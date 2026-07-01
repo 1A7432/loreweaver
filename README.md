@@ -38,6 +38,8 @@ python -m app --cli --script tests/fixtures/selfplay_en.txt   # offline AI-KP se
 #    TRPG_LLM__PROVIDER=deepseek   TRPG_LLM__API_KEY=sk-...   TRPG_LLM__CHAT_MODEL=deepseek-chat
 python -m app --cli                     # natural-language turns now run a real Keeper
 ```
+> **Model choice matters.** The Keeper leans on tool-calling and instruction-following: a capable model (GPT-4-class, Claude, or a strong open model) resolves checks with real dice via the tools and runs a module's own scenes far more faithfully than a small/cheap one. Budget models such as `deepseek-chat` are excellent for load/regression testing but tend to narrate a check's outcome without rolling and to drift off-module. Switch at runtime with `.model set <provider> [model]` — no restart needed.
+
 **Networked / multiplayer:** `scripts/tui_demo.sh` mints a key + starts the server and prints the connect line; then in another terminal `cd clients/tui && bun install && bun run dev -- connect --host ws://127.0.0.1:8787/ --key <key>`. Browser: `cd clients/web && bun install && bun run dev`. SSH: see `clients/ssh/README.md`. No registration — the deployer issues keys that bind players to a shared room.
 
 ### Deploy (self-host)
