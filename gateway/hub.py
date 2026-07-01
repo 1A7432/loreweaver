@@ -18,6 +18,7 @@ dropped and logged; it never aborts the fan-out to the rest of the room.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -108,6 +109,31 @@ class RoomHub:
 
     def __init__(self) -> None:
         self.rooms: dict[str, set[Member]] = {}
+        # Per-room turn lock (F8): the engine locks each individual store get/set, but
+        # nothing serializes a caller's read->mutate->write of the shared per-`chat_key`
+        # JSON blobs (party roster, KP history, knowledge pool, worldbook index). Two
+        # turns interleaving on the SAME room (two transports on one room in combined
+        # mode, or a multiplayer room) could lost-update those. `turn_lock` hands each
+        # room its own `asyncio.Lock` so a whole turn runs one-at-a-time per room, while
+        # DIFFERENT rooms keep distinct locks and still run concurrently. Held by the
+        # transport choke points (`net.tui_server.dispatch_input`,
+        # `gateway.runner._answer_on_hub`), NOT by `run_turn` itself — so the companion/
+        # director sub-turn (which re-enters `run_turn` directly, never a choke point)
+        # never re-acquires the room's lock and so cannot self-deadlock.
+        self._turn_locks: dict[str, asyncio.Lock] = {}
+
+    def turn_lock(self, session_key: str) -> asyncio.Lock:
+        """The (lazily created) `asyncio.Lock` that serializes whole turns for `session_key`.
+
+        Stable per key (same key -> same lock, so concurrent turns on one room contend)
+        and distinct across keys (different rooms never block each other). Acquire it once,
+        around a whole turn, at a transport choke point; never nest the same room's lock.
+        """
+        lock = self._turn_locks.get(session_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._turn_locks[session_key] = lock
+        return lock
 
     async def subscribe(self, session_key: str, member: Member) -> None:
         """Add ``member`` to ``session_key``'s room and broadcast the new roster."""

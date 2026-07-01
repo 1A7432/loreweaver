@@ -266,16 +266,21 @@ class TuiServer:
 
         ctx = self._ctx_for(member)
         try:
-            result = await run_turn(
-                self.hub,
-                self.services,
-                ctx,
-                text,
-                command_router=self.command_router,
-                toolset=self.toolset,
-                censor=self.censor,
-                origin=member,
-            )
+            # Serialize the WHOLE turn per room (F8): two connections in the same room
+            # (or a chat member in combined mode) must not interleave their read-modify-write
+            # of the shared per-room state. `run_turn` publishes the companion sub-turn inline
+            # (it re-enters `run_turn`, not this choke point), so the lock is never re-acquired.
+            async with self.hub.turn_lock(member.session_key):
+                result = await run_turn(
+                    self.hub,
+                    self.services,
+                    ctx,
+                    text,
+                    command_router=self.command_router,
+                    toolset=self.toolset,
+                    censor=self.censor,
+                    origin=member,
+                )
         except Exception:
             await _send(member.ws, _error_frame("server_error", i18n))
             return

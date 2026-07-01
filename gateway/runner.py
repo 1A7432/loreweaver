@@ -161,17 +161,23 @@ class GatewayRunner:
         # On the shared-room path the toolset is wired with the hub + router so the KP's
         # `companion_act` tool can drive a live companion turn (M10).
         toolset = self.toolset or build_kp_toolset(self.services, hub=self.hub, command_router=self.command_router)
-        await run_turn(
-            self.hub,
-            self.services,
-            hub_ctx,
-            text,
-            command_router=self.command_router,
-            toolset=toolset,
-            censor=self.censor,
-            origin=member,
-            echo_exclude=member,
-        )
+        # Serialize the WHOLE turn per room (F8): two channels bound to one session (or a
+        # terminal member in combined mode) must not interleave read-modify-write of the shared
+        # per-room state. Keyed by `session_key` on the shared hub, so it also serializes against
+        # a TUI turn on the same room; the companion sub-turn re-enters `run_turn` directly (never
+        # this choke point), so it never re-acquires this lock and cannot self-deadlock.
+        async with self.hub.turn_lock(session_key):
+            await run_turn(
+                self.hub,
+                self.services,
+                hub_ctx,
+                text,
+                command_router=self.command_router,
+                toolset=toolset,
+                censor=self.censor,
+                origin=member,
+                echo_exclude=member,
+            )
         return None
 
     def _adapter_for(self, platform: str) -> BaseAdapter | None:
