@@ -161,6 +161,19 @@ async def test_inject_interaction_style_prompt_is_localized_and_nonempty():
     assert ZH.t("prompt.style.principles") in zh_result
 
 
+async def test_inject_interaction_style_prompt_includes_freshness_and_ensemble_nudges():
+    # Play-quality nudges: vary phrasing across turns + keep an unaddressed
+    # companion/party member alive. Part of the interaction-style section, and
+    # must never displace the dice-first tool-usage rule that shares it.
+    ctx = _Ctx(chat_key="chat1")
+    en_result = await inject_interaction_style_prompt(ctx, EN)
+    zh_result = await inject_interaction_style_prompt(ctx, ZH)
+    assert EN.t("prompt.style.freshness") in en_result
+    assert ZH.t("prompt.style.freshness") in zh_result
+    # The freshness bullets are additive: the dice-first tool-usage rule stays.
+    assert EN.t("prompt.style.tool_usage") in en_result
+
+
 # ---------------------------------------------------------------------------
 # inject_system_expertise_prompt
 # ---------------------------------------------------------------------------

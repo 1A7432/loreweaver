@@ -33,6 +33,13 @@ export interface ServerOpts {
   // Injectables for tests.
   spawnFn?: SpawnFn
   terminalFactory?: TerminalFactory
+  // Resource-exhaustion hardening (all optional; sane defaults below).
+  /** Max concurrent client connections; further connections are dropped. Default 100. */
+  maxConnections?: number
+  /** Max concurrent bridged sessions per connection (each spawns a client process). Default 2. */
+  maxSessionsPerConnection?: number
+  /** Close a connection after this many ms with no activity (0 disables). Default 5 min. */
+  idleTimeoutMs?: number
 }
 
 export interface RunningServer {
@@ -52,16 +59,72 @@ export async function startSshServer(opts: ServerOpts): Promise<RunningServer> {
     bunPath: opts.bunPath,
   }
 
+  const maxConnections = opts.maxConnections ?? 100
+  const maxSessionsPerConnection = opts.maxSessionsPerConnection ?? 2
+  const idleTimeoutMs = opts.idleTimeoutMs ?? 5 * 60_000
+
   const clients = new Set<any>()
 
   const server = new Server({ hostKeys: [hostKey] }, (client: any) => {
+    // Connection cap: refuse new connections past the limit so a flood of
+    // sockets can't exhaust process resources.
+    if (clients.size >= maxConnections) {
+      try {
+        client.end()
+      } catch {
+        // ignore
+      }
+      try {
+        client.destroy?.()
+      } catch {
+        // ignore
+      }
+      return
+    }
     clients.add(client)
-    client.on("close", () => clients.delete(client))
-    client.on("error", () => {})
 
     let authed: AuthorizedKey | null = null
+    let activeSessions = 0
+
+    // Idle timeout: drop a connection that has seen no activity (auth, a new
+    // session, or channel traffic) for `idleTimeoutMs`, freeing its resources.
+    let idleTimer: ReturnType<typeof setTimeout> | null = null
+    const clearIdle = () => {
+      if (idleTimer) {
+        clearTimeout(idleTimer)
+        idleTimer = null
+      }
+    }
+    const dropIdle = () => {
+      clearIdle()
+      try {
+        client.end()
+      } catch {
+        // ignore
+      }
+      try {
+        client.destroy?.()
+      } catch {
+        // ignore
+      }
+    }
+    const bumpIdle = () => {
+      if (idleTimeoutMs <= 0) return
+      clearIdle()
+      idleTimer = setTimeout(dropIdle, idleTimeoutMs)
+      // Don't let the idle timer alone keep the event loop (or a test) alive.
+      ;(idleTimer as any).unref?.()
+    }
+    bumpIdle()
+
+    client.on("close", () => {
+      clients.delete(client)
+      clearIdle()
+    })
+    client.on("error", () => {})
 
     client.on("authentication", (ctx: any) => {
+      bumpIdle()
       if (ctx.method !== "publickey") {
         return ctx.reject(["publickey"])
       }
@@ -86,6 +149,7 @@ export async function startSshServer(opts: ServerOpts): Promise<RunningServer> {
     })
 
     client.on("session", (acceptSession: any) => {
+      bumpIdle()
       const session = acceptSession()
       let ptyInfo: PtyInfo = { cols: 80, rows: 24 }
       let channel: any = null
@@ -108,6 +172,25 @@ export async function startSshServer(opts: ServerOpts): Promise<RunningServer> {
           channel.end()
           return
         }
+        // Session cap: each bridged session spawns a client process, so refuse
+        // more than `maxSessionsPerConnection` concurrent ones per connection.
+        // Signal the refusal with an exit status (like the bridge's teardown)
+        // before ending, so the peer isn't left hanging on an open channel.
+        if (activeSessions >= maxSessionsPerConnection) {
+          try {
+            channel.exit?.(1)
+          } catch {
+            // ignore
+          }
+          channel.end()
+          return
+        }
+        activeSessions += 1
+        bumpIdle()
+        channel.on("data", bumpIdle)
+        channel.on("close", () => {
+          activeSessions = activeSessions > 0 ? activeSessions - 1 : 0
+        })
         bridgeSession(channel, ptyInfo, authed, bridgeOpts, spawnFn, terminalFactory)
       }
 

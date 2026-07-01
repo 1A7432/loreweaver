@@ -14,6 +14,7 @@ import logging
 import re
 import time
 import uuid
+from collections import OrderedDict
 from typing import Any
 
 try:  # pragma: no cover - exercised only by live transport users.
@@ -53,6 +54,40 @@ _MODE_FULL = "full"
 _SENTINEL_YES = "1"
 _DIRECT_CHAT_TYPES = {"dm", "c2c", "private", "direct"}
 _AT_PREFIX_RE = re.compile(r"^(?:<@!?[^>]+>|@\S+)\s*")
+# Caps for the recent-id dedup structures so their memory stays bounded over a
+# long-lived process instead of growing without limit (one bad actor spamming
+# unique ids would otherwise leak memory forever).
+_SEEN_IDS_MAX = 4096
+_HINT_SENT_MAX = 1024
+
+
+class _BoundedIdSet:
+    """A bounded, insertion-ordered membership set for recent-id dedup.
+
+    Backed by an ``OrderedDict`` used as an ordered set: once it grows past
+    ``maxsize`` the oldest id is evicted (FIFO), so membership memory stays
+    bounded while the most-recent ids are still remembered for deduping.
+    Supports the two operations the adapter needs — ``id in self`` and
+    ``self.add(id)`` — so it drops in for the plain ``set`` it replaces.
+    """
+
+    def __init__(self, maxsize: int) -> None:
+        self._maxsize = max(1, maxsize)
+        self._ids: OrderedDict[str, None] = OrderedDict()
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._ids
+
+    def __len__(self) -> int:
+        return len(self._ids)
+
+    def add(self, key: str) -> None:
+        if key in self._ids:
+            self._ids.move_to_end(key)
+            return
+        self._ids[key] = None
+        if len(self._ids) > self._maxsize:
+            self._ids.popitem(last=False)
 
 
 class _DefaultQQTransport:
@@ -185,8 +220,8 @@ class QQOfficialAdapter(BaseAdapter):
         )
         self._sanitizer = ContentSanitizer(locale=self._locale)
         self._group_modes: dict[str, str] = {}
-        self._hint_sent: set[str] = set()
-        self._seen_message_ids: set[str] = set()
+        self._hint_sent: _BoundedIdSet = _BoundedIdSet(_HINT_SENT_MAX)
+        self._seen_message_ids: _BoundedIdSet = _BoundedIdSet(_SEEN_IDS_MAX)
         self._listen_task: asyncio.Task | None = None
         self._session_id: str | None = None
         self._last_seq: int | None = None

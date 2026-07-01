@@ -3,7 +3,7 @@ import json
 import pytest
 
 from adapters.qq_official import QQOfficialAdapter
-from adapters.qq_official.adapter import _DefaultQQTransport
+from adapters.qq_official.adapter import _BoundedIdSet, _DefaultQQTransport
 from gateway.events import InboundMessage
 from gateway.session import SessionSource
 from infra.store import Store
@@ -209,3 +209,44 @@ async def test_qq_ws_loop_survives_a_raising_payload() -> None:
     await transport._consume(_FakeWs(messages), on_payload)
 
     assert len(seen) == 2  # both payloads dispatched despite each one raising
+
+
+def test_bounded_id_set_evicts_oldest_and_keeps_recent_ids() -> None:
+    # The dedup structure must stay bounded: past the cap the OLDEST id is
+    # evicted (FIFO) while the most-recent ids remain remembered for dedup.
+    ids = _BoundedIdSet(maxsize=3)
+    for i in range(10):
+        ids.add(f"id-{i}")
+
+    assert len(ids) == 3  # bounded, not 10
+    assert "id-0" not in ids  # oldest evicted
+    assert "id-7" in ids and "id-8" in ids and "id-9" in ids  # most-recent still deduped
+    # Re-adding an already-present id does not grow the set.
+    ids.add("id-9")
+    assert len(ids) == 3
+
+
+async def test_seen_message_ids_dedup_stays_bounded_over_many_messages() -> None:
+    # Regression: `_seen_message_ids` must not grow without bound. After more
+    # distinct messages than the cap arrive, the set stays capped and the most
+    # recent id is still deduped (a duplicate does not re-emit an inbound).
+    store = Store(":memory:")
+    adapter = _adapter(store)
+    adapter._seen_message_ids = _BoundedIdSet(maxsize=3)
+    received: list[InboundMessage] = []
+
+    async def handler(msg: InboundMessage) -> str | None:
+        received.append(msg)
+        return None
+
+    adapter.set_message_handler(handler)
+
+    for i in range(5):
+        await adapter.dispatch_payload(_group_payload("GROUP_MESSAGE_CREATE", gid="g", mid=f"m{i}"))
+
+    assert len(received) == 5
+    assert len(adapter._seen_message_ids) == 3  # bounded despite 5 distinct ids
+
+    # The most-recent id is still in the window, so a duplicate is deduped.
+    await adapter.dispatch_payload(_group_payload("GROUP_MESSAGE_CREATE", gid="g", mid="m4"))
+    assert len(received) == 5

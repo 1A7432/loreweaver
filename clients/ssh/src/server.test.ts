@@ -37,13 +37,61 @@ function makeMocks() {
   let resolveCalled!: () => void
   const calledPromise = new Promise<void>((r) => (resolveCalled = r))
   let capturedArgv: string[] | null = null
+  let spawnCount = 0
   const spawnFn = (cmd: string[], _options: { terminal: any }): SpawnedProc => {
     capturedArgv = cmd
+    spawnCount += 1
     resolveCalled()
+    // A never-resolving `exited` keeps the (mock) session "active" for cap tests.
     return { exited: new Promise<number>(() => {}), kill() {} }
   }
   const terminalFactory = () => ({ write() {}, resize() {}, close() {} })
-  return { spawnFn, terminalFactory, calledPromise, argv: () => capturedArgv }
+  return {
+    spawnFn,
+    terminalFactory,
+    calledPromise,
+    argv: () => capturedArgv,
+    spawnCount: () => spawnCount,
+  }
+}
+
+function openShell(conn: any): Promise<any> {
+  return new Promise((resolve, reject) => {
+    conn.shell({ cols: 80, rows: 24, term: "xterm-256color" } as any, (err: any, stream: any) => {
+      if (err) return reject(err)
+      stream.on("error", () => {})
+      resolve(stream)
+    })
+  })
+}
+
+// Open a shell and resolve with the FIRST teardown event. Listeners are attached
+// synchronously in the shell callback because a refused session emits its
+// one-shot `exit` immediately — attaching after an `await` gap would miss it.
+function openShellExpectingTeardown(conn: any): Promise<string> {
+  return new Promise((resolve, reject) => {
+    conn.shell({ cols: 80, rows: 24, term: "xterm-256color" } as any, (err: any, stream: any) => {
+      if (err) return reject(err)
+      stream.on("error", () => {})
+      stream.on("exit", () => resolve("exit"))
+      stream.on("close", () => resolve("close"))
+      stream.on("end", () => resolve("end"))
+    })
+  })
+}
+
+function connectReady(conn: any, port: number): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    conn.on("ready", () => resolve())
+    conn.on("error", reject)
+    conn.connect({
+      host: "127.0.0.1",
+      port,
+      username: "player",
+      privateKey: authorized.private,
+      readyTimeout: 5000,
+    })
+  })
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -150,6 +198,87 @@ describe("startSshServer", () => {
         ).catch(() => "no-event")
         expect(result).not.toBe("ready")
         expect(mocks.argv()).toBeNull()
+      } finally {
+        conn.end()
+        ;(conn as any).destroy?.()
+        await server.close()
+      }
+    },
+    20000,
+  )
+
+  test(
+    "a second concurrent session on one connection is refused (session cap)",
+    async () => {
+      const mocks = makeMocks()
+      const server = await startSshServer({
+        port: 0,
+        host: "127.0.0.1",
+        wsUrl: "ws://127.0.0.1:8787/",
+        clientEntry: "/abs/clients/tui/src/index.tsx",
+        bunPath: "bun",
+        sshKeysPath: writeKeysToml(),
+        hostKey,
+        spawnFn: mocks.spawnFn,
+        terminalFactory: mocks.terminalFactory as any,
+        maxSessionsPerConnection: 1,
+      })
+
+      const conn = new Client()
+      try {
+        await withTimeout(connectReady(conn, server.port), 10000, "authorized ready")
+
+        // First session: authorized + under the cap, so it spawns the client.
+        const stream1 = await openShell(conn)
+        await withTimeout(mocks.calledPromise, 8000, "first spawn")
+        expect(mocks.spawnCount()).toBe(1)
+        expect(stream1).toBeDefined()
+
+        // Second concurrent session on the SAME connection: over the cap, so the
+        // server refuses it (exit status + channel end) and spawns nothing more.
+        const how = await withTimeout(openShellExpectingTeardown(conn), 8000, "second session refused")
+        expect(["exit", "close", "end"]).toContain(how)
+        // The invariant that proves the refusal: no second client was spawned.
+        expect(mocks.spawnCount()).toBe(1)
+      } finally {
+        conn.end()
+        ;(conn as any).destroy?.()
+        await server.close()
+      }
+    },
+    20000,
+  )
+
+  test(
+    "an idle connection with no activity is dropped after the idle timeout",
+    async () => {
+      const mocks = makeMocks()
+      const server = await startSshServer({
+        port: 0,
+        host: "127.0.0.1",
+        wsUrl: "ws://127.0.0.1:8787/",
+        clientEntry: "/abs/clients/tui/src/index.tsx",
+        bunPath: "bun",
+        sshKeysPath: writeKeysToml(),
+        hostKey,
+        spawnFn: mocks.spawnFn,
+        terminalFactory: mocks.terminalFactory as any,
+        idleTimeoutMs: 300,
+      })
+
+      const conn = new Client()
+      try {
+        // Resolve when the connection is torn down by any means (a forced drop
+        // may surface as end/close or as an ECONNRESET-style error first).
+        const dropped = new Promise<string>((resolve) => {
+          conn.on("close", () => resolve("close"))
+          conn.on("end", () => resolve("end"))
+          conn.on("error", () => resolve("error"))
+        })
+        await withTimeout(connectReady(conn, server.port), 10000, "authorized ready")
+        // Send no traffic: the server's idle timer should fire and drop us.
+        const how = await withTimeout(dropped, 5000, "idle drop")
+        expect(["close", "end", "error"]).toContain(how)
       } finally {
         conn.end()
         ;(conn as any).destroy?.()

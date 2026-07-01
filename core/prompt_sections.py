@@ -549,5 +549,7 @@ async def inject_interaction_style_prompt(ctx: Any, i18n: I18n) -> str:
         i18n.t("prompt.style.examples"),
         "",
         i18n.t("prompt.style.principles"),
+        "",
+        i18n.t("prompt.style.freshness"),
     ]
     return "\n".join(parts)
