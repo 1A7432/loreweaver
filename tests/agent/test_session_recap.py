@@ -209,6 +209,40 @@ async def test_a_failing_summarizer_call_does_not_raise_or_clobber_the_recap():
     assert await services.store.get(user_key="", store_key=recap_store_key(ctx.chat_key)) == "prior recap"
 
 
+async def test_recap_refresh_records_debug_observability_on_success_and_failure():
+    # Success: the debug breadcrumb records that a refresh ran and its length.
+    services = _services(FakeLLM(responder=lambda messages, tools: assistant_text("terse recap notes")))
+    ctx = _ctx("recap-obs-ok")
+    key = await _seed_history(services, ctx.chat_key, ("user", "I hide the brass key."))
+
+    await refresh_session_recap(ctx, services, history_key=key)
+
+    debug = json.loads(await services.store.get(user_key="", store_key=f"session_recap_debug.{ctx.chat_key}"))
+    assert debug["ran"] is True
+    assert debug["ok"] is True
+    assert debug["length"] > 0
+
+    # Failure: an otherwise-silent summarizer error is now detectable, and the
+    # refresh still neither raises nor clobbers the prior recap.
+    def boom(messages, tools):
+        raise RuntimeError("summarizer offline")
+
+    services_fail = _services(FakeLLM(responder=boom))
+    ctx_fail = _ctx("recap-obs-fail")
+    key_fail = await _seed_history(services_fail, ctx_fail.chat_key, ("user", "something happened"))
+    await services_fail.store.set(user_key="", store_key=recap_store_key(ctx_fail.chat_key), value="prior recap")
+
+    await refresh_session_recap(ctx_fail, services_fail, history_key=key_fail)  # must NOT raise
+
+    debug_fail = json.loads(
+        await services_fail.store.get(user_key="", store_key=f"session_recap_debug.{ctx_fail.chat_key}")
+    )
+    assert debug_fail["ran"] is True
+    assert debug_fail["ok"] is False
+    # The recap itself is untouched by the failed refresh.
+    assert await services_fail.store.get(user_key="", store_key=recap_store_key(ctx_fail.chat_key)) == "prior recap"
+
+
 async def test_maybe_refresh_swallows_a_summarizer_failure_at_the_window_boundary():
     def boom(messages, tools):
         raise RuntimeError("summarizer offline")

@@ -9,7 +9,12 @@ from __future__ import annotations
 import json
 
 from agent.context import AgentCtx
-from agent.loop import KPTurnResult, run_kp_turn
+from agent.loop import (
+    KPTurnResult,
+    _dice_rolled,
+    _reply_requests_or_resolves_check,
+    run_kp_turn,
+)
 from agent.services import build_services
 from agent.tools import Toolset, tool
 from infra.config import Settings
@@ -33,8 +38,21 @@ class _SampleProvider:
         return KEEPER_SECRET
 
 
+class _DiceProvider:
+    """A provider exposing a `skill_check` dice tool for dice-first tests."""
+
+    @tool
+    async def skill_check(self, ctx: AgentCtx, skill_name: str) -> str:
+        """Roll a skill check. Returns a fake rolled result string."""
+        return f"{skill_name}: rolled 42 vs 65 -> hard success"
+
+
 def _toolset() -> Toolset:
     return Toolset(_SampleProvider())
+
+
+def _dice_toolset() -> Toolset:
+    return Toolset(_DiceProvider())
 
 
 def _services(llm: FakeLLM):
@@ -267,3 +285,113 @@ async def test_provider_error_fallback_is_localized_and_goes_through_output_revi
     )
 
     assert result.reply == services.i18n.with_locale("zh").t("loop.unavailable").upper()
+
+
+# ---------------------------------------------------------------------------
+# Structural dice-first enforcement: a check narrated/asked-for but never rolled
+# triggers exactly one bounded corrective round that DOES roll (iron rule #2)
+# ---------------------------------------------------------------------------
+
+
+async def test_narrating_a_check_without_rolling_triggers_one_corrective_dice_round():
+    # The KP asks the player to roll (".ra") and calls no dice tool, so exactly
+    # one corrective round fires -- and THIS time the model rolls skill_check.
+    llm = FakeLLM(
+        script=[
+            assistant_text("Make a Spot Hidden check — please roll .ra Spot Hidden."),
+            assistant_tools(tool_call("skill_check", skill_name="Spot Hidden")),
+            assistant_text("Your fingers brush a hidden latch beneath the desk."),
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx("chat-dice-fix"), services, _dice_toolset(), "I search the desk.")
+
+    # The corrective round rolled real dice, then re-narrated per the result.
+    assert [t["name"] for t in result.tool_trace] == ["skill_check"]
+    assert result.reply == "Your fingers brush a hidden latch beneath the desk."
+    assert len(llm.calls) == 3  # initial reply + one corrective tool round + re-narration
+
+
+async def test_a_check_that_already_rolled_triggers_no_corrective_round():
+    # skill_check already fired this turn, so even a success-level narration must
+    # NOT trigger a corrective round (the script would be exhausted if it did).
+    llm = FakeLLM(
+        script=[
+            assistant_tools(tool_call("skill_check", skill_name="Spot Hidden")),
+            assistant_text("A hard success — you spot the faint scratches immediately."),
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx("chat-dice-ok"), services, _dice_toolset(), "I search the desk.")
+
+    assert [t["name"] for t in result.tool_trace] == ["skill_check"]
+    assert len(llm.calls) == 2
+    assert result.reply.startswith("A hard success")
+
+
+async def test_plain_narration_without_a_check_triggers_no_corrective_round():
+    # No dice-command / roll-request / success-level vocabulary -> no correction.
+    llm = FakeLLM(script=[assistant_text("The corridor stretches on into darkness, silent and cold.")])
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx("chat-plain"), services, _dice_toolset(), "I look around.")
+
+    assert result.tool_trace == []
+    assert len(llm.calls) == 1
+    assert result.reply.startswith("The corridor stretches on")
+
+
+async def test_corrective_round_is_bounded_when_the_model_still_will_not_roll():
+    # KP asks for a roll; the corrective round is entered exactly ONCE; the model
+    # still refuses to roll -> keep that reply and stop (the ceiling, no loop).
+    llm = FakeLLM(
+        script=[
+            assistant_text("Please roll .ra Spot Hidden to search the desk."),
+            assistant_text("Very well, you find nothing of note."),
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx("chat-dice-ceiling"), services, _dice_toolset(), "I search.")
+
+    assert result.tool_trace == []  # never rolled
+    assert len(llm.calls) == 2  # exactly one corrective attempt, then it stops
+    assert result.reply == "Very well, you find nothing of note."
+
+
+def test_reply_check_detector_catches_the_violation_but_not_plain_narration():
+    # Positives: the reply asks the player to roll, or narrates a graded outcome.
+    for positive in [
+        "Please roll .ra Spot Hidden.",
+        "Make a Spot Hidden check to see what you find.",
+        "Roll a d100 for Luck.",
+        "That's a hard success — you notice the scratch.",
+        "It's a critical failure; the lock jams.",
+        "请投掷侦察检定，输入 .ra 侦察",
+        "请进行一次侦查检定。",
+        "这是一次大成功，你看清了墙上的划痕。",
+        "自己掷一个理智检定吧。",
+    ]:
+        assert _reply_requests_or_resolves_check(positive), positive
+
+    # Negatives: ordinary narration, incl. bare "check"/"roll"/"success" words.
+    for negative in [
+        "",
+        "It is a moonless midnight in Innsmouth.",
+        "The investigators sense something is deeply wrong here.",
+        "The corridor stretches on into darkness, silent and cold.",
+        "You step into the fog. What do you do?",
+        "You check the desk and the walls but find nothing.",
+        "The ritual was a success.",
+        "You roll the heavy barrel aside.",
+        "你走进浓雾，四周一片死寂。",
+    ]:
+        assert not _reply_requests_or_resolves_check(negative), negative
+
+    # `_dice_rolled` keys off the real dice-rolling tools only.
+    assert _dice_rolled([{"name": "skill_check"}])
+    assert _dice_rolled([{"name": "lookup_time"}, {"name": "sanity_check"}])
+    assert not _dice_rolled([{"name": "lookup_time"}, {"name": "get_module_summary"}])
+    assert not _dice_rolled([])

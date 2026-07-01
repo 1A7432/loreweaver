@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -39,6 +40,95 @@ logger = logging.getLogger(__name__)
 # assistant exchanges) both on load and after persisting a new exchange, so
 # replayed history can't grow unbounded across a long session.
 _HISTORY_CAP = 20
+
+# --- Structural dice-first enforcement -------------------------------------
+# Iron rule #2 is "dice-first": a check rolls REAL dice, then narrates per the
+# success level. Play-testing showed a model routinely ignoring the prompt's
+# roll-first guidance -- telling the player to type ".ra X" and then narrating a
+# clean success/failure without ever calling a dice tool. Prompt-tuning alone
+# only fixed ~2/8 cases, so we enforce it structurally: after the loop, if the
+# final reply narrates or asks for a check yet NO dice-rolling tool fired this
+# turn, we run one bounded corrective round that nudges the model to actually
+# roll, then re-narrate. It is entered at most once per turn and hard-capped, so
+# it can never loop; a provider error inside it is non-fatal (we keep the
+# original reply). The detector is deliberately conservative: it keys off
+# tabletop-specific dice commands / roll-request phrasing and success-LEVEL
+# result vocabulary (never bare "success"/"成功") so ordinary narration -- and the
+# exact-call-count FakeLLM test scripts -- don't trip it.
+
+# Chat calls the corrective phase may make: one to roll the dice + one to
+# re-narrate. Hard bound -- the phase is also entered at most once per turn.
+_CORRECTIVE_MAX_ROUNDS = 2
+
+# Tools that roll real dice. If any fired this turn the check WAS resolved for
+# real, so no correction is needed.
+_DICE_TOOL_NAMES = frozenset(
+    {"skill_check", "sanity_check", "roll_dice", "opposed_check", "skill_growth", "wod_check"}
+)
+
+# Dot-/slash-prefixed dice commands (".ra Spot Hidden", ".sc 1/1d6", "/roll") are
+# unique to tabletop play; in a player-facing reply they mean the Keeper is
+# telling the player to type the command instead of rolling it via a tool.
+_DICE_COMMAND_RE = re.compile(
+    r"(?<![0-9A-Za-z])[./](?:ra|rah|rav|rab|rap|rc|sc|sca|en|ti|li|rd|ww|wod|roll)\b",
+    re.IGNORECASE,
+)
+# English "you (the player) roll it" imperatives.
+_ROLL_REQUEST_EN_RE = re.compile(
+    r"\b(?:please\s+(?:roll|make)"
+    r"|make\s+an?\b[^.!?\n]{0,40}\b(?:check|roll|test|saving|save)\b"
+    r"|roll\s+(?:an?|for|your|to|1?d\d)\b"
+    r"|give\s+(?:it|me)\b[^.!?\n]{0,20}\broll\b"
+    r"|go\s+ahead\s+and\s+roll)",
+    re.IGNORECASE,
+)
+# Chinese "you roll it" imperatives.
+_ROLL_REQUEST_ZH_RE = re.compile(
+    r"请(?:你)?(?:自己)?(?:掷|投|骰|进行|做)"
+    r"|自己(?:来)?(?:掷|投|骰)"
+    r"|投掷|掷骰|骰一下"
+    r"|进行(?:一次|一个)?[^。！？\n]{0,10}检定"
+    r"|做(?:一次|一个|个)?检定"
+    r"|掷出你的"
+)
+# Success-LEVEL result vocabulary. These grade a resolved check and essentially
+# never appear in pure flavour prose, so they signal the model already DECIDED a
+# check's outcome. Bare "success"/"成功" is intentionally excluded (too common in
+# ordinary narration to trigger on).
+_CHECK_OUTCOME_MARKERS = (
+    "critical success",
+    "extreme success",
+    "hard success",
+    "regular success",
+    "critical failure",
+    "极难成功",
+    "困难成功",
+    "常规成功",
+    "普通成功",
+    "大成功",
+    "大失败",
+)
+
+
+def _dice_rolled(tool_trace: list[dict]) -> bool:
+    """True if any real dice-rolling tool fired during this turn."""
+    return any(entry.get("name") in _DICE_TOOL_NAMES for entry in tool_trace)
+
+
+def _reply_requests_or_resolves_check(reply: str) -> bool:
+    """Heuristic: does `reply` ask the player to roll, or narrate a check's graded outcome?
+
+    Conservative by design (see the enforcement note above): keys off
+    tabletop-specific dice commands, explicit roll-request phrasing, and
+    success-LEVEL result vocabulary -- not bare "success"/"check"/"roll" -- so it
+    fires on the real dice-first violation without tripping on ordinary prose.
+    """
+    if not reply:
+        return False
+    if _DICE_COMMAND_RE.search(reply) or _ROLL_REQUEST_EN_RE.search(reply) or _ROLL_REQUEST_ZH_RE.search(reply):
+        return True
+    lowered = reply.lower()
+    return any(marker in lowered for marker in _CHECK_OUTCOME_MARKERS)
 
 
 @dataclass
@@ -105,22 +195,28 @@ async def run_kp_turn(
             return KPTurnResult(reply=reply, tool_trace=tool_trace, rounds=rounds)
 
         if result.tool_calls:
-            messages.append(_assistant_tool_call_message(result))
-            for call in result.tool_calls:
-                tool_result = await toolset.dispatch(call.name, ctx, call.arguments)
-                tool_trace.append(
-                    {
-                        "name": call.name,
-                        "arguments": call.arguments,
-                        "keeper_only": toolset.is_keeper_only(call.name),
-                        "result": tool_result,
-                    }
-                )
-                messages.append({"role": "tool", "tool_call_id": call.id, "content": tool_result})
+            await _dispatch_and_record(toolset, ctx, result, messages, tool_trace)
             continue
 
         reply = result.content or ""
         break
+
+    # Dice-first enforcement: if the model narrated or asked for a check but no
+    # real dice were rolled this turn, run one bounded corrective round (see the
+    # enforcement note above). Cheap `_dice_rolled` gate first so the regex only
+    # runs when it might matter; skipped entirely on the max_rounds fallback
+    # (reply is still None) and after a provider error (returned early above).
+    if reply is not None and not _dice_rolled(tool_trace) and _reply_requests_or_resolves_check(reply):
+        reply = await _run_dice_correction(
+            ctx,
+            services,
+            toolset,
+            messages,
+            tool_trace,
+            reply,
+            i18n,
+            temperature=services.settings.llm.temperature,
+        )
 
     if reply is None:  # max_rounds exhausted without ever reaching a plain-text reply
         reply = i18n.t("loop.max_rounds")
@@ -151,6 +247,71 @@ def _assistant_tool_call_message(result: ChatResult) -> dict:
             for call in result.tool_calls
         ],
     }
+
+
+async def _dispatch_and_record(
+    toolset: Toolset, ctx: AgentCtx, result: ChatResult, conversation: list[dict], tool_trace: list[dict]
+) -> None:
+    """Dispatch one assistant round's tool calls, feeding results back into `conversation` + `tool_trace`.
+
+    Shared by the main loop and the dice-first corrective round so both record
+    the trace identically. Mutates `conversation` and `tool_trace` in place.
+    """
+    conversation.append(_assistant_tool_call_message(result))
+    for call in result.tool_calls:
+        tool_result = await toolset.dispatch(call.name, ctx, call.arguments)
+        tool_trace.append(
+            {
+                "name": call.name,
+                "arguments": call.arguments,
+                "keeper_only": toolset.is_keeper_only(call.name),
+                "result": tool_result,
+            }
+        )
+        conversation.append({"role": "tool", "tool_call_id": call.id, "content": tool_result})
+
+
+async def _run_dice_correction(
+    ctx: AgentCtx,
+    services: Services,
+    toolset: Toolset,
+    messages: list[dict],
+    tool_trace: list[dict],
+    prior_reply: str,
+    i18n,
+    *,
+    temperature: float | None,
+) -> str:
+    """One bounded, one-shot corrective phase: nudge the model to actually roll, then re-narrate.
+
+    Appends the offending narration plus a localized "you didn't roll it" nudge,
+    then lets the model take at most `_CORRECTIVE_MAX_ROUNDS` chat calls (one to
+    call a dice tool, one to re-narrate) before returning. Never recursive, so it
+    can't loop. Non-fatal: a provider error, or the model simply refusing to roll,
+    both fall back to `prior_reply` -- that's the ceiling. Any dice tool the model
+    now calls is dispatched for real and recorded into `tool_trace`.
+    """
+    convo = [
+        *messages,
+        {"role": "assistant", "content": prior_reply},
+        {"role": "user", "content": i18n.t("loop.dice_correction")},
+    ]
+    reply = prior_reply
+    for _ in range(_CORRECTIVE_MAX_ROUNDS):
+        try:
+            result = await services.llm.chat(
+                convo, tools=toolset.schemas(), tool_choice="auto", temperature=temperature
+            )
+        except Exception:
+            # Best-effort correction: keep the original reply rather than crash the turn.
+            logger.warning("dice-first correction skipped: LLM chat failed", exc_info=True)
+            return prior_reply
+        if result.tool_calls:
+            await _dispatch_and_record(toolset, ctx, result, convo, tool_trace)
+            continue
+        reply = result.content or prior_reply
+        break
+    return reply
 
 
 async def _load_history(services: Services, key: str) -> list[dict]:

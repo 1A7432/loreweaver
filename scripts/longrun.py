@@ -52,6 +52,11 @@ ANCHORS = [
     ("dog", "I name the scruffy stray dog that keeps following us 'Boomer'.", "Boomer"),
     ("vow", "I swear aloud, so all can hear: I will never enter the cellar alone.", "cellar"),
 ]
+# Twist-reveal sentinels: short concept phrases whose appearance in a PLAYER-FACING reply
+# signals the module's core secret leaked EVEN IF PARAPHRASED. A raw keeper-pool substring
+# match alone misses paraphrase (the play-test critique caught the KP revealing the twist
+# through an invented prop that never quoted the source verbatim).
+SECRET_CONCEPTS = ["赛伊格亚", "巩固封印", "血祭固封", "止血祭", "升腾为龙", "镇压邪神", "封印松", "以血固封"]
 
 
 async def _chat(services, prompt, temperature=0.9):
@@ -146,7 +151,8 @@ async def main():
         dt = time.time() - t0
         lat.append(dt)
         transcript.append(f"[KP] {reply[:300]}")
-        leaked = next((s for s in secret_lines if s and s in reply), None)
+        leaked = (next((s for s in secret_lines if s and s in reply), None)
+                  or next((c for c in SECRET_CONCEPTS if c in reply), None))
         if leaked:
             leaks += 1
             rec(kind="LEAK", turn=turn_no, secret=leaked[:100], reply=reply[:200])

@@ -55,6 +55,10 @@ def _counter_key(chat_key: str) -> str:
     return f"session_recap_turns.{chat_key}"
 
 
+def _debug_key(chat_key: str) -> str:
+    return f"session_recap_debug.{chat_key}"
+
+
 async def maybe_refresh_session_recap(ctx: AgentCtx, services: Services, *, history_key: str) -> None:
     """Advance the per-room turn counter and refresh the recap when one is due.
 
@@ -105,9 +109,17 @@ async def refresh_session_recap(ctx: AgentCtx, services: Services, *, history_ke
         result = await services.llm.chat(messages)
         text = (result.content or "").strip()
         if not text:
-            return  # keep the old recap rather than clobbering it with nothing
-        await services.store.set(user_key="", store_key=recap_store_key(ctx.chat_key), value=_bound(text))
+            # A summarizer that returns nothing is a soft failure worth surfacing:
+            # keep the old recap, but record that the refresh ran and produced 0 chars.
+            await _note_recap_outcome(services, ctx.chat_key, ok=False, length=0)
+            return
+        bounded = _bound(text)
+        await services.store.set(user_key="", store_key=recap_store_key(ctx.chat_key), value=bounded)
+        await _note_recap_outcome(services, ctx.chat_key, ok=True, length=len(bounded))
     except Exception:
+        # Still non-fatal, but leave a breadcrumb so a silently-swallowed summarizer
+        # failure is detectable rather than invisible.
+        await _note_recap_outcome(services, ctx.chat_key, ok=False, length=0)
         return
 
 
@@ -117,6 +129,25 @@ def _bound(text: str) -> str:
     if len(text) <= _RECAP_MAX_CHARS:
         return text
     return text[: _RECAP_MAX_CHARS - 1].rstrip() + "…"
+
+
+async def _note_recap_outcome(services: Services, chat_key: str, *, ok: bool, length: int) -> None:
+    """Best-effort observability: record that a recap refresh ran and how it turned out.
+
+    Purely diagnostic -- stored under ``session_recap_debug.{chat_key}`` as
+    ``{"ran": True, "ok": bool, "length": int}`` -- so an otherwise-silent
+    summarizer failure (the recap swallows every error) becomes detectable. Never
+    raises, so it is safe to call from the failure path too; it does not alter the
+    recap's non-fatal behavior.
+    """
+    try:
+        await services.store.set(
+            user_key="",
+            store_key=_debug_key(chat_key),
+            value=json.dumps({"ran": True, "ok": ok, "length": length}),
+        )
+    except Exception:
+        return
 
 
 async def _load_counter(services: Services, chat_key: str) -> int:
