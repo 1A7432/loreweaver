@@ -1,5 +1,5 @@
 {
   "loop.max_rounds": "The Keeper pauses for a long moment, still weighing several possibilities. Please try again in a moment.",
   "loop.unavailable": "The Keeper is momentarily unavailable. Please try again in a moment.",
-  "loop.dice_correction": "Runtime check: the player's latest action (or your reply) describes or calls for a dice check, but no dice were rolled this turn. If a check is genuinely required, call skill_check / sanity_check / roll_dice / opposed_check NOW to roll the REAL dice, then narrate the outcome strictly according to the result and success level — never tell the player to type a dice command like '.ra' or 'roll it yourself'. If no check is actually needed here (pure dialogue or roleplay), simply restate your narration unchanged."
+  "loop.dice_correction": "Runtime check: the player's latest action (or your reply) describes or calls for a dice check, but no dice were rolled this turn. Call skill_check / sanity_check / roll_dice / opposed_check NOW to roll the REAL dice and resolve the pending check, then narrate the outcome strictly according to the result and success level — never tell the player to type a dice command like '.ra' or 'roll it yourself'."
 }

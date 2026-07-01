@@ -46,12 +46,17 @@ _HISTORY_CAP = 20
 # success level. Play-testing showed a model routinely ignoring the prompt's
 # roll-first guidance -- telling the player to type ".ra X" and then narrating a
 # clean success/failure without ever calling a dice tool. Prompt-tuning alone
-# only fixed ~2/8 cases, so we enforce it structurally: after the loop, if NO
-# dice-rolling tool fired this turn yet a check plausibly should have, we run one
-# bounded corrective round that nudges the model to actually roll, then
-# re-narrate. It is entered at most once per turn and hard-capped, so it can
-# never loop; a provider error inside it is non-fatal (we keep the original
-# reply).
+# only fixed ~2/8 cases, and a SOFT nudge fared no better: the real Keeper
+# (DeepSeek) took the escape-hatch nudge EVERY time across fresh 16- and 24-turn
+# play-tests -- the corrective fired but rolled a skill_check on 0 turns. So we
+# enforce it structurally AND compulsorily: after the loop, if NO dice-rolling
+# tool fired this turn yet a check plausibly should have, we run one bounded
+# corrective phase whose first round FORCES a tool call (`tool_choice="required"`)
+# so the Keeper MUST resolve the pending check with a dice tool, then a second
+# normal round narrates the graded result. It is entered at most once per turn
+# and hard-capped, so it can never loop; a provider error (or a provider that
+# rejects `tool_choice="required"`) inside it is non-fatal (we keep the original
+# reply). See `_run_dice_correction`.
 #
 # We fire on EITHER of two signals:
 #   (a) a conservative REPLY-side detector -- the model's own reply uses tabletop
@@ -63,12 +68,13 @@ _HISTORY_CAP = 20
 # (b) is what catches the real DeepSeek failure mode: it resolves a player's
 # skill attempt in plain prose carrying none of the (a) vocabulary, so (a) alone
 # fired ~0-1x across 24- and 100-turn play-tests while real dice never rolled.
-# Broadening (b) is safe precisely because the corrective can NEVER force a roll
-# -- its escape-hatch nudge lets the model restate its narration unchanged -- so a
-# false positive costs at most one extra, decline-able round. The `_dice_rolled`
-# gate keeps already-resolved turns (and the exact-call-count FakeLLM scripts)
-# inert. It is a heuristic that trades some extra corrective calls for real dice
-# discipline.
+# Because the forced round has no escape hatch, a false-positive detection now
+# forces a (possibly minor/irrelevant) roll -- that is the accepted trade for
+# dice-first actually happening. The detectors already exclude dialogue-dominant
+# terms so pure roleplay stays inert, and the `_dice_rolled` gate keeps
+# already-resolved turns (and the exact-call-count FakeLLM scripts) inert. It is
+# a heuristic that trades some extra (now non-decline-able) corrective rolls for
+# real dice discipline.
 
 # Chat calls the corrective phase may make: one to roll the dice + one to
 # re-narrate. Hard bound -- the phase is also entered at most once per turn.
@@ -208,8 +214,8 @@ def _player_attempts_checkable_action(text: str) -> bool:
 
     Broad but curated (see the enforcement note above): a whole-word/boundary
     match against the EN skill-attempt lexicon, or a curated CJK term. Deliberately
-    excludes dialogue-dominant words so pure roleplay stays inert. A hit only ever
-    triggers the SAME bounded, escape-hatched corrective -- never a forced roll.
+    excludes dialogue-dominant words so pure roleplay stays inert. A hit triggers
+    the SAME bounded corrective, whose forced round now compels a real roll.
     """
     if not text:
         return False
@@ -375,14 +381,28 @@ async def _run_dice_correction(
     *,
     temperature: float | None,
 ) -> str:
-    """One bounded, one-shot corrective phase: nudge the model to actually roll, then re-narrate.
+    """One bounded, one-shot corrective phase that FORCES a dice resolution, then re-narrates.
 
-    Appends the offending narration plus a localized "you didn't roll it" nudge,
-    then lets the model take at most `_CORRECTIVE_MAX_ROUNDS` chat calls (one to
-    call a dice tool, one to re-narrate) before returning. Never recursive, so it
-    can't loop. Non-fatal: a provider error, or the model simply refusing to roll,
-    both fall back to `prior_reply` -- that's the ceiling. Any dice tool the model
-    now calls is dispatched for real and recorded into `tool_trace`.
+    A SOFT nudge did not work: play-testing showed the real Keeper (DeepSeek)
+    took the old escape-hatch nudge EVERY time -- the corrective fired but rolled
+    on 0 turns. So the FIRST corrective round now compels a tool call via
+    `tool_choice="required"` (the OpenAI-compatible "must call some tool" value):
+    the model MUST call a tool, and the accompanying instruction directs it to
+    skill_check / sanity_check / roll_dice / opposed_check to resolve the pending
+    check. If a real dice tool fires, one more NORMAL (`tool_choice="auto"`) round
+    narrates the graded outcome.
+
+    Bounded to at most `_CORRECTIVE_MAX_ROUNDS` chat calls (one forced + one
+    narration) and entered at most once per turn, so it can never loop.
+    Non-recursive. Non-fatal / best-effort -- ALL of these fall back to keeping
+    `prior_reply` (that is the ceiling; we never loop chasing a roll):
+      * a provider error, OR a provider that rejects `tool_choice="required"`;
+      * the forced round returning prose instead of a tool call (provider ignored
+        "required");
+      * the forced round calling a NON-dice tool (e.g. get_character_sheet) -- so
+        no real dice were rolled.
+    Any dice tool the model does call is dispatched for real and recorded into
+    `tool_trace`.
     """
     convo = [
         *messages,
@@ -390,18 +410,34 @@ async def _run_dice_correction(
         {"role": "user", "content": i18n.t("loop.dice_correction")},
     ]
     reply = prior_reply
-    for _ in range(_CORRECTIVE_MAX_ROUNDS):
+    for round_index in range(_CORRECTIVE_MAX_ROUNDS):
+        # Round 0 FORCES a tool call ("required"); the follow-up narration round is
+        # a normal "auto" call.
+        forced = round_index == 0
         try:
             result = await services.llm.chat(
-                convo, tools=toolset.schemas(), tool_choice="auto", temperature=temperature
+                convo,
+                tools=toolset.schemas(),
+                tool_choice="required" if forced else "auto",
+                temperature=temperature,
             )
         except Exception:
-            # Best-effort correction: keep the original reply rather than crash the turn.
+            # Best-effort: a provider error OR a provider that rejects
+            # tool_choice="required" keeps the original reply rather than crash.
             logger.warning("dice-first correction skipped: LLM chat failed", exc_info=True)
             return prior_reply
         if result.tool_calls:
             await _dispatch_and_record(toolset, ctx, result, convo, tool_trace)
+            if forced and not _dice_rolled(tool_trace):
+                # Forced a NON-dice tool (e.g. get_character_sheet): no real dice
+                # rolled -- that's the ceiling, keep the reply, do not loop.
+                return prior_reply
             continue
+        if forced:
+            # Provider ignored "required" and returned prose instead of a tool
+            # call: ceiling, keep the original reply.
+            return prior_reply
+        # Narration round: the model re-narrated per the freshly rolled dice.
         reply = result.content or prior_reply
         break
     return reply

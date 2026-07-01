@@ -48,6 +48,24 @@ class _DiceProvider:
         return f"{skill_name}: rolled 42 vs 65 -> hard success"
 
 
+class _MixedProvider:
+    """A provider with a dice tool AND a non-dice (sheet-reading) tool.
+
+    Lets a test drive the forced corrective round into calling a NON-dice tool,
+    exercising the "no real dice rolled -> keep the reply, don't loop" ceiling.
+    """
+
+    @tool
+    async def skill_check(self, ctx: AgentCtx, skill_name: str) -> str:
+        """Roll a skill check. Returns a fake rolled result string."""
+        return f"{skill_name}: rolled 42 vs 65 -> hard success"
+
+    @tool
+    async def get_character_sheet(self, ctx: AgentCtx) -> str:
+        """Read the investigator's character sheet (rolls no dice)."""
+        return "STR 50, DEX 60, Spot Hidden 65"
+
+
 def _toolset() -> Toolset:
     return Toolset(_SampleProvider())
 
@@ -347,8 +365,9 @@ async def test_plain_narration_without_a_check_triggers_no_corrective_round():
 
 
 async def test_corrective_round_is_bounded_when_the_model_still_will_not_roll():
-    # KP asks for a roll; the corrective round is entered exactly ONCE; the model
-    # still refuses to roll -> keep that reply and stop (the ceiling, no loop).
+    # KP asks for a roll; the forced corrective round is entered exactly ONCE. If
+    # the model ignores tool_choice="required" and returns prose instead of a dice
+    # tool, we keep the ORIGINAL reply and stop (the ceiling -- never loop).
     llm = FakeLLM(
         script=[
             assistant_text("Please roll .ra Spot Hidden to search the desk."),
@@ -361,7 +380,10 @@ async def test_corrective_round_is_bounded_when_the_model_still_will_not_roll():
 
     assert result.tool_trace == []  # never rolled
     assert len(llm.calls) == 2  # exactly one corrective attempt, then it stops
-    assert result.reply == "Very well, you find nothing of note."
+    # The forced round produced no tool call, so the original reply is kept as-is.
+    assert result.reply == "Please roll .ra Spot Hidden to search the desk."
+    # The corrective round asked the model with tool_choice="required".
+    assert llm.tool_choices == ["auto", "required"]
 
 
 # ---------------------------------------------------------------------------
@@ -410,19 +432,93 @@ async def test_pure_dialogue_player_action_triggers_no_corrective_round():
     assert result.reply == "Martha beams and clasps your hand in both of hers."
 
 
-async def test_player_action_trigger_escape_hatch_leaves_the_reply_intact():
-    # The player-action detector fires, but the action needs no check: the model
-    # takes the escape hatch and restates its narration unchanged. A false positive
-    # can therefore NEVER force a spurious roll -- the reply survives verbatim.
+async def test_player_action_trigger_forced_round_returning_prose_keeps_reply():
+    # The player-action detector fires (via the broadened PLAYER-side trigger) and
+    # forces the corrective round. If the model returns prose instead of obeying
+    # tool_choice="required" (provider ignored "required"), we keep the ORIGINAL
+    # reply and stop -- so a forced round that produces no dice can't corrupt it.
     narration = "You glance over the tidy desk; nothing seems out of place."
-    llm = FakeLLM(script=[assistant_text(narration), assistant_text(narration)])
+    llm = FakeLLM(script=[assistant_text(narration), assistant_text("...restated...")])
     services = _services(llm)
 
     result = await run_kp_turn(_ctx("chat-escape"), services, _dice_toolset(), "I search the desk.")
 
-    assert result.tool_trace == []  # never rolled -- the model declined
+    assert result.tool_trace == []  # never rolled -- the forced round returned prose
     assert len(llm.calls) == 2  # exactly one corrective attempt, then it stops
-    assert result.reply == narration  # left intact
+    assert result.reply == narration  # original reply kept (the ceiling)
+    assert llm.tool_choices == ["auto", "required"]  # player-side trigger forced a tool
+
+
+# ---------------------------------------------------------------------------
+# Forced dice-first correction: the corrective round FORCES a tool call via
+# tool_choice="required" (a soft nudge let the real Keeper decline every time).
+# ---------------------------------------------------------------------------
+
+
+async def test_corrective_round_forces_tool_choice_required_then_narrates():
+    # The KP asks for a roll but calls no dice tool. The corrective phase now
+    # FORCES a tool call (tool_choice="required"); the model complies with a real
+    # skill_check (dispatched + recorded), then a normal "auto" round narrates.
+    llm = FakeLLM(
+        script=[
+            assistant_text("Make a Spot Hidden check — please roll .ra Spot Hidden."),
+            assistant_tools(tool_call("skill_check", skill_name="Spot Hidden")),
+            assistant_text("Your fingers brush a hidden latch beneath the desk."),
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx("chat-forced"), services, _dice_toolset(), "I search the desk.")
+
+    # The dice tool the forced round called was dispatched for real and recorded.
+    assert [t["name"] for t in result.tool_trace] == ["skill_check"]
+    assert result.tool_trace[0]["result"].endswith("hard success")
+    assert result.reply == "Your fingers brush a hidden latch beneath the desk."
+    # main "auto" round, then the FORCED "required" round, then the "auto" narration.
+    assert llm.tool_choices == ["auto", "required", "auto"]
+
+
+async def test_forced_round_non_dice_tool_keeps_reply_and_does_not_loop():
+    # The forced round obeys tool_choice="required" but calls a NON-dice tool
+    # (get_character_sheet). No real dice rolled -> ceiling: dispatch it, keep the
+    # ORIGINAL reply, and do NOT loop for a narration round.
+    llm = FakeLLM(
+        script=[
+            assistant_text("Please roll .ra Spot Hidden to search the desk."),
+            assistant_tools(tool_call("get_character_sheet")),
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx("chat-nondice"), services, Toolset(_MixedProvider()), "I search the desk.")
+
+    assert [t["name"] for t in result.tool_trace] == ["get_character_sheet"]  # dispatched...
+    assert not _dice_rolled(result.tool_trace)  # ...but no real dice rolled
+    assert result.reply == "Please roll .ra Spot Hidden to search the desk."  # original kept
+    assert len(llm.calls) == 2  # main + one forced round, then it stops (no loop)
+    assert llm.tool_choices == ["auto", "required"]
+
+
+async def test_forced_correction_round_provider_error_keeps_original_reply():
+    # A provider that raises on the forced round (e.g. it rejects
+    # tool_choice="required") must be non-fatal: keep the original reply intact.
+    calls = {"n": 0}
+
+    def _responder(messages, tools):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return assistant_text("Please roll .ra Spot Hidden to search the desk.")
+        raise RuntimeError("provider rejects tool_choice='required'")
+
+    services = _services(FakeLLM(responder=_responder))
+
+    result = await run_kp_turn(_ctx("chat-forced-boom"), services, _dice_toolset(), "I search the desk.")
+
+    assert result.tool_trace == []  # nothing rolled
+    assert result.reply == "Please roll .ra Spot Hidden to search the desk."  # original kept
+    assert calls["n"] == 2  # main round + exactly one forced attempt that raised
+    # The turn still persisted (the corrective error is best-effort, not a turn crash).
+    assert await services.store.get(user_key="", store_key="chat_history.chat-forced-boom") is not None
 
 
 def test_player_action_detector_catches_attempts_but_not_dialogue():

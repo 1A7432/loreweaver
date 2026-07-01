@@ -118,7 +118,10 @@ class FakeLLM:
     - `responder`: each `chat()` call invokes `responder(messages, tools)`,
       letting a test inspect the running conversation and branch.
     Every call is recorded to `self.calls` as `(messages, tools)` so tests
-    can assert on what the loop actually sent.
+    can assert on what the loop actually sent; the per-call `tool_choice` is
+    recorded in parallel to `self.tool_choices` (it is otherwise ignored — the
+    script/responder decides the reply), so a test can assert the loop forced a
+    tool with `tool_choice="required"`.
     """
 
     def __init__(
@@ -129,6 +132,7 @@ class FakeLLM:
         self._responder = responder
         self._script: deque[ChatResult] | None = deque(script) if script is not None else None
         self.calls: list[tuple[list[dict], list[dict] | None]] = []
+        self.tool_choices: list[str | dict | None] = []
 
     async def chat(
         self,
@@ -140,6 +144,7 @@ class FakeLLM:
         model: str | None = None,
     ) -> ChatResult:
         self.calls.append((messages, tools))
+        self.tool_choices.append(tool_choice)
         if self._script is not None:
             if not self._script:
                 raise RuntimeError(t("infra.llm.fake_script_exhausted"))
