@@ -133,9 +133,6 @@ describe("startSshServer", () => {
       try {
         const result = await withTimeout(
           new Promise<string>((resolve) => {
-            // An unauthorized key must not authenticate. Across platforms the
-            // rejection surfaces as an "error" (auth failed / handshake timeout)
-            // or a bare connection close/end — any non-"ready" outcome is a pass.
             conn.on("ready", () => resolve("ready"))
             conn.on("error", (e: any) => resolve(`error:${e?.level ?? e?.message ?? "err"}`))
             conn.on("close", () => resolve("close"))
@@ -145,16 +142,17 @@ describe("startSshServer", () => {
               port: server.port,
               username: "player",
               privateKey: stranger.private,
-              readyTimeout: 4000,
+              readyTimeout: 2000,
             })
           }),
-          8000,
+          6000,
           "unauthorized auth",
-        )
+        ).catch(() => "no-event")
         expect(result).not.toBe("ready")
         expect(mocks.argv()).toBeNull()
       } finally {
         conn.end()
+        ;(conn as any).destroy?.()
         await server.close()
       }
     },

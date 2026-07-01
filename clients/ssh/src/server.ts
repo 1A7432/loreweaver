@@ -134,9 +134,18 @@ export async function startSshServer(opts: ServerOpts): Promise<RunningServer> {
           } catch {
             // ignore
           }
+          try {
+            client.destroy?.()
+          } catch {
+            // ignore
+          }
         }
         clients.clear()
-        server.close(() => resolve())
+        const timer = setTimeout(resolve, 500)
+        server.close(() => {
+          clearTimeout(timer)
+          resolve()
+        })
       }),
   }
 }
