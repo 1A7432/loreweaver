@@ -1,0 +1,17 @@
+{
+  "rooms.chat.npc_line": "**{name}：** {text}",
+  "rooms.chat.npc_unknown": "NPC",
+  "rooms.chat.dice_line": "🎲 {actor} {expr} → {level}（{total}）",
+  "rooms.chat.dice_line_plain": "🎲 {actor} {expr} → {total}",
+  "rooms.denied": "只有群管理员或守秘人可以管理共享房间。",
+  "rooms.usage": "用法：.room [open | link <密钥> | leave]",
+  "rooms.open.result": "已开启共享房间。终端加入密钥：{key}（会话：{session}）。把该密钥交给终端玩家即可共享本场游戏。",
+  "rooms.open.no_keystore": "无法在此开启共享房间：未挂载终端密钥库。",
+  "rooms.link.result": "本频道已连接到共享会话 {session}。",
+  "rooms.link.usage": "用法：.room link <加入密钥或会话ID>",
+  "rooms.leave.result": "本频道已离开共享会话 {session}。",
+  "rooms.leave.none": "本频道未连接任何共享会话。",
+  "rooms.show.result": "已连接共享会话 {session} —— 在线 {online} 人：{members}",
+  "rooms.show.none": "本频道未连接共享会话。使用 .room open 创建一个。",
+  "rooms.show.empty": "（暂无成员）"
+}

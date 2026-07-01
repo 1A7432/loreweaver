@@ -1,0 +1,3 @@
+{
+  "telegram.error.missing_transport": "Telegram transport is not configured."
+}

@@ -1,0 +1,33 @@
+MODULE: The Blackmoor Lighthouse (Call of Cthulhu 7e — one-shot)
+
+## Player-facing premise
+The fishing village of Blackmoor has lost three sailors this month. Their boats
+returned empty, scratched, and reeking of brine. The investigators arrive to look
+into the disappearances. The old lighthouse on the northern cliff still burns each
+night, though the keeper, Elias Crane, is rarely seen in the village anymore.
+
+## Opening scene: The Salt & Anchor Inn
+A low-beamed tavern, smoke-stained, half-empty. The innkeeper Martha eyes strangers
+warily. A water-stained harbor map hangs by the hearth. Patrons fall silent when the
+lighthouse is mentioned.
+- Clue (Spot Hidden): behind the map, someone has scratched a tide table with three
+  dates circled — the three nights sailors vanished.
+- NPC: Martha (innkeeper) — knows the sailors feared the lighthouse light "changed color".
+
+## KEEPER-ONLY SECRETS (do NOT reveal to players; for the Keeper's eyes only)
+KEEPER SECRET / TRUTH: THE LIGHTHOUSE KEEPER IS THE MURDERER. Elias Crane drowned two
+years ago and what climbs the lighthouse stairs now is a Deep One thrall wearing his
+face. The "light" is a lure that calls boats onto the rocks so the Deep Ones can feed.
+- Hidden clue (only if players search the lighthouse lamp room): the lamp's lens is
+  packed with human teeth. Sanity loss 1/1D6.
+- Final truth to be earned, never told: the villagers made a pact generations ago; the
+  three dead sailors tried to break it.
+
+## Threat
+Deep One thrall "Elias" — STR 80 CON 70 DEX 55 SIZ 65, HP 13, attacks: claw 1d6+db,
+drag underwater. SAN loss on reveal 1/1D8.
+
+## Timeline
+- Night 1: the lighthouse light shifts to a sickly green.
+- Night 2: a boat is found circling with no crew.
+- Night 3 (if unresolved): the thrall descends into the village.

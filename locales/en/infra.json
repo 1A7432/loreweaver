@@ -1,0 +1,5 @@
+{
+  "infra.llm.fake_script_exhausted": "FakeLLM script exhausted: no more scripted responses remain.",
+  "infra.llm.fake_not_configured": "FakeLLM requires either a `script` or a `responder` to be configured.",
+  "infra.vector.dimension_mismatch": "Vector dimension mismatch: expected {expected}, got {actual}."
+}

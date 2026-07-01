@@ -1,0 +1,61 @@
+[project]
+name = "loreweaver"
+version = "0.1.0"
+description = "An AI Game Master / Keeper for any TTRPG system — dice bot + function-calling AI KP, Discord-first, system-agnostic (D&D 5e SRD + CoC7)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "trpg_kp contributors" }]
+keywords = ["ttrpg", "dnd", "coc", "dice", "ai", "game-master", "keeper", "discord"]
+
+dependencies = [
+    "d20>=1.1.2",
+    "openai>=1.40",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+    "httpx>=0.27",
+    "aiohttp>=3.9",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+# Platform SDKs are optional extras so the core + CLI install stays light.
+qq = ["qq-botpy>=1.2.1"]
+telegram = ["python-telegram-bot>=21.0"]
+discord = ["discord.py>=2.3"]
+feishu = ["lark-oapi>=1.2"]
+vector = ["sqlite-vec>=0.1.1"]
+anthropic = ["anthropic>=0.40"]
+gemini = ["google-genai>=0.3"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.5"]
+
+[project.scripts]
+loreweaver = "app:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["core", "infra", "agent", "gateway", "adapters"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402", "F401"]
+"adapters/*/vendor_*.py" = ["ALL"]

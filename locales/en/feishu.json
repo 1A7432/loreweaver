@@ -1,0 +1,4 @@
+{
+  "feishu.client_unavailable": "Feishu client is unavailable.",
+  "feishu.send_failed": "Failed to send Feishu message."
+}

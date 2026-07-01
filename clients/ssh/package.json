@@ -1,0 +1,19 @@
+{
+  "name": "@trpg-kp/ssh",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "trpg-kp-ssh": "./src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "ssh2": "1.17.0"
+  },
+  "devDependencies": {
+    "@types/ssh2": "1.15.5"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "tui.error.bad_key": "无法识别的密钥，请向部署者索取有效的邀请密钥。",
+  "tui.error.bad_frame": "消息格式有误。",
+  "tui.error.rate_limited": "发送太快了，请稍等片刻再试。",
+  "tui.error.server_error": "处理该回合时出现问题，请重试。",
+  "tui.npc.unknown_name": "未知 NPC",
+  "tui.serve.listening": "已在 ws://{host}:{port}/ 提供联网 TUI 服务（密钥文件：{path}）",
+  "tui.key.added": "已为房间 '{room}' 添加一个 {role} 密钥（name={name}）：{key}",
+  "tui.key.room_required": "--tui-key add 需要提供 --room ROOM"
+}

@@ -1,0 +1,12 @@
+{
+  "dice.result": "{expression} = {roll_str} = {total}",
+  "dice.result_simple": "Result: {total}",
+  "dice.error.invalid_expression": "Invalid dice expression: {expression}",
+  "dice.error.invalid_repeat_times": "Repeat count must be between 1 and 20, got {times}",
+  "coc.rank.crit": "Critical Success",
+  "coc.rank.extreme": "Extreme Success",
+  "coc.rank.hard": "Hard Success",
+  "coc.rank.success": "Success",
+  "coc.rank.fail": "Failure",
+  "coc.rank.fumble": "Fumble"
+}

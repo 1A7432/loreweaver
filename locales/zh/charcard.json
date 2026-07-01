@@ -1,0 +1,19 @@
+{
+  "charcard.concept_prompt": "你要把 SillyTavern 人设转换为 {system} 的 TRPG 角色概念。只根据人设和模组上下文提出职业/职业类别、属性倾向、标志技能和 1-2 行背景，不要编造具体数值。只返回 JSON，键包括：occupation/class、attribute_emphasis（按优先级排列的属性代码列表）、signature_skills（简短列表）、backstory。模组上下文：{module_context}\n人设：\n{persona}",
+  "charcard.tools.import.done_pc": "已将「{name}」导入为你的玩家角色（{system}）。关键属性：{stats}。导入设定条目：{lore}。",
+  "charcard.tools.import.done_companion": "已将「{name}」导入为 AI 同伴（id {id}，{system}）。关键属性：{stats}。导入设定条目：{lore}。",
+  "charcard.tools.import.no_fs": "当前环境没有可用的文件访问权限。",
+  "charcard.tools.import.no_file": "无法读取角色卡：{path}。",
+  "charcard.tools.import.failed": "导入角色失败：{error}",
+  "charcard.tools.preview.name_line": "名称：{name}",
+  "charcard.tools.preview.description_line": "描述：{description}",
+  "charcard.tools.preview.personality_line": "性格：{personality}",
+  "charcard.tools.preview.scenario_line": "场景：{scenario}",
+  "charcard.tools.preview.tags_line": "标签：{tags}",
+  "charcard.tools.preview.lore_line": "卡中设定条目：{count}",
+  "charcard.tools.preview.no_fs": "当前环境没有可用的文件访问权限。",
+  "charcard.tools.preview.no_file": "无法读取角色卡：{path}。",
+  "charcard.tools.preview.failed": "预览角色卡失败：{error}",
+  "charcard.commands.import.help": "将 SillyTavern 角色卡导入为玩家角色或 AI 同伴：.import <文件> [coc7|dnd5e] [pc|companion]",
+  "charcard.commands.import.usage": "用法：.import <角色卡文件> [coc7|dnd5e] [pc|companion]"
+}

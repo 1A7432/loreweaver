@@ -1,0 +1,4 @@
+{
+  "qq.enable_full_hint": "当前 QQ 群仍处于仅 @ 可见模式。请群主在 QQ 开放平台为机器人开启“接收全部消息”和“允许主动发言”。",
+  "qq.pending_flush_prefix": "以下是暂存的 QQ 叙事："
+}

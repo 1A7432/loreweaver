@@ -1,0 +1,95 @@
+defaults:
+  力量: 10
+  敏捷: 10
+  体质: 10
+  智力: 10
+  感知: 10
+  魅力: 10
+  熟练: 2
+  ac: 10
+  hp: 8
+  hpmax: 8
+  dc: 10
+  pp: 10
+  运动: 0
+  体操: 0
+  巧手: 0
+  隐匿: 0
+  调查: 0
+  奥秘: 0
+  历史: 0
+  自然: 0
+  宗教: 0
+  察觉: 0
+  洞悉: 0
+  驯兽: 0
+  医药: 0
+  求生: 0
+  游说: 0
+  欺瞒: 0
+  威吓: 0
+  表演: 0
+defaultsComputed:
+  pp: fixed:dnd5e.pp
+  力量调整值: fixed:dnd5e.str_mod
+  敏捷调整值: fixed:dnd5e.dex_mod
+  体质调整值: fixed:dnd5e.con_mod
+  智力调整值: fixed:dnd5e.int_mod
+  感知调整值: fixed:dnd5e.wis_mod
+  魅力调整值: fixed:dnd5e.cha_mod
+  运动: fixed:dnd5e.athletics
+  体操: fixed:dnd5e.acrobatics
+  巧手: fixed:dnd5e.sleight_of_hand
+  隐匿: fixed:dnd5e.stealth
+  调查: fixed:dnd5e.investigation
+  奥秘: fixed:dnd5e.arcana
+  历史: fixed:dnd5e.history
+  自然: fixed:dnd5e.nature
+  宗教: fixed:dnd5e.religion
+  察觉: fixed:dnd5e.perception
+  洞悉: fixed:dnd5e.insight
+  驯兽: fixed:dnd5e.animal_handling
+  医药: fixed:dnd5e.medicine
+  求生: fixed:dnd5e.survival
+  游说: fixed:dnd5e.persuasion
+  欺瞒: fixed:dnd5e.deception
+  威吓: fixed:dnd5e.intimidation
+  表演: fixed:dnd5e.performance
+alias:
+  力量: [str, STR, strength, Strength]
+  敏捷: [dex, DEX, dexterity, Dexterity]
+  体质: [con, CON, constitution, Constitution, 體質, 體魄, 体魄]
+  智力: [int, INT, intelligence, Intelligence]
+  感知: [wis, WIS, wisdom, Wisdom]
+  魅力: [cha, CHA, charisma, Charisma]
+  ac: [AC, armor class, armour class, 护甲等级, 护甲值, 护甲, 護甲等級, 護甲值, 護甲, 装甲, 裝甲]
+  hp: [HP, hit points, health, 生命值, 生命, 血量, 体力, 體力, 耐久值]
+  hpmax: [HPMAX, max hp, hp max, 生命值上限, 生命上限, 血量上限, 耐久上限]
+  dc: [DC, difficulty class, spell save dc, 难度等级, 法术豁免, 難度等級, 法術豁免]
+  hd: [HD, hit dice, 生命骰]
+  pp: [PP, passive perception, passive wisdom, 被动察觉, 被动感知, 被動察覺, PW]
+  熟练: [proficiency, proficiency bonus, prof, pb, 熟练加值, 熟練, 熟練加值]
+  体型: [siz, size, 體型, 体形, 體形]
+  运动: [athletics, athletic, 運動]
+  体操: [acrobatics, acrobat, 杂技, 特技, 體操, 雜技, 特技動作, 特技动作]
+  巧手: [sleight of hand, sleight, legerdemain, 上手把戲, 上手把戏]
+  隐匿: [stealth, sneak, hide, 隱匿, 潜行, 潛行]
+  调查: [investigation, investigate, 調查]
+  奥秘: [arcana, arcane, 奧秘]
+  历史: [history, 歷史]
+  自然: [nature]
+  宗教: [religion]
+  察觉: [perception, perceive, spot, notice, 察覺, 觉察, 覺察, 观察]
+  洞悉: [insight, sense motive, 洞察, 察言觀色, 察言观色]
+  驯兽: [animal handling, animal, 馴獸, 驯养, 馴養, 動物馴服, 動物馴養, 动物驯服, 动物驯养]
+  医药: [medicine, medical, 醫藥, 医疗, 醫療]
+  求生: [survival, survive, 生存]
+  游说: [persuasion, persuade, diplomacy, 说服, 话术, 遊說, 說服, 話術]
+  欺瞒: [deception, deceive, bluff, lie, 唬骗, 欺诈, 欺骗, 诈骗, 欺瞞, 唬騙, 欺詐, 欺騙, 詐騙]
+  威吓: [intimidation, intimidate, 恐吓, 威嚇, 恐嚇]
+  表演: [performance, perform]
+st_show:
+  top: [力量, 敏捷, 体质, 体型, 魅力, 智力, 感知, hp, ac, 熟练, pp]
+  sortBy: Name
+  ignores: [DSS, DSF, hpmax]
+set_keys: [dnd, dnd5e]

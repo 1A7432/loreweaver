@@ -1,0 +1,1159 @@
+"""Platform-independent command router with EN slash and CN SealDice dialects."""
+
+from __future__ import annotations
+
+import random
+import re
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any
+
+from agent.context import AgentCtx
+from agent.services import Services
+from core.character_manager import CharacterSheet
+from core.coc_rules import DEFAULT_COC_RULE
+from core.dice_engine import DiceResult, coc_rank_label
+from core.rulepacks import RulePack, load_rulepack
+from gateway.ops import PrivilegeLevel
+from gateway.rooms import clear_binding, get_binding, mint_room_id, session_key_for_room, set_binding
+from infra.i18n import I18n, get_i18n
+
+Handler = Callable[["CommandCtx"], Awaitable[str]]
+
+_INLINE_RE = re.compile(r"\[\[([^\[\]]+)\]\]")
+_COMMAND_TOKEN_RE = re.compile(r"([^\s]+)(?:\s+(.*))?$", re.S)
+_MULTI_PREFIX_RE = re.compile(r"^\s*(\d{1,2})[#＃]\s*(.*)$", re.S)
+_TRAILING_NUMBER_RE = re.compile(r"^(.+?)(\d{1,3})$")
+_SHEET_ASSIGN_RE = re.compile(r"(.+?)([+-]?(?:\d+d\d+(?:[+\-*/]\d+)?|\d+))(?:\s*|$)", re.I)
+_EXPLODE_BANG_RE = re.compile(r"(\d*d(\d+))!", re.I)
+
+_SLASH_NAME_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
+
+_COC_ATTR_TO_KEY = {
+    "力量": "STR",
+    "体质": "CON",
+    "体型": "SIZ",
+    "敏捷": "DEX",
+    "外貌": "APP",
+    "智力": "INT",
+    "意志": "POW",
+    "教育": "EDU",
+    "幸运": "LUC",
+    "理智": "SAN",
+    "理智上限": "SANMAX",
+    "生命值": "HP",
+    "生命值上限": "HPMAX",
+    "魔法值": "MP",
+    "魔法值上限": "MPMAX",
+    "DB": "DB",
+    "体格": "BUILD",
+    "移动力": "MOV",
+    "护甲": "AR",
+}
+_COC_KEY_TO_ATTR = {value: key for key, value in _COC_ATTR_TO_KEY.items()}
+_COC_SKILL_TO_MANAGER = {
+    "信用评级": "信用",
+    "图书馆": "图书馆",
+    "博物": "博物",
+    "骑乘": "骑乘",
+    "驯兽": "驯兽",
+}
+
+_DND_ATTR_TO_KEY = {
+    "力量": "STR",
+    "敏捷": "DEX",
+    "体质": "CON",
+    "智力": "INT",
+    "感知": "WIS",
+    "魅力": "CHA",
+}
+_DND_KEY_TO_ATTR = {value: key for key, value in _DND_ATTR_TO_KEY.items()}
+_DND_SECONDARY_TO_KEY = {
+    "hp": "生命值",
+    "hpmax": "生命值上限",
+    "ac": "护甲等级",
+    "dc": "难度等级",
+    "pp": "被动感知",
+    "熟练": "熟练加值",
+}
+_DND_SKILL_TO_MANAGER = {"求生": "生存"}
+_DND_SKILLS = {
+    "运动",
+    "体操",
+    "巧手",
+    "隐匿",
+    "调查",
+    "奥秘",
+    "历史",
+    "自然",
+    "宗教",
+    "察觉",
+    "洞悉",
+    "驯兽",
+    "医药",
+    "求生",
+    "游说",
+    "欺瞒",
+    "威吓",
+    "表演",
+}
+
+_DIFFICULTY_PREFIXES = (
+    ("大成功", 4),
+    ("极难", 3),
+    ("極難", 3),
+    ("困难", 2),
+    ("困難", 2),
+)
+_DIFFICULTY_WORDS = {
+    "critical": 4,
+    "crit": 4,
+    "extreme": 3,
+    "hard": 2,
+    "regular": 1,
+    "normal": 1,
+}
+_ADV_WORDS = {"adv", "advantage", "优势", "優勢"}
+_DIS_WORDS = {"dis", "disadvantage", "劣势", "劣勢"}
+_PROF_WORDS = {"prof", "proficient", "proficiency", "熟练", "熟練"}
+
+# `.party` subcommand vocabularies (EN + a couple of CN synonyms) -- AI companion party (M10).
+_PARTY_ADD_WORDS = {"add", "new", "recruit", "加入", "招募", "添加"}
+_PARTY_ACT_WORDS = {"act", "go", "行动", "行動"}
+_PARTY_AUTO_WORDS = {"auto", "自动", "自動"}
+_PARTY_LIST_WORDS = {"", "list", "ls", "列表", "查看"}
+_PARTY_REMOVE_WORDS = {"remove", "rm", "del", "delete", "移除", "删除", "刪除"}
+
+# `.lore` subcommand vocabularies (EN + a couple of CN synonyms) -- world lore (M11).
+_LORE_ADD_WORDS = {"add", "new", "添加", "新增"}
+_LORE_LIST_WORDS = {"", "list", "ls", "列表", "查看"}
+_LORE_QUERY_WORDS = {"query", "search", "find", "查询", "查詢", "搜索"}
+_LORE_IMPORT_WORDS = {"import", "load", "导入", "導入"}
+
+# `.room` subcommand vocabularies (EN + a couple of CN synonyms).
+_ROOM_OPEN_WORDS = {"open", "new", "create", "开", "开房", "開", "開房"}
+_ROOM_LINK_WORDS = {"link", "join", "bind", "连", "連", "加入"}
+_ROOM_LEAVE_WORDS = {"leave", "unbind", "close", "离开", "離開", "解绑", "解綁"}
+_ROOM_SHOW_WORDS = {"", "show", "status", "info", "查看"}
+
+# Privilege inputs for `.room` gating. Chat platforms rarely surface a reliable
+# admin flag through the generic InboundMessage.raw, so the gate treats the local
+# CLI/terminal operator and private/DM sessions as owners of their own session,
+# plus any explicit admin/owner marker the adapter happened to include in `raw`.
+_ROOM_ADMIN_CHAT_TYPES = {"dm", "direct", "private"}
+_ROOM_ADMIN_RAW_ROLES = {"admin", "administrator", "owner", "creator", "keeper", "master", "moderator"}
+_ROOM_ADMIN_RAW_FLAGS = ("is_admin", "is_owner", "is_group_admin", "admin", "owner")
+_ROOM_LOCAL_PLATFORMS = {"cli", "tui"}
+
+
+@dataclass
+class CommandSpec:
+    canonical: str
+    handler: Handler
+    aliases_en: list[str]
+    aliases_zh: list[str]
+    slash: dict | None
+    help_key: str
+    required_level: int = 0
+
+
+@dataclass
+class CommandCtx:
+    services: Services
+    router: CommandRouter
+    raw_ctx: Any
+    spec: CommandSpec
+    command: str
+    args: str
+    locale: str
+    i18n: I18n
+
+    @property
+    def chat_key(self) -> str:
+        value = getattr(self.raw_ctx, "chat_key", "")
+        return value() if callable(value) else str(value)
+
+    @property
+    def user_id(self) -> str:
+        if hasattr(self.raw_ctx, "uid") and callable(self.raw_ctx.uid):
+            return str(self.raw_ctx.uid())
+        return str(getattr(self.raw_ctx, "user_id", ""))
+
+
+class CommandRouter:
+    def __init__(
+        self,
+        services: Services,
+        prefixes: tuple[str, ...] = (".", "。", "/"),
+        *,
+        keystore: Any = None,
+        hub: Any = None,
+    ) -> None:
+        self.services = services
+        self.prefixes = prefixes
+        # Optional cross-transport deps for the `.room` family: `keystore` mints
+        # terminal join keys (`.room open`); `hub` reports online members
+        # (`.room` show). Both default to None so a standalone router still works
+        # (those subcommands then degrade to a localized notice).
+        self.keystore = keystore
+        self.hub = hub
+        self._specs = self._build_specs()
+        self._alias_maps = {
+            "en": self._build_alias_map("en"),
+            "zh": self._build_alias_map("zh"),
+        }
+
+    def resolve(self, text: str, locale: str) -> tuple[CommandSpec, str] | None:
+        stripped = text.strip()
+        prefix = next((item for item in self.prefixes if stripped.startswith(item)), "")
+        if not prefix:
+            return None
+
+        rest = stripped[len(prefix) :].lstrip()
+        match = _COMMAND_TOKEN_RE.match(rest)
+        if not match:
+            return None
+
+        token = match.group(1).casefold()
+        args = (match.group(2) or "").strip()
+        for dialect in self._locale_order(locale):
+            spec = self._alias_maps[dialect].get(token)
+            if spec is not None:
+                return spec, args
+        return None
+
+    async def dispatch(self, ctx: AgentCtx | Any, text: str) -> str | None:
+        locale = _ctx_locale(ctx)
+        resolved = self.resolve(text, locale)
+        if resolved is None:
+            return self._render_inline_rolls(text, locale)
+
+        spec, args = resolved
+        if spec.required_level and _privilege_level(ctx) < spec.required_level:
+            return get_i18n(locale).t("rooms.denied")
+        command = text.strip()[1:].split(maxsplit=1)[0] if text.strip() else spec.canonical
+        command_ctx = CommandCtx(
+            services=self.services,
+            router=self,
+            raw_ctx=ctx,
+            spec=spec,
+            command=command,
+            args=args,
+            locale=locale,
+            i18n=get_i18n(locale),
+        )
+        return await spec.handler(command_ctx)
+
+    def slash_definitions(self, locale: str = "en") -> list[dict]:
+        i18n = get_i18n(locale)
+        definitions = []
+        for spec in self._specs:
+            if spec.slash is None:
+                continue
+            name = str(spec.slash.get("name") or spec.canonical).casefold()
+            if not _SLASH_NAME_RE.fullmatch(name):
+                continue
+            definition = {
+                "name": name,
+                "description": i18n.t(spec.help_key),
+            }
+            if spec.slash.get("options"):
+                definition["options"] = spec.slash["options"]
+            definitions.append(definition)
+        return definitions
+
+    async def cmd_roll(self, ctx: CommandCtx) -> str:
+        args = ctx.args or "1d20"
+        times, expression = _split_multi(args)
+        times = min(times, 20)
+        lines = []
+        for _ in range(times):
+            result = _roll_expression(ctx.services, expression)
+            lines.append(ctx.i18n.t("commands.roll.result", result=_format_roll(result, ctx.i18n)))
+        return "\n".join(lines)
+
+    async def cmd_hidden_roll(self, ctx: CommandCtx) -> str:
+        expression = ctx.args or "1d20"
+        result = _roll_expression(ctx.services, expression)
+        return ctx.i18n.t("commands.roll.hidden", result=_format_roll(result, ctx.i18n))
+
+    async def cmd_check(self, ctx: CommandCtx) -> str:
+        character = await ctx.services.characters.get_character(ctx.user_id, ctx.chat_key)
+        if character.system == "DnD5e":
+            return await self._cmd_check_dnd(ctx, character)
+        return await self._cmd_check_coc(ctx, character)
+
+    async def cmd_opposed(self, ctx: CommandCtx) -> str:
+        character = await ctx.services.characters.get_character(ctx.user_id, ctx.chat_key)
+        pack = load_rulepack("coc7")
+        args = ctx.args or "侦查"
+        left_text, right_text = _split_two_args(args)
+        left = _parse_coc_check_args(left_text or "侦查", pack)
+        right = _parse_coc_check_args(right_text or left.name, pack)
+        rule = await _get_coc_rule(ctx)
+        left_value = _coc_check_value(character, pack, left.name, left.temp_value)
+        right_value = _coc_check_value(character, pack, right.name, right.temp_value)
+        left_roll = ctx.services.dice.roll_coc_check(left_value, rule=rule, difficulty=left.difficulty)
+        right_roll = ctx.services.dice.roll_coc_check(right_value, rule=rule, difficulty=right.difficulty)
+        if left_roll["rank"] > right_roll["rank"]:
+            winner = ctx.i18n.t("commands.opposed.left")
+        elif left_roll["rank"] < right_roll["rank"]:
+            winner = ctx.i18n.t("commands.opposed.right")
+        else:
+            winner = ctx.i18n.t("commands.opposed.tie")
+        return ctx.i18n.t(
+            "commands.opposed.result",
+            left=left.canonical,
+            left_roll=left_roll["roll"],
+            left_rank=coc_rank_label(left_roll["rank"], ctx.i18n),
+            right=right.canonical,
+            right_roll=right_roll["roll"],
+            right_rank=coc_rank_label(right_roll["rank"], ctx.i18n),
+            winner=winner,
+        )
+
+    async def cmd_sanity(self, ctx: CommandCtx) -> str:
+        character = await ctx.services.characters.get_character(ctx.user_id, ctx.chat_key)
+        pack = load_rulepack("coc7")
+        parsed = _parse_coc_check_args(ctx.args or "0/1", pack, default_name="理智")
+        loss_text = parsed.remaining or ctx.args or "0/1"
+        success_loss, failure_loss = _parse_sanity_loss(loss_text)
+        san = _get_sheet_value(character, pack, "理智")
+        rule = await _get_coc_rule(ctx)
+        outcome = ctx.services.dice.roll_coc_check(san, rule=rule, bonus=parsed.bonus, penalty=parsed.penalty)
+        loss_expr = success_loss if outcome["success"] else failure_loss
+        loss = _roll_loss(ctx.services, loss_expr)
+        _set_sheet_value(character, pack, "理智", max(0, san - loss))
+        await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
+        return ctx.i18n.t(
+            "commands.sanity.result",
+            roll=outcome["roll"],
+            rank=coc_rank_label(outcome["rank"], ctx.i18n),
+            loss=loss,
+            san=max(0, san - loss),
+        )
+
+    async def cmd_sheet(self, ctx: CommandCtx) -> str:
+        character = await ctx.services.characters.get_character(ctx.user_id, ctx.chat_key)
+        pack = _pack_for_character(character)
+        args = ctx.args.strip()
+        if not args or args.casefold() == "show":
+            return _render_sheet(ctx, character, pack)
+        if args.casefold() in {"clr", "clear", "del", "delete"}:
+            await ctx.services.characters.delete_character(ctx.user_id, ctx.chat_key, character.name)
+            return ctx.i18n.t("commands.sheet.deleted", name=character.name)
+
+        assignments = _parse_sheet_assignments(args)
+        if not assignments:
+            return ctx.i18n.t("commands.error.bad_args")
+
+        changed = []
+        for raw_name, raw_value in assignments:
+            canonical = pack.resolve_skill(raw_name) or raw_name.strip()
+            current = _get_sheet_value(character, pack, canonical)
+            value = _apply_value_expr(ctx.services, current, raw_value)
+            _set_sheet_value(character, pack, canonical, value)
+            changed.append(ctx.i18n.t("commands.sheet.changed_item", name=canonical, value=value))
+        await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
+        return ctx.i18n.t("commands.sheet.changed", items=", ".join(changed))
+
+    async def cmd_growth(self, ctx: CommandCtx) -> str:
+        character = await ctx.services.characters.get_character(ctx.user_id, ctx.chat_key)
+        pack = _pack_for_character(character)
+        name = ctx.args or ("侦查" if character.system != "DnD5e" else "察觉")
+        canonical = pack.resolve_skill(name) or name
+        current = _get_sheet_value(character, pack, canonical)
+        roll = ctx.services.dice.roll_expression("1d100").total
+        gain = ctx.services.dice.roll_expression("1d10").total if roll > current else 0
+        if gain:
+            _set_sheet_value(character, pack, canonical, current + gain)
+            await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
+        return ctx.i18n.t("commands.growth.result", name=canonical, roll=roll, gain=gain, value=current + gain)
+
+    async def cmd_initiative(self, ctx: CommandCtx) -> str:
+        character = await ctx.services.characters.get_character(ctx.user_id, ctx.chat_key)
+        if character.system == "DnD5e":
+            modifier = ctx.services.characters.get_dnd_ability_modifier(character, "DEX")
+            expr = _d20_expr(modifier)
+            result = ctx.services.dice.roll_expression(expr, is_check=True)
+            return ctx.i18n.t("commands.init.result", name=character.name, result=_format_roll(result, ctx.i18n))
+        dex = int(character.attributes.get("DEX", 50))
+        result = ctx.services.dice.roll_expression(f"1d100+{dex}", is_check=True)
+        return ctx.i18n.t("commands.init.result", name=character.name, result=_format_roll(result, ctx.i18n))
+
+    async def cmd_make_char(self, ctx: CommandCtx) -> str:
+        template = "dnd5e" if ctx.spec.canonical == "dnd" else "coc7"
+        default_name_key = "commands.character.dnd_name" if template == "dnd5e" else "commands.character.coc_name"
+        name = ctx.args.strip() or ctx.i18n.t(default_name_key)
+        character = ctx.services.characters.generate_character(template, name)
+        await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
+        return ctx.i18n.t("commands.character.created", name=character.name, system=character.system)
+
+    async def cmd_setcoc(self, ctx: CommandCtx) -> str:
+        raw = ctx.args.strip().casefold()
+        if raw == "dg":
+            rule = 11
+        elif raw.isdigit():
+            rule = int(raw)
+        else:
+            rule = await _get_coc_rule(ctx)
+            return ctx.i18n.t("commands.setcoc.current", rule=rule)
+
+        if rule not in {0, 1, 2, 3, 4, 5, 11}:
+            return ctx.i18n.t("commands.setcoc.invalid")
+        await ctx.services.store.set(user_key="", store_key=f"coc_rule.{ctx.chat_key}", value=str(rule))
+        return ctx.i18n.t("commands.setcoc.changed", rule=rule)
+
+    async def cmd_rename(self, ctx: CommandCtx) -> str:
+        new_name = ctx.args.strip()
+        if not new_name:
+            return ctx.i18n.t("commands.error.bad_args")
+        character = await ctx.services.characters.get_character(ctx.user_id, ctx.chat_key)
+        old_name = character.name
+        character.name = new_name
+        await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
+        if old_name and old_name != new_name:
+            await ctx.services.characters.delete_character(ctx.user_id, ctx.chat_key, old_name)
+        return ctx.i18n.t("commands.rename.changed", old=old_name, new=new_name)
+
+    async def cmd_jrrp(self, ctx: CommandCtx) -> str:
+        luck = await ctx.services.characters.get_daily_luck(ctx.user_id)
+        return ctx.i18n.t("commands.jrrp.result", luck=luck)
+
+    async def cmd_draw(self, ctx: CommandCtx) -> str:
+        deck = [
+            ctx.i18n.t("commands.draw.card_1"),
+            ctx.i18n.t("commands.draw.card_2"),
+            ctx.i18n.t("commands.draw.card_3"),
+            ctx.i18n.t("commands.draw.card_4"),
+        ]
+        card = deck[random.randrange(len(deck))]
+        return ctx.i18n.t("commands.draw.result", card=card)
+
+    async def cmd_bot_toggle(self, ctx: CommandCtx) -> str:
+        value = ctx.args.strip().casefold()
+        if value in {"on", "1", "true", "开启", "啟用"}:
+            await ctx.services.store.set(user_key="", store_key=f"bot_enabled.{ctx.chat_key}", value="1")
+            return ctx.i18n.t("commands.bot.on")
+        if value in {"off", "0", "false", "关闭", "關閉"}:
+            await ctx.services.store.set(user_key="", store_key=f"bot_enabled.{ctx.chat_key}", value="0")
+            return ctx.i18n.t("commands.bot.off")
+        return ctx.i18n.t("commands.bot.status")
+
+    async def cmd_help(self, ctx: CommandCtx) -> str:
+        names = []
+        for spec in self._specs:
+            aliases = spec.aliases_zh if _is_zh(ctx.locale) else spec.aliases_en
+            names.append(f"{ctx.router.prefixes[0]}{aliases[0]}")
+        return ctx.i18n.t("commands.help.result", commands=", ".join(names))
+
+    async def cmd_room(self, ctx: CommandCtx) -> str:
+        """`.room [open|link <key>|leave]` — bind/inspect this channel's shared
+        session (M7 §4). Bindings are keyed by the ORIGIN channel's chat_key, not
+        the (already-resolved) `ctx.chat_key`, so `resolve_session_key` finds
+        them on the next inbound message."""
+        parts = ctx.args.split(maxsplit=1)
+        sub = parts[0].casefold() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        channel_key = _channel_chat_key(ctx.raw_ctx)
+        store = ctx.services.store
+        if sub in _ROOM_OPEN_WORDS:
+            return await self._room_open(ctx, store, channel_key)
+        if sub in _ROOM_LINK_WORDS:
+            return await self._room_link(ctx, store, channel_key, rest)
+        if sub in _ROOM_LEAVE_WORDS:
+            return await self._room_leave(ctx, store, channel_key)
+        if sub in _ROOM_SHOW_WORDS:
+            return await self._room_show(ctx, store, channel_key)
+        return ctx.i18n.t("rooms.usage")
+
+    async def _room_open(self, ctx: CommandCtx, store: Any, channel_key: str) -> str:
+        if self.keystore is None:
+            return ctx.i18n.t("rooms.open.no_keystore")
+        room_id = mint_room_id()
+        session_key = session_key_for_room(room_id)
+        join_key = self.keystore.add(room=room_id)
+        await set_binding(store, channel_key, session_key)
+        return ctx.i18n.t("rooms.open.result", key=join_key, session=session_key)
+
+    async def _room_link(self, ctx: CommandCtx, store: Any, channel_key: str, rest: str) -> str:
+        if not rest:
+            return ctx.i18n.t("rooms.link.usage")
+        session_key = self._room_link_target(rest)
+        await set_binding(store, channel_key, session_key)
+        return ctx.i18n.t("rooms.link.result", session=session_key)
+
+    def _room_link_target(self, token: str) -> str:
+        """A join key resolves to its terminal session; anything else is taken
+        as a literal session id to bind to directly."""
+        if self.keystore is not None:
+            entry = self.keystore.get(token)
+            if entry is not None:
+                return session_key_for_room(entry.room)
+        return token
+
+    async def _room_leave(self, ctx: CommandCtx, store: Any, channel_key: str) -> str:
+        binding = await get_binding(store, channel_key)
+        if not binding:
+            return ctx.i18n.t("rooms.leave.none")
+        await clear_binding(store, channel_key)
+        return ctx.i18n.t("rooms.leave.result", session=binding)
+
+    async def _room_show(self, ctx: CommandCtx, store: Any, channel_key: str) -> str:
+        binding = await get_binding(store, channel_key)
+        if not binding:
+            return ctx.i18n.t("rooms.show.none")
+        online = 0
+        members_text = ctx.i18n.t("rooms.show.empty")
+        if self.hub is not None:
+            members = self.hub.members(binding)
+            online = len(members)
+            names = sorted(n for n in (_member_label(member) for member in members) if n)
+            if names:
+                members_text = ", ".join(names)
+        return ctx.i18n.t("rooms.show.result", session=binding, online=online, members=members_text)
+
+    async def cmd_party(self, ctx: CommandCtx) -> str:
+        """`.party [add <name> [| persona] | act <name> [hint] | auto on|off | remove <name>]`
+        — manage the AI companion party (M10). Bare `.party` lists the party's AI companions."""
+        from agent.kp_tools_companion import CompanionTools
+
+        parts = ctx.args.split(maxsplit=1)
+        sub = parts[0].casefold() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        agent_ctx = AgentCtx(
+            chat_key=ctx.chat_key,
+            user_id=ctx.user_id,
+            platform=str(getattr(ctx.raw_ctx, "platform", "cli") or "cli"),
+            locale=ctx.locale,
+        )
+        tools = CompanionTools(ctx.services)
+
+        if sub in _PARTY_ADD_WORDS:
+            if not rest:
+                return ctx.i18n.t("companion.commands.party.add_usage")
+            name, persona = (piece.strip() for piece in rest.split("|", 1)) if "|" in rest else (rest, "")
+            return await tools.add_companion(agent_ctx, name=name, persona=persona)
+        if sub in _PARTY_ACT_WORDS:
+            return await self._party_act(ctx, rest)
+        if sub in _PARTY_AUTO_WORDS:
+            return await tools.party_auto(agent_ctx, action=rest)
+        if sub in _PARTY_REMOVE_WORDS:
+            if not rest:
+                return ctx.i18n.t("companion.commands.party.remove_usage")
+            return await tools.remove_companion(agent_ctx, name=rest)
+        if sub in _PARTY_LIST_WORDS:
+            return await tools.list_companions(agent_ctx)
+        return ctx.i18n.t("companion.commands.party.usage")
+
+    async def _party_act(self, ctx: CommandCtx, rest: str) -> str:
+        """`.party act <name> [hint]` — run one companion's turn now, fanned out to the room."""
+        if not rest:
+            return ctx.i18n.t("companion.commands.party.act_usage")
+        if self.hub is None:
+            return ctx.i18n.t("companion.commands.party.no_hub")
+
+        name, _, hint = rest.partition(" ")
+        from agent.kp_tools import build_kp_toolset
+        from gateway.director import request_companion
+
+        result = await request_companion(
+            self.hub,
+            ctx.services,
+            name.strip(),
+            chat_key=ctx.chat_key,
+            command_router=self,
+            toolset=build_kp_toolset(ctx.services),
+            hint=hint.strip(),
+            locale=ctx.locale,
+        )
+        if result is None:
+            return ctx.i18n.t("companion.commands.party.act_none", name=name.strip())
+        return ctx.i18n.t("companion.commands.party.act_done", name=name.strip())
+
+    def _agent_ctx(self, ctx: CommandCtx) -> AgentCtx:
+        """Build the `AgentCtx` a delegated tool needs, carrying the origin ctx's fs/extra so
+        file-based tools (`.lore import`, `.import`) can resolve sandbox paths."""
+        return AgentCtx(
+            chat_key=ctx.chat_key,
+            user_id=ctx.user_id,
+            platform=str(getattr(ctx.raw_ctx, "platform", "cli") or "cli"),
+            locale=ctx.locale,
+            fs=getattr(ctx.raw_ctx, "fs", None),
+            extra=getattr(ctx.raw_ctx, "extra", {}) or {},
+        )
+
+    async def cmd_lore(self, ctx: CommandCtx) -> str:
+        """`.lore [add <title> | <content> | list [scope] | query <text> | import <file>]` — manage
+        world lore (M11). `list` is open; authoring/secret-revealing ops (add/query/import) are
+        keeper-gated via the shared privilege check."""
+        from agent.kp_tools_worldbook import WorldbookTools
+
+        parts = ctx.args.split(maxsplit=1)
+        sub = parts[0].casefold() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        agent_ctx = self._agent_ctx(ctx)
+        tools = WorldbookTools(ctx.services)
+        keeper = _privilege_level(ctx.raw_ctx) >= int(PrivilegeLevel.GROUP_ADMIN)
+
+        if sub in _LORE_LIST_WORDS:
+            return await tools.list_lore(agent_ctx, scope=rest)
+        if sub in _LORE_ADD_WORDS:
+            if not keeper:
+                return ctx.i18n.t("worldbook.commands.lore.denied")
+            title, _, content = rest.partition("|")
+            title, content = title.strip(), content.strip()
+            if not title or not content:
+                return ctx.i18n.t("worldbook.commands.lore.add_usage")
+            return await tools.add_lore(agent_ctx, title=title, content=content)
+        if sub in _LORE_QUERY_WORDS:
+            if not keeper:
+                return ctx.i18n.t("worldbook.commands.lore.denied")
+            if not rest:
+                return ctx.i18n.t("worldbook.commands.lore.query_usage")
+            return await tools.query_lore(agent_ctx, query=rest)
+        if sub in _LORE_IMPORT_WORDS:
+            if not keeper:
+                return ctx.i18n.t("worldbook.commands.lore.denied")
+            if not rest:
+                return ctx.i18n.t("worldbook.commands.lore.import_usage")
+            return await tools.import_lorebook(agent_ctx, file_path=rest)
+        return ctx.i18n.t("worldbook.commands.lore.usage")
+
+    async def cmd_import(self, ctx: CommandCtx) -> str:
+        """`.import <card file> [coc7|dnd5e] [pc|companion]` — import a SillyTavern card as the
+        acting player's PC or an AI companion (M12)."""
+        from agent.kp_tools_charcard import CharcardTools
+
+        tokens = ctx.args.split()
+        if not tokens:
+            return ctx.i18n.t("charcard.commands.import.usage")
+        file_path = tokens[0]
+        system = "coc7"
+        as_ = "pc"
+        for token in tokens[1:]:
+            low = token.casefold()
+            if low in {"coc7", "coc", "dnd5e", "dnd"}:
+                system = low
+            elif low in {"pc", "companion"}:
+                as_ = low
+        tools = CharcardTools(ctx.services)
+        return await tools.import_character(self._agent_ctx(ctx), file_path=file_path, system=system, as_=as_)
+
+    def _build_specs(self) -> list[CommandSpec]:
+        return [
+            CommandSpec("roll", self.cmd_roll, ["roll", "r"], ["r", "rd"], {"name": "roll"}, "commands.help.roll"),
+            CommandSpec("hidden_roll", self.cmd_hidden_roll, ["rh", "hroll"], ["rh"], None, "commands.help.hidden_roll"),
+            CommandSpec(
+                "check",
+                self.cmd_check,
+                ["check", "save", "attack", "cast", "ra", "rc"],
+                ["ra", "rc"],
+                {"name": "check"},
+                "commands.help.check",
+            ),
+            CommandSpec("opposed", self.cmd_opposed, ["opposed", "rav", "rcv"], ["rav", "rcv"], None, "commands.help.opposed"),
+            CommandSpec("sc", self.cmd_sanity, ["sc", "sanity"], ["sc"], {"name": "sc"}, "commands.help.sc"),
+            CommandSpec("sheet", self.cmd_sheet, ["sheet", "st"], ["st"], {"name": "sheet"}, "commands.help.sheet"),
+            CommandSpec("growth", self.cmd_growth, ["growth", "en"], ["en"], None, "commands.help.growth"),
+            CommandSpec("init", self.cmd_initiative, ["init", "initiative", "ri"], ["ri", "init"], {"name": "init"}, "commands.help.init"),
+            CommandSpec("coc", self.cmd_make_char, ["coc", "coc7"], ["coc", "coc7"], {"name": "coc"}, "commands.help.coc"),
+            CommandSpec("dnd", self.cmd_make_char, ["dnd", "dnd5e"], ["dnd", "dnd5e"], {"name": "dnd"}, "commands.help.dnd"),
+            CommandSpec("setcoc", self.cmd_setcoc, ["setcoc"], ["setcoc"], {"name": "setcoc"}, "commands.help.setcoc"),
+            CommandSpec("rename", self.cmd_rename, ["rename", "nn"], ["nn"], None, "commands.help.rename"),
+            CommandSpec("jrrp", self.cmd_jrrp, ["jrrp", "luck"], ["jrrp"], None, "commands.help.jrrp"),
+            CommandSpec("draw", self.cmd_draw, ["draw"], ["draw", "抽牌"], None, "commands.help.draw"),
+            CommandSpec("bot", self.cmd_bot_toggle, ["bot"], ["bot"], None, "commands.help.bot"),
+            CommandSpec(
+                "party",
+                self.cmd_party,
+                ["party"],
+                ["party", "队伍", "隊伍"],
+                None,
+                "companion.commands.party.help",
+            ),
+            CommandSpec("lore", self.cmd_lore, ["lore"], ["lore", "设定", "設定"], None, "worldbook.commands.lore.help"),
+            CommandSpec(
+                "import",
+                self.cmd_import,
+                ["import"],
+                ["import", "导入", "導入"],
+                None,
+                "charcard.commands.import.help",
+            ),
+            CommandSpec(
+                "room",
+                self.cmd_room,
+                ["room"],
+                ["room", "房间", "房間"],
+                None,
+                "commands.help.room",
+                required_level=int(PrivilegeLevel.GROUP_ADMIN),
+            ),
+            CommandSpec("help", self.cmd_help, ["help", "h"], ["help", "帮助"], {"name": "help"}, "commands.help.help"),
+        ]
+
+    def _build_alias_map(self, locale: str) -> dict[str, CommandSpec]:
+        alias_map = {}
+        for spec in self._specs:
+            aliases = spec.aliases_zh if locale == "zh" else spec.aliases_en
+            for alias in aliases:
+                alias_map[alias.casefold()] = spec
+        return alias_map
+
+    def _locale_order(self, locale: str) -> tuple[str, str]:
+        return ("zh", "en") if _is_zh(locale) else ("en", "zh")
+
+    async def _cmd_check_coc(self, ctx: CommandCtx, character: CharacterSheet) -> str:
+        pack = load_rulepack("coc7")
+        args = ctx.args or "侦查"
+        times, rest = _split_multi(args)
+        parsed = _parse_coc_check_args(rest, pack)
+        target_value = _coc_check_value(character, pack, parsed.name, parsed.temp_value)
+        effective_target = _effective_coc_target(target_value, parsed.difficulty)
+        rule = await _get_coc_rule(ctx)
+        lines = []
+        for _ in range(min(times, 20)):
+            outcome = ctx.services.dice.roll_coc_check(
+                target_value,
+                rule=rule,
+                difficulty=parsed.difficulty,
+                bonus=parsed.bonus,
+                penalty=parsed.penalty,
+            )
+            lines.append(
+                ctx.i18n.t(
+                    "commands.check.coc",
+                    name=parsed.canonical,
+                    target=target_value,
+                    effective=effective_target,
+                    roll=outcome["roll"],
+                    rank=coc_rank_label(outcome["rank"], ctx.i18n),
+                )
+            )
+        return "\n".join(lines)
+
+    async def _cmd_check_dnd(self, ctx: CommandCtx, character: CharacterSheet) -> str:
+        pack = load_rulepack("dnd5e")
+        parsed = _parse_dnd_check_args(ctx.args or "perception", pack)
+        canonical = parsed["canonical"]
+        modifier = _dnd_modifier(ctx.services, character, canonical, parsed["proficient"])
+        expr = _d20_expr(modifier)
+        if parsed["mode"] == "adv":
+            result = ctx.services.dice.roll_advantage(expr, is_check=True)
+        elif parsed["mode"] == "dis":
+            result = ctx.services.dice.roll_disadvantage(expr, is_check=True)
+        else:
+            result = ctx.services.dice.roll_expression(expr, is_check=True)
+        return ctx.i18n.t(
+            "commands.check.dnd",
+            name=canonical,
+            modifier=_signed(modifier),
+            result=_format_roll(result, ctx.i18n),
+        )
+
+    def _render_inline_rolls(self, text: str, locale: str) -> str | None:
+        matches = _INLINE_RE.findall(text)
+        if not matches:
+            return None
+        i18n = get_i18n(locale)
+        lines = []
+        for expression in matches:
+            result = _roll_expression(self.services, expression)
+            lines.append(i18n.t("commands.inline.result", expression=expression.strip(), result=_format_roll(result, i18n)))
+        return "\n".join(lines)
+
+
+@dataclass
+class _CocParsedCheck:
+    name: str
+    canonical: str
+    difficulty: int = 1
+    bonus: int = 0
+    penalty: int = 0
+    temp_value: int | None = None
+    remaining: str = ""
+
+
+def _ctx_locale(ctx: AgentCtx | Any) -> str:
+    return str(getattr(ctx, "locale", "en") or "en")
+
+
+def _is_zh(locale: str) -> bool:
+    return locale.casefold().startswith("zh")
+
+
+def _format_roll(result: DiceResult, i18n: I18n) -> str:
+    return result.format_result(i18n=i18n)
+
+
+def _normalize_roll_expression(expression: str) -> str:
+    text = expression.strip() or "1d20"
+    return _EXPLODE_BANG_RE.sub(lambda match: f"{match.group(1)}e{match.group(2)}", text)
+
+
+def _roll_expression(services: Services, expression: str) -> DiceResult:
+    mode, expr = _extract_roll_mode(expression)
+    expr = _normalize_roll_expression(expr)
+    if mode == "adv":
+        return services.dice.roll_advantage(expr, is_check=True)
+    if mode == "dis":
+        return services.dice.roll_disadvantage(expr, is_check=True)
+    return services.dice.roll_expression(expr)
+
+
+def _extract_roll_mode(expression: str) -> tuple[str, str]:
+    tokens = expression.split()
+    if not tokens:
+        return "", "1d20"
+    first = tokens[0].casefold()
+    last = tokens[-1].casefold()
+    if first in _ADV_WORDS:
+        return "adv", " ".join(tokens[1:]) or "1d20"
+    if first in _DIS_WORDS:
+        return "dis", " ".join(tokens[1:]) or "1d20"
+    if last in _ADV_WORDS:
+        return "adv", " ".join(tokens[:-1]) or "1d20"
+    if last in _DIS_WORDS:
+        return "dis", " ".join(tokens[:-1]) or "1d20"
+    return "", expression
+
+
+def _split_multi(args: str) -> tuple[int, str]:
+    match = _MULTI_PREFIX_RE.match(args)
+    if not match:
+        return 1, args.strip() or "1d20"
+    return max(1, int(match.group(1))), match.group(2).strip() or "1d20"
+
+
+def _parse_coc_check_args(text: str, pack: RulePack, default_name: str = "侦查") -> _CocParsedCheck:
+    rest = text.strip() or default_name
+    bonus = 0
+    penalty = 0
+    rest, bonus, penalty = _consume_bonus_penalty(rest, bonus, penalty)
+    difficulty, rest = _consume_difficulty(rest)
+    rest, bonus, penalty = _consume_bonus_penalty(rest, bonus, penalty)
+
+    name_text = rest.strip() or default_name
+    remaining = ""
+    if "/" in name_text and default_name == "理智":
+        name_text, remaining = default_name, name_text
+
+    temp_value = None
+    if remaining == "":
+        match = _TRAILING_NUMBER_RE.match(name_text)
+        if match and not match.group(1).strip().isdigit():
+            name_text = match.group(1).strip()
+            temp_value = int(match.group(2))
+
+    canonical = pack.resolve_skill(name_text) or name_text
+    return _CocParsedCheck(
+        name=canonical,
+        canonical=canonical,
+        difficulty=difficulty,
+        bonus=bonus,
+        penalty=penalty,
+        temp_value=temp_value,
+        remaining=remaining,
+    )
+
+
+def _consume_bonus_penalty(text: str, bonus: int, penalty: int) -> tuple[str, int, int]:
+    rest = text.strip()
+    while rest:
+        parts = rest.split(maxsplit=1)
+        token = parts[0]
+        token_cf = token.casefold()
+        if re.fullmatch(r"b\d*", token_cf):
+            bonus += int(token_cf[1:] or "1")
+            rest = parts[1] if len(parts) > 1 else ""
+            continue
+        if re.fullmatch(r"p\d*", token_cf):
+            penalty += int(token_cf[1:] or "1")
+            rest = parts[1] if len(parts) > 1 else ""
+            continue
+        if len(token) > 1 and token[0].casefold() in {"b", "p"} and not token[1].isascii():
+            amount = 1
+            if token[0].casefold() == "b":
+                bonus += amount
+            else:
+                penalty += amount
+            rest = f"{token[1:]} {parts[1] if len(parts) > 1 else ''}".strip()
+            continue
+        break
+    return rest, bonus, penalty
+
+
+def _consume_difficulty(text: str) -> tuple[int, str]:
+    rest = text.strip()
+    for prefix, difficulty in _DIFFICULTY_PREFIXES:
+        if rest.startswith(prefix):
+            return difficulty, rest[len(prefix) :].strip()
+    parts = rest.split(maxsplit=1)
+    if parts:
+        word = parts[0].casefold()
+        if word in _DIFFICULTY_WORDS:
+            return _DIFFICULTY_WORDS[word], parts[1].strip() if len(parts) > 1 else ""
+    return 1, rest
+
+
+def _coc_check_value(character: CharacterSheet, pack: RulePack, canonical: str, temp_value: int | None) -> int:
+    if temp_value is not None:
+        return temp_value
+    return _get_sheet_value(character, pack, canonical)
+
+
+def _effective_coc_target(value: int, difficulty: int) -> int:
+    if difficulty == 2:
+        return value // 2
+    if difficulty == 3:
+        return value // 5
+    if difficulty == 4:
+        return 1
+    return value
+
+
+def _parse_dnd_check_args(text: str, pack: RulePack) -> dict[str, Any]:
+    tokens = text.split()
+    mode = ""
+    proficient = False
+    kept = []
+    for token in tokens:
+        word = token.casefold()
+        if word in _ADV_WORDS:
+            mode = "adv"
+        elif word in _DIS_WORDS:
+            mode = "dis"
+        elif word in _PROF_WORDS:
+            proficient = True
+        else:
+            kept.append(token)
+    name = " ".join(kept) or "perception"
+    canonical = pack.resolve_skill(name) or name
+    return {"canonical": canonical, "mode": mode, "proficient": proficient}
+
+
+def _dnd_modifier(services: Services, character: CharacterSheet, canonical: str, proficient: bool) -> int:
+    if canonical in _DND_ATTR_TO_KEY:
+        return services.characters.get_dnd_ability_modifier(character, _DND_ATTR_TO_KEY[canonical])
+    manager_name = _DND_SKILL_TO_MANAGER.get(canonical, canonical)
+    return services.characters.get_dnd_skill_modifier(character, manager_name, proficient=proficient)
+
+
+def _d20_expr(modifier: int) -> str:
+    if modifier == 0:
+        return "1d20"
+    return f"1d20{_signed(modifier)}"
+
+
+def _signed(value: int) -> str:
+    return f"+{value}" if value >= 0 else str(value)
+
+
+def _split_two_args(text: str) -> tuple[str, str]:
+    if "," in text:
+        left, right = text.split(",", 1)
+        return left.strip(), right.strip()
+    parts = text.split()
+    if len(parts) >= 2:
+        return parts[0], " ".join(parts[1:])
+    return text.strip(), ""
+
+
+def _parse_sanity_loss(text: str) -> tuple[str, str]:
+    rest = text.strip()
+    if "/" in rest:
+        success, failure = rest.split("/", 1)
+        return success.strip() or "0", failure.strip() or "0"
+    return "0", rest or "1"
+
+
+def _roll_loss(services: Services, expression: str) -> int:
+    text = expression.strip() or "0"
+    if re.fullmatch(r"[+-]?\d+", text):
+        return max(0, int(text))
+    return max(0, services.dice.roll_expression(text).total)
+
+
+async def _get_coc_rule(ctx: CommandCtx) -> int:
+    raw = await ctx.services.store.get(user_key="", store_key=f"coc_rule.{ctx.chat_key}")
+    if raw is None:
+        return DEFAULT_COC_RULE
+    try:
+        return int(raw)
+    except ValueError:
+        return DEFAULT_COC_RULE
+
+
+def _pack_for_character(character: CharacterSheet) -> RulePack:
+    return load_rulepack("dnd5e" if character.system == "DnD5e" else "coc7")
+
+
+def _canonical_values(character: CharacterSheet, pack: RulePack) -> dict[str, Any]:
+    values = dict(pack.defaults)
+    if character.system == "DnD5e":
+        for key, value in character.attributes.items():
+            values[_DND_KEY_TO_ATTR.get(key, key)] = value
+        for key, value in character.secondary_attributes.items():
+            canonical = pack.resolve_skill(key) or key
+            values[canonical] = value
+        for key, value in character.skills.items():
+            canonical = pack.resolve_skill(key) or key
+            values[canonical] = value
+    else:
+        for key, value in character.attributes.items():
+            values[_COC_KEY_TO_ATTR.get(key, key)] = value
+        for key, value in character.skills.items():
+            canonical = pack.resolve_skill(key) or key
+            values[canonical] = value
+    return values
+
+
+def _get_sheet_value(character: CharacterSheet, pack: RulePack, canonical: str) -> int:
+    if character.system == "DnD5e":
+        if canonical in _DND_ATTR_TO_KEY:
+            return int(character.attributes.get(_DND_ATTR_TO_KEY[canonical], pack.defaults.get(canonical, 10)))
+        secondary_key = _DND_SECONDARY_TO_KEY.get(canonical)
+        if secondary_key:
+            return int(character.secondary_attributes.get(secondary_key, pack.defaults.get(canonical, 0)))
+        if canonical in character.skills:
+            return int(character.skills[canonical])
+        if canonical in _DND_SKILLS:
+            return _dnd_modifier_for_values(_canonical_values(character, pack), canonical)
+    else:
+        attr_key = _COC_ATTR_TO_KEY.get(canonical)
+        if attr_key and attr_key in character.attributes:
+            return int(character.attributes[attr_key])
+        skill_key = _COC_SKILL_TO_MANAGER.get(canonical, canonical)
+        if skill_key in character.skills:
+            return int(character.skills[skill_key])
+
+    values = _canonical_values(character, pack)
+    derived = pack.compute_derived(values)
+    if canonical in derived:
+        return int(derived[canonical]) if isinstance(derived[canonical], int) else 0
+    return int(pack.defaults.get(canonical, 0))
+
+
+def _dnd_modifier_for_values(values: dict[str, Any], canonical: str) -> int:
+    ability = {
+        "运动": "力量",
+        "体操": "敏捷",
+        "巧手": "敏捷",
+        "隐匿": "敏捷",
+        "调查": "智力",
+        "奥秘": "智力",
+        "历史": "智力",
+        "自然": "智力",
+        "宗教": "智力",
+        "察觉": "感知",
+        "洞悉": "感知",
+        "驯兽": "感知",
+        "医药": "感知",
+        "求生": "感知",
+        "游说": "魅力",
+        "欺瞒": "魅力",
+        "威吓": "魅力",
+        "表演": "魅力",
+    }.get(canonical, "力量")
+    return (int(values.get(ability, 10)) - 10) // 2
+
+
+def _set_sheet_value(character: CharacterSheet, pack: RulePack, canonical: str, value: int) -> None:
+    if character.system == "DnD5e":
+        attr_key = _DND_ATTR_TO_KEY.get(canonical)
+        if attr_key:
+            character.attributes[attr_key] = value
+            return
+        secondary_key = _DND_SECONDARY_TO_KEY.get(canonical)
+        if secondary_key:
+            character.secondary_attributes[secondary_key] = value
+            return
+        character.skills[canonical] = value
+        return
+
+    attr_key = _COC_ATTR_TO_KEY.get(canonical)
+    if attr_key:
+        character.attributes[attr_key] = value
+        if attr_key in {"DEX", "EDU"}:
+            character._calc_coc_derived_skills()
+        return
+    character.skills[_COC_SKILL_TO_MANAGER.get(canonical, canonical)] = value
+
+
+def _parse_sheet_assignments(text: str) -> list[tuple[str, str]]:
+    assignments = []
+    for match in _SHEET_ASSIGN_RE.finditer(text.strip()):
+        name = match.group(1).strip(" ,，")
+        value = match.group(2).strip()
+        if name and value:
+            assignments.append((name, value))
+    return assignments
+
+
+def _apply_value_expr(services: Services, current: int, raw_value: str) -> int:
+    text = raw_value.strip()
+    sign = text[0] if text[:1] in {"+", "-"} else ""
+    expression = text[1:] if sign else text
+    if "d" in expression.casefold():
+        rolled = services.dice.roll_expression(expression).total
+    else:
+        rolled = int(expression)
+    if sign == "+":
+        return current + rolled
+    if sign == "-":
+        return current - rolled
+    return rolled
+
+
+def _render_sheet(ctx: CommandCtx, character: CharacterSheet, pack: RulePack) -> str:
+    values = _canonical_values(character, pack)
+    values.update(pack.compute_derived(values))
+    top = pack.st_show.get("top") or list(values.keys())[:12]
+    items = []
+    for name in top:
+        value = values.get(name)
+        if value is None:
+            value = _get_sheet_value(character, pack, str(name))
+        items.append(ctx.i18n.t("commands.sheet.item", name=name, value=value))
+    return ctx.i18n.t("commands.sheet.show", name=character.name, items=", ".join(items))
+
+
+def _channel_chat_key(ctx: Any) -> str:
+    """The ORIGIN channel's chat_key (for room bindings), even when `ctx.chat_key`
+    has already been resolved to a shared session by the runner."""
+    extra = getattr(ctx, "extra", None)
+    source = extra.get("source") if isinstance(extra, dict) else None
+    if source is not None and hasattr(source, "chat_key"):
+        return str(source.chat_key())
+    chat_key = getattr(ctx, "chat_key", "")
+    return chat_key() if callable(chat_key) else str(chat_key)
+
+
+def _privilege_level(ctx: Any) -> int:
+    """The caller's privilege for command gating (see `_ROOM_*` constants)."""
+    platform = str(getattr(ctx, "platform", "") or "").casefold()
+    if platform in _ROOM_LOCAL_PLATFORMS:
+        return int(PrivilegeLevel.MASTER)
+    extra = getattr(ctx, "extra", None)
+    raw = extra.get("raw") if isinstance(extra, dict) else None
+    source = extra.get("source") if isinstance(extra, dict) else None
+    chat_type = str(getattr(source, "chat_type", "") or "").casefold()
+    if chat_type in _ROOM_ADMIN_CHAT_TYPES:
+        return int(PrivilegeLevel.GROUP_ADMIN)
+    if _raw_indicates_admin(raw):
+        return int(PrivilegeLevel.GROUP_ADMIN)
+    return int(PrivilegeLevel.EVERYONE)
+
+
+def _raw_indicates_admin(raw: Any) -> bool:
+    if not isinstance(raw, dict):
+        return False
+    for key in ("role", "sender_role", "member_role", "author_role", "user_role"):
+        if str(raw.get(key, "")).casefold() in _ROOM_ADMIN_RAW_ROLES:
+            return True
+    return any(raw.get(flag) is True for flag in _ROOM_ADMIN_RAW_FLAGS)
+
+
+def _member_label(member: Any) -> str:
+    return str(getattr(member, "name", "") or getattr(member, "id", "") or "")

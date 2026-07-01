@@ -1,0 +1,4 @@
+{
+  "agent.tools.unknown_tool": "未知工具：{name}",
+  "agent.tools.bad_arguments": "工具 {name} 参数无效：{error}"
+}

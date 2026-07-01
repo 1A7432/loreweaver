@@ -1,0 +1,4 @@
+{
+  "agent.tools.unknown_tool": "Unknown tool: {name}",
+  "agent.tools.bad_arguments": "Invalid arguments for tool {name}: {error}"
+}

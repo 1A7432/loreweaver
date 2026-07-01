@@ -1,0 +1,8 @@
+{
+  "common.yes": "Yes",
+  "common.no": "No",
+  "common.unknown": "Unknown",
+  "common.error": "Error",
+  "common.none": "None",
+  "character.default_name": "Unnamed"
+}

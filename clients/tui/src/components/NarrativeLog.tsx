@@ -1,0 +1,93 @@
+import { SyntaxStyle } from "@opentui/core"
+import type { DiceFrame, NarrativeFrame, SystemFrame } from "@trpg-kp/protocol"
+import type { Palette } from "../themes"
+
+export type LogFrame = NarrativeFrame | DiceFrame | SystemFrame
+
+// Markdown rendering requires a SyntaxStyle instance; one shared instance is enough
+// since KP narrative markdown only needs basic emphasis styling.
+const narrativeSyntaxStyle = SyntaxStyle.fromStyles({
+  "markup.strong": { bold: true },
+  "markup.italic": { italic: true },
+  "markup.strikethrough": { dim: true },
+})
+
+export interface NarrativeLogProps {
+  frames: LogFrame[]
+  theme: Palette
+  revealTicks?: number
+  critFlash?: boolean
+}
+
+function diceColor(frame: DiceFrame, theme: Palette): string {
+  if ((frame.rank ?? 0) >= 4) return theme.crit
+  if ((frame.rank ?? 0) >= 2) return frame.rank === 2 ? theme.hard : theme.extreme
+  if ((frame.rank ?? 0) >= 1) return theme.success
+  if ((frame.rank ?? 0) <= -2) return theme.fumble
+  if ((frame.rank ?? 0) <= -1) return theme.fail
+  return theme.system
+}
+
+function diceLine(frame: DiceFrame, revealTicks: number): string {
+  const level = frame.level ?? (frame.success ? "SUCCESS" : "FAIL")
+  const target = typeof frame.target === "number" ? ` vs ${frame.target}` : ""
+  const prefix = revealTicks < 2 ? "⚄ ..." : "⚄"
+  return `${prefix} ${frame.actor} ${frame.expr} ${frame.total}${target} -> ${level}`
+}
+
+function speakerLabel(frame: NarrativeFrame): string {
+  if (frame.speaker === "kp") return "KP"
+  if (frame.speaker === "npc") return frame.name ? `[${frame.name}]` : "[NPC]"
+  if (frame.name) return frame.name
+  return frame.speaker.toUpperCase()
+}
+
+export function NarrativeLog({ frames, theme, revealTicks = 3, critFlash = false }: NarrativeLogProps) {
+  return (
+    <box flexDirection="column" width="100%" paddingX={1}>
+      {frames.length === 0 ? (
+        <text fg={theme.dim}>等待 Keeper 叙事...</text>
+      ) : (
+        frames.map((frame, index) => {
+          if (frame.type === "dice") {
+            const color = critFlash && (frame.rank ?? 0) >= 4 ? theme.bg : diceColor(frame, theme)
+            const backgroundColor = critFlash && (frame.rank ?? 0) >= 4 ? theme.crit : theme.bg
+            return (
+              <text key={`${frame.type}-${index}`} fg={color} bg={backgroundColor}>
+                {diceLine(frame, revealTicks)}
+              </text>
+            )
+          }
+
+          if (frame.type === "system") {
+            return (
+              <text key={`${frame.type}-${index}`} fg={frame.level === "warn" ? theme.fail : theme.system}>
+                [{frame.level.toUpperCase()}] {frame.text}
+              </text>
+            )
+          }
+
+          if (frame.speaker === "kp" && frame.format === "markdown") {
+            // `streaming` must stay true until the frame is marked done: besides matching
+            // "chunks still being appended", it also makes MarkdownRenderable draw its
+            // synchronous unstyled fallback instead of waiting on async tree-sitter
+            // highlighting (which never resolves inside a single render pass/test flush).
+            return (
+              <box key={`${frame.type}-${frame.id}-${index}`} flexDirection="column" width="100%">
+                <text fg={theme.dim}>{speakerLabel(frame)}</text>
+                <markdown content={frame.text} fg={theme.kp} syntaxStyle={narrativeSyntaxStyle} streaming={!frame.done} />
+              </box>
+            )
+          }
+
+          const color = frame.speaker === "player" ? theme.player : frame.speaker === "npc" ? theme.npc : theme.system
+          return (
+            <text key={`${frame.type}-${frame.id}-${index}`} fg={color}>
+              {speakerLabel(frame)}: {frame.text}
+            </text>
+          )
+        })
+      )}
+    </box>
+  )
+}

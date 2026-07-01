@@ -1,0 +1,21 @@
+# Whole-file exemptions for sanctioned game data / parser data modules.
+agent/kp_tools_mechanics.py
+agent/kp_tools_knowledge.py
+core/character_manager.py
+core/coc_rules.py
+core/game_clock.py
+core/module_initializer.py
+core/prompt_sections.py
+core/rulepacks.py
+gateway/commands.py
+
+# Narrow runner exemptions for bot-on parser tokens.
+gateway/runner.py::开启
+gateway/runner.py::啟用
+
+# Developer-facing ValueError diagnostics in the binary character-card parser; these are never shown
+# raw to players (the importing tool layer wraps str(exc) in a localized template), matching the
+# convention the sibling parser modules above are whole-file-exempt for.
+core/charcard.py:: PNG does not contain a SillyTavern character card
+core/charcard.py:: embedded character card payload is not a JSON object
+core/charcard.py:: character card JSON must be an object

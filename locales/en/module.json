@@ -1,0 +1,5 @@
+{
+  "module.analysis_no_json_found": "No JSON object could be parsed from the LLM's module-analysis response.",
+  "module.analysis_prompt": "You are a professional TRPG module analysis expert. Carefully read the full module text below and extract every key detail into the required JSON structure.\n\n[Module Name] {doc_name}\n\n[Module Full Text]\n{full_text}\n\n[Output Requirements]\nRespond with strict JSON using exactly the following fields:\n\n{schema}\n\n[Notes]\n- Cover every major scene, NPC, and clue in the module - do not omit any.\n- \"description\" fields must only contain information players can directly perceive.\n- \"keeper_notes\" and \"secret\" fields contain information that must never be revealed to players.\n- List \"timeline\" entries in chronological order.\n- The response must be valid JSON; do not wrap it in markdown code fences.\n- If a field has no content, use an empty array [] or an empty string \"\".\n\nRespond with the JSON only, nothing else.",
+  "module.default_document_name": "Untitled Module"
+}

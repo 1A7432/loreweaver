@@ -1,0 +1,216 @@
+defaults:
+  力量: 50
+  体质: 50
+  体型: 50
+  敏捷: 50
+  外貌: 50
+  智力: 50
+  意志: 50
+  教育: 50
+  幸运: 50
+  理智: 50
+  生命值: 10
+  魔法值: 10
+  信用评级: 0
+  取悦: 15
+  话术: 5
+  恐吓: 15
+  说服: 10
+  心理学: 10
+  母语: 50
+  外语: 1
+  估价: 5
+  乔装: 5
+  潜行: 20
+  追踪: 10
+  侦查: 25
+  聆听: 20
+  读唇: 1
+  图书馆: 20
+  生存: 10
+  攀爬: 20
+  跳跃: 20
+  骑乘: 5
+  游泳: 20
+  潜水: 1
+  艺术与手艺: 5
+  表演: 5
+  美术: 5
+  伪造: 5
+  摄影: 5
+  写作: 5
+  音乐: 5
+  舞蹈: 5
+  厨艺: 5
+  妙手: 10
+  锁匠: 1
+  电气维修: 10
+  机械维修: 10
+  计算机使用: 5
+  导航: 10
+  汽车驾驶: 20
+  驾驶:飞行器: 1
+  驾驶:船: 1
+  驯兽: 5
+  操作重型机械: 1
+  斗殴: 25
+  斧: 15
+  链锯: 10
+  连枷: 10
+  绞索: 15
+  矛: 20
+  剑: 20
+  鞭: 5
+  射击: 10
+  手枪: 20
+  步霰: 25
+  投掷: 20
+  爆破: 1
+  炮术: 1
+  急救: 30
+  医学: 1
+  精神分析: 1
+  催眠: 1
+  会计: 5
+  法律: 5
+  历史: 5
+  考古学: 1
+  博物: 10
+  人类学: 1
+  神秘学: 5
+  电子学: 1
+  科学: 1
+  天文学: 1
+  生物学: 1
+  植物学: 1
+  化学: 1
+  密码学: 1
+  工程学: 1
+  司法科学: 1
+  地质学: 1
+  数学: 10
+  气象学: 1
+  药学: 1
+  物理学: 1
+  动物学: 1
+  克苏鲁神话: 0
+defaultsComputed:
+  DB: fixed:coc7.db
+  体格: fixed:coc7.build
+  移动力: fixed:coc7.mov
+  生命值上限: fixed:coc7.hpmax
+  生命值: fixed:coc7.hp
+  魔法值上限: fixed:coc7.mpmax
+  魔法值: fixed:coc7.mp
+  理智上限: fixed:coc7.sanmax
+  母语: fixed:coc7.own_language
+  闪避: fixed:coc7.dodge
+alias:
+  力量: [str, STR, strength, Strength]
+  体质: [con, CON, constitution, Constitution, 體質]
+  体型: [siz, SIZ, size, Size, 體型, 体形, 體形]
+  敏捷: [dex, DEX, dexterity, Dexterity]
+  外貌: [app, APP, appearance, Appearance, 外表]
+  智力: [int, INT, intelligence, Intelligence, idea, 灵感, 靈感]
+  意志: [pow, POW, power, Power, will, willpower]
+  教育: [edu, EDU, education, Education, knowledge, 知识, 知識]
+  幸运: [luck, LUCK, luck value, 幸运值, 运气, 幸運, 運氣, 幸運值]
+  DB: [db, damage bonus, 伤害加值, 傷害加值]
+  体格: [build, Build, 體格]
+  移动力: [mov, MOV, move, movement, 移動力, 移动速度, 移動速度, 移速]
+  护甲: [ar, AR, armor, armour, 装甲, 護甲, 裝甲]
+  理智: [san, SAN, sanity, Sanity, san值, SAN值, 理智值, 理智点数, 心智, 心智点数, 心智點數, 理智點數]
+  理智上限: [sanmax, SANMAX, max sanity, sanity max, san上限, SAN上限, san值上限, SAN值上限, 理智值上限, 理智点数上限, 心智上限]
+  生命值: [hp, HP, hit points, health, 生命, 体力, 體力, 血量, 耐久值]
+  生命值上限: [hpmax, HPMAX, max hp, hp max, 生命上限, 体力上限, 體力上限, 血量上限, 耐久值上限]
+  魔法值: [mp, MP, magic points, 魔法, 魔力, 魔力值]
+  魔法值上限: [mpmax, MPMAX, max mp, mp max, 魔法上限, 蓝量上限, 藍量上限]
+  信用评级: [credit rating, credit, cr, CR, 信誉, 信用, 信誉度, 信用評級, 信譽, 信譽度]
+  取悦: [charm, 魅惑, 取悅]
+  话术: [fast talk, fast-talk, 快速交谈, 話術, 快速交談]
+  恐吓: [intimidate, intimidation, 恐嚇, 威吓, 威嚇]
+  说服: [persuade, persuasion, 辩论, 议价, 演讲, 說服, 辯論, 議價, 演講]
+  心理学: [psychology, psychoanalysis check, 心理學]
+  母语: [own language, language own, native language, 母語]
+  外语: [foreign language, other language, language, 语言, 語言, 外語, 其他语言, 其他語言]
+  估价: [appraise, appraisal, 鉴定, 估價]
+  乔装: [disguise, 伪装, 喬裝]
+  潜行: [stealth, sneak, hide, 躲藏, 潛行, 隐匿]
+  追踪: [track, tracking, 跟踪, 追蹤, 跟蹤]
+  侦查: [spot hidden, spot, notice, perception, 侦察, 偵查, 偵察, 发现]
+  聆听: [listen, hearing, 倾听, 聆聽, 傾聽]
+  读唇: [read lips, lip reading, 唇语, 讀唇, 唇語]
+  图书馆: [library use, library, library-use, 图书馆使用, 圖書館使用, 图书馆利用, 圖書館, 圖書館利用]
+  生存: [survival, survive]
+  攀爬: [climb, climbing, 攀岩, 攀登, 攀巖]
+  跳跃: [jump, jumping, 跳躍]
+  骑乘: [ride, riding, 骑术, 騎術]
+  游泳: [swim, swimming, 遊泳]
+  潜水: [diving, dive, 潛水]
+  艺术与手艺: [art craft, art and craft, arts crafts, art/craft, 艺术和手艺, 艺术, 手艺, 工艺, 技艺, 藝術與手藝, 藝術和手藝]
+  表演: [perform, performance, acting, 艺术和手艺:表演, 艺术和手艺（表演）]
+  美术: [fine art, art, 美術, 艺术和手艺:美术, 艺术和手艺（美术）]
+  伪造: [forgery, forge, 偽造]
+  摄影: [photography, photo, 攝影]
+  写作: [writing, literature, 文学, 寫作, 文學]
+  音乐: [music, 音樂]
+  舞蹈: [dance, dancing]
+  厨艺: [cooking, cook, cuisine, 烹饪, 廚藝, 烹飪]
+  妙手: [sleight of hand, sleight, legerdemain, 巧手, 藏匿, 盗窃, 盜竊]
+  锁匠: [locksmith, locksmithing, lockpick, lock picking, 开锁, 撬锁, 钳工, 鎖匠, 鉗工, 開鎖, 撬鎖]
+  电气维修: [electrical repair, electrical, electrician, 电器维修, 电工, 電氣維修, 電器維修, 電工]
+  机械维修: [mechanical repair, mechanical, mechanics, repair, 机器维修, 机修, 機器維修, 機修, 機械維修]
+  计算机使用: [computer use, computer, computers, 电脑使用, 計算機使用, 電腦使用, 计算机, 电脑, 計算機, 電腦]
+  导航: [navigate, navigation, 领航, 領航, 導航]
+  汽车驾驶: [drive auto, drive automobile, drive, driving, auto, automobile, 驾驶, 駕駛, 汽車駕駛, 汽车, 汽車, 开车, 開車, 驾车, 駕車]
+  驾驶:飞行器: [pilot aircraft, aircraft, 飞行器, 开飞行器, 驾驶飞行器, 驾驶:飞行器, 驾驶（飞行器）]
+  驾驶:船: [pilot boat, boat, ship, 船, 开船, 驾驶船, 驾驶:船, 驾驶（船）]
+  驯兽: [animal handling, animal handling coc, animal training, animal, 动物驯养, 驯养, 馴獸, 動物馴養, 馴養]
+  操作重型机械: [operate heavy machinery, heavy machinery, 重型操作, 重型机械, 重型, 重机, 操作重型機械, 重型機械, 重機]
+  斗殴: [fighting brawl, brawl, fighting, fist, 格斗, 格斗:斗殴, 格斗（斗殴）, 鬥毆, 格鬥]
+  斧: [axe, ax, 斧头, 斧子, 斧頭, 格斗:斧, 格斗（斧）]
+  链锯: [chainsaw, chain saw, 电锯, 油锯, 鏈鋸, 電鋸, 油鋸]
+  连枷: [flail, 链枷, 連枷, 鏈枷]
+  绞索: [garrote, garotte, 绞具, 絞索, 絞具]
+  矛: [spear, lance]
+  剑: [sword, swordsmanship, 剑术, 劍, 劍術]
+  鞭: [whip]
+  射击: [firearms, firearm, shooting, gun, guns, 火器, 枪械, 槍械, 射擊]
+  手枪: [handgun, pistol, firearms handgun, shoot handgun, shooting handgun, 射击:手枪, 射击（手枪）, 手槍]
+  步霰: [rifle shotgun, rifle/shotgun, rifle, shotgun, long gun, firearms rifle, firearms shotgun, 步枪/霰弹枪, 射击:步枪, 射击:霰弹枪, 步枪, 霰弹枪, 散弹枪, 步槍, 霰彈槍, 步槍/霰彈槍]
+  投掷: [throw, throwing, 投擲]
+  爆破: [demolitions, demolition, explosives]
+  炮术: [artillery, gunnery, 炮術, 火炮]
+  急救: [first aid, first-aid, 医疗]
+  医学: [medicine, medical, 醫學, 医疗, 醫療]
+  精神分析: [psychoanalysis, psycho analysis, 心理分析]
+  催眠: [hypnosis, hypnotism]
+  会计: [accounting, accountant, 會計]
+  法律: [law, legal, 律法]
+  历史: [history, 歷史]
+  考古学: [archaeology, archeology, 考古學]
+  博物: [natural world, nature, natural history, 自然, 自然学, 自然史, 自然學, 博物学, 博物學]
+  人类学: [anthropology, 人類學]
+  神秘学: [occult, occultism, 神秘學]
+  电子学: [electronics, electronic, 電子學]
+  科学: [science, sciences, 科學]
+  天文学: [astronomy, 科学:天文学, 科学（天文学）, 天文學]
+  生物学: [biology, 科学:生物学, 科学（生物学）, 生物學]
+  植物学: [botany, 科学:植物学, 科学（植物学）, 植物學]
+  化学: [chemistry, 科学:化学, 科学（化学）, 化學]
+  密码学: [cryptography, cryptology, 科学:密码学, 科学（密码学）, 密碼學]
+  工程学: [engineering, engineer, 科学:工程学, 科学（工程学）, 工程學]
+  司法科学: [forensics, forensic science, 科学:司法科学, 科学（司法科学）, 司法科學]
+  地质学: [geology, geography, 科学:地质学, 科学（地质学）, 地質學, 地理学]
+  数学: [mathematics, math, maths, 科学:数学, 科学（数学）, 數學]
+  气象学: [meteorology, weather science, 科学:气象学, 科学（气象学）, 氣象學]
+  药学: [pharmacy, pharmacology, 科学:药学, 科学（药学）, 藥學]
+  物理学: [physics, physical science, 科学:物理学, 科学（物理学）, 物理, 物理學]
+  动物学: [zoology, 科学:动物学, 科学（动物学）, 動物學]
+  克苏鲁神话: [cthulhu mythos, mythos, cm, CM, 克苏鲁, 克苏鲁神话知识, 克蘇魯, 克蘇魯神話, 克蘇魯神話知識]
+st_show:
+  top: [力量, 敏捷, 体质, 体型, 外貌, 智力, 意志, 教育, 幸运, DB, 体格, 移动力, 理智, 生命值, 魔法值, 护甲]
+  sortBy: name
+  itemsPerLine: 4
+  ignores: [生命值上限, 魔法值上限, 理智上限]
+set_keys: [coc, coc7]

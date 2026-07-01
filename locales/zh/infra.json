@@ -1,0 +1,5 @@
+{
+  "infra.llm.fake_script_exhausted": "FakeLLM 脚本已耗尽，没有更多预设响应了。",
+  "infra.llm.fake_not_configured": "FakeLLM 需要提供 `script` 或 `responder` 其中之一。",
+  "infra.vector.dimension_mismatch": "向量维度不匹配：期望 {expected} 维，实际为 {actual} 维。"
+}

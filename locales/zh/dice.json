@@ -1,0 +1,12 @@
+{
+  "dice.result": "{expression} = {roll_str} = {total}",
+  "dice.result_simple": "结果: {total}",
+  "dice.error.invalid_expression": "无效的骰子表达式：{expression}",
+  "dice.error.invalid_repeat_times": "重复次数必须在 1-20 之间，收到 {times}",
+  "coc.rank.crit": "大成功",
+  "coc.rank.extreme": "极难成功",
+  "coc.rank.hard": "困难成功",
+  "coc.rank.success": "成功",
+  "coc.rank.fail": "失败",
+  "coc.rank.fumble": "大失败"
+}

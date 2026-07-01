@@ -1,0 +1,5 @@
+{
+  "gateway.adapter_unavailable": "Gateway adapter is unavailable.",
+  "gateway.connected": "Gateway connected.",
+  "gateway.disconnected": "Gateway disconnected."
+}

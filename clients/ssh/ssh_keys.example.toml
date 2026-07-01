@@ -1,0 +1,20 @@
+# ssh_keys.toml — maps a player's SSH public key to their room + WS join key.
+#
+# One [[user]] block per player. Copy this file to ./data/ssh_keys.toml and fill
+# in real values. The SSH public key IS the credential — there is no password.
+#
+# To mint a `ws_key` for a room, run (from the repo root):
+#   python -m app --tui-key add --room blackmoor --name Nora
+# then paste the printed key below, along with the player's ~/.ssh/id_ed25519.pub.
+
+[[user]]
+pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... nora@laptop"   # player's SSH public key
+room   = "blackmoor"                                              # RoomHub room to join
+ws_key = "GiAZWUeR..."                                            # WS join key minted for that room
+name   = "Nora"                                                   # display name in the session
+
+[[user]]
+pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... thane@desktop"
+room   = "blackmoor"
+ws_key = "Xq8vTt2P..."
+name   = "Thane"

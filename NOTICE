@@ -1,0 +1,29 @@
+Loreweaver — an AI Game Master / Keeper for TTRPGs
+Copyright (c) 2026 Loreweaver contributors
+
+This product includes software and design derived from the following projects:
+
+- hermes-agent (MIT License, Copyright 2025 Nous Research)
+  The platform-adapter / gateway layer (gateway/, adapters/) is vendored and
+  trimmed from hermes-agent. The MIT license text is retained where its code is
+  reused.
+
+- avrae/d20 (MIT License)
+  Used as the dice-expression engine (`pip install d20`).
+
+- SealDice (sealdice-core, MIT License)
+  The CN command dialect, COC success-level function, house-rule table, and
+  skill-alias tables are re-implemented in Python based on SealDice's design.
+
+Game content:
+
+- This product includes material from the System Reference Document 5.1 ("SRD
+  5.1") by Wizards of the Coast LLC, available under the Creative Commons
+  Attribution 4.0 International License (CC-BY-4.0):
+  https://creativecommons.org/licenses/by/4.0/legalcode
+
+- Call of Cthulhu content is limited to open / Miskatonic Repository-permitted
+  material. No Chaosium copyrighted text is distributed with this repository.
+
+No copyrighted adventure/module text is distributed with this project; users
+supply their own modules at runtime.

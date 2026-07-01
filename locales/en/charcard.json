@@ -1,0 +1,19 @@
+{
+  "charcard.concept_prompt": "You convert a SillyTavern persona into a TRPG character concept for {system}. Use the persona and module context only as inspiration; do not invent numeric stats. Return JSON only with keys: occupation/class, attribute_emphasis as a ranked list of attribute codes, signature_skills as a short list, and backstory as 1-2 lines. Module context: {module_context}\nPersona:\n{persona}",
+  "charcard.tools.import.done_pc": "Imported \"{name}\" as your player character ({system}). Key stats: {stats}. Lore entries added: {lore}.",
+  "charcard.tools.import.done_companion": "Imported \"{name}\" as an AI companion (id {id}, {system}). Key stats: {stats}. Lore entries added: {lore}.",
+  "charcard.tools.import.no_fs": "No file access is available in this context.",
+  "charcard.tools.import.no_file": "Could not read the character card at {path}.",
+  "charcard.tools.import.failed": "Failed to import character: {error}",
+  "charcard.tools.preview.name_line": "Name: {name}",
+  "charcard.tools.preview.description_line": "Description: {description}",
+  "charcard.tools.preview.personality_line": "Personality: {personality}",
+  "charcard.tools.preview.scenario_line": "Scenario: {scenario}",
+  "charcard.tools.preview.tags_line": "Tags: {tags}",
+  "charcard.tools.preview.lore_line": "Lore entries in card: {count}",
+  "charcard.tools.preview.no_fs": "No file access is available in this context.",
+  "charcard.tools.preview.no_file": "Could not read the character card at {path}.",
+  "charcard.tools.preview.failed": "Failed to preview card: {error}",
+  "charcard.commands.import.help": "Import a SillyTavern card as a PC or AI companion: .import <file> [coc7|dnd5e] [pc|companion]",
+  "charcard.commands.import.usage": "Usage: .import <card file> [coc7|dnd5e] [pc|companion]"
+}

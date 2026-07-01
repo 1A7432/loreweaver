@@ -1,0 +1,5 @@
+{
+  "module.analysis_no_json_found": "无法从 LLM 的模组分析响应中解析出 JSON 对象。",
+  "module.analysis_prompt": "你是一位专业的 TRPG 模组解析专家。请仔细阅读以下模组全文，并将所有关键信息整理为规定的 JSON 结构。\n\n【模组名称】{doc_name}\n\n【模组全文】\n{full_text}\n\n【输出要求】\n请严格按照以下字段输出合法 JSON：\n\n{schema}\n\n【注意事项】\n- 必须覆盖模组中所有主要场景、NPC、线索，不要遗漏。\n- \"description\" 字段只能包含玩家可直接感知的信息。\n- \"keeper_notes\" 与 \"secret\" 字段包含绝不能告知玩家的信息。\n- \"timeline\" 按时间顺序排列。\n- 输出必须是合法 JSON，不要包含 markdown 代码块标记。\n- 若某字段没有内容，使用空数组 [] 或空字符串 \"\"。\n\n只输出 JSON，不要输出其他内容。",
+  "module.default_document_name": "未命名模组"
+}

@@ -1,0 +1,12 @@
+{
+  "document.error.unsupported_format": "不支持的文件格式: {extension}",
+  "document.error.txt_parse_failed": "无法解析TXT文件: {error}",
+  "document.error.pdf_unavailable": "PDF处理功能不可用，请安装 `pypdf` 库",
+  "document.error.pdf_parse_failed": "无法解析PDF文件: {error}",
+  "document.error.docx_unavailable": "Word文档处理功能不可用，请安装 `python-docx` 库",
+  "document.error.docx_parse_failed": "无法解析Word文档: {error}",
+  "document.context.chunk_header": "\n--- 来自文档: {filename} ---\n{text}\n",
+  "document.answer.no_context": "抱歉，我在您上传的文档中没有找到相关信息来回答这个问题。",
+  "document.answer.no_llm": "未配置可用于文档问答的语言模型，暂时无法回答此问题。",
+  "document.answer.prompt": "基于以下文档内容回答问题。如果文档中没有相关信息，请明确说明。\n\n问题: {question}\n\n相关文档内容:\n{context}\n\n请基于上述文档内容回答问题，如果信息不足请说明。"
+}

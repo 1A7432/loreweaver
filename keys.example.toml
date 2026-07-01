@@ -1,0 +1,22 @@
+# Example keystore for the networked TUI server (`python -m app --serve`).
+#
+# Copy this file to `keys.toml` (or point `--keys`/`TRPG_TUI_KEYS` at your
+# own copy) and replace the placeholder keys below with real ones minted
+# via:
+#
+#   python -m app --tui-key add --room blackmoor --name Alice --role player
+#   python -m app --tui-key add --room blackmoor --name Sam --role keeper
+#
+# Each `[key]` table binds one opaque key to a room ("chat_key") and an
+# optional display name / role ("player", default, or "keeper"). There is
+# no registration flow: unknown keys are rejected on `join`.
+
+["demo-player-key"]
+room = "demo"
+name = "Player"
+role = "player"
+
+["demo-keeper-key"]
+room = "demo"
+name = "Keeper"
+role = "keeper"

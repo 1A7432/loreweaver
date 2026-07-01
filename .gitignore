@@ -1,0 +1,50 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# --- Secrets & runtime data (NEVER commit) ---
+.env
+.env.*
+!.env.example
+# databases + runtime state
+*.db
+*.sqlite
+*.sqlite3
+data/
+shared/
+# issued keys / host keys (only the *.example.* files are committed)
+**/keys.toml
+**/tui_keys.toml
+**/ssh_keys.toml
+*_host_key
+*_host_key.pub
+*.pem
+!**/*.example.toml
+
+# --- Node / clients ---
+node_modules/
+clients/*/dist/
+*.tsbuildinfo
+.vite/
+coverage/
+.bun/
+
+# --- Internal (not published: design specs + build blueprint) ---
+docs/specs/
+PROMPT.md
+
+# --- Misc ---
+.DS_Store
+*.log
+scratch/

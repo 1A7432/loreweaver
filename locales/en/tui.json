@@ -1,0 +1,10 @@
+{
+  "tui.error.bad_key": "Unrecognized key. Ask your deployer for a valid invite key.",
+  "tui.error.bad_frame": "Malformed message.",
+  "tui.error.rate_limited": "You're sending messages too fast. Please slow down.",
+  "tui.error.server_error": "Something went wrong handling that turn. Please try again.",
+  "tui.npc.unknown_name": "Unknown NPC",
+  "tui.serve.listening": "Serving the networked TUI at ws://{host}:{port}/ (keys: {path})",
+  "tui.key.added": "Added a {role} key for room '{room}' (name={name}): {key}",
+  "tui.key.room_required": "--tui-key add requires --room ROOM"
+}

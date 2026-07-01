@@ -1,0 +1,17 @@
+{
+  "rooms.chat.npc_line": "**{name}:** {text}",
+  "rooms.chat.npc_unknown": "NPC",
+  "rooms.chat.dice_line": "🎲 {actor} {expr} → {level} ({total})",
+  "rooms.chat.dice_line_plain": "🎲 {actor} {expr} → {total}",
+  "rooms.denied": "Only a group admin or Keeper can manage shared rooms.",
+  "rooms.usage": "Usage: .room [open | link <key> | leave]",
+  "rooms.open.result": "Shared room opened. Terminal join key: {key} (session: {session}). Hand this key to terminal players so they share this session.",
+  "rooms.open.no_keystore": "Cannot open a shared room here: no terminal keystore is attached.",
+  "rooms.link.result": "This channel is now linked to shared session {session}.",
+  "rooms.link.usage": "Usage: .room link <join-key or session-id>",
+  "rooms.leave.result": "This channel left shared session {session}.",
+  "rooms.leave.none": "This channel is not linked to any shared session.",
+  "rooms.show.result": "Linked to shared session {session} — {online} online: {members}",
+  "rooms.show.none": "This channel is not linked to a shared session. Use .room open to create one.",
+  "rooms.show.empty": "(nobody yet)"
+}

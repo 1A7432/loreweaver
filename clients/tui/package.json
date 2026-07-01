@@ -1,0 +1,20 @@
+{
+  "name": "@trpg-kp/tui",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "trpg-kp": "./dist/index.js"
+  },
+  "scripts": {
+    "dev": "bun run src/index.tsx",
+    "build": "bun build ./src/index.tsx --outdir ./dist --target bun --format esm --external \"@opentui/core-*\" && (mkdir -p dist/node_modules/@opentui && cp -RL ../node_modules/.bun/@opentui+core-*/node_modules/@opentui/core-* dist/node_modules/@opentui/ 2>/dev/null || true)",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@opentui/core": "0.4.2",
+    "@opentui/react": "0.4.2",
+    "@trpg-kp/protocol": "file:../protocol",
+    "react": "19.2.7"
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "gateway.adapter_unavailable": "网关适配器不可用。",
+  "gateway.connected": "网关已连接。",
+  "gateway.disconnected": "网关已断开。"
+}

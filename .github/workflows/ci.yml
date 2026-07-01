@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python (3.12) — lint + i18n + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      # anthropic + gemini extras are installed so the provider unit tests run;
+      # platform SDKs (qq/telegram/discord/feishu) stay optional — adapter tests mock them.
+      - run: pip install -e ".[dev,anthropic,gemini]"
+      - name: Ruff
+        run: ruff check core infra agent gateway net adapters app.py scripts
+      - name: i18n lint (no hardcoded natural-language strings)
+        run: python scripts/i18n_lint.py
+      - name: Tests (offline — FakeLLM/FakeEmbeddings, no API keys)
+        run: pytest -q
+
+  clients:
+    name: Clients — TypeScript (bun)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: protocol (shared)
+        working-directory: clients/protocol
+        run: bun install && bun test
+      - name: tui (OpenTUI)
+        working-directory: clients/tui
+        run: bun install && bun test && bun run build
+      - name: web (React + Vite)
+        working-directory: clients/web
+        run: bun install && bun run test && bun run build
+      - name: ssh (ssh2 + Bun PTY)
+        working-directory: clients/ssh
+        run: bun install && bun test

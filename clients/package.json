@@ -1,0 +1,10 @@
+{
+  "name": "trpg-kp-clients",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "protocol",
+    "tui"
+  ]
+}
+
