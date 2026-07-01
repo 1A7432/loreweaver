@@ -12,6 +12,7 @@ from agent.context import AgentCtx
 from agent.loop import (
     KPTurnResult,
     _dice_rolled,
+    _player_attempts_checkable_action,
     _reply_requests_or_resolves_check,
     run_kp_turn,
 )
@@ -332,11 +333,13 @@ async def test_a_check_that_already_rolled_triggers_no_corrective_round():
 
 
 async def test_plain_narration_without_a_check_triggers_no_corrective_round():
-    # No dice-command / roll-request / success-level vocabulary -> no correction.
+    # Neither the reply (no dice-command / roll-request / success-level vocabulary)
+    # nor the player's action (no skill-attempt lexicon) signals a check -> no
+    # correction. The inbound is deliberately non-checkable dialogue/movement.
     llm = FakeLLM(script=[assistant_text("The corridor stretches on into darkness, silent and cold.")])
     services = _services(llm)
 
-    result = await run_kp_turn(_ctx("chat-plain"), services, _dice_toolset(), "I look around.")
+    result = await run_kp_turn(_ctx("chat-plain"), services, _dice_toolset(), "I wait quietly for a moment.")
 
     assert result.tool_trace == []
     assert len(llm.calls) == 1
@@ -359,6 +362,108 @@ async def test_corrective_round_is_bounded_when_the_model_still_will_not_roll():
     assert result.tool_trace == []  # never rolled
     assert len(llm.calls) == 2  # exactly one corrective attempt, then it stops
     assert result.reply == "Very well, you find nothing of note."
+
+
+# ---------------------------------------------------------------------------
+# Broadened trigger: the PLAYER's action attempts a skill-checkable thing and
+# the Keeper resolves it in plain prose (no dice-command / roll-request /
+# success-level vocabulary of its own) -> the same one bounded corrective fires.
+# ---------------------------------------------------------------------------
+
+
+async def test_player_action_attempts_a_check_but_reply_never_rolls_triggers_one_corrective_round():
+    # The player attempts a Spot Hidden ("search ... for hidden clues"); the KP
+    # resolves it in plain prose carrying NONE of the reply-side vocabulary, so
+    # only the player-action detector fires. Exactly one corrective round runs and
+    # THIS time the model rolls skill_check.
+    llm = FakeLLM(
+        script=[
+            assistant_text("You rifle through the drawers and turn up an old photograph."),
+            assistant_tools(tool_call("skill_check", skill_name="Spot Hidden")),
+            assistant_text("Behind a false bottom, your fingers close on a brass key."),
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(
+        _ctx("chat-player-attempt"), services, _dice_toolset(), "I search the desk for hidden clues."
+    )
+
+    assert [t["name"] for t in result.tool_trace] == ["skill_check"]
+    assert result.reply == "Behind a false bottom, your fingers close on a brass key."
+    assert len(llm.calls) == 3  # initial reply + one corrective tool round + re-narration
+
+
+async def test_pure_dialogue_player_action_triggers_no_corrective_round():
+    # Pure roleplay/dialogue: no skill-attempt lexicon in the player's action and
+    # no reply-side check vocabulary -> the corrective never fires (the single-entry
+    # script would be exhausted, and llm.calls would exceed 1, if it did).
+    llm = FakeLLM(script=[assistant_text("Martha beams and clasps your hand in both of hers.")])
+    services = _services(llm)
+
+    result = await run_kp_turn(
+        _ctx("chat-dialogue"), services, _dice_toolset(), "I nod and greet Martha warmly."
+    )
+
+    assert result.tool_trace == []
+    assert len(llm.calls) == 1
+    assert result.reply == "Martha beams and clasps your hand in both of hers."
+
+
+async def test_player_action_trigger_escape_hatch_leaves_the_reply_intact():
+    # The player-action detector fires, but the action needs no check: the model
+    # takes the escape hatch and restates its narration unchanged. A false positive
+    # can therefore NEVER force a spurious roll -- the reply survives verbatim.
+    narration = "You glance over the tidy desk; nothing seems out of place."
+    llm = FakeLLM(script=[assistant_text(narration), assistant_text(narration)])
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx("chat-escape"), services, _dice_toolset(), "I search the desk.")
+
+    assert result.tool_trace == []  # never rolled -- the model declined
+    assert len(llm.calls) == 2  # exactly one corrective attempt, then it stops
+    assert result.reply == narration  # left intact
+
+
+def test_player_action_detector_catches_attempts_but_not_dialogue():
+    # Positives: the player's action plausibly attempts a skill-checkable thing.
+    for positive in [
+        "I search the desk for hidden clues.",
+        "I listen at the door.",
+        "I try to sneak past the guard.",
+        "I climb the drainpipe to the window.",
+        "I persuade the clerk to hand over the ledger.",
+        "I attack the cultist with my knife.",
+        "I pick the lock on the cabinet.",
+        "I look around the room for another way out.",
+        "I use first aid on the wounded man.",
+        "I want to spot any hidden traps.",
+        "我搜查这张书桌。",
+        "我想潜行绕到他背后。",
+        "我说服他放我们离开。",
+        "我尝试撬开这把锁。",
+        "我躲避扑过来的怪物。",
+        "我去图书馆查阅相关资料。",
+        "我聆听门后的动静。",
+        "我攻击那个邪教徒。",
+    ]:
+        assert _player_attempts_checkable_action(positive), positive
+
+    # Negatives: pure dialogue/roleplay/movement, incl. dialogue-dominant words
+    # (look-at / see / 看 / 打招呼) that are deliberately excluded.
+    for negative in [
+        "",
+        "I nod and greet Martha warmly.",
+        "I say hello to the man behind the counter.",
+        "I look at Martha and smile.",
+        "I walk into the parlor and sit down.",
+        "I tell her my name is Harvey.",
+        "I wait quietly for a moment.",
+        "我向玛莎打招呼。",
+        "我对他微笑着点点头。",
+        "我看着窗外，一言不发。",
+    ]:
+        assert not _player_attempts_checkable_action(negative), negative
 
 
 def test_reply_check_detector_catches_the_violation_but_not_plain_narration():

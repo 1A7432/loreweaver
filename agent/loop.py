@@ -46,15 +46,29 @@ _HISTORY_CAP = 20
 # success level. Play-testing showed a model routinely ignoring the prompt's
 # roll-first guidance -- telling the player to type ".ra X" and then narrating a
 # clean success/failure without ever calling a dice tool. Prompt-tuning alone
-# only fixed ~2/8 cases, so we enforce it structurally: after the loop, if the
-# final reply narrates or asks for a check yet NO dice-rolling tool fired this
-# turn, we run one bounded corrective round that nudges the model to actually
-# roll, then re-narrate. It is entered at most once per turn and hard-capped, so
-# it can never loop; a provider error inside it is non-fatal (we keep the
-# original reply). The detector is deliberately conservative: it keys off
-# tabletop-specific dice commands / roll-request phrasing and success-LEVEL
-# result vocabulary (never bare "success"/"成功") so ordinary narration -- and the
-# exact-call-count FakeLLM test scripts -- don't trip it.
+# only fixed ~2/8 cases, so we enforce it structurally: after the loop, if NO
+# dice-rolling tool fired this turn yet a check plausibly should have, we run one
+# bounded corrective round that nudges the model to actually roll, then
+# re-narrate. It is entered at most once per turn and hard-capped, so it can
+# never loop; a provider error inside it is non-fatal (we keep the original
+# reply).
+#
+# We fire on EITHER of two signals:
+#   (a) a conservative REPLY-side detector -- the model's own reply uses tabletop
+#       dice commands / roll-request phrasing / success-LEVEL result vocabulary
+#       (never bare "success"/"成功"); or
+#   (b) a broadened PLAYER-side detector -- the player's inbound action plausibly
+#       attempts a skill-checkable thing (search / listen / sneak / persuade /
+#       climb / attack / pick a lock / ...; see the lexicon below).
+# (b) is what catches the real DeepSeek failure mode: it resolves a player's
+# skill attempt in plain prose carrying none of the (a) vocabulary, so (a) alone
+# fired ~0-1x across 24- and 100-turn play-tests while real dice never rolled.
+# Broadening (b) is safe precisely because the corrective can NEVER force a roll
+# -- its escape-hatch nudge lets the model restate its narration unchanged -- so a
+# false positive costs at most one extra, decline-able round. The `_dice_rolled`
+# gate keeps already-resolved turns (and the exact-call-count FakeLLM scripts)
+# inert. It is a heuristic that trades some extra corrective calls for real dice
+# discipline.
 
 # Chat calls the corrective phase may make: one to roll the dice + one to
 # re-narrate. Hard bound -- the phase is also entered at most once per turn.
@@ -109,6 +123,64 @@ _CHECK_OUTCOME_MARKERS = (
     "大失败",
 )
 
+# --- Player-action skill-attempt lexicon (the broadened trigger) -------------
+# Curated verbs/nouns a player uses when ATTEMPTING a skill-checkable action. If
+# the inbound action matches one and no dice tool fired, the same bounded
+# corrective runs (the model is nudged to roll, and can always decline via the
+# escape hatch, so a false positive is harmless). English is matched on \b word
+# boundaries with a light suffix tolerance; CJK -- which has no word boundaries --
+# uses curated multi-character terms (plus a few unambiguous single chars) so it
+# doesn't fire on incidental substrings. Intentionally EXCLUDES words that
+# dominate ordinary dialogue (look-at / see / watch / read / 看 / 听 / 找 / 打 / ...)
+# to keep pure roleplay from tripping it.
+_PLAYER_SKILL_EN_WORDS = (
+    "search", "rummage", "ransack", "scour", "frisk", "investigate", "examine",
+    "inspect", "scrutinize", "scrutinise", "appraise", "scan", "listen",
+    "eavesdrop", "overhear", "peek", "sneak", "creep", "tiptoe", "skulk",
+    "prowl", "hide", "conceal", "climb", "clamber", "jump", "leap", "vault",
+    "swim", "dodge", "evade", "duck", "persuade", "convince", "coax", "cajole",
+    "plead", "intimidate", "threaten", "menace", "coerce", "charm", "seduce",
+    "flatter", "bluff", "deceive", "negotiate", "bargain", "haggle",
+    "interrogate", "bandage", "stabilize", "psychoanalyze", "decipher",
+    "attack", "strike", "punch", "stab", "slash", "shoot", "grapple", "wrestle",
+    "tackle", "strangle", "choke", "fight", "pickpocket", "disarm", "track",
+    "pry", "spot", "library", "psychology",
+)
+_PLAYER_SKILL_EN_PHRASES = (
+    r"first[-\s]?aid",
+    r"fast[-\s]?talk",
+    r"sleight\s+of\s+hand",
+    r"pick(?:s|ing|ed)?\s+(?:the\s+)?lock",
+    r"lock[-\s]?pick\w*",
+    r"look(?:s|ing|ed)?\s+(?:for|around|behind|underneath|under|inside|through|over|about|beneath)",
+)
+_PLAYER_SKILL_EN_RE = re.compile(
+    r"\b(?:"
+    + "|".join([rf"{w}(?:s|es|ed|ing)?" for w in _PLAYER_SKILL_EN_WORDS] + list(_PLAYER_SKILL_EN_PHRASES))
+    + r")\b",
+    re.IGNORECASE,
+)
+_PLAYER_SKILL_ZH_TERMS = (
+    "搜", "搜查", "搜索", "搜身", "翻找", "翻查", "查看", "察看", "检查", "调查",
+    "侦查", "侦察", "观察", "寻找", "找寻", "探查", "探索", "摸索",
+    "聆听", "倾听", "偷听", "窃听",
+    "潜行", "潜入", "蹑手蹑脚", "溜进", "溜走",
+    "躲避", "躲藏", "藏身", "隐藏", "躲闪",
+    "攀爬", "爬", "攀登", "翻越", "跳跃",
+    "游泳", "潜水",
+    "闪避", "闪躲", "格挡",
+    "开锁", "撬锁", "撬开", "撬",
+    "追踪", "跟踪", "追赶",
+    "说服", "劝说", "劝阻", "规劝", "劝",
+    "威吓", "恐吓", "威胁", "恫吓",
+    "交涉", "谈判", "讲价", "砍价",
+    "欺骗", "哄骗", "花言巧语", "说谎", "撒谎",
+    "攻击", "袭击", "揍", "殴打", "射击", "开枪", "扭打", "擒抱",
+    "急救", "包扎", "止血",
+    "图书馆", "查资料", "查阅",
+    "心理学", "鉴定", "估价", "伪装", "乔装",
+)
+
 
 def _dice_rolled(tool_trace: list[dict]) -> bool:
     """True if any real dice-rolling tool fired during this turn."""
@@ -129,6 +201,21 @@ def _reply_requests_or_resolves_check(reply: str) -> bool:
         return True
     lowered = reply.lower()
     return any(marker in lowered for marker in _CHECK_OUTCOME_MARKERS)
+
+
+def _player_attempts_checkable_action(text: str) -> bool:
+    """Heuristic: does the player's inbound `text` plausibly attempt a skill-checkable action?
+
+    Broad but curated (see the enforcement note above): a whole-word/boundary
+    match against the EN skill-attempt lexicon, or a curated CJK term. Deliberately
+    excludes dialogue-dominant words so pure roleplay stays inert. A hit only ever
+    triggers the SAME bounded, escape-hatched corrective -- never a forced roll.
+    """
+    if not text:
+        return False
+    if _PLAYER_SKILL_EN_RE.search(text):
+        return True
+    return any(term in text for term in _PLAYER_SKILL_ZH_TERMS)
 
 
 @dataclass
@@ -201,12 +288,18 @@ async def run_kp_turn(
         reply = result.content or ""
         break
 
-    # Dice-first enforcement: if the model narrated or asked for a check but no
-    # real dice were rolled this turn, run one bounded corrective round (see the
-    # enforcement note above). Cheap `_dice_rolled` gate first so the regex only
-    # runs when it might matter; skipped entirely on the max_rounds fallback
-    # (reply is still None) and after a provider error (returned early above).
-    if reply is not None and not _dice_rolled(tool_trace) and _reply_requests_or_resolves_check(reply):
+    # Dice-first enforcement: if no real dice were rolled this turn yet a check
+    # plausibly should have -- either the model's reply narrates/asks for one, OR
+    # the player's action plausibly attempts a skill-checkable thing -- run one
+    # bounded corrective round (see the enforcement note above). Cheap
+    # `_dice_rolled` gate first so the detectors only run when it might matter;
+    # skipped entirely on the max_rounds fallback (reply is still None) and after
+    # a provider error (returned early above).
+    if (
+        reply is not None
+        and not _dice_rolled(tool_trace)
+        and (_reply_requests_or_resolves_check(reply) or _player_attempts_checkable_action(user_message))
+    ):
         reply = await _run_dice_correction(
             ctx,
             services,
