@@ -80,8 +80,11 @@ async def _gen_player_action(services, archetype_desc: str, name: str, recent: s
     prompt = (
         f"You are {name}, {archetype_desc}, a PLAYER (not the Keeper) at a Call of Cthulhu table. "
         f"Recent play:\n{recent[-1800:]}\n\n"
-        "Say, in ONE short first-person line, what your character does or says next. Be concrete and in "
-        "character; when it warrants a check, ask to roll the relevant skill. Output only the line."
+        "If the Keeper just asked you to roll or make a check (e.g. it wrote '.ra 侦查', 'make a Spot Hidden "
+        "check', or 'roll SAN'), reply with ONLY the exact dice command: '.ra <skill>' for a skill check, "
+        "'.sc 1/1d6' for a sanity check, or '.r <expr>' for a raw roll (use the skill the Keeper named). "
+        "Otherwise, say in ONE short first-person line what your character does or says next (be concrete and in "
+        "character; you may attempt something that warrants a check). Output only the single line or command."
     )
     try:
         r = await services.llm.chat([{"role": "user", "content": prompt}], temperature=0.9)

@@ -1,4 +1,8 @@
-export const PROTOCOL_VERSION = "1" as const
+// Bumped from "1" -> "1.1" for the additive keeper-gated admin frames below.
+// The bump is backward compatible: pre-admin clients keep working unchanged and
+// simply never send/handle `admin_*` frames. `WelcomeFrame.protocol` is a plain
+// string so a v1 client still accepts a "1.1" welcome (forward compatible).
+export const PROTOCOL_VERSION = "1.1" as const
 
 export const FrameType = {
   Join: "join",
@@ -12,6 +16,14 @@ export const FrameType = {
   Presence: "presence",
   System: "system",
   Pong: "pong",
+  // v1.1 additive admin (keeper-gated) frames.
+  AdminGetConfig: "admin_get_config",
+  AdminSetModel: "admin_set_model",
+  AdminListKeys: "admin_list_keys",
+  AdminMintKey: "admin_mint_key",
+  AdminConfig: "admin_config",
+  AdminKeys: "admin_keys",
+  AdminError: "admin_error",
 } as const
 
 export type FrameType = (typeof FrameType)[keyof typeof FrameType]
@@ -22,6 +34,7 @@ export type NarrativeFormat = "markdown" | "plain"
 export type ErrorCode = "bad_key" | "bad_frame" | "rate_limited" | "server_error"
 export type DiceKind = "roll" | "check" | "sanity" | "opposed" | "init"
 export type SystemLevel = "info" | "warn"
+export type AdminErrorCode = "forbidden" | "unknown_provider" | "bad_request"
 
 export interface ClientInfo {
   name: string
@@ -47,7 +60,9 @@ export interface PingFrame {
 
 export interface WelcomeFrame {
   type: typeof FrameType.Welcome
-  protocol: typeof PROTOCOL_VERSION
+  // A plain string (not the literal) so a client pinned to an older minor still
+  // type-checks against a newer server banner.
+  protocol: string
   room: string
   you: {
     id: string
@@ -157,7 +172,77 @@ export interface PongFrame {
   t: number
 }
 
-export type ClientFrame = JoinFrame | InputFrame | PingFrame
+// ---- v1.1 admin (keeper-gated) frames ------------------------------------
+// A deployer/keeper opens the web admin panel with a keeper-role key; the server
+// answers these ONLY for a keeper connection (else `admin_error {code:"forbidden"}`).
+
+export interface AdminGetConfigFrame {
+  type: typeof FrameType.AdminGetConfig
+}
+
+export interface AdminSetModelFrame {
+  type: typeof FrameType.AdminSetModel
+  provider: string
+  chat_model?: string
+}
+
+export interface AdminListKeysFrame {
+  type: typeof FrameType.AdminListKeys
+}
+
+export interface AdminMintKeyFrame {
+  type: typeof FrameType.AdminMintKey
+  room: string
+  name?: string
+  role?: PlayerRole
+}
+
+export interface AdminConfigFrame {
+  type: typeof FrameType.AdminConfig
+  provider: string
+  chat_model: string
+  base_url: string
+  api_key_masked: string
+  providers: string[]
+  override_active: boolean
+}
+
+export interface AdminKeyInfo {
+  key_masked: string
+  room: string
+  name: string
+  role: PlayerRole
+}
+
+// The freshly minted key is returned ONCE, in cleartext, so the keeper can copy
+// it; every other view (including `keys` here) only ever carries `key_masked`.
+export interface MintedKey {
+  key: string
+  room: string
+  name: string
+  role: PlayerRole
+}
+
+export interface AdminKeysFrame {
+  type: typeof FrameType.AdminKeys
+  keys: AdminKeyInfo[]
+  minted?: MintedKey
+}
+
+export interface AdminErrorFrame {
+  type: typeof FrameType.AdminError
+  code: AdminErrorCode
+  message?: string
+}
+
+export type ClientFrame =
+  | JoinFrame
+  | InputFrame
+  | PingFrame
+  | AdminGetConfigFrame
+  | AdminSetModelFrame
+  | AdminListKeysFrame
+  | AdminMintKeyFrame
 
 export type ServerFrame =
   | WelcomeFrame
@@ -168,5 +253,8 @@ export type ServerFrame =
   | PresenceFrame
   | SystemFrame
   | PongFrame
+  | AdminConfigFrame
+  | AdminKeysFrame
+  | AdminErrorFrame
 
 export type AnyFrame = ClientFrame | ServerFrame

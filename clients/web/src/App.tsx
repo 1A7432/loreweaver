@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { type ServerFrame, type WelcomeFrame } from "@trpg-kp/protocol"
+import { AdminPanel } from "./admin/AdminPanel"
 import { GameView } from "./GameView"
 import { createClient, type AppClient } from "./ws"
 
@@ -8,12 +9,21 @@ export type { AppClient } from "./ws"
 export interface AppProps {
   // Injected in tests; defaults to a real WsClient (native browser WebSocket).
   client?: AppClient
+  // The keeper opens the admin panel with `?admin=1` (or `?admin`) in the URL;
+  // tests force it explicitly. Defaults to reading the current URL.
+  admin?: boolean
 }
 
 const DEFAULT_URL = "ws://127.0.0.1:8787/"
 
-export function App({ client: injected }: AppProps) {
+function readAdminFlag(): boolean {
+  if (typeof window === "undefined") return false
+  return new URLSearchParams(window.location.search).has("admin")
+}
+
+export function App({ client: injected, admin }: AppProps) {
   const client = useMemo(() => injected ?? createClient(), [injected])
+  const adminMode = admin ?? readAdminFlag()
 
   const [url, setUrl] = useState(DEFAULT_URL)
   const [key, setKey] = useState("")
@@ -53,14 +63,22 @@ export function App({ client: injected }: AppProps) {
   }
 
   if (welcome) {
-    return <GameView client={client} welcome={welcome} />
+    return adminMode ? (
+      <AdminPanel client={client} welcome={welcome} />
+    ) : (
+      <GameView client={client} welcome={welcome} />
+    )
   }
 
   return (
     <div className="connect">
       <form className="connect-card" onSubmit={handleConnect}>
-        <h1 className="connect-title">TRPG KP</h1>
-        <p className="connect-sub">Connect to a Keeper session with a deployer key.</p>
+        <h1 className="connect-title">TRPG KP{adminMode ? " · Admin" : ""}</h1>
+        <p className="connect-sub">
+          {adminMode
+            ? "Connect with a keeper key to manage the model and room keys."
+            : "Connect to a Keeper session with a deployer key."}
+        </p>
 
         <label className="field">
           <span>Server URL</span>

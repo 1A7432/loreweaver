@@ -35,9 +35,12 @@ from gateway.ops import Censor, RateLimiter
 from gateway.session import SessionSource
 from gateway.turn import publish_state, run_turn
 from infra.i18n import I18n, get_i18n
+from net.admin import handle_admin_frame, is_admin_frame
 from net.keystore import Keystore
 
-_PROTOCOL_VERSION = "1"
+# v1.1 adds the additive, keeper-gated `admin_*` frames (see `net.admin` and
+# `docs/protocol.md`); pre-admin clients are unaffected and never send them.
+_PROTOCOL_VERSION = "1.1"
 _SERVER_BANNER = "trpg-kp/1"
 
 
@@ -221,6 +224,12 @@ class TuiServer:
             return
         if kind == "ping":
             await _send(member.ws, {"type": "pong", "t": frame.get("t")})
+            return
+        if is_admin_frame(kind):
+            # Keeper-gated admin surface (LLM config + room keys). The gate is the
+            # connection's keystore role; `handle_admin_frame` refuses non-keepers.
+            reply = await handle_admin_frame(self.services, self.keystore, member.role, frame, i18n)
+            await _send(member.ws, reply)
             return
 
         await _send(member.ws, _error_frame("bad_frame", i18n))

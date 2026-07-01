@@ -9,6 +9,10 @@ class MockClient implements AppClient {
   connect = vi.fn((_url: string) => Promise.resolve())
   join = vi.fn((_key: string, _name?: string) => {})
   sendInput = vi.fn((_text: string) => {})
+  adminGetConfig = vi.fn(() => {})
+  adminSetModel = vi.fn((_provider: string, _chatModel?: string) => {})
+  adminListKeys = vi.fn(() => {})
+  adminMintKey = vi.fn((_room: string, _name?: string, _role?: string) => {})
   private listeners = new Set<(frame: ServerFrame) => void>()
 
   onMessage(cb: (frame: ServerFrame) => void): () => void {
@@ -54,6 +58,30 @@ describe("App connect screen", () => {
     // GameView is now mounted: the room name appears in the header.
     expect(await screen.findByText(/joined arkham/i)).toBeTruthy()
     expect(screen.getByLabelText("Command input")).toBeTruthy()
+  })
+
+  test("admin mode routes to the admin panel after welcome", async () => {
+    const client = new MockClient()
+    const user = userEvent.setup()
+    render(<App client={client} admin />)
+
+    await user.type(screen.getByLabelText("Deployer key"), "keeper-key")
+    await user.click(screen.getByRole("button", { name: /connect/i }))
+    await waitFor(() => expect(client.connect).toHaveBeenCalled())
+
+    client.push({
+      type: "welcome",
+      protocol: "1.1",
+      room: "arkham",
+      you: { id: "k1", name: "Keeper", role: "keeper" },
+      locale: "en",
+      server: "mock",
+    })
+
+    // The admin panel mounted (not the game command bar), and it pulled config.
+    expect(await screen.findByText("LLM CONFIG")).toBeTruthy()
+    expect(screen.queryByLabelText("Command input")).toBeNull()
+    expect(client.adminGetConfig).toHaveBeenCalled()
   })
 
   test("a bad_key error frame is surfaced on the connect screen", async () => {

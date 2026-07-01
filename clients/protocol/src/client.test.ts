@@ -111,5 +111,47 @@ describe("WsClient", () => {
       t: 123,
     })
   })
+
+  test("admin request helpers send the v1.1 admin frames", async () => {
+    const { client, sockets } = createClient()
+    await client.connect("ws://example.test")
+
+    client.adminGetConfig()
+    client.adminSetModel("deepseek", "deepseek-chat")
+    client.adminSetModel("openai")
+    client.adminListKeys()
+    client.adminMintKey("arkham", "Ada", "keeper")
+
+    expect(sockets[0].sent.map((raw) => JSON.parse(raw))).toEqual([
+      { type: FrameType.AdminGetConfig },
+      { type: FrameType.AdminSetModel, provider: "deepseek", chat_model: "deepseek-chat" },
+      { type: FrameType.AdminSetModel, provider: "openai" },
+      { type: FrameType.AdminListKeys },
+      { type: FrameType.AdminMintKey, room: "arkham", name: "Ada", role: "keeper" },
+    ])
+  })
+
+  test("incoming admin_config / admin_keys / admin_error frames are dispatched", async () => {
+    const { client, sockets } = createClient()
+    const seen: string[] = []
+    client.on(FrameType.AdminConfig, () => seen.push(FrameType.AdminConfig))
+    client.on(FrameType.AdminKeys, () => seen.push(FrameType.AdminKeys))
+    client.on(FrameType.AdminError, () => seen.push(FrameType.AdminError))
+
+    await client.connect("ws://example.test")
+    sockets[0].serverSend({
+      type: FrameType.AdminConfig,
+      provider: "openai",
+      chat_model: "gpt-4o",
+      base_url: "",
+      api_key_masked: "",
+      providers: ["openai", "deepseek"],
+      override_active: false,
+    })
+    sockets[0].serverSend({ type: FrameType.AdminKeys, keys: [] })
+    sockets[0].serverSend({ type: FrameType.AdminError, code: "forbidden" })
+
+    expect(seen).toEqual([FrameType.AdminConfig, FrameType.AdminKeys, FrameType.AdminError])
+  })
 })
 

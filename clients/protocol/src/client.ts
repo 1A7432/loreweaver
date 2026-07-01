@@ -1,4 +1,12 @@
-import { FrameType, type ClientFrame, type PingFrame, type PongFrame, type ServerFrame } from "./types"
+import {
+  FrameType,
+  type AdminMintKeyFrame,
+  type ClientFrame,
+  type PingFrame,
+  type PlayerRole,
+  type PongFrame,
+  type ServerFrame,
+} from "./types"
 
 export interface WebSocketLike {
   readonly readyState: number
@@ -38,6 +46,9 @@ const serverFrameTypes = new Set<string>([
   FrameType.Presence,
   FrameType.System,
   FrameType.Pong,
+  FrameType.AdminConfig,
+  FrameType.AdminKeys,
+  FrameType.AdminError,
 ])
 
 function defaultWebSocketFactory(url: string): WebSocketLike {
@@ -154,6 +165,33 @@ export class WsClient {
 
   ping(t = Date.now()): void {
     this.send({ type: FrameType.Ping, t })
+  }
+
+  // ---- v1.1 admin (keeper-gated) requests --------------------------------
+  // The server only honors these on a keeper-role connection; otherwise it
+  // replies `admin_error {code:"forbidden"}`.
+
+  adminGetConfig(): void {
+    this.send({ type: FrameType.AdminGetConfig })
+  }
+
+  adminSetModel(provider: string, chatModel?: string): void {
+    this.send(
+      chatModel
+        ? { type: FrameType.AdminSetModel, provider, chat_model: chatModel }
+        : { type: FrameType.AdminSetModel, provider },
+    )
+  }
+
+  adminListKeys(): void {
+    this.send({ type: FrameType.AdminListKeys })
+  }
+
+  adminMintKey(room: string, name?: string, role?: PlayerRole): void {
+    const frame: AdminMintKeyFrame = { type: FrameType.AdminMintKey, room }
+    if (name) frame.name = name
+    if (role) frame.role = role
+    this.send(frame)
   }
 
   send(frame: ClientFrame): void {

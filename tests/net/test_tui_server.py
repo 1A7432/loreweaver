@@ -87,7 +87,7 @@ async def test_join_with_good_key_gets_welcome_and_bad_key_gets_error():
         async with websockets.connect(url) as ws:
             welcome = await _join(ws, key, "Alice")
             assert welcome["type"] == "welcome"
-            assert welcome["protocol"] == "1"
+            assert welcome["protocol"] == "1.1"
             assert welcome["room"] == "demo"
             assert welcome["you"]["name"] == "Alice"
             assert welcome["you"]["role"] == "player"

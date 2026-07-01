@@ -36,15 +36,20 @@ class KeyEntry:
 class Keystore:
     """In-memory `key -> KeyEntry` table, loadable from and savable back to a TOML file."""
 
-    def __init__(self, entries: dict[str, KeyEntry] | None = None) -> None:
+    def __init__(self, entries: dict[str, KeyEntry] | None = None, *, path: str | Path | None = None) -> None:
         self._entries: dict[str, KeyEntry] = dict(entries) if entries else {}
+        # The file this keystore was loaded from (if any). `persist()` writes back
+        # to it, so a key minted at runtime (e.g. via the web admin panel) survives
+        # a restart. An in-memory keystore (tests) has no path and never persists.
+        self._path: Path | None = Path(path) if path is not None else None
 
     @classmethod
     def load(cls, path: str | Path) -> Keystore:
-        """Load a keystore from `path`; a missing file loads as an empty keystore."""
+        """Load a keystore from `path`; a missing file loads as an empty keystore
+        (still remembering `path`, so a later `persist()`/`add` can create it)."""
         file_path = Path(path)
         if not file_path.is_file():
-            return cls()
+            return cls(path=file_path)
 
         with file_path.open("rb") as handle:
             raw = tomllib.load(handle)
@@ -62,7 +67,12 @@ class Keystore:
                 name=str(table.get("name", "") or ""),
                 role=_normalize_role(table.get("role")),
             )
-        return cls(entries)
+        return cls(entries, path=file_path)
+
+    @property
+    def path(self) -> Path | None:
+        """The file this keystore was loaded from / persists to, if any."""
+        return self._path
 
     def get(self, key: str) -> KeyEntry | None:
         """Look up `key`, or `None` if it isn't registered."""
@@ -78,9 +88,17 @@ class Keystore:
         """Every registered entry, in insertion order."""
         return list(self._entries.values())
 
-    def save(self, path: str | Path) -> None:
-        """Write every entry back out as TOML (one `[key]` table each)."""
-        file_path = Path(path)
+    def save(self, path: str | Path | None = None) -> None:
+        """Write every entry back out as TOML (one `[key]` table each).
+
+        `path` defaults to the file this keystore was loaded from; passing one
+        both writes there and remembers it as the new persistence target.
+        """
+        target = path if path is not None else self._path
+        if target is None:
+            raise ValueError("Keystore.save requires a path (this keystore has none).")  # i18n-exempt: internal misuse error
+        file_path = Path(target)
+        self._path = file_path
         file_path.parent.mkdir(parents=True, exist_ok=True)
         blocks = []
         for entry in self._entries.values():
@@ -90,6 +108,17 @@ class Keystore:
             lines.append(f"role = {_toml_string(entry.role)}")
             blocks.append("\n".join(lines))
         file_path.write_text(("\n\n".join(blocks) + "\n") if blocks else "", encoding="utf-8")
+
+    def persist(self) -> bool:
+        """Save back to the remembered `path`, if any; return whether it wrote.
+
+        A no-op (returning False) for an in-memory keystore, so runtime minting
+        works in tests without a backing file.
+        """
+        if self._path is None:
+            return False
+        self.save(self._path)
+        return True
 
     def __len__(self) -> int:
         return len(self._entries)

@@ -8,7 +8,12 @@ is unaffected by transport; this document is the language-agnostic seam.
 
 Transport: WebSocket, JSON text frames, one JSON object per frame, every
 frame shaped `{"type": ...}`. Endpoint: `ws://host:port/`. Protocol
-version: `"1"`.
+version: `"1.1"`.
+
+Versioning is additive: `"1.1"` only ADDS the keeper-gated `admin_*` frames
+(see "Admin frames" below). A client that only understands `"1"` keeps working
+unchanged — it never sends `admin_*` frames, and it should treat the `welcome`
+`protocol` field as an opaque string (accept any `"1.x"`).
 
 The first frame a client sends MUST be `join`. The server replies with
 either `welcome` or `error`, closing the connection on error.
@@ -24,7 +29,7 @@ either `welcome` or `error`, closing the connection on error.
 ## Server → Client
 
 - `welcome` — sent once, on a successful `join`:
-  `{type:"welcome", protocol:"1", room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string}`
+  `{type:"welcome", protocol:"1.1", room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string}`
 - `error` — a localized failure notice; `bad_key` closes the connection (it
   only ever happens during the `join` handshake), the others do not:
   `{type:"error", code:"bad_key"|"bad_frame"|"rate_limited"|"server_error", message:string}`
@@ -100,6 +105,43 @@ On `join`, the server looks up `key`; an unknown key is rejected with
 connection to `SessionSource(platform="tui", chat_type="group",
 chat_id=room, user_id="tui:" + sha1(key)[:8], user_name=name)` — see
 `net/keystore.py` and the shipped `keys.example.toml`.
+
+## Admin frames (v1.1, keeper-gated)
+
+A deployer/keeper can manage the server from a browser (the web client's admin
+panel, opened with `?admin=1`) over the SAME connection, using a **keeper-role
+key**: the keystore role stamped on the connection at `join` is the admin gate —
+there is no separate auth. The server answers these ONLY for a `keeper`
+connection; any other connection gets `admin_error{code:"forbidden"}` and nothing
+is read or mutated. Implemented in `net/admin.py`.
+
+Client → server:
+
+- `admin_get_config` — `{type:"admin_get_config"}`
+- `admin_set_model` — switch the live LLM provider/model:
+  `{type:"admin_set_model", provider:string, chat_model?:string}`
+- `admin_list_keys` — `{type:"admin_list_keys"}`
+- `admin_mint_key` — mint a room access key:
+  `{type:"admin_mint_key", room:string, name?:string, role?:"player"|"keeper"}`
+
+Server → client:
+
+- `admin_config` — the live, display-safe LLM config (api_key masked) plus the
+  provider catalog and whether a runtime override is active:
+  `{type:"admin_config", provider:string, chat_model:string, base_url:string, api_key_masked:string, providers:string[], override_active:boolean}`
+- `admin_keys` — the room-key roster; every entry's key value is masked. A
+  `mint` request additionally returns the freshly minted key ONCE in cleartext
+  under `minted` (so the keeper can copy it):
+  `{type:"admin_keys", keys:[{key_masked:string, room:string, name:string, role:"player"|"keeper"}], minted?:{key:string, room:string, name:string, role:"player"|"keeper"}}`
+- `admin_error` — a localized failure notice (does not close the connection):
+  `{type:"admin_error", code:"forbidden"|"unknown_provider"|"bad_request", message?:string}`
+
+`admin_set_model` validates `provider` against the known providers
+(`infra.providers.is_known_provider`), persists the override via
+`services.runtime_config`, and hot-reconfigures the shared `MutableLLM` — the
+same path as the `.model set` chat command — then replies a fresh
+`admin_config`. A key minted here is written back to the server's keys file, so
+it survives a restart.
 
 ## Additive v1 NPC frames
 

@@ -544,6 +544,100 @@ body {
   border-color: var(--accent);
 }
 
+/* ---------- Admin panel ---------- */
+
+.admin {
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+.admin-body {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.admin-config {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 12px;
+}
+
+.admin-config > div {
+  display: flex;
+  gap: 10px;
+}
+
+.admin-config dt {
+  color: var(--dim);
+  width: 110px;
+  flex: none;
+}
+
+.admin-config dd {
+  margin: 0;
+  color: var(--fg);
+  word-break: break-all;
+}
+
+.admin-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.admin-form .field {
+  margin-bottom: 0;
+  min-width: 160px;
+  flex: 1;
+}
+
+.admin-form button {
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  padding: 9px 16px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.admin-form select {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+  font: inherit;
+}
+
+.admin-keys {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.admin-keys li {
+  color: var(--fg);
+  word-break: break-all;
+}
+
+.admin-minted {
+  color: var(--success);
+  word-break: break-all;
+  margin: 0 0 12px;
+}
+
 /* ---------- Status bar ---------- */
 
 .status-bar {
