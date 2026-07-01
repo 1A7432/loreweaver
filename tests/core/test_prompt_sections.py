@@ -172,6 +172,12 @@ async def test_inject_interaction_style_prompt_includes_freshness_and_ensemble_n
     assert ZH.t("prompt.style.freshness") in zh_result
     # The freshness bullets are additive: the dice-first tool-usage rule stays.
     assert EN.t("prompt.style.tool_usage") in en_result
+    # Strengthened wording: it must explicitly warn against reusing the same SCENE-ENDING
+    # image/beat across CONSECUTIVE turns (not just avoiding a repeated word).
+    en_fresh = EN.t("prompt.style.freshness")
+    assert "two turns in a row" in en_fresh and "END a turn" in en_fresh
+    zh_fresh = ZH.t("prompt.style.freshness")
+    assert "连续两回合" in zh_fresh and "收尾" in zh_fresh
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +375,32 @@ async def test_inject_document_context_prompt_ready_pool_includes_keeper_discipl
     assert EN.t("prompt.document.spoiler_line", tags="murderer_reveal") in result
     assert summarize_knowledge_item({"name": "大厅", "description": "潮湿阴冷", "focus": "探索"}) in result
     assert EN.t("prompt.document.catalog_hint") in result
+
+
+async def test_inject_document_context_prompt_ready_pool_includes_module_fidelity():
+    # When a keeper pool is initialized the KP must be told to RUN THE ACTUAL MODULE (drive its
+    # scenes/hooks, name its NPCs, use its clues; never freelance a parallel plot) -- alongside,
+    # not replacing, the keeper-secrecy discipline block.
+    store = Store(":memory:")
+    chat_key = "chat-fidelity"
+    await store.set(user_key="", store_key=f"module_init_status.{chat_key}", value="ready")
+    await store.set(
+        user_key="",
+        store_key=f"module_keeper_pool.{chat_key}",
+        value=json.dumps(
+            {"summary": "A village sacrifices to a dragon king.", "npcs": [{"name": "老严", "role": "村民向导"}]}
+        ),
+    )
+    ctx = _Ctx(chat_key=chat_key)
+
+    en = await inject_document_context_prompt(ctx, _FakeVectorDB(), store, EN)
+    zh = await inject_document_context_prompt(ctx, _FakeVectorDB(), store, ZH)
+
+    # The run-the-module fidelity block rides along with a ready pool, in the caller's locale...
+    assert EN.t("prompt.module_fidelity") in en
+    assert ZH.t("prompt.module_fidelity") in zh
+    # ...and sits WITH (does not displace) the keeper-secrecy discipline red line.
+    assert EN.t("prompt.keeper_discipline") in en
 
 
 async def test_inject_document_context_prompt_processing_state():

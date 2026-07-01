@@ -203,10 +203,13 @@ class CompanionTools:
                 return i18n.t("companion.tools.list.empty")
             lines = [i18n.t("companion.tools.list.header", count=len(companions))]
             for companion in companions:
+                # Surface the companion's pronoun hint right after its name (e.g. "沈墨 (he/him)") so the
+                # Keeper narrates its gender from the imported card instead of guessing off the name.
+                display_name = f"{companion.name} ({companion.pronouns})" if companion.pronouns else companion.name
                 lines.append(
                     i18n.t(
                         "companion.tools.list.item",
-                        name=companion.name,
+                        name=display_name,
                         id=companion.id,
                         playstyle=companion.playstyle or i18n.t("common.none"),
                     )

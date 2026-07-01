@@ -521,6 +521,34 @@ async def test_forced_correction_round_provider_error_keeps_original_reply():
     assert await services.store.get(user_key="", store_key="chat_history.chat-forced-boom") is not None
 
 
+async def test_dice_correction_nudge_binds_to_the_current_player_action():
+    # A real play-test bug: a forced corrective roll narrated the PREVIOUS player's action. The
+    # nudge must quote THIS turn's just-submitted action verbatim, so the forced roll +
+    # re-narration bind to it rather than drifting onto a stale action still in the replay window.
+    action = "I pry open the rusted strongbox with my crowbar."
+    llm = FakeLLM(
+        script=[
+            assistant_text("You crouch beside the strongbox."),  # initial reply -- rolls nothing
+            assistant_tools(tool_call("skill_check", skill_name="Locksmith")),  # forced round rolls
+            assistant_text("The lid groans open on a nest of oilcloth bundles."),  # narration round
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx("chat-bind"), services, _dice_toolset(), action)
+
+    # The corrective nudge is built by quoting THIS turn's action into loop.dice_correction; that
+    # exact user message must appear in the conversation the corrective round saw.
+    expected_nudge = services.i18n.with_locale("en").t("loop.dice_correction", action=action)
+    assert action in expected_nudge  # sanity: the action really is quoted in the nudge
+    corrective_convo = llm.calls[-1][0]
+    assert any(m.get("role") == "user" and m.get("content") == expected_nudge for m in corrective_convo)
+    # ...and the forced roll actually fired + re-narrated per the result.
+    assert [t["name"] for t in result.tool_trace] == ["skill_check"]
+    assert result.reply == "The lid groans open on a nest of oilcloth bundles."
+    assert llm.tool_choices == ["auto", "required", "auto"]
+
+
 def test_player_action_detector_catches_attempts_but_not_dialogue():
     # Positives: the player's action plausibly attempts a skill-checkable thing.
     for positive in [

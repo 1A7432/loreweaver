@@ -350,11 +350,13 @@ async def inject_document_context_prompt(
 
     Precedence: an initialized knowledge pool (``module_init_status`` ==
     ``"ready"``) beats an in-progress one (``"processing"``), which beats a
-    vector-search fallback over raw uploaded documents. Whenever a keeper
-    pool is present this always carries the strong, localized
-    ``prompt.keeper_discipline`` instruction telling the KP that
-    keeper/module-secret content is for its own reasoning only and must
-    NEVER be quoted to players.
+    vector-search fallback over raw uploaded documents. Whenever an
+    initialized keeper pool is present this always carries two strong,
+    localized instructions: ``prompt.keeper_discipline`` (keeper/module-secret
+    content is for the KP's own reasoning only and must NEVER be quoted to
+    players) and ``prompt.module_fidelity`` (RUN the actual module above — drive
+    its scenes, hooks, real NPC names and clues; never freelance a parallel
+    plot that replaces the module's own content).
     """
     if not enable_vector_db:
         return ""
@@ -375,6 +377,8 @@ async def inject_document_context_prompt(
                 divider,
                 "",
                 i18n.t("prompt.keeper_discipline"),
+                "",
+                i18n.t("prompt.module_fidelity"),
                 "",
             ]
 

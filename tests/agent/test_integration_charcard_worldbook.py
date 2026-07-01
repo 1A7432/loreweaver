@@ -9,10 +9,12 @@ than the leaf modules in isolation.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from agent.context import AgentCtx, LocalFs
 from agent.kp_tools import build_kp_toolset
 from agent.kp_tools_charcard import CharcardTools
+from agent.kp_tools_companion import CompanionTools
 from agent.kp_tools_worldbook import WorldbookTools
 from agent.npc import NpcManager
 from agent.prompt_builder import build_system_prompt
@@ -97,6 +99,30 @@ async def test_import_character_as_companion_creates_record_sheet_and_lore(tmp_p
         AgentCtx(chat_key="chat-comp", user_id="kp", locale="en"), query="arkham"
     )
     assert "Arkham is a cursed town." in lore
+
+
+async def test_import_male_card_as_companion_carries_he_him_to_the_keeper(tmp_path):
+    # Item 4 regression: 沈墨's card describes him with 他 throughout, yet the Keeper narrated him
+    # as she/her. Importing the card must (1) carry a structural he/him hint on the companion
+    # record, and (2) surface it where the Keeper actually sees the companion (the roster tool),
+    # so the model narrates the imported gender instead of guessing off the name.
+    services = _services()
+    card_src = Path(__file__).resolve().parents[2] / "cards" / "companion_shenmo.json"
+    (tmp_path / "shenmo.json").write_text(card_src.read_text(encoding="utf-8"), encoding="utf-8")
+    fs = LocalFs(str(tmp_path))
+    ctx = AgentCtx(chat_key="chat-shenmo", user_id="player-1", locale="zh", fs=fs)
+
+    await CharcardTools(services).import_character(ctx, file_path="shenmo.json", system="coc7", as_="companion")
+
+    # (1) The pronoun hint is carried structurally on the companion record.
+    companions = await NpcManager(services.store).list_companions("chat-shenmo")
+    assert len(companions) == 1
+    assert companions[0].name == "沈墨"
+    assert companions[0].pronouns == "he/him"
+
+    # (2) The Keeper-facing companion roster surfaces "沈墨 (he/him)" so the KP doesn't guess.
+    roster = await CompanionTools(services).list_companions(ctx)
+    assert "沈墨 (he/him)" in roster
 
 
 async def test_worldbook_tools_through_built_toolset():

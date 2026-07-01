@@ -313,6 +313,7 @@ async def run_kp_turn(
             messages,
             tool_trace,
             reply,
+            user_message,
             i18n,
             temperature=services.settings.llm.temperature,
         )
@@ -377,6 +378,7 @@ async def _run_dice_correction(
     messages: list[dict],
     tool_trace: list[dict],
     prior_reply: str,
+    user_message: str,
     i18n,
     *,
     temperature: float | None,
@@ -391,6 +393,11 @@ async def _run_dice_correction(
     skill_check / sanity_check / roll_dice / opposed_check to resolve the pending
     check. If a real dice tool fires, one more NORMAL (`tool_choice="auto"`) round
     narrates the graded outcome.
+
+    The nudge quotes `user_message` -- THE CURRENT player's just-submitted action --
+    verbatim, so the forced roll and its re-narration bind to *this* turn's action
+    rather than drifting onto a stale earlier one still in the replayed window
+    (a real play-test failure: a forced roll narrated the previous player's action).
 
     Bounded to at most `_CORRECTIVE_MAX_ROUNDS` chat calls (one forced + one
     narration) and entered at most once per turn, so it can never loop.
@@ -407,7 +414,7 @@ async def _run_dice_correction(
     convo = [
         *messages,
         {"role": "assistant", "content": prior_reply},
-        {"role": "user", "content": i18n.t("loop.dice_correction")},
+        {"role": "user", "content": i18n.t("loop.dice_correction", action=user_message)},
     ]
     reply = prior_reply
     for round_index in range(_CORRECTIVE_MAX_ROUNDS):

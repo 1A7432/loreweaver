@@ -78,6 +78,10 @@ class NpcRecord:
     role: str = "keeper_npc"  # "keeper_npc" | "player_companion"
     playstyle: str = ""  # companion tactical/RP leaning (unused for keeper NPCs)
     is_pc: bool = False  # True for player companions (they own a CharacterSheet)
+    # Compact gender/pronoun hint (e.g. "he/him", "she/her"), inferred structurally on import from a
+    # card's own description so the KP is handed the character's gender instead of guessing it from a
+    # name. Surfaced in the Keeper-facing companion roster; "" when there was no clear signal.
+    pronouns: str = ""
     created_time: float = field(default_factory=time.time)
     updated_time: float = field(default_factory=time.time)
 
@@ -99,6 +103,7 @@ class NpcRecord:
             "role": self.role,
             "playstyle": self.playstyle,
             "is_pc": self.is_pc,
+            "pronouns": self.pronouns,
             "created_time": self.created_time,
             "updated_time": self.updated_time,
         }
@@ -122,6 +127,7 @@ class NpcRecord:
             role=data.get("role", "keeper_npc"),
             playstyle=data.get("playstyle", ""),
             is_pc=bool(data.get("is_pc", False)),
+            pronouns=data.get("pronouns", ""),
             created_time=data.get("created_time") or time.time(),
             updated_time=data.get("updated_time") or time.time(),
         )
@@ -249,15 +255,16 @@ class NpcManager:
         playstyle: str = "",
         knowledge: list[str] | None = None,
         stat_char: str | None = None,
+        pronouns: str = "",
     ) -> NpcRecord:
         """Create a `player_companion` record (M10): a party-side PC voiced by
         `agent.companion_actor`, linked to a CharacterSheet via `stat_char`.
 
         Thin wrapper over `create_npc` (so id-collision suffixing and the room id
         list are reused unchanged) that then stamps the companion-only fields
-        `role="player_companion"`, `is_pc=True`, `playstyle` and `stat_char`. The
-        legacy `create_npc(role=...)` *persona-hint* param is deliberately left
-        alone so keeper NPCs are wholly unaffected.
+        `role="player_companion"`, `is_pc=True`, `playstyle`, `pronouns` and
+        `stat_char`. The legacy `create_npc(role=...)` *persona-hint* param is
+        deliberately left alone so keeper NPCs are wholly unaffected.
         """
         record = await self.create_npc(
             chat_key, name, persona=persona, knowledge=knowledge, stat_char=stat_char, major=True
@@ -265,6 +272,7 @@ class NpcManager:
         record.role = "player_companion"
         record.is_pc = True
         record.playstyle = playstyle
+        record.pronouns = pronouns
         await self._save_record(chat_key, record)
         return record
 

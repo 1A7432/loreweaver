@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.char_from_persona import build_sheet_from_persona
+from core.char_from_persona import build_sheet_from_persona, infer_pronoun_note
 from core.character_manager import CharacterManager
 from core.charcard import parse_card_bytes
 from core.dice_engine import seed_dice
@@ -35,6 +35,18 @@ def _v2_png_card() -> bytes:
     text = b"chara\x00" + encoded
     ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
     return b"\x89PNG\r\n\x1a\n" + _png_chunk(b"IHDR", ihdr) + _png_chunk(b"tEXt", text) + _png_chunk(b"IEND", b"")
+
+
+def test_infer_pronoun_note_reads_gender_from_prose_and_stays_silent_when_unclear():
+    # CJK 他/她 (singular) and English he/she drive a deterministic, dominant-marker choice.
+    assert infer_pronoun_note("他穿一件灰布长衫，他自己从不细说。") == "he/him"
+    assert infer_pronoun_note("她是一位民俗学者，她记录乡野怪谈。") == "she/her"
+    assert infer_pronoun_note("He tips his hat and grins to himself.") == "he/him"
+    assert infer_pronoun_note("She adjusts her glasses and frowns.") == "she/her"
+    # No clear signal -> "" (never a coin-flip guess); the plural 们 forms carry no gender.
+    assert infer_pronoun_note("The scholar records local legends.") == ""
+    assert infer_pronoun_note("他们一起上路，谁也不说话。") == ""
+    assert infer_pronoun_note("") == ""
 
 
 def test_parse_sillytavern_v2_png_and_v1_json():

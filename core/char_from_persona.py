@@ -3,12 +3,40 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from core.character_manager import CharacterManager, CharacterSheet
 from core.charcard import CharacterCard
 from infra.i18n import t
 from infra.store import Store
+
+# Gendered-pronoun markers for the deterministic gender/pronoun inference below. English is matched on
+# word boundaries (he/she + their possessive/reflexive forms); CJK counts singular 他/她 while skipping
+# the plural 们 forms (他们/她们 == "they"), which carry no personal-gender signal.
+_EN_MALE_RE = re.compile(r"\b(?:he|him|his|himself)\b", re.IGNORECASE)
+_EN_FEMALE_RE = re.compile(r"\b(?:she|her|hers|herself)\b", re.IGNORECASE)
+_ZH_MALE_RE = re.compile(r"他(?!们)")
+_ZH_FEMALE_RE = re.compile(r"她(?!们)")
+
+
+def infer_pronoun_note(text: str) -> str:
+    """Deterministically infer a compact pronoun note ('he/him' | 'she/her' | '') from persona text.
+
+    Counts gendered pronoun markers -- English he/she (+ possessive/reflexive) and CJK 他/她
+    (singular only) -- and returns the dominant one, or '' when there is no clear signal so the
+    Keeper is handed a real pronoun hint or nothing at all, never a coin-flip guess. This is data
+    inference over text the user supplied, not generation, so it lives in the deterministic core.
+    """
+    if not text:
+        return ""
+    male = len(_EN_MALE_RE.findall(text)) + len(_ZH_MALE_RE.findall(text))
+    female = len(_EN_FEMALE_RE.findall(text)) + len(_ZH_FEMALE_RE.findall(text))
+    if male > female:
+        return "he/him"
+    if female > male:
+        return "she/her"
+    return ""
 
 COC_CHARACTERISTICS = ["STR", "CON", "SIZ", "DEX", "APP", "INT", "POW", "EDU", "LUC"]
 COC_HIGH_MIN_CHARACTERISTICS = {"SIZ", "INT", "EDU"}

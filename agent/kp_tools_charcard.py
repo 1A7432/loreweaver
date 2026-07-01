@@ -20,7 +20,7 @@ from agent.context import AgentCtx
 from agent.npc import NpcManager
 from agent.services import Services
 from agent.tools import tool
-from core.char_from_persona import build_sheet_from_persona
+from core.char_from_persona import build_sheet_from_persona, infer_pronoun_note
 from core.character_manager import CharacterSheet
 from core.charcard import CharacterCard, parse_card_file
 from infra.i18n import I18n
@@ -38,6 +38,14 @@ def _companion_uid(companion_id: str) -> str:
 def _persona_text(card: CharacterCard) -> str:
     """The roleplay persona carried onto the character, from the card's description + personality."""
     return "\n".join(part for part in (card.description, card.personality) if part).strip()
+
+
+def _card_pronouns(card: CharacterCard) -> str:
+    """Infer the card's gender/pronoun note from all of its prose fields (empty when unclear)."""
+    blob = "\n".join(
+        part for part in (card.description, card.personality, card.scenario, card.first_mes, card.mes_example) if part
+    )
+    return infer_pronoun_note(blob)
 
 
 def _truncate(text: str) -> str:
@@ -112,6 +120,7 @@ class CharcardTools:
                     persona=_persona_text(card),
                     playstyle=", ".join(card.tags),
                     stat_char=final_name,
+                    pronouns=_card_pronouns(card),
                 )
                 await self._services.characters.save_character(_companion_uid(record.id), ctx.chat_key, sheet)
                 lore = await self._import_card_lore(ctx, card)
