@@ -1,4 +1,4 @@
-import type { PresenceFrame, WelcomeFrame } from "@trpg-kp/protocol"
+import { stripControlChars, type PresenceFrame, type WelcomeFrame } from "@trpg-kp/protocol"
 import type { Palette, ThemeName } from "../themes"
 
 export interface StatusBarProps {
@@ -10,8 +10,8 @@ export interface StatusBarProps {
 }
 
 export function StatusBar({ welcome, presence, online, theme, themeName }: StatusBarProps) {
-  const room = welcome?.room ?? "not joined"
-  const locale = welcome?.locale ?? "--"
+  const room = stripControlChars(welcome?.room ?? "not joined")
+  const locale = stripControlChars(welcome?.locale ?? "--")
   const count = presence?.online ?? online
   return (
     <box height={1} backgroundColor={theme.border}>

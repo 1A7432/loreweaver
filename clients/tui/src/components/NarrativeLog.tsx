@@ -1,5 +1,5 @@
 import { SyntaxStyle } from "@opentui/core"
-import type { DiceFrame, NarrativeFrame, SystemFrame } from "@trpg-kp/protocol"
+import { stripControlChars, type DiceFrame, type NarrativeFrame, type SystemFrame } from "@trpg-kp/protocol"
 import type { Palette } from "../themes"
 
 export type LogFrame = NarrativeFrame | DiceFrame | SystemFrame
@@ -32,14 +32,15 @@ function diceLine(frame: DiceFrame, revealTicks: number): string {
   const level = frame.level ?? (frame.success ? "SUCCESS" : "FAIL")
   const target = typeof frame.target === "number" ? ` vs ${frame.target}` : ""
   const prefix = revealTicks < 2 ? "⚄ ..." : "⚄"
-  return `${prefix} ${frame.actor} ${frame.expr} ${frame.total}${target} -> ${level}`
+  // actor / expr / level are server-supplied; scrub control bytes off the line.
+  return stripControlChars(`${prefix} ${frame.actor} ${frame.expr} ${frame.total}${target} -> ${level}`)
 }
 
 function speakerLabel(frame: NarrativeFrame): string {
   if (frame.speaker === "kp") return "KP"
-  if (frame.speaker === "npc") return frame.name ? `[${frame.name}]` : "[NPC]"
-  if (frame.name) return frame.name
-  return frame.speaker.toUpperCase()
+  if (frame.speaker === "npc") return frame.name ? `[${stripControlChars(frame.name)}]` : "[NPC]"
+  if (frame.name) return stripControlChars(frame.name)
+  return stripControlChars(frame.speaker.toUpperCase())
 }
 
 export function NarrativeLog({ frames, theme, revealTicks = 3, critFlash = false }: NarrativeLogProps) {
@@ -62,7 +63,7 @@ export function NarrativeLog({ frames, theme, revealTicks = 3, critFlash = false
           if (frame.type === "system") {
             return (
               <text key={`${frame.type}-${index}`} fg={frame.level === "warn" ? theme.fail : theme.system}>
-                [{frame.level.toUpperCase()}] {frame.text}
+                {stripControlChars(`[${frame.level.toUpperCase()}] ${frame.text}`)}
               </text>
             )
           }
@@ -75,7 +76,7 @@ export function NarrativeLog({ frames, theme, revealTicks = 3, critFlash = false
             return (
               <box key={`${frame.type}-${frame.id}-${index}`} flexDirection="column" width="100%">
                 <text fg={theme.dim}>{speakerLabel(frame)}</text>
-                <markdown content={frame.text} fg={theme.kp} syntaxStyle={narrativeSyntaxStyle} streaming={!frame.done} />
+                <markdown content={stripControlChars(frame.text)} fg={theme.kp} syntaxStyle={narrativeSyntaxStyle} streaming={!frame.done} />
               </box>
             )
           }
@@ -83,7 +84,7 @@ export function NarrativeLog({ frames, theme, revealTicks = 3, critFlash = false
           const color = frame.speaker === "player" ? theme.player : frame.speaker === "npc" ? theme.npc : theme.system
           return (
             <text key={`${frame.type}-${frame.id}-${index}`} fg={color}>
-              {speakerLabel(frame)}: {frame.text}
+              {speakerLabel(frame)}: {stripControlChars(frame.text)}
             </text>
           )
         })

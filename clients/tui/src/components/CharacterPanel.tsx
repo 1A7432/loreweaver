@@ -1,4 +1,4 @@
-import type { CharacterState } from "@trpg-kp/protocol"
+import { stripControlChars, type CharacterState } from "@trpg-kp/protocol"
 import type { Palette } from "../themes"
 
 export interface CharacterPanelProps {
@@ -25,7 +25,7 @@ function statColor(value: number, max: number, full: string, low: string): strin
 function renderAttributes(attributes: Record<string, unknown>): string[] {
   return Object.entries(attributes)
     .slice(0, 6)
-    .map(([key, value]) => `${key.toUpperCase().slice(0, 4)} ${String(value)}`)
+    .map(([key, value]) => stripControlChars(`${key.toUpperCase().slice(0, 4)} ${String(value)}`))
 }
 
 export function CharacterPanel({ character, theme }: CharacterPanelProps) {
@@ -44,7 +44,7 @@ export function CharacterPanel({ character, theme }: CharacterPanelProps) {
       <text fg={theme.accent}>
         CHARACTER {incapacitated ? "☠" : ""}
       </text>
-      <text fg={theme.kp}>{character.name}</text>
+      <text fg={theme.kp}>{stripControlChars(character.name)}</text>
       <text fg={statColor(character.hp, character.hpmax, theme.hpFull, theme.hpLow)}>
         HP {bar(character.hp, character.hpmax)} {character.hp}/{character.hpmax}
       </text>
@@ -60,7 +60,7 @@ export function CharacterPanel({ character, theme }: CharacterPanelProps) {
         </text>
       ))}
       {character.status_effects.length > 0 ? (
-        <text fg={theme.fail}>✖ {character.status_effects.join(", ")}</text>
+        <text fg={theme.fail}>✖ {stripControlChars(character.status_effects.join(", "))}</text>
       ) : (
         <text fg={theme.dim}>OK</text>
       )}

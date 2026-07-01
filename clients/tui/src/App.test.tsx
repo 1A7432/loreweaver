@@ -127,4 +127,47 @@ describe("App", () => {
       renderer.destroy()
     })
   })
+
+  test("strips terminal escape sequences from untrusted server text + names", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame } = await testRender(<App client={client} />, {
+      width: 110,
+      height: 34,
+    })
+    await flush()
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400))
+    })
+    await flush()
+
+    // A hostile NPC line: OSC title-set + OSC-52 clipboard write + ED (erase
+    // display), plus an ESC-bearing speaker name. If the client rendered these
+    // raw, the ESC/BEL introducers would reach the real terminal.
+    act(() => {
+      client.push({
+        type: FrameType.Narrative,
+        id: "inj",
+        speaker: "npc",
+        name: "Mar\x1b]0;PWNEDTITLE\x07tha",
+        text: "look\x1b]52;c;cGF5bG9hZA==\x07here\x1b[2Jgone",
+        format: "plain",
+      })
+    })
+
+    const frame = await waitForFrame((text) => text.includes("here"))
+
+    // OpenTUI styles with CSI (ESC "["); the injected attacks are OSC (ESC "]")
+    // title / clipboard writes. The ESC + BEL introducers must be gone so the
+    // sequences are inert (never an active escape) at the terminal.
+    expect(frame).not.toContain("\x1b]0;") // no OSC window-title set survives
+    expect(frame).not.toContain("\x1b]52;") // no OSC-52 clipboard write survives
+    expect(frame).not.toContain("\x07") // no BEL terminators survive
+    // The visible narrative text itself is preserved (only control bytes drop).
+    expect(frame).toContain("look")
+    expect(frame).toContain("here")
+
+    act(() => {
+      renderer.destroy()
+    })
+  })
 })

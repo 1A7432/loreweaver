@@ -30,6 +30,10 @@ const EMPTY_STATE: StateFrame = {
   online: 0,
 }
 
+// Cap a single streaming message so a hostile/runaway stream can't grow the
+// merged text without bound (memory / render blowup).
+const MAX_STREAM_TEXT = 20_000
+
 // Merge streaming narrative chunks (same id) in place; otherwise append and cap
 // the log so it can't grow unbounded. Mirrors the OpenTUI client.
 function appendFrame(frames: LogFrame[], frame: LogFrame): LogFrame[] {
@@ -39,7 +43,7 @@ function appendFrame(frames: LogFrame[], frame: LogFrame): LogFrame[] {
   if (index === -1) return [...next, frame].slice(-200)
   const existing = next[index]
   if (existing.type !== FrameType.Narrative) return [...next, frame].slice(-200)
-  next[index] = { ...existing, text: existing.text + frame.text, done: frame.done }
+  next[index] = { ...existing, text: (existing.text + frame.text).slice(0, MAX_STREAM_TEXT), done: frame.done }
   return next
 }
 

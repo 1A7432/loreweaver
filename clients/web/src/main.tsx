@@ -1,6 +1,7 @@
 import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 import { App } from "./App"
+import { ErrorBoundary } from "./ErrorBoundary"
 import "./themes.css"
 
 const rootEl = document.getElementById("root")
@@ -11,6 +12,8 @@ if (!document.body.dataset.theme) document.body.dataset.theme = "df16"
 
 createRoot(rootEl).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 )

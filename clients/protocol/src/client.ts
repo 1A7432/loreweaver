@@ -37,19 +37,33 @@ export interface WsClientOptions {
 
 const OPEN = 1
 
-const serverFrameTypes = new Set<string>([
-  FrameType.Welcome,
-  FrameType.Error,
-  FrameType.Narrative,
-  FrameType.Dice,
-  FrameType.State,
-  FrameType.Presence,
-  FrameType.System,
-  FrameType.Pong,
-  FrameType.AdminConfig,
-  FrameType.AdminKeys,
-  FrameType.AdminError,
-])
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null
+}
+
+const isStr = (v: unknown): v is string => typeof v === "string"
+const isNum = (v: unknown): v is number => typeof v === "number"
+const isArr = Array.isArray
+
+// Per-frame-type validation of the load-bearing required fields. A frame that
+// passes the `type` check but is missing/mistyped these (e.g. `{"type":"state"}`
+// with no party/initiative, or a narrative with no speaker/text) is DROPPED here
+// so it can never crash a downstream consumer (`.map`/`.length`/`.toUpperCase`
+// on `undefined` in the web panels and the TUI). One validator table protects
+// every client.
+const serverFrameValidators: Record<string, (f: Record<string, unknown>) => boolean> = {
+  [FrameType.Welcome]: (f) => isStr(f.room) && isObject(f.you) && isStr(f.you.name) && isStr(f.you.role),
+  [FrameType.Error]: (f) => isStr(f.code) && isStr(f.message),
+  [FrameType.Narrative]: (f) => isStr(f.id) && isStr(f.speaker) && isStr(f.text),
+  [FrameType.Dice]: (f) => isStr(f.actor) && isStr(f.expr) && isNum(f.total),
+  [FrameType.State]: (f) => isArr(f.party) && isArr(f.initiative) && isNum(f.online),
+  [FrameType.Presence]: (f) => isArr(f.players) && isNum(f.online),
+  [FrameType.System]: (f) => isStr(f.level) && isStr(f.text),
+  [FrameType.Pong]: (f) => isNum(f.t),
+  [FrameType.AdminConfig]: (f) => isStr(f.provider) && isStr(f.chat_model) && isArr(f.providers),
+  [FrameType.AdminKeys]: (f) => isArr(f.keys),
+  [FrameType.AdminError]: (f) => isStr(f.code),
+}
 
 function defaultWebSocketFactory(url: string): WebSocketLike {
   if (typeof WebSocket === "undefined") {
@@ -70,7 +84,9 @@ function toText(data: unknown): string {
 }
 
 function isServerFrame(value: unknown): value is ServerFrame {
-  return Boolean(value && typeof value === "object" && serverFrameTypes.has(String((value as { type?: unknown }).type)))
+  if (!isObject(value)) return false
+  const validate = serverFrameValidators[String(value.type)]
+  return validate !== undefined && validate(value)
 }
 
 function isPingFrame(value: unknown): value is PingFrame {
@@ -228,7 +244,14 @@ export class WsClient {
   }
 
   private handleRawMessage(data: unknown): void {
-    const parsed = JSON.parse(toText(data)) as unknown
+    // Untrusted transport: a non-JSON (or undecodable) message must never throw
+    // out of the socket's message handler — drop it and keep the connection alive.
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(toText(data))
+    } catch {
+      return
+    }
     if (isPingFrame(parsed)) {
       this.sendPong(parsed.t)
       return

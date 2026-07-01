@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useKeyboard, useTerminalDimensions, useTimeline } from "@opentui/react"
 import type { InputRenderable, KeyEvent, ScrollBoxRenderable } from "@opentui/core"
-import { FrameType, type DiceFrame, type PresenceFrame, type ServerFrame, type StateFrame, type WelcomeFrame } from "@trpg-kp/protocol"
+import { FrameType, stripControlChars, type DiceFrame, type PresenceFrame, type ServerFrame, type StateFrame, type WelcomeFrame } from "@trpg-kp/protocol"
 import { CharacterPanel } from "./components/CharacterPanel"
 import { NarrativeLog, type LogFrame } from "./components/NarrativeLog"
 import { PartyPanel } from "./components/PartyPanel"
@@ -18,6 +18,10 @@ export interface AppProps {
   client: AppClient
 }
 
+// Cap a single streaming message so a hostile/runaway stream can't grow the
+// merged text without bound (memory / render blowup).
+const MAX_STREAM_TEXT = 20_000
+
 function appendFrame(frames: LogFrame[], frame: LogFrame): LogFrame[] {
   if (frame.type !== FrameType.Narrative || !frame.stream) return [...frames, frame].slice(-200)
   const next = [...frames]
@@ -25,7 +29,7 @@ function appendFrame(frames: LogFrame[], frame: LogFrame): LogFrame[] {
   if (index === -1) return [...next, frame].slice(-200)
   const existing = next[index]
   if (existing.type !== FrameType.Narrative) return [...next, frame].slice(-200)
-  next[index] = { ...existing, text: existing.text + frame.text, done: frame.done }
+  next[index] = { ...existing, text: (existing.text + frame.text).slice(0, MAX_STREAM_TEXT), done: frame.done }
   return next
 }
 
@@ -174,7 +178,7 @@ export function App({ client }: AppProps) {
         <box flexDirection="column" marginLeft={2}>
           <text fg={theme.accent}>{bootText}</text>
           <text fg={theme.dim}>
-            {dimensions.width}x{dimensions.height} · {welcome ? `joined ${welcome.room}` : "mock/server pending"}
+            {dimensions.width}x{dimensions.height} · {welcome ? `joined ${stripControlChars(welcome.room)}` : "mock/server pending"}
           </text>
         </box>
       </box>

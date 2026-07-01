@@ -37,6 +37,12 @@ class MockWebSocket implements WebSocketLike {
     this.emit("message", { data: JSON.stringify(frame) })
   }
 
+  // Deliver a raw payload verbatim (bypasses JSON.stringify) so tests can feed
+  // malformed / non-JSON bytes straight into the client's message handler.
+  serverSendRaw(data: string): void {
+    this.emit("message", { data })
+  }
+
   private emit(type: string, event: unknown): void {
     for (const listener of this.listeners.get(type) ?? []) {
       listener(event)
@@ -98,6 +104,41 @@ describe("WsClient", () => {
     expect(narrativeFrames).toHaveLength(1)
     expect(narrativeFrames[0].text).toBe("The door opens.")
     expect(allFrames).toEqual([FrameType.Narrative, FrameType.State])
+  })
+
+  test("malformed frames are validated per type and dropped, not dispatched", async () => {
+    const { client, sockets } = createClient()
+    const seen: string[] = []
+    client.onMessage((frame) => seen.push(frame.type))
+
+    await client.connect("ws://example.test")
+
+    // Right `type`, but missing the load-bearing fields the consumers read.
+    sockets[0].serverSend({ type: FrameType.State }) // no party / initiative
+    sockets[0].serverSend({ type: FrameType.Narrative, id: "x" }) // no speaker / text
+    sockets[0].serverSend({ type: FrameType.System, level: "info" }) // no text
+    sockets[0].serverSend({ type: "totally-unknown" }) // unknown type
+    // A well-formed frame of the same types still gets through untouched.
+    sockets[0].serverSend({
+      type: FrameType.State,
+      party: [],
+      initiative: [],
+      online: 1,
+    } satisfies StateFrame)
+
+    expect(seen).toEqual([FrameType.State])
+  })
+
+  test("a non-JSON message is ignored without throwing", async () => {
+    const { client, sockets } = createClient()
+    const seen: string[] = []
+    client.onMessage((frame) => seen.push(frame.type))
+
+    await client.connect("ws://example.test")
+
+    expect(() => sockets[0].serverSendRaw("<<< not json >>>")).not.toThrow()
+    expect(() => sockets[0].serverSendRaw("")).not.toThrow()
+    expect(seen).toEqual([])
   })
 
   test("incoming ping auto-sends pong", async () => {
