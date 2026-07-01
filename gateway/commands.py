@@ -345,7 +345,11 @@ class CommandRouter:
         rule = await _get_coc_rule(ctx)
         outcome = ctx.services.dice.roll_coc_check(san, rule=rule, bonus=parsed.bonus, penalty=parsed.penalty)
         loss_expr = success_loss if outcome["success"] else failure_loss
-        loss = _roll_loss(ctx.services, loss_expr)
+        # A non-numeric SAN-loss expression (e.g. `.sc 侦查/侦查`) must not crash the turn.
+        try:
+            loss = _roll_loss(ctx.services, loss_expr)
+        except ValueError:
+            return ctx.i18n.t("commands.roll.invalid", expr=loss_expr)
         _set_sheet_value(character, pack, "理智", max(0, san - loss))
         await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
         return ctx.i18n.t(
@@ -374,7 +378,12 @@ class CommandRouter:
         for raw_name, raw_value in assignments:
             canonical = pack.resolve_skill(raw_name) or raw_name.strip()
             current = _get_sheet_value(character, pack, canonical)
-            value = _apply_value_expr(ctx.services, current, raw_value)
+            # A malformed value expression (bad int, or an over-large dice term like
+            # `力量+9999d6` that trips d20's roll cap) must not crash the turn.
+            try:
+                value = _apply_value_expr(ctx.services, current, raw_value)
+            except ValueError:
+                return ctx.i18n.t("commands.roll.invalid", expr=raw_value)
             _set_sheet_value(character, pack, canonical, value)
             changed.append(ctx.i18n.t("commands.sheet.changed_item", name=canonical, value=value))
         await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
@@ -400,7 +409,10 @@ class CommandRouter:
             expr = _d20_expr(modifier)
             result = ctx.services.dice.roll_expression(expr, is_check=True)
             return ctx.i18n.t("commands.init.result", name=character.name, result=_format_roll(result, ctx.i18n))
-        dex = int(character.attributes.get("DEX", 50))
+        try:
+            dex = int(character.attributes.get("DEX", 50))
+        except (ValueError, TypeError):
+            dex = 50
         result = ctx.services.dice.roll_expression(f"1d100+{dex}", is_check=True)
         return ctx.i18n.t("commands.init.result", name=character.name, result=_format_roll(result, ctx.i18n))
 
@@ -620,7 +632,9 @@ class CommandRouter:
         keeper = _privilege_level(ctx.raw_ctx) >= int(PrivilegeLevel.GROUP_ADMIN)
 
         if sub in _LORE_LIST_WORDS:
-            return await tools.list_lore(agent_ctx, scope=rest)
+            # A player's `.lore list` must never reveal that a secret entry even exists; only a
+            # keeper sees secret titles (mirrors `query_lore` being keeper-gated).
+            return await tools.list_lore(agent_ctx, scope=rest, _keeper=keeper)
         if sub in _LORE_ADD_WORDS:
             if not keeper:
                 return ctx.i18n.t("worldbook.commands.lore.denied")
@@ -729,8 +743,18 @@ class CommandRouter:
         overrides: dict[str, str] = {"provider": provider}
         if len(tokens) > 1:
             overrides["chat_model"] = tokens[1]
-        merged = await runtime_config.set(**overrides)
-        reconfigured = _reconfigure_llm(ctx.services, merged)
+        # Validate by reconfiguring the LIVE LLM FIRST, then persist only on success. Building a
+        # native provider whose optional SDK/key is missing raises; if we persisted before that, the
+        # bad override would also brick the next `build_services()` boot. On failure we roll the live
+        # LLM back to the last-good config and persist nothing.
+        current = await runtime_config.get()
+        candidate = {**current, **overrides}
+        try:
+            reconfigured = _reconfigure_llm(ctx.services, candidate)
+        except Exception:
+            _reconfigure_llm(ctx.services, current)  # restore the previously-good live config
+            return ctx.i18n.t("commands.model.set_failed", provider=provider)
+        await runtime_config.set(**overrides)
         info = _describe_llm(ctx.services)
         key = "commands.model.set_done" if reconfigured else "commands.model.set_saved"
         return ctx.i18n.t(key, provider=info["provider"], chat_model=info["chat_model"])
@@ -883,7 +907,14 @@ class CommandRouter:
         i18n = get_i18n(locale)
         lines = []
         for expression in matches:
-            result = _roll_expression(self.services, expression)
+            # `[[...]]` is reached for ANY ordinary (non-command) message, so a bad expression
+            # (e.g. a skill name typed as `[[侦查]]`) must degrade to a localized notice, never
+            # crash the dispatch of a plain chat message.
+            try:
+                result = _roll_expression(self.services, expression)
+            except ValueError:
+                lines.append(i18n.t("commands.roll.invalid", expr=expression.strip()))
+                continue
             lines.append(i18n.t("commands.inline.result", expression=expression.strip(), result=_format_roll(result, i18n)))
         return "\n".join(lines)
 

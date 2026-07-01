@@ -95,8 +95,17 @@ async def _set_model(services: Services, frame: dict[str, Any], i18n: I18n) -> d
     if chat_model:
         overrides["chat_model"] = chat_model
 
-    merged = await services.runtime_config.set(**overrides)
-    _reconfigure_llm(services, merged)
+    # Reconfigure the LIVE LLM FIRST; persist only on success (mirrors gateway.commands._model_set):
+    # a native provider with a missing SDK/key raises here, and persisting a bad override would also
+    # brick the next `build_services()` boot. On failure, roll the live LLM back and persist nothing.
+    current = await services.runtime_config.get()
+    candidate = {**current, **overrides}
+    try:
+        _reconfigure_llm(services, candidate)
+    except Exception:
+        _reconfigure_llm(services, current)
+        return _error("set_failed", i18n)
+    await services.runtime_config.set(**overrides)
     return await _config_frame(services)
 
 

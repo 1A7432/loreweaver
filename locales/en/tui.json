@@ -7,6 +7,7 @@
   "tui.admin.error.forbidden": "Admin actions require a keeper key.",
   "tui.admin.error.unknown_provider": "Unknown LLM provider. Pick one from the provider list.",
   "tui.admin.error.bad_request": "Malformed admin request.",
+  "tui.admin.error.set_failed": "Could not switch LLM provider (its SDK or API key may be missing). Kept the previous configuration.",
   "tui.serve.listening": "Serving the networked TUI at ws://{host}:{port}/ (keys: {path})",
   "tui.key.added": "Added a {role} key for room '{room}' (name={name}): {key}",
   "tui.key.room_required": "--tui-key add requires --room ROOM"

@@ -316,3 +316,39 @@ async def test_dispatch_error_messages_are_localized_per_ctx_locale():
 
     assert result == t("agent.tools.unknown_tool", locale="zh", name="does_not_exist")
     assert result != t("agent.tools.unknown_tool", locale="en", name="does_not_exist")
+
+
+# ---------------------------------------------------------------------------
+# Underscore-prefixed params are caller-injected framework context (F1 support):
+# hidden from the model schema AND from dispatch coercion, so a command layer can
+# thread a keeper/role flag into a @tool without the model ever seeing/setting it.
+# ---------------------------------------------------------------------------
+
+
+class _KeeperFlagTool:
+    @tool
+    async def peek(self, ctx: AgentCtx, query: str, *, _keeper: bool = True) -> str:
+        """Peek at lore.
+
+        Args:
+            query: What to look at.
+        """
+        return f"{query}:{_keeper}"
+
+
+async def test_underscore_prefixed_param_is_hidden_from_schema_and_dispatch_coercion():
+    toolset = Toolset(_KeeperFlagTool())
+    schema = next(s for s in toolset.schemas() if s["function"]["name"] == "peek")
+    properties = schema["function"]["parameters"]["properties"]
+
+    assert "query" in properties
+    assert "_keeper" not in properties  # caller-injected, never model-facing
+    assert schema["function"]["parameters"]["required"] == ["query"]
+
+    # A model-driven dispatch can NOT set the underscore param; the method default applies.
+    dispatched = await toolset.dispatch("peek", _ctx(), {"query": "chapel", "_keeper": False})
+    assert dispatched == "chapel:True"
+
+    # A direct Python call (the command layer) can still pass it explicitly.
+    direct = await _KeeperFlagTool().peek(_ctx(), "chapel", _keeper=False)
+    assert direct == "chapel:False"

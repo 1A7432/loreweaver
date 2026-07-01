@@ -40,6 +40,12 @@ _SEALDICE_MULTIPLY_RE = re.compile(r"(?<=[0-9)])\s*[x×]\s*(?=[0-9(])")
 # lookahead leaves already-valid `d20` selectors (`kh3`/`kl3`) untouched.
 _SEALDICE_BARE_KEEP_RE = re.compile(r"k(?![hl])(\d+)")
 
+# Upper bound on the number of SealDice bonus/penalty *tens dice* rolled. Past a handful
+# the kept min/max tens digit is already statistically saturated, so this only guards
+# against a pathological, unbounded `range()` (e.g. `.sc b100000000`, `.ra b100000000 ...`)
+# freezing the process. It does not change the outcome distribution for realistic inputs.
+_MAX_BONUS_PENALTY_DICE = 100
+
 
 def _normalize_dice_expression(expression: str) -> str:
     """Rewrite SealDice-style notation into `d20` grammar (see the regexes above).
@@ -230,9 +236,8 @@ class DiceRoller:
         tens = (roll // 10) % 10  # roll == 100 -> tens == 0
 
         net_bonus = bonus - penalty
-        extra_tens: list[int] = []
-        if net_bonus != 0:
-            extra_tens = [random.randint(0, 9) for _ in range(abs(net_bonus))]
+        extra_count = min(abs(net_bonus), _MAX_BONUS_PENALTY_DICE)
+        extra_tens: list[int] = [random.randint(0, 9) for _ in range(extra_count)]
 
         if net_bonus > 0:
             final_tens = min([tens, *extra_tens])

@@ -143,7 +143,7 @@ class WorldbookTools:
             return i18n.t("worldbook.tools.query.failed", error=str(exc))
 
     @tool
-    async def list_lore(self, ctx: AgentCtx, scope: str = "") -> str:
+    async def list_lore(self, ctx: AgentCtx, scope: str = "", *, _keeper: bool = True) -> str:
         """List world-lore entries (titles + scope/category only -- no secret content is revealed).
 
         Args:
@@ -152,9 +152,16 @@ class WorldbookTools:
         Returns:
             A roster of lore entries, or an empty-book notice.
         """
+        # `_keeper` is caller-injected (never model-facing; see `agent.tools._skip_param`). A
+        # non-keeper caller (a player's `.lore list`) must NOT even learn that a secret entry
+        # exists, so secret entries are dropped entirely from their roster. The AI Keeper calls
+        # this tool with the default keeper view (it may see that secrets exist; the keeper-secrecy
+        # discipline still forbids it from quoting them to players).
         i18n = self._i18n(ctx)
         try:
             entries = await self._services.worldbook.list(ctx.chat_key, scope=scope.strip() or None)
+            if not _keeper:
+                entries = [entry for entry in entries if not entry.secret]
             if not entries:
                 return i18n.t("worldbook.tools.list.empty")
             lines = [i18n.t("worldbook.tools.list.header", count=len(entries))]

@@ -7,6 +7,7 @@ fully offline)."""
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from core.battle_report import BattleReportManager
@@ -24,6 +25,8 @@ from infra.providers import MutableLLM
 from infra.runtime_config import RuntimeConfig
 from infra.store import Store
 from infra.vector import VectorStore
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -72,7 +75,14 @@ def build_services(
         mutable = MutableLLM(settings)
         persisted = runtime_config.load_sync()
         if persisted:
-            mutable.apply(persisted)
+            # A persisted override that no longer builds (e.g. a native provider whose optional SDK
+            # or key went missing) must NOT brick boot. Fall back to the env/`Settings` baseline the
+            # `MutableLLM` was constructed with, and log it, instead of raising out of build_services.
+            try:
+                mutable.apply(persisted)
+            except Exception:
+                logger.warning("Ignoring unusable persisted LLM override %r; using base config", persisted, exc_info=True)
+                mutable.apply({})  # restore the pristine env/Settings baseline
         llm = mutable
 
     # keep the deterministic-core crit toggle in sync with config

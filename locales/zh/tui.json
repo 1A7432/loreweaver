@@ -7,6 +7,7 @@
   "tui.admin.error.forbidden": "管理操作需要守秘人（keeper）密钥。",
   "tui.admin.error.unknown_provider": "未知的 LLM 提供方，请从提供方列表中选择。",
   "tui.admin.error.bad_request": "管理请求格式有误。",
+  "tui.admin.error.set_failed": "无法切换 LLM 提供方（可能缺少其 SDK 或 API 密钥）。已保留原有配置。",
   "tui.serve.listening": "已在 ws://{host}:{port}/ 提供联网 TUI 服务（密钥文件：{path}）",
   "tui.key.added": "已为房间 '{room}' 添加一个 {role} 密钥（name={name}）：{key}",
   "tui.key.room_required": "--tui-key add 需要提供 --room ROOM"

@@ -110,7 +110,18 @@ class WorldbookManager:
                 raw = await self.store.get(user_key="", store_key=_entry_store_key(namespace, entry_id))
                 if raw is None:
                     continue
-                entries.append(LoreEntry.from_dict(json.loads(raw)))
+                # A single corrupt row (bad JSON / wrong shape) must never break every lore
+                # lookup for the whole book — skip it, mirroring `_load_index`'s tolerant decode.
+                try:
+                    data = json.loads(raw)
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                try:
+                    entries.append(LoreEntry.from_dict(data))
+                except (TypeError, ValueError):
+                    continue
         if scope in {"module", "session"}:
             return [entry for entry in entries if entry.scope == scope]
         return entries

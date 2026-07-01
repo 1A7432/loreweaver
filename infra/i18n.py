@@ -110,7 +110,10 @@ class I18n:
             return template
         try:
             return template.format(**params)
-        except (KeyError, IndexError):
+        except (KeyError, IndexError, ValueError):
+            # Missing placeholder param (KeyError/IndexError) or a malformed template
+            # (ValueError, e.g. an unbalanced brace / bad format spec): return the raw
+            # template rather than ever raising out of a user-facing string lookup.
             return template
 
 

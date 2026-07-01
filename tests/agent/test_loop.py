@@ -234,3 +234,36 @@ async def test_history_is_capped_to_the_last_twenty_messages():
     persisted = json.loads(raw)
     assert len(persisted) <= 20
     assert persisted[-1] == {"role": "assistant", "content": "newest reply"}
+
+
+# ---------------------------------------------------------------------------
+# F9: a real provider error becomes a friendly localized reply, never a crash
+# ---------------------------------------------------------------------------
+
+
+async def test_run_kp_turn_survives_a_provider_error_with_a_localized_reply():
+    def _boom(messages, tools):
+        raise RuntimeError("provider exploded (network/rate-limit/auth)")
+
+    services = _services(FakeLLM(responder=_boom))
+
+    result = await run_kp_turn(_ctx("chat-boom"), services, _toolset(), "What do I see?")
+
+    assert isinstance(result, KPTurnResult)
+    assert result.reply == services.i18n.with_locale("en").t("loop.unavailable")
+    assert result.tool_trace == []
+    # A failed turn persists nothing (nothing useful happened this turn).
+    assert await services.store.get(user_key="", store_key="chat_history.chat-boom") is None
+
+
+async def test_provider_error_fallback_is_localized_and_goes_through_output_review():
+    def _boom(messages, tools):
+        raise RuntimeError("boom")
+
+    services = _services(FakeLLM(responder=_boom))
+
+    result = await run_kp_turn(
+        _ctx("chat-boom-zh", locale="zh"), services, _toolset(), "hi", output_review=str.upper
+    )
+
+    assert result.reply == services.i18n.with_locale("zh").t("loop.unavailable").upper()

@@ -140,3 +140,26 @@ async def test_inject_world_lore_prompt_role_filtering_and_empty_case():
     assert "Secret moon lore." not in player_prompt
     assert "Secret moon lore." in keeper_prompt
     assert empty_prompt == ""
+
+
+async def test_one_corrupt_row_is_skipped_and_does_not_break_lookups():
+    """F7: a single unreadable worldbook row (bad JSON / wrong shape) must not break
+    list()/get()/match() for the whole book — the bad row is skipped, good ones survive."""
+    from core.worldbook import _entry_store_key, _index_store_key, _namespace
+
+    store = Store(":memory:")
+    manager = WorldbookManager(store)
+    await manager.add(
+        "chat-a", LoreEntry(id="ok", title="Good Lore", content="The harbor is calm.", keys=["harbor"])
+    )
+
+    # Poison the index with a second id whose stored blob is not valid JSON.
+    namespace = _namespace("chat-a", "world")
+    await store.set(user_key="", store_key=_entry_store_key(namespace, "broken"), value="{not valid json")
+    await store.set(user_key="", store_key=_index_store_key(namespace), value='["ok", "broken"]')
+
+    listed = await manager.list("chat-a")
+    assert [entry.id for entry in listed] == ["ok"]  # broken row skipped, good row survives
+    assert (await manager.get("chat-a", "Good Lore")).content == "The harbor is calm."
+    matches = await manager.match("chat-a", "We reach the harbor.", role="player")
+    assert [entry.id for entry in matches] == ["ok"]

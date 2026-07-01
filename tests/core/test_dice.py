@@ -582,3 +582,24 @@ def test_normalize_dice_expression_examples():
     assert dice_engine._normalize_dice_expression("3d6x5") == "3d6*5"
     assert dice_engine._normalize_dice_expression("(2d6+6)x5") == "(2d6+6)*5"
     assert dice_engine._normalize_dice_expression("4d6k3") == "4d6kh3"
+
+
+# ---------------------------------------------------------------------------
+# F3 (DoS): unbounded bonus/penalty tens dice are clamped
+# ---------------------------------------------------------------------------
+
+
+def test_bonus_penalty_tens_dice_are_clamped_against_unbounded_range():
+    """A pathological bonus/penalty magnitude (e.g. from `.sc b100000000`) must not
+    spin an unbounded `range()`; the number of extra tens dice is clamped, so the
+    check returns promptly with a sane d100 result and success rank."""
+    seed_dice(1)
+    out = DiceRoller().roll_coc_check_with_bonus(50, bonus=100_000_000)
+
+    assert len(out["extra_tens"]) == dice_engine._MAX_BONUS_PENALTY_DICE  # clamped, not 100_000_000
+    assert 1 <= out["roll"] <= 100
+    assert -2 <= out["rank"] <= 4
+
+    seed_dice(1)
+    penalized = DiceRoller().roll_coc_check(50, penalty=100_000_000)
+    assert 1 <= penalized["roll"] <= 100

@@ -127,3 +127,34 @@ async def test_player_role_connection_is_refused_every_admin_action():
         await ws.close()
     finally:
         await server.close()
+
+
+async def test_admin_set_model_rolls_back_and_persists_nothing_when_the_provider_fails_to_build():
+    """F2: like `.model set`, `admin_set_model` reconfigures the live LLM BEFORE
+    persisting. A provider whose build fails leaves the old config active, persists
+    nothing, and returns a localized `set_failed` error instead of crashing."""
+    from infra.i18n import get_i18n
+    from net.admin import handle_admin_frame
+
+    def _raising_builder(settings):
+        if (settings.llm.provider or "").lower() == "anthropic":
+            raise ValueError("anthropic SDK missing")
+        return FakeLLM(script=[])
+
+    settings = Settings(locale="en", llm=LLMSettings(provider="openai", chat_model="gpt-4o"))
+    llm = MutableLLM(settings, builder=_raising_builder)
+    services = build_services(settings, llm=llm, embeddings=FakeEmbeddings(64))
+
+    reply = await handle_admin_frame(
+        services,
+        Keystore(),
+        "keeper",
+        {"type": "admin_set_model", "provider": "anthropic"},
+        get_i18n("en"),
+    )
+
+    assert reply["type"] == "admin_error"
+    assert reply["code"] == "set_failed"
+    assert services.settings.llm.provider == "openai"  # unchanged
+    assert await services.runtime_config.get() == {}  # not persisted
+    assert isinstance(services.llm.inner, FakeLLM)  # live LLM rolled back

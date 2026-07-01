@@ -284,3 +284,161 @@ async def test_roll_invalid_expression_returns_friendly_error_not_crash():
 
     ok = await router.dispatch(ctx, ".r 2d6+1")
     assert ok is not None and "2d6+1" in ok
+
+
+# ---------------------------------------------------------------------------
+# F1 — `.lore list` information isolation (a player must not even learn a
+#      secret entry exists; a keeper still sees it).
+# ---------------------------------------------------------------------------
+
+
+async def test_lore_list_hides_secret_entries_from_players_but_shows_them_to_keepers():
+    from core.worldbook import LoreEntry
+
+    services = _services()
+    router = CommandRouter(services)
+    chat_key = "grp:lore"
+
+    await services.worldbook.add(
+        chat_key, LoreEntry(id="pub", title="Harbor Gate", content="The gate stands open.", keys=["gate"])
+    )
+    await services.worldbook.add(
+        chat_key,
+        LoreEntry(id="sec", title="Cult Safehouse", content="Hidden beneath the chapel.", keys=["chapel"], secret=True),
+    )
+
+    # A player (non-admin group member) sees only the public entry — not even the secret title.
+    player = AgentCtx(
+        chat_key=chat_key,
+        user_id="player",
+        platform="discord",
+        locale="en",
+        extra={"raw": {}, "source": SimpleNamespace(chat_type="group")},
+    )
+    player_view = await router.dispatch(player, ".lore list")
+    assert player_view is not None
+    assert "Harbor Gate" in player_view
+    assert "Cult Safehouse" not in player_view  # RED LINE
+
+    # The keeper (local CLI operator) sees both.
+    keeper = AgentCtx(chat_key=chat_key, user_id="kp", locale="en")  # cli default -> keeper
+    keeper_view = await router.dispatch(keeper, ".lore list")
+    assert keeper_view is not None
+    assert "Harbor Gate" in keeper_view
+    assert "Cult Safehouse" in keeper_view
+
+
+# ---------------------------------------------------------------------------
+# F2 — `.model set` reconfigures/validates BEFORE persisting: a provider whose
+#      build fails leaves the old config active and persists nothing; a stored
+#      bad override can't brick `build_services()` boot.
+# ---------------------------------------------------------------------------
+
+
+def _raising_builder(bad_provider: str):
+    """A `MutableLLM` builder that fails for one provider (its SDK/key 'missing')
+    but builds an offline `FakeLLM` for anything else."""
+
+    def build(settings):
+        if (settings.llm.provider or "").lower() == bad_provider:
+            raise ValueError(f"{bad_provider} SDK missing")
+        return FakeLLM(script=[])
+
+    return build
+
+
+async def test_model_set_rolls_back_and_persists_nothing_when_the_provider_fails_to_build():
+    settings = _baseline_settings()
+    llm = MutableLLM(settings, builder=_raising_builder("anthropic"))
+    services = build_services(settings, llm=llm, embeddings=FakeEmbeddings(64))
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")  # cli -> keeper
+
+    reply = await router.dispatch(ctx, ".model set anthropic claude-3")
+
+    assert reply is not None
+    assert "anthropic" in reply  # localized failure notice naming the provider
+    # old config still active, nothing persisted, no exception escaped
+    assert services.settings.llm.provider == "openai"
+    assert services.settings.llm.chat_model == "gpt-4o"
+    assert await services.runtime_config.get() == {}
+    # the live LLM was rolled back to a still-buildable client
+    assert isinstance(services.llm.inner, FakeLLM)
+
+
+class _BoomMutableLLM:
+    """Stand-in for `MutableLLM` whose startup `apply()` rejects a specific bad
+    override (a provider whose optional SDK/key is missing), proving that a
+    poisoned persisted override does NOT crash `build_services()`."""
+
+    def __init__(self, settings, *, builder=None):
+        self._settings = settings
+        self.applied: list[dict] = []
+
+    def apply(self, overrides):
+        self.applied.append(dict(overrides))
+        if overrides.get("provider") == "anthropic":
+            raise ValueError("anthropic SDK missing")
+
+
+async def test_build_services_survives_an_unusable_persisted_llm_override(tmp_path, monkeypatch):
+    from infra.runtime_config import RuntimeConfig
+    from infra.store import Store
+
+    db = str(tmp_path / "state.db")
+    await RuntimeConfig(Store(db)).set(provider="anthropic", chat_model="claude-x")
+    monkeypatch.setattr("agent.services.MutableLLM", _BoomMutableLLM)
+
+    # Must NOT raise even though the persisted override fails to build at startup.
+    services = build_services(
+        Settings(llm=LLMSettings(provider="openai", chat_model="gpt-4o")),
+        embeddings=FakeEmbeddings(8),
+        db_path=db,
+    )
+
+    assert isinstance(services.llm, _BoomMutableLLM)
+    assert services.llm.applied[0] == {"provider": "anthropic", "chat_model": "claude-x"}  # attempted
+    assert services.llm.applied[-1] == {}  # then rolled back to the pristine baseline
+
+
+# ---------------------------------------------------------------------------
+# F4/F5/F6 — malformed dice-ish input degrades to a localized notice, never a crash
+# ---------------------------------------------------------------------------
+
+
+async def test_inline_roll_on_ordinary_text_never_crashes_dispatch():
+    services = _services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:t", user_id="u1", locale="en")
+
+    handled = await router.dispatch(ctx, "I search the desk [[侦查]]")
+    assert isinstance(handled, str)  # no raise
+    assert "侦查" in handled  # localized invalid-expression notice
+
+    seed_dice(2)
+    valid = await router.dispatch(ctx, "I strike [[1d20+3]] now")
+    assert valid is not None
+    assert "Inline" in valid  # a valid inline expression still renders
+
+
+async def test_sanity_command_with_non_numeric_loss_returns_a_notice_not_a_crash():
+    services = _services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:t", user_id="u1", locale="en")
+    await router.dispatch(ctx, ".coc")  # a CoC investigator to roll SAN for
+
+    seed_dice(3)
+    reply = await router.dispatch(ctx, ".sc 侦查/侦查")
+    assert isinstance(reply, str)  # no crash
+    assert "侦查" in reply  # localized invalid-expression notice
+
+
+async def test_sheet_command_with_oversized_dice_expr_returns_a_notice_not_a_crash():
+    services = _services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:t", user_id="u1", locale="en")
+    await router.dispatch(ctx, ".coc")  # a CoC sheet to edit
+
+    reply = await router.dispatch(ctx, ".st 力量+9999d6")
+    assert isinstance(reply, str)  # no d20.TooManyRolls traceback
+    assert "9999d6" in reply  # localized invalid-expression notice

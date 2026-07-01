@@ -1,3 +1,4 @@
 {
-  "loop.max_rounds": "The Keeper pauses for a long moment, still weighing several possibilities. Please try again in a moment."
+  "loop.max_rounds": "The Keeper pauses for a long moment, still weighing several possibilities. Please try again in a moment.",
+  "loop.unavailable": "The Keeper is momentarily unavailable. Please try again in a moment."
 }

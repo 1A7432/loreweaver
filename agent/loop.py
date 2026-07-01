@@ -22,6 +22,7 @@ prompt carries — see ``agent/prompt_builder.py``).
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -31,6 +32,8 @@ from agent.services import Services
 from agent.session_recap import maybe_refresh_session_recap
 from agent.tools import Toolset
 from infra.llm import ChatResult
+
+logger = logging.getLogger(__name__)
 
 # Prior-turn history is capped to roughly the last 20 messages (~10 user/
 # assistant exchanges) both on load and after persisting a new exchange, so
@@ -83,12 +86,23 @@ async def run_kp_turn(
 
     for round_index in range(1, max_rounds + 1):
         rounds = round_index
-        result = await services.llm.chat(
-            messages,
-            tools=toolset.schemas(),
-            tool_choice="auto",
-            temperature=services.settings.llm.temperature,
-        )
+        try:
+            result = await services.llm.chat(
+                messages,
+                tools=toolset.schemas(),
+                tool_choice="auto",
+                temperature=services.settings.llm.temperature,
+            )
+        except Exception:
+            # A real provider error (network/rate-limit/auth/SDK) must degrade to a friendly,
+            # localized "Keeper temporarily unavailable" reply, never crash the player's turn.
+            # We return early WITHOUT persisting history or refreshing the recap (nothing useful
+            # happened this turn, and the summarizer LLM would just fail again).
+            logger.warning("KP turn aborted: LLM chat failed", exc_info=True)
+            reply = i18n.t("loop.unavailable")
+            if output_review is not None:
+                reply = output_review(reply)
+            return KPTurnResult(reply=reply, tool_trace=tool_trace, rounds=rounds)
 
         if result.tool_calls:
             messages.append(_assistant_tool_call_message(result))

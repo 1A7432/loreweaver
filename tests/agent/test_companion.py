@@ -402,3 +402,50 @@ async def test_build_room_state_tags_ai_companions_in_the_party():
     party = {member["name"]: member for member in state["party"]}
     assert party["Silas"]["ai"] is True
     assert party["Nora"]["ai"] is False
+
+
+# ---------------------------------------------------------------------------
+# (a') info-isolation red line, F11: the director must never feed room-wide
+#      session key-events into the isolated companion actor's prompt.
+# ---------------------------------------------------------------------------
+
+ROOM_EVENT_SENTINEL = "THE ALTAR ROOM CONCEALS A HIDDEN LEVER"
+
+
+async def test_companion_turn_never_feeds_room_wide_session_events_to_the_actor():
+    chat_key = "iso-events-room"
+    store = Store(":memory:")
+
+    actor_calls: list[list[dict]] = []
+
+    def responder(messages, tools):
+        if tools is None:  # the companion actor call (no tools attached)
+            actor_calls.append(messages)
+            return assistant_text(json.dumps({"action": "I hold position and watch the door.", "dialogue": ""}))
+        return assistant_text("The KP resolves the hold.")  # KP loop resolving the action
+
+    services = build_services(
+        Settings(locale="en"), llm=FakeLLM(responder=responder), embeddings=FakeEmbeddings(8), store=store
+    )
+    companion = await NpcManager(store).create_companion(chat_key, "Silas")
+
+    # A room-wide session key-event the companion has NOT personally witnessed.
+    await services.battles.start_session(chat_key)
+    await services.battles.add_key_event(chat_key, ROOM_EVENT_SENTINEL)
+
+    hub = RoomHub()
+    await hub.subscribe(chat_key, FakeMember("m"))
+
+    await run_companion_turn(
+        hub,
+        services,
+        companion,
+        chat_key=chat_key,
+        command_router=CommandRouter(services),
+        toolset=build_kp_toolset(services),
+    )
+
+    assert actor_calls, "the companion actor must have been consulted"
+    blob = "\n".join(message["content"] for message in actor_calls[0])
+    # RED LINE: room-wide state (the shared session log) never reaches the isolated actor.
+    assert ROOM_EVENT_SENTINEL not in blob

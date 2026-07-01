@@ -28,6 +28,10 @@ from infra.i18n import t
 
 # `self` is bound automatically; `ctx`/`_ctx` is injected positionally by
 # `Toolset.dispatch`. Neither belongs in the schema or the coerced kwargs.
+# Any other underscore-prefixed parameter is likewise treated as caller-injected
+# framework context (e.g. a keeper/role flag a command layer passes directly): it
+# is kept out of the model-facing schema AND out of dispatch coercion, so the
+# model can never set it and the method's own default applies on a tool call.
 _SKIPPED_PARAMS = {"self", "ctx", "_ctx"}
 
 _JSON_TYPE_MAP: dict[type, str] = {
@@ -198,9 +202,14 @@ def _build_parameters_schema(fn: Callable[..., Any], param_descriptions: dict[st
 
 
 def _skip_param(param_name: str, param: inspect.Parameter) -> bool:
-    return param_name in _SKIPPED_PARAMS or param.kind in (
-        inspect.Parameter.VAR_POSITIONAL,
-        inspect.Parameter.VAR_KEYWORD,
+    return (
+        param_name in _SKIPPED_PARAMS
+        or param_name.startswith("_")
+        or param.kind
+        in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        )
     )
 
 

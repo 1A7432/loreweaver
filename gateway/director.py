@@ -41,10 +41,6 @@ if TYPE_CHECKING:
 # (or a mis-seeded initiative list) can never turn one combat round into an unbounded LLM cascade.
 MAX_COMPANION_TURNS = 6
 
-# How many recent session events to feed a companion as short-term context (what just happened),
-# kept small so the actor stays current without the prompt ballooning.
-_RECENT_EVENTS = 5
-
 
 async def run_companion_turn(
     hub: RoomHub,
@@ -56,7 +52,6 @@ async def run_companion_turn(
     toolset: Toolset,
     censor: Censor | None = None,
     situation: str = "",
-    recent: list[str] | None = None,
     locale: str = "en",
     cap_note: str | None = None,
 ) -> KPTurnResult | None:
@@ -68,11 +63,14 @@ async def run_companion_turn(
     for during this turn resolves against the companion's own sheet.
     """
     sheet = await services.characters.get_character(f"companion:{companion.id}", chat_key)
-    if recent is None:
-        recent = await _recent_events(services, chat_key)
 
     prompt_situation = f"{situation}\n{cap_note}".strip() if cap_note else situation
-    out = await companion_action(services, companion, sheet, prompt_situation, recent=recent)
+    # INFORMATION ISOLATION (M10 red line): a companion actor is built from ONLY its own record +
+    # its own sheet, NEVER room-wide state. So we deliberately do NOT feed the room's session
+    # key-events into the companion prompt -- its short-term context is just the KP-provided
+    # ``situation`` for this turn. Anything the companion "knows" must reach it via its own
+    # player-scoped ``knowledge`` (see ``agent.kp_tools_companion.witness``), not the shared log.
+    out = await companion_action(services, companion, sheet, prompt_situation)
 
     action = (out.get("action") or "").strip()
     if not action:  # empty/"hold" action == a pass: the companion sits this one out
@@ -213,14 +211,3 @@ async def _initiative_order(services: Services, chat_key: str) -> list[str]:
     if not isinstance(entries, list):
         return []
     return [str(entry.get("name", "")) for entry in entries if isinstance(entry, dict) and entry.get("name")]
-
-
-async def _recent_events(services: Services, chat_key: str) -> list[str]:
-    """The last few key-event descriptions from the in-progress session (best-effort, may be empty)."""
-    try:
-        session = await services.battles.generator.get_current_session(chat_key)
-    except Exception:
-        return []
-    if session is None:
-        return []
-    return [str(event.get("description", "")) for event in session.key_events[-_RECENT_EVENTS:] if event.get("description")]
