@@ -6,9 +6,13 @@ fixed order — session history, game state, document/knowledge-pool context,
 system-specific expertise, TRPG-system identity, interaction style — and
 joined with a blank line between every NON-empty section (a section that
 legitimately has nothing to say, e.g. no prior session, is simply omitted
-rather than leaving a stray blank block). ``i18n`` is rebound to
-``ctx.locale`` so the whole prompt renders in the caller's locale for this
-turn, independent of the process-wide default locale.
+rather than leaving a stray blank block). Immediately after session history a
+rolling "story so far" recap of the CURRENT session
+(``inject_session_recap_prompt``) is folded in, so the KP keeps concrete facts
+established earlier this session even after they scroll out of the loop's
+~20-message replay window; it too is omitted until the first recap exists.
+``i18n`` is rebound to ``ctx.locale`` so the whole prompt renders in the
+caller's locale for this turn, independent of the process-wide default locale.
 
 Whenever an initialized module knowledge pool exists,
 ``inject_document_context_prompt`` folds in the localized keeper-secrecy
@@ -27,6 +31,7 @@ from core.prompt_sections import (
     inject_game_state_prompt,
     inject_interaction_style_prompt,
     inject_session_history_prompt,
+    inject_session_recap_prompt,
     inject_system_expertise_prompt,
     inject_trpg_system_prompt,
 )
@@ -44,6 +49,9 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
     i18n = services.i18n.with_locale(ctx.locale)
 
     session_history = await inject_session_history_prompt(ctx, services.battles, i18n)
+    # Rolling "story so far" memory of THIS session — keeps the KP coherent over
+    # hundreds of turns, past the loop's ~20-message replay window.
+    session_recap = await inject_session_recap_prompt(ctx, services.store, i18n)
     document_context = await inject_document_context_prompt(
         ctx, services.vector_db, services.store, i18n, services.settings.enable_vector_db
     )
@@ -57,6 +65,7 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
 
     sections = [
         session_history,
+        session_recap,
         await inject_game_state_prompt(ctx, services.characters, services.store, i18n),
         document_context,
         world_lore,

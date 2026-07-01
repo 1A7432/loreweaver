@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from agent.context import AgentCtx
 from agent.prompt_builder import build_system_prompt
 from agent.services import Services
+from agent.session_recap import maybe_refresh_session_recap
 from agent.tools import Toolset
 from infra.llm import ChatResult
 
@@ -114,6 +115,10 @@ async def run_kp_turn(
         reply = output_review(reply)
 
     await _persist_history(services, key, history, user_message, reply)
+    # Fold this turn into the rolling "story so far" recap when one is due, so
+    # the KP keeps facts established far earlier in the session even after they
+    # scroll out of the ~20-message replay window. Best-effort: never fatal.
+    await maybe_refresh_session_recap(ctx, services, history_key=key)
 
     return KPTurnResult(reply=reply, tool_trace=tool_trace, rounds=rounds)
 
