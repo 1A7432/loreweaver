@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 
 from scripts.i18n_lint import DEFAULT_SCAN_PATHS, is_hardcoded_ui_literal, scan_tree
 
@@ -22,7 +23,7 @@ def test_real_code_tree_has_no_hardcoded_user_facing_strings():
 
 def test_i18n_lint_cli_passes():
     result = subprocess.run(
-        [".venv/bin/python", "scripts/i18n_lint.py"],
+        [sys.executable, "scripts/i18n_lint.py"],
         check=False,
         capture_output=True,
         text=True,
