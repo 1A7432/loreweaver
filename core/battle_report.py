@@ -93,11 +93,15 @@ class SessionRecord:
                 "critical_failure": 0,
             }
 
-        self.player_stats[user_id]["total_rolls"] += 1
+        stats = self.player_stats[user_id]
+        stats["char_name"] = stats.get("char_name", char_name)
+        stats["total_rolls"] = stats.get("total_rolls", 0) + 1
+        stats["critical_success"] = stats.get("critical_success", 0)
+        stats["critical_failure"] = stats.get("critical_failure", 0)
         if critical_type == "success" or (is_critical and not critical_type):
-            self.player_stats[user_id]["critical_success"] += 1
+            stats["critical_success"] += 1
         elif critical_type == "failure":
-            self.player_stats[user_id]["critical_failure"] += 1
+            stats["critical_failure"] += 1
 
     def add_skill_check(
         self, user_id: str, char_name: str, skill: str, target: int, roll: int, success_level: str
@@ -123,7 +127,9 @@ class SessionRecord:
             }
 
         stats = self.player_stats[user_id]
+        stats["char_name"] = stats.get("char_name", char_name)
         stats["total_checks"] = stats.get("total_checks", 0) + 1
+        stats["successful_checks"] = stats.get("successful_checks", 0)
         if _is_successful_level(success_level):
             stats["successful_checks"] = stats.get("successful_checks", 0) + 1
 
@@ -444,8 +450,18 @@ class BattleReportGenerator:
 
         return "\n".join(lines)
 
-    def generate_markdown_report(self, record: SessionRecord, session_name: str, i18n: I18n | None = None) -> str:
-        """Render the Markdown battle report."""
+    def generate_markdown_report(
+        self, record: SessionRecord, session_name: str, i18n: I18n | None = None, detailed: bool = False
+    ) -> str:
+        """Render the Markdown battle report.
+
+        With ``detailed=True`` the summary output is followed by a full
+        chronological transcript (player actions, dice rolls, skill checks WITH
+        their success levels, NPC interactions, combat rounds, key events) --
+        the players' full keepsake / review log. ``detailed=False`` (the
+        default) is byte-for-byte the historical summary-only rendering, so
+        existing callers/tests are unaffected.
+        """
         i18n = i18n or get_i18n()
         lines: list[str] = []
 
@@ -562,12 +578,137 @@ class BattleReportGenerator:
                 )
             lines.append("")
 
+        if detailed:
+            lines.append(f"## {i18n.t('battle.report.md.detailed.heading')}")
+            lines.append("")
+            transcript = self._detailed_transcript_lines(record, i18n)
+            lines.extend(transcript or [i18n.t("battle.report.md.detailed.empty")])
+            lines.append("")
+
         lines.append("---")
         lines.append("")
         lines.append(f"*{i18n.t('battle.report.footer')}*")
         lines.append("")
 
         return "\n".join(lines)
+
+    def _detailed_transcript_lines(self, record: SessionRecord, i18n: I18n) -> list[str]:
+        """Build the chronological event transcript for `generate_markdown_report(detailed=True)`.
+
+        Every recorded event (player action, dice roll, skill check WITH its success level, key event,
+        NPC interaction, combat round) becomes one localized line tagged with its `HH:MM:SS` timestamp,
+        then all are merged into a single timeline. Events with no timestamp (e.g. hand-appended combat
+        rounds / NPC interactions) sort first and render with a placeholder time; the sort is stable, so
+        same-timestamp events keep their insertion order.
+        """
+        unknown = i18n.t("battle.player.unknown_character")
+
+        def _fmt_time(timestamp: float) -> str:
+            if not timestamp:
+                return i18n.t("battle.report.md.detailed.no_time")
+            return datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
+
+        entries: list[tuple[float, str]] = []
+
+        for actions in record.player_actions.values():
+            for action in actions:
+                timestamp = action.get("timestamp", 0)
+                entries.append(
+                    (
+                        timestamp,
+                        i18n.t(
+                            "battle.report.md.detailed.player_action",
+                            time=_fmt_time(timestamp),
+                            name=action.get("char_name", unknown),
+                            action=action.get("action", ""),
+                        ),
+                    )
+                )
+
+        for roll in record.dice_rolls:
+            timestamp = roll.get("timestamp", 0)
+            if roll.get("is_critical"):
+                marker = i18n.t(
+                    "battle.report.md.detailed.crit_failure_marker"
+                    if roll.get("critical_type") == "failure"
+                    else "battle.report.md.detailed.crit_success_marker"
+                )
+            else:
+                marker = ""
+            entries.append(
+                (
+                    timestamp,
+                    i18n.t(
+                        "battle.report.md.detailed.dice_roll",
+                        time=_fmt_time(timestamp),
+                        name=roll.get("char_name", unknown),
+                        expression=roll.get("expression", ""),
+                        result=roll.get("result", ""),
+                        marker=marker,
+                    ),
+                )
+            )
+
+        for check in record.skill_checks:
+            timestamp = check.get("timestamp", 0)
+            entries.append(
+                (
+                    timestamp,
+                    i18n.t(
+                        "battle.report.md.detailed.skill_check",
+                        time=_fmt_time(timestamp),
+                        name=check.get("char_name", unknown),
+                        skill=check.get("skill", ""),
+                        target=check.get("target", ""),
+                        roll=check.get("roll", ""),
+                        success_level=check.get("success_level", ""),
+                    ),
+                )
+            )
+
+        for event in record.key_events:
+            timestamp = event.get("timestamp", 0)
+            entries.append(
+                (
+                    timestamp,
+                    i18n.t(
+                        "battle.report.md.detailed.key_event",
+                        time=_fmt_time(timestamp),
+                        description=event.get("description", ""),
+                    ),
+                )
+            )
+
+        for interaction in record.npc_interactions:
+            timestamp = interaction.get("timestamp", 0)
+            entries.append(
+                (
+                    timestamp,
+                    i18n.t(
+                        "battle.report.md.detailed.npc_interaction",
+                        time=_fmt_time(timestamp),
+                        npc=interaction.get("npc", interaction.get("name", "?")),
+                        note=interaction.get("note", interaction.get("description", interaction.get("action", ""))),
+                    ),
+                )
+            )
+
+        for index, combat_round in enumerate(record.combat_rounds, 1):
+            timestamp = combat_round.get("timestamp", 0)
+            entries.append(
+                (
+                    timestamp,
+                    i18n.t(
+                        "battle.report.md.detailed.combat_round",
+                        time=_fmt_time(timestamp),
+                        round=combat_round.get("round", index),
+                        notes=combat_round.get("notes", combat_round.get("description", "")),
+                    ),
+                )
+            )
+
+        entries.sort(key=lambda item: item[0])
+        return [line for _timestamp, line in entries]
 
     def generate_summary_for_prompt(self, record: SessionRecord, session_name: str, i18n: I18n | None = None) -> str:
         """Render a compact recap of `record`, meant for injection into an LLM prompt."""

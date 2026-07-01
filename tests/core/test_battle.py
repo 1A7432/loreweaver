@@ -336,3 +336,80 @@ def test_generate_report_text_and_markdown_differ_by_locale():
     assert en_text != zh_text
     assert "Session Statistics" in en_text
     assert "游戏统计" in zh_text
+
+
+# ---------------------------------------------------------------------------
+# generate_markdown_report(detailed=...) — summary vs. full-transcript variants
+# ---------------------------------------------------------------------------
+
+
+def _detailed_record() -> SessionRecord:
+    """A SessionRecord touching every transcript source: action, roll, skill check, key event."""
+    record = SessionRecord("session-detailed")
+    record.add_player_action("u1", "Alice", "pries open the rusted locker")
+    record.add_dice_roll("u1", "Alice", "1d20", 15)  # non-critical: not a summary "highlight"
+    record.add_skill_check("u1", "Alice", "Spot Hidden", 60, 42, "regular success")
+    record.add_key_event("A hidden compartment clicks open", event_type="discovery")
+    return record
+
+
+def test_generate_markdown_report_summary_default_is_byte_compatible_and_omits_transcript():
+    generator = BattleReportGenerator(Store())
+    record = _detailed_record()
+    i18n = I18n(locale="en")
+
+    default = generator.generate_markdown_report(record, "Locker Room", i18n=i18n)
+    explicit_summary = generator.generate_markdown_report(record, "Locker Room", i18n=i18n, detailed=False)
+
+    # the default and detailed=False renderings are identical (backward compatible)
+    assert default == explicit_summary
+    # the per-event transcript is entirely absent from the summary
+    assert "Full Session Log" not in default
+    assert "pries open the rusted locker" not in default  # player-action text is transcript-only
+    assert "Spot Hidden" not in default  # per-check skill name is transcript-only (summary is aggregate)
+
+
+def test_generate_markdown_report_detailed_appends_full_transcript():
+    generator = BattleReportGenerator(Store())
+    record = _detailed_record()
+    i18n = I18n(locale="en")
+
+    summary = generator.generate_markdown_report(record, "Locker Room", i18n=i18n)
+    detailed = generator.generate_markdown_report(record, "Locker Room", i18n=i18n, detailed=True)
+
+    # detailed keeps the whole summary (both headings present) and is strictly longer
+    assert "Player Scores" in detailed and "Session Statistics" in detailed
+    assert len(detailed) > len(summary)
+
+    # transcript heading + one line per recorded event
+    assert "Full Session Log" in detailed
+    assert "pries open the rusted locker" in detailed  # player action
+    assert "1d20" in detailed and "15" in detailed  # dice roll (expression + result), though non-critical
+    assert "Spot Hidden" in detailed and "regular success" in detailed  # skill check WITH its success level
+    assert "A hidden compartment clicks open" in detailed  # key event
+
+
+def test_generate_markdown_report_detailed_transcript_is_chronological():
+    """Transcript lines appear in timestamp order across event types."""
+    generator = BattleReportGenerator(Store())
+    record = SessionRecord("session-order")
+    record.add_player_action("u1", "Alice", "FIRST-ACTION")
+    record.add_dice_roll("u1", "Alice", "1d6", 4)  # SECOND
+    record.add_key_event("THIRD-EVENT")
+    i18n = I18n(locale="en")
+
+    detailed = generator.generate_markdown_report(record, "Order Test", i18n=i18n, detailed=True)
+
+    log = detailed.split("Full Session Log", 1)[1]
+    assert log.index("FIRST-ACTION") < log.index("1d6") < log.index("THIRD-EVENT")
+
+
+def test_generate_markdown_report_detailed_localizes_transcript_heading():
+    generator = BattleReportGenerator(Store())
+    detailed_zh = generator.generate_markdown_report(
+        _detailed_record(), "储物间", i18n=I18n(locale="zh"), detailed=True
+    )
+
+    assert "完整跑团记录" in detailed_zh  # localized transcript heading
+    assert "储物间" in detailed_zh
+    assert "Full Session Log" not in detailed_zh

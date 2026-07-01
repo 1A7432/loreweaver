@@ -106,3 +106,39 @@ async def test_both_dialects_use_same_roller_for_same_seed_and_expression():
     assert en_roll is not None
     assert zh_roll is not None
     assert _total(en_roll) == _total(zh_roll)
+
+
+async def test_report_command_exports_summary_without_keeper_permission():
+    services = _services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:report", user_id="player", locale="en")
+
+    await services.battles.start_session(ctx.chat_key, "Report Command")
+    await services.battles.add_player_action(ctx.chat_key, "player", "Nora", "checks the locked desk")
+    await services.battles.add_key_event(ctx.chat_key, "A silver key was recovered")
+
+    report = await router.dispatch(ctx, ".report")
+
+    assert report is not None
+    assert "Report Command" in report
+    assert "Player Scores" in report
+    assert "Full Session Log" not in report
+    assert "checks the locked desk" not in report
+
+
+async def test_report_detailed_command_exports_full_transcript():
+    services = _services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:report-detailed", user_id="player", locale="en")
+
+    await services.battles.start_session(ctx.chat_key, "Detailed Command")
+    await services.battles.add_player_action(ctx.chat_key, "player", "Nora", "checks the locked desk")
+    await services.battles.add_skill_check(ctx.chat_key, "player", "Nora", "Locksmith", 50, 21, "success")
+
+    report = await router.dispatch(ctx, ".report detailed")
+
+    assert report is not None
+    assert "Detailed Command" in report
+    assert "Full Session Log" in report
+    assert "checks the locked desk" in report
+    assert "Locksmith (target 50): rolled 21" in report

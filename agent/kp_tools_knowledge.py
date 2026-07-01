@@ -95,6 +95,7 @@ from typing import Any
 from agent.context import AgentCtx
 from agent.services import Services
 from agent.tools import tool
+from core.battle_report import _default_session_name
 from core.game_clock import advance_game_time
 from infra.i18n import I18n
 
@@ -211,6 +212,59 @@ def _find_by_name(items: list[Any], name: str) -> Any:
         if name_lower in item_name.lower():
             return item
     return None
+
+
+async def render_session_report(
+    services: Services,
+    ctx: AgentCtx,
+    i18n: I18n,
+    *,
+    detailed: bool = False,
+    session_name: str = "",
+) -> tuple[str, str] | None:
+    """Render the in-progress (or, failing that, the latest archived) session as a Markdown report and
+    persist it, WITHOUT ending the session -- the players' keepsake / review export ("团报").
+
+    Reuses ``services.battles.generator.generate_markdown_report`` (summary when ``detailed=False``, the
+    full chronological transcript when ``detailed=True``); it does not duplicate any rendering. The
+    rendered Markdown is stored under the same ``battle_report.{chat_key}.{timestamp}`` key
+    ``get_battle_report_markdown`` reads, and written best-effort to ``ctx.fs.shared_path`` (the exact
+    shared-reports save path ``generate_session_report`` already uses).
+
+    Returns ``(markdown, saved_note)`` -- ``saved_note`` is the localized "saved to {path}" line, or ``""``
+    when no ``ctx.fs`` was available to write a file -- or ``None`` when there is no session to export.
+    Shared by the ``export_report`` tool and the gateway ``.report`` command so neither duplicates the
+    render/save flow.
+    """
+    generator = services.battles.generator
+    record = await generator.get_current_session(ctx.chat_key)
+    scope = "current"
+    if record is None:
+        record = await generator.get_latest_history(ctx.chat_key)
+        scope = "latest"
+    if record is None:
+        return None
+
+    name = session_name.strip()
+    if not name:
+        name = await services.store.get(store_key=f"session_name.{ctx.chat_key}.{scope}")
+    if not name:
+        name = _default_session_name(datetime.fromtimestamp(record.start_time), i18n)
+
+    markdown = generator.generate_markdown_report(record, name, i18n=i18n, detailed=detailed)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    await services.store.set(store_key=_battle_report_key(ctx.chat_key, timestamp), value=markdown)
+
+    saved_note = ""
+    if ctx.fs is not None:
+        try:
+            report_path = ctx.fs.shared_path / f"session_report_{timestamp}.md"
+            report_path.write_text(markdown, encoding="utf-8")
+            saved_note = i18n.t("kp_tools.know.session.export.saved_note", path=ctx.fs.forward_file(report_path))
+        except Exception:
+            pass  # best-effort file write; the markdown itself is still returned/stored above
+    return markdown, saved_note
 
 
 class _KnowledgeToolsBase:
@@ -1156,6 +1210,7 @@ class SessionTools(_KnowledgeToolsBase):
             text_report, markdown_report, _session_name = await self._services.battles.generate_battle_report(ctx.chat_key)
             if not text_report:
                 return i18n.t("kp_tools.know.session.no_active_session")
+            markdown_report = markdown_report or ""
 
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             await self._services.store.set(store_key=_battle_report_key(ctx.chat_key, timestamp), value=markdown_report)
@@ -1192,3 +1247,45 @@ class SessionTools(_KnowledgeToolsBase):
             return markdown_report
         except Exception as exc:
             return i18n.t("kp_tools.know.session.report_fetch_failed", error=str(exc))
+
+    @tool
+    async def export_report(self, ctx: AgentCtx, detailed: bool = False, session_name: str = "") -> str:
+        """Export the session report ("团报") for the players to keep and review -- a concise summary by
+        default, or the full chronological log with detailed=True. Unlike generate_session_report this does
+        NOT end the session, so players can save a keepsake at any point (mid-session or after). This is the
+        players' own record, not keeper-only material.
+
+        Args:
+            detailed: False exports the summary report; True adds the full chronological transcript
+                (player actions, dice rolls, skill checks with their success levels, NPC interactions,
+                combat rounds, key events) on top of the summary.
+            session_name: Optional title override for the exported report.
+
+        Returns:
+            The saved file path plus a short preview of the report.
+        """
+        i18n = self._i18n(ctx)
+        try:
+            rendered = await render_session_report(
+                self._services, ctx, i18n, detailed=detailed, session_name=session_name
+            )
+            if rendered is None:
+                return i18n.t("kp_tools.know.session.export.no_session")
+            markdown, saved_note = rendered
+            mode = i18n.t(
+                "kp_tools.know.session.export.mode_detailed"
+                if detailed
+                else "kp_tools.know.session.export.mode_summary"
+            )
+            # Bounded preview: small/medium reports (incl. their detailed transcript) render whole; only a
+            # genuinely long transcript gets truncated, so the return stays digestible in a tool/chat reply.
+            body = markdown.strip()
+            preview_body = body if len(body) <= 4000 else body[:4000] + "\n…"
+            preview = i18n.t("kp_tools.know.session.export.preview", preview=preview_body)
+            parts = [i18n.t("kp_tools.know.session.export.done", mode=mode)]
+            if saved_note:
+                parts.append(saved_note)
+            parts.append(preview)
+            return "\n\n".join(parts)
+        except Exception as exc:
+            return i18n.t("kp_tools.know.session.export.failed", error=str(exc))

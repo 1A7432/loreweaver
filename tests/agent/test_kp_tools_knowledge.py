@@ -163,6 +163,28 @@ async def test_get_supported_file_types_differs_by_locale_and_mentions_txt():
     assert en_text != zh_text
 
 
+async def test_export_report_tool_saves_player_report_without_ending_session(tmp_path):
+    services = build_services(Settings(), llm=FakeLLM(), embeddings=FakeEmbeddings(8))
+    session_tools = SessionTools(services)
+    ctx = _ctx(fs=LocalFs(base_dir=tmp_path), locale="en")
+
+    await services.battles.start_session(CHAT_KEY, "Export Tool Report")
+    await services.battles.add_player_action(CHAT_KEY, "u1", "Nora", "studies the mural")
+    await services.battles.add_skill_check(CHAT_KEY, "u1", "Nora", "Occult", 60, 18, "success")
+
+    result = await session_tools.export_report(ctx, detailed=True)
+
+    assert "Session report exported" in result
+    assert "detailed log" in result
+    assert "Saved to:" in result
+    assert "Full Session Log" in result
+    assert "studies the mural" in result
+    assert await services.battles.generator.get_current_session(CHAT_KEY) is not None
+    written = list((tmp_path / "shared").glob("session_report_*.md"))
+    assert len(written) == 1
+    assert "studies the mural" in written[0].read_text(encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # end-to-end: upload -> summary -> unlock -> notes -> clock -> session report -> delete
 # ---------------------------------------------------------------------------

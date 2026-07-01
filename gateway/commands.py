@@ -136,6 +136,9 @@ _ROOM_LINK_WORDS = {"link", "join", "bind", "连", "連", "加入"}
 _ROOM_LEAVE_WORDS = {"leave", "unbind", "close", "离开", "離開", "解绑", "解綁"}
 _ROOM_SHOW_WORDS = {"", "show", "status", "info", "查看"}
 
+# `.report` detailed-log toggle words (EN + a couple of CN synonyms) -- session report export ("团报").
+_REPORT_DETAILED_WORDS = {"detailed", "full", "log", "详细", "詳細", "完整", "全部"}
+
 # Privilege inputs for `.room` gating. Chat platforms rarely surface a reliable
 # admin flag through the generic InboundMessage.raw, so the gate treats the local
 # CLI/terminal operator and private/DM sessions as owners of their own session,
@@ -640,6 +643,20 @@ class CommandRouter:
         tools = CharcardTools(ctx.services)
         return await tools.import_character(self._agent_ctx(ctx), file_path=file_path, system=system, as_=as_)
 
+    async def cmd_report(self, ctx: CommandCtx) -> str:
+        """`.report [detailed|full]` — export the session report ("团报") for players to keep and review.
+        Bare `.report` renders the summary; `.report detailed`/`.report full` renders the full
+        chronological log. Player-facing (any member; no keeper privilege). Reuses the KP tool's shared
+        render/save helper, so the report is also saved to the shared reports path and its path noted."""
+        from agent.kp_tools_knowledge import render_session_report
+
+        detailed = ctx.args.strip().casefold() in _REPORT_DETAILED_WORDS
+        rendered = await render_session_report(ctx.services, self._agent_ctx(ctx), ctx.i18n, detailed=detailed)
+        if rendered is None:
+            return ctx.i18n.t("commands.report.no_session")
+        markdown, saved_note = rendered
+        return f"{markdown}\n\n{saved_note}" if saved_note else markdown
+
     def _build_specs(self) -> list[CommandSpec]:
         return [
             CommandSpec("roll", self.cmd_roll, ["roll", "r"], ["r", "rd"], {"name": "roll"}, "commands.help.roll"),
@@ -664,6 +681,14 @@ class CommandRouter:
             CommandSpec("jrrp", self.cmd_jrrp, ["jrrp", "luck"], ["jrrp"], None, "commands.help.jrrp"),
             CommandSpec("draw", self.cmd_draw, ["draw"], ["draw", "抽牌"], None, "commands.help.draw"),
             CommandSpec("bot", self.cmd_bot_toggle, ["bot"], ["bot"], None, "commands.help.bot"),
+            CommandSpec(
+                "report",
+                self.cmd_report,
+                ["report"],
+                ["report", "团报", "跑团记录"],
+                {"name": "report"},
+                "commands.help.report",
+            ),
             CommandSpec(
                 "party",
                 self.cmd_party,
