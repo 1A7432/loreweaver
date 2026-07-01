@@ -1,3 +1,4 @@
 {
-  "runner.throttled": "Too many messages too quickly. Please slow down."
+  "runner.throttled": "Too many messages too quickly. Please slow down.",
+  "runner.error": "Something went wrong handling that. Please try again."
 }

@@ -1,7 +1,17 @@
+import json
+
+import pytest
+
 from adapters.qq_official import QQOfficialAdapter
+from adapters.qq_official.adapter import _DefaultQQTransport
 from gateway.events import InboundMessage
 from gateway.session import SessionSource
 from infra.store import Store
+
+try:  # aiohttp is an optional dep; the ws-loop test needs its WSMsgType enum.
+    import aiohttp
+except ImportError:  # pragma: no cover
+    aiohttp = None
 
 
 class MockTransport:
@@ -85,7 +95,10 @@ async def test_group_message_create_emits_non_at_inbound_for_full_message_extens
     assert received[0].at_bot is False
 
 
-async def test_first_group_message_create_flips_mode_to_full_and_allows_proactive() -> None:
+async def test_unaddressed_group_message_does_not_auto_promote_to_full() -> None:
+    # Regression (#4): an unaddressed (non-@) group message must NOT flip the group to
+    # FULL proactive mode — a single stray message would otherwise un-gate unsolicited
+    # bot push. The prior mode is kept; FULL is reached only by explicit keeper opt-in.
     store = Store(":memory:")
     adapter = _adapter(store)
     source = SessionSource(platform="qq", chat_type="group", chat_id="group-3")
@@ -95,7 +108,12 @@ async def test_first_group_message_create_flips_mode_to_full_and_allows_proactiv
 
     await adapter.dispatch_payload(_group_payload("GROUP_MESSAGE_CREATE", gid="group-3", mid="m3"))
 
-    assert await store.get(store_key="qq_group_mode.group-3") == "full"
+    # Still at_only after the unaddressed message.
+    assert await store.get(store_key="qq_group_mode.group-3") is None
+    assert adapter.supports_proactive(source) is False
+
+    # An explicit keeper opt-in (mode set to full) still enables proactive push.
+    await adapter._set_group_mode("group-3", "full")
     assert adapter.supports_proactive(source) is True
 
 
@@ -147,3 +165,47 @@ async def test_c2c_message_create_emits_dm_inbound_with_full_availability() -> N
     assert received[0].source.chat_type == "dm"
     assert received[0].source.chat_key() == "qq:dm:user-1"
     assert adapter.supports_proactive(received[0].source) is True
+
+
+class _FakeWsMsg:
+    def __init__(self, msg_type, data=None) -> None:
+        self.type = msg_type
+        self.data = data
+
+
+class _FakeWs:
+    """A minimal async-iterable stand-in for an aiohttp websocket."""
+
+    def __init__(self, messages) -> None:
+        self._messages = list(messages)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._messages:
+            raise StopAsyncIteration
+        return self._messages.pop(0)
+
+
+@pytest.mark.skipif(aiohttp is None, reason="aiohttp not installed")
+async def test_qq_ws_loop_survives_a_raising_payload() -> None:
+    # Regression (#2): one bad payload / crashing turn must not break out of the ws
+    # `async for` loop and permanently kill the listener. Every payload here raises,
+    # yet the loop still drains BOTH (proving it survived the first crash) and returns.
+    transport = _DefaultQQTransport(app_id="x", secret="y")
+    seen: list[dict] = []
+
+    async def on_payload(payload: dict) -> None:
+        seen.append(payload)
+        raise RuntimeError("turn crashed on payload")
+
+    messages = [
+        _FakeWsMsg(aiohttp.WSMsgType.TEXT, json.dumps({"op": 0, "t": "A", "s": 1})),
+        _FakeWsMsg(aiohttp.WSMsgType.TEXT, json.dumps({"op": 0, "t": "B", "s": 2})),
+        _FakeWsMsg(aiohttp.WSMsgType.CLOSED),
+    ]
+
+    await transport._consume(_FakeWs(messages), on_payload)
+
+    assert len(seen) == 2  # both payloads dispatched despite each one raising

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from agent.context import AgentCtx
@@ -20,6 +21,8 @@ from gateway.rooms import resolve_session_key
 from gateway.session import SessionSource
 from gateway.turn import run_turn
 from infra.i18n import get_i18n
+
+logger = logging.getLogger(__name__)
 
 _BOT_ENABLED_PREFIX = "bot_enabled."
 _BOT_ENABLED_VALUE = "1"
@@ -88,9 +91,17 @@ class GatewayRunner:
         if not self.rate_limiter.allow(user_key) or not self.rate_limiter.allow(chat_key):
             return get_i18n(locale).t("runner.throttled")
 
-        if self.hub is None:
-            return await self._answer_standalone(ctx, text)
-        return await self._answer_on_hub(msg, source, user_key, locale, text, command)
+        # A crashing command / KP turn / tool must degrade to a friendly localized
+        # reply, never propagate out of the inbound handler — an unguarded raise here
+        # would tear down the adapter's listen loop and permanently disconnect the bot
+        # (mirrors the try/except in `net.tui_server.dispatch_input`).
+        try:
+            if self.hub is None:
+                return await self._answer_standalone(ctx, text)
+            return await self._answer_on_hub(msg, source, user_key, locale, text, command)
+        except Exception:
+            logger.exception("runner.turn_failed chat_key=%s", chat_key)
+            return get_i18n(locale).t("runner.error")
 
     async def _answer_standalone(self, ctx: AgentCtx, text: str) -> str | None:
         """Pre-M7 path (no hub): resolve one reply string for the origin channel.

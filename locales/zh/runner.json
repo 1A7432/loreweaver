@@ -1,3 +1,4 @@
 {
-  "runner.throttled": "消息发送过快，请稍后再试。"
+  "runner.throttled": "消息发送过快，请稍后再试。",
+  "runner.error": "处理消息时出现问题，请重试。"
 }

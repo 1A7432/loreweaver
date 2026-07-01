@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import secrets
 import time
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum, IntFlag
@@ -14,6 +15,14 @@ _BOT_ENABLED_VALUE = "1"
 _BOT_DISABLED_VALUE = "0"
 _DIRECT_CHAT_TYPES = {"dm", "direct", "private"}
 _CENSOR_MASK_KEY = "ops.censor.mask"
+# Inter-letter "noise" allowed inside a banned word so an obfuscated spelling
+# ("b a d w o r d", "b.a.d") still matches: whitespace (`\s`), common punctuation
+# obfuscators (dot, asterisk, middle-dot, hyphen), and a few zero-width /
+# soft-hyphen format chars. None of these are `\w`, so the word-boundary
+# lookarounds around a hit are unaffected. Written with explicit escapes so no
+# literal invisible characters live in the source.
+_CENSOR_SEP_CHARS = ".*-\u00b7\u200b\u200c\u200d\ufeff\u00ad"
+_CENSOR_SEP = r"[\s" + re.escape(_CENSOR_SEP_CHARS) + r"]*"
 _SANITIZER_URL_KEY = "ops.sanitizer.url"
 _MASS_MENTION_RE = re.compile(r"@(?:everyone|here)\b", re.IGNORECASE)
 _URL_RE = re.compile(r"(?<![\w@])(?P<url>(?:https?://|www\.)[^\s<>()]+)", re.IGNORECASE)
@@ -74,13 +83,56 @@ class CensorResult:
 _DEFAULT_WORDLIST = {"badword": int(CensorLevel.DANGER)}
 
 
+def _normalize_for_match(text: str) -> tuple[str, list[int]]:
+    """NFKC + casefold `text` per character.
+
+    Returns the normalized string plus a map from each normalized-char index back
+    to its originating index in the ORIGINAL `text`. Folding fullwidth/compatibility
+    and case variants defeats a naive matcher's blind spots (fullwidth `ｂａｄ`, mixed
+    case), while the per-character map keeps offsets exact so a masked span still
+    lands on the original text.
+    """
+    normalized: list[str] = []
+    origin: list[int] = []
+    for index, char in enumerate(text):
+        folded = unicodedata.normalize("NFKC", char).casefold()
+        for piece in folded:
+            normalized.append(piece)
+            origin.append(index)
+    return "".join(normalized), origin
+
+
+def _compile_censor_word(word: str) -> re.Pattern[str] | None:
+    """Compile a banned `word` into a bypass-resistant matcher.
+
+    The word is normalized the same way inbound text is, then each letter is joined
+    by `_CENSOR_SEP` (so obfuscation spacing/punctuation between letters still
+    matches) and anchored with `\\w` boundaries so it only fires on a whole word,
+    never a substring (no "Scunthorpe problem"). Returns `None` for an all-noise
+    word that would compile to an empty matcher.
+    """
+    normalized, _ = _normalize_for_match(word)
+    letters = [char for char in normalized if not char.isspace()]
+    if not letters:
+        return None
+    core = _CENSOR_SEP.join(re.escape(char) for char in letters)
+    return re.compile(rf"(?<!\w){core}(?!\w)")
+
+
 class Censor:
     def __init__(self, wordlist: dict[str, int] | None = None) -> None:
         source = _DEFAULT_WORDLIST if wordlist is None else wordlist
         self._wordlist = {word: self._normalize_level(level) for word, level in source.items() if word}
+        # Precompiled, normalization-aware matcher per banned word (skipping any that
+        # reduce to nothing). Matching runs against a normalized copy of the input.
+        self._patterns: dict[str, re.Pattern[str]] = {}
+        for word in self._wordlist:
+            pattern = _compile_censor_word(word)
+            if pattern is not None:
+                self._patterns[word] = pattern
 
     def review(self, text: str) -> CensorResult:
-        if not text or not self._wordlist:
+        if not text or not self._patterns:
             return CensorResult(
                 allowed=True,
                 cleaned=text,
@@ -88,20 +140,25 @@ class Censor:
                 hits=[],
             )
 
+        normalized, origin = _normalize_for_match(text)
+
         spans: list[tuple[int, int]] = []
         hits: list[str] = []
         highest_level = int(CensorLevel.NONE)
 
-        for word, level in self._wordlist.items():
-            word_spans = [
-                (match.start(), match.end())
-                for match in re.finditer(re.escape(word), text, flags=re.IGNORECASE)
-            ]
-            if not word_spans:
-                continue
-            hits.append(word)
-            spans.extend(word_spans)
-            highest_level = max(highest_level, level)
+        for word, pattern in self._patterns.items():
+            matched = False
+            for match in pattern.finditer(normalized):
+                start, end = match.start(), match.end()
+                if end <= start:
+                    continue
+                # Map the normalized-coordinate span back onto the original text so the
+                # mask covers exactly the original (possibly obfuscated) characters.
+                spans.append((origin[start], origin[end - 1] + 1))
+                matched = True
+            if matched:
+                hits.append(word)
+                highest_level = max(highest_level, self._wordlist[word])
 
         if not spans:
             return CensorResult(

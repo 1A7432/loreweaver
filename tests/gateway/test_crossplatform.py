@@ -26,6 +26,7 @@ from gateway.session import SessionSource
 from gateway.turn import run_turn
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
+from infra.i18n import get_i18n
 from infra.llm import FakeLLM, assistant_text, assistant_tools, tool_call
 from net.keystore import Keystore
 
@@ -222,3 +223,37 @@ async def test_runner_hub_path_broadcasts_turn_and_keeps_room_reply_to_origin() 
     assert room_reply is not None and keystore.entries()[0].key in room_reply
     assert ws_member.events == []
     assert adapter.sends == []
+
+
+class _BoomToolset:
+    """A toolset whose only tool always raises — stands in for an adversarial turn."""
+
+    def schemas(self) -> list[dict]:
+        return [
+            {
+                "type": "function",
+                "function": {"name": "boom", "description": "x", "parameters": {"type": "object", "properties": {}}},
+            }
+        ]
+
+    def is_keeper_only(self, name: str) -> bool:
+        return False
+
+    async def dispatch(self, name, ctx, args) -> str:
+        raise RuntimeError("tool blew up on adversarial args")
+
+
+async def test_runner_inbound_turn_exception_yields_friendly_reply_not_crash() -> None:
+    # Regression (#2): a KP turn/tool that raises must degrade to a localized error
+    # reply, never propagate out of on_inbound — an unguarded raise would tear down the
+    # adapter's listen loop and permanently disconnect the bot.
+    def _calls_boom(messages, tools):
+        return assistant_tools(tool_call("boom"))
+
+    services = _services(_calls_boom)
+    runner = GatewayRunner(services, adapters=[], hub=None, toolset=_BoomToolset())
+    source = SessionSource(platform="cli", chat_type="dm", chat_id="local", user_id="p")
+
+    reply = await runner.on_inbound(InboundMessage(source=source, text="do a thing", at_bot=True))
+
+    assert reply == get_i18n("en").t("runner.error")

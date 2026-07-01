@@ -515,17 +515,27 @@ class CommandRouter:
         if not rest:
             return ctx.i18n.t("rooms.link.usage")
         session_key = self._room_link_target(rest)
+        if session_key is None:
+            # A token that is not a known keystore join key is refused outright: no
+            # binding, no leak. (Accepting a literal session id here would let a caller
+            # bind their channel to an arbitrary FOREIGN session and read/eavesdrop it.)
+            return ctx.i18n.t("rooms.link.invalid_key")
         await set_binding(store, channel_key, session_key)
         return ctx.i18n.t("rooms.link.result", session=session_key)
 
-    def _room_link_target(self, token: str) -> str:
-        """A join key resolves to its terminal session; anything else is taken
-        as a literal session id to bind to directly."""
+    def _room_link_target(self, token: str) -> str | None:
+        """Resolve a keystore join KEY to its terminal session, or ``None`` if
+        ``token`` is not a known join key.
+
+        Only a real join key (minted by ``.room open`` and handed to invitees) may
+        bind a channel to a shared session — there is deliberately NO literal
+        session-id fallback, which would otherwise let anyone bind to (and read /
+        eavesdrop) an arbitrary foreign session by guessing its id."""
         if self.keystore is not None:
             entry = self.keystore.get(token)
             if entry is not None:
                 return session_key_for_room(entry.room)
-        return token
+        return None
 
     async def _room_leave(self, ctx: CommandCtx, store: Any, channel_key: str) -> str:
         binding = await get_binding(store, channel_key)

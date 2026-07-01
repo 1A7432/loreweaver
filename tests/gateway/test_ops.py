@@ -57,6 +57,37 @@ def test_censor_passes_clean_text_unchanged() -> None:
     assert result.disposition == CensorDisposition.ALLOW
 
 
+def test_censor_defeats_spacing_punctuation_and_fullwidth_bypass() -> None:
+    # Regression (#6): normalization (NFKC + casefold) plus inter-letter separator
+    # tolerance closes the "b a d w o r d" / "b.a.d..." / fullwidth / mixed-case holes
+    # a naive `re.escape(word)` IGNORECASE matcher left open.
+    censor = Censor({"badword": int(CensorLevel.DANGER)})
+
+    for bypass in ("keep b a d w o r d away", "b.a.d.w.o.r.d now", "BADWORD here", "ｂａｄｗｏｒｄ"):
+        result = censor.review(bypass)
+        assert not result.allowed, bypass
+        assert result.hits == ["badword"], bypass
+        assert "badword" not in result.cleaned.lower(), bypass
+        assert t("ops.censor.mask") in result.cleaned, bypass
+
+
+def test_censor_word_boundary_avoids_substring_overmatch() -> None:
+    # Regression (#6): whole-word (\w-boundary) matching avoids the Scunthorpe problem —
+    # a banned word must not fire when it is merely a substring of an innocent word.
+    censor = Censor({"cat": int(CensorLevel.NOTICE)})
+
+    for innocent in ("category", "concatenate", "scatter"):
+        result = censor.review(innocent)
+        assert result.allowed
+        assert result.hits == []
+        assert result.cleaned == innocent
+
+    # ...but a real standalone occurrence (any case / trailing punctuation) still hits.
+    hit = censor.review("a CAT.")
+    assert hit.hits == ["cat"]
+    assert t("ops.censor.mask") in hit.cleaned
+
+
 async def test_bot_on_off_defaults_disabled_then_enabled() -> None:
     store = Store(":memory:")
     chat_key = "qq:group:42"

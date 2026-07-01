@@ -43,6 +43,11 @@ from net.keystore import Keystore
 _PROTOCOL_VERSION = "1.1"
 _SERVER_BANNER = "trpg-kp/1"
 
+# Hard cap on a single `input` frame's text before it reaches the LLM/history. A
+# client-controlled, unbounded string would otherwise blow up prompt size, context
+# cost and stored history; oversized input is truncated to this many characters.
+_MAX_INPUT_CHARS = 4000
+
 
 @dataclass(eq=False)
 class WsMember:
@@ -181,7 +186,11 @@ class TuiServer:
             return None
 
         client_id = f"tui:{hashlib.sha1(key.encode('utf-8')).hexdigest()[:8]}"
-        name = str(frame.get("name") or entry.name or client_id)
+        # The broadcast display name is AUTHORITATIVE — the keystore entry's name, else
+        # the derived client id. A client-supplied `join.name` is deliberately ignored:
+        # honoring it would let any connection impersonate "Keeper"/another player in the
+        # room fan-out.
+        name = entry.name or client_id
         source = SessionSource(
             platform="tui", chat_type="group", chat_id=entry.room, user_id=client_id, user_name=name
         )
@@ -218,18 +227,26 @@ class TuiServer:
 
         kind = frame.get("type")
         if kind == "input":
-            text = str(frame.get("text") or "")
+            # Cap the client-controlled text before it hits the LLM/history (dispatch_input
+            # already wraps the turn itself in its own try/except -> error frame).
+            text = str(frame.get("text") or "")[:_MAX_INPUT_CHARS]
             if text:
                 await self.dispatch_input(member, text)
             return
-        if kind == "ping":
-            await _send(member.ws, {"type": "pong", "t": frame.get("t")})
-            return
-        if is_admin_frame(kind):
-            # Keeper-gated admin surface (LLM config + room keys). The gate is the
-            # connection's keystore role; `handle_admin_frame` refuses non-keepers.
-            reply = await handle_admin_frame(self.services, self.keystore, member.role, frame, i18n)
-            await _send(member.ws, reply)
+        # Any failure in the ping/admin branches becomes a per-connection error frame,
+        # never an unhandled exception that would drop the socket (mirrors dispatch_input).
+        try:
+            if kind == "ping":
+                await _send(member.ws, {"type": "pong", "t": frame.get("t")})
+                return
+            if is_admin_frame(kind):
+                # Keeper-gated admin surface (LLM config + room keys). The gate is the
+                # connection's keystore role; `handle_admin_frame` refuses non-keepers.
+                reply = await handle_admin_frame(self.services, self.keystore, member.role, frame, i18n)
+                await _send(member.ws, reply)
+                return
+        except Exception:
+            await _send(member.ws, _error_frame("server_error", i18n))
             return
 
         await _send(member.ws, _error_frame("bad_frame", i18n))

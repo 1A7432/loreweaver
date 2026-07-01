@@ -71,11 +71,24 @@ class _DefaultQQTransport:
         gateway_url = await self._gateway_url()
         self._ws_session = aiohttp.ClientSession(trust_env=True)
         self._ws = await self._ws_session.ws_connect(gateway_url)
-        async for msg in self._ws:
+        await self._consume(self._ws, on_payload)
+
+    async def _consume(self, ws: Any, on_payload) -> None:
+        """Drain `ws`, dispatching each TEXT payload to `on_payload`.
+
+        Each payload is dispatched under its own guard: a single raising payload
+        (a malformed frame, or a turn that blew up) is logged and skipped, never
+        propagated — otherwise it would break out of `async for` and permanently
+        kill the listener task (the bot silently disconnects until restart)."""
+        async for msg in ws:
             if msg.type == aiohttp.WSMsgType.TEXT:
                 payload = _parse_json(msg.data)
                 if payload is not None:
-                    await on_payload(payload)
+                    try:
+                        await on_payload(payload)
+                    except Exception:
+                        # One bad payload / crashing turn must not kill the listener loop.
+                        logger.warning("qq.payload_failed", exc_info=True)
             elif msg.type in {aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR}:
                 break
 
@@ -275,8 +288,10 @@ class QQOfficialAdapter(BaseAdapter):
 
         if event_type in {GROUP_AT_MESSAGE_CREATE, GROUP_MESSAGE_CREATE}:
             at_bot = event_type == GROUP_AT_MESSAGE_CREATE
-            if not at_bot:
-                await self._set_group_mode(str(data.get("group_openid") or ""), _MODE_FULL)
+            # An unaddressed (non-@) group message must NOT auto-promote the group to
+            # FULL proactive mode: a single stray message would otherwise un-gate
+            # unsolicited bot push. The prior mode is kept; FULL is reached only by an
+            # explicit keeper opt-in (a stored `qq_group_mode` = full).
             msg = self._build_group_message(data, message_id, at_bot=at_bot)
             if msg is None:
                 return

@@ -26,7 +26,7 @@ from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM, ToolCall, assistant_text, assistant_tools, tool_call
 from net.keystore import Keystore
 from net.state import build_room_state
-from net.tui_server import TuiServer
+from net.tui_server import _MAX_INPUT_CHARS, TuiServer
 from tests.agent.test_kp_selfplay import FIXTURES, SENTINEL, _tools_called_this_turn, kp_responder
 
 _RECV_TIMEOUT = 5.0
@@ -97,6 +97,75 @@ async def test_join_with_good_key_gets_welcome_and_bad_key_gets_error():
             assert error["type"] == "error"
             assert error["code"] == "bad_key"
             assert error["message"]
+    finally:
+        await server.close()
+
+
+async def test_join_ignores_client_supplied_name_and_uses_keystore_identity():
+    # Regression (#3): the broadcast display name is authoritative (keystore entry),
+    # never the client-sent `join.name` — otherwise any connection could impersonate
+    # "Keeper"/another player in the room fan-out.
+    services = _services()
+    keystore = Keystore()
+    key = keystore.add(room="demo", name="Alice", role="player")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        async with websockets.connect(url) as ws:
+            welcome = await _join(ws, key, "Keeper")  # client tries to spoof "Keeper"
+            assert welcome["type"] == "welcome"
+            assert welcome["you"]["name"] == "Alice"  # authoritative keystore name wins
+            assert welcome["you"]["role"] == "player"
+    finally:
+        await server.close()
+
+
+async def test_oversized_input_is_truncated_before_the_turn():
+    # Regression (#8): a client-controlled `input.text` is capped before it reaches the
+    # LLM/history, so it cannot blow up prompt size / stored history unboundedly.
+    services = _services(responder=lambda messages, tools: assistant_text("ok"))
+    keystore = Keystore()
+    key = keystore.add(room="caproom", name="Nora")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        ws, *_ = await _connect_and_join(url, key, "Nora")
+        await ws.send(json.dumps({"type": "input", "text": "x" * (_MAX_INPUT_CHARS + 500)}))
+
+        echo = await _recv(ws)
+        assert echo["type"] == "narrative" and echo["speaker"] == "player"
+        assert len(echo["text"]) == _MAX_INPUT_CHARS
+        await ws.close()
+    finally:
+        await server.close()
+
+
+async def test_admin_frame_exception_becomes_error_frame_not_a_dropped_socket(monkeypatch):
+    # Regression (#7): a raising admin/ping branch is turned into a per-connection error
+    # frame (mirroring dispatch_input) rather than an unhandled exception that drops the
+    # socket — and the connection survives to serve the next frame.
+    services = _services()
+    keystore = Keystore()
+    key = keystore.add(room="adminroom", name="Keeper", role="keeper")
+    server = TuiServer(services, keystore, port=0)
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("admin handler blew up")
+
+    monkeypatch.setattr("net.tui_server.handle_admin_frame", _boom)
+
+    url = await _start(server)
+    try:
+        ws, *_ = await _connect_and_join(url, key, "Keeper")
+        await ws.send(json.dumps({"type": "admin_get_config"}))
+        err = await _recv(ws)
+        assert err["type"] == "error" and err["code"] == "server_error"
+
+        # The socket is still alive: a subsequent ping still gets its pong.
+        await ws.send(json.dumps({"type": "ping", "t": 42}))
+        pong = await _recv(ws)
+        assert pong["type"] == "pong" and pong["t"] == 42
+        await ws.close()
     finally:
         await server.close()
 
