@@ -58,10 +58,10 @@ def test_generate_character_coc7_end_to_end_with_real_dice_roller():
         # "3d6x5" ranges 15-90, "(2d6+6)x5" ranges 40-90 - either way, comfortably below 100.
         assert value < 100, f"{attr} looks unrolled/un-normalized (got {value!r})"
 
-    # Derived attributes (`CharacterTemplate.mapping`, e.g. "{POW}") also depend on the
-    # dice-rolled characteristics above, so a positive value here is further end-to-end
-    # proof the roll -> mapping pipeline completed without raising.
-    assert character.attributes["SANMAX"] == character.attributes["POW"]
+    # HPMAX/MPMAX (`CharacterTemplate.mapping`) depend on the dice-rolled characteristics
+    # above, so a positive value here is further end-to-end proof the roll -> mapping
+    # pipeline completed without raising. SANMAX is the CoC7e cap 99 - Cthulhu Mythos.
+    assert character.attributes["SANMAX"] == 99 - character.skills["克苏鲁神话"]
     assert character.attributes["HPMAX"] > 0
     assert character.attributes["MPMAX"] > 0
 

@@ -228,25 +228,35 @@ class DiceRoller:
         """SealDice-style d100 with tens bonus/penalty dice (ported from nekro).
 
         d100 = tens*10 + ones (00+0 == 100). Bonus dice: roll extra tens dice and
-        keep the *lowest* tens digit. Penalty dice: roll extra tens dice and keep
-        the *highest* tens digit. Net bonus/penalty dice cancel out 1-for-1.
+        keep the tens digit giving the *lowest* d100 value. Penalty dice: keep the
+        one giving the *highest* value. Net bonus/penalty dice cancel out 1-for-1.
+
+        Candidates are compared by full d100 VALUE, never by bare tens digit: the
+        kept ones die is shared across every tens candidate (SealDice swaps only
+        the tens), and a tens of 0 with a ones of 0 is 100 - the *largest* roll,
+        not the smallest. Comparing bare tens would let a penalty die improve, or
+        a bonus die worsen, any `x0` roll (e.g. raw 100 dropping to 30).
         """
         roll = random.randint(1, 100)
         ones = roll % 10
         tens = (roll // 10) % 10  # roll == 100 -> tens == 0
+
+        def _value(candidate_tens: int) -> int:
+            # d100 built from a tens candidate sharing the kept ones die (00+0 == 100).
+            return 100 if candidate_tens == 0 and ones == 0 else candidate_tens * 10 + ones
 
         net_bonus = bonus - penalty
         extra_count = min(abs(net_bonus), _MAX_BONUS_PENALTY_DICE)
         extra_tens: list[int] = [random.randint(0, 9) for _ in range(extra_count)]
 
         if net_bonus > 0:
-            final_tens = min([tens, *extra_tens])
+            final_tens = min([tens, *extra_tens], key=_value)
         elif net_bonus < 0:
-            final_tens = max([tens, *extra_tens])
+            final_tens = max([tens, *extra_tens], key=_value)
         else:
             final_tens = tens
 
-        final_roll = 100 if final_tens == 0 and ones == 0 else final_tens * 10 + ones
+        final_roll = _value(final_tens)
         return {
             "roll": roll,
             "final_roll": final_roll,

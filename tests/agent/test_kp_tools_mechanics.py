@@ -130,7 +130,8 @@ async def test_update_character_skill_and_attribute_recompute_derived_stats():
     attr_result = await char_tools.update_character_attribute(ctx, attribute="POW", value=80)
     assert "80" in attr_result
     sheet_after = await char_tools.get_character_sheet(ctx)
-    assert "SAN: 80/80" in sheet_after
+    # Starting SAN tracks POW (80); the SANMAX cap is 99 - Cthulhu Mythos (0) -> 99, not POW.
+    assert "SAN: 80/99" in sheet_after
     assert "MP: 16/16" in sheet_after  # 80 // 5 == 16
 
 
@@ -380,6 +381,25 @@ async def test_skill_growth_maxed_skill_reports_no_growth_needed():
 
     assert "100" in result
     assert "maxed" in result.lower() or "无需成长" in result
+
+
+async def test_skill_growth_succeeds_on_roll_above_95_even_when_not_above_skill(monkeypatch):
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    dice_tools = DiceTools(services)
+    await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)
+    await char_tools.update_character_skill(ctx, skill_name="会计", value=99)
+
+    # roll 97 is NOT > skill (99) but IS > 95, so the CoC7e experience check still grows
+    # (+1d10 -> capped at 100). random.randint is called for the check roll, then the gain.
+    queued = iter([97, 4])
+    monkeypatch.setattr(random, "randint", lambda _lo, _hi: next(queued))
+
+    result = await dice_tools.skill_growth(ctx, skill_name="会计")
+
+    assert "Success" in result
+    sheet = await char_tools.get_character_sheet(ctx)
+    assert "会计: 100" in sheet
 
 
 async def test_opposed_check_deterministic_outcome():

@@ -303,7 +303,9 @@ class CharacterTools:
             # COC: changing POW/CON/SIZ auto-recomputes the derived attributes.
             if character.system == "CoC":
                 if attribute == "POW":
-                    character.attributes["SANMAX"] = value
+                    # SANMAX is the CoC7e sanity cap 99 - Cthulhu Mythos (default 0 -> 99),
+                    # not POW; starting SAN still tracks POW. Matches rulepack `_coc_sanmax`.
+                    character.attributes["SANMAX"] = 99 - character.skills.get("克苏鲁神话", 0)
                     character.attributes["SAN"] = value
                     character.attributes["MPMAX"] = value // 5
                     character.attributes["MP"] = value // 5
@@ -680,7 +682,9 @@ class DiceTools:
                 return i18n.t("kp_tools.dice.growth.maxed", skill=target_skill, value=skill_value)
 
             roll = random.randint(1, 100)
-            if roll > skill_value:
+            # CoC7e experience check: the skill grows on a roll ABOVE the skill value, and
+            # a roll above 95 also always succeeds (so 96-100 grow even at high skill).
+            if roll > skill_value or roll > 95:
                 growth = random.randint(1, 10)
                 old_value = skill_value
                 new_value = min(100, skill_value + growth)

@@ -242,6 +242,10 @@ class CharacterTemplate:
                 calc_formula = formula
                 for attr, value in character.attributes.items():
                     calc_formula = calc_formula.replace(f"{{{attr}}}", str(value))
+                # Skills too, so a cap like SANMAX = "99 - {克苏鲁神话}" can reference a
+                # skill value; skills are already numeric here (computed just above).
+                for skill, value in character.skills.items():
+                    calc_formula = calc_formula.replace(f"{{{skill}}}", str(value))
                 result = eval(calc_formula, {"__builtins__": {}})  # noqa: S307
                 character.attributes[target] = int(result)
             except Exception:
@@ -284,7 +288,9 @@ class CharacterTemplate:
         }
 
         template.mapping = {
-            "SANMAX": "{POW}",
+            # CoC7e: starting SAN = POW, but the sanity *cap* is 99 - Cthulhu Mythos
+            # (default 0 -> 99), never POW. Matches the rulepack `_coc_sanmax`.
+            "SANMAX": "99 - {克苏鲁神话}",
             "SAN": "{POW}",
             "HPMAX": "({CON}+{SIZ})/10",
             "HP": "({CON}+{SIZ})/10",

@@ -380,6 +380,56 @@ def test_bonus_penalty_helper_handles_natural_hundred(monkeypatch):
     assert bonus_penalty == {"roll": 100, "final_roll": 100, "tens": 0, "ones": 0, "extra_tens": [], "final_tens": 0}
 
 
+def test_penalty_die_does_not_shrink_a_natural_hundred(monkeypatch):
+    roller = DiceRoller()
+    # raw 100 (tens 0, ones 0) is the LARGEST d100. A penalty (keep-highest) die whose
+    # extra tens is 3 must stay 100, never treat the bare tens 0 as "highest -> value 30".
+    queued = iter([100, 3])
+    monkeypatch.setattr(dice_engine.random, "randint", lambda _lo, _hi: next(queued))
+
+    bonus_penalty = roller._roll_bonus_penalty_d100(bonus=0, penalty=1)
+
+    assert bonus_penalty == {
+        "roll": 100,
+        "final_roll": 100,
+        "tens": 0,
+        "ones": 0,
+        "extra_tens": [3],
+        "final_tens": 0,
+    }
+
+
+def test_bonus_die_does_not_inflate_an_x0_roll_via_a_zero_tens(monkeypatch):
+    roller = DiceRoller()
+    # raw 70 (tens 7, ones 0). A bonus (keep-lowest) die whose extra tens is 0 must NOT
+    # pick tens 0 -> that is 00+0 == 100, the LARGEST value, the opposite of an improvement.
+    queued = iter([70, 0])
+    monkeypatch.setattr(dice_engine.random, "randint", lambda _lo, _hi: next(queued))
+
+    bonus_penalty = roller._roll_bonus_penalty_d100(bonus=1, penalty=0)
+
+    assert bonus_penalty == {
+        "roll": 70,
+        "final_roll": 70,
+        "tens": 7,
+        "ones": 0,
+        "extra_tens": [0],
+        "final_tens": 7,
+    }
+
+
+def test_bonus_die_never_worse_and_penalty_die_never_better_than_base():
+    # Property (all d100 outcomes, incl. the x0 edge): a bonus die can only keep or lower
+    # the roll (better on a roll-under check), a penalty die can only keep or raise it.
+    roller = DiceRoller()
+    seed_dice(2026)
+    for _ in range(500):
+        bonus = roller._roll_bonus_penalty_d100(bonus=1, penalty=0)
+        assert bonus["final_roll"] <= bonus["roll"]
+        penalty = roller._roll_bonus_penalty_d100(bonus=0, penalty=1)
+        assert penalty["final_roll"] >= penalty["roll"]
+
+
 def test_roll_coc_check_with_bonus_exposes_tens_dice_diagnostics():
     roller = DiceRoller()
     seed_dice(3)

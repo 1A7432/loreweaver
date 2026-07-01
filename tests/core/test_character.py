@@ -244,4 +244,5 @@ def test_generate_character_applies_template_and_defaults_name(monkeypatch):
     assert character.name == t("character.default_name")
     assert character.system == "CoC"
     assert character.attributes["STR"] == 30  # from the faked dice roll
-    assert character.attributes["SANMAX"] == character.attributes["POW"]  # mapping applied
+    # SANMAX cap = 99 - Cthulhu Mythos (0) -> 99 (NOT POW, which is 30 here). Mapping applied.
+    assert character.attributes["SANMAX"] == 99
