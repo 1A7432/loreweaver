@@ -277,3 +277,62 @@ async def test_run_kp_turn_stays_functional_even_if_the_recap_refresh_fails():
     result = await run_kp_turn(ctx, services, _toolset(), "I walk forward.")
 
     assert result.reply == "You step into the fog."
+
+
+# ---------------------------------------------------------------------------
+# (e) The durable facts block survives many later refreshes piling on prose
+# ---------------------------------------------------------------------------
+
+
+async def test_an_early_fact_survives_many_refreshes_that_pile_on_new_narrative():
+    """The core retention guarantee: a fact established at turn ~1 is still in the
+    recap after later refreshes flooded it with new narrative.
+
+    The summarizer here mimics the real two-section contract -- it carries every
+    existing facts bullet forward, appends a fresh fact, and emits a deliberately
+    huge narrative tail. Each refresh therefore runs the recap well over budget,
+    so `_bound` must trim only the rolling narrative and keep the early
+    brass-key/Boomer fact (which sits in the protected facts block) intact.
+    """
+    holder: dict[str, object] = {"n": 0}
+
+    def accumulating_summarizer(messages, tools):
+        facts_heading = holder["facts_heading"]
+        narrative_heading = holder["narrative_heading"]
+        user = next(m["content"] for m in reversed(messages) if m["role"] == "user")
+        # Recover the facts bullets already established (they ride in via previous_recap).
+        prior_facts = ""
+        if facts_heading in user:
+            after = user.split(facts_heading, 1)[1]
+            prior_facts = after.split(narrative_heading, 1)[0].strip()
+        holder["n"] = int(holder["n"]) + 1
+        n = holder["n"]
+        new_fact = f"- fact #{n}: the party reached room {n}"
+        facts = "\n".join(chunk for chunk in (prior_facts, new_fact) if chunk)
+        # A large narrative tail so the whole recap runs over the ceiling every time.
+        narrative = "They pressed onward through the fog and something stirred. " * 200
+        return assistant_text(f"{facts_heading}\n{facts}\n\n{narrative_heading}\n{narrative}")
+
+    services = _services(FakeLLM(responder=accumulating_summarizer))
+    i18n = services.i18n.with_locale("en")
+    holder["facts_heading"] = i18n.t("prompt.session_recap.facts_heading")
+    holder["narrative_heading"] = i18n.t("prompt.session_recap.narrative_heading")
+    ctx = _ctx("recap-retention")
+
+    # Seed the very first recap already holding the early concrete fact as a bullet.
+    seed = f"{holder['facts_heading']}\n- {BRASS_KEY_FACT}\n\n{holder['narrative_heading']}\nThe session begins."
+    await services.store.set(user_key="", store_key=recap_store_key(ctx.chat_key), value=seed)
+    key = await _seed_history(services, ctx.chat_key, ("user", "we continue"), ("assistant", "Onward."))
+
+    # Drive many refreshes; each one dumps a fresh flood of narrative on top.
+    for _ in range(12):
+        await refresh_session_recap(ctx, services, history_key=key)
+        stored = await services.store.get(user_key="", store_key=recap_store_key(ctx.chat_key))
+        assert stored is not None
+        assert len(stored) <= _RECAP_MAX_CHARS  # never blows the hard ceiling
+        assert BRASS_KEY_FACT in stored  # ...and the early fact is never dropped
+
+    # It also survived into the KP's system prompt many turns later.
+    prompt = await build_system_prompt(ctx, services)
+    assert BRASS_KEY_FACT in prompt
+    assert "brass key" in prompt

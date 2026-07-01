@@ -39,8 +39,11 @@ from infra.i18n import I18n
 _RECAP_REFRESH_EVERY = 8
 
 # Hard ceiling on the stored recap so the injected system prompt stays bounded
-# no matter what (or how much) the summarizer returns.
-_RECAP_MAX_CHARS = 1200
+# no matter what (or how much) the summarizer returns. Sized to comfortably hold
+# a growing "established facts" block PLUS a rolling narrative tail: when the two
+# together run over budget, `_bound` trims only the narrative so no concrete fact
+# is ever crowded out -- the exact failure a long play-test exposed at 1200.
+_RECAP_MAX_CHARS = 2500
 
 # How many trailing history messages to feed the summarizer as "recent turns".
 _RECENT_MESSAGES = 20
@@ -95,8 +98,18 @@ async def refresh_session_recap(ctx: AgentCtx, services: Services, *, history_ke
             return  # nothing has happened yet -- nothing to summarize
 
         none_yet = i18n.t("prompt.session_recap.no_previous")
+        facts_heading = i18n.t("prompt.session_recap.facts_heading")
+        narrative_heading = i18n.t("prompt.session_recap.narrative_heading")
         messages = [
-            {"role": "system", "content": i18n.t("prompt.session_recap.instruction", limit=_RECAP_MAX_CHARS)},
+            {
+                "role": "system",
+                "content": i18n.t(
+                    "prompt.session_recap.instruction",
+                    limit=_RECAP_MAX_CHARS,
+                    facts_heading=facts_heading,
+                    narrative_heading=narrative_heading,
+                ),
+            },
             {
                 "role": "user",
                 "content": i18n.t(
@@ -113,7 +126,7 @@ async def refresh_session_recap(ctx: AgentCtx, services: Services, *, history_ke
             # keep the old recap, but record that the refresh ran and produced 0 chars.
             await _note_recap_outcome(services, ctx.chat_key, ok=False, length=0)
             return
-        bounded = _bound(text)
+        bounded = _bound(text, narrative_heading)
         await services.store.set(user_key="", store_key=recap_store_key(ctx.chat_key), value=bounded)
         await _note_recap_outcome(services, ctx.chat_key, ok=True, length=len(bounded))
     except Exception:
@@ -123,11 +136,29 @@ async def refresh_session_recap(ctx: AgentCtx, services: Services, *, history_ke
         return
 
 
-def _bound(text: str) -> str:
-    """Truncate ``text`` to the hard recap ceiling, with a trailing ellipsis."""
+def _bound(text: str, narrative_heading: str = "") -> str:
+    """Enforce the hard recap ceiling, cutting the rolling NARRATIVE first.
+
+    The summarizer emits a durable "established facts" block followed by
+    ``narrative_heading`` and a rolling narrative tail. When the whole recap runs
+    over budget we keep the facts block intact and shorten only that tail, so an
+    early concrete fact is never silently dropped merely because later turns piled
+    on fresh prose. If the two-part structure isn't present (an older recap, or a
+    summarizer that ignored the format) we fall back to a plain end-truncation --
+    still bounded, still non-fatal.
+    """
     text = text.strip()
     if len(text) <= _RECAP_MAX_CHARS:
         return text
+    split = text.find(narrative_heading) if narrative_heading else -1
+    if split > 0:
+        facts = text[:split].rstrip()
+        budget = _RECAP_MAX_CHARS - len(facts) - 1  # room left for the narrative tail (+newline)
+        if budget > 1:
+            narrative = text[split:].strip()
+            return f"{facts}\n{narrative[: budget - 1].rstrip()}…"
+        # The facts block alone already fills the ceiling: keep what fits, drop the tail.
+        return facts[: _RECAP_MAX_CHARS - 1].rstrip() + "…"
     return text[: _RECAP_MAX_CHARS - 1].rstrip() + "…"
 
 
