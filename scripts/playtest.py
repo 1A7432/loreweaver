@@ -39,6 +39,7 @@ from agent.context import AgentCtx, LocalFs  # noqa: E402
 from agent.kp_tools import build_kp_toolset  # noqa: E402
 from agent.services import build_services  # noqa: E402
 from core.charcard import parse_card_file  # noqa: E402
+from gateway.commands import CommandRouter  # noqa: E402
 from gateway.hub import RoomHub  # noqa: E402
 from gateway.turn import run_turn  # noqa: E402
 from infra.config import get_settings  # noqa: E402
@@ -115,7 +116,7 @@ async def _setup(services, ts, module_path: Path, companion_path: Path | None, c
     return keeper_pool, companion_name
 
 
-async def run_session(services, ts, hub, module_path, companion_path, players, turns, sidx, rec: Recorder):
+async def run_session(services, ts, router, hub, module_path, companion_path, players, turns, sidx, rec: Recorder):
     chat_key = f"playtest:s{sidx}"
     keeper_pool, companion_name = await _setup(services, ts, module_path, companion_path, chat_key, rec)
     # a rough secret sentinel set: long-ish keeper-only lines the KP must not echo verbatim to players
@@ -138,7 +139,7 @@ async def run_session(services, ts, hub, module_path, companion_path, players, t
             action = await _gen_player_action(services, adesc, pname, "\n".join(transcript[-16:]))
             transcript.append(f">>> {pname}: {action}")
             try:
-                res = await run_turn(ctx, services, ts, action, hub=hub, actor_name=pname)
+                res = await run_turn(hub, services, ctx, action, command_router=router, toolset=ts, actor_name=pname)
                 reply = getattr(res, "reply", "") or ""
                 tools = [t.get("name") for t in getattr(res, "tool_trace", [])]
                 transcript.append(f"[KP] {reply[:400]}")
@@ -180,6 +181,7 @@ async def main():
     settings = get_settings()
     services = build_services(settings, embeddings=LocalEmbeddings(64))
     ts = build_kp_toolset(services)
+    router = CommandRouter(services)
     hub = RoomHub()
     rec = Recorder(ROOT / args.log)
     rec.emit("run_start", at=datetime.now().isoformat(timespec="seconds"),
@@ -189,7 +191,7 @@ async def main():
     companion_path = (ROOT / args.companion) if args.companion else None
     for sidx in range(1, args.sessions + 1):
         try:
-            await run_session(services, ts, hub, module_path, companion_path, args.players, args.turns, sidx, rec)
+            await run_session(services, ts, router, hub, module_path, companion_path, args.players, args.turns, sidx, rec)
         except Exception as exc:
             rec.emit("SESSION_ERROR", session=sidx, error=f"{type(exc).__name__}: {exc}",
                      trace=traceback.format_exc()[-1500:])
