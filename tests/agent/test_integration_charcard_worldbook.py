@@ -107,8 +107,19 @@ async def test_import_male_card_as_companion_carries_he_him_to_the_keeper(tmp_pa
     # record, and (2) surface it where the Keeper actually sees the companion (the roster tool),
     # so the model narrates the imported gender instead of guessing off the name.
     services = _services()
-    card_src = Path(__file__).resolve().parents[2] / "cards" / "companion_shenmo.json"
-    (tmp_path / "shenmo.json").write_text(card_src.read_text(encoding="utf-8"), encoding="utf-8")
+    # An inline male-described card (uses 他 throughout) — self-contained so this test
+    # does not depend on the gitignored private cards/ material (which is absent in CI).
+    card = {
+        "spec": "chara_card_v2",
+        "data": {
+            "name": "沈墨",
+            "description": "沈墨是一位1927年的民俗学者。他三十岁上下，穿一件洗得发白的灰布长衫，随身一只旧皮箱。他见过太多打着规矩旗号的血腥事。",
+            "personality": "他冷静、好奇，习惯先记录再判断。",
+            "first_mes": "他把皮箱往桌上一搁，抬眼打量你们。",
+            "tags": ["CoC", "investigator"],
+        },
+    }
+    (tmp_path / "shenmo.json").write_text(json.dumps(card, ensure_ascii=False), encoding="utf-8")
     fs = LocalFs(str(tmp_path))
     ctx = AgentCtx(chat_key="chat-shenmo", user_id="player-1", locale="zh", fs=fs)
 
