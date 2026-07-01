@@ -52,5 +52,6 @@
   "commands.sheet.changed_item": "{name}={value}",
   "commands.sheet.deleted": "已删除角色：{name}",
   "commands.sheet.item": "{name} {value}",
-  "commands.sheet.show": "{name}：{items}"
+  "commands.sheet.show": "{name}：{items}",
+  "commands.roll.invalid": "无效的骰子表达式：{expr}"
 }

@@ -52,5 +52,6 @@
   "commands.sheet.changed_item": "{name}={value}",
   "commands.sheet.deleted": "Deleted character: {name}",
   "commands.sheet.item": "{name} {value}",
-  "commands.sheet.show": "{name}: {items}"
+  "commands.sheet.show": "{name}: {items}",
+  "commands.roll.invalid": "Invalid dice expression: {expr}"
 }

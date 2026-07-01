@@ -1,0 +1,19 @@
+{
+  "commands.help.model": "Show or switch the Keeper's LLM provider/model.",
+  "commands.model.usage": "Usage: .model [list | set <provider> [chat_model] | key <api_key> | reset]",
+  "commands.model.show": "LLM: provider {provider}, chat model {chat_model}, base_url {base_url}, api_key {api_key}. Override: {override}",
+  "commands.model.override_on": "active (runtime override)",
+  "commands.model.override_off": "none (using environment/Settings)",
+  "commands.model.base_default": "(provider default)",
+  "commands.model.key_none": "(not set)",
+  "commands.model.list": "Providers — OpenAI-compatible: {compatible}; native: {native}. Any OpenAI-compatible endpoint works by pointing base_url at it.",
+  "commands.model.denied": "Only a group admin or Keeper can change the LLM configuration.",
+  "commands.model.set_usage": "Usage: .model set <provider> [chat_model]",
+  "commands.model.unknown_provider": "Unknown provider: {provider}. Use .model list to see the options.",
+  "commands.model.set_done": "LLM switched to provider {provider}, chat model {chat_model}.",
+  "commands.model.set_saved": "Saved LLM override: provider {provider}, chat model {chat_model} (takes effect on restart).",
+  "commands.model.key_usage": "Usage: .model key <api_key>",
+  "commands.model.key_public": "Set the API key from a private/DM or the local CLI, not a public channel.",
+  "commands.model.key_done": "API key updated ({api_key}).",
+  "commands.model.reset_done": "LLM override cleared. Reverted to provider {provider}, chat model {chat_model}."
+}

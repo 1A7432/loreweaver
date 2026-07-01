@@ -40,6 +40,18 @@ python -m app --cli                     # natural-language turns now run a real 
 ```
 **Networked / multiplayer:** `scripts/tui_demo.sh` mints a key + starts the server and prints the connect line; then in another terminal `cd clients/tui && bun install && bun run dev -- connect --host ws://127.0.0.1:8787/ --key <key>`. Browser: `cd clients/web && bun install && bun run dev`. SSH: see `clients/ssh/README.md`. No registration — the deployer issues keys that bind players to a shared room.
 
+### Deploy (self-host)
+One command brings up the networked Keeper (WebSocket server on `:8787`):
+```bash
+./scripts/deploy.sh                 # Docker: docker compose up -d --build
+./scripts/deploy.sh --bare-metal    # no Docker: venv + pip install + run
+```
+It creates `.env` from `.env.example` on first run (set `TRPG_LLM__*`, or leave blank for the offline demo). Mint an access key, then connect any client:
+```bash
+docker compose run --rm loreweaver --tui-key add --room table --name Alice
+```
+State (SQLite + keys) persists in the `/data` volume. Full guide — config, keys, persistence, reverse-proxy/TLS, connecting clients — in **[docs/deploy.md](docs/deploy.md)**.
+
 ## Play surfaces & systems
 | Surface | Status | Notes |
 |---|---|---|

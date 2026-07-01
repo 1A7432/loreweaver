@@ -17,6 +17,13 @@ from core.rulepacks import RulePack, load_rulepack
 from gateway.ops import PrivilegeLevel
 from gateway.rooms import clear_binding, get_binding, mint_room_id, session_key_for_room, set_binding
 from infra.i18n import I18n, get_i18n
+from infra.providers import (
+    NATIVE_PROVIDER_NAMES,
+    PRESETS,
+    describe_settings,
+    is_known_provider,
+    mask_secret,
+)
 
 Handler = Callable[["CommandCtx"], Awaitable[str]]
 
@@ -138,6 +145,13 @@ _ROOM_SHOW_WORDS = {"", "show", "status", "info", "查看"}
 
 # `.report` detailed-log toggle words (EN + a couple of CN synonyms) -- session report export ("团报").
 _REPORT_DETAILED_WORDS = {"detailed", "full", "log", "详细", "詳細", "完整", "全部"}
+
+# `.model` subcommand vocabularies (EN + a couple of CN synonyms) -- runtime LLM config.
+_MODEL_SHOW_WORDS = {"", "show", "status", "info", "查看", "状态", "狀態"}
+_MODEL_LIST_WORDS = {"list", "ls", "providers", "列表", "列出"}
+_MODEL_SET_WORDS = {"set", "use", "switch", "设置", "設置", "切换", "切換"}
+_MODEL_KEY_WORDS = {"key", "apikey", "token", "密钥", "密鑰"}
+_MODEL_RESET_WORDS = {"reset", "clear", "revert", "重置", "清除"}
 
 # Privilege inputs for `.room` gating. Chat platforms rarely surface a reliable
 # admin flag through the generic InboundMessage.raw, so the gate treats the local
@@ -270,14 +284,20 @@ class CommandRouter:
         times, expression = _split_multi(args)
         times = min(times, 20)
         lines = []
-        for _ in range(times):
-            result = _roll_expression(ctx.services, expression)
-            lines.append(ctx.i18n.t("commands.roll.result", result=_format_roll(result, ctx.i18n)))
+        try:
+            for _ in range(times):
+                result = _roll_expression(ctx.services, expression)
+                lines.append(ctx.i18n.t("commands.roll.result", result=_format_roll(result, ctx.i18n)))
+        except ValueError:
+            return ctx.i18n.t("commands.roll.invalid", expr=expression)
         return "\n".join(lines)
 
     async def cmd_hidden_roll(self, ctx: CommandCtx) -> str:
         expression = ctx.args or "1d20"
-        result = _roll_expression(ctx.services, expression)
+        try:
+            result = _roll_expression(ctx.services, expression)
+        except ValueError:
+            return ctx.i18n.t("commands.roll.invalid", expr=expression)
         return ctx.i18n.t("commands.roll.hidden", result=_format_roll(result, ctx.i18n))
 
     async def cmd_check(self, ctx: CommandCtx) -> str:
@@ -657,6 +677,84 @@ class CommandRouter:
         markdown, saved_note = rendered
         return f"{markdown}\n\n{saved_note}" if saved_note else markdown
 
+    async def cmd_model(self, ctx: CommandCtx) -> str:
+        """`.model [list | set <provider> [chat_model] | key <api_key> | reset]` — inspect or
+        switch the Keeper's LLM provider/model at runtime. Viewing is open; mutations are
+        keeper-gated via the shared privilege check. The override persists (see
+        `infra.runtime_config`) and hot-reconfigures the live `MutableLLM`, so every LLM
+        consumer sees the switch without a restart."""
+        parts = ctx.args.split(maxsplit=1)
+        sub = parts[0].casefold() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        runtime_config = ctx.services.runtime_config
+        if sub in _MODEL_LIST_WORDS:
+            return self._model_list(ctx)
+        if sub in _MODEL_SET_WORDS:
+            return await self._model_set(ctx, runtime_config, rest)
+        if sub in _MODEL_KEY_WORDS:
+            return await self._model_key(ctx, runtime_config, rest)
+        if sub in _MODEL_RESET_WORDS:
+            return await self._model_reset(ctx, runtime_config)
+        if sub in _MODEL_SHOW_WORDS:
+            return await self._model_show(ctx, runtime_config)
+        return ctx.i18n.t("commands.model.usage")
+
+    async def _model_show(self, ctx: CommandCtx, runtime_config: Any) -> str:
+        info = _describe_llm(ctx.services)
+        overrides = await runtime_config.get()
+        override = ctx.i18n.t("commands.model.override_on") if overrides else ctx.i18n.t("commands.model.override_off")
+        return ctx.i18n.t(
+            "commands.model.show",
+            provider=info["provider"],
+            chat_model=info["chat_model"],
+            base_url=info["base_url"] or ctx.i18n.t("commands.model.base_default"),
+            api_key=info["api_key"] or ctx.i18n.t("commands.model.key_none"),
+            override=override,
+        )
+
+    def _model_list(self, ctx: CommandCtx) -> str:
+        compatible = ", ".join(sorted(PRESETS))
+        native = ", ".join(NATIVE_PROVIDER_NAMES)
+        return ctx.i18n.t("commands.model.list", compatible=compatible, native=native)
+
+    async def _model_set(self, ctx: CommandCtx, runtime_config: Any, rest: str) -> str:
+        if not _is_keeper(ctx.raw_ctx):
+            return ctx.i18n.t("commands.model.denied")
+        tokens = rest.split()
+        if not tokens:
+            return ctx.i18n.t("commands.model.set_usage")
+        provider = tokens[0].casefold()
+        if not is_known_provider(provider):
+            return ctx.i18n.t("commands.model.unknown_provider", provider=provider)
+        overrides: dict[str, str] = {"provider": provider}
+        if len(tokens) > 1:
+            overrides["chat_model"] = tokens[1]
+        merged = await runtime_config.set(**overrides)
+        reconfigured = _reconfigure_llm(ctx.services, merged)
+        info = _describe_llm(ctx.services)
+        key = "commands.model.set_done" if reconfigured else "commands.model.set_saved"
+        return ctx.i18n.t(key, provider=info["provider"], chat_model=info["chat_model"])
+
+    async def _model_key(self, ctx: CommandCtx, runtime_config: Any, rest: str) -> str:
+        if not _is_keeper(ctx.raw_ctx):
+            return ctx.i18n.t("commands.model.denied")
+        if not _is_private_channel(ctx.raw_ctx):
+            return ctx.i18n.t("commands.model.key_public")
+        api_key = rest.strip()
+        if not api_key:
+            return ctx.i18n.t("commands.model.key_usage")
+        merged = await runtime_config.set(api_key=api_key)
+        _reconfigure_llm(ctx.services, merged)
+        return ctx.i18n.t("commands.model.key_done", api_key=mask_secret(api_key))
+
+    async def _model_reset(self, ctx: CommandCtx, runtime_config: Any) -> str:
+        if not _is_keeper(ctx.raw_ctx):
+            return ctx.i18n.t("commands.model.denied")
+        await runtime_config.clear()
+        _reconfigure_llm(ctx.services, {})
+        info = _describe_llm(ctx.services)
+        return ctx.i18n.t("commands.model.reset_done", provider=info["provider"], chat_model=info["chat_model"])
+
     def _build_specs(self) -> list[CommandSpec]:
         return [
             CommandSpec("roll", self.cmd_roll, ["roll", "r"], ["r", "rd"], {"name": "roll"}, "commands.help.roll"),
@@ -715,6 +813,7 @@ class CommandRouter:
                 "commands.help.room",
                 required_level=int(PrivilegeLevel.GROUP_ADMIN),
             ),
+            CommandSpec("model", self.cmd_model, ["model"], ["model", "模型"], None, "commands.help.model"),
             CommandSpec("help", self.cmd_help, ["help", "h"], ["help", "帮助"], {"name": "help"}, "commands.help.help"),
         ]
 
@@ -1169,6 +1268,43 @@ def _privilege_level(ctx: Any) -> int:
     if _raw_indicates_admin(raw):
         return int(PrivilegeLevel.GROUP_ADMIN)
     return int(PrivilegeLevel.EVERYONE)
+
+
+def _is_keeper(ctx: Any) -> bool:
+    """True if the caller may perform keeper/admin mutations (CLI/DM/group-admin)."""
+    return _privilege_level(ctx) >= int(PrivilegeLevel.GROUP_ADMIN)
+
+
+def _is_private_channel(ctx: Any) -> bool:
+    """True for the local CLI/TUI operator or a private/DM channel — where echoing
+    a secret (e.g. an API key) back is acceptable."""
+    platform = str(getattr(ctx, "platform", "") or "").casefold()
+    if platform in _ROOM_LOCAL_PLATFORMS:
+        return True
+    extra = getattr(ctx, "extra", None)
+    source = extra.get("source") if isinstance(extra, dict) else None
+    chat_type = str(getattr(source, "chat_type", "") or "").casefold()
+    return chat_type in _ROOM_ADMIN_CHAT_TYPES
+
+
+def _describe_llm(services: Services) -> dict[str, str]:
+    """The live LLM's display snapshot — from the `MutableLLM` if present, else
+    from the (possibly injected) settings so `.model` still shows something."""
+    describe = getattr(services.llm, "describe", None)
+    if callable(describe):
+        return describe()
+    return describe_settings(services.settings.llm)
+
+
+def _reconfigure_llm(services: Services, overrides: dict) -> bool:
+    """Hot-reconfigure the `MutableLLM` if present. Returns False when the LLM is
+    not swappable (e.g. an injected FakeLLM / offline demo); the override is still
+    persisted and takes effect on the next restart."""
+    apply = getattr(services.llm, "apply", None)
+    if callable(apply):
+        apply(overrides)
+        return True
+    return False
 
 
 def _raw_indicates_admin(raw: Any) -> bool:

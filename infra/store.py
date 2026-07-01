@@ -31,6 +31,11 @@ class Store:
         self._conn: sqlite3.Connection | None = None
         self._lock = asyncio.Lock()
 
+    @property
+    def path(self) -> str:
+        """The backing database path (``":memory:"`` for the in-memory store)."""
+        return self._db_path
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path, check_same_thread=False)
         conn.execute("PRAGMA journal_mode=WAL")

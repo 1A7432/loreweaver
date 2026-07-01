@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from infra.config import LLMSettings, Settings
 from infra.llm import ChatResult, LLMClient, OpenAILLM, ToolCall
+from infra.runtime_config import OVERRIDE_FIELDS, apply_overrides
 
 PRESETS: dict[str, str] = {
     "openai": "",
@@ -64,6 +65,99 @@ def build_llm(settings: Settings) -> LLMClient:
     if base_url == llm_settings.base_url:
         return OpenAILLM(llm_settings)
     return OpenAILLM(llm_settings.model_copy(update={"base_url": base_url}))
+
+
+# Providers reached through a native (non-OpenAI) SDK. Aliases included so
+# `is_known_provider` accepts what `build_llm` accepts; `NATIVE_PROVIDER_NAMES`
+# is the curated set shown to users by `.model list`.
+NATIVE_PROVIDERS: frozenset[str] = frozenset({"anthropic", "claude", "gemini", "google"})
+NATIVE_PROVIDER_NAMES: tuple[str, ...] = ("anthropic", "gemini")
+
+
+def is_known_provider(name: str) -> bool:
+    """True if `name` is a recognized provider key (`build_llm` can build it)."""
+    provider = (name or "").lower()
+    return provider in PRESETS or provider in NATIVE_PROVIDERS
+
+
+def mask_secret(value: str) -> str:
+    """Mask an API key for display: first/last 4 chars, or all-stars if short."""
+    if not value:
+        return ""
+    if len(value) <= 8:
+        return "*" * len(value)
+    return f"{value[:4]}...{value[-4:]}"
+
+
+def describe_settings(llm: LLMSettings) -> dict[str, str]:
+    """A display-safe snapshot of the effective LLM config (api_key masked)."""
+    provider = (llm.provider or "openai").lower()
+    return {
+        "provider": llm.provider or "openai",
+        "chat_model": llm.chat_model,
+        "base_url": llm.base_url or PRESETS.get(provider, ""),
+        "analysis_model": llm.analysis_model,
+        "npc_model": llm.npc_model,
+        "api_key": mask_secret(llm.api_key),
+    }
+
+
+class MutableLLM:
+    """An `LLMClient` whose backing provider/model can be swapped at runtime.
+
+    Wraps an inner client built via `build_llm`. `reconfigure()` rebuilds the
+    inner client AND copies the new llm fields into the shared `Settings` IN
+    PLACE, so every consumer observes the switch without rebuilding `Services`:
+    the agent loop uses the inner client's default model, while module init and
+    the NPC/companion actors read `services.settings.llm.*` at call time.
+    """
+
+    def __init__(self, settings: Settings, *, builder: Callable[[Settings], LLMClient] = build_llm) -> None:
+        self._builder = builder
+        self._settings = settings  # shared/effective settings (mutated in place)
+        self._base = settings.model_copy(deep=True)  # pristine baseline for reset
+        self._inner: LLMClient = builder(settings)
+
+    @property
+    def inner(self) -> LLMClient:
+        return self._inner
+
+    @property
+    def settings(self) -> Settings:
+        return self._settings
+
+    async def chat(
+        self,
+        messages: list[dict],
+        *,
+        tools: list[dict] | None = None,
+        tool_choice: str | dict | None = None,
+        temperature: float | None = None,
+        model: str | None = None,
+    ) -> ChatResult:
+        return await self._inner.chat(
+            messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            temperature=temperature,
+            model=model,
+        )
+
+    def reconfigure(self, settings: Settings) -> None:
+        """Rebuild the inner client from `settings`, mutating the shared Settings'
+        llm fields in place so all LLM consumers observe the change."""
+        for field in OVERRIDE_FIELDS:
+            setattr(self._settings.llm, field, getattr(settings.llm, field))
+        self._inner = self._builder(self._settings)
+
+    def apply(self, overrides: dict) -> None:
+        """Recompute effective settings from the pristine baseline + `overrides`
+        and reconfigure (empty `overrides` reverts to the env/`Settings` baseline)."""
+        self.reconfigure(apply_overrides(self._base, overrides))
+
+    def describe(self) -> dict[str, str]:
+        """Display-safe snapshot of the current effective config (api_key masked)."""
+        return describe_settings(self._settings.llm)
 
 
 class AnthropicLLM:

@@ -43,7 +43,8 @@ act(() => {
   })
 })
 
-const frame = await waitForFrame((t) => t.includes("Martha") && t.includes("HARD SUCCESS") && t.includes("HP"))
+const frame = await waitForFrame((t) => t.includes("Martha"))
 await Bun.write("preview_frame.txt", frame)
+console.log(frame)
 act(() => renderer.destroy())
 process.exit(0)

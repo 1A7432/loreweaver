@@ -1,0 +1,19 @@
+{
+  "commands.help.model": "查看或切换 Keeper 的 LLM 提供方/模型。",
+  "commands.model.usage": "用法：.model [list | set <提供方> [聊天模型] | key <api_key> | reset]",
+  "commands.model.show": "LLM：提供方 {provider}，聊天模型 {chat_model}，base_url {base_url}，api_key {api_key}。覆盖：{override}",
+  "commands.model.override_on": "已启用（运行时覆盖）",
+  "commands.model.override_off": "无（使用环境/Settings 配置）",
+  "commands.model.base_default": "（提供方默认）",
+  "commands.model.key_none": "（未设置）",
+  "commands.model.list": "提供方 —— 兼容 OpenAI：{compatible}；原生：{native}。将 base_url 指向任意 OpenAI 兼容端点即可使用。",
+  "commands.model.denied": "只有群管理员或 Keeper 才能修改 LLM 配置。",
+  "commands.model.set_usage": "用法：.model set <提供方> [聊天模型]",
+  "commands.model.unknown_provider": "未知提供方：{provider}。请使用 .model list 查看可选项。",
+  "commands.model.set_done": "LLM 已切换为提供方 {provider}，聊天模型 {chat_model}。",
+  "commands.model.set_saved": "已保存 LLM 覆盖：提供方 {provider}，聊天模型 {chat_model}（重启后生效）。",
+  "commands.model.key_usage": "用法：.model key <api_key>",
+  "commands.model.key_public": "请在私聊/DM 或本地 CLI 中设置 API 密钥，请勿在公共频道中设置。",
+  "commands.model.key_done": "API 密钥已更新（{api_key}）。",
+  "commands.model.reset_done": "已清除 LLM 覆盖。已还原为提供方 {provider}，聊天模型 {chat_model}。"
+}

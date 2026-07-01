@@ -20,7 +20,8 @@ from infra.config import Settings, get_settings
 from infra.embeddings import Embeddings, OpenAIEmbeddings
 from infra.i18n import I18n, get_i18n
 from infra.llm import LLMClient
-from infra.providers import build_llm
+from infra.providers import MutableLLM
+from infra.runtime_config import RuntimeConfig
 from infra.store import Store
 from infra.vector import VectorStore
 
@@ -40,6 +41,7 @@ class Services:
     worldbook: WorldbookManager
     llm: LLMClient
     embeddings: Embeddings
+    runtime_config: RuntimeConfig
 
 
 def build_services(
@@ -57,11 +59,21 @@ def build_services(
     from `settings.llm`."""
     settings = settings or get_settings()
     i18n = i18n or get_i18n(settings.locale)
-    embeddings = embeddings or OpenAIEmbeddings(settings.llm)
-    # `build_llm` honors settings.llm.provider + PRESETS (OpenAI/Anthropic/Gemini/
-    # OpenAI-compatible); an injected `llm` (e.g. FakeLLM in tests) still wins.
-    llm = llm or build_llm(settings)
     store = store or Store(db_path)
+    runtime_config = RuntimeConfig(store)
+    embeddings = embeddings or OpenAIEmbeddings(settings.llm)
+    # An injected `llm` (e.g. FakeLLM in tests) is used verbatim and left
+    # UNWRAPPED so those paths stay byte-compatible. Otherwise wrap in a
+    # `MutableLLM` whose provider/model the `.model` admin command can hot-swap,
+    # and apply any persisted runtime overrides at startup. `build_llm` (inside
+    # MutableLLM) honors settings.llm.provider + PRESETS (OpenAI/Anthropic/Gemini/
+    # OpenAI-compatible).
+    if llm is None:
+        mutable = MutableLLM(settings)
+        persisted = runtime_config.load_sync()
+        if persisted:
+            mutable.apply(persisted)
+        llm = mutable
 
     # keep the deterministic-core crit toggle in sync with config
     dice_config.ENABLE_CRITICAL_EFFECTS = settings.enable_critical_effects
@@ -89,4 +101,5 @@ def build_services(
         worldbook=worldbook,
         llm=llm,
         embeddings=embeddings,
+        runtime_config=runtime_config,
     )

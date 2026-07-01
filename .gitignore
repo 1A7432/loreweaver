@@ -44,7 +44,15 @@ coverage/
 docs/specs/
 PROMPT.md
 
+# --- Local play-test material (user-supplied modules / cards; may be copyrighted) ---
+modules/
+playtest/
+cards/
+
 # --- Misc ---
 .DS_Store
 *.log
 scratch/
+
+# TUI preview render artifact
+clients/tui/preview_frame.txt

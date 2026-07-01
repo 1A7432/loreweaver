@@ -190,7 +190,13 @@ class DiceRoller:
         `_normalize_dice_expression`.
         """
         normalized = _normalize_dice_expression(expression.strip().lower())
-        result = d20.roll(normalized)
+        try:
+            result = d20.roll(normalized)
+        except d20.RollError as exc:
+            # A malformed expression (e.g. a skill name typed at `.r`) surfaces as a
+            # localized ValueError, like the other roll_* methods, so callers never see
+            # a raw d20 traceback.
+            raise ValueError(t("dice.error.invalid_expression", expression=expression)) from exc
         return _dice_result_from_roll(expression, result, is_check=is_check)
 
     def roll_advantage(self, expression: str, is_check: bool = False) -> DiceResult:

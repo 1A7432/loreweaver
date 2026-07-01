@@ -1,0 +1,51 @@
+# Keep the build context (and image) lean: only the Python server sources,
+# pyproject, README (referenced by pyproject), locales and rulepacks are needed.
+
+# Python virtualenv / build / caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# VCS / CI / editor
+.git/
+.github/
+.gitignore
+.DS_Store
+
+# Secrets & runtime state (NEVER bake into an image — injected at run time)
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite*
+data/
+shared/
+**/keys.toml
+**/tui_keys.toml
+*_host_key
+*_host_key.pub
+*.pem
+
+# TypeScript clients — not part of the Python WS server
+clients/
+node_modules/
+
+# Not needed at runtime
+tests/
+docs/
+PROMPT.md
+*.log
+scratch/
+modules/
+playtest/
+cards/
