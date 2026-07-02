@@ -2,6 +2,8 @@
 
 **A self-hosted AI Game Master / Keeper for tabletop RPGs — world & story first.**
 
+*English · [中文](README.zh.md)*
+
 Loreweaver runs a *game*, not a chat. It keeps a structured world (module, scenes, NPCs, clues, timeline, hidden truths), a deterministic rules engine (real dice, success levels, character sheets, a game clock, a persistent session log), and a function-calling **AI Keeper** that narrates, adjudicates, and runs NPCs on top of it — while a hard secrecy discipline keeps the plot's secrets out of players' view. Discord-first, system-agnostic (**D&D 5e SRD** + **Call of Cthulhu 7e**), English-first with runtime `en`/`zh` i18n.
 
 [![CI](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml/badge.svg)](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml) ![license](https://img.shields.io/badge/license-MIT-green) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![clients](https://img.shields.io/badge/clients-TypeScript%20%2F%20Bun-black) ![status](https://img.shields.io/badge/tests-511%20passing-brightgreen)
