@@ -18,6 +18,7 @@ dependencies = [
     "httpx>=0.27",
     "aiohttp>=3.9",
     "numpy>=1.24",
+    "websockets>=16",  # net/tui_server WebSocket server + clients (15.x proxy handling breaks localhost)
 ]
 
 [project.optional-dependencies]
@@ -29,6 +30,11 @@ feishu = ["lark-oapi>=1.2"]
 vector = ["sqlite-vec>=0.1.1"]
 anthropic = ["anthropic>=0.40"]
 gemini = ["google-genai>=0.3"]
+
+[dependency-groups]
+# Dev tooling as a uv-native group (PEP 735): `uv sync` installs it by default.
+# pip users (fallback): `pip install -e . && pip install pytest pytest-asyncio ruff`,
+# or with pip >= 25.1: `pip install --group dev`.
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.5"]
 
 [project.scripts]

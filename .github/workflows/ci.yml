@@ -15,19 +15,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-          cache: pip
-      # anthropic + gemini extras are installed so the provider unit tests run;
-      # platform SDKs (qq/telegram/discord/feishu) stay optional — adapter tests mock them.
-      - run: pip install -e ".[dev,anthropic,gemini]"
+          enable-cache: true
+      # anthropic + gemini extras so the provider unit tests run; platform SDKs
+      # (qq/telegram/discord/feishu) stay optional — adapter tests mock them. The
+      # `dev` dependency-group (pytest/ruff) is installed by default; --locked
+      # asserts uv.lock is up to date.
+      - run: uv sync --locked --extra anthropic --extra gemini
       - name: Ruff
-        run: ruff check core infra agent gateway net adapters app.py scripts
+        run: uv run ruff check core infra agent gateway net adapters app.py scripts
       - name: i18n lint (no hardcoded natural-language strings)
-        run: python scripts/i18n_lint.py
+        run: uv run python scripts/i18n_lint.py
       - name: Tests (offline — FakeLLM/FakeEmbeddings, no API keys)
-        run: pytest -q
+        run: uv run pytest -q
 
   clients:
     name: Clients — TypeScript (bun)

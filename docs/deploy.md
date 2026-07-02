@@ -65,11 +65,11 @@ the connect line, and starts the server in the foreground (Ctrl-C to stop).
 Manual equivalent:
 
 ```bash
-python3 -m venv .venv && . .venv/bin/activate
-pip install -e ".[anthropic,gemini]"     # drop the extras if you only use OpenAI-compatible providers
+uv sync --extra anthropic --extra gemini   # env + deps; drop --extra ... for OpenAI-compatible-only
 export TRPG_DATA_DIR=./data TRPG_TUI_KEYS=./data/keys.toml
-python -m app --tui-key add --room table --name Keeper --role keeper   # mint a key
-python -m app --serve --host 0.0.0.0 --port 8787                       # run the server
+uv run python -m app --tui-key add --room table --name Keeper --role keeper   # mint a key
+uv run python -m app --serve --host 0.0.0.0 --port 8787                       # run the server
+# No uv? pip works: python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[anthropic,gemini]"
 ```
 
 ## Configuration

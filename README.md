@@ -29,16 +29,17 @@ Competitors are either **dice bots** (Avrae, SealDice, Dice Maiden — automatio
 
 ## Quickstart
 ```bash
-python3 -m venv .venv && . .venv/bin/activate
-pip install -e .            # add [anthropic,gemini] extras only if you use those native providers
+uv sync                     # creates .venv + installs deps (dev tools included). Native providers: uv sync --extra anthropic --extra gemini
 
 # 1) Offline — no API key needed (bundled demo Keeper + deterministic dice):
-python -m app --cli                     # REPL: try  r 3d6+2  /roll 4d6kh3  .ra 侦查  .setcoc 2
-python -m app --cli --script tests/fixtures/selfplay_en.txt   # offline AI-KP self-play demo
+uv run python -m app --cli              # REPL: try  r 3d6+2  /roll 4d6kh3  .ra 侦查  .setcoc 2
+uv run python -m app --cli --script tests/fixtures/selfplay_en.txt   # offline AI-KP self-play demo
 
 # 2) Real AI Keeper — copy .env.example → .env and set your model:
-#    TRPG_LLM__PROVIDER=deepseek   TRPG_LLM__API_KEY=sk-...   TRPG_LLM__CHAT_MODEL=deepseek-chat
-python -m app --cli                     # natural-language turns now run a real Keeper
+#    TRPG_LLM__PROVIDER=deepseek   TRPG_LLM__API_KEY=sk-...   TRPG_LLM__CHAT_MODEL=deepseek-v4-pro
+uv run python -m app --cli              # natural-language turns now run a real Keeper
+
+# No uv? pip still works: python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[dev,anthropic,gemini]"
 ```
 > **Model choice matters.** The Keeper leans on tool-calling and instruction-following: a capable model (GPT-4-class, Claude, or a strong open model) resolves checks with real dice via the tools and runs a module's own scenes far more faithfully than a small/cheap one. Budget models such as `deepseek-chat` are excellent for load/regression testing but tend to narrate a check's outcome without rolling and to drift off-module. Switch at runtime with `.model set <provider> [model]` — no restart needed.
 
@@ -80,9 +81,9 @@ The engine scopes all state by a stable `chat_key`; the RoomHub adds live cross-
 
 ## Testing
 ```bash
-pytest -q                                   # ~511 offline tests (FakeLLM/FakeEmbeddings, seeded dice)
-ruff check core infra agent gateway net adapters app.py scripts
-python scripts/i18n_lint.py                 # no hardcoded natural-language strings
+uv run pytest -q                            # offline tests (FakeLLM/FakeEmbeddings, seeded dice)
+uv run ruff check core infra agent gateway net adapters app.py scripts
+uv run python scripts/i18n_lint.py          # no hardcoded natural-language strings
 cd clients/<protocol|tui|web|ssh> && bun install && bun test   # (web: bun run test)
 ```
 The self-play test drives the whole stack (upload → analyze → open → player action → **real seeded dice** check → report) and asserts the Keeper **never leaks** hidden module secrets. CI runs Python (3.12) + all four client packages.

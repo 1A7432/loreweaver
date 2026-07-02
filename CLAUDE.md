@@ -20,11 +20,11 @@ Loreweaver is a self-hosted **AI Game Master / Keeper** for tabletop RPGs: a wor
 
 ## Develop / test / run
 ```bash
-python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[dev,anthropic,gemini]"
-pytest -q                      # offline: FakeLLM/FakeEmbeddings + seed_dice, no network/keys
-ruff check core infra agent gateway net adapters app.py scripts
-python scripts/i18n_lint.py    # NO ARGS (passing a path wrongly scans .venv)
-python -m app --cli            # try it: r 3d6+2 / /roll 4d6kh3 / .ra 侦查 / .setcoc 2
+uv sync --extra anthropic --extra gemini   # env + deps; the `dev` group (pytest/ruff) installs by default. (pip fallback: python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[dev,anthropic,gemini]")
+uv run pytest -q               # offline: FakeLLM/FakeEmbeddings + seed_dice, no network/keys
+uv run ruff check core infra agent gateway net adapters app.py scripts
+uv run python scripts/i18n_lint.py    # NO ARGS (passing a path wrongly scans .venv)
+uv run python -m app --cli     # try it: r 3d6+2 / /roll 4d6kh3 / .ra 侦查 / .setcoc 2
 # clients: cd clients/<protocol|tui|web|ssh> && bun install && bun test   (web: bun run test)
 ```
 Tests are deterministic and offline. To run a real Keeper, set `TRPG_LLM__*` in `.env` (see `.env.example`).
@@ -40,4 +40,4 @@ Tests are deterministic and offline. To run a real Keeper, set `TRPG_LLM__*` in 
 - **Parallelize leaves, serialize the merge.** Independent new modules can be built + tested in isolation concurrently; the wiring into shared files (`build_kp_toolset`, `services`, `commands`, `prompt_builder`) is one careful sequential pass.
 - **Scope your test runs.** When others may be editing concurrently, run only your module's tests, not the whole suite.
 - **NEVER foreground a blocking server** (`python -m app --serve`, a dev server) — it hangs. Verify via tests (they spin up ephemeral in-process servers); background + `timeout` + `kill` if you truly must.
-- **After any change:** `ruff check` + `python scripts/i18n_lint.py` + `pytest -q` (and the relevant `bun test`) must all pass.
+- **After any change:** `uv run ruff check` + `uv run python scripts/i18n_lint.py` + `uv run pytest -q` (and the relevant `bun test`) must all pass.
