@@ -3,6 +3,7 @@ import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
 import { FrameType, type ServerFrame, type WelcomeFrame } from "@trpg-kp/protocol"
 import { GameView, type GameClient } from "./GameView"
+import { SPINNER_FRAMES } from "./components/Spinner"
 import { themes } from "./themes"
 
 class MockClient implements GameClient {
@@ -172,5 +173,112 @@ describe("GameView", () => {
     act(() => {
       renderer.destroy()
     })
+  })
+
+  // A self-ticking spinner's interval outlives a concurrent-root unmount (its passive
+  // cleanup is deferred), so any test that leaves a spinner ACTIVE at teardown would
+  // leak an interval that ticks — un-acted — into later tests. Landing a frame first
+  // unmounts the empty-state spinner within an act()ed commit, clearing its interval,
+  // exactly as CharacterScreen stops its roll timer before the test ends.
+  const settleSpinner: ServerFrame = { type: FrameType.System, level: "info", text: "· connected ·" }
+
+  test("header renders cleanly: `joined <room>` + terminal dims, no CONNECTING bleed-through", async () => {
+    const client = new MockClient()
+    const { renderer, flush, captureCharFrame } = await renderGame(client)
+    await flush()
+
+    const frame = captureCharFrame()
+    // The room and terminal dims read as clean, well-spaced text beside the logo...
+    expect(frame).toContain("joined arkham")
+    expect(frame).toContain("110x34")
+    // ...and the old permanent "CONNECTING TO KEEPER…" label — which used to collide
+    // with the dims/room line on the header's single inner row — is gone entirely.
+    expect(frame).not.toContain("CONNECTING")
+
+    act(() => client.push(settleSpinner))
+    await flush()
+    act(() => renderer.destroy())
+  })
+
+  test("empty log shows an animated placeholder, not a dead static string", async () => {
+    const client = new MockClient()
+    const { renderer, flush, captureCharFrame } = await renderGame(client)
+    await flush()
+
+    const frame = captureCharFrame()
+    expect(frame).toContain("等待 Keeper 叙事")
+    // A spinner glyph proves it's animated (alive), not the old static placeholder.
+    expect(SPINNER_FRAMES.some((glyph) => frame.includes(glyph))).toBe(true)
+
+    act(() => client.push(settleSpinner))
+    await flush()
+    act(() => renderer.destroy())
+  })
+
+  test("shows the working indicator after a submit and clears it once the Keeper replies", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame, captureCharFrame, mockInput } = await renderGame(client)
+    await flush()
+
+    // Submitting a turn flips kpWorking on: the trailing "构思中" spinner appears.
+    await act(async () => {
+      await mockInput.typeText("i listen")
+      mockInput.pressEnter()
+    })
+    await flush()
+    expect(client.sent).toContain("i listen")
+
+    // Read the committed frame synchronously (not via a polling waitForFrame): the
+    // "构思中" spinner is already active here, and a poll spanning its ~110ms tick
+    // would fire an un-acted update.
+    const working = captureCharFrame()
+    expect(working).toContain("构思中")
+    expect(SPINNER_FRAMES.some((glyph) => working.includes(glyph))).toBe(true)
+
+    // The Keeper's (non-streaming) reply lands → the working indicator clears (ending
+    // with no active spinner, so nothing leaks into the next test).
+    act(() => {
+      client.push({ type: FrameType.Narrative, id: "kp1", speaker: "kp", text: "A floorboard groans overhead.", format: "markdown" })
+    })
+    await flush()
+    const replied = await waitForFrame((t) => t.includes("floorboard groans"))
+    expect(replied).toContain("floorboard groans")
+    expect(replied).not.toContain("构思中")
+
+    act(() => renderer.destroy())
+  })
+
+  test("keeps the working indicator up while the reply streams, clearing on the done chunk", async () => {
+    const client = new MockClient()
+    const { renderer, flush, captureCharFrame, mockInput } = await renderGame(client)
+    await flush()
+
+    await act(async () => {
+      await mockInput.typeText("open the door")
+      mockInput.pressEnter()
+    })
+    // The "构思中" spinner stays active across the whole stream, so its flushes are
+    // wrapped in act(): a tick landing during a bare flush would be an un-acted update.
+    await act(async () => {
+      await flush()
+    })
+    expect(captureCharFrame()).toContain("构思中")
+
+    // A streaming chunk that isn't `done`: the Keeper is visibly producing text, but
+    // it's still in flight — the indicator must stay up.
+    await act(async () => {
+      client.push({ type: FrameType.Narrative, id: "s1", speaker: "kp", text: "The hinge ", format: "markdown", stream: true, done: false })
+      await flush()
+    })
+    expect(captureCharFrame()).toContain("构思中")
+
+    // The terminal `done` chunk clears it (ends with no active spinner).
+    act(() => {
+      client.push({ type: FrameType.Narrative, id: "s1", speaker: "kp", text: "shrieks.", format: "markdown", stream: true, done: true })
+    })
+    await flush()
+    expect(captureCharFrame()).not.toContain("构思中")
+
+    act(() => renderer.destroy())
   })
 })

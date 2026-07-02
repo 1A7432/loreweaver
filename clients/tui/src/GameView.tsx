@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useKeyboard, useTerminalDimensions, useTimeline } from "@opentui/react"
 import type { InputRenderable, KeyEvent, ScrollBoxRenderable } from "@opentui/core"
 import { FrameType, stripControlChars, type DiceFrame, type PresenceFrame, type ServerFrame, type StateFrame, type WelcomeFrame } from "@trpg-kp/protocol"
@@ -57,30 +57,16 @@ export function GameView({ client, welcome, theme, themeName }: GameViewProps) {
   const [historyIndex, setHistoryIndex] = useState<number | null>(null)
   const [inputVersion, setInputVersion] = useState(0)
   const [showHelp, setShowHelp] = useState(false)
-  const [bootStep, setBootStep] = useState(0)
+  // True from the moment the player submits until the Keeper's reply lands, so the
+  // narrative log can show an animated "构思中" liveness indicator meanwhile.
+  const [kpWorking, setKpWorking] = useState(false)
   const [revealTicks, setRevealTicks] = useState(3)
   const [critFlash, setCritFlash] = useState(false)
   const scrollRef = useRef<ScrollBoxRenderable>(null)
   const inputRef = useRef<InputRenderable>(null)
   const dimensions = useTerminalDimensions()
 
-  const bootTimeline = useTimeline({ duration: 450, loop: false, autoplay: false })
   const diceTimeline = useTimeline({ duration: 360, loop: false, autoplay: false })
-
-  useEffect(() => {
-    const steps = [0, 1, 2, 3]
-    for (const step of steps) {
-      setTimeout(() => setBootStep(step), step * 120)
-    }
-    bootTimeline.add(
-      { value: 0 },
-      {
-        value: 1,
-        duration: 450,
-        onUpdate: () => undefined,
-      },
-    )
-  }, [])
 
   useEffect(() => {
     return client.onMessage((frame) => {
@@ -94,6 +80,14 @@ export function GameView({ client, welcome, theme, themeName }: GameViewProps) {
       }
       if (frame.type === FrameType.Narrative || frame.type === FrameType.Dice || frame.type === FrameType.System) {
         setFrames((current) => appendFrame(current, frame))
+        // Clear the "Keeper is working" indicator once the reply actually lands. A
+        // dice frame means the Keeper already acted; a `kp` narrative is the reply
+        // itself — but it MAY stream, so a streaming chunk that isn't `done` yet is
+        // still "working" (keep the spinner up until the terminal `done` chunk).
+        if (frame.type === FrameType.Dice) setKpWorking(false)
+        if (frame.type === FrameType.Narrative && frame.speaker === "kp" && (!frame.stream || frame.done)) {
+          setKpWorking(false)
+        }
         if (frame.type === FrameType.Dice) {
           setRevealTicks(0)
           diceTimeline.add(
@@ -129,6 +123,7 @@ export function GameView({ client, welcome, theme, themeName }: GameViewProps) {
     const text = String(value ?? command).trim()
     if (!text) return
     client.sendInput(text)
+    setKpWorking(true)
     setFrames((current) =>
       appendFrame(current, {
         type: FrameType.Narrative,
@@ -171,19 +166,18 @@ export function GameView({ client, welcome, theme, themeName }: GameViewProps) {
     if (hasCtrl(event) && name === "l") setFrames([])
   })
 
-  const bootText = useMemo(() => {
-    const dots = ".".repeat(bootStep % 4)
-    return `CONNECTING TO KEEPER${dots}`
-  }, [bootStep])
-
   return (
     <box flexDirection="column" height="100%" width="100%" backgroundColor={theme.bg}>
-      <box height={3} flexDirection="row" border borderColor={theme.border} paddingX={1}>
+      {/* height=4 → 2 inner rows: exactly the height the `tiny` ascii-font needs,
+          so its second row no longer bleeds into the border, and the status column
+          gets its own two rows instead of collapsing both lines onto one. */}
+      <box height={4} flexDirection="row" border borderColor={theme.border} paddingX={1}>
         <ascii-font text="TRPG KP" font="tiny" color={theme.accent} />
-        <box flexDirection="column" marginLeft={2}>
-          <text fg={theme.accent}>{bootText}</text>
+        <box flexDirection="column" marginLeft={2} justifyContent="center">
+          <text fg={theme.accent}>joined {stripControlChars(welcome.room)}</text>
           <text fg={theme.dim}>
-            {dimensions.width}x{dimensions.height} · joined {stripControlChars(welcome.room)}
+            {dimensions.width}x{dimensions.height}
+            {stateFrame.online > 0 ? ` · ${stateFrame.online} online` : ""}
           </text>
         </box>
       </box>
@@ -198,7 +192,7 @@ export function GameView({ client, welcome, theme, themeName }: GameViewProps) {
           stickyStart="bottom"
           viewportCulling={false}
         >
-          <NarrativeLog frames={frames} theme={theme} revealTicks={revealTicks} critFlash={critFlash} />
+          <NarrativeLog frames={frames} theme={theme} revealTicks={revealTicks} critFlash={critFlash} kpWorking={kpWorking} />
         </scrollbox>
 
         <box width={32} flexDirection="column">

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { useKeyboard } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
 import { FrameType, stripControlChars, type ServerFrame, type StateFrame, type WelcomeFrame } from "@trpg-kp/protocol"
+import { Spinner } from "../components/Spinner"
 import { StatusBar } from "../components/StatusBar"
 import type { Palette, ThemeName } from "../themes"
 
@@ -98,7 +99,7 @@ export function KeeperModule({ client, theme, themeName, welcome, stateFrame, on
 
           <box flexDirection="column" border borderColor={theme.border} paddingX={1}>
             <text fg={theme.accent}>导入结果</text>
-            {pending ? <text fg={theme.hard}>⚄ 分析中…（模组分析约需 1–2 分钟）</text> : null}
+            <Spinner active={pending} label="分析中…（模组分析约需 1–2 分钟）" color={theme.hard} />
             {log.length ? (
               log.map((line, index) => (
                 <text key={`sys-${index}`} fg={index === log.length - 1 ? theme.fg : theme.dim}>

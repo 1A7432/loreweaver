@@ -1,6 +1,7 @@
 import { SyntaxStyle } from "@opentui/core"
 import { stripControlChars, type DiceFrame, type NarrativeFrame, type SystemFrame } from "@trpg-kp/protocol"
 import type { Palette } from "../themes"
+import { Spinner } from "./Spinner"
 
 export type LogFrame = NarrativeFrame | DiceFrame | SystemFrame
 
@@ -17,6 +18,9 @@ export interface NarrativeLogProps {
   theme: Palette
   revealTicks?: number
   critFlash?: boolean
+  // While the Keeper's reply to the latest player turn is in flight, a trailing
+  // "构思中" spinner rides the bottom of the log (like a chat typing indicator).
+  kpWorking?: boolean
 }
 
 function diceColor(frame: DiceFrame, theme: Palette): string {
@@ -43,11 +47,13 @@ function speakerLabel(frame: NarrativeFrame): string {
   return stripControlChars(frame.speaker.toUpperCase())
 }
 
-export function NarrativeLog({ frames, theme, revealTicks = 3, critFlash = false }: NarrativeLogProps) {
+export function NarrativeLog({ frames, theme, revealTicks = 3, critFlash = false, kpWorking = false }: NarrativeLogProps) {
   return (
     <box flexDirection="column" width="100%" paddingX={1}>
       {frames.length === 0 ? (
-        <text fg={theme.dim}>等待 Keeper 叙事...</text>
+        // Animated so the empty log obviously reads as "alive, awaiting the Keeper"
+        // rather than a hung/dropped connection.
+        <Spinner active label="等待 Keeper 叙事…" color={theme.dim} />
       ) : (
         frames.map((frame, index) => {
           if (frame.type === "dice") {
@@ -89,6 +95,7 @@ export function NarrativeLog({ frames, theme, revealTicks = 3, critFlash = false
           )
         })
       )}
+      {frames.length > 0 && kpWorking ? <Spinner active label="Keeper 构思中" trailing color={theme.accent} /> : null}
     </box>
   )
 }

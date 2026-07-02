@@ -3,6 +3,7 @@ import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
 import { FrameType, type PlayerRole, type ServerFrame, type WelcomeFrame } from "@trpg-kp/protocol"
 import App, { type AppClient } from "../App"
+import { SPINNER_FRAMES } from "../components/Spinner"
 
 // Same MockClient shape as the sibling keeper tests: `sent` records the input-channel
 // commands and push() injects server frames like the wire. The admin_* methods are
@@ -137,9 +138,11 @@ describe("KeeperModule", () => {
     await harness.flush()
 
     expect(client.sent).toContain(".module modules/shuxue.md")
-    // While awaiting the async broadcast reply, the screen shows the pending state.
+    // While awaiting the async broadcast reply, the screen shows an ANIMATED pending
+    // state: the "分析中…" caption is driven by the shared spinner (glyph present).
     const frame = await harness.waitForFrame((t) => t.includes("分析中"))
     expect(frame).toContain("分析中")
+    expect(SPINNER_FRAMES.some((glyph) => frame.includes(glyph))).toBe(true)
 
     act(() => harness.renderer.destroy())
   })
