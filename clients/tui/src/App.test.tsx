@@ -125,6 +125,34 @@ describe("App shell", () => {
     act(() => renderer.destroy())
   })
 
+  test("join-time history replayed while on the menu is shown once the game view opens", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client)
+    await flush()
+    act(() => client.push(PLAYER_WELCOME))
+    await waitForFrame((t) => t.includes("进入游戏"))
+
+    // The server replays prior room history right after `welcome` — while the
+    // player is still on the menu, before GameView has mounted. Without shell-level
+    // accumulation these frames would be dropped (the original bug).
+    act(() =>
+      client.push({ type: FrameType.Narrative, speaker: "kp", text: "雪原上风声呼啸。", fmt: "markdown" } as ServerFrame),
+    )
+    await flush()
+
+    // Enter the game (Enter activates the first menu item, "进入游戏").
+    await act(async () => {
+      mockInput.pressEnter()
+    })
+    await flush()
+
+    // The replayed narrative is present in the game log, not lost in the transition.
+    const game = await waitForFrame((t) => t.includes("雪原上风声呼啸"))
+    expect(game).toContain("雪原上风声呼啸")
+
+    act(() => renderer.destroy())
+  })
+
   test("a bad_key error keeps you on the connect screen and shows the message", async () => {
     const client = new MockClient()
     const { renderer, flush, waitForFrame } = await renderApp(client)

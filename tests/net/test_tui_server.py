@@ -20,6 +20,7 @@ from websockets.exceptions import ConnectionClosed
 
 from agent.context import AgentCtx, LocalFs
 from agent.kp_tools import build_kp_toolset
+from agent.kp_tools_companion import CompanionTools
 from agent.services import build_services
 from core.dice_engine import seed_dice
 from gateway.commands import CommandRouter
@@ -651,3 +652,33 @@ async def test_keeper_role_connection_is_allowed_keeper_only_dot_commands_over_t
         await ws.close()
     finally:
         await server.close()
+
+
+async def test_kp_toolset_is_hub_wired_so_companion_act_drives_a_live_turn():
+    """Regression: TuiServer must build its KP toolset WITH its own hub/command_router,
+    or `companion_act` silently degrades to returning a bare declared line instead of
+    spotlighting the companion as a live room turn — so an AI companion the Keeper
+    addresses (e.g. "沈墨, how do you answer?") would never actually act."""
+    seed_dice(20240701)
+
+    def responder(messages, tools):
+        if tools is None:  # the companion actor's own call (no KP tools attached)
+            return assistant_text(json.dumps({"action": "I raise my lantern toward the sound", "dialogue": "Who's there?"}))
+        return assistant_text("Silas' lantern throws the dark back a step. What next?")  # KP resolving it
+
+    services = _services(responder=responder)
+    ctx = _room_ctx("companions")
+    await CompanionTools(services).add_companion(ctx, name="Silas", persona="A steady lamplighter.", playstyle="cautious")
+    await services.battles.start_session(ctx.chat_key)
+
+    server = TuiServer(services, Keystore(), port=0)
+    # Dispatch through the SERVER's OWN toolset (not a hand-built one) to prove its wiring.
+    result = await server.toolset.dispatch(
+        "companion_act", ctx, {"name": "Silas", "situation": "A floorboard creaks in the dark."}
+    )
+
+    # Hub path taken: the "✅ … takes a turn." confirmation, NOT the no-hub
+    # `Name: "<dialogue>" — <action>` declared-line fallback.
+    assert "Silas" in result
+    assert "takes a turn" in result
+    assert "Who's there?" not in result

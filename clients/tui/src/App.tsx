@@ -3,7 +3,8 @@ import { useKeyboard } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
 import { FrameType, type PresenceFrame, type ServerFrame, type StateFrame, type WelcomeFrame } from "@trpg-kp/protocol"
 import { createClient, type AppClient } from "./client"
-import { GameView } from "./GameView"
+import { GameView, appendFrame } from "./GameView"
+import type { LogFrame } from "./components/NarrativeLog"
 import { CharacterScreen } from "./screens/CharacterScreen"
 import { ConnectScreen } from "./screens/ConnectScreen"
 import { KeeperKeys } from "./screens/KeeperKeys"
@@ -48,6 +49,11 @@ export function App({ client: injected, prefill }: AppProps) {
   const [error, setError] = useState<string>()
   const [stateFrame, setStateFrame] = useState<StateFrame>(EMPTY_STATE)
   const [presence, setPresence] = useState<PresenceFrame>()
+  // The room log, accumulated at the shell level from the moment we join — so the
+  // join-time history replay (narrative frames the server delivers right after
+  // `welcome`, while we're still on the menu, before GameView exists) isn't lost.
+  // GameView seeds its own log from this on mount; see GameViewProps.initialFrames.
+  const [frames, setFrames] = useState<LogFrame[]>([])
 
   // Theme cycling + Esc are safe to handle globally: F-keys / Escape never
   // collide with typing, arrow navigation, or a focused input, so the theme
@@ -75,6 +81,13 @@ export function App({ client: injected, prefill }: AppProps) {
       }
       if (frame.type === FrameType.Presence) {
         setPresence(frame)
+        return
+      }
+      if (frame.type === FrameType.Narrative || frame.type === FrameType.Dice || frame.type === FrameType.System) {
+        // Accumulate the room log even while off the game view (e.g. the menu), so
+        // the join-time replay survives until the player opens GameView, which
+        // seeds from it. GameView keeps its own copy for live play + dice effects.
+        setFrames((current) => appendFrame(current, frame))
         return
       }
       if (frame.type === FrameType.Error && frame.code === "bad_key") {
@@ -106,7 +119,7 @@ export function App({ client: injected, prefill }: AppProps) {
   }
 
   if (screen === "game" && welcome) {
-    return <GameView client={client} welcome={welcome} theme={theme} themeName={themeName} />
+    return <GameView client={client} welcome={welcome} theme={theme} themeName={themeName} initialFrames={frames} />
   }
 
   if (screen === "character" && welcome) {

@@ -22,13 +22,19 @@ export interface GameViewProps {
   welcome: WelcomeFrame
   theme: Palette
   themeName: ThemeName
+  // The room log already accumulated by the shell (App) before this view mounted
+  // — the join-time history replay + anything that arrived while on the menu. The
+  // server delivers those frames right after `welcome`, long before the player
+  // opens the game view, so without seeding here they'd be lost. Seeds the local
+  // log ONCE on mount; live frames from here on are appended by `onMessage` below.
+  initialFrames?: LogFrame[]
 }
 
 // Cap a single streaming message so a hostile/runaway stream can't grow the
 // merged text without bound (memory / render blowup).
 const MAX_STREAM_TEXT = 20_000
 
-function appendFrame(frames: LogFrame[], frame: LogFrame): LogFrame[] {
+export function appendFrame(frames: LogFrame[], frame: LogFrame): LogFrame[] {
   if (frame.type !== FrameType.Narrative || !frame.stream) return [...frames, frame].slice(-200)
   const next = [...frames]
   const index = next.findIndex((item) => item.type === FrameType.Narrative && item.id === frame.id)
@@ -47,10 +53,10 @@ function hasCtrl(event: KeyEvent): boolean {
   return Boolean(event.ctrl)
 }
 
-export function GameView({ client, welcome, theme, themeName }: GameViewProps) {
+export function GameView({ client, welcome, theme, themeName, initialFrames }: GameViewProps) {
   const [presence, setPresence] = useState<PresenceFrame>()
   const [stateFrame, setStateFrame] = useState<StateFrame>({ type: FrameType.State, party: [], initiative: [], online: 0 })
-  const [frames, setFrames] = useState<LogFrame[]>([])
+  const [frames, setFrames] = useState<LogFrame[]>(() => initialFrames ?? [])
   const [command, setCommand] = useState("")
   const [history, setHistory] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState<number | null>(null)

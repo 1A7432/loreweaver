@@ -119,15 +119,19 @@ class TuiServer:
         self.host = host
         self.port = port
         self.command_router = command_router or CommandRouter(services)
-        self.toolset = toolset or build_kp_toolset(services)
+        # An injected hub lets this WS server share ONE bus with the chat gateway
+        # (app.py combined mode); standalone it owns its own (back-compat). Built
+        # BEFORE the toolset so the KP toolset receives it: companion_act (and any
+        # other hub-driven KP tool) needs the hub + router to publish a live
+        # companion sub-turn to the room — without it, companion_act degrades to
+        # returning a bare line to the KP instead of spotlighting the companion.
+        self.hub = hub if hub is not None else RoomHub()
+        self.toolset = toolset or build_kp_toolset(services, hub=self.hub, command_router=self.command_router)
         # Built from `services.settings.censor` (see `infra.config.CensorSettings` /
         # `docs/deploy.md` "Content moderation") unless a caller injects one (tests).
         # With nothing configured this is an explicit no-op, not a fake wordlist.
         self.censor = censor if censor is not None else censor_from_settings(services.settings.censor)
         self.rate_limiter = RateLimiter()
-        # An injected hub lets this WS server share ONE bus with the chat
-        # gateway (app.py combined mode); standalone it owns its own (back-compat).
-        self.hub = hub if hub is not None else RoomHub()
         # Recent AI-KP turns, for introspection/observability (e.g. tests and
         # admin tooling asserting a keeper-only tool actually ran) — never
         # itself broadcast over the wire.
