@@ -687,6 +687,17 @@ class CommandRouter:
         tools = CharcardTools(ctx.services)
         return await tools.import_character(self._agent_ctx(ctx), file_path=file_path, system=system, as_=as_)
 
+    async def cmd_module(self, ctx: CommandCtx) -> str:
+        """`.module <module file>` — import a module document and run module analysis."""
+        from agent.kp_tools_knowledge import DocumentTools
+
+        tokens = ctx.args.split()
+        if not tokens:
+            return ctx.i18n.t("commands.module.usage")
+        file_path = tokens[0]
+        tools = DocumentTools(ctx.services)
+        return await tools.upload_document(self._agent_ctx(ctx), file_path=file_path, doc_type="module")
+
     async def cmd_report(self, ctx: CommandCtx) -> str:
         """`.report [detailed|full]` — export the session report ("团报") for players to keep and review.
         Bare `.report` renders the summary; `.report detailed`/`.report full` renders the full
@@ -837,6 +848,15 @@ class CommandRouter:
                 ["import", "导入", "導入"],
                 None,
                 "charcard.commands.import.help",
+            ),
+            CommandSpec(
+                "module",
+                self.cmd_module,
+                ["module"],
+                ["module", "模组", "導入模組"],
+                None,
+                "commands.module.help",
+                required_level=int(PrivilegeLevel.GROUP_ADMIN),
             ),
             CommandSpec(
                 "room",

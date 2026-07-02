@@ -36,6 +36,8 @@
   "commands.inline.result": "Inline {expression}: {result}",
   "commands.init.result": "Initiative {name}: {result}",
   "commands.jrrp.result": "Daily luck: {luck}",
+  "commands.module.help": "Import a module file from the server filesystem and start module analysis.",
+  "commands.module.usage": "Usage: .module <module file path>",
   "commands.opposed.left": "left",
   "commands.opposed.result": "Opposed {left} roll {left_roll} {left_rank} vs {right} roll {right_roll} {right_rank}: {winner}",
   "commands.opposed.right": "right",
