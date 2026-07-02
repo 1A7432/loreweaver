@@ -11,6 +11,7 @@ from typing import Any
 from agent.context import AgentCtx
 from agent.services import Services
 from core.character_manager import CharacterSheet
+from core.character_rules import render_validation_notice, validate_sheet
 from core.coc_rules import DEFAULT_COC_RULE
 from core.dice_engine import DiceResult, coc_rank_label
 from core.rulepacks import RulePack, load_rulepack
@@ -375,6 +376,7 @@ class CommandRouter:
             return ctx.i18n.t("commands.error.bad_args")
 
         changed = []
+        changed_names = []
         for raw_name, raw_value in assignments:
             canonical = pack.resolve_skill(raw_name) or raw_name.strip()
             current = _get_sheet_value(character, pack, canonical)
@@ -385,9 +387,16 @@ class CommandRouter:
             except ValueError:
                 return ctx.i18n.t("commands.roll.invalid", expr=raw_value)
             _set_sheet_value(character, pack, canonical, value)
-            changed.append(ctx.i18n.t("commands.sheet.changed_item", name=canonical, value=value))
+            changed_names.append(canonical)
+        character, violations = validate_sheet(character, character.system)
+        for canonical in changed_names:
+            changed.append(
+                ctx.i18n.t("commands.sheet.changed_item", name=canonical, value=_get_sheet_value(character, pack, canonical))
+            )
         await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
-        return ctx.i18n.t("commands.sheet.changed", items=", ".join(changed))
+        result = ctx.i18n.t("commands.sheet.changed", items=", ".join(changed))
+        notice = render_validation_notice(ctx.i18n, violations)
+        return f"{result}\n{notice}" if notice else result
 
     async def cmd_growth(self, ctx: CommandCtx) -> str:
         character = await ctx.services.characters.get_character(ctx.user_id, ctx.chat_key)
@@ -421,8 +430,11 @@ class CommandRouter:
         default_name_key = "commands.character.dnd_name" if template == "dnd5e" else "commands.character.coc_name"
         name = ctx.args.strip() or ctx.i18n.t(default_name_key)
         character = ctx.services.characters.generate_character(template, name)
+        character, violations = validate_sheet(character, template)
         await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
-        return ctx.i18n.t("commands.character.created", name=character.name, system=character.system)
+        result = ctx.i18n.t("commands.character.created", name=character.name, system=character.system)
+        notice = render_validation_notice(ctx.i18n, violations)
+        return f"{result}\n{notice}" if notice else result
 
     async def cmd_setcoc(self, ctx: CommandCtx) -> str:
         raw = ctx.args.strip().casefold()

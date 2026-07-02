@@ -135,6 +135,25 @@ async def test_update_character_skill_and_attribute_recompute_derived_stats():
     assert "MP: 16/16" in sheet_after  # 80 // 5 == 16
 
 
+async def test_update_character_tools_clamp_rule_violations_before_saving():
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)
+
+    attr_result = await char_tools.update_character_attribute(ctx, attribute="POW", value=999)
+    assert "90" in attr_result
+    assert "attribute_above_max" in attr_result
+    character = await services.characters.get_character(ctx.uid(), ctx.chat_key)
+    assert character.attributes["POW"] == 90
+    assert character.attributes["MP"] == 18
+
+    skill_result = await char_tools.update_character_skill(ctx, skill_name="spot hidden", value=999)
+    assert "90" in skill_result
+    assert "skill_above_max" in skill_result
+    character = await services.characters.get_character(ctx.uid(), ctx.chat_key)
+    assert character.skills["侦查"] == 90
+
+
 async def test_list_switch_and_delete_characters():
     services, ctx = _build()
     char_tools = CharacterTools(services)
@@ -334,7 +353,7 @@ async def test_sanity_check_updates_san_deterministically():
     services, ctx = _build()
     char_tools = CharacterTools(services)
     dice_tools = DiceTools(services)
-    await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)  # SAN starts at 50
+    await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)  # SAN starts at 50/99
 
     seed_dice(11)
     expected_check = DiceRoller().roll_coc_check(50)
@@ -344,9 +363,9 @@ async def test_sanity_check_updates_san_deterministically():
     seed_dice(11)
     result = await dice_tools.sanity_check(ctx, success_loss="0", failure_loss="0")
 
-    assert f"{expected_san}/50" in result
+    assert f"{expected_san}/99" in result
     sheet = await char_tools.get_character_sheet(ctx)
-    assert f"SAN: {expected_san}/50" in sheet
+    assert f"SAN: {expected_san}/99" in sheet
 
 
 async def test_skill_growth_deterministic_outcome():
@@ -375,7 +394,9 @@ async def test_skill_growth_maxed_skill_reports_no_growth_needed():
     char_tools = CharacterTools(services)
     dice_tools = DiceTools(services)
     await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)
-    await char_tools.update_character_skill(ctx, skill_name="会计", value=100)
+    character = await services.characters.get_character(ctx.uid(), ctx.chat_key)
+    character.skills["会计"] = 100
+    await services.characters.save_character(ctx.uid(), ctx.chat_key, character)
 
     result = await dice_tools.skill_growth(ctx, skill_name="会计")
 
@@ -388,7 +409,9 @@ async def test_skill_growth_succeeds_on_roll_above_95_even_when_not_above_skill(
     char_tools = CharacterTools(services)
     dice_tools = DiceTools(services)
     await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)
-    await char_tools.update_character_skill(ctx, skill_name="会计", value=99)
+    character = await services.characters.get_character(ctx.uid(), ctx.chat_key)
+    character.skills["会计"] = 99
+    await services.characters.save_character(ctx.uid(), ctx.chat_key, character)
 
     # roll 97 is NOT > skill (99) but IS > 95, so the CoC7e experience check still grows
     # (+1d10 -> capped at 100). random.randint is called for the check roll, then the gain.

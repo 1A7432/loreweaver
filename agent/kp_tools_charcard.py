@@ -22,6 +22,7 @@ from agent.services import Services
 from agent.tools import tool
 from core.char_from_persona import build_sheet_from_persona, infer_pronoun_note
 from core.character_manager import CharacterSheet
+from core.character_rules import render_validation_notice, validate_sheet
 from core.charcard import CharacterCard, parse_card_file
 from infra.i18n import I18n
 
@@ -112,6 +113,8 @@ class CharcardTools:
             sheet = await build_sheet_from_persona(self._services, card, system, module_context=module_context)
             final_name = name.strip() or card.name or sheet.name
             sheet.name = final_name
+            sheet, violations = validate_sheet(sheet, system)
+            validation_notice = render_validation_notice(i18n, violations)
 
             if as_.strip().lower() == "companion":
                 record = await self._npcs.create_companion(
@@ -124,7 +127,7 @@ class CharcardTools:
                 )
                 await self._services.characters.save_character(_companion_uid(record.id), ctx.chat_key, sheet)
                 lore = await self._import_card_lore(ctx, card)
-                return i18n.t(
+                result = i18n.t(
                     "charcard.tools.import.done_companion",
                     name=final_name,
                     id=record.id,
@@ -132,17 +135,19 @@ class CharcardTools:
                     stats=_key_stats(sheet),
                     lore=lore,
                 )
+                return f"{result}\n{validation_notice}" if validation_notice else result
 
             # Default: the acting player plays AS the card -- save + set active under their own uid.
             await self._services.characters.save_character(ctx.uid(), ctx.chat_key, sheet)
             lore = await self._import_card_lore(ctx, card)
-            return i18n.t(
+            result = i18n.t(
                 "charcard.tools.import.done_pc",
                 name=final_name,
                 system=sheet.system,
                 stats=_key_stats(sheet),
                 lore=lore,
             )
+            return f"{result}\n{validation_notice}" if validation_notice else result
         except Exception as exc:
             return i18n.t("charcard.tools.import.failed", error=str(exc))
 

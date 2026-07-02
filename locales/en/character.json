@@ -1,3 +1,7 @@
 {
-  "character.unknown_template": "Unknown character template: {template_name}"
+  "character.unknown_template": "Unknown character template: {template_name}",
+  "character.validation.notice": "Rule validation adjusted the sheet: {items}",
+  "character.validation.clamped_item": "{path} {original} -> {corrected} (limit {limit}; {code})",
+  "character.validation.budget_item": "{path} spent {value}, budget {limit} ({code})",
+  "character.validation.separator": "; "
 }

@@ -41,6 +41,35 @@ def validate_sheet(sheet: CharacterSheet, system: str | None = None) -> tuple[Ch
     return clamped, violations
 
 
+def render_validation_notice(i18n: Any, violations: list[SheetViolation]) -> str:
+    if not violations:
+        return ""
+    rendered = []
+    for violation in violations:
+        if violation.corrected is None:
+            rendered.append(
+                i18n.t(
+                    "character.validation.budget_item",
+                    code=violation.code,
+                    path=violation.path,
+                    value=violation.original,
+                    limit=violation.limit,
+                )
+            )
+        else:
+            rendered.append(
+                i18n.t(
+                    "character.validation.clamped_item",
+                    code=violation.code,
+                    path=violation.path,
+                    original=violation.original,
+                    corrected=violation.corrected,
+                    limit=violation.limit,
+                )
+            )
+    return i18n.t("character.validation.notice", items=i18n.t("character.validation.separator").join(rendered))
+
+
 def _validate_coc_sheet(sheet: CharacterSheet, pack: RulePack, violations: list[SheetViolation]) -> None:
     constraints = pack.creation_constraints
     characteristics = constraints.get("characteristics") or {}

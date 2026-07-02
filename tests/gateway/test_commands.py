@@ -442,3 +442,18 @@ async def test_sheet_command_with_oversized_dice_expr_returns_a_notice_not_a_cra
     reply = await router.dispatch(ctx, ".st 力量+9999d6")
     assert isinstance(reply, str)  # no d20.TooManyRolls traceback
     assert "9999d6" in reply  # localized invalid-expression notice
+
+
+async def test_sheet_command_clamps_values_through_rule_validation():
+    services = _services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:t", user_id="u1", locale="en")
+    await router.dispatch(ctx, ".coc")
+
+    reply = await router.dispatch(ctx, ".st STR999")
+
+    assert reply is not None
+    assert "力量=90" in reply
+    assert "attribute_above_max" in reply
+    character = await services.characters.get_character("u1", "cli:dm:t")
+    assert character.attributes["STR"] == 90

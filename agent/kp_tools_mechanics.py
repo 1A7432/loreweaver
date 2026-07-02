@@ -40,6 +40,7 @@ from agent.context import AgentCtx
 from agent.services import Services
 from agent.tools import tool
 from core.character_manager import CharacterSheet
+from core.character_rules import render_validation_notice, validate_sheet
 from core.dice_engine import DiceResult, coc_rank_label
 
 # COC7 base-attribute names, recognized by `skill_check` so "STR"/"POW"/...
@@ -153,11 +154,12 @@ class CharacterTools:
             else:
                 character = CharacterSheet(name=name, system=system_name)
 
+            character, violations = validate_sheet(character, template_key)
             await self.services.characters.save_character(ctx.uid(), ctx.chat_key, character)
 
             attrs = character.attributes
             if system_name == "CoC":
-                return i18n.t(
+                result = i18n.t(
                     "kp_tools.character.create.success_coc",
                     name=name,
                     STR=attrs.get("STR", "?"),
@@ -176,16 +178,19 @@ class CharacterTools:
                     MP=attrs.get("MP", "?"),
                     MPMAX=attrs.get("MPMAX", "?"),
                 )
-            return i18n.t(
-                "kp_tools.character.create.success_dnd",
-                name=name,
-                STR=attrs.get("STR", "?"),
-                DEX=attrs.get("DEX", "?"),
-                CON=attrs.get("CON", "?"),
-                INT=attrs.get("INT", "?"),
-                WIS=attrs.get("WIS", "?"),
-                CHA=attrs.get("CHA", "?"),
-            )
+            else:
+                result = i18n.t(
+                    "kp_tools.character.create.success_dnd",
+                    name=name,
+                    STR=attrs.get("STR", "?"),
+                    DEX=attrs.get("DEX", "?"),
+                    CON=attrs.get("CON", "?"),
+                    INT=attrs.get("INT", "?"),
+                    WIS=attrs.get("WIS", "?"),
+                    CHA=attrs.get("CHA", "?"),
+                )
+            notice = render_validation_notice(i18n, violations)
+            return f"{result}\n{notice}" if notice else result
         except Exception as exc:
             return i18n.t("kp_tools.character.create.failed", error=str(exc))
 
@@ -273,12 +278,16 @@ class CharacterTools:
 
             old_value = character.skills.get(target_skill, i18n.t("kp_tools.character.value_unset"))
             character.skills[target_skill] = value
+            character, violations = validate_sheet(character, character.system)
+            new_value = character.skills.get(target_skill, value)
 
             await characters.save_character(ctx.uid(), ctx.chat_key, character)
 
-            return i18n.t(
-                "kp_tools.character.skill.updated", name=character.name, skill=target_skill, old=old_value, new=value
+            result = i18n.t(
+                "kp_tools.character.skill.updated", name=character.name, skill=target_skill, old=old_value, new=new_value
             )
+            notice = render_validation_notice(i18n, violations)
+            return f"{result}\n{notice}" if notice else result
         except Exception as exc:
             return i18n.t("kp_tools.character.skill.failed", error=str(exc))
 
@@ -300,30 +309,20 @@ class CharacterTools:
             old_value = character.attributes.get(attribute, i18n.t("kp_tools.character.value_unset"))
             character.attributes[attribute] = value
 
-            # COC: changing POW/CON/SIZ auto-recomputes the derived attributes.
-            if character.system == "CoC":
-                if attribute == "POW":
-                    # SANMAX is the CoC7e sanity cap 99 - Cthulhu Mythos (default 0 -> 99),
-                    # not POW; starting SAN still tracks POW. Matches rulepack `_coc_sanmax`.
-                    character.attributes["SANMAX"] = 99 - character.skills.get("克苏鲁神话", 0)
-                    character.attributes["SAN"] = value
-                    character.attributes["MPMAX"] = value // 5
-                    character.attributes["MP"] = value // 5
-                elif attribute in ("CON", "SIZ"):
-                    con = character.attributes.get("CON", 50)
-                    siz = character.attributes.get("SIZ", 50)
-                    character.attributes["HPMAX"] = (con + siz) // 10
-                    character.attributes["HP"] = (con + siz) // 10
+            character, violations = validate_sheet(character, character.system)
+            new_value = character.attributes.get(attribute, value)
 
             await characters.save_character(ctx.uid(), ctx.chat_key, character)
 
-            return i18n.t(
+            result = i18n.t(
                 "kp_tools.character.attribute.updated",
                 name=character.name,
                 attribute=attribute,
                 old=old_value,
-                new=value,
+                new=new_value,
             )
+            notice = render_validation_notice(i18n, violations)
+            return f"{result}\n{notice}" if notice else result
         except Exception as exc:
             return i18n.t("kp_tools.character.attribute.failed", error=str(exc))
 
