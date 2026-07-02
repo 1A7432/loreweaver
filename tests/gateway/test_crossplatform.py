@@ -333,6 +333,96 @@ async def test_runner_hub_path_broadcasts_turn_and_keeps_room_reply_to_origin() 
     assert adapter.sends == []
 
 
+async def test_private_reply_command_reaches_only_origin_not_other_room_members() -> None:
+    # `.model key` echoes the (masked) API key -- a `private_reply` command
+    # (gateway.commands.CommandSpec.private_reply). `run_turn` must deliver its
+    # reply ONLY to the invoking connection (unicast via `Member.deliver`), never
+    # `hub.publish` it to the rest of the room.
+    hub = RoomHub()
+    services = _services(_kp_rolls_then_replies)
+    toolset = build_kp_toolset(services)
+    router = CommandRouter(services)
+
+    adapter = FakeAdapter()
+    chat_source = SessionSource(
+        platform="discord", chat_type="group", chat_id="c-priv", user_id="u-priv", user_name="Nora", message_id="m-priv"
+    )
+    chat_member = AdapterMember(adapter, chat_source, "R-priv", locale="en")
+    origin_member = RecordingWsMember(member_id="term-priv", name="Keeper")
+    bystander_member = RecordingWsMember(member_id="term-bystander", name="Bystander")
+    await hub.subscribe("R-priv", chat_member)
+    await hub.subscribe("R-priv", origin_member)
+    await hub.subscribe("R-priv", bystander_member)
+    origin_member.events.clear()
+    bystander_member.events.clear()
+    adapter.sends.clear()
+
+    # `platform="cli"` is always master (`_AUTO_MASTER_PLATFORMS`) AND a "local"
+    # channel (`_ROOM_LOCAL_PLATFORMS`) -- the two gates `.model key` requires.
+    ctx = AgentCtx(chat_key="R-priv", user_id="cli:keeper", platform="cli", locale="en")
+    await run_turn(
+        hub,
+        services,
+        ctx,
+        ".model key sk-supersecret-value-9999",
+        command_router=router,
+        toolset=toolset,
+        censor=Censor(),
+        origin=origin_member,
+        echo_exclude=None,
+    )
+
+    # The masked-key reply reached the origin connection...
+    origin_replies = [e for e in origin_member.events if e.kind == "narrative" and e.speaker == "system"]
+    assert any("sk-s...9999" in e.text for e in origin_replies)
+    # ...and reached NEITHER the other terminal member NOR the chat channel.
+    assert all(e.kind != "narrative" or e.speaker != "system" for e in bystander_member.events)
+    assert all("sk-s...9999" not in text for text in adapter.texts)
+    assert adapter.sends == []
+
+
+async def test_normal_command_reply_still_broadcasts_to_every_room_member() -> None:
+    # Sanity/contrast: a command WITHOUT `private_reply` set (e.g. `.roll`) keeps
+    # broadcasting its reply to every member of the room, as before this fix.
+    hub = RoomHub()
+    services = _services(_kp_rolls_then_replies)
+    toolset = build_kp_toolset(services)
+    router = CommandRouter(services)
+
+    adapter = FakeAdapter()
+    chat_source = SessionSource(
+        platform="discord", chat_type="group", chat_id="c-pub", user_id="u-pub", user_name="Nora", message_id="m-pub"
+    )
+    chat_member = AdapterMember(adapter, chat_source, "R-pub", locale="en")
+    origin_member = RecordingWsMember(member_id="term-pub")
+    bystander_member = RecordingWsMember(member_id="term-pub-2", name="Bystander")
+    await hub.subscribe("R-pub", chat_member)
+    await hub.subscribe("R-pub", origin_member)
+    await hub.subscribe("R-pub", bystander_member)
+    origin_member.events.clear()
+    bystander_member.events.clear()
+    adapter.sends.clear()
+
+    ctx = AgentCtx(chat_key="R-pub", user_id="cli:keeper", platform="cli", locale="en")
+    seed_dice(7)
+    await run_turn(
+        hub,
+        services,
+        ctx,
+        ".r 1d20",
+        command_router=router,
+        toolset=toolset,
+        censor=Censor(),
+        origin=origin_member,
+        echo_exclude=None,
+    )
+
+    origin_reply = next(e for e in origin_member.events if e.kind == "narrative" and e.speaker == "system")
+    bystander_reply = next(e for e in bystander_member.events if e.kind == "narrative" and e.speaker == "system")
+    assert origin_reply.text == bystander_reply.text
+    assert origin_reply.text in adapter.texts
+
+
 class _BoomToolset:
     """A toolset whose only tool always raises — stands in for an adversarial turn."""
 

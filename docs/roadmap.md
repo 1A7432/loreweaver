@@ -6,14 +6,21 @@ Loreweaver is young and built largely by one person with AI assistance. This is 
 
 The deterministic engine — dice (on `d20`), CoC/DnD success levels, character math, rule validation, the game clock — is the solid core, covered by a deterministic, offline test suite. The terminal (OpenTUI) client is the polished path; the React web client speaks the same [protocol](protocol.md). The chat-platform adapters (Discord · Telegram · QQ · Feishu) are implemented and offline-unit-tested but **not yet verified against a live platform**. SSH is experimental.
 
-## Recent focus — foundations
+## Foundations — done
 
-Getting the base right so the project installs cleanly, behaves correctly, and is safe to run for a small group: `pip`-installable packaging, uniform enforcement of the player/keeper permission distinction across every command surface, character-sheet edit correctness, configurable (and honestly documented) content moderation, and a first real-model red-line evaluation. The unglamorous things that have to be right before breadth is worth adding.
+A hardening pass just landed the unglamorous things that have to be right before breadth is worth adding — the project now installs cleanly, behaves correctly, and is safer to run for a small group:
+
+- **Installable.** The wheel ships every package plus the runtime data (locales, rulepacks), so `pip install` works from a clean environment — not just from a source checkout.
+- **Permission model.** The player/keeper distinction is now enforced on *every* command surface (it previously held only on the admin frames — a player key could run keeper-only commands over the terminal). Replies that expose secrets — a masked API key, keeper-only lore — are scoped to the caller, not broadcast to the room.
+- **Character correctness.** Editing a skill/attribute no longer heals a wounded investigator, and creation derives the right starting vitals (full HP/MP, SAN = min(POW, SANMAX)); every stat-set path is clamped to the rulepack.
+- **Honest moderation.** The content filter ships OFF with no bundled wordlist (configurable), and the docs say so plainly instead of implying built-in moderation.
+- **Real-model red-line gate.** A nightly job runs a real (cheap) model through the turn pipeline and fails on **leak rate** (verbatim *and* paraphrase sentinels for keeper secrets) or **dice-first misses** (a check that should have rolled, didn't) — the first automated guardian of the two claims the whole project rests on. (See [below](#offline-tests-vs-real-model-quality) for why this is separate from the offline suite.)
+- **Transport + housekeeping.** WS handshake timeout, a global connection cap, and optional TLS (with reverse-proxy guidance); CI on Python 3.11 *and* 3.12; dead code and stale references cleared out.
 
 ## Near-term
 
-- **Real-model red-line evaluation in CI.** The offline suite proves the deterministic machinery with a *scripted* Keeper (see [below](#offline-tests-vs-real-model-quality)); a real model's discretion needs its own measurement. A nightly job runs a real (cheap) model through the turn pipeline and gates on two metrics: **leak rate** (verbatim *and* paraphrase sentinels for keeper secrets) and **dice-first compliance** (a check that should have rolled, did). This is the only automated guardian of the two claims the whole project rests on.
 - **Live-test one chat adapter end to end.** Pick one (QQ is the most complete) and drive it against the real platform until it genuinely works; keep the others marked experimental rather than implying they're done.
+- **Multiplayer polish.** Now that the permission model is enforced, tighten the remaining networked-play rough edges (a real bot-loop guard, richer late-joiner state) so a room among trusted people is genuinely comfortable.
 
 ## The bigger arc — the world engine
 
@@ -32,7 +39,7 @@ An alternative is to keep secrets *out* of the base prompt and have the Keeper p
 
 ## Offline tests vs. real-model quality
 
-Worth stating plainly, because green CI is easy to over-read: the offline suite is deterministic and uses a *scripted* Keeper. It rigorously proves the deterministic machinery — the keeper/player knowledge redaction, the sub-actor prompt isolation, real seeded dice, the command surface — and it will catch a regression in any of those. It **cannot** prove that a live model refrains from leaking a secret it is shown, or that it rolls before it narrates; those are model-behavior properties, and they are exactly what the near-term real-model evaluation exists to measure. Read "CI is green" as *the engine is correct*, not *the Keeper is good*.
+Worth stating plainly, because green CI is easy to over-read: the offline suite is deterministic and uses a *scripted* Keeper. It rigorously proves the deterministic machinery — the keeper/player knowledge redaction, the sub-actor prompt isolation, real seeded dice, the command surface — and it will catch a regression in any of those. It **cannot** prove that a live model refrains from leaking a secret it is shown, or that it rolls before it narrates; those are model-behavior properties, and they are exactly what the real-model red-line gate (now running nightly) exists to measure. Read "CI is green" as *the engine is correct*, not *the Keeper is good*.
 
 ## How to help
 

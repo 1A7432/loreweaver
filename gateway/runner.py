@@ -58,7 +58,14 @@ class GatewayRunner:
         # `docs/deploy.md` "Content moderation") unless a caller injects one (tests).
         # With nothing configured this is an explicit no-op, not a fake wordlist.
         self.censor = censor if censor is not None else censor_from_settings(services.settings.censor)
-        self.botlist = Botlist()
+        # The SAME Botlist instance `.botlist add` (`CommandRouter.cmd_botlist`)
+        # mutates -- never a separate copy, or a runtime addition would silently not
+        # take effect on this pre-LLM gate. See `gateway.ops.Botlist` for why this
+        # manual list exists alongside the platform-native `source.is_bot` check below.
+        # `getattr` falls back to a private, empty `Botlist` for a non-`CommandRouter`
+        # test double injected as `command_router` (no `.botlist` attribute) so those
+        # tests are unaffected; production always goes through a real `CommandRouter`.
+        self.botlist = getattr(self.command_router, "botlist", None) or Botlist()
         # Per-channel AdapterMember registry (keyed by the channel's own
         # chat_key) so repeat messages from a channel reuse one hub member.
         self._members: dict[str, AdapterMember] = {}

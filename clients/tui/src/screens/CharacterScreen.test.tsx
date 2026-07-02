@@ -313,6 +313,13 @@ describe("CharacterScreen", () => {
 
     expect(client.sent).toContain(".dnd 米拉")
     expect(client.sent).toContain(".st 力量8 敏捷8 体质8 智力8 感知8 魅力8")
+    // `.dnd`/`.coc` seeds DEFAULT characteristics (deriving current HP/MP/SAN from
+    // those); `.st` then overwrites the characteristics but -- being an in-play EDIT
+    // -- preserves the (now stale) current vitals instead of re-deriving them. A
+    // trailing finalize word re-derives current HP/MP/SAN to their maxima for the
+    // manually-chosen characteristics, so the finished character isn't left with
+    // default-derived vitals. Order matters: create, then set attrs, then finalize.
+    expect(client.sent).toEqual([".dnd 米拉", ".st 力量8 敏捷8 体质8 智力8 感知8 魅力8", ".st 定稿"])
 
     await act(async () => {
       mockInput.pressEscape()

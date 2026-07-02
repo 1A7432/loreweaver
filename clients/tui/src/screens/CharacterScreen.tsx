@@ -271,6 +271,13 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
     const trimmed = nameRef.current.trim()
     client.sendInput(trimmed ? `.${system} ${trimmed}` : `.${system}`)
     client.sendInput(`.st ${defs.map((def) => `${def.label}${attrs[def.key] ?? def.min}`).join(" ")}`)
+    // `.coc`/`.dnd` seeds the sheet with DEFAULT characteristics (deriving current
+    // HP/MP/SAN from those), then `.st` overwrites them with the manually-chosen
+    // ones -- but `.st` validates as an in-play EDIT (preserve current vitals, never
+    // auto-heal), so without this the finished character keeps the DEFAULT-derived
+    // vitals instead of full HP/MP and starting SAN for the CHOSEN characteristics.
+    // `.st 定稿` re-derives current HP/MP/SAN to their maxima for the final sheet.
+    client.sendInput(`.st 定稿`)
     setPendingName(trimmed)
     setCreateNote("已发送 → 手动角色")
     beginRoll("manual")

@@ -298,14 +298,34 @@ def requires_at_mention(chat_type: str) -> bool:
 
 
 class Botlist:
+    """Manually curated anti-loop ignore list, keyed by ``SessionSource.user_key()``
+    (``"{platform}:{user_id}"``).
+
+    ``gateway.runner.GatewayRunner`` consults ``is_bot`` on every inbound message
+    ALONGSIDE ``SessionSource.is_bot`` (see its ``on_inbound``): the platform-native
+    flag covers adapters that mark a message's author as a bot (Discord); this list
+    covers the rest (Telegram/Feishu/QQ-OneBot none currently populate ``is_bot``,
+    so a second bot sharing one of those rooms would otherwise be treated as an
+    ordinary player and the two could loop off each other's replies forever).
+    Populated at runtime via the ``.botlist add`` keeper command
+    (``gateway.commands.CommandRouter.cmd_botlist``); process-lifetime only, not
+    persisted, matching ``RateLimiter``'s in-memory-only precedent.
+    """
+
     def __init__(self, ids: set[str] | None = None) -> None:
         self._ids = set() if ids is None else set(ids)
 
     def add(self, bot_id: str) -> None:
         self._ids.add(bot_id)
 
+    def remove(self, bot_id: str) -> None:
+        self._ids.discard(bot_id)
+
     def is_bot(self, sender_id: str) -> bool:
         return sender_id in self._ids
+
+    def list_ids(self) -> list[str]:
+        return sorted(self._ids)
 
 
 class PrivilegeLevel(IntEnum):

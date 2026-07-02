@@ -206,6 +206,20 @@ def test_botlist_ignores_added_bot_ids() -> None:
     assert botlist.is_bot("bot:2")
 
 
+def test_botlist_remove_and_list_ids() -> None:
+    botlist = Botlist({"onebot:1", "onebot:2"})
+
+    assert botlist.list_ids() == ["onebot:1", "onebot:2"]
+
+    botlist.remove("onebot:1")
+    assert not botlist.is_bot("onebot:1")
+    assert botlist.list_ids() == ["onebot:2"]
+
+    # Removing an id that was never added is a no-op, not an error.
+    botlist.remove("never-added")
+    assert botlist.list_ids() == ["onebot:2"]
+
+
 def test_content_sanitizer_removes_mass_mentions_and_rewrites_url() -> None:
     sanitizer = ContentSanitizer()
 

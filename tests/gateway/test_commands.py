@@ -539,6 +539,62 @@ async def test_sheet_command_clamps_values_through_rule_validation():
     assert character.attributes["STR"] == 90
 
 
+async def test_manual_create_flow_leaves_stale_vitals_until_finalize_word():
+    """Mirrors the TUI manual-create flow (`CharacterScreen.submitManual`): `.coc`
+    first creates a sheet from randomly-ROLLED (i.e. not the manually-chosen)
+    characteristics -- deriving current HP/MP/SAN from those -- then `.st`
+    overwrites the characteristics with the manually-chosen ones. `.st` validates
+    with `initialize_vitals=False` (in-play EDIT semantics: preserve, never
+    auto-heal), so without an explicit finalize step the finished character keeps
+    the ROLLED-derived vitals instead of full HP/MP and starting SAN for the
+    CHOSEN characteristics. The `.st finalize` / `.st 定稿` word re-derives them.
+    """
+    services = _services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:manual", user_id="u1", locale="en")
+
+    seed_dice(42)
+    await router.dispatch(ctx, ".coc Manual")
+    rolled = await services.characters.get_character("u1", "cli:dm:manual")
+    assert (rolled.attributes["CON"], rolled.attributes["SIZ"], rolled.attributes["POW"]) == (55, 50, 15)
+    assert rolled.attributes["HP"] == rolled.attributes["HPMAX"] == 10  # full HP for the rolled characteristics
+    assert rolled.attributes["SAN"] == 15  # starting SAN = min(POW, SANMAX) for the rolled POW
+
+    # Manual mode now overwrites the characteristics with the player's chosen ones.
+    await router.dispatch(ctx, ".st CON90 SIZ90 POW90")
+    stale = await services.characters.get_character("u1", "cli:dm:manual")
+    assert (stale.attributes["HPMAX"], stale.attributes["MPMAX"], stale.attributes["SANMAX"]) == (18, 18, 99)
+    # Bug: current HP/MP/SAN are still the OLD (rolled-characteristics) values --
+    # `.st` preserved them instead of deriving from the chosen CON/SIZ/POW.
+    assert (stale.attributes["HP"], stale.attributes["MP"], stale.attributes["SAN"]) == (10, 3, 15)
+
+    reply = await router.dispatch(ctx, ".st finalize")
+    assert reply is not None
+    assert "Manual" in reply
+
+    finalized = await services.characters.get_character("u1", "cli:dm:manual")
+    assert finalized.attributes["HP"] == 18
+    assert finalized.attributes["MP"] == 18
+    assert finalized.attributes["SAN"] == 90  # min(POW=90, SANMAX=99)
+
+
+async def test_sheet_finalize_word_is_locale_agnostic_and_localized_reply():
+    services = _services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:manual_zh", user_id="u1", locale="zh")
+
+    seed_dice(42)
+    await router.dispatch(ctx, ".coc 小明")
+    await router.dispatch(ctx, ".st 体质90 体型90 意志90")
+
+    reply = await router.dispatch(ctx, ".st 定稿")
+    assert reply is not None
+    assert "小明" in reply
+    character = await services.characters.get_character("u1", "cli:dm:manual_zh")
+    assert character.attributes["HP"] == 18
+    assert character.attributes["SAN"] == 90
+
+
 async def test_genchar_command_builds_and_validates_sheet_from_description():
     services = build_services(
         Settings(),
@@ -572,3 +628,64 @@ async def test_genchar_command_builds_and_validates_sheet_from_description():
     assert character.occupation == "Investigator"
     assert character.skills["图书馆"] >= 60
     assert character.attributes["SAN"] <= character.attributes["SANMAX"]
+
+
+# ---------------------------------------------------------------------------
+# `.botlist` — anti-loop bot-ignore list (`gateway.ops.Botlist`). The command
+# mutates `router.botlist`, the SAME instance `GatewayRunner.on_inbound` (or any
+# caller holding the router) consults, so a successful `.botlist add` takes
+# effect immediately for that router's lifetime (see `gateway.runner`).
+# ---------------------------------------------------------------------------
+
+
+async def test_botlist_add_list_remove_via_command():
+    services = _services()
+    router = CommandRouter(services)
+    cli = AgentCtx(chat_key="cli:dm:t", user_id="kp", locale="en")
+    i18n = services.i18n.with_locale("en")
+
+    empty = await router.dispatch(cli, ".botlist list")
+    assert empty == i18n.t("commands.botlist.empty")
+
+    added = await router.dispatch(cli, ".botlist add onebot:114514")
+    assert added == i18n.t("commands.botlist.added", id="onebot:114514")
+    assert router.botlist.is_bot("onebot:114514")  # visible to the runner's anti-loop gate
+
+    shown = await router.dispatch(cli, ".botlist")
+    assert shown == i18n.t("commands.botlist.show", ids="onebot:114514")
+
+    removed = await router.dispatch(cli, ".botlist remove onebot:114514")
+    assert removed == i18n.t("commands.botlist.removed", id="onebot:114514")
+    assert not router.botlist.is_bot("onebot:114514")
+
+    usage = await router.dispatch(cli, ".botlist add")
+    assert usage == i18n.t("commands.botlist.usage")
+
+
+async def test_botlist_command_denied_for_ordinary_group_member():
+    services = _services()
+    router = CommandRouter(services)
+    source = SimpleNamespace(chat_type="group")
+    player = AgentCtx(
+        chat_key="discord:group:c-1",
+        user_id="discord:u-1",
+        platform="discord",
+        locale="en",
+        extra={"source": source, "raw": {}},
+    )
+    i18n = services.i18n.with_locale("en")
+
+    denied = await router.dispatch(player, ".botlist add discord:evilbot")
+    assert denied == i18n.t("rooms.denied")
+    assert not router.botlist.is_bot("discord:evilbot")  # nothing mutated
+
+
+async def test_botlist_zh_dialect_alias_adds_id():
+    services = _services()
+    router = CommandRouter(services)
+    cli = AgentCtx(chat_key="cli:dm:t", user_id="kp", locale="zh")
+    i18n = services.i18n.with_locale("zh")
+
+    added = await router.dispatch(cli, "。机器人名单 add qq:888")
+    assert added == i18n.t("commands.botlist.added", id="qq:888")
+    assert router.botlist.is_bot("qq:888")

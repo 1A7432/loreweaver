@@ -16,7 +16,7 @@ from core.character_rules import render_validation_notice, validate_sheet
 from core.coc_rules import DEFAULT_COC_RULE
 from core.dice_engine import DiceResult, coc_rank_label
 from core.rulepacks import RulePack, load_rulepack
-from gateway.ops import PrivilegeLevel
+from gateway.ops import Botlist, PrivilegeLevel
 from gateway.rooms import clear_binding, get_binding, mint_room_id, session_key_for_room, set_binding
 from infra.i18n import I18n, get_i18n
 from infra.providers import (
@@ -163,6 +163,18 @@ _MODEL_SET_WORDS = {"set", "use", "switch", "设置", "設置", "切换", "切�
 _MODEL_KEY_WORDS = {"key", "apikey", "token", "密钥", "密鑰"}
 _MODEL_RESET_WORDS = {"reset", "clear", "revert", "重置", "清除"}
 
+# `.botlist` subcommand vocabularies (EN + a couple of CN synonyms) -- anti-loop
+# bot-ignore list (`gateway.ops.Botlist`).
+_BOTLIST_ADD_WORDS = {"add", "new", "添加", "新增"}
+_BOTLIST_REMOVE_WORDS = {"remove", "rm", "del", "delete", "移除", "删除", "刪除"}
+_BOTLIST_LIST_WORDS = {"", "list", "ls", "show", "列表", "查看"}
+
+# `.st`/`.sheet` finalize word: re-derive current HP/MP/SAN to their maxima for
+# the sheet's CURRENT characteristics (CREATION semantics -- see `cmd_sheet`).
+# Deliberately locale-agnostic (checked regardless of `ctx.locale`), matching the
+# other reserved `.st` subcommand words above (`clr`/`del`/...).
+_SHEET_FINALIZE_WORDS = {"finalize", "定稿", "初始化"}
+
 # Privilege inputs for `.room` gating. Chat platforms rarely surface a reliable
 # admin flag through the generic InboundMessage.raw, so the gate treats the local
 # CLI/terminal operator and private/DM sessions as owners of their own session,
@@ -197,6 +209,13 @@ class CommandSpec:
     slash: dict | None
     help_key: str
     required_level: int = 0
+    # A command whose reply can contain a keeper secret (masked API key, keeper-only
+    # lore, a room join key that grants access) must never be broadcast to the whole
+    # room via `hub.publish` -- see `gateway.turn.run_turn`, which delivers a
+    # `private_reply` command's reply ONLY to the invoking connection (unicast via
+    # `Member.deliver`), falling back to the normal broadcast only when there is no
+    # `origin` member (e.g. a non-hub transport).
+    private_reply: bool = False
 
 
 @dataclass
@@ -237,6 +256,7 @@ class CommandRouter:
         *,
         keystore: Any = None,
         hub: Any = None,
+        botlist: Botlist | None = None,
     ) -> None:
         self.services = services
         self.prefixes = prefixes
@@ -246,6 +266,12 @@ class CommandRouter:
         # (those subcommands then degrade to a localized notice).
         self.keystore = keystore
         self.hub = hub
+        # The anti-loop ignore list `.botlist` mutates (see `gateway.ops.Botlist`).
+        # `GatewayRunner` reads THIS SAME instance (`self.command_router.botlist`)
+        # for its per-message pre-LLM gate, so there is exactly one Botlist per
+        # router/runner pair -- never two independently-mutated copies. A caller
+        # may inject a pre-built list (e.g. seeded in tests); default is empty.
+        self.botlist = botlist if botlist is not None else Botlist()
         self._specs = self._build_specs()
         self._alias_maps = {
             "en": self._build_alias_map("en"),
@@ -401,6 +427,21 @@ class CommandRouter:
         if args.casefold() in {"clr", "clear", "del", "delete"}:
             await ctx.services.characters.delete_character(ctx.user_id, ctx.chat_key, character.name)
             return ctx.i18n.t("commands.sheet.deleted", name=character.name)
+        if args.casefold() in _SHEET_FINALIZE_WORDS:
+            # A manual build (`.coc`/`.dnd` with DEFAULT characteristics, then one or
+            # more `.st` edits to the chosen ones) never re-derives current HP/MP/SAN:
+            # `.st` validates with `initialize_vitals=False` (in-play EDIT semantics —
+            # preserve, never heal) by design (see `core.character_rules.validate_sheet`).
+            # This finalize word is the CREATION-side re-derive: it forces the current
+            # vitals back to their maxima for the sheet's final characteristics, same as
+            # `.coc`/`.dnd`/`.genchar` do at birth. Safe to reuse mid-play too (a player
+            # who wants to top off HP/MP/SAN to the current max after e.g. levelling can
+            # invoke it deliberately) since it is the same explicit, opt-in verb.
+            character, violations = validate_sheet(character, character.system, initialize_vitals=True)
+            await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
+            result = ctx.i18n.t("commands.sheet.finalized", name=character.name)
+            notice = render_validation_notice(ctx.i18n, violations)
+            return f"{result}\n{notice}" if notice else result
 
         assignments = _parse_sheet_assignments(args)
         if not assignments:
@@ -534,6 +575,40 @@ class CommandRouter:
             await ctx.services.store.set(user_key="", store_key=f"bot_enabled.{ctx.chat_key}", value="0")
             return ctx.i18n.t("commands.bot.off")
         return ctx.i18n.t("commands.bot.status")
+
+    async def cmd_botlist(self, ctx: CommandCtx) -> str:
+        """`.botlist [add|remove|list] <bot_id>` — maintain the anti-loop bot-ignore
+        list (`gateway.ops.Botlist`) that `GatewayRunner.on_inbound` consults on every
+        inbound message. `<bot_id>` is a `SessionSource.user_key()` value, i.e.
+        `"{platform}:{user_id}"` (e.g. `onebot:114514`) — the SAME identity string the
+        runner derives from every inbound message, so an id copied from `.room`/a
+        platform's own member list matches directly.
+
+        Discord already marks a bot author via `SessionSource.is_bot` (the adapter
+        reads the platform's own `author.bot` flag), so this command is mainly for
+        platforms whose adapter does not set that flag (Telegram/Feishu/QQ-OneBot):
+        without it, a second bot sharing one of those rooms looks like an ordinary
+        player and the two can loop off each other's replies forever.
+        """
+        parts = ctx.args.split(maxsplit=1)
+        sub = parts[0].casefold() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        if sub in _BOTLIST_ADD_WORDS:
+            if not rest:
+                return ctx.i18n.t("commands.botlist.usage")
+            self.botlist.add(rest)
+            return ctx.i18n.t("commands.botlist.added", id=rest)
+        if sub in _BOTLIST_REMOVE_WORDS:
+            if not rest:
+                return ctx.i18n.t("commands.botlist.usage")
+            self.botlist.remove(rest)
+            return ctx.i18n.t("commands.botlist.removed", id=rest)
+        if sub in _BOTLIST_LIST_WORDS:
+            ids = self.botlist.list_ids()
+            if not ids:
+                return ctx.i18n.t("commands.botlist.empty")
+            return ctx.i18n.t("commands.botlist.show", ids=", ".join(ids))
+        return ctx.i18n.t("commands.botlist.usage")
 
     async def cmd_help(self, ctx: CommandCtx) -> str:
         names = []
@@ -893,6 +968,17 @@ class CommandRouter:
             CommandSpec("draw", self.cmd_draw, ["draw"], ["draw", "抽牌"], None, "commands.help.draw"),
             CommandSpec("bot", self.cmd_bot_toggle, ["bot"], ["bot"], None, "commands.help.bot"),
             CommandSpec(
+                "botlist",
+                self.cmd_botlist,
+                ["botlist"],
+                ["botlist", "机器人名单", "機器人名單"],
+                None,
+                "commands.help.botlist",
+                # Same admin tier as `.room`/`.import`/`.module`: mutating the anti-loop
+                # ignore list is an operational control, not a player action.
+                required_level=int(PrivilegeLevel.GROUP_ADMIN),
+            ),
+            CommandSpec(
                 "report",
                 self.cmd_report,
                 ["report"],
@@ -908,7 +994,18 @@ class CommandRouter:
                 None,
                 "companion.commands.party.help",
             ),
-            CommandSpec("lore", self.cmd_lore, ["lore"], ["lore", "设定", "設定"], None, "worldbook.commands.lore.help"),
+            CommandSpec(
+                "lore",
+                self.cmd_lore,
+                ["lore"],
+                ["lore", "设定", "設定"],
+                None,
+                "worldbook.commands.lore.help",
+                # `.lore query`/`.lore add`/`.lore import` read or write keeper-only secret
+                # lore (see `cmd_lore`'s `_keeper` gate); a keeper's reply must not be
+                # broadcast to the whole room.
+                private_reply=True,
+            ),
             CommandSpec(
                 "import",
                 self.cmd_import,
@@ -935,8 +1032,25 @@ class CommandRouter:
                 None,
                 "commands.help.room",
                 required_level=int(PrivilegeLevel.GROUP_ADMIN),
+                # `.room open`/`.room link` replies carry a literal join key / session id
+                # that GRANTS room access -- broadcasting it would let every current member
+                # hand the room away. (`gateway.runner.GatewayRunner` already special-cases
+                # `.room` before it ever reaches `run_turn` on the chat-adapter path; this
+                # flag is what protects the direct `net.tui_server` path, which dispatches
+                # `.room` through `run_turn` like any other command.)
+                private_reply=True,
             ),
-            CommandSpec("model", self.cmd_model, ["model"], ["model", "模型"], None, "commands.help.model"),
+            CommandSpec(
+                "model",
+                self.cmd_model,
+                ["model"],
+                ["model", "模型"],
+                None,
+                "commands.help.model",
+                # `.model key` echoes a masked API key; `.model show`/`set`/`reset` also
+                # surface provider/base_url/key config. None of that belongs on the room bus.
+                private_reply=True,
+            ),
             CommandSpec("help", self.cmd_help, ["help", "h"], ["help", "帮助"], {"name": "help"}, "commands.help.help"),
         ]
 

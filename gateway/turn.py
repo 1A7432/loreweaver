@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from agent.context import AgentCtx
     from agent.services import Services
     from agent.tools import Toolset
-    from gateway.commands import CommandRouter
+    from gateway.commands import CommandRouter, CommandSpec
     from gateway.hub import Member, RoomHub
     from gateway.ops import Censor
 
@@ -91,6 +91,12 @@ async def run_turn(
     runs with no ``origin`` member but passes the companion's display name here so
     the room sees ``Silas: I cover the door`` rather than the raw ``companion:silas``.
 
+    A command turn whose matched ``gateway.commands.CommandSpec.private_reply`` is set
+    (e.g. ``.model key``/``.lore query``, which can echo a masked API key or keeper-only
+    secret lore) delivers its reply ONLY to ``origin`` via ``Member.deliver`` — never
+    ``hub.publish`` — so the rest of the room never sees it. With no ``origin`` (a
+    transport with no per-connection member) this falls back to the normal broadcast.
+
     On a real (non-command) AI-KP turn, once the KP's own narrative is published,
     this also gives the party's AI companions (M10) a chance to auto-act via
     ``gateway.director.run_director`` — a no-op outside combat / with `.party auto`
@@ -106,9 +112,16 @@ async def run_turn(
     await hub.publish(ctx.chat_key, Event.player_action(name=name, text=text), exclude=echo_exclude)
 
     result: KPTurnResult | None = None
+    matched_spec = _matched_command_spec(command_router, text, ctx.locale)
     command_reply = await command_router.dispatch(ctx, text)
     if command_reply is not None:
-        await hub.publish(ctx.chat_key, Event.narrative(speaker="system", text=command_reply, fmt="plain"))
+        reply_event = Event.narrative(speaker="system", text=command_reply, fmt="plain")
+        if matched_spec is not None and matched_spec.private_reply and origin is not None:
+            # Sensitive keeper-command reply (masked API key / keeper-only secret lore /
+            # a room join key): unicast to the invoking connection only, never broadcast.
+            await origin.deliver(reply_event)
+        else:
+            await hub.publish(ctx.chat_key, reply_event)
     else:
         review = (lambda value: censor.review(value).cleaned) if censor is not None else None
         result = await run_kp_turn(ctx, services, toolset, text, output_review=review)
@@ -127,6 +140,18 @@ async def run_turn(
 
     await publish_state(hub, services, ctx)
     return result
+
+
+def _matched_command_spec(command_router: CommandRouter, text: str, locale: str) -> CommandSpec | None:
+    """The ``CommandSpec`` ``text`` resolves to, or ``None`` for a non-command turn.
+
+    Reuses ``CommandRouter.resolve`` — the router's own accessor, not a re-implementation
+    of its prefix/alias parsing — purely to learn ``private_reply`` before dispatching;
+    ``command_router.dispatch`` performs the actual (identical) resolution again to run
+    the handler, so this never affects which handler runs or its result.
+    """
+    resolved = command_router.resolve(text, locale)
+    return resolved[0] if resolved is not None else None
 
 
 async def _run_companion_director(
