@@ -6,6 +6,8 @@ import { createClient, type AppClient } from "./client"
 import { GameView } from "./GameView"
 import { CharacterScreen } from "./screens/CharacterScreen"
 import { ConnectScreen } from "./screens/ConnectScreen"
+import { KeeperKeys } from "./screens/KeeperKeys"
+import { KeeperModel } from "./screens/KeeperModel"
 import { MainMenu } from "./screens/MainMenu"
 import { DEFAULT_THEME, themeOrder, themes, type ThemeName } from "./themes"
 
@@ -25,8 +27,8 @@ export interface AppProps {
   prefill?: AppPrefill
 }
 
-// Later stages add "keeper_*"; Stage 2 adds "character".
-type Screen = "connect" | "menu" | "game" | "character"
+// Stage 2 adds "character"; Stage 3 adds the keeper-only "keeper_keys" / "keeper_model".
+type Screen = "connect" | "menu" | "game" | "character" | "keeper_keys" | "keeper_model"
 
 const EMPTY_STATE: StateFrame = { type: FrameType.State, party: [], initiative: [], online: 0 }
 
@@ -118,6 +120,34 @@ export function App({ client: injected, prefill }: AppProps) {
     )
   }
 
+  // Keeper-only screens: guarded on the welcome role (the MainMenu only offers them
+  // to a keeper, and the server re-enforces role on every admin_* frame anyway).
+  if (screen === "keeper_keys" && welcome?.you.role === "keeper") {
+    return (
+      <KeeperKeys
+        client={client}
+        theme={theme}
+        themeName={themeName}
+        welcome={welcome}
+        stateFrame={stateFrame}
+        onBack={() => setScreen("menu")}
+      />
+    )
+  }
+
+  if (screen === "keeper_model" && welcome?.you.role === "keeper") {
+    return (
+      <KeeperModel
+        client={client}
+        theme={theme}
+        themeName={themeName}
+        welcome={welcome}
+        stateFrame={stateFrame}
+        onBack={() => setScreen("menu")}
+      />
+    )
+  }
+
   if (screen === "menu" && welcome) {
     return (
       <MainMenu
@@ -128,6 +158,8 @@ export function App({ client: injected, prefill }: AppProps) {
         presence={presence}
         onEnterGame={() => setScreen("game")}
         onCharacter={() => setScreen("character")}
+        onKeeperKeys={() => setScreen("keeper_keys")}
+        onKeeperModel={() => setScreen("keeper_model")}
       />
     )
   }

@@ -16,6 +16,8 @@ export interface MainMenuProps {
   presence?: PresenceFrame
   onEnterGame: () => void
   onCharacter: () => void
+  onKeeperKeys: () => void
+  onKeeperModel: () => void
 }
 
 interface MenuItem {
@@ -28,7 +30,17 @@ interface MenuItem {
 // not a generic ▶.
 const CURSOR = "⚄"
 
-export function MainMenu({ welcome, theme, themeName, stateFrame, presence, onEnterGame, onCharacter }: MainMenuProps) {
+export function MainMenu({
+  welcome,
+  theme,
+  themeName,
+  stateFrame,
+  presence,
+  onEnterGame,
+  onCharacter,
+  onKeeperKeys,
+  onKeeperModel,
+}: MainMenuProps) {
   const [selected, setSelected] = useState(0)
   const [note, setNote] = useState<string>()
   const isKeeper = welcome.you.role === "keeper"
@@ -44,9 +56,9 @@ export function MainMenu({ welcome, theme, themeName, stateFrame, presence, onEn
   ]
   if (isKeeper) {
     items.push(
-      { label: "房间与邀请", keeper: true, run: () => setNote("房间与邀请 · 即将推出（第三阶段）") },
+      { label: "房间与邀请", keeper: true, run: () => onKeeperKeys() },
       { label: "导入模组", keeper: true, run: () => setNote("导入模组 · 即将推出（第四阶段）") },
-      { label: "模型 / 配置", keeper: true, run: () => setNote("模型 / 配置 · 即将推出（第三阶段）") },
+      { label: "模型 / 配置", keeper: true, run: () => onKeeperModel() },
     )
   }
 
