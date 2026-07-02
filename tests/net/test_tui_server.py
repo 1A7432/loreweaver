@@ -14,7 +14,9 @@ import asyncio
 import json
 import re
 
+import pytest
 import websockets
+from websockets.exceptions import ConnectionClosed
 
 from agent.context import AgentCtx, LocalFs
 from agent.kp_tools import build_kp_toolset
@@ -120,6 +122,76 @@ async def test_join_ignores_client_supplied_name_and_uses_keystore_identity():
             assert welcome["you"]["role"] == "player"
     finally:
         await server.close()
+
+
+# ---------------------------------------------------------------------------
+# Availability hardening: no handshake timeout on unauthenticated connections
+# and no connection-count cap let a peer exhaust server coroutines/fds before
+# ever authenticating (the rate limiter only applies AFTER `join`, in
+# `dispatch_input`). See `infra.config.TuiSettings`.
+# ---------------------------------------------------------------------------
+
+
+async def test_silent_connection_is_closed_after_the_join_handshake_timeout():
+    services = _services()
+    keystore = Keystore()
+    server = TuiServer(services, keystore, port=0, join_timeout=0.05)
+    url = await _start(server)
+    try:
+        async with websockets.connect(url) as ws:
+            # Never send `join`: the server must close us out after `join_timeout`
+            # instead of holding the connection open forever.
+            error = await _recv(ws)
+            assert error["type"] == "error"
+            assert error["code"] == "join_timeout"
+            assert error["message"]
+
+            with pytest.raises(ConnectionClosed):
+                await asyncio.wait_for(ws.recv(), timeout=_RECV_TIMEOUT)
+    finally:
+        await server.close()
+
+
+async def test_connection_over_the_cap_is_refused_and_closed():
+    services = _services()
+    keystore = Keystore()
+    key = keystore.add(room="capped", name="Alice")
+    server = TuiServer(services, keystore, port=0, max_connections=1)
+    url = await _start(server)
+    try:
+        # The first connection fills the (cap=1) slot and stays open.
+        ws_a, *_ = await _connect_and_join(url, key, "Alice")
+
+        # A second, simultaneous connection is over the cap: refused before
+        # `join` is even read, with `too_many_connections`, then closed.
+        async with websockets.connect(url) as ws_b:
+            error = await _recv(ws_b)
+            assert error["type"] == "error"
+            assert error["code"] == "too_many_connections"
+            assert error["message"]
+
+            with pytest.raises(ConnectionClosed):
+                await asyncio.wait_for(ws_b.recv(), timeout=_RECV_TIMEOUT)
+
+        # Freeing the slot lets a new connection back in.
+        await ws_a.close()
+        await asyncio.sleep(0.05)  # let the server-side `finally` decrement land
+        ws_c, welcome_c, *_ = await _connect_and_join(url, key, "Alice")
+        assert welcome_c["type"] == "welcome"
+        await ws_c.close()
+    finally:
+        await server.close()
+
+
+def test_build_ssl_context_is_none_when_unset_and_rejects_a_half_configured_pair():
+    from net.tui_server import _build_ssl_context
+
+    assert _build_ssl_context(Settings()) is None
+
+    half = Settings()
+    half.tui.tls_cert_path = "/tmp/does-not-matter.pem"
+    with pytest.raises(ValueError):
+        _build_ssl_context(half)
 
 
 async def test_oversized_input_is_truncated_before_the_turn():

@@ -3,6 +3,8 @@
   "tui.error.bad_frame": "消息格式有误。",
   "tui.error.rate_limited": "发送太快了，请稍等片刻再试。",
   "tui.error.server_error": "处理该回合时出现问题，请重试。",
+  "tui.error.join_timeout": "等待加入（join）消息超时。",
+  "tui.error.too_many_connections": "服务器已达到连接数上限，请稍后重试。",
   "tui.npc.unknown_name": "未知 NPC",
   "tui.admin.error.forbidden": "管理操作需要守秘人（keeper）密钥。",
   "tui.admin.error.unknown_provider": "未知的 LLM 提供方，请从提供方列表中选择。",

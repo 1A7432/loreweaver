@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import secrets
 import time
@@ -7,8 +8,13 @@ import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum, IntFlag
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from infra.i18n import t
+
+if TYPE_CHECKING:
+    from infra.config import CensorSettings
 
 _BOT_ENABLED_PREFIX = "bot_enabled."
 _BOT_ENABLED_VALUE = "1"
@@ -80,9 +86,6 @@ class CensorResult:
     disposition: CensorDisposition = CensorDisposition.ALLOW
 
 
-_DEFAULT_WORDLIST = {"badword": int(CensorLevel.DANGER)}
-
-
 def _normalize_for_match(text: str) -> tuple[str, list[int]]:
     """NFKC + casefold `text` per character.
 
@@ -120,8 +123,20 @@ def _compile_censor_word(word: str) -> re.Pattern[str] | None:
 
 
 class Censor:
+    """Bypass-resistant wordlist matcher (NFKC+casefold, de-obfuscation,
+    whole-word boundaries, offset-preserving masking -- see the module-level
+    helpers above).
+
+    `wordlist` is empty by default (``Censor()`` / ``Censor(None)``): with no
+    banned words compiled, ``review()`` takes its `not self._patterns` early
+    return on EVERY call, so an unconfigured `Censor` is an explicit no-op,
+    never a false impression of moderation. Build a real one via
+    `censor_from_settings`/`load_wordlist` (see `infra.config.CensorSettings`
+    and `docs/deploy.md` "Content moderation").
+    """
+
     def __init__(self, wordlist: dict[str, int] | None = None) -> None:
-        source = _DEFAULT_WORDLIST if wordlist is None else wordlist
+        source = wordlist or {}
         self._wordlist = {word: self._normalize_level(level) for word, level in source.items() if word}
         # Precompiled, normalization-aware matcher per banned word (skipping any that
         # reduce to nothing). Matching runs against a normalized copy of the input.
@@ -204,6 +219,69 @@ class Censor:
             cursor = end
         chunks.append(text[cursor:])
         return "".join(chunks)
+
+
+def load_wordlist(*, path: str = "", inline: str = "") -> dict[str, int]:
+    """Build a `Censor` wordlist from a JSON file and/or an inline spec.
+
+    Both blank (the default) returns `{}` -- `Censor(load_wordlist())` is then
+    the explicit no-op the empty-wordlist contract promises, never a stand-in
+    profanity list. `path` is a JSON file `{"word": level, ...}`; `inline` is
+    a comma-separated `word[:level],word2[:level2],...` list (env-var
+    friendly, no file needed). Both may be combined; `inline` entries win on a
+    key collision. See `infra.config.CensorSettings` for the deployer-facing
+    knobs this feeds (`censor_from_settings` wires them together).
+    """
+    wordlist: dict[str, int] = {}
+    if path:
+        wordlist.update(_load_wordlist_file(path))
+    if inline:
+        wordlist.update(_parse_inline_wordlist(inline))
+    return wordlist
+
+
+def censor_from_settings(settings: CensorSettings) -> Censor:
+    """Build the production `Censor` from `infra.config.CensorSettings`.
+
+    The single wiring point both `gateway.runner.GatewayRunner` and
+    `net.tui_server.TuiServer` use so a deployer's config actually reaches the
+    matcher -- with nothing configured this is `Censor({})`, the explicit
+    no-op (see `Censor`'s docstring), not a fake "badword"-only placeholder.
+    """
+    return Censor(load_wordlist(path=settings.wordlist_path, inline=settings.wordlist))
+
+
+def _load_wordlist_file(path: str) -> dict[str, int]:
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        # Operator/config misuse at startup, not user-facing chat text.
+        raise ValueError(f"censor wordlist file not readable: {path} ({exc})") from exc  # i18n-exempt
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"censor wordlist file is not valid JSON: {path} ({exc})") from exc  # i18n-exempt
+    if not isinstance(data, dict):
+        raise ValueError(f"censor wordlist file must be a JSON object of word -> level: {path}")  # i18n-exempt
+    return {str(word): _coerce_level(level) for word, level in data.items() if str(word).strip()}
+
+
+def _parse_inline_wordlist(inline: str) -> dict[str, int]:
+    wordlist: dict[str, int] = {}
+    for entry in inline.split(","):
+        word, _, level = entry.strip().partition(":")
+        word = word.strip()
+        if not word:
+            continue
+        wordlist[word] = _coerce_level(level.strip()) if level.strip() else int(CensorLevel.NOTICE)
+    return wordlist
+
+
+def _coerce_level(level: Any) -> int:
+    try:
+        return int(level)
+    except (TypeError, ValueError):
+        return int(CensorLevel.NOTICE)
 
 
 async def is_bot_enabled(store, chat_key: str) -> bool:
@@ -311,7 +389,9 @@ __all__ = [
     "PermissionGate",
     "PrivilegeLevel",
     "RateLimiter",
+    "censor_from_settings",
     "is_bot_enabled",
+    "load_wordlist",
     "requires_at_mention",
     "sanitize_outbound",
     "set_bot_enabled",

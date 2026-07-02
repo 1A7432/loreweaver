@@ -20,8 +20,10 @@ log while the KP session keeps continuing from server-side history. See
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import ssl
 import uuid
 from collections import deque
 from dataclasses import dataclass
@@ -37,9 +39,10 @@ from agent.services import Services
 from agent.tools import Toolset
 from gateway.commands import CommandRouter
 from gateway.hub import Event, RoomHub
-from gateway.ops import Censor, RateLimiter
+from gateway.ops import Censor, RateLimiter, censor_from_settings
 from gateway.session import SessionSource
 from gateway.turn import publish_state, run_turn
+from infra.config import Settings
 from infra.i18n import I18n, get_i18n
 from net.admin import handle_admin_frame, is_admin_frame
 from net.keystore import Keystore
@@ -108,6 +111,8 @@ class TuiServer:
         toolset: Toolset | None = None,
         censor: Censor | None = None,
         hub: RoomHub | None = None,
+        join_timeout: float | None = None,
+        max_connections: int | None = None,
     ) -> None:
         self.services = services
         self.keystore = keystore
@@ -115,7 +120,10 @@ class TuiServer:
         self.port = port
         self.command_router = command_router or CommandRouter(services)
         self.toolset = toolset or build_kp_toolset(services)
-        self.censor = censor or Censor()
+        # Built from `services.settings.censor` (see `infra.config.CensorSettings` /
+        # `docs/deploy.md` "Content moderation") unless a caller injects one (tests).
+        # With nothing configured this is an explicit no-op, not a fake wordlist.
+        self.censor = censor if censor is not None else censor_from_settings(services.settings.censor)
         self.rate_limiter = RateLimiter()
         # An injected hub lets this WS server share ONE bus with the chat
         # gateway (app.py combined mode); standalone it owns its own (back-compat).
@@ -125,6 +133,12 @@ class TuiServer:
         # itself broadcast over the wire.
         self.turns: deque[KPTurnResult] = deque(maxlen=50)
         self._server: Any = None
+        # Availability hardening (see `infra.config.TuiSettings`): callers may override either
+        # knob directly (mainly for tests); otherwise both default from `services.settings.tui`.
+        tui_settings = services.settings.tui
+        self.join_timeout = tui_settings.join_timeout if join_timeout is None else join_timeout
+        self.max_connections = tui_settings.max_connections if max_connections is None else max_connections
+        self._active_connections = 0
 
     @property
     def bound_port(self) -> int:
@@ -136,7 +150,8 @@ class TuiServer:
     async def start(self) -> None:
         """Bind and start accepting connections (idempotent)."""
         if self._server is None:
-            self._server = await websockets.serve(self.handle, self.host, self.port)
+            ssl_context = _build_ssl_context(self.services.settings)
+            self._server = await websockets.serve(self.handle, self.host, self.port, ssl=ssl_context)
 
     async def serve(self) -> None:
         """Start (if not already) and run until `close()` stops the server."""
@@ -155,26 +170,39 @@ class TuiServer:
     async def handle(self, ws: Any) -> None:
         """Per-connection entry point handed to `websockets.serve`.
 
-        Authenticates the mandatory first `join` frame, subscribes the member
-        to its room on the hub (which emits `presence`), replays the room's
-        recent narrative to THIS connection only, pushes an initial `state`,
-        then dispatches every subsequent frame until the socket closes — at
-        which point it unsubscribes (emitting `presence` again).
+        Refuses the connection outright if the server is already at
+        `max_connections` (before authentication -- a cheap, pre-auth defense
+        against exhausting server resources). Otherwise authenticates the
+        mandatory first `join` frame, subscribes the member to its room on the
+        hub (which emits `presence`), replays the room's recent narrative to
+        THIS connection only, pushes an initial `state`, then dispatches every
+        subsequent frame until the socket closes — at which point it
+        unsubscribes (emitting `presence` again).
         """
-        member = await self._authenticate(ws)
-        if member is None:
+        if self.max_connections > 0 and self._active_connections >= self.max_connections:
+            i18n = get_i18n(self.services.settings.locale)
+            await _send(ws, _error_frame("too_many_connections", i18n))
+            await ws.close()
             return
 
-        await self.hub.subscribe(member.session_key, member)
+        self._active_connections += 1
         try:
-            await self._replay_history(member)
-            await publish_state(self.hub, self.services, self._ctx_for(member))
-            async for raw in ws:
-                await self._on_frame(member, raw)
-        except ConnectionClosed:
-            pass
+            member = await self._authenticate(ws)
+            if member is None:
+                return
+
+            await self.hub.subscribe(member.session_key, member)
+            try:
+                await self._replay_history(member)
+                await publish_state(self.hub, self.services, self._ctx_for(member))
+                async for raw in ws:
+                    await self._on_frame(member, raw)
+            except ConnectionClosed:
+                pass
+            finally:
+                await self.hub.unsubscribe(member)
         finally:
-            await self.hub.unsubscribe(member)
+            self._active_connections -= 1
 
     async def _replay_history(self, member: WsMember) -> None:
         """Replay this room's recent narrative to `member` ONLY (never broadcast to the room).
@@ -213,11 +241,22 @@ class TuiServer:
 
     async def _authenticate(self, ws: Any) -> WsMember | None:
         """Consume the mandatory first `join` frame; `welcome` + return the
-        `WsMember` on success, `error` + close the socket on any failure."""
+        `WsMember` on success, `error` + close the socket on any failure.
+
+        The `recv()` is bounded by `join_timeout`: an unauthenticated peer that
+        opens a socket and never sends anything (or sends slowly) would
+        otherwise sit open forever, since the rate limiter only applies AFTER
+        auth (`dispatch_input`) — letting a hostile/broken client accumulate
+        many such half-open connections and exhaust server coroutines.
+        """
         i18n = get_i18n(self.services.settings.locale)
         try:
-            raw = await ws.recv()
+            raw = await asyncio.wait_for(ws.recv(), timeout=self.join_timeout)
         except ConnectionClosed:
+            return None
+        except TimeoutError:
+            await _send(ws, _error_frame("join_timeout", i18n))
+            await ws.close()
             return None
 
         frame = _parse_frame(raw)
@@ -364,6 +403,28 @@ class TuiServer:
 
 
 # -- module-level framing helpers ------------------------------------------
+
+
+def _build_ssl_context(settings: Settings) -> ssl.SSLContext | None:
+    """Build a server-side `SSLContext` from `settings.tui`'s cert/key paths, or
+    `None` for plaintext (the default).
+
+    This is the OPTIONAL native-TLS fallback (`docs/deploy.md` "TLS"): the
+    recommended production setup terminates TLS at a reverse proxy in front of
+    a plaintext local listener instead. Only one of the two paths being set is
+    almost certainly a misconfiguration (an incomplete cert/key pair), so that
+    fails fast rather than silently falling back to plaintext.
+    """
+    cert_path, key_path = settings.tui.tls_cert_path, settings.tui.tls_key_path
+    if not cert_path and not key_path:
+        return None
+    if not cert_path or not key_path:
+        raise ValueError(
+            "TRPG_TUI__TLS_CERT_PATH and TRPG_TUI__TLS_KEY_PATH must both be set to enable native TLS (leave both blank for plaintext ws://)"  # i18n-exempt: operator/config misuse error, not user-facing chat text
+        )
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert_path, key_path)
+    return context
 
 
 def _render_frame(event: Event) -> dict[str, Any] | None:

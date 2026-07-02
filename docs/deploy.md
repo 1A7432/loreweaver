@@ -88,6 +88,11 @@ All settings use the `TRPG_` env prefix with `__` for nesting (see
 | `TRPG_DATA_DIR` | store + keys directory (db → `<data_dir>/loreweaver.db`) | `/data` (image) |
 | `TRPG_TUI_KEYS` | keystore file path | `/data/keys.toml` (image) |
 | `TRPG_ENABLE_VECTOR_DB` | worldbook / document retrieval | `true` |
+| `TRPG_TUI__JOIN_TIMEOUT` | seconds an unauthenticated connection has to send `join` before being closed | `10` |
+| `TRPG_TUI__MAX_CONNECTIONS` | global concurrent-connection cap (all rooms); over it, refused immediately. `0`/negative = unlimited | `200` |
+| `TRPG_TUI__TLS_CERT_PATH` / `TRPG_TUI__TLS_KEY_PATH` | OPTIONAL native TLS — PEM cert chain / key paths; set **both** to serve `wss://` directly. See [TLS](#tls-wss) | *(empty = plaintext `ws://`)* |
+| `TRPG_CENSOR__WORDLIST_PATH` | Content-moderation wordlist: a JSON file `{"word": level, ...}` (level `1`-`5`, see `gateway.ops.CensorLevel`). See [Content moderation](#content-moderation) | *(empty = moderation OFF)* |
+| `TRPG_CENSOR__WORDLIST` | Content-moderation wordlist, inline: `word[:level],word2[:level2],...` — an alternative to a file, handy for one env var. Combines with `WORDLIST_PATH` if both are set | *(empty = moderation OFF)* |
 
 Platform bots (optional): `TRPG_DISCORD__TOKEN`, `TRPG_TELEGRAM__TOKEN`,
 `TRPG_QQ__APP_ID` / `TRPG_QQ__SECRET`, `TRPG_FEISHU__APP_ID` /
@@ -95,6 +100,98 @@ Platform bots (optional): `TRPG_DISCORD__TOKEN`, `TRPG_TELEGRAM__TOKEN`,
 `--platforms discord,telegram` to the serve command (combined mode) — override
 the container command, e.g. `docker compose run ... loreweaver --serve --host
 0.0.0.0 --port 8787 --platforms discord`.
+
+## TLS (wss://)
+
+Plain `ws://` is unencrypted: long-lived bearer keys (`--tui-key add`) and all
+game content — including keeper-only module secrets — cross the wire in the
+clear. **`ws://` is only acceptable bound to `127.0.0.1` for local
+development.** Anything reachable beyond localhost (a public server, `--host
+0.0.0.0`, a LAN) needs TLS.
+
+### Recommended: terminate TLS at a reverse proxy
+
+Keep the app listening on plaintext `ws://127.0.0.1:8787` (the default host)
+and put nginx/Caddy/traefik in front of it to own the certificate (e.g. via
+Let's Encrypt/ACME) and speak `wss://` to clients. This is the standard,
+battle-tested way to run any WebSocket service in production and is the
+recommended approach here.
+
+Caddy (automatic HTTPS — simplest option):
+
+```
+your-domain.example {
+    reverse_proxy 127.0.0.1:8787
+}
+```
+
+nginx:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name your-domain.example;
+    ssl_certificate     /etc/letsencrypt/live/your-domain.example/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-domain.example/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+    }
+}
+```
+
+Point clients at `wss://your-domain.example/`. Keep `--host 127.0.0.1` (the
+default) so the app port itself is never reachable directly from the
+internet — only through the proxy.
+
+### Fallback: native TLS in the server
+
+No reverse proxy available? The server can terminate TLS itself: set
+`TRPG_TUI__TLS_CERT_PATH` and `TRPG_TUI__TLS_KEY_PATH` to a PEM certificate
+chain and private key (both required together — see
+[Configuration](#configuration)). When both are set, `--serve` listens
+`wss://` directly; leave both blank (the default) to keep plaintext `ws://`,
+which is fine for `127.0.0.1`-only local dev.
+
+## Content moderation
+
+`gateway.ops.Censor` is a real, bypass-resistant word matcher (NFKC + casefold
+normalization, de-obfuscation for spaced/punctuated/fullwidth spellings,
+whole-word boundaries, offset-preserving masking) — but **it ships with no
+wordlist and is OFF by default.** Loreweaver deliberately does not bundle a
+profanity/slur list: maintaining one, and getting multilingual coverage
+right, is a policy choice each deployer should own, not something baked into
+the engine. With no wordlist configured, `Censor` takes an explicit no-op
+path on every call — it is not silently filtering anything.
+
+To turn it on, set **one** of `TRPG_CENSOR__WORDLIST_PATH` (a JSON file) or
+`TRPG_CENSOR__WORDLIST` (an inline list) — see the
+[Configuration](#configuration) table above. Example file:
+
+```json
+{ "some-slur": 5, "some-mild-word": 2 }
+```
+
+Levels are `1` (`NOTICE`) through `5` (`FORBIDDEN`); a hit at `DANGER` (`4`)
+or above blocks the message (the reply is replaced), below that it is masked
+in place. Word matching is locale-agnostic — list whatever words/scripts you
+need moderated.
+
+**Current scope — read before relying on this:**
+
+- It only screens the **AI Keeper's own narration** (`agent.loop.run_kp_turn`'s
+  `output_review`, wired in `gateway.runner.GatewayRunner` and
+  `net.tui_server.TuiServer`). **Player input is not screened.** A player can
+  type anything; only what the Keeper says back is checked.
+- It is a wordlist matcher, not a semantic classifier — it catches listed
+  words (and simple obfuscations of them), nothing it wasn't told about.
+
+Do not treat this as a moderation solution out of the box — it is a
+configurable building block that does nothing until you supply a wordlist.
 
 ## Keys & persistence
 
@@ -123,5 +220,5 @@ cd clients/web && bun install && bun run dev
 # SSH (zero-install full TUI) — see clients/ssh/README.md
 ```
 
-For a real deployment, expose port 8787 (or reverse-proxy it, e.g. TLS
-`wss://` via nginx/Caddy). The server is key-gated, but treat keys as secrets.
+For a real deployment, see [TLS](#tls-wss) above — don't expose plaintext
+`ws://` beyond localhost. The server is key-gated, but treat keys as secrets.

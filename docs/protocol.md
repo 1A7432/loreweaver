@@ -16,7 +16,12 @@ unchanged — it never sends `admin_*` frames, and it should treat the `welcome`
 `protocol` field as an opaque string (accept any `"1.x"`).
 
 The first frame a client sends MUST be `join`. The server replies with
-either `welcome` or `error`, closing the connection on error.
+either `welcome` or `error`, closing the connection on error. If it doesn't
+arrive within the server's join-handshake timeout (`TRPG_TUI__JOIN_TIMEOUT`,
+default 10s), the server closes the connection with `error join_timeout`
+rather than waiting forever. A connection accepted over the server's
+concurrent-connection cap (`TRPG_TUI__MAX_CONNECTIONS`) is refused before
+`join` is even read: `error too_many_connections`, then closed.
 
 ## Client → Server
 
@@ -30,9 +35,10 @@ either `welcome` or `error`, closing the connection on error.
 
 - `welcome` — sent once, on a successful `join`:
   `{type:"welcome", protocol:"1.1", room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string}`
-- `error` — a localized failure notice; `bad_key` closes the connection (it
-  only ever happens during the `join` handshake), the others do not:
-  `{type:"error", code:"bad_key"|"bad_frame"|"rate_limited"|"server_error", message:string}`
+- `error` — a localized failure notice; `bad_key`, `join_timeout` and
+  `too_many_connections` close the connection (they only ever happen during
+  or before the `join` handshake), the others do not:
+  `{type:"error", code:"bad_key"|"bad_frame"|"rate_limited"|"server_error"|"join_timeout"|"too_many_connections", message:string}`
 - `narrative` — one line of story/chat text:
   `{type:"narrative", id:string, speaker:"kp"|"player"|"system"|"npc", name?:string, text:string, format:"markdown"|"plain", stream?:boolean, done?:boolean}`
   For `speaker:"npc"`, `name` carries the NPC name.

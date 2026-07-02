@@ -16,7 +16,7 @@ from gateway.commands import CommandRouter, CommandSpec
 from gateway.events import InboundMessage
 from gateway.hub import RoomHub
 from gateway.member import AdapterMember
-from gateway.ops import Botlist, Censor, RateLimiter
+from gateway.ops import Botlist, Censor, RateLimiter, censor_from_settings
 from gateway.rooms import resolve_session_key
 from gateway.session import SessionSource
 from gateway.turn import run_turn
@@ -42,6 +42,7 @@ class GatewayRunner:
         toolset: Toolset | None = None,
         hub: RoomHub | None = None,
         keystore: Any = None,
+        censor: Censor | None = None,
     ) -> None:
         self.services = services
         self.adapters = list(adapters or [])
@@ -53,7 +54,10 @@ class GatewayRunner:
         self.command_router = command_router or CommandRouter(services, keystore=keystore, hub=hub)
         self.toolset = toolset
         self.rate_limiter = RateLimiter()
-        self.censor = Censor()
+        # Built from `services.settings.censor` (see `infra.config.CensorSettings` /
+        # `docs/deploy.md` "Content moderation") unless a caller injects one (tests).
+        # With nothing configured this is an explicit no-op, not a fake wordlist.
+        self.censor = censor if censor is not None else censor_from_settings(services.settings.censor)
         self.botlist = Botlist()
         # Per-channel AdapterMember registry (keyed by the channel's own
         # chat_key) so repeat messages from a channel reuse one hub member.
