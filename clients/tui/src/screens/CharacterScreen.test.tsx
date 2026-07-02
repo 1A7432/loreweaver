@@ -82,6 +82,8 @@ describe("CharacterScreen", () => {
     expect(frame).toContain("D&D 5e")
     expect(frame).toContain("姓名")
     expect(frame).toContain("⚄ 建卡")
+    expect(frame).toContain("导入酒馆卡")
+    expect(frame).toContain("⚄ 导入")
     // The old Stage-1 stub note is gone; this is real navigation now.
     expect(frame).not.toContain("即将推出")
 
@@ -197,6 +199,44 @@ describe("CharacterScreen", () => {
     await flush()
 
     expect(client.sent).toContain(".coc")
+
+    act(() => renderer.destroy())
+  })
+
+  test("建卡屏可导入酒馆卡:路径输入 Enter 发送 .import <path> <system> pc", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client)
+    await flush()
+    act(() => client.push(PLAYER_WELCOME))
+    await waitForFrame((t) => t.includes("我的角色"))
+
+    await act(async () => {
+      mockInput.pressArrow("down")
+    })
+    await flush()
+    await act(async () => {
+      mockInput.pressEnter()
+    })
+    await flush()
+    await waitForFrame((t) => t.includes("导入酒馆卡"))
+
+    await act(async () => {
+      mockInput.pressTab()
+      mockInput.pressTab()
+    })
+    await flush()
+    await act(async () => {
+      await mockInput.typeText("/cards/ada.json")
+    })
+    await flush()
+    await act(async () => {
+      mockInput.pressEnter()
+    })
+    await flush()
+
+    expect(client.sent).toContain(".import /cards/ada.json coc pc")
+    const sent = await waitForFrame((t) => t.includes("已发送"))
+    expect(sent).toContain(".import /cards/ada.json coc pc")
 
     act(() => renderer.destroy())
   })

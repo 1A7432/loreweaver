@@ -25,7 +25,7 @@ export interface CharacterScreenProps {
 }
 
 type Mode = "view" | "create" | "tweak"
-type CreateField = "system" | "name"
+type CreateField = "system" | "name" | "importPath"
 
 interface ViewAction {
   label: string
@@ -34,7 +34,7 @@ interface ViewAction {
 
 const CURSOR = "⚄"
 const DICE_GLYPHS = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
-const CREATE_FIELD_ORDER: CreateField[] = ["system", "name"]
+const CREATE_FIELD_ORDER: CreateField[] = ["system", "name", "importPath"]
 
 // The roll flicker ticks at a fixed cadence and is capped at ROLL_MAX_TICKS so a
 // slow/never-arriving reply can't spin forever-looking (still "rolling", just
@@ -73,9 +73,12 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
   // so submit always reads the latest typed value regardless of render timing).
   const [systemIndex, setSystemIndex] = useState(0)
   const [name, setName] = useState("")
+  const [importPath, setImportPath] = useState("")
   const [createFocus, setCreateFocus] = useState<CreateField>("system")
   const nameRef = useRef(name)
+  const importPathRef = useRef(importPath)
   const [pendingName, setPendingName] = useState("")
+  const [createNote, setCreateNote] = useState<string>()
 
   // Signature stat-roll reveal: the roll itself happens server-side (dice-first),
   // so this is purely a client-side "tumbling dice" flicker that plays while
@@ -152,6 +155,15 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
     beginRoll()
   }
 
+  const submitImport = () => {
+    const path = importPathRef.current.trim()
+    if (!path) return
+    const system = String(SYSTEM_OPTIONS[systemIndex]?.value ?? "coc")
+    const command = `.import ${path} ${system} pc`
+    client.sendInput(command)
+    setCreateNote(`已发送 → ${command}`)
+  }
+
   const submitTweak = () => {
     const text = tweakRef.current.trim()
     if (!text) return
@@ -164,7 +176,10 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
   const enterCreate = () => {
     setSystemIndex(0)
     setName("")
+    setImportPath("")
     nameRef.current = ""
+    importPathRef.current = ""
+    setCreateNote(undefined)
     setCreateFocus("system")
     setMode("create")
   }
@@ -313,6 +328,31 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
               <box marginTop={1} onMouseDown={submitCreate} backgroundColor={theme.accent} paddingX={1}>
                 <text fg={theme.bg}>{rolling ? "⚄ 掷骰中…" : "⚄ 建卡"}</text>
               </box>
+
+              <box flexDirection="column" marginTop={1} onMouseDown={() => setCreateFocus("importPath")}>
+                <text fg={createFocus === "importPath" ? theme.accent : theme.dim}>导入酒馆卡</text>
+                <input
+                  flexGrow={1}
+                  value={importPath}
+                  focused={createFocus === "importPath"}
+                  placeholder="/path/to/card.png 或 .json"
+                  onInput={(value: string) => {
+                    importPathRef.current = value
+                    setImportPath(value)
+                  }}
+                  onSubmit={submitImport}
+                />
+              </box>
+
+              <box marginTop={1} onMouseDown={submitImport} backgroundColor={theme.accent} paddingX={1}>
+                <text fg={theme.bg}>⚄ 导入</text>
+              </box>
+
+              {createNote ? (
+                <box marginTop={1}>
+                  <text fg={theme.dim}>{stripControlChars(createNote)}</text>
+                </box>
+              ) : null}
 
               <box marginTop={1}>
                 <text fg={theme.dim}>Tab 切换字段 · Enter 确认 · Esc {hasCharacter ? "返回查看" : "返回菜单"}</text>
