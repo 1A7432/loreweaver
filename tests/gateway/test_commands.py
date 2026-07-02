@@ -1,3 +1,4 @@
+import json
 import re
 from types import SimpleNamespace
 
@@ -7,7 +8,7 @@ from core.dice_engine import seed_dice
 from gateway.commands import CommandRouter
 from infra.config import LLMSettings, Settings
 from infra.embeddings import FakeEmbeddings
-from infra.llm import FakeLLM
+from infra.llm import FakeLLM, assistant_text
 from infra.providers import MutableLLM
 
 
@@ -457,3 +458,38 @@ async def test_sheet_command_clamps_values_through_rule_validation():
     assert "attribute_above_max" in reply
     character = await services.characters.get_character("u1", "cli:dm:t")
     assert character.attributes["STR"] == 90
+
+
+async def test_genchar_command_builds_and_validates_sheet_from_description():
+    services = build_services(
+        Settings(),
+        llm=FakeLLM(
+            script=[
+                assistant_text(
+                    json.dumps(
+                        {
+                            "occupation": "Investigator",
+                            "attribute_emphasis": ["INT", "EDU"],
+                            "signature_skills": ["Library Use", "Occult"],
+                            "backstory": "A meticulous cataloger of impossible books.",
+                        }
+                    )
+                )
+            ]
+        ),
+        embeddings=FakeEmbeddings(64),
+    )
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:genchar", user_id="u1", locale="en")
+
+    seed_dice(2028)
+    reply = await router.dispatch(ctx, ".genchar coc7 Ada | A sharp-eyed scholar of forbidden lore.")
+
+    assert reply is not None
+    assert "Generated CoC character from description: Ada" in reply
+    character = await services.characters.get_character("u1", "cli:dm:genchar")
+    assert character.name == "Ada"
+    assert character.system == "CoC"
+    assert character.occupation == "Investigator"
+    assert character.skills["图书馆"] >= 60
+    assert character.attributes["SAN"] <= character.attributes["SANMAX"]

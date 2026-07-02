@@ -82,6 +82,19 @@ async def build_sheet_from_persona(
     return sheet
 
 
+async def build_sheet_from_description(
+    services: Any,
+    description: str,
+    system: str,
+    *,
+    name: str = "",
+    module_context: str = "",
+) -> CharacterSheet:
+    text = description.strip()
+    card = CharacterCard(name=name.strip(), description=text, personality=text)
+    return await build_sheet_from_persona(services, card, system, module_context=module_context)
+
+
 def _character_manager_from_services(services: Any) -> CharacterManager:
     manager = getattr(services, "characters", None)
     if isinstance(manager, CharacterManager):

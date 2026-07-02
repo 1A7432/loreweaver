@@ -15,5 +15,8 @@
   "charcard.tools.preview.no_file": "Could not read the character card at {path}.",
   "charcard.tools.preview.failed": "Failed to preview card: {error}",
   "charcard.commands.import.help": "Import a SillyTavern card as a PC or AI companion: .import <file> [coc7|dnd5e] [pc|companion]",
-  "charcard.commands.import.usage": "Usage: .import <card file> [coc7|dnd5e] [pc|companion]"
+  "charcard.commands.import.usage": "Usage: .import <card file> [coc7|dnd5e] [pc|companion]",
+  "charcard.commands.genchar.done": "Generated {system} character from description: {name}",
+  "charcard.commands.genchar.help": "Generate a character from a free-text description.",
+  "charcard.commands.genchar.usage": "Usage: .genchar [coc7|dnd5e] [name] | <description>"
 }

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.char_from_persona import build_sheet_from_persona, infer_pronoun_note
+from core.char_from_persona import build_sheet_from_description, build_sheet_from_persona, infer_pronoun_note
 from core.character_manager import CharacterManager
 from core.charcard import parse_card_bytes
 from core.dice_engine import seed_dice
@@ -104,3 +104,35 @@ async def test_build_sheet_from_persona_coc7_is_rule_legal_and_biased():
     assert sheet.skills["神秘学"] >= 60
     assert sheet.attributes["SAN"] == sheet.attributes["POW"]
     assert sheet.attributes["IDEA"] == sheet.attributes["INT"]
+
+
+@pytest.mark.asyncio
+async def test_build_sheet_from_description_wraps_text_as_minimal_persona_card():
+    seed_dice(2027)
+    manager = CharacterManager(Store(":memory:"))
+    llm = FakeLLM(
+        script=[
+            assistant_text(
+                json.dumps(
+                    {
+                        "class": "Rogue",
+                        "attribute_emphasis": ["DEX", "INT"],
+                        "signature_skills": ["Stealth"],
+                        "backstory": "A streetwise courier with too many secrets.",
+                    }
+                )
+            )
+        ]
+    )
+    services = SimpleNamespace(characters=manager, llm=llm)
+    description = "She is a careful rooftop courier who survives by stealth and quick study."
+
+    sheet = await build_sheet_from_description(services, description, "dnd5e", name="Mira")
+
+    assert sheet.name == "Mira"
+    assert sheet.system == "DnD5e"
+    assert sheet.character_class == "Rogue"
+    assert sheet.attributes["DEX"] == 15
+    assert sheet.attributes["INT"] == 14
+    assert sheet.background == "A streetwise courier with too many secrets."
+    assert description in sheet.notes

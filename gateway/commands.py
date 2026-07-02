@@ -10,6 +10,7 @@ from typing import Any
 
 from agent.context import AgentCtx
 from agent.services import Services
+from core.char_from_persona import build_sheet_from_description
 from core.character_manager import CharacterSheet
 from core.character_rules import render_validation_notice, validate_sheet
 from core.coc_rules import DEFAULT_COC_RULE
@@ -36,6 +37,14 @@ _SHEET_ASSIGN_RE = re.compile(r"(.+?)([+-]?(?:\d+d\d+(?:[+\-*/]\d+)?|\d+))(?:\s*
 _EXPLODE_BANG_RE = re.compile(r"(\d*d(\d+))!", re.I)
 
 _SLASH_NAME_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
+
+_GENCHAR_SYSTEMS = {
+    "coc": "coc7",
+    "coc7": "coc7",
+    "dnd": "dnd5e",
+    "dnd5e": "dnd5e",
+    "d&d5e": "dnd5e",
+}
 
 _COC_ATTR_TO_KEY = {
     "力量": "STR",
@@ -196,6 +205,13 @@ class CommandCtx:
         if hasattr(self.raw_ctx, "uid") and callable(self.raw_ctx.uid):
             return str(self.raw_ctx.uid())
         return str(getattr(self.raw_ctx, "user_id", ""))
+
+
+@dataclass(frozen=True)
+class GenCharRequest:
+    system: str
+    name: str
+    description: str
 
 
 class CommandRouter:
@@ -433,6 +449,23 @@ class CommandRouter:
         character, violations = validate_sheet(character, template)
         await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
         result = ctx.i18n.t("commands.character.created", name=character.name, system=character.system)
+        notice = render_validation_notice(ctx.i18n, violations)
+        return f"{result}\n{notice}" if notice else result
+
+    async def cmd_genchar(self, ctx: CommandCtx) -> str:
+        request = _parse_genchar_args(ctx.args)
+        if request is None:
+            return ctx.i18n.t("charcard.commands.genchar.usage")
+
+        character = await build_sheet_from_description(
+            ctx.services,
+            request.description,
+            request.system,
+            name=request.name,
+        )
+        character, violations = validate_sheet(character, request.system)
+        await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
+        result = ctx.i18n.t("charcard.commands.genchar.done", name=character.name, system=character.system)
         notice = render_validation_notice(ctx.i18n, violations)
         return f"{result}\n{notice}" if notice else result
 
@@ -831,6 +864,14 @@ class CommandRouter:
             CommandSpec("init", self.cmd_initiative, ["init", "initiative", "ri"], ["ri", "init"], {"name": "init"}, "commands.help.init"),
             CommandSpec("coc", self.cmd_make_char, ["coc", "coc7"], ["coc", "coc7"], {"name": "coc"}, "commands.help.coc"),
             CommandSpec("dnd", self.cmd_make_char, ["dnd", "dnd5e"], ["dnd", "dnd5e"], {"name": "dnd"}, "commands.help.dnd"),
+            CommandSpec(
+                "genchar",
+                self.cmd_genchar,
+                ["genchar"],
+                ["genchar", "生卡", "生成角色"],
+                None,
+                "charcard.commands.genchar.help",
+            ),
             CommandSpec("setcoc", self.cmd_setcoc, ["setcoc"], ["setcoc"], {"name": "setcoc"}, "commands.help.setcoc"),
             CommandSpec("rename", self.cmd_rename, ["rename", "nn"], ["nn"], None, "commands.help.rename"),
             CommandSpec("jrrp", self.cmd_jrrp, ["jrrp", "luck"], ["jrrp"], None, "commands.help.jrrp"),
@@ -970,6 +1011,34 @@ class _CocParsedCheck:
     penalty: int = 0
     temp_value: int | None = None
     remaining: str = ""
+
+
+def _parse_genchar_args(args: str) -> GenCharRequest | None:
+    raw = args.strip()
+    if not raw:
+        return None
+
+    head, sep, body = raw.partition("|")
+    if sep:
+        tokens = head.split()
+        system = "coc7"
+        name = head.strip()
+        if tokens and tokens[0].casefold() in _GENCHAR_SYSTEMS:
+            system = _GENCHAR_SYSTEMS[tokens[0].casefold()]
+            name = " ".join(tokens[1:]).strip()
+        description = body.strip()
+    else:
+        tokens = raw.split(maxsplit=1)
+        system = "coc7"
+        description = raw
+        name = ""
+        if tokens and tokens[0].casefold() in _GENCHAR_SYSTEMS:
+            system = _GENCHAR_SYSTEMS[tokens[0].casefold()]
+            description = tokens[1].strip() if len(tokens) > 1 else ""
+
+    if not description:
+        return None
+    return GenCharRequest(system=system, name=name, description=description)
 
 
 def _ctx_locale(ctx: AgentCtx | Any) -> str:
