@@ -8,6 +8,7 @@ import { CharacterScreen } from "./screens/CharacterScreen"
 import { ConnectScreen } from "./screens/ConnectScreen"
 import { KeeperKeys } from "./screens/KeeperKeys"
 import { KeeperModel } from "./screens/KeeperModel"
+import { KeeperModule } from "./screens/KeeperModule"
 import { MainMenu } from "./screens/MainMenu"
 import { DEFAULT_THEME, themeOrder, themes, type ThemeName } from "./themes"
 
@@ -27,8 +28,9 @@ export interface AppProps {
   prefill?: AppPrefill
 }
 
-// Stage 2 adds "character"; Stage 3 adds the keeper-only "keeper_keys" / "keeper_model".
-type Screen = "connect" | "menu" | "game" | "character" | "keeper_keys" | "keeper_model"
+// Stage 2 adds "character"; Stage 3 adds the keeper-only "keeper_keys" / "keeper_model";
+// Stage 4 adds the keeper-only "keeper_module".
+type Screen = "connect" | "menu" | "game" | "character" | "keeper_keys" | "keeper_module" | "keeper_model"
 
 const EMPTY_STATE: StateFrame = { type: FrameType.State, party: [], initiative: [], online: 0 }
 
@@ -135,6 +137,19 @@ export function App({ client: injected, prefill }: AppProps) {
     )
   }
 
+  if (screen === "keeper_module" && welcome?.you.role === "keeper") {
+    return (
+      <KeeperModule
+        client={client}
+        theme={theme}
+        themeName={themeName}
+        welcome={welcome}
+        stateFrame={stateFrame}
+        onBack={() => setScreen("menu")}
+      />
+    )
+  }
+
   if (screen === "keeper_model" && welcome?.you.role === "keeper") {
     return (
       <KeeperModel
@@ -159,6 +174,7 @@ export function App({ client: injected, prefill }: AppProps) {
         onEnterGame={() => setScreen("game")}
         onCharacter={() => setScreen("character")}
         onKeeperKeys={() => setScreen("keeper_keys")}
+        onKeeperModule={() => setScreen("keeper_module")}
         onKeeperModel={() => setScreen("keeper_model")}
       />
     )

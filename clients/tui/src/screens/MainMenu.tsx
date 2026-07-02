@@ -17,6 +17,7 @@ export interface MainMenuProps {
   onEnterGame: () => void
   onCharacter: () => void
   onKeeperKeys: () => void
+  onKeeperModule: () => void
   onKeeperModel: () => void
 }
 
@@ -39,6 +40,7 @@ export function MainMenu({
   onEnterGame,
   onCharacter,
   onKeeperKeys,
+  onKeeperModule,
   onKeeperModel,
 }: MainMenuProps) {
   const [selected, setSelected] = useState(0)
@@ -57,7 +59,7 @@ export function MainMenu({
   if (isKeeper) {
     items.push(
       { label: "房间与邀请", keeper: true, run: () => onKeeperKeys() },
-      { label: "导入模组", keeper: true, run: () => setNote("导入模组 · 即将推出（第四阶段）") },
+      { label: "导入模组", keeper: true, run: () => onKeeperModule() },
       { label: "模型 / 配置", keeper: true, run: () => onKeeperModel() },
     )
   }
