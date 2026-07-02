@@ -207,9 +207,12 @@ describe("App shell", () => {
     await flush()
     act(() => client.push(PLAYER_WELCOME))
 
-    // Locate the row for "我的角色" (its screen row = its line index in the frame).
-    const menu = await waitForFrame((t) => t.includes("我的角色"))
-    const rowY = menu.split("\n").findIndex((line) => line.includes("我的角色"))
+    // Locate the row for "设置" (its screen row = its line index in the frame).
+    // ("我的角色" now navigates to the character screen as of Stage 2 — that flow
+    // is covered by screens/CharacterScreen.test.tsx — so this generic
+    // hover/click-mechanics test uses the still-stubbed "设置" item instead.)
+    const menu = await waitForFrame((t) => t.includes("设置"))
+    const rowY = menu.split("\n").findIndex((line) => line.includes("设置"))
     expect(rowY).toBeGreaterThan(0)
 
     // Hovering the row moves the shared cursor onto it (onMouseOver).
@@ -217,16 +220,16 @@ describe("App shell", () => {
       await mockMouse.moveTo(6, rowY)
     })
     await flush()
-    const hovered = await waitForFrame((t) => t.includes("⚄ 我的角色"))
-    expect(hovered).toContain("⚄ 我的角色")
+    const hovered = await waitForFrame((t) => t.includes("⚄ 设置"))
+    expect(hovered).toContain("⚄ 设置")
 
     // Clicking the row activates it (onMouseDown) -> the stub note appears.
     await act(async () => {
       await mockMouse.click(6, rowY)
     })
     await flush()
-    const clicked = await waitForFrame((t) => t.includes("即将推出"))
-    expect(clicked).toContain("即将推出")
+    const clicked = await waitForFrame((t) => t.includes("昵称"))
+    expect(clicked).toContain("昵称")
 
     act(() => renderer.destroy())
   })

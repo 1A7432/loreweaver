@@ -15,6 +15,7 @@ export interface MainMenuProps {
   stateFrame: StateFrame
   presence?: PresenceFrame
   onEnterGame: () => void
+  onCharacter: () => void
 }
 
 interface MenuItem {
@@ -27,14 +28,14 @@ interface MenuItem {
 // not a generic ▶.
 const CURSOR = "⚄"
 
-export function MainMenu({ welcome, theme, themeName, stateFrame, presence, onEnterGame }: MainMenuProps) {
+export function MainMenu({ welcome, theme, themeName, stateFrame, presence, onEnterGame, onCharacter }: MainMenuProps) {
   const [selected, setSelected] = useState(0)
   const [note, setNote] = useState<string>()
   const isKeeper = welcome.you.role === "keeper"
 
   const items: MenuItem[] = [
     { label: "进入游戏", keeper: false, run: () => onEnterGame() },
-    { label: "我的角色", keeper: false, run: () => setNote("我的角色 · 即将推出（第二阶段）") },
+    { label: "我的角色", keeper: false, run: () => onCharacter() },
     {
       label: "设置",
       keeper: false,

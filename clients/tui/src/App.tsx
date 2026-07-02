@@ -4,6 +4,7 @@ import type { KeyEvent } from "@opentui/core"
 import { FrameType, type PresenceFrame, type ServerFrame, type StateFrame, type WelcomeFrame } from "@trpg-kp/protocol"
 import { createClient, type AppClient } from "./client"
 import { GameView } from "./GameView"
+import { CharacterScreen } from "./screens/CharacterScreen"
 import { ConnectScreen } from "./screens/ConnectScreen"
 import { MainMenu } from "./screens/MainMenu"
 import { DEFAULT_THEME, themeOrder, themes, type ThemeName } from "./themes"
@@ -24,8 +25,8 @@ export interface AppProps {
   prefill?: AppPrefill
 }
 
-// Later stages add "character" / "keeper_*"; Stage 1 routes these three.
-type Screen = "connect" | "menu" | "game"
+// Later stages add "keeper_*"; Stage 2 adds "character".
+type Screen = "connect" | "menu" | "game" | "character"
 
 const EMPTY_STATE: StateFrame = { type: FrameType.State, party: [], initiative: [], online: 0 }
 
@@ -104,6 +105,19 @@ export function App({ client: injected, prefill }: AppProps) {
     return <GameView client={client} welcome={welcome} theme={theme} themeName={themeName} />
   }
 
+  if (screen === "character" && welcome) {
+    return (
+      <CharacterScreen
+        client={client}
+        theme={theme}
+        themeName={themeName}
+        welcome={welcome}
+        stateFrame={stateFrame}
+        onBack={() => setScreen("menu")}
+      />
+    )
+  }
+
   if (screen === "menu" && welcome) {
     return (
       <MainMenu
@@ -113,6 +127,7 @@ export function App({ client: injected, prefill }: AppProps) {
         stateFrame={stateFrame}
         presence={presence}
         onEnterGame={() => setScreen("game")}
+        onCharacter={() => setScreen("character")}
       />
     )
   }

@@ -135,7 +135,7 @@ export const themes: Record<ThemeName, Palette> = {
   },
 }
 
-// F1..F5 map 1:1 onto this order; lamplight leads and is the default theme.
-export const themeOrder: ThemeName[] = ["lamplight", "df16", "phosphor", "amber", "paperwhite"]
+// F1..F5 map 1:1 onto this order; amber leads and is the default theme (higher contrast).
+export const themeOrder: ThemeName[] = ["amber", "df16", "phosphor", "lamplight", "paperwhite"]
 
-export const DEFAULT_THEME: ThemeName = "lamplight"
+export const DEFAULT_THEME: ThemeName = "amber"
