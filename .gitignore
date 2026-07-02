@@ -57,5 +57,5 @@ scratch/
 # TUI preview render artifact
 clients/tui/preview_frame.txt
 
-# local-only interactive play launcher (not for the public repo)
-scripts/play.py
+# local-only play launcher that loads private module/card material (not for the public repo)
+scripts/play_tui.sh
