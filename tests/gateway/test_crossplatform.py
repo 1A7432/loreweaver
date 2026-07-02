@@ -223,6 +223,47 @@ async def test_display_name_prefers_active_character_with_nickname_in_parens_whe
     assert echo.name == "Nora Vance (Dirac)"
 
 
+async def test_echoed_name_after_coc_command_creation_matches_what_state_reports() -> None:
+    # BUG C (playtest feedback): a character created via the `.coc`/`.dnd` command must make the
+    # NEXT turn's `player_action` echo lead with the character's name (matching `net.state`'s
+    # `state.character`/`party[].active`), not fall back to the bare platform nickname.
+    hub = RoomHub()
+    services = _services(_kp_rolls_then_replies)
+    toolset = build_kp_toolset(services)
+    router = CommandRouter(services)
+
+    ws_member = RecordingWsMember(member_id="term-coc", name="Dirac")
+    await hub.subscribe("R-coc", ws_member)
+
+    ctx = AgentCtx(chat_key="R-coc", user_id=ws_member.id, platform="tui", locale="en")
+
+    # 1) Create the character through the real `.coc` command turn (not a direct `save_character`
+    #    seed) -- this is `cmd_make_char` under `gateway.commands.CommandRouter`.
+    await run_turn(
+        hub, services, ctx, ".coc Rust", command_router=router, toolset=toolset, origin=ws_member, echo_exclude=None
+    )
+    ws_member.events.clear()
+
+    # 2) A SEPARATE, later player turn: the echo must already reflect the active character.
+    seed_dice(7)
+    await run_turn(
+        hub,
+        services,
+        ctx,
+        "I search the room",
+        command_router=router,
+        toolset=toolset,
+        censor=Censor(),
+        origin=ws_member,
+        echo_exclude=None,
+    )
+
+    echo = next(e for e in ws_member.events if e.kind == "player_action")
+    state = next(e for e in ws_member.events if e.kind == "state")
+    assert state.data["character"]["name"] == "Rust"  # what net.state reports for this caller
+    assert echo.name == "Rust (Dirac)"  # the echo must agree with it, not just show "Dirac"
+
+
 async def test_display_name_omits_parens_when_nickname_matches_character_name() -> None:
     # When the nickname and the character name happen to be the same string,
     # the echoed name is just that one name -- no redundant "X (X)".

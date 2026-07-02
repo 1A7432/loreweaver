@@ -51,14 +51,22 @@ export function NarrativeLog({ frames, theme, revealTicks = 3, critFlash = false
   return (
     <box flexDirection="column" width="100%" paddingX={1}>
       {frames.length === 0 ? (
-        // Animated so the empty log obviously reads as "alive, awaiting the Keeper"
-        // rather than a hung/dropped connection. The client no longer echoes the
-        // player's own submitted line optimistically (the server's own
-        // `narrative{speaker:"player"}` broadcast is the only echo, so it never
-        // renders twice) — so right after a submit, `frames` can still be empty
-        // for the round trip; `kpWorking` swaps this placeholder to say so
-        // explicitly instead of reading as "nothing happened yet".
-        <Spinner active label={kpWorking ? "Keeper 构思中" : "等待 Keeper 叙事…"} color={kpWorking ? theme.accent : theme.dim} />
+        kpWorking ? (
+          // A turn is genuinely in flight (submitted, reply not landed yet): animate
+          // so this obviously reads as "alive, awaiting the Keeper" rather than a
+          // hung/dropped connection. The client no longer echoes the player's own
+          // submitted line optimistically (the server's own `narrative{speaker:"player"}`
+          // broadcast is the only echo, so it never renders twice) — so right after a
+          // submit, `frames` can still be empty for the round trip.
+          <Spinner active label="Keeper 构思中" color={theme.accent} />
+        ) : (
+          // Idle (no turn in flight): a STATIC hint, no motion — an animated spinner
+          // here with nothing actually happening reads as frozen/deceptive (a player
+          // waiting on a fresh, empty join saw it spin for 10 minutes with nothing
+          // going on). The server also replays room history as narrative frames on
+          // join, so this mostly only shows on a genuinely fresh, empty room.
+          <text fg={theme.dim}>准备就绪 · 输入你的行动开始</text>
+        )
       ) : (
         frames.map((frame, index) => {
           if (frame.type === "dice") {

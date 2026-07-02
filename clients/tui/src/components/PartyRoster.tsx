@@ -137,41 +137,41 @@ export function PartyRoster({ character, party, initiative, theme, focused, onFo
             </>
           )}
         </box>
+      ) : otherMembers.length === 0 ? (
+        // No own character AND no other members: one clear line, not two stacked
+        // empty-state messages (used to show "尚未创建角色" AND "No roster" together).
+        <text fg={theme.dim}>队伍空 · 在「我的角色」里创建角色</text>
       ) : (
         <text fg={theme.dim}>尚未创建角色</text>
       )}
 
-      {otherMembers.length === 0 && !character ? (
-        <text fg={theme.dim}>No roster</text>
-      ) : (
-        otherMembers.map((member) => {
-          const vitals = partyVitals(member, theme)
-          const canExpand = vitals.length > 0
-          const memberExpanded = expandedMembers.has(member.name)
-          const marker = canExpand ? (memberExpanded ? "▾" : "▸") : member.active ? "▶" : " "
-          const activeMarker = canExpand && member.active ? " ▶" : ""
-          const onlineMarker = member.online ? "●" : "○"
-          const statWidth = memberExpanded ? DETAIL_BAR_WIDTH : COMPACT_BAR_WIDTH
-          return (
-            <box
-              key={member.name}
-              flexDirection="column"
-              onMouseDown={canExpand ? () => toggleMember(member.name) : undefined}
-            >
-              <text fg={member.online ? theme.player : theme.dim}>
-                {`${marker}${activeMarker} ${onlineMarker} ${stripControlChars(member.name)}`}
-                {member.ai ? " [AI]" : ""}
-                {initiativeValue(member, initiative)}
+      {otherMembers.map((member) => {
+        const vitals = partyVitals(member, theme)
+        const canExpand = vitals.length > 0
+        const memberExpanded = expandedMembers.has(member.name)
+        const marker = canExpand ? (memberExpanded ? "▾" : "▸") : member.active ? "▶" : " "
+        const activeMarker = canExpand && member.active ? " ▶" : ""
+        const onlineMarker = member.online ? "●" : "○"
+        const statWidth = memberExpanded ? DETAIL_BAR_WIDTH : COMPACT_BAR_WIDTH
+        return (
+          <box
+            key={member.name}
+            flexDirection="column"
+            onMouseDown={canExpand ? () => toggleMember(member.name) : undefined}
+          >
+            <text fg={member.online ? theme.player : theme.dim}>
+              {`${marker}${activeMarker} ${onlineMarker} ${stripControlChars(member.name)}`}
+              {member.ai ? " [AI]" : ""}
+              {initiativeValue(member, initiative)}
+            </text>
+            {vitals.map((stat) => (
+              <text key={`${member.name}-${stat.label}`} fg={stat.color}>
+                {stat.label} {bar(stat.value, stat.max, statWidth)} {stat.value}/{stat.max}
               </text>
-              {vitals.map((stat) => (
-                <text key={`${member.name}-${stat.label}`} fg={stat.color}>
-                  {stat.label} {bar(stat.value, stat.max, statWidth)} {stat.value}/{stat.max}
-                </text>
-              ))}
-            </box>
-          )
-        })
-      )}
+            ))}
+          </box>
+        )
+      })}
 
       {initiative.length > 0 ? <text fg={theme.dim}>INIT</text> : null}
       {initiative.map((entry) => (

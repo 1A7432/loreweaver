@@ -12,6 +12,12 @@ every turn.
 `online` is left at `0` here: a room's live connection count (and which
 party members are currently connected) is `TuiServer`'s concern, not this
 module's — the server overlays the real numbers before broadcasting.
+
+`resolve_active_character` (below) is the single, canonical "what character is
+this caller playing right now" lookup: `gateway.turn._display_name` (the turn
+echo's actor name) reuses it too, rather than re-implementing the same
+lookup + `"default"`-sentinel fallback a second time, so the echoed actor name
+and this module's `state.character` can never diverge on the same caller.
 """
 
 from __future__ import annotations
@@ -34,7 +40,7 @@ async def build_room_state(services: Services, ctx: AgentCtx) -> dict[str, Any]:
     initiative = await _initiative(services, ctx.chat_key)
     initiative_by_name = {entry["name"]: entry["value"] for entry in initiative}
 
-    sheet = await _active_character(services, ctx)
+    sheet = await resolve_active_character(services, ctx)
     active_name = sheet.name if sheet is not None else ""
     for member in party:
         member["active"] = bool(active_name) and member["name"] == active_name
@@ -57,7 +63,15 @@ async def build_room_state(services: Services, ctx: AgentCtx) -> dict[str, Any]:
     return state
 
 
-async def _active_character(services: Services, ctx: AgentCtx) -> CharacterSheet | None:
+async def resolve_active_character(services: Services, ctx: AgentCtx) -> CharacterSheet | None:
+    """`ctx.uid()`'s active character for `ctx.chat_key`, or `None` when unset.
+
+    `CharacterManager.get_character` never raises for "no character" — it
+    defaults the unresolved active-character pointer to the fixed sentinel
+    slot name `"default"` and returns a fresh, unsaved sheet for it — so
+    "unset" here means: the lookup itself failed (best-effort — treated the
+    same as unset), or the resolved sheet is that `"default"` sentinel.
+    """
     try:
         sheet = await services.characters.get_character(ctx.uid(), ctx.chat_key)
     except Exception:

@@ -11,11 +11,16 @@ whatever transport, receives the same fan-out via ``hub.publish``.
 The published order is fixed and matches what the M4 WS server produced:
 ``player_action`` echo -> one ``dice`` event per dice/check tool-trace entry ->
 one ``narrative`` (speaker ``npc``) per ``speak_as_npc`` entry -> the
-``narrative`` (speaker ``kp``) reply -> the room ``state`` snapshot.
+``narrative`` (speaker ``kp``) reply -> the room ``state`` snapshot. On a real
+(non-command) AI-KP turn, the KP narrative is also followed by a best-effort
+call into ``gateway.director.run_director`` (M10), which lets the party's AI
+companions take an auto-paced turn (their own sub-turns fan out through this
+same function) before the room ``state`` snapshot is published.
 """
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -23,7 +28,9 @@ from agent.loop import KPTurnResult, run_kp_turn
 from core.dice_engine import coc_rank_label
 from gateway.hub import Event
 from infra.i18n import I18n, get_i18n
-from net.state import build_room_state
+from net.state import build_room_state, resolve_active_character
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from agent.context import AgentCtx
@@ -32,12 +39,6 @@ if TYPE_CHECKING:
     from gateway.commands import CommandRouter
     from gateway.hub import Member, RoomHub
     from gateway.ops import Censor
-
-# The sentinel `CharacterManager.get_character` returns for "no character set"
-# (it defaults an unresolved active-character pointer to this fixed slot name
-# rather than raising). Mirrors `net.state._UNSET_CHARACTER_NAME` (a private
-# name of that module, so duplicated here rather than imported).
-_UNSET_CHARACTER_NAME = "default"
 
 # tool_trace `name` -> the `dice` event's `kind` (M4 §1's turn-flow step 5).
 # None of these are `keeper_only` (they never touch module secrets), matching
@@ -89,6 +90,15 @@ async def run_turn(
     ``ctx.uid()``). An AI companion turn (``gateway.director.run_companion_turn``)
     runs with no ``origin`` member but passes the companion's display name here so
     the room sees ``Silas: I cover the door`` rather than the raw ``companion:silas``.
+
+    On a real (non-command) AI-KP turn, once the KP's own narrative is published,
+    this also gives the party's AI companions (M10) a chance to auto-act via
+    ``gateway.director.run_director`` — a no-op outside combat / with `.party auto`
+    off, and, critically, ALWAYS a no-op when ``ctx.platform == "companion"`` (a
+    companion's own turn re-enters this function and must never re-trigger the
+    director — the structural anti-runaway `gateway.director` describes). A
+    companion-pacing failure is logged and swallowed, never allowed to turn a
+    successful player turn into a surfaced error.
     """
     i18n = get_i18n(ctx.locale)
     name = actor_name or await _display_name(origin, ctx, services)
@@ -112,8 +122,32 @@ async def run_turn(
                 await hub.publish(ctx.chat_key, npc_event)
         await hub.publish(ctx.chat_key, Event.narrative(speaker="kp", text=result.reply, fmt="markdown"))
 
+        if ctx.platform != "companion":
+            await _run_companion_director(hub, services, ctx, command_router, censor, result.reply)
+
     await publish_state(hub, services, ctx)
     return result
+
+
+async def _run_companion_director(
+    hub: RoomHub,
+    services: Services,
+    ctx: AgentCtx,
+    command_router: CommandRouter,
+    censor: Censor | None,
+    situation: str,
+) -> None:
+    """Best-effort M10 auto-pacing call-out (see ``run_turn``'s docstring).
+
+    Imported lazily to avoid a module-level cycle (``gateway.director`` imports
+    ``run_turn`` FROM this module, since a companion's turn runs through it too).
+    """
+    from gateway.director import run_director
+
+    try:
+        await run_director(hub, services, ctx, command_router=command_router, censor=censor, situation=situation)
+    except Exception:
+        logger.warning("director: companion auto-turn failed for chat_key=%s", ctx.chat_key, exc_info=True)
 
 
 async def publish_state(hub: RoomHub, services: Services, ctx: AgentCtx) -> None:
@@ -135,22 +169,21 @@ async def publish_state(hub: RoomHub, services: Services, ctx: AgentCtx) -> None
 async def _display_name(origin: Member | None, ctx: AgentCtx, services: Services) -> str:
     """The actor name to echo/attribute this turn to.
 
-    Prefers ``ctx``'s ACTIVE character name (looked up the same way
-    ``net.state._active_character`` does: ``CharacterManager.get_character``
-    defaults to the caller's active character and returns a sentinel
-    ``"default"``-named sheet when none is set). When the platform nickname
-    (member name, else ``ctx.uid()``) differs from the character name, it is
-    kept alongside it -- ``"<char name> (<nickname>)"`` -- so a chat log stays
-    legible even when a player's in-fiction name and platform handle diverge;
-    when they match, just the one name is shown. Falls back to the nickname
-    alone (the previous behavior) when the player has no active character.
+    Prefers ``ctx``'s ACTIVE character name, resolved via
+    ``net.state.resolve_active_character`` -- the SAME function
+    ``net.state.build_room_state`` uses for the room ``state`` snapshot's
+    ``character``/``party[].active`` fields, reused here (not re-implemented)
+    so the echoed actor name and what ``state`` reports can never diverge for
+    the same caller. When the platform nickname (member name, else
+    ``ctx.uid()``) differs from the character name, it is kept alongside it --
+    ``"<char name> (<nickname>)"`` -- so a chat log stays legible even when a
+    player's in-fiction name and platform handle diverge; when they match,
+    just the one name is shown. Falls back to the nickname alone when the
+    player has no active character.
     """
     nickname = str(getattr(origin, "name", "") or ctx.uid())
-    try:
-        sheet = await services.characters.get_character(ctx.uid(), ctx.chat_key)
-    except Exception:
-        return nickname
-    if not sheet or not sheet.name or sheet.name == _UNSET_CHARACTER_NAME:
+    sheet = await resolve_active_character(services, ctx)
+    if sheet is None:
         return nickname
     if sheet.name == nickname:
         return sheet.name

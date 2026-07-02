@@ -10,6 +10,12 @@ sends it over the socket. A player's input is handed to the transport-agnostic
 hub fans them out to every member — so the exact same turn now reaches a
 second terminal (or, later, a Discord/QQ member) in the same session. The wire
 protocol, `--serve`/`--tui-key` and `keys.example.toml` are unchanged.
+
+On `join`, after `welcome`, a newly connected (or reconnecting) member also
+gets a one-time REPLAY of the room's recent narrative -- `narrative` frames
+sent to that connection ONLY (never broadcast) -- so it does not see an empty
+log while the KP session keeps continuing from server-side history. See
+`TuiServer._replay_history`.
 """
 
 from __future__ import annotations
@@ -47,6 +53,11 @@ _SERVER_BANNER = "trpg-kp/1"
 # client-controlled, unbounded string would otherwise blow up prompt size, context
 # cost and stored history; oversized input is truncated to this many characters.
 _MAX_INPUT_CHARS = 4000
+
+# How many trailing `agent.loop` chat-history messages a join/reconnect replays to the joining
+# connection (bounds the frame burst a rejoin sends). Mirrors `agent.session_recap`'s own
+# `_RECENT_MESSAGES` "recent turns" window.
+_HISTORY_REPLAY_CAP = 30
 
 
 @dataclass(eq=False)
@@ -145,9 +156,10 @@ class TuiServer:
         """Per-connection entry point handed to `websockets.serve`.
 
         Authenticates the mandatory first `join` frame, subscribes the member
-        to its room on the hub (which emits `presence`), pushes an initial
-        `state`, then dispatches every subsequent frame until the socket
-        closes — at which point it unsubscribes (emitting `presence` again).
+        to its room on the hub (which emits `presence`), replays the room's
+        recent narrative to THIS connection only, pushes an initial `state`,
+        then dispatches every subsequent frame until the socket closes — at
+        which point it unsubscribes (emitting `presence` again).
         """
         member = await self._authenticate(ws)
         if member is None:
@@ -155,6 +167,7 @@ class TuiServer:
 
         await self.hub.subscribe(member.session_key, member)
         try:
+            await self._replay_history(member)
             await publish_state(self.hub, self.services, self._ctx_for(member))
             async for raw in ws:
                 await self._on_frame(member, raw)
@@ -162,6 +175,41 @@ class TuiServer:
             pass
         finally:
             await self.hub.unsubscribe(member)
+
+    async def _replay_history(self, member: WsMember) -> None:
+        """Replay this room's recent narrative to `member` ONLY (never broadcast to the room).
+
+        A joining or reconnecting player would otherwise see an empty log while the KP session
+        keeps continuing from server-side history. Reuses `agent.loop.run_kp_turn`'s own turn
+        history (the `chat_history.{chat_key}` store key it persists to and replays into its own
+        prompt -- see `agent.loop._persist_history`/`agent.session_recap._recent_transcript`) as
+        the source of "what already happened", rendering its last `_HISTORY_REPLAY_CAP` entries as
+        `narrative` frames: `role: "user"` (the player's own turns) as `speaker: "player"`,
+        `role: "assistant"` (the KP's replies) as `speaker: "kp"`.
+
+        Best-effort: any failure (unset/malformed history) silently no-ops rather than blocking the
+        join.
+        """
+        chat_key = self._ctx_for(member).chat_key
+        try:
+            raw = await self.services.store.get(user_key="", store_key=f"chat_history.{chat_key}")
+            if not raw:
+                return
+            history = json.loads(raw)
+            if not isinstance(history, list):
+                return
+            for entry in history[-_HISTORY_REPLAY_CAP:]:
+                if not isinstance(entry, dict):
+                    continue
+                text = str(entry.get("content") or "").strip()
+                if not text:
+                    continue
+                role = entry.get("role")
+                speaker = "player" if role == "user" else "kp" if role == "assistant" else "system"
+                fmt = "plain" if speaker == "player" else "markdown"
+                await member.deliver(Event.narrative(speaker=speaker, text=text, fmt=fmt))
+        except Exception:
+            return
 
     async def _authenticate(self, ws: Any) -> WsMember | None:
         """Consume the mandatory first `join` frame; `welcome` + return the

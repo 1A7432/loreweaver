@@ -11,11 +11,16 @@ Pacing (locked decisions):
 - ``request_companion`` -- run ONE companion's turn now (exploration / on-request; `.party act`).
 - ``run_combat_round`` -- iterate companions in initiative order ONCE, each taking a single turn,
   bounded by ``MAX_COMPANION_TURNS`` (anti-runaway) and honoring "pass" (an empty action → skip).
+- ``run_director`` -- the AUTO-PACING entry point ``gateway.turn.run_turn`` calls after every real
+  (non-command) AI-KP turn: runs one ``run_combat_round`` when ``.party auto`` is on AND the room is
+  in combat (an active initiative order), else does nothing. Exploration stays on-request only.
 
 Anti-runaway is structural: a companion turn NEVER spawns another. The director loop is the ONLY
 place companion turns are scheduled, and it builds each companion turn a *hub-less* toolset (via
 ``build_kp_toolset(services)`` with no hub), so the ``companion_act`` KP tool can't re-enter the
-director from inside a companion's own turn.
+director from inside a companion's own turn. ``run_director`` itself refuses to run at all when
+called from within a companion's own turn (``ctx.platform == "companion"``), so even its ONE entry
+point on the normal turn path (``gateway.turn.run_turn``) can never recurse.
 """
 
 from __future__ import annotations
@@ -172,6 +177,66 @@ async def run_combat_round(
         )
         results.append((companion.id, result))
     return results
+
+
+async def run_director(
+    hub: RoomHub,
+    services: Services,
+    ctx: AgentCtx,
+    *,
+    command_router: CommandRouter,
+    censor: Censor | None = None,
+    situation: str = "",
+) -> list[tuple[str, KPTurnResult | None]]:
+    """Auto-pace the party's AI companions after ``ctx``'s turn (the M10 locked "auto on initiative"
+    half of pacing; `docs/specs/M10-companions.md` §4).
+
+    This is the ONE entry point ``gateway.turn.run_turn`` calls, right after publishing a REAL
+    AI-KP turn's narrative -- never for a command turn. It runs one full :func:`run_combat_round`
+    ONLY when BOTH hold for ``ctx.chat_key``:
+
+    - ``.party auto`` is on (``party_auto.{chat_key}`` == ``"1"``), and
+    - the room is in combat (``initiative.{chat_key}`` has an active order).
+
+    Exploration pacing stays strictly ON-REQUEST (``.party act`` / the KP's ``companion_act`` tool);
+    outside combat, or with auto off, this is a no-op returning ``[]``.
+
+    STRUCTURAL anti-runaway: refuses to run at all when ``ctx.platform == "companion"`` -- a
+    companion's own turn re-enters ``run_turn`` (see ``run_companion_turn``) and so would otherwise
+    reach this exact call site, which would recursively schedule another companion round. Since the
+    director loop (``run_combat_round``) is the only scheduler and this is its only automatic
+    trigger, that one guard is enough to make the whole path non-recursive.
+
+    ``situation`` is normally the KP's just-published reply (what the companions are reacting to);
+    the companion turns it runs get their own hub-less toolset (:func:`companion_turn_toolset`), so
+    they can never re-enter the director via their own ``companion_act`` tool call either.
+    """
+    if ctx.platform == "companion":
+        return []
+    if not await _party_auto_enabled(services, ctx.chat_key):
+        return []
+    if not await _initiative_order(services, ctx.chat_key):  # no active order == not in combat
+        return []
+    return await run_combat_round(
+        hub,
+        services,
+        chat_key=ctx.chat_key,
+        command_router=command_router,
+        toolset=companion_turn_toolset(services),
+        censor=censor,
+        situation=situation,
+        locale=ctx.locale,
+    )
+
+
+async def _party_auto_enabled(services: Services, chat_key: str) -> bool:
+    """Whether `.party auto` is on for `chat_key` (mirrors `agent.kp_tools_companion.party_auto`'s
+    ``party_auto.{chat_key}`` store key -- ``"1"`` means on)."""
+    try:
+        value = await services.store.get(user_key="", store_key=f"party_auto.{chat_key}")
+    except Exception:
+        return False
+    return value == "1"
 
 
 def companion_turn_toolset(services: Services) -> Toolset:

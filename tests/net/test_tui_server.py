@@ -377,3 +377,102 @@ async def test_build_room_state_reports_character_party_and_clock():
     assert nora["mp"] == 10
     assert nora["mpMax"] == 10
     assert state["clock"]["time"] == "Night 1, 22:00"
+
+
+# ---------------------------------------------------------------------------
+# BUG B: history replay on join -- a joining/reconnecting player sees the
+# room's recent narrative instead of an empty log.
+# ---------------------------------------------------------------------------
+
+
+async def test_join_replays_recent_chat_history_to_the_joiner_only():
+    services = _services()
+    keystore = Keystore()
+    key_ann = keystore.add(room="replay-room", name="Ann")
+    key_bob = keystore.add(room="replay-room", name="Bob")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        chat_key = _room_ctx("replay-room").chat_key
+        history = [
+            {"role": "user", "content": "I open the door"},
+            {"role": "assistant", "content": "The door creaks open onto a dark hallway."},
+        ]
+        await services.store.set(user_key="", store_key=f"chat_history.{chat_key}", value=json.dumps(history))
+
+        ws_ann = await websockets.connect(url)
+        await _join(ws_ann, key_ann, "Ann")
+        await _recv(ws_ann)  # Ann's own join presence
+
+        replay1 = await _recv(ws_ann)
+        replay2 = await _recv(ws_ann)
+        state_ann = await _recv(ws_ann)
+
+        assert replay1["type"] == "narrative"
+        assert replay1["speaker"] == "player"
+        assert replay1["text"] == "I open the door"
+        assert replay2["type"] == "narrative"
+        assert replay2["speaker"] == "kp"
+        assert replay2["text"] == "The door creaks open onto a dark hallway."
+        assert state_ann["type"] == "state"
+
+        # Bob joins next -- HE also gets the same replay (unicast to him)...
+        ws_bob = await websockets.connect(url)
+        await _join(ws_bob, key_bob, "Bob")
+        await _recv(ws_bob)  # Bob's own join presence
+        bob_replay1 = await _recv(ws_bob)
+        bob_replay2 = await _recv(ws_bob)
+        await _recv(ws_bob)  # state
+        assert bob_replay1["text"] == "I open the door"
+        assert bob_replay2["text"] == "The door creaks open onto a dark hallway."
+
+        # ...but Ann, already in the room, must NOT receive a second copy of the replay: she only
+        # sees the ordinary presence/state updates Bob's join triggers, never a `narrative` frame.
+        ann_next_frames = [await _recv(ws_ann), await _recv(ws_ann)]
+        assert [frame["type"] for frame in ann_next_frames] == ["presence", "state"]
+
+        await ws_ann.close()
+        await ws_bob.close()
+    finally:
+        await server.close()
+
+
+async def test_join_replay_is_capped_and_skips_a_brand_new_room():
+    services = _services()
+    keystore = Keystore()
+    key = keystore.add(room="cap-room", name="Nora")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        chat_key = _room_ctx("cap-room").chat_key
+        history = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"line {i}"} for i in range(40)]
+        await services.store.set(user_key="", store_key=f"chat_history.{chat_key}", value=json.dumps(history))
+
+        ws = await websockets.connect(url)
+        await _join(ws, key, "Nora")
+        await _recv(ws)  # presence
+
+        replayed = [await _recv(ws) for _ in range(30)]
+        state = await _recv(ws)
+
+        assert all(frame["type"] == "narrative" for frame in replayed)
+        # Only the LAST 30 of the 40 persisted messages are replayed (the oldest 10 are dropped).
+        assert [frame["text"] for frame in replayed] == [f"line {i}" for i in range(10, 40)]
+        assert state["type"] == "state"
+        await ws.close()
+    finally:
+        await server.close()
+
+    # A brand-new room (no `chat_history` key set) replays nothing: welcome -> presence -> state,
+    # exactly `_connect_and_join`'s existing assumption (regression-proofs the no-history path).
+    server2 = TuiServer(services, keystore, port=0)
+    url2 = await _start(server2)
+    try:
+        key2 = keystore.add(room="fresh-room", name="Nora")
+        ws2, welcome2, presence2, state2 = await _connect_and_join(url2, key2, "Nora")
+        assert welcome2["type"] == "welcome"
+        assert presence2["type"] == "presence"
+        assert state2["type"] == "state"
+        await ws2.close()
+    finally:
+        await server2.close()

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { useKeyboard, useTerminalDimensions, useTimeline } from "@opentui/react"
+import { useKeyboard, useTimeline } from "@opentui/react"
 import type { InputRenderable, KeyEvent, ScrollBoxRenderable } from "@opentui/core"
 import { FrameType, stripControlChars, type DiceFrame, type PresenceFrame, type ServerFrame, type StateFrame, type WelcomeFrame } from "@trpg-kp/protocol"
 import { NarrativeLog, type LogFrame } from "./components/NarrativeLog"
@@ -68,7 +68,6 @@ export function GameView({ client, welcome, theme, themeName }: GameViewProps) {
   const [rosterFocused, setRosterFocused] = useState(false)
   const scrollRef = useRef<ScrollBoxRenderable>(null)
   const inputRef = useRef<InputRenderable>(null)
-  const dimensions = useTerminalDimensions()
 
   const diceTimeline = useTimeline({ duration: 360, loop: false, autoplay: false })
 
@@ -183,10 +182,7 @@ export function GameView({ client, welcome, theme, themeName }: GameViewProps) {
         <ascii-font text="TRPG KP" font="tiny" color={theme.accent} />
         <box flexDirection="column" marginLeft={2} justifyContent="center">
           <text fg={theme.accent}>joined {stripControlChars(welcome.room)}</text>
-          <text fg={theme.dim}>
-            {dimensions.width}x{dimensions.height}
-            {stateFrame.online > 0 ? ` · ${stateFrame.online} online` : ""}
-          </text>
+          {stateFrame.online > 0 ? <text fg={theme.dim}>{stateFrame.online} online</text> : null}
         </box>
       </box>
 

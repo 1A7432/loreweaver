@@ -228,18 +228,22 @@ describe("GameView", () => {
   // cleanup is deferred), so any test that leaves a spinner ACTIVE at teardown would
   // leak an interval that ticks — un-acted — into later tests. Landing a frame first
   // unmounts the empty-state spinner within an act()ed commit, clearing its interval,
-  // exactly as CharacterScreen stops its roll timer before the test ends.
+  // exactly as CharacterScreen stops its roll timer before the test ends. (The idle
+  // empty-log placeholder is now static/non-animated — see below — so this is only
+  // load-bearing for tests that actually drive `kpWorking` true; it's kept as a
+  // harmless no-op teardown step elsewhere for consistency.)
   const settleSpinner: ServerFrame = { type: FrameType.System, level: "info", text: "· connected ·" }
 
-  test("header renders cleanly: `joined <room>` + terminal dims, no CONNECTING bleed-through", async () => {
+  test("header renders cleanly: `joined <room>` + online count, no dims, no CONNECTING bleed-through", async () => {
     const client = new MockClient()
     const { renderer, flush, captureCharFrame } = await renderGame(client)
     await flush()
 
     const frame = captureCharFrame()
-    // The room and terminal dims read as clean, well-spaced text beside the logo...
+    // The room reads as clean, well-spaced text beside the logo...
     expect(frame).toContain("joined arkham")
-    expect(frame).toContain("110x34")
+    // ...the meaningless terminal-dimensions readout ("110x34") is gone entirely...
+    expect(frame).not.toMatch(/\d+x\d+/)
     // ...and the old permanent "CONNECTING TO KEEPER…" label — which used to collide
     // with the dims/room line on the header's single inner row — is gone entirely.
     expect(frame).not.toContain("CONNECTING")
@@ -249,17 +253,74 @@ describe("GameView", () => {
     act(() => renderer.destroy())
   })
 
-  test("empty log shows an animated placeholder, not a dead static string", async () => {
+  test("header shows the online count once state arrives", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame } = await renderGame(client)
+    await flush()
+
+    act(() => {
+      client.push({ type: FrameType.State, party: [], initiative: [], online: 2 })
+    })
+    await flush()
+
+    const frame = await waitForFrame((t) => t.includes("2 online"))
+    expect(frame).toContain("joined arkham")
+    expect(frame).toContain("2 online")
+    expect(frame).not.toMatch(/\d+x\d+/)
+
+    act(() => client.push(settleSpinner))
+    await flush()
+    act(() => renderer.destroy())
+  })
+
+  test("idle empty log shows a static ready hint, not an animated spinner", async () => {
     const client = new MockClient()
     const { renderer, flush, captureCharFrame } = await renderGame(client)
     await flush()
 
+    // Fresh/idle join, nothing in flight (`kpWorking` is false): the placeholder
+    // must be a calm, static hint — no spinner glyph — so it can never look like a
+    // frozen/hung "spinning forever" state.
     const frame = captureCharFrame()
-    expect(frame).toContain("等待 Keeper 叙事")
-    // A spinner glyph proves it's animated (alive), not the old static placeholder.
-    expect(SPINNER_FRAMES.some((glyph) => frame.includes(glyph))).toBe(true)
+    expect(frame).toContain("准备就绪")
+    expect(SPINNER_FRAMES.some((glyph) => frame.includes(glyph))).toBe(false)
 
-    act(() => client.push(settleSpinner))
+    // Give the interval a tick's worth of real time; the hint must stay static
+    // (no interval was ever started for it).
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 150))
+    })
+    await flush()
+    const later = captureCharFrame()
+    expect(later).toContain("准备就绪")
+    expect(SPINNER_FRAMES.some((glyph) => later.includes(glyph))).toBe(false)
+
+    act(() => renderer.destroy())
+  })
+
+  test("submitting into a still-empty log shows the animated working placeholder, not the static hint", async () => {
+    const client = new MockClient()
+    const { renderer, flush, captureCharFrame, mockInput } = await renderGame(client)
+    await flush()
+
+    // Submit flips `kpWorking` true; the server's echo hasn't round-tripped yet, so
+    // `frames` is still empty here — the empty-state placeholder must switch to the
+    // animated "Keeper 构思中" spinner, not stay on the idle static hint.
+    await act(async () => {
+      await mockInput.typeText("look around")
+      mockInput.pressEnter()
+    })
+    await flush()
+
+    const working = captureCharFrame()
+    expect(working).toContain("Keeper 构思中")
+    expect(working).not.toContain("准备就绪")
+    expect(SPINNER_FRAMES.some((glyph) => working.includes(glyph))).toBe(true)
+
+    // Settle so the interval doesn't leak into a later test.
+    act(() => {
+      client.push({ type: FrameType.Narrative, id: "kp-empty-1", speaker: "kp", text: "Nothing stirs.", format: "markdown" })
+    })
     await flush()
     act(() => renderer.destroy())
   })
@@ -433,8 +494,9 @@ describe("GameView", () => {
       // a captured char-frame row's string index only equals its true terminal
       // column when nothing wide (CJK glyphs, which occupy two cells but one
       // string char) precedes it on THAT SAME row — the narrative log's left
-      // column has "等待 Keeper 叙事…" on this row, so indices from a differently-
-      // padded row would land off by however many wide glyphs preceded them there.
+      // column has "准备就绪 · 输入你的行动开始" on this row, so indices from a
+      // differently-padded row would land off by however many wide glyphs preceded
+      // them there.
       const clickX = lines[rowY].indexOf("Ada")
       expect(rowY).toBeGreaterThan(0)
 
@@ -595,7 +657,7 @@ describe("GameView", () => {
       act(() => renderer.destroy())
     })
 
-    test("empty party + no character still renders gracefully", async () => {
+    test("empty party + no character shows one clear empty message, not two stacked", async () => {
       const client = new MockClient()
       const { renderer, flush, waitForFrame } = await renderGame(client)
       await flush()
@@ -606,8 +668,11 @@ describe("GameView", () => {
       await flush()
 
       const frame = await waitForFrame((t) => t.includes("队伍 / PARTY"))
-      expect(frame).toContain("尚未创建角色")
-      expect(frame).toContain("No roster")
+      // Regression: this used to render BOTH "尚未创建角色" AND "No roster" — a
+      // confusing double empty-state. Now it's a single, clearer line.
+      expect(frame).toContain("队伍空")
+      expect(frame).not.toContain("尚未创建角色")
+      expect(frame).not.toContain("No roster")
 
       // Settle the log's empty-state spinner before teardown so its ~110ms
       // interval can't tick — un-acted — into a later test (same discipline the
