@@ -369,5 +369,11 @@ async def test_build_room_state_reports_character_party_and_clock():
     assert state["character"]["hpmax"] == 10
     assert state["character"]["san"] == 50
     assert state["character"]["sanmax"] == 50
-    assert any(member["name"] == "Nora Vance" for member in state["party"])
+    nora = next(member for member in state["party"] if member["name"] == "Nora Vance")
+    assert nora["hp"] == 10
+    assert nora["hpMax"] == 10
+    assert nora["san"] == 50
+    assert nora["sanMax"] == 50
+    assert nora["mp"] == 10
+    assert nora["mpMax"] == 10
     assert state["clock"]["time"] == "Night 1, 22:00"

@@ -155,6 +155,12 @@ async def test_get_party_roster_lists_synced_characters():
 
     assert len(roster) == 1
     assert roster[0]["name"] == "Alice"
+    assert roster[0]["hp"] == 10
+    assert roster[0]["hpMax"] == 10
+    assert roster[0]["san"] == 50
+    assert roster[0]["sanMax"] == 50
+    assert roster[0]["mp"] == 10
+    assert roster[0]["mpMax"] == 10
 
 
 async def test_get_daily_luck_is_stable_and_persisted():

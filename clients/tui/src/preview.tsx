@@ -47,7 +47,11 @@ act(() => {
   client.push({
     type: FrameType.State,
     character: { name: "Nora Vance", system: "coc7", hp: 11, hpmax: 13, mp: 8, mpmax: 10, san: 55, sanmax: 70, attributes: { STR: 60, DEX: 65, INT: 70, POW: 55 }, status_effects: ["shaken"] },
-    party: [ { name: "Nora", online: true, active: true, initiative: 14 }, { name: "Silas", online: true, active: false, initiative: 9 }, { name: "Gil", online: false, active: false } ],
+    party: [
+      { name: "Nora Vance", online: true, active: true, initiative: 14, hp: 11, hpMax: 13, mp: 8, mpMax: 10, san: 55, sanMax: 70 },
+      { name: "Silas", online: true, active: false, initiative: 9, ai: true, hp: 8, hpMax: 10, mp: 7, mpMax: 10, san: 48, sanMax: 60 },
+      { name: "Gil", online: false, active: false, hp: 3, hpMax: 9 },
+    ],
     scene: { name: "Salt & Anchor Inn" },
     clock: { time: "1926-03-15 22:14", round: 1 },
     initiative: [ { name: "Nora", value: 14, current: true }, { name: "Silas", value: 9, current: false } ],

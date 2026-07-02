@@ -528,6 +528,73 @@ describe("GameView", () => {
       act(() => renderer.destroy())
     })
 
+    test("renders other members with compact vitals and expands their details on click", async () => {
+      const client = new MockClient()
+      const { renderer, flush, waitForFrame, mockMouse } = await renderGame(client)
+      await flush()
+
+      act(() => {
+        client.push({
+          type: FrameType.State,
+          character: {
+            name: "Ada",
+            system: "coc7",
+            hp: 11,
+            hpmax: 13,
+            mp: 8,
+            mpmax: 10,
+            san: 55,
+            sanmax: 70,
+            attributes: { str: 45, dex: 60 },
+            status_effects: [],
+          },
+          party: [
+            { name: "Ada", online: true, active: true },
+            {
+              name: "Bob",
+              online: true,
+              active: false,
+              hp: 4,
+              hpMax: 8,
+              mp: 3,
+              mpMax: 6,
+              san: 42,
+              sanMax: 60,
+            },
+          ],
+          initiative: [],
+          online: 2,
+        })
+      })
+      await flush()
+
+      const collapsed = await waitForFrame((t) => t.includes("Bob") && t.includes("HP ▓▓▓░░░ 4/8"))
+      expect(collapsed).toContain("▸ ● Bob")
+      expect(collapsed).toContain("MP ▓▓▓░░░ 3/6")
+      expect(collapsed).toContain("SAN ████░░ 42/60")
+
+      const lines = collapsed.split("\n")
+      const rowY = lines.findIndex((line) => line.includes("Bob"))
+      const clickX = lines[rowY].indexOf("Bob")
+      expect(rowY).toBeGreaterThan(0)
+
+      await act(async () => {
+        await mockMouse.click(clickX, rowY)
+      })
+      await flush()
+
+      const expanded = await waitForFrame((t) => t.includes("▾ ● Bob") && t.includes("HP ▓▓▓▓▓░░░░░ 4/8"))
+      expect(expanded).toContain("MP ▓▓▓▓▓░░░░░ 3/6")
+      expect(expanded).toContain("SAN ███████░░░ 42/60")
+
+      // Settle the log's empty-state spinner before teardown so its ~110ms
+      // interval can't tick — un-acted — into a later test (same discipline the
+      // outer describe's own tests already follow via `settleSpinner`).
+      act(() => client.push(settleSpinner))
+      await flush()
+      act(() => renderer.destroy())
+    })
+
     test("empty party + no character still renders gracefully", async () => {
       const client = new MockClient()
       const { renderer, flush, waitForFrame } = await renderGame(client)

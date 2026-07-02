@@ -40,6 +40,39 @@ from infra.store import Store
 
 # core/character_manager.py -> core/ -> repo root -> templates/
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
+_DND_CURRENT_HP_KEY = "生命值"
+
+
+def _numeric_stat(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return int(value)
+    return None
+
+
+def _character_vitals(character: CharacterSheet) -> dict[str, int]:
+    attrs = character.attributes
+    if character.system == "CoC":
+        pairs = (
+            ("hp", "hpMax", attrs.get("HP"), attrs.get("HPMAX")),
+            ("san", "sanMax", attrs.get("SAN"), attrs.get("SANMAX")),
+            ("mp", "mpMax", attrs.get("MP"), attrs.get("MPMAX")),
+        )
+    else:
+        hp = getattr(character, "secondary_attributes", {}).get(_DND_CURRENT_HP_KEY)
+        if hp is None:
+            hp = attrs.get("HP")
+        pairs = (("hp", "hpMax", hp, hp),)
+
+    vitals: dict[str, int] = {}
+    for value_key, max_key, raw_value, raw_max in pairs:
+        value = _numeric_stat(raw_value)
+        max_value = _numeric_stat(raw_max)
+        if value is not None and max_value is not None:
+            vitals[value_key] = value
+            vitals[max_key] = max_value
+    return vitals
 
 
 class CharacterSheet:
@@ -574,6 +607,7 @@ class CharacterManager:
         effective_status_effects = status_effects if status_effects is not None else previous_status_effects
 
         attrs = character.attributes
+        vitals = _character_vitals(character)
         if character.system == "CoC":
             status_summary = {
                 "name": character.name,
@@ -587,15 +621,17 @@ class CharacterManager:
             }
         else:
             sec = getattr(character, "secondary_attributes", {})
+            hp = sec.get(_DND_CURRENT_HP_KEY, attrs.get("HP", "?"))
             status_summary = {
                 "name": character.name,
                 "system": character.system,
-                "HP": f"{attrs.get('HP', '?')}",
+                "HP": f"{hp}",
                 "AC": sec.get("护甲等级", "?"),
                 "status_effects": effective_status_effects,
                 "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
             }
 
+        status_summary.update(vitals)
         roster[character.name] = status_summary
         try:
             await self.store.set(user_key="", store_key=roster_key, value=json.dumps(roster, ensure_ascii=False))

@@ -106,16 +106,60 @@ async def _party(services: Services, chat_key: str) -> list[dict[str, Any]]:
     except Exception:
         return []
     companion_names = await _companion_sheet_names(services, chat_key)
-    return [
-        {
+    members: list[dict[str, Any]] = []
+    for member in roster:
+        payload = {
             "name": member.get("name", ""),
             "online": True,
             "active": False,
             # M10: tag AI-companion party members so clients can render an "AI" badge.
             "ai": member.get("name", "") in companion_names,
         }
-        for member in roster
-    ]
+        payload.update(_party_member_vitals(member))
+        members.append(payload)
+    return members
+
+
+def _party_member_vitals(member: dict[str, Any]) -> dict[str, int]:
+    vitals: dict[str, int] = {}
+    for value_key, max_key, legacy_key in (
+        ("hp", "hpMax", "HP"),
+        ("san", "sanMax", "SAN"),
+        ("mp", "mpMax", "MP"),
+    ):
+        value = _int_value(member.get(value_key))
+        max_value = _int_value(member.get(max_key))
+        if value is None or max_value is None:
+            legacy_value, legacy_max = _parse_legacy_vital(member.get(legacy_key))
+            value = value if value is not None else legacy_value
+            max_value = max_value if max_value is not None else legacy_max
+        if value is not None and max_value is not None:
+            vitals[value_key] = value
+            vitals[max_key] = max_value
+    return vitals
+
+
+def _int_value(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return int(value)
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def _parse_legacy_vital(value: Any) -> tuple[int | None, int | None]:
+    if not isinstance(value, str):
+        return (None, None)
+    current, separator, maximum = value.partition("/")
+    current_value = _int_value(current.strip())
+    if current_value is None:
+        return (None, None)
+    if not separator:
+        return (current_value, current_value)
+    max_value = _int_value(maximum.strip())
+    return (current_value, max_value)
 
 
 async def _companion_sheet_names(services: Services, chat_key: str) -> set[str]:

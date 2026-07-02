@@ -29,10 +29,43 @@ function initiativeValue(member: PartyMember, initiative: InitiativeEntry[]): st
   return typeof value === "number" ? ` ${value}` : ""
 }
 
+interface VitalLine {
+  label: "HP" | "MP" | "SAN"
+  value: number
+  max: number
+  color: string
+}
+
+function partyVitals(member: PartyMember, theme: Palette): VitalLine[] {
+  const stats: VitalLine[] = []
+  const { hp, hpMax, mp, mpMax, san, sanMax } = member
+  if (typeof hp === "number" && typeof hpMax === "number") {
+    stats.push({
+      label: "HP",
+      value: hp,
+      max: hpMax,
+      color: statColor(hp, hpMax, theme.hpFull, theme.hpLow),
+    })
+  }
+  if (typeof mp === "number" && typeof mpMax === "number") {
+    stats.push({ label: "MP", value: mp, max: mpMax, color: theme.success })
+  }
+  if (typeof san === "number" && typeof sanMax === "number") {
+    stats.push({
+      label: "SAN",
+      value: san,
+      max: sanMax,
+      color: statColor(san, sanMax, theme.sanFull, theme.sanLow),
+    })
+  }
+  return stats
+}
+
 // The compact bar width used inline in the collapsed own-character row — narrower
 // than CharacterPanel's own default (10) so HP/MP/SAN + numbers all fit this
 // panel's column width alongside the roster rows below.
 const COMPACT_BAR_WIDTH = 6
+const DETAIL_BAR_WIDTH = 10
 
 /** The merged "队伍 / PARTY" roster: every member from `party` in one list, with
  * the player's own character (`character`) rendered inline as an expandable
@@ -42,6 +75,7 @@ const COMPACT_BAR_WIDTH = 6
  * mouse click on the row, or Enter while this panel is focused (see `focused`). */
 export function PartyRoster({ character, party, initiative, theme, focused, onFocus }: PartyRosterProps) {
   const [expanded, setExpanded] = useState(false)
+  const [expandedMembers, setExpandedMembers] = useState<Set<string>>(() => new Set())
 
   const toggle = () => {
     if (!character) return
@@ -49,9 +83,25 @@ export function PartyRoster({ character, party, initiative, theme, focused, onFo
     setExpanded((value) => !value)
   }
 
+  const toggleMember = (name: string) => {
+    onFocus()
+    setExpandedMembers((value) => {
+      const next = new Set(value)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+  }
+
   useKeyboard((event) => {
-    if (!focused || !character) return
-    if (keyName(event) === "return") setExpanded((value) => !value)
+    if (!focused) return
+    if (keyName(event) !== "return") return
+    if (character) {
+      setExpanded((value) => !value)
+      return
+    }
+    const expandableMember = party.find((member) => partyVitals(member, theme).length > 0)
+    if (expandableMember) toggleMember(expandableMember.name)
   })
 
   // The roster (`party`) and the caller's own sheet (`character`) are both keyed
@@ -91,20 +141,36 @@ export function PartyRoster({ character, party, initiative, theme, focused, onFo
         <text fg={theme.dim}>尚未创建角色</text>
       )}
 
-      {/* TODO(protocol): other members only carry name/online/ai on the wire today
-          (`PartyMember` has no per-member HP/SAN/status) — showing more than a name
-          row for a companion or another player's character needs a new field on
-          `state.party[]` first. */}
       {otherMembers.length === 0 && !character ? (
         <text fg={theme.dim}>No roster</text>
       ) : (
-        otherMembers.map((member) => (
-          <text key={member.name} fg={member.online ? theme.player : theme.dim}>
-            {member.active ? "▶" : " "} {member.online ? "●" : "○"} {stripControlChars(member.name)}
-            {member.ai ? " [AI]" : ""}
-            {initiativeValue(member, initiative)}
-          </text>
-        ))
+        otherMembers.map((member) => {
+          const vitals = partyVitals(member, theme)
+          const canExpand = vitals.length > 0
+          const memberExpanded = expandedMembers.has(member.name)
+          const marker = canExpand ? (memberExpanded ? "▾" : "▸") : member.active ? "▶" : " "
+          const activeMarker = canExpand && member.active ? " ▶" : ""
+          const onlineMarker = member.online ? "●" : "○"
+          const statWidth = memberExpanded ? DETAIL_BAR_WIDTH : COMPACT_BAR_WIDTH
+          return (
+            <box
+              key={member.name}
+              flexDirection="column"
+              onMouseDown={canExpand ? () => toggleMember(member.name) : undefined}
+            >
+              <text fg={member.online ? theme.player : theme.dim}>
+                {`${marker}${activeMarker} ${onlineMarker} ${stripControlChars(member.name)}`}
+                {member.ai ? " [AI]" : ""}
+                {initiativeValue(member, initiative)}
+              </text>
+              {vitals.map((stat) => (
+                <text key={`${member.name}-${stat.label}`} fg={stat.color}>
+                  {stat.label} {bar(stat.value, stat.max, statWidth)} {stat.value}/{stat.max}
+                </text>
+              ))}
+            </box>
+          )
+        })
       )}
 
       {initiative.length > 0 ? <text fg={theme.dim}>INIT</text> : null}
