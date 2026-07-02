@@ -93,3 +93,23 @@ st_show:
   sortBy: Name
   ignores: [DSS, DSF, hpmax]
 set_keys: [dnd, dnd5e]
+creation_constraints:
+  abilities:
+    STR: {min: 3, max: 18, point_buy_min: 8, point_buy_max: 15, roll: "4d6kh3"}
+    DEX: {min: 3, max: 18, point_buy_min: 8, point_buy_max: 15, roll: "4d6kh3"}
+    CON: {min: 3, max: 18, point_buy_min: 8, point_buy_max: 15, roll: "4d6kh3"}
+    INT: {min: 3, max: 18, point_buy_min: 8, point_buy_max: 15, roll: "4d6kh3"}
+    WIS: {min: 3, max: 18, point_buy_min: 8, point_buy_max: 15, roll: "4d6kh3"}
+    CHA: {min: 3, max: 18, point_buy_min: 8, point_buy_max: 15, roll: "4d6kh3"}
+  methods:
+    point_buy:
+      budget: 27
+      min: 8
+      max: 15
+      costs: {8: 0, 9: 1, 10: 2, 11: 3, 12: 4, 13: 5, 14: 7, 15: 9}
+    standard_array:
+      values: [15, 14, 13, 12, 10, 8]
+    rolled:
+      formula: "4d6kh3"
+      min: 3
+      max: 18

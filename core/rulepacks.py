@@ -177,6 +177,7 @@ class RulePack:
     alias: dict[str, list[str]]
     st_show: dict[str, Any]
     set_keys: list[str]
+    creation_constraints: dict[str, Any]
     alias_to_canonical: dict[str, str]
     derived_formulas: dict[str, Callable[[Mapping[str, Any]], Any]]
 
@@ -224,6 +225,7 @@ def load_rulepack(system: str) -> RulePack:
         alias={str(key): list(value or []) for key, value in alias.items()},
         st_show=dict(data.get("st_show") or {}),
         set_keys=list(data.get("set_keys") or []),
+        creation_constraints=dict(data.get("creation_constraints") or {}),
         alias_to_canonical=_build_alias_map(alias),
         derived_formulas=dict(_DERIVED_TABLES[normalized]),
     )

@@ -54,3 +54,13 @@ def test_rulepack_aliases_resolve_en_and_zh_to_same_canonical():
 
     assert pack.resolve_skill("spot hidden") == "侦查"
     assert pack.resolve_skill("侦察") == "侦查"
+
+
+def test_rulepacks_expose_creation_constraints():
+    coc = load_rulepack("coc7").creation_constraints
+    dnd = load_rulepack("dnd5e").creation_constraints
+
+    assert coc["characteristics"]["STR"] == {"min": 15, "max": 90, "roll": "3d6x5"}
+    assert coc["budgets"]["personal_interest_points"]["formula"] == "INT*2"
+    assert dnd["methods"]["point_buy"]["budget"] == 27
+    assert dnd["methods"]["standard_array"]["values"] == [15, 14, 13, 12, 10, 8]

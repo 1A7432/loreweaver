@@ -214,3 +214,24 @@ st_show:
   itemsPerLine: 4
   ignores: [生命值上限, 魔法值上限, 理智上限]
 set_keys: [coc, coc7]
+creation_constraints:
+  characteristics:
+    STR: {min: 15, max: 90, roll: "3d6x5"}
+    CON: {min: 15, max: 90, roll: "3d6x5"}
+    DEX: {min: 15, max: 90, roll: "3d6x5"}
+    APP: {min: 15, max: 90, roll: "3d6x5"}
+    POW: {min: 15, max: 90, roll: "3d6x5"}
+    LUC: {min: 15, max: 90, roll: "3d6x5"}
+    SIZ: {min: 40, max: 90, roll: "(2d6+6)x5"}
+    INT: {min: 40, max: 90, roll: "(2d6+6)x5"}
+    EDU: {min: 40, max: 90, roll: "(2d6+6)x5"}
+  skills:
+    default: {min: 0, max: 90, growth_max: 99}
+    creation_locked:
+      克苏鲁神话: {min: 0, max: 0}
+  budgets:
+    personal_interest_points:
+      formula: "INT*2"
+    occupational_points:
+      default_formula: "EDU*4"
+      formulas: ["EDU*4", "EDU*2+STR*2", "EDU*2+DEX*2", "EDU*2+APP*2", "EDU*2+POW*2"]
