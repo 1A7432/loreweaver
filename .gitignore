@@ -56,3 +56,6 @@ scratch/
 
 # TUI preview render artifact
 clients/tui/preview_frame.txt
+
+# local-only interactive play launcher (not for the public repo)
+scripts/play.py
