@@ -45,7 +45,51 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["core", "infra", "agent", "gateway", "adapters"]
+# `net` is a real package. `app.py` is a top-level module (the `loreweaver`
+# console script's entry point, and `python -m app --cli`'s target).
+# `rulepacks`/`locales` are data-only "packages" (no __init__.py — PEP 420
+# implicit namespace packages) so their files land as siblings of core/infra/
+# etc. directly under site-packages, matching the runtime lookup in
+# core/rulepacks.py and infra/i18n.py: both resolve their data dir as
+# `Path(__file__).resolve().parent.parent / "<rulepacks|locales>"`, i.e. two
+# levels up from the loader module — which is site-packages root in an
+# installed (non-editable) wheel, not the source repo root.
+#
+# Also folds in a second, same-shape pre-existing omission found while
+# hard-verifying this fix: `adapters` has real subpackages (adapters.cli,
+# .discord, .feishu, .onebot, .qq_official, .telegram) that the old flat
+# `["core", ..., "adapters"]` list never declared, so they were silently
+# absent from the wheel too — `python -m app --cli` imports
+# `adapters.cli.adapter` and would ModuleNotFoundError on a clean install.
+packages = [
+    "core",
+    "infra",
+    "agent",
+    "gateway",
+    "adapters",
+    "adapters.cli",
+    "adapters.discord",
+    "adapters.feishu",
+    "adapters.onebot",
+    "adapters.qq_official",
+    "adapters.telegram",
+    "net",
+    "rulepacks",
+    "locales",
+    "locales.en",
+    "locales.zh",
+]
+py-modules = ["app"]
+
+[tool.setuptools.package-data]
+rulepacks = ["*.yaml"]
+"locales.en" = ["*.json"]
+"locales.zh" = ["*.json"]
+# adapters/cli/demo.py loads this offline-demo module text via a
+# `Path(__file__).with_name(...)` sibling-file read at import time; without
+# declaring it, setuptools ships only `*.py` for a package and the import
+# crashes with FileNotFoundError on a clean install.
+"adapters.cli" = ["*.txt"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

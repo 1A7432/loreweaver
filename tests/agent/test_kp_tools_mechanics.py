@@ -11,10 +11,13 @@ from __future__ import annotations
 import json
 import random
 
+import pytest
+
 from agent.context import AgentCtx
 from agent.kp_tools_mechanics import _MADNESS_SYMPTOMS, CharacterTools, DiceTools, InitiativeTools
 from agent.services import Services, build_services
 from agent.tools import Toolset
+from core.coc_rules import DEFAULT_COC_RULE, DIFFICULTY_REGULAR, result_check_base
 from core.dice_engine import DiceRoller, coc_rank_label, seed_dice
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
@@ -130,9 +133,12 @@ async def test_update_character_skill_and_attribute_recompute_derived_stats():
     attr_result = await char_tools.update_character_attribute(ctx, attribute="POW", value=80)
     assert "80" in attr_result
     sheet_after = await char_tools.get_character_sheet(ctx)
-    # Starting SAN tracks POW (80); the SANMAX cap is 99 - Cthulhu Mythos (0) -> 99, not POW.
-    assert "SAN: 80/99" in sheet_after
-    assert "MP: 16/16" in sheet_after  # 80 // 5 == 16
+    # Editing POW in-play recomputes MPMAX (80//5=16) but PRESERVES the current MP
+    # and SAN — raising a characteristic must never restore spent magic/sanity.
+    # (Starting SAN = min(POW, SANMAX) is set at CREATION; here Vera was created at
+    # POW 50, so SAN stays 50/99.)
+    assert "MP: 10/16" in sheet_after
+    assert "SAN: 50/99" in sheet_after
 
 
 async def test_update_character_tools_clamp_rule_violations_before_saving():
@@ -145,7 +151,10 @@ async def test_update_character_tools_clamp_rule_violations_before_saving():
     assert "attribute_above_max" in attr_result
     character = await services.characters.get_character(ctx.uid(), ctx.chat_key)
     assert character.attributes["POW"] == 90
-    assert character.attributes["MP"] == 18
+    # Raising POW recomputes MPMAX (POW//5 -> 18) but PRESERVES the current MP —
+    # an in-play attribute edit never restores spent magic.
+    assert character.attributes["MPMAX"] == 18
+    assert character.attributes["MP"] == 10
 
     skill_result = await char_tools.update_character_skill(ctx, skill_name="spot hidden", value=999)
     assert "90" in skill_result
@@ -368,6 +377,34 @@ async def test_sanity_check_updates_san_deterministically():
     assert f"SAN: {expected_san}/99" in sheet
 
 
+async def test_sanity_check_fumble_drains_all_remaining_san_house_rule(monkeypatch):
+    """Locks the intentional house rule on `sanity_check`'s fumble branch (see the
+    comment on the `rank == -2` branch in `agent/kp_tools_mechanics.py`): CoC7e RAW
+    says a fumble's SAN loss is the MAX of the loss-dice range (e.g. "1d4" tops out
+    at 4), but this port faithfully carries over `nekro_trpg_dice_plugin`'s house
+    rule of draining ALL remaining SAN instead - confirmed intentional (not a bug
+    introduced by this port) since the upstream source has the same behavior with
+    its own explicit comment ("大失败时损失所有SAN" - "lose all SAN on a fumble").
+    """
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    dice_tools = DiceTools(services)
+    await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)  # SAN starts at 50/99
+
+    # d100 == 100 is always a fumble under the default CoC rule (rule 0), regardless
+    # of skill value (`core.coc_rules.result_check_base`) - force the SAN-check roll.
+    # `d20` (used for the "1d4" loss-dice roll below) draws from `random.randrange`,
+    # never `random.randint`, so this only pins the SAN-check's own d100 roll.
+    monkeypatch.setattr(random, "randint", lambda _lo, _hi: 100)
+
+    result = await dice_tools.sanity_check(ctx, success_loss="1", failure_loss="1d4")
+
+    # A "1d4" failure_loss maxes out at 4 under RAW; the house rule drains all 50.
+    assert "0/99" in result
+    sheet = await char_tools.get_character_sheet(ctx)
+    assert "SAN: 0/99" in sheet
+
+
 async def test_skill_growth_deterministic_outcome():
     services, ctx = _build()
     char_tools = CharacterTools(services)
@@ -441,6 +478,64 @@ async def test_opposed_check_deterministic_outcome():
     assert str(r1) in result
     assert str(r2) in result
     assert "侦查" in result and "聆听" in result
+
+
+@pytest.mark.parametrize(
+    ("value", "roll"),
+    [
+        (25, 1),  # natural-1 crit regardless of skill
+        (25, 5),  # extreme (roll <= 25 // 5)
+        (25, 10),  # hard (roll <= 25 // 2)
+        (25, 25),  # regular success (roll <= value)
+        (25, 26),  # fail
+        (25, 96),  # fumble: skill < 50 -> 96-100 band
+        (60, 1),  # natural-1 crit
+        (60, 12),  # extreme (roll <= 60 // 5)
+        (60, 30),  # hard (roll <= 60 // 2)
+        (60, 60),  # regular success
+        (60, 61),  # fail
+        (60, 100),  # fumble: natural 100, any skill
+    ],
+)
+async def test_opposed_check_per_side_level_matches_core_coc_rules(monkeypatch, value, roll):
+    """`opposed_check`'s per-side level must come from the SAME authoritative
+    `core.coc_rules.result_check_base` ladder used by `skill_check`/`sanity_check`
+    (via `core.dice_engine`) - not a private re-implementation that can silently
+    drift from it. Covers a natural-1 crit, the extreme/hard/regular-success bands,
+    a plain fail, and both fumble bands (96-100 under skill 50, natural 100 otherwise).
+    """
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    dice_tools = DiceTools(services)
+    await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)
+
+    passive_value, passive_roll = 60, 50
+    queued = iter([roll, passive_roll])
+    monkeypatch.setattr(random, "randint", lambda _lo, _hi: next(queued))
+
+    result = await dice_tools.opposed_check(
+        ctx, skill1="侦查", skill2="聆听", skill1_value=value, skill2_value=passive_value
+    )
+
+    i18n = services.i18n.with_locale(ctx.locale)
+    expected_rank, _ = result_check_base(DEFAULT_COC_RULE, roll, value, DIFFICULTY_REGULAR)
+    expected_passive_rank, _ = result_check_base(DEFAULT_COC_RULE, passive_roll, passive_value, DIFFICULTY_REGULAR)
+    expected_active_line = i18n.t(
+        "kp_tools.dice.opposed.active_line",
+        skill="侦查",
+        value=value,
+        roll=roll,
+        level=coc_rank_label(expected_rank, i18n),
+    )
+    expected_passive_line = i18n.t(
+        "kp_tools.dice.opposed.passive_line",
+        skill="聆听",
+        value=passive_value,
+        roll=passive_roll,
+        level=coc_rank_label(expected_passive_rank, i18n),
+    )
+    assert expected_active_line in result
+    assert expected_passive_line in result
 
 
 async def test_hp_manager_add_sub_and_show():

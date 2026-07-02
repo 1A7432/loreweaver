@@ -17,11 +17,12 @@ faithful to the source; only the wiring changes:
   ``core.dice_engine.DiceRoller`` requires an instance (see its module
   docstring);
 - COC success levels are the canonical ``-2..4`` rank codes produced by
-  ``core.coc_rules.result_check_base`` (surfaced through
-  ``core.dice_engine``'s check helpers) and rendered to a localized label at
-  the edge via ``coc_rank_label``/``services.i18n`` - never compared against
-  a hardcoded CN string the way the source compares ``result["level"] ==
-  "大失败"``.
+  ``core.coc_rules.result_check_base`` - called directly (``opposed_check``)
+  or surfaced through ``core.dice_engine``'s check helpers (``sanity_check``,
+  ``skill_check``) - and rendered to a localized label at the edge via
+  ``coc_rank_label``/``services.i18n``; never compared against a hardcoded CN
+  string the way the source compares ``result["level"] == "大失败"``, and
+  never re-implemented as a second, private ladder.
 
 Every user-visible string is localized via ``self.services.i18n`` (see
 ``locales/{en,zh}/kp_tools.json``). CJK/EN game-data literals - skill and
@@ -41,6 +42,7 @@ from agent.services import Services
 from agent.tools import tool
 from core.character_manager import CharacterSheet
 from core.character_rules import render_validation_notice, validate_sheet
+from core.coc_rules import DEFAULT_COC_RULE, DIFFICULTY_REGULAR, result_check_base
 from core.dice_engine import DiceResult, coc_rank_label
 
 # COC7 base-attribute names, recognized by `skill_check` so "STR"/"POW"/...
@@ -52,18 +54,6 @@ _COC_ATTRIBUTE_NAMES = {"STR", "CON", "SIZ", "DEX", "APP", "INT", "POW", "EDU", 
 # display name "信用评级". CJK/EN game-data skill-name aliases, exempt from
 # i18n per the same convention as `core.character_manager.CharacterTemplate.synonyms`.
 _CREDIT_RATING_ALIASES = {"信用", "credit rating", "信用评级", "信誉"}
-
-# `opposed_check`'s local success-level scale (0..5, ported as-is from
-# plugin.py's inline `get_level` helper - distinct from `core.coc_rules`'
-# canonical -2..4 codes) -> the matching `dice.json` rank-label i18n key.
-_OPPOSED_LEVEL_KEYS = {
-    5: "coc.rank.crit",
-    4: "coc.rank.extreme",
-    3: "coc.rank.hard",
-    2: "coc.rank.success",
-    1: "coc.rank.fail",
-    0: "coc.rank.fumble",
-}
 
 # COC7 random-madness symptom tables, ported verbatim from plugin.py's
 # `random_madness`. Madness-table entries are CJK game data, explicitly
@@ -154,7 +144,7 @@ class CharacterTools:
             else:
                 character = CharacterSheet(name=name, system=system_name)
 
-            character, violations = validate_sheet(character, template_key)
+            character, violations = validate_sheet(character, template_key, initialize_vitals=True)
             await self.services.characters.save_character(ctx.uid(), ctx.chat_key, character)
 
             attrs = character.attributes
@@ -629,7 +619,15 @@ class DiceTools:
             loss_result = dice.roll_expression(loss_expr)
             loss = loss_result.total
 
-            if result["rank"] == -2:  # fumble: lose all remaining SAN
+            if result["rank"] == -2:
+                # Intentional house rule, not CoC7e RAW: a fumble drains ALL remaining SAN,
+                # rather than RAW's "loss = the max of the loss-dice range" (e.g. 1d6 -> 6).
+                # Faithfully ported from `nekro_trpg_dice_plugin/trpg_dice/plugin.py`'s
+                # `sanity_check` (`if result["level"] == "大失败": loss = san_value`, with
+                # its own comment "大失败时损失所有SAN" - "lose all SAN on a fumble") - this
+                # predates this port and is confirmed intentional, not an accidental
+                # divergence introduced here. Locked by
+                # `test_sanity_check_fumble_drains_all_remaining_san_house_rule`.
                 loss = san_value
 
             new_san = max(0, san_value - loss)
@@ -735,23 +733,16 @@ class DiceTools:
             r1 = random.randint(1, 100)
             r2 = random.randint(1, 100)
 
-            def get_level(roll: int, value: int) -> tuple[int, str]:
-                if roll == 1:
-                    code = 5
-                elif roll <= value // 5:
-                    code = 4
-                elif roll <= value // 2:
-                    code = 3
-                elif roll <= value:
-                    code = 2
-                elif roll == 100 or (roll >= 96 and value < 50):
-                    code = 0
-                else:
-                    code = 1
-                return code, i18n.t(_OPPOSED_LEVEL_KEYS[code])
-
-            lv1, name1 = get_level(r1, s1)
-            lv2, name2 = get_level(r2, s2)
+            # Per-side success level: reuse `core.coc_rules.result_check_base` (the
+            # authoritative CoC7 ladder, also used by `skill_check`/`sanity_check` via
+            # `core.dice_engine`) under the default rulebook rule/difficulty, instead of
+            # re-implementing the crit/extreme/hard/fail/fumble bands here. Only the
+            # canonical `-2..4` rank is needed for the opposed comparison below - the
+            # `critical_success_value` threshold is irrelevant to who wins.
+            lv1, _ = result_check_base(DEFAULT_COC_RULE, r1, s1, DIFFICULTY_REGULAR)
+            lv2, _ = result_check_base(DEFAULT_COC_RULE, r2, s2, DIFFICULTY_REGULAR)
+            name1 = coc_rank_label(lv1, i18n)
+            name2 = coc_rank_label(lv2, i18n)
 
             if lv1 > lv2:
                 winner = i18n.t("kp_tools.dice.opposed.winner_active", skill=skill1)

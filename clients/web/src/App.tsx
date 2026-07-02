@@ -41,6 +41,14 @@ export function App({ client: injected, admin }: AppProps) {
       } else if (frame.type === "error") {
         setError(frame.message)
         setConnecting(false)
+        // A bad key is a permanent failure: stop the auto-reconnect loop so it
+        // doesn't keep re-joining with the same rejected key and spamming the
+        // same error. Transient errors (rate_limited, server_error, a
+        // malformed mid-session frame) keep the session alive. Mirrors the
+        // OpenTUI client (clients/tui/src/App.tsx).
+        if (frame.code === "bad_key") {
+          client.close?.()
+        }
       }
     })
   }, [client])

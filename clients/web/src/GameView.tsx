@@ -99,16 +99,12 @@ export function GameView({ client, welcome }: GameViewProps) {
     const text = command.trim()
     if (!text) return
     client.sendInput(text)
-    setFrames((current) =>
-      appendFrame(current, {
-        type: FrameType.Narrative,
-        id: `local-${Date.now()}`,
-        speaker: "player",
-        name: welcome.you.name,
-        text,
-        format: "plain",
-      }),
-    )
+    // No optimistic local echo here: per docs/protocol.md (turn flow step 3)
+    // the server always broadcasts the player's own action back as a
+    // `narrative{speaker:"player"}` frame, including to the sender. Appending
+    // a local frame here too used to double every submitted line; `onMessage`
+    // above already renders the server's echo once it round-trips. Mirrors
+    // the OpenTUI client (clients/tui/src/GameView.tsx).
     setHistory((current) => [...current, text].slice(-50))
     setHistoryIndex(null)
     setCommand("")

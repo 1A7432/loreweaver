@@ -23,19 +23,27 @@ class SheetViolation:
     limit: Any | None = None
 
 
-def validate_sheet(sheet: CharacterSheet, system: str | None = None) -> tuple[CharacterSheet, list[SheetViolation]]:
+def validate_sheet(
+    sheet: CharacterSheet, system: str | None = None, *, initialize_vitals: bool = False
+) -> tuple[CharacterSheet, list[SheetViolation]]:
     """Return a clamped sheet copy plus deterministic rule violations.
 
     The validator never consults an LLM. It enforces the rulepack's creation
     constraints for core ability/characteristic ranges, skill ranges, and the
     budget checks that can be inferred from a complete sheet.
+
+    ``initialize_vitals`` distinguishes character CREATION from an in-play EDIT.
+    On creation (True) the current HP/MP/SAN are (re)derived from the final
+    characteristics — full HP/MP and CoC's starting SAN = min(POW, SANMAX). On
+    an edit (False, the default) the current values are PRESERVED (only clamped
+    to their new maxima) so editing a skill/attribute never heals a wounded PC.
     """
     pack = load_rulepack(system or sheet.system)
     clamped = CharacterSheet.from_dict(copy.deepcopy(sheet.to_dict()))
     violations: list[SheetViolation] = []
 
     if pack.system == _COC_SYSTEM:
-        _validate_coc_sheet(clamped, pack, violations)
+        _validate_coc_sheet(clamped, pack, violations, initialize=initialize_vitals)
     elif pack.system == _DND_SYSTEM:
         _validate_dnd_sheet(clamped, pack, violations)
     return clamped, violations
@@ -70,7 +78,9 @@ def render_validation_notice(i18n: Any, violations: list[SheetViolation]) -> str
     return i18n.t("character.validation.notice", items=i18n.t("character.validation.separator").join(rendered))
 
 
-def _validate_coc_sheet(sheet: CharacterSheet, pack: RulePack, violations: list[SheetViolation]) -> None:
+def _validate_coc_sheet(
+    sheet: CharacterSheet, pack: RulePack, violations: list[SheetViolation], *, initialize: bool = False
+) -> None:
     constraints = pack.creation_constraints
     characteristics = constraints.get("characteristics") or {}
     for key, rule in characteristics.items():
@@ -91,7 +101,7 @@ def _validate_coc_sheet(sheet: CharacterSheet, pack: RulePack, violations: list[
         _clamp_numeric_field(sheet.skills, key, min_skill, max_skill, "skill", violations)
 
     sheet._calc_coc_derived_skills()
-    _recompute_coc_vitals(sheet)
+    _recompute_coc_vitals(sheet, initialize=initialize)
     _check_coc_skill_budget(sheet, constraints.get("budgets") or {}, violations)
 
 
@@ -149,24 +159,45 @@ def _coerce_int(value: Any) -> int | None:
     return None
 
 
-def _recompute_coc_vitals(sheet: CharacterSheet) -> None:
+def _recompute_coc_vitals(sheet: CharacterSheet, *, initialize: bool = False) -> None:
+    """Recompute the CoC derived maxima (HPMAX/MPMAX/SANMAX/IDEA/KNOW), then set
+    the current HP/MP/SAN.
+
+    ``initialize`` is the CREATION vs in-play EDIT switch. On creation (True) the
+    current values are (re)derived from the final characteristics — full HP/MP and
+    CoC's starting SAN = min(POW, SANMAX). On an edit (False) an existing current
+    value is PRESERVED (only clamped to its new max), so editing a skill/attribute
+    never heals a wounded character back to full; an absent value is initialized
+    (a genuinely bare sheet). IDEA/KNOW are pure derivations and always recompute.
+    """
     attrs = sheet.attributes
     skills = sheet.skills
     con = _int(attrs.get("CON"), 50)
     siz = _int(attrs.get("SIZ"), 50)
     pow_value = _int(attrs.get("POW"), 50)
     mythos = _int(skills.get("克苏鲁神话"), 0)
-    hp = (con + siz) // 10
-    mp = pow_value // 5
+    hpmax = (con + siz) // 10
+    mpmax = pow_value // 5
     sanmax = max(0, 99 - mythos)
-    attrs["HPMAX"] = hp
-    attrs["HP"] = hp
-    attrs["MPMAX"] = mp
-    attrs["MP"] = mp
+    san_start = min(pow_value, sanmax)
+    attrs["HPMAX"] = hpmax
+    attrs["MPMAX"] = mpmax
     attrs["SANMAX"] = sanmax
-    attrs["SAN"] = min(pow_value, sanmax)
+    attrs["HP"] = hpmax if initialize else _clamp_current_vital(attrs, "HP", hpmax)
+    attrs["MP"] = mpmax if initialize else _clamp_current_vital(attrs, "MP", mpmax)
+    attrs["SAN"] = san_start if initialize else _clamp_current_vital(attrs, "SAN", sanmax, default=san_start)
     attrs["IDEA"] = _int(attrs.get("INT"), 50)
     attrs["KNOW"] = _int(attrs.get("EDU"), 50)
+
+
+def _clamp_current_vital(attrs: dict[str, Any], key: str, maximum: int, default: int | None = None) -> int:
+    """Preserve an existing current vital (clamped to [0, maximum]); initialize a
+    genuinely absent one to ``default`` (or ``maximum``). Used for in-play edits."""
+    fallback = maximum if default is None else default
+    if key not in attrs:
+        return fallback
+    current = _int(attrs.get(key), fallback)
+    return max(0, min(maximum, current))
 
 
 def _check_coc_skill_budget(sheet: CharacterSheet, budgets: dict[str, Any], violations: list[SheetViolation]) -> None:

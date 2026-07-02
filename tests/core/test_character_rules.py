@@ -2,10 +2,15 @@ from core.character_manager import CharacterSheet
 from core.character_rules import validate_sheet
 
 
-def test_validate_coc_characteristics_clamps_to_roll_ranges_and_recomputes_vitals():
+def test_validate_coc_characteristics_clamps_to_roll_ranges_and_recomputes_maxima():
+    # A default `CharacterSheet` already carries placeholder *current* vitals
+    # (HP=10, MP=10, SAN=50) consistent with its default CON/SIZ/POW=50.
+    # Bumping STR/SIZ/POW here must recompute the *maxima* (and clamp the
+    # existing current values into their new range) without resetting the
+    # current values up to the new maxima -- that was the bug.
     sheet = CharacterSheet("Boundary", "CoC")
     sheet.attributes["STR"] = 999
-    sheet.attributes["SIZ"] = 1
+    sheet.attributes["SIZ"] = 1  # clamps up to the min (40) -> HPMAX shrinks below the old HP
     sheet.attributes["POW"] = 95
 
     clamped, violations = validate_sheet(sheet, "coc7")
@@ -14,10 +19,69 @@ def test_validate_coc_characteristics_clamps_to_roll_ranges_and_recomputes_vital
     assert clamped.attributes["STR"] == 90
     assert clamped.attributes["SIZ"] == 40
     assert clamped.attributes["POW"] == 90
-    assert clamped.attributes["MP"] == 18
     assert clamped.attributes["MPMAX"] == 18
-    assert clamped.attributes["SAN"] == 90
+    assert clamped.attributes["SANMAX"] == 99
+    assert clamped.attributes["HPMAX"] == 9
+    # Current values are preserved (not reset to the new maxima): MP/SAN stay
+    # at their untouched placeholder default; HP clamps down since the new
+    # HPMAX (9) is now below the old current HP (10).
+    assert clamped.attributes["MP"] == 10
+    assert clamped.attributes["SAN"] == 50
+    assert clamped.attributes["HP"] == 9
     assert {violation.code for violation in violations} >= {"attribute_above_max", "attribute_below_min"}
+
+
+def test_validate_coc_preserves_wounded_current_hp_mp_san_across_unrelated_edit():
+    """`validate_sheet` is called on every skill/attribute edit, not just at
+    creation -- it must never act as a mutator that silently heals a wounded
+    character back to full HP/MP/SAN."""
+    sheet = CharacterSheet("Wounded", "CoC")
+    sheet.attributes.update({"CON": 60, "SIZ": 70, "POW": 60})
+    sheet, _ = validate_sheet(sheet, "coc7")
+    assert sheet.attributes["HPMAX"] == 13
+
+    # The investigator has taken damage/SAN loss during play.
+    sheet.attributes["HP"] = 3
+    sheet.attributes["MP"] = 2
+    sheet.attributes["SAN"] = 20
+
+    # Simulate the KP editing an unrelated skill, which re-runs validate_sheet.
+    sheet.skills["侦查"] = 40
+    revalidated, _ = validate_sheet(sheet, "coc7")
+
+    assert revalidated.attributes["HPMAX"] == 13
+    assert revalidated.attributes["HP"] == 3
+    assert revalidated.attributes["MP"] == 2
+    assert revalidated.attributes["SAN"] == 20
+    assert revalidated.skills["侦查"] == 40
+
+
+def test_validate_coc_fresh_sheet_without_current_vitals_initializes_to_maxima():
+    """A sheet with no current HP/MP/SAN yet (e.g. imported from a raw
+    character card missing derived stats) initializes them: HP/MP to their
+    maxima, SAN to CoC's starting-SAN rule of min(POW, SANMAX)."""
+    sheet = CharacterSheet.from_dict(
+        {
+            "name": "Fresh",
+            "system": "CoC",
+            "attributes": {"CON": 60, "SIZ": 60, "POW": 70, "INT": 55, "EDU": 45},
+            "skills": {},
+        }
+    )
+    assert "HP" not in sheet.attributes
+    assert "MP" not in sheet.attributes
+    assert "SAN" not in sheet.attributes
+
+    clamped, _ = validate_sheet(sheet, "coc7")
+
+    assert clamped.attributes["HPMAX"] == 12
+    assert clamped.attributes["HP"] == 12
+    assert clamped.attributes["MPMAX"] == 14
+    assert clamped.attributes["MP"] == 14
+    assert clamped.attributes["SANMAX"] == 99
+    assert clamped.attributes["SAN"] == 70  # min(POW=70, SANMAX=99), not SANMAX
+    assert clamped.attributes["IDEA"] == 55
+    assert clamped.attributes["KNOW"] == 45
 
 
 def test_validate_coc_skills_clamps_and_marks_budget_overrun():

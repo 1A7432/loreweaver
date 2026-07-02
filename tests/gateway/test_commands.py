@@ -271,6 +271,85 @@ async def test_model_key_rejected_in_public_channel_but_accepted_in_dm():
     assert (await services.runtime_config.get())["api_key"] == "sk-supersecret-value-9999"
 
 
+# ---------------------------------------------------------------------------
+# Privilege-escalation regression — `tui` is a MULTI-USER network service
+# (`net/tui_server.py`), unlike the single-local-operator `cli`. Its privilege
+# must come from the AUTHENTICATED keystore role stamped into `ctx.extra["role"]`
+# (`TuiServer._ctx_for`), never be assumed from the platform name alone (see
+# `gateway.commands._privilege_level`). A player-role `tui` connection must be
+# denied every keeper-only dot-command; a keeper-role one is allowed; `cli`
+# keeps auto-master.
+# ---------------------------------------------------------------------------
+
+
+def _tui_ctx(role: str, *, room: str = "room1") -> AgentCtx:
+    return AgentCtx(
+        chat_key=f"tui:group:{room}", user_id="u1", platform="tui", locale="en", extra={"role": role}
+    )
+
+
+async def test_tui_player_role_is_denied_keeper_only_commands():
+    from net.keystore import Keystore
+
+    services = _mutable_services()
+    router = CommandRouter(services, keystore=Keystore())
+    player = _tui_ctx("player")
+    i18n = services.i18n.with_locale("en")
+
+    denied = await router.dispatch(player, ".model set anthropic")
+    assert denied == i18n.t("commands.model.denied")
+    assert services.settings.llm.provider == "openai"  # unchanged
+    assert await services.runtime_config.get() == {}  # not persisted
+
+    denied_lore = await router.dispatch(player, ".lore query anything")
+    assert denied_lore == i18n.t("worldbook.commands.lore.denied")
+
+    denied_room = await router.dispatch(player, ".room open")
+    assert denied_room == i18n.t("rooms.denied")
+
+
+async def test_tui_keeper_role_is_allowed_keeper_only_commands():
+    from net.keystore import Keystore
+
+    services = _mutable_services()
+    keystore = Keystore()
+    router = CommandRouter(services, keystore=keystore)
+    keeper = _tui_ctx("keeper")
+    i18n = services.i18n.with_locale("en")
+
+    allowed = await router.dispatch(keeper, ".model set anthropic")
+    assert allowed != i18n.t("commands.model.denied")
+    assert services.settings.llm.provider == "anthropic"
+
+    allowed_lore = await router.dispatch(keeper, ".lore query")
+    assert allowed_lore == i18n.t("worldbook.commands.lore.query_usage")  # reached the handler, not denied
+
+    allowed_room = await router.dispatch(keeper, ".room open")
+    assert allowed_room != i18n.t("rooms.denied")
+    assert len(keystore) == 1  # a join key was minted
+
+
+async def test_cli_ctx_is_still_auto_master_for_keeper_only_commands():
+    from net.keystore import Keystore
+
+    services = _mutable_services()
+    keystore = Keystore()
+    router = CommandRouter(services, keystore=keystore)
+    cli = AgentCtx(chat_key="cli:dm:m", user_id="kp", locale="en")
+    i18n = services.i18n.with_locale("en")
+
+    allowed = await router.dispatch(cli, ".model set anthropic")
+    assert allowed != i18n.t("commands.model.denied")
+    assert services.settings.llm.provider == "anthropic"
+
+    allowed_lore = await router.dispatch(cli, ".lore query")
+    assert allowed_lore == i18n.t("worldbook.commands.lore.query_usage")
+
+    allowed_room = await router.dispatch(cli, ".room open")
+    assert allowed_room != i18n.t("rooms.denied")
+    assert len(keystore) == 1
+
+
 async def test_roll_invalid_expression_returns_friendly_error_not_crash():
     """A malformed dice expression (e.g. a skill name typed at `.r`/`.rh`/`.rd`) must
     return a localized 'invalid expression' message, never raise a raw d20 error."""

@@ -20,13 +20,15 @@ from agent.context import AgentCtx, LocalFs
 from agent.kp_tools import build_kp_toolset
 from agent.services import build_services
 from core.dice_engine import seed_dice
+from gateway.commands import CommandRouter
+from gateway.hub import RoomHub
 from gateway.session import SessionSource
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM, ToolCall, assistant_text, assistant_tools, tool_call
 from net.keystore import Keystore
 from net.state import build_room_state
-from net.tui_server import _MAX_INPUT_CHARS, TuiServer
+from net.tui_server import _MAX_INPUT_CHARS, TuiServer, WsMember
 from tests.agent.test_kp_selfplay import FIXTURES, SENTINEL, _tools_called_this_turn, kp_responder
 
 _RECV_TIMEOUT = 5.0
@@ -476,3 +478,104 @@ async def test_join_replay_is_capped_and_skips_a_brand_new_room():
         await ws2.close()
     finally:
         await server2.close()
+
+
+# ---------------------------------------------------------------------------
+# Privilege-escalation regression (see `gateway.commands._privilege_level`): the
+# TUI is a MULTI-USER network service, so a connection's dot-command privilege
+# must come from its AUTHENTICATED keystore role, never be assumed just because
+# the transport is `tui`. `_ctx_for` is the wiring that carries that role from
+# the `WsMember` into the `AgentCtx` every command is gated on.
+# ---------------------------------------------------------------------------
+
+
+async def _send_command(ws, text: str) -> dict:
+    """Send a dot-command `input` frame and return its reply, draining the echo and
+    the trailing `state` frame every turn publishes (mirrors
+    `test_dot_r_command_broadcasts_echo_reply_and_state`'s echo -> reply -> state shape)."""
+    await ws.send(json.dumps({"type": "input", "text": text}))
+    echo = await _recv(ws)
+    assert echo["type"] == "narrative" and echo["speaker"] == "player"
+    reply = await _recv(ws)
+    assert reply["type"] == "narrative" and reply["speaker"] == "system"
+    state = await _recv(ws)
+    assert state["type"] == "state"
+    return reply
+
+
+def test_ctx_for_stamps_the_connections_keystore_role_into_ctx_extra():
+    services = _services()
+    server = TuiServer(services, Keystore(), port=0)
+    member = WsMember(
+        ws=None,
+        id="tui:abc123",
+        user_key="tui:abc123",
+        name="Pete",
+        role="player",
+        room="demo",
+        session_key=SessionSource(platform="tui", chat_type="group", chat_id="demo").chat_key(),
+        locale="en",
+    )
+
+    ctx = server._ctx_for(member)
+
+    assert ctx.platform == "tui"
+    assert ctx.extra.get("role") == "player"
+
+
+async def test_player_role_connection_is_denied_keeper_only_dot_commands_over_the_wire():
+    services = _services()
+    keystore = Keystore()
+    player_key = keystore.add(room="demo", name="Pete", role="player")
+    hub = RoomHub()
+    # Mirrors the production wiring in `app.py`: the router shares the server's
+    # keystore/hub so `.room` can actually mint/report keys.
+    router = CommandRouter(services, keystore=keystore, hub=hub)
+    server = TuiServer(services, keystore, port=0, command_router=router, hub=hub)
+    url = await _start(server)
+    i18n = services.i18n.with_locale("en")
+    try:
+        ws, *_ = await _connect_and_join(url, player_key, "Pete")
+
+        reply = await _send_command(ws, ".model set anthropic")
+        assert reply["text"] == i18n.t("commands.model.denied")
+        assert services.settings.llm.provider != "anthropic"
+
+        reply = await _send_command(ws, ".lore query anything")
+        assert reply["text"] == i18n.t("worldbook.commands.lore.denied")
+
+        reply = await _send_command(ws, ".room open")
+        assert reply["text"] == i18n.t("rooms.denied")
+        assert len(keystore) == 1  # no room key was minted for the player
+
+        await ws.close()
+    finally:
+        await server.close()
+
+
+async def test_keeper_role_connection_is_allowed_keeper_only_dot_commands_over_the_wire():
+    services = _services()
+    keystore = Keystore()
+    keeper_key = keystore.add(room="demo", name="Kip", role="keeper")
+    hub = RoomHub()
+    router = CommandRouter(services, keystore=keystore, hub=hub)
+    server = TuiServer(services, keystore, port=0, command_router=router, hub=hub)
+    url = await _start(server)
+    i18n = services.i18n.with_locale("en")
+    try:
+        ws, *_ = await _connect_and_join(url, keeper_key, "Kip")
+
+        reply = await _send_command(ws, ".model set anthropic")
+        assert reply["text"] != i18n.t("commands.model.denied")
+
+        reply = await _send_command(ws, ".lore query")
+        # reached the keeper-gated handler (usage notice, not the denial)
+        assert reply["text"] == i18n.t("worldbook.commands.lore.query_usage")
+
+        reply = await _send_command(ws, ".room open")
+        assert reply["text"] != i18n.t("rooms.denied")
+        assert len(keystore) == 2  # the keeper's key plus the freshly-minted room key
+
+        await ws.close()
+    finally:
+        await server.close()

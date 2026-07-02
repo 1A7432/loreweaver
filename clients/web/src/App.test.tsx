@@ -9,6 +9,7 @@ class MockClient implements AppClient {
   connect = vi.fn((_url: string) => Promise.resolve())
   join = vi.fn((_key: string, _name?: string) => {})
   sendInput = vi.fn((_text: string) => {})
+  close = vi.fn((_code?: number, _reason?: string) => {})
   adminGetConfig = vi.fn(() => {})
   adminSetModel = vi.fn((_provider: string, _chatModel?: string) => {})
   adminListKeys = vi.fn(() => {})
@@ -98,5 +99,24 @@ describe("App connect screen", () => {
     expect(await screen.findByText("Unknown key")).toBeTruthy()
     // Did not navigate to the game view.
     expect(screen.queryByLabelText("Command input")).toBeNull()
+    // A bad_key error is a permanent failure: the client is closed to stop
+    // the auto-reconnect loop from spamming rejoins with the same rejected
+    // key (250ms->5s backoff otherwise repeats forever).
+    expect(client.close).toHaveBeenCalled()
+  })
+
+  test("a transient error does not close the client (reconnect loop stays alive)", async () => {
+    const client = new MockClient()
+    const user = userEvent.setup()
+    render(<App client={client} />)
+
+    await user.type(screen.getByLabelText("Deployer key"), "sekret")
+    await user.click(screen.getByRole("button", { name: /connect/i }))
+    await waitFor(() => expect(client.connect).toHaveBeenCalled())
+
+    client.push({ type: "error", code: "server_error", message: "Try again" })
+
+    expect(await screen.findByText("Try again")).toBeTruthy()
+    expect(client.close).not.toHaveBeenCalled()
   })
 })

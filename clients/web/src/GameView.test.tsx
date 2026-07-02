@@ -129,4 +129,31 @@ describe("GameView", () => {
     // The input clears after submit.
     expect((screen.getByLabelText("Command input") as HTMLInputElement).value).toBe("")
   })
+
+  test("the player's own line renders exactly once (no local echo + server echo double)", async () => {
+    const { client, container } = renderGame()
+    const user = userEvent.setup()
+
+    await user.type(screen.getByLabelText("Command input"), "i search")
+    await user.click(screen.getByRole("button", { name: /send/i }))
+    await waitFor(() => expect(client.sendInput).toHaveBeenCalledWith("i search"))
+
+    // No optimistic local echo: the log is still empty until the server's
+    // broadcast round-trips back to the sender (docs/protocol.md turn flow
+    // step 3 — the server echoes the player's own action to everyone,
+    // including the sender, as a distinct `narrative{speaker:"player"}` id).
+    expect(container.querySelectorAll(".narrative-line").length).toBe(0)
+
+    client.push({
+      type: "narrative",
+      id: "server-echo-1",
+      speaker: "player",
+      name: "Ada",
+      text: "i search",
+      format: "plain",
+    })
+
+    await waitFor(() => expect(container.querySelectorAll(".narrative-line").length).toBe(1))
+    expect(screen.getAllByText("i search")).toHaveLength(1)
+  })
 })

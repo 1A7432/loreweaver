@@ -344,11 +344,23 @@ class TuiServer:
     # -- helpers ------------------------------------------------------------
 
     def _ctx_for(self, member: WsMember) -> AgentCtx:
-        """Build the `AgentCtx` for `member`'s room (M4 §"Auth / keystore")."""
+        """Build the `AgentCtx` for `member`'s room (M4 §"Auth / keystore").
+
+        Carries the connection's keystore role in `extra["role"]` (mirrors the
+        `raw`/`source` pattern other transports stash in `extra`) so
+        `gateway.commands._privilege_level` can gate keeper-only dot-commands by the
+        AUTHENTICATED role instead of trusting every `tui` connection as a keeper —
+        the TUI is a multi-user network service, not a single local operator."""
         source = SessionSource(
             platform="tui", chat_type="group", chat_id=member.room, user_id=member.id, user_name=member.name
         )
-        return AgentCtx(chat_key=source.chat_key(), user_id=member.id, platform="tui", locale=member.locale)
+        return AgentCtx(
+            chat_key=source.chat_key(),
+            user_id=member.id,
+            platform="tui",
+            locale=member.locale,
+            extra={"role": member.role},
+        )
 
 
 # -- module-level framing helpers ------------------------------------------

@@ -170,7 +170,22 @@ _MODEL_RESET_WORDS = {"reset", "clear", "revert", "重置", "清除"}
 _ROOM_ADMIN_CHAT_TYPES = {"dm", "direct", "private"}
 _ROOM_ADMIN_RAW_ROLES = {"admin", "administrator", "owner", "creator", "keeper", "master", "moderator"}
 _ROOM_ADMIN_RAW_FLAGS = ("is_admin", "is_owner", "is_group_admin", "admin", "owner")
+
+# TOPOLOGY, not privilege: platforms whose channel is inherently local/private rather
+# than a public chat group (used e.g. by `_is_private_channel` to decide whether
+# echoing a secret like an API key back inline is safe). Membership here does NOT by
+# itself grant any privilege level — see `_AUTO_MASTER_PLATFORMS` / `_privilege_level`
+# for who is actually authorized to run keeper-only commands on each platform.
 _ROOM_LOCAL_PLATFORMS = {"cli", "tui"}
+
+# PRIVILEGE: platforms that are a single, already-trusted local operator process with
+# no keystore/role concept, so the caller is always the master. `tui` is deliberately
+# excluded: it is a genuine multi-user network service (`net/tui_server.py`), so its
+# privilege must instead be decided per-connection from the authenticated keystore role
+# stamped into `ctx.extra["role"]` (see `_privilege_level`), never assumed from the
+# platform name alone.
+_AUTO_MASTER_PLATFORMS = {"cli"}
+_TUI_KEEPER_ROLE = "keeper"
 
 
 @dataclass
@@ -446,7 +461,7 @@ class CommandRouter:
         default_name_key = "commands.character.dnd_name" if template == "dnd5e" else "commands.character.coc_name"
         name = ctx.args.strip() or ctx.i18n.t(default_name_key)
         character = ctx.services.characters.generate_character(template, name)
-        character, violations = validate_sheet(character, template)
+        character, violations = validate_sheet(character, template, initialize_vitals=True)
         await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
         result = ctx.i18n.t("commands.character.created", name=character.name, system=character.system)
         notice = render_validation_notice(ctx.i18n, violations)
@@ -463,7 +478,7 @@ class CommandRouter:
             request.system,
             name=request.name,
         )
-        character, violations = validate_sheet(character, request.system)
+        character, violations = validate_sheet(character, request.system, initialize_vitals=True)
         await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
         result = ctx.i18n.t("charcard.commands.genchar.done", name=character.name, system=character.system)
         notice = render_validation_notice(ctx.i18n, violations)
@@ -901,6 +916,7 @@ class CommandRouter:
                 ["import", "导入", "導入"],
                 None,
                 "charcard.commands.import.help",
+                required_level=int(PrivilegeLevel.GROUP_ADMIN),
             ),
             CommandSpec(
                 "module",
@@ -1397,11 +1413,20 @@ def _channel_chat_key(ctx: Any) -> str:
 
 
 def _privilege_level(ctx: Any) -> int:
-    """The caller's privilege for command gating (see `_ROOM_*` constants)."""
+    """The caller's privilege for command gating (see `_ROOM_*` constants).
+
+    `cli` is a single local operator (no keystore/role concept) and is always the
+    master. `tui` is a multi-user network service, so its level is decided by the
+    AUTHENTICATED keystore role the server stamped into `ctx.extra["role"]`
+    (`net.tui_server._ctx_for`): `keeper` -> master, anything else -> everyone. Every
+    other platform falls through to the generic chat-admin heuristics below."""
     platform = str(getattr(ctx, "platform", "") or "").casefold()
-    if platform in _ROOM_LOCAL_PLATFORMS:
+    if platform in _AUTO_MASTER_PLATFORMS:
         return int(PrivilegeLevel.MASTER)
     extra = getattr(ctx, "extra", None)
+    if platform == "tui":
+        role = extra.get("role") if isinstance(extra, dict) else None
+        return int(PrivilegeLevel.MASTER) if role == _TUI_KEEPER_ROLE else int(PrivilegeLevel.EVERYONE)
     raw = extra.get("raw") if isinstance(extra, dict) else None
     source = extra.get("source") if isinstance(extra, dict) else None
     chat_type = str(getattr(source, "chat_type", "") or "").casefold()
