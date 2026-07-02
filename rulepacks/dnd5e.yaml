@@ -29,32 +29,6 @@ defaults:
   欺瞒: 0
   威吓: 0
   表演: 0
-defaultsComputed:
-  pp: fixed:dnd5e.pp
-  力量调整值: fixed:dnd5e.str_mod
-  敏捷调整值: fixed:dnd5e.dex_mod
-  体质调整值: fixed:dnd5e.con_mod
-  智力调整值: fixed:dnd5e.int_mod
-  感知调整值: fixed:dnd5e.wis_mod
-  魅力调整值: fixed:dnd5e.cha_mod
-  运动: fixed:dnd5e.athletics
-  体操: fixed:dnd5e.acrobatics
-  巧手: fixed:dnd5e.sleight_of_hand
-  隐匿: fixed:dnd5e.stealth
-  调查: fixed:dnd5e.investigation
-  奥秘: fixed:dnd5e.arcana
-  历史: fixed:dnd5e.history
-  自然: fixed:dnd5e.nature
-  宗教: fixed:dnd5e.religion
-  察觉: fixed:dnd5e.perception
-  洞悉: fixed:dnd5e.insight
-  驯兽: fixed:dnd5e.animal_handling
-  医药: fixed:dnd5e.medicine
-  求生: fixed:dnd5e.survival
-  游说: fixed:dnd5e.persuasion
-  欺瞒: fixed:dnd5e.deception
-  威吓: fixed:dnd5e.intimidation
-  表演: fixed:dnd5e.performance
 alias:
   力量: [str, STR, strength, Strength]
   敏捷: [dex, DEX, dexterity, Dexterity]

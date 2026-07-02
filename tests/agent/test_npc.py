@@ -1,6 +1,6 @@
 """Tests for `agent.npc` (`NpcRecord`/`NpcManager`), `agent.npc_actor.voice_npc`, and
 `agent.kp_tools_npc.NpcTools` -- the M5 AI-played, knowledge-scoped NPC sub-actor feature
-(`docs/specs/M5.md`).
+(`docs/specs/M5-npc.md`).
 
 The signature test in this file (`test_voice_npc_never_leaks_keeper_secrets_or_other_npcs_knowledge`)
 is the red line the whole feature exists to prove: it mirrors the same sentinel-never-leaks pattern
@@ -484,5 +484,5 @@ def test_get_npc_and_list_npcs_are_keeper_only_in_build_kp_toolset():
         assert name in toolset.names()
         assert toolset.is_keeper_only(name) is False, name
 
-    # locked decision (docs/specs/M5.md): no separate options tool
+    # locked decision (docs/specs/M5-npc.md): no separate options tool
     assert "npc_action_options" not in toolset.names()

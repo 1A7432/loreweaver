@@ -173,7 +173,6 @@ class RulePack:
 
     system: str
     defaults: dict[str, Any]
-    defaults_computed: dict[str, str]
     alias: dict[str, list[str]]
     st_show: dict[str, Any]
     set_keys: list[str]
@@ -221,7 +220,6 @@ def load_rulepack(system: str) -> RulePack:
     return RulePack(
         system=normalized,
         defaults=dict(data.get("defaults") or {}),
-        defaults_computed=dict(data.get("defaultsComputed") or {}),
         alias={str(key): list(value or []) for key, value in alias.items()},
         st_show=dict(data.get("st_show") or {}),
         set_keys=list(data.get("set_keys") or []),

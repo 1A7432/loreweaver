@@ -60,11 +60,14 @@ def _normalize_dice_expression(expression: str) -> str:
 
 @dataclass
 class DiceConfig:
-    """Dice engine limits/toggles."""
+    """Dice engine toggles.
 
-    MAX_DICE_COUNT: int = 100
-    MAX_DICE_SIDES: int = 1000
-    DEFAULT_DICE_TYPE: int = 20
+    No dice-count/sides cap lives here: `d20.Roller`'s own `RollContext`
+    (default `max_rolls=1000`, see `roll_explode` for an explicit override) is
+    the real guard against a pathological expression, so this only holds
+    behavior toggles.
+    """
+
     ENABLE_CRITICAL_EFFECTS: bool = True
 
 

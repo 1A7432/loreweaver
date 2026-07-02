@@ -1,7 +1,7 @@
 [project]
 name = "loreweaver"
 version = "0.1.0"
-description = "An AI Game Master / Keeper for any TTRPG system — dice bot + function-calling AI KP, Discord-first, system-agnostic (D&D 5e SRD + CoC7)."
+description = "A self-hosted, terminal-first AI Game Master / Keeper for any TTRPG system — dice bot + function-calling AI KP, system-agnostic (D&D 5e SRD + CoC7)."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -100,7 +100,7 @@ filterwarnings = ["ignore::DeprecationWarning"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]

@@ -1,4 +1,4 @@
-"""Long-run / context-edge play-test.
+"""Long-run / context-edge play-test AND real-model red-line eval (long-session).
 
 Drives ONE persistent campaign for many turns to surface long-session degradation the
 short runs can't: the Keeper only ever sees the last ~20 replayed messages (agent.loop
@@ -7,13 +7,23 @@ is no running summary of the CURRENT session. So the real failure mode over hund
 turns is amnesia / contradiction, not a context-overflow crash (context is bounded).
 
 This harness plants memorable ANCHOR facts in the opening turns, then PROBES them at
-growing distances and checks whether the Keeper still remembers -- coherence-over-distance.
-It also tracks per-turn latency, leaks, empty replies and errors. It is RESUMABLE: state
-lives in a file-backed store (data/longrun.db) + a turn counter, so re-running continues the
-same campaign (which also exercises the auto-save/restore feature over a long horizon). Each
-invocation self-limits to a wall-clock budget so it fits the shell timeout; re-run to add more.
+growing distances and checks whether the Keeper still remembers -- coherence-over-distance
+(informational; not gated). It also scores every turn against the SAME two red-line metrics
+`scripts/playtest.py` does -- leak rate (literal + paraphrase) and dice-first miss rate --
+via the shared `RedlineMetrics`/`GateThresholds` gate (`from scripts.playtest import ...`;
+see that module's docstring for why the two live together). `--gate` turns that into a hard
+pass/fail, scored over THIS invocation's turns only (long sessions are long -- see below).
+
+It is RESUMABLE: state lives in a file-backed store (data/longrun.db) + a turn counter, so
+re-running continues the same campaign (which also exercises the auto-save/restore feature
+over a long horizon). Each invocation self-limits to a wall-clock budget so it fits the shell
+timeout; re-run to add more.
 
   .venv/bin/python scripts/longrun.py --module modules/shuxue.md --max-turns 300 --budget 520
+
+  # CI / gate mode (bounded, single invocation -- see scripts/playtest.py for the short-session
+  # counterpart and .github/workflows/ for the nightly job that runs both against a real model):
+  .venv/bin/python scripts/longrun.py --gate --max-turns 30 --budget 300 --summary-json longrun/summary.json
 """
 from __future__ import annotations
 
@@ -44,6 +54,19 @@ from gateway.turn import run_turn  # noqa: E402
 from infra.config import get_settings  # noqa: E402
 from infra.embeddings import LocalEmbeddings  # noqa: E402
 
+# `scripts` has no __init__.py -- it's an implicit PEP 420 namespace package
+# (ROOT is already on sys.path above), so this plain import works. See
+# scripts/playtest.py's "Shared red-line gate" section for what's in here.
+from scripts.playtest import (  # noqa: E402
+    GateThresholds,
+    RedlineMetrics,
+    evaluate_gate,
+    extract_secret_snippets,
+    parse_secret_concepts,
+    render_report,
+    write_summary_json,
+)
+
 CHAT_KEY = "longrun:campaign"
 # (anchor id, the player line that establishes it, the phrase the KP should still recall)
 ANCHORS = [
@@ -52,11 +75,6 @@ ANCHORS = [
     ("dog", "I name the scruffy stray dog that keeps following us 'Boomer'.", "Boomer"),
     ("vow", "I swear aloud, so all can hear: I will never enter the cellar alone.", "cellar"),
 ]
-# Twist-reveal sentinels: short concept phrases whose appearance in a PLAYER-FACING reply
-# signals the module's core secret leaked EVEN IF PARAPHRASED. A raw keeper-pool substring
-# match alone misses paraphrase (the play-test critique caught the KP revealing the twist
-# through an invented prop that never quoted the source verbatim).
-SECRET_CONCEPTS = ["赛伊格亚", "巩固封印", "血祭固封", "止血祭", "升腾为龙", "镇压邪神", "封印松", "以血固封"]
 
 
 async def _chat(services, prompt, temperature=0.9):
@@ -100,13 +118,34 @@ async def _setup(services, ts, module_path, companion_path, rec):
 
 async def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--module", default="modules/shuxue.md")
+    ap.add_argument("--module", default="tests/fixtures/module_en.txt")
     ap.add_argument("--companion", default="cards/companion_shenmo.json")
     ap.add_argument("--max-turns", type=int, default=300)
     ap.add_argument("--probe-every", type=int, default=25)
     ap.add_argument("--budget", type=int, default=520, help="wall-clock seconds this invocation may run")
     ap.add_argument("--log", default="playtest/longrun.jsonl")
+    ap.add_argument("--secret-concepts", default="",
+                     help="comma-separated paraphrase-leak sentinel phrases specific to --module")
+    ap.add_argument("--secret-concepts-file", default="",
+                     help="path to a file with one paraphrase sentinel phrase per line (merged with --secret-concepts)")
+    ap.add_argument("--max-leak-rate", type=float, default=0.0,
+                     help="gate: max allowed fraction of turns with a literal-or-paraphrase leak")
+    ap.add_argument("--max-dice-miss-rate", type=float, default=0.2,
+                     help="gate: max allowed fraction of checkable turns where no dice tool fired")
+    ap.add_argument("--min-checkable-turns", type=int, default=1,
+                     help="gate: below this many checkable turns, dice-miss rate is not gated (too little signal)")
+    ap.add_argument("--gate", action="store_true",
+                     help="exit non-zero (after printing the report) if thresholds are violated -- for CI")
+    ap.add_argument("--summary-json", default="", help="optional path to write a machine-readable JSON summary")
     args = ap.parse_args()
+
+    secret_concepts = parse_secret_concepts(args.secret_concepts, args.secret_concepts_file)
+    thresholds = GateThresholds(
+        max_leak_rate=args.max_leak_rate,
+        max_dice_miss_rate=args.max_dice_miss_rate,
+        min_checkable_turns=args.min_checkable_turns,
+    )
+    metrics = RedlineMetrics()  # scored over THIS invocation's turns only, like the latency stats below
 
     settings = get_settings()
     services = build_services(settings, embeddings=LocalEmbeddings(64), db_path=str(ROOT / "data" / "longrun.db"))
@@ -124,7 +163,7 @@ async def main():
         fh.flush()
 
     keeper = await _setup(services, ts, ROOT / args.module, ROOT / args.companion, rec)
-    secret_lines = [ln.strip() for ln in keeper.splitlines() if len(ln.strip()) > 40][:60]
+    secret_snippets = extract_secret_snippets(keeper)
 
     done = int(await services.store.get(store_key=f"longrun.turns_done.{CHAT_KEY}") or 0)
     rec(kind="resume", turns_already_done=done, target=args.max_turns)
@@ -134,37 +173,41 @@ async def main():
     transcript: list[str] = []
     start = time.time()
     lat: list[float] = []
-    leaks = errors = empty = probes_ok = probes_total = 0
+    probes_ok = probes_total = 0
 
     async def do_turn(turn_no, action, is_probe=False, anchor_phrase=None):
-        nonlocal leaks, errors, empty, probes_ok, probes_total
+        nonlocal probes_ok, probes_total
         transcript.append(f">>> {action}")
         t0 = time.time()
         try:
             res = await run_turn(hub, services, ctx, action, command_router=router, toolset=ts, actor_name="Nora")
             reply = (getattr(res, "reply", "") or "")
+            tool_trace = getattr(res, "tool_trace", []) or []
         except Exception as exc:
-            errors += 1
+            metrics.errors += 1
             rec(kind="TURN_ERROR", turn=turn_no, action=action, error=f"{type(exc).__name__}: {exc}",
                 trace=traceback.format_exc()[-800:])
             return
         dt = time.time() - t0
         lat.append(dt)
         transcript.append(f"[KP] {reply[:300]}")
-        leaked = (next((s for s in secret_lines if s and s in reply), None)
-                  or next((c for c in SECRET_CONCEPTS if c in reply), None))
-        if leaked:
-            leaks += 1
-            rec(kind="LEAK", turn=turn_no, secret=leaked[:100], reply=reply[:200])
-        if not reply.strip():
-            empty += 1
+        outcome = metrics.record_turn(
+            reply=reply, action=action, tool_trace=tool_trace,
+            secret_snippets=secret_snippets, secret_concepts=secret_concepts,
+        )
+        if outcome["literal_leak"] or outcome["paraphrase_leak"]:
+            rec(kind="LEAK", turn=turn_no, reply=reply[:200],
+                literal_secret=(outcome["literal_leak"] or "")[:100], paraphrase_concept=outcome["paraphrase_leak"])
+        if outcome["missed_roll"]:
+            rec(kind="DICE_MISS", turn=turn_no, action=action, reply=reply[:200])
         if is_probe:
             probes_total += 1
             ok = bool(anchor_phrase and anchor_phrase.lower() in reply.lower())
             probes_ok += int(ok)
             rec(kind="PROBE", turn=turn_no, anchor=anchor_phrase, remembered=ok, reply=reply[:200])
-        rec(kind="turn", turn=turn_no, latency=round(dt, 2), tools=[t.get("name") for t in getattr(res, "tool_trace", [])],
-            leaked=bool(leaked), empty=(not reply.strip()), action=action[:120], kp_reply=reply[:200])
+        rec(kind="turn", turn=turn_no, latency=round(dt, 2), tools=[t.get("name") for t in tool_trace],
+            leaked=bool(outcome["literal_leak"] or outcome["paraphrase_leak"]), missed_roll=outcome["missed_roll"],
+            empty=(not reply.strip()), action=action[:120], kp_reply=reply[:200])
 
     turn = done
     # opening: plant anchors (only if this is a fresh campaign)
@@ -184,23 +227,32 @@ async def main():
             await do_turn(turn, action or "I stay alert and press on.")
         if turn % 20 == 0:
             avg = sum(lat) / len(lat) if lat else 0
-            rec(kind="checkpoint", turn=turn, avg_latency=round(avg, 2),
-                max_latency=round(max(lat), 2) if lat else 0, leaks=leaks, errors=errors,
-                empty=empty, probes_ok=probes_ok, probes_total=probes_total)
+            rec(kind="checkpoint", turn=turn, avg_latency=round(avg, 2), max_latency=round(max(lat), 2) if lat else 0,
+                leak_turns=metrics.leak_turns, errors=metrics.errors, missed_roll_turns=metrics.missed_roll_turns,
+                probes_ok=probes_ok, probes_total=probes_total)
 
     await services.store.set(store_key=f"longrun.turns_done.{CHAT_KEY}", value=str(turn))
     avg = sum(lat) / len(lat) if lat else 0
     first10 = sum(lat[:10]) / max(1, len(lat[:10]))
     last10 = sum(lat[-10:]) / max(1, len(lat[-10:]))
-    rec(kind="run_end", turns_now=turn, target=args.max_turns, this_invocation=len(lat), leaks=leaks, errors=errors,
-        empty=empty, probes_ok=probes_ok, probes_total=probes_total, avg_latency=round(avg, 2),
-        latency_first10=round(first10, 2), latency_last10=round(last10, 2))
+    rec(kind="run_end", turns_now=turn, target=args.max_turns, this_invocation=len(lat), leak_turns=metrics.leak_turns,
+        errors=metrics.errors, missed_roll_turns=metrics.missed_roll_turns, probes_ok=probes_ok,
+        probes_total=probes_total, avg_latency=round(avg, 2), latency_first10=round(first10, 2),
+        latency_last10=round(last10, 2))
     fh.close()
-    print(f"longrun: campaign at turn {turn}/{args.max_turns} (+{len(lat)} this run) | leaks={leaks} errors={errors} "
-          f"empty={empty} | coherence probes {probes_ok}/{probes_total} remembered | "
+
+    passed, reasons = evaluate_gate(metrics, thresholds)
+    report = render_report("longrun", metrics, thresholds, passed, reasons)
+    print(report)
+    print(f"longrun: campaign at turn {turn}/{args.max_turns} (+{len(lat)} this run) | "
+          f"coherence probes {probes_ok}/{probes_total} remembered (informational, not gated) | "
           f"latency avg={avg:.1f}s first10={first10:.1f}s last10={last10:.1f}s | log -> {args.log}")
     if turn < args.max_turns:
         print(f"  budget/timeout reached — RE-RUN the same command to continue from turn {turn}.")
+    if args.summary_json:
+        write_summary_json(ROOT / args.summary_json, "longrun", metrics, thresholds, passed, reasons)
+    if args.gate and not passed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

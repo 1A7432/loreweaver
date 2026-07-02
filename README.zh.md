@@ -113,7 +113,7 @@ uv run ruff check core infra agent gateway net adapters app.py scripts
 uv run python scripts/i18n_lint.py          # 不许有硬编码的自然语言串
 cd clients/tui && bun install && bun test   # (客户端:protocol · tui · web)
 ```
-测试全程确定性、离线。自play 测试用一个**脚本化**的 KP 贯穿整条栈(上传 → 分析 → 开团 → 玩家行动 → **真 seed 骰子**检定 → 战报),并直接单元测试那些确定性保证:守秘人/玩家知识分池(秘密**从构造上**不进玩家池)、子演员隔离(NPC/同伴的提示**只**由它自己的记录组装)、以及真 seed 骰子。因为离线 KP 是脚本化的,这些证明的是**机制与脱敏——不是真模型的自觉**;真模型的泄密与掷骰优先行为另行度量(见[路线图](docs/roadmap.md))。CI 跑 Python(3.12)+ 客户端各包。
+测试全程确定性、离线。自 play 测试用一个**脚本化**的 KP 贯穿整条栈(上传 → 分析 → 开团 → 玩家行动 → **真 seed 骰子**检定 → 战报),并直接单元测试那些确定性保证:守秘人/玩家知识分池(秘密**从构造上**不进玩家池)、子演员隔离(NPC/同伴的提示**只**由它自己的记录组装)、以及真 seed 骰子。因为离线 KP 是脚本化的,这证明的是**流程和脱敏本身是对的——证明不了真模型真的会守规矩**。真模型的表现另有一道**每夜真模型红线闸门**在盯(`.github/workflows/redline-eval.yml`,只按 schedule 跑,绝不卡 PR):它以 `--gate` 模式跑 `scripts/playtest.py` 和 `scripts/longrun.py`,用一个便宜的真模型给每一回合打分——泄密率(逐字**和**改述)与掷骰优先漏判率——任一项超过(可配置的)阈值就判负:非零退出 + 上传日志产物;没配 `EVAL_LLM_API_KEY` 这个 secret 时会干净地跳过(不会变红)。详见[路线图](docs/roadmap.md)。CI(push/PR)跑 Python(3.11 · 3.12)+ 客户端各包,全程离线——真模型调用不会发生在那里。
 
 ## 参与贡献
 欢迎 PR 和 issue。提 PR 前,`uv run ruff check …`、`uv run python scripts/i18n_lint.py`、`uv run pytest -q`(以及相关 `bun test`)都得过。守住 [CLAUDE.md](CLAUDE.md) 的铁律——尤其**不许硬编码面向用户的文案**(走 `infra.i18n` + `locales/`)和**信息隔离**红线。只能加开放、可自由分发的规则内容(SRD / 米斯卡塔尼克);模组请运行时自带。最需要人手的地方见 **[路线图](docs/roadmap.md)**。

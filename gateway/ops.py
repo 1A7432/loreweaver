@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import secrets
 import time
 import unicodedata
 from collections.abc import Callable
@@ -316,41 +315,6 @@ class PrivilegeLevel(IntEnum):
     MASTER = 3
 
 
-class PermissionGate:
-    def __init__(self, masters: set[str] | None = None, *, claim_code: str | None = None) -> None:
-        self._masters = set() if masters is None else set(masters)
-        self._claim_code = self._normalize_claim_code(claim_code) if claim_code is not None else secrets.token_hex(4)
-
-    def level_of(self, user_key: str, *, is_group_admin: bool = False) -> PrivilegeLevel:
-        if user_key in self._masters:
-            return PrivilegeLevel.MASTER
-        if is_group_admin:
-            return PrivilegeLevel.GROUP_ADMIN
-        return PrivilegeLevel.EVERYONE
-
-    def allowed(
-        self,
-        user_key: str,
-        required: PrivilegeLevel,
-        *,
-        is_group_admin: bool = False,
-    ) -> bool:
-        return self.level_of(user_key, is_group_admin=is_group_admin) >= required
-
-    def rotating_claim_code(self) -> str:
-        return self._claim_code
-
-    def claim_master(self, user_key: str, code: str) -> bool:
-        if code != self._claim_code:
-            return False
-        self._masters.add(user_key)
-        return True
-
-    @staticmethod
-    def _normalize_claim_code(code: str) -> str:
-        return code[:8].ljust(8, "0")
-
-
 class ContentSanitizer:
     def __init__(self, *, locale: str | None = None) -> None:
         self._locale = locale
@@ -386,7 +350,6 @@ __all__ = [
     "CensorLevel",
     "CensorResult",
     "ContentSanitizer",
-    "PermissionGate",
     "PrivilegeLevel",
     "RateLimiter",
     "censor_from_settings",

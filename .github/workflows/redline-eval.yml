@@ -1,0 +1,132 @@
+name: Nightly red-line eval (real model)
+
+# Independent of ci.yml on purpose: this is the ONLY place real-model API calls
+# happen. ci.yml (push/PR) stays fully offline (FakeLLM/FakeEmbeddings, no
+# network/keys) -- see CLAUDE.md and the README "Testing" section. This job
+# runs scripts/playtest.py and scripts/longrun.py in `--gate` mode against a
+# real (cheap) model to measure the two claims the offline suite CANNOT prove
+# with a scripted Keeper: the Keeper never leaks a keeper-only secret to
+# players (literal OR paraphrase), and a check rolls real dice before it is
+# narrated. See docs/roadmap.md "Offline tests vs. real-model quality".
+#
+# Never runs on push/PR -- schedule + manual dispatch only. If the
+# EVAL_LLM_API_KEY secret is absent (e.g. a fork, or before a maintainer wires
+# one up), the eval steps are SKIPPED, not failed -- see the "Check for eval
+# LLM key" step.
+on:
+  schedule:
+    - cron: "17 3 * * *"   # 03:17 UTC daily -- off the top of the hour
+  workflow_dispatch: {}
+
+concurrency:
+  group: redline-eval
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  redline-eval:
+    name: Real-model red-line gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Gate every subsequent step on the secret's presence via a step OUTPUT
+      # (not a job-level `if: secrets.X != ''`) so this reliably SKIPS -- never
+      # fails -- when no key is configured. This step itself always succeeds.
+      - name: Check for eval LLM key
+        id: check
+        env:
+          EVAL_LLM_API_KEY: ${{ secrets.EVAL_LLM_API_KEY }}
+        run: |
+          if [ -n "$EVAL_LLM_API_KEY" ]; then
+            echo "has_key=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::EVAL_LLM_API_KEY secret is not set -- skipping the real-model red-line gate (offline CI is unaffected)."
+            echo "has_key=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: astral-sh/setup-uv@v5
+        if: steps.check.outputs.has_key == 'true'
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install
+        if: steps.check.outputs.has_key == 'true'
+        run: uv sync --locked --extra anthropic --extra gemini
+
+      # Short multi-session, multi-archetype run: several fresh sessions of a
+      # few players x a few turns each, against the committed public fixture
+      # module (tests/fixtures/module_en.txt -- has a real "KEEPER-ONLY
+      # SECRETS" section to leak-test against, unlike modules/ and cards/,
+      # which are gitignored local play-test material and not present in CI).
+      - name: playtest -- short-session red-line gate
+        id: playtest_eval
+        if: steps.check.outputs.has_key == 'true'
+        continue-on-error: true
+        env:
+          TRPG_LLM__PROVIDER: ${{ vars.EVAL_LLM_PROVIDER || 'deepseek' }}
+          TRPG_LLM__API_KEY: ${{ secrets.EVAL_LLM_API_KEY }}
+          TRPG_LLM__CHAT_MODEL: ${{ vars.EVAL_LLM_CHAT_MODEL || 'deepseek-chat' }}
+        run: |
+          uv run python scripts/playtest.py \
+            --module tests/fixtures/module_en.txt \
+            --players 2 --turns 6 --sessions 2 \
+            --secret-concepts "Deep One,Deep Ones,thrall,drowned,lure,pact,Elias Crane" \
+            --max-leak-rate "${{ vars.EVAL_MAX_LEAK_RATE || '0.0' }}" \
+            --max-dice-miss-rate "${{ vars.EVAL_MAX_DICE_MISS_RATE || '0.2' }}" \
+            --log eval-logs/playtest.jsonl \
+            --summary-json eval-logs/playtest-summary.json \
+            --gate
+
+      # Long, single-session coherence/leak/dice-first run (resumable state
+      # lives in data/longrun.db, which the ephemeral runner starts fresh
+      # every night -- so this is one bounded invocation, not 300 turns).
+      - name: longrun -- long-session red-line gate
+        id: longrun_eval
+        if: steps.check.outputs.has_key == 'true'
+        continue-on-error: true
+        env:
+          TRPG_LLM__PROVIDER: ${{ vars.EVAL_LLM_PROVIDER || 'deepseek' }}
+          TRPG_LLM__API_KEY: ${{ secrets.EVAL_LLM_API_KEY }}
+          TRPG_LLM__CHAT_MODEL: ${{ vars.EVAL_LLM_CHAT_MODEL || 'deepseek-chat' }}
+        run: |
+          uv run python scripts/longrun.py \
+            --module tests/fixtures/module_en.txt \
+            --max-turns 30 --probe-every 10 --budget 300 \
+            --secret-concepts "Deep One,Deep Ones,thrall,drowned,lure,pact,Elias Crane" \
+            --max-leak-rate "${{ vars.EVAL_MAX_LEAK_RATE || '0.0' }}" \
+            --max-dice-miss-rate "${{ vars.EVAL_MAX_DICE_MISS_RATE || '0.2' }}" \
+            --log eval-logs/longrun.jsonl \
+            --summary-json eval-logs/longrun-summary.json \
+            --gate
+
+      - name: Upload eval logs
+        if: steps.check.outputs.has_key == 'true' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: redline-eval-logs-${{ github.run_id }}
+          path: eval-logs/
+          retention-days: 14
+          if-no-files-found: warn
+
+      # `continue-on-error` above means a failing eval step doesn't stop the
+      # job (so both evals run, and logs always get uploaded); this step turns
+      # a real failure back into a red job. `outcome` (unlike `conclusion`) is
+      # unaffected by `continue-on-error`, so it still reflects the true result.
+      - name: Fail the job if either red-line gate failed
+        if: steps.check.outputs.has_key == 'true'
+        run: |
+          status=0
+          if [ "${{ steps.playtest_eval.outcome }}" != "success" ]; then
+            echo "::error::playtest red-line gate failed -- see the redline-eval-logs artifact."
+            status=1
+          fi
+          if [ "${{ steps.longrun_eval.outcome }}" != "success" ]; then
+            echo "::error::longrun red-line gate failed -- see the redline-eval-logs artifact."
+            status=1
+          fi
+          exit "$status"

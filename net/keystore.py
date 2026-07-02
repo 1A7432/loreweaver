@@ -14,10 +14,9 @@ small dependency-free writer since ``tomllib`` is read-only.
 from __future__ import annotations
 
 import secrets
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-
-import tomllib
 
 _ROLES = ("player", "keeper")
 _DEFAULT_ROLE = "player"

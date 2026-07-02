@@ -94,17 +94,6 @@ defaults:
   物理学: 1
   动物学: 1
   克苏鲁神话: 0
-defaultsComputed:
-  DB: fixed:coc7.db
-  体格: fixed:coc7.build
-  移动力: fixed:coc7.mov
-  生命值上限: fixed:coc7.hpmax
-  生命值: fixed:coc7.hp
-  魔法值上限: fixed:coc7.mpmax
-  魔法值: fixed:coc7.mp
-  理智上限: fixed:coc7.sanmax
-  母语: fixed:coc7.own_language
-  闪避: fixed:coc7.dodge
 alias:
   力量: [str, STR, strength, Strength]
   体质: [con, CON, constitution, Constitution, 體質]
@@ -227,8 +216,6 @@ creation_constraints:
     EDU: {min: 40, max: 90, roll: "(2d6+6)x5"}
   skills:
     default: {min: 0, max: 90, growth_max: 99}
-    creation_locked:
-      克苏鲁神话: {min: 0, max: 0}
   budgets:
     personal_interest_points:
       formula: "INT*2"

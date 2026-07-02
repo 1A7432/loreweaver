@@ -151,7 +151,7 @@ it survives a restart.
 
 ## Additive v1 NPC frames
 
-`docs/specs/M5.md` adds AI-played, knowledge-scoped NPC sub-actors
+This adds AI-played, knowledge-scoped NPC sub-actors
 (`agent/npc.py`, `agent/npc_actor.py`, `agent/kp_tools_npc.py`). The server
 surfaces each `speak_as_npc` tool result as an additional
 `narrative{speaker:"npc", name:<npc>, format:"markdown"}` frame before the

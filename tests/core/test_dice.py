@@ -214,10 +214,10 @@ def test_roll_expression_pure_modifier_has_no_primary_dice():
 
 
 def test_dice_roller_accepts_custom_config():
-    custom_config = DiceConfig(MAX_DICE_COUNT=5)
+    custom_config = DiceConfig(ENABLE_CRITICAL_EFFECTS=False)
     roller = DiceRoller(config=custom_config)
     assert roller.config is custom_config
-    assert roller.config.MAX_DICE_COUNT == 5
+    assert roller.config.ENABLE_CRITICAL_EFFECTS is False
 
 
 def test_seed_dice_makes_rolls_reproducible():

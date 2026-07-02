@@ -11,13 +11,18 @@ concurrency:
 
 jobs:
   python:
-    name: Python (3.12) — lint + i18n + tests
+    name: Python (${{ matrix.python-version }}) — lint + i18n + tests
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep in sync with `requires-python` in pyproject.toml (currently >=3.11).
+        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           enable-cache: true
       # anthropic + gemini extras so the provider unit tests run; platform SDKs
       # (qq/telegram/discord/feishu) stay optional — adapter tests mock them. The

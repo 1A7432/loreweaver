@@ -8,8 +8,6 @@ from gateway.ops import (
     CensorDisposition,
     CensorLevel,
     ContentSanitizer,
-    PermissionGate,
-    PrivilegeLevel,
     RateLimiter,
     censor_from_settings,
     is_bot_enabled,
@@ -206,20 +204,6 @@ def test_botlist_ignores_added_bot_ids() -> None:
 
     botlist.add("bot:2")
     assert botlist.is_bot("bot:2")
-
-
-def test_permission_gate_master_required_and_claim_code() -> None:
-    gate = PermissionGate(masters={"user:master"}, claim_code="abcd1234")
-
-    assert PrivilegeLevel.EVERYONE < PrivilegeLevel.MASTER
-    assert gate.allowed("user:master", PrivilegeLevel.MASTER)
-    assert not gate.allowed("user:normal", PrivilegeLevel.MASTER)
-    assert not gate.claim_master("user:normal", "bad-code")
-    assert not gate.allowed("user:normal", PrivilegeLevel.MASTER)
-
-    assert gate.rotating_claim_code() == "abcd1234"
-    assert gate.claim_master("user:normal", "abcd1234")
-    assert gate.allowed("user:normal", PrivilegeLevel.MASTER)
 
 
 def test_content_sanitizer_removes_mass_mentions_and_rewrites_url() -> None:
