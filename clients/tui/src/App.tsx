@@ -115,6 +115,12 @@ export function App({ client }: AppProps) {
       }
       if (frame.type === FrameType.Error) {
         setFrames((current) => appendFrame(current, { type: FrameType.System, level: "warn", text: frame.message }))
+        // An unrecognized key is a PERMANENT failure: stop the auto-reconnect loop so it
+        // doesn't re-join and spam the same warning on every retry. Transient errors
+        // (rate_limited, server_error, a malformed mid-session frame) keep the session.
+        if (frame.code === "bad_key") {
+          client.close()
+        }
       }
     })
   }, [client, diceTimeline])

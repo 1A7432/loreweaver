@@ -181,6 +181,11 @@ class TuiServer:
         key = str(frame.get("key") or "")
         entry = self.keystore.get(key)
         if entry is None:
+            # A key minted after the server booted isn't in the in-memory table yet;
+            # re-read the keystore file once and retry before rejecting (no restart).
+            self.keystore.refresh()
+            entry = self.keystore.get(key)
+        if entry is None:
             await _send(ws, _error_frame("bad_key", i18n))
             await ws.close()
             return None

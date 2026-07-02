@@ -55,5 +55,9 @@ await client.connect(args.host)
 client.join(args.key, args.name)
 
 const renderer = await createCliRenderer()
+// Set a clean terminal window title. Without this the shell leaves the title as the
+// full launch command — which overflows the title bar and, worse, exposes the invite
+// key in it. OSC 2 (window title) + BEL terminator.
+process.stdout.write("\x1b]2;TRPG KP\x07")
 createRoot(renderer).render(<App client={client} />)
 

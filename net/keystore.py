@@ -78,6 +78,15 @@ class Keystore:
         """Look up `key`, or `None` if it isn't registered."""
         return self._entries.get(key)
 
+    def refresh(self) -> None:
+        """Re-read the backing file, ADDING any keys not already in memory (never
+        dropping in-memory entries). Lets a running server pick up keys minted after
+        it booted — no restart needed. No-op for a pathless / missing-file keystore."""
+        if self._path is None or not self._path.is_file():
+            return
+        for key, entry in Keystore.load(self._path)._entries.items():
+            self._entries.setdefault(key, entry)
+
     def add(self, room: str, name: str = "", role: str = _DEFAULT_ROLE) -> str:
         """Mint a fresh url-safe key bound to `room`, register it, and return it."""
         key = secrets.token_urlsafe(18)
