@@ -1,8 +1,7 @@
 #!/usr/bin/env bun
 import { createCliRenderer } from "@opentui/core"
 import { createRoot } from "@opentui/react"
-import { WsClient } from "@trpg-kp/protocol"
-import App from "./App"
+import App, { type AppPrefill } from "./App"
 
 interface Args {
   command?: string
@@ -29,8 +28,8 @@ function parseArgs(argv: string[]): Args {
 function usage(): string {
   return [
     "Usage:",
-    "  trpg-kp connect --host ws://127.0.0.1:8787 --key <k> [--name N]",
-    "  trpg-kp connect --solo",
+    "  trpg-kp                       # launch the lobby (connect screen)",
+    "  trpg-kp connect --host ws://127.0.0.1:8787 --key <k> [--name N]  # prefilled",
     "",
     "Local server:",
     "  python -m app --serve",
@@ -39,25 +38,19 @@ function usage(): string {
 
 const args = parseArgs(Bun.argv.slice(2))
 
-if (args.solo) {
-  console.log("Start the local Python server first:")
-  console.log("  python -m app --serve")
+// --host/--key are no longer required: a bare `trpg-kp` opens the lobby and the
+// args (if any) just prefill the connect form. Only an explicit help request is
+// handled before the renderer starts.
+if (args.command === "help" || args.command === "--help" || args.command === "-h") {
+  console.log(usage())
   process.exit(0)
 }
 
-if (args.command !== "connect" || !args.host || !args.key) {
-  console.log(usage())
-  process.exit(args.command ? 1 : 0)
-}
-
-const client = new WsClient()
-await client.connect(args.host)
-client.join(args.key, args.name)
+const prefill: AppPrefill = { host: args.host, key: args.key, name: args.name }
 
 const renderer = await createCliRenderer()
 // Set a clean terminal window title. Without this the shell leaves the title as the
 // full launch command — which overflows the title bar and, worse, exposes the invite
 // key in it. OSC 2 (window title) + BEL terminator.
 process.stdout.write("\x1b]2;TRPG KP\x07")
-createRoot(renderer).render(<App client={client} />)
-
+createRoot(renderer).render(<App prefill={prefill} />)

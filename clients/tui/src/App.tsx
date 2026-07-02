@@ -1,238 +1,131 @@
-import { useEffect, useMemo, useRef, useState } from "react"
-import { useKeyboard, useTerminalDimensions, useTimeline } from "@opentui/react"
-import type { InputRenderable, KeyEvent, ScrollBoxRenderable } from "@opentui/core"
-import { FrameType, stripControlChars, type DiceFrame, type PresenceFrame, type ServerFrame, type StateFrame, type WelcomeFrame } from "@trpg-kp/protocol"
-import { CharacterPanel } from "./components/CharacterPanel"
-import { NarrativeLog, type LogFrame } from "./components/NarrativeLog"
-import { PartyPanel } from "./components/PartyPanel"
-import { ScenePanel } from "./components/ScenePanel"
-import { StatusBar } from "./components/StatusBar"
-import { themeOrder, themes, type ThemeName } from "./themes"
+import { useEffect, useMemo, useState } from "react"
+import { useKeyboard } from "@opentui/react"
+import type { KeyEvent } from "@opentui/core"
+import { FrameType, type PresenceFrame, type ServerFrame, type StateFrame, type WelcomeFrame } from "@trpg-kp/protocol"
+import { createClient, type AppClient } from "./client"
+import { GameView } from "./GameView"
+import { ConnectScreen } from "./screens/ConnectScreen"
+import { MainMenu } from "./screens/MainMenu"
+import { DEFAULT_THEME, themeOrder, themes, type ThemeName } from "./themes"
 
-export interface AppClient {
-  onMessage(cb: (frame: ServerFrame) => void): () => void
-  sendInput(text: string): void
+export type { AppClient } from "./client"
+
+// CLI args become prefilled connect-form defaults (index.tsx no longer forces a
+// --host/--key: a bare `trpg-kp` lands on the connect screen).
+export interface AppPrefill {
+  host?: string
+  key?: string
+  name?: string
 }
 
 export interface AppProps {
-  client: AppClient
+  // Injected in tests; defaults to a real WsClient (Bun's global WebSocket).
+  client?: AppClient
+  prefill?: AppPrefill
 }
 
-// Cap a single streaming message so a hostile/runaway stream can't grow the
-// merged text without bound (memory / render blowup).
-const MAX_STREAM_TEXT = 20_000
+// Later stages add "character" / "keeper_*"; Stage 1 routes these three.
+type Screen = "connect" | "menu" | "game"
 
-function appendFrame(frames: LogFrame[], frame: LogFrame): LogFrame[] {
-  if (frame.type !== FrameType.Narrative || !frame.stream) return [...frames, frame].slice(-200)
-  const next = [...frames]
-  const index = next.findIndex((item) => item.type === FrameType.Narrative && item.id === frame.id)
-  if (index === -1) return [...next, frame].slice(-200)
-  const existing = next[index]
-  if (existing.type !== FrameType.Narrative) return [...next, frame].slice(-200)
-  next[index] = { ...existing, text: (existing.text + frame.text).slice(0, MAX_STREAM_TEXT), done: frame.done }
-  return next
-}
+const EMPTY_STATE: StateFrame = { type: FrameType.State, party: [], initiative: [], online: 0 }
 
-function keyName(event: KeyEvent): string {
-  return typeof event.name === "string" ? event.name.toLowerCase() : ""
-}
+// F1..F5 select a theme by its position in themeOrder (five themes now).
+const themeKeyIndex: Record<string, number> = { f1: 0, f2: 1, f3: 2, f4: 3, f5: 4 }
 
-function hasCtrl(event: KeyEvent): boolean {
-  return Boolean(event.ctrl)
-}
+export function App({ client: injected, prefill }: AppProps) {
+  const client = useMemo(() => injected ?? createClient(), [injected])
 
-export function App({ client }: AppProps) {
-  const [themeName, setThemeName] = useState<ThemeName>("df16")
+  const [themeName, setThemeName] = useState<ThemeName>(DEFAULT_THEME)
   const theme = themes[themeName]
+  const [screen, setScreen] = useState<Screen>("connect")
   const [welcome, setWelcome] = useState<WelcomeFrame>()
+  const [connecting, setConnecting] = useState(false)
+  const [error, setError] = useState<string>()
+  const [stateFrame, setStateFrame] = useState<StateFrame>(EMPTY_STATE)
   const [presence, setPresence] = useState<PresenceFrame>()
-  const [stateFrame, setStateFrame] = useState<StateFrame>({ type: FrameType.State, party: [], initiative: [], online: 0 })
-  const [frames, setFrames] = useState<LogFrame[]>([])
-  const [command, setCommand] = useState("")
-  const [history, setHistory] = useState<string[]>([])
-  const [historyIndex, setHistoryIndex] = useState<number | null>(null)
-  const [inputVersion, setInputVersion] = useState(0)
-  const [showHelp, setShowHelp] = useState(false)
-  const [bootStep, setBootStep] = useState(0)
-  const [revealTicks, setRevealTicks] = useState(3)
-  const [critFlash, setCritFlash] = useState(false)
-  const scrollRef = useRef<ScrollBoxRenderable>(null)
-  const inputRef = useRef<InputRenderable>(null)
-  const dimensions = useTerminalDimensions()
 
-  const bootTimeline = useTimeline({ duration: 450, loop: false, autoplay: false })
-  const diceTimeline = useTimeline({ duration: 360, loop: false, autoplay: false })
+  // Theme cycling + Esc are safe to handle globally: F-keys / Escape never
+  // collide with typing, arrow navigation, or a focused input, so the theme
+  // persists across every screen. Screen-specific keys live in each screen.
+  useKeyboard((event: KeyEvent) => {
+    const name = typeof event.name === "string" ? event.name.toLowerCase() : ""
+    const index = themeKeyIndex[name]
+    if (index !== undefined && themeOrder[index]) setThemeName(themeOrder[index])
+    // Esc returns from the game view to the menu; the menu is the top level.
+    if (name === "escape") setScreen((prev) => (prev === "game" ? "menu" : prev))
+  })
 
   useEffect(() => {
-    const steps = [0, 1, 2, 3]
-    for (const step of steps) {
-      setTimeout(() => setBootStep(step), step * 120)
-    }
-    bootTimeline.add(
-      { value: 0 },
-      {
-        value: 1,
-        duration: 450,
-        onUpdate: () => undefined,
-      },
-    )
-  }, [])
-
-  useEffect(() => {
-    return client.onMessage((frame) => {
+    return client.onMessage((frame: ServerFrame) => {
       if (frame.type === FrameType.Welcome) {
         setWelcome(frame)
-        return
-      }
-      if (frame.type === FrameType.Presence) {
-        setPresence(frame)
+        setConnecting(false)
+        setError(undefined)
+        setScreen((prev) => (prev === "connect" ? "menu" : prev))
         return
       }
       if (frame.type === FrameType.State) {
         setStateFrame(frame)
         return
       }
-      if (frame.type === FrameType.Narrative || frame.type === FrameType.Dice || frame.type === FrameType.System) {
-        setFrames((current) => appendFrame(current, frame))
-        if (frame.type === FrameType.Dice) {
-          setRevealTicks(0)
-          diceTimeline.add(
-            { tick: 0 },
-            {
-              tick: 3,
-              duration: 360,
-              onUpdate: (animation: { targets: Array<{ tick: number }> }) => {
-                setRevealTicks(Math.round(animation.targets[0].tick))
-              },
-            },
-          )
-          if ((frame as DiceFrame).rank === 4) {
-            setCritFlash(true)
-            setTimeout(() => setCritFlash(false), 220)
-          }
-        }
+      if (frame.type === FrameType.Presence) {
+        setPresence(frame)
         return
       }
-      if (frame.type === FrameType.Error) {
-        setFrames((current) => appendFrame(current, { type: FrameType.System, level: "warn", text: frame.message }))
-        // An unrecognized key is a PERMANENT failure: stop the auto-reconnect loop so it
-        // doesn't re-join and spam the same warning on every retry. Transient errors
-        // (rate_limited, server_error, a malformed mid-session frame) keep the session.
-        if (frame.code === "bad_key") {
-          client.close()
-        }
+      if (frame.type === FrameType.Error && frame.code === "bad_key") {
+        // A bad key is a permanent failure while still on the connect screen:
+        // surface it, stay put, and stop the auto-reconnect/re-join loop so it
+        // can't spam the same rejection. A fresh submit reconnects cleanly.
+        setConnecting(false)
+        setError(frame.message)
+        client.close?.()
+        setScreen((prev) => (prev === "connect" ? "connect" : prev))
       }
     })
-  }, [client, diceTimeline])
+  }, [client])
 
-  const submit = (value?: string) => {
-    const text = String(value ?? command).trim()
-    if (!text) return
-    client.sendInput(text)
-    setFrames((current) =>
-      appendFrame(current, {
-        type: FrameType.Narrative,
-        id: `local-${Date.now()}`,
-        speaker: "player",
-        name: welcome?.you.name ?? "You",
-        text,
-        format: "plain",
-      }),
+  const handleConnect = async (url: string, key: string, name: string) => {
+    if (!key) {
+      setError("需要邀请码")
+      return
+    }
+    setError(undefined)
+    setConnecting(true)
+    try {
+      await client.connect(url)
+      client.join(key, name || undefined)
+    } catch (err) {
+      setConnecting(false)
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  if (screen === "game" && welcome) {
+    return <GameView client={client} welcome={welcome} theme={theme} themeName={themeName} />
+  }
+
+  if (screen === "menu" && welcome) {
+    return (
+      <MainMenu
+        welcome={welcome}
+        theme={theme}
+        themeName={themeName}
+        stateFrame={stateFrame}
+        presence={presence}
+        onEnterGame={() => setScreen("game")}
+      />
     )
-    setHistory((current) => [...current, text].slice(-50))
-    setHistoryIndex(null)
-    setCommand("")
-    setInputVersion((current) => current + 1)
   }
-
-  const recallHistory = (direction: -1 | 1) => {
-    if (history.length === 0) return
-    const nextIndex =
-      historyIndex === null
-        ? direction < 0
-          ? history.length - 1
-          : 0
-        : Math.max(0, Math.min(history.length - 1, historyIndex + direction))
-    setHistoryIndex(nextIndex)
-    setCommand(history[nextIndex])
-    if (inputRef.current) inputRef.current.value = history[nextIndex]
-  }
-
-  useKeyboard((event) => {
-    const name = keyName(event)
-    if (name === "f1") setThemeName("df16")
-    if (name === "f2") setThemeName("phosphor")
-    if (name === "f3") setThemeName("amber")
-    if (name === "f4") setThemeName("paperwhite")
-    if (name === "?" || name === "slash") setShowHelp((value) => !value)
-    if (name === "pageup") scrollRef.current?.scrollBy?.(-1, "viewport")
-    if (name === "pagedown") scrollRef.current?.scrollBy?.(1, "viewport")
-    if (name === "up") recallHistory(-1)
-    if (name === "down") recallHistory(1)
-    if (hasCtrl(event) && name === "l") setFrames([])
-  })
-
-  const bootText = useMemo(() => {
-    const dots = ".".repeat(bootStep % 4)
-    return `CONNECTING TO KEEPER${dots}`
-  }, [bootStep])
 
   return (
-    <box flexDirection="column" height="100%" width="100%" backgroundColor={theme.bg}>
-      <box height={3} flexDirection="row" border borderColor={theme.border} paddingX={1}>
-        <ascii-font text="TRPG KP" font="tiny" color={theme.accent} />
-        <box flexDirection="column" marginLeft={2}>
-          <text fg={theme.accent}>{bootText}</text>
-          <text fg={theme.dim}>
-            {dimensions.width}x{dimensions.height} · {welcome ? `joined ${stripControlChars(welcome.room)}` : "mock/server pending"}
-          </text>
-        </box>
-      </box>
-
-      <box flexDirection="row" flexGrow={1} minHeight={8}>
-        <scrollbox
-          ref={scrollRef}
-          flexGrow={1}
-          border
-          borderColor={theme.border}
-          stickyScroll
-          stickyStart="bottom"
-          viewportCulling={false}
-        >
-          <NarrativeLog frames={frames} theme={theme} revealTicks={revealTicks} critFlash={critFlash} />
-        </scrollbox>
-
-        <box width={32} flexDirection="column">
-          <CharacterPanel character={stateFrame.character} theme={theme} />
-          <PartyPanel party={stateFrame.party} initiative={stateFrame.initiative} theme={theme} />
-          <ScenePanel scene={stateFrame.scene} clock={stateFrame.clock} theme={theme} />
-        </box>
-      </box>
-
-      <box height={3} flexDirection="row" border borderColor={theme.border} paddingX={1}>
-        <text fg={theme.accent}>{"> "}</text>
-        <input
-          key={inputVersion}
-          ref={inputRef}
-          flexGrow={1}
-          value={command}
-          focused
-          placeholder="say or command"
-          onInput={(value: string) => setCommand(value)}
-          onSubmit={(value?: string) => submit(value)}
-        />
-      </box>
-
-      {showHelp ? (
-        <box border borderColor={theme.accent} paddingX={1} backgroundColor={theme.bg}>
-          <text fg={theme.fg}>F1 df16 · F2 phosphor · F3 amber · F4 paperwhite · PgUp/PgDn scroll · Ctrl+L clear</text>
-        </box>
-      ) : null}
-
-      <StatusBar welcome={welcome} presence={presence} online={stateFrame.online} theme={theme} themeName={themeName} />
-    </box>
+    <ConnectScreen
+      theme={theme}
+      defaults={{ host: prefill?.host, key: prefill?.key, name: prefill?.name }}
+      connecting={connecting}
+      error={error}
+      onSubmit={handleConnect}
+    />
   )
 }
 
 export default App
-

@@ -16,7 +16,7 @@ export function StatusBar({ welcome, presence, online, theme, themeName }: Statu
   return (
     <box height={1} backgroundColor={theme.border}>
       <text fg={theme.bg} bg={theme.border}>
-        {room} · {count} online · {locale} · {themeName} · F1-F4 theme · ? help
+        {room} · {count} online · {locale} · {themeName} · F1-F5 theme · ? help
       </text>
     </box>
   )

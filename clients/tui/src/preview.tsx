@@ -1,11 +1,12 @@
-// Static preview: render one rich frame of the TUI to stdout (no server needed).
-// Run: bun run preview     (from clients/tui)
+// Static preview: render one rich frame of the TUI game view to stdout (no server
+// needed). Run: bun run preview     (from clients/tui)
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
-import { FrameType, type ServerFrame } from "@trpg-kp/protocol"
-import App, { type AppClient } from "./App"
+import { FrameType, type ServerFrame, type WelcomeFrame } from "@trpg-kp/protocol"
+import { GameView, type GameClient } from "./GameView"
+import { themes } from "./themes"
 
-class MockClient implements AppClient {
+class MockClient implements GameClient {
   private listeners = new Set<(f: ServerFrame) => void>()
   onMessage(cb: (f: ServerFrame) => void): () => void {
     this.listeners.add(cb)
@@ -17,8 +18,20 @@ class MockClient implements AppClient {
   }
 }
 
+const WELCOME: WelcomeFrame = {
+  type: FrameType.Welcome,
+  protocol: "1",
+  room: "blackmoor",
+  you: { id: "p1", name: "Nora", role: "player" },
+  locale: "en",
+  server: "demo",
+}
+
 const client = new MockClient()
-const { flush, waitForFrame, renderer } = await testRender(<App client={client} />, { width: 100, height: 30 })
+const { flush, waitForFrame, renderer } = await testRender(
+  <GameView client={client} welcome={WELCOME} theme={themes.lamplight} themeName="lamplight" />,
+  { width: 100, height: 30 },
+)
 await flush()
 await act(async () => {
   await new Promise((r) => setTimeout(r, 450))
@@ -26,7 +39,6 @@ await act(async () => {
 await flush()
 
 act(() => {
-  client.push({ type: FrameType.Welcome, protocol: "1", room: "blackmoor", you: { id: "p1", name: "Nora", role: "player" }, locale: "en", server: "demo" })
   client.push({ type: FrameType.Narrative, id: "n1", speaker: "kp", format: "markdown", text: "The Salt & Anchor Inn is dim and smoke-stained. Martha eyes you warily while the patrons fall silent at the lighthouse's name." })
   client.push({ type: FrameType.Narrative, id: "n2", speaker: "npc", name: "Martha", format: "markdown", text: "You'll be wanting the lighthouse. Folk who ask about it don't come back." })
   client.push({ type: FrameType.Narrative, id: "n3", speaker: "player", name: "Nora", format: "plain", text: "I search the desk for clues." })

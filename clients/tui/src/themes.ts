@@ -1,4 +1,4 @@
-export type ThemeName = "df16" | "phosphor" | "amber" | "paperwhite"
+export type ThemeName = "lamplight" | "df16" | "phosphor" | "amber" | "paperwhite"
 
 export interface Palette {
   bg: string
@@ -23,6 +23,32 @@ export interface Palette {
 }
 
 export const themes: Record<ThemeName, Palette> = {
+  // "灯下的牌桌 / lamplight": a warm, aged-parchment table lit by a single lamp.
+  // Signature tokens (from the design brief): warm near-black bg, parchment fg,
+  // faded副字 dim, brass accent, oxblood danger, verdigris ok, aged-leather border.
+  // The cool player/SAN hues keep speaker roles + the sanity meter legible against
+  // the warm ground without breaking the sepia mood.
+  lamplight: {
+    bg: "#17130E",
+    fg: "#E7D8B5",
+    dim: "#8A7B5E",
+    kp: "#F2E4BC",
+    player: "#7FA8B8",
+    npc: "#C79B74",
+    system: "#9C8A66",
+    crit: "#F0C46A",
+    extreme: "#7FB8A3",
+    hard: "#5B9A86",
+    success: "#5B9A86",
+    fail: "#B8894A",
+    fumble: "#A2432E",
+    hpFull: "#5B9A86",
+    hpLow: "#A2432E",
+    sanFull: "#6FA5B0",
+    sanLow: "#9B6A8C",
+    border: "#4A3F30",
+    accent: "#D19A3E",
+  },
   df16: {
     bg: "#000000",
     fg: "#c0c0c0",
@@ -109,4 +135,7 @@ export const themes: Record<ThemeName, Palette> = {
   },
 }
 
-export const themeOrder: ThemeName[] = ["df16", "phosphor", "amber", "paperwhite"]
+// F1..F5 map 1:1 onto this order; lamplight leads and is the default theme.
+export const themeOrder: ThemeName[] = ["lamplight", "df16", "phosphor", "amber", "paperwhite"]
+
+export const DEFAULT_THEME: ThemeName = "lamplight"
