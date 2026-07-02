@@ -52,8 +52,13 @@ export function NarrativeLog({ frames, theme, revealTicks = 3, critFlash = false
     <box flexDirection="column" width="100%" paddingX={1}>
       {frames.length === 0 ? (
         // Animated so the empty log obviously reads as "alive, awaiting the Keeper"
-        // rather than a hung/dropped connection.
-        <Spinner active label="等待 Keeper 叙事…" color={theme.dim} />
+        // rather than a hung/dropped connection. The client no longer echoes the
+        // player's own submitted line optimistically (the server's own
+        // `narrative{speaker:"player"}` broadcast is the only echo, so it never
+        // renders twice) — so right after a submit, `frames` can still be empty
+        // for the round trip; `kpWorking` swaps this placeholder to say so
+        // explicitly instead of reading as "nothing happened yet".
+        <Spinner active label={kpWorking ? "Keeper 构思中" : "等待 Keeper 叙事…"} color={kpWorking ? theme.accent : theme.dim} />
       ) : (
         frames.map((frame, index) => {
           if (frame.type === "dice") {

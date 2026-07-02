@@ -135,6 +135,55 @@ describe("GameView", () => {
     })
   })
 
+  test("submitting a line shows it exactly once (no client-side duplicate echo)", async () => {
+    // Regression: `submit()` used to append an optimistic local `{speaker:"player"}`
+    // frame IN ADDITION TO the server's own `player_action` broadcast (the TUI
+    // server always echoes the sender's own turn back — `echo_exclude=None`,
+    // gateway/turn.py) — so every submitted line rendered twice. `submit()` must
+    // now rely solely on the server's echo round-tripping back through `onMessage`.
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame, captureCharFrame, mockInput } = await renderGame(client)
+    await flush()
+
+    await act(async () => {
+      await mockInput.typeText("i search the shelf")
+      mockInput.pressEnter()
+    })
+    await flush()
+    expect(client.sent).toContain("i search the shelf")
+
+    // Nothing rendered yet from the client itself — only once the server's echo
+    // lands does the line show up at all (no optimistic local frame).
+    expect(captureCharFrame()).not.toContain("i search the shelf")
+
+    act(() => {
+      client.push({
+        type: FrameType.Narrative,
+        id: "echo-1",
+        speaker: "player",
+        name: "Ada",
+        text: "i search the shelf",
+        format: "plain",
+      })
+    })
+    await flush()
+
+    const frame = await waitForFrame((text) => text.includes("i search the shelf"))
+    const occurrences = frame.split("i search the shelf").length - 1
+    expect(occurrences).toBe(1)
+
+    // Settle the turn (clears `kpWorking`'s trailing spinner) before teardown so its
+    // ~110ms interval can't tick — un-acted — into a later test.
+    act(() => {
+      client.push({ type: FrameType.Narrative, id: "kp-echo-1", speaker: "kp", text: "The shelf creaks open.", format: "markdown" })
+    })
+    await flush()
+
+    act(() => {
+      renderer.destroy()
+    })
+  })
+
   test("strips terminal escape sequences from untrusted server text + names", async () => {
     const client = new MockClient()
     const { renderer, flush, waitForFrame } = await renderGame(client)
@@ -280,5 +329,225 @@ describe("GameView", () => {
     expect(captureCharFrame()).not.toContain("构思中")
 
     act(() => renderer.destroy())
+  })
+
+  const ADA_STATE: ServerFrame = {
+    type: FrameType.State,
+    character: {
+      name: "Ada",
+      system: "coc7",
+      hp: 11,
+      hpmax: 13,
+      mp: 8,
+      mpmax: 10,
+      san: 55,
+      sanmax: 70,
+      attributes: { str: 45, dex: 60 },
+      status_effects: [],
+    },
+    party: [{ name: "Ada", online: true, active: true }],
+    initiative: [],
+    online: 1,
+  }
+
+  describe("merged party roster", () => {
+    test("renders the own character collapsed (simplified bars, no full detail)", async () => {
+      const client = new MockClient()
+      const { renderer, flush, waitForFrame } = await renderGame(client)
+      await flush()
+
+      act(() => client.push(ADA_STATE))
+      await flush()
+
+      const frame = await waitForFrame((t) => t.includes("队伍 / PARTY"))
+      expect(frame).toContain("队伍 / PARTY")
+      expect(frame).toContain("▸") // collapsed affordance
+      expect(frame).toContain("Ada")
+      expect(frame).toContain("HP")
+      expect(frame).toContain("SAN")
+      // The full per-attribute CharacterPanel detail (its "CHARACTER" heading) is
+      // NOT embedded while collapsed — only the compact bar summary is.
+      expect(frame).not.toContain("CHARACTER")
+
+      // Settle the log's empty-state spinner before teardown so its ~110ms
+      // interval can't tick — un-acted — into a later test (same discipline the
+      // outer describe's own tests already follow via `settleSpinner`).
+      act(() => client.push(settleSpinner))
+      await flush()
+      act(() => renderer.destroy())
+    })
+
+    test("own character expands to full CharacterPanel detail via Enter once Tab-focused, and collapses again", async () => {
+      const client = new MockClient()
+      const { renderer, flush, waitForFrame, mockInput } = await renderGame(client)
+      await flush()
+
+      act(() => client.push(ADA_STATE))
+      await flush()
+      await waitForFrame((t) => t.includes("▸"))
+
+      // Tab moves focus from the chat input to the roster's own-character row;
+      // Enter then toggles it (rather than submitting the — empty — chat input).
+      await act(async () => {
+        mockInput.pressTab()
+      })
+      await flush()
+      await act(async () => {
+        mockInput.pressEnter()
+      })
+      await flush()
+
+      const expanded = await waitForFrame((t) => t.includes("▾"))
+      expect(expanded).toContain("▾") // expanded affordance
+      expect(expanded).toContain("CHARACTER") // the embedded full CharacterPanel
+      expect(client.sent).toEqual([]) // Enter never leaked through as a chat submit
+
+      // Enter again (still roster-focused) collapses it back.
+      await act(async () => {
+        mockInput.pressEnter()
+      })
+      await flush()
+      const collapsedAgain = await waitForFrame((t) => t.includes("▸"))
+      expect(collapsedAgain).not.toContain("CHARACTER")
+
+      // Settle the log's empty-state spinner before teardown so its ~110ms
+      // interval can't tick — un-acted — into a later test (same discipline the
+      // outer describe's own tests already follow via `settleSpinner`).
+      act(() => client.push(settleSpinner))
+      await flush()
+      act(() => renderer.destroy())
+    })
+
+    test("own character expands to full CharacterPanel detail via a mouse click, and collapses again", async () => {
+      const client = new MockClient()
+      const { renderer, flush, waitForFrame, mockMouse } = await renderGame(client)
+      await flush()
+
+      act(() => client.push(ADA_STATE))
+      await flush()
+
+      const collapsed = await waitForFrame((t) => t.includes("▸"))
+      const lines = collapsed.split("\n")
+      const rowY = lines.findIndex((line) => line.includes("Ada"))
+      // The click X MUST be read off THIS row (not e.g. the title row above it):
+      // a captured char-frame row's string index only equals its true terminal
+      // column when nothing wide (CJK glyphs, which occupy two cells but one
+      // string char) precedes it on THAT SAME row — the narrative log's left
+      // column has "等待 Keeper 叙事…" on this row, so indices from a differently-
+      // padded row would land off by however many wide glyphs preceded them there.
+      const clickX = lines[rowY].indexOf("Ada")
+      expect(rowY).toBeGreaterThan(0)
+
+      await act(async () => {
+        await mockMouse.click(clickX, rowY)
+      })
+      await flush()
+
+      const expanded = await waitForFrame((t) => t.includes("CHARACTER"))
+      expect(expanded).toContain("▾")
+      expect(expanded).toContain("CHARACTER")
+
+      // Clicking the (now expanded) row again collapses it.
+      await act(async () => {
+        await mockMouse.click(clickX, rowY)
+      })
+      await flush()
+      const collapsedAgain = await waitForFrame((t) => t.includes("▸"))
+      expect(collapsedAgain).not.toContain("CHARACTER")
+
+      // Settle the log's empty-state spinner before teardown so its ~110ms
+      // interval can't tick — un-acted — into a later test (same discipline the
+      // outer describe's own tests already follow via `settleSpinner`).
+      act(() => client.push(settleSpinner))
+      await flush()
+      act(() => renderer.destroy())
+    })
+
+    test("shows a hint and no expand affordance when the player has no character yet", async () => {
+      const client = new MockClient()
+      const { renderer, flush, waitForFrame } = await renderGame(client)
+      await flush()
+
+      act(() => {
+        client.push({
+          type: FrameType.State,
+          party: [{ name: "Bob", online: true, active: false }],
+          initiative: [],
+          online: 1,
+        })
+      })
+      await flush()
+
+      const frame = await waitForFrame((t) => t.includes("队伍 / PARTY"))
+      expect(frame).toContain("尚未创建角色")
+      expect(frame).toContain("Bob")
+      expect(frame).not.toContain("▸")
+      expect(frame).not.toContain("▾")
+      expect(frame).not.toContain("CHARACTER")
+
+      // Settle the log's empty-state spinner before teardown so its ~110ms
+      // interval can't tick — un-acted — into a later test (same discipline the
+      // outer describe's own tests already follow via `settleSpinner`).
+      act(() => client.push(settleSpinner))
+      await flush()
+      act(() => renderer.destroy())
+    })
+
+    test("lists other roster members with an AI badge and online/offline dots", async () => {
+      const client = new MockClient()
+      const { renderer, flush, waitForFrame } = await renderGame(client)
+      await flush()
+
+      act(() => {
+        client.push({
+          type: FrameType.State,
+          party: [
+            { name: "Silas", online: true, active: false, ai: true },
+            { name: "Bob", online: false, active: false },
+          ],
+          initiative: [],
+          online: 1,
+        })
+      })
+      await flush()
+
+      const frame = await waitForFrame((t) => t.includes("Silas"))
+      const lines = frame.split("\n")
+      const silasLine = lines.find((line) => line.includes("Silas"))
+      const bobLine = lines.find((line) => line.includes("Bob"))
+      expect(silasLine).toContain("[AI]")
+      expect(silasLine).toContain("●")
+      expect(bobLine).not.toContain("[AI]")
+      expect(bobLine).toContain("○")
+
+      // Settle the log's empty-state spinner before teardown so its ~110ms
+      // interval can't tick — un-acted — into a later test (same discipline the
+      // outer describe's own tests already follow via `settleSpinner`).
+      act(() => client.push(settleSpinner))
+      await flush()
+      act(() => renderer.destroy())
+    })
+
+    test("empty party + no character still renders gracefully", async () => {
+      const client = new MockClient()
+      const { renderer, flush, waitForFrame } = await renderGame(client)
+      await flush()
+
+      act(() => {
+        client.push({ type: FrameType.State, party: [], initiative: [], online: 0 })
+      })
+      await flush()
+
+      const frame = await waitForFrame((t) => t.includes("队伍 / PARTY"))
+      expect(frame).toContain("尚未创建角色")
+      expect(frame).toContain("No roster")
+
+      // Settle the log's empty-state spinner before teardown so its ~110ms
+      // interval can't tick — un-acted — into a later test (same discipline the
+      // outer describe's own tests already follow via `settleSpinner`).
+      act(() => client.push(settleSpinner))
+      await flush()
+      act(() => renderer.destroy())
+    })
   })
 })

@@ -43,7 +43,7 @@ either `welcome` or `error`, closing the connection on error.
   `rank` (`-2`..`+4`); NEVER carries keeper secrets:
   `{type:"dice", actor:string, kind:"roll"|"check"|"sanity"|"opposed"|"init", expr:string, rolls:number[], total:number, target?:number, rank?:int, level?:string, success?:boolean}`
 - `state` — a panel snapshot, sent on `join` and after every turn:
-  `{type:"state", character?:{name,system,hp,hpmax,mp,mpmax,san,sanmax,attributes:{},status_effects:[]}, party:[{name,online:boolean,active:boolean,initiative?:int}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int}`
+  `{type:"state", character?:{name,system,hp,hpmax,mp,mpmax,san,sanmax,attributes:{},status_effects:[]}, party:[{name,online:boolean,active:boolean,initiative?:int,ai?:boolean}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int}`
 - `presence` — the connected-player roster, sent on join/leave:
   `{type:"presence", players:[{id,name,online}], online:int}`
 - `system` — an out-of-band notice: `{type:"system", level:"info"|"warn", text:string}`

@@ -11,14 +11,16 @@ function ratio(value: number, max: number): number {
   return Math.max(0, Math.min(1, value / max))
 }
 
-function bar(value: number, max: number, width = 10): string {
+// Exported so other panels (e.g. the merged party/character roster) can render
+// stat bars with the exact same glyphs/thresholds instead of re-implementing them.
+export function bar(value: number, max: number, width = 10): string {
   const filled = Math.round(ratio(value, max) * width)
   const empty = Math.max(0, width - filled)
   const glyph = ratio(value, max) > 0.6 ? "█" : ratio(value, max) > 0.3 ? "▓" : "▒"
   return `${glyph.repeat(filled)}${"░".repeat(empty)}`
 }
 
-function statColor(value: number, max: number, full: string, low: string): string {
+export function statColor(value: number, max: number, full: string, low: string): string {
   return ratio(value, max) <= 0.35 ? low : full
 }
 

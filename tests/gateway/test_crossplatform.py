@@ -15,6 +15,7 @@ import json
 from agent.context import AgentCtx
 from agent.kp_tools import build_kp_toolset
 from agent.services import build_services
+from core.character_manager import CharacterSheet
 from core.dice_engine import seed_dice
 from gateway.commands import CommandRouter
 from gateway.events import InboundMessage
@@ -186,6 +187,72 @@ async def test_terminal_origin_turn_reaches_the_chat_channel() -> None:
     assert any("🎲" in text for text in adapter.texts)
     # The raw player line never surfaces as a chat send.
     assert all("look under the floor" not in text for text in adapter.texts)
+
+
+async def test_display_name_prefers_active_character_with_nickname_in_parens_when_they_differ() -> None:
+    # FIX 3 (playtest feedback): the room should see who a player IS in the
+    # fiction, not just their platform handle -- so once a character exists,
+    # the echoed/attributed turn name leads with the character's name and
+    # keeps the differing nickname alongside it in parens.
+    hub = RoomHub()
+    services = _services(_kp_rolls_then_replies)
+    toolset = build_kp_toolset(services)
+    router = CommandRouter(services)
+
+    ws_member = RecordingWsMember(member_id="term-2", name="Dirac")
+    await hub.subscribe("R2", ws_member)
+    ws_member.events.clear()
+
+    ctx = AgentCtx(chat_key="R2", user_id=ws_member.id, platform="tui", locale="en")
+    await services.characters.save_character(ctx.uid(), ctx.chat_key, CharacterSheet(name="Nora Vance", system="CoC"))
+
+    seed_dice(7)
+    await run_turn(
+        hub,
+        services,
+        ctx,
+        "I search the room",
+        command_router=router,
+        toolset=toolset,
+        censor=Censor(),
+        origin=ws_member,
+        echo_exclude=None,
+    )
+
+    echo = next(e for e in ws_member.events if e.kind == "player_action")
+    assert echo.name == "Nora Vance (Dirac)"
+
+
+async def test_display_name_omits_parens_when_nickname_matches_character_name() -> None:
+    # When the nickname and the character name happen to be the same string,
+    # the echoed name is just that one name -- no redundant "X (X)".
+    hub = RoomHub()
+    services = _services(_kp_rolls_then_replies)
+    toolset = build_kp_toolset(services)
+    router = CommandRouter(services)
+
+    ws_member = RecordingWsMember(member_id="term-3", name="Nora Vance")
+    await hub.subscribe("R3", ws_member)
+    ws_member.events.clear()
+
+    ctx = AgentCtx(chat_key="R3", user_id=ws_member.id, platform="tui", locale="en")
+    await services.characters.save_character(ctx.uid(), ctx.chat_key, CharacterSheet(name="Nora Vance", system="CoC"))
+
+    seed_dice(7)
+    await run_turn(
+        hub,
+        services,
+        ctx,
+        "I search the room",
+        command_router=router,
+        toolset=toolset,
+        censor=Censor(),
+        origin=ws_member,
+        echo_exclude=None,
+    )
+
+    echo = next(e for e in ws_member.events if e.kind == "player_action")
+    assert echo.name == "Nora Vance"
 
 
 async def test_runner_hub_path_broadcasts_turn_and_keeps_room_reply_to_origin() -> None:

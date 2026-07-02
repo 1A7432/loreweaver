@@ -121,6 +121,10 @@ export interface PartyMember {
   online: boolean
   active: boolean
   initiative?: number
+  // M10: set when this roster member is an AI player-companion (vs a human
+  // player's character), so clients can render an "AI" badge. Additive/
+  // optional so older server payloads without it still type-check.
+  ai?: boolean
 }
 
 export interface SceneState {

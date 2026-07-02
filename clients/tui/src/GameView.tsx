@@ -2,9 +2,8 @@ import { useEffect, useRef, useState } from "react"
 import { useKeyboard, useTerminalDimensions, useTimeline } from "@opentui/react"
 import type { InputRenderable, KeyEvent, ScrollBoxRenderable } from "@opentui/core"
 import { FrameType, stripControlChars, type DiceFrame, type PresenceFrame, type ServerFrame, type StateFrame, type WelcomeFrame } from "@trpg-kp/protocol"
-import { CharacterPanel } from "./components/CharacterPanel"
 import { NarrativeLog, type LogFrame } from "./components/NarrativeLog"
-import { PartyPanel } from "./components/PartyPanel"
+import { PartyRoster } from "./components/PartyRoster"
 import { ScenePanel } from "./components/ScenePanel"
 import { StatusBar } from "./components/StatusBar"
 import type { Palette, ThemeName } from "./themes"
@@ -62,6 +61,11 @@ export function GameView({ client, welcome, theme, themeName }: GameViewProps) {
   const [kpWorking, setKpWorking] = useState(false)
   const [revealTicks, setRevealTicks] = useState(3)
   const [critFlash, setCritFlash] = useState(false)
+  // Whether the party roster (vs the chat input) currently owns Enter — see
+  // components/PartyRoster.tsx. Tab toggles it; the chat `<input>`'s own
+  // `focused` prop below is kept the logical opposite so Enter is never
+  // handled by both at once.
+  const [rosterFocused, setRosterFocused] = useState(false)
   const scrollRef = useRef<ScrollBoxRenderable>(null)
   const inputRef = useRef<InputRenderable>(null)
   const dimensions = useTerminalDimensions()
@@ -124,16 +128,12 @@ export function GameView({ client, welcome, theme, themeName }: GameViewProps) {
     if (!text) return
     client.sendInput(text)
     setKpWorking(true)
-    setFrames((current) =>
-      appendFrame(current, {
-        type: FrameType.Narrative,
-        id: `local-${Date.now()}`,
-        speaker: "player",
-        name: welcome.you.name,
-        text,
-        format: "plain",
-      }),
-    )
+    // No optimistic local echo here: the TUI server always broadcasts the
+    // player's own action back as a `narrative{speaker:"player"}` event (it
+    // runs `run_turn` with `echo_exclude=None` — see gateway/turn.py — so a
+    // solo terminal still sees its own echo, M4 behavior). Appending a local
+    // frame here too used to double every submitted line; `onMessage` above
+    // already renders the server's echo once it round-trips.
     setHistory((current) => [...current, text].slice(-50))
     setHistoryIndex(null)
     setCommand("")
@@ -164,6 +164,14 @@ export function GameView({ client, welcome, theme, themeName }: GameViewProps) {
     if (name === "up") recallHistory(-1)
     if (name === "down") recallHistory(1)
     if (hasCtrl(event) && name === "l") setFrames([])
+    // Tab moves focus to the roster (only worth it when there's an own character
+    // to expand/collapse — otherwise Tab would blur the chat input with nothing
+    // for the roster to do with it) and always back, so focus can never get
+    // stranded off the input if a character disappears mid-session.
+    if (name === "tab") {
+      if (rosterFocused) setRosterFocused(false)
+      else if (stateFrame.character) setRosterFocused(true)
+    }
   })
 
   return (
@@ -196,8 +204,14 @@ export function GameView({ client, welcome, theme, themeName }: GameViewProps) {
         </scrollbox>
 
         <box width={32} flexDirection="column">
-          <CharacterPanel character={stateFrame.character} theme={theme} />
-          <PartyPanel party={stateFrame.party} initiative={stateFrame.initiative} theme={theme} />
+          <PartyRoster
+            character={stateFrame.character}
+            party={stateFrame.party}
+            initiative={stateFrame.initiative}
+            theme={theme}
+            focused={rosterFocused}
+            onFocus={() => setRosterFocused(true)}
+          />
           <ScenePanel scene={stateFrame.scene} clock={stateFrame.clock} theme={theme} />
         </box>
       </box>
@@ -209,7 +223,7 @@ export function GameView({ client, welcome, theme, themeName }: GameViewProps) {
           ref={inputRef}
           flexGrow={1}
           value={command}
-          focused
+          focused={!rosterFocused}
           placeholder="say or command"
           onInput={(value: string) => setCommand(value)}
           onSubmit={(value?: string) => submit(value)}
@@ -218,7 +232,10 @@ export function GameView({ client, welcome, theme, themeName }: GameViewProps) {
 
       {showHelp ? (
         <box border borderColor={theme.accent} paddingX={1} backgroundColor={theme.bg}>
-          <text fg={theme.fg}>F1 lamplight · F2 df16 · F3 phosphor · F4 amber · F5 paperwhite · Esc menu · PgUp/PgDn scroll · Ctrl+L clear</text>
+          <text fg={theme.fg}>
+            F1 lamplight · F2 df16 · F3 phosphor · F4 amber · F5 paperwhite · Esc menu · PgUp/PgDn scroll · Tab
+            roster · Ctrl+L clear
+          </text>
         </box>
       ) : null}
 

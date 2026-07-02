@@ -33,6 +33,12 @@ if TYPE_CHECKING:
     from gateway.hub import Member, RoomHub
     from gateway.ops import Censor
 
+# The sentinel `CharacterManager.get_character` returns for "no character set"
+# (it defaults an unresolved active-character pointer to this fixed slot name
+# rather than raising). Mirrors `net.state._UNSET_CHARACTER_NAME` (a private
+# name of that module, so duplicated here rather than imported).
+_UNSET_CHARACTER_NAME = "default"
+
 # tool_trace `name` -> the `dice` event's `kind` (M4 §1's turn-flow step 5).
 # None of these are `keeper_only` (they never touch module secrets), matching
 # the wire protocol's "dice frames NEVER contain keeper secrets" guarantee.
@@ -85,7 +91,7 @@ async def run_turn(
     the room sees ``Silas: I cover the door`` rather than the raw ``companion:silas``.
     """
     i18n = get_i18n(ctx.locale)
-    name = actor_name or _display_name(origin, ctx)
+    name = actor_name or await _display_name(origin, ctx, services)
 
     await hub.publish(ctx.chat_key, Event.player_action(name=name, text=text), exclude=echo_exclude)
 
@@ -126,9 +132,29 @@ async def publish_state(hub: RoomHub, services: Services, ctx: AgentCtx) -> None
     await hub.publish(ctx.chat_key, Event.state(snapshot))
 
 
-def _display_name(origin: Member | None, ctx: AgentCtx) -> str:
-    """The actor name to echo/attribute this turn to (member name, else uid)."""
-    return str(getattr(origin, "name", "") or ctx.uid())
+async def _display_name(origin: Member | None, ctx: AgentCtx, services: Services) -> str:
+    """The actor name to echo/attribute this turn to.
+
+    Prefers ``ctx``'s ACTIVE character name (looked up the same way
+    ``net.state._active_character`` does: ``CharacterManager.get_character``
+    defaults to the caller's active character and returns a sentinel
+    ``"default"``-named sheet when none is set). When the platform nickname
+    (member name, else ``ctx.uid()``) differs from the character name, it is
+    kept alongside it -- ``"<char name> (<nickname>)"`` -- so a chat log stays
+    legible even when a player's in-fiction name and platform handle diverge;
+    when they match, just the one name is shown. Falls back to the nickname
+    alone (the previous behavior) when the player has no active character.
+    """
+    nickname = str(getattr(origin, "name", "") or ctx.uid())
+    try:
+        sheet = await services.characters.get_character(ctx.uid(), ctx.chat_key)
+    except Exception:
+        return nickname
+    if not sheet or not sheet.name or sheet.name == _UNSET_CHARACTER_NAME:
+        return nickname
+    if sheet.name == nickname:
+        return sheet.name
+    return f"{sheet.name} ({nickname})"
 
 
 def _npc_event(entry: dict[str, Any], i18n: I18n) -> Event | None:
