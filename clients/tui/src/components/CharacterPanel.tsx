@@ -1,5 +1,6 @@
 import { stripControlChars, type CharacterState } from "@trpg-kp/protocol"
 import type { Palette } from "../themes"
+import { attributeLines } from "./characterAttributes"
 
 export interface CharacterPanelProps {
   character?: CharacterState
@@ -22,12 +23,6 @@ export function bar(value: number, max: number, width = 10): string {
 
 export function statColor(value: number, max: number, full: string, low: string): string {
   return ratio(value, max) <= 0.35 ? low : full
-}
-
-function renderAttributes(attributes: Record<string, unknown>): string[] {
-  return Object.entries(attributes)
-    .slice(0, 6)
-    .map(([key, value]) => stripControlChars(`${key.toUpperCase().slice(0, 4)} ${String(value)}`))
 }
 
 export function CharacterPanel({ character, theme }: CharacterPanelProps) {
@@ -56,8 +51,8 @@ export function CharacterPanel({ character, theme }: CharacterPanelProps) {
       <text fg={statColor(character.san, character.sanmax, theme.sanFull, theme.sanLow)}>
         SAN {bar(character.san, character.sanmax)} {character.san}/{character.sanmax}
       </text>
-      {renderAttributes(character.attributes).map((line) => (
-        <text key={line} fg={theme.fg}>
+      {attributeLines(character).slice(0, 6).map(({ key, line }) => (
+        <text key={key} fg={theme.fg}>
           {line}
         </text>
       ))}
@@ -69,4 +64,3 @@ export function CharacterPanel({ character, theme }: CharacterPanelProps) {
     </box>
   )
 }
-

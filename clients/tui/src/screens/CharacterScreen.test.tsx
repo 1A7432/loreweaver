@@ -270,4 +270,73 @@ describe("CharacterScreen", () => {
 
     act(() => renderer.destroy())
   })
+
+  test("属性表和角色面板过滤内部修正键并保留核心属性对齐", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client)
+    await flush()
+    act(() => client.push(PLAYER_WELCOME))
+    await waitForFrame((t) => t.includes("我的角色"))
+
+    act(() => {
+      client.push({
+        type: FrameType.State,
+        character: {
+          name: "漱雪",
+          system: "CoC",
+          hp: 10,
+          hpmax: 10,
+          mp: 10,
+          mpmax: 10,
+          san: 65,
+          sanmax: 99,
+          attributes: {
+            STR: 60,
+            SANMAXADD: 0,
+            HPMAXADD: 0,
+            MPMAXADD: 0,
+            IDEA: 70,
+            KNOW: 80,
+            DEX: 55,
+            CON: 50,
+            SIZ: 65,
+            APP: 45,
+            INT: 70,
+            POW: 65,
+            EDU: 80,
+            LUC: 40,
+          },
+          status_effects: [],
+        },
+        party: [],
+        initiative: [],
+        online: 1,
+      })
+    })
+    await flush()
+
+    await act(async () => {
+      mockInput.pressArrow("down")
+    })
+    await flush()
+    await act(async () => {
+      mockInput.pressEnter()
+    })
+    await flush()
+
+    const frame = await waitForFrame((t) => t.includes("属性 / ATTRIBUTES"))
+    expect(frame).toContain("STR 60")
+    expect(frame).toContain("DEX 55")
+    expect(frame).toContain("LUC 40")
+    expect(frame).not.toContain("SANMAXADD")
+    expect(frame).not.toContain("HPMAXADD")
+    expect(frame).not.toContain("MPMAXADD")
+    expect(frame).not.toContain("SANM 0")
+    expect(frame).not.toContain("HPM")
+    expect(frame).not.toContain("MPM")
+    expect(frame).not.toContain("IDEA")
+    expect(frame).not.toContain("KNOW")
+
+    act(() => renderer.destroy())
+  })
 })

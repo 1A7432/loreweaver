@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react"
 import { useKeyboard } from "@opentui/react"
 import type { KeyEvent, SelectOption } from "@opentui/core"
-import { stripControlChars, type CharacterState, type StateFrame, type WelcomeFrame } from "@trpg-kp/protocol"
+import { stripControlChars, type StateFrame, type WelcomeFrame } from "@trpg-kp/protocol"
 import { CharacterPanel } from "../components/CharacterPanel"
+import { attributeLines } from "../components/characterAttributes"
 import { StatusBar } from "../components/StatusBar"
 import type { Palette, ThemeName } from "../themes"
 
@@ -50,15 +51,6 @@ const SYSTEM_OPTIONS: SelectOption[] = [
 
 const COC_ROLL_LABELS = ["力量", "体质", "体型", "敏捷", "外貌", "智力", "意志", "教育"]
 const DND_ROLL_LABELS = ["力量", "敏捷", "体质", "智力", "感知", "魅力"]
-
-// Already surfaced as HP/MP/SAN bars by CharacterPanel; the fuller attribute list
-// below shows everything else `attributes` carries instead of repeating them.
-const VITAL_KEYS = new Set(["HP", "HPMAX", "MP", "MPMAX", "SAN", "SANMAX"])
-
-function nonVitalAttributes(character?: CharacterState): Array<[string, unknown]> {
-  if (!character) return []
-  return Object.entries(character.attributes).filter(([key]) => !VITAL_KEYS.has(key.toUpperCase()))
-}
 
 // Identity, not reference: `net/state.py` rebuilds a brand-new `character` dict on
 // *every* state frame (any room event), so a reference check alone would treat an
@@ -369,9 +361,9 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
                   <text fg={theme.success}>
                     {CURSOR} {stripControlChars(stateFrame.character?.name ?? pendingName)}
                   </text>
-                  {nonVitalAttributes(stateFrame.character).map(([key, value]) => (
+                  {attributeLines(stateFrame.character).map(({ key, line }) => (
                     <text key={key} fg={theme.success}>
-                      {key} {String(value)}
+                      {line}
                     </text>
                   ))}
                 </>
@@ -395,9 +387,9 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
               {stateFrame.character ? (
                 <box flexDirection="column" border borderColor={theme.border} paddingX={1} marginTop={1}>
                   <text fg={theme.accent}>属性 / ATTRIBUTES</text>
-                  {nonVitalAttributes(stateFrame.character).map(([key, value]) => (
+                  {attributeLines(stateFrame.character).map(({ key, line }) => (
                     <text key={key} fg={theme.fg}>
-                      {key} {String(value)}
+                      {line}
                     </text>
                   ))}
                 </box>
