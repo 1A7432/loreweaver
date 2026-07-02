@@ -80,10 +80,13 @@ describe("CharacterScreen", () => {
     expect(frame).toContain("规则系统")
     expect(frame).toContain("CoC 7 版")
     expect(frame).toContain("D&D 5e")
-    expect(frame).toContain("姓名")
-    expect(frame).toContain("⚄ 建卡")
+    expect(frame).toContain("建卡方式")
+    expect(frame).toContain("自动掷骰")
+    expect(frame).toContain("手动设置")
+    expect(frame).toContain("描述生成")
     expect(frame).toContain("导入酒馆卡")
-    expect(frame).toContain("⚄ 导入")
+    expect(frame).toContain("姓名")
+    expect(frame).toContain("⚄ 自动掷骰")
     // The old Stage-1 stub note is gone; this is real navigation now.
     expect(frame).not.toContain("即将推出")
 
@@ -107,8 +110,9 @@ describe("CharacterScreen", () => {
     await flush()
     await waitForFrame((t) => t.includes("规则系统"))
 
-    // Tab from the system select onto the name field, type a name, submit.
+    // Tab from method -> system -> name, type a name, submit.
     await act(async () => {
+      mockInput.pressTab()
       mockInput.pressTab()
     })
     await flush()
@@ -187,8 +191,8 @@ describe("CharacterScreen", () => {
     })
     await flush()
 
-    const form = await waitForFrame((t) => t.includes("⚄ 建卡"))
-    const buttonRowY = form.split("\n").findIndex((line) => line.includes("⚄ 建卡"))
+    const form = await waitForFrame((t) => t.includes("⚄ 自动掷骰"))
+    const buttonRowY = form.split("\n").findIndex((line) => line.includes("⚄ 自动掷骰"))
     expect(buttonRowY).toBeGreaterThan(0)
 
     // No system change, no typed name: clicking straight away submits the
@@ -218,10 +222,21 @@ describe("CharacterScreen", () => {
       mockInput.pressEnter()
     })
     await flush()
-    await waitForFrame((t) => t.includes("导入酒馆卡"))
+    await waitForFrame((t) => t.includes("建卡方式"))
 
     await act(async () => {
-      mockInput.pressTab()
+      mockInput.pressArrow("down")
+      mockInput.pressArrow("down")
+      mockInput.pressArrow("down")
+    })
+    await flush()
+    await act(async () => {
+      mockInput.pressEnter()
+    })
+    await flush()
+    await waitForFrame((t) => t.includes("⚄ 导入"))
+
+    await act(async () => {
       mockInput.pressTab()
     })
     await flush()
@@ -238,6 +253,128 @@ describe("CharacterScreen", () => {
     const sent = await waitForFrame((t) => t.includes("已发送"))
     expect(sent).toContain(".import /cards/ada.json coc pc")
 
+    await act(async () => {
+      mockInput.pressEscape()
+    })
+    await flush()
+    act(() => renderer.destroy())
+  })
+
+  test("手动建卡显示点数预算并发送 .dnd + .st 特性", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client)
+    await flush()
+    act(() => client.push(PLAYER_WELCOME))
+    await waitForFrame((t) => t.includes("我的角色"))
+
+    await act(async () => {
+      mockInput.pressArrow("down")
+    })
+    await flush()
+    await act(async () => {
+      mockInput.pressEnter()
+    })
+    await flush()
+    await waitForFrame((t) => t.includes("建卡方式"))
+
+    await act(async () => {
+      mockInput.pressArrow("down")
+    })
+    await flush()
+    await act(async () => {
+      mockInput.pressEnter()
+    })
+    await flush()
+    await act(async () => {
+      mockInput.pressArrow("down")
+    })
+    await flush()
+    await act(async () => {
+      mockInput.pressEnter()
+    })
+    await flush()
+
+    await act(async () => {
+      await mockInput.typeText("米拉")
+    })
+    await flush()
+    await act(async () => {
+      mockInput.pressTab()
+    })
+    await flush()
+
+    const budget = await waitForFrame((t) => t.includes("点数购买 0/27"))
+    expect(budget).toContain("STR 力量  8")
+
+    await act(async () => {
+      mockInput.pressEnter()
+    })
+    await flush()
+
+    expect(client.sent).toContain(".dnd 米拉")
+    expect(client.sent).toContain(".st 力量8 敏捷8 体质8 智力8 感知8 魅力8")
+
+    await act(async () => {
+      mockInput.pressEscape()
+    })
+    await flush()
+    act(() => renderer.destroy())
+  })
+
+  test("描述生成模式发送 .genchar <system> <name> | <description>", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client)
+    await flush()
+    act(() => client.push(PLAYER_WELCOME))
+    await waitForFrame((t) => t.includes("我的角色"))
+
+    await act(async () => {
+      mockInput.pressArrow("down")
+    })
+    await flush()
+    await act(async () => {
+      mockInput.pressEnter()
+    })
+    await flush()
+    await waitForFrame((t) => t.includes("建卡方式"))
+
+    await act(async () => {
+      mockInput.pressArrow("down")
+      mockInput.pressArrow("down")
+    })
+    await flush()
+    await act(async () => {
+      mockInput.pressEnter()
+    })
+    await flush()
+
+    await act(async () => {
+      mockInput.pressTab()
+    })
+    await flush()
+    await act(async () => {
+      await mockInput.typeText("阿达")
+    })
+    await flush()
+    await act(async () => {
+      mockInput.pressTab()
+    })
+    await flush()
+    await act(async () => {
+      await mockInput.typeText("冷静的医生,在雾港调查失踪案")
+    })
+    await flush()
+    await act(async () => {
+      mockInput.pressEnter()
+    })
+    await flush()
+
+    expect(client.sent).toContain(".genchar coc 阿达 | 冷静的医生,在雾港调查失踪案")
+
+    await act(async () => {
+      mockInput.pressEscape()
+    })
+    await flush()
     act(() => renderer.destroy())
   })
 
