@@ -22,7 +22,11 @@ class LLMSettings(BaseModel):
     embedding_dim: int = 1536
     analysis_model: str = ""  # large-context model for full-module analysis; falls back to chat_model
     npc_model: str = ""  # model for AI-played NPC sub-actors (agent.npc_actor.voice_npc); falls back to chat_model
-    temperature: float = 0.7
+    # Left unset by default: don't hand-tune temperature — send nothing and let the provider
+    # use its own default (DeepSeek = 1.0, which is also what it recommends for thinking mode;
+    # a low temperature can collapse a reasoning model's trace). Callers may still pass one.
+    temperature: float | None = None
+    reasoning_effort: str = ""  # "high"/"max" for DeepSeek thinking mode / o-series. "" = off. When set, temperature is not sent (thinking mode ignores it).
 
 
 class Settings(BaseSettings):

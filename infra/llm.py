@@ -78,9 +78,14 @@ class OpenAILLM:
             kwargs["tools"] = tools
         if tool_choice is not None:
             kwargs["tool_choice"] = tool_choice
-        effective_temperature = self._settings.temperature if temperature is None else temperature
-        if effective_temperature is not None:
-            kwargs["temperature"] = effective_temperature
+        if self._settings.reasoning_effort:
+            # Reasoning models (deepseek-v4-pro, o-series) take a thinking budget and
+            # ignore/reject `temperature`, so send one xor the other.
+            kwargs["reasoning_effort"] = self._settings.reasoning_effort
+        else:
+            effective_temperature = self._settings.temperature if temperature is None else temperature
+            if effective_temperature is not None:
+                kwargs["temperature"] = effective_temperature
 
         response = await self._client.chat.completions.create(**kwargs)
         if not response.choices:
