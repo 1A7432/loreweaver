@@ -40,11 +40,12 @@ jobs:
           ssh-keyscan -H "$host" >> ~/.ssh/known_hosts 2>/dev/null
 
       - name: Publish tarball + installers + web client
+        # ubuntu-latest no longer ships rsync, so use scp; clear /play/ first for a
+        # clean web deploy (drops stale hashed assets).
         run: |
           T="${{ secrets.LW_SSH_TARGET }}"
-          rsync -az --chmod=D755,F644 \
-            loreweaver-client.tar.gz clients/install.sh clients/install.ps1 \
-            "$T:/var/www/1a7432.site/trpg/"
-          rsync -az --delete --chmod=D755,F644 \
-            clients/web/dist/ "$T:/var/www/1a7432.site/play/"
+          scp loreweaver-client.tar.gz clients/install.sh clients/install.ps1 "$T:/var/www/1a7432.site/trpg/"
+          ssh "$T" "rm -rf /var/www/1a7432.site/play/* /var/www/1a7432.site/play/.[!.]*"
+          scp -r clients/web/dist/* "$T:/var/www/1a7432.site/play/"
+          ssh "$T" "chmod -R a+rX /var/www/1a7432.site/trpg /var/www/1a7432.site/play"
           echo "published → /trpg/loreweaver-client.tar.gz + /play/"
