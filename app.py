@@ -80,6 +80,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--host", default=DEFAULT_TUI_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_TUI_PORT)
+    # Transport selection. Iroh p2p is the DEFAULT carrier (zero domain/TLS/port-forward —
+    # share a ticket); the WebSocket listener is opt-in for reverse-proxied deployments.
+    parser.add_argument("--ws", action="store_true")
+    parser.add_argument("--no-iroh", action="store_true")
     parser.add_argument("--keys", default=os.environ.get("TRPG_TUI_KEYS", DEFAULT_TUI_KEYS_PATH))
     parser.add_argument("--tui-key", dest="tui_key_cmd", choices=["add"])
     parser.add_argument("--room")
@@ -207,15 +211,69 @@ def _run_serve(settings: Settings, i18n: I18n, args: argparse.Namespace) -> int:
     _bootstrap_keystore(keystore, i18n, args.keys)
     server = build_tui_server(settings, keystore, host=args.host, port=args.port)
     seed_dice(0)
-    print(i18n.t("tui.serve.listening", host=args.host, port=args.port, path=args.keys), file=sys.stderr)
 
     try:
-        asyncio.run(server.serve())
+        asyncio.run(_serve_transports(server, i18n, args))
     except KeyboardInterrupt:
         pass
     finally:
         server.services.store.close()
     return 0
+
+
+async def _serve_transports(server: TuiServer, i18n: I18n, args: argparse.Namespace) -> None:
+    """Run the enabled transports concurrently over the one shared core/hub.
+
+    Iroh p2p is the DEFAULT carrier; the WebSocket listener is opt-in (`--ws`). If Iroh is
+    requested but its native dep is missing or the endpoint can't come up, warn and fall back
+    to WebSocket so the server is still reachable rather than exiting.
+    """
+    tasks: list = []
+    iroh_server = None
+    enable_ws = bool(args.ws)
+
+    if not args.no_iroh:
+        from net.iroh_server import IrohServer
+
+        iroh_server = IrohServer(server)
+        try:
+            ticket = await iroh_server.start()
+        except ImportError:
+            print(i18n.t("tui.serve.iroh.missing"), file=sys.stderr)
+            iroh_server, enable_ws = None, True
+        except Exception as exc:  # relay unreachable, bind failure, etc.
+            print(i18n.t("tui.serve.iroh.failed", error=str(exc)), file=sys.stderr)
+            iroh_server, enable_ws = None, True
+        else:
+            _announce_iroh_ticket(i18n, ticket, args.keys)
+            tasks.append(asyncio.create_task(iroh_server.serve()))
+
+    if enable_ws:
+        print(i18n.t("tui.serve.listening", host=args.host, port=args.port, path=args.keys), file=sys.stderr)
+        tasks.append(asyncio.create_task(server.serve()))
+
+    if not tasks:
+        print(i18n.t("tui.serve.none"), file=sys.stderr)
+        return
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        if iroh_server is not None:
+            await iroh_server.close()
+        await server.close()
+
+
+def _announce_iroh_ticket(i18n: I18n, ticket: str, keys_path: str) -> None:
+    """Print the shareable Iroh ticket prominently + drop it in a sidecar file, mirroring the
+    keeper-key bootstrap banner. The operator shares this ticket (the address) + an invite key."""
+    sidecar = Path(keys_path).with_name("iroh-ticket.txt")
+    try:
+        sidecar.write_text(f"ticket={ticket}\n", encoding="utf-8")  # i18n-exempt: data file
+    except OSError:
+        pass
+    print(i18n.t("tui.serve.iroh.banner"), file=sys.stderr)
+    print(i18n.t("tui.serve.iroh.ticket", ticket=ticket), file=sys.stderr)
+    print(i18n.t("tui.serve.iroh.hint", path=str(sidecar)), file=sys.stderr)
 
 
 # --- combined `--serve --platforms` mode (M7) -----------------------------

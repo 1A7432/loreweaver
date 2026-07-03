@@ -16,6 +16,12 @@
   "tui.serve.bootstrap.banner": "★ First run: no keys yet, so minted a keeper key for room '{room}'.",
   "tui.serve.bootstrap.key": "  Keeper key: {key}",
   "tui.serve.bootstrap.hint": "  Connect with it to administer the server from the client (mint more keys, import modules). Saved to {path}.",
+  "tui.serve.none": "No transport enabled (--no-iroh with no --ws). Nothing to serve.",
+  "tui.serve.iroh.banner": "★ Iroh p2p transport ready. Share this ticket + an invite key; friends connect with no domain/TLS/port-forward.",
+  "tui.serve.iroh.ticket": "  Ticket: {ticket}",
+  "tui.serve.iroh.hint": "  Saved to {path}. Add --ws to also serve WebSocket; --no-iroh to disable Iroh.",
+  "tui.serve.iroh.missing": "Iroh transport requested but the 'iroh' package is not installed (pip install iroh). Falling back to WebSocket.",
+  "tui.serve.iroh.failed": "Iroh transport could not start ({error}). Falling back to WebSocket.",
   "tui.key.added": "Added a {role} key for room '{room}' (name={name}): {key}",
   "tui.key.room_required": "--tui-key add requires --room ROOM"
 }

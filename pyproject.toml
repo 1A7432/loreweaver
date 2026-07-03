@@ -19,6 +19,7 @@ dependencies = [
     "aiohttp>=3.9",
     "numpy>=1.24",
     "websockets>=16",  # net/tui_server WebSocket server + clients (15.x proxy handling breaks localhost)
+    "iroh>=1.0",  # net/iroh_server p2p QUIC transport — the DEFAULT carrier (dial a ticket, not a domain)
 ]
 
 [project.optional-dependencies]

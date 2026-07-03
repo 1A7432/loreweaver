@@ -16,6 +16,12 @@
   "tui.serve.bootstrap.banner": "★ 首次启动：密钥库为空，已为房间「{room}」自动发放一个守秘人 key。",
   "tui.serve.bootstrap.key": "  守秘人 key：{key}",
   "tui.serve.bootstrap.hint": "  用它连入即可在客户端里管理服务器（发更多 key、导入模组）。已保存到 {path}。",
+  "tui.serve.none": "未启用任何传输（--no-iroh 且无 --ws）。无可服务。",
+  "tui.serve.iroh.banner": "★ Iroh p2p 传输就绪。把这个 ticket + 一个邀请码发给朋友，无需域名/证书/端口转发即可连入。",
+  "tui.serve.iroh.ticket": "  Ticket：{ticket}",
+  "tui.serve.iroh.hint": "  已保存到 {path}。加 --ws 同时提供 WebSocket；--no-iroh 关闭 Iroh。",
+  "tui.serve.iroh.missing": "请求了 Iroh 传输，但未安装 'iroh' 包（pip install iroh）。回退到 WebSocket。",
+  "tui.serve.iroh.failed": "Iroh 传输启动失败（{error}）。回退到 WebSocket。",
   "tui.key.added": "已为房间 '{room}' 添加一个 {role} 密钥（name={name}）：{key}",
   "tui.key.room_required": "--tui-key add 需要提供 --room ROOM"
 }

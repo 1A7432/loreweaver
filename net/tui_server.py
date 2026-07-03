@@ -89,11 +89,20 @@ class WsMember:
         """A live terminal can always be pushed to (it is a persistent socket)."""
         return True
 
+    async def send_frame(self, frame: dict[str, Any]) -> None:
+        """Send one already-built protocol frame over this connection.
+
+        The transport hook the shared session logic (`_on_frame`, `dispatch_input`,
+        `_replay_history`) sends through, so those stay transport-agnostic — a second
+        transport (`net.iroh_server.IrohMember`) only reimplements this + `deliver`.
+        """
+        await _send(self.ws, frame)
+
     async def deliver(self, event: Event) -> None:
         """Render `event` to its WS frame and send it (dropping a closed socket)."""
         frame = _render_frame(event)
         if frame is not None:
-            await _send(self.ws, frame)
+            await self.send_frame(frame)
 
 
 class TuiServer:
@@ -274,55 +283,21 @@ class TuiServer:
             return None
 
         key = str(frame.get("key") or "")
-        entry = self.keystore.get(key)
-        if entry is None:
-            # A key minted after the server booted isn't in the in-memory table yet;
-            # re-read the keystore file once and retry before rejecting (no restart).
-            self.keystore.refresh()
-            entry = self.keystore.get(key)
-        if entry is None:
+        fields = resolve_session_fields(self.keystore, key, i18n.locale)
+        if fields is None:
             await _send(ws, _error_frame("bad_key", i18n))
             await ws.close()
             return None
 
-        client_id = f"tui:{hashlib.sha1(key.encode('utf-8')).hexdigest()[:8]}"
-        # The broadcast display name is AUTHORITATIVE — the keystore entry's name, else
-        # the derived client id. A client-supplied `join.name` is deliberately ignored:
-        # honoring it would let any connection impersonate "Keeper"/another player in the
-        # room fan-out.
-        name = entry.name or client_id
-        source = SessionSource(
-            platform="tui", chat_type="group", chat_id=entry.room, user_id=client_id, user_name=name
-        )
-        member = WsMember(
-            ws=ws,
-            id=client_id,
-            user_key=source.user_key(),
-            name=name,
-            role=entry.role,
-            room=entry.room,
-            session_key=source.chat_key(),
-            locale=i18n.locale,
-        )
-
-        await _send(
-            ws,
-            {
-                "type": "welcome",
-                "protocol": _PROTOCOL_VERSION,
-                "room": member.room,
-                "you": {"id": member.id, "name": member.name, "role": member.role},
-                "locale": member.locale,
-                "server": _SERVER_BANNER,
-            },
-        )
+        member = WsMember(ws=ws, **fields)
+        await _send(ws, welcome_frame(fields))
         return member
 
     async def _on_frame(self, member: WsMember, raw: Any) -> None:
         i18n = get_i18n(member.locale)
         frame = _parse_frame(raw)
         if frame is None:
-            await _send(member.ws, _error_frame("bad_frame", i18n))
+            await member.send_frame(_error_frame("bad_frame", i18n))
             return
 
         kind = frame.get("type")
@@ -337,7 +312,7 @@ class TuiServer:
         # never an unhandled exception that would drop the socket (mirrors dispatch_input).
         try:
             if kind == "ping":
-                await _send(member.ws, {"type": "pong", "t": frame.get("t")})
+                await member.send_frame({"type": "pong", "t": frame.get("t")})
                 return
             if is_admin_frame(kind):
                 # Keeper-gated admin surface (LLM config + room keys). The gate is the
@@ -346,13 +321,13 @@ class TuiServer:
                 reply = await handle_admin_frame(
                     self.services, self.keystore, member.role, member.room, frame, i18n
                 )
-                await _send(member.ws, reply)
+                await member.send_frame(reply)
                 return
         except Exception:
-            await _send(member.ws, _error_frame("server_error", i18n))
+            await member.send_frame(_error_frame("server_error", i18n))
             return
 
-        await _send(member.ws, _error_frame("bad_frame", i18n))
+        await member.send_frame(_error_frame("bad_frame", i18n))
 
     # -- turn flow (M4 §1 "Turn flow", now via the hub) -----------------------
 
@@ -364,7 +339,7 @@ class TuiServer:
         """
         i18n = get_i18n(member.locale)
         if not self.rate_limiter.allow(member.id) or not self.rate_limiter.allow(member.session_key):
-            await _send(member.ws, _error_frame("rate_limited", i18n))
+            await member.send_frame(_error_frame("rate_limited", i18n))
             return
 
         ctx = self._ctx_for(member)
@@ -385,7 +360,7 @@ class TuiServer:
                     origin=member,
                 )
         except Exception:
-            await _send(member.ws, _error_frame("server_error", i18n))
+            await member.send_frame(_error_frame("server_error", i18n))
             return
 
         if result is not None:
@@ -437,6 +412,50 @@ def _build_ssl_context(settings: Settings) -> ssl.SSLContext | None:
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(cert_path, key_path)
     return context
+
+
+def resolve_session_fields(keystore: Keystore, key: str, locale: str) -> dict[str, str] | None:
+    """Resolve a raw invite `key` to a member's session fields, or `None` if unknown.
+
+    The transport-agnostic half of the join handshake: keystore lookup (+ one hot-reload
+    retry so a key minted after boot is accepted without a restart) and the derived id /
+    AUTHORITATIVE display name (the keystore entry's name, never a client-supplied one —
+    else a connection could impersonate another player in the room fan-out) / session
+    scoping. Both the WS `_authenticate` and `net.iroh_server` build their Member from
+    this, so auth + room/role binding is identical on either wire.
+    """
+    entry = keystore.get(key)
+    if entry is None:
+        keystore.refresh()
+        entry = keystore.get(key)
+    if entry is None:
+        return None
+    client_id = f"tui:{hashlib.sha1(key.encode('utf-8')).hexdigest()[:8]}"
+    name = entry.name or client_id
+    source = SessionSource(
+        platform="tui", chat_type="group", chat_id=entry.room, user_id=client_id, user_name=name
+    )
+    return {
+        "id": client_id,
+        "user_key": source.user_key(),
+        "name": name,
+        "role": entry.role,
+        "room": entry.room,
+        "session_key": source.chat_key(),
+        "locale": locale,
+    }
+
+
+def welcome_frame(fields: dict[str, str]) -> dict[str, Any]:
+    """Build the `welcome` frame from resolved session fields (shared by both transports)."""
+    return {
+        "type": "welcome",
+        "protocol": _PROTOCOL_VERSION,
+        "room": fields["room"],
+        "you": {"id": fields["id"], "name": fields["name"], "role": fields["role"]},
+        "locale": fields["locale"],
+        "server": _SERVER_BANNER,
+    }
 
 
 def _render_frame(event: Event) -> dict[str, Any] | None:
