@@ -16,6 +16,7 @@ from core.character_rules import render_validation_notice, validate_sheet
 from core.coc_rules import DEFAULT_COC_RULE
 from core.dice_engine import DiceResult, coc_rank_label
 from core.rulepacks import RulePack, load_rulepack
+from gateway.hub import Event
 from gateway.ops import Botlist, PrivilegeLevel
 from gateway.rooms import clear_binding, get_binding, mint_room_id, session_key_for_room, set_binding
 from infra.i18n import I18n, get_i18n
@@ -832,7 +833,35 @@ class CommandRouter:
             return ctx.i18n.t("commands.module.usage")
         file_path = tokens[0]
         tools = DocumentTools(ctx.services)
-        return await tools.upload_document(self._agent_ctx(ctx), file_path=file_path, doc_type="module")
+        agent_ctx = self._agent_ctx(ctx)
+        return await tools.upload_document(
+            agent_ctx,
+            file_path=file_path,
+            doc_type="module",
+            progress=self._module_progress(ctx, agent_ctx.chat_key),
+        )
+
+    def _module_progress(self, ctx: CommandCtx, chat_key: str) -> Any:
+        """Build a progress reporter that STREAMS import-stage frames to the room while a
+        (deliberately slow) full-module analysis runs, so the keeper watches a live progress
+        bar advance through read → embed → analyze → build → done instead of staring at a
+        frozen spinner. Returns None (a no-op import) when this router has no hub — e.g. the
+        standalone CLI — so imports still work everywhere, just without the live bar."""
+        hub = self.hub
+        if hub is None:
+            return None
+        i18n = ctx.i18n
+        steps = {"read": 1, "embed": 2, "analyze": 3, "build": 4, "done": 5}
+        total = len(steps)
+
+        async def report(stage: str, detail: str = "") -> None:
+            step = steps.get(stage, 0)
+            bar = "█" * step + "░" * (total - step)
+            label = i18n.t(f"commands.module.progress.{stage}")
+            text = i18n.t("commands.module.progress.line", bar=bar, label=label)
+            await hub.publish(chat_key, Event.narrative(speaker="system", text=text, fmt="plain"))
+
+        return report
 
     async def cmd_report(self, ctx: CommandCtx) -> str:
         """`.report [detailed|full]` — export the session report ("团报") for players to keep and review.

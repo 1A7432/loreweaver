@@ -55,7 +55,10 @@ export function KeeperModule({ client, theme, themeName, welcome, stateFrame, on
     return client.onMessage((frame) => {
       if (frame.type === FrameType.Narrative && frame.speaker === "system" && frame.text.trim()) {
         setLog((current) => [...current, frame.text].slice(-MAX_LOG))
-        setPending(false)
+        // A progress-bar frame (it carries the █/░ bar) keeps the spinner alive through the
+        // long analysis stage; only the final, non-bar reply clears the pending state.
+        const isProgress = frame.text.includes("█") || frame.text.includes("░")
+        if (!isProgress) setPending(false)
       }
     })
   }, [client])

@@ -120,15 +120,16 @@ class TuiServer:
         self.keystore = keystore
         self.host = host
         self.port = port
-        self.command_router = command_router or CommandRouter(services)
         self.fs = fs if fs is not None else LocalFs(Path.cwd())
         # An injected hub lets this WS server share ONE bus with the chat gateway
         # (app.py combined mode); standalone it owns its own (back-compat). Built
-        # BEFORE the toolset so the KP toolset receives it: companion_act (and any
-        # other hub-driven KP tool) needs the hub + router to publish a live
-        # companion sub-turn to the room — without it, companion_act degrades to
-        # returning a bare line to the KP instead of spotlighting the companion.
+        # BEFORE the command router + toolset so BOTH receive it: `.module` streams
+        # live import-progress frames through the router's hub (so a slow analysis
+        # shows a moving progress bar, not a frozen spinner), and companion_act (and
+        # other hub-driven KP tools) publish live companion sub-turns — without the
+        # hub each silently degrades (no progress bar / a bare companion line).
         self.hub = hub if hub is not None else RoomHub()
+        self.command_router = command_router or CommandRouter(services, hub=self.hub)
         self.toolset = toolset or build_kp_toolset(services, hub=self.hub, command_router=self.command_router)
         # Built from `services.settings.censor` (see `infra.config.CensorSettings` /
         # `docs/deploy.md` "Content moderation") unless a caller injects one (tests).

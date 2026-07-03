@@ -34,12 +34,28 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from infra.config import Settings
 from infra.i18n import I18n
 from infra.llm import LLMClient
 from infra.store import Store
+
+# An optional progress reporter the gateway may pass in to surface import STAGES to
+# the room while a slow full-module analysis runs. Core only SIGNALS a stage id (+
+# an opaque detail string); the gateway formats + publishes it. Best-effort: a
+# progress hiccup must never fail the import itself.
+ProgressCb = Callable[[str, str], Awaitable[None]] | None
+
+
+async def _emit(progress: ProgressCb, stage: str, detail: str = "") -> None:
+    if progress is None:
+        return
+    try:
+        await progress(stage, detail)
+    except Exception:
+        pass
 
 # Fields every analysis dict (LLM-produced or fallback) is normalized to
 # carry, per the M1 spec's data shape: scenes/npcs/clues/timeline/background/
@@ -173,7 +189,7 @@ class ModuleInitializer:
         self.settings = settings
         self.i18n = i18n
 
-    async def initialize(self, chat_key: str) -> None:
+    async def initialize(self, chat_key: str, progress: ProgressCb = None) -> None:
         """Run (or skip, if already running) full-module analysis for `chat_key`.
 
         Orchestrates: read the stored module full text (or reassemble it
@@ -197,7 +213,9 @@ class ModuleInitializer:
                 await self.store.set(user_key="", store_key=status_key, value="failed")
                 return
 
+            await _emit(progress, "analyze")
             analysis = await self._analyze_full_text(full_text, doc_name)
+            await _emit(progress, "build")
             keeper_pool, player_pool = self._build_knowledge_pools(analysis)
 
             await self.store.set(

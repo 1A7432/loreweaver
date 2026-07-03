@@ -97,6 +97,7 @@ from agent.services import Services
 from agent.tools import tool
 from core.battle_report import _default_session_name
 from core.game_clock import advance_game_time
+from core.module_initializer import ProgressCb, _emit
 from infra.i18n import I18n
 
 # Document-type -> emoji, purely a decorative icon lookup keyed by an
@@ -884,7 +885,7 @@ class DocumentTools(_KnowledgeToolsBase):
     """
 
     @tool
-    async def upload_document(self, ctx: AgentCtx, file_path: str, doc_type: str = "module", custom_filename: str | None = None) -> str:
+    async def upload_document(self, ctx: AgentCtx, file_path: str, doc_type: str = "module", custom_filename: str | None = None, progress: ProgressCb = None) -> str:
         """Process an uploaded document file: extract its text, chunk + embed it into the vector store, and
         (for module/story documents) auto-trigger module knowledge-pool initialization.
 
@@ -921,6 +922,8 @@ class DocumentTools(_KnowledgeToolsBase):
                 return i18n.t("kp_tools.know.upload.empty_content")
 
             chat_key = ctx.chat_key
+            await _emit(progress, "read", str(len(text_content)))
+            await _emit(progress, "embed")
             chunk_count = await self._services.vector_db.store_document(
                 document_id=str(uuid.uuid4()),
                 filename=filename,
@@ -936,8 +939,11 @@ class DocumentTools(_KnowledgeToolsBase):
                 # "the module" being analyzed, so only those may (over)write it -- a `rule`/
                 # `background` upload must never clobber a previously uploaded module's full text.
                 await self._services.store.set(user_key="", store_key=_fulltext_key(chat_key), value=text_content)
-                await self._services.module_init.initialize(chat_key)
+                # `initialize` emits the "analyze"/"build" stages itself (its LLM analysis is the
+                # slow one); we bracket it with the fast read/embed and the final done here.
+                await self._services.module_init.initialize(chat_key, progress=progress)
                 status = await self._services.store.get(user_key="", store_key=_status_key(chat_key))
+                await _emit(progress, "done", status or "")
                 init_note = "\n" + i18n.t("kp_tools.know.upload.init_done", status=status or i18n.t("kp_tools.know.status.unknown"))
 
             emoji = _DOC_TYPE_EMOJI.get(doc_type, _DEFAULT_DOC_EMOJI)
