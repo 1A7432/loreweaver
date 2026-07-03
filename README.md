@@ -88,7 +88,7 @@ loreweaver update   # 自更新到最新客户端
 ./scripts/deploy.sh                 # Docker:docker compose up -d --build
 ./scripts/deploy.sh --bare-metal    # 不用 Docker:venv + 安装 + 运行
 ```
-首次运行会用 `.env.example` 生成 `.env`。发个 key,任意客户端连上即可。状态(SQLite + key)存在 `/data` 卷里。配置、密钥、持久化、反代/TLS 的完整说明见 **[docs/deploy.zh.md](docs/deploy.zh.md)**。
+首次运行会用 `.env.example` 生成 `.env`。**服务器首次启动会自动发一个守秘人 key 并打印出来**——从 `docker logs loreweaver` 或 `/data/keeper-key.txt` 拿到,用它连进客户端;之后在客户端的「房间与邀请」界面就能给任意房间发 key(=建房),不用再碰服务器。状态(SQLite + key)存在 `/data` 卷里。完整说明(配置、密钥、持久化、反代/TLS)见 **[docs/deploy.zh.md](docs/deploy.zh.md)**。
 
 ## 游玩入口
 | 入口 | 状态 |

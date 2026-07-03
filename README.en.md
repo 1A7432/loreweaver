@@ -83,7 +83,7 @@ Or host the built web client (`cd clients/web && VITE_WS_URL=wss://<your-host>/w
 ./scripts/deploy.sh                 # Docker: docker compose up -d --build
 ./scripts/deploy.sh --bare-metal    # no Docker: venv + install + run
 ```
-First run creates `.env` from `.env.example`. Mint a key, then connect any client. State (SQLite + keys) lives in the `/data` volume. Full guide — config, keys, persistence, reverse-proxy/TLS — in **[docs/deploy.md](docs/deploy.md)**.
+First run creates `.env` from `.env.example`. **The server auto-mints a keeper key on first boot** — grab it from `docker logs loreweaver` or `/data/keeper-key.txt`, connect with it, then mint more keys (and create rooms) right in the client's *Rooms & invites* screen — no server access needed. State (SQLite + keys) lives in the `/data` volume. Full guide — config, keys, persistence, reverse-proxy/TLS — in **[docs/deploy.md](docs/deploy.md)**.
 
 ## Play surfaces
 | Surface | Status |
