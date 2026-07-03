@@ -1,30 +1,26 @@
 *English · [中文](protocol.zh.md)*
 
-# loreweaver networked TUI — WebSocket protocol v1
+# loreweaver networked TUI — wire protocol v1
 
-This is the open, versioned wire protocol between a loreweaver server
-(`net.tui_server.TuiServer`, started via `python -m app --serve`) and any
-client — the bundled OpenTUI terminal client, or a community-built
-React/Vue/web client. The engine itself (deterministic core + AI Keeper)
-is unaffected by transport; this document is the language-agnostic seam.
+This is the open, versioned wire protocol between a loreweaver server (started via
+`python -m app --serve`) and the OpenTUI terminal client. The engine itself
+(deterministic core + AI Keeper) is unaffected by transport; the transport-neutral
+session logic is `net.session.SessionCore`, and this document is the language-agnostic seam.
 
-Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"1.1"`.
-The same frames and the same `join` handshake ride either of two **transports**
-— the wire body is identical, only the carrier and its framing differ:
+Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"1.1"`. The same
+frames + `join` handshake ride the transport; only the carrier + its framing differ:
 
-- **Iroh (default)** — peer-to-peer QUIC. The server (`net.iroh_server`) binds an
-  endpoint on the custom ALPN `loreweaver/tui/1` and prints a shareable **ticket**;
-  a client dials the ticket (no domain/TLS/port-forward). A QUIC bidirectional
-  stream is a raw byte stream, so frames are **newline-delimited** JSON — one
-  compact `{...}\n` per frame — over one long-lived `open_bi`/`accept_bi` stream.
-  Rich media (images/audio, roadmap) will ride this transport only.
-- **WebSocket (opt-in, `--serve --ws`)** — `net.tui_server`, endpoint `ws://host:port/`,
-  **one JSON object per WebSocket message** (the message boundary is the frame
-  boundary). This is the browser-reachable, text-only carrier for reverse-proxied
-  (`wss://`) deployments and the web client.
+- **Iroh** (the transport `--serve` starts) — peer-to-peer QUIC. The server
+  (`net.iroh_server`) binds an endpoint on the custom ALPN `loreweaver/tui/1` and prints a
+  shareable **ticket**; a client dials the ticket (no domain/TLS/port-forward). A QUIC
+  bidirectional stream is a raw byte stream, so frames are **newline-delimited** JSON — one
+  compact `{...}\n` per frame — over one long-lived `open_bi`/`accept_bi` stream. Rich media
+  (images/audio, roadmap) will ride this transport (via iroh-blobs).
+- **WebSocket** (`net.tui_server`, endpoint `ws://host:port/`, one JSON object per message) —
+  kept ONLY as the offline test / loopback carrier; the offline test suite drives the
+  transport-neutral logic through it. It is not a `--serve` option.
 
-Both carriers share one `RoomHub`, so a p2p player and a WebSocket player sit at
-the same table in one AI-KP session.
+Both carriers drive the same `SessionCore`/`RoomHub`.
 
 Versioning is additive: `"1.1"` only ADDS the keeper-gated `admin_*` frames
 (see "Admin frames" below). A client that only understands `"1"` keeps working
@@ -130,8 +126,8 @@ chat_id=room, user_id="tui:" + sha1(key)[:8], user_name=name)` — see
 
 ## Admin frames (v1.1, keeper-gated)
 
-A deployer/keeper can manage the server from a browser (the web client's admin
-panel, opened with `?admin=1`) over the SAME connection, using a **keeper-role
+A deployer/keeper can manage the server from the client's keeper screens (Rooms &
+invites, Model) over the SAME connection, using a **keeper-role
 key**: the keystore role stamped on the connection at `join` is the admin gate —
 there is no separate auth. The server answers these ONLY for a `keeper`
 connection; any other connection gets `admin_error{code:"forbidden"}` and nothing

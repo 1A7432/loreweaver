@@ -6,7 +6,7 @@ Loreweaver is young and built largely by one person with AI assistance. This is 
 
 ## Where things stand
 
-The deterministic engine — dice (on `d20`), CoC/DnD success levels, character math, rule validation, the game clock — is the solid core, covered by a deterministic, offline test suite. The terminal (OpenTUI) client is the polished path; the React web client speaks the same [protocol](protocol.md). The chat-platform adapters (Discord · Telegram · QQ · Feishu) are implemented and offline-unit-tested but **not yet verified against a live platform**. SSH is experimental.
+The deterministic engine — dice (on `d20`), CoC/DnD success levels, character math, rule validation, the game clock — is the solid core, covered by a deterministic, offline test suite. The **terminal (OpenTUI) client is the one focus**, connecting over the **Iroh** p2p transport (dial a ticket — no domain/TLS/port-forward). The chat-platform adapters (Discord · Telegram · QQ · Feishu) are still **in-tree but unmaintained and untested against a live platform** — kept behind the gateway's transport-agnostic seam so they *could* be revived, but not a current commitment. (The React web client, the WebSocket serve path, Docker deployment, and the SSH client were removed to keep the surface to what one maintainer can actually test; WebSocket lives on only as the offline test transport. Rich media — images/audio via iroh-blobs — is a future Iroh-only feature.)
 
 ## Foundations — done
 
