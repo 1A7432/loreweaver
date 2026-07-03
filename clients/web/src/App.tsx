@@ -14,7 +14,9 @@ export interface AppProps {
   admin?: boolean
 }
 
-const DEFAULT_URL = "ws://127.0.0.1:8787/"
+// Prefilled connect URL. A deployer can bake in their own endpoint at build time via
+// VITE_WS_URL (e.g. VITE_WS_URL=wss://example.com/ws); otherwise it falls back to localhost.
+const DEFAULT_URL = import.meta.env.VITE_WS_URL || "ws://127.0.0.1:8787/"
 
 function readAdminFlag(): boolean {
   if (typeof window === "undefined") return false
