@@ -184,10 +184,34 @@ describe("WsClient", () => {
     ])
   })
 
-  test("incoming admin_config / admin_keys / admin_room_op / admin_error frames are dispatched", async () => {
+  test("adminSetModel carries the key/base_url + adminListModels send the new admin frames", async () => {
+    const { client, sockets } = createClient()
+    await client.connect("ws://example.test")
+
+    client.adminSetModel("deepseek", "deepseek-chat", "sk-live", "https://api.deepseek.com/v1")
+    client.adminSetModel("openai", undefined, "sk-openai")
+    client.adminListModels("deepseek", "sk-live")
+    client.adminListModels()
+
+    expect(sockets[0].sent.map((raw) => JSON.parse(raw))).toEqual([
+      {
+        type: FrameType.AdminSetModel,
+        provider: "deepseek",
+        chat_model: "deepseek-chat",
+        api_key: "sk-live",
+        base_url: "https://api.deepseek.com/v1",
+      },
+      { type: FrameType.AdminSetModel, provider: "openai", api_key: "sk-openai" },
+      { type: FrameType.AdminListModels, provider: "deepseek", api_key: "sk-live" },
+      { type: FrameType.AdminListModels },
+    ])
+  })
+
+  test("incoming admin_config / admin_models / admin_keys / admin_room_op / admin_error frames are dispatched", async () => {
     const { client, sockets } = createClient()
     const seen: string[] = []
     client.on(FrameType.AdminConfig, () => seen.push(FrameType.AdminConfig))
+    client.on(FrameType.AdminModels, () => seen.push(FrameType.AdminModels))
     client.on(FrameType.AdminKeys, () => seen.push(FrameType.AdminKeys))
     client.on(FrameType.AdminRoomOp, () => seen.push(FrameType.AdminRoomOp))
     client.on(FrameType.AdminError, () => seen.push(FrameType.AdminError))
@@ -200,8 +224,10 @@ describe("WsClient", () => {
       base_url: "",
       api_key_masked: "",
       providers: ["openai", "deepseek"],
+      saved_providers: ["openai"],
       override_active: false,
     })
+    sockets[0].serverSend({ type: FrameType.AdminModels, provider: "openai", models: ["gpt-4o", "gpt-4o-mini"] })
     sockets[0].serverSend({ type: FrameType.AdminKeys, keys: [] })
     sockets[0].serverSend({
       type: FrameType.AdminRoomOp,
@@ -214,6 +240,12 @@ describe("WsClient", () => {
     })
     sockets[0].serverSend({ type: FrameType.AdminError, code: "forbidden" })
 
-    expect(seen).toEqual([FrameType.AdminConfig, FrameType.AdminKeys, FrameType.AdminRoomOp, FrameType.AdminError])
+    expect(seen).toEqual([
+      FrameType.AdminConfig,
+      FrameType.AdminModels,
+      FrameType.AdminKeys,
+      FrameType.AdminRoomOp,
+      FrameType.AdminError,
+    ])
   })
 })

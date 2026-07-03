@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from agent.services import build_services
 from infra.config import LLMSettings, Settings
@@ -345,6 +346,75 @@ async def test_admin_export_confines_the_path_to_the_backups_directory(tmp_path)
         assert exported["path"].startswith(base)  # confined under the backups dir
         assert exported["path"].endswith("loreweaver-evil.json")  # only the filename survived
         assert not Path("/etc/loreweaver-evil.json").exists()  # nothing written outside
+
+        await ws.close()
+    finally:
+        await server.close()
+
+
+async def test_set_model_remembers_each_providers_key_and_reuses_it_on_switch_back():
+    """The credential book: setting a key for a provider persists + remembers it; switching to
+    another provider (with its own key) and then BACK reuses the first provider's saved key
+    without re-supplying it — the multi-provider combo the model screen relies on."""
+    services = _services()
+    keystore = Keystore()
+    keeper_key = keystore.add(room="arkham", name="Keeper", role="keeper")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        ws, *_ = await _connect_and_join(url, keeper_key, "Keeper")
+
+        # deepseek + its key: applied, persisted, remembered, and surfaced in saved_providers.
+        first = await _send(
+            ws,
+            {"type": "admin_set_model", "provider": "deepseek", "chat_model": "deepseek-chat", "api_key": "sk-deep"},
+        )
+        assert first["type"] == "admin_config"
+        assert first["provider"] == "deepseek"
+        assert "deepseek" in first["saved_providers"]
+        assert (await services.runtime_config.get())["api_key"] == "sk-deep"
+        assert (await services.llm_credentials.get("deepseek"))["api_key"] == "sk-deep"
+
+        # a different provider with its own key.
+        await _send(ws, {"type": "admin_set_model", "provider": "openai", "api_key": "sk-open"})
+        assert (await services.runtime_config.get())["api_key"] == "sk-open"
+        assert (await services.llm_credentials.get("openai"))["api_key"] == "sk-open"
+
+        # switch BACK to deepseek WITHOUT a key → the saved deepseek key is reused.
+        back = await _send(ws, {"type": "admin_set_model", "provider": "deepseek"})
+        assert back["provider"] == "deepseek"
+        assert (await services.runtime_config.get())["api_key"] == "sk-deep"
+        assert set(back["saved_providers"]) >= {"deepseek", "openai"}
+
+        await ws.close()
+    finally:
+        await server.close()
+
+
+async def test_admin_list_models_returns_the_providers_live_catalog():
+    """`admin_list_models` answers with the provider's model IDs (the live /models fetch is
+    stubbed here so the test stays offline)."""
+    services = _services()
+    keystore = Keystore()
+    keeper_key = keystore.add(room="arkham", name="Keeper", role="keeper")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+
+    async def _fake_list_models(_llm):
+        return ["alpha-1", "beta-2"]
+
+    try:
+        ws, *_ = await _connect_and_join(url, keeper_key, "Keeper")
+        with patch("net.admin.list_models", new=_fake_list_models):
+            reply = await _send(ws, {"type": "admin_list_models", "provider": "deepseek", "api_key": "sk-x"})
+        assert reply["type"] == "admin_models"
+        assert reply["provider"] == "deepseek"
+        assert reply["models"] == ["alpha-1", "beta-2"]
+
+        # an unknown provider is refused, not queried.
+        bad = await _send(ws, {"type": "admin_list_models", "provider": "nope-9000"})
+        assert bad["type"] == "admin_error"
+        assert bad["code"] == "unknown_provider"
 
         await ws.close()
     finally:

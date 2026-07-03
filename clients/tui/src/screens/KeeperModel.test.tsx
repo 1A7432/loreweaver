@@ -5,7 +5,7 @@ import { FrameType, type PlayerRole, type ServerFrame, type WelcomeFrame } from 
 import App, { type AppClient } from "../App"
 
 // Same MockClient shape as App.test.tsx, extended so the keeper admin_* methods are
-// spied and push() can inject admin_config / admin_error like the wire.
+// spied and push() can inject admin_config / admin_models / admin_error like the wire.
 class MockClient implements AppClient {
   connectCalls: string[] = []
   joinCalls: Array<[string, string | undefined]> = []
@@ -13,7 +13,8 @@ class MockClient implements AppClient {
   closed = 0
   getConfigCalls = 0
   listKeysCalls = 0
-  setModelCalls: Array<[string, string | undefined]> = []
+  setModelCalls: Array<[string, string | undefined, string | undefined, string | undefined]> = []
+  listModelsCalls: Array<[string | undefined, string | undefined, string | undefined]> = []
   mintKeyCalls: Array<[string, string | undefined, PlayerRole | undefined]> = []
   private listeners = new Set<(frame: ServerFrame) => void>()
 
@@ -37,8 +38,11 @@ class MockClient implements AppClient {
   adminGetConfig(): void {
     this.getConfigCalls += 1
   }
-  adminSetModel(provider: string, chatModel?: string): void {
-    this.setModelCalls.push([provider, chatModel])
+  adminSetModel(provider: string, chatModel?: string, apiKey?: string, baseUrl?: string): void {
+    this.setModelCalls.push([provider, chatModel, apiKey, baseUrl])
+  }
+  adminListModels(provider?: string, apiKey?: string, baseUrl?: string): void {
+    this.listModelsCalls.push([provider, apiKey, baseUrl])
   }
   adminListKeys(): void {
     this.listKeysCalls += 1
@@ -74,6 +78,7 @@ function renderApp(client: MockClient) {
 const CLICK_X = 6
 
 // A representative admin_config reply (the wire's source of truth the form re-seeds from).
+// `anthropic` has a saved credential, so its row shows the "key saved" tag.
 const CONFIG_FRAME = {
   type: FrameType.AdminConfig,
   provider: "anthropic",
@@ -81,6 +86,7 @@ const CONFIG_FRAME = {
   base_url: "",
   api_key_masked: "sk-...cafe",
   providers: ["anthropic", "openai"],
+  saved_providers: ["anthropic"],
   override_active: true,
 } as const
 
@@ -96,7 +102,7 @@ async function enterKeeperModel(harness: Awaited<ReturnType<typeof renderApp>>) 
 }
 
 describe("KeeperModel", () => {
-  test("进入模型/配置:挂载即请求 adminGetConfig,收到 admin_config 后填充当前配置", async () => {
+  test("进入模型/配置:挂载即请求 adminGetConfig + 拉当前 provider 的模型,收到 admin_config 后填充", async () => {
     const client = new MockClient()
     const harness = await renderApp(client)
     await harness.flush()
@@ -106,7 +112,7 @@ describe("KeeperModel", () => {
     // Mounting fires the config request (mirrors AdminPanel's effect).
     expect(client.getConfigCalls).toBeGreaterThan(0)
 
-    // The pushed config paints the current provider/model/masked key/override state.
+    // The pushed config paints the current provider/model/masked key/override state...
     act(() => client.push({ ...CONFIG_FRAME }))
     await harness.flush()
 
@@ -115,11 +121,37 @@ describe("KeeperModel", () => {
     expect(frame).toContain("claude-x")
     expect(frame).toContain("sk-...cafe")
     expect(frame).toContain("运行时生效")
+    // ...and the "key saved" tag shows because anthropic is in saved_providers.
+    expect(frame).toContain("已存 key")
+
+    // Config also triggers a live model fetch for the seeded provider.
+    expect(client.listModelsCalls.some((call) => call[0] === "anthropic")).toBe(true)
 
     act(() => harness.renderer.destroy())
   })
 
-  test("点击保存:adminSetModel 收到从 admin_config 回填的 provider/model", async () => {
+  test("admin_models 回填模型下拉:返回的模型 ID 出现在选择列表里", async () => {
+    const client = new MockClient()
+    const harness = await renderApp(client)
+    await harness.flush()
+    act(() => client.push(KEEPER_WELCOME))
+    await enterKeeperModel(harness)
+
+    act(() => client.push({ ...CONFIG_FRAME }))
+    await harness.flush()
+    act(() =>
+      client.push({ type: FrameType.AdminModels, provider: "anthropic", models: ["claude-x", "claude-omega"] }),
+    )
+    await harness.flush()
+
+    // The dropdown renders the fetched options; `claude-omega` is unique to the list.
+    const frame = await harness.waitForFrame((t) => t.includes("claude-omega"))
+    expect(frame).toContain("claude-omega")
+
+    act(() => harness.renderer.destroy())
+  })
+
+  test("点击保存:adminSetModel 收到回填的 provider/model(4 参形态)", async () => {
     const client = new MockClient()
     const harness = await renderApp(client)
     await harness.flush()
@@ -137,13 +169,13 @@ describe("KeeperModel", () => {
     })
     await harness.flush()
 
-    // The seeded provider + model flow straight through to adminSetModel.
-    expect(client.setModelCalls).toContainEqual(["anthropic", "claude-x"])
+    // The seeded provider + model flow straight through; no key typed → api_key undefined.
+    expect(client.setModelCalls).toContainEqual(["anthropic", "claude-x", undefined, undefined])
 
     act(() => harness.renderer.destroy())
   })
 
-  test("键盘切 provider 后保存:adminSetModel 收到新 provider", async () => {
+  test("键盘切 provider:重新拉该 provider 的模型,保存时带上新 provider(模型已随切换重置)", async () => {
     const client = new MockClient()
     const harness = await renderApp(client)
     await harness.flush()
@@ -154,22 +186,58 @@ describe("KeeperModel", () => {
     await harness.flush()
     await harness.waitForFrame((t) => t.includes("⚄ 保存模型"))
 
-    // The provider <select> is focused on mount: arrow to the next provider, Enter
-    // moves focus onto the model field, Enter there submits.
+    // The provider <select> is focused on mount: arrow down commits the next provider (onChange).
     await act(async () => {
       harness.mockInput.pressArrow("down")
     })
     await harness.flush()
+
+    // Switching provider refetches ITS live models.
+    expect(client.listModelsCalls.some((call) => call[0] === "openai")).toBe(true)
+
+    // Save via the button: new provider flows through; model was reset by the switch → undefined.
+    const form = await harness.waitForFrame((t) => t.includes("⚄ 保存模型"))
+    const buttonY = form.split("\n").findIndex((line) => line.includes("⚄ 保存模型"))
     await act(async () => {
-      harness.mockInput.pressEnter()
-    })
-    await harness.flush()
-    await act(async () => {
-      harness.mockInput.pressEnter()
+      await harness.mockMouse.click(CLICK_X, buttonY)
     })
     await harness.flush()
 
-    expect(client.setModelCalls).toContainEqual(["openai", "claude-x"])
+    expect(client.setModelCalls).toContainEqual(["openai", undefined, undefined, undefined])
+
+    act(() => harness.renderer.destroy())
+  })
+
+  test("填入 API key 后保存:adminSetModel 带上新 key", async () => {
+    const client = new MockClient()
+    const harness = await renderApp(client)
+    await harness.flush()
+    act(() => client.push(KEEPER_WELCOME))
+    await enterKeeperModel(harness)
+
+    act(() => client.push({ ...CONFIG_FRAME }))
+    await harness.flush()
+    await harness.waitForFrame((t) => t.includes("⚄ 保存模型"))
+
+    // Tab from the provider select to the API-key input, type a key.
+    await act(async () => {
+      harness.mockInput.pressTab()
+    })
+    await harness.flush()
+    await act(async () => {
+      await harness.mockInput.typeText("sk-fresh-key")
+    })
+    await harness.flush()
+
+    const form = await harness.waitForFrame((t) => t.includes("⚄ 保存模型"))
+    const buttonY = form.split("\n").findIndex((line) => line.includes("⚄ 保存模型"))
+    await act(async () => {
+      await harness.mockMouse.click(CLICK_X, buttonY)
+    })
+    await harness.flush()
+
+    // The typed key rides along on the same set-model call (provider + seeded model preserved).
+    expect(client.setModelCalls).toContainEqual(["anthropic", "claude-x", "sk-fresh-key", undefined])
 
     act(() => harness.renderer.destroy())
   })

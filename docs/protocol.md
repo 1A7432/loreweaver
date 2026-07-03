@@ -136,8 +136,14 @@ is read or mutated. Implemented in `net/admin.py`.
 Client → server:
 
 - `admin_get_config` — `{type:"admin_get_config"}`
-- `admin_set_model` — switch the live LLM provider/model:
-  `{type:"admin_set_model", provider:string, chat_model?:string}`
+- `admin_set_model` — switch the live LLM provider/model, and optionally set this
+  provider's key/base_url (blank = keep the saved one). The server remembers the
+  credential per provider, so a later switch back to it needs no key:
+  `{type:"admin_set_model", provider:string, chat_model?:string, api_key?:string, base_url?:string}`
+- `admin_list_models` — fetch a provider's live model catalog (OpenAI-compatible
+  `GET /models`). All fields optional: omit to list the current provider; pass
+  `provider` (+ optional `api_key`/`base_url`) to preview another before switching:
+  `{type:"admin_list_models", provider?:string, api_key?:string, base_url?:string}`
 - `admin_list_keys` — `{type:"admin_list_keys"}`
 - `admin_mint_key` — mint a room access key:
   `{type:"admin_mint_key", room:string, name?:string, role?:"player"|"keeper"}`
@@ -161,9 +167,14 @@ Client → server:
 
 Server → client:
 
-- `admin_config` — the live, display-safe LLM config (api_key masked) plus the
-  provider catalog and whether a runtime override is active:
-  `{type:"admin_config", provider:string, chat_model:string, base_url:string, api_key_masked:string, providers:string[], override_active:boolean}`
+- `admin_config` — the live, display-safe LLM config (api_key masked), the
+  provider catalog, the providers that already have a saved key (`saved_providers`),
+  and whether a runtime override is active:
+  `{type:"admin_config", provider:string, chat_model:string, base_url:string, api_key_masked:string, providers:string[], saved_providers:string[], override_active:boolean}`
+- `admin_models` — a provider's live model catalog (empty when the provider is a
+  native SDK, the key is missing/invalid, or `/models` is unreachable — the client
+  falls back to a free-text model field):
+  `{type:"admin_models", provider:string, models:string[]}`
 - `admin_keys` — the room-key roster; every entry's key value is masked. A
   `mint` request additionally returns the freshly minted key ONCE in cleartext
   under `minted` (so the keeper can copy it):
@@ -177,8 +188,11 @@ Server → client:
 (`infra.providers.is_known_provider`), persists the override via
 `services.runtime_config`, and hot-reconfigures the shared `MutableLLM` — the
 same path as the `.model set` chat command — then replies a fresh
-`admin_config`. A key minted here is written back to the server's keys file, so
-it survives a restart.
+`admin_config`. A key set here is also saved to a per-provider credential book
+(`infra.runtime_config.CredentialBook`), so switching providers never re-asks for
+a key you've already entered; `admin_list_models` reuses that saved credential
+when no explicit `api_key` is supplied. A key minted here is written back to the
+server's keys file, so it survives a restart.
 
 The provider catalog is additive. `chatgpt` / `gpt-subscription` are accepted as
 OpenAI-compatible proxy aliases only; they require `TRPG_LLM__BASE_URL` to point

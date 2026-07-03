@@ -3,7 +3,9 @@ import {
   type AdminDeleteRoomDataFrame,
   type AdminExportRoomFrame,
   type AdminImportRoomFrame,
+  type AdminListModelsFrame,
   type AdminMintKeyFrame,
+  type AdminSetModelFrame,
   type AdminUpdateKeyFrame,
   type ClientFrame,
   type PingFrame,
@@ -65,6 +67,7 @@ const serverFrameValidators: Record<string, (f: Record<string, unknown>) => bool
   [FrameType.System]: (f) => isStr(f.level) && isStr(f.text),
   [FrameType.Pong]: (f) => isNum(f.t),
   [FrameType.AdminConfig]: (f) => isStr(f.provider) && isStr(f.chat_model) && isArr(f.providers),
+  [FrameType.AdminModels]: (f) => isStr(f.provider) && isArr(f.models),
   [FrameType.AdminKeys]: (f) => isArr(f.keys),
   [FrameType.AdminRoomOp]: (f) =>
     isStr(f.action) && isStr(f.room) && isNum(f.keys) && isNum(f.store_rows) && isNum(f.vector_points),
@@ -197,12 +200,22 @@ export class WsClient {
     this.send({ type: FrameType.AdminGetConfig })
   }
 
-  adminSetModel(provider: string, chatModel?: string): void {
-    this.send(
-      chatModel
-        ? { type: FrameType.AdminSetModel, provider, chat_model: chatModel }
-        : { type: FrameType.AdminSetModel, provider },
-    )
+  adminSetModel(provider: string, chatModel?: string, apiKey?: string, baseUrl?: string): void {
+    const frame: AdminSetModelFrame = { type: FrameType.AdminSetModel, provider }
+    if (chatModel) frame.chat_model = chatModel
+    if (apiKey) frame.api_key = apiKey
+    if (baseUrl) frame.base_url = baseUrl
+    this.send(frame)
+  }
+
+  // Ask for a provider's live model catalog. Omit args to list the current provider;
+  // pass provider (+ optional apiKey/baseUrl) to preview another before switching.
+  adminListModels(provider?: string, apiKey?: string, baseUrl?: string): void {
+    const frame: AdminListModelsFrame = { type: FrameType.AdminListModels }
+    if (provider) frame.provider = provider
+    if (apiKey) frame.api_key = apiKey
+    if (baseUrl) frame.base_url = baseUrl
+    this.send(frame)
   }
 
   adminListKeys(): void {

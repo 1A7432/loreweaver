@@ -19,6 +19,7 @@ export const FrameType = {
   // v1.1 additive admin (keeper-gated) frames.
   AdminGetConfig: "admin_get_config",
   AdminSetModel: "admin_set_model",
+  AdminListModels: "admin_list_models",
   AdminListKeys: "admin_list_keys",
   AdminMintKey: "admin_mint_key",
   AdminUpdateKey: "admin_update_key",
@@ -28,6 +29,7 @@ export const FrameType = {
   AdminImportRoom: "admin_import_room",
   AdminDeleteRoomData: "admin_delete_room_data",
   AdminConfig: "admin_config",
+  AdminModels: "admin_models",
   AdminKeys: "admin_keys",
   AdminRoomOp: "admin_room_op",
   AdminError: "admin_error",
@@ -208,6 +210,20 @@ export interface AdminSetModelFrame {
   type: typeof FrameType.AdminSetModel
   provider: string
   chat_model?: string
+  // Optional: set/replace this provider's key (blank = keep the saved one). The server
+  // remembers it per-provider so a later switch back to this provider won't re-ask.
+  api_key?: string
+  base_url?: string
+}
+
+// Ask the server for a provider's live model catalog (OpenAI-compatible GET /models).
+// All fields optional: omit to list the current provider; pass provider (+ optional
+// api_key/base_url) to preview another provider's models before committing.
+export interface AdminListModelsFrame {
+  type: typeof FrameType.AdminListModels
+  provider?: string
+  api_key?: string
+  base_url?: string
 }
 
 export interface AdminListKeysFrame {
@@ -265,7 +281,17 @@ export interface AdminConfigFrame {
   base_url: string
   api_key_masked: string
   providers: string[]
+  // Providers that already have a saved key — the model screen marks these 'ready'.
+  saved_providers: string[]
   override_active: boolean
+}
+
+// The live model catalog for `provider` (empty when the provider is a native SDK,
+// the key is missing/invalid, or /models is unreachable — client falls back to free-text).
+export interface AdminModelsFrame {
+  type: typeof FrameType.AdminModels
+  provider: string
+  models: string[]
 }
 
 export interface AdminKeyInfo {
@@ -313,6 +339,7 @@ export type ClientFrame =
   | PingFrame
   | AdminGetConfigFrame
   | AdminSetModelFrame
+  | AdminListModelsFrame
   | AdminListKeysFrame
   | AdminMintKeyFrame
   | AdminUpdateKeyFrame
@@ -332,6 +359,7 @@ export type ServerFrame =
   | SystemFrame
   | PongFrame
   | AdminConfigFrame
+  | AdminModelsFrame
   | AdminKeysFrame
   | AdminRoomOpFrame
   | AdminErrorFrame

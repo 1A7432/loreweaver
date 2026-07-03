@@ -26,6 +26,7 @@ from infra.providers import (
     PRESETS,
     describe_settings,
     is_known_provider,
+    list_models,
     mask_secret,
 )
 from net.keystore import Keystore
@@ -36,6 +37,7 @@ _ADMIN_REQUESTS: frozenset[str] = frozenset(
     {
         "admin_get_config",
         "admin_set_model",
+        "admin_list_models",
         "admin_list_keys",
         "admin_mint_key",
         "admin_update_key",
@@ -81,6 +83,8 @@ async def handle_admin_frame(
         return await _config_frame(services)
     if kind == "admin_set_model":
         return await _set_model(services, frame, i18n)
+    if kind == "admin_list_models":
+        return await _list_models(services, frame, i18n)
     if kind == "admin_list_keys":
         return _keys_frame(keystore)
     if kind == "admin_mint_key":
@@ -106,6 +110,7 @@ async def handle_admin_frame(
 async def _config_frame(services: Services) -> dict[str, Any]:
     info = _describe_llm(services)
     overrides = await services.runtime_config.get()
+    saved_providers = await services.llm_credentials.providers()
     return {
         "type": "admin_config",
         "provider": info["provider"],
@@ -113,6 +118,9 @@ async def _config_frame(services: Services) -> dict[str, Any]:
         "base_url": info["base_url"],
         "api_key_masked": info["api_key"],
         "providers": _provider_names(),
+        # Providers that already have a saved key — the model screen marks these 'ready' and
+        # switching to one never re-asks for its key (see `_set_model`).
+        "saved_providers": saved_providers,
         "override_active": bool(overrides),
     }
 
@@ -126,6 +134,19 @@ async def _set_model(services: Services, frame: dict[str, Any], i18n: I18n) -> d
     chat_model = str(frame.get("chat_model") or "").strip()
     if chat_model:
         overrides["chat_model"] = chat_model
+    api_key = str(frame.get("api_key") or "").strip()
+    base_url = str(frame.get("base_url") or "").strip()
+    # Fall back to a previously-saved credential for this provider when the caller didn't supply
+    # one, so switching back to a provider you've configured before doesn't re-ask for its key.
+    saved = await services.llm_credentials.get(provider)
+    if not api_key and saved.get("api_key"):
+        api_key = saved["api_key"]
+    if not base_url and saved.get("base_url"):
+        base_url = saved["base_url"]
+    if api_key:
+        overrides["api_key"] = api_key
+    if base_url:
+        overrides["base_url"] = base_url
 
     # Reconfigure the LIVE LLM FIRST; persist only on success (mirrors gateway.commands._model_set):
     # a native provider with a missing SDK/key raises here, and persisting a bad override would also
@@ -138,7 +159,37 @@ async def _set_model(services: Services, frame: dict[str, Any], i18n: I18n) -> d
         _reconfigure_llm(services, current)
         return _error("set_failed", i18n)
     await services.runtime_config.set(**overrides)
+    # Remember this provider's credential so the next switch to it is frictionless.
+    if api_key or base_url:
+        await services.llm_credentials.remember(provider, api_key=api_key, base_url=base_url)
     return await _config_frame(services)
+
+
+async def _list_models(services: Services, frame: dict[str, Any], i18n: I18n) -> dict[str, Any]:
+    """Answer `admin_list_models` with the provider's LIVE model catalog (OpenAI `/models`).
+
+    Resolves the credential to try in priority order: an api_key/base_url supplied on the
+    frame (previewing before Save), else this provider's saved credential, else the current
+    live config (only when it's the same provider). Unsupported/unreachable → `models: []`,
+    which the client renders as a free-text model field."""
+    live = getattr(services.llm, "settings", None)
+    base_llm = live.llm if live is not None else services.settings.llm
+    current_provider = (base_llm.provider or "openai").lower()
+    provider = str(frame.get("provider") or "").strip().casefold() or current_provider
+    if not is_known_provider(provider):
+        return _error("unknown_provider", i18n)
+
+    api_key = str(frame.get("api_key") or "").strip()
+    base_url = str(frame.get("base_url") or "").strip()
+    saved = await services.llm_credentials.get(provider)
+    if not api_key:
+        api_key = saved.get("api_key", "") or (base_llm.api_key if provider == current_provider else "")
+    if not base_url:
+        base_url = saved.get("base_url", "") or (base_llm.base_url if provider == current_provider else "")
+
+    candidate = base_llm.model_copy(update={"provider": provider, "api_key": api_key, "base_url": base_url})
+    models = await list_models(candidate)
+    return {"type": "admin_models", "provider": provider, "models": models}
 
 
 def _provider_names() -> list[str]:

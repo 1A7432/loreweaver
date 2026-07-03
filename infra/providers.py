@@ -87,6 +87,32 @@ def is_known_provider(name: str) -> bool:
     return provider in PRESETS or provider in CHATGPT_SUBSCRIPTION_PROXY_PROVIDERS or provider in NATIVE_PROVIDERS
 
 
+async def list_models(llm: LLMSettings) -> list[str]:
+    """Best-effort LIVE model catalog for `llm`'s provider, via the OpenAI-compatible
+    ``GET /models`` (DeepSeek, OpenAI, OpenRouter, Groq, … all expose it). Returns a
+    sorted list of model IDs, or ``[]`` when the provider is a native SDK (Anthropic/
+    Gemini), the key is missing/invalid, or the endpoint is unreachable — the caller
+    falls back to a free-text model field. Never raises; the network call is bounded."""
+    provider = (llm.provider or "openai").lower()
+    if provider in NATIVE_PROVIDERS:
+        return []  # native SDKs don't speak OpenAI /models; free-text fallback
+    base_url = llm.base_url or PRESETS.get(provider, "")
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key=llm.api_key or None, base_url=base_url or None, timeout=15.0, max_retries=0)
+    try:
+        page = await client.models.list()
+        ids = [str(getattr(model, "id", "") or "") for model in getattr(page, "data", []) or []]
+        return sorted({model for model in ids if model})
+    except Exception:
+        return []
+    finally:
+        try:
+            await client.close()
+        except Exception:
+            pass
+
+
 def mask_secret(value: str) -> str:
     """Mask an API key for display: first/last 4 chars, or all-stars if short."""
     if not value:

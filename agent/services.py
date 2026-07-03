@@ -22,7 +22,7 @@ from infra.embeddings import Embeddings, OpenAIEmbeddings
 from infra.i18n import I18n, get_i18n
 from infra.llm import LLMClient
 from infra.providers import MutableLLM
-from infra.runtime_config import RuntimeConfig
+from infra.runtime_config import CredentialBook, RuntimeConfig
 from infra.store import Store
 from infra.vector import VectorStore
 
@@ -45,6 +45,7 @@ class Services:
     llm: LLMClient
     embeddings: Embeddings
     runtime_config: RuntimeConfig
+    llm_credentials: CredentialBook
 
 
 def build_services(
@@ -64,6 +65,7 @@ def build_services(
     i18n = i18n or get_i18n(settings.locale)
     store = store or Store(db_path)
     runtime_config = RuntimeConfig(store)
+    llm_credentials = CredentialBook(store)
     embeddings = embeddings or OpenAIEmbeddings(settings.llm)
     # An injected `llm` (e.g. FakeLLM in tests) is used verbatim and left
     # UNWRAPPED so those paths stay byte-compatible. Otherwise wrap in a
@@ -112,4 +114,5 @@ def build_services(
         llm=llm,
         embeddings=embeddings,
         runtime_config=runtime_config,
+        llm_credentials=llm_credentials,
     )

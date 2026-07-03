@@ -5,7 +5,9 @@ import {
   type AdminDeleteRoomDataFrame,
   type AdminExportRoomFrame,
   type AdminImportRoomFrame,
+  type AdminListModelsFrame,
   type AdminMintKeyFrame,
+  type AdminSetModelFrame,
   type AdminUpdateKeyFrame,
   type ClientFrame,
   type PlayerRole,
@@ -132,12 +134,20 @@ export class IrohClient implements AppClient {
     this.sendFrame({ type: FrameType.AdminGetConfig })
   }
 
-  adminSetModel(provider: string, chatModel?: string): void {
-    this.sendFrame(
-      chatModel
-        ? { type: FrameType.AdminSetModel, provider, chat_model: chatModel }
-        : { type: FrameType.AdminSetModel, provider },
-    )
+  adminSetModel(provider: string, chatModel?: string, apiKey?: string, baseUrl?: string): void {
+    const frame: AdminSetModelFrame = { type: FrameType.AdminSetModel, provider }
+    if (chatModel) frame.chat_model = chatModel
+    if (apiKey) frame.api_key = apiKey
+    if (baseUrl) frame.base_url = baseUrl
+    this.sendFrame(frame)
+  }
+
+  adminListModels(provider?: string, apiKey?: string, baseUrl?: string): void {
+    const frame: AdminListModelsFrame = { type: FrameType.AdminListModels }
+    if (provider) frame.provider = provider
+    if (apiKey) frame.api_key = apiKey
+    if (baseUrl) frame.base_url = baseUrl
+    this.sendFrame(frame)
   }
 
   adminListKeys(): void {

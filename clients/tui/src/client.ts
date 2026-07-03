@@ -18,7 +18,8 @@ export interface AppClient {
   onMessage(cb: (frame: ServerFrame) => void): () => void
   close?(code?: number, reason?: string): void
   adminGetConfig(): void
-  adminSetModel(provider: string, chatModel?: string): void
+  adminSetModel(provider: string, chatModel?: string, apiKey?: string, baseUrl?: string): void
+  adminListModels(provider?: string, apiKey?: string, baseUrl?: string): void
   adminListKeys(): void
   adminMintKey(room: string, name?: string, role?: PlayerRole): void
   adminUpdateKey(id: string, room?: string, name?: string, role?: PlayerRole): void
@@ -63,8 +64,11 @@ class TransportClient implements AppClient {
   adminGetConfig(): void {
     this.inner?.adminGetConfig()
   }
-  adminSetModel(provider: string, chatModel?: string): void {
-    this.inner?.adminSetModel(provider, chatModel)
+  adminSetModel(provider: string, chatModel?: string, apiKey?: string, baseUrl?: string): void {
+    this.inner?.adminSetModel(provider, chatModel, apiKey, baseUrl)
+  }
+  adminListModels(provider?: string, apiKey?: string, baseUrl?: string): void {
+    this.inner?.adminListModels(provider, apiKey, baseUrl)
   }
   adminListKeys(): void {
     this.inner?.adminListKeys()
