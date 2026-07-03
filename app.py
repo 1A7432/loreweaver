@@ -80,10 +80,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--host", default=DEFAULT_TUI_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_TUI_PORT)
-    # Transport selection. Iroh p2p is the DEFAULT carrier (zero domain/TLS/port-forward —
-    # share a ticket); the WebSocket listener is opt-in for reverse-proxied deployments.
-    parser.add_argument("--ws", action="store_true")
-    parser.add_argument("--no-iroh", action="store_true")
     parser.add_argument("--keys", default=os.environ.get("TRPG_TUI_KEYS", DEFAULT_TUI_KEYS_PATH))
     parser.add_argument("--tui-key", dest="tui_key_cmd", choices=["add"])
     parser.add_argument("--room")
@@ -194,12 +190,12 @@ def _bootstrap_keystore(keystore: Keystore, i18n: I18n, keys_path: str) -> None:
 
 
 def _run_serve(settings: Settings, i18n: I18n, args: argparse.Namespace) -> int:
-    """`--serve [--host --port --keys FILE]`: run the networked TUI WebSocket server.
+    """`--serve [--keys FILE]`: run the networked TUI server over the Iroh p2p transport — it
+    prints a shareable ticket (no domain/TLS/port-forward). WebSocket is not a serve option; it
+    lives on only as the offline test / loopback carrier (tests instantiate `TuiServer` directly).
 
-    With `--platforms a,b` the server runs in COMBINED mode (M7): one `RoomHub`
-    and one `Services` shared by the TUI server AND a `GatewayRunner` driving the
-    chat adapters, so terminal and chat players share live sessions. `--serve`
-    alone stays WS-only (unchanged).
+    With `--platforms a,b` the server runs in COMBINED mode: one `RoomHub`/`Services` shared by the
+    TUI server AND a `GatewayRunner` driving the (experimental, roadmap-only) chat adapters.
     """
     if not settings.llm.api_key:
         print(i18n.t("cli.offline_demo_notice"), file=sys.stderr)
@@ -213,7 +209,7 @@ def _run_serve(settings: Settings, i18n: I18n, args: argparse.Namespace) -> int:
     seed_dice(0)
 
     try:
-        asyncio.run(_serve_transports(server, i18n, args))
+        asyncio.run(_serve_iroh(server, i18n, args.keys))
     except KeyboardInterrupt:
         pass
     finally:
@@ -221,61 +217,28 @@ def _run_serve(settings: Settings, i18n: I18n, args: argparse.Namespace) -> int:
     return 0
 
 
-async def _serve_transports(server: TuiServer, i18n: I18n, args: argparse.Namespace) -> None:
-    """Run the enabled transports CONCURRENTLY over the one shared core/hub.
+async def _serve_iroh(core: TuiServer, i18n: I18n, keys_path: str) -> None:
+    """Run the Iroh p2p listener — the one carrier `--serve` starts. Share a ticket; no domain,
+    TLS or port-forward. (WebSocket lives on ONLY as the offline test / loopback transport,
+    instantiated directly in tests.) `core` is a `net.session.SessionCore` — a `TuiServer` is one,
+    so we borrow it as the shared engine without ever binding its socket."""
+    from net.iroh_server import IrohServer
 
-    Iroh p2p is the DEFAULT carrier; add `--ws` for the WebSocket listener (browser web client
-    + reverse-proxied `wss://`). The two come up independently: WebSocket binds immediately and
-    never waits on the Iroh relay handshake, so its healthcheck-able port is up right away while
-    Iroh warms up (and prints its ticket) in parallel. If Iroh is the ONLY carrier and it can't
-    start (native dep missing / relay unreachable), WebSocket is started as a fallback so the
-    server stays reachable rather than exiting.
-    """
-    enable_ws = bool(args.ws)
-    iroh_box: dict[str, object] = {}
-
-    async def run_ws() -> None:
-        print(i18n.t("tui.serve.listening", host=args.host, port=args.port, path=args.keys), file=sys.stderr)
-        await server.serve()
-
-    async def run_iroh() -> bool:
-        from net.iroh_server import IrohServer
-
-        srv = IrohServer(server)
-        iroh_box["srv"] = srv
-        try:
-            # Bound the relay handshake so an unreachable relay can't hang this task forever.
-            ticket = await asyncio.wait_for(srv.start(), timeout=30)
-        except ImportError:
-            print(i18n.t("tui.serve.iroh.missing"), file=sys.stderr)
-            return False
-        except Exception as exc:  # relay unreachable, bind failure, etc.
-            print(i18n.t("tui.serve.iroh.failed", error=str(exc)), file=sys.stderr)
-            return False
-        _announce_iroh_ticket(i18n, ticket, args.keys)
-        await srv.serve()
-        return True
-
-    async def iroh_or_fallback() -> None:
-        if not await run_iroh() and not enable_ws:
-            await run_ws()  # p2p was the only carrier and it failed — keep the server reachable
-
-    tasks: list[asyncio.Task[None]] = []
-    if enable_ws:
-        tasks.append(asyncio.create_task(run_ws()))
-    if not args.no_iroh:
-        tasks.append(asyncio.create_task(iroh_or_fallback()))
-
-    if not tasks:
-        print(i18n.t("tui.serve.none"), file=sys.stderr)
-        return
+    iroh_server = IrohServer(core)
     try:
-        await asyncio.gather(*tasks)
+        # Bound the relay handshake so an unreachable relay can't hang startup forever.
+        ticket = await asyncio.wait_for(iroh_server.start(), timeout=45)
+    except ImportError:
+        print(i18n.t("tui.serve.iroh.missing"), file=sys.stderr)
+        return
+    except Exception as exc:  # relay unreachable, bind failure, etc.
+        print(i18n.t("tui.serve.iroh.failed", error=str(exc)), file=sys.stderr)
+        return
+    _announce_iroh_ticket(i18n, ticket, keys_path)
+    try:
+        await iroh_server.serve()
     finally:
-        srv = iroh_box.get("srv")
-        if srv is not None:
-            await srv.close()  # type: ignore[attr-defined]
-        await server.close()
+        await iroh_server.close()
 
 
 def _announce_iroh_ticket(i18n: I18n, ticket: str, keys_path: str) -> None:

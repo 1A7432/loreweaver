@@ -12,9 +12,9 @@ const HOME = process.env.HOME ?? process.env.USERPROFILE ?? "."
 const SERVER_DIR = `${HOME}/.loreweaver/server`
 const LOCAL_KEYS = `${HOME}/.loreweaver/local-keys.toml`
 const LOCAL_SIDECAR = `${HOME}/.loreweaver/keeper-key.txt`
-const PORT = 8787
 const REPO = "https://github.com/1A7432/loreweaver"
-const READY_TIMEOUT_MS = 45_000
+const READY_TIMEOUT_MS = 60_000 // Iroh waits for a relay handshake, so allow longer than a local socket
+const TICKET_RE = /(endpoint[a-z0-9]{20,})/ // the base32 ticket, printed once the endpoint is online (locale-independent)
 
 export type LogKind = "step" | "out" | "err" | "ok" | "fail"
 export type OnLog = (text: string, kind: LogKind) => void
@@ -112,7 +112,7 @@ async function readSidecarKey(): Promise<string> {
   }
 }
 
-async function waitReady(proc: Bun.Subprocess, onLog: OnLog): Promise<string> {
+async function waitReady(proc: Bun.Subprocess, onLog: OnLog): Promise<{ ticket: string; key: string }> {
   const reader = (proc.stderr as ReadableStream<Uint8Array>).getReader()
   const decoder = new TextDecoder()
   let line = ""
@@ -120,7 +120,7 @@ async function waitReady(proc: Bun.Subprocess, onLog: OnLog): Promise<string> {
   const timeout = new Promise<never>((_, reject) =>
     setTimeout(() => reject(new Error("the server did not become ready in time")), READY_TIMEOUT_MS),
   )
-  const ready = (async (): Promise<string> => {
+  const ready = (async (): Promise<{ ticket: string; key: string }> => {
     for (;;) {
       const { value, done } = await reader.read()
       if (done) throw new Error("the server exited before it was ready")
@@ -132,11 +132,12 @@ async function waitReady(proc: Bun.Subprocess, onLog: OnLog): Promise<string> {
         onLog(clean(line.slice(0, nl)), "out")
         line = line.slice(nl + 1)
       }
-      // Locale-independent readiness: the WS URL prints once the listener binds; the keeper key
-      // is in the sidecar (written during first-run bootstrap, before the listener starts).
-      if (all.includes(`ws://127.0.0.1:${PORT}`)) {
+      // Readiness = the Iroh ticket is printed (once the endpoint has a relay). Both are
+      // locale-independent: the ticket is base32, the keeper key comes from the sidecar file.
+      const match = all.match(TICKET_RE)
+      if (match) {
         const key = await readSidecarKey()
-        if (key) return key
+        if (key) return { ticket: match[1], key }
       }
     }
   })()
@@ -160,9 +161,9 @@ export async function bringUpServer(onLog: OnLog): Promise<HostHandle> {
   if ((await run(["uv", "sync"], serverDir, onLog)) !== 0) throw new Error("uv sync failed")
   onLog("Dependencies ready", "ok")
 
-  onLog("Starting the local server…", "step")
+  onLog("Starting the local p2p server (Iroh) — waiting for a relay, ~10s…", "step")
   const proc = Bun.spawn(
-    ["uv", "run", "python", "-m", "app", "--serve", "--ws", "--no-iroh", "--host", "127.0.0.1", "--port", String(PORT), "--keys", LOCAL_KEYS],
+    ["uv", "run", "python", "-m", "app", "--serve", "--keys", LOCAL_KEYS],
     { cwd: serverDir, stdout: "pipe", stderr: "pipe", env: process.env as Record<string, string> },
   )
   const stop = () => {
@@ -174,9 +175,9 @@ export async function bringUpServer(onLog: OnLog): Promise<HostHandle> {
   }
   void pipeLines(proc.stdout, (l) => onLog(l, "out"))
   try {
-    const key = await waitReady(proc, onLog)
-    onLog(`Server ready at ws://127.0.0.1:${PORT} — logging you in as Keeper`, "ok")
-    return { host: `ws://127.0.0.1:${PORT}`, key, stop }
+    const { ticket, key } = await waitReady(proc, onLog)
+    onLog("Server ready — dialing you in as Keeper over p2p", "ok")
+    return { host: ticket, key, stop }
   } catch (error) {
     stop()
     throw error
