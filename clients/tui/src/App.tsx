@@ -4,7 +4,7 @@ import type { KeyEvent } from "@opentui/core"
 import { FrameType, type PresenceFrame, type ServerFrame, type StateFrame, type WelcomeFrame } from "@loreweaver/protocol"
 import { createClient, type AppClient } from "./client"
 import type { SavedServer } from "./connectMemory"
-import { canHostLocally, startLocalServer, type LocalServer } from "./localServer"
+import type { HostHandle } from "./hostLocal"
 import { GameView, appendFrame } from "./GameView"
 import type { LogFrame } from "./components/NarrativeLog"
 import { CharacterScreen } from "./screens/CharacterScreen"
@@ -13,6 +13,7 @@ import { KeeperKeys } from "./screens/KeeperKeys"
 import { KeeperModel } from "./screens/KeeperModel"
 import { KeeperModule } from "./screens/KeeperModule"
 import { MainMenu } from "./screens/MainMenu"
+import { HostLocalScreen } from "./screens/HostLocalScreen"
 import { SettingsScreen } from "./screens/SettingsScreen"
 import { defaultTuiLocale, normalizeLocale, tt, type TuiLocale } from "./i18n"
 import { DEFAULT_THEME, themeOrder, themes, type ThemeName } from "./themes"
@@ -40,7 +41,7 @@ export interface AppProps {
 
 // Stage 2 adds "character"; Stage 3 adds the keeper-only "keeper_keys" / "keeper_model";
 // Stage 4 adds the keeper-only "keeper_module".
-type Screen = "connect" | "menu" | "settings" | "game" | "character" | "keeper_keys" | "keeper_module" | "keeper_model"
+type Screen = "connect" | "host_local" | "menu" | "settings" | "game" | "character" | "keeper_keys" | "keeper_module" | "keeper_model"
 
 const EMPTY_STATE: StateFrame = { type: FrameType.State, party: [], initiative: [], online: 0 }
 
@@ -49,15 +50,12 @@ const themeKeyIndex: Record<string, number> = { f1: 0, f2: 1, f3: 2, f4: 3, f5: 
 
 export function App({ client: injected, prefill, onRememberConnect, onLocaleChange }: AppProps) {
   const client = useMemo(() => injected ?? createClient(), [injected])
-  // "Host locally" only makes sense where a server can actually be spawned (a checkout with
-  // app.py + a venv, not a bare client install); otherwise the button is hidden.
-  const canHostLocal = useMemo(() => canHostLocally(), [])
   const pendingConnect = useRef<Required<AppPrefill> | undefined>(undefined)
   // An explicit language pick (the connect-screen toggle, or a remembered one) wins over
   // the server's room locale, so the client UI stays in the language the user chose.
   const localePinned = useRef(Boolean(prefill?.locale))
-  // A server spawned by the connect screen's "host locally" button; killed when the app exits.
-  const localServer = useRef<LocalServer | undefined>(undefined)
+  // A server spawned by the "host locally" screen; killed when the app exits.
+  const localServer = useRef<HostHandle | undefined>(undefined)
 
   const [themeName, setThemeName] = useState<ThemeName>(DEFAULT_THEME)
   const theme = themes[themeName]
@@ -93,7 +91,7 @@ export function App({ client: injected, prefill, onRememberConnect, onLocaleChan
         if (!localePinned.current) setLocale(normalizeLocale(frame.locale))
         setConnecting(false)
         setError(undefined)
-        setScreen((prev) => (prev === "connect" ? "menu" : prev))
+        setScreen((prev) => (prev === "connect" || prev === "host_local" ? "menu" : prev))
         return
       }
       if (frame.type === FrameType.State) {
@@ -142,19 +140,9 @@ export function App({ client: injected, prefill, onRememberConnect, onLocaleChan
     }
   }
 
-  // "Host locally & play": spawn a server on this machine and log straight in as Keeper over
-  // its local WebSocket. The subprocess is stopped when the app exits (the effect below).
-  const handleHostLocal = async () => {
-    setError(undefined)
-    setConnecting(true)
-    try {
-      localServer.current = await startLocalServer()
-      await handleConnect(localServer.current.host, localServer.current.key, localServer.current.name)
-    } catch (err) {
-      setConnecting(false)
-      setError(err instanceof Error ? err.message : String(err))
-    }
-  }
+  // "Host locally & play": open the bring-up screen, which detects the environment, sets up +
+  // starts a server (streaming its output), then logs straight in as Keeper (onReady, below).
+  const handleHostLocal = () => setScreen("host_local")
 
   // Kill a button-spawned local server on exit so it doesn't outlive the client.
   useEffect(() => {
@@ -176,6 +164,20 @@ export function App({ client: injected, prefill, onRememberConnect, onLocaleChan
     setLocale(next)
     localePinned.current = true
     onLocaleChange?.(next)
+  }
+
+  if (screen === "host_local") {
+    return (
+      <HostLocalScreen
+        theme={theme}
+        locale={locale}
+        onReady={(host, key, stop) => {
+          localServer.current = { host, key, stop }
+          void handleConnect(host, key, tt(locale, "menu.role.keeper"))
+        }}
+        onBack={() => setScreen("connect")}
+      />
+    )
   }
 
   if (screen === "settings" && welcome) {
@@ -278,7 +280,7 @@ export function App({ client: injected, prefill, onRememberConnect, onLocaleChan
       error={error}
       locale={locale}
       onLocaleChange={handleLocaleChange}
-      onHostLocal={canHostLocal ? handleHostLocal : undefined}
+      onHostLocal={handleHostLocal}
       onSubmit={handleConnect}
     />
   )
