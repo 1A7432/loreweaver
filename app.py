@@ -237,7 +237,9 @@ async def _serve_transports(server: TuiServer, i18n: I18n, args: argparse.Namesp
 
         iroh_server = IrohServer(server)
         try:
-            ticket = await iroh_server.start()
+            # Bound the relay handshake: on a network where the relay is unreachable,
+            # online() could otherwise hang and (with --ws) starve the WebSocket listener.
+            ticket = await asyncio.wait_for(iroh_server.start(), timeout=30)
         except ImportError:
             print(i18n.t("tui.serve.iroh.missing"), file=sys.stderr)
             iroh_server, enable_ws = None, True
