@@ -7,7 +7,7 @@ export interface ConnectMemory {
   name?: string
 }
 
-const MEMORY_PATH = `${process.env.HOME ?? "."}/.trpg-kp/tui-connect.json`
+const MEMORY_PATH = `${process.env.HOME ?? "."}/.loreweaver/tui-connect.json`
 
 function clean(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined

@@ -14,7 +14,7 @@
 set -euo pipefail
 
 TRPG_ORIGIN="${TRPG_ORIGIN:-https://1a7432.site/trpg}"
-TRPG_HOME="${TRPG_HOME:-$HOME/.trpg-kp}"
+TRPG_HOME="${TRPG_HOME:-$HOME/.loreweaver}"
 TRPG_REGISTRY="${TRPG_REGISTRY:-https://registry.npmmirror.com}"
 TRPG_BIN="${TRPG_BIN:-$HOME/.local/bin}"
 
@@ -51,21 +51,26 @@ printf 'registry=%s\n' "$TRPG_REGISTRY" > "$TRPG_HOME/clients/.npmrc"
 ( cd "$TRPG_HOME/clients" && bun install --silent ) \
   || die "bun install failed. Try again, or set TRPG_REGISTRY to another mirror."
 
-# 4) launcher.
+# 4) launcher — `loreweaver` (matches the project name). `loreweaver update` re-runs
+#    this installer to fetch + reinstall the latest client; anything else launches the TUI.
 mkdir -p "$TRPG_BIN"
-cat > "$TRPG_BIN/trpg-kp" <<EOF
+cat > "$TRPG_BIN/loreweaver" <<EOF
 #!/usr/bin/env bash
+if [ "\$1" = "update" ]; then
+  echo "updating Loreweaver…"
+  exec bash -c "curl -fsSL '${TRPG_ORIGIN}/install.sh' | bash"
+fi
 exec bun run "$TRPG_HOME/clients/tui/src/index.tsx" "\$@"
 EOF
-chmod +x "$TRPG_BIN/trpg-kp"
+chmod +x "$TRPG_BIN/loreweaver"
 
 echo
 say "installed ✓"
-echo "  Launcher: $TRPG_BIN/trpg-kp"
+echo "  Launcher: $TRPG_BIN/loreweaver"
 case ":$PATH:" in
-  *":$TRPG_BIN:"*) echo "  Run:      trpg-kp" ;;
+  *":$TRPG_BIN:"*) echo "  Run:      loreweaver          (update later with: loreweaver update)" ;;
   *) echo "  '$TRPG_BIN' is not on your PATH yet. Either add it, or run the full path:"
-     echo "            $TRPG_BIN/trpg-kp" ;;
+     echo "            $TRPG_BIN/loreweaver" ;;
 esac
 echo
 echo "  In the connect screen, use:"

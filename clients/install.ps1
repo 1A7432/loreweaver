@@ -11,9 +11,9 @@
 $ErrorActionPreference = "Stop"
 
 $Origin   = if ($env:TRPG_ORIGIN)   { $env:TRPG_ORIGIN }   else { "https://1a7432.site/trpg" }
-$Home_    = if ($env:TRPG_HOME)     { $env:TRPG_HOME }     else { Join-Path $HOME ".trpg-kp" }
+$Home_    = if ($env:TRPG_HOME)     { $env:TRPG_HOME }     else { Join-Path $HOME ".loreweaver" }
 $Registry = if ($env:TRPG_REGISTRY) { $env:TRPG_REGISTRY } else { "https://registry.npmmirror.com" }
-$BinDir   = if ($env:TRPG_BIN)      { $env:TRPG_BIN }      else { Join-Path $HOME ".trpg-kp\bin" }
+$BinDir   = if ($env:TRPG_BIN)      { $env:TRPG_BIN }      else { Join-Path $HOME ".loreweaver\bin" }
 
 function Say([string]$m) { Write-Host "▸ $m" -ForegroundColor Yellow }
 
@@ -46,15 +46,17 @@ Push-Location (Join-Path $Home_ "clients")
 bun install --silent
 Pop-Location
 
-# 4) launcher
+# 4) launcher — `loreweaver` (matches the project name). `loreweaver update` re-runs the
+#    installer to fetch the latest client; anything else launches the TUI.
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 $entry = (Join-Path $Home_ "clients\tui\src\index.tsx")
-Set-Content -Path (Join-Path $BinDir "trpg-kp.cmd") -Value "@echo off`r`nbun run `"$entry`" %*"
+$cmd = "@echo off`r`nif /I `"%1`"==`"update`" ( powershell -NoProfile -Command `"irm $Origin/install.ps1 | iex`" & exit /b )`r`nbun run `"$entry`" %*"
+Set-Content -Path (Join-Path $BinDir "loreweaver.cmd") -Value $cmd
 
 Write-Host ""
 Say "installed ✓"
-Write-Host "  Launcher: $BinDir\trpg-kp.cmd"
-Write-Host "  Add '$BinDir' to PATH, then run:  trpg-kp"
+Write-Host "  Launcher: $BinDir\loreweaver.cmd"
+Write-Host "  Add '$BinDir' to PATH, then run:  loreweaver   (update later with: loreweaver update)"
 Write-Host ""
 Write-Host "  In the connect screen, use:"
 Write-Host "    host  wss://1a7432.site/ws"

@@ -29,8 +29,9 @@ function parseArgs(argv: string[]): Args {
 function usage(): string {
   return [
     "Usage:",
-    "  trpg-kp                       # launch the lobby (connect screen)",
-    "  trpg-kp connect --host ws://127.0.0.1:8787 --key <k> [--name N]  # prefilled",
+    "  loreweaver                    # launch the lobby (connect screen)",
+    "  loreweaver connect --host wss://1a7432.site/ws --key <k> [--name N]  # prefilled",
+    "  loreweaver update             # re-fetch + reinstall the latest client",
     "",
     "Local server:",
     "  python -m app --serve",
@@ -58,7 +59,7 @@ const renderer = await createCliRenderer()
 // Set a clean terminal window title. Without this the shell leaves the title as the
 // full launch command — which overflows the title bar and, worse, exposes the invite
 // key in it. OSC 2 (window title) + BEL terminator.
-process.stdout.write("\x1b]2;TRPG KP\x07")
+process.stdout.write("\x1b]2;Loreweaver\x07")
 createRoot(renderer).render(
   <App
     prefill={prefill}

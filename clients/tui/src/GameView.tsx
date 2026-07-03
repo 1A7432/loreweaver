@@ -187,7 +187,7 @@ export function GameView({ client, welcome, theme, themeName, initialFrames }: G
           so its second row no longer bleeds into the border, and the status column
           gets its own two rows instead of collapsing both lines onto one. */}
       <box height={4} flexDirection="row" border borderColor={theme.border} paddingX={1}>
-        <ascii-font text="TRPG KP" font="tiny" color={theme.accent} />
+        <ascii-font text="LOREWEAVER" font="tiny" color={theme.accent} />
         <box flexDirection="column" marginLeft={2} justifyContent="center">
           <text fg={theme.accent}>{tt(locale, "game.joined", { room: stripControlChars(welcome.room) })}</text>
           {stateFrame.online > 0 ? (

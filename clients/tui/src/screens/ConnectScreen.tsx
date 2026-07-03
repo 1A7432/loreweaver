@@ -63,7 +63,7 @@ export function ConnectScreen({ theme, defaults, connecting, error, locale = def
   return (
     <box flexDirection="column" height="100%" width="100%" backgroundColor={theme.bg} paddingX={2} paddingY={1}>
       <box marginBottom={1}>
-        <ascii-font text="TRPG KP" font="tiny" color={theme.accent} />
+        <ascii-font text="LOREWEAVER" font="tiny" color={theme.accent} />
       </box>
       <text fg={theme.dim}>{tt(locale, "connect.subtitle")}</text>
 
