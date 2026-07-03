@@ -41,12 +41,12 @@ EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD python -c "import socket; socket.create_connection(('127.0.0.1', 8787), 3).close()"
 
-# `python -m app` is the program. This containerized deployment is the reverse-proxied
-# `wss://` path (it has a domain + TLS + serves the browser web client), so it runs the
-# WebSocket listener and disables the p2p carrier: `--ws --no-iroh`. (Iroh is the DEFAULT for
-# a bare `python -m app --serve` laptop host — no domain needed — but a public server with a
-# domain doesn't need p2p, and the healthcheck below probes the WS port.) Override the ARGS
-# (everything after the image name) to run other subcommands, e.g. mint a key:
+# `python -m app` is the program. This runs BOTH carriers (`--serve --ws`): the WebSocket
+# listener (for the browser web client + the reverse-proxied `wss://` path; the healthcheck
+# below probes its port) AND the default Iroh p2p transport (so friends can dial a ticket, and
+# rich media rides it). WS binds immediately and doesn't wait on the Iroh relay, so the
+# healthcheck is unaffected. Add `--no-iroh` to drop p2p. Override the ARGS (everything after
+# the image name) to run other subcommands, e.g. mint a key:
 #   docker run ... loreweaver --tui-key add --room <room> --name <name>
 ENTRYPOINT ["python", "-m", "app"]
-CMD ["--serve", "--ws", "--no-iroh", "--host", "0.0.0.0", "--port", "8787"]
+CMD ["--serve", "--ws", "--host", "0.0.0.0", "--port", "8787"]
