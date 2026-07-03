@@ -86,7 +86,7 @@ export function ConnectScreen({ theme, defaults, connecting, error, locale = def
             flexGrow={1}
             value={host}
             focused={focused === "host"}
-            placeholder="ws://127.0.0.1:8787"
+            placeholder={tt(locale, "connect.hostPlaceholder")}
             onInput={(value: string) => {
               hostRef.current = value
               setHost(value)

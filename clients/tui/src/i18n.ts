@@ -5,7 +5,8 @@ const DEFAULT_LOCALE: TuiLocale = "zh"
 const messages = {
   en: {
     "connect.subtitle": "Lamplit table · connect to a Keeper with an invite key",
-    "connect.host": "Host",
+    "connect.host": "Ticket / host",
+    "connect.hostPlaceholder": "paste a p2p ticket, or ws://host:port",
     "connect.key": "Invite key",
     "connect.name": "Nickname",
     "connect.defaultName": "Investigator",
@@ -183,7 +184,8 @@ const messages = {
   },
   zh: {
     "connect.subtitle": "灯下的牌桌 · 用邀请码连接一位守秘人",
-    "connect.host": "主机",
+    "connect.host": "Ticket / 主机",
+    "connect.hostPlaceholder": "粘贴 p2p ticket,或 ws://主机:端口",
     "connect.key": "邀请码",
     "connect.name": "昵称",
     "connect.defaultName": "调查员",

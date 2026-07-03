@@ -16,14 +16,43 @@
         "loreweaver": "./dist/index.js",
       },
       "dependencies": {
+        "@loreweaver/protocol": "file:../protocol",
+        "@number0/iroh": "1.0.0",
         "@opentui/core": "0.4.2",
         "@opentui/react": "0.4.2",
-        "@loreweaver/protocol": "file:../protocol",
         "react": "19.2.7",
       },
     },
   },
   "packages": {
+    "@loreweaver/protocol": ["@loreweaver/protocol@workspace:protocol"],
+
+    "@loreweaver/tui": ["@loreweaver/tui@workspace:tui"],
+
+    "@number0/iroh": ["@number0/iroh@1.0.0", "https://registry.npmmirror.com/@number0/iroh/-/iroh-1.0.0.tgz", { "optionalDependencies": { "@number0/iroh-android-arm-eabi": "1.0.0", "@number0/iroh-android-arm64": "1.0.0", "@number0/iroh-darwin-arm64": "1.0.0", "@number0/iroh-linux-arm-gnueabihf": "1.0.0", "@number0/iroh-linux-arm-musleabihf": "1.0.0", "@number0/iroh-linux-arm64-gnu": "1.0.0", "@number0/iroh-linux-arm64-musl": "1.0.0", "@number0/iroh-linux-x64-gnu": "1.0.0", "@number0/iroh-linux-x64-musl": "1.0.0", "@number0/iroh-win32-arm64-msvc": "1.0.0", "@number0/iroh-win32-x64-msvc": "1.0.0" } }, "sha512-QeuRYxfLPm8HGbWKYpZZA//hCn8J+WO8hVrEAU2VQG0BLnfHTX9tcqGbQJLzcePFdtFVVXVIkm3IkSAUWajOXg=="],
+
+    "@number0/iroh-android-arm-eabi": ["@number0/iroh-android-arm-eabi@1.0.0", "https://registry.npmmirror.com/@number0/iroh-android-arm-eabi/-/iroh-android-arm-eabi-1.0.0.tgz", { "os": "android", "cpu": "arm" }, "sha512-AkrdmoQ2YhC+X0JgD14SNE+KOSGLKC8z5HSWnPY5tvSXrASPbwCtvWFCVmyPKWj2kQHv0blMI5lBGeGFe+v54w=="],
+
+    "@number0/iroh-android-arm64": ["@number0/iroh-android-arm64@1.0.0", "https://registry.npmmirror.com/@number0/iroh-android-arm64/-/iroh-android-arm64-1.0.0.tgz", { "os": "android", "cpu": "arm64" }, "sha512-EkZh6hl5XJ1JQlWWANc2yDdScP5yGbi9IlF9bttd4DuUelAI8yqEMzXq4YdPB0kQqPlmPk8nEGLEtPWbVCNTLg=="],
+
+    "@number0/iroh-darwin-arm64": ["@number0/iroh-darwin-arm64@1.0.0", "https://registry.npmmirror.com/@number0/iroh-darwin-arm64/-/iroh-darwin-arm64-1.0.0.tgz", { "os": "darwin", "cpu": "arm64" }, "sha512-zmf9CE1l6TWy9zDlNs3EvcxPxHfVQKvkod7wuF6llkGi/2WaSRc+x1vaaMEfpguaxnRfP4NNvIKyy8Ni4imIQg=="],
+
+    "@number0/iroh-linux-arm-gnueabihf": ["@number0/iroh-linux-arm-gnueabihf@1.0.0", "https://registry.npmmirror.com/@number0/iroh-linux-arm-gnueabihf/-/iroh-linux-arm-gnueabihf-1.0.0.tgz", { "os": "linux", "cpu": "arm" }, "sha512-obp3eZIJrOGD0rUL1Y0SSCFUNa6NQAsZS+z2khmurqD/rOIIjzvVNYakS4+MEWQLzF1acuUvN7aprHAceUkiuQ=="],
+
+    "@number0/iroh-linux-arm-musleabihf": ["@number0/iroh-linux-arm-musleabihf@1.0.0", "https://registry.npmmirror.com/@number0/iroh-linux-arm-musleabihf/-/iroh-linux-arm-musleabihf-1.0.0.tgz", { "os": "linux", "cpu": "arm" }, "sha512-5OXTzmdej7CPaQCReg3vf0/jDCRdVgiOsbC0gcyoPBOdNPs7tZgSoXRBQsod7ioObrjegPM2UfvdF+bIyGst4Q=="],
+
+    "@number0/iroh-linux-arm64-gnu": ["@number0/iroh-linux-arm64-gnu@1.0.0", "https://registry.npmmirror.com/@number0/iroh-linux-arm64-gnu/-/iroh-linux-arm64-gnu-1.0.0.tgz", { "os": "linux", "cpu": "arm64" }, "sha512-whQ36eFP+9aYRJxpZn/Q35EVlvEJm45AFSO2mfctVYvZFJKC/YjZWue4p60VWuW4/yBdjBTErwUum5mMppoeLQ=="],
+
+    "@number0/iroh-linux-arm64-musl": ["@number0/iroh-linux-arm64-musl@1.0.0", "https://registry.npmmirror.com/@number0/iroh-linux-arm64-musl/-/iroh-linux-arm64-musl-1.0.0.tgz", { "os": "linux", "cpu": "arm64" }, "sha512-Xb4Yy9I2MXlv2SeZZcEIkJIgG1do+5F4R5GkXb4L0if/5vTuuKj7KGQE/ehaIJjNcv+TE+KIOhUvGCxO02l7Nw=="],
+
+    "@number0/iroh-linux-x64-gnu": ["@number0/iroh-linux-x64-gnu@1.0.0", "https://registry.npmmirror.com/@number0/iroh-linux-x64-gnu/-/iroh-linux-x64-gnu-1.0.0.tgz", { "os": "linux", "cpu": "x64" }, "sha512-ZOOWURPAWhnBmj5ElLaB/wCjoWNdrjOblaOs0YViW+dlTc5qwInSGJdYEDRdSoZ61MIP0gI2H9EwENe8UYWRcg=="],
+
+    "@number0/iroh-linux-x64-musl": ["@number0/iroh-linux-x64-musl@1.0.0", "https://registry.npmmirror.com/@number0/iroh-linux-x64-musl/-/iroh-linux-x64-musl-1.0.0.tgz", { "os": "linux", "cpu": "x64" }, "sha512-sJzuehJ9BnuZe4lnP6cWA1wDedC+rbOiI/Hu4V9BGTUE50Z/s28rXDQFJCqVWz1qseXCqHYQ/Jt3U1XdX+Gmtw=="],
+
+    "@number0/iroh-win32-arm64-msvc": ["@number0/iroh-win32-arm64-msvc@1.0.0", "https://registry.npmmirror.com/@number0/iroh-win32-arm64-msvc/-/iroh-win32-arm64-msvc-1.0.0.tgz", { "os": "win32", "cpu": "arm64" }, "sha512-7KgpUvinndcJnQgbYdV0zs7nGTxKi9zZDBxyTX9PRlQm/9TfTDZhSkur+sZYW2xca2P31XGkjZYZ78yAjYviqQ=="],
+
+    "@number0/iroh-win32-x64-msvc": ["@number0/iroh-win32-x64-msvc@1.0.0", "https://registry.npmmirror.com/@number0/iroh-win32-x64-msvc/-/iroh-win32-x64-msvc-1.0.0.tgz", { "os": "win32", "cpu": "x64" }, "sha512-mNgHds9US3IWfrvZn+yBuyE/kjrM//jSFpWn1llu3aiNgGq8Rf7yW2TJWvmrFT+eeTi2osOsh1nJfykXTe9xYQ=="],
+
     "@opentui/core": ["@opentui/core@0.4.2", "https://registry.npmmirror.com/@opentui/core/-/core-0.4.2.tgz", { "dependencies": { "bun-ffi-structs": "0.2.3", "diff": "9.0.0", "marked": "17.0.1", "string-width": "7.2.0", "strip-ansi": "7.1.2" }, "optionalDependencies": { "@opentui/core-darwin-arm64": "0.4.2", "@opentui/core-darwin-x64": "0.4.2", "@opentui/core-linux-arm64": "0.4.2", "@opentui/core-linux-arm64-musl": "0.4.2", "@opentui/core-linux-x64": "0.4.2", "@opentui/core-linux-x64-musl": "0.4.2", "@opentui/core-win32-arm64": "0.4.2", "@opentui/core-win32-x64": "0.4.2" }, "peerDependencies": { "web-tree-sitter": "0.25.10" } }, "sha512-ulx6RMqftf2fm7Itf9e81GcCDMNY6NAhmnKYhllDOMYD+PxYXR+vomy2bxQNV5ow31RE7s8WQFnb7hWTRUbx2g=="],
 
     "@opentui/core-darwin-arm64": ["@opentui/core-darwin-arm64@0.4.2", "https://registry.npmmirror.com/@opentui/core-darwin-arm64/-/core-darwin-arm64-0.4.2.tgz", { "os": "darwin", "cpu": "arm64" }, "sha512-is+O+sS/l3E9cZXyM9pRF1WhqnE+hYSPYoZkbseR9CthJcaWPGi3R3jUJa1cLj325252jWgxVupnDqFUtKg36w=="],
@@ -43,10 +72,6 @@
     "@opentui/core-win32-x64": ["@opentui/core-win32-x64@0.4.2", "https://registry.npmmirror.com/@opentui/core-win32-x64/-/core-win32-x64-0.4.2.tgz", { "os": "win32", "cpu": "x64" }, "sha512-P2oguG3ng3OMjAdasFSA3GhHaQXtzDUsIRDGbzWFOimpZ/zMemidp+JQ0V8V6XwK6Utk5G0aQ03oBaRCoLyYDw=="],
 
     "@opentui/react": ["@opentui/react@0.4.2", "https://registry.npmmirror.com/@opentui/react/-/react-0.4.2.tgz", { "dependencies": { "@opentui/core": "0.4.2", "react-reconciler": "^0.33.0" }, "peerDependencies": { "react": ">=19.2.0", "react-devtools-core": "^7.0.1", "ws": "^8.18.0" } }, "sha512-SsteuclEw72gUBzp/mZjADSNS1jJJr4htB89euicn+Atl62ZvO22wuLE9hBFDCpumtgG3sbSe+7XtV6vW1orXA=="],
-
-    "@loreweaver/protocol": ["@loreweaver/protocol@workspace:protocol"],
-
-    "@loreweaver/tui": ["@loreweaver/tui@workspace:tui"],
 
     "ansi-regex": ["ansi-regex@6.2.2", "https://registry.npmmirror.com/ansi-regex/-/ansi-regex-6.2.2.tgz", {}, "sha512-Bq3SmSpyFHaWjPk8If9yc6svM8c56dB5BAtW4Qbw5jHTwwXXcTLoRMkpDJp6VL0XzlWaCHTXrkFURMYmD0sLqg=="],
 

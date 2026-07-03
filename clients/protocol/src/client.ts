@@ -89,13 +89,13 @@ function toText(data: unknown): string {
   return String(data)
 }
 
-function isServerFrame(value: unknown): value is ServerFrame {
+export function isServerFrame(value: unknown): value is ServerFrame {
   if (!isObject(value)) return false
   const validate = serverFrameValidators[String(value.type)]
   return validate !== undefined && validate(value)
 }
 
-function isPingFrame(value: unknown): value is PingFrame {
+export function isPingFrame(value: unknown): value is PingFrame {
   return Boolean(
     value &&
       typeof value === "object" &&
