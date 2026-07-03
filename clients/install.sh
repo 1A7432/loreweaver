@@ -5,28 +5,25 @@
 #
 # It: (1) makes sure `bun` is on PATH (bun is both the runtime AND the package
 # manager that auto-resolves the right @opentui/core native core per platform),
-# (2) downloads the client tarball from the GitHub Release, (3) `bun install`s it
-# via a fast registry mirror, (4) drops a `loreweaver` launcher. Nothing needs root.
+# (2) downloads the client tarball — GitHub Release by default, AUTO-FALLING-BACK to the
+# 1a7432.site mirror if GitHub is unreachable, (3) `bun install`s it via a fast registry
+# mirror, (4) drops a `loreweaver` launcher. Nothing needs root.
 #
-# In mainland China (GitHub can be slow/blocked) use the mirror instead:
-#   TRPG_ORIGIN=https://1a7432.site/trpg  (or run the mirror one-liner from the site)
-# Override too: TRPG_HOME (install dir), TRPG_REGISTRY (npm mirror), TRPG_BIN (launcher dir).
+# Force a source with TRPG_ORIGIN (e.g. TRPG_ORIGIN=https://1a7432.site/trpg to prefer the
+# China mirror and skip the GitHub attempt). Also: TRPG_HOME, TRPG_REGISTRY, TRPG_BIN.
 set -euo pipefail
 
 TRPG_HOME="${TRPG_HOME:-$HOME/.loreweaver}"
 TRPG_REGISTRY="${TRPG_REGISTRY:-https://registry.npmmirror.com}"
 TRPG_BIN="${TRPG_BIN:-$HOME/.local/bin}"
 
-# Distribution source: GitHub by default; a mirror (e.g. 1a7432.site) when TRPG_ORIGIN is set.
-if [ -n "${TRPG_ORIGIN:-}" ]; then
-  TARBALL_URL="${TRPG_ORIGIN}/loreweaver-client.tar.gz"
-  INSTALLER_URL="${TRPG_ORIGIN}/install.sh"
-  SOURCE_DESC="${TRPG_ORIGIN}"
-else
-  TARBALL_URL="https://github.com/1A7432/loreweaver/releases/latest/download/loreweaver-client.tar.gz"
-  INSTALLER_URL="https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.sh"
-  SOURCE_DESC="GitHub Release"
-fi
+# Distribution: default GitHub Release; TRPG_ORIGIN overrides the primary source. When the
+# primary is unreachable (e.g. GitHub from mainland China) we auto-fall-back to the mirror.
+MIRROR="https://1a7432.site/trpg"
+PRIMARY="${TRPG_ORIGIN:-}"                        # empty => GitHub
+tarball_of()   { [ -n "$1" ] && printf '%s/loreweaver-client.tar.gz' "$1" || printf 'https://github.com/1A7432/loreweaver/releases/latest/download/loreweaver-client.tar.gz'; }
+installer_of() { [ -n "$1" ] && printf '%s/install.sh' "$1" || printf 'https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.sh'; }
+desc_of()      { [ -n "$1" ] && printf '%s' "$1" || printf 'GitHub Release'; }
 
 say() { printf '\033[1;33m▸ %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
@@ -48,12 +45,24 @@ fi
 command -v bun >/dev/null 2>&1 || die "bun still not on PATH — open a new shell and re-run."
 say "bun $(bun --version) ready"
 
-# 2) client tarball.
-say "downloading client from ${SOURCE_DESC}…"
-rm -rf "$TRPG_HOME/clients"
-mkdir -p "$TRPG_HOME"
-curl -fsSL "$TARBALL_URL" | tar xz -C "$TRPG_HOME" \
-  || die "could not fetch the client from ${SOURCE_DESC}. In mainland China try the mirror: TRPG_ORIGIN=https://1a7432.site/trpg curl -fsSL https://1a7432.site/trpg/install.sh | bash"
+# 2) client tarball — try the primary source, auto-fall-back to the 1a7432.site mirror.
+fetch_client() {  # $1 = tarball url; downloads to a temp file, extracts only on success
+  local tmp; tmp="$(mktemp)"
+  if curl -fsSL --connect-timeout 15 "$1" -o "$tmp" && tar xzf "$tmp" -C "$TRPG_HOME" 2>/dev/null; then rm -f "$tmp"; return 0; fi
+  rm -f "$tmp"; return 1
+}
+rm -rf "$TRPG_HOME/clients"; mkdir -p "$TRPG_HOME"
+USED="$PRIMARY"
+say "downloading client from $(desc_of "$PRIMARY")…"
+if fetch_client "$(tarball_of "$PRIMARY")"; then :
+elif [ "$PRIMARY" != "$MIRROR" ]; then
+  say "primary source unreachable — falling back to the 1a7432.site mirror…"
+  rm -rf "$TRPG_HOME/clients"
+  fetch_client "$(tarball_of "$MIRROR")" && USED="$MIRROR" \
+    || die "could not fetch the client from GitHub or the mirror — check your network / proxy."
+else
+  die "could not fetch the client from the mirror — check your network."
+fi
 
 # 3) deps — bun install resolves the per-platform @opentui/core native core for us.
 say "installing dependencies (registry: ${TRPG_REGISTRY})…"
@@ -64,11 +73,12 @@ printf 'registry=%s\n' "$TRPG_REGISTRY" > "$TRPG_HOME/clients/.npmrc"
 # 4) launcher — `loreweaver` (matches the project name). `loreweaver update` re-runs
 #    this installer to fetch + reinstall the latest client; anything else launches the TUI.
 mkdir -p "$TRPG_BIN"
+UPDATE_INSTALLER="$(installer_of "$USED")"   # re-update from whichever source actually worked
 cat > "$TRPG_BIN/loreweaver" <<EOF
 #!/usr/bin/env bash
 if [ "\$1" = "update" ]; then
   echo "updating Loreweaver…"
-  exec env ${TRPG_ORIGIN:+TRPG_ORIGIN='${TRPG_ORIGIN}'} bash -c "curl -fsSL '${INSTALLER_URL}' | bash"
+  exec env ${USED:+TRPG_ORIGIN='$USED'} bash -c "curl -fsSL '${UPDATE_INSTALLER}' | bash"
 fi
 exec bun run "$TRPG_HOME/clients/tui/src/index.tsx" "\$@"
 EOF
