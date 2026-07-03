@@ -220,8 +220,8 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
 
   return (
     <box flexDirection="column" height="100%" width="100%" backgroundColor={theme.bg}>
-      <box height={3} flexDirection="row" border borderColor={theme.border} paddingX={1}>
-        <ascii-font text="TRPG KP" font="tiny" color={theme.accent} />
+      <box height={4} flexDirection="row" border borderColor={theme.border} paddingX={1}>
+        <ascii-font text="LOREWEAVER" font="tiny" color={theme.accent} />
         <box flexDirection="row" marginLeft={2}>
           <text fg={theme.accent}>{tt(locale, "keys.title")}</text>
           <text fg={theme.dim}>
@@ -352,10 +352,12 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
               />
             </box>
 
+            {/* Primary action — mint a new invite key */}
             <box marginTop={1} onMouseDown={mint} backgroundColor={theme.accent} paddingX={1}>
               <text fg={theme.bg}>{tt(locale, "keys.mint")}</text>
             </box>
 
+            {/* Manage the selected key */}
             <box flexDirection="row" marginTop={1}>
               <box onMouseDown={loadSelected} backgroundColor={theme.border} paddingX={1}>
                 <text fg={theme.fg}>{tt(locale, "keys.load")}</text>
@@ -368,18 +370,19 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
               </box>
             </box>
 
-            <box onMouseDown={() => armOrRun("room", deleteRoom)} backgroundColor={theme.fumble} paddingX={1}>
-              <text fg={theme.bg}>{tt(locale, "keys.deleteAccess")}{confirming === "room" ? tt(locale, "keys.confirm") : ""}</text>
-            </box>
-
-            <box onMouseDown={exportRoom} backgroundColor={theme.border} paddingX={1}>
+            {/* Room backup — the two neutral room ops, grouped + gapped off the row above */}
+            <box marginTop={1} onMouseDown={exportRoom} backgroundColor={theme.border} paddingX={1}>
               <text fg={theme.fg}>{tt(locale, "keys.export")}</text>
             </box>
-
             <box onMouseDown={importRoom} backgroundColor={theme.border} paddingX={1}>
               <text fg={theme.fg}>{tt(locale, "keys.import")}</text>
             </box>
 
+            {/* Danger zone — the destructive ops grouped together and set apart by a gap,
+                not interleaved with the neutral ones; each still confirms on a second click. */}
+            <box marginTop={1} onMouseDown={() => armOrRun("room", deleteRoom)} backgroundColor={theme.fumble} paddingX={1}>
+              <text fg={theme.bg}>{tt(locale, "keys.deleteAccess")}{confirming === "room" ? tt(locale, "keys.confirm") : ""}</text>
+            </box>
             <box onMouseDown={() => armOrRun("roomData", deleteRoomData)} backgroundColor={theme.fumble} paddingX={1}>
               <text fg={theme.bg}>{tt(locale, "keys.deleteRoom")}{confirming === "roomData" ? tt(locale, "keys.confirm") : ""}</text>
             </box>

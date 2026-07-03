@@ -308,9 +308,9 @@ describe("App shell", () => {
     act(() => client.push(PLAYER_WELCOME))
 
     // Locate the row for "设置" (its screen row = its line index in the frame).
-    // ("我的角色" now navigates to the character screen as of Stage 2 — that flow
-    // is covered by screens/CharacterScreen.test.tsx — so this generic
-    // hover/click-mechanics test uses the still-stubbed "设置" item instead.)
+    // ("我的角色" navigates to the character screen — covered by
+    // screens/CharacterScreen.test.tsx — so this generic hover/click-mechanics test
+    // uses the "设置" item, which now opens the settings screen.)
     const menu = await waitForFrame((t) => t.includes("设置"))
     const rowY = menu.split("\n").findIndex((line) => line.includes("设置"))
     expect(rowY).toBeGreaterThan(0)
@@ -323,13 +323,13 @@ describe("App shell", () => {
     const hovered = await waitForFrame((t) => t.includes("⚄ 设置"))
     expect(hovered).toContain("⚄ 设置")
 
-    // Clicking the row activates it (onMouseDown) -> the stub note appears.
+    // Clicking the row activates it (onMouseDown) -> navigates to the settings screen.
     await act(async () => {
       await mockMouse.click(6, rowY)
     })
     await flush()
-    const clicked = await waitForFrame((t) => t.includes("昵称"))
-    expect(clicked).toContain("昵称")
+    const clicked = await waitForFrame((t) => t.includes("主题"))
+    expect(clicked).toContain("主题")
 
     act(() => renderer.destroy())
   })

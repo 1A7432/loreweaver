@@ -83,8 +83,8 @@ export function KeeperModule({ client, theme, themeName, welcome, stateFrame, on
 
   return (
     <box flexDirection="column" height="100%" width="100%" backgroundColor={theme.bg}>
-      <box height={3} flexDirection="row" border borderColor={theme.border} paddingX={1}>
-        <ascii-font text="TRPG KP" font="tiny" color={theme.accent} />
+      <box height={4} flexDirection="row" border borderColor={theme.border} paddingX={1}>
+        <ascii-font text="LOREWEAVER" font="tiny" color={theme.accent} />
         <box flexDirection="row" marginLeft={2}>
           <text fg={theme.accent}>{tt(locale, "module.title")}</text>
           <text fg={theme.dim}>

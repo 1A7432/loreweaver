@@ -111,7 +111,7 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
 
   return (
     <box flexDirection="column" height="100%" width="100%" backgroundColor={theme.bg}>
-      <box height={3} flexDirection="row" border borderColor={theme.border} paddingX={1}>
+      <box height={4} flexDirection="row" border borderColor={theme.border} paddingX={1}>
         <ascii-font text="LOREWEAVER" font="tiny" color={theme.accent} />
         <box flexDirection="row" marginLeft={2}>
           <text fg={theme.accent}>{tt(locale, "model.title")}</text>

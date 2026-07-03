@@ -17,6 +17,7 @@ export interface MainMenuProps {
   presence?: PresenceFrame
   onEnterGame: () => void
   onCharacter: () => void
+  onSettings: () => void
   onKeeperKeys: () => void
   onKeeperModule: () => void
   onKeeperModel: () => void
@@ -40,29 +41,19 @@ export function MainMenu({
   presence,
   onEnterGame,
   onCharacter,
+  onSettings,
   onKeeperKeys,
   onKeeperModule,
   onKeeperModel,
 }: MainMenuProps) {
   const [selected, setSelected] = useState(0)
-  const [note, setNote] = useState<string>()
   const isKeeper = welcome.you.role === "keeper"
   const locale = welcome.locale
 
   const items: MenuItem[] = [
     { label: tt(locale, "menu.enterGame"), keeper: false, run: () => onEnterGame() },
     { label: tt(locale, "menu.character"), keeper: false, run: () => onCharacter() },
-    {
-      label: tt(locale, "menu.settings"),
-      keeper: false,
-      run: () =>
-        setNote(
-          tt(locale, "menu.settingsNote", {
-            theme: themeName,
-            name: stripControlChars(welcome.you.name),
-          }),
-        ),
-    },
+    { label: tt(locale, "menu.settings"), keeper: false, run: () => onSettings() },
   ]
   if (isKeeper) {
     items.push(
@@ -129,12 +120,6 @@ export function MainMenu({
               </box>
             </Fragment>
           ))}
-
-          {note ? (
-            <box marginTop={1} border borderColor={theme.border} paddingX={1}>
-              <text fg={theme.dim}>{note}</text>
-            </box>
-          ) : null}
         </box>
 
         <box width={32} flexDirection="column">

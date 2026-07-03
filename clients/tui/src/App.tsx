@@ -11,6 +11,7 @@ import { KeeperKeys } from "./screens/KeeperKeys"
 import { KeeperModel } from "./screens/KeeperModel"
 import { KeeperModule } from "./screens/KeeperModule"
 import { MainMenu } from "./screens/MainMenu"
+import { SettingsScreen } from "./screens/SettingsScreen"
 import { defaultTuiLocale, normalizeLocale, tt, type TuiLocale } from "./i18n"
 import { DEFAULT_THEME, themeOrder, themes, type ThemeName } from "./themes"
 
@@ -36,7 +37,7 @@ export interface AppProps {
 
 // Stage 2 adds "character"; Stage 3 adds the keeper-only "keeper_keys" / "keeper_model";
 // Stage 4 adds the keeper-only "keeper_module".
-type Screen = "connect" | "menu" | "game" | "character" | "keeper_keys" | "keeper_module" | "keeper_model"
+type Screen = "connect" | "menu" | "settings" | "game" | "character" | "keeper_keys" | "keeper_module" | "keeper_model"
 
 const EMPTY_STATE: StateFrame = { type: FrameType.State, party: [], initiative: [], online: 0 }
 
@@ -133,8 +134,31 @@ export function App({ client: injected, prefill, onRememberConnect, onLocaleChan
     }
   }
 
+  // A language pick (connect screen or settings) is explicit: pin it so the server's
+  // room locale won't override it, and persist it for next launch.
+  const handleLocaleChange = (next: TuiLocale) => {
+    setLocale(next)
+    localePinned.current = true
+    onLocaleChange?.(next)
+  }
+
+  if (screen === "settings" && welcome) {
+    return (
+      <SettingsScreen
+        theme={theme}
+        themeName={themeName}
+        welcome={{ ...welcome, locale }}
+        stateFrame={stateFrame}
+        locale={locale}
+        onLocaleChange={handleLocaleChange}
+        onThemeChange={setThemeName}
+        onBack={() => setScreen("menu")}
+      />
+    )
+  }
+
   if (screen === "game" && welcome) {
-    return <GameView client={client} welcome={welcome} theme={theme} themeName={themeName} initialFrames={frames} />
+    return <GameView client={client} welcome={{ ...welcome, locale }} theme={theme} themeName={themeName} initialFrames={frames} />
   }
 
   if (screen === "character" && welcome) {
@@ -143,7 +167,7 @@ export function App({ client: injected, prefill, onRememberConnect, onLocaleChan
         client={client}
         theme={theme}
         themeName={themeName}
-        welcome={welcome}
+        welcome={{ ...welcome, locale }}
         stateFrame={stateFrame}
         onBack={() => setScreen("menu")}
       />
@@ -158,7 +182,7 @@ export function App({ client: injected, prefill, onRememberConnect, onLocaleChan
         client={client}
         theme={theme}
         themeName={themeName}
-        welcome={welcome}
+        welcome={{ ...welcome, locale }}
         stateFrame={stateFrame}
         onBack={() => setScreen("menu")}
       />
@@ -171,7 +195,7 @@ export function App({ client: injected, prefill, onRememberConnect, onLocaleChan
         client={client}
         theme={theme}
         themeName={themeName}
-        welcome={welcome}
+        welcome={{ ...welcome, locale }}
         stateFrame={stateFrame}
         onBack={() => setScreen("menu")}
       />
@@ -184,7 +208,7 @@ export function App({ client: injected, prefill, onRememberConnect, onLocaleChan
         client={client}
         theme={theme}
         themeName={themeName}
-        welcome={welcome}
+        welcome={{ ...welcome, locale }}
         stateFrame={stateFrame}
         onBack={() => setScreen("menu")}
       />
@@ -194,13 +218,14 @@ export function App({ client: injected, prefill, onRememberConnect, onLocaleChan
   if (screen === "menu" && welcome) {
     return (
       <MainMenu
-        welcome={welcome}
+        welcome={{ ...welcome, locale }}
         theme={theme}
         themeName={themeName}
         stateFrame={stateFrame}
         presence={presence}
         onEnterGame={() => setScreen("game")}
         onCharacter={() => setScreen("character")}
+        onSettings={() => setScreen("settings")}
         onKeeperKeys={() => setScreen("keeper_keys")}
         onKeeperModule={() => setScreen("keeper_module")}
         onKeeperModel={() => setScreen("keeper_model")}
@@ -215,11 +240,7 @@ export function App({ client: injected, prefill, onRememberConnect, onLocaleChan
       connecting={connecting}
       error={error}
       locale={locale}
-      onLocaleChange={(l) => {
-        setLocale(l)
-        localePinned.current = true
-        onLocaleChange?.(l)
-      }}
+      onLocaleChange={handleLocaleChange}
       onSubmit={handleConnect}
     />
   )
