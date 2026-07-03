@@ -77,6 +77,10 @@ class Keystore:
         """Look up `key`, or `None` if it isn't registered."""
         return self._entries.get(key)
 
+    def is_empty(self) -> bool:
+        """True when no keys are registered — the first-run signal for bootstrapping."""
+        return not self._entries
+
     def refresh(self) -> None:
         """Re-read the backing file, ADDING any keys not already in memory (never
         dropping in-memory entries). Lets a running server pick up keys minted after

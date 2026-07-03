@@ -34,3 +34,25 @@ def test_refresh_noop_for_pathless_keystore():
     ks = Keystore()  # in-memory (tests); no backing file
     ks.refresh()  # must not raise
     assert ks.entries() == []
+
+
+def test_is_empty_and_bootstrap_mints_one_keeper_key(tmp_path: Path):
+    """First-run bootstrap: an empty keystore auto-mints exactly one keeper key + a sidecar,
+    and is idempotent (never double-mints once a key exists)."""
+    from app import _bootstrap_keystore
+    from infra.i18n import I18n
+
+    path = tmp_path / "keys.toml"
+    ks = Keystore.load(path)
+    assert ks.is_empty()
+
+    _bootstrap_keystore(ks, I18n(), str(path))
+    assert not ks.is_empty()
+    entries = list(ks._entries.values())
+    assert len(entries) == 1 and entries[0].role == "keeper"
+    sidecar = (tmp_path / "keeper-key.txt").read_text()
+    assert entries[0].key in sidecar and "role=keeper" in sidecar
+
+    reloaded = Keystore.load(path)
+    _bootstrap_keystore(reloaded, I18n(), str(path))
+    assert len(reloaded._entries) == 1

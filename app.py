@@ -170,6 +170,25 @@ def _tui_key_add(i18n: I18n, args: argparse.Namespace) -> int:
     return 0
 
 
+def _bootstrap_keystore(keystore: Keystore, i18n: I18n, keys_path: str) -> None:
+    """First run: if the keystore has no keys, mint ONE keeper key so the operator gets admin
+    access with zero CLI, and surface it (a stderr banner + a `keeper-key.txt` sidecar next to
+    the keystore). Idempotent — a no-op once any key exists. Room via TRPG_BOOTSTRAP_ROOM."""
+    if not keystore.is_empty():
+        return
+    room = os.environ.get("TRPG_BOOTSTRAP_ROOM", "table")
+    key = keystore.add(room=room, name="keeper", role="keeper")
+    keystore.save(keys_path)
+    sidecar = Path(keys_path).with_name("keeper-key.txt")
+    try:
+        sidecar.write_text(f"room={room}\nrole=keeper\nkey={key}\n", encoding="utf-8")  # i18n-exempt: data file
+    except OSError:
+        pass
+    print(i18n.t("tui.serve.bootstrap.banner", room=room), file=sys.stderr)
+    print(i18n.t("tui.serve.bootstrap.key", key=key), file=sys.stderr)
+    print(i18n.t("tui.serve.bootstrap.hint", path=str(sidecar)), file=sys.stderr)
+
+
 def _run_serve(settings: Settings, i18n: I18n, args: argparse.Namespace) -> int:
     """`--serve [--host --port --keys FILE]`: run the networked TUI WebSocket server.
 
@@ -185,6 +204,7 @@ def _run_serve(settings: Settings, i18n: I18n, args: argparse.Namespace) -> int:
         return _run_serve_combined(settings, i18n, args)
 
     keystore = Keystore.load(args.keys)
+    _bootstrap_keystore(keystore, i18n, args.keys)
     server = build_tui_server(settings, keystore, host=args.host, port=args.port)
     seed_dice(0)
     print(i18n.t("tui.serve.listening", host=args.host, port=args.port, path=args.keys), file=sys.stderr)
@@ -219,6 +239,7 @@ _PLATFORM_REQUIRED = {
 def _run_serve_combined(settings: Settings, i18n: I18n, args: argparse.Namespace) -> int:
     services = _serve_services(settings)
     keystore = Keystore.load(args.keys)
+    _bootstrap_keystore(keystore, i18n, args.keys)
     hub = RoomHub()
     command_router = CommandRouter(services, keystore=keystore, hub=hub)
     toolset = build_kp_toolset(services)

@@ -13,6 +13,9 @@
   "tui.admin.error.op_failed": "房间备份、导入或删除操作失败，请检查路径和服务端文件权限。",
   "tui.admin.error.set_failed": "无法切换 LLM 提供方（可能缺少其 SDK 或 API 密钥）。已保留原有配置。",
   "tui.serve.listening": "已在 ws://{host}:{port}/ 提供联网 TUI 服务（密钥文件：{path}）",
+  "tui.serve.bootstrap.banner": "★ 首次启动：密钥库为空，已为房间「{room}」自动发放一个守秘人 key。",
+  "tui.serve.bootstrap.key": "  守秘人 key：{key}",
+  "tui.serve.bootstrap.hint": "  用它连入即可在客户端里管理服务器（发更多 key、导入模组）。已保存到 {path}。",
   "tui.key.added": "已为房间 '{room}' 添加一个 {role} 密钥（name={name}）：{key}",
   "tui.key.room_required": "--tui-key add 需要提供 --room ROOM"
 }
