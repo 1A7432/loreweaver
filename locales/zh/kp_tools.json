@@ -142,7 +142,7 @@
   "kp_tools.know.elements.header": "📘 模组 {element_type} 清单（共 {count} 条）：",
   "kp_tools.know.elements.not_found": "❌ 未找到 {element_type} 类型的 \"{name}\"",
   "kp_tools.know.elements.unnamed": "条目{index}",
-  "kp_tools.know.file_types.help": "📄 支持的文件类型：\n• TXT - 纯文本文件\n• PDF - PDF 文档（需要 pypdf）\n• DOCX - Microsoft Word 文档（需要 python-docx）\n\n📚 文档类型：\n• module - 📘 游戏模组、剧本内容\n• rule - 📜 游戏规则、系统说明\n• story - 📖 背景故事、剧情内容\n• background - 🌍 世界观、设定资料\n\n💡 使用方法：\n1. 直接上传文件到聊天窗口\n2. 告诉我文件类型，我会自动处理\n3. 处理完成后可以搜索和询问文档内容",
+  "kp_tools.know.file_types.help": "📄 支持的文件类型：\n• TXT/MD - 纯文本或 Markdown 文件\n• PDF - PDF 文档（需要 pypdf）\n• DOCX - Microsoft Word 文档（需要 python-docx）\n\n📚 文档类型：\n• module - 📘 游戏模组、剧本内容\n• rule - 📜 游戏规则、系统说明\n• story - 📖 背景故事、剧情内容\n• background - 🌍 世界观、设定资料\n\n💡 使用方法：\n1. 直接上传文件到聊天窗口\n2. 告诉我文件类型，我会自动处理\n3. 处理完成后可以搜索和询问文档内容",
   "kp_tools.know.init.already_processing": "⏳ 模组初始化正在进行中，请稍候...",
   "kp_tools.know.init.completed": "✅ 模组知识池初始化完成（处理了 {count} 个分片），状态：{status}",
   "kp_tools.know.init.no_document": "❌ 尚未上传模组文档，请先上传 module/story 类型文档",

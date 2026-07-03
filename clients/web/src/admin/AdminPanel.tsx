@@ -17,6 +17,9 @@ export interface AdminClient {
   adminSetModel(provider: string, chatModel?: string): void
   adminListKeys(): void
   adminMintKey(room: string, name?: string, role?: PlayerRole): void
+  adminUpdateKey(id: string, room?: string, name?: string, role?: PlayerRole): void
+  adminDeleteKey(id: string): void
+  adminDeleteRoom(room: string): void
 }
 
 export interface AdminPanelProps {

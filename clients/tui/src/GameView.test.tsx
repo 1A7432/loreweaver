@@ -282,7 +282,7 @@ describe("GameView", () => {
     // must be a calm, static hint — no spinner glyph — so it can never look like a
     // frozen/hung "spinning forever" state.
     const frame = captureCharFrame()
-    expect(frame).toContain("准备就绪")
+    expect(frame).toContain("Ready")
     expect(SPINNER_FRAMES.some((glyph) => frame.includes(glyph))).toBe(false)
 
     // Give the interval a tick's worth of real time; the hint must stay static
@@ -292,7 +292,7 @@ describe("GameView", () => {
     })
     await flush()
     const later = captureCharFrame()
-    expect(later).toContain("准备就绪")
+    expect(later).toContain("Ready")
     expect(SPINNER_FRAMES.some((glyph) => later.includes(glyph))).toBe(false)
 
     act(() => renderer.destroy())
@@ -305,7 +305,7 @@ describe("GameView", () => {
 
     // Submit flips `kpWorking` true; the server's echo hasn't round-tripped yet, so
     // `frames` is still empty here — the empty-state placeholder must switch to the
-    // animated "Keeper 构思中" spinner, not stay on the idle static hint.
+    // animated "Keeper thinking" spinner, not stay on the idle static hint.
     await act(async () => {
       await mockInput.typeText("look around")
       mockInput.pressEnter()
@@ -313,8 +313,8 @@ describe("GameView", () => {
     await flush()
 
     const working = captureCharFrame()
-    expect(working).toContain("Keeper 构思中")
-    expect(working).not.toContain("准备就绪")
+    expect(working).toContain("Keeper thinking")
+    expect(working).not.toContain("Ready")
     expect(SPINNER_FRAMES.some((glyph) => working.includes(glyph))).toBe(true)
 
     // Settle so the interval doesn't leak into a later test.
@@ -330,7 +330,7 @@ describe("GameView", () => {
     const { renderer, flush, waitForFrame, captureCharFrame, mockInput } = await renderGame(client)
     await flush()
 
-    // Submitting a turn flips kpWorking on: the trailing "构思中" spinner appears.
+    // Submitting a turn flips kpWorking on: the trailing "Keeper thinking" spinner appears.
     await act(async () => {
       await mockInput.typeText("i listen")
       mockInput.pressEnter()
@@ -339,10 +339,10 @@ describe("GameView", () => {
     expect(client.sent).toContain("i listen")
 
     // Read the committed frame synchronously (not via a polling waitForFrame): the
-    // "构思中" spinner is already active here, and a poll spanning its ~110ms tick
+    // "Keeper thinking" spinner is already active here, and a poll spanning its ~110ms tick
     // would fire an un-acted update.
     const working = captureCharFrame()
-    expect(working).toContain("构思中")
+    expect(working).toContain("Keeper thinking")
     expect(SPINNER_FRAMES.some((glyph) => working.includes(glyph))).toBe(true)
 
     // The Keeper's (non-streaming) reply lands → the working indicator clears (ending
@@ -353,7 +353,7 @@ describe("GameView", () => {
     await flush()
     const replied = await waitForFrame((t) => t.includes("floorboard groans"))
     expect(replied).toContain("floorboard groans")
-    expect(replied).not.toContain("构思中")
+    expect(replied).not.toContain("Keeper thinking")
 
     act(() => renderer.destroy())
   })
@@ -367,12 +367,12 @@ describe("GameView", () => {
       await mockInput.typeText("open the door")
       mockInput.pressEnter()
     })
-    // The "构思中" spinner stays active across the whole stream, so its flushes are
+    // The "Keeper thinking" spinner stays active across the whole stream, so its flushes are
     // wrapped in act(): a tick landing during a bare flush would be an un-acted update.
     await act(async () => {
       await flush()
     })
-    expect(captureCharFrame()).toContain("构思中")
+    expect(captureCharFrame()).toContain("Keeper thinking")
 
     // A streaming chunk that isn't `done`: the Keeper is visibly producing text, but
     // it's still in flight — the indicator must stay up.
@@ -380,14 +380,14 @@ describe("GameView", () => {
       client.push({ type: FrameType.Narrative, id: "s1", speaker: "kp", text: "The hinge ", format: "markdown", stream: true, done: false })
       await flush()
     })
-    expect(captureCharFrame()).toContain("构思中")
+    expect(captureCharFrame()).toContain("Keeper thinking")
 
     // The terminal `done` chunk clears it (ends with no active spinner).
     act(() => {
       client.push({ type: FrameType.Narrative, id: "s1", speaker: "kp", text: "shrieks.", format: "markdown", stream: true, done: true })
     })
     await flush()
-    expect(captureCharFrame()).not.toContain("构思中")
+    expect(captureCharFrame()).not.toContain("Keeper thinking")
 
     act(() => renderer.destroy())
   })
@@ -420,8 +420,8 @@ describe("GameView", () => {
       act(() => client.push(ADA_STATE))
       await flush()
 
-      const frame = await waitForFrame((t) => t.includes("队伍 / PARTY"))
-      expect(frame).toContain("队伍 / PARTY")
+      const frame = await waitForFrame((t) => t.includes("Party / PARTY"))
+      expect(frame).toContain("Party / PARTY")
       expect(frame).toContain("▸") // collapsed affordance
       expect(frame).toContain("Ada")
       expect(frame).toContain("HP")
@@ -494,7 +494,7 @@ describe("GameView", () => {
       // a captured char-frame row's string index only equals its true terminal
       // column when nothing wide (CJK glyphs, which occupy two cells but one
       // string char) precedes it on THAT SAME row — the narrative log's left
-      // column has "准备就绪 · 输入你的行动开始" on this row, so indices from a
+      // column has the ready hint on this row, so indices from a
       // differently-padded row would land off by however many wide glyphs preceded
       // them there.
       const clickX = lines[rowY].indexOf("Ada")
@@ -540,8 +540,8 @@ describe("GameView", () => {
       })
       await flush()
 
-      const frame = await waitForFrame((t) => t.includes("队伍 / PARTY"))
-      expect(frame).toContain("尚未创建角色")
+      const frame = await waitForFrame((t) => t.includes("Party / PARTY"))
+      expect(frame).toContain("No character yet")
       expect(frame).toContain("Bob")
       expect(frame).not.toContain("▸")
       expect(frame).not.toContain("▾")
@@ -667,11 +667,11 @@ describe("GameView", () => {
       })
       await flush()
 
-      const frame = await waitForFrame((t) => t.includes("队伍 / PARTY"))
-      // Regression: this used to render BOTH "尚未创建角色" AND "No roster" — a
+      const frame = await waitForFrame((t) => t.includes("Party / PARTY"))
+      // Regression: this used to render BOTH "No character yet" AND "No roster" — a
       // confusing double empty-state. Now it's a single, clearer line.
-      expect(frame).toContain("队伍空")
-      expect(frame).not.toContain("尚未创建角色")
+      expect(frame).toContain("Party empty")
+      expect(frame).not.toContain("No character yet")
       expect(frame).not.toContain("No roster")
 
       // Settle the log's empty-state spinner before teardown so its ~110ms

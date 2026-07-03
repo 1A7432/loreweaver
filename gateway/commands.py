@@ -20,6 +20,7 @@ from gateway.ops import Botlist, PrivilegeLevel
 from gateway.rooms import clear_binding, get_binding, mint_room_id, session_key_for_room, set_binding
 from infra.i18n import I18n, get_i18n
 from infra.providers import (
+    CHATGPT_SUBSCRIPTION_PROXY_PROVIDER_NAMES,
     NATIVE_PROVIDER_NAMES,
     PRESETS,
     describe_settings,
@@ -883,7 +884,7 @@ class CommandRouter:
         )
 
     def _model_list(self, ctx: CommandCtx) -> str:
-        compatible = ", ".join(sorted(PRESETS))
+        compatible = ", ".join([*sorted(PRESETS), *CHATGPT_SUBSCRIPTION_PROXY_PROVIDER_NAMES])
         native = ", ".join(NATIVE_PROVIDER_NAMES)
         return ctx.i18n.t("commands.model.list", compatible=compatible, native=native)
 

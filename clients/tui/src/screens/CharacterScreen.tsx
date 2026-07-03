@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react"
 import { useKeyboard } from "@opentui/react"
 import type { KeyEvent, SelectOption } from "@opentui/core"
-import { stripControlChars, type StateFrame, type WelcomeFrame } from "@trpg-kp/protocol"
+import { stripControlChars, type CharacterState, type StateFrame, type WelcomeFrame } from "@trpg-kp/protocol"
 import { CharacterPanel } from "../components/CharacterPanel"
 import { attributeLines } from "../components/characterAttributes"
 import { StatusBar } from "../components/StatusBar"
+import { tt } from "../i18n"
+import type { MessageKey } from "../i18n"
 import type { Palette, ThemeName } from "../themes"
 
 // Only `sendInput` is needed here: the screen's data arrives via the `stateFrame`
@@ -45,18 +47,6 @@ const ROLL_TICK_MS = 110
 const ROLL_MAX_TICKS = 48
 const LAND_FLOURISH_MS = 420
 
-const SYSTEM_OPTIONS: SelectOption[] = [
-  { name: "CoC 7 版", description: "克苏鲁的呼唤 · 7th Edition", value: "coc" },
-  { name: "D&D 5e", description: "龙与地下城 第五版", value: "dnd" },
-]
-
-const CREATE_MODE_OPTIONS: SelectOption[] = [
-  { name: "自动掷骰", description: "按规则公式生成属性", value: "roll" },
-  { name: "手动设置", description: "逐项调整特性并校验预算", value: "manual" },
-  { name: "描述生成", description: "描述人设,AI 只提议,规则校验定稿", value: "persona" },
-  { name: "导入酒馆卡", description: "导入 SillyTavern PNG/JSON", value: "import" },
-]
-
 const COC_ROLL_LABELS = ["力量", "体质", "体型", "敏捷", "外貌", "智力", "意志", "教育"]
 const DND_ROLL_LABELS = ["力量", "敏捷", "体质", "智力", "感知", "魅力"]
 
@@ -91,6 +81,24 @@ const DND_MANUAL_ATTRS: ManualAttrDef[] = [
 
 const DND_POINT_BUY_COST: Record<number, number> = { 8: 0, 9: 1, 10: 2, 11: 3, 12: 4, 13: 5, 14: 7, 15: 9 }
 const DND_POINT_BUY_BUDGET = 27
+const CREATE_MODE_VALUES: CreateMode[] = ["roll", "manual", "persona", "import"]
+const SYSTEM_VALUES: SystemValue[] = ["coc", "dnd"]
+
+function systemOptions(locale: string): SelectOption[] {
+  return [
+    { name: tt(locale, "character.system.coc"), description: tt(locale, "character.system.coc.desc"), value: "coc" },
+    { name: tt(locale, "character.system.dnd"), description: tt(locale, "character.system.dnd.desc"), value: "dnd" },
+  ]
+}
+
+function createModeOptions(locale: string): SelectOption[] {
+  return [
+    { name: tt(locale, "character.method.roll"), description: tt(locale, "character.method.roll.desc"), value: "roll" },
+    { name: tt(locale, "character.method.manual"), description: tt(locale, "character.method.manual.desc"), value: "manual" },
+    { name: tt(locale, "character.method.persona"), description: tt(locale, "character.method.persona.desc"), value: "persona" },
+    { name: tt(locale, "character.method.import"), description: tt(locale, "character.method.import.desc"), value: "import" },
+  ]
+}
 
 function createFieldOrderFor(mode: CreateMode): CreateField[] {
   if (mode === "manual") return ["method", "system", "name", "attrs"]
@@ -100,11 +108,11 @@ function createFieldOrderFor(mode: CreateMode): CreateField[] {
 }
 
 function createModeAt(index: number): CreateMode {
-  return String(CREATE_MODE_OPTIONS[index]?.value ?? "roll") as CreateMode
+  return CREATE_MODE_VALUES[index] ?? "roll"
 }
 
 function systemValueAt(index: number): SystemValue {
-  return String(SYSTEM_OPTIONS[index]?.value ?? "coc") as SystemValue
+  return SYSTEM_VALUES[index] ?? "coc"
 }
 
 function manualAttrDefs(system: SystemValue): ManualAttrDef[] {
@@ -115,20 +123,33 @@ function initialManualAttrs(defs: ManualAttrDef[], value: number): Record<string
   return Object.fromEntries(defs.map((def) => [def.key, value]))
 }
 
-function manualBudgetText(system: SystemValue, attrs: Record<string, number>): string {
-  if (system === "dnd") return `点数购买 ${dndPointBuySpent(attrs)}/${DND_POINT_BUY_BUDGET}`
-  return `兴趣点 INT×2=${(attrs.INT ?? 50) * 2} · 职业点 EDU×4=${(attrs.EDU ?? 50) * 4}`
+function attrLabel(key: string, locale: string): string {
+  return tt(locale, `attrs.${key}` as MessageKey)
 }
 
-function manualValidation(system: SystemValue, attrs: Record<string, number>): string[] {
+function manualBudgetText(system: SystemValue, attrs: Record<string, number>, locale: string): string {
+  if (system === "dnd") {
+    return tt(locale, "character.budget.dnd", { spent: dndPointBuySpent(attrs), budget: DND_POINT_BUY_BUDGET })
+  }
+  return tt(locale, "character.budget.coc", {
+    interest: (attrs.INT ?? 50) * 2,
+    occupation: (attrs.EDU ?? 50) * 4,
+  })
+}
+
+function manualValidation(system: SystemValue, attrs: Record<string, number>, locale: string): string[] {
   const messages: string[] = []
   for (const def of manualAttrDefs(system)) {
     const value = attrs[def.key] ?? def.min
-    if (value < def.min || value > def.max) messages.push(`${def.label} 超出范围 ${def.min}-${def.max}`)
+    if (value < def.min || value > def.max) {
+      messages.push(tt(locale, "character.validation.range", { label: attrLabel(def.key, locale), min: def.min, max: def.max }))
+    }
   }
   if (system === "dnd") {
     const spent = dndPointBuySpent(attrs)
-    if (spent > DND_POINT_BUY_BUDGET) messages.push(`点数购买超出预算 ${spent}/${DND_POINT_BUY_BUDGET}`)
+    if (spent > DND_POINT_BUY_BUDGET) {
+      messages.push(tt(locale, "character.validation.budget", { spent, budget: DND_POINT_BUY_BUDGET }))
+    }
   }
   return messages
 }
@@ -137,11 +158,11 @@ function dndPointBuySpent(attrs: Record<string, number>): number {
   return DND_MANUAL_ATTRS.reduce((sum, def) => sum + (DND_POINT_BUY_COST[attrs[def.key] ?? def.min] ?? 0), 0)
 }
 
-function pendingLabel(kind: CreateMode): string {
-  if (kind === "manual") return "写入中"
-  if (kind === "persona") return "构思中"
-  if (kind === "import") return "导入中"
-  return "掷骰中"
+function pendingLabel(kind: CreateMode, locale: string): string {
+  if (kind === "manual") return tt(locale, "character.pending.manual")
+  if (kind === "persona") return tt(locale, "character.pending.persona")
+  if (kind === "import") return tt(locale, "character.pending.import")
+  return tt(locale, "character.pending.roll")
 }
 
 // Identity, not reference: `net/state.py` rebuilds a brand-new `character` dict on
@@ -152,14 +173,21 @@ function characterSignature(character?: CharacterState): string {
   return character ? JSON.stringify(character) : ""
 }
 
-function rollLabelsFor(systemValue: unknown): string[] {
+function rollLabelsFor(systemValue: unknown, locale: string): string[] {
+  const labels = systemValue === "dnd" ? DND_MANUAL_ATTRS.map((def) => def.key) : COC_MANUAL_ATTRS.slice(0, 8).map((def) => def.key)
+  if (locale.startsWith("en")) return labels
   return systemValue === "dnd" ? DND_ROLL_LABELS : COC_ROLL_LABELS
 }
 
 export function CharacterScreen({ client, theme, themeName, welcome, stateFrame, onBack }: CharacterScreenProps) {
+  const locale = welcome.locale
+  const SYSTEM_OPTIONS = systemOptions(locale)
+  const CREATE_MODE_OPTIONS = createModeOptions(locale)
   const hasCharacter = Boolean(stateFrame.character)
   const [mode, setMode] = useState<Mode>(hasCharacter ? "view" : "create")
   const [selected, setSelected] = useState(0)
+  const [deleteArmed, setDeleteArmed] = useState(false)
+  const [viewNote, setViewNote] = useState<string>()
 
   // Create-flow fields (Tab-focus + ref-mirrored inputs, copied from ConnectScreen
   // so submit always reads the latest typed value regardless of render timing).
@@ -263,7 +291,7 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
     const system = systemValueAt(systemIndex)
     const defs = manualAttrDefs(system)
     const attrs = system === "dnd" ? manualDndAttrs : manualCocAttrs
-    const errors = manualValidation(system, attrs)
+    const errors = manualValidation(system, attrs, locale)
     if (errors.length) {
       setCreateNote(errors[0])
       return
@@ -279,7 +307,7 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
     // `.st 定稿` re-derives current HP/MP/SAN to their maxima for the final sheet.
     client.sendInput(`.st 定稿`)
     setPendingName(trimmed)
-    setCreateNote("已发送 → 手动角色")
+    setCreateNote(tt(locale, "character.note.manualSent"))
     beginRoll("manual")
   }
 
@@ -287,7 +315,7 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
     if (rolling) return
     const descriptionValue = descriptionRef.current.trim()
     if (!descriptionValue) {
-      setCreateNote("请先填写描述")
+      setCreateNote(tt(locale, "character.note.descriptionRequired"))
       return
     }
     const system = systemValueAt(systemIndex)
@@ -295,7 +323,7 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
     const command = trimmed ? `.genchar ${system} ${trimmed} | ${descriptionValue}` : `.genchar ${system} | ${descriptionValue}`
     client.sendInput(command)
     setPendingName(trimmed)
-    setCreateNote(`已发送 → .genchar ${system}`)
+    setCreateNote(tt(locale, "character.note.genSent", { system }))
     beginRoll("persona")
   }
 
@@ -306,7 +334,7 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
     const system = systemValueAt(systemIndex)
     const command = `.import ${path} ${system} pc`
     client.sendInput(command)
-    setCreateNote(`已发送 → ${command}`)
+    setCreateNote(tt(locale, "character.note.sent", { command }))
     setPendingName(path.split("/").filter(Boolean).pop() ?? "")
     beginRoll("import")
   }
@@ -319,7 +347,7 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
     const current = attrs[def.key] ?? def.min
     const next = current + direction * def.step
     if (next < def.min || next > def.max) {
-      setCreateNote(`${def.label} 已到范围 ${def.min}-${def.max}`)
+      setCreateNote(tt(locale, "character.note.attrAtLimit", { label: attrLabel(def.key, locale), min: def.min, max: def.max }))
       return
     }
     const setter = system === "dnd" ? setManualDndAttrs : setManualCocAttrs
@@ -331,12 +359,14 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
     const text = tweakRef.current.trim()
     if (!text) return
     client.sendInput(`.st ${text}`)
-    setTweakNote(`已发送 → .st ${text}`)
+    setTweakNote(tt(locale, "character.note.tweakSent", { text }))
     tweakRef.current = ""
     setTweakText("")
   }
 
   const enterCreate = () => {
+    setDeleteArmed(false)
+    setViewNote(undefined)
     setCreateModeIndex(0)
     setSystemIndex(0)
     setName("")
@@ -352,16 +382,31 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
   }
 
   const enterTweak = () => {
+    setDeleteArmed(false)
+    setViewNote(undefined)
     setTweakText("")
     tweakRef.current = ""
     setTweakNote(undefined)
     setMode("tweak")
   }
 
+  const deleteCurrent = () => {
+    if (!stateFrame.character) return
+    if (!deleteArmed) {
+      setDeleteArmed(true)
+      setViewNote(tt(locale, "character.note.confirmDelete"))
+      return
+    }
+    client.sendInput(".st delete")
+    setViewNote(tt(locale, "character.note.deleteSent", { name: stateFrame.character.name }))
+    setDeleteArmed(false)
+  }
+
   const viewActions: ViewAction[] = [
-    { label: "重掷 / 新建", run: enterCreate },
-    { label: "微调", run: enterTweak },
-    { label: "返回", run: onBack },
+    { label: tt(locale, "character.view.new"), run: enterCreate },
+    { label: tt(locale, "character.view.tweak"), run: enterTweak },
+    { label: deleteArmed ? tt(locale, "character.view.confirmDelete") : tt(locale, "character.view.delete"), run: deleteCurrent },
+    { label: tt(locale, "character.view.back"), run: onBack },
   ]
   const clampView = (index: number) => Math.max(0, Math.min(viewActions.length - 1, index))
   const activateView = (index: number) => {
@@ -388,7 +433,14 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
       if (key === "up") setSelected((prev) => clampView(prev - 1))
       if (key === "down") setSelected((prev) => clampView(prev + 1))
       if (key === "return" || key === "enter") activateView(selected)
-      if (key === "escape") onBack()
+      if (key === "escape") {
+        if (deleteArmed) {
+          setDeleteArmed(false)
+          setViewNote(undefined)
+        } else {
+          onBack()
+        }
+      }
       return
     }
 
@@ -433,15 +485,15 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
   const systemValue = systemValueAt(systemIndex)
   const manualDefs = manualAttrDefs(systemValue)
   const manualAttrs = systemValue === "dnd" ? manualDndAttrs : manualCocAttrs
-  const manualMessages = manualValidation(systemValue, manualAttrs)
-  const rollLabels = rollLabelsFor(systemValue)
+  const manualMessages = manualValidation(systemValue, manualAttrs, locale)
+  const rollLabels = rollLabelsFor(systemValue, locale)
 
   return (
     <box flexDirection="column" height="100%" width="100%" backgroundColor={theme.bg}>
       <box height={3} flexDirection="row" border borderColor={theme.border} paddingX={1}>
         <ascii-font text="TRPG KP" font="tiny" color={theme.accent} />
         <box flexDirection="row" marginLeft={2}>
-          <text fg={theme.accent}>我的角色</text>
+          <text fg={theme.accent}>{tt(locale, "character.title")}</text>
           <text fg={theme.dim}>
             {" · "}
             {stripControlChars(welcome.room)}
@@ -468,17 +520,17 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
                 </box>
               ))}
               <box marginTop={1}>
-                <text fg={theme.dim}>↑↓ 选择 · Enter 确认 · Esc 返回菜单</text>
+                <text fg={theme.dim}>{tt(locale, "character.view.help")}</text>
               </box>
             </>
           ) : null}
 
           {mode === "create" ? (
             <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} width={72}>
-              <text fg={theme.dim}>选择建卡方式,规则校验由服务端最终落定</text>
+              <text fg={theme.dim}>{tt(locale, "character.createIntro")}</text>
 
               <box flexDirection="column" marginTop={1} onMouseDown={() => setCreateFocus("method")}>
-                <text fg={createFocus === "method" ? theme.accent : theme.dim}>建卡方式</text>
+                <text fg={createFocus === "method" ? theme.accent : theme.dim}>{tt(locale, "character.method")}</text>
                 <select
                   flexGrow={1}
                   height={8}
@@ -502,7 +554,7 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
               </box>
 
               <box flexDirection="column" marginTop={1} onMouseDown={() => setCreateFocus("system")}>
-                <text fg={createFocus === "system" ? theme.accent : theme.dim}>规则系统</text>
+                <text fg={createFocus === "system" ? theme.accent : theme.dim}>{tt(locale, "character.system")}</text>
                 <select
                   flexGrow={1}
                   height={4}
@@ -528,12 +580,12 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
 
               {createMode !== "import" ? (
                 <box flexDirection="column" marginTop={1} onMouseDown={() => setCreateFocus("name")}>
-                  <text fg={createFocus === "name" ? theme.accent : theme.dim}>姓名（留空用默认）</text>
+                  <text fg={createFocus === "name" ? theme.accent : theme.dim}>{tt(locale, "character.name")}</text>
                   <input
                     flexGrow={1}
                     value={name}
                     focused={createFocus === "name"}
-                    placeholder={systemValue === "dnd" ? "英雄" : "调查员"}
+                    placeholder={systemValue === "dnd" ? tt(locale, "character.hero") : tt(locale, "character.investigator")}
                     onInput={(value: string) => {
                       nameRef.current = value
                       setName(value)
@@ -545,8 +597,8 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
 
               {createMode === "manual" ? (
                 <box flexDirection="column" marginTop={1} onMouseDown={() => setCreateFocus("attrs")}>
-                  <text fg={createFocus === "attrs" ? theme.accent : theme.dim}>特性 / ATTRIBUTES</text>
-                  <text fg={manualMessages.length ? theme.fumble : theme.dim}>{manualBudgetText(systemValue, manualAttrs)}</text>
+                  <text fg={createFocus === "attrs" ? theme.accent : theme.dim}>{tt(locale, "character.attrs")}</text>
+                  <text fg={manualMessages.length ? theme.fumble : theme.dim}>{manualBudgetText(systemValue, manualAttrs, locale)}</text>
                   {manualDefs.map((def, index) => {
                     const selectedAttr = createFocus === "attrs" && manualAttrIndex === index
                     const value = manualAttrs[def.key] ?? def.min
@@ -558,7 +610,7 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
                       >
                         <text fg={selectedAttr ? theme.accent : theme.fg}>
                           {selectedAttr ? `${CURSOR} ` : "  "}
-                          {def.key.padEnd(3)} {def.label.padEnd(2)} {String(value).padStart(2)}
+                          {def.key.padEnd(3)} {attrLabel(def.key, locale).padEnd(2)} {String(value).padStart(2)}
                         </text>
                         <box marginLeft={1} paddingX={1} backgroundColor={theme.border} onMouseDown={() => adjustManualAttr(def.key, -1)}>
                           <text fg={theme.fg}>-</text>
@@ -576,25 +628,25 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
                     </text>
                   ))}
                   <box marginTop={1} onMouseDown={submitManual} backgroundColor={theme.accent} paddingX={1}>
-                    <text fg={theme.bg}>⚄ 写入手动卡</text>
+                    <text fg={theme.bg}>{tt(locale, "character.manualWrite")}</text>
                   </box>
                 </box>
               ) : null}
 
               {createMode === "roll" ? (
                 <box marginTop={1} onMouseDown={submitCreate} backgroundColor={theme.accent} paddingX={1}>
-                  <text fg={theme.bg}>{rolling ? "⚄ 掷骰中…" : "⚄ 自动掷骰"}</text>
+                  <text fg={theme.bg}>{rolling ? tt(locale, "character.rolling") : tt(locale, "character.roll")}</text>
                 </box>
               ) : null}
 
               {createMode === "persona" ? (
                 <box flexDirection="column" marginTop={1} onMouseDown={() => setCreateFocus("description")}>
-                  <text fg={createFocus === "description" ? theme.accent : theme.dim}>描述（性格 / 能力 / 经历）</text>
+                  <text fg={createFocus === "description" ? theme.accent : theme.dim}>{tt(locale, "character.description")}</text>
                   <input
                     flexGrow={1}
                     value={description}
                     focused={createFocus === "description"}
-                    placeholder="冷静的医生,在雾港调查失踪案"
+                    placeholder={tt(locale, "character.descriptionPlaceholder")}
                     onInput={(value: string) => {
                       descriptionRef.current = value
                       setDescription(value)
@@ -602,19 +654,19 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
                     onSubmit={submitPersona}
                   />
                   <box marginTop={1} onMouseDown={submitPersona} backgroundColor={theme.accent} paddingX={1}>
-                    <text fg={theme.bg}>⚄ 描述生成</text>
+                    <text fg={theme.bg}>{tt(locale, "character.persona")}</text>
                   </box>
                 </box>
               ) : null}
 
               {createMode === "import" ? (
                 <box flexDirection="column" marginTop={1} onMouseDown={() => setCreateFocus("importPath")}>
-                  <text fg={createFocus === "importPath" ? theme.accent : theme.dim}>导入酒馆卡</text>
+                  <text fg={createFocus === "importPath" ? theme.accent : theme.dim}>{tt(locale, "character.import")}</text>
                   <input
                     flexGrow={1}
                     value={importPath}
                     focused={createFocus === "importPath"}
-                    placeholder="/path/to/card.png 或 .json"
+                    placeholder={tt(locale, "character.importPlaceholder")}
                     onInput={(value: string) => {
                       importPathRef.current = value
                       setImportPath(value)
@@ -623,7 +675,7 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
                   />
 
                   <box marginTop={1} onMouseDown={submitImport} backgroundColor={theme.accent} paddingX={1}>
-                    <text fg={theme.bg}>⚄ 导入</text>
+                    <text fg={theme.bg}>{tt(locale, "character.importButton")}</text>
                   </box>
                 </box>
               ) : null}
@@ -635,21 +687,25 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
               ) : null}
 
               <box marginTop={1}>
-                <text fg={theme.dim}>Tab 切换字段 · 手动特性用 ↑↓←→ · Esc {hasCharacter ? "返回查看" : "返回菜单"}</text>
+                <text fg={theme.dim}>
+                  {tt(locale, "character.createHelp", {
+                    target: hasCharacter ? tt(locale, "character.backToView") : tt(locale, "character.backToMenu"),
+                  })}
+                </text>
               </box>
             </box>
           ) : null}
 
           {mode === "tweak" ? (
             <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} width={60}>
-              <text fg={theme.dim}>格式:属性名+新值,空格连写多组,如 力量60 侦查70</text>
+              <text fg={theme.dim}>{tt(locale, "character.tweakIntro")}</text>
               <box flexDirection="column" marginTop={1}>
-                <text fg={theme.accent}>微调指令</text>
+                <text fg={theme.accent}>{tt(locale, "character.tweakCommand")}</text>
                 <input
                   flexGrow={1}
                   value={tweakText}
                   focused
-                  placeholder="力量60 侦查70"
+                  placeholder={tt(locale, "character.tweakPlaceholder")}
                   onInput={(value: string) => {
                     tweakRef.current = value
                     setTweakText(value)
@@ -658,7 +714,7 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
                 />
               </box>
               <box marginTop={1} onMouseDown={submitTweak} backgroundColor={theme.accent} paddingX={1}>
-                <text fg={theme.bg}>⚄ 应用</text>
+                <text fg={theme.bg}>{tt(locale, "character.apply")}</text>
               </box>
               {tweakNote ? (
                 <box marginTop={1}>
@@ -666,7 +722,7 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
                 </box>
               ) : null}
               <box marginTop={1}>
-                <text fg={theme.dim}>Enter 应用 · Esc 返回查看</text>
+                <text fg={theme.dim}>{tt(locale, "character.tweakHelp")}</text>
               </box>
             </box>
           ) : null}
@@ -675,7 +731,9 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
         <box width={32} flexDirection="column">
           {rolling ? (
             <box flexDirection="column" border borderColor={theme.accent} paddingX={1}>
-              <text fg={theme.accent}>CHARACTER {landed ? "· 落定" : `· ${pendingLabel(pendingKind)}`}</text>
+              <text fg={theme.accent}>
+                CHARACTER {landed ? `· ${tt(locale, "character.landed")}` : `· ${pendingLabel(pendingKind, locale)}`}
+              </text>
               {landed ? (
                 <>
                   <text fg={theme.success}>
@@ -690,7 +748,8 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
               ) : (
                 <>
                   <text fg={theme.accent}>
-                    {DICE_GLYPHS[rollTick % DICE_GLYPHS.length]} {stripControlChars(pendingName || "新的角色")}…
+                    {DICE_GLYPHS[rollTick % DICE_GLYPHS.length]}{" "}
+                    {stripControlChars(pendingName || tt(locale, "character.newCharacter"))}…
                   </text>
                   {pendingKind === "roll"
                     ? rollLabels.map((label, index) => (
@@ -707,22 +766,27 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
                         </text>
                       ))
                     : null}
-                  {pendingKind === "persona" ? <text fg={theme.dim}>AI 生成候选,规则校验后保存</text> : null}
-                  {pendingKind === "import" ? <text fg={theme.dim}>读取卡片,生成人物卡并校验</text> : null}
+                  {pendingKind === "persona" ? <text fg={theme.dim}>{tt(locale, "character.personaPending")}</text> : null}
+                  {pendingKind === "import" ? <text fg={theme.dim}>{tt(locale, "character.importPending")}</text> : null}
                 </>
               )}
             </box>
           ) : (
             <>
-              <CharacterPanel character={stateFrame.character} theme={theme} />
+              <CharacterPanel character={stateFrame.character} theme={theme} locale={locale} />
               {stateFrame.character ? (
                 <box flexDirection="column" border borderColor={theme.border} paddingX={1} marginTop={1}>
-                  <text fg={theme.accent}>属性 / ATTRIBUTES</text>
+                  <text fg={theme.accent}>{tt(locale, "character.attributesTitle")}</text>
                   {attributeLines(stateFrame.character).map(({ key, line }) => (
                     <text key={key} fg={theme.fg}>
                       {line}
                     </text>
                   ))}
+                </box>
+              ) : null}
+              {viewNote ? (
+                <box marginTop={1}>
+                  <text fg={deleteArmed ? theme.fumble : theme.dim}>{stripControlChars(viewNote)}</text>
                 </box>
               ) : null}
             </>

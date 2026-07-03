@@ -10,6 +10,9 @@ class MockAdminClient implements AdminClient {
   adminSetModel = vi.fn((_provider: string, _chatModel?: string) => {})
   adminListKeys = vi.fn(() => {})
   adminMintKey = vi.fn((_room: string, _name?: string, _role?: string) => {})
+  adminUpdateKey = vi.fn((_id: string, _room?: string, _name?: string, _role?: string) => {})
+  adminDeleteKey = vi.fn((_id: string) => {})
+  adminDeleteRoom = vi.fn((_room: string) => {})
   private listeners = new Set<(frame: ServerFrame) => void>()
 
   onMessage(cb: (frame: ServerFrame) => void): () => void {
@@ -55,7 +58,7 @@ describe("AdminPanel", () => {
     client.push(CONFIG)
     client.push({
       type: "admin_keys",
-      keys: [{ key_masked: "abcd...wxyz", room: "arkham", name: "Keeper", role: "keeper" }],
+      keys: [{ id: "k1", key_masked: "abcd...wxyz", room: "arkham", name: "Keeper", role: "keeper" }],
     })
 
     expect(await screen.findByText("gpt-4o")).toBeTruthy()
@@ -96,7 +99,7 @@ describe("AdminPanel", () => {
     // The server echoes the fresh key once, in cleartext.
     client.push({
       type: "admin_keys",
-      keys: [{ key_masked: "dddd...eeee", room: "dunwich", name: "Ada", role: "keeper" }],
+      keys: [{ id: "k2", key_masked: "dddd...eeee", room: "dunwich", name: "Ada", role: "keeper" }],
       minted: { key: "the-full-secret-key", room: "dunwich", name: "Ada", role: "keeper" },
     })
     expect(await screen.findByText("the-full-secret-key")).toBeTruthy()

@@ -88,6 +88,12 @@ def test_extract_text_by_extension_dispatches_txt():
     assert DocumentProcessor.extract_text_by_extension("notes.TXT", content) == "plain text content"
 
 
+def test_extract_text_by_extension_dispatches_markdown_as_plain_text():
+    content = "# Module\n\nPlain markdown content".encode()
+    assert DocumentProcessor.extract_text_by_extension("module.MD", content) == "# Module\n\nPlain markdown content"
+    assert DocumentProcessor.extract_text_by_extension("module.markdown", content) == "# Module\n\nPlain markdown content"
+
+
 def test_extract_text_by_extension_dispatches_pdf_to_the_guarded_pdf_path():
     with pytest.raises(ValueError) as exc_info:
         DocumentProcessor.extract_text_by_extension("scan.pdf", b"fake")

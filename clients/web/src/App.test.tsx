@@ -14,6 +14,12 @@ class MockClient implements AppClient {
   adminSetModel = vi.fn((_provider: string, _chatModel?: string) => {})
   adminListKeys = vi.fn(() => {})
   adminMintKey = vi.fn((_room: string, _name?: string, _role?: string) => {})
+  adminUpdateKey = vi.fn((_id: string, _room?: string, _name?: string, _role?: string) => {})
+  adminDeleteKey = vi.fn((_id: string) => {})
+  adminDeleteRoom = vi.fn((_room: string) => {})
+  adminExportRoom = vi.fn((_room: string, _path?: string) => {})
+  adminImportRoom = vi.fn((_path: string, _room?: string) => {})
+  adminDeleteRoomData = vi.fn((_room: string, _backup?: boolean, _path?: string) => {})
   private listeners = new Set<(frame: ServerFrame) => void>()
 
   onMessage(cb: (frame: ServerFrame) => void): () => void {

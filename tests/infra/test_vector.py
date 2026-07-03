@@ -158,6 +158,23 @@ async def test_delete_unknown_id_is_a_noop():
     assert await store.count() == 4
 
 
+async def test_dump_and_delete_by_filter_operate_on_matching_payloads():
+    store = await _seeded_store()
+
+    dumped = await store.dump(filter={"chat_key": "room1"}, limit=2)
+
+    assert [point["id"] for point in dumped] == ["p1", "p2"]
+    assert dumped[0]["vector"] == [1.0, 0.0]
+    assert dumped[0]["payload"] == {"chat_key": "room1", "document_type": "module"}
+
+    deleted = await store.delete_by_filter(filter={"chat_key": "room1"})
+
+    assert deleted == 3
+    assert await store.count() == 1
+    assert await store.count(filter={"chat_key": "room1"}) == 0
+    assert await store.count(filter={"chat_key": "room2"}) == 1
+
+
 # ---------------------------------------------------------------------------
 # scroll / count honor filter
 # ---------------------------------------------------------------------------

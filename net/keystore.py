@@ -92,6 +92,41 @@ class Keystore:
         self._entries[key] = KeyEntry(key=key, room=room, name=name, role=_normalize_role(role))
         return key
 
+    def update(self, key: str, *, room: str | None = None, name: str | None = None, role: str | None = None) -> bool:
+        """Update an existing key entry in place; return whether it existed."""
+        entry = self._entries.get(key)
+        if entry is None:
+            return False
+        if room is not None:
+            entry.room = room
+        if name is not None:
+            entry.name = name
+        if role is not None:
+            entry.role = _normalize_role(role)
+        return True
+
+    def remove(self, key: str) -> bool:
+        """Delete one key entry; return whether it existed."""
+        return self._entries.pop(key, None) is not None
+
+    def remove_room(self, room: str) -> int:
+        """Delete every key bound to `room`; return the number removed."""
+        keys = [key for key, entry in self._entries.items() if entry.room == room]
+        for key in keys:
+            self._entries.pop(key, None)
+        return len(keys)
+
+    def restore(self, key: str, *, room: str, name: str = "", role: str = _DEFAULT_ROLE) -> bool:
+        """Re-create an EXACT key entry from a backup snapshot (unlike `add`, which mints a
+        fresh random key). The role is normalized; a blank key or room is rejected. Callers
+        must themselves guard against clobbering a key that belongs to a different room."""
+        key = key.strip()
+        room = room.strip()
+        if not key or not room:
+            return False
+        self._entries[key] = KeyEntry(key=key, room=room, name=name, role=_normalize_role(role))
+        return True
+
     def entries(self) -> list[KeyEntry]:
         """Every registered entry, in insertion order."""
         return list(self._entries.values())

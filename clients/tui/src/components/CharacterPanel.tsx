@@ -1,10 +1,12 @@
 import { stripControlChars, type CharacterState } from "@trpg-kp/protocol"
+import { tt } from "../i18n"
 import type { Palette } from "../themes"
 import { attributeLines } from "./characterAttributes"
 
 export interface CharacterPanelProps {
   character?: CharacterState
   theme: Palette
+  locale?: string
 }
 
 function ratio(value: number, max: number): number {
@@ -25,12 +27,12 @@ export function statColor(value: number, max: number, full: string, low: string)
   return ratio(value, max) <= 0.35 ? low : full
 }
 
-export function CharacterPanel({ character, theme }: CharacterPanelProps) {
+export function CharacterPanel({ character, theme, locale }: CharacterPanelProps) {
   if (!character) {
     return (
       <box flexDirection="column" border borderColor={theme.border} paddingX={1} height={5}>
         <text fg={theme.accent}>CHARACTER</text>
-        <text fg={theme.dim}>No character</text>
+        <text fg={theme.dim}>{tt(locale, "character.noCharacter")}</text>
       </box>
     )
   }

@@ -79,9 +79,9 @@ All settings use the `TRPG_` env prefix with `__` for nesting (see
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `TRPG_LLM__PROVIDER` | `openai` (+ presets: `deepseek`, `groq`, `openrouter`, `together`, `ollama`, `lmstudio`, …), or native `anthropic` / `gemini` | `openai` |
+| `TRPG_LLM__PROVIDER` | `openai` (+ presets: `deepseek`, `groq`, `openrouter`, `together`, `ollama`, `lmstudio`, …), `chatgpt` / `gpt-subscription` for a compatible proxy, or native `anthropic` / `gemini` | `openai` |
 | `TRPG_LLM__API_KEY` | provider API key — **blank = offline demo Keeper** | *(empty)* |
-| `TRPG_LLM__BASE_URL` | OpenAI-compatible base URL | provider preset |
+| `TRPG_LLM__BASE_URL` | OpenAI-compatible base URL; required for `chatgpt` / `gpt-subscription` proxy aliases | provider preset |
 | `TRPG_LLM__CHAT_MODEL` | chat model id | `gpt-4o` |
 | `TRPG_LLM__EMBEDDING_MODEL` / `TRPG_LLM__EMBEDDING_DIM` | retrieval embeddings | `text-embedding-3-small` / `1536` |
 | `TRPG_LOCALE` | UI language `en` / `zh` | `en` |
@@ -100,6 +100,14 @@ Platform bots (optional): `TRPG_DISCORD__TOKEN`, `TRPG_TELEGRAM__TOKEN`,
 `--platforms discord,telegram` to the serve command (combined mode) — override
 the container command, e.g. `docker compose run ... loreweaver --serve --host
 0.0.0.0 --port 8787 --platforms discord`.
+
+ChatGPT subscriptions (Free/Go/Plus/Pro/Business/Enterprise on chatgpt.com)
+are not API credentials, and the app does not use ChatGPT browser sessions,
+cookies, or unofficial web automation as a model backend. To route through a
+subscription-backed service, expose or configure an OpenAI-compatible gateway
+your deployment controls, then set `TRPG_LLM__PROVIDER=gpt-subscription`,
+`TRPG_LLM__BASE_URL=<gateway /v1 endpoint>`, `TRPG_LLM__API_KEY=<gateway key>`,
+and `TRPG_LLM__CHAT_MODEL=<gateway model id>`.
 
 ## TLS (wss://)
 
@@ -200,6 +208,10 @@ configurable building block that does nothing until you supply a wordlist.
   a TOML file (`keys.toml`) — never commit it.
 - **Persistence** is a single SQLite file (`loreweaver.db`) holding all
   campaign state, scoped by `room`. Keep the `/data` volume to keep progress.
+- **Room backups** created from the keeper admin UI are server-side JSON
+  snapshots under `<data_dir>/room_backups/` unless a path is supplied. They
+  include raw access keys, room state, and vector data, so protect them like
+  `keys.toml`.
 - **Secrets** (`.env`, `keys.toml`, `*.db`) are git-ignored; only `*.example.*`
   are tracked. Don't bake them into the image (the `.dockerignore` excludes them).
 

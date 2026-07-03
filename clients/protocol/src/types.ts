@@ -21,8 +21,15 @@ export const FrameType = {
   AdminSetModel: "admin_set_model",
   AdminListKeys: "admin_list_keys",
   AdminMintKey: "admin_mint_key",
+  AdminUpdateKey: "admin_update_key",
+  AdminDeleteKey: "admin_delete_key",
+  AdminDeleteRoom: "admin_delete_room",
+  AdminExportRoom: "admin_export_room",
+  AdminImportRoom: "admin_import_room",
+  AdminDeleteRoomData: "admin_delete_room_data",
   AdminConfig: "admin_config",
   AdminKeys: "admin_keys",
+  AdminRoomOp: "admin_room_op",
   AdminError: "admin_error",
 } as const
 
@@ -34,7 +41,14 @@ export type NarrativeFormat = "markdown" | "plain"
 export type ErrorCode = "bad_key" | "bad_frame" | "rate_limited" | "server_error"
 export type DiceKind = "roll" | "check" | "sanity" | "opposed" | "init"
 export type SystemLevel = "info" | "warn"
-export type AdminErrorCode = "forbidden" | "unknown_provider" | "bad_request"
+export type AdminErrorCode =
+  | "forbidden"
+  | "unknown_provider"
+  | "bad_request"
+  | "set_failed"
+  | "not_found"
+  | "op_failed"
+export type AdminRoomOpAction = "export" | "import" | "delete"
 
 export interface ClientInfo {
   name: string
@@ -207,6 +221,43 @@ export interface AdminMintKeyFrame {
   role?: PlayerRole
 }
 
+export interface AdminUpdateKeyFrame {
+  type: typeof FrameType.AdminUpdateKey
+  id: string
+  room?: string
+  name?: string
+  role?: PlayerRole
+}
+
+export interface AdminDeleteKeyFrame {
+  type: typeof FrameType.AdminDeleteKey
+  id: string
+}
+
+export interface AdminDeleteRoomFrame {
+  type: typeof FrameType.AdminDeleteRoom
+  room: string
+}
+
+export interface AdminExportRoomFrame {
+  type: typeof FrameType.AdminExportRoom
+  room: string
+  path?: string
+}
+
+export interface AdminImportRoomFrame {
+  type: typeof FrameType.AdminImportRoom
+  path: string
+  room?: string
+}
+
+export interface AdminDeleteRoomDataFrame {
+  type: typeof FrameType.AdminDeleteRoomData
+  room: string
+  backup?: boolean
+  path?: string
+}
+
 export interface AdminConfigFrame {
   type: typeof FrameType.AdminConfig
   provider: string
@@ -218,6 +269,7 @@ export interface AdminConfigFrame {
 }
 
 export interface AdminKeyInfo {
+  id: string
   key_masked: string
   room: string
   name: string
@@ -239,6 +291,16 @@ export interface AdminKeysFrame {
   minted?: MintedKey
 }
 
+export interface AdminRoomOpFrame {
+  type: typeof FrameType.AdminRoomOp
+  action: AdminRoomOpAction
+  room: string
+  path?: string
+  keys: number
+  store_rows: number
+  vector_points: number
+}
+
 export interface AdminErrorFrame {
   type: typeof FrameType.AdminError
   code: AdminErrorCode
@@ -253,6 +315,12 @@ export type ClientFrame =
   | AdminSetModelFrame
   | AdminListKeysFrame
   | AdminMintKeyFrame
+  | AdminUpdateKeyFrame
+  | AdminDeleteKeyFrame
+  | AdminDeleteRoomFrame
+  | AdminExportRoomFrame
+  | AdminImportRoomFrame
+  | AdminDeleteRoomDataFrame
 
 export type ServerFrame =
   | WelcomeFrame
@@ -265,6 +333,7 @@ export type ServerFrame =
   | PongFrame
   | AdminConfigFrame
   | AdminKeysFrame
+  | AdminRoomOpFrame
   | AdminErrorFrame
 
 export type AnyFrame = ClientFrame | ServerFrame

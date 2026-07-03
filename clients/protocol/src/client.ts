@@ -1,6 +1,10 @@
 import {
   FrameType,
+  type AdminDeleteRoomDataFrame,
+  type AdminExportRoomFrame,
+  type AdminImportRoomFrame,
   type AdminMintKeyFrame,
+  type AdminUpdateKeyFrame,
   type ClientFrame,
   type PingFrame,
   type PlayerRole,
@@ -62,6 +66,8 @@ const serverFrameValidators: Record<string, (f: Record<string, unknown>) => bool
   [FrameType.Pong]: (f) => isNum(f.t),
   [FrameType.AdminConfig]: (f) => isStr(f.provider) && isStr(f.chat_model) && isArr(f.providers),
   [FrameType.AdminKeys]: (f) => isArr(f.keys),
+  [FrameType.AdminRoomOp]: (f) =>
+    isStr(f.action) && isStr(f.room) && isNum(f.keys) && isNum(f.store_rows) && isNum(f.vector_points),
   [FrameType.AdminError]: (f) => isStr(f.code),
 }
 
@@ -210,6 +216,41 @@ export class WsClient {
     this.send(frame)
   }
 
+  adminUpdateKey(id: string, room?: string, name?: string, role?: PlayerRole): void {
+    const frame: AdminUpdateKeyFrame = { type: FrameType.AdminUpdateKey, id }
+    if (room !== undefined) frame.room = room
+    if (name !== undefined) frame.name = name
+    if (role !== undefined) frame.role = role
+    this.send(frame)
+  }
+
+  adminDeleteKey(id: string): void {
+    this.send({ type: FrameType.AdminDeleteKey, id })
+  }
+
+  adminDeleteRoom(room: string): void {
+    this.send({ type: FrameType.AdminDeleteRoom, room })
+  }
+
+  adminExportRoom(room: string, path?: string): void {
+    const frame: AdminExportRoomFrame = { type: FrameType.AdminExportRoom, room }
+    if (path) frame.path = path
+    this.send(frame)
+  }
+
+  adminImportRoom(path: string, room?: string): void {
+    const frame: AdminImportRoomFrame = { type: FrameType.AdminImportRoom, path }
+    if (room) frame.room = room
+    this.send(frame)
+  }
+
+  adminDeleteRoomData(room: string, backup?: boolean, path?: string): void {
+    const frame: AdminDeleteRoomDataFrame = { type: FrameType.AdminDeleteRoomData, room }
+    if (backup !== undefined) frame.backup = backup
+    if (path) frame.path = path
+    this.send(frame)
+  }
+
   send(frame: ClientFrame): void {
     if (!this.socket || this.socket.readyState !== OPEN) {
       throw new Error("WebSocket is not open.")
@@ -279,4 +320,3 @@ export class WsClient {
     }, delay)
   }
 }
-

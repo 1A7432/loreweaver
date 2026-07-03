@@ -27,12 +27,13 @@ import ssl
 import uuid
 from collections import deque
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import websockets
 from websockets.exceptions import ConnectionClosed
 
-from agent.context import AgentCtx
+from agent.context import AgentCtx, FsAdapter, LocalFs
 from agent.kp_tools import build_kp_toolset
 from agent.loop import KPTurnResult
 from agent.services import Services
@@ -111,6 +112,7 @@ class TuiServer:
         toolset: Toolset | None = None,
         censor: Censor | None = None,
         hub: RoomHub | None = None,
+        fs: FsAdapter | None = None,
         join_timeout: float | None = None,
         max_connections: int | None = None,
     ) -> None:
@@ -119,6 +121,7 @@ class TuiServer:
         self.host = host
         self.port = port
         self.command_router = command_router or CommandRouter(services)
+        self.fs = fs if fs is not None else LocalFs(Path.cwd())
         # An injected hub lets this WS server share ONE bus with the chat gateway
         # (app.py combined mode); standalone it owns its own (back-compat). Built
         # BEFORE the toolset so the KP toolset receives it: companion_act (and any
@@ -337,8 +340,11 @@ class TuiServer:
                 return
             if is_admin_frame(kind):
                 # Keeper-gated admin surface (LLM config + room keys). The gate is the
-                # connection's keystore role; `handle_admin_frame` refuses non-keepers.
-                reply = await handle_admin_frame(self.services, self.keystore, member.role, frame, i18n)
+                # connection's keystore role; `handle_admin_frame` refuses non-keepers and
+                # scopes destructive/room-content ops to the connection's OWN room.
+                reply = await handle_admin_frame(
+                    self.services, self.keystore, member.role, member.room, frame, i18n
+                )
                 await _send(member.ws, reply)
                 return
         except Exception:
@@ -402,6 +408,7 @@ class TuiServer:
             user_id=member.id,
             platform="tui",
             locale=member.locale,
+            fs=self.fs,
             extra={"role": member.role},
         )
 

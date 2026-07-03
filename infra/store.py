@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 
@@ -83,6 +84,44 @@ class Store:
                 (user_key, store_key),
             )
             conn.commit()
+
+    async def list_rows(self, *, store_key_prefixes: Iterable[str] = ()) -> list[dict[str, str | None]]:
+        """Return KV rows whose ``store_key`` starts with any requested prefix.
+
+        With no prefixes this returns every row. This is intentionally small and
+        explicit: callers that need room-level export/delete build the prefixes
+        for that room and pass them here, rather than gaining arbitrary SQL
+        access.
+        """
+        prefixes = tuple(store_key_prefixes)
+        async with self._lock:
+            conn = self._ensure_conn()
+            if not prefixes:
+                rows = conn.execute("SELECT user_key, store_key, value FROM kv").fetchall()
+            else:
+                # Escape LIKE metacharacters so a prefix containing `%`/`_` (e.g. a room name
+                # with an underscore) matches LITERALLY, not as a wildcard — otherwise an
+                # export/delete could over-match a different, similarly-named room's rows.
+                def _esc(prefix: str) -> str:
+                    return prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+                where = " OR ".join("store_key LIKE ? ESCAPE '\\'" for _ in prefixes)
+                rows = conn.execute(
+                    f"SELECT user_key, store_key, value FROM kv WHERE {where}",  # noqa: S608 - fixed clause shape.
+                    tuple(f"{_esc(prefix)}%" for prefix in prefixes),
+                ).fetchall()
+            return [{"user_key": row[0], "store_key": row[1], "value": row[2]} for row in rows]
+
+    async def delete_rows(self, rows: Iterable[tuple[str, str]]) -> int:
+        """Delete exact ``(user_key, store_key)`` rows; return the affected count."""
+        items = list(rows)
+        if not items:
+            return 0
+        async with self._lock:
+            conn = self._ensure_conn()
+            cursor = conn.executemany("DELETE FROM kv WHERE user_key = ? AND store_key = ?", items)
+            conn.commit()
+            return cursor.rowcount if cursor.rowcount != -1 else len(items)
 
     def close(self) -> None:
         """Close the underlying connection, if one has been opened."""

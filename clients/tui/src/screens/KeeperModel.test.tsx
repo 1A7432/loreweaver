@@ -46,6 +46,12 @@ class MockClient implements AppClient {
   adminMintKey(room: string, name?: string, role?: PlayerRole): void {
     this.mintKeyCalls.push([room, name, role])
   }
+  adminUpdateKey(_id: string, _room?: string, _name?: string, _role?: PlayerRole): void {}
+  adminDeleteKey(_id: string): void {}
+  adminDeleteRoom(_room: string): void {}
+  adminExportRoom(_room: string, _path?: string): void {}
+  adminImportRoom(_path: string, _room?: string): void {}
+  adminDeleteRoomData(_room: string, _backup?: boolean, _path?: string): void {}
 
   push(frame: ServerFrame): void {
     for (const listener of this.listeners) listener(frame)

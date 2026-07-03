@@ -10,6 +10,7 @@ import {
   type WelcomeFrame,
 } from "@trpg-kp/protocol"
 import { StatusBar } from "../components/StatusBar"
+import { tt } from "../i18n"
 import type { Palette, ThemeName } from "../themes"
 
 // Narrow superset of the web AdminPanel's `AdminClient`: view + hot-swap the
@@ -35,6 +36,7 @@ type Field = "provider" | "model"
 const FIELD_ORDER: Field[] = ["provider", "model"]
 
 export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onBack }: KeeperModelProps) {
+  const locale = welcome.locale
   const [config, setConfig] = useState<AdminConfigFrame>()
   const [error, setError] = useState<string>()
 
@@ -112,7 +114,7 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
       <box height={3} flexDirection="row" border borderColor={theme.border} paddingX={1}>
         <ascii-font text="TRPG KP" font="tiny" color={theme.accent} />
         <box flexDirection="row" marginLeft={2}>
-          <text fg={theme.accent}>模型 / 配置</text>
+          <text fg={theme.accent}>{tt(locale, "model.title")}</text>
           <text fg={theme.dim}>
             {" · "}
             {stripControlChars(welcome.room)}
@@ -124,7 +126,7 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
         <box flexDirection="column" flexGrow={1} paddingX={2} paddingY={1}>
           {!isKeeper ? (
             <box marginBottom={1}>
-              <text fg={theme.fumble}>此邀请码非守秘人 — 管理操作会被服务端拒绝。</text>
+              <text fg={theme.fumble}>{tt(locale, "keeper.notKeeper")}</text>
             </box>
           ) : null}
 
@@ -135,28 +137,29 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
           ) : null}
 
           <box flexDirection="column" border borderColor={theme.border} paddingX={1}>
-            <text fg={theme.accent}>当前配置</text>
+            <text fg={theme.accent}>{tt(locale, "model.current")}</text>
             {config ? (
               <>
                 <text fg={theme.fg}>Provider · {stripControlChars(config.provider)}</text>
                 <text fg={theme.fg}>Model · {stripControlChars(config.chat_model)}</text>
                 <text fg={theme.fg}>
-                  Base URL · {config.base_url ? stripControlChars(config.base_url) : "(provider 默认)"}
+                  Base URL · {config.base_url ? stripControlChars(config.base_url) : tt(locale, "model.providerDefault")}
                 </text>
                 <text fg={theme.fg}>
-                  API Key · {config.api_key_masked ? stripControlChars(config.api_key_masked) : "(未设置)"}
+                  API Key · {config.api_key_masked ? stripControlChars(config.api_key_masked) : tt(locale, "model.notSet")}
                 </text>
                 <text fg={config.override_active ? theme.success : theme.dim}>
-                  覆盖 · {config.override_active ? "运行时生效" : "无(用环境变量)"}
+                  {tt(locale, "model.override")} ·{" "}
+                  {config.override_active ? tt(locale, "model.overrideActive") : tt(locale, "model.overrideNone")}
                 </text>
               </>
             ) : (
-              <text fg={theme.dim}>加载当前配置…</text>
+              <text fg={theme.dim}>{tt(locale, "model.loading")}</text>
             )}
           </box>
 
           <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} marginTop={1} width={60}>
-            <text fg={theme.dim}>切换 Keeper 的 LLM provider / model(热更新)</text>
+            <text fg={theme.dim}>{tt(locale, "model.intro")}</text>
 
             <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("provider")}>
               <text fg={focused === "provider" ? theme.accent : theme.dim}>Provider</text>
@@ -184,12 +187,12 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
             </box>
 
             <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("model")}>
-              <text fg={focused === "model" ? theme.accent : theme.dim}>Chat model(留空用默认)</text>
+              <text fg={focused === "model" ? theme.accent : theme.dim}>{tt(locale, "model.chatModel")}</text>
               <input
                 flexGrow={1}
                 value={chatModel}
                 focused={focused === "model"}
-                placeholder="留空用 provider 默认"
+                placeholder={tt(locale, "model.chatPlaceholder")}
                 onInput={(value: string) => {
                   chatModelRef.current = value
                   setChatModel(value)
@@ -199,11 +202,11 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
             </box>
 
             <box marginTop={1} onMouseDown={save} backgroundColor={theme.accent} paddingX={1}>
-              <text fg={theme.bg}>⚄ 保存模型</text>
+              <text fg={theme.bg}>{tt(locale, "model.save")}</text>
             </box>
 
             <box marginTop={1}>
-              <text fg={theme.dim}>Tab 切换字段 · Enter 保存 · Esc 返回菜单</text>
+              <text fg={theme.dim}>{tt(locale, "model.help")}</text>
             </box>
           </box>
         </box>

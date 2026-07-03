@@ -1,10 +1,12 @@
 import { stripControlChars, type InitiativeEntry, type PartyMember } from "@trpg-kp/protocol"
+import { tt } from "../i18n"
 import type { Palette } from "../themes"
 
 export interface PartyPanelProps {
   party: PartyMember[]
   initiative: InitiativeEntry[]
   theme: Palette
+  locale?: string
 }
 
 function initiativeValue(member: PartyMember, initiative: InitiativeEntry[]): string {
@@ -12,12 +14,12 @@ function initiativeValue(member: PartyMember, initiative: InitiativeEntry[]): st
   return typeof value === "number" ? ` ${value}` : ""
 }
 
-export function PartyPanel({ party, initiative, theme }: PartyPanelProps) {
+export function PartyPanel({ party, initiative, theme, locale }: PartyPanelProps) {
   return (
     <box flexDirection="column" border borderColor={theme.border} paddingX={1}>
-      <text fg={theme.accent}>PARTY</text>
+      <text fg={theme.accent}>{tt(locale, "party.legacyTitle")}</text>
       {party.length === 0 ? (
-        <text fg={theme.dim}>No roster</text>
+        <text fg={theme.dim}>{tt(locale, "party.noRoster")}</text>
       ) : (
         party.map((member) => (
           <text key={member.name} fg={member.online ? theme.player : theme.dim}>
@@ -35,4 +37,3 @@ export function PartyPanel({ party, initiative, theme }: PartyPanelProps) {
     </box>
   )
 }
-

@@ -77,6 +77,7 @@ class DocumentProcessor:
 
     Supported formats:
     - TXT: plain text
+    - MD/Markdown: plain text
     - PDF: requires the optional `pypdf` library
     - DOCX: requires the optional `python-docx` library
     """
@@ -138,7 +139,7 @@ class DocumentProcessor:
         """Dispatch to the right `extract_text_from_*` based on `filename`'s extension."""
         extension = filename.lower().split(".")[-1]
 
-        if extension == "txt":
+        if extension in ("txt", "md", "markdown"):
             return DocumentProcessor.extract_text_from_txt(file_content)
         elif extension == "pdf":
             return DocumentProcessor.extract_text_from_pdf(file_content)

@@ -25,6 +25,11 @@ PRESETS: dict[str, str] = {
     "vllm": "http://localhost:8000/v1",
 }
 
+# ChatGPT web subscriptions are not API credentials. These provider names are
+# only for user-operated OpenAI-compatible proxy gateways that expose a base_url.
+CHATGPT_SUBSCRIPTION_PROXY_PROVIDER_NAMES: tuple[str, ...] = ("chatgpt", "gpt-subscription")
+CHATGPT_SUBSCRIPTION_PROXY_PROVIDERS: frozenset[str] = frozenset(CHATGPT_SUBSCRIPTION_PROXY_PROVIDER_NAMES)
+
 _GEMINI_SCHEMA_ALLOWED_KEYS = {
     "type",
     "format",
@@ -60,6 +65,8 @@ def build_llm(settings: Settings) -> LLMClient:
         return AnthropicLLM(llm_settings)
     if provider in {"gemini", "google"}:
         return GeminiLLM(llm_settings)
+    if provider in CHATGPT_SUBSCRIPTION_PROXY_PROVIDERS and not llm_settings.base_url:
+        raise ValueError("chatgpt_subscription_proxy_requires_base_url")
 
     base_url = llm_settings.base_url or PRESETS.get(provider, "")
     if base_url == llm_settings.base_url:
@@ -77,7 +84,7 @@ NATIVE_PROVIDER_NAMES: tuple[str, ...] = ("anthropic", "gemini")
 def is_known_provider(name: str) -> bool:
     """True if `name` is a recognized provider key (`build_llm` can build it)."""
     provider = (name or "").lower()
-    return provider in PRESETS or provider in NATIVE_PROVIDERS
+    return provider in PRESETS or provider in CHATGPT_SUBSCRIPTION_PROXY_PROVIDERS or provider in NATIVE_PROVIDERS
 
 
 def mask_secret(value: str) -> str:

@@ -4,6 +4,7 @@ import type { KeyEvent } from "@opentui/core"
 import { FrameType, stripControlChars, type ServerFrame, type StateFrame, type WelcomeFrame } from "@trpg-kp/protocol"
 import { Spinner } from "../components/Spinner"
 import { StatusBar } from "../components/StatusBar"
+import { tt } from "../i18n"
 import type { Palette, ThemeName } from "../themes"
 
 // This screen needs only the `input` channel + `onMessage`. A `.module <path>`
@@ -36,6 +37,7 @@ export interface KeeperModuleProps {
 const MAX_LOG = 5
 
 export function KeeperModule({ client, theme, themeName, welcome, stateFrame, onBack }: KeeperModuleProps) {
+  const locale = welcome.locale
   const [path, setPath] = useState("")
   const [pending, setPending] = useState(false)
   const [log, setLog] = useState<string[]>([])
@@ -81,7 +83,7 @@ export function KeeperModule({ client, theme, themeName, welcome, stateFrame, on
       <box height={3} flexDirection="row" border borderColor={theme.border} paddingX={1}>
         <ascii-font text="TRPG KP" font="tiny" color={theme.accent} />
         <box flexDirection="row" marginLeft={2}>
-          <text fg={theme.accent}>导入模组</text>
+          <text fg={theme.accent}>{tt(locale, "module.title")}</text>
           <text fg={theme.dim}>
             {" · "}
             {stripControlChars(welcome.room)}
@@ -93,13 +95,13 @@ export function KeeperModule({ client, theme, themeName, welcome, stateFrame, on
         <box flexDirection="column" flexGrow={1} paddingX={2} paddingY={1}>
           {!isKeeper ? (
             <box marginBottom={1}>
-              <text fg={theme.fumble}>此邀请码非守秘人 — 导入模组会被服务端拒绝。</text>
+              <text fg={theme.fumble}>{tt(locale, "module.notKeeper")}</text>
             </box>
           ) : null}
 
           <box flexDirection="column" border borderColor={theme.border} paddingX={1}>
-            <text fg={theme.accent}>导入结果</text>
-            <Spinner active={pending} label="分析中…（模组分析约需 1–2 分钟）" color={theme.hard} />
+            <text fg={theme.accent}>{tt(locale, "module.result")}</text>
+            <Spinner active={pending} label={tt(locale, "module.pending")} color={theme.hard} />
             {log.length ? (
               log.map((line, index) => (
                 <text key={`sys-${index}`} fg={index === log.length - 1 ? theme.fg : theme.dim}>
@@ -107,15 +109,15 @@ export function KeeperModule({ client, theme, themeName, welcome, stateFrame, on
                 </text>
               ))
             ) : pending ? null : (
-              <text fg={theme.dim}>填服务端路径并导入,结果会显示在这里</text>
+              <text fg={theme.dim}>{tt(locale, "module.empty")}</text>
             )}
           </box>
 
           <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} marginTop={1} width={60}>
-            <text fg={theme.dim}>导入模组 = 服务端上的文件路径(自托管,无跨机上传)</text>
+            <text fg={theme.dim}>{tt(locale, "module.intro")}</text>
 
             <box flexDirection="column" marginTop={1}>
-              <text fg={theme.accent}>模组文件路径(服务端)</text>
+              <text fg={theme.accent}>{tt(locale, "module.path")}</text>
               <input
                 flexGrow={1}
                 value={path}
@@ -130,11 +132,11 @@ export function KeeperModule({ client, theme, themeName, welcome, stateFrame, on
             </box>
 
             <box marginTop={1} onMouseDown={submit} backgroundColor={theme.accent} paddingX={1}>
-              <text fg={theme.bg}>⚄ 导入模组</text>
+              <text fg={theme.bg}>{tt(locale, "module.button")}</text>
             </box>
 
             <box marginTop={1}>
-              <text fg={theme.dim}>Enter 导入 · Esc 返回菜单</text>
+              <text fg={theme.dim}>{tt(locale, "module.help")}</text>
             </box>
           </box>
         </box>

@@ -142,7 +142,7 @@
   "kp_tools.know.elements.header": "📘 Module {element_type} list ({count} total):",
   "kp_tools.know.elements.not_found": "❌ No {element_type} named \"{name}\" was found.",
   "kp_tools.know.elements.unnamed": "Entry {index}",
-  "kp_tools.know.file_types.help": "📄 Supported file types:\n• TXT - Plain text files\n• PDF - PDF documents (requires pypdf)\n• DOCX - Microsoft Word documents (requires python-docx)\n\n📚 Document types:\n• module - 📘 Game module / scenario content\n• rule - 📜 Game rules / system reference\n• story - 📖 Background story / plot content\n• background - 🌍 World-setting / lore material\n\n💡 How to use:\n1. Upload the file directly to the chat\n2. Tell me the document type and I'll process it automatically\n3. Once processed, you can search and ask questions about its content",
+  "kp_tools.know.file_types.help": "📄 Supported file types:\n• TXT/MD - Plain text or Markdown files\n• PDF - PDF documents (requires pypdf)\n• DOCX - Microsoft Word documents (requires python-docx)\n\n📚 Document types:\n• module - 📘 Game module / scenario content\n• rule - 📜 Game rules / system reference\n• story - 📖 Background story / plot content\n• background - 🌍 World-setting / lore material\n\n💡 How to use:\n1. Upload the file directly to the chat\n2. Tell me the document type and I'll process it automatically\n3. Once processed, you can search and ask questions about its content",
   "kp_tools.know.init.already_processing": "⏳ Module initialization is already in progress; please wait...",
   "kp_tools.know.init.completed": "✅ Module knowledge-pool initialization complete ({count} chunk(s) processed); status: {status}",
   "kp_tools.know.init.no_document": "❌ No module document has been uploaded yet; please upload a module/story document first.",

@@ -129,6 +129,23 @@ Client → server:
 - `admin_list_keys` — `{type:"admin_list_keys"}`
 - `admin_mint_key` — mint a room access key:
   `{type:"admin_mint_key", room:string, name?:string, role?:"player"|"keeper"}`
+- `admin_update_key` — update one key by its stable non-secret id:
+  `{type:"admin_update_key", id:string, room?:string, name?:string, role?:"player"|"keeper"}`
+- `admin_delete_key` — delete one key by id:
+  `{type:"admin_delete_key", id:string}`
+- `admin_delete_room` — delete every access key bound to a room; room data is
+  left untouched:
+  `{type:"admin_delete_room", room:string}`
+- `admin_export_room` — write a room backup JSON file on the server. If `path`
+  is omitted, the server writes under `<data_dir>/room_backups/`:
+  `{type:"admin_export_room", room:string, path?:string}`
+- `admin_import_room` — restore a server-side backup JSON. If `room` is
+  supplied, the snapshot is remapped to that room before restoring:
+  `{type:"admin_import_room", path:string, room?:string}`
+- `admin_delete_room_data` — delete a room's access keys, room-scoped KV state,
+  document vectors, and worldbook vectors. `backup` defaults to `true`; with
+  backup enabled, deletion only proceeds after the backup write succeeds:
+  `{type:"admin_delete_room_data", room:string, backup?:boolean, path?:string}`
 
 Server → client:
 
@@ -138,9 +155,11 @@ Server → client:
 - `admin_keys` — the room-key roster; every entry's key value is masked. A
   `mint` request additionally returns the freshly minted key ONCE in cleartext
   under `minted` (so the keeper can copy it):
-  `{type:"admin_keys", keys:[{key_masked:string, room:string, name:string, role:"player"|"keeper"}], minted?:{key:string, room:string, name:string, role:"player"|"keeper"}}`
+  `{type:"admin_keys", keys:[{id:string, key_masked:string, room:string, name:string, role:"player"|"keeper"}], minted?:{key:string, room:string, name:string, role:"player"|"keeper"}}`
+- `admin_room_op` — result for export/import/full-delete room operations:
+  `{type:"admin_room_op", action:"export"|"import"|"delete", room:string, path?:string, keys:number, store_rows:number, vector_points:number}`
 - `admin_error` — a localized failure notice (does not close the connection):
-  `{type:"admin_error", code:"forbidden"|"unknown_provider"|"bad_request", message?:string}`
+  `{type:"admin_error", code:"forbidden"|"unknown_provider"|"bad_request"|"set_failed"|"not_found"|"op_failed", message?:string}`
 
 `admin_set_model` validates `provider` against the known providers
 (`infra.providers.is_known_provider`), persists the override via
@@ -148,6 +167,15 @@ Server → client:
 same path as the `.model set` chat command — then replies a fresh
 `admin_config`. A key minted here is written back to the server's keys file, so
 it survives a restart.
+
+The provider catalog is additive. `chatgpt` / `gpt-subscription` are accepted as
+OpenAI-compatible proxy aliases only; they require `TRPG_LLM__BASE_URL` to point
+at a gateway controlled by the deployment. They do not represent direct
+ChatGPT web-subscription login/session access.
+
+Room backup snapshots contain the room's raw access keys as well as campaign
+state and vector points. Treat exported JSON like `keys.toml` or the SQLite
+database: it is sensitive server-side data and should not be shared publicly.
 
 ## Additive v1 NPC frames
 

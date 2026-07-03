@@ -34,6 +34,12 @@ class MockClient implements AppClient {
   adminSetModel(_provider: string, _chatModel?: string): void {}
   adminListKeys(): void {}
   adminMintKey(_room: string, _name?: string, _role?: string): void {}
+  adminUpdateKey(_id: string, _room?: string, _name?: string, _role?: string): void {}
+  adminDeleteKey(_id: string): void {}
+  adminDeleteRoom(_room: string): void {}
+  adminExportRoom(_room: string, _path?: string): void {}
+  adminImportRoom(_path: string, _room?: string): void {}
+  adminDeleteRoomData(_room: string, _backup?: boolean, _path?: string): void {}
 
   push(frame: ServerFrame): void {
     for (const listener of this.listeners) listener(frame)
@@ -451,6 +457,65 @@ describe("CharacterScreen", () => {
     expect(client.sent).toContain(".st 力量60 侦查70")
     const sent = await waitForFrame((t) => t.includes("已发送"))
     expect(sent).toContain(".st 力量60 侦查70")
+
+    act(() => renderer.destroy())
+  })
+
+  test("已有角色时删除需要两次确认并发送 .st delete", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client)
+    await flush()
+    act(() => client.push(PLAYER_WELCOME))
+    await waitForFrame((t) => t.includes("我的角色"))
+
+    act(() => {
+      client.push({
+        type: FrameType.State,
+        character: {
+          name: "漱雪",
+          system: "CoC",
+          hp: 10,
+          hpmax: 10,
+          mp: 10,
+          mpmax: 10,
+          san: 65,
+          sanmax: 99,
+          attributes: { STR: 60, CON: 50, SIZ: 65, DEX: 55, APP: 45, INT: 70, POW: 65, EDU: 80, LUC: 50 },
+          status_effects: [],
+        },
+        party: [],
+        initiative: [],
+        online: 1,
+      })
+    })
+    await flush()
+    await act(async () => {
+      mockInput.pressArrow("down")
+    })
+    await flush()
+    await act(async () => {
+      mockInput.pressEnter()
+    })
+    await flush()
+
+    await waitForFrame((t) => t.includes("删除当前角色"))
+    await act(async () => {
+      mockInput.pressArrow("down")
+      mockInput.pressArrow("down")
+    })
+    await flush()
+    await act(async () => {
+      mockInput.pressEnter()
+    })
+    await flush()
+    expect(client.sent).not.toContain(".st delete")
+    await waitForFrame((t) => t.includes("确认删除角色"))
+
+    await act(async () => {
+      mockInput.pressEnter()
+    })
+    await flush()
+    expect(client.sent).toContain(".st delete")
 
     act(() => renderer.destroy())
   })

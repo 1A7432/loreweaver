@@ -704,9 +704,24 @@ class CharacterManager:
         try:
             await self.store.delete(user_key=user_id, store_key=store_key)
             await self._update_char_list(user_id, chat_key, char_name, add=False)
+            active_key = f"active_character.{chat_key}"
+            if await self.store.get(user_key=user_id, store_key=active_key) == char_name:
+                await self.store.delete(user_key=user_id, store_key=active_key)
+            await self.remove_from_party_roster(chat_key, char_name)
             return True
         except Exception:
             return False
+
+    async def remove_from_party_roster(self, chat_key: str, char_name: str) -> None:
+        roster_key = f"party_roster.{chat_key}"
+        try:
+            roster_data = await self.store.get(user_key="", store_key=roster_key)
+            roster = json.loads(roster_data) if roster_data else {}
+            if char_name in roster:
+                roster.pop(char_name, None)
+                await self.store.set(user_key="", store_key=roster_key, value=json.dumps(roster, ensure_ascii=False))
+        except Exception:
+            pass
 
     async def get_daily_luck(self, user_id: str) -> int:
         """Deterministic per-user, per-day "luck" value in `[1, 100]`, cached in the store."""

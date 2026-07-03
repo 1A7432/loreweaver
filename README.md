@@ -51,7 +51,7 @@ Real dice, a persistent story, no browser needed. (There's a React web client to
 - **AI NPCs & AI party members** — knowledge-scoped sub-actors that play fair: each acts *only* on what it would actually know, built by construction from its own record and never the keeper's secret pool, so those actors can't metagame. Fill an empty seat with an AI companion that rolls its own dice.
 - **One shared session, cross-transport** — a RoomHub can seat terminal and web players (and, once live-tested, chat-platform players) at the *same live table*.
 - **Two command dialects, one roller** — EN Avrae/d20 (`/roll 4d6kh3`, `[[1d20+5]]`, `adv/dis`) and CN SealDice (`.ra 侦查`, `困难/极难`, `.st 力量50`).
-- **Multi-vendor LLMs** — one env var switches provider: `deepseek`, `groq`, `openrouter`, `together`, `ollama`, `lmstudio`, … (OpenAI-compatible) or native `anthropic` / `gemini`.
+- **Multi-vendor LLMs** — one env var switches provider: `deepseek`, `groq`, `openrouter`, `together`, `ollama`, `lmstudio`, … (OpenAI-compatible), `chatgpt` / `gpt-subscription` via an OpenAI-compatible proxy, or native `anthropic` / `gemini`.
 
 ## Quickstart
 ```bash

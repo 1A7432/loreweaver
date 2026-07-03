@@ -36,6 +36,12 @@ class MockClient implements AppClient {
   adminSetModel(_provider: string, _chatModel?: string): void {}
   adminListKeys(): void {}
   adminMintKey(_room: string, _name?: string, _role?: PlayerRole): void {}
+  adminUpdateKey(_id: string, _room?: string, _name?: string, _role?: string): void {}
+  adminDeleteKey(_id: string): void {}
+  adminDeleteRoom(_room: string): void {}
+  adminExportRoom(_room: string, _path?: string): void {}
+  adminImportRoom(_path: string, _room?: string): void {}
+  adminDeleteRoomData(_room: string, _backup?: boolean, _path?: string): void {}
 
   push(frame: ServerFrame): void {
     for (const listener of this.listeners) listener(frame)

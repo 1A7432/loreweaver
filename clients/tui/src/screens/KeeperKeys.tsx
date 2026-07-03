@@ -12,6 +12,7 @@ import {
   type WelcomeFrame,
 } from "@trpg-kp/protocol"
 import { StatusBar } from "../components/StatusBar"
+import { tt } from "../i18n"
 import type { Palette, ThemeName } from "../themes"
 
 // Only the admin methods + onMessage are needed here — the narrow superset of the
@@ -23,6 +24,12 @@ export interface KeeperKeysClient {
   onMessage(cb: (frame: ServerFrame) => void): () => void
   adminListKeys(): void
   adminMintKey(room: string, name?: string, role?: PlayerRole): void
+  adminUpdateKey(id: string, room?: string, name?: string, role?: PlayerRole): void
+  adminDeleteKey(id: string): void
+  adminDeleteRoom(room: string): void
+  adminExportRoom(room: string, path?: string): void
+  adminImportRoom(path: string, room?: string): void
+  adminDeleteRoomData(room: string, backup?: boolean, path?: string): void
 }
 
 export interface KeeperKeysProps {
@@ -36,30 +43,52 @@ export interface KeeperKeysProps {
   onBack: () => void
 }
 
-type Field = "room" | "name" | "role"
-const FIELD_ORDER: Field[] = ["room", "name", "role"]
-
-const ROLE_OPTIONS: SelectOption[] = [
-  { name: "玩家 · player", description: "普通调查员席位", value: "player" },
-  { name: "守秘人 · keeper", description: "可管理房间与配置", value: "keeper" },
-]
+type Field = "room" | "name" | "role" | "path"
+const FIELD_ORDER: Field[] = ["room", "name", "role", "path"]
 
 const CURSOR = "⚄"
 
+function roleOptions(locale: string): SelectOption[] {
+  return [
+    { name: tt(locale, "keys.role.player"), description: tt(locale, "keys.role.player.desc"), value: "player" },
+    { name: tt(locale, "keys.role.keeper"), description: tt(locale, "keys.role.keeper.desc"), value: "keeper" },
+  ]
+}
+
+function describeRoomOp(frame: Extract<ServerFrame, { type: typeof FrameType.AdminRoomOp }>, locale: string): string {
+  const action =
+    frame.action === "export" ? tt(locale, "keys.op.export") : frame.action === "import" ? tt(locale, "keys.op.import") : tt(locale, "keys.op.delete")
+  const path = frame.path ? ` · ${frame.path}` : ""
+  return tt(locale, "keys.op.summary", {
+    action,
+    room: frame.room,
+    keys: frame.keys,
+    rows: frame.store_rows,
+    vectors: frame.vector_points,
+    path,
+  })
+}
+
 export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBack }: KeeperKeysProps) {
+  const locale = welcome.locale
+  const ROLE_OPTIONS = roleOptions(locale)
   const [keys, setKeys] = useState<AdminKeyInfo[]>([])
   const [minted, setMinted] = useState<MintedKey>()
   const [error, setError] = useState<string>()
+  const [roomOp, setRoomOp] = useState<string>()
 
   const [room, setRoom] = useState("")
   const [name, setName] = useState("")
+  const [path, setPath] = useState("")
   const [roleIndex, setRoleIndex] = useState(0)
+  const [selectedKey, setSelectedKey] = useState(0)
   const [focused, setFocused] = useState<Field>("room")
 
   // Mirror the text fields into refs so submit always reads the latest typed value
   // regardless of render timing (same reason ConnectScreen/CharacterScreen do it).
   const roomRef = useRef(room)
   const nameRef = useRef(name)
+  const pathRef = useRef(path)
 
   const isKeeper = welcome.you.role === "keeper"
 
@@ -71,7 +100,11 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
     const off = client.onMessage((frame) => {
       if (frame.type === FrameType.AdminKeys) {
         setKeys(frame.keys)
+        setSelectedKey((current) => Math.max(0, Math.min(current, frame.keys.length - 1)))
         if (frame.minted) setMinted(frame.minted)
+        setError(undefined)
+      } else if (frame.type === FrameType.AdminRoomOp) {
+        setRoomOp(describeRoomOp(frame, locale))
         setError(undefined)
       } else if (frame.type === FrameType.AdminError) {
         setError(frame.message ?? frame.code)
@@ -85,6 +118,7 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
   // (mirror AdminPanel's silent guard); the reply is a fresh `admin_keys` that
   // repaints the list and shows the cleartext key once, so clear the inputs after.
   const mint = () => {
+    setConfirming(null)
     const roomValue = roomRef.current.trim()
     if (!roomValue) return
     const nameValue = nameRef.current.trim()
@@ -94,6 +128,74 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
     setName("")
     roomRef.current = ""
     nameRef.current = ""
+  }
+
+  const selected = keys[selectedKey]
+
+  // Destructive ops (delete invite / room access / full room) require a SECOND click to fire —
+  // a single misclick can't irreversibly wipe a room's data or keys. Arming a different
+  // destructive button, or any non-destructive action below, resets the pending confirmation.
+  const [confirming, setConfirming] = useState<"key" | "room" | "roomData" | null>(null)
+  const armOrRun = (which: "key" | "room" | "roomData", run: () => void) => {
+    if (confirming === which) {
+      setConfirming(null)
+      run()
+    } else {
+      setConfirming(which)
+    }
+  }
+
+  const loadSelected = () => {
+    setConfirming(null)
+    if (!selected) return
+    setRoom(selected.room)
+    setName(selected.name)
+    roomRef.current = selected.room
+    nameRef.current = selected.name
+    setRoleIndex(selected.role === "keeper" ? 1 : 0)
+  }
+
+  const updateSelected = () => {
+    setConfirming(null)
+    if (!selected) return
+    const roomValue = roomRef.current.trim()
+    if (!roomValue) return
+    const nameValue = nameRef.current.trim()
+    const role = String(ROLE_OPTIONS[roleIndex]?.value ?? "player") as PlayerRole
+    client.adminUpdateKey(selected.id, roomValue, nameValue, role)
+  }
+
+  const deleteSelected = () => {
+    if (!selected) return
+    client.adminDeleteKey(selected.id)
+  }
+
+  const deleteRoom = () => {
+    const roomValue = roomRef.current.trim() || selected?.room || ""
+    if (!roomValue) return
+    client.adminDeleteRoom(roomValue)
+  }
+
+  const targetRoom = () => roomRef.current.trim() || selected?.room || welcome.room
+
+  const exportRoom = () => {
+    setConfirming(null)
+    const roomValue = targetRoom().trim()
+    if (!roomValue) return
+    client.adminExportRoom(roomValue, pathRef.current.trim() || undefined)
+  }
+
+  const importRoom = () => {
+    setConfirming(null)
+    const pathValue = pathRef.current.trim()
+    if (!pathValue) return
+    client.adminImportRoom(pathValue, roomRef.current.trim() || undefined)
+  }
+
+  const deleteRoomData = () => {
+    const roomValue = targetRoom().trim()
+    if (!roomValue) return
+    client.adminDeleteRoomData(roomValue, true, pathRef.current.trim() || undefined)
   }
 
   // Scoped to this screen and further scoped by focus: Tab cycles fields, Esc goes
@@ -112,6 +214,8 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
         return FIELD_ORDER[(index + delta) % FIELD_ORDER.length]
       })
     }
+    if (keyName === "up") setSelectedKey((prev) => Math.max(0, prev - 1))
+    if (keyName === "down" && keys.length) setSelectedKey((prev) => Math.min(keys.length - 1, prev + 1))
   })
 
   return (
@@ -119,7 +223,7 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
       <box height={3} flexDirection="row" border borderColor={theme.border} paddingX={1}>
         <ascii-font text="TRPG KP" font="tiny" color={theme.accent} />
         <box flexDirection="row" marginLeft={2}>
-          <text fg={theme.accent}>房间与邀请</text>
+          <text fg={theme.accent}>{tt(locale, "keys.title")}</text>
           <text fg={theme.dim}>
             {" · "}
             {stripControlChars(welcome.room)}
@@ -131,7 +235,7 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
         <box flexDirection="column" flexGrow={1} paddingX={2} paddingY={1}>
           {!isKeeper ? (
             <box marginBottom={1}>
-              <text fg={theme.fumble}>此邀请码非守秘人 — 管理操作会被服务端拒绝。</text>
+              <text fg={theme.fumble}>{tt(locale, "keeper.notKeeper")}</text>
             </box>
           ) : null}
 
@@ -142,41 +246,53 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
           ) : null}
 
           {minted ? (
-            <box flexDirection="column" marginBottom={1} border borderColor={theme.accent} paddingX={1}>
+            <box flexDirection="column" height={5} marginBottom={1} border borderColor={theme.accent} paddingX={1}>
               <text fg={theme.accent}>
-                新邀请码 · 牌桌「{stripControlChars(minted.room)}」· {minted.role}
+                {tt(locale, "keys.minted", { room: stripControlChars(minted.room), role: minted.role })}
               </text>
               <text fg={theme.success}>
                 {CURSOR} {stripControlChars(minted.key)}
               </text>
-              <text fg={theme.fumble}>只显示一次,复制好</text>
+              <text fg={theme.fumble}>{tt(locale, "keys.copyOnce")}</text>
             </box>
           ) : null}
 
-          <box flexDirection="column" border borderColor={theme.border} paddingX={1}>
-            <text fg={theme.accent}>已有邀请码</text>
+          {roomOp ? (
+            <box marginBottom={1} border borderColor={theme.success} paddingX={1}>
+              <text fg={theme.success}>{stripControlChars(roomOp)}</text>
+            </box>
+          ) : null}
+
+          <box
+            flexDirection="column"
+            height={Math.min(Math.max(keys.length + 3, 4), 8)}
+            border
+            borderColor={theme.border}
+            paddingX={1}
+          >
+            <text fg={theme.accent}>{tt(locale, "keys.existing")}</text>
             {keys.length ? (
               keys.map((entry, index) => (
-                <text key={`${entry.key_masked}-${index}`} fg={theme.fg}>
-                  {stripControlChars(entry.key_masked)} · {stripControlChars(entry.room)} ·{" "}
+                <text key={entry.id} fg={index === selectedKey ? theme.accent : theme.fg}>
+                  {index === selectedKey ? CURSOR : " "} {stripControlChars(entry.key_masked)} · {stripControlChars(entry.room)} ·{" "}
                   {stripControlChars(entry.name || "—")} · {entry.role}
                 </text>
               ))
             ) : (
-              <text fg={theme.dim}>暂无邀请码</text>
+              <text fg={theme.dim}>{tt(locale, "keys.none")}</text>
             )}
           </box>
 
-          <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} marginTop={1} width={60}>
-            <text fg={theme.dim}>发新邀请码 = 建/入房(填房间名即建房)</text>
+          <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} marginTop={1} width={72}>
+            <text fg={theme.dim}>{tt(locale, "keys.intro")}</text>
 
             <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("room")}>
-              <text fg={focused === "room" ? theme.accent : theme.dim}>房间名</text>
+              <text fg={focused === "room" ? theme.accent : theme.dim}>{tt(locale, "keys.room")}</text>
               <input
                 flexGrow={1}
                 value={room}
                 focused={focused === "room"}
-                placeholder="shuxue"
+                placeholder={tt(locale, "keys.roomPlaceholder")}
                 onInput={(value: string) => {
                   roomRef.current = value
                   setRoom(value)
@@ -186,12 +302,12 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
             </box>
 
             <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("name")}>
-              <text fg={focused === "name" ? theme.accent : theme.dim}>备注名(可选)</text>
+              <text fg={focused === "name" ? theme.accent : theme.dim}>{tt(locale, "keys.name")}</text>
               <input
                 flexGrow={1}
                 value={name}
                 focused={focused === "name"}
-                placeholder="留空即可"
+                placeholder={tt(locale, "keys.blank")}
                 onInput={(value: string) => {
                   nameRef.current = value
                   setName(value)
@@ -201,10 +317,10 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
             </box>
 
             <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("role")}>
-              <text fg={focused === "role" ? theme.accent : theme.dim}>角色</text>
+              <text fg={focused === "role" ? theme.accent : theme.dim}>{tt(locale, "keys.role")}</text>
               <select
                 flexGrow={1}
-                height={6}
+                height={4}
                 focused={focused === "role"}
                 options={ROLE_OPTIONS}
                 selectedIndex={roleIndex}
@@ -221,12 +337,55 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
               />
             </box>
 
+            <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("path")}>
+              <text fg={focused === "path" ? theme.accent : theme.dim}>{tt(locale, "keys.backupPath")}</text>
+              <input
+                flexGrow={1}
+                value={path}
+                focused={focused === "path"}
+                placeholder={tt(locale, "keys.backupPlaceholder")}
+                onInput={(value: string) => {
+                  pathRef.current = value
+                  setPath(value)
+                }}
+                onSubmit={exportRoom}
+              />
+            </box>
+
             <box marginTop={1} onMouseDown={mint} backgroundColor={theme.accent} paddingX={1}>
-              <text fg={theme.bg}>⚄ 发邀请码</text>
+              <text fg={theme.bg}>{tt(locale, "keys.mint")}</text>
+            </box>
+
+            <box flexDirection="row" marginTop={1}>
+              <box onMouseDown={loadSelected} backgroundColor={theme.border} paddingX={1}>
+                <text fg={theme.fg}>{tt(locale, "keys.load")}</text>
+              </box>
+              <box marginLeft={1} onMouseDown={updateSelected} backgroundColor={theme.border} paddingX={1}>
+                <text fg={theme.fg}>{tt(locale, "keys.save")}</text>
+              </box>
+              <box marginLeft={1} onMouseDown={() => armOrRun("key", deleteSelected)} backgroundColor={theme.fumble} paddingX={1}>
+                <text fg={theme.bg}>{tt(locale, "keys.deleteKey")}{confirming === "key" ? tt(locale, "keys.confirm") : ""}</text>
+              </box>
+            </box>
+
+            <box onMouseDown={() => armOrRun("room", deleteRoom)} backgroundColor={theme.fumble} paddingX={1}>
+              <text fg={theme.bg}>{tt(locale, "keys.deleteAccess")}{confirming === "room" ? tt(locale, "keys.confirm") : ""}</text>
+            </box>
+
+            <box onMouseDown={exportRoom} backgroundColor={theme.border} paddingX={1}>
+              <text fg={theme.fg}>{tt(locale, "keys.export")}</text>
+            </box>
+
+            <box onMouseDown={importRoom} backgroundColor={theme.border} paddingX={1}>
+              <text fg={theme.fg}>{tt(locale, "keys.import")}</text>
+            </box>
+
+            <box onMouseDown={() => armOrRun("roomData", deleteRoomData)} backgroundColor={theme.fumble} paddingX={1}>
+              <text fg={theme.bg}>{tt(locale, "keys.deleteRoom")}{confirming === "roomData" ? tt(locale, "keys.confirm") : ""}</text>
             </box>
 
             <box marginTop={1}>
-              <text fg={theme.dim}>Tab 切换字段 · Enter 发码 · Esc 返回菜单</text>
+              <text fg={theme.dim}>{tt(locale, "keys.help")}</text>
             </box>
           </box>
         </box>

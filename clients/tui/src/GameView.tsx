@@ -6,6 +6,7 @@ import { NarrativeLog, type LogFrame } from "./components/NarrativeLog"
 import { PartyRoster } from "./components/PartyRoster"
 import { ScenePanel } from "./components/ScenePanel"
 import { StatusBar } from "./components/StatusBar"
+import { tt } from "./i18n"
 import type { Palette, ThemeName } from "./themes"
 
 // The game view needs only these three from the client. `WsClient` (and the
@@ -54,6 +55,7 @@ function hasCtrl(event: KeyEvent): boolean {
 }
 
 export function GameView({ client, welcome, theme, themeName, initialFrames }: GameViewProps) {
+  const locale = welcome.locale
   const [presence, setPresence] = useState<PresenceFrame>()
   const [stateFrame, setStateFrame] = useState<StateFrame>({ type: FrameType.State, party: [], initiative: [], online: 0 })
   const [frames, setFrames] = useState<LogFrame[]>(() => initialFrames ?? [])
@@ -187,8 +189,12 @@ export function GameView({ client, welcome, theme, themeName, initialFrames }: G
       <box height={4} flexDirection="row" border borderColor={theme.border} paddingX={1}>
         <ascii-font text="TRPG KP" font="tiny" color={theme.accent} />
         <box flexDirection="column" marginLeft={2} justifyContent="center">
-          <text fg={theme.accent}>joined {stripControlChars(welcome.room)}</text>
-          {stateFrame.online > 0 ? <text fg={theme.dim}>{stateFrame.online} online</text> : null}
+          <text fg={theme.accent}>{tt(locale, "game.joined", { room: stripControlChars(welcome.room) })}</text>
+          {stateFrame.online > 0 ? (
+            <text fg={theme.dim}>
+              {stateFrame.online} {tt(locale, "status.online")}
+            </text>
+          ) : null}
         </box>
       </box>
 
@@ -202,7 +208,14 @@ export function GameView({ client, welcome, theme, themeName, initialFrames }: G
           stickyStart="bottom"
           viewportCulling={false}
         >
-          <NarrativeLog frames={frames} theme={theme} revealTicks={revealTicks} critFlash={critFlash} kpWorking={kpWorking} />
+          <NarrativeLog
+            frames={frames}
+            theme={theme}
+            revealTicks={revealTicks}
+            critFlash={critFlash}
+            kpWorking={kpWorking}
+            locale={locale}
+          />
         </scrollbox>
 
         <box width={32} flexDirection="column">
@@ -211,10 +224,11 @@ export function GameView({ client, welcome, theme, themeName, initialFrames }: G
             party={stateFrame.party}
             initiative={stateFrame.initiative}
             theme={theme}
+            locale={locale}
             focused={rosterFocused}
             onFocus={() => setRosterFocused(true)}
           />
-          <ScenePanel scene={stateFrame.scene} clock={stateFrame.clock} theme={theme} />
+          <ScenePanel scene={stateFrame.scene} clock={stateFrame.clock} theme={theme} locale={locale} />
         </box>
       </box>
 
@@ -226,7 +240,7 @@ export function GameView({ client, welcome, theme, themeName, initialFrames }: G
           flexGrow={1}
           value={command}
           focused={!rosterFocused}
-          placeholder="say or command"
+          placeholder={tt(locale, "game.placeholder")}
           onInput={(value: string) => setCommand(value)}
           onSubmit={(value?: string) => submit(value)}
         />
@@ -235,8 +249,7 @@ export function GameView({ client, welcome, theme, themeName, initialFrames }: G
       {showHelp ? (
         <box border borderColor={theme.accent} paddingX={1} backgroundColor={theme.bg}>
           <text fg={theme.fg}>
-            F1 lamplight · F2 df16 · F3 phosphor · F4 amber · F5 paperwhite · Esc menu · PgUp/PgDn scroll · Tab
-            roster · Ctrl+L clear
+            {tt(locale, "game.help")}
           </text>
         </box>
       ) : null}

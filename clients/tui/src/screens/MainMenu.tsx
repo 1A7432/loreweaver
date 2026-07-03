@@ -6,6 +6,7 @@ import { CharacterPanel } from "../components/CharacterPanel"
 import { PartyPanel } from "../components/PartyPanel"
 import { ScenePanel } from "../components/ScenePanel"
 import { StatusBar } from "../components/StatusBar"
+import { tt } from "../i18n"
 import type { Palette, ThemeName } from "../themes"
 
 export interface MainMenuProps {
@@ -46,21 +47,28 @@ export function MainMenu({
   const [selected, setSelected] = useState(0)
   const [note, setNote] = useState<string>()
   const isKeeper = welcome.you.role === "keeper"
+  const locale = welcome.locale
 
   const items: MenuItem[] = [
-    { label: "进入游戏", keeper: false, run: () => onEnterGame() },
-    { label: "我的角色", keeper: false, run: () => onCharacter() },
+    { label: tt(locale, "menu.enterGame"), keeper: false, run: () => onEnterGame() },
+    { label: tt(locale, "menu.character"), keeper: false, run: () => onCharacter() },
     {
-      label: "设置",
+      label: tt(locale, "menu.settings"),
       keeper: false,
-      run: () => setNote(`设置 · 主题 F1–F5 切换（当前 ${themeName}）· 昵称 ${stripControlChars(welcome.you.name)}`),
+      run: () =>
+        setNote(
+          tt(locale, "menu.settingsNote", {
+            theme: themeName,
+            name: stripControlChars(welcome.you.name),
+          }),
+        ),
     },
   ]
   if (isKeeper) {
     items.push(
-      { label: "房间与邀请", keeper: true, run: () => onKeeperKeys() },
-      { label: "导入模组", keeper: true, run: () => onKeeperModule() },
-      { label: "模型 / 配置", keeper: true, run: () => onKeeperModel() },
+      { label: tt(locale, "menu.keys"), keeper: true, run: () => onKeeperKeys() },
+      { label: tt(locale, "menu.module"), keeper: true, run: () => onKeeperModule() },
+      { label: tt(locale, "menu.model"), keeper: true, run: () => onKeeperModel() },
     )
   }
 
@@ -89,10 +97,11 @@ export function MainMenu({
       <box height={3} flexDirection="row" border borderColor={theme.border} paddingX={1}>
         <ascii-font text="TRPG KP" font="tiny" color={theme.accent} />
         <box flexDirection="row" marginLeft={2}>
-          <text fg={theme.accent}>牌桌「{stripControlChars(welcome.room)}」</text>
+          <text fg={theme.accent}>{tt(locale, "menu.table", { room: stripControlChars(welcome.room) })}</text>
           <text fg={theme.dim}>
             {" · "}
-            {stripControlChars(welcome.you.name)} · {welcome.you.role === "keeper" ? "守秘人" : "调查员"}
+            {stripControlChars(welcome.you.name)} ·{" "}
+            {welcome.you.role === "keeper" ? tt(locale, "menu.role.keeper") : tt(locale, "menu.role.player")}
           </text>
         </box>
       </box>
@@ -103,7 +112,7 @@ export function MainMenu({
             <Fragment key={item.label}>
               {index === firstKeeperIndex ? (
                 <box marginTop={1}>
-                  <text fg={theme.fumble}>── 守秘人 ──</text>
+                  <text fg={theme.fumble}>{tt(locale, "menu.keeperSection")}</text>
                 </box>
               ) : null}
               <box
@@ -128,9 +137,9 @@ export function MainMenu({
         </box>
 
         <box width={32} flexDirection="column">
-          <CharacterPanel character={stateFrame.character} theme={theme} />
-          <PartyPanel party={stateFrame.party} initiative={stateFrame.initiative} theme={theme} />
-          <ScenePanel scene={stateFrame.scene} clock={stateFrame.clock} theme={theme} />
+          <CharacterPanel character={stateFrame.character} theme={theme} locale={locale} />
+          <PartyPanel party={stateFrame.party} initiative={stateFrame.initiative} theme={theme} locale={locale} />
+          <ScenePanel scene={stateFrame.scene} clock={stateFrame.clock} theme={theme} locale={locale} />
         </box>
       </box>
 

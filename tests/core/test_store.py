@@ -93,6 +93,27 @@ async def test_keys_are_scoped_by_user_key_and_store_key():
     assert await store.get(user_key="u1", store_key="other") == "c"
 
 
+async def test_list_rows_filters_by_store_key_prefix_and_delete_rows():
+    store = Store()
+    await store.set(user_key="u1", store_key="characters.room.Ada", value="ada")
+    await store.set(user_key="u2", store_key="characters.room.Ben", value="ben")
+    await store.set(user_key="", store_key="chat_history.other", value="keep")
+
+    rows = await store.list_rows(store_key_prefixes=["characters.room."])
+
+    assert rows == [
+        {"user_key": "u1", "store_key": "characters.room.Ada", "value": "ada"},
+        {"user_key": "u2", "store_key": "characters.room.Ben", "value": "ben"},
+    ]
+
+    deleted = await store.delete_rows((str(row["user_key"]), str(row["store_key"])) for row in rows)
+
+    assert deleted == 2
+    assert await store.get(user_key="u1", store_key="characters.room.Ada") is None
+    assert await store.get(user_key="u2", store_key="characters.room.Ben") is None
+    assert await store.get(user_key="", store_key="chat_history.other") == "keep"
+
+
 async def test_json_string_values_survive_round_trip():
     store = Store()
     payload = {"name": "Alice", "hp": 12, "tags": ["kp", "coc"], "nested": {"a": 1}}

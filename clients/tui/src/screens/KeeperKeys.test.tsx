@@ -15,6 +15,12 @@ class MockClient implements AppClient {
   listKeysCalls = 0
   setModelCalls: Array<[string, string | undefined]> = []
   mintKeyCalls: Array<[string, string | undefined, PlayerRole | undefined]> = []
+  updateKeyCalls: Array<[string, string | undefined, string | undefined, PlayerRole | undefined]> = []
+  deleteKeyCalls: string[] = []
+  deleteRoomCalls: string[] = []
+  exportRoomCalls: Array<[string, string | undefined]> = []
+  importRoomCalls: Array<[string, string | undefined]> = []
+  deleteRoomDataCalls: Array<[string, boolean | undefined, string | undefined]> = []
   private listeners = new Set<(frame: ServerFrame) => void>()
 
   connect(url: string): Promise<void> {
@@ -45,6 +51,24 @@ class MockClient implements AppClient {
   }
   adminMintKey(room: string, name?: string, role?: PlayerRole): void {
     this.mintKeyCalls.push([room, name, role])
+  }
+  adminUpdateKey(id: string, room?: string, name?: string, role?: PlayerRole): void {
+    this.updateKeyCalls.push([id, room, name, role])
+  }
+  adminDeleteKey(id: string): void {
+    this.deleteKeyCalls.push(id)
+  }
+  adminDeleteRoom(room: string): void {
+    this.deleteRoomCalls.push(room)
+  }
+  adminExportRoom(room: string, path?: string): void {
+    this.exportRoomCalls.push([room, path])
+  }
+  adminImportRoom(path: string, room?: string): void {
+    this.importRoomCalls.push([path, room])
+  }
+  adminDeleteRoomData(room: string, backup?: boolean, path?: string): void {
+    this.deleteRoomDataCalls.push([room, backup, path])
   }
 
   push(frame: ServerFrame): void {
@@ -106,8 +130,8 @@ describe("KeeperKeys", () => {
       client.push({
         type: FrameType.AdminKeys,
         keys: [
-          { key_masked: "LW1abcd", room: "shuxue", name: "漱雪", role: "player" },
-          { key_masked: "LW2wxyz", room: "shuxue", name: "沈墨", role: "keeper" },
+          { id: "k1", key_masked: "LW1abcd", room: "shuxue", name: "漱雪", role: "player" },
+          { id: "k2", key_masked: "LW2wxyz", room: "shuxue", name: "沈墨", role: "keeper" },
         ],
       }),
     )
@@ -201,7 +225,7 @@ describe("KeeperKeys", () => {
     act(() =>
       client.push({
         type: FrameType.AdminKeys,
-        keys: [{ key_masked: "LW1abcd", room: "shuxue", name: "新钥", role: "player" }],
+        keys: [{ id: "k1", key_masked: "LW1abcd", room: "shuxue", name: "新钥", role: "player" }],
         minted: { key: "LW-cleartext-01", room: "shuxue", name: "新钥", role: "player" },
       }),
     )
@@ -210,6 +234,150 @@ describe("KeeperKeys", () => {
     const frame = await harness.waitForFrame((t) => t.includes("LW-cleartext-01"))
     expect(frame).toContain("LW-cleartext-01")
     expect(frame).toContain("只显示一次")
+
+    act(() => harness.renderer.destroy())
+  })
+
+  test("可载入选中邀请码并执行修改、删除邀请码、删除房间访问", async () => {
+    const client = new MockClient()
+    const harness = await renderApp(client)
+    await harness.flush()
+    act(() => client.push(KEEPER_WELCOME))
+    await enterKeeperKeys(harness)
+
+    act(() =>
+      client.push({
+        type: FrameType.AdminKeys,
+        keys: [{ id: "k1", key_masked: "LW1abcd", room: "shuxue", name: "漱雪", role: "player" }],
+      }),
+    )
+    await harness.flush()
+    const frame = await harness.waitForFrame((t) => t.includes("载入选中"))
+    const lines = frame.split("\n")
+
+    const loadY = lines.findIndex((line) => line.includes("载入选中"))
+    expect(loadY).toBeGreaterThan(0)
+    await act(async () => {
+      await harness.mockMouse.click(CLICK_X, loadY)
+    })
+    await harness.flush()
+
+    const loaded = await harness.waitForFrame((t) => t.includes("保存修改"))
+    const loadedLines = loaded.split("\n")
+    const saveY = loadedLines.findIndex((line) => line.includes("保存修改"))
+    expect(saveY).toBeGreaterThan(0)
+    await act(async () => {
+      await harness.mockMouse.click(CLICK_X + 14, saveY)
+    })
+    await harness.flush()
+    expect(client.updateKeyCalls).toContainEqual(["k1", "shuxue", "漱雪", "player"])
+
+    const deleteY = loadedLines.findIndex((line) => line.includes("删除邀请码"))
+    expect(deleteY).toBeGreaterThan(0)
+    // A destructive op needs a SECOND click to confirm — one click only arms it, so a single
+    // misclick can't irreversibly delete anything.
+    await act(async () => {
+      await harness.mockMouse.click(CLICK_X + 28, deleteY)
+    })
+    await harness.flush()
+    expect(client.deleteKeyCalls).toEqual([]) // armed, not yet fired
+    await act(async () => {
+      await harness.mockMouse.click(CLICK_X + 28, deleteY)
+    })
+    await harness.flush()
+    expect(client.deleteKeyCalls).toEqual(["k1"])
+
+    const deleteRoomY = loadedLines.findIndex((line) => line.includes("删除房间访问"))
+    expect(deleteRoomY).toBeGreaterThan(0)
+    await act(async () => {
+      await harness.mockMouse.click(CLICK_X, deleteRoomY)
+    })
+    await harness.flush()
+    expect(client.deleteRoomCalls).toEqual([]) // armed, not yet fired
+    await act(async () => {
+      await harness.mockMouse.click(CLICK_X, deleteRoomY)
+    })
+    await harness.flush()
+    expect(client.deleteRoomCalls).toEqual(["shuxue"])
+
+    act(() => harness.renderer.destroy())
+  })
+
+  test("可导出、导入并完整删除房间数据,完成后显示操作摘要", async () => {
+    const client = new MockClient()
+    const harness = await renderApp(client)
+    await harness.flush()
+    act(() => client.push(KEEPER_WELCOME))
+    await enterKeeperKeys(harness)
+
+    act(() =>
+      client.push({
+        type: FrameType.AdminKeys,
+        keys: [{ id: "k1", key_masked: "LW1abcd", room: "shuxue", name: "漱雪", role: "player" }],
+      }),
+    )
+    await harness.flush()
+    await harness.waitForFrame((t) => t.includes("备份路径"))
+
+    for (let index = 0; index < 3; index += 1) {
+      await act(async () => {
+        harness.mockInput.pressTab()
+      })
+      await harness.flush()
+    }
+    await act(async () => {
+      await harness.mockInput.typeText("/tmp/shuxue.json")
+    })
+    await harness.flush()
+
+    const frame = await harness.waitForFrame((t) => t.includes("导出房间备份"))
+    const lines = frame.split("\n")
+    const exportY = lines.findIndex((line) => line.includes("导出房间备份"))
+    expect(exportY).toBeGreaterThan(0)
+    await act(async () => {
+      await harness.mockMouse.click(CLICK_X, exportY)
+    })
+    await harness.flush()
+    expect(client.exportRoomCalls).toContainEqual(["shuxue", "/tmp/shuxue.json"])
+
+    const importY = lines.findIndex((line) => line.includes("导入房间备份"))
+    expect(importY).toBeGreaterThan(0)
+    await act(async () => {
+      await harness.mockMouse.click(CLICK_X, importY)
+    })
+    await harness.flush()
+    expect(client.importRoomCalls).toContainEqual(["/tmp/shuxue.json", undefined])
+
+    const deleteY = lines.findIndex((line) => line.includes("完整删除房间"))
+    expect(deleteY).toBeGreaterThan(0)
+    // Second-click-to-confirm: one click arms, the next fires.
+    await act(async () => {
+      await harness.mockMouse.click(CLICK_X, deleteY)
+    })
+    await harness.flush()
+    expect(client.deleteRoomDataCalls).toEqual([]) // armed, not yet fired
+    await act(async () => {
+      await harness.mockMouse.click(CLICK_X, deleteY)
+    })
+    await harness.flush()
+    expect(client.deleteRoomDataCalls).toContainEqual(["shuxue", true, "/tmp/shuxue.json"])
+
+    act(() =>
+      client.push({
+        type: FrameType.AdminRoomOp,
+        action: "delete",
+        room: "shuxue",
+        path: "/tmp/shuxue.json",
+        keys: 1,
+        store_rows: 2,
+        vector_points: 3,
+      }),
+    )
+    await harness.flush()
+    const result = await harness.waitForFrame((t) => t.includes("删除完成"))
+    expect(result).toContain("邀请1")
+    expect(result).toContain("数据2")
+    expect(result).toContain("向量3")
 
     act(() => harness.renderer.destroy())
   })

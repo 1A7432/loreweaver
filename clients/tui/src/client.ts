@@ -20,6 +20,12 @@ export interface AppClient {
   adminSetModel(provider: string, chatModel?: string): void
   adminListKeys(): void
   adminMintKey(room: string, name?: string, role?: PlayerRole): void
+  adminUpdateKey(id: string, room?: string, name?: string, role?: PlayerRole): void
+  adminDeleteKey(id: string): void
+  adminDeleteRoom(room: string): void
+  adminExportRoom(room: string, path?: string): void
+  adminImportRoom(path: string, room?: string): void
+  adminDeleteRoomData(room: string, backup?: boolean, path?: string): void
 }
 
 // Bun exposes a global `WebSocket`, so `WsClient`'s default factory works with no

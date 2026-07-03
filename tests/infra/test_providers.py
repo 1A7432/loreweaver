@@ -3,6 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
 from infra.config import LLMSettings, Settings
 from infra.llm import OpenAILLM, ToolCall
 from infra.providers import (
@@ -12,6 +14,7 @@ from infra.providers import (
     build_llm,
     from_anthropic_response,
     from_gemini_response,
+    is_known_provider,
     sanitize_gemini_tool_parameters,
     to_anthropic_messages,
     to_anthropic_tools,
@@ -55,6 +58,24 @@ def test_build_llm_explicit_base_url_overrides_preset(monkeypatch):
 
     assert isinstance(llm, OpenAILLM)
     assert llm._client.init_kwargs["base_url"] == "https://example.test/v1"
+
+
+def test_build_llm_selects_chatgpt_subscription_proxy_with_explicit_base_url(monkeypatch):
+    monkeypatch.setattr("infra.llm.AsyncOpenAI", _FakeAsyncOpenAI)
+
+    llm = build_llm(_settings("gpt-subscription", base_url="https://proxy.example/v1"))
+
+    assert is_known_provider("gpt-subscription")
+    assert is_known_provider("chatgpt")
+    assert isinstance(llm, OpenAILLM)
+    assert llm._client.init_kwargs["base_url"] == "https://proxy.example/v1"
+
+
+def test_build_llm_rejects_chatgpt_subscription_proxy_without_base_url(monkeypatch):
+    monkeypatch.setattr("infra.llm.AsyncOpenAI", _FakeAsyncOpenAI)
+
+    with pytest.raises(ValueError, match="chatgpt_subscription_proxy_requires_base_url"):
+        build_llm(_settings("gpt-subscription"))
 
 
 def test_build_llm_selects_anthropic(monkeypatch):

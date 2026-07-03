@@ -2,6 +2,7 @@
 import { createCliRenderer } from "@opentui/core"
 import { createRoot } from "@opentui/react"
 import App, { type AppPrefill } from "./App"
+import { loadConnectMemory, saveConnectMemory } from "./connectMemory"
 
 interface Args {
   command?: string
@@ -46,11 +47,23 @@ if (args.command === "help" || args.command === "--help" || args.command === "-h
   process.exit(0)
 }
 
-const prefill: AppPrefill = { host: args.host, key: args.key, name: args.name }
+const remembered = await loadConnectMemory()
+const prefill: AppPrefill = {
+  host: args.host ?? remembered.host,
+  key: args.key ?? remembered.key,
+  name: args.name ?? remembered.name,
+}
 
 const renderer = await createCliRenderer()
 // Set a clean terminal window title. Without this the shell leaves the title as the
 // full launch command — which overflows the title bar and, worse, exposes the invite
 // key in it. OSC 2 (window title) + BEL terminator.
 process.stdout.write("\x1b]2;TRPG KP\x07")
-createRoot(renderer).render(<App prefill={prefill} />)
+createRoot(renderer).render(
+  <App
+    prefill={prefill}
+    onRememberConnect={(memory) => {
+      void saveConnectMemory(memory)
+    }}
+  />,
+)

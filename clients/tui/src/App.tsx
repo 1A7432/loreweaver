@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useKeyboard } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
 import { FrameType, type PresenceFrame, type ServerFrame, type StateFrame, type WelcomeFrame } from "@trpg-kp/protocol"
@@ -11,6 +11,7 @@ import { KeeperKeys } from "./screens/KeeperKeys"
 import { KeeperModel } from "./screens/KeeperModel"
 import { KeeperModule } from "./screens/KeeperModule"
 import { MainMenu } from "./screens/MainMenu"
+import { defaultTuiLocale, normalizeLocale, tt, type TuiLocale } from "./i18n"
 import { DEFAULT_THEME, themeOrder, themes, type ThemeName } from "./themes"
 
 export type { AppClient } from "./client"
@@ -27,6 +28,7 @@ export interface AppProps {
   // Injected in tests; defaults to a real WsClient (Bun's global WebSocket).
   client?: AppClient
   prefill?: AppPrefill
+  onRememberConnect?: (memory: Required<AppPrefill>) => void
 }
 
 // Stage 2 adds "character"; Stage 3 adds the keeper-only "keeper_keys" / "keeper_model";
@@ -38,11 +40,13 @@ const EMPTY_STATE: StateFrame = { type: FrameType.State, party: [], initiative: 
 // F1..F5 select a theme by its position in themeOrder (five themes now).
 const themeKeyIndex: Record<string, number> = { f1: 0, f2: 1, f3: 2, f4: 3, f5: 4 }
 
-export function App({ client: injected, prefill }: AppProps) {
+export function App({ client: injected, prefill, onRememberConnect }: AppProps) {
   const client = useMemo(() => injected ?? createClient(), [injected])
+  const pendingConnect = useRef<Required<AppPrefill> | undefined>(undefined)
 
   const [themeName, setThemeName] = useState<ThemeName>(DEFAULT_THEME)
   const theme = themes[themeName]
+  const [locale, setLocale] = useState<TuiLocale>(() => defaultTuiLocale())
   const [screen, setScreen] = useState<Screen>("connect")
   const [welcome, setWelcome] = useState<WelcomeFrame>()
   const [connecting, setConnecting] = useState(false)
@@ -69,7 +73,9 @@ export function App({ client: injected, prefill }: AppProps) {
   useEffect(() => {
     return client.onMessage((frame: ServerFrame) => {
       if (frame.type === FrameType.Welcome) {
+        if (pendingConnect.current) onRememberConnect?.(pendingConnect.current)
         setWelcome(frame)
+        setLocale(normalizeLocale(frame.locale))
         setConnecting(false)
         setError(undefined)
         setScreen((prev) => (prev === "connect" ? "menu" : prev))
@@ -95,24 +101,27 @@ export function App({ client: injected, prefill }: AppProps) {
         // surface it, stay put, and stop the auto-reconnect/re-join loop so it
         // can't spam the same rejection. A fresh submit reconnects cleanly.
         setConnecting(false)
+        pendingConnect.current = undefined
         setError(frame.message)
         client.close?.()
         setScreen((prev) => (prev === "connect" ? "connect" : prev))
       }
     })
-  }, [client])
+  }, [client, onRememberConnect])
 
   const handleConnect = async (url: string, key: string, name: string) => {
     if (!key) {
-      setError("需要邀请码")
+      setError(tt(locale, "app.error.keyRequired"))
       return
     }
     setError(undefined)
     setConnecting(true)
+    pendingConnect.current = { host: url, key, name: name || tt(locale, "connect.defaultName") }
     try {
       await client.connect(url)
       client.join(key, name || undefined)
     } catch (err) {
+      pendingConnect.current = undefined
       setConnecting(false)
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -199,6 +208,7 @@ export function App({ client: injected, prefill }: AppProps) {
       defaults={{ host: prefill?.host, key: prefill?.key, name: prefill?.name }}
       connecting={connecting}
       error={error}
+      locale={locale}
       onSubmit={handleConnect}
     />
   )

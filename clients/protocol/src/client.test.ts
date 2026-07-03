@@ -162,6 +162,12 @@ describe("WsClient", () => {
     client.adminSetModel("openai")
     client.adminListKeys()
     client.adminMintKey("arkham", "Ada", "keeper")
+    client.adminUpdateKey("kid-1", "dunwich", "Beth", "player")
+    client.adminDeleteKey("kid-1")
+    client.adminDeleteRoom("dunwich")
+    client.adminExportRoom("dunwich", "/tmp/dunwich.json")
+    client.adminImportRoom("/tmp/dunwich.json", "dunwich-restored")
+    client.adminDeleteRoomData("dunwich", true, "/tmp/dunwich-delete.json")
 
     expect(sockets[0].sent.map((raw) => JSON.parse(raw))).toEqual([
       { type: FrameType.AdminGetConfig },
@@ -169,14 +175,21 @@ describe("WsClient", () => {
       { type: FrameType.AdminSetModel, provider: "openai" },
       { type: FrameType.AdminListKeys },
       { type: FrameType.AdminMintKey, room: "arkham", name: "Ada", role: "keeper" },
+      { type: FrameType.AdminUpdateKey, id: "kid-1", room: "dunwich", name: "Beth", role: "player" },
+      { type: FrameType.AdminDeleteKey, id: "kid-1" },
+      { type: FrameType.AdminDeleteRoom, room: "dunwich" },
+      { type: FrameType.AdminExportRoom, room: "dunwich", path: "/tmp/dunwich.json" },
+      { type: FrameType.AdminImportRoom, path: "/tmp/dunwich.json", room: "dunwich-restored" },
+      { type: FrameType.AdminDeleteRoomData, room: "dunwich", backup: true, path: "/tmp/dunwich-delete.json" },
     ])
   })
 
-  test("incoming admin_config / admin_keys / admin_error frames are dispatched", async () => {
+  test("incoming admin_config / admin_keys / admin_room_op / admin_error frames are dispatched", async () => {
     const { client, sockets } = createClient()
     const seen: string[] = []
     client.on(FrameType.AdminConfig, () => seen.push(FrameType.AdminConfig))
     client.on(FrameType.AdminKeys, () => seen.push(FrameType.AdminKeys))
+    client.on(FrameType.AdminRoomOp, () => seen.push(FrameType.AdminRoomOp))
     client.on(FrameType.AdminError, () => seen.push(FrameType.AdminError))
 
     await client.connect("ws://example.test")
@@ -190,9 +203,17 @@ describe("WsClient", () => {
       override_active: false,
     })
     sockets[0].serverSend({ type: FrameType.AdminKeys, keys: [] })
+    sockets[0].serverSend({
+      type: FrameType.AdminRoomOp,
+      action: "export",
+      room: "arkham",
+      path: "/tmp/arkham.json",
+      keys: 1,
+      store_rows: 2,
+      vector_points: 3,
+    })
     sockets[0].serverSend({ type: FrameType.AdminError, code: "forbidden" })
 
-    expect(seen).toEqual([FrameType.AdminConfig, FrameType.AdminKeys, FrameType.AdminError])
+    expect(seen).toEqual([FrameType.AdminConfig, FrameType.AdminKeys, FrameType.AdminRoomOp, FrameType.AdminError])
   })
 })
-

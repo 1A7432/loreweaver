@@ -184,6 +184,7 @@ async def test_list_switch_and_delete_characters():
 
     listed_after = await char_tools.list_characters(ctx)
     assert "Bob" not in listed_after
+    assert all(member.get("name") != "Bob" for member in await services.characters.get_party_roster(ctx.chat_key))
     assert "Alice" in listed_after
 
 

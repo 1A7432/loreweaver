@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
 import { FrameType, type ServerFrame, type WelcomeFrame } from "@trpg-kp/protocol"
-import App, { type AppClient } from "./App"
+import App, { type AppClient, type AppPrefill } from "./App"
 
 // A mock implementing the full AppClient surface: connect/join are recorded so
 // the connect flow can be asserted; push() delivers server frames like the wire.
@@ -34,6 +34,12 @@ class MockClient implements AppClient {
   adminSetModel(_provider: string, _chatModel?: string): void {}
   adminListKeys(): void {}
   adminMintKey(_room: string, _name?: string, _role?: string): void {}
+  adminUpdateKey(_id: string, _room?: string, _name?: string, _role?: string): void {}
+  adminDeleteKey(_id: string): void {}
+  adminDeleteRoom(_room: string): void {}
+  adminExportRoom(_room: string, _path?: string): void {}
+  adminImportRoom(_path: string, _room?: string): void {}
+  adminDeleteRoomData(_room: string, _backup?: boolean, _path?: string): void {}
 
   push(frame: ServerFrame): void {
     for (const listener of this.listeners) listener(frame)
@@ -58,8 +64,11 @@ const KEEPER_WELCOME: WelcomeFrame = {
   server: "mock",
 }
 
-function renderApp(client: MockClient) {
-  return testRender(<App client={client} prefill={{}} />, { width: 110, height: 34 })
+function renderApp(client: MockClient, options: { prefill?: AppPrefill; onRememberConnect?: (memory: Required<AppPrefill>) => void } = {}) {
+  return testRender(<App client={client} prefill={options.prefill ?? {}} onRememberConnect={options.onRememberConnect} />, {
+    width: 110,
+    height: 34,
+  })
 }
 
 describe("App shell", () => {
@@ -104,6 +113,69 @@ describe("App shell", () => {
     expect(client.connectCalls[0]).toBe("ws://127.0.0.1:8787")
     await waitFor(() => client.joinCalls.length > 0)
     expect(client.joinCalls[0]).toEqual(["sekret", "调查员"])
+
+    act(() => renderer.destroy())
+  })
+
+  test("remembers the last successful host, key, and name after welcome", async () => {
+    const client = new MockClient()
+    const remembered: Array<Required<AppPrefill>> = []
+    const { renderer, flush, waitFor, waitForFrame, mockInput } = await renderApp(client, {
+      prefill: { host: "ws://table.example:8787", name: "" },
+      onRememberConnect: (memory) => remembered.push(memory),
+    })
+    await flush()
+    await waitForFrame((t) => t.includes("邀请码"))
+
+    await act(async () => {
+      mockInput.pressTab()
+    })
+    await flush()
+    await act(async () => {
+      await mockInput.typeText("keeper-key")
+    })
+    await flush()
+    await act(async () => {
+      mockInput.pressTab()
+    })
+    await flush()
+    await act(async () => {
+      await mockInput.typeText("漱雪")
+    })
+    await flush()
+    await act(async () => {
+      mockInput.pressEnter()
+    })
+    await flush()
+    await waitFor(() => client.joinCalls.length > 0)
+
+    expect(remembered).toEqual([])
+    act(() => client.push(PLAYER_WELCOME))
+    await waitFor(() => remembered.length > 0)
+    expect(remembered[0]).toEqual({ host: "ws://table.example:8787", key: "keeper-key", name: "漱雪" })
+
+    act(() => renderer.destroy())
+  })
+
+  test("does not remember a rejected key", async () => {
+    const client = new MockClient()
+    const remembered: Array<Required<AppPrefill>> = []
+    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client, {
+      onRememberConnect: (memory) => remembered.push(memory),
+    })
+    await flush()
+    await waitForFrame((t) => t.includes("邀请码"))
+
+    await act(async () => {
+      mockInput.pressTab()
+      await mockInput.typeText("bad-key")
+      mockInput.pressEnter()
+    })
+    await flush()
+
+    act(() => client.push({ type: FrameType.Error, code: "bad_key", message: "Unknown key" }))
+    await waitForFrame((t) => t.includes("Unknown key"))
+    expect(remembered).toEqual([])
 
     act(() => renderer.destroy())
   })
@@ -223,8 +295,8 @@ describe("App shell", () => {
     })
     await flush()
 
-    const game = await waitForFrame((t) => t.includes("say or command"))
-    expect(game).toContain("say or command")
+    const game = await waitForFrame((t) => t.includes("输入行动或命令"))
+    expect(game).toContain("输入行动或命令")
 
     act(() => renderer.destroy())
   })

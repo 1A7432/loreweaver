@@ -2,6 +2,7 @@ import { useState } from "react"
 import { useKeyboard } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
 import { stripControlChars, type CharacterState, type InitiativeEntry, type PartyMember } from "@trpg-kp/protocol"
+import { tt } from "../i18n"
 import type { Palette } from "../themes"
 import { bar, CharacterPanel, statColor } from "./CharacterPanel"
 
@@ -10,6 +11,7 @@ export interface PartyRosterProps {
   party: PartyMember[]
   initiative: InitiativeEntry[]
   theme: Palette
+  locale?: string
   // Whether THIS panel (vs the chat input) currently owns Enter. `<box>` has no
   // native per-element key routing in OpenTUI (only `input`/`select`/`textarea`
   // do), so — mirroring the local field-focus convention `screens/KeeperKeys.tsx`
@@ -73,7 +75,7 @@ const DETAIL_BAR_WIDTH = 10
  * bar summary (reusing CharacterPanel's `bar`/`statColor` glyphs), expanded
  * embeds the full `CharacterPanel` (attributes + status effects). Toggle via a
  * mouse click on the row, or Enter while this panel is focused (see `focused`). */
-export function PartyRoster({ character, party, initiative, theme, focused, onFocus }: PartyRosterProps) {
+export function PartyRoster({ character, party, initiative, theme, locale, focused, onFocus }: PartyRosterProps) {
   const [expanded, setExpanded] = useState(false)
   const [expandedMembers, setExpandedMembers] = useState<Set<string>>(() => new Set())
 
@@ -114,15 +116,16 @@ export function PartyRoster({ character, party, initiative, theme, focused, onFo
 
   return (
     <box flexDirection="column" border borderColor={focused ? theme.accent : theme.border} paddingX={1}>
-      <text fg={theme.accent}>队伍 / PARTY</text>
+      <text fg={theme.accent}>{tt(locale, "party.title")}</text>
 
       {character ? (
         <box flexDirection="column" onMouseDown={toggle}>
           <text fg={focused ? theme.accent : theme.player}>
-            {expanded ? "▾" : "▸"} {(ownMember?.online ?? true) ? "●" : "○"} {stripControlChars(character.name)} (你)
+            {expanded ? "▾" : "▸"} {(ownMember?.online ?? true) ? "●" : "○"} {stripControlChars(character.name)} (
+            {tt(locale, "party.you")})
           </text>
           {expanded ? (
-            <CharacterPanel character={character} theme={theme} />
+            <CharacterPanel character={character} theme={theme} locale={locale} />
           ) : (
             <>
               <text fg={statColor(character.hp, character.hpmax, theme.hpFull, theme.hpLow)}>
@@ -140,9 +143,9 @@ export function PartyRoster({ character, party, initiative, theme, focused, onFo
       ) : otherMembers.length === 0 ? (
         // No own character AND no other members: one clear line, not two stacked
         // empty-state messages (used to show "尚未创建角色" AND "No roster" together).
-        <text fg={theme.dim}>队伍空 · 在「我的角色」里创建角色</text>
+        <text fg={theme.dim}>{tt(locale, "party.empty")}</text>
       ) : (
-        <text fg={theme.dim}>尚未创建角色</text>
+        <text fg={theme.dim}>{tt(locale, "party.noCharacter")}</text>
       )}
 
       {otherMembers.map((member) => {

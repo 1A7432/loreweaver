@@ -1,5 +1,6 @@
 import { SyntaxStyle } from "@opentui/core"
 import { stripControlChars, type DiceFrame, type NarrativeFrame, type SystemFrame } from "@trpg-kp/protocol"
+import { tt } from "../i18n"
 import type { Palette } from "../themes"
 import { Spinner } from "./Spinner"
 
@@ -21,6 +22,7 @@ export interface NarrativeLogProps {
   // While the Keeper's reply to the latest player turn is in flight, a trailing
   // "构思中" spinner rides the bottom of the log (like a chat typing indicator).
   kpWorking?: boolean
+  locale?: string
 }
 
 function diceColor(frame: DiceFrame, theme: Palette): string {
@@ -47,7 +49,14 @@ function speakerLabel(frame: NarrativeFrame): string {
   return stripControlChars(frame.speaker.toUpperCase())
 }
 
-export function NarrativeLog({ frames, theme, revealTicks = 3, critFlash = false, kpWorking = false }: NarrativeLogProps) {
+export function NarrativeLog({
+  frames,
+  theme,
+  revealTicks = 3,
+  critFlash = false,
+  kpWorking = false,
+  locale,
+}: NarrativeLogProps) {
   return (
     <box flexDirection="column" width="100%" paddingX={1}>
       {frames.length === 0 ? (
@@ -58,14 +67,14 @@ export function NarrativeLog({ frames, theme, revealTicks = 3, critFlash = false
           // submitted line optimistically (the server's own `narrative{speaker:"player"}`
           // broadcast is the only echo, so it never renders twice) — so right after a
           // submit, `frames` can still be empty for the round trip.
-          <Spinner active label="Keeper 构思中" color={theme.accent} />
+          <Spinner active label={tt(locale, "log.working")} color={theme.accent} />
         ) : (
           // Idle (no turn in flight): a STATIC hint, no motion — an animated spinner
           // here with nothing actually happening reads as frozen/deceptive (a player
           // waiting on a fresh, empty join saw it spin for 10 minutes with nothing
           // going on). The server also replays room history as narrative frames on
           // join, so this mostly only shows on a genuinely fresh, empty room.
-          <text fg={theme.dim}>准备就绪 · 输入你的行动开始</text>
+          <text fg={theme.dim}>{tt(locale, "log.ready")}</text>
         )
       ) : (
         frames.map((frame, index) => {
@@ -108,7 +117,7 @@ export function NarrativeLog({ frames, theme, revealTicks = 3, critFlash = false
           )
         })
       )}
-      {frames.length > 0 && kpWorking ? <Spinner active label="Keeper 构思中" trailing color={theme.accent} /> : null}
+      {frames.length > 0 && kpWorking ? <Spinner active label={tt(locale, "log.working")} trailing color={theme.accent} /> : null}
     </box>
   )
 }

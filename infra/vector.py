@@ -140,6 +140,40 @@ class VectorStore:
             if conn is not None:
                 conn.commit()
 
+    async def delete_by_filter(self, *, filter: dict | None = None) -> int:
+        """Delete every point matching ``filter``; return the number removed."""
+        async with self._lock:
+            point_ids = [pid for pid, payload in self._payloads.items() if _matches(payload, filter)]
+            if not point_ids:
+                return 0
+            conn = self._ensure_conn() if self._path is not None else None
+            for point_id in point_ids:
+                self._vectors.pop(point_id, None)
+                self._payloads.pop(point_id, None)
+                if conn is not None:
+                    conn.execute("DELETE FROM vectors WHERE id = ?", (point_id,))
+            if conn is not None:
+                conn.commit()
+            return len(point_ids)
+
+    async def dump(self, *, filter: dict | None = None, limit: int = 100_000) -> list[dict]:
+        """Return raw vector points matching ``filter`` for backup/import."""
+        async with self._lock:
+            points = []
+            for point_id, payload in self._payloads.items():
+                if not _matches(payload, filter):
+                    continue
+                points.append(
+                    {
+                        "id": point_id,
+                        "vector": self._vectors[point_id].tolist(),
+                        "payload": dict(payload),
+                    }
+                )
+                if len(points) >= limit:
+                    break
+            return points
+
     async def scroll(self, *, filter: dict | None = None, limit: int = 1000) -> list[VectorHit]:
         async with self._lock:
             hits = [
