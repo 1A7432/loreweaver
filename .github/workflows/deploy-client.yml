@@ -1,0 +1,50 @@
+name: deploy-client
+# On every push to main that touches the clients, repackage the terminal-client
+# tarball + installers and rebuild the web client, then publish them to the file
+# server so `loreweaver update` and https://1a7432.site/play/ pick up the latest.
+on:
+  push:
+    branches: [main]
+    paths:
+      - clients/**
+      - .github/workflows/deploy-client.yml
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-client
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Package terminal-client tarball
+        # Same layout the one-line installer expects: clients/{package.json,bun.lock,protocol,tui}.
+        run: tar czf loreweaver-client.tar.gz clients/package.json clients/bun.lock clients/protocol clients/tui
+
+      - name: Build web client
+        working-directory: clients/web
+        run: |
+          bun install --frozen-lockfile || bun install
+          VITE_WS_URL=wss://1a7432.site/ws bun run build --base=/play/
+
+      - name: Set up SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.LW_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          host="${{ secrets.LW_SSH_TARGET }}"; host="${host##*@}"
+          ssh-keyscan -H "$host" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Publish tarball + installers + web client
+        run: |
+          T="${{ secrets.LW_SSH_TARGET }}"
+          rsync -az --chmod=D755,F644 \
+            loreweaver-client.tar.gz clients/install.sh clients/install.ps1 \
+            "$T:/var/www/1a7432.site/trpg/"
+          rsync -az --delete --chmod=D755,F644 \
+            clients/web/dist/ "$T:/var/www/1a7432.site/play/"
+          echo "published → /trpg/loreweaver-client.tar.gz + /play/"
