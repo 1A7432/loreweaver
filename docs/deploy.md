@@ -1,3 +1,5 @@
+*English · [中文](deploy.zh.md)*
+
 # Deploying Loreweaver
 
 Self-host the networked Keeper (the WebSocket server that terminal / web / SSH

@@ -135,7 +135,9 @@ export const themes: Record<ThemeName, Palette> = {
   },
 }
 
-// F1..F5 map 1:1 onto this order; amber leads and is the default theme (higher contrast).
-export const themeOrder: ThemeName[] = ["amber", "df16", "phosphor", "lamplight", "paperwhite"]
+// F1..F5 map 1:1 onto this order; lamplight leads and is the default — it IS the
+// Loreweaver identity (warm near-black + parchment + brass), shared with the site,
+// web client, and app icon. The others stay available as F-key alternates.
+export const themeOrder: ThemeName[] = ["lamplight", "amber", "df16", "phosphor", "paperwhite"]
 
-export const DEFAULT_THEME: ThemeName = "amber"
+export const DEFAULT_THEME: ThemeName = "lamplight"

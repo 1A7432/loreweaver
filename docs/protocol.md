@@ -1,3 +1,5 @@
+*English · [中文](protocol.zh.md)*
+
 # loreweaver networked TUI — WebSocket protocol v1
 
 This is the open, versioned wire protocol between a loreweaver server

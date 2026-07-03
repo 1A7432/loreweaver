@@ -1,3 +1,5 @@
+*English · [中文](roadmap.zh.md)*
+
 # Loreweaver roadmap
 
 Loreweaver is young and built largely by one person with AI assistance. This is the honest forward plan — where the project is focused now, the bigger arc after, and one open design question worth deciding in the open. For the layer contracts and iron rules, see [CLAUDE.md](../CLAUDE.md).

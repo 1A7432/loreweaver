@@ -92,10 +92,11 @@ export function MainMenu({
 
   return (
     <box flexDirection="column" height="100%" width="100%" backgroundColor={theme.bg}>
-      {/* A bordered height-3 header exposes a single content row, so the room +
-          role sit side by side on one line (two stacked lines would overlap). */}
-      <box height={3} flexDirection="row" border borderColor={theme.border} paddingX={1}>
-        <ascii-font text="TRPG KP" font="tiny" color={theme.accent} />
+      {/* height=4 → 2 inner rows: the height the `tiny` ascii-font wordmark needs so
+          its second row doesn't bleed into the border (matches the GameView header);
+          the room + role still sit side by side on the first content row. */}
+      <box height={4} flexDirection="row" border borderColor={theme.border} paddingX={1}>
+        <ascii-font text="LOREWEAVER" font="tiny" color={theme.accent} />
         <box flexDirection="row" marginLeft={2}>
           <text fg={theme.accent}>{tt(locale, "menu.table", { room: stripControlChars(welcome.room) })}</text>
           <text fg={theme.dim}>
