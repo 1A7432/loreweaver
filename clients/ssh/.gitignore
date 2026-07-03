@@ -1,5 +1,0 @@
-node_modules/
-# Secrets / runtime state — never commit these.
-data/ssh_keys.toml
-data/ssh_host_key
-data/ssh_host_key.pub
