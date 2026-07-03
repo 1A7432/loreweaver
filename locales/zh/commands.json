@@ -47,7 +47,7 @@
   "commands.module.progress.line": "  {bar}  {label}",
   "commands.module.progress.read": "① 读取模组文本",
   "commands.module.progress.embed": "② 建立检索索引",
-  "commands.module.progress.analyze": "③ 分析模组中(大模组可能需要几分钟,请耐心等待)",
+  "commands.module.progress.analyze": "③ 分析模组中(长模组可能需要 10 分钟以上,请耐心等待)",
   "commands.module.progress.build": "④ 构建守秘人知识",
   "commands.module.progress.done": "⑤ 完成",
   "commands.opposed.left": "左侧",

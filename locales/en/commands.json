@@ -47,7 +47,7 @@
   "commands.module.progress.line": "  {bar}  {label}",
   "commands.module.progress.read": "① Reading module text",
   "commands.module.progress.embed": "② Embedding into the search index",
-  "commands.module.progress.analyze": "③ Analyzing the module (large modules can take a few minutes — please wait)",
+  "commands.module.progress.analyze": "③ Analyzing the module (a long module can take 10+ minutes — please wait)",
   "commands.module.progress.build": "④ Building keeper knowledge",
   "commands.module.progress.done": "⑤ Done",
   "commands.opposed.left": "left",
