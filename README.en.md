@@ -26,7 +26,7 @@ The bet is that a real dice/rules core plus a knowledge-scoped model can *run* a
 ## How you play — the terminal lobby
 Run one command and you land in a game menu, not a config file:
 
-![Loreweaver — the lamplit table: one command, a lobby, not a config file](assets/lobby-en.png)
+![The Loreweaver TUI — a real screenshot: Keeper narration, a dice check, the party roster](assets/tui-en.png)
 
 - **Build a character four ways** — roll on the rulepack's formula, set stats by hand (with a live point-buy / skill-point budget), describe your character in prose and let the AI draft the sheet, or import a SillyTavern card. **Every path is checked against the rule system**: out-of-range or over-budget values are clamped by deterministic code, never left to the AI's word.
 - **Keyboard *and* mouse**, a die-face cursor, a live "Keeper is thinking" spinner (so you can tell it's working, not frozen), and a party roster that folds open to full sheets.
