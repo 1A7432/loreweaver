@@ -36,24 +36,26 @@ Real dice, a persistent story, no browser needed. (There's a React web client to
 
 ## Host a game for your friends (self-host, 3 steps)
 
-The real way to play: you **self-host** a server and hand out invite keys. **Your friends only install the client — no docs to read** — you just give them the address and their key.
+The real way to play: you **self-host** and hand out a ticket + invite keys. **Your friends only install the client — no docs to read.** The default is **Iroh p2p (recommended)**: run one command on **your own machine** and friends dial in — **no domain, no TLS, no port-forward**.
 
-**① You (host / Keeper) — start the server + grab your key**
+**① You (host / Keeper) — start the server + grab your ticket & key**
 ```bash
-./scripts/deploy.sh                              # Docker brings up the server (:8787)
-docker exec loreweaver cat /data/keeper-key.txt  # the keeper key auto-minted on first boot (also in `docker logs`)
+python -m app --serve   # prints a p2p ticket (endpoint…) + the keeper key auto-minted on first boot
+                        # (also written to iroh-ticket.txt / keeper-key.txt)
 ```
-Run `loreweaver`; in the connect screen enter host `wss://<your-host>/ws` + that keeper key + a nickname.
+Run `loreweaver`; in the connect screen's **Ticket / host** field paste that ticket + the keeper key + a nickname.
 
 **② You — create a room + mint one key per friend**
 Main menu → **Rooms & invites** → enter a **room name + friend's name + role (player)** → mint a key and send it. ("Creating a room" is just minting a key for a new room name — no server access; mint a `keeper`-role key for a co-Keeper.)
 
 **③ Friend (player) — one-line install + connect**
 ```bash
-curl -fsSL https://<your-host>/trpg/install.sh | bash   # Windows: irm https://<your-host>/trpg/install.ps1 | iex
-loreweaver     # connect screen: host wss://<your-host>/ws + the invite key you gave them + a nickname
+curl -fsSL https://1a7432.site/trpg/install.sh | bash   # Windows: irm https://1a7432.site/trpg/install.ps1 | iex
+loreweaver     # connect screen: paste the ticket + the invite key you gave them + a nickname
 ```
 Same table, sit down, play. No accounts — the invite key is the ticket in.
+
+> **Transports**: **Iroh** (default · p2p · zero-config · **rich media (images/audio) rides this one only**, roadmap) vs **WebSocket** (`python -m app --serve --ws`, for domain+TLS always-on deployments and the **browser web client**; **text-only, no multimedia**). With a VPS, `--serve --ws` runs both; the web client is WS-only. Same protocol, different carrier — see [docs/protocol.md](docs/protocol.md).
 
 ## Highlights
 - **AI Keeper via standard function-calling** — 60+ Keeper tools (dice, checks, sanity, sheets, module knowledge, notes, session reports, initiative). Bring any OpenAI-compatible or native model; the recommended default is **`deepseek-v4-pro` with thinking on**.

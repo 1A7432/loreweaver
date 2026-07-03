@@ -8,9 +8,23 @@ client — the bundled OpenTUI terminal client, or a community-built
 React/Vue/web client. The engine itself (deterministic core + AI Keeper)
 is unaffected by transport; this document is the language-agnostic seam.
 
-Transport: WebSocket, JSON text frames, one JSON object per frame, every
-frame shaped `{"type": ...}`. Endpoint: `ws://host:port/`. Protocol
-version: `"1.1"`.
+Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"1.1"`.
+The same frames and the same `join` handshake ride either of two **transports**
+— the wire body is identical, only the carrier and its framing differ:
+
+- **Iroh (default)** — peer-to-peer QUIC. The server (`net.iroh_server`) binds an
+  endpoint on the custom ALPN `loreweaver/tui/1` and prints a shareable **ticket**;
+  a client dials the ticket (no domain/TLS/port-forward). A QUIC bidirectional
+  stream is a raw byte stream, so frames are **newline-delimited** JSON — one
+  compact `{...}\n` per frame — over one long-lived `open_bi`/`accept_bi` stream.
+  Rich media (images/audio, roadmap) will ride this transport only.
+- **WebSocket (opt-in, `--serve --ws`)** — `net.tui_server`, endpoint `ws://host:port/`,
+  **one JSON object per WebSocket message** (the message boundary is the frame
+  boundary). This is the browser-reachable, text-only carrier for reverse-proxied
+  (`wss://`) deployments and the web client.
+
+Both carriers share one `RoomHub`, so a p2p player and a WebSocket player sit at
+the same table in one AI-KP session.
 
 Versioning is additive: `"1.1"` only ADDS the keeper-gated `admin_*` frames
 (see "Admin frames" below). A client that only understands `"1"` keeps working
