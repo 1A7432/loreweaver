@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { useKeyboard } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
-import { stripControlChars, type CharacterState, type InitiativeEntry, type PartyMember } from "@trpg-kp/protocol"
+import { stripControlChars, type CharacterState, type InitiativeEntry, type PartyMember } from "@loreweaver/protocol"
 import { tt } from "../i18n"
 import type { Palette } from "../themes"
 import { bar, CharacterPanel, statColor } from "./CharacterPanel"

@@ -42,7 +42,7 @@ say "bun $(bun --version) ready"
 say "downloading client source from ${TRPG_ORIGIN}…"
 rm -rf "$TRPG_HOME/clients"
 mkdir -p "$TRPG_HOME"
-curl -fsSL "${TRPG_ORIGIN}/trpg-kp-client.tar.gz" | tar xz -C "$TRPG_HOME" \
+curl -fsSL "${TRPG_ORIGIN}/loreweaver-client.tar.gz" | tar xz -C "$TRPG_HOME" \
   || die "could not fetch the client source from ${TRPG_ORIGIN} (is the file server up?)"
 
 # 3) deps — bun install resolves the per-platform @opentui/core native core for us.

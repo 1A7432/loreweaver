@@ -1,10 +1,10 @@
 {
-  "name": "@trpg-kp/tui",
+  "name": "@loreweaver/tui",
   "version": "0.1.0",
   "type": "module",
   "private": true,
   "bin": {
-    "trpg-kp": "./dist/index.js"
+    "loreweaver": "./dist/index.js"
   },
   "scripts": {
     "dev": "bun run src/index.tsx",
@@ -14,7 +14,7 @@
   "dependencies": {
     "@opentui/core": "0.4.2",
     "@opentui/react": "0.4.2",
-    "@trpg-kp/protocol": "file:../protocol",
+    "@loreweaver/protocol": "file:../protocol",
     "react": "19.2.7"
   }
 }

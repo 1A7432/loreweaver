@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { useKeyboard } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
-import { FrameType, stripControlChars, type ServerFrame, type StateFrame, type WelcomeFrame } from "@trpg-kp/protocol"
+import { FrameType, stripControlChars, type ServerFrame, type StateFrame, type WelcomeFrame } from "@loreweaver/protocol"
 import { Spinner } from "../components/Spinner"
 import { StatusBar } from "../components/StatusBar"
 import { tt } from "../i18n"

@@ -1,4 +1,4 @@
-import { stripControlChars, type InitiativeEntry, type PartyMember } from "@trpg-kp/protocol"
+import { stripControlChars, type InitiativeEntry, type PartyMember } from "@loreweaver/protocol"
 import { tt } from "../i18n"
 import type { Palette } from "../themes"
 

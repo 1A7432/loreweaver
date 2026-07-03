@@ -1,4 +1,4 @@
-import { WsClient, type PlayerRole, type ServerFrame } from "@trpg-kp/protocol"
+import { WsClient, type PlayerRole, type ServerFrame } from "@loreweaver/protocol"
 
 // Minimal surface the UI needs from a client. WsClient satisfies it; tests
 // inject a mock. The browser has a native WebSocket, so the WsClient default

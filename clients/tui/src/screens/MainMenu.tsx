@@ -1,7 +1,7 @@
 import { Fragment, useState } from "react"
 import { useKeyboard } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
-import { stripControlChars, type PresenceFrame, type StateFrame, type WelcomeFrame } from "@trpg-kp/protocol"
+import { stripControlChars, type PresenceFrame, type StateFrame, type WelcomeFrame } from "@loreweaver/protocol"
 import { CharacterPanel } from "../components/CharacterPanel"
 import { PartyPanel } from "../components/PartyPanel"
 import { ScenePanel } from "../components/ScenePanel"

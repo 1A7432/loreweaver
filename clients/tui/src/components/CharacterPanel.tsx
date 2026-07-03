@@ -1,4 +1,4 @@
-import { stripControlChars, type CharacterState } from "@trpg-kp/protocol"
+import { stripControlChars, type CharacterState } from "@loreweaver/protocol"
 import { tt } from "../i18n"
 import type { Palette } from "../themes"
 import { attributeLines } from "./characterAttributes"

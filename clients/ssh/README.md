@@ -1,4 +1,4 @@
-# @trpg-kp/ssh — Rich SSH front-end
+# @loreweaver/ssh — Rich SSH front-end
 
 `ssh -p 2222 anything@host` renders the **full OpenTUI TUI**. Zero client install,
 no registration. The SSH public key **is** the credential (public-key auth only —
@@ -104,4 +104,4 @@ In-process only — an `ssh2` client/server pair on an ephemeral port, closed in
 - `src/host_key.ts` — load-or-generate a persistent ed25519 host key.
 - `src/bridge.ts` — `bridgeSession(channel, ptyInfo, entry, opts, spawnFn?, terminalFactory?)`.
 - `src/server.ts` — `startSshServer(opts)` → `{ port, close() }`.
-- `src/index.ts` — CLI entrypoint (`trpg-kp-ssh`).
+- `src/index.ts` — CLI entrypoint (`loreweaver-ssh`).

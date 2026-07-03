@@ -1,4 +1,4 @@
-import { stripControlChars, type CharacterState } from "@trpg-kp/protocol"
+import { stripControlChars, type CharacterState } from "@loreweaver/protocol"
 
 const VITAL_KEYS = new Set(["HP", "HPMAX", "MP", "MPMAX", "SAN", "SANMAX"])
 const COC_CHARACTERISTICS = ["STR", "CON", "SIZ", "DEX", "APP", "INT", "POW", "EDU", "LUC"]

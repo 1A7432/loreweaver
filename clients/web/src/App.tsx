@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { type ServerFrame, type WelcomeFrame } from "@trpg-kp/protocol"
+import { type ServerFrame, type WelcomeFrame } from "@loreweaver/protocol"
 import { AdminPanel } from "./admin/AdminPanel"
 import { GameView } from "./GameView"
 import { createClient, type AppClient } from "./ws"

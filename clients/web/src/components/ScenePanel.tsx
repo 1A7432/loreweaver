@@ -1,4 +1,4 @@
-import type { ClockState, SceneState } from "@trpg-kp/protocol"
+import type { ClockState, SceneState } from "@loreweaver/protocol"
 
 export interface ScenePanelProps {
   scene?: SceneState

@@ -1,4 +1,4 @@
-import type { CharacterState } from "@trpg-kp/protocol"
+import type { CharacterState } from "@loreweaver/protocol"
 
 export interface CharacterPanelProps {
   character?: CharacterState

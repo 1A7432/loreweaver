@@ -6,12 +6,12 @@ import { loadConnectMemory, saveConnectMemory } from "./connectMemory"
 
 describe("connectMemory", () => {
   test("missing or malformed memory returns empty defaults", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "trpg-kp-tui-"))
+    const dir = await mkdtemp(join(tmpdir(), "loreweaver-tui-"))
     expect(await loadConnectMemory(join(dir, "missing.json"))).toEqual({})
   })
 
   test("saves and loads the last successful connection fields", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "trpg-kp-tui-"))
+    const dir = await mkdtemp(join(tmpdir(), "loreweaver-tui-"))
     const path = join(dir, "nested", "connect.json")
 
     await saveConnectMemory({ host: " ws://127.0.0.1:8787 ", key: " keeper-key ", name: " 漱雪 " }, path)

@@ -1,4 +1,4 @@
-import type { InitiativeEntry, PartyMember } from "@trpg-kp/protocol"
+import type { InitiativeEntry, PartyMember } from "@loreweaver/protocol"
 
 export interface PartyPanelProps {
   party: PartyMember[]

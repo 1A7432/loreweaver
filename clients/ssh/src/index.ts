@@ -46,10 +46,10 @@ function parseArgs(argv: string[]): CliArgs {
 
 function usage(): string {
   return [
-    "trpg-kp-ssh — Rich SSH front-end (OpenTUI over SSH)",
+    "loreweaver-ssh — Rich SSH front-end (OpenTUI over SSH)",
     "",
     "Usage:",
-    "  trpg-kp-ssh --port 2222 --ws-url ws://127.0.0.1:8787/ \\",
+    "  loreweaver-ssh --port 2222 --ws-url ws://127.0.0.1:8787/ \\",
     "              --keys ./data/ssh_keys.toml \\",
     "              --client /abs/path/to/clients/tui/src/index.tsx",
     "",
@@ -70,7 +70,7 @@ async function main(): Promise<void> {
     hostKeyPath: args.hostKey,
   })
 
-  console.log("trpg-kp-ssh listening")
+  console.log("loreweaver-ssh listening")
   console.log(`  ssh port : ${args.host}:${server.port}`)
   console.log(`  ws server: ${args.wsUrl}`)
   console.log(`  keys     : ${args.keys}`)
@@ -78,7 +78,7 @@ async function main(): Promise<void> {
   console.log("Players: ssh -p " + server.port + " anything@host")
 
   const shutdown = async () => {
-    console.log("\ntrpg-kp-ssh shutting down")
+    console.log("\nloreweaver-ssh shutting down")
     await server.close()
     process.exit(0)
   }
@@ -88,7 +88,7 @@ async function main(): Promise<void> {
 
 if (import.meta.main) {
   main().catch((err) => {
-    console.error("trpg-kp-ssh failed to start:", err?.message ?? err)
+    console.error("loreweaver-ssh failed to start:", err?.message ?? err)
     process.exit(1)
   })
 }

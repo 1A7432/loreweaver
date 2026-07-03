@@ -3,7 +3,7 @@
 #   irm https://1a7432.site/trpg/install.ps1 | iex
 #
 # Same idea as install.sh: ensure bun (runtime + package manager), pull the client
-# SOURCE from your server, `bun install`, drop a `trpg-kp` launcher. No admin needed.
+# SOURCE from your server, `bun install`, drop a `loreweaver` launcher. No admin needed.
 # Note: OpenTUI's terminal rendering is primarily tuned for Unix terminals; on
 # Windows use Windows Terminal, and treat this path as best-effort.
 #
@@ -34,8 +34,8 @@ Say ("bun " + (bun --version) + " ready")
 Say "downloading client source from $Origin…"
 if (Test-Path (Join-Path $Home_ "clients")) { Remove-Item (Join-Path $Home_ "clients") -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $Home_ | Out-Null
-$tar = Join-Path $env:TEMP "trpg-kp-client.tar.gz"
-Invoke-WebRequest "$Origin/trpg-kp-client.tar.gz" -OutFile $tar
+$tar = Join-Path $env:TEMP "loreweaver-client.tar.gz"
+Invoke-WebRequest "$Origin/loreweaver-client.tar.gz" -OutFile $tar
 tar -xzf $tar -C $Home_          # tar.exe ships with Windows 10+
 Remove-Item $tar -Force
 

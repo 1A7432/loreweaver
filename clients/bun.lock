@@ -3,22 +3,22 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "trpg-kp-clients",
+      "name": "loreweaver-clients",
     },
     "protocol": {
-      "name": "@trpg-kp/protocol",
+      "name": "@loreweaver/protocol",
       "version": "0.1.0",
     },
     "tui": {
-      "name": "@trpg-kp/tui",
+      "name": "@loreweaver/tui",
       "version": "0.1.0",
       "bin": {
-        "trpg-kp": "./dist/index.js",
+        "loreweaver": "./dist/index.js",
       },
       "dependencies": {
         "@opentui/core": "0.4.2",
         "@opentui/react": "0.4.2",
-        "@trpg-kp/protocol": "file:../protocol",
+        "@loreweaver/protocol": "file:../protocol",
         "react": "19.2.7",
       },
     },
@@ -44,9 +44,9 @@
 
     "@opentui/react": ["@opentui/react@0.4.2", "https://registry.npmmirror.com/@opentui/react/-/react-0.4.2.tgz", { "dependencies": { "@opentui/core": "0.4.2", "react-reconciler": "^0.33.0" }, "peerDependencies": { "react": ">=19.2.0", "react-devtools-core": "^7.0.1", "ws": "^8.18.0" } }, "sha512-SsteuclEw72gUBzp/mZjADSNS1jJJr4htB89euicn+Atl62ZvO22wuLE9hBFDCpumtgG3sbSe+7XtV6vW1orXA=="],
 
-    "@trpg-kp/protocol": ["@trpg-kp/protocol@workspace:protocol"],
+    "@loreweaver/protocol": ["@loreweaver/protocol@workspace:protocol"],
 
-    "@trpg-kp/tui": ["@trpg-kp/tui@workspace:tui"],
+    "@loreweaver/tui": ["@loreweaver/tui@workspace:tui"],
 
     "ansi-regex": ["ansi-regex@6.2.2", "https://registry.npmmirror.com/ansi-regex/-/ansi-regex-6.2.2.tgz", {}, "sha512-Bq3SmSpyFHaWjPk8If9yc6svM8c56dB5BAtW4Qbw5jHTwwXXcTLoRMkpDJp6VL0XzlWaCHTXrkFURMYmD0sLqg=="],
 
@@ -80,7 +80,7 @@
 
     "ws": ["ws@8.21.0", "https://registry.npmmirror.com/ws/-/ws-8.21.0.tgz", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g=="],
 
-    "@trpg-kp/tui/@trpg-kp/protocol": ["@trpg-kp/protocol@file:protocol", {}],
+    "@loreweaver/tui/@loreweaver/protocol": ["@loreweaver/protocol@file:protocol", {}],
 
     "react-devtools-core/ws": ["ws@7.5.11", "https://registry.npmmirror.com/ws/-/ws-7.5.11.tgz", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": "^5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-zS54Oen9bITtp7kp2XM3AydrCIq1D+HwJOuH+c+e4LfpL/lotP5osijd+UoMnxwAam1GN8R4KtLAyIrIcBNpiA=="],
   }

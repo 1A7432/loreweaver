@@ -1,10 +1,10 @@
 {
-  "name": "@trpg-kp/ssh",
+  "name": "@loreweaver/ssh",
   "version": "0.1.0",
   "type": "module",
   "private": true,
   "bin": {
-    "trpg-kp-ssh": "./src/index.ts"
+    "loreweaver-ssh": "./src/index.ts"
   },
   "scripts": {
     "start": "bun run src/index.ts",

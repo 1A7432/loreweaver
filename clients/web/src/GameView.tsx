@@ -5,7 +5,7 @@ import {
   type ServerFrame,
   type StateFrame,
   type WelcomeFrame,
-} from "@trpg-kp/protocol"
+} from "@loreweaver/protocol"
 import { CharacterPanel } from "./components/CharacterPanel"
 import { NarrativeLog, type LogFrame } from "./components/NarrativeLog"
 import { PartyPanel } from "./components/PartyPanel"

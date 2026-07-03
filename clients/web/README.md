@@ -2,7 +2,7 @@
 
 A zero-install browser client (React + Vite + TypeScript) for the TRPG KP
 system. It speaks the same v1 WebSocket protocol as the terminal and chat
-clients, reusing `@trpg-kp/protocol` (the browser's native `WebSocket` powers
+clients, reusing `@loreweaver/protocol` (the browser's native `WebSocket` powers
 the default `WsClient` factory). Same rooms, same session.
 
 The UI mirrors the OpenTUI client's **Hybrid** layout — a narrative column plus

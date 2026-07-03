@@ -1,9 +1,9 @@
-import { WsClient, type PlayerRole, type ServerFrame } from "@trpg-kp/protocol"
+import { WsClient, type PlayerRole, type ServerFrame } from "@loreweaver/protocol"
 
 // The full client surface the TUI shell needs. This is the superset the web
 // client declares (`clients/web/src/ws.ts`): connect/join/sendInput/onMessage +
 // the optional close and the keeper-only admin_* requests. The real `WsClient`
-// from `@trpg-kp/protocol` implements every method, so it is what `createClient`
+// from `@loreweaver/protocol` implements every method, so it is what `createClient`
 // hands back; tests inject a mock that satisfies the same interface.
 //
 // The `admin*` methods are only exercised by keeper-only screens (Stage 3); a

@@ -40,7 +40,7 @@ function usage(): string {
 
 const args = parseArgs(Bun.argv.slice(2))
 
-// --host/--key are no longer required: a bare `trpg-kp` opens the lobby and the
+// --host/--key are no longer required: a bare `loreweaver` opens the lobby and the
 // args (if any) just prefill the connect form. Only an explicit help request is
 // handled before the renderer starts.
 if (args.command === "help" || args.command === "--help" || args.command === "-h") {

@@ -1,4 +1,4 @@
-import { stripControlChars, type PresenceFrame, type WelcomeFrame } from "@trpg-kp/protocol"
+import { stripControlChars, type PresenceFrame, type WelcomeFrame } from "@loreweaver/protocol"
 import { tt } from "../i18n"
 import type { Palette, ThemeName } from "../themes"
 

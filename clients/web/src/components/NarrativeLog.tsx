@@ -1,4 +1,4 @@
-import type { DiceFrame, NarrativeFrame, SystemFrame } from "@trpg-kp/protocol"
+import type { DiceFrame, NarrativeFrame, SystemFrame } from "@loreweaver/protocol"
 import { MiniMarkdown } from "../markdown"
 
 export type LogFrame = NarrativeFrame | DiceFrame | SystemFrame

@@ -2,7 +2,7 @@
 // needed). Run: bun run preview     (from clients/tui)
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
-import { FrameType, type ServerFrame, type WelcomeFrame } from "@trpg-kp/protocol"
+import { FrameType, type ServerFrame, type WelcomeFrame } from "@loreweaver/protocol"
 import { GameView, type GameClient } from "./GameView"
 import { themes } from "./themes"
 

@@ -7,7 +7,7 @@ import {
   type PlayerRole,
   type ServerFrame,
   type WelcomeFrame,
-} from "@trpg-kp/protocol"
+} from "@loreweaver/protocol"
 
 // The subset of the WS client the admin panel drives. WsClient satisfies it;
 // tests inject a mock.

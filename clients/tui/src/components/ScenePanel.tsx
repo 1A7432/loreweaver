@@ -1,4 +1,4 @@
-import { stripControlChars, type ClockState, type SceneState } from "@trpg-kp/protocol"
+import { stripControlChars, type ClockState, type SceneState } from "@loreweaver/protocol"
 import { tt } from "../i18n"
 import type { Palette } from "../themes"
 

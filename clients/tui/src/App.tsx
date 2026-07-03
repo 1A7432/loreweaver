@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useKeyboard } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
-import { FrameType, type PresenceFrame, type ServerFrame, type StateFrame, type WelcomeFrame } from "@trpg-kp/protocol"
+import { FrameType, type PresenceFrame, type ServerFrame, type StateFrame, type WelcomeFrame } from "@loreweaver/protocol"
 import { createClient, type AppClient } from "./client"
 import { GameView, appendFrame } from "./GameView"
 import type { LogFrame } from "./components/NarrativeLog"
@@ -17,7 +17,7 @@ import { DEFAULT_THEME, themeOrder, themes, type ThemeName } from "./themes"
 export type { AppClient } from "./client"
 
 // CLI args become prefilled connect-form defaults (index.tsx no longer forces a
-// --host/--key: a bare `trpg-kp` lands on the connect screen).
+// --host/--key: a bare `loreweaver` lands on the connect screen).
 export interface AppPrefill {
   host?: string
   key?: string

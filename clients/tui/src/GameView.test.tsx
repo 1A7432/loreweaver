@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
-import { FrameType, type ServerFrame, type WelcomeFrame } from "@trpg-kp/protocol"
+import { FrameType, type ServerFrame, type WelcomeFrame } from "@loreweaver/protocol"
 import { GameView, type GameClient } from "./GameView"
 import { SPINNER_FRAMES } from "./components/Spinner"
 import { themes } from "./themes"

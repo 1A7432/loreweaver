@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { useKeyboard, useTimeline } from "@opentui/react"
 import type { InputRenderable, KeyEvent, ScrollBoxRenderable } from "@opentui/core"
-import { FrameType, stripControlChars, type DiceFrame, type PresenceFrame, type ServerFrame, type StateFrame, type WelcomeFrame } from "@trpg-kp/protocol"
+import { FrameType, stripControlChars, type DiceFrame, type PresenceFrame, type ServerFrame, type StateFrame, type WelcomeFrame } from "@loreweaver/protocol"
 import { NarrativeLog, type LogFrame } from "./components/NarrativeLog"
 import { PartyRoster } from "./components/PartyRoster"
 import { ScenePanel } from "./components/ScenePanel"

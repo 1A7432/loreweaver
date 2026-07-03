@@ -1,5 +1,5 @@
 import { SyntaxStyle } from "@opentui/core"
-import { stripControlChars, type DiceFrame, type NarrativeFrame, type SystemFrame } from "@trpg-kp/protocol"
+import { stripControlChars, type DiceFrame, type NarrativeFrame, type SystemFrame } from "@loreweaver/protocol"
 import { tt } from "../i18n"
 import type { Palette } from "../themes"
 import { Spinner } from "./Spinner"

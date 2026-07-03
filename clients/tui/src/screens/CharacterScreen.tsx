@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { useKeyboard } from "@opentui/react"
 import type { KeyEvent, SelectOption } from "@opentui/core"
-import { stripControlChars, type CharacterState, type StateFrame, type WelcomeFrame } from "@trpg-kp/protocol"
+import { stripControlChars, type CharacterState, type StateFrame, type WelcomeFrame } from "@loreweaver/protocol"
 import { CharacterPanel } from "../components/CharacterPanel"
 import { attributeLines } from "../components/characterAttributes"
 import { StatusBar } from "../components/StatusBar"

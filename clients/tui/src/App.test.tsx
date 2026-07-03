@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
-import { FrameType, type ServerFrame, type WelcomeFrame } from "@trpg-kp/protocol"
+import { FrameType, type ServerFrame, type WelcomeFrame } from "@loreweaver/protocol"
 import App, { type AppClient, type AppPrefill } from "./App"
 
 // A mock implementing the full AppClient surface: connect/join are recorded so

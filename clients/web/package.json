@@ -1,5 +1,5 @@
 {
-  "name": "@trpg-kp/web",
+  "name": "@loreweaver/web",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@trpg-kp/protocol": "file:../protocol",
+    "@loreweaver/protocol": "file:../protocol",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

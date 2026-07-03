@@ -1,4 +1,4 @@
-import type { WelcomeFrame } from "@trpg-kp/protocol"
+import type { WelcomeFrame } from "@loreweaver/protocol"
 import { THEME_ORDER, type ThemeName } from "../themes"
 
 export interface StatusBarProps {

@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@trpg-kp/ssh",
+      "name": "@loreweaver/ssh",
       "dependencies": {
         "ssh2": "1.17.0",
       },
