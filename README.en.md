@@ -70,10 +70,10 @@ cd clients/tui && bun install && bun run dev
 ```
 Browser client instead: `cd clients/web && bun install && bun run dev`. No accounts — the host issues keys that bind players to a shared room.
 
-**Give players a one-line install (no clone/build).** Serve `clients/install.sh` (and `install.ps1` for Windows) from your host — the script ensures `bun`, fetches the client source, and drops a `loreweaver` launcher. Players then:
+**One-line install for players (no clone/build).** Installs `bun`, fetches the client, and drops a `loreweaver` launcher — one command:
 ```bash
-curl -fsSL https://<your-host>/trpg/install.sh | bash   # Windows: irm https://<your-host>/trpg/install.ps1 | iex
-loreweaver          # launch → connect to wss://<your-host>/ws with an invite key
+curl -fsSL https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.sh | bash   # Windows: irm https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.ps1 | iex
+loreweaver          # launch → in the connect screen, enter your Keeper's wss://… host + invite key
 loreweaver update   # self-update to the latest client
 ```
 Or host the built web client (`cd clients/web && VITE_WS_URL=wss://<your-host>/ws bun run build --base=/play/`) behind your reverse proxy for a zero-install browser table.

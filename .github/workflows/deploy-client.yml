@@ -17,6 +17,8 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create/update the rolling 'latest' GitHub Release
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -24,6 +26,20 @@ jobs:
       - name: Package terminal-client tarball
         # Same layout the one-line installer expects: clients/{package.json,bun.lock,protocol,tui}.
         run: tar czf loreweaver-client.tar.gz clients/package.json clients/bun.lock clients/protocol clients/tui
+
+      - name: Publish to GitHub Release (rolling 'latest')
+        # The public, canonical distribution — the one-line installer defaults here.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          R="${{ github.repository }}"
+          if gh release view latest --repo "$R" >/dev/null 2>&1; then
+            gh release upload latest loreweaver-client.tar.gz clients/install.sh clients/install.ps1 --repo "$R" --clobber
+          else
+            gh release create latest loreweaver-client.tar.gz clients/install.sh clients/install.ps1 \
+              --repo "$R" --title "Loreweaver client (rolling latest)" \
+              --notes "Rolling build of the terminal + web client from main. \`loreweaver update\` tracks this." --latest
+          fi
 
       - name: Build web client
         working-directory: clients/web

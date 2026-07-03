@@ -70,12 +70,17 @@ cd clients/tui && bun install && bun run dev
 ```
 想用浏览器:`cd clients/web && bun install && bun run dev`。无需注册——房主发放 key,把玩家绑到同一个房间。
 
-**给玩家一行安装(不用克隆/构建)。** 把 `clients/install.sh`(Windows 用 `install.ps1`)放到你的服务器上——脚本会装好 `bun`、拉取客户端源码、生成 `loreweaver` 启动器。玩家只需:
+**玩家一行安装(不用克隆/构建)。** 装好 `bun` + 拉取客户端 + 生成 `loreweaver` 启动器,一条命令搞定:
 ```bash
-curl -fsSL https://<你的域名>/trpg/install.sh | bash   # Windows: irm https://<你的域名>/trpg/install.ps1 | iex
-loreweaver          # 启动 → 用邀请码连到 wss://<你的域名>/ws
+curl -fsSL https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.sh | bash   # Windows: irm https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.ps1 | iex
+loreweaver          # 启动 → 在连接屏填守秘人给你的 wss://… 地址 + 邀请码
 loreweaver update   # 自更新到最新客户端
 ```
+> 🇨🇳 国内访问 GitHub 慢或不稳?用镜像源(会自动改从 1a7432.site 拉取客户端):
+>
+> ```bash
+> curl -fsSL https://1a7432.site/trpg/install.sh | bash   # Windows: irm https://1a7432.site/trpg/install.ps1 | iex
+> ```
 或把构建好的网页客户端(`cd clients/web && VITE_WS_URL=wss://<你的域名>/ws bun run build --base=/play/`)挂到反代后面,给一个零安装的浏览器牌桌。
 
 ### 部署(自托管)

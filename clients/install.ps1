@@ -1,19 +1,30 @@
 # Loreweaver terminal client — one-line installer (Windows / PowerShell).
 #
-#   irm https://1a7432.site/trpg/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.ps1 | iex
 #
 # Same idea as install.sh: ensure bun (runtime + package manager), pull the client
-# SOURCE from your server, `bun install`, drop a `loreweaver` launcher. No admin needed.
+# tarball from the GitHub Release, `bun install`, drop a `loreweaver` launcher. No admin.
+# In mainland China (GitHub slow/blocked) set $env:TRPG_ORIGIN='https://1a7432.site/trpg'.
 # Note: OpenTUI's terminal rendering is primarily tuned for Unix terminals; on
 # Windows use Windows Terminal, and treat this path as best-effort.
 #
 # Override via env: TRPG_ORIGIN, TRPG_HOME, TRPG_REGISTRY, TRPG_BIN.
 $ErrorActionPreference = "Stop"
 
-$Origin   = if ($env:TRPG_ORIGIN)   { $env:TRPG_ORIGIN }   else { "https://1a7432.site/trpg" }
 $Home_    = if ($env:TRPG_HOME)     { $env:TRPG_HOME }     else { Join-Path $HOME ".loreweaver" }
 $Registry = if ($env:TRPG_REGISTRY) { $env:TRPG_REGISTRY } else { "https://registry.npmmirror.com" }
 $BinDir   = if ($env:TRPG_BIN)      { $env:TRPG_BIN }      else { Join-Path $HOME ".loreweaver\bin" }
+
+# Distribution source: GitHub by default; a mirror when TRPG_ORIGIN is set.
+if ($env:TRPG_ORIGIN) {
+  $TarballUrl   = "$($env:TRPG_ORIGIN)/loreweaver-client.tar.gz"
+  $InstallerUrl = "$($env:TRPG_ORIGIN)/install.ps1"
+  $SourceDesc   = $env:TRPG_ORIGIN
+} else {
+  $TarballUrl   = "https://github.com/1A7432/loreweaver/releases/latest/download/loreweaver-client.tar.gz"
+  $InstallerUrl = "https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.ps1"
+  $SourceDesc   = "GitHub Release"
+}
 
 function Say([string]$m) { Write-Host "▸ $m" -ForegroundColor Yellow }
 
@@ -30,12 +41,12 @@ if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
 if (-not (Get-Command bun -ErrorAction SilentlyContinue)) { throw "bun still not on PATH — open a new PowerShell and re-run." }
 Say ("bun " + (bun --version) + " ready")
 
-# 2) client source from your server
-Say "downloading client source from $Origin…"
+# 2) client tarball
+Say "downloading client from $SourceDesc…"
 if (Test-Path (Join-Path $Home_ "clients")) { Remove-Item (Join-Path $Home_ "clients") -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $Home_ | Out-Null
 $tar = Join-Path $env:TEMP "loreweaver-client.tar.gz"
-Invoke-WebRequest "$Origin/loreweaver-client.tar.gz" -OutFile $tar
+Invoke-WebRequest $TarballUrl -OutFile $tar
 tar -xzf $tar -C $Home_          # tar.exe ships with Windows 10+
 Remove-Item $tar -Force
 
@@ -50,7 +61,8 @@ Pop-Location
 #    installer to fetch the latest client; anything else launches the TUI.
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 $entry = (Join-Path $Home_ "clients\tui\src\index.tsx")
-$cmd = "@echo off`r`nif /I `"%1`"==`"update`" ( powershell -NoProfile -Command `"irm $Origin/install.ps1 | iex`" & exit /b )`r`nbun run `"$entry`" %*"
+$updateInner = if ($env:TRPG_ORIGIN) { "`$env:TRPG_ORIGIN='$($env:TRPG_ORIGIN)'; irm $InstallerUrl | iex" } else { "irm $InstallerUrl | iex" }
+$cmd = "@echo off`r`nif /I `"%1`"==`"update`" ( powershell -NoProfile -Command `"$updateInner`" & exit /b )`r`nbun run `"$entry`" %*"
 Set-Content -Path (Join-Path $BinDir "loreweaver.cmd") -Value $cmd
 
 Write-Host ""
