@@ -10,7 +10,7 @@ You play it in a **game-style terminal UI**: one command drops you into a lobby 
 
 [![CI](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml/badge.svg)](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml) ![license](https://img.shields.io/badge/license-MIT-green) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![clients](https://img.shields.io/badge/clients-TypeScript%20%2F%20Bun-black)
 
-> **Status — early & honest.** Loreweaver is young and built largely by one person with AI assistance. The deterministic engine (dice, rules, character math) and its offline test suite are solid, and the terminal client is the polished path. Networked multiplayer, the chat-platform adapters, and real-model Keeper quality are actively maturing — see the **[roadmap](docs/roadmap.md)** for what's ready and what isn't.
+> **Status — early & honest.** Loreweaver is young and built largely by one person with AI assistance. The deterministic engine (dice, rules, character math) and its offline test suite are solid, and the terminal client is the polished path. Networked p2p multiplayer and real-model Keeper quality are actively maturing — see the **[roadmap](docs/roadmap.md)** for what's ready and what isn't (chat-platform adapters exist in-tree but are unmaintained; the focus is the terminal client).
 
 ## Why it's different
 Most tools are either **dice bots** (Avrae, SealDice — automation, no GM) or **persona-chat frontends** (SillyTavern — great characters, but no world, no causality, no rules). Loreweaver is the combination none of them have:
@@ -32,7 +32,7 @@ Run one command and you land in a game menu, not a config file:
 - **Keyboard *and* mouse**, a die-face cursor, a live "Keeper is thinking" spinner (so you can tell it's working, not frozen), and a party roster that folds open to full sheets.
 - Keeper-only tools — mint invite keys, hot-swap the model, import a module — appear only when you connect with a keeper key.
 
-Real dice, a persistent story, no browser needed. (There's a React web client too, and chat-platform adapters — see [Play surfaces](#play-surfaces).)
+Real dice, a persistent story, no browser needed — just the terminal client.
 
 ## Host a game for your friends (self-host, 3 steps)
 
@@ -55,14 +55,14 @@ loreweaver     # connect screen: paste the ticket + the invite key you gave them
 ```
 Same table, sit down, play. No accounts — the invite key is the ticket in.
 
-> **Transports**: **Iroh** (default · p2p · zero-config · **rich media (images/audio) rides this one only**, roadmap) vs **WebSocket** (`python -m app --serve --ws`, for domain+TLS always-on deployments and the **browser web client**; **text-only, no multimedia**). With a VPS, `--serve --ws` runs both; the web client is WS-only. Same protocol, different carrier — see [docs/protocol.md](docs/protocol.md).
+> **Transport**: Loreweaver connects over **Iroh** — direct peer-to-peer QUIC, dialed by a ticket, with no domain, TLS, or port-forward. Rich media (images/audio) is on the roadmap and will ride this transport (via iroh-blobs). See [docs/protocol.md](docs/protocol.md).
 
 ## Highlights
 - **AI Keeper via standard function-calling** — 60+ Keeper tools (dice, checks, sanity, sheets, module knowledge, notes, session reports, initiative). Bring any OpenAI-compatible or native model; the recommended default is **`deepseek-v4-pro` with thinking on**.
 - **Deterministic core, generative surface** — dice/`d20`, CoC success levels, character math, **character-creation rule validation**, the content-censor matcher and permissions are real code; narration and NPCs are the model. A check rolls *first*, then the Keeper narrates the graded result. (The censor ships with an empty wordlist — **moderation is OFF by default** and, once configured, only screens the Keeper's own replies, not player input — see [Content moderation](docs/deploy.md#content-moderation).)
 - **Rule-validated characters** — manual, rolled, AI-drafted, or imported, a sheet is always clamped to the rulepack's ranges and point budgets by deterministic code (`core/character_rules.py`) — the AI only proposes.
 - **AI NPCs & AI party members** — knowledge-scoped sub-actors that play fair: each acts *only* on what it would actually know, built by construction from its own record and never the keeper's secret pool, so those actors can't metagame. Fill an empty seat with an AI companion that rolls its own dice.
-- **One shared session, cross-transport** — a RoomHub can seat terminal and web players (and, once live-tested, chat-platform players) at the *same live table*.
+- **One shared session** — a RoomHub seats every player at the *same live table*, and keeps the transport-agnostic seam that (once live-tested) chat-platform players could join through.
 - **Two command dialects, one roller** — EN Avrae/d20 (`/roll 4d6kh3`, `[[1d20+5]]`, `adv/dis`) and CN SealDice (`.ra 侦查`, `困难/极难`, `.st 力量50`).
 - **Multi-vendor LLMs** — one env var switches provider: `deepseek`, `groq`, `openrouter`, `together`, `ollama`, `lmstudio`, … (OpenAI-compatible), `chatgpt` / `gpt-subscription` via an OpenAI-compatible proxy, or native `anthropic` / `gemini`.
 
@@ -86,44 +86,39 @@ TRPG_LLM__CHAT_MODEL=deepseek-v4-pro   TRPG_LLM__REASONING_EFFORT=max
 
 **Play in the terminal UI (the real experience):**
 ```bash
-uv run python -m app --tui-key add --room table --name me   # mint an invite key (copy it)
-uv run python -m app --serve                                 # start the WebSocket server (:8787)
+uv run python -m app --serve   # start the Iroh p2p server — prints a ticket + auto-mints a keeper key
 # in another terminal — the client opens on the connect screen:
 cd clients/tui && bun install && bun run dev
 ```
-Browser client instead: `cd clients/web && bun install && bun run dev`. No accounts — the host issues keys that bind players to a shared room.
+Paste the printed ticket + keeper key into the connect screen (or just click **Host locally** there, which does all of the above for you). No accounts — the host issues keys that bind players to a shared room.
 
 **One-line install for players (no clone/build).** Installs `bun`, fetches the client, and drops a `loreweaver` launcher — one command:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.sh | bash   # Windows: irm https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.ps1 | iex
-loreweaver          # launch → in the connect screen, enter your Keeper's wss://… host + invite key
+loreweaver          # launch → paste your Keeper's ticket + invite key in the connect screen
 loreweaver update   # self-update to the latest client
 ```
-Or host the built web client (`cd clients/web && VITE_WS_URL=wss://<your-host>/ws bun run build --base=/play/`) behind your reverse proxy for a zero-install browser table.
 
-### Deploy (self-host)
+### Run an always-on server (optional)
+Most tables are hosted p2p from a laptop (above). For a 24/7 public game, run it bare-metal on any box:
 ```bash
-./scripts/deploy.sh                 # Docker: docker compose up -d --build
-./scripts/deploy.sh --bare-metal    # no Docker: venv + install + run
+uv sync && uv run python -m app --serve   # a systemd unit keeps it up — see docs/deploy.md
 ```
-First run creates `.env` from `.env.example`. **The server auto-mints a keeper key on first boot** — grab it from `docker logs loreweaver` or `/data/keeper-key.txt`, connect with it, then mint more keys (and create rooms) right in the client's *Rooms & invites* screen — no server access needed. State (SQLite + keys) lives in the `/data` volume. Full guide — config, keys, persistence, reverse-proxy/TLS — in **[docs/deploy.md](docs/deploy.md)**.
+First run creates `.env` from `.env.example` and **auto-mints a keeper key** (printed + saved to `keeper-key.txt`). Connect with it, then mint more keys / create rooms right in the client's *Rooms & invites* screen. State (SQLite + keys) persists next to the process. Full guide — config, keys, systemd, keeper model — in **[docs/deploy.md](docs/deploy.md)**.
 
 ## Play surfaces
 | Surface | Status |
 |---|---|
-| **Terminal — OpenTUI** | ✅ **primary** — the game-style lobby above; local or networked |
+| **Terminal — OpenTUI** | ✅ **primary** — the game-style lobby above; local or networked p2p (Iroh) |
 | CLI (headless) | ✅ dev / quick trial / offline demo |
-| Browser (web, React) | ✅ same open [WebSocket protocol](docs/protocol.md) |
-| Discord · Telegram · QQ · Feishu | 🧪 adapters implemented, offline-unit-tested — **live bot connections not yet verified** |
-| SSH | 🧪 experimental (not a current focus) |
 
-Systems: **D&D 5e SRD** and **CoC 7e** ship as data-driven rulepacks (`rulepacks/*.yaml`) — add a system with no code change.
+Systems: **D&D 5e SRD** and **CoC 7e** ship as data-driven rulepacks (`rulepacks/*.yaml`) — add a system with no code change. (Chat-platform adapters — Discord/Telegram/QQ/Feishu — exist in-tree but are unmaintained and untested against live platforms; see the [roadmap](docs/roadmap.md).)
 
 ## Architecture
 ```
 core/  deterministic engine   infra/  store · config · i18n · llm · embeddings · vector · providers
 agent/ AI-Keeper brain + tools gateway/ platform-independent: commands · ops · hub · runner · director
-net/   WebSocket server         adapters/ cli · discord · telegram · qq · feishu   clients/ protocol · tui · web · ssh
+net/   Iroh p2p + session core  adapters/ cli (chat adapters in-tree, unmaintained)   clients/ protocol · tui
 ```
 The engine scopes all state by a stable `chat_key`; the RoomHub adds live cross-transport broadcast. See **[CLAUDE.md](CLAUDE.md)** for the layer contracts, the iron rules (deterministic-vs-generative, dice-first, information isolation), and how to add a rulepack / adapter / provider / tool / client. The client wire format is **[docs/protocol.md](docs/protocol.md)**.
 
