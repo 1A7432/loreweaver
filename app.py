@@ -208,20 +208,26 @@ def _run_serve(settings: Settings, i18n: I18n, args: argparse.Namespace) -> int:
     server = build_tui_server(settings, keystore, host=args.host, port=args.port)
     seed_dice(0)
 
+    # A clean shutdown (Ctrl-C, or the listener stopping) exits 0; a startup failure exits non-zero
+    # so systemd's `Restart=on-failure` fires and scripts/automation don't read "no ticket" as success.
+    started = False
     try:
-        asyncio.run(_serve_iroh(server, i18n, args.keys))
+        started = asyncio.run(_serve_iroh(server, i18n, args.keys))
     except KeyboardInterrupt:
-        pass
+        started = True
     finally:
         server.services.store.close()
-    return 0
+    return 0 if started else 1
 
 
-async def _serve_iroh(core: TuiServer, i18n: I18n, keys_path: str) -> None:
+async def _serve_iroh(core: TuiServer, i18n: I18n, keys_path: str) -> bool:
     """Run the Iroh p2p listener — the one carrier `--serve` starts. Share a ticket; no domain,
     TLS or port-forward. (WebSocket lives on ONLY as the offline test / loopback transport,
     instantiated directly in tests.) `core` is a `net.session.SessionCore` — a `TuiServer` is one,
-    so we borrow it as the shared engine without ever binding its socket."""
+    so we borrow it as the shared engine without ever binding its socket.
+
+    Returns True once the endpoint came online and served (a clean stop), False if it never
+    started — the caller turns a False into a non-zero exit code so a supervisor restarts it."""
     from net.iroh_server import IrohServer
 
     iroh_server = IrohServer(core)
@@ -230,15 +236,16 @@ async def _serve_iroh(core: TuiServer, i18n: I18n, keys_path: str) -> None:
         ticket = await asyncio.wait_for(iroh_server.start(), timeout=45)
     except ImportError:
         print(i18n.t("tui.serve.iroh.missing"), file=sys.stderr)
-        return
-    except Exception as exc:  # relay unreachable, bind failure, etc.
+        return False
+    except Exception as exc:  # relay unreachable, bind failure, startup timeout, etc.
         print(i18n.t("tui.serve.iroh.failed", error=str(exc)), file=sys.stderr)
-        return
+        return False
     _announce_iroh_ticket(i18n, ticket, keys_path)
     try:
         await iroh_server.serve()
     finally:
         await iroh_server.close()
+    return True
 
 
 def _announce_iroh_ticket(i18n: I18n, ticket: str, keys_path: str) -> None:

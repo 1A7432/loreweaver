@@ -14,7 +14,7 @@ interface Line {
 export interface HostLocalScreenProps {
   theme: Palette
   locale: string
-  // Called once the server is up; hands back its ws:// address, keeper key, and a stop().
+  // Called once the server is up; hands back its Iroh ticket, keeper key, and a stop().
   onReady: (host: string, key: string, stop: () => void) => void
   onBack: () => void
 }
@@ -30,6 +30,11 @@ export function HostLocalScreen({ theme, locale, onReady, onBack }: HostLocalScr
   const [done, setDone] = useState(false)
   const started = useRef(false)
   const nextId = useRef(0)
+  // `onReady` is a fresh inline closure each render; hold it in a ref so the bring-up effect can
+  // run exactly once (empty deps) without re-firing — and re-running its abort cleanup — on every
+  // parent re-render.
+  const onReadyRef = useRef(onReady)
+  onReadyRef.current = onReady
 
   useKeyboard((event: KeyEvent) => {
     if (typeof event.name === "string" && event.name.toLowerCase() === "escape") onBack()
@@ -38,19 +43,32 @@ export function HostLocalScreen({ theme, locale, onReady, onBack }: HostLocalScr
   useEffect(() => {
     if (started.current) return
     started.current = true
+    const controller = new AbortController()
+    let cancelled = false
     const log = (text: string, kind: LogKind) =>
       setLines((prev) => [...prev, { id: nextId.current++, text, kind }].slice(-MAX_LINES))
-    bringUpServer(log)
+    bringUpServer(log, controller.signal)
       .then((handle) => {
+        // The user hit Esc while we were bringing the server up: don't yank them back into the
+        // connect flow — tear the just-started server down instead of leaking it.
+        if (cancelled) {
+          handle.stop()
+          return
+        }
         setDone(true)
-        onReady(handle.host, handle.key, handle.stop)
+        onReadyRef.current(handle.host, handle.key, handle.stop)
       })
       .catch((err) => {
+        if (cancelled) return
         const message = err instanceof Error ? err.message : String(err)
         setError(message)
         log(message, "fail")
       })
-  }, [onReady])
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
+  }, [])
 
   const colorFor = (kind: LogKind): string =>
     kind === "step"

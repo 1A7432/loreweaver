@@ -6,7 +6,7 @@
 // so the shell can log straight in. Bare-metal — no Docker.
 
 import { existsSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { delimiter, dirname, join } from "node:path"
 
 const HOME = process.env.HOME ?? process.env.USERPROFILE ?? "."
 const SERVER_DIR = `${HOME}/.loreweaver/server`
@@ -61,14 +61,28 @@ async function pipeLines(stream: ReadableStream<Uint8Array> | null, onLine: (lin
 }
 
 // Run a command to completion, streaming stdout+stderr through `onLog`. Returns the exit code.
-async function run(cmd: string[], cwd: string | undefined, onLog: OnLog): Promise<number> {
+// If `signal` aborts (the user backed out), the child is killed so a long `uv sync`/clone doesn't
+// keep running after they've left the screen.
+async function run(cmd: string[], cwd: string | undefined, onLog: OnLog, signal?: AbortSignal): Promise<number> {
   onLog(`$ ${cmd.join(" ")}`, "step")
   const proc = Bun.spawn(cmd, { cwd, stdout: "pipe", stderr: "pipe", env: process.env as Record<string, string> })
-  await Promise.all([
-    pipeLines(proc.stdout, (line) => onLog(line, "out")),
-    pipeLines(proc.stderr, (line) => onLog(line, "err")),
-  ])
-  return await proc.exited
+  const onAbort = () => {
+    try {
+      proc.kill()
+    } catch {
+      // already gone
+    }
+  }
+  signal?.addEventListener("abort", onAbort, { once: true })
+  try {
+    await Promise.all([
+      pipeLines(proc.stdout, (line) => onLog(line, "out")),
+      pipeLines(proc.stderr, (line) => onLog(line, "err")),
+    ])
+    return await proc.exited
+  } finally {
+    signal?.removeEventListener("abort", onAbort)
+  }
 }
 
 async function ensureServerDir(onLog: OnLog): Promise<string> {
@@ -89,7 +103,7 @@ async function ensureServerDir(onLog: OnLog): Promise<string> {
   return SERVER_DIR
 }
 
-async function ensureUv(onLog: OnLog): Promise<void> {
+async function ensureUv(onLog: OnLog, signal?: AbortSignal): Promise<void> {
   if (Bun.which("uv")) {
     onLog("uv is already installed", "ok")
     return
@@ -99,9 +113,11 @@ async function ensureUv(onLog: OnLog): Promise<void> {
     process.platform === "win32"
       ? ["powershell", "-NoProfile", "-Command", "irm https://astral.sh/uv/install.ps1 | iex"]
       : ["sh", "-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"]
-  if ((await run(installer, undefined, onLog)) !== 0) throw new Error("uv install failed — check your network")
-  // uv drops its binary in one of these; make it visible to the steps that follow.
-  process.env.PATH = `${HOME}/.local/bin:${HOME}/.cargo/bin:${process.env.PATH ?? ""}`
+  if ((await run(installer, undefined, onLog, signal)) !== 0) throw new Error("uv install failed — check your network")
+  // uv drops its binary in one of these; prepend both to PATH so the steps that follow can find it.
+  // `delimiter` is `;` on Windows, `:` elsewhere — a hardcoded `:` would break the Windows lookup.
+  const uvDirs = [join(HOME, ".local", "bin"), join(HOME, ".cargo", "bin")]
+  process.env.PATH = [...uvDirs, process.env.PATH ?? ""].join(delimiter)
 }
 
 async function readSidecarKey(): Promise<string> {
@@ -112,7 +128,11 @@ async function readSidecarKey(): Promise<string> {
   }
 }
 
-async function waitReady(proc: Bun.Subprocess, onLog: OnLog): Promise<{ ticket: string; key: string }> {
+async function waitReady(
+  proc: Bun.Subprocess,
+  onLog: OnLog,
+  signal?: AbortSignal,
+): Promise<{ ticket: string; key: string }> {
   const reader = (proc.stderr as ReadableStream<Uint8Array>).getReader()
   const decoder = new TextDecoder()
   let line = ""
@@ -120,6 +140,11 @@ async function waitReady(proc: Bun.Subprocess, onLog: OnLog): Promise<{ ticket: 
   const timeout = new Promise<never>((_, reject) =>
     setTimeout(() => reject(new Error("the server did not become ready in time")), READY_TIMEOUT_MS),
   )
+  // Losing the race to an abort lets the caller tear the half-started server down promptly.
+  const aborted = new Promise<never>((_, reject) => {
+    if (signal?.aborted) reject(new Error("cancelled"))
+    else signal?.addEventListener("abort", () => reject(new Error("cancelled")), { once: true })
+  })
   const ready = (async (): Promise<{ ticket: string; key: string }> => {
     for (;;) {
       const { value, done } = await reader.read()
@@ -142,7 +167,7 @@ async function waitReady(proc: Bun.Subprocess, onLog: OnLog): Promise<{ ticket: 
     }
   })()
   try {
-    return await Promise.race([ready, timeout])
+    return await Promise.race([ready, timeout, aborted])
   } finally {
     try {
       reader.releaseLock()
@@ -152,13 +177,20 @@ async function waitReady(proc: Bun.Subprocess, onLog: OnLog): Promise<{ ticket: 
   }
 }
 
-export async function bringUpServer(onLog: OnLog): Promise<HostHandle> {
+export async function bringUpServer(onLog: OnLog, signal?: AbortSignal): Promise<HostHandle> {
+  const bailIfAborted = () => {
+    if (signal?.aborted) throw new Error("cancelled")
+  }
+  bailIfAborted()
   onLog(`OS: ${process.platform} / ${process.arch}`, "step")
   const serverDir = await ensureServerDir(onLog)
-  await ensureUv(onLog)
+  bailIfAborted()
+  await ensureUv(onLog, signal)
+  bailIfAborted()
 
   onLog("Installing Python + dependencies (uv sync) — this can take a minute the first time…", "step")
-  if ((await run(["uv", "sync"], serverDir, onLog)) !== 0) throw new Error("uv sync failed")
+  if ((await run(["uv", "sync"], serverDir, onLog, signal)) !== 0) throw new Error("uv sync failed")
+  bailIfAborted()
   onLog("Dependencies ready", "ok")
 
   onLog("Starting the local p2p server (Iroh) — waiting for a relay, ~10s…", "step")
@@ -173,13 +205,17 @@ export async function bringUpServer(onLog: OnLog): Promise<HostHandle> {
       // already gone
     }
   }
+  // If the user backs out while we're still waiting for the relay, kill the server we just spawned.
+  signal?.addEventListener("abort", stop, { once: true })
   void pipeLines(proc.stdout, (l) => onLog(l, "out"))
   try {
-    const { ticket, key } = await waitReady(proc, onLog)
+    const { ticket, key } = await waitReady(proc, onLog, signal)
     onLog("Server ready — dialing you in as Keeper over p2p", "ok")
     return { host: ticket, key, stop }
   } catch (error) {
     stop()
     throw error
+  } finally {
+    signal?.removeEventListener("abort", stop)
   }
 }

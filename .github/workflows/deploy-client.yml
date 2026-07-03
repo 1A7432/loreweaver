@@ -55,4 +55,7 @@ jobs:
           T="${{ secrets.LW_SSH_TARGET }}"
           scp loreweaver-client.tar.gz clients/install.sh clients/install.ps1 "$T:/var/www/1a7432.site/trpg/"
           ssh "$T" "chmod -R a+rX /var/www/1a7432.site/trpg"
+          # The React web client was removed; take its old bundle offline (idempotent) so a
+          # rebuilt server never re-serves a stale /play pointing at the retired WS entrypoint.
+          ssh "$T" "rm -rf /var/www/1a7432.site/play"
           echo "published → /trpg/loreweaver-client.tar.gz"
