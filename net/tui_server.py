@@ -21,47 +21,32 @@ log while the KP session keeps continuing from server-side history. See
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import ssl
-import uuid
-from collections import deque
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import websockets
 from websockets.exceptions import ConnectionClosed
 
-from agent.context import AgentCtx, FsAdapter, LocalFs
-from agent.kp_tools import build_kp_toolset
-from agent.loop import KPTurnResult
+from agent.context import FsAdapter
 from agent.services import Services
 from agent.tools import Toolset
 from gateway.commands import CommandRouter
 from gateway.hub import Event, RoomHub
-from gateway.ops import Censor, RateLimiter, censor_from_settings
-from gateway.session import SessionSource
-from gateway.turn import publish_state, run_turn
+from gateway.ops import Censor
+from gateway.turn import publish_state
 from infra.config import Settings
-from infra.i18n import I18n, get_i18n
-from net.admin import handle_admin_frame, is_admin_frame
+from infra.i18n import get_i18n
 from net.keystore import Keystore
 
-# v1.1 adds the additive, keeper-gated `admin_*` frames (see `net.admin` and
-# `docs/protocol.md`); pre-admin clients are unaffected and never send them.
-_PROTOCOL_VERSION = "1.1"
-_SERVER_BANNER = "loreweaver/1"
-
-# Hard cap on a single `input` frame's text before it reaches the LLM/history. A
-# client-controlled, unbounded string would otherwise blow up prompt size, context
-# cost and stored history; oversized input is truncated to this many characters.
-_MAX_INPUT_CHARS = 4000
-
-# How many trailing `agent.loop` chat-history messages a join/reconnect replays to the joining
-# connection (bounds the frame burst a rejoin sends). Mirrors `agent.session_recap`'s own
-# `_RECENT_MESSAGES` "recent turns" window.
-_HISTORY_REPLAY_CAP = 30
+# The transport-neutral session core + frame helpers now live in `net.session`; the WebSocket
+# server just adds the WS accept loop + `WsMember`. The underscore aliases keep the historical
+# `from net.tui_server import ...` imports (`net.iroh_server`, `_authenticate`) working unchanged.
+from net.session import SessionCore, resolve_session_fields, welcome_frame
+from net.session import error_frame as _error_frame
+from net.session import parse_frame as _parse_frame
+from net.session import render_frame as _render_frame
 
 
 @dataclass(eq=False)
@@ -105,10 +90,11 @@ class WsMember:
             await self.send_frame(frame)
 
 
-class TuiServer:
-    """Hosts the networked TUI: one WebSocket endpoint over a shared
-    `gateway.hub.RoomHub`, each room a shared AI-KP session
-    (`gateway.session.SessionSource(platform="tui", ...)`)."""
+class TuiServer(SessionCore):
+    """The WebSocket transport for the networked TUI: a `websockets` accept loop over the shared
+    `SessionCore` (one `gateway.hub.RoomHub`), each authenticated socket a `WsMember`. Kept as the
+    zero-config LOCAL / loopback / offline-test carrier; `net.iroh_server` is the default p2p
+    transport for reaching remote hosts. Both drive the same `SessionCore`, so they share a room."""
 
     def __init__(
         self,
@@ -125,36 +111,23 @@ class TuiServer:
         join_timeout: float | None = None,
         max_connections: int | None = None,
     ) -> None:
-        self.services = services
-        self.keystore = keystore
+        super().__init__(
+            services,
+            keystore,
+            command_router=command_router,
+            toolset=toolset,
+            censor=censor,
+            hub=hub,
+            fs=fs,
+            join_timeout=join_timeout,
+        )
         self.host = host
         self.port = port
-        self.fs = fs if fs is not None else LocalFs(Path.cwd())
-        # An injected hub lets this WS server share ONE bus with the chat gateway
-        # (app.py combined mode); standalone it owns its own (back-compat). Built
-        # BEFORE the command router + toolset so BOTH receive it: `.module` streams
-        # live import-progress frames through the router's hub (so a slow analysis
-        # shows a moving progress bar, not a frozen spinner), and companion_act (and
-        # other hub-driven KP tools) publish live companion sub-turns — without the
-        # hub each silently degrades (no progress bar / a bare companion line).
-        self.hub = hub if hub is not None else RoomHub()
-        self.command_router = command_router or CommandRouter(services, hub=self.hub)
-        self.toolset = toolset or build_kp_toolset(services, hub=self.hub, command_router=self.command_router)
-        # Built from `services.settings.censor` (see `infra.config.CensorSettings` /
-        # `docs/deploy.md` "Content moderation") unless a caller injects one (tests).
-        # With nothing configured this is an explicit no-op, not a fake wordlist.
-        self.censor = censor if censor is not None else censor_from_settings(services.settings.censor)
-        self.rate_limiter = RateLimiter()
-        # Recent AI-KP turns, for introspection/observability (e.g. tests and
-        # admin tooling asserting a keeper-only tool actually ran) — never
-        # itself broadcast over the wire.
-        self.turns: deque[KPTurnResult] = deque(maxlen=50)
         self._server: Any = None
-        # Availability hardening (see `infra.config.TuiSettings`): callers may override either
-        # knob directly (mainly for tests); otherwise both default from `services.settings.tui`.
-        tui_settings = services.settings.tui
-        self.join_timeout = tui_settings.join_timeout if join_timeout is None else join_timeout
-        self.max_connections = tui_settings.max_connections if max_connections is None else max_connections
+        # Availability hardening (`infra.config.TuiSettings`): overridable for tests, else settings.
+        self.max_connections = (
+            services.settings.tui.max_connections if max_connections is None else max_connections
+        )
         self._active_connections = 0
 
     @property
@@ -221,41 +194,6 @@ class TuiServer:
         finally:
             self._active_connections -= 1
 
-    async def _replay_history(self, member: WsMember) -> None:
-        """Replay this room's recent narrative to `member` ONLY (never broadcast to the room).
-
-        A joining or reconnecting player would otherwise see an empty log while the KP session
-        keeps continuing from server-side history. Reuses `agent.loop.run_kp_turn`'s own turn
-        history (the `chat_history.{chat_key}` store key it persists to and replays into its own
-        prompt -- see `agent.loop._persist_history`/`agent.session_recap._recent_transcript`) as
-        the source of "what already happened", rendering its last `_HISTORY_REPLAY_CAP` entries as
-        `narrative` frames: `role: "user"` (the player's own turns) as `speaker: "player"`,
-        `role: "assistant"` (the KP's replies) as `speaker: "kp"`.
-
-        Best-effort: any failure (unset/malformed history) silently no-ops rather than blocking the
-        join.
-        """
-        chat_key = self._ctx_for(member).chat_key
-        try:
-            raw = await self.services.store.get(user_key="", store_key=f"chat_history.{chat_key}")
-            if not raw:
-                return
-            history = json.loads(raw)
-            if not isinstance(history, list):
-                return
-            for entry in history[-_HISTORY_REPLAY_CAP:]:
-                if not isinstance(entry, dict):
-                    continue
-                text = str(entry.get("content") or "").strip()
-                if not text:
-                    continue
-                role = entry.get("role")
-                speaker = "player" if role == "user" else "kp" if role == "assistant" else "system"
-                fmt = "plain" if speaker == "player" else "markdown"
-                await member.deliver(Event.narrative(speaker=speaker, text=text, fmt=fmt))
-        except Exception:
-            return
-
     async def _authenticate(self, ws: Any) -> WsMember | None:
         """Consume the mandatory first `join` frame; `welcome` + return the
         `WsMember` on success, `error` + close the socket on any failure.
@@ -293,103 +231,8 @@ class TuiServer:
         await _send(ws, welcome_frame(fields))
         return member
 
-    async def _on_frame(self, member: WsMember, raw: Any) -> None:
-        i18n = get_i18n(member.locale)
-        frame = _parse_frame(raw)
-        if frame is None:
-            await member.send_frame(_error_frame("bad_frame", i18n))
-            return
 
-        kind = frame.get("type")
-        if kind == "input":
-            # Cap the client-controlled text before it hits the LLM/history (dispatch_input
-            # already wraps the turn itself in its own try/except -> error frame).
-            text = str(frame.get("text") or "")[:_MAX_INPUT_CHARS]
-            if text:
-                await self.dispatch_input(member, text)
-            return
-        # Any failure in the ping/admin branches becomes a per-connection error frame,
-        # never an unhandled exception that would drop the socket (mirrors dispatch_input).
-        try:
-            if kind == "ping":
-                await member.send_frame({"type": "pong", "t": frame.get("t")})
-                return
-            if is_admin_frame(kind):
-                # Keeper-gated admin surface (LLM config + room keys). The gate is the
-                # connection's keystore role; `handle_admin_frame` refuses non-keepers and
-                # scopes destructive/room-content ops to the connection's OWN room.
-                reply = await handle_admin_frame(
-                    self.services, self.keystore, member.role, member.room, frame, i18n
-                )
-                await member.send_frame(reply)
-                return
-        except Exception:
-            await member.send_frame(_error_frame("server_error", i18n))
-            return
-
-        await member.send_frame(_error_frame("bad_frame", i18n))
-
-    # -- turn flow (M4 §1 "Turn flow", now via the hub) -----------------------
-
-    async def dispatch_input(self, member: WsMember, text: str) -> None:
-        """Drive one player turn (command or AI-KP) to completion via the hub.
-
-        Rate-limiting and per-connection error frames stay here (transport
-        concerns); the turn itself and its room fan-out are `run_turn`'s job.
-        """
-        i18n = get_i18n(member.locale)
-        if not self.rate_limiter.allow(member.id) or not self.rate_limiter.allow(member.session_key):
-            await member.send_frame(_error_frame("rate_limited", i18n))
-            return
-
-        ctx = self._ctx_for(member)
-        try:
-            # Serialize the WHOLE turn per room (F8): two connections in the same room
-            # (or a chat member in combined mode) must not interleave their read-modify-write
-            # of the shared per-room state. `run_turn` publishes the companion sub-turn inline
-            # (it re-enters `run_turn`, not this choke point), so the lock is never re-acquired.
-            async with self.hub.turn_lock(member.session_key):
-                result = await run_turn(
-                    self.hub,
-                    self.services,
-                    ctx,
-                    text,
-                    command_router=self.command_router,
-                    toolset=self.toolset,
-                    censor=self.censor,
-                    origin=member,
-                )
-        except Exception:
-            await member.send_frame(_error_frame("server_error", i18n))
-            return
-
-        if result is not None:
-            self.turns.append(result)
-
-    # -- helpers ------------------------------------------------------------
-
-    def _ctx_for(self, member: WsMember) -> AgentCtx:
-        """Build the `AgentCtx` for `member`'s room (M4 §"Auth / keystore").
-
-        Carries the connection's keystore role in `extra["role"]` (mirrors the
-        `raw`/`source` pattern other transports stash in `extra`) so
-        `gateway.commands._privilege_level` can gate keeper-only dot-commands by the
-        AUTHENTICATED role instead of trusting every `tui` connection as a keeper —
-        the TUI is a multi-user network service, not a single local operator."""
-        source = SessionSource(
-            platform="tui", chat_type="group", chat_id=member.room, user_id=member.id, user_name=member.name
-        )
-        return AgentCtx(
-            chat_key=source.chat_key(),
-            user_id=member.id,
-            platform="tui",
-            locale=member.locale,
-            fs=self.fs,
-            extra={"role": member.role},
-        )
-
-
-# -- module-level framing helpers ------------------------------------------
+# -- WebSocket-only helpers ------------------------------------------------
 
 
 def _build_ssl_context(settings: Settings) -> ssl.SSLContext | None:
@@ -414,109 +257,9 @@ def _build_ssl_context(settings: Settings) -> ssl.SSLContext | None:
     return context
 
 
-def resolve_session_fields(keystore: Keystore, key: str, locale: str) -> dict[str, str] | None:
-    """Resolve a raw invite `key` to a member's session fields, or `None` if unknown.
-
-    The transport-agnostic half of the join handshake: keystore lookup (+ one hot-reload
-    retry so a key minted after boot is accepted without a restart) and the derived id /
-    AUTHORITATIVE display name (the keystore entry's name, never a client-supplied one —
-    else a connection could impersonate another player in the room fan-out) / session
-    scoping. Both the WS `_authenticate` and `net.iroh_server` build their Member from
-    this, so auth + room/role binding is identical on either wire.
-    """
-    entry = keystore.get(key)
-    if entry is None:
-        keystore.refresh()
-        entry = keystore.get(key)
-    if entry is None:
-        return None
-    client_id = f"tui:{hashlib.sha1(key.encode('utf-8')).hexdigest()[:8]}"
-    name = entry.name or client_id
-    source = SessionSource(
-        platform="tui", chat_type="group", chat_id=entry.room, user_id=client_id, user_name=name
-    )
-    return {
-        "id": client_id,
-        "user_key": source.user_key(),
-        "name": name,
-        "role": entry.role,
-        "room": entry.room,
-        "session_key": source.chat_key(),
-        "locale": locale,
-    }
-
-
-def welcome_frame(fields: dict[str, str]) -> dict[str, Any]:
-    """Build the `welcome` frame from resolved session fields (shared by both transports)."""
-    return {
-        "type": "welcome",
-        "protocol": _PROTOCOL_VERSION,
-        "room": fields["room"],
-        "you": {"id": fields["id"], "name": fields["name"], "role": fields["role"]},
-        "locale": fields["locale"],
-        "server": _SERVER_BANNER,
-    }
-
-
-def _render_frame(event: Event) -> dict[str, Any] | None:
-    """Render a normalized :class:`~gateway.hub.Event` into its WS JSON frame.
-
-    This is the terminal transport's renderer: `narrative`/`dice`/`state`/
-    `presence`/`system` map to the like-named frames, and a `player_action`
-    echo renders as a `narrative{speaker:"player"}` (the input echo).
-    """
-    if event.kind == "player_action":
-        return {
-            "type": "narrative",
-            "id": _new_id(),
-            "speaker": "player",
-            "name": event.name,
-            "text": event.text,
-            "format": event.fmt,
-        }
-    if event.kind == "narrative":
-        frame: dict[str, Any] = {
-            "type": "narrative",
-            "id": _new_id(),
-            "speaker": event.speaker,
-            "text": event.text,
-            "format": event.fmt,
-        }
-        if event.name:
-            frame["name"] = event.name
-        return frame
-    if event.kind == "dice":
-        return {"type": "dice", **event.data}
-    if event.kind == "state":
-        return dict(event.data)
-    if event.kind == "presence":
-        return {"type": "presence", **event.data}
-    if event.kind == "system":
-        return {"type": "system", "level": event.data.get("level", ""), "text": event.text}
-    return None
-
-
 async def _send(ws: Any, frame: dict[str, Any]) -> None:
     """Send one JSON `frame` to `ws`, swallowing an already-closed connection."""
     try:
         await ws.send(json.dumps(frame, ensure_ascii=False))
     except ConnectionClosed:
         pass
-
-
-def _parse_frame(raw: Any) -> dict[str, Any] | None:
-    if not isinstance(raw, (str, bytes)):
-        return None
-    try:
-        data = json.loads(raw)
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return None
-    return data if isinstance(data, dict) else None
-
-
-def _error_frame(code: str, i18n: I18n) -> dict[str, Any]:
-    return {"type": "error", "code": code, "message": i18n.t(f"tui.error.{code}")}
-
-
-def _new_id() -> str:
-    return uuid.uuid4().hex

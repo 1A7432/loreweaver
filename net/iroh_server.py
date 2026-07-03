@@ -5,7 +5,7 @@ join handshake, only the carrier differs. Where WebSocket gives message boundari
 bidirectional stream is a raw byte stream, so frames are NEWLINE-DELIMITED JSON (one compact
 ``{...}\\n`` per frame) over one long-lived ``accept_bi`` stream.
 
-This reuses the WS server's transport-agnostic core (`net.tui_server.TuiServer`): keystore
+This reuses the WS server's transport-agnostic core (`net.session.SessionCore`): keystore
 auth (`resolve_session_fields`), room binding, history replay, the frame dispatch (`_on_frame`),
 the per-turn choke (`dispatch_input`) and the shared `RoomHub`. An `IrohMember` only
 reimplements `send_frame`/`deliver` (write a line to its QUIC `SendStream`) — so a p2p player
@@ -25,12 +25,7 @@ from typing import Any
 from gateway.hub import Event
 from gateway.turn import publish_state
 from infra.i18n import get_i18n
-from net.tui_server import (
-    TuiServer,
-    _render_frame,
-    resolve_session_fields,
-    welcome_frame,
-)
+from net.session import SessionCore, render_frame, resolve_session_fields, welcome_frame
 
 # The custom ALPN both ends negotiate. Bump if the framing (not the JSON protocol) changes.
 ALPN = b"loreweaver/tui/1"
@@ -74,7 +69,7 @@ class IrohMember:
                 pass  # peer gone / stream reset — dropped like a closed socket
 
     async def deliver(self, event: Event) -> None:
-        frame = _render_frame(event)
+        frame = render_frame(event)
         if frame is not None:
             await self.send_frame(frame)
 
@@ -121,14 +116,14 @@ async def _write_line(send: Any, frame: dict[str, Any]) -> None:
 
 
 class IrohServer:
-    """Runs the Iroh (p2p) listener over the SAME core as the WS `TuiServer`.
+    """Runs the Iroh (p2p) listener over the SAME SessionCore as the WS server.
 
     Composition, not inheritance: it borrows the core's keystore/hub/services and its
     transport-agnostic methods (`_replay_history`/`_on_frame`/`dispatch_input`/`_ctx_for`),
     so the WS server stays untouched and both wires fan out through one `RoomHub`.
     """
 
-    def __init__(self, core: TuiServer) -> None:
+    def __init__(self, core: SessionCore) -> None:
         self.core = core
         self._endpoint: Any = None
         self._tasks: set[asyncio.Task[Any]] = set()
@@ -185,7 +180,7 @@ class IrohServer:
 
     async def _authenticate(self, reader: _LineReader, send: Any) -> IrohMember | None:
         """Consume the mandatory first `join` line; `welcome` + return an `IrohMember` on
-        success, best-effort `error` + drop on failure. Mirrors `TuiServer._authenticate`."""
+        success, best-effort `error` + drop on failure. Mirrors the WS _authenticate."""
         i18n = get_i18n(self.core.services.settings.locale)
         timeout = getattr(self.core, "join_timeout", _DEFAULT_JOIN_TIMEOUT) or _DEFAULT_JOIN_TIMEOUT
         try:

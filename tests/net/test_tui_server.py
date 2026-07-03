@@ -31,7 +31,8 @@ from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM, ToolCall, assistant_text, assistant_tools, tool_call
 from net.keystore import Keystore
 from net.state import build_room_state
-from net.tui_server import _MAX_INPUT_CHARS, TuiServer, WsMember
+from net.session import _MAX_INPUT_CHARS
+from net.tui_server import TuiServer, WsMember
 from tests.agent.test_kp_selfplay import FIXTURES, SENTINEL, _tools_called_this_turn, kp_responder
 
 _RECV_TIMEOUT = 5.0
@@ -227,7 +228,7 @@ async def test_admin_frame_exception_becomes_error_frame_not_a_dropped_socket(mo
     async def _boom(*args, **kwargs):
         raise RuntimeError("admin handler blew up")
 
-    monkeypatch.setattr("net.tui_server.handle_admin_frame", _boom)
+    monkeypatch.setattr("net.session.handle_admin_frame", _boom)
 
     url = await _start(server)
     try:
