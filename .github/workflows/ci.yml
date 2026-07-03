@@ -48,9 +48,6 @@ jobs:
       - name: tui (OpenTUI)
         working-directory: clients/tui
         run: bun install && bun test && bun run build
-      - name: web (React + Vite)
-        working-directory: clients/web
-        run: bun install && bun run test && bun run build
       - name: ssh (ssh2 + Bun PTY)
         working-directory: clients/ssh
         run: bun install && bun test

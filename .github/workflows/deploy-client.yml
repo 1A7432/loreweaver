@@ -1,7 +1,7 @@
 name: deploy-client
 # On every push to main that touches the clients, repackage the terminal-client
-# tarball + installers and rebuild the web client, then publish them to the file
-# server so `loreweaver update` and https://1a7432.site/play/ pick up the latest.
+# tarball + installers and publish them to the file server so `loreweaver update`
+# and the install mirror pick up the latest.
 on:
   push:
     branches: [main]
@@ -38,14 +38,8 @@ jobs:
           else
             gh release create latest loreweaver-client.tar.gz clients/install.sh clients/install.ps1 \
               --repo "$R" --title "Loreweaver client (rolling latest)" \
-              --notes "Rolling build of the terminal + web client from main. \`loreweaver update\` tracks this." --latest
+              --notes "Rolling build of the terminal client from main. \`loreweaver update\` tracks this." --latest
           fi
-
-      - name: Build web client
-        working-directory: clients/web
-        run: |
-          bun install --frozen-lockfile || bun install
-          VITE_WS_URL=wss://1a7432.site/ws bun run build --base=/play/
 
       - name: Set up SSH
         run: |
@@ -55,13 +49,10 @@ jobs:
           host="${{ secrets.LW_SSH_TARGET }}"; host="${host##*@}"
           ssh-keyscan -H "$host" >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Publish tarball + installers + web client
-        # ubuntu-latest no longer ships rsync, so use scp; clear /play/ first for a
-        # clean web deploy (drops stale hashed assets).
+      - name: Publish tarball + installers
+        # ubuntu-latest no longer ships rsync, so use scp.
         run: |
           T="${{ secrets.LW_SSH_TARGET }}"
           scp loreweaver-client.tar.gz clients/install.sh clients/install.ps1 "$T:/var/www/1a7432.site/trpg/"
-          ssh "$T" "rm -rf /var/www/1a7432.site/play/* /var/www/1a7432.site/play/.[!.]*"
-          scp -r clients/web/dist/* "$T:/var/www/1a7432.site/play/"
-          ssh "$T" "chmod -R a+rX /var/www/1a7432.site/trpg /var/www/1a7432.site/play"
-          echo "published → /trpg/loreweaver-client.tar.gz + /play/"
+          ssh "$T" "chmod -R a+rX /var/www/1a7432.site/trpg"
+          echo "published → /trpg/loreweaver-client.tar.gz"
