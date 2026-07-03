@@ -6,7 +6,7 @@
 # It: (1) makes sure `bun` is on PATH (bun is both the runtime AND the package
 # manager that auto-resolves the right @opentui/core native core per platform),
 # (2) downloads the client SOURCE from your server (not GitHub — friendlier from
-# China), (3) `bun install`s it via a fast registry mirror, (4) drops a `trpg-kp`
+# China), (3) `bun install`s it via a fast registry mirror, (4) drops a `loreweaver`
 # launcher. Nothing here needs root.
 #
 # Override anything via env: TRPG_ORIGIN (where install.sh + the tarball live),

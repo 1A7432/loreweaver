@@ -27,7 +27,7 @@ The bet is that a real dice/rules core plus a knowledge-scoped model can *run* a
 Run one command and you land in a game menu, not a config file:
 
 ```
-trpg-kp
+loreweaver
 ┌ connect ───────────────┐         ┌ main menu · role-aware ──────┐
 │ host  [ws://…:8787   ] │   →     │ ⚄ enter game                 │
 │ key   [ invite key   ] │         │   my character   (create ▸)  │
@@ -79,6 +79,14 @@ uv run python -m app --serve                                 # start the WebSock
 cd clients/tui && bun install && bun run dev
 ```
 Browser client instead: `cd clients/web && bun install && bun run dev`. No accounts — the host issues keys that bind players to a shared room.
+
+**Give players a one-line install (no clone/build).** Serve `clients/install.sh` (and `install.ps1` for Windows) from your host — the script ensures `bun`, fetches the client source, and drops a `loreweaver` launcher. Players then:
+```bash
+curl -fsSL https://<your-host>/trpg/install.sh | bash   # Windows: irm https://<your-host>/trpg/install.ps1 | iex
+loreweaver          # launch → connect to wss://<your-host>/ws with an invite key
+loreweaver update   # self-update to the latest client
+```
+Or host the built web client (`cd clients/web && VITE_WS_URL=wss://<your-host>/ws bun run build --base=/play/`) behind your reverse proxy for a zero-install browser table.
 
 ### Deploy (self-host)
 ```bash
