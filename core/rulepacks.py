@@ -1,15 +1,31 @@
-"""Rule-pack loading and fixed derived-stat helpers for command routing."""
+"""Rule-pack loading and derived-stat computation for command routing.
+
+A "rule pack" is a `rulepacks/<id>.yaml` file. Dropping a new file in that
+directory makes the system usable: it is discovered, resolvable by its id,
+its declared `names:`, and its `set_keys:`, and its `derived:` section is
+compiled into safe, non-evaluated derived-stat formulas.
+
+Derived stats are HYBRID:
+  - a small SAFE declarative DSL (copy_of / half_of / floor_div / sum_ranges)
+    for pure-data systems that need no code, and
+  - a named-computer registry (real Python callables, `_NAMED_COMPUTERS`) for
+    the built-in systems' bespoke math (CoC damage bonus, D&D ability mods, ...).
+Nothing in the `derived:` section is ever `eval`/`exec`-ed.
+"""
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _RULEPACK_DIR = _REPO_ROOT / "rulepacks"
@@ -28,6 +44,11 @@ def _int_value(values: Mapping[str, Any], key: str, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+# --------------------------------------------------------------------------
+# Built-in derived-stat computers (real code; the deterministic core).
+# --------------------------------------------------------------------------
 
 
 def _coc_str_siz(values: Mapping[str, Any]) -> int:
@@ -137,6 +158,18 @@ def _dnd_pp(values: Mapping[str, Any]) -> int:
     return 10 + _int_value({"察觉": perception}, "察觉", 0)
 
 
+# Individually-named computers, referenceable from YAML via `{computer: <name>}`.
+_NAMED_COMPUTERS: dict[str, Callable[[Mapping[str, Any]], Any]] = {
+    "coc_db": _coc_db,
+    "coc_build": _coc_build,
+    "coc_mov": _coc_mov,
+    "coc_hp": _coc_hp,
+    "coc_mp": _coc_mp,
+    "coc_sanmax": _coc_sanmax,
+    "coc_own_language": _coc_own_language,
+    "coc_dodge": _coc_dodge,
+}
+
 _COC_DERIVED: dict[str, Callable[[Mapping[str, Any]], Any]] = {
     "DB": _coc_db,
     "体格": _coc_build,
@@ -161,10 +194,130 @@ _DND_DERIVED: dict[str, Callable[[Mapping[str, Any]], Any]] = {
     **{skill: _dnd_skill_for(skill) for skill in _DND_SKILL_ABILITIES},
 }
 
-_DERIVED_TABLES: dict[str, dict[str, Callable[[Mapping[str, Any]], Any]]] = {
+# Whole generated tables, referenceable from YAML via `{computer_group: <id>}`.
+# Lets a pack reuse a built-in system's entire generated derived table (e.g.
+# dnd5e's per-skill ability-modifier table) without hand-transcribing it.
+_COMPUTER_GROUPS: dict[str, dict[str, Callable[[Mapping[str, Any]], Any]]] = {
     "coc7": _COC_DERIVED,
     "dnd5e": _DND_DERIVED,
 }
+
+
+# --------------------------------------------------------------------------
+# Safe declarative derived-stat DSL. Never eval/exec: every spec shape below
+# is the ONLY vocabulary understood; anything else raises ValueError at load.
+# --------------------------------------------------------------------------
+
+
+def _compile_copy_of(stat: str, default: int) -> Callable[[Mapping[str, Any]], Any]:
+    # Numeric copy: int-coerce (like the built-in computers) and fall back to the source
+    # stat's DECLARED default, so a partial/non-numeric values dict yields the same result as
+    # a full sheet — matching e.g. the old `_coc_own_language` (`_int_value(values, 教育, 50)`).
+    def _calc(values: Mapping[str, Any]) -> Any:
+        return _int_value(values, stat, default)
+
+    return _calc
+
+
+def _compile_half_of(stat: str, default: int) -> Callable[[Mapping[str, Any]], Any]:
+    def _calc(values: Mapping[str, Any]) -> Any:
+        return _int_value(values, stat, default) // 2
+
+    return _calc
+
+
+def _compile_floor_div(stat: str, divisor: int, default: int) -> Callable[[Mapping[str, Any]], Any]:
+    def _calc(values: Mapping[str, Any]) -> Any:
+        return _int_value(values, stat, default) // divisor
+
+    return _calc
+
+
+def _compile_sum_ranges(
+    stats: list[tuple[str, int]], ranges: list[tuple[int, int, Any]], fallback: Any
+) -> Callable[[Mapping[str, Any]], Any]:
+    # `stats` is a list of (name, default) so each summand falls back to its declared default.
+    def _calc(values: Mapping[str, Any]) -> Any:
+        total = sum(_int_value(values, stat, default) for stat, default in stats)
+        for lo, hi, result in ranges:
+            if lo <= total <= hi:
+                return result
+        return fallback
+
+    return _calc
+
+
+def _compile_derived_spec(
+    pack_id: str, stat_name: str, spec: Any, defaults: Mapping[str, Any] | None = None
+) -> Callable[[Mapping[str, Any]], Any]:
+    """Compile one `derived:` entry's spec into a callable. SAFE: fixed vocabulary only.
+
+    `defaults` is the pack's declared defaults, used so a stat-referencing primitive falls
+    back to that stat's declared default (matching the built-in computers' hardcoded defaults);
+    omit it (as isolated unit tests do) to fall back to 0.
+    """
+    if defaults is None:
+        defaults = {}
+    if not isinstance(spec, Mapping):
+        raise ValueError(f"rulepack '{pack_id}': derived spec for '{stat_name}' must be a mapping, got {spec!r}")
+
+    if "computer" in spec:
+        name = str(spec["computer"])
+        func = _NAMED_COMPUTERS.get(name)
+        if func is None:
+            raise ValueError(f"rulepack '{pack_id}': unknown computer '{name}' for derived stat '{stat_name}'")
+        return func
+
+    if "copy_of" in spec:
+        stat = str(spec["copy_of"])
+        return _compile_copy_of(stat, _int_value(defaults, stat, 0))
+
+    if "half_of" in spec:
+        stat = str(spec["half_of"])
+        return _compile_half_of(stat, _int_value(defaults, stat, 0))
+
+    if "floor_div" in spec:
+        params = spec["floor_div"]
+        if not isinstance(params, Mapping) or "of" not in params or "by" not in params:
+            raise ValueError(f"rulepack '{pack_id}': 'floor_div' for '{stat_name}' needs 'of' and 'by'")
+        stat = str(params["of"])
+        return _compile_floor_div(stat, int(params["by"]), _int_value(defaults, stat, 0))
+
+    if "sum_ranges" in spec:
+        params = spec["sum_ranges"]
+        if not isinstance(params, Mapping) or "of" not in params or "ranges" not in params:
+            raise ValueError(f"rulepack '{pack_id}': 'sum_ranges' for '{stat_name}' needs 'of' and 'ranges'")
+        stats = [(str(item), _int_value(defaults, str(item), 0)) for item in params["of"]]
+        ranges: list[tuple[int, int, Any]] = []
+        for entry in params["ranges"]:
+            if not isinstance(entry, (list, tuple)) or len(entry) != 3:
+                raise ValueError(f"rulepack '{pack_id}': 'sum_ranges' range entries must be [lo, hi, value]")
+            lo, hi, result = entry
+            ranges.append((int(lo), int(hi), result))
+        return _compile_sum_ranges(stats, ranges, params.get("else"))
+
+    raise ValueError(f"rulepack '{pack_id}': unrecognized derived spec shape for '{stat_name}': {spec!r}")
+
+
+def _compile_derived_section(
+    pack_id: str, derived: Mapping[str, Any], defaults: Mapping[str, Any] | None = None
+) -> dict[str, Callable[[Mapping[str, Any]], Any]]:
+    formulas: dict[str, Callable[[Mapping[str, Any]], Any]] = {}
+    for stat_name, spec in derived.items():
+        if isinstance(spec, Mapping) and "computer_group" in spec:
+            group_id = str(spec["computer_group"])
+            group = _COMPUTER_GROUPS.get(group_id)
+            if group is None:
+                raise ValueError(f"rulepack '{pack_id}': unknown computer_group '{group_id}'")
+            formulas.update(group)
+            continue
+        formulas[str(stat_name)] = _compile_derived_spec(pack_id, str(stat_name), spec, defaults)
+    return formulas
+
+
+# --------------------------------------------------------------------------
+# RulePack + discovery.
+# --------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -179,6 +332,7 @@ class RulePack:
     creation_constraints: dict[str, Any]
     alias_to_canonical: dict[str, str]
     derived_formulas: dict[str, Callable[[Mapping[str, Any]], Any]]
+    names: list[str] = field(default_factory=list)
 
     def resolve_skill(self, name: str) -> str | None:
         """Resolve a player-entered skill/attribute name to this pack's canonical key."""
@@ -201,29 +355,73 @@ def _build_alias_map(alias: Mapping[str, Any]) -> dict[str, str]:
     return flattened
 
 
-@cache
-def load_rulepack(system: str) -> RulePack:
-    """Load and cache `rulepacks/{coc7,dnd5e}.yaml`."""
-    normalized = system.strip().casefold()
-    if normalized in {"coc", "coc7", "call of cthulhu"}:
-        normalized = "coc7"
-    elif normalized in {"dnd", "dnd5e", "d&d5e"}:
-        normalized = "dnd5e"
-    else:
-        raise ValueError(f"unknown rulepack: {system}")
-
-    path = _RULEPACK_DIR / f"{normalized}.yaml"
-    with path.open("r", encoding="utf-8") as fh:
-        data = yaml.safe_load(fh) or {}
-
+def _build_rulepack(pack_id: str, data: Mapping[str, Any]) -> RulePack:
     alias = data.get("alias") or {}
+    derived = data.get("derived") or {}
+    defaults = dict(data.get("defaults") or {})
     return RulePack(
-        system=normalized,
-        defaults=dict(data.get("defaults") or {}),
+        system=pack_id,
+        defaults=defaults,
         alias={str(key): list(value or []) for key, value in alias.items()},
         st_show=dict(data.get("st_show") or {}),
         set_keys=list(data.get("set_keys") or []),
         creation_constraints=dict(data.get("creation_constraints") or {}),
         alias_to_canonical=_build_alias_map(alias),
-        derived_formulas=dict(_DERIVED_TABLES[normalized]),
+        derived_formulas=_compile_derived_section(pack_id, derived, defaults),
+        names=[str(name) for name in (data.get("names") or [])],
     )
+
+
+def _parse_rulepack_file(path: Path) -> RulePack:
+    with path.open("r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    if not isinstance(data, Mapping):
+        raise ValueError(f"rulepack '{path.stem}': YAML root must be a mapping, got {type(data).__name__}")
+    return _build_rulepack(path.stem, data)
+
+
+@cache
+def _discover_registry() -> dict[str, RulePack]:
+    """Scan `rulepacks/*.yaml`; each file stem is a system id.
+
+    Robust by construction: a single malformed/broken YAML file (parse error,
+    bad structure, or an invalid `derived:` spec) is logged and skipped — it
+    never prevents discovery of the other, valid packs.
+    """
+    registry: dict[str, RulePack] = {}
+    if not _RULEPACK_DIR.is_dir():
+        return registry
+    for path in sorted(_RULEPACK_DIR.glob("*.yaml")):
+        try:
+            registry[path.stem] = _parse_rulepack_file(path)
+        except Exception:
+            logger.warning("Skipping malformed rulepack file: %s", path, exc_info=True)
+    return registry
+
+
+@cache
+def _alias_resolver() -> dict[str, str]:
+    """Normalized alias -> pack id, built from each pack's id, `names:`, and `set_keys:`."""
+    resolver: dict[str, str] = {}
+    for pack_id, pack in _discover_registry().items():
+        for candidate in (pack_id, *pack.names, *pack.set_keys):
+            key = _normalize_alias(str(candidate))
+            resolver.setdefault(key, pack_id)
+    return resolver
+
+
+def available_systems() -> list[str]:
+    """Return the sorted ids of every rule pack discoverable in `rulepacks/`."""
+    return sorted(_discover_registry())
+
+
+def load_rulepack(system: str) -> RulePack:
+    """Resolve `system` (an id, a declared name, or a set_key) to its RulePack.
+
+    Resolution is cached keyed by the resolved pack id (via `_discover_registry`),
+    so every alias of a pack returns the same loaded `RulePack`.
+    """
+    pack_id = _alias_resolver().get(_normalize_alias(system))
+    if pack_id is None:
+        raise ValueError(f"unknown rulepack: {system}")
+    return _discover_registry()[pack_id]

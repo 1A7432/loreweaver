@@ -1,3 +1,4 @@
+names: [coc, coc7, "call of cthulhu"]
 defaults:
   力量: 50
   体质: 50
@@ -203,6 +204,17 @@ st_show:
   itemsPerLine: 4
   ignores: [生命值上限, 魔法值上限, 理智上限]
 set_keys: [coc, coc7]
+derived:
+  DB: {computer: coc_db}
+  体格: {computer: coc_build}
+  移动力: {computer: coc_mov}
+  生命值上限: {computer: coc_hp}
+  生命值: {computer: coc_hp}
+  魔法值上限: {computer: coc_mp}
+  魔法值: {computer: coc_mp}
+  理智上限: {computer: coc_sanmax}
+  母语: {copy_of: 教育}
+  闪避: {half_of: 敏捷}
 creation_constraints:
   characteristics:
     STR: {min: 15, max: 90, roll: "3d6x5"}
