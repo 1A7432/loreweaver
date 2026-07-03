@@ -1,4 +1,4 @@
-"""Application entrypoint for trpg_kp."""
+"""Application entrypoint for loreweaver."""
 
 from __future__ import annotations
 

@@ -18,7 +18,7 @@ KEY="$(printf '%s' "$MINT" | sed -nE 's/.*: ([A-Za-z0-9_-]{12,})$/\1/p' | tail -
 
 cat <<EOF
 
-  trpg_kp — networked terminal demo
+  loreweaver — networked terminal demo
   ---------------------------------
   Room : $ROOM     Player: $NAME
   Key  : $KEY

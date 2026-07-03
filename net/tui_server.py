@@ -51,7 +51,7 @@ from net.keystore import Keystore
 # v1.1 adds the additive, keeper-gated `admin_*` frames (see `net.admin` and
 # `docs/protocol.md`); pre-admin clients are unaffected and never send them.
 _PROTOCOL_VERSION = "1.1"
-_SERVER_BANNER = "trpg-kp/1"
+_SERVER_BANNER = "loreweaver/1"
 
 # Hard cap on a single `input` frame's text before it reaches the LLM/history. A
 # client-controlled, unbounded string would otherwise blow up prompt size, context

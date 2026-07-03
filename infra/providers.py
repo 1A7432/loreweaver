@@ -178,7 +178,7 @@ class AnthropicLLM:
         try:
             import anthropic
         except ImportError as exc:
-            raise ValueError("缺少 anthropic SDK；请安装 trpg-kp[anthropic] 或 anthropic。") from exc
+            raise ValueError("缺少 anthropic SDK；请安装 loreweaver[anthropic] 或 anthropic。") from exc
         self._client = anthropic.AsyncAnthropic(
             api_key=settings.api_key or None,
             base_url=settings.base_url or None,
@@ -225,7 +225,7 @@ class GeminiLLM:
         try:
             from google import genai
         except ImportError as exc:
-            raise ValueError("缺少 google-genai SDK；请安装 trpg-kp[gemini] 或 google-genai。") from exc
+            raise ValueError("缺少 google-genai SDK；请安装 loreweaver[gemini] 或 google-genai。") from exc
         self._client = genai.Client(api_key=settings.api_key or None)
 
     async def chat(
@@ -382,7 +382,7 @@ def to_gemini_tools(tools: list[dict] | None) -> list[Any]:
     try:
         from google.genai import types
     except ImportError as exc:
-        raise ValueError("缺少 google-genai SDK；请安装 trpg-kp[gemini] 或 google-genai。") from exc
+        raise ValueError("缺少 google-genai SDK；请安装 loreweaver[gemini] 或 google-genai。") from exc
 
     declarations = []
     for tool in tools:
@@ -406,7 +406,7 @@ def to_gemini_contents(messages: list[dict]) -> tuple[str | None, list[Any]]:
     try:
         from google.genai import types
     except ImportError as exc:
-        raise ValueError("缺少 google-genai SDK；请安装 trpg-kp[gemini] 或 google-genai。") from exc
+        raise ValueError("缺少 google-genai SDK；请安装 loreweaver[gemini] 或 google-genai。") from exc
 
     system_parts: list[str] = []
     contents: list[Any] = []
@@ -462,7 +462,7 @@ def to_gemini_config(
     try:
         from google.genai import types
     except ImportError as exc:
-        raise ValueError("缺少 google-genai SDK；请安装 trpg-kp[gemini] 或 google-genai。") from exc
+        raise ValueError("缺少 google-genai SDK；请安装 loreweaver[gemini] 或 google-genai。") from exc
     kwargs: dict[str, Any] = {}
     gemini_tools = to_gemini_tools(tools)
     if gemini_tools:

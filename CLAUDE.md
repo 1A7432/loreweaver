@@ -34,7 +34,7 @@ Tests are deterministic and offline. To run a real Keeper, set `TRPG_LLM__*` in 
 - **Platform adapter** → subclass `gateway/base_adapter.py:BaseAdapter`, translate payloads → `InboundMessage`, register a `PlatformEntry` at import. Mock the transport in tests.
 - **LLM provider** → most vendors work via the OpenAI-compatible path + a `PRESETS` entry in `infra/providers.py`; add a native class (see `AnthropicLLM`/`GeminiLLM`) only for non-OpenAI APIs.
 - **KP tool** → an `async def name(self, ctx, ...) -> str` decorated `@tool` on a provider class; add the provider to `agent/kp_tools.build_kp_toolset`. Flag secret-reading tools `keeper_only=True`.
-- **Client** → build against `docs/protocol.md` (the versioned WS protocol) + reuse `@trpg-kp/protocol` types.
+- **Client** → build against `docs/protocol.md` (the versioned WS protocol) + reuse `@loreweaver/protocol` types.
 
 ## Working conventions for AI agents
 - **Parallelize leaves, serialize the merge.** Independent new modules can be built + tested in isolation concurrently; the wiring into shared files (`build_kp_toolset`, `services`, `commands`, `prompt_builder`) is one careful sequential pass.

@@ -3,20 +3,20 @@
 ## Install
 
 ```sh
-cd /Users/darthvader/ClaudeCode/trpg_kp/clients/protocol
+cd clients/protocol
 bun install
 
-cd /Users/darthvader/ClaudeCode/trpg_kp/clients/tui
+cd clients/tui
 bun install
 ```
 
 ## Test
 
 ```sh
-cd /Users/darthvader/ClaudeCode/trpg_kp/clients/protocol
+cd clients/protocol
 bun test
 
-cd /Users/darthvader/ClaudeCode/trpg_kp/clients/tui
+cd clients/tui
 bun test
 ```
 
@@ -31,7 +31,7 @@ python -m app --serve
 Connect the OpenTUI client:
 
 ```sh
-cd /Users/darthvader/ClaudeCode/trpg_kp/clients/tui
+cd clients/tui
 bun run dev -- connect --host ws://127.0.0.1:8787 --key <k>
 ```
 

@@ -29,7 +29,7 @@ hub room with everyone else.
 
 ## Deployer flow
 
-From the repo root (`trpg_kp/`):
+From the repo root:
 
 1. **Start the WS server** (terminal 1):
 

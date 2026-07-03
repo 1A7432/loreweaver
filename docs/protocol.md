@@ -1,6 +1,6 @@
-# trpg_kp networked TUI — WebSocket protocol v1
+# loreweaver networked TUI — WebSocket protocol v1
 
-This is the open, versioned wire protocol between a trpg_kp server
+This is the open, versioned wire protocol between a loreweaver server
 (`net.tui_server.TuiServer`, started via `python -m app --serve`) and any
 client — the bundled OpenTUI terminal client, or a community-built
 React/Vue/web client. The engine itself (deterministic core + AI Keeper)

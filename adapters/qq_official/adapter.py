@@ -390,8 +390,8 @@ class QQOfficialAdapter(BaseAdapter):
                 "shard": [0, 1],
                 "properties": {
                     "$os": "python",
-                    "$browser": "trpg-kp",
-                    "$device": "trpg-kp",
+                    "$browser": "loreweaver",
+                    "$device": "loreweaver",
                 },
             },
         }

@@ -5,7 +5,7 @@ description = "A self-hosted, terminal-first AI Game Master / Keeper for any TTR
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "trpg_kp contributors" }]
+authors = [{ name = "loreweaver contributors" }]
 keywords = ["ttrpg", "dnd", "coc", "dice", "ai", "game-master", "keeper", "discord"]
 
 dependencies = [
