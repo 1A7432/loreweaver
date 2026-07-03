@@ -2,7 +2,7 @@
 import { createCliRenderer } from "@opentui/core"
 import { createRoot } from "@opentui/react"
 import App, { type AppPrefill } from "./App"
-import { loadConnectMemory, saveConnectMemory } from "./connectMemory"
+import { loadConnectMemory, rememberServer, saveConnectMemory } from "./connectMemory"
 
 interface Args {
   command?: string
@@ -54,6 +54,7 @@ const prefill: AppPrefill = {
   key: args.key ?? remembered.key,
   name: args.name ?? remembered.name,
   locale: remembered.locale,
+  servers: remembered.servers,
 }
 
 const renderer = await createCliRenderer()
@@ -65,7 +66,15 @@ createRoot(renderer).render(
   <App
     prefill={prefill}
     onRememberConnect={(memory) => {
-      void saveConnectMemory(memory)
+      // Persist as "last used" AND float this server to the top of the saved list, so the
+      // connect screen remembers every server/key you've joined (deduped by host+key).
+      void loadConnectMemory().then((m) =>
+        saveConnectMemory({
+          ...m,
+          ...memory,
+          servers: rememberServer(m.servers, { host: memory.host, key: memory.key, name: memory.name }),
+        }),
+      )
     }}
     onLocaleChange={(locale) => {
       // Persist a language pick made before connecting, merging with the saved file

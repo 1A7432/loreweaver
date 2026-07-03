@@ -3,6 +3,8 @@ import { useKeyboard } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
 import { FrameType, type PresenceFrame, type ServerFrame, type StateFrame, type WelcomeFrame } from "@loreweaver/protocol"
 import { createClient, type AppClient } from "./client"
+import type { SavedServer } from "./connectMemory"
+import { canHostLocally, startLocalServer, type LocalServer } from "./localServer"
 import { GameView, appendFrame } from "./GameView"
 import type { LogFrame } from "./components/NarrativeLog"
 import { CharacterScreen } from "./screens/CharacterScreen"
@@ -24,6 +26,7 @@ export interface AppPrefill {
   key?: string
   name?: string
   locale?: TuiLocale
+  servers?: SavedServer[]
 }
 
 export interface AppProps {
@@ -46,10 +49,15 @@ const themeKeyIndex: Record<string, number> = { f1: 0, f2: 1, f3: 2, f4: 3, f5: 
 
 export function App({ client: injected, prefill, onRememberConnect, onLocaleChange }: AppProps) {
   const client = useMemo(() => injected ?? createClient(), [injected])
+  // "Host locally" only makes sense where a server can actually be spawned (a checkout with
+  // app.py + a venv, not a bare client install); otherwise the button is hidden.
+  const canHostLocal = useMemo(() => canHostLocally(), [])
   const pendingConnect = useRef<Required<AppPrefill> | undefined>(undefined)
   // An explicit language pick (the connect-screen toggle, or a remembered one) wins over
   // the server's room locale, so the client UI stays in the language the user chose.
   const localePinned = useRef(Boolean(prefill?.locale))
+  // A server spawned by the connect screen's "host locally" button; killed when the app exits.
+  const localServer = useRef<LocalServer | undefined>(undefined)
 
   const [themeName, setThemeName] = useState<ThemeName>(DEFAULT_THEME)
   const theme = themes[themeName]
@@ -133,6 +141,34 @@ export function App({ client: injected, prefill, onRememberConnect, onLocaleChan
       setError(err instanceof Error ? err.message : String(err))
     }
   }
+
+  // "Host locally & play": spawn a server on this machine and log straight in as Keeper over
+  // its local WebSocket. The subprocess is stopped when the app exits (the effect below).
+  const handleHostLocal = async () => {
+    setError(undefined)
+    setConnecting(true)
+    try {
+      localServer.current = await startLocalServer()
+      await handleConnect(localServer.current.host, localServer.current.key, localServer.current.name)
+    } catch (err) {
+      setConnecting(false)
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  // Kill a button-spawned local server on exit so it doesn't outlive the client.
+  useEffect(() => {
+    const kill = () => localServer.current?.stop()
+    process.on("exit", kill)
+    process.on("SIGINT", kill)
+    process.on("SIGTERM", kill)
+    return () => {
+      process.off("exit", kill)
+      process.off("SIGINT", kill)
+      process.off("SIGTERM", kill)
+      kill()
+    }
+  }, [])
 
   // A language pick (connect screen or settings) is explicit: pin it so the server's
   // room locale won't override it, and persist it for next launch.
@@ -237,10 +273,12 @@ export function App({ client: injected, prefill, onRememberConnect, onLocaleChan
     <ConnectScreen
       theme={theme}
       defaults={{ host: prefill?.host, key: prefill?.key, name: prefill?.name }}
+      savedServers={prefill?.servers}
       connecting={connecting}
       error={error}
       locale={locale}
       onLocaleChange={handleLocaleChange}
+      onHostLocal={canHostLocal ? handleHostLocal : undefined}
       onSubmit={handleConnect}
     />
   )

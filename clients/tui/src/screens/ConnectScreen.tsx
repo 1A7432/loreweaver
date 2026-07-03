@@ -2,6 +2,7 @@ import { useRef, useState } from "react"
 import { useKeyboard } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
 import { defaultTuiLocale, tt, type TuiLocale } from "../i18n"
+import type { SavedServer } from "../connectMemory"
 import type { Palette } from "../themes"
 
 // Prefilled defaults come from CLI args (see index.tsx); the host falls back to
@@ -18,8 +19,12 @@ export interface ConnectScreenProps {
   connecting: boolean
   error?: string
   locale?: string
+  // Past connections (most-recent first); clicking one fills the form.
+  savedServers?: SavedServer[]
   // Switch the connect-screen UI language before any welcome; the shell persists it.
   onLocaleChange?: (locale: TuiLocale) => void
+  // Spawn a local server and log in as Keeper (one-click host & play).
+  onHostLocal?: () => void
   // The shell owns the client: it awaits connect(url) then join(key,name) and
   // advances to the menu when `welcome` arrives.
   onSubmit: (url: string, key: string, name: string) => void
@@ -30,7 +35,17 @@ const DEFAULT_HOST = "ws://127.0.0.1:8787"
 type Field = "host" | "key" | "name"
 const FIELD_ORDER: Field[] = ["host", "key", "name"]
 
-export function ConnectScreen({ theme, defaults, connecting, error, locale = defaultTuiLocale(), onLocaleChange, onSubmit }: ConnectScreenProps) {
+export function ConnectScreen({
+  theme,
+  defaults,
+  connecting,
+  error,
+  locale = defaultTuiLocale(),
+  savedServers,
+  onLocaleChange,
+  onHostLocal,
+  onSubmit,
+}: ConnectScreenProps) {
   const defaultName = tt(locale, "connect.defaultName")
   const [host, setHost] = useState(defaults.host ?? DEFAULT_HOST)
   const [key, setKey] = useState(defaults.key ?? "")
@@ -62,6 +77,20 @@ export function ConnectScreen({ theme, defaults, connecting, error, locale = def
 
   const fieldColor = (field: Field) => (focused === field ? theme.accent : theme.dim)
 
+  const pickServer = (server: SavedServer) => {
+    setHost(server.host)
+    hostRef.current = server.host
+    setKey(server.key)
+    keyRef.current = server.key
+    if (server.name) {
+      setName(server.name)
+      nameRef.current = server.name
+    }
+    setFocused("key")
+  }
+  // A ticket is long base32; show a head…tail so the row stays readable.
+  const shortHost = (host: string) => (host.length > 40 ? `${host.slice(0, 20)}…${host.slice(-6)}` : host)
+
   return (
     <box flexDirection="column" height="100%" width="100%" backgroundColor={theme.bg} paddingX={2} paddingY={1}>
       <box marginBottom={1}>
@@ -80,6 +109,27 @@ export function ConnectScreen({ theme, defaults, connecting, error, locale = def
             <text fg={locale === "zh" ? theme.bg : theme.fg}>中文</text>
           </box>
         </box>
+
+        {onHostLocal ? (
+          <box marginBottom={1} onMouseDown={() => onHostLocal()} backgroundColor={theme.success} paddingX={1}>
+            <text fg={theme.bg}>{connecting ? tt(locale, "connect.connecting") : tt(locale, "connect.hostLocal")}</text>
+          </box>
+        ) : null}
+
+        {savedServers && savedServers.length > 0 ? (
+          <box flexDirection="column" marginBottom={1}>
+            <text fg={theme.dim}>{tt(locale, "connect.saved")}</text>
+            {savedServers.slice(0, 5).map((server) => (
+              <box key={`${server.host}:${server.key}`} onMouseDown={() => pickServer(server)}>
+                <text fg={theme.fg}>
+                  · {server.name ? `${server.name} — ` : ""}
+                  {shortHost(server.host)}
+                </text>
+              </box>
+            ))}
+          </box>
+        ) : null}
+
         <box flexDirection="column" onMouseDown={() => setFocused("host")}>
           <text fg={fieldColor("host")}>{tt(locale, "connect.host")}</text>
           <input
