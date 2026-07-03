@@ -34,6 +34,27 @@ Run one command and you land in a game menu, not a config file:
 
 Real dice, a persistent story, no browser needed. (There's a React web client too, and chat-platform adapters — see [Play surfaces](#play-surfaces).)
 
+## Host a game for your friends (self-host, 3 steps)
+
+The real way to play: you **self-host** a server and hand out invite keys. **Your friends only install the client — no docs to read** — you just give them the address and their key.
+
+**① You (host / Keeper) — start the server + grab your key**
+```bash
+./scripts/deploy.sh                              # Docker brings up the server (:8787)
+docker exec loreweaver cat /data/keeper-key.txt  # the keeper key auto-minted on first boot (also in `docker logs`)
+```
+Run `loreweaver`; in the connect screen enter host `wss://<your-host>/ws` + that keeper key + a nickname.
+
+**② You — create a room + mint one key per friend**
+Main menu → **Rooms & invites** → enter a **room name + friend's name + role (player)** → mint a key and send it. ("Creating a room" is just minting a key for a new room name — no server access; mint a `keeper`-role key for a co-Keeper.)
+
+**③ Friend (player) — one-line install + connect**
+```bash
+curl -fsSL https://<your-host>/trpg/install.sh | bash   # Windows: irm https://<your-host>/trpg/install.ps1 | iex
+loreweaver     # connect screen: host wss://<your-host>/ws + the invite key you gave them + a nickname
+```
+Same table, sit down, play. No accounts — the invite key is the ticket in.
+
 ## Highlights
 - **AI Keeper via standard function-calling** — 60+ Keeper tools (dice, checks, sanity, sheets, module knowledge, notes, session reports, initiative). Bring any OpenAI-compatible or native model; the recommended default is **`deepseek-v4-pro` with thinking on**.
 - **Deterministic core, generative surface** — dice/`d20`, CoC success levels, character math, **character-creation rule validation**, the content-censor matcher and permissions are real code; narration and NPCs are the model. A check rolls *first*, then the Keeper narrates the graded result. (The censor ships with an empty wordlist — **moderation is OFF by default** and, once configured, only screens the Keeper's own replies, not player input — see [Content moderation](docs/deploy.md#content-moderation).)
