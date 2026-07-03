@@ -2,67 +2,53 @@
 
 # 部署 Loreweaver
 
-自托管网络化 Keeper（终端/网页/SSH 客户端连接的 WebSocket 服务器）。一条命令即可启动；玩家通过部署者颁发的密钥加入 —— 没有账户系统。
+大多数桌都是**从笔记本 p2p 开的**——`python -m app --serve`,或连接屏一键「本地开服」(见 [README](../README.zh.md))。本页讲**常驻服务器**(7×24 的公共局 + 一个稳定 ticket)。Loreweaver 走 **Iroh**——点对点 QUIC、用 ticket 拨号,**无需域名、TLS、端口转发或反向代理**。玩家用部署者颁发的密钥加入,没有账户系统。(不再有 Docker 镜像和 WebSocket 服务路径——WebSocket 仅作离线测试传输保留。)
 
-## TL;DR
+## 裸机运行
+
+需要 Python ≥ 3.11 和 [uv](https://docs.astral.sh/uv/)。
 
 ```bash
-# Docker（推荐）—— 构建并启动服务器，后台运行，监听 :8787
-./scripts/deploy.sh
-
-# 无 Docker —— venv + pip install + 前台运行
-./scripts/deploy.sh --bare-metal
+git clone https://github.com/1A7432/loreweaver && cd loreweaver
+cp .env.example .env          # 然后设置 TRPG_LLM__*(或留空以使用离线演示)
+uv sync                       # env + 依赖(iroh 是默认依赖)
+uv run python -m app --serve --keys ./data/keys.toml
 ```
 
-`deploy.sh` 在首次运行时从 `.env.example` 创建 `.env`，然后执行 `docker compose up -d --build` 或设置 `.venv`。重新运行是安全的。
+首次运行服务器会**自动发一个守秘人 key** 并打印一个可分享的 **Iroh ticket**——两者也写到 keystore 旁的 `keeper-key.txt` / `iroh-ticket.txt`。把 ticket + 守秘人 key 发出去;连进去后,在客户端的「房间与邀请」界面发更多 key / 建房,不用碰服务器。状态(SQLite + key)存在 `--keys` 旁边。
 
-## 选项 A —— Docker（推荐）
+> 非国内 LLM 走 SOCKS 代理?`uv pip install socksio`。国内直连的 provider(如 DeepSeek)不用代理,干净 env 跑即可。
 
-```bash
-cp .env.example .env          # 然后设置 TRPG_LLM__* (或留空以使用离线演示)
-docker compose up -d --build  # 构建镜像并在 :8787 启动服务器
-docker compose logs -f        # 跟踪日志
-docker compose down           # 停止
+## 常驻(systemd)
+
+```ini
+# /etc/systemd/system/loreweaver.service  —— 把 YOU 换成你的用户名
+[Unit]
+Description=Loreweaver Iroh server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=YOU
+WorkingDirectory=/home/YOU/loreweaver                 # .env 从这里加载
+ExecStart=/home/YOU/.local/bin/uv run python -m app --serve --keys /home/YOU/loreweaver-data/keys.toml
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=120                                   # Iroh 的中继握手要一会儿
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-- 镜像基于 `python:3.12-slim`，以非 root 用户身份运行，启动 `python -m app --serve --host 0.0.0.0 --port 8787`。
-- 配置从 `.env` 读取（见 [配置](#配置)）。该文件是可选的 —— 无 API 密钥时，运行绑定的**离线演示 Keeper**。
-- 状态存储在挂载于 `/data` 的命名卷 `loreweaver-data` 中（`/data/loreweaver.db` + `/data/keys.toml`），因此战役和已颁发的密钥在重启和重新构建后保留。要改为绑定主机目录，请将 `docker-compose.yml` 中的卷行替换为 `./data:/data`。
-
-### 生成访问密钥 (Docker)
-
-镜像的 `ENTRYPOINT` 是 `python -m app`，因此仅传递应用程序参数：
-
 ```bash
-docker compose run --rm loreweaver --tui-key add --room table --name Keeper --role keeper
-docker compose run --rm loreweaver --tui-key add --room table --name Alice
-```
-
-每条命令打印一个新密钥并将其追加到 `/data/keys.toml`（服务器使用的同一卷），因此运行中的服务器在下一次客户端加入时会使用它 —— 无需重启。给所有人相同的 **`--room`** 来将他们安排在一个共享表中；`--role keeper` 授予仅限 Keeper 的权力（默认为 `player`）。
-
-## 选项 B —— 裸机（无 Docker）
-
-需要 Python >= 3.11。
-
-```bash
-./scripts/deploy.sh --bare-metal
-```
-
-这会创建 `.venv`，安装包（`pip install -e ".[anthropic,gemini]"`），确保 `.env` 存在，首次运行时为房间 `table` 生成初始 Keeper 密钥，打印连接行，并在前台启动服务器（Ctrl-C 停止）。
-
-手动等效：
-
-```bash
-uv sync --extra anthropic --extra gemini   # env + 依赖；删除 --extra ... 以仅使用 OpenAI 兼容
-export TRPG_DATA_DIR=./data TRPG_TUI_KEYS=./data/keys.toml
-uv run python -m app --tui-key add --room table --name Keeper --role keeper   # 生成密钥
-uv run python -m app --serve --host 0.0.0.0 --port 8787                       # 运行服务器
-# 没有 uv？pip 也可以：python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[anthropic,gemini]"
+sudo systemctl daemon-reload && sudo systemctl enable --now loreweaver
+journalctl -u loreweaver -f       # 跟日志——ticket + 守秘人 key 启动时打印
 ```
 
 ## 配置
 
-所有设置使用 `TRPG_` 环境变量前缀，`__` 用于嵌套（见 `.env.example` / `infra/config.py`）。Docker Compose 从 `.env` 注入它们。
+所有设置使用 `TRPG_` 环境变量前缀，`__` 用于嵌套（见 `.env.example` / `infra/config.py`），从工作目录的 `.env` 加载。
 
 | 变量 | 目的 | 默认值 |
 |---|---|---|
@@ -72,59 +58,20 @@ uv run python -m app --serve --host 0.0.0.0 --port 8787                       # 
 | `TRPG_LLM__CHAT_MODEL` | 聊天模型 id | `gpt-4o` |
 | `TRPG_LLM__EMBEDDING_MODEL` / `TRPG_LLM__EMBEDDING_DIM` | 检索嵌入 | `text-embedding-3-small` / `1536` |
 | `TRPG_LOCALE` | 用户界面语言 `en` / `zh` | `en` |
-| `TRPG_DATA_DIR` | 存储 + 密钥目录（db → `<data_dir>/loreweaver.db`） | `/data`（镜像） |
-| `TRPG_TUI_KEYS` | 密钥存储文件路径 | `/data/keys.toml`（镜像） |
+| `TRPG_DATA_DIR` | 存储 + 密钥目录（db → `<data_dir>/loreweaver.db`） | `./data` |
+| `TRPG_TUI_KEYS` | 密钥存储文件路径（也可用 `--keys` 覆盖） | `./data/keys.toml` |
 | `TRPG_ENABLE_VECTOR_DB` | 世界书 / 文档检索 | `true` |
 | `TRPG_TUI__JOIN_TIMEOUT` | 未经身份验证的连接在关闭前必须发送 `join` 的秒数 | `10` |
-| `TRPG_TUI__MAX_CONNECTIONS` | 全局并发连接上限（所有房间）；超过时立即拒绝。`0`/负数 = 无限制 | `200` |
-| `TRPG_TUI__TLS_CERT_PATH` / `TRPG_TUI__TLS_KEY_PATH` | 可选的原生 TLS —— PEM 证书链 / 密钥路径；设置**两者**以直接提供 `wss://`。见 [TLS](#tls-wss) | *（空 = 明文 `ws://`）* |
 | `TRPG_CENSOR__WORDLIST_PATH` | 内容审核词表：JSON 文件 `{"word": level, ...}`（等级 `1`-`5`，见 `gateway.ops.CensorLevel`）。见 [内容审核](#内容审核) | *（空 = 审核关闭）* |
 | `TRPG_CENSOR__WORDLIST` | 内容审核词表，内联：`word[:level],word2[:level2],...` —— 文件的替代方案，方便用一个环境变量。如果两者都设置，将结合 `WORDLIST_PATH` | *（空 = 审核关闭）* |
 
-平台机器人（可选）：`TRPG_DISCORD__TOKEN`、`TRPG_TELEGRAM__TOKEN`、`TRPG_QQ__APP_ID` / `TRPG_QQ__SECRET`、`TRPG_FEISHU__APP_ID` / `TRPG_FEISHU__APP_SECRET`。要在 WS 服务器旁边运行聊天机器人，请在 serve 命令中追加 `--platforms discord,telegram`（组合模式）—— 覆盖容器命令，例如 `docker compose run ... loreweaver --serve --host 0.0.0.0 --port 8787 --platforms discord`。
+聊天平台适配器（Discord/Telegram/QQ/飞书）**代码在树内,但无人维护、未对真平台实测**——见 [roadmap](roadmap.zh.md)。它们的 token（`TRPG_DISCORD__TOKEN`、`TRPG_TELEGRAM__TOKEN`、`TRPG_QQ__APP_ID` / `TRPG_QQ__SECRET`、`TRPG_FEISHU__APP_ID` / `TRPG_FEISHU__APP_SECRET`）仍在,`--serve --platforms discord` 可组合模式跑一个,但视为实验性。
 
 ChatGPT 订阅（chatgpt.com 上的 Free/Go/Plus/Pro/Business/Enterprise）不是 API 凭证，应用不使用 ChatGPT 浏览器会话、cookie 或非官方网页自动化作为模型后端。要通过订阅支持的服务路由，暴露或配置您部署控制的 OpenAI 兼容网关，然后设置 `TRPG_LLM__PROVIDER=gpt-subscription`、`TRPG_LLM__BASE_URL=<gateway /v1 endpoint>`、`TRPG_LLM__API_KEY=<gateway key>` 和 `TRPG_LLM__CHAT_MODEL=<gateway model id>`。
 
-## TLS (wss://)
+## 加密
 
-普通 `ws://` 是未加密的：长期持有的令牌（`--tui-key add`）和所有游戏内容 —— 包括仅限 Keeper 的模块机密 —— 以明文形式在网络上传输。**`ws://` 只有在绑定到 `127.0.0.1` 进行本地开发时才可接受。** 任何可从 localhost 之外访问的内容（公共服务器、`--host 0.0.0.0`、LAN）都需要 TLS。
-
-### 推荐：在反向代理处终止 TLS
-
-让应用继续监听明文 `ws://127.0.0.1:8787`（默认主机），在它前面放置 nginx/Caddy/traefik 以拥有证书（例如通过 Let's Encrypt/ACME）并与客户端通信 `wss://`。这是在生产中运行任何 WebSocket 服务的标准、久经考验的方式，也是这里推荐的方法。
-
-Caddy（自动 HTTPS —— 最简选项）：
-
-```
-your-domain.example {
-    reverse_proxy 127.0.0.1:8787
-}
-```
-
-nginx：
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name your-domain.example;
-    ssl_certificate     /etc/letsencrypt/live/your-domain.example/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/your-domain.example/privkey.pem;
-
-    location / {
-        proxy_pass http://127.0.0.1:8787;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-    }
-}
-```
-
-将客户端指向 `wss://your-domain.example/`。保持 `--host 127.0.0.1`（默认值），使应用端口本身永远不会从互联网直接访问 —— 仅通过代理。
-
-### 备选：服务器中的原生 TLS
-
-没有反向代理可用？服务器可以自己终止 TLS：将 `TRPG_TUI__TLS_CERT_PATH` 和 `TRPG_TUI__TLS_KEY_PATH` 设置为 PEM 证书链和私钥（两者都需要一起 —— 见 [配置](#配置)）。设置两者时，`--serve` 直接监听 `wss://`；将两者留空（默认值）以保持明文 `ws://`，这对于仅 `127.0.0.1` 的本地开发是可以的。
+Iroh 连接**天生端到端加密**（QUIC/TLS，每个对端由其公钥认证）——没有明文 `ws://` 可被嗅探,也没有证书要管理。仅限 Keeper 的机密和持有型密钥绝不明文过线。
 
 ## 内容审核
 
@@ -150,21 +97,16 @@ server {
 - **密钥**将不透明令牌绑定到 `room`（共享的 `chat_key`）和角色。使用 `--tui-key add` 生成；未知密钥在加入时被拒绝。密钥存储是 TOML 文件（`keys.toml`） —— 永远不要提交它。
 - **持久化**是一个 SQLite 文件（`loreweaver.db`），保存所有战役状态，由 `room` 作用域。保留 `/data` 卷以保持进度。
 - **房间备份**从 Keeper 管理 UI 创建的是服务器端 JSON 快照，放在 `<data_dir>/room_backups/` 下，除非提供路径。它们包括原始访问密钥、房间状态和向量数据，所以要像保护 `keys.toml` 一样保护它们。
-- **机密**（`.env`、`keys.toml`、`*.db`）被 git 忽略；只有 `*.example.*` 被跟踪。不要将它们烘焙到镜像中（`.dockerignore` 排除它们）。
+- **机密**（`.env`、`keys.toml`、`*.db`）被 git 忽略；只有 `*.example.*` 被跟踪。绝不提交它们。
 
 ## 连接客户端
 
-客户端使用 [`docs/protocol.md`](protocol.md) 中的版本化 WebSocket 协议。将任何客户端指向 `ws://<host>:8787/` 和一个已生成的密钥：
+客户端使用 [`docs/protocol.md`](protocol.md) 中的版本化协议,经 Iroh 连接。把终端客户端指向服务器的 **ticket**(启动时打印)+ 一个已生成的密钥:
 
 ```bash
-# 终端 (OpenTUI)
 cd clients/tui && bun install
-bun run dev -- connect --host ws://localhost:8787/ --key <key> --name <name>
-
-# 浏览器 (React)
-cd clients/web && bun install && bun run dev
-
-# SSH（零安装完整 TUI）—— 见 clients/ssh/README.md
+bun run dev -- connect --host <ticket> --key <key> --name <name>
+# 或直接 `loreweaver`(装好的客户端),在连接屏粘 ticket + 密钥
 ```
 
-对于实际部署，见上面的 [TLS](#tls-wss) —— 不要在 localhost 之外暴露明文 `ws://`。服务器是密钥门控的，但要将密钥视为机密。
+连接端到端加密;服务器是密钥门控的,但要把密钥当机密对待。

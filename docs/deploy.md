@@ -2,82 +2,63 @@
 
 # Deploying Loreweaver
 
-Self-host the networked Keeper (the WebSocket server that terminal / web / SSH
-clients connect to). One command brings it up; players join with deployer-issued
-keys — there is no account system.
+Most tables are hosted **peer-to-peer from a laptop** — just `python -m app --serve`, or one-click
+**Host locally** from the connect screen (see the [README](../README.md)). This page is for running
+an **always-on server** (a 24/7 public game with a stable ticket). Loreweaver connects over **Iroh**
+— p2p QUIC, dialed by a ticket, with **no domain, TLS, port-forward, or reverse proxy**. Players
+join with deployer-issued keys; there is no account system. (There is no Docker image and no
+WebSocket serve path any more — WebSocket lives on only as the offline test transport.)
 
-## TL;DR
+## Run it (bare metal)
 
-```bash
-# Docker (recommended) — build + start the server, detached, on :8787
-./scripts/deploy.sh
-
-# No Docker — venv + pip install + run in the foreground
-./scripts/deploy.sh --bare-metal
-```
-
-`deploy.sh` creates `.env` from `.env.example` on first run, then either
-`docker compose up -d --build` or sets up a `.venv`. Re-running is safe.
-
-## Option A — Docker (recommended)
+Requires Python ≥ 3.11 and [uv](https://docs.astral.sh/uv/).
 
 ```bash
+git clone https://github.com/1A7432/loreweaver && cd loreweaver
 cp .env.example .env          # then set TRPG_LLM__* (or leave blank for the offline demo)
-docker compose up -d --build  # build the image + start the server on :8787
-docker compose logs -f        # follow logs
-docker compose down           # stop
+uv sync                       # env + deps (Iroh is a default dep)
+uv run python -m app --serve --keys ./data/keys.toml
 ```
 
-- The image is `python:3.12-slim`, runs as a non-root user, and starts
-  `python -m app --serve --host 0.0.0.0 --port 8787`.
-- Config is read from `.env` (see [Configuration](#configuration)). The file is
-  optional — with no API key the bundled **offline demo Keeper** runs.
-- State lives in the named volume `loreweaver-data` mounted at `/data`
-  (`/data/loreweaver.db` + `/data/keys.toml`), so campaigns and issued keys
-  survive restarts and rebuilds. To bind a host directory instead, swap the
-  volume line in `docker-compose.yml` for `./data:/data`.
+On first run the server **auto-mints a keeper key** and prints a shareable **Iroh ticket** — both
+are also written next to the keystore as `keeper-key.txt` / `iroh-ticket.txt`. Share the ticket +
+the keeper key; connect with them, then mint more keys / create rooms right in the client's *Rooms
+& invites* screen — no server access needed. State (SQLite + keys) lives next to `--keys`.
 
-### Mint an access key (Docker)
+> Behind a SOCKS proxy for a non-China LLM? `uv pip install socksio`. A China-direct provider
+> (e.g. DeepSeek) needs no proxy — run with a clean env.
 
-The image's `ENTRYPOINT` is `python -m app`, so pass only the app arguments:
+## Keep it running (systemd)
 
-```bash
-docker compose run --rm loreweaver --tui-key add --room table --name Keeper --role keeper
-docker compose run --rm loreweaver --tui-key add --room table --name Alice
+```ini
+# /etc/systemd/system/loreweaver.service  — replace YOU with your username
+[Unit]
+Description=Loreweaver Iroh server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=YOU
+WorkingDirectory=/home/YOU/loreweaver                 # .env is loaded from here
+ExecStart=/home/YOU/.local/bin/uv run python -m app --serve --keys /home/YOU/loreweaver-data/keys.toml
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=120                                   # Iroh's relay handshake takes a moment
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-Each command prints a fresh key and appends it to `/data/keys.toml` (the same
-volume the server uses), so the running server honors it on the next client
-join — no restart needed. Give everyone the **same `--room`** to seat them at
-one shared table; `--role keeper` grants Keeper-only powers (default is
-`player`).
-
-## Option B — Bare metal (no Docker)
-
-Requires Python >= 3.11.
-
 ```bash
-./scripts/deploy.sh --bare-metal
-```
-
-This creates `.venv`, installs the package (`pip install -e ".[anthropic,gemini]"`),
-ensures `.env`, mints a starter keeper key for room `table` on first run, prints
-the connect line, and starts the server in the foreground (Ctrl-C to stop).
-
-Manual equivalent:
-
-```bash
-uv sync --extra anthropic --extra gemini   # env + deps; drop --extra ... for OpenAI-compatible-only
-export TRPG_DATA_DIR=./data TRPG_TUI_KEYS=./data/keys.toml
-uv run python -m app --tui-key add --room table --name Keeper --role keeper   # mint a key
-uv run python -m app --serve --host 0.0.0.0 --port 8787                       # run the server
-# No uv? pip works: python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[anthropic,gemini]"
+sudo systemctl daemon-reload && sudo systemctl enable --now loreweaver
+journalctl -u loreweaver -f       # follow logs — the ticket + keeper key print at startup
 ```
 
 ## Configuration
 
 All settings use the `TRPG_` env prefix with `__` for nesting (see
-`.env.example` / `infra/config.py`). Docker Compose injects them from `.env`.
+`.env.example` / `infra/config.py`), loaded from `.env` in the working directory.
 
 | Variable | Purpose | Default |
 |---|---|---|
@@ -87,21 +68,18 @@ All settings use the `TRPG_` env prefix with `__` for nesting (see
 | `TRPG_LLM__CHAT_MODEL` | chat model id | `gpt-4o` |
 | `TRPG_LLM__EMBEDDING_MODEL` / `TRPG_LLM__EMBEDDING_DIM` | retrieval embeddings | `text-embedding-3-small` / `1536` |
 | `TRPG_LOCALE` | UI language `en` / `zh` | `en` |
-| `TRPG_DATA_DIR` | store + keys directory (db → `<data_dir>/loreweaver.db`) | `/data` (image) |
-| `TRPG_TUI_KEYS` | keystore file path | `/data/keys.toml` (image) |
+| `TRPG_DATA_DIR` | store + keys directory (db → `<data_dir>/loreweaver.db`) | `./data` |
+| `TRPG_TUI_KEYS` | keystore file path (also overridable with `--keys`) | `./data/keys.toml` |
 | `TRPG_ENABLE_VECTOR_DB` | worldbook / document retrieval | `true` |
 | `TRPG_TUI__JOIN_TIMEOUT` | seconds an unauthenticated connection has to send `join` before being closed | `10` |
-| `TRPG_TUI__MAX_CONNECTIONS` | global concurrent-connection cap (all rooms); over it, refused immediately. `0`/negative = unlimited | `200` |
-| `TRPG_TUI__TLS_CERT_PATH` / `TRPG_TUI__TLS_KEY_PATH` | OPTIONAL native TLS — PEM cert chain / key paths; set **both** to serve `wss://` directly. See [TLS](#tls-wss) | *(empty = plaintext `ws://`)* |
 | `TRPG_CENSOR__WORDLIST_PATH` | Content-moderation wordlist: a JSON file `{"word": level, ...}` (level `1`-`5`, see `gateway.ops.CensorLevel`). See [Content moderation](#content-moderation) | *(empty = moderation OFF)* |
 | `TRPG_CENSOR__WORDLIST` | Content-moderation wordlist, inline: `word[:level],word2[:level2],...` — an alternative to a file, handy for one env var. Combines with `WORDLIST_PATH` if both are set | *(empty = moderation OFF)* |
 
-Platform bots (optional): `TRPG_DISCORD__TOKEN`, `TRPG_TELEGRAM__TOKEN`,
-`TRPG_QQ__APP_ID` / `TRPG_QQ__SECRET`, `TRPG_FEISHU__APP_ID` /
-`TRPG_FEISHU__APP_SECRET`. To run the chat bots alongside the WS server, append
-`--platforms discord,telegram` to the serve command (combined mode) — override
-the container command, e.g. `docker compose run ... loreweaver --serve --host
-0.0.0.0 --port 8787 --platforms discord`.
+The chat-platform adapters (Discord/Telegram/QQ/Feishu) are **in-tree but unmaintained and
+untested against a live platform** — see the [roadmap](roadmap.md). Their tokens
+(`TRPG_DISCORD__TOKEN`, `TRPG_TELEGRAM__TOKEN`, `TRPG_QQ__APP_ID` / `TRPG_QQ__SECRET`, `TRPG_FEISHU__APP_ID`
+/ `TRPG_FEISHU__APP_SECRET`) still exist, and `--serve --platforms discord` runs one in combined
+mode, but treat that as experimental.
 
 ChatGPT subscriptions (Free/Go/Plus/Pro/Business/Enterprise on chatgpt.com)
 are not API credentials, and the app does not use ChatGPT browser sessions,
@@ -111,61 +89,11 @@ your deployment controls, then set `TRPG_LLM__PROVIDER=gpt-subscription`,
 `TRPG_LLM__BASE_URL=<gateway /v1 endpoint>`, `TRPG_LLM__API_KEY=<gateway key>`,
 and `TRPG_LLM__CHAT_MODEL=<gateway model id>`.
 
-## TLS (wss://)
+## Encryption
 
-Plain `ws://` is unencrypted: long-lived bearer keys (`--tui-key add`) and all
-game content — including keeper-only module secrets — cross the wire in the
-clear. **`ws://` is only acceptable bound to `127.0.0.1` for local
-development.** Anything reachable beyond localhost (a public server, `--host
-0.0.0.0`, a LAN) needs TLS.
-
-### Recommended: terminate TLS at a reverse proxy
-
-Keep the app listening on plaintext `ws://127.0.0.1:8787` (the default host)
-and put nginx/Caddy/traefik in front of it to own the certificate (e.g. via
-Let's Encrypt/ACME) and speak `wss://` to clients. This is the standard,
-battle-tested way to run any WebSocket service in production and is the
-recommended approach here.
-
-Caddy (automatic HTTPS — simplest option):
-
-```
-your-domain.example {
-    reverse_proxy 127.0.0.1:8787
-}
-```
-
-nginx:
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name your-domain.example;
-    ssl_certificate     /etc/letsencrypt/live/your-domain.example/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/your-domain.example/privkey.pem;
-
-    location / {
-        proxy_pass http://127.0.0.1:8787;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-    }
-}
-```
-
-Point clients at `wss://your-domain.example/`. Keep `--host 127.0.0.1` (the
-default) so the app port itself is never reachable directly from the
-internet — only through the proxy.
-
-### Fallback: native TLS in the server
-
-No reverse proxy available? The server can terminate TLS itself: set
-`TRPG_TUI__TLS_CERT_PATH` and `TRPG_TUI__TLS_KEY_PATH` to a PEM certificate
-chain and private key (both required together — see
-[Configuration](#configuration)). When both are set, `--serve` listens
-`wss://` directly; leave both blank (the default) to keep plaintext `ws://`,
-which is fine for `127.0.0.1`-only local dev.
+Iroh connections are **end-to-end encrypted by construction** (QUIC/TLS, each peer
+authenticated by its public key) — there is no plaintext `ws://` for anyone to sniff and no
+certificate to manage. Keeper-only secrets and bearer keys never cross the wire in the clear.
 
 ## Content moderation
 
@@ -215,24 +143,17 @@ configurable building block that does nothing until you supply a wordlist.
   include raw access keys, room state, and vector data, so protect them like
   `keys.toml`.
 - **Secrets** (`.env`, `keys.toml`, `*.db`) are git-ignored; only `*.example.*`
-  are tracked. Don't bake them into the image (the `.dockerignore` excludes them).
+  are tracked. Never commit them.
 
 ## Connecting clients
 
-Clients speak the versioned WebSocket protocol in
-[`docs/protocol.md`](protocol.md). Point any client at `ws://<host>:8787/` with
-a minted key:
+Clients speak the versioned protocol in [`docs/protocol.md`](protocol.md) over Iroh. Point the
+terminal client at the server's **ticket** (printed at startup) with a minted key:
 
 ```bash
-# Terminal (OpenTUI)
 cd clients/tui && bun install
-bun run dev -- connect --host ws://localhost:8787/ --key <key> --name <name>
-
-# Browser (React)
-cd clients/web && bun install && bun run dev
-
-# SSH (zero-install full TUI) — see clients/ssh/README.md
+bun run dev -- connect --host <ticket> --key <key> --name <name>
+# or just `loreweaver` (installed client) and paste the ticket + key in the connect screen
 ```
 
-For a real deployment, see [TLS](#tls-wss) above — don't expose plaintext
-`ws://` beyond localhost. The server is key-gated, but treat keys as secrets.
+The connection is end-to-end encrypted; the server is key-gated, but treat keys as secrets.
