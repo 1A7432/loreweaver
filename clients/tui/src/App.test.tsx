@@ -152,7 +152,7 @@ describe("App shell", () => {
     expect(remembered).toEqual([])
     act(() => client.push(PLAYER_WELCOME))
     await waitFor(() => remembered.length > 0)
-    expect(remembered[0]).toEqual({ host: "ws://table.example:8787", key: "keeper-key", name: "漱雪" })
+    expect(remembered[0]).toEqual({ host: "ws://table.example:8787", key: "keeper-key", name: "漱雪", locale: "zh" })
 
     act(() => renderer.destroy())
   })

@@ -1,7 +1,7 @@
 import { useRef, useState } from "react"
 import { useKeyboard } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
-import { defaultTuiLocale, tt } from "../i18n"
+import { defaultTuiLocale, tt, type TuiLocale } from "../i18n"
 import type { Palette } from "../themes"
 
 // Prefilled defaults come from CLI args (see index.tsx); the host falls back to
@@ -18,6 +18,8 @@ export interface ConnectScreenProps {
   connecting: boolean
   error?: string
   locale?: string
+  // Switch the connect-screen UI language before any welcome; the shell persists it.
+  onLocaleChange?: (locale: TuiLocale) => void
   // The shell owns the client: it awaits connect(url) then join(key,name) and
   // advances to the menu when `welcome` arrives.
   onSubmit: (url: string, key: string, name: string) => void
@@ -28,7 +30,7 @@ const DEFAULT_HOST = "ws://127.0.0.1:8787"
 type Field = "host" | "key" | "name"
 const FIELD_ORDER: Field[] = ["host", "key", "name"]
 
-export function ConnectScreen({ theme, defaults, connecting, error, locale = defaultTuiLocale(), onSubmit }: ConnectScreenProps) {
+export function ConnectScreen({ theme, defaults, connecting, error, locale = defaultTuiLocale(), onLocaleChange, onSubmit }: ConnectScreenProps) {
   const defaultName = tt(locale, "connect.defaultName")
   const [host, setHost] = useState(defaults.host ?? DEFAULT_HOST)
   const [key, setKey] = useState(defaults.key ?? "")
@@ -68,6 +70,16 @@ export function ConnectScreen({ theme, defaults, connecting, error, locale = def
       <text fg={theme.dim}>{tt(locale, "connect.subtitle")}</text>
 
       <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} marginTop={1} width={60}>
+        <box flexDirection="row" marginBottom={1}>
+          <text fg={theme.dim}>{tt(locale, "connect.language")}{"  "}</text>
+          <box onMouseDown={() => onLocaleChange?.("en")} backgroundColor={locale === "en" ? theme.accent : theme.bg} paddingX={1}>
+            <text fg={locale === "en" ? theme.bg : theme.fg}>English</text>
+          </box>
+          <text>{" "}</text>
+          <box onMouseDown={() => onLocaleChange?.("zh")} backgroundColor={locale === "zh" ? theme.accent : theme.bg} paddingX={1}>
+            <text fg={locale === "zh" ? theme.bg : theme.fg}>中文</text>
+          </box>
+        </box>
         <box flexDirection="column" onMouseDown={() => setFocused("host")}>
           <text fg={fieldColor("host")}>{tt(locale, "connect.host")}</text>
           <input

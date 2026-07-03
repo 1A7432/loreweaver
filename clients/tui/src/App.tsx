@@ -22,6 +22,7 @@ export interface AppPrefill {
   host?: string
   key?: string
   name?: string
+  locale?: TuiLocale
 }
 
 export interface AppProps {
@@ -29,6 +30,8 @@ export interface AppProps {
   client?: AppClient
   prefill?: AppPrefill
   onRememberConnect?: (memory: Required<AppPrefill>) => void
+  // Persist a language choice made on the connect screen (before any welcome).
+  onLocaleChange?: (locale: TuiLocale) => void
 }
 
 // Stage 2 adds "character"; Stage 3 adds the keeper-only "keeper_keys" / "keeper_model";
@@ -40,13 +43,16 @@ const EMPTY_STATE: StateFrame = { type: FrameType.State, party: [], initiative: 
 // F1..F5 select a theme by its position in themeOrder (five themes now).
 const themeKeyIndex: Record<string, number> = { f1: 0, f2: 1, f3: 2, f4: 3, f5: 4 }
 
-export function App({ client: injected, prefill, onRememberConnect }: AppProps) {
+export function App({ client: injected, prefill, onRememberConnect, onLocaleChange }: AppProps) {
   const client = useMemo(() => injected ?? createClient(), [injected])
   const pendingConnect = useRef<Required<AppPrefill> | undefined>(undefined)
+  // An explicit language pick (the connect-screen toggle, or a remembered one) wins over
+  // the server's room locale, so the client UI stays in the language the user chose.
+  const localePinned = useRef(Boolean(prefill?.locale))
 
   const [themeName, setThemeName] = useState<ThemeName>(DEFAULT_THEME)
   const theme = themes[themeName]
-  const [locale, setLocale] = useState<TuiLocale>(() => defaultTuiLocale())
+  const [locale, setLocale] = useState<TuiLocale>(() => prefill?.locale ?? defaultTuiLocale())
   const [screen, setScreen] = useState<Screen>("connect")
   const [welcome, setWelcome] = useState<WelcomeFrame>()
   const [connecting, setConnecting] = useState(false)
@@ -75,7 +81,7 @@ export function App({ client: injected, prefill, onRememberConnect }: AppProps) 
       if (frame.type === FrameType.Welcome) {
         if (pendingConnect.current) onRememberConnect?.(pendingConnect.current)
         setWelcome(frame)
-        setLocale(normalizeLocale(frame.locale))
+        if (!localePinned.current) setLocale(normalizeLocale(frame.locale))
         setConnecting(false)
         setError(undefined)
         setScreen((prev) => (prev === "connect" ? "menu" : prev))
@@ -116,7 +122,7 @@ export function App({ client: injected, prefill, onRememberConnect }: AppProps) 
     }
     setError(undefined)
     setConnecting(true)
-    pendingConnect.current = { host: url, key, name: name || tt(locale, "connect.defaultName") }
+    pendingConnect.current = { host: url, key, name: name || tt(locale, "connect.defaultName"), locale }
     try {
       await client.connect(url)
       client.join(key, name || undefined)
@@ -209,6 +215,11 @@ export function App({ client: injected, prefill, onRememberConnect }: AppProps) 
       connecting={connecting}
       error={error}
       locale={locale}
+      onLocaleChange={(l) => {
+        setLocale(l)
+        localePinned.current = true
+        onLocaleChange?.(l)
+      }}
       onSubmit={handleConnect}
     />
   )

@@ -53,6 +53,7 @@ const prefill: AppPrefill = {
   host: args.host ?? remembered.host,
   key: args.key ?? remembered.key,
   name: args.name ?? remembered.name,
+  locale: remembered.locale,
 }
 
 const renderer = await createCliRenderer()
@@ -65,6 +66,11 @@ createRoot(renderer).render(
     prefill={prefill}
     onRememberConnect={(memory) => {
       void saveConnectMemory(memory)
+    }}
+    onLocaleChange={(locale) => {
+      // Persist a language pick made before connecting, merging with the saved file
+      // so a later connect still overwrites host/key/name correctly.
+      void loadConnectMemory().then((m) => saveConnectMemory({ ...m, locale }))
     }}
   />,
 )
