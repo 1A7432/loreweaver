@@ -6,6 +6,7 @@ from agent.context import AgentCtx
 from agent.services import build_services
 from core.dice_engine import seed_dice
 from gateway.commands import CommandRouter
+from gateway.ops import get_enabled_skills
 from infra.config import LLMSettings, Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM, assistant_text
@@ -689,3 +690,93 @@ async def test_botlist_zh_dialect_alias_adds_id():
     added = await router.dispatch(cli, "。机器人名单 add qq:888")
     assert added == i18n.t("commands.botlist.added", id="qq:888")
     assert router.botlist.is_bot("qq:888")
+
+
+# ---------------------------------------------------------------------------
+# `.skill` — per-room KP-skills layer (Layer B.1, `core.skills` +
+# `gateway.ops.get/set_enabled_skills`). `list`/`status` are open to any
+# player; `enable`/`disable` are keeper-gated, mirroring `.model`/`.lore`.
+# Only relies on the real `skills/` directory containing `mature-mode`.
+# ---------------------------------------------------------------------------
+
+
+async def test_skill_list_shows_mature_mode_off_by_default():
+    services = _services()
+    router = CommandRouter(services)
+    cli = AgentCtx(chat_key="cli:dm:skills-list", user_id="kp", locale="en")
+    i18n = services.i18n.with_locale("en")
+
+    shown = await router.dispatch(cli, "/skill list")
+    assert shown is not None
+    assert "mature-mode" in shown
+    assert f"[{i18n.t('commands.skill.enabled_none')}]" in shown  # off by default
+
+    bare = await router.dispatch(cli, "/skill")
+    assert bare == shown  # bare `.skill` behaves exactly like `.skill list`
+
+
+async def test_skill_status_reports_none_enabled_then_the_enabled_id():
+    services = _services()
+    router = CommandRouter(services)
+    cli = AgentCtx(chat_key="cli:dm:skills-status", user_id="kp", locale="en")
+    i18n = services.i18n.with_locale("en")
+
+    before = await router.dispatch(cli, "/skill status")
+    assert before == i18n.t("commands.skill.status", items=i18n.t("commands.skill.enabled_none"))
+
+    await router.dispatch(cli, "/skill enable mature-mode")
+    after = await router.dispatch(cli, "/skill status")
+    assert after == i18n.t("commands.skill.status", items="mature-mode")
+
+
+async def test_skill_enable_disable_via_command_updates_the_room_store():
+    services = _services()
+    router = CommandRouter(services)
+    cli = AgentCtx(chat_key="cli:dm:skills-toggle", user_id="kp", locale="en")
+    i18n = services.i18n.with_locale("en")
+
+    assert await get_enabled_skills(services.store, cli.chat_key) == []
+
+    enabled = await router.dispatch(cli, "/skill enable mature-mode")
+    assert enabled == i18n.t("commands.skill.enable_done", id="mature-mode")
+    assert await get_enabled_skills(services.store, cli.chat_key) == ["mature-mode"]
+
+    disabled = await router.dispatch(cli, "/skill disable mature-mode")
+    assert disabled == i18n.t("commands.skill.disable_done", id="mature-mode")
+    assert await get_enabled_skills(services.store, cli.chat_key) == []
+
+
+async def test_skill_enable_unknown_id_is_rejected():
+    services = _services()
+    router = CommandRouter(services)
+    cli = AgentCtx(chat_key="cli:dm:skills-unknown", user_id="kp", locale="en")
+    i18n = services.i18n.with_locale("en")
+
+    result = await router.dispatch(cli, "/skill enable not-a-real-skill")
+    assert result == i18n.t("commands.skill.unknown", id="not-a-real-skill")
+    assert await get_enabled_skills(services.store, cli.chat_key) == []
+
+
+async def test_skill_enable_disable_denied_for_ordinary_group_member_and_store_unchanged():
+    services = _services()
+    router = CommandRouter(services)
+    source = SimpleNamespace(chat_type="group")
+    player = AgentCtx(
+        chat_key="discord:group:skills-1",
+        user_id="discord:u-1",
+        platform="discord",
+        locale="en",
+        extra={"source": source, "raw": {}},
+    )
+    i18n = services.i18n.with_locale("en")
+
+    denied = await router.dispatch(player, ".skill enable mature-mode")
+    assert denied == i18n.t("commands.skill.denied")
+    assert await get_enabled_skills(services.store, player.chat_key) == []  # nothing mutated
+
+    denied_off = await router.dispatch(player, ".skill disable mature-mode")
+    assert denied_off == i18n.t("commands.skill.denied")
+
+    # Viewing (list/status) is still open to the same non-keeper player.
+    status = await router.dispatch(player, ".skill status")
+    assert status == i18n.t("commands.skill.status", items=i18n.t("commands.skill.enabled_none"))

@@ -16,8 +16,9 @@ from core.character_rules import render_validation_notice, validate_sheet
 from core.coc_rules import DEFAULT_COC_RULE
 from core.dice_engine import DiceResult, coc_rank_label
 from core.rulepacks import RulePack, load_rulepack
+from core.skills import available_skills
 from gateway.hub import Event
-from gateway.ops import Botlist, PrivilegeLevel
+from gateway.ops import Botlist, PrivilegeLevel, get_enabled_skills, set_enabled_skills
 from gateway.rooms import clear_binding, get_binding, mint_room_id, session_key_for_room, set_binding
 from infra.i18n import I18n, get_i18n
 from infra.providers import (
@@ -170,6 +171,12 @@ _MODEL_RESET_WORDS = {"reset", "clear", "revert", "重置", "清除"}
 _BOTLIST_ADD_WORDS = {"add", "new", "添加", "新增"}
 _BOTLIST_REMOVE_WORDS = {"remove", "rm", "del", "delete", "移除", "删除", "刪除"}
 _BOTLIST_LIST_WORDS = {"", "list", "ls", "show", "列表", "查看"}
+
+# `.skill` subcommand vocabularies (EN + a couple of CN synonyms) -- the per-room
+# KP-skills layer (Layer B.1, `core.skills` + `gateway.ops.get/set_enabled_skills`).
+_SKILL_STATUS_WORDS = {"status", "状态", "狀態"}
+_SKILL_ENABLE_WORDS = {"enable", "on", "启用", "啟用"}
+_SKILL_DISABLE_WORDS = {"disable", "off", "禁用", "关闭", "關閉"}
 
 # `.st`/`.sheet` finalize word: re-derive current HP/MP/SAN to their maxima for
 # the sheet's CURRENT characteristics (CREATION semantics -- see `cmd_sheet`).
@@ -612,6 +619,60 @@ class CommandRouter:
             return ctx.i18n.t("commands.botlist.show", ids=", ".join(ids))
         return ctx.i18n.t("commands.botlist.usage")
 
+    async def cmd_skill(self, ctx: CommandCtx) -> str:
+        """`.skill [list | status | enable <id> | disable <id>]` — manage the
+        per-room KP-skills layer (Layer B.1, ``docs/plugins.md`` "Layer B").
+        Bare `.skill`/`.skill list` and `.skill status` are open to any player
+        (viewing which skills exist / are on for this room); `enable`/`disable`
+        mutate the room's play style — and, for a mature/explicit skill, lift the
+        output censor (`gateway.ops.room_content_unfiltered`) — so those require
+        keeper privilege.
+        """
+        parts = ctx.args.split(maxsplit=1)
+        sub = parts[0].casefold() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+
+        if sub in _SKILL_STATUS_WORDS:
+            return await self._skill_status(ctx)
+        if sub in _SKILL_ENABLE_WORDS:
+            return await self._skill_set(ctx, rest, enable=True)
+        if sub in _SKILL_DISABLE_WORDS:
+            return await self._skill_set(ctx, rest, enable=False)
+        return await self._skill_list(ctx)
+
+    async def _skill_list(self, ctx: CommandCtx) -> str:
+        enabled_ids = set(await get_enabled_skills(ctx.services.store, ctx.chat_key))
+        lines = []
+        for skill in available_skills():
+            marker_key = "commands.skill.enabled_some" if skill.id in enabled_ids else "commands.skill.enabled_none"
+            lines.append(f"[{ctx.i18n.t(marker_key)}] {skill.id} — {skill.name}")
+        return ctx.i18n.t("commands.skill.list", items="\n".join(lines))
+
+    async def _skill_status(self, ctx: CommandCtx) -> str:
+        enabled_ids = await get_enabled_skills(ctx.services.store, ctx.chat_key)
+        items = ", ".join(enabled_ids) if enabled_ids else ctx.i18n.t("commands.skill.enabled_none")
+        return ctx.i18n.t("commands.skill.status", items=items)
+
+    async def _skill_set(self, ctx: CommandCtx, skill_id: str, *, enable: bool) -> str:
+        if not _is_keeper(ctx.raw_ctx):
+            return ctx.i18n.t("commands.skill.denied")
+        skill_id = skill_id.strip()
+        known_ids = {skill.id for skill in available_skills()}
+        if not skill_id or skill_id not in known_ids:
+            return ctx.i18n.t("commands.skill.unknown", id=skill_id)
+
+        store = ctx.services.store
+        enabled_ids = await get_enabled_skills(store, ctx.chat_key)
+        if enable:
+            if skill_id not in enabled_ids:
+                enabled_ids = [*enabled_ids, skill_id]
+            await set_enabled_skills(store, ctx.chat_key, enabled_ids)
+            return ctx.i18n.t("commands.skill.enable_done", id=skill_id)
+
+        enabled_ids = [item for item in enabled_ids if item != skill_id]
+        await set_enabled_skills(store, ctx.chat_key, enabled_ids)
+        return ctx.i18n.t("commands.skill.disable_done", id=skill_id)
+
     async def cmd_help(self, ctx: CommandCtx) -> str:
         names = []
         for spec in self._specs:
@@ -997,6 +1058,7 @@ class CommandRouter:
             CommandSpec("jrrp", self.cmd_jrrp, ["jrrp", "luck"], ["jrrp"], None, "commands.help.jrrp"),
             CommandSpec("draw", self.cmd_draw, ["draw"], ["draw", "抽牌"], None, "commands.help.draw"),
             CommandSpec("bot", self.cmd_bot_toggle, ["bot"], ["bot"], None, "commands.help.bot"),
+            CommandSpec("skill", self.cmd_skill, ["skill"], ["skill"], None, "commands.help.skill"),
             CommandSpec(
                 "botlist",
                 self.cmd_botlist,

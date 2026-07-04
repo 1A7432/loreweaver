@@ -19,6 +19,10 @@ _BOT_ENABLED_PREFIX = "bot_enabled."
 _BOT_ENABLED_VALUE = "1"
 _BOT_DISABLED_VALUE = "0"
 _DIRECT_CHAT_TYPES = {"dm", "direct", "private"}
+_SKILLS_ENABLED_PREFIX = "skills_enabled."
+# Skill `metadata.content-rating` values that lift the output censor for a room
+# (see `room_content_unfiltered` / `gateway.turn.run_turn`).
+_UNFILTERED_CONTENT_RATINGS = {"mature", "explicit"}
 _CENSOR_MASK_KEY = "ops.censor.mask"
 # Inter-letter "noise" allowed inside a banned word so an obfuscated spelling
 # ("b a d w o r d", "b.a.d") still matches: whitespace (`\s`), common punctuation
@@ -293,6 +297,47 @@ async def set_bot_enabled(store, chat_key: str, on: bool) -> None:
     await store.set(store_key=f"{_BOT_ENABLED_PREFIX}{chat_key}", value=value)
 
 
+async def get_enabled_skills(store, chat_key: str) -> list[str]:
+    """The list of KP-skill ids enabled for `chat_key`'s room (`[]` if unset/corrupt).
+
+    Mirrors `is_bot_enabled`'s store-flag pattern: a missing key, invalid JSON, or a
+    JSON value that isn't a list all degrade to the empty (no skills enabled) default
+    rather than raising -- a corrupt flag must never break a room's turn.
+    """
+    raw = await store.get(store_key=f"{_SKILLS_ENABLED_PREFIX}{chat_key}")
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value]
+
+
+async def set_enabled_skills(store, chat_key: str, ids: list[str]) -> None:
+    await store.set(store_key=f"{_SKILLS_ENABLED_PREFIX}{chat_key}", value=json.dumps(list(ids), ensure_ascii=False))
+
+
+async def room_content_unfiltered(store, chat_key: str) -> bool:
+    """True if `chat_key`'s room has a skill enabled whose `content_rating` is
+    mature/explicit -- the mature-mode signal `gateway.turn.run_turn` uses to bypass
+    the output word-filter for that room regardless of the configured `Censor`.
+
+    Imports `core.skills` locally: `core` sits below `gateway` in the layering, so a
+    module-level import would be fine too, but this keeps the import next to its one
+    use site.
+    """
+    from core.skills import load_skill
+
+    for skill_id in await get_enabled_skills(store, chat_key):
+        skill = load_skill(skill_id)
+        if skill is not None and skill.content_rating in _UNFILTERED_CONTENT_RATINGS:
+            return True
+    return False
+
+
 def requires_at_mention(chat_type: str) -> bool:
     return chat_type.lower() not in _DIRECT_CHAT_TYPES
 
@@ -373,9 +418,12 @@ __all__ = [
     "PrivilegeLevel",
     "RateLimiter",
     "censor_from_settings",
+    "get_enabled_skills",
     "is_bot_enabled",
     "load_wordlist",
     "requires_at_mention",
+    "room_content_unfiltered",
     "sanitize_outbound",
     "set_bot_enabled",
+    "set_enabled_skills",
 ]

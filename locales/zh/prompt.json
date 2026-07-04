@@ -72,5 +72,6 @@
   "prompt.session_recap.no_previous": "（暂无）",
   "prompt.session_recap.player_label": "玩家",
   "prompt.session_recap.keeper_label": "守秘人",
-  "prompt.session_recap.transcript_line": "{role}：{content}"
+  "prompt.session_recap.transcript_line": "{role}：{content}",
+  "prompt.skills_header": "## 当前启用的玩法技能（请遵循以下指示）"
 }

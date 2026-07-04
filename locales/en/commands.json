@@ -39,6 +39,7 @@
   "commands.help.sc": "Run a sanity check.",
   "commands.help.setcoc": "Set the CoC house rule.",
   "commands.help.sheet": "Show or edit the active sheet.",
+  "commands.help.skill": "List, enable, or disable per-room KP skills.",
   "commands.inline.result": "Inline {expression}: {result}",
   "commands.init.result": "Initiative {name}: {result}",
   "commands.jrrp.result": "Daily luck: {luck}",
@@ -68,5 +69,13 @@
   "commands.sheet.finalized": "Vitals (HP/MP/SAN) recalculated to full for the current characteristics: {name}",
   "commands.sheet.item": "{name} {value}",
   "commands.sheet.show": "{name}: {items}",
+  "commands.skill.list": "Available skills:\n{items}",
+  "commands.skill.status": "Skills enabled for this room: {items}",
+  "commands.skill.enabled_none": "off",
+  "commands.skill.enabled_some": "on",
+  "commands.skill.enable_done": "Enabled skill: {id}",
+  "commands.skill.disable_done": "Disabled skill: {id}",
+  "commands.skill.unknown": "Unknown skill: {id}",
+  "commands.skill.denied": "Only the keeper may manage skills.",
   "commands.roll.invalid": "Invalid dice expression: {expr}"
 }

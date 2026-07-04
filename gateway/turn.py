@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 from agent.loop import KPTurnResult, run_kp_turn
 from core.dice_engine import coc_rank_label
 from gateway.hub import Event
+from gateway.ops import room_content_unfiltered
 from infra.i18n import I18n, get_i18n
 from net.state import build_room_state, resolve_active_character
 
@@ -123,7 +124,12 @@ async def run_turn(
         else:
             await hub.publish(ctx.chat_key, reply_event)
     else:
-        review = (lambda value: censor.review(value).cleaned) if censor is not None else None
+        # A room with a mature/explicit KP skill enabled (Layer B.1's mature-mode
+        # gate — see `gateway.ops.room_content_unfiltered`) opts the output censor
+        # OUT entirely for that room, regardless of the configured `Censor`; every
+        # other room keeps today's behavior exactly.
+        unfiltered = await room_content_unfiltered(services.store, ctx.chat_key)
+        review = None if unfiltered else ((lambda value: censor.review(value).cleaned) if censor is not None else None)
         result = await run_kp_turn(ctx, services, toolset, text, output_review=review)
         for entry in result.tool_trace:
             dice_event = _dice_event(entry, name, i18n)

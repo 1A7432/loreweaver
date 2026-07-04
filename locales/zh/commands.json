@@ -39,6 +39,7 @@
   "commands.help.sc": "进行理智检定。",
   "commands.help.setcoc": "设置 CoC 房规。",
   "commands.help.sheet": "显示或编辑当前角色卡。",
+  "commands.help.skill": "列出、启用或禁用本房间的 KP 技能。",
   "commands.inline.result": "内联 {expression}：{result}",
   "commands.init.result": "先攻 {name}：{result}",
   "commands.jrrp.result": "今日人品：{luck}",
@@ -68,5 +69,13 @@
   "commands.sheet.finalized": "已按当前属性重新计算生命值/魔法值/理智至满值：{name}",
   "commands.sheet.item": "{name} {value}",
   "commands.sheet.show": "{name}：{items}",
+  "commands.skill.list": "可用技能：\n{items}",
+  "commands.skill.status": "本房间已启用的技能：{items}",
+  "commands.skill.enabled_none": "关",
+  "commands.skill.enabled_some": "开",
+  "commands.skill.enable_done": "已启用技能：{id}",
+  "commands.skill.disable_done": "已禁用技能：{id}",
+  "commands.skill.unknown": "未知技能：{id}",
+  "commands.skill.denied": "只有守秘人可以管理技能。",
   "commands.roll.invalid": "无效的骰子表达式：{expr}"
 }

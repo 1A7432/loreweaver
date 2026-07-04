@@ -7,6 +7,7 @@ core/game_clock.py
 core/module_initializer.py
 core/prompt_sections.py
 core/rulepacks.py
+core/skills.py
 gateway/commands.py
 
 # Narrow runner exemptions for bot-on parser tokens.

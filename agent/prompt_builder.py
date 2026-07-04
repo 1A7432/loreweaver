@@ -20,9 +20,20 @@ discipline block (``prompt.keeper_discipline``) instructing the KP that
 keeper-only material is for its own reasoning only and must never be quoted
 to players; that instruction rides along automatically as part of this
 assembly, it needs no special handling here.
+
+After the 6 sections, any KP skills (Layer B.1 — ``docs/plugins.md`` "Layer B")
+enabled for this room are folded in LAST, so they read as the final/strongest
+directive. This module reads the room's enabled-skill ids DIRECTLY off the
+store (never importing ``gateway.ops`` — that would invert the layering; only
+``core.skills`` is imported, which is below `agent`), tolerating a
+missing/corrupt flag the same way ``gateway.ops.get_enabled_skills`` does. A
+room with no skills enabled contributes nothing, so its prompt stays
+byte-identical to a build with no skills layer at all.
 """
 
 from __future__ import annotations
+
+import json
 
 from agent.context import AgentCtx
 from agent.services import Services
@@ -35,6 +46,7 @@ from core.prompt_sections import (
     inject_system_expertise_prompt,
     inject_trpg_system_prompt,
 )
+from core.skills import load_skill
 from core.worldbook import inject_world_lore_prompt
 
 
@@ -74,4 +86,32 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
         await inject_interaction_style_prompt(ctx, i18n),
     ]
 
+    skill_bodies = await _enabled_skill_bodies(ctx, services)
+    if skill_bodies:
+        sections.append(i18n.t("prompt.skills_header") + "\n\n" + "\n\n".join(skill_bodies))
+
     return "\n\n".join(section for section in sections if section)
+
+
+async def _enabled_skill_bodies(ctx: AgentCtx, services: Services) -> list[str]:
+    """Markdown bodies of every KP skill enabled for `ctx.chat_key`'s room, in
+    enablement order. Reads the store flag inline (see module docstring) rather
+    than importing `gateway.ops.get_enabled_skills`; an unknown skill id (already
+    removed from `skills/`) is silently skipped via `load_skill` returning `None`.
+    """
+    raw = await services.store.get(store_key=f"skills_enabled.{ctx.chat_key}")
+    if not raw:
+        return []
+    try:
+        skill_ids = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(skill_ids, list):
+        return []
+
+    bodies = []
+    for skill_id in skill_ids:
+        skill = load_skill(str(skill_id))
+        if skill is not None:
+            bodies.append(skill.body)
+    return bodies

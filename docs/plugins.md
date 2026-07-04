@@ -1,9 +1,11 @@
 # Loreweaver extensibility: plugins, skills & content packs
 
 > Status: **design** (2026-07-04). Layer A (rule-system management) has **landed**
-> (`core/rulepacks.py` is now a discovery-based, data-driven loader; coc7/dnd5e
-> migrated behavior-identical); Layer B (KP skills) follows; Layer C (code plugins)
-> is deferred. This document is the contract contributors build against.
+> (`core/rulepacks.py` is a discovery-based, data-driven loader; coc7/dnd5e migrated
+> behavior-identical). Layer B.1 (KP skills — SKILL.md loader, prompt binding,
+> per-room enable, mature-mode content gate) has **landed**; B.2 (allowed-tools
+> enforcement + the romance skill) follows. Layer C (code plugins) is deferred.
+> This document is the contract contributors build against.
 
 Loreweaver is a self-hosted, world/story-first AI Keeper — not a persona-chat
 frontend. Its long-term leverage is being a **platform the community extends**,
@@ -210,9 +212,11 @@ Until Layer C ships, code contributions go through normal in-tree PRs.
 1. **Layer A — rule-system management** — **landed** (discovery-based loader +
    hybrid derived stats; coc7/dnd5e migrated behavior-identical; a new pure-data
    system is now just a YAML file).
-2. **Layer B — KP skills** — next; `SKILL.md` loader + prompt-section/toolset
-   binding + per-room enable; `mature-mode` and `romance-relationships` as the
-   first built-in skills.
+2. **Layer B.1 — KP skills** — **landed**: `SKILL.md` loader (`core/skills.py`),
+   prompt-section binding (`agent/prompt_builder.py`), per-room enable (`.skill`
+   command), and the mature/explicit content gate that lifts the output censor;
+   `mature-mode` shipped as the first built-in skill. **B.2 next**: `allowed-tools`
+   toolset enforcement + the `romance-relationships` skill.
 3. **Content-pack formalization** — expose the existing ST card/lorebook import
    under the unified discovery/manifest.
 4. **Layer C — code plugins** — deferred; entry points + trust model.
