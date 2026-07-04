@@ -332,6 +332,41 @@ async def test_narrating_a_check_without_rolling_triggers_one_corrective_dice_ro
     assert len(llm.calls) == 3  # initial reply + one corrective tool round + re-narration
 
 
+class _RequiredRejectingLLM(FakeLLM):
+    """DeepSeek v4-pro's thinking-mode shape: tool_choice="required" 400s outright (thinking is
+    the server-side default there); every other call behaves like a normal FakeLLM."""
+
+    async def chat(self, messages, *, tools=None, tool_choice=None, temperature=None, model=None):
+        if tool_choice == "required":
+            self.calls.append((messages, tools))
+            self.tool_choices.append(tool_choice)
+            raise RuntimeError("Error code: 400 - Thinking mode does not support this tool_choice")
+        return await super().chat(messages, tools=tools, tool_choice=tool_choice, temperature=temperature, model=model)
+
+
+async def test_corrective_round_falls_back_to_auto_when_required_is_rejected():
+    # The recommended default Keeper (deepseek-v4-pro, thinking ON server-side) rejects the
+    # forced round's tool_choice="required" with a 400. The corrective must degrade to ONE
+    # plain "auto" retry — never silently drop dice-first enforcement. (Deliberately NOT
+    # worked around by disabling thinking per-call: the models that reject "required" are
+    # the strong ones that roll voluntarily; see _run_dice_correction's comment.)
+    llm = _RequiredRejectingLLM(
+        script=[
+            assistant_text("Make a Spot Hidden check — please roll .ra Spot Hidden."),
+            assistant_tools(tool_call("skill_check", skill_name="Spot Hidden")),
+            assistant_text("Your fingers brush a hidden latch beneath the desk."),
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx("chat-dice-400"), services, _dice_toolset(), "I search the desk.")
+
+    assert [t["name"] for t in result.tool_trace] == ["skill_check"]
+    assert result.reply == "Your fingers brush a hidden latch beneath the desk."
+    # main reply + rejected "required" + "auto" retry (which rolls) + re-narration
+    assert llm.tool_choices == ["auto", "required", "auto", "auto"]
+
+
 async def test_a_check_that_already_rolled_triggers_no_corrective_round():
     # skill_check already fired this turn, so even a success-level narration must
     # NOT trigger a corrective round (the script would be exhausted if it did).
@@ -516,7 +551,8 @@ async def test_forced_correction_round_provider_error_keeps_original_reply():
 
     assert result.tool_trace == []  # nothing rolled
     assert result.reply == "Please roll .ra Spot Hidden to search the desk."  # original kept
-    assert calls["n"] == 2  # main round + exactly one forced attempt that raised
+    # main round + the forced attempt that raised + its single "auto" fallback that also raised
+    assert calls["n"] == 3
     # The turn still persisted (the corrective error is best-effort, not a turn crash).
     assert await services.store.get(user_key="", store_key="chat_history.chat-forced-boom") is not None
 

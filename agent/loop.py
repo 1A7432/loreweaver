@@ -78,7 +78,9 @@ _HISTORY_CAP = 20
 # real dice discipline.
 
 # Chat calls the corrective phase may make: one to roll the dice + one to
-# re-narrate. Hard bound -- the phase is also entered at most once per turn.
+# re-narrate (plus at most one extra "auto" retry when a provider rejects
+# tool_choice="required" — see _run_dice_correction). Hard bound -- the phase
+# is also entered at most once per turn.
 _CORRECTIVE_MAX_ROUNDS = 2
 
 # Tools that roll real dice. If any fired this turn the check WAS resolved for
@@ -496,10 +498,29 @@ async def _run_dice_correction(
                 temperature=temperature,
             )
         except Exception:
-            # Best-effort: a provider error OR a provider that rejects
-            # tool_choice="required" keeps the original reply rather than crash.
-            logger.warning("dice-first correction skipped: LLM chat failed", exc_info=True)
-            return prior_reply
+            if not forced:
+                # Best-effort: a provider error on the narration round keeps the original reply.
+                logger.warning("dice-first correction skipped: LLM chat failed", exc_info=True)
+                return prior_reply
+            # DeepSeek v4-pro's thinking mode (server-side DEFAULT, and the recommended Keeper)
+            # rejects tool_choice="required" with a 400 — caught live by the nightly red-line
+            # gate. Deliberately NOT worked around by disabling thinking per-call: the models
+            # that reject "required" are exactly the strong thinking models that already roll
+            # voluntarily (first gate run: dice-miss 0.0 even with every forced round erroring),
+            # while the weak models that DO need compulsion don't run thinking mode and never
+            # take this path. So one plain "auto" retry — the corrective nudge alone — is the
+            # whole fallback; the nightly dice-miss metric watches for that assumption ever
+            # going stale. Bounded: at most one extra chat call, once per turn.
+            try:
+                result = await services.llm.chat(
+                    convo,
+                    tools=toolset.schemas(unlocked),
+                    tool_choice="auto",
+                    temperature=temperature,
+                )
+            except Exception:
+                logger.warning("dice-first correction skipped: LLM chat failed", exc_info=True)
+                return prior_reply
         if result.tool_calls:
             await _dispatch_and_record(toolset, ctx, result, convo, tool_trace, unlocked)
             if forced and not _dice_rolled(tool_trace):
