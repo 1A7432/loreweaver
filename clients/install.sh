@@ -28,7 +28,16 @@ desc_of()      { [ -n "$1" ] && printf '%s' "$1" || printf 'GitHub Release'; }
 say() { printf '\033[1;33m▸ %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 
-command -v curl >/dev/null 2>&1 || die "need curl"
+# curl OR wget — fresh Linux images often ship only one of them.
+if command -v curl >/dev/null 2>&1; then
+  dl()      { curl -fsSL --connect-timeout 15 "$1" -o "$2"; }
+  dl_pipe() { curl -fsSL "$1"; }
+elif command -v wget >/dev/null 2>&1; then
+  dl()      { wget -q --timeout=15 -O "$2" "$1"; }
+  dl_pipe() { wget -qO- "$1"; }
+else
+  die "need curl or wget"
+fi
 command -v tar  >/dev/null 2>&1 || die "need tar"
 
 # 1) bun — the runtime + package manager the client is built on.
@@ -38,7 +47,7 @@ if ! command -v bun >/dev/null 2>&1; then
 fi
 if ! command -v bun >/dev/null 2>&1; then
   say "installing bun (runtime + package manager)…"
-  curl -fsSL https://bun.sh/install | bash >/dev/null \
+  dl_pipe https://bun.sh/install | bash >/dev/null \
     || die "bun install failed. If GitHub is slow where you are, install bun manually (https://bun.sh) then re-run."
   export PATH="$HOME/.bun/bin:$PATH"
 fi
@@ -48,7 +57,7 @@ say "bun $(bun --version) ready"
 # 2) client tarball — try the primary source, auto-fall-back to the 1a7432.site mirror.
 fetch_client() {  # $1 = tarball url; downloads to a temp file, extracts only on success
   local tmp; tmp="$(mktemp)"
-  if curl -fsSL --connect-timeout 15 "$1" -o "$tmp" && tar xzf "$tmp" -C "$TRPG_HOME" 2>/dev/null; then rm -f "$tmp"; return 0; fi
+  if dl "$1" "$tmp" && tar xzf "$tmp" -C "$TRPG_HOME" 2>/dev/null; then rm -f "$tmp"; return 0; fi
   rm -f "$tmp"; return 1
 }
 rm -rf "$TRPG_HOME/clients"; mkdir -p "$TRPG_HOME"
@@ -78,7 +87,7 @@ cat > "$TRPG_BIN/loreweaver" <<EOF
 #!/usr/bin/env bash
 if [ "\$1" = "update" ]; then
   echo "updating Loreweaver…"
-  exec env ${USED:+TRPG_ORIGIN='$USED'} bash -c "curl -fsSL '${UPDATE_INSTALLER}' | bash"
+  exec env ${USED:+TRPG_ORIGIN='$USED'} bash -c "(command -v curl >/dev/null 2>&1 && curl -fsSL '${UPDATE_INSTALLER}' || wget -qO- '${UPDATE_INSTALLER}') | bash"
 fi
 exec bun run "$TRPG_HOME/clients/tui/src/index.tsx" "\$@"
 EOF
@@ -94,6 +103,6 @@ case ":$PATH:" in
 esac
 echo
 echo "  In the connect screen, use:"
-echo "    host  wss://1a7432.site/ws"
-echo "    key   <the invite key your Keeper gave you>"
-echo "    name  <your nickname>"
+echo "    ticket  <the p2p ticket your Keeper shared>   (or click 'Host locally & play' to run your own)"
+echo "    key     <the invite key your Keeper gave you>"
+echo "    name    <your nickname>"

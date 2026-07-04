@@ -1,11 +1,15 @@
 // One-click "host locally": detect this machine's environment and bring a loreweaver server up
-// from whatever state it's in — locate a checkout, else fetch the server code; ensure `uv`
-// (which installs Python + deps for us, so a machine with no Python still works); `uv sync`;
-// then run the server on a local WebSocket. EVERY step streams its real terminal output through
-// `onLog` so the TUI can show the whole bring-up, and the keeper key it auto-mints is returned
-// so the shell can log straight in. Bare-metal — no Docker.
+// from whatever state it's in — locate a checkout, else fetch the server code (a source tarball
+// by default, so a FRESH machine with no git works; git clone is only a fallback); ensure `uv`
+// (which installs Python + deps for us, so a machine with no Python still works — its installer
+// is fetched with Bun's own fetch(), so no curl is needed either); `uv sync`; then run the
+// server. EVERY step streams its real terminal output through `onLog` so the TUI can show the
+// whole bring-up, and the keeper key it auto-mints is returned so the shell can log straight in.
+// The only assumed tools are the OS's own: `tar` (bundled on Windows 10+, macOS, and every
+// mainstream Linux) and, on POSIX, `sh`.
 
 import { existsSync } from "node:fs"
+import { mkdir, rename, rm } from "node:fs/promises"
 import { delimiter, dirname, join } from "node:path"
 
 const HOME = process.env.HOME ?? process.env.USERPROFILE ?? "."
@@ -13,6 +17,7 @@ const SERVER_DIR = `${HOME}/.loreweaver/server`
 const LOCAL_KEYS = `${HOME}/.loreweaver/local-keys.toml`
 const LOCAL_SIDECAR = `${HOME}/.loreweaver/keeper-key.txt`
 const REPO = "https://github.com/1A7432/loreweaver"
+const TARBALL = `${REPO}/archive/refs/heads/main.tar.gz`
 const READY_TIMEOUT_MS = 60_000 // Iroh waits for a relay handshake, so allow longer than a local socket
 const TICKET_RE = /(endpoint[a-z0-9]{20,})/ // the base32 ticket, printed once the endpoint is online (locale-independent)
 
@@ -85,7 +90,30 @@ async function run(cmd: string[], cwd: string | undefined, onLog: OnLog, signal?
   }
 }
 
-async function ensureServerDir(onLog: OnLog): Promise<string> {
+// Fetch the server source WITHOUT git: download the branch tarball and unpack it with the
+// system `tar`. Extraction goes to a staging dir that is atomically renamed into place, so a
+// half-finished download can never masquerade as a working server dir on the next run.
+async function fetchServerSource(onLog: OnLog, signal?: AbortSignal): Promise<string> {
+  onLog("Downloading the server source (a few MB — no git needed)…", "step")
+  const response = await fetch(TARBALL, { signal })
+  if (!response.ok) throw new Error(`download failed: HTTP ${response.status}`)
+  const tarball = join(HOME, ".loreweaver", "server-src.tar.gz")
+  const staging = `${SERVER_DIR}.staging`
+  await mkdir(dirname(tarball), { recursive: true })
+  await Bun.write(tarball, response)
+  await rm(staging, { recursive: true, force: true })
+  await mkdir(staging, { recursive: true })
+  // --strip-components=1 drops the `loreweaver-main/` wrapper folder GitHub puts in the tarball.
+  if ((await run(["tar", "-xzf", tarball, "-C", staging, "--strip-components=1"], undefined, onLog, signal)) !== 0) {
+    throw new Error("extracting the server source failed")
+  }
+  await rm(tarball, { force: true })
+  await rm(SERVER_DIR, { recursive: true, force: true })
+  await rename(staging, SERVER_DIR)
+  return SERVER_DIR
+}
+
+async function ensureServerDir(onLog: OnLog, signal?: AbortSignal): Promise<string> {
   const checkout = findCheckout()
   if (checkout) {
     onLog(`Found a checkout at ${checkout}`, "ok")
@@ -96,11 +124,23 @@ async function ensureServerDir(onLog: OnLog): Promise<string> {
     return SERVER_DIR
   }
   onLog("No server on this machine — fetching the code…", "step")
-  if (!Bun.which("git")) throw new Error("git is needed to fetch the server, and it isn't installed")
-  if ((await run(["git", "clone", "--depth", "1", REPO, SERVER_DIR], undefined, onLog)) !== 0) {
-    throw new Error("git clone failed — check your network (GitHub reachable?)")
+  // Tarball FIRST: it works on a fresh machine with no git, and macOS's git shim would pop a
+  // GUI "install developer tools?" dialog mid-bring-up. git is only the fallback for networks
+  // where the tarball endpoint is blocked but git happens to get through.
+  try {
+    return await fetchServerSource(onLog, signal)
+  } catch (error) {
+    if (signal?.aborted) throw error instanceof Error ? error : new Error("cancelled")
+    const detail = error instanceof Error ? error.message : String(error)
+    onLog(`Tarball download didn't work (${detail}) — trying git…`, "err")
+    if (!Bun.which("git")) {
+      throw new Error("could not download the server source (and git isn't installed as a fallback) — check your network and retry")
+    }
+    if ((await run(["git", "clone", "--depth", "1", REPO, SERVER_DIR], undefined, onLog, signal)) !== 0) {
+      throw new Error("git clone failed — check your network (GitHub reachable?)")
+    }
+    return SERVER_DIR
   }
-  return SERVER_DIR
 }
 
 async function ensureUv(onLog: OnLog, signal?: AbortSignal): Promise<void> {
@@ -109,11 +149,21 @@ async function ensureUv(onLog: OnLog, signal?: AbortSignal): Promise<void> {
     return
   }
   onLog("uv not found — installing it (it manages Python + deps for us)…", "step")
-  const installer =
-    process.platform === "win32"
-      ? ["powershell", "-NoProfile", "-Command", "irm https://astral.sh/uv/install.ps1 | iex"]
-      : ["sh", "-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"]
-  if ((await run(installer, undefined, onLog, signal)) !== 0) throw new Error("uv install failed — check your network")
+  if (process.platform === "win32") {
+    const installer = ["powershell", "-NoProfile", "-Command", "irm https://astral.sh/uv/install.ps1 | iex"]
+    if ((await run(installer, undefined, onLog, signal)) !== 0) throw new Error("uv install failed — check your network")
+  } else {
+    // Fetch the installer with Bun's own fetch() and run it with sh — fresh Linux images often
+    // ship without curl, and this path must work on a factory-fresh machine.
+    const response = await fetch("https://astral.sh/uv/install.sh", { signal })
+    if (!response.ok) throw new Error(`uv installer download failed: HTTP ${response.status}`)
+    const script = join(HOME, ".loreweaver", "uv-install.sh")
+    await mkdir(dirname(script), { recursive: true })
+    await Bun.write(script, response)
+    const code = await run(["sh", script], undefined, onLog, signal)
+    await rm(script, { force: true })
+    if (code !== 0) throw new Error("uv install failed — check your network")
+  }
   // uv drops its binary in one of these; prepend both to PATH so the steps that follow can find it.
   // `delimiter` is `;` on Windows, `:` elsewhere — a hardcoded `:` would break the Windows lookup.
   const uvDirs = [join(HOME, ".local", "bin"), join(HOME, ".cargo", "bin")]
@@ -183,7 +233,7 @@ export async function bringUpServer(onLog: OnLog, signal?: AbortSignal): Promise
   }
   bailIfAborted()
   onLog(`OS: ${process.platform} / ${process.arch}`, "step")
-  const serverDir = await ensureServerDir(onLog)
+  const serverDir = await ensureServerDir(onLog, signal)
   bailIfAborted()
   await ensureUv(onLog, signal)
   bailIfAborted()

@@ -30,11 +30,11 @@ function usage(): string {
   return [
     "Usage:",
     "  loreweaver                    # launch the lobby (connect screen)",
-    "  loreweaver connect --host wss://1a7432.site/ws --key <k> [--name N]  # prefilled",
+    "  loreweaver connect --host <p2p-ticket> --key <k> [--name N]   # prefilled",
     "  loreweaver update             # re-fetch + reinstall the latest client",
     "",
     "Local server:",
-    "  python -m app --serve",
+    "  click 'Host locally & play' on the connect screen (or: python -m app --serve)",
   ].join("\n")
 }
 
