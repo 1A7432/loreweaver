@@ -4,6 +4,10 @@
 
 Loreweaver is young and built largely by one person with AI assistance. This is the honest forward plan — where the project is focused now, the bigger arc after, and one open design question worth deciding in the open. For the layer contracts and iron rules, see [CLAUDE.md](../CLAUDE.md).
 
+## The ambition
+
+The goal is not "an AI stand-in for a game master" — it is to be **the Claude Code of the RPG domain**. Powerful coding agents are everywhere; competent RPG agents barely exist. Every layer here — real dice and hard rules, a Keeper that acts through tool calls, sub-actors that know only what they should, an extension ecosystem growing along SKILL.md and SillyTavern conventions — points the same way: making "running a world well" a first-class agent capability.
+
 ## Where things stand
 
 The deterministic engine — dice (on `d20`), CoC/DnD success levels, character math, rule validation, the game clock — is the solid core, covered by a deterministic, offline test suite. The **terminal (OpenTUI) client is the one focus**, connecting over the **Iroh** p2p transport (dial a ticket — no domain/TLS/port-forward). The chat-platform adapters (Discord · Telegram · QQ · Feishu) are still **in-tree but unmaintained and untested against a live platform** — kept behind the gateway's transport-agnostic seam so they *could* be revived, but not a current commitment. (The React web client, the WebSocket serve path, Docker deployment, and the SSH client were removed to keep the surface to what one maintainer can actually test; WebSocket lives on only as the offline test transport. Rich media — images/audio via iroh-blobs — is a future Iroh-only feature.)
