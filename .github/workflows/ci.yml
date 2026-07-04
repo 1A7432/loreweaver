@@ -19,8 +19,8 @@ jobs:
         # Keep in sync with `requires-python` in pyproject.toml (currently >=3.11).
         python-version: ["3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
@@ -40,7 +40,7 @@ jobs:
     name: Clients — TypeScript (bun)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
       - name: protocol (shared)
         working-directory: clients/protocol

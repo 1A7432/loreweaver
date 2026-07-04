@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Gate every subsequent step on the secret's presence via a step OUTPUT
       # (not a job-level `if: secrets.X != ''`) so this reliably SKIPS -- never
@@ -48,7 +48,7 @@ jobs:
             echo "has_key=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v8
         if: steps.check.outputs.has_key == 'true'
         with:
           python-version: "3.12"
@@ -106,7 +106,7 @@ jobs:
 
       - name: Upload eval logs
         if: steps.check.outputs.has_key == 'true' && always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: redline-eval-logs-${{ github.run_id }}
           path: eval-logs/

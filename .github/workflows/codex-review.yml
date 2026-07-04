@@ -57,7 +57,7 @@ jobs:
         if: steps.check.outputs.has_secret == 'true'
         id: checkout
         continue-on-error: true
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
