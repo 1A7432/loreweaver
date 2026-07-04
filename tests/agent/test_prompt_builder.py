@@ -11,6 +11,17 @@ import json
 from agent.context import AgentCtx
 from agent.prompt_builder import build_system_prompt
 from agent.services import build_services
+from core.prompt_sections import (
+    inject_document_context_prompt,
+    inject_game_state_prompt,
+    inject_interaction_style_prompt,
+    inject_session_history_prompt,
+    inject_session_recap_prompt,
+    inject_system_expertise_prompt,
+    inject_trpg_system_prompt,
+)
+from core.relationships import RelationshipManager
+from core.worldbook import inject_world_lore_prompt
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM
@@ -114,3 +125,84 @@ async def test_build_system_prompt_survives_a_brand_new_chat_with_no_seeded_stat
     assert i18n.t("prompt.game_state.title") in prompt
     assert i18n.t("prompt.style.narrative") in prompt
     assert i18n.t("prompt.keeper_discipline") not in prompt
+
+
+# ---------------------------------------------------------------------------
+# Deterministic relationship tracks (好感/情欲, core.relationships) fold-in --
+# the last section, read straight off the store like the skills block above.
+# ---------------------------------------------------------------------------
+
+
+async def test_build_system_prompt_with_no_relationship_state_is_byte_identical_to_before():
+    """CRITICAL INVARIANT: a chat with no relationship tracks ever set must assemble EXACTLY the
+    same prompt as the pre-relationships assembly logic (the 6 sections + skills fold-in, joined
+    the same way) -- the fold-in contributes nothing at all, not even an empty header, when the
+    room's relationship state is empty."""
+    services = _services("en")
+    chat_key = "chat-prompt-builder-no-relationships"
+    ctx = AgentCtx(chat_key=chat_key, user_id="u1", locale="en")
+
+    await _seed_ready_keeper_pool(services, chat_key)
+    await _seed_last_session(services, chat_key)
+
+    i18n = services.i18n.with_locale("en")
+    session_history = await inject_session_history_prompt(ctx, services.battles, i18n)
+    session_recap = await inject_session_recap_prompt(ctx, services.store, i18n)
+    document_context = await inject_document_context_prompt(
+        ctx, services.vector_db, services.store, i18n, services.settings.enable_vector_db
+    )
+    extra = getattr(ctx, "extra", {}) or {}
+    recent_context = "\n".join(part for part in (session_history, str(extra.get("user_message", "") or "")) if part)
+    world_lore = await inject_world_lore_prompt(ctx, services.worldbook, i18n, role="keeper", recent_context=recent_context)
+    legacy_sections = [
+        session_history,
+        session_recap,
+        await inject_game_state_prompt(ctx, services.characters, services.store, i18n),
+        document_context,
+        world_lore,
+        await inject_system_expertise_prompt(ctx, services.characters, i18n),
+        await inject_trpg_system_prompt(ctx, i18n),
+        await inject_interaction_style_prompt(ctx, i18n),
+    ]
+    expected = "\n\n".join(section for section in legacy_sections if section)  # no skills enabled here
+
+    actual = await build_system_prompt(ctx, services)
+
+    assert actual == expected
+    assert i18n.t("prompt.relationships_header") not in actual
+
+
+async def test_build_system_prompt_folds_in_a_set_relationship_track_as_the_last_section():
+    services = _services("en")
+    chat_key = "chat-prompt-builder-with-relationships"
+    ctx = AgentCtx(chat_key=chat_key, user_id="u1", locale="en")
+
+    manager = RelationshipManager(services.store)
+    await manager.adjust(chat_key, "Alice", "Bob", "affection", 30)
+
+    prompt = await build_system_prompt(ctx, services)
+    i18n = services.i18n.with_locale("en")
+
+    assert i18n.t("prompt.relationships_header") in prompt
+    assert "Alice" in prompt and "Bob" in prompt
+    # It's the LAST section: nothing else appears after it.
+    header_pos = prompt.index(i18n.t("prompt.relationships_header"))
+    assert header_pos == max(
+        prompt.index(marker) for marker in (i18n.t("prompt.relationships_header"), i18n.t("prompt.game_state.title"))
+    )
+    assert prompt.rstrip().endswith(prompt[header_pos:].rstrip())
+
+
+async def test_build_system_prompt_relationship_fold_in_is_localized_per_ctx_locale():
+    services = _services("en")
+    chat_key = "chat-prompt-builder-relationships-zh"
+    ctx = AgentCtx(chat_key=chat_key, user_id="u1", locale="zh")
+
+    manager = RelationshipManager(services.store)
+    await manager.adjust(chat_key, "Alice", "Bob", "affection", 30)
+
+    prompt = await build_system_prompt(ctx, services)
+    zh = services.i18n.with_locale("zh")
+
+    assert zh.t("prompt.relationships_header") in prompt
+    assert zh.t("relationships.track.affection") in prompt

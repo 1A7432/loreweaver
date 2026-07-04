@@ -4,7 +4,7 @@ description: >
   Enable for a campaign centered on romance/intimacy: tracks attraction and
   tension, resolves seduction and reading feelings as social checks, and
   prompts consent beats before a scene turns intimate.
-allowed-tools: []
+allowed-tools: [adjust_relationship, set_relationship, get_relationships]
 metadata:
   scope: room
   systems: [coc7]
@@ -26,10 +26,17 @@ attraction is a Psychology (心理学) check. Call for the roll, then narrate th
 outcome per the success level the dice actually produced — a failed Charm
 check is an awkward or rebuffed moment, not a free pass to skip to success.
 
-Track affection, tension, and trust narratively across scenes rather than as a
-hidden numeric meter: remember what happened last time these two characters
-were alone together, let small gestures and callbacks accumulate, and let a
-relationship cool or warm believably rather than resetting every scene.
+This table has deterministic relationship tracks -- affection (好感) and
+desire (情欲) -- for every pair of characters, maintained as real numbers
+rather than vibes: call `adjust_relationship` after a meaningful beat (a kind
+gesture, a betrayal, a shared danger survived, a flirtation that lands) to
+nudge the right track by a signed amount, and `get_relationships` to check
+where things currently stand before you narrate. Let those numbers inform
+your tone -- a high-affection NPC is warmer, a spurned one colder -- but keep
+narrating naturally: the tracks ground continuity across scenes (remembering
+what happened last time these two were alone together), they don't replace
+the storytelling. Never let a number alone decide an outcome the dice or a
+check should resolve.
 
 Consent and pacing come first. Check in with the player (out of character, if
 needed) before a scene crosses into anything explicit, and always leave an

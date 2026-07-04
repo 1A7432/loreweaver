@@ -1,0 +1,14 @@
+{
+  "relationships.track.affection": "好感",
+  "relationships.track.desire": "情欲",
+  "relationships.describe.line": "{subject} → {target}：{tracks}",
+  "relationships.describe.pair": "{label} {value}",
+  "relationships.tools.bad_track": "未知的关系轨。可用关系轨：{allowed}。",
+  "relationships.tools.bad_delta": "该数值无法解析为整数。",
+  "relationships.tools.adjust.done": "{subject} → {target} {track}：{old} → {new}（变化：{delta}）。",
+  "relationships.tools.set.done": "已将 {subject} → {target} 的 {track} 设为 {value}。",
+  "relationships.tools.get.empty": "尚未记录任何关系轨数据。",
+  "relationships.tools.get.header": "当前关系：",
+  "relationships.tools.get.item": "- {line}",
+  "relationships.tools.failed": "更新关系数据失败：{error}"
+}

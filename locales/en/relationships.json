@@ -1,0 +1,14 @@
+{
+  "relationships.track.affection": "Affection",
+  "relationships.track.desire": "Desire",
+  "relationships.describe.line": "{subject} → {target}: {tracks}",
+  "relationships.describe.pair": "{label} {value}",
+  "relationships.tools.bad_track": "Unknown relationship track. Allowed tracks: {allowed}.",
+  "relationships.tools.bad_delta": "That value isn't a usable whole number.",
+  "relationships.tools.adjust.done": "{subject} → {target} {track}: {old} → {new} (change: {delta}).",
+  "relationships.tools.set.done": "{subject} → {target} {track} set to {value}.",
+  "relationships.tools.get.empty": "No relationship tracks recorded yet.",
+  "relationships.tools.get.header": "Current relationships:",
+  "relationships.tools.get.item": "- {line}",
+  "relationships.tools.failed": "Failed to update relationships: {error}"
+}

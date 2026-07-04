@@ -126,13 +126,14 @@ def test_real_mature_mode_skill_exists_and_is_explicit_rated() -> None:
 
 def test_real_romance_relationships_skill_exists_and_is_mature_rated() -> None:
     """The Layer B.2 built-in skill: real `skills/romance-relationships/SKILL.md`
-    must be discoverable, prompt-only (no allowed-tools yet), and mature-rated."""
+    must be discoverable, unlock the deterministic relationship-track tools, and
+    be mature-rated."""
     skill = load_skill("romance-relationships")
     assert skill is not None
     assert skill.content_rating == "mature"
     assert skill.scope == "room"
     assert skill.systems == ["coc7"]
-    assert skill.allowed_tools == []
+    assert skill.allowed_tools == ["adjust_relationship", "set_relationship", "get_relationships"]
     assert skill.body.strip()
 
 

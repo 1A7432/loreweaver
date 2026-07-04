@@ -29,6 +29,14 @@ store (never importing ``gateway.ops`` — that would invert the layering; only
 missing/corrupt flag the same way ``gateway.ops.get_enabled_skills`` does. A
 room with no skills enabled contributes nothing, so its prompt stays
 byte-identical to a build with no skills layer at all.
+
+Finally, current deterministic relationship tracks (``core.relationships`` —
+好感/情欲, see iron rule #1: the values are real code, only the narration
+around them is the model's job) are folded in as the last section, read
+straight off the store the same inline way as the skills block above (never
+importing ``agent.kp_tools_relationships`` or ``gateway``). A chat with no
+relationship state set contributes nothing, so its prompt stays byte-identical
+to a build from before this section existed.
 """
 
 from __future__ import annotations
@@ -46,6 +54,7 @@ from core.prompt_sections import (
     inject_system_expertise_prompt,
     inject_trpg_system_prompt,
 )
+from core.relationships import RelationshipManager
 from core.skills import load_skill
 from core.worldbook import inject_world_lore_prompt
 
@@ -89,6 +98,10 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
     skill_bodies = await _enabled_skill_bodies(ctx, services)
     if skill_bodies:
         sections.append(i18n.t("prompt.skills_header") + "\n\n" + "\n\n".join(skill_bodies))
+
+    relationship_lines = await RelationshipManager(services.store).describe(ctx.chat_key, i18n)
+    if relationship_lines:
+        sections.append(i18n.t("prompt.relationships_header") + "\n" + "\n".join(relationship_lines))
 
     return "\n\n".join(section for section in sections if section)
 

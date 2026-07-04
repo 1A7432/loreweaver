@@ -231,11 +231,13 @@ Until Layer C ships, code contributions go through normal in-tree PRs.
    and allow a gated tool only when its name is in the room's unlocked set),
    and `core.skills.unlocked_tools_for` unioning enabled skills' `allowed-tools`
    for `agent.loop.run_kp_turn` to pass in. `romance-relationships` shipped as
-   the second built-in skill (prompt-only, `allowed-tools: []`), backed by coc7
-   intimate-vocabulary aliases (魅惑/媚惑/勾引/风情 → 取悦, 调情/撩拨 → 话术,
-   洞察情感/察言观色/共情/同理心 → 心理学) — aliases only, no new default skills
-   added to the sheet. B.3's generators (below) are the first actually-gated
-   tools, making this enforcement live rather than inert.
+   the second built-in skill, backed by coc7 intimate-vocabulary aliases
+   (魅惑/媚惑/勾引/风情 → 取悦, 调情/撩拨 → 话术, 洞察情感/察言观色/共情/同理心 →
+   心理学) and, since the deterministic relationship-tracks feature landed, its
+   own `allowed-tools: [adjust_relationship, set_relationship,
+   get_relationships]` gating the `agent.kp_tools_relationships` tool trio
+   (backed by `core.relationships`: clamped, persisted 好感/情欲 tracks folded
+   into the main KP prompt by `agent.prompt_builder`).
 4. **Layer B.3 — self-extension generators** — **landed**: three gated
    `generate_*` tools in `agent.forge`/`agent.kp_tools_forge`, each invisible
    until its own forge skill (`skill-forge`/`rule-forge`/`module-forge`) is
