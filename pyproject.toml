@@ -1,6 +1,6 @@
 [project]
 name = "loreweaver"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A self-hosted, terminal-first AI Game Master / Keeper for any TTRPG system — dice bot + function-calling AI KP, system-agnostic (D&D 5e SRD + CoC7)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -45,8 +45,22 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.5"]
 loreweaver = "app:main"
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
+# Auto, git-derived versioning: the version increases with every commit; milestone
+# versions come from `v*` tags. The repo also carries a rolling `latest` release tag
+# (release-server.yml's GitHub Release marker) that is NOT a version — `--match` on
+# the describe command excludes it so it can never poison the derivation.
+git_describe_command = "git describe --dirty --tags --long --match v[0-9]*"
+# The one-click host's source-tarball install tier has no `.git` dir at all (a plain
+# GitHub tarball checkout) — `uv sync`/`pip install` there must not explode.
+fallback_version = "0.0.0+unknown"
+# A plain top-level module (this is a flat-package repo, no single src/pkg tree) so
+# runtime code can read the resolved version without importlib gymnastics. Generated
+# at build time — gitignored, never hand-edited or committed.
+version_file = "_lw_version.py"
 
 [tool.setuptools]
 # `net` is a real package. `app.py` is a top-level module (the `loreweaver`
@@ -83,7 +97,7 @@ packages = [
     "locales.en",
     "locales.zh",
 ]
-py-modules = ["app"]
+py-modules = ["app", "_lw_version"]
 
 [tool.setuptools.package-data]
 rulepacks = ["*.yaml"]

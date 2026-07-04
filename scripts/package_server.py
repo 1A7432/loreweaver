@@ -143,11 +143,27 @@ def smoke_test(bundle_dir: Path, tag: str, *, skip_serve: bool) -> None:
     binary = bundle_dir / executable_name(tag)
     if not binary.exists():
         raise PackagingError(f"Bundle executable missing: {binary}")
+    _smoke_version(binary)
     _smoke_doctor(binary)
     if skip_serve:
         print("--skip-serve-smoke: skipping the --serve smoke.")
     else:
         _smoke_serve(binary)
+
+
+def _smoke_version(binary: Path) -> None:
+    """`<binary> --version` must print the real git-derived version baked in at build
+    time (`loreweaver-server.spec`'s `VERSION` sidecar), never the last-resort fallback
+    — a frozen bundle has no other way to know its version, so silently falling back
+    here would mean the bake step regressed."""
+    print(f"$ {binary} --version")
+    result = subprocess.run([str(binary), "--version"], capture_output=True, text=True, timeout=60)
+    output = (result.stdout + result.stderr).strip()
+    print(output)
+    if result.returncode != 0:
+        raise PackagingError(f"--version exited {result.returncode}:\n{output}")
+    if not output or output == "0.0.0+unknown":
+        raise PackagingError(f"--version printed the fallback, not a real derived version:\n{output!r}")
 
 
 def _smoke_doctor(binary: Path) -> None:

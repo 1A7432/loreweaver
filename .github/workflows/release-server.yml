@@ -48,7 +48,13 @@ jobs:
             asset: windows-x64
             file: dist/loreweaver-server-windows-x64.zip
     steps:
+      # fetch-depth: 0 (full history + tags): setuptools-scm (pyproject.toml's
+      # [tool.setuptools_scm]) derives the version from `git describe` — the default
+      # depth=1 checkout has no tags at all, so every build here would silently report
+      # the fallback version instead of the real git-derived one.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"

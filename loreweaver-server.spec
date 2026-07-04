@@ -15,17 +15,32 @@ right directory unmodified in a frozen build — proven by `scripts/package_serv
 `--doctor` smoke, which is the one thing that would fail loudly if this ever stopped holding.
 """
 
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all
 
 REPO_ROOT = Path(SPECPATH)  # noqa: F821 -- SPECPATH is injected by PyInstaller's spec exec
 
+# Bake the resolved version into the bundle: a frozen binary has neither the
+# setuptools-scm-generated `_lw_version` module nor installed package metadata to read
+# at runtime (see `infra/version.py`'s resolution order), so `--version`/`--doctor`
+# instead read this `VERSION` sidecar out of the bundle's data directory
+# (`sys._MEIPASS`). Freshly resolved on every build (in THIS process, run in the build
+# env by `scripts/package_server.py` / CI, where `.git` — or an already-built
+# `_lw_version.py` — is present) so it is never stale; gitignored, never hand-edited.
+sys.path.insert(0, str(REPO_ROOT))
+from infra.version import resolve_version  # noqa: E402
+
+VERSION_PATH = REPO_ROOT / "VERSION"
+VERSION_PATH.write_text(resolve_version() + "\n", encoding="utf-8")
+
 datas = [
     (str(REPO_ROOT / "locales"), "locales"),
     (str(REPO_ROOT / "rulepacks"), "rulepacks"),
     (str(REPO_ROOT / "skills"), "skills"),
     (str(REPO_ROOT / ".env.example"), "."),
+    (str(VERSION_PATH), "."),
     (str(REPO_ROOT / "adapters" / "cli" / "demo_module_en.txt"), "adapters/cli"),
 ]
 binaries = []

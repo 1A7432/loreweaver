@@ -25,6 +25,7 @@ from infra.config import Settings
 from infra.embeddings import FakeEmbeddings, LocalEmbeddings
 from infra.i18n import I18n, get_i18n
 from infra.llm import FakeLLM
+from infra.version import resolve_version
 from net.keystore import Keystore
 from net.tui_server import TuiServer
 
@@ -89,6 +90,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--platforms")
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--doctor", action="store_true")
+    parser.add_argument("--version", action="store_true")
     parser.add_argument("--host", default=DEFAULT_TUI_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_TUI_PORT)
     parser.add_argument("--keys", default=os.environ.get("TRPG_TUI_KEYS", DEFAULT_TUI_KEYS_PATH))
@@ -100,6 +102,12 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--exec", dest="exec_cmd")
     mode.add_argument("--script")
     args = parser.parse_args(argv)
+
+    if args.version:
+        # Plain output (no i18n): a version string is data, not natural-language UI
+        # text, and must be parseable by scripts/tooling without locale variance.
+        print(resolve_version())
+        return 0
 
     settings = Settings()
     i18n = get_i18n(settings.locale)
@@ -201,6 +209,7 @@ def _run_doctor(settings: Settings, i18n: I18n) -> int:
     skill_ids = [skill.id for skill in core_skills.available_skills()]
 
     print(i18n.t("tui.doctor.header"), file=sys.stderr)
+    print(i18n.t("tui.doctor.version", version=resolve_version()), file=sys.stderr)
     print(i18n.t("tui.doctor.mode", mode=mode), file=sys.stderr)
     print(i18n.t("tui.doctor.locales", locales=locale_report), file=sys.stderr)
     print(i18n.t("tui.doctor.rulepacks", rulepacks=", ".join(rulepack_ids) or "-"), file=sys.stderr)

@@ -25,6 +25,7 @@
   "tui.key.added": "已为房间 '{room}' 添加一个 {role} 密钥（name={name}）：{key}",
   "tui.key.room_required": "--tui-key add 需要提供 --room ROOM",
   "tui.doctor.header": "Loreweaver 诊断",
+  "tui.doctor.version": "版本：{version}",
   "tui.doctor.mode": "模式：{mode}",
   "tui.doctor.locales": "语言包：{locales}",
   "tui.doctor.rulepacks": "规则包：{rulepacks}",

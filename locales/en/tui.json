@@ -25,6 +25,7 @@
   "tui.key.added": "Added a {role} key for room '{room}' (name={name}): {key}",
   "tui.key.room_required": "--tui-key add requires --room ROOM",
   "tui.doctor.header": "Loreweaver doctor",
+  "tui.doctor.version": "Version: {version}",
   "tui.doctor.mode": "Mode: {mode}",
   "tui.doctor.locales": "Locales: {locales}",
   "tui.doctor.rulepacks": "Rulepacks: {rulepacks}",

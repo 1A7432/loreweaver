@@ -880,7 +880,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/8e/ac/c873c508dc2955da6
 
 [[package]]
 name = "loreweaver"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
