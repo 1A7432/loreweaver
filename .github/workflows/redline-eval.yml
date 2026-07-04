@@ -48,7 +48,7 @@ jobs:
             echo "has_key=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: astral-sh/setup-uv@v8
+      - uses: astral-sh/setup-uv@v8.2.0
         if: steps.check.outputs.has_key == 'true'
         with:
           python-version: "3.12"
