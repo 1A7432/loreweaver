@@ -18,6 +18,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 import core.skills as skills_module
 from core.skills import Skill, available_skills, load_skill, unlocked_tools_for
 
@@ -202,3 +204,133 @@ async def test_unlocked_tools_for_unknown_skill_id_is_empty() -> None:
 async def test_unlocked_tools_for_corrupt_flag_degrades_to_empty() -> None:
     store = _FakeStore({"skills_enabled.chat-corrupt": "not valid json"})
     assert await unlocked_tools_for(store, "chat-corrupt") == set()
+
+
+# ---------------------------------------------------------------------------
+# User data-dir discovery (Layer B.3a -- see `docs/plugins.md` "Layer B" and
+# `agent.forge`, the generation engine that writes into `_USER_SKILL_DIR`).
+# ---------------------------------------------------------------------------
+
+
+def test_user_skill_dir_is_none_by_default() -> None:
+    """Every test in this file (and every test elsewhere unless it opts in) must see the
+    real, zero-regression default: no user skill dir configured at all."""
+    assert skills_module._USER_SKILL_DIR is None
+
+
+def test_user_skill_dir_skill_discovered_alongside_built_ins(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "user-skill", GOOD_SKILL)
+
+    original_user_dir = skills_module._USER_SKILL_DIR
+    skills_module._USER_SKILL_DIR = tmp_path
+    skills_module._discover_registry.cache_clear()
+    try:
+        ids = {skill.id for skill in available_skills()}
+        assert "user-skill" in ids
+        assert "mature-mode" in ids  # the real built-ins are still discoverable alongside it
+        loaded = load_skill("user-skill")
+        assert loaded is not None
+        assert loaded.name == "Test Skill"
+    finally:
+        skills_module._USER_SKILL_DIR = original_user_dir
+        skills_module._discover_registry.cache_clear()
+
+
+def test_user_skill_dir_none_discovery_is_byte_identical_to_baseline(tmp_path: Path) -> None:
+    """Setting `_USER_SKILL_DIR` and then putting it back to `None` must reproduce EXACTLY the
+    same registry as never having touched it -- the additive discovery must not leave any
+    residue once the user dir is unset again."""
+    baseline = available_skills()
+
+    skills_module._USER_SKILL_DIR = tmp_path
+    skills_module._discover_registry.cache_clear()
+    skills_module._USER_SKILL_DIR = None
+    skills_module._discover_registry.cache_clear()
+    try:
+        assert available_skills() == baseline
+    finally:
+        skills_module._discover_registry.cache_clear()
+
+
+def test_user_skill_dir_cannot_override_a_built_in_id(tmp_path: Path) -> None:
+    """A user-dir skill sharing a built-in's id must never win: the built-in's real content is
+    what gets discovered, never the user-dir shadow (a generated skill must never be able to
+    override e.g. `mature-mode`)."""
+    shadow = """---
+name: Shadow Mature Mode
+description: an attempted shadow of the built-in mature-mode skill.
+allowed-tools: []
+metadata:
+  scope: room
+---
+
+# Shadowed
+"""
+    _write_skill(tmp_path, "mature-mode", shadow)
+
+    original_user_dir = skills_module._USER_SKILL_DIR
+    skills_module._USER_SKILL_DIR = tmp_path
+    skills_module._discover_registry.cache_clear()
+    try:
+        loaded = load_skill("mature-mode")
+        assert loaded is not None
+        assert loaded.name == "Mature mode"  # the REAL built-in, never the shadow
+        assert loaded.content_rating == "explicit"
+    finally:
+        skills_module._USER_SKILL_DIR = original_user_dir
+        skills_module._discover_registry.cache_clear()
+
+
+def test_reload_skills_picks_up_a_newly_written_skill(tmp_path: Path) -> None:
+    original_user_dir = skills_module._USER_SKILL_DIR
+    skills_module._USER_SKILL_DIR = tmp_path
+    skills_module._discover_registry.cache_clear()
+    try:
+        assert load_skill("late-skill") is None
+        _write_skill(tmp_path, "late-skill", GOOD_SKILL)
+        assert load_skill("late-skill") is None  # still cached -- reload_skills() not called yet
+
+        skills_module.reload_skills()
+
+        loaded = load_skill("late-skill")
+        assert loaded is not None
+        assert loaded.name == "Test Skill"
+    finally:
+        skills_module._USER_SKILL_DIR = original_user_dir
+        skills_module._discover_registry.cache_clear()
+
+
+def test_built_in_skill_ids_matches_the_real_skills_dir() -> None:
+    ids = skills_module.built_in_skill_ids()
+    assert "mature-mode" in ids
+    assert "romance-relationships" in ids
+    assert "skill-forge" in ids
+
+
+def test_built_in_skill_ids_ignores_the_user_dir(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "user-only-skill", GOOD_SKILL)
+
+    original_user_dir = skills_module._USER_SKILL_DIR
+    skills_module._USER_SKILL_DIR = tmp_path
+    try:
+        assert "user-only-skill" not in skills_module.built_in_skill_ids()
+    finally:
+        skills_module._USER_SKILL_DIR = original_user_dir
+
+
+def test_parse_skill_text_matches_the_on_disk_parser(tmp_path: Path) -> None:
+    parsed = skills_module.parse_skill_text("in-memory-skill", GOOD_SKILL)
+    assert parsed.id == "in-memory-skill"
+    assert parsed.name == "Test Skill"
+    assert parsed.allowed_tools == ["skill_check", "kp_note"]
+    assert parsed.content_rating == "mature"
+
+
+def test_parse_skill_text_rejects_malformed_frontmatter() -> None:
+    with pytest.raises(ValueError):
+        skills_module.parse_skill_text("bad-skill", MALFORMED_NO_FENCE)
+
+
+def test_parse_skill_text_rejects_non_mapping_frontmatter() -> None:
+    with pytest.raises(ValueError):
+        skills_module.parse_skill_text("bad-skill", "---\n- just\n- a\n- list\n---\n\nbody\n")

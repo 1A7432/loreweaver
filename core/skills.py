@@ -40,6 +40,15 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SKILL_DIR = _REPO_ROOT / "skills"
 _FRONTMATTER_FENCE = "---"
 
+# Layer B.3a (the skill-generation engine, `agent.forge`) discovery target: a user data-dir
+# `skills/` directory, set once at startup (`app.py`: `core.skills._USER_SKILL_DIR =
+# Path(settings.data_dir) / "skills"`) so a generated skill need not live inside the checkout.
+# `None` (the default, and every test unless it opts in) means discovery scans ONLY `_SKILL_DIR`,
+# byte-identical to before this existed. `_discover_registry` reads this module attribute at scan
+# time (not a value captured at import time), so setting it after import -- as `app.py` and tests
+# both do -- takes effect on the next `reload_skills()`/cache miss.
+_USER_SKILL_DIR: Path | None = None
+
 
 @dataclass(frozen=True)
 class Skill:
@@ -89,35 +98,89 @@ def _build_skill(skill_id: str, frontmatter: Mapping[str, Any], body: str) -> Sk
     )
 
 
-def _parse_skill_file(path: Path) -> Skill:
-    text = path.read_text(encoding="utf-8")
+def parse_skill_text(skill_id: str, text: str) -> Skill:
+    """Parse ``SKILL.md``-shaped `text` into a `Skill`, assigning it `skill_id`.
+
+    The same frontmatter+body parser `_discover_registry` uses on-disk, exposed so a caller that
+    has SKILL.md content in memory (`agent.forge`, validating LLM-generated skill text before ever
+    writing it to disk) can validate against the identical rules real discovery will later apply —
+    no separate/divergent parser to keep in sync. Raises `ValueError` on any malformed input
+    (missing/unclosed frontmatter fence, or frontmatter that isn't a YAML mapping); never
+    `eval`/`exec`s anything -- the frontmatter is `yaml.safe_load`-ed only.
+    """
     frontmatter_text, body = _split_frontmatter(text)
     data = yaml.safe_load(frontmatter_text) or {}
     if not isinstance(data, dict):
-        raise ValueError(f"skill '{path.parent.name}': frontmatter must be a mapping, got {type(data).__name__}")
-    return _build_skill(path.parent.name, data, body)
+        raise ValueError(f"skill '{skill_id}': frontmatter must be a mapping, got {type(data).__name__}")
+    return _build_skill(skill_id, data, body)
 
 
-@cache
-def _discover_registry() -> dict[str, Skill]:
-    """Scan ``skills/<id>/SKILL.md``; each directory name is the skill id.
+def _parse_skill_file(path: Path) -> Skill:
+    text = path.read_text(encoding="utf-8")
+    return parse_skill_text(path.parent.name, text)
 
-    Robust by construction (mirrors ``core.rulepacks._discover_registry``): a
-    skill directory with no ``SKILL.md``, bad/missing frontmatter, or any other
-    parse failure is logged and skipped — it never prevents discovery of the
-    other, valid skills.
+
+def _scan_skill_dir(directory: Path, registry: dict[str, Skill], *, allow_override: bool) -> None:
+    """Scan `directory` for `<id>/SKILL.md` subdirectories, adding valid parses into `registry`.
+
+    A directory with no ``SKILL.md``, bad/missing frontmatter, or any other parse failure is
+    logged and skipped -- it never prevents discovery of the other, valid skills (mirrors
+    ``core.rulepacks._discover_registry``). When `allow_override` is False, an id already present
+    in `registry` is left untouched: this is how a user-dir skill (Layer B.3a) can never shadow a
+    built-in of the same id -- a built-in always wins.
     """
-    registry: dict[str, Skill] = {}
-    if not _SKILL_DIR.is_dir():
-        return registry
-    for entry in sorted(_SKILL_DIR.iterdir()):
+    if not directory.is_dir():
+        return
+    for entry in sorted(directory.iterdir()):
         if not entry.is_dir():
+            continue
+        if not allow_override and entry.name in registry:
             continue
         try:
             registry[entry.name] = _parse_skill_file(entry / "SKILL.md")
         except Exception:
             logger.warning("Skipping malformed skill: %s", entry, exc_info=True)
+
+
+@cache
+def _discover_registry() -> dict[str, Skill]:
+    """Scan ``skills/<id>/SKILL.md`` (built-in), then `_USER_SKILL_DIR` (Layer B.3a) when set.
+
+    Robust by construction (mirrors ``core.rulepacks._discover_registry``): a skill directory with
+    no ``SKILL.md``, bad/missing frontmatter, or any other parse failure is logged and skipped — it
+    never prevents discovery of the other, valid skills. A built-in id always wins over a
+    same-named user-dir entry (`_scan_skill_dir`'s `allow_override=False` for the user dir), so a
+    generated skill can never override e.g. `mature-mode`. With `_USER_SKILL_DIR` left at its
+    default `None` (every test unless it opts in), this scans ONLY `_SKILL_DIR` -- byte-identical
+    to before the user data-dir existed.
+    """
+    registry: dict[str, Skill] = {}
+    _scan_skill_dir(_SKILL_DIR, registry, allow_override=True)
+    if _USER_SKILL_DIR is not None:
+        _scan_skill_dir(_USER_SKILL_DIR, registry, allow_override=False)
     return registry
+
+
+def reload_skills() -> None:
+    """Clear the discovery cache so a just-written skill (`agent.forge`) is picked up immediately.
+
+    Discovery is otherwise cached for process lifetime (`@cache`); nothing else needs to call
+    this in normal operation since the on-disk skill set doesn't change outside of generation.
+    """
+    _discover_registry.cache_clear()
+
+
+def built_in_skill_ids() -> set[str]:
+    """Directory names under `_SKILL_DIR` — the BUILT-IN skills only, never `_USER_SKILL_DIR`.
+
+    Used by `agent.forge` to reject a generated skill id that collides with a built-in (e.g.
+    `mature-mode`) before ever writing it -- deliberately a raw directory listing rather than
+    going through `_discover_registry`/`available_skills`, so this stays accurate even if a
+    built-in's own `SKILL.md` happens to be malformed at the moment of the check.
+    """
+    if not _SKILL_DIR.is_dir():
+        return set()
+    return {entry.name for entry in _SKILL_DIR.iterdir() if entry.is_dir()}
 
 
 def available_skills() -> list[Skill]:

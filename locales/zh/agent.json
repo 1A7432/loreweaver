@@ -1,5 +1,10 @@
 {
   "agent.tools.unknown_tool": "未知工具：{name}",
   "agent.tools.bad_arguments": "工具 {name} 参数无效：{error}",
-  "agent.tools.tool_not_available": "工具 {name} 在本房间不可用。"
+  "agent.tools.tool_not_available": "工具 {name} 在本房间不可用。",
+  "agent.forge.installed": "已生成并安装新技能：{name}（{skill_id}），位于 {path}。可用 `.skill enable {skill_id}` 为本房间启用。",
+  "agent.forge.invalid": "无法生成有效的技能：{error}。未安装任何内容。",
+  "agent.forge.no_data_dir": "技能生成功能不可用：服务器未配置数据目录。",
+  "agent.forge.bad_id": "无法为技能生成可用的 id：{error}。未安装任何内容。",
+  "agent.forge.system_prompt": "你正在为 Loreweaver 编写一个 KP 技能（skill）：一个把某种桌面角色扮演游戏玩法风格（语气基调、常用机制、叙事侧重点）打包成一段房间可开关提示词的声明式包。这是数据，不是代码——你在写一份 Markdown 文档，绝不是脚本。\n\n只输出一份完整的 SKILL.md 文件：两条 `---` 分隔线之间是 YAML frontmatter，之后是 Markdown 正文。不要输出任何别的内容——不要有说明文字、不要用代码围栏包裹，开头的 `---` 之前和正文之后都不要有任何文字。\n\nFrontmatter 结构：\n---\nname: <简短的展示名称，标题式大小写，2-5 个词>\ndescription: >\n  <一段话：说明主持人什么时候应该启用这个技能，写给主持人看的提示>\nallowed-tools: []          # 该技能解锁的、已存在工具名称的 YAML 列表；没有则为 []\nmetadata:\n  scope: room               # 目前始终为 room\n  content-rating: \"\"         # \"\"、\"mature\" 或 \"explicit\"——仅当这种玩法风格确实需要时才设置\n---\n\n<Markdown 正文：该技能启用期间会被注入 KP 自身系统提示词中的指示——直接对守密人（\"你\"）说话，语域应与一份优秀的规则参考资料一致：具体、可执行，并且专属于这一种玩法风格，而不是泛泛的 GM 建议。>\n\n参考示例（不要逐字照抄——请根据实际要求调整结构与语气）：\n---\nname: Romance & relationships\ndescription: >\n  Enable for a campaign centered on romance/intimacy: tracks attraction and tension, resolves seduction and reading feelings as social checks, and prompts consent beats before a scene turns intimate.\nallowed-tools: []\nmetadata:\n  scope: room\n  content-rating: mature\n---\n\n# Romance & relationships\n\nThis table is playing a relationship-forward campaign: romance, courtship, and intimacy are a load-bearing part of the story, not a side quest...\n\n让这个技能只专注于一种玩法风格，优先使用纯提示词式的指引（`allowed-tools: []`），除非这种玩法风格确实离不开某个已存在工具，并让正文的格调保持有品味、且与游戏其余部分一致。"
 }

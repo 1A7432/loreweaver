@@ -5,9 +5,12 @@
 > behavior-identical). Layer B.1 (KP skills — SKILL.md loader, prompt binding,
 > per-room enable, mature-mode content gate) has **landed**. Layer B.2
 > (`allowed-tools` toolset-gating enforcement + the `romance-relationships`
-> skill + coc7 intimate aliases) has **landed**; B.3 (the generator tools)
-> follows. Layer C (code plugins) is deferred. This document is the contract
-> contributors build against.
+> skill + coc7 intimate aliases) has **landed**. Layer B.3a (the skill-generation
+> engine — a gated `generate_skill` tool + the `skill-forge` skill that authors a
+> new SKILL.md from a description and installs it to a user data-dir) has
+> **landed**; B.3b (the rulepack + module generators) follows, then B.4 (TUI
+> management pages with a describe→generate button). Layer C (code plugins) is
+> deferred. This document is the contract contributors build against.
 
 Loreweaver is a self-hosted, world/story-first AI Keeper — not a persona-chat
 frontend. Its long-term leverage is being a **platform the community extends**,
