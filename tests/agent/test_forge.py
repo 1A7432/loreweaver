@@ -150,6 +150,33 @@ async def test_empty_llm_response_is_rejected(tmp_path: Path) -> None:
         skills_module._discover_registry.cache_clear()
 
 
+class _RaisingLLM:
+    """An LLM whose chat() raises — models a real backend failure (timeout / rate-limit / 401)."""
+
+    async def chat(self, *args: object, **kwargs: object) -> None:
+        raise RuntimeError("backend exploded (e.g. rate limit)")
+
+
+async def test_llm_failure_is_a_clean_forge_result_not_an_uncaught_exception(tmp_path: Path) -> None:
+    """A backend LLM failure during authoring must become a clean ForgeResult(ok=False), NOT an
+    uncaught exception — otherwise it surfaces as a generic `error` frame and hangs the client's
+    generate spinner. Nothing is written on failure."""
+    services = build_services(Settings(locale="en"), llm=_RaisingLLM(), embeddings=FakeEmbeddings(8))
+
+    original_user_dir = skills_module._USER_SKILL_DIR
+    skills_module._USER_SKILL_DIR = tmp_path
+    skills_module._discover_registry.cache_clear()
+    try:
+        result = await generate_and_install_skill(services, "anything")
+
+        assert not result.ok
+        assert result.error.startswith("llm_failed")
+        assert list(tmp_path.iterdir()) == []
+    finally:
+        skills_module._USER_SKILL_DIR = original_user_dir
+        skills_module._discover_registry.cache_clear()
+
+
 # ---------------------------------------------------------------------------
 # (c) Security: id sanitization, built-in collision rejection, path confinement.
 # ---------------------------------------------------------------------------

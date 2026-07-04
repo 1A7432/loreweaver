@@ -12,6 +12,8 @@ import { ConnectScreen } from "./screens/ConnectScreen"
 import { KeeperKeys } from "./screens/KeeperKeys"
 import { KeeperModel } from "./screens/KeeperModel"
 import { KeeperModule } from "./screens/KeeperModule"
+import { KeeperRules } from "./screens/KeeperRules"
+import { KeeperSkills } from "./screens/KeeperSkills"
 import { MainMenu } from "./screens/MainMenu"
 import { HostLocalScreen } from "./screens/HostLocalScreen"
 import { SettingsScreen } from "./screens/SettingsScreen"
@@ -40,8 +42,20 @@ export interface AppProps {
 }
 
 // Stage 2 adds "character"; Stage 3 adds the keeper-only "keeper_keys" / "keeper_model";
-// Stage 4 adds the keeper-only "keeper_module".
-type Screen = "connect" | "host_local" | "menu" | "settings" | "game" | "character" | "keeper_keys" | "keeper_module" | "keeper_model"
+// Stage 4 adds the keeper-only "keeper_module"; Layer B.4b adds the keeper-only
+// "keeper_rules" / "keeper_skills" (plugin management, docs/plugins.md "Layer B").
+type Screen =
+  | "connect"
+  | "host_local"
+  | "menu"
+  | "settings"
+  | "game"
+  | "character"
+  | "keeper_keys"
+  | "keeper_module"
+  | "keeper_model"
+  | "keeper_rules"
+  | "keeper_skills"
 
 const EMPTY_STATE: StateFrame = { type: FrameType.State, party: [], initiative: [], online: 0 }
 
@@ -253,6 +267,32 @@ export function App({ client: injected, prefill, onRememberConnect, onLocaleChan
     )
   }
 
+  if (screen === "keeper_rules" && welcome?.you.role === "keeper") {
+    return (
+      <KeeperRules
+        client={client}
+        theme={theme}
+        themeName={themeName}
+        welcome={{ ...welcome, locale }}
+        stateFrame={stateFrame}
+        onBack={() => setScreen("menu")}
+      />
+    )
+  }
+
+  if (screen === "keeper_skills" && welcome?.you.role === "keeper") {
+    return (
+      <KeeperSkills
+        client={client}
+        theme={theme}
+        themeName={themeName}
+        welcome={{ ...welcome, locale }}
+        stateFrame={stateFrame}
+        onBack={() => setScreen("menu")}
+      />
+    )
+  }
+
   if (screen === "menu" && welcome) {
     return (
       <MainMenu
@@ -267,6 +307,8 @@ export function App({ client: injected, prefill, onRememberConnect, onLocaleChan
         onKeeperKeys={() => setScreen("keeper_keys")}
         onKeeperModule={() => setScreen("keeper_module")}
         onKeeperModel={() => setScreen("keeper_model")}
+        onKeeperRules={() => setScreen("keeper_rules")}
+        onKeeperSkills={() => setScreen("keeper_skills")}
       />
     )
   }

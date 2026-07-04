@@ -6,13 +6,15 @@ import App, { type AppClient } from "../App"
 import { SPINNER_FRAMES } from "../components/Spinner"
 
 // Same MockClient shape as the sibling keeper tests: `sent` records the input-channel
-// commands and push() injects server frames like the wire. The admin_* methods are
-// present only to satisfy AppClient; this screen never calls them.
+// commands and push() injects server frames like the wire. Most admin_* methods are
+// present only to satisfy AppClient (this screen never calls them); `adminGenerate` is
+// spied since KeeperModule now drives the describe->generate flow (Layer B.4b).
 class MockClient implements AppClient {
   connectCalls: string[] = []
   joinCalls: Array<[string, string | undefined]> = []
   sent: string[] = []
   closed = 0
+  generateCalls: Array<[string, string]> = []
   private listeners = new Set<(frame: ServerFrame) => void>()
 
   connect(url: string): Promise<void> {
@@ -45,7 +47,9 @@ class MockClient implements AppClient {
   adminListSkills(): void {}
   adminEnableSkill(_id: string, _on: boolean): void {}
   adminListRules(): void {}
-  adminGenerate(_kind: string, _description: string): void {}
+  adminGenerate(kind: string, description: string): void {
+    this.generateCalls.push([kind, description])
+  }
 
   push(frame: ServerFrame): void {
     for (const listener of this.listeners) listener(frame)
@@ -246,6 +250,107 @@ describe("KeeperModule", () => {
     await harness.flush()
 
     expect(client.sent.length).toBe(0)
+
+    act(() => harness.renderer.destroy())
+  })
+
+  test("描述生成模组:填描述 + 点击生成按钮,adminGenerate 收到 (\"module\", 描述),admin_generated 的 detail 字段渲染出来", async () => {
+    const client = new MockClient()
+    const harness = await renderApp(client)
+    await harness.flush()
+    act(() => client.push(KEEPER_WELCOME))
+    await enterKeeperModule(harness)
+
+    // The path <input> is focused by default on mount: Tab once to reach the
+    // description <input> (mirrors the sibling keeper screens' pattern), then type.
+    await harness.waitForFrame((t) => t.includes("⚄ 生成模组"))
+    await act(async () => {
+      harness.mockInput.pressTab()
+    })
+    await harness.flush()
+    await act(async () => {
+      await harness.mockInput.typeText("一座渔民接连失踪的雾港小镇")
+    })
+    await harness.flush()
+
+    const buttonFrame = await harness.waitForFrame((t) => t.includes("⚄ 生成模组"))
+    const buttonY = buttonFrame.split("\n").findIndex((line) => line.includes("⚄ 生成模组"))
+    expect(buttonY).toBeGreaterThan(0)
+    await act(async () => {
+      await harness.mockMouse.click(CLICK_X, buttonY)
+    })
+    await harness.flush()
+
+    expect(client.generateCalls).toContainEqual(["module", "一座渔民接连失踪的雾港小镇"])
+
+    // While awaiting the reply, an ANIMATED spinner shows (never a static caption).
+    const pendingFrame = await harness.waitForFrame((t) => t.includes("正在撰写模组"))
+    expect(SPINNER_FRAMES.some((glyph) => pendingFrame.includes(glyph))).toBe(true)
+
+    act(() =>
+      client.push({
+        type: FrameType.AdminGenerated,
+        kind: "module",
+        ok: true,
+        id: "foggy-port",
+        name: "雾港疑云",
+        error: "",
+        // Short enough not to line-wrap in the fixed-width test terminal (a wrap would
+        // split the string across two rendered lines and break a plain substring check).
+        detail: "已入库",
+      }),
+    )
+    await harness.flush()
+
+    // `detail` is the real per-room signal for a module — it must be surfaced
+    // alongside the name, and the spinner must clear.
+    const done = await harness.waitForFrame((t) => t.includes("已入库"))
+    expect(done).toContain("雾港疑云")
+    expect(done).toContain("已入库")
+    expect(SPINNER_FRAMES.some((glyph) => done.includes(glyph))).toBe(false)
+
+    act(() => harness.renderer.destroy())
+  })
+
+  test("描述生成模组失败:admin_generated ok=false 时展示 error", async () => {
+    const client = new MockClient()
+    const harness = await renderApp(client)
+    await harness.flush()
+    act(() => client.push(KEEPER_WELCOME))
+    await enterKeeperModule(harness)
+
+    await harness.waitForFrame((t) => t.includes("⚄ 生成模组"))
+    await act(async () => {
+      harness.mockInput.pressTab()
+    })
+    await harness.flush()
+    await act(async () => {
+      await harness.mockInput.typeText("坏描述")
+    })
+    await harness.flush()
+
+    const buttonFrame = await harness.waitForFrame((t) => t.includes("⚄ 生成模组"))
+    const buttonY = buttonFrame.split("\n").findIndex((line) => line.includes("⚄ 生成模组"))
+    await act(async () => {
+      await harness.mockMouse.click(CLICK_X, buttonY)
+    })
+    await harness.flush()
+
+    act(() =>
+      client.push({
+        type: FrameType.AdminGenerated,
+        kind: "module",
+        ok: false,
+        id: "",
+        name: "",
+        error: "empty_response",
+        detail: "",
+      }),
+    )
+    await harness.flush()
+
+    const failed = await harness.waitForFrame((t) => t.includes("empty_response"))
+    expect(failed).toContain("empty_response")
 
     act(() => harness.renderer.destroy())
   })

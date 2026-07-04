@@ -84,6 +84,22 @@ class ForgeResult:
     detail: str = ""
 
 
+async def _llm_authored(services: Services, messages: list[dict]) -> tuple[str | None, ForgeResult | None]:
+    """Call the LLM to author an artifact. Returns `(content, None)` on success, or
+    `(None, ForgeResult)` when the call itself failed (timeout / rate-limit / auth error) or came
+    back empty — so a backend LLM failure becomes a clean `ForgeResult` the admin/tool path reports,
+    NOT an uncaught exception that surfaces as a generic `error` frame (which would leave a client's
+    "generating…" spinner stuck forever)."""
+    try:
+        result = await services.llm.chat(messages)
+    except Exception as exc:
+        return None, ForgeResult(False, "", "", "", f"llm_failed: {exc}")  # i18n-exempt
+    content = (result.content or "").strip()
+    if not content:
+        return None, ForgeResult(False, "", "", "", "empty_response")
+    return content, None
+
+
 def _slugify(text: str) -> str:
     """Lowercase, collapse whitespace/underscores to `-`, strip everything else, and require the
     result to match `^[a-z0-9][a-z0-9-]*$`. Returns `""` when nothing safe survives (e.g. an
@@ -180,10 +196,10 @@ async def generate_and_install_skill(services: Services, description: str) -> Fo
     if user_dir is None:
         return ForgeResult(False, "", "", "", "no_data_dir")
 
-    result = await services.llm.chat(_build_messages(services, description))
-    content = (result.content or "").strip()
-    if not content:
-        return ForgeResult(False, "", "", "", "empty_response")
+    content, failure = await _llm_authored(services, _build_messages(services, description))
+    if failure is not None:
+        return failure
+    assert content is not None  # _llm_authored returns content XOR failure
 
     # Step (c): derive the slug BEFORE full validation, from the frontmatter `name` (falling back
     # to the caller's own description when the model omitted one). Reuses the same parser as the
@@ -287,10 +303,10 @@ async def generate_and_install_rulepack(services: Services, description: str) ->
     if user_dir is None:
         return ForgeResult(False, "", "", "", "no_data_dir")
 
-    result = await services.llm.chat(_build_rulepack_messages(services, description))
-    content = (result.content or "").strip()
-    if not content:
-        return ForgeResult(False, "", "", "", "empty_response")
+    content, failure = await _llm_authored(services, _build_rulepack_messages(services, description))
+    if failure is not None:
+        return failure
+    assert content is not None  # _llm_authored returns content XOR failure
 
     # Step (c): derive the slug BEFORE full validation, from the pack's declared `names:` (falling
     # back to the caller's own description when the model omitted any). A parse failure here is
@@ -416,10 +432,10 @@ async def generate_and_install_module(services: Services, ctx: AgentCtx, descrip
     if user_dir is None:
         return ForgeResult(False, "", "", "", "no_data_dir")
 
-    result = await services.llm.chat(_build_module_messages(services, description))
-    content = (result.content or "").strip()
-    if not content:
-        return ForgeResult(False, "", "", "", "empty_response")
+    content, failure = await _llm_authored(services, _build_module_messages(services, description))
+    if failure is not None:
+        return failure
+    assert content is not None  # _llm_authored returns content XOR failure
 
     title = _extract_module_title(content) or description
     module_id = _slugify(title)

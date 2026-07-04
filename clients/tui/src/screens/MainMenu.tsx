@@ -21,6 +21,8 @@ export interface MainMenuProps {
   onKeeperKeys: () => void
   onKeeperModule: () => void
   onKeeperModel: () => void
+  onKeeperRules: () => void
+  onKeeperSkills: () => void
 }
 
 interface MenuItem {
@@ -45,6 +47,8 @@ export function MainMenu({
   onKeeperKeys,
   onKeeperModule,
   onKeeperModel,
+  onKeeperRules,
+  onKeeperSkills,
 }: MainMenuProps) {
   const [selected, setSelected] = useState(0)
   const isKeeper = welcome.you.role === "keeper"
@@ -59,6 +63,8 @@ export function MainMenu({
     items.push(
       { label: tt(locale, "menu.keys"), keeper: true, run: () => onKeeperKeys() },
       { label: tt(locale, "menu.module"), keeper: true, run: () => onKeeperModule() },
+      { label: tt(locale, "menu.rules"), keeper: true, run: () => onKeeperRules() },
+      { label: tt(locale, "menu.skills"), keeper: true, run: () => onKeeperSkills() },
       { label: tt(locale, "menu.model"), keeper: true, run: () => onKeeperModel() },
     )
   }
