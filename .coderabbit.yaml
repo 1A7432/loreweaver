@@ -1,0 +1,39 @@
+# CodeRabbit config — free AI review for this public repo (install: github.com/apps/coderabbitai).
+# Complements the Codex CI reviewer: CodeRabbit covers generic quality breadth; the Codex job
+# enforces this repo's iron rules in depth. Schema: https://docs.coderabbit.ai/reference/yaml-template
+language: "zh-CN"
+reviews:
+  profile: "chill"
+  high_level_summary: true
+  auto_review:
+    enabled: true
+    drafts: false
+  path_instructions:
+    - path: "core/**"
+      instructions: >-
+        This is the DETERMINISTIC engine (iron rule #1): dice, success levels, character math,
+        rulepack validation must be real code — flag anything that delegates these to an LLM or
+        weakens a clamp/validation. Flag hardcoded user-facing natural-language strings: all
+        user-visible text must go through infra.i18n with keys in locales/en AND locales/zh.
+    - path: "agent/**"
+      instructions: >-
+        Information isolation is a red line: an NPC/companion actor must be built ONLY from its
+        own record (never the keeper pool), and keeper-only material must never be quoted to
+        players. Flag any change that widens what a sub-actor or player-visible reply can see.
+    - path: "gateway/**"
+      instructions: >-
+        Permissions and room scoping matter here: keeper-only commands/frames must stay
+        keeper-gated, and replies carrying secrets must be unicast to the caller, not broadcast.
+        User-facing strings go through infra.i18n (en + zh).
+    - path: "locales/**"
+      instructions: >-
+        en and zh catalogs must stay key-identical. Flag keys added to one language only.
+    - path: "clients/**"
+      instructions: >-
+        TUI user-facing strings go through the typed tt()/messages dict in clients/tui/src/i18n.ts
+        with BOTH en and zh entries. Transport code must never log or echo invite keys/tickets.
+    - path: "tests/**"
+      instructions: >-
+        Tests must stay deterministic and offline (FakeLLM/FakeEmbeddings, seeded dice, no network,
+        no reliance on a local .env). Flag sleeps, real-network calls, or environment-dependent
+        assertions.
