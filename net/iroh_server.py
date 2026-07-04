@@ -19,7 +19,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from gateway.hub import Event
@@ -27,11 +30,59 @@ from gateway.turn import publish_state
 from infra.i18n import get_i18n
 from net.session import SessionCore, render_frame, resolve_session_fields, welcome_frame
 
+logger = logging.getLogger(__name__)
+
 # The custom ALPN both ends negotiate. Bump if the framing (not the JSON protocol) changes.
 ALPN = b"loreweaver/tui/1"
 _READ_CHUNK = 65536
 _MAX_LINE = 1 << 20  # 1 MiB guard on a single frame line (a hostile peer can't grow the buffer forever)
 _DEFAULT_JOIN_TIMEOUT = 10.0
+
+
+def load_or_create_secret(secret_path: Path) -> Any:
+    """Load the persisted Iroh `SecretKey` from `secret_path`, creating it on first run.
+
+    Reusing the same secret key across restarts keeps the endpoint's NodeId — and therefore
+    the shareable ticket — STABLE, so a saved ticket keeps working after a server restart.
+
+    - Missing file: generate a fresh key, persist it (best-effort `chmod 0600` — it's a
+      bearer secret), and return it.
+    - Corrupt/unreadable file: log a warning, regenerate + overwrite (the ticket changes
+      ONCE, then is stable again). Never raises — a bad key file must self-heal, not brick
+      startup.
+    """
+    import iroh  # lazy: native dep, only imported when Iroh is actually enabled
+
+    if secret_path.exists():
+        try:
+            return iroh.SecretKey.from_bytes(secret_path.read_bytes())
+        except Exception:
+            logger.warning(
+                "Iroh secret key file at %s is unreadable/corrupt; regenerating "
+                "(the ticket will change once, then stay stable).",
+                secret_path,
+            )
+
+    key = iroh.SecretKey.generate()
+    try:
+        secret_path.parent.mkdir(parents=True, exist_ok=True)
+        secret_path.write_bytes(key.to_bytes())
+        try:
+            os.chmod(secret_path, 0o600)
+        except OSError:
+            pass  # best-effort on platforms/filesystems without POSIX perms
+    except OSError:
+        # A read-only / full / permission-denied data dir must NOT brick startup — under
+        # systemd `Restart=on-failure` a raise here would crash-loop. Degrade to the
+        # in-memory key: the server still comes up, only the ticket won't survive THIS
+        # restart until the data dir is writable again. Mirrors the best-effort writes in
+        # `_announce_iroh_ticket` / the keeper-key sidecar.
+        logger.warning(
+            "Could not persist the Iroh secret key to %s; the server will start but its "
+            "ticket will change on the next restart until the data dir is writable.",
+            secret_path,
+        )
+    return key
 
 
 @dataclass(eq=False)
@@ -123,18 +174,27 @@ class IrohServer:
     so the WS server stays untouched and both wires fan out through one `RoomHub`.
     """
 
-    def __init__(self, core: SessionCore) -> None:
+    def __init__(self, core: SessionCore, *, secret_path: Path | None = None) -> None:
         self.core = core
+        self._secret_path = secret_path
         self._endpoint: Any = None
         self._tasks: set[asyncio.Task[Any]] = set()
 
     async def start(self) -> str:
-        """Bind the endpoint, wait for a home relay, and return the shareable ticket string."""
+        """Bind the endpoint, wait for a home relay, and return the shareable ticket string.
+
+        When `secret_path` was given, reuse (or create) a persisted secret key so the NodeId
+        — and therefore the ticket — is stable across restarts. Otherwise (loopback/tests),
+        bind with an ephemeral, randomly generated key, as before.
+        """
         import iroh  # lazy: native dep, only imported when Iroh is actually enabled
 
-        self._endpoint = await iroh.Endpoint.bind(
-            iroh.EndpointOptions(preset=iroh.preset_n0(), alpns=[ALPN])
-        )
+        if self._secret_path is not None:
+            secret_key = load_or_create_secret(self._secret_path)
+            options = iroh.EndpointOptions(preset=iroh.preset_n0(), alpns=[ALPN], secret_key=secret_key)
+        else:
+            options = iroh.EndpointOptions(preset=iroh.preset_n0(), alpns=[ALPN])
+        self._endpoint = await iroh.Endpoint.bind(options)
         await self._endpoint.online()
         return str(iroh.EndpointTicket.from_addr(self._endpoint.addr()))
 
@@ -206,9 +266,14 @@ class IrohServer:
         return member
 
     async def close(self) -> None:
+        """Cancel in-flight per-connection tasks, then close the endpoint. Best-effort and
+        idempotent — safe to call more than once (e.g. once from a signal handler's stop
+        path and once from an outer `finally`)."""
+        for task in list(self._tasks):
+            task.cancel()
         if self._endpoint is not None:
+            endpoint, self._endpoint = self._endpoint, None
             try:
-                self._endpoint.close()
+                endpoint.close()
             except Exception:
                 pass
-            self._endpoint = None

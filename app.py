@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -235,11 +236,15 @@ async def _serve_iroh(core: TuiServer, i18n: I18n, keys_path: str) -> bool:
     instantiated directly in tests.) `core` is a `net.session.SessionCore` — a `TuiServer` is one,
     so we borrow it as the shared engine without ever binding its socket.
 
+    The endpoint's secret key is persisted next to the keystore (`iroh-secret.key`) so the
+    NodeId — and therefore the shareable ticket — is STABLE across restarts.
+
     Returns True once the endpoint came online and served (a clean stop), False if it never
     started — the caller turns a False into a non-zero exit code so a supervisor restarts it."""
     from net.iroh_server import IrohServer
 
-    iroh_server = IrohServer(core)
+    secret_path = Path(keys_path).with_name("iroh-secret.key")
+    iroh_server = IrohServer(core, secret_path=secret_path)
     try:
         # Bound the relay handshake so an unreachable relay can't hang startup forever.
         ticket = await asyncio.wait_for(iroh_server.start(), timeout=45)
@@ -250,9 +255,31 @@ async def _serve_iroh(core: TuiServer, i18n: I18n, keys_path: str) -> bool:
         print(i18n.t("tui.serve.iroh.failed", error=str(exc)), file=sys.stderr)
         return False
     _announce_iroh_ticket(i18n, ticket, keys_path)
+
+    # Graceful SIGTERM (systemd `stop`/`restart`): asyncio.run does NOT turn SIGTERM into
+    # KeyboardInterrupt, so without this a supervisor stop would hard-kill the process without
+    # closing the endpoint/store. Cancelling the serve task makes `iroh_server.serve()` return
+    # so the `finally: await iroh_server.close()` below runs — the same clean shutdown Ctrl-C
+    # already gets via the outer KeyboardInterrupt path, which is left untouched.
+    loop = asyncio.get_running_loop()
+    serve_task = asyncio.ensure_future(iroh_server.serve())
+    handler_installed = True
     try:
-        await iroh_server.serve()
+        loop.add_signal_handler(signal.SIGTERM, serve_task.cancel)
+    except NotImplementedError:
+        # Not available on Windows — laptop self-hosters there already stop via Ctrl-C.
+        handler_installed = False
+
+    try:
+        await serve_task
+    except asyncio.CancelledError:
+        pass
     finally:
+        if handler_installed:
+            try:
+                loop.remove_signal_handler(signal.SIGTERM)
+            except (NotImplementedError, ValueError):
+                pass
         await iroh_server.close()
     return True
 
