@@ -31,6 +31,9 @@ feishu = ["lark-oapi>=1.2"]
 vector = ["sqlite-vec>=0.1.1"]
 anthropic = ["anthropic>=0.40"]
 gemini = ["google-genai>=0.3"]
+# PyInstaller onedir packaging (`scripts/package_server.py`) — a self-contained
+# per-platform server bundle; not needed to develop/run/test loreweaver itself.
+package = ["pyinstaller>=6.11"]
 
 [dependency-groups]
 # Dev tooling as a uv-native group (PEP 735): `uv sync` installs it by default.

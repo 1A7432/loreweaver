@@ -23,5 +23,16 @@
   "tui.serve.iroh.missing": "The 'iroh' package is not installed — install it: pip install iroh (or uv sync).",
   "tui.serve.iroh.failed": "Iroh transport could not start ({error}).",
   "tui.key.added": "Added a {role} key for room '{room}' (name={name}): {key}",
-  "tui.key.room_required": "--tui-key add requires --room ROOM"
+  "tui.key.room_required": "--tui-key add requires --room ROOM",
+  "tui.doctor.header": "Loreweaver doctor",
+  "tui.doctor.mode": "Mode: {mode}",
+  "tui.doctor.locales": "Locales: {locales}",
+  "tui.doctor.rulepacks": "Rulepacks: {rulepacks}",
+  "tui.doctor.skills": "Skills: {skills} ({count})",
+  "tui.doctor.data_dir": "Data dir: {path}",
+  "tui.doctor.missing_locale": "missing locale catalog: {locale}",
+  "tui.doctor.missing_rulepack": "missing rulepack: {rulepack}",
+  "tui.doctor.no_skills": "zero skills discovered",
+  "tui.doctor.fail": "FAIL: {reason}",
+  "tui.doctor.ok": "OK: all checks passed"
 }

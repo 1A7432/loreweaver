@@ -23,5 +23,16 @@
   "tui.serve.iroh.missing": "未安装 'iroh' 包——请安装：pip install iroh（或 uv sync）。",
   "tui.serve.iroh.failed": "Iroh 传输启动失败（{error}）。",
   "tui.key.added": "已为房间 '{room}' 添加一个 {role} 密钥（name={name}）：{key}",
-  "tui.key.room_required": "--tui-key add 需要提供 --room ROOM"
+  "tui.key.room_required": "--tui-key add 需要提供 --room ROOM",
+  "tui.doctor.header": "Loreweaver 诊断",
+  "tui.doctor.mode": "模式：{mode}",
+  "tui.doctor.locales": "语言包：{locales}",
+  "tui.doctor.rulepacks": "规则包：{rulepacks}",
+  "tui.doctor.skills": "技能：{skills}（{count}）",
+  "tui.doctor.data_dir": "数据目录：{path}",
+  "tui.doctor.missing_locale": "缺少语言包：{locale}",
+  "tui.doctor.missing_rulepack": "缺少规则包：{rulepack}",
+  "tui.doctor.no_skills": "未发现任何技能",
+  "tui.doctor.fail": "失败：{reason}",
+  "tui.doctor.ok": "OK：所有检查通过"
 }

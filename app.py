@@ -88,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cli", action="store_true")
     parser.add_argument("--platforms")
     parser.add_argument("--serve", action="store_true")
+    parser.add_argument("--doctor", action="store_true")
     parser.add_argument("--host", default=DEFAULT_TUI_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_TUI_PORT)
     parser.add_argument("--keys", default=os.environ.get("TRPG_TUI_KEYS", DEFAULT_TUI_KEYS_PATH))
@@ -102,6 +103,9 @@ def main(argv: list[str] | None = None) -> int:
 
     settings = Settings()
     i18n = get_i18n(settings.locale)
+
+    if args.doctor:
+        return _run_doctor(settings, i18n)
 
     if args.tui_key_cmd == "add":
         return _tui_key_add(i18n, args)
@@ -177,6 +181,49 @@ def _tui_key_add(i18n: I18n, args: argparse.Namespace) -> int:
     key = keystore.add(room=args.room, name=args.name or "", role=args.role)
     keystore.save(args.keys)
     print(i18n.t("tui.key.added", key=key, room=args.room, name=args.name or "-", role=args.role))
+    return 0
+
+
+def _run_doctor(settings: Settings, i18n: I18n) -> int:
+    """`--doctor`: diagnose exactly what a frozen (PyInstaller) bundle tends to break —
+    locale catalogs, rulepacks, skills, and the resolved data dir — then exit 0, or
+    non-zero naming what's missing. Also a plain sanity check when run from source."""
+    mode = "frozen" if getattr(sys, "frozen", False) else "source"
+    available_locales = i18n.available_locales()
+    locale_report = (
+        ", ".join(
+            f"{locale} ({len(list((i18n.base_dir / locale).glob('*.json')))} files)"
+            for locale in available_locales
+        )
+        or "-"
+    )
+    rulepack_ids = core_rulepacks.available_systems()
+    skill_ids = [skill.id for skill in core_skills.available_skills()]
+
+    print(i18n.t("tui.doctor.header"), file=sys.stderr)
+    print(i18n.t("tui.doctor.mode", mode=mode), file=sys.stderr)
+    print(i18n.t("tui.doctor.locales", locales=locale_report), file=sys.stderr)
+    print(i18n.t("tui.doctor.rulepacks", rulepacks=", ".join(rulepack_ids) or "-"), file=sys.stderr)
+    print(
+        i18n.t("tui.doctor.skills", skills=", ".join(skill_ids) or "-", count=len(skill_ids)),
+        file=sys.stderr,
+    )
+    print(i18n.t("tui.doctor.data_dir", path=settings.data_dir), file=sys.stderr)
+
+    missing: list[str] = []
+    for locale in ("en", "zh"):
+        if locale not in available_locales:
+            missing.append(i18n.t("tui.doctor.missing_locale", locale=locale))
+    for rulepack in ("coc7", "dnd5e"):
+        if rulepack not in rulepack_ids:
+            missing.append(i18n.t("tui.doctor.missing_rulepack", rulepack=rulepack))
+    if not skill_ids:
+        missing.append(i18n.t("tui.doctor.no_skills"))
+
+    if missing:
+        print(i18n.t("tui.doctor.fail", reason="; ".join(missing)), file=sys.stderr)
+        return 1
+    print(i18n.t("tui.doctor.ok"), file=sys.stderr)
     return 0
 
 

@@ -136,6 +136,42 @@ def test_load_or_create_secret_degrades_when_dir_unwritable(tmp_path) -> None:
         os.chmod(ro_dir, 0o700)  # restore so pytest's tmp cleanup can remove it
 
 
+def test_iroh_server_start_passes_secret_key_as_bytes(monkeypatch, tmp_path) -> None:
+    """Regression: `EndpointOptions.secret_key` is a uniffi-generated `Optional[bytes]` field,
+    despite `SecretKey.generate()`/`load_or_create_secret` returning a `SecretKey` object.
+    Passing the object itself type-checks fine at `EndpointOptions(...)` construction (uniffi
+    validates lazily) but raises `TypeError: a bytes-like object is required, not 'SecretKey'`
+    inside the real `Endpoint.bind()` — never caught offline before because every other test
+    here stops short of an actual bind. This fakes `Endpoint.bind`/`EndpointTicket.from_addr`
+    to capture what `IrohServer.start()` actually constructs, with no real network/relay."""
+    pytest.importorskip("iroh")
+    import iroh
+
+    from net.iroh_server import IrohServer
+
+    captured: dict[str, object] = {}
+
+    class _FakeEndpoint:
+        async def online(self) -> None:
+            return None
+
+        def addr(self):
+            return None
+
+    async def _fake_bind(_cls, options):
+        captured["options"] = options
+        return _FakeEndpoint()
+
+    monkeypatch.setattr(iroh.Endpoint, "bind", classmethod(_fake_bind))
+    monkeypatch.setattr(iroh.EndpointTicket, "from_addr", classmethod(lambda _cls, _addr: "ticket-fake"))
+
+    server = IrohServer(object(), secret_path=tmp_path / "iroh-secret.key")
+    ticket = asyncio.run(server.start())
+
+    assert ticket == "ticket-fake"
+    assert isinstance(captured["options"].secret_key, bytes)
+
+
 def test_serve_iroh_sigterm_triggers_clean_shutdown(monkeypatch, tmp_path) -> None:
     """SIGTERM (systemd `stop`/`restart`) must cancel serve() and run the finally-close, not
     hard-kill the process — so the endpoint/store shut down cleanly on a deploy restart."""

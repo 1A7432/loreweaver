@@ -191,7 +191,13 @@ class IrohServer:
 
         if self._secret_path is not None:
             secret_key = load_or_create_secret(self._secret_path)
-            options = iroh.EndpointOptions(preset=iroh.preset_n0(), alpns=[ALPN], secret_key=secret_key)
+            # `EndpointOptions.secret_key` is a uniffi-generated `Optional[bytes]` field (see
+            # its FFI type stub) despite `SecretKey.generate()`/`load_or_create_secret`
+            # returning a `SecretKey` object -- passing the object itself type-checks at
+            # `EndpointOptions(...)` construction (uniffi validates lazily) but raises
+            # `TypeError: a bytes-like object is required, not 'SecretKey'` inside
+            # `Endpoint.bind()`. Serialize it the same way it's persisted to disk.
+            options = iroh.EndpointOptions(preset=iroh.preset_n0(), alpns=[ALPN], secret_key=secret_key.to_bytes())
         else:
             options = iroh.EndpointOptions(preset=iroh.preset_n0(), alpns=[ALPN])
         self._endpoint = await iroh.Endpoint.bind(options)
