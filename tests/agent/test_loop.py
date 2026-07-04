@@ -20,7 +20,7 @@ from agent.services import build_services
 from agent.tools import Toolset, tool
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
-from infra.llm import FakeLLM, assistant_text, assistant_tools, tool_call
+from infra.llm import ChatResult, FakeLLM, Usage, assistant_text, assistant_tools, tool_call
 
 KEEPER_SECRET = "THE BUTLER POISONED THE WINE"
 
@@ -624,3 +624,77 @@ def test_reply_check_detector_catches_the_violation_but_not_plain_narration():
     assert _dice_rolled([{"name": "lookup_time"}, {"name": "sanity_check"}])
     assert not _dice_rolled([{"name": "lookup_time"}, {"name": "get_module_summary"}])
     assert not _dice_rolled([])
+
+
+# ---------------------------------------------------------------------------
+# Token/cache usage accumulation (KPTurnResult.usage)
+# ---------------------------------------------------------------------------
+
+
+async def test_usage_accumulates_completion_sums_and_prompt_last_wins_across_rounds():
+    """A tool-call round + a final text round, each carrying `Usage`: completion
+    SUMS across both rounds, while prompt/total/cache_hit/cache_miss are LAST-WINS
+    (the final round's numbers, which describe the full current context)."""
+    llm = FakeLLM(
+        script=[
+            ChatResult(
+                content=None,
+                tool_calls=[tool_call("lookup_time")],
+                usage=Usage(prompt_tokens=100, completion_tokens=10, total_tokens=110, cache_hit_tokens=20, cache_miss_tokens=80),
+            ),
+            ChatResult(
+                content="It is a moonless midnight in Innsmouth.",
+                tool_calls=[],
+                usage=Usage(prompt_tokens=140, completion_tokens=25, total_tokens=165, cache_hit_tokens=100, cache_miss_tokens=40),
+            ),
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx("chat-usage-1"), services, _toolset(), "What time is it?")
+
+    assert result.reply == "It is a moonless midnight in Innsmouth."
+    assert result.usage.completion_tokens == 35  # 10 + 25, summed
+    assert result.usage.prompt_tokens == 140  # last-wins
+    assert result.usage.total_tokens == 165  # last-wins
+    assert result.usage.cache_hit_tokens == 100  # last-wins
+    assert result.usage.cache_miss_tokens == 40  # last-wins
+
+
+async def test_usage_stays_all_zero_when_the_llm_reports_no_usage():
+    # FakeLLM's default ChatResult carries usage=None -- the ordinary path every
+    # other test in this file (and every test in the whole suite) exercises.
+    llm = FakeLLM(script=[assistant_text("Ready.")])
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx("chat-usage-2"), services, _toolset(), "hi")
+
+    assert result.usage == Usage()
+
+
+async def test_usage_is_zeroed_on_max_rounds_fallback_even_when_rounds_carried_real_usage():
+    def _always_tool_calls_with_usage(messages, tools):
+        return ChatResult(
+            content=None,
+            tool_calls=[tool_call("lookup_time")],
+            usage=Usage(prompt_tokens=50, completion_tokens=5, total_tokens=55),
+        )
+
+    llm = FakeLLM(responder=_always_tool_calls_with_usage)
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx("chat-usage-3"), services, _toolset(), "hi", max_rounds=2)
+
+    assert result.reply == services.i18n.with_locale("en").t("loop.max_rounds")
+    assert result.usage == Usage()
+
+
+async def test_usage_is_zeroed_on_provider_error():
+    def _boom(messages, tools):
+        raise RuntimeError("boom")
+
+    services = _services(FakeLLM(responder=_boom))
+
+    result = await run_kp_turn(_ctx("chat-usage-4"), services, _toolset(), "hi")
+
+    assert result.usage == Usage()

@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from infra.config import LLMSettings, Settings
-from infra.llm import ChatResult, LLMClient, OpenAILLM, ToolCall
+from infra.llm import ChatResult, LLMClient, OpenAILLM, ToolCall, parse_usage
 from infra.runtime_config import OVERRIDE_FIELDS, apply_overrides
 
 PRESETS: dict[str, str] = {
@@ -358,7 +358,7 @@ def from_anthropic_response(response: Any) -> ChatResult:
                     arguments=_ensure_dict(_get_value(block, "input", {})),
                 )
             )
-    return ChatResult(content="".join(text_parts) or None, tool_calls=tool_calls, raw=response)
+    return ChatResult(content="".join(text_parts) or None, tool_calls=tool_calls, raw=response, usage=parse_usage(response))
 
 
 def sanitize_gemini_schema(schema: Any) -> dict[str, Any]:
@@ -520,7 +520,7 @@ def from_gemini_response(response: Any) -> ChatResult:
         text = _get_value(response, "text", "")
         if text:
             text_parts.append(text)
-    return ChatResult(content="".join(text_parts) or None, tool_calls=tool_calls, raw=response)
+    return ChatResult(content="".join(text_parts) or None, tool_calls=tool_calls, raw=response, usage=parse_usage(response))
 
 
 def _to_anthropic_tool_choice(tool_choice: str | dict) -> Any:

@@ -174,6 +174,19 @@ export interface InitiativeEntry {
   current: boolean
 }
 
+// Rolling per-room LLM token/cache usage aggregate (gateway/turn.py's
+// `_record_usage_stats`, surfaced by `net.state.build_room_state`). Additive/
+// optional -- an older server that never sends it still type-checks fine, and a
+// brand-new room with no completed AI-KP turn yet simply omits the field.
+export interface UsageState {
+  context_tokens: number
+  context_window: number
+  input_tokens: number
+  output_tokens: number
+  cache_hit_tokens: number
+  cache_miss_tokens: number
+}
+
 export interface StateFrame {
   type: typeof FrameType.State
   character?: CharacterState
@@ -182,6 +195,7 @@ export interface StateFrame {
   clock?: ClockState
   initiative: InitiativeEntry[]
   online: number
+  usage?: UsageState
 }
 
 export interface PresencePlayer {

@@ -25,7 +25,7 @@ import json
 import logging
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from agent.context import AgentCtx
 from agent.prompt_builder import build_system_prompt
@@ -33,7 +33,7 @@ from agent.services import Services
 from agent.session_recap import maybe_refresh_session_recap
 from agent.tools import Toolset
 from core.skills import unlocked_tools_for
-from infra.llm import ChatResult
+from infra.llm import ChatResult, Usage
 
 logger = logging.getLogger(__name__)
 
@@ -232,6 +232,12 @@ class KPTurnResult:
     reply: str  # final player-visible text (already `output_review`-ed)
     tool_trace: list[dict]  # [{name, arguments, keeper_only, result}, ...] in call order
     rounds: int  # how many function-calling rounds this turn took
+    # Token/cache usage accumulated across this turn's MAIN loop rounds (see
+    # `_accumulate_usage` and the `run_kp_turn` docstring below) -- all-zero on the
+    # provider-error early return and the `max_rounds`-exhausted fallback, and always
+    # all-zero against `FakeLLM` (which never sets `ChatResult.usage`), so every
+    # existing test's behavior is unchanged.
+    usage: Usage = field(default_factory=Usage)
 
 
 async def run_kp_turn(
@@ -273,6 +279,12 @@ async def run_kp_turn(
     tool_trace: list[dict] = []
     reply: str | None = None
     rounds = 0
+    # Accumulated across MAIN loop rounds only -- the dice-first corrective phase
+    # (`_run_dice_correction`, below) makes its own `services.llm.chat` calls but
+    # deliberately does NOT fold them in here (see its docstring): the corrective
+    # is a bounded, best-effort repair pass, not part of what a context% meter
+    # should describe as "this turn's usage".
+    turn_usage = Usage()
 
     for round_index in range(1, max_rounds + 1):
         rounds = round_index
@@ -287,12 +299,15 @@ async def run_kp_turn(
             # A real provider error (network/rate-limit/auth/SDK) must degrade to a friendly,
             # localized "Keeper temporarily unavailable" reply, never crash the player's turn.
             # We return early WITHOUT persisting history or refreshing the recap (nothing useful
-            # happened this turn, and the summarizer LLM would just fail again).
+            # happened this turn, and the summarizer LLM would just fail again). `usage` stays
+            # the default all-zero `Usage()` -- nothing usable came back.
             logger.warning("KP turn aborted: LLM chat failed", exc_info=True)
             reply = i18n.t("loop.unavailable")
             if output_review is not None:
                 reply = output_review(reply)
             return KPTurnResult(reply=reply, tool_trace=tool_trace, rounds=rounds)
+
+        _accumulate_usage(turn_usage, result)
 
         if result.tool_calls:
             await _dispatch_and_record(toolset, ctx, result, messages, tool_trace, unlocked)
@@ -300,6 +315,13 @@ async def run_kp_turn(
 
         reply = result.content or ""
         break
+
+    # `reply` is still `None` here exactly when every round returned tool calls and
+    # `max_rounds` ran out without ever reaching a plain-text reply -- captured BEFORE
+    # the dice-first correction below (which may itself set `reply`) so the usage
+    # decision reflects whether THIS turn ever produced a real reply, not whatever the
+    # corrective phase did afterwards.
+    max_rounds_exhausted = reply is None
 
     # Dice-first enforcement: if no real dice were rolled this turn yet a check
     # plausibly should have -- either the model's reply narrates/asks for one, OR
@@ -338,7 +360,33 @@ async def run_kp_turn(
     # scroll out of the ~20-message replay window. Best-effort: never fatal.
     await maybe_refresh_session_recap(ctx, services, history_key=key)
 
-    return KPTurnResult(reply=reply, tool_trace=tool_trace, rounds=rounds)
+    return KPTurnResult(
+        reply=reply,
+        tool_trace=tool_trace,
+        rounds=rounds,
+        usage=Usage() if max_rounds_exhausted else turn_usage,
+    )
+
+
+def _accumulate_usage(turn_usage: Usage, result: ChatResult) -> None:
+    """Fold one main-loop round's `ChatResult.usage` into the turn's running total, in place.
+
+    `completion_tokens` SUMS across rounds (each round produced genuinely new
+    completion tokens). `prompt_tokens`/`total_tokens`/`cache_hit_tokens`/
+    `cache_miss_tokens` are LAST-WINS -- the latest round's numbers describe the
+    full current context (prior turns + this round's tool chatter), which is what
+    a context% meter wants, not a sum. A no-op when `result.usage` is `None`
+    (every `FakeLLM` result, and any real provider call `parse_usage` couldn't
+    make sense of), so `turn_usage` stays all-zero exactly like before this
+    feature existed.
+    """
+    if result.usage is None:
+        return
+    turn_usage.completion_tokens += result.usage.completion_tokens
+    turn_usage.prompt_tokens = result.usage.prompt_tokens
+    turn_usage.total_tokens = result.usage.total_tokens
+    turn_usage.cache_hit_tokens = result.usage.cache_hit_tokens
+    turn_usage.cache_miss_tokens = result.usage.cache_miss_tokens
 
 
 def _assistant_tool_call_message(result: ChatResult) -> dict:
@@ -438,6 +486,9 @@ async def _run_dice_correction(
         # a normal "auto" call.
         forced = round_index == 0
         try:
+            # Deliberately NOT folded into `turn_usage`/`KPTurnResult.usage` (see
+            # `run_kp_turn`'s comment where `turn_usage` is declared): this corrective
+            # phase is a bounded repair pass, not part of the turn's headline usage.
             result = await services.llm.chat(
                 convo,
                 tools=toolset.schemas(unlocked),

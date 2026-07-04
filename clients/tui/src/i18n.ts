@@ -233,6 +233,8 @@ const messages = {
     "scene.unframed": "Unframed",
     "scene.clock": "CLOCK",
     "scene.round": "ROUND",
+    "hud.ctx": "ctx",
+    "hud.cache": "cache",
   },
   zh: {
     "connect.subtitle": "灯下的牌桌 · 用邀请码连接一位守秘人",
@@ -464,6 +466,8 @@ const messages = {
     "scene.unframed": "未定场景",
     "scene.clock": "时间",
     "scene.round": "轮次",
+    "hud.ctx": "上下文",
+    "hud.cache": "缓存",
   },
 } as const
 

@@ -1,11 +1,11 @@
 """Build the WebSocket `state` frame's payload for one room (M4 spec §1).
 
 `build_room_state` is a read-only snapshot: the caller's own active
-character, the shared party roster, the game clock, the initiative order
-and the current scene. Every piece is independently optional — a
-brand-new room has none of them yet — so a missing/unset piece is simply
-left out of the returned dict (or reduced to an empty list for
-`party`/`initiative`) instead of raising, letting
+character, the shared party roster, the game clock, the initiative order,
+the current scene, and the room's rolling LLM token/cache usage. Every piece
+is independently optional — a brand-new room has none of them yet — so a
+missing/unset piece is simply left out of the returned dict (or reduced to
+an empty list for `party`/`initiative`) instead of raising, letting
 `net.tui_server.TuiServer` call this unconditionally on join and after
 every turn.
 
@@ -59,6 +59,10 @@ async def build_room_state(services: Services, ctx: AgentCtx) -> dict[str, Any]:
     clock = await _clock(services, ctx.chat_key)
     if clock is not None:
         state["clock"] = clock
+
+    usage = await _usage(services, ctx.chat_key)
+    if usage is not None:
+        state["usage"] = usage
 
     return state
 
@@ -242,3 +246,33 @@ async def _clock(services: Services, chat_key: str) -> dict[str, Any] | None:
 
     time_value = clock.get("current_time") if isinstance(clock, dict) else None
     return {"time": time_value} if time_value else None
+
+
+async def _usage(services: Services, chat_key: str) -> dict[str, Any] | None:
+    """The room's rolling token/cache usage aggregate (`gateway.turn._record_usage_stats`
+    writes it), translated to the wire's snake_case shape -- `None` when unset (a
+    brand-new room, or one that has never completed a real AI-KP turn), so
+    `build_room_state` leaves `state.usage` out entirely rather than sending zeros.
+    """
+    try:
+        raw = await services.store.get(user_key="", store_key=f"usage_stats.{chat_key}")
+        stats = json.loads(raw) if raw else {}
+    except Exception:
+        stats = {}
+
+    if not isinstance(stats, dict) or not stats:
+        return None
+
+    last = stats.get("last")
+    last = last if isinstance(last, dict) else {}
+    session = stats.get("session")
+    session = session if isinstance(session, dict) else {}
+
+    return {
+        "context_tokens": last.get("prompt", 0),
+        "context_window": last.get("context_window", 0),
+        "input_tokens": session.get("prompt", 0),
+        "output_tokens": session.get("completion", 0),
+        "cache_hit_tokens": session.get("cache_hit", 0),
+        "cache_miss_tokens": session.get("cache_miss", 0),
+    }

@@ -20,6 +20,7 @@ same function) before the room ``state`` snapshot is published.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import TYPE_CHECKING, Any
@@ -29,6 +30,7 @@ from core.dice_engine import coc_rank_label
 from gateway.hub import Event
 from gateway.ops import room_content_unfiltered
 from infra.i18n import I18n, get_i18n
+from infra.llm import Usage, context_window_for
 from net.state import build_room_state, resolve_active_character
 
 logger = logging.getLogger(__name__)
@@ -99,7 +101,9 @@ async def run_turn(
     transport with no per-connection member) this falls back to the normal broadcast.
 
     On a real (non-command) AI-KP turn, once the KP's own narrative is published,
-    this also gives the party's AI companions (M10) a chance to auto-act via
+    this also best-effort records the turn's token/cache usage (``_record_usage_stats``)
+    -- surfaced by ``net.state.build_room_state`` as ``state.usage`` -- and gives the
+    party's AI companions (M10) a chance to auto-act via
     ``gateway.director.run_director`` — a no-op outside combat / with `.party auto`
     off, and, critically, ALWAYS a no-op when ``ctx.platform == "companion"`` (a
     companion's own turn re-enters this function and must never re-trigger the
@@ -140,6 +144,7 @@ async def run_turn(
             if npc_event is not None:
                 await hub.publish(ctx.chat_key, npc_event)
         await hub.publish(ctx.chat_key, Event.narrative(speaker="kp", text=result.reply, fmt="markdown"))
+        await _record_usage_stats(services, ctx, result.usage)
 
         if ctx.platform != "companion":
             await _run_companion_director(hub, services, ctx, command_router, censor, result.reply)
@@ -179,6 +184,58 @@ async def _run_companion_director(
         await run_director(hub, services, ctx, command_router=command_router, censor=censor, situation=situation)
     except Exception:
         logger.warning("director: companion auto-turn failed for chat_key=%s", ctx.chat_key, exc_info=True)
+
+
+async def _record_usage_stats(services: Services, ctx: AgentCtx, usage: Usage) -> None:
+    """Best-effort persist this turn's token/cache usage as a rolling per-room aggregate.
+
+    Stored at `usage_stats.{ctx.chat_key}` -- `net.state.build_room_state` reads it
+    back as the `state.usage` snapshot field. Skips entirely when `usage` is
+    all-zero (a provider-error turn, an exhausted `max_rounds` fallback, or a
+    `FakeLLM`-backed test turn never carries real usage -- see `agent.loop`), so a
+    turn that produced no usage data can't zero out an otherwise-healthy meter.
+
+    Shape: `{"last": {...THIS turn's counts + context_window}, "session": {...running
+    sums across every turn recorded so far + a turn counter}}`. A missing or corrupt
+    prior aggregate just starts the session sums fresh rather than failing the turn.
+    """
+    if usage.total_tokens == 0 and usage.prompt_tokens == 0:
+        return
+
+    key = f"usage_stats.{ctx.chat_key}"
+    session = {"prompt": 0, "completion": 0, "cache_hit": 0, "cache_miss": 0, "turns": 0}
+    try:
+        raw = await services.store.get(user_key="", store_key=key)
+        prior = json.loads(raw) if raw else {}
+        prior_session = prior.get("session") if isinstance(prior, dict) else None
+        if isinstance(prior_session, dict):
+            for field_name in session:
+                session[field_name] = int(prior_session.get(field_name, 0) or 0)
+    except Exception:
+        # Corrupt/missing prior aggregate: start this session's sums fresh rather
+        # than losing the turn.
+        session = {"prompt": 0, "completion": 0, "cache_hit": 0, "cache_miss": 0, "turns": 0}
+
+    session["prompt"] += usage.prompt_tokens
+    session["completion"] += usage.completion_tokens
+    session["cache_hit"] += usage.cache_hit_tokens
+    session["cache_miss"] += usage.cache_miss_tokens
+    session["turns"] += 1
+
+    payload = {
+        "last": {
+            "prompt": usage.prompt_tokens,
+            "completion": usage.completion_tokens,
+            "cache_hit": usage.cache_hit_tokens,
+            "cache_miss": usage.cache_miss_tokens,
+            "context_window": context_window_for(services.settings.llm.chat_model),
+        },
+        "session": session,
+    }
+    try:
+        await services.store.set(user_key="", store_key=key, value=json.dumps(payload, ensure_ascii=False))
+    except Exception:
+        logger.warning("usage_stats: failed to persist for chat_key=%s", ctx.chat_key, exc_info=True)
 
 
 async def publish_state(hub: RoomHub, services: Services, ctx: AgentCtx) -> None:

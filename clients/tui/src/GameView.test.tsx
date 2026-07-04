@@ -273,6 +273,38 @@ describe("GameView", () => {
     act(() => renderer.destroy())
   })
 
+  test("header renders a usage statusline (a `%`) once a state frame carries usage", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame } = await renderGame(client)
+    await flush()
+
+    act(() => {
+      client.push({
+        type: FrameType.State,
+        party: [],
+        initiative: [],
+        online: 1,
+        usage: {
+          context_tokens: 20000,
+          context_window: 128000,
+          input_tokens: 5000,
+          output_tokens: 900,
+          cache_hit_tokens: 3000,
+          cache_miss_tokens: 1000,
+        },
+      })
+    })
+    await flush()
+
+    const frame = await waitForFrame((t) => t.includes("%"))
+    expect(frame).toContain("%")
+    expect(frame).toContain("joined arkham")
+
+    act(() => client.push(settleSpinner))
+    await flush()
+    act(() => renderer.destroy())
+  })
+
   test("idle empty log shows a static ready hint, not an animated spinner", async () => {
     const client = new MockClient()
     const { renderer, flush, captureCharFrame } = await renderGame(client)

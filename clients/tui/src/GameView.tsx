@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react"
 import { useKeyboard, useTimeline } from "@opentui/react"
 import type { InputRenderable, KeyEvent, ScrollBoxRenderable } from "@opentui/core"
-import { FrameType, stripControlChars, type DiceFrame, type PresenceFrame, type ServerFrame, type StateFrame, type WelcomeFrame } from "@loreweaver/protocol"
+import { FrameType, type DiceFrame, type PresenceFrame, type ServerFrame, type StateFrame, type WelcomeFrame } from "@loreweaver/protocol"
+import { HeaderBar } from "./components/HeaderBar"
 import { NarrativeLog, type LogFrame } from "./components/NarrativeLog"
 import { PartyRoster } from "./components/PartyRoster"
 import { ScenePanel } from "./components/ScenePanel"
@@ -183,20 +184,15 @@ export function GameView({ client, welcome, theme, themeName, initialFrames }: G
 
   return (
     <box flexDirection="column" height="100%" width="100%" backgroundColor={theme.bg}>
-      {/* height=4 → 2 inner rows: exactly the height the `tiny` ascii-font needs,
-          so its second row no longer bleeds into the border, and the status column
-          gets its own two rows instead of collapsing both lines onto one. */}
-      <box height={4} flexDirection="row" border borderColor={theme.border} paddingX={1}>
-        <ascii-font text="LOREWEAVER" font="tiny" color={theme.accent} />
-        <box flexDirection="column" marginLeft={2} justifyContent="center">
-          <text fg={theme.accent}>{tt(locale, "game.joined", { room: stripControlChars(welcome.room) })}</text>
-          {stateFrame.online > 0 ? (
-            <text fg={theme.dim}>
-              {stateFrame.online} {tt(locale, "status.online")}
-            </text>
-          ) : null}
-        </box>
-      </box>
+      <HeaderBar
+        welcome={welcome}
+        scene={stateFrame.scene}
+        clock={stateFrame.clock}
+        usage={stateFrame.usage}
+        online={stateFrame.online}
+        theme={theme}
+        locale={locale}
+      />
 
       <box flexDirection="row" flexGrow={1} minHeight={8}>
         <scrollbox
