@@ -2,7 +2,7 @@
 import { createCliRenderer } from "@opentui/core"
 import { createRoot } from "@opentui/react"
 import App, { type AppPrefill } from "./App"
-import { loadConnectMemory, rememberServer, saveConnectMemory } from "./connectMemory"
+import { forgetServer, loadConnectMemory, rememberServer, saveConnectMemory, type SavedServer } from "./connectMemory"
 
 interface Args {
   command?: string
@@ -80,6 +80,20 @@ createRoot(renderer).render(
       // Persist a language pick made before connecting, merging with the saved file
       // so a later connect still overwrites host/key/name correctly.
       void loadConnectMemory().then((m) => saveConnectMemory({ ...m, locale }))
+    }}
+    onForgetConnect={(entry: SavedServer) => {
+      // Mirrors onRememberConnect: load the current file, apply the pure list edit, re-save.
+      void loadConnectMemory().then((m) => saveConnectMemory({ ...m, servers: forgetServer(m.servers, entry) }))
+    }}
+    onQuit={() => {
+      // Restore the terminal (raw mode / alt-screen) BEFORE exiting — otherwise the shell
+      // is left in whatever state the renderer put it in.
+      try {
+        renderer.destroy?.()
+      } catch {
+        // best-effort — still exit even if teardown itself throws
+      }
+      process.exit(0)
     }}
   />,
 )

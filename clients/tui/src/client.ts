@@ -1,4 +1,4 @@
-import { WsClient, type AdminForgeKind, type PlayerRole, type ServerFrame } from "@loreweaver/protocol"
+import { WsClient, type AdminForgeKind, type ConnectionStatus, type PlayerRole, type ServerFrame } from "@loreweaver/protocol"
 import { IrohClient, isIrohTicket } from "./irohClient"
 
 // The full client surface the TUI shell needs. This is the superset the web
@@ -17,6 +17,10 @@ export interface AppClient {
   sendInput(text: string): void
   onMessage(cb: (frame: ServerFrame) => void): () => void
   close?(code?: number, reason?: string): void
+  // Optional: a coarse liveness signal ("connecting"/"online"/"reconnecting"/"offline") for a
+  // small HUD indicator (GameView's HeaderBar). Optional so a test mock need not implement it —
+  // the shell renders nothing/neutral when it's absent.
+  onStatus?(cb: (status: ConnectionStatus) => void): () => void
   adminGetConfig(): void
   adminSetModel(provider: string, chatModel?: string, apiKey?: string, baseUrl?: string): void
   adminListModels(provider?: string, apiKey?: string, baseUrl?: string): void
@@ -43,12 +47,16 @@ export interface AppClient {
 class TransportClient implements AppClient {
   private inner?: AppClient
   private readonly handlers = new Set<(frame: ServerFrame) => void>()
+  private readonly statusHandlers = new Set<(status: ConnectionStatus) => void>()
 
   async connect(target: string): Promise<void> {
     const inner = isIrohTicket(target) ? new IrohClient() : new WsClient()
     this.inner = inner
     inner.onMessage((frame) => {
       for (const handler of this.handlers) handler(frame)
+    })
+    inner.onStatus?.((status) => {
+      for (const handler of this.statusHandlers) handler(status)
     })
     await inner.connect(target)
   }
@@ -62,6 +70,10 @@ class TransportClient implements AppClient {
   onMessage(cb: (frame: ServerFrame) => void): () => void {
     this.handlers.add(cb)
     return () => this.handlers.delete(cb)
+  }
+  onStatus(cb: (status: ConnectionStatus) => void): () => void {
+    this.statusHandlers.add(cb)
+    return () => this.statusHandlers.delete(cb)
   }
   close(code?: number, reason?: string): void {
     this.inner?.close?.(code, reason)

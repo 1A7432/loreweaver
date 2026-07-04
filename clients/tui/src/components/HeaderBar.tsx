@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react"
-import { stripControlChars, type ClockState, type SceneState, type UsageState, type WelcomeFrame } from "@loreweaver/protocol"
+import {
+  stripControlChars,
+  type ClockState,
+  type ConnectionStatus,
+  type SceneState,
+  type UsageState,
+  type WelcomeFrame,
+} from "@loreweaver/protocol"
 import { tt } from "../i18n"
 import type { Palette } from "../themes"
 
@@ -11,6 +18,9 @@ export interface HeaderBarProps {
   online: number
   theme: Palette
   locale?: string
+  // The transport's liveness (App subscribes to `client.onStatus?.(...)`). Undefined when the
+  // client doesn't implement `onStatus` (an older mock) — renders nothing, not a false state.
+  connectionStatus?: ConnectionStatus
 }
 
 // A plain geometric clock face -- single-width in every terminal font (unlike an
@@ -43,11 +53,31 @@ function cacheColor(theme: Palette, rate: number | null): string {
   return rate !== null && rate >= 50 ? theme.success : theme.dim
 }
 
+// "connecting" and "reconnecting" share the same amber glyph + label — both mean "not fully
+// online yet", and the distinction (first dial vs. mid-session redial) isn't worth two rows.
+function connGlyph(status: ConnectionStatus): string {
+  if (status === "online") return "🟢"
+  if (status === "offline") return "🔴"
+  return "🟡"
+}
+
+function connKey(status: ConnectionStatus): "hud.connOnline" | "hud.connReconnecting" | "hud.connOffline" {
+  if (status === "online") return "hud.connOnline"
+  if (status === "offline") return "hud.connOffline"
+  return "hud.connReconnecting"
+}
+
+function connColor(theme: Palette, status: ConnectionStatus): string {
+  if (status === "online") return theme.success
+  if (status === "offline") return theme.fumble
+  return theme.dim
+}
+
 // Replaces GameView's old plain `height={4}` header box: same overall footprint (a
 // height=4 bordered row -- exactly the two inner rows the `tiny` ascii-font needs),
 // now split into three zones -- room identity (left), scene + in-game clock
 // (center), and a ticking wall clock + optional token/cache statusline (right).
-export function HeaderBar({ welcome, scene, clock, usage, online, theme, locale }: HeaderBarProps) {
+export function HeaderBar({ welcome, scene, clock, usage, online, theme, locale, connectionStatus }: HeaderBarProps) {
   const [now, setNow] = useState(() => new Date())
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 1000)
@@ -66,6 +96,11 @@ export function HeaderBar({ welcome, scene, clock, usage, online, theme, locale 
         {online > 0 ? (
           <text fg={theme.dim}>
             {online} {tt(locale, "status.online")}
+          </text>
+        ) : null}
+        {connectionStatus ? (
+          <text fg={connColor(theme, connectionStatus)}>
+            {connGlyph(connectionStatus)} {tt(locale, connKey(connectionStatus))}
           </text>
         ) : null}
       </box>

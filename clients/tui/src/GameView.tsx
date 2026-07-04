@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState } from "react"
 import { useKeyboard, useTimeline } from "@opentui/react"
 import type { InputRenderable, KeyEvent, ScrollBoxRenderable } from "@opentui/core"
-import { FrameType, type DiceFrame, type PresenceFrame, type ServerFrame, type StateFrame, type WelcomeFrame } from "@loreweaver/protocol"
+import {
+  FrameType,
+  type ConnectionStatus,
+  type DiceFrame,
+  type PresenceFrame,
+  type ServerFrame,
+  type StateFrame,
+  type WelcomeFrame,
+} from "@loreweaver/protocol"
 import { HeaderBar } from "./components/HeaderBar"
 import { NarrativeLog, type LogFrame } from "./components/NarrativeLog"
 import { PartyRoster } from "./components/PartyRoster"
@@ -30,6 +38,9 @@ export interface GameViewProps {
   // opens the game view, so without seeding here they'd be lost. Seeds the local
   // log ONCE on mount; live frames from here on are appended by `onMessage` below.
   initialFrames?: LogFrame[]
+  // Threaded from the shell's `client.onStatus?.(...)` subscription (App.tsx); undefined when
+  // the client doesn't implement `onStatus` — the HeaderBar then renders no indicator at all.
+  connectionStatus?: ConnectionStatus
 }
 
 // Cap a single streaming message so a hostile/runaway stream can't grow the
@@ -55,7 +66,7 @@ function hasCtrl(event: KeyEvent): boolean {
   return Boolean(event.ctrl)
 }
 
-export function GameView({ client, welcome, theme, themeName, initialFrames }: GameViewProps) {
+export function GameView({ client, welcome, theme, themeName, initialFrames, connectionStatus }: GameViewProps) {
   const locale = welcome.locale
   const [presence, setPresence] = useState<PresenceFrame>()
   const [stateFrame, setStateFrame] = useState<StateFrame>({ type: FrameType.State, party: [], initiative: [], online: 0 })
@@ -192,6 +203,7 @@ export function GameView({ client, welcome, theme, themeName, initialFrames }: G
         online={stateFrame.online}
         theme={theme}
         locale={locale}
+        connectionStatus={connectionStatus}
       />
 
       <box flexDirection="row" flexGrow={1} minHeight={8}>

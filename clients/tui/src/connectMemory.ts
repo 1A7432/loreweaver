@@ -50,6 +50,13 @@ export function rememberServer(servers: SavedServer[] | undefined, entry: SavedS
   return [entry, ...rest].slice(0, MAX_SERVERS)
 }
 
+// Remove the matching host+key entry (the connect screen's per-row delete). Pure — returns a
+// fresh list; a no-match input is returned unchanged (as a new array, still no-op for equality
+// purposes since callers only care about contents).
+export function forgetServer(servers: SavedServer[] | undefined, entry: SavedServer): SavedServer[] {
+  return (servers ?? []).filter((s) => !(s.host === entry.host && s.key === entry.key))
+}
+
 export async function loadConnectMemory(path = MEMORY_PATH): Promise<ConnectMemory> {
   try {
     const raw = await Bun.file(path).text()

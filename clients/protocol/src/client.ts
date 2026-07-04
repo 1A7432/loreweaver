@@ -35,6 +35,13 @@ export type WebSocketFactory = (url: string) => WebSocketLike
 export type MessageHandler = (frame: ServerFrame) => void
 export type TypedMessageHandler<T extends ServerFrame["type"]> = (frame: Extract<ServerFrame, { type: T }>) => void
 
+// The transport's coarse liveness, for a small UI indicator (🟢/🟡/🔴). "connecting" covers
+// both the very first dial and each redial attempt; "online" is a settled, joined socket;
+// "reconnecting" is the backoff window between an unexpected drop and the next redial;
+// "offline" is only reached via an explicit `close()` (the reconnect loop has stopped for good).
+export type ConnectionStatus = "connecting" | "online" | "reconnecting" | "offline"
+export type StatusHandler = (status: ConnectionStatus) => void
+
 export interface WsClientOptions {
   webSocketFactory?: WebSocketFactory
   reconnect?: boolean
@@ -128,6 +135,7 @@ export class WsClient {
   private readonly clearTimeoutFn: typeof clearTimeout
   private readonly messageHandlers = new Set<MessageHandler>()
   private readonly typedHandlers = new Map<ServerFrame["type"], Set<MessageHandler>>()
+  private readonly statusHandlers = new Set<StatusHandler>()
 
   constructor(options: WsClientOptions = {}) {
     this.factory = options.webSocketFactory ?? defaultWebSocketFactory
@@ -145,6 +153,7 @@ export class WsClient {
       this.clearTimeoutFn(this.reconnectTimer)
       this.reconnectTimer = undefined
     }
+    this.setStatus("connecting")
 
     const socket = this.factory(url)
     this.socket = socket
@@ -155,6 +164,7 @@ export class WsClient {
       const settleOpen = () => {
         settled = true
         this.reconnectAttempts = 0
+        this.setStatus("online")
         resolve()
         if (this.lastJoin) {
           this.join(this.lastJoin.key, this.lastJoin.name)
@@ -181,6 +191,7 @@ export class WsClient {
       this.clearTimeoutFn(this.reconnectTimer)
       this.reconnectTimer = undefined
     }
+    this.setStatus("offline")
     this.socket?.close(code, reason)
   }
 
@@ -312,6 +323,18 @@ export class WsClient {
     return () => handlers.delete(cb as MessageHandler)
   }
 
+  // Optional: a small HUD indicator subscribes here rather than polling. Not called with
+  // the current status on subscribe — only future transitions — so a fresh subscriber sees
+  // "connecting" implicitly (no event yet) until the next real transition fires.
+  onStatus(cb: StatusHandler): () => void {
+    this.statusHandlers.add(cb)
+    return () => this.statusHandlers.delete(cb)
+  }
+
+  private setStatus(status: ConnectionStatus): void {
+    for (const handler of this.statusHandlers) handler(status)
+  }
+
   private attach<T extends "open" | "message" | "close" | "error">(
     socket: WebSocketLike,
     type: T,
@@ -355,6 +378,7 @@ export class WsClient {
 
   private handleClose(): void {
     if (this.manualClose || !this.reconnect || !this.url) return
+    this.setStatus("reconnecting")
     const delay = Math.min(this.reconnectMaxMs, this.reconnectBaseMs * 2 ** this.reconnectAttempts)
     this.reconnectAttempts += 1
     this.reconnectTimer = this.setTimeoutFn(() => {

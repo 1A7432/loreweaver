@@ -28,6 +28,12 @@ export interface ConnectScreenProps {
   // The shell owns the client: it awaits connect(url) then join(key,name) and
   // advances to the menu when `welcome` arrives.
   onSubmit: (url: string, key: string, name: string) => void
+  // Remove a saved-server row (the "✕" affordance). Optional: without it the rows render
+  // with no delete control at all (a caller that hasn't wired persistence yet).
+  onForgetServer?: (entry: SavedServer) => void
+  // Release resources (client + any button-spawned local server) and exit. Optional so a
+  // caller that hasn't wired teardown yet just gets no Quit button.
+  onQuit?: () => void
 }
 
 const DEFAULT_HOST = "ws://127.0.0.1:8787"
@@ -45,6 +51,8 @@ export function ConnectScreen({
   onLocaleChange,
   onHostLocal,
   onSubmit,
+  onForgetServer,
+  onQuit,
 }: ConnectScreenProps) {
   const defaultName = tt(locale, "connect.defaultName")
   const [host, setHost] = useState(defaults.host ?? DEFAULT_HOST)
@@ -120,11 +128,25 @@ export function ConnectScreen({
           <box flexDirection="column" marginBottom={1}>
             <text fg={theme.dim}>{tt(locale, "connect.saved")}</text>
             {savedServers.slice(0, 5).map((server) => (
-              <box key={`${server.host}:${server.key}`} onMouseDown={() => pickServer(server)}>
-                <text fg={theme.fg}>
-                  · {server.name ? `${server.name} — ` : ""}
-                  {shortHost(server.host)}
-                </text>
+              <box key={`${server.host}:${server.key}`} flexDirection="row" onMouseDown={() => pickServer(server)}>
+                <box flexGrow={1}>
+                  <text fg={theme.fg}>
+                    · {server.name ? `${server.name} — ` : ""}
+                    {shortHost(server.host)}
+                  </text>
+                </box>
+                {onForgetServer ? (
+                  <box
+                    paddingX={1}
+                    onMouseDown={(event) => {
+                      // Don't let the delete also pick/fill this row (Part C requirement).
+                      event.stopPropagation()
+                      onForgetServer(server)
+                    }}
+                  >
+                    <text fg={theme.fumble}>{tt(locale, "connect.forget")}</text>
+                  </box>
+                ) : null}
               </box>
             ))}
           </box>
@@ -182,6 +204,12 @@ export function ConnectScreen({
         {error ? (
           <box marginTop={1}>
             <text fg={theme.fumble}>{error}</text>
+          </box>
+        ) : null}
+
+        {onQuit ? (
+          <box marginTop={1} onMouseDown={() => onQuit()} backgroundColor={theme.border} paddingX={1}>
+            <text fg={theme.bg}>{tt(locale, "connect.quit")}</text>
           </box>
         ) : null}
       </box>

@@ -1,9 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useKeyboard } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
-import { FrameType, type PresenceFrame, type ServerFrame, type StateFrame, type WelcomeFrame } from "@loreweaver/protocol"
+import {
+  FrameType,
+  type ConnectionStatus,
+  type PresenceFrame,
+  type ServerFrame,
+  type StateFrame,
+  type WelcomeFrame,
+} from "@loreweaver/protocol"
 import { createClient, type AppClient } from "./client"
-import type { SavedServer } from "./connectMemory"
+import { forgetServer, type SavedServer } from "./connectMemory"
 import type { HostHandle } from "./hostLocal"
 import { GameView, appendFrame } from "./GameView"
 import type { LogFrame } from "./components/NarrativeLog"
@@ -39,6 +46,11 @@ export interface AppProps {
   onRememberConnect?: (memory: Required<AppPrefill>) => void
   // Persist a language choice made on the connect screen (before any welcome).
   onLocaleChange?: (locale: TuiLocale) => void
+  // Persist a saved-server deletion (index.tsx loads memory, applies forgetServer, re-saves).
+  onForgetConnect?: (entry: SavedServer) => void
+  // Restore the terminal (renderer.destroy) and exit the process. Falls back to a no-op so
+  // tests (and any caller that doesn't pass it) don't need to stub process teardown.
+  onQuit?: () => void
 }
 
 // Stage 2 adds "character"; Stage 3 adds the keeper-only "keeper_keys" / "keeper_model";
@@ -62,7 +74,14 @@ const EMPTY_STATE: StateFrame = { type: FrameType.State, party: [], initiative: 
 // F1..F5 select a theme by its position in themeOrder (five themes now).
 const themeKeyIndex: Record<string, number> = { f1: 0, f2: 1, f3: 2, f4: 3, f5: 4 }
 
-export function App({ client: injected, prefill, onRememberConnect, onLocaleChange }: AppProps) {
+export function App({
+  client: injected,
+  prefill,
+  onRememberConnect,
+  onLocaleChange,
+  onForgetConnect,
+  onQuit,
+}: AppProps) {
   const client = useMemo(() => injected ?? createClient(), [injected])
   const pendingConnect = useRef<Required<AppPrefill> | undefined>(undefined)
   // An explicit language pick (the connect-screen toggle, or a remembered one) wins over
@@ -76,6 +95,10 @@ export function App({ client: injected, prefill, onRememberConnect, onLocaleChan
   const [locale, setLocale] = useState<TuiLocale>(() => prefill?.locale ?? defaultTuiLocale())
   const [screen, setScreen] = useState<Screen>("connect")
   const [welcome, setWelcome] = useState<WelcomeFrame>()
+  // Held in local state (not read straight from `prefill`) so a delete updates the connect
+  // screen immediately; `handleForgetServer` below keeps this and the persisted file in sync.
+  const [savedServers, setSavedServers] = useState<SavedServer[]>(() => prefill?.servers ?? [])
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>()
   const [connecting, setConnecting] = useState(false)
   const [error, setError] = useState<string>()
   const [stateFrame, setStateFrame] = useState<StateFrame>(EMPTY_STATE)
@@ -136,6 +159,12 @@ export function App({ client: injected, prefill, onRememberConnect, onLocaleChan
     })
   }, [client, onRememberConnect])
 
+  // Optional: an older mock client (or a transport with no `onStatus`) simply never fires,
+  // so `connectionStatus` stays undefined and the HUD indicator renders nothing.
+  useEffect(() => {
+    return client.onStatus?.((status: ConnectionStatus) => setConnectionStatus(status))
+  }, [client])
+
   const handleConnect = async (url: string, key: string, name: string) => {
     if (!key) {
       setError(tt(locale, "app.error.keyRequired"))
@@ -158,9 +187,14 @@ export function App({ client: injected, prefill, onRememberConnect, onLocaleChan
   // starts a server (streaming its output), then logs straight in as Keeper (onReady, below).
   const handleHostLocal = () => setScreen("host_local")
 
-  // Kill a button-spawned local server on exit so it doesn't outlive the client.
+  // Kill a button-spawned local server AND close the client connection on exit, so a raw
+  // Ctrl-C (or any process-level exit) doesn't leave a zombie server child or a p2p endpoint
+  // still trying to redial in the background.
   useEffect(() => {
-    const kill = () => localServer.current?.stop()
+    const kill = () => {
+      localServer.current?.stop()
+      client.close?.()
+    }
     process.on("exit", kill)
     process.on("SIGINT", kill)
     process.on("SIGTERM", kill)
@@ -170,7 +204,7 @@ export function App({ client: injected, prefill, onRememberConnect, onLocaleChan
       process.off("SIGTERM", kill)
       kill()
     }
-  }, [])
+  }, [client])
 
   // A language pick (connect screen or settings) is explicit: pin it so the server's
   // room locale won't override it, and persist it for next launch.
@@ -178,6 +212,22 @@ export function App({ client: injected, prefill, onRememberConnect, onLocaleChan
     setLocale(next)
     localePinned.current = true
     onLocaleChange?.(next)
+  }
+
+  // A saved-server delete (Part C): update the connect screen's list immediately, and persist
+  // it via the index.tsx-supplied callback (load memory, apply forgetServer, re-save).
+  const handleForgetServer = (entry: SavedServer) => {
+    setSavedServers((current: SavedServer[]) => forgetServer(current, entry))
+    onForgetConnect?.(entry)
+  }
+
+  // A user-visible Quit (menu row / connect-screen button): release everything a raw Ctrl-C
+  // would (stop a button-spawned local server, close the client so its reconnect loop can't
+  // keep redialing), then hand off to the caller (index.tsx restores the terminal and exits).
+  const handleQuit = () => {
+    localServer.current?.stop()
+    client.close?.()
+    onQuit?.()
   }
 
   if (screen === "host_local") {
@@ -210,7 +260,16 @@ export function App({ client: injected, prefill, onRememberConnect, onLocaleChan
   }
 
   if (screen === "game" && welcome) {
-    return <GameView client={client} welcome={{ ...welcome, locale }} theme={theme} themeName={themeName} initialFrames={frames} />
+    return (
+      <GameView
+        client={client}
+        welcome={{ ...welcome, locale }}
+        theme={theme}
+        themeName={themeName}
+        initialFrames={frames}
+        connectionStatus={connectionStatus}
+      />
+    )
   }
 
   if (screen === "character" && welcome) {
@@ -309,6 +368,7 @@ export function App({ client: injected, prefill, onRememberConnect, onLocaleChan
         onKeeperModel={() => setScreen("keeper_model")}
         onKeeperRules={() => setScreen("keeper_rules")}
         onKeeperSkills={() => setScreen("keeper_skills")}
+        onQuit={handleQuit}
       />
     )
   }
@@ -317,13 +377,15 @@ export function App({ client: injected, prefill, onRememberConnect, onLocaleChan
     <ConnectScreen
       theme={theme}
       defaults={{ host: prefill?.host, key: prefill?.key, name: prefill?.name }}
-      savedServers={prefill?.servers}
+      savedServers={savedServers}
       connecting={connecting}
       error={error}
       locale={locale}
       onLocaleChange={handleLocaleChange}
       onHostLocal={handleHostLocal}
       onSubmit={handleConnect}
+      onForgetServer={handleForgetServer}
+      onQuit={handleQuit}
     />
   )
 }

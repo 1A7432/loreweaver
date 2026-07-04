@@ -13,6 +13,7 @@ import {
   type AdminSetModelFrame,
   type AdminUpdateKeyFrame,
   type ClientFrame,
+  type ConnectionStatus,
   type PlayerRole,
   type ServerFrame,
 } from "@loreweaver/protocol"
@@ -32,34 +33,141 @@ export function isIrohTicket(target: string): boolean {
   return !/^wss?:\/\//i.test(target.trim())
 }
 
+// A minimal structural subset of `@number0/iroh`'s real surface — just enough for `dial()`
+// below. Kept loose (not the native module's own classes) so tests can inject a plain-object
+// mock via `loadIroh` without pulling in the native module at all.
+interface IrohRecvStreamLike {
+  read(sizeLimit: number): Promise<number[] | null>
+}
+interface IrohSendStreamLike {
+  writeAll(buf: number[]): Promise<void>
+}
+interface IrohConnectionLike {
+  openBi(): Promise<{ send: IrohSendStreamLike; recv: IrohRecvStreamLike }>
+}
+interface IrohEndpointLike {
+  online(): Promise<void>
+  connect(addr: unknown, alpn: number[]): Promise<IrohConnectionLike>
+  close?(): unknown
+}
+interface IrohEndpointBuilderLike {
+  bind(): Promise<IrohEndpointLike>
+}
+interface IrohModuleLike {
+  Endpoint: { builder(): IrohEndpointBuilderLike }
+  presetN0(builder: IrohEndpointBuilderLike): void
+  EndpointTicket: { fromString(ticket: string): { endpointAddr(): unknown } }
+}
+
+export type LoadIroh = () => Promise<IrohModuleLike>
+
+const defaultLoadIroh: LoadIroh = () => import("@number0/iroh") as unknown as Promise<IrohModuleLike>
+
+export interface IrohClientOptions {
+  // Injected in tests to avoid loading the native `@number0/iroh` module at all; defaults to
+  // the real dynamic import.
+  loadIroh?: LoadIroh
+  reconnect?: boolean
+  reconnectBaseMs?: number
+  reconnectMaxMs?: number
+  setTimeoutFn?: typeof setTimeout
+  clearTimeoutFn?: typeof clearTimeout
+}
+
 /**
  * The p2p transport, behind the same `AppClient` contract as `WsClient`. `@number0/iroh` is a
- * native (napi) module, imported DYNAMICALLY in `connect` — the browser web client never loads
+ * native (napi) module, imported DYNAMICALLY in `dial()` — the browser web client never loads
  * this file, and a WS-only run never pulls iroh into memory. Frames are newline-JSON over one
  * long-lived `openBi` stream, dispatched with the shared `@loreweaver/protocol` validators.
+ *
+ * Reconnect parity with `WsClient` (clients/protocol/src/client.ts): `lastJoin` is re-sent on
+ * every successful (re)dial; an unexpected end of the read loop (not a manual `close()`)
+ * schedules a redial of the same ticket with the same exponential backoff (base 250ms, max
+ * 5000ms); `close()` sets `manualClose` and permanently stops the loop.
  */
 export class IrohClient implements AppClient {
-  private endpoint: unknown
-  private sendStream: { writeAll(buf: number[]): Promise<void> } | undefined
-  private closed = false
+  private endpoint: IrohEndpointLike | undefined
+  private sendStream: IrohSendStreamLike | undefined
+  private manualClose = false
+  private ticket?: string
+  private lastJoin?: { key: string; name?: string }
+  private reconnectAttempts = 0
+  private reconnectTimer?: ReturnType<typeof setTimeout>
+  // Bumped on every `dial()` so a stale readLoop from a superseded connection attempt can
+  // never trigger a duplicate redial once a newer dial has taken over.
+  private generation = 0
   private writeChain: Promise<void> = Promise.resolve()
   private readonly handlers = new Set<(frame: ServerFrame) => void>()
+  private readonly statusHandlers = new Set<(status: ConnectionStatus) => void>()
+  private readonly loadIroh: LoadIroh
+  private readonly reconnect: boolean
+  private readonly reconnectBaseMs: number
+  private readonly reconnectMaxMs: number
+  private readonly setTimeoutFn: typeof setTimeout
+  private readonly clearTimeoutFn: typeof clearTimeout
+
+  constructor(options: IrohClientOptions = {}) {
+    this.loadIroh = options.loadIroh ?? defaultLoadIroh
+    this.reconnect = options.reconnect ?? true
+    this.reconnectBaseMs = options.reconnectBaseMs ?? 250
+    this.reconnectMaxMs = options.reconnectMaxMs ?? 5_000
+    this.setTimeoutFn = options.setTimeoutFn ?? setTimeout
+    this.clearTimeoutFn = options.clearTimeoutFn ?? clearTimeout
+  }
 
   async connect(ticket: string): Promise<void> {
-    const iroh = await import("@number0/iroh")
+    this.ticket = ticket
+    this.manualClose = false
+    this.reconnectAttempts = 0
+    if (this.reconnectTimer) {
+      this.clearTimeoutFn(this.reconnectTimer)
+      this.reconnectTimer = undefined
+    }
+    // A first-time connect failure rejects straight to the caller (the connect screen shows
+    // the error) — it does NOT enter the redial loop; redials only start once a session has
+    // actually been established (see `readLoop`'s unexpected-end handling below).
+    await this.dial(ticket)
+  }
+
+  private async dial(ticket: string): Promise<void> {
+    const myGeneration = ++this.generation
+    this.setStatus("connecting")
+    const iroh = await this.loadIroh()
     const builder = iroh.Endpoint.builder()
     iroh.presetN0(builder)
     const endpoint = await builder.bind()
-    this.endpoint = endpoint
     await endpoint.online()
     const addr = iroh.EndpointTicket.fromString(ticket.trim()).endpointAddr()
     const conn = await this.connectWithRetry(endpoint, addr, toBytes(ALPN))
     const bi = await conn.openBi()
+
+    // A manual close() (or a newer dial superseding this one) raced us while we were still
+    // connecting — don't take over as the live connection; tear down what we just opened.
+    if (this.manualClose || myGeneration !== this.generation) {
+      this.closeEndpoint(endpoint)
+      return
+    }
+
+    // Hand over to the new connection FIRST, then close the one it supersedes. Each dial()
+    // binds a fresh native Endpoint, so on a redial after an unexpected drop the prior endpoint
+    // must be closed or every reconnect over a long, flap-prone session leaks its socket/QUIC
+    // state. Closing only AFTER the handoff means the live stream is never dropped mid-swap.
+    const superseded = this.endpoint
+    this.endpoint = endpoint
     this.sendStream = bi.send
-    void this.readLoop(bi.recv)
+    this.reconnectAttempts = 0
+    if (superseded && superseded !== endpoint) this.closeEndpoint(superseded)
+    this.setStatus("online")
+    if (this.lastJoin) this.join(this.lastJoin.key, this.lastJoin.name)
+    void this.readLoop(bi.recv, myGeneration)
   }
 
-  private async connectWithRetry(endpoint: any, addr: unknown, alpn: number[], tries = 2): Promise<any> {
+  private async connectWithRetry(
+    endpoint: IrohEndpointLike,
+    addr: unknown,
+    alpn: number[],
+    tries = 2,
+  ): Promise<IrohConnectionLike> {
     let lastError: unknown
     for (let attempt = 0; attempt < tries; attempt++) {
       try {
@@ -71,10 +179,10 @@ export class IrohClient implements AppClient {
     throw lastError instanceof Error ? lastError : new Error("Iroh connection failed.")
   }
 
-  private async readLoop(recv: { read(limit: number): Promise<number[] | null> }): Promise<void> {
+  private async readLoop(recv: IrohRecvStreamLike, generation: number): Promise<void> {
     let buffer = new Uint8Array(0)
     try {
-      while (!this.closed) {
+      while (!this.manualClose && generation === this.generation) {
         const chunk = await recv.read(65536)
         if (!chunk || chunk.length === 0) break // EOF / reset
         buffer = concat(buffer, Uint8Array.from(chunk))
@@ -87,6 +195,22 @@ export class IrohClient implements AppClient {
     } catch {
       // stream closed / reset — nothing more to read
     }
+    // The stream ended and it wasn't us calling close(), and no newer dial has already
+    // taken over (see the race guard in `dial()`) — this is an UNEXPECTED drop (server
+    // restart, laptop sleep, network flap): redial the same ticket.
+    if (!this.manualClose && generation === this.generation) this.scheduleRedial()
+  }
+
+  private scheduleRedial(): void {
+    if (this.manualClose || !this.reconnect || !this.ticket) return
+    this.setStatus("reconnecting")
+    const delay = Math.min(this.reconnectMaxMs, this.reconnectBaseMs * 2 ** this.reconnectAttempts)
+    this.reconnectAttempts += 1
+    this.reconnectTimer = this.setTimeoutFn(() => {
+      // A redial attempt itself can fail (still no network) — unlike `connect()`, keep
+      // retrying with the same backoff rather than giving up silently.
+      this.dial(this.ticket!).catch(() => this.scheduleRedial())
+    }, delay)
   }
 
   private dispatch(text: string): void {
@@ -107,10 +231,13 @@ export class IrohClient implements AppClient {
   private sendFrame(frame: ClientFrame): void {
     const line = toBytes(`${JSON.stringify(frame)}\n`)
     // Serialize writes: interleaved writeAll on one QUIC stream would corrupt the framing.
+    // `this.sendStream` is read at write-time (not capture-time), so a write queued just
+    // before a reconnect naturally goes out over the freshest stream once one exists.
     this.writeChain = this.writeChain.then(() => this.sendStream?.writeAll(line)).catch(() => {})
   }
 
   join(key: string, name?: string): void {
+    this.lastJoin = { key, name }
     this.sendFrame(name ? { type: FrameType.Join, key, name } : { type: FrameType.Join, key })
   }
 
@@ -123,10 +250,34 @@ export class IrohClient implements AppClient {
     return () => this.handlers.delete(cb)
   }
 
+  onStatus(cb: (status: ConnectionStatus) => void): () => void {
+    this.statusHandlers.add(cb)
+    return () => this.statusHandlers.delete(cb)
+  }
+
+  private setStatus(status: ConnectionStatus): void {
+    for (const cb of this.statusHandlers) cb(status)
+  }
+
   close(): void {
-    this.closed = true
+    this.manualClose = true
+    this.generation += 1
+    if (this.reconnectTimer) {
+      this.clearTimeoutFn(this.reconnectTimer)
+      this.reconnectTimer = undefined
+    }
+    this.setStatus("offline")
+    this.closeEndpoint(this.endpoint)
+  }
+
+  private closeEndpoint(endpoint: IrohEndpointLike | undefined): void {
     try {
-      ;(this.endpoint as { close?: () => void } | undefined)?.close?.()
+      const result = endpoint?.close?.()
+      // The real `Endpoint.close()` returns a Promise; swallow a rejection so it never
+      // surfaces as an unhandled promise rejection during teardown.
+      if (result && typeof (result as Promise<unknown>).catch === "function") {
+        void (result as Promise<unknown>).catch(() => {})
+      }
     } catch {
       // ignore — already gone
     }

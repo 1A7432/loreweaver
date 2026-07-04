@@ -3,6 +3,7 @@ import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
 import { FrameType, type ServerFrame, type WelcomeFrame } from "@loreweaver/protocol"
 import App, { type AppClient, type AppPrefill } from "./App"
+import type { SavedServer } from "./connectMemory"
 
 // A mock implementing the full AppClient surface: connect/join are recorded so
 // the connect flow can be asserted; push() delivers server frames like the wire.
@@ -68,11 +69,25 @@ const KEEPER_WELCOME: WelcomeFrame = {
   server: "mock",
 }
 
-function renderApp(client: MockClient, options: { prefill?: AppPrefill; onRememberConnect?: (memory: Required<AppPrefill>) => void } = {}) {
-  return testRender(<App client={client} prefill={options.prefill ?? {}} onRememberConnect={options.onRememberConnect} />, {
-    width: 110,
-    height: 34,
-  })
+function renderApp(
+  client: MockClient,
+  options: {
+    prefill?: AppPrefill
+    onRememberConnect?: (memory: Required<AppPrefill>) => void
+    onForgetConnect?: (entry: NonNullable<AppPrefill["servers"]>[number]) => void
+    onQuit?: () => void
+  } = {},
+) {
+  return testRender(
+    <App
+      client={client}
+      prefill={options.prefill ?? {}}
+      onRememberConnect={options.onRememberConnect}
+      onForgetConnect={options.onForgetConnect}
+      onQuit={options.onQuit}
+    />,
+    { width: 110, height: 34 },
+  )
 }
 
 describe("App shell", () => {
@@ -334,6 +349,66 @@ describe("App shell", () => {
     await flush()
     const clicked = await waitForFrame((t) => t.includes("主题"))
     expect(clicked).toContain("主题")
+
+    act(() => renderer.destroy())
+  })
+
+  test("deleting a saved server updates the connect screen live and persists via onForgetConnect", async () => {
+    const client = new MockClient()
+    const servers: SavedServer[] = [
+      { host: "endpoint-aaa", key: "key-a", name: "Home" },
+      { host: "endpoint-bbb", key: "key-b", name: "Away" },
+    ]
+    const forgotten: SavedServer[] = []
+    const { renderer, flush, waitForFrame, mockMouse } = await renderApp(client, {
+      prefill: { servers },
+      onForgetConnect: (entry) => forgotten.push(entry),
+    })
+    await flush()
+
+    let frame = await waitForFrame((t) => t.includes("Home") && t.includes("Away"))
+    const rowY = frame.split("\n").findIndex((line) => line.includes("Home"))
+    const rowX = frame.split("\n")[rowY].indexOf("✕")
+    expect(rowX).toBeGreaterThan(0)
+
+    await act(async () => {
+      await mockMouse.click(rowX, rowY)
+    })
+    await flush()
+
+    // The row disappears from the live UI, "Away" stays, and the delete did NOT also
+    // trigger the row's click-to-fill (the key input would show "key-a" if pickServer
+    // had also fired) or a connect attempt.
+    frame = await waitForFrame((t) => t.includes("Away"))
+    expect(frame).not.toContain("Home")
+    expect(frame).not.toContain("key-a")
+    expect(frame).toContain("Away")
+    expect(client.connectCalls).toEqual([])
+    expect(forgotten).toEqual([servers[0]])
+
+    act(() => renderer.destroy())
+  })
+
+  test("Quit from the main menu tears down the client (and any onQuit callback fires)", async () => {
+    const client = new MockClient()
+    let quitCalls = 0
+    const { renderer, flush, waitForFrame, mockMouse } = await renderApp(client, { onQuit: () => (quitCalls += 1) })
+    await flush()
+    act(() => client.push(PLAYER_WELCOME))
+
+    // The connect screen ALSO has its own "退出"/Quit button (Part D.4), so wait for the
+    // menu specifically first (via its unique "进入游戏" entry) before scanning for the row.
+    const frame = await waitForFrame((t) => t.includes("进入游戏"))
+    const rowY = frame.split("\n").findIndex((line) => line.includes("退出"))
+    expect(rowY).toBeGreaterThan(0)
+
+    await act(async () => {
+      await mockMouse.click(6, rowY)
+    })
+    await flush()
+
+    expect(client.closed).toBeGreaterThan(0)
+    expect(quitCalls).toBe(1)
 
     act(() => renderer.destroy())
   })

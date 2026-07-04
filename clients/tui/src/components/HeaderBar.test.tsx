@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
-import { FrameType, type UsageState, type WelcomeFrame } from "@loreweaver/protocol"
+import { FrameType, type ConnectionStatus, type UsageState, type WelcomeFrame } from "@loreweaver/protocol"
 import { HeaderBar } from "./HeaderBar"
 import { themes } from "../themes"
 
@@ -19,6 +19,7 @@ interface RenderOverrides {
   scene?: { name: string; focus?: string }
   clock?: { time: string; round?: number }
   online?: number
+  connectionStatus?: ConnectionStatus
 }
 
 function renderHeader(overrides: RenderOverrides = {}) {
@@ -31,6 +32,7 @@ function renderHeader(overrides: RenderOverrides = {}) {
       scene={overrides.scene}
       clock={overrides.clock}
       usage={overrides.usage}
+      connectionStatus={overrides.connectionStatus}
     />,
     { width: 100, height: 8 },
   )
@@ -118,5 +120,35 @@ describe("HeaderBar", () => {
     expect(frame).toContain("--:--")
 
     act(() => renderer.destroy())
+  })
+
+  test("(f) connectionStatus renders a compact glyph indicator; nothing when absent", async () => {
+    const online = await renderHeader({ connectionStatus: "online" })
+    await online.flush()
+    expect(online.captureCharFrame()).toContain("🟢")
+    act(() => online.renderer.destroy())
+
+    const reconnecting = await renderHeader({ connectionStatus: "reconnecting" })
+    await reconnecting.flush()
+    expect(reconnecting.captureCharFrame()).toContain("🟡")
+    act(() => reconnecting.renderer.destroy())
+
+    const connecting = await renderHeader({ connectionStatus: "connecting" })
+    await connecting.flush()
+    expect(connecting.captureCharFrame()).toContain("🟡")
+    act(() => connecting.renderer.destroy())
+
+    const offline = await renderHeader({ connectionStatus: "offline" })
+    await offline.flush()
+    expect(offline.captureCharFrame()).toContain("🔴")
+    act(() => offline.renderer.destroy())
+
+    const none = await renderHeader()
+    await none.flush()
+    const frame = none.captureCharFrame()
+    expect(frame).not.toContain("🟢")
+    expect(frame).not.toContain("🟡")
+    expect(frame).not.toContain("🔴")
+    act(() => none.renderer.destroy())
   })
 })

@@ -714,4 +714,17 @@ describe("GameView", () => {
       act(() => renderer.destroy())
     })
   })
+
+  test("connectionStatus prop threads through to the HeaderBar's compact indicator", async () => {
+    const client = new MockClient()
+    const { renderer, flush, captureCharFrame } = await testRender(
+      <GameView client={client} welcome={WELCOME} theme={themes.lamplight} themeName="lamplight" connectionStatus="reconnecting" />,
+      { width: 110, height: 34 },
+    )
+    await flush()
+
+    expect(captureCharFrame()).toContain("🟡")
+
+    act(() => renderer.destroy())
+  })
 })

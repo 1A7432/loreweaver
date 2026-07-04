@@ -23,6 +23,9 @@ export interface MainMenuProps {
   onKeeperModel: () => void
   onKeeperRules: () => void
   onKeeperSkills: () => void
+  // Optional so a caller that doesn't wire teardown yet just gets no Quit row (rather than a
+  // dead button); App.tsx always supplies it via `handleQuit`.
+  onQuit?: () => void
 }
 
 interface MenuItem {
@@ -49,6 +52,7 @@ export function MainMenu({
   onKeeperModel,
   onKeeperRules,
   onKeeperSkills,
+  onQuit,
 }: MainMenuProps) {
   const [selected, setSelected] = useState(0)
   const isKeeper = welcome.you.role === "keeper"
@@ -68,6 +72,10 @@ export function MainMenu({
       { label: tt(locale, "menu.model"), keeper: true, run: () => onKeeperModel() },
     )
   }
+  // Placed last and visually separated (a blank spacer row, below) — not for someone new to
+  // the app to hit by accident while arrowing through the game actions.
+  const quitIndex = onQuit ? items.length : -1
+  if (onQuit) items.push({ label: tt(locale, "menu.quit"), keeper: false, run: () => onQuit() })
 
   const clamp = (index: number) => Math.max(0, Math.min(items.length - 1, index))
   const activate = (index: number) => {
@@ -113,6 +121,7 @@ export function MainMenu({
                   <text fg={theme.fumble}>{tt(locale, "menu.keeperSection")}</text>
                 </box>
               ) : null}
+              {index === quitIndex ? <box height={1} /> : null}
               <box
                 height={1}
                 backgroundColor={selected === index ? theme.accent : theme.bg}

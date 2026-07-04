@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import { loadConnectMemory, rememberServer, saveConnectMemory } from "./connectMemory"
+import { forgetServer, loadConnectMemory, rememberServer, saveConnectMemory } from "./connectMemory"
 
 describe("connectMemory", () => {
   test("missing or malformed memory returns empty defaults", async () => {
@@ -57,5 +57,30 @@ describe("connectMemory", () => {
     for (let i = 0; i < 12; i++) many = rememberServer(many, { host: `h${i}`, key: `k${i}` })
     expect(many?.length).toBe(8)
     expect(many?.[0]).toEqual({ host: "h11", key: "k11" })
+  })
+
+  test("forgetServer removes only the matching host+key entry, leaving the rest untouched", () => {
+    const servers = [
+      { host: "a", key: "1", name: "A" },
+      { host: "b", key: "2", name: "B" },
+      { host: "a", key: "3", name: "A-other-key" }, // same host, different key -> kept
+    ]
+
+    expect(forgetServer(servers, { host: "a", key: "1" })).toEqual([
+      { host: "b", key: "2", name: "B" },
+      { host: "a", key: "3", name: "A-other-key" },
+    ])
+    // Pure: the input array is untouched.
+    expect(servers).toHaveLength(3)
+  })
+
+  test("forgetServer on a non-match is a no-op (same contents)", () => {
+    const servers = [{ host: "a", key: "1", name: "A" }]
+    expect(forgetServer(servers, { host: "z", key: "9" })).toEqual(servers)
+  })
+
+  test("forgetServer on undefined/empty servers returns an empty list", () => {
+    expect(forgetServer(undefined, { host: "a", key: "1" })).toEqual([])
+    expect(forgetServer([], { host: "a", key: "1" })).toEqual([])
   })
 })

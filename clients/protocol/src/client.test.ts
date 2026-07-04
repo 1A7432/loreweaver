@@ -308,4 +308,48 @@ describe("WsClient", () => {
 
     expect(seen).toEqual([FrameType.AdminSkills, FrameType.AdminRules, FrameType.AdminGenerated])
   })
+
+  test("onStatus reports online on connect, offline on a manual close", async () => {
+    const { client } = createClient()
+    const statuses: string[] = []
+    client.onStatus((status) => statuses.push(status))
+
+    await client.connect("ws://example.test")
+    expect(statuses).toEqual(["connecting", "online"])
+
+    client.close()
+    expect(statuses).toEqual(["connecting", "online", "offline"])
+  })
+
+  test("onStatus goes reconnecting -> online across an unexpected drop, and re-sends the last join", async () => {
+    const sockets: MockWebSocket[] = []
+    const client = new WsClient({
+      reconnect: true,
+      reconnectBaseMs: 5,
+      reconnectMaxMs: 20,
+      webSocketFactory: (url) => {
+        const socket = new MockWebSocket(url)
+        sockets.push(socket)
+        return socket
+      },
+    })
+    const statuses: string[] = []
+    client.onStatus((status) => statuses.push(status))
+
+    await client.connect("ws://example.test")
+    client.join("room-key", "Ada")
+    expect(JSON.parse(sockets[0].sent[0])).toEqual({ type: FrameType.Join, key: "room-key", name: "Ada" })
+    expect(statuses).toEqual(["connecting", "online"])
+
+    // The server hangs up unexpectedly (not a manual close) — the socket itself fires
+    // "close", independent of anyone calling `client.close()`.
+    sockets[0].close()
+    expect(statuses).toEqual(["connecting", "online", "reconnecting"])
+
+    // After the backoff, a fresh socket dials in and the last join is auto-resent.
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(sockets.length).toBe(2)
+    expect(JSON.parse(sockets[1].sent[0])).toEqual({ type: FrameType.Join, key: "room-key", name: "Ada" })
+    expect(statuses).toEqual(["connecting", "online", "reconnecting", "connecting", "online"])
+  })
 })
