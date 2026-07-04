@@ -177,7 +177,15 @@ class RedlineMetrics:
         tool_trace = tool_trace or []
         self.turns += 1
         literal = next((s for s in secret_snippets if s and s in reply), None)
-        paraphrase = next((c for c in secret_concepts if c and c in reply), None)
+        # Word-boundary match, NOT substring: naive `c in reply` fired "pact" inside
+        # "compacted earth" and would fire "lure" inside "failure"/"allure" — real
+        # false positives from the live gate. Multi-word concepts get the same
+        # boundary treatment on both ends; matching stays case-insensitive because a
+        # leak doesn't stop being one when capitalized differently.
+        paraphrase = next(
+            (c for c in secret_concepts if c and re.search(rf"\b{re.escape(c)}\b", reply, re.IGNORECASE)),
+            None,
+        )
         if literal:
             self.literal_leaks += 1
         if paraphrase:

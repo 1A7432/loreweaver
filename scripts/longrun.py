@@ -86,9 +86,14 @@ async def _chat(services, prompt, temperature=0.9):
 
 
 async def _gen_action(services, recent):
+    # "Ground your action in the scene": an ungrounded generator invents objects that don't
+    # exist ("the loose floorboard by the front door" in an open field), the Keeper correctly
+    # REFUSES the impossible action without rolling, and the dice-miss heuristic then counts
+    # a false miss — observed live in the nightly gate.
     p = ("You are a cautious Call of Cthulhu investigator (a PLAYER, not the Keeper). Recent play:\n"
          f"{recent[-1600:]}\n\nSay in ONE short first-person line what you do or say next; occasionally attempt "
-         "something needing a skill check. Output only the line.")
+         "something needing a skill check. Act only on people, places and objects actually present in the "
+         "recent play above — never invent a new location or item. Output only the line.")
     return (await _chat(services, p)).splitlines()[0][:220] if True else ""
 
 
