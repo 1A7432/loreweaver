@@ -1,25 +1,64 @@
 // One-click "host locally": detect this machine's environment and bring a loreweaver server up
-// from whatever state it's in — locate a checkout, else fetch the server code (a source tarball
-// by default, so a FRESH machine with no git works; git clone is only a fallback); ensure `uv`
-// (which installs Python + deps for us, so a machine with no Python still works — its installer
-// is fetched with Bun's own fetch(), so no curl is needed either); `uv sync`; then run the
-// server. EVERY step streams its real terminal output through `onLog` so the TUI can show the
+// from whatever state it's in, preferring the fastest path available:
+//   1. a dev checkout on disk (found by walking up for app.py)
+//   2. a prebuilt server binary fetched on an earlier run (~/.loreweaver/server-bin)
+//   3. server SOURCE fetched on an earlier run (~/.loreweaver/server)
+//   4. download a prebuilt server binary for this OS/arch from the GitHub release (or its
+//      mirror) — no Python/uv/git needed at all when one exists for this platform
+//   5. fetch the server SOURCE (a tarball by default, so a FRESH machine with no git works;
+//      git clone is only a fallback), then `uv` (which installs Python + deps for us — its
+//      installer is fetched with Bun's own fetch(), so a machine with no Python/curl still
+//      works) + `uv sync`
+// When a binary is used, it is spawned directly — no uv involved. If that spawn fails or the
+// server never becomes ready, we fall through to the source path ONCE (never loop back to the
+// binary). EVERY step streams its real terminal output through `onLog` so the TUI can show the
 // whole bring-up, and the keeper key it auto-mints is returned so the shell can log straight in.
 // The only assumed tools are the OS's own: `tar` (bundled on Windows 10+, macOS, and every
-// mainstream Linux) and, on POSIX, `sh`.
+// mainstream Linux — bsdtar handles the Windows .zip release asset too) and, on POSIX, `sh`.
 
 import { existsSync } from "node:fs"
-import { mkdir, rename, rm } from "node:fs/promises"
+import { chmod, mkdir, rename, rm } from "node:fs/promises"
 import { delimiter, dirname, join } from "node:path"
 
 const HOME = process.env.HOME ?? process.env.USERPROFILE ?? "."
 const SERVER_DIR = `${HOME}/.loreweaver/server`
+const BINARY_DIR = `${HOME}/.loreweaver/server-bin`
 const LOCAL_KEYS = `${HOME}/.loreweaver/local-keys.toml`
 const LOCAL_SIDECAR = `${HOME}/.loreweaver/keeper-key.txt`
 const REPO = "https://github.com/1A7432/loreweaver"
 const TARBALL = `${REPO}/archive/refs/heads/main.tar.gz`
+const RELEASE_MIRROR = "https://1a7432.site/trpg"
 const READY_TIMEOUT_MS = 60_000 // Iroh waits for a relay handshake, so allow longer than a local socket
 const TICKET_RE = /(endpoint[a-z0-9]{20,})/ // the base32 ticket, printed once the endpoint is online (locale-independent)
+
+// The packaged server archive's top-level folder + executable name (see scripts/package_server.py).
+const BINARY_EXE_NAME = process.platform === "win32" ? "loreweaver-server.exe" : "loreweaver-server"
+function binaryExePath(dir: string): string {
+  return join(dir, "loreweaver-server", BINARY_EXE_NAME)
+}
+
+// Maps this machine's (platform, arch) to a released server asset name, or undefined when no
+// prebuilt binary is published for it (the caller then skips straight to the source tier).
+export function assetNameFor(platform: string, arch: string): string | undefined {
+  switch (`${platform}/${arch}`) {
+    case "darwin/arm64":
+      return "loreweaver-server-macos-arm64.tar.gz"
+    case "linux/x64":
+      return "loreweaver-server-linux-x64.tar.gz"
+    case "linux/arm64":
+      return "loreweaver-server-linux-arm64.tar.gz"
+    case "win32/x64":
+      return "loreweaver-server-windows-x64.zip"
+    default:
+      return undefined
+  }
+}
+
+// GitHub release first (canonical, CDN-backed); the site mirror second, for networks that block
+// GitHub. Same rolling-'latest' release the CI packaging job publishes to.
+export function binaryUrlsFor(asset: string): string[] {
+  return [`${REPO}/releases/download/latest/${asset}`, `${RELEASE_MIRROR}/${asset}`]
+}
 
 export type LogKind = "step" | "out" | "err" | "ok" | "fail"
 export type OnLog = (text: string, kind: LogKind) => void
@@ -113,6 +152,59 @@ async function fetchServerSource(onLog: OnLog, signal?: AbortSignal): Promise<st
   return SERVER_DIR
 }
 
+// Download a prebuilt server binary for this OS/arch (see the pinned contract in
+// scripts/package_server.py) and unpack it with the system `tar`. Same staging + atomic-rename
+// pattern as fetchServerSource. Returns undefined (not an error) when no binary is published for
+// this platform, so the caller falls through to the source tier without treating it as a failure.
+async function fetchServerBinary(onLog: OnLog, signal?: AbortSignal): Promise<string | undefined> {
+  const asset = assetNameFor(process.platform, process.arch)
+  if (!asset) {
+    onLog(`No prebuilt server binary for ${process.platform}/${process.arch} — falling back to source`, "step")
+    return undefined
+  }
+  onLog(`Downloading the prebuilt server (${asset})…`, "step")
+  let response: Response | undefined
+  let lastError = "no mirrors reachable"
+  for (const url of binaryUrlsFor(asset)) {
+    try {
+      const candidate = await fetch(url, { signal })
+      if (candidate.ok) {
+        response = candidate
+        break
+      }
+      lastError = `HTTP ${candidate.status} from ${url}`
+    } catch (error) {
+      if (signal?.aborted) throw error instanceof Error ? error : new Error("cancelled")
+      lastError = error instanceof Error ? error.message : String(error)
+    }
+  }
+  if (!response) throw new Error(`binary download failed (${lastError})`)
+
+  const archive = join(HOME, ".loreweaver", asset)
+  const staging = `${BINARY_DIR}.staging`
+  await mkdir(dirname(archive), { recursive: true })
+  await Bun.write(archive, response)
+  await rm(staging, { recursive: true, force: true })
+  await mkdir(staging, { recursive: true })
+  // No --strip-components here: unlike the source tarball, the release asset's top-level
+  // `loreweaver-server/` folder IS the layout we want at BINARY_DIR.
+  if ((await run(["tar", "-xf", archive, "-C", staging], undefined, onLog, signal)) !== 0) {
+    throw new Error("extracting the server binary failed")
+  }
+  await rm(archive, { force: true })
+  await rm(BINARY_DIR, { recursive: true, force: true })
+  await rename(staging, BINARY_DIR)
+  const exe = binaryExePath(BINARY_DIR)
+  if (process.platform !== "win32") {
+    try {
+      await chmod(exe, 0o755)
+    } catch {
+      // best-effort — if this fails the spawn below will fail loudly anyway
+    }
+  }
+  return exe
+}
+
 async function ensureServerDir(onLog: OnLog, signal?: AbortSignal): Promise<string> {
   const checkout = findCheckout()
   if (checkout) {
@@ -141,6 +233,42 @@ async function ensureServerDir(onLog: OnLog, signal?: AbortSignal): Promise<stri
     }
     return SERVER_DIR
   }
+}
+
+type ServerLocation = { kind: "source"; dir: string } | { kind: "binary"; exe: string }
+
+// The full acquisition chain, in priority order: dev checkout > binary fetched earlier > source
+// fetched earlier > download a binary > (fall back to) fetch source. Only the last step can fail
+// outright — everything before it is "use what's already here", and the binary-download step
+// degrades to the source tier instead of throwing when unsupported or unreachable.
+async function resolveServer(onLog: OnLog, signal?: AbortSignal): Promise<ServerLocation> {
+  const checkout = findCheckout()
+  if (checkout) {
+    onLog(`Found a checkout at ${checkout}`, "ok")
+    return { kind: "source", dir: checkout }
+  }
+  const existingExe = binaryExePath(BINARY_DIR)
+  if (existsSync(existingExe)) {
+    onLog(`Using the prebuilt server fetched earlier at ${existingExe}`, "ok")
+    return { kind: "binary", exe: existingExe }
+  }
+  if (existsSync(join(SERVER_DIR, "app.py"))) {
+    onLog(`Using the server fetched earlier at ${SERVER_DIR}`, "ok")
+    return { kind: "source", dir: SERVER_DIR }
+  }
+  onLog("No server on this machine — fetching it…", "step")
+  try {
+    const exe = await fetchServerBinary(onLog, signal)
+    if (exe) {
+      onLog("Prebuilt server downloaded", "ok")
+      return { kind: "binary", exe }
+    }
+  } catch (error) {
+    if (signal?.aborted) throw error instanceof Error ? error : new Error("cancelled")
+    const detail = error instanceof Error ? error.message : String(error)
+    onLog(`Prebuilt binary download didn't work (${detail}) — falling back to source…`, "err")
+  }
+  return { kind: "source", dir: await ensureServerDir(onLog, signal) }
 }
 
 async function ensureUv(onLog: OnLog, signal?: AbortSignal): Promise<void> {
@@ -227,27 +355,9 @@ async function waitReady(
   }
 }
 
-export async function bringUpServer(onLog: OnLog, signal?: AbortSignal): Promise<HostHandle> {
-  const bailIfAborted = () => {
-    if (signal?.aborted) throw new Error("cancelled")
-  }
-  bailIfAborted()
-  onLog(`OS: ${process.platform} / ${process.arch}`, "step")
-  const serverDir = await ensureServerDir(onLog, signal)
-  bailIfAborted()
-  await ensureUv(onLog, signal)
-  bailIfAborted()
-
-  onLog("Installing Python + dependencies (uv sync) — this can take a minute the first time…", "step")
-  if ((await run(["uv", "sync"], serverDir, onLog, signal)) !== 0) throw new Error("uv sync failed")
-  bailIfAborted()
-  onLog("Dependencies ready", "ok")
-
-  onLog("Starting the local p2p server (Iroh) — waiting for a relay, ~10s…", "step")
-  const proc = Bun.spawn(
-    ["uv", "run", "python", "-m", "app", "--serve", "--keys", LOCAL_KEYS],
-    { cwd: serverDir, stdout: "pipe", stderr: "pipe", env: process.env as Record<string, string> },
-  )
+// Shared tail for both run modes: spawn is already done by the caller, this just wires up the
+// abort-kills-the-child plumbing, streams stdout, and waits for the readiness ticket.
+async function runProcAndWait(proc: Bun.Subprocess, onLog: OnLog, signal?: AbortSignal): Promise<HostHandle> {
   const stop = () => {
     try {
       proc.kill()
@@ -267,5 +377,60 @@ export async function bringUpServer(onLog: OnLog, signal?: AbortSignal): Promise
     throw error
   } finally {
     signal?.removeEventListener("abort", stop)
+  }
+}
+
+// Today's path: ensure uv, `uv sync` the checkout/fetched source, then run it from Python.
+async function runSource(serverDir: string, onLog: OnLog, signal?: AbortSignal): Promise<HostHandle> {
+  await ensureUv(onLog, signal)
+  if (signal?.aborted) throw new Error("cancelled")
+
+  onLog("Installing Python + dependencies (uv sync) — this can take a minute the first time…", "step")
+  if ((await run(["uv", "sync"], serverDir, onLog, signal)) !== 0) throw new Error("uv sync failed")
+  if (signal?.aborted) throw new Error("cancelled")
+  onLog("Dependencies ready", "ok")
+
+  onLog("Starting the local p2p server (Iroh) — waiting for a relay, ~10s…", "step")
+  const proc = Bun.spawn(
+    ["uv", "run", "python", "-m", "app", "--serve", "--keys", LOCAL_KEYS],
+    { cwd: serverDir, stdout: "pipe", stderr: "pipe", env: process.env as Record<string, string> },
+  )
+  return runProcAndWait(proc, onLog, signal)
+}
+
+// The binary path: no uv, no Python interpreter to find — just run the packaged executable
+// directly. It prints the same readiness banner (ticket + sidecar key) as `python -m app --serve`.
+async function runBinary(exe: string, onLog: OnLog, signal?: AbortSignal): Promise<HostHandle> {
+  onLog("Starting the local p2p server (prebuilt binary) — waiting for a relay, ~10s…", "step")
+  const proc = Bun.spawn([exe, "--serve", "--keys", LOCAL_KEYS], {
+    cwd: dirname(exe),
+    stdout: "pipe",
+    stderr: "pipe",
+    env: process.env as Record<string, string>,
+  })
+  return runProcAndWait(proc, onLog, signal)
+}
+
+export async function bringUpServer(onLog: OnLog, signal?: AbortSignal): Promise<HostHandle> {
+  const bailIfAborted = () => {
+    if (signal?.aborted) throw new Error("cancelled")
+  }
+  bailIfAborted()
+  onLog(`OS: ${process.platform} / ${process.arch}`, "step")
+  const location = await resolveServer(onLog, signal)
+  bailIfAborted()
+
+  if (location.kind === "source") return runSource(location.dir, onLog, signal)
+
+  try {
+    return await runBinary(location.exe, onLog, signal)
+  } catch (error) {
+    // Never loop back to the binary: one fallback to the source tier, then give up for real.
+    if (signal?.aborted) throw error instanceof Error ? error : new Error("cancelled")
+    const detail = error instanceof Error ? error.message : String(error)
+    onLog(`Prebuilt server didn't start (${detail}) — falling back to source…`, "err")
+    const serverDir = await ensureServerDir(onLog, signal)
+    bailIfAborted()
+    return runSource(serverDir, onLog, signal)
   }
 }

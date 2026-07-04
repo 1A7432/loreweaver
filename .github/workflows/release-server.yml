@@ -1,0 +1,125 @@
+name: release-server
+# Builds + publishes self-contained, per-platform SERVER bundles (PyInstaller onedir via
+# scripts/package_server.py) so a target machine needs no Python/uv/git at all, and so the TUI's
+# "Host locally" flow (clients/tui/src/hostLocal.ts) can download one instead of building from
+# source. Mirrors deploy-client.yml's conventions: rolling 'latest' GitHub Release + scp mirror,
+# same secrets, same target path.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - core/**
+      - infra/**
+      - agent/**
+      - gateway/**
+      - net/**
+      - app.py
+      - scripts/package_server.py
+      - loreweaver-server.spec
+      - pyproject.toml
+      - locales/**
+      - rulepacks/**
+      - skills/**
+      - .github/workflows/release-server.yml
+
+concurrency:
+  group: release-server
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (${{ matrix.asset }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: linux-x64
+            file: dist/loreweaver-server-linux-x64.tar.gz
+          - os: ubuntu-24.04-arm
+            asset: linux-arm64
+            file: dist/loreweaver-server-linux-arm64.tar.gz
+          - os: macos-14
+            asset: macos-arm64
+            file: dist/loreweaver-server-macos-arm64.tar.gz
+          - os: windows-latest
+            asset: windows-x64
+            file: dist/loreweaver-server-windows-x64.zip
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      # Pinned build contract (scripts/package_server.py's own docstring): this exact two-step
+      # sequence produces `dist/<asset>` for whatever platform the runner is.
+      - name: uv sync (package + provider extras)
+        run: uv sync --extra package --extra anthropic --extra gemini
+      - name: Build the server bundle
+        run: uv run python scripts/package_server.py --skip-serve-smoke
+
+      - name: Assert the expected asset was produced
+        shell: bash
+        run: test -f "${{ matrix.file }}" || { echo "::error::expected asset ${{ matrix.file }} was not produced"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: loreweaver-server-${{ matrix.asset }}
+          path: ${{ matrix.file }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish (rolling 'latest')
+    needs: build
+    # No `if:` needed for all-or-nothing: `needs: build` already makes this job SKIP (not just
+    # fail) when any matrix leg failed -- fail-fast is off so every leg still runs and reports,
+    # but a partial platform set is never published (it would strand users on whichever OS/arch
+    # got left out, e.g. "Host locally" download failing on a fresh Windows/arm64 machine only).
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create/update the rolling 'latest' GitHub Release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifacts into dist/
+        run: |
+          mkdir -p dist
+          find artifacts -type f -exec cp {} dist/ \;
+          ls -la dist/
+
+      - name: Publish to GitHub Release (rolling 'latest')
+        # The public, canonical distribution -- hostLocal.ts's binary download defaults here.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          R="${{ github.repository }}"
+          if gh release view latest --repo "$R" >/dev/null 2>&1; then
+            gh release upload latest dist/loreweaver-server-* --repo "$R" --clobber
+          else
+            gh release create latest dist/loreweaver-server-* \
+              --repo "$R" --title "Loreweaver server (rolling latest)" \
+              --notes "Rolling self-contained server build from main -- no Python/uv needed." --latest
+          fi
+
+      - name: Set up SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.LW_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          host="${{ secrets.LW_SSH_TARGET }}"; host="${host##*@}"
+          ssh-keyscan -H "$host" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Publish bundles to the mirror
+        # ubuntu-latest no longer ships rsync, so use scp (same as deploy-client.yml).
+        run: |
+          T="${{ secrets.LW_SSH_TARGET }}"
+          scp dist/loreweaver-server-* "$T:/var/www/1a7432.site/trpg/"
+          ssh "$T" "chmod -R a+rX /var/www/1a7432.site/trpg"
+          echo "published → /trpg/loreweaver-server-*"
