@@ -52,10 +52,10 @@ jobs:
       # [tool.setuptools_scm]) derives the version from `git describe` — the default
       # depth=1 checkout has no tags at all, so every build here would silently report
       # the fallback version instead of the real git-derived one.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
           enable-cache: true
@@ -71,7 +71,7 @@ jobs:
         shell: bash
         run: test -f "${{ matrix.file }}" || { echo "::error::expected asset ${{ matrix.file }} was not produced"; exit 1; }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: loreweaver-server-${{ matrix.asset }}
           path: ${{ matrix.file }}
@@ -88,9 +88,9 @@ jobs:
     permissions:
       contents: write # create/update the rolling 'latest' GitHub Release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
