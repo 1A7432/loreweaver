@@ -69,10 +69,16 @@ from scripts.playtest import (  # noqa: E402
 
 CHAT_KEY = "longrun:campaign"
 # (anchor id, the player line that establishes it, the phrase the KP should still recall)
+# Every anchor is a PURE SPEECH ACT with no scene-object premise: an earlier anchor asserted
+# a floorboard/front door that didn't exist in the scene, a good Keeper rightly refused the
+# impossible action, the anchor never got established — and the later memory probe then
+# failed through no fault of the KP's memory (observed live in the nightly gate). Words
+# spoken aloud can always be said, wherever the party stands, and are unmistakably
+# checkable-free (no dice-lexicon verbs), so they can't trip the miss heuristic either.
 ANCHORS = [
-    ("oak", "Before we go in, I carve the initials K.V. deep into the third oak by the gate. Remember that mark.", "K.V."),
-    ("key", "I hide the brass key under the loose floorboard just inside the front door, and tell everyone.", "floorboard"),
-    ("dog", "I name the scruffy stray dog that keeps following us 'Boomer'.", "Boomer"),
+    ("code word", "I say aloud so everyone remembers: our group's code word is 'K.V.' — answer with it or you're not one of us.", "K.V."),
+    ("signal", "Attention everyone — if I shout the word 'floorboard', that means drop everything and run. Repeat it back to me.", "floorboard"),
+    ("nickname", "From now on I'm calling this expedition of ours 'Boomer'. That's official.", "Boomer"),
     ("vow", "I swear aloud, so all can hear: I will never enter the cellar alone.", "cellar"),
 ]
 

@@ -332,7 +332,9 @@ async def _gen_player_action(services, archetype_desc: str, name: str, recent: s
         "check', or 'roll SAN'), reply with ONLY the exact dice command: '.ra <skill>' for a skill check, "
         "'.sc 1/1d6' for a sanity check, or '.r <expr>' for a raw roll (use the skill the Keeper named). "
         "Otherwise, say in ONE short first-person line what your character does or says next (be concrete and in "
-        "character; you may attempt something that warrants a check). Output only the single line or command."
+        "character). Roughly every other turn, ATTEMPT something that plausibly warrants a skill check — search, "
+        "climb, sneak, persuade, listen at a door — so checks actually happen; act only on people, places and "
+        "objects present in the recent play, never inventing new ones. Output only the single line or command."
     )
     try:
         r = await services.llm.chat([{"role": "user", "content": prompt}], temperature=0.9)
