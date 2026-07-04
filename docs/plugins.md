@@ -3,9 +3,11 @@
 > Status: **design** (2026-07-04). Layer A (rule-system management) has **landed**
 > (`core/rulepacks.py` is a discovery-based, data-driven loader; coc7/dnd5e migrated
 > behavior-identical). Layer B.1 (KP skills — SKILL.md loader, prompt binding,
-> per-room enable, mature-mode content gate) has **landed**; B.2 (allowed-tools
-> enforcement + the romance skill) follows. Layer C (code plugins) is deferred.
-> This document is the contract contributors build against.
+> per-room enable, mature-mode content gate) has **landed**. Layer B.2
+> (`allowed-tools` toolset-gating enforcement + the `romance-relationships`
+> skill + coc7 intimate aliases) has **landed**; B.3 (the generator tools)
+> follows. Layer C (code plugins) is deferred. This document is the contract
+> contributors build against.
 
 Loreweaver is a self-hosted, world/story-first AI Keeper — not a persona-chat
 frontend. Its long-term leverage is being a **platform the community extends**,
@@ -215,8 +217,19 @@ Until Layer C ships, code contributions go through normal in-tree PRs.
 2. **Layer B.1 — KP skills** — **landed**: `SKILL.md` loader (`core/skills.py`),
    prompt-section binding (`agent/prompt_builder.py`), per-room enable (`.skill`
    command), and the mature/explicit content gate that lifts the output censor;
-   `mature-mode` shipped as the first built-in skill. **B.2 next**: `allowed-tools`
-   toolset enforcement + the `romance-relationships` skill.
-3. **Content-pack formalization** — expose the existing ST card/lorebook import
+   `mature-mode` shipped as the first built-in skill.
+3. **Layer B.2 — `allowed-tools` enforcement** — **landed**: a `gated: bool`
+   marker on `@tool` (independent of `keeper_only`), additive gating in
+   `agent.tools.Toolset` (`schemas(unlocked)`/`dispatch(..., unlocked)` expose
+   and allow a gated tool only when its name is in the room's unlocked set),
+   and `core.skills.unlocked_tools_for` unioning enabled skills' `allowed-tools`
+   for `agent.loop.run_kp_turn` to pass in. No tool is gated yet (B.3's
+   generators will be the first), so this is inert today by construction.
+   `romance-relationships` shipped as the second built-in skill (prompt-only,
+   `allowed-tools: []`), backed by coc7 intimate-vocabulary aliases (魅惑/媚惑/
+   勾引/风情 → 取悦, 调情/撩拨 → 话术, 洞察情感/察言观色/共情/同理心 → 心理学) —
+   aliases only, no new default skills added to the sheet. **B.3 next**: the
+   generator tools (the first gated tools).
+4. **Content-pack formalization** — expose the existing ST card/lorebook import
    under the unified discovery/manifest.
-4. **Layer C — code plugins** — deferred; entry points + trust model.
+5. **Layer C — code plugins** — deferred; entry points + trust model.

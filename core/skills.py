@@ -13,10 +13,18 @@ enabled skill's body into the KP system prompt is ``agent.prompt_builder``'s
 job; the content-rating censor gate is ``gateway.ops.room_content_unfiltered``
 + ``gateway.turn``. Nothing here is ever ``eval``/``exec``-ed: the frontmatter
 is parsed with ``yaml.safe_load`` only, and the Markdown body is opaque text.
+
+``unlocked_tools_for`` (Layer B.2 -- ``allowed-tools`` enforcement, see
+``docs/plugins.md`` "Layer B") is the one exception to "no store imports": it
+takes a duck-typed `store` parameter (shaped like ``infra.store.Store`` --
+an async ``get(store_key=...)``) rather than importing ``infra.store``, so
+this module still imports nothing from ``infra``/``agent``/``gateway`` and
+stays below both in the layering; callers in either layer can use it directly.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -124,3 +132,36 @@ def load_skill(skill_id: str) -> Skill | None:
     resolves to a discoverable skill, e.g. after its directory was removed).
     """
     return _discover_registry().get(skill_id)
+
+
+async def unlocked_tools_for(store: Any, chat_key: str) -> set[str]:
+    """The union of ``allowed_tools`` across every KP skill enabled for `chat_key`'s room.
+
+    This is Layer B.2's toolset-gating input (see the module docstring and
+    ``docs/plugins.md`` "Layer B"): `agent.loop.run_kp_turn` passes the result
+    to ``Toolset.schemas``/``Toolset.dispatch`` as the room's `unlocked` set of
+    otherwise-gated tool names.
+
+    Reads the room's enabled-skill ids off `store` the same way
+    ``gateway.ops.get_enabled_skills``/``agent.prompt_builder`` do (the
+    ``skills_enabled.{chat_key}`` flag, tolerating a missing/corrupt value as
+    the empty default rather than raising). An id that no longer resolves to a
+    discoverable skill (``load_skill`` returns ``None``) contributes nothing --
+    same as everywhere else this flag is read.
+    """
+    raw = await store.get(store_key=f"skills_enabled.{chat_key}")
+    if not raw:
+        return set()
+    try:
+        skill_ids = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return set()
+    if not isinstance(skill_ids, list):
+        return set()
+
+    unlocked: set[str] = set()
+    for skill_id in skill_ids:
+        skill = load_skill(str(skill_id))
+        if skill is not None:
+            unlocked.update(skill.allowed_tools)
+    return unlocked

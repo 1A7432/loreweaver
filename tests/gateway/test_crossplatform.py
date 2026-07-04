@@ -424,9 +424,14 @@ async def test_normal_command_reply_still_broadcasts_to_every_room_member() -> N
 
 
 class _BoomToolset:
-    """A toolset whose only tool always raises — stands in for an adversarial turn."""
+    """A toolset whose only tool always raises — stands in for an adversarial turn.
 
-    def schemas(self) -> list[dict]:
+    Mirrors `agent.tools.Toolset`'s duck-typed interface, including the Layer
+    B.2 `unlocked` parameter `agent.loop.run_kp_turn` now passes to both
+    `schemas()` and `dispatch()` (unused here — this fixture has no gated tools).
+    """
+
+    def schemas(self, unlocked: set[str] | None = None) -> list[dict]:
         return [
             {
                 "type": "function",
@@ -437,7 +442,7 @@ class _BoomToolset:
     def is_keeper_only(self, name: str) -> bool:
         return False
 
-    async def dispatch(self, name, ctx, args) -> str:
+    async def dispatch(self, name, ctx, args, unlocked: set[str] | None = None) -> str:
         raise RuntimeError("tool blew up on adversarial args")
 
 

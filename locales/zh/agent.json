@@ -1,4 +1,5 @@
 {
   "agent.tools.unknown_tool": "未知工具：{name}",
-  "agent.tools.bad_arguments": "工具 {name} 参数无效：{error}"
+  "agent.tools.bad_arguments": "工具 {name} 参数无效：{error}",
+  "agent.tools.tool_not_available": "工具 {name} 在本房间不可用。"
 }

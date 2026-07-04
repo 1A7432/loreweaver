@@ -32,6 +32,7 @@ from agent.prompt_builder import build_system_prompt
 from agent.services import Services
 from agent.session_recap import maybe_refresh_session_recap
 from agent.tools import Toolset
+from core.skills import unlocked_tools_for
 from infra.llm import ChatResult
 
 logger = logging.getLogger(__name__)
@@ -253,6 +254,12 @@ async def run_kp_turn(
     """
     i18n = services.i18n.with_locale(ctx.locale)
     system_prompt = await build_system_prompt(ctx, services)
+    # Layer B.2 -- allowed-tools enforcement (docs/plugins.md "Layer B"): the union
+    # of `allowed_tools` across every KP skill enabled for this room. With no
+    # skills enabled (or none of them declaring gated tools) this is `set()`, so
+    # `toolset.schemas()`/`toolset.dispatch()` behave exactly as before gating
+    # existed -- see `Toolset.schemas`'s docstring.
+    unlocked = await unlocked_tools_for(services.store, ctx.chat_key)
 
     key = history_key or f"chat_history.{ctx.chat_key}"
     history = await _load_history(services, key)
@@ -272,7 +279,7 @@ async def run_kp_turn(
         try:
             result = await services.llm.chat(
                 messages,
-                tools=toolset.schemas(),
+                tools=toolset.schemas(unlocked),
                 tool_choice="auto",
                 temperature=services.settings.llm.temperature,
             )
@@ -288,7 +295,7 @@ async def run_kp_turn(
             return KPTurnResult(reply=reply, tool_trace=tool_trace, rounds=rounds)
 
         if result.tool_calls:
-            await _dispatch_and_record(toolset, ctx, result, messages, tool_trace)
+            await _dispatch_and_record(toolset, ctx, result, messages, tool_trace, unlocked)
             continue
 
         reply = result.content or ""
@@ -315,6 +322,7 @@ async def run_kp_turn(
             reply,
             user_message,
             i18n,
+            unlocked,
             temperature=services.settings.llm.temperature,
         )
 
@@ -350,16 +358,23 @@ def _assistant_tool_call_message(result: ChatResult) -> dict:
 
 
 async def _dispatch_and_record(
-    toolset: Toolset, ctx: AgentCtx, result: ChatResult, conversation: list[dict], tool_trace: list[dict]
+    toolset: Toolset,
+    ctx: AgentCtx,
+    result: ChatResult,
+    conversation: list[dict],
+    tool_trace: list[dict],
+    unlocked: set[str] | None = None,
 ) -> None:
     """Dispatch one assistant round's tool calls, feeding results back into `conversation` + `tool_trace`.
 
     Shared by the main loop and the dice-first corrective round so both record
     the trace identically. Mutates `conversation` and `tool_trace` in place.
+    `unlocked` (Layer B.2 -- see `Toolset.dispatch`) is the room's set of
+    unlocked gated-tool names; `None`/empty means no gated tool is callable.
     """
     conversation.append(_assistant_tool_call_message(result))
     for call in result.tool_calls:
-        tool_result = await toolset.dispatch(call.name, ctx, call.arguments)
+        tool_result = await toolset.dispatch(call.name, ctx, call.arguments, unlocked)
         tool_trace.append(
             {
                 "name": call.name,
@@ -380,6 +395,7 @@ async def _run_dice_correction(
     prior_reply: str,
     user_message: str,
     i18n,
+    unlocked: set[str] | None = None,
     *,
     temperature: float | None,
 ) -> str:
@@ -424,7 +440,7 @@ async def _run_dice_correction(
         try:
             result = await services.llm.chat(
                 convo,
-                tools=toolset.schemas(),
+                tools=toolset.schemas(unlocked),
                 tool_choice="required" if forced else "auto",
                 temperature=temperature,
             )
@@ -434,7 +450,7 @@ async def _run_dice_correction(
             logger.warning("dice-first correction skipped: LLM chat failed", exc_info=True)
             return prior_reply
         if result.tool_calls:
-            await _dispatch_and_record(toolset, ctx, result, convo, tool_trace)
+            await _dispatch_and_record(toolset, ctx, result, convo, tool_trace, unlocked)
             if forced and not _dice_rolled(tool_trace):
                 # Forced a NON-dice tool (e.g. get_character_sheet): no real dice
                 # rolled -- that's the ceiling, keep the reply, do not loop.

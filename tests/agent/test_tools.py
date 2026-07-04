@@ -71,6 +71,27 @@ class OtherTools:
         return "pong"
 
 
+class _GatedTools:
+    """A provider exercising Layer B.2 additive tool gating (see docs/plugins.md
+    "Layer B"): one ordinary tool and one `gated=True` tool, plus a tool that is
+    BOTH `gated` and `keeper_only` to prove the two flags are independent."""
+
+    @tool
+    async def public_tool(self, ctx: AgentCtx) -> str:
+        """An ordinary, non-gated tool -- always present regardless of `unlocked`."""
+        return "public"
+
+    @tool(gated=True)
+    async def secret_recipe(self, ctx: AgentCtx) -> str:
+        """A gated tool -- hidden from schemas() and refused by dispatch() unless unlocked."""
+        return "the secret recipe"
+
+    @tool(gated=True, keeper_only=True)
+    async def keeper_gated(self, ctx: AgentCtx) -> str:
+        """Gated AND keeper_only at once -- the flags must not interfere with each other."""
+        return "keeper+gated"
+
+
 def _schema_of(toolset: Toolset, name: str) -> dict:
     return next(s for s in toolset.schemas() if s["function"]["name"] == name)
 
@@ -199,6 +220,107 @@ def test_is_keeper_only_for_unknown_tool_is_false():
     toolset = Toolset(SampleTools())
 
     assert toolset.is_keeper_only("nonexistent") is False
+
+
+# ---------------------------------------------------------------------------
+# Layer B.2 — additive tool gating (docs/plugins.md "Layer B"): a `gated=True`
+# tool is hidden from schemas()/refused by dispatch() unless its name is in the
+# caller-supplied `unlocked` set. The base (non-gated) toolset is unaffected.
+# ---------------------------------------------------------------------------
+
+
+def test_gated_tool_hidden_from_schemas_by_default():
+    toolset = Toolset(_GatedTools())
+    names = {s["function"]["name"] for s in toolset.schemas()}
+
+    assert "public_tool" in names
+    assert "secret_recipe" not in names
+
+
+def test_gated_tool_exposed_when_its_name_is_in_unlocked():
+    toolset = Toolset(_GatedTools())
+    names = {s["function"]["name"] for s in toolset.schemas(unlocked={"secret_recipe"})}
+
+    assert "public_tool" in names
+    assert "secret_recipe" in names
+
+
+def test_gated_tool_stays_hidden_when_unlocked_names_something_else():
+    toolset = Toolset(_GatedTools())
+    names = {s["function"]["name"] for s in toolset.schemas(unlocked={"some_other_tool"})}
+
+    assert "secret_recipe" not in names
+
+
+def test_is_gated_reflects_the_decorator_flag():
+    toolset = Toolset(_GatedTools())
+
+    assert toolset.is_gated("secret_recipe") is True
+    assert toolset.is_gated("public_tool") is False
+
+
+def test_is_gated_for_unknown_tool_is_false():
+    toolset = Toolset(_GatedTools())
+
+    assert toolset.is_gated("nonexistent") is False
+
+
+def test_gated_and_keeper_only_flags_are_independent():
+    toolset = Toolset(_GatedTools())
+
+    assert toolset.is_gated("keeper_gated") is True
+    assert toolset.is_keeper_only("keeper_gated") is True
+    # keeper_only alone never exposes a gated tool: it stays hidden until unlocked.
+    assert "keeper_gated" not in {s["function"]["name"] for s in toolset.schemas()}
+    assert "keeper_gated" in {s["function"]["name"] for s in toolset.schemas(unlocked={"keeper_gated"})}
+
+
+async def test_dispatch_refuses_a_locked_gated_tool_with_a_localized_message():
+    toolset = Toolset(_GatedTools())
+
+    result = await toolset.dispatch("secret_recipe", _ctx(), {})
+
+    assert result == t("agent.tools.tool_not_available", name="secret_recipe")
+
+
+async def test_dispatch_runs_a_gated_tool_once_unlocked():
+    toolset = Toolset(_GatedTools())
+
+    result = await toolset.dispatch("secret_recipe", _ctx(), {}, unlocked={"secret_recipe"})
+
+    assert result == "the secret recipe"
+
+
+async def test_dispatch_gated_refusal_is_localized_per_ctx_locale():
+    toolset = Toolset(_GatedTools())
+    ctx_zh = AgentCtx(chat_key="test-chat", locale="zh")
+
+    result = await toolset.dispatch("secret_recipe", ctx_zh, {})
+
+    assert result == t("agent.tools.tool_not_available", locale="zh", name="secret_recipe")
+    assert result != t("agent.tools.tool_not_available", locale="en", name="secret_recipe")
+
+
+def test_schemas_with_no_gated_tools_is_unchanged_from_before_gating_existed():
+    """(b) The real KP toolset defines zero gated tools as of Layer B.2 (the
+    generators in B.3 will be the first). With no gated tool anywhere on a
+    provider, `schemas()` must list every tool identically regardless of the
+    `unlocked` argument -- gating is fully inert until a tool opts in."""
+    toolset = Toolset(SampleTools(), OtherTools())
+    expected = {"create_widget", "roll", "toggle", "find", "secret_lookup", "structured", "ping"}
+
+    assert {s["function"]["name"] for s in toolset.schemas()} == expected
+    assert {s["function"]["name"] for s in toolset.schemas(None)} == expected
+    assert {s["function"]["name"] for s in toolset.schemas(set())} == expected
+    assert {s["function"]["name"] for s in toolset.schemas({"nonexistent-tool"})} == expected
+
+
+async def test_dispatch_with_no_gated_tools_ignores_unlocked_argument():
+    toolset = Toolset(SampleTools())
+
+    result = await toolset.dispatch("create_widget", _ctx(), {"name": "Lantern"}, unlocked={"whatever"})
+
+    assert result == "created Lantern in test-chat"
 
 
 # ---------------------------------------------------------------------------

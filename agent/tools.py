@@ -61,6 +61,7 @@ class ToolMeta:
     name: str
     description: str
     keeper_only: bool
+    gated: bool
     param_descriptions: dict[str, str]
     _schema: dict[str, Any] | None = field(default=None, init=False, repr=False, compare=False)
 
@@ -77,6 +78,7 @@ def tool(
     name: str | None = None,
     description: str | None = None,
     keeper_only: bool = False,
+    gated: bool = False,
     params: dict[str, str] | None = None,
 ):
     """Mark an async method as an AI-KP tool. Schema is generated from type hints + docstring.
@@ -84,6 +86,13 @@ def tool(
     Usable bare (`@tool`) or parameterized (`@tool(keeper_only=True, params={...})`).
     `params` optionally maps `param_name -> human description`; `keeper_only`
     flags red-line tools that must never be quoted directly to players.
+    `gated` (independent of `keeper_only` -- a tool can be either, both, or
+    neither) flags an ADDITIVE toolset gate (Layer B.2 -- see
+    ``docs/plugins.md`` "Layer B"): a gated tool is hidden from
+    `Toolset.schemas()` and refused by `Toolset.dispatch()` unless its name is
+    in the caller-supplied `unlocked` set (typically the union of enabled KP
+    skills' `allowed-tools` for the room). The base toolset is never gated by
+    default, so a tool with no `gated=True` behaves exactly as before.
     Attaches the metadata to the function as `__tool_meta__`; the function's
     behavior is otherwise unchanged.
     """
@@ -94,6 +103,7 @@ def tool(
             name=name or func.__name__,
             description=description or _first_doc_line(func.__doc__),
             keeper_only=keeper_only,
+            gated=gated,
             param_descriptions=dict(params or {}),
         )
         return func
@@ -121,9 +131,21 @@ class Toolset:
                 meta: ToolMeta = bound_method.__tool_meta__
                 self._entries[meta.name] = _ToolEntry(meta=meta, bound=bound_method)
 
-    def schemas(self) -> list[dict[str, Any]]:
-        """OpenAI function-calling schema list, one entry per collected tool."""
-        return [entry.meta.schema() for entry in self._entries.values()]
+    def schemas(self, unlocked: set[str] | None = None) -> list[dict[str, Any]]:
+        """OpenAI function-calling schema list: every non-gated tool, ALWAYS,
+        plus any gated tool whose name is in `unlocked`.
+
+        Additive gating (Layer B.2 -- see ``docs/plugins.md`` "Layer B"): the
+        base toolset is unaffected by gating. With `unlocked=None` (or empty)
+        and no gated tools defined, this is identical to a plain schema dump --
+        the observable behavior before gating existed.
+        """
+        allowed = unlocked or set()
+        return [
+            entry.meta.schema()
+            for entry in self._entries.values()
+            if not entry.meta.gated or entry.meta.name in allowed
+        ]
 
     def names(self) -> list[str]:
         return list(self._entries.keys())
@@ -132,16 +154,28 @@ class Toolset:
         entry = self._entries.get(name)
         return entry.meta.keeper_only if entry is not None else False
 
-    async def dispatch(self, name: str, ctx: AgentCtx, arguments: dict[str, Any]) -> str:
+    def is_gated(self, name: str) -> bool:
+        entry = self._entries.get(name)
+        return entry.meta.gated if entry is not None else False
+
+    async def dispatch(
+        self, name: str, ctx: AgentCtx, arguments: dict[str, Any], unlocked: set[str] | None = None
+    ) -> str:
         """Look up `name`, coerce `arguments` to its parameter types, call it, and
         guarantee a `str` result.
 
-        Never raises into the caller: an unknown tool name or bad/missing
-        arguments both come back as a localized error string instead.
+        Never raises into the caller: an unknown tool name, a locked gated
+        tool, or bad/missing arguments all come back as a localized error
+        string instead. Defense in depth for gating: a gated tool whose name
+        is not in `unlocked` is refused here too, even if it was never exposed
+        via `schemas()` in the first place (e.g. a model hallucinating a call
+        to a gated-but-not-unlocked tool name it saw in a prior turn/session).
         """
         entry = self._entries.get(name)
         if entry is None:
             return t("agent.tools.unknown_tool", locale=ctx.locale, name=name)
+        if entry.meta.gated and name not in (unlocked or set()):
+            return t("agent.tools.tool_not_available", locale=ctx.locale, name=name)
 
         try:
             coerced = _coerce_arguments(entry.meta.fn, arguments or {})

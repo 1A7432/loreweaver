@@ -1,4 +1,5 @@
 {
   "agent.tools.unknown_tool": "Unknown tool: {name}",
-  "agent.tools.bad_arguments": "Invalid arguments for tool {name}: {error}"
+  "agent.tools.bad_arguments": "Invalid arguments for tool {name}: {error}",
+  "agent.tools.tool_not_available": "Tool {name} is not available in this room."
 }

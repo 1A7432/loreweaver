@@ -175,6 +175,40 @@ def test_unknown_system_name_raises_value_error():
 
 
 # ---------------------------------------------------------------------------
+# coc7 intimate/romance aliases (Layer B.2 -- docs/plugins.md "Layer B"): pure
+# alias additions to EXISTING canonicals, so romance-forward terms resolve to
+# real skills without adding any new default skill to the horror-CoC sheet.
+# ---------------------------------------------------------------------------
+
+
+def test_coc7_intimate_aliases_resolve_to_existing_canonical_skills():
+    pack = load_rulepack("coc7")
+
+    assert pack.resolve_skill("魅惑") == "取悦"
+    assert pack.resolve_skill("媚惑") == "取悦"
+    assert pack.resolve_skill("勾引") == "取悦"
+    assert pack.resolve_skill("风情") == "取悦"
+    assert pack.resolve_skill("调情") == "话术"
+    assert pack.resolve_skill("撩拨") == "话术"
+    assert pack.resolve_skill("洞察情感") == "心理学"
+    assert pack.resolve_skill("察言观色") == "心理学"
+    assert pack.resolve_skill("共情") == "心理学"
+    assert pack.resolve_skill("同理心") == "心理学"
+
+
+def test_coc7_intimate_aliases_add_no_new_default_skills():
+    """These romance terms must be aliases only -- none of them is itself a new
+    canonical/default skill key on the sheet."""
+    pack = load_rulepack("coc7")
+    intimate_terms = {
+        "魅惑", "媚惑", "勾引", "风情",
+        "调情", "撩拨",
+        "洞察情感", "察言观色", "共情", "同理心",
+    }
+    assert intimate_terms.isdisjoint(pack.defaults.keys())
+
+
+# ---------------------------------------------------------------------------
 # (c) declarative primitives in isolation, including inclusive boundaries.
 # ---------------------------------------------------------------------------
 
