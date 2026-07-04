@@ -11,13 +11,19 @@ Derived stats are HYBRID:
   - a named-computer registry (real Python callables, `_NAMED_COMPUTERS`) for
     the built-in systems' bespoke math (CoC damage bonus, D&D ability mods, ...).
 Nothing in the `derived:` section is ever `eval`/`exec`-ed.
+
+Discovery additionally scans a user data-dir, `_USER_RULEPACK_DIR` (Layer B.3b -- see
+`docs/plugins.md` "Layer B" and `agent.forge.generate_and_install_rulepack`), when one is
+configured, so a generated rulepack is discoverable without living inside the checkout. A
+built-in id always wins over a same-named user-dir pack; left unset (the default), discovery is
+byte-identical to before this existed.
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
@@ -30,6 +36,16 @@ logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _RULEPACK_DIR = _REPO_ROOT / "rulepacks"
 _SPACE_RE = re.compile(r"\s+")
+
+# Layer B.3b (the rulepack-generation engine, `agent.forge`) discovery target: a user data-dir
+# `rulepacks/` directory, set once at startup (`app.py`: `core.rulepacks._USER_RULEPACK_DIR =
+# Path(settings.data_dir) / "rulepacks"`) so a generated rulepack need not live inside the checkout.
+# `None` (the default, and every test unless it opts in) means discovery scans ONLY `_RULEPACK_DIR`,
+# byte-identical to before this existed. `_discover_registry` reads this module attribute at scan
+# time (not a value captured at import time), so setting it after import -- as `app.py` and tests
+# both do -- takes effect on the next `reload_rulepacks()`/cache miss. Mirrors `core.skills`'s
+# `_USER_SKILL_DIR` precedent exactly.
+_USER_RULEPACK_DIR: Path | None = None
 
 
 def _normalize_alias(value: str) -> str:
@@ -372,30 +388,64 @@ def _build_rulepack(pack_id: str, data: Mapping[str, Any]) -> RulePack:
     )
 
 
-def _parse_rulepack_file(path: Path) -> RulePack:
-    with path.open("r", encoding="utf-8") as fh:
-        data = yaml.safe_load(fh) or {}
-    if not isinstance(data, Mapping):
-        raise ValueError(f"rulepack '{path.stem}': YAML root must be a mapping, got {type(data).__name__}")
-    return _build_rulepack(path.stem, data)
+def parse_rulepack_text(pack_id: str, text: str) -> RulePack:
+    """Parse rulepack YAML `text` into a `RulePack`, assigning it `pack_id`.
 
-
-@cache
-def _discover_registry() -> dict[str, RulePack]:
-    """Scan `rulepacks/*.yaml`; each file stem is a system id.
-
-    Robust by construction: a single malformed/broken YAML file (parse error,
-    bad structure, or an invalid `derived:` spec) is logged and skipped — it
-    never prevents discovery of the other, valid packs.
+    The same YAML-to-`RulePack` builder `_discover_registry` uses on-disk, exposed so a caller
+    that has rulepack YAML in memory (`agent.forge`, validating LLM-generated rulepack text
+    before ever writing it to disk) can validate against the identical rules real discovery will
+    later apply -- no separate/divergent parser to keep in sync (mirrors
+    `core.skills.parse_skill_text`'s precedent). Raises `ValueError` on any malformed input (bad
+    YAML, a non-mapping root, or an invalid `derived:` spec -- see `_compile_derived_section`);
+    never `eval`/`exec`s anything -- the YAML is `yaml.safe_load`-ed only and `derived:` compiles
+    through the fixed safe DSL / named-computer vocabulary only.
     """
-    registry: dict[str, RulePack] = {}
-    if not _RULEPACK_DIR.is_dir():
-        return registry
-    for path in sorted(_RULEPACK_DIR.glob("*.yaml")):
+    data = yaml.safe_load(text) or {}
+    if not isinstance(data, Mapping):
+        raise ValueError(f"rulepack '{pack_id}': YAML root must be a mapping, got {type(data).__name__}")
+    return _build_rulepack(pack_id, data)
+
+
+def _parse_rulepack_file(path: Path) -> RulePack:
+    return parse_rulepack_text(path.stem, path.read_text(encoding="utf-8"))
+
+
+def _scan_rulepack_dir(directory: Path, registry: dict[str, RulePack], *, allow_override: bool) -> None:
+    """Scan `directory` for `<id>.yaml` files, adding valid parses into `registry`.
+
+    A malformed file (parse error, bad structure, or an invalid `derived:` spec) is logged and
+    skipped -- it never prevents discovery of the other, valid packs (mirrors
+    `core.skills._scan_skill_dir`). When `allow_override` is False, an id already present in
+    `registry` is left untouched: this is how a user-dir pack (Layer B.3b, `agent.forge`) can
+    never shadow a built-in of the same id -- a built-in always wins.
+    """
+    if not directory.is_dir():
+        return
+    for path in sorted(directory.glob("*.yaml")):
+        if not allow_override and path.stem in registry:
+            continue
         try:
             registry[path.stem] = _parse_rulepack_file(path)
         except Exception:
             logger.warning("Skipping malformed rulepack file: %s", path, exc_info=True)
+
+
+@cache
+def _discover_registry() -> dict[str, RulePack]:
+    """Scan `rulepacks/*.yaml` (built-in), then `_USER_RULEPACK_DIR` (Layer B.3b) when set.
+
+    Robust by construction: a single malformed/broken YAML file (parse error, bad structure, or
+    an invalid `derived:` spec) is logged and skipped — it never prevents discovery of the other,
+    valid packs. A built-in id always wins over a same-named user-dir entry
+    (`_scan_rulepack_dir`'s `allow_override=False` for the user dir), so a generated pack can
+    never override e.g. `coc7`/`dnd5e`. With `_USER_RULEPACK_DIR` left at its default `None`
+    (every test unless it opts in), this scans ONLY `_RULEPACK_DIR` -- byte-identical to before
+    the user data-dir existed.
+    """
+    registry: dict[str, RulePack] = {}
+    _scan_rulepack_dir(_RULEPACK_DIR, registry, allow_override=True)
+    if _USER_RULEPACK_DIR is not None:
+        _scan_rulepack_dir(_USER_RULEPACK_DIR, registry, allow_override=False)
     return registry
 
 
@@ -408,6 +458,58 @@ def _alias_resolver() -> dict[str, str]:
             key = _normalize_alias(str(candidate))
             resolver.setdefault(key, pack_id)
     return resolver
+
+
+def reload_rulepacks() -> None:
+    """Clear both cached lookups so a just-written rulepack (`agent.forge`) is picked up
+    immediately: the discovery registry AND the alias resolver built from it -- rulepacks (unlike
+    `core.skills`) additionally cache alias resolution, so both `@cache`s must be cleared together
+    or a newly installed pack's names/set_keys would keep resolving against the stale registry.
+    Discovery is otherwise cached for process lifetime; nothing else needs to call this in normal
+    operation since the on-disk rulepack set doesn't change outside of generation.
+    """
+    _discover_registry.cache_clear()
+    _alias_resolver.cache_clear()
+
+
+def built_in_rulepack_ids() -> set[str]:
+    """File stems under `_RULEPACK_DIR` — the BUILT-IN rulepacks only, never `_USER_RULEPACK_DIR`.
+
+    Used by `agent.forge` to reject a generated rulepack id that collides with a built-in (e.g.
+    `coc7`, `dnd5e`) before ever writing it -- deliberately a raw file listing rather than going
+    through `_discover_registry`/`available_systems`, so this stays accurate even if a built-in's
+    own YAML happens to be malformed at the moment of the check.
+    """
+    if not _RULEPACK_DIR.is_dir():
+        return set()
+    return {path.stem for path in _RULEPACK_DIR.glob("*.yaml")}
+
+
+def built_in_aliases() -> set[str]:
+    """Every normalized alias (id + declared `names:` + `set_keys:`) claimed by a BUILT-IN rulepack.
+
+    Used by `agent.forge` to refuse a generated pack that tries to CLAIM a built-in's name/alias
+    (e.g. a user pack with `names: [..., coc7]`). A built-in already wins resolution today via
+    `_alias_resolver`'s insertion order, but rejecting up front makes the invariant explicit rather
+    than dependent on scan order, and stops a generated pack from declaring a dead alias it could
+    never actually resolve as.
+    """
+    aliases: set[str] = set()
+    for pack_id in built_in_rulepack_ids():
+        try:
+            pack = load_rulepack(pack_id)
+        except ValueError:
+            continue
+        for candidate in (pack.system, *pack.names, *pack.set_keys):
+            aliases.add(_normalize_alias(str(candidate)))
+    return aliases
+
+
+def claims_built_in_alias(candidates: Iterable[str]) -> bool:
+    """True if any of `candidates` (a pack's declared names/set_keys) normalizes to an alias already
+    reserved by a built-in rulepack — the check `agent.forge` uses to reject such a generated pack."""
+    reserved = built_in_aliases()
+    return any(_normalize_alias(str(candidate)) in reserved for candidate in candidates)
 
 
 def available_systems() -> list[str]:

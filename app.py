@@ -10,8 +10,10 @@ from pathlib import Path
 
 from adapters.cli.adapter import CliAdapter
 from adapters.cli.demo import demo_kp_responder
+from agent import forge as agent_forge
 from agent.kp_tools import build_kp_toolset
 from agent.services import build_services
+from core import rulepacks as core_rulepacks
 from core import skills as core_skills
 from core.dice_engine import seed_dice
 from gateway.commands import CommandRouter
@@ -40,11 +42,12 @@ def _app_services(settings, *, llm=None, embeddings=None):
     embeddings = embeddings or LocalEmbeddings(64)
     db = settings.db_path or os.path.join(settings.data_dir, "loreweaver.db")
     os.makedirs(os.path.dirname(db) or ".", exist_ok=True)
-    # Layer B.3a (`docs/plugins.md` "Layer B"): a user data-dir `skills/` directory so
-    # `agent.forge`-generated skills are discoverable alongside the built-ins, without ever
-    # touching the checkout. Set once here (the one place every entrypoint below funnels
-    # through) rather than importing anything heavier than `core.skills` into `app.py`.
+    # Layer B.3 (`docs/plugins.md` "Layer B"): user data-dirs so `agent.forge`-generated skills,
+    # rulepacks, and modules are discoverable/usable alongside the built-ins, without ever
+    # touching the checkout. Set once here (the one place every entrypoint below funnels through).
     core_skills._USER_SKILL_DIR = Path(settings.data_dir) / "skills"
+    core_rulepacks._USER_RULEPACK_DIR = Path(settings.data_dir) / "rulepacks"
+    agent_forge._USER_MODULE_DIR = Path(settings.data_dir) / "modules"
     return build_services(settings, llm=llm, embeddings=embeddings, db_path=db)
 
 

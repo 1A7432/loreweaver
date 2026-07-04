@@ -9,6 +9,8 @@ and (f) discovery robustness against one malformed pack file.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 import core.rulepacks as rulepacks_module
@@ -356,3 +358,134 @@ def test_malformed_pack_does_not_break_discovery_of_good_packs(tmp_path, monkeyp
             rulepacks_module.load_rulepack("brokenderived")
     finally:
         _clear_rulepack_caches()
+
+
+# ---------------------------------------------------------------------------
+# User data-dir discovery (Layer B.3b -- see `docs/plugins.md` "Layer B" and
+# `agent.forge.generate_and_install_rulepack`, the generation engine that writes into
+# `_USER_RULEPACK_DIR`). Mirrors `tests/core/test_skills.py`'s `_USER_SKILL_DIR` coverage.
+# ---------------------------------------------------------------------------
+
+_USER_DIR_FIXTURE_YAML = "names: [user-fixture-system]\ndefaults:\n  力量: 10\n"
+
+
+def _write_rulepack(root: Path, pack_id: str, content: str) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / f"{pack_id}.yaml").write_text(content, encoding="utf-8")
+
+
+def test_user_rulepack_dir_is_none_by_default() -> None:
+    """Every test in this file (and every test elsewhere unless it opts in) must see the real,
+    zero-regression default: no user rulepack dir configured at all."""
+    assert rulepacks_module._USER_RULEPACK_DIR is None
+
+
+def test_user_rulepack_dir_pack_discovered_alongside_built_ins(tmp_path: Path) -> None:
+    _write_rulepack(tmp_path, "user-fixture", _USER_DIR_FIXTURE_YAML)
+
+    original_user_dir = rulepacks_module._USER_RULEPACK_DIR
+    rulepacks_module._USER_RULEPACK_DIR = tmp_path
+    _clear_rulepack_caches()
+    try:
+        systems = rulepacks_module.available_systems()
+        assert "user-fixture" in systems
+        assert "coc7" in systems  # the real built-ins are still discoverable alongside it
+        assert "dnd5e" in systems
+
+        pack = rulepacks_module.load_rulepack("user-fixture-system")
+        assert pack.system == "user-fixture"
+    finally:
+        rulepacks_module._USER_RULEPACK_DIR = original_user_dir
+        _clear_rulepack_caches()
+
+
+def test_user_rulepack_dir_none_discovery_is_byte_identical_to_baseline(tmp_path: Path) -> None:
+    """Setting `_USER_RULEPACK_DIR` and then putting it back to `None` must reproduce EXACTLY the
+    same registry as never having touched it -- the additive discovery must not leave any residue
+    once the user dir is unset again (Layer B.3b's zero-regression requirement)."""
+    baseline = rulepacks_module.available_systems()
+
+    rulepacks_module._USER_RULEPACK_DIR = tmp_path
+    _clear_rulepack_caches()
+    rulepacks_module._USER_RULEPACK_DIR = None
+    _clear_rulepack_caches()
+    try:
+        assert rulepacks_module.available_systems() == baseline
+    finally:
+        _clear_rulepack_caches()
+
+
+def test_user_rulepack_dir_cannot_override_a_built_in_id(tmp_path: Path) -> None:
+    """A user-dir pack sharing a built-in's id must never win: the built-in's real content is what
+    gets discovered, never the user-dir shadow (a generated rulepack must never be able to
+    override e.g. `coc7`)."""
+    shadow = "names: [shadow-coc]\ndefaults:\n  力量: 999\n"
+    _write_rulepack(tmp_path, "coc7", shadow)
+
+    original_user_dir = rulepacks_module._USER_RULEPACK_DIR
+    rulepacks_module._USER_RULEPACK_DIR = tmp_path
+    _clear_rulepack_caches()
+    try:
+        pack = rulepacks_module.load_rulepack("coc7")
+        assert pack.defaults["力量"] == 50  # the REAL built-in, never the shadow
+    finally:
+        rulepacks_module._USER_RULEPACK_DIR = original_user_dir
+        _clear_rulepack_caches()
+
+
+def test_reload_rulepacks_picks_up_a_newly_written_pack(tmp_path: Path) -> None:
+    original_user_dir = rulepacks_module._USER_RULEPACK_DIR
+    rulepacks_module._USER_RULEPACK_DIR = tmp_path
+    _clear_rulepack_caches()
+    try:
+        assert "late-fixture" not in rulepacks_module.available_systems()
+        _write_rulepack(tmp_path, "late-fixture", _USER_DIR_FIXTURE_YAML)
+        assert "late-fixture" not in rulepacks_module.available_systems()  # still cached
+
+        rulepacks_module.reload_rulepacks()
+
+        assert "late-fixture" in rulepacks_module.available_systems()
+        pack = rulepacks_module.load_rulepack("user-fixture-system")
+        assert pack.system == "late-fixture"
+    finally:
+        rulepacks_module._USER_RULEPACK_DIR = original_user_dir
+        _clear_rulepack_caches()
+
+
+def test_built_in_rulepack_ids_matches_the_real_rulepacks_dir() -> None:
+    ids = rulepacks_module.built_in_rulepack_ids()
+    assert "coc7" in ids
+    assert "dnd5e" in ids
+
+
+def test_built_in_rulepack_ids_ignores_the_user_dir(tmp_path: Path) -> None:
+    _write_rulepack(tmp_path, "user-only-pack", _USER_DIR_FIXTURE_YAML)
+
+    original_user_dir = rulepacks_module._USER_RULEPACK_DIR
+    rulepacks_module._USER_RULEPACK_DIR = tmp_path
+    try:
+        assert "user-only-pack" not in rulepacks_module.built_in_rulepack_ids()
+    finally:
+        rulepacks_module._USER_RULEPACK_DIR = original_user_dir
+
+
+# ---------------------------------------------------------------------------
+# parse_rulepack_text (Layer B.3b): the in-memory validation entry point `agent.forge` uses
+# before ever writing a generated pack to disk.
+# ---------------------------------------------------------------------------
+
+
+def test_parse_rulepack_text_matches_file_based_parse() -> None:
+    parsed = rulepacks_module.parse_rulepack_text("inline-test", "names: [inline]\ndefaults:\n  力量: 7\n")
+    assert parsed.system == "inline-test"
+    assert parsed.defaults["力量"] == 7
+
+
+def test_parse_rulepack_text_rejects_non_mapping_root() -> None:
+    with pytest.raises(ValueError):
+        rulepacks_module.parse_rulepack_text("inline-test", "- just\n- a\n- list\n")
+
+
+def test_parse_rulepack_text_rejects_bad_derived_spec() -> None:
+    with pytest.raises(ValueError):
+        rulepacks_module.parse_rulepack_text("inline-test", "names: [inline]\nderived:\n  stat: {bogus: 1}\n")

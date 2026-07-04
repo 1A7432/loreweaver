@@ -1,0 +1,199 @@
+"""Tests for agent.forge's module generator (Layer B.3b -- `docs/plugins.md` "Layer B").
+
+Unlike the skill/rulepack generators (a global, discovery-based user data-dir), a generated module
+installs PER-ROOM through the EXISTING module-ingestion pipeline
+(`agent.kp_tools_knowledge.DocumentTools.upload_document`), so this exercises TWO scripted `FakeLLM`
+responses in order: the module-authoring call (`generate_and_install_module`'s own `services.llm.chat`)
+and the full-text analysis call `upload_document` triggers via `services.module_init.initialize` --
+mirroring `tests/agent/test_kp_tools_knowledge.py`'s "sentinel never leaks to the player pool"
+pattern to confirm the room's REAL knowledge-pool pipeline ran, not some parallel bespoke path.
+
+Covers: (a) happy path -- the generated Markdown is written to a confined file under a tmp
+`_USER_MODULE_DIR` and the room (`ctx.chat_key`)'s module knowledge pools end up populated by the
+scripted analysis; (b) an empty LLM response / an unsluggable title+description is rejected with
+`ok=False` and nothing written; (c) path/id confinement holds for a traversal-shaped title; (d)
+with no `_USER_MODULE_DIR` configured at all, generation fails cleanly instead of raising.
+
+Every test that swaps `agent.forge._USER_MODULE_DIR` restores it in a `finally` block -- never
+leaking a tmp path into another test's module-forge generation.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import agent.forge as forge_module
+from agent.context import AgentCtx, LocalFs
+from agent.forge import generate_and_install_module
+from agent.services import build_services
+from infra.config import Settings
+from infra.embeddings import FakeEmbeddings
+from infra.llm import FakeLLM, assistant_text
+
+CHAT_KEY = "module-forge-chat"
+SENTINEL = "THE FERRYMAN IS THE FEY BOUND TO THE OLD PACT"
+
+GENERATED_MODULE_MD = f"""# The Salt Marsh Vanishing
+
+## Player-facing premise
+Fisherfolk have gone missing near the marsh town of Greyreed. The only way across
+the marsh at night is the ferryman's boat.
+
+## KEEPER-ONLY
+{SENTINEL}: the ferryman who rows travelers across the marsh is himself the culprit,
+bound centuries ago into a pact he must now feed to survive.
+"""
+
+
+def _scripted_analysis_json() -> str:
+    """A minimal well-formed module-analysis JSON (the shape `module.analysis_prompt` asks the LLM
+    to emit) whose keeper-only NPC secret carries the sentinel -- `core.module_initializer`
+    normalizes any missing list/str fields, so this doesn't need every field populated."""
+    return json.dumps(
+        {
+            "npcs": [
+                {
+                    "name": "The Ferryman",
+                    "description": "A quiet old man who never speaks above a whisper.",
+                    "secret": SENTINEL,
+                    "role": "antagonist",
+                }
+            ],
+            "summary": "Investigators uncover the truth behind the marsh disappearances.",
+        }
+    )
+
+
+def _services(authoring_text: str) -> object:
+    """Two scripted responses in order: the module-authoring call, then the analysis call
+    `upload_document` triggers via `services.module_init.initialize`."""
+    return build_services(
+        Settings(locale="en"),
+        llm=FakeLLM(script=[assistant_text(authoring_text), assistant_text(_scripted_analysis_json())]),
+        embeddings=FakeEmbeddings(8),
+    )
+
+
+def _ctx(fs_base: Path) -> AgentCtx:
+    return AgentCtx(chat_key=CHAT_KEY, user_id="kp", locale="en", fs=LocalFs(base_dir=fs_base))
+
+
+# ---------------------------------------------------------------------------
+# (a) Happy path: written to a confined file, installed into THIS room via the existing pipeline.
+# ---------------------------------------------------------------------------
+
+
+async def test_happy_path_writes_and_installs_into_the_calling_room(tmp_path: Path) -> None:
+    services = _services(GENERATED_MODULE_MD)
+    ctx = _ctx(tmp_path / "fs")
+
+    original_user_dir = forge_module._USER_MODULE_DIR
+    forge_module._USER_MODULE_DIR = tmp_path / "modules"
+    try:
+        result = await generate_and_install_module(services, ctx, "a marsh-town disappearance mystery")
+
+        assert result.ok, result.error
+        assert result.skill_id == "the-salt-marsh-vanishing"
+        assert result.name == "The Salt Marsh Vanishing"
+        assert Path(result.path).is_file()
+        assert Path(result.path).parent == (tmp_path / "modules").resolve()
+        assert result.detail  # upload_document's own confirmation, the "room summary"
+
+        # The EXISTING module pipeline actually ran for THIS room's chat_key.
+        status = await services.store.get(user_key="", store_key=f"module_init_status.{CHAT_KEY}")
+        assert status == "ready"
+
+        keeper_raw = await services.store.get(user_key="", store_key=f"module_keeper_pool.{CHAT_KEY}")
+        player_raw = await services.store.get(user_key="", store_key=f"module_player_pool.{CHAT_KEY}")
+        assert SENTINEL in keeper_raw
+        assert SENTINEL not in player_raw  # red line: the secret never reaches the player pool
+    finally:
+        forge_module._USER_MODULE_DIR = original_user_dir
+
+
+# ---------------------------------------------------------------------------
+# (b) Invalid output -- rejected, nothing written, room untouched.
+# ---------------------------------------------------------------------------
+
+
+async def test_empty_llm_response_is_rejected(tmp_path: Path) -> None:
+    services = _services("   ")
+    ctx = _ctx(tmp_path / "fs")
+
+    original_user_dir = forge_module._USER_MODULE_DIR
+    forge_module._USER_MODULE_DIR = tmp_path / "modules"
+    try:
+        result = await generate_and_install_module(services, ctx, "anything")
+
+        assert not result.ok
+        assert result.error == "empty_response"
+        assert not (tmp_path / "modules").exists() or list((tmp_path / "modules").iterdir()) == []
+
+        status = await services.store.get(user_key="", store_key=f"module_init_status.{CHAT_KEY}")
+        assert not status  # the room's module pipeline never ran
+    finally:
+        forge_module._USER_MODULE_DIR = original_user_dir
+
+
+async def test_unsluggable_title_and_description_is_rejected(tmp_path: Path) -> None:
+    """A document with no level-1 heading, whose fallback (the keeper's own `description`) is
+    itself all-punctuation/unsluggable, must be rejected with `bad_id` rather than installing
+    under some empty/garbage id."""
+    services = _services("Just prose, no heading at all.\n")
+    ctx = _ctx(tmp_path / "fs")
+
+    original_user_dir = forge_module._USER_MODULE_DIR
+    forge_module._USER_MODULE_DIR = tmp_path / "modules"
+    try:
+        result = await generate_and_install_module(services, ctx, "!!! ???")
+
+        assert not result.ok
+        assert result.error.startswith("bad_id")
+        assert not (tmp_path / "modules").exists() or list((tmp_path / "modules").iterdir()) == []
+    finally:
+        forge_module._USER_MODULE_DIR = original_user_dir
+
+
+# ---------------------------------------------------------------------------
+# (c) Security: path/id confinement for a traversal-shaped title.
+# ---------------------------------------------------------------------------
+
+
+async def test_traversal_title_is_sanitized_to_a_safe_id_never_a_path(tmp_path: Path) -> None:
+    traversal_md = GENERATED_MODULE_MD.replace("The Salt Marsh Vanishing", "../../etc/passwd")
+    services = _services(traversal_md)
+    ctx = _ctx(tmp_path / "fs")
+
+    original_user_dir = forge_module._USER_MODULE_DIR
+    forge_module._USER_MODULE_DIR = tmp_path / "modules"
+    try:
+        result = await generate_and_install_module(services, ctx, "anything")
+
+        if result.ok:
+            assert "/" not in result.skill_id
+            assert ".." not in result.skill_id
+            written = Path(result.path).resolve()
+            assert written.is_relative_to((tmp_path / "modules").resolve())
+        else:
+            assert not result.error.startswith("path_escape")
+    finally:
+        forge_module._USER_MODULE_DIR = original_user_dir
+
+
+# ---------------------------------------------------------------------------
+# (d) No data dir configured at all.
+# ---------------------------------------------------------------------------
+
+
+async def test_no_data_dir_configured_fails_cleanly(tmp_path: Path) -> None:
+    services = _services(GENERATED_MODULE_MD)
+    ctx = _ctx(tmp_path / "fs")
+    assert forge_module._USER_MODULE_DIR is None  # the default in every test unless opted in
+
+    result = await generate_and_install_module(services, ctx, "anything")
+
+    assert not result.ok
+    assert result.error == "no_data_dir"
+    assert result.skill_id == ""
+    assert result.path == ""

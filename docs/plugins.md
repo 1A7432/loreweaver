@@ -8,9 +8,13 @@
 > skill + coc7 intimate aliases) has **landed**. Layer B.3a (the skill-generation
 > engine — a gated `generate_skill` tool + the `skill-forge` skill that authors a
 > new SKILL.md from a description and installs it to a user data-dir) has
-> **landed**; B.3b (the rulepack + module generators) follows, then B.4 (TUI
-> management pages with a describe→generate button). Layer C (code plugins) is
-> deferred. This document is the contract contributors build against.
+> **landed**. Layer B.3b (the rulepack + module generators — gated
+> `generate_rulepack`/`generate_module` tools + the `rule-forge`/`module-forge`
+> skills; a rulepack installs as a flat `<id>.yaml` to a user data-dir the same
+> way skills do, a module installs PER-ROOM through the existing
+> upload/analysis pipeline) has **landed**; B.4 (TUI management pages with a
+> describe→generate button) is next. Layer C (code plugins) is deferred. This
+> document is the contract contributors build against.
 
 Loreweaver is a self-hosted, world/story-first AI Keeper — not a persona-chat
 frontend. Its long-term leverage is being a **platform the community extends**,
@@ -226,13 +230,25 @@ Until Layer C ships, code contributions go through normal in-tree PRs.
    `agent.tools.Toolset` (`schemas(unlocked)`/`dispatch(..., unlocked)` expose
    and allow a gated tool only when its name is in the room's unlocked set),
    and `core.skills.unlocked_tools_for` unioning enabled skills' `allowed-tools`
-   for `agent.loop.run_kp_turn` to pass in. No tool is gated yet (B.3's
-   generators will be the first), so this is inert today by construction.
-   `romance-relationships` shipped as the second built-in skill (prompt-only,
-   `allowed-tools: []`), backed by coc7 intimate-vocabulary aliases (魅惑/媚惑/
-   勾引/风情 → 取悦, 调情/撩拨 → 话术, 洞察情感/察言观色/共情/同理心 → 心理学) —
-   aliases only, no new default skills added to the sheet. **B.3 next**: the
-   generator tools (the first gated tools).
-4. **Content-pack formalization** — expose the existing ST card/lorebook import
+   for `agent.loop.run_kp_turn` to pass in. `romance-relationships` shipped as
+   the second built-in skill (prompt-only, `allowed-tools: []`), backed by coc7
+   intimate-vocabulary aliases (魅惑/媚惑/勾引/风情 → 取悦, 调情/撩拨 → 话术,
+   洞察情感/察言观色/共情/同理心 → 心理学) — aliases only, no new default skills
+   added to the sheet. B.3's generators (below) are the first actually-gated
+   tools, making this enforcement live rather than inert.
+4. **Layer B.3 — self-extension generators** — **landed**: three gated
+   `generate_*` tools in `agent.forge`/`agent.kp_tools_forge`, each invisible
+   until its own forge skill (`skill-forge`/`rule-forge`/`module-forge`) is
+   enabled for a room. `generate_skill` (B.3a) authors a `SKILL.md` and installs
+   it to a user skills data-dir; `generate_rulepack` (B.3b) authors a rulepack
+   YAML (validated through the same safe derived-stat DSL Layer A uses) and
+   installs it as a flat `<id>.yaml` to a user rulepacks data-dir, both never
+   shadowing a built-in id; `generate_module` (B.3b) authors a module/scenario
+   document and installs it PER-ROOM through the EXISTING upload/analysis
+   pipeline (`agent.kp_tools_knowledge.DocumentTools.upload_document`) rather
+   than a new one. All three validate-before-write and never `eval`/`exec`
+   anything. **B.4 next**: TUI management pages with a describe→generate
+   button.
+5. **Content-pack formalization** — expose the existing ST card/lorebook import
    under the unified discovery/manifest.
-5. **Layer C — code plugins** — deferred; entry points + trust model.
+6. **Layer C — code plugins** — deferred; entry points + trust model.

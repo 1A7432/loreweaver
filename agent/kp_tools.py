@@ -3,9 +3,9 @@
 The tool bodies live in `kp_tools_mechanics` (character / dice / initiative), `kp_tools_knowledge`
 (module / document / notes / session), `kp_tools_npc` (AI-played keeper NPC sub-actors --
 `docs/specs/M5.md`), `kp_tools_companion` (AI player companions -- `docs/specs/M10-companions.md`)
-and `kp_tools_forge` (the `generate_skill` gated tool -- Layer B.3a, `docs/plugins.md` "Layer B").
-This module is the single entry point the agent loop and adapters use to build the toolset for a
-`Services` bundle."""
+and `kp_tools_forge` (the `generate_skill`/`generate_rulepack`/`generate_module` gated tools --
+Layer B.3, `docs/plugins.md` "Layer B"). This module is the single entry point the agent loop and
+adapters use to build the toolset for a `Services` bundle."""
 
 from __future__ import annotations
 
