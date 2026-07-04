@@ -1,0 +1,19 @@
+# Dependabot version updates — deliberately LOW-NOISE for a solo maintainer:
+# monthly cadence, everything grouped into one PR per ecosystem. Security
+# updates are separate (enabled repo-wide) and arrive as soon as a CVE lands.
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      python-deps:
+        patterns: ["*"]
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      actions:
+        patterns: ["*"]
