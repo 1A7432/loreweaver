@@ -148,6 +148,8 @@ async def main():
     metrics = RedlineMetrics()  # scored over THIS invocation's turns only, like the latency stats below
 
     settings = get_settings()
+    # A fresh checkout (CI) has no data/ dir — sqlite can't create the parent, only the file.
+    (ROOT / "data").mkdir(parents=True, exist_ok=True)
     services = build_services(settings, embeddings=LocalEmbeddings(64), db_path=str(ROOT / "data" / "longrun.db"))
     ts = build_kp_toolset(services)
     router = CommandRouter(services)

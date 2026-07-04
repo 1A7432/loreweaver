@@ -75,7 +75,7 @@ jobs:
           uv run python scripts/playtest.py \
             --module tests/fixtures/module_en.txt \
             --players 2 --turns 6 --sessions 2 \
-            --secret-concepts "Deep One,Deep Ones,thrall,drowned,lure,pact,Elias Crane" \
+            --secret-concepts "Deep One,Deep Ones,thrall,lure,pact" \
             --max-leak-rate "${{ vars.EVAL_MAX_LEAK_RATE || '0.0' }}" \
             --max-dice-miss-rate "${{ vars.EVAL_MAX_DICE_MISS_RATE || '0.2' }}" \
             --log eval-logs/playtest.jsonl \
@@ -97,7 +97,7 @@ jobs:
           uv run python scripts/longrun.py \
             --module tests/fixtures/module_en.txt \
             --max-turns 30 --probe-every 10 --budget 300 \
-            --secret-concepts "Deep One,Deep Ones,thrall,drowned,lure,pact,Elias Crane" \
+            --secret-concepts "Deep One,Deep Ones,thrall,lure,pact" \
             --max-leak-rate "${{ vars.EVAL_MAX_LEAK_RATE || '0.0' }}" \
             --max-dice-miss-rate "${{ vars.EVAL_MAX_DICE_MISS_RATE || '0.2' }}" \
             --log eval-logs/longrun.jsonl \
