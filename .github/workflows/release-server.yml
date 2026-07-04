@@ -114,18 +114,7 @@ jobs:
               --notes "Rolling self-contained server build from main -- no Python/uv needed." --latest
           fi
 
-      - name: Set up SSH
-        run: |
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "${{ secrets.LW_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          host="${{ secrets.LW_SSH_TARGET }}"; host="${host##*@}"
-          ssh-keyscan -H "$host" >> ~/.ssh/known_hosts 2>/dev/null
-
-      - name: Publish bundles to the mirror
-        # ubuntu-latest no longer ships rsync, so use scp (same as deploy-client.yml).
-        run: |
-          T="${{ secrets.LW_SSH_TARGET }}"
-          scp dist/loreweaver-server-* "$T:/var/www/1a7432.site/trpg/"
-          ssh "$T" "chmod -R a+rX /var/www/1a7432.site/trpg"
-          echo "published → /trpg/loreweaver-server-*"
+      # NO mirror step for server bundles — deliberately. The 1a7432.site mirror is a small
+      # personal VPS on a thin pipe; it carries only the tiny installers + client tarball
+      # (deploy-client.yml). The ~50MB per-platform bundles are served by GitHub Releases ONLY
+      # (a runner->CN scp of ~200MB crawled for hours and left truncated files on the mirror).

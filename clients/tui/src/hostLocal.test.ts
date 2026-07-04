@@ -19,11 +19,10 @@ describe("hostLocal — binary acquisition mapping (pure helpers only; no proces
     expect(assetNameFor("", "")).toBeUndefined()
   })
 
-  test("binaryUrlsFor yields the GitHub release first, then the site mirror, in order", () => {
+  test("binaryUrlsFor yields ONLY the GitHub release (the small mirror VPS never carries bundles)", () => {
     const asset = "loreweaver-server-linux-x64.tar.gz"
     expect(binaryUrlsFor(asset)).toEqual([
       `https://github.com/1A7432/loreweaver/releases/download/latest/${asset}`,
-      `https://1a7432.site/trpg/${asset}`,
     ])
   })
 
@@ -34,11 +33,9 @@ describe("hostLocal — binary acquisition mapping (pure helpers only; no proces
       "loreweaver-server-windows-x64.zip",
     ]) {
       const urls = binaryUrlsFor(asset)
-      expect(urls).toHaveLength(2)
+      expect(urls).toHaveLength(1)
       expect(urls[0]).toContain(asset)
-      expect(urls[1]).toContain(asset)
       expect(urls[0]?.startsWith("https://github.com/")).toBe(true)
-      expect(urls[1]?.startsWith("https://1a7432.site/")).toBe(true)
     }
   })
 })

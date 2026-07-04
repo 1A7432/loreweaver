@@ -3,8 +3,8 @@
 //   1. a dev checkout on disk (found by walking up for app.py)
 //   2. a prebuilt server binary fetched on an earlier run (~/.loreweaver/server-bin)
 //   3. server SOURCE fetched on an earlier run (~/.loreweaver/server)
-//   4. download a prebuilt server binary for this OS/arch from the GitHub release (or its
-//      mirror) — no Python/uv/git needed at all when one exists for this platform
+//   4. download a prebuilt server binary for this OS/arch from the GitHub release —
+//      no Python/uv/git needed at all when one exists for this platform
 //   5. fetch the server SOURCE (a tarball by default, so a FRESH machine with no git works;
 //      git clone is only a fallback), then `uv` (which installs Python + deps for us — its
 //      installer is fetched with Bun's own fetch(), so a machine with no Python/curl still
@@ -27,7 +27,6 @@ const LOCAL_KEYS = `${HOME}/.loreweaver/local-keys.toml`
 const LOCAL_SIDECAR = `${HOME}/.loreweaver/keeper-key.txt`
 const REPO = "https://github.com/1A7432/loreweaver"
 const TARBALL = `${REPO}/archive/refs/heads/main.tar.gz`
-const RELEASE_MIRROR = "https://1a7432.site/trpg"
 const READY_TIMEOUT_MS = 60_000 // Iroh waits for a relay handshake, so allow longer than a local socket
 const TICKET_RE = /(endpoint[a-z0-9]{20,})/ // the base32 ticket, printed once the endpoint is online (locale-independent)
 
@@ -54,10 +53,12 @@ export function assetNameFor(platform: string, arch: string): string | undefined
   }
 }
 
-// GitHub release first (canonical, CDN-backed); the site mirror second, for networks that block
-// GitHub. Same rolling-'latest' release the CI packaging job publishes to.
+// GitHub Releases is deliberately the ONLY binary source: the 1a7432.site mirror carries just the
+// tiny installers/client tarball — the owner's small VPS can't serve public ~50MB bundle traffic.
+// Networks that can't fetch this fall through to the source tiers. Returned as a list so more
+// sources can be added later without touching the caller's loop.
 export function binaryUrlsFor(asset: string): string[] {
-  return [`${REPO}/releases/download/latest/${asset}`, `${RELEASE_MIRROR}/${asset}`]
+  return [`${REPO}/releases/download/latest/${asset}`]
 }
 
 export type LogKind = "step" | "out" | "err" | "ok" | "fail"
