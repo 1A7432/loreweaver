@@ -1,19 +1,22 @@
 # Loreweaver
 
-**A self-hosted, terminal-first AI Game Master for tabletop RPGs — world & story first.**
+**An open-source AI Game Master. You bring the players — it runs the game.**
 
 *[中文](README.md) · English*
 
-Loreweaver runs a *game*, not a chat. Beneath the AI **Keeper** sits a real engine: a structured world (module, scenes, NPCs, clues, timeline, hidden truths), a deterministic rules core (real dice, success levels, rule-validated character sheets, a game clock, persistent session history), and a hard secrecy discipline that keeps the plot's secrets out of players' view. The Keeper narrates, adjudicates, and voices NPCs on top of that — but it never invents the dice.
+Every group has players; almost no group has someone who wants to *run* the game. That's the seat Loreweaver fills: it reads the module, remembers the world, plays every NPC, and keeps the secrets. You sit down and say what you do.
 
-You play it in a **game-style terminal UI**: one command drops you into a lobby — connect, build a character, sit down at the table. System-agnostic (**D&D 5e SRD** + **Call of Cthulhu 7e**), English + 中文 at runtime.
+The difference from "chatting with an AI" is simple: **the dice are real.** Checks, damage, sanity — rolled by code, resolved by the rules. The AI turns outcomes into story. It can invent atmosphere; it can't invent numbers.
+
+Call of Cthulhu 7e and D&D 5e (SRD), English and Chinese, with the server running on your own machine.
 
 [![CI](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml/badge.svg)](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml) ![license](https://img.shields.io/badge/license-MIT-green) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![clients](https://img.shields.io/badge/clients-TypeScript%20%2F%20Bun-black)
 
-> **Status — early & honest.** Loreweaver is young and built largely by one person with AI assistance. The deterministic engine (dice, rules, character math) and its offline test suite are solid, and the terminal client is the polished path. Networked p2p multiplayer and real-model Keeper quality are actively maturing — see the **[roadmap](docs/roadmap.md)** for what's ready and what isn't (chat-platform adapters exist in-tree but are unmaintained; the focus is the terminal client).
+> **Honestly:** this is a young project, built mostly by one person with AI help. The dice-and-rules core is the solid part — a full offline test suite watches it — and the terminal client is comfortable now. Networked multiplayer and Keeper quality on real models are still being polished; the [roadmap](docs/roadmap.md) says plainly what works and what doesn't.
 
 ## Why it's different
-Most tools are either **dice bots** (Avrae, SealDice — automation, no GM) or **persona-chat frontends** (SillyTavern — great characters, but no world, no causality, no rules). Loreweaver is the combination none of them have:
+
+Today's tools come in two kinds. Dice bots (Avrae, SealDice): great dice, nobody runs the game. Roleplay chat (SillyTavern): great characters, but no rules, no world, and you can never fail. Loreweaver fills in what both are missing:
 
 | | Real dice/rules | AI Game Master | Persistent world + story | AI party members |
 |---|:---:|:---:|:---:|:---:|
@@ -21,92 +24,88 @@ Most tools are either **dice bots** (Avrae, SealDice — automation, no GM) or *
 | Persona-chat | ❌ | ~ | ❌ | ~ |
 | **Loreweaver** | ✅ | ✅ | ✅ | ✅ |
 
-The bet is that a real dice/rules core plus a knowledge-scoped model can *run* a module the way a human Keeper would. How well that bet pays off depends heavily on the model you bring (see [Model choice](#quickstart)) — that's the honest trade of a system-agnostic, bring-your-own-LLM design.
+Fair warning: how well the AI runs a table depends a lot on the model you plug in. A good one rolls honestly and follows the module; a cheap one likes to talk instead of roll. See [Quickstart](#quickstart) for advice.
 
-## How you play — the terminal lobby
-Run one command and you land in a game menu, not a config file:
+## How you play
+
+One command drops you in a game lobby — no config files:
 
 ![The Loreweaver TUI — a real screenshot: Keeper narration, a dice check, the party roster](assets/tui-en.png)
 
-- **Build a character four ways** — roll on the rulepack's formula, set stats by hand (with a live point-buy / skill-point budget), describe your character in prose and let the AI draft the sheet, or import a SillyTavern card. **Every path is checked against the rule system**: out-of-range or over-budget values are clamped by deterministic code, never left to the AI's word.
-- **Keyboard *and* mouse**, a die-face cursor, a live "Keeper is thinking" spinner (so you can tell it's working, not frozen), and a party roster that folds open to full sheets. The **top HUD** carries the scene name, in-game clock and local time, plus context-window %, input/output tokens and cache-hit rate; a 🟢/🟡/🔴 status light auto-reconnects on a drop (sleep / network change / server restart) — no need to relaunch.
-- Keeper-only tools — mint invite keys, hot-swap the model, import a module — appear only when you connect with a keeper key.
+- **Four ways to build a character** — roll it, fill it in by hand (the UI stops you when you're over budget), describe your character in a sentence and let the AI draft the sheet, or drop in a SillyTavern card. Whichever way, the rules get the last word — an illegal stat doesn't go through, no matter what the AI says.
+- **Keyboard and mouse both work.** A spinner shows while the Keeper thinks, so you're never staring at a frozen screen; the top bar carries the scene, in-game time, real time and token spend; if you drop, the client reconnects on its own.
+- Minting invites, swapping models and importing modules are the Keeper's business — those pages only appear when you connect with a keeper key.
 
-Real dice, a persistent story, no browser needed — just the terminal client.
+## Host a game for your friends
 
-## Host a game for your friends (self-host, 3 steps)
+You run the server on your own computer and send out a ticket + invite keys. Friends install a client and they're in. No domain, no certificates, no port forwarding.
 
-The real way to play: you **self-host** and hand out a ticket + invite keys. **Your friends only install the client — no docs to read.** The default is **Iroh p2p (recommended)**: run one command on **your own machine** and friends dial in — **no domain, no TLS, no port-forward**.
-
-**① You (host / Keeper) — start the server + grab your ticket & key**
+**① You (the Keeper) — start the server**
 ```bash
-python -m app --serve   # prints a p2p ticket (endpoint…) + the keeper key auto-minted on first boot
-                        # (also written to iroh-ticket.txt / keeper-key.txt)
+python -m app --serve   # prints a p2p ticket + a keeper key (also saved to iroh-ticket.txt / keeper-key.txt)
 ```
-Run `loreweaver`; in the connect screen's **Ticket / host** field paste that ticket + the keeper key + a nickname.
+Then run `loreweaver` and paste the ticket + keeper key on the connect screen.
 
-**② You — create a room + mint one key per friend**
-Main menu → **Rooms & invites** → enter a **room name + friend's name + role (player)** → mint a key and send it. ("Creating a room" is just minting a key for a new room name — no server access; mint a `keeper`-role key for a co-Keeper.)
+**② Make a room, send out invites**
+Main menu → **Rooms & invites** → room name + friend's name → mint a key and send it over. Naming a room *is* creating it; mint a keeper-role key if you want a co-GM.
 
-**③ Friend (player) — one-line install + connect**
+**③ Your friends — install and join**
 ```bash
 curl -fsSL https://1a7432.site/trpg/install.sh | bash   # Windows: irm https://1a7432.site/trpg/install.ps1 | iex
-loreweaver     # connect screen: paste the ticket + the invite key you gave them + a nickname
+loreweaver     # paste the ticket + their invite key, pick a nickname
 ```
-Same table, sit down, play. No accounts — the invite key is the ticket in.
+No sign-ups. The invite key is the whole ceremony.
 
-> **Transport**: Loreweaver connects over **Iroh** — direct peer-to-peer QUIC, dialed by a ticket, with no domain, TLS, or port-forward. The server identity is **persisted** (the node key lives in the data dir), so the **ticket stays the same across restarts** — share it once, it keeps working (a long-running server uses systemd; `stop`/`restart` shut down cleanly over SIGTERM). Rich media (images/audio) is on the roadmap and will ride this transport (via iroh-blobs). See [docs/protocol.md](docs/protocol.md).
+> The ticket lives on the server and survives restarts — share it once, it keeps working. Dropped clients reconnect on their own. Images and audio will ride the same p2p channel later ([roadmap](docs/roadmap.md)); protocol details in [docs/protocol.md](docs/protocol.md).
 
 ## Highlights
-- **AI Keeper via standard function-calling** — 60+ Keeper tools (dice, checks, sanity, sheets, module knowledge, notes, session reports, initiative). Bring any OpenAI-compatible or native model; the recommended default is **`deepseek-v4-pro` with thinking on**.
-- **Extend it in plain language** — from the TUI's Rule systems / Skills / Module pages, the Keeper describes what they want and the KP **generates → validates via the real loader → installs → goes live**. No bespoke formats: rule packs are data-driven `rulepacks/*.yaml`, skills follow **Claude Code's `SKILL.md`** convention (with `allowed-tools` tool-gating), and characters/world-info follow the **SillyTavern** ecosystem (V2/V3 cards + lorebooks) so existing tooling migrates with zero friction. Generated artifacts are validated before write, land in a user data dir, never override built-ins, and never `eval` an arbitrary string (risk-layered data → declarative skills → code plugins; see [docs/plugins.md](docs/plugins.md)).
-- **Relationship tracks (social / romance)** — enabling the `romance-relationships` skill unlocks a gated toolset that tracks **affection / desire** as **deterministic, clamped, persisted** values (directional and asymmetric), giving a social campaign a real ledger — the numbers are code, the narration stays the model's.
-- **Deterministic core, generative surface** — dice/`d20`, CoC success levels, character math, **character-creation rule validation**, the content-censor matcher and permissions are real code; narration and NPCs are the model. A check rolls *first*, then the Keeper narrates the graded result. (The censor ships with an empty wordlist — **moderation is OFF by default** and, once configured, only screens the Keeper's own replies, not player input — see [Content moderation](docs/deploy.md#content-moderation).)
-- **Rule-validated characters** — manual, rolled, AI-drafted, or imported, a sheet is always clamped to the rulepack's ranges and point budgets by deterministic code (`core/character_rules.py`) — the AI only proposes.
-- **AI NPCs & AI party members** — knowledge-scoped sub-actors that play fair: each acts *only* on what it would actually know, built by construction from its own record and never the keeper's secret pool, so those actors can't metagame. Fill an empty seat with an AI companion that rolls its own dice.
-- **One shared session** — a RoomHub seats every player at the *same live table*, and keeps the transport-agnostic seam that (once live-tested) chat-platform players could join through.
-- **Two command dialects, one roller** — EN Avrae/d20 (`/roll 4d6kh3`, `[[1d20+5]]`, `adv/dis`) and CN SealDice (`.ra 侦查`, `困难/极难`, `.st 力量50`).
-- **Multi-vendor LLMs** — one env var switches provider: `deepseek`, `groq`, `openrouter`, `together`, `ollama`, `lmstudio`, … (OpenAI-compatible), `chatgpt` / `gpt-subscription` via an OpenAI-compatible proxy, or native `anthropic` / `gemini`.
+
+- **The AI actually runs the game — it doesn't just talk about it.** Rolling dice, checking sheets, taking notes, advancing the clock: all real engine operations, 60+ Keeper tools in total. Bring any OpenAI-compatible or native model; `deepseek-v4-pro` with thinking on is the recommended default.
+- **NPCs can't peek at the script.** Every NPC and AI party member knows only what it should — the plot's secrets are simply out of their reach, so they couldn't spoil it if they tried. Short a player? An AI companion takes the seat, with its own sheet and its own dice.
+- **Ask for it in plain words.** A new rule system, a new play style, a new module — describe it on the management page and the Keeper writes it, checks it, and installs it on the spot. Everything it produces is a standard format (SillyTavern cards, lorebooks, SKILL.md, YAML rule packs), so your existing collection moves right in. Details in [docs/plugins.md](docs/plugins.md).
+- **Romance has a ledger too.** With the romance skill on, affection and desire are actual numbers — kept by code, not by the AI's mood.
+- **Both command dialects work** — Chinese SealDice style (`.ra 侦查`, `.st 力量50`) and English Avrae style (`/roll 4d6kh3`, `adv/dis`), one dice engine underneath.
+- **Content filtering is off by default.** Your table, your rules. If you do turn it on, it screens only the Keeper's output, never player input ([docs](docs/deploy.md#content-moderation)).
 
 ## Quickstart
 ```bash
-uv sync                                  # create .venv + install deps (dev tools included)
+uv sync                                  # create the env + install deps
 
-# Fastest look — offline, no API key (bundled demo Keeper + real seeded dice):
+# Offline taste first — no API key (bundled demo Keeper + real dice):
 uv run python -m app --cli               # try  r 3d6+2 · /roll 4d6kh3 · .ra 侦查 · .setcoc 2
 
-# A real Keeper — copy .env.example → .env and set your model, then:
-uv run python -m app --cli               # natural-language turns now run a real Keeper
+# A real Keeper: copy .env.example to .env, set your model, run again:
+uv run python -m app --cli
 # (no uv? python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[dev,anthropic,gemini]")
 ```
-`.env` for a real Keeper (DeepSeek shown; any OpenAI-compatible or native provider works):
+`.env` looks like this (DeepSeek shown; any OpenAI-compatible or native provider works):
 ```
 TRPG_LLM__PROVIDER=deepseek   TRPG_LLM__API_KEY=sk-…
 TRPG_LLM__CHAT_MODEL=deepseek-v4-pro   TRPG_LLM__REASONING_EFFORT=max
 ```
-> **Model choice matters.** The Keeper leans hard on tool-calling and instruction-following. A capable model (deepseek-v4-pro with thinking, a GPT-4-class model, or Claude) resolves checks with real dice via the tools and stays faithful to the module; a small/cheap model tends to narrate a check's outcome *without* rolling and to drift off-module. Switch live with `.model set <provider> [model]` — no restart.
+> **Don't cheap out on the model.** The Keeper works by calling tools: a strong model (deepseek-v4-pro with thinking, GPT-4-class, Claude) really rolls and follows the module; a bargain model tends to *say* "you succeed" without rolling, and to wander off the plot. Switch live in-game with `.model set <provider> [model]` — no restart.
 
-**Play in the terminal UI (the real experience):**
+**The terminal UI (the real experience):**
 ```bash
-uv run python -m app --serve   # start the Iroh p2p server — prints a ticket + auto-mints a keeper key
-# in another terminal — the client opens on the connect screen:
+uv run python -m app --serve   # start the p2p server — prints a ticket + a keeper key
+# in another terminal:
 cd clients/tui && bun install && bun run dev
 ```
-Paste the printed ticket + keeper key into the connect screen (or just click **Host locally** there, which does all of the above for you). No accounts — the host issues keys that bind players to a shared room.
+Paste the ticket + key into the connect screen. Or skip all of it: click **Host locally** on the connect screen and it does the above for you.
 
-**One-line install for players (no clone/build).** Installs `bun`, fetches the client, and drops a `loreweaver` launcher — one command:
+**One-line install for players (no clone, no build):**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.sh | bash   # Windows: irm https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.ps1 | iex
-loreweaver          # launch → paste your Keeper's ticket + invite key in the connect screen
-loreweaver update   # self-update to the latest client
+loreweaver          # launch, paste the ticket + invite key your Keeper sent you
+loreweaver update   # self-update the client
 ```
 
 ### Run an always-on server (optional)
-Most tables are hosted p2p from a laptop (above). For a 24/7 public game, run it bare-metal on any box:
+Most tables are hosted p2p from a laptop (above). For a 24/7 game, pick any box:
 ```bash
-uv sync && uv run python -m app --serve   # a systemd unit keeps it up — see docs/deploy.md
+uv sync && uv run python -m app --serve   # keep it up with systemd — see docs/deploy.md
 ```
-First run creates `.env` from `.env.example` and **auto-mints a keeper key** (printed + saved to `keeper-key.txt`). Connect with it, then mint more keys / create rooms right in the client's *Rooms & invites* screen. State (SQLite + keys) persists next to the process. Full guide — config, keys, systemd, keeper model — in **[docs/deploy.md](docs/deploy.md)**.
+First run creates `.env` and mints a keeper key (printed, and saved to `keeper-key.txt`). Connect with it; minting keys and creating rooms all happen in the client afterwards. State (SQLite + keys) lives next to the process. Full guide in **[docs/deploy.md](docs/deploy.md)**.
 
 ## Play surfaces
 | Surface | Status |
@@ -126,20 +125,22 @@ The engine scopes all state by a stable `chat_key`; the RoomHub adds live cross-
 
 ## Testing
 ```bash
-uv run pytest -q                            # offline: FakeLLM/FakeEmbeddings + seeded dice, no network/keys
+uv run pytest -q                            # offline: FakeLLM + seeded dice, no network/keys
 uv run ruff check core infra agent gateway net adapters app.py scripts
-uv run python scripts/i18n_lint.py          # no hardcoded natural-language strings
-cd clients/tui && bun install && bun test   # (clients: protocol · tui · web)
+uv run python scripts/i18n_lint.py          # no hardcoded user-facing strings
+cd clients/tui && bun install && bun test   # clients (protocol · tui)
 ```
-Tests are deterministic and offline. The self-play test drives the whole stack (upload → analyze → open → player action → **real seeded dice** check → report) with a **scripted** Keeper, and directly unit-tests the deterministic guarantees: the keeper/player knowledge split (secrets are stripped from the player pool *by construction*), sub-actor isolation (an NPC/companion prompt is assembled *only* from its own record), and real seeded dice. Because the offline Keeper is scripted, this proves the **pipeline and the de-identification are correct — it cannot prove a live model actually exercises good discretion**. That's measured separately by a **nightly real-model red-line gate** (`.github/workflows/redline-eval.yml`, schedule-only, never blocks a PR): it runs `scripts/playtest.py` and `scripts/longrun.py` in `--gate` mode against a cheap real model, scores every turn for leak rate (literal *and* paraphrase) and dice-first miss rate, and fails loudly — exit non-zero + an uploaded log artifact — if either exceeds a configurable threshold; it skips cleanly (not red) if no `EVAL_LLM_API_KEY` secret is configured. See [docs/roadmap.md](docs/roadmap.md) for more. CI (push/PR) runs Python (3.11 · 3.12) + the client packages and stays fully offline — no real-model calls happen there.
+Tests are deterministic and offline. A self-play test drives the whole pipeline with a scripted Keeper (upload → analyze → open the table → player action → real seeded dice → session report), and the hard guarantees — secrets never enter the player pool, an NPC is assembled only from its own record — each have dedicated red-line tests.
+
+Offline tests prove the pipeline; whether a *live* model behaves is measured separately, by a nightly real-model check (`.github/workflows/redline-eval.yml`): a cheap real model scores every turn, and the run fails loudly if the leak rate or the "narrated a check without rolling" rate crosses a threshold. Schedule-only, never blocks a PR; skips cleanly when no `EVAL_LLM_API_KEY` is configured. CI (push/PR) runs Python 3.11/3.12 + the client packages, fully offline.
 
 ## Contributing
-PRs and issues welcome. Before a PR, all of `uv run ruff check …`, `uv run python scripts/i18n_lint.py`, `uv run pytest -q` (and the relevant `bun test`) must pass. Keep the iron rules in [CLAUDE.md](CLAUDE.md) — especially **no hardcoded user-facing strings** (route through `infra.i18n` + `locales/`) and the **information-isolation** red lines. Only open, freely-distributable rule content (SRD / Miskatonic) may be added; bring your own modules at runtime. The **[roadmap](docs/roadmap.md)** lists where help is most useful.
+PRs and issues welcome. Before a PR, get these green: `uv run ruff check …`, `uv run python scripts/i18n_lint.py`, `uv run pytest -q` (and the relevant `bun test`). Keep the iron rules in [CLAUDE.md](CLAUDE.md) — especially: user-facing text goes through i18n, and the information-isolation lines don't break. Only open, freely-distributable rule content (SRD / Miskatonic) may be added; bring your own modules at runtime. The **[roadmap](docs/roadmap.md)** lists where help is most useful.
 
 ## Security
-Never commit secrets — `.env`, issued keys, SSH host keys, and databases are git-ignored (only `*.example.*` are tracked). Host-issued keys bind players to rooms; there is no account system.
+Never commit secrets — `.env`, issued keys, SSH host keys, and databases are git-ignored (only `*.example.*` are tracked).
 
-There is no account system: keys are bearer tokens that bind a player to a room with a player or keeper role. For anything past a trusted group, run the server behind your own authentication and TLS (a reverse proxy) rather than open to the public internet — standard hygiene for any self-hosted service.
+There is no account system: an invite key is a bearer pass that binds a player to a room, with a player or keeper role. Past a trusted circle, put your own authentication and TLS in front rather than facing the open internet — standard hygiene for anything self-hosted.
 
 Found a vulnerability? Please open a private GitHub security advisory rather than a public issue.
 
@@ -147,4 +148,4 @@ Found a vulnerability? Please open a private GitHub security advisory rather tha
 MIT — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE). Includes **D&D 5e SRD 5.1** material (CC-BY-4.0); Call of Cthulhu content is limited to open / Miskatonic Repository material. The gateway/adapter layer derives from **hermes-agent** (MIT, © 2025 Nous Research); the dice engine is **avrae/d20** (MIT); the CN command dialect, CoC success function, and skill-alias tables are re-implemented from **SealDice** (MIT); the terminal client uses **OpenTUI**. No copyrighted adventure text ships with this repo.
 
 ## Roadmap
-See **[docs/roadmap.md](docs/roadmap.md)** for the full plan. The longer arc grows the world engine (generative world · living causal timeline · canon consistency), adds late-joiner catch-up and D&D Beyond sheet import, and live-tests the chat adapters end to end.
+See **[docs/roadmap.md](docs/roadmap.md)** for the full plan. Further out: a world engine that grows (generative world, a living causal timeline, canon consistency), catch-up for late joiners, D&D Beyond sheet import, and live end-to-end testing of the chat adapters.
