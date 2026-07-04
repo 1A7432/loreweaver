@@ -122,33 +122,38 @@ describe("HeaderBar", () => {
     act(() => renderer.destroy())
   })
 
-  test("(f) connectionStatus renders a compact glyph indicator; nothing when absent", async () => {
-    const online = await renderHeader({ connectionStatus: "online" })
+  test("(f) connectionStatus renders a single-width dot; the label shows when no count claims the line", async () => {
+    // The dot is the SAME glyph for every state (color carries the state — captureCharFrame
+    // can't see color), so assert the state via the LABEL, which renders when online === 0
+    // (with a count, the count text takes the shared liveness line instead).
+    const online = await renderHeader({ connectionStatus: "online", online: 0 })
     await online.flush()
-    expect(online.captureCharFrame()).toContain("🟢")
+    const onlineFrame = online.captureCharFrame()
+    expect(onlineFrame).toContain("●")
+    expect(onlineFrame).toContain("online")
     act(() => online.renderer.destroy())
 
-    const reconnecting = await renderHeader({ connectionStatus: "reconnecting" })
+    const reconnecting = await renderHeader({ connectionStatus: "reconnecting", online: 0 })
     await reconnecting.flush()
-    expect(reconnecting.captureCharFrame()).toContain("🟡")
+    expect(reconnecting.captureCharFrame()).toContain("reconnecting")
     act(() => reconnecting.renderer.destroy())
 
-    const connecting = await renderHeader({ connectionStatus: "connecting" })
-    await connecting.flush()
-    expect(connecting.captureCharFrame()).toContain("🟡")
-    act(() => connecting.renderer.destroy())
-
-    const offline = await renderHeader({ connectionStatus: "offline" })
+    const offline = await renderHeader({ connectionStatus: "offline", online: 0 })
     await offline.flush()
-    expect(offline.captureCharFrame()).toContain("🔴")
+    expect(offline.captureCharFrame()).toContain("offline")
     act(() => offline.renderer.destroy())
 
-    const none = await renderHeader()
+    // With BOTH a status and a live count, the dot and the count SHARE one line (the old
+    // stacked layout was a third row that collided with the row below at narrow widths).
+    const both = await renderHeader({ connectionStatus: "online", online: 2 })
+    await both.flush()
+    const bothFrame = both.captureCharFrame()
+    expect(bothFrame).toContain("● 2 online")
+    act(() => both.renderer.destroy())
+
+    const none = await renderHeader({ online: 0 })
     await none.flush()
-    const frame = none.captureCharFrame()
-    expect(frame).not.toContain("🟢")
-    expect(frame).not.toContain("🟡")
-    expect(frame).not.toContain("🔴")
+    expect(none.captureCharFrame()).not.toContain("●")
     act(() => none.renderer.destroy())
   })
 })

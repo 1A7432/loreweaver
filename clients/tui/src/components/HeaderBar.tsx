@@ -53,13 +53,10 @@ function cacheColor(theme: Palette, rate: number | null): string {
   return rate !== null && rate >= 50 ? theme.success : theme.dim
 }
 
-// "connecting" and "reconnecting" share the same amber glyph + label — both mean "not fully
-// online yet", and the distinction (first dial vs. mid-session redial) isn't worth two rows.
-function connGlyph(status: ConnectionStatus): string {
-  if (status === "online") return "🟢"
-  if (status === "offline") return "🔴"
-  return "🟡"
-}
+// A single-width dot for the liveness light — like CLOCK_GLYPH above, an emoji circle
+// (🟢/🟡/🔴) renders double-width or as tofu in many terminal fonts and throws off column
+// math; the STATE is carried by the dot's color (+ the label when no online count shows).
+const CONN_GLYPH = "●"
 
 function connKey(status: ConnectionStatus): "hud.connOnline" | "hud.connReconnecting" | "hud.connOffline" {
   if (status === "online") return "hud.connOnline"
@@ -92,22 +89,38 @@ export function HeaderBar({ welcome, scene, clock, usage, online, theme, locale,
     <box height={4} flexDirection="row" border borderColor={theme.border} paddingX={1}>
       <ascii-font text="LOREWEAVER" font="tiny" color={theme.accent} />
       <box flexDirection="column" marginLeft={2} justifyContent="center">
-        <text fg={theme.accent}>{tt(locale, "game.joined", { room: stripControlChars(welcome.room) })}</text>
-        {online > 0 ? (
-          <text fg={theme.dim}>
-            {online} {tt(locale, "status.online")}
-          </text>
-        ) : null}
-        {connectionStatus ? (
-          <text fg={connColor(theme, connectionStatus)}>
-            {connGlyph(connectionStatus)} {tt(locale, connKey(connectionStatus))}
-          </text>
+        <text fg={theme.accent} wrapMode="none" truncate>
+          {tt(locale, "game.joined", { room: stripControlChars(welcome.room) })}
+        </text>
+        {/* ONE line for liveness: the status glyph + the online count share it — the header has
+            exactly two inner rows, and stacking these separately overflowed the box and collided
+            with the row below (caught by the screenshot harness at 118 cols). With no count the
+            status label rides alone; with no status the count renders as before. */}
+        {connectionStatus || online > 0 ? (
+          <box flexDirection="row">
+            {connectionStatus ? (
+              <text fg={connColor(theme, connectionStatus)}>{CONN_GLYPH} </text>
+            ) : null}
+            {online > 0 ? (
+              <text fg={theme.dim} wrapMode="none" truncate>
+                {online} {tt(locale, "status.online")}
+              </text>
+            ) : connectionStatus ? (
+              <text fg={connColor(theme, connectionStatus)} wrapMode="none" truncate>
+                {tt(locale, connKey(connectionStatus))}
+              </text>
+            ) : null}
+          </box>
         ) : null}
       </box>
 
-      <box flexGrow={1} flexDirection="column" marginLeft={2} justifyContent="center">
-        <text fg={theme.kp}>{stripControlChars(scene?.name ?? tt(locale, "scene.unframed"))}</text>
-        <text fg={theme.fg}>
+      <box flexGrow={1} flexShrink={1} flexDirection="column" marginLeft={2} justifyContent="center">
+        {/* wrapMode none + truncate: when the usage statusline squeezes this center column, the
+            scene/clock lines must TRUNCATE, never wrap into a third row (same collision class). */}
+        <text fg={theme.kp} wrapMode="none" truncate>
+          {stripControlChars(scene?.name ?? tt(locale, "scene.unframed"))}
+        </text>
+        <text fg={theme.fg} wrapMode="none" truncate>
           {CLOCK_GLYPH} {stripControlChars(clock?.time ?? "--:--")}
           {clock?.round ? ` · ${tt(locale, "scene.round")} ${clock.round}` : ""}
         </text>

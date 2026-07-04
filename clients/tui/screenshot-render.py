@@ -43,7 +43,11 @@ while i < len(raw):
 if row: cells.append(row)
 while cells and not any(c[0].strip() or c[2] for c in cells[-1]): cells.pop()
 
-ncols, nrows = 118, len(cells)
+# Canvas width follows the widest captured row (display cells: wide CJK counts as 2)
+# instead of a hardcoded terminal width — capture-screenshots.sh's tmux size is the
+# single source of truth.
+ncols = max((sum(2 if c[3] else 1 for c in r) for r in cells), default=80)
+nrows = len(cells)
 W = MARGIN * 2 + PAD * 2 + ncols * CW
 H = MARGIN * 2 + BAR + PAD * 2 + nrows * CH
 img = Image.new("RGB", (W, H), OUTER)

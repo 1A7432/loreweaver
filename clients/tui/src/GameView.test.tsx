@@ -723,7 +723,11 @@ describe("GameView", () => {
     )
     await flush()
 
-    expect(captureCharFrame()).toContain("🟡")
+    // Single-width dot (color carries the state) + the label, since no online count has
+    // claimed the shared liveness line yet in this fresh view.
+    const frame = captureCharFrame()
+    expect(frame).toContain("●")
+    expect(frame).toContain("reconnecting")
 
     act(() => renderer.destroy())
   })
