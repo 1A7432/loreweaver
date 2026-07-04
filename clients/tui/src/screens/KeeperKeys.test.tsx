@@ -70,6 +70,10 @@ class MockClient implements AppClient {
   adminDeleteRoomData(room: string, backup?: boolean, path?: string): void {
     this.deleteRoomDataCalls.push([room, backup, path])
   }
+  adminListSkills(): void {}
+  adminEnableSkill(_id: string, _on: boolean): void {}
+  adminListRules(): void {}
+  adminGenerate(_kind: string, _description: string): void {}
 
   push(frame: ServerFrame): void {
     for (const listener of this.listeners) listener(frame)

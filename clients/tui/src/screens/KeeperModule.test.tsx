@@ -42,6 +42,10 @@ class MockClient implements AppClient {
   adminExportRoom(_room: string, _path?: string): void {}
   adminImportRoom(_path: string, _room?: string): void {}
   adminDeleteRoomData(_room: string, _backup?: boolean, _path?: string): void {}
+  adminListSkills(): void {}
+  adminEnableSkill(_id: string, _on: boolean): void {}
+  adminListRules(): void {}
+  adminGenerate(_kind: string, _description: string): void {}
 
   push(frame: ServerFrame): void {
     for (const listener of this.listeners) listener(frame)

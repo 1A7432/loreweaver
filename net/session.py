@@ -234,7 +234,7 @@ class SessionCore:
                 # Keeper-gated admin surface. The gate is the connection's keystore role;
                 # `handle_admin_frame` refuses non-keepers and scopes destructive ops to its OWN room.
                 reply = await handle_admin_frame(
-                    self.services, self.keystore, member.role, member.room, frame, i18n
+                    self.services, self.keystore, member.role, member.room, frame, i18n, fs=self.fs
                 )
                 await member.send_frame(reply)
                 return

@@ -184,6 +184,29 @@ describe("WsClient", () => {
     ])
   })
 
+  test("admin plugin-management helpers (B.4a) send the right frames", async () => {
+    const { client, sockets } = createClient()
+    await client.connect("ws://example.test")
+
+    client.adminListSkills()
+    client.adminEnableSkill("mature-mode", true)
+    client.adminEnableSkill("mature-mode", false)
+    client.adminListRules()
+    client.adminGenerate("skill", "a grim survival horror campaign")
+    client.adminGenerate("rule", "a pulp adventure system")
+    client.adminGenerate("module", "a marsh mystery")
+
+    expect(sockets[0].sent.map((raw) => JSON.parse(raw))).toEqual([
+      { type: FrameType.AdminListSkills },
+      { type: FrameType.AdminEnableSkill, id: "mature-mode", on: true },
+      { type: FrameType.AdminEnableSkill, id: "mature-mode", on: false },
+      { type: FrameType.AdminListRules },
+      { type: FrameType.AdminGenerate, kind: "skill", description: "a grim survival horror campaign" },
+      { type: FrameType.AdminGenerate, kind: "rule", description: "a pulp adventure system" },
+      { type: FrameType.AdminGenerate, kind: "module", description: "a marsh mystery" },
+    ])
+  })
+
   test("adminSetModel carries the key/base_url + adminListModels send the new admin frames", async () => {
     const { client, sockets } = createClient()
     await client.connect("ws://example.test")
@@ -247,5 +270,42 @@ describe("WsClient", () => {
       FrameType.AdminRoomOp,
       FrameType.AdminError,
     ])
+  })
+
+  test("incoming admin_skills / admin_rules / admin_generated frames (B.4a) are dispatched", async () => {
+    const { client, sockets } = createClient()
+    const seen: string[] = []
+    client.on(FrameType.AdminSkills, () => seen.push(FrameType.AdminSkills))
+    client.on(FrameType.AdminRules, () => seen.push(FrameType.AdminRules))
+    client.on(FrameType.AdminGenerated, () => seen.push(FrameType.AdminGenerated))
+
+    await client.connect("ws://example.test")
+    sockets[0].serverSend({
+      type: FrameType.AdminSkills,
+      skills: [
+        { id: "mature-mode", name: "Mature mode", description: "...", content_rating: "explicit", enabled: false },
+      ],
+    })
+    sockets[0].serverSend({
+      type: FrameType.AdminRules,
+      systems: [
+        { id: "coc7", built_in: true },
+        { id: "dnd5e", built_in: true },
+      ],
+    })
+    sockets[0].serverSend({
+      type: FrameType.AdminGenerated,
+      kind: "skill",
+      ok: true,
+      id: "grim-survival-horror",
+      name: "Grim Survival Horror",
+      error: "",
+    })
+    // Malformed variants of each are dropped, not dispatched.
+    sockets[0].serverSendRaw(JSON.stringify({ type: FrameType.AdminSkills })) // no `skills`
+    sockets[0].serverSendRaw(JSON.stringify({ type: FrameType.AdminRules })) // no `systems`
+    sockets[0].serverSendRaw(JSON.stringify({ type: FrameType.AdminGenerated, kind: "skill" })) // no `ok`
+
+    expect(seen).toEqual([FrameType.AdminSkills, FrameType.AdminRules, FrameType.AdminGenerated])
   })
 })

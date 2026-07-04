@@ -3,7 +3,10 @@ import {
   isPingFrame,
   isServerFrame,
   type AdminDeleteRoomDataFrame,
+  type AdminEnableSkillFrame,
   type AdminExportRoomFrame,
+  type AdminForgeKind,
+  type AdminGenerateFrame,
   type AdminImportRoomFrame,
   type AdminListModelsFrame,
   type AdminMintKeyFrame,
@@ -193,6 +196,25 @@ export class IrohClient implements AppClient {
     const frame: AdminDeleteRoomDataFrame = { type: FrameType.AdminDeleteRoomData, room }
     if (backup !== undefined) frame.backup = backup
     if (path) frame.path = path
+    this.sendFrame(frame)
+  }
+
+  // ---- v1.1 additive: Layer B.4a plugin management, identical wire to WsClient ------
+  adminListSkills(): void {
+    this.sendFrame({ type: FrameType.AdminListSkills })
+  }
+
+  adminEnableSkill(id: string, on: boolean): void {
+    const frame: AdminEnableSkillFrame = { type: FrameType.AdminEnableSkill, id, on }
+    this.sendFrame(frame)
+  }
+
+  adminListRules(): void {
+    this.sendFrame({ type: FrameType.AdminListRules })
+  }
+
+  adminGenerate(kind: AdminForgeKind, description: string): void {
+    const frame: AdminGenerateFrame = { type: FrameType.AdminGenerate, kind, description }
     this.sendFrame(frame)
   }
 }

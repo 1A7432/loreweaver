@@ -13,15 +13,80 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import agent.forge as forge_module
+import core.rulepacks as rulepacks_module
+import core.skills as skills_module
 from agent.services import build_services
+from gateway.ops import get_enabled_skills, set_enabled_skills
 from infra.config import LLMSettings, Settings
 from infra.embeddings import FakeEmbeddings
-from infra.llm import FakeLLM
+from infra.llm import FakeLLM, assistant_text
 from infra.providers import MutableLLM
 from net.keystore import Keystore
 from net.room_backup import chat_key_for_room
 from net.tui_server import TuiServer
 from tests.net.test_tui_server import _connect_and_join, _recv, _start
+
+# A minimal valid SKILL.md the forge's skill generator can author (mirrors
+# `tests/agent/test_forge.py`'s fixture); its name doesn't collide with any built-in skill id.
+_VALID_SKILL_MD = """---
+name: Grim Survival Horror
+description: >
+  Enable for a campaign about grinding, resource-scarce survival horror: supplies run out,
+  wounds linger, and every choice costs something.
+allowed-tools: []
+metadata:
+  scope: room
+  content-rating: mature
+---
+
+# Grim survival horror
+
+Track scarcity relentlessly: ammunition, food, and light sources are real, finite resources.
+"""
+
+# A minimal valid rulepack YAML (mirrors `tests/agent/test_forge_rulepack.py`'s fixture); its
+# id/names don't collide with either built-in system (coc7/dnd5e).
+_VALID_RULEPACK_YAML = """
+names: [pulp-adventure, pulp]
+set_keys: [pulp]
+defaults:
+  力量: 10
+  意志: 10
+alias:
+  力量: [STR, strength]
+derived:
+  生命值上限:
+    half_of: 意志
+"""
+
+_GENERATED_MODULE_MD = """# The Salt Marsh Vanishing
+
+## Player-facing premise
+Fisherfolk have gone missing near the marsh town of Greyreed.
+
+## KEEPER-ONLY
+The ferryman is the culprit, bound to an old pact.
+"""
+
+
+def _scripted_module_analysis_json() -> str:
+    """A minimal well-formed module-analysis JSON — the shape `agent.forge`'s module generator's
+    `upload_document(doc_type="module")` call triggers analysis for (mirrors
+    `tests/agent/test_forge_module.py`'s fixture)."""
+    return json.dumps(
+        {
+            "npcs": [
+                {
+                    "name": "The Ferryman",
+                    "description": "A quiet old man.",
+                    "secret": "He is the culprit.",
+                    "role": "antagonist",
+                }
+            ],
+            "summary": "Investigators uncover the truth behind the marsh disappearances.",
+        }
+    )
 
 
 def _services(data_dir: str = "./data"):
@@ -146,6 +211,10 @@ async def test_player_role_connection_is_refused_every_admin_action():
             {"type": "admin_export_room", "room": "arkham"},
             {"type": "admin_import_room", "path": "backup.json"},
             {"type": "admin_delete_room_data", "room": "arkham"},
+            {"type": "admin_list_skills"},
+            {"type": "admin_enable_skill", "id": "mature-mode", "on": True},
+            {"type": "admin_list_rules"},
+            {"type": "admin_generate", "kind": "skill", "description": "anything"},
         ):
             reply = await _send(ws, request)
             assert reply["type"] == "admin_error"
@@ -419,3 +488,156 @@ async def test_admin_list_models_returns_the_providers_live_catalog():
         await ws.close()
     finally:
         await server.close()
+
+
+async def test_admin_list_rules_returns_the_built_in_systems():
+    services = _services()
+    keystore = Keystore()
+    keeper_key = keystore.add(room="arkham", name="Keeper", role="keeper")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        ws, *_ = await _connect_and_join(url, keeper_key, "Keeper")
+
+        reply = await _send(ws, {"type": "admin_list_rules"})
+        assert reply["type"] == "admin_rules"
+        by_id = {system["id"]: system["built_in"] for system in reply["systems"]}
+        assert by_id.get("coc7") is True
+        assert by_id.get("dnd5e") is True
+
+        await ws.close()
+    finally:
+        await server.close()
+
+
+async def test_admin_list_skills_reflects_the_callers_room_and_enable_toggles_it():
+    services = _services()
+    keystore = Keystore()
+    keeper_key = keystore.add(room="arkham", name="Keeper", role="keeper")
+    chat_key = chat_key_for_room("arkham")
+    await set_enabled_skills(services.store, chat_key, ["romance-relationships"])
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        ws, *_ = await _connect_and_join(url, keeper_key, "Keeper")
+
+        listed = await _send(ws, {"type": "admin_list_skills"})
+        assert listed["type"] == "admin_skills"
+        by_id = {skill["id"]: skill for skill in listed["skills"]}
+        assert "mature-mode" in by_id and "romance-relationships" in by_id
+        # enabled reflects THIS room's store flag, set above for romance-relationships only.
+        assert by_id["romance-relationships"]["enabled"] is True
+        assert by_id["mature-mode"]["enabled"] is False
+        assert by_id["mature-mode"]["content_rating"] == "explicit"
+        assert by_id["mature-mode"]["name"]
+        assert by_id["mature-mode"]["description"]
+
+        # toggling ON another skill leaves the first one enabled and a follow-up admin_skills
+        # reflects both.
+        enabled = await _send(ws, {"type": "admin_enable_skill", "id": "mature-mode", "on": True})
+        assert enabled["type"] == "admin_skills"
+        by_id = {skill["id"]: skill for skill in enabled["skills"]}
+        assert by_id["mature-mode"]["enabled"] is True
+        assert by_id["romance-relationships"]["enabled"] is True
+        assert set(await get_enabled_skills(services.store, chat_key)) == {"romance-relationships", "mature-mode"}
+
+        # toggling it back off removes it and nothing else.
+        disabled = await _send(ws, {"type": "admin_enable_skill", "id": "mature-mode", "on": False})
+        by_id = {skill["id"]: skill for skill in disabled["skills"]}
+        assert by_id["mature-mode"]["enabled"] is False
+        assert by_id["romance-relationships"]["enabled"] is True
+        assert await get_enabled_skills(services.store, chat_key) == ["romance-relationships"]
+
+        # an unknown skill id is refused, not silently ignored.
+        bad = await _send(ws, {"type": "admin_enable_skill", "id": "no-such-skill", "on": True})
+        assert bad["type"] == "admin_error"
+        assert bad["code"] == "bad_request"
+
+        await ws.close()
+    finally:
+        await server.close()
+
+
+async def test_admin_generate_authors_and_installs_skill_rule_and_module(tmp_path):
+    """`admin_generate` for each `kind` runs the matching `agent.forge` engine end to end (a real
+    `TuiServer` + FakeLLM-scripted responses, mirroring `tests/agent/test_forge*.py`'s fixtures),
+    and a bogus `kind`/a blank `description` are refused as `admin_error{bad_request}`."""
+    skill_dir = tmp_path / "skills"
+    rulepack_dir = tmp_path / "rulepacks"
+    module_dir = tmp_path / "modules"
+    for directory in (skill_dir, rulepack_dir, module_dir):
+        directory.mkdir()
+
+    original_skill_dir = skills_module._USER_SKILL_DIR
+    original_rulepack_dir = rulepacks_module._USER_RULEPACK_DIR
+    original_module_dir = forge_module._USER_MODULE_DIR
+    skills_module._USER_SKILL_DIR = skill_dir
+    rulepacks_module._USER_RULEPACK_DIR = rulepack_dir
+    forge_module._USER_MODULE_DIR = module_dir
+    skills_module.reload_skills()
+    rulepacks_module.reload_rulepacks()
+    try:
+        script = [
+            assistant_text(_VALID_SKILL_MD),
+            assistant_text(_VALID_RULEPACK_YAML),
+            assistant_text(_GENERATED_MODULE_MD),
+            assistant_text(_scripted_module_analysis_json()),
+        ]
+        settings = Settings(
+            locale="en", data_dir=str(tmp_path), llm=LLMSettings(provider="openai", chat_model="gpt-4o")
+        )
+        services = build_services(settings, llm=FakeLLM(script=script), embeddings=FakeEmbeddings(64))
+        keystore = Keystore()
+        keeper_key = keystore.add(room="arkham", name="Keeper", role="keeper")
+        server = TuiServer(services, keystore, port=0)
+        url = await _start(server)
+        try:
+            ws, *_ = await _connect_and_join(url, keeper_key, "Keeper")
+
+            skill_reply = await _send(
+                ws, {"type": "admin_generate", "kind": "skill", "description": "a grim survival horror campaign"}
+            )
+            assert skill_reply["type"] == "admin_generated"
+            assert skill_reply["kind"] == "skill"
+            assert skill_reply["ok"] is True
+            assert skill_reply["id"] == "grim-survival-horror"
+            assert skill_reply["name"] == "Grim Survival Horror"
+            assert skill_reply["error"] == ""
+
+            rule_reply = await _send(
+                ws, {"type": "admin_generate", "kind": "rule", "description": "a pulp adventure system"}
+            )
+            assert rule_reply["type"] == "admin_generated"
+            assert rule_reply["ok"] is True
+            assert rule_reply["id"] == "pulp-adventure"
+
+            module_reply = await _send(
+                ws, {"type": "admin_generate", "kind": "module", "description": "a marsh mystery"}
+            )
+            assert module_reply["type"] == "admin_generated"
+            assert module_reply["ok"] is True
+            assert module_reply["name"] == "The Salt Marsh Vanishing"
+            # `detail` carries the per-room install outcome — the only signal (beyond `ok`) that the
+            # module actually reached the room's knowledge pool. Present + non-empty for a module.
+            assert module_reply["detail"]
+            # skill/rule generation has no per-room install step, so their `detail` is empty.
+            assert skill_reply["detail"] == ""
+            assert rule_reply["detail"] == ""
+
+            bogus = await _send(ws, {"type": "admin_generate", "kind": "bogus", "description": "x"})
+            assert bogus["type"] == "admin_error"
+            assert bogus["code"] == "bad_request"
+
+            blank = await _send(ws, {"type": "admin_generate", "kind": "skill", "description": "   "})
+            assert blank["type"] == "admin_error"
+            assert blank["code"] == "bad_request"
+
+            await ws.close()
+        finally:
+            await server.close()
+    finally:
+        skills_module._USER_SKILL_DIR = original_skill_dir
+        rulepacks_module._USER_RULEPACK_DIR = original_rulepack_dir
+        forge_module._USER_MODULE_DIR = original_module_dir
+        skills_module.reload_skills()
+        rulepacks_module.reload_rulepacks()

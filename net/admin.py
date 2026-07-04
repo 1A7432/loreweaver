@@ -18,7 +18,17 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
+from agent.context import AgentCtx, FsAdapter
+from agent.forge import (
+    ForgeResult,
+    generate_and_install_module,
+    generate_and_install_rulepack,
+    generate_and_install_skill,
+)
 from agent.services import Services
+from core.rulepacks import available_systems, built_in_rulepack_ids
+from core.skills import available_skills
+from gateway.ops import get_enabled_skills, set_enabled_skills
 from infra.i18n import I18n
 from infra.providers import (
     CHATGPT_SUBSCRIPTION_PROXY_PROVIDER_NAMES,
@@ -30,7 +40,7 @@ from infra.providers import (
     mask_secret,
 )
 from net.keystore import Keystore
-from net.room_backup import delete_room_data, export_room, import_room
+from net.room_backup import chat_key_for_room, delete_room_data, export_room, import_room
 
 # The client -> server admin request frames this module answers.
 _ADMIN_REQUESTS: frozenset[str] = frozenset(
@@ -46,6 +56,10 @@ _ADMIN_REQUESTS: frozenset[str] = frozenset(
         "admin_export_room",
         "admin_import_room",
         "admin_delete_room_data",
+        "admin_list_skills",
+        "admin_enable_skill",
+        "admin_list_rules",
+        "admin_generate",
     }
 )
 
@@ -64,6 +78,8 @@ async def handle_admin_frame(
     caller_room: str,
     frame: dict[str, Any],
     i18n: I18n,
+    *,
+    fs: FsAdapter | None = None,
 ) -> dict[str, Any]:
     """Handle one admin request `frame`, returning the reply frame to send.
 
@@ -74,6 +90,13 @@ async def handle_admin_frame(
     to) — a keeper cannot reach into another room's data or keys. Either gate
     failing yields `admin_error {code:"forbidden"}` and nothing is read or mutated.
     (Minting/listing keys stay deployment-global, matching their prior behavior.)
+    The KP-skills list/enable and the forge (`admin_generate`) requests are ALSO
+    scoped to `caller_room` (a room's enabled-skill set, and — for `kind:"module"`
+    — the room a generated module is installed into). `fs` is the `FsAdapter` a
+    generated module's install needs (see `_generate`); transports without one
+    (e.g. no filesystem bridge configured) still answer, but a module generation
+    then fails cleanly via `agent.kp_tools_knowledge.DocumentTools.upload_document`'s
+    own `ctx.fs is None` guard rather than raising.
     """
     if role != _KEEPER_ROLE:
         return _error("forbidden", i18n)
@@ -101,6 +124,14 @@ async def handle_admin_frame(
         return await _import_room(services, keystore, caller_room, frame, i18n)
     if kind == "admin_delete_room_data":
         return await _delete_room_data(services, keystore, caller_room, frame, i18n)
+    if kind == "admin_list_skills":
+        return await _skills_frame(services, caller_room)
+    if kind == "admin_enable_skill":
+        return await _enable_skill(services, caller_room, frame, i18n)
+    if kind == "admin_list_rules":
+        return _rules_frame()
+    if kind == "admin_generate":
+        return await _generate(services, caller_room, fs, frame, i18n)
     return _error("bad_request", i18n)
 
 
@@ -406,6 +437,118 @@ def _room_op_frame(action: str, result: dict[str, Any]) -> dict[str, Any]:
     if path:
         frame["path"] = path
     return frame
+
+
+# -- KP skills (Layer B.1/B.2) ----------------------------------------------
+
+
+async def _skills_frame(services: Services, caller_room: str) -> dict[str, Any]:
+    """Answer `admin_list_skills`/a fresh post-`admin_enable_skill` reply: every discoverable
+    skill (`core.skills.available_skills`), each marked `enabled` per the CALLER'S room."""
+    chat_key = chat_key_for_room(caller_room)
+    enabled_ids = set(await get_enabled_skills(services.store, chat_key))
+    skills = [
+        {
+            "id": skill.id,
+            "name": skill.name,
+            "description": skill.description,
+            "content_rating": skill.content_rating,
+            "enabled": skill.id in enabled_ids,
+        }
+        for skill in available_skills()
+    ]
+    return {"type": "admin_skills", "skills": skills}
+
+
+async def _enable_skill(
+    services: Services, caller_room: str, frame: dict[str, Any], i18n: I18n
+) -> dict[str, Any]:
+    skill_id = str(frame.get("id") or "").strip()
+    known_ids = {skill.id for skill in available_skills()}
+    if not skill_id or skill_id not in known_ids:
+        return _error("bad_request", i18n)
+
+    chat_key = chat_key_for_room(caller_room)
+    enabled_ids = await get_enabled_skills(services.store, chat_key)
+    on = bool(frame.get("on"))
+    if on:
+        if skill_id not in enabled_ids:
+            enabled_ids = [*enabled_ids, skill_id]
+    else:
+        enabled_ids = [item for item in enabled_ids if item != skill_id]
+    await set_enabled_skills(services.store, chat_key, enabled_ids)
+    return await _skills_frame(services, caller_room)
+
+
+# -- rule systems (Layer A) ---------------------------------------------------
+
+
+def _rules_frame() -> dict[str, Any]:
+    """Answer `admin_list_rules`: every discoverable rule system
+    (`core.rulepacks.available_systems`), each marked `built_in` per
+    `core.rulepacks.built_in_rulepack_ids` (a generated/user-installed pack is `False`)."""
+    built_in = built_in_rulepack_ids()
+    systems = [{"id": system_id, "built_in": system_id in built_in} for system_id in available_systems()]
+    return {"type": "admin_rules", "systems": systems}
+
+
+# -- self-extension forge (Layer B.3) ----------------------------------------
+
+_FORGE_KINDS: frozenset[str] = frozenset({"skill", "rule", "module"})
+
+
+async def _generate(
+    services: Services,
+    caller_room: str,
+    fs: FsAdapter | None,
+    frame: dict[str, Any],
+    i18n: I18n,
+) -> dict[str, Any]:
+    """Answer `admin_generate`: run the matching `agent.forge` engine and reply
+    `admin_generated`. Never `eval`/`exec`s anything — see `agent.forge`'s module docstring;
+    this is only the wire-level dispatch to it, mirroring the gated `generate_*` KP tools
+    (`agent.kp_tools_forge.ForgeTools`) but without requiring a forge skill to be enabled (the
+    admin surface is already keeper-gated by construction)."""
+    kind = str(frame.get("kind") or "").strip()
+    if kind not in _FORGE_KINDS:
+        return _error("bad_request", i18n)
+    description = str(frame.get("description") or "").strip()
+    if not description:
+        return _error("bad_request", i18n)
+
+    if kind == "skill":
+        result = await generate_and_install_skill(services, description)
+    elif kind == "rule":
+        result = await generate_and_install_rulepack(services, description)
+    else:
+        # Mirrors `net.session.SessionCore._ctx_for`'s AgentCtx construction: a keeper-role
+        # context scoped to the CALLER'S room, so the generated module lands in the calling
+        # keeper's own knowledge pool via `agent.kp_tools_knowledge.DocumentTools.upload_document`.
+        ctx = AgentCtx(
+            chat_key=chat_key_for_room(caller_room),
+            user_id="keeper",
+            platform="tui",
+            locale=i18n.locale,
+            fs=fs,
+            extra={"role": _KEEPER_ROLE},
+        )
+        result = await generate_and_install_module(services, ctx, description)
+    return _generated_frame(kind, result)
+
+
+def _generated_frame(kind: str, result: ForgeResult) -> dict[str, Any]:
+    return {
+        "type": "admin_generated",
+        "kind": kind,
+        "ok": result.ok,
+        "id": result.skill_id,
+        "name": result.name,
+        "error": result.error,
+        # `detail` carries the per-room install outcome — for kind="module" it is the ONLY signal
+        # of whether the generated module actually landed in the room's knowledge pool (`ok` merely
+        # means a valid module was authored + written). Empty for skill/rule (no per-room step).
+        "detail": result.detail,
+    }
 
 
 def _error(code: str, i18n: I18n) -> dict[str, Any]:

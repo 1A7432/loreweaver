@@ -164,6 +164,18 @@ Client → server:
   document vectors, and worldbook vectors. `backup` defaults to `true`; with
   backup enabled, deletion only proceeds after the backup write succeeds:
   `{type:"admin_delete_room_data", room:string, backup?:boolean, path?:string}`
+- `admin_list_skills` — list every discoverable KP skill (Layer B.1), marked
+  `enabled` per the CALLER's own room: `{type:"admin_list_skills"}`
+- `admin_enable_skill` — enable/disable one skill for the caller's room; replies
+  a fresh `admin_skills`: `{type:"admin_enable_skill", id:string, on:boolean}`
+- `admin_list_rules` — list every discoverable rule system (Layer A):
+  `{type:"admin_list_rules"}`
+- `admin_generate` — author + install a brand-new skill/rule system/module from a
+  natural-language description via the matching `agent.forge` self-extension
+  engine (Layer B.3); a `kind:"module"` generation installs into the CALLER's own
+  room. This is a slow LLM call answered as a normal request/reply — the client
+  shows a spinner while it awaits `admin_generated`:
+  `{type:"admin_generate", kind:"skill"|"rule"|"module", description:string}`
 
 Server → client:
 
@@ -183,6 +195,18 @@ Server → client:
   `{type:"admin_room_op", action:"export"|"import"|"delete", room:string, path?:string, keys:number, store_rows:number, vector_points:number}`
 - `admin_error` — a localized failure notice (does not close the connection):
   `{type:"admin_error", code:"forbidden"|"unknown_provider"|"bad_request"|"set_failed"|"not_found"|"op_failed", message?:string}`
+- `admin_skills` — every discoverable skill, `enabled` reflecting the caller's room:
+  `{type:"admin_skills", skills:[{id:string, name:string, description:string, content_rating:string, enabled:boolean}]}`
+- `admin_rules` — every discoverable rule system, `built_in` marking a shipped
+  system (`coc7`/`dnd5e`) vs a generated/user-installed one:
+  `{type:"admin_rules", systems:[{id:string, built_in:boolean}]}`
+- `admin_generated` — the forge engine's outcome; `id`/`name` are empty and
+  `error` carries an (untranslated) diagnostic when `ok` is `false`, and nothing
+  was installed:
+  `detail` carries the per-room install outcome — for `kind:"module"` it is the only signal of
+  whether the module actually landed in the room (`ok` merely means a valid document was authored
+  and written); it is empty for `skill`/`rule` (no per-room install step):
+  `{type:"admin_generated", kind:"skill"|"rule"|"module", ok:boolean, id:string, name:string, error:string, detail:string}`
 
 `admin_set_model` validates `provider` against the known providers
 (`infra.providers.is_known_provider`), persists the override via

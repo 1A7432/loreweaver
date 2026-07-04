@@ -33,6 +33,14 @@ export const FrameType = {
   AdminKeys: "admin_keys",
   AdminRoomOp: "admin_room_op",
   AdminError: "admin_error",
+  // v1.1 additive: Layer B.4a plugin-management (KP skills, rule systems, self-extension forge).
+  AdminListSkills: "admin_list_skills",
+  AdminSkills: "admin_skills",
+  AdminEnableSkill: "admin_enable_skill",
+  AdminListRules: "admin_list_rules",
+  AdminRules: "admin_rules",
+  AdminGenerate: "admin_generate",
+  AdminGenerated: "admin_generated",
 } as const
 
 export type FrameType = (typeof FrameType)[keyof typeof FrameType]
@@ -51,6 +59,7 @@ export type AdminErrorCode =
   | "not_found"
   | "op_failed"
 export type AdminRoomOpAction = "export" | "import" | "delete"
+export type AdminForgeKind = "skill" | "rule" | "module"
 
 export interface ClientInfo {
   name: string
@@ -333,6 +342,69 @@ export interface AdminErrorFrame {
   message?: string
 }
 
+// ---- v1.1 additive: Layer B.4a plugin management (KP skills, rule systems, self-extension
+// forge) — see `docs/plugins.md` "Layer B". Keeper-gated exactly like every other `admin_*` frame.
+
+export interface AdminListSkillsFrame {
+  type: typeof FrameType.AdminListSkills
+}
+
+export interface AdminSkillInfo {
+  id: string
+  name: string
+  description: string
+  content_rating: string
+  // Per the CALLING keeper's own room, not global.
+  enabled: boolean
+}
+
+export interface AdminSkillsFrame {
+  type: typeof FrameType.AdminSkills
+  skills: AdminSkillInfo[]
+}
+
+export interface AdminEnableSkillFrame {
+  type: typeof FrameType.AdminEnableSkill
+  id: string
+  on: boolean
+}
+
+export interface AdminListRulesFrame {
+  type: typeof FrameType.AdminListRules
+}
+
+export interface AdminRuleInfo {
+  id: string
+  built_in: boolean
+}
+
+export interface AdminRulesFrame {
+  type: typeof FrameType.AdminRules
+  systems: AdminRuleInfo[]
+}
+
+// Ask the server to author + install a brand-new skill/rule system/module from a natural-language
+// description via the matching `agent.forge` generator. A slow LLM call answered as a normal
+// request/reply — the client shows a spinner while it awaits `AdminGeneratedFrame`.
+export interface AdminGenerateFrame {
+  type: typeof FrameType.AdminGenerate
+  kind: AdminForgeKind
+  description: string
+}
+
+export interface AdminGeneratedFrame {
+  type: typeof FrameType.AdminGenerated
+  kind: AdminForgeKind
+  ok: boolean
+  id: string
+  name: string
+  error: string
+  // Per-room install outcome. For kind:"module" this is the only signal of whether the module
+  // actually landed in the room (ok merely means a valid document was authored + written); empty
+  // for skill/rule, which have no per-room install step.
+  detail: string
+}
+
 export type ClientFrame =
   | JoinFrame
   | InputFrame
@@ -348,6 +420,10 @@ export type ClientFrame =
   | AdminExportRoomFrame
   | AdminImportRoomFrame
   | AdminDeleteRoomDataFrame
+  | AdminListSkillsFrame
+  | AdminEnableSkillFrame
+  | AdminListRulesFrame
+  | AdminGenerateFrame
 
 export type ServerFrame =
   | WelcomeFrame
@@ -363,5 +439,8 @@ export type ServerFrame =
   | AdminKeysFrame
   | AdminRoomOpFrame
   | AdminErrorFrame
+  | AdminSkillsFrame
+  | AdminRulesFrame
+  | AdminGeneratedFrame
 
 export type AnyFrame = ClientFrame | ServerFrame

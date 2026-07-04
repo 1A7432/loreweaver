@@ -1,7 +1,10 @@
 import {
   FrameType,
   type AdminDeleteRoomDataFrame,
+  type AdminEnableSkillFrame,
   type AdminExportRoomFrame,
+  type AdminForgeKind,
+  type AdminGenerateFrame,
   type AdminImportRoomFrame,
   type AdminListModelsFrame,
   type AdminMintKeyFrame,
@@ -72,6 +75,9 @@ const serverFrameValidators: Record<string, (f: Record<string, unknown>) => bool
   [FrameType.AdminRoomOp]: (f) =>
     isStr(f.action) && isStr(f.room) && isNum(f.keys) && isNum(f.store_rows) && isNum(f.vector_points),
   [FrameType.AdminError]: (f) => isStr(f.code),
+  [FrameType.AdminSkills]: (f) => isArr(f.skills),
+  [FrameType.AdminRules]: (f) => isArr(f.systems),
+  [FrameType.AdminGenerated]: (f) => isStr(f.kind) && typeof f.ok === "boolean",
 }
 
 function defaultWebSocketFactory(url: string): WebSocketLike {
@@ -261,6 +267,29 @@ export class WsClient {
     const frame: AdminDeleteRoomDataFrame = { type: FrameType.AdminDeleteRoomData, room }
     if (backup !== undefined) frame.backup = backup
     if (path) frame.path = path
+    this.send(frame)
+  }
+
+  // ---- v1.1 additive: Layer B.4a plugin management (KP skills / rule systems / forge) ----
+
+  adminListSkills(): void {
+    this.send({ type: FrameType.AdminListSkills })
+  }
+
+  adminEnableSkill(id: string, on: boolean): void {
+    const frame: AdminEnableSkillFrame = { type: FrameType.AdminEnableSkill, id, on }
+    this.send(frame)
+  }
+
+  adminListRules(): void {
+    this.send({ type: FrameType.AdminListRules })
+  }
+
+  // Author + install a brand-new skill/rule system/module from a description via the matching
+  // `agent.forge` generator. Slow (an LLM call) but still a plain request/reply — the caller
+  // shows a spinner while awaiting the `admin_generated` reply.
+  adminGenerate(kind: AdminForgeKind, description: string): void {
+    const frame: AdminGenerateFrame = { type: FrameType.AdminGenerate, kind, description }
     this.send(frame)
   }
 

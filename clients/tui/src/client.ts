@@ -1,4 +1,4 @@
-import { WsClient, type PlayerRole, type ServerFrame } from "@loreweaver/protocol"
+import { WsClient, type AdminForgeKind, type PlayerRole, type ServerFrame } from "@loreweaver/protocol"
 import { IrohClient, isIrohTicket } from "./irohClient"
 
 // The full client surface the TUI shell needs. This is the superset the web
@@ -28,6 +28,11 @@ export interface AppClient {
   adminExportRoom(room: string, path?: string): void
   adminImportRoom(path: string, room?: string): void
   adminDeleteRoomData(room: string, backup?: boolean, path?: string): void
+  // v1.1 additive: Layer B.4a plugin management (KP skills / rule systems / self-extension forge).
+  adminListSkills(): void
+  adminEnableSkill(id: string, on: boolean): void
+  adminListRules(): void
+  adminGenerate(kind: AdminForgeKind, description: string): void
 }
 
 // Picks the transport on connect by the shape of the target: a `ws(s)://` URL -> `WsClient`
@@ -93,6 +98,18 @@ class TransportClient implements AppClient {
   }
   adminDeleteRoomData(room: string, backup?: boolean, path?: string): void {
     this.inner?.adminDeleteRoomData(room, backup, path)
+  }
+  adminListSkills(): void {
+    this.inner?.adminListSkills()
+  }
+  adminEnableSkill(id: string, on: boolean): void {
+    this.inner?.adminEnableSkill(id, on)
+  }
+  adminListRules(): void {
+    this.inner?.adminListRules()
+  }
+  adminGenerate(kind: AdminForgeKind, description: string): void {
+    this.inner?.adminGenerate(kind, description)
   }
 }
 
