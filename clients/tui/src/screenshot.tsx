@@ -79,13 +79,8 @@ function welcomeFor(role: "player" | "keeper", room = ROOM): WelcomeFrame {
   }
 }
 
-// `headerOnline` feeds `StateFrame.online`, which is read by BOTH the header's own
-// "N online" line AND the bottom StatusBar. On the game screen this is deliberately
-// 0 (see the `game` branch below) to dodge a real HeaderBar layout overflow; the
-// party roster's per-member online dots come from each member's own `online` flag
-// and are unaffected either way. `round` is included for the menu screen's side
-// ScenePanel (plenty of width there) but omitted on the game screen, where it's
-// the other half of that same overflow (see the `game` branch).
+// `headerOnline` feeds `StateFrame.online` (the header's "N online" line + the bottom
+// StatusBar); per-member roster dots come from each member's own `online` flag.
 function partyState(headerOnline: number, round?: number): StateFrame {
   return {
     type: FrameType.State,
@@ -159,7 +154,7 @@ if (SCREEN === "game") {
 } else if (SCREEN === "connect") {
   const savedServers: SavedServer[] = [
     {
-      host: "iroh:k51qzi5uqu5dlwz0uzp0zvpp7rcxr66kf0hn9dqxnq3en1ilb1jbxxr5m9k8g8",
+      host: "endpointaahnc72q6gbx6gizd54glgrthgqqhenhot2gy4q47vu",
       key: "lw-invite-9f2a7c31",
       name: ROOM,
     },

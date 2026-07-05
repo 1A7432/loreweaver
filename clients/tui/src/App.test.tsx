@@ -100,8 +100,10 @@ describe("App shell", () => {
     expect(frame).toContain("主机")
     expect(frame).toContain("邀请码")
     expect(frame).toContain("昵称")
-    // The default host is prefilled; the menu has not appeared yet.
-    expect(frame).toContain("ws://127.0.0.1:8787")
+    // Fields start empty; the host example is a dim ticket-shaped PLACEHOLDER, not a
+    // pre-filled value the user would have to clear. The menu has not appeared yet.
+    expect(frame).toContain("endpoint…")
+    expect(frame).not.toContain("ws://127.0.0.1:8787")
     expect(frame).not.toContain("进入游戏")
 
     act(() => renderer.destroy())
@@ -113,7 +115,11 @@ describe("App shell", () => {
     await flush()
     await waitForFrame((t) => t.includes("邀请码"))
 
-    // Tab from host -> key, type an invite key, submit with Enter.
+    // Type a host (the field starts empty now), Tab to the key, type it, submit with Enter.
+    await act(async () => {
+      await mockInput.typeText("ws://127.0.0.1:8787")
+    })
+    await flush()
     await act(async () => {
       mockInput.pressTab()
     })
@@ -127,7 +133,7 @@ describe("App shell", () => {
     })
     await flush()
 
-    // connect(url) is awaited before join(key,name); the default url + name apply.
+    // connect(url) is awaited before join(key,name); the default NAME still applies.
     await waitFor(() => client.connectCalls.length > 0)
     expect(client.connectCalls[0]).toBe("ws://127.0.0.1:8787")
     await waitFor(() => client.joinCalls.length > 0)

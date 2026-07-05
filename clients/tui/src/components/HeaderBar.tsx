@@ -115,14 +115,16 @@ export function HeaderBar({ welcome, scene, clock, usage, online, theme, locale,
       </box>
 
       <box flexGrow={1} flexShrink={1} flexDirection="column" marginLeft={2} justifyContent="center">
-        {/* wrapMode none + truncate: when the usage statusline squeezes this center column, the
-            scene/clock lines must TRUNCATE, never wrap into a third row (same collision class). */}
-        <text fg={theme.kp} wrapMode="none" truncate>
-          {stripControlChars(scene?.name ?? tt(locale, "scene.unframed"))}
-        </text>
-        <text fg={theme.fg} wrapMode="none" truncate>
-          {CLOCK_GLYPH} {stripControlChars(clock?.time ?? "--:--")}
-          {clock?.round ? ` · ${tt(locale, "scene.round")} ${clock.round}` : ""}
+        {/* Scene + in-game clock + round share ONE line: the header's top row was sparse while
+            the bottom row (liveness + statusline) was cramped, so the whole center rides the top
+            row. wrapMode none + truncate: when the usage statusline squeezes this column it must
+            TRUNCATE, never wrap into a phantom row (the collision class the reshoot caught). */}
+        <text wrapMode="none" truncate>
+          <span fg={theme.kp}>{stripControlChars(scene?.name ?? tt(locale, "scene.unframed"))}</span>
+          <span fg={theme.fg}>
+            {" "}{CLOCK_GLYPH}{stripControlChars(clock?.time ?? "--:--")}
+            {clock?.round ? ` ·${tt(locale, "scene.round")}${clock.round}` : ""}
+          </span>
         </text>
       </box>
 

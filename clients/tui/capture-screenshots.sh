@@ -12,6 +12,9 @@
 # all /tmp/out`.
 set -euo pipefail
 cd "$(dirname "$0")"
+# Clear any stray renderer from an earlier/aborted run FIRST: a pile of zombie bun
+# processes starves the 10 concurrent sessions below and they get captured pre-boot.
+pkill -f "bun run src/screenshot.tsx" 2>/dev/null || true
 
 SCREENS_ARG="${1:-all}"
 OUT="${2:-../../assets}"
@@ -38,7 +41,7 @@ for S in $SCREENS; do
 done
 
 # Bun boot + first frame ~5-7s.
-sleep 7
+sleep 16
 
 # The `character` screen has no character yet, so it mounts straight on the
 # create form (method="roll" by default) — send real keystrokes over the tmux

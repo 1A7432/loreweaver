@@ -36,6 +36,6 @@ def test_doctor_reports_at_least_four_skills():
     assert returncode == 0, output
 
     # e.g. "Skills: mature-mode, module-forge, ... (5)" — parse the trailing count.
-    match = re.search(r"Skills:.*\((\d+)\)", output)
+    match = re.search(r"KP skills:.*\((\d+)\)", output)
     assert match is not None, output
     assert int(match.group(1)) >= 4, output

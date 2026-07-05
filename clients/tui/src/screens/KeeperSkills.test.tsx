@@ -187,7 +187,7 @@ describe("KeeperSkills", () => {
     act(() => client.push(skillsFrame()))
     await harness.flush()
 
-    await harness.waitForFrame((t) => t.includes("⚄ 生成技能"))
+    await harness.waitForFrame((t) => t.includes("⚄ 生成 KP 技能"))
     // The list is focused on mount: Tab once to reach the description <input>
     // (mirrors the sibling keeper screens' Tab-to-focus-then-type pattern).
     await act(async () => {
@@ -199,8 +199,8 @@ describe("KeeperSkills", () => {
     })
     await harness.flush()
 
-    const buttonFrame = await harness.waitForFrame((t) => t.includes("⚄ 生成技能"))
-    const buttonY = buttonFrame.split("\n").findIndex((line) => line.includes("⚄ 生成技能"))
+    const buttonFrame = await harness.waitForFrame((t) => t.includes("⚄ 生成 KP 技能"))
+    const buttonY = buttonFrame.split("\n").findIndex((line) => line.includes("⚄ 生成 KP 技能"))
     expect(buttonY).toBeGreaterThan(0)
     const listCallsBefore = client.listSkillsCalls
     await act(async () => {
@@ -211,7 +211,7 @@ describe("KeeperSkills", () => {
     expect(client.generateCalls).toContainEqual(["skill", "阴郁的生存恐怖基调"])
 
     // An ANIMATED spinner shows while awaiting the (slow, LLM-backed) reply.
-    const pendingFrame = await harness.waitForFrame((t) => t.includes("正在撰写技能"))
+    const pendingFrame = await harness.waitForFrame((t) => t.includes("正在撰写 KP 技能"))
     expect(SPINNER_FRAMES.some((glyph) => pendingFrame.includes(glyph))).toBe(true)
 
     act(() =>
@@ -245,7 +245,7 @@ describe("KeeperSkills", () => {
     act(() => client.push(skillsFrame()))
     await harness.flush()
 
-    await harness.waitForFrame((t) => t.includes("⚄ 生成技能"))
+    await harness.waitForFrame((t) => t.includes("⚄ 生成 KP 技能"))
     await act(async () => {
       harness.mockInput.pressTab()
     })
@@ -255,15 +255,15 @@ describe("KeeperSkills", () => {
     })
     await harness.flush()
 
-    const buttonFrame = await harness.waitForFrame((t) => t.includes("⚄ 生成技能"))
-    const buttonY = buttonFrame.split("\n").findIndex((line) => line.includes("⚄ 生成技能"))
+    const buttonFrame = await harness.waitForFrame((t) => t.includes("⚄ 生成 KP 技能"))
+    const buttonY = buttonFrame.split("\n").findIndex((line) => line.includes("⚄ 生成 KP 技能"))
     await act(async () => {
       await harness.mockMouse.click(CLICK_X, buttonY)
     })
     await harness.flush()
 
     // The animated spinner is up while awaiting.
-    const pending = await harness.waitForFrame((t) => t.includes("正在撰写技能"))
+    const pending = await harness.waitForFrame((t) => t.includes("正在撰写 KP 技能"))
     expect(SPINNER_FRAMES.some((glyph) => pending.includes(glyph))).toBe(true)
 
     // A real backend failure (LLM timeout / rate-limit / 401) comes back as a GENERIC error frame,
@@ -274,7 +274,7 @@ describe("KeeperSkills", () => {
     const after = await harness.waitForFrame((t) => t.includes("KP 后端超时"))
     expect(after).toContain("KP 后端超时")
     // Spinner renders null when inactive — its caption is gone, proving no stuck spinner.
-    expect(after).not.toContain("正在撰写技能")
+    expect(after).not.toContain("正在撰写 KP 技能")
 
     act(() => harness.renderer.destroy())
   })
@@ -286,8 +286,8 @@ describe("KeeperSkills", () => {
     act(() => client.push(KEEPER_WELCOME))
     await enterKeeperSkills(harness)
 
-    const form = await harness.waitForFrame((t) => t.includes("⚄ 生成技能"))
-    const buttonY = form.split("\n").findIndex((line) => line.includes("⚄ 生成技能"))
+    const form = await harness.waitForFrame((t) => t.includes("⚄ 生成 KP 技能"))
+    const buttonY = form.split("\n").findIndex((line) => line.includes("⚄ 生成 KP 技能"))
     expect(buttonY).toBeGreaterThan(0)
     await act(async () => {
       await harness.mockMouse.click(CLICK_X, buttonY)

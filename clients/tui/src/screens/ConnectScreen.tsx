@@ -36,7 +36,6 @@ export interface ConnectScreenProps {
   onQuit?: () => void
 }
 
-const DEFAULT_HOST = "ws://127.0.0.1:8787"
 
 type Field = "host" | "key" | "name"
 const FIELD_ORDER: Field[] = ["host", "key", "name"]
@@ -55,9 +54,12 @@ export function ConnectScreen({
   onQuit,
 }: ConnectScreenProps) {
   const defaultName = tt(locale, "connect.defaultName")
-  const [host, setHost] = useState(defaults.host ?? DEFAULT_HOST)
+  // Fields start EMPTY (unless remembered/CLI-prefilled) so the examples read as dim
+  // placeholders, not pre-filled values the user has to clear: the host placeholder shows a
+  // ticket shape, and `submit` still falls back to the default nickname when left blank.
+  const [host, setHost] = useState(defaults.host ?? "")
   const [key, setKey] = useState(defaults.key ?? "")
-  const [name, setName] = useState(defaults.name ?? defaultName)
+  const [name, setName] = useState(defaults.name ?? "")
   const [focused, setFocused] = useState<Field>("host")
 
   // Mirror each field into a ref so submit always reads the latest typed value,

@@ -29,7 +29,7 @@
   "tui.doctor.mode": "模式：{mode}",
   "tui.doctor.locales": "语言包：{locales}",
   "tui.doctor.rulepacks": "规则包：{rulepacks}",
-  "tui.doctor.skills": "技能：{skills}（{count}）",
+  "tui.doctor.skills": "KP 技能：{skills}（{count}）",
   "tui.doctor.data_dir": "数据目录：{path}",
   "tui.doctor.missing_locale": "缺少语言包：{locale}",
   "tui.doctor.missing_rulepack": "缺少规则包：{rulepack}",

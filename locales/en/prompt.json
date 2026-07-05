@@ -73,6 +73,6 @@
   "prompt.session_recap.player_label": "Player",
   "prompt.session_recap.keeper_label": "Keeper",
   "prompt.session_recap.transcript_line": "{role}: {content}",
-  "prompt.skills_header": "## Active play-style skills (follow these)",
+  "prompt.skills_header": "## Active KP skills (play-style packs) (follow these)",
   "prompt.relationships_header": "## Current relationships (deterministic tracks)"
 }
