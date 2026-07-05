@@ -29,7 +29,7 @@ telegram = ["python-telegram-bot>=21.0"]
 discord = ["discord.py>=2.3"]
 feishu = ["lark-oapi>=1.2"]
 vector = ["sqlite-vec>=0.1.1"]
-anthropic = ["anthropic>=0.40"]
+anthropic = ["anthropic>=0.116.0"]
 gemini = ["google-genai>=0.3"]
 # PyInstaller onedir packaging (`scripts/package_server.py`) — a self-contained
 # per-platform server bundle; not needed to develop/run/test loreweaver itself.
@@ -45,7 +45,7 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.5"]
 loreweaver = "app:main"
 
 [build-system]
-requires = ["setuptools>=68", "setuptools-scm>=8"]
+requires = ["setuptools>=83.0.0", "setuptools-scm>=10.2.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools_scm]
