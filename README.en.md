@@ -81,6 +81,7 @@ Fair warning: how well the AI runs a table depends a lot on the model's capabili
 - **Four ways to make a character**: roll one up, fill it in by hand (the UI blocks over-budget stats as you type), describe a persona and let the AI draft it, or drop in a SillyTavern card. Whichever path you take, the rules check the result — if the numbers don't validate, no amount of AI charm gets them through.
 - **Keyboard and mouse both work.** A spinner shows when the KP is thinking, so you're never staring at a frozen screen; the top bar keeps the scene, in-game clock, round, a connection light, and token/cache spend in view; dropped connections reconnect on their own.
 - Invites, model switching, module import, and KP-skill management are the Keeper's business — those screens only appear when you connect with a Keeper key.
+- Looking for a command? The full reference — dice, checks, character sheets, Keeper commands — is the **[player command manual](https://1a7432.site/commands.html)**.
 
 ## Highlights
 
