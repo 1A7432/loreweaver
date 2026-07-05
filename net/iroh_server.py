@@ -28,6 +28,7 @@ from typing import Any
 from gateway.hub import Event
 from gateway.turn import publish_state
 from infra.i18n import get_i18n
+from infra.media_store import MediaError
 from net.session import SessionCore, render_frame, resolve_session_fields, welcome_frame
 
 logger = logging.getLogger(__name__)
@@ -150,6 +151,29 @@ class _LineReader:
                 return None  # EOF / reset
             self._buf.extend(bytes(chunk))
 
+    async def read_exact(self, size: int) -> bytes:
+        """Read exactly `size` bytes after a header line, preserving buffered bytes."""
+        remaining = size
+        out = bytearray()
+        if self._buf:
+            take = min(remaining, len(self._buf))
+            out.extend(self._buf[:take])
+            del self._buf[:take]
+            remaining -= take
+        while remaining > 0:
+            chunk = await self._recv.read(min(_READ_CHUNK, remaining))
+            if not chunk:
+                raise EOFError("media_body_incomplete")
+            data = bytes(chunk)
+            if len(data) > remaining:
+                out.extend(data[:remaining])
+                self._buf.extend(data[remaining:])
+                remaining = 0
+            else:
+                out.extend(data)
+                remaining -= len(data)
+        return bytes(out)
+
 
 def _parse_line(line: bytes) -> dict[str, Any] | None:
     try:
@@ -164,6 +188,11 @@ async def _write_line(send: Any, frame: dict[str, Any]) -> None:
         await send.write_all((json.dumps(frame, ensure_ascii=False) + "\n").encode("utf-8"))
     except Exception:
         pass
+
+
+async def _write_bytes_chunked(send: Any, data: bytes, chunk_size: int = _READ_CHUNK) -> None:
+    for offset in range(0, len(data), chunk_size):
+        await send.write_all(data[offset : offset + chunk_size])
 
 
 class IrohServer:
@@ -233,6 +262,7 @@ class IrohServer:
         if member is None:
             return
         await core.hub.subscribe(member.session_key, member)
+        media_task = asyncio.create_task(self._accept_media_streams(conn, member))
         try:
             await core._replay_history(member)
             await publish_state(core.hub, core.services, core._ctx_for(member))
@@ -242,7 +272,59 @@ class IrohServer:
                     break
                 await core._on_frame(member, line)
         finally:
+            media_task.cancel()
+            try:
+                await media_task
+            except asyncio.CancelledError:
+                pass
+            core.drop_pending_media(member)
             await core.hub.unsubscribe(member)
+
+    async def _accept_media_streams(self, conn: Any, member: IrohMember) -> None:
+        while True:
+            try:
+                bi = await conn.accept_bi()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                return
+            task = asyncio.create_task(self._handle_media_stream(member, bi))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+
+    async def _handle_media_stream(self, member: IrohMember, bi: Any) -> None:
+        send = bi.send()
+        reader = _LineReader(bi.recv())
+        i18n = get_i18n(member.locale)
+        try:
+            line = await reader.readline()
+            header = _parse_line(line or b"")
+            if header is None:
+                await _write_line(send, {"type": "error", "code": "bad_frame", "message": i18n.t("tui.error.bad_frame")})
+                return
+            op = header.get("op")
+            if op == "put":
+                upload_id = str(header.get("upload_id") or "")
+                pending = self.core._pending_media.get(upload_id)
+                if pending is None:
+                    raise MediaError("media_bad_upload")
+                data = await reader.read_exact(pending.size)
+                await self.core.receive_media_put(member, upload_id, data)
+                await _write_line(send, {"op": "put_ok", "hash": pending.sha256})
+                return
+            if op == "get":
+                response_header, data = await self.core.get_media_bytes(member, str(header.get("hash") or ""))
+                await _write_line(send, response_header)
+                await _write_bytes_chunked(send, data)
+                return
+            await _write_line(send, {"type": "error", "code": "bad_frame", "message": i18n.t("tui.error.bad_frame")})
+        except MediaError as exc:
+            await _write_line(send, {"type": "error", "code": exc.code, "message": i18n.t(f"tui.error.{exc.code}")})
+        except Exception:
+            await _write_line(
+                send,
+                {"type": "error", "code": "server_error", "message": i18n.t("tui.error.server_error")},
+            )
 
     async def _authenticate(self, reader: _LineReader, send: Any) -> IrohMember | None:
         """Consume the mandatory first `join` line; `welcome` + return an `IrohMember` on

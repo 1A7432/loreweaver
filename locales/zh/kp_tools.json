@@ -112,6 +112,8 @@
   "kp_tools.initiative.list_item": "{index}. {name}: {initiative}",
   "kp_tools.initiative.next_turn": "➡️ 当前回合: {name}",
   "kp_tools.initiative.unknown_action": "❌ 未知操作: {action}",
+  "kp_tools.map.draw.done": "✅ SVG 地图已发送：{name}（{hash}）",
+  "kp_tools.map.draw.failed": "❌ 绘制 SVG 地图失败：{error}",
   "kp_tools.know.catalog.category_line": "### {category}（{count}）",
   "kp_tools.know.catalog.empty": "❌ 当前没有模组目录，请先上传模组（module/story 类型）",
   "kp_tools.know.catalog.failed": "❌ 获取模组目录失败：{error}",

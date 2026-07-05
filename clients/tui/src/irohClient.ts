@@ -14,6 +14,9 @@ import {
   type AdminUpdateKeyFrame,
   type ClientFrame,
   type ConnectionStatus,
+  type MediaFrame,
+  type MediaPayload,
+  type MediaUpload,
   type PlayerRole,
   type ServerFrame,
 } from "@loreweaver/protocol"
@@ -87,6 +90,7 @@ export interface IrohClientOptions {
  */
 export class IrohClient implements AppClient {
   private endpoint: IrohEndpointLike | undefined
+  private connection: IrohConnectionLike | undefined
   private sendStream: IrohSendStreamLike | undefined
   private manualClose = false
   private ticket?: string
@@ -154,6 +158,7 @@ export class IrohClient implements AppClient {
     // state. Closing only AFTER the handoff means the live stream is never dropped mid-swap.
     const superseded = this.endpoint
     this.endpoint = endpoint
+    this.connection = conn
     this.sendStream = bi.send
     this.reconnectAttempts = 0
     if (superseded && superseded !== endpoint) this.closeEndpoint(superseded)
@@ -245,6 +250,50 @@ export class IrohClient implements AppClient {
     this.sendFrame({ type: FrameType.Input, text })
   }
 
+  async uploadMedia(upload: MediaUpload): Promise<MediaFrame | undefined> {
+    const accept = await this.offerMedia({
+      type: FrameType.MediaOffer,
+      name: upload.name,
+      mime: upload.mime,
+      size: upload.bytes.byteLength,
+      sha256: upload.sha256,
+    })
+    if (accept.existing) return accept.media
+    if (!accept.upload_id) return accept.media
+    const stream = await this.openMediaStream()
+    await stream.send.writeAll(toBytes(`${JSON.stringify({ op: "put", upload_id: accept.upload_id })}\n`))
+    for (let offset = 0; offset < upload.bytes.byteLength; offset += 65536) {
+      await stream.send.writeAll(Array.from(upload.bytes.subarray(offset, offset + 65536)))
+    }
+    // The server confirms the stored blob with a `put_ok` line, or reports a localized error
+    // line (hash/size mismatch, unsafe SVG, …) — surface it instead of pretending success.
+    const reply = await new IrohMediaReader(stream.recv).readHeader()
+    if (reply.op !== "put_ok") throw new Error(String(reply.message ?? "Iroh media upload was not acknowledged."))
+    return accept.media
+  }
+
+  async getMedia(hash: string): Promise<MediaPayload> {
+    const stream = await this.openMediaStream()
+    await stream.send.writeAll(toBytes(`${JSON.stringify({ op: "get", hash })}\n`))
+    const reader = new IrohMediaReader(stream.recv)
+    const header = await reader.readHeader()
+    // An error reply is a `{type:"error"}` line with no body — without this check it would
+    // silently read as an empty zero-byte payload.
+    if (header.op !== "get") throw new Error(String(header.message ?? "Iroh media download failed."))
+    const size = Number(header.size ?? 0)
+    const bytes = await reader.readExact(size)
+    return {
+      hash: String(header.hash ?? hash),
+      mime: String(header.mime ?? ""),
+      name: String(header.name ?? ""),
+      bytes,
+    }
+  }
+
+  setMediaEnabled(enabled: boolean): void {
+    this.sendFrame({ type: FrameType.MediaSetEnabled, enabled })
+  }
+
   onMessage(cb: (frame: ServerFrame) => void): () => void {
     this.handlers.add(cb)
     return () => this.handlers.delete(cb)
@@ -268,6 +317,8 @@ export class IrohClient implements AppClient {
     }
     this.setStatus("offline")
     this.closeEndpoint(this.endpoint)
+    this.connection = undefined
+    this.sendStream = undefined
   }
 
   private closeEndpoint(endpoint: IrohEndpointLike | undefined): void {
@@ -368,6 +419,26 @@ export class IrohClient implements AppClient {
     const frame: AdminGenerateFrame = { type: FrameType.AdminGenerate, kind, description }
     this.sendFrame(frame)
   }
+
+  private offerMedia(frame: ClientFrame & { type: typeof FrameType.MediaOffer }): Promise<Extract<ServerFrame, { type: "media_accept" }>> {
+    return new Promise((resolve, reject) => {
+      const off = this.onMessage((reply) => {
+        if (reply.type === FrameType.MediaAccept) {
+          off()
+          resolve(reply)
+        } else if (reply.type === FrameType.Error) {
+          off()
+          reject(new Error(reply.message))
+        }
+      })
+      this.sendFrame(frame)
+    })
+  }
+
+  private async openMediaStream(): Promise<{ send: IrohSendStreamLike; recv: IrohRecvStreamLike }> {
+    if (!this.connection) throw new Error("Iroh connection is not open.")
+    return await this.connection.openBi()
+  }
 }
 
 function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
@@ -375,4 +446,47 @@ function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
   out.set(a, 0)
   out.set(b, a.length)
   return out
+}
+
+class IrohMediaReader {
+  private buffer = new Uint8Array(0)
+
+  constructor(private readonly recv: IrohRecvStreamLike) {}
+
+  async readHeader(): Promise<Record<string, unknown>> {
+    while (true) {
+      const nl = this.buffer.indexOf(NEWLINE)
+      if (nl >= 0) {
+        const line = this.buffer.subarray(0, nl)
+        this.buffer = this.buffer.subarray(nl + 1)
+        const parsed = JSON.parse(dec.decode(line))
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>
+        throw new Error("Invalid media header.")
+      }
+      const chunk = await this.recv.read(65536)
+      if (!chunk || chunk.length === 0) throw new Error("Iroh media stream ended before header.")
+      this.buffer = concat(this.buffer, Uint8Array.from(chunk))
+    }
+  }
+
+  async readExact(size: number): Promise<Uint8Array> {
+    const out = new Uint8Array(size)
+    let offset = 0
+    if (this.buffer.byteLength > 0) {
+      const take = Math.min(size, this.buffer.byteLength)
+      out.set(this.buffer.subarray(0, take), 0)
+      this.buffer = this.buffer.subarray(take)
+      offset += take
+    }
+    while (offset < size) {
+      const chunk = await this.recv.read(Math.min(65536, size - offset))
+      if (!chunk || chunk.length === 0) throw new Error("Iroh media stream ended before body.")
+      const bytes = Uint8Array.from(chunk)
+      const take = Math.min(size - offset, bytes.byteLength)
+      out.set(bytes.subarray(0, take), offset)
+      offset += take
+      if (take < bytes.byteLength) this.buffer = concat(bytes.subarray(take), this.buffer)
+    }
+    return out
+  }
 }

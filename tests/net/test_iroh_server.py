@@ -15,7 +15,7 @@ import stat
 
 import pytest
 
-from net.iroh_server import IrohMember, _LineReader, _parse_line, load_or_create_secret
+from net.iroh_server import IrohMember, _LineReader, _parse_line, _write_bytes_chunked, _write_line, load_or_create_secret
 
 
 class _FakeRecv:
@@ -66,6 +66,30 @@ def test_irohmember_send_frame_is_newline_json() -> None:
     asyncio.run(member.send_frame({"type": "pong", "t": 1}))
     assert send.written.endswith(b"\n")
     assert json.loads(send.written[:-1]) == {"type": "pong", "t": 1}
+
+
+def test_media_linereader_preserves_body_bytes_after_header() -> None:
+    reader = _LineReader(_FakeRecv([b'{"op":"put","upload_id":"u"}\nabc', b"def"]))
+
+    async def go() -> tuple[bytes | None, bytes]:
+        return await reader.readline(), await reader.read_exact(6)
+
+    header, body = asyncio.run(go())
+    assert json.loads(header or b"{}") == {"op": "put", "upload_id": "u"}
+    assert body == b"abcdef"
+
+
+def test_write_line_and_bytes_chunked_for_media_stream() -> None:
+    send = _FakeSend()
+
+    async def go() -> None:
+        await _write_line(send, {"size": 6})
+        await _write_bytes_chunked(send, b"abcdef", chunk_size=2)
+
+    asyncio.run(go())
+    line, body = bytes(send.written).split(b"\n", 1)
+    assert json.loads(line) == {"size": 6}
+    assert body == b"abcdef"
 
 
 # --- persisted secret key (stable NodeId / ticket across restarts) ---------

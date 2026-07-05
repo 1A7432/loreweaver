@@ -9,6 +9,7 @@ import {
   type StateFrame,
   type WelcomeFrame,
 } from "@loreweaver/protocol"
+import { AudioController } from "./audio"
 import { createClient, type AppClient } from "./client"
 import { forgetServer, type SavedServer } from "./connectMemory"
 import type { HostHandle } from "./hostLocal"
@@ -83,6 +84,7 @@ export function App({
   onQuit,
 }: AppProps) {
   const client = useMemo(() => injected ?? createClient(), [injected])
+  const audioController = useMemo(() => new AudioController(), [])
   const pendingConnect = useRef<Required<AppPrefill> | undefined>(undefined)
   // An explicit language pick (the connect-screen toggle, or a remembered one) wins over
   // the server's room locale, so the client UI stays in the language the user chose.
@@ -139,7 +141,25 @@ export function App({
         setPresence(frame)
         return
       }
-      if (frame.type === FrameType.Narrative || frame.type === FrameType.Dice || frame.type === FrameType.System) {
+      if (frame.type === FrameType.AudioLibraryItem || frame.type === FrameType.AudioControl || frame.type === FrameType.AudioState) {
+        void audioController.handle(frame, client).catch((error) => {
+          setFrames((current) =>
+            appendFrame(current, {
+              type: FrameType.System,
+              level: "warn",
+              text: tt(locale, "audio.playbackFailed", { error: error instanceof Error ? error.message : String(error) }),
+            }),
+          )
+        })
+      }
+      if (
+        frame.type === FrameType.Narrative ||
+        frame.type === FrameType.Dice ||
+        frame.type === FrameType.System ||
+        frame.type === FrameType.Media ||
+        frame.type === FrameType.AudioLibraryItem ||
+        frame.type === FrameType.AudioControl
+      ) {
         // Accumulate the room log even while off the game view (e.g. the menu), so
         // the join-time replay survives until the player opens GameView, which
         // seeds from it. GameView keeps its own copy for live play + dice effects.
@@ -157,13 +177,13 @@ export function App({
         setScreen((prev) => (prev === "connect" ? "connect" : prev))
       }
     })
-  }, [client, onRememberConnect])
+  }, [client, onRememberConnect, audioController, locale])
 
   // Optional: an older mock client (or a transport with no `onStatus`) simply never fires,
   // so `connectionStatus` stays undefined and the HUD indicator renders nothing.
   useEffect(() => {
     return client.onStatus?.((status: ConnectionStatus) => setConnectionStatus(status))
-  }, [client])
+  }, [client, audioController])
 
   const handleConnect = async (url: string, key: string, name: string) => {
     if (!key) {
@@ -193,6 +213,7 @@ export function App({
   useEffect(() => {
     const kill = () => {
       localServer.current?.stop()
+      audioController.stopAll()
       client.close?.()
     }
     process.on("exit", kill)
@@ -226,8 +247,9 @@ export function App({
   // keep redialing), then hand off to the caller (index.tsx restores the terminal and exits).
   const handleQuit = () => {
     localServer.current?.stop()
-    client.close?.()
-    onQuit?.()
+      client.close?.()
+      audioController.stopAll()
+      onQuit?.()
   }
 
   if (screen === "host_local") {

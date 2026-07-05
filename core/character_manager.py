@@ -132,6 +132,7 @@ class CharacterSheet:
         self.equipment: list[Any] = []
         self.background = ""
         self.notes = ""
+        self.avatar: dict[str, Any] | None = None
         self.created_time = time.time()
         self.last_updated = time.time()
 
@@ -161,6 +162,7 @@ class CharacterSheet:
             "equipment": getattr(self, "equipment", []),
             "background": getattr(self, "background", ""),
             "notes": getattr(self, "notes", ""),
+            "avatar": getattr(self, "avatar", None),
             "occupation": getattr(self, "occupation", ""),
             "age": getattr(self, "age", 25),
             "character_class": getattr(self, "character_class", ""),
@@ -179,6 +181,8 @@ class CharacterSheet:
         character.equipment = data.get("equipment", [])
         character.background = data.get("background", "")
         character.notes = data.get("notes", "")
+        avatar = data.get("avatar")
+        character.avatar = avatar if isinstance(avatar, dict) else None
         character.occupation = data.get("occupation", "")
         character.age = data.get("age", 25)
         character.character_class = data.get("character_class", "")
@@ -631,6 +635,8 @@ class CharacterManager:
                 "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
             }
 
+        if getattr(character, "avatar", None):
+            status_summary["avatar"] = character.avatar
         status_summary.update(vitals)
         roster[character.name] = status_summary
         try:

@@ -1,8 +1,10 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useKeyboard } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
-import { stripControlChars, type CharacterState, type InitiativeEntry, type PartyMember } from "@loreweaver/protocol"
+import { stripControlChars, type CharacterState, type InitiativeEntry, type MediaRef, type PartyMember } from "@loreweaver/protocol"
+import type { AppClient } from "../client"
 import { tt } from "../i18n"
+import { getCachedMedia, renderHalfBlockPreview, type HalfBlockLine } from "../media"
 import type { Palette } from "../themes"
 import { bar, CharacterPanel, statColor } from "./CharacterPanel"
 
@@ -12,6 +14,7 @@ export interface PartyRosterProps {
   initiative: InitiativeEntry[]
   theme: Palette
   locale?: string
+  client?: AppClient
   // Whether THIS panel (vs the chat input) currently owns Enter. `<box>` has no
   // native per-element key routing in OpenTUI (only `input`/`select`/`textarea`
   // do), so — mirroring the local field-focus convention `screens/KeeperKeys.tsx`
@@ -75,7 +78,7 @@ const DETAIL_BAR_WIDTH = 10
  * bar summary (reusing CharacterPanel's `bar`/`statColor` glyphs), expanded
  * embeds the full `CharacterPanel` (attributes + status effects). Toggle via a
  * mouse click on the row, or Enter while this panel is focused (see `focused`). */
-export function PartyRoster({ character, party, initiative, theme, locale, focused, onFocus }: PartyRosterProps) {
+export function PartyRoster({ character, party, initiative, theme, locale, client, focused, onFocus }: PartyRosterProps) {
   const [expanded, setExpanded] = useState(false)
   const [expandedMembers, setExpandedMembers] = useState<Set<string>>(() => new Set())
 
@@ -124,6 +127,7 @@ export function PartyRoster({ character, party, initiative, theme, locale, focus
             {expanded ? "▾" : "▸"} {(ownMember?.online ?? true) ? "●" : "○"} {stripControlChars(character.name)} (
             {tt(locale, "party.you")})
           </text>
+          <AvatarPreview avatar={character.avatar ?? ownMember?.avatar} client={client} />
           {expanded ? (
             <CharacterPanel character={character} theme={theme} locale={locale} />
           ) : (
@@ -167,6 +171,7 @@ export function PartyRoster({ character, party, initiative, theme, locale, focus
               {member.ai ? " [AI]" : ""}
               {initiativeValue(member, initiative)}
             </text>
+            <AvatarPreview avatar={member.avatar} client={client} />
             {vitals.map((stat) => (
               <text key={`${member.name}-${stat.label}`} fg={stat.color}>
                 {stat.label} {bar(stat.value, stat.max, statWidth)} {stat.value}/{stat.max}
@@ -181,6 +186,38 @@ export function PartyRoster({ character, party, initiative, theme, locale, focus
         <text key={`${entry.name}-${entry.value}`} fg={entry.current ? theme.accent : theme.fg}>
           {entry.current ? "▶" : " "} {stripControlChars(entry.name)} {entry.value}
         </text>
+      ))}
+    </box>
+  )
+}
+
+function AvatarPreview({ avatar, client }: { avatar?: MediaRef; client?: AppClient }) {
+  const [lines, setLines] = useState<HalfBlockLine[]>([])
+  useEffect(() => {
+    let cancelled = false
+    setLines([])
+    if (!avatar || !client || avatar.mime === "image/gif" || avatar.mime === "image/webp") return
+    void getCachedMedia(client, avatar)
+      .then((payload) => renderHalfBlockPreview(payload.bytes, payload.mime, 8, 4))
+      .then((preview) => {
+        if (!cancelled) setLines(preview)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [avatar?.hash, avatar?.mime, client])
+  if (!lines.length) return null
+  return (
+    <box flexDirection="column">
+      {lines.map((line, row) => (
+        <box key={`${avatar?.hash}-${row}`} flexDirection="row">
+          {line.cells.map((cell, col) => (
+            <text key={`${avatar?.hash}-${row}-${col}`} fg={cell.fg} bg={cell.bg}>
+              {cell.char}
+            </text>
+          ))}
+        </box>
       ))}
     </box>
   )

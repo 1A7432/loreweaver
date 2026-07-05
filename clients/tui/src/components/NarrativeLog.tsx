@@ -1,10 +1,21 @@
+import { useEffect, useState } from "react"
 import { SyntaxStyle } from "@opentui/core"
-import { stripControlChars, type DiceFrame, type NarrativeFrame, type SystemFrame } from "@loreweaver/protocol"
+import {
+  stripControlChars,
+  type AudioControlFrame,
+  type AudioLibraryItemFrame,
+  type DiceFrame,
+  type MediaFrame,
+  type NarrativeFrame,
+  type SystemFrame,
+} from "@loreweaver/protocol"
+import type { AppClient } from "../client"
 import { tt } from "../i18n"
+import { getCachedMedia, mediaPlaceholder, renderHalfBlockPreview, type HalfBlockLine } from "../media"
 import type { Palette } from "../themes"
 import { Spinner } from "./Spinner"
 
-export type LogFrame = NarrativeFrame | DiceFrame | SystemFrame
+export type LogFrame = NarrativeFrame | DiceFrame | SystemFrame | MediaFrame | AudioLibraryItemFrame | AudioControlFrame
 
 // Markdown rendering requires a SyntaxStyle instance; one shared instance is enough
 // since KP narrative markdown only needs basic emphasis styling.
@@ -23,6 +34,9 @@ export interface NarrativeLogProps {
   // "构思中" spinner rides the bottom of the log (like a chat typing indicator).
   kpWorking?: boolean
   locale?: string
+  client?: AppClient
+  selectedMediaHash?: string
+  onSelectMedia?: (frame: MediaFrame) => void
 }
 
 function diceColor(frame: DiceFrame, theme: Palette): string {
@@ -56,6 +70,9 @@ export function NarrativeLog({
   critFlash = false,
   kpWorking = false,
   locale,
+  client,
+  selectedMediaHash,
+  onSelectMedia,
 }: NarrativeLogProps) {
   return (
     <box flexDirection="column" width="100%" paddingX={1}>
@@ -96,6 +113,38 @@ export function NarrativeLog({
             )
           }
 
+          if (frame.type === "media") {
+            return (
+              <MediaLogEntry
+                key={`${frame.type}-${frame.id}-${index}`}
+                frame={frame}
+                client={client}
+                theme={theme}
+                locale={locale}
+                selected={selectedMediaHash === frame.hash}
+                onSelect={() => onSelectMedia?.(frame)}
+              />
+            )
+          }
+
+          if (frame.type === "audio_library_item") {
+            const label = frame.title || frame.name
+            return (
+              <text key={`${frame.type}-${frame.hash}-${index}`} fg={theme.system}>
+                {stripControlChars(`[AUDIO] ${frame.from}: ${label}`)}
+              </text>
+            )
+          }
+
+          if (frame.type === "audio_control") {
+            const label = frame.title || frame.name || frame.hash || frame.layer
+            return (
+              <text key={`${frame.type}-${frame.id}-${index}`} fg={theme.accent}>
+                {stripControlChars(`[${frame.layer.toUpperCase()}] ${frame.action}${label ? ` · ${label}` : ""}`)}
+              </text>
+            )
+          }
+
           if (frame.speaker === "kp" && frame.format === "markdown") {
             // `streaming` must stay true until the frame is marked done: besides matching
             // "chunks still being appended", it also makes MarkdownRenderable draw its
@@ -118,6 +167,63 @@ export function NarrativeLog({
         })
       )}
       {frames.length > 0 && kpWorking ? <Spinner active label={tt(locale, "log.working")} trailing color={theme.accent} /> : null}
+    </box>
+  )
+}
+
+function MediaLogEntry({
+  frame,
+  client,
+  theme,
+  locale,
+  selected,
+  onSelect,
+}: {
+  frame: MediaFrame
+  client?: AppClient
+  theme: Palette
+  locale?: string
+  selected: boolean
+  onSelect: () => void
+}) {
+  const [lines, setLines] = useState<HalfBlockLine[] | undefined>()
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setLines(undefined)
+    setFailed(false)
+    if (!client || frame.mime === "image/gif" || frame.mime === "image/webp") return
+    void getCachedMedia(client, frame)
+      .then((payload) => renderHalfBlockPreview(payload.bytes, payload.mime, 40, 20))
+      .then((preview) => {
+        if (!cancelled) setLines(preview)
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [client, frame.hash, frame.mime])
+
+  const label = `${selected ? "▶ " : ""}${stripControlChars(frame.from)}: ${mediaPlaceholder(frame, locale)}`
+  return (
+    <box flexDirection="column" width="100%" onMouseDown={onSelect}>
+      <text fg={selected ? theme.accent : theme.system}>{label}</text>
+      {lines ? (
+        lines.map((line, row) => (
+          <box key={`${frame.hash}-${row}`} flexDirection="row">
+            {line.cells.map((cell, col) => (
+              <text key={`${frame.hash}-${row}-${col}`} fg={cell.fg} bg={cell.bg}>
+                {cell.char}
+              </text>
+            ))}
+          </box>
+        ))
+      ) : (
+        <text fg={failed ? theme.fail : theme.dim}>{failed ? mediaPlaceholder(frame, locale) : stripControlChars(frame.name)}</text>
+      )}
     </box>
   )
 }

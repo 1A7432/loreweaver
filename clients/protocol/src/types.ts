@@ -1,13 +1,19 @@
-// Bumped from "1" -> "1.1" for the additive keeper-gated admin frames below.
-// The bump is backward compatible: pre-admin clients keep working unchanged and
-// simply never send/handle `admin_*` frames. `WelcomeFrame.protocol` is a plain
-// string so a v1 client still accepts a "1.1" welcome (forward compatible).
-export const PROTOCOL_VERSION = "1.1" as const
+// Bumped to "1.3" for additive room-audio library/control frames over the media byte channel.
+// `WelcomeFrame.protocol` stays a plain string so older minor clients keep accepting it.
+export const PROTOCOL_VERSION = "1.3" as const
 
 export const FrameType = {
   Join: "join",
   Input: "input",
   Ping: "ping",
+  MediaOffer: "media_offer",
+  MediaAccept: "media_accept",
+  Media: "media",
+  MediaSetEnabled: "media_set_enabled",
+  MediaEnabled: "media_enabled",
+  AudioLibraryItem: "audio_library_item",
+  AudioControl: "audio_control",
+  AudioState: "audio_state",
   Welcome: "welcome",
   Error: "error",
   Narrative: "narrative",
@@ -48,9 +54,30 @@ export type FrameType = (typeof FrameType)[keyof typeof FrameType]
 export type PlayerRole = "player" | "keeper"
 export type NarrativeSpeaker = "kp" | "player" | "system" | "npc"
 export type NarrativeFormat = "markdown" | "plain"
-export type ErrorCode = "bad_key" | "bad_frame" | "rate_limited" | "server_error"
+export type ErrorCode =
+  | "bad_key"
+  | "bad_frame"
+  | "rate_limited"
+  | "server_error"
+  | "join_timeout"
+  | "too_many_connections"
+  | "forbidden"
+  | "media_disabled"
+  | "media_rate_limited"
+  | "media_bad_mime"
+  | "media_too_large"
+  | "media_quota_exceeded"
+  | "media_bad_hash"
+  | "media_bad_offer"
+  | "media_bad_svg"
+  | "media_bad_upload"
+  | "media_size_mismatch"
+  | "media_hash_mismatch"
+  | "media_not_found"
 export type DiceKind = "roll" | "check" | "sanity" | "opposed" | "init"
 export type SystemLevel = "info" | "warn"
+export type AudioLayer = "bgm" | "ambience" | "sfx"
+export type AudioAction = "play" | "stop" | "pause" | "resume" | "volume"
 export type AdminErrorCode =
   | "forbidden"
   | "unknown_provider"
@@ -83,6 +110,92 @@ export interface PingFrame {
   t: number
 }
 
+export interface MediaOfferFrame {
+  type: typeof FrameType.MediaOffer
+  name: string
+  mime: string
+  size: number
+  sha256: string
+}
+
+export interface MediaRef {
+  hash: string
+  mime: string
+  size: number
+  name?: string
+}
+
+export interface MediaFrame extends MediaRef {
+  type: typeof FrameType.Media
+  id: string
+  name: string
+  from: string
+  ts: number
+}
+
+export interface MediaAcceptFrame {
+  type: typeof FrameType.MediaAccept
+  upload_id: string
+  existing?: boolean
+  media?: MediaFrame
+  audio?: AudioLibraryItemFrame
+}
+
+export interface MediaSetEnabledFrame {
+  type: typeof FrameType.MediaSetEnabled
+  enabled: boolean
+}
+
+export interface MediaEnabledFrame {
+  type: typeof FrameType.MediaEnabled
+  enabled: boolean
+}
+
+export interface AudioLibraryItemFrame extends MediaRef {
+  type: typeof FrameType.AudioLibraryItem
+  id: string
+  name: string
+  from: string
+  ts: number
+  title?: string
+  license?: string
+  source?: string
+  tags?: string[]
+}
+
+export interface AudioControlFrame {
+  type: typeof FrameType.AudioControl
+  id: string
+  action: AudioAction
+  layer: AudioLayer
+  hash?: string
+  mime?: string
+  name?: string
+  title?: string
+  loop?: boolean
+  volume?: number
+  fade_ms?: number
+  position_ms?: number
+  server_ts?: number
+}
+
+export interface AudioLayerState {
+  layer: AudioLayer
+  hash?: string
+  mime?: string
+  name?: string
+  title?: string
+  playing: boolean
+  volume?: number
+  loop?: boolean
+  started_at?: number
+}
+
+export interface AudioStateFrame {
+  type: typeof FrameType.AudioState
+  layers: AudioLayerState[]
+}
+
 export interface WelcomeFrame {
   type: typeof FrameType.Welcome
   // A plain string (not the literal) so a client pinned to an older minor still
@@ -96,6 +209,7 @@ export interface WelcomeFrame {
   }
   locale: string
   server: string
+  features?: string[]
 }
 
 export interface ErrorFrame {
@@ -139,6 +253,7 @@ export interface CharacterState {
   sanmax: number
   attributes: Record<string, unknown>
   status_effects: string[]
+  avatar?: MediaRef
 }
 
 export interface PartyMember {
@@ -156,6 +271,7 @@ export interface PartyMember {
   // player's character), so clients can render an "AI" badge. Additive/
   // optional so older server payloads without it still type-check.
   ai?: boolean
+  avatar?: MediaRef
 }
 
 export interface SceneState {
@@ -423,6 +539,8 @@ export type ClientFrame =
   | JoinFrame
   | InputFrame
   | PingFrame
+  | MediaOfferFrame
+  | MediaSetEnabledFrame
   | AdminGetConfigFrame
   | AdminSetModelFrame
   | AdminListModelsFrame
@@ -442,6 +560,12 @@ export type ClientFrame =
 export type ServerFrame =
   | WelcomeFrame
   | ErrorFrame
+  | MediaAcceptFrame
+  | MediaFrame
+  | MediaEnabledFrame
+  | AudioLibraryItemFrame
+  | AudioControlFrame
+  | AudioStateFrame
   | NarrativeFrame
   | DiceFrame
   | StateFrame

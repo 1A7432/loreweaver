@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import { FrameType, type NarrativeFrame, type StateFrame } from "./types"
-import { WsClient, type WebSocketLike } from "./client"
+import { packMediaMessage, unpackMediaMessage, WsClient, type WebSocketLike } from "./client"
 
 type Listener = (event: any) => void
 
 class MockWebSocket implements WebSocketLike {
   readonly url: string
   readyState = 0
-  sent: string[] = []
+  sent: Array<string | Uint8Array | ArrayBuffer> = []
   private listeners = new Map<string, Set<Listener>>()
 
   constructor(url: string) {
@@ -24,7 +24,7 @@ class MockWebSocket implements WebSocketLike {
     this.listeners.set(type, listeners)
   }
 
-  send(data: string): void {
+  send(data: string | Uint8Array | ArrayBuffer): void {
     this.sent.push(data)
   }
 
@@ -40,6 +40,10 @@ class MockWebSocket implements WebSocketLike {
   // Deliver a raw payload verbatim (bypasses JSON.stringify) so tests can feed
   // malformed / non-JSON bytes straight into the client's message handler.
   serverSendRaw(data: string): void {
+    this.emit("message", { data })
+  }
+
+  serverSendBinary(data: Uint8Array): void {
     this.emit("message", { data })
   }
 
@@ -84,6 +88,7 @@ describe("WsClient", () => {
     const allFrames: string[] = []
 
     client.on(FrameType.Narrative, (frame) => narrativeFrames.push(frame))
+    client.on(FrameType.AudioControl, (frame) => allFrames.push(`${frame.type}:${frame.layer}`))
     client.onMessage((frame) => allFrames.push(frame.type))
 
     await client.connect("ws://example.test")
@@ -100,10 +105,64 @@ describe("WsClient", () => {
       initiative: [],
       online: 1,
     } satisfies StateFrame)
+    sockets[0].serverSend({
+      type: FrameType.AudioControl,
+      id: "a1",
+      action: "play",
+      layer: "bgm",
+      hash: "c".repeat(64),
+      mime: "audio/mpeg",
+      name: "theme.mp3",
+    })
 
     expect(narrativeFrames).toHaveLength(1)
     expect(narrativeFrames[0].text).toBe("The door opens.")
-    expect(allFrames).toEqual([FrameType.Narrative, FrameType.State])
+    expect(allFrames).toEqual([FrameType.Narrative, FrameType.State, FrameType.AudioControl, `${FrameType.AudioControl}:bgm`])
+  })
+
+  test("media upload offer sends binary put after accept", async () => {
+    const { client, sockets } = createClient()
+    await client.connect("ws://example.test")
+
+    const upload = client.uploadMedia({
+      name: "handout.png",
+      mime: "image/png",
+      bytes: new Uint8Array([1, 2, 3]),
+      sha256: "a".repeat(64),
+    })
+    expect(JSON.parse(sockets[0].sent[0] as string)).toEqual({
+      type: FrameType.MediaOffer,
+      name: "handout.png",
+      mime: "image/png",
+      size: 3,
+      sha256: "a".repeat(64),
+    })
+
+    sockets[0].serverSend({ type: FrameType.MediaAccept, upload_id: "up-1" })
+    await upload
+    const binary = sockets[0].sent[1] as Uint8Array
+    const unpacked = unpackMediaMessage(binary)
+    expect(unpacked.header).toEqual({ op: "put", upload_id: "up-1" })
+    expect(Array.from(unpacked.body)).toEqual([1, 2, 3])
+  })
+
+  test("media get resolves from a binary response", async () => {
+    const { client, sockets } = createClient()
+    await client.connect("ws://example.test")
+
+    const pending = client.getMedia("b".repeat(64))
+    const request = unpackMediaMessage(sockets[0].sent[0] as Uint8Array)
+    expect(request.header).toEqual({ op: "get", hash: "b".repeat(64) })
+
+    sockets[0].serverSendBinary(
+      packMediaMessage({ op: "get", hash: "b".repeat(64), mime: "image/png", name: "a.png", size: 2 }, new Uint8Array([9, 8])),
+    )
+    await expect(pending).resolves.toEqual({
+      hash: "b".repeat(64),
+      mime: "image/png",
+      name: "a.png",
+      bytes: new Uint8Array([9, 8]),
+    })
   })
 
   test("malformed frames are validated per type and dropped, not dispatched", async () => {

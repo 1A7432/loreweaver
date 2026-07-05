@@ -4,9 +4,9 @@
 
 这是 loreweaver 服务器（通过 `python -m app --serve` 启动的 `net.tui_server.TuiServer`）与任何客户端之间的开放、版本化的网络协议——可以是随附的 OpenTUI 终端客户端，或社区构建的 React/Vue/Web 客户端。引擎本身（确定性核心 + AI Keeper）不受传输方式的影响；此文档是与语言无关的接口定义。
 
-传输方式：WebSocket，JSON 文本帧，每帧一个 JSON 对象，每帧格式为 `{"type": ...}`。端点：`ws://host:port/`。协议版本：`"1.1"`。
+传输方式：Iroh 或 WebSocket。控制流为 JSON 帧，每帧格式为 `{"type": ...}`。协议版本：`"1.3"`。
 
-版本控制是递增式的：`"1.1"` 仅ADDS Keeper 门控的 `admin_*` 帧（见下文"Admin frames"部分）。只理解 `"1"` 的客户端保持正常工作——它永远不会发送 `admin_*` 帧，应该将 `welcome` 的 `protocol` 字段视为不透明字符串（接受任何 `"1.x"`）。
+版本控制是递增式的：`"1.3"` 新增房间音频库/播放控制帧；`"1.2"` 新增媒体元数据帧和字节通道；`"1.1"` 新增 Keeper 门控的 `admin_*` 帧（见下文"Admin frames"部分）。只理解 `"1"` 的客户端保持正常工作——它永远不会发送新帧，应该将 `welcome` 的 `protocol` 字段视为不透明字符串（接受任何 `"1.x"`）。
 
 客户端发送的第一帧MUST是 `join`。服务器回复 `welcome` 或 `error`，错误时关闭连接。如果在服务器的 join 握手超时内未到达（`TRPG_TUI__JOIN_TIMEOUT`，默认 10 秒），服务器将用 `error join_timeout` 关闭连接，而不是无限等待。超过服务器并发连接上限（`TRPG_TUI__MAX_CONNECTIONS`）的连接在读取 `join` 之前被拒绝：`error too_many_connections`，然后关闭。
 
@@ -16,14 +16,30 @@
   `{type:"join", key:string, name?:string, client?:{name,version}}`
 - `input` — 命令行或玩家言辞，正是玩家键入的内容：
   `{type:"input", text:string}`
+- `media_offer` — 打开字节通道前先提交图片/音频元数据：
+  `{type:"media_offer", name:string, mime:string, size:int, sha256:string}`
+- `media_set_enabled` — Keeper 专用的房间媒体上传开关：
+  `{type:"media_set_enabled", enabled:boolean}`
 - `ping`: `{type:"ping", t:number}`
 
 ## Server → Client
 
 - `welcome` — 成功 `join` 时发送一次：
-  `{type:"welcome", protocol:"1.1", room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string}`
+  `{type:"welcome", protocol:"1.3", features:["media","audio"], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string}`
 - `error` — 本地化的故障通知；`bad_key`、`join_timeout` 和 `too_many_connections` 关闭连接（它们仅在 `join` 握手期间或之前发生），其他不关闭：
-  `{type:"error", code:"bad_key"|"bad_frame"|"rate_limited"|"server_error"|"join_timeout"|"too_many_connections", message:string}`
+  `{type:"error", code:"bad_key"|"bad_frame"|"rate_limited"|"server_error"|"join_timeout"|"too_many_connections"|媒体错误码, message:string}`
+- `media_accept` — 上传被接受；若 `existing` 为 true，则无需 PUT：
+  `{type:"media_accept", upload_id:string, existing?:boolean, media?:MediaFrame, audio?:AudioLibraryItem}`
+- `media` — 媒体元数据广播和历史回放条目；字节按需拉取：
+  `{type:"media", id:string, hash:string, mime:string, size:int, name:string, from:string, ts:number}`
+- `media_enabled` — Keeper 切换上传开关后的回复：
+  `{type:"media_enabled", enabled:boolean}`
+- `audio_library_item` — 由上传音频 blob 生成的房间音频库条目：
+  `{type:"audio_library_item", id:string, hash:string, mime:string, size:int, name:string, from:string, ts:number, title?:string, license?:string, source?:string, tags?:string[]}`
+- `audio_control` — 客户端本地播放意图：
+  `{type:"audio_control", id:string, action:"play"|"stop"|"pause"|"resume"|"volume", layer:"bgm"|"ambience"|"sfx", hash?:string, mime?:string, name?:string, title?:string, loop?:boolean, volume?:number, fade_ms?:int, position_ms?:int, server_ts?:number}`
+- `audio_state` — 尽力持久化的 BGM/环境音状态，在加入房间时回放：
+  `{type:"audio_state", layers:[{layer:"bgm"|"ambience"|"sfx", hash?:string, mime?:string, name?:string, title?:string, playing:boolean, volume?:number, loop?:boolean, started_at?:number}]}`
 - `narrative` — 一行故事/聊天文本：
   `{type:"narrative", id:string, speaker:"kp"|"player"|"system"|"npc", name?:string, text:string, format:"markdown"|"plain", stream?:boolean, done?:boolean}`
   对于 `speaker:"npc"`，`name` 携带 NPC 名称。
@@ -31,7 +47,7 @@
 - `dice` — 一次掷骰子/检定，由客户端渲染并按 `rank` 着色（`-2`..`+4`）；NEVER 携带 Keeper 秘密：
   `{type:"dice", actor:string, kind:"roll"|"check"|"sanity"|"opposed"|"init", expr:string, rolls:number[], total:number, target?:number, rank?:int, level?:string, success?:boolean}`
 - `state` — 一个面板快照，在 `join` 时和每回合后发送：
-  `{type:"state", character?:{name,system,hp,hpmax,mp,mpmax,san,sanmax,attributes:{},status_effects:[]}, party:[{name,online:boolean,active:boolean,initiative?:int,hp?:int,hpMax?:int,san?:int,sanMax?:int,mp?:int,mpMax?:int,ai?:boolean}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int}`
+  `{type:"state", character?:{name,system,hp,hpmax,mp,mpmax,san,sanmax,attributes:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,hp?:int,hpMax?:int,san?:int,sanMax?:int,mp?:int,mpMax?:int,ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int}`
 - `presence` — 连接的玩家名单，在加入/离开时发送：
   `{type:"presence", players:[{id,name,online}], online:int}`
 - `system` — 带外通知：`{type:"system", level:"info"|"warn", text:string}`
@@ -52,6 +68,31 @@
 8. 重新构建并广播一个 `state` 帧（`net.state.build_room_state`）。
 
 密钥映射到同一房间的多个客户端共享一个 AI-KP 会话；上述每个描述为"广播"的帧都发送给当前连接到该房间的每个成员。
+
+## Media transfer（v1.2+）与音频（v1.3）
+
+所有媒体都经服务器存储转发。JSON 控制流只传元数据；原始字节永远不进入 JSON，也不做 base64。支持上传的 MIME 为 `image/png`、`image/jpeg`、`image/webp`、`image/gif`、`image/svg+xml`、`audio/mpeg`、`audio/ogg`、`audio/wav`、`audio/flac`、`audio/mp4`、`audio/aac`。图片默认限制为单文件 8 MiB、每房间 512 MiB；音频默认限制为单文件 128 MiB、每房间 2 GiB。二者共用每成员每分钟 10 次上传限速。服务端只把媒体当不透明 blob 存储，解码和播放只发生在客户端。
+
+SVG 是“不透明存储”的例外：服务端只接受静态安全子集（`svg`、`g`、`rect`、`line`、`polyline`、`text`、`tspan`、`title`、`desc`），会用 `error media_bad_svg` 拒绝脚本、foreignObject、事件属性、外链、data URL 和 CSS/url 执行面。TUI 的 SVG 预览只把这些静态绘图信息解析成终端文本，不会像浏览器那样执行 SVG 内容。
+
+上传流程：
+
+1. 客户端在控制流发送 `media_offer{name,mime,size,sha256}`。
+2. 服务端校验 MIME、大小、房间配额、限速和房间上传开关，然后返回 `media_accept{upload_id}` 或 `error`。如果本房间已有相同 hash，可返回 `media_accept{upload_id:"", existing:true, media|audio}` 并直接广播元数据，无需 PUT。
+3. 客户端通过 MediaChannel 发送 PUT：header `{op:"put", upload_id}` 加原始字节。
+4. 服务端校验精确大小和 sha256，存入 `data_dir/media/<room>/<sha256>`，登记 `media_index(hash, room, mime, size, name, uploader, created_at)`；图片广播 `media`，音频广播 `audio_library_item`。
+
+下载流程：
+
+1. 客户端通过 MediaChannel 发送 GET：header `{op:"get", hash}`。
+2. 服务端确认该 hash 属于调用者房间，然后返回 `{op:"get",hash,size,mime,name}` 加原始字节。客户端应校验 sha256，并可缓存到 `~/.loreweaver/cache/media/<hash>`。
+
+MediaChannel 线格式：
+
+- Iroh：在同一连接上打开新的双向流。流以一行 JSON header 开头（`\n` 结尾）。PUT 时客户端随后按不超过 64 KiB 的块写入原始字节，服务端存好后回一行 `{op:"put_ok", hash}`（拒收则回一行 `{type:"error", code, message}`）；GET 时服务端先写一行 `{op:"get",hash,size,mime,name}` 响应 header，再按不超过 64 KiB 的块写入原始字节，出错则只回一行 `{type:"error", ...}`、无字节体。
+- WebSocket：一条二进制消息为 `uint32_be header_length` + UTF-8 JSON header + 原始字节。PUT 发送 `{op:"put", upload_id}` 加 body，成功以房间广播的 `media` / `audio_library_item` 帧为准，拒收则以标准 `error` 文本帧返回。GET 发送 `{op:"get", hash}` 且无 body；服务端回复 `{op:"get",hash,size,mime,name}` 加 body。
+
+音频控制与字节传输是分离的。上传音频文件只会创建或更新房间音频库。Keeper/管理员命令如 `.bgm play <音频>`、`.ambience stop`、`.sfx <音频>` 会广播 `audio_control` 帧；TUI 客户端用同一套 GET 流程拉取字节并在本机播放。服务端自身不播放音频。
 
 ## Auth / keystore
 

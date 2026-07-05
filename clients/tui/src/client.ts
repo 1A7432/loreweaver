@@ -1,4 +1,13 @@
-import { WsClient, type AdminForgeKind, type ConnectionStatus, type PlayerRole, type ServerFrame } from "@loreweaver/protocol"
+import {
+  WsClient,
+  type AdminForgeKind,
+  type ConnectionStatus,
+  type MediaFrame,
+  type MediaPayload,
+  type MediaUpload,
+  type PlayerRole,
+  type ServerFrame,
+} from "@loreweaver/protocol"
 import { IrohClient, isIrohTicket } from "./irohClient"
 
 // The full client surface the TUI shell needs. This is the superset the web
@@ -15,6 +24,9 @@ export interface AppClient {
   connect(url: string): Promise<void>
   join(key: string, name?: string): void
   sendInput(text: string): void
+  uploadMedia(upload: MediaUpload): Promise<MediaFrame | undefined>
+  getMedia(hash: string): Promise<MediaPayload>
+  setMediaEnabled(enabled: boolean): void
   onMessage(cb: (frame: ServerFrame) => void): () => void
   close?(code?: number, reason?: string): void
   // Optional: a coarse liveness signal ("connecting"/"online"/"reconnecting"/"offline") for a
@@ -66,6 +78,15 @@ class TransportClient implements AppClient {
   }
   sendInput(text: string): void {
     this.inner?.sendInput(text)
+  }
+  uploadMedia(upload: MediaUpload): Promise<MediaFrame | undefined> {
+    return this.inner?.uploadMedia(upload) ?? Promise.reject(new Error("not connected"))
+  }
+  getMedia(hash: string): Promise<MediaPayload> {
+    return this.inner?.getMedia(hash) ?? Promise.reject(new Error("not connected"))
+  }
+  setMediaEnabled(enabled: boolean): void {
+    this.inner?.setMediaEnabled(enabled)
   }
   onMessage(cb: (frame: ServerFrame) => void): () => void {
     this.handlers.add(cb)

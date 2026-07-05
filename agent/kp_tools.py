@@ -17,6 +17,7 @@ from agent.kp_tools_charcard import CharcardTools
 from agent.kp_tools_companion import CompanionTools
 from agent.kp_tools_forge import ForgeTools
 from agent.kp_tools_knowledge import DocumentTools, ModuleTools, NoteTools, SessionTools
+from agent.kp_tools_maps import SvgMapTools
 from agent.kp_tools_mechanics import CharacterTools, DiceTools, InitiativeTools
 from agent.kp_tools_npc import NpcTools
 from agent.kp_tools_relationships import RelationshipTools
@@ -54,6 +55,7 @@ def build_kp_toolset(
         CompanionTools(services, hub=hub, command_router=command_router),
         WorldbookTools(services),
         CharcardTools(services),
+        SvgMapTools(services, hub=hub),
         ForgeTools(services),
         RelationshipTools(services),
     )

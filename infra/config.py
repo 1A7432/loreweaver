@@ -75,6 +75,13 @@ class TuiSettings(BaseModel):
     # docs/deploy.md -- this pair is a fallback for deployments without one.
     tls_cert_path: str = ""
     tls_key_path: str = ""
+    # Media transfer limits. Media bytes are stored server-side and forwarded on demand;
+    # only metadata rides the JSON control stream.
+    media_max_file_bytes: int = 8 * 1024 * 1024
+    media_room_quota_bytes: int = 512 * 1024 * 1024
+    media_uploads_per_minute: int = 10
+    audio_max_file_bytes: int = 128 * 1024 * 1024
+    audio_room_quota_bytes: int = 2 * 1024 * 1024 * 1024
 
 
 class Settings(BaseSettings):

@@ -11,6 +11,9 @@ import {
   type AdminSetModelFrame,
   type AdminUpdateKeyFrame,
   type ClientFrame,
+  type MediaAcceptFrame,
+  type MediaFrame,
+  type MediaOfferFrame,
   type PingFrame,
   type PlayerRole,
   type PongFrame,
@@ -19,7 +22,7 @@ import {
 
 export interface WebSocketLike {
   readonly readyState: number
-  send(data: string): void
+  send(data: string | ArrayBuffer | Uint8Array): void
   close(code?: number, reason?: string): void
   addEventListener?(type: "open", listener: (event: unknown) => void): void
   addEventListener?(type: "message", listener: (event: { data: unknown }) => void): void
@@ -51,7 +54,22 @@ export interface WsClientOptions {
   clearTimeoutFn?: typeof clearTimeout
 }
 
+export interface MediaUpload {
+  name: string
+  mime: string
+  bytes: Uint8Array
+  sha256: string
+}
+
+export interface MediaPayload {
+  hash: string
+  mime: string
+  name: string
+  bytes: Uint8Array
+}
+
 const OPEN = 1
+const WS_MEDIA_HEADER_BYTES = 4
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
@@ -70,6 +88,14 @@ const isArr = Array.isArray
 const serverFrameValidators: Record<string, (f: Record<string, unknown>) => boolean> = {
   [FrameType.Welcome]: (f) => isStr(f.room) && isObject(f.you) && isStr(f.you.name) && isStr(f.you.role),
   [FrameType.Error]: (f) => isStr(f.code) && isStr(f.message),
+  [FrameType.MediaAccept]: (f) => isStr(f.upload_id),
+  [FrameType.Media]: (f) =>
+    isStr(f.id) && isStr(f.hash) && isStr(f.mime) && isNum(f.size) && isStr(f.name) && isStr(f.from) && isNum(f.ts),
+  [FrameType.MediaEnabled]: (f) => typeof f.enabled === "boolean",
+  [FrameType.AudioLibraryItem]: (f) =>
+    isStr(f.id) && isStr(f.hash) && isStr(f.mime) && isNum(f.size) && isStr(f.name) && isStr(f.from) && isNum(f.ts),
+  [FrameType.AudioControl]: (f) => isStr(f.id) && isStr(f.action) && isStr(f.layer),
+  [FrameType.AudioState]: (f) => isArr(f.layers),
   [FrameType.Narrative]: (f) => isStr(f.id) && isStr(f.speaker) && isStr(f.text),
   [FrameType.Dice]: (f) => isStr(f.actor) && isStr(f.expr) && isNum(f.total),
   [FrameType.State]: (f) => isArr(f.party) && isArr(f.initiative) && isNum(f.online),
@@ -136,6 +162,17 @@ export class WsClient {
   private readonly messageHandlers = new Set<MessageHandler>()
   private readonly typedHandlers = new Map<ServerFrame["type"], Set<MessageHandler>>()
   private readonly statusHandlers = new Set<StatusHandler>()
+  private readonly pendingOffers: Array<{
+    resolve: (frame: MediaAcceptFrame) => void
+    reject: (error: Error) => void
+  }> = []
+  private readonly pendingGets = new Map<
+    string,
+    {
+      resolve: (payload: MediaPayload) => void
+      reject: (error: Error) => void
+    }
+  >()
 
   constructor(options: WsClientOptions = {}) {
     this.factory = options.webSocketFactory ?? defaultWebSocketFactory
@@ -207,6 +244,34 @@ export class WsClient {
 
   ping(t = Date.now()): void {
     this.send({ type: FrameType.Ping, t })
+  }
+
+  async uploadMedia(upload: MediaUpload): Promise<MediaFrame | undefined> {
+    const accept = await this.offerMedia({
+      type: FrameType.MediaOffer,
+      name: upload.name,
+      mime: upload.mime,
+      size: upload.bytes.byteLength,
+      sha256: upload.sha256,
+    })
+    if (accept.existing) return accept.media
+    if (!accept.upload_id) return accept.media
+    this.sendMedia({ op: "put", upload_id: accept.upload_id }, upload.bytes)
+    return accept.media
+  }
+
+  getMedia(hash: string): Promise<MediaPayload> {
+    if (!this.socket || this.socket.readyState !== OPEN) {
+      return Promise.reject(new Error("WebSocket is not open."))
+    }
+    return new Promise((resolve, reject) => {
+      this.pendingGets.set(hash, { resolve, reject })
+      this.sendMedia({ op: "get", hash })
+    })
+  }
+
+  setMediaEnabled(enabled: boolean): void {
+    this.send({ type: FrameType.MediaSetEnabled, enabled })
   }
 
   // ---- v1.1 admin (keeper-gated) requests --------------------------------
@@ -350,6 +415,11 @@ export class WsClient {
   }
 
   private handleRawMessage(data: unknown): void {
+    const binary = toUint8Array(data)
+    if (binary) {
+      this.handleMediaMessage(binary)
+      return
+    }
     // Untrusted transport: a non-JSON (or undecodable) message must never throw
     // out of the socket's message handler — drop it and keep the connection alive.
     let parsed: unknown
@@ -363,6 +433,17 @@ export class WsClient {
       return
     }
     if (!isServerFrame(parsed)) return
+    if (parsed.type === FrameType.MediaAccept) {
+      const pending = this.pendingOffers.shift()
+      if (pending) pending.resolve(parsed)
+    }
+    if (parsed.type === FrameType.Error) {
+      const error = new Error(parsed.message)
+      const pendingOffer = this.pendingOffers.shift()
+      if (pendingOffer) pendingOffer.reject(error)
+      for (const pending of this.pendingGets.values()) pending.reject(error)
+      this.pendingGets.clear()
+    }
 
     for (const handler of this.messageHandlers) handler(parsed)
     const typed = this.typedHandlers.get(parsed.type)
@@ -385,4 +466,68 @@ export class WsClient {
       void this.connect(this.url!)
     }, delay)
   }
+
+  private offerMedia(frame: MediaOfferFrame): Promise<MediaAcceptFrame> {
+    if (!this.socket || this.socket.readyState !== OPEN) {
+      return Promise.reject(new Error("WebSocket is not open."))
+    }
+    return new Promise((resolve, reject) => {
+      this.pendingOffers.push({ resolve, reject })
+      this.send(frame)
+    })
+  }
+
+  private sendMedia(header: Record<string, unknown>, bytes = new Uint8Array()): void {
+    if (!this.socket || this.socket.readyState !== OPEN) {
+      throw new Error("WebSocket is not open.")
+    }
+    this.socket.send(packMediaMessage(header, bytes))
+  }
+
+  private handleMediaMessage(payload: Uint8Array): void {
+    let unpacked: { header: Record<string, unknown>; body: Uint8Array }
+    try {
+      unpacked = unpackMediaMessage(payload)
+    } catch {
+      return
+    }
+    const hash = String(unpacked.header.hash ?? "")
+    const pending = this.pendingGets.get(hash)
+    if (!pending) return
+    this.pendingGets.delete(hash)
+    pending.resolve({
+      hash,
+      mime: String(unpacked.header.mime ?? ""),
+      name: String(unpacked.header.name ?? ""),
+      bytes: unpacked.body,
+    })
+  }
+}
+
+export function packMediaMessage(header: Record<string, unknown>, body = new Uint8Array()): Uint8Array {
+  const headerBytes = new TextEncoder().encode(JSON.stringify(header))
+  const out = new Uint8Array(WS_MEDIA_HEADER_BYTES + headerBytes.byteLength + body.byteLength)
+  const view = new DataView(out.buffer, out.byteOffset, out.byteLength)
+  view.setUint32(0, headerBytes.byteLength)
+  out.set(headerBytes, WS_MEDIA_HEADER_BYTES)
+  out.set(body, WS_MEDIA_HEADER_BYTES + headerBytes.byteLength)
+  return out
+}
+
+export function unpackMediaMessage(payload: Uint8Array): { header: Record<string, unknown>; body: Uint8Array } {
+  if (payload.byteLength < WS_MEDIA_HEADER_BYTES) throw new Error("media message missing header length")
+  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength)
+  const headerLength = view.getUint32(0)
+  const start = WS_MEDIA_HEADER_BYTES
+  const end = start + headerLength
+  if (headerLength <= 0 || end > payload.byteLength) throw new Error("media message has invalid header length")
+  const parsed = JSON.parse(new TextDecoder().decode(payload.subarray(start, end)))
+  if (!isObject(parsed)) throw new Error("media header is not an object")
+  return { header: parsed, body: payload.subarray(end) }
+}
+
+function toUint8Array(data: unknown): Uint8Array | undefined {
+  if (data instanceof Uint8Array) return data
+  if (data instanceof ArrayBuffer) return new Uint8Array(data)
+  return undefined
 }

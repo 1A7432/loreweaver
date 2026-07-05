@@ -16,6 +16,8 @@
     "@opentui/react": "0.4.2",
     "@loreweaver/protocol": "file:../protocol",
     "@number0/iroh": "1.0.0",
+    "jpeg-js": "0.4.4",
+    "pngjs": "7.0.0",
     "react": "19.2.7"
   }
 }

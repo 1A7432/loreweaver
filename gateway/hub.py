@@ -36,7 +36,7 @@ class Event:
     ``data``, a ``narrative`` event carries ``speaker``/``text``/``fmt``).
     """
 
-    kind: str  # "player_action" | "dice" | "narrative" | "state" | "presence" | "system"
+    kind: str  # "player_action" | "dice" | "narrative" | "state" | "presence" | "system" | "media" | "audio"
     speaker: str = ""  # narrative: "kp" | "npc" | "player" | "system"
     name: str = ""  # actor / npc / player display name
     text: str = ""  # narrative / system text
@@ -73,6 +73,16 @@ class Event:
     def system(cls, level: str, text: str) -> Event:
         """An out-of-band notice (``level`` = ``info``/``warn``)."""
         return cls(kind="system", text=text, data={"level": level})
+
+    @classmethod
+    def media(cls, frame: dict[str, Any]) -> Event:
+        """A media metadata frame. Bytes are fetched separately on demand."""
+        return cls(kind="media", data=dict(frame))
+
+    @classmethod
+    def audio(cls, frame: dict[str, Any]) -> Event:
+        """An audio library/control/state frame. Bytes are fetched separately on demand."""
+        return cls(kind="audio", data=dict(frame))
 
 
 @runtime_checkable

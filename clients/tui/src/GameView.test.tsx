@@ -1,13 +1,18 @@
 import { describe, expect, test } from "bun:test"
+import { mkdtemp, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { pathToFileURL } from "node:url"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
-import { FrameType, type ServerFrame, type WelcomeFrame } from "@loreweaver/protocol"
+import { FrameType, type MediaFrame, type MediaPayload, type MediaUpload, type ServerFrame, type WelcomeFrame } from "@loreweaver/protocol"
 import { GameView, type GameClient } from "./GameView"
 import { SPINNER_FRAMES } from "./components/Spinner"
 import { themes } from "./themes"
 
 class MockClient implements GameClient {
   sent: string[] = []
+  uploads: MediaUpload[] = []
   private listeners = new Set<(frame: ServerFrame) => void>()
 
   onMessage(cb: (frame: ServerFrame) => void): () => void {
@@ -17,6 +22,15 @@ class MockClient implements GameClient {
 
   sendInput(text: string): void {
     this.sent.push(text)
+  }
+
+  uploadMedia(upload: MediaUpload): Promise<MediaFrame | undefined> {
+    this.uploads.push(upload)
+    return Promise.resolve(undefined)
+  }
+
+  getMedia(hash: string): Promise<MediaPayload> {
+    return Promise.resolve({ hash, mime: "image/png", name: "cached.png", bytes: new Uint8Array([1, 2, 3]) })
   }
 
   push(frame: ServerFrame): void {
@@ -182,6 +196,70 @@ describe("GameView", () => {
     act(() => {
       renderer.destroy()
     })
+  })
+
+  test("/attach reads a local file and uploads it through the media channel", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lw-attach-"))
+    const path = join(dir, "handout.png")
+    await writeFile(path, new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]))
+    const client = new MockClient()
+    const { renderer, flush, waitFor, mockInput } = await renderGame(client)
+    await flush()
+
+    await act(async () => {
+      await mockInput.typeText(`/attach ${path}`)
+      mockInput.pressEnter()
+    })
+    await waitFor(() => client.uploads.length > 0)
+
+    expect(client.sent).toEqual([])
+    expect(client.uploads[0].name).toBe("handout.png")
+    expect(client.uploads[0].mime).toBe("image/png")
+    expect(client.uploads[0].bytes.byteLength).toBe(7)
+
+    act(() => renderer.destroy())
+  })
+
+  test("a dropped image path submits as an image upload instead of chat input", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lw-drop-"))
+    const path = join(dir, "clue.png")
+    await writeFile(path, new Uint8Array([0x89, 0x50, 0x4e, 0x47, 4, 5]))
+    const client = new MockClient()
+    const { renderer, flush, waitFor, mockInput } = await renderGame(client)
+    await flush()
+
+    await act(async () => {
+      await mockInput.typeText(pathToFileURL(path).toString())
+      mockInput.pressEnter()
+    })
+    await waitFor(() => client.uploads.length > 0)
+
+    expect(client.sent).toEqual([])
+    expect(client.uploads[0].name).toBe("clue.png")
+    expect(client.uploads[0].mime).toBe("image/png")
+
+    act(() => renderer.destroy())
+  })
+
+  test("/audio reads a local file and uploads it through the media channel", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lw-audio-"))
+    const path = join(dir, "theme.mp3")
+    await writeFile(path, new Uint8Array([0x49, 0x44, 0x33, 1, 2, 3]))
+    const client = new MockClient()
+    const { renderer, flush, waitFor, mockInput } = await renderGame(client)
+    await flush()
+
+    await act(async () => {
+      await mockInput.typeText(`/audio ${path}`)
+      mockInput.pressEnter()
+    })
+    await waitFor(() => client.uploads.length > 0)
+
+    expect(client.sent).toEqual([])
+    expect(client.uploads[0].name).toBe("theme.mp3")
+    expect(client.uploads[0].mime).toBe("audio/mpeg")
+
+    act(() => renderer.destroy())
   })
 
   test("strips terminal escape sequences from untrusted server text + names", async () => {

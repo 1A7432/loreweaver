@@ -40,6 +40,16 @@ function createMockIroh() {
           queue.push(null)
         }
       },
+      push(text: string): void {
+        const bytes = Array.from(enc.encode(text))
+        if (waiter) {
+          const resolve = waiter
+          waiter = undefined
+          resolve(bytes)
+        } else {
+          queue.push(bytes)
+        }
+      },
       async read(): Promise<number[] | null> {
         if (queue.length > 0) return queue.shift()!
         return new Promise((resolve) => {
@@ -49,6 +59,8 @@ function createMockIroh() {
     }
   }
 
+  // One entry per `openBi()` call: streams[0] is the first connection's long-lived control
+  // stream; media PUT/GET each open the next fresh stream, exactly like the real transport.
   const streams: Array<ReturnType<typeof makeRecvStream>> = []
 
   const loadIroh: LoadIroh = async () => ({
@@ -56,20 +68,20 @@ function createMockIroh() {
       builder: () => ({
         bind: async () => ({
           online: async () => {},
-          connect: async () => {
-            const recv = makeRecvStream()
-            streams.push(recv)
-            return {
-              openBi: async () => ({
+          connect: async () => ({
+            openBi: async () => {
+              const recv = makeRecvStream()
+              streams.push(recv)
+              return {
                 send: {
                   writeAll: async (buf: number[]) => {
                     sent.push(dec.decode(Uint8Array.from(buf)))
                   },
                 },
                 recv,
-              }),
-            }
-          },
+              }
+            },
+          }),
           close: () => {},
         }),
       }),
@@ -144,5 +156,60 @@ describe("IrohClient reconnect", () => {
     await settle()
     expect(streams.length).toBe(1)
     expect(statuses).toEqual(["connecting", "online", "offline"])
+  })
+})
+
+// The media byte channel opens a fresh bi-stream per transfer. The server ends a PUT stream
+// with a `put_ok` (or localized error) line and answers a GET with a header line + body —
+// these pin that the client actually reads those replies instead of assuming success.
+describe("IrohClient media channel", () => {
+  const TICKET = "endpointaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  const UPLOAD = { name: "a.png", mime: "image/png", bytes: new Uint8Array([1, 2, 3]), sha256: "ab".repeat(32) }
+
+  // Wrapped in an object: returning the bare promise from an async helper would make
+  // `await startUpload(...)` flatten and await the upload itself — before the test had a
+  // chance to push the server's reply, deadlocking the test.
+  async function startUpload(client: IrohClient, streams: Array<{ push(text: string): void }>) {
+    const promise = client.uploadMedia(UPLOAD)
+    promise.catch(() => {}) // inspected via expect() below; avoid an unhandled-rejection warning
+    await settle(0)
+    streams[0].push(`${JSON.stringify({ type: FrameType.MediaAccept, upload_id: "u1" })}\n`)
+    await settle(0) // let the client open the PUT stream and write header + body
+    return { promise }
+  }
+
+  test("uploadMedia resolves once the server acknowledges with put_ok", async () => {
+    const { loadIroh, sent, streams } = createMockIroh()
+    const client = new IrohClient({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20 })
+    await client.connect(TICKET)
+
+    const { promise } = await startUpload(client, streams)
+    expect(streams.length).toBe(2)
+    streams[1].push(`${JSON.stringify({ op: "put_ok", hash: UPLOAD.sha256 })}\n`)
+    await expect(promise).resolves.toBeUndefined()
+    expect(sent.some((line) => line.includes('"op":"put"') && line.includes('"upload_id":"u1"'))).toBe(true)
+  })
+
+  test("uploadMedia surfaces a server error line instead of pretending success", async () => {
+    const { loadIroh, streams } = createMockIroh()
+    const client = new IrohClient({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20 })
+    await client.connect(TICKET)
+
+    const { promise } = await startUpload(client, streams)
+    streams[1].push(`${JSON.stringify({ type: "error", code: "media_hash_mismatch", message: "hash mismatch" })}\n`)
+    await expect(promise).rejects.toThrow("hash mismatch")
+  })
+
+  test("getMedia throws on an error reply header instead of returning empty bytes", async () => {
+    const { loadIroh, streams } = createMockIroh()
+    const client = new IrohClient({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20 })
+    await client.connect(TICKET)
+
+    const promise = client.getMedia("ab".repeat(32))
+    promise.catch(() => {})
+    await settle(0)
+    expect(streams.length).toBe(2)
+    streams[1].push(`${JSON.stringify({ type: "error", code: "media_not_found", message: "not found" })}\n`)
+    await expect(promise).rejects.toThrow("not found")
   })
 })

@@ -23,6 +23,7 @@ from core.worldbook import LoreEntry
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM, assistant_text
+from tests.agent.test_charcard import _v2_png_card
 
 _CONCEPT = {
     "occupation": "Professor",
@@ -69,6 +70,24 @@ async def test_import_character_as_pc_saves_active_sheet(tmp_path):
     assert sheet.name == "Ada"
     assert sheet.system == "CoC"
     assert sheet.occupation == "Professor"
+
+
+async def test_import_png_card_registers_avatar_media(tmp_path):
+    services = build_services(
+        Settings(data_dir=str(tmp_path / "data")),
+        llm=_concept_llm(),
+        embeddings=FakeEmbeddings(64),
+    )
+    (tmp_path / "ada.png").write_bytes(_v2_png_card())
+    ctx = AgentCtx(chat_key="chat-avatar", user_id="player-1", locale="en", fs=LocalFs(str(tmp_path)))
+
+    await CharcardTools(services).import_character(ctx, file_path="ada.png", system="coc7", as_="pc")
+
+    sheet = await services.characters.get_character("player-1", "chat-avatar")
+    assert sheet.avatar
+    assert sheet.avatar["mime"] == "image/png"
+    roster = await services.characters.get_party_roster("chat-avatar")
+    assert roster[0]["avatar"]["hash"] == sheet.avatar["hash"]
 
 
 async def test_import_character_as_companion_creates_record_sheet_and_lore(tmp_path):

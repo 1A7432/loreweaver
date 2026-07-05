@@ -38,6 +38,7 @@ from gateway.ops import Censor
 from gateway.turn import publish_state
 from infra.config import Settings
 from infra.i18n import get_i18n
+from infra.media_store import MediaError
 from net.keystore import Keystore
 
 # The transport-neutral session core + frame helpers now live in `net.session`; the WebSocket
@@ -47,6 +48,11 @@ from net.session import SessionCore, resolve_session_fields, welcome_frame
 from net.session import error_frame as _error_frame
 from net.session import parse_frame as _parse_frame
 from net.session import render_frame as _render_frame
+
+_WS_MEDIA_HEADER_BYTES = 4
+# Headroom over the largest allowed media body for the length prefix + JSON header of one
+# binary media message (a PUT is ONE WebSocket message on this carrier).
+_WS_MEDIA_HEADER_SLACK = 64 * 1024
 
 
 @dataclass(eq=False)
@@ -82,6 +88,9 @@ class WsMember:
         transport (`net.iroh_server.IrohMember`) only reimplements this + `deliver`.
         """
         await _send(self.ws, frame)
+
+    async def send_media(self, header: dict[str, Any], data: bytes = b"") -> None:
+        await _send_media(self.ws, header, data)
 
     async def deliver(self, event: Event) -> None:
         """Render `event` to its WS frame and send it (dropping a closed socket)."""
@@ -141,7 +150,13 @@ class TuiServer(SessionCore):
         """Bind and start accepting connections (idempotent)."""
         if self._server is None:
             ssl_context = _build_ssl_context(self.services.settings)
-            self._server = await websockets.serve(self.handle, self.host, self.port, ssl=ssl_context)
+            # `websockets` caps a single message at 1 MiB by default — far below the media
+            # limits `docs/protocol.md` promises, and a media PUT arrives as one message.
+            tui = self.services.settings.tui
+            max_size = max(tui.media_max_file_bytes, tui.audio_max_file_bytes) + _WS_MEDIA_HEADER_SLACK
+            self._server = await websockets.serve(
+                self.handle, self.host, self.port, ssl=ssl_context, max_size=max_size
+            )
 
     async def serve(self) -> None:
         """Start (if not already) and run until `close()` stops the server."""
@@ -186,10 +201,14 @@ class TuiServer(SessionCore):
                 await self._replay_history(member)
                 await publish_state(self.hub, self.services, self._ctx_for(member))
                 async for raw in ws:
+                    if isinstance(raw, bytes | bytearray | memoryview):
+                        await self._on_media_message(member, bytes(raw))
+                        continue
                     await self._on_frame(member, raw)
             except ConnectionClosed:
                 pass
             finally:
+                self.drop_pending_media(member)
                 await self.hub.unsubscribe(member)
         finally:
             self._active_connections -= 1
@@ -231,6 +250,26 @@ class TuiServer(SessionCore):
         await _send(ws, welcome_frame(fields))
         return member
 
+    async def _on_media_message(self, member: WsMember, payload: bytes) -> None:
+        i18n = get_i18n(member.locale)
+        try:
+            header, body = _unpack_media_message(payload)
+            op = header.get("op")
+            if op == "put":
+                upload_id = str(header.get("upload_id") or "")
+                await self.receive_media_put(member, upload_id, body)
+                return
+            if op == "get":
+                sha256 = str(header.get("hash") or "")
+                response_header, data = await self.get_media_bytes(member, sha256)
+                await member.send_media(response_header, data)
+                return
+            await member.send_frame(_error_frame("bad_frame", i18n))
+        except MediaError as exc:
+            await member.send_frame(_error_frame(exc.code, i18n))
+        except Exception:
+            await member.send_frame(_error_frame("server_error", i18n))
+
 
 # -- WebSocket-only helpers ------------------------------------------------
 
@@ -261,5 +300,31 @@ async def _send(ws: Any, frame: dict[str, Any]) -> None:
     """Send one JSON `frame` to `ws`, swallowing an already-closed connection."""
     try:
         await ws.send(json.dumps(frame, ensure_ascii=False))
+    except ConnectionClosed:
+        pass
+
+
+def _pack_media_message(header: dict[str, Any], data: bytes = b"") -> bytes:
+    header_bytes = json.dumps(header, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return len(header_bytes).to_bytes(_WS_MEDIA_HEADER_BYTES, "big") + header_bytes + bytes(data)
+
+
+def _unpack_media_message(payload: bytes) -> tuple[dict[str, Any], bytes]:
+    if len(payload) < _WS_MEDIA_HEADER_BYTES:
+        raise ValueError("media_header_missing")
+    header_len = int.from_bytes(payload[:_WS_MEDIA_HEADER_BYTES], "big")
+    start = _WS_MEDIA_HEADER_BYTES
+    end = start + header_len
+    if header_len <= 0 or end > len(payload):
+        raise ValueError("media_header_length_invalid")
+    header = json.loads(payload[start:end])
+    if not isinstance(header, dict):
+        raise ValueError("media_header_not_object")
+    return header, payload[end:]
+
+
+async def _send_media(ws: Any, header: dict[str, Any], data: bytes = b"") -> None:
+    try:
+        await ws.send(_pack_media_message(header, data))
     except ConnectionClosed:
         pass

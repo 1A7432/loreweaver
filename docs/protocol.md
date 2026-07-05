@@ -7,22 +7,22 @@ This is the open, versioned wire protocol between a loreweaver server (started v
 (deterministic core + AI Keeper) is unaffected by transport; the transport-neutral
 session logic is `net.session.SessionCore`, and this document is the language-agnostic seam.
 
-Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"1.1"`. The same
+Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"1.3"`. The same
 frames + `join` handshake ride the transport; only the carrier + its framing differ:
 
 - **Iroh** (the transport `--serve` starts) — peer-to-peer QUIC. The server
   (`net.iroh_server`) binds an endpoint on the custom ALPN `loreweaver/tui/1` and prints a
   shareable **ticket**; a client dials the ticket (no domain/TLS/port-forward). A QUIC
-  bidirectional stream is a raw byte stream, so frames are **newline-delimited** JSON — one
-  compact `{...}\n` per frame — over one long-lived `open_bi`/`accept_bi` stream. Rich media
-  (images/audio, roadmap) will ride this transport (via iroh-blobs).
+  bidirectional stream is a raw byte stream, so control frames are **newline-delimited** JSON — one
+  compact `{...}\n` per frame — over one long-lived `open_bi`/`accept_bi` stream. Media bytes use
+  additional bidirectional streams on the same connection; see "Media transfer" below.
 - **WebSocket** (`net.tui_server`, endpoint `ws://host:port/`, one JSON object per message) —
-  kept ONLY as the offline test / loopback carrier; the offline test suite drives the
-  transport-neutral logic through it. It is not a `--serve` option.
+  kept ONLY as the offline test / loopback carrier; JSON control frames are text messages, and
+  media bytes are binary messages; see "Media transfer" below. It is not a `--serve` option.
 
 Both carriers drive the same `SessionCore`/`RoomHub`.
 
-Versioning is additive: `"1.1"` only ADDS the keeper-gated `admin_*` frames
+Versioning is additive: `"1.3"` adds room audio library/control frames; `"1.2"` adds media metadata frames and byte channels; `"1.1"` added the keeper-gated `admin_*` frames
 (see "Admin frames" below). A client that only understands `"1"` keeps working
 unchanged — it never sends `admin_*` frames, and it should treat the `welcome`
 `protocol` field as an opaque string (accept any `"1.x"`).
@@ -41,16 +41,32 @@ concurrent-connection cap (`TRPG_TUI__MAX_CONNECTIONS`) is refused before
   `{type:"join", key:string, name?:string, client?:{name,version}}`
 - `input` — a command line or player utterance, exactly what the player typed:
   `{type:"input", text:string}`
+- `media_offer` — request to upload image/audio metadata before opening the byte channel:
+  `{type:"media_offer", name:string, mime:string, size:int, sha256:string}`
+- `media_set_enabled` — keeper-only room switch for player uploads:
+  `{type:"media_set_enabled", enabled:boolean}`
 - `ping`: `{type:"ping", t:number}`
 
 ## Server → Client
 
 - `welcome` — sent once, on a successful `join`:
-  `{type:"welcome", protocol:"1.1", room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string}`
+  `{type:"welcome", protocol:"1.3", features:["media","audio"], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string}`
 - `error` — a localized failure notice; `bad_key`, `join_timeout` and
   `too_many_connections` close the connection (they only ever happen during
   or before the `join` handshake), the others do not:
-  `{type:"error", code:"bad_key"|"bad_frame"|"rate_limited"|"server_error"|"join_timeout"|"too_many_connections", message:string}`
+  `{type:"error", code:"bad_key"|"bad_frame"|"rate_limited"|"server_error"|"join_timeout"|"too_many_connections"|media error codes, message:string}`
+- `media_accept` — upload accepted; if `existing` is true, no PUT is needed:
+  `{type:"media_accept", upload_id:string, existing?:boolean, media?:MediaFrame, audio?:AudioLibraryItem}`
+- `media` — media metadata broadcast and history replay entry; bytes are fetched on demand:
+  `{type:"media", id:string, hash:string, mime:string, size:int, name:string, from:string, ts:number}`
+- `media_enabled` — reply to a keeper upload-switch request:
+  `{type:"media_enabled", enabled:boolean}`
+- `audio_library_item` — a room audio-library entry created from an uploaded audio blob:
+  `{type:"audio_library_item", id:string, hash:string, mime:string, size:int, name:string, from:string, ts:number, title?:string, license?:string, source?:string, tags?:string[]}`
+- `audio_control` — playback intent for local clients:
+  `{type:"audio_control", id:string, action:"play"|"stop"|"pause"|"resume"|"volume", layer:"bgm"|"ambience"|"sfx", hash?:string, mime?:string, name?:string, title?:string, loop?:boolean, volume?:number, fade_ms?:int, position_ms?:int, server_ts?:number}`
+- `audio_state` — best-effort persisted BGM/ambience state, replayed on join:
+  `{type:"audio_state", layers:[{layer:"bgm"|"ambience"|"sfx", hash?:string, mime?:string, name?:string, title?:string, playing:boolean, volume?:number, loop?:boolean, started_at?:number}]}`
 - `narrative` — one line of story/chat text:
   `{type:"narrative", id:string, speaker:"kp"|"player"|"system"|"npc", name?:string, text:string, format:"markdown"|"plain", stream?:boolean, done?:boolean}`
   For `speaker:"npc"`, `name` carries the NPC name.
@@ -61,7 +77,7 @@ concurrent-connection cap (`TRPG_TUI__MAX_CONNECTIONS`) is refused before
   `rank` (`-2`..`+4`); NEVER carries keeper secrets:
   `{type:"dice", actor:string, kind:"roll"|"check"|"sanity"|"opposed"|"init", expr:string, rolls:number[], total:number, target?:number, rank?:int, level?:string, success?:boolean}`
 - `state` — a panel snapshot, sent on `join` and after every turn:
-  `{type:"state", character?:{name,system,hp,hpmax,mp,mpmax,san,sanmax,attributes:{},status_effects:[]}, party:[{name,online:boolean,active:boolean,initiative?:int,hp?:int,hpMax?:int,san?:int,sanMax?:int,mp?:int,mpMax?:int,ai?:boolean}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, usage?:{context_tokens:int,context_window:int,input_tokens:int,output_tokens:int,cache_hit_tokens:int,cache_miss_tokens:int}}`
+  `{type:"state", character?:{name,system,hp,hpmax,mp,mpmax,san,sanmax,attributes:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,hp?:int,hpMax?:int,san?:int,sanMax?:int,mp?:int,mpMax?:int,ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, usage?:{context_tokens:int,context_window:int,input_tokens:int,output_tokens:int,cache_hit_tokens:int,cache_miss_tokens:int}}`
   `usage` is a rolling per-room LLM token/cache aggregate (additive/optional — omitted
   until the room's first completed AI-KP turn, and never sent by a pre-1.1 server):
   `context_tokens`/`context_window` describe the MOST RECENT turn's context fullness;
@@ -103,6 +119,59 @@ On an `input` frame from a client in room `R`, the server:
 Multiple clients whose keys map to the same room share one AI-KP session;
 every frame described above as "broadcast" goes to every member currently
 connected to that room.
+
+## Media transfer (v1.2+) and audio (v1.3)
+
+All media is server-stored and server-forwarded. The JSON control stream carries only metadata;
+raw bytes never appear in JSON and are never base64-encoded. Supported upload MIME types are
+`image/png`, `image/jpeg`, `image/webp`, `image/gif`, `image/svg+xml`, `audio/mpeg`, `audio/ogg`, `audio/wav`,
+`audio/flac`, `audio/mp4`, and `audio/aac`. The default image limits are 8 MiB per file and
+512 MiB per room; the default audio limits are 128 MiB per file and 2 GiB per room. Both share
+the default 10 uploads per member per minute rate limit. The server treats media bytes as opaque
+blobs; decoding and playback happen only in clients.
+
+SVG is the exception to fully opaque storage: the server accepts only a safe, static subset
+(`svg`, `g`, `rect`, `line`, `polyline`, `text`, `tspan`, `title`, `desc`) and rejects scripts,
+foreignObject, event handlers, external links, data URLs, and CSS/url execution surfaces with
+`error media_bad_svg`. TUI SVG previews parse that same static drawing information into terminal
+text; they never execute SVG as browser content.
+
+Upload flow:
+
+1. Client sends `media_offer{name,mime,size,sha256}` on the control stream.
+2. Server validates MIME, size, room quota, rate limit, and room upload switch, then sends
+   `media_accept{upload_id}` or `error`. If the room already has the same hash, it may send
+   `media_accept{upload_id:"", existing:true, media|audio}` and broadcast the metadata without a PUT.
+3. Client sends PUT on the MediaChannel: header `{op:"put", upload_id}` plus raw bytes.
+4. Server verifies exact size and sha256, stores `data_dir/media/<room>/<sha256>`, records
+   `media_index(hash, room, mime, size, name, uploader, created_at)`, and broadcasts `media` for
+   images or `audio_library_item` for audio.
+
+Download flow:
+
+1. Client sends GET on the MediaChannel: header `{op:"get", hash}`.
+2. Server checks the hash belongs to the caller's room, then replies with `{op:"get",hash,size,mime,name}`
+   plus raw bytes. The client should verify sha256 and may cache under
+   `~/.loreweaver/cache/media/<hash>`.
+
+MediaChannel wire formats:
+
+- Iroh: open a new bidirectional stream on the existing connection. The stream begins with one
+  newline-terminated compact JSON header. For PUT, the client then writes the raw body in chunks
+  of up to 64 KiB; the server answers with one newline-terminated `{op:"put_ok", hash}` line once
+  the blob is stored (or a `{type:"error", code, message}` line on rejection). For GET, the server
+  writes one newline-terminated `{op:"get",hash,size,mime,name}` response header, then the raw
+  body in chunks of up to 64 KiB; an error reply is a `{type:"error", ...}` line with no body.
+- WebSocket: one binary message is `uint32_be header_length` + UTF-8 JSON header + raw bytes.
+  PUT sends `{op:"put", upload_id}` plus the body; success is observed via the room's `media` /
+  `audio_library_item` broadcast, and rejections arrive as standard `error` text frames. GET
+  sends `{op:"get", hash}` with no body; the server replies with `{op:"get",hash,size,mime,name}`
+  plus the body.
+
+Audio control is intentionally separate from byte transfer. Uploading an audio file only creates
+or updates the room's audio library. Keeper/admin commands such as `.bgm play <audio>`,
+`.ambience stop`, and `.sfx <audio>` broadcast `audio_control` frames; TUI clients fetch the bytes
+with the same GET flow and play them locally. The server never plays audio itself.
 
 ## Auth / keystore
 

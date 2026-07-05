@@ -5,6 +5,9 @@ import {
   FrameType,
   type ConnectionStatus,
   type DiceFrame,
+  type MediaFrame,
+  type MediaPayload,
+  type MediaUpload,
   type PresenceFrame,
   type ServerFrame,
   type StateFrame,
@@ -16,6 +19,7 @@ import { PartyRoster } from "./components/PartyRoster"
 import { ScenePanel } from "./components/ScenePanel"
 import { StatusBar } from "./components/StatusBar"
 import { tt } from "./i18n"
+import { droppedImagePath, openMedia, readAudioUpload, readUpload } from "./media"
 import type { Palette, ThemeName } from "./themes"
 
 // The game view needs only these three from the client. `WsClient` (and the
@@ -24,6 +28,8 @@ import type { Palette, ThemeName } from "./themes"
 export interface GameClient {
   onMessage(cb: (frame: ServerFrame) => void): () => void
   sendInput(text: string): void
+  uploadMedia(upload: MediaUpload): Promise<MediaFrame | undefined>
+  getMedia(hash: string): Promise<MediaPayload>
   close?(code?: number, reason?: string): void
 }
 
@@ -76,6 +82,7 @@ export function GameView({ client, welcome, theme, themeName, initialFrames, con
   const [historyIndex, setHistoryIndex] = useState<number | null>(null)
   const [inputVersion, setInputVersion] = useState(0)
   const [showHelp, setShowHelp] = useState(false)
+  const [selectedMedia, setSelectedMedia] = useState<MediaFrame | undefined>()
   // True from the moment the player submits until the Keeper's reply lands, so the
   // narrative log can show an animated "构思中" liveness indicator meanwhile.
   const [kpWorking, setKpWorking] = useState(false)
@@ -101,8 +108,16 @@ export function GameView({ client, welcome, theme, themeName, initialFrames, con
         setStateFrame(frame)
         return
       }
-      if (frame.type === FrameType.Narrative || frame.type === FrameType.Dice || frame.type === FrameType.System) {
+      if (
+        frame.type === FrameType.Narrative ||
+        frame.type === FrameType.Dice ||
+        frame.type === FrameType.System ||
+        frame.type === FrameType.Media ||
+        frame.type === FrameType.AudioLibraryItem ||
+        frame.type === FrameType.AudioControl
+      ) {
         setFrames((current) => appendFrame(current, frame))
+        if (frame.type === FrameType.Media) setSelectedMedia(frame)
         // Clear the "Keeper is working" indicator once the reply actually lands. A
         // dice frame means the Keeper already acted; a `kp` narrative is the reply
         // itself — but it MAY stream, so a streaming chunk that isn't `done` yet is
@@ -144,7 +159,29 @@ export function GameView({ client, welcome, theme, themeName, initialFrames, con
 
   const submit = (value?: string) => {
     const text = String(value ?? command).trim()
-    if (!text) return
+    if (!text) {
+      if (selectedMedia) {
+        void openMedia(client, selectedMedia).catch((error) => {
+          setFrames((current) =>
+            appendFrame(current, { type: FrameType.System, level: "warn", text: error instanceof Error ? error.message : String(error) }),
+          )
+        })
+      }
+      return
+    }
+    if (text.startsWith("/attach ")) {
+      void attachMedia(text.slice("/attach ".length).trim())
+      return
+    }
+    if (text.startsWith("/audio ")) {
+      void attachAudio(text.slice("/audio ".length).trim())
+      return
+    }
+    const droppedImage = droppedImagePath(text)
+    if (droppedImage) {
+      void attachMedia(droppedImage)
+      return
+    }
     client.sendInput(text)
     setKpWorking(true)
     // No optimistic local echo here: the TUI server always broadcasts the
@@ -157,6 +194,44 @@ export function GameView({ client, welcome, theme, themeName, initialFrames, con
     setHistoryIndex(null)
     setCommand("")
     setInputVersion((current) => current + 1)
+  }
+
+  const attachMedia = async (path: string) => {
+    if (!path) return
+    setFrames((current) => appendFrame(current, { type: FrameType.System, level: "info", text: tt(locale, "media.uploading") }))
+    try {
+      const upload = await readUpload(path)
+      if (!upload.mime) throw new Error(tt(locale, "media.unsupported"))
+      await client.uploadMedia(upload)
+      setFrames((current) => appendFrame(current, { type: FrameType.System, level: "info", text: tt(locale, "media.uploaded", { name: upload.name }) }))
+      setHistory((current) => [...current, `/attach ${path}`].slice(-50))
+      setHistoryIndex(null)
+      setCommand("")
+      setInputVersion((current) => current + 1)
+    } catch (error) {
+      setFrames((current) =>
+        appendFrame(current, { type: FrameType.System, level: "warn", text: error instanceof Error ? error.message : String(error) }),
+      )
+    }
+  }
+
+  const attachAudio = async (path: string) => {
+    if (!path) return
+    setFrames((current) => appendFrame(current, { type: FrameType.System, level: "info", text: tt(locale, "audio.uploading") }))
+    try {
+      const upload = await readAudioUpload(path)
+      if (!upload.mime) throw new Error(tt(locale, "audio.unsupported"))
+      await client.uploadMedia(upload)
+      setFrames((current) => appendFrame(current, { type: FrameType.System, level: "info", text: tt(locale, "audio.uploaded", { name: upload.name }) }))
+      setHistory((current) => [...current, `/audio ${path}`].slice(-50))
+      setHistoryIndex(null)
+      setCommand("")
+      setInputVersion((current) => current + 1)
+    } catch (error) {
+      setFrames((current) =>
+        appendFrame(current, { type: FrameType.System, level: "warn", text: error instanceof Error ? error.message : String(error) }),
+      )
+    }
   }
 
   const recallHistory = (direction: -1 | 1) => {
@@ -223,6 +298,9 @@ export function GameView({ client, welcome, theme, themeName, initialFrames, con
             critFlash={critFlash}
             kpWorking={kpWorking}
             locale={locale}
+            client={client}
+            selectedMediaHash={selectedMedia?.hash}
+            onSelectMedia={setSelectedMedia}
           />
         </scrollbox>
 
@@ -233,6 +311,7 @@ export function GameView({ client, welcome, theme, themeName, initialFrames, con
             initiative={stateFrame.initiative}
             theme={theme}
             locale={locale}
+            client={client}
             focused={rosterFocused}
             onFocus={() => setRosterFocused(true)}
           />

@@ -24,17 +24,29 @@ from agent.kp_tools import build_kp_toolset
 from agent.loop import KPTurnResult
 from agent.services import Services
 from agent.tools import Toolset
+from gateway.audio import add_audio_item, audio_state_frame, has_audio_state, list_audio_items
 from gateway.commands import CommandRouter
 from gateway.hub import Event, RoomHub
-from gateway.ops import Censor, RateLimiter, censor_from_settings
+from gateway.ops import Censor, RateLimiter, censor_from_settings, is_media_enabled, set_media_enabled
 from gateway.session import SessionSource
 from gateway.turn import run_turn
 from infra.i18n import I18n, get_i18n
+from infra.media_store import (
+    ALLOWED_AUDIO_MIMES,
+    ALLOWED_IMAGE_MIMES,
+    ALLOWED_MEDIA_MIMES,
+    MediaError,
+    MediaRecord,
+    MediaStore,
+    PendingUpload,
+    is_audio_mime,
+    is_image_mime,
+)
 from net.admin import handle_admin_frame, is_admin_frame
 from net.keystore import Keystore
 
-# v1.1 adds the additive, keeper-gated `admin_*` frames (see `net.admin` and `docs/protocol.md`).
-_PROTOCOL_VERSION = "1.1"
+# v1.3 adds room-scoped audio library/control frames over the media byte channel.
+_PROTOCOL_VERSION = "1.3"
 _SERVER_BANNER = "loreweaver/1"
 
 # Hard cap on a single `input` frame's text before it reaches the LLM/history. A client-controlled
@@ -43,6 +55,7 @@ _MAX_INPUT_CHARS = 4000
 
 # How many trailing chat-history messages a join/reconnect replays to the joining connection.
 _HISTORY_REPLAY_CAP = 30
+_MEDIA_HISTORY_REPLAY_CAP = 30
 
 
 def resolve_session_fields(keystore: Keystore, key: str, locale: str) -> dict[str, str] | None:
@@ -81,6 +94,7 @@ def welcome_frame(fields: dict[str, str]) -> dict[str, Any]:
     return {
         "type": "welcome",
         "protocol": _PROTOCOL_VERSION,
+        "features": ["media", "audio"],
         "room": fields["room"],
         "you": {"id": fields["id"], "name": fields["name"], "role": fields["role"]},
         "locale": fields["locale"],
@@ -122,6 +136,10 @@ def render_frame(event: Event) -> dict[str, Any] | None:
         return {"type": "presence", **event.data}
     if event.kind == "system":
         return {"type": "system", "level": event.data.get("level", ""), "text": event.text}
+    if event.kind == "media":
+        return dict(event.data)
+    if event.kind == "audio":
+        return dict(event.data)
     return None
 
 
@@ -176,9 +194,19 @@ class SessionCore:
         # From `services.settings.censor` unless injected (tests). Nothing configured = explicit no-op.
         self.censor = censor if censor is not None else censor_from_settings(services.settings.censor)
         self.rate_limiter = RateLimiter()
+        tui_settings = services.settings.tui
+        uploads_per_minute = max(1, int(tui_settings.media_uploads_per_minute))
+        self.media_upload_limiter = RateLimiter(uploads_per_minute, uploads_per_minute / 60.0)
+        self.media_store = MediaStore(
+            services.store,
+            services.settings.data_dir,
+            max_file_bytes=max(tui_settings.media_max_file_bytes, tui_settings.audio_max_file_bytes),
+            room_quota_bytes=max(tui_settings.media_room_quota_bytes, tui_settings.audio_room_quota_bytes),
+            allowed_mimes=ALLOWED_MEDIA_MIMES,
+        )
+        self._pending_media: dict[str, PendingUpload] = {}
         # Recent AI-KP turns, for introspection (tests/admin asserting a keeper tool ran) — never wired.
         self.turns: deque[KPTurnResult] = deque(maxlen=50)
-        tui_settings = services.settings.tui
         self.join_timeout = tui_settings.join_timeout if join_timeout is None else join_timeout
 
     async def _replay_history(self, member: Any) -> None:
@@ -191,21 +219,29 @@ class SessionCore:
         chat_key = self._ctx_for(member).chat_key
         try:
             raw = await self.services.store.get(user_key="", store_key=f"chat_history.{chat_key}")
-            if not raw:
-                return
-            history = json.loads(raw)
-            if not isinstance(history, list):
-                return
-            for entry in history[-_HISTORY_REPLAY_CAP:]:
-                if not isinstance(entry, dict):
-                    continue
-                text = str(entry.get("content") or "").strip()
-                if not text:
-                    continue
-                role = entry.get("role")
-                speaker = "player" if role == "user" else "kp" if role == "assistant" else "system"
-                fmt = "plain" if speaker == "player" else "markdown"
-                await member.deliver(Event.narrative(speaker=speaker, text=text, fmt=fmt))
+            history = json.loads(raw) if raw else []
+            if isinstance(history, list):
+                for entry in history[-_HISTORY_REPLAY_CAP:]:
+                    if not isinstance(entry, dict):
+                        continue
+                    text = str(entry.get("content") or "").strip()
+                    if not text:
+                        continue
+                    role = entry.get("role")
+                    speaker = "player" if role == "user" else "kp" if role == "assistant" else "system"
+                    fmt = "plain" if speaker == "player" else "markdown"
+                    await member.deliver(Event.narrative(speaker=speaker, text=text, fmt=fmt))
+            media_raw = await self.services.store.get(user_key="", store_key=f"media_history.{chat_key}")
+            media_history = json.loads(media_raw) if media_raw else []
+            if isinstance(media_history, list):
+                for frame in media_history[-_MEDIA_HISTORY_REPLAY_CAP:]:
+                    if isinstance(frame, dict) and frame.get("type") == "media":
+                        await member.deliver(Event.media(frame))
+            audio_items = await list_audio_items(self.services.store, chat_key)
+            for frame in audio_items[-_MEDIA_HISTORY_REPLAY_CAP:]:
+                await member.deliver(Event.audio(frame))
+            if audio_items or await has_audio_state(self.services.store, chat_key):
+                await member.deliver(Event.audio(await audio_state_frame(self.services.store, chat_key)))
         except Exception:
             return
 
@@ -230,6 +266,12 @@ class SessionCore:
             if kind == "ping":
                 await member.send_frame({"type": "pong", "t": frame.get("t")})
                 return
+            if kind == "media_offer":
+                await self._handle_media_offer(member, frame)
+                return
+            if kind == "media_set_enabled":
+                await self._handle_media_set_enabled(member, frame)
+                return
             if is_admin_frame(kind):
                 # Keeper-gated admin surface. The gate is the connection's keystore role;
                 # `handle_admin_frame` refuses non-keepers and scopes destructive ops to its OWN room.
@@ -243,6 +285,166 @@ class SessionCore:
             return
 
         await member.send_frame(error_frame("bad_frame", i18n))
+
+    async def _handle_media_offer(self, member: Any, frame: dict[str, Any]) -> None:
+        i18n = get_i18n(member.locale)
+        if not await is_media_enabled(self.services.store, member.session_key):
+            await member.send_frame(error_frame("media_disabled", i18n))
+            return
+        if not self.media_upload_limiter.allow(f"media:{member.session_key}:{member.id}"):
+            await member.send_frame(error_frame("media_rate_limited", i18n))
+            return
+
+        name = str(frame.get("name") or "media").strip()[:255] or "media"
+        mime = str(frame.get("mime") or "").lower()
+        sha256 = str(frame.get("sha256") or "").lower()
+        policy = self._media_policy(mime)
+        try:
+            size = int(frame.get("size") or 0)
+            existing = await self.media_store.validate_offer(
+                room=member.session_key,
+                mime=mime,
+                size=size,
+                sha256=sha256,
+                max_file_bytes=policy["max_file_bytes"],
+                room_quota_bytes=policy["room_quota_bytes"],
+                allowed_mimes=policy["allowed_mimes"],
+            )
+        except (TypeError, ValueError, MediaError) as exc:
+            code = exc.code if isinstance(exc, MediaError) else "media_bad_offer"
+            await member.send_frame(error_frame(code, i18n))
+            return
+
+        if existing is not None:
+            if is_audio_mime(existing.mime):
+                audio_frame = await self._publish_audio_item(member, existing)
+                await member.send_frame({"type": "media_accept", "upload_id": "", "existing": True, "audio": audio_frame})
+            else:
+                media_frame = self._media_frame(existing, member)
+                await member.send_frame({"type": "media_accept", "upload_id": "", "existing": True, "media": media_frame})
+                await self._publish_media(member, media_frame)
+            return
+
+        upload_id = new_id()
+        self._pending_media[upload_id] = PendingUpload(
+            upload_id=upload_id,
+            room=member.session_key,
+            mime=mime,
+            size=size,
+            name=name,
+            uploader=member.id,
+            sha256=sha256,
+        )
+        await member.send_frame({"type": "media_accept", "upload_id": upload_id})
+
+    def _media_policy(self, mime: str) -> dict[str, Any]:
+        tui = self.services.settings.tui
+        if is_image_mime(mime):
+            return {
+                "max_file_bytes": tui.media_max_file_bytes,
+                "room_quota_bytes": tui.media_room_quota_bytes,
+                "allowed_mimes": ALLOWED_IMAGE_MIMES,
+            }
+        if is_audio_mime(mime):
+            return {
+                "max_file_bytes": tui.audio_max_file_bytes,
+                "room_quota_bytes": tui.audio_room_quota_bytes,
+                "allowed_mimes": ALLOWED_AUDIO_MIMES,
+            }
+        return {
+            "max_file_bytes": max(tui.media_max_file_bytes, tui.audio_max_file_bytes),
+            "room_quota_bytes": max(tui.media_room_quota_bytes, tui.audio_room_quota_bytes),
+            "allowed_mimes": ALLOWED_MEDIA_MIMES,
+        }
+
+    async def _handle_media_set_enabled(self, member: Any, frame: dict[str, Any]) -> None:
+        i18n = get_i18n(member.locale)
+        if member.role != "keeper":
+            await member.send_frame(error_frame("forbidden", i18n))
+            return
+        enabled = bool(frame.get("enabled"))
+        await set_media_enabled(self.services.store, member.session_key, enabled)
+        await member.send_frame({"type": "media_enabled", "enabled": enabled})
+
+    def drop_pending_media(self, member: Any) -> None:
+        """Forget offers `member` never completed — a PUT can only arrive on its own connection,
+        so its pending entries are dead once that connection closes. (Transports call this on
+        disconnect; without it the offer→never-PUT pattern grows `_pending_media` forever.)"""
+        stale = [
+            upload_id
+            for upload_id, pending in self._pending_media.items()
+            if pending.room == member.session_key and pending.uploader == member.id
+        ]
+        for upload_id in stale:
+            self._pending_media.pop(upload_id, None)
+
+    async def receive_media_put(self, member: Any, upload_id: str, data: bytes) -> dict[str, Any]:
+        i18n = get_i18n(member.locale)
+        pending = self._pending_media.pop(upload_id, None)
+        if pending is None or pending.room != member.session_key or pending.uploader != member.id:
+            raise MediaError("media_bad_upload")
+        try:
+            record = await self.media_store.commit_bytes(pending, data)
+        except MediaError:
+            raise
+        except Exception as exc:
+            raise MediaError("server_error") from exc
+        if is_audio_mime(record.mime):
+            await self._publish_audio_item(member, record)
+            return {"type": "media_put_ok", "hash": record.hash, "message": i18n.t("tui.media.uploaded", name=record.name)}
+        media_frame = self._media_frame(record, member)
+        await self._publish_media(member, media_frame)
+        return {"type": "media_put_ok", "hash": record.hash, "message": i18n.t("tui.media.uploaded", name=record.name)}
+
+    async def get_media_bytes(self, member: Any, sha256: str) -> tuple[dict[str, Any], bytes]:
+        record, data = await self.media_store.read_bytes(member.session_key, sha256)
+        header = {
+            "op": "get",
+            "hash": record.hash,
+            "size": record.size,
+            "mime": record.mime,
+            "name": record.name,
+        }
+        return header, data
+
+    def _media_frame(self, record: MediaRecord, member: Any) -> dict[str, Any]:
+        return {
+            "type": "media",
+            "id": new_id(),
+            "hash": record.hash,
+            "mime": record.mime,
+            "size": record.size,
+            "name": record.name,
+            "from": getattr(member, "name", "") or record.uploader,
+            "ts": record.created_at,
+        }
+
+    async def _publish_media(self, member: Any, frame: dict[str, Any]) -> None:
+        await self._record_media_history(member.session_key, frame)
+        await self.hub.publish(member.session_key, Event.media(frame))
+
+    async def _publish_audio_item(self, member: Any, record: MediaRecord) -> dict[str, Any]:
+        frame = await add_audio_item(
+            self.services.store,
+            member.session_key,
+            record,
+            getattr(member, "name", "") or record.uploader,
+        )
+        await self.hub.publish(member.session_key, Event.audio(frame))
+        return frame
+
+    async def _record_media_history(self, session_key: str, frame: dict[str, Any]) -> None:
+        store_key = f"media_history.{session_key}"
+        try:
+            raw = await self.services.store.get(user_key="", store_key=store_key)
+            history = json.loads(raw) if raw else []
+        except Exception:
+            history = []
+        if not isinstance(history, list):
+            history = []
+        history.append(dict(frame))
+        history = history[-_MEDIA_HISTORY_REPLAY_CAP:]
+        await self.services.store.set(user_key="", store_key=store_key, value=json.dumps(history, ensure_ascii=False))
 
     async def dispatch_input(self, member: Any, text: str) -> None:
         """Drive one player turn (command or AI-KP) to completion via the hub.

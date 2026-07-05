@@ -23,8 +23,9 @@ from agent.tools import tool
 from core.char_from_persona import build_sheet_from_persona, infer_pronoun_note
 from core.character_manager import CharacterSheet
 from core.character_rules import render_validation_notice, validate_sheet
-from core.charcard import CharacterCard, parse_card_file
+from core.charcard import PNG_SIGNATURE, CharacterCard, parse_card_file
 from infra.i18n import I18n
+from infra.media_store import MediaStore
 
 _PREVIEW_CHARS = 200
 _KEY_STAT_COUNT = 6
@@ -59,6 +60,32 @@ def _key_stats(sheet: CharacterSheet) -> str:
     attrs = sheet.attributes or {}
     keys = [attr for attr in _COC_CORE_ATTRS if attr in attrs] if sheet.system == "CoC" else list(attrs)
     return ", ".join(f"{attr} {attrs[attr]}" for attr in keys[:_KEY_STAT_COUNT])
+
+
+async def _register_png_avatar(services: Services, ctx: AgentCtx, host_path: Path, sheet: CharacterSheet) -> None:
+    try:
+        data = host_path.read_bytes()
+    except OSError:
+        return
+    if not data.startswith(PNG_SIGNATURE):
+        return
+    try:
+        store = MediaStore(
+            services.store,
+            services.settings.data_dir,
+            max_file_bytes=services.settings.tui.media_max_file_bytes,
+            room_quota_bytes=services.settings.tui.media_room_quota_bytes,
+        )
+        record = await store.register_blob(
+            room=ctx.chat_key,
+            data=data,
+            mime="image/png",
+            name=host_path.name,
+            uploader=ctx.uid(),
+        )
+    except Exception:
+        return
+    sheet.avatar = record.ref()
 
 
 async def _module_summary(services: Services, chat_key: str) -> str:
@@ -114,6 +141,7 @@ class CharcardTools:
             final_name = name.strip() or card.name or sheet.name
             sheet.name = final_name
             sheet, violations = validate_sheet(sheet, system)
+            await _register_png_avatar(self._services, ctx, host_path, sheet)
             validation_notice = render_validation_notice(i18n, violations)
 
             if as_.strip().lower() == "companion":

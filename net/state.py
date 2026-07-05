@@ -104,7 +104,7 @@ async def _character_payload(services: Services, chat_key: str, sheet: Character
     except Exception:
         pass
 
-    return {
+    payload = {
         "name": sheet.name,
         "system": sheet.system,
         "hp": hp,
@@ -116,6 +116,10 @@ async def _character_payload(services: Services, chat_key: str, sheet: Character
         "attributes": dict(attrs),
         "status_effects": status_effects,
     }
+    avatar = getattr(sheet, "avatar", None)
+    if isinstance(avatar, dict):
+        payload["avatar"] = avatar
+    return payload
 
 
 async def _party(services: Services, chat_key: str) -> list[dict[str, Any]]:
@@ -133,6 +137,9 @@ async def _party(services: Services, chat_key: str) -> list[dict[str, Any]]:
             # M10: tag AI-companion party members so clients can render an "AI" badge.
             "ai": member.get("name", "") in companion_names,
         }
+        avatar = member.get("avatar")
+        if isinstance(avatar, dict):
+            payload["avatar"] = avatar
         payload.update(_party_member_vitals(member))
         members.append(payload)
     return members

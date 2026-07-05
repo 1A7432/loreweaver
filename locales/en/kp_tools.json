@@ -112,6 +112,8 @@
   "kp_tools.initiative.list_item": "{index}. {name}: {initiative}",
   "kp_tools.initiative.next_turn": "➡️ Current turn: {name}",
   "kp_tools.initiative.unknown_action": "❌ Unknown action: {action}",
+  "kp_tools.map.draw.done": "✅ SVG map sent: {name} ({hash})",
+  "kp_tools.map.draw.failed": "❌ Failed to draw SVG map: {error}",
   "kp_tools.know.catalog.category_line": "### {category} ({count})",
   "kp_tools.know.catalog.empty": "❌ No module catalog yet; please upload a module (module/story type) first.",
   "kp_tools.know.catalog.failed": "❌ Failed to load the module catalog: {error}",

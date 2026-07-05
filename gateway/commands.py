@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 import re
+import shlex
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -17,6 +18,7 @@ from core.coc_rules import DEFAULT_COC_RULE
 from core.dice_engine import DiceResult, coc_rank_label
 from core.rulepacks import RulePack, load_rulepack
 from core.skills import available_skills
+from gateway.audio import build_audio_control, list_audio_items, resolve_audio_item, update_audio_item
 from gateway.hub import Event
 from gateway.ops import Botlist, PrivilegeLevel, get_enabled_skills, set_enabled_skills
 from gateway.rooms import clear_binding, get_binding, mint_room_id, session_key_for_room, set_binding
@@ -177,6 +179,15 @@ _BOTLIST_LIST_WORDS = {"", "list", "ls", "show", "列表", "查看"}
 _SKILL_STATUS_WORDS = {"status", "状态", "狀態"}
 _SKILL_ENABLE_WORDS = {"enable", "on", "启用", "啟用"}
 _SKILL_DISABLE_WORDS = {"disable", "off", "禁用", "关闭", "關閉"}
+
+# `.audio` / `.bgm` / `.ambience` / `.sfx` subcommand vocabularies.
+_AUDIO_LIST_WORDS = {"", "list", "ls", "show", "列表", "查看"}
+_AUDIO_SET_WORDS = {"set", "meta", "metadata", "设置", "設置", "元数据", "元資料"}
+_AUDIO_PLAY_WORDS = {"play", "start", "播放", "开始", "開始"}
+_AUDIO_STOP_WORDS = {"stop", "停止"}
+_AUDIO_PAUSE_WORDS = {"pause", "暂停", "暫停"}
+_AUDIO_RESUME_WORDS = {"resume", "继续", "繼續"}
+_AUDIO_VOLUME_WORDS = {"volume", "vol", "音量"}
 
 # `.st`/`.sheet` finalize word: re-derive current HP/MP/SAN to their maxima for
 # the sheet's CURRENT characteristics (CREATION semantics -- see `cmd_sheet`).
@@ -673,6 +684,117 @@ class CommandRouter:
         await set_enabled_skills(store, ctx.chat_key, enabled_ids)
         return ctx.i18n.t("commands.skill.disable_done", id=skill_id)
 
+    async def cmd_audio(self, ctx: CommandCtx) -> str:
+        tokens = _shell_words(ctx.args)
+        sub = tokens[0].casefold() if tokens else ""
+        rest = tokens[1:] if tokens else []
+        if sub in _AUDIO_LIST_WORDS:
+            return await self._audio_list(ctx)
+        if sub in _AUDIO_SET_WORDS:
+            return await self._audio_set(ctx, rest)
+        return ctx.i18n.t("commands.audio.usage")
+
+    async def cmd_bgm(self, ctx: CommandCtx) -> str:
+        return await self._audio_layer(ctx, "bgm", default_loop=True)
+
+    async def cmd_ambience(self, ctx: CommandCtx) -> str:
+        return await self._audio_layer(ctx, "ambience", default_loop=True)
+
+    async def cmd_sfx(self, ctx: CommandCtx) -> str:
+        return await self._audio_layer(ctx, "sfx", default_loop=False)
+
+    async def _audio_list(self, ctx: CommandCtx) -> str:
+        items = await list_audio_items(ctx.services.store, ctx.chat_key)
+        if not items:
+            return ctx.i18n.t("commands.audio.empty")
+        lines = [_audio_item_line(item) for item in items[-25:]]
+        return ctx.i18n.t("commands.audio.list", items="\n".join(lines))
+
+    async def _audio_set(self, ctx: CommandCtx, tokens: list[str]) -> str:
+        query, metadata = _split_audio_metadata(tokens)
+        if not query or not metadata:
+            return ctx.i18n.t("commands.audio.set_usage")
+        resolved = await update_audio_item(ctx.services.store, ctx.chat_key, query, metadata)
+        if resolved.status == "not_found":
+            return ctx.i18n.t("commands.audio.not_found", query=query)
+        if resolved.status == "ambiguous":
+            return ctx.i18n.t("commands.audio.ambiguous", matches=_audio_matches(resolved.matches))
+        assert resolved.item is not None
+        await self._publish_audio(ctx, resolved.item)
+        return ctx.i18n.t("commands.audio.updated", item=_audio_item_label(resolved.item))
+
+    async def _audio_layer(self, ctx: CommandCtx, layer: str, *, default_loop: bool) -> str:
+        tokens = _shell_words(ctx.args)
+        if not tokens:
+            return ctx.i18n.t(f"commands.audio.{layer}.usage")
+
+        sub = tokens[0].casefold()
+        if sub in _AUDIO_STOP_WORDS:
+            return await self._audio_control(ctx, layer, "stop")
+        if sub in _AUDIO_PAUSE_WORDS:
+            return await self._audio_control(ctx, layer, "pause")
+        if sub in _AUDIO_RESUME_WORDS:
+            return await self._audio_control(ctx, layer, "resume")
+        if sub in _AUDIO_VOLUME_WORDS:
+            volume = _parse_audio_volume(tokens[1:])
+            if volume is None:
+                return ctx.i18n.t("commands.audio.volume_usage")
+            return await self._audio_control(ctx, layer, "volume", volume=volume)
+
+        play_tokens = tokens[1:] if sub in _AUDIO_PLAY_WORDS else tokens
+        query, options = _split_audio_play(play_tokens, default_loop=default_loop)
+        if not query:
+            return ctx.i18n.t(f"commands.audio.{layer}.usage")
+        resolved = await resolve_audio_item(ctx.services.store, ctx.chat_key, query)
+        if resolved.status == "not_found":
+            return ctx.i18n.t("commands.audio.not_found", query=query)
+        if resolved.status == "ambiguous":
+            return ctx.i18n.t("commands.audio.ambiguous", matches=_audio_matches(resolved.matches))
+        assert resolved.item is not None
+        return await self._audio_control(
+            ctx,
+            layer,
+            "play",
+            item=resolved.item,
+            volume=options.get("volume"),
+            loop=bool(options.get("loop")),
+            fade_ms=options.get("fade_ms"),
+        )
+
+    async def _audio_control(
+        self,
+        ctx: CommandCtx,
+        layer: str,
+        action: str,
+        *,
+        item: dict[str, Any] | None = None,
+        volume: float | None = None,
+        loop: bool | None = None,
+        fade_ms: int | None = None,
+    ) -> str:
+        control, state = await build_audio_control(
+            ctx.services.store,
+            ctx.chat_key,
+            layer=layer,
+            action=action,
+            item=item,
+            volume=volume,
+            loop=loop,
+            fade_ms=fade_ms,
+        )
+        await self._publish_audio(ctx, control)
+        if state is not None:
+            await self._publish_audio(ctx, state)
+        if action == "play" and item is not None:
+            return ctx.i18n.t("commands.audio.played", layer=ctx.i18n.t(f"commands.audio.layer.{layer}"), item=_audio_item_label(item))
+        if action == "volume":
+            return ctx.i18n.t("commands.audio.volume_done", layer=ctx.i18n.t(f"commands.audio.layer.{layer}"), volume=f"{(volume or 0) * 100:.0f}%")
+        return ctx.i18n.t("commands.audio.control_done", layer=ctx.i18n.t(f"commands.audio.layer.{layer}"), action=ctx.i18n.t(f"commands.audio.action.{action}"))
+
+    async def _publish_audio(self, ctx: CommandCtx, frame: dict[str, Any]) -> None:
+        if ctx.router.hub is not None:
+            await ctx.router.hub.publish(ctx.chat_key, Event.audio(frame))
+
     async def cmd_help(self, ctx: CommandCtx) -> str:
         names = []
         for spec in self._specs:
@@ -1059,6 +1181,42 @@ class CommandRouter:
             CommandSpec("draw", self.cmd_draw, ["draw"], ["draw", "抽牌"], None, "commands.help.draw"),
             CommandSpec("bot", self.cmd_bot_toggle, ["bot"], ["bot"], None, "commands.help.bot"),
             CommandSpec("skill", self.cmd_skill, ["skill"], ["skill"], None, "commands.help.skill"),
+            CommandSpec(
+                "audio",
+                self.cmd_audio,
+                ["audio"],
+                ["audio", "音频", "音訊"],
+                None,
+                "commands.help.audio",
+                required_level=int(PrivilegeLevel.GROUP_ADMIN),
+            ),
+            CommandSpec(
+                "bgm",
+                self.cmd_bgm,
+                ["bgm"],
+                ["bgm", "背景音乐", "背景音樂"],
+                None,
+                "commands.help.bgm",
+                required_level=int(PrivilegeLevel.GROUP_ADMIN),
+            ),
+            CommandSpec(
+                "ambience",
+                self.cmd_ambience,
+                ["ambience", "amb"],
+                ["ambience", "amb", "环境音", "環境音"],
+                None,
+                "commands.help.ambience",
+                required_level=int(PrivilegeLevel.GROUP_ADMIN),
+            ),
+            CommandSpec(
+                "sfx",
+                self.cmd_sfx,
+                ["sfx"],
+                ["sfx", "音效"],
+                None,
+                "commands.help.sfx",
+                required_level=int(PrivilegeLevel.GROUP_ADMIN),
+            ),
             CommandSpec(
                 "botlist",
                 self.cmd_botlist,
@@ -1605,6 +1763,116 @@ def _render_sheet(ctx: CommandCtx, character: CharacterSheet, pack: RulePack) ->
             value = _get_sheet_value(character, pack, str(name))
         items.append(ctx.i18n.t("commands.sheet.item", name=name, value=value))
     return ctx.i18n.t("commands.sheet.show", name=character.name, items=", ".join(items))
+
+
+def _shell_words(text: str) -> list[str]:
+    try:
+        return shlex.split(text)
+    except ValueError:
+        return text.split()
+
+
+def _split_audio_metadata(tokens: list[str]) -> tuple[str, dict[str, Any]]:
+    query_tokens: list[str] = []
+    metadata: dict[str, Any] = {}
+    seen_metadata = False
+    for token in tokens:
+        key, sep, value = token.partition("=")
+        normalized = key.casefold().replace("-", "_")
+        if sep and normalized in {"title", "license", "source", "tags"}:
+            seen_metadata = True
+            if normalized == "tags":
+                metadata[normalized] = [item.strip() for item in value.split(",")]
+            else:
+                metadata[normalized] = value.strip()
+        elif seen_metadata:
+            continue
+        else:
+            query_tokens.append(token)
+    return " ".join(query_tokens).strip(), metadata
+
+
+def _split_audio_play(tokens: list[str], *, default_loop: bool) -> tuple[str, dict[str, Any]]:
+    query_tokens: list[str] = []
+    options: dict[str, Any] = {"loop": default_loop}
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        lowered = token.casefold()
+        if lowered in {"--loop", "loop"}:
+            options["loop"] = True
+            index += 1
+            continue
+        if lowered in {"--no-loop", "noloop", "once"}:
+            options["loop"] = False
+            index += 1
+            continue
+        if lowered in {"--volume", "volume", "vol"}:
+            if index + 1 < len(tokens):
+                volume = _parse_audio_volume([tokens[index + 1]])
+                if volume is not None:
+                    options["volume"] = volume
+            index += 2
+            continue
+        if lowered.startswith("--volume=") or lowered.startswith("volume=") or lowered.startswith("vol="):
+            volume = _parse_audio_volume([token.split("=", 1)[1]])
+            if volume is not None:
+                options["volume"] = volume
+            index += 1
+            continue
+        if lowered in {"--fade", "fade", "fade_ms"}:
+            if index + 1 < len(tokens):
+                options["fade_ms"] = _parse_int(tokens[index + 1], default=0)
+            index += 2
+            continue
+        if lowered.startswith("--fade=") or lowered.startswith("fade=") or lowered.startswith("fade_ms="):
+            options["fade_ms"] = _parse_int(token.split("=", 1)[1], default=0)
+            index += 1
+            continue
+        query_tokens.append(token)
+        index += 1
+    return " ".join(query_tokens).strip(), options
+
+
+def _parse_audio_volume(tokens: list[str]) -> float | None:
+    if not tokens:
+        return None
+    token = str(tokens[0]).strip().rstrip("%")
+    try:
+        value = float(token)
+    except ValueError:
+        return None
+    if value > 1:
+        value = value / 100.0
+    return max(0.0, min(1.0, value))
+
+
+def _parse_int(value: Any, *, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _audio_item_label(item: dict[str, Any]) -> str:
+    title = str(item.get("title") or "").strip()
+    name = str(item.get("name") or item.get("hash") or "").strip()
+    return title or name or str(item.get("hash", ""))[:12]
+
+
+def _audio_item_line(item: dict[str, Any]) -> str:
+    label = _audio_item_label(item)
+    short_hash = str(item.get("hash") or "")[:12]
+    details = [short_hash]
+    if item.get("license"):
+        details.append(str(item["license"]))
+    if item.get("tags"):
+        details.append(",".join(str(tag) for tag in item["tags"]))
+    return f"{label} ({' · '.join(details)})"
+
+
+def _audio_matches(matches: tuple[dict[str, Any], ...]) -> str:
+    return ", ".join(_audio_item_label(item) for item in matches[:5])
 
 
 def _channel_chat_key(ctx: Any) -> str:

@@ -11,6 +11,7 @@ fixtures/sentinel are reused from `tests/agent/test_kp_selfplay.py` so the
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 
@@ -30,9 +31,10 @@ from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM, ToolCall, assistant_text, assistant_tools, tool_call
 from net.keystore import Keystore
-from net.state import build_room_state
 from net.session import _MAX_INPUT_CHARS
+from net.state import build_room_state
 from net.tui_server import TuiServer, WsMember
+from net.tui_server import _pack_media_message, _unpack_media_message
 from tests.agent.test_kp_selfplay import FIXTURES, SENTINEL, _tools_called_this_turn, kp_responder
 
 _RECV_TIMEOUT = 5.0
@@ -58,6 +60,13 @@ async def _recv(ws) -> dict:
     return json.loads(raw)
 
 
+async def _recv_until(ws, frame_type: str) -> dict:
+    while True:
+        frame = await _recv(ws)
+        if frame.get("type") == frame_type:
+            return frame
+
+
 async def _join(ws, key: str, name: str | None = None) -> dict:
     frame = {"type": "join", "key": key}
     if name:
@@ -66,10 +75,10 @@ async def _join(ws, key: str, name: str | None = None) -> dict:
     return await _recv(ws)
 
 
-async def _connect_and_join(url: str, key: str, name: str | None = None):
+async def _connect_and_join(url: str, key: str, name: str | None = None, **connect_kwargs):
     """Connect + `join`, draining the `welcome` and the join-time `presence` +
     `state` frames every successful join triggers (see `TuiServer.handle`)."""
-    ws = await websockets.connect(url)
+    ws = await websockets.connect(url, **connect_kwargs)
     welcome = await _join(ws, key, name)
     presence = await _recv(ws)
     state = await _recv(ws)
@@ -93,7 +102,9 @@ async def test_join_with_good_key_gets_welcome_and_bad_key_gets_error():
         async with websockets.connect(url) as ws:
             welcome = await _join(ws, key, "Alice")
             assert welcome["type"] == "welcome"
-            assert welcome["protocol"] == "1.1"
+            assert welcome["protocol"] == "1.3"
+            assert "media" in welcome["features"]
+            assert "audio" in welcome["features"]
             assert welcome["room"] == "demo"
             assert welcome["you"]["name"] == "Alice"
             assert welcome["you"]["role"] == "player"
@@ -271,6 +282,249 @@ async def test_dot_r_command_broadcasts_echo_reply_and_state():
         assert state["type"] == "state"
 
         await ws.close()
+    finally:
+        await server.close()
+
+
+async def test_ws_media_upload_broadcast_and_download_round_trip(tmp_path):
+    settings = Settings(locale="en", data_dir=str(tmp_path))
+    services = build_services(settings, llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64))
+    keystore = Keystore()
+    key_a = keystore.add(room="media-room", name="Ada")
+    key_b = keystore.add(room="media-room", name="Ben")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    data = b"\x89PNG\r\n\x1a\nmedia-bytes"
+    digest = hashlib.sha256(data).hexdigest()
+    try:
+        ws_a, *_ = await _connect_and_join(url, key_a, "Ada")
+        ws_b, *_ = await _connect_and_join(url, key_b, "Ben")
+        await _recv(ws_a)  # Ben's join-time presence broadcast to Ada.
+        await _recv(ws_a)  # Ben's join-time state broadcast to Ada.
+
+        await ws_a.send(
+            json.dumps(
+                {
+                    "type": "media_offer",
+                    "name": "handout.png",
+                    "mime": "image/png",
+                    "size": len(data),
+                    "sha256": digest,
+                }
+            )
+        )
+        accept = await _recv_until(ws_a, "media_accept")
+        assert accept["type"] == "media_accept"
+        upload_id = accept["upload_id"]
+
+        await ws_a.send(_pack_media_message({"op": "put", "upload_id": upload_id}, data))
+        media_a = await _recv_until(ws_a, "media")
+        media_b = await _recv_until(ws_b, "media")
+        assert media_a["type"] == media_b["type"] == "media"
+        assert media_b["hash"] == digest
+        assert media_b["name"] == "handout.png"
+
+        await ws_b.send(_pack_media_message({"op": "get", "hash": digest}))
+        raw = await asyncio.wait_for(ws_b.recv(), timeout=_RECV_TIMEOUT)
+        assert isinstance(raw, bytes)
+        header, body = _unpack_media_message(raw)
+        assert header["hash"] == digest
+        assert header["mime"] == "image/png"
+        assert body == data
+
+        await ws_a.close()
+        await ws_b.close()
+    finally:
+        await server.close()
+
+
+async def test_ws_media_upload_larger_than_the_websockets_default_cap(tmp_path):
+    """Regression: `websockets` caps one message at 1 MiB by default, and a media PUT is ONE
+    binary message on this carrier — without `max_size` raised to the configured media limits,
+    any real-sized image kills the connection with 1009 before the server ever sees the offer
+    honored. (The offer/quota checks still bound what a compliant client sends.)"""
+    settings = Settings(locale="en", data_dir=str(tmp_path))
+    services = build_services(settings, llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64))
+    keystore = Keystore()
+    key = keystore.add(room="media-big", name="Ada")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    data = b"\x89PNG\r\n\x1a\n" + bytes(1536 * 1024)  # 1.5 MiB body > the library's 1 MiB default
+    digest = hashlib.sha256(data).hexdigest()
+    try:
+        # `max_size=None` lifts the TEST CLIENT's own 1 MiB receive cap for the GET reply.
+        ws, *_ = await _connect_and_join(url, key, "Ada", max_size=None)
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "media_offer",
+                    "name": "big.png",
+                    "mime": "image/png",
+                    "size": len(data),
+                    "sha256": digest,
+                }
+            )
+        )
+        accept = await _recv_until(ws, "media_accept")
+        await ws.send(_pack_media_message({"op": "put", "upload_id": accept["upload_id"]}, data))
+        media = await _recv_until(ws, "media")
+        assert media["hash"] == digest
+
+        await ws.send(_pack_media_message({"op": "get", "hash": digest}))
+        raw = await asyncio.wait_for(ws.recv(), timeout=_RECV_TIMEOUT)
+        header, body = _unpack_media_message(raw)
+        assert header["size"] == len(data)
+        assert body == data
+        await ws.close()
+    finally:
+        await server.close()
+
+
+async def test_disconnect_forgets_the_members_pending_media_offers(tmp_path):
+    """An accepted offer that is never PUT must not linger in `_pending_media` after the
+    offering connection goes away (a PUT can only arrive on that same connection)."""
+    settings = Settings(locale="en", data_dir=str(tmp_path))
+    services = build_services(settings, llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64))
+    keystore = Keystore()
+    key = keystore.add(room="media-pending", name="Ada")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    data = b"\x89PNG\r\n\x1a\nnever-sent"
+    try:
+        ws, *_ = await _connect_and_join(url, key, "Ada")
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "media_offer",
+                    "name": "ghost.png",
+                    "mime": "image/png",
+                    "size": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+            )
+        )
+        accept = await _recv_until(ws, "media_accept")
+        assert accept["upload_id"]
+        assert len(server._pending_media) == 1
+
+        await ws.close()
+        for _ in range(100):  # the server-side handler finishes asynchronously after the close
+            if not server._pending_media:
+                break
+            await asyncio.sleep(0.05)
+        assert server._pending_media == {}
+    finally:
+        await server.close()
+
+
+async def test_ws_svg_upload_is_safety_checked(tmp_path):
+    settings = Settings(locale="en", data_dir=str(tmp_path))
+    services = build_services(settings, llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64))
+    keystore = Keystore()
+    key = keystore.add(room="svg-room", name="Ada")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    safe = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><text x="1" y="5">Map</text></svg>'
+    unsafe = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
+    try:
+        ws, *_ = await _connect_and_join(url, key, "Ada")
+        safe_digest = hashlib.sha256(safe).hexdigest()
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "media_offer",
+                    "name": "map.svg",
+                    "mime": "image/svg+xml",
+                    "size": len(safe),
+                    "sha256": safe_digest,
+                }
+            )
+        )
+        safe_accept = await _recv_until(ws, "media_accept")
+        await ws.send(_pack_media_message({"op": "put", "upload_id": safe_accept["upload_id"]}, safe))
+        media = await _recv_until(ws, "media")
+        assert media["mime"] == "image/svg+xml"
+        assert media["name"] == "map.svg"
+
+        unsafe_digest = hashlib.sha256(unsafe).hexdigest()
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "media_offer",
+                    "name": "bad.svg",
+                    "mime": "image/svg+xml",
+                    "size": len(unsafe),
+                    "sha256": unsafe_digest,
+                }
+            )
+        )
+        unsafe_accept = await _recv_until(ws, "media_accept")
+        await ws.send(_pack_media_message({"op": "put", "upload_id": unsafe_accept["upload_id"]}, unsafe))
+        error = await _recv_until(ws, "error")
+        assert error["code"] == "media_bad_svg"
+
+        await ws.close()
+    finally:
+        await server.close()
+
+
+async def test_ws_audio_upload_indexes_library_and_bgm_command_broadcasts_control(tmp_path):
+    settings = Settings(locale="en", data_dir=str(tmp_path))
+    services = build_services(settings, llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64))
+    keystore = Keystore()
+    key_a = keystore.add(room="audio-room", name="Keeper", role="keeper")
+    key_b = keystore.add(room="audio-room", name="Ben")
+    hub = RoomHub()
+    router = CommandRouter(services, keystore=keystore, hub=hub)
+    server = TuiServer(services, keystore, port=0, command_router=router, hub=hub)
+    url = await _start(server)
+    data = b"ID3audio-bytes"
+    digest = hashlib.sha256(data).hexdigest()
+    try:
+        ws_a, *_ = await _connect_and_join(url, key_a, "Keeper")
+        ws_b, *_ = await _connect_and_join(url, key_b, "Ben")
+        await _recv(ws_a)  # Ben's join-time presence broadcast to Keeper.
+        await _recv(ws_a)  # Ben's join-time state broadcast to Keeper.
+
+        await ws_a.send(
+            json.dumps(
+                {
+                    "type": "media_offer",
+                    "name": "theme.mp3",
+                    "mime": "audio/mpeg",
+                    "size": len(data),
+                    "sha256": digest,
+                }
+            )
+        )
+        accept = await _recv_until(ws_a, "media_accept")
+        await ws_a.send(_pack_media_message({"op": "put", "upload_id": accept["upload_id"]}, data))
+        item_a = await _recv_until(ws_a, "audio_library_item")
+        item_b = await _recv_until(ws_b, "audio_library_item")
+        assert item_a["hash"] == item_b["hash"] == digest
+        assert item_b["name"] == "theme.mp3"
+
+        await ws_b.send(_pack_media_message({"op": "get", "hash": digest}))
+        raw = await asyncio.wait_for(ws_b.recv(), timeout=_RECV_TIMEOUT)
+        assert isinstance(raw, bytes)
+        header, body = _unpack_media_message(raw)
+        assert header["hash"] == digest
+        assert header["mime"] == "audio/mpeg"
+        assert body == data
+
+        await ws_a.send(json.dumps({"type": "input", "text": ".bgm play theme --volume 0.5"}))
+        control = await _recv_until(ws_b, "audio_control")
+        state = await _recv_until(ws_b, "audio_state")
+        assert control["action"] == "play"
+        assert control["layer"] == "bgm"
+        assert control["hash"] == digest
+        assert control["volume"] == 0.5
+        bgm_state = next(layer for layer in state["layers"] if layer["layer"] == "bgm")
+        assert bgm_state["playing"] is True
+        assert bgm_state["hash"] == digest
+
+        await ws_a.close()
+        await ws_b.close()
     finally:
         await server.close()
 

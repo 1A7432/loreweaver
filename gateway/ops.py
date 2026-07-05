@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 _BOT_ENABLED_PREFIX = "bot_enabled."
 _BOT_ENABLED_VALUE = "1"
 _BOT_DISABLED_VALUE = "0"
+_MEDIA_ENABLED_PREFIX = "media_enabled."
 _DIRECT_CHAT_TYPES = {"dm", "direct", "private"}
 _SKILLS_ENABLED_PREFIX = "skills_enabled."
 # Skill `metadata.content-rating` values that lift the output censor for a room
@@ -295,6 +296,17 @@ async def is_bot_enabled(store, chat_key: str) -> bool:
 async def set_bot_enabled(store, chat_key: str, on: bool) -> None:
     value = _BOT_ENABLED_VALUE if on else _BOT_DISABLED_VALUE
     await store.set(store_key=f"{_BOT_ENABLED_PREFIX}{chat_key}", value=value)
+
+
+async def is_media_enabled(store, chat_key: str) -> bool:
+    """Whether players may upload media in `chat_key`; default is enabled."""
+    value = await store.get(store_key=f"{_MEDIA_ENABLED_PREFIX}{chat_key}")
+    return value != _BOT_DISABLED_VALUE
+
+
+async def set_media_enabled(store, chat_key: str, on: bool) -> None:
+    value = _BOT_ENABLED_VALUE if on else _BOT_DISABLED_VALUE
+    await store.set(store_key=f"{_MEDIA_ENABLED_PREFIX}{chat_key}", value=value)
 
 
 async def get_enabled_skills(store, chat_key: str) -> list[str]:
