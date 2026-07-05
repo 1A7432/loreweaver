@@ -1,201 +1,189 @@
 # Loreweaver
 
-**「你喜欢的角色,不该只活在对话框里。」**
+**[简体中文 →](README.zh.md)**
 
-带上 TA,去经历一个完整的世界:骰子决定成败,规则守住真实,留下共同历经世事的痕迹。你们一起冒险、一起失败、一起把故事走完。
+**"Your favorite character shouldn't live only in a chat window."**
 
-你们都不知道剧本——**你们共同创造故事。**
+Take them into a full world: dice decide what succeeds, rules keep it honest, and what you live through together leaves marks. You adventure together, fail together, and see the story through to the end.
 
-*[English](README.en.md) · 中文*
+Neither of you knows the script — **you create the story together.**
 
-Loreweaver 是开源的 AI 守秘人:你和朋友出人,带上你们喜欢的同伴角色卡,AI 守秘人来带团。它读模组、记世界、扮演每一个 NPC、守住每一条线索,你只管坐下来说"我要做什么"。它跟"和 AI 聊天"的根本区别是:**骰子是真的**。检定、伤害、理智,全由代码掷骰、按规则结算,AI 只负责把结果讲成故事——**故事归 AI,账归代码。**
+Loreweaver is an open-source AI Game Master: you and your friends bring the characters — including the companion cards you already love — and the AI Keeper runs the table. It reads the module, remembers the world, plays every NPC and guards every clue — you just sit down and say what you do. What separates it from "chatting with an AI" is simple: **the dice are real**. Checks, damage, sanity — all rolled and resolved by code, and the AI's only job is to tell the result as a story. **The AI tells the story. The code keeps the score.**
 
-支持《克苏鲁的呼唤》7 版和 D&D 5e(SRD),中英双语,服务器跑在你自己的电脑上。
+Ships with Call of Cthulhu 7e and D&D 5e (SRD), speaks English and Chinese, and the server runs on your own machine.
 
 [![CI](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml/badge.svg)](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml) ![license](https://img.shields.io/badge/license-MIT-green) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![clients](https://img.shields.io/badge/clients-TypeScript%20%2F%20Bun-black)
 
-> **实话实说**:项目还很年轻,基本是一个人带着 AI 写出来的。骰子和规则这部分最扎实,有整套离线测试盯着;终端客户端用起来也顺手了。联网多人和 AI 带团的稳定度还在磨——哪些能用、哪些还差点,[路线图](docs/roadmap.zh.md)里写得清楚。
+> **Honestly:** this project is young, built mostly by one person working with AI. The dice and rules core is the solid part, watched by a full offline test suite; the terminal client is comfortable now. Networked multiplayer and AI-GM reliability are still being polished — what works and what doesn't is spelled out in the [roadmap](docs/roadmap.md).
 
-![Loreweaver TUI —— 真·终端截图:守秘人叙事、一次侦查检定困难成功、右侧队伍花名册和 AI 队友](assets/tui-zh.png)
+![Loreweaver TUI — a real terminal screenshot: Keeper narration, a Spot Hidden check landing a hard success, the party roster with an AI companion](assets/tui-en.png)
 
-## 开一局,只要点一个按钮
+## Starting a game is one button
 
-装好客户端,点连接屏上的绿色按钮「**本地开服并开玩**」——就这样,没有第二步。
+Install the client, click the green button on the connect screen — "**Host locally & play**" — and that's it. There is no step two.
 
-它会自动下载对应你系统的服务器程序(自包含,**不用装 Python、不用配环境**),起服、发钥匙,然后把你以守秘人身份直接送进主菜单。纯净的 Windows 10/11、macOS(Apple silicon)、Linux,我们都从裸系统一键点到进桌验证过。
+It downloads the server build for your OS (self-contained — **no Python, no environment setup**), starts it, issues your Keeper key, and drops you into the main menu as the Keeper. We've verified the whole path from clean installs of Windows 10/11, macOS (Apple silicon), and Linux.
 
-装客户端就一行。macOS / Linux:
+Installing the client is one line. macOS / Linux:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.sh | bash
 ```
 
-Windows(PowerShell):
+Windows (PowerShell):
 
 ```powershell
 irm https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.ps1 | iex
 ```
 
-装好之后:
+Once installed:
 
 ```bash
-loreweaver          # 启动它,点那个按钮
-loreweaver update   # 以后升级也是一行
+loreweaver          # start it, click the button
+loreweaver update   # upgrading is one line too
 ```
 
-> 🇨🇳 GitHub 慢或连不上?换国内镜像——macOS / Linux:
->
-> ```bash
-> curl -fsSL https://1a7432.site/trpg/install.sh | bash
-> ```
->
-> Windows(PowerShell):
->
-> ```powershell
-> irm https://1a7432.site/trpg/install.ps1 | iex
-> ```
+The server builds are also yours to take and run long-term on a machine of your own: [GitHub Releases](https://github.com/1A7432/loreweaver/releases/tag/latest) has `loreweaver-server-*` for Windows / macOS / Linux (x64 + arm64) — unzip and run, with a `--doctor` self-check built in.
 
-服务器程序也可以自己拿去服务器上长期部署:[GitHub Releases](https://github.com/1A7432/loreweaver/releases/tag/latest) 上有 Windows / macOS / Linux(x64 + arm64)四份 `loreweaver-server-*`,解压即跑,`--doctor` 一键体检。
+## Bringing your friends in
 
-## 把朋友拉进来
+Once you're hosting, your screen shows two things: a **ticket** (a p2p address) and a **Keeper key**. Rooms and invites live in the main menu under "Rooms & invites" — one invite code per friend.
 
-开服之后,你屏幕上有两样东西:一个 **ticket**(p2p 地址)和一把**守秘人钥匙**。建房、发邀请码都在主菜单「房间与邀请」里做——每个朋友一个码。
+On their side: install the client (the one-liner above), paste your ticket and their invite code, pick a nickname, done.
 
-朋友那边:装客户端(上面那一行),贴上你发的 ticket 和邀请码,起个昵称,进来。
+**No domain, no TLS certificate, no port forwarding.** Connections are p2p (Iroh — QUIC with NAT hole-punching, relay fallback, end-to-end encrypted); the ticket is stored locally and survives restarts — **share it once, it works forever**. There are no accounts: the invite code is the entrance ticket. Want a co-Keeper? Send a key with the Keeper role. Dropped connections reconnect on their own and pick up where you left off.
 
-**不用买域名、不用配证书、不用开端口转发。** 连接走 p2p(Iroh,QUIC 直连,打不通走中继,端到端加密);ticket 存在你本地,重启也不变——**发一次,一直能用**。没有注册这回事,邀请码就是入场券;想要个副 KP,就发一把守秘人角色的钥匙。掉线会自动重连,回来接着玩。
+## Why it's different
 
-## 它凭什么不一样
+Existing tools come in two kinds: dice bots (SealDice, Avrae) — great dice, nobody runs the story; and character-card chat (SillyTavern) — lively talk, but no rules, no world, and you can never fail. Loreweaver fills in what both sides are missing:
 
-现有的工具就两类:骰子机器人(SealDice、Avrae)——骰子很硬,但没人带团;角色扮演聊天(SillyTavern/酒馆)——聊得热闹,但没有规则、没有世界,你永远不会失败。Loreweaver 把两边都缺的那块补上了:
-
-| | 真骰子/规则 | AI 守秘人 | 持久世界+故事 | AI 队友 | 自托管 · p2p 联机 |
+| | Real dice/rules | AI Game Master | Persistent world + story | AI party members | Self-hosted · p2p with friends |
 |---|:---:|:---:|:---:|:---:|:---:|
-| 骰子机器人 | ✅ | ❌ | ❌ | ❌ | ~ |
-| 人物卡聊天 | ❌ | ~ | ❌ | ~ | ~ |
+| Dice bots | ✅ | ❌ | ❌ | ❌ | ~ |
+| Character-card chat | ❌ | ~ | ❌ | ~ | ~ |
 | **Loreweaver** | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-(最后一列的「~」:骰子机器人能自托管,但联机得挂在 QQ/Discord 这类平台上;酒馆能自托管,但本质是单人。Loreweaver 的服务器在你自己电脑上,朋友 p2p 直连进来玩。)
+(The "~" in the last column: dice bots self-host but play through QQ/Discord-style platforms; character-card chat self-hosts but is fundamentally single-player. Loreweaver's server runs on your own machine, and friends connect directly over p2p.)
 
-丑话说在前:AI 带团带得好不好,很看你接的模型能力水平。指令遵循好的模型会老老实实掷骰、贴着模组走;能力过差模型容易爱嘴上说说、自由发挥。怎么选,见[给开发者](#给开发者从源码跑起来)。
+Fair warning: how well the AI runs a table depends a lot on the model's capability. Models that follow instructions well roll honestly and stick to the module; weak ones tend to talk instead of roll and wander off script. See [For developers](#for-developers-running-from-source) for picking one.
 
-## 怎么玩
+## How it plays
 
 <p align="center">
-  <img src="assets/tui-connect-zh.png" width="49%" alt="连接屏:一键本地开服、已存服务器、ticket 登录" />
-  <img src="assets/tui-character-zh.png" width="49%" alt="建卡:四种方式,手动模式实时校验点数预算" />
+  <img src="assets/tui-connect-en.png" width="49%" alt="Connect screen: one-click local hosting, saved servers, ticket login" />
+  <img src="assets/tui-character-en.png" width="49%" alt="Character creation: four methods, manual mode validates the point budget live" />
 </p>
 <p align="center">
-  <img src="assets/tui-menu-zh.png" width="49%" alt="守秘人主菜单:房间与邀请、导入模组、规则系统、KP 技能、模型配置" />
-  <img src="assets/tui-skills-zh.png" width="49%" alt="KP 技能页:开关玩法包,描述一句话生成新技能" />
+  <img src="assets/tui-menu-en.png" width="49%" alt="Keeper main menu: rooms & invites, import module, rule systems, KP skills, model config" />
+  <img src="assets/tui-skills-en.png" width="49%" alt="KP skills: toggle play-style packs, or describe one sentence and generate a new one" />
 </p>
 
-- **建卡有四条路**:掷骰生成、手动逐项填(超预算界面直接拦)、写段人设让 AI 起草、或者把酒馆(SillyTavern)的卡直接丢进来。不管哪条路,最后都要过规则这一关——数值不合规,AI 说破天也没用。
-- **键盘鼠标都能用**。KP 思考时有转圈提示,不用对着静止的屏幕干猜;顶栏摆着场景、游戏内时间、轮次、连接状态灯和 token/缓存开销;掉线自动重连。
-- 发邀请码、换模型、导模组、管 KP 技能是守秘人的事,用守秘人钥匙连进来才看得到这些页面。
-- 想查命令?掷骰、检定、角色卡、守秘人命令的完整参考在**[玩家指令手册](https://1a7432.site/commands.html)**。
+- **Four ways to make a character**: roll one up, fill it in by hand (the UI blocks over-budget stats as you type), describe a persona and let the AI draft it, or drop in a SillyTavern card. Whichever path you take, the rules check the result — if the numbers don't validate, no amount of AI charm gets them through.
+- **Keyboard and mouse both work.** A spinner shows when the KP is thinking, so you're never staring at a frozen screen; the top bar keeps the scene, in-game clock, round, a connection light, and token/cache spend in view; dropped connections reconnect on their own.
+- Invites, model switching, module import, and KP-skill management are the Keeper's business — those screens only appear when you connect with a Keeper key.
+- Looking for a command? The full reference — dice, checks, character sheets, Keeper commands — is the **[player command manual](https://1a7432.site/commands-en.html)**.
 
-## 亮点
+## Highlights
 
-- **AI 是真的在带团,不是在陪聊**。掷骰、翻角色卡、记笔记、推时钟,都是它实际操作引擎完成的动作,一共 60 多个守秘人工具。接哪家模型都行,推荐 `deepseek-v4-pro` 开思考。
-- **NPC 不开天眼**。每个 NPC、每个 AI 队友,只知道自己该知道的事,剧情的底牌根本不在它们手里——想剧透都没得透。缺人的时候,AI 队友真能顶上一个位置:用自己的卡,掷自己的骰。
-- **想要什么,说一句就有**。新规则系统、新玩法、新模组,在管理页里描述一下,KP 当场写好、校验、装上就能用。写出来的全是通用格式(酒馆卡、世界书、SKILL.md、YAML 规则包),你收藏的老资源也能直接搬进来。细节见 [docs/plugins.md](docs/plugins.md)。
-- **感情戏也有账本**。开了浪漫这个 KP 技能之后,好感和情欲是实打实的数值:涨了就是涨了,由代码记账,不看 AI 心情。
-- **两套指令习惯都认**。中文 SealDice 那套(`.ra 侦查`、`.st 力量50`)和英文 Avrae 那套(`/roll 4d6kh3`、`adv/dis`),背后是同一个骰子引擎。
-- **内容过滤默认关闭**。私人团想怎么跑怎么跑;真要开,也只过滤 KP 的输出,不碰玩家输入(见 [docs/deploy.zh.md](docs/deploy.zh.md#内容审核))。
+- **The AI actually runs the game — it isn't just chatting.** Rolling dice, reading character sheets, taking notes, advancing the clock: all real engine operations, via 60+ Keeper tools. Any model works; we recommend `deepseek-v4-pro` with thinking on.
+- **NPCs don't get X-ray vision.** Every NPC and AI companion knows only what it should — the module's secrets are simply not in their hands, so they couldn't spoil the plot if they tried. Short a player? An AI companion genuinely fills the seat: its own sheet, its own rolls.
+- **Ask for it, and it exists.** New rule systems, new play styles, new modules: describe what you want on an admin screen and the KP authors, validates, and installs it on the spot. Everything it writes is a portable format (SillyTavern cards, worldbooks, SKILL.md, YAML rulepacks) — and your old collection walks right in through the same door. Details in [docs/plugins.md](docs/plugins.md).
+- **Romance keeps books too.** With the romance KP skill enabled, affection and desire are actual numbers: when they move, they moved — tracked by code, not by the AI's mood.
+- **Both command dialects work.** The Chinese SealDice style (`.ra 侦查`, `.st 力量50`) and the English Avrae style (`/roll 4d6kh3`, `adv/dis`) drive the same dice engine.
+- **Content filtering is off by default.** Your private table plays how it wants; if you do enable it, it filters only the KP's output, never player input (see [docs/deploy.md](docs/deploy.md#content-moderation)).
 
-## 给开发者:从源码跑起来
+## For developers: running from source
 
 ```bash
-uv sync                                  # 建环境、装依赖
+uv sync                                  # environment + dependencies
 
-# 先离线尝个鲜——不用 API key,内置演示 KP + 真骰子:
-uv run python -m app --cli               # 试试  r 3d6+2 · /roll 4d6kh3 · .ra 侦查 · .setcoc 2
+# Taste it offline first — no API key needed, built-in demo KP + real dice:
+uv run python -m app --cli               # try  r 3d6+2 · /roll 4d6kh3 · .ra 侦查 · .setcoc 2
 
-# 接真模型:复制 .env.example 为 .env,填上你的 key,再跑一次:
+# Plug in a real model: copy .env.example to .env, add your key, run again:
 uv run python -m app --cli
-# (没有 uv?python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[dev,anthropic,gemini]")
+# (No uv?  python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[dev,anthropic,gemini]")
 ```
 
-`.env` 这样写(以 DeepSeek 为例,别家同理,OpenAI 兼容或原生都行):
+`.env` looks like this (DeepSeek shown; any OpenAI-compatible or native provider works the same way):
 
 ```
 TRPG_LLM__PROVIDER=deepseek   TRPG_LLM__API_KEY=sk-…
 TRPG_LLM__CHAT_MODEL=deepseek-v4-pro   TRPG_LLM__REASONING_EFFORT=high
 ```
 
-> **模型别太省。** KP 全靠调用工具干活:强模型(deepseek-v4-pro 开思考、GPT-4 级、Claude)会真掷骰、贴着模组走;太便宜的模型常常嘴上说"你成功了"却根本没掷,还爱把团带偏。游戏里 `.model set <provider> [model]` 随时热切,不用重启。
+> **Don't cheap out on the model.** The KP does everything through tool calls: strong models (deepseek-v4-pro with thinking, GPT-4-class, Claude) roll real dice and stick to the module; bargain models love to say "you succeed" without ever rolling, and tend to derail the campaign. Switch models mid-game with `.model set <provider> [model]` — no restart.
 
-**终端界面(真正的体验):**
+**The terminal UI (the real experience):**
 
 ```bash
-uv run python -m app --serve   # 起 p2p 服务端,打印 ticket 和守秘人钥匙
-# 另开一个终端:
+uv run python -m app --serve   # start the p2p server; prints a ticket + Keeper key
+# in another terminal:
 cd clients/tui && bun install && bun run dev
 ```
 
-把 ticket 和钥匙贴进连接屏就行。更省事的办法:直接点连接屏上的「本地开服并开玩」,这些它全帮你干了。
+Paste the ticket and key into the connect screen. Or skip all of it: click "Host locally & play" and the client does the whole dance for you.
 
-### 跑一台常驻服务器(可选)
+### Running a persistent server (optional)
 
-多数团在笔记本上 p2p 就开了。想要 7×24 常驻,找台机器:
+Most tables run p2p off a laptop. For a 24/7 server, pick a machine:
 
 ```bash
-uv sync && uv run python -m app --serve   # 用 systemd 守着——见 docs/deploy.zh.md
+uv sync && uv run python -m app --serve   # keep it alive with systemd — see docs/deploy.md
 ```
 
-首次运行会生成 `.env`,并自动发一把守秘人钥匙(打印出来,也存在 `keeper-key.txt`)。用它连进去,之后发码、建房都在客户端里做。数据(SQLite + 钥匙)就存在程序旁边。完整说明见 **[docs/deploy.zh.md](docs/deploy.zh.md)**。
+First run generates `.env` and issues a Keeper key automatically (printed, and saved to `keeper-key.txt`). Connect with it; invites and rooms are managed from the client after that. Data (SQLite + keys) lives next to the app. Full guide: **[docs/deploy.md](docs/deploy.md)**.
 
-## 游玩入口
+## Ways to play
 
-| 入口 | 状态 |
+| Entry | Status |
 |---|---|
-| **终端 · OpenTUI** | ✅ **主力**——上面那个游戏大厅;本地或联网 p2p(Iroh) |
-| CLI(无头) | ✅ 开发 / 快速试玩 / 离线 demo |
+| **Terminal · OpenTUI** | ✅ **Primary** — the game lobby above; local or networked p2p (Iroh) |
+| CLI (headless) | ✅ Development / quick testing / offline demo |
 
-系统:D&D 5e SRD 和 CoC 7 版以数据驱动的 rulepack(`rulepacks/*.yaml`)随附——加新系统不用改代码。(Discord/Telegram/QQ/飞书这些聊天平台适配器还在仓库里,但没人维护、没在真平台上测过,见[路线图](docs/roadmap.zh.md)。)
+Systems: D&D 5e SRD and CoC 7e ship as data-driven rulepacks (`rulepacks/*.yaml`) — adding a system requires no code changes. (Chat-platform adapters for Discord/Telegram/QQ/Feishu are in-tree but unmaintained and untested against live platforms — see the [roadmap](docs/roadmap.md).)
 
-## 架构
+## Architecture
 
 ```
-core/  确定性引擎        infra/  store · config · i18n · llm · embeddings · vector · providers
-agent/ AI-KP 大脑 + 工具  gateway/ 平台无关层:commands · ops · hub · runner · director
-net/   Iroh p2p + 会话核心  adapters/ cli(聊天适配器在树内、无人维护)   clients/ protocol · tui
+core/  deterministic engine   infra/  store · config · i18n · llm · embeddings · vector · providers
+agent/ AI-KP brain + tools    gateway/ platform-independent: commands · ops · hub · runner · director
+net/   Iroh p2p + session core  adapters/ cli (chat adapters in-tree, unmaintained)   clients/ protocol · tui
 ```
 
-引擎用稳定的 `chat_key` 隔离全部状态;RoomHub 再叠一层跨端实时广播。分层契约、铁律(确定性 vs 生成、掷骰优先、信息隔离),以及怎么加 rulepack / 适配器 / provider / 工具 / 客户端,都在 **[AGENTS.md](AGENTS.md)**。客户端线格式见 **[docs/protocol.zh.md](docs/protocol.zh.md)**。
+The engine isolates all state behind a stable `chat_key`; RoomHub layers cross-transport realtime broadcast on top. Layer contracts, the iron rules (deterministic vs. generative, dice-first, information isolation), and how to add rulepacks / adapters / providers / tools / clients: **[AGENTS.md](AGENTS.md)**. Client wire format: **[docs/protocol.md](docs/protocol.md)**.
 
-## 测试
+## Testing
 
 ```bash
-uv run pytest -q                            # 离线:FakeLLM + seed 骰子,不联网、不用 key
+uv run pytest -q                            # offline: FakeLLM + seeded dice, no network, no keys
 uv run ruff check core infra agent gateway net adapters app.py scripts
-uv run python scripts/i18n_lint.py          # 不许有硬编码的文案
-cd clients/tui && bun install && bun test   # 客户端(protocol · tui)
+uv run python scripts/i18n_lint.py          # no hardcoded user-facing strings
+cd clients/tui && bun install && bun test   # clients (protocol · tui)
 ```
 
-955 个测试,全程离线、结果可复现。自 play 测试用脚本化的 KP 把整条链路跑一遍(传模组 → 分析 → 开团 → 玩家行动 → 真骰检定 → 战报);"秘密进不了玩家池""NPC 只由自己的档案组装"这些底线,各有专门的红线测试守着。
+955 tests, fully offline and reproducible. A self-play test drives the entire pipeline with a scripted KP (upload module → analyze → start → player actions → real dice checks → battle report); the red lines — "secrets never reach the player pool", "an NPC is assembled only from its own record" — each have dedicated tests standing guard.
 
-离线测试证明的是流程正确;真模型守不守规矩,另有一道**每夜跑的真模型红线评测**(`.github/workflows/redline-eval.yml`):脚本化玩家陪真模型跑几十个回合,逐回合量化"剧透率"和"该掷骰没掷率",超阈值就红。这道闸门刚架起来的时候抓到的是真问题——KP 在战斗叙事和战斗表格里管不住嘴,泄密率 45.8%;六轮修复-复测之后,稳定在 0。它只按计划跑、不卡 PR;没配 `EVAL_LLM_API_KEY` 时自动跳过。CI(push/PR)跑 Python 3.11/3.12 和各客户端包,全程离线。
+Offline tests prove the pipeline; whether a real model behaves is a separate question, answered by a **nightly real-model red-line eval** (`.github/workflows/redline-eval.yml`): scripted players run dozens of turns against a real model, and every turn is scored for "spoiler rate" and "talked instead of rolled" rate, with thresholds that fail the run. When this gate first went up it caught real problems — the KP couldn't keep quiet in combat narration and combat tables, leaking at 45.8%; six fix-and-rerun rounds later, it holds steady at 0. It runs on schedule only, never blocks PRs, and skips itself when `EVAL_LLM_API_KEY` isn't set. CI (push/PR) covers Python 3.11/3.12 and the client packages, fully offline.
 
-## 参与贡献
+## Contributing
 
-欢迎 PR 和 issue。提交前把这些跑绿:`uv run ruff check …`、`uv run python scripts/i18n_lint.py`、`uv run pytest -q`(以及相关的 `bun test`)。守住 [AGENTS.md](AGENTS.md) 里的铁律——尤其是文案必须走 i18n、信息隔离不能破。规则内容只收开放许可的(SRD / 米斯卡塔尼克);模组请运行时自备。最缺人手的地方列在[路线图](docs/roadmap.zh.md)里。
+PRs and issues welcome. Before submitting, get these green: `uv run ruff check …`, `uv run python scripts/i18n_lint.py`, `uv run pytest -q` (plus the relevant `bun test`). Respect the iron rules in [AGENTS.md](AGENTS.md) — above all: every user-facing string goes through i18n, and information isolation is never broken. Rules content must be openly licensed (SRD / Miskatonic Repository); bring your own modules at runtime. Where help is needed most is listed in the [roadmap](docs/roadmap.md).
 
-野心在路线图里写得很直白:做 RPG 领域的 Claude Code——连终端优先,都是同一种审美。
+The roadmap states the ambition plainly: to be the Claude Code of RPGs — right down to the shared terminal-first aesthetic.
 
-## 安全
+## Security
 
-别提交任何密钥——`.env`、发出的钥匙、SSH host key、数据库都已 gitignore(只提交 `*.example.*`)。
+Never commit secrets — `.env`, issued keys, SSH host keys, and databases are gitignored (only `*.example.*` files are committed).
 
-没有账号系统:邀请码就是通行证,它把玩家绑到某个房间、带玩家或守秘人角色。要面向可信小圈子以外开放,请自己在前面加鉴权和 TLS,别直接裸奔公网——任何自托管服务都该有的卫生习惯。
+There is no account system: an invite code is the pass, binding a player to a room with the player or Keeper role. If you open a server beyond a trusted circle, put auth and TLS in front of it — standard hygiene for any self-hosted service.
 
-发现漏洞?请在 GitHub 开私有安全通告,别开公开 issue。
+Found a vulnerability? Open a private security advisory on GitHub, not a public issue.
 
-## 许可与致谢
+## License & credits
 
-MIT——见 [`LICENSE`](LICENSE) 和 [`NOTICE`](NOTICE)。含 **D&D 5e SRD 5.1**(CC-BY-4.0)材料;克苏鲁内容仅限开放 / 米斯卡塔尼克仓库许可范围。gateway/适配器层派生自 **hermes-agent**(MIT,© 2025 Nous Research);骰子引擎是 **avrae/d20**(MIT);中文命令方言、CoC 成功函数与技能别名表参照 **SealDice**(MIT)重写;终端客户端用 **OpenTUI**。本仓库不随附任何受版权保护的冒险/模组文本。
+MIT — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE). Includes **D&D 5e SRD 5.1** (CC-BY-4.0) material; Cthulhu content only within open / Miskatonic Repository licensing. The gateway/adapter layer derives from **hermes-agent** (MIT, © 2025 Nous Research); the dice engine is **avrae/d20** (MIT); the Chinese command dialect, CoC success function, and skill alias table are rewritten with reference to **SealDice** (MIT); the terminal client is built on **OpenTUI**. No copyrighted adventure/module text ships in this repository.
 
-## 路线图
+## Roadmap
 
-完整计划见 **[docs/roadmap.zh.md](docs/roadmap.zh.md)**。更远的方向:会生长的世界引擎(生成式世界、活的因果时间线、设定一致性)、迟到玩家的剧情追进度、D&D Beyond 角色卡导入,以及把聊天适配器放到真平台上端到端测一遍。
+The full plan: **[docs/roadmap.md](docs/roadmap.md)**. Further out: a living world engine (generative worlds, a causal timeline, setting consistency), story catch-up for late joiners, D&D Beyond character import, and end-to-end testing of the chat adapters against real platforms.
