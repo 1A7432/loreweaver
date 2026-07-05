@@ -184,6 +184,8 @@ Found a vulnerability? Open a private security advisory on GitHub, not a public 
 
 MIT — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE). Includes **D&D 5e SRD 5.1** (CC-BY-4.0) material; Cthulhu content only within open / Miskatonic Repository licensing. The gateway/adapter layer derives from **hermes-agent** (MIT, © 2025 Nous Research); the dice engine is **avrae/d20** (MIT); the Chinese command dialect, CoC success function, and skill alias table are rewritten with reference to **SealDice** (MIT); the terminal client is built on **OpenTUI**. No copyrighted adventure/module text ships in this repository.
 
+Community link: [LINUX DO](https://linux.do/) — a community we call home.
+
 ## Roadmap
 
 The full plan: **[docs/roadmap.md](docs/roadmap.md)**. Further out: a living world engine (generative worlds, a causal timeline, setting consistency), story catch-up for late joiners, D&D Beyond character import, and end-to-end testing of the chat adapters against real platforms.

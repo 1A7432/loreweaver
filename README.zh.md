@@ -196,6 +196,8 @@ cd clients/tui && bun install && bun test   # 客户端(protocol · tui)
 
 MIT——见 [`LICENSE`](LICENSE) 和 [`NOTICE`](NOTICE)。含 **D&D 5e SRD 5.1**(CC-BY-4.0)材料;克苏鲁内容仅限开放 / 米斯卡塔尼克仓库许可范围。gateway/适配器层派生自 **hermes-agent**(MIT,© 2025 Nous Research);骰子引擎是 **avrae/d20**(MIT);中文命令方言、CoC 成功函数与技能别名表参照 **SealDice**(MIT)重写;终端客户端用 **OpenTUI**。本仓库不随附任何受版权保护的冒险/模组文本。
 
+友情链接:[LINUX DO](https://linux.do/)——我们常驻的社区。
+
 ## 路线图
 
 完整计划见 **[docs/roadmap.zh.md](docs/roadmap.zh.md)**。更远的方向:会生长的世界引擎(生成式世界、活的因果时间线、设定一致性)、迟到玩家的剧情追进度、D&D Beyond 角色卡导入,以及把聊天适配器放到真平台上端到端测一遍。
