@@ -9,6 +9,7 @@ import { PNG } from "pngjs"
 import jpeg from "jpeg-js"
 import { stripControlChars, type MediaPayload, type MediaRef } from "@loreweaver/protocol"
 import type { AppClient } from "./client"
+import { tt } from "./i18n"
 
 export interface HalfBlockLine {
   text: string
@@ -144,9 +145,9 @@ export async function renderHalfBlockPreview(
 export function mediaPlaceholder(media: MediaRef, locale?: string): string {
   const name = stripControlChars(media.name ?? media.hash.slice(0, 12))
   if (media.mime === "image/gif" || media.mime === "image/webp") {
-    return locale?.toLowerCase().startsWith("zh") ? `[图片 ${name} · 不支持内联预览]` : `[image ${name} · inline preview unsupported]`
+    return tt(locale, "media.placeholderNoPreview", { name })
   }
-  return locale?.toLowerCase().startsWith("zh") ? `[图片 ${name}]` : `[image ${name}]`
+  return tt(locale, "media.placeholder", { name })
 }
 
 function decodeImage(bytes: Uint8Array, mime: string): RgbaImage {
