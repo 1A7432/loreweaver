@@ -20,9 +20,10 @@ from core.worldbook import WorldbookManager
 from infra.config import Settings, get_settings
 from infra.embeddings import Embeddings, OpenAIEmbeddings
 from infra.i18n import I18n, get_i18n
+from infra.imagegen import ImageGen, apply_imagegen_overrides, build_imagegen
 from infra.llm import LLMClient
 from infra.providers import MutableLLM
-from infra.runtime_config import CredentialBook, RuntimeConfig
+from infra.runtime_config import CredentialBook, ImageGenCredentialBook, ImageGenRuntimeConfig, RuntimeConfig
 from infra.store import Store
 from infra.vector import VectorStore
 
@@ -43,9 +44,12 @@ class Services:
     module_init: ModuleInitializer
     worldbook: WorldbookManager
     llm: LLMClient
+    imagegen: ImageGen | None
     embeddings: Embeddings
     runtime_config: RuntimeConfig
     llm_credentials: CredentialBook
+    imagegen_runtime_config: ImageGenRuntimeConfig
+    imagegen_credentials: ImageGenCredentialBook
 
 
 def build_services(
@@ -66,6 +70,11 @@ def build_services(
     store = store or Store(db_path)
     runtime_config = RuntimeConfig(store)
     llm_credentials = CredentialBook(store)
+    imagegen_runtime_config = ImageGenRuntimeConfig(store)
+    imagegen_credentials = ImageGenCredentialBook(store)
+    imagegen_overrides = imagegen_runtime_config.load_sync()
+    if imagegen_overrides:
+        settings = apply_imagegen_overrides(settings, imagegen_overrides)
     embeddings = embeddings or OpenAIEmbeddings(settings.llm)
     # An injected `llm` (e.g. FakeLLM in tests) is used verbatim and left
     # UNWRAPPED so those paths stay byte-compatible. Otherwise wrap in a
@@ -100,6 +109,7 @@ def build_services(
     # API (its own "worldbook" collection), so it takes `vector_store` directly --
     # not the higher-level `VectorDatabaseManager`, which exposes a different surface.
     worldbook = WorldbookManager(store, vector_db=vector_store, embeddings=embeddings)
+    imagegen = build_imagegen(settings)
 
     return Services(
         settings=settings,
@@ -112,7 +122,10 @@ def build_services(
         module_init=module_init,
         worldbook=worldbook,
         llm=llm,
+        imagegen=imagegen,
         embeddings=embeddings,
         runtime_config=runtime_config,
         llm_credentials=llm_credentials,
+        imagegen_runtime_config=imagegen_runtime_config,
+        imagegen_credentials=imagegen_credentials,
     )

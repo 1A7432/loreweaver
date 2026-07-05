@@ -23,6 +23,7 @@ from agent.context import AgentCtx, LocalFs
 from agent.kp_tools import build_kp_toolset
 from agent.kp_tools_companion import CompanionTools
 from agent.services import build_services
+from core.character_manager import CharacterSheet
 from core.dice_engine import seed_dice
 from gateway.commands import CommandRouter
 from gateway.hub import RoomHub
@@ -102,7 +103,7 @@ async def test_join_with_good_key_gets_welcome_and_bad_key_gets_error():
         async with websockets.connect(url) as ws:
             welcome = await _join(ws, key, "Alice")
             assert welcome["type"] == "welcome"
-            assert welcome["protocol"] == "1.3"
+            assert welcome["protocol"] == "1.4"
             assert "media" in welcome["features"]
             assert "audio" in welcome["features"]
             assert welcome["room"] == "demo"
@@ -332,6 +333,87 @@ async def test_ws_media_upload_broadcast_and_download_round_trip(tmp_path):
         assert header["mime"] == "image/png"
         assert body == data
 
+        await ws_a.close()
+        await ws_b.close()
+    finally:
+        await server.close()
+
+
+async def test_ws_avatar_set_binds_only_own_character(tmp_path):
+    settings = Settings(locale="en", data_dir=str(tmp_path))
+    services = build_services(settings, llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64))
+    keystore = Keystore()
+    key = keystore.add(room="avatar-room", name="Ada")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    data = b"\x89PNG\r\n\x1a\navatar"
+    digest = hashlib.sha256(data).hexdigest()
+    try:
+        ws, welcome, *_ = await _connect_and_join(url, key, "Ada")
+        await services.characters.save_character(welcome["you"]["id"], "tui:group:avatar-room", CharacterSheet("Ada Sheet", "CoC"))
+
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "media_offer",
+                    "name": "avatar.png",
+                    "mime": "image/png",
+                    "size": len(data),
+                    "sha256": digest,
+                }
+            )
+        )
+        accept = await _recv_until(ws, "media_accept")
+        await ws.send(_pack_media_message({"op": "put", "upload_id": accept["upload_id"]}, data))
+        await _recv_until(ws, "media")
+
+        await ws.send(json.dumps({"type": "avatar_set", "hash": digest}))
+        system = await _recv_until(ws, "system")
+        state = await _recv_until(ws, "state")
+        assert system["text"]
+        assert state["character"]["avatar"]["hash"] == digest
+
+        await ws.send(json.dumps({"type": "avatar_set", "hash": digest, "character": "Someone Else"}))
+        error = await _recv_until(ws, "error")
+        assert error["code"] == "forbidden"
+        await ws.close()
+    finally:
+        await server.close()
+
+
+async def test_ws_avatar_set_rejects_cross_room_hash(tmp_path):
+    settings = Settings(locale="en", data_dir=str(tmp_path))
+    services = build_services(settings, llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64))
+    keystore = Keystore()
+    key_a = keystore.add(room="avatar-a", name="Ada")
+    key_b = keystore.add(room="avatar-b", name="Ben")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    data = b"\x89PNG\r\n\x1a\navatar"
+    digest = hashlib.sha256(data).hexdigest()
+    try:
+        ws_a, *_ = await _connect_and_join(url, key_a, "Ada")
+        ws_b, welcome_b, *_ = await _connect_and_join(url, key_b, "Ben")
+        await services.characters.save_character(welcome_b["you"]["id"], "tui:group:avatar-b", CharacterSheet("Ben Sheet", "CoC"))
+
+        await ws_a.send(
+            json.dumps(
+                {
+                    "type": "media_offer",
+                    "name": "avatar.png",
+                    "mime": "image/png",
+                    "size": len(data),
+                    "sha256": digest,
+                }
+            )
+        )
+        accept = await _recv_until(ws_a, "media_accept")
+        await ws_a.send(_pack_media_message({"op": "put", "upload_id": accept["upload_id"]}, data))
+        await _recv_until(ws_a, "media")
+
+        await ws_b.send(json.dumps({"type": "avatar_set", "hash": digest}))
+        error = await _recv_until(ws_b, "error")
+        assert error["code"] == "media_not_found"
         await ws_a.close()
         await ws_b.close()
     finally:

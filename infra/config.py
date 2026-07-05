@@ -84,6 +84,15 @@ class TuiSettings(BaseModel):
     audio_room_quota_bytes: int = 2 * 1024 * 1024 * 1024
 
 
+class ImageGenSettings(BaseModel):
+    provider: str = ""
+    base_url: str = ""
+    api_key: str = ""
+    model: str = ""
+    size: str = "1024x1024"
+    per_room_per_hour: int = 10
+
+
 class Settings(BaseSettings):
     locale: str = "en"  # default en (see infra/i18n.py)
     data_dir: str = "./data"
@@ -91,6 +100,7 @@ class Settings(BaseSettings):
     enable_vector_db: bool = True
     enable_critical_effects: bool = True
     llm: LLMSettings = LLMSettings()
+    imagegen: ImageGenSettings = ImageGenSettings()
     tui: TuiSettings = TuiSettings()
     censor: CensorSettings = CensorSettings()
     # platform sub-settings (qq/telegram/discord/feishu) added in M3

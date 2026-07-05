@@ -16,10 +16,17 @@ export interface HalfBlockLine {
   cells: Array<{ char: string; fg: string; bg: string }>
 }
 
-interface RgbaImage {
+export interface RgbaImage {
   width: number
   height: number
   data: Uint8Array
+}
+
+export function halfBlockPreviewSize(availableWidth: number, availableHeight = 28): { width: number; height: number } {
+  return {
+    width: Math.max(16, Math.min(56, Math.floor(availableWidth || 40))),
+    height: Math.max(8, Math.min(28, Math.floor(availableHeight || 20))),
+  }
 }
 
 export function detectImageMime(path: string): string {
@@ -97,8 +104,12 @@ export async function getCachedMedia(client: AppClient, media: MediaRef): Promis
   }
   const payload = await client.getMedia(media.hash)
   if (sha256Hex(payload.bytes) !== media.hash) throw new Error("media checksum mismatch")
-  await mkdir(join(homedir(), ".loreweaver", "cache", "media"), { recursive: true })
-  await writeFile(path, payload.bytes)
+  try {
+    await mkdir(mediaCacheDir(), { recursive: true })
+    await writeFile(path, payload.bytes)
+  } catch {
+    // A read-only home directory should not break viewing; it only disables the cache.
+  }
   return payload
 }
 
@@ -150,7 +161,7 @@ export function mediaPlaceholder(media: MediaRef, locale?: string): string {
   return tt(locale, "media.placeholder", { name })
 }
 
-function decodeImage(bytes: Uint8Array, mime: string): RgbaImage {
+export function decodeImage(bytes: Uint8Array, mime: string): RgbaImage {
   if (mime === "image/png") {
     const decoded = PNG.sync.read(Buffer.from(bytes))
     return { width: decoded.width, height: decoded.height, data: new Uint8Array(decoded.data) }
@@ -314,7 +325,11 @@ function toHex(value: number): string {
 }
 
 function cachePath(hash: string): string {
-  return join(homedir(), ".loreweaver", "cache", "media", hash)
+  return join(mediaCacheDir(), hash)
+}
+
+function mediaCacheDir(): string {
+  return process.env.LOREWEAVER_MEDIA_CACHE_DIR || join(homedir(), ".loreweaver", "cache", "media")
 }
 
 export function extensionForMime(mime: string): string {

@@ -19,7 +19,8 @@ import { PartyRoster } from "./components/PartyRoster"
 import { ScenePanel } from "./components/ScenePanel"
 import { StatusBar } from "./components/StatusBar"
 import { tt } from "./i18n"
-import { droppedImagePath, openMedia, readAudioUpload, readUpload } from "./media"
+import { viewImage, type RendererLike } from "./imageViewer"
+import { droppedImagePath, openMedia, readAudioUpload, readUpload, type HalfBlockLine } from "./media"
 import type { Palette, ThemeName } from "./themes"
 
 // The game view needs only these three from the client. `WsClient` (and the
@@ -30,6 +31,7 @@ export interface GameClient {
   sendInput(text: string): void
   uploadMedia(upload: MediaUpload): Promise<MediaFrame | undefined>
   getMedia(hash: string): Promise<MediaPayload>
+  setAvatar(hash: string): void
   close?(code?: number, reason?: string): void
 }
 
@@ -47,6 +49,7 @@ export interface GameViewProps {
   // Threaded from the shell's `client.onStatus?.(...)` subscription (App.tsx); undefined when
   // the client doesn't implement `onStatus` — the HeaderBar then renders no indicator at all.
   connectionStatus?: ConnectionStatus
+  renderer?: RendererLike
 }
 
 // Cap a single streaming message so a hostile/runaway stream can't grow the
@@ -72,7 +75,7 @@ function hasCtrl(event: KeyEvent): boolean {
   return Boolean(event.ctrl)
 }
 
-export function GameView({ client, welcome, theme, themeName, initialFrames, connectionStatus }: GameViewProps) {
+export function GameView({ client, welcome, theme, themeName, initialFrames, connectionStatus, renderer }: GameViewProps) {
   const locale = welcome.locale
   const [presence, setPresence] = useState<PresenceFrame>()
   const [stateFrame, setStateFrame] = useState<StateFrame>({ type: FrameType.State, party: [], initiative: [], online: 0 })
@@ -83,6 +86,7 @@ export function GameView({ client, welcome, theme, themeName, initialFrames, con
   const [inputVersion, setInputVersion] = useState(0)
   const [showHelp, setShowHelp] = useState(false)
   const [selectedMedia, setSelectedMedia] = useState<MediaFrame | undefined>()
+  const [viewerLines, setViewerLines] = useState<HalfBlockLine[] | undefined>()
   // True from the moment the player submits until the Keeper's reply lands, so the
   // narrative log can show an animated "构思中" liveness indicator meanwhile.
   const [kpWorking, setKpWorking] = useState(false)
@@ -161,11 +165,7 @@ export function GameView({ client, welcome, theme, themeName, initialFrames, con
     const text = String(value ?? command).trim()
     if (!text) {
       if (selectedMedia) {
-        void openMedia(client, selectedMedia).catch((error) => {
-          setFrames((current) =>
-            appendFrame(current, { type: FrameType.System, level: "warn", text: error instanceof Error ? error.message : String(error) }),
-          )
-        })
+        void openSelectedMedia(false)
       }
       return
     }
@@ -175,6 +175,10 @@ export function GameView({ client, welcome, theme, themeName, initialFrames, con
     }
     if (text.startsWith("/audio ")) {
       void attachAudio(text.slice("/audio ".length).trim())
+      return
+    }
+    if (text.startsWith("/avatar ")) {
+      void attachAvatar(text.slice("/avatar ".length).trim())
       return
     }
     const droppedImage = droppedImagePath(text)
@@ -194,6 +198,20 @@ export function GameView({ client, welcome, theme, themeName, initialFrames, con
     setHistoryIndex(null)
     setCommand("")
     setInputVersion((current) => current + 1)
+  }
+
+  const openSelectedMedia = async (forceSystem: boolean) => {
+    if (!selectedMedia) return
+    try {
+      const lines = forceSystem
+        ? await openMedia(client, selectedMedia).then(() => undefined)
+        : await viewImage({ client, media: selectedMedia, renderer, locale })
+      setViewerLines(lines)
+    } catch (error) {
+      setFrames((current) =>
+        appendFrame(current, { type: FrameType.System, level: "warn", text: error instanceof Error ? error.message : String(error) }),
+      )
+    }
   }
 
   const attachMedia = async (path: string) => {
@@ -234,6 +252,26 @@ export function GameView({ client, welcome, theme, themeName, initialFrames, con
     }
   }
 
+  const attachAvatar = async (path: string) => {
+    if (!path) return
+    setFrames((current) => appendFrame(current, { type: FrameType.System, level: "info", text: tt(locale, "avatar.uploading") }))
+    try {
+      const upload = await readUpload(path)
+      if (!upload.mime) throw new Error(tt(locale, "media.unsupported"))
+      await client.uploadMedia(upload)
+      client.setAvatar(upload.sha256)
+      setFrames((current) => appendFrame(current, { type: FrameType.System, level: "info", text: tt(locale, "avatar.uploaded", { name: upload.name }) }))
+      setHistory((current) => [...current, `/avatar ${path}`].slice(-50))
+      setHistoryIndex(null)
+      setCommand("")
+      setInputVersion((current) => current + 1)
+    } catch (error) {
+      setFrames((current) =>
+        appendFrame(current, { type: FrameType.System, level: "warn", text: error instanceof Error ? error.message : String(error) }),
+      )
+    }
+  }
+
   const recallHistory = (direction: -1 | 1) => {
     if (history.length === 0) return
     const nextIndex =
@@ -258,6 +296,8 @@ export function GameView({ client, welcome, theme, themeName, initialFrames, con
     if (name === "up") recallHistory(-1)
     if (name === "down") recallHistory(1)
     if (hasCtrl(event) && name === "l") setFrames([])
+    if (selectedMedia && (name === "o" || name === "O")) void openSelectedMedia(true)
+    if (viewerLines && (name === "escape" || name === "q" || name === "return" || name === "enter")) setViewerLines(undefined)
     // Tab moves focus to the roster (only worth it when there's an own character
     // to expand/collapse — otherwise Tab would blur the chat input with nothing
     // for the roster to do with it) and always back, so focus can never get
@@ -338,6 +378,21 @@ export function GameView({ client, welcome, theme, themeName, initialFrames, con
           <text fg={theme.fg}>
             {tt(locale, "game.help")}
           </text>
+        </box>
+      ) : null}
+
+      {viewerLines ? (
+        <box position="absolute" top={1} left={2} right={2} bottom={1} flexDirection="column" border borderColor={theme.accent} backgroundColor={theme.bg} paddingX={1}>
+          <text fg={theme.accent}>{tt(locale, "viewer.close")}</text>
+          {viewerLines.map((line, row) => (
+            <box key={`viewer-${row}`} flexDirection="row">
+              {line.cells.map((cell, col) => (
+                <text key={`viewer-${row}-${col}`} fg={cell.fg} bg={cell.bg}>
+                  {cell.char}
+                </text>
+              ))}
+            </box>
+          ))}
         </box>
       ) : null}
 

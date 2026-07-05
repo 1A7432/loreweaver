@@ -460,6 +460,52 @@ async def test_set_model_remembers_each_providers_key_and_reuses_it_on_switch_ba
         await server.close()
 
 
+async def test_admin_set_imagegen_configures_runtime_and_masks_key():
+    services = _services()
+    keystore = Keystore()
+    keeper_key = keystore.add(room="arkham", name="Keeper", role="keeper")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        ws, *_ = await _connect_and_join(url, keeper_key, "Keeper")
+
+        config = await _send(ws, {"type": "admin_get_config"})
+        assert config["imagegen"]["configured"] is False
+        assert config["imagegen"]["api_key_masked"] == ""
+
+        updated = await _send(
+            ws,
+            {
+                "type": "admin_set_imagegen",
+                "provider": "openai",
+                "base_url": "https://images.example/v1",
+                "model": "image-model",
+                "api_key": "sk-image-secret",
+                "size": "512x512",
+            },
+        )
+
+        assert updated["type"] == "admin_config"
+        assert updated["imagegen"]["provider"] == "openai"
+        assert updated["imagegen"]["model"] == "image-model"
+        assert updated["imagegen"]["size"] == "512x512"
+        assert updated["imagegen"]["configured"] is True
+        assert updated["imagegen"]["api_key_masked"].endswith("cret")
+        assert "sk-image-secret" not in json.dumps(updated)
+        assert services.imagegen is not None
+        assert (await services.imagegen_runtime_config.get())["api_key"] == "sk-image-secret"
+        assert (await services.imagegen_credentials.get("openai"))["api_key"] == "sk-image-secret"
+
+        with patch("net.admin.list_models", return_value=[]):
+            listed = await _send(ws, {"type": "admin_list_models", "provider": "openai"})
+        assert listed["type"] == "admin_models"
+        assert listed["imagegen"]["configured"] is True
+
+        await ws.close()
+    finally:
+        await server.close()
+
+
 async def test_admin_list_models_returns_the_providers_live_catalog():
     """`admin_list_models` answers with the provider's model IDs (the live /models fetch is
     stubbed here so the test stays offline)."""

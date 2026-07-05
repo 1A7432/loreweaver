@@ -30,6 +30,7 @@ from core.rulepacks import available_systems, built_in_rulepack_ids
 from core.skills import available_skills
 from gateway.ops import get_enabled_skills, set_enabled_skills
 from infra.i18n import I18n
+from infra.imagegen import apply_imagegen_overrides, build_imagegen, describe_imagegen_settings
 from infra.providers import (
     CHATGPT_SUBSCRIPTION_PROXY_PROVIDER_NAMES,
     NATIVE_PROVIDER_NAMES,
@@ -47,6 +48,7 @@ _ADMIN_REQUESTS: frozenset[str] = frozenset(
     {
         "admin_get_config",
         "admin_set_model",
+        "admin_set_imagegen",
         "admin_list_models",
         "admin_list_keys",
         "admin_mint_key",
@@ -106,6 +108,8 @@ async def handle_admin_frame(
         return await _config_frame(services)
     if kind == "admin_set_model":
         return await _set_model(services, frame, i18n)
+    if kind == "admin_set_imagegen":
+        return await _set_imagegen(services, frame, i18n)
     if kind == "admin_list_models":
         return await _list_models(services, frame, i18n)
     if kind == "admin_list_keys":
@@ -153,6 +157,7 @@ async def _config_frame(services: Services) -> dict[str, Any]:
         # switching to one never re-asks for its key (see `_set_model`).
         "saved_providers": saved_providers,
         "override_active": bool(overrides),
+        "imagegen": await _imagegen_status(services),
     }
 
 
@@ -220,7 +225,51 @@ async def _list_models(services: Services, frame: dict[str, Any], i18n: I18n) ->
 
     candidate = base_llm.model_copy(update={"provider": provider, "api_key": api_key, "base_url": base_url})
     models = await list_models(candidate)
-    return {"type": "admin_models", "provider": provider, "models": models}
+    return {"type": "admin_models", "provider": provider, "models": models, "imagegen": await _imagegen_status(services)}
+
+
+async def _set_imagegen(services: Services, frame: dict[str, Any], i18n: I18n) -> dict[str, Any]:
+    provider = str(frame.get("provider") or "").strip().casefold()
+    model = str(frame.get("model") or "").strip()
+    if not provider or not model:
+        return _error("bad_request", i18n)
+
+    size = str(frame.get("size") or services.settings.imagegen.size or "1024x1024").strip()
+    if not _valid_image_size(size):
+        return _error("bad_request", i18n)
+
+    api_key = str(frame.get("api_key") or "").strip()
+    base_url = str(frame.get("base_url") or "").strip()
+    saved = await services.imagegen_credentials.get(provider)
+    if not api_key and saved.get("api_key"):
+        api_key = saved["api_key"]
+    if not base_url and saved.get("base_url"):
+        base_url = saved["base_url"]
+
+    overrides: dict[str, str] = {"provider": provider, "model": model, "size": size}
+    if api_key:
+        overrides["api_key"] = api_key
+    if base_url:
+        overrides["base_url"] = base_url
+
+    current = await services.imagegen_runtime_config.get()
+    candidate = {**current, **overrides}
+    try:
+        _reconfigure_imagegen(services, candidate)
+    except Exception:
+        _reconfigure_imagegen(services, current)
+        return _error("set_failed", i18n)
+    await services.imagegen_runtime_config.set(**overrides)
+    if api_key or base_url:
+        await services.imagegen_credentials.remember(provider, api_key=api_key, base_url=base_url)
+    return await _config_frame(services)
+
+
+async def _imagegen_status(services: Services) -> dict[str, Any]:
+    saved = await services.imagegen_credentials.providers()
+    status = describe_imagegen_settings(services.settings.imagegen, configured=services.imagegen is not None)
+    status["saved_providers"] = saved
+    return status
 
 
 def _provider_names() -> list[str]:
@@ -246,6 +295,23 @@ def _reconfigure_llm(services: Services, overrides: dict[str, str]) -> bool:
         apply(overrides)
         return True
     return False
+
+
+def _reconfigure_imagegen(services: Services, overrides: dict[str, str]) -> None:
+    effective = apply_imagegen_overrides(services.settings, overrides)
+    services.settings.imagegen = effective.imagegen
+    services.imagegen = build_imagegen(services.settings)
+
+
+def _valid_image_size(value: str) -> bool:
+    parts = value.lower().split("x", 1)
+    if len(parts) != 2:
+        return False
+    try:
+        width, height = int(parts[0]), int(parts[1])
+    except ValueError:
+        return False
+    return 128 <= width <= 4096 and 128 <= height <= 4096
 
 
 # -- room keys --------------------------------------------------------------

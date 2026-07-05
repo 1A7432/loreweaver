@@ -20,6 +20,7 @@ import os
 import sqlite3
 
 from infra.config import Settings
+from infra.imagegen import IMAGEGEN_OVERRIDE_FIELDS
 from infra.store import Store
 
 # The ``llm`` fields a runtime override may set. ``embedding_*``/``temperature``
@@ -41,6 +42,8 @@ DEFAULT_KEY = "runtime_config.llm"
 # under its own `Store` key, same plaintext-local-DB caveat as the overrides above.
 CREDENTIALS_KEY = "runtime_config.credentials"
 _CREDENTIAL_FIELDS: tuple[str, ...] = ("api_key", "base_url")
+IMAGEGEN_DEFAULT_KEY = "runtime_config.imagegen"
+IMAGEGEN_CREDENTIALS_KEY = "runtime_config.imagegen.credentials"
 
 
 def apply_overrides(base: Settings, overrides: dict) -> Settings:
@@ -143,6 +146,77 @@ class RuntimeConfig:
         return dict(self._cache)
 
 
+def _decode_imagegen(raw: str | None) -> dict[str, str]:
+    """Parse persisted image-generation overrides."""
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        key: str(value)
+        for key, value in data.items()
+        if key in IMAGEGEN_OVERRIDE_FIELDS and value not in (None, "")
+    }
+
+
+class ImageGenRuntimeConfig:
+    """Load/store persisted image-generation runtime overrides."""
+
+    def __init__(self, store: Store, *, key: str = IMAGEGEN_DEFAULT_KEY) -> None:
+        self._store = store
+        self._key = key
+        self._cache: dict[str, str] | None = None
+
+    async def load(self) -> dict[str, str]:
+        raw = await self._store.get(user_key="", store_key=self._key)
+        self._cache = _decode_imagegen(raw)
+        return dict(self._cache)
+
+    async def get(self) -> dict[str, str]:
+        if self._cache is None:
+            await self.load()
+        return dict(self._cache or {})
+
+    async def set(self, **overrides: str) -> dict[str, str]:
+        current = await self.get()
+        for key, value in overrides.items():
+            if key not in IMAGEGEN_OVERRIDE_FIELDS:
+                raise ValueError(key)
+            if value in (None, ""):
+                continue
+            current[key] = str(value)
+        await self._store.set(user_key="", store_key=self._key, value=json.dumps(current))
+        self._cache = current
+        return dict(current)
+
+    async def clear(self) -> None:
+        await self._store.delete(user_key="", store_key=self._key)
+        self._cache = {}
+
+    def load_sync(self) -> dict[str, str]:
+        path = self._store.path
+        if path == ":memory:" or not os.path.exists(path):
+            self._cache = {}
+            return {}
+        row = None
+        try:
+            conn = sqlite3.connect(path)
+            try:
+                row = conn.execute(
+                    "SELECT value FROM kv WHERE user_key = '' AND store_key = ?",
+                    (self._key,),
+                ).fetchone()
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            row = None
+        self._cache = _decode_imagegen(row[0]) if row else {}
+        return dict(self._cache)
+
 def _decode_book(raw: str | None) -> dict[str, dict[str, str]]:
     """Parse a persisted credential book, keeping only known, non-empty fields."""
     if not raw:
@@ -229,3 +303,10 @@ class CredentialBook:
         assert self._cache is not None
         if self._cache.pop(provider, None) is not None:
             await self._store.set(user_key="", store_key=self._key, value=json.dumps(self._cache))
+
+
+class ImageGenCredentialBook(CredentialBook):
+    """Per-provider image-generation credentials, stored separately from LLM keys."""
+
+    def __init__(self, store: Store, *, key: str = IMAGEGEN_CREDENTIALS_KEY) -> None:
+        super().__init__(store, key=key)

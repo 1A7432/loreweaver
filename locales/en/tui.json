@@ -18,6 +18,8 @@
   "tui.error.media_size_mismatch": "The uploaded media size did not match the offer.",
   "tui.error.media_hash_mismatch": "The uploaded media checksum did not match the offer.",
   "tui.error.media_not_found": "That media item is not available in this room.",
+  "tui.error.avatar_no_character": "Create or select a character before setting an avatar.",
+  "tui.avatar.set_done": "Avatar updated.",
   "tui.media.uploaded": "Uploaded {name}.",
   "tui.npc.unknown_name": "Unknown NPC",
   "tui.admin.error.forbidden": "Admin actions require a keeper key.",

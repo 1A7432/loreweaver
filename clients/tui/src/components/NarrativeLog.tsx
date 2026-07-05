@@ -11,7 +11,7 @@ import {
 } from "@loreweaver/protocol"
 import type { AppClient } from "../client"
 import { tt } from "../i18n"
-import { getCachedMedia, mediaPlaceholder, renderHalfBlockPreview, type HalfBlockLine } from "../media"
+import { getCachedMedia, halfBlockPreviewSize, mediaPlaceholder, renderHalfBlockPreview, type HalfBlockLine } from "../media"
 import type { Palette } from "../themes"
 import { Spinner } from "./Spinner"
 
@@ -106,6 +106,9 @@ export function NarrativeLog({
           }
 
           if (frame.type === "system") {
+            if (frame.spinner) {
+              return <Spinner key={`${frame.type}-${index}`} active label={stripControlChars(frame.text)} color={theme.accent} />
+            }
             return (
               <text key={`${frame.type}-${index}`} fg={frame.level === "warn" ? theme.fail : theme.system}>
                 {stripControlChars(`[${frame.level.toUpperCase()}] ${frame.text}`)}
@@ -195,7 +198,10 @@ function MediaLogEntry({
     setFailed(false)
     if (!client || frame.mime === "image/gif" || frame.mime === "image/webp") return
     void getCachedMedia(client, frame)
-      .then((payload) => renderHalfBlockPreview(payload.bytes, payload.mime, 40, 20))
+      .then((payload) => {
+        const size = halfBlockPreviewSize(56, 28)
+        return renderHalfBlockPreview(payload.bytes, payload.mime, size.width, size.height)
+      })
       .then((preview) => {
         if (!cancelled) setLines(preview)
       })

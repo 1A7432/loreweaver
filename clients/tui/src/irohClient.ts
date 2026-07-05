@@ -10,6 +10,7 @@ import {
   type AdminImportRoomFrame,
   type AdminListModelsFrame,
   type AdminMintKeyFrame,
+  type AdminSetImagegenFrame,
   type AdminSetModelFrame,
   type AdminUpdateKeyFrame,
   type ClientFrame,
@@ -294,6 +295,10 @@ export class IrohClient implements AppClient {
     this.sendFrame({ type: FrameType.MediaSetEnabled, enabled })
   }
 
+  setAvatar(hash: string): void {
+    this.sendFrame({ type: FrameType.AvatarSet, hash })
+  }
+
   onMessage(cb: (frame: ServerFrame) => void): () => void {
     this.handlers.add(cb)
     return () => this.handlers.delete(cb)
@@ -344,6 +349,14 @@ export class IrohClient implements AppClient {
     if (chatModel) frame.chat_model = chatModel
     if (apiKey) frame.api_key = apiKey
     if (baseUrl) frame.base_url = baseUrl
+    this.sendFrame(frame)
+  }
+
+  adminSetImagegen(provider: string, model: string, apiKey?: string, baseUrl?: string, size?: string): void {
+    const frame: AdminSetImagegenFrame = { type: FrameType.AdminSetImagegen, provider, model }
+    if (apiKey) frame.api_key = apiKey
+    if (baseUrl) frame.base_url = baseUrl
+    if (size) frame.size = size
     this.sendFrame(frame)
   }
 

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { PNG } from "pngjs"
-import { detectAudioMime, detectImageMime, droppedImagePath, renderHalfBlockPreview } from "./media"
+import { detectAudioMime, detectImageMime, droppedImagePath, halfBlockPreviewSize, renderHalfBlockPreview } from "./media"
 
 describe("media preview", () => {
   test("renders two vertical pixels as one half-block cell", async () => {
@@ -43,5 +43,10 @@ describe("media preview", () => {
 
     expect(text).toContain("Library")
     expect(text).toContain("+")
+  })
+
+  test("caps adaptive half-block preview size", () => {
+    expect(halfBlockPreviewSize(120, 80)).toEqual({ width: 56, height: 28 })
+    expect(halfBlockPreviewSize(10, 4)).toEqual({ width: 16, height: 8 })
   })
 })

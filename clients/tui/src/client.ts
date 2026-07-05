@@ -27,6 +27,7 @@ export interface AppClient {
   uploadMedia(upload: MediaUpload): Promise<MediaFrame | undefined>
   getMedia(hash: string): Promise<MediaPayload>
   setMediaEnabled(enabled: boolean): void
+  setAvatar(hash: string): void
   onMessage(cb: (frame: ServerFrame) => void): () => void
   close?(code?: number, reason?: string): void
   // Optional: a coarse liveness signal ("connecting"/"online"/"reconnecting"/"offline") for a
@@ -35,6 +36,7 @@ export interface AppClient {
   onStatus?(cb: (status: ConnectionStatus) => void): () => void
   adminGetConfig(): void
   adminSetModel(provider: string, chatModel?: string, apiKey?: string, baseUrl?: string): void
+  adminSetImagegen(provider: string, model: string, apiKey?: string, baseUrl?: string, size?: string): void
   adminListModels(provider?: string, apiKey?: string, baseUrl?: string): void
   adminListKeys(): void
   adminMintKey(room: string, name?: string, role?: PlayerRole): void
@@ -88,6 +90,9 @@ class TransportClient implements AppClient {
   setMediaEnabled(enabled: boolean): void {
     this.inner?.setMediaEnabled(enabled)
   }
+  setAvatar(hash: string): void {
+    this.inner?.setAvatar(hash)
+  }
   onMessage(cb: (frame: ServerFrame) => void): () => void {
     this.handlers.add(cb)
     return () => this.handlers.delete(cb)
@@ -104,6 +109,9 @@ class TransportClient implements AppClient {
   }
   adminSetModel(provider: string, chatModel?: string, apiKey?: string, baseUrl?: string): void {
     this.inner?.adminSetModel(provider, chatModel, apiKey, baseUrl)
+  }
+  adminSetImagegen(provider: string, model: string, apiKey?: string, baseUrl?: string, size?: string): void {
+    this.inner?.adminSetImagegen(provider, model, apiKey, baseUrl, size)
   }
   adminListModels(provider?: string, apiKey?: string, baseUrl?: string): void {
     this.inner?.adminListModels(provider, apiKey, baseUrl)

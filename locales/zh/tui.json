@@ -18,6 +18,8 @@
   "tui.error.media_size_mismatch": "上传媒体大小与请求不一致。",
   "tui.error.media_hash_mismatch": "上传媒体校验和与请求不一致。",
   "tui.error.media_not_found": "本房间无法访问该媒体。",
+  "tui.error.avatar_no_character": "请先创建或选择角色，再设置头像。",
+  "tui.avatar.set_done": "头像已更新。",
   "tui.media.uploaded": "已上传 {name}。",
   "tui.npc.unknown_name": "未知 NPC",
   "tui.admin.error.forbidden": "管理操作需要守秘人（keeper）密钥。",

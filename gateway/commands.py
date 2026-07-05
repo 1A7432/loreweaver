@@ -19,10 +19,16 @@ from core.dice_engine import DiceResult, coc_rank_label
 from core.rulepacks import RulePack, load_rulepack
 from core.skills import available_skills
 from gateway.audio import build_audio_control, list_audio_items, resolve_audio_item, update_audio_item
+from gateway.avatar import AvatarError, set_target_avatar, set_user_avatar
 from gateway.hub import Event
-from gateway.ops import Botlist, PrivilegeLevel, get_enabled_skills, set_enabled_skills
+from gateway.imagegen import allow_imagegen_request, image_name
+from gateway.media import media_frame, publish_media
+from gateway.ops import Botlist, PrivilegeLevel, get_enabled_skills, is_media_enabled, set_enabled_skills
 from gateway.rooms import clear_binding, get_binding, mint_room_id, session_key_for_room, set_binding
+from gateway.turn import publish_state
 from infra.i18n import I18n, get_i18n
+from infra.imagegen import ImageGenError
+from infra.media_store import ALLOWED_IMAGE_MIMES, MediaStore
 from infra.providers import (
     CHATGPT_SUBSCRIPTION_PROXY_PROVIDER_NAMES,
     NATIVE_PROVIDER_NAMES,
@@ -188,6 +194,8 @@ _AUDIO_STOP_WORDS = {"stop", "停止"}
 _AUDIO_PAUSE_WORDS = {"pause", "暂停", "暫停"}
 _AUDIO_RESUME_WORDS = {"resume", "继续", "繼續"}
 _AUDIO_VOLUME_WORDS = {"volume", "vol", "音量"}
+_AVATAR_GEN_WORDS = {"gen", "generate", "生成"}
+_AVATAR_CLEAR_WORDS = {"clear", "remove", "rm", "清除", "删除", "刪除"}
 
 # `.st`/`.sheet` finalize word: re-derive current HP/MP/SAN to their maxima for
 # the sheet's CURRENT characteristics (CREATION semantics -- see `cmd_sheet`).
@@ -703,6 +711,86 @@ class CommandRouter:
     async def cmd_sfx(self, ctx: CommandCtx) -> str:
         return await self._audio_layer(ctx, "sfx", default_loop=False)
 
+    async def cmd_avatar(self, ctx: CommandCtx) -> str:
+        tokens = _shell_words(ctx.args)
+        sub = tokens[0].casefold() if tokens else ""
+        rest = tokens[1:] if tokens else []
+        if sub in _AVATAR_CLEAR_WORDS:
+            return await self._avatar_clear(ctx)
+        if sub in _AVATAR_GEN_WORDS:
+            return await self._avatar_generate(ctx, rest)
+        return ctx.i18n.t("commands.avatar.usage")
+
+    async def _avatar_clear(self, ctx: CommandCtx) -> str:
+        try:
+            sheet = await set_user_avatar(ctx.services, user_id=ctx.user_id, chat_key=ctx.chat_key, avatar=None)
+        except AvatarError as exc:
+            return ctx.i18n.t(f"commands.avatar.error.{exc.code}")
+        if ctx.router.hub is not None:
+            await publish_state(ctx.router.hub, ctx.services, ctx.raw_ctx)
+        return ctx.i18n.t("commands.avatar.cleared", name=sheet.name)
+
+    async def _avatar_generate(self, ctx: CommandCtx, tokens: list[str]) -> str:
+        if not tokens:
+            return ctx.i18n.t("commands.avatar.usage")
+        if not await is_media_enabled(ctx.services.store, ctx.chat_key):
+            return ctx.i18n.t("commands.avatar.media_disabled")
+        if ctx.services.imagegen is None:
+            return ctx.i18n.t("commands.avatar.not_configured")
+        if not allow_imagegen_request(ctx.services, ctx.chat_key):
+            return ctx.i18n.t("commands.avatar.rate_limited")
+
+        target_name = ""
+        prompt_tokens = tokens
+        if len(tokens) >= 2:
+            maybe_target = tokens[0]
+            target_record = await _resolve_avatar_target(ctx, maybe_target)
+            if target_record is not None:
+                if not _is_keeper(ctx.raw_ctx):
+                    return ctx.i18n.t("commands.avatar.denied")
+                target_name = maybe_target
+                prompt_tokens = tokens[1:]
+        prompt = " ".join(prompt_tokens).strip()
+        if not prompt:
+            return ctx.i18n.t("commands.avatar.usage")
+
+        if ctx.router.hub is not None:
+            await ctx.router.hub.publish(
+                ctx.chat_key,
+                Event(kind="system", text=ctx.i18n.t("commands.avatar.generating"), data={"level": "info", "spinner": True}),
+            )
+        try:
+            data, mime = await ctx.services.imagegen.generate(prompt, size=ctx.services.settings.imagegen.size)
+            settings = ctx.services.settings.tui
+            store = MediaStore(
+                ctx.services.store,
+                ctx.services.settings.data_dir,
+                max_file_bytes=settings.media_max_file_bytes,
+                room_quota_bytes=settings.media_room_quota_bytes,
+                allowed_mimes=ALLOWED_IMAGE_MIMES,
+            )
+            record = await store.register_blob(
+                room=ctx.chat_key,
+                data=data,
+                mime=mime,
+                name=image_name("avatar", prompt),
+                uploader=ctx.user_id,
+            )
+            if target_name:
+                sheet = await set_target_avatar(ctx.services, chat_key=ctx.chat_key, target=target_name, avatar=record.ref())
+            else:
+                sheet = await set_user_avatar(ctx.services, user_id=ctx.user_id, chat_key=ctx.chat_key, avatar=record.ref())
+            await publish_media(ctx.router.hub, ctx.services.store, ctx.chat_key, media_frame(record, from_name=sheet.name))
+            if ctx.router.hub is not None:
+                await publish_state(ctx.router.hub, ctx.services, ctx.raw_ctx)
+            return ctx.i18n.t("commands.avatar.generated", name=sheet.name, file=record.name, hash=record.hash[:12])
+        except AvatarError as exc:
+            return ctx.i18n.t(f"commands.avatar.error.{exc.code}")
+        except ImageGenError as exc:
+            return ctx.i18n.t(f"commands.avatar.error.{exc.code}")
+        except Exception as exc:
+            return ctx.i18n.t("commands.avatar.failed", error=str(exc))
+
     async def _audio_list(self, ctx: CommandCtx) -> str:
         items = await list_audio_items(ctx.services.store, ctx.chat_key)
         if not items:
@@ -1181,6 +1269,7 @@ class CommandRouter:
             CommandSpec("draw", self.cmd_draw, ["draw"], ["draw", "抽牌"], None, "commands.help.draw"),
             CommandSpec("bot", self.cmd_bot_toggle, ["bot"], ["bot"], None, "commands.help.bot"),
             CommandSpec("skill", self.cmd_skill, ["skill"], ["skill"], None, "commands.help.skill"),
+            CommandSpec("avatar", self.cmd_avatar, ["avatar"], ["avatar", "头像"], None, "commands.help.avatar"),
             CommandSpec(
                 "audio",
                 self.cmd_audio,
@@ -1770,6 +1859,15 @@ def _shell_words(text: str) -> list[str]:
         return shlex.split(text)
     except ValueError:
         return text.split()
+
+
+async def _resolve_avatar_target(ctx: CommandCtx, target: str) -> Any | None:
+    try:
+        from agent.npc import NpcManager
+
+        return await NpcManager(ctx.services.store).get_npc(ctx.chat_key, target)
+    except Exception:
+        return None
 
 
 def _split_audio_metadata(tokens: list[str]) -> tuple[str, dict[str, Any]]:

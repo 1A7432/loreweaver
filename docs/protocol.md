@@ -7,7 +7,7 @@ This is the open, versioned wire protocol between a loreweaver server (started v
 (deterministic core + AI Keeper) is unaffected by transport; the transport-neutral
 session logic is `net.session.SessionCore`, and this document is the language-agnostic seam.
 
-Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"1.3"`. The same
+Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"1.4"`. The same
 frames + `join` handshake ride the transport; only the carrier + its framing differ:
 
 - **Iroh** (the transport `--serve` starts) — peer-to-peer QUIC. The server
@@ -22,7 +22,7 @@ frames + `join` handshake ride the transport; only the carrier + its framing dif
 
 Both carriers drive the same `SessionCore`/`RoomHub`.
 
-Versioning is additive: `"1.3"` adds room audio library/control frames; `"1.2"` adds media metadata frames and byte channels; `"1.1"` added the keeper-gated `admin_*` frames
+Versioning is additive: `"1.4"` adds image-generation config plus avatar binding; `"1.3"` adds room audio library/control frames; `"1.2"` adds media metadata frames and byte channels; `"1.1"` added the keeper-gated `admin_*` frames
 (see "Admin frames" below). A client that only understands `"1"` keeps working
 unchanged — it never sends `admin_*` frames, and it should treat the `welcome`
 `protocol` field as an opaque string (accept any `"1.x"`).
@@ -45,12 +45,16 @@ concurrent-connection cap (`TRPG_TUI__MAX_CONNECTIONS`) is refused before
   `{type:"media_offer", name:string, mime:string, size:int, sha256:string}`
 - `media_set_enabled` — keeper-only room switch for player uploads:
   `{type:"media_set_enabled", enabled:boolean}`
+- `avatar_set` — bind one already-uploaded image in this room to the caller's
+  own active character. The server rejects frames that try to name another
+  character/user:
+  `{type:"avatar_set", hash:string}`
 - `ping`: `{type:"ping", t:number}`
 
 ## Server → Client
 
 - `welcome` — sent once, on a successful `join`:
-  `{type:"welcome", protocol:"1.3", features:["media","audio"], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string}`
+  `{type:"welcome", protocol:"1.4", features:["media","audio", "imagegen"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string}`
 - `error` — a localized failure notice; `bad_key`, `join_timeout` and
   `too_many_connections` close the connection (they only ever happen during
   or before the `join` handshake), the others do not:
@@ -85,7 +89,7 @@ concurrent-connection cap (`TRPG_TUI__MAX_CONNECTIONS`) is refused before
   every turn in the room's session so far.
 - `presence` — the connected-player roster, sent on join/leave:
   `{type:"presence", players:[{id,name,online}], online:int}`
-- `system` — an out-of-band notice: `{type:"system", level:"info"|"warn", text:string}`
+- `system` — an out-of-band notice: `{type:"system", level:"info"|"warn", text:string, spinner?:boolean}`
 - `pong`: `{type:"pong", t:number}`
 
 ## Turn flow
@@ -214,10 +218,15 @@ Client → server:
   provider's key/base_url (blank = keep the saved one). The server remembers the
   credential per provider, so a later switch back to it needs no key:
   `{type:"admin_set_model", provider:string, chat_model?:string, api_key?:string, base_url?:string}`
+- `admin_set_imagegen` — configure the OpenAI-compatible image-generation
+  endpoint. `api_key` is optional; when omitted the server reuses the saved key
+  for that provider:
+  `{type:"admin_set_imagegen", provider:string, base_url?:string, model:string, api_key?:string, size?:string}`
 - `admin_list_models` — fetch a provider's live model catalog (OpenAI-compatible
   `GET /models`). All fields optional: omit to list the current provider; pass
   `provider` (+ optional `api_key`/`base_url`) to preview another before switching:
-  `{type:"admin_list_models", provider?:string, api_key?:string, base_url?:string}`
+  `{type:"admin_list_models", provider?:string, api_key?:string, base_url?:string}`.
+  The reply also includes the current `imagegen` status.
 - `admin_list_keys` — `{type:"admin_list_keys"}`
 - `admin_mint_key` — mint a room access key:
   `{type:"admin_mint_key", room:string, name?:string, role?:"player"|"keeper"}`
@@ -255,12 +264,15 @@ Server → client:
 
 - `admin_config` — the live, display-safe LLM config (api_key masked), the
   provider catalog, the providers that already have a saved key (`saved_providers`),
-  and whether a runtime override is active:
-  `{type:"admin_config", provider:string, chat_model:string, base_url:string, api_key_masked:string, providers:string[], saved_providers:string[], override_active:boolean}`
+  whether a runtime override is active, and the display-safe image-generation
+  status:
+  `{type:"admin_config", provider:string, chat_model:string, base_url:string, api_key_masked:string, providers:string[], saved_providers:string[], override_active:boolean, imagegen?:ImageGenStatus}`
 - `admin_models` — a provider's live model catalog (empty when the provider is a
   native SDK, the key is missing/invalid, or `/models` is unreachable — the client
   falls back to a free-text model field):
-  `{type:"admin_models", provider:string, models:string[]}`
+  `{type:"admin_models", provider:string, models:string[], imagegen?:ImageGenStatus}`
+- `ImageGenStatus` — `{provider:string, base_url:string, model:string, size:string, api_key_masked:string, has_key:boolean, configured:boolean, saved_providers?:string[]}`.
+  The API key is never returned in cleartext.
 - `admin_keys` — the room-key roster; every entry's key value is masked. A
   `mint` request additionally returns the freshly minted key ONCE in cleartext
   under `minted` (so the keeper can copy it):

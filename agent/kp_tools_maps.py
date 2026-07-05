@@ -2,24 +2,19 @@
 
 from __future__ import annotations
 
-import json
-import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from agent.context import AgentCtx
 from agent.services import Services
 from agent.tools import tool
 from core.svg_map import build_svg_map
-from gateway.hub import Event
+from gateway.media import media_frame, publish_media
 from infra.i18n import I18n
 from infra.media_store import ALLOWED_MEDIA_MIMES, MediaStore
 from infra.svg import SVG_MIME
 
 if TYPE_CHECKING:
     from gateway.hub import RoomHub
-
-_MEDIA_HISTORY_REPLAY_CAP = 30
-
 
 class SvgMapTools:
     """Gated tools for drawing player-visible SVG maps and room diagrams."""
@@ -37,8 +32,11 @@ class SvgMapTools:
 
         Args:
             title: Map title shown at the top, e.g. "Old Chapel Basement".
-            areas_json: JSON list of areas. Each item may include id, name, parent, description, and links.
-            layout: "hierarchy" for nested/flow maps, or "grid" for room/floor layouts.
+            areas_json: JSON list of areas. Each item may include id, name, parent, description, links, and
+                for spatial maps pos/size hints. pos is a rough relative placement hint, not exact pixels:
+                north means a smaller y, east means a larger x, and important rooms can use a larger size.
+            layout: "hierarchy" for nested/flow maps, "grid" for room/floor layouts, or "spatial" for
+                rough room/location positions from pos/size hints.
 
         Returns:
             Confirmation with the generated file name and media hash.
@@ -62,35 +60,8 @@ class SvgMapTools:
                 name=filename,
                 uploader=ctx.uid(),
             )
-            frame = {
-                "type": "media",
-                "id": uuid.uuid4().hex,
-                "hash": record.hash,
-                "mime": record.mime,
-                "size": record.size,
-                "name": record.name,
-                "from": "KP",
-                "ts": record.created_at,
-            }
-            await self._record_media_history(ctx.chat_key, frame)
-            if self._hub is not None:
-                await self._hub.publish(ctx.chat_key, Event.media(frame))
+            frame = media_frame(record, from_name="KP")
+            await publish_media(self._hub, self._services.store, ctx.chat_key, frame)
             return i18n.t("kp_tools.map.draw.done", name=record.name, hash=record.hash[:12])
         except Exception as exc:
             return i18n.t("kp_tools.map.draw.failed", error=str(exc))
-
-    async def _record_media_history(self, chat_key: str, frame: dict[str, Any]) -> None:
-        store_key = f"media_history.{chat_key}"
-        try:
-            raw = await self._services.store.get(user_key="", store_key=store_key)
-            history = json.loads(raw) if raw else []
-        except Exception:
-            history = []
-        if not isinstance(history, list):
-            history = []
-        history.append(dict(frame))
-        await self._services.store.set(
-            user_key="",
-            store_key=store_key,
-            value=json.dumps(history[-_MEDIA_HISTORY_REPLAY_CAP:], ensure_ascii=False),
-        )

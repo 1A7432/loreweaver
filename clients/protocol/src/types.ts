@@ -1,6 +1,6 @@
-// Bumped to "1.3" for additive room-audio library/control frames over the media byte channel.
+// Bumped to "1.4" for additive image-generation config/control frames.
 // `WelcomeFrame.protocol` stays a plain string so older minor clients keep accepting it.
-export const PROTOCOL_VERSION = "1.3" as const
+export const PROTOCOL_VERSION = "1.4" as const
 
 export const FrameType = {
   Join: "join",
@@ -11,6 +11,7 @@ export const FrameType = {
   Media: "media",
   MediaSetEnabled: "media_set_enabled",
   MediaEnabled: "media_enabled",
+  AvatarSet: "avatar_set",
   AudioLibraryItem: "audio_library_item",
   AudioControl: "audio_control",
   AudioState: "audio_state",
@@ -25,6 +26,7 @@ export const FrameType = {
   // v1.1 additive admin (keeper-gated) frames.
   AdminGetConfig: "admin_get_config",
   AdminSetModel: "admin_set_model",
+  AdminSetImagegen: "admin_set_imagegen",
   AdminListModels: "admin_list_models",
   AdminListKeys: "admin_list_keys",
   AdminMintKey: "admin_mint_key",
@@ -74,6 +76,7 @@ export type ErrorCode =
   | "media_size_mismatch"
   | "media_hash_mismatch"
   | "media_not_found"
+  | "avatar_no_character"
 export type DiceKind = "roll" | "check" | "sanity" | "opposed" | "init"
 export type SystemLevel = "info" | "warn"
 export type AudioLayer = "bgm" | "ambience" | "sfx"
@@ -149,6 +152,11 @@ export interface MediaSetEnabledFrame {
 export interface MediaEnabledFrame {
   type: typeof FrameType.MediaEnabled
   enabled: boolean
+}
+
+export interface AvatarSetFrame {
+  type: typeof FrameType.AvatarSet
+  hash: string
 }
 
 export interface AudioLibraryItemFrame extends MediaRef {
@@ -330,6 +338,7 @@ export interface SystemFrame {
   type: typeof FrameType.System
   level: SystemLevel
   text: string
+  spinner?: boolean
 }
 
 export interface PongFrame {
@@ -353,6 +362,26 @@ export interface AdminSetModelFrame {
   // remembers it per-provider so a later switch back to this provider won't re-ask.
   api_key?: string
   base_url?: string
+}
+
+export interface ImageGenStatus {
+  provider: string
+  base_url: string
+  model: string
+  size: string
+  api_key_masked: string
+  has_key: boolean
+  configured: boolean
+  saved_providers?: string[]
+}
+
+export interface AdminSetImagegenFrame {
+  type: typeof FrameType.AdminSetImagegen
+  provider: string
+  base_url?: string
+  model: string
+  api_key?: string
+  size?: string
 }
 
 // Ask the server for a provider's live model catalog (OpenAI-compatible GET /models).
@@ -423,6 +452,7 @@ export interface AdminConfigFrame {
   // Providers that already have a saved key — the model screen marks these 'ready'.
   saved_providers: string[]
   override_active: boolean
+  imagegen?: ImageGenStatus
 }
 
 // The live model catalog for `provider` (empty when the provider is a native SDK,
@@ -431,6 +461,7 @@ export interface AdminModelsFrame {
   type: typeof FrameType.AdminModels
   provider: string
   models: string[]
+  imagegen?: ImageGenStatus
 }
 
 export interface AdminKeyInfo {
@@ -541,8 +572,10 @@ export type ClientFrame =
   | PingFrame
   | MediaOfferFrame
   | MediaSetEnabledFrame
+  | AvatarSetFrame
   | AdminGetConfigFrame
   | AdminSetModelFrame
+  | AdminSetImagegenFrame
   | AdminListModelsFrame
   | AdminListKeysFrame
   | AdminMintKeyFrame

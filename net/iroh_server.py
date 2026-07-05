@@ -350,7 +350,7 @@ class IrohServer:
             return None
 
         member = IrohMember(send=send, **fields)
-        await member.send_frame(welcome_frame(fields))
+        await member.send_frame(welcome_frame(fields, imagegen=self.core.services.imagegen is not None))
         return member
 
     async def close(self) -> None:

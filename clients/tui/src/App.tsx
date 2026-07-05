@@ -15,6 +15,7 @@ import { forgetServer, type SavedServer } from "./connectMemory"
 import type { HostHandle } from "./hostLocal"
 import { GameView, appendFrame } from "./GameView"
 import type { LogFrame } from "./components/NarrativeLog"
+import type { RendererLike } from "./imageViewer"
 import { CharacterScreen } from "./screens/CharacterScreen"
 import { ConnectScreen } from "./screens/ConnectScreen"
 import { KeeperKeys } from "./screens/KeeperKeys"
@@ -52,6 +53,7 @@ export interface AppProps {
   // Restore the terminal (renderer.destroy) and exit the process. Falls back to a no-op so
   // tests (and any caller that doesn't pass it) don't need to stub process teardown.
   onQuit?: () => void
+  renderer?: RendererLike
 }
 
 // Stage 2 adds "character"; Stage 3 adds the keeper-only "keeper_keys" / "keeper_model";
@@ -82,6 +84,7 @@ export function App({
   onLocaleChange,
   onForgetConnect,
   onQuit,
+  renderer,
 }: AppProps) {
   const client = useMemo(() => injected ?? createClient(), [injected])
   const audioController = useMemo(() => new AudioController(), [])
@@ -290,6 +293,7 @@ export function App({
         themeName={themeName}
         initialFrames={frames}
         connectionStatus={connectionStatus}
+        renderer={renderer}
       />
     )
   }

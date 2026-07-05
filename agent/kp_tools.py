@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from agent.kp_tools_charcard import CharcardTools
 from agent.kp_tools_companion import CompanionTools
 from agent.kp_tools_forge import ForgeTools
+from agent.kp_tools_images import ImageTools
 from agent.kp_tools_knowledge import DocumentTools, ModuleTools, NoteTools, SessionTools
 from agent.kp_tools_maps import SvgMapTools
 from agent.kp_tools_mechanics import CharacterTools, DiceTools, InitiativeTools
@@ -56,6 +57,7 @@ def build_kp_toolset(
         WorldbookTools(services),
         CharcardTools(services),
         SvgMapTools(services, hub=hub),
+        ImageTools(services, hub=hub),
         ForgeTools(services),
         RelationshipTools(services),
     )

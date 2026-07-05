@@ -8,8 +8,10 @@ import {
   type AdminImportRoomFrame,
   type AdminListModelsFrame,
   type AdminMintKeyFrame,
+  type AdminSetImagegenFrame,
   type AdminSetModelFrame,
   type AdminUpdateKeyFrame,
+  type AvatarSetFrame,
   type ClientFrame,
   type MediaAcceptFrame,
   type MediaFrame,
@@ -274,6 +276,11 @@ export class WsClient {
     this.send({ type: FrameType.MediaSetEnabled, enabled })
   }
 
+  setAvatar(hash: string): void {
+    const frame: AvatarSetFrame = { type: FrameType.AvatarSet, hash }
+    this.send(frame)
+  }
+
   // ---- v1.1 admin (keeper-gated) requests --------------------------------
   // The server only honors these on a keeper-role connection; otherwise it
   // replies `admin_error {code:"forbidden"}`.
@@ -287,6 +294,14 @@ export class WsClient {
     if (chatModel) frame.chat_model = chatModel
     if (apiKey) frame.api_key = apiKey
     if (baseUrl) frame.base_url = baseUrl
+    this.send(frame)
+  }
+
+  adminSetImagegen(provider: string, model: string, apiKey?: string, baseUrl?: string, size?: string): void {
+    const frame: AdminSetImagegenFrame = { type: FrameType.AdminSetImagegen, provider, model }
+    if (apiKey) frame.api_key = apiKey
+    if (baseUrl) frame.base_url = baseUrl
+    if (size) frame.size = size
     this.send(frame)
   }
 

@@ -247,7 +247,7 @@ class TuiServer(SessionCore):
             return None
 
         member = WsMember(ws=ws, **fields)
-        await _send(ws, welcome_frame(fields))
+        await _send(ws, welcome_frame(fields, imagegen=self.services.imagegen is not None))
         return member
 
     async def _on_media_message(self, member: WsMember, payload: bytes) -> None:

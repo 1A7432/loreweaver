@@ -25,19 +25,24 @@ class MapArea:
     parent: str = ""
     description: str = ""
     links: tuple[str, ...] = field(default_factory=tuple)
+    pos: tuple[float, float] | None = None
+    size: tuple[float, float] | None = None
 
 
 def build_svg_map(title: str, areas_json: str, *, layout: str = "hierarchy") -> tuple[str, str]:
     """Build a safe SVG map from a JSON area list.
 
     ``areas_json`` accepts either ``[{...}]`` or ``{"areas":[...]}``. Each area
-    may contain ``id``, ``name``, ``parent``, ``description``/``notes``, and
-    ``links``. The output uses only the SVG subset accepted by ``infra.svg``.
+    may contain ``id``, ``name``, ``parent``, ``description``/``notes``,
+    ``links``, and for ``layout="spatial"`` rough ``pos``/``size`` hints. The
+    output uses only the SVG subset accepted by ``infra.svg``.
     """
     parsed_title, areas = parse_map_areas(title, areas_json)
     if not areas:
         areas = (MapArea(id="start", name="Scene"),)
     layout_key = layout.strip().casefold()
+    if layout_key == "spatial" and any(area.pos is not None for area in areas):
+        return (_slug(parsed_title or "map") + ".svg", _build_spatial_svg(parsed_title, areas))
     return (
         _slug(parsed_title or "map") + ".svg",
         _build_grid_svg(parsed_title, areas) if layout_key in {"grid", "floor", "rooms"} else _build_hierarchy_svg(parsed_title, areas),
@@ -77,9 +82,119 @@ def parse_map_areas(title: str, areas_json: str) -> tuple[str, tuple[MapArea, ..
                 parent=_slug(str(item.get("parent") or "")),
                 description=_clean(item.get("description") or item.get("notes") or item.get("type") or "", 96),
                 links=links,
+                pos=_parse_pair(item.get("pos"), minimum=0.0, maximum=11.0),
+                size=_parse_pair(item.get("size"), minimum=1.0, maximum=6.0),
             )
         )
     return parsed_title or "Map", tuple(areas)
+
+
+def _build_spatial_svg(title: str, areas: tuple[MapArea, ...]) -> str:
+    slots = _spatial_slots(areas)
+    if not slots:
+        return _build_hierarchy_svg(title, areas)
+    max_bottom = max(slot[1] + slot[3] for slot in slots.values())
+    height = _TOP + max_bottom * 116 + 64
+    positions: dict[str, tuple[float, float, float, float]] = {}
+    for area in areas:
+        gx, gy, gw, gh = slots[area.id]
+        positions[area.id] = (
+            _MARGIN_X + gx * _spatial_unit_x() + 4,
+            _TOP + gy * 116 + 4,
+            max(48.0, gw * _spatial_unit_x() - 8),
+            max(_BOX_HEIGHT, gh * _BOX_HEIGHT + (gh - 1) * 22),
+        )
+    lines = [_svg_header(title, height)]
+    lines.extend(_connection_lines(areas, positions))
+    for index, area in enumerate(areas):
+        lines.extend(_area_rect(area, positions[area.id], index))
+    lines.append("</svg>")
+    return "\n".join(lines)
+
+
+def _spatial_slots(areas: tuple[MapArea, ...]) -> dict[str, tuple[int, int, int, int]]:
+    slots: dict[str, tuple[int, int, int, int]] = {}
+    occupied: set[tuple[int, int]] = set()
+    for area in areas:
+        if area.pos is None:
+            continue
+        desired = _snapped_slot(area)
+        placed = _nearest_free_slot(desired, occupied)
+        slots[area.id] = placed
+        _occupy(occupied, placed)
+
+    if not slots:
+        return {}
+
+    append_y = max(y + h for _, y, _, h in slots.values()) + 1
+    cursor_x = 0
+    cursor_y = append_y
+    for area in areas:
+        if area.id in slots:
+            continue
+        width, height = _snapped_size(area)
+        if cursor_x + width > 12:
+            cursor_x = 0
+            cursor_y += 2
+        placed = _nearest_free_slot((cursor_x, cursor_y, width, height), occupied, min_y=append_y)
+        slots[area.id] = placed
+        _occupy(occupied, placed)
+        cursor_x = placed[0] + width + 1
+        cursor_y = max(cursor_y, placed[1])
+    return slots
+
+
+def _snapped_slot(area: MapArea) -> tuple[int, int, int, int]:
+    width, height = _snapped_size(area)
+    assert area.pos is not None
+    gx = _clamp_int(round(area.pos[0]), 0, max(0, 12 - width))
+    gy = _clamp_int(round(area.pos[1]), 0, 11)
+    return gx, gy, width, height
+
+
+def _snapped_size(area: MapArea) -> tuple[int, int]:
+    if area.size is None:
+        return 2, 1
+    width = _clamp_int(round(area.size[0]), 1, 6)
+    height = _clamp_int(round(area.size[1]), 1, 6)
+    return width, height
+
+
+def _nearest_free_slot(
+    desired: tuple[int, int, int, int],
+    occupied: set[tuple[int, int]],
+    *,
+    min_y: int = 0,
+) -> tuple[int, int, int, int]:
+    dx, dy, width, height = desired
+    best: tuple[int, int, int, int] | None = None
+    best_key: tuple[int, int, int] | None = None
+    for y in range(min_y, 48):
+        for x in range(0, max(1, 12 - width + 1)):
+            candidate = (x, y, width, height)
+            if _slot_overlaps(candidate, occupied):
+                continue
+            key = (abs(x - dx) + abs(y - dy), y, x)
+            if best_key is None or key < best_key:
+                best_key = key
+                best = candidate
+    return best if best is not None else (0, max(min_y, dy), width, height)
+
+
+def _slot_overlaps(slot: tuple[int, int, int, int], occupied: set[tuple[int, int]]) -> bool:
+    x, y, width, height = slot
+    return any((col, row) in occupied for row in range(y, y + height) for col in range(x, x + width))
+
+
+def _occupy(occupied: set[tuple[int, int]], slot: tuple[int, int, int, int]) -> None:
+    x, y, width, height = slot
+    for row in range(y, y + height):
+        for col in range(x, x + width):
+            occupied.add((col, row))
+
+
+def _spatial_unit_x() -> float:
+    return (_CANVAS_WIDTH - 2 * _MARGIN_X) / 12
 
 
 def _build_hierarchy_svg(title: str, areas: tuple[MapArea, ...]) -> str:
@@ -195,6 +310,23 @@ def _center(pos: tuple[float, float, float, float]) -> tuple[float, float]:
 def _clean(value: Any, limit: int) -> str:
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]+", "", str(value or "")).strip()
     return text[:limit]
+
+
+def _parse_pair(value: Any, *, minimum: float, maximum: float) -> tuple[float, float] | None:
+    if not isinstance(value, list | tuple) or len(value) != 2:
+        return None
+    try:
+        x = float(value[0])
+        y = float(value[1])
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(x) or not math.isfinite(y):
+        return None
+    return (max(minimum, min(maximum, x)), max(minimum, min(maximum, y)))
+
+
+def _clamp_int(value: int, minimum: int, maximum: int) -> int:
+    return max(minimum, min(maximum, int(value)))
 
 
 def _truncate(value: str, limit: int) -> str:

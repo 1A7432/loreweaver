@@ -4,9 +4,9 @@
 
 这是 loreweaver 服务器（通过 `python -m app --serve` 启动的 `net.tui_server.TuiServer`）与任何客户端之间的开放、版本化的网络协议——可以是随附的 OpenTUI 终端客户端，或社区构建的 React/Vue/Web 客户端。引擎本身（确定性核心 + AI Keeper）不受传输方式的影响；此文档是与语言无关的接口定义。
 
-传输方式：Iroh 或 WebSocket。控制流为 JSON 帧，每帧格式为 `{"type": ...}`。协议版本：`"1.3"`。
+传输方式：Iroh 或 WebSocket。控制流为 JSON 帧，每帧格式为 `{"type": ...}`。协议版本：`"1.4"`。
 
-版本控制是递增式的：`"1.3"` 新增房间音频库/播放控制帧；`"1.2"` 新增媒体元数据帧和字节通道；`"1.1"` 新增 Keeper 门控的 `admin_*` 帧（见下文"Admin frames"部分）。只理解 `"1"` 的客户端保持正常工作——它永远不会发送新帧，应该将 `welcome` 的 `protocol` 字段视为不透明字符串（接受任何 `"1.x"`）。
+版本控制是递增式的：`"1.4"` 新增图像生成配置与头像绑定；`"1.3"` 新增房间音频库/播放控制帧；`"1.2"` 新增媒体元数据帧和字节通道；`"1.1"` 新增 Keeper 门控的 `admin_*` 帧（见下文"Admin frames"部分）。只理解 `"1"` 的客户端保持正常工作——它永远不会发送新帧，应该将 `welcome` 的 `protocol` 字段视为不透明字符串（接受任何 `"1.x"`）。
 
 客户端发送的第一帧MUST是 `join`。服务器回复 `welcome` 或 `error`，错误时关闭连接。如果在服务器的 join 握手超时内未到达（`TRPG_TUI__JOIN_TIMEOUT`，默认 10 秒），服务器将用 `error join_timeout` 关闭连接，而不是无限等待。超过服务器并发连接上限（`TRPG_TUI__MAX_CONNECTIONS`）的连接在读取 `join` 之前被拒绝：`error too_many_connections`，然后关闭。
 
@@ -20,12 +20,14 @@
   `{type:"media_offer", name:string, mime:string, size:int, sha256:string}`
 - `media_set_enabled` — Keeper 专用的房间媒体上传开关：
   `{type:"media_set_enabled", enabled:boolean}`
+- `avatar_set` — 将本房间已经上传的一张图片绑定到调用者自己的当前角色头像。服务端会拒绝试图指定其他角色/用户的帧：
+  `{type:"avatar_set", hash:string}`
 - `ping`: `{type:"ping", t:number}`
 
 ## Server → Client
 
 - `welcome` — 成功 `join` 时发送一次：
-  `{type:"welcome", protocol:"1.3", features:["media","audio"], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string}`
+  `{type:"welcome", protocol:"1.4", features:["media","audio","imagegen"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string}`
 - `error` — 本地化的故障通知；`bad_key`、`join_timeout` 和 `too_many_connections` 关闭连接（它们仅在 `join` 握手期间或之前发生），其他不关闭：
   `{type:"error", code:"bad_key"|"bad_frame"|"rate_limited"|"server_error"|"join_timeout"|"too_many_connections"|媒体错误码, message:string}`
 - `media_accept` — 上传被接受；若 `existing` 为 true，则无需 PUT：
@@ -122,6 +124,10 @@ role = "player"  # 或 "keeper"；默认为 "player"
 - `admin_get_config` — `{type:"admin_get_config"}`
 - `admin_set_model` — 切换实时 LLM 提供商/模型：
   `{type:"admin_set_model", provider:string, chat_model?:string}`
+- `admin_set_imagegen` — 配置 OpenAI-compatible 图像生成端点；`api_key` 省略时沿用该 provider 已保存的 key：
+  `{type:"admin_set_imagegen", provider:string, base_url?:string, model:string, api_key?:string, size?:string}`
+- `admin_list_models` — 获取某 provider 的实时模型列表；回复中也包含当前 `imagegen` 状态：
+  `{type:"admin_list_models", provider?:string, api_key?:string, base_url?:string}`
 - `admin_list_keys` — `{type:"admin_list_keys"}`
 - `admin_mint_key` — 创建房间访问密钥：
   `{type:"admin_mint_key", room:string, name?:string, role?:"player"|"keeper"}`
@@ -140,8 +146,11 @@ role = "player"  # 或 "keeper"；默认为 "player"
 
 服务器 → 客户端：
 
-- `admin_config` — 实时、显示安全的 LLM 配置（api_key 已遮蔽）加上提供商目录以及运行时覆盖是否活跃：
-  `{type:"admin_config", provider:string, chat_model:string, base_url:string, api_key_masked:string, providers:string[], override_active:boolean}`
+- `admin_config` — 实时、显示安全的 LLM 配置（api_key 已遮蔽）加上提供商目录、运行时覆盖是否活跃，以及显示安全的图像生成状态：
+  `{type:"admin_config", provider:string, chat_model:string, base_url:string, api_key_masked:string, providers:string[], saved_providers:string[], override_active:boolean, imagegen?:ImageGenStatus}`
+- `admin_models` — 某 provider 的实时模型列表：
+  `{type:"admin_models", provider:string, models:string[], imagegen?:ImageGenStatus}`
+- `ImageGenStatus` — `{provider:string, base_url:string, model:string, size:string, api_key_masked:string, has_key:boolean, configured:boolean, saved_providers?:string[]}`。API key 永不以明文返回。
 - `admin_keys` — 房间密钥名单；每个条目的密钥值被遮蔽。一个 `mint` 请求额外在 `minted` 下返回新创建的密钥一次明文（以便 Keeper 可以复制）：
   `{type:"admin_keys", keys:[{id:string, key_masked:string, room:string, name:string, role:"player"|"keeper"}], minted?:{key:string, room:string, name:string, role:"player"|"keeper"}}`
 - `admin_room_op` — 导出/导入/完全删除房间操作的结果：

@@ -505,6 +505,11 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
         <box flexDirection="column" flexGrow={1} paddingX={2} paddingY={1}>
           {mode === "view" ? (
             <>
+              <box marginBottom={1}>
+                <text fg={stateFrame.character?.avatar ? theme.success : theme.dim}>
+                  {tt(locale, stateFrame.character?.avatar ? "character.avatar.set" : "character.avatar.unset")}
+                </text>
+              </box>
               {viewActions.map((action, index) => (
                 <box
                   key={action.label}

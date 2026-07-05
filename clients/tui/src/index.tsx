@@ -95,5 +95,6 @@ createRoot(renderer).render(
       }
       process.exit(0)
     }}
+    renderer={renderer}
   />,
 )

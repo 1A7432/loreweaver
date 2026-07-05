@@ -5,6 +5,7 @@ import {
   FrameType,
   stripControlChars,
   type AdminConfigFrame,
+  type ImageGenStatus,
   type ServerFrame,
   type StateFrame,
   type WelcomeFrame,
@@ -20,6 +21,7 @@ export interface KeeperModelClient {
   onMessage(cb: (frame: ServerFrame) => void): () => void
   adminGetConfig(): void
   adminSetModel(provider: string, chatModel?: string, apiKey?: string, baseUrl?: string): void
+  adminSetImagegen(provider: string, model: string, apiKey?: string, baseUrl?: string, size?: string): void
   adminListModels(provider?: string, apiKey?: string, baseUrl?: string): void
 }
 
@@ -33,8 +35,8 @@ export interface KeeperModelProps {
   onBack: () => void
 }
 
-type Field = "provider" | "apiKey" | "model" | "custom"
-const FIELD_ORDER: Field[] = ["provider", "apiKey", "model", "custom"]
+type Field = "provider" | "apiKey" | "model" | "custom" | "imageProvider" | "imageBaseUrl" | "imageModel" | "imageSize" | "imageApiKey"
+const FIELD_ORDER: Field[] = ["provider", "apiKey", "model", "custom", "imageProvider", "imageBaseUrl", "imageModel", "imageSize", "imageApiKey"]
 
 export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onBack }: KeeperModelProps) {
   const locale = welcome.locale
@@ -50,6 +52,12 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
   const [models, setModels] = useState<string[]>([])
   const [modelsLoading, setModelsLoading] = useState(false)
   const [savedProviders, setSavedProviders] = useState<string[]>([])
+  const [imagegen, setImagegen] = useState<ImageGenStatus>()
+  const [imageProvider, setImageProvider] = useState("")
+  const [imageBaseUrl, setImageBaseUrl] = useState("")
+  const [imageModel, setImageModel] = useState("")
+  const [imageSize, setImageSize] = useState("1024x1024")
+  const [imageApiKey, setImageApiKey] = useState("")
   const [focused, setFocused] = useState<Field>("provider")
 
   // Latest-value mirrors so submit reads what is on screen regardless of render timing.
@@ -57,9 +65,15 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
   const apiKeyRef = useRef(apiKey)
   const selectedModelRef = useRef(selectedModel)
   const customModelRef = useRef(customModel)
+  const imageProviderRef = useRef(imageProvider)
+  const imageBaseUrlRef = useRef(imageBaseUrl)
+  const imageModelRef = useRef(imageModel)
+  const imageSizeRef = useRef(imageSize)
+  const imageApiKeyRef = useRef(imageApiKey)
 
   const isKeeper = welcome.you.role === "keeper"
   const providerHasSavedKey = savedProviders.includes(provider)
+  const imageHasSavedKey = Boolean(imageProvider && imagegen?.saved_providers?.includes(imageProvider))
 
   // Ask the server for a provider's live /models (server resolves the key: the one passed here,
   // else the provider's saved credential, else the current live config). Blanks the list while
@@ -89,11 +103,24 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
         setApiKey("")
         apiKeyRef.current = ""
         setSavedProviders(frame.saved_providers ?? [])
+        setImagegen(frame.imagegen)
+        const img = frame.imagegen
+        setImageProvider(img?.provider ?? "")
+        imageProviderRef.current = img?.provider ?? ""
+        setImageBaseUrl(img?.base_url ?? "")
+        imageBaseUrlRef.current = img?.base_url ?? ""
+        setImageModel(img?.model ?? "")
+        imageModelRef.current = img?.model ?? ""
+        setImageSize(img?.size ?? "1024x1024")
+        imageSizeRef.current = img?.size ?? "1024x1024"
+        setImageApiKey("")
+        imageApiKeyRef.current = ""
         setError(undefined)
         setModels([])
         setModelsLoading(true)
         client.adminListModels(frame.provider)
       } else if (frame.type === FrameType.AdminModels) {
+        if (frame.imagegen) setImagegen(frame.imagegen)
         // Ignore a stale reply for a provider we've since switched away from.
         if (frame.provider === providerRef.current) {
           setModels(frame.models)
@@ -142,6 +169,19 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
     client.adminSetModel(providerValue, chatModel || undefined, apiKeyRef.current.trim() || undefined)
   }
 
+  const saveImagegen = () => {
+    const providerValue = imageProviderRef.current.trim()
+    const modelValue = imageModelRef.current.trim()
+    if (!providerValue || !modelValue) return
+    client.adminSetImagegen(
+      providerValue,
+      modelValue,
+      imageApiKeyRef.current.trim() || undefined,
+      imageBaseUrlRef.current.trim() || undefined,
+      imageSizeRef.current.trim() || undefined,
+    )
+  }
+
   // Scoped to this screen; Tab cycles fields, Esc goes back. Arrows are left to the focused
   // <select>; the text inputs submit on Enter.
   useKeyboard((event: KeyEvent) => {
@@ -181,28 +221,49 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
           ) : null}
 
           {error ? (
-            <box marginBottom={1} border borderColor={theme.fumble} paddingX={1}>
+            <box marginBottom={1} height={3} border borderColor={theme.fumble} paddingX={1}>
               <text fg={theme.fumble}>{stripControlChars(error)}</text>
             </box>
           ) : null}
 
-          <box flexDirection="column" border borderColor={theme.border} paddingX={1}>
-            <text fg={theme.accent}>{tt(locale, "model.current")}</text>
-            {config ? (
-              <>
-                <text fg={theme.fg}>Provider · {stripControlChars(config.provider)}</text>
-                <text fg={theme.fg}>Model · {stripControlChars(config.chat_model)}</text>
-                <text fg={theme.fg}>
-                  API Key · {config.api_key_masked ? stripControlChars(config.api_key_masked) : tt(locale, "model.notSet")}
-                </text>
-                <text fg={config.override_active ? theme.success : theme.dim}>
-                  {tt(locale, "model.override")} ·{" "}
-                  {config.override_active ? tt(locale, "model.overrideActive") : tt(locale, "model.overrideNone")}
-                </text>
-              </>
-            ) : (
-              <text fg={theme.dim}>{tt(locale, "model.loading")}</text>
-            )}
+          <box flexDirection="row" height={7}>
+            <box flexDirection="column" flexGrow={1} border borderColor={theme.border} paddingX={1}>
+              <text fg={theme.accent}>{tt(locale, "model.current")}</text>
+              {config ? (
+                <>
+                  <text fg={theme.fg}>Provider · {stripControlChars(config.provider)}</text>
+                  <text fg={theme.fg}>Model · {stripControlChars(config.chat_model)}</text>
+                  <text fg={theme.fg}>
+                    API Key · {config.api_key_masked ? stripControlChars(config.api_key_masked) : tt(locale, "model.notSet")}
+                  </text>
+                  <text fg={config.override_active ? theme.success : theme.dim}>
+                    {tt(locale, "model.override")} ·{" "}
+                    {config.override_active ? tt(locale, "model.overrideActive") : tt(locale, "model.overrideNone")}
+                  </text>
+                </>
+              ) : (
+                <text fg={theme.dim}>{tt(locale, "model.loading")}</text>
+              )}
+            </box>
+            <box flexDirection="column" flexGrow={1} border borderColor={theme.border} paddingX={1} marginLeft={1}>
+              <text fg={theme.accent}>{tt(locale, "imagegen.current")}</text>
+              {config?.imagegen ? (
+                <>
+                  <text fg={theme.fg}>Provider · {stripControlChars(config.imagegen.provider || tt(locale, "model.notSet"))}</text>
+                  <text fg={theme.fg}>Model · {stripControlChars(config.imagegen.model || tt(locale, "model.notSet"))}</text>
+                  <text fg={theme.fg}>
+                    API Key · {config.imagegen.has_key ? stripControlChars(config.imagegen.api_key_masked) : tt(locale, "model.notSet")}
+                  </text>
+                  <text fg={config.imagegen.configured ? theme.success : theme.dim}>
+                    {config.imagegen.configured ? tt(locale, "imagegen.configured") : tt(locale, "imagegen.notConfigured")}
+                  </text>
+                </>
+              ) : config ? (
+                <text fg={theme.dim}>{tt(locale, "imagegen.notConfigured")}</text>
+              ) : (
+                <text fg={theme.dim}>{tt(locale, "model.loading")}</text>
+              )}
+            </box>
           </box>
 
           <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} marginTop={1} width={64}>
@@ -312,6 +373,93 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
 
             <box marginTop={1}>
               <text fg={theme.dim}>{tt(locale, "model.help")}</text>
+            </box>
+          </box>
+
+          <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} marginTop={1} width={64}>
+            <text fg={theme.accent}>{tt(locale, "imagegen.title")}</text>
+            <text fg={theme.dim}>{tt(locale, "imagegen.intro")}</text>
+
+            <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("imageProvider")}>
+              <text fg={focused === "imageProvider" ? theme.accent : theme.dim}>{tt(locale, "imagegen.provider")}</text>
+              <input
+                flexGrow={1}
+                value={imageProvider}
+                focused={focused === "imageProvider"}
+                placeholder="openai"
+                onInput={(value: string) => {
+                  imageProviderRef.current = value
+                  setImageProvider(value)
+                }}
+                onSubmit={() => setFocused("imageBaseUrl")}
+              />
+            </box>
+
+            <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("imageBaseUrl")}>
+              <text fg={focused === "imageBaseUrl" ? theme.accent : theme.dim}>{tt(locale, "imagegen.baseUrl")}</text>
+              <input
+                flexGrow={1}
+                value={imageBaseUrl}
+                focused={focused === "imageBaseUrl"}
+                placeholder={tt(locale, "imagegen.baseUrlPlaceholder")}
+                onInput={(value: string) => {
+                  imageBaseUrlRef.current = value
+                  setImageBaseUrl(value)
+                }}
+                onSubmit={() => setFocused("imageModel")}
+              />
+            </box>
+
+            <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("imageModel")}>
+              <text fg={focused === "imageModel" ? theme.accent : theme.dim}>{tt(locale, "imagegen.model")}</text>
+              <input
+                flexGrow={1}
+                value={imageModel}
+                focused={focused === "imageModel"}
+                placeholder={tt(locale, "imagegen.modelPlaceholder")}
+                onInput={(value: string) => {
+                  imageModelRef.current = value
+                  setImageModel(value)
+                }}
+                onSubmit={() => setFocused("imageSize")}
+              />
+            </box>
+
+            <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("imageSize")}>
+              <text fg={focused === "imageSize" ? theme.accent : theme.dim}>{tt(locale, "imagegen.size")}</text>
+              <input
+                flexGrow={1}
+                value={imageSize}
+                focused={focused === "imageSize"}
+                placeholder="1024x1024"
+                onInput={(value: string) => {
+                  imageSizeRef.current = value
+                  setImageSize(value)
+                }}
+                onSubmit={() => setFocused("imageApiKey")}
+              />
+            </box>
+
+            <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("imageApiKey")}>
+              <box flexDirection="row">
+                <text fg={focused === "imageApiKey" ? theme.accent : theme.dim}>{tt(locale, "imagegen.apiKey")}</text>
+                {imageHasSavedKey ? <text fg={theme.success}>{"  " + tt(locale, "model.keySavedTag")}</text> : null}
+              </box>
+              <input
+                flexGrow={1}
+                value={imageApiKey}
+                focused={focused === "imageApiKey"}
+                placeholder={imageHasSavedKey ? tt(locale, "model.apiKeySaved") : tt(locale, "imagegen.apiKeyPlaceholder")}
+                onInput={(value: string) => {
+                  imageApiKeyRef.current = value
+                  setImageApiKey(value)
+                }}
+                onSubmit={saveImagegen}
+              />
+            </box>
+
+            <box marginTop={1} onMouseDown={saveImagegen} backgroundColor={theme.accent} paddingX={1}>
+              <text fg={theme.bg}>{tt(locale, "imagegen.save")}</text>
             </box>
           </box>
         </box>
