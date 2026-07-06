@@ -348,6 +348,14 @@ class CharacterTools:
             if character.name == "default" and name != "default":
                 return i18n.t("kp_tools.character.switch.not_found", name=name)
 
+            # Only sheets the CALLING user owns are switchable. Without this the AI KP,
+            # running in the acting player's ctx, can re-point that player's active sheet
+            # to a companion/NPC it wants to see act (observed in live play) — silently
+            # hijacking the player's character.
+            owned = await characters.list_characters(ctx.uid(), ctx.chat_key)
+            if not any(entry.get("name") == character.name for entry in owned):
+                return i18n.t("kp_tools.character.switch.not_found", name=name)
+
             await characters.set_active_character(ctx.uid(), ctx.chat_key, name)
             return i18n.t("kp_tools.character.switch.success", name=character.name, system=character.system)
         except Exception as exc:

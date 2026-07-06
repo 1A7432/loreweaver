@@ -30,7 +30,10 @@ export function statColor(value: number, max: number, full: string, low: string)
 export function CharacterPanel({ character, theme, locale }: CharacterPanelProps) {
   if (!character) {
     return (
-      <box flexDirection="column" border borderColor={theme.border} paddingX={1} height={5}>
+      // No fixed height here: the reconciler does not clear a removed `height` prop, so a
+      // box first rendered empty (menu mount, pre-state) would stay 5 rows tall forever and
+      // composite the full panel's 11 rows on top of each other once the state frame lands.
+      <box flexDirection="column" border borderColor={theme.border} paddingX={1} flexShrink={0}>
         <text fg={theme.accent}>CHARACTER</text>
         <text fg={theme.dim}>{tt(locale, "character.noCharacter")}</text>
       </box>
@@ -39,7 +42,9 @@ export function CharacterPanel({ character, theme, locale }: CharacterPanelProps
 
   const incapacitated = character.hp <= 0
   return (
-    <box flexDirection="column" border borderColor={theme.border} paddingX={1}>
+    // flexShrink=0: in a tight sidebar column yoga would otherwise squash this panel and
+    // composite its rows on top of each other (HP over SIZ, OK over INT, ...).
+    <box flexDirection="column" border borderColor={theme.border} paddingX={1} flexShrink={0}>
       <text fg={theme.accent}>
         CHARACTER {incapacitated ? "☠" : ""}
       </text>

@@ -46,6 +46,9 @@ export interface GameViewProps {
   // opens the game view, so without seeding here they'd be lost. Seeds the local
   // log ONCE on mount; live frames from here on are appended by `onMessage` below.
   initialFrames?: LogFrame[]
+  // The shell's last state/presence snapshot at mount time (see the seeding note below).
+  initialState?: StateFrame
+  initialPresence?: PresenceFrame
   // Threaded from the shell's `client.onStatus?.(...)` subscription (App.tsx); undefined when
   // the client doesn't implement `onStatus` — the HeaderBar then renders no indicator at all.
   connectionStatus?: ConnectionStatus
@@ -75,10 +78,25 @@ function hasCtrl(event: KeyEvent): boolean {
   return Boolean(event.ctrl)
 }
 
-export function GameView({ client, welcome, theme, themeName, initialFrames, connectionStatus, renderer }: GameViewProps) {
+export function GameView({
+  client,
+  welcome,
+  theme,
+  themeName,
+  initialFrames,
+  initialState,
+  initialPresence,
+  connectionStatus,
+  renderer,
+}: GameViewProps) {
   const locale = welcome.locale
-  const [presence, setPresence] = useState<PresenceFrame>()
-  const [stateFrame, setStateFrame] = useState<StateFrame>({ type: FrameType.State, party: [], initiative: [], online: 0 })
+  // Seed from the shell's last-seen frames: the server sends state/presence right after
+  // `join` (while the player is still on the menu), so without this the panels open on
+  // "empty party / no scene / 0 online" until the first turn completes.
+  const [presence, setPresence] = useState<PresenceFrame | undefined>(initialPresence)
+  const [stateFrame, setStateFrame] = useState<StateFrame>(
+    initialState ?? { type: FrameType.State, party: [], initiative: [], online: 0 },
+  )
   const [frames, setFrames] = useState<LogFrame[]>(() => initialFrames ?? [])
   const [command, setCommand] = useState("")
   const [history, setHistory] = useState<string[]>([])

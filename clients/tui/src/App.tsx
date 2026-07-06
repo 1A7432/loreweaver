@@ -292,6 +292,8 @@ export function App({
         theme={theme}
         themeName={themeName}
         initialFrames={frames}
+        initialState={stateFrame}
+        initialPresence={presence}
         connectionStatus={connectionStatus}
         renderer={renderer}
       />

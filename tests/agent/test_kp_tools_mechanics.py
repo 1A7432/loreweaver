@@ -188,6 +188,23 @@ async def test_list_switch_and_delete_characters():
     assert "Alice" in listed_after
 
 
+async def test_switch_character_refuses_sheets_the_caller_does_not_own():
+    """The AI KP runs in the acting player's ctx; switching that player's active sheet to a
+    character owned by ANOTHER user (a companion/NPC) silently hijacks the player's character
+    — observed in live play when the KP wanted a companion to act."""
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    await char_tools.create_character(ctx, name="Alice", system="coc7", auto_generate=False)
+
+    other = AgentCtx(chat_key=ctx.chat_key, user_id="companion:shenmo", platform=ctx.platform, locale=ctx.locale)
+    await char_tools.create_character(other, name="Shadow", system="coc7", auto_generate=False)
+
+    result = await char_tools.switch_character(ctx, name="Shadow")
+    active = await services.characters.get_character(ctx.user_id, ctx.chat_key)
+    assert active.name == "Alice"
+    assert "Shadow" not in result or "失败" in result or "not" in result.lower()
+
+
 async def test_update_character_status_persists_to_party_roster():
     services, ctx = _build()
     char_tools = CharacterTools(services)

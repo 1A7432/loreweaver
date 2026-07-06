@@ -16,7 +16,7 @@ function initiativeValue(member: PartyMember, initiative: InitiativeEntry[]): st
 
 export function PartyPanel({ party, initiative, theme, locale }: PartyPanelProps) {
   return (
-    <box flexDirection="column" border borderColor={theme.border} paddingX={1}>
+    <box flexDirection="column" border borderColor={theme.border} paddingX={1} flexShrink={0}>
       <text fg={theme.accent}>{tt(locale, "party.legacyTitle")}</text>
       {party.length === 0 ? (
         <text fg={theme.dim}>{tt(locale, "party.noRoster")}</text>
