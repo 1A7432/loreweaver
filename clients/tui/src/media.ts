@@ -219,7 +219,7 @@ function renderSvgPreview(bytes: Uint8Array, widthCells: number, heightCells: nu
   }
   for (const match of text.matchAll(/<text\b([^>]*)>([\s\S]*?)<\/text>/gi)) {
     const attrs = parseAttrs(match[1] ?? "")
-    const label = decodeXml(match[2] ?? "").replace(/<[^>]+>/g, "").trim()
+    const label = svgSimpleTextContent(match[2] ?? "")
     putText(grid, mapX(num(attrs.x), viewBox, width), mapY(num(attrs.y), viewBox, height), label)
   }
 
@@ -300,13 +300,28 @@ function setCell(grid: string[][], x: number, y: number, char: string): void {
   grid[y][x] = char
 }
 
-function decodeXml(value: string): string {
-  return value
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
+function svgSimpleTextContent(value: string): string {
+  if (value.includes("<") || value.includes(">")) return ""
+  return decodeSvgTextEntities(value).trim()
+}
+
+function decodeSvgTextEntities(value: string): string {
+  return value.replace(/&(lt|gt|amp|quot|apos);/g, (_, entity: string) => {
+    switch (entity) {
+      case "lt":
+        return "<"
+      case "gt":
+        return ">"
+      case "amp":
+        return "&"
+      case "quot":
+        return '"'
+      case "apos":
+        return "'"
+      default:
+        return `&${entity};`
+    }
+  })
 }
 
 function sampleRgb(image: RgbaImage, x: number, y: number, width: number, height: number): [number, number, number] {

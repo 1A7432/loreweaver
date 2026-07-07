@@ -45,6 +45,23 @@ describe("media preview", () => {
     expect(text).toContain("+")
   })
 
+  test("renders SVG text conservatively", async () => {
+    const svg = new TextEncoder().encode(`
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 60">
+        <text x="30" y="20">A &amp; B</text>
+        <text x="30" y="30"><tspan>Hidden</tspan></text>
+        <text x="30" y="40">&amp;lt;not-tag&amp;gt;</text>
+      </svg>
+    `)
+
+    const lines = await renderHalfBlockPreview(svg, "image/svg+xml", 60, 12)
+    const text = lines.map((line) => line.text).join("\n")
+
+    expect(text).toContain("A & B")
+    expect(text).not.toContain("Hidden")
+    expect(text).toContain("&lt;not-tag&gt;")
+  })
+
   test("caps adaptive half-block preview size", () => {
     expect(halfBlockPreviewSize(120, 80)).toEqual({ width: 56, height: 28 })
     expect(halfBlockPreviewSize(10, 4)).toEqual({ width: 16, height: 8 })

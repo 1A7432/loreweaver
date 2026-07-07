@@ -742,7 +742,7 @@ class CharacterManager:
             pass
 
         hash_input = f"{user_id}_{today}"
-        hash_value = int(hashlib.md5(hash_input.encode()).hexdigest()[:8], 16)  # noqa: S324
+        hash_value = int(hashlib.sha256(hash_input.encode()).hexdigest()[:8], 16)
         luck_value = (hash_value % 100) + 1  # 1-100
 
         await self.store.set(user_key=user_id, store_key=store_key, value=str(luck_value))
