@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 # replayed history can't grow unbounded across a long session.
 _HISTORY_CAP = 20
 
-# --- Structural dice-first enforcement -------------------------------------
+# --- Structural runtime enforcement ----------------------------------------
 # Iron rule #2 is "dice-first": a check rolls REAL dice, then narrates per the
 # success level. Play-testing showed a model routinely ignoring the prompt's
 # roll-first guidance -- telling the player to type ".ra X" and then narrating a
@@ -82,12 +82,19 @@ _HISTORY_CAP = 20
 # tool_choice="required" — see _run_dice_correction). Hard bound -- the phase
 # is also entered at most once per turn.
 _CORRECTIVE_MAX_ROUNDS = 2
+_STATE_CORRECTIVE_MAX_ROUNDS = 3
 
 # Tools that roll real dice. If any fired this turn the check WAS resolved for
 # real, so no correction is needed.
 _DICE_TOOL_NAMES = frozenset(
     {"skill_check", "sanity_check", "roll_dice", "opposed_check", "skill_growth", "wod_check"}
 )
+
+# Tools that update the deterministic HUD/world-state fields. A scene transition
+# narrated only in prose leaves the HUD reading stale `kp_notes` / `game_clock`
+# values, so a high-confidence self-drawn scene title triggers a bounded repair
+# pass unless one of these bookkeeping calls already fired this turn.
+_STATE_BOOKKEEPING_TOOL_NAMES = frozenset({"kp_note", "game_clock"})
 
 # Dot-/slash-prefixed dice commands (".ra Spot Hidden", ".sc 1/1d6", "/roll") are
 # unique to tabletop play; in a player-facing reply they mean the Keeper is
@@ -190,10 +197,64 @@ _PLAYER_SKILL_ZH_TERMS = (
     "心理学", "鉴定", "估价", "伪装", "乔装",
 )
 
+# High-confidence "self-drawn scene card" detector: short title-like lines with
+# a location/time separator and an explicit time marker, e.g.
+# "🌉 東京港·大井埠頭五号泊位 | 晚 10:15". Ordinary prose can mention places or
+# times freely; the separator + time marker shape is what flags "the model knew
+# this was a HUD transition but forgot to update deterministic state".
+_SCENE_TITLE_TIME_RE = re.compile(
+    r"(?:\b\d{1,2}[:：]\d{2}\b|\b\d{1,2}\s*(?:am|pm)\b|上午|下午|早上|清晨|凌晨|"
+    r"傍晚|黄昏|晚上|晚间|夜里|深夜|午夜|正午|morning|afternoon|evening|night|midnight|dawn|dusk|noon)",
+    re.IGNORECASE,
+)
+
 
 def _dice_rolled(tool_trace: list[dict]) -> bool:
     """True if any real dice-rolling tool fired during this turn."""
     return any(entry.get("name") in _DICE_TOOL_NAMES for entry in tool_trace)
+
+
+def _state_bookkeeping_done(tool_trace: list[dict]) -> bool:
+    """True if this turn updated both HUD-backed scene/focus and game-clock state."""
+    scene_updated = False
+    clock_updated = False
+    for entry in tool_trace:
+        name = entry.get("name")
+        if name not in _STATE_BOOKKEEPING_TOOL_NAMES:
+            continue
+        arguments = entry.get("arguments") or {}
+        if name == "kp_note" and arguments.get("action") == "set":
+            if arguments.get("category") in {"current_scene", "current_focus"}:
+                scene_updated = True
+        if name == "game_clock" and arguments.get("action") in {"set", "advance"}:
+            clock_updated = True
+    return scene_updated and clock_updated
+
+
+def _scene_title_lines(reply: str) -> list[str]:
+    """Return high-confidence self-drawn scene/time title lines from `reply`."""
+    lines: list[str] = []
+    for raw_line in (reply or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        while line.startswith("#"):
+            line = line[1:].lstrip()
+        if not (6 <= len(line) <= 140):
+            continue
+        if "|" not in line and "｜" not in line:
+            continue
+        if not _SCENE_TITLE_TIME_RE.search(line):
+            continue
+        left = re.split(r"[|｜]", line, maxsplit=1)[0].strip(" -:：[]【】")
+        if left:
+            lines.append(line)
+    return lines
+
+
+def _reply_draws_scene_title(reply: str) -> bool:
+    """Heuristic: does `reply` include a scene/time title that requires HUD bookkeeping?"""
+    return bool(_scene_title_lines(reply))
 
 
 def _reply_requests_or_resolves_check(reply: str) -> bool:
@@ -332,6 +393,8 @@ async def run_kp_turn(
     # `_dice_rolled` gate first so the detectors only run when it might matter;
     # skipped entirely on the max_rounds fallback (reply is still None) and after
     # a provider error (returned early above).
+    pre_correction_reply = reply
+
     if (
         reply is not None
         and not _dice_rolled(tool_trace)
@@ -345,6 +408,25 @@ async def run_kp_turn(
             tool_trace,
             reply,
             user_message,
+            i18n,
+            unlocked,
+            temperature=services.settings.llm.temperature,
+        )
+
+    # Scene/time HUD enforcement: a self-drawn scene title is a high-confidence
+    # sign that the Keeper changed scene/time in prose but skipped the
+    # deterministic bookkeeping tools. Run after dice correction but key off the
+    # original plain-text reply too, so a dice repair cannot hide a stale-HUD
+    # transition that was present in the first reply.
+    if pre_correction_reply is not None and _reply_draws_scene_title(pre_correction_reply) and not _state_bookkeeping_done(tool_trace):
+        reply = await _run_state_correction(
+            ctx,
+            services,
+            toolset,
+            messages,
+            tool_trace,
+            reply or pre_correction_reply,
+            pre_correction_reply,
             i18n,
             unlocked,
             temperature=services.settings.llm.temperature,
@@ -405,6 +487,19 @@ def _assistant_tool_call_message(result: ChatResult) -> dict:
             for call in result.tool_calls
         ],
     }
+
+
+def _schemas_for_tool_names(toolset: Toolset, unlocked: set[str] | None, names: frozenset[str]) -> list[dict]:
+    """Return schemas for the named tools that are available in this turn."""
+    schemas = []
+    for schema in toolset.schemas(unlocked):
+        try:
+            name = schema["function"]["name"]
+        except (KeyError, TypeError):
+            continue
+        if name in names:
+            schemas.append(schema)
+    return schemas
 
 
 async def _dispatch_and_record(
@@ -533,6 +628,73 @@ async def _run_dice_correction(
             # call: ceiling, keep the original reply.
             return prior_reply
         # Narration round: the model re-narrated per the freshly rolled dice.
+        reply = result.content or prior_reply
+        break
+    return reply
+
+
+async def _run_state_correction(
+    ctx: AgentCtx,
+    services: Services,
+    toolset: Toolset,
+    messages: list[dict],
+    tool_trace: list[dict],
+    prior_reply: str,
+    observed_reply: str,
+    i18n,
+    unlocked: set[str] | None = None,
+    *,
+    temperature: float | None,
+) -> str:
+    """One bounded repair pass for prose-only scene/time transitions.
+
+    The model sometimes draws a scene card in text ("Place | time") while
+    forgetting that the actual HUD reads deterministic `kp_notes` and
+    `game_clock` state. This mirrors the dice-first repair shape: force one tool
+    round, accept it only if it performs relevant bookkeeping, then allow one
+    normal narration round. Best-effort and non-fatal; failure keeps
+    `prior_reply`.
+    """
+    title_lines = _scene_title_lines(observed_reply)
+    title = title_lines[0] if title_lines else observed_reply[:160]
+    state_tools = _schemas_for_tool_names(toolset, unlocked, _STATE_BOOKKEEPING_TOOL_NAMES)
+    if not state_tools:
+        return prior_reply
+    convo = [
+        *messages,
+        {"role": "assistant", "content": prior_reply},
+        {"role": "user", "content": i18n.t("loop.state_correction", title=title)},
+    ]
+    reply = prior_reply
+    correction_start = len(tool_trace)
+    for _round_index in range(_STATE_CORRECTIVE_MAX_ROUNDS):
+        forced = not _state_bookkeeping_done(tool_trace[correction_start:])
+        try:
+            result = await services.llm.chat(
+                convo,
+                tools=state_tools,
+                tool_choice="required" if forced else "auto",
+                temperature=temperature,
+            )
+        except Exception:
+            if not forced:
+                logger.warning("state correction skipped: LLM chat failed", exc_info=True)
+                return prior_reply
+            try:
+                result = await services.llm.chat(
+                    convo,
+                    tools=state_tools,
+                    tool_choice="auto",
+                    temperature=temperature,
+                )
+            except Exception:
+                logger.warning("state correction skipped: LLM chat failed", exc_info=True)
+                return prior_reply
+        if result.tool_calls:
+            await _dispatch_and_record(toolset, ctx, result, convo, tool_trace, unlocked)
+            continue
+        if forced:
+            return prior_reply
         reply = result.content or prior_reply
         break
     return reply
