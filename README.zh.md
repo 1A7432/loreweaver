@@ -38,6 +38,12 @@ Windows(PowerShell):
 irm https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.ps1 | iex
 ```
 
+Windows 上请尽量用 **Windows Terminal** 或 **WezTerm** 跑 TUI。如果界面不像截图——
+边框错位、颜色不对、Unicode 字符异常、鼠标输入失灵——多半是终端模拟器问题。
+Windows 11 也可能因为启动方式或默认终端设置进到旧控制台。请安装/打开
+[Windows Terminal](https://github.com/microsoft/terminal#installing-and-running-windows-terminal)
+或 [WezTerm](https://wezterm.org/install/windows.html)，再在里面运行 `loreweaver`。
+
 装好之后：
 
 ```bash

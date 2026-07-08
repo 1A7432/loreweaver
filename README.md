@@ -38,6 +38,13 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.ps1 | iex
 ```
 
+On Windows, run the TUI in **Windows Terminal** or **WezTerm**. If the screen does not look
+like the screenshots — broken borders, wrong colors, bad Unicode, or mouse input not working —
+you are probably in the legacy console host. Windows 11 machines can still open the old console
+depending on how `cmd.exe` / PowerShell is launched or configured. Install/open
+[Windows Terminal](https://github.com/microsoft/terminal#installing-and-running-windows-terminal)
+or [WezTerm](https://wezterm.org/install/windows.html), then run `loreweaver` there.
+
 Once installed:
 
 ```bash
