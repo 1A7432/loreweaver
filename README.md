@@ -14,7 +14,7 @@ Ships with Call of Cthulhu 7e and D&D 5e (SRD), speaks English and Chinese, and 
 
 [![CI](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml/badge.svg)](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml) ![license](https://img.shields.io/badge/license-MIT-green) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![clients](https://img.shields.io/badge/clients-TypeScript%20%2F%20Bun-black)
 
-**Links:** [Project home](https://1a7432.site/trpg/) · [Command manual](https://1a7432.site/commands-en.html) · [GitHub](https://github.com/1A7432/loreweaver) · [Author home](https://1a7432.site/)
+**Links:** [Homepage](https://1a7432.site) · [Command manual](https://1a7432.site/commands-en.html) · [GitHub](https://github.com/1A7432/loreweaver)
 
 > **Honestly:** this project is young, built mostly by one person working with AI. The dice and rules core is the solid part, watched by a full offline test suite; the terminal client is comfortable now. Networked multiplayer and AI-GM reliability are still being polished — what works and what doesn't is spelled out in the [roadmap](docs/roadmap.md).
 

@@ -22,6 +22,12 @@ dependencies = [
     "iroh>=1.0",  # net/iroh_server p2p QUIC transport — the DEFAULT carrier (dial a ticket, not a domain)
 ]
 
+[project.urls]
+Homepage = "https://1a7432.site"
+Repository = "https://github.com/1A7432/loreweaver"
+Documentation = "https://1a7432.site/commands-en.html"
+Issues = "https://github.com/1A7432/loreweaver/issues"
+
 [project.optional-dependencies]
 # Platform SDKs are optional extras so the core + CLI install stays light.
 qq = ["qq-botpy>=1.2.1"]
