@@ -22,7 +22,6 @@ import { delimiter, dirname, join } from "node:path"
 import { defaultUserHome, resolveLocalServerPaths, type LocalServerPaths } from "./localPaths"
 
 const REPO = "https://github.com/1A7432/loreweaver"
-const TARBALL = `${REPO}/archive/refs/heads/main.tar.gz`
 const READY_TIMEOUT_MS = 60_000 // Iroh waits for a relay handshake, so allow longer than a local socket
 const TICKET_RE = /(endpoint[a-z0-9]{20,})/ // the base32 ticket, printed once the endpoint is online (locale-independent)
 
@@ -75,7 +74,14 @@ export function assetNameFor(platform: string, arch: string): string | undefined
 // Networks that can't fetch this fall through to the source tiers. Returned as a list so more
 // sources can be added later without touching the caller's loop.
 export function binaryUrlsFor(asset: string): string[] {
-  return [`${REPO}/releases/download/latest/${asset}`]
+  const tag = process.env.TRPG_SERVER_RELEASE_TAG?.trim() || process.env.TRPG_RELEASE_TAG?.trim() || "latest"
+  return [`${REPO}/releases/download/${encodeURIComponent(tag)}/${asset}`]
+}
+
+function sourceTarballUrl(): string {
+  const tag = process.env.TRPG_SERVER_RELEASE_TAG?.trim() || process.env.TRPG_RELEASE_TAG?.trim()
+  if (tag && tag !== "latest") return `${REPO}/archive/refs/tags/${encodeURIComponent(tag)}.tar.gz`
+  return `${REPO}/archive/refs/heads/main.tar.gz`
 }
 
 export type LogKind = "step" | "out" | "err" | "ok" | "fail"
@@ -152,7 +158,7 @@ async function run(cmd: string[], cwd: string | undefined, onLog: OnLog, signal?
 // half-finished download can never masquerade as a working server dir on the next run.
 async function fetchServerSource(ctx: HostLocalContext, onLog: OnLog, signal?: AbortSignal): Promise<string> {
   onLog("Downloading the server source (a few MB — no git needed)…", "step")
-  const response = await fetch(TARBALL, { signal })
+  const response = await fetch(sourceTarballUrl(), { signal })
   if (!response.ok) throw new Error(`download failed: HTTP ${response.status}`)
   const tarball = ctx.paths.sourceArchive
   const staging = `${ctx.paths.serverDir}.staging`

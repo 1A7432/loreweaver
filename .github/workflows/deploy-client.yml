@@ -1,12 +1,28 @@
 name: deploy-client
-# On every push to main that touches the clients, repackage the terminal-client
-# tarball + installers and publish them to the file server so `loreweaver update`
-# and the install mirror pick up the latest.
+# On every release-relevant push to main, repackage the terminal-client tarball +
+# installers, attach them to an immutable versioned GitHub Release, and refresh
+# the small 1a7432.site mirror so `loreweaver update` can still use a fast latest
+# path when the user has not pinned a release.
 on:
   push:
     branches: [main]
+    tags:
+      - "v*"
     paths:
+      - core/**
+      - infra/**
+      - agent/**
+      - gateway/**
+      - net/**
+      - app.py
+      - scripts/package_server.py
+      - loreweaver-server.spec
+      - pyproject.toml
+      - locales/**
+      - rulepacks/**
+      - skills/**
       - clients/**
+      - .github/workflows/release-server.yml
       - .github/workflows/deploy-client.yml
   workflow_dispatch:
 
@@ -18,28 +34,105 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # create/update the rolling 'latest' GitHub Release
+      contents: write   # create the versioned release + upload client assets
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
       - uses: oven-sh/setup-bun@v2
 
-      - name: Package terminal-client tarball
-        # Same layout the one-line installer expects: clients/{package.json,bun.lock,protocol,tui}.
-        run: tar czf loreweaver-client.tar.gz clients/package.json clients/bun.lock clients/protocol clients/tui
+      - name: Resolve Python package version
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check "setuptools-scm>=10.2.0"
+          version="$(python -m setuptools_scm)"
+          if stable_tag="$(git describe --tags --exact-match --match 'v[0-9]*' 2>/dev/null)"; then
+            tag="$stable_tag"
+            channel="stable"
+          else
+            tag="release-${version}"
+            channel="dev"
+          fi
+          {
+            echo "version=${version}"
+            echo "tag=${tag}"
+            echo "channel=${channel}"
+            echo "short=$(git rev-parse --short=7 HEAD)"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Publish to GitHub Release (rolling 'latest')
-        # The public, canonical distribution — the one-line installer defaults here.
+      - name: Package terminal-client tarball
+        # Same layout the one-line installer expects:
+        # clients/{package.json,bun.lock,release-version.json,protocol,tui}.
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist/client-build
+          mkdir -p dist/client-build/clients
+          cp clients/package.json clients/bun.lock dist/client-build/clients/
+          cp -R clients/protocol dist/client-build/clients/protocol
+          cp -R clients/tui dist/client-build/clients/tui
+          cp clients/install.sh dist/install.sh
+          cp clients/install.ps1 dist/install.ps1
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          tag = "${{ steps.release.outputs.tag }}"
+          version = "${{ steps.release.outputs.version }}"
+          Path("dist/client-build/clients/release-version.json").write_text(
+              json.dumps({"version": version, "tag": tag}, indent=2) + "\n"
+          )
+
+          replacements = [
+              (Path("dist/install.sh"), 'TRPG_EMBEDDED_RELEASE_TAG=""', f'TRPG_EMBEDDED_RELEASE_TAG="{tag}"'),
+              (Path("dist/install.sh"), 'TRPG_EMBEDDED_CLIENT_VERSION=""', f'TRPG_EMBEDDED_CLIENT_VERSION="{version}"'),
+              (Path("dist/install.ps1"), '$EmbeddedReleaseTag = ""', f'$EmbeddedReleaseTag = "{tag}"'),
+              (Path("dist/install.ps1"), '$EmbeddedClientVersion = ""', f'$EmbeddedClientVersion = "{version}"'),
+          ]
+          for path, old, new in replacements:
+              text = path.read_text()
+              if old not in text:
+                  raise SystemExit(f"release placeholder {old!r} not found in {path}")
+              path.write_text(text.replace(old, new, 1))
+          PY
+          tar czf dist/loreweaver-client.tar.gz -C dist/client-build clients/package.json clients/bun.lock clients/release-version.json clients/protocol clients/tui
+
+      - name: Publish to GitHub Release
+        # The public, canonical distribution. The normal install path follows GitHub's latest
+        # release; users can pin or roll back with TRPG_RELEASE_TAG=<release tag>.
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
+          set -euo pipefail
           R="${{ github.repository }}"
-          if gh release view latest --repo "$R" >/dev/null 2>&1; then
-            gh release upload latest loreweaver-client.tar.gz clients/install.sh clients/install.ps1 --repo "$R" --clobber
-          else
-            gh release create latest loreweaver-client.tar.gz clients/install.sh clients/install.ps1 \
-              --repo "$R" --title "Loreweaver client (rolling latest)" \
-              --notes "Rolling build of the terminal client from main. \`loreweaver update\` tracks this." --latest
+          TAG="${{ steps.release.outputs.tag }}"
+          VERSION="${{ steps.release.outputs.version }}"
+          CHANNEL="${{ steps.release.outputs.channel }}"
+          if ! gh release view "$TAG" --repo "$R" >/dev/null 2>&1; then
+            cat > release-notes.md <<EOF
+          Automated ${CHANNEL} release from commit $GITHUB_SHA.
+
+          Install the newest release:
+          - macOS/Linux: \`curl -fsSL https://github.com/$R/releases/latest/download/install.sh | bash\`
+          - Windows PowerShell: \`irm https://github.com/$R/releases/latest/download/install.ps1 | iex\`
+
+          Pin or roll back by setting \`TRPG_RELEASE_TAG=$TAG\` before running the installer.
+          EOF
+            gh release create "$TAG" \
+              --repo "$R" \
+              --target "$GITHUB_SHA" \
+              --title "Loreweaver ${VERSION}" \
+              --notes-file release-notes.md \
+              --latest \
+            || gh release view "$TAG" --repo "$R" >/dev/null
           fi
+          gh release upload "$TAG" dist/loreweaver-client.tar.gz dist/install.sh dist/install.ps1 --repo "$R" --clobber
 
       - name: Set up SSH
         run: |
@@ -53,7 +146,7 @@ jobs:
         # ubuntu-latest no longer ships rsync, so use scp.
         run: |
           T="${{ secrets.LW_SSH_TARGET }}"
-          scp loreweaver-client.tar.gz clients/install.sh clients/install.ps1 "$T:/var/www/1a7432.site/trpg/"
+          scp dist/loreweaver-client.tar.gz dist/install.sh dist/install.ps1 "$T:/var/www/1a7432.site/trpg/"
           ssh "$T" "chmod -R a+rX /var/www/1a7432.site/trpg"
           # The React web client was removed; take its old bundle offline (idempotent) so a
           # rebuilt server never re-serves a stale /play pointing at the retired WS entrypoint.

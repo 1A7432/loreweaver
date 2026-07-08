@@ -82,6 +82,29 @@ describe("WsClient", () => {
     })
   })
 
+  test("join includes client info when configured", async () => {
+    const sockets: MockWebSocket[] = []
+    const client = new WsClient({
+      reconnect: false,
+      clientInfo: { name: "loreweaver-tui", version: "0.5.1.dev2+gabcdef0" },
+      webSocketFactory: (url) => {
+        const socket = new MockWebSocket(url)
+        sockets.push(socket)
+        return socket
+      },
+    })
+
+    await client.connect("ws://example.test")
+    client.join("room-key", "Ada")
+
+    expect(JSON.parse(sockets[0].sent[0])).toEqual({
+      type: FrameType.Join,
+      key: "room-key",
+      name: "Ada",
+      client: { name: "loreweaver-tui", version: "0.5.1.dev2+gabcdef0" },
+    })
+  })
+
   test("incoming frames are parsed and dispatched by type", async () => {
     const { client, sockets } = createClient()
     const narrativeFrames: NarrativeFrame[] = []

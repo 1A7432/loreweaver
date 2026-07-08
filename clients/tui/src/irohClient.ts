@@ -14,6 +14,7 @@ import {
   type AdminSetModelFrame,
   type AdminUpdateKeyFrame,
   type ClientFrame,
+  type ClientInfo,
   type ConnectionStatus,
   type MediaFrame,
   type MediaPayload,
@@ -71,6 +72,7 @@ export interface IrohClientOptions {
   // Injected in tests to avoid loading the native `@number0/iroh` module at all; defaults to
   // the real dynamic import.
   loadIroh?: LoadIroh
+  clientInfo?: ClientInfo
   reconnect?: boolean
   reconnectBaseMs?: number
   reconnectMaxMs?: number
@@ -105,6 +107,7 @@ export class IrohClient implements AppClient {
   private readonly handlers = new Set<(frame: ServerFrame) => void>()
   private readonly statusHandlers = new Set<(status: ConnectionStatus) => void>()
   private readonly loadIroh: LoadIroh
+  private readonly clientInfo?: ClientInfo
   private readonly reconnect: boolean
   private readonly reconnectBaseMs: number
   private readonly reconnectMaxMs: number
@@ -113,6 +116,7 @@ export class IrohClient implements AppClient {
 
   constructor(options: IrohClientOptions = {}) {
     this.loadIroh = options.loadIroh ?? defaultLoadIroh
+    this.clientInfo = options.clientInfo
     this.reconnect = options.reconnect ?? true
     this.reconnectBaseMs = options.reconnectBaseMs ?? 250
     this.reconnectMaxMs = options.reconnectMaxMs ?? 5_000
@@ -244,7 +248,12 @@ export class IrohClient implements AppClient {
 
   join(key: string, name?: string): void {
     this.lastJoin = { key, name }
-    this.sendFrame(name ? { type: FrameType.Join, key, name } : { type: FrameType.Join, key })
+    this.sendFrame({
+      type: FrameType.Join,
+      key,
+      ...(name ? { name } : {}),
+      ...(this.clientInfo ? { client: this.clientInfo } : {}),
+    })
   }
 
   sendInput(text: string): void {

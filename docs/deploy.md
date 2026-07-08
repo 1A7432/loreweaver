@@ -74,6 +74,8 @@ All settings use the `TRPG_` env prefix with `__` for nesting (see
 | `TRPG_DATA_DIR` | store + keys directory (db → `<data_dir>/loreweaver.db`) | `./data` |
 | `TRPG_TUI_KEYS` | keystore file path (also overridable with `--keys`) | `./data/keys.toml` |
 | `TRPG_LOCAL_SERVER_HOME` | TUI one-click local hosting root: server binary/source cache, `.env`, data, keys, and ticket sidecars | `TRPG_HOME`, else `<user home>/.loreweaver` |
+| `TRPG_RELEASE_TAG` | Pin the installer/client and one-click server downloads to a versioned GitHub Release such as `release-0.5.1.dev29+g0cf542b` | latest release |
+| `TRPG_SERVER_RELEASE_TAG` | Pin only the one-click server binary/source download tag; the installer writes this automatically for release builds | `TRPG_RELEASE_TAG`, else latest release |
 | `TRPG_ENABLE_VECTOR_DB` | worldbook / document retrieval | `true` |
 | `TRPG_TUI__JOIN_TIMEOUT` | seconds an unauthenticated connection has to send `join` before being closed | `10` |
 | `TRPG_CENSOR__WORDLIST_PATH` | Content-moderation wordlist: a JSON file `{"word": level, ...}` (level `1`-`5`, see `gateway.ops.CensorLevel`). See [Content moderation](#content-moderation) | *(empty = moderation OFF)* |

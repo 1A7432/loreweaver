@@ -13,6 +13,7 @@ import {
   type AdminUpdateKeyFrame,
   type AvatarSetFrame,
   type ClientFrame,
+  type ClientInfo,
   type MediaAcceptFrame,
   type MediaFrame,
   type MediaOfferFrame,
@@ -49,6 +50,7 @@ export type StatusHandler = (status: ConnectionStatus) => void
 
 export interface WsClientOptions {
   webSocketFactory?: WebSocketFactory
+  clientInfo?: ClientInfo
   reconnect?: boolean
   reconnectBaseMs?: number
   reconnectMaxMs?: number
@@ -156,6 +158,7 @@ export class WsClient {
   private reconnectTimer?: ReturnType<typeof setTimeout>
   private lastJoin?: { key: string; name?: string }
   private readonly factory: WebSocketFactory
+  private readonly clientInfo?: ClientInfo
   private readonly reconnect: boolean
   private readonly reconnectBaseMs: number
   private readonly reconnectMaxMs: number
@@ -178,6 +181,7 @@ export class WsClient {
 
   constructor(options: WsClientOptions = {}) {
     this.factory = options.webSocketFactory ?? defaultWebSocketFactory
+    this.clientInfo = options.clientInfo
     this.reconnect = options.reconnect ?? true
     this.reconnectBaseMs = options.reconnectBaseMs ?? 250
     this.reconnectMaxMs = options.reconnectMaxMs ?? 5_000
@@ -236,7 +240,12 @@ export class WsClient {
 
   join(key: string, name?: string): void {
     this.lastJoin = { key, name }
-    const frame = name ? { type: FrameType.Join, key, name } : { type: FrameType.Join, key }
+    const frame = {
+      type: FrameType.Join,
+      key,
+      ...(name ? { name } : {}),
+      ...(this.clientInfo ? { client: this.clientInfo } : {}),
+    }
     this.send(frame)
   }
 

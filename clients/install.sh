@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Loreweaver terminal client — one-line installer (macOS / Linux).
 #
-#   curl -fsSL https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.sh | bash
+#   curl -fsSL https://github.com/1A7432/loreweaver/releases/latest/download/install.sh | bash
 #
 # It: (1) makes sure `bun` is on PATH (bun is both the runtime AND the package
 # manager that auto-resolves the right @opentui/core native core per platform),
@@ -10,21 +10,46 @@
 # mirror, (4) drops a `loreweaver` launcher. Nothing needs root.
 #
 # Force a source with TRPG_ORIGIN (e.g. TRPG_ORIGIN=https://1a7432.site/trpg to prefer the
-# China mirror and skip the GitHub attempt). Also: TRPG_HOME, TRPG_REGISTRY, TRPG_BIN,
+# China mirror and skip the GitHub attempt). Pin or roll back a GitHub release with
+# TRPG_RELEASE_TAG=release-... . Also: TRPG_HOME, TRPG_REGISTRY, TRPG_BIN,
 # TRPG_LOCAL_SERVER_HOME.
 set -euo pipefail
+
+TRPG_EMBEDDED_RELEASE_TAG=""
+TRPG_EMBEDDED_CLIENT_VERSION=""
+
+version_from_release_tag() {
+  case "$1" in
+    release-*) printf '%s' "${1#release-}" ;;
+    v[0-9]*) printf '%s' "${1#v}" ;;
+    *) printf '' ;;
+  esac
+}
 
 TRPG_HOME="${TRPG_HOME:-$HOME/.loreweaver}"
 TRPG_REGISTRY="${TRPG_REGISTRY:-https://registry.npmmirror.com}"
 TRPG_BIN="${TRPG_BIN:-$HOME/.local/bin}"
 TRPG_LOCAL_SERVER_HOME="${TRPG_LOCAL_SERVER_HOME:-$TRPG_HOME}"
+TRPG_PINNED_RELEASE_TAG="${TRPG_RELEASE_TAG:-}"
+TRPG_INSTALL_RELEASE_TAG="${TRPG_PINNED_RELEASE_TAG:-${TRPG_EMBEDDED_RELEASE_TAG:-latest}}"
+TRPG_DERIVED_RELEASE_VERSION="$(version_from_release_tag "$TRPG_INSTALL_RELEASE_TAG")"
+TRPG_CLIENT_VERSION="${TRPG_CLIENT_VERSION:-${TRPG_RELEASE_VERSION:-${TRPG_DERIVED_RELEASE_VERSION:-$TRPG_EMBEDDED_CLIENT_VERSION}}}"
+TRPG_SERVER_RELEASE_TAG="${TRPG_SERVER_RELEASE_TAG:-$TRPG_INSTALL_RELEASE_TAG}"
 
 # Distribution: default GitHub Release; TRPG_ORIGIN overrides the primary source. When the
 # primary is unreachable (e.g. GitHub from mainland China) we auto-fall-back to the mirror.
 MIRROR="https://1a7432.site/trpg"
 PRIMARY="${TRPG_ORIGIN:-}"                        # empty => GitHub
-tarball_of()   { [ -n "$1" ] && printf '%s/loreweaver-client.tar.gz' "$1" || printf 'https://github.com/1A7432/loreweaver/releases/latest/download/loreweaver-client.tar.gz'; }
-installer_of() { [ -n "$1" ] && printf '%s/install.sh' "$1" || printf 'https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.sh'; }
+tarball_of()   { [ -n "$1" ] && printf '%s/loreweaver-client.tar.gz' "$1" || printf 'https://github.com/1A7432/loreweaver/releases/download/%s/loreweaver-client.tar.gz' "$TRPG_INSTALL_RELEASE_TAG"; }
+installer_of() {
+  if [ -n "$1" ]; then
+    printf '%s/install.sh' "$1"
+  elif [ -n "$TRPG_PINNED_RELEASE_TAG" ]; then
+    printf 'https://github.com/1A7432/loreweaver/releases/download/%s/install.sh' "$TRPG_INSTALL_RELEASE_TAG"
+  else
+    printf 'https://github.com/1A7432/loreweaver/releases/latest/download/install.sh'
+  fi
+}
 desc_of()      { [ -n "$1" ] && printf '%s' "$1" || printf 'GitHub Release'; }
 
 say() { printf '\033[1;33m▸ %s\033[0m\n' "$*"; }
@@ -90,7 +115,15 @@ Q_TRPG_HOME="$(shell_quote "$TRPG_HOME")"
 Q_TRPG_BIN="$(shell_quote "$TRPG_BIN")"
 Q_TRPG_REGISTRY="$(shell_quote "$TRPG_REGISTRY")"
 Q_TRPG_LOCAL_SERVER_HOME="$(shell_quote "$TRPG_LOCAL_SERVER_HOME")"
+Q_TRPG_CLIENT_VERSION="$(shell_quote "$TRPG_CLIENT_VERSION")"
+Q_TRPG_SERVER_RELEASE_TAG="$(shell_quote "$TRPG_SERVER_RELEASE_TAG")"
+PINNED_RELEASE_EXPORT=""
 UPDATE_ENV="TRPG_HOME=$Q_TRPG_HOME TRPG_BIN=$Q_TRPG_BIN TRPG_REGISTRY=$Q_TRPG_REGISTRY TRPG_LOCAL_SERVER_HOME=$Q_TRPG_LOCAL_SERVER_HOME"
+if [ -n "$TRPG_PINNED_RELEASE_TAG" ]; then
+  Q_TRPG_PINNED_RELEASE_TAG="$(shell_quote "$TRPG_PINNED_RELEASE_TAG")"
+  PINNED_RELEASE_EXPORT="export TRPG_RELEASE_TAG=$Q_TRPG_PINNED_RELEASE_TAG"
+  UPDATE_ENV="$UPDATE_ENV TRPG_RELEASE_TAG=$Q_TRPG_PINNED_RELEASE_TAG"
+fi
 if [ -n "$USED" ]; then
   Q_USED="$(shell_quote "$USED")"
   UPDATE_ENV="$UPDATE_ENV TRPG_ORIGIN=$Q_USED"
@@ -100,6 +133,10 @@ cat > "$TRPG_BIN/loreweaver" <<EOF
 export TRPG_HOME=$Q_TRPG_HOME
 export TRPG_BIN=$Q_TRPG_BIN
 export TRPG_REGISTRY=$Q_TRPG_REGISTRY
+export TRPG_CLIENT_VERSION=$Q_TRPG_CLIENT_VERSION
+export TRPG_RELEASE_VERSION=$Q_TRPG_CLIENT_VERSION
+export TRPG_SERVER_RELEASE_TAG=$Q_TRPG_SERVER_RELEASE_TAG
+$PINNED_RELEASE_EXPORT
 if [ -z "\${TRPG_LOCAL_SERVER_HOME:-}" ]; then
   export TRPG_LOCAL_SERVER_HOME=$Q_TRPG_LOCAL_SERVER_HOME
 else

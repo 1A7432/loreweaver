@@ -62,6 +62,8 @@ journalctl -u loreweaver -f       # 跟日志——ticket + 守秘人 key 启动
 | `TRPG_DATA_DIR` | 存储 + 密钥目录（db → `<data_dir>/loreweaver.db`） | `./data` |
 | `TRPG_TUI_KEYS` | 密钥存储文件路径（也可用 `--keys` 覆盖） | `./data/keys.toml` |
 | `TRPG_LOCAL_SERVER_HOME` | TUI 一键本地开服根目录：服务器程序/源码缓存、`.env`、数据、钥匙和 ticket sidecar 都在这里 | `TRPG_HOME`，否则 `<用户目录>/.loreweaver` |
+| `TRPG_RELEASE_TAG` | 将安装器/客户端和一键开服下载固定到某个带版本的 GitHub Release，例如 `release-0.5.1.dev29+g0cf542b` | 最新 release |
+| `TRPG_SERVER_RELEASE_TAG` | 只固定一键开服下载服务器程序/源码的 release tag；正式 release 安装器会自动写入 | `TRPG_RELEASE_TAG`，否则最新 release |
 | `TRPG_ENABLE_VECTOR_DB` | 世界书 / 文档检索 | `true` |
 | `TRPG_TUI__JOIN_TIMEOUT` | 未经身份验证的连接在关闭前必须发送 `join` 的秒数 | `10` |
 | `TRPG_CENSOR__WORDLIST_PATH` | 内容审核词表：JSON 文件 `{"word": level, ...}`（等级 `1`-`5`，见 `gateway.ops.CensorLevel`）。见 [内容审核](#内容审核) | *（空 = 审核关闭）* |

@@ -9,6 +9,7 @@ import {
   type ServerFrame,
 } from "@loreweaver/protocol"
 import { IrohClient, isIrohTicket } from "./irohClient"
+import { clientInfo } from "./version"
 
 // The full client surface the TUI shell needs. This is the superset the web
 // client declares (`clients/web/src/ws.ts`): connect/join/sendInput/onMessage +
@@ -64,7 +65,8 @@ class TransportClient implements AppClient {
   private readonly statusHandlers = new Set<(status: ConnectionStatus) => void>()
 
   async connect(target: string): Promise<void> {
-    const inner = isIrohTicket(target) ? new IrohClient() : new WsClient()
+    const info = clientInfo()
+    const inner = isIrohTicket(target) ? new IrohClient({ clientInfo: info }) : new WsClient({ clientInfo: info })
     this.inner = inner
     inner.onMessage((frame) => {
       for (const handler of this.handlers) handler(frame)

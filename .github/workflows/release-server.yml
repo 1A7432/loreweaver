@@ -2,12 +2,14 @@ name: release-server
 # Builds + publishes self-contained, per-platform SERVER bundles (PyInstaller onedir via
 # scripts/package_server.py) so a target machine needs no Python/uv/git at all, and so the TUI's
 # "Host locally" flow (clients/tui/src/hostLocal.ts) can download one instead of building from
-# source. Mirrors deploy-client.yml's conventions: rolling 'latest' GitHub Release + scp mirror,
-# same secrets, same target path.
+# source. Server bundles are attached to the same immutable, versioned GitHub Release as the
+# client assets; the tiny 1a7432.site mirror is intentionally client-only.
 on:
   workflow_dispatch:
   push:
     branches: [main]
+    tags:
+      - "v*"
     paths:
       - core/**
       - infra/**
@@ -21,6 +23,8 @@ on:
       - locales/**
       - rulepacks/**
       - skills/**
+      - clients/**
+      - .github/workflows/deploy-client.yml
       - .github/workflows/release-server.yml
 
 concurrency:
@@ -81,7 +85,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: Publish (rolling 'latest')
+    name: Publish
     needs: build
     # No `if:` needed for all-or-nothing: `needs: build` already makes this job SKIP (not just
     # fail) when any matrix leg failed -- fail-fast is off so every leg still runs and reports,
@@ -89,13 +93,39 @@ jobs:
     # got left out, e.g. "Host locally" download failing on a fresh Windows/arm64 machine only).
     runs-on: ubuntu-latest
     permissions:
-      contents: write # create/update the rolling 'latest' GitHub Release
+      contents: write # create the versioned release + upload server assets
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
 
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
+
+      - name: Resolve Python package version
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check "setuptools-scm>=10.2.0"
+          version="$(python -m setuptools_scm)"
+          if stable_tag="$(git describe --tags --exact-match --match 'v[0-9]*' 2>/dev/null)"; then
+            tag="$stable_tag"
+            channel="stable"
+          else
+            tag="release-${version}"
+            channel="dev"
+          fi
+          {
+            echo "version=${version}"
+            echo "tag=${tag}"
+            echo "channel=${channel}"
+            echo "short=$(git rev-parse --short=7 HEAD)"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Flatten artifacts into dist/
         run: |
@@ -103,19 +133,37 @@ jobs:
           find artifacts -type f -exec cp {} dist/ \;
           ls -la dist/
 
-      - name: Publish to GitHub Release (rolling 'latest')
-        # The public, canonical distribution -- hostLocal.ts's binary download defaults here.
+      - name: Publish to GitHub Release
+        # The public, canonical distribution -- hostLocal.ts follows GitHub's latest release
+        # unless TRPG_RELEASE_TAG/TRPG_SERVER_RELEASE_TAG pins a specific release tag.
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
+          set -euo pipefail
           R="${{ github.repository }}"
-          if gh release view latest --repo "$R" >/dev/null 2>&1; then
-            gh release upload latest dist/loreweaver-server-* --repo "$R" --clobber
-          else
-            gh release create latest dist/loreweaver-server-* \
-              --repo "$R" --title "Loreweaver server (rolling latest)" \
-              --notes "Rolling self-contained server build from main -- no Python/uv needed." --latest
+          TAG="${{ steps.release.outputs.tag }}"
+          VERSION="${{ steps.release.outputs.version }}"
+          CHANNEL="${{ steps.release.outputs.channel }}"
+          if ! gh release view "$TAG" --repo "$R" >/dev/null 2>&1; then
+            cat > release-notes.md <<EOF
+          Automated ${CHANNEL} release from commit $GITHUB_SHA.
+
+          Install the newest release:
+          - macOS/Linux: \`curl -fsSL https://github.com/$R/releases/latest/download/install.sh | bash\`
+          - Windows PowerShell: \`irm https://github.com/$R/releases/latest/download/install.ps1 | iex\`
+
+          Pin or roll back by setting \`TRPG_RELEASE_TAG=$TAG\` before running the installer.
+          EOF
+            gh release create "$TAG" \
+              --repo "$R" \
+              --target "$GITHUB_SHA" \
+              --title "Loreweaver ${VERSION}" \
+              --notes-file release-notes.md \
+              --latest \
+            || gh release view "$TAG" --repo "$R" >/dev/null
           fi
+          gh release upload "$TAG" dist/loreweaver-server-* --repo "$R" --clobber
 
       # NO mirror step for server bundles — deliberately. The 1a7432.site mirror is a small
       # personal VPS on a thin pipe; it carries only the tiny installers + client tarball

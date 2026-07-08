@@ -1,27 +1,47 @@
 # Loreweaver terminal client — one-line installer (Windows / PowerShell).
 #
-#   irm https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.ps1 | iex
+#   irm https://github.com/1A7432/loreweaver/releases/latest/download/install.ps1 | iex
 #
 # Same idea as install.sh: ensure bun, pull the client tarball (GitHub Release by default,
 # AUTO-FALLING-BACK to the 1a7432.site mirror if GitHub is unreachable), `bun install`, drop
-# a `loreweaver` launcher. No admin. Force a source with $env:TRPG_ORIGIN.
+# a `loreweaver` launcher. No admin. Force a source with $env:TRPG_ORIGIN, or pin/roll
+# back a GitHub release with $env:TRPG_RELEASE_TAG.
 # Note: OpenTUI's terminal rendering is primarily tuned for Unix terminals; on
 # Windows use Windows Terminal, and treat this path as best-effort.
 #
-# Override via env: TRPG_ORIGIN, TRPG_HOME, TRPG_REGISTRY, TRPG_BIN, TRPG_LOCAL_SERVER_HOME.
+# Override via env: TRPG_ORIGIN, TRPG_RELEASE_TAG, TRPG_HOME, TRPG_REGISTRY, TRPG_BIN,
+# TRPG_LOCAL_SERVER_HOME.
 $ErrorActionPreference = "Stop"
+
+$EmbeddedReleaseTag = ""
+$EmbeddedClientVersion = ""
+
+function VersionFromReleaseTag($tag) {
+  if ($tag -like "release-*") { return $tag.Substring(8) }
+  if ($tag -match "^v[0-9]") { return $tag.Substring(1) }
+  return ""
+}
 
 $Home_    = if ($env:TRPG_HOME)     { $env:TRPG_HOME }     else { Join-Path $HOME ".loreweaver" }
 $Registry = if ($env:TRPG_REGISTRY) { $env:TRPG_REGISTRY } else { "https://registry.npmmirror.com" }
 $BinDir   = if ($env:TRPG_BIN)      { $env:TRPG_BIN }      else { Join-Path $HOME ".loreweaver\bin" }
 $LocalServerHome = if ($env:TRPG_LOCAL_SERVER_HOME) { $env:TRPG_LOCAL_SERVER_HOME } else { $Home_ }
+$PinnedReleaseTag = if ($env:TRPG_RELEASE_TAG) { $env:TRPG_RELEASE_TAG } else { "" }
+$InstallReleaseTag = if ($PinnedReleaseTag) { $PinnedReleaseTag } elseif ($EmbeddedReleaseTag) { $EmbeddedReleaseTag } else { "latest" }
+$DerivedReleaseVersion = VersionFromReleaseTag $InstallReleaseTag
+$ClientVersion = if ($env:TRPG_CLIENT_VERSION) { $env:TRPG_CLIENT_VERSION } elseif ($env:TRPG_RELEASE_VERSION) { $env:TRPG_RELEASE_VERSION } elseif ($DerivedReleaseVersion) { $DerivedReleaseVersion } else { $EmbeddedClientVersion }
+$ServerReleaseTag = if ($env:TRPG_SERVER_RELEASE_TAG) { $env:TRPG_SERVER_RELEASE_TAG } else { $InstallReleaseTag }
 
 # Distribution: default GitHub Release; TRPG_ORIGIN overrides the primary. Auto-fall-back to
 # the 1a7432.site mirror if the primary is unreachable (e.g. GitHub from mainland China).
 $Mirror  = "https://1a7432.site/trpg"
 $Primary = if ($env:TRPG_ORIGIN) { $env:TRPG_ORIGIN } else { "" }
-function TarballOf($o)   { if ($o) { "$o/loreweaver-client.tar.gz" } else { "https://github.com/1A7432/loreweaver/releases/latest/download/loreweaver-client.tar.gz" } }
-function InstallerOf($o) { if ($o) { "$o/install.ps1" } else { "https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.ps1" } }
+function TarballOf($o)   { if ($o) { "$o/loreweaver-client.tar.gz" } else { "https://github.com/1A7432/loreweaver/releases/download/$InstallReleaseTag/loreweaver-client.tar.gz" } }
+function InstallerOf($o) {
+  if ($o) { return "$o/install.ps1" }
+  if ($PinnedReleaseTag) { return "https://github.com/1A7432/loreweaver/releases/download/$InstallReleaseTag/install.ps1" }
+  return "https://github.com/1A7432/loreweaver/releases/latest/download/install.ps1"
+}
 function DescOf($o)      { if ($o) { $o } else { "GitHub Release" } }
 
 function Say([string]$m) { Write-Host "▸ $m" -ForegroundColor Yellow }
@@ -71,8 +91,11 @@ New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 $entry = (Join-Path $Home_ "clients\tui\src\index.tsx")
 $updInstaller = InstallerOf $Used   # re-update from whichever source actually worked
 $updatePrefix = "`$env:TRPG_HOME=$(PsQuote $Home_); `$env:TRPG_BIN=$(PsQuote $BinDir); `$env:TRPG_REGISTRY=$(PsQuote $Registry); if (-not `$env:TRPG_LOCAL_SERVER_HOME) { `$env:TRPG_LOCAL_SERVER_HOME=$(PsQuote $LocalServerHome) }; "
+if ($PinnedReleaseTag) { $updatePrefix += "`$env:TRPG_RELEASE_TAG=$(PsQuote $PinnedReleaseTag); " }
 $updateInner = if ($Used) { "$updatePrefix`$env:TRPG_ORIGIN=$(PsQuote $Used); irm $updInstaller | iex" } else { "$updatePrefix irm $updInstaller | iex" }
-$cmd = "@echo off`r`nset `"TRPG_HOME=$Home_`"`r`nset `"TRPG_BIN=$BinDir`"`r`nset `"TRPG_REGISTRY=$Registry`"`r`nif not defined TRPG_LOCAL_SERVER_HOME set `"TRPG_LOCAL_SERVER_HOME=$LocalServerHome`"`r`nif /I `"%1`"==`"update`" ( powershell -NoProfile -Command `"$updateInner`" & exit /b )`r`nbun run `"$entry`" %*"
+$cmd = "@echo off`r`nset `"TRPG_HOME=$Home_`"`r`nset `"TRPG_BIN=$BinDir`"`r`nset `"TRPG_REGISTRY=$Registry`"`r`nset `"TRPG_CLIENT_VERSION=$ClientVersion`"`r`nset `"TRPG_RELEASE_VERSION=$ClientVersion`"`r`nset `"TRPG_SERVER_RELEASE_TAG=$ServerReleaseTag`"`r`nif not defined TRPG_LOCAL_SERVER_HOME set `"TRPG_LOCAL_SERVER_HOME=$LocalServerHome`"`r`n"
+if ($PinnedReleaseTag) { $cmd += "if not defined TRPG_RELEASE_TAG set `"TRPG_RELEASE_TAG=$PinnedReleaseTag`"`r`n" }
+$cmd += "if /I `"%1`"==`"update`" ( powershell -NoProfile -Command `"$updateInner`" & exit /b )`r`nbun run `"$entry`" %*"
 Set-Content -Path (Join-Path $BinDir "loreweaver.cmd") -Value $cmd
 
 Write-Host ""

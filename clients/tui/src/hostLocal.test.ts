@@ -26,6 +26,23 @@ describe("hostLocal — binary acquisition mapping (pure helpers only; no proces
     ])
   })
 
+  test("binaryUrlsFor can pin a versioned release tag", () => {
+    const oldRelease = process.env.TRPG_RELEASE_TAG
+    const oldServerRelease = process.env.TRPG_SERVER_RELEASE_TAG
+    process.env.TRPG_RELEASE_TAG = "release-0.5.1.dev29+g0cf542b"
+    delete process.env.TRPG_SERVER_RELEASE_TAG
+    try {
+      expect(binaryUrlsFor("loreweaver-server-linux-x64.tar.gz")).toEqual([
+        "https://github.com/1A7432/loreweaver/releases/download/release-0.5.1.dev29%2Bg0cf542b/loreweaver-server-linux-x64.tar.gz",
+      ])
+    } finally {
+      if (oldRelease === undefined) delete process.env.TRPG_RELEASE_TAG
+      else process.env.TRPG_RELEASE_TAG = oldRelease
+      if (oldServerRelease === undefined) delete process.env.TRPG_SERVER_RELEASE_TAG
+      else process.env.TRPG_SERVER_RELEASE_TAG = oldServerRelease
+    }
+  })
+
   test("binaryUrlsFor threads the asset name through unchanged for every platform", () => {
     for (const asset of [
       "loreweaver-server-macos-arm64.tar.gz",

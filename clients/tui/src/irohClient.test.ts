@@ -115,6 +115,27 @@ describe("IrohClient reconnect", () => {
     expect(JSON.parse(sent[1])).toEqual({ type: FrameType.Join, key: "room-key", name: "Ada" })
   })
 
+  test("join includes client info when configured", async () => {
+    const { loadIroh, sent } = createMockIroh()
+    const client = new IrohClient({
+      loadIroh,
+      clientInfo: { name: "loreweaver-tui", version: "0.5.1.dev2+gabcdef0" },
+      reconnectBaseMs: 5,
+      reconnectMaxMs: 20,
+    })
+
+    await client.connect("endpointaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    client.join("room-key", "Ada")
+    await settle(0)
+
+    expect(JSON.parse(sent[0])).toEqual({
+      type: FrameType.Join,
+      key: "room-key",
+      name: "Ada",
+      client: { name: "loreweaver-tui", version: "0.5.1.dev2+gabcdef0" },
+    })
+  })
+
   test("close() is manual — a late stream end after close() does not redial", async () => {
     const { loadIroh, streams } = createMockIroh()
     const client = new IrohClient({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20 })

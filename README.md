@@ -29,13 +29,13 @@ It downloads the server build for your OS (self-contained — **no Python, no en
 Installing the client is one line. macOS / Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.sh | bash
+curl -fsSL https://github.com/1A7432/loreweaver/releases/latest/download/install.sh | bash
 ```
 
 Windows (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.ps1 | iex
+irm https://github.com/1A7432/loreweaver/releases/latest/download/install.ps1 | iex
 ```
 
 To keep the client and one-click server state out of your user profile, set the folders before
@@ -45,7 +45,7 @@ before clicking **Host locally & play**:
 ```powershell
 $env:TRPG_HOME="D:\Loreweaver"
 $env:TRPG_LOCAL_SERVER_HOME="D:\Loreweaver\server-state"
-irm https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.ps1 | iex
+irm https://github.com/1A7432/loreweaver/releases/latest/download/install.ps1 | iex
 ```
 
 For one-click hosting, put the server `.env` in the selected local server folder; data, keys, the
@@ -65,7 +65,9 @@ loreweaver          # start it, click the button
 loreweaver update   # upgrading is one line too
 ```
 
-The server builds are also yours to take and run long-term on a machine of your own: [GitHub Releases](https://github.com/1A7432/loreweaver/releases/tag/latest) has `loreweaver-server-*` for Windows / macOS / Linux (x64 + arm64) — unzip and run, with a `--doctor` self-check built in.
+Need a known older build? Pick a tag from [GitHub Releases](https://github.com/1A7432/loreweaver/releases), then run the installer with `TRPG_RELEASE_TAG=release-...`; the client tarball and one-click local server binary will both come from that same release.
+
+The server builds are also yours to take and run long-term on a machine of your own: [GitHub Releases](https://github.com/1A7432/loreweaver/releases) has `loreweaver-server-*` for Windows / macOS / Linux (x64 + arm64) — unzip and run, with a `--doctor` self-check built in.
 
 ## Bringing your friends in
 

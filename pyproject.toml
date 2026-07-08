@@ -56,9 +56,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools_scm]
 # Auto, git-derived versioning: the version increases with every commit; milestone
-# versions come from `v*` tags. The repo also carries a rolling `latest` release tag
-# (release-server.yml's GitHub Release marker) that is NOT a version — `--match` on
-# the describe command excludes it so it can never poison the derivation.
+# versions come from `v*` tags. Automated GitHub Releases use `release-*` tags that are
+# NOT source-version tags — `--match` on the describe command excludes them so they can
+# never poison the derivation.
 git_describe_command = "git describe --dirty --tags --long --match v[0-9]*"
 # The one-click host's source-tarball install tier has no `.git` dir at all (a plain
 # GitHub tarball checkout) — `uv sync`/`pip install` there must not explode.
