@@ -162,7 +162,7 @@ if (SCREEN === "game") {
   root.render(
     <ConnectScreen
       theme={theme}
-      defaults={{}}
+      defaults={{ localServerHome: ZH ? "D:\\Loreweaver\\server-state" : "~/.loreweaver" }}
       connecting={false}
       locale={LOCALE}
       savedServers={savedServers}

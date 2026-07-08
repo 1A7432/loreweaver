@@ -7,7 +7,9 @@ works with no environment configured at all, which keeps tests hermetic.
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
+from typing import Any
 
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -104,6 +106,10 @@ class Settings(BaseSettings):
     tui: TuiSettings = TuiSettings()
     censor: CensorSettings = CensorSettings()
     # platform sub-settings (qq/telegram/discord/feishu) added in M3
+
+    def __init__(self, **values: Any) -> None:
+        env_file = values.pop("_env_file", os.environ.get("TRPG_ENV_FILE") or ".env")
+        super().__init__(_env_file=env_file, **values)
 
     model_config = SettingsConfigDict(
         env_prefix="TRPG_",

@@ -14,12 +14,21 @@ describe("connectMemory", () => {
     const dir = await mkdtemp(join(tmpdir(), "loreweaver-tui-"))
     const path = join(dir, "nested", "connect.json")
 
-    await saveConnectMemory({ host: " ws://127.0.0.1:8787 ", key: " keeper-key ", name: " 漱雪 " }, path)
+    await saveConnectMemory(
+      {
+        host: " ws://127.0.0.1:8787 ",
+        key: " keeper-key ",
+        name: " 漱雪 ",
+        localServerHome: " /srv/loreweaver-local ",
+      },
+      path,
+    )
 
     expect(await loadConnectMemory(path)).toEqual({
       host: "ws://127.0.0.1:8787",
       key: "keeper-key",
       name: "漱雪",
+      localServerHome: "/srv/loreweaver-local",
       servers: [],
     })
   })

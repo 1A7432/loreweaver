@@ -19,16 +19,33 @@
 import { existsSync } from "node:fs"
 import { chmod, mkdir, rename, rm } from "node:fs/promises"
 import { delimiter, dirname, join } from "node:path"
+import { defaultUserHome, resolveLocalServerPaths, type LocalServerPaths } from "./localPaths"
 
-const HOME = process.env.HOME ?? process.env.USERPROFILE ?? "."
-const SERVER_DIR = `${HOME}/.loreweaver/server`
-const BINARY_DIR = `${HOME}/.loreweaver/server-bin`
-const LOCAL_KEYS = `${HOME}/.loreweaver/local-keys.toml`
-const LOCAL_SIDECAR = `${HOME}/.loreweaver/keeper-key.txt`
 const REPO = "https://github.com/1A7432/loreweaver"
 const TARBALL = `${REPO}/archive/refs/heads/main.tar.gz`
 const READY_TIMEOUT_MS = 60_000 // Iroh waits for a relay handshake, so allow longer than a local socket
 const TICKET_RE = /(endpoint[a-z0-9]{20,})/ // the base32 ticket, printed once the endpoint is online (locale-independent)
+
+export interface HostLocalOptions {
+  localServerHome?: string
+}
+
+interface HostLocalContext {
+  paths: LocalServerPaths
+}
+
+function makeContext(options: HostLocalOptions = {}): HostLocalContext {
+  return { paths: resolveLocalServerPaths(options.localServerHome) }
+}
+
+function serverEnv(paths: LocalServerPaths): Record<string, string> {
+  const env = { ...(process.env as Record<string, string>) }
+  env.TRPG_LOCAL_SERVER_HOME = paths.home
+  env.TRPG_DATA_DIR = paths.dataDir
+  env.TRPG_ENV_FILE = paths.envFile
+  env.TRPG_TUI_KEYS = paths.keysFile
+  return env
+}
 
 // The packaged server archive's top-level folder + executable name (see scripts/package_server.py).
 const BINARY_EXE_NAME = process.platform === "win32" ? "loreweaver-server.exe" : "loreweaver-server"
@@ -133,12 +150,12 @@ async function run(cmd: string[], cwd: string | undefined, onLog: OnLog, signal?
 // Fetch the server source WITHOUT git: download the branch tarball and unpack it with the
 // system `tar`. Extraction goes to a staging dir that is atomically renamed into place, so a
 // half-finished download can never masquerade as a working server dir on the next run.
-async function fetchServerSource(onLog: OnLog, signal?: AbortSignal): Promise<string> {
+async function fetchServerSource(ctx: HostLocalContext, onLog: OnLog, signal?: AbortSignal): Promise<string> {
   onLog("Downloading the server source (a few MB — no git needed)…", "step")
   const response = await fetch(TARBALL, { signal })
   if (!response.ok) throw new Error(`download failed: HTTP ${response.status}`)
-  const tarball = join(HOME, ".loreweaver", "server-src.tar.gz")
-  const staging = `${SERVER_DIR}.staging`
+  const tarball = ctx.paths.sourceArchive
+  const staging = `${ctx.paths.serverDir}.staging`
   await mkdir(dirname(tarball), { recursive: true })
   await Bun.write(tarball, response)
   await rm(staging, { recursive: true, force: true })
@@ -148,16 +165,16 @@ async function fetchServerSource(onLog: OnLog, signal?: AbortSignal): Promise<st
     throw new Error("extracting the server source failed")
   }
   await rm(tarball, { force: true })
-  await rm(SERVER_DIR, { recursive: true, force: true })
-  await rename(staging, SERVER_DIR)
-  return SERVER_DIR
+  await rm(ctx.paths.serverDir, { recursive: true, force: true })
+  await rename(staging, ctx.paths.serverDir)
+  return ctx.paths.serverDir
 }
 
 // Download a prebuilt server binary for this OS/arch (see the pinned contract in
 // scripts/package_server.py) and unpack it with the system `tar`. Same staging + atomic-rename
 // pattern as fetchServerSource. Returns undefined (not an error) when no binary is published for
 // this platform, so the caller falls through to the source tier without treating it as a failure.
-async function fetchServerBinary(onLog: OnLog, signal?: AbortSignal): Promise<string | undefined> {
+async function fetchServerBinary(ctx: HostLocalContext, onLog: OnLog, signal?: AbortSignal): Promise<string | undefined> {
   const asset = assetNameFor(process.platform, process.arch)
   if (!asset) {
     onLog(`No prebuilt server binary for ${process.platform}/${process.arch} — falling back to source`, "step")
@@ -181,21 +198,21 @@ async function fetchServerBinary(onLog: OnLog, signal?: AbortSignal): Promise<st
   }
   if (!response) throw new Error(`binary download failed (${lastError})`)
 
-  const archive = join(HOME, ".loreweaver", asset)
-  const staging = `${BINARY_DIR}.staging`
+  const archive = join(ctx.paths.home, asset)
+  const staging = `${ctx.paths.binaryDir}.staging`
   await mkdir(dirname(archive), { recursive: true })
   await Bun.write(archive, response)
   await rm(staging, { recursive: true, force: true })
   await mkdir(staging, { recursive: true })
   // No --strip-components here: unlike the source tarball, the release asset's top-level
-  // `loreweaver-server/` folder IS the layout we want at BINARY_DIR.
+  // `loreweaver-server/` folder IS the layout we want under the binary cache dir.
   if ((await run(["tar", "-xf", archive, "-C", staging], undefined, onLog, signal)) !== 0) {
     throw new Error("extracting the server binary failed")
   }
   await rm(archive, { force: true })
-  await rm(BINARY_DIR, { recursive: true, force: true })
-  await rename(staging, BINARY_DIR)
-  const exe = binaryExePath(BINARY_DIR)
+  await rm(ctx.paths.binaryDir, { recursive: true, force: true })
+  await rename(staging, ctx.paths.binaryDir)
+  const exe = binaryExePath(ctx.paths.binaryDir)
   if (process.platform !== "win32") {
     try {
       await chmod(exe, 0o755)
@@ -206,22 +223,22 @@ async function fetchServerBinary(onLog: OnLog, signal?: AbortSignal): Promise<st
   return exe
 }
 
-async function ensureServerDir(onLog: OnLog, signal?: AbortSignal): Promise<string> {
+async function ensureServerDir(ctx: HostLocalContext, onLog: OnLog, signal?: AbortSignal): Promise<string> {
   const checkout = findCheckout()
   if (checkout) {
     onLog(`Found a checkout at ${checkout}`, "ok")
     return checkout
   }
-  if (existsSync(join(SERVER_DIR, "app.py"))) {
-    onLog(`Using the server fetched earlier at ${SERVER_DIR}`, "ok")
-    return SERVER_DIR
+  if (existsSync(join(ctx.paths.serverDir, "app.py"))) {
+    onLog(`Using the server fetched earlier at ${ctx.paths.serverDir}`, "ok")
+    return ctx.paths.serverDir
   }
   onLog("No server on this machine — fetching the code…", "step")
   // Tarball FIRST: it works on a fresh machine with no git, and macOS's git shim would pop a
   // GUI "install developer tools?" dialog mid-bring-up. git is only the fallback for networks
   // where the tarball endpoint is blocked but git happens to get through.
   try {
-    return await fetchServerSource(onLog, signal)
+    return await fetchServerSource(ctx, onLog, signal)
   } catch (error) {
     if (signal?.aborted) throw error instanceof Error ? error : new Error("cancelled")
     const detail = error instanceof Error ? error.message : String(error)
@@ -229,10 +246,10 @@ async function ensureServerDir(onLog: OnLog, signal?: AbortSignal): Promise<stri
     if (!Bun.which("git")) {
       throw new Error("could not download the server source (and git isn't installed as a fallback) — check your network and retry")
     }
-    if ((await run(["git", "clone", "--depth", "1", REPO, SERVER_DIR], undefined, onLog, signal)) !== 0) {
+    if ((await run(["git", "clone", "--depth", "1", REPO, ctx.paths.serverDir], undefined, onLog, signal)) !== 0) {
       throw new Error("git clone failed — check your network (GitHub reachable?)")
     }
-    return SERVER_DIR
+    return ctx.paths.serverDir
   }
 }
 
@@ -242,24 +259,24 @@ type ServerLocation = { kind: "source"; dir: string } | { kind: "binary"; exe: s
 // fetched earlier > download a binary > (fall back to) fetch source. Only the last step can fail
 // outright — everything before it is "use what's already here", and the binary-download step
 // degrades to the source tier instead of throwing when unsupported or unreachable.
-async function resolveServer(onLog: OnLog, signal?: AbortSignal): Promise<ServerLocation> {
+async function resolveServer(ctx: HostLocalContext, onLog: OnLog, signal?: AbortSignal): Promise<ServerLocation> {
   const checkout = findCheckout()
   if (checkout) {
     onLog(`Found a checkout at ${checkout}`, "ok")
     return { kind: "source", dir: checkout }
   }
-  const existingExe = binaryExePath(BINARY_DIR)
+  const existingExe = binaryExePath(ctx.paths.binaryDir)
   if (existsSync(existingExe)) {
     onLog(`Using the prebuilt server fetched earlier at ${existingExe}`, "ok")
     return { kind: "binary", exe: existingExe }
   }
-  if (existsSync(join(SERVER_DIR, "app.py"))) {
-    onLog(`Using the server fetched earlier at ${SERVER_DIR}`, "ok")
-    return { kind: "source", dir: SERVER_DIR }
+  if (existsSync(join(ctx.paths.serverDir, "app.py"))) {
+    onLog(`Using the server fetched earlier at ${ctx.paths.serverDir}`, "ok")
+    return { kind: "source", dir: ctx.paths.serverDir }
   }
   onLog("No server on this machine — fetching it…", "step")
   try {
-    const exe = await fetchServerBinary(onLog, signal)
+    const exe = await fetchServerBinary(ctx, onLog, signal)
     if (exe) {
       onLog("Prebuilt server downloaded", "ok")
       return { kind: "binary", exe }
@@ -269,10 +286,10 @@ async function resolveServer(onLog: OnLog, signal?: AbortSignal): Promise<Server
     const detail = error instanceof Error ? error.message : String(error)
     onLog(`Prebuilt binary download didn't work (${detail}) — falling back to source…`, "err")
   }
-  return { kind: "source", dir: await ensureServerDir(onLog, signal) }
+  return { kind: "source", dir: await ensureServerDir(ctx, onLog, signal) }
 }
 
-async function ensureUv(onLog: OnLog, signal?: AbortSignal): Promise<void> {
+async function ensureUv(ctx: HostLocalContext, onLog: OnLog, signal?: AbortSignal): Promise<void> {
   if (Bun.which("uv")) {
     onLog("uv is already installed", "ok")
     return
@@ -286,7 +303,7 @@ async function ensureUv(onLog: OnLog, signal?: AbortSignal): Promise<void> {
     // ship without curl, and this path must work on a factory-fresh machine.
     const response = await fetch("https://astral.sh/uv/install.sh", { signal })
     if (!response.ok) throw new Error(`uv installer download failed: HTTP ${response.status}`)
-    const script = join(HOME, ".loreweaver", "uv-install.sh")
+    const script = ctx.paths.uvInstallScript
     await mkdir(dirname(script), { recursive: true })
     await Bun.write(script, response)
     const code = await run(["sh", script], undefined, onLog, signal)
@@ -295,19 +312,21 @@ async function ensureUv(onLog: OnLog, signal?: AbortSignal): Promise<void> {
   }
   // uv drops its binary in one of these; prepend both to PATH so the steps that follow can find it.
   // `delimiter` is `;` on Windows, `:` elsewhere — a hardcoded `:` would break the Windows lookup.
-  const uvDirs = [join(HOME, ".local", "bin"), join(HOME, ".cargo", "bin")]
+  const home = defaultUserHome()
+  const uvDirs = [join(home, ".local", "bin"), join(home, ".cargo", "bin")]
   process.env.PATH = [...uvDirs, process.env.PATH ?? ""].join(delimiter)
 }
 
-async function readSidecarKey(): Promise<string> {
+async function readSidecarKey(paths: LocalServerPaths): Promise<string> {
   try {
-    return (await Bun.file(LOCAL_SIDECAR).text()).match(/key=([A-Za-z0-9_-]{16,})/)?.[1] ?? ""
+    return (await Bun.file(paths.keeperSidecar).text()).match(/key=([A-Za-z0-9_-]{16,})/)?.[1] ?? ""
   } catch {
     return ""
   }
 }
 
 async function waitReady(
+  paths: LocalServerPaths,
   proc: Bun.Subprocess,
   onLog: OnLog,
   signal?: AbortSignal,
@@ -340,7 +359,7 @@ async function waitReady(
       // locale-independent: the ticket is base32, the keeper key comes from the sidecar file.
       const match = all.match(TICKET_RE)
       if (match) {
-        const key = await readSidecarKey()
+        const key = await readSidecarKey(paths)
         if (key) return { ticket: match[1], key }
       }
     }
@@ -358,7 +377,12 @@ async function waitReady(
 
 // Shared tail for both run modes: spawn is already done by the caller, this just wires up the
 // abort-kills-the-child plumbing, streams stdout, and waits for the readiness ticket.
-async function runProcAndWait(proc: Bun.Subprocess, onLog: OnLog, signal?: AbortSignal): Promise<HostHandle> {
+async function runProcAndWait(
+  paths: LocalServerPaths,
+  proc: Bun.Subprocess,
+  onLog: OnLog,
+  signal?: AbortSignal,
+): Promise<HostHandle> {
   const stop = () => {
     try {
       proc.kill()
@@ -370,7 +394,7 @@ async function runProcAndWait(proc: Bun.Subprocess, onLog: OnLog, signal?: Abort
   signal?.addEventListener("abort", stop, { once: true })
   void pipeLines(proc.stdout, (l) => onLog(l, "out"))
   try {
-    const { ticket, key } = await waitReady(proc, onLog, signal)
+    const { ticket, key } = await waitReady(paths, proc, onLog, signal)
     onLog("Server ready — dialing you in as Keeper over p2p", "ok")
     return { host: ticket, key, stop }
   } catch (error) {
@@ -382,8 +406,8 @@ async function runProcAndWait(proc: Bun.Subprocess, onLog: OnLog, signal?: Abort
 }
 
 // Today's path: ensure uv, `uv sync` the checkout/fetched source, then run it from Python.
-async function runSource(serverDir: string, onLog: OnLog, signal?: AbortSignal): Promise<HostHandle> {
-  await ensureUv(onLog, signal)
+async function runSource(ctx: HostLocalContext, serverDir: string, onLog: OnLog, signal?: AbortSignal): Promise<HostHandle> {
+  await ensureUv(ctx, onLog, signal)
   if (signal?.aborted) throw new Error("cancelled")
 
   onLog("Installing Python + dependencies (uv sync) — this can take a minute the first time…", "step")
@@ -393,45 +417,46 @@ async function runSource(serverDir: string, onLog: OnLog, signal?: AbortSignal):
 
   onLog("Starting the local p2p server (Iroh) — waiting for a relay, ~10s…", "step")
   const proc = Bun.spawn(
-    ["uv", "run", "python", "-m", "app", "--serve", "--keys", LOCAL_KEYS],
-    { cwd: serverDir, stdout: "pipe", stderr: "pipe", env: process.env as Record<string, string> },
+    ["uv", "run", "python", "-m", "app", "--serve", "--keys", ctx.paths.keysFile],
+    { cwd: serverDir, stdout: "pipe", stderr: "pipe", env: serverEnv(ctx.paths) },
   )
-  return runProcAndWait(proc, onLog, signal)
+  return runProcAndWait(ctx.paths, proc, onLog, signal)
 }
 
 // The binary path: no uv, no Python interpreter to find — just run the packaged executable
 // directly. It prints the same readiness banner (ticket + sidecar key) as `python -m app --serve`.
-async function runBinary(exe: string, onLog: OnLog, signal?: AbortSignal): Promise<HostHandle> {
+async function runBinary(ctx: HostLocalContext, exe: string, onLog: OnLog, signal?: AbortSignal): Promise<HostHandle> {
   onLog("Starting the local p2p server (prebuilt binary) — waiting for a relay, ~10s…", "step")
-  const proc = Bun.spawn([exe, "--serve", "--keys", LOCAL_KEYS], {
+  const proc = Bun.spawn([exe, "--serve", "--keys", ctx.paths.keysFile], {
     cwd: dirname(exe),
     stdout: "pipe",
     stderr: "pipe",
-    env: process.env as Record<string, string>,
+    env: serverEnv(ctx.paths),
   })
-  return runProcAndWait(proc, onLog, signal)
+  return runProcAndWait(ctx.paths, proc, onLog, signal)
 }
 
-export async function bringUpServer(onLog: OnLog, signal?: AbortSignal): Promise<HostHandle> {
+export async function bringUpServer(onLog: OnLog, signal?: AbortSignal, options: HostLocalOptions = {}): Promise<HostHandle> {
   const bailIfAborted = () => {
     if (signal?.aborted) throw new Error("cancelled")
   }
   bailIfAborted()
+  const ctx = makeContext(options)
   onLog(`OS: ${process.platform} / ${process.arch}`, "step")
-  const location = await resolveServer(onLog, signal)
+  const location = await resolveServer(ctx, onLog, signal)
   bailIfAborted()
 
-  if (location.kind === "source") return runSource(location.dir, onLog, signal)
+  if (location.kind === "source") return runSource(ctx, location.dir, onLog, signal)
 
   try {
-    return await runBinary(location.exe, onLog, signal)
+    return await runBinary(ctx, location.exe, onLog, signal)
   } catch (error) {
     // Never loop back to the binary: one fallback to the source tier, then give up for real.
     if (signal?.aborted) throw error instanceof Error ? error : new Error("cancelled")
     const detail = error instanceof Error ? error.message : String(error)
     onLog(`Prebuilt server didn't start (${detail}) — falling back to source…`, "err")
-    const serverDir = await ensureServerDir(onLog, signal)
+    const serverDir = await ensureServerDir(ctx, onLog, signal)
     bailIfAborted()
-    return runSource(serverDir, onLog, signal)
+    return runSource(ctx, serverDir, onLog, signal)
   }
 }

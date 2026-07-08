@@ -38,6 +38,19 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.ps1 | iex
 ```
 
+To keep the client and one-click server state out of your user profile, set the folders before
+installing. The connect screen also shows the current local server folder and lets you edit it
+before clicking **Host locally & play**:
+
+```powershell
+$env:TRPG_HOME="D:\Loreweaver"
+$env:TRPG_LOCAL_SERVER_HOME="D:\Loreweaver\server-state"
+irm https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.ps1 | iex
+```
+
+For one-click hosting, put the server `.env` in the selected local server folder; data, keys, the
+ticket, and the server binary/source cache live there too.
+
 On Windows, run the TUI in **Windows Terminal** or **WezTerm**. If the screen does not look
 like the screenshots — broken borders, wrong colors, bad Unicode, or mouse input not working —
 you are probably in the legacy console host. Windows 11 machines can still open the old console

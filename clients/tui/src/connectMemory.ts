@@ -1,5 +1,6 @@
 import { chmod, mkdir } from "node:fs/promises"
 import { dirname } from "node:path"
+import { resolveConnectMemoryPath } from "./localPaths"
 
 // One remembered connection: a server address (ws:// URL or Iroh ticket) + its invite key.
 export interface SavedServer {
@@ -13,6 +14,7 @@ export interface ConnectMemory {
   key?: string
   name?: string
   locale?: "en" | "zh"
+  localServerHome?: string
   // Past successful connections, most-recent first — the connect screen offers them to pick.
   servers?: SavedServer[]
 }
@@ -23,7 +25,7 @@ function cleanLocale(value: unknown): "en" | "zh" | undefined {
   return value === "en" || value === "zh" ? value : undefined
 }
 
-const MEMORY_PATH = `${process.env.HOME ?? "."}/.loreweaver/tui-connect.json`
+const MEMORY_PATH = resolveConnectMemoryPath()
 
 function clean(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
@@ -67,6 +69,7 @@ export async function loadConnectMemory(path = MEMORY_PATH): Promise<ConnectMemo
       key: clean((parsed as ConnectMemory).key),
       name: clean((parsed as ConnectMemory).name),
       locale: cleanLocale((parsed as ConnectMemory).locale),
+      localServerHome: clean((parsed as ConnectMemory).localServerHome),
       servers: cleanServers((parsed as ConnectMemory).servers),
     }
   } catch {
@@ -80,6 +83,7 @@ export async function saveConnectMemory(memory: ConnectMemory, path = MEMORY_PAT
     key: clean(memory.key),
     name: clean(memory.name),
     locale: cleanLocale(memory.locale),
+    localServerHome: clean(memory.localServerHome),
     servers: cleanServers(memory.servers),
   }
   await mkdir(dirname(path), { recursive: true })

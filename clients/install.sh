@@ -10,12 +10,14 @@
 # mirror, (4) drops a `loreweaver` launcher. Nothing needs root.
 #
 # Force a source with TRPG_ORIGIN (e.g. TRPG_ORIGIN=https://1a7432.site/trpg to prefer the
-# China mirror and skip the GitHub attempt). Also: TRPG_HOME, TRPG_REGISTRY, TRPG_BIN.
+# China mirror and skip the GitHub attempt). Also: TRPG_HOME, TRPG_REGISTRY, TRPG_BIN,
+# TRPG_LOCAL_SERVER_HOME.
 set -euo pipefail
 
 TRPG_HOME="${TRPG_HOME:-$HOME/.loreweaver}"
 TRPG_REGISTRY="${TRPG_REGISTRY:-https://registry.npmmirror.com}"
 TRPG_BIN="${TRPG_BIN:-$HOME/.local/bin}"
+TRPG_LOCAL_SERVER_HOME="${TRPG_LOCAL_SERVER_HOME:-$TRPG_HOME}"
 
 # Distribution: default GitHub Release; TRPG_ORIGIN overrides the primary source. When the
 # primary is unreachable (e.g. GitHub from mainland China) we auto-fall-back to the mirror.
@@ -27,6 +29,7 @@ desc_of()      { [ -n "$1" ] && printf '%s' "$1" || printf 'GitHub Release'; }
 
 say() { printf '\033[1;33m▸ %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
+shell_quote() { printf '%q' "$1"; }
 
 # curl OR wget — fresh Linux images often ship only one of them.
 if command -v curl >/dev/null 2>&1; then
@@ -83,11 +86,28 @@ printf 'registry=%s\n' "$TRPG_REGISTRY" > "$TRPG_HOME/clients/.npmrc"
 #    this installer to fetch + reinstall the latest client; anything else launches the TUI.
 mkdir -p "$TRPG_BIN"
 UPDATE_INSTALLER="$(installer_of "$USED")"   # re-update from whichever source actually worked
+Q_TRPG_HOME="$(shell_quote "$TRPG_HOME")"
+Q_TRPG_BIN="$(shell_quote "$TRPG_BIN")"
+Q_TRPG_REGISTRY="$(shell_quote "$TRPG_REGISTRY")"
+Q_TRPG_LOCAL_SERVER_HOME="$(shell_quote "$TRPG_LOCAL_SERVER_HOME")"
+UPDATE_ENV="TRPG_HOME=$Q_TRPG_HOME TRPG_BIN=$Q_TRPG_BIN TRPG_REGISTRY=$Q_TRPG_REGISTRY TRPG_LOCAL_SERVER_HOME=$Q_TRPG_LOCAL_SERVER_HOME"
+if [ -n "$USED" ]; then
+  Q_USED="$(shell_quote "$USED")"
+  UPDATE_ENV="$UPDATE_ENV TRPG_ORIGIN=$Q_USED"
+fi
 cat > "$TRPG_BIN/loreweaver" <<EOF
 #!/usr/bin/env bash
+export TRPG_HOME=$Q_TRPG_HOME
+export TRPG_BIN=$Q_TRPG_BIN
+export TRPG_REGISTRY=$Q_TRPG_REGISTRY
+if [ -z "\${TRPG_LOCAL_SERVER_HOME:-}" ]; then
+  export TRPG_LOCAL_SERVER_HOME=$Q_TRPG_LOCAL_SERVER_HOME
+else
+  export TRPG_LOCAL_SERVER_HOME
+fi
 if [ "\$1" = "update" ]; then
   echo "updating Loreweaver…"
-  exec env ${USED:+TRPG_ORIGIN='$USED'} bash -c "(command -v curl >/dev/null 2>&1 && curl -fsSL '${UPDATE_INSTALLER}' || wget -qO- '${UPDATE_INSTALLER}') | bash"
+  exec env $UPDATE_ENV bash -c "(command -v curl >/dev/null 2>&1 && curl -fsSL '${UPDATE_INSTALLER}' || wget -qO- '${UPDATE_INSTALLER}') | bash"
 fi
 exec bun run "$TRPG_HOME/clients/tui/src/index.tsx" "\$@"
 EOF
@@ -96,6 +116,7 @@ chmod +x "$TRPG_BIN/loreweaver"
 echo
 say "installed ✓"
 echo "  Launcher: $TRPG_BIN/loreweaver"
+echo "  Local server folder: $TRPG_LOCAL_SERVER_HOME"
 case ":$PATH:" in
   *":$TRPG_BIN:"*) echo "  Run:      loreweaver          (update later with: loreweaver update)" ;;
   *) echo "  '$TRPG_BIN' is not on your PATH yet. Either add it, or run the full path:"

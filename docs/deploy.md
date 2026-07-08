@@ -58,7 +58,9 @@ journalctl -u loreweaver -f       # follow logs — the ticket + keeper key prin
 ## Configuration
 
 All settings use the `TRPG_` env prefix with `__` for nesting (see
-`.env.example` / `infra/config.py`), loaded from `.env` in the working directory.
+`.env.example` / `infra/config.py`), loaded from `.env` in the working directory unless
+`TRPG_ENV_FILE` points at a different file. The TUI's one-click local host path sets
+`TRPG_ENV_FILE=<local server folder>/.env` automatically.
 
 | Variable | Purpose | Default |
 |---|---|---|
@@ -68,8 +70,10 @@ All settings use the `TRPG_` env prefix with `__` for nesting (see
 | `TRPG_LLM__CHAT_MODEL` | chat model id | `gpt-4o` |
 | `TRPG_LLM__EMBEDDING_MODEL` / `TRPG_LLM__EMBEDDING_DIM` | retrieval embeddings | `text-embedding-3-small` / `1536` |
 | `TRPG_LOCALE` | UI language `en` / `zh` | `en` |
+| `TRPG_ENV_FILE` | explicit `.env` file to load before starting the server | `.env` in the working directory |
 | `TRPG_DATA_DIR` | store + keys directory (db → `<data_dir>/loreweaver.db`) | `./data` |
 | `TRPG_TUI_KEYS` | keystore file path (also overridable with `--keys`) | `./data/keys.toml` |
+| `TRPG_LOCAL_SERVER_HOME` | TUI one-click local hosting root: server binary/source cache, `.env`, data, keys, and ticket sidecars | `TRPG_HOME`, else `<user home>/.loreweaver` |
 | `TRPG_ENABLE_VECTOR_DB` | worldbook / document retrieval | `true` |
 | `TRPG_TUI__JOIN_TIMEOUT` | seconds an unauthenticated connection has to send `join` before being closed | `10` |
 | `TRPG_CENSOR__WORDLIST_PATH` | Content-moderation wordlist: a JSON file `{"word": level, ...}` (level `1`-`5`, see `gateway.ops.CensorLevel`). See [Content moderation](#content-moderation) | *(empty = moderation OFF)* |

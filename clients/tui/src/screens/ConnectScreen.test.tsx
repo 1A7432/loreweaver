@@ -132,3 +132,32 @@ describe("ConnectScreen quit", () => {
     act(() => renderer.destroy())
   })
 })
+
+describe("ConnectScreen local server folder", () => {
+  test("renders the current one-click server folder and persists edits", async () => {
+    const changed: string[] = []
+    const { renderer, flush, waitForFrame, mockInput, mockMouse } = await renderConnect({
+      defaults: { localServerHome: "/tmp/loreweaver-local" },
+      onHostLocal: () => {},
+      onLocalServerHomeChange: (path) => changed.push(path),
+    })
+    await flush()
+
+    const frame = await waitForFrame((t) => t.includes("Local server folder"))
+    expect(frame).toContain("/tmp/loreweaver-local")
+    const lines = frame.split("\n")
+    const rowY = lines.findIndex((line) => line.includes("/tmp/loreweaver-local"))
+    const rowX = lines[rowY].indexOf("/tmp/loreweaver-local")
+    expect(rowY).toBeGreaterThan(0)
+    expect(rowX).toBeGreaterThan(0)
+
+    await act(async () => {
+      await mockMouse.click(rowX + "/tmp/loreweaver-local".length, rowY)
+      await mockInput.typeText("-2")
+    })
+    await flush()
+
+    expect(changed.at(-1)).toBe("/tmp/loreweaver-local-2")
+    act(() => renderer.destroy())
+  })
+})

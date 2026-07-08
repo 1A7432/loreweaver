@@ -27,6 +27,7 @@ import { MainMenu } from "./screens/MainMenu"
 import { HostLocalScreen } from "./screens/HostLocalScreen"
 import { SettingsScreen } from "./screens/SettingsScreen"
 import { defaultTuiLocale, normalizeLocale, tt, type TuiLocale } from "./i18n"
+import { defaultLocalServerHome } from "./localPaths"
 import { DEFAULT_THEME, themeOrder, themes, type ThemeName } from "./themes"
 
 export type { AppClient } from "./client"
@@ -38,6 +39,7 @@ export interface AppPrefill {
   key?: string
   name?: string
   locale?: TuiLocale
+  localServerHome?: string
   servers?: SavedServer[]
 }
 
@@ -45,9 +47,11 @@ export interface AppProps {
   // Injected in tests; defaults to a real WsClient (Bun's global WebSocket).
   client?: AppClient
   prefill?: AppPrefill
-  onRememberConnect?: (memory: Required<AppPrefill>) => void
+  onRememberConnect?: (memory: AppPrefill) => void
   // Persist a language choice made on the connect screen (before any welcome).
   onLocaleChange?: (locale: TuiLocale) => void
+  // Persist the one-click local server install/state directory.
+  onLocalServerHomeChange?: (path: string) => void
   // Persist a saved-server deletion (index.tsx loads memory, applies forgetServer, re-saves).
   onForgetConnect?: (entry: SavedServer) => void
   // Restore the terminal (renderer.destroy) and exit the process. Falls back to a no-op so
@@ -82,13 +86,14 @@ export function App({
   prefill,
   onRememberConnect,
   onLocaleChange,
+  onLocalServerHomeChange,
   onForgetConnect,
   onQuit,
   renderer,
 }: AppProps) {
   const client = useMemo(() => injected ?? createClient(), [injected])
   const audioController = useMemo(() => new AudioController(), [])
-  const pendingConnect = useRef<Required<AppPrefill> | undefined>(undefined)
+  const pendingConnect = useRef<AppPrefill | undefined>(undefined)
   // An explicit language pick (the connect-screen toggle, or a remembered one) wins over
   // the server's room locale, so the client UI stays in the language the user chose.
   const localePinned = useRef(Boolean(prefill?.locale))
@@ -98,6 +103,7 @@ export function App({
   const [themeName, setThemeName] = useState<ThemeName>(DEFAULT_THEME)
   const theme = themes[themeName]
   const [locale, setLocale] = useState<TuiLocale>(() => prefill?.locale ?? defaultTuiLocale())
+  const [localServerHome, setLocalServerHome] = useState(() => prefill?.localServerHome ?? defaultLocalServerHome())
   const [screen, setScreen] = useState<Screen>("connect")
   const [welcome, setWelcome] = useState<WelcomeFrame>()
   // Held in local state (not read straight from `prefill`) so a delete updates the connect
@@ -195,7 +201,7 @@ export function App({
     }
     setError(undefined)
     setConnecting(true)
-    pendingConnect.current = { host: url, key, name: name || tt(locale, "connect.defaultName"), locale }
+    pendingConnect.current = { host: url, key, name: name || tt(locale, "connect.defaultName"), locale, localServerHome }
     try {
       await client.connect(url)
       client.join(key, name || undefined)
@@ -238,6 +244,11 @@ export function App({
     onLocaleChange?.(next)
   }
 
+  const handleLocalServerHomeChange = (next: string) => {
+    setLocalServerHome(next)
+    onLocalServerHomeChange?.(next)
+  }
+
   // A saved-server delete (Part C): update the connect screen's list immediately, and persist
   // it via the index.tsx-supplied callback (load memory, apply forgetServer, re-save).
   const handleForgetServer = (entry: SavedServer) => {
@@ -250,9 +261,9 @@ export function App({
   // keep redialing), then hand off to the caller (index.tsx restores the terminal and exits).
   const handleQuit = () => {
     localServer.current?.stop()
-      client.close?.()
-      audioController.stopAll()
-      onQuit?.()
+    client.close?.()
+    audioController.stopAll()
+    onQuit?.()
   }
 
   if (screen === "host_local") {
@@ -260,6 +271,7 @@ export function App({
       <HostLocalScreen
         theme={theme}
         locale={locale}
+        localServerHome={localServerHome}
         onReady={(host, key, stop) => {
           localServer.current = { host, key, stop }
           void handleConnect(host, key, tt(locale, "menu.role.keeper"))
@@ -404,12 +416,13 @@ export function App({
   return (
     <ConnectScreen
       theme={theme}
-      defaults={{ host: prefill?.host, key: prefill?.key, name: prefill?.name }}
+      defaults={{ host: prefill?.host, key: prefill?.key, name: prefill?.name, localServerHome }}
       savedServers={savedServers}
       connecting={connecting}
       error={error}
       locale={locale}
       onLocaleChange={handleLocaleChange}
+      onLocalServerHomeChange={handleLocalServerHomeChange}
       onHostLocal={handleHostLocal}
       onSubmit={handleConnect}
       onForgetServer={handleForgetServer}

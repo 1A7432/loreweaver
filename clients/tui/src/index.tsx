@@ -54,6 +54,7 @@ const prefill: AppPrefill = {
   key: args.key ?? remembered.key,
   name: args.name ?? remembered.name,
   locale: remembered.locale,
+  localServerHome: remembered.localServerHome,
   servers: remembered.servers,
 }
 
@@ -68,6 +69,7 @@ createRoot(renderer).render(
     onRememberConnect={(memory) => {
       // Persist as "last used" AND float this server to the top of the saved list, so the
       // connect screen remembers every server/key you've joined (deduped by host+key).
+      if (!memory.host || !memory.key) return
       void loadConnectMemory().then((m) =>
         saveConnectMemory({
           ...m,
@@ -80,6 +82,9 @@ createRoot(renderer).render(
       // Persist a language pick made before connecting, merging with the saved file
       // so a later connect still overwrites host/key/name correctly.
       void loadConnectMemory().then((m) => saveConnectMemory({ ...m, locale }))
+    }}
+    onLocalServerHomeChange={(localServerHome) => {
+      void loadConnectMemory().then((m) => saveConnectMemory({ ...m, localServerHome }))
     }}
     onForgetConnect={(entry: SavedServer) => {
       // Mirrors onRememberConnect: load the current file, apply the pure list edit, re-save.

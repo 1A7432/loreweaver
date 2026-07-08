@@ -48,7 +48,7 @@ journalctl -u loreweaver -f       # 跟日志——ticket + 守秘人 key 启动
 
 ## 配置
 
-所有设置使用 `TRPG_` 环境变量前缀，`__` 用于嵌套（见 `.env.example` / `infra/config.py`），从工作目录的 `.env` 加载。
+所有设置使用 `TRPG_` 环境变量前缀，`__` 用于嵌套（见 `.env.example` / `infra/config.py`）。默认从工作目录的 `.env` 加载；如果设置了 `TRPG_ENV_FILE`，就从该文件加载。TUI 一键本地开服会自动设置 `TRPG_ENV_FILE=<本地服务器目录>/.env`。
 
 | 变量 | 目的 | 默认值 |
 |---|---|---|
@@ -58,8 +58,10 @@ journalctl -u loreweaver -f       # 跟日志——ticket + 守秘人 key 启动
 | `TRPG_LLM__CHAT_MODEL` | 聊天模型 id | `gpt-4o` |
 | `TRPG_LLM__EMBEDDING_MODEL` / `TRPG_LLM__EMBEDDING_DIM` | 检索嵌入 | `text-embedding-3-small` / `1536` |
 | `TRPG_LOCALE` | 用户界面语言 `en` / `zh` | `en` |
+| `TRPG_ENV_FILE` | 明确指定启动时读取的 `.env` 文件 | 工作目录下的 `.env` |
 | `TRPG_DATA_DIR` | 存储 + 密钥目录（db → `<data_dir>/loreweaver.db`） | `./data` |
 | `TRPG_TUI_KEYS` | 密钥存储文件路径（也可用 `--keys` 覆盖） | `./data/keys.toml` |
+| `TRPG_LOCAL_SERVER_HOME` | TUI 一键本地开服根目录：服务器程序/源码缓存、`.env`、数据、钥匙和 ticket sidecar 都在这里 | `TRPG_HOME`，否则 `<用户目录>/.loreweaver` |
 | `TRPG_ENABLE_VECTOR_DB` | 世界书 / 文档检索 | `true` |
 | `TRPG_TUI__JOIN_TIMEOUT` | 未经身份验证的连接在关闭前必须发送 `join` 的秒数 | `10` |
 | `TRPG_CENSOR__WORDLIST_PATH` | 内容审核词表：JSON 文件 `{"word": level, ...}`（等级 `1`-`5`，见 `gateway.ops.CensorLevel`）。见 [内容审核](#内容审核) | *（空 = 审核关闭）* |

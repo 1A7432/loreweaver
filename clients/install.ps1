@@ -8,12 +8,13 @@
 # Note: OpenTUI's terminal rendering is primarily tuned for Unix terminals; on
 # Windows use Windows Terminal, and treat this path as best-effort.
 #
-# Override via env: TRPG_ORIGIN, TRPG_HOME, TRPG_REGISTRY, TRPG_BIN.
+# Override via env: TRPG_ORIGIN, TRPG_HOME, TRPG_REGISTRY, TRPG_BIN, TRPG_LOCAL_SERVER_HOME.
 $ErrorActionPreference = "Stop"
 
 $Home_    = if ($env:TRPG_HOME)     { $env:TRPG_HOME }     else { Join-Path $HOME ".loreweaver" }
 $Registry = if ($env:TRPG_REGISTRY) { $env:TRPG_REGISTRY } else { "https://registry.npmmirror.com" }
 $BinDir   = if ($env:TRPG_BIN)      { $env:TRPG_BIN }      else { Join-Path $HOME ".loreweaver\bin" }
+$LocalServerHome = if ($env:TRPG_LOCAL_SERVER_HOME) { $env:TRPG_LOCAL_SERVER_HOME } else { $Home_ }
 
 # Distribution: default GitHub Release; TRPG_ORIGIN overrides the primary. Auto-fall-back to
 # the 1a7432.site mirror if the primary is unreachable (e.g. GitHub from mainland China).
@@ -24,6 +25,7 @@ function InstallerOf($o) { if ($o) { "$o/install.ps1" } else { "https://raw.gith
 function DescOf($o)      { if ($o) { $o } else { "GitHub Release" } }
 
 function Say([string]$m) { Write-Host "▸ $m" -ForegroundColor Yellow }
+function PsQuote([string]$s) { "'" + ($s -replace "'", "''") + "'" }
 
 # 1) bun
 if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
@@ -68,13 +70,15 @@ Pop-Location
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 $entry = (Join-Path $Home_ "clients\tui\src\index.tsx")
 $updInstaller = InstallerOf $Used   # re-update from whichever source actually worked
-$updateInner = if ($Used) { "`$env:TRPG_ORIGIN='$Used'; irm $updInstaller | iex" } else { "irm $updInstaller | iex" }
-$cmd = "@echo off`r`nif /I `"%1`"==`"update`" ( powershell -NoProfile -Command `"$updateInner`" & exit /b )`r`nbun run `"$entry`" %*"
+$updatePrefix = "`$env:TRPG_HOME=$(PsQuote $Home_); `$env:TRPG_BIN=$(PsQuote $BinDir); `$env:TRPG_REGISTRY=$(PsQuote $Registry); if (-not `$env:TRPG_LOCAL_SERVER_HOME) { `$env:TRPG_LOCAL_SERVER_HOME=$(PsQuote $LocalServerHome) }; "
+$updateInner = if ($Used) { "$updatePrefix`$env:TRPG_ORIGIN=$(PsQuote $Used); irm $updInstaller | iex" } else { "$updatePrefix irm $updInstaller | iex" }
+$cmd = "@echo off`r`nset `"TRPG_HOME=$Home_`"`r`nset `"TRPG_BIN=$BinDir`"`r`nset `"TRPG_REGISTRY=$Registry`"`r`nif not defined TRPG_LOCAL_SERVER_HOME set `"TRPG_LOCAL_SERVER_HOME=$LocalServerHome`"`r`nif /I `"%1`"==`"update`" ( powershell -NoProfile -Command `"$updateInner`" & exit /b )`r`nbun run `"$entry`" %*"
 Set-Content -Path (Join-Path $BinDir "loreweaver.cmd") -Value $cmd
 
 Write-Host ""
 Say "installed ✓"
 Write-Host "  Launcher: $BinDir\loreweaver.cmd"
+Write-Host "  Local server folder: $LocalServerHome"
 Write-Host "  Add '$BinDir' to PATH, then run:  loreweaver   (update later with: loreweaver update)"
 Write-Host ""
 Write-Host "  In the connect screen, use:"

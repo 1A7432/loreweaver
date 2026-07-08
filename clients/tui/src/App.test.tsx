@@ -73,7 +73,8 @@ function renderApp(
   client: MockClient,
   options: {
     prefill?: AppPrefill
-    onRememberConnect?: (memory: Required<AppPrefill>) => void
+    onRememberConnect?: (memory: AppPrefill) => void
+    onLocalServerHomeChange?: (path: string) => void
     onForgetConnect?: (entry: NonNullable<AppPrefill["servers"]>[number]) => void
     onQuit?: () => void
   } = {},
@@ -83,6 +84,7 @@ function renderApp(
       client={client}
       prefill={options.prefill ?? {}}
       onRememberConnect={options.onRememberConnect}
+      onLocalServerHomeChange={options.onLocalServerHomeChange}
       onForgetConnect={options.onForgetConnect}
       onQuit={options.onQuit}
     />,
@@ -144,7 +146,7 @@ describe("App shell", () => {
 
   test("remembers the last successful host, key, and name after welcome", async () => {
     const client = new MockClient()
-    const remembered: Array<Required<AppPrefill>> = []
+    const remembered: AppPrefill[] = []
     const { renderer, flush, waitFor, waitForFrame, mockInput } = await renderApp(client, {
       prefill: { host: "ws://table.example:8787", name: "" },
       onRememberConnect: (memory) => remembered.push(memory),
@@ -177,14 +179,16 @@ describe("App shell", () => {
     expect(remembered).toEqual([])
     act(() => client.push(PLAYER_WELCOME))
     await waitFor(() => remembered.length > 0)
-    expect(remembered[0]).toEqual({ host: "ws://table.example:8787", key: "keeper-key", name: "漱雪", locale: "zh" })
+    const { localServerHome, ...rest } = remembered[0] ?? {}
+    expect(rest).toEqual({ host: "ws://table.example:8787", key: "keeper-key", name: "漱雪", locale: "zh" })
+    expect(localServerHome).toBeTruthy()
 
     act(() => renderer.destroy())
   })
 
   test("does not remember a rejected key", async () => {
     const client = new MockClient()
-    const remembered: Array<Required<AppPrefill>> = []
+    const remembered: AppPrefill[] = []
     const { renderer, flush, waitForFrame, mockInput } = await renderApp(client, {
       onRememberConnect: (memory) => remembered.push(memory),
     })

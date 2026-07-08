@@ -14,6 +14,7 @@ interface Line {
 export interface HostLocalScreenProps {
   theme: Palette
   locale: string
+  localServerHome: string
   // Called once the server is up; hands back its Iroh ticket, keeper key, and a stop().
   onReady: (host: string, key: string, stop: () => void) => void
   onBack: () => void
@@ -24,7 +25,7 @@ const VISIBLE = 22
 
 // One-click host: runs the bring-up pipeline (fetch/uv/deps/serve) and streams every step's
 // terminal output here, then hands the ready server to the shell to log in as Keeper.
-export function HostLocalScreen({ theme, locale, onReady, onBack }: HostLocalScreenProps) {
+export function HostLocalScreen({ theme, locale, localServerHome, onReady, onBack }: HostLocalScreenProps) {
   const [lines, setLines] = useState<Line[]>([])
   const [error, setError] = useState<string>()
   const [done, setDone] = useState(false)
@@ -47,7 +48,7 @@ export function HostLocalScreen({ theme, locale, onReady, onBack }: HostLocalScr
     let cancelled = false
     const log = (text: string, kind: LogKind) =>
       setLines((prev) => [...prev, { id: nextId.current++, text, kind }].slice(-MAX_LINES))
-    bringUpServer(log, controller.signal)
+    bringUpServer(log, controller.signal, { localServerHome })
       .then((handle) => {
         // The user hit Esc while we were bringing the server up: don't yank them back into the
         // connect flow — tear the just-started server down instead of leaking it.

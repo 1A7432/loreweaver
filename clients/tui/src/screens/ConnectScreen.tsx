@@ -11,6 +11,7 @@ export interface ConnectDefaults {
   host?: string
   key?: string
   name?: string
+  localServerHome?: string
 }
 
 export interface ConnectScreenProps {
@@ -23,6 +24,8 @@ export interface ConnectScreenProps {
   savedServers?: SavedServer[]
   // Switch the connect-screen UI language before any welcome; the shell persists it.
   onLocaleChange?: (locale: TuiLocale) => void
+  // One-click local server install/state directory; edited on the connect screen and persisted.
+  onLocalServerHomeChange?: (path: string) => void
   // Spawn a local server and log in as Keeper (one-click host & play).
   onHostLocal?: () => void
   // The shell owns the client: it awaits connect(url) then join(key,name) and
@@ -37,8 +40,8 @@ export interface ConnectScreenProps {
 }
 
 
-type Field = "host" | "key" | "name"
-const FIELD_ORDER: Field[] = ["host", "key", "name"]
+type Field = "host" | "key" | "name" | "localServerHome"
+const FIELD_ORDER: Field[] = ["host", "key", "name", "localServerHome"]
 
 export function ConnectScreen({
   theme,
@@ -48,6 +51,7 @@ export function ConnectScreen({
   locale = defaultTuiLocale(),
   savedServers,
   onLocaleChange,
+  onLocalServerHomeChange,
   onHostLocal,
   onSubmit,
   onForgetServer,
@@ -60,6 +64,7 @@ export function ConnectScreen({
   const [host, setHost] = useState(defaults.host ?? "")
   const [key, setKey] = useState(defaults.key ?? "")
   const [name, setName] = useState(defaults.name ?? "")
+  const [localServerHome, setLocalServerHome] = useState(defaults.localServerHome ?? "")
   const [focused, setFocused] = useState<Field>("host")
 
   // Mirror each field into a ref so submit always reads the latest typed value,
@@ -103,7 +108,7 @@ export function ConnectScreen({
 
   return (
     <box flexDirection="column" height="100%" width="100%" backgroundColor={theme.bg} paddingX={2} paddingY={1}>
-      <box marginBottom={1}>
+      <box height={3}>
         <ascii-font text="LOREWEAVER" font="tiny" color={theme.accent} />
       </box>
       <text fg={theme.dim}>{tt(locale, "connect.subtitle")}</text>
@@ -121,8 +126,25 @@ export function ConnectScreen({
         </box>
 
         {onHostLocal ? (
-          <box marginBottom={1} onMouseDown={() => onHostLocal()} backgroundColor={theme.success} paddingX={1}>
-            <text fg={theme.bg}>{connecting ? tt(locale, "connect.connecting") : tt(locale, "connect.hostLocal")}</text>
+          <box flexDirection="column" marginBottom={1}>
+            <box onMouseDown={() => onHostLocal()} backgroundColor={theme.success} paddingX={1}>
+              <text fg={theme.bg}>{connecting ? tt(locale, "connect.connecting") : tt(locale, "connect.hostLocal")}</text>
+            </box>
+            <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("localServerHome")}>
+              <text fg={fieldColor("localServerHome")}>{tt(locale, "connect.localServerHome")}</text>
+              <input
+                flexGrow={1}
+                value={localServerHome}
+                focused={focused === "localServerHome"}
+                placeholder={tt(locale, "connect.localServerHomePlaceholder")}
+                onInput={(value: string) => {
+                  setLocalServerHome(value)
+                  onLocalServerHomeChange?.(value)
+                }}
+                onSubmit={() => setFocused("host")}
+              />
+              <text fg={theme.dim}>{tt(locale, "connect.localServerHomeHelp")}</text>
+            </box>
           </box>
         ) : null}
 

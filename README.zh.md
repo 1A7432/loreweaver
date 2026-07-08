@@ -38,6 +38,18 @@ Windows(PowerShell):
 irm https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.ps1 | iex
 ```
 
+不想装到 `C:\Users\<用户名>` 下面的话，安装前先指定目录。连接屏也会显示当前
+「本地服务器目录」，点「本地开服并开玩」前可以直接改：
+
+```powershell
+$env:TRPG_HOME="D:\Loreweaver"
+$env:TRPG_LOCAL_SERVER_HOME="D:\Loreweaver\server-state"
+irm https://raw.githubusercontent.com/1A7432/loreweaver/main/clients/install.ps1 | iex
+```
+
+一键开服时，服务端 `.env` 放在这个本地服务器目录里；数据、钥匙、ticket、服务器
+程序/源码缓存也都在这里。
+
 Windows 上请尽量用 **Windows Terminal** 或 **WezTerm** 跑 TUI。如果界面不像截图——
 边框错位、颜色不对、Unicode 字符异常、鼠标输入失灵——多半是终端模拟器问题。
 Windows 11 也可能因为启动方式或默认终端设置进到旧控制台。请安装/打开
