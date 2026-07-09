@@ -293,9 +293,17 @@ async def test_skill_check_on_a_seeded_skill_yields_deterministic_rank_and_a_rea
     text = await dice_tools.skill_check(ctx, skill_name="侦查")
 
     assert "Vera" in text
-    assert "侦查" in text
+    # The default (en) locale renders the rulepack display name, not the canonical key.
+    assert "Spot Hidden" in text
+    assert "侦查" not in text
     assert str(expected["final_roll"]) in text
     assert expected_label in text
+
+    seed_dice(777)
+    zh_text = await dice_tools.skill_check(
+        AgentCtx(chat_key="cli:dm:t", user_id="u1", locale="zh"), skill_name="spot hidden"
+    )
+    assert "侦查" in zh_text  # zh keeps the canonical key even for an en alias input
 
 
 async def test_skill_check_records_a_real_skill_check_into_battle_report_when_session_active():

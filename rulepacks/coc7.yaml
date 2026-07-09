@@ -234,3 +234,109 @@ creation_constraints:
     occupational_points:
       default_formula: "EDU*4"
       formulas: ["EDU*4", "EDU*2+STR*2", "EDU*2+DEX*2", "EDU*2+APP*2", "EDU*2+POW*2"]
+# Presentation-only localized names for canonical keys (checks/tools render via
+# RulePack.display_name; unmapped keys fall back to the canonical key itself).
+display:
+  en:
+    力量: STR
+    体质: CON
+    体型: SIZ
+    敏捷: DEX
+    外貌: APP
+    智力: INT
+    意志: POW
+    教育: EDU
+    幸运: Luck
+    理智: Sanity
+    理智上限: Max Sanity
+    生命值: HP
+    生命值上限: Max HP
+    魔法值: MP
+    魔法值上限: Max MP
+    体格: Build
+    移动力: MOV
+    护甲: Armor
+    闪避: Dodge
+    信用评级: Credit Rating
+    取悦: Charm
+    话术: Fast Talk
+    恐吓: Intimidate
+    说服: Persuade
+    心理学: Psychology
+    母语: Language (Own)
+    外语: Language (Other)
+    估价: Appraise
+    乔装: Disguise
+    潜行: Stealth
+    追踪: Track
+    侦查: Spot Hidden
+    聆听: Listen
+    读唇: Read Lips
+    图书馆: Library Use
+    生存: Survival
+    攀爬: Climb
+    跳跃: Jump
+    骑乘: Ride
+    游泳: Swim
+    潜水: Diving
+    艺术与手艺: Art/Craft
+    表演: Acting
+    美术: Fine Art
+    伪造: Forgery
+    摄影: Photography
+    写作: Writing
+    音乐: Music
+    舞蹈: Dance
+    厨艺: Cooking
+    妙手: Sleight of Hand
+    锁匠: Locksmith
+    电气维修: Electrical Repair
+    机械维修: Mechanical Repair
+    计算机使用: Computer Use
+    导航: Navigate
+    汽车驾驶: Drive Auto
+    驾驶:飞行器: Pilot (Aircraft)
+    驾驶:船: Pilot (Boat)
+    驯兽: Animal Handling
+    操作重型机械: Operate Heavy Machinery
+    斗殴: Fighting (Brawl)
+    斧: Fighting (Axe)
+    链锯: Fighting (Chainsaw)
+    连枷: Fighting (Flail)
+    绞索: Fighting (Garrote)
+    矛: Fighting (Spear)
+    剑: Fighting (Sword)
+    鞭: Fighting (Whip)
+    射击: Firearms
+    手枪: Firearms (Handgun)
+    步霰: Firearms (Rifle/Shotgun)
+    投掷: Throw
+    爆破: Demolitions
+    炮术: Artillery
+    急救: First Aid
+    医学: Medicine
+    精神分析: Psychoanalysis
+    催眠: Hypnosis
+    会计: Accounting
+    法律: Law
+    历史: History
+    考古学: Archaeology
+    博物: Natural World
+    人类学: Anthropology
+    神秘学: Occult
+    电子学: Electronics
+    科学: Science
+    天文学: Science (Astronomy)
+    生物学: Science (Biology)
+    植物学: Science (Botany)
+    化学: Science (Chemistry)
+    密码学: Science (Cryptography)
+    工程学: Science (Engineering)
+    司法科学: Science (Forensics)
+    地质学: Science (Geology)
+    数学: Science (Mathematics)
+    气象学: Science (Meteorology)
+    药学: Science (Pharmacy)
+    物理学: Science (Physics)
+    动物学: Science (Zoology)
+    克苏鲁神话: Cthulhu Mythos

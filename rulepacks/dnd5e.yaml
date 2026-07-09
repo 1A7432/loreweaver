@@ -90,3 +90,32 @@ creation_constraints:
       formula: "4d6kh3"
       min: 3
       max: 18
+# Presentation-only localized names for canonical keys (see coc7.yaml display note).
+display:
+  en:
+    力量: STR
+    敏捷: DEX
+    体质: CON
+    智力: INT
+    感知: WIS
+    魅力: CHA
+    体型: Size
+    熟练: Proficiency
+    运动: Athletics
+    体操: Acrobatics
+    巧手: Sleight of Hand
+    隐匿: Stealth
+    调查: Investigation
+    奥秘: Arcana
+    历史: History
+    自然: Nature
+    宗教: Religion
+    察觉: Perception
+    洞悉: Insight
+    驯兽: Animal Handling
+    医药: Medicine
+    求生: Survival
+    游说: Persuasion
+    欺瞒: Deception
+    威吓: Intimidation
+    表演: Performance

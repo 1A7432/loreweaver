@@ -349,10 +349,21 @@ class RulePack:
     alias_to_canonical: dict[str, str]
     derived_formulas: dict[str, Callable[[Mapping[str, Any]], Any]]
     names: list[str] = field(default_factory=list)
+    display: dict[str, dict[str, str]] = field(default_factory=dict)
 
     def resolve_skill(self, name: str) -> str | None:
         """Resolve a player-entered skill/attribute name to this pack's canonical key."""
         return self.alias_to_canonical.get(_normalize_alias(name))
+
+    def display_name(self, name: str, locale: str) -> str:
+        """Localized display name for a canonical key; falls back to the key itself.
+
+        Canonical keys stay the single identity used in sheets/aliases/derived
+        formulas — `display` is presentation-only, so a missing locale table or
+        an unmapped key can never break resolution.
+        """
+        base = str(locale or "").replace("_", "-").split("-")[0].casefold()
+        return self.display.get(base, {}).get(name, name)
 
     def compute_derived(self, values: Mapping[str, Any]) -> dict[str, Any]:
         """Compute fixed derived attributes for `values` without evaluating pack code."""
@@ -371,6 +382,19 @@ def _build_alias_map(alias: Mapping[str, Any]) -> dict[str, str]:
     return flattened
 
 
+def _parse_display_section(pack_id: str, raw: Any) -> dict[str, dict[str, str]]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"rulepack '{pack_id}': 'display' must be a mapping of locale -> name table")
+    display: dict[str, dict[str, str]] = {}
+    for locale, table in raw.items():
+        if not isinstance(table, Mapping):
+            raise ValueError(f"rulepack '{pack_id}': 'display.{locale}' must be a mapping of canonical -> display name")
+        display[str(locale).casefold()] = {str(key): str(value) for key, value in table.items()}
+    return display
+
+
 def _build_rulepack(pack_id: str, data: Mapping[str, Any]) -> RulePack:
     alias = data.get("alias") or {}
     derived = data.get("derived") or {}
@@ -385,6 +409,7 @@ def _build_rulepack(pack_id: str, data: Mapping[str, Any]) -> RulePack:
         alias_to_canonical=_build_alias_map(alias),
         derived_formulas=_compile_derived_section(pack_id, derived, defaults),
         names=[str(name) for name in (data.get("names") or [])],
+        display=_parse_display_section(pack_id, data.get("display")),
     )
 
 

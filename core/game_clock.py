@@ -3,16 +3,20 @@
 import re
 from datetime import datetime, timedelta
 
-_TIME_FORMATS = (
-    "%Y年%m月%d日 %H:%M",
-    "%Y年%m月%d日%H:%M",
-    "%Y-%m-%d %H:%M",
-    "%Y/%m/%d %H:%M",
-    "%Y-%m-%dT%H:%M",
-    "%Y年%m月%d日",
-    "%Y-%m-%d",
-    "%Y/%m/%d",
-)
+# Accepted input format -> the same-family output format used after advancing.
+# Advancing preserves the style the table already uses (a zh 年月日 clock stays
+# zh, an ISO clock stays ISO) instead of forcing one culture's format on every
+# room; date-only inputs gain a time-of-day so sub-day deltas stay visible.
+_TIME_FORMATS = {
+    "%Y年%m月%d日 %H:%M": "%Y年%m月%d日 %H:%M",
+    "%Y年%m月%d日%H:%M": "%Y年%m月%d日 %H:%M",
+    "%Y-%m-%d %H:%M": "%Y-%m-%d %H:%M",
+    "%Y/%m/%d %H:%M": "%Y/%m/%d %H:%M",
+    "%Y-%m-%dT%H:%M": "%Y-%m-%d %H:%M",
+    "%Y年%m月%d日": "%Y年%m月%d日 %H:%M",
+    "%Y-%m-%d": "%Y-%m-%d %H:%M",
+    "%Y/%m/%d": "%Y/%m/%d %H:%M",
+}
 
 _UNIT_SECONDS = {
     "分钟": 60,
@@ -35,15 +39,19 @@ _UNIT_SECONDS = {
 }
 
 
-def parse_game_datetime(value: str) -> datetime | None:
-    """Parse common Chinese/ISO-like game datetime strings."""
+def _parse_with_format(value: str) -> tuple[datetime | None, str | None]:
     text = value.strip()
     for fmt in _TIME_FORMATS:
         try:
-            return datetime.strptime(text, fmt)
+            return datetime.strptime(text, fmt), fmt
         except ValueError:
             continue
-    return None
+    return None, None
+
+
+def parse_game_datetime(value: str) -> datetime | None:
+    """Parse common Chinese/ISO-like game datetime strings."""
+    return _parse_with_format(value)[0]
 
 
 def parse_time_delta(value: str) -> timedelta | None:
@@ -58,10 +66,15 @@ def parse_time_delta(value: str) -> timedelta | None:
 
 
 def advance_game_time(current_time: str, delta_text: str) -> tuple[str, bool]:
-    """Advance parseable game time, otherwise preserve the readable fallback chain."""
-    current_dt = parse_game_datetime(current_time)
+    """Advance parseable game time, keeping the input's format family.
+
+    Returns ``(new_time, True)`` on success. When either side is unparseable the
+    clock text is returned UNCHANGED with ``False`` — the caller decides how to
+    surface that (this is a pure core helper, so no user-facing language here).
+    """
+    current_dt, fmt = _parse_with_format(current_time)
     delta = parse_time_delta(delta_text)
-    if current_dt and delta:
+    if current_dt and delta and fmt:
         advanced = current_dt + delta
-        return advanced.strftime("%Y年%m月%d日 %H:%M"), True
-    return f"{current_time} → 推进 {delta_text}", False
+        return advanced.strftime(_TIME_FORMATS[fmt]), True
+    return current_time, False

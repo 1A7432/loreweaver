@@ -73,7 +73,10 @@ async def test_en_commands_roll_inline_setcoc_make_and_check():
     checked = await router.dispatch(ctx, "/check spot hidden")
     assert checked is not None
     assert "Check" in checked
-    assert "侦查" in checked
+    # The canonical key is 侦查, but the en locale renders the rulepack's
+    # display name so no CJK leaks into an English table's dice lines.
+    assert "Spot Hidden" in checked
+    assert "侦查" not in checked
 
 
 async def test_zh_commands_roll_check_sheet_fullwidth_and_setcoc():

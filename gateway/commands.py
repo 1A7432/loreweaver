@@ -412,10 +412,10 @@ class CommandRouter:
             winner = ctx.i18n.t("commands.opposed.tie")
         return ctx.i18n.t(
             "commands.opposed.result",
-            left=left.canonical,
+            left=pack.display_name(left.canonical, ctx.locale),
             left_roll=left_roll["roll"],
             left_rank=coc_rank_label(left_roll["rank"], ctx.i18n),
-            right=right.canonical,
+            right=pack.display_name(right.canonical, ctx.locale),
             right_roll=right_roll["roll"],
             right_rank=coc_rank_label(right_roll["rank"], ctx.i18n),
             winner=winner,
@@ -1424,7 +1424,7 @@ class CommandRouter:
             lines.append(
                 ctx.i18n.t(
                     "commands.check.coc",
-                    name=parsed.canonical,
+                    name=pack.display_name(parsed.canonical, ctx.locale),
                     target=target_value,
                     effective=effective_target,
                     roll=outcome["roll"],
@@ -1447,7 +1447,7 @@ class CommandRouter:
             result = ctx.services.dice.roll_expression(expr, is_check=True)
         return ctx.i18n.t(
             "commands.check.dnd",
-            name=canonical,
+            name=pack.display_name(canonical, ctx.locale),
             modifier=_signed(modifier),
             result=_format_roll(result, ctx.i18n),
         )

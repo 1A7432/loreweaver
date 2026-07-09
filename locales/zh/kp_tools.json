@@ -130,6 +130,7 @@
   "kp_tools.know.catalog.header": "📘 模组目录（状态：{status}）",
   "kp_tools.know.catalog.summary_line": "📝 概要：{summary}",
   "kp_tools.know.clock.advance_done": "✅ 游戏时间已推进 {delta}，当前：{time}",
+  "kp_tools.know.clock.advance_unparsed": "⚠️ 无法解析“{delta}”（或当前钟面“{time}”）——时钟未变动。请用“+30分钟”/“+2小时”/“+1天”推进，或用 set 直接设定如“1926-03-15 14:00”。",
   "kp_tools.know.clock.all_events_heading": "📅 全部日程记录：",
   "kp_tools.know.clock.bad_action": "❌ 不支持的 action：{action}",
   "kp_tools.know.clock.current": "🕐 当前游戏时间：{time}",

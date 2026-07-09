@@ -44,6 +44,7 @@ from core.character_manager import CharacterSheet
 from core.character_rules import render_validation_notice, validate_sheet
 from core.coc_rules import DEFAULT_COC_RULE, DIFFICULTY_REGULAR, result_check_base
 from core.dice_engine import DiceResult, coc_rank_label
+from core.rulepacks import load_rulepack
 
 # COC7 base-attribute names, recognized by `skill_check` so "STR"/"POW"/...
 # route to an attribute check instead of a skill lookup. Game data (mirrors
@@ -508,7 +509,8 @@ class DiceTools:
                 result = dice.roll_coc_check_with_bonus(skill_value, bonus, penalty)
                 level_label = coc_rank_label(result["rank"], i18n)
 
-                lines = [i18n.t("kp_tools.dice.skill_check.coc_header", name=character.name, skill=target_skill)]
+                skill_label = load_rulepack("coc7").display_name(target_skill, ctx.locale)
+                lines = [i18n.t("kp_tools.dice.skill_check.coc_header", name=character.name, skill=skill_label)]
                 target_line = i18n.t("kp_tools.dice.skill_check.target_line", value=skill_value)
                 if bonus > 0:
                     target_line += i18n.t("kp_tools.dice.skill_check.bonus_suffix", count=bonus)
@@ -577,7 +579,7 @@ class DiceTools:
                 i18n.t(
                     "kp_tools.dice.skill_check.dnd_header",
                     name=character.name,
-                    skill=target_skill,
+                    skill=load_rulepack("dnd5e").display_name(target_skill, ctx.locale),
                     proficient=prof_label,
                 )
             ]

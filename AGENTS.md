@@ -31,7 +31,7 @@ uv run python -m app --doctor  # sanity-check locales/rulepacks/skills discovery
 Tests are deterministic and offline. To run a real Keeper, set `TRPG_LLM__*` in `.env` (see `.env.example`).
 
 ## How to extend
-- **Rule system** → add a `rulepacks/<system>.yaml` (five-part: defaults/defaultsComputed/alias/st.show/set.keys); no code change for data-driven parts.
+- **Rule system** → add a `rulepacks/<system>.yaml` (defaults/derived/alias/st_show/set_keys + optional per-locale `display` names); no code change for data-driven parts.
 - **KP skill** → a `skills/<id>/SKILL.md` (Claude-Code shape: YAML frontmatter `name`/`description`/`allowed-tools` + Markdown body); per-room enable via `.skill enable <id>`.
 - **Platform adapter** → subclass `gateway/base_adapter.py:BaseAdapter`, translate payloads → `InboundMessage`, register a `PlatformEntry` at import. Mock the transport in tests.
 - **LLM provider** → most vendors work via the OpenAI-compatible path + a `PRESETS` entry in `infra/providers.py`; add a native class (see `AnthropicLLM`/`GeminiLLM`) only for non-OpenAI APIs.

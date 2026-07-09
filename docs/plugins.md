@@ -83,7 +83,13 @@ creation_constraints: { ... }            # roll formulas / point-buy / ranges
 derived:                                 # HYBRID derived stats — see below
   DB:   { computer: coc_db }             #  (a) named code computer (built-ins / exotic)
   闪避: { half_of: 敏捷 }                #  (b) declarative primitive (pure data)
+display:                                 # OPTIONAL presentation-only localized names
+  en: { 侦查: Spot Hidden, ... }         #  locale -> canonical -> display name
 ```
+
+`display` never affects resolution — canonical keys stay the single identity in
+sheets/aliases/derived; check output renders `display_name(canonical, locale)`
+and falls back to the canonical key for unmapped names/locales.
 
 **Derived stats are hybrid** (both paths, so a new system *can* be pure data but
 an exotic one *may* use code):

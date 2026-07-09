@@ -1136,7 +1136,11 @@ class NoteTools(_KnowledgeToolsBase):
 
             if action == "advance":
                 current = clock.get("current_time", i18n.t("kp_tools.know.clock.unset"))
-                advanced_time, _parsed_cleanly = advance_game_time(current, value)
+                advanced_time, parsed_cleanly = advance_game_time(current, value)
+                if not parsed_cleanly:
+                    # Leave the clock untouched (a "X → +2 hours" chain string would
+                    # pollute the HUD); tell the model to `set` a parseable time instead.
+                    return i18n.t("kp_tools.know.clock.advance_unparsed", delta=value, time=current)
                 clock["current_time"] = advanced_time
                 await store.set(user_key="", store_key=store_key, value=json.dumps(clock, ensure_ascii=False))
                 return i18n.t("kp_tools.know.clock.advance_done", delta=value, time=advanced_time)

@@ -489,3 +489,35 @@ def test_parse_rulepack_text_rejects_non_mapping_root() -> None:
 def test_parse_rulepack_text_rejects_bad_derived_spec() -> None:
     with pytest.raises(ValueError):
         rulepacks_module.parse_rulepack_text("inline-test", "names: [inline]\nderived:\n  stat: {bogus: 1}\n")
+
+
+# ---------------------------------------------------------------------------
+# display: presentation-only per-locale names for canonical keys.
+# ---------------------------------------------------------------------------
+
+
+def test_display_name_renders_locale_table_with_fallbacks() -> None:
+    pack = rulepacks_module.parse_rulepack_text(
+        "inline-test",
+        "names: [inline]\ndefaults:\n  侦查: 25\ndisplay:\n  en:\n    侦查: Spot Hidden\n",
+    )
+    assert pack.display_name("侦查", "en") == "Spot Hidden"
+    assert pack.display_name("侦查", "en-US") == "Spot Hidden"  # region tags collapse to base
+    assert pack.display_name("侦查", "zh") == "侦查"  # no zh table -> canonical
+    assert pack.display_name("聆听", "en") == "聆听"  # unmapped key -> canonical
+    assert pack.display_name("侦查", "") == "侦查"  # empty locale never raises
+
+
+def test_builtin_packs_ship_en_display_for_check_staples() -> None:
+    coc = rulepacks_module.load_rulepack("coc7")
+    assert coc.display_name("侦查", "en") == "Spot Hidden"
+    assert coc.display_name("理智", "en") == "Sanity"
+    dnd = rulepacks_module.load_rulepack("dnd5e")
+    assert dnd.display_name("察觉", "en") == "Perception"
+
+
+def test_parse_rulepack_text_rejects_bad_display_shapes() -> None:
+    with pytest.raises(ValueError):
+        rulepacks_module.parse_rulepack_text("inline-test", "names: [inline]\ndisplay: [en]\n")
+    with pytest.raises(ValueError):
+        rulepacks_module.parse_rulepack_text("inline-test", "names: [inline]\ndisplay:\n  en: [not, a, map]\n")

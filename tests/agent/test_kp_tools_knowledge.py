@@ -258,9 +258,15 @@ async def test_knowledge_tools_end_to_end(tmp_path):
     advance_result = await note_tools.game_clock(ctx, action="advance", value="+2 hours")
     assert "1926" in advance_result
     clock_raw = json.loads(await services.store.get(user_key="", store_key=f"game_clock.{CHAT_KEY}"))
-    # core.game_clock.advance_game_time's successful-parse branch always renders this exact format
-    # (game-data structural format, not localized UI text -- see core/game_clock.py).
-    assert clock_raw["current_time"] == "1926年03月15日 11:00"
+    # Advancing preserves the input's format family: an ISO clock stays ISO
+    # (see core/game_clock.py -- a zh 年月日 clock would stay 年月日 the same way).
+    assert clock_raw["current_time"] == "1926-03-15 11:00"
+
+    # An unparseable delta leaves the clock untouched and reports it instead.
+    unparsed = await note_tools.game_clock(ctx, action="advance", value="a little while")
+    assert "⚠️" in unparsed
+    clock_raw = json.loads(await services.store.get(user_key="", store_key=f"game_clock.{CHAT_KEY}"))
+    assert clock_raw["current_time"] == "1926-03-15 11:00"
 
     # -- 6. start_session_recording + add_session_event + generate_session_report produce a report ------
     await session_tools.start_session_recording(ctx, session_name="Blackmoor One-Shot")

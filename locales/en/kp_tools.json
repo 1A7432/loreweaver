@@ -130,6 +130,7 @@
   "kp_tools.know.catalog.header": "📘 Module catalog (status: {status})",
   "kp_tools.know.catalog.summary_line": "📝 Summary: {summary}",
   "kp_tools.know.clock.advance_done": "✅ Game time advanced by {delta}; now: {time}",
+  "kp_tools.know.clock.advance_unparsed": "⚠️ Could not parse \"{delta}\" (or the current clock \"{time}\") — the clock is unchanged. Advance with e.g. \"+30 minutes\"/\"+2 hours\"/\"+1 day\", or `set` an explicit time like \"1926-03-15 14:00\".",
   "kp_tools.know.clock.all_events_heading": "📅 All logged events:",
   "kp_tools.know.clock.bad_action": "❌ Unsupported action: {action}",
   "kp_tools.know.clock.current": "🕐 Current game time: {time}",
