@@ -18,13 +18,17 @@ Ships with Call of Cthulhu 7e and D&D 5e (SRD), speaks English and Chinese, and 
 
 > **Honestly:** this project is young, built mostly by one person working with AI. The dice and rules core is the solid part, watched by a full offline test suite; the terminal client is comfortable now. Networked multiplayer and AI-GM reliability are still being polished — what works and what doesn't is spelled out in the [roadmap](docs/roadmap.md).
 
-![Loreweaver TUI — a real terminal screenshot: Keeper narration, a Spot Hidden check landing a hard success, the party roster with an AI companion](https://raw.githubusercontent.com/1A7432/loreweaver/main/assets/tui-en.png)
+![Loreweaver demo — a real session in the terminal: p2p connect with an invite key, the module opening replays, the AI Keeper narrates, a Spot Hidden check resolves with real dice](https://raw.githubusercontent.com/1A7432/loreweaver/main/assets/demo-en.gif)
+
+*Real session, real model, real dice — recorded in the terminal client. ([Chinese version](https://raw.githubusercontent.com/1A7432/loreweaver/main/assets/demo-zh.gif))*
 
 ## Starting a game is one button
 
 Install the client, click the green button on the connect screen — "**Host locally & play**" — and that's it. There is no step two.
 
 It downloads the server build for your OS (self-contained — **no Python, no environment setup**), starts it, issues your Keeper key, and drops you into the main menu as the Keeper. We've verified the whole path from clean installs of Windows 10/11, macOS (Apple silicon), and Linux.
+
+**No API key needed to taste it**: with no model configured, a built-in demo Keeper answers — with real dice — until you plug in a real model on the model screen.
 
 Installing the client is one line. macOS / Linux:
 
@@ -122,7 +126,7 @@ Fair warning: how well the AI runs a table depends a lot on the model's capabili
 uv sync                                  # environment + dependencies
 
 # Taste it offline first — no API key needed, built-in demo KP + real dice:
-uv run python -m app --cli               # try  r 3d6+2 · /roll 4d6kh3 · .ra 侦查 · .setcoc 2
+uv run python -m app --cli               # try  r 3d6+2 · /roll 4d6kh3 · .ra spot hidden · .setcoc 2
 
 # Plug in a real model: copy .env.example to .env, add your key, run again:
 uv run python -m app --cli
