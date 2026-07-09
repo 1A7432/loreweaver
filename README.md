@@ -18,9 +18,9 @@ Ships with Call of Cthulhu 7e and D&D 5e (SRD), speaks English and Chinese, and 
 
 > **Honestly:** this project is young, built mostly by one person working with AI. The dice and rules core is the solid part, watched by a full offline test suite; the terminal client is comfortable now. Networked multiplayer and AI-GM reliability are still being polished — what works and what doesn't is spelled out in the [roadmap](docs/roadmap.md).
 
-![Loreweaver demo — a real session in the terminal: p2p connect with an invite key, the module opening replays, the AI Keeper narrates, a Spot Hidden check resolves with real dice](https://raw.githubusercontent.com/1A7432/loreweaver/main/assets/demo-en.gif)
+![Loreweaver demo — a real session in the terminal: p2p connect with an invite key, the module opening replays, the AI Keeper narrates, a Spot Hidden check resolves with real dice](assets/demo-en.gif)
 
-*Real session, real model, real dice — recorded in the terminal client. ([There's also a session played in Chinese.](https://raw.githubusercontent.com/1A7432/loreweaver/main/assets/demo-zh.gif))*
+*Real session, real model, real dice — recorded in the terminal client. ([There's also a session played in Chinese.](assets/demo-zh.gif))*
 
 ## Starting a game is one button
 
@@ -98,12 +98,12 @@ Fair warning: how well the AI runs a table depends a lot on the model's capabili
 ## How it plays
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/1A7432/loreweaver/main/assets/tui-connect-en.png" width="49%" alt="Connect screen: one-click local hosting, saved servers, ticket login" />
-  <img src="https://raw.githubusercontent.com/1A7432/loreweaver/main/assets/tui-character-en.png" width="49%" alt="Character creation: four methods, manual mode validates the point budget live" />
+  <img src="assets/tui-connect-en.png" width="49%" alt="Connect screen: one-click local hosting, saved servers, ticket login" />
+  <img src="assets/tui-character-en.png" width="49%" alt="Character creation: four methods, manual mode validates the point budget live" />
 </p>
 <p align="center">
-  <img src="https://raw.githubusercontent.com/1A7432/loreweaver/main/assets/tui-menu-en.png" width="49%" alt="Keeper main menu: rooms & invites, import module, rule systems, KP skills, model config" />
-  <img src="https://raw.githubusercontent.com/1A7432/loreweaver/main/assets/tui-skills-en.png" width="49%" alt="KP skills: toggle play-style packs, or describe one sentence and generate a new one" />
+  <img src="assets/tui-menu-en.png" width="49%" alt="Keeper main menu: rooms & invites, import module, rule systems, KP skills, model config" />
+  <img src="assets/tui-skills-en.png" width="49%" alt="KP skills: toggle play-style packs, or describe one sentence and generate a new one" />
 </p>
 
 - **Four ways to make a character**: roll one up, fill it in by hand (the UI blocks over-budget stats as you type), describe a persona and let the AI draft it, or drop in a SillyTavern card. Whichever path you take, the rules check the result — if the numbers don't validate, no amount of AI charm gets them through.
