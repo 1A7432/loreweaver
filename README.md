@@ -20,7 +20,7 @@ Ships with Call of Cthulhu 7e and D&D 5e (SRD), speaks English and Chinese, and 
 
 ![Loreweaver demo — a real session in the terminal: p2p connect with an invite key, the module opening replays, the AI Keeper narrates, a Spot Hidden check resolves with real dice](https://raw.githubusercontent.com/1A7432/loreweaver/main/assets/demo-en.gif)
 
-*Real session, real model, real dice — recorded in the terminal client. ([Chinese version](https://raw.githubusercontent.com/1A7432/loreweaver/main/assets/demo-zh.gif))*
+*Real session, real model, real dice — recorded in the terminal client. ([There's also a session played in Chinese.](https://raw.githubusercontent.com/1A7432/loreweaver/main/assets/demo-zh.gif))*
 
 ## Starting a game is one button
 
