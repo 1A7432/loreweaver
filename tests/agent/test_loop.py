@@ -14,6 +14,7 @@ from agent.loop import (
     _dice_rolled,
     _player_attempts_checkable_action,
     _reply_requests_or_resolves_check,
+    _scene_title_lines,
     run_kp_turn,
 )
 from agent.services import build_services
@@ -734,3 +735,133 @@ async def test_usage_is_zeroed_on_provider_error():
     result = await run_kp_turn(_ctx("chat-usage-4"), services, _toolset(), "hi")
 
     assert result.usage == Usage()
+
+
+# ---------------------------------------------------------------------------
+# Structural scene/time HUD enforcement (mirrors the dice-first suite above)
+# ---------------------------------------------------------------------------
+
+
+class _StateProvider:
+    """A provider exposing the HUD bookkeeping tools the state corrective forces."""
+
+    @tool
+    async def kp_note(self, ctx: AgentCtx, action: str, category: str = "", content: str = "") -> str:
+        """Set or add a KP note (current_scene / current_focus / world_changes)."""
+        return f"note {action} {category}: {content}"
+
+    @tool
+    async def game_clock(self, ctx: AgentCtx, action: str, value: str = "") -> str:
+        """Show, set, or advance the in-game clock."""
+        return f"clock {action} {value}"
+
+
+def _state_toolset() -> Toolset:
+    return Toolset(_StateProvider())
+
+
+_TITLE_REPLY = "🌉 Tokyo Port · Pier 5 | 10:15 pm\nThe sea wind mixes diesel and rust as the cranes sweep overhead."
+
+
+def test_scene_title_detector_hits_and_misses():
+    # Hits: a short title-like line with a |/｜ separator AND a time marker.
+    assert _scene_title_lines("🌉 東京港·大井埠頭五号泊位 | 晚 10:15")
+    assert _scene_title_lines("码头仓库区 ｜ 深夜")
+    assert _scene_title_lines("## 東京港 | 凌晨 2:00\n正文继续。")
+    assert _scene_title_lines(_TITLE_REPLY)
+    # Misses: prose mentioning a time (no separator), a separator with no time
+    # marker, and an over-long line are all left alone.
+    assert not _scene_title_lines("你们在晚上10:15到达了码头,海风很冷,吊机在夜空里摆动。")
+    assert not _scene_title_lines("东京港 | 五号泊位")
+    assert not _scene_title_lines("东京港 | 深夜," + "很" * 140 + "冷")
+    assert not _scene_title_lines("The corridor stretches on, silent and cold.")
+
+
+async def test_scene_title_without_bookkeeping_triggers_a_state_correction():
+    # The KP draws a scene/time card in prose but calls no bookkeeping tool, so
+    # the corrective phase forces kp_note + game_clock, then allows a narration.
+    llm = FakeLLM(
+        script=[
+            assistant_text(_TITLE_REPLY),
+            assistant_tools(tool_call("kp_note", action="set", category="current_scene", content="Tokyo Port Pier 5")),
+            assistant_tools(tool_call("game_clock", action="advance", value="75m")),
+            assistant_text("The pier waits below, half-lit and quiet."),
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx("chat-state-fix"), services, _state_toolset(), "We take the train to the docks.")
+
+    assert [t["name"] for t in result.tool_trace] == ["kp_note", "game_clock"]
+    assert result.reply == "The pier waits below, half-lit and quiet."
+    # main reply + two forced bookkeeping rounds + one free narration round
+    assert len(llm.calls) == 4
+
+
+async def test_scene_title_with_bookkeeping_already_done_triggers_no_correction():
+    # Both bookkeeping tools already fired this turn, so the self-drawn title is
+    # fine as-is (the script would be exhausted if a correction fired).
+    llm = FakeLLM(
+        script=[
+            assistant_tools(tool_call("kp_note", action="set", category="current_scene", content="Pier 5")),
+            assistant_tools(tool_call("game_clock", action="set", value="22:15")),
+            assistant_text(_TITLE_REPLY),
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx("chat-state-ok"), services, _state_toolset(), "We take the train to the docks.")
+
+    assert [t["name"] for t in result.tool_trace] == ["kp_note", "game_clock"]
+    assert result.reply == _TITLE_REPLY
+    assert len(llm.calls) == 3
+
+
+async def test_plain_prose_without_a_scene_title_triggers_no_state_correction():
+    llm = FakeLLM(script=[assistant_text("The train rattles on through the dark suburbs.")])
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx("chat-state-plain"), services, _state_toolset(), "We take the train to the docks.")
+
+    assert result.tool_trace == []
+    assert len(llm.calls) == 1
+
+
+async def test_state_correction_is_bounded_and_keeps_the_original_reply():
+    # The forced round returns prose instead of a bookkeeping tool call: keep
+    # the ORIGINAL reply and stop -- never loop, never replace with the refusal.
+    llm = FakeLLM(
+        script=[
+            assistant_text(_TITLE_REPLY),
+            assistant_text("I would rather not do bookkeeping."),
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx("chat-state-stubborn"), services, _state_toolset(), "We take the train to the docks.")
+
+    assert result.tool_trace == []
+    assert result.reply == _TITLE_REPLY
+    assert len(llm.calls) == 2
+
+
+async def test_state_correction_falls_back_to_auto_when_required_is_rejected():
+    # Same provider shape as the dice suite: tool_choice="required" 400s
+    # (deepseek v4-pro thinking), so each forced round degrades to ONE "auto"
+    # retry instead of silently dropping HUD enforcement.
+    llm = _RequiredRejectingLLM(
+        script=[
+            assistant_text(_TITLE_REPLY),
+            assistant_tools(tool_call("kp_note", action="set", category="current_scene", content="Pier 5")),
+            assistant_tools(tool_call("game_clock", action="advance", value="75m")),
+            assistant_text("The pier waits below."),
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx("chat-state-400"), services, _state_toolset(), "We take the train to the docks.")
+
+    assert [t["name"] for t in result.tool_trace] == ["kp_note", "game_clock"]
+    assert result.reply == "The pier waits below."
+    # main + (required rejected, auto) x2 forced rounds + free narration round
+    assert llm.tool_choices == ["auto", "required", "auto", "required", "auto", "auto"]
