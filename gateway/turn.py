@@ -128,6 +128,15 @@ async def run_turn(
         else:
             await hub.publish(ctx.chat_key, reply_event)
     else:
+        # `.bot off` (gateway.commands.cmd_bot_toggle) mutes the AI Keeper for this
+        # room: the player message above is still echoed to everyone (a human-Keeper
+        # table keeps chatting, dice commands keep working), but no KP turn runs.
+        # Unset defaults to ON — the hub/TUI table's existing behavior. The chat
+        # adapters gate earlier, in `GatewayRunner.on_inbound`, with their own
+        # per-platform defaults; this check makes the same switch real on the hub path.
+        if not await _kp_enabled(services, ctx.chat_key):
+            await publish_state(hub, services, ctx)
+            return None
         # A room with a mature/explicit KP skill enabled (Layer B.1's mature-mode
         # gate — see `gateway.ops.room_content_unfiltered`) opts the output censor
         # OUT entirely for that room, regardless of the configured `Censor`; every
@@ -151,6 +160,17 @@ async def run_turn(
 
     await publish_state(hub, services, ctx)
     return result
+
+
+async def _kp_enabled(services: Services, chat_key: str) -> bool:
+    """Whether the AI Keeper answers non-command messages in this room.
+
+    Reads the SAME store flag `.bot on/off` writes (`bot_enabled.{chat_key}` --
+    see `gateway.commands.cmd_bot_toggle` and `GatewayRunner._bot_enabled`);
+    only an explicit "0" mutes the KP, so existing rooms keep today's behavior.
+    """
+    value = await services.store.get(user_key="", store_key=f"bot_enabled.{chat_key}")
+    return value != "0"
 
 
 def _matched_command_spec(command_router: CommandRouter, text: str, locale: str) -> CommandSpec | None:
