@@ -52,9 +52,9 @@ journalctl -u loreweaver -f       # 跟日志——ticket + 守秘人 key 启动
 
 | 变量 | 目的 | 默认值 |
 |---|---|---|
-| `TRPG_LLM__PROVIDER` | `openai`（+ 预设：`deepseek`、`groq`、`openrouter`、`together`、`ollama`、`lmstudio` 等），兼容代理的 `chatgpt` / `gpt-subscription`，或原生 `anthropic` / `gemini` | `openai` |
-| `TRPG_LLM__API_KEY` | 提供商 API 密钥 —— **留空 = 离线演示 Keeper** | *（空）* |
-| `TRPG_LLM__BASE_URL` | OpenAI 兼容的基础 URL；对于 `chatgpt` / `gpt-subscription` 代理别名为必需 | 提供商预设 |
+| `TRPG_LLM__PROVIDER` | `openai`（+ 预设：`deepseek`、`groq`、`openrouter`、`together`、`ollama`、`lmstudio` 等）、双模式 `chatgpt` / `gpt-subscription`、订阅模式 `supergrok`，或原生 `anthropic` / `gemini` | `openai` |
+| `TRPG_LLM__API_KEY` | 提供商/代理 API 密钥；订阅 OAuth 路径不使用它；对普通 API-key provider 而言，**留空 = 离线演示 Keeper** | *（空）* |
+| `TRPG_LLM__BASE_URL` | OpenAI-compatible 基础 URL；对 `chatgpt` / `gpt-subscription` 显式设置时选择代理路径，留空时选择订阅 OAuth | 提供商预设 |
 | `TRPG_LLM__CHAT_MODEL` | 聊天模型 id | `gpt-4o` |
 | `TRPG_LLM__EMBEDDING_MODEL` / `TRPG_LLM__EMBEDDING_DIM` | 检索嵌入 | `text-embedding-3-small` / `1536` |
 | `TRPG_LOCALE` | 用户界面语言 `en` / `zh` | `en` |
@@ -71,7 +71,9 @@ journalctl -u loreweaver -f       # 跟日志——ticket + 守秘人 key 启动
 
 聊天平台适配器（Discord/Telegram/QQ/飞书）**代码在树内,但无人维护、未对真平台实测**——见 [roadmap](roadmap.zh.md)。它们的 token（`TRPG_DISCORD__TOKEN`、`TRPG_TELEGRAM__TOKEN`、`TRPG_QQ__APP_ID` / `TRPG_QQ__SECRET`、`TRPG_FEISHU__APP_ID` / `TRPG_FEISHU__APP_SECRET`）仍在,`--serve --platforms discord` 可组合模式跑一个,但视为实验性。
 
-ChatGPT 订阅（chatgpt.com 上的 Free/Go/Plus/Pro/Business/Enterprise）不是 API 凭证，应用不使用 ChatGPT 浏览器会话、cookie 或非官方网页自动化作为模型后端。要通过订阅支持的服务路由，暴露或配置您部署控制的 OpenAI 兼容网关，然后设置 `TRPG_LLM__PROVIDER=gpt-subscription`、`TRPG_LLM__BASE_URL=<gateway /v1 endpoint>`、`TRPG_LLM__API_KEY=<gateway key>` 和 `TRPG_LLM__CHAT_MODEL=<gateway model id>`。
+ChatGPT 订阅不是 API key。要使用直接订阅路径，先启动服务器，在私密/本地 Keeper 聊天中运行 `.model login chatgpt`，完成设备码流程，再运行 `.model set chatgpt [model]`。此路径应让 `TRPG_LLM__BASE_URL` 保持为空；Loreweaver 使用保存的 OAuth grant，而不是浏览器 cookie 或网页会话自动化。运行 `.model login supergrok` 后再执行 `.model set supergrok [model]`，即可选择 SuperGrok 订阅路径；同一 grant 也可供其生图使用。
+
+原有兼容网关仍然受支持：将 provider 设为 `chatgpt` 或 `gpt-subscription`，显式设置 `TRPG_LLM__BASE_URL=<gateway /v1 endpoint>`，并提供网关 API key。显式 `base_url` 始终选择这条经典代理路径，而不是订阅 OAuth。
 
 ## 加密
 
@@ -100,6 +102,7 @@ Iroh 连接**天生端到端加密**（QUIC/TLS，每个对端由其公钥认证
 
 - **密钥**将不透明令牌绑定到 `room`（共享的 `chat_key`）和角色。使用 `--tui-key add` 生成；未知密钥在加入时被拒绝。密钥存储是 TOML 文件（`keys.toml`） —— 永远不要提交它。
 - **持久化**是一个 SQLite 文件（`loreweaver.db`），保存所有战役状态，由 `room` 作用域。保留 `/data` 卷以保持进度。
+- **运行时 provider 凭据**（包括订阅 OAuth 的 access/refresh grant）会以未加密形式保存在该本地 SQLite 文件中，以便重启后继续使用。请像保护 `.env`、`keys.toml` 一样保护数据库。
 - **房间备份**从 Keeper 管理 UI 创建的是服务器端 JSON 快照，放在 `<data_dir>/room_backups/` 下，除非提供路径。它们包括原始访问密钥、房间状态和向量数据，所以要像保护 `keys.toml` 一样保护它们。
 - **机密**（`.env`、`keys.toml`、`*.db`）被 git 忽略；只有 `*.example.*` 被跟踪。绝不提交它们。
 

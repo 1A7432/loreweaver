@@ -15,13 +15,18 @@ is intentional so a restart keeps a runtime-set key working. Prefer setting
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sqlite3
+from typing import TYPE_CHECKING, Any
 
 from infra.config import Settings
 from infra.imagegen import IMAGEGEN_OVERRIDE_FIELDS
 from infra.store import Store
+
+if TYPE_CHECKING:
+    from infra.oauth_flows import TokenManager
 
 # The ``llm`` fields a runtime override may set. ``embedding_*``/``temperature``
 # are deliberately left to env config: switching the chat model should not
@@ -41,7 +46,17 @@ DEFAULT_KEY = "runtime_config.llm"
 # secret so switching providers in the model screen never re-asks for a key. Stored
 # under its own `Store` key, same plaintext-local-DB caveat as the overrides above.
 CREDENTIALS_KEY = "runtime_config.credentials"
-_CREDENTIAL_FIELDS: tuple[str, ...] = ("api_key", "base_url")
+# api_key/base_url for classic providers; subscription OAuth adds optional
+# access_token/refresh_token/expires_at/account_id (unknown keys dropped on load).
+_CREDENTIAL_FIELDS: tuple[str, ...] = (
+    "api_key",
+    "base_url",
+    "access_token",
+    "refresh_token",
+    "expires_at",
+    "account_id",
+)
+_SUBSCRIPTION_FIELDS: tuple[str, ...] = ("access_token", "refresh_token", "expires_at", "account_id")
 IMAGEGEN_DEFAULT_KEY = "runtime_config.imagegen"
 IMAGEGEN_CREDENTIALS_KEY = "runtime_config.imagegen.credentials"
 
@@ -49,14 +64,14 @@ IMAGEGEN_CREDENTIALS_KEY = "runtime_config.imagegen.credentials"
 def apply_overrides(base: Settings, overrides: dict) -> Settings:
     """Return a copy of ``base`` with the given llm ``overrides`` overlaid.
 
-    Pure: ``base`` is never mutated. Only known, non-empty ``OVERRIDE_FIELDS``
-    are applied; anything else is ignored. An empty/irrelevant ``overrides``
-    yields a fresh deep copy of ``base``.
+    Pure: ``base`` is never mutated. Only known ``OVERRIDE_FIELDS`` are applied;
+    an explicit empty string clears the corresponding base setting. Anything
+    else is ignored. An empty/irrelevant ``overrides`` yields a fresh deep copy.
     """
     filtered = {
         key: value
         for key, value in (overrides or {}).items()
-        if key in OVERRIDE_FIELDS and value not in (None, "")
+        if key in OVERRIDE_FIELDS and value is not None
     }
     if not filtered:
         return base.model_copy(deep=True)
@@ -64,7 +79,7 @@ def apply_overrides(base: Settings, overrides: dict) -> Settings:
 
 
 def _decode(raw: str | None) -> dict[str, str]:
-    """Parse a persisted overrides blob, keeping only known, non-empty fields."""
+    """Parse a persisted overrides blob, preserving explicit empty fields."""
     if not raw:
         return {}
     try:
@@ -76,7 +91,7 @@ def _decode(raw: str | None) -> dict[str, str]:
     return {
         key: str(value)
         for key, value in data.items()
-        if key in OVERRIDE_FIELDS and value not in (None, "")
+        if key in OVERRIDE_FIELDS and value is not None
     }
 
 
@@ -115,6 +130,16 @@ class RuntimeConfig:
             if value in (None, ""):
                 continue
             current[key] = str(value)
+        await self._store.set(user_key="", store_key=self._key, value=json.dumps(current))
+        self._cache = current
+        return dict(current)
+
+    async def replace(self, **overrides: str) -> dict[str, str]:
+        """Replace the persisted snapshot, preserving explicit empty strings."""
+        for key in overrides:
+            if key not in OVERRIDE_FIELDS:
+                raise ValueError(key)
+        current = {key: str(value) for key, value in overrides.items() if value is not None}
         await self._store.set(user_key="", store_key=self._key, value=json.dumps(current))
         self._cache = current
         return dict(current)
@@ -159,7 +184,7 @@ def _decode_imagegen(raw: str | None) -> dict[str, str]:
     return {
         key: str(value)
         for key, value in data.items()
-        if key in IMAGEGEN_OVERRIDE_FIELDS and value not in (None, "")
+        if key in IMAGEGEN_OVERRIDE_FIELDS and value is not None
     }
 
 
@@ -189,6 +214,16 @@ class ImageGenRuntimeConfig:
             if value in (None, ""):
                 continue
             current[key] = str(value)
+        await self._store.set(user_key="", store_key=self._key, value=json.dumps(current))
+        self._cache = current
+        return dict(current)
+
+    async def replace(self, **overrides: str) -> dict[str, str]:
+        """Replace the persisted snapshot, preserving explicit empty strings."""
+        for key in overrides:
+            if key not in IMAGEGEN_OVERRIDE_FIELDS:
+                raise ValueError(key)
+        current = {key: str(value) for key, value in overrides.items() if value is not None}
         await self._store.set(user_key="", store_key=self._key, value=json.dumps(current))
         self._cache = current
         return dict(current)
@@ -242,8 +277,12 @@ def _decode_book(raw: str | None) -> dict[str, dict[str, str]]:
 
 
 class CredentialBook:
-    """Per-provider LLM credentials (``{provider: {api_key, base_url}}``), persisted
-    in the ``Store`` under one JSON key.
+    """Per-provider LLM credentials, persisted in the ``Store`` under one JSON key.
+
+    Classic providers store ``{api_key, base_url}``. Subscription providers
+    (ChatGPT / SuperGrok) additionally store
+    ``{access_token, refresh_token, expires_at, account_id}`` via
+    :meth:`save_subscription` / :meth:`load_subscription`.
 
     This is what lets the model screen offer *multiple* provider/key combos: set a
     key once for ``deepseek`` and once for ``openai``, then switching between them
@@ -255,11 +294,36 @@ class CredentialBook:
         self._store = store
         self._key = key
         self._cache: dict[str, dict[str, str]] | None = None
+        self._subscription_managers: dict[str, TokenManager] = {}
+        self._disabled_subscriptions: set[str] = set()
+        self._mutation_lock = asyncio.Lock()
 
     async def _load(self) -> dict[str, dict[str, str]]:
         raw = await self._store.get(user_key="", store_key=self._key)
         self._cache = _decode_book(raw)
         return self._cache
+
+    def load_sync(self) -> dict[str, dict[str, str]]:
+        """Synchronously read the credential book (for boot / build_llm)."""
+        path = self._store.path
+        if path == ":memory:" or not os.path.exists(path):
+            if self._cache is None:
+                self._cache = {}
+            return {provider: dict(cred) for provider, cred in self._cache.items()}
+        row = None
+        try:
+            conn = sqlite3.connect(path)
+            try:
+                row = conn.execute(
+                    "SELECT value FROM kv WHERE user_key = '' AND store_key = ?",
+                    (self._key,),
+                ).fetchone()
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            row = None
+        self._cache = _decode_book(row[0]) if row else {}
+        return {provider: dict(cred) for provider, cred in self._cache.items()}
 
     async def all(self) -> dict[str, dict[str, str]]:
         """The whole book (a copy), loading once if not cached."""
@@ -272,36 +336,244 @@ class CredentialBook:
         book = await self.all()
         return book.get((provider or "").casefold(), {})
 
+    def get_sync(self, provider: str) -> dict[str, str]:
+        """Sync credential lookup (uses cache, or load_sync when cold)."""
+        provider = (provider or "").casefold()
+        if self._cache is None:
+            self.load_sync()
+        return dict((self._cache or {}).get(provider, {}))
+
     async def providers(self) -> list[str]:
-        """Sorted providers that have a saved API key — what the UI marks 'ready'."""
+        """Sorted providers that have a saved API key or subscription token."""
         book = await self.all()
-        return sorted(name for name, cred in book.items() if cred.get("api_key"))
+        return sorted(
+            name
+            for name, cred in book.items()
+            if cred.get("api_key") or cred.get("access_token")
+        )
 
     async def remember(self, provider: str, *, api_key: str = "", base_url: str = "") -> None:
         """Upsert `provider`'s credential, keeping any field left blank."""
         provider = (provider or "").casefold()
         if not provider:
             return
-        if self._cache is None:
-            await self._load()
+        async with self._mutation_lock:
+            if self._cache is None:
+                await self._load()
+            assert self._cache is not None
+            entry = dict(self._cache.get(provider, {}))
+            if api_key:
+                entry["api_key"] = api_key
+            if base_url:
+                entry["base_url"] = base_url
+            if not entry:
+                return
+            self._cache[provider] = entry
+            await self._store.set(user_key="", store_key=self._key, value=json.dumps(self._cache))
+
+    async def save_subscription(self, provider: str, token: Any) -> None:
+        """Persist a :class:`~infra.oauth_flows.SubscriptionToken` under ``provider``.
+
+        Accepts a ``SubscriptionToken`` dataclass or a plain mapping with the same fields.
+        Stored under the canonical subscription name (``chatgpt`` / ``supergrok``).
+        """
+        from infra.oauth_flows import SubscriptionToken, canonical_subscription_provider
+
+        provider = canonical_subscription_provider(provider)
+        if not provider:
+            return
+        if isinstance(token, SubscriptionToken):
+            fields = {
+                "access_token": token.access_token,
+                "refresh_token": token.refresh_token,
+                "expires_at": str(token.expires_at),
+                "account_id": token.account_id or "",
+            }
+        elif isinstance(token, dict):
+            fields = {
+                "access_token": str(token.get("access_token") or ""),
+                "refresh_token": str(token.get("refresh_token") or ""),
+                "expires_at": str(token.get("expires_at") or ""),
+                "account_id": str(token.get("account_id") or ""),
+            }
+        else:
+            raise TypeError("token")
+        if not fields["access_token"] or not fields["refresh_token"]:
+            return
+        # A successful new login supersedes any live clients holding the old
+        # token. Refresh callbacks use ``_persist_manager_update`` instead.
+        manager = self._subscription_managers.pop(provider, None)
+        if manager is not None:
+            manager.invalidate()
+        async with self._mutation_lock:
+            if self._cache is None:
+                await self._load()
+            assert self._cache is not None
+            self._write_subscription_fields(provider, fields)
+            self._disabled_subscriptions.discard(provider)
+            await self._store.set(user_key="", store_key=self._key, value=json.dumps(self._cache))
+
+    def _write_subscription_fields(self, provider: str, fields: dict[str, str]) -> None:
         assert self._cache is not None
         entry = dict(self._cache.get(provider, {}))
-        if api_key:
-            entry["api_key"] = api_key
-        if base_url:
-            entry["base_url"] = base_url
-        if not entry:
-            return
+        for key in _SUBSCRIPTION_FIELDS:
+            value = fields.get(key, "")
+            if value:
+                entry[key] = value
+            elif key == "account_id":
+                entry.pop(key, None)
+        # Official subscription paths use neither a static key nor a proxy URL.
+        entry.pop("api_key", None)
+        entry.pop("base_url", None)
         self._cache[provider] = entry
-        await self._store.set(user_key="", store_key=self._key, value=json.dumps(self._cache))
+
+    async def _persist_manager_update(
+        self,
+        provider: str,
+        manager: TokenManager,
+        token: Any,
+    ) -> None:
+        """Persist a refresh only while its manager is still current and active."""
+        from infra.oauth_flows import SubscriptionToken
+
+        if not isinstance(token, SubscriptionToken):
+            return
+        fields = {
+            "access_token": token.access_token,
+            "refresh_token": token.refresh_token,
+            "expires_at": str(token.expires_at),
+            "account_id": token.account_id or "",
+        }
+        async with self._mutation_lock:
+            if self._subscription_managers.get(provider) is not manager or not manager.active:
+                return
+            if self._cache is None:
+                await self._load()
+            assert self._cache is not None
+            self._write_subscription_fields(provider, fields)
+            await self._store.set(user_key="", store_key=self._key, value=json.dumps(self._cache))
+
+    def subscription_manager_sync(self, provider: str) -> TokenManager | None:
+        """Return the one shared live token manager for a subscription provider."""
+        from infra.oauth_flows import canonical_subscription_provider, flow_for
+
+        provider = canonical_subscription_provider(provider)
+        if not provider or provider in self._disabled_subscriptions:
+            return None
+        existing = self._subscription_managers.get(provider)
+        if existing is not None and existing.active:
+            return existing
+        self._subscription_managers.pop(provider, None)
+        token = self.load_subscription_sync(provider)
+        if token is None:
+            return None
+
+        holder: dict[str, TokenManager] = {}
+
+        async def _on_update(updated: Any) -> None:
+            await self._persist_manager_update(provider, holder["manager"], updated)
+
+        from infra.oauth_flows import TokenManager
+
+        manager = TokenManager(token, flow_for(provider), on_update=_on_update)
+        holder["manager"] = manager
+        self._subscription_managers[provider] = manager
+        return manager
+
+    async def load_subscription(self, provider: str) -> Any | None:
+        """Load a :class:`~infra.oauth_flows.SubscriptionToken` or ``None`` if absent/invalid."""
+        from infra.oauth_flows import SubscriptionToken, canonical_subscription_provider
+
+        provider = canonical_subscription_provider(provider)
+        cred = await self.get(provider)
+        access = cred.get("access_token") or ""
+        refresh = cred.get("refresh_token") or ""
+        if not access or not refresh:
+            return None
+        try:
+            expires_at = float(cred.get("expires_at") or 0)
+        except (TypeError, ValueError):
+            expires_at = 0.0
+        return SubscriptionToken(
+            access_token=access,
+            refresh_token=refresh,
+            expires_at=expires_at,
+            account_id=cred.get("account_id") or "",
+        )
+
+    def load_subscription_sync(self, provider: str) -> Any | None:
+        """Sync form of :meth:`load_subscription` for boot / build_llm."""
+        from infra.oauth_flows import SubscriptionToken, canonical_subscription_provider
+
+        provider = canonical_subscription_provider(provider)
+        cred = self.get_sync(provider)
+        access = cred.get("access_token") or ""
+        refresh = cred.get("refresh_token") or ""
+        if not access or not refresh:
+            return None
+        try:
+            expires_at = float(cred.get("expires_at") or 0)
+        except (TypeError, ValueError):
+            expires_at = 0.0
+        return SubscriptionToken(
+            access_token=access,
+            refresh_token=refresh,
+            expires_at=expires_at,
+            account_id=cred.get("account_id") or "",
+        )
 
     async def forget(self, provider: str) -> None:
         """Drop `provider`'s saved credential (no-op if absent)."""
-        provider = (provider or "").casefold()
-        if self._cache is None:
-            await self._load()
-        assert self._cache is not None
-        if self._cache.pop(provider, None) is not None:
+        from infra.oauth_flows import canonical_subscription_provider, is_subscription_provider
+
+        raw = (provider or "").casefold()
+        # Clear both the alias and the canonical subscription name.
+        names = {raw}
+        if is_subscription_provider(raw):
+            canonical = canonical_subscription_provider(raw)
+            names.add(canonical)
+            self._disabled_subscriptions.add(canonical)
+            manager = self._subscription_managers.pop(canonical, None)
+            if manager is not None:
+                manager.invalidate()
+        async with self._mutation_lock:
+            if self._cache is None:
+                await self._load()
+            assert self._cache is not None
+            changed = False
+            for name in names:
+                if self._cache.pop(name, None) is not None:
+                    changed = True
+            if changed:
+                await self._store.set(user_key="", store_key=self._key, value=json.dumps(self._cache))
+
+    async def forget_subscription(self, provider: str) -> None:
+        """Revoke only OAuth fields/manager, preserving an independent proxy key."""
+        from infra.oauth_flows import canonical_subscription_provider
+
+        provider = canonical_subscription_provider(provider)
+        if not provider:
+            return
+        self._disabled_subscriptions.add(provider)
+        manager = self._subscription_managers.pop(provider, None)
+        if manager is not None:
+            manager.invalidate()
+
+        async with self._mutation_lock:
+            if self._cache is None:
+                await self._load()
+            assert self._cache is not None
+            entry = dict(self._cache.get(provider, {}))
+            changed = False
+            for key in _SUBSCRIPTION_FIELDS:
+                if entry.pop(key, None) is not None:
+                    changed = True
+            if not changed:
+                return
+            if entry:
+                self._cache[provider] = entry
+            else:
+                self._cache.pop(provider, None)
             await self._store.set(user_key="", store_key=self._key, value=json.dumps(self._cache))
 
 

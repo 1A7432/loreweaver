@@ -449,10 +449,17 @@ export interface AdminConfigFrame {
   base_url: string
   api_key_masked: string
   providers: string[]
-  // Providers that already have a saved key — the model screen marks these 'ready'.
+  // Providers that already have a saved API key or OAuth grant — the model screen marks these 'ready'.
   saved_providers: string[]
   override_active: boolean
   imagegen?: ImageGenStatus
+  /**
+   * Subscription OAuth status for the *current* provider when it uses a ChatGPT /
+   * SuperGrok grant (no new frame type — optional field only). Empty or absent for
+   * classic API-key providers, including dual-mode ChatGPT aliases with an explicit
+   * proxy `base_url`. Login itself is still a chat command (`.model login`).
+   */
+  subscription_status?: "" | "logged_in" | "logged_out"
 }
 
 // The live model catalog for `provider` (empty when the provider is a native SDK,

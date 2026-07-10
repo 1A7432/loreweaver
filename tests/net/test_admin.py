@@ -131,7 +131,12 @@ async def test_keeper_can_get_and_set_config_list_and_mint_keys():
         assert updated["override_active"] is True
         # live reconfigure mutated the shared settings, and it persisted.
         assert services.settings.llm.provider == "deepseek"
-        assert await services.runtime_config.get() == {"provider": "deepseek", "chat_model": "deepseek-chat"}
+        assert await services.runtime_config.get() == {
+            "provider": "deepseek",
+            "chat_model": "deepseek-chat",
+            "api_key": "",
+            "base_url": "",
+        }
 
         # an unknown provider is refused without mutating anything.
         bad = await _send(ws, {"type": "admin_set_model", "provider": "nope-9000"})
@@ -261,6 +266,70 @@ async def test_admin_set_model_rolls_back_and_persists_nothing_when_the_provider
     assert services.settings.llm.provider == "openai"  # unchanged
     assert await services.runtime_config.get() == {}  # not persisted
     assert isinstance(services.llm.inner, FakeLLM)  # live LLM rolled back
+
+
+async def test_admin_set_model_replaces_provider_scoped_credentials():
+    import time
+
+    from infra.i18n import get_i18n
+    from infra.oauth_flows import SubscriptionToken
+    from net.admin import handle_admin_frame
+
+    services = _services()
+    previous = {
+        "provider": "deepseek",
+        "chat_model": "deepseek-chat",
+        "api_key": "sk-old-provider",
+        "base_url": "https://old-provider.example/v1",
+    }
+    await services.runtime_config.replace(**previous)
+    services.llm.apply(previous)
+    await services.llm_credentials.save_subscription(
+        "supergrok",
+        SubscriptionToken("access-secret", "refresh-secret", time.time() + 3600),
+    )
+
+    switched = await handle_admin_frame(
+        services,
+        Keystore(),
+        "keeper",
+        "",
+        {"type": "admin_set_model", "provider": "supergrok"},
+        get_i18n("en"),
+    )
+
+    assert switched["type"] == "admin_config"
+    assert switched["provider"] == "supergrok"
+    assert await services.runtime_config.get() == {
+        "provider": "supergrok",
+        "chat_model": "grok-4.3",
+        "api_key": "",
+        "base_url": "",
+    }
+    assert services.settings.llm.api_key == ""
+    assert services.settings.llm.base_url == ""
+
+    await services.llm_credentials.remember(
+        "chatgpt",
+        api_key="sk-chatgpt-proxy",
+        base_url="https://chatgpt-proxy.example/v1",
+    )
+    proxy = await handle_admin_frame(
+        services,
+        Keystore(),
+        "keeper",
+        "",
+        {"type": "admin_set_model", "provider": "chatgpt", "chat_model": "proxy-model"},
+        get_i18n("en"),
+    )
+
+    assert proxy["type"] == "admin_config"
+    assert await services.runtime_config.get() == {
+        "provider": "chatgpt",
+        "chat_model": "proxy-model",
+        "api_key": "sk-chatgpt-proxy",
+        "base_url": "https://chatgpt-proxy.example/v1",
+    }
 
 
 async def test_keeper_can_export_delete_and_import_room_data(tmp_path):
@@ -461,6 +530,10 @@ async def test_set_model_remembers_each_providers_key_and_reuses_it_on_switch_ba
 
 
 async def test_admin_set_imagegen_configures_runtime_and_masks_key():
+    import time
+
+    from infra.oauth_flows import SubscriptionToken
+
     services = _services()
     keystore = Keystore()
     keeper_key = keystore.add(room="arkham", name="Keeper", role="keeper")
@@ -500,6 +573,35 @@ async def test_admin_set_imagegen_configures_runtime_and_masks_key():
             listed = await _send(ws, {"type": "admin_list_models", "provider": "openai"})
         assert listed["type"] == "admin_models"
         assert listed["imagegen"]["configured"] is True
+
+        # Switching to the OAuth-backed image provider replaces the whole
+        # provider-scoped snapshot. Neither the previous OpenAI key/base_url nor
+        # malicious values supplied on this frame may reach SuperGrok.
+        await services.llm_credentials.save_subscription(
+            "supergrok",
+            SubscriptionToken("access-secret", "refresh-secret", time.time() + 3600),
+        )
+        supergrok = await _send(
+            ws,
+            {
+                "type": "admin_set_imagegen",
+                "provider": "supergrok",
+                "model": "grok-imagine-image",
+                "api_key": "sk-must-be-ignored",
+                "base_url": "https://must-not-receive-token.example/v1",
+            },
+        )
+        assert supergrok["type"] == "admin_config"
+        assert supergrok["imagegen"]["provider"] == "supergrok"
+        assert services.settings.imagegen.api_key == ""
+        assert services.settings.imagegen.base_url == ""
+        assert await services.imagegen_runtime_config.get() == {
+            "provider": "supergrok",
+            "model": "grok-imagine-image",
+            "size": "512x512",
+            "api_key": "",
+            "base_url": "",
+        }
 
         await ws.close()
     finally:

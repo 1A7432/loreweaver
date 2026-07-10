@@ -11,10 +11,12 @@ from infra.providers import (
     PRESETS,
     AnthropicLLM,
     GeminiLLM,
+    MutableLLM,
     build_llm,
     from_anthropic_response,
     from_gemini_response,
     is_known_provider,
+    list_models,
     sanitize_gemini_tool_parameters,
     to_anthropic_messages,
     to_anthropic_tools,
@@ -71,11 +73,78 @@ def test_build_llm_selects_chatgpt_subscription_proxy_with_explicit_base_url(mon
     assert llm._client.init_kwargs["base_url"] == "https://proxy.example/v1"
 
 
-def test_build_llm_rejects_chatgpt_subscription_proxy_without_base_url(monkeypatch):
+def test_openai_compat_client_never_borrows_ambient_openai_key(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-must-not-leak")
     monkeypatch.setattr("infra.llm.AsyncOpenAI", _FakeAsyncOpenAI)
 
-    with pytest.raises(ValueError, match="chatgpt_subscription_proxy_requires_base_url"):
+    llm = build_llm(
+        Settings(
+            llm=LLMSettings(
+                provider="chatgpt",
+                api_key="",
+                base_url="https://proxy.example/v1",
+            )
+        )
+    )
+
+    assert isinstance(llm, OpenAILLM)
+    assert llm._client.init_kwargs["api_key"] == "missing"
+
+
+def test_build_llm_chatgpt_without_base_url_requires_subscription_login(monkeypatch):
+    monkeypatch.setattr("infra.llm.AsyncOpenAI", _FakeAsyncOpenAI)
+
+    # Without credentials / prior `.model login`, the official OAuth path refuses to build.
+    with pytest.raises(ValueError, match="subscription_login_required"):
         build_llm(_settings("gpt-subscription"))
+
+
+async def test_list_models_does_not_construct_client_for_subscription_providers(monkeypatch):
+    calls = []
+
+    def _unexpected_client(**kwargs):
+        calls.append(kwargs)
+        raise AssertionError("AsyncOpenAI must not be constructed")
+
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-secret")
+    monkeypatch.setattr("openai.AsyncOpenAI", _unexpected_client)
+
+    assert await list_models(
+        LLMSettings(
+            provider="supergrok",
+            api_key="",
+            base_url="https://stale-proxy.example/v1",
+        )
+    ) == []
+    assert await list_models(LLMSettings(provider="chatgpt", api_key="", base_url="")) == []
+    assert calls == []
+
+
+async def test_list_models_never_raises_when_client_construction_fails(monkeypatch):
+    def _broken_client(**_kwargs):
+        raise ValueError("malformed base URL")
+
+    monkeypatch.setattr("openai.AsyncOpenAI", _broken_client)
+
+    models = await list_models(
+        LLMSettings(provider="openai", api_key="sk-test", base_url="not-a-url")
+    )
+
+    assert models == []
+
+
+def test_mutable_llm_does_not_retry_internal_builder_type_error():
+    calls = 0
+
+    def broken_builder(_settings, *, credentials=None):
+        nonlocal calls
+        calls += 1
+        raise TypeError("builder implementation failed")
+
+    with pytest.raises(TypeError, match="implementation failed"):
+        MutableLLM(_settings("openai"), builder=broken_builder)
+
+    assert calls == 1
 
 
 def test_build_llm_selects_anthropic(monkeypatch):

@@ -6,7 +6,11 @@ offline.
 
 from __future__ import annotations
 
+import asyncio
 import json
+from copy import deepcopy
+
+import pytest
 
 from agent.context import AgentCtx
 from agent.loop import (
@@ -65,6 +69,13 @@ class _MixedProvider:
     async def get_character_sheet(self, ctx: AgentCtx) -> str:
         """Read the investigator's character sheet (rolls no dice)."""
         return "STR 50, DEX 60, Spot Hidden 65"
+
+
+class _ExplodingProvider:
+    @tool
+    async def explode(self, ctx: AgentCtx) -> str:
+        """Raise an unexpected tool implementation failure."""
+        raise RuntimeError("tool exploded")
 
 
 def _toolset() -> Toolset:
@@ -179,6 +190,8 @@ async def test_max_rounds_fallback_triggers_when_the_llm_always_returns_tool_cal
         return assistant_tools(tool_call("lookup_time"))
 
     llm = FakeLLM(responder=_always_tool_calls)
+    cleared: list[list[dict]] = []
+    llm.clear_continuation = cleared.append  # type: ignore[attr-defined]
     services = _services(llm)
 
     result = await run_kp_turn(_ctx("chat-5"), services, _toolset(), "hi", max_rounds=3)
@@ -186,6 +199,28 @@ async def test_max_rounds_fallback_triggers_when_the_llm_always_returns_tool_cal
     assert result.rounds == 3
     assert len(result.tool_trace) == 3
     assert result.reply == services.i18n.with_locale("en").t("loop.max_rounds")
+    assert len(cleared) == 1
+
+
+async def test_cancelled_tool_continuation_is_cleared_before_propagating():
+    calls = 0
+
+    def responder(_messages, _tools):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return assistant_tools(tool_call("lookup_time"))
+        raise asyncio.CancelledError
+
+    llm = FakeLLM(responder=responder)
+    cleared: list[list[dict]] = []
+    llm.clear_continuation = cleared.append  # type: ignore[attr-defined]
+    services = _services(llm)
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_kp_turn(_ctx("chat-cancelled"), services, _toolset(), "hi")
+
+    assert len(cleared) == 1
 
 
 async def test_max_rounds_fallback_is_localized_per_ctx_locale():
@@ -211,6 +246,45 @@ async def test_max_rounds_fallback_also_goes_through_output_review():
     result = await run_kp_turn(_ctx("chat-6"), services, _toolset(), "hi", max_rounds=2, output_review=str.upper)
 
     assert result.reply == services.i18n.with_locale("en").t("loop.max_rounds").upper()
+
+
+async def test_max_rounds_clears_continuation_before_output_review_failure():
+    llm = FakeLLM(responder=lambda messages, tools: assistant_tools(tool_call("lookup_time")))
+    cleared: list[list[dict]] = []
+    llm.clear_continuation = cleared.append  # type: ignore[attr-defined]
+    services = _services(llm)
+
+    def broken_review(_reply: str) -> str:
+        raise RuntimeError("review exploded")
+
+    with pytest.raises(RuntimeError, match="review exploded"):
+        await run_kp_turn(
+            _ctx("chat-review-cleanup"),
+            services,
+            _toolset(),
+            "hi",
+            max_rounds=1,
+            output_review=broken_review,
+        )
+
+    assert len(cleared) == 1
+
+
+async def test_unexpected_tool_dispatch_failure_clears_continuation():
+    llm = FakeLLM(script=[assistant_tools(tool_call("explode"))])
+    cleared: list[list[dict]] = []
+    llm.clear_continuation = cleared.append  # type: ignore[attr-defined]
+    services = _services(llm)
+
+    with pytest.raises(RuntimeError, match="tool exploded"):
+        await run_kp_turn(
+            _ctx("chat-dispatch-cleanup"),
+            services,
+            Toolset(_ExplodingProvider()),
+            "trigger",
+        )
+
+    assert len(cleared) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +405,44 @@ async def test_narrating_a_check_without_rolling_triggers_one_corrective_dice_ro
     assert [t["name"] for t in result.tool_trace] == ["skill_check"]
     assert result.reply == "Your fingers brush a hidden latch beneath the desk."
     assert len(llm.calls) == 3  # initial reply + one corrective tool round + re-narration
+
+
+async def test_correction_drops_completed_main_round_tool_chatter():
+    responses = [
+        assistant_tools(tool_call("get_character_sheet")),
+        assistant_text("You examine the room but have not resolved the search."),
+        assistant_tools(tool_call("skill_check", skill_name="Spot Hidden")),
+        assistant_text("A real roll reveals a hidden latch."),
+    ]
+    snapshots: list[list[dict]] = []
+
+    def responder(messages, tools):
+        snapshots.append(deepcopy(messages))
+        return responses.pop(0)
+
+    llm = FakeLLM(responder=responder)
+    services = _services(llm)
+
+    result = await run_kp_turn(
+        _ctx("chat-correction-clean"),
+        services,
+        Toolset(_MixedProvider()),
+        "I search the room for hidden clues.",
+    )
+
+    correction_request = snapshots[2]
+    assert all(message.get("role") != "tool" for message in correction_request)
+    assert all(not message.get("tool_calls") for message in correction_request)
+    assert any(
+        message.get("role") == "assistant"
+        and message.get("content") == "You examine the room but have not resolved the search."
+        for message in correction_request
+    )
+    assert [entry["name"] for entry in result.tool_trace] == [
+        "get_character_sheet",
+        "skill_check",
+    ]
+    assert result.reply == "A real roll reveals a hidden latch."
 
 
 class _RequiredRejectingLLM(FakeLLM):

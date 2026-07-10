@@ -31,6 +31,11 @@ from core.skills import available_skills
 from gateway.ops import get_enabled_skills, set_enabled_skills
 from infra.i18n import I18n
 from infra.imagegen import apply_imagegen_overrides, build_imagegen, describe_imagegen_settings
+from infra.oauth_flows import (
+    SUBSCRIPTION_DEFAULT_MODELS,
+    canonical_subscription_provider,
+    is_subscription_provider,
+)
 from infra.providers import (
     CHATGPT_SUBSCRIPTION_PROXY_PROVIDER_NAMES,
     NATIVE_PROVIDER_NAMES,
@@ -146,18 +151,43 @@ async def _config_frame(services: Services) -> dict[str, Any]:
     info = _describe_llm(services)
     overrides = await services.runtime_config.get()
     saved_providers = await services.llm_credentials.providers()
+    # Subscription status for the model screen (no new protocol frames).
+    provider = (info["provider"] or "").casefold()
+    base_url = info.get("base_url") or ""
+    api_key_masked = info["api_key"]
+    # Pure OAuth path only: supergrok, or chatgpt/gpt-subscription without a proxy base_url.
+    # chatgpt + base_url still means a user-operated proxy (classic key masking).
+    oauth_path = provider == "supergrok" or (
+        is_subscription_provider(provider) and provider != "supergrok" and not base_url
+    )
+    subscription_status = ""
+    if oauth_path:
+        sub = await services.llm_credentials.load_subscription(provider)
+        if sub is not None:
+            subscription_status = "logged_in"
+            from datetime import UTC, datetime
+
+            try:
+                api_key_masked = datetime.fromtimestamp(float(sub.expires_at), tz=UTC).strftime("sub:%Y-%m-%dT%H:%MZ")
+            except (TypeError, ValueError, OSError):
+                api_key_masked = "sub:logged_in"
+        else:
+            subscription_status = "logged_out"
+            api_key_masked = ""
     return {
         "type": "admin_config",
         "provider": info["provider"],
         "chat_model": info["chat_model"],
         "base_url": info["base_url"],
-        "api_key_masked": info["api_key"],
+        "api_key_masked": api_key_masked,
         "providers": _provider_names(),
         # Providers that already have a saved key — the model screen marks these 'ready' and
         # switching to one never re-asks for its key (see `_set_model`).
         "saved_providers": saved_providers,
         "override_active": bool(overrides),
         "imagegen": await _imagegen_status(services),
+        # Optional hint (clients that ignore unknown fields stay compatible).
+        "subscription_status": subscription_status,
     }
 
 
@@ -166,37 +196,64 @@ async def _set_model(services: Services, frame: dict[str, Any], i18n: I18n) -> d
     if not provider or not is_known_provider(provider):
         return _error("unknown_provider", i18n)
 
-    overrides: dict[str, str] = {"provider": provider}
-    chat_model = str(frame.get("chat_model") or "").strip()
-    if chat_model:
-        overrides["chat_model"] = chat_model
-    api_key = str(frame.get("api_key") or "").strip()
-    base_url = str(frame.get("base_url") or "").strip()
-    # Fall back to a previously-saved credential for this provider when the caller didn't supply
-    # one, so switching back to a provider you've configured before doesn't re-ask for its key.
-    saved = await services.llm_credentials.get(provider)
-    if not api_key and saved.get("api_key"):
-        api_key = saved["api_key"]
-    if not base_url and saved.get("base_url"):
-        base_url = saved["base_url"]
-    if api_key:
-        overrides["api_key"] = api_key
-    if base_url:
-        overrides["base_url"] = base_url
+    current = await services.runtime_config.get()
+    live = _live_llm_settings(services)
+    same_provider = _provider_identity(provider) == _provider_identity(live.provider)
+    saved = await _saved_llm_credentials(services, provider)
+
+    supplied_api_key = str(frame.get("api_key") or "").strip()
+    supplied_base_url = str(frame.get("base_url") or "").strip()
+    if provider == "supergrok":
+        # Official SuperGrok OAuth is never sent to a caller-supplied endpoint.
+        api_key = ""
+        base_url = ""
+    else:
+        current_api_key = (live.api_key or "") if same_provider else ""
+        current_base_url = (live.base_url or "") if same_provider else ""
+        api_key = supplied_api_key or current_api_key or saved.get("api_key", "")
+        base_url = supplied_base_url or current_base_url or saved.get("base_url", "")
+
+    oauth_path = provider == "supergrok" or (
+        provider in CHATGPT_SUBSCRIPTION_PROXY_PROVIDER_NAMES and not base_url
+    )
+    if oauth_path:
+        sub = await services.llm_credentials.load_subscription(provider)
+        if sub is None:
+            return _error("set_failed", i18n)
+
+    supplied_model = str(frame.get("chat_model") or "").strip()
+    if supplied_model:
+        chat_model = supplied_model
+    elif same_provider:
+        chat_model = live.chat_model
+    else:
+        chat_model = SUBSCRIPTION_DEFAULT_MODELS.get(provider, live.chat_model)
+
+    overrides = {
+        key: value
+        for key, value in current.items()
+        if key not in {"provider", "chat_model", "api_key", "base_url"}
+    }
+    overrides.update(
+        {
+            "provider": provider,
+            "chat_model": chat_model,
+            "api_key": api_key,
+            "base_url": base_url,
+        }
+    )
 
     # Reconfigure the LIVE LLM FIRST; persist only on success (mirrors gateway.commands._model_set):
     # a native provider with a missing SDK/key raises here, and persisting a bad override would also
     # brick the next `build_services()` boot. On failure, roll the live LLM back and persist nothing.
-    current = await services.runtime_config.get()
-    candidate = {**current, **overrides}
     try:
-        _reconfigure_llm(services, candidate)
+        _reconfigure_llm(services, overrides)
     except Exception:
         _reconfigure_llm(services, current)
         return _error("set_failed", i18n)
-    await services.runtime_config.set(**overrides)
+    await services.runtime_config.replace(**overrides)
     # Remember this provider's credential so the next switch to it is frictionless.
-    if api_key or base_url:
+    if not oauth_path and (api_key or base_url):
         await services.llm_credentials.remember(provider, api_key=api_key, base_url=base_url)
     return await _config_frame(services)
 
@@ -238,29 +295,36 @@ async def _set_imagegen(services: Services, frame: dict[str, Any], i18n: I18n) -
     if not _valid_image_size(size):
         return _error("bad_request", i18n)
 
-    api_key = str(frame.get("api_key") or "").strip()
-    base_url = str(frame.get("base_url") or "").strip()
+    supplied_api_key = str(frame.get("api_key") or "").strip()
+    supplied_base_url = str(frame.get("base_url") or "").strip()
+    live = services.settings.imagegen
+    same_provider = provider == (live.provider or "").casefold()
     saved = await services.imagegen_credentials.get(provider)
-    if not api_key and saved.get("api_key"):
-        api_key = saved["api_key"]
-    if not base_url and saved.get("base_url"):
-        base_url = saved["base_url"]
+    if provider == "supergrok":
+        api_key = ""
+        base_url = ""
+    else:
+        current_api_key = (live.api_key or "") if same_provider else ""
+        current_base_url = (live.base_url or "") if same_provider else ""
+        api_key = supplied_api_key or current_api_key or saved.get("api_key", "")
+        base_url = supplied_base_url or current_base_url or saved.get("base_url", "")
 
-    overrides: dict[str, str] = {"provider": provider, "model": model, "size": size}
-    if api_key:
-        overrides["api_key"] = api_key
-    if base_url:
-        overrides["base_url"] = base_url
+    overrides: dict[str, str] = {
+        "provider": provider,
+        "model": model,
+        "size": size,
+        "api_key": api_key,
+        "base_url": base_url,
+    }
 
     current = await services.imagegen_runtime_config.get()
-    candidate = {**current, **overrides}
     try:
-        _reconfigure_imagegen(services, candidate)
+        _reconfigure_imagegen(services, overrides)
     except Exception:
         _reconfigure_imagegen(services, current)
         return _error("set_failed", i18n)
-    await services.imagegen_runtime_config.set(**overrides)
-    if api_key or base_url:
+    await services.imagegen_runtime_config.replace(**overrides)
+    if provider != "supergrok" and (api_key or base_url):
         await services.imagegen_credentials.remember(provider, api_key=api_key, base_url=base_url)
     return await _config_frame(services)
 
@@ -274,8 +338,34 @@ async def _imagegen_status(services: Services) -> dict[str, Any]:
 
 def _provider_names() -> list[str]:
     """Every provider `.model`/`is_known_provider` accepts: OpenAI-compatible
-    presets first (sorted), then subscription-proxy aliases and native SDK providers."""
-    return sorted(PRESETS) + list(CHATGPT_SUBSCRIPTION_PROXY_PROVIDER_NAMES) + list(NATIVE_PROVIDER_NAMES)
+    presets first (sorted), then subscription aliases and native SDK providers."""
+    from infra.oauth_flows import SUBSCRIPTION_PROVIDER_NAMES
+
+    names = sorted(PRESETS) + list(CHATGPT_SUBSCRIPTION_PROXY_PROVIDER_NAMES) + list(NATIVE_PROVIDER_NAMES)
+    # Ensure supergrok is listed even if already in PRESETS.
+    for name in SUBSCRIPTION_PROVIDER_NAMES:
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def _live_llm_settings(services: Services) -> Any:
+    """Return the effective mutable LLM settings, including unmasked credentials."""
+    live = getattr(services.llm, "settings", None)
+    return live.llm if live is not None else services.settings.llm
+
+
+def _provider_identity(provider: str) -> str:
+    return canonical_subscription_provider((provider or "").casefold())
+
+
+async def _saved_llm_credentials(services: Services, provider: str) -> dict[str, str]:
+    """Load target-scoped static credentials, with canonical alias fallback."""
+    provider = (provider or "").casefold()
+    canonical = canonical_subscription_provider(provider)
+    canonical_saved = await services.llm_credentials.get(canonical) if canonical != provider else {}
+    exact_saved = await services.llm_credentials.get(provider)
+    return {**canonical_saved, **exact_saved}
 
 
 def _describe_llm(services: Services) -> dict[str, str]:
@@ -300,7 +390,7 @@ def _reconfigure_llm(services: Services, overrides: dict[str, str]) -> bool:
 def _reconfigure_imagegen(services: Services, overrides: dict[str, str]) -> None:
     effective = apply_imagegen_overrides(services.settings, overrides)
     services.settings.imagegen = effective.imagegen
-    services.imagegen = build_imagegen(services.settings)
+    services.imagegen = build_imagegen(services.settings, llm_credentials=services.llm_credentials)
 
 
 def _valid_image_size(value: str) -> bool:

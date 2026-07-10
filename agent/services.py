@@ -56,6 +56,7 @@ def build_services(
     settings: Settings | None = None,
     *,
     llm: LLMClient | None = None,
+    fallback_llm: LLMClient | None = None,
     embeddings: Embeddings | None = None,
     i18n: I18n | None = None,
     store: Store | None = None,
@@ -63,8 +64,9 @@ def build_services(
     vector_path: str | None = None,
 ) -> Services:
     """Wire the full service graph. Inject `llm`/`embeddings` (e.g. FakeLLM /
-    FakeEmbeddings) to run offline; otherwise the OpenAI-backed clients are built
-    from `settings.llm`."""
+    FakeEmbeddings) to run offline; otherwise the configured client is built
+    from `settings.llm`. ``fallback_llm`` remains inside ``MutableLLM`` so an
+    initially offline app can hot-switch when credentials arrive."""
     settings = settings or get_settings()
     i18n = i18n or get_i18n(settings.locale)
     store = store or Store(db_path)
@@ -83,7 +85,13 @@ def build_services(
     # MutableLLM) honors settings.llm.provider + PRESETS (OpenAI/Anthropic/Gemini/
     # OpenAI-compatible).
     if llm is None:
-        mutable = MutableLLM(settings)
+        # Warm the credential book cache so subscription providers can resolve
+        # OAuth tokens at build_llm time (sync path).
+        llm_credentials.load_sync()
+        mutable_kwargs = {"credentials": llm_credentials}
+        if fallback_llm is not None:
+            mutable_kwargs["fallback_llm"] = fallback_llm
+        mutable = MutableLLM(settings, **mutable_kwargs)
         persisted = runtime_config.load_sync()
         if persisted:
             # A persisted override that no longer builds (e.g. a native provider whose optional SDK
@@ -92,7 +100,12 @@ def build_services(
             try:
                 mutable.apply(persisted)
             except Exception:
-                logger.warning("Ignoring unusable persisted LLM override %r; using base config", persisted, exc_info=True)
+                logger.warning(
+                    "Ignoring unusable persisted LLM override for provider=%r model=%r; using base config",
+                    persisted.get("provider"),
+                    persisted.get("chat_model"),
+                    exc_info=True,
+                )
                 mutable.apply({})  # restore the pristine env/Settings baseline
         llm = mutable
 
@@ -109,7 +122,7 @@ def build_services(
     # API (its own "worldbook" collection), so it takes `vector_store` directly --
     # not the higher-level `VectorDatabaseManager`, which exposes a different surface.
     worldbook = WorldbookManager(store, vector_db=vector_store, embeddings=embeddings)
-    imagegen = build_imagegen(settings)
+    imagegen = build_imagegen(settings, llm_credentials=llm_credentials)
 
     return Services(
         settings=settings,

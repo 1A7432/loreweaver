@@ -13,7 +13,7 @@ from __future__ import annotations
 import itertools
 import json
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -21,6 +21,8 @@ from openai import AsyncOpenAI
 
 from infra.config import LLMSettings
 from infra.i18n import t
+
+TokenProvider = Callable[[], Awaitable[str]]
 
 
 @dataclass
@@ -72,11 +74,29 @@ class OpenAILLM:
     Uses the OpenAI-compatible chat-completions API, so any OpenAI-compatible
     provider (e.g. DeepSeek) works by pointing `settings.base_url` at it —
     no other code change needed.
+
+    Optional ``token_provider`` supplies a fresh Bearer on every request
+    (subscription OAuth); when set, the static ``settings.api_key`` is ignored.
     """
 
-    def __init__(self, settings: LLMSettings) -> None:
+    def __init__(
+        self,
+        settings: LLMSettings,
+        *,
+        token_provider: TokenProvider | None = None,
+        client: Any | None = None,
+    ) -> None:
         self._settings = settings
-        self._client = AsyncOpenAI(api_key=settings.api_key or None, base_url=settings.base_url or None)
+        self._token_provider = token_provider
+        if client is not None:
+            self._client = client
+        else:
+            # Placeholder key when a token_provider will inject the real bearer.
+            # Always pass an explicit value. Letting the SDK resolve a missing
+            # key from ambient OPENAI_API_KEY could send an OpenAI credential to
+            # a selected third-party/custom base URL.
+            api_key = settings.api_key or ("subscription" if token_provider else "missing")
+            self._client = AsyncOpenAI(api_key=api_key, base_url=settings.base_url or None)
 
     async def chat(
         self,
@@ -87,6 +107,9 @@ class OpenAILLM:
         temperature: float | None = None,
         model: str | None = None,
     ) -> ChatResult:
+        if self._token_provider is not None:
+            token = await self._token_provider()
+            self._client.api_key = token
         kwargs: dict[str, Any] = {
             "model": model or self._settings.chat_model,
             "messages": messages,

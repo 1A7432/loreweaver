@@ -39,8 +39,10 @@ def _app_services(settings, *, llm=None, embeddings=None):
     auto-saves and restores across restarts, and a LOCAL hash embedder by default
     so document/vector features work with any chat-only provider (configure a
     dedicated embeddings provider for higher-quality retrieval)."""
-    if not settings.llm.api_key:
-        llm = llm or FakeLLM(responder=demo_kp_responder)
+    # Keep the demo behind MutableLLM instead of injecting it as the live LLM.
+    # That lets a device-code login hot-switch an initially offline process and
+    # lets persisted subscription/runtime credentials take effect on restart.
+    fallback_llm = FakeLLM(responder=demo_kp_responder) if llm is None else None
     embeddings = embeddings or LocalEmbeddings(64)
     db = settings.db_path or os.path.join(settings.data_dir, "loreweaver.db")
     os.makedirs(os.path.dirname(db) or ".", exist_ok=True)
@@ -50,12 +52,17 @@ def _app_services(settings, *, llm=None, embeddings=None):
     core_skills._USER_SKILL_DIR = Path(settings.data_dir) / "skills"
     core_rulepacks._USER_RULEPACK_DIR = Path(settings.data_dir) / "rulepacks"
     agent_forge._USER_MODULE_DIR = Path(settings.data_dir) / "modules"
-    return build_services(settings, llm=llm, embeddings=embeddings, db_path=db)
+    return build_services(
+        settings,
+        llm=llm,
+        fallback_llm=fallback_llm,
+        embeddings=embeddings,
+        db_path=db,
+    )
 
 
 def build_runner(settings: Settings, *, llm=None, embeddings=None) -> GatewayRunner:
     if not settings.llm.api_key:
-        llm = llm or FakeLLM(responder=demo_kp_responder)
         embeddings = embeddings or FakeEmbeddings(64)
     services = _app_services(settings, llm=llm, embeddings=embeddings)
     adapter = CliAdapter()
@@ -69,9 +76,8 @@ def build_runner(settings: Settings, *, llm=None, embeddings=None) -> GatewayRun
 
 def build_tui_server(settings: Settings, keystore: Keystore, *, host: str, port: int, llm=None, embeddings=None) -> TuiServer:
     """Wire a `TuiServer` the same way `build_runner` wires the CLI gateway
-    (offline `FakeLLM` demo when no API key is configured)."""
+    (offline `FakeLLM` demo when no usable provider credential is configured)."""
     if not settings.llm.api_key:
-        llm = llm or FakeLLM(responder=demo_kp_responder)
         embeddings = embeddings or FakeEmbeddings(64)
     services = _app_services(settings, llm=llm, embeddings=embeddings)
     return TuiServer(
@@ -129,11 +135,9 @@ def main(argv: list[str] | None = None) -> int:
         print(i18n.t("cli.no_mode"), file=sys.stderr)
         return 0
 
-    offline = not settings.llm.api_key
-    if offline:
-        print(i18n.t("cli.offline_demo_notice"), file=sys.stderr)
-
     runner = build_runner(settings)
+    if _uses_demo_llm(runner.services):
+        print(i18n.t("cli.offline_demo_notice"), file=sys.stderr)
     seed_dice(0)
 
     try:
@@ -263,15 +267,14 @@ def _run_serve(settings: Settings, i18n: I18n, args: argparse.Namespace) -> int:
     With `--platforms a,b` the server runs in COMBINED mode: one `RoomHub`/`Services` shared by the
     TUI server AND a `GatewayRunner` driving the (experimental, roadmap-only) chat adapters.
     """
-    if not settings.llm.api_key:
-        print(i18n.t("cli.offline_demo_notice"), file=sys.stderr)
-
     if args.platforms:
         return _run_serve_combined(settings, i18n, args)
 
     keystore = Keystore.load(args.keys)
     _bootstrap_keystore(keystore, i18n, args.keys)
     server = build_tui_server(settings, keystore, host=args.host, port=args.port)
+    if _uses_demo_llm(server.services):
+        print(i18n.t("cli.offline_demo_notice"), file=sys.stderr)
     seed_dice(0)
 
     # A clean shutdown (Ctrl-C, or the listener stopping) exits 0; a startup failure exits non-zero
@@ -373,6 +376,8 @@ _PLATFORM_REQUIRED = {
 
 def _run_serve_combined(settings: Settings, i18n: I18n, args: argparse.Namespace) -> int:
     services = _serve_services(settings)
+    if _uses_demo_llm(services):
+        print(i18n.t("cli.offline_demo_notice"), file=sys.stderr)
     keystore = Keystore.load(args.keys)
     _bootstrap_keystore(keystore, i18n, args.keys)
     hub = RoomHub()
@@ -423,11 +428,15 @@ async def _serve_combined(server: TuiServer, runner: GatewayRunner) -> None:
 
 
 def _serve_services(settings: Settings, *, llm=None, embeddings=None):
-    """Build one `Services` graph (offline `FakeLLM` demo when no API key)."""
+    """Build one graph, retaining a hot-swappable offline demo fallback."""
     if not settings.llm.api_key:
-        llm = llm or FakeLLM(responder=demo_kp_responder)
         embeddings = embeddings or FakeEmbeddings(64)
     return _app_services(settings, llm=llm, embeddings=embeddings)
+
+
+def _uses_demo_llm(services) -> bool:
+    """Whether the effective MutableLLM inner client is the offline demo."""
+    return isinstance(getattr(services.llm, "inner", services.llm), FakeLLM)
 
 
 def _build_platform_adapters(platforms: str, i18n: I18n) -> list:

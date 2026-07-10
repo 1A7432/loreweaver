@@ -263,10 +263,15 @@ Client → server:
 Server → client:
 
 - `admin_config` — the live, display-safe LLM config (api_key masked), the
-  provider catalog, the providers that already have a saved key (`saved_providers`),
+  provider catalog, the providers that already have a saved credential (`saved_providers`),
   whether a runtime override is active, and the display-safe image-generation
   status:
-  `{type:"admin_config", provider:string, chat_model:string, base_url:string, api_key_masked:string, providers:string[], saved_providers:string[], override_active:boolean, imagegen?:ImageGenStatus}`
+  `{type:"admin_config", provider:string, chat_model:string, base_url:string, api_key_masked:string, providers:string[], saved_providers:string[], override_active:boolean, imagegen?:ImageGenStatus, subscription_status?:""|"logged_in"|"logged_out"}`
+  `subscription_status` is `"logged_in"` or `"logged_out"` when the current
+  provider is on a ChatGPT / SuperGrok OAuth path. Empty or absent means the
+  classic API-key path (including a `chatgpt` / `gpt-subscription` provider with
+  an explicit proxy `base_url`). Login remains a private chat command
+  (`.model login`); the TUI model page only displays the status.
 - `admin_models` — a provider's live model catalog (empty when the provider is a
   native SDK, the key is missing/invalid, or `/models` is unreachable — the client
   falls back to a free-text model field):
@@ -301,13 +306,15 @@ same path as the `.model set` chat command — then replies a fresh
 `admin_config`. A key set here is also saved to a per-provider credential book
 (`infra.runtime_config.CredentialBook`), so switching providers never re-asks for
 a key you've already entered; `admin_list_models` reuses that saved credential
-when no explicit `api_key` is supplied. A key minted here is written back to the
-server's keys file, so it survives a restart.
+when no explicit `api_key` is supplied. Subscription OAuth grants are stored in
+the same local credential book under their canonical provider name.
 
-The provider catalog is additive. `chatgpt` / `gpt-subscription` are accepted as
-OpenAI-compatible proxy aliases only; they require `TRPG_LLM__BASE_URL` to point
-at a gateway controlled by the deployment. They do not represent direct
-ChatGPT web-subscription login/session access.
+The provider catalog is additive. `chatgpt` / `gpt-subscription` are dual-mode:
+without a `base_url`, they use the ChatGPT subscription OAuth grant obtained by
+`.model login chatgpt`; with an explicit `base_url`, they retain the classic
+OpenAI-compatible proxy path and its API key. `supergrok` always uses the
+SuperGrok subscription OAuth path (`.model login supergrok`) and can share that
+grant with SuperGrok image generation.
 
 Room backup snapshots contain the room's raw access keys as well as campaign
 state and vector points. Treat exported JSON like `keys.toml` or the SQLite

@@ -2,6 +2,8 @@ import json
 import re
 from types import SimpleNamespace
 
+import pytest
+
 from agent.context import AgentCtx
 from agent.services import build_services
 from core.dice_engine import seed_dice
@@ -190,6 +192,7 @@ async def test_model_show_and_list_are_open_to_everyone():
     assert listed is not None
     assert "deepseek" in listed  # an OpenAI-compatible preset
     assert "anthropic" in listed and "gemini" in listed  # native providers
+    assert listed.count("supergrok") == 1  # subscription category only
 
 
 async def test_model_set_reconfigures_live_and_persists():
@@ -205,7 +208,12 @@ async def test_model_set_reconfigures_live_and_persists():
     assert services.settings.llm.provider == "deepseek"
     assert services.settings.llm.chat_model == "deepseek-chat"
     # and it persisted for the next restart
-    assert await services.runtime_config.get() == {"provider": "deepseek", "chat_model": "deepseek-chat"}
+    assert await services.runtime_config.get() == {
+        "provider": "deepseek",
+        "chat_model": "deepseek-chat",
+        "api_key": "",
+        "base_url": "",
+    }
 
 
 async def test_model_set_rejects_unknown_provider():
@@ -218,6 +226,660 @@ async def test_model_set_rejects_unknown_provider():
     assert reply is not None
     assert "nope-9000" in reply
     assert services.settings.llm.provider == "openai"  # unchanged
+
+
+async def test_model_set_subscription_requires_login():
+    services = _mutable_services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+
+    reply = await router.dispatch(ctx, ".model set supergrok")
+    assert reply is not None
+    assert "login" in reply.casefold()
+    assert services.settings.llm.provider == "openai"
+
+
+async def test_model_set_supergrok_clears_previous_provider_credentials():
+    import time
+
+    from infra.oauth_flows import SubscriptionToken
+
+    services = _mutable_services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+    previous = {
+        "provider": "deepseek",
+        "chat_model": "deepseek-chat",
+        "api_key": "sk-deepseek",
+        "base_url": "https://old-provider.example/v1",
+    }
+    await services.runtime_config.replace(**previous)
+    services.llm.apply(previous)
+    await services.llm_credentials.save_subscription(
+        "supergrok",
+        SubscriptionToken("access-secret", "refresh-secret", time.time() + 3600),
+    )
+
+    reply = await router.dispatch(ctx, ".model set supergrok")
+
+    assert reply is not None and "supergrok" in reply
+    assert await services.runtime_config.get() == {
+        "provider": "supergrok",
+        "chat_model": "grok-4.3",
+        "api_key": "",
+        "base_url": "",
+    }
+    assert services.settings.llm.api_key == ""
+    assert services.settings.llm.base_url == ""
+
+
+async def test_model_set_chatgpt_uses_only_its_saved_proxy_credentials():
+    services = _mutable_services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+    previous = {
+        "provider": "deepseek",
+        "chat_model": "deepseek-chat",
+        "api_key": "sk-old",
+        "base_url": "https://old-provider.example/v1",
+    }
+    await services.runtime_config.replace(**previous)
+    services.llm.apply(previous)
+    await services.llm_credentials.remember(
+        "chatgpt",
+        api_key="sk-chatgpt-proxy",
+        base_url="https://chatgpt-proxy.example/v1",
+    )
+
+    reply = await router.dispatch(ctx, ".model set chatgpt proxy-model")
+
+    assert reply is not None and "chatgpt" in reply
+    assert await services.runtime_config.get() == {
+        "provider": "chatgpt",
+        "chat_model": "proxy-model",
+        "api_key": "sk-chatgpt-proxy",
+        "base_url": "https://chatgpt-proxy.example/v1",
+    }
+
+
+async def test_model_show_treats_chatgpt_with_base_url_as_proxy():
+    settings = Settings(
+        llm=LLMSettings(
+            provider="chatgpt",
+            chat_model="proxy-model",
+            api_key="sk-proxy-secret",
+            base_url="https://chatgpt-proxy.example/v1",
+        )
+    )
+    services = build_services(settings, llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64))
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+
+    shown = await router.dispatch(ctx, ".model")
+
+    assert shown is not None
+    assert "sk-p" in shown and "cret" in shown
+    assert "subscription not logged in" not in shown.casefold()
+
+
+async def test_model_login_switches_current_chatgpt_proxy_to_oauth(monkeypatch):
+    import asyncio
+    import time
+
+    from infra.llm_chatgpt import ChatGPTSubscriptionLLM
+    from infra.oauth_flows import DeviceLogin, SubscriptionToken
+
+    class _ImmediateFlow:
+        async def start(self):
+            return DeviceLogin(
+                verification_url="https://auth.example/device",
+                user_code="OAUTH",
+                poll_interval=1,
+                expires_at=time.time() + 60,
+            )
+
+        async def poll(self, login):
+            return SubscriptionToken("access-oauth", "refresh-oauth", time.time() + 3600)
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr("gateway.commands.flow_for", lambda _provider: _ImmediateFlow())
+    settings = Settings(
+        llm=LLMSettings(
+            provider="chatgpt",
+            chat_model="proxy-model",
+            api_key="sk-proxy-secret",
+            base_url="https://chatgpt-proxy.example/v1",
+        )
+    )
+    services = build_services(settings, embeddings=FakeEmbeddings(64))
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+
+    started = await router.dispatch(ctx, ".model login chatgpt")
+    for _ in range(50):
+        if isinstance(services.llm.inner, ChatGPTSubscriptionLLM):
+            break
+        await asyncio.sleep(0.01)
+    else:
+        raise AssertionError("ChatGPT proxy login did not switch to OAuth")
+
+    assert started is not None and "OAUTH" in started
+    assert services.settings.llm.provider == "chatgpt"
+    assert services.settings.llm.api_key == ""
+    assert services.settings.llm.base_url == ""
+    assert await services.runtime_config.get() == {
+        "provider": "chatgpt",
+        "chat_model": "proxy-model",
+        "api_key": "",
+        "base_url": "",
+    }
+    shown = await router.dispatch(ctx, ".model")
+    assert shown is not None and "subscription logged in" in shown.casefold()
+
+
+async def test_model_logout_chatgpt_proxy_preserves_static_credentials():
+    import time
+
+    from infra.oauth_flows import SubscriptionToken
+
+    settings = Settings(
+        llm=LLMSettings(
+            provider="chatgpt",
+            chat_model="proxy-model",
+            api_key="sk-proxy-secret",
+            base_url="https://chatgpt-proxy.example/v1",
+        )
+    )
+    services = build_services(settings, embeddings=FakeEmbeddings(64))
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+    await services.llm_credentials.save_subscription(
+        "chatgpt",
+        SubscriptionToken("access-oauth", "refresh-oauth", time.time() + 3600),
+    )
+    await services.llm_credentials.remember(
+        "chatgpt",
+        api_key="sk-proxy-secret",
+        base_url="https://chatgpt-proxy.example/v1",
+    )
+
+    logout = await router.dispatch(ctx, ".model logout chatgpt")
+
+    assert logout is not None and "chatgpt" in logout
+    assert await services.llm_credentials.load_subscription("chatgpt") is None
+    credential = await services.llm_credentials.get("chatgpt")
+    assert credential["api_key"] == "sk-proxy-secret"
+    assert credential["base_url"] == "https://chatgpt-proxy.example/v1"
+    assert services.settings.llm.api_key == "sk-proxy-secret"
+    assert services.settings.llm.base_url == "https://chatgpt-proxy.example/v1"
+
+
+async def test_model_login_supergrok_refreshes_explicit_imagegen_when_llm_is_other(monkeypatch):
+    import asyncio
+    import time
+
+    from infra.config import ImageGenSettings
+    from infra.oauth_flows import DeviceLogin, SubscriptionToken
+
+    class _ImmediateFlow:
+        async def start(self):
+            return DeviceLogin(
+                verification_url="https://auth.example/device",
+                user_code="IMAGE",
+                poll_interval=1,
+                expires_at=time.time() + 60,
+            )
+
+        async def poll(self, login):
+            return SubscriptionToken("access-image", "refresh-image", time.time() + 3600)
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr("gateway.commands.flow_for", lambda _provider: _ImmediateFlow())
+    settings = Settings(
+        llm=LLMSettings(provider="openai", chat_model="gpt-4o", api_key="sk-baseline"),
+        imagegen=ImageGenSettings(provider="supergrok", model="grok-imagine-image"),
+    )
+    services = build_services(settings, embeddings=FakeEmbeddings(64))
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+    assert services.imagegen is None
+
+    started = await router.dispatch(ctx, ".model login supergrok")
+    for _ in range(50):
+        if services.imagegen is not None:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        raise AssertionError("SuperGrok login did not refresh configured imagegen")
+
+    assert started is not None and "IMAGE" in started
+    assert services.settings.llm.provider == "openai"
+    assert await services.runtime_config.get() == {}
+    assert await services.imagegen._token_provider() == "access-image"
+
+
+async def test_model_set_same_subscription_keeps_custom_model():
+    import time
+
+    from infra.oauth_flows import SubscriptionToken
+
+    services = _mutable_services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+    await services.llm_credentials.save_subscription(
+        "supergrok",
+        SubscriptionToken("access-secret", "refresh-secret", time.time() + 3600),
+    )
+
+    await router.dispatch(ctx, ".model set supergrok grok-custom")
+    reply = await router.dispatch(ctx, ".model set supergrok")
+
+    assert reply is not None
+    assert services.settings.llm.chat_model == "grok-custom"
+    assert (await services.runtime_config.get())["chat_model"] == "grok-custom"
+
+
+async def test_model_logout_invalidates_active_clients_and_reverts_to_base_provider():
+    import time
+
+    from infra.oauth_flows import OAuthError, SubscriptionToken
+
+    settings = Settings(
+        llm=LLMSettings(provider="openai", chat_model="gpt-4o", api_key="sk-baseline")
+    )
+    services = build_services(settings, embeddings=FakeEmbeddings(64))
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+    await services.llm_credentials.save_subscription(
+        "supergrok",
+        SubscriptionToken("access-secret", "refresh-secret", time.time() + 3600),
+    )
+    services.settings.imagegen.provider = "supergrok"
+    services.settings.imagegen.model = "grok-imagine-image"
+    await router.dispatch(ctx, ".model set supergrok grok-custom")
+    assert services.imagegen is not None
+    old_inner = services.llm.inner
+
+    rejected_key = await router.dispatch(ctx, ".model key sk-must-not-be-saved")
+    assert rejected_key is not None and "login" in rejected_key.casefold()
+    assert (await services.runtime_config.get())["api_key"] == ""
+    assert "api_key" not in await services.llm_credentials.get("supergrok")
+
+    logout = await router.dispatch(ctx, ".model logout supergrok")
+    shown = await router.dispatch(ctx, ".model")
+
+    assert logout is not None and "supergrok" in logout
+    assert shown is not None and "provider openai" in shown.casefold()
+    assert await services.llm_credentials.load_subscription("supergrok") is None
+    assert await services.runtime_config.get() == {}
+    assert services.settings.llm.provider == "openai"
+    assert services.imagegen is None
+    with pytest.raises(OAuthError, match="subscription_login_required"):
+        await old_inner.chat([{"role": "user", "content": "hello"}])
+
+
+async def test_model_logout_restart_keeps_base_provider_and_empty_override(tmp_path):
+    import time
+
+    from infra.oauth_flows import SubscriptionToken
+
+    db = str(tmp_path / "state.db")
+    baseline = LLMSettings(provider="openai", chat_model="gpt-4o", api_key="sk-baseline")
+    services = build_services(Settings(llm=baseline), embeddings=FakeEmbeddings(64), db_path=db)
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+    await services.llm_credentials.save_subscription(
+        "supergrok",
+        SubscriptionToken("access-secret", "refresh-secret", time.time() + 3600),
+    )
+    await router.dispatch(ctx, ".model set supergrok grok-custom")
+
+    await router.dispatch(ctx, ".model logout supergrok")
+    services.store.close()
+
+    restarted = build_services(
+        Settings(llm=LLMSettings(provider="openai", chat_model="gpt-4o", api_key="sk-baseline")),
+        embeddings=FakeEmbeddings(64),
+        db_path=db,
+    )
+    assert restarted.settings.llm.provider == "openai"
+    assert await restarted.runtime_config.get() == {}
+    restarted.store.close()
+
+
+async def test_model_logout_does_not_crash_when_base_is_the_oauth_provider(tmp_path):
+    import time
+
+    from infra.oauth_flows import OAuthError, SubscriptionToken
+    from infra.runtime_config import CredentialBook
+    from infra.store import Store
+
+    db = str(tmp_path / "oauth-base.db")
+    seed_store = Store(db)
+    await CredentialBook(seed_store).save_subscription(
+        "supergrok",
+        SubscriptionToken("access-secret", "refresh-secret", time.time() + 3600),
+    )
+    seed_store.close()
+
+    services = build_services(
+        Settings(llm=LLMSettings(provider="supergrok", chat_model="grok-4.3")),
+        embeddings=FakeEmbeddings(64),
+        db_path=db,
+    )
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+    old_inner = services.llm.inner
+
+    logout = await router.dispatch(ctx, ".model logout supergrok")
+    shown = await router.dispatch(ctx, ".model")
+
+    assert logout is not None and "supergrok" in logout
+    assert shown is not None and "subscription not logged in" in shown.casefold()
+    assert services.settings.llm.provider == "supergrok"
+    assert await services.runtime_config.get() == {}
+    assert await services.llm_credentials.load_subscription("supergrok") is None
+    with pytest.raises(OAuthError, match="subscription_login_required"):
+        await old_inner.chat([{"role": "user", "content": "hello"}])
+    services.store.close()
+
+
+async def test_model_relogin_hot_rebuilds_active_supergrok_clients(monkeypatch):
+    import asyncio
+    import time
+
+    from infra.oauth_flows import DeviceLogin, OAuthError, SubscriptionToken
+
+    class _ImmediateFlow:
+        async def start(self):
+            return DeviceLogin(
+                verification_url="https://auth.example/device",
+                user_code="RELOGIN",
+                poll_interval=1,
+                expires_at=time.time() + 60,
+            )
+
+        async def poll(self, login):
+            return SubscriptionToken("access-two", "refresh-two", time.time() + 3600)
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr("gateway.commands.flow_for", lambda _provider: _ImmediateFlow())
+    settings = Settings(
+        llm=LLMSettings(provider="openai", chat_model="gpt-4o", api_key="sk-baseline")
+    )
+    services = build_services(settings, embeddings=FakeEmbeddings(64))
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+    await services.llm_credentials.save_subscription(
+        "supergrok",
+        SubscriptionToken("access-one", "refresh-one", time.time() + 3600),
+    )
+    services.settings.imagegen.provider = "supergrok"
+    services.settings.imagegen.model = "grok-imagine-image"
+    await router.dispatch(ctx, ".model set supergrok grok-custom")
+    old_llm = services.llm.inner
+    old_imagegen = services.imagegen
+    assert old_imagegen is not None
+
+    started = await router.dispatch(ctx, ".model login supergrok")
+    for _ in range(50):
+        if services.llm.inner is not old_llm and services.imagegen is not old_imagegen:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        raise AssertionError("relogin did not rebuild active subscription clients")
+
+    assert started is not None and "RELOGIN" in started
+    assert await services.llm.inner._token_provider() == "access-two"
+    assert await services.imagegen._token_provider() == "access-two"
+    with pytest.raises(OAuthError, match="subscription_login_required"):
+        await old_llm._token_provider()
+
+    # A later relogin must not replace or implicitly enable an unrelated image
+    # provider merely because the active LLM is SuperGrok.
+    from infra.imagegen import FakeImageGen
+
+    unrelated_imagegen = FakeImageGen()
+    services.settings.imagegen = services.settings.imagegen.model_copy(update={"provider": "openai"})
+    services.imagegen = unrelated_imagegen
+    previous_llm = services.llm.inner
+    await router.dispatch(ctx, ".model login supergrok")
+    for _ in range(50):
+        if services.llm.inner is not previous_llm:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        raise AssertionError("second relogin did not rebuild the active LLM")
+    assert services.imagegen is unrelated_imagegen
+
+
+async def test_model_set_supergrok_does_not_implicitly_enable_imagegen():
+    import time
+
+    from infra.oauth_flows import SubscriptionToken
+
+    services = _mutable_services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+    await services.llm_credentials.save_subscription(
+        "supergrok",
+        SubscriptionToken("access-secret", "refresh-secret", time.time() + 3600),
+    )
+
+    await router.dispatch(ctx, ".model set supergrok")
+
+    assert services.settings.imagegen.provider == ""
+    assert services.imagegen is None
+    assert await services.imagegen_runtime_config.get() == {}
+
+
+async def test_model_key_is_remembered_for_the_current_provider():
+    services = _mutable_services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+
+    reply = await router.dispatch(ctx, ".model key sk-provider-specific")
+
+    assert reply is not None
+    assert (await services.llm_credentials.get("openai"))["api_key"] == "sk-provider-specific"
+
+
+async def test_model_login_unexpected_poll_failure_allows_retry(monkeypatch):
+    import asyncio
+    import time
+
+    from infra.oauth_flows import DeviceLogin
+
+    class _BrokenFlow:
+        def __init__(self, code):
+            self.code = code
+
+        async def start(self):
+            return DeviceLogin(
+                verification_url="https://auth.example/device",
+                user_code=self.code,
+                poll_interval=1,
+                expires_at=time.time() + 60,
+            )
+
+        async def poll(self, login):
+            raise RuntimeError("malformed response")
+
+        async def aclose(self):
+            return None
+
+    flows = iter([_BrokenFlow("FIRST"), _BrokenFlow("RETRY")])
+    monkeypatch.setattr("gateway.commands.flow_for", lambda _provider: next(flows))
+    services = _mutable_services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+
+    first = await router.dispatch(ctx, ".model login supergrok")
+    await asyncio.sleep(0)
+    retried = await router.dispatch(ctx, ".model login supergrok")
+    await asyncio.sleep(0)
+
+    assert first is not None and "FIRST" in first
+    assert retried is not None and "RETRY" in retried
+
+
+async def test_model_login_closes_flow_when_start_fails(monkeypatch):
+    class _StartFailureFlow:
+        def __init__(self):
+            self.closed = False
+
+        async def start(self):
+            raise RuntimeError("network unavailable")
+
+        async def aclose(self):
+            self.closed = True
+
+    flow = _StartFailureFlow()
+    monkeypatch.setattr("gateway.commands.flow_for", lambda _provider: flow)
+    services = _mutable_services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+
+    reply = await router.dispatch(ctx, ".model login supergrok")
+
+    assert reply == services.i18n.with_locale("en").t("commands.model.login_failed")
+    assert flow.closed is True
+
+
+async def test_concurrent_model_login_starts_only_one_device_flow(monkeypatch):
+    import asyncio
+    import time
+
+    from infra.oauth_flows import DeviceLogin
+
+    start_entered = asyncio.Event()
+    release_start = asyncio.Event()
+    poll_forever = asyncio.Event()
+
+    class _SlowFlow:
+        def __init__(self):
+            self.starts = 0
+
+        async def start(self):
+            self.starts += 1
+            start_entered.set()
+            await release_start.wait()
+            return DeviceLogin(
+                verification_url="https://auth.example/device",
+                user_code="ONLY-ONE",
+                poll_interval=60,
+                expires_at=time.time() + 600,
+            )
+
+        async def poll(self, _login):
+            await poll_forever.wait()
+            return None
+
+        async def aclose(self):
+            return None
+
+    flow = _SlowFlow()
+    monkeypatch.setattr("gateway.commands.flow_for", lambda _provider: flow)
+    services = _mutable_services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+
+    first_task = asyncio.create_task(router.dispatch(ctx, ".model login supergrok"))
+    await start_entered.wait()
+    second_task = asyncio.create_task(router.dispatch(ctx, ".model login supergrok"))
+    await asyncio.sleep(0)
+    release_start.set()
+    first, second = await asyncio.gather(first_task, second_task)
+
+    assert flow.starts == 1
+    assert first is not None and "ONLY-ONE" in first
+    assert second is not None and "ONLY-ONE" in second
+    await router.dispatch(ctx, ".model logout supergrok")
+
+
+async def test_model_login_logout_and_set_with_mock_flow(monkeypatch):
+    import time
+
+    from infra.oauth_flows import DeviceLogin, SubscriptionToken
+
+    class _FakeFlow:
+        def __init__(self):
+            self.polls = 0
+
+        async def start(self):
+            return DeviceLogin(
+                verification_url="https://auth.example/device",
+                user_code="ABCD",
+                poll_interval=0.01,
+                expires_at=time.time() + 60,
+                state={"device_code": "dc"},
+            )
+
+        async def poll(self, login):
+            self.polls += 1
+            if self.polls < 2:
+                return None
+            return SubscriptionToken("access-secret", "refresh-secret", time.time() + 3600, account_id="")
+
+        async def refresh(self, token):
+            return token
+
+        async def aclose(self):
+            return None
+
+    fake = _FakeFlow()
+    monkeypatch.setattr("gateway.commands.flow_for", lambda _p: fake)
+
+    services = _mutable_services()
+    # Builder that accepts subscription providers once credentials exist.
+    settings = services.settings
+
+    def builder(s, credentials=None):
+        provider = (s.llm.provider or "").lower()
+        if provider in {"supergrok", "chatgpt", "gpt-subscription"}:
+            if credentials is None or credentials.load_subscription_sync(provider) is None:
+                raise ValueError("subscription_login_required")
+        return FakeLLM(script=[])
+
+    services.llm = MutableLLM(settings, builder=builder, credentials=services.llm_credentials)
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+
+    started = await router.dispatch(ctx, ".model login supergrok")
+    assert started is not None
+    assert "https://auth.example/device" in started
+    assert "ABCD" in started
+    assert "access-secret" not in started
+    assert "refresh-secret" not in started
+
+    # Wait for background poll to finish.
+    import asyncio
+
+    for _ in range(100):
+        sub = await services.llm_credentials.load_subscription("supergrok")
+        if sub is not None:
+            break
+        await asyncio.sleep(0.02)
+    else:
+        raise AssertionError("login poll never saved subscription")
+
+    assert sub.access_token == "access-secret"
+
+    set_reply = await router.dispatch(ctx, ".model set supergrok grok-4.3")
+    assert set_reply is not None
+    assert "supergrok" in set_reply
+    assert services.settings.llm.provider == "supergrok"
+
+    logout = await router.dispatch(ctx, ".model logout supergrok")
+    assert logout is not None
+    assert "supergrok" in logout
+    assert await services.llm_credentials.load_subscription("supergrok") is None
 
 
 async def test_model_set_denied_for_non_admin():
@@ -455,7 +1117,7 @@ class _BoomMutableLLM:
     override (a provider whose optional SDK/key is missing), proving that a
     poisoned persisted override does NOT crash `build_services()`."""
 
-    def __init__(self, settings, *, builder=None):
+    def __init__(self, settings, *, builder=None, credentials=None):
         self._settings = settings
         self.applied: list[dict] = []
 

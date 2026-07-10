@@ -1,12 +1,12 @@
 {
   "commands.help.model": "Show or switch the Keeper's LLM provider/model.",
-  "commands.model.usage": "Usage: .model [list | set <provider> [chat_model] | key <api_key> | reset]",
+  "commands.model.usage": "Usage: .model [list | set <provider> [chat_model] | login <chatgpt|supergrok> | logout <provider> | key <api_key> | reset]",
   "commands.model.show": "LLM: provider {provider}, chat model {chat_model}, base_url {base_url}, api_key {api_key}. Override: {override}",
   "commands.model.override_on": "active (runtime override)",
   "commands.model.override_off": "none (using environment/Settings)",
   "commands.model.base_default": "(provider default)",
   "commands.model.key_none": "(not set)",
-  "commands.model.list": "Providers — OpenAI-compatible: {compatible}; native: {native}. Any OpenAI-compatible endpoint works by pointing base_url at it.",
+  "commands.model.list": "Providers — OpenAI-compatible: {compatible}; native: {native}; subscription: {subscription}. Any OpenAI-compatible endpoint works by pointing base_url at it. Subscription providers need `.model login` first.",
   "commands.model.denied": "Only a group admin or Keeper can change the LLM configuration.",
   "commands.model.set_usage": "Usage: .model set <provider> [chat_model]",
   "commands.model.unknown_provider": "Unknown provider: {provider}. Use .model list to see the options.",
@@ -16,5 +16,15 @@
   "commands.model.key_usage": "Usage: .model key <api_key>",
   "commands.model.key_public": "Set the API key from a private/DM or the local CLI, not a public channel.",
   "commands.model.key_done": "API key updated ({api_key}).",
-  "commands.model.reset_done": "LLM override cleared. Reverted to provider {provider}, chat model {chat_model}."
+  "commands.model.reset_done": "LLM override cleared. Reverted to provider {provider}, chat model {chat_model}.",
+  "commands.model.login_usage": "Usage: .model login <chatgpt|supergrok>",
+  "commands.model.logout_usage": "Usage: .model logout <chatgpt|supergrok>",
+  "commands.model.login_required": "Provider {provider} needs a subscription login first. Run: .model login {provider}",
+  "commands.model.login_started": "Login started for {provider}. Open {url} and enter code: {code}. Waiting in the background (up to 10 minutes)…",
+  "commands.model.login_pending": "Login for {provider} is already in progress. Open {url} and enter code: {code}.",
+  "commands.model.login_failed": "Could not start subscription login. Try again later.",
+  "commands.model.login_chatgpt_no_imagegen": "Note: ChatGPT subscription does not include image generation on this channel.",
+  "commands.model.logout_done": "Logged out of subscription provider {provider}.",
+  "commands.model.subscription_logged_in": "subscription logged in (expires {expires})",
+  "commands.model.subscription_logged_out": "subscription not logged in"
 }

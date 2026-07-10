@@ -64,9 +64,9 @@ All settings use the `TRPG_` env prefix with `__` for nesting (see
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `TRPG_LLM__PROVIDER` | `openai` (+ presets: `deepseek`, `groq`, `openrouter`, `together`, `ollama`, `lmstudio`, …), `chatgpt` / `gpt-subscription` for a compatible proxy, or native `anthropic` / `gemini` | `openai` |
-| `TRPG_LLM__API_KEY` | provider API key — **blank = offline demo Keeper** | *(empty)* |
-| `TRPG_LLM__BASE_URL` | OpenAI-compatible base URL; required for `chatgpt` / `gpt-subscription` proxy aliases | provider preset |
+| `TRPG_LLM__PROVIDER` | `openai` (+ presets: `deepseek`, `groq`, `openrouter`, `together`, `ollama`, `lmstudio`, …), dual-mode `chatgpt` / `gpt-subscription`, subscription `supergrok`, or native `anthropic` / `gemini` | `openai` |
+| `TRPG_LLM__API_KEY` | provider/proxy API key — not used by a subscription OAuth path; **blank = offline demo Keeper** for normal API-key providers | *(empty)* |
+| `TRPG_LLM__BASE_URL` | OpenAI-compatible base URL; an explicit value selects the proxy path for `chatgpt` / `gpt-subscription`, while blank selects subscription OAuth | provider preset |
 | `TRPG_LLM__CHAT_MODEL` | chat model id | `gpt-4o` |
 | `TRPG_LLM__EMBEDDING_MODEL` / `TRPG_LLM__EMBEDDING_DIM` | retrieval embeddings | `text-embedding-3-small` / `1536` |
 | `TRPG_LOCALE` | UI language `en` / `zh` | `en` |
@@ -87,13 +87,18 @@ untested against a live platform** — see the [roadmap](roadmap.md). Their toke
 / `TRPG_FEISHU__APP_SECRET`) still exist, and `--serve --platforms discord` runs one in combined
 mode, but treat that as experimental.
 
-ChatGPT subscriptions (Free/Go/Plus/Pro/Business/Enterprise on chatgpt.com)
-are not API credentials, and the app does not use ChatGPT browser sessions,
-cookies, or unofficial web automation as a model backend. To route through a
-subscription-backed service, expose or configure an OpenAI-compatible gateway
-your deployment controls, then set `TRPG_LLM__PROVIDER=gpt-subscription`,
-`TRPG_LLM__BASE_URL=<gateway /v1 endpoint>`, `TRPG_LLM__API_KEY=<gateway key>`,
-and `TRPG_LLM__CHAT_MODEL=<gateway model id>`.
+ChatGPT subscriptions are not API keys. For the direct subscription path, start
+the server, run `.model login chatgpt` from a private/local Keeper chat, complete
+the device-code flow, then run `.model set chatgpt [model]`. Leave
+`TRPG_LLM__BASE_URL` blank for this path; Loreweaver uses the saved OAuth grant,
+not browser cookies or web-session automation. `.model login supergrok` followed
+by `.model set supergrok [model]` selects the SuperGrok subscription path and can
+also supply its image-generation bearer.
+
+Existing compatible gateways remain supported: set provider to `chatgpt` or
+`gpt-subscription`, explicitly set `TRPG_LLM__BASE_URL=<gateway /v1 endpoint>`,
+and provide the gateway API key. An explicit `base_url` always selects this
+classic proxy path rather than subscription OAuth.
 
 ## Encryption
 
@@ -144,6 +149,9 @@ configurable building block that does nothing until you supply a wordlist.
   a TOML file (`keys.toml`) — never commit it.
 - **Persistence** is a single SQLite file (`loreweaver.db`) holding all
   campaign state, scoped by `room`. Keep the `/data` volume to keep progress.
+- **Provider credentials** entered at runtime, including subscription OAuth
+  access/refresh grants, are stored unencrypted in that local SQLite file so
+  they survive restart. Protect the database like `.env` or `keys.toml`.
 - **Room backups** created from the keeper admin UI are server-side JSON
   snapshots under `<data_dir>/room_backups/` unless a path is supplied. They
   include raw access keys, room state, and vector data, so protect them like

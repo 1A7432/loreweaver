@@ -9,9 +9,10 @@ import asyncio
 
 import pytest
 
-from infra.config import LLMSettings, Settings
+from infra.config import ImageGenSettings, LLMSettings, Settings
+from infra.imagegen import apply_imagegen_overrides
 from infra.providers import MutableLLM
-from infra.runtime_config import RuntimeConfig, apply_overrides
+from infra.runtime_config import ImageGenRuntimeConfig, RuntimeConfig, apply_overrides
 from infra.store import Store
 
 
@@ -51,6 +52,16 @@ def test_apply_overrides_empty_returns_independent_copy():
     assert out.llm.provider == "openai"
 
 
+def test_apply_overrides_explicit_empty_clears_base_credentials():
+    base = _settings(api_key="env-key", base_url="https://env.example/v1")
+
+    out = apply_overrides(base, {"api_key": "", "base_url": ""})
+
+    assert out.llm.api_key == ""
+    assert out.llm.base_url == ""
+    assert base.llm.api_key == "env-key"
+
+
 # ---------------------------------------------------------------------------
 # RuntimeConfig — Store round-trips
 # ---------------------------------------------------------------------------
@@ -83,6 +94,46 @@ async def test_runtime_config_set_skips_empty_and_rejects_unknown_field():
 
     with pytest.raises(ValueError):
         await rc.set(temperature="0.5")  # not an OVERRIDE_FIELDS key
+
+
+async def test_runtime_config_replace_persists_complete_snapshot_with_empty_fields():
+    store = Store(":memory:")
+    rc = RuntimeConfig(store)
+    await rc.set(provider="openai", api_key="old", base_url="https://old.example/v1")
+
+    replaced = await rc.replace(provider="chatgpt", api_key="", base_url="")
+
+    assert replaced == {"provider": "chatgpt", "api_key": "", "base_url": ""}
+    assert await RuntimeConfig(store).get() == replaced
+    # Legacy merge semantics remain: empty values are ignored and old fields stay.
+    assert await rc.set(chat_model="", npc_model="npc-x") == {
+        **replaced,
+        "npc_model": "npc-x",
+    }
+    with pytest.raises(ValueError):
+        await rc.replace(temperature="0.5")
+
+
+async def test_imagegen_runtime_replace_and_overlay_preserve_explicit_empty_fields():
+    store = Store(":memory:")
+    rc = ImageGenRuntimeConfig(store)
+    await rc.set(provider="openai", api_key="old", base_url="https://old.example/v1")
+
+    replaced = await rc.replace(provider="supergrok", api_key="", base_url="")
+
+    assert replaced == {"provider": "supergrok", "api_key": "", "base_url": ""}
+    assert await ImageGenRuntimeConfig(store).get() == replaced
+    base = Settings(
+        imagegen=ImageGenSettings(
+            provider="openai",
+            api_key="env-key",
+            base_url="https://env.example/v1",
+        )
+    )
+    out = apply_imagegen_overrides(base, replaced)
+    assert out.imagegen.provider == "supergrok"
+    assert out.imagegen.api_key == ""
+    assert out.imagegen.base_url == ""
 
 
 def test_runtime_config_load_sync_reads_persisted_file(tmp_path):

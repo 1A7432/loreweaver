@@ -122,8 +122,8 @@ role = "player"  # 或 "keeper"；默认为 "player"
 客户端 → 服务器：
 
 - `admin_get_config` — `{type:"admin_get_config"}`
-- `admin_set_model` — 切换实时 LLM 提供商/模型：
-  `{type:"admin_set_model", provider:string, chat_model?:string}`
+- `admin_set_model` — 切换实时 LLM 提供商/模型，并可设置该 provider 的 API key / `base_url`（省略时沿用已保存凭据）：
+  `{type:"admin_set_model", provider:string, chat_model?:string, api_key?:string, base_url?:string}`
 - `admin_set_imagegen` — 配置 OpenAI-compatible 图像生成端点；`api_key` 省略时沿用该 provider 已保存的 key：
   `{type:"admin_set_imagegen", provider:string, base_url?:string, model:string, api_key?:string, size?:string}`
 - `admin_list_models` — 获取某 provider 的实时模型列表；回复中也包含当前 `imagegen` 状态：
@@ -146,8 +146,9 @@ role = "player"  # 或 "keeper"；默认为 "player"
 
 服务器 → 客户端：
 
-- `admin_config` — 实时、显示安全的 LLM 配置（api_key 已遮蔽）加上提供商目录、运行时覆盖是否活跃，以及显示安全的图像生成状态：
-  `{type:"admin_config", provider:string, chat_model:string, base_url:string, api_key_masked:string, providers:string[], saved_providers:string[], override_active:boolean, imagegen?:ImageGenStatus}`
+- `admin_config` — 实时、显示安全的 LLM 配置（api_key 已遮蔽）加上提供商目录、已有保存凭据的 provider（`saved_providers`）、运行时覆盖是否活跃，以及显示安全的图像生成状态：
+  `{type:"admin_config", provider:string, chat_model:string, base_url:string, api_key_masked:string, providers:string[], saved_providers:string[], override_active:boolean, imagegen?:ImageGenStatus, subscription_status?:""|"logged_in"|"logged_out"}`
+  当前提供方实际走 ChatGPT / SuperGrok OAuth 时，`subscription_status` 为 `"logged_in"` 或 `"logged_out"`；空值或缺省表示经典 API-key 路径，包括显式配置代理 `base_url` 的 `chatgpt` / `gpt-subscription`。登录仍用私密聊天命令（`.model login`）；TUI 模型页只展示状态。
 - `admin_models` — 某 provider 的实时模型列表：
   `{type:"admin_models", provider:string, models:string[], imagegen?:ImageGenStatus}`
 - `ImageGenStatus` — `{provider:string, base_url:string, model:string, size:string, api_key_masked:string, has_key:boolean, configured:boolean, saved_providers?:string[]}`。API key 永不以明文返回。
@@ -158,9 +159,9 @@ role = "player"  # 或 "keeper"；默认为 "player"
 - `admin_error` — 本地化的故障通知（不关闭连接）：
   `{type:"admin_error", code:"forbidden"|"unknown_provider"|"bad_request"|"set_failed"|"not_found"|"op_failed", message?:string}`
 
-`admin_set_model` 根据已知提供商验证 `provider`（`infra.providers.is_known_provider`），通过 `services.runtime_config` 持久化覆盖，并热重新配置共享的 `MutableLLM` —— 与 `.model set` 聊天命令相同的路径—— 然后回复一个新鲜的 `admin_config`。在此创建的密钥被写回服务器的密钥文件，因此它在重启后仍然存在。
+`admin_set_model` 根据已知提供商验证 `provider`（`infra.providers.is_known_provider`），通过 `services.runtime_config` 持久化覆盖，并热重新配置共享的 `MutableLLM` —— 与 `.model set` 聊天命令相同的路径—— 然后回复一个新的 `admin_config`。这里设置的 API key / `base_url` 会按 provider 保存到本地凭据簿；订阅 OAuth grant 也保存在同一凭据簿的规范 provider 名下。
 
-提供商目录是递增的。`chatgpt` / `gpt-subscription` 仅作为 OpenAI 兼容代理别名被接受；它们需要 `TRPG_LLM__BASE_URL` 指向由部署控制的网关。它们不代表直接 ChatGPT Web 订阅登录/会话访问。
+提供商目录是递增的。`chatgpt` / `gpt-subscription` 有两种模式：没有 `base_url` 时使用 `.model login chatgpt` 获取的 ChatGPT 订阅 OAuth grant；显式设置 `base_url` 时仍走经典 OpenAI-compatible 代理及其 API key。`supergrok` 始终使用 SuperGrok 订阅 OAuth（`.model login supergrok`），且该 grant 可与 SuperGrok 生图共享。
 
 房间备份快照包含房间的原始访问密钥以及战役状态和向量点。将导出的 JSON 视为 `keys.toml` 或 SQLite 数据库：这是敏感的服务器端数据，不应公开共享。
 

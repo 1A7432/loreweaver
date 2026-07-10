@@ -21,6 +21,7 @@ prompt carries — see ``agent/prompt_builder.py``).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -352,7 +353,8 @@ async def run_kp_turn(
     for round_index in range(1, max_rounds + 1):
         rounds = round_index
         try:
-            result = await services.llm.chat(
+            result = await _chat_with_continuation_cleanup(
+                services,
                 messages,
                 tools=toolset.schemas(unlocked),
                 tool_choice="auto",
@@ -366,6 +368,7 @@ async def run_kp_turn(
             # the default all-zero `Usage()` -- nothing usable came back.
             logger.warning("KP turn aborted: LLM chat failed", exc_info=True)
             reply = i18n.t("loop.unavailable")
+            _clear_llm_continuation(services, messages)
             if output_review is not None:
                 reply = output_review(reply)
             return KPTurnResult(reply=reply, tool_trace=tool_trace, rounds=rounds)
@@ -373,7 +376,11 @@ async def run_kp_turn(
         _accumulate_usage(turn_usage, result)
 
         if result.tool_calls:
-            await _dispatch_and_record(toolset, ctx, result, messages, tool_trace, unlocked)
+            try:
+                await _dispatch_and_record(toolset, ctx, result, messages, tool_trace, unlocked)
+            except (asyncio.CancelledError, Exception):
+                _clear_llm_continuation(services, messages)
+                raise
             continue
 
         reply = result.content or ""
@@ -435,6 +442,7 @@ async def run_kp_turn(
     if reply is None:  # max_rounds exhausted without ever reaching a plain-text reply
         reply = i18n.t("loop.max_rounds")
 
+    _clear_llm_continuation(services, messages)
     if output_review is not None:
         reply = output_review(reply)
 
@@ -471,6 +479,47 @@ def _accumulate_usage(turn_usage: Usage, result: ChatResult) -> None:
     turn_usage.total_tokens = result.usage.total_tokens
     turn_usage.cache_hit_tokens = result.usage.cache_hit_tokens
     turn_usage.cache_miss_tokens = result.usage.cache_miss_tokens
+
+
+def _clear_llm_continuation(services: Services, messages: list[dict]) -> None:
+    """Release optional provider state after a conversation list is retired."""
+    clear = getattr(services.llm, "clear_continuation", None)
+    if callable(clear):
+        try:
+            clear(messages)
+        except Exception:
+            logger.debug("LLM continuation cleanup failed", exc_info=True)
+
+
+async def _chat_with_continuation_cleanup(
+    services: Services,
+    messages: list[dict],
+    *,
+    tools: list[dict],
+    tool_choice: str | dict,
+    temperature: float | None,
+) -> ChatResult:
+    """Call the LLM and release list-owned state if the turn is cancelled."""
+    try:
+        return await services.llm.chat(
+            messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            temperature=temperature,
+        )
+    except asyncio.CancelledError:
+        _clear_llm_continuation(services, messages)
+        raise
+
+
+def _correction_base_messages(messages: list[dict]) -> list[dict]:
+    """Copy durable context without this turn's provider-specific tool chatter."""
+    return [
+        message
+        for message in messages
+        if message.get("role") != "tool"
+        and not (message.get("role") == "assistant" and message.get("tool_calls"))
+    ]
 
 
 def _assistant_tool_call_message(result: ChatResult) -> dict:
@@ -573,7 +622,7 @@ async def _run_dice_correction(
     `tool_trace`.
     """
     convo = [
-        *messages,
+        *_correction_base_messages(messages),
         {"role": "assistant", "content": prior_reply},
         {"role": "user", "content": i18n.t("loop.dice_correction", action=user_message)},
     ]
@@ -586,7 +635,8 @@ async def _run_dice_correction(
             # Deliberately NOT folded into `turn_usage`/`KPTurnResult.usage` (see
             # `run_kp_turn`'s comment where `turn_usage` is declared): this corrective
             # phase is a bounded repair pass, not part of the turn's headline usage.
-            result = await services.llm.chat(
+            result = await _chat_with_continuation_cleanup(
+                services,
                 convo,
                 tools=toolset.schemas(unlocked),
                 tool_choice="required" if forced else "auto",
@@ -596,6 +646,7 @@ async def _run_dice_correction(
             if not forced:
                 # Best-effort: a provider error on the narration round keeps the original reply.
                 logger.warning("dice-first correction skipped: LLM chat failed", exc_info=True)
+                _clear_llm_continuation(services, convo)
                 return prior_reply
             # DeepSeek v4-pro's thinking mode (server-side DEFAULT, and the recommended Keeper)
             # rejects tool_choice="required" with a 400 — caught live by the nightly red-line
@@ -607,7 +658,8 @@ async def _run_dice_correction(
             # whole fallback; the nightly dice-miss metric watches for that assumption ever
             # going stale. Bounded: at most one extra chat call, once per turn.
             try:
-                result = await services.llm.chat(
+                result = await _chat_with_continuation_cleanup(
+                    services,
                     convo,
                     tools=toolset.schemas(unlocked),
                     tool_choice="auto",
@@ -615,21 +667,29 @@ async def _run_dice_correction(
                 )
             except Exception:
                 logger.warning("dice-first correction skipped: LLM chat failed", exc_info=True)
+                _clear_llm_continuation(services, convo)
                 return prior_reply
         if result.tool_calls:
-            await _dispatch_and_record(toolset, ctx, result, convo, tool_trace, unlocked)
+            try:
+                await _dispatch_and_record(toolset, ctx, result, convo, tool_trace, unlocked)
+            except (asyncio.CancelledError, Exception):
+                _clear_llm_continuation(services, convo)
+                raise
             if forced and not _dice_rolled(tool_trace):
                 # Forced a NON-dice tool (e.g. get_character_sheet): no real dice
                 # rolled -- that's the ceiling, keep the reply, do not loop.
+                _clear_llm_continuation(services, convo)
                 return prior_reply
             continue
         if forced:
             # Provider ignored "required" and returned prose instead of a tool
             # call: ceiling, keep the original reply.
+            _clear_llm_continuation(services, convo)
             return prior_reply
         # Narration round: the model re-narrated per the freshly rolled dice.
         reply = result.content or prior_reply
         break
+    _clear_llm_continuation(services, convo)
     return reply
 
 
@@ -661,7 +721,7 @@ async def _run_state_correction(
     if not state_tools:
         return prior_reply
     convo = [
-        *messages,
+        *_correction_base_messages(messages),
         {"role": "assistant", "content": prior_reply},
         {"role": "user", "content": i18n.t("loop.state_correction", title=title)},
     ]
@@ -670,7 +730,8 @@ async def _run_state_correction(
     for _round_index in range(_STATE_CORRECTIVE_MAX_ROUNDS):
         forced = not _state_bookkeeping_done(tool_trace[correction_start:])
         try:
-            result = await services.llm.chat(
+            result = await _chat_with_continuation_cleanup(
+                services,
                 convo,
                 tools=state_tools,
                 tool_choice="required" if forced else "auto",
@@ -679,9 +740,11 @@ async def _run_state_correction(
         except Exception:
             if not forced:
                 logger.warning("state correction skipped: LLM chat failed", exc_info=True)
+                _clear_llm_continuation(services, convo)
                 return prior_reply
             try:
-                result = await services.llm.chat(
+                result = await _chat_with_continuation_cleanup(
+                    services,
                     convo,
                     tools=state_tools,
                     tool_choice="auto",
@@ -689,14 +752,21 @@ async def _run_state_correction(
                 )
             except Exception:
                 logger.warning("state correction skipped: LLM chat failed", exc_info=True)
+                _clear_llm_continuation(services, convo)
                 return prior_reply
         if result.tool_calls:
-            await _dispatch_and_record(toolset, ctx, result, convo, tool_trace, unlocked)
+            try:
+                await _dispatch_and_record(toolset, ctx, result, convo, tool_trace, unlocked)
+            except (asyncio.CancelledError, Exception):
+                _clear_llm_continuation(services, convo)
+                raise
             continue
         if forced:
+            _clear_llm_continuation(services, convo)
             return prior_reply
         reply = result.content or prior_reply
         break
+    _clear_llm_continuation(services, convo)
     return reply
 
 

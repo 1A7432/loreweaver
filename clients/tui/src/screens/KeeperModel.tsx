@@ -38,6 +38,49 @@ export interface KeeperModelProps {
 type Field = "provider" | "apiKey" | "model" | "custom" | "imageProvider" | "imageBaseUrl" | "imageModel" | "imageSize" | "imageApiKey"
 const FIELD_ORDER: Field[] = ["provider", "apiKey", "model", "custom", "imageProvider", "imageBaseUrl", "imageModel", "imageSize", "imageApiKey"]
 
+/** ChatGPT aliases are dual-mode: explicit base_url = proxy; no base_url = subscription OAuth. */
+const CHATGPT_PROVIDER_ALIASES = new Set(["chatgpt", "gpt-subscription"])
+
+function normalizeProvider(name: string): string {
+  return (name || "").trim().toLowerCase()
+}
+
+function isSupergrokProvider(name: string): boolean {
+  return normalizeProvider(name) === "supergrok"
+}
+
+/** Whether the selected form provider is on the actual OAuth path represented by this config. */
+function usesSubscriptionAuth(name: string, config?: AdminConfigFrame): boolean {
+  const provider = normalizeProvider(name)
+  if (provider === "supergrok") return true
+  if (!CHATGPT_PROVIDER_ALIASES.has(provider)) return false
+
+  // `admin_config` only describes the live/current provider. When another provider is merely
+  // selected, keep the API-key field available because it may be a saved compatible proxy.
+  if (!config || normalizeProvider(config.provider) !== provider) return false
+  if (config.subscription_status === "logged_in" || config.subscription_status === "logged_out") return true
+  return !config.base_url.trim()
+}
+
+function hasSavedProviderCredential(
+  savedProviders: string[],
+  name: string,
+  config?: AdminConfigFrame,
+): boolean {
+  const provider = normalizeProvider(name)
+  const saved = savedProviders.map(normalizeProvider)
+
+  // Subscription credentials are stored under the canonical `chatgpt` name even when the live
+  // provider is its `gpt-subscription` alias. Do not apply this aliasing to proxy API keys.
+  const isCurrent = normalizeProvider(config?.provider ?? "") === provider
+  if (isCurrent && usesSubscriptionAuth(provider, config)) {
+    if (config?.subscription_status === "logged_in") return true
+    if (config?.subscription_status === "logged_out") return false
+    if (provider === "gpt-subscription") return saved.includes("chatgpt")
+  }
+  return saved.includes(provider)
+}
+
 export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onBack }: KeeperModelProps) {
   const locale = welcome.locale
   const [config, setConfig] = useState<AdminConfigFrame>()
@@ -72,8 +115,30 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
   const imageApiKeyRef = useRef(imageApiKey)
 
   const isKeeper = welcome.you.role === "keeper"
-  const providerHasSavedKey = savedProviders.includes(provider)
+  // Form selection is on the actual OAuth path (API key field is replaced by a login hint).
+  const formIsSubscription = usesSubscriptionAuth(provider, config)
+  const providerHasSavedCredential = hasSavedProviderCredential(savedProviders, provider, config)
+  // Live config's OAuth status (only set by server for pure OAuth path).
+  const liveSubscriptionStatus = config?.subscription_status || ""
   const imageHasSavedKey = Boolean(imageProvider && imagegen?.saved_providers?.includes(imageProvider))
+  const imageIsSupergrok = isSupergrokProvider(imageProvider)
+  const visibleFieldOrder = useMemo(
+    () =>
+      FIELD_ORDER.filter(
+        (field) =>
+          !(formIsSubscription && field === "apiKey") &&
+          !(imageIsSupergrok && (field === "imageBaseUrl" || field === "imageApiKey")),
+      ),
+    [formIsSubscription, imageIsSupergrok],
+  )
+
+  // A config reply or provider edit can hide the currently focused key input. Move focus to the
+  // nearest visible field instead of leaving keyboard users on a non-existent control.
+  useEffect(() => {
+    if (formIsSubscription && focused === "apiKey") setFocused("model")
+    if (imageIsSupergrok && focused === "imageApiKey") setFocused("imageSize")
+    if (imageIsSupergrok && focused === "imageBaseUrl") setFocused("imageModel")
+  }, [formIsSubscription, imageIsSupergrok, focused])
 
   // Ask the server for a provider's live /models (server resolves the key: the one passed here,
   // else the provider's saved credential, else the current live config). Blanks the list while
@@ -136,15 +201,21 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
   }, [client])
 
   // Provider options come from the fetched config; keep the current provider selectable even if the
-  // server didn't advertise it (mirrors AdminPanel).
+  // server didn't advertise it (mirrors AdminPanel). Subscription providers with a saved grant also
+  // get a ready mark (server puts them in saved_providers when access_token is present).
   const providerOptions: SelectOption[] = useMemo(() => {
     const list = config?.providers ?? []
     const withCurrent = provider && !list.includes(provider) ? [...list, provider] : list
-    return withCurrent.map((name) => ({
-      name: savedProviders.includes(name) ? `${name}  ✓` : name,
-      value: name,
-    }))
-  }, [config, provider, savedProviders])
+    return withCurrent.map((name) => {
+      const ready = hasSavedProviderCredential(savedProviders, name, config)
+      const tag = ready
+        ? usesSubscriptionAuth(name, config)
+          ? `  ${tt(locale, "model.subscriptionReadyTag")}`
+          : "  ✓"
+        : ""
+      return { name: `${name}${tag}`, value: name }
+    })
+  }, [config, provider, savedProviders, locale])
 
   const providerIndex = Math.max(
     0,
@@ -166,18 +237,23 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
     const providerValue = providerRef.current.trim()
     if (!providerValue) return
     const chatModel = customModelRef.current.trim() || selectedModelRef.current.trim()
-    client.adminSetModel(providerValue, chatModel || undefined, apiKeyRef.current.trim() || undefined)
+    // The actual OAuth path never sends an API key; dual-mode ChatGPT proxy aliases still do.
+    const key = usesSubscriptionAuth(providerValue, config) ? undefined : apiKeyRef.current.trim() || undefined
+    client.adminSetModel(providerValue, chatModel || undefined, key)
   }
 
   const saveImagegen = () => {
     const providerValue = imageProviderRef.current.trim()
     const modelValue = imageModelRef.current.trim()
     if (!providerValue || !modelValue) return
+    const isSupergrok = isSupergrokProvider(providerValue)
+    const key = isSupergrok ? undefined : imageApiKeyRef.current.trim() || undefined
+    const baseUrl = isSupergrok ? undefined : imageBaseUrlRef.current.trim() || undefined
     client.adminSetImagegen(
       providerValue,
       modelValue,
-      imageApiKeyRef.current.trim() || undefined,
-      imageBaseUrlRef.current.trim() || undefined,
+      key,
+      baseUrl,
       imageSizeRef.current.trim() || undefined,
     )
   }
@@ -192,9 +268,10 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
     }
     if (keyName === "tab") {
       setFocused((prev) => {
-        const index = FIELD_ORDER.indexOf(prev)
-        const delta = event.shift ? FIELD_ORDER.length - 1 : 1
-        return FIELD_ORDER[(index + delta) % FIELD_ORDER.length]
+        const index = visibleFieldOrder.indexOf(prev)
+        const start = index >= 0 ? index : 0
+        const delta = event.shift ? visibleFieldOrder.length - 1 : 1
+        return visibleFieldOrder[(start + delta) % visibleFieldOrder.length]
       })
     }
   })
@@ -233,9 +310,24 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
                 <>
                   <text fg={theme.fg}>Provider · {stripControlChars(config.provider)}</text>
                   <text fg={theme.fg}>Model · {stripControlChars(config.chat_model)}</text>
-                  <text fg={theme.fg}>
-                    API Key · {config.api_key_masked ? stripControlChars(config.api_key_masked) : tt(locale, "model.notSet")}
-                  </text>
+                  {liveSubscriptionStatus ? (
+                    <text fg={liveSubscriptionStatus === "logged_in" ? theme.success : theme.dim}>
+                      {tt(locale, "model.auth")} ·{" "}
+                      {liveSubscriptionStatus === "logged_in"
+                        ? tt(locale, "model.subscriptionLoggedIn")
+                        : tt(locale, "model.subscriptionLoggedOut")}
+                      {liveSubscriptionStatus === "logged_in" && config.api_key_masked
+                        ? ` · ${stripControlChars(config.api_key_masked)}`
+                        : ""}
+                    </text>
+                  ) : (
+                    <text fg={theme.fg}>
+                      API Key ·{" "}
+                      {config.api_key_masked
+                        ? stripControlChars(config.api_key_masked)
+                        : tt(locale, "model.notSet")}
+                    </text>
+                  )}
                   <text fg={config.override_active ? theme.success : theme.dim}>
                     {tt(locale, "model.override")} ·{" "}
                     {config.override_active ? tt(locale, "model.overrideActive") : tt(locale, "model.overrideNone")}
@@ -252,7 +344,12 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
                   <text fg={theme.fg}>Provider · {stripControlChars(config.imagegen.provider || tt(locale, "model.notSet"))}</text>
                   <text fg={theme.fg}>Model · {stripControlChars(config.imagegen.model || tt(locale, "model.notSet"))}</text>
                   <text fg={theme.fg}>
-                    API Key · {config.imagegen.has_key ? stripControlChars(config.imagegen.api_key_masked) : tt(locale, "model.notSet")}
+                    API Key ·{" "}
+                    {config.imagegen.has_key
+                      ? isSupergrokProvider(config.imagegen.provider)
+                        ? tt(locale, "model.subscriptionReadyTag")
+                        : stripControlChars(config.imagegen.api_key_masked)
+                      : tt(locale, "model.notSet")}
                   </text>
                   <text fg={config.imagegen.configured ? theme.success : theme.dim}>
                     {config.imagegen.configured ? tt(locale, "imagegen.configured") : tt(locale, "imagegen.notConfigured")}
@@ -297,29 +394,43 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
                   selectedModelRef.current = ""
                   requestModels(value)
                 }}
-                onSelect={() => setFocused("apiKey")}
+                onSelect={() =>
+                  setFocused(usesSubscriptionAuth(providerRef.current, config) ? "model" : "apiKey")
+                }
               />
             </box>
 
-            <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("apiKey")}>
-              <box flexDirection="row">
-                <text fg={focused === "apiKey" ? theme.accent : theme.dim}>{tt(locale, "model.apiKey")}</text>
-                {providerHasSavedKey ? (
-                  <text fg={theme.success}>{"  " + tt(locale, "model.keySavedTag")}</text>
-                ) : null}
+            {formIsSubscription ? (
+              <box flexDirection="column" marginTop={1}>
+                <text fg={theme.dim}>{tt(locale, "model.subscriptionFieldNote")}</text>
+                <text fg={providerHasSavedCredential ? theme.success : theme.dim}>
+                  {providerHasSavedCredential
+                    ? tt(locale, "model.subscriptionReadyTag")
+                    : tt(locale, "model.subscriptionLoggedOut")}
+                </text>
+                <text fg={theme.dim}>{tt(locale, "model.subscriptionHint")}</text>
               </box>
-              <input
-                flexGrow={1}
-                value={apiKey}
-                focused={focused === "apiKey"}
-                placeholder={providerHasSavedKey ? tt(locale, "model.apiKeySaved") : tt(locale, "model.apiKeyPlaceholder")}
-                onInput={(value: string) => {
-                  apiKeyRef.current = value
-                  setApiKey(value)
-                }}
-                onSubmit={() => requestModels(providerRef.current, apiKeyRef.current.trim() || undefined)}
-              />
-            </box>
+            ) : (
+              <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("apiKey")}>
+                <box flexDirection="row">
+                  <text fg={focused === "apiKey" ? theme.accent : theme.dim}>{tt(locale, "model.apiKey")}</text>
+                  {providerHasSavedCredential ? (
+                    <text fg={theme.success}>{"  " + tt(locale, "model.keySavedTag")}</text>
+                  ) : null}
+                </box>
+                <input
+                  flexGrow={1}
+                  value={apiKey}
+                  focused={focused === "apiKey"}
+                  placeholder={providerHasSavedCredential ? tt(locale, "model.apiKeySaved") : tt(locale, "model.apiKeyPlaceholder")}
+                  onInput={(value: string) => {
+                    apiKeyRef.current = value
+                    setApiKey(value)
+                  }}
+                  onSubmit={() => requestModels(providerRef.current, apiKeyRef.current.trim() || undefined)}
+                />
+              </box>
+            )}
 
             <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("model")}>
               <text fg={focused === "model" ? theme.accent : theme.dim}>{tt(locale, "model.modelSelect")}</text>
@@ -391,24 +502,28 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
                   imageProviderRef.current = value
                   setImageProvider(value)
                 }}
-                onSubmit={() => setFocused("imageBaseUrl")}
+                onSubmit={() =>
+                  setFocused(isSupergrokProvider(imageProviderRef.current) ? "imageModel" : "imageBaseUrl")
+                }
               />
             </box>
 
-            <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("imageBaseUrl")}>
-              <text fg={focused === "imageBaseUrl" ? theme.accent : theme.dim}>{tt(locale, "imagegen.baseUrl")}</text>
-              <input
-                flexGrow={1}
-                value={imageBaseUrl}
-                focused={focused === "imageBaseUrl"}
-                placeholder={tt(locale, "imagegen.baseUrlPlaceholder")}
-                onInput={(value: string) => {
-                  imageBaseUrlRef.current = value
-                  setImageBaseUrl(value)
-                }}
-                onSubmit={() => setFocused("imageModel")}
-              />
-            </box>
+            {!imageIsSupergrok ? (
+              <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("imageBaseUrl")}>
+                <text fg={focused === "imageBaseUrl" ? theme.accent : theme.dim}>{tt(locale, "imagegen.baseUrl")}</text>
+                <input
+                  flexGrow={1}
+                  value={imageBaseUrl}
+                  focused={focused === "imageBaseUrl"}
+                  placeholder={tt(locale, "imagegen.baseUrlPlaceholder")}
+                  onInput={(value: string) => {
+                    imageBaseUrlRef.current = value
+                    setImageBaseUrl(value)
+                  }}
+                  onSubmit={() => setFocused("imageModel")}
+                />
+              </box>
+            ) : null}
 
             <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("imageModel")}>
               <text fg={focused === "imageModel" ? theme.accent : theme.dim}>{tt(locale, "imagegen.model")}</text>
@@ -436,27 +551,37 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
                   imageSizeRef.current = value
                   setImageSize(value)
                 }}
-                onSubmit={() => setFocused("imageApiKey")}
+                onSubmit={() => {
+                  if (isSupergrokProvider(imageProviderRef.current)) saveImagegen()
+                  else setFocused("imageApiKey")
+                }}
               />
             </box>
 
-            <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("imageApiKey")}>
-              <box flexDirection="row">
-                <text fg={focused === "imageApiKey" ? theme.accent : theme.dim}>{tt(locale, "imagegen.apiKey")}</text>
-                {imageHasSavedKey ? <text fg={theme.success}>{"  " + tt(locale, "model.keySavedTag")}</text> : null}
+            {imageIsSupergrok ? (
+              <box flexDirection="column" marginTop={1}>
+                <text fg={theme.dim}>{tt(locale, "model.subscriptionFieldNote")}</text>
+                <text fg={theme.dim}>{tt(locale, "model.subscriptionHint")}</text>
               </box>
-              <input
-                flexGrow={1}
-                value={imageApiKey}
-                focused={focused === "imageApiKey"}
-                placeholder={imageHasSavedKey ? tt(locale, "model.apiKeySaved") : tt(locale, "imagegen.apiKeyPlaceholder")}
-                onInput={(value: string) => {
-                  imageApiKeyRef.current = value
-                  setImageApiKey(value)
-                }}
-                onSubmit={saveImagegen}
-              />
-            </box>
+            ) : (
+              <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("imageApiKey")}>
+                <box flexDirection="row">
+                  <text fg={focused === "imageApiKey" ? theme.accent : theme.dim}>{tt(locale, "imagegen.apiKey")}</text>
+                  {imageHasSavedKey ? <text fg={theme.success}>{"  " + tt(locale, "model.keySavedTag")}</text> : null}
+                </box>
+                <input
+                  flexGrow={1}
+                  value={imageApiKey}
+                  focused={focused === "imageApiKey"}
+                  placeholder={imageHasSavedKey ? tt(locale, "model.apiKeySaved") : tt(locale, "imagegen.apiKeyPlaceholder")}
+                  onInput={(value: string) => {
+                    imageApiKeyRef.current = value
+                    setImageApiKey(value)
+                  }}
+                  onSubmit={saveImagegen}
+                />
+              </box>
+            )}
 
             <box marginTop={1} onMouseDown={saveImagegen} backgroundColor={theme.accent} paddingX={1}>
               <text fg={theme.bg}>{tt(locale, "imagegen.save")}</text>

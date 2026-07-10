@@ -23,7 +23,7 @@
   "cli.demo.upload_ready": "Demo module loaded. Nora Vance is ready at the Salt & Anchor Inn.",
   "cli.combined_listening": "Serving networked TUI on {host}:{port} with chat platforms: {platforms}",
   "cli.no_mode": "No platform selected. Use --cli for the headless CLI.",
-  "cli.offline_demo_notice": "No LLM API key configured; running offline demo mode.",
+  "cli.offline_demo_notice": "No usable LLM credential configured; running offline demo mode.",
   "cli.platform_skip_no_creds": "No credentials for platform '{platform}'; skipping (set its TRPG_* env vars).",
   "cli.platform_unknown": "Unknown platform '{platform}'; skipping.",
   "cli.platforms_stub": "Platform assembly is not wired here yet: {platforms}",

@@ -3,11 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from typing import Any
+from inspect import Parameter, signature
+from typing import TYPE_CHECKING, Any
 
 from infra.config import LLMSettings, Settings
 from infra.llm import ChatResult, LLMClient, OpenAILLM, ToolCall, parse_usage
+from infra.oauth_flows import (
+    XAI_API_BASE,
+    TokenManager,
+    is_subscription_provider,
+)
 from infra.runtime_config import OVERRIDE_FIELDS, apply_overrides
+
+if TYPE_CHECKING:
+    from infra.runtime_config import CredentialBook
 
 PRESETS: dict[str, str] = {
     "openai": "",
@@ -19,16 +28,19 @@ PRESETS: dict[str, str] = {
     "moonshot": "https://api.moonshot.cn/v1",
     "zhipu": "https://open.bigmodel.cn/api/paas/v4",
     "xai": "https://api.x.ai/v1",
+    "supergrok": XAI_API_BASE,
     "mistral": "https://api.mistral.ai/v1",
     "ollama": "http://localhost:11434/v1",
     "lmstudio": "http://localhost:1234/v1",
     "vllm": "http://localhost:8000/v1",
 }
 
-# ChatGPT web subscriptions are not API credentials. These provider names are
-# only for user-operated OpenAI-compatible proxy gateways that expose a base_url.
+# ChatGPT: with an explicit base_url these names still mean "user-operated proxy
+# gateway". Without base_url they mean official ChatGPT-subscription OAuth
+# (ChatGPTSubscriptionLLM). SuperGrok is subscription-only (OAuth bearer on api.x.ai).
 CHATGPT_SUBSCRIPTION_PROXY_PROVIDER_NAMES: tuple[str, ...] = ("chatgpt", "gpt-subscription")
 CHATGPT_SUBSCRIPTION_PROXY_PROVIDERS: frozenset[str] = frozenset(CHATGPT_SUBSCRIPTION_PROXY_PROVIDER_NAMES)
+_AUTHLESS_LOCAL_PROVIDERS: frozenset[str] = frozenset({"ollama", "lmstudio", "vllm"})
 
 _GEMINI_SCHEMA_ALLOWED_KEYS = {
     "type",
@@ -56,8 +68,16 @@ _GEMINI_SCHEMA_ALLOWED_KEYS = {
 }
 
 
-def build_llm(settings: Settings) -> LLMClient:
-    """Build an LLM client from application settings."""
+def build_llm(
+    settings: Settings,
+    *,
+    credentials: CredentialBook | None = None,
+) -> LLMClient:
+    """Build an LLM client from application settings.
+
+    Optional ``credentials`` supplies subscription OAuth tokens for
+    ``chatgpt`` / ``supergrok`` (and aliases). Classic API-key providers ignore it.
+    """
 
     llm_settings = settings.llm
     provider = (llm_settings.provider or "openai").lower()
@@ -65,13 +85,76 @@ def build_llm(settings: Settings) -> LLMClient:
         return AnthropicLLM(llm_settings)
     if provider in {"gemini", "google"}:
         return GeminiLLM(llm_settings)
+
+    # ChatGPT subscription OAuth (no proxy base_url).
     if provider in CHATGPT_SUBSCRIPTION_PROXY_PROVIDERS and not llm_settings.base_url:
-        raise ValueError("chatgpt_subscription_proxy_requires_base_url")
+        return _build_chatgpt_subscription(llm_settings, credentials=credentials)
+
+    # SuperGrok subscription: OpenAI-compatible api.x.ai with dynamic bearer.
+    if provider == "supergrok":
+        return _build_supergrok(llm_settings, credentials=credentials)
 
     base_url = llm_settings.base_url or PRESETS.get(provider, "")
     if base_url == llm_settings.base_url:
         return OpenAILLM(llm_settings)
     return OpenAILLM(llm_settings.model_copy(update={"base_url": base_url}))
+
+
+def is_llm_configured(
+    settings: Settings,
+    *,
+    credentials: CredentialBook | None = None,
+) -> bool:
+    """Whether ``settings`` can build a real client without ambient secrets."""
+    llm = settings.llm
+    provider = (llm.provider or "openai").casefold()
+    oauth_path = provider == "supergrok" or (
+        provider in CHATGPT_SUBSCRIPTION_PROXY_PROVIDERS and not llm.base_url
+    )
+    if oauth_path:
+        return (
+            credentials is not None
+            and credentials.load_subscription_sync(provider) is not None
+        )
+    if provider in _AUTHLESS_LOCAL_PROVIDERS:
+        return True
+    return bool(llm.api_key)
+
+
+def _token_manager_for(
+    provider: str,
+    credentials: CredentialBook | None,
+) -> TokenManager:
+    """Build a TokenManager from the credential book or raise login-required."""
+    if credentials is None:
+        raise ValueError("subscription_login_required")
+    manager = credentials.subscription_manager_sync(provider)
+    if manager is None:
+        raise ValueError("subscription_login_required")
+    return manager
+
+
+def _build_chatgpt_subscription(
+    llm_settings: LLMSettings,
+    *,
+    credentials: CredentialBook | None,
+) -> LLMClient:
+    from infra.llm_chatgpt import ChatGPTSubscriptionLLM
+
+    manager = _token_manager_for("chatgpt", credentials)
+    return ChatGPTSubscriptionLLM(llm_settings, token_manager=manager)
+
+
+def _build_supergrok(
+    llm_settings: LLMSettings,
+    *,
+    credentials: CredentialBook | None,
+) -> LLMClient:
+    manager = _token_manager_for("supergrok", credentials)
+    # SuperGrok OAuth bearers are valid only for the official xAI API. Never
+    # inherit a stale proxy URL from a previously selected provider/mode.
+    settings = llm_settings.model_copy(update={"base_url": XAI_API_BASE, "api_key": ""})
+    return OpenAILLM(settings, token_provider=manager.access_token)
 
 
 # Providers reached through a native (non-OpenAI) SDK. Aliases included so
@@ -84,7 +167,12 @@ NATIVE_PROVIDER_NAMES: tuple[str, ...] = ("anthropic", "gemini")
 def is_known_provider(name: str) -> bool:
     """True if `name` is a recognized provider key (`build_llm` can build it)."""
     provider = (name or "").lower()
-    return provider in PRESETS or provider in CHATGPT_SUBSCRIPTION_PROXY_PROVIDERS or provider in NATIVE_PROVIDERS
+    return (
+        provider in PRESETS
+        or provider in CHATGPT_SUBSCRIPTION_PROXY_PROVIDERS
+        or provider in NATIVE_PROVIDERS
+        or is_subscription_provider(provider)
+    )
 
 
 async def list_models(llm: LLMSettings) -> list[str]:
@@ -96,21 +184,37 @@ async def list_models(llm: LLMSettings) -> list[str]:
     provider = (llm.provider or "openai").lower()
     if provider in NATIVE_PROVIDERS:
         return []  # native SDKs don't speak OpenAI /models; free-text fallback
+    # Official subscription providers do not expose a safe /models discovery
+    # path here. In particular, do not let the SDK borrow OPENAI_API_KEY from
+    # the process environment when their runtime api_key is intentionally empty.
+    if provider == "supergrok" or (
+        provider in CHATGPT_SUBSCRIPTION_PROXY_PROVIDERS and not llm.base_url
+    ):
+        return []
+    if not llm.api_key:
+        return []
     base_url = llm.base_url or PRESETS.get(provider, "")
     from openai import AsyncOpenAI
 
-    client = AsyncOpenAI(api_key=llm.api_key or None, base_url=base_url or None, timeout=15.0, max_retries=0)
+    client: AsyncOpenAI | None = None
     try:
+        client = AsyncOpenAI(
+            api_key=llm.api_key,
+            base_url=base_url or None,
+            timeout=15.0,
+            max_retries=0,
+        )
         page = await client.models.list()
         ids = [str(getattr(model, "id", "") or "") for model in getattr(page, "data", []) or []]
         return sorted({model for model in ids if model})
     except Exception:
         return []
     finally:
-        try:
-            await client.close()
-        except Exception:
-            pass
+        if client is not None:
+            try:
+                await client.close()
+            except Exception:
+                pass
 
 
 def mask_secret(value: str) -> str:
@@ -143,13 +247,46 @@ class MutableLLM:
     PLACE, so every consumer observes the switch without rebuilding `Services`:
     the agent loop uses the inner client's default model, while module init and
     the NPC/companion actors read `services.settings.llm.*` at call time.
+
+    Optional ``credentials`` is forwarded to ``build_llm`` so subscription
+    providers can resolve OAuth tokens from the credential book.
     """
 
-    def __init__(self, settings: Settings, *, builder: Callable[[Settings], LLMClient] = build_llm) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        builder: Callable[..., LLMClient] = build_llm,
+        credentials: CredentialBook | None = None,
+        fallback_llm: LLMClient | None = None,
+    ) -> None:
         self._builder = builder
+        self._credentials = credentials
+        self._fallback_llm = fallback_llm
         self._settings = settings  # shared/effective settings (mutated in place)
         self._base = settings.model_copy(deep=True)  # pristine baseline for reset
-        self._inner: LLMClient = builder(settings)
+        self._inner: LLMClient = self._call_builder(settings)
+
+    def _call_builder(self, settings: Settings) -> LLMClient:
+        if self._fallback_llm is not None and not is_llm_configured(
+            settings,
+            credentials=self._credentials,
+        ):
+            return self._fallback_llm
+        try:
+            parameters = signature(self._builder).parameters.values()
+        except (TypeError, ValueError):
+            # Opaque callables follow the current builder contract.
+            return self._builder(settings, credentials=self._credentials)
+        accepts_credentials = any(
+            parameter.name == "credentials"
+            or parameter.kind is Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
+        if accepts_credentials:
+            return self._builder(settings, credentials=self._credentials)
+        # Test stubs / older builders that only accept settings.
+        return self._builder(settings)
 
     @property
     def inner(self) -> LLMClient:
@@ -176,12 +313,18 @@ class MutableLLM:
             model=model,
         )
 
+    def clear_continuation(self, messages: list[dict]) -> None:
+        """Release provider-specific state owned by a completed agent turn."""
+        clear = getattr(self._inner, "clear_continuation", None)
+        if callable(clear):
+            clear(messages)
+
     def reconfigure(self, settings: Settings) -> None:
         """Rebuild the inner client from `settings`, mutating the shared Settings'
         llm fields in place so all LLM consumers observe the change."""
         for field in OVERRIDE_FIELDS:
             setattr(self._settings.llm, field, getattr(settings.llm, field))
-        self._inner = self._builder(self._settings)
+        self._inner = self._call_builder(self._settings)
 
     def apply(self, overrides: dict) -> None:
         """Recompute effective settings from the pristine baseline + `overrides`
