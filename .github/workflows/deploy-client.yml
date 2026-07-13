@@ -188,7 +188,8 @@ jobs:
         # Publish every build under its immutable release tag before refreshing the flat
         # compatibility path. Released/pinned installers fall back to `releases/<tag>/`,
         # so a later main/dev deployment cannot replace the archive they verify.
-        # ubuntu-latest no longer ships rsync, so use scp.
+        # Stream the four fixed files once, over one SSH session, then refresh the flat
+        # compatibility path with a server-local copy. This avoids duplicate WAN uploads.
         run: |
           set -euo pipefail
           T="${{ secrets.LW_SSH_TARGET }}"
@@ -198,11 +199,22 @@ jobs:
           esac
           ROOT="/var/www/1a7432.site/trpg"
           FIXED="$ROOT/releases/$TAG"
-          ssh "$T" "install -d -m 755 '$FIXED'"
-          scp dist/loreweaver-client.tar.gz dist/loreweaver-client.tar.gz.sha256 dist/install.sh dist/install.ps1 "$T:$FIXED/"
-          scp dist/loreweaver-client.tar.gz dist/loreweaver-client.tar.gz.sha256 dist/install.sh dist/install.ps1 "$T:/var/www/1a7432.site/trpg/"
-          ssh "$T" "chmod -R a+rX '$ROOT'"
-          # The React web client was removed; take its old bundle offline (idempotent) so a
-          # rebuilt server never re-serves a stale /play pointing at the retired WS entrypoint.
-          ssh "$T" "rm -rf /var/www/1a7432.site/play"
+          tar -C dist -cf - \
+            loreweaver-client.tar.gz \
+            loreweaver-client.tar.gz.sha256 \
+            install.sh \
+            install.ps1 \
+          | ssh "$T" "
+              set -eu
+              install -d -m 755 '$ROOT' '$FIXED'
+              tar -xf - -C '$FIXED'
+              install -m 644 \
+                '$FIXED/loreweaver-client.tar.gz' \
+                '$FIXED/loreweaver-client.tar.gz.sha256' \
+                '$FIXED/install.sh' \
+                '$FIXED/install.ps1' \
+                '$ROOT/'
+              # The React web client was removed; keep its stale bundle offline.
+              rm -rf /var/www/1a7432.site/play
+            "
           echo "published → /trpg/releases/$TAG/ + /trpg/"

@@ -539,3 +539,24 @@ def test_only_client_workflow_promotes_latest_after_client_assets_exist():
     assert client.index(upload) < client.index(promote)
     assert 'if [ "$CHANNEL" != "prerelease" ]; then' in client
     assert "gh release edit" not in server
+
+
+def test_client_mirror_uploads_once_over_one_ssh_session():
+    text = (ROOT / ".github/workflows/deploy-client.yml").read_text()
+    start = text.index("      - name: Publish tarball + installers")
+    publish = text[start:]
+    run_marker = "        run: |\n"
+    script = textwrap.dedent(publish[publish.index(run_marker) + len(run_marker) :])
+    script = script.replace("${{ secrets.LW_SSH_TARGET }}", "deploy@example.test")
+    script = script.replace("${{ steps.release.outputs.tag }}", "release-1.0.0")
+
+    assert "scp " not in publish
+    assert "tar -C dist -cf -" in publish
+    assert publish.count('ssh "$T"') == 1
+    assert "set -euo pipefail" in publish
+    assert "tar -xf - -C '$FIXED'" in publish
+    assert "install -m 644" in publish
+    assert publish.index("tar -xf - -C '$FIXED'") < publish.index("install -m 644")
+    assert "'$FIXED/loreweaver-client.tar.gz'" in publish
+    parsed = subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True)
+    assert parsed.returncode == 0, parsed.stderr
