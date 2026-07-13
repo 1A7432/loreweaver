@@ -74,8 +74,8 @@ All settings use the `TRPG_` env prefix with `__` for nesting (see
 | `TRPG_DATA_DIR` | campaign/runtime data directory (db → `<data_dir>/loreweaver.db`) | `./data` |
 | `TRPG_TUI_KEYS` | keystore file path (also overridable with `--keys`; independent of `TRPG_DATA_DIR`) | `./keys.toml` |
 | `TRPG_LOCAL_SERVER_HOME` | TUI one-click local hosting root: server binary/source cache, `.env`, data, keys, and ticket sidecars | `TRPG_HOME`, else `<user home>/.loreweaver` |
-| `TRPG_RELEASE_TAG` | Pin the installer/client and one-click server downloads to a versioned GitHub Release such as `release-0.5.1.dev29+g0cf542b` | latest stable release |
-| `TRPG_SERVER_RELEASE_TAG` | Pin only the one-click server binary/source download tag; the installer writes this automatically for release builds | `TRPG_RELEASE_TAG`, else latest stable release |
+| `TRPG_RELEASE_TAG` | Pin the installer/client and one-click server downloads to a versioned GitHub Release such as `release-0.5.1.dev29+g0cf542b` | latest release |
+| `TRPG_SERVER_RELEASE_TAG` | Pin only the one-click server binary/source download tag; the installer writes this automatically for release builds | `TRPG_RELEASE_TAG`, else latest release |
 | `TRPG_ENABLE_VECTOR_DB` | worldbook / document retrieval | `true` |
 | `TRPG_TUI__JOIN_TIMEOUT` | seconds an unauthenticated connection has to send `join` before being closed | `10` |
 | `TRPG_CENSOR__WORDLIST_PATH` | Content-moderation wordlist: a JSON file `{"word": level, ...}` (level `1`-`5`, see `gateway.ops.CensorLevel`). See [Content moderation](#content-moderation) | *(empty = moderation OFF)* |
@@ -102,14 +102,16 @@ classic proxy path rather than subscription OAuth.
 
 Release builds publish an adjacent `.sha256` for every client and server archive. The
 installer verifies the client digest before extraction; one-click hosting verifies the
-selected server archive and refuses to fall back to an unverified source checkout on an
-integrity failure. Stable `v*` tags become GitHub's Latest release; development builds are
-pre-releases and do not replace it. The HTTP mirror keeps a flat compatibility copy for its
-one-line installer and an immutable copy at `releases/<tag>/` for every published build. A
-released or pinned installer uses the tag-specific mirror copy, so a later development publish
-cannot replace its fallback archive. An embedded digest is accepted only when the selected tag
-matches the installer's embedded tag; other selections fetch the selected archive's sidecar.
-Checksum mismatches are fatal and never trigger extraction or a fallback to a different payload.
+selected server archive. If an older binary release has no sidecar, or its checksum metadata is
+unreachable or malformed, one-click hosting falls back to the selected source path. A valid
+checksum that does not match the downloaded archive is fatal. Untagged `main` builds and numeric
+stable `v*` tags become GitHub's Latest release; explicitly tagged prereleases remain
+pre-releases. The HTTP mirror keeps a flat compatibility copy for its one-line installer and an
+immutable copy at `releases/<tag>/` for every published build. A released or pinned installer
+uses the tag-specific mirror copy, so a later development publish cannot replace its fallback
+archive. An embedded digest is accepted only when the selected tag matches the installer's
+embedded tag; other selections fetch the selected archive's sidecar. Checksum mismatches are
+fatal and never trigger extraction or a fallback to a different payload.
 The installer uses `https://registry.npmjs.org` by default; set `TRPG_REGISTRY` only when you
 intentionally choose another registry.
 

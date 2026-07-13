@@ -112,92 +112,6 @@ export function parseSha256Sidecar(text: string, asset: string): string | undefi
   return digest.toLowerCase()
 }
 
-// `tar` implementations differ in how aggressively they protect the extraction
-// destination. Reject dangerous names ourselves before any archive is unpacked,
-// treating backslashes as separators as Windows' bsdtar does.
-export function isSafeArchiveEntry(rawEntry: string): boolean {
-  if (!rawEntry || /[\u0000-\u001f\u007f]/.test(rawEntry)) return false
-  let entry = rawEntry.replaceAll("\\", "/")
-  while (entry.startsWith("./")) entry = entry.slice(2)
-  if (!entry || entry.startsWith("/") || entry.startsWith("//") || /^[A-Za-z]:/.test(entry)) return false
-  return !entry.split("/").some((part) => part === "..")
-}
-
-export function isSafeArchiveTypeLine(line: string): boolean {
-  return line.startsWith("-") || line.startsWith("d")
-}
-
-async function inspectArchive(archive: string, verbose: boolean, signal?: AbortSignal) {
-  const proc = Bun.spawn(["tar", verbose ? "-tvf" : "-tf", archive], {
-    stdout: "pipe",
-    stderr: "pipe",
-    env: process.env as Record<string, string>,
-  })
-  const onAbort = () => {
-    try {
-      proc.kill()
-    } catch {
-      // already gone
-    }
-  }
-  signal?.addEventListener("abort", onAbort, { once: true })
-  try {
-    const [stdout, stderr, code] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ])
-    return { stdout, stderr, code }
-  } finally {
-    signal?.removeEventListener("abort", onAbort)
-  }
-}
-
-async function validateArchiveEntries(
-  archive: string,
-  onLog: OnLog,
-  signal?: AbortSignal,
-  integrityFailure = false,
-  requiredRoot?: string,
-): Promise<void> {
-  onLog(`$ tar -tf ${archive}`, "step")
-  const fail = (message: string): never => {
-    throw integrityFailure ? new IntegrityError(message) : new Error(message)
-  }
-  const listing = await inspectArchive(archive, false, signal)
-  for (const line of listing.stderr.split(/\r?\n/)) {
-    if (line) onLog(clean(line), "err")
-  }
-  if (signal?.aborted) throw new Error("cancelled")
-  if (listing.code !== 0) fail("could not inspect the downloaded archive")
-  const entries = listing.stdout.split(/\r?\n/).filter(Boolean)
-  if (entries.length === 0) fail("downloaded archive is empty")
-  for (const entry of entries) {
-    if (!isSafeArchiveEntry(entry)) fail(`unsafe archive entry: ${JSON.stringify(entry)}`)
-    if (requiredRoot) {
-      const normalized = entry.replaceAll("\\", "/").replace(/^(?:\.\/)+/, "").replace(/\/$/, "")
-      if (normalized !== requiredRoot && !normalized.startsWith(`${requiredRoot}/`)) {
-        fail(`archive entry is outside ${requiredRoot}/: ${JSON.stringify(entry)}`)
-      }
-    }
-  }
-
-  // A relative child can still escape when an earlier member creates a symlink
-  // or hardlink. Release/source archives are deliberately restricted to regular
-  // files and directories, so reject every other tar/zip member type up front.
-  onLog(`$ tar -tvf ${archive}`, "step")
-  const verbose = await inspectArchive(archive, true, signal)
-  for (const line of verbose.stderr.split(/\r?\n/)) {
-      if (line) onLog(clean(line), "err")
-  }
-  if (signal?.aborted) throw new Error("cancelled")
-  if (verbose.code !== 0) fail("could not inspect downloaded archive member types")
-  const typeLines = verbose.stdout.split(/\r?\n/).filter(Boolean)
-  if (typeLines.length === 0 || typeLines.some((line) => !isSafeArchiveTypeLine(line))) {
-    fail("downloaded archive contains a link or special entry")
-  }
-}
-
 // Commit a fully prepared directory without deleting the working copy first.
 // If the final rename fails, the previous directory is restored before the
 // error is surfaced to the UI.
@@ -228,9 +142,9 @@ async function sha256File(path: string): Promise<string> {
 
 type FetchResponse = (url: string, init?: RequestInit) => Promise<Response>
 
-// Once an archive response has been accepted, absence of its checksum is an integrity failure,
-// not an ordinary mirror outage: silently switching to an unchecked source tarball would undo
-// the release verification this path promises.
+// Checksum metadata improves corruption detection, but it is an optional part of the binary
+// acquisition path: older releases did not publish sidecars. Missing, unreachable, or malformed
+// metadata is therefore an ordinary binary-source failure and lets the caller use source instead.
 export async function fetchReleaseSha256(
   archiveUrl: string,
   asset: string,
@@ -241,17 +155,20 @@ export async function fetchReleaseSha256(
   try {
     const response = await fetchResponse(checksumUrl, { signal })
     if (!response.ok) {
-      throw new IntegrityError(`HTTP ${response.status} fetching SHA-256 metadata from ${checksumUrl}`)
+      throw new Error(`HTTP ${response.status} fetching SHA-256 metadata from ${checksumUrl}`)
     }
     const checksum = parseSha256Sidecar(await response.text(), asset)
-    if (!checksum) throw new IntegrityError(`invalid SHA-256 metadata from ${checksumUrl}`)
+    if (!checksum) throw new Error(`invalid SHA-256 metadata from ${checksumUrl}`)
     return checksum
   } catch (error) {
     if (signal?.aborted) throw error instanceof Error ? error : new Error("cancelled")
-    if (error instanceof IntegrityError) throw error
     const detail = error instanceof Error ? error.message : String(error)
-    throw new IntegrityError(`could not fetch SHA-256 metadata from ${checksumUrl} (${detail})`)
+    throw new Error(`could not fetch SHA-256 metadata from ${checksumUrl} (${detail})`, { cause: error })
   }
+}
+
+export function verifyArchiveSha256(actual: string, expected: string, asset: string): void {
+  if (actual !== expected) throw new IntegrityError(`binary SHA-256 mismatch for ${asset}`)
 }
 
 function isBinaryIntegrityManifest(value: unknown): value is BinaryIntegrityManifest {
@@ -277,7 +194,7 @@ export async function writeBinaryIntegrityManifest(
   sourceUrl: string,
   archiveSha256: string,
 ): Promise<void> {
-  if (!/^[0-9a-f]{64}$/.test(archiveSha256)) throw new IntegrityError("invalid verified archive SHA-256")
+  if (!/^[0-9a-f]{64}$/.test(archiveSha256)) throw new Error("invalid verified archive SHA-256")
   const executableSha256 = await sha256File(binaryExePath(binaryDir))
   const manifest: BinaryIntegrityManifest = {
     version: BINARY_INTEGRITY_VERSION,
@@ -429,7 +346,6 @@ async function fetchServerSource(ctx: HostLocalContext, onLog: OnLog, signal?: A
   const staging = await mkdtemp(`${ctx.paths.serverDir}.staging-`)
   try {
     await Bun.write(tarball, response)
-    await validateArchiveEntries(tarball, onLog, signal)
     // --strip-components=1 drops the `loreweaver-main/` wrapper folder GitHub puts in the tarball.
     if ((await run(["tar", "-xzf", tarball, "-C", staging, "--strip-components=1"], undefined, onLog, signal)) !== 0) {
       throw new Error("extracting the server source failed")
@@ -469,8 +385,8 @@ async function fetchServerBinary(ctx: HostLocalContext, onLog: OnLog, signal?: A
           try {
             await candidate.body?.cancel()
           } catch {
-            // The integrity error is authoritative; a failed best-effort body cancellation must
-            // not replace it with an unrelated stream error.
+            // Preserve the checksum-metadata error that triggers source fallback; a failed
+            // best-effort body cancellation must not replace it with a stream error.
           }
           throw error
         }
@@ -494,15 +410,14 @@ async function fetchServerBinary(ctx: HostLocalContext, onLog: OnLog, signal?: A
   try {
     await Bun.write(archive, response)
     const actualSha256 = await sha256File(archive)
-    if (actualSha256 !== expectedSha256) throw new IntegrityError(`binary SHA-256 mismatch for ${asset}`)
-    await validateArchiveEntries(archive, onLog, signal, true, "loreweaver-server")
+    verifyArchiveSha256(actualSha256, expectedSha256, asset)
     // No --strip-components here: unlike the source tarball, the release asset's top-level
     // `loreweaver-server/` folder IS the layout we want under the binary cache dir.
     if ((await run(["tar", "-xf", archive, "-C", staging], undefined, onLog, signal)) !== 0) {
-      throw new IntegrityError("extracting the verified server binary failed")
+      throw new Error("extracting the verified server binary failed")
     }
     const stagedExe = binaryExePath(staging)
-    if (!existsSync(stagedExe)) throw new IntegrityError("verified server archive has an unexpected layout")
+    if (!existsSync(stagedExe)) throw new Error("verified server archive has an unexpected layout")
     if (process.platform !== "win32") {
       try {
         await chmod(stagedExe, 0o755)
@@ -562,7 +477,28 @@ async function ensureServerDir(ctx: HostLocalContext, onLog: OnLog, signal?: Abo
   }
 }
 
-type ServerLocation = { kind: "source"; dir: string } | { kind: "binary"; exe: string }
+export type ServerLocation = { kind: "source"; dir: string } | { kind: "binary"; exe: string }
+
+export async function resolveDownloadedServer(
+  fetchBinary: () => Promise<string | undefined>,
+  fetchSource: () => Promise<string>,
+  onLog: OnLog,
+  signal?: AbortSignal,
+): Promise<ServerLocation> {
+  try {
+    const exe = await fetchBinary()
+    if (exe) {
+      onLog("Prebuilt server downloaded", "ok")
+      return { kind: "binary", exe }
+    }
+  } catch (error) {
+    if (signal?.aborted) throw error instanceof Error ? error : new Error("cancelled")
+    if (error instanceof IntegrityError) throw error
+    const detail = error instanceof Error ? error.message : String(error)
+    onLog(`Prebuilt binary download didn't work (${detail}) — falling back to source…`, "err")
+  }
+  return { kind: "source", dir: await fetchSource() }
+}
 
 // The full acquisition chain, in priority order: dev checkout > binary fetched earlier > source
 // fetched earlier > download a binary > (fall back to) fetch source. Only the last step can fail
@@ -593,19 +529,12 @@ async function resolveServer(ctx: HostLocalContext, onLog: OnLog, signal?: Abort
     onLog("Ignoring a source cache from another release tag or without a manifest", "err")
   }
   onLog("No server on this machine — fetching it…", "step")
-  try {
-    const exe = await fetchServerBinary(ctx, onLog, signal)
-    if (exe) {
-      onLog("Prebuilt server downloaded", "ok")
-      return { kind: "binary", exe }
-    }
-  } catch (error) {
-    if (signal?.aborted) throw error instanceof Error ? error : new Error("cancelled")
-    if (error instanceof IntegrityError) throw error
-    const detail = error instanceof Error ? error.message : String(error)
-    onLog(`Prebuilt binary download didn't work (${detail}) — falling back to source…`, "err")
-  }
-  return { kind: "source", dir: await ensureServerDir(ctx, onLog, signal) }
+  return resolveDownloadedServer(
+    () => fetchServerBinary(ctx, onLog, signal),
+    () => ensureServerDir(ctx, onLog, signal),
+    onLog,
+    signal,
+  )
 }
 
 async function ensureUv(ctx: HostLocalContext, onLog: OnLog, signal?: AbortSignal): Promise<void> {

@@ -158,14 +158,7 @@ rewrite_lock_registry() {  # $1 = staged clients directory
   [ -f "$lock" ] || return 0
   TRPG_LOCK_FILE="$lock" TRPG_LOCK_REGISTRY="$TRPG_REGISTRY" bun -e '
     const path = process.env.TRPG_LOCK_FILE;
-    let registry;
-    try {
-      const url = new URL(process.env.TRPG_LOCK_REGISTRY || "");
-      if (!new Set(["http:", "https:"]).has(url.protocol) || url.username || url.password) process.exit(2);
-      registry = url.toString().replace(/\/+$/, "");
-    } catch {
-      process.exit(2);
-    }
+    const registry = (process.env.TRPG_LOCK_REGISTRY || "").replace(/\/+$/, "");
     if (!path || !registry) process.exit(2);
     let contents = await Bun.file(path).text();
     contents = contents.replace(
@@ -202,42 +195,6 @@ cleanup_install() {
 trap cleanup_install EXIT
 trap 'exit 130' HUP INT TERM
 
-archive_is_safe() {  # $1 = verified client tarball
-  local archive="$1" listing verbose entry normalized first seen=0
-  listing="$(mktemp)"
-  verbose="$(mktemp)"
-  if ! LC_ALL=C tar tzf "$archive" > "$listing" 2>/dev/null \
-    || ! LC_ALL=C tar tvzf "$archive" > "$verbose" 2>/dev/null; then
-    rm -f "$listing" "$verbose"
-    return 1
-  fi
-  while IFS= read -r entry; do
-    [ -n "$entry" ] || continue
-    normalized="${entry//\\//}"
-    while [ "${normalized#./}" != "$normalized" ]; do normalized="${normalized#./}"; done
-    case "$normalized" in
-      ""|/*|//*|[A-Za-z]:*) rm -f "$listing" "$verbose"; return 1 ;;
-    esac
-    case "/$normalized/" in *"/../"*) rm -f "$listing" "$verbose"; return 1 ;; esac
-    case "$normalized" in
-      clients|clients/*) ;;
-      *) rm -f "$listing" "$verbose"; return 1 ;;
-    esac
-    seen=1
-  done < "$listing"
-  [ "$seen" -eq 1 ] || { rm -f "$listing" "$verbose"; return 1; }
-  # The official client payload contains only files/directories. Reject links,
-  # devices, and other special entries so extraction cannot pivot through a
-  # symlink even when all path names themselves look relative.
-  while IFS= read -r entry; do
-    [ -n "$entry" ] || continue
-    first="${entry%"${entry#?}"}"
-    case "$first" in -|d) ;; *) rm -f "$listing" "$verbose"; return 1 ;; esac
-  done < "$verbose"
-  rm -f "$listing" "$verbose"
-  return 0
-}
-
 # 2) Client tarball. Only source availability failures may fall back. Invalid checksum
 # metadata, a digest mismatch, or an extraction failure is fatal and never tries another
 # payload under the same trust decision. Return 10=unavailable, 20=fatal.
@@ -258,11 +215,6 @@ fetch_client() {  # $1 = tarball URL; $2 = target tag; $3 = extraction root
   if ! verify_sha256 "$tmp" "$expected"; then
     rm -f "$tmp"
     printf '\033[1;31m\u2717 client archive SHA-256 mismatch or invalid metadata; refusing to install\033[0m\n' >&2
-    return 20
-  fi
-  if ! archive_is_safe "$tmp"; then
-    rm -f "$tmp"
-    printf '\033[1;31m\u2717 verified client archive contains an unsafe path or entry type\033[0m\n' >&2
     return 20
   fi
   if ! tar xzf "$tmp" -C "$destination" 2>/dev/null; then

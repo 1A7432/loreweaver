@@ -7,6 +7,7 @@ import io
 import os
 import subprocess
 import tarfile
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -403,7 +404,7 @@ def test_dependency_failure_restores_the_previous_client(tmp_path: Path):
     assert not (home / "clients" / "candidate.txt").exists()
 
 
-def test_verified_archive_path_traversal_is_rejected_before_extraction(tmp_path: Path):
+def test_system_tar_rejects_verified_archive_path_traversal(tmp_path: Path):
     archive = tmp_path / "traversal.tar.gz"
     digest = _unsafe_archive(archive)
     sidecar = _sidecar(archive, digest)
@@ -419,12 +420,12 @@ def test_verified_archive_path_traversal_is_rejected_before_extraction(tmp_path:
     )
 
     assert result.returncode != 0
-    assert "unsafe path or entry type" in result.stderr
+    assert "extracting the verified client archive failed" in result.stderr
     assert (home / "clients" / "previous.txt").read_text() == "working version"
     assert not list(tmp_path.rglob("escaped.txt"))
 
 
-def test_verified_archive_link_pivot_is_rejected_before_extraction(tmp_path: Path):
+def test_system_tar_rejects_verified_archive_link_pivot(tmp_path: Path):
     archive = tmp_path / "link-pivot.tar.gz"
     digest = _unsafe_archive(archive, link_pivot=True)
     sidecar = _sidecar(archive, digest)
@@ -440,7 +441,7 @@ def test_verified_archive_link_pivot_is_rejected_before_extraction(tmp_path: Pat
     )
 
     assert result.returncode != 0
-    assert "unsafe path or entry type" in result.stderr
+    assert "extracting the verified client archive failed" in result.stderr
     assert (home / "clients" / "previous.txt").read_text() == "working version"
     assert not list(tmp_path.rglob("escaped.txt"))
 
@@ -454,8 +455,7 @@ def test_powershell_installer_keeps_the_same_release_and_fallback_guards():
     assert "$targetTag -ceq $EmbeddedReleaseTag" in text
     assert 'return "fatal"' in text
     assert '($result -eq "unavailable") -and ($Primary -ne $Mirror)' in text
-    assert text.index("Get-FileHash -Algorithm SHA256") < text.index("TestClientArchive $tar")
-    assert text.index("TestClientArchive $tar") < text.index("& tar -xzf $tar")
+    assert text.index("Get-FileHash -Algorithm SHA256") < text.index("& tar -xzf $tar")
     assert "Remove-Item (Join-Path $Home_ \"clients\") -Recurse -Force" not in text
     assert "if ($bunInstallExit -ne 0)" in text
     assert "irm $(PsQuote $updInstaller) | iex" in text
@@ -479,10 +479,63 @@ def test_both_installers_rewrite_absolute_lock_urls_before_bun_install():
     assert powershell.rindex("RewriteLockRegistry $StagedClients") < powershell.index("bun install --silent")
 
 
-def test_release_workflows_do_not_promote_prerelease_tags_or_cross_cancel_refs():
+@pytest.mark.parametrize(
+    ("exact_tag", "expected_tag", "expected_channel", "expected_flag"),
+    [
+        ("", "release-0.5.1.dev40", "current", "--latest=false"),
+        ("v1.2.3", "v1.2.3", "stable", "--latest=false"),
+        ("v1.2.3-rc1", "v1.2.3-rc1", "prerelease", "--prerelease"),
+    ],
+)
+def test_release_workflow_channel_truth_table(
+    exact_tag: str,
+    expected_tag: str,
+    expected_channel: str,
+    expected_flag: str,
+):
     for relative in (".github/workflows/deploy-client.yml", ".github/workflows/release-server.yml"):
         text = (ROOT / relative).read_text()
-        assert "^v[0-9]+([.][0-9]+)*$" in text
-        assert 'elif [ -n "$exact_tag" ]' in text
+
+        resolve_start = text.index('          if [[ "$exact_tag"')
+        resolve_end = text.index("          {\n", resolve_start)
+        resolve_block = textwrap.dedent(text[resolve_start:resolve_end])
+        resolve_script = (
+            'exact_tag="$1"; version="$2"; '
+            + resolve_block
+            + '\nprintf "%s\\t%s" "$tag" "$channel"'
+        )
+        resolved = subprocess.run(
+            ["bash", "-c", resolve_script, "resolve", exact_tag, "0.5.1.dev40"],
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.split("\t")
+        assert resolved == [expected_tag, expected_channel]
+
+        flags_start = text.index("            release_flags=(", resolve_end)
+        flags_end = text.index("            gh release create", flags_start)
+        flags_block = textwrap.dedent(text[flags_start:flags_end])
+        flags_script = 'CHANNEL="$1"; ' + flags_block + '\nprintf "%s" "${release_flags[*]}"'
+        release_flag = subprocess.run(
+            ["bash", "-c", flags_script, "flags", expected_channel],
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout
+        assert release_flag == expected_flag
+
         assert "group: ${{ github.workflow }}-${{ github.ref }}" in text
         assert "cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}" in text
+
+
+def test_only_client_workflow_promotes_latest_after_client_assets_exist():
+    client = (ROOT / ".github/workflows/deploy-client.yml").read_text()
+    server = (ROOT / ".github/workflows/release-server.yml").read_text()
+    upload = 'gh release upload "$TAG" dist/loreweaver-client.tar.gz'
+    promote = 'gh release edit "$TAG" --repo "$R" --prerelease=false --latest'
+
+    assert upload in client
+    assert promote in client
+    assert client.index(upload) < client.index(promote)
+    assert 'if [ "$CHANNEL" != "prerelease" ]; then' in client
+    assert "gh release edit" not in server

@@ -275,10 +275,9 @@ def make_archive(bundle_dir: Path, tag: str) -> Path:
                 if path.is_file():
                     zf.write(path, Path(BUNDLE_NAME) / path.relative_to(bundle_dir))
     else:
-        # Host-local extraction intentionally rejects link members: even a
-        # relative child can escape its staging directory through an earlier
-        # symlink/hardlink. Materialise PyInstaller's internal symlinks as
-        # regular members so release archives keep that strict contract.
+        # Materialise PyInstaller's internal symlinks as regular members so the
+        # bundle behaves consistently when unpacked by GNU tar or the bsdtar
+        # shipped with macOS and Windows.
         with tarfile.open(out_path, "w:gz", dereference=True) as tf:
             tf.add(bundle_dir, arcname=BUNDLE_NAME)
     return out_path

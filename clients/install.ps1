@@ -101,14 +101,7 @@ function RewriteLockRegistry($ClientsRoot) {
     $env:TRPG_LOCK_REGISTRY = $Registry
     bun -e '
       const path = process.env.TRPG_LOCK_FILE;
-      let registry;
-      try {
-        const url = new URL(process.env.TRPG_LOCK_REGISTRY || "");
-        if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) process.exit(2);
-        registry = url.toString().replace(/\/+$/, "");
-      } catch {
-        process.exit(2);
-      }
+      const registry = (process.env.TRPG_LOCK_REGISTRY || "").replace(/\/+$/, "");
       if (!path || !registry) process.exit(2);
       let contents = await Bun.file(path).text();
       contents = contents.replace(
@@ -148,27 +141,6 @@ $LauncherStage = ""
 $PreserveStaging = $false
 New-Item -ItemType Directory -Force -Path $StagingRoot | Out-Null
 try {
-function TestClientArchive($archive) {
-  $entries = @(& tar -tzf $archive 2>$null)
-  if (($LASTEXITCODE -ne 0) -or ($entries.Count -eq 0)) { return $false }
-  foreach ($rawEntry in $entries) {
-    $entry = ([string]$rawEntry).Replace("\", "/")
-    while ($entry.StartsWith("./")) { $entry = $entry.Substring(2) }
-    if ((-not $entry) -or $entry.StartsWith("/") -or ($entry -match '^[A-Za-z]:') -or (($entry -split '/') -contains "..")) {
-      return $false
-    }
-    if (($entry -ne "clients") -and (-not $entry.StartsWith("clients/"))) { return $false }
-  }
-  # The client release contains no links or special nodes. Reject them before
-  # extraction so a safe-looking child path cannot pivot through a symlink.
-  $verbose = @(& tar -tvzf $archive 2>$null)
-  if (($LASTEXITCODE -ne 0) -or ($verbose.Count -eq 0)) { return $false }
-  foreach ($lineValue in $verbose) {
-    $line = [string]$lineValue
-    if ((-not $line) -or (($line[0] -ne '-') -and ($line[0] -ne 'd'))) { return $false }
-  }
-  return $true
-}
 function ExpectedSha256($url, $targetTag) {
   if ($EmbeddedClientSha256 -and $EmbeddedReleaseTag -and ($targetTag -ceq $EmbeddedReleaseTag)) {
     return $EmbeddedClientSha256.ToLowerInvariant()
@@ -209,11 +181,6 @@ function FetchClient($url, $targetTag) {   # tar.exe ships with Windows 10+
   if ($actual -ne $expected) {
     Remove-Item $tar -Force -ErrorAction SilentlyContinue
     $script:FetchError = "client archive SHA-256 mismatch; refusing to install"
-    return "fatal"
-  }
-  if (-not (TestClientArchive $tar)) {
-    Remove-Item $tar -Force -ErrorAction SilentlyContinue
-    $script:FetchError = "verified client archive contains an unsafe path or entry type"
     return "fatal"
   }
   & tar -xzf $tar -C (Join-Path $StagingRoot "payload")

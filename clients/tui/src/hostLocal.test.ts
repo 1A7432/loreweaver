@@ -7,14 +7,14 @@ import {
   assetNameFor,
   binaryUrlsFor,
   fetchReleaseSha256,
-  isSafeArchiveEntry,
-  isSafeArchiveTypeLine,
   parseSha256Sidecar,
   replaceDirectory,
+  resolveDownloadedServer,
   sourceGitCloneArgs,
   sourceTarballUrl,
   verifiedCachedBinary,
   verifiedCachedSource,
+  verifyArchiveSha256,
   writeBinaryIntegrityManifest,
   writeSourceCacheManifest,
 } from "./hostLocal"
@@ -138,30 +138,6 @@ describe("hostLocal — binary acquisition mapping (pure helpers only; no proces
     expect(parseSha256Sidecar(`${"b".repeat(64)}  another.tar.gz`, "loreweaver-server-linux-x64.tar.gz")).toBeUndefined()
   })
 
-  test("archive entry validation rejects POSIX, Windows, and backslash traversal", () => {
-    expect(isSafeArchiveEntry("loreweaver-server/app.py")).toBe(true)
-    expect(isSafeArchiveEntry("./loreweaver-server/data/rules.yaml")).toBe(true)
-    for (const entry of [
-      "../outside",
-      "loreweaver-server/../../outside",
-      "loreweaver-server\\..\\outside",
-      "/tmp/outside",
-      "C:\\tmp\\outside",
-      "\\\\server\\share\\outside",
-      "loreweaver-server/evil\n../outside",
-    ]) {
-      expect(isSafeArchiveEntry(entry)).toBe(false)
-    }
-  })
-
-  test("archive member type validation permits only regular files and directories", () => {
-    expect(isSafeArchiveTypeLine("-rw-r--r-- user/group 10 Jan 1 00:00 loreweaver-server/app.py")).toBe(true)
-    expect(isSafeArchiveTypeLine("drwxr-xr-x user/group 0 Jan 1 00:00 loreweaver-server/")).toBe(true)
-    expect(isSafeArchiveTypeLine("lrwxrwxrwx user/group 0 Jan 1 00:00 safe -> ../outside")).toBe(false)
-    expect(isSafeArchiveTypeLine("hrw-r--r-- user/group 0 Jan 1 00:00 safe link to outside")).toBe(false)
-    expect(isSafeArchiveTypeLine("prw-r--r-- user/group 0 Jan 1 00:00 pipe")).toBe(false)
-  })
-
   test("directory replacement restores the previous copy when commit rename fails", async () => {
     const root = await mkdtemp(join(tmpdir(), "loreweaver-directory-swap-"))
     const target = join(root, "target")
@@ -175,23 +151,61 @@ describe("hostLocal — binary acquisition mapping (pure helpers only; no proces
     }
   })
 
-  test("a rejected checksum request is an IntegrityError instead of a source-fallback error", async () => {
-    const failedFetch = async (): Promise<Response> => {
-      throw new TypeError("network unavailable")
-    }
-    let thrown: unknown
-    try {
-      await fetchReleaseSha256(
-        "https://github.com/1A7432/loreweaver/releases/latest/download/server.tar.gz",
-        "server.tar.gz",
-        undefined,
-        failedFetch,
+  test("missing, unreachable, or malformed checksum metadata falls back to source", async () => {
+    const failedFetches: Array<() => Promise<Response>> = [
+      async () => new Response("missing", { status: 404 }),
+      async () => {
+        throw new TypeError("network unavailable")
+      },
+      async () => new Response("not-a-checksum", { status: 200 }),
+    ]
+
+    for (const failedFetch of failedFetches) {
+      let sourceCalls = 0
+      const location = await resolveDownloadedServer(
+        async () => {
+          await fetchReleaseSha256(
+            "https://github.com/1A7432/loreweaver/releases/latest/download/server.tar.gz",
+            "server.tar.gz",
+            undefined,
+            failedFetch,
+          )
+          return "/unused-binary"
+        },
+        async () => {
+          sourceCalls += 1
+          return "/source"
+        },
+        () => {},
       )
-    } catch (error) {
-      thrown = error
+      expect(location).toEqual({ kind: "source", dir: "/source" })
+      expect(sourceCalls).toBe(1)
     }
-    expect(thrown).toBeInstanceOf(IntegrityError)
-    expect((thrown as Error).message).toContain("could not fetch SHA-256 metadata")
+  })
+
+  test("a valid checksum that does not match the archive is fatal", async () => {
+    const expected = "a".repeat(64)
+    let sourceCalls = 0
+    const result = resolveDownloadedServer(
+      async () => {
+        const checksum = await fetchReleaseSha256(
+          "https://github.com/1A7432/loreweaver/releases/latest/download/server.tar.gz",
+          "server.tar.gz",
+          undefined,
+          async () => new Response(`${expected}  server.tar.gz\n`, { status: 200 }),
+        )
+        verifyArchiveSha256("b".repeat(64), checksum, "server.tar.gz")
+        return "/unused-binary"
+      },
+      async () => {
+        sourceCalls += 1
+        return "/source"
+      },
+      () => {},
+    )
+
+    await expect(result).rejects.toBeInstanceOf(IntegrityError)
+    expect(sourceCalls).toBe(0)
   })
 
   test("legacy binary cache without a trusted manifest is never accepted", async () => {

@@ -59,12 +59,15 @@ jobs:
             channel="stable"
           elif [ -n "$exact_tag" ]; then
             # Keep prerelease tags immutable and addressable, but do not let
-            # v1.2.3-rc1 replace GitHub's stable `latest` release.
+            # v1.2.3-rc1 replace GitHub's `latest` release.
             tag="$exact_tag"
-            channel="dev"
+            channel="prerelease"
           else
             tag="release-${version}"
-            channel="dev"
+            # This project publishes usable development builds directly from
+            # main. Keep the canonical one-line installer moving with them;
+            # only explicitly tagged prereleases stay off the latest channel.
+            channel="current"
           fi
           {
             echo "version=${version}"
@@ -150,9 +153,12 @@ jobs:
           Pin or roll back by setting \`TRPG_RELEASE_TAG=$TAG\` before running the installer.
           Downloaded archives are verified against their adjacent \`.sha256\` assets.
           EOF
-            release_flags=(--prerelease)
-            if [ "$CHANNEL" = "stable" ]; then
-              release_flags=(--latest)
+            # Publish only after the canonical installer/client assets exist. The
+            # server workflow may race us to release creation, so neither creator
+            # is allowed to expose an asset-incomplete release as Latest.
+            release_flags=(--latest=false)
+            if [ "$CHANNEL" = "prerelease" ]; then
+              release_flags=(--prerelease)
             fi
             gh release create "$TAG" \
               --repo "$R" \
@@ -163,6 +169,12 @@ jobs:
             || gh release view "$TAG" --repo "$R" >/dev/null
           fi
           gh release upload "$TAG" dist/loreweaver-client.tar.gz dist/loreweaver-client.tar.gz.sha256 dist/install.sh dist/install.ps1 --repo "$R" --clobber
+          if [ "$CHANNEL" != "prerelease" ]; then
+            # This workflow owns Latest promotion. At this point both one-line
+            # installers and their client payload are available; server assets
+            # may arrive later because Host Local can temporarily use source.
+            gh release edit "$TAG" --repo "$R" --prerelease=false --latest
+          fi
 
       - name: Set up SSH
         run: |
