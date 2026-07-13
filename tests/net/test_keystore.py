@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+import net.keystore as keystore_module
 from net.keystore import KeyEntry, Keystore, member_id_for_key
 
 
@@ -214,6 +215,77 @@ def test_authorize_member_uses_current_disk_role_room_and_revocation(tmp_path: P
     external.save()
     assert running.authorize_member(member_id, room="arkham") is None
     assert running.get(key) is None
+
+
+def test_authorize_member_does_not_reparse_unchanged_file(tmp_path: Path):
+    path = tmp_path / "keys.toml"
+    running = Keystore.load(path)
+    key = running.add(room="arkham", role="keeper")
+    running.save()
+
+    with patch("net.keystore._read_entries") as read_entries:
+        assert running.authorize_member(
+            member_id_for_key(key),
+            room="arkham",
+            required_role="keeper",
+        ) is not None
+        assert running.authorize_member(
+            member_id_for_key(key),
+            room="arkham",
+            required_role="keeper",
+        ) is not None
+
+    read_entries.assert_not_called()
+
+
+def test_refresh_does_not_cache_signature_from_newer_unread_file(tmp_path: Path):
+    path = tmp_path / "keys.toml"
+    initial = Keystore.load(path)
+    key = initial.add(room="arkham", name="Keeper", role="keeper")
+    initial.save()
+    running = Keystore.load(path)
+
+    # Publish one change so the running server enters refresh(), then prepare a
+    # downgrade that lands after refresh has read the old snapshot but before it
+    # records the file version it saw.
+    intermediate = Keystore.load(path)
+    assert intermediate.update(key, name="Renamed")
+    intermediate.save()
+    replacement_path = tmp_path / "downgraded.toml"
+    replacement = Keystore.load(replacement_path)
+    assert replacement.restore(key, room="arkham", name="Renamed", role="player")
+    replacement.save()
+
+    original_read = keystore_module._read_entries
+    replaced = False
+
+    def read_then_replace(file_path: Path):
+        nonlocal replaced
+        entries = original_read(file_path)
+        if not replaced:
+            os.replace(replacement_path, path)
+            replaced = True
+        return entries
+
+    with patch("net.keystore._read_entries", side_effect=read_then_replace):
+        # This in-flight check may have read the complete pre-downgrade file.
+        assert running.authorize_member(
+            member_id_for_key(key),
+            room="arkham",
+            required_role="keeper",
+        ) is not None
+
+    # The next check must notice the replacement and enforce the downgrade.
+    assert running.authorize_member(
+        member_id_for_key(key),
+        room="arkham",
+        required_role="keeper",
+    ) is None
+    assert running.authorize_member(
+        member_id_for_key(key),
+        room="arkham",
+        required_role="player",
+    ) is not None
 
 
 def test_authorize_member_fails_closed_on_derived_id_collision():

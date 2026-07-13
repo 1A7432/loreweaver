@@ -82,6 +82,15 @@ def _read_entries(file_path: Path) -> dict[str, KeyEntry]:
     return entries
 
 
+def _file_signature(file_path: Path) -> tuple[int, int, int] | None:
+    """Cheap change token for an atomically replaced keystore file."""
+    try:
+        stat = file_path.stat()
+    except FileNotFoundError:
+        return None
+    return (stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+
 def _render_entries(entries: dict[str, KeyEntry]) -> str:
     blocks = []
     for entry in entries.values():
@@ -189,13 +198,21 @@ class Keystore:
         # to it, so a key minted at runtime (e.g. via the web admin panel) survives
         # a restart. An in-memory keystore (tests) has no path and never persists.
         self._path: Path | None = Path(path) if path is not None else None
+        self._disk_signature = _file_signature(self._path) if self._path is not None else None
 
     @classmethod
     def load(cls, path: str | Path) -> Keystore:
         """Load a keystore from `path`; a missing file loads as an empty keystore
         (still remembering `path`, so a later `persist()`/`add` can create it)."""
         file_path = Path(path)
-        return cls(_read_entries(file_path), path=file_path)
+        # Remember the version observed *before* the read. If an atomic writer
+        # replaces the file while it is being parsed, the next authorization
+        # check sees a different signature and refreshes instead of caching old
+        # entries under the replacement file's signature.
+        disk_signature = _file_signature(file_path)
+        loaded = cls(_read_entries(file_path), path=file_path)
+        loaded._disk_signature = disk_signature
+        return loaded
 
     @property
     def path(self) -> Path | None:
@@ -219,11 +236,26 @@ class Keystore:
         """
         if self._path is None:
             return
-        with _locked_keystore(self._path):
-            latest = _read_entries(self._path)
-            merged = _merge_local_changes(latest, self._baseline, self._entries)
+        # Writers publish with atomic replacement, so readers see either the old
+        # complete file or the new complete file and do not need an exclusive
+        # cross-process lock. Writer-to-writer merging remains locked in save().
+        disk_signature = _file_signature(self._path)
+        latest = _read_entries(self._path)
+        merged = _merge_local_changes(latest, self._baseline, self._entries)
         self._entries = merged
         self._baseline = _copy_entries(latest)
+        self._disk_signature = disk_signature
+
+    def refresh_if_changed(self) -> None:
+        """Refresh only after an external atomic file replacement.
+
+        Live authorization calls this frequently, so unchanged traffic pays one
+        stat rather than an exclusive flock plus a full TOML parse.
+        """
+        if self._path is None:
+            return
+        if _file_signature(self._path) != self._disk_signature:
+            self.refresh()
 
     def authorize_member(
         self,
@@ -236,19 +268,11 @@ class Keystore:
 
         `SessionCore` only retains the derived member id, not the bearer key. This method maps that
         id back to exactly one current key entry and validates its original room binding plus an
-        optional live role. A collision, deletion, room move, or downgrade fails closed. Pathless
-        test keystores use their in-memory entries; file-backed stores read disk under the same lock
-        as writers so a long-lived connection cannot keep stale keeper power.
+        optional live role. A collision, deletion, room move, or downgrade fails closed. A
+        file-backed store reloads only when its atomic file signature changes.
         """
-        if self._path is None:
-            entries = _copy_entries(self._entries)
-        else:
-            with _locked_keystore(self._path):
-                entries = _read_entries(self._path)
-            # Active authorization is deliberately authoritative rather than delta-preserving:
-            # there must be no stale in-memory keeper role for adjacent code to observe afterward.
-            self._entries = _copy_entries(entries)
-            self._baseline = _copy_entries(entries)
+        self.refresh_if_changed()
+        entries = self._entries
         matches = [entry for key, entry in entries.items() if member_id_for_key(key) == member_id]
         if len(matches) != 1:
             return None
@@ -348,6 +372,7 @@ class Keystore:
                     self._baseline = _copy_entries(latest)
                     raise
                 self._baseline = _copy_entries(self._entries)
+                self._disk_signature = _file_signature(file_path)
         except BaseException:
             if latest is None:
                 # Lock/read failures happen before a newer snapshot is available; at minimum, drop
@@ -389,6 +414,7 @@ class Keystore:
         self._entries = merged
         self._baseline = _copy_entries(merged)
         self._path = file_path
+        self._disk_signature = _file_signature(file_path)
 
     def persist(self) -> bool:
         """Save back to the remembered `path`, if any; return whether it wrote.

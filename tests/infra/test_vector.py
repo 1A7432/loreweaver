@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import stat
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -316,6 +317,17 @@ async def test_file_backed_store_tightens_sqlite_and_live_sidecars(tmp_path: Pat
     candidates = [db_path, Path(f"{db_path}-wal"), Path(f"{db_path}-shm")]
     assert db_path.exists()
     assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in candidates if path.exists())
+    store.close()
+
+
+async def test_file_backed_store_does_not_repeat_permission_scan_after_connect(tmp_path: Path):
+    db_path = tmp_path / "vectors.sqlite3"
+    store = VectorStore(dim=2, path=db_path)
+
+    with patch("infra.vector.restrict_sqlite_files") as restrict:
+        await store.upsert([P1])
+
+    restrict.assert_not_called()
     store.close()
 
 

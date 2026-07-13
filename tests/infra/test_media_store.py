@@ -129,7 +129,16 @@ async def test_commit_rechecks_pending_offer_quota_atomically(tmp_path):
             is None
         )
         pending.append(
-            PendingUpload(upload_id, "room-a", "image/png", len(data), f"{upload_id}.png", "u", digest)
+            PendingUpload(
+                upload_id,
+                "room-a",
+                "image/png",
+                len(data),
+                f"{upload_id}.png",
+                "u",
+                digest,
+                room_quota_bytes=quota,
+            )
         )
 
     results = await asyncio.gather(
@@ -143,6 +152,53 @@ async def test_commit_rechecks_pending_offer_quota_atomically(tmp_path):
     assert errors[0].code == "media_quota_exceeded"
     assert await store.room_total_size("room-a") == quota
     assert len(await store.list_room_records("room-a")) == 1
+
+
+async def test_pending_offer_policy_does_not_leak_to_later_uploads(tmp_path):
+    store = MediaStore(
+        Store(),
+        tmp_path,
+        max_file_bytes=64,
+        room_quota_bytes=64,
+        allowed_mimes=ALLOWED_IMAGE_MIMES | ALLOWED_AUDIO_MIMES,
+    )
+    first = b"ID3first"
+    first_digest = hashlib.sha256(first).hexdigest()
+    await store.commit_bytes(
+        PendingUpload(
+            "u1",
+            "room-a",
+            "audio/mpeg",
+            len(first),
+            "first.mp3",
+            "u",
+            first_digest,
+            max_file_bytes=16,
+            room_quota_bytes=16,
+            allowed_mimes=ALLOWED_AUDIO_MIMES,
+        ),
+        first,
+    )
+
+    second = b"ID3second-upload"
+    second_digest = hashlib.sha256(second).hexdigest()
+    record = await store.commit_bytes(
+        PendingUpload(
+            "u2",
+            "room-a",
+            "audio/mpeg",
+            len(second),
+            "second.mp3",
+            "u",
+            second_digest,
+            max_file_bytes=64,
+            room_quota_bytes=64,
+            allowed_mimes=ALLOWED_AUDIO_MIMES,
+        ),
+        second,
+    )
+
+    assert record.size == len(second)
 
 
 async def test_commit_removes_new_blob_when_metadata_commit_fails(tmp_path):

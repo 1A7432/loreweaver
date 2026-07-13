@@ -210,6 +210,31 @@ async def test_store_document_same_document_id_overwrites_rather_than_duplicates
     assert hit.payload["filename"] == "module_en_v2.txt"
 
 
+async def test_store_document_removes_legacy_aliases_and_stale_chunks():
+    manager, vector_store = _manager()
+    legacy_payload = {
+        "document_id": "doc-1",
+        "filename": "old.txt",
+        "chunk_index": 0,
+        "text": "old",
+        "chat_key": "room-1",
+        "document_type": "module",
+    }
+    stale_payload = {**legacy_payload, "chunk_index": 9}
+    await vector_store.upsert(
+        [
+            ("room-1:backup:legacy", [0.1] * 64, legacy_payload),
+            ("doc-1:9", [0.2] * 64, stale_payload),
+        ]
+    )
+
+    await manager.store_document("doc-1", "module_en.txt", MODULE_TEXT, "room-1")
+
+    hits = await vector_store.scroll(filter={"document_id": "doc-1", "chat_key": "room-1"})
+    assert [hit.id for hit in hits] == ["doc-1:0"]
+    assert hits[0].payload["filename"] == "module_en.txt"
+
+
 async def test_store_document_uses_embeddings_dim_not_a_hardcoded_1536():
     """Regression guard: the source hardcoded `embedding_dim = 1536`; the port
     must size vectors from `embeddings.dim` so a non-default dim still works."""

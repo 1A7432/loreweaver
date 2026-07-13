@@ -389,6 +389,15 @@ async def test_guided_demo_is_rejected_without_mutating_an_existing_room(tmp_pat
         assert legacy_denied["code"] == "demo_unavailable"
         assert await services.store.get(user_key="", store_key=record_key) == '{"name":"existing"}'
         assert await services.store.get(user_key="", store_key=module_key) == "existing module"
+
+        # Ordinary prose is not a hidden demo command merely because it mentions a module.
+        await ws.send(json.dumps({"type": "input", "text": "let's check the module again"}))
+        ordinary = await _recv(ws)
+        assert ordinary["type"] == "narrative"
+        assert ordinary["speaker"] == "player"
+        assert ordinary["text"] == "let's check the module again"
+        assert await services.store.get(user_key="", store_key=record_key) == '{"name":"existing"}'
+        assert await services.store.get(user_key="", store_key=module_key) == "existing module"
         await ws.close()
     finally:
         await server.close()

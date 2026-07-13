@@ -68,6 +68,18 @@ async def test_file_store_tightens_sqlite_and_live_sidecars(tmp_path: Path):
     store.close()
 
 
+async def test_file_store_does_not_repeat_permission_scan_after_connect(tmp_path: Path):
+    db_path = tmp_path / "credentials.sqlite3"
+    store = Store(db_path)
+    await store.set(store_key="first", value="1")
+
+    with patch("infra.store.restrict_sqlite_files") as restrict:
+        await store.set(store_key="second", value="2")
+
+    restrict.assert_not_called()
+    store.close()
+
+
 @pytest.mark.skipif(os.name != "posix", reason="exact permission bits are POSIX-only")
 def test_file_store_self_heals_existing_database_before_first_read(tmp_path: Path):
     db_path = tmp_path / "legacy.sqlite3"

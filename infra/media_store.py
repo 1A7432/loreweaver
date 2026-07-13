@@ -25,9 +25,6 @@ ALLOWED_AUDIO_MIMES = frozenset({"audio/mpeg", "audio/ogg", "audio/wav", "audio/
 ALLOWED_MEDIA_MIMES = ALLOWED_IMAGE_MIMES | ALLOWED_AUDIO_MIMES
 DEFAULT_MAX_FILE_BYTES = 8 * 1024 * 1024
 DEFAULT_ROOM_QUOTA_BYTES = 512 * 1024 * 1024
-_OFFER_POLICY_TTL_SECONDS = 10 * 60
-_MAX_REMEMBERED_OFFER_POLICIES = 4096
-
 # TODO: EXIF stripping is intentionally out of scope for media P1; blobs stay opaque.
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
@@ -68,14 +65,13 @@ class PendingUpload:
     name: str
     uploader: str
     sha256: str
-
-
-@dataclass(frozen=True)
-class _OfferPolicy:
-    max_file_bytes: int
-    room_quota_bytes: int
-    allowed_mimes: frozenset[str]
-    expires_at: float
+    # The policy that accepted this specific offer. Network callers populate
+    # these fields from their image/audio limits; internal callers can omit them
+    # and use the store defaults. Keeping the snapshot on the pending upload is
+    # both simpler and more accurate than a process-wide expiring policy cache.
+    max_file_bytes: int | None = None
+    room_quota_bytes: int | None = None
+    allowed_mimes: frozenset[str] | None = None
 
 
 class MediaStore:
@@ -95,17 +91,6 @@ class MediaStore:
         self.max_file_bytes = int(max_file_bytes)
         self.room_quota_bytes = int(room_quota_bytes)
         self.allowed_mimes = frozenset(allowed_mimes)
-        # ``validate_offer`` may apply a MIME-specific policy that is stricter than
-        # this store's aggregate image+audio limits. Remember that policy until the
-        # corresponding PUT so commit-time validation cannot accidentally fall back
-        # to the broader aggregate quota. Entries are bounded and short-lived because
-        # a client is allowed to abandon an accepted offer without sending its body.
-        self._offer_policies: dict[tuple[str, str, int, str], _OfferPolicy] = {}
-        # Keep the strictest policy observed for each room+MIME as the fallback
-        # after an abandoned offer expires or the bounded exact-policy cache evicts
-        # it. Thus expiry can never widen a MIME-specific quota to this store's
-        # aggregate image+audio quota.
-        self._mime_policies: dict[tuple[str, str], _OfferPolicy] = {}
 
     async def validate_offer(
         self,
@@ -138,15 +123,6 @@ class MediaStore:
         total = await self.room_total_size(room)
         if total + size > quota_limit:
             raise MediaError("media_quota_exceeded")
-        self._remember_offer_policy(
-            room=room,
-            mime=mime,
-            size=size,
-            sha256=sha256,
-            max_file_bytes=file_limit,
-            room_quota_bytes=quota_limit,
-            allowed_mimes=self.allowed_mimes if allowed_mimes is None else frozenset(allowed_mimes),
-        )
         return None
 
     async def register_blob(
@@ -188,10 +164,13 @@ class MediaStore:
         digest = hashlib.sha256(data).hexdigest()
         if digest != pending.sha256.lower():
             raise MediaError("media_hash_mismatch")
-        policy = self._take_offer_policy(pending)
-        allowed_mimes = policy.allowed_mimes if policy is not None else self.allowed_mimes
-        max_file_bytes = policy.max_file_bytes if policy is not None else self.max_file_bytes
-        room_quota_bytes = policy.room_quota_bytes if policy is not None else self.room_quota_bytes
+        allowed_mimes = pending.allowed_mimes if pending.allowed_mimes is not None else self.allowed_mimes
+        max_file_bytes = pending.max_file_bytes if pending.max_file_bytes is not None else self.max_file_bytes
+        room_quota_bytes = (
+            pending.room_quota_bytes
+            if pending.room_quota_bytes is not None
+            else self.room_quota_bytes
+        )
         if pending.mime not in allowed_mimes:
             raise MediaError("media_bad_mime")
         if pending.size <= 0 or pending.size > max_file_bytes:
@@ -245,21 +224,7 @@ class MediaStore:
             except Exception:
                 if conn.in_transaction:
                     conn.rollback()
-                try:
-                    metadata_exists = (
-                        conn.execute(
-                            "SELECT 1 FROM media_index WHERE room = ? AND hash = ?",
-                            (pending.room, digest),
-                        ).fetchone()
-                        is not None
-                    )
-                except Exception:
-                    # The normal Store commit cannot raise after SQLite committed
-                    # (permission tightening is best-effort). If a broken connection
-                    # prevents verification, removing a blob created solely by this
-                    # failed call remains the least surprising compensation.
-                    metadata_exists = False
-                if created_blob and not metadata_exists:
+                if created_blob:
                     _remove_new_blob(media_path)
                 raise
         return record
@@ -378,21 +343,7 @@ class MediaStore:
             except Exception:
                 if conn.in_transaction:
                     conn.rollback()
-                try:
-                    rows_still_live = (
-                        conn.execute(
-                            "SELECT 1 FROM media_index WHERE room = ? LIMIT 1",
-                            (room,),
-                        ).fetchone()
-                        is not None
-                    )
-                except Exception:
-                    # Prefer restoring bytes when DB outcome is unknowable. This can
-                    # leave an unindexed private blob, but never knowingly leaves a
-                    # live index pointing at a file this call moved away.
-                    rows_still_live = True
-                if rows_still_live:
-                    _restore_staged_blobs(moved)
+                _restore_staged_blobs(moved)
                 _discard_staging(staging_dir)
                 raise
 
@@ -405,56 +356,6 @@ class MediaStore:
         else:
             _fsync_directory(room_dir.parent)
         return len(records)
-
-    def _remember_offer_policy(
-        self,
-        *,
-        room: str,
-        mime: str,
-        size: int,
-        sha256: str,
-        max_file_bytes: int,
-        room_quota_bytes: int,
-        allowed_mimes: frozenset[str],
-    ) -> None:
-        now = time.monotonic()
-        self._prune_offer_policies(now)
-        if len(self._offer_policies) >= _MAX_REMEMBERED_OFFER_POLICIES:
-            self._offer_policies.pop(next(iter(self._offer_policies)))
-        policy = _OfferPolicy(
-            max_file_bytes=max_file_bytes,
-            room_quota_bytes=room_quota_bytes,
-            allowed_mimes=allowed_mimes,
-            expires_at=now + _OFFER_POLICY_TTL_SECONDS,
-        )
-        self._offer_policies[(room, mime, size, sha256)] = policy
-        room_mime = (room, mime)
-        previous = self._mime_policies.get(room_mime)
-        self._mime_policies[room_mime] = _OfferPolicy(
-            max_file_bytes=min(max_file_bytes, previous.max_file_bytes)
-            if previous is not None
-            else max_file_bytes,
-            room_quota_bytes=min(room_quota_bytes, previous.room_quota_bytes)
-            if previous is not None
-            else room_quota_bytes,
-            allowed_mimes=allowed_mimes & previous.allowed_mimes
-            if previous is not None
-            else allowed_mimes,
-            expires_at=float("inf"),
-        )
-
-    def _take_offer_policy(self, pending: PendingUpload) -> _OfferPolicy | None:
-        now = time.monotonic()
-        self._prune_offer_policies(now)
-        exact = self._offer_policies.pop(
-            (pending.room, pending.mime, pending.size, pending.sha256.lower()), None
-        )
-        return exact or self._mime_policies.get((pending.room, pending.mime))
-
-    def _prune_offer_policies(self, now: float) -> None:
-        expired = [key for key, policy in self._offer_policies.items() if policy.expires_at <= now]
-        for key in expired:
-            self._offer_policies.pop(key, None)
 
     async def _insert_record(self, record: MediaRecord, *, conn: Any | None = None) -> None:
         if conn is not None:

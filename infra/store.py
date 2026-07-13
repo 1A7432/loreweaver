@@ -71,9 +71,8 @@ class Store:
         return conn
 
     def _commit(self, conn: sqlite3.Connection) -> None:
-        """Commit, then tighten any DB/WAL/SHM files SQLite created."""
+        """Commit the current transaction."""
         conn.commit()
-        restrict_sqlite_files(self._db_path)
 
     def _ensure_conn(self) -> sqlite3.Connection:
         if self._conn is None:

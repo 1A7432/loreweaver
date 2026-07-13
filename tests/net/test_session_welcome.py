@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from agent.services import build_services
+from gateway.demo import is_demo_setup_request, is_guided_demo_request
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM
@@ -35,6 +36,16 @@ def test_guided_action_matches_both_client_locales():
     assert is_guided_demo_action("Start the built-in sample adventure")
     assert is_guided_demo_action("开始内置示例冒险")
     assert not is_guided_demo_action("start this existing campaign")
+
+
+def test_demo_setup_recognition_requires_an_exact_explicit_action():
+    assert is_guided_demo_request("  Start the built-in sample adventure  ")
+    assert is_guided_demo_request("开始内置示例冒险")
+    assert is_demo_setup_request("UPLOAD THE DEMO MODULE")
+
+    assert not is_guided_demo_request("let's discuss the sample adventure first")
+    assert not is_demo_setup_request("let's check the module again")
+    assert not is_demo_setup_request("I upload my notes before we continue")
 
 
 async def test_guided_demo_requires_an_empty_room(tmp_path):

@@ -69,6 +69,11 @@ _CHUNK_BREAK_POINTS = ("\n\n", "。", "！", "？", "\n", "，", "；")
 _DELETE_SCROLL_LIMIT = 100_000
 
 
+def document_point_id(document_id: str, chunk_index: int) -> str:
+    """Return the stable vector id shared by document storage and backup restore."""
+    return f"{document_id}:{chunk_index}"
+
+
 class DocumentProcessor:
     """Document parser: TXT/PDF/DOCX text extraction + character-based chunking.
 
@@ -234,7 +239,7 @@ class VectorDatabaseManager:
 
         points = [
             (
-                f"{document_id}:{index}",
+                document_point_id(document_id, index),
                 vector,
                 {
                     "document_id": document_id,
@@ -249,8 +254,22 @@ class VectorDatabaseManager:
             for index, (chunk, vector) in enumerate(zip(chunks, vectors, strict=True))
         ]
 
+        # A backup produced by older versions may contain the same logical chunk
+        # under a legacy namespaced id. Publish the canonical points first, then
+        # remove every stale id for this room/document. This also removes trailing
+        # chunks when a document is replaced with shorter content without risking
+        # loss of the old document if the new upsert itself fails.
+        existing = await self.vector_store.scroll(
+            filter={"document_id": document_id, "chat_key": chat_key},
+            limit=_DELETE_SCROLL_LIMIT,
+        )
+        canonical_ids = {point_id for point_id, _vector, _payload in points}
+        stale_ids = [hit.id for hit in existing if hit.id not in canonical_ids]
+
         if points:
             await self.vector_store.upsert(points)
+        if stale_ids:
+            await self.vector_store.delete(stale_ids)
 
         return len(points)
 

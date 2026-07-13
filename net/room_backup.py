@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.services import Services
+from core.document_manager import document_point_id
 from gateway.session import SessionSource
 from infra.file_permissions import atomic_write_private, ensure_private_directory, restrict_file
 from infra.media_store import (
@@ -123,10 +124,14 @@ def _room_backup_dir(services: Services, room: str) -> Path:
     prefix is paired with a digest of the exact room id.  A keeper resolving a filename for
     room A never even opens room B's directory.
     """
+    base = _backup_base(services)
     digest = hashlib.sha256(room.encode("utf-8")).hexdigest()[:16]
-    target = (_backup_base(services) / f"{_safe_room(room)}-{digest}").resolve()
-    if not target.is_relative_to(_backup_base(services)):
-        raise ValueError("backup room directory escapes the backups directory")  # i18n-exempt: internal invariant
+    target = base / f"{_safe_room(room)}-{digest}"
+    # The sanitized, digest-suffixed name cannot traverse. The one meaningful
+    # filesystem guard here is rejecting a room directory symlink: even a link to
+    # another directory *inside* the backup root would break room isolation.
+    if target.is_symlink():
+        raise ValueError("backup room directory must not be a symlink")  # i18n-exempt: internal invariant
     return target
 
 
@@ -148,10 +153,10 @@ def _resolve_export_path(services: Services, room: str, path: str = "") -> Path:
     base = _room_backup_dir(services, room)
     if not path.strip():
         return _default_path(services, room)
-    target = (base / _backup_filename(path, _safe_room(room))).resolve()
-    if not target.is_relative_to(base):  # belt-and-suspenders after `.name` stripping
-        raise ValueError("backup path escapes the backups directory")  # i18n-exempt: internal error -> op_failed
-    return target
+    # `_backup_filename` has already removed every directory component. Keeping
+    # this path unresolved also lets the atomic writer replace a final symlink
+    # itself instead of following it.
+    return base / _backup_filename(path, _safe_room(room))
 
 
 def _resolve_import_path(services: Services, path: str, expected_room: str) -> Path:
@@ -159,18 +164,30 @@ def _resolve_import_path(services: Services, path: str, expected_room: str) -> P
     filename = _backup_filename(path, "room")
     if expected_room:
         base = _room_backup_dir(services, expected_room)
-        source = (base / filename).resolve()
-        if not source.is_relative_to(base) or not source.is_file():
+        candidate = base / filename
+        # Imports open an existing file, so unlike atomic export a final symlink
+        # would be followed. Reject it, then retain one resolved containment check
+        # for a concurrently prepared or legacy filesystem layout.
+        source = candidate.resolve()
+        if candidate.is_symlink() or not source.is_relative_to(base) or not source.is_file():
             raise ValueError("import source is not a room backup file")  # i18n-exempt: admin op detail
         return source
 
     # There is no network caller for the unscoped form, but keep the internal helper useful:
     # a filename must identify exactly one snapshot rather than silently selecting a room.
     root = _backup_base(services)
-    candidates = [candidate for candidate in root.glob(f"*/{filename}") if candidate.is_file()]
+    candidates = []
+    for candidate in root.glob(f"*/{filename}"):
+        source = candidate.resolve()
+        if (
+            not candidate.is_symlink()
+            and source.is_relative_to(root)
+            and source.is_file()
+        ):
+            candidates.append(source)
     if len(candidates) != 1:
         raise ValueError("import source is not a unique room backup file")  # i18n-exempt: internal CLI detail
-    return candidates[0].resolve()
+    return candidates[0]
 
 
 def _matches_room_store_key(store_key: str, value: str | None, chat_key: str) -> bool:
@@ -278,21 +295,87 @@ def _vector_payload_owned_by_room(payload: dict[str, Any], chat_key: str) -> boo
     return payload.get("chat_key") == chat_key
 
 
+def _document_point_id_from_payload(payload: dict[str, Any]) -> str | None:
+    """Recover the canonical id used by ``VectorDatabaseManager`` when possible."""
+    document_id = payload.get("document_id")
+    chunk_index = payload.get("chunk_index")
+    if (
+        not isinstance(document_id, str)
+        or not document_id
+        or isinstance(chunk_index, bool)
+        or not isinstance(chunk_index, int)
+        or chunk_index < 0
+    ):
+        return None
+    return document_point_id(document_id, chunk_index)
+
+
 def _rewrite_vector_point(point: dict[str, Any], old_chat_key: str, new_chat_key: str) -> dict[str, Any]:
     copied = dict(point)
     copied["payload"] = _rewrite_payload_ownership(
         dict(copied.get("payload") or {}), old_chat_key, new_chat_key
     )
+    canonical_document_id = _document_point_id_from_payload(copied["payload"])
+    if canonical_document_id is not None:
+        # Older backup code namespaced these ids during import even though the
+        # document manager writes `<document_id>:<chunk_index>`. Normalize both
+        # fresh and legacy snapshots back to the one deterministic contract.
+        copied["id"] = canonical_document_id
+        return copied
+
     point_id = str(copied.get("id") or "")
-    if point_id.startswith(f"{old_chat_key}:"):
+    if old_chat_key == new_chat_key:
+        # A same-room restore must remain an upsert of the original point, not
+        # manufacture an alias that makes retrieval return the chunk twice.
+        copied["id"] = point_id
+    elif point_id.startswith(f"{old_chat_key}:"):
         copied["id"] = f"{new_chat_key}:{point_id[len(old_chat_key) + 1:]}"
     elif point_id:
-        # Vector ids are global in the embedded store.  Document chunks historically use
-        # ``<document_uuid>:<chunk>`` without a room prefix, so trusting a snapshot's id could
-        # overwrite an unrelated room's point.  Namespace legacy ids deterministically.
+        # Unknown legacy vector kinds lack a canonical payload-derived id. If an
+        # internal caller ever enables cross-room cloning, keep those global ids
+        # target-scoped; collision checks below still protect every known kind.
         digest = hashlib.sha256(point_id.encode("utf-8")).hexdigest()[:32]
         copied["id"] = f"{new_chat_key}:backup:{digest}"
     return copied
+
+
+async def _preflight_vector_import(
+    vector_store: Any,
+    points: list[tuple[str, list[float], dict[str, Any]]],
+    chat_key: str,
+) -> list[str]:
+    """Reject global id collisions and find obsolete aliases in the target room.
+
+    Vector ids are global even though retrieval is payload-scoped. A same-room
+    point with the same id is an ordinary upsert; the same id owned by any other
+    room must fail before import mutates live state. Legacy backup aliases for the
+    same document/chunk are returned for removal after canonical points publish.
+    """
+    if not points:
+        return []
+    if not hasattr(vector_store, "count") or not hasattr(vector_store, "scroll"):
+        raise ValueError("vector store cannot validate point ownership")  # i18n-exempt: internal detail
+
+    incoming_ids = {point_id for point_id, _vector, _payload in points}
+    total = await vector_store.count()
+    existing = await vector_store.scroll(
+        limit=max(1, total + MAX_BACKUP_VECTOR_POINTS + 1)
+    )
+    stale_aliases: list[str] = []
+    for hit in existing:
+        point_id = str(getattr(hit, "id", "") or "")
+        payload = getattr(hit, "payload", None)
+        if not isinstance(payload, dict):
+            if point_id in incoming_ids:
+                raise ValueError("snapshot vector id belongs to another room")  # i18n-exempt
+            continue
+        owned_by_target = _vector_payload_owned_by_room(payload, chat_key)
+        if point_id in incoming_ids and not owned_by_target:
+            raise ValueError("snapshot vector id belongs to another room")  # i18n-exempt
+        canonical_id = _document_point_id_from_payload(payload)
+        if owned_by_target and canonical_id in incoming_ids and point_id != canonical_id:
+            stale_aliases.append(point_id)
+    return stale_aliases
 
 
 def _json_bytes(value: Any) -> int:
@@ -1063,6 +1146,11 @@ async def import_room(
             raise ValueError("vector value limit exceeded")
         vector_ids.add(point_id)
         validated_vectors.append((point_id, [float(value) for value in vector], payload))
+    stale_vector_ids = await _preflight_vector_import(
+        vector_store,
+        validated_vectors,
+        new_chat_key,
+    )
 
     raw_media = _list_field(raw, "media")
     if len(raw_media) > MAX_BACKUP_MEDIA_FILES:
@@ -1086,7 +1174,7 @@ async def import_room(
         mime = str(item.get("mime") or "").lower()
         data_text = item.get("data")
         try:
-            file_limit, quota_limit, _ = _media_policy(services, mime)
+            file_limit, quota_limit, allowed_mimes = _media_policy(services, mime)
         except ValueError as exc:
             raise ValueError("invalid media entry") from exc
         kind = "image" if mime in ALLOWED_IMAGE_MIMES else "audio"
@@ -1127,6 +1215,9 @@ async def import_room(
                     name=str(item.get("name") or "media")[:255],
                     uploader=str(item.get("uploader") or "backup")[:255],
                     sha256=digest,
+                    max_file_bytes=file_limit,
+                    room_quota_bytes=quota_limit,
+                    allowed_mimes=allowed_mimes,
                 ),
                 data,
             )
@@ -1164,6 +1255,8 @@ async def import_room(
         await _atomic_store_update(services, upsert_rows=validated_rows)
         if validated_vectors:
             await vector_store.upsert(validated_vectors)
+        if stale_vector_ids:
+            await vector_store.delete(stale_vector_ids)
         for pending, data in validated_media:
             file_limit, quota_limit, allowed_mimes = _media_policy(services, pending.mime)
             existing = await media_store.validate_offer(

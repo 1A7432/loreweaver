@@ -27,7 +27,7 @@ from agent.tools import Toolset
 from gateway.audio import add_audio_item, audio_state_frame, has_audio_state, list_audio_items
 from gateway.avatar import AvatarError, set_user_avatar
 from gateway.commands import CommandRouter
-from gateway.demo import is_demo_setup_request
+from gateway.demo import is_demo_setup_request, is_guided_demo_request
 from gateway.hub import Event, RoomHub
 from gateway.media import MEDIA_HISTORY_REPLAY_CAP, media_frame, record_media_history
 from gateway.ops import Censor, RateLimiter, censor_from_settings, is_media_enabled, set_media_enabled
@@ -131,11 +131,7 @@ def uses_demo_llm(services: Services) -> bool:
 
 def is_guided_demo_action(text: str) -> bool:
     """Whether ``text`` is the localized action emitted by the first-run button."""
-    action = text.strip()
-    return action in {
-        get_i18n("en").t("tui.demo.action"),
-        get_i18n("zh").t("tui.demo.action"),
-    }
+    return is_guided_demo_request(text)
 
 
 async def guided_demo_available(services: Services, chat_key: str) -> bool:
@@ -486,6 +482,9 @@ class SessionCore:
             name=name,
             uploader=member.id,
             sha256=sha256,
+            max_file_bytes=policy["max_file_bytes"],
+            room_quota_bytes=policy["room_quota_bytes"],
+            allowed_mimes=policy["allowed_mimes"],
         )
         await member.send_frame({"type": "media_accept", "upload_id": upload_id})
 
@@ -650,10 +649,10 @@ class SessionCore:
                     await member.send_frame(error_frame("forbidden", i18n))
                     return
                 ctx = self._ctx_for(member)
-                # The fallback responder retains a legacy natural-language "upload module"
-                # trigger used by CLI self-play. Guard that path too: otherwise a player could
-                # bypass the first-run button check and replace a populated room. Real commands
-                # such as `.module list` resolve before this fallback-only legacy guard.
+                # The fallback responder retains one exact legacy CLI setup action. Guard that
+                # explicit action too, but never infer destructive setup from ordinary prose
+                # merely containing words such as "upload" or "module". Real commands such as
+                # `.module list` resolve before this fallback-only compatibility check.
                 guarded_demo_setup = is_guided_demo_action(text) or (
                     uses_demo_llm(self.services)
                     and self.command_router.resolve(text, member.locale) is None
