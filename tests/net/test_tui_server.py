@@ -26,7 +26,7 @@ from agent.services import build_services
 from core.character_manager import CharacterSheet
 from core.dice_engine import seed_dice
 from gateway.commands import CommandRouter
-from gateway.hub import RoomHub
+from gateway.hub import Event, RoomHub
 from gateway.session import SessionSource
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
@@ -34,8 +34,7 @@ from infra.llm import FakeLLM, ToolCall, assistant_text, assistant_tools, tool_c
 from net.keystore import Keystore
 from net.session import _MAX_INPUT_CHARS
 from net.state import build_room_state
-from net.tui_server import TuiServer, WsMember
-from net.tui_server import _pack_media_message, _unpack_media_message
+from net.tui_server import TuiServer, WsMember, _pack_media_message, _unpack_media_message
 from tests.agent.test_kp_selfplay import FIXTURES, SENTINEL, _tools_called_this_turn, kp_responder
 
 _RECV_TIMEOUT = 5.0
@@ -253,6 +252,143 @@ async def test_admin_frame_exception_becomes_error_frame_not_a_dropped_socket(mo
         await ws.send(json.dumps({"type": "ping", "t": 42}))
         pong = await _recv(ws)
         assert pong["type"] == "pong" and pong["t"] == 42
+        await ws.close()
+    finally:
+        await server.close()
+
+
+async def test_model_switch_refreshes_other_connected_keepers(monkeypatch):
+    services = _services()
+    keystore = Keystore()
+    key_a = keystore.add(room="arkham", name="Keeper A", role="keeper")
+    key_b = keystore.add(room="dunwich", name="Keeper B", role="keeper")
+    key_c = keystore.add(room="innsmouth", name="Former Keeper", role="keeper")
+    server = TuiServer(services, keystore, port=0)
+
+    config = {
+        "type": "admin_config",
+        "provider": "deepseek",
+        "chat_model": "deepseek-chat",
+        "base_url": "",
+        "api_key_masked": "",
+        "providers": ["deepseek"],
+        "saved_providers": [],
+        "override_active": True,
+        "using_demo": False,
+    }
+
+    async def _config(*args, **kwargs):
+        return dict(config)
+
+    monkeypatch.setattr("net.session.handle_admin_frame", _config)
+    url = await _start(server)
+    try:
+        ws_a, *_ = await _connect_and_join(url, key_a)
+        ws_b, *_ = await _connect_and_join(url, key_b)
+        ws_c, *_ = await _connect_and_join(url, key_c)
+        keystore.update(key_c, role="player")
+
+        await ws_a.send(json.dumps({"type": "admin_set_model", "provider": "deepseek"}))
+        assert await _recv(ws_a) == config
+        assert await _recv(ws_b) == config
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(ws_c.recv(), timeout=0.05)
+
+        await ws_a.close()
+        await ws_b.close()
+        await ws_c.close()
+    finally:
+        await server.close()
+
+
+async def test_live_keeper_downgrade_takes_effect_without_reconnect():
+    services = _services()
+    keystore = Keystore()
+    key = keystore.add(room="arkham", name="Keeper", role="keeper")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        ws, *_ = await _connect_and_join(url, key)
+        keystore.update(key, role="player")
+
+        await ws.send(json.dumps({"type": "admin_get_config"}))
+        denied = await _recv(ws)
+        assert denied["type"] == "admin_error"
+        assert denied["code"] == "forbidden"
+
+        keystore.remove(key)
+        await ws.send(json.dumps({"type": "input", "text": ".r 1d1"}))
+        revoked = await _recv(ws)
+        assert revoked["type"] == "error"
+        assert revoked["code"] == "forbidden"
+        await ws.close()
+    finally:
+        await server.close()
+
+
+async def test_revoked_connection_cannot_keep_receiving_passive_room_events():
+    services = _services()
+    keystore = Keystore()
+    key = keystore.add(room="arkham", name="Listener", role="player")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        ws, welcome, *_ = await _connect_and_join(url, key)
+        session_key = SessionSource(
+            platform="tui", chat_type="group", chat_id="arkham"
+        ).chat_key()
+        assert server.hub.online(session_key) == 1
+
+        keystore.remove(key)
+        await server.hub.publish(
+            session_key,
+            Event.narrative(speaker="kp", text="keeper-only next scene"),
+        )
+
+        assert server.hub.online(session_key) == 0
+        revoked = await _recv(ws)
+        assert revoked["type"] == "error"
+        assert revoked["code"] == "forbidden"
+        with pytest.raises(ConnectionClosed):
+            await ws.recv()
+        assert welcome["you"]["name"] == "Listener"
+    finally:
+        await server.close()
+
+
+async def test_guided_demo_is_rejected_without_mutating_an_existing_room(tmp_path):
+    settings = Settings(locale="en", data_dir=str(tmp_path))
+    services = build_services(settings, llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64))
+    services.llm.using_fallback = True
+    keystore = Keystore()
+    key = keystore.add(room="arkham", name="Keeper", role="keeper")
+    chat_key = SessionSource(platform="tui", chat_type="group", chat_id="arkham").chat_key()
+    record_key = f"session_record.{chat_key}.current"
+    module_key = f"module_fulltext.{chat_key}"
+    await services.store.set(user_key="", store_key=record_key, value='{"name":"existing"}')
+    await services.store.set(user_key="", store_key=module_key, value="existing module")
+
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        ws, welcome, *_ = await _connect_and_join(url, key)
+        assert "demo" not in welcome.get("features", [])
+
+        await ws.send(json.dumps({"type": "input", "text": "Start the built-in sample adventure"}))
+        denied = await _recv(ws)
+        assert denied["type"] == "error"
+        assert denied["code"] == "demo_unavailable"
+        assert await services.store.get(user_key="", store_key=record_key) == '{"name":"existing"}'
+        assert await services.store.get(user_key="", store_key=module_key) == "existing module"
+
+        # The scripted fallback's legacy CLI phrase reaches the same destructive setup tools.
+        # It must not bypass the room-emptiness guard merely by avoiding the TUI button text.
+        await ws.send(json.dumps({"type": "input", "text": "upload the demo module"}))
+        legacy_denied = await _recv(ws)
+        assert legacy_denied["type"] == "error"
+        assert legacy_denied["code"] == "demo_unavailable"
+        assert await services.store.get(user_key="", store_key=record_key) == '{"name":"existing"}'
+        assert await services.store.get(user_key="", store_key=module_key) == "existing module"
         await ws.close()
     finally:
         await server.close()

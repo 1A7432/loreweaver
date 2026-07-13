@@ -28,7 +28,7 @@ Install the client, click the green button on the connect screen — "**Host loc
 
 It downloads the server build for your OS (self-contained — **no Python, no environment setup**), starts it, issues your Keeper key, and drops you into the main menu as the Keeper. We've verified the whole path from clean installs of Windows 10/11, macOS (Apple silicon), and Linux.
 
-**No API key needed to taste it**: with no model configured, a built-in demo Keeper answers — with real dice — until you plug in a real model on the model screen.
+**No API key needed to taste it**: with no model configured, a Keeper in an empty room sees **Play sample adventure**. A built-in scripted Keeper loads the included lighthouse scenario and drives the real dice/rules pipeline. The server rechecks that the room is empty before loading it, so a stale menu cannot overwrite a campaign. Add a provider on the model screen whenever you are ready; the live server switches immediately and restores that choice after restart.
 
 Installing the client is one line. macOS / Linux:
 
@@ -71,7 +71,9 @@ loreweaver update   # upgrading is one line too
 
 Need a known older build? Pick a tag from [GitHub Releases](https://github.com/1A7432/loreweaver/releases), then run the installer with `TRPG_RELEASE_TAG=release-...`; the client tarball and one-click local server binary will both come from that same release.
 
-The server builds are also yours to take and run long-term on a machine of your own: [GitHub Releases](https://github.com/1A7432/loreweaver/releases) has `loreweaver-server-*` for Windows / macOS / Linux (x64 + arm64) — unzip and run, with a `--doctor` self-check built in.
+Release installers verify the client archive's SHA-256 before extracting it, and one-click hosting does the same for the server archive. The official npm registry is the default; `TRPG_REGISTRY` remains available when you deliberately want a mirror.
+
+The server builds are also yours to take and run long-term on a machine of your own: [GitHub Releases](https://github.com/1A7432/loreweaver/releases) currently has `loreweaver-server-*` for Windows x64, macOS arm64, and Linux x64/arm64 — unzip and run, with a `--doctor` self-check built in.
 
 ## Bringing your friends in
 
@@ -79,7 +81,9 @@ Once you're hosting, your screen shows two things: a **ticket** (a p2p address) 
 
 On their side: install the client (the one-liner above), paste your ticket and their invite code, pick a nickname, done.
 
-**No domain, no TLS certificate, no port forwarding.** Connections are p2p (Iroh — QUIC with NAT hole-punching, relay fallback, end-to-end encrypted); the ticket is stored locally and survives restarts — **share it once, it works forever**. There are no accounts: the invite code is the entrance ticket. Want a co-Keeper? Send a key with the Keeper role. Dropped connections reconnect on their own and pick up where you left off.
+**No domain, no TLS certificate, no port forwarding.** Connections are p2p (Iroh — QUIC with NAT hole-punching, relay fallback, end-to-end encrypted); the ticket is stored locally and survives restarts — **share it once, it works forever**. There are no accounts: the invite code is the entrance ticket. Dropped connections reconnect on their own and pick up where they left off.
+
+A Keeper key is an administrator credential for its room: it can read Keeper-only material and manage that room's invites, while model/provider settings affect the whole deployment. Give Keeper keys only to people you fully trust.
 
 ## Why it's different
 
@@ -113,8 +117,8 @@ Fair warning: how well the AI runs a table depends a lot on the model's capabili
 
 ## Highlights
 
-- **The AI actually runs the game — it isn't just chatting.** Rolling dice, reading character sheets, taking notes, advancing the clock: all real engine operations, via 60+ Keeper tools. Any model works; we recommend `deepseek-v4-pro` with thinking on.
-- **NPCs don't get X-ray vision.** Every NPC and AI companion knows only what it should — the module's secrets are simply not in their hands, so they couldn't spoil the plot if they tried. Short a player? An AI companion genuinely fills the seat: its own sheet, its own rolls.
+- **The AI actually runs the game — it isn't just chatting.** Rolling dice, reading character sheets, taking notes, advancing the clock: all real engine operations, via 60+ Keeper tools. Many OpenAI-compatible and native providers work; model capability still matters, and `deepseek-v4-pro` with thinking is the current recommendation.
+- **NPCs don't get X-ray vision.** NPC and companion actors are assembled only from their own record and sheet, never from the Keeper pool. The main Keeper is different: it sees module secrets so it can run the mystery, and live-model leak resistance is measured rather than claimed as an architectural guarantee. Short a player? An AI companion can fill the seat with its own sheet and rolls.
 - **Ask for it, and it exists.** New rule systems, new play styles, new modules: describe what you want on an admin screen and the KP authors, validates, and installs it on the spot. Everything it writes is a portable format (SillyTavern cards, worldbooks, SKILL.md, YAML rulepacks) — and your old collection walks right in through the same door. Details in [docs/plugins.md](docs/plugins.md).
 - **Romance keeps books too.** With the romance KP skill enabled, affection and desire are actual numbers: when they move, they moved — tracked by code, not by the AI's mood.
 - **Both command dialects work.** The Chinese SealDice style (`.ra 侦查`, `.st 力量50`) and the English Avrae style (`/roll 4d6kh3`, `adv/dis`) drive the same dice engine.
@@ -160,7 +164,7 @@ Most tables run p2p off a laptop. For a 24/7 server, pick a machine:
 uv sync && uv run python -m app --serve   # keep it alive with systemd — see docs/deploy.md
 ```
 
-First run generates `.env` and issues a Keeper key automatically (printed, and saved to `keeper-key.txt`). Connect with it; invites and rooms are managed from the client after that. Data (SQLite + keys) lives next to the app. Full guide: **[docs/deploy.md](docs/deploy.md)**.
+At startup Loreweaver reads `.env` if you created one; it does not invent provider credentials. A missing keystore does cause the server to issue a Keeper key automatically (printed and saved to `keeper-key.txt`). Connect with it; invites and rooms are managed from the client after that. SQLite campaign data follows `TRPG_DATA_DIR`; the keystore follows `--keys` / `TRPG_TUI_KEYS` (default `./keys.toml`). Full guide: **[docs/deploy.md](docs/deploy.md)**.
 
 ## Ways to play
 
@@ -190,9 +194,9 @@ uv run python scripts/i18n_lint.py          # no hardcoded user-facing strings
 cd clients/tui && bun install && bun test   # clients (protocol · tui)
 ```
 
-955 tests, fully offline and reproducible. A self-play test drives the entire pipeline with a scripted KP (upload module → analyze → start → player actions → real dice checks → battle report); the red lines — "secrets never reach the player pool", "an NPC is assembled only from its own record" — each have dedicated tests standing guard.
+More than 1,000 tests run fully offline and reproducibly. A self-play test drives the entire pipeline with a scripted Keeper (upload module → analyze → start → player actions → real dice checks → battle report). Dedicated red-line tests prove that Keeper-only data never enters the player knowledge pool and that NPC/companion actors are assembled only from their own scoped records. They do not prove that the main Keeper model will never repeat a secret it was shown.
 
-Offline tests prove the pipeline; whether a real model behaves is a separate question, answered by a **nightly real-model red-line eval** (`.github/workflows/redline-eval.yml`): scripted players run dozens of turns against a real model, and every turn is scored for "spoiler rate" and "talked instead of rolled" rate, with thresholds that fail the run. When this gate first went up it caught real problems — the KP couldn't keep quiet in combat narration and combat tables, leaking at 45.8%; six fix-and-rerun rounds later, it holds steady at 0. It runs on schedule only, never blocks PRs, and skips itself when `EVAL_LLM_API_KEY` isn't set. CI (push/PR) covers Python 3.11/3.12 and the client packages, fully offline.
+Offline tests prove the pipeline; whether a real model behaves is a separate question, measured by a [nightly real-model red-line eval](https://github.com/1A7432/loreweaver/actions/workflows/redline-eval.yml). Scripted players run against the configured model and each turn is scored for secret leakage and missed dice-first behavior; threshold violations, provider failures, and authentication failures make the run red. Results are per model and per run, not a permanent guarantee: for example, the [2026-07-07 run](https://github.com/1A7432/loreweaver/actions/runs/28847688245) measured one short-run leak in 24 turns and one missed roll in six checkable turns, while its long run measured zero of each; the next two scheduled runs failed before evaluation because the provider rejected the credential. The workflow skips when `EVAL_LLM_API_KEY` is absent and never blocks PRs. Push/PR CI covers Python 3.11/3.12 and the client packages fully offline.
 
 ## Contributing
 
@@ -202,9 +206,11 @@ The roadmap states the ambition plainly: to be the Claude Code of RPGs — right
 
 ## Security
 
-Never commit secrets — `.env`, issued keys, SSH host keys, and databases are gitignored (only `*.example.*` files are committed).
+Self-hosting keeps the deterministic engine, campaign database, keys, and files under your control. It does **not** automatically make model traffic local. A remote LLM receives module text during analysis, the Keeper system prompt (including Keeper-only lore), relevant history, and the current player input. The standard app uses a local hash embedder; an explicitly wired remote embedding backend would also receive document chunks. Use a local endpoint such as Ollama or LM Studio if those prompts must stay on infrastructure you control. Iroh's end-to-end encryption protects player-to-server transport; it is a separate boundary from the model provider.
 
-There is no account system: an invite code is the pass, binding a player to a room with the player or Keeper role. If you open a server beyond a trusted circle, put auth and TLS in front of it — standard hygiene for any self-hosted service.
+Provider API keys and OAuth grants are stored unencrypted in the local SQLite database so runtime configuration survives restart. New secret files and dedicated data directories are restricted to the local owner where the filesystem supports POSIX modes, but this is not a secret vault: protect the host account, backups, `.env`, `keys.toml`, `keeper-key.txt`, and `*.db`, and never commit them. See the full [data-flow and deployment trust model](docs/deploy.md#data-flow-and-trust-boundaries).
+
+There is no account-recovery or central identity service: a random key is the credential, binding its holder to one room with a player or Keeper role. Iroh already encrypts and authenticates the p2p connection; the operational risk is leaked keys or a compromised host, not a missing reverse proxy certificate. Revoke lost keys and treat every Keeper key as a trusted administrator for its room and for deployment-wide model configuration.
 
 Found a vulnerability? Open a private security advisory on GitHub, not a public issue.
 

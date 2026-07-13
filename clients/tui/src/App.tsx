@@ -94,8 +94,10 @@ export function App({
   const client = useMemo(() => injected ?? createClient(), [injected])
   const audioController = useMemo(() => new AudioController(), [])
   const pendingConnect = useRef<AppPrefill | undefined>(undefined)
-  // An explicit language pick (the connect-screen toggle, or a remembered one) wins over
-  // the server's room locale, so the client UI stays in the language the user chose.
+  const welcomeIdentity = useRef<{ room: string; memberId: string; role: string } | undefined>(undefined)
+  // index.tsx always supplies the remembered/environment-resolved local locale,
+  // pinning it against a remote room's language. Embedders that omit it retain
+  // the historical server-locale fallback.
   const localePinned = useRef(Boolean(prefill?.locale))
   // A server spawned by the "host locally" screen; killed when the app exits.
   const localServer = useRef<HostHandle | undefined>(undefined)
@@ -134,12 +136,39 @@ export function App({
   useEffect(() => {
     return client.onMessage((frame: ServerFrame) => {
       if (frame.type === FrameType.Welcome) {
-        if (pendingConnect.current) onRememberConnect?.(pendingConnect.current)
+        if (pendingConnect.current) {
+          onRememberConnect?.(pendingConnect.current)
+          pendingConnect.current = undefined
+        }
+        const previousIdentity = welcomeIdentity.current
+        const nextIdentity = {
+          room: frame.room,
+          memberId: frame.you.id,
+          role: frame.you.role,
+        }
+        const identityChanged = Boolean(
+          previousIdentity &&
+            (previousIdentity.room !== nextIdentity.room ||
+              previousIdentity.memberId !== nextIdentity.memberId ||
+              previousIdentity.role !== nextIdentity.role),
+        )
+        welcomeIdentity.current = nextIdentity
+        if (identityChanged) {
+          // An automatic reconnect normally returns the same identity and keeps the current
+          // screen/log. A different key, room, or role is a new security context: never retain
+          // the previous room's panels, presence, or replay in it.
+          setStateFrame(EMPTY_STATE)
+          setPresence(undefined)
+          setFrames([])
+          audioController.stopAll()
+        }
         setWelcome(frame)
         if (!localePinned.current) setLocale(normalizeLocale(frame.locale))
         setConnecting(false)
         setError(undefined)
-        setScreen((prev) => (prev === "connect" || prev === "host_local" ? "menu" : prev))
+        setScreen((prev) =>
+          prev === "connect" || prev === "host_local" || identityChanged ? "menu" : prev,
+        )
         return
       }
       if (frame.type === FrameType.State) {
@@ -149,6 +178,20 @@ export function App({
       if (frame.type === FrameType.Presence) {
         setPresence(frame)
         return
+      }
+      if (frame.type === FrameType.AdminConfig && typeof frame.using_demo === "boolean") {
+        // A model save hot-swaps MutableLLM immediately. Keep the menu's guided
+        // demo capability in sync too, instead of leaving a stale button until
+        // the next reconnect/welcome frame.
+        setWelcome((current) => {
+          if (!current) return current
+          const features = new Set(current.features ?? [])
+          // A welcome advertises demo only after the server has verified that this
+          // specific room is empty. A global switch back to the fallback therefore
+          // must not add it blindly; reconnecting performs the room-scoped check.
+          if (!frame.using_demo) features.delete("demo")
+          return { ...current, features: [...features] }
+        })
       }
       if (frame.type === FrameType.AudioLibraryItem || frame.type === FrameType.AudioControl || frame.type === FrameType.AudioState) {
         void audioController.handle(frame, client).catch((error) => {
@@ -175,15 +218,26 @@ export function App({
         setFrames((current) => appendFrame(current, frame))
         return
       }
-      if (frame.type === FrameType.Error && frame.code === "bad_key") {
-        // A bad key is a permanent failure while still on the connect screen:
-        // surface it, stay put, and stop the auto-reconnect/re-join loop so it
-        // can't spam the same rejection. A fresh submit reconnects cleanly.
+      if (
+        frame.type === FrameType.Error &&
+        (frame.code === "bad_key" || frame.code === "forbidden")
+      ) {
+        // `bad_key` rejects the join; a top-level `forbidden` means the active key no longer
+        // authorizes this connection (admin permission failures use `admin_error` instead).
+        // Both require a fresh credential and must drop all room-scoped state.
         setConnecting(false)
         pendingConnect.current = undefined
+        welcomeIdentity.current = undefined
         setError(frame.message)
+        setWelcome(undefined)
+        setStateFrame(EMPTY_STATE)
+        setPresence(undefined)
+        setFrames([])
+        setConnectionStatus(undefined)
+        audioController.stopAll()
         client.close?.()
-        setScreen((prev) => (prev === "connect" ? "connect" : prev))
+        setScreen("connect")
+        return
       }
     })
   }, [client, onRememberConnect, audioController, locale])
@@ -236,11 +290,12 @@ export function App({
     }
   }, [client])
 
-  // A language pick (connect screen or settings) is explicit: pin it so the server's
-  // room locale won't override it, and persist it for next launch.
+  // The TUI language is a local user preference (remembered choice, TRPG_LOCALE,
+  // or system locale), independent from the server's narration/room locale.
   const handleLocaleChange = (next: TuiLocale) => {
     setLocale(next)
     localePinned.current = true
+    if (pendingConnect.current) pendingConnect.current = { ...pendingConnect.current, locale: next }
     onLocaleChange?.(next)
   }
 
@@ -264,6 +319,28 @@ export function App({
     client.close?.()
     audioController.stopAll()
     onQuit?.()
+  }
+
+  const handleStartDemo = () => {
+    // The server's demo responder treats this localized, human-readable action
+    // as one guided transaction: install the sample module, create its pregenerated
+    // investigator, inspect the module summary, then narrate the opening scene.
+    setFrames((current) =>
+      appendFrame(current, {
+        type: FrameType.System,
+        level: "info",
+        text: tt(locale, "demo.starting"),
+      }),
+    )
+    // The capability is single-use for an empty room. Remove it before sending so returning
+    // to the menu cannot offer a stale second start while the server is creating the sample.
+    setWelcome((current) =>
+      current
+        ? { ...current, features: (current.features ?? []).filter((feature) => feature !== "demo") }
+        : current,
+    )
+    client.sendInput(tt(locale, "demo.action"))
+    setScreen("game")
   }
 
   if (screen === "host_local") {
@@ -400,6 +477,7 @@ export function App({
         themeName={themeName}
         stateFrame={stateFrame}
         presence={presence}
+        onStartDemo={handleStartDemo}
         onEnterGame={() => setScreen("game")}
         onCharacter={() => setScreen("character")}
         onSettings={() => setScreen("settings")}

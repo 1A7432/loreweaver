@@ -15,7 +15,14 @@ import stat
 
 import pytest
 
-from net.iroh_server import IrohMember, _LineReader, _parse_line, _write_bytes_chunked, _write_line, load_or_create_secret
+from net.iroh_server import (
+    IrohMember,
+    _LineReader,
+    _parse_line,
+    _write_bytes_chunked,
+    _write_line,
+    load_or_create_secret,
+)
 
 
 class _FakeRecv:
@@ -113,9 +120,13 @@ def test_load_or_create_secret_creates_file_and_is_stable(tmp_path) -> None:
     contents_after_first = secret_path.read_bytes()
 
     # A second call reuses the persisted key: same identity, unchanged file.
+    if os.name == "posix":
+        os.chmod(secret_path, 0o644)  # simulate a file created by an older release
     key2 = load_or_create_secret(secret_path)
     assert key2.to_bytes() == key1.to_bytes()
     assert secret_path.read_bytes() == contents_after_first
+    if os.name == "posix":
+        assert stat.S_IMODE(secret_path.stat().st_mode) == 0o600
 
 
 def test_load_or_create_secret_self_heals_from_corrupt_file(tmp_path) -> None:

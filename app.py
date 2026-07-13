@@ -23,6 +23,7 @@ from gateway.registry import platform_registry
 from gateway.runner import GatewayRunner
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings, LocalEmbeddings
+from infra.file_permissions import atomic_write_private, ensure_private_directory
 from infra.i18n import I18n, get_i18n
 from infra.llm import FakeLLM
 from infra.version import resolve_version
@@ -45,7 +46,13 @@ def _app_services(settings, *, llm=None, embeddings=None):
     fallback_llm = FakeLLM(responder=demo_kp_responder) if llm is None else None
     embeddings = embeddings or LocalEmbeddings(64)
     db = settings.db_path or os.path.join(settings.data_dir, "loreweaver.db")
-    os.makedirs(os.path.dirname(db) or ".", exist_ok=True)
+    # The data directory always contains private media/backups/generated modules, even when
+    # SQLite itself is configured elsewhere. Keep it owner-only. An explicitly external DB
+    # parent is user-owned/shared, so create it if needed without changing an existing policy;
+    # Store tightens only the DB and sidecar files after SQLite opens them.
+    ensure_private_directory(settings.data_dir)
+    if settings.db_path:
+        ensure_private_directory(os.path.dirname(db) or ".", tighten_existing=False)
     # Layer B.3 (`docs/plugins.md` "Layer B"): user data-dirs so `agent.forge`-generated skills,
     # rulepacks, and modules are discoverable/usable alongside the built-ins, without ever
     # touching the checkout. Set once here (the one place every entrypoint below funnels through).
@@ -251,7 +258,7 @@ def _bootstrap_keystore(keystore: Keystore, i18n: I18n, keys_path: str) -> None:
     keystore.save(keys_path)
     sidecar = Path(keys_path).with_name("keeper-key.txt")
     try:
-        sidecar.write_text(f"room={room}\nrole=keeper\nkey={key}\n", encoding="utf-8")  # i18n-exempt: data file
+        atomic_write_private(sidecar, f"room={room}\nrole=keeper\nkey={key}\n")  # i18n-exempt: data file
     except OSError:
         pass
     print(i18n.t("tui.serve.bootstrap.banner", room=room), file=sys.stderr)
@@ -348,7 +355,7 @@ def _announce_iroh_ticket(i18n: I18n, ticket: str, keys_path: str) -> None:
     keeper-key bootstrap banner. The operator shares this ticket (the address) + an invite key."""
     sidecar = Path(keys_path).with_name("iroh-ticket.txt")
     try:
-        sidecar.write_text(f"ticket={ticket}\n", encoding="utf-8")  # i18n-exempt: data file
+        atomic_write_private(sidecar, f"ticket={ticket}\n")  # i18n-exempt: data file
     except OSError:
         pass
     print(i18n.t("tui.serve.iroh.banner"), file=sys.stderr)
@@ -436,7 +443,10 @@ def _serve_services(settings: Settings, *, llm=None, embeddings=None):
 
 def _uses_demo_llm(services) -> bool:
     """Whether the effective MutableLLM inner client is the offline demo."""
-    return isinstance(getattr(services.llm, "inner", services.llm), FakeLLM)
+    using_fallback = getattr(services.llm, "using_fallback", None)
+    if using_fallback is not None:
+        return bool(using_fallback)
+    return isinstance(services.llm, FakeLLM)
 
 
 def _build_platform_adapters(platforms: str, i18n: I18n) -> list:

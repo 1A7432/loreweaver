@@ -34,7 +34,7 @@ from gateway.session import SessionSource
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM, assistant_text
-from net.keystore import Keystore
+from net.keystore import Keystore, member_id_for_key
 from net.tui_server import TuiServer, WsMember
 
 
@@ -101,6 +101,24 @@ def _ws_member(room_id: str, member_id: str, name: str = "P") -> WsMember:
         session_key=source.chat_key(),
         locale="en",
     )
+
+
+def _authorize(keystore: Keystore, *members: WsMember) -> list[str]:
+    """Bind directly-constructed test members through the real live-auth mapping."""
+    keys: list[str] = []
+    for member in members:
+        key = keystore.add(room=member.room, name=member.name, role=member.role)
+        keys.append(key)
+        member.id = member_id_for_key(key)
+        source = SessionSource(
+            platform="tui",
+            chat_type="group",
+            chat_id=member.room,
+            user_id=member.id,
+            user_name=member.name,
+        )
+        member.user_key = source.user_key()
+    return keys
 
 
 class _RosterRmwRouter:
@@ -178,10 +196,11 @@ async def test_same_room_turns_serialize_and_do_not_lose_an_update() -> None:
     hub = RoomHub()
     services = _services()
     order: list[tuple[str, str]] = []
-    server = TuiServer(services, Keystore(), command_router=_RosterRmwRouter(services.store, order), hub=hub)
-
     ann = _ws_member("shared-room", "conn-a", "Ann")
     bob = _ws_member("shared-room", "conn-b", "Bob")
+    keystore = Keystore()
+    _authorize(keystore, ann, bob)
+    server = TuiServer(services, keystore, command_router=_RosterRmwRouter(services.store, order), hub=hub)
     assert ann.session_key == bob.session_key  # one room -> one turn lock
 
     await asyncio.gather(server.dispatch_input(ann, "Ann"), server.dispatch_input(bob, "Bob"))
@@ -197,6 +216,57 @@ async def test_same_room_turns_serialize_and_do_not_lose_an_update() -> None:
     assert {order[0][1], order[2][1]} == {"Ann", "Bob"}
 
 
+async def test_queued_turn_reauthorizes_after_acquiring_the_room_lock() -> None:
+    hub = RoomHub()
+    services = _services()
+    order: list[tuple[str, str]] = []
+    member = _ws_member("queued-room", "conn", "Keeper")
+    member.role = "keeper"
+    keystore = Keystore()
+    [key] = _authorize(keystore, member)
+    server = TuiServer(
+        services,
+        keystore,
+        command_router=_RosterRmwRouter(services.store, order),
+        hub=hub,
+    )
+    lock = hub.turn_lock(member.session_key)
+    await lock.acquire()
+    task = asyncio.create_task(server.dispatch_input(member, "must-not-run"))
+    await asyncio.sleep(0)  # initial auth completed; request is queued on `lock`
+
+    keystore.remove(key)
+    lock.release()
+    await task
+
+    assert order == []
+    frames = [json.loads(raw) for raw in member.ws.sent]
+    assert frames[-1]["type"] == "error"
+    assert frames[-1]["code"] == "forbidden"
+
+
+async def test_queued_admin_reauthorizes_after_acquiring_the_config_lock() -> None:
+    services = _services()
+    member = _ws_member("queued-admin", "conn", "Keeper")
+    member.role = "keeper"
+    keystore = Keystore()
+    [key] = _authorize(keystore, member)
+    server = TuiServer(services, keystore)
+    await services.config_lock.acquire()
+    task = asyncio.create_task(
+        server._on_frame(member, json.dumps({"type": "admin_get_config"}))
+    )
+    await asyncio.sleep(0)  # request holds the room lock and waits on config_lock
+
+    keystore.remove(key)
+    services.config_lock.release()
+    await task
+
+    frames = [json.loads(raw) for raw in member.ws.sent]
+    assert frames[-1]["type"] == "error"
+    assert frames[-1]["code"] == "forbidden"
+
+
 # ---------------------------------------------------------------------------
 # (3) different rooms -> NOT serialized (they overlap)
 # ---------------------------------------------------------------------------
@@ -210,7 +280,9 @@ async def test_turns_on_different_rooms_are_not_serialized() -> None:
     assert alice.session_key != bruno.session_key
 
     arrived = {alice.session_key: asyncio.Event(), bruno.session_key: asyncio.Event()}
-    server = TuiServer(services, Keystore(), command_router=_BarrierRouter(arrived), hub=hub)
+    keystore = Keystore()
+    _authorize(keystore, alice, bruno)
+    server = TuiServer(services, keystore, command_router=_BarrierRouter(arrived), hub=hub)
 
     # Each turn only returns once the OTHER room's turn has also entered. If different rooms
     # wrongly shared a lock, the second turn could never enter and this would deadlock; the
@@ -242,12 +314,14 @@ async def test_companion_subturn_inside_a_player_turn_does_not_deadlock() -> Non
         AgentCtx(chat_key=chat_key, user_id="kp", locale="en"), name="Silas", persona="A steady gunslinger."
     )
 
-    router = CommandRouter(services, hub=hub)  # hub-wired so `.party act` can drive the director
-    server = TuiServer(services, Keystore(), command_router=router, hub=hub, toolset=build_kp_toolset(services))
     watcher = _FakeMember("watcher")
     await hub.subscribe(chat_key, watcher)
 
     keeper = _ws_member(room_id, "kp-conn", "Keeper")
+    keystore = Keystore()
+    _authorize(keystore, keeper)
+    router = CommandRouter(services, hub=hub)  # hub-wired so `.party act` can drive the director
+    server = TuiServer(services, keystore, command_router=router, hub=hub, toolset=build_kp_toolset(services))
     assert keeper.session_key == chat_key
 
     # `.party act Silas` runs INSIDE the player turn, which already holds turn_lock(room). It drives

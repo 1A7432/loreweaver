@@ -150,7 +150,7 @@ describe("KeeperKeys", () => {
     act(() => harness.renderer.destroy())
   })
 
-  test("填写 room+name 后点击发码,adminMintKey 收到所填的房间/备注/默认角色", async () => {
+  test("填写备注后发码固定使用当前房间", async () => {
     const client = new MockClient()
     const harness = await renderApp(client)
     await harness.flush()
@@ -158,15 +158,7 @@ describe("KeeperKeys", () => {
     await enterKeeperKeys(harness)
     await harness.waitForFrame((t) => t.includes("⚄ 发邀请码"))
 
-    // The room field is focused on mount: type it, Tab to the name field, type it.
-    await act(async () => {
-      await harness.mockInput.typeText("poolside")
-    })
-    await harness.flush()
-    await act(async () => {
-      harness.mockInput.pressTab()
-    })
-    await harness.flush()
+    // The current room is display-only; the name field is focused on mount.
     await act(async () => {
       await harness.mockInput.typeText("守秘之钥")
     })
@@ -181,7 +173,7 @@ describe("KeeperKeys", () => {
     })
     await harness.flush()
 
-    expect(client.mintKeyCalls).toContainEqual(["poolside", "守秘之钥", "player"])
+    expect(client.mintKeyCalls).toContainEqual(["shuxue", "守秘之钥", "player"])
 
     act(() => harness.renderer.destroy())
   })
@@ -194,14 +186,8 @@ describe("KeeperKeys", () => {
     await enterKeeperKeys(harness)
     await harness.waitForFrame((t) => t.includes("⚄ 发邀请码"))
 
-    // Type room, Tab past the (blank) name onto the role <select>, arrow to keeper,
-    // Enter (the select's onSelect) submits.
+    // Tab from the blank name onto the role <select>, arrow to keeper, then Enter.
     await act(async () => {
-      await harness.mockInput.typeText("cellar")
-    })
-    await harness.flush()
-    await act(async () => {
-      harness.mockInput.pressTab()
       harness.mockInput.pressTab()
     })
     await harness.flush()
@@ -214,7 +200,75 @@ describe("KeeperKeys", () => {
     })
     await harness.flush()
 
-    expect(client.mintKeyCalls).toContainEqual(["cellar", undefined, "keeper"])
+    expect(client.mintKeyCalls).toContainEqual(["shuxue", undefined, "keeper"])
+
+    act(() => harness.renderer.destroy())
+  })
+
+  test("角色下拉的方向键不会同时改变邀请码列表选择", async () => {
+    const client = new MockClient()
+    const harness = await renderApp(client)
+    await harness.flush()
+    act(() => client.push(KEEPER_WELCOME))
+    await enterKeeperKeys(harness)
+    act(() =>
+      client.push({
+        type: FrameType.AdminKeys,
+        keys: [
+          { id: "k1", key_masked: "LW1", room: "shuxue", name: "First", role: "player" },
+          { id: "k2", key_masked: "LW2", room: "shuxue", name: "Second", role: "keeper" },
+        ],
+      }),
+    )
+    await harness.flush()
+
+    await act(async () => harness.mockInput.pressTab())
+    await harness.flush()
+    await act(async () => harness.mockInput.pressArrow("down"))
+    await harness.flush()
+
+    const frame = await harness.waitForFrame((text) => text.includes("载入选中"))
+    const loadY = frame.split("\n").findIndex((line) => line.includes("载入选中"))
+    await act(async () => harness.mockMouse.click(CLICK_X, loadY))
+    await harness.flush()
+    const loaded = await harness.waitForFrame((text) => text.includes("保存修改"))
+    const saveY = loaded.split("\n").findIndex((line) => line.includes("保存修改"))
+    await act(async () => harness.mockMouse.click(CLICK_X + 14, saveY))
+    await harness.flush()
+
+    expect(client.updateKeyCalls.at(-1)).toEqual(["k1", "shuxue", "First", "player"])
+    act(() => harness.renderer.destroy())
+  })
+
+  test("切换邀请码选择会撤销已武装的删除确认", async () => {
+    const client = new MockClient()
+    const harness = await renderApp(client)
+    await harness.flush()
+    act(() => client.push(KEEPER_WELCOME))
+    await enterKeeperKeys(harness)
+    act(() =>
+      client.push({
+        type: FrameType.AdminKeys,
+        keys: [
+          { id: "k1", key_masked: "LW1", room: "shuxue", name: "First", role: "player" },
+          { id: "k2", key_masked: "LW2", room: "shuxue", name: "Second", role: "player" },
+        ],
+      }),
+    )
+    await harness.flush()
+
+    const frame = await harness.waitForFrame((text) => text.includes("删除邀请码"))
+    const deleteY = frame.split("\n").findIndex((line) => line.includes("删除邀请码"))
+    await act(async () => harness.mockMouse.click(CLICK_X + 28, deleteY))
+    await harness.flush()
+    expect(client.deleteKeyCalls).toEqual([])
+
+    // Focus is still on the name input, where arrows navigate the invite list.
+    await act(async () => harness.mockInput.pressArrow("down"))
+    await harness.flush()
+    await act(async () => harness.mockMouse.click(CLICK_X + 28, deleteY))
+    await harness.flush()
+    expect(client.deleteKeyCalls).toEqual([])
 
     act(() => harness.renderer.destroy())
   })
@@ -323,7 +377,7 @@ describe("KeeperKeys", () => {
     await harness.flush()
     await harness.waitForFrame((t) => t.includes("备份路径"))
 
-    for (let index = 0; index < 3; index += 1) {
+    for (let index = 0; index < 2; index += 1) {
       await act(async () => {
         harness.mockInput.pressTab()
       })
@@ -375,12 +429,14 @@ describe("KeeperKeys", () => {
         keys: 1,
         store_rows: 2,
         vector_points: 3,
+        media_files: 2,
       }),
     )
     await harness.flush()
     const result = await harness.waitForFrame((t) => t.includes("删除完成"))
     expect(result).toContain("邀请1")
     expect(result).toContain("数据2")
+    expect(result).toContain("媒体2")
     expect(result).toContain("向量3")
 
     act(() => harness.renderer.destroy())

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import random
 import re
 import shlex
@@ -46,8 +47,10 @@ from infra.providers import (
     is_known_provider,
     mask_secret,
 )
+from infra.runtime_config import OVERRIDE_FIELDS
 
 Handler = Callable[["CommandCtx"], Awaitable[str]]
+logger = logging.getLogger(__name__)
 
 _INLINE_RE = re.compile(r"\[\[([^\[\]]+)\]\]")
 _COMMAND_TOKEN_RE = re.compile(r"([^\s]+)(?:\s+(.*))?$", re.S)
@@ -926,8 +929,24 @@ class CommandRouter:
             return ctx.i18n.t("rooms.open.no_keystore")
         room_id = mint_room_id()
         session_key = session_key_for_room(room_id)
-        join_key = self.keystore.add(room=room_id)
-        await set_binding(store, channel_key, session_key)
+        # A returned join key must already be authoritative on disk. SessionCore revalidates
+        # every live member against the file-backed keystore, so an in-memory-only key would
+        # authenticate once and then be rejected on its first frame (and disappear on restart).
+        with self.keystore.persisted_mutation():
+            join_key = self.keystore.add(room=room_id)
+        try:
+            await set_binding(store, channel_key, session_key)
+        except BaseException:
+            # The TOML and SQLite stores cannot share one transaction. Best-effort compensation
+            # avoids leaving an undisclosed orphan key when the channel binding write fails.
+            try:
+                with self.keystore.persisted_mutation():
+                    entry = self.keystore.get(join_key)
+                    if entry is not None and entry.room == room_id:
+                        self.keystore.remove(join_key)
+            except Exception:
+                logger.warning("rooms: could not revoke orphaned join key after binding failure", exc_info=True)
+            raise
         return ctx.i18n.t("rooms.open.result", key=join_key, session=session_key)
 
     async def _room_link(self, ctx: CommandCtx, store: Any, channel_key: str, rest: str) -> str:
@@ -951,6 +970,12 @@ class CommandRouter:
         session-id fallback, which would otherwise let anyone bind to (and read /
         eavesdrop) an arbitrary foreign session by guessing its id."""
         if self.keystore is not None:
+            try:
+                # Operations may revoke or move a key while the bot process stays up. Never
+                # authorize `.room link` from a stale in-memory snapshot.
+                self.keystore.refresh()
+            except Exception:
+                return None
             entry = self.keystore.get(token)
             if entry is not None:
                 return session_key_for_room(entry.room)
@@ -1171,16 +1196,23 @@ class CommandRouter:
         runtime_config = ctx.services.runtime_config
         if sub in _MODEL_LIST_WORDS:
             return self._model_list(ctx)
-        if sub in _MODEL_SET_WORDS:
-            return await self._model_set(ctx, runtime_config, rest)
-        if sub in _MODEL_LOGIN_WORDS:
-            return await self._model_login(ctx, rest)
-        if sub in _MODEL_LOGOUT_WORDS:
-            return await self._model_logout(ctx, rest)
-        if sub in _MODEL_KEY_WORDS:
-            return await self._model_key(ctx, runtime_config, rest)
-        if sub in _MODEL_RESET_WORDS:
-            return await self._model_reset(ctx, runtime_config)
+        if sub in (
+            _MODEL_SET_WORDS
+            | _MODEL_LOGIN_WORDS
+            | _MODEL_LOGOUT_WORDS
+            | _MODEL_KEY_WORDS
+            | _MODEL_RESET_WORDS
+        ):
+            async with ctx.services.config_lock:
+                if sub in _MODEL_SET_WORDS:
+                    return await self._model_set(ctx, runtime_config, rest)
+                if sub in _MODEL_LOGIN_WORDS:
+                    return await self._model_login(ctx, rest)
+                if sub in _MODEL_LOGOUT_WORDS:
+                    return await self._model_logout(ctx, rest)
+                if sub in _MODEL_KEY_WORDS:
+                    return await self._model_key(ctx, runtime_config, rest)
+                return await self._model_reset(ctx, runtime_config)
         if sub in _MODEL_SHOW_WORDS:
             return await self._model_show(ctx, runtime_config)
         return ctx.i18n.t("commands.model.usage")
@@ -1243,6 +1275,7 @@ class CommandRouter:
 
         current = await runtime_config.get()
         live = _live_llm_settings(ctx.services)
+        live_snapshot = _snapshot_live_llm(ctx.services)
         same_provider = _provider_identity(provider) == _provider_identity(live.provider)
         saved = await _saved_llm_credentials(ctx.services, provider)
 
@@ -1296,15 +1329,18 @@ class CommandRouter:
 
         # Validate by reconfiguring the LIVE LLM FIRST, then persist only on success. Building a
         # native provider whose optional SDK/key is missing raises; if we persisted before that, the
-        # bad override would also brick the next `build_services()` boot. On failure we roll the live
-        # LLM back to the last-good config and persist nothing.
+        # bad override would also brick the next `build_services()` boot. Persistence failure is
+        # compensated with the exact old inner/settings snapshot.
         try:
             reconfigured = _reconfigure_llm(ctx.services, overrides)
-        except Exception:
-            _reconfigure_llm(ctx.services, current)  # restore the previously-good live config
-            # Distinguish "not logged in" (already checked) from other build failures.
-            return ctx.i18n.t("commands.model.set_failed", provider=provider)
-        await runtime_config.replace(**overrides)
+            await runtime_config.replace(**overrides)
+        except BaseException as exc:
+            await _restore_runtime_config(runtime_config, current, operation="model set")
+            _restore_live_llm(ctx.services, live_snapshot, operation="model set")
+            if not isinstance(exc, Exception):
+                raise
+            # Distinguish "not logged in" (already checked) from other build/persistence failures.
+            return _model_mutation_failed(ctx, provider)
         # Refresh an explicitly configured SuperGrok image client once its
         # shared subscription is ready. Selecting an LLM must not silently turn
         # image generation on (or create an in-memory-only imagegen setting).
@@ -1392,8 +1428,8 @@ class CommandRouter:
                         session["done"] = True
                         return
                     if token is not None:
-                        await ctx.services.llm_credentials.save_subscription(canonical, token)
-                        await _refresh_active_subscription_clients(ctx.services, canonical)
+                        async with ctx.services.config_lock:
+                            await _install_subscription(ctx.services, canonical, token)
                         session["done"] = True
                         session["token_ok"] = True
                         return
@@ -1451,33 +1487,59 @@ class CommandRouter:
                 except (asyncio.CancelledError, Exception):
                     pass
 
-        await ctx.services.llm_credentials.forget_subscription(canonical)
-
         live = _live_llm_settings(ctx.services)
+        live_snapshot = _snapshot_live_llm(ctx.services)
+        runtime_snapshot = await ctx.services.runtime_config.get()
+        subscription_snapshot = await ctx.services.llm_credentials.load_subscription(canonical)
+        credential_snapshot = await ctx.services.llm_credentials.get(canonical)
         current_oauth_path = (live.provider or "").casefold() == "supergrok" or (
             (live.provider or "").casefold() in CHATGPT_SUBSCRIPTION_PROXY_PROVIDER_NAMES
             and not live.base_url
         )
-        if _provider_identity(live.provider) == canonical and current_oauth_path:
-            # The active OAuth client is no longer buildable after forgetting its
-            # grant. Revert to the process's already-validated base/env provider
-            # and remove the unusable persisted override so restart sees the same
-            # effective configuration.
-            try:
+        active_oauth = _provider_identity(live.provider) == canonical and current_oauth_path
+        try:
+            if active_oauth:
+                # Move the live process and restart snapshot off the soon-to-be-revoked grant
+                # BEFORE deleting it. If either step fails, the still-valid credential makes exact
+                # rollback possible and logout reports failure rather than leaving a broken client.
                 _reconfigure_llm(ctx.services, {})
-            except Exception:
-                # The base/env configuration may itself be this OAuth provider.
-                # After logout it is intentionally unbuildable until the next
-                # login, but that must not turn a successful logout into a crash.
-                fallback = _live_llm_settings(ctx.services)
-                fallback_provider = (fallback.provider or "").casefold()
-                fallback_oauth_path = fallback_provider == "supergrok" or (
-                    fallback_provider in CHATGPT_SUBSCRIPTION_PROXY_PROVIDER_NAMES
-                    and not fallback.base_url
-                )
-                if not fallback_oauth_path or _provider_identity(fallback_provider) != canonical:
-                    raise
-            await ctx.services.runtime_config.clear()
+                await ctx.services.runtime_config.clear()
+            # CredentialBook persists before invalidating its manager, so a failed forget leaves
+            # the old token/client valid and compensatable.
+            await ctx.services.llm_credentials.forget_subscription(canonical)
+        except BaseException as exc:
+            subscription_restored = await _restore_subscription_credential(
+                ctx.services,
+                canonical,
+                subscription_snapshot,
+                operation="model logout",
+            )
+            # save_subscription intentionally strips proxy fields for a successful login. During
+            # rollback, restore the independent static endpoint/key as a second compensation step.
+            await _restore_static_credential(
+                ctx.services,
+                canonical,
+                credential_snapshot,
+                operation="model logout",
+            )
+            await _restore_runtime_config(
+                ctx.services.runtime_config,
+                runtime_snapshot,
+                operation="model logout",
+            )
+            if active_oauth and subscription_restored:
+                try:
+                    # A failed forget implementation may already have invalidated the old manager;
+                    # rebuild from the restored grant instead of reinstalling that stale inner.
+                    _reconfigure_llm(ctx.services, live_snapshot.overrides)
+                except Exception:
+                    logger.warning("model: live rebuild failed during model logout rollback", exc_info=True)
+                    _restore_live_llm(ctx.services, live_snapshot, operation="model logout")
+            else:
+                _restore_live_llm(ctx.services, live_snapshot, operation="model logout")
+            if not isinstance(exc, Exception):
+                raise
+            return _model_mutation_failed(ctx, canonical)
 
         if canonical == "supergrok" and (ctx.services.settings.imagegen.provider or "").casefold() == "supergrok":
             _refresh_supergrok_imagegen(ctx.services)
@@ -1498,20 +1560,53 @@ class CommandRouter:
         )
         if oauth_path:
             return ctx.i18n.t("commands.model.login_required", provider=canonical_subscription_provider(provider))
-        merged = await runtime_config.set(api_key=api_key)
-        _reconfigure_llm(ctx.services, merged)
-        await ctx.services.llm_credentials.remember(
-            provider,
-            api_key=api_key,
-            base_url=live.base_url or "",
-        )
+        runtime_snapshot = await runtime_config.get()
+        live_snapshot = _snapshot_live_llm(ctx.services)
+        credential_snapshot = await ctx.services.llm_credentials.get(provider)
+        merged = dict(runtime_snapshot)
+        merged["api_key"] = api_key
+        try:
+            # Build first; no durable state changes if the new key/provider cannot construct.
+            _reconfigure_llm(ctx.services, merged)
+            # Provider credential and active override are separate rows. Write the inactive book
+            # first, then compensate it if the active runtime snapshot cannot be persisted.
+            await ctx.services.llm_credentials.replace_static(
+                provider,
+                api_key=api_key,
+                base_url=live.base_url or "",
+            )
+            await runtime_config.replace(**merged)
+        except BaseException as exc:
+            await _restore_runtime_config(runtime_config, runtime_snapshot, operation="model key")
+            await _restore_static_credential(
+                ctx.services,
+                provider,
+                credential_snapshot,
+                operation="model key",
+            )
+            _restore_live_llm(ctx.services, live_snapshot, operation="model key")
+            if not isinstance(exc, Exception):
+                raise
+            return _model_mutation_failed(ctx, provider)
         return ctx.i18n.t("commands.model.key_done", api_key=mask_secret(api_key))
 
     async def _model_reset(self, ctx: CommandCtx, runtime_config: Any) -> str:
         if not _is_keeper(ctx.raw_ctx):
             return ctx.i18n.t("commands.model.denied")
-        await runtime_config.clear()
-        _reconfigure_llm(ctx.services, {})
+        runtime_snapshot = await runtime_config.get()
+        live_snapshot = _snapshot_live_llm(ctx.services)
+        provider = live_snapshot.overrides.get("provider", "default")
+        try:
+            # Build/reconfigure first so a broken base/env provider cannot erase the last-known-good
+            # restart override. A clear failure restores the exact old live inner.
+            _reconfigure_llm(ctx.services, {})
+            await runtime_config.clear()
+        except BaseException as exc:
+            await _restore_runtime_config(runtime_config, runtime_snapshot, operation="model reset")
+            _restore_live_llm(ctx.services, live_snapshot, operation="model reset")
+            if not isinstance(exc, Exception):
+                raise
+            return _model_mutation_failed(ctx, provider)
         info = _describe_llm(ctx.services)
         return ctx.i18n.t("commands.model.reset_done", provider=info["provider"], chat_model=info["chat_model"])
 
@@ -2305,6 +2400,138 @@ def _is_private_channel(ctx: Any) -> bool:
     return chat_type in _ROOM_ADMIN_CHAT_TYPES
 
 
+_NO_LIVE_INNER = object()
+
+
+@dataclass(frozen=True)
+class _LiveLLMSnapshot:
+    """Exact pre-mutation live state used for command-level compensation."""
+
+    overrides: dict[str, str]
+    inner: Any = _NO_LIVE_INNER
+
+
+def _snapshot_live_llm(services: Services) -> _LiveLLMSnapshot:
+    live = _live_llm_settings(services)
+    overrides = {
+        field: str(value)
+        for field in OVERRIDE_FIELDS
+        if (value := getattr(live, field, None)) is not None
+    }
+    return _LiveLLMSnapshot(
+        overrides=overrides,
+        inner=getattr(services.llm, "inner", _NO_LIVE_INNER),
+    )
+
+
+def _restore_live_llm(services: Services, snapshot: _LiveLLMSnapshot, *, operation: str) -> bool:
+    """Restore a live snapshot without rebuilding when MutableLLM exposes its exact old inner.
+
+    The direct path is deliberately only a compensation fallback in this module: a provider
+    builder may be the component that just failed, while the previously-running inner is already
+    validated. Non-standard swappable test/integration clients fall back to their public `apply`.
+    """
+    llm = services.llm
+    settings = getattr(llm, "settings", None)
+    if (
+        snapshot.inner is not _NO_LIVE_INNER
+        and settings is not None
+        and getattr(settings, "llm", None) is not None
+        and hasattr(llm, "_inner")
+    ):
+        for field, value in snapshot.overrides.items():
+            setattr(settings.llm, field, value)
+        llm._inner = snapshot.inner  # type: ignore[attr-defined]
+        return True
+    try:
+        _reconfigure_llm(services, snapshot.overrides)
+        return True
+    except Exception:
+        logger.warning("model: live rollback failed during %s", operation, exc_info=True)
+        return False
+
+
+async def _restore_runtime_config(runtime_config: Any, snapshot: dict[str, str], *, operation: str) -> bool:
+    """Best-effort compensation for a runtime-config write that may have partially completed.
+
+    Always publish the snapshot instead of trusting ``get()``: a storage call can commit and
+    then raise before ``RuntimeConfig`` updates its cache, in which case the cache still looks
+    equal to the old snapshot while a restart would observe the new value.
+    """
+    try:
+        if snapshot:
+            await runtime_config.replace(**snapshot)
+        else:
+            await runtime_config.clear()
+        return True
+    except Exception:
+        logger.warning("model: runtime-config rollback failed during %s", operation, exc_info=True)
+        return False
+
+
+async def _restore_static_credential(
+    services: Services,
+    provider: str,
+    snapshot: dict[str, str],
+    *,
+    operation: str,
+) -> bool:
+    """Restore only a provider's static key/URL, leaving OAuth fields untouched.
+
+    This is intentionally unconditional for the same commit-before-cache-publication window as
+    :func:`_restore_runtime_config`.
+    """
+    try:
+        old_static = {
+            "api_key": snapshot.get("api_key", ""),
+            "base_url": snapshot.get("base_url", ""),
+        }
+        await services.llm_credentials.replace_static(provider, **old_static)
+        return True
+    except Exception:
+        logger.warning(
+            "model: credential rollback failed for provider %s during %s",
+            provider,
+            operation,
+            exc_info=True,
+        )
+        return False
+
+
+async def _restore_subscription_credential(
+    services: Services,
+    provider: str,
+    snapshot: Any | None,
+    *,
+    operation: str,
+) -> bool:
+    """Best-effort OAuth compensation used only when logout itself fails.
+
+    Do not skip the durable write based on the credential cache: a failed store call may already
+    have committed the token deletion without publishing that fact to the cache.
+    """
+    try:
+        if snapshot is None:
+            await services.llm_credentials.forget_subscription(provider)
+        else:
+            await services.llm_credentials.save_subscription(provider, snapshot)
+        return True
+    except Exception:
+        logger.warning(
+            "model: subscription rollback failed for provider %s during %s",
+            provider,
+            operation,
+            exc_info=True,
+        )
+        return False
+
+
+def _model_mutation_failed(ctx: CommandCtx, provider: str) -> str:
+    # Reuse the existing localized, non-secret generic mutation failure. The command-specific
+    # success message is only emitted after every durable/live step commits.
+    return ctx.i18n.t("commands.model.set_failed", provider=provider)
+
+
 def _describe_llm(services: Services) -> dict[str, str]:
     """The live LLM's display snapshot — from the `MutableLLM` if present, else
     from the (possibly injected) settings so `.model` still shows something."""
@@ -2363,6 +2590,93 @@ def _subscription_login_locks(services: Services) -> dict[str, Any]:
     return locks
 
 
+async def _install_subscription(services: Services, canonical: str, token: Any) -> None:
+    """Atomically publish a polled OAuth grant and every client that consumes it.
+
+    ``CredentialBook.save_subscription`` deliberately invalidates the previous token manager
+    after its durable write. Therefore restoring only the credential row after a later refresh
+    failure is insufficient: active LLM/image clients holding that manager must be rebuilt from
+    the restored grant. The caller owns ``services.config_lock`` so these compensation writes do
+    not overwrite another admin mutation.
+    """
+    subscription_snapshot = await services.llm_credentials.load_subscription(canonical)
+    credential_snapshot = await services.llm_credentials.get(canonical)
+    runtime_snapshot = await services.runtime_config.get()
+    live_snapshot = _snapshot_live_llm(services)
+    imagegen_snapshot = services.imagegen
+    live_provider = live_snapshot.overrides.get("provider", "").casefold()
+    live_oauth_path = live_provider == "supergrok" or (
+        live_provider in CHATGPT_SUBSCRIPTION_PROXY_PROVIDER_NAMES
+        and not live_snapshot.overrides.get("base_url", "")
+    )
+    active_oauth = _provider_identity(live_provider) == canonical and live_oauth_path
+
+    try:
+        await services.llm_credentials.save_subscription(canonical, token)
+        await _refresh_active_subscription_clients(services, canonical)
+    except BaseException:
+        subscription_restored = await _restore_subscription_credential(
+            services,
+            canonical,
+            subscription_snapshot,
+            operation="subscription login",
+        )
+        # This second, unconditional credential-book write is important when the OAuth store
+        # commit succeeded but save_subscription raised before publishing its cache: forgetting
+        # an apparently absent cached token is otherwise a no-op and would leave the new grant on
+        # disk. It also restores an independent ChatGPT proxy endpoint/key stripped by login.
+        await _restore_static_credential(
+            services,
+            canonical,
+            credential_snapshot,
+            operation="subscription login",
+        )
+        await _restore_runtime_config(
+            services.runtime_config,
+            runtime_snapshot,
+            operation="subscription login",
+        )
+
+        if active_oauth and subscription_restored:
+            try:
+                # The exact old inner references the manager invalidated by the attempted save;
+                # rebuild it against the manager created from the restored durable token.
+                _reconfigure_llm(services, live_snapshot.overrides)
+            except Exception:
+                logger.warning(
+                    "model: active LLM rebuild failed during subscription login rollback",
+                    exc_info=True,
+                )
+                _restore_live_llm(services, live_snapshot, operation="subscription login")
+        else:
+            # A classic proxy/static provider never used the invalidated manager, so exact object
+            # restoration is both safe and preserves the pre-login client.
+            _restore_live_llm(services, live_snapshot, operation="subscription login")
+
+        if canonical == "supergrok":
+            imagegen_provider = (services.settings.imagegen.provider or "").casefold()
+            snapshot_used_subscription = callable(
+                getattr(imagegen_snapshot, "_token_provider", None)
+            )
+            if (
+                imagegen_provider == "supergrok"
+                and subscription_restored
+                and snapshot_used_subscription
+            ):
+                try:
+                    # SuperGrok image generation shares the same invalidated TokenManager.
+                    _refresh_supergrok_imagegen(services)
+                except Exception:
+                    logger.warning(
+                        "model: image client rebuild failed during subscription login rollback",
+                        exc_info=True,
+                    )
+                    services.imagegen = imagegen_snapshot
+            else:
+                services.imagegen = imagegen_snapshot
+        raise
+
+
 async def _refresh_active_subscription_clients(services: Services, canonical: str) -> None:
     """Rebuild live clients after a successful login replaces their token manager."""
     live = _live_llm_settings(services)
@@ -2390,8 +2704,22 @@ async def _refresh_active_subscription_clients(services: Services, canonical: st
                     "base_url": "",
                 }
             )
-            _reconfigure_llm(services, overrides)
-            await services.runtime_config.replace(**overrides)
+            live_snapshot = _snapshot_live_llm(services)
+            try:
+                _reconfigure_llm(services, overrides)
+                await services.runtime_config.replace(**overrides)
+            except BaseException:
+                await _restore_runtime_config(
+                    services.runtime_config,
+                    current,
+                    operation="subscription login",
+                )
+                _restore_live_llm(
+                    services,
+                    live_snapshot,
+                    operation="subscription login",
+                )
+                raise
         elif oauth_path:
             # A failed persisted override may have left the validated base/env
             # provider live. Rebuild the base snapshot, not an unrelated override.

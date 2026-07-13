@@ -400,7 +400,7 @@ export interface AdminListKeysFrame {
 
 export interface AdminMintKeyFrame {
   type: typeof FrameType.AdminMintKey
-  room: string
+  room?: string
   name?: string
   role?: PlayerRole
 }
@@ -453,6 +453,8 @@ export interface AdminConfigFrame {
   saved_providers: string[]
   override_active: boolean
   imagegen?: ImageGenStatus
+  /** True only while turns route to the server's offline sample Keeper. */
+  using_demo?: boolean
   /**
    * Subscription OAuth status for the *current* provider when it uses a ChatGPT /
    * SuperGrok grant (no new frame type — optional field only). Empty or absent for
@@ -502,6 +504,7 @@ export interface AdminRoomOpFrame {
   keys: number
   store_rows: number
   vector_points: number
+  media_files?: number
 }
 
 export interface AdminErrorFrame {

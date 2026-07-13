@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import ssl
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -44,7 +45,7 @@ from net.keystore import Keystore
 # The transport-neutral session core + frame helpers now live in `net.session`; the WebSocket
 # server just adds the WS accept loop + `WsMember`. The underscore aliases keep the historical
 # `from net.tui_server import ...` imports (`net.iroh_server`, `_authenticate`) working unchanged.
-from net.session import SessionCore, resolve_session_fields, welcome_frame
+from net.session import SessionCore, guided_demo_available, resolve_session_fields, welcome_frame
 from net.session import error_frame as _error_frame
 from net.session import parse_frame as _parse_frame
 from net.session import render_frame as _render_frame
@@ -75,6 +76,7 @@ class WsMember:
     session_key: str
     locale: str
     transport: str = "tui"
+    authorize: Callable[[], bool] | None = None
 
     def supports_proactive(self) -> bool:
         """A live terminal can always be pushed to (it is a persistent socket)."""
@@ -94,6 +96,10 @@ class WsMember:
 
     async def deliver(self, event: Event) -> None:
         """Render `event` to its WS frame and send it (dropping a closed socket)."""
+        if self.authorize is not None and not self.authorize():
+            await self.send_frame(_error_frame("forbidden", get_i18n(self.locale)))
+            await self.ws.close()
+            raise PermissionError("member authorization was revoked")  # i18n-exempt: internal hub signal
         frame = _render_frame(event)
         if frame is not None:
             await self.send_frame(frame)
@@ -196,6 +202,11 @@ class TuiServer(SessionCore):
             if member is None:
                 return
 
+            if not self._refresh_member_authorization(member):
+                await member.send_frame(_error_frame("forbidden", get_i18n(member.locale)))
+                await ws.close()
+                return
+
             await self.hub.subscribe(member.session_key, member)
             try:
                 await self._replay_history(member)
@@ -247,7 +258,20 @@ class TuiServer(SessionCore):
             return None
 
         member = WsMember(ws=ws, **fields)
-        await _send(ws, welcome_frame(fields, imagegen=self.services.imagegen is not None))
+        # Passive room fan-out must observe revocation too; otherwise a silent client could
+        # keep receiving narrative/state forever without sending another inbound frame.
+        member.authorize = lambda: self._refresh_member_authorization(member)
+        await _send(
+            ws,
+            welcome_frame(
+                fields,
+                imagegen=self.services.imagegen is not None,
+                demo=(
+                    fields["role"] == "keeper"
+                    and await guided_demo_available(self.services, fields["session_key"])
+                ),
+            ),
+        )
         return member
 
     async def _on_media_message(self, member: WsMember, payload: bytes) -> None:

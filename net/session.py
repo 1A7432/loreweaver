@@ -12,8 +12,8 @@ a p2p player and (historically) a chat member sit at the same live table.
 
 from __future__ import annotations
 
-import hashlib
 import json
+import logging
 import uuid
 from collections import deque
 from pathlib import Path
@@ -27,6 +27,7 @@ from agent.tools import Toolset
 from gateway.audio import add_audio_item, audio_state_frame, has_audio_state, list_audio_items
 from gateway.avatar import AvatarError, set_user_avatar
 from gateway.commands import CommandRouter
+from gateway.demo import is_demo_setup_request
 from gateway.hub import Event, RoomHub
 from gateway.media import MEDIA_HISTORY_REPLAY_CAP, media_frame, record_media_history
 from gateway.ops import Censor, RateLimiter, censor_from_settings, is_media_enabled, set_media_enabled
@@ -45,7 +46,10 @@ from infra.media_store import (
     is_image_mime,
 )
 from net.admin import handle_admin_frame, is_admin_frame
-from net.keystore import Keystore
+from net.keystore import Keystore, member_id_for_key
+from net.room_backup import room_rows, room_vector_points
+
+logger = logging.getLogger(__name__)
 
 # v1.4 adds image-generation configuration plus avatar/image handout generation.
 _PROTOCOL_VERSION = "1.4"
@@ -68,13 +72,16 @@ def resolve_session_fields(keystore: Keystore, key: str, locale: str) -> dict[st
     impersonate another player in the room fan-out) / session scoping. Every transport builds its
     Member from this, so auth + room/role binding is identical on either wire.
     """
+    try:
+        # Always refresh a file-backed store, even when memory already contains
+        # this key: a deleted/downgraded key must not authenticate from stale RAM.
+        keystore.refresh()
+    except Exception:
+        return None
     entry = keystore.get(key)
     if entry is None:
-        keystore.refresh()
-        entry = keystore.get(key)
-    if entry is None:
         return None
-    client_id = f"tui:{hashlib.sha1(key.encode('utf-8')).hexdigest()[:8]}"
+    client_id = member_id_for_key(key)
     name = entry.name or client_id
     source = SessionSource(
         platform="tui", chat_type="group", chat_id=entry.room, user_id=client_id, user_name=name
@@ -90,11 +97,17 @@ def resolve_session_fields(keystore: Keystore, key: str, locale: str) -> dict[st
     }
 
 
-def welcome_frame(fields: dict[str, str], *, imagegen: bool = False) -> dict[str, Any]:
+def welcome_frame(
+    fields: dict[str, str], *, imagegen: bool = False, demo: bool = False
+) -> dict[str, Any]:
     """Build the `welcome` frame from resolved session fields (shared by both transports)."""
     features = ["media", "audio"]
     if imagegen:
         features.append("imagegen")
+    if demo:
+        # Additive capability flag: clients that know it can offer a guided
+        # first-run adventure; older clients simply ignore the extra string.
+        features.append("demo")
     return {
         "type": "welcome",
         "protocol": _PROTOCOL_VERSION,
@@ -104,6 +117,51 @@ def welcome_frame(fields: dict[str, str], *, imagegen: bool = False) -> dict[str
         "locale": fields["locale"],
         "server": _SERVER_BANNER,
     }
+
+
+def uses_demo_llm(services: Services) -> bool:
+    """Whether turns currently route to the offline fallback Keeper.
+
+    ``MutableLLM.using_fallback`` changes immediately after a model hot-swap,
+    so a reconnect receives an accurate capability flag without coupling the
+    session layer to the concrete demo responder.
+    """
+    return bool(getattr(services.llm, "using_fallback", False))
+
+
+def is_guided_demo_action(text: str) -> bool:
+    """Whether ``text`` is the localized action emitted by the first-run button."""
+    action = text.strip()
+    return action in {
+        get_i18n("en").t("tui.demo.action"),
+        get_i18n("zh").t("tui.demo.action"),
+    }
+
+
+async def guided_demo_available(services: Services, chat_key: str) -> bool:
+    """Offer the destructive sample setup only to a genuinely empty room.
+
+    The check includes KV campaign state, vector documents, and indexed media.
+    Any inspection failure fails closed. The room turn lock rechecks this immediately
+    before the guided turn, so a stale welcome frame cannot overwrite a live campaign.
+    """
+    if not uses_demo_llm(services) or not services.settings.enable_vector_db:
+        return False
+    try:
+        if await room_rows(services, chat_key) or await room_vector_points(services, chat_key):
+            return False
+        tui = services.settings.tui
+        media = MediaStore(
+            services.store,
+            services.settings.data_dir,
+            max_file_bytes=max(tui.media_max_file_bytes, tui.audio_max_file_bytes),
+            room_quota_bytes=max(tui.media_room_quota_bytes, tui.audio_room_quota_bytes),
+            allowed_mimes=ALLOWED_MEDIA_MIMES,
+        )
+        return not await media.list_room_records(chat_key)
+    except Exception:
+        logger.warning("demo: could not verify empty room %s; hiding guided setup", chat_key, exc_info=True)
+        return False
 
 
 def render_frame(event: Event) -> dict[str, Any] | None:
@@ -212,6 +270,10 @@ class SessionCore:
             allowed_mimes=ALLOWED_MEDIA_MIMES,
         )
         self._pending_media: dict[str, PendingUpload] = {}
+        # Admin mutations are serialized globally, and each request also shares the
+        # room turn lock below. This prevents config lost-updates across keepers and
+        # export/import/delete racing a live turn that could recreate wiped state.
+        self._admin_lock = services.config_lock
         # Recent AI-KP turns, for introspection (tests/admin asserting a keeper tool ran) — never wired.
         self.turns: deque[KPTurnResult] = deque(maxlen=50)
         self.join_timeout = tui_settings.join_timeout if join_timeout is None else join_timeout
@@ -273,28 +335,108 @@ class SessionCore:
             if kind == "ping":
                 await member.send_frame({"type": "pong", "t": frame.get("t")})
                 return
+            if not self._refresh_member_authorization(member):
+                await member.send_frame(error_frame("forbidden", i18n))
+                return
             if kind == "media_offer":
-                await self._handle_media_offer(member, frame)
+                async with self.hub.turn_lock(member.session_key):
+                    if not self._refresh_member_authorization(member):
+                        await member.send_frame(error_frame("forbidden", i18n))
+                        return
+                    await self._handle_media_offer(member, frame)
                 return
             if kind == "media_set_enabled":
-                await self._handle_media_set_enabled(member, frame)
+                async with self.hub.turn_lock(member.session_key):
+                    if not self._refresh_member_authorization(member):
+                        await member.send_frame(error_frame("forbidden", i18n))
+                        return
+                    await self._handle_media_set_enabled(member, frame)
                 return
             if kind == "avatar_set":
-                await self._handle_avatar_set(member, frame)
+                async with self.hub.turn_lock(member.session_key):
+                    if not self._refresh_member_authorization(member):
+                        await member.send_frame(error_frame("forbidden", i18n))
+                        return
+                    await self._handle_avatar_set(member, frame)
                 return
             if is_admin_frame(kind):
                 # Keeper-gated admin surface. The gate is the connection's keystore role;
                 # `handle_admin_frame` refuses non-keepers and scopes destructive ops to its OWN room.
-                reply = await handle_admin_frame(
-                    self.services, self.keystore, member.role, member.room, frame, i18n, fs=self.fs
-                )
+                # Lock order is room -> deployment config everywhere. A chat `.model`
+                # command already holds this same room lock before taking config_lock;
+                # reversing the order here would deadlock a simultaneous panel save.
+                async with self.hub.turn_lock(member.session_key):
+                    async with self._admin_lock:
+                        # The request may have waited behind a room turn and then a deployment-wide
+                        # config mutation. Re-authorize after the final lock is held so an
+                        # operations-side revoke/downgrade during that wait cannot use cached power.
+                        if not self._refresh_member_authorization(member):
+                            await member.send_frame(error_frame("forbidden", i18n))
+                            return
+                        if kind in {"admin_import_room", "admin_delete_room_data"}:
+                            self._drop_pending_room(member.session_key)
+                        reply = await handle_admin_frame(
+                            self.services,
+                            self.keystore,
+                            member.role,
+                            member.room,
+                            frame,
+                            i18n,
+                            fs=self.fs,
+                        )
                 await member.send_frame(reply)
+                if kind == "admin_set_model" and reply.get("type") == "admin_config":
+                    await self._broadcast_admin_config(reply, exclude=member)
                 return
         except Exception:
             await member.send_frame(error_frame("server_error", i18n))
             return
 
         await member.send_frame(error_frame("bad_frame", i18n))
+
+    def _refresh_member_authorization(self, member: Any) -> bool:
+        """Refresh a live connection's current room/role binding, failing closed."""
+        try:
+            entry = self.keystore.authorize_member(member.id, room=member.room)
+        except Exception:
+            logger.warning(
+                "auth: could not refresh member %s",
+                getattr(member, "id", "unknown"),
+                exc_info=True,
+            )
+            return False
+        if entry is None:
+            return False
+        member.role = entry.role
+        if entry.name:
+            member.name = entry.name
+        return True
+
+    async def _broadcast_admin_config(self, frame: dict[str, Any], *, exclude: Any) -> None:
+        """Best-effort refresh every connected Keeper after a deployment-wide model switch."""
+        seen: set[int] = set()
+        for members in list(self.hub.rooms.values()):
+            for peer in list(members):
+                marker = id(peer)
+                if peer is exclude or marker in seen:
+                    continue
+                seen.add(marker)
+                # A long-lived connection's cached role can be stale after an operations-side
+                # downgrade/revocation. Re-authorize before sending deployment details such as
+                # provider/base URL and saved-provider names.
+                if not self._refresh_member_authorization(peer) or getattr(peer, "role", "") != "keeper":
+                    continue
+                send_frame = getattr(peer, "send_frame", None)
+                if send_frame is None:
+                    continue
+                try:
+                    await send_frame(frame)
+                except Exception:
+                    logger.warning(
+                        "admin: could not refresh config for member %s",
+                        getattr(peer, "id", "unknown"),
+                        exc_info=True,
+                    )
 
     async def _handle_media_offer(self, member: Any, frame: dict[str, Any]) -> None:
         i18n = get_i18n(member.locale)
@@ -414,25 +556,48 @@ class SessionCore:
         for upload_id in stale:
             self._pending_media.pop(upload_id, None)
 
+    def _drop_pending_room(self, session_key: str) -> None:
+        """Invalidate every uncommitted offer before replacing/deleting room state."""
+        stale = [
+            upload_id
+            for upload_id, pending in self._pending_media.items()
+            if pending.room == session_key
+        ]
+        for upload_id in stale:
+            self._pending_media.pop(upload_id, None)
+
     async def receive_media_put(self, member: Any, upload_id: str, data: bytes) -> dict[str, Any]:
         i18n = get_i18n(member.locale)
-        pending = self._pending_media.pop(upload_id, None)
-        if pending is None or pending.room != member.session_key or pending.uploader != member.id:
-            raise MediaError("media_bad_upload")
-        try:
-            record = await self.media_store.commit_bytes(pending, data)
-        except MediaError:
-            raise
-        except Exception as exc:
-            raise MediaError("server_error") from exc
-        if is_audio_mime(record.mime):
-            await self._publish_audio_item(member, record)
-            return {"type": "media_put_ok", "hash": record.hash, "message": i18n.t("tui.media.uploaded", name=record.name)}
-        media_frame = self._media_frame(record, member)
-        await self._publish_media(member, media_frame)
-        return {"type": "media_put_ok", "hash": record.hash, "message": i18n.t("tui.media.uploaded", name=record.name)}
+        async with self.hub.turn_lock(member.session_key):
+            if not self._refresh_member_authorization(member):
+                raise MediaError("forbidden")
+            pending = self._pending_media.pop(upload_id, None)
+            if pending is None or pending.room != member.session_key or pending.uploader != member.id:
+                raise MediaError("media_bad_upload")
+            try:
+                record = await self.media_store.commit_bytes(pending, data)
+            except MediaError:
+                raise
+            except Exception as exc:
+                raise MediaError("server_error") from exc
+            if is_audio_mime(record.mime):
+                await self._publish_audio_item(member, record)
+                return {
+                    "type": "media_put_ok",
+                    "hash": record.hash,
+                    "message": i18n.t("tui.media.uploaded", name=record.name),
+                }
+            media_frame = self._media_frame(record, member)
+            await self._publish_media(member, media_frame)
+            return {
+                "type": "media_put_ok",
+                "hash": record.hash,
+                "message": i18n.t("tui.media.uploaded", name=record.name),
+            }
 
     async def get_media_bytes(self, member: Any, sha256: str) -> tuple[dict[str, Any], bytes]:
+        if not self._refresh_member_authorization(member):
+            raise MediaError("forbidden")
         record, data = await self.media_store.read_bytes(member.session_key, sha256)
         header = {
             "op": "get",
@@ -467,16 +632,39 @@ class SessionCore:
         itself and its room fan-out are `run_turn`'s job.
         """
         i18n = get_i18n(member.locale)
+        if not self._refresh_member_authorization(member):
+            await member.send_frame(error_frame("forbidden", i18n))
+            return
         if not self.rate_limiter.allow(member.id) or not self.rate_limiter.allow(member.session_key):
             await member.send_frame(error_frame("rate_limited", i18n))
             return
 
-        ctx = self._ctx_for(member)
         try:
             # Serialize the WHOLE turn per room (F8): two connections in the same room must not
             # interleave their read-modify-write of the shared per-room state. `run_turn` publishes
             # a companion sub-turn inline (re-entering `run_turn`, not this choke), so no re-lock.
             async with self.hub.turn_lock(member.session_key):
+                # A queued turn must not retain authority from before it waited. This also
+                # refreshes `member.role` before `_ctx_for` copies it into command privileges.
+                if not self._refresh_member_authorization(member):
+                    await member.send_frame(error_frame("forbidden", i18n))
+                    return
+                ctx = self._ctx_for(member)
+                # The fallback responder retains a legacy natural-language "upload module"
+                # trigger used by CLI self-play. Guard that path too: otherwise a player could
+                # bypass the first-run button check and replace a populated room. Real commands
+                # such as `.module list` resolve before this fallback-only legacy guard.
+                guarded_demo_setup = is_guided_demo_action(text) or (
+                    uses_demo_llm(self.services)
+                    and self.command_router.resolve(text, member.locale) is None
+                    and is_demo_setup_request(text)
+                )
+                if guarded_demo_setup and (
+                    getattr(member, "role", "") != "keeper"
+                    or not await guided_demo_available(self.services, member.session_key)
+                ):
+                    await member.send_frame(error_frame("demo_unavailable", i18n))
+                    return
                 result = await run_turn(
                     self.hub,
                     self.services,

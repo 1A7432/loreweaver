@@ -295,7 +295,9 @@ describe("WsClient", () => {
 
     client.adminSetModel("deepseek", "deepseek-chat", "sk-live", "https://api.deepseek.com/v1")
     client.adminSetModel("openai", undefined, "sk-openai")
+    client.adminSetModel("openai", undefined, "", "")
     client.adminListModels("deepseek", "sk-live")
+    client.adminListModels("openai", "", "")
     client.adminListModels()
 
     expect(sockets[0].sent.map((raw) => JSON.parse(raw))).toEqual([
@@ -307,7 +309,9 @@ describe("WsClient", () => {
         base_url: "https://api.deepseek.com/v1",
       },
       { type: FrameType.AdminSetModel, provider: "openai", api_key: "sk-openai" },
+      { type: FrameType.AdminSetModel, provider: "openai", api_key: "", base_url: "" },
       { type: FrameType.AdminListModels, provider: "deepseek", api_key: "sk-live" },
+      { type: FrameType.AdminListModels, provider: "openai", api_key: "", base_url: "" },
       { type: FrameType.AdminListModels },
     ])
   })
@@ -342,6 +346,7 @@ describe("WsClient", () => {
       keys: 1,
       store_rows: 2,
       vector_points: 3,
+      media_files: 4,
     })
     sockets[0].serverSend({ type: FrameType.AdminError, code: "forbidden" })
 

@@ -17,13 +17,21 @@
 // mainstream Linux — bsdtar handles the Windows .zip release asset too) and, on POSIX, `sh`.
 
 import { existsSync } from "node:fs"
-import { chmod, mkdir, rename, rm } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, rename, rm } from "node:fs/promises"
+import { createHash, randomUUID } from "node:crypto"
 import { delimiter, dirname, join } from "node:path"
 import { defaultUserHome, resolveLocalServerPaths, type LocalServerPaths } from "./localPaths"
 
 const REPO = "https://github.com/1A7432/loreweaver"
 const READY_TIMEOUT_MS = 60_000 // Iroh waits for a relay handshake, so allow longer than a local socket
 const TICKET_RE = /(endpoint[a-z0-9]{20,})/ // the base32 ticket, printed once the endpoint is online (locale-independent)
+
+export class IntegrityError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "IntegrityError"
+  }
+}
 
 export interface HostLocalOptions {
   localServerHome?: string
@@ -48,8 +56,26 @@ function serverEnv(paths: LocalServerPaths): Record<string, string> {
 
 // The packaged server archive's top-level folder + executable name (see scripts/package_server.py).
 const BINARY_EXE_NAME = process.platform === "win32" ? "loreweaver-server.exe" : "loreweaver-server"
+const BINARY_INTEGRITY_MANIFEST = ".loreweaver-integrity.json"
+const BINARY_INTEGRITY_VERSION = 1
+const SOURCE_CACHE_MANIFEST = ".loreweaver-source.json"
+const SOURCE_CACHE_VERSION = 1
+
 function binaryExePath(dir: string): string {
   return join(dir, "loreweaver-server", BINARY_EXE_NAME)
+}
+
+interface BinaryIntegrityManifest {
+  version: typeof BINARY_INTEGRITY_VERSION
+  asset: string
+  source_url: string
+  archive_sha256: string
+  executable_sha256: string
+}
+
+interface SourceCacheManifest {
+  version: typeof SOURCE_CACHE_VERSION
+  source_url: string
 }
 
 // Maps this machine's (platform, arch) to a released server asset name, or undefined when no
@@ -75,13 +101,249 @@ export function assetNameFor(platform: string, arch: string): string | undefined
 // sources can be added later without touching the caller's loop.
 export function binaryUrlsFor(asset: string): string[] {
   const tag = process.env.TRPG_SERVER_RELEASE_TAG?.trim() || process.env.TRPG_RELEASE_TAG?.trim() || "latest"
+  if (tag === "latest") return [`${REPO}/releases/latest/download/${asset}`]
   return [`${REPO}/releases/download/${encodeURIComponent(tag)}/${asset}`]
 }
 
-function sourceTarballUrl(): string {
-  const tag = process.env.TRPG_SERVER_RELEASE_TAG?.trim() || process.env.TRPG_RELEASE_TAG?.trim()
-  if (tag && tag !== "latest") return `${REPO}/archive/refs/tags/${encodeURIComponent(tag)}.tar.gz`
+export function parseSha256Sidecar(text: string, asset: string): string | undefined {
+  const [digest = "", filename = ""] = text.trim().split(/\s+/, 2)
+  if (!/^[0-9a-f]{64}$/i.test(digest)) return undefined
+  if (filename && filename.replace(/^\*/, "") !== asset) return undefined
+  return digest.toLowerCase()
+}
+
+// `tar` implementations differ in how aggressively they protect the extraction
+// destination. Reject dangerous names ourselves before any archive is unpacked,
+// treating backslashes as separators as Windows' bsdtar does.
+export function isSafeArchiveEntry(rawEntry: string): boolean {
+  if (!rawEntry || /[\u0000-\u001f\u007f]/.test(rawEntry)) return false
+  let entry = rawEntry.replaceAll("\\", "/")
+  while (entry.startsWith("./")) entry = entry.slice(2)
+  if (!entry || entry.startsWith("/") || entry.startsWith("//") || /^[A-Za-z]:/.test(entry)) return false
+  return !entry.split("/").some((part) => part === "..")
+}
+
+export function isSafeArchiveTypeLine(line: string): boolean {
+  return line.startsWith("-") || line.startsWith("d")
+}
+
+async function inspectArchive(archive: string, verbose: boolean, signal?: AbortSignal) {
+  const proc = Bun.spawn(["tar", verbose ? "-tvf" : "-tf", archive], {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: process.env as Record<string, string>,
+  })
+  const onAbort = () => {
+    try {
+      proc.kill()
+    } catch {
+      // already gone
+    }
+  }
+  signal?.addEventListener("abort", onAbort, { once: true })
+  try {
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ])
+    return { stdout, stderr, code }
+  } finally {
+    signal?.removeEventListener("abort", onAbort)
+  }
+}
+
+async function validateArchiveEntries(
+  archive: string,
+  onLog: OnLog,
+  signal?: AbortSignal,
+  integrityFailure = false,
+  requiredRoot?: string,
+): Promise<void> {
+  onLog(`$ tar -tf ${archive}`, "step")
+  const fail = (message: string): never => {
+    throw integrityFailure ? new IntegrityError(message) : new Error(message)
+  }
+  const listing = await inspectArchive(archive, false, signal)
+  for (const line of listing.stderr.split(/\r?\n/)) {
+    if (line) onLog(clean(line), "err")
+  }
+  if (signal?.aborted) throw new Error("cancelled")
+  if (listing.code !== 0) fail("could not inspect the downloaded archive")
+  const entries = listing.stdout.split(/\r?\n/).filter(Boolean)
+  if (entries.length === 0) fail("downloaded archive is empty")
+  for (const entry of entries) {
+    if (!isSafeArchiveEntry(entry)) fail(`unsafe archive entry: ${JSON.stringify(entry)}`)
+    if (requiredRoot) {
+      const normalized = entry.replaceAll("\\", "/").replace(/^(?:\.\/)+/, "").replace(/\/$/, "")
+      if (normalized !== requiredRoot && !normalized.startsWith(`${requiredRoot}/`)) {
+        fail(`archive entry is outside ${requiredRoot}/: ${JSON.stringify(entry)}`)
+      }
+    }
+  }
+
+  // A relative child can still escape when an earlier member creates a symlink
+  // or hardlink. Release/source archives are deliberately restricted to regular
+  // files and directories, so reject every other tar/zip member type up front.
+  onLog(`$ tar -tvf ${archive}`, "step")
+  const verbose = await inspectArchive(archive, true, signal)
+  for (const line of verbose.stderr.split(/\r?\n/)) {
+      if (line) onLog(clean(line), "err")
+  }
+  if (signal?.aborted) throw new Error("cancelled")
+  if (verbose.code !== 0) fail("could not inspect downloaded archive member types")
+  const typeLines = verbose.stdout.split(/\r?\n/).filter(Boolean)
+  if (typeLines.length === 0 || typeLines.some((line) => !isSafeArchiveTypeLine(line))) {
+    fail("downloaded archive contains a link or special entry")
+  }
+}
+
+// Commit a fully prepared directory without deleting the working copy first.
+// If the final rename fails, the previous directory is restored before the
+// error is surfaced to the UI.
+export async function replaceDirectory(staging: string, target: string): Promise<void> {
+  const backup = `${target}.backup-${randomUUID()}`
+  const hadTarget = existsSync(target)
+  if (hadTarget) await rename(target, backup)
+  try {
+    await rename(staging, target)
+  } catch (error) {
+    if (hadTarget) {
+      try {
+        await rename(backup, target)
+      } catch (restoreError) {
+        const detail = restoreError instanceof Error ? restoreError.message : String(restoreError)
+        throw new Error(`install failed and restoring the previous directory also failed (${detail})`, { cause: error })
+      }
+    }
+    throw error
+  }
+  if (hadTarget) await rm(backup, { recursive: true, force: true })
+}
+
+async function sha256File(path: string): Promise<string> {
+  const bytes = await Bun.file(path).arrayBuffer()
+  return createHash("sha256").update(new Uint8Array(bytes)).digest("hex")
+}
+
+type FetchResponse = (url: string, init?: RequestInit) => Promise<Response>
+
+// Once an archive response has been accepted, absence of its checksum is an integrity failure,
+// not an ordinary mirror outage: silently switching to an unchecked source tarball would undo
+// the release verification this path promises.
+export async function fetchReleaseSha256(
+  archiveUrl: string,
+  asset: string,
+  signal?: AbortSignal,
+  fetchResponse: FetchResponse = fetch,
+): Promise<string> {
+  const checksumUrl = `${archiveUrl}.sha256`
+  try {
+    const response = await fetchResponse(checksumUrl, { signal })
+    if (!response.ok) {
+      throw new IntegrityError(`HTTP ${response.status} fetching SHA-256 metadata from ${checksumUrl}`)
+    }
+    const checksum = parseSha256Sidecar(await response.text(), asset)
+    if (!checksum) throw new IntegrityError(`invalid SHA-256 metadata from ${checksumUrl}`)
+    return checksum
+  } catch (error) {
+    if (signal?.aborted) throw error instanceof Error ? error : new Error("cancelled")
+    if (error instanceof IntegrityError) throw error
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new IntegrityError(`could not fetch SHA-256 metadata from ${checksumUrl} (${detail})`)
+  }
+}
+
+function isBinaryIntegrityManifest(value: unknown): value is BinaryIntegrityManifest {
+  if (!value || typeof value !== "object") return false
+  const manifest = value as Record<string, unknown>
+  return (
+    manifest.version === BINARY_INTEGRITY_VERSION &&
+    typeof manifest.asset === "string" &&
+    typeof manifest.source_url === "string" &&
+    typeof manifest.archive_sha256 === "string" &&
+    /^[0-9a-f]{64}$/.test(manifest.archive_sha256) &&
+    typeof manifest.executable_sha256 === "string" &&
+    /^[0-9a-f]{64}$/.test(manifest.executable_sha256)
+  )
+}
+
+// The manifest is written into the staging directory only after the release archive itself has
+// matched its published sidecar. Renaming that directory therefore commits the executable and
+// its trust record atomically; a half-extracted cache never gains a valid manifest.
+export async function writeBinaryIntegrityManifest(
+  binaryDir: string,
+  asset: string,
+  sourceUrl: string,
+  archiveSha256: string,
+): Promise<void> {
+  if (!/^[0-9a-f]{64}$/.test(archiveSha256)) throw new IntegrityError("invalid verified archive SHA-256")
+  const executableSha256 = await sha256File(binaryExePath(binaryDir))
+  const manifest: BinaryIntegrityManifest = {
+    version: BINARY_INTEGRITY_VERSION,
+    asset,
+    source_url: sourceUrl,
+    archive_sha256: archiveSha256,
+    executable_sha256: executableSha256,
+  }
+  await Bun.write(join(binaryDir, BINARY_INTEGRITY_MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`)
+}
+
+// Never execute a cache on existence alone. Besides detecting changed bytes, binding the manifest
+// to the currently selected release URL means an explicit release-tag pin cannot accidentally
+// reuse a binary cached from another channel. Legacy caches have no manifest and are ignored.
+export async function verifiedCachedBinary(
+  binaryDir: string,
+  asset: string,
+  allowedSourceUrls: string[] = binaryUrlsFor(asset),
+): Promise<string | undefined> {
+  const exe = binaryExePath(binaryDir)
+  if (!existsSync(exe)) return undefined
+  try {
+    const value: unknown = JSON.parse(await Bun.file(join(binaryDir, BINARY_INTEGRITY_MANIFEST)).text())
+    if (!isBinaryIntegrityManifest(value)) return undefined
+    if (value.asset !== asset || !allowedSourceUrls.includes(value.source_url)) return undefined
+    return (await sha256File(exe)) === value.executable_sha256 ? exe : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function selectedSourceTag(): string {
+  return process.env.TRPG_SERVER_RELEASE_TAG?.trim() || process.env.TRPG_RELEASE_TAG?.trim() || "latest"
+}
+
+export function sourceTarballUrl(): string {
+  const tag = selectedSourceTag()
+  if (tag !== "latest") return `${REPO}/archive/refs/tags/${encodeURIComponent(tag)}.tar.gz`
   return `${REPO}/archive/refs/heads/main.tar.gz`
+}
+
+export function sourceGitCloneArgs(destination: string): string[] {
+  const tag = selectedSourceTag()
+  const ref = tag === "latest" ? "main" : tag
+  return ["git", "clone", "--depth", "1", "--branch", ref, "--single-branch", REPO, destination]
+}
+
+export async function writeSourceCacheManifest(serverDir: string, sourceUrl: string = sourceTarballUrl()): Promise<void> {
+  const manifest: SourceCacheManifest = { version: SOURCE_CACHE_VERSION, source_url: sourceUrl }
+  await Bun.write(join(serverDir, SOURCE_CACHE_MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`)
+}
+
+export async function verifiedCachedSource(
+  serverDir: string,
+  expectedSourceUrl: string = sourceTarballUrl(),
+): Promise<string | undefined> {
+  if (!existsSync(join(serverDir, "app.py"))) return undefined
+  try {
+    const value: unknown = JSON.parse(await Bun.file(join(serverDir, SOURCE_CACHE_MANIFEST)).text())
+    if (!value || typeof value !== "object") return undefined
+    const manifest = value as Record<string, unknown>
+    if (manifest.version !== SOURCE_CACHE_VERSION || manifest.source_url !== expectedSourceUrl) return undefined
+    return serverDir
+  } catch {
+    return undefined
+  }
 }
 
 export type LogKind = "step" | "out" | "err" | "ok" | "fail"
@@ -158,22 +420,28 @@ async function run(cmd: string[], cwd: string | undefined, onLog: OnLog, signal?
 // half-finished download can never masquerade as a working server dir on the next run.
 async function fetchServerSource(ctx: HostLocalContext, onLog: OnLog, signal?: AbortSignal): Promise<string> {
   onLog("Downloading the server source (a few MB — no git needed)…", "step")
-  const response = await fetch(sourceTarballUrl(), { signal })
+  const sourceUrl = sourceTarballUrl()
+  const response = await fetch(sourceUrl, { signal })
   if (!response.ok) throw new Error(`download failed: HTTP ${response.status}`)
-  const tarball = ctx.paths.sourceArchive
-  const staging = `${ctx.paths.serverDir}.staging`
-  await mkdir(dirname(tarball), { recursive: true })
-  await Bun.write(tarball, response)
-  await rm(staging, { recursive: true, force: true })
-  await mkdir(staging, { recursive: true })
-  // --strip-components=1 drops the `loreweaver-main/` wrapper folder GitHub puts in the tarball.
-  if ((await run(["tar", "-xzf", tarball, "-C", staging, "--strip-components=1"], undefined, onLog, signal)) !== 0) {
-    throw new Error("extracting the server source failed")
+  await mkdir(dirname(ctx.paths.sourceArchive), { recursive: true })
+  await mkdir(dirname(ctx.paths.serverDir), { recursive: true })
+  const tarball = `${ctx.paths.sourceArchive}.${randomUUID()}`
+  const staging = await mkdtemp(`${ctx.paths.serverDir}.staging-`)
+  try {
+    await Bun.write(tarball, response)
+    await validateArchiveEntries(tarball, onLog, signal)
+    // --strip-components=1 drops the `loreweaver-main/` wrapper folder GitHub puts in the tarball.
+    if ((await run(["tar", "-xzf", tarball, "-C", staging, "--strip-components=1"], undefined, onLog, signal)) !== 0) {
+      throw new Error("extracting the server source failed")
+    }
+    if (!existsSync(join(staging, "app.py"))) throw new Error("downloaded server source has an unexpected layout")
+    await writeSourceCacheManifest(staging, sourceUrl)
+    await replaceDirectory(staging, ctx.paths.serverDir)
+    return ctx.paths.serverDir
+  } finally {
+    await rm(tarball, { force: true })
+    await rm(staging, { recursive: true, force: true })
   }
-  await rm(tarball, { force: true })
-  await rm(ctx.paths.serverDir, { recursive: true, force: true })
-  await rename(staging, ctx.paths.serverDir)
-  return ctx.paths.serverDir
 }
 
 // Download a prebuilt server binary for this OS/arch (see the pinned contract in
@@ -188,45 +456,67 @@ async function fetchServerBinary(ctx: HostLocalContext, onLog: OnLog, signal?: A
   }
   onLog(`Downloading the prebuilt server (${asset})…`, "step")
   let response: Response | undefined
+  let expectedSha256 = ""
+  let sourceUrl = ""
   let lastError = "no mirrors reachable"
   for (const url of binaryUrlsFor(asset)) {
     try {
       const candidate = await fetch(url, { signal })
       if (candidate.ok) {
+        try {
+          expectedSha256 = await fetchReleaseSha256(url, asset, signal)
+        } catch (error) {
+          try {
+            await candidate.body?.cancel()
+          } catch {
+            // The integrity error is authoritative; a failed best-effort body cancellation must
+            // not replace it with an unrelated stream error.
+          }
+          throw error
+        }
         response = candidate
+        sourceUrl = url
         break
       }
       lastError = `HTTP ${candidate.status} from ${url}`
     } catch (error) {
       if (signal?.aborted) throw error instanceof Error ? error : new Error("cancelled")
+      if (error instanceof IntegrityError) throw error
       lastError = error instanceof Error ? error.message : String(error)
     }
   }
   if (!response) throw new Error(`binary download failed (${lastError})`)
 
-  const archive = join(ctx.paths.home, asset)
-  const staging = `${ctx.paths.binaryDir}.staging`
-  await mkdir(dirname(archive), { recursive: true })
-  await Bun.write(archive, response)
-  await rm(staging, { recursive: true, force: true })
-  await mkdir(staging, { recursive: true })
-  // No --strip-components here: unlike the source tarball, the release asset's top-level
-  // `loreweaver-server/` folder IS the layout we want under the binary cache dir.
-  if ((await run(["tar", "-xf", archive, "-C", staging], undefined, onLog, signal)) !== 0) {
-    throw new Error("extracting the server binary failed")
-  }
-  await rm(archive, { force: true })
-  await rm(ctx.paths.binaryDir, { recursive: true, force: true })
-  await rename(staging, ctx.paths.binaryDir)
-  const exe = binaryExePath(ctx.paths.binaryDir)
-  if (process.platform !== "win32") {
-    try {
-      await chmod(exe, 0o755)
-    } catch {
-      // best-effort — if this fails the spawn below will fail loudly anyway
+  await mkdir(ctx.paths.home, { recursive: true })
+  await mkdir(dirname(ctx.paths.binaryDir), { recursive: true })
+  const archive = join(ctx.paths.home, `${asset}.${randomUUID()}`)
+  const staging = await mkdtemp(`${ctx.paths.binaryDir}.staging-`)
+  try {
+    await Bun.write(archive, response)
+    const actualSha256 = await sha256File(archive)
+    if (actualSha256 !== expectedSha256) throw new IntegrityError(`binary SHA-256 mismatch for ${asset}`)
+    await validateArchiveEntries(archive, onLog, signal, true, "loreweaver-server")
+    // No --strip-components here: unlike the source tarball, the release asset's top-level
+    // `loreweaver-server/` folder IS the layout we want under the binary cache dir.
+    if ((await run(["tar", "-xf", archive, "-C", staging], undefined, onLog, signal)) !== 0) {
+      throw new IntegrityError("extracting the verified server binary failed")
     }
+    const stagedExe = binaryExePath(staging)
+    if (!existsSync(stagedExe)) throw new IntegrityError("verified server archive has an unexpected layout")
+    if (process.platform !== "win32") {
+      try {
+        await chmod(stagedExe, 0o755)
+      } catch {
+        // best-effort — if this fails the spawn below will fail loudly anyway
+      }
+    }
+    await writeBinaryIntegrityManifest(staging, asset, sourceUrl, actualSha256)
+    await replaceDirectory(staging, ctx.paths.binaryDir)
+    return binaryExePath(ctx.paths.binaryDir)
+  } finally {
+    await rm(archive, { force: true })
+    await rm(staging, { recursive: true, force: true })
   }
-  return exe
 }
 
 async function ensureServerDir(ctx: HostLocalContext, onLog: OnLog, signal?: AbortSignal): Promise<string> {
@@ -235,9 +525,13 @@ async function ensureServerDir(ctx: HostLocalContext, onLog: OnLog, signal?: Abo
     onLog(`Found a checkout at ${checkout}`, "ok")
     return checkout
   }
+  const cachedSource = await verifiedCachedSource(ctx.paths.serverDir)
+  if (cachedSource) {
+    onLog(`Using the server fetched earlier at ${cachedSource}`, "ok")
+    return cachedSource
+  }
   if (existsSync(join(ctx.paths.serverDir, "app.py"))) {
-    onLog(`Using the server fetched earlier at ${ctx.paths.serverDir}`, "ok")
-    return ctx.paths.serverDir
+    onLog("Ignoring a source cache from another release tag or without a manifest", "err")
   }
   onLog("No server on this machine — fetching the code…", "step")
   // Tarball FIRST: it works on a fresh machine with no git, and macOS's git shim would pop a
@@ -252,10 +546,19 @@ async function ensureServerDir(ctx: HostLocalContext, onLog: OnLog, signal?: Abo
     if (!Bun.which("git")) {
       throw new Error("could not download the server source (and git isn't installed as a fallback) — check your network and retry")
     }
-    if ((await run(["git", "clone", "--depth", "1", REPO, ctx.paths.serverDir], undefined, onLog, signal)) !== 0) {
-      throw new Error("git clone failed — check your network (GitHub reachable?)")
+    await mkdir(dirname(ctx.paths.serverDir), { recursive: true })
+    const stagingRoot = await mkdtemp(`${ctx.paths.serverDir}.git-staging-`)
+    const checkoutDir = join(stagingRoot, "checkout")
+    try {
+      if ((await run(sourceGitCloneArgs(checkoutDir), undefined, onLog, signal)) !== 0) {
+        throw new Error("git clone failed — check your network (GitHub reachable?)")
+      }
+      await writeSourceCacheManifest(checkoutDir)
+      await replaceDirectory(checkoutDir, ctx.paths.serverDir)
+      return ctx.paths.serverDir
+    } finally {
+      await rm(stagingRoot, { recursive: true, force: true })
     }
-    return ctx.paths.serverDir
   }
 }
 
@@ -273,12 +576,21 @@ async function resolveServer(ctx: HostLocalContext, onLog: OnLog, signal?: Abort
   }
   const existingExe = binaryExePath(ctx.paths.binaryDir)
   if (existsSync(existingExe)) {
-    onLog(`Using the prebuilt server fetched earlier at ${existingExe}`, "ok")
-    return { kind: "binary", exe: existingExe }
+    const asset = assetNameFor(process.platform, process.arch)
+    const verifiedExe = asset ? await verifiedCachedBinary(ctx.paths.binaryDir, asset) : undefined
+    if (verifiedExe) {
+      onLog(`Using the verified prebuilt server fetched earlier at ${verifiedExe}`, "ok")
+      return { kind: "binary", exe: verifiedExe }
+    }
+    onLog("Ignoring an unverified or changed prebuilt server cache", "err")
+  }
+  const cachedSource = await verifiedCachedSource(ctx.paths.serverDir)
+  if (cachedSource) {
+    onLog(`Using the server fetched earlier at ${cachedSource}`, "ok")
+    return { kind: "source", dir: cachedSource }
   }
   if (existsSync(join(ctx.paths.serverDir, "app.py"))) {
-    onLog(`Using the server fetched earlier at ${ctx.paths.serverDir}`, "ok")
-    return { kind: "source", dir: ctx.paths.serverDir }
+    onLog("Ignoring a source cache from another release tag or without a manifest", "err")
   }
   onLog("No server on this machine — fetching it…", "step")
   try {
@@ -289,6 +601,7 @@ async function resolveServer(ctx: HostLocalContext, onLog: OnLog, signal?: Abort
     }
   } catch (error) {
     if (signal?.aborted) throw error instanceof Error ? error : new Error("cancelled")
+    if (error instanceof IntegrityError) throw error
     const detail = error instanceof Error ? error.message : String(error)
     onLog(`Prebuilt binary download didn't work (${detail}) — falling back to source…`, "err")
   }
@@ -448,6 +761,17 @@ export async function bringUpServer(onLog: OnLog, signal?: AbortSignal, options:
   }
   bailIfAborted()
   const ctx = makeContext(options)
+  const homeAlreadyExists = existsSync(ctx.paths.home)
+  await mkdir(ctx.paths.home, { recursive: true, mode: 0o700 })
+  if (!homeAlreadyExists && process.platform !== "win32") {
+    try {
+      await chmod(ctx.paths.home, 0o700)
+    } catch {
+      // Best effort on filesystems that do not expose POSIX modes. Do not chmod
+      // an existing path: it may be a user-selected shared parent rather than a
+      // directory Loreweaver created and owns.
+    }
+  }
   onLog(`OS: ${process.platform} / ${process.arch}`, "step")
   const location = await resolveServer(ctx, onLog, signal)
   bailIfAborted()

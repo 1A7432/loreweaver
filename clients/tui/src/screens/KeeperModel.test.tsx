@@ -81,8 +81,8 @@ const KEEPER_WELCOME: WelcomeFrame = {
   server: "mock",
 }
 
-function renderApp(client: MockClient) {
-  return testRender(<App client={client} prefill={{}} />, { width: 110, height: 40 })
+function renderApp(client: MockClient, height = 40) {
+  return testRender(<App client={client} prefill={{}} />, { width: 110, height })
 }
 
 const CLICK_X = 6
@@ -107,6 +107,31 @@ async function enterKeeperModel(harness: Awaited<ReturnType<typeof renderApp>>) 
   expect(rowY).toBeGreaterThan(0)
   await act(async () => {
     await harness.mockMouse.click(CLICK_X, rowY)
+  })
+  await harness.flush()
+}
+
+async function clickRenderedText(
+  harness: Awaited<ReturnType<typeof renderApp>>,
+  label: string,
+  occurrence = 0,
+) {
+  const frame = await harness.waitForFrame((text) => text.includes(label))
+  const lines = frame.split("\n")
+  const matchingRows = lines
+    .map((line, index) => ({ index, x: line.indexOf(label) }))
+    .filter(({ x }) => x >= 0)
+  const target = matchingRows[occurrence]
+  expect(target).toBeDefined()
+  const prefix = lines[target.index].slice(0, target.x)
+  // Renderer mouse coordinates use terminal cells, while String#indexOf counts each CJK code
+  // point as one. Convert the prefix to its display width before clicking the inline action.
+  const terminalX = Array.from(prefix).reduce(
+    (width, char) => width + (/[⺀-꓏가-힣豈-﫿︐-﹯＀-￯]/u.test(char) ? 2 : 1),
+    0,
+  )
+  await act(async () => {
+    await harness.mockMouse.click(terminalX + 1, target.index)
   })
   await harness.flush()
 }
@@ -390,6 +415,214 @@ describe("KeeperModel", () => {
     // The seeded provider + model flow straight through; no key typed → api_key undefined.
     expect(client.setModelCalls).toContainEqual(["anthropic", "claude-x", undefined, undefined])
 
+    act(() => harness.renderer.destroy())
+  })
+
+  test("聊天凭据 touched:未改字段为 undefined,明确清除 key/Base URL 则预览和保存发送空字符串", async () => {
+    const client = new MockClient()
+    const harness = await renderApp(client)
+    await harness.flush()
+    act(() => client.push(KEEPER_WELCOME))
+    await enterKeeperModel(harness)
+
+    act(() =>
+      client.push({
+        ...CONFIG_FRAME,
+        base_url: "https://proxy.example/v1",
+      }),
+    )
+    await harness.flush()
+
+    // Hydrating the effective URL must not mark either credential field as edited.
+    await clickRenderedText(harness, "⚄ 保存模型")
+    expect(client.setModelCalls.at(-1)).toEqual(["anthropic", "claude-x", undefined, undefined])
+
+    // The key input is intentionally blank even when a saved key exists, so clearing it is an
+    // explicit action. Clearing the URL is likewise explicit; both clears flow into /models too.
+    await clickRenderedText(harness, "[清除已保存 key]")
+    expect(client.listModelsCalls.at(-1)).toEqual(["anthropic", "", undefined])
+    await clickRenderedText(harness, "[清除 Base URL]")
+    expect(client.listModelsCalls.at(-1)).toEqual(["anthropic", "", ""])
+
+    await clickRenderedText(harness, "⚄ 保存模型")
+    expect(client.setModelCalls.at(-1)).toEqual(["anthropic", "claude-x", "", ""])
+
+    act(() => harness.renderer.destroy())
+  })
+
+  test("聊天 Base URL 可编辑,模型预览与保存只携带实际 touched 字段", async () => {
+    const client = new MockClient()
+    const harness = await renderApp(client)
+    await harness.flush()
+    act(() => client.push(KEEPER_WELCOME))
+    await enterKeeperModel(harness)
+
+    act(() => client.push({ ...CONFIG_FRAME, base_url: "" }))
+    await harness.flush()
+    await harness.waitForFrame((text) => text.includes("聊天 Base URL"))
+
+    // provider -> API key -> Base URL
+    await act(async () => {
+      harness.mockInput.pressTab()
+      harness.mockInput.pressTab()
+    })
+    await harness.flush()
+    await act(async () => {
+      await harness.mockInput.typeText("https://chat.example/v1")
+      harness.mockInput.pressEnter()
+    })
+    await harness.flush()
+
+    expect(client.listModelsCalls.at(-1)).toEqual([
+      "anthropic",
+      undefined,
+      "https://chat.example/v1",
+    ])
+    await clickRenderedText(harness, "⚄ 保存模型")
+    expect(client.setModelCalls.at(-1)).toEqual([
+      "anthropic",
+      "claude-x",
+      undefined,
+      "https://chat.example/v1",
+    ])
+
+    act(() => harness.renderer.destroy())
+  })
+
+  test("图像凭据 touched:明确清除已保存 key/Base URL 时发送空字符串", async () => {
+    const client = new MockClient()
+    const harness = await renderApp(client, 80)
+    await harness.flush()
+    act(() => client.push(KEEPER_WELCOME))
+    await enterKeeperModel(harness)
+
+    act(() =>
+      client.push({
+        ...CONFIG_FRAME,
+        imagegen: {
+          provider: "openai",
+          base_url: "https://images.example/v1",
+          model: "gpt-image-1",
+          size: "1024x1024",
+          api_key_masked: "sk-...image",
+          has_key: true,
+          configured: true,
+          // A live environment/runtime key may be configured without a credential-book entry.
+          saved_providers: [],
+        },
+      }),
+    )
+    await harness.flush()
+
+    // The chat form owns the first matching clear controls; image generation owns the second.
+    await clickRenderedText(harness, "[清除 Base URL]", 1)
+    await clickRenderedText(harness, "[清除已保存 key]", 1)
+    await clickRenderedText(harness, "⚄ 保存图像生成")
+
+    expect(client.setImagegenCalls.at(-1)).toEqual([
+      "openai",
+      "gpt-image-1",
+      "",
+      "",
+      "1024x1024",
+    ])
+
+    act(() => harness.renderer.destroy())
+  })
+
+  test("OAuth 聊天模型保存不发送 API key 或 Base URL", async () => {
+    const client = new MockClient()
+    const harness = await renderApp(client)
+    await harness.flush()
+    act(() => client.push(KEEPER_WELCOME))
+    await enterKeeperModel(harness)
+
+    act(() =>
+      client.push({
+        type: FrameType.AdminConfig,
+        provider: "chatgpt",
+        chat_model: "gpt-5.4",
+        base_url: "",
+        api_key_masked: "sub:2026-07-09T12:00Z",
+        providers: ["chatgpt", "openai"],
+        saved_providers: ["chatgpt"],
+        override_active: true,
+        subscription_status: "logged_in",
+      }),
+    )
+    await harness.flush()
+
+    await clickRenderedText(harness, "⚄ 保存模型")
+    expect(client.setModelCalls.at(-1)).toEqual(["chatgpt", "gpt-5.4", undefined, undefined])
+
+    act(() => harness.renderer.destroy())
+  })
+
+  test("当前 ChatGPT OAuth 可直接填写 key/Base URL 切换到兼容代理", async () => {
+    const client = new MockClient()
+    const harness = await renderApp(client)
+    await harness.flush()
+    act(() => client.push(KEEPER_WELCOME))
+    await enterKeeperModel(harness)
+
+    act(() =>
+      client.push({
+        type: FrameType.AdminConfig,
+        provider: "chatgpt",
+        chat_model: "gpt-5.4",
+        base_url: "",
+        api_key_masked: "sub:2026-07-09T12:00Z",
+        providers: ["chatgpt", "openai"],
+        saved_providers: ["chatgpt"],
+        override_active: true,
+        subscription_status: "logged_in",
+      }),
+    )
+    await harness.flush()
+
+    const oauthForm = await harness.waitForFrame((text) => text.includes("配置兼容代理"))
+    expect(oauthForm).not.toContain("聊天 Base URL")
+
+    // provider -> explicit proxy-mode action -> proxy API key -> proxy Base URL
+    await act(async () => harness.mockInput.pressTab())
+    await harness.flush()
+    await act(async () => harness.mockInput.pressEnter())
+    await harness.flush()
+    const proxyForm = await harness.waitForFrame(
+      (text) => text.includes("API 密钥") && text.includes("聊天 Base URL"),
+    )
+    expect(proxyForm).not.toContain("配置兼容代理")
+    await act(async () => harness.mockInput.typeText("sk-chatgpt-proxy"))
+    await harness.flush()
+    await act(async () => harness.mockInput.pressTab())
+    await harness.flush()
+    await act(async () => harness.mockInput.typeText("https://proxy.example/v1"))
+    await harness.flush()
+
+    await clickRenderedText(harness, "⚄ 保存模型")
+    expect(client.setModelCalls.at(-1)).toEqual([
+      "chatgpt",
+      "gpt-5.4",
+      "sk-chatgpt-proxy",
+      "https://proxy.example/v1",
+    ])
+
+    act(() => harness.renderer.destroy())
+  })
+
+  test("当前环境变量 key 即使未进 saved_providers 也有显式清除入口", async () => {
+    const client = new MockClient()
+    const harness = await renderApp(client)
+    await harness.flush()
+    act(() => client.push(KEEPER_WELCOME))
+    await enterKeeperModel(harness)
+
+    act(() => client.push({ ...CONFIG_FRAME, saved_providers: [] }))
+    await harness.flush()
+    await clickRenderedText(harness, "[清除已保存 key]")
+    await clickRenderedText(harness, "⚄ 保存模型")
+
+    expect(client.setModelCalls.at(-1)).toEqual(["anthropic", "claude-x", "", undefined])
     act(() => harness.renderer.destroy())
   })
 

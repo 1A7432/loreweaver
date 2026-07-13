@@ -35,8 +35,31 @@ export interface KeeperModelProps {
   onBack: () => void
 }
 
-type Field = "provider" | "apiKey" | "model" | "custom" | "imageProvider" | "imageBaseUrl" | "imageModel" | "imageSize" | "imageApiKey"
-const FIELD_ORDER: Field[] = ["provider", "apiKey", "model", "custom", "imageProvider", "imageBaseUrl", "imageModel", "imageSize", "imageApiKey"]
+type Field =
+  | "provider"
+  | "proxyMode"
+  | "apiKey"
+  | "baseUrl"
+  | "model"
+  | "custom"
+  | "imageProvider"
+  | "imageBaseUrl"
+  | "imageModel"
+  | "imageSize"
+  | "imageApiKey"
+const FIELD_ORDER: Field[] = [
+  "provider",
+  "proxyMode",
+  "apiKey",
+  "baseUrl",
+  "model",
+  "custom",
+  "imageProvider",
+  "imageBaseUrl",
+  "imageModel",
+  "imageSize",
+  "imageApiKey",
+]
 
 /** ChatGPT aliases are dual-mode: explicit base_url = proxy; no base_url = subscription OAuth. */
 const CHATGPT_PROVIDER_ALIASES = new Set(["chatgpt", "gpt-subscription"])
@@ -81,6 +104,11 @@ function hasSavedProviderCredential(
   return saved.includes(provider)
 }
 
+/** Preserve the wire distinction between an untouched field and an explicit clear. */
+function touchedValue(touched: boolean, value: string): string | undefined {
+  return touched ? value.trim() : undefined
+}
+
 export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onBack }: KeeperModelProps) {
   const locale = welcome.locale
   const [config, setConfig] = useState<AdminConfigFrame>()
@@ -88,6 +116,10 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
 
   const [provider, setProvider] = useState("")
   const [apiKey, setApiKey] = useState("")
+  const [baseUrl, setBaseUrl] = useState("")
+  const [apiKeyClearPending, setApiKeyClearPending] = useState(false)
+  const [baseUrlClearPending, setBaseUrlClearPending] = useState(false)
+  const [proxyEditing, setProxyEditing] = useState(false)
   // Model has two inputs: a `<select>` populated from the provider's LIVE /models, and a free-text
   // fallback that wins if non-empty (for models the list doesn't surface, or offline providers).
   const [selectedModel, setSelectedModel] = useState("")
@@ -101,11 +133,21 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
   const [imageModel, setImageModel] = useState("")
   const [imageSize, setImageSize] = useState("1024x1024")
   const [imageApiKey, setImageApiKey] = useState("")
+  const [imageBaseUrlClearPending, setImageBaseUrlClearPending] = useState(false)
+  const [imageApiKeyClearPending, setImageApiKeyClearPending] = useState(false)
   const [focused, setFocused] = useState<Field>("provider")
 
   // Latest-value mirrors so submit reads what is on screen regardless of render timing.
   const providerRef = useRef(provider)
   const apiKeyRef = useRef(apiKey)
+  const baseUrlRef = useRef(baseUrl)
+  const apiKeyTouchedRef = useRef(false)
+  const baseUrlTouchedRef = useRef(false)
+  // OpenTUI's controlled input can emit onInput while React synchronizes a new `value` prop.
+  // Suppress that one matching emission so config hydration/provider reset is not mistaken for a
+  // user edit (which would otherwise resend effective URLs as explicit overrides).
+  const apiKeySyncRef = useRef<string | null>(null)
+  const baseUrlSyncRef = useRef<string | null>(null)
   const selectedModelRef = useRef(selectedModel)
   const customModelRef = useRef(customModel)
   const imageProviderRef = useRef(imageProvider)
@@ -113,42 +155,76 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
   const imageModelRef = useRef(imageModel)
   const imageSizeRef = useRef(imageSize)
   const imageApiKeyRef = useRef(imageApiKey)
+  const imageBaseUrlTouchedRef = useRef(false)
+  const imageApiKeyTouchedRef = useRef(false)
+  const imageBaseUrlSyncRef = useRef<string | null>(null)
+  const imageApiKeySyncRef = useRef<string | null>(null)
 
   const isKeeper = welcome.you.role === "keeper"
-  // Form selection is on the actual OAuth path (API key field is replaced by a login hint).
+  // Whether the live/current selection is on OAuth (used for status and credential labeling).
   const formIsSubscription = usesSubscriptionAuth(provider, config)
   const providerHasSavedCredential = hasSavedProviderCredential(savedProviders, provider, config)
+  const providerIsCurrent = normalizeProvider(config?.provider ?? "") === normalizeProvider(provider)
+  // `saved_providers` excludes environment-only credentials. The live masked key still needs an
+  // explicit clear affordance; conversely an OAuth grant must never be presented as a static key.
+  const providerHasSavedStaticCredential = Boolean(
+    !formIsSubscription &&
+      (providerHasSavedCredential || (providerIsCurrent && config?.api_key_masked)),
+  )
+  // SuperGrok has a fixed OAuth endpoint. ChatGPT aliases are dual-mode, so their static fields
+  // stay reachable even while the current live config uses OAuth; entering a URL opts into proxy.
+  const hideChatStaticFields = isSupergrokProvider(provider)
+  const offerProxyMode = formIsSubscription && !hideChatStaticFields && !proxyEditing
+  const showChatStaticFields = !hideChatStaticFields && (!formIsSubscription || proxyEditing)
   // Live config's OAuth status (only set by server for pure OAuth path).
   const liveSubscriptionStatus = config?.subscription_status || ""
-  const imageHasSavedKey = Boolean(imageProvider && imagegen?.saved_providers?.includes(imageProvider))
+  const imageHasSavedKey = Boolean(
+    imageProvider &&
+      (imagegen?.saved_providers?.some(
+        (saved) => normalizeProvider(saved) === normalizeProvider(imageProvider),
+      ) ||
+        (normalizeProvider(imagegen?.provider ?? "") === normalizeProvider(imageProvider) &&
+          imagegen?.has_key)),
+  )
   const imageIsSupergrok = isSupergrokProvider(imageProvider)
   const visibleFieldOrder = useMemo(
     () =>
       FIELD_ORDER.filter(
         (field) =>
-          !(formIsSubscription && field === "apiKey") &&
+          !(field === "proxyMode" && !offerProxyMode) &&
+          !(field === "apiKey" && !showChatStaticFields) &&
+          !(field === "baseUrl" && !showChatStaticFields) &&
           !(imageIsSupergrok && (field === "imageBaseUrl" || field === "imageApiKey")),
       ),
-    [formIsSubscription, imageIsSupergrok],
+    [offerProxyMode, showChatStaticFields, imageIsSupergrok],
   )
 
   // A config reply or provider edit can hide the currently focused key input. Move focus to the
   // nearest visible field instead of leaving keyboard users on a non-existent control.
   useEffect(() => {
-    if (formIsSubscription && focused === "apiKey") setFocused("model")
+    if (!showChatStaticFields && focused === "apiKey") setFocused(offerProxyMode ? "proxyMode" : "model")
+    if (!showChatStaticFields && focused === "baseUrl") setFocused(offerProxyMode ? "proxyMode" : "model")
+    if (!offerProxyMode && focused === "proxyMode") setFocused(showChatStaticFields ? "apiKey" : "model")
     if (imageIsSupergrok && focused === "imageApiKey") setFocused("imageSize")
     if (imageIsSupergrok && focused === "imageBaseUrl") setFocused("imageModel")
-  }, [formIsSubscription, imageIsSupergrok, focused])
+  }, [offerProxyMode, showChatStaticFields, imageIsSupergrok, focused])
 
   // Ask the server for a provider's live /models (server resolves the key: the one passed here,
   // else the provider's saved credential, else the current live config). Blanks the list while
   // loading; a matching `admin_models` reply repopulates it.
-  const requestModels = (prov: string, key?: string) => {
+  const requestModels = (prov: string) => {
     if (!prov) return
     providerRef.current = prov
     setModels([])
     setModelsLoading(true)
-    client.adminListModels(prov, key || undefined)
+    const fixedSubscription = isSupergrokProvider(prov)
+    const key = fixedSubscription
+      ? undefined
+      : touchedValue(apiKeyTouchedRef.current, apiKeyRef.current)
+    const url = fixedSubscription
+      ? undefined
+      : touchedValue(baseUrlTouchedRef.current, baseUrlRef.current)
+    client.adminListModels(prov, key, url)
   }
 
   // Subscribe first, then request the current config on mount. Every `admin_config` (incl. the one
@@ -167,6 +243,15 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
         // Never populate the key field from the (masked) server value — blank means "keep".
         setApiKey("")
         apiKeyRef.current = ""
+        apiKeyTouchedRef.current = false
+        apiKeySyncRef.current = ""
+        setApiKeyClearPending(false)
+        setBaseUrl(frame.base_url)
+        baseUrlRef.current = frame.base_url
+        baseUrlTouchedRef.current = false
+        baseUrlSyncRef.current = frame.base_url
+        setBaseUrlClearPending(false)
+        setProxyEditing(false)
         setSavedProviders(frame.saved_providers ?? [])
         setImagegen(frame.imagegen)
         const img = frame.imagegen
@@ -174,12 +259,18 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
         imageProviderRef.current = img?.provider ?? ""
         setImageBaseUrl(img?.base_url ?? "")
         imageBaseUrlRef.current = img?.base_url ?? ""
+        imageBaseUrlTouchedRef.current = false
+        imageBaseUrlSyncRef.current = img?.base_url ?? ""
+        setImageBaseUrlClearPending(false)
         setImageModel(img?.model ?? "")
         imageModelRef.current = img?.model ?? ""
         setImageSize(img?.size ?? "1024x1024")
         imageSizeRef.current = img?.size ?? "1024x1024"
         setImageApiKey("")
         imageApiKeyRef.current = ""
+        imageApiKeyTouchedRef.current = false
+        imageApiKeySyncRef.current = ""
+        setImageApiKeyClearPending(false)
         setError(undefined)
         setModels([])
         setModelsLoading(true)
@@ -237,9 +328,17 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
     const providerValue = providerRef.current.trim()
     if (!providerValue) return
     const chatModel = customModelRef.current.trim() || selectedModelRef.current.trim()
-    // The actual OAuth path never sends an API key; dual-mode ChatGPT proxy aliases still do.
-    const key = usesSubscriptionAuth(providerValue, config) ? undefined : apiKeyRef.current.trim() || undefined
-    client.adminSetModel(providerValue, chatModel || undefined, key)
+    // SuperGrok's fixed OAuth path never sends static credentials. ChatGPT aliases are dual-mode:
+    // untouched fields preserve OAuth/current proxy state, while entered values switch to a proxy
+    // and a touched blank stays "" (clear/switch back to OAuth server-side).
+    const fixedSubscription = isSupergrokProvider(providerValue)
+    const key = fixedSubscription
+      ? undefined
+      : touchedValue(apiKeyTouchedRef.current, apiKeyRef.current)
+    const url = fixedSubscription
+      ? undefined
+      : touchedValue(baseUrlTouchedRef.current, baseUrlRef.current)
+    client.adminSetModel(providerValue, chatModel || undefined, key, url)
   }
 
   const saveImagegen = () => {
@@ -247,8 +346,12 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
     const modelValue = imageModelRef.current.trim()
     if (!providerValue || !modelValue) return
     const isSupergrok = isSupergrokProvider(providerValue)
-    const key = isSupergrok ? undefined : imageApiKeyRef.current.trim() || undefined
-    const baseUrl = isSupergrok ? undefined : imageBaseUrlRef.current.trim() || undefined
+    const key = isSupergrok
+      ? undefined
+      : touchedValue(imageApiKeyTouchedRef.current, imageApiKeyRef.current)
+    const baseUrl = isSupergrok
+      ? undefined
+      : touchedValue(imageBaseUrlTouchedRef.current, imageBaseUrlRef.current)
     client.adminSetImagegen(
       providerValue,
       modelValue,
@@ -264,6 +367,11 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
     const keyName = typeof event.name === "string" ? event.name.toLowerCase() : ""
     if (keyName === "escape") {
       onBack()
+      return
+    }
+    if ((keyName === "return" || keyName === "enter") && focused === "proxyMode") {
+      setProxyEditing(true)
+      setFocused("apiKey")
       return
     }
     if (keyName === "tab") {
@@ -387,50 +495,153 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
                   providerRef.current = value
                   setProvider(value)
                   // Switching provider: blank the key (its saved one is reused server-side), reset the
-                  // model, and refetch this provider's live catalog.
+                  // endpoint/model, and refetch this provider's live catalog. Untouched blanks tell
+                  // the server to reuse any saved provider credential rather than clear it.
                   setApiKey("")
                   apiKeyRef.current = ""
+                  apiKeyTouchedRef.current = false
+                  apiKeySyncRef.current = ""
+                  setApiKeyClearPending(false)
+                  setBaseUrl("")
+                  baseUrlRef.current = ""
+                  baseUrlTouchedRef.current = false
+                  baseUrlSyncRef.current = ""
+                  setBaseUrlClearPending(false)
+                  setProxyEditing(false)
                   setSelectedModel("")
                   selectedModelRef.current = ""
                   requestModels(value)
                 }}
-                onSelect={() =>
-                  setFocused(usesSubscriptionAuth(providerRef.current, config) ? "model" : "apiKey")
-                }
+                onSelect={() => {
+                  if (isSupergrokProvider(providerRef.current)) setFocused("model")
+                  else if (usesSubscriptionAuth(providerRef.current, config)) setFocused("proxyMode")
+                  else setFocused("apiKey")
+                }}
               />
             </box>
 
-            {formIsSubscription ? (
+            {formIsSubscription && !proxyEditing ? (
               <box flexDirection="column" marginTop={1}>
-                <text fg={theme.dim}>{tt(locale, "model.subscriptionFieldNote")}</text>
-                <text fg={providerHasSavedCredential ? theme.success : theme.dim}>
-                  {providerHasSavedCredential
-                    ? tt(locale, "model.subscriptionReadyTag")
-                    : tt(locale, "model.subscriptionLoggedOut")}
-                </text>
+                {hideChatStaticFields ? (
+                  <text fg={theme.dim}>{tt(locale, "model.subscriptionFieldNote")}</text>
+                ) : null}
+                <box flexDirection="row">
+                  <text fg={providerHasSavedCredential ? theme.success : theme.dim}>
+                    {providerHasSavedCredential
+                      ? tt(locale, "model.subscriptionReadyTag")
+                      : tt(locale, "model.subscriptionLoggedOut")}
+                  </text>
+                  {!hideChatStaticFields ? (
+                    <box
+                      marginLeft={2}
+                      backgroundColor={focused === "proxyMode" ? theme.accent : theme.bg}
+                      onMouseDown={() => {
+                        setProxyEditing(true)
+                        setFocused("apiKey")
+                      }}
+                    >
+                      <text fg={focused === "proxyMode" ? theme.bg : theme.accent}>
+                        {`⚄ ${tt(locale, "model.configureProxy")}`}
+                      </text>
+                    </box>
+                  ) : null}
+                </box>
                 <text fg={theme.dim}>{tt(locale, "model.subscriptionHint")}</text>
               </box>
-            ) : (
+            ) : null}
+
+            {showChatStaticFields ? (
               <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("apiKey")}>
                 <box flexDirection="row">
                   <text fg={focused === "apiKey" ? theme.accent : theme.dim}>{tt(locale, "model.apiKey")}</text>
-                  {providerHasSavedCredential ? (
+                  {providerHasSavedStaticCredential ? (
                     <text fg={theme.success}>{"  " + tt(locale, "model.keySavedTag")}</text>
+                  ) : null}
+                  {providerHasSavedStaticCredential ? (
+                    <box
+                      marginLeft={2}
+                      onMouseDown={() => {
+                        apiKeyRef.current = ""
+                        apiKeyTouchedRef.current = true
+                        setApiKey("")
+                        setApiKeyClearPending(true)
+                        requestModels(providerRef.current)
+                      }}
+                    >
+                      <text fg={apiKeyClearPending ? theme.fumble : theme.accent}>
+                        {apiKeyClearPending
+                          ? tt(locale, "model.clearPending")
+                          : tt(locale, "model.clearSavedKey")}
+                      </text>
+                    </box>
                   ) : null}
                 </box>
                 <input
                   flexGrow={1}
                   value={apiKey}
                   focused={focused === "apiKey"}
-                  placeholder={providerHasSavedCredential ? tt(locale, "model.apiKeySaved") : tt(locale, "model.apiKeyPlaceholder")}
+                  placeholder={providerHasSavedStaticCredential ? tt(locale, "model.apiKeySaved") : tt(locale, "model.apiKeyPlaceholder")}
                   onInput={(value: string) => {
                     apiKeyRef.current = value
+                    if (apiKeySyncRef.current === value) {
+                      apiKeySyncRef.current = null
+                      setApiKey(value)
+                      return
+                    }
+                    apiKeySyncRef.current = null
+                    apiKeyTouchedRef.current = true
                     setApiKey(value)
+                    setApiKeyClearPending(!value.trim())
                   }}
-                  onSubmit={() => requestModels(providerRef.current, apiKeyRef.current.trim() || undefined)}
+                  onSubmit={() => requestModels(providerRef.current)}
                 />
               </box>
-            )}
+            ) : null}
+
+            {showChatStaticFields ? (
+              <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("baseUrl")}>
+                <box flexDirection="row">
+                  <text fg={focused === "baseUrl" ? theme.accent : theme.dim}>
+                    {tt(locale, "model.baseUrl")}
+                  </text>
+                  <box
+                    marginLeft={2}
+                    onMouseDown={() => {
+                      baseUrlRef.current = ""
+                      baseUrlTouchedRef.current = true
+                      setBaseUrl("")
+                      setBaseUrlClearPending(true)
+                      requestModels(providerRef.current)
+                    }}
+                  >
+                    <text fg={baseUrlClearPending ? theme.fumble : theme.accent}>
+                      {baseUrlClearPending
+                        ? tt(locale, "model.clearPending")
+                        : tt(locale, "model.clearBaseUrl")}
+                    </text>
+                  </box>
+                </box>
+                <input
+                  flexGrow={1}
+                  value={baseUrl}
+                  focused={focused === "baseUrl"}
+                  placeholder={tt(locale, "model.baseUrlPlaceholder")}
+                  onInput={(value: string) => {
+                    baseUrlRef.current = value
+                    if (baseUrlSyncRef.current === value) {
+                      baseUrlSyncRef.current = null
+                      setBaseUrl(value)
+                      return
+                    }
+                    baseUrlSyncRef.current = null
+                    baseUrlTouchedRef.current = true
+                    setBaseUrl(value)
+                    setBaseUrlClearPending(!value.trim())
+                  }}
+                  onSubmit={() => requestModels(providerRef.current)}
+                />
+              </box>
+            ) : null}
 
             <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("model")}>
               <text fg={focused === "model" ? theme.accent : theme.dim}>{tt(locale, "model.modelSelect")}</text>
@@ -510,7 +721,26 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
 
             {!imageIsSupergrok ? (
               <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("imageBaseUrl")}>
-                <text fg={focused === "imageBaseUrl" ? theme.accent : theme.dim}>{tt(locale, "imagegen.baseUrl")}</text>
+                <box flexDirection="row">
+                  <text fg={focused === "imageBaseUrl" ? theme.accent : theme.dim}>
+                    {tt(locale, "imagegen.baseUrl")}
+                  </text>
+                  <box
+                    marginLeft={2}
+                    onMouseDown={() => {
+                      imageBaseUrlRef.current = ""
+                      imageBaseUrlTouchedRef.current = true
+                      setImageBaseUrl("")
+                      setImageBaseUrlClearPending(true)
+                    }}
+                  >
+                    <text fg={imageBaseUrlClearPending ? theme.fumble : theme.accent}>
+                      {imageBaseUrlClearPending
+                        ? tt(locale, "model.clearPending")
+                        : tt(locale, "model.clearBaseUrl")}
+                    </text>
+                  </box>
+                </box>
                 <input
                   flexGrow={1}
                   value={imageBaseUrl}
@@ -518,7 +748,15 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
                   placeholder={tt(locale, "imagegen.baseUrlPlaceholder")}
                   onInput={(value: string) => {
                     imageBaseUrlRef.current = value
+                    if (imageBaseUrlSyncRef.current === value) {
+                      imageBaseUrlSyncRef.current = null
+                      setImageBaseUrl(value)
+                      return
+                    }
+                    imageBaseUrlSyncRef.current = null
+                    imageBaseUrlTouchedRef.current = true
                     setImageBaseUrl(value)
+                    setImageBaseUrlClearPending(!value.trim())
                   }}
                   onSubmit={() => setFocused("imageModel")}
                 />
@@ -568,6 +806,23 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
                 <box flexDirection="row">
                   <text fg={focused === "imageApiKey" ? theme.accent : theme.dim}>{tt(locale, "imagegen.apiKey")}</text>
                   {imageHasSavedKey ? <text fg={theme.success}>{"  " + tt(locale, "model.keySavedTag")}</text> : null}
+                  {imageHasSavedKey ? (
+                    <box
+                      marginLeft={2}
+                      onMouseDown={() => {
+                        imageApiKeyRef.current = ""
+                        imageApiKeyTouchedRef.current = true
+                        setImageApiKey("")
+                        setImageApiKeyClearPending(true)
+                      }}
+                    >
+                      <text fg={imageApiKeyClearPending ? theme.fumble : theme.accent}>
+                        {imageApiKeyClearPending
+                          ? tt(locale, "model.clearPending")
+                          : tt(locale, "model.clearSavedKey")}
+                      </text>
+                    </box>
+                  ) : null}
                 </box>
                 <input
                   flexGrow={1}
@@ -576,7 +831,15 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
                   placeholder={imageHasSavedKey ? tt(locale, "model.apiKeySaved") : tt(locale, "imagegen.apiKeyPlaceholder")}
                   onInput={(value: string) => {
                     imageApiKeyRef.current = value
+                    if (imageApiKeySyncRef.current === value) {
+                      imageApiKeySyncRef.current = null
+                      setImageApiKey(value)
+                      return
+                    }
+                    imageApiKeySyncRef.current = null
+                    imageApiKeyTouchedRef.current = true
                     setImageApiKey(value)
+                    setImageApiKeyClearPending(!value.trim())
                   }}
                   onSubmit={saveImagegen}
                 />

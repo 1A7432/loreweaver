@@ -147,6 +147,24 @@ def test_mutable_llm_does_not_retry_internal_builder_type_error():
     assert calls == 1
 
 
+def test_mutable_llm_reports_when_offline_fallback_is_live():
+    fallback = object()
+    built = object()
+    settings = Settings(llm=LLMSettings(provider="openai", api_key=""))
+    llm = MutableLLM(settings, builder=lambda _settings: built, fallback_llm=fallback)
+
+    assert llm.inner is fallback
+    assert llm.using_fallback is True
+
+    llm.apply({"provider": "deepseek", "api_key": "sk-test"})
+    assert llm.inner is built
+    assert llm.using_fallback is False
+
+    llm.apply({})
+    assert llm.inner is fallback
+    assert llm.using_fallback is True
+
+
 def test_build_llm_selects_anthropic(monkeypatch):
     class FakeAnthropic:
         def __init__(self, **kwargs) -> None:

@@ -20,8 +20,8 @@ A hardening pass just landed the unglamorous things that have to be right before
 - **Permission model.** The player/keeper distinction is now enforced on *every* command surface (it previously held only on the admin frames — a player key could run keeper-only commands over the terminal). Replies that expose secrets — a masked API key, keeper-only lore — are scoped to the caller, not broadcast to the room.
 - **Character correctness.** Editing a skill/attribute no longer heals a wounded investigator, and creation derives the right starting vitals (full HP/MP, SAN = min(POW, SANMAX)); every stat-set path is clamped to the rulepack.
 - **Honest moderation.** The content filter ships OFF with no bundled wordlist (configurable), and the docs say so plainly instead of implying built-in moderation.
-- **Real-model red-line gate.** A nightly job runs a real (cheap) model through the turn pipeline and fails on **leak rate** (verbatim *and* paraphrase sentinels for keeper secrets) or **dice-first misses** (a check that should have rolled, didn't) — the first automated guardian of the two claims the whole project rests on. (See [below](#offline-tests-vs-real-model-quality) for why this is separate from the offline suite.)
-- **Transport + housekeeping.** WS handshake timeout, a global connection cap, and optional TLS (with reverse-proxy guidance); CI on Python 3.11 *and* 3.12; dead code and stale references cleared out.
+- **Real-model red-line gate.** A nightly job runs a real model through the turn pipeline and fails on measured **leak rate** (verbatim *and* paraphrase sentinels for keeper secrets) or **dice-first misses** (a check that should have rolled, didn't). It is a regression signal for one model/run, not a permanent guarantee. (See [below](#offline-tests-vs-real-model-quality) for why this is separate from the offline suite.)
+- **Transport + release housekeeping.** Iroh join timeouts, room-scoped Keeper key administration, owner-only local secret permissions where supported, verified release archives, stable/prerelease separation, CI on Python 3.11 *and* 3.12, and dead-code cleanup.
 
 ## Near-term
 
@@ -35,7 +35,7 @@ The differentiator is a world *beneath* the adventure, not just a chat with dice
 - **Deeper worldbook:** a generative world (not only keyword/vector-retrieved lore), a **living causal timeline** where events have consequences that propagate, and **canon consistency** so the Keeper can't contradict established facts.
 - **Late-joiner catch-up:** a player who joins mid-campaign is caught up on what their character *would* know — without leaking what they wouldn't.
 - **D&D Beyond sheet import**, alongside the existing SillyTavern-card path.
-- **CI release artifacts** so a version is a downloadable, installable thing.
+- **Broader prebuilt coverage** beyond the current Windows x64, macOS arm64, and Linux x64/arm64 matrix.
 
 ## An open design question — where do the Keeper's secrets live?
 

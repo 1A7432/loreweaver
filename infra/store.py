@@ -11,10 +11,13 @@ here.
 from __future__ import annotations
 
 import asyncio
+import os
 import sqlite3
 from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
+
+from infra.file_permissions import restrict_sqlite_files
 
 
 class Store:
@@ -31,6 +34,9 @@ class Store:
         self._db_path = str(db_path)
         self._conn: sqlite3.Connection | None = None
         self._lock = asyncio.Lock()
+        # Self-heal files created by older versions before synchronous runtime
+        # credential reads can touch them during service construction.
+        restrict_sqlite_files(self._db_path)
 
     @property
     def path(self) -> str:
@@ -38,6 +44,16 @@ class Store:
         return self._db_path
 
     def _connect(self) -> sqlite3.Connection:
+        # SQLite otherwise creates a new database through the process umask. Pre-create
+        # ordinary path-backed databases as 0600 so credentials are never briefly readable
+        # before ``restrict_sqlite_files`` runs after the first commit.
+        if self._db_path != ":memory:" and not self._db_path.startswith("file:"):
+            try:
+                fd = os.open(self._db_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                pass
+            else:
+                os.close(fd)
         conn = sqlite3.connect(self._db_path, check_same_thread=False)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(
@@ -51,7 +67,13 @@ class Store:
             """
         )
         conn.commit()
+        restrict_sqlite_files(self._db_path)
         return conn
+
+    def _commit(self, conn: sqlite3.Connection) -> None:
+        """Commit, then tighten any DB/WAL/SHM files SQLite created."""
+        conn.commit()
+        restrict_sqlite_files(self._db_path)
 
     def _ensure_conn(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -74,7 +96,7 @@ class Store:
                 "INSERT OR REPLACE INTO kv (user_key, store_key, value) VALUES (?, ?, ?)",
                 (user_key, store_key, value),
             )
-            conn.commit()
+            self._commit(conn)
 
     async def delete(self, user_key: str = "", store_key: str = "") -> None:
         async with self._lock:
@@ -83,7 +105,7 @@ class Store:
                 "DELETE FROM kv WHERE user_key = ? AND store_key = ?",
                 (user_key, store_key),
             )
-            conn.commit()
+            self._commit(conn)
 
     async def list_rows(self, *, store_key_prefixes: Iterable[str] = ()) -> list[dict[str, str | None]]:
         """Return KV rows whose ``store_key`` starts with any requested prefix.
@@ -120,7 +142,7 @@ class Store:
         async with self._lock:
             conn = self._ensure_conn()
             cursor = conn.executemany("DELETE FROM kv WHERE user_key = ? AND store_key = ?", items)
-            conn.commit()
+            self._commit(conn)
             return cursor.rowcount if cursor.rowcount != -1 else len(items)
 
     def close(self) -> None:
@@ -157,7 +179,7 @@ class MigrationRunner:
                 )
                 """
             )
-            conn.commit()
+            self._store._commit(conn)
 
             already_applied = conn.execute(
                 "SELECT 1 FROM applied_migrations WHERE name = ?",
@@ -171,5 +193,5 @@ class MigrationRunner:
                 "INSERT INTO applied_migrations (name, applied_at) VALUES (?, ?)",
                 (name, datetime.utcnow().isoformat()),
             )
-            conn.commit()
+            self._store._commit(conn)
             return True

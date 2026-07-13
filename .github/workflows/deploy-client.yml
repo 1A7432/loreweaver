@@ -27,8 +27,10 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: deploy-client
-  cancel-in-progress: true
+  # A newer main build may supersede an older main build, but a version tag is
+  # immutable release work and must never be cancelled by an unrelated ref.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
 
 jobs:
   deploy:
@@ -51,9 +53,15 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check "setuptools-scm>=10.2.0"
           version="$(python -m setuptools_scm)"
-          if stable_tag="$(git describe --tags --exact-match --match 'v[0-9]*' 2>/dev/null)"; then
-            tag="$stable_tag"
+          exact_tag="$(git describe --tags --exact-match --match 'v*' 2>/dev/null || true)"
+          if [[ "$exact_tag" =~ ^v[0-9]+([.][0-9]+)*$ ]]; then
+            tag="$exact_tag"
             channel="stable"
+          elif [ -n "$exact_tag" ]; then
+            # Keep prerelease tags immutable and addressable, but do not let
+            # v1.2.3-rc1 replace GitHub's stable `latest` release.
+            tag="$exact_tag"
+            channel="dev"
           else
             tag="release-${version}"
             channel="dev"
@@ -101,6 +109,23 @@ jobs:
               path.write_text(text.replace(old, new, 1))
           PY
           tar czf dist/loreweaver-client.tar.gz -C dist/client-build clients/package.json clients/bun.lock clients/release-version.json clients/protocol clients/tui
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+
+          archive = Path("dist/loreweaver-client.tar.gz")
+          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          Path(f"{archive}.sha256").write_text(f"{digest}  {archive.name}\n")
+          replacements = [
+              (Path("dist/install.sh"), 'TRPG_EMBEDDED_CLIENT_SHA256=""', f'TRPG_EMBEDDED_CLIENT_SHA256="{digest}"'),
+              (Path("dist/install.ps1"), '$EmbeddedClientSha256 = ""', f'$EmbeddedClientSha256 = "{digest}"'),
+          ]
+          for path, old, new in replacements:
+              text = path.read_text()
+              if old not in text:
+                  raise SystemExit(f"release placeholder {old!r} not found in {path}")
+              path.write_text(text.replace(old, new, 1))
+          PY
 
       - name: Publish to GitHub Release
         # The public, canonical distribution. The normal install path follows GitHub's latest
@@ -123,16 +148,21 @@ jobs:
           - Windows PowerShell: \`irm https://github.com/$R/releases/latest/download/install.ps1 | iex\`
 
           Pin or roll back by setting \`TRPG_RELEASE_TAG=$TAG\` before running the installer.
+          Downloaded archives are verified against their adjacent \`.sha256\` assets.
           EOF
+            release_flags=(--prerelease)
+            if [ "$CHANNEL" = "stable" ]; then
+              release_flags=(--latest)
+            fi
             gh release create "$TAG" \
               --repo "$R" \
               --target "$GITHUB_SHA" \
               --title "Loreweaver ${VERSION}" \
               --notes-file release-notes.md \
-              --latest \
+              "${release_flags[@]}" \
             || gh release view "$TAG" --repo "$R" >/dev/null
           fi
-          gh release upload "$TAG" dist/loreweaver-client.tar.gz dist/install.sh dist/install.ps1 --repo "$R" --clobber
+          gh release upload "$TAG" dist/loreweaver-client.tar.gz dist/loreweaver-client.tar.gz.sha256 dist/install.sh dist/install.ps1 --repo "$R" --clobber
 
       - name: Set up SSH
         run: |
@@ -143,12 +173,24 @@ jobs:
           ssh-keyscan -H "$host" >> ~/.ssh/known_hosts 2>/dev/null
 
       - name: Publish tarball + installers
+        # Publish every build under its immutable release tag before refreshing the flat
+        # compatibility path. Released/pinned installers fall back to `releases/<tag>/`,
+        # so a later main/dev deployment cannot replace the archive they verify.
         # ubuntu-latest no longer ships rsync, so use scp.
         run: |
+          set -euo pipefail
           T="${{ secrets.LW_SSH_TARGET }}"
-          scp dist/loreweaver-client.tar.gz dist/install.sh dist/install.ps1 "$T:/var/www/1a7432.site/trpg/"
-          ssh "$T" "chmod -R a+rX /var/www/1a7432.site/trpg"
+          TAG="${{ steps.release.outputs.tag }}"
+          case "$TAG" in
+            *[!A-Za-z0-9._+-]*) echo "::error::unsafe release tag for mirror path: $TAG"; exit 1 ;;
+          esac
+          ROOT="/var/www/1a7432.site/trpg"
+          FIXED="$ROOT/releases/$TAG"
+          ssh "$T" "install -d -m 755 '$FIXED'"
+          scp dist/loreweaver-client.tar.gz dist/loreweaver-client.tar.gz.sha256 dist/install.sh dist/install.ps1 "$T:$FIXED/"
+          scp dist/loreweaver-client.tar.gz dist/loreweaver-client.tar.gz.sha256 dist/install.sh dist/install.ps1 "$T:/var/www/1a7432.site/trpg/"
+          ssh "$T" "chmod -R a+rX '$ROOT'"
           # The React web client was removed; take its old bundle offline (idempotent) so a
           # rebuilt server never re-serves a stale /play pointing at the retired WS entrypoint.
           ssh "$T" "rm -rf /var/www/1a7432.site/play"
-          echo "published → /trpg/loreweaver-client.tar.gz"
+          echo "published → /trpg/releases/$TAG/ + /trpg/"

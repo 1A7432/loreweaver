@@ -1,14 +1,19 @@
 *[English](protocol.md) · 中文*
 
-# loreweaver networked TUI — WebSocket protocol v1
+# loreweaver networked TUI — wire protocol v1
 
-这是 loreweaver 服务器（通过 `python -m app --serve` 启动的 `net.tui_server.TuiServer`）与任何客户端之间的开放、版本化的网络协议——可以是随附的 OpenTUI 终端客户端，或社区构建的 React/Vue/Web 客户端。引擎本身（确定性核心 + AI Keeper）不受传输方式的影响；此文档是与语言无关的接口定义。
+这是 loreweaver 服务器（通过 `python -m app --serve` 启动）与 OpenTUI 终端客户端之间开放、版本化的 wire protocol。引擎本身（确定性核心 + AI Keeper）不受传输方式影响；传输中立的会话逻辑位于 `net.session.SessionCore`，本文档是与语言无关的接口定义。
 
-传输方式：Iroh 或 WebSocket。控制流为 JSON 帧，每帧格式为 `{"type": ...}`。协议版本：`"1.4"`。
+控制流使用 `{"type": ...}` 形状的 JSON 帧，协议版本为 `"1.4"`。同一套帧与 `join` 握手可搭载于两种 carrier：
+
+- **Iroh** 是 `--serve` 实际启动的默认传输：点对点 QUIC，服务端打印可分享 ticket，不需要域名、证书或端口转发。控制帧是在长连接双向流上的 newline-delimited JSON；媒体字节使用同一连接上的额外双向流。
+- **WebSocket**（`net.tui_server`）只保留作离线测试/loopback carrier，不是 `--serve` 选项。控制帧是文本消息，媒体字节是二进制消息。
+
+两种 carrier 都驱动同一个 `SessionCore` / `RoomHub`。
 
 版本控制是递增式的：`"1.4"` 新增图像生成配置与头像绑定；`"1.3"` 新增房间音频库/播放控制帧；`"1.2"` 新增媒体元数据帧和字节通道；`"1.1"` 新增 Keeper 门控的 `admin_*` 帧（见下文"Admin frames"部分）。只理解 `"1"` 的客户端保持正常工作——它永远不会发送新帧，应该将 `welcome` 的 `protocol` 字段视为不透明字符串（接受任何 `"1.x"`）。
 
-客户端发送的第一帧MUST是 `join`。服务器回复 `welcome` 或 `error`，错误时关闭连接。如果在服务器的 join 握手超时内未到达（`TRPG_TUI__JOIN_TIMEOUT`，默认 10 秒），服务器将用 `error join_timeout` 关闭连接，而不是无限等待。超过服务器并发连接上限（`TRPG_TUI__MAX_CONNECTIONS`）的连接在读取 `join` 之前被拒绝：`error too_many_connections`，然后关闭。
+客户端发送的第一帧 MUST 是 `join`。服务器回复 `welcome` 或 `error`，错误时关闭连接。如果在 join 握手超时内未到达（`TRPG_TUI__JOIN_TIMEOUT`，默认 10 秒），服务器将用 `error join_timeout` 关闭连接，而不是无限等待。离线 WebSocket 测试 carrier 另外支持 `TRPG_TUI__MAX_CONNECTIONS` 并发上限；超额测试连接会在读取 `join` 前收到 `error too_many_connections`。
 
 ## Client → Server
 
@@ -27,9 +32,10 @@
 ## Server → Client
 
 - `welcome` — 成功 `join` 时发送一次：
-  `{type:"welcome", protocol:"1.4", features:["media","audio","imagegen"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string}`
+  `{type:"welcome", protocol:"1.4", features:["media","audio","imagegen"?,"demo"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string}`
+  `demo` 表示服务端正在使用离线示例 Keeper、向量功能已启用，且本次检查时这个守秘人房间为空。服务端会在房间回合锁内再次检查，过期 flag 不会覆盖战役状态；客户端收到 `admin_config{using_demo:false}`（例如从模型页保存后）会立即移除入口，否则重连时重新计算，过期操作也会被服务端拒绝。
 - `error` — 本地化的故障通知；`bad_key`、`join_timeout` 和 `too_many_connections` 关闭连接（它们仅在 `join` 握手期间或之前发生），其他不关闭：
-  `{type:"error", code:"bad_key"|"bad_frame"|"rate_limited"|"server_error"|"join_timeout"|"too_many_connections"|媒体错误码, message:string}`
+  `{type:"error", code:"bad_key"|"bad_frame"|"rate_limited"|"server_error"|"join_timeout"|"too_many_connections"|"demo_unavailable"|媒体错误码, message:string}`
 - `media_accept` — 上传被接受；若 `existing` 为 true，则无需 PUT：
   `{type:"media_accept", upload_id:string, existing?:boolean, media?:MediaFrame, audio?:AudioLibraryItem}`
 - `media` — 媒体元数据广播和历史回放条目；字节按需拉取：
@@ -66,7 +72,7 @@
    否则，`run_kp_turn(ctx, services, toolset, text, output_review=censor)` 驱动 AI Keeper 并返回一个 `KPTurnResult`。
 5. 对于每个 `tool_trace` 条目，如果是掷骰子/检定工具（`roll_dice`、`skill_check`、`sanity_check`、`opposed_check`、`initiative_tracker`），从其结果中解析并广播一个 `dice` 帧。
 6. 对于每个名为 `speak_as_npc` 的 `tool_trace` 条目，在最终 KP 回复之前广播 `narrative{speaker:"npc", name, text, format:"markdown"}`。`name` 是工具调用的 `npc` 参数，`text` 是玩家安全的工具结果。
-7. 将回复广播为 `narrative{text: reply}` — 命令回复为 `speaker:"system"`，AI Keeper 回复为 `speaker:"kp", format:"markdown"`。回复已被审查；Keeper 专用工具输出永远不会到达此帧（循环保证——见 `agent/loop.py`）。
+7. 将回复广播为 `narrative{text: reply}`——命令回复为 `speaker:"system"`，AI Keeper 回复为 `speaker:"kp", format:"markdown"`。回复已通过所配置的输出词表；守秘人专用工具的原始结果不会被代码直接复制到此帧，但主 Keeper 模型看过这些结果，仍可能自行复述，因此另由真实模型红线评测测量这种行为风险。
 8. 重新构建并广播一个 `state` 帧（`net.state.build_room_state`）。
 
 密钥映射到同一房间的多个客户端共享一个 AI-KP 会话；上述每个描述为"广播"的帧都发送给当前连接到该房间的每个成员。
@@ -117,20 +123,20 @@ role = "player"  # 或 "keeper"；默认为 "player"
 
 ## Admin frames (v1.1, keeper-gated)
 
-部署者/Keeper 可以通过浏览器（Web 客户端的管理面板，用 `?admin=1` 打开）使用**Keeper 角色密钥**在SAME连接上管理服务器：在 `join` 时戳在连接上的密钥库角色是管理员门控——没有单独的认证。服务器仅对 `keeper` 连接回答这些；任何其他连接获得 `admin_error{code:"forbidden"}` 且没有读取或变异。在 `net/admin.py` 中实现。
+部署者/Keeper 可以通过终端客户端的守秘人页面，在同一连接上用 **Keeper 角色 key** 管理服务器。`join` 时绑定到连接的 keystore role 就是管理员门控，没有第二套认证。服务器只对 `keeper` 连接回答这些帧；其他连接得到 `admin_error{code:"forbidden"}`，且不会读取或修改数据。实现在 `net/admin.py`。
 
 客户端 → 服务器：
 
 - `admin_get_config` — `{type:"admin_get_config"}`
-- `admin_set_model` — 切换实时 LLM 提供商/模型，并可设置该 provider 的 API key / `base_url`（省略时沿用已保存凭据）：
+- `admin_set_model` — 切换实时 LLM provider/模型，并可设置该 provider 的 API key / `base_url`。字段省略时，只有 endpoint 未变才复用已保存凭据；显式空值会清空字段。提供新的 `base_url` 却不同时提供新 `api_key` 时，旧 key 会被清空，绝不会发往新 endpoint：
   `{type:"admin_set_model", provider:string, chat_model?:string, api_key?:string, base_url?:string}`
-- `admin_set_imagegen` — 配置 OpenAI-compatible 图像生成端点；`api_key` 省略时沿用该 provider 已保存的 key：
+- `admin_set_imagegen` — 配置 OpenAI-compatible 生图 endpoint；遵循相同的 endpoint/key 隔离规则：
   `{type:"admin_set_imagegen", provider:string, base_url?:string, model:string, api_key?:string, size?:string}`
-- `admin_list_models` — 获取某 provider 的实时模型列表；回复中也包含当前 `imagegen` 状态：
+- `admin_list_models` — 获取某 provider 的实时模型列表。预览不同 `base_url` 时不会复用 saved/current key，除非同一请求明确提供 key；回复中也包含当前 `imagegen` 状态：
   `{type:"admin_list_models", provider?:string, api_key?:string, base_url?:string}`
-- `admin_list_keys` — `{type:"admin_list_keys"}`
-- `admin_mint_key` — 创建房间访问密钥：
-  `{type:"admin_mint_key", room:string, name?:string, role?:"player"|"keeper"}`
+- `admin_list_keys` — 只列出调用者 key 所绑定房间的访问 key：`{type:"admin_list_keys"}`
+- `admin_mint_key` — 只为调用者所绑定的房间创建访问 key；`room` 可省略，指定其他房间会被拒绝：
+  `{type:"admin_mint_key", room?:string, name?:string, role?:"player"|"keeper"}`
 - `admin_update_key` — 按稳定的非秘密 id 更新一个密钥：
   `{type:"admin_update_key", id:string, room?:string, name?:string, role?:"player"|"keeper"}`
 - `admin_delete_key` — 按 id 删除一个密钥：
@@ -147,19 +153,20 @@ role = "player"  # 或 "keeper"；默认为 "player"
 服务器 → 客户端：
 
 - `admin_config` — 实时、显示安全的 LLM 配置（api_key 已遮蔽）加上提供商目录、已有保存凭据的 provider（`saved_providers`）、运行时覆盖是否活跃，以及显示安全的图像生成状态：
-  `{type:"admin_config", provider:string, chat_model:string, base_url:string, api_key_masked:string, providers:string[], saved_providers:string[], override_active:boolean, imagegen?:ImageGenStatus, subscription_status?:""|"logged_in"|"logged_out"}`
+  `{type:"admin_config", provider:string, chat_model:string, base_url:string, api_key_masked:string, providers:string[], saved_providers:string[], override_active:boolean, imagegen?:ImageGenStatus, using_demo?:boolean, subscription_status?:""|"logged_in"|"logged_out"}`
+  `using_demo` 跟踪当前是否仍由离线示例 Keeper 应答，使客户端能在热切到真实模型后立即移除过期入口。`true` 本身不授权载入；只有按房间计算的 `welcome.features` 才能添加入口。
   当前提供方实际走 ChatGPT / SuperGrok OAuth 时，`subscription_status` 为 `"logged_in"` 或 `"logged_out"`；空值或缺省表示经典 API-key 路径，包括显式配置代理 `base_url` 的 `chatgpt` / `gpt-subscription`。登录仍用私密聊天命令（`.model login`）；TUI 模型页只展示状态。
 - `admin_models` — 某 provider 的实时模型列表：
   `{type:"admin_models", provider:string, models:string[], imagegen?:ImageGenStatus}`
 - `ImageGenStatus` — `{provider:string, base_url:string, model:string, size:string, api_key_masked:string, has_key:boolean, configured:boolean, saved_providers?:string[]}`。API key 永不以明文返回。
-- `admin_keys` — 房间密钥名单；每个条目的密钥值被遮蔽。一个 `mint` 请求额外在 `minted` 下返回新创建的密钥一次明文（以便 Keeper 可以复制）：
+- `admin_keys` — 仅含调用者自己房间的 key 名单；每个条目的 key 值被遮蔽。一个 `mint` 请求额外在 `minted` 下返回新 key 一次明文（供 Keeper 复制）：
   `{type:"admin_keys", keys:[{id:string, key_masked:string, room:string, name:string, role:"player"|"keeper"}], minted?:{key:string, room:string, name:string, role:"player"|"keeper"}}`
 - `admin_room_op` — 导出/导入/完全删除房间操作的结果：
-  `{type:"admin_room_op", action:"export"|"import"|"delete", room:string, path?:string, keys:number, store_rows:number, vector_points:number}`
+  `{type:"admin_room_op", action:"export"|"import"|"delete", room:string, path?:string, keys:number, store_rows:number, vector_points:number, media_files?:number}`
 - `admin_error` — 本地化的故障通知（不关闭连接）：
   `{type:"admin_error", code:"forbidden"|"unknown_provider"|"bad_request"|"set_failed"|"not_found"|"op_failed", message?:string}`
 
-`admin_set_model` 根据已知提供商验证 `provider`（`infra.providers.is_known_provider`），通过 `services.runtime_config` 持久化覆盖，并热重新配置共享的 `MutableLLM` —— 与 `.model set` 聊天命令相同的路径—— 然后回复一个新的 `admin_config`。这里设置的 API key / `base_url` 会按 provider 保存到本地凭据簿；订阅 OAuth grant 也保存在同一凭据簿的规范 provider 名下。
+`admin_set_model` 根据已知 provider 验证 `provider`（`infra.providers.is_known_provider`），通过 `services.runtime_config` 持久化覆盖，并热重配置共享的 `MutableLLM`——与 `.model set` 聊天命令走同一路径——然后回复新的 `admin_config`。API key / `base_url` 按 provider 成对保存在本地凭据簿；只有 endpoint 未变时才会复用。新 endpoint 必须在同一请求提供匹配 key，否则使用并持久化空 key。订阅 OAuth grant 也保存在同一凭据簿的规范 provider 名下。
 
 提供商目录是递增的。`chatgpt` / `gpt-subscription` 有两种模式：没有 `base_url` 时使用 `.model login chatgpt` 获取的 ChatGPT 订阅 OAuth grant；显式设置 `base_url` 时仍走经典 OpenAI-compatible 代理及其 API key。`supergrok` 始终使用 SuperGrok 订阅 OAuth（`.model login supergrok`），且该 grant 可与 SuperGrok 生图共享。
 

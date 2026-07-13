@@ -19,6 +19,8 @@
   "tui.error.media_hash_mismatch": "The uploaded media checksum did not match the offer.",
   "tui.error.media_not_found": "That media item is not available in this room.",
   "tui.error.avatar_no_character": "Create or select a character before setting an avatar.",
+  "tui.error.demo_unavailable": "The sample adventure is available only to a Keeper in an empty room while the offline demo is active. Your room was not changed.",
+  "tui.demo.action": "Start the built-in sample adventure",
   "tui.avatar.set_done": "Avatar updated.",
   "tui.media.uploaded": "Uploaded {name}.",
   "tui.npc.unknown_name": "Unknown NPC",

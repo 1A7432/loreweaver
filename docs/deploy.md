@@ -71,11 +71,11 @@ All settings use the `TRPG_` env prefix with `__` for nesting (see
 | `TRPG_LLM__EMBEDDING_MODEL` / `TRPG_LLM__EMBEDDING_DIM` | retrieval embeddings | `text-embedding-3-small` / `1536` |
 | `TRPG_LOCALE` | UI language `en` / `zh` | `en` |
 | `TRPG_ENV_FILE` | explicit `.env` file to load before starting the server | `.env` in the working directory |
-| `TRPG_DATA_DIR` | store + keys directory (db → `<data_dir>/loreweaver.db`) | `./data` |
-| `TRPG_TUI_KEYS` | keystore file path (also overridable with `--keys`) | `./data/keys.toml` |
+| `TRPG_DATA_DIR` | campaign/runtime data directory (db → `<data_dir>/loreweaver.db`) | `./data` |
+| `TRPG_TUI_KEYS` | keystore file path (also overridable with `--keys`; independent of `TRPG_DATA_DIR`) | `./keys.toml` |
 | `TRPG_LOCAL_SERVER_HOME` | TUI one-click local hosting root: server binary/source cache, `.env`, data, keys, and ticket sidecars | `TRPG_HOME`, else `<user home>/.loreweaver` |
-| `TRPG_RELEASE_TAG` | Pin the installer/client and one-click server downloads to a versioned GitHub Release such as `release-0.5.1.dev29+g0cf542b` | latest release |
-| `TRPG_SERVER_RELEASE_TAG` | Pin only the one-click server binary/source download tag; the installer writes this automatically for release builds | `TRPG_RELEASE_TAG`, else latest release |
+| `TRPG_RELEASE_TAG` | Pin the installer/client and one-click server downloads to a versioned GitHub Release such as `release-0.5.1.dev29+g0cf542b` | latest stable release |
+| `TRPG_SERVER_RELEASE_TAG` | Pin only the one-click server binary/source download tag; the installer writes this automatically for release builds | `TRPG_RELEASE_TAG`, else latest stable release |
 | `TRPG_ENABLE_VECTOR_DB` | worldbook / document retrieval | `true` |
 | `TRPG_TUI__JOIN_TIMEOUT` | seconds an unauthenticated connection has to send `join` before being closed | `10` |
 | `TRPG_CENSOR__WORDLIST_PATH` | Content-moderation wordlist: a JSON file `{"word": level, ...}` (level `1`-`5`, see `gateway.ops.CensorLevel`). See [Content moderation](#content-moderation) | *(empty = moderation OFF)* |
@@ -100,11 +100,49 @@ Existing compatible gateways remain supported: set provider to `chatgpt` or
 and provide the gateway API key. An explicit `base_url` always selects this
 classic proxy path rather than subscription OAuth.
 
+Release builds publish an adjacent `.sha256` for every client and server archive. The
+installer verifies the client digest before extraction; one-click hosting verifies the
+selected server archive and refuses to fall back to an unverified source checkout on an
+integrity failure. Stable `v*` tags become GitHub's Latest release; development builds are
+pre-releases and do not replace it. The HTTP mirror keeps a flat compatibility copy for its
+one-line installer and an immutable copy at `releases/<tag>/` for every published build. A
+released or pinned installer uses the tag-specific mirror copy, so a later development publish
+cannot replace its fallback archive. An embedded digest is accepted only when the selected tag
+matches the installer's embedded tag; other selections fetch the selected archive's sidecar.
+Checksum mismatches are fatal and never trigger extraction or a fallback to a different payload.
+The installer uses `https://registry.npmjs.org` by default; set `TRPG_REGISTRY` only when you
+intentionally choose another registry.
+
 ## Encryption
 
 Iroh connections are **end-to-end encrypted by construction** (QUIC/TLS, each peer
-authenticated by its public key) — there is no plaintext `ws://` for anyone to sniff and no
-certificate to manage. Keeper-only secrets and bearer keys never cross the wire in the clear.
+authenticated by its public key) — there is no plaintext `ws://` in the supported serve path
+and no certificate to manage. This protects traffic between a player client and the Loreweaver
+server. It does not say what the server sends to a configured model provider.
+
+## Data flow and trust boundaries
+
+- The deterministic rules engine, SQLite campaign state, media, room keys, and backups stay on
+  the server you operate. The Iroh relay, when one is needed, carries encrypted traffic and does
+  not terminate the application session.
+- A **remote** LLM endpoint is a separate data processor. It receives module text for analysis,
+  the Keeper system prompt (which currently contains near-full Keeper-only lore), relevant
+  conversation history, and the current player input. The standard app uses a local hash
+  embedder; if an embedding backend is explicitly replaced with a remote implementation, document
+  chunks also go to that endpoint. Select a local endpoint such as Ollama or LM Studio when this
+  material must remain on infrastructure you control.
+- The player knowledge pool and each NPC/companion actor are structurally scoped: a sub-actor is
+  built only from its own record and sheet. The main Keeper is intentionally different — it sees
+  secrets in order to run the mystery. Prompt instructions and the nightly live-model red-line
+  eval reduce and measure its leak risk; they are not a proof that every model will behave.
+- Player keys are room-scoped. Keeper keys can read Keeper-only state and manage keys only for
+  their own room, but provider/model configuration is deployment-wide. Issue Keeper keys only to
+  fully trusted co-administrators. A caller-supplied custom provider URL is never paired with an
+  older saved API key unless the caller supplies that key for the new endpoint.
+- Provider API keys and subscription OAuth grants are stored unencrypted in the local SQLite
+  database so hot configuration survives restart. They are sent as authorization only to the
+  chosen provider endpoint, not to players. Treat the host account and its backups as part of the
+  trusted computing base.
 
 ## Content moderation
 
@@ -153,11 +191,15 @@ configurable building block that does nothing until you supply a wordlist.
   access/refresh grants, are stored unencrypted in that local SQLite file so
   they survive restart. Protect the database like `.env` or `keys.toml`.
 - **Room backups** created from the keeper admin UI are server-side JSON
-  snapshots under `<data_dir>/room_backups/` unless a path is supplied. They
-  include raw access keys, room state, and vector data, so protect them like
+  snapshots confined to `<data_dir>/room_backups/`; an optional path is treated as a
+  filename inside that directory. They include raw access keys, room state, vector data,
+  and self-contained media blobs, so protect them like
   `keys.toml`.
-- **Secrets** (`.env`, `keys.toml`, `*.db`) are git-ignored; only `*.example.*`
-  are tracked. Never commit them.
+- **Local permissions** are tightened on new secret-bearing files (`0600`) and dedicated data /
+  backup directories (`0700`) where the filesystem implements POSIX modes. On Windows or filesystems
+  without POSIX permissions this is best-effort, not an ACL manager.
+- **Secrets** (`.env`, `keys.toml`, `keeper-key.txt`, `*.db`, backups) are git-ignored; only
+  `*.example.*` files are tracked. Never commit them.
 
 ## Connecting clients
 

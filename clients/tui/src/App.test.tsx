@@ -69,6 +69,17 @@ const KEEPER_WELCOME: WelcomeFrame = {
   server: "mock",
 }
 
+const DEMO_KEEPER_WELCOME: WelcomeFrame = {
+  ...KEEPER_WELCOME,
+  features: ["media", "audio", "demo"],
+}
+
+const OTHER_PLAYER_WELCOME: WelcomeFrame = {
+  ...PLAYER_WELCOME,
+  room: "innsmouth",
+  you: { id: "p2", name: "Eliot", role: "player" },
+}
+
 function renderApp(
   client: MockClient,
   options: {
@@ -95,27 +106,27 @@ function renderApp(
 describe("App shell", () => {
   test("opens on the connect screen with no CLI args", async () => {
     const client = new MockClient()
-    const { renderer, flush, waitForFrame } = await renderApp(client)
+    const { renderer, flush, waitForFrame } = await renderApp(client, { prefill: {} })
     await flush()
 
-    const frame = await waitForFrame((t) => t.includes("邀请码"))
-    expect(frame).toContain("主机")
-    expect(frame).toContain("邀请码")
-    expect(frame).toContain("昵称")
+    const frame = await waitForFrame((t) => t.includes("Invite key"))
+    expect(frame).toContain("Ticket / host")
+    expect(frame).toContain("Invite key")
+    expect(frame).toContain("Nickname")
     // Fields start empty; the host example is a dim ticket-shaped PLACEHOLDER, not a
     // pre-filled value the user would have to clear. The menu has not appeared yet.
     expect(frame).toContain("endpoint…")
     expect(frame).not.toContain("ws://127.0.0.1:8787")
-    expect(frame).not.toContain("进入游戏")
+    expect(frame).not.toContain("Enter game")
 
     act(() => renderer.destroy())
   })
 
   test("submitting the form connects then joins with the default name", async () => {
     const client = new MockClient()
-    const { renderer, flush, waitFor, waitForFrame, mockInput } = await renderApp(client)
+    const { renderer, flush, waitFor, waitForFrame, mockInput } = await renderApp(client, { prefill: {} })
     await flush()
-    await waitForFrame((t) => t.includes("邀请码"))
+    await waitForFrame((t) => t.includes("Invite key"))
 
     // Type a host (the field starts empty now), Tab to the key, type it, submit with Enter.
     await act(async () => {
@@ -139,7 +150,7 @@ describe("App shell", () => {
     await waitFor(() => client.connectCalls.length > 0)
     expect(client.connectCalls[0]).toBe("ws://127.0.0.1:8787")
     await waitFor(() => client.joinCalls.length > 0)
-    expect(client.joinCalls[0]).toEqual(["sekret", "调查员"])
+    expect(client.joinCalls[0]).toEqual(["sekret", "Investigator"])
 
     act(() => renderer.destroy())
   })
@@ -152,7 +163,7 @@ describe("App shell", () => {
       onRememberConnect: (memory) => remembered.push(memory),
     })
     await flush()
-    await waitForFrame((t) => t.includes("邀请码"))
+    await waitForFrame((t) => t.includes("Invite key"))
 
     await act(async () => {
       mockInput.pressTab()
@@ -180,7 +191,7 @@ describe("App shell", () => {
     act(() => client.push(PLAYER_WELCOME))
     await waitFor(() => remembered.length > 0)
     const { localServerHome, ...rest } = remembered[0] ?? {}
-    expect(rest).toEqual({ host: "ws://table.example:8787", key: "keeper-key", name: "漱雪", locale: "zh" })
+    expect(rest).toEqual({ host: "ws://table.example:8787", key: "keeper-key", name: "漱雪", locale: "en" })
     expect(localServerHome).toBeTruthy()
 
     act(() => renderer.destroy())
@@ -190,10 +201,11 @@ describe("App shell", () => {
     const client = new MockClient()
     const remembered: AppPrefill[] = []
     const { renderer, flush, waitForFrame, mockInput } = await renderApp(client, {
+      prefill: {},
       onRememberConnect: (memory) => remembered.push(memory),
     })
     await flush()
-    await waitForFrame((t) => t.includes("邀请码"))
+    await waitForFrame((t) => t.includes("Invite key"))
 
     await act(async () => {
       mockInput.pressTab()
@@ -213,7 +225,7 @@ describe("App shell", () => {
     const client = new MockClient()
     const { renderer, flush, waitForFrame } = await renderApp(client)
     await flush()
-    await waitForFrame((t) => t.includes("邀请码"))
+    await waitForFrame((t) => t.includes("Invite key"))
 
     act(() => client.push(PLAYER_WELCOME))
 
@@ -254,20 +266,80 @@ describe("App shell", () => {
     act(() => renderer.destroy())
   })
 
+  test("server room locale does not override the local UI language", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame } = await renderApp(client, { prefill: { locale: "en" } })
+    await flush()
+    await waitForFrame((text) => text.includes("Invite key"))
+
+    // This room narrates in Chinese, while the terminal's local default is English.
+    act(() => client.push(PLAYER_WELCOME))
+    const menu = await waitForFrame((text) => text.includes("Enter game"))
+    expect(menu).toContain('Table "shuxue"')
+    expect(menu).not.toContain("进入游戏")
+    act(() => renderer.destroy())
+  })
+
   test("a bad_key error keeps you on the connect screen and shows the message", async () => {
     const client = new MockClient()
-    const { renderer, flush, waitForFrame } = await renderApp(client)
+    const { renderer, flush, waitForFrame } = await renderApp(client, { prefill: {} })
     await flush()
-    await waitForFrame((t) => t.includes("邀请码"))
+    await waitForFrame((t) => t.includes("Invite key"))
 
     act(() => client.push({ type: FrameType.Error, code: "bad_key", message: "Unknown key" }))
 
     const frame = await waitForFrame((t) => t.includes("Unknown key"))
     // Still on the connect screen; never advanced to the menu.
-    expect(frame).toContain("邀请码")
-    expect(frame).not.toContain("进入游戏")
+    expect(frame).toContain("Invite key")
+    expect(frame).not.toContain("Enter game")
     // The auto-reconnect/re-join loop was stopped.
     expect(client.closed).toBeGreaterThan(0)
+
+    act(() => renderer.destroy())
+  })
+
+  test("a revoked active key drops room state and returns to the connect screen", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame } = await renderApp(client, { prefill: { locale: "en" } })
+    await flush()
+    act(() => client.push(KEEPER_WELCOME))
+    await waitForFrame((text) => text.includes('Table "shuxue"'))
+
+    act(() => client.push({ type: FrameType.Error, code: "forbidden", message: "Invite revoked" }))
+    const connect = await waitForFrame((text) => text.includes("Invite revoked"))
+    expect(connect).toContain("Invite key")
+    expect(connect).not.toContain("shuxue")
+    expect(client.closed).toBeGreaterThan(0)
+
+    act(() => renderer.destroy())
+  })
+
+  test("a different welcome identity cannot inherit the previous room replay", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client, {
+      prefill: { locale: "en" },
+    })
+    await flush()
+    act(() => client.push(PLAYER_WELCOME))
+    await waitForFrame((text) => text.includes('Table "shuxue"'))
+    act(() =>
+      client.push({
+        type: FrameType.Narrative,
+        speaker: "kp",
+        text: "OLD ROOM SECRET",
+        fmt: "markdown",
+      } as ServerFrame),
+    )
+    await flush()
+
+    act(() => client.push(OTHER_PLAYER_WELCOME))
+    await waitForFrame((text) => text.includes('Table "innsmouth"'))
+    await act(async () => {
+      mockInput.pressEnter()
+      await flush()
+    })
+    const game = await waitForFrame((text) => text.includes("say or command"))
+    expect(game).not.toContain("OLD ROOM SECRET")
 
     act(() => renderer.destroy())
   })
@@ -294,6 +366,91 @@ describe("App shell", () => {
     expect(playerFrame).not.toContain("守秘人")
     expect(playerFrame).not.toContain("房间与邀请")
     act(() => player.renderer.destroy())
+  })
+
+  test("offline Keeper can start the built-in adventure with one Enter", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client, { prefill: { locale: "zh" } })
+    await flush()
+    act(() => client.push(DEMO_KEEPER_WELCOME))
+
+    const menu = await waitForFrame((text) => text.includes("⚄ 试玩示例冒险"))
+    expect(menu).toContain("⚄ 试玩示例冒险")
+
+    await act(async () => mockInput.pressEnter())
+    await flush()
+
+    expect(client.sent).toEqual(["开始内置示例冒险"])
+    const game = await waitForFrame((text) => text.includes("黑沼灯塔") && text.includes("搜查港口地图"))
+    expect(game).toContain("输入行动或命令")
+    expect(game).toContain("搜查港口地图")
+
+    // The empty-room capability is consumed immediately; returning to the menu must not offer
+    // another destructive sample start while the first setup is in flight/already installed.
+    await act(async () => {
+      mockInput.pressEscape()
+      // A lone ESC is intentionally buffered by the terminal parser so it can distinguish
+      // it from the prefix of a longer escape sequence. Keep that parser tick inside act().
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    })
+    await flush()
+    const returnedMenu = await waitForFrame((text) => text.includes("⚄ 进入游戏"))
+    expect(returnedMenu).not.toContain("试玩示例冒险")
+    act(() => renderer.destroy())
+  })
+
+  test("a hot model switch removes the guided demo entry without reconnecting", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame } = await renderApp(client, { prefill: { locale: "zh" } })
+    await flush()
+    act(() => client.push(DEMO_KEEPER_WELCOME))
+    await waitForFrame((text) => text.includes("试玩示例冒险"))
+
+    act(() =>
+      client.push({
+        type: FrameType.AdminConfig,
+        provider: "deepseek",
+        chat_model: "deepseek-chat",
+        base_url: "https://api.deepseek.com/v1",
+        api_key_masked: "sk-…test",
+        providers: ["deepseek"],
+        saved_providers: ["deepseek"],
+        override_active: true,
+        using_demo: false,
+      }),
+    )
+    await flush()
+
+    const menu = await waitForFrame((text) => text.includes("⚄ 进入游戏"))
+    expect(menu).not.toContain("试玩示例冒险")
+    act(() => renderer.destroy())
+  })
+
+  test("global fallback status cannot add demo without a room-scoped welcome check", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame } = await renderApp(client, { prefill: { locale: "zh" } })
+    await flush()
+    act(() => client.push(KEEPER_WELCOME))
+    await waitForFrame((text) => text.includes("⚄ 进入游戏"))
+
+    act(() =>
+      client.push({
+        type: FrameType.AdminConfig,
+        provider: "openai",
+        chat_model: "gpt-4o",
+        base_url: "",
+        api_key_masked: "",
+        providers: ["openai"],
+        saved_providers: [],
+        override_active: false,
+        using_demo: true,
+      }),
+    )
+    await flush()
+
+    const menu = await waitForFrame((text) => text.includes("⚄ 进入游戏"))
+    expect(menu).not.toContain("试玩示例冒险")
+    act(() => renderer.destroy())
   })
 
   test("keyboard ↑↓ moves the die cursor and Enter enters the game", async () => {

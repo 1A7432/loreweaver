@@ -43,8 +43,8 @@ export interface KeeperKeysProps {
   onBack: () => void
 }
 
-type Field = "room" | "name" | "role" | "path"
-const FIELD_ORDER: Field[] = ["room", "name", "role", "path"]
+type Field = "name" | "role" | "path"
+const FIELD_ORDER: Field[] = ["name", "role", "path"]
 
 const CURSOR = "⚄"
 
@@ -65,6 +65,7 @@ function describeRoomOp(frame: Extract<ServerFrame, { type: typeof FrameType.Adm
     keys: frame.keys,
     rows: frame.store_rows,
     vectors: frame.vector_points,
+    media: frame.media_files ?? 0,
     path,
   })
 }
@@ -77,16 +78,15 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
   const [error, setError] = useState<string>()
   const [roomOp, setRoomOp] = useState<string>()
 
-  const [room, setRoom] = useState("")
   const [name, setName] = useState("")
   const [path, setPath] = useState("")
   const [roleIndex, setRoleIndex] = useState(0)
   const [selectedKey, setSelectedKey] = useState(0)
-  const [focused, setFocused] = useState<Field>("room")
+  const [focused, setFocused] = useState<Field>("name")
+  const [confirming, setConfirming] = useState<"key" | "room" | "roomData" | null>(null)
 
   // Mirror the text fields into refs so submit always reads the latest typed value
   // regardless of render timing (same reason ConnectScreen/CharacterScreen do it).
-  const roomRef = useRef(room)
   const nameRef = useRef(name)
   const pathRef = useRef(path)
 
@@ -97,10 +97,24 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
   // the (masked) list and, on a mint, a one-time cleartext `minted`; `admin_error`
   // (forbidden / bad_request / anything the wire sends) surfaces inline.
   useEffect(() => {
+    // A reconnect can replace the member's room without remounting the whole App. Never retain
+    // masked keys, a one-time cleartext invite, or a destructive confirmation across that boundary.
+    setKeys([])
+    setMinted(undefined)
+    setError(undefined)
+    setRoomOp(undefined)
+    setSelectedKey(0)
+    setConfirming(null)
+    setName("")
+    nameRef.current = ""
+    setPath("")
+    pathRef.current = ""
+    setRoleIndex(0)
     const off = client.onMessage((frame) => {
       if (frame.type === FrameType.AdminKeys) {
         setKeys(frame.keys)
         setSelectedKey((current) => Math.max(0, Math.min(current, frame.keys.length - 1)))
+        setConfirming(null)
         if (frame.minted) setMinted(frame.minted)
         setError(undefined)
       } else if (frame.type === FrameType.AdminRoomOp) {
@@ -112,21 +126,17 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
     })
     client.adminListKeys()
     return off
-  }, [client])
+  }, [client, locale, welcome.room])
 
-  // Minting a key for a room IS the create-room path. Require a non-empty room
-  // (mirror AdminPanel's silent guard); the reply is a fresh `admin_keys` that
-  // repaints the list and shows the cleartext key once, so clear the inputs after.
+  // A Keeper connection may administer only the room its own key is bound to.
+  // Keep that boundary in the UI as well as on the server: never offer an
+  // arbitrary room field that would only produce a forbidden response.
   const mint = () => {
     setConfirming(null)
-    const roomValue = roomRef.current.trim()
-    if (!roomValue) return
     const nameValue = nameRef.current.trim()
     const role = String(ROLE_OPTIONS[roleIndex]?.value ?? "player") as PlayerRole
-    client.adminMintKey(roomValue, nameValue || undefined, role)
-    setRoom("")
+    client.adminMintKey(welcome.room, nameValue || undefined, role)
     setName("")
-    roomRef.current = ""
     nameRef.current = ""
   }
 
@@ -135,7 +145,6 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
   // Destructive ops (delete invite / room access / full room) require a SECOND click to fire —
   // a single misclick can't irreversibly wipe a room's data or keys. Arming a different
   // destructive button, or any non-destructive action below, resets the pending confirmation.
-  const [confirming, setConfirming] = useState<"key" | "room" | "roomData" | null>(null)
   const armOrRun = (which: "key" | "room" | "roomData", run: () => void) => {
     if (confirming === which) {
       setConfirming(null)
@@ -148,9 +157,7 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
   const loadSelected = () => {
     setConfirming(null)
     if (!selected) return
-    setRoom(selected.room)
     setName(selected.name)
-    roomRef.current = selected.room
     nameRef.current = selected.name
     setRoleIndex(selected.role === "keeper" ? 1 : 0)
   }
@@ -158,11 +165,9 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
   const updateSelected = () => {
     setConfirming(null)
     if (!selected) return
-    const roomValue = roomRef.current.trim()
-    if (!roomValue) return
     const nameValue = nameRef.current.trim()
     const role = String(ROLE_OPTIONS[roleIndex]?.value ?? "player") as PlayerRole
-    client.adminUpdateKey(selected.id, roomValue, nameValue, role)
+    client.adminUpdateKey(selected.id, welcome.room, nameValue, role)
   }
 
   const deleteSelected = () => {
@@ -171,12 +176,10 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
   }
 
   const deleteRoom = () => {
-    const roomValue = roomRef.current.trim() || selected?.room || ""
-    if (!roomValue) return
-    client.adminDeleteRoom(roomValue)
+    client.adminDeleteRoom(welcome.room)
   }
 
-  const targetRoom = () => roomRef.current.trim() || selected?.room || welcome.room
+  const targetRoom = () => welcome.room
 
   const exportRoom = () => {
     setConfirming(null)
@@ -189,7 +192,7 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
     setConfirming(null)
     const pathValue = pathRef.current.trim()
     if (!pathValue) return
-    client.adminImportRoom(pathValue, roomRef.current.trim() || undefined)
+    client.adminImportRoom(pathValue)
   }
 
   const deleteRoomData = () => {
@@ -199,8 +202,8 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
   }
 
   // Scoped to this screen and further scoped by focus: Tab cycles fields, Esc goes
-  // back. Arrows are left to the focused role <select>; the room/name <input>s get
-  // Enter via onSubmit and the select gets it via onSelect, so both submit.
+  // back. Arrows are left to the focused role <select>; the name/path <input>s
+  // get Enter via onSubmit and the select gets it via onSelect.
   useKeyboard((event: KeyEvent) => {
     const keyName = typeof event.name === "string" ? event.name.toLowerCase() : ""
     if (keyName === "escape") {
@@ -214,8 +217,16 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
         return FIELD_ORDER[(index + delta) % FIELD_ORDER.length]
       })
     }
-    if (keyName === "up") setSelectedKey((prev) => Math.max(0, prev - 1))
-    if (keyName === "down" && keys.length) setSelectedKey((prev) => Math.min(keys.length - 1, prev + 1))
+    // The role select owns its arrows. Moving it must not silently retarget a pending key edit or
+    // deletion to another invite in the list.
+    if (focused !== "role" && keyName === "up") {
+      setConfirming(null)
+      setSelectedKey((prev) => Math.max(0, prev - 1))
+    }
+    if (focused !== "role" && keyName === "down" && keys.length) {
+      setConfirming(null)
+      setSelectedKey((prev) => Math.min(keys.length - 1, prev + 1))
+    }
   })
 
   return (
@@ -286,19 +297,9 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
           <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} marginTop={1} width={72}>
             <text fg={theme.dim}>{tt(locale, "keys.intro")}</text>
 
-            <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("room")}>
-              <text fg={focused === "room" ? theme.accent : theme.dim}>{tt(locale, "keys.room")}</text>
-              <input
-                flexGrow={1}
-                value={room}
-                focused={focused === "room"}
-                placeholder={tt(locale, "keys.roomPlaceholder")}
-                onInput={(value: string) => {
-                  roomRef.current = value
-                  setRoom(value)
-                }}
-                onSubmit={mint}
-              />
+            <box flexDirection="column" marginTop={1}>
+              <text fg={theme.dim}>{tt(locale, "keys.room")}</text>
+              <text fg={theme.fg}>{stripControlChars(welcome.room)}</text>
             </box>
 
             <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("name")}>
@@ -309,6 +310,7 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
                 focused={focused === "name"}
                 placeholder={tt(locale, "keys.blank")}
                 onInput={(value: string) => {
+                  setConfirming(null)
                   nameRef.current = value
                   setName(value)
                 }}
@@ -332,7 +334,10 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
                 selectedTextColor={theme.bg}
                 descriptionColor={theme.dim}
                 selectedDescriptionColor={theme.bg}
-                onChange={(index: number) => setRoleIndex(index)}
+                onChange={(index: number) => {
+                  setConfirming(null)
+                  setRoleIndex(index)
+                }}
                 onSelect={mint}
               />
             </box>
@@ -345,6 +350,7 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
                 focused={focused === "path"}
                 placeholder={tt(locale, "keys.backupPlaceholder")}
                 onInput={(value: string) => {
+                  setConfirming(null)
                   pathRef.current = value
                   setPath(value)
                 }}

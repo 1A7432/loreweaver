@@ -31,9 +31,9 @@ The first frame a client sends MUST be `join`. The server replies with
 either `welcome` or `error`, closing the connection on error. If it doesn't
 arrive within the server's join-handshake timeout (`TRPG_TUI__JOIN_TIMEOUT`,
 default 10s), the server closes the connection with `error join_timeout`
-rather than waiting forever. A connection accepted over the server's
-concurrent-connection cap (`TRPG_TUI__MAX_CONNECTIONS`) is refused before
-`join` is even read: `error too_many_connections`, then closed.
+rather than waiting forever. The offline WebSocket test carrier also supports a
+concurrent-connection cap (`TRPG_TUI__MAX_CONNECTIONS`): excess test-carrier
+connections receive `error too_many_connections` before `join` is read.
 
 ## Client → Server
 
@@ -54,11 +54,17 @@ concurrent-connection cap (`TRPG_TUI__MAX_CONNECTIONS`) is refused before
 ## Server → Client
 
 - `welcome` — sent once, on a successful `join`:
-  `{type:"welcome", protocol:"1.4", features:["media","audio", "imagegen"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string}`
+  `{type:"welcome", protocol:"1.4", features:["media","audio", "imagegen"?, "demo"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string}`
+  `demo` means the server is using its offline sample Keeper, vector support is
+  enabled, and this specific Keeper room was empty when the server checked it.
+  The server rechecks under the room turn lock before setup, so a stale flag cannot
+  overwrite campaign state. An `admin_config{using_demo:false}` refresh (for example,
+  after saving on the model screen) removes it immediately; otherwise reconnecting
+  recalculates it, and a stale action is rejected server-side.
 - `error` — a localized failure notice; `bad_key`, `join_timeout` and
   `too_many_connections` close the connection (they only ever happen during
   or before the `join` handshake), the others do not:
-  `{type:"error", code:"bad_key"|"bad_frame"|"rate_limited"|"server_error"|"join_timeout"|"too_many_connections"|media error codes, message:string}`
+  `{type:"error", code:"bad_key"|"bad_frame"|"rate_limited"|"server_error"|"join_timeout"|"too_many_connections"|"demo_unavailable"|media error codes, message:string}`
 - `media_accept` — upload accepted; if `existing` is true, no PUT is needed:
   `{type:"media_accept", upload_id:string, existing?:boolean, media?:MediaFrame, audio?:AudioLibraryItem}`
 - `media` — media metadata broadcast and history replay entry; bytes are fetched on demand:
@@ -116,8 +122,10 @@ On an `input` frame from a client in room `R`, the server:
    player-safe tool result.
 7. Broadcasts the reply as `narrative{text: reply}` — `speaker:"system"` for
    a command reply, `speaker:"kp", format:"markdown"` for an AI Keeper
-   reply. The reply is already censored; keeper-only tool outputs never
-   reach this frame (the loop guarantees that — see `agent/loop.py`).
+   reply. The reply is already passed through the configured output wordlist.
+   Raw keeper-only tool results are never copied directly into this frame, but
+   the main Keeper model has seen them and could restate them; that behavioral
+   risk is measured separately by the live-model red-line eval.
 8. Rebuilds and broadcasts a `state` frame (`net.state.build_room_state`).
 
 Multiple clients whose keys map to the same room share one AI-KP session;
@@ -215,21 +223,29 @@ Client → server:
 
 - `admin_get_config` — `{type:"admin_get_config"}`
 - `admin_set_model` — switch the live LLM provider/model, and optionally set this
-  provider's key/base_url (blank = keep the saved one). The server remembers the
-  credential per provider, so a later switch back to it needs no key:
+  provider's key/base_url. Omitted fields reuse the provider's saved credential
+  only while the endpoint is unchanged; an explicit empty value clears that
+  field. Supplying a different `base_url` without a new `api_key` clears the old
+  key, so it is never sent to the new endpoint. The server remembers credentials
+  per provider, so a later switch back to an unchanged endpoint needs no key:
   `{type:"admin_set_model", provider:string, chat_model?:string, api_key?:string, base_url?:string}`
 - `admin_set_imagegen` — configure the OpenAI-compatible image-generation
-  endpoint. `api_key` is optional; when omitted the server reuses the saved key
-  for that provider:
+  endpoint. It follows the same endpoint/key isolation rule as `admin_set_model`:
+  an omitted key is reusable only for the same endpoint, while changing
+  `base_url` without a new key clears the old key:
   `{type:"admin_set_imagegen", provider:string, base_url?:string, model:string, api_key?:string, size?:string}`
 - `admin_list_models` — fetch a provider's live model catalog (OpenAI-compatible
   `GET /models`). All fields optional: omit to list the current provider; pass
   `provider` (+ optional `api_key`/`base_url`) to preview another before switching:
   `{type:"admin_list_models", provider?:string, api_key?:string, base_url?:string}`.
-  The reply also includes the current `imagegen` status.
-- `admin_list_keys` — `{type:"admin_list_keys"}`
-- `admin_mint_key` — mint a room access key:
-  `{type:"admin_mint_key", room:string, name?:string, role?:"player"|"keeper"}`
+  Previewing a different `base_url` never reuses a saved/current key unless that
+  key is supplied on the same request. The reply also includes the current
+  `imagegen` status.
+- `admin_list_keys` — list access keys for the caller's bound room only:
+  `{type:"admin_list_keys"}`
+- `admin_mint_key` — mint an access key for the caller's bound room only; a
+  different `room` is forbidden (the field may be omitted to select the caller's room):
+  `{type:"admin_mint_key", room?:string, name?:string, role?:"player"|"keeper"}`
 - `admin_update_key` — update one key by its stable non-secret id:
   `{type:"admin_update_key", id:string, room?:string, name?:string, role?:"player"|"keeper"}`
 - `admin_delete_key` — delete one key by id:
@@ -266,7 +282,10 @@ Server → client:
   provider catalog, the providers that already have a saved credential (`saved_providers`),
   whether a runtime override is active, and the display-safe image-generation
   status:
-  `{type:"admin_config", provider:string, chat_model:string, base_url:string, api_key_masked:string, providers:string[], saved_providers:string[], override_active:boolean, imagegen?:ImageGenStatus, subscription_status?:""|"logged_in"|"logged_out"}`
+  `{type:"admin_config", provider:string, chat_model:string, base_url:string, api_key_masked:string, providers:string[], saved_providers:string[], override_active:boolean, imagegen?:ImageGenStatus, using_demo?:boolean, subscription_status?:""|"logged_in"|"logged_out"}`
+  `using_demo` tracks the live offline fallback so a client can immediately remove
+  a stale sample-adventure affordance. A true value alone does not authorize setup;
+  only the room-scoped `welcome.features` check may add it.
   `subscription_status` is `"logged_in"` or `"logged_out"` when the current
   provider is on a ChatGPT / SuperGrok OAuth path. Empty or absent means the
   classic API-key path (including a `chatgpt` / `gpt-subscription` provider with
@@ -278,12 +297,12 @@ Server → client:
   `{type:"admin_models", provider:string, models:string[], imagegen?:ImageGenStatus}`
 - `ImageGenStatus` — `{provider:string, base_url:string, model:string, size:string, api_key_masked:string, has_key:boolean, configured:boolean, saved_providers?:string[]}`.
   The API key is never returned in cleartext.
-- `admin_keys` — the room-key roster; every entry's key value is masked. A
+- `admin_keys` — the caller's own room-key roster; every entry's key value is masked. A
   `mint` request additionally returns the freshly minted key ONCE in cleartext
   under `minted` (so the keeper can copy it):
   `{type:"admin_keys", keys:[{id:string, key_masked:string, room:string, name:string, role:"player"|"keeper"}], minted?:{key:string, room:string, name:string, role:"player"|"keeper"}}`
 - `admin_room_op` — result for export/import/full-delete room operations:
-  `{type:"admin_room_op", action:"export"|"import"|"delete", room:string, path?:string, keys:number, store_rows:number, vector_points:number}`
+  `{type:"admin_room_op", action:"export"|"import"|"delete", room:string, path?:string, keys:number, store_rows:number, vector_points:number, media_files?:number}`
 - `admin_error` — a localized failure notice (does not close the connection):
   `{type:"admin_error", code:"forbidden"|"unknown_provider"|"bad_request"|"set_failed"|"not_found"|"op_failed", message?:string}`
 - `admin_skills` — every discoverable skill, `enabled` reflecting the caller's room:
@@ -306,7 +325,10 @@ same path as the `.model set` chat command — then replies a fresh
 `admin_config`. A key set here is also saved to a per-provider credential book
 (`infra.runtime_config.CredentialBook`), so switching providers never re-asks for
 a key you've already entered; `admin_list_models` reuses that saved credential
-when no explicit `api_key` is supplied. Subscription OAuth grants are stored in
+when no explicit `api_key` is supplied and the endpoint is unchanged. A newly
+supplied endpoint is never paired with an older key: the caller must supply the
+matching key on that request or the server uses/persists an empty key.
+Subscription OAuth grants are stored in
 the same local credential book under their canonical provider name.
 
 The provider catalog is additive. `chatgpt` / `gpt-subscription` are dual-mode:

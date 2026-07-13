@@ -28,8 +28,10 @@ on:
       - .github/workflows/release-server.yml
 
 concurrency:
-  group: release-server
-  cancel-in-progress: true
+  # A newer main build may supersede an older main build, but a version tag is
+  # immutable release work and must never be cancelled by an unrelated ref.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
 
 permissions:
   contents: read
@@ -76,12 +78,16 @@ jobs:
 
       - name: Assert the expected asset was produced
         shell: bash
-        run: test -f "${{ matrix.file }}" || { echo "::error::expected asset ${{ matrix.file }} was not produced"; exit 1; }
+        run: |
+          test -f "${{ matrix.file }}" || { echo "::error::expected asset ${{ matrix.file }} was not produced"; exit 1; }
+          uv run python -c 'import hashlib, pathlib, sys; p = pathlib.Path(sys.argv[1]); p.with_name(p.name + ".sha256").write_text(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n")' "${{ matrix.file }}"
 
       - uses: actions/upload-artifact@v7
         with:
           name: loreweaver-server-${{ matrix.asset }}
-          path: ${{ matrix.file }}
+          path: |
+            ${{ matrix.file }}
+            ${{ matrix.file }}.sha256
           if-no-files-found: error
 
   publish:
@@ -113,9 +119,15 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check "setuptools-scm>=10.2.0"
           version="$(python -m setuptools_scm)"
-          if stable_tag="$(git describe --tags --exact-match --match 'v[0-9]*' 2>/dev/null)"; then
-            tag="$stable_tag"
+          exact_tag="$(git describe --tags --exact-match --match 'v*' 2>/dev/null || true)"
+          if [[ "$exact_tag" =~ ^v[0-9]+([.][0-9]+)*$ ]]; then
+            tag="$exact_tag"
             channel="stable"
+          elif [ -n "$exact_tag" ]; then
+            # Keep prerelease tags immutable and addressable, but do not let
+            # v1.2.3-rc1 replace GitHub's stable `latest` release.
+            tag="$exact_tag"
+            channel="dev"
           else
             tag="release-${version}"
             channel="dev"
@@ -154,13 +166,18 @@ jobs:
           - Windows PowerShell: \`irm https://github.com/$R/releases/latest/download/install.ps1 | iex\`
 
           Pin or roll back by setting \`TRPG_RELEASE_TAG=$TAG\` before running the installer.
+          Downloaded archives are verified against their adjacent \`.sha256\` assets.
           EOF
+            release_flags=(--prerelease)
+            if [ "$CHANNEL" = "stable" ]; then
+              release_flags=(--latest)
+            fi
             gh release create "$TAG" \
               --repo "$R" \
               --target "$GITHUB_SHA" \
               --title "Loreweaver ${VERSION}" \
               --notes-file release-notes.md \
-              --latest \
+              "${release_flags[@]}" \
             || gh release view "$TAG" --repo "$R" >/dev/null
           fi
           gh release upload "$TAG" dist/loreweaver-server-* --repo "$R" --clobber

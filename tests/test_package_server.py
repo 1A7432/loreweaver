@@ -5,8 +5,11 @@ packaging task, not something the offline suite does)."""
 
 from __future__ import annotations
 
+import tarfile
+
 import pytest
 
+from scripts import package_server
 from scripts.package_server import (
     PackagingError,
     archive_name,
@@ -61,3 +64,21 @@ def test_executable_name_adds_exe_suffix_only_on_windows():
     assert executable_name("macos-arm64") == "loreweaver-server"
     assert executable_name("linux-x64") == "loreweaver-server"
     assert executable_name("linux-arm64") == "loreweaver-server"
+
+
+def test_server_tar_materializes_symlinks_as_regular_files(tmp_path, monkeypatch):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    target = bundle / "library-real.so"
+    target.write_bytes(b"shared-library")
+    (bundle / "library.so").symlink_to(target.name)
+    monkeypatch.setattr(package_server, "DIST_DIR", tmp_path / "dist")
+
+    archive = package_server.make_archive(bundle, "linux-x64")
+
+    with tarfile.open(archive, "r:gz") as tf:
+        member = tf.getmember("loreweaver-server/library.so")
+        assert member.isfile()
+        extracted = tf.extractfile(member)
+        assert extracted is not None
+        assert extracted.read() == b"shared-library"

@@ -6,9 +6,14 @@ database, plus MigrationRunner idempotency.
 """
 
 import json
+import os
 import sqlite3
+import stat
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 from infra.store import MigrationRunner, Store
 
@@ -48,6 +53,46 @@ async def test_file_store_get_set_delete_round_trip(tmp_path: Path):
     await store.delete(user_key="u1", store_key="k1")
     assert await store.get(user_key="u1", store_key="k1") is None
     assert db_path.exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="exact permission bits are POSIX-only")
+async def test_file_store_tightens_sqlite_and_live_sidecars(tmp_path: Path):
+    db_path = tmp_path / "credentials.sqlite3"
+    store = Store(db_path)
+
+    await store.set(user_key="", store_key="runtime_config.credentials", value='{"openai": {"api_key": "secret"}}')
+
+    candidates = [db_path, Path(f"{db_path}-wal"), Path(f"{db_path}-shm")]
+    assert db_path.exists()
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in candidates if path.exists())
+    store.close()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="exact permission bits are POSIX-only")
+def test_file_store_self_heals_existing_database_before_first_read(tmp_path: Path):
+    db_path = tmp_path / "legacy.sqlite3"
+    sqlite3.connect(db_path).close()
+    os.chmod(db_path, 0o644)
+
+    Store(db_path)
+
+    assert stat.S_IMODE(db_path.stat().st_mode) == 0o600
+
+
+@pytest.mark.skipif(os.name != "posix", reason="exact permission bits are POSIX-only")
+async def test_new_database_is_private_before_sqlite_opens_it(tmp_path: Path):
+    db_path = tmp_path / "new.sqlite3"
+    real_connect = sqlite3.connect
+
+    def checked_connect(path, *args, **kwargs):
+        assert Path(path).is_file()
+        assert stat.S_IMODE(Path(path).stat().st_mode) == 0o600
+        return real_connect(path, *args, **kwargs)
+
+    with patch("infra.store.sqlite3.connect", side_effect=checked_connect):
+        store = Store(db_path)
+        await store.set(store_key="secret", value="value")
+        store.close()
 
 
 async def test_file_store_persists_across_instances(tmp_path: Path):

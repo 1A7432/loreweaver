@@ -356,15 +356,17 @@ export class IrohClient implements AppClient {
   adminSetModel(provider: string, chatModel?: string, apiKey?: string, baseUrl?: string): void {
     const frame: AdminSetModelFrame = { type: FrameType.AdminSetModel, provider }
     if (chatModel) frame.chat_model = chatModel
-    if (apiKey) frame.api_key = apiKey
-    if (baseUrl) frame.base_url = baseUrl
+    // Empty and omitted have different protocol semantics: empty clears a saved
+    // credential field; undefined reuses the unchanged endpoint pair.
+    if (apiKey !== undefined) frame.api_key = apiKey
+    if (baseUrl !== undefined) frame.base_url = baseUrl
     this.sendFrame(frame)
   }
 
   adminSetImagegen(provider: string, model: string, apiKey?: string, baseUrl?: string, size?: string): void {
     const frame: AdminSetImagegenFrame = { type: FrameType.AdminSetImagegen, provider, model }
-    if (apiKey) frame.api_key = apiKey
-    if (baseUrl) frame.base_url = baseUrl
+    if (apiKey !== undefined) frame.api_key = apiKey
+    if (baseUrl !== undefined) frame.base_url = baseUrl
     if (size) frame.size = size
     this.sendFrame(frame)
   }
@@ -372,8 +374,8 @@ export class IrohClient implements AppClient {
   adminListModels(provider?: string, apiKey?: string, baseUrl?: string): void {
     const frame: AdminListModelsFrame = { type: FrameType.AdminListModels }
     if (provider) frame.provider = provider
-    if (apiKey) frame.api_key = apiKey
-    if (baseUrl) frame.base_url = baseUrl
+    if (apiKey !== undefined) frame.api_key = apiKey
+    if (baseUrl !== undefined) frame.base_url = baseUrl
     this.sendFrame(frame)
   }
 
@@ -381,8 +383,9 @@ export class IrohClient implements AppClient {
     this.sendFrame({ type: FrameType.AdminListKeys })
   }
 
-  adminMintKey(room: string, name?: string, role?: PlayerRole): void {
-    const frame: AdminMintKeyFrame = { type: FrameType.AdminMintKey, room }
+  adminMintKey(room?: string, name?: string, role?: PlayerRole): void {
+    const frame: AdminMintKeyFrame = { type: FrameType.AdminMintKey }
+    if (room !== undefined) frame.room = room
     if (name) frame.name = name
     if (role) frame.role = role
     this.sendFrame(frame)

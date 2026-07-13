@@ -6,6 +6,7 @@ import json
 from itertools import count
 from pathlib import Path
 
+from gateway.demo import is_demo_setup_request, is_guided_demo_request
 from infra.i18n import t
 from infra.llm import ToolCall, assistant_text, assistant_tools
 
@@ -24,7 +25,23 @@ def demo_kp_responder(messages, tools):
     user_text = str(messages[last_user].get("content", "")).lower()
     called = _tools_called_this_turn(messages)
 
-    if "upload" in user_text or "module" in user_text:
+    # The TUI's first-run button sends a normal, localized player action. Treat
+    # it as one complete guided transaction so the user never has to guess the
+    # old upload -> start keyword sequence: setup first, inspect the freshly
+    # installed module next, then narrate the opening in the same turn.
+    if is_guided_demo_request(user_text):
+        if "upload_document" not in called:
+            return assistant_tools(
+                _tool("upload_document", {"file_path": str(DEMO_MODULE_PATH), "doc_type": "module"}),
+                _tool("create_character", {"name": "Nora Vance", "system": "coc7"}),
+                _tool("update_character_skill", {"skill_name": "Spot Hidden", "value": 65}),
+                _tool("start_session_recording", {"session_name": "The Blackmoor Lighthouse"}),
+            )
+        if "get_module_summary" not in called:
+            return assistant_tools(_tool("get_module_summary", {}))
+        return assistant_text(t("cli.demo.opening"))
+
+    if is_demo_setup_request(user_text):
         if "upload_document" not in called:
             return assistant_tools(
                 _tool("upload_document", {"file_path": str(DEMO_MODULE_PATH), "doc_type": "module"}),
@@ -39,7 +56,14 @@ def demo_kp_responder(messages, tools):
             return assistant_tools(_tool("get_module_summary", {}))
         return assistant_text(t("cli.demo.opening"))
 
-    if "search" in user_text or "desk" in user_text or "look" in user_text:
+    if (
+        "search" in user_text
+        or "desk" in user_text
+        or "look" in user_text
+        or "搜索" in user_text
+        or "搜查" in user_text
+        or "查看" in user_text
+    ):
         if "skill_check" not in called:
             return assistant_tools(_tool("skill_check", {"skill_name": "Spot Hidden"}))
         result = _last_tool_result(messages).lower()

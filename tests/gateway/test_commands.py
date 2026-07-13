@@ -9,10 +9,12 @@ from agent.services import build_services
 from core.dice_engine import seed_dice
 from gateway.commands import CommandRouter
 from gateway.ops import get_enabled_skills
+from gateway.rooms import get_binding, session_key_for_room
 from infra.config import LLMSettings, Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM, assistant_text
 from infra.providers import MutableLLM
+from infra.runtime_config import CREDENTIALS_KEY, DEFAULT_KEY
 
 
 def _services():
@@ -216,6 +218,33 @@ async def test_model_set_reconfigures_live_and_persists():
     }
 
 
+async def test_model_set_persistence_failure_restores_exact_live_snapshot(monkeypatch):
+    services = _mutable_services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+    old_inner = services.llm.inner
+    original_set = services.store.set
+    attempts = 0
+
+    async def commit_then_fail(user_key="", store_key="", value=None):
+        nonlocal attempts
+        result = await original_set(user_key=user_key, store_key=store_key, value=value)
+        if store_key == DEFAULT_KEY:
+            attempts += 1
+        if store_key == DEFAULT_KEY and attempts == 1:
+            raise OSError("runtime store unavailable after write")
+        return result
+
+    monkeypatch.setattr(services.store, "set", commit_then_fail)
+    reply = await router.dispatch(ctx, ".model set deepseek deepseek-chat")
+
+    assert reply is not None and "deepseek" in reply
+    assert services.settings.llm.provider == "openai"
+    assert services.settings.llm.chat_model == "gpt-4o"
+    assert services.llm.inner is old_inner
+    assert await services.runtime_config.load() == {}
+
+
 async def test_model_set_rejects_unknown_provider():
     services = _mutable_services()
     router = CommandRouter(services)
@@ -379,6 +408,49 @@ async def test_model_login_switches_current_chatgpt_proxy_to_oauth(monkeypatch):
     assert shown is not None and "subscription logged in" in shown.casefold()
 
 
+async def test_subscription_proxy_switch_persistence_failure_restores_live_proxy(monkeypatch):
+    from gateway.commands import _refresh_active_subscription_clients
+
+    settings = Settings(
+        llm=LLMSettings(
+            provider="chatgpt",
+            chat_model="proxy-model",
+            api_key="sk-proxy-secret",
+            base_url="https://chatgpt-proxy.example/v1",
+        )
+    )
+    llm = MutableLLM(settings, builder=lambda _settings: FakeLLM(script=[]))
+    services = build_services(settings, llm=llm, embeddings=FakeEmbeddings(64))
+    proxy_snapshot = {
+        "provider": "chatgpt",
+        "chat_model": "proxy-model",
+        "api_key": "sk-proxy-secret",
+        "base_url": "https://chatgpt-proxy.example/v1",
+    }
+    await services.runtime_config.replace(**proxy_snapshot)
+    old_inner = services.llm.inner
+    original_set = services.store.set
+    attempts = 0
+
+    async def commit_then_fail(user_key="", store_key="", value=None):
+        nonlocal attempts
+        result = await original_set(user_key=user_key, store_key=store_key, value=value)
+        if store_key == DEFAULT_KEY:
+            attempts += 1
+        if store_key == DEFAULT_KEY and attempts == 1:
+            raise OSError("runtime store unavailable after write")
+        return result
+
+    monkeypatch.setattr(services.store, "set", commit_then_fail)
+    with pytest.raises(OSError, match="runtime store unavailable after write"):
+        await _refresh_active_subscription_clients(services, "chatgpt")
+
+    assert services.llm.inner is old_inner
+    assert services.settings.llm.api_key == "sk-proxy-secret"
+    assert services.settings.llm.base_url == "https://chatgpt-proxy.example/v1"
+    assert await services.runtime_config.load() == proxy_snapshot
+
+
 async def test_model_logout_chatgpt_proxy_preserves_static_credentials():
     import time
 
@@ -412,6 +484,60 @@ async def test_model_logout_chatgpt_proxy_preserves_static_credentials():
     credential = await services.llm_credentials.get("chatgpt")
     assert credential["api_key"] == "sk-proxy-secret"
     assert credential["base_url"] == "https://chatgpt-proxy.example/v1"
+    assert services.settings.llm.api_key == "sk-proxy-secret"
+    assert services.settings.llm.base_url == "https://chatgpt-proxy.example/v1"
+
+
+async def test_model_logout_failure_restores_oauth_and_independent_proxy_credential(monkeypatch):
+    import time
+
+    from infra.oauth_flows import SubscriptionToken
+
+    settings = Settings(
+        llm=LLMSettings(
+            provider="chatgpt",
+            chat_model="proxy-model",
+            api_key="sk-proxy-secret",
+            base_url="https://chatgpt-proxy.example/v1",
+        )
+    )
+    services = build_services(settings, embeddings=FakeEmbeddings(64))
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+    await services.llm_credentials.save_subscription(
+        "chatgpt",
+        SubscriptionToken("access-oauth", "refresh-oauth", time.time() + 3600),
+    )
+    await services.llm_credentials.remember(
+        "chatgpt",
+        api_key="sk-proxy-secret",
+        base_url="https://chatgpt-proxy.example/v1",
+    )
+    original_set = services.store.set
+    attempts = 0
+
+    async def commit_then_fail(user_key="", store_key="", value=None):
+        nonlocal attempts
+        result = await original_set(user_key=user_key, store_key=store_key, value=value)
+        if store_key == CREDENTIALS_KEY:
+            attempts += 1
+        if store_key == CREDENTIALS_KEY and attempts == 1:
+            raise OSError("credential store unavailable after delete")
+        return result
+
+    monkeypatch.setattr(services.store, "set", commit_then_fail)
+    reply = await router.dispatch(ctx, ".model logout chatgpt")
+
+    assert reply is not None and "chatgpt" in reply
+    restored = await services.llm_credentials.get("chatgpt")
+    assert restored["access_token"] == "access-oauth"
+    assert restored["refresh_token"] == "refresh-oauth"
+    assert restored["api_key"] == "sk-proxy-secret"
+    assert restored["base_url"] == "https://chatgpt-proxy.example/v1"
+    persisted_book = json.loads(
+        await services.store.get(user_key="", store_key=CREDENTIALS_KEY) or "{}"
+    )
+    assert persisted_book["chatgpt"] == restored
     assert services.settings.llm.api_key == "sk-proxy-secret"
     assert services.settings.llm.base_url == "https://chatgpt-proxy.example/v1"
 
@@ -520,6 +646,83 @@ async def test_model_logout_invalidates_active_clients_and_reverts_to_base_provi
     assert services.imagegen is None
     with pytest.raises(OAuthError, match="subscription_login_required"):
         await old_inner.chat([{"role": "user", "content": "hello"}])
+
+
+async def test_model_logout_runtime_clear_failure_keeps_grant_override_and_live(monkeypatch):
+    import time
+
+    from infra.oauth_flows import SubscriptionToken
+
+    services = _mutable_services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+    await services.llm_credentials.save_subscription(
+        "supergrok",
+        SubscriptionToken("access-secret", "refresh-secret", time.time() + 3600),
+    )
+    await router.dispatch(ctx, ".model set supergrok grok-custom")
+    runtime_before = await services.runtime_config.get()
+    old_inner = services.llm.inner
+    original_delete = services.store.delete
+    attempts = 0
+
+    async def commit_then_fail(user_key="", store_key=""):
+        nonlocal attempts
+        result = await original_delete(user_key=user_key, store_key=store_key)
+        if store_key == DEFAULT_KEY:
+            attempts += 1
+        if store_key == DEFAULT_KEY and attempts == 1:
+            raise OSError("runtime store unavailable after delete")
+        return result
+
+    monkeypatch.setattr(services.store, "delete", commit_then_fail)
+    reply = await router.dispatch(ctx, ".model logout supergrok")
+
+    assert reply is not None and "supergrok" in reply
+    assert await services.llm_credentials.load_subscription("supergrok") is not None
+    assert await services.runtime_config.load() == runtime_before
+    assert services.settings.llm.provider == "supergrok"
+    assert services.llm.inner is not old_inner  # rollback rebuilds against the still-valid grant
+
+
+async def test_model_logout_credential_failure_compensates_runtime_and_live(monkeypatch):
+    import time
+
+    from infra.oauth_flows import SubscriptionToken
+
+    services = _mutable_services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+    await services.llm_credentials.save_subscription(
+        "supergrok",
+        SubscriptionToken("access-secret", "refresh-secret", time.time() + 3600),
+    )
+    await router.dispatch(ctx, ".model set supergrok grok-custom")
+    runtime_before = await services.runtime_config.get()
+    original_set = services.store.set
+    attempts = 0
+
+    async def commit_then_fail(user_key="", store_key="", value=None):
+        nonlocal attempts
+        result = await original_set(user_key=user_key, store_key=store_key, value=value)
+        if store_key == CREDENTIALS_KEY:
+            attempts += 1
+        if store_key == CREDENTIALS_KEY and attempts == 1:
+            raise OSError("credential store unavailable after delete")
+        return result
+
+    monkeypatch.setattr(services.store, "set", commit_then_fail)
+    reply = await router.dispatch(ctx, ".model logout supergrok")
+
+    assert reply is not None and "supergrok" in reply
+    assert await services.llm_credentials.load_subscription("supergrok") is not None
+    persisted_book = json.loads(
+        await services.store.get(user_key="", store_key=CREDENTIALS_KEY) or "{}"
+    )
+    assert persisted_book["supergrok"]["access_token"] == "access-secret"
+    assert await services.runtime_config.load() == runtime_before
+    assert services.settings.llm.provider == "supergrok"
+    assert services.settings.llm.chat_model == "grok-custom"
 
 
 async def test_model_logout_restart_keeps_base_provider_and_empty_override(tmp_path):
@@ -659,6 +862,223 @@ async def test_model_relogin_hot_rebuilds_active_supergrok_clients(monkeypatch):
     assert services.imagegen is unrelated_imagegen
 
 
+async def test_model_relogin_refresh_failure_restores_old_grant_and_rebuilds_clients(monkeypatch):
+    import asyncio
+    import time
+
+    import gateway.commands as commands_module
+    from infra.oauth_flows import DeviceLogin, OAuthError, SubscriptionToken
+
+    class _ImmediateFlow:
+        async def start(self):
+            return DeviceLogin(
+                verification_url="https://auth.example/device",
+                user_code="ROLLBACK",
+                poll_interval=1,
+                expires_at=time.time() + 60,
+            )
+
+        async def poll(self, _login):
+            return SubscriptionToken("access-new", "refresh-new", time.time() + 7200)
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(commands_module, "flow_for", lambda _provider: _ImmediateFlow())
+    settings = Settings(
+        llm=LLMSettings(provider="openai", chat_model="gpt-4o", api_key="sk-baseline")
+    )
+    services = build_services(settings, embeddings=FakeEmbeddings(64))
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+    await services.llm_credentials.save_subscription(
+        "supergrok",
+        SubscriptionToken("access-old", "refresh-old", time.time() + 3600),
+    )
+    services.settings.imagegen.provider = "supergrok"
+    services.settings.imagegen.model = "grok-imagine-image"
+    await router.dispatch(ctx, ".model set supergrok grok-custom")
+    runtime_before = await services.runtime_config.get()
+    old_llm = services.llm.inner
+    old_imagegen = services.imagegen
+    assert old_imagegen is not None
+    original_refresh = commands_module._refresh_active_subscription_clients
+
+    async def refresh_then_fail(target_services, canonical):
+        await original_refresh(target_services, canonical)
+        raise OSError("refresh failed after replacing clients")
+
+    monkeypatch.setattr(
+        commands_module,
+        "_refresh_active_subscription_clients",
+        refresh_then_fail,
+    )
+    started = await router.dispatch(ctx, ".model login supergrok")
+    session = services._subscription_logins["supergrok"]
+    await asyncio.wait_for(session["task"], timeout=1.0)
+
+    assert started is not None and "ROLLBACK" in started
+    assert session["done"] is True
+    assert session["error"] == "subscription_poll_failed"
+    restored = await services.llm_credentials.load_subscription("supergrok")
+    assert restored is not None
+    assert restored.access_token == "access-old"
+    assert restored.refresh_token == "refresh-old"
+    persisted_book = json.loads(
+        await services.store.get(user_key="", store_key=CREDENTIALS_KEY) or "{}"
+    )
+    assert persisted_book["supergrok"]["access_token"] == "access-old"
+    assert await services.runtime_config.load() == runtime_before
+    assert services.llm.inner is not old_llm
+    assert services.imagegen is not old_imagegen
+    assert await services.llm.inner._token_provider() == "access-old"
+    assert await services.imagegen._token_provider() == "access-old"
+    with pytest.raises(OAuthError, match="subscription_login_required"):
+        await old_llm._token_provider()
+    with pytest.raises(OAuthError, match="subscription_login_required"):
+        await old_imagegen._token_provider()
+
+
+async def test_model_first_proxy_login_persistence_failure_restores_proxy(monkeypatch):
+    import asyncio
+    import time
+
+    import gateway.commands as commands_module
+    from infra.oauth_flows import DeviceLogin, SubscriptionToken
+
+    class _ImmediateFlow:
+        async def start(self):
+            return DeviceLogin(
+                verification_url="https://auth.example/device",
+                user_code="PROXY",
+                poll_interval=1,
+                expires_at=time.time() + 60,
+            )
+
+        async def poll(self, _login):
+            return SubscriptionToken("access-new", "refresh-new", time.time() + 3600)
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(commands_module, "flow_for", lambda _provider: _ImmediateFlow())
+    settings = Settings(
+        llm=LLMSettings(
+            provider="chatgpt",
+            chat_model="proxy-model",
+            api_key="sk-proxy-secret",
+            base_url="https://chatgpt-proxy.example/v1",
+        )
+    )
+    services = build_services(settings, embeddings=FakeEmbeddings(64))
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+    proxy_snapshot = {
+        "provider": "chatgpt",
+        "chat_model": "proxy-model",
+        "api_key": "sk-proxy-secret",
+        "base_url": "https://chatgpt-proxy.example/v1",
+    }
+    await services.runtime_config.replace(**proxy_snapshot)
+    await services.llm_credentials.replace_static(
+        "chatgpt",
+        api_key="sk-proxy-secret",
+        base_url="https://chatgpt-proxy.example/v1",
+    )
+    old_inner = services.llm.inner
+    original_set = services.store.set
+    runtime_writes = 0
+
+    async def commit_then_fail(user_key="", store_key="", value=None):
+        nonlocal runtime_writes
+        result = await original_set(user_key=user_key, store_key=store_key, value=value)
+        if store_key == DEFAULT_KEY:
+            runtime_writes += 1
+        if store_key == DEFAULT_KEY and runtime_writes == 1:
+            raise OSError("runtime store unavailable after write")
+        return result
+
+    monkeypatch.setattr(services.store, "set", commit_then_fail)
+    started = await router.dispatch(ctx, ".model login chatgpt")
+    session = services._subscription_logins["chatgpt"]
+    await asyncio.wait_for(session["task"], timeout=1.0)
+
+    assert started is not None and "PROXY" in started
+    assert session["error"] == "subscription_poll_failed"
+    assert await services.llm_credentials.load_subscription("chatgpt") is None
+    restored = await services.llm_credentials.get("chatgpt")
+    assert restored == {
+        "api_key": "sk-proxy-secret",
+        "base_url": "https://chatgpt-proxy.example/v1",
+    }
+    persisted_book = json.loads(
+        await services.store.get(user_key="", store_key=CREDENTIALS_KEY) or "{}"
+    )
+    assert persisted_book["chatgpt"] == restored
+    assert await services.runtime_config.load() == proxy_snapshot
+    assert services.llm.inner is old_inner
+    assert services.settings.llm.provider == "chatgpt"
+    assert services.settings.llm.api_key == "sk-proxy-secret"
+    assert services.settings.llm.base_url == "https://chatgpt-proxy.example/v1"
+
+
+async def test_model_first_login_oauth_commit_then_raise_removes_new_grant(monkeypatch):
+    import asyncio
+    import time
+
+    import gateway.commands as commands_module
+    from infra.oauth_flows import DeviceLogin, SubscriptionToken
+
+    class _ImmediateFlow:
+        async def start(self):
+            return DeviceLogin(
+                verification_url="https://auth.example/device",
+                user_code="OAUTH-WRITE",
+                poll_interval=1,
+                expires_at=time.time() + 60,
+            )
+
+        async def poll(self, _login):
+            return SubscriptionToken("access-new", "refresh-new", time.time() + 3600)
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(commands_module, "flow_for", lambda _provider: _ImmediateFlow())
+    services = _mutable_services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+    old_inner = services.llm.inner
+    original_set = services.store.set
+    credential_writes = 0
+
+    async def commit_then_fail(user_key="", store_key="", value=None):
+        nonlocal credential_writes
+        result = await original_set(user_key=user_key, store_key=store_key, value=value)
+        if store_key == CREDENTIALS_KEY:
+            credential_writes += 1
+        if store_key == CREDENTIALS_KEY and credential_writes == 1:
+            raise OSError("credential store unavailable after write")
+        return result
+
+    monkeypatch.setattr(services.store, "set", commit_then_fail)
+    started = await router.dispatch(ctx, ".model login supergrok")
+    session = services._subscription_logins["supergrok"]
+    await asyncio.wait_for(session["task"], timeout=1.0)
+
+    assert started is not None and "OAUTH-WRITE" in started
+    assert session["error"] == "subscription_poll_failed"
+    assert await services.llm_credentials.load_subscription("supergrok") is None
+    persisted_book = json.loads(
+        await services.store.get(user_key="", store_key=CREDENTIALS_KEY) or "{}"
+    )
+    assert "supergrok" not in persisted_book
+    assert await services.runtime_config.load() == {}
+    assert services.llm.inner is old_inner
+    assert services.settings.llm.provider == "openai"
+    assert services.imagegen is None
+
+
 async def test_model_set_supergrok_does_not_implicitly_enable_imagegen():
     import time
 
@@ -688,6 +1108,97 @@ async def test_model_key_is_remembered_for_the_current_provider():
 
     assert reply is not None
     assert (await services.llm_credentials.get("openai"))["api_key"] == "sk-provider-specific"
+
+
+async def test_model_key_build_failure_leaves_runtime_credential_and_live_unchanged():
+    settings = _baseline_settings()
+
+    def builder(candidate):
+        if candidate.llm.api_key == "sk-rejected":
+            raise ValueError("rejected key")
+        return FakeLLM(script=[])
+
+    services = build_services(
+        settings,
+        llm=MutableLLM(settings, builder=builder),
+        embeddings=FakeEmbeddings(64),
+    )
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+    old_inner = services.llm.inner
+
+    reply = await router.dispatch(ctx, ".model key sk-rejected")
+
+    assert reply is not None and "openai" in reply
+    assert services.llm.inner is old_inner
+    assert services.settings.llm.api_key == ""
+    assert await services.runtime_config.get() == {}
+    assert await services.llm_credentials.get("openai") == {}
+
+
+async def test_model_key_credential_failure_rolls_live_back_before_runtime_write(monkeypatch):
+    services = _mutable_services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+    old_inner = services.llm.inner
+    original_set = services.store.set
+    attempts = 0
+
+    async def commit_then_fail(user_key="", store_key="", value=None):
+        nonlocal attempts
+        result = await original_set(user_key=user_key, store_key=store_key, value=value)
+        if store_key == CREDENTIALS_KEY:
+            attempts += 1
+        if store_key == CREDENTIALS_KEY and attempts == 1:
+            raise OSError("credential store unavailable after write")
+        return result
+
+    monkeypatch.setattr(services.store, "set", commit_then_fail)
+    reply = await router.dispatch(ctx, ".model key sk-not-saved")
+
+    assert reply is not None and "openai" in reply
+    assert services.llm.inner is old_inner
+    assert services.settings.llm.api_key == ""
+    assert await services.runtime_config.get() == {}
+    assert await services.llm_credentials.get("openai") == {}
+    assert json.loads(
+        await services.store.get(user_key="", store_key=CREDENTIALS_KEY) or "{}"
+    ) == {}
+
+
+async def test_model_key_runtime_failure_compensates_credential_and_live(monkeypatch):
+    services = _mutable_services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+    await services.llm_credentials.replace_static(
+        "openai",
+        api_key="sk-previous",
+        base_url="https://previous.example/v1",
+    )
+    old_inner = services.llm.inner
+    original_set = services.store.set
+    attempts = 0
+
+    async def commit_then_fail(user_key="", store_key="", value=None):
+        nonlocal attempts
+        result = await original_set(user_key=user_key, store_key=store_key, value=value)
+        if store_key == DEFAULT_KEY:
+            attempts += 1
+        if store_key == DEFAULT_KEY and attempts == 1:
+            raise OSError("runtime store unavailable after write")
+        return result
+
+    monkeypatch.setattr(services.store, "set", commit_then_fail)
+    reply = await router.dispatch(ctx, ".model key sk-not-committed")
+
+    assert reply is not None and "openai" in reply
+    assert services.llm.inner is old_inner
+    assert services.settings.llm.api_key == ""
+    assert await services.runtime_config.load() == {}
+    assert await services.llm_credentials.get("openai") == {
+        "api_key": "sk-previous",
+        "base_url": "https://previous.example/v1",
+    }
 
 
 async def test_model_login_unexpected_poll_failure_allows_retry(monkeypatch):
@@ -911,6 +1422,60 @@ async def test_model_reset_reverts_override():
     assert await services.runtime_config.get() == {}  # override cleared
 
 
+async def test_model_reset_clear_failure_restores_override_and_live(monkeypatch):
+    services = _mutable_services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+    await router.dispatch(ctx, ".model set deepseek deepseek-chat")
+    runtime_before = await services.runtime_config.get()
+    old_inner = services.llm.inner
+    original_delete = services.store.delete
+    attempts = 0
+
+    async def commit_then_fail(user_key="", store_key=""):
+        nonlocal attempts
+        result = await original_delete(user_key=user_key, store_key=store_key)
+        if store_key == DEFAULT_KEY:
+            attempts += 1
+        if store_key == DEFAULT_KEY and attempts == 1:
+            raise OSError("runtime store unavailable after delete")
+        return result
+
+    monkeypatch.setattr(services.store, "delete", commit_then_fail)
+    reply = await router.dispatch(ctx, ".model reset")
+
+    assert reply is not None and "deepseek" in reply
+    assert services.settings.llm.provider == "deepseek"
+    assert services.settings.llm.chat_model == "deepseek-chat"
+    assert services.llm.inner is old_inner
+    assert await services.runtime_config.load() == runtime_before
+
+
+async def test_model_reset_build_failure_does_not_clear_persisted_override(monkeypatch):
+    import gateway.commands as commands_module
+
+    services = _mutable_services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
+    await router.dispatch(ctx, ".model set deepseek deepseek-chat")
+    runtime_before = await services.runtime_config.get()
+    old_inner = services.llm.inner
+    original_reconfigure = commands_module._reconfigure_llm
+
+    def reject_reset(target_services, overrides):
+        if not overrides:
+            raise ValueError("base provider unavailable")
+        return original_reconfigure(target_services, overrides)
+
+    monkeypatch.setattr(commands_module, "_reconfigure_llm", reject_reset)
+    reply = await router.dispatch(ctx, ".model reset")
+
+    assert reply is not None and "deepseek" in reply
+    assert services.settings.llm.provider == "deepseek"
+    assert services.llm.inner is old_inner
+    assert await services.runtime_config.get() == runtime_before
+
+
 async def test_model_key_rejected_in_public_channel_but_accepted_in_dm():
     services = _mutable_services()
     router = CommandRouter(services)
@@ -1014,6 +1579,47 @@ async def test_cli_ctx_is_still_auto_master_for_keeper_only_commands():
     allowed_room = await router.dispatch(cli, ".room open")
     assert allowed_room != i18n.t("rooms.denied")
     assert len(keystore) == 1
+
+
+async def test_room_open_persists_a_key_that_survives_live_authorization(tmp_path):
+    from net.keystore import Keystore, member_id_for_key
+
+    services = _mutable_services()
+    key_path = tmp_path / "keys.toml"
+    keystore = Keystore.load(key_path)
+    router = CommandRouter(services, keystore=keystore)
+    cli = AgentCtx(chat_key="cli:dm:keeper", user_id="keeper", locale="en")
+
+    reply = await router.dispatch(cli, ".room open")
+
+    assert reply is not None
+    reloaded = Keystore.load(key_path)
+    [entry] = reloaded.entries()
+    member_id = member_id_for_key(entry.key)
+    authorized = reloaded.authorize_member(member_id, room=entry.room)
+    assert authorized is not None
+    assert await get_binding(services.store, cli.chat_key) == session_key_for_room(entry.room)
+
+
+async def test_room_link_rejects_a_key_revoked_by_another_process(tmp_path):
+    from net.keystore import Keystore
+
+    services = _mutable_services()
+    key_path = tmp_path / "keys.toml"
+    keystore = Keystore.load(key_path)
+    with keystore.persisted_mutation():
+        token = keystore.add(room="shared-room", role="player")
+    router = CommandRouter(services, keystore=keystore)
+
+    external = Keystore.load(key_path)
+    with external.persisted_mutation():
+        assert external.remove(token)
+
+    cli = AgentCtx(chat_key="cli:dm:keeper", user_id="keeper", locale="en")
+    reply = await router.dispatch(cli, f".room link {token}")
+
+    assert reply == services.i18n.with_locale("en").t("rooms.link.invalid_key")
+    assert await get_binding(services.store, cli.chat_key) is None
 
 
 async def test_roll_invalid_expression_returns_friendly_error_not_crash():

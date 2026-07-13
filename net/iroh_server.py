@@ -20,16 +20,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from gateway.hub import Event
 from gateway.turn import publish_state
+from infra.file_permissions import atomic_write_private, ensure_private_directory, restrict_file
 from infra.i18n import get_i18n
 from infra.media_store import MediaError
-from net.session import SessionCore, render_frame, resolve_session_fields, welcome_frame
+from net.session import SessionCore, guided_demo_available, render_frame, resolve_session_fields, welcome_frame
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ def load_or_create_secret(secret_path: Path) -> Any:
     import iroh  # lazy: native dep, only imported when Iroh is actually enabled
 
     if secret_path.exists():
+        restrict_file(secret_path)
         try:
             return iroh.SecretKey.from_bytes(secret_path.read_bytes())
         except Exception:
@@ -66,12 +68,8 @@ def load_or_create_secret(secret_path: Path) -> Any:
 
     key = iroh.SecretKey.generate()
     try:
-        secret_path.parent.mkdir(parents=True, exist_ok=True)
-        secret_path.write_bytes(key.to_bytes())
-        try:
-            os.chmod(secret_path, 0o600)
-        except OSError:
-            pass  # best-effort on platforms/filesystems without POSIX perms
+        ensure_private_directory(secret_path.parent, tighten_existing=False)
+        atomic_write_private(secret_path, key.to_bytes())
     except OSError:
         # A read-only / full / permission-denied data dir must NOT brick startup — under
         # systemd `Restart=on-failure` a raise here would crash-loop. Degrade to the
@@ -105,6 +103,7 @@ class IrohMember:
     locale: str
     transport: str = "iroh"
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    authorize: Callable[[], bool] | None = None
 
     def supports_proactive(self) -> bool:
         """A live QUIC stream can always be pushed to."""
@@ -121,6 +120,15 @@ class IrohMember:
                 pass  # peer gone / stream reset — dropped like a closed socket
 
     async def deliver(self, event: Event) -> None:
+        if self.authorize is not None and not self.authorize():
+            await self.send_frame(
+                {
+                    "type": "error",
+                    "code": "forbidden",
+                    "message": get_i18n(self.locale).t("tui.error.forbidden"),
+                }
+            )
+            raise PermissionError("member authorization was revoked")  # i18n-exempt: internal hub signal
         frame = render_frame(event)
         if frame is not None:
             await self.send_frame(frame)
@@ -261,6 +269,15 @@ class IrohServer:
         member = await self._authenticate(reader, send)
         if member is None:
             return
+        if not core._refresh_member_authorization(member):
+            await member.send_frame(
+                {
+                    "type": "error",
+                    "code": "forbidden",
+                    "message": get_i18n(member.locale).t("tui.error.forbidden"),
+                }
+            )
+            return
         await core.hub.subscribe(member.session_key, member)
         media_task = asyncio.create_task(self._accept_media_streams(conn, member))
         try:
@@ -350,7 +367,17 @@ class IrohServer:
             return None
 
         member = IrohMember(send=send, **fields)
-        await member.send_frame(welcome_frame(fields, imagegen=self.core.services.imagegen is not None))
+        member.authorize = lambda: self.core._refresh_member_authorization(member)
+        await member.send_frame(
+            welcome_frame(
+                fields,
+                imagegen=self.core.services.imagegen is not None,
+                demo=(
+                    fields["role"] == "keeper"
+                    and await guided_demo_available(self.core.services, fields["session_key"])
+                ),
+            )
+        )
         return member
 
     async def close(self) -> None:

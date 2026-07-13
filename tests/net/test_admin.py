@@ -9,21 +9,39 @@ frames are exercised end to end. The LLM is a `MutableLLM` wrapping an offline
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import stat
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+
+import pytest
 
 import agent.forge as forge_module
 import core.rulepacks as rulepacks_module
 import core.skills as skills_module
+import net.keystore as keystore_module
+import net.room_backup as room_backup_module
 from agent.services import build_services
 from gateway.ops import get_enabled_skills, set_enabled_skills
 from infra.config import LLMSettings, Settings
 from infra.embeddings import FakeEmbeddings
+from infra.i18n import get_i18n
+from infra.imagegen import IMAGEGEN_PRESETS
 from infra.llm import FakeLLM, assistant_text
-from infra.providers import MutableLLM
+from infra.media_store import ALLOWED_MEDIA_MIMES, MediaError, MediaStore
+from infra.providers import PRESETS, MutableLLM
+from net.admin import handle_admin_frame
 from net.keystore import Keystore
-from net.room_backup import chat_key_for_room
+from net.room_backup import (
+    chat_key_for_room,
+    delete_room_data,
+    export_room,
+    import_room,
+    room_rows,
+    room_vector_points,
+)
 from net.tui_server import TuiServer
 from tests.net.test_tui_server import _connect_and_join, _recv, _start
 
@@ -106,6 +124,7 @@ async def test_keeper_can_get_and_set_config_list_and_mint_keys():
     services = _services()
     keystore = Keystore()
     keeper_key = keystore.add(room="arkham", name="Keeper", role="keeper")
+    foreign_key = keystore.add(room="dunwich", name="Foreign Keeper", role="keeper")
     server = TuiServer(services, keystore, port=0)
     url = await _start(server)
     try:
@@ -145,7 +164,7 @@ async def test_keeper_can_get_and_set_config_list_and_mint_keys():
         assert bad["message"]
         assert services.settings.llm.provider == "deepseek"  # unchanged
 
-        # list_keys masks every key value.
+        # list_keys masks key values and exposes ONLY the caller's bound room.
         listed = await _send(ws, {"type": "admin_list_keys"})
         assert listed["type"] == "admin_keys"
         assert len(listed["keys"]) == 1
@@ -153,10 +172,16 @@ async def test_keeper_can_get_and_set_config_list_and_mint_keys():
         assert only["room"] == "arkham" and only["role"] == "keeper"
         assert only["key_masked"] != keeper_key
         assert "..." in only["key_masked"]
+        assert foreign_key not in json.dumps(listed)
 
-        # mint_key returns the fresh key ONCE in cleartext + a refreshed masked list. Minting
-        # stays deployment-global (the operator can seed any room); MUTATING a key is scoped
-        # to the caller's own room (cross-room mutation is covered in its own test below).
+        # Minting into a different room is forbidden; omission selects caller_room.
+        cross_room = await _send(
+            ws, {"type": "admin_mint_key", "room": "dunwich", "name": "Intruder"}
+        )
+        assert cross_room["type"] == "admin_error"
+        assert cross_room["code"] == "forbidden"
+
+        # mint_key returns the fresh key ONCE in cleartext + a refreshed masked list.
         minted = await _send(
             ws, {"type": "admin_mint_key", "room": "arkham", "name": "Player One", "role": "player"}
         )
@@ -194,6 +219,53 @@ async def test_keeper_can_get_and_set_config_list_and_mint_keys():
         await ws.close()
     finally:
         await server.close()
+
+
+async def test_key_mutation_rechecks_room_after_external_move(tmp_path):
+    services = _services(str(tmp_path))
+    key_path = tmp_path / "keys.toml"
+    keystore = Keystore.load(key_path)
+    with keystore.persisted_mutation():
+        keystore.add(room="arkham", name="Keeper", role="keeper")
+        victim = keystore.add(room="arkham", name="Player", role="player")
+
+    listed = await handle_admin_frame(
+        services,
+        keystore,
+        "keeper",
+        "arkham",
+        {"type": "admin_list_keys"},
+        get_i18n("en"),
+    )
+    victim_id = next(item["id"] for item in listed["keys"] if item["name"] == "Player")
+
+    external = Keystore.load(key_path)
+    with external.persisted_mutation():
+        assert external.update(victim, room="dunwich")
+
+    updated = await handle_admin_frame(
+        services,
+        keystore,
+        "keeper",
+        "arkham",
+        {"type": "admin_update_key", "id": victim_id, "name": "Hijacked"},
+        get_i18n("en"),
+    )
+    deleted = await handle_admin_frame(
+        services,
+        keystore,
+        "keeper",
+        "arkham",
+        {"type": "admin_delete_key", "id": victim_id},
+        get_i18n("en"),
+    )
+
+    assert updated["type"] == deleted["type"] == "admin_error"
+    assert updated["code"] == deleted["code"] == "forbidden"
+    persisted = Keystore.load(key_path).get(victim)
+    assert persisted is not None
+    assert persisted.room == "dunwich"
+    assert persisted.name == "Player"
 
 
 async def test_player_role_connection_is_refused_every_admin_action():
@@ -334,10 +406,11 @@ async def test_admin_set_model_replaces_provider_scoped_credentials():
 
 async def test_keeper_can_export_delete_and_import_room_data(tmp_path):
     services = _services(str(tmp_path))
-    keystore = Keystore()
-    keeper_key = keystore.add(room="arkham", name="Keeper", role="keeper")
-    player_key = keystore.add(room="arkham", name="Ada", role="player")
-    other_key = keystore.add(room="dunwich", name="Other", role="player")
+    keystore = Keystore.load(tmp_path / "keys.toml")
+    with keystore.persisted_mutation():
+        keeper_key = keystore.add(room="arkham", name="Keeper", role="keeper")
+        player_key = keystore.add(room="arkham", name="Ada", role="player")
+        other_key = keystore.add(room="dunwich", name="Other", role="player")
 
     chat_key = chat_key_for_room("arkham")
     await services.store.set(user_key="", store_key=f"chat_history.{chat_key}", value='[{"role":"user"}]')
@@ -350,6 +423,28 @@ async def test_keeper_can_export_delete_and_import_room_data(tmp_path):
     await services.store.set(user_key="", store_key=f"worldbook.{chat_key}.l1", value='{"title":"Kingsport"}')
     await services.store.set(user_key="", store_key="bound_room.discord:group:table", value=chat_key)
     await services.store.set(user_key="", store_key="chat_history.tui:group:dunwich", value="keep")
+    for base, value in {
+        "skills_enabled": '["romance-relationships"]',
+        "media_enabled": "1",
+        "media_history": "[]",
+        "audio_library": "[]",
+        "audio_state": "{}",
+        "relationships": '{"Ada":{"West":{"affection":5}}}',
+        "usage_stats": '{"input_tokens":12}',
+    }.items():
+        await services.store.set(user_key="", store_key=f"{base}.{chat_key}", value=value)
+    media_store = MediaStore(
+        services.store,
+        services.settings.data_dir,
+        allowed_mimes=ALLOWED_MEDIA_MIMES,
+    )
+    media_record = await media_store.register_blob(
+        room=chat_key,
+        data=b"private handout",
+        mime="image/png",
+        name="clue.png",
+        uploader="keeper",
+    )
     await services.vector_db.vector_store.upsert(
         [
             ("doc-1:0", [0.1] * 64, {"chat_key": chat_key, "document_id": "doc-1", "chunk_index": 0}),
@@ -376,10 +471,15 @@ async def test_keeper_can_export_delete_and_import_room_data(tmp_path):
         assert exported["room"] == "arkham"
         assert exported["path"].startswith(backups) and exported["path"].endswith("arkham-export.json")
         assert exported["keys"] == 2
-        assert exported["store_rows"] == 9
+        assert exported["store_rows"] == 16
         assert exported["vector_points"] == 2
+        assert exported["media_files"] == 1
         snapshot = json.loads(Path(exported["path"]).read_text(encoding="utf-8"))
         assert {item["key"] for item in snapshot["keys"]} == {keeper_key, player_key}
+        assert snapshot["media"][0]["hash"] == media_record.hash
+        if os.name == "posix":
+            assert stat.S_IMODE(Path(backups).stat().st_mode) == 0o700
+            assert stat.S_IMODE(Path(exported["path"]).stat().st_mode) == 0o600
 
         deleted = await _send(
             ws,
@@ -389,8 +489,9 @@ async def test_keeper_can_export_delete_and_import_room_data(tmp_path):
         assert deleted["action"] == "delete"
         assert deleted["path"].startswith(backups) and deleted["path"].endswith("arkham-delete-backup.json")
         assert deleted["keys"] == 2
-        assert deleted["store_rows"] == 9
+        assert deleted["store_rows"] == 16
         assert deleted["vector_points"] == 2
+        assert deleted["media_files"] == 1
         assert Path(deleted["path"]).is_file()
         assert keystore.get(keeper_key) is None
         assert keystore.get(player_key) is None
@@ -404,16 +505,43 @@ async def test_keeper_can_export_delete_and_import_room_data(tmp_path):
         assert await services.store.get(user_key="", store_key="chat_history.tui:group:dunwich") == "keep"
         assert await services.vector_db.vector_store.count(filter={"chat_key": chat_key}) == 0
         assert await services.vector_db.vector_store.count(filter={"collection": "worldbook", "namespace": chat_key}) == 0
+        for base in (
+            "skills_enabled",
+            "media_enabled",
+            "media_history",
+            "audio_library",
+            "audio_state",
+            "relationships",
+            "usage_stats",
+        ):
+            assert await services.store.get(user_key="", store_key=f"{base}.{chat_key}") is None
+        with pytest.raises(MediaError, match="media_not_found"):
+            await media_store.read_bytes(chat_key, media_record.hash)
 
-        # Restore the keeper's OWN room from its backup (same-room; the file is named, not pathed).
-        # Importing INTO another room is forbidden — see test_admin_room_ops_are_scoped_to_the_callers_room.
+        # Revoking the room's keys invalidates the live Keeper connection immediately; it must
+        # not retain stale admin authority merely because it authenticated before the delete.
+        stale = await _send(ws, {"type": "admin_import_room", "path": Path(deleted["path"]).name})
+        assert stale["type"] == "error"
+        assert stale["code"] == "forbidden"
+        await ws.close()
+
+        # Restore through a newly minted, persisted out-of-band operations key. Importing INTO
+        # another room is forbidden — see test_admin_room_ops_are_scoped_to_the_callers_room.
+        with keystore.persisted_mutation():
+            recovery_key = keystore.add(room="arkham", name="Recovery", role="keeper")
+        ws, *_ = await _connect_and_join(url, recovery_key, "Recovery")
+        if os.name == "posix":
+            os.chmod(deleted["path"], 0o644)  # legacy backup permissions self-heal on import
         imported = await _send(ws, {"type": "admin_import_room", "path": Path(deleted["path"]).name})
         assert imported["type"] == "admin_room_op"
         assert imported["action"] == "import"
         assert imported["room"] == "arkham"
         assert imported["keys"] == 2
-        assert imported["store_rows"] == 9
+        assert imported["store_rows"] == 16
         assert imported["vector_points"] == 2
+        assert imported["media_files"] == 1
+        if os.name == "posix":
+            assert stat.S_IMODE(Path(deleted["path"]).stat().st_mode) == 0o600
         assert keystore.get(keeper_key).room == "arkham"
         assert keystore.get(player_key).room == "arkham"
         assert await services.store.get(user_key="", store_key=f"chat_history.{chat_key}") == '[{"role":"user"}]'
@@ -424,15 +552,453 @@ async def test_keeper_can_export_delete_and_import_room_data(tmp_path):
         assert await services.store.get(user_key="", store_key="bound_room.discord:group:table") == chat_key
         assert await services.vector_db.vector_store.count(filter={"chat_key": chat_key}) == 1
         assert await services.vector_db.vector_store.count(filter={"collection": "worldbook", "namespace": chat_key}) == 1
+        restored_record, restored_data = await media_store.read_bytes(chat_key, media_record.hash)
+        assert restored_record.name == "clue.png"
+        assert restored_data == b"private handout"
+        assert await services.store.get(user_key="", store_key=f"skills_enabled.{chat_key}") == '["romance-relationships"]'
+        assert await services.store.get(user_key="", store_key=f"relationships.{chat_key}") == '{"Ada":{"West":{"affection":5}}}'
 
         await ws.close()
     finally:
         await server.close()
 
 
+async def test_room_backup_paths_are_room_owned_and_default_names_are_unique(tmp_path):
+    services = _services(str(tmp_path))
+    keystore = Keystore()
+    keystore.add(room="arkham", name="Keeper", role="keeper")
+    keystore.add(room="dunwich", name="Keeper", role="keeper")
+    arkham_key = chat_key_for_room("arkham")
+    dunwich_key = chat_key_for_room("dunwich")
+    await services.store.set(store_key=f"chat_history.{arkham_key}", value="arkham-v1")
+    await services.store.set(store_key=f"chat_history.{dunwich_key}", value="dunwich-v1")
+
+    arkham = await export_room(services, keystore, "arkham", "shared.json")
+    dunwich = await export_room(services, keystore, "dunwich", "shared.json")
+    arkham_path = Path(arkham["path"])
+    dunwich_path = Path(dunwich["path"])
+    dunwich_bytes = dunwich_path.read_bytes()
+
+    assert arkham_path.parent != dunwich_path.parent
+    assert arkham_path.name == dunwich_path.name == "shared.json"
+
+    # Replacing a named snapshot is confined to the exact room namespace.
+    await services.store.set(store_key=f"chat_history.{arkham_key}", value="arkham-v2")
+    replaced = await export_room(services, keystore, "arkham", "shared.json")
+    assert Path(replaced["path"]) == arkham_path
+    assert dunwich_path.read_bytes() == dunwich_bytes
+
+    first_default = await export_room(services, keystore, "arkham")
+    second_default = await export_room(services, keystore, "arkham")
+    assert first_default["path"] != second_default["path"]
+
+    # If Arkham's file is absent, an Arkham import must not discover Dunwich's same-name file.
+    arkham_path.unlink()
+    with pytest.raises(ValueError, match="not a room backup file"):
+        await import_room(services, keystore, "shared.json", expected_room="arkham")
+    assert dunwich_path.is_file()
+
+
+async def test_dotted_child_room_prefix_fails_closed_for_export_delete_and_import(tmp_path):
+    services = _services(str(tmp_path))
+    keystore = Keystore()
+    keystore.add(room="foo", name="Parent Keeper", role="keeper")
+    parent_key = chat_key_for_room("foo")
+    child_key = chat_key_for_room("foo.bar")
+    parent_history = f"chat_history.{parent_key}"
+    child_history = f"chat_history.{child_key}"
+    child_character = f"characters.{child_key}.Bob"
+    await services.store.set(store_key=parent_history, value="parent")
+
+    # Produce a legitimate parent snapshot before the ambiguous child exists.
+    exported = await export_room(services, keystore, "foo", "before-child.json")
+    keystore.add(room="foo.bar", name="Child Keeper", role="keeper")
+    await services.store.set(store_key=child_history, value="child")
+    await services.store.set(store_key=child_character, value='{"name":"Bob"}')
+
+    for operation in (
+        lambda: export_room(services, keystore, "foo", "after-child.json"),
+        lambda: delete_room_data(services, keystore, "foo"),
+        lambda: import_room(
+            services,
+            keystore,
+            Path(exported["path"]).name,
+            expected_room="foo",
+        ),
+    ):
+        with pytest.raises(ValueError, match="ambiguous dotted-prefix"):
+            await operation()
+
+    # Fail-closed means neither the child nor the parent was partially exposed/deleted/imported.
+    assert await services.store.get(store_key=parent_history) == "parent"
+    assert await services.store.get(store_key=child_history) == "child"
+    assert await services.store.get(store_key=child_character) == '{"name":"Bob"}'
+
+
+async def test_vector_conflicting_ownership_fails_export_and_delete_without_erasing_point(tmp_path):
+    services = _services(str(tmp_path))
+    keystore = Keystore()
+    keystore.add(room="arkham", name="Keeper", role="keeper")
+    chat_key = chat_key_for_room("arkham")
+    foreign_key = chat_key_for_room("dunwich")
+    await services.vector_db.vector_store.upsert(
+        [
+            (
+                "conflicted:0",
+                [0.1] * 64,
+                {
+                    "chat_key": chat_key,
+                    "namespace": foreign_key,
+                    "document_id": "conflicted",
+                },
+            )
+        ]
+    )
+
+    with pytest.raises(ValueError, match="conflicting room ownership"):
+        await export_room(services, keystore, "arkham", "conflicted.json")
+    with pytest.raises(ValueError, match="conflicting room ownership"):
+        await delete_room_data(services, keystore, "arkham")
+
+    points = await services.vector_db.vector_store.dump(filter={"chat_key": chat_key})
+    assert [point["id"] for point in points] == ["conflicted:0"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "document_foreign_namespace",
+        "document_missing_chat_key",
+        "worldbook_foreign_chat_key",
+        "worldbook_missing_namespace",
+        "nested_foreign_owner",
+    ],
+)
+async def test_room_import_requires_every_vector_owner_field_to_match_target(tmp_path, case):
+    services = _services(str(tmp_path))
+    keystore = Keystore()
+    keystore.add(room="arkham", name="Keeper", role="keeper")
+    chat_key = chat_key_for_room("arkham")
+    foreign_key = chat_key_for_room("dunwich")
+    exported = await export_room(services, keystore, "arkham", f"vector-{case}.json")
+    source = Path(exported["path"])
+    snapshot = json.loads(source.read_text(encoding="utf-8"))
+    payloads = {
+        "document_foreign_namespace": {
+            "chat_key": chat_key,
+            "namespace": foreign_key,
+            "document_id": "doc",
+        },
+        "document_missing_chat_key": {"namespace": chat_key, "document_id": "doc"},
+        "worldbook_foreign_chat_key": {
+            "collection": "worldbook",
+            "namespace": chat_key,
+            "chat_key": foreign_key,
+            "entry_id": "entry",
+        },
+        "worldbook_missing_namespace": {
+            "collection": "worldbook",
+            "chat_key": chat_key,
+            "entry_id": "entry",
+        },
+        "nested_foreign_owner": {
+            "chat_key": chat_key,
+            "document_id": "doc",
+            "metadata": {"namespace": foreign_key},
+        },
+    }
+    snapshot["vector_points"] = [
+        {"id": "forged:0", "vector": [0.2] * 64, "payload": payloads[case]}
+    ]
+    source.write_text(json.dumps(snapshot), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="vector owned by another room"):
+        await import_room(services, keystore, source.name, expected_room="arkham")
+    assert await services.vector_db.vector_store.count() == 0
+
+
+async def test_import_rejects_foreign_bound_room_inside_the_same_store_transaction(tmp_path):
+    services = _services(str(tmp_path))
+    keystore = Keystore()
+    keystore.add(room="arkham", name="Keeper", role="keeper")
+    chat_key = chat_key_for_room("arkham")
+    foreign_key = chat_key_for_room("dunwich")
+    history_key = f"chat_history.{chat_key}"
+    binding_key = "bound_room.discord:group:table"
+    await services.store.set(store_key=history_key, value="snapshot")
+    await services.store.set(store_key=binding_key, value=chat_key)
+    exported = await export_room(services, keystore, "arkham", "binding.json")
+
+    await services.store.set(store_key=history_key, value="live")
+    await services.store.set(store_key=binding_key, value=foreign_key)
+    with pytest.raises(ValueError, match="bound room already belongs"):
+        await import_room(
+            services,
+            keystore,
+            Path(exported["path"]).name,
+            expected_room="arkham",
+        )
+
+    # The conflict check precedes every upsert in the BEGIN IMMEDIATE transaction.
+    assert await services.store.get(store_key=history_key) == "live"
+    assert await services.store.get(store_key=binding_key) == foreign_key
+
+
+async def test_import_rollback_preserves_a_concurrent_foreign_room_binding(tmp_path):
+    services = _services(str(tmp_path))
+    keystore = Keystore()
+    keystore.add(room="arkham", name="Keeper", role="keeper")
+    chat_key = chat_key_for_room("arkham")
+    foreign_key = chat_key_for_room("dunwich")
+    history_key = f"chat_history.{chat_key}"
+    binding_key = "bound_room.discord:group:table"
+    await services.store.set(store_key=history_key, value="snapshot")
+    await services.store.set(store_key=binding_key, value=chat_key)
+    media_store = MediaStore(
+        services.store,
+        services.settings.data_dir,
+        allowed_mimes=ALLOWED_MEDIA_MIMES,
+    )
+    await media_store.register_blob(
+        room=chat_key,
+        data=b"rollback trigger",
+        mime="image/png",
+        name="trigger.png",
+        uploader="keeper",
+    )
+    exported = await export_room(services, keystore, "arkham", "binding-rollback.json")
+    await services.store.set(store_key=history_key, value="live")
+
+    async def _rebind_then_fail(_instance, **_kwargs):
+        await services.store.set(store_key=binding_key, value=foreign_key)
+        raise OSError("injected import failure after concurrent rebind")
+
+    with patch.object(MediaStore, "validate_offer", new=_rebind_then_fail):
+        with pytest.raises(OSError, match="concurrent rebind"):
+            await import_room(
+                services,
+                keystore,
+                Path(exported["path"]).name,
+                expected_room="arkham",
+            )
+
+    assert await services.store.get(store_key=history_key) == "live"
+    assert await services.store.get(store_key=binding_key) == foreign_key
+
+
+async def test_room_export_refreshes_external_key_moves_before_snapshot(tmp_path):
+    services = _services(str(tmp_path))
+    key_path = tmp_path / "keys.toml"
+    keystore = Keystore.load(key_path)
+    with keystore.persisted_mutation():
+        key = keystore.add(room="arkham", name="Keeper", role="keeper")
+
+    external = Keystore.load(key_path)
+    with external.persisted_mutation():
+        assert external.update(key, room="dunwich")
+
+    exported = await export_room(services, keystore, "arkham", "after-move.json")
+    snapshot = json.loads(Path(exported["path"]).read_text(encoding="utf-8"))
+    assert snapshot["keys"] == []
+
+
+async def test_room_export_rejects_media_over_the_backup_budget_before_writing(tmp_path, monkeypatch):
+    services = _services(str(tmp_path))
+    room = "arkham"
+    chat_key = chat_key_for_room(room)
+    media_store = MediaStore(
+        services.store,
+        services.settings.data_dir,
+        allowed_mimes=ALLOWED_MEDIA_MIMES,
+    )
+    await media_store.register_blob(
+        room=chat_key,
+        data=b"large-for-this-test",
+        mime="image/png",
+        name="clue.png",
+        uploader="keeper",
+    )
+    monkeypatch.setattr(room_backup_module, "MAX_BACKUP_MEDIA_BYTES", 4)
+
+    with pytest.raises(ValueError, match="media backup byte limit exceeded"):
+        await export_room(services, Keystore(), room, "oversized.json")
+
+    backup_root = Path(services.settings.data_dir) / "room_backups"
+    assert not list(backup_root.rglob("oversized.json"))
+
+
+async def test_room_import_enforces_the_image_policy_not_the_aggregate_audio_limit(tmp_path):
+    services = _services(str(tmp_path))
+    room = "arkham"
+    chat_key = chat_key_for_room(room)
+    media_store = MediaStore(
+        services.store,
+        services.settings.data_dir,
+        allowed_mimes=ALLOWED_MEDIA_MIMES,
+    )
+    record = await media_store.register_blob(
+        room=chat_key,
+        data=b"image",
+        mime="image/png",
+        name="clue.png",
+        uploader="keeper",
+    )
+    exported = await export_room(services, Keystore(), room, "image-policy.json")
+    await delete_room_data(services, Keystore(), room)
+
+    # Audio's much larger configured limit must not make this image acceptable.
+    services.settings.tui.media_max_file_bytes = 4
+    assert services.settings.tui.audio_max_file_bytes > 4
+    with pytest.raises(ValueError, match="invalid media entry"):
+        await import_room(services, Keystore(), Path(exported["path"]).name, expected_room=room)
+    with pytest.raises(MediaError, match="media_not_found"):
+        await media_store.read_bytes(chat_key, record.hash)
+
+
+async def test_delete_room_rolls_back_every_component_after_late_media_failure(tmp_path):
+    services = _services(str(tmp_path))
+    key_path = tmp_path / "keys.toml"
+    keystore = Keystore.load(key_path)
+    with keystore.persisted_mutation():
+        keeper_key = keystore.add(room="arkham", name="Keeper", role="keeper")
+    chat_key = chat_key_for_room("arkham")
+    store_key = f"chat_history.{chat_key}"
+    await services.store.set(store_key=store_key, value="original")
+    await services.vector_db.vector_store.upsert(
+        [("original:0", [0.25] * 64, {"chat_key": chat_key, "document_id": "original"})]
+    )
+    media_store = MediaStore(
+        services.store,
+        services.settings.data_dir,
+        allowed_mimes=ALLOWED_MEDIA_MIMES,
+    )
+    media_record = await media_store.register_blob(
+        room=chat_key,
+        data=b"original handout",
+        mime="image/png",
+        name="original.png",
+        uploader="keeper",
+    )
+    original_delete = MediaStore.delete_room
+    recovery_key = ""
+
+    async def _delete_then_fail(instance, target_room):
+        nonlocal recovery_key
+        await original_delete(instance, target_room)
+        # Simulate a separate operations process minting a recovery credential after
+        # the delete's keystore leg. The later rollback must merge, not erase it.
+        external = Keystore.load(key_path)
+        with external.persisted_mutation():
+            recovery_key = external.add(room="arkham", name="Recovery", role="keeper")
+        raise OSError("injected post-delete failure")
+
+    with patch.object(MediaStore, "delete_room", new=_delete_then_fail):
+        failed = await handle_admin_frame(
+            services,
+            keystore,
+            "keeper",
+            "arkham",
+            {"type": "admin_delete_room_data", "room": "arkham", "backup": False},
+            get_i18n("en"),
+        )
+    assert failed["type"] == "admin_error"
+    assert failed["code"] == "op_failed"
+
+    assert await services.store.get(store_key=store_key) == "original"
+    restored_vectors = await room_vector_points(services, chat_key)
+    assert [point["id"] for point in restored_vectors] == ["original:0"]
+    persisted_keys = Keystore.load(key_path)
+    assert persisted_keys.get(keeper_key) is not None
+    assert persisted_keys.get(recovery_key) is not None
+    restored_record, restored_data = await media_store.read_bytes(chat_key, media_record.hash)
+    assert restored_record.name == "original.png"
+    assert restored_data == b"original handout"
+
+
+async def test_import_room_rolls_back_every_component_when_key_persistence_fails(tmp_path):
+    services = _services(str(tmp_path))
+    key_path = tmp_path / "keys.toml"
+    keystore = Keystore.load(key_path)
+    room = "arkham"
+    chat_key = chat_key_for_room(room)
+    store_key = f"chat_history.{chat_key}"
+    with keystore.persisted_mutation():
+        backup_key = keystore.add(room=room, name="Old Keeper", role="keeper")
+    await services.store.set(store_key=store_key, value="backup")
+    await services.vector_db.vector_store.upsert(
+        [("backup:0", [0.1] * 64, {"chat_key": chat_key, "document_id": "backup"})]
+    )
+    media_store = MediaStore(
+        services.store,
+        services.settings.data_dir,
+        allowed_mimes=ALLOWED_MEDIA_MIMES,
+    )
+    backup_media = await media_store.register_blob(
+        room=chat_key,
+        data=b"backup handout",
+        mime="image/png",
+        name="backup.png",
+        uploader="keeper",
+    )
+    exported = await export_room(services, keystore, room, "rollback.json")
+    await delete_room_data(services, keystore, room)
+
+    with keystore.persisted_mutation():
+        recovery_key = keystore.add(room=room, name="Recovery", role="keeper")
+    await services.store.set(store_key=store_key, value="live")
+    await services.vector_db.vector_store.upsert(
+        [("live:0", [0.9] * 64, {"chat_key": chat_key, "document_id": "live"})]
+    )
+    live_media = await media_store.register_blob(
+        room=chat_key,
+        data=b"live handout",
+        mime="image/png",
+        name="live.png",
+        uploader="recovery",
+    )
+    live_rows = await room_rows(services, chat_key)
+    live_vectors = await room_vector_points(services, chat_key)
+
+    original_writer = keystore_module.atomic_write_private
+    failed = False
+
+    def _fail_key_write_once(path, data, *, encoding="utf-8"):
+        nonlocal failed
+        if Path(path).resolve() == key_path.resolve() and not failed:
+            failed = True
+            raise OSError("injected keystore write failure")
+        return original_writer(path, data, encoding=encoding)
+
+    with patch.object(keystore_module, "atomic_write_private", new=_fail_key_write_once):
+        failed_import = await handle_admin_frame(
+            services,
+            keystore,
+            "keeper",
+            room,
+            {"type": "admin_import_room", "path": Path(exported["path"]).name},
+            get_i18n("en"),
+        )
+    assert failed_import["type"] == "admin_error"
+    assert failed_import["code"] == "op_failed"
+
+    def _normalized_rows(rows):
+        return sorted((row["user_key"], row["store_key"], row["value"]) for row in rows)
+
+    assert _normalized_rows(await room_rows(services, chat_key)) == _normalized_rows(live_rows)
+    assert await room_vector_points(services, chat_key) == live_vectors
+    assert keystore.get(recovery_key) is not None
+    assert keystore.get(backup_key) is None
+    records = await media_store.list_room_records(chat_key)
+    assert [record.hash for record in records] == [live_media.hash]
+    _, live_data = await media_store.read_bytes(chat_key, live_media.hash)
+    assert live_data == b"live handout"
+    with pytest.raises(MediaError, match="media_not_found"):
+        await media_store.read_bytes(chat_key, backup_media.hash)
+
+
 async def test_admin_room_ops_are_scoped_to_the_callers_room():
     """Security: a keeper key bound to room A cannot mutate/export/wipe/import room B — only its
-    own room. (Minting/listing stay deployment-global; the destructive/room-content ops scope.)"""
+    own room, including listing/minting/mutating access keys."""
     services = _services()
     keystore = Keystore()
     keeper_key = keystore.add(room="arkham", name="Keeper", role="keeper")  # caller is bound to arkham
@@ -441,10 +1007,11 @@ async def test_admin_room_ops_are_scoped_to_the_callers_room():
     url = await _start(server)
     try:
         ws, *_ = await _connect_and_join(url, keeper_key, "Keeper")
-        victim_id = next(
-            e["id"] for e in (await _send(ws, {"type": "admin_list_keys"}))["keys"] if e["room"] == "dunwich"
-        )
+        listed = await _send(ws, {"type": "admin_list_keys"})
+        assert {entry["room"] for entry in listed["keys"]} == {"arkham"}
+        victim_id = hashlib.sha256(victim_key.encode("utf-8")).hexdigest()[:16]
         for request in (
+            {"type": "admin_mint_key", "room": "dunwich", "role": "keeper"},
             {"type": "admin_update_key", "id": victim_id, "role": "player"},
             {"type": "admin_delete_key", "id": victim_id},
             {"type": "admin_delete_room", "room": "dunwich"},
@@ -529,6 +1096,250 @@ async def test_set_model_remembers_each_providers_key_and_reuses_it_on_switch_ba
         await server.close()
 
 
+async def test_preset_llm_endpoint_roundtrip_keeps_the_existing_key():
+    """The config frame exposes a preset's effective URL even when the stored URL
+    is empty. Sending that unchanged value back must not look like a trust-boundary
+    move and silently clear the key."""
+    services = _services()
+    keystore = Keystore()
+    keeper_key = keystore.add(room="arkham", name="Keeper", role="keeper")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    captured: list[LLMSettings] = []
+
+    async def _capture(settings: LLMSettings):
+        captured.append(settings)
+        return []
+
+    try:
+        ws, *_ = await _connect_and_join(url, keeper_key, "Keeper")
+        first = await _send(
+            ws,
+            {
+                "type": "admin_set_model",
+                "provider": "deepseek",
+                "chat_model": "deepseek-chat",
+                "api_key": "sk-preset",
+            },
+        )
+        effective_url = PRESETS["deepseek"]
+        assert first["base_url"] == effective_url
+        assert services.settings.llm.base_url == ""
+
+        with patch("net.admin.list_models", new=_capture):
+            await _send(
+                ws,
+                {
+                    "type": "admin_list_models",
+                    "provider": "deepseek",
+                    "base_url": effective_url,
+                },
+            )
+        assert captured[-1].api_key == "sk-preset"
+
+        saved = await _send(
+            ws,
+            {
+                "type": "admin_set_model",
+                "provider": "deepseek",
+                "base_url": effective_url,
+            },
+        )
+        assert saved["type"] == "admin_config"
+        assert services.settings.llm.api_key == "sk-preset"
+        assert await services.llm_credentials.get("deepseek") == {
+            "api_key": "sk-preset",
+            "base_url": effective_url,
+        }
+
+        await ws.close()
+    finally:
+        await server.close()
+
+
+async def test_new_model_endpoint_never_receives_or_remembers_the_old_key():
+    """A caller-selected URL is a new trust boundary: preview/save must not attach
+    the key associated with the previous URL, including on a later keyless save."""
+    services = _services()
+    keystore = Keystore()
+    keeper_key = keystore.add(room="arkham", name="Keeper", role="keeper")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    captured: list[LLMSettings] = []
+
+    async def _capture(settings: LLMSettings):
+        captured.append(settings)
+        return []
+
+    try:
+        ws, *_ = await _connect_and_join(url, keeper_key, "Keeper")
+        await _send(
+            ws,
+            {
+                "type": "admin_set_model",
+                "provider": "openai",
+                "base_url": "https://old.example/v1",
+                "api_key": "sk-old-endpoint",
+            },
+        )
+
+        with patch("net.admin.list_models", new=_capture):
+            await _send(
+                ws,
+                {
+                    "type": "admin_list_models",
+                    "provider": "openai",
+                    "base_url": "https://new.example/v1",
+                },
+            )
+        assert captured[-1].base_url == "https://new.example/v1"
+        assert captured[-1].api_key == ""
+
+        changed = await _send(
+            ws,
+            {
+                "type": "admin_set_model",
+                "provider": "openai",
+                "base_url": "https://new.example/v1",
+            },
+        )
+        assert changed["type"] == "admin_config"
+        assert services.settings.llm.base_url == "https://new.example/v1"
+        assert services.settings.llm.api_key == ""
+        assert await services.llm_credentials.get("openai") == {
+            "base_url": "https://new.example/v1"
+        }
+
+        # A later save with omitted fields must not resurrect the old saved key.
+        await _send(ws, {"type": "admin_set_model", "provider": "openai"})
+        assert services.settings.llm.api_key == ""
+
+        # Supplying the replacement key on the same request is accepted and paired
+        # only with that new endpoint.
+        await _send(
+            ws,
+            {
+                "type": "admin_set_model",
+                "provider": "openai",
+                "base_url": "https://third.example/v1",
+                "api_key": "sk-third-endpoint",
+            },
+        )
+        assert await services.llm_credentials.get("openai") == {
+            "api_key": "sk-third-endpoint",
+            "base_url": "https://third.example/v1",
+        }
+
+        # Presence matters: an explicitly empty key clears it while retaining the
+        # unchanged endpoint (the TUI omits blank fields when it means "reuse").
+        await _send(
+            ws,
+            {"type": "admin_set_model", "provider": "openai", "api_key": ""},
+        )
+        assert await services.llm_credentials.get("openai") == {
+            "base_url": "https://third.example/v1"
+        }
+
+        await ws.close()
+    finally:
+        await server.close()
+
+
+async def test_model_runtime_persistence_failure_restores_the_live_client():
+    services = _services()
+    original_inner = services.llm.inner
+    original_provider = services.settings.llm.provider
+
+    with patch.object(
+        services.runtime_config,
+        "replace",
+        new=AsyncMock(side_effect=OSError("database is read-only")),
+    ):
+        result = await handle_admin_frame(
+            services,
+            Keystore(),
+            "keeper",
+            "arkham",
+            {
+                "type": "admin_set_model",
+                "provider": "deepseek",
+                "chat_model": "deepseek-chat",
+                "api_key": "sk-new",
+            },
+            get_i18n("en"),
+        )
+
+    assert result["type"] == "admin_error"
+    assert result["code"] == "set_failed"
+    assert services.llm.inner is not None
+    assert services.settings.llm.provider == original_provider
+    assert services.llm.inner is original_inner  # exact last-good client, no fragile rebuild
+    assert await services.runtime_config.get() == {}
+
+
+async def test_model_runtime_commit_then_raise_restores_durable_and_exact_live_state():
+    services = _services()
+    original_inner = services.llm.inner
+    original_replace = services.runtime_config.replace
+    calls = 0
+
+    async def commit_then_raise_once(**values):
+        nonlocal calls
+        calls += 1
+        result = await original_replace(**values)
+        if calls == 1:
+            raise OSError("write committed before fsync error")
+        return result
+
+    with patch.object(services.runtime_config, "replace", new=commit_then_raise_once):
+        result = await handle_admin_frame(
+            services,
+            Keystore(),
+            "keeper",
+            "arkham",
+            {
+                "type": "admin_set_model",
+                "provider": "deepseek",
+                "chat_model": "deepseek-chat",
+                "api_key": "sk-new",
+            },
+            get_i18n("en"),
+        )
+
+    assert result["type"] == "admin_error"
+    assert result["code"] == "set_failed"
+    assert services.llm.inner is original_inner
+    assert services.settings.llm.provider == "openai"
+    assert await services.runtime_config.get() == {}
+    assert await services.store.get(user_key="", store_key="runtime_config.llm") is None
+
+
+async def test_model_credential_persistence_failure_rolls_runtime_and_live_back():
+    services = _services()
+    with patch.object(
+        services.llm_credentials,
+        "replace_static",
+        new=AsyncMock(side_effect=OSError("database is read-only")),
+    ):
+        result = await handle_admin_frame(
+            services,
+            Keystore(),
+            "keeper",
+            "arkham",
+            {
+                "type": "admin_set_model",
+                "provider": "deepseek",
+                "chat_model": "deepseek-chat",
+                "api_key": "sk-new",
+            },
+            get_i18n("en"),
+        )
+
+    assert result["type"] == "admin_error"
+    assert services.settings.llm.provider == "openai"
+    assert await services.runtime_config.get() == {}
+
+
 async def test_admin_set_imagegen_configures_runtime_and_masks_key():
     import time
 
@@ -606,6 +1417,211 @@ async def test_admin_set_imagegen_configures_runtime_and_masks_key():
         await ws.close()
     finally:
         await server.close()
+
+
+async def test_new_image_endpoint_never_reuses_or_remembers_the_old_key():
+    services = _services()
+    keystore = Keystore()
+    keeper_key = keystore.add(room="arkham", name="Keeper", role="keeper")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        ws, *_ = await _connect_and_join(url, keeper_key, "Keeper")
+        first = await _send(
+            ws,
+            {
+                "type": "admin_set_imagegen",
+                "provider": "openai",
+                "model": "image-old",
+                "base_url": "https://images-old.example/v1",
+                "api_key": "sk-old-image-endpoint",
+            },
+        )
+        assert first["type"] == "admin_config"
+
+        changed = await _send(
+            ws,
+            {
+                "type": "admin_set_imagegen",
+                "provider": "openai",
+                "model": "image-new",
+                "base_url": "https://images-new.example/v1",
+            },
+        )
+        assert changed["type"] == "admin_config"
+        assert services.settings.imagegen.base_url == "https://images-new.example/v1"
+        assert services.settings.imagegen.api_key == ""
+        assert await services.imagegen_credentials.get("openai") == {
+            "base_url": "https://images-new.example/v1"
+        }
+
+        # Omitted fields on the unchanged endpoint keep the safe, cleared state.
+        await _send(
+            ws,
+            {"type": "admin_set_imagegen", "provider": "openai", "model": "image-newer"},
+        )
+        assert services.settings.imagegen.api_key == ""
+
+        await ws.close()
+    finally:
+        await server.close()
+
+
+async def test_preset_image_endpoint_roundtrip_keeps_the_existing_key():
+    services = _services()
+    keystore = Keystore()
+    keeper_key = keystore.add(room="arkham", name="Keeper", role="keeper")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        ws, *_ = await _connect_and_join(url, keeper_key, "Keeper")
+        first = await _send(
+            ws,
+            {
+                "type": "admin_set_imagegen",
+                "provider": "openai",
+                "model": "gpt-image-1",
+                "api_key": "sk-image-preset",
+            },
+        )
+        effective_url = IMAGEGEN_PRESETS["openai"]["base_url"]
+        assert first["imagegen"]["base_url"] == effective_url
+        assert services.settings.imagegen.base_url == ""
+
+        saved = await _send(
+            ws,
+            {
+                "type": "admin_set_imagegen",
+                "provider": "openai",
+                "model": "gpt-image-1",
+                "base_url": effective_url,
+            },
+        )
+        assert saved["type"] == "admin_config"
+        assert services.settings.imagegen.api_key == "sk-image-preset"
+        assert await services.imagegen_credentials.get("openai") == {
+            "api_key": "sk-image-preset",
+            "base_url": effective_url,
+        }
+
+        await ws.close()
+    finally:
+        await server.close()
+
+
+async def test_imagegen_build_failure_preserves_the_previous_live_state():
+    services = _services()
+    original_settings = services.settings.imagegen.model_copy(
+        update={
+            "provider": "openai",
+            "model": "old-image-model",
+            "api_key": "sk-old-image",
+            "base_url": "https://old-images.example/v1",
+        }
+    )
+    original_client = object()
+    services.settings.imagegen = original_settings
+    services.imagegen = original_client
+
+    keystore = Keystore()
+    keeper_key = keystore.add(room="arkham", name="Keeper", role="keeper")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        ws, *_ = await _connect_and_join(url, keeper_key, "Keeper")
+        with patch("net.admin.build_imagegen", side_effect=RuntimeError("builder failed")):
+            failed = await _send(
+                ws,
+                {
+                    "type": "admin_set_imagegen",
+                    "provider": "openai",
+                    "model": "new-image-model",
+                    "api_key": "sk-new-image",
+                },
+            )
+
+        assert failed["type"] == "admin_error"
+        assert failed["code"] == "set_failed"
+        assert services.settings.imagegen is original_settings
+        assert services.imagegen is original_client
+        assert await services.imagegen_runtime_config.get() == {}
+
+        await ws.close()
+    finally:
+        await server.close()
+
+
+async def test_imagegen_runtime_persistence_failure_restores_live_state():
+    services = _services()
+    original_settings = services.settings.imagegen
+    original_client = services.imagegen
+
+    with patch.object(
+        services.imagegen_runtime_config,
+        "replace",
+        new=AsyncMock(side_effect=OSError("database is read-only")),
+    ):
+        result = await handle_admin_frame(
+            services,
+            Keystore(),
+            "keeper",
+            "arkham",
+            {
+                "type": "admin_set_imagegen",
+                "provider": "openai",
+                "model": "gpt-image-1",
+                "api_key": "sk-image",
+            },
+            get_i18n("en"),
+        )
+
+    assert result["type"] == "admin_error"
+    assert result["code"] == "set_failed"
+    assert services.settings.imagegen is original_settings
+    assert services.imagegen is original_client
+    assert await services.imagegen_runtime_config.get() == {}
+
+
+async def test_imagegen_runtime_commit_then_raise_restores_durable_and_live_state():
+    services = _services()
+    original_settings = services.settings.imagegen
+    original_client = services.imagegen
+    original_replace = services.imagegen_runtime_config.replace
+    calls = 0
+
+    async def commit_then_raise_once(**values):
+        nonlocal calls
+        calls += 1
+        result = await original_replace(**values)
+        if calls == 1:
+            raise OSError("write committed before fsync error")
+        return result
+
+    with patch.object(
+        services.imagegen_runtime_config,
+        "replace",
+        new=commit_then_raise_once,
+    ):
+        result = await handle_admin_frame(
+            services,
+            Keystore(),
+            "keeper",
+            "arkham",
+            {
+                "type": "admin_set_imagegen",
+                "provider": "openai",
+                "model": "gpt-image-1",
+                "api_key": "sk-image",
+            },
+            get_i18n("en"),
+        )
+
+    assert result["type"] == "admin_error"
+    assert result["code"] == "set_failed"
+    assert services.settings.imagegen is original_settings
+    assert services.imagegen is original_client
+    assert await services.imagegen_runtime_config.get() == {}
+    assert await services.store.get(user_key="", store_key="runtime_config.imagegen") is None
 
 
 async def test_admin_list_models_returns_the_providers_live_catalog():

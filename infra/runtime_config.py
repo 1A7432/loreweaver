@@ -368,8 +368,43 @@ class CredentialBook:
                 entry["base_url"] = base_url
             if not entry:
                 return
-            self._cache[provider] = entry
-            await self._store.set(user_key="", store_key=self._key, value=json.dumps(self._cache))
+            updated = dict(self._cache)
+            updated[provider] = entry
+            await self._store.set(user_key="", store_key=self._key, value=json.dumps(updated))
+            self._cache = updated
+
+    async def replace_static(self, provider: str, *, api_key: str = "", base_url: str = "") -> None:
+        """Replace a provider's static endpoint credential, including explicit clears.
+
+        OAuth fields, if any, are preserved.  This is intentionally different
+        from :meth:`remember`: when an endpoint changes, retaining a blank field
+        could pair the old API key with the new URL on a later switch.
+        """
+        provider = (provider or "").casefold()
+        if not provider:
+            return
+        async with self._mutation_lock:
+            if self._cache is None:
+                await self._load()
+            assert self._cache is not None
+            # Build a replacement snapshot off to the side.  Store.set can fail
+            # (disk full/read-only database); publishing the new cache before that
+            # succeeds would make this process believe an old key was cleared while
+            # a restart would load that key again from disk.
+            updated = dict(self._cache)
+            entry = dict(updated.get(provider, {}))
+            entry.pop("api_key", None)
+            entry.pop("base_url", None)
+            if api_key:
+                entry["api_key"] = api_key
+            if base_url:
+                entry["base_url"] = base_url
+            if entry:
+                updated[provider] = entry
+            else:
+                updated.pop(provider, None)
+            await self._store.set(user_key="", store_key=self._key, value=json.dumps(updated))
+            self._cache = updated
 
     async def save_subscription(self, provider: str, token: Any) -> None:
         """Persist a :class:`~infra.oauth_flows.SubscriptionToken` under ``provider``.
@@ -400,22 +435,29 @@ class CredentialBook:
             raise TypeError("token")
         if not fields["access_token"] or not fields["refresh_token"]:
             return
-        # A successful new login supersedes any live clients holding the old
-        # token. Refresh callbacks use ``_persist_manager_update`` instead.
-        manager = self._subscription_managers.pop(provider, None)
-        if manager is not None:
-            manager.invalidate()
         async with self._mutation_lock:
             if self._cache is None:
                 await self._load()
             assert self._cache is not None
-            self._write_subscription_fields(provider, fields)
+            updated = self._with_subscription_fields(self._cache, provider, fields)
+            await self._store.set(user_key="", store_key=self._key, value=json.dumps(updated))
+            self._cache = updated
             self._disabled_subscriptions.discard(provider)
-            await self._store.set(user_key="", store_key=self._key, value=json.dumps(self._cache))
+            # A successful new login supersedes live clients holding the old
+            # token. Never invalidate them before the durable write succeeds.
+            manager = self._subscription_managers.pop(provider, None)
+            if manager is not None:
+                manager.invalidate()
 
-    def _write_subscription_fields(self, provider: str, fields: dict[str, str]) -> None:
-        assert self._cache is not None
-        entry = dict(self._cache.get(provider, {}))
+    @staticmethod
+    def _with_subscription_fields(
+        book: dict[str, dict[str, str]],
+        provider: str,
+        fields: dict[str, str],
+    ) -> dict[str, dict[str, str]]:
+        """Return a copied book with subscription fields applied."""
+        updated = dict(book)
+        entry = dict(updated.get(provider, {}))
         for key in _SUBSCRIPTION_FIELDS:
             value = fields.get(key, "")
             if value:
@@ -425,7 +467,8 @@ class CredentialBook:
         # Official subscription paths use neither a static key nor a proxy URL.
         entry.pop("api_key", None)
         entry.pop("base_url", None)
-        self._cache[provider] = entry
+        updated[provider] = entry
+        return updated
 
     async def _persist_manager_update(
         self,
@@ -450,8 +493,9 @@ class CredentialBook:
             if self._cache is None:
                 await self._load()
             assert self._cache is not None
-            self._write_subscription_fields(provider, fields)
-            await self._store.set(user_key="", store_key=self._key, value=json.dumps(self._cache))
+            updated = self._with_subscription_fields(self._cache, provider, fields)
+            await self._store.set(user_key="", store_key=self._key, value=json.dumps(updated))
+            self._cache = updated
 
     def subscription_manager_sync(self, provider: str) -> TokenManager | None:
         """Return the one shared live token manager for a subscription provider."""
@@ -529,23 +573,24 @@ class CredentialBook:
         raw = (provider or "").casefold()
         # Clear both the alias and the canonical subscription name.
         names = {raw}
-        if is_subscription_provider(raw):
-            canonical = canonical_subscription_provider(raw)
+        canonical = canonical_subscription_provider(raw) if is_subscription_provider(raw) else ""
+        if canonical:
             names.add(canonical)
-            self._disabled_subscriptions.add(canonical)
-            manager = self._subscription_managers.pop(canonical, None)
-            if manager is not None:
-                manager.invalidate()
         async with self._mutation_lock:
             if self._cache is None:
                 await self._load()
             assert self._cache is not None
-            changed = False
+            updated = dict(self._cache)
             for name in names:
-                if self._cache.pop(name, None) is not None:
-                    changed = True
-            if changed:
-                await self._store.set(user_key="", store_key=self._key, value=json.dumps(self._cache))
+                updated.pop(name, None)
+            if updated != self._cache:
+                await self._store.set(user_key="", store_key=self._key, value=json.dumps(updated))
+                self._cache = updated
+            if canonical:
+                self._disabled_subscriptions.add(canonical)
+                manager = self._subscription_managers.pop(canonical, None)
+                if manager is not None:
+                    manager.invalidate()
 
     async def forget_subscription(self, provider: str) -> None:
         """Revoke only OAuth fields/manager, preserving an independent proxy key."""
@@ -554,11 +599,6 @@ class CredentialBook:
         provider = canonical_subscription_provider(provider)
         if not provider:
             return
-        self._disabled_subscriptions.add(provider)
-        manager = self._subscription_managers.pop(provider, None)
-        if manager is not None:
-            manager.invalidate()
-
         async with self._mutation_lock:
             if self._cache is None:
                 await self._load()
@@ -568,13 +608,18 @@ class CredentialBook:
             for key in _SUBSCRIPTION_FIELDS:
                 if entry.pop(key, None) is not None:
                     changed = True
-            if not changed:
-                return
-            if entry:
-                self._cache[provider] = entry
-            else:
-                self._cache.pop(provider, None)
-            await self._store.set(user_key="", store_key=self._key, value=json.dumps(self._cache))
+            if changed:
+                updated = dict(self._cache)
+                if entry:
+                    updated[provider] = entry
+                else:
+                    updated.pop(provider, None)
+                await self._store.set(user_key="", store_key=self._key, value=json.dumps(updated))
+                self._cache = updated
+            self._disabled_subscriptions.add(provider)
+            manager = self._subscription_managers.pop(provider, None)
+            if manager is not None:
+                manager.invalidate()
 
 
 class ImageGenCredentialBook(CredentialBook):

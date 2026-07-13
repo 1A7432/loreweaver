@@ -15,6 +15,9 @@ export interface MainMenuProps {
   themeName: ThemeName
   stateFrame: StateFrame
   presence?: PresenceFrame
+  // Offered only when the server advertises its offline demo fallback. Keeping
+  // the callback optional preserves compatibility with embedders/older tests.
+  onStartDemo?: () => void
   onEnterGame: () => void
   onCharacter: () => void
   onSettings: () => void
@@ -44,6 +47,7 @@ export function MainMenu({
   themeName,
   stateFrame,
   presence,
+  onStartDemo,
   onEnterGame,
   onCharacter,
   onSettings,
@@ -58,11 +62,17 @@ export function MainMenu({
   const isKeeper = welcome.you.role === "keeper"
   const locale = welcome.locale
 
-  const items: MenuItem[] = [
+  const items: MenuItem[] = []
+  if (isKeeper && welcome.features?.includes("demo") && onStartDemo) {
+    // First row + initial cursor: a brand-new local user can press Enter once
+    // instead of learning magic words such as "upload", "start", or "search".
+    items.push({ label: tt(locale, "menu.demo"), keeper: false, run: () => onStartDemo() })
+  }
+  items.push(
     { label: tt(locale, "menu.enterGame"), keeper: false, run: () => onEnterGame() },
     { label: tt(locale, "menu.character"), keeper: false, run: () => onCharacter() },
     { label: tt(locale, "menu.settings"), keeper: false, run: () => onSettings() },
-  ]
+  )
   if (isKeeper) {
     items.push(
       { label: tt(locale, "menu.keys"), keeper: true, run: () => onKeeperKeys() },
@@ -78,6 +88,10 @@ export function MainMenu({
   if (onQuit) items.push({ label: tt(locale, "menu.quit"), keeper: false, run: () => onQuit() })
 
   const clamp = (index: number) => Math.max(0, Math.min(items.length - 1, index))
+  // Capabilities/roles may change while the menu is mounted (for example a hot switch removes
+  // the one-shot demo row). Render and activate a clamped cursor immediately; no follow-up state
+  // effect is needed, so the capability update cannot briefly target an item that no longer exists.
+  const visibleSelected = clamp(selected)
   const activate = (index: number) => {
     const target = clamp(index)
     setSelected(target)
@@ -90,7 +104,7 @@ export function MainMenu({
     const keyName = typeof event.name === "string" ? event.name.toLowerCase() : ""
     if (keyName === "up") setSelected((prev) => clamp(prev - 1))
     if (keyName === "down") setSelected((prev) => clamp(prev + 1))
-    if (keyName === "return" || keyName === "enter") activate(selected)
+    if (keyName === "return" || keyName === "enter") activate(visibleSelected)
   })
 
   const firstKeeperIndex = items.findIndex((item) => item.keeper)
@@ -124,12 +138,12 @@ export function MainMenu({
               {index === quitIndex ? <box height={1} /> : null}
               <box
                 height={1}
-                backgroundColor={selected === index ? theme.accent : theme.bg}
+                backgroundColor={visibleSelected === index ? theme.accent : theme.bg}
                 onMouseOver={() => setSelected(index)}
                 onMouseDown={() => activate(index)}
               >
-                <text fg={selected === index ? theme.bg : theme.fg}>
-                  {selected === index ? `${CURSOR} ` : "  "}
+                <text fg={visibleSelected === index ? theme.bg : theme.fg}>
+                  {visibleSelected === index ? `${CURSOR} ` : "  "}
                   {item.label}
                 </text>
               </box>

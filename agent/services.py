@@ -7,8 +7,9 @@ fully offline)."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from core.battle_report import BattleReportManager
 from core.character_manager import CharacterManager
@@ -50,6 +51,9 @@ class Services:
     llm_credentials: CredentialBook
     imagegen_runtime_config: ImageGenRuntimeConfig
     imagegen_credentials: ImageGenCredentialBook
+    # One deployment-wide mutation lock shared by TUI admin frames, chat `.model`
+    # commands, and subscription refresh publication. Room turn locks remain separate.
+    config_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
 
 def build_services(

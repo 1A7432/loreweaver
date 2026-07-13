@@ -170,6 +170,7 @@ class RoomHub:
         members = self.rooms.get(session_key)
         if not members:
             return
+        dropped = False
         for member in list(members):
             if member is exclude:
                 continue
@@ -178,6 +179,15 @@ class RoomHub:
             except Exception:
                 logger.warning("hub: dropping member %s after deliver failed", getattr(member, "id", member), exc_info=True)
                 members.discard(member)
+                dropped = True
+        if dropped:
+            # Keep the remaining clients' roster consistent with the fail-closed removal.
+            # Recursive presence publication terminates because every failing member was
+            # removed before this call; an empty room is removed from the registry outright.
+            if members:
+                await self._emit_presence(session_key)
+            else:
+                self.rooms.pop(session_key, None)
 
     def members(self, session_key: str) -> list[Member]:
         """Every member currently connected to ``session_key``."""

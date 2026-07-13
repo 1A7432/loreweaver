@@ -1,6 +1,6 @@
 export type TuiLocale = "en" | "zh"
 
-const DEFAULT_LOCALE: TuiLocale = "zh"
+const DEFAULT_LOCALE: TuiLocale = "en"
 
 const messages = {
   en: {
@@ -31,6 +31,7 @@ const messages = {
     "menu.role.keeper": "Keeper",
     "menu.role.player": "Investigator",
     "menu.enterGame": "Enter game",
+    "menu.demo": "Play sample adventure",
     "menu.character": "My character",
     "menu.settings": "Settings",
     "menu.keeperSection": "── Keeper ──",
@@ -51,6 +52,9 @@ const messages = {
     "status.theme": "theme",
     "status.help": "? help",
     "game.joined": "joined {room}",
+    "demo.action": "Start the built-in sample adventure",
+    "demo.starting":
+      "Loading The Blackmoor Lighthouse… Nora Vance is ready. After the opening, try: “I search behind the harbor map.”",
     "game.placeholder": "say or command",
     "game.help":
       "F1 lamplight · F2 df16 · F3 phosphor · F4 amber · F5 paperwhite · Esc menu · PgUp/PgDn scroll · Tab roster · Ctrl+L clear",
@@ -155,19 +159,19 @@ const messages = {
     "keys.op.export": "Export complete",
     "keys.op.import": "Import complete",
     "keys.op.delete": "Delete complete",
-    "keys.op.summary": "{action} · {room} · keys {keys} · data {rows} · vectors {vectors}{path}",
+    "keys.op.summary": "{action} · {room} · keys {keys} · data {rows} · vectors {vectors} · media {media}{path}",
     "keys.minted": "New invite · table \"{room}\" · {role}",
     "keys.copyOnce": "Shown once; copy it now",
     "keys.existing": "Existing invites",
     "keys.none": "No invites yet",
-    "keys.intro": "Mint invite = create/join room (room name creates it)",
-    "keys.room": "Room",
+    "keys.intro": "Invites and backups are scoped to this table",
+    "keys.room": "Current table",
     "keys.roomPlaceholder": "arkham",
     "keys.name": "Note (optional)",
     "keys.blank": "blank is fine",
     "keys.role": "Role",
     "keys.backupPath": "Backup path",
-    "keys.backupPlaceholder": "blank auto-saves; import needs a JSON path",
+    "keys.backupPlaceholder": "blank auto-saves; import needs a backup filename",
     "keys.mint": "⚄ Mint invite",
     "keys.load": "Load selected",
     "keys.save": "Save changes",
@@ -177,7 +181,7 @@ const messages = {
     "keys.import": "Import room backup",
     "keys.deleteRoom": "Delete full room (backup first)",
     "keys.confirm": "  ⚠ click again to confirm",
-    "keys.help": "Up/down select · load to edit room/note/role · Esc menu",
+    "keys.help": "Up/down select · load to edit note/role · Esc menu",
     "model.title": "Model / config",
     "model.current": "Current config",
     "model.providerDefault": "(provider default)",
@@ -193,18 +197,24 @@ const messages = {
     "model.apiKeyPlaceholder": "set / replace this provider's key",
     "model.apiKeySaved": "saved ✓ — blank keeps it",
     "model.keySavedTag": "✓ key saved",
+    "model.baseUrl": "Chat Base URL",
+    "model.baseUrlPlaceholder": "leave untouched to reuse the saved/provider endpoint",
+    "model.clearSavedKey": "[clear saved key]",
+    "model.clearBaseUrl": "[clear Base URL]",
+    "model.clearPending": "[will clear on save]",
     "model.modelSelect": "Model (↑↓ / click to pick)",
     "model.modelCustom": "…or type a model",
     "model.modelsLoading": "fetching models…",
     "model.modelsEmpty": "no live list — type a model below",
     "model.save": "⚄ Save model",
-    "model.help": "Tab fields · Enter on key loads its models · Enter save · Esc menu",
+    "model.help": "Tab fields · Enter on key/Base URL previews models · Enter save · Esc menu",
     "model.auth": "Auth",
     "model.subscriptionLoggedIn": "subscription logged in",
     "model.subscriptionLoggedOut": "subscription not logged in",
     "model.subscriptionHint": "Login in chat: .model login <chatgpt|supergrok> (not in this form)",
     "model.subscriptionReadyTag": "✓ subscription ready",
-    "model.subscriptionFieldNote": "Uses OAuth subscription — no API key field",
+    "model.subscriptionFieldNote": "Uses OAuth subscription — API key / Base URL do not apply",
+    "model.configureProxy": "Configure compatible proxy",
     "imagegen.title": "Image generation",
     "imagegen.current": "Image generation",
     "imagegen.intro": "Configure an OpenAI-compatible image endpoint for avatars and handouts",
@@ -307,6 +317,7 @@ const messages = {
     "menu.role.keeper": "守秘人",
     "menu.role.player": "调查员",
     "menu.enterGame": "进入游戏",
+    "menu.demo": "试玩示例冒险",
     "menu.character": "我的角色",
     "menu.settings": "设置",
     "menu.keeperSection": "── 守秘人 ──",
@@ -327,6 +338,8 @@ const messages = {
     "status.theme": "主题",
     "status.help": "? 帮助",
     "game.joined": "已加入 {room}",
+    "demo.action": "开始内置示例冒险",
+    "demo.starting": "正在载入《黑沼灯塔》…诺拉·万斯已经就绪。开场后可试试：“我搜查港口地图后面。”",
     "game.placeholder": "输入行动或命令",
     "game.help":
       "F1 lamplight · F2 df16 · F3 phosphor · F4 amber · F5 paperwhite · Esc 菜单 · PgUp/PgDn 滚动 · Tab 队伍 · Ctrl+L 清空",
@@ -431,19 +444,19 @@ const messages = {
     "keys.op.export": "导出完成",
     "keys.op.import": "导入完成",
     "keys.op.delete": "删除完成",
-    "keys.op.summary": "{action} · {room} · 邀请{keys} · 数据{rows} · 向量{vectors}{path}",
+    "keys.op.summary": "{action} · {room} · 邀请{keys} · 数据{rows} · 向量{vectors} · 媒体{media}{path}",
     "keys.minted": "新邀请码 · 牌桌「{room}」· {role}",
     "keys.copyOnce": "只显示一次,复制好",
     "keys.existing": "已有邀请码",
     "keys.none": "暂无邀请码",
-    "keys.intro": "发新邀请码 = 建/入房(填房间名即建房)",
-    "keys.room": "房间名",
+    "keys.intro": "邀请码与备份仅限当前牌桌",
+    "keys.room": "当前牌桌",
     "keys.roomPlaceholder": "shuxue",
     "keys.name": "备注名(可选)",
     "keys.blank": "留空即可",
     "keys.role": "角色",
     "keys.backupPath": "备份路径",
-    "keys.backupPlaceholder": "留空自动保存；导入时填 JSON 路径",
+    "keys.backupPlaceholder": "留空自动保存；导入时填备份文件名",
     "keys.mint": "⚄ 发邀请码",
     "keys.load": "载入选中",
     "keys.save": "保存修改",
@@ -453,7 +466,7 @@ const messages = {
     "keys.import": "导入房间备份",
     "keys.deleteRoom": "完整删除房间(先备份)",
     "keys.confirm": "  ⚠ 再点一次确认",
-    "keys.help": "↑↓ 选中 · 载入后可改房间/备注/角色 · Esc 返回菜单",
+    "keys.help": "↑↓ 选中 · 载入后可改备注/角色 · Esc 返回菜单",
     "model.title": "模型 / 配置",
     "model.current": "当前配置",
     "model.providerDefault": "(provider 默认)",
@@ -469,18 +482,24 @@ const messages = {
     "model.apiKeyPlaceholder": "设置 / 更换该 provider 的 key",
     "model.apiKeySaved": "已保存 ✓ — 留空则沿用",
     "model.keySavedTag": "✓ 已存 key",
+    "model.baseUrl": "聊天 Base URL",
+    "model.baseUrlPlaceholder": "不修改则沿用已保存地址或 provider 默认地址",
+    "model.clearSavedKey": "[清除已保存 key]",
+    "model.clearBaseUrl": "[清除 Base URL]",
+    "model.clearPending": "[保存时清除]",
     "model.modelSelect": "模型(↑↓ / 点击选择)",
     "model.modelCustom": "…或手动输入模型",
     "model.modelsLoading": "正在获取模型…",
     "model.modelsEmpty": "拉不到实时清单 — 请在下方手填",
     "model.save": "⚄ 保存模型",
-    "model.help": "Tab 切换字段 · 在 key 上回车加载模型 · Enter 保存 · Esc 返回菜单",
+    "model.help": "Tab 切换字段 · 在 key/Base URL 上回车预览模型 · Enter 保存 · Esc 返回菜单",
     "model.auth": "认证",
     "model.subscriptionLoggedIn": "订阅已登录",
     "model.subscriptionLoggedOut": "订阅未登录",
     "model.subscriptionHint": "请在聊天中执行：.model login <chatgpt|supergrok>（本页不提供登录）",
     "model.subscriptionReadyTag": "✓ 订阅就绪",
-    "model.subscriptionFieldNote": "使用 OAuth 订阅 — 无需填写 API key",
+    "model.subscriptionFieldNote": "使用 OAuth 订阅 — API key / Base URL 不适用",
+    "model.configureProxy": "配置兼容代理",
     "imagegen.title": "图像生成",
     "imagegen.current": "图像生成",
     "imagegen.intro": "配置 OpenAI-compatible 图像端点,用于头像和 handout",
@@ -564,9 +583,30 @@ export function normalizeLocale(locale?: string): TuiLocale {
   return lower.startsWith("en") ? "en" : lower.startsWith("zh") ? "zh" : DEFAULT_LOCALE
 }
 
+export function localeFromEnvironment(
+  env: Record<string, string | undefined>,
+  systemLocale?: string,
+): TuiLocale {
+  // An explicit Loreweaver override wins. Otherwise follow the conventional
+  // POSIX locale precedence before asking Intl (useful on non-POSIX systems).
+  const explicit = env.TRPG_LOCALE?.trim()
+  if (explicit) return normalizeLocale(explicit)
+  for (const name of ["LC_ALL", "LC_MESSAGES", "LANG"] as const) {
+    const value = env[name]?.trim()
+    if (value) return normalizeLocale(value)
+  }
+  return normalizeLocale(systemLocale)
+}
+
 export function defaultTuiLocale(): TuiLocale {
   const env = (globalThis as unknown as { Bun?: { env?: Record<string, string | undefined> } }).Bun?.env ?? {}
-  return normalizeLocale(env.TRPG_LOCALE)
+  let systemLocale = ""
+  try {
+    systemLocale = Intl.DateTimeFormat().resolvedOptions().locale
+  } catch {
+    // Minimal runtimes may not ship Intl locale data; English is the stable fallback.
+  }
+  return localeFromEnvironment(env, systemLocale)
 }
 
 export function tt(locale: string | undefined, key: MessageKey, vars: Record<string, string | number> = {}): string {

@@ -40,7 +40,7 @@ export interface AppClient {
   adminSetImagegen(provider: string, model: string, apiKey?: string, baseUrl?: string, size?: string): void
   adminListModels(provider?: string, apiKey?: string, baseUrl?: string): void
   adminListKeys(): void
-  adminMintKey(room: string, name?: string, role?: PlayerRole): void
+  adminMintKey(room?: string, name?: string, role?: PlayerRole): void
   adminUpdateKey(id: string, room?: string, name?: string, role?: PlayerRole): void
   adminDeleteKey(id: string): void
   adminDeleteRoom(room: string): void
@@ -121,7 +121,7 @@ class TransportClient implements AppClient {
   adminListKeys(): void {
     this.inner?.adminListKeys()
   }
-  adminMintKey(room: string, name?: string, role?: PlayerRole): void {
+  adminMintKey(room?: string, name?: string, role?: PlayerRole): void {
     this.inner?.adminMintKey(room, name, role)
   }
   adminUpdateKey(id: string, room?: string, name?: string, role?: PlayerRole): void {

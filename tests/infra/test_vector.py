@@ -13,6 +13,8 @@ result order unambiguous (no near-ties to reason about):
 
 from __future__ import annotations
 
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -302,6 +304,19 @@ async def test_file_backed_store_persists_across_instances(tmp_path: Path):
     assert [hit.id for hit in hits] == ["p1", "p2"]
     assert db_path.exists()
     store2.close()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="exact permission bits are POSIX-only")
+async def test_file_backed_store_tightens_sqlite_and_live_sidecars(tmp_path: Path):
+    db_path = tmp_path / "vectors.sqlite3"
+    store = VectorStore(dim=2, path=db_path)
+
+    await store.upsert([P1])
+
+    candidates = [db_path, Path(f"{db_path}-wal"), Path(f"{db_path}-shm")]
+    assert db_path.exists()
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in candidates if path.exists())
+    store.close()
 
 
 async def test_file_backed_store_persists_deletes_across_instances(tmp_path: Path):

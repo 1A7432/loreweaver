@@ -31,3 +31,23 @@ async def test_cli_selfplay_demo_no_keeper_secret_leak():
 
     keeper_pool = await services.store.get(store_key=f"module_keeper_pool.cli:dm:{CLI_CHAT_ID}")
     assert keeper_pool and DEMO_SENTINEL in keeper_pool
+
+
+async def test_guided_demo_action_loads_module_and_opens_in_one_turn():
+    services = build_services(
+        Settings(locale="en"),
+        llm=FakeLLM(responder=demo_kp_responder),
+        embeddings=FakeEmbeddings(64),
+    )
+
+    replies = await run_script(
+        ["Start the built-in sample adventure", "I search behind the harbor map"],
+        services,
+        seed=20240701,
+    )
+
+    assert len(replies) == 2
+    assert "Salt & Anchor Inn" in replies[0]
+    assert "tide table" in replies[1]
+    keeper_pool = await services.store.get(store_key=f"module_keeper_pool.cli:dm:{CLI_CHAT_ID}")
+    assert keeper_pool and DEMO_SENTINEL in keeper_pool

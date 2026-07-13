@@ -9,11 +9,14 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shutil
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from infra.file_permissions import atomic_write_private, ensure_private_directory, restrict_file
 from infra.store import Store
 from infra.svg import SVG_MIME, SvgSafetyError, validate_svg_bytes
 
@@ -22,6 +25,8 @@ ALLOWED_AUDIO_MIMES = frozenset({"audio/mpeg", "audio/ogg", "audio/wav", "audio/
 ALLOWED_MEDIA_MIMES = ALLOWED_IMAGE_MIMES | ALLOWED_AUDIO_MIMES
 DEFAULT_MAX_FILE_BYTES = 8 * 1024 * 1024
 DEFAULT_ROOM_QUOTA_BYTES = 512 * 1024 * 1024
+_OFFER_POLICY_TTL_SECONDS = 10 * 60
+_MAX_REMEMBERED_OFFER_POLICIES = 4096
 
 # TODO: EXIF stripping is intentionally out of scope for media P1; blobs stay opaque.
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -65,6 +70,14 @@ class PendingUpload:
     sha256: str
 
 
+@dataclass(frozen=True)
+class _OfferPolicy:
+    max_file_bytes: int
+    room_quota_bytes: int
+    allowed_mimes: frozenset[str]
+    expires_at: float
+
+
 class MediaStore:
     """File-backed, room-scoped media store with a SQLite metadata index."""
 
@@ -82,6 +95,17 @@ class MediaStore:
         self.max_file_bytes = int(max_file_bytes)
         self.room_quota_bytes = int(room_quota_bytes)
         self.allowed_mimes = frozenset(allowed_mimes)
+        # ``validate_offer`` may apply a MIME-specific policy that is stricter than
+        # this store's aggregate image+audio limits. Remember that policy until the
+        # corresponding PUT so commit-time validation cannot accidentally fall back
+        # to the broader aggregate quota. Entries are bounded and short-lived because
+        # a client is allowed to abandon an accepted offer without sending its body.
+        self._offer_policies: dict[tuple[str, str, int, str], _OfferPolicy] = {}
+        # Keep the strictest policy observed for each room+MIME as the fallback
+        # after an abandoned offer expires or the bounded exact-policy cache evicts
+        # it. Thus expiry can never widen a MIME-specific quota to this store's
+        # aggregate image+audio quota.
+        self._mime_policies: dict[tuple[str, str], _OfferPolicy] = {}
 
     async def validate_offer(
         self,
@@ -114,6 +138,15 @@ class MediaStore:
         total = await self.room_total_size(room)
         if total + size > quota_limit:
             raise MediaError("media_quota_exceeded")
+        self._remember_offer_policy(
+            room=room,
+            mime=mime,
+            size=size,
+            sha256=sha256,
+            max_file_bytes=file_limit,
+            room_quota_bytes=quota_limit,
+            allowed_mimes=self.allowed_mimes if allowed_mimes is None else frozenset(allowed_mimes),
+        )
         return None
 
     async def register_blob(
@@ -142,45 +175,93 @@ class MediaStore:
         return await self.commit_bytes(pending, data)
 
     async def commit_bytes(self, pending: PendingUpload, data: bytes) -> MediaRecord:
-        """Store uploaded bytes after verifying exact size and sha256."""
+        """Store uploaded bytes after verifying content and quota atomically.
+
+        Offer validation is advisory: several clients may have valid pending offers
+        at once. The authoritative duplicate/quota check and metadata insert therefore
+        run under one SQLite ``BEGIN IMMEDIATE`` transaction. File publication happens
+        before the metadata commit, but a newly-created blob is removed if that commit
+        fails; a blob that predated this call is never removed by compensation.
+        """
         if len(data) != pending.size:
             raise MediaError("media_size_mismatch")
         digest = hashlib.sha256(data).hexdigest()
         if digest != pending.sha256.lower():
             raise MediaError("media_hash_mismatch")
+        policy = self._take_offer_policy(pending)
+        allowed_mimes = policy.allowed_mimes if policy is not None else self.allowed_mimes
+        max_file_bytes = policy.max_file_bytes if policy is not None else self.max_file_bytes
+        room_quota_bytes = policy.room_quota_bytes if policy is not None else self.room_quota_bytes
+        if pending.mime not in allowed_mimes:
+            raise MediaError("media_bad_mime")
+        if pending.size <= 0 or pending.size > max_file_bytes:
+            raise MediaError("media_too_large")
         if pending.mime == SVG_MIME:
             try:
                 validate_svg_bytes(data)
             except SvgSafetyError as exc:
                 raise MediaError("media_bad_svg") from exc
 
-        existing = await self.get_record(pending.room, digest)
-        if existing is not None:
-            return existing
-
+        await self._ensure_schema()
         media_path = self._path(pending.room, digest)
-        media_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = media_path.with_name(f".{media_path.name}.{os.getpid()}.tmp")
-        try:
-            tmp_path.write_bytes(data)
-            os.replace(tmp_path, media_path)
-        finally:
+        ensure_private_directory(media_path.parent)
+        created_blob = False
+        async with self._store._lock:
+            conn = self._store._ensure_conn()
+            conn.execute("BEGIN IMMEDIATE")
             try:
-                tmp_path.unlink()
-            except FileNotFoundError:
-                pass
+                row = conn.execute(
+                    """
+                    SELECT hash, room, mime, size, name, uploader, created_at
+                    FROM media_index
+                    WHERE room = ? AND hash = ?
+                    """,
+                    (pending.room, digest),
+                ).fetchone()
+                if row is not None:
+                    conn.rollback()
+                    return _row_to_record(row)
 
-        created_at = time.time()
-        record = MediaRecord(
-            hash=digest,
-            room=pending.room,
-            mime=pending.mime,
-            size=pending.size,
-            name=pending.name,
-            uploader=pending.uploader,
-            created_at=created_at,
-        )
-        await self._insert_record(record)
+                total_row = conn.execute(
+                    "SELECT COALESCE(SUM(size), 0) FROM media_index WHERE room = ?",
+                    (pending.room,),
+                ).fetchone()
+                total = int(total_row[0] or 0) if total_row else 0
+                if total + pending.size > room_quota_bytes:
+                    raise MediaError("media_quota_exceeded")
+
+                created_blob = _publish_blob(media_path, data)
+                record = MediaRecord(
+                    hash=digest,
+                    room=pending.room,
+                    mime=pending.mime,
+                    size=pending.size,
+                    name=pending.name,
+                    uploader=pending.uploader,
+                    created_at=time.time(),
+                )
+                await self._insert_record(record, conn=conn)
+                self._store._commit(conn)
+            except Exception:
+                if conn.in_transaction:
+                    conn.rollback()
+                try:
+                    metadata_exists = (
+                        conn.execute(
+                            "SELECT 1 FROM media_index WHERE room = ? AND hash = ?",
+                            (pending.room, digest),
+                        ).fetchone()
+                        is not None
+                    )
+                except Exception:
+                    # The normal Store commit cannot raise after SQLite committed
+                    # (permission tightening is best-effort). If a broken connection
+                    # prevents verification, removing a blob created solely by this
+                    # failed call remains the least surprising compensation.
+                    metadata_exists = False
+                if created_blob and not metadata_exists:
+                    _remove_new_blob(media_path)
+                raise
         return record
 
     async def get_record(self, room: str, sha256: str) -> MediaRecord | None:
@@ -217,11 +298,187 @@ class MediaStore:
             row = conn.execute("SELECT COALESCE(SUM(size), 0) FROM media_index WHERE room = ?", (room,)).fetchone()
         return int(row[0] or 0) if row else 0
 
-    async def _insert_record(self, record: MediaRecord) -> None:
+    async def list_room_records(self, room: str) -> list[MediaRecord]:
+        """Return every indexed blob owned by ``room`` in stable hash order."""
         await self._ensure_schema()
         async with self._store._lock:
             conn = self._store._ensure_conn()
+            rows = conn.execute(
+                """
+                SELECT hash, room, mime, size, name, uploader, created_at
+                FROM media_index
+                WHERE room = ?
+                ORDER BY hash
+                """,
+                (room,),
+            ).fetchall()
+        return [_row_to_record(row) for row in rows]
+
+    async def delete_room(self, room: str) -> int:
+        """Delete ``room``'s index entries and blobs as one recoverable operation.
+
+        Blobs are first moved to an owner-only staging directory while the SQLite
+        write transaction is held. A staging or DB failure rolls those moves back,
+        so live index rows never point at files an ordinary failed call removed.
+        Only after the metadata delete commits is the private staging directory
+        discarded. A post-commit cleanup failure can leave private quarantine data,
+        but cannot leave a dangling live index or delete another room's shared blob.
+        """
+        await self._ensure_schema()
+        records: list[MediaRecord] = []
+        moved: list[tuple[Path, Path]] = []
+        staging_dir: Path | None = None
+        async with self._store._lock:
+            conn = self._store._ensure_conn()
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT hash, room, mime, size, name, uploader, created_at
+                    FROM media_index
+                    WHERE room = ?
+                    ORDER BY hash
+                    """,
+                    (room,),
+                ).fetchall()
+                records = [_row_to_record(row) for row in rows]
+                if not records:
+                    conn.rollback()
+                    return 0
+
+                # Sanitized directory names can theoretically collide. Preserve a
+                # shared content-addressed file if another exact room resolves to it.
+                other_rows = conn.execute(
+                    "SELECT room, hash FROM media_index WHERE room != ?",
+                    (room,),
+                ).fetchall()
+                protected = {
+                    str(hash_value)
+                    for other_room, hash_value in other_rows
+                    if _safe_room(str(other_room)) == _safe_room(room)
+                }
+
+                for record in records:
+                    source = self._path(room, record.hash)
+                    if record.hash in protected or not source.exists():
+                        continue
+                    if staging_dir is None:
+                        staging_root = ensure_private_directory(self._base / ".delete-staging")
+                        staging_dir = Path(tempfile.mkdtemp(prefix="room-", dir=staging_root))
+                        ensure_private_directory(staging_dir)
+                    staged = staging_dir / record.hash
+                    os.replace(source, staged)
+                    moved.append((source, staged))
+
+                if staging_dir is not None:
+                    _fsync_directory(staging_dir)
+                    _fsync_directory(self._base / _safe_room(room))
+                conn.execute("DELETE FROM media_index WHERE room = ?", (room,))
+                self._store._commit(conn)
+            except Exception:
+                if conn.in_transaction:
+                    conn.rollback()
+                try:
+                    rows_still_live = (
+                        conn.execute(
+                            "SELECT 1 FROM media_index WHERE room = ? LIMIT 1",
+                            (room,),
+                        ).fetchone()
+                        is not None
+                    )
+                except Exception:
+                    # Prefer restoring bytes when DB outcome is unknowable. This can
+                    # leave an unindexed private blob, but never knowingly leaves a
+                    # live index pointing at a file this call moved away.
+                    rows_still_live = True
+                if rows_still_live:
+                    _restore_staged_blobs(moved)
+                _discard_staging(staging_dir)
+                raise
+
+        _discard_staging(staging_dir)
+        room_dir = self._base / _safe_room(room)
+        try:
+            room_dir.rmdir()
+        except (FileNotFoundError, OSError):
+            pass
+        else:
+            _fsync_directory(room_dir.parent)
+        return len(records)
+
+    def _remember_offer_policy(
+        self,
+        *,
+        room: str,
+        mime: str,
+        size: int,
+        sha256: str,
+        max_file_bytes: int,
+        room_quota_bytes: int,
+        allowed_mimes: frozenset[str],
+    ) -> None:
+        now = time.monotonic()
+        self._prune_offer_policies(now)
+        if len(self._offer_policies) >= _MAX_REMEMBERED_OFFER_POLICIES:
+            self._offer_policies.pop(next(iter(self._offer_policies)))
+        policy = _OfferPolicy(
+            max_file_bytes=max_file_bytes,
+            room_quota_bytes=room_quota_bytes,
+            allowed_mimes=allowed_mimes,
+            expires_at=now + _OFFER_POLICY_TTL_SECONDS,
+        )
+        self._offer_policies[(room, mime, size, sha256)] = policy
+        room_mime = (room, mime)
+        previous = self._mime_policies.get(room_mime)
+        self._mime_policies[room_mime] = _OfferPolicy(
+            max_file_bytes=min(max_file_bytes, previous.max_file_bytes)
+            if previous is not None
+            else max_file_bytes,
+            room_quota_bytes=min(room_quota_bytes, previous.room_quota_bytes)
+            if previous is not None
+            else room_quota_bytes,
+            allowed_mimes=allowed_mimes & previous.allowed_mimes
+            if previous is not None
+            else allowed_mimes,
+            expires_at=float("inf"),
+        )
+
+    def _take_offer_policy(self, pending: PendingUpload) -> _OfferPolicy | None:
+        now = time.monotonic()
+        self._prune_offer_policies(now)
+        exact = self._offer_policies.pop(
+            (pending.room, pending.mime, pending.size, pending.sha256.lower()), None
+        )
+        return exact or self._mime_policies.get((pending.room, pending.mime))
+
+    def _prune_offer_policies(self, now: float) -> None:
+        expired = [key for key, policy in self._offer_policies.items() if policy.expires_at <= now]
+        for key in expired:
+            self._offer_policies.pop(key, None)
+
+    async def _insert_record(self, record: MediaRecord, *, conn: Any | None = None) -> None:
+        if conn is not None:
             conn.execute(
+                """
+                INSERT INTO media_index
+                    (hash, room, mime, size, name, uploader, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.hash,
+                    record.room,
+                    record.mime,
+                    record.size,
+                    record.name,
+                    record.uploader,
+                    record.created_at,
+                ),
+            )
+            return
+        await self._ensure_schema()
+        async with self._store._lock:
+            store_conn = self._store._ensure_conn()
+            store_conn.execute(
                 """
                 INSERT OR IGNORE INTO media_index
                     (hash, room, mime, size, name, uploader, created_at)
@@ -229,7 +486,7 @@ class MediaStore:
                 """,
                 (record.hash, record.room, record.mime, record.size, record.name, record.uploader, record.created_at),
             )
-            conn.commit()
+            self._store._commit(store_conn)
 
     async def _ensure_schema(self) -> None:
         async with self._store._lock:
@@ -249,7 +506,7 @@ class MediaStore:
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_media_index_room ON media_index(room)")
-            conn.commit()
+            self._store._commit(conn)
 
     def _path(self, room: str, sha256: str) -> Path:
         return self._base / _safe_room(room) / sha256.lower()
@@ -270,6 +527,87 @@ def _row_to_record(row: Any) -> MediaRecord:
         uploader=str(row[5]),
         created_at=float(row[6]),
     )
+
+
+def _publish_blob(path: Path, data: bytes) -> bool:
+    """Durably publish ``data`` and return whether this call created the path.
+
+    A valid content-addressed blob may already exist because another exact room
+    whose sanitized directory collides references the same hash, or because a
+    previous metadata commit failed. Reusing/replacing that path is safe, but it
+    must not be removed if the caller's later DB insert fails.
+    """
+    existed = path.exists()
+    if existed:
+        try:
+            if path.read_bytes() == data:
+                restrict_file(path)
+                return False
+        except OSError:
+            # Let the durable atomic replacement below either repair the path or
+            # surface the filesystem error to the caller.
+            pass
+    atomic_write_private(path, data)
+    return not existed
+
+
+def _remove_new_blob(path: Path) -> None:
+    """Best-effort compensation for a blob created before a failed DB commit."""
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    _fsync_directory(path.parent)
+
+
+def _restore_staged_blobs(moved: list[tuple[Path, Path]]) -> None:
+    """Reverse delete staging while the room's SQLite write lock is still held."""
+    touched: set[Path] = set()
+    for original, staged in reversed(moved):
+        if not staged.exists():
+            continue
+        ensure_private_directory(original.parent)
+        os.replace(staged, original)
+        touched.add(original.parent)
+        touched.add(staged.parent)
+    for directory in touched:
+        _fsync_directory(directory)
+
+
+def _discard_staging(path: Path | None) -> None:
+    """Discard committed/rolled-back private staging without masking the main result."""
+    if path is None:
+        return
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        return
+    except OSError:
+        # Metadata is already authoritative at this point. Leaving owner-only
+        # quarantine is safer than resurrecting rows or masking a successful DB
+        # commit; a later operator cleanup can remove the hidden directory.
+        return
+    _fsync_directory(path.parent)
+    try:
+        path.parent.rmdir()
+    except (FileNotFoundError, OSError):
+        pass
+    else:
+        _fsync_directory(path.parent.parent)
+
+
+def _fsync_directory(path: Path) -> None:
+    """Best-effort persistence barrier for directory entry changes."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
 
 
 def is_audio_mime(mime: str) -> bool:

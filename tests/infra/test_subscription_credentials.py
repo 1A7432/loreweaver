@@ -72,6 +72,82 @@ async def test_forget_subscription_preserves_independent_proxy_credentials():
         await manager.access_token()
 
 
+async def test_replace_static_can_clear_an_old_key_without_dropping_oauth_fields():
+    book = CredentialBook(Store(":memory:"))
+    await book.save_subscription(
+        "chatgpt",
+        SubscriptionToken("access", "refresh", time.time() + 3600),
+    )
+    await book.remember(
+        "chatgpt", api_key="sk-old", base_url="https://old.example/v1"
+    )
+
+    await book.replace_static("chatgpt", base_url="https://new.example/v1")
+
+    credential = await book.get("chatgpt")
+    assert credential["access_token"] == "access"
+    assert credential["base_url"] == "https://new.example/v1"
+    assert "api_key" not in credential
+
+
+async def test_replace_static_failed_persist_keeps_old_cache_and_disk(monkeypatch):
+    store = Store(":memory:")
+    book = CredentialBook(store)
+    await book.remember(
+        "openai", api_key="sk-old", base_url="https://old.example/v1"
+    )
+
+    async def fail_set(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(store, "set", fail_set)
+
+    with pytest.raises(OSError, match="disk full"):
+        await book.replace_static(
+            "openai", api_key="sk-new", base_url="https://new.example/v1"
+        )
+
+    expected = {"api_key": "sk-old", "base_url": "https://old.example/v1"}
+    assert await book.get("openai") == expected
+    # A cold credential book sees the same last successfully persisted value.
+    assert await CredentialBook(store).get("openai") == expected
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["remember", "save_subscription", "forget", "forget_subscription"],
+)
+async def test_credential_mutations_publish_cache_only_after_persist(monkeypatch, operation):
+    store = Store(":memory:")
+    book = CredentialBook(store)
+    await book.save_subscription(
+        "chatgpt",
+        SubscriptionToken("old-access", "old-refresh", time.time() + 3600),
+    )
+    before_cache = await book.all()
+    before_disk = await store.get(user_key="", store_key="runtime_config.credentials")
+
+    async def fail_set(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(store, "set", fail_set)
+    with pytest.raises(OSError, match="disk full"):
+        if operation == "remember":
+            await book.remember("deepseek", api_key="sk-new")
+        elif operation == "save_subscription":
+            await book.save_subscription(
+                "chatgpt",
+                SubscriptionToken("new-access", "new-refresh", time.time() + 7200),
+            )
+        elif operation == "forget":
+            await book.forget("chatgpt")
+        else:
+            await book.forget_subscription("chatgpt")
+
+    assert await book.all() == before_cache
+    assert await store.get(user_key="", store_key="runtime_config.credentials") == before_disk
+
+
 async def test_save_subscription_drops_stale_static_key_and_proxy_url():
     book = CredentialBook(Store(":memory:"))
     await book.remember(

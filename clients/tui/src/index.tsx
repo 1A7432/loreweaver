@@ -3,6 +3,7 @@ import { createCliRenderer } from "@opentui/core"
 import { createRoot } from "@opentui/react"
 import App, { type AppPrefill } from "./App"
 import { forgetServer, loadConnectMemory, rememberServer, saveConnectMemory, type SavedServer } from "./connectMemory"
+import { defaultTuiLocale } from "./i18n"
 
 interface Args {
   command?: string
@@ -53,7 +54,9 @@ const prefill: AppPrefill = {
   host: args.host ?? remembered.host,
   key: args.key ?? remembered.key,
   name: args.name ?? remembered.name,
-  locale: remembered.locale,
+  // Treat the remembered choice or OS/environment-derived locale as a local
+  // user preference, so a remote room's locale cannot flip the TUI after join.
+  locale: remembered.locale ?? defaultTuiLocale(),
   localServerHome: remembered.localServerHome,
   servers: remembered.servers,
 }

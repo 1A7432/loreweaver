@@ -293,6 +293,11 @@ class MutableLLM:
         return self._inner
 
     @property
+    def using_fallback(self) -> bool:
+        """Whether the live inner client is the configured offline fallback."""
+        return self._fallback_llm is not None and self._inner is self._fallback_llm
+
+    @property
     def settings(self) -> Settings:
         return self._settings
 
@@ -322,9 +327,16 @@ class MutableLLM:
     def reconfigure(self, settings: Settings) -> None:
         """Rebuild the inner client from `settings`, mutating the shared Settings'
         llm fields in place so all LLM consumers observe the change."""
+        # Build against an isolated candidate first. Native SDK construction can
+        # fail (missing dependency/key, invalid endpoint); in that case neither the
+        # shared settings nor the working inner client may be partially changed.
+        candidate_settings = self._settings.model_copy(deep=True)
         for field in OVERRIDE_FIELDS:
-            setattr(self._settings.llm, field, getattr(settings.llm, field))
-        self._inner = self._call_builder(self._settings)
+            setattr(candidate_settings.llm, field, getattr(settings.llm, field))
+        candidate_inner = self._call_builder(candidate_settings)
+        for field in OVERRIDE_FIELDS:
+            setattr(self._settings.llm, field, getattr(candidate_settings.llm, field))
+        self._inner = candidate_inner
 
     def apply(self, overrides: dict) -> None:
         """Recompute effective settings from the pristine baseline + `overrides`

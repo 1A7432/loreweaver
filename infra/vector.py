@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
+from infra.file_permissions import restrict_sqlite_files
 from infra.i18n import t
 
 
@@ -79,7 +80,13 @@ class VectorStore:
             """
         )
         conn.commit()
+        restrict_sqlite_files(self._path)
         return conn
+
+    def _commit(self, conn: sqlite3.Connection) -> None:
+        """Commit, then tighten any DB/WAL/SHM files SQLite created."""
+        conn.commit()
+        restrict_sqlite_files(self._path)
 
     def _ensure_conn(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -113,7 +120,7 @@ class VectorStore:
                         (point_id, json.dumps(arr.tolist()), json.dumps(payload_copy)),
                     )
             if conn is not None:
-                conn.commit()
+                self._commit(conn)
 
     async def search(self, vector: list[float], *, limit: int = 5, filter: dict | None = None) -> list[VectorHit]:
         async with self._lock:
@@ -138,7 +145,7 @@ class VectorStore:
                 if conn is not None:
                     conn.execute("DELETE FROM vectors WHERE id = ?", (point_id,))
             if conn is not None:
-                conn.commit()
+                self._commit(conn)
 
     async def delete_by_filter(self, *, filter: dict | None = None) -> int:
         """Delete every point matching ``filter``; return the number removed."""
@@ -153,7 +160,7 @@ class VectorStore:
                 if conn is not None:
                     conn.execute("DELETE FROM vectors WHERE id = ?", (point_id,))
             if conn is not None:
-                conn.commit()
+                self._commit(conn)
             return len(point_ids)
 
     async def dump(self, *, filter: dict | None = None, limit: int = 100_000) -> list[dict]:

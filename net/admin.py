@@ -3,7 +3,8 @@
 The `net.tui_server.TuiServer` routes the v1.1 `admin_*` frames here. A keeper
 holds an admin gate BY CONSTRUCTION: the keystore role stamped on the connection
 at `join` decides it — a `keeper`-role connection may read/mutate the live LLM
-config and mint/list room keys; anyone else gets `admin_error {code:"forbidden"}`.
+config and mint/list keys for its own room; anyone else gets
+`admin_error {code:"forbidden"}`.
 There is no separate auth system.
 
 Config/model handling REUSES the same primitives the `.model` chat command uses
@@ -16,6 +17,7 @@ here persists and hot-reconfigures the live `MutableLLM` exactly like
 from __future__ import annotations
 
 import hashlib
+import logging
 from typing import Any
 
 from agent.context import AgentCtx, FsAdapter
@@ -30,7 +32,12 @@ from core.rulepacks import available_systems, built_in_rulepack_ids
 from core.skills import available_skills
 from gateway.ops import get_enabled_skills, set_enabled_skills
 from infra.i18n import I18n
-from infra.imagegen import apply_imagegen_overrides, build_imagegen, describe_imagegen_settings
+from infra.imagegen import (
+    IMAGEGEN_PRESETS,
+    apply_imagegen_overrides,
+    build_imagegen,
+    describe_imagegen_settings,
+)
 from infra.oauth_flows import (
     SUBSCRIPTION_DEFAULT_MODELS,
     canonical_subscription_provider,
@@ -45,8 +52,11 @@ from infra.providers import (
     list_models,
     mask_secret,
 )
+from infra.runtime_config import OVERRIDE_FIELDS
 from net.keystore import Keystore
 from net.room_backup import chat_key_for_room, delete_room_data, export_room, import_room
+
+logger = logging.getLogger(__name__)
 
 # The client -> server admin request frames this module answers.
 _ADMIN_REQUESTS: frozenset[str] = frozenset(
@@ -92,11 +102,10 @@ async def handle_admin_frame(
 
     Gated two ways: (1) every admin request requires a `keeper`-role connection;
     (2) the destructive / room-content ops (export/import/delete_room/
-    delete_room_data) and the key mutations (update/delete_key) are scoped to the
+    delete_room_data) and every key operation are scoped to the
     caller's OWN room (`caller_room`, the room the connecting keeper key is bound
     to) — a keeper cannot reach into another room's data or keys. Either gate
     failing yields `admin_error {code:"forbidden"}` and nothing is read or mutated.
-    (Minting/listing keys stay deployment-global, matching their prior behavior.)
     The KP-skills list/enable and the forge (`admin_generate`) requests are ALSO
     scoped to `caller_room` (a room's enabled-skill set, and — for `kind:"module"`
     — the room a generated module is installed into). `fs` is the `FsAdapter` a
@@ -118,9 +127,9 @@ async def handle_admin_frame(
     if kind == "admin_list_models":
         return await _list_models(services, frame, i18n)
     if kind == "admin_list_keys":
-        return _keys_frame(keystore)
+        return _keys_frame(keystore, caller_room)
     if kind == "admin_mint_key":
-        return _mint_key(keystore, frame, i18n)
+        return _mint_key(keystore, caller_room, frame, i18n)
     if kind == "admin_update_key":
         return _update_key(keystore, caller_room, frame, i18n)
     if kind == "admin_delete_key":
@@ -186,6 +195,10 @@ async def _config_frame(services: Services) -> dict[str, Any]:
         "saved_providers": saved_providers,
         "override_active": bool(overrides),
         "imagegen": await _imagegen_status(services),
+        # Lets connected clients remove a stale guided-demo affordance immediately.
+        # A true value is global fallback state, not room authorization; adding the
+        # affordance still requires the room-scoped check performed on welcome.
+        "using_demo": bool(getattr(services.llm, "using_fallback", False)),
         # Optional hint (clients that ignore unknown fields stay compatible).
         "subscription_status": subscription_status,
     }
@@ -201,6 +214,8 @@ async def _set_model(services: Services, frame: dict[str, Any], i18n: I18n) -> d
     same_provider = _provider_identity(provider) == _provider_identity(live.provider)
     saved = await _saved_llm_credentials(services, provider)
 
+    api_key_supplied = "api_key" in frame
+    base_url_supplied = "base_url" in frame
     supplied_api_key = str(frame.get("api_key") or "").strip()
     supplied_base_url = str(frame.get("base_url") or "").strip()
     if provider == "supergrok":
@@ -210,8 +225,21 @@ async def _set_model(services: Services, frame: dict[str, Any], i18n: I18n) -> d
     else:
         current_api_key = (live.api_key or "") if same_provider else ""
         current_base_url = (live.base_url or "") if same_provider else ""
-        api_key = supplied_api_key or current_api_key or saved.get("api_key", "")
-        base_url = supplied_base_url or current_base_url or saved.get("base_url", "")
+        fallback_api_key, fallback_base_url = _static_credential_pair(
+            same_provider, current_api_key, current_base_url, saved
+        )
+        base_url = supplied_base_url if base_url_supplied else fallback_base_url
+        endpoint_changed = base_url_supplied and not _same_endpoint(
+            _effective_llm_endpoint(provider, base_url),
+            _effective_llm_endpoint(provider, fallback_base_url),
+        )
+        # Never couple a credential to a caller-selected endpoint it was not entered for.
+        # An explicitly empty api_key clears it; omission also clears it when the URL changed.
+        api_key = (
+            supplied_api_key
+            if api_key_supplied
+            else "" if endpoint_changed else fallback_api_key
+        )
 
     oauth_path = provider == "supergrok" or (
         provider in CHATGPT_SUBSCRIPTION_PROXY_PROVIDER_NAMES and not base_url
@@ -243,18 +271,32 @@ async def _set_model(services: Services, frame: dict[str, Any], i18n: I18n) -> d
         }
     )
 
-    # Reconfigure the LIVE LLM FIRST; persist only on success (mirrors gateway.commands._model_set):
-    # a native provider with a missing SDK/key raises here, and persisting a bad override would also
-    # brick the next `build_services()` boot. On failure, roll the live LLM back and persist nothing.
+    credential_names = {_provider_identity(provider), provider}
+    previous_credentials = {
+        name: await services.llm_credentials.get(name) for name in credential_names
+    }
+    live_snapshot = _snapshot_live_llm(services)
     try:
         _reconfigure_llm(services, overrides)
-    except Exception:
-        _reconfigure_llm(services, current)
+        await services.runtime_config.replace(**overrides)
+        # Remember this provider's credential so the next switch to it is frictionless.
+        if not oauth_path and (api_key_supplied or base_url_supplied or api_key or base_url):
+            await _replace_llm_static_credentials(
+                services, provider, api_key=api_key, base_url=base_url
+            )
+    except BaseException as exc:
+        # Every compensation is unconditional: Store.set may commit and then raise before
+        # RuntimeConfig publishes its cache, so a `runtime_changed` flag set after await is not
+        # authoritative. Restore the exact validated inner instead of rebuilding a provider that
+        # may itself be the failing component.
+        _restore_live_llm(services, live_snapshot, operation="admin set model")
+        await _best_effort_replace_runtime(services.runtime_config, current)
+        await _best_effort_restore_static_credentials(
+            services.llm_credentials, previous_credentials
+        )
+        if not isinstance(exc, Exception):
+            raise
         return _error("set_failed", i18n)
-    await services.runtime_config.replace(**overrides)
-    # Remember this provider's credential so the next switch to it is frictionless.
-    if not oauth_path and (api_key or base_url):
-        await services.llm_credentials.remember(provider, api_key=api_key, base_url=base_url)
     return await _config_frame(services)
 
 
@@ -272,13 +314,28 @@ async def _list_models(services: Services, frame: dict[str, Any], i18n: I18n) ->
     if not is_known_provider(provider):
         return _error("unknown_provider", i18n)
 
-    api_key = str(frame.get("api_key") or "").strip()
-    base_url = str(frame.get("base_url") or "").strip()
+    api_key_supplied = "api_key" in frame
+    base_url_supplied = "base_url" in frame
+    supplied_api_key = str(frame.get("api_key") or "").strip()
+    supplied_base_url = str(frame.get("base_url") or "").strip()
     saved = await services.llm_credentials.get(provider)
-    if not api_key:
-        api_key = saved.get("api_key", "") or (base_llm.api_key if provider == current_provider else "")
-    if not base_url:
-        base_url = saved.get("base_url", "") or (base_llm.base_url if provider == current_provider else "")
+    same_provider = _provider_identity(provider) == _provider_identity(current_provider)
+    fallback_api_key, fallback_base_url = _static_credential_pair(
+        same_provider,
+        base_llm.api_key or "",
+        base_llm.base_url or "",
+        saved,
+    )
+    base_url = supplied_base_url if base_url_supplied else fallback_base_url
+    endpoint_changed = base_url_supplied and not _same_endpoint(
+        _effective_llm_endpoint(provider, base_url),
+        _effective_llm_endpoint(provider, fallback_base_url),
+    )
+    api_key = (
+        supplied_api_key
+        if api_key_supplied
+        else "" if endpoint_changed else fallback_api_key
+    )
 
     candidate = base_llm.model_copy(update={"provider": provider, "api_key": api_key, "base_url": base_url})
     models = await list_models(candidate)
@@ -295,6 +352,8 @@ async def _set_imagegen(services: Services, frame: dict[str, Any], i18n: I18n) -
     if not _valid_image_size(size):
         return _error("bad_request", i18n)
 
+    api_key_supplied = "api_key" in frame
+    base_url_supplied = "base_url" in frame
     supplied_api_key = str(frame.get("api_key") or "").strip()
     supplied_base_url = str(frame.get("base_url") or "").strip()
     live = services.settings.imagegen
@@ -306,8 +365,19 @@ async def _set_imagegen(services: Services, frame: dict[str, Any], i18n: I18n) -
     else:
         current_api_key = (live.api_key or "") if same_provider else ""
         current_base_url = (live.base_url or "") if same_provider else ""
-        api_key = supplied_api_key or current_api_key or saved.get("api_key", "")
-        base_url = supplied_base_url or current_base_url or saved.get("base_url", "")
+        fallback_api_key, fallback_base_url = _static_credential_pair(
+            same_provider, current_api_key, current_base_url, saved
+        )
+        base_url = supplied_base_url if base_url_supplied else fallback_base_url
+        endpoint_changed = base_url_supplied and not _same_endpoint(
+            _effective_imagegen_endpoint(provider, base_url),
+            _effective_imagegen_endpoint(provider, fallback_base_url),
+        )
+        api_key = (
+            supplied_api_key
+            if api_key_supplied
+            else "" if endpoint_changed else fallback_api_key
+        )
 
     overrides: dict[str, str] = {
         "provider": provider,
@@ -317,15 +387,33 @@ async def _set_imagegen(services: Services, frame: dict[str, Any], i18n: I18n) -
         "base_url": base_url,
     }
 
-    current = await services.imagegen_runtime_config.get()
+    previous_runtime = await services.imagegen_runtime_config.get()
+    previous_credentials = {
+        provider: await services.imagegen_credentials.get(provider)
+    }
+    previous_settings = services.settings.imagegen
+    previous_imagegen = services.imagegen
     try:
         _reconfigure_imagegen(services, overrides)
-    except Exception:
-        _reconfigure_imagegen(services, current)
+        await services.imagegen_runtime_config.replace(**overrides)
+        if provider != "supergrok" and (
+            api_key_supplied or base_url_supplied or api_key or base_url
+        ):
+            await services.imagegen_credentials.replace_static(
+                provider, api_key=api_key, base_url=base_url
+            )
+    except BaseException as exc:
+        services.settings.imagegen = previous_settings
+        services.imagegen = previous_imagegen
+        await _best_effort_replace_runtime(
+            services.imagegen_runtime_config, previous_runtime
+        )
+        await _best_effort_restore_static_credentials(
+            services.imagegen_credentials, previous_credentials
+        )
+        if not isinstance(exc, Exception):
+            raise
         return _error("set_failed", i18n)
-    await services.imagegen_runtime_config.replace(**overrides)
-    if provider != "supergrok" and (api_key or base_url):
-        await services.imagegen_credentials.remember(provider, api_key=api_key, base_url=base_url)
     return await _config_frame(services)
 
 
@@ -359,6 +447,118 @@ def _provider_identity(provider: str) -> str:
     return canonical_subscription_provider((provider or "").casefold())
 
 
+def _same_endpoint(left: str, right: str) -> bool:
+    """Compare endpoint spellings without treating a trailing slash as a move."""
+    return (left or "").strip().rstrip("/") == (right or "").strip().rstrip("/")
+
+
+def _effective_llm_endpoint(provider: str, base_url: str) -> str:
+    """Resolve the endpoint a preset-backed LLM actually uses.
+
+    Admin config returns this effective URL.  When a client sends that value
+    back unchanged, compare it with the same effective fallback instead of the
+    raw empty setting; otherwise a harmless round-trip looks like an endpoint
+    move and drops the provider's API key.
+    """
+    return (base_url or PRESETS.get((provider or "").casefold(), "")).strip()
+
+
+def _effective_imagegen_endpoint(provider: str, base_url: str) -> str:
+    """Resolve the endpoint an image-generation preset actually uses."""
+    preset = IMAGEGEN_PRESETS.get((provider or "").casefold(), {})
+    return (base_url or preset.get("base_url", "")).strip()
+
+
+def _static_credential_pair(
+    same_provider: bool,
+    current_api_key: str,
+    current_base_url: str,
+    saved: dict[str, str],
+) -> tuple[str, str]:
+    """Keep a key and its endpoint paired instead of mixing two sources."""
+    if same_provider and (current_api_key or current_base_url):
+        return current_api_key, current_base_url
+    return saved.get("api_key", ""), saved.get("base_url", "")
+
+
+async def _replace_llm_static_credentials(
+    services: Services, provider: str, *, api_key: str, base_url: str
+) -> None:
+    """Replace exact + canonical alias credentials so no fallback revives an old key."""
+    canonical = canonical_subscription_provider(provider)
+    await services.llm_credentials.replace_static(
+        canonical, api_key=api_key, base_url=base_url
+    )
+    if canonical != provider:
+        await services.llm_credentials.replace_static(
+            provider, api_key=api_key, base_url=base_url
+        )
+
+
+_NO_LIVE_INNER = object()
+
+
+def _snapshot_live_llm(services: Services) -> tuple[Any, Any]:
+    """Copy mutable settings plus the exact already-validated live client."""
+    return (
+        _live_llm_settings(services).model_copy(deep=True),
+        getattr(services.llm, "inner", _NO_LIVE_INNER),
+    )
+
+
+def _restore_live_llm(
+    services: Services,
+    snapshot: tuple[Any, Any],
+    *,
+    operation: str,
+) -> None:
+    settings_snapshot, inner_snapshot = snapshot
+    live = _live_llm_settings(services)
+    for field in OVERRIDE_FIELDS:
+        setattr(live, field, getattr(settings_snapshot, field))
+    if inner_snapshot is not _NO_LIVE_INNER and hasattr(services.llm, "_inner"):
+        services.llm._inner = inner_snapshot  # type: ignore[attr-defined]
+        return
+    # Non-standard swappable clients may not expose an inner object. Their public apply path is
+    # the only available compensation; ordinary injected FakeLLM clients were never mutated.
+    if callable(getattr(services.llm, "apply", None)):
+        try:
+            _reconfigure_llm(
+                services,
+                {field: str(getattr(settings_snapshot, field)) for field in OVERRIDE_FIELDS},
+            )
+        except Exception:
+            logger.error("Failed to restore live LLM during %s", operation, exc_info=True)
+
+
+async def _best_effort_replace_runtime(runtime: Any, values: dict[str, str]) -> None:
+    try:
+        if values:
+            await runtime.replace(**values)
+        else:
+            await runtime.clear()
+    except Exception:
+        logger.error("Failed to restore persisted runtime config after an admin error", exc_info=True)
+
+
+async def _best_effort_restore_static_credentials(
+    book: Any, snapshots: dict[str, dict[str, str]]
+) -> None:
+    for provider, snapshot in snapshots.items():
+        try:
+            await book.replace_static(
+                provider,
+                api_key=snapshot.get("api_key", ""),
+                base_url=snapshot.get("base_url", ""),
+            )
+        except Exception:
+            logger.error(
+                "Failed to restore a provider credential after an admin error (provider=%s)",
+                provider,
+                exc_info=True,
+            )
+
+
 async def _saved_llm_credentials(services: Services, provider: str) -> dict[str, str]:
     """Load target-scoped static credentials, with canonical alias fallback."""
     provider = (provider or "").casefold()
@@ -389,8 +589,12 @@ def _reconfigure_llm(services: Services, overrides: dict[str, str]) -> bool:
 
 def _reconfigure_imagegen(services: Services, overrides: dict[str, str]) -> None:
     effective = apply_imagegen_overrides(services.settings, overrides)
+    candidate = build_imagegen(effective, llm_credentials=services.llm_credentials)
+    # Publish the new settings/client as one synchronous step only after the
+    # candidate was constructed successfully.  In particular, a raising builder
+    # must leave the old live settings and client untouched.
     services.settings.imagegen = effective.imagegen
-    services.imagegen = build_imagegen(services.settings, llm_credentials=services.llm_credentials)
+    services.imagegen = candidate
 
 
 def _valid_image_size(value: str) -> bool:
@@ -407,7 +611,9 @@ def _valid_image_size(value: str) -> bool:
 # -- room keys --------------------------------------------------------------
 
 
-def _keys_frame(keystore: Keystore, *, minted: dict[str, str] | None = None) -> dict[str, Any]:
+def _keys_frame(
+    keystore: Keystore, caller_room: str, *, minted: dict[str, str] | None = None
+) -> dict[str, Any]:
     keys = [
         {
             "id": _key_id(entry.key),
@@ -417,6 +623,7 @@ def _keys_frame(keystore: Keystore, *, minted: dict[str, str] | None = None) -> 
             "role": entry.role,
         }
         for entry in keystore.entries()
+        if entry.room == caller_room
     ]
     frame: dict[str, Any] = {"type": "admin_keys", "keys": keys}
     if minted is not None:
@@ -436,31 +643,27 @@ def _resolve_key(keystore: Keystore, key_id: str) -> str | None:
     return None
 
 
-def _mint_key(keystore: Keystore, frame: dict[str, Any], i18n: I18n) -> dict[str, Any]:
-    room = str(frame.get("room") or "").strip()
-    if not room:
-        return _error("bad_request", i18n)
+def _mint_key(
+    keystore: Keystore, caller_room: str, frame: dict[str, Any], i18n: I18n
+) -> dict[str, Any]:
+    requested_room = str(frame.get("room") or caller_room).strip()
+    if not caller_room or requested_room != caller_room:
+        return _error("forbidden", i18n)
+    room = caller_room
     name = str(frame.get("name") or "").strip()
     role = str(frame.get("role") or "player").strip()
 
-    key = keystore.add(room=room, name=name, role=role)
-    keystore.persist()  # write back to the keys file if one is configured (no-op in tests)
+    with keystore.persisted_mutation():
+        key = keystore.add(room=room, name=name, role=role)
     entry = keystore.get(key)
     assert entry is not None  # just added
     # The full key travels once, here, so the keeper can copy it; list views mask.
     minted = {"key": key, "room": entry.room, "name": entry.name, "role": entry.role}
-    return _keys_frame(keystore, minted=minted)
+    return _keys_frame(keystore, caller_room, minted=minted)
 
 
 def _update_key(keystore: Keystore, caller_room: str, frame: dict[str, Any], i18n: I18n) -> dict[str, Any]:
     key_id = str(frame.get("id") or "").strip()
-    key = _resolve_key(keystore, key_id)
-    if key is None:
-        return _error("not_found", i18n)
-    entry = keystore.get(key)
-    if entry is None or entry.room != caller_room:  # only the caller's own room's keys
-        return _error("forbidden", i18n)
-
     updates: dict[str, str] = {}
     if "room" in frame:
         room = str(frame.get("room") or "").strip()
@@ -479,22 +682,31 @@ def _update_key(keystore: Keystore, caller_room: str, frame: dict[str, Any], i18
     if not updates:
         return _error("bad_request", i18n)
 
-    keystore.update(key, **updates)
-    keystore.persist()
-    return _keys_frame(keystore)
+    with keystore.persisted_mutation():
+        # Resolve and authorize only after persisted_mutation has reloaded the authoritative
+        # on-disk snapshot while holding its cross-process lock. Checking before the lock would
+        # allow another process to move this key between rooms in the intervening window.
+        key = _resolve_key(keystore, key_id)
+        if key is None:
+            return _error("not_found", i18n)
+        entry = keystore.get(key)
+        if entry is None or entry.room != caller_room:
+            return _error("forbidden", i18n)
+        keystore.update(key, **updates)
+    return _keys_frame(keystore, caller_room)
 
 
 def _delete_key(keystore: Keystore, caller_room: str, frame: dict[str, Any], i18n: I18n) -> dict[str, Any]:
     key_id = str(frame.get("id") or "").strip()
-    key = _resolve_key(keystore, key_id)
-    if key is None:
-        return _error("not_found", i18n)
-    entry = keystore.get(key)
-    if entry is None or entry.room != caller_room:  # only the caller's own room's keys
-        return _error("forbidden", i18n)
-    keystore.remove(key)
-    keystore.persist()
-    return _keys_frame(keystore)
+    with keystore.persisted_mutation():
+        key = _resolve_key(keystore, key_id)
+        if key is None:
+            return _error("not_found", i18n)
+        entry = keystore.get(key)
+        if entry is None or entry.room != caller_room:
+            return _error("forbidden", i18n)
+        keystore.remove(key)
+    return _keys_frame(keystore, caller_room)
 
 
 def _delete_room(keystore: Keystore, caller_room: str, frame: dict[str, Any], i18n: I18n) -> dict[str, Any]:
@@ -503,11 +715,11 @@ def _delete_room(keystore: Keystore, caller_room: str, frame: dict[str, Any], i1
         return _error("bad_request", i18n)
     if room != caller_room:  # a keeper can only delete its OWN room
         return _error("forbidden", i18n)
-    removed = keystore.remove_room(room)
-    if removed <= 0:
-        return _error("not_found", i18n)
-    keystore.persist()
-    return _keys_frame(keystore)
+    with keystore.persisted_mutation():
+        removed = keystore.remove_room(room)
+        if removed <= 0:
+            return _error("not_found", i18n)
+    return _keys_frame(keystore, caller_room)
 
 
 async def _export_room(
@@ -588,6 +800,7 @@ def _room_op_frame(action: str, result: dict[str, Any]) -> dict[str, Any]:
         "keys": int(result.get("keys") or 0),
         "store_rows": int(result.get("store_rows") or 0),
         "vector_points": int(result.get("vector_points") or 0),
+        "media_files": int(result.get("media_files") or 0),
     }
     path = str(result.get("path") or "")
     if path:

@@ -203,3 +203,22 @@ def test_mutable_llm_apply_empty_reverts_to_pristine_baseline():
     llm.apply({})  # reset -> back to the env baseline captured at construction
     assert settings.llm.provider == "openai"
     assert settings.llm.chat_model == "gpt-4o"
+
+
+def test_mutable_llm_failed_reconfigure_keeps_live_settings_and_client():
+    settings = _settings(provider="openai", chat_model="gpt-4o")
+
+    def builder(candidate: Settings) -> _StubLLM:
+        if candidate.llm.provider == "anthropic":
+            raise RuntimeError("provider unavailable")
+        return _StubLLM(candidate)
+
+    llm = MutableLLM(settings, builder=builder)
+    original_inner = llm.inner
+
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        llm.apply({"provider": "anthropic", "chat_model": "claude-x"})
+
+    assert llm.inner is original_inner
+    assert settings.llm.provider == "openai"
+    assert settings.llm.chat_model == "gpt-4o"

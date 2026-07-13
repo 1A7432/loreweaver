@@ -90,3 +90,37 @@ describe("MainMenu quit", () => {
     act(() => renderer.destroy())
   })
 })
+
+describe("MainMenu guided demo", () => {
+  test("demo Keeper gets a first-row one-key sample action", async () => {
+    let starts = 0
+    const welcome: WelcomeFrame = {
+      ...WELCOME,
+      you: { ...WELCOME.you, role: "keeper" },
+      features: ["media", "demo"],
+    }
+    const { renderer, flush, waitForFrame, mockInput } = await renderMenu({
+      welcome,
+      onStartDemo: () => (starts += 1),
+    })
+    await flush()
+
+    const menu = await waitForFrame((text) => text.includes("⚄ Play sample adventure"))
+    expect(menu).toContain("⚄ Play sample adventure")
+
+    await act(async () => mockInput.pressEnter())
+    await flush()
+    expect(starts).toBe(1)
+    act(() => renderer.destroy())
+  })
+
+  test("sample action stays hidden without the server capability", async () => {
+    const welcome: WelcomeFrame = { ...WELCOME, you: { ...WELCOME.you, role: "keeper" } }
+    const { renderer, flush, waitForFrame } = await renderMenu({ welcome, onStartDemo: () => {} })
+    await flush()
+
+    const menu = await waitForFrame((text) => text.includes("Enter game"))
+    expect(menu).not.toContain("Play sample adventure")
+    act(() => renderer.destroy())
+  })
+})
