@@ -17,7 +17,9 @@ from infra.providers import (
     from_gemini_response,
     is_known_provider,
     list_models,
+    restore_live_llm,
     sanitize_gemini_tool_parameters,
+    snapshot_live_llm,
     to_anthropic_messages,
     to_anthropic_tools,
     to_gemini_tools,
@@ -163,6 +165,28 @@ def test_mutable_llm_reports_when_offline_fallback_is_live():
     llm.apply({})
     assert llm.inner is fallback
     assert llm.using_fallback is True
+
+
+def test_mutable_llm_public_snapshot_restores_exact_inner_without_rebuilding():
+    built = []
+
+    def builder(settings):
+        inner = object()
+        built.append((settings.llm.provider, inner))
+        return inner
+
+    settings = _settings("openai")
+    llm = MutableLLM(settings, builder=builder)
+    snapshot = snapshot_live_llm(llm, settings.llm)
+    original_inner = llm.inner
+
+    llm.apply({"provider": "deepseek", "api_key": "sk-next"})
+    assert llm.inner is not original_inner
+
+    assert restore_live_llm(llm, snapshot) is True
+    assert llm.inner is original_inner
+    assert settings.llm.provider == "openai"
+    assert len(built) == 2
 
 
 def test_build_llm_selects_anthropic(monkeypatch):

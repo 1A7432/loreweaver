@@ -52,7 +52,12 @@ from infra.providers import (
     list_models,
     mask_secret,
 )
-from infra.runtime_config import OVERRIDE_FIELDS
+from infra.providers import (
+    restore_live_llm as restore_provider_llm,
+)
+from infra.providers import (
+    snapshot_live_llm as snapshot_provider_llm,
+)
 from net.keystore import Keystore
 from net.room_backup import chat_key_for_room, delete_room_data, export_room, import_room
 
@@ -276,24 +281,26 @@ async def _set_model(services: Services, frame: dict[str, Any], i18n: I18n) -> d
         name: await services.llm_credentials.get(name) for name in credential_names
     }
     live_snapshot = _snapshot_live_llm(services)
+    runtime_changed = False
+    credentials_started = False
     try:
         _reconfigure_llm(services, overrides)
         await services.runtime_config.replace(**overrides)
+        runtime_changed = True
         # Remember this provider's credential so the next switch to it is frictionless.
         if not oauth_path and (api_key_supplied or base_url_supplied or api_key or base_url):
+            credentials_started = True
             await _replace_llm_static_credentials(
                 services, provider, api_key=api_key, base_url=base_url
             )
     except BaseException as exc:
-        # Every compensation is unconditional: Store.set may commit and then raise before
-        # RuntimeConfig publishes its cache, so a `runtime_changed` flag set after await is not
-        # authoritative. Restore the exact validated inner instead of rebuilding a provider that
-        # may itself be the failing component.
         _restore_live_llm(services, live_snapshot, operation="admin set model")
-        await _best_effort_replace_runtime(services.runtime_config, current)
-        await _best_effort_restore_static_credentials(
-            services.llm_credentials, previous_credentials
-        )
+        if runtime_changed:
+            await _best_effort_replace_runtime(services.runtime_config, current)
+        if credentials_started:
+            await _best_effort_restore_static_credentials(
+                services.llm_credentials, previous_credentials
+            )
         if not isinstance(exc, Exception):
             raise
         return _error("set_failed", i18n)
@@ -393,24 +400,30 @@ async def _set_imagegen(services: Services, frame: dict[str, Any], i18n: I18n) -
     }
     previous_settings = services.settings.imagegen
     previous_imagegen = services.imagegen
+    runtime_changed = False
+    credentials_started = False
     try:
         _reconfigure_imagegen(services, overrides)
         await services.imagegen_runtime_config.replace(**overrides)
+        runtime_changed = True
         if provider != "supergrok" and (
             api_key_supplied or base_url_supplied or api_key or base_url
         ):
+            credentials_started = True
             await services.imagegen_credentials.replace_static(
                 provider, api_key=api_key, base_url=base_url
             )
     except BaseException as exc:
         services.settings.imagegen = previous_settings
         services.imagegen = previous_imagegen
-        await _best_effort_replace_runtime(
-            services.imagegen_runtime_config, previous_runtime
-        )
-        await _best_effort_restore_static_credentials(
-            services.imagegen_credentials, previous_credentials
-        )
+        if runtime_changed:
+            await _best_effort_replace_runtime(
+                services.imagegen_runtime_config, previous_runtime
+            )
+        if credentials_started:
+            await _best_effort_restore_static_credentials(
+                services.imagegen_credentials, previous_credentials
+            )
         if not isinstance(exc, Exception):
             raise
         return _error("set_failed", i18n)
@@ -495,40 +508,18 @@ async def _replace_llm_static_credentials(
         )
 
 
-_NO_LIVE_INNER = object()
-
-
-def _snapshot_live_llm(services: Services) -> tuple[Any, Any]:
-    """Copy mutable settings plus the exact already-validated live client."""
-    return (
-        _live_llm_settings(services).model_copy(deep=True),
-        getattr(services.llm, "inner", _NO_LIVE_INNER),
-    )
+def _snapshot_live_llm(services: Services) -> Any:
+    return snapshot_provider_llm(services.llm, _live_llm_settings(services))
 
 
 def _restore_live_llm(
     services: Services,
-    snapshot: tuple[Any, Any],
+    snapshot: Any,
     *,
     operation: str,
 ) -> None:
-    settings_snapshot, inner_snapshot = snapshot
-    live = _live_llm_settings(services)
-    for field in OVERRIDE_FIELDS:
-        setattr(live, field, getattr(settings_snapshot, field))
-    if inner_snapshot is not _NO_LIVE_INNER and hasattr(services.llm, "_inner"):
-        services.llm._inner = inner_snapshot  # type: ignore[attr-defined]
-        return
-    # Non-standard swappable clients may not expose an inner object. Their public apply path is
-    # the only available compensation; ordinary injected FakeLLM clients were never mutated.
-    if callable(getattr(services.llm, "apply", None)):
-        try:
-            _reconfigure_llm(
-                services,
-                {field: str(getattr(settings_snapshot, field)) for field in OVERRIDE_FIELDS},
-            )
-        except Exception:
-            logger.error("Failed to restore live LLM during %s", operation, exc_info=True)
+    if not restore_provider_llm(services.llm, snapshot):
+        logger.error("Failed to restore live LLM during %s", operation)
 
 
 async def _best_effort_replace_runtime(runtime: Any, values: dict[str, str]) -> None:

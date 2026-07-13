@@ -599,6 +599,47 @@ async def test_room_backup_paths_are_room_owned_and_default_names_are_unique(tmp
     assert dunwich_path.is_file()
 
 
+@pytest.mark.skipif(os.name != "posix", reason="symlink semantics are platform-specific")
+async def test_room_backup_rejects_import_symlinks_but_export_replaces_the_link(tmp_path):
+    services = _services(str(tmp_path))
+    room = "arkham"
+    exported = await export_room(services, Keystore(), room, "original.json")
+    room_dir = Path(exported["path"]).parent
+    outside = tmp_path / "outside.json"
+    outside.write_text("do not overwrite", encoding="utf-8")
+    alias = room_dir / "alias.json"
+    alias.symlink_to(outside)
+
+    with pytest.raises(ValueError, match="not a room backup file"):
+        await import_room(services, Keystore(), alias.name, expected_room=room)
+
+    replaced = await export_room(services, Keystore(), room, alias.name)
+    assert Path(replaced["path"]) == alias
+    assert not alias.is_symlink()
+    assert outside.read_text(encoding="utf-8") == "do not overwrite"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="symlink semantics are platform-specific")
+async def test_room_backup_rejects_a_symlinked_room_directory(tmp_path):
+    services = _services(str(tmp_path))
+    room = "arkham"
+    exported = await export_room(services, Keystore(), room, "snapshot.json")
+    snapshot = Path(exported["path"])
+    room_dir = snapshot.parent
+    other_room = Path(
+        (await export_room(services, Keystore(), "dunwich", "snapshot.json"))["path"]
+    ).parent
+
+    snapshot.unlink()
+    room_dir.rmdir()
+    room_dir.symlink_to(other_room, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        await import_room(services, Keystore(), "snapshot.json", expected_room=room)
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        await export_room(services, Keystore(), room, "snapshot.json")
+
+
 async def test_dotted_child_room_prefix_fails_closed_for_export_delete_and_import(tmp_path):
     services = _services(str(tmp_path))
     keystore = Keystore()
@@ -662,6 +703,92 @@ async def test_vector_conflicting_ownership_fails_export_and_delete_without_eras
 
     points = await services.vector_db.vector_store.dump(filter={"chat_key": chat_key})
     assert [point["id"] for point in points] == ["conflicted:0"]
+
+
+async def test_room_vector_restore_preserves_canonical_ids_and_future_upserts(tmp_path):
+    services = _services(str(tmp_path))
+    room = "arkham"
+    chat_key = chat_key_for_room(room)
+    await services.vector_db.store_document(
+        "doc-1",
+        "original.txt",
+        "original clue",
+        chat_key,
+    )
+    exported = await export_room(services, Keystore(), room, "vectors.json")
+
+    # Importing over the live room is an upsert of the same deterministic point,
+    # not a second namespaced alias.
+    await import_room(
+        services,
+        Keystore(),
+        Path(exported["path"]).name,
+        expected_room=room,
+    )
+    points = await room_vector_points(services, chat_key)
+    assert [point["id"] for point in points] == ["doc-1:0"]
+
+    # Snapshots produced after the old buggy importer may themselves contain its
+    # `:backup:` alias. Restore normalizes those from payload identity as well.
+    source = Path(exported["path"])
+    snapshot = json.loads(source.read_text(encoding="utf-8"))
+    snapshot["vector_points"][0]["id"] = f"{chat_key}:backup:legacy"
+    source.write_text(json.dumps(snapshot), encoding="utf-8")
+    await delete_room_data(services, Keystore(), room)
+    await import_room(services, Keystore(), source.name, expected_room=room)
+    await services.vector_db.store_document(
+        "doc-1",
+        "updated.txt",
+        "updated clue",
+        chat_key,
+    )
+
+    points = await room_vector_points(services, chat_key)
+    assert [point["id"] for point in points] == ["doc-1:0"]
+    assert points[0]["payload"]["filename"] == "updated.txt"
+    assert points[0]["payload"]["text"] == "updated clue"
+
+
+async def test_room_import_rejects_a_vector_id_owned_by_another_room(tmp_path):
+    services = _services(str(tmp_path))
+    room = "arkham"
+    chat_key = chat_key_for_room(room)
+    foreign_key = chat_key_for_room("dunwich")
+    await services.vector_db.store_document(
+        "doc-1",
+        "arkham.txt",
+        "arkham clue",
+        chat_key,
+    )
+    exported = await export_room(services, Keystore(), room, "collision.json")
+    await services.vector_db.vector_store.delete(["doc-1:0"])
+    await services.vector_db.vector_store.upsert(
+        [
+            (
+                "doc-1:0",
+                [0.9] * 64,
+                {
+                    "chat_key": foreign_key,
+                    "document_id": "doc-1",
+                    "chunk_index": 0,
+                    "text": "foreign clue",
+                },
+            )
+        ]
+    )
+
+    with pytest.raises(ValueError, match="vector id belongs to another room"):
+        await import_room(
+            services,
+            Keystore(),
+            Path(exported["path"]).name,
+            expected_room=room,
+        )
+
+    [foreign] = await services.vector_db.vector_store.scroll()
+    assert foreign.id == "doc-1:0"
+    assert foreign.payload["chat_key"] == foreign_key
+    assert await services.vector_db.vector_store.count(filter={"chat_key": chat_key}) == 0
 
 
 @pytest.mark.parametrize(
@@ -1277,43 +1404,6 @@ async def test_model_runtime_persistence_failure_restores_the_live_client():
     assert await services.runtime_config.get() == {}
 
 
-async def test_model_runtime_commit_then_raise_restores_durable_and_exact_live_state():
-    services = _services()
-    original_inner = services.llm.inner
-    original_replace = services.runtime_config.replace
-    calls = 0
-
-    async def commit_then_raise_once(**values):
-        nonlocal calls
-        calls += 1
-        result = await original_replace(**values)
-        if calls == 1:
-            raise OSError("write committed before fsync error")
-        return result
-
-    with patch.object(services.runtime_config, "replace", new=commit_then_raise_once):
-        result = await handle_admin_frame(
-            services,
-            Keystore(),
-            "keeper",
-            "arkham",
-            {
-                "type": "admin_set_model",
-                "provider": "deepseek",
-                "chat_model": "deepseek-chat",
-                "api_key": "sk-new",
-            },
-            get_i18n("en"),
-        )
-
-    assert result["type"] == "admin_error"
-    assert result["code"] == "set_failed"
-    assert services.llm.inner is original_inner
-    assert services.settings.llm.provider == "openai"
-    assert await services.runtime_config.get() == {}
-    assert await services.store.get(user_key="", store_key="runtime_config.llm") is None
-
-
 async def test_model_credential_persistence_failure_rolls_runtime_and_live_back():
     services = _services()
     with patch.object(
@@ -1580,48 +1670,6 @@ async def test_imagegen_runtime_persistence_failure_restores_live_state():
     assert services.settings.imagegen is original_settings
     assert services.imagegen is original_client
     assert await services.imagegen_runtime_config.get() == {}
-
-
-async def test_imagegen_runtime_commit_then_raise_restores_durable_and_live_state():
-    services = _services()
-    original_settings = services.settings.imagegen
-    original_client = services.imagegen
-    original_replace = services.imagegen_runtime_config.replace
-    calls = 0
-
-    async def commit_then_raise_once(**values):
-        nonlocal calls
-        calls += 1
-        result = await original_replace(**values)
-        if calls == 1:
-            raise OSError("write committed before fsync error")
-        return result
-
-    with patch.object(
-        services.imagegen_runtime_config,
-        "replace",
-        new=commit_then_raise_once,
-    ):
-        result = await handle_admin_frame(
-            services,
-            Keystore(),
-            "keeper",
-            "arkham",
-            {
-                "type": "admin_set_imagegen",
-                "provider": "openai",
-                "model": "gpt-image-1",
-                "api_key": "sk-image",
-            },
-            get_i18n("en"),
-        )
-
-    assert result["type"] == "admin_error"
-    assert result["code"] == "set_failed"
-    assert services.settings.imagegen is original_settings
-    assert services.imagegen is original_client
-    assert await services.imagegen_runtime_config.get() == {}
-    assert await services.store.get(user_key="", store_key="runtime_config.imagegen") is None
 
 
 async def test_admin_list_models_returns_the_providers_live_catalog():

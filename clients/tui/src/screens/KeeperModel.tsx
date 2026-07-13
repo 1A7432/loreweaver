@@ -143,11 +143,6 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
   const baseUrlRef = useRef(baseUrl)
   const apiKeyTouchedRef = useRef(false)
   const baseUrlTouchedRef = useRef(false)
-  // OpenTUI's controlled input can emit onInput while React synchronizes a new `value` prop.
-  // Suppress that one matching emission so config hydration/provider reset is not mistaken for a
-  // user edit (which would otherwise resend effective URLs as explicit overrides).
-  const apiKeySyncRef = useRef<string | null>(null)
-  const baseUrlSyncRef = useRef<string | null>(null)
   const selectedModelRef = useRef(selectedModel)
   const customModelRef = useRef(customModel)
   const imageProviderRef = useRef(imageProvider)
@@ -157,8 +152,6 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
   const imageApiKeyRef = useRef(imageApiKey)
   const imageBaseUrlTouchedRef = useRef(false)
   const imageApiKeyTouchedRef = useRef(false)
-  const imageBaseUrlSyncRef = useRef<string | null>(null)
-  const imageApiKeySyncRef = useRef<string | null>(null)
 
   const isKeeper = welcome.you.role === "keeper"
   // Whether the live/current selection is on OAuth (used for status and credential labeling).
@@ -244,12 +237,10 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
         setApiKey("")
         apiKeyRef.current = ""
         apiKeyTouchedRef.current = false
-        apiKeySyncRef.current = ""
         setApiKeyClearPending(false)
         setBaseUrl(frame.base_url)
         baseUrlRef.current = frame.base_url
         baseUrlTouchedRef.current = false
-        baseUrlSyncRef.current = frame.base_url
         setBaseUrlClearPending(false)
         setProxyEditing(false)
         setSavedProviders(frame.saved_providers ?? [])
@@ -260,7 +251,6 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
         setImageBaseUrl(img?.base_url ?? "")
         imageBaseUrlRef.current = img?.base_url ?? ""
         imageBaseUrlTouchedRef.current = false
-        imageBaseUrlSyncRef.current = img?.base_url ?? ""
         setImageBaseUrlClearPending(false)
         setImageModel(img?.model ?? "")
         imageModelRef.current = img?.model ?? ""
@@ -269,7 +259,6 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
         setImageApiKey("")
         imageApiKeyRef.current = ""
         imageApiKeyTouchedRef.current = false
-        imageApiKeySyncRef.current = ""
         setImageApiKeyClearPending(false)
         setError(undefined)
         setModels([])
@@ -500,12 +489,10 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
                   setApiKey("")
                   apiKeyRef.current = ""
                   apiKeyTouchedRef.current = false
-                  apiKeySyncRef.current = ""
                   setApiKeyClearPending(false)
                   setBaseUrl("")
                   baseUrlRef.current = ""
                   baseUrlTouchedRef.current = false
-                  baseUrlSyncRef.current = ""
                   setBaseUrlClearPending(false)
                   setProxyEditing(false)
                   setSelectedModel("")
@@ -582,16 +569,13 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
                   focused={focused === "apiKey"}
                   placeholder={providerHasSavedStaticCredential ? tt(locale, "model.apiKeySaved") : tt(locale, "model.apiKeyPlaceholder")}
                   onInput={(value: string) => {
+                    const edited = apiKeyRef.current !== value
                     apiKeyRef.current = value
-                    if (apiKeySyncRef.current === value) {
-                      apiKeySyncRef.current = null
-                      setApiKey(value)
-                      return
-                    }
-                    apiKeySyncRef.current = null
-                    apiKeyTouchedRef.current = true
                     setApiKey(value)
-                    setApiKeyClearPending(!value.trim())
+                    if (edited) {
+                      apiKeyTouchedRef.current = true
+                      setApiKeyClearPending(!value.trim())
+                    }
                   }}
                   onSubmit={() => requestModels(providerRef.current)}
                 />
@@ -627,16 +611,13 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
                   focused={focused === "baseUrl"}
                   placeholder={tt(locale, "model.baseUrlPlaceholder")}
                   onInput={(value: string) => {
+                    const edited = baseUrlRef.current !== value
                     baseUrlRef.current = value
-                    if (baseUrlSyncRef.current === value) {
-                      baseUrlSyncRef.current = null
-                      setBaseUrl(value)
-                      return
-                    }
-                    baseUrlSyncRef.current = null
-                    baseUrlTouchedRef.current = true
                     setBaseUrl(value)
-                    setBaseUrlClearPending(!value.trim())
+                    if (edited) {
+                      baseUrlTouchedRef.current = true
+                      setBaseUrlClearPending(!value.trim())
+                    }
                   }}
                   onSubmit={() => requestModels(providerRef.current)}
                 />
@@ -747,16 +728,13 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
                   focused={focused === "imageBaseUrl"}
                   placeholder={tt(locale, "imagegen.baseUrlPlaceholder")}
                   onInput={(value: string) => {
+                    const edited = imageBaseUrlRef.current !== value
                     imageBaseUrlRef.current = value
-                    if (imageBaseUrlSyncRef.current === value) {
-                      imageBaseUrlSyncRef.current = null
-                      setImageBaseUrl(value)
-                      return
-                    }
-                    imageBaseUrlSyncRef.current = null
-                    imageBaseUrlTouchedRef.current = true
                     setImageBaseUrl(value)
-                    setImageBaseUrlClearPending(!value.trim())
+                    if (edited) {
+                      imageBaseUrlTouchedRef.current = true
+                      setImageBaseUrlClearPending(!value.trim())
+                    }
                   }}
                   onSubmit={() => setFocused("imageModel")}
                 />
@@ -830,16 +808,13 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
                   focused={focused === "imageApiKey"}
                   placeholder={imageHasSavedKey ? tt(locale, "model.apiKeySaved") : tt(locale, "imagegen.apiKeyPlaceholder")}
                   onInput={(value: string) => {
+                    const edited = imageApiKeyRef.current !== value
                     imageApiKeyRef.current = value
-                    if (imageApiKeySyncRef.current === value) {
-                      imageApiKeySyncRef.current = null
-                      setImageApiKey(value)
-                      return
-                    }
-                    imageApiKeySyncRef.current = null
-                    imageApiKeyTouchedRef.current = true
                     setImageApiKey(value)
-                    setImageApiKeyClearPending(!value.trim())
+                    if (edited) {
+                      imageApiKeyTouchedRef.current = true
+                      setImageApiKeyClearPending(!value.trim())
+                    }
                   }}
                   onSubmit={saveImagegen}
                 />

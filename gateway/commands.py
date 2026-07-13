@@ -47,7 +47,12 @@ from infra.providers import (
     is_known_provider,
     mask_secret,
 )
-from infra.runtime_config import OVERRIDE_FIELDS
+from infra.providers import (
+    restore_live_llm as restore_provider_llm,
+)
+from infra.providers import (
+    snapshot_live_llm as snapshot_provider_llm,
+)
 
 Handler = Callable[["CommandCtx"], Awaitable[str]]
 logger = logging.getLogger(__name__)
@@ -1335,7 +1340,6 @@ class CommandRouter:
             reconfigured = _reconfigure_llm(ctx.services, overrides)
             await runtime_config.replace(**overrides)
         except BaseException as exc:
-            await _restore_runtime_config(runtime_config, current, operation="model set")
             _restore_live_llm(ctx.services, live_snapshot, operation="model set")
             if not isinstance(exc, Exception):
                 raise
@@ -1490,13 +1494,12 @@ class CommandRouter:
         live = _live_llm_settings(ctx.services)
         live_snapshot = _snapshot_live_llm(ctx.services)
         runtime_snapshot = await ctx.services.runtime_config.get()
-        subscription_snapshot = await ctx.services.llm_credentials.load_subscription(canonical)
-        credential_snapshot = await ctx.services.llm_credentials.get(canonical)
         current_oauth_path = (live.provider or "").casefold() == "supergrok" or (
             (live.provider or "").casefold() in CHATGPT_SUBSCRIPTION_PROXY_PROVIDER_NAMES
             and not live.base_url
         )
         active_oauth = _provider_identity(live.provider) == canonical and current_oauth_path
+        runtime_changed = False
         try:
             if active_oauth:
                 # Move the live process and restart snapshot off the soon-to-be-revoked grant
@@ -1504,39 +1507,16 @@ class CommandRouter:
                 # rollback possible and logout reports failure rather than leaving a broken client.
                 _reconfigure_llm(ctx.services, {})
                 await ctx.services.runtime_config.clear()
-            # CredentialBook persists before invalidating its manager, so a failed forget leaves
-            # the old token/client valid and compensatable.
+                runtime_changed = True
             await ctx.services.llm_credentials.forget_subscription(canonical)
         except BaseException as exc:
-            subscription_restored = await _restore_subscription_credential(
-                ctx.services,
-                canonical,
-                subscription_snapshot,
-                operation="model logout",
-            )
-            # save_subscription intentionally strips proxy fields for a successful login. During
-            # rollback, restore the independent static endpoint/key as a second compensation step.
-            await _restore_static_credential(
-                ctx.services,
-                canonical,
-                credential_snapshot,
-                operation="model logout",
-            )
-            await _restore_runtime_config(
-                ctx.services.runtime_config,
-                runtime_snapshot,
-                operation="model logout",
-            )
-            if active_oauth and subscription_restored:
-                try:
-                    # A failed forget implementation may already have invalidated the old manager;
-                    # rebuild from the restored grant instead of reinstalling that stale inner.
-                    _reconfigure_llm(ctx.services, live_snapshot.overrides)
-                except Exception:
-                    logger.warning("model: live rebuild failed during model logout rollback", exc_info=True)
-                    _restore_live_llm(ctx.services, live_snapshot, operation="model logout")
-            else:
-                _restore_live_llm(ctx.services, live_snapshot, operation="model logout")
+            if runtime_changed:
+                await _restore_runtime_config(
+                    ctx.services.runtime_config,
+                    runtime_snapshot,
+                    operation="model logout",
+                )
+            _restore_live_llm(ctx.services, live_snapshot, operation="model logout")
             if not isinstance(exc, Exception):
                 raise
             return _model_mutation_failed(ctx, canonical)
@@ -1565,6 +1545,7 @@ class CommandRouter:
         credential_snapshot = await ctx.services.llm_credentials.get(provider)
         merged = dict(runtime_snapshot)
         merged["api_key"] = api_key
+        credential_changed = False
         try:
             # Build first; no durable state changes if the new key/provider cannot construct.
             _reconfigure_llm(ctx.services, merged)
@@ -1575,15 +1556,16 @@ class CommandRouter:
                 api_key=api_key,
                 base_url=live.base_url or "",
             )
+            credential_changed = True
             await runtime_config.replace(**merged)
         except BaseException as exc:
-            await _restore_runtime_config(runtime_config, runtime_snapshot, operation="model key")
-            await _restore_static_credential(
-                ctx.services,
-                provider,
-                credential_snapshot,
-                operation="model key",
-            )
+            if credential_changed:
+                await _restore_static_credential(
+                    ctx.services,
+                    provider,
+                    credential_snapshot,
+                    operation="model key",
+                )
             _restore_live_llm(ctx.services, live_snapshot, operation="model key")
             if not isinstance(exc, Exception):
                 raise
@@ -1593,7 +1575,6 @@ class CommandRouter:
     async def _model_reset(self, ctx: CommandCtx, runtime_config: Any) -> str:
         if not _is_keeper(ctx.raw_ctx):
             return ctx.i18n.t("commands.model.denied")
-        runtime_snapshot = await runtime_config.get()
         live_snapshot = _snapshot_live_llm(ctx.services)
         provider = live_snapshot.overrides.get("provider", "default")
         try:
@@ -1602,7 +1583,6 @@ class CommandRouter:
             _reconfigure_llm(ctx.services, {})
             await runtime_config.clear()
         except BaseException as exc:
-            await _restore_runtime_config(runtime_config, runtime_snapshot, operation="model reset")
             _restore_live_llm(ctx.services, live_snapshot, operation="model reset")
             if not isinstance(exc, Exception):
                 raise
@@ -2400,64 +2380,19 @@ def _is_private_channel(ctx: Any) -> bool:
     return chat_type in _ROOM_ADMIN_CHAT_TYPES
 
 
-_NO_LIVE_INNER = object()
+def _snapshot_live_llm(services: Services) -> Any:
+    return snapshot_provider_llm(services.llm, _live_llm_settings(services))
 
 
-@dataclass(frozen=True)
-class _LiveLLMSnapshot:
-    """Exact pre-mutation live state used for command-level compensation."""
-
-    overrides: dict[str, str]
-    inner: Any = _NO_LIVE_INNER
-
-
-def _snapshot_live_llm(services: Services) -> _LiveLLMSnapshot:
-    live = _live_llm_settings(services)
-    overrides = {
-        field: str(value)
-        for field in OVERRIDE_FIELDS
-        if (value := getattr(live, field, None)) is not None
-    }
-    return _LiveLLMSnapshot(
-        overrides=overrides,
-        inner=getattr(services.llm, "inner", _NO_LIVE_INNER),
-    )
-
-
-def _restore_live_llm(services: Services, snapshot: _LiveLLMSnapshot, *, operation: str) -> bool:
-    """Restore a live snapshot without rebuilding when MutableLLM exposes its exact old inner.
-
-    The direct path is deliberately only a compensation fallback in this module: a provider
-    builder may be the component that just failed, while the previously-running inner is already
-    validated. Non-standard swappable test/integration clients fall back to their public `apply`.
-    """
-    llm = services.llm
-    settings = getattr(llm, "settings", None)
-    if (
-        snapshot.inner is not _NO_LIVE_INNER
-        and settings is not None
-        and getattr(settings, "llm", None) is not None
-        and hasattr(llm, "_inner")
-    ):
-        for field, value in snapshot.overrides.items():
-            setattr(settings.llm, field, value)
-        llm._inner = snapshot.inner  # type: ignore[attr-defined]
-        return True
-    try:
-        _reconfigure_llm(services, snapshot.overrides)
-        return True
-    except Exception:
-        logger.warning("model: live rollback failed during %s", operation, exc_info=True)
+def _restore_live_llm(services: Services, snapshot: Any, *, operation: str) -> bool:
+    if not restore_provider_llm(services.llm, snapshot):
+        logger.warning("model: live rollback failed during %s", operation)
         return False
+    return True
 
 
 async def _restore_runtime_config(runtime_config: Any, snapshot: dict[str, str], *, operation: str) -> bool:
-    """Best-effort compensation for a runtime-config write that may have partially completed.
-
-    Always publish the snapshot instead of trusting ``get()``: a storage call can commit and
-    then raise before ``RuntimeConfig`` updates its cache, in which case the cache still looks
-    equal to the old snapshot while a restart would observe the new value.
-    """
+    """Best-effort compensation after a later step failed."""
     try:
         if snapshot:
             await runtime_config.replace(**snapshot)
@@ -2476,11 +2411,7 @@ async def _restore_static_credential(
     *,
     operation: str,
 ) -> bool:
-    """Restore only a provider's static key/URL, leaving OAuth fields untouched.
-
-    This is intentionally unconditional for the same commit-before-cache-publication window as
-    :func:`_restore_runtime_config`.
-    """
+    """Restore only a provider's static key/URL, leaving OAuth fields untouched."""
     try:
         old_static = {
             "api_key": snapshot.get("api_key", ""),
@@ -2505,11 +2436,7 @@ async def _restore_subscription_credential(
     *,
     operation: str,
 ) -> bool:
-    """Best-effort OAuth compensation used only when logout itself fails.
-
-    Do not skip the durable write based on the credential cache: a failed store call may already
-    have committed the token deletion without publishing that fact to the cache.
-    """
+    """Best-effort OAuth compensation after a later client refresh failed."""
     try:
         if snapshot is None:
             await services.llm_credentials.forget_subscription(provider)
@@ -2611,20 +2538,22 @@ async def _install_subscription(services: Services, canonical: str, token: Any) 
     )
     active_oauth = _provider_identity(live_provider) == canonical and live_oauth_path
 
+    subscription_changed = False
     try:
         await services.llm_credentials.save_subscription(canonical, token)
+        subscription_changed = True
         await _refresh_active_subscription_clients(services, canonical)
     except BaseException:
+        if not subscription_changed:
+            raise
         subscription_restored = await _restore_subscription_credential(
             services,
             canonical,
             subscription_snapshot,
             operation="subscription login",
         )
-        # This second, unconditional credential-book write is important when the OAuth store
-        # commit succeeded but save_subscription raised before publishing its cache: forgetting
-        # an apparently absent cached token is otherwise a no-op and would leave the new grant on
-        # disk. It also restores an independent ChatGPT proxy endpoint/key stripped by login.
+        # A successful OAuth save strips an independent ChatGPT proxy key/URL,
+        # so restore that pair after restoring the old grant.
         await _restore_static_credential(
             services,
             canonical,
@@ -2709,11 +2638,6 @@ async def _refresh_active_subscription_clients(services: Services, canonical: st
                 _reconfigure_llm(services, overrides)
                 await services.runtime_config.replace(**overrides)
             except BaseException:
-                await _restore_runtime_config(
-                    services.runtime_config,
-                    current,
-                    operation="subscription login",
-                )
                 _restore_live_llm(
                     services,
                     live_snapshot,

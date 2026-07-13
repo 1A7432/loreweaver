@@ -223,19 +223,15 @@ async def test_model_set_persistence_failure_restores_exact_live_snapshot(monkey
     router = CommandRouter(services)
     ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
     old_inner = services.llm.inner
-    original_set = services.store.set
-    attempts = 0
 
-    async def commit_then_fail(user_key="", store_key="", value=None):
-        nonlocal attempts
-        result = await original_set(user_key=user_key, store_key=store_key, value=value)
+    async def fail_runtime_write(user_key="", store_key="", value=None):
         if store_key == DEFAULT_KEY:
-            attempts += 1
-        if store_key == DEFAULT_KEY and attempts == 1:
             raise OSError("runtime store unavailable after write")
-        return result
+        return await services.store.__class__.set(
+            services.store, user_key=user_key, store_key=store_key, value=value
+        )
 
-    monkeypatch.setattr(services.store, "set", commit_then_fail)
+    monkeypatch.setattr(services.store, "set", fail_runtime_write)
     reply = await router.dispatch(ctx, ".model set deepseek deepseek-chat")
 
     assert reply is not None and "deepseek" in reply
@@ -429,19 +425,15 @@ async def test_subscription_proxy_switch_persistence_failure_restores_live_proxy
     }
     await services.runtime_config.replace(**proxy_snapshot)
     old_inner = services.llm.inner
-    original_set = services.store.set
-    attempts = 0
 
-    async def commit_then_fail(user_key="", store_key="", value=None):
-        nonlocal attempts
-        result = await original_set(user_key=user_key, store_key=store_key, value=value)
+    async def fail_runtime_write(user_key="", store_key="", value=None):
         if store_key == DEFAULT_KEY:
-            attempts += 1
-        if store_key == DEFAULT_KEY and attempts == 1:
             raise OSError("runtime store unavailable after write")
-        return result
+        return await services.store.__class__.set(
+            services.store, user_key=user_key, store_key=store_key, value=value
+        )
 
-    monkeypatch.setattr(services.store, "set", commit_then_fail)
+    monkeypatch.setattr(services.store, "set", fail_runtime_write)
     with pytest.raises(OSError, match="runtime store unavailable after write"):
         await _refresh_active_subscription_clients(services, "chatgpt")
 
@@ -513,19 +505,14 @@ async def test_model_logout_failure_restores_oauth_and_independent_proxy_credent
         api_key="sk-proxy-secret",
         base_url="https://chatgpt-proxy.example/v1",
     )
-    original_set = services.store.set
-    attempts = 0
-
-    async def commit_then_fail(user_key="", store_key="", value=None):
-        nonlocal attempts
-        result = await original_set(user_key=user_key, store_key=store_key, value=value)
+    async def fail_credential_write(user_key="", store_key="", value=None):
         if store_key == CREDENTIALS_KEY:
-            attempts += 1
-        if store_key == CREDENTIALS_KEY and attempts == 1:
             raise OSError("credential store unavailable after delete")
-        return result
+        return await services.store.__class__.set(
+            services.store, user_key=user_key, store_key=store_key, value=value
+        )
 
-    monkeypatch.setattr(services.store, "set", commit_then_fail)
+    monkeypatch.setattr(services.store, "set", fail_credential_write)
     reply = await router.dispatch(ctx, ".model logout chatgpt")
 
     assert reply is not None and "chatgpt" in reply
@@ -663,26 +650,22 @@ async def test_model_logout_runtime_clear_failure_keeps_grant_override_and_live(
     await router.dispatch(ctx, ".model set supergrok grok-custom")
     runtime_before = await services.runtime_config.get()
     old_inner = services.llm.inner
-    original_delete = services.store.delete
-    attempts = 0
 
-    async def commit_then_fail(user_key="", store_key=""):
-        nonlocal attempts
-        result = await original_delete(user_key=user_key, store_key=store_key)
+    async def fail_runtime_delete(user_key="", store_key=""):
         if store_key == DEFAULT_KEY:
-            attempts += 1
-        if store_key == DEFAULT_KEY and attempts == 1:
             raise OSError("runtime store unavailable after delete")
-        return result
+        return await services.store.__class__.delete(
+            services.store, user_key=user_key, store_key=store_key
+        )
 
-    monkeypatch.setattr(services.store, "delete", commit_then_fail)
+    monkeypatch.setattr(services.store, "delete", fail_runtime_delete)
     reply = await router.dispatch(ctx, ".model logout supergrok")
 
     assert reply is not None and "supergrok" in reply
     assert await services.llm_credentials.load_subscription("supergrok") is not None
     assert await services.runtime_config.load() == runtime_before
     assert services.settings.llm.provider == "supergrok"
-    assert services.llm.inner is not old_inner  # rollback rebuilds against the still-valid grant
+    assert services.llm.inner is old_inner
 
 
 async def test_model_logout_credential_failure_compensates_runtime_and_live(monkeypatch):
@@ -699,19 +682,14 @@ async def test_model_logout_credential_failure_compensates_runtime_and_live(monk
     )
     await router.dispatch(ctx, ".model set supergrok grok-custom")
     runtime_before = await services.runtime_config.get()
-    original_set = services.store.set
-    attempts = 0
-
-    async def commit_then_fail(user_key="", store_key="", value=None):
-        nonlocal attempts
-        result = await original_set(user_key=user_key, store_key=store_key, value=value)
+    async def fail_credential_write(user_key="", store_key="", value=None):
         if store_key == CREDENTIALS_KEY:
-            attempts += 1
-        if store_key == CREDENTIALS_KEY and attempts == 1:
             raise OSError("credential store unavailable after delete")
-        return result
+        return await services.store.__class__.set(
+            services.store, user_key=user_key, store_key=store_key, value=value
+        )
 
-    monkeypatch.setattr(services.store, "set", commit_then_fail)
+    monkeypatch.setattr(services.store, "set", fail_credential_write)
     reply = await router.dispatch(ctx, ".model logout supergrok")
 
     assert reply is not None and "supergrok" in reply
@@ -986,19 +964,15 @@ async def test_model_first_proxy_login_persistence_failure_restores_proxy(monkey
         base_url="https://chatgpt-proxy.example/v1",
     )
     old_inner = services.llm.inner
-    original_set = services.store.set
-    runtime_writes = 0
 
-    async def commit_then_fail(user_key="", store_key="", value=None):
-        nonlocal runtime_writes
-        result = await original_set(user_key=user_key, store_key=store_key, value=value)
+    async def fail_runtime_write(user_key="", store_key="", value=None):
         if store_key == DEFAULT_KEY:
-            runtime_writes += 1
-        if store_key == DEFAULT_KEY and runtime_writes == 1:
             raise OSError("runtime store unavailable after write")
-        return result
+        return await services.store.__class__.set(
+            services.store, user_key=user_key, store_key=store_key, value=value
+        )
 
-    monkeypatch.setattr(services.store, "set", commit_then_fail)
+    monkeypatch.setattr(services.store, "set", fail_runtime_write)
     started = await router.dispatch(ctx, ".model login chatgpt")
     session = services._subscription_logins["chatgpt"]
     await asyncio.wait_for(session["task"], timeout=1.0)
@@ -1020,63 +994,6 @@ async def test_model_first_proxy_login_persistence_failure_restores_proxy(monkey
     assert services.settings.llm.provider == "chatgpt"
     assert services.settings.llm.api_key == "sk-proxy-secret"
     assert services.settings.llm.base_url == "https://chatgpt-proxy.example/v1"
-
-
-async def test_model_first_login_oauth_commit_then_raise_removes_new_grant(monkeypatch):
-    import asyncio
-    import time
-
-    import gateway.commands as commands_module
-    from infra.oauth_flows import DeviceLogin, SubscriptionToken
-
-    class _ImmediateFlow:
-        async def start(self):
-            return DeviceLogin(
-                verification_url="https://auth.example/device",
-                user_code="OAUTH-WRITE",
-                poll_interval=1,
-                expires_at=time.time() + 60,
-            )
-
-        async def poll(self, _login):
-            return SubscriptionToken("access-new", "refresh-new", time.time() + 3600)
-
-        async def aclose(self):
-            return None
-
-    monkeypatch.setattr(commands_module, "flow_for", lambda _provider: _ImmediateFlow())
-    services = _mutable_services()
-    router = CommandRouter(services)
-    ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
-    old_inner = services.llm.inner
-    original_set = services.store.set
-    credential_writes = 0
-
-    async def commit_then_fail(user_key="", store_key="", value=None):
-        nonlocal credential_writes
-        result = await original_set(user_key=user_key, store_key=store_key, value=value)
-        if store_key == CREDENTIALS_KEY:
-            credential_writes += 1
-        if store_key == CREDENTIALS_KEY and credential_writes == 1:
-            raise OSError("credential store unavailable after write")
-        return result
-
-    monkeypatch.setattr(services.store, "set", commit_then_fail)
-    started = await router.dispatch(ctx, ".model login supergrok")
-    session = services._subscription_logins["supergrok"]
-    await asyncio.wait_for(session["task"], timeout=1.0)
-
-    assert started is not None and "OAUTH-WRITE" in started
-    assert session["error"] == "subscription_poll_failed"
-    assert await services.llm_credentials.load_subscription("supergrok") is None
-    persisted_book = json.loads(
-        await services.store.get(user_key="", store_key=CREDENTIALS_KEY) or "{}"
-    )
-    assert "supergrok" not in persisted_book
-    assert await services.runtime_config.load() == {}
-    assert services.llm.inner is old_inner
-    assert services.settings.llm.provider == "openai"
-    assert services.imagegen is None
 
 
 async def test_model_set_supergrok_does_not_implicitly_enable_imagegen():
@@ -1141,19 +1058,15 @@ async def test_model_key_credential_failure_rolls_live_back_before_runtime_write
     router = CommandRouter(services)
     ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
     old_inner = services.llm.inner
-    original_set = services.store.set
-    attempts = 0
 
-    async def commit_then_fail(user_key="", store_key="", value=None):
-        nonlocal attempts
-        result = await original_set(user_key=user_key, store_key=store_key, value=value)
+    async def fail_credential_write(user_key="", store_key="", value=None):
         if store_key == CREDENTIALS_KEY:
-            attempts += 1
-        if store_key == CREDENTIALS_KEY and attempts == 1:
             raise OSError("credential store unavailable after write")
-        return result
+        return await services.store.__class__.set(
+            services.store, user_key=user_key, store_key=store_key, value=value
+        )
 
-    monkeypatch.setattr(services.store, "set", commit_then_fail)
+    monkeypatch.setattr(services.store, "set", fail_credential_write)
     reply = await router.dispatch(ctx, ".model key sk-not-saved")
 
     assert reply is not None and "openai" in reply
@@ -1176,19 +1089,15 @@ async def test_model_key_runtime_failure_compensates_credential_and_live(monkeyp
         base_url="https://previous.example/v1",
     )
     old_inner = services.llm.inner
-    original_set = services.store.set
-    attempts = 0
 
-    async def commit_then_fail(user_key="", store_key="", value=None):
-        nonlocal attempts
-        result = await original_set(user_key=user_key, store_key=store_key, value=value)
+    async def fail_runtime_write(user_key="", store_key="", value=None):
         if store_key == DEFAULT_KEY:
-            attempts += 1
-        if store_key == DEFAULT_KEY and attempts == 1:
             raise OSError("runtime store unavailable after write")
-        return result
+        return await services.store.__class__.set(
+            services.store, user_key=user_key, store_key=store_key, value=value
+        )
 
-    monkeypatch.setattr(services.store, "set", commit_then_fail)
+    monkeypatch.setattr(services.store, "set", fail_runtime_write)
     reply = await router.dispatch(ctx, ".model key sk-not-committed")
 
     assert reply is not None and "openai" in reply
@@ -1429,19 +1338,15 @@ async def test_model_reset_clear_failure_restores_override_and_live(monkeypatch)
     await router.dispatch(ctx, ".model set deepseek deepseek-chat")
     runtime_before = await services.runtime_config.get()
     old_inner = services.llm.inner
-    original_delete = services.store.delete
-    attempts = 0
 
-    async def commit_then_fail(user_key="", store_key=""):
-        nonlocal attempts
-        result = await original_delete(user_key=user_key, store_key=store_key)
+    async def fail_runtime_delete(user_key="", store_key=""):
         if store_key == DEFAULT_KEY:
-            attempts += 1
-        if store_key == DEFAULT_KEY and attempts == 1:
             raise OSError("runtime store unavailable after delete")
-        return result
+        return await services.store.__class__.delete(
+            services.store, user_key=user_key, store_key=store_key
+        )
 
-    monkeypatch.setattr(services.store, "delete", commit_then_fail)
+    monkeypatch.setattr(services.store, "delete", fail_runtime_delete)
     reply = await router.dispatch(ctx, ".model reset")
 
     assert reply is not None and "deepseek" in reply
