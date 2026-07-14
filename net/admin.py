@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
 from typing import Any
 
 from agent.context import AgentCtx, FsAdapter
@@ -31,6 +32,13 @@ from agent.services import Services
 from core.rulepacks import available_systems, built_in_rulepack_ids
 from core.skills import available_skills
 from gateway.ops import get_enabled_skills, set_enabled_skills
+from gateway.rooms import (
+    clear_bindings_for_session,
+    clear_keeper_binding,
+    clear_keeper_bindings_for_room,
+    list_keeper_bindings_for_room,
+    session_key_for_room,
+)
 from infra.i18n import I18n
 from infra.imagegen import (
     IMAGEGEN_PRESETS,
@@ -51,12 +59,6 @@ from infra.providers import (
     is_known_provider,
     list_models,
     mask_secret,
-)
-from infra.providers import (
-    restore_live_llm as restore_provider_llm,
-)
-from infra.providers import (
-    snapshot_live_llm as snapshot_provider_llm,
 )
 from net.keystore import Keystore
 from net.room_backup import chat_key_for_room, delete_room_data, export_room, import_room
@@ -93,7 +95,112 @@ def is_admin_frame(kind: Any) -> bool:
     return isinstance(kind, str) and kind in _ADMIN_REQUESTS
 
 
-async def handle_admin_frame(
+class AdminService:
+    """Transport-independent facade over the existing admin frame handlers."""
+
+    def __init__(
+        self,
+        services: Services,
+        keystore: Keystore,
+        *,
+        fs: FsAdapter | None = None,
+        hub: Any = None,
+    ) -> None:
+        self.services = services
+        self.keystore = keystore
+        self.fs = fs
+        self.hub = hub
+
+    async def dispatch(
+        self,
+        role: str,
+        caller_room: str,
+        frame: dict[str, Any],
+        i18n: I18n,
+        *,
+        reauthorize: Any = None,
+    ) -> dict[str, Any]:
+        if role == _KEEPER_ROLE and frame.get("type") == "admin_delete_key":
+            binding = await self._chat_binding_for_id(caller_room, str(frame.get("id") or ""))
+            if binding is not None:
+                await clear_keeper_binding(
+                    self.services.store,
+                    *binding,
+                    expected_room=caller_room,
+                )
+                await self._evict_chat_members(caller_room, binding)
+                reply = _keys_frame(self.keystore, caller_room)
+                return await self._with_chat_bindings(reply, caller_room)
+        reply = await _dispatch_admin_frame(
+            self.services,
+            self.keystore,
+            role,
+            caller_room,
+            frame,
+            i18n,
+            fs=self.fs,
+            reauthorize=reauthorize,
+        )
+        if reply.get("type") != "admin_error" and frame.get("type") in {
+            "admin_delete_room",
+            "admin_delete_room_data",
+        }:
+            await self._evict_chat_members(caller_room)
+        return await self._with_chat_bindings(reply, caller_room)
+
+    async def _evict_chat_members(
+        self,
+        room: str,
+        identity: tuple[str, str] | None = None,
+    ) -> None:
+        if self.hub is None:
+            return
+        for member in self.hub.members(session_key_for_room(room)):
+            source = getattr(member, "source", None)
+            if source is None:
+                continue
+            if identity is not None and (
+                getattr(source, "platform", ""),
+                getattr(source, "user_id", ""),
+            ) != identity:
+                continue
+            await self.hub.unsubscribe(member)
+
+    async def _with_chat_bindings(
+        self,
+        reply: dict[str, Any],
+        room: str,
+    ) -> dict[str, Any]:
+        if reply.get("type") != "admin_keys":
+            return reply
+        keys = list(reply.get("keys") or [])
+        for platform, user_id in await list_keeper_bindings_for_room(self.services.store, room):
+            identity = f"{platform}:{user_id}"
+            keys.append(
+                {
+                    "id": _chat_binding_id(identity),
+                    "key_masked": identity,
+                    "room": room,
+                    "name": identity,
+                    "role": _KEEPER_ROLE,
+                    "purpose": "chat_bind",
+                    "expires_at": None,
+                }
+            )
+        return {**reply, "keys": keys}
+
+    async def _chat_binding_for_id(
+        self,
+        room: str,
+        binding_id: str,
+    ) -> tuple[str, str] | None:
+        for platform, user_id in await list_keeper_bindings_for_room(self.services.store, room):
+            if _chat_binding_id(f"{platform}:{user_id}") == binding_id:
+                return platform, user_id
+        return None
+
+
+async def _dispatch_admin_frame(
     services: Services,
     keystore: Keystore,
     role: str,
@@ -102,6 +209,7 @@ async def handle_admin_frame(
     i18n: I18n,
     *,
     fs: FsAdapter | None = None,
+    reauthorize: Any = None,
 ) -> dict[str, Any]:
     """Handle one admin request `frame`, returning the reply frame to send.
 
@@ -126,9 +234,15 @@ async def handle_admin_frame(
     if kind == "admin_get_config":
         return await _config_frame(services)
     if kind == "admin_set_model":
-        return await _set_model(services, frame, i18n)
+        async with services.config_lock:
+            if reauthorize is not None and not reauthorize():
+                return _error("forbidden", i18n)
+            return await _set_model(services, frame, i18n)
     if kind == "admin_set_imagegen":
-        return await _set_imagegen(services, frame, i18n)
+        async with services.config_lock:
+            if reauthorize is not None and not reauthorize():
+                return _error("forbidden", i18n)
+            return await _set_imagegen(services, frame, i18n)
     if kind == "admin_list_models":
         return await _list_models(services, frame, i18n)
     if kind == "admin_list_keys":
@@ -140,7 +254,7 @@ async def handle_admin_frame(
     if kind == "admin_delete_key":
         return _delete_key(keystore, caller_room, frame, i18n)
     if kind == "admin_delete_room":
-        return _delete_room(keystore, caller_room, frame, i18n)
+        return await _delete_room(services, keystore, caller_room, frame, i18n)
     if kind == "admin_export_room":
         return await _export_room(services, keystore, caller_room, frame, i18n)
     if kind == "admin_import_room":
@@ -276,33 +390,15 @@ async def _set_model(services: Services, frame: dict[str, Any], i18n: I18n) -> d
         }
     )
 
-    credential_names = {_provider_identity(provider), provider}
-    previous_credentials = {
-        name: await services.llm_credentials.get(name) for name in credential_names
-    }
-    live_snapshot = _snapshot_live_llm(services)
-    runtime_changed = False
-    credentials_started = False
     try:
         _reconfigure_llm(services, overrides)
         await services.runtime_config.replace(**overrides)
-        runtime_changed = True
         # Remember this provider's credential so the next switch to it is frictionless.
         if not oauth_path and (api_key_supplied or base_url_supplied or api_key or base_url):
-            credentials_started = True
             await _replace_llm_static_credentials(
                 services, provider, api_key=api_key, base_url=base_url
             )
-    except BaseException as exc:
-        _restore_live_llm(services, live_snapshot, operation="admin set model")
-        if runtime_changed:
-            await _best_effort_replace_runtime(services.runtime_config, current)
-        if credentials_started:
-            await _best_effort_restore_static_credentials(
-                services.llm_credentials, previous_credentials
-            )
-        if not isinstance(exc, Exception):
-            raise
+    except Exception:
         return _error("set_failed", i18n)
     return await _config_frame(services)
 
@@ -394,38 +490,16 @@ async def _set_imagegen(services: Services, frame: dict[str, Any], i18n: I18n) -
         "base_url": base_url,
     }
 
-    previous_runtime = await services.imagegen_runtime_config.get()
-    previous_credentials = {
-        provider: await services.imagegen_credentials.get(provider)
-    }
-    previous_settings = services.settings.imagegen
-    previous_imagegen = services.imagegen
-    runtime_changed = False
-    credentials_started = False
     try:
         _reconfigure_imagegen(services, overrides)
         await services.imagegen_runtime_config.replace(**overrides)
-        runtime_changed = True
         if provider != "supergrok" and (
             api_key_supplied or base_url_supplied or api_key or base_url
         ):
-            credentials_started = True
             await services.imagegen_credentials.replace_static(
                 provider, api_key=api_key, base_url=base_url
             )
-    except BaseException as exc:
-        services.settings.imagegen = previous_settings
-        services.imagegen = previous_imagegen
-        if runtime_changed:
-            await _best_effort_replace_runtime(
-                services.imagegen_runtime_config, previous_runtime
-            )
-        if credentials_started:
-            await _best_effort_restore_static_credentials(
-                services.imagegen_credentials, previous_credentials
-            )
-        if not isinstance(exc, Exception):
-            raise
+    except Exception:
         return _error("set_failed", i18n)
     return await _config_frame(services)
 
@@ -508,48 +582,6 @@ async def _replace_llm_static_credentials(
         )
 
 
-def _snapshot_live_llm(services: Services) -> Any:
-    return snapshot_provider_llm(services.llm, _live_llm_settings(services))
-
-
-def _restore_live_llm(
-    services: Services,
-    snapshot: Any,
-    *,
-    operation: str,
-) -> None:
-    if not restore_provider_llm(services.llm, snapshot):
-        logger.error("Failed to restore live LLM during %s", operation)
-
-
-async def _best_effort_replace_runtime(runtime: Any, values: dict[str, str]) -> None:
-    try:
-        if values:
-            await runtime.replace(**values)
-        else:
-            await runtime.clear()
-    except Exception:
-        logger.error("Failed to restore persisted runtime config after an admin error", exc_info=True)
-
-
-async def _best_effort_restore_static_credentials(
-    book: Any, snapshots: dict[str, dict[str, str]]
-) -> None:
-    for provider, snapshot in snapshots.items():
-        try:
-            await book.replace_static(
-                provider,
-                api_key=snapshot.get("api_key", ""),
-                base_url=snapshot.get("base_url", ""),
-            )
-        except Exception:
-            logger.error(
-                "Failed to restore a provider credential after an admin error (provider=%s)",
-                provider,
-                exc_info=True,
-            )
-
-
 async def _saved_llm_credentials(services: Services, provider: str) -> dict[str, str]:
     """Load target-scoped static credentials, with canonical alias fallback."""
     provider = (provider or "").casefold()
@@ -603,7 +635,7 @@ def _valid_image_size(value: str) -> bool:
 
 
 def _keys_frame(
-    keystore: Keystore, caller_room: str, *, minted: dict[str, str] | None = None
+    keystore: Keystore, caller_room: str, *, minted: dict[str, Any] | None = None
 ) -> dict[str, Any]:
     keys = [
         {
@@ -612,8 +644,10 @@ def _keys_frame(
             "room": entry.room,
             "name": entry.name,
             "role": entry.role,
+            "purpose": entry.purpose,
+            "expires_at": entry.expires_at,
         }
-        for entry in keystore.entries()
+        for entry in keystore.entries(purpose=None)
         if entry.room == caller_room
     ]
     frame: dict[str, Any] = {"type": "admin_keys", "keys": keys}
@@ -627,8 +661,12 @@ def _key_id(key: str) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
 
+def _chat_binding_id(identity: str) -> str:
+    return f"chat:{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:16]}"
+
+
 def _resolve_key(keystore: Keystore, key_id: str) -> str | None:
-    for entry in keystore.entries():
+    for entry in keystore.entries(purpose=None):
         if _key_id(entry.key) == key_id:
             return entry.key
     return None
@@ -642,14 +680,38 @@ def _mint_key(
         return _error("forbidden", i18n)
     room = caller_room
     name = str(frame.get("name") or "").strip()
-    role = str(frame.get("role") or "player").strip()
+    purpose = str(frame.get("purpose") or "join").strip()
+    if purpose not in {"join", "chat_bind"}:
+        return _error("bad_request", i18n)
+    role = str(frame.get("role") or ("keeper" if purpose == "chat_bind" else "player")).strip()
+    if purpose == "chat_bind" and role != _KEEPER_ROLE:
+        return _error("bad_request", i18n)
+    expires_at: float | None = None
+    if purpose == "chat_bind":
+        try:
+            expires_at = time.time() + int(frame.get("expires_in") or 600)
+        except (TypeError, ValueError):
+            return _error("bad_request", i18n)
 
     with keystore.persisted_mutation():
-        key = keystore.add(room=room, name=name, role=role)
-    entry = keystore.get(key)
+        key = keystore.add(
+            room=room,
+            name=name,
+            role=role,
+            purpose=purpose,
+            expires_at=expires_at,
+        )
+    entry = keystore.get(key, purpose=None)
     assert entry is not None  # just added
     # The full key travels once, here, so the keeper can copy it; list views mask.
-    minted = {"key": key, "room": entry.room, "name": entry.name, "role": entry.role}
+    minted = {
+        "key": key,
+        "room": entry.room,
+        "name": entry.name,
+        "role": entry.role,
+        "purpose": entry.purpose,
+        "expires_at": entry.expires_at,
+    }
     return _keys_frame(keystore, caller_room, minted=minted)
 
 
@@ -680,7 +742,7 @@ def _update_key(keystore: Keystore, caller_room: str, frame: dict[str, Any], i18
         key = _resolve_key(keystore, key_id)
         if key is None:
             return _error("not_found", i18n)
-        entry = keystore.get(key)
+        entry = keystore.get(key, purpose=None)
         if entry is None or entry.room != caller_room:
             return _error("forbidden", i18n)
         keystore.update(key, **updates)
@@ -693,14 +755,20 @@ def _delete_key(keystore: Keystore, caller_room: str, frame: dict[str, Any], i18
         key = _resolve_key(keystore, key_id)
         if key is None:
             return _error("not_found", i18n)
-        entry = keystore.get(key)
+        entry = keystore.get(key, purpose=None)
         if entry is None or entry.room != caller_room:
             return _error("forbidden", i18n)
         keystore.remove(key)
     return _keys_frame(keystore, caller_room)
 
 
-def _delete_room(keystore: Keystore, caller_room: str, frame: dict[str, Any], i18n: I18n) -> dict[str, Any]:
+async def _delete_room(
+    services: Services,
+    keystore: Keystore,
+    caller_room: str,
+    frame: dict[str, Any],
+    i18n: I18n,
+) -> dict[str, Any]:
     room = str(frame.get("room") or "").strip()
     if not room:
         return _error("bad_request", i18n)
@@ -710,6 +778,8 @@ def _delete_room(keystore: Keystore, caller_room: str, frame: dict[str, Any], i1
         removed = keystore.remove_room(room)
         if removed <= 0:
             return _error("not_found", i18n)
+    await clear_keeper_bindings_for_room(services.store, room)
+    await clear_bindings_for_session(services.store, session_key_for_room(room))
     return _keys_frame(keystore, caller_room)
 
 
@@ -776,6 +846,8 @@ async def _delete_room_data(
             backup_result = await export_room(services, keystore, room, path)
             backup_path = str(backup_result.get("path") or "")
         result = await delete_room_data(services, keystore, room)
+        await clear_keeper_bindings_for_room(services.store, room)
+        await clear_bindings_for_session(services.store, session_key_for_room(room))
     except Exception:
         return _error("op_failed", i18n)
     if backup_path:

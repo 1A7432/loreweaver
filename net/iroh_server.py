@@ -105,10 +105,6 @@ class IrohMember:
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     authorize: Callable[[], bool] | None = None
 
-    def supports_proactive(self) -> bool:
-        """A live QUIC stream can always be pushed to."""
-        return True
-
     async def send_frame(self, frame: dict[str, Any]) -> None:
         """Send one protocol frame as a newline-terminated JSON line."""
         line = (json.dumps(frame, ensure_ascii=False) + "\n").encode("utf-8")

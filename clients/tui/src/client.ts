@@ -1,6 +1,7 @@
 import {
   WsClient,
   type AdminForgeKind,
+  type AdminKeyPurpose,
   type ConnectionStatus,
   type MediaFrame,
   type MediaPayload,
@@ -40,7 +41,13 @@ export interface AppClient {
   adminSetImagegen(provider: string, model: string, apiKey?: string, baseUrl?: string, size?: string): void
   adminListModels(provider?: string, apiKey?: string, baseUrl?: string): void
   adminListKeys(): void
-  adminMintKey(room?: string, name?: string, role?: PlayerRole): void
+  adminMintKey(
+    room?: string,
+    name?: string,
+    role?: PlayerRole,
+    purpose?: AdminKeyPurpose,
+    expiresIn?: number,
+  ): void
   adminUpdateKey(id: string, room?: string, name?: string, role?: PlayerRole): void
   adminDeleteKey(id: string): void
   adminDeleteRoom(room: string): void
@@ -121,8 +128,14 @@ class TransportClient implements AppClient {
   adminListKeys(): void {
     this.inner?.adminListKeys()
   }
-  adminMintKey(room?: string, name?: string, role?: PlayerRole): void {
-    this.inner?.adminMintKey(room, name, role)
+  adminMintKey(
+    room?: string,
+    name?: string,
+    role?: PlayerRole,
+    purpose?: AdminKeyPurpose,
+    expiresIn?: number,
+  ): void {
+    this.inner?.adminMintKey(room, name, role, purpose, expiresIn)
   }
   adminUpdateKey(id: string, room?: string, name?: string, role?: PlayerRole): void {
     this.inner?.adminUpdateKey(id, room, name, role)

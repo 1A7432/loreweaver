@@ -78,10 +78,6 @@ class WsMember:
     transport: str = "tui"
     authorize: Callable[[], bool] | None = None
 
-    def supports_proactive(self) -> bool:
-        """A live terminal can always be pushed to (it is a persistent socket)."""
-        return True
-
     async def send_frame(self, frame: dict[str, Any]) -> None:
         """Send one already-built protocol frame over this connection.
 

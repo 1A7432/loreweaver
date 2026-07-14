@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
-import { FrameType, type PlayerRole, type ServerFrame, type WelcomeFrame } from "@loreweaver/protocol"
+import {
+  FrameType,
+  type AdminKeyPurpose,
+  type PlayerRole,
+  type ServerFrame,
+  type WelcomeFrame,
+} from "@loreweaver/protocol"
 import App, { type AppClient } from "../App"
 
 // Same MockClient shape as App.test.tsx, extended so the keeper admin_* methods are
@@ -14,7 +20,9 @@ class MockClient implements AppClient {
   getConfigCalls = 0
   listKeysCalls = 0
   setModelCalls: Array<[string, string | undefined]> = []
-  mintKeyCalls: Array<[string, string | undefined, PlayerRole | undefined]> = []
+  mintKeyCalls: Array<
+    [string, string | undefined, PlayerRole | undefined, AdminKeyPurpose | undefined, number | undefined]
+  > = []
   updateKeyCalls: Array<[string, string | undefined, string | undefined, PlayerRole | undefined]> = []
   deleteKeyCalls: string[] = []
   deleteRoomCalls: string[] = []
@@ -49,8 +57,14 @@ class MockClient implements AppClient {
   adminListKeys(): void {
     this.listKeysCalls += 1
   }
-  adminMintKey(room: string, name?: string, role?: PlayerRole): void {
-    this.mintKeyCalls.push([room, name, role])
+  adminMintKey(
+    room: string,
+    name?: string,
+    role?: PlayerRole,
+    purpose?: AdminKeyPurpose,
+    expiresIn?: number,
+  ): void {
+    this.mintKeyCalls.push([room, name, role, purpose, expiresIn])
   }
   adminUpdateKey(id: string, room?: string, name?: string, role?: PlayerRole): void {
     this.updateKeyCalls.push([id, room, name, role])
@@ -134,8 +148,24 @@ describe("KeeperKeys", () => {
       client.push({
         type: FrameType.AdminKeys,
         keys: [
-          { id: "k1", key_masked: "LW1abcd", room: "shuxue", name: "漱雪", role: "player" },
-          { id: "k2", key_masked: "LW2wxyz", room: "shuxue", name: "沈墨", role: "keeper" },
+          {
+            id: "k1",
+            key_masked: "LW1abcd",
+            room: "shuxue",
+            name: "漱雪",
+            role: "player",
+            purpose: "join",
+            expires_at: null,
+          },
+          {
+            id: "k2",
+            key_masked: "LW2wxyz",
+            room: "shuxue",
+            name: "沈墨",
+            role: "keeper",
+            purpose: "join",
+            expires_at: null,
+          },
         ],
       }),
     )
@@ -173,7 +203,7 @@ describe("KeeperKeys", () => {
     })
     await harness.flush()
 
-    expect(client.mintKeyCalls).toContainEqual(["shuxue", "守秘之钥", "player"])
+    expect(client.mintKeyCalls).toContainEqual(["shuxue", "守秘之钥", "player", undefined, undefined])
 
     act(() => harness.renderer.destroy())
   })
@@ -200,7 +230,25 @@ describe("KeeperKeys", () => {
     })
     await harness.flush()
 
-    expect(client.mintKeyCalls).toContainEqual(["shuxue", undefined, "keeper"])
+    expect(client.mintKeyCalls).toContainEqual(["shuxue", undefined, "keeper", undefined, undefined])
+
+    act(() => harness.renderer.destroy())
+  })
+
+  test("一键生成 10 分钟 QQ/Discord 聊天绑定码", async () => {
+    const client = new MockClient()
+    const harness = await renderApp(client)
+    await harness.flush()
+    act(() => client.push(KEEPER_WELCOME))
+    await enterKeeperKeys(harness)
+
+    const frame = await harness.waitForFrame((text) => text.includes("生成 QQ / Discord /bind 码"))
+    const buttonY = frame.split("\n").findIndex((line) => line.includes("生成 QQ / Discord /bind 码"))
+    expect(buttonY).toBeGreaterThan(0)
+    await act(async () => harness.mockMouse.click(CLICK_X, buttonY))
+    await harness.flush()
+
+    expect(client.mintKeyCalls).toContainEqual(["shuxue", undefined, "keeper", "chat_bind", 600])
 
     act(() => harness.renderer.destroy())
   })
@@ -215,8 +263,24 @@ describe("KeeperKeys", () => {
       client.push({
         type: FrameType.AdminKeys,
         keys: [
-          { id: "k1", key_masked: "LW1", room: "shuxue", name: "First", role: "player" },
-          { id: "k2", key_masked: "LW2", room: "shuxue", name: "Second", role: "keeper" },
+          {
+            id: "k1",
+            key_masked: "LW1",
+            room: "shuxue",
+            name: "First",
+            role: "player",
+            purpose: "join",
+            expires_at: null,
+          },
+          {
+            id: "k2",
+            key_masked: "LW2",
+            room: "shuxue",
+            name: "Second",
+            role: "keeper",
+            purpose: "join",
+            expires_at: null,
+          },
         ],
       }),
     )
@@ -250,8 +314,24 @@ describe("KeeperKeys", () => {
       client.push({
         type: FrameType.AdminKeys,
         keys: [
-          { id: "k1", key_masked: "LW1", room: "shuxue", name: "First", role: "player" },
-          { id: "k2", key_masked: "LW2", room: "shuxue", name: "Second", role: "player" },
+          {
+            id: "k1",
+            key_masked: "LW1",
+            room: "shuxue",
+            name: "First",
+            role: "player",
+            purpose: "join",
+            expires_at: null,
+          },
+          {
+            id: "k2",
+            key_masked: "LW2",
+            room: "shuxue",
+            name: "Second",
+            role: "player",
+            purpose: "join",
+            expires_at: null,
+          },
         ],
       }),
     )
@@ -283,8 +363,25 @@ describe("KeeperKeys", () => {
     act(() =>
       client.push({
         type: FrameType.AdminKeys,
-        keys: [{ id: "k1", key_masked: "LW1abcd", room: "shuxue", name: "新钥", role: "player" }],
-        minted: { key: "LW-cleartext-01", room: "shuxue", name: "新钥", role: "player" },
+        keys: [
+          {
+            id: "k1",
+            key_masked: "LW1abcd",
+            room: "shuxue",
+            name: "新钥",
+            role: "player",
+            purpose: "join",
+            expires_at: null,
+          },
+        ],
+        minted: {
+          key: "LW-cleartext-01",
+          room: "shuxue",
+          name: "新钥",
+          role: "player",
+          purpose: "join",
+          expires_at: null,
+        },
       }),
     )
     await harness.flush()
@@ -293,6 +390,76 @@ describe("KeeperKeys", () => {
     expect(frame).toContain("LW-cleartext-01")
     expect(frame).toContain("只显示一次")
 
+    act(() => harness.renderer.destroy())
+  })
+
+  test("聊天绑定码直接显示可复制的 /bind 命令", async () => {
+    const client = new MockClient()
+    const harness = await renderApp(client)
+    await harness.flush()
+    act(() => client.push(KEEPER_WELCOME))
+    await enterKeeperKeys(harness)
+
+    act(() =>
+      client.push({
+        type: FrameType.AdminKeys,
+        keys: [],
+        minted: {
+          key: "LW-chat-bind-01",
+          room: "shuxue",
+          name: "",
+          role: "keeper",
+          purpose: "chat_bind",
+          expires_at: Date.now() / 1000 + 600,
+        },
+      }),
+    )
+    await harness.flush()
+
+    const frame = await harness.waitForFrame((text) => text.includes("/bind LW-chat-bind-01"))
+    expect(frame).toContain("临时聊天绑定码")
+    expect(frame).toContain("10 分钟")
+
+    act(() => harness.renderer.destroy())
+  })
+
+  test("已绑定聊天身份只能撤销，不能当邀请码编辑", async () => {
+    const client = new MockClient()
+    const harness = await renderApp(client)
+    await harness.flush()
+    act(() => client.push(KEEPER_WELCOME))
+    await enterKeeperKeys(harness)
+
+    act(() =>
+      client.push({
+        type: FrameType.AdminKeys,
+        keys: [
+          {
+            id: "chat:binding-id",
+            key_masked: "discord:42",
+            room: "shuxue",
+            name: "discord:42",
+            role: "keeper",
+            purpose: "chat_bind",
+            expires_at: null,
+          },
+        ],
+      }),
+    )
+    await harness.flush()
+
+    const frame = await harness.waitForFrame((text) => text.includes("discord:42"))
+    expect(frame).not.toContain("载入选中")
+    expect(frame).not.toContain("保存修改")
+    const deleteY = frame.split("\n").findIndex((line) => line.includes("删除邀请码"))
+    expect(deleteY).toBeGreaterThan(0)
+    await act(async () => harness.mockMouse.click(CLICK_X, deleteY))
+    await harness.flush()
+    await act(async () => harness.mockMouse.click(CLICK_X, deleteY))
+    await harness.flush()
+
+    expect(client.updateKeyCalls).toEqual([])
+    expect(client.deleteKeyCalls).toEqual(["chat:binding-id"])
     act(() => harness.renderer.destroy())
   })
 
@@ -306,7 +473,17 @@ describe("KeeperKeys", () => {
     act(() =>
       client.push({
         type: FrameType.AdminKeys,
-        keys: [{ id: "k1", key_masked: "LW1abcd", room: "shuxue", name: "漱雪", role: "player" }],
+        keys: [
+          {
+            id: "k1",
+            key_masked: "LW1abcd",
+            room: "shuxue",
+            name: "漱雪",
+            role: "player",
+            purpose: "join",
+            expires_at: null,
+          },
+        ],
       }),
     )
     await harness.flush()
@@ -371,7 +548,17 @@ describe("KeeperKeys", () => {
     act(() =>
       client.push({
         type: FrameType.AdminKeys,
-        keys: [{ id: "k1", key_masked: "LW1abcd", room: "shuxue", name: "漱雪", role: "player" }],
+        keys: [
+          {
+            id: "k1",
+            key_masked: "LW1abcd",
+            room: "shuxue",
+            name: "漱雪",
+            role: "player",
+            purpose: "join",
+            expires_at: null,
+          },
+        ],
       }),
     )
     await harness.flush()

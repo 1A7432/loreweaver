@@ -7,8 +7,8 @@ key up on ``join`` to authenticate a connection and bind it to a room —
 unknown keys are rejected, there is no sign-up flow.
 
 Backed by a flat TOML file, one ``[key]`` table per entry (see the shipped
-``keys.example.toml``): stdlib ``tomllib`` handles reading; ``save`` uses a
-small dependency-free writer since ``tomllib`` is read-only.
+``keys.example.toml``). Writers use ``persisted_mutation()`` so each update
+starts from the latest file and ends in one atomic replacement.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import hashlib
 import os
 import secrets
 import threading
+import time
 import tomllib
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -27,22 +28,22 @@ from infra.file_permissions import atomic_write_private, ensure_private_director
 
 _ROLES = ("player", "keeper")
 _DEFAULT_ROLE = "player"
+_PURPOSES = ("join", "chat_bind")
+_DEFAULT_PURPOSE = "join"
 _PATH_LOCKS: dict[str, threading.RLock] = {}
 _PATH_LOCKS_GUARD = threading.Lock()
 
 
 @dataclass
 class KeyEntry:
-    """One keystore entry: an opaque key bound to a room, display name and role."""
+    """One opaque key bound to a room and a single authentication purpose."""
 
     key: str
     room: str
     name: str = ""
     role: str = _DEFAULT_ROLE
-
-
-class KeystoreConflictError(RuntimeError):
-    """A locally-added exact key collided with a different entry on disk."""
+    purpose: str = _DEFAULT_PURPOSE
+    expires_at: float | None = None
 
 
 def member_id_for_key(key: str) -> str:
@@ -51,7 +52,14 @@ def member_id_for_key(key: str) -> str:
 
 
 def _copy_entry(entry: KeyEntry) -> KeyEntry:
-    return KeyEntry(key=entry.key, room=entry.room, name=entry.name, role=entry.role)
+    return KeyEntry(
+        key=entry.key,
+        room=entry.room,
+        name=entry.name,
+        role=entry.role,
+        purpose=entry.purpose,
+        expires_at=entry.expires_at,
+    )
 
 
 def _copy_entries(entries: dict[str, KeyEntry]) -> dict[str, KeyEntry]:
@@ -78,6 +86,8 @@ def _read_entries(file_path: Path) -> dict[str, KeyEntry]:
             room=room,
             name=str(table.get("name", "") or ""),
             role=_normalize_role(table.get("role")),
+            purpose=_normalize_purpose(table.get("purpose")),
+            expires_at=_normalize_expires_at(table.get("expires_at")),
         )
     return entries
 
@@ -98,48 +108,11 @@ def _render_entries(entries: dict[str, KeyEntry]) -> str:
         if entry.name:
             lines.append(f"name = {_toml_string(entry.name)}")
         lines.append(f"role = {_toml_string(entry.role)}")
+        lines.append(f"purpose = {_toml_string(entry.purpose)}")
+        if entry.expires_at is not None:
+            lines.append(f"expires_at = {entry.expires_at}")
         blocks.append("\n".join(lines))
     return ("\n\n".join(blocks) + "\n") if blocks else ""
-
-
-def _merge_local_changes(
-    latest: dict[str, KeyEntry],
-    baseline: dict[str, KeyEntry],
-    current: dict[str, KeyEntry],
-) -> dict[str, KeyEntry]:
-    """Apply only local deltas to a freshly-read disk snapshot.
-
-    Deltas are field-level, so a stale name edit cannot undo an independently persisted
-    keeper-to-player downgrade. An external deletion is authoritative and is never resurrected by
-    a stale local edit; explicit local deletions remain deletions.
-    """
-    merged = _copy_entries(latest)
-    for key, before in baseline.items():
-        after = current.get(key)
-        if after is None:
-            merged.pop(key, None)
-            continue
-        if after == before:
-            continue
-        target = merged.get(key)
-        if target is None:
-            # Revocation on disk wins over a stale local edit.
-            continue
-        for field in ("room", "name", "role"):
-            value = getattr(after, field)
-            if value != getattr(before, field):
-                setattr(target, field, value)
-
-    for key, entry in current.items():
-        if key in baseline:
-            continue
-        existing = merged.get(key)
-        if existing is None:
-            merged[key] = _copy_entry(entry)
-        elif existing != entry:
-            # Never put the bearer key in an exception that an outer layer may log.
-            raise KeystoreConflictError("keystore key collision")  # i18n-exempt: internal error
-    return merged
 
 
 def _thread_lock_for(file_path: Path) -> threading.RLock:
@@ -186,24 +159,16 @@ def _locked_keystore(file_path: Path) -> Iterator[None]:
 
 
 class Keystore:
-    """In-memory `key -> KeyEntry` table, loadable from and savable back to a TOML file."""
+    """In-memory ``key -> KeyEntry`` table with optional TOML persistence."""
 
     def __init__(self, entries: dict[str, KeyEntry] | None = None, *, path: str | Path | None = None) -> None:
         self._entries: dict[str, KeyEntry] = _copy_entries(entries or {})
-        # Last authoritative disk snapshot. Comparing it with `_entries` lets `save()` merge a
-        # direct `load(); add/update/remove(); save()` caller onto the newest file without losing
-        # another process's changes.
-        self._baseline: dict[str, KeyEntry] = _copy_entries(self._entries)
-        # The file this keystore was loaded from (if any). `persist()` writes back
-        # to it, so a key minted at runtime (e.g. via the web admin panel) survives
-        # a restart. An in-memory keystore (tests) has no path and never persists.
         self._path: Path | None = Path(path) if path is not None else None
         self._disk_signature = _file_signature(self._path) if self._path is not None else None
 
     @classmethod
     def load(cls, path: str | Path) -> Keystore:
-        """Load a keystore from `path`; a missing file loads as an empty keystore
-        (still remembering `path`, so a later `persist()`/`add` can create it)."""
+        """Load ``path``; a missing file creates an empty file-backed keystore."""
         file_path = Path(path)
         # Remember the version observed *before* the read. If an atomic writer
         # replaces the file while it is being parsed, the next authorization
@@ -219,31 +184,25 @@ class Keystore:
         """The file this keystore was loaded from / persists to, if any."""
         return self._path
 
-    def get(self, key: str) -> KeyEntry | None:
-        """Look up `key`, or `None` if it isn't registered."""
-        return self._entries.get(key)
+    def get(self, key: str, *, purpose: str | None = _DEFAULT_PURPOSE) -> KeyEntry | None:
+        """Look up a non-expired key for ``purpose``; ``None`` exposes all purposes to admin code."""
+        entry = self._entries.get(key)
+        if entry is None or (purpose is not None and entry.purpose != purpose):
+            return None
+        if purpose is not None and entry.expires_at is not None and entry.expires_at <= time.time():
+            return None
+        return entry
 
     def is_empty(self) -> bool:
-        """True when no keys are registered — the first-run signal for bootstrapping."""
-        return not self._entries
+        """True when no active TUI join keys exist."""
+        return not self.entries()
 
     def refresh(self) -> None:
-        """Merge local pending edits onto the latest authoritative backing file.
-
-        Unchanged memory never masks disk revocations, room moves, or role downgrades. Locally
-        minted-but-not-yet-saved keys remain pending so legacy `add(); refresh(); save()` callers do
-        not lose their own work. A missing backing file is an authoritative empty snapshot.
-        """
+        """Replace memory with the current file, if this keystore is file-backed."""
         if self._path is None:
             return
-        # Writers publish with atomic replacement, so readers see either the old
-        # complete file or the new complete file and do not need an exclusive
-        # cross-process lock. Writer-to-writer merging remains locked in save().
         disk_signature = _file_signature(self._path)
-        latest = _read_entries(self._path)
-        merged = _merge_local_changes(latest, self._baseline, self._entries)
-        self._entries = merged
-        self._baseline = _copy_entries(latest)
+        self._entries = _read_entries(self._path)
         self._disk_signature = disk_signature
 
     def refresh_if_changed(self) -> None:
@@ -273,7 +232,14 @@ class Keystore:
         """
         self.refresh_if_changed()
         entries = self._entries
-        matches = [entry for key, entry in entries.items() if member_id_for_key(key) == member_id]
+        now = time.time()
+        matches = [
+            entry
+            for key, entry in entries.items()
+            if entry.purpose == _DEFAULT_PURPOSE
+            and (entry.expires_at is None or entry.expires_at > now)
+            and member_id_for_key(key) == member_id
+        ]
         if len(matches) != 1:
             return None
         entry = matches[0]
@@ -283,11 +249,48 @@ class Keystore:
             return None
         return _copy_entry(entry)
 
-    def add(self, room: str, name: str = "", role: str = _DEFAULT_ROLE) -> str:
+    def add(
+        self,
+        room: str,
+        name: str = "",
+        role: str = _DEFAULT_ROLE,
+        *,
+        purpose: str = _DEFAULT_PURPOSE,
+        expires_at: float | None = None,
+    ) -> str:
         """Mint a fresh url-safe key bound to `room`, register it, and return it."""
         key = secrets.token_urlsafe(18)
-        self._entries[key] = KeyEntry(key=key, room=room, name=name, role=_normalize_role(role))
+        self._entries[key] = KeyEntry(
+            key=key,
+            room=room,
+            name=name,
+            role=_normalize_role(role),
+            purpose=_normalize_purpose(purpose),
+            expires_at=_normalize_expires_at(expires_at),
+        )
         return key
+
+    def consume(
+        self,
+        key: str,
+        *,
+        purpose: str,
+        required_role: str | None = None,
+    ) -> KeyEntry | None:
+        """Atomically consume one valid purpose-scoped token."""
+        consumed: KeyEntry | None = None
+        with self.persisted_mutation():
+            entry = self._entries.get(key)
+            if entry is None or entry.purpose != purpose:
+                return None
+            if entry.expires_at is not None and entry.expires_at <= time.time():
+                self._entries.pop(key, None)
+                return None
+            if required_role is not None and entry.role != required_role:
+                return None
+            consumed = _copy_entry(entry)
+            self._entries.pop(key, None)
+        return consumed
 
     def update(self, key: str, *, room: str | None = None, name: str | None = None, role: str | None = None) -> bool:
         """Update an existing key entry in place; return whether it existed."""
@@ -324,108 +327,34 @@ class Keystore:
         self._entries[key] = KeyEntry(key=key, room=room, name=name, role=_normalize_role(role))
         return True
 
-    def entries(self) -> list[KeyEntry]:
-        """Every registered entry, in insertion order."""
-        return list(self._entries.values())
+    def entries(self, *, purpose: str | None = _DEFAULT_PURPOSE) -> list[KeyEntry]:
+        """Non-expired entries in insertion order; normal callers see join keys only."""
+        now = time.time()
+        return [
+            entry
+            for entry in self._entries.values()
+            if (purpose is None or entry.purpose == purpose)
+            and (entry.expires_at is None or entry.expires_at > now)
+        ]
 
     @contextmanager
     def persisted_mutation(self) -> Iterator[Keystore]:
-        """Lock, re-read, mutate, and atomically persist one authoritative snapshot.
-
-        Reloading happens *inside* the cross-process lock and before caller code runs, so runtime
-        admin mutations do not overwrite an independently executed ``--tui-key add``. Any caller
-        or write failure restores memory to the current on-disk snapshot.
-        """
+        """Read the latest file, mutate it under one writer lock, then atomically replace it."""
         if self._path is None:
-            previous = _copy_entries(self._entries)
-            previous_baseline = _copy_entries(self._baseline)
-            try:
-                yield self
-            except BaseException:
-                self._entries = previous
-                self._baseline = previous_baseline
-                raise
+            yield self
             return
 
         file_path = self._path
-        rollback_baseline = _copy_entries(self._baseline)
-        latest: dict[str, KeyEntry] | None = None
-        try:
-            with _locked_keystore(file_path):
-                latest = _read_entries(file_path)
-                # Preserve any pending local delta, but apply it field-by-field to the latest file.
-                try:
-                    before_mutation = _merge_local_changes(latest, self._baseline, self._entries)
-                except BaseException:
-                    self._entries = _copy_entries(latest)
-                    self._baseline = _copy_entries(latest)
-                    raise
-                self._entries = before_mutation
-                self._baseline = _copy_entries(latest)
-                try:
-                    yield self
-                    atomic_write_private(file_path, _render_entries(self._entries))
-                except BaseException:
-                    # The atomic writer leaves `latest` intact. Match memory to that same authority,
-                    # dropping both this mutation and any older unpersisted local delta.
-                    self._entries = _copy_entries(latest)
-                    self._baseline = _copy_entries(latest)
-                    raise
-                self._baseline = _copy_entries(self._entries)
-                self._disk_signature = _file_signature(file_path)
-        except BaseException:
-            if latest is None:
-                # Lock/read failures happen before a newer snapshot is available; at minimum, drop
-                # all pending mutations back to the last known authoritative baseline.
-                self._entries = rollback_baseline
-                self._baseline = _copy_entries(rollback_baseline)
-            raise
-
-    def save(self, path: str | Path | None = None) -> None:
-        """Merge local deltas onto the latest file, then atomically write TOML.
-
-        `path` defaults to the file this keystore was loaded from; passing one
-        both writes there and remembers it as the new persistence target.
-        """
-        target = path if path is not None else self._path
-        if target is None:
-            raise ValueError("Keystore.save requires a path (this keystore has none).")  # i18n-exempt: internal misuse error
-        file_path = Path(target)
-        previous_path = self._path
-        previous_baseline = _copy_entries(self._baseline)
-        same_target = previous_path is not None and file_path.resolve(strict=False) == previous_path.resolve(strict=False)
-        baseline = self._baseline if same_target else {}
-        latest: dict[str, KeyEntry] | None = None
-        try:
-            with _locked_keystore(file_path):
-                latest = _read_entries(file_path)
-                merged = _merge_local_changes(latest, baseline, self._entries)
-                atomic_write_private(file_path, _render_entries(merged))
-        except BaseException:
-            if same_target and latest is not None:
-                # Roll direct `add/update/remove(); save()` failures back to what remains on disk.
-                self._entries = _copy_entries(latest)
-                self._baseline = _copy_entries(latest)
-            else:
-                self._entries = _copy_entries(previous_baseline)
-                self._baseline = _copy_entries(previous_baseline)
-            self._path = previous_path
-            raise
-        self._entries = merged
-        self._baseline = _copy_entries(merged)
-        self._path = file_path
-        self._disk_signature = _file_signature(file_path)
-
-    def persist(self) -> bool:
-        """Save back to the remembered `path`, if any; return whether it wrote.
-
-        A no-op (returning False) for an in-memory keystore, so runtime minting
-        works in tests without a backing file.
-        """
-        if self._path is None:
-            return False
-        self.save(self._path)
-        return True
+        with _locked_keystore(file_path):
+            latest = _read_entries(file_path)
+            self._entries = _copy_entries(latest)
+            try:
+                yield self
+                atomic_write_private(file_path, _render_entries(self._entries))
+            except Exception:
+                self._entries = latest
+                raise
+            self._disk_signature = _file_signature(file_path)
 
     def __len__(self) -> int:
         return len(self._entries)
@@ -434,6 +363,21 @@ class Keystore:
 def _normalize_role(role: object) -> str:
     text = str(role or _DEFAULT_ROLE)
     return text if text in _ROLES else _DEFAULT_ROLE
+
+
+def _normalize_purpose(purpose: object) -> str:
+    text = str(purpose or _DEFAULT_PURPOSE)
+    return text if text in _PURPOSES else _DEFAULT_PURPOSE
+
+
+def _normalize_expires_at(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        expires_at = float(value)
+    except (TypeError, ValueError):
+        return None
+    return expires_at if expires_at > 0 else None
 
 
 def _toml_string(value: str) -> str:

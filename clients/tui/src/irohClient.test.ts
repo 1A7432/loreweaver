@@ -96,6 +96,23 @@ function createMockIroh() {
 const settle = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms))
 
 describe("IrohClient reconnect", () => {
+  test("chat binding key request carries its purpose and expiry", async () => {
+    const { loadIroh, sent } = createMockIroh()
+    const client = new IrohClient({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20 })
+
+    await client.connect("endpointaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    client.adminMintKey("arkham", undefined, "keeper", "chat_bind", 600)
+    await settle(0)
+
+    expect(JSON.parse(sent[0])).toEqual({
+      type: FrameType.AdminMintKey,
+      room: "arkham",
+      role: "keeper",
+      purpose: "chat_bind",
+      expires_in: 600,
+    })
+  })
+
   test("an unexpected stream end schedules a redial and re-sends the last join", async () => {
     const { loadIroh, sent, streams } = createMockIroh()
     const client = new IrohClient({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20 })

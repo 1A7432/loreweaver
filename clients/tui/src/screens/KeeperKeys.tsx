@@ -4,6 +4,7 @@ import type { KeyEvent, SelectOption } from "@opentui/core"
 import {
   FrameType,
   stripControlChars,
+  type AdminKeyPurpose,
   type AdminKeyInfo,
   type MintedKey,
   type PlayerRole,
@@ -23,7 +24,13 @@ import type { Palette, ThemeName } from "../themes"
 export interface KeeperKeysClient {
   onMessage(cb: (frame: ServerFrame) => void): () => void
   adminListKeys(): void
-  adminMintKey(room: string, name?: string, role?: PlayerRole): void
+  adminMintKey(
+    room: string,
+    name?: string,
+    role?: PlayerRole,
+    purpose?: AdminKeyPurpose,
+    expiresIn?: number,
+  ): void
   adminUpdateKey(id: string, room?: string, name?: string, role?: PlayerRole): void
   adminDeleteKey(id: string): void
   adminDeleteRoom(room: string): void
@@ -47,6 +54,7 @@ type Field = "name" | "role" | "path"
 const FIELD_ORDER: Field[] = ["name", "role", "path"]
 
 const CURSOR = "⚄"
+const CHAT_BIND_TTL_SECONDS = 600
 
 function roleOptions(locale: string): SelectOption[] {
   return [
@@ -140,7 +148,13 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
     nameRef.current = ""
   }
 
+  const mintChatBind = () => {
+    setConfirming(null)
+    client.adminMintKey(welcome.room, undefined, "keeper", "chat_bind", CHAT_BIND_TTL_SECONDS)
+  }
+
   const selected = keys[selectedKey]
+  const selectedChatBinding = selected?.id.startsWith("chat:") ?? false
 
   // Destructive ops (delete invite / room access / full room) require a SECOND click to fire —
   // a single misclick can't irreversibly wipe a room's data or keys. Arming a different
@@ -156,7 +170,7 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
 
   const loadSelected = () => {
     setConfirming(null)
-    if (!selected) return
+    if (!selected || selectedChatBinding) return
     setName(selected.name)
     nameRef.current = selected.name
     setRoleIndex(selected.role === "keeper" ? 1 : 0)
@@ -164,7 +178,7 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
 
   const updateSelected = () => {
     setConfirming(null)
-    if (!selected) return
+    if (!selected || selectedChatBinding) return
     const nameValue = nameRef.current.trim()
     const role = String(ROLE_OPTIONS[roleIndex]?.value ?? "player") as PlayerRole
     client.adminUpdateKey(selected.id, welcome.room, nameValue, role)
@@ -259,12 +273,17 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
           {minted ? (
             <box flexDirection="column" height={5} marginBottom={1} border borderColor={theme.accent} paddingX={1}>
               <text fg={theme.accent}>
-                {tt(locale, "keys.minted", { room: stripControlChars(minted.room), role: minted.role })}
+                {minted.purpose === "chat_bind"
+                  ? tt(locale, "keys.chatBindMinted", { room: stripControlChars(minted.room) })
+                  : tt(locale, "keys.minted", { room: stripControlChars(minted.room), role: minted.role })}
               </text>
               <text fg={theme.success}>
-                {CURSOR} {stripControlChars(minted.key)}
+                {CURSOR} {minted.purpose === "chat_bind" ? "/bind " : ""}
+                {stripControlChars(minted.key)}
               </text>
-              <text fg={theme.fumble}>{tt(locale, "keys.copyOnce")}</text>
+              <text fg={theme.fumble}>
+                {tt(locale, minted.purpose === "chat_bind" ? "keys.chatBindCopyOnce" : "keys.copyOnce")}
+              </text>
             </box>
           ) : null}
 
@@ -362,16 +381,23 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
             <box marginTop={1} onMouseDown={mint} backgroundColor={theme.accent} paddingX={1}>
               <text fg={theme.bg}>{tt(locale, "keys.mint")}</text>
             </box>
+            <box onMouseDown={mintChatBind} backgroundColor={theme.accent} paddingX={1}>
+              <text fg={theme.bg}>{tt(locale, "keys.mintChatBind")}</text>
+            </box>
 
             {/* Manage the selected key */}
             <box flexDirection="row" marginTop={1}>
-              <box onMouseDown={loadSelected} backgroundColor={theme.border} paddingX={1}>
-                <text fg={theme.fg}>{tt(locale, "keys.load")}</text>
-              </box>
-              <box marginLeft={1} onMouseDown={updateSelected} backgroundColor={theme.border} paddingX={1}>
-                <text fg={theme.fg}>{tt(locale, "keys.save")}</text>
-              </box>
-              <box marginLeft={1} onMouseDown={() => armOrRun("key", deleteSelected)} backgroundColor={theme.fumble} paddingX={1}>
+              {!selectedChatBinding ? (
+                <>
+                  <box onMouseDown={loadSelected} backgroundColor={theme.border} paddingX={1}>
+                    <text fg={theme.fg}>{tt(locale, "keys.load")}</text>
+                  </box>
+                  <box marginLeft={1} onMouseDown={updateSelected} backgroundColor={theme.border} paddingX={1}>
+                    <text fg={theme.fg}>{tt(locale, "keys.save")}</text>
+                  </box>
+                </>
+              ) : null}
+              <box marginLeft={selectedChatBinding ? 0 : 1} onMouseDown={() => armOrRun("key", deleteSelected)} backgroundColor={theme.fumble} paddingX={1}>
                 <text fg={theme.bg}>{tt(locale, "keys.deleteKey")}{confirming === "key" ? tt(locale, "keys.confirm") : ""}</text>
               </box>
             </box>

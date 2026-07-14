@@ -5,7 +5,14 @@ from gateway.demo import is_demo_setup_request, is_guided_demo_request
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM
-from net.session import guided_demo_available, is_guided_demo_action, uses_demo_llm, welcome_frame
+from net.keystore import Keystore
+from net.session import (
+    guided_demo_available,
+    is_guided_demo_action,
+    resolve_session_fields,
+    uses_demo_llm,
+    welcome_frame,
+)
 
 _FIELDS = {
     "id": "tui:demo",
@@ -14,6 +21,13 @@ _FIELDS = {
     "room": "demo",
     "locale": "en",
 }
+
+
+def test_chat_bind_token_cannot_join_the_tui_session():
+    keystore = Keystore()
+    token = keystore.add(room="demo", role="keeper", purpose="chat_bind")
+
+    assert resolve_session_fields(keystore, token, "en") is None
 
 
 def test_welcome_advertises_guided_demo_as_an_additive_feature():

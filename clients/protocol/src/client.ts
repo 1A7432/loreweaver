@@ -6,6 +6,7 @@ import {
   type AdminForgeKind,
   type AdminGenerateFrame,
   type AdminImportRoomFrame,
+  type AdminKeyPurpose,
   type AdminListModelsFrame,
   type AdminMintKeyFrame,
   type AdminSetImagegenFrame,
@@ -330,11 +331,19 @@ export class WsClient {
     this.send({ type: FrameType.AdminListKeys })
   }
 
-  adminMintKey(room?: string, name?: string, role?: PlayerRole): void {
+  adminMintKey(
+    room?: string,
+    name?: string,
+    role?: PlayerRole,
+    purpose?: AdminKeyPurpose,
+    expiresIn?: number,
+  ): void {
     const frame: AdminMintKeyFrame = { type: FrameType.AdminMintKey }
     if (room !== undefined) frame.room = room
     if (name) frame.name = name
     if (role) frame.role = role
+    if (purpose) frame.purpose = purpose
+    if (expiresIn !== undefined) frame.expires_in = expiresIn
     this.send(frame)
   }
 

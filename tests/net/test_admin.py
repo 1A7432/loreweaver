@@ -9,6 +9,7 @@ frames are exercised end to end. The LLM is a `MutableLLM` wrapping an offline
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -24,7 +25,15 @@ import core.skills as skills_module
 import net.keystore as keystore_module
 import net.room_backup as room_backup_module
 from agent.services import build_services
+from gateway.hub import RoomHub
 from gateway.ops import get_enabled_skills, set_enabled_skills
+from gateway.rooms import (
+    get_keeper_binding,
+    resolve_session_key,
+    session_key_for_room,
+    set_keeper_binding,
+)
+from gateway.session import SessionSource
 from infra.config import LLMSettings, Settings
 from infra.embeddings import FakeEmbeddings
 from infra.i18n import get_i18n
@@ -32,7 +41,7 @@ from infra.imagegen import IMAGEGEN_PRESETS
 from infra.llm import FakeLLM, assistant_text
 from infra.media_store import ALLOWED_MEDIA_MIMES, MediaError, MediaStore
 from infra.providers import PRESETS, MutableLLM
-from net.admin import handle_admin_frame
+from net.admin import AdminService
 from net.keystore import Keystore
 from net.room_backup import (
     chat_key_for_room,
@@ -118,6 +127,45 @@ def _services(data_dir: str = "./data"):
 async def _send(ws, frame: dict) -> dict:
     await ws.send(json.dumps(frame))
     return await _recv(ws)
+
+
+async def test_admin_service_mints_room_scoped_single_use_chat_bind_token():
+    services = _services()
+    keystore = Keystore()
+    admin = AdminService(services, keystore)
+
+    reply = await admin.dispatch(
+        "keeper",
+        "arkham",
+        {"type": "admin_mint_key", "purpose": "chat_bind", "expires_in": 60},
+        get_i18n("en"),
+    )
+
+    minted = reply["minted"]
+    assert minted["room"] == "arkham"
+    assert minted["role"] == "keeper"
+    assert minted["purpose"] == "chat_bind"
+    assert minted["expires_at"] is not None
+    assert keystore.get(minted["key"]) is None
+    assert keystore.get(minted["key"], purpose="chat_bind") is not None
+
+    await set_keeper_binding(services.store, "discord", "keeper-7", "arkham")
+    listed = await admin.dispatch(
+        "keeper",
+        "arkham",
+        {"type": "admin_list_keys"},
+        get_i18n("en"),
+    )
+    binding = next(item for item in listed["keys"] if item["id"].startswith("chat:"))
+    assert binding["key_masked"] == "discord:keeper-7"
+
+    await admin.dispatch(
+        "keeper",
+        "arkham",
+        {"type": "admin_delete_key", "id": binding["id"]},
+        get_i18n("en"),
+    )
+    assert await get_keeper_binding(services.store, "discord", "keeper-7") is None
 
 
 async def test_keeper_can_get_and_set_config_list_and_mint_keys():
@@ -228,10 +276,9 @@ async def test_key_mutation_rechecks_room_after_external_move(tmp_path):
     with keystore.persisted_mutation():
         keystore.add(room="arkham", name="Keeper", role="keeper")
         victim = keystore.add(room="arkham", name="Player", role="player")
+    admin = AdminService(services, keystore)
 
-    listed = await handle_admin_frame(
-        services,
-        keystore,
+    listed = await admin.dispatch(
         "keeper",
         "arkham",
         {"type": "admin_list_keys"},
@@ -243,17 +290,13 @@ async def test_key_mutation_rechecks_room_after_external_move(tmp_path):
     with external.persisted_mutation():
         assert external.update(victim, room="dunwich")
 
-    updated = await handle_admin_frame(
-        services,
-        keystore,
+    updated = await admin.dispatch(
         "keeper",
         "arkham",
         {"type": "admin_update_key", "id": victim_id, "name": "Hijacked"},
         get_i18n("en"),
     )
-    deleted = await handle_admin_frame(
-        services,
-        keystore,
+    deleted = await admin.dispatch(
         "keeper",
         "arkham",
         {"type": "admin_delete_key", "id": victim_id},
@@ -308,13 +351,8 @@ async def test_player_role_connection_is_refused_every_admin_action():
         await server.close()
 
 
-async def test_admin_set_model_rolls_back_and_persists_nothing_when_the_provider_fails_to_build():
-    """F2: like `.model set`, `admin_set_model` reconfigures the live LLM BEFORE
-    persisting. A provider whose build fails leaves the old config active, persists
-    nothing, and returns a localized `set_failed` error instead of crashing."""
-    from infra.i18n import get_i18n
-    from net.admin import handle_admin_frame
-
+async def test_admin_set_model_leaves_state_unchanged_when_provider_build_fails():
+    """A failed candidate build happens before live or persisted state changes."""
     def _raising_builder(settings):
         if (settings.llm.provider or "").lower() == "anthropic":
             raise ValueError("anthropic SDK missing")
@@ -324,9 +362,7 @@ async def test_admin_set_model_rolls_back_and_persists_nothing_when_the_provider
     llm = MutableLLM(settings, builder=_raising_builder)
     services = build_services(settings, llm=llm, embeddings=FakeEmbeddings(64))
 
-    reply = await handle_admin_frame(
-        services,
-        Keystore(),
+    reply = await AdminService(services, Keystore()).dispatch(
         "keeper",
         "",  # caller_room — irrelevant for the non-room-scoped set_model op
         {"type": "admin_set_model", "provider": "anthropic"},
@@ -337,17 +373,87 @@ async def test_admin_set_model_rolls_back_and_persists_nothing_when_the_provider
     assert reply["code"] == "set_failed"
     assert services.settings.llm.provider == "openai"  # unchanged
     assert await services.runtime_config.get() == {}  # not persisted
-    assert isinstance(services.llm.inner, FakeLLM)  # live LLM rolled back
+    assert isinstance(services.llm.inner, FakeLLM)
+
+
+async def test_admin_set_model_rechecks_authorization_after_waiting_for_lock():
+    services = _services()
+    authorized = True
+    await services.config_lock.acquire()
+    task = asyncio.create_task(
+        AdminService(services, Keystore()).dispatch(
+            "keeper",
+            "arkham",
+            {"type": "admin_set_model", "provider": "deepseek"},
+            get_i18n("en"),
+            reauthorize=lambda: authorized,
+        )
+    )
+    await asyncio.sleep(0)
+    authorized = False
+    services.config_lock.release()
+
+    reply = await task
+
+    assert reply["type"] == "admin_error"
+    assert reply["code"] == "forbidden"
+    assert services.settings.llm.provider == "openai"
+    assert await services.runtime_config.get() == {}
+
+
+async def test_revoking_chat_binding_evicts_live_direct_member() -> None:
+    services = _services()
+    hub = RoomHub()
+    admin = AdminService(services, Keystore(), hub=hub)
+    source = SessionSource(
+        platform="discord",
+        chat_type="dm",
+        chat_id="dm-7",
+        user_id="keeper-7",
+    )
+
+    class DirectMember:
+        id = "discord:dm-7"
+        user_key = "discord:keeper-7"
+        transport = "discord"
+        name = "Keeper"
+
+        def __init__(self) -> None:
+            self.source = source
+
+        async def deliver(self, _event) -> None:
+            return None
+
+    await set_keeper_binding(services.store, "discord", "keeper-7", "arkham")
+    member = DirectMember()
+    session_key = session_key_for_room("arkham")
+    await hub.subscribe(session_key, member)
+    listed = await admin.dispatch(
+        "keeper", "arkham", {"type": "admin_list_keys"}, get_i18n("en")
+    )
+    binding_id = next(
+        item["id"] for item in listed["keys"] if item["id"].startswith("chat:")
+    )
+
+    await admin.dispatch(
+        "keeper",
+        "arkham",
+        {"type": "admin_delete_key", "id": binding_id},
+        get_i18n("en"),
+    )
+
+    assert await get_keeper_binding(services.store, "discord", "keeper-7") is None
+    assert member not in hub.members(session_key)
+    assert await resolve_session_key(services.store, source) == source.chat_key()
 
 
 async def test_admin_set_model_replaces_provider_scoped_credentials():
     import time
 
-    from infra.i18n import get_i18n
     from infra.oauth_flows import SubscriptionToken
-    from net.admin import handle_admin_frame
 
     services = _services()
+    admin = AdminService(services, Keystore())
     previous = {
         "provider": "deepseek",
         "chat_model": "deepseek-chat",
@@ -361,9 +467,7 @@ async def test_admin_set_model_replaces_provider_scoped_credentials():
         SubscriptionToken("access-secret", "refresh-secret", time.time() + 3600),
     )
 
-    switched = await handle_admin_frame(
-        services,
-        Keystore(),
+    switched = await admin.dispatch(
         "keeper",
         "",
         {"type": "admin_set_model", "provider": "supergrok"},
@@ -386,9 +490,7 @@ async def test_admin_set_model_replaces_provider_scoped_credentials():
         api_key="sk-chatgpt-proxy",
         base_url="https://chatgpt-proxy.example/v1",
     )
-    proxy = await handle_admin_frame(
-        services,
-        Keystore(),
+    proxy = await admin.dispatch(
         "keeper",
         "",
         {"type": "admin_set_model", "provider": "chatgpt", "chat_model": "proxy-model"},
@@ -1020,9 +1122,7 @@ async def test_delete_room_rolls_back_every_component_after_late_media_failure(t
         raise OSError("injected post-delete failure")
 
     with patch.object(MediaStore, "delete_room", new=_delete_then_fail):
-        failed = await handle_admin_frame(
-            services,
-            keystore,
+        failed = await AdminService(services, keystore).dispatch(
             "keeper",
             "arkham",
             {"type": "admin_delete_room_data", "room": "arkham", "backup": False},
@@ -1097,9 +1197,7 @@ async def test_import_room_rolls_back_every_component_when_key_persistence_fails
         return original_writer(path, data, encoding=encoding)
 
     with patch.object(keystore_module, "atomic_write_private", new=_fail_key_write_once):
-        failed_import = await handle_admin_frame(
-            services,
-            keystore,
+        failed_import = await AdminService(services, keystore).dispatch(
             "keeper",
             room,
             {"type": "admin_import_room", "path": Path(exported["path"]).name},
@@ -1372,19 +1470,16 @@ async def test_new_model_endpoint_never_receives_or_remembers_the_old_key():
         await server.close()
 
 
-async def test_model_runtime_persistence_failure_restores_the_live_client():
+async def test_model_runtime_persistence_failure_reports_error_without_compensation():
     services = _services()
     original_inner = services.llm.inner
-    original_provider = services.settings.llm.provider
 
     with patch.object(
         services.runtime_config,
         "replace",
         new=AsyncMock(side_effect=OSError("database is read-only")),
     ):
-        result = await handle_admin_frame(
-            services,
-            Keystore(),
+        result = await AdminService(services, Keystore()).dispatch(
             "keeper",
             "arkham",
             {
@@ -1398,22 +1493,20 @@ async def test_model_runtime_persistence_failure_restores_the_live_client():
 
     assert result["type"] == "admin_error"
     assert result["code"] == "set_failed"
-    assert services.llm.inner is not None
-    assert services.settings.llm.provider == original_provider
-    assert services.llm.inner is original_inner  # exact last-good client, no fragile rebuild
+    assert services.settings.llm.provider == "deepseek"
+    assert services.settings.llm.chat_model == "deepseek-chat"
+    assert services.llm.inner is not original_inner
     assert await services.runtime_config.get() == {}
 
 
-async def test_model_credential_persistence_failure_rolls_runtime_and_live_back():
+async def test_model_credential_persistence_failure_keeps_applied_runtime():
     services = _services()
     with patch.object(
         services.llm_credentials,
         "replace_static",
         new=AsyncMock(side_effect=OSError("database is read-only")),
     ):
-        result = await handle_admin_frame(
-            services,
-            Keystore(),
+        result = await AdminService(services, Keystore()).dispatch(
             "keeper",
             "arkham",
             {
@@ -1426,8 +1519,15 @@ async def test_model_credential_persistence_failure_rolls_runtime_and_live_back(
         )
 
     assert result["type"] == "admin_error"
-    assert services.settings.llm.provider == "openai"
-    assert await services.runtime_config.get() == {}
+    assert result["code"] == "set_failed"
+    assert services.settings.llm.provider == "deepseek"
+    assert await services.runtime_config.get() == {
+        "provider": "deepseek",
+        "chat_model": "deepseek-chat",
+        "api_key": "sk-new",
+        "base_url": "",
+    }
+    assert await services.llm_credentials.get("deepseek") == {}
 
 
 async def test_admin_set_imagegen_configures_runtime_and_masks_key():
@@ -1641,7 +1741,7 @@ async def test_imagegen_build_failure_preserves_the_previous_live_state():
         await server.close()
 
 
-async def test_imagegen_runtime_persistence_failure_restores_live_state():
+async def test_imagegen_runtime_persistence_failure_reports_error_without_compensation():
     services = _services()
     original_settings = services.settings.imagegen
     original_client = services.imagegen
@@ -1651,9 +1751,7 @@ async def test_imagegen_runtime_persistence_failure_restores_live_state():
         "replace",
         new=AsyncMock(side_effect=OSError("database is read-only")),
     ):
-        result = await handle_admin_frame(
-            services,
-            Keystore(),
+        result = await AdminService(services, Keystore()).dispatch(
             "keeper",
             "arkham",
             {
@@ -1667,8 +1765,10 @@ async def test_imagegen_runtime_persistence_failure_restores_live_state():
 
     assert result["type"] == "admin_error"
     assert result["code"] == "set_failed"
-    assert services.settings.imagegen is original_settings
-    assert services.imagegen is original_client
+    assert services.settings.imagegen is not original_settings
+    assert services.settings.imagegen.provider == "openai"
+    assert services.settings.imagegen.model == "gpt-image-1"
+    assert services.imagegen is not original_client
     assert await services.imagegen_runtime_config.get() == {}
 
 

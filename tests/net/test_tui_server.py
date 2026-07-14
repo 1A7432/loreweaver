@@ -239,7 +239,7 @@ async def test_admin_frame_exception_becomes_error_frame_not_a_dropped_socket(mo
     async def _boom(*args, **kwargs):
         raise RuntimeError("admin handler blew up")
 
-    monkeypatch.setattr("net.session.handle_admin_frame", _boom)
+    monkeypatch.setattr(server.admin, "dispatch", _boom)
 
     url = await _start(server)
     try:
@@ -280,7 +280,7 @@ async def test_model_switch_refreshes_other_connected_keepers(monkeypatch):
     async def _config(*args, **kwargs):
         return dict(config)
 
-    monkeypatch.setattr("net.session.handle_admin_frame", _config)
+    monkeypatch.setattr(server.admin, "dispatch", _config)
     url = await _start(server)
     try:
         ws_a, *_ = await _connect_and_join(url, key_a)
@@ -403,7 +403,7 @@ async def test_guided_demo_is_rejected_without_mutating_an_existing_room(tmp_pat
         await server.close()
 
 
-async def test_dot_r_command_broadcasts_echo_reply_and_state():
+async def test_dot_r_command_broadcasts_echo_dice_reply_and_state():
     services = _services()
     keystore = Keystore()
     key = keystore.add(room="solo", name="Nora")
@@ -418,6 +418,11 @@ async def test_dot_r_command_broadcasts_echo_reply_and_state():
         assert echo["type"] == "narrative"
         assert echo["speaker"] == "player"
         assert echo["text"] == ".r 1d1+1"
+
+        dice = await _recv(ws)
+        assert dice["type"] == "dice"
+        assert dice["expr"] == "1d1+1"
+        assert dice["total"] == 2
 
         reply = await _recv(ws)
         assert reply["type"] == "narrative"
@@ -892,11 +897,14 @@ async def test_two_clients_same_room_both_receive_the_broadcast_turn():
         seed_dice(99)
         await ws_a.send(json.dumps({"type": "input", "text": ".r 1d1+1"}))
 
+        echo = await _recv(ws_a)
+        assert echo["type"] == "narrative" and echo["speaker"] == "player" and echo["name"] == "Alice"
+
         for ws in (ws_a, ws_b):
-            echo = await _recv(ws)
+            dice = await _recv(ws)
             reply = await _recv(ws)
             state = await _recv(ws)
-            assert echo["type"] == "narrative" and echo["speaker"] == "player" and echo["name"] == "Alice"
+            assert dice["type"] == "dice" and dice["total"] == 2
             assert reply["type"] == "narrative"
             assert _total(reply["text"]) == 2
             assert state["type"] == "state"

@@ -54,6 +54,7 @@ export const FrameType = {
 export type FrameType = (typeof FrameType)[keyof typeof FrameType]
 
 export type PlayerRole = "player" | "keeper"
+export type AdminKeyPurpose = "join" | "chat_bind"
 export type NarrativeSpeaker = "kp" | "player" | "system" | "npc"
 export type NarrativeFormat = "markdown" | "plain"
 export type ErrorCode =
@@ -403,6 +404,8 @@ export interface AdminMintKeyFrame {
   room?: string
   name?: string
   role?: PlayerRole
+  purpose?: AdminKeyPurpose
+  expires_in?: number
 }
 
 export interface AdminUpdateKeyFrame {
@@ -479,6 +482,8 @@ export interface AdminKeyInfo {
   room: string
   name: string
   role: PlayerRole
+  purpose: AdminKeyPurpose
+  expires_at: number | null
 }
 
 // The freshly minted key is returned ONCE, in cleartext, so the keeper can copy
@@ -488,6 +493,8 @@ export interface MintedKey {
   room: string
   name: string
   role: PlayerRole
+  purpose: AdminKeyPurpose
+  expires_at: number | null
 }
 
 export interface AdminKeysFrame {

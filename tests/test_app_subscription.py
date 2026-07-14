@@ -13,7 +13,7 @@ from infra.i18n import get_i18n
 from infra.llm import OpenAILLM
 from infra.oauth_flows import SubscriptionToken
 from infra.providers import MutableLLM
-from net.admin import handle_admin_frame
+from net.admin import AdminService
 from net.keystore import Keystore
 
 
@@ -52,9 +52,7 @@ async def test_app_model_screen_switches_demo_to_api_provider_and_restores_on_re
     assert services.llm.using_fallback is True
     assert _uses_demo_llm(services)
 
-    response = await handle_admin_frame(
-        services,
-        Keystore(),
+    response = await AdminService(services, Keystore()).dispatch(
         "keeper",
         "arkham",
         {

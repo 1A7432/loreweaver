@@ -45,7 +45,7 @@ from infra.media_store import (
     is_audio_mime,
     is_image_mime,
 )
-from net.admin import handle_admin_frame, is_admin_frame
+from net.admin import AdminService, is_admin_frame
 from net.keystore import Keystore, member_id_for_key
 from net.room_backup import room_rows, room_vector_points
 
@@ -190,6 +190,8 @@ def render_frame(event: Event) -> dict[str, Any] | None:
         return {"type": "dice", **event.data}
     if event.kind == "state":
         return dict(event.data)
+    if event.kind == "panel":
+        return dict(event.data)
     if event.kind == "presence":
         return {"type": "presence", **event.data}
     if event.kind == "system":
@@ -250,7 +252,12 @@ class SessionCore:
         # Built BEFORE the router + toolset so both receive it (live `.module` import progress +
         # hub-driven KP tools like companion_act publish through it).
         self.hub = hub if hub is not None else RoomHub()
-        self.command_router = command_router or CommandRouter(services, hub=self.hub)
+        self.admin = AdminService(services, keystore, fs=self.fs, hub=self.hub)
+        self.command_router = command_router or CommandRouter(
+            services,
+            keystore=keystore,
+            hub=self.hub,
+        )
         self.toolset = toolset or build_kp_toolset(services, hub=self.hub, command_router=self.command_router)
         # From `services.settings.censor` unless injected (tests). Nothing configured = explicit no-op.
         self.censor = censor if censor is not None else censor_from_settings(services.settings.censor)
@@ -266,10 +273,6 @@ class SessionCore:
             allowed_mimes=ALLOWED_MEDIA_MIMES,
         )
         self._pending_media: dict[str, PendingUpload] = {}
-        # Admin mutations are serialized globally, and each request also shares the
-        # room turn lock below. This prevents config lost-updates across keepers and
-        # export/import/delete racing a live turn that could recreate wiped state.
-        self._admin_lock = services.config_lock
         # Recent AI-KP turns, for introspection (tests/admin asserting a keeper tool ran) — never wired.
         self.turns: deque[KPTurnResult] = deque(maxlen=50)
         self.join_timeout = tui_settings.join_timeout if join_timeout is None else join_timeout
@@ -356,30 +359,37 @@ class SessionCore:
                     await self._handle_avatar_set(member, frame)
                 return
             if is_admin_frame(kind):
-                # Keeper-gated admin surface. The gate is the connection's keystore role;
-                # `handle_admin_frame` refuses non-keepers and scopes destructive ops to its OWN room.
-                # Lock order is room -> deployment config everywhere. A chat `.model`
-                # command already holds this same room lock before taking config_lock;
-                # reversing the order here would deadlock a simultaneous panel save.
-                async with self.hub.turn_lock(member.session_key):
-                    async with self._admin_lock:
-                        # The request may have waited behind a room turn and then a deployment-wide
-                        # config mutation. Re-authorize after the final lock is held so an
-                        # operations-side revoke/downgrade during that wait cannot use cached power.
+                if kind in {
+                    "admin_delete_room",
+                    "admin_export_room",
+                    "admin_import_room",
+                    "admin_delete_room_data",
+                    "admin_generate",
+                }:
+                    async with self.hub.turn_lock(member.session_key):
                         if not self._refresh_member_authorization(member):
                             await member.send_frame(error_frame("forbidden", i18n))
                             return
                         if kind in {"admin_import_room", "admin_delete_room_data"}:
                             self._drop_pending_room(member.session_key)
-                        reply = await handle_admin_frame(
-                            self.services,
-                            self.keystore,
+                        reply = await self.admin.dispatch(
                             member.role,
                             member.room,
                             frame,
                             i18n,
-                            fs=self.fs,
+                            reauthorize=lambda: self._refresh_member_authorization(member),
                         )
+                else:
+                    if not self._refresh_member_authorization(member):
+                        await member.send_frame(error_frame("forbidden", i18n))
+                        return
+                    reply = await self.admin.dispatch(
+                        member.role,
+                        member.room,
+                        frame,
+                        i18n,
+                        reauthorize=lambda: self._refresh_member_authorization(member),
+                    )
                 await member.send_frame(reply)
                 if kind == "admin_set_model" and reply.get("type") == "admin_config":
                     await self._broadcast_admin_config(reply, exclude=member)
@@ -417,13 +427,13 @@ class SessionCore:
                 if peer is exclude or marker in seen:
                     continue
                 seen.add(marker)
+                send_frame = getattr(peer, "send_frame", None)
+                if send_frame is None:
+                    continue
                 # A long-lived connection's cached role can be stale after an operations-side
                 # downgrade/revocation. Re-authorize before sending deployment details such as
                 # provider/base URL and saved-provider names.
                 if not self._refresh_member_authorization(peer) or getattr(peer, "role", "") != "keeper":
-                    continue
-                send_frame = getattr(peer, "send_frame", None)
-                if send_frame is None:
                     continue
                 try:
                     await send_frame(frame)
@@ -695,5 +705,8 @@ class SessionCore:
             platform="tui",
             locale=member.locale,
             fs=self.fs,
-            extra={"role": member.role},
+            extra={
+                "role": member.role,
+                "reauthorize": lambda: self._refresh_member_authorization(member),
+            },
         )

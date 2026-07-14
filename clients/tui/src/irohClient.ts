@@ -2,6 +2,7 @@ import {
   FrameType,
   isPingFrame,
   isServerFrame,
+  type AdminKeyPurpose,
   type AdminDeleteRoomDataFrame,
   type AdminEnableSkillFrame,
   type AdminExportRoomFrame,
@@ -383,11 +384,19 @@ export class IrohClient implements AppClient {
     this.sendFrame({ type: FrameType.AdminListKeys })
   }
 
-  adminMintKey(room?: string, name?: string, role?: PlayerRole): void {
+  adminMintKey(
+    room?: string,
+    name?: string,
+    role?: PlayerRole,
+    purpose?: AdminKeyPurpose,
+    expiresIn?: number,
+  ): void {
     const frame: AdminMintKeyFrame = { type: FrameType.AdminMintKey }
     if (room !== undefined) frame.room = room
     if (name) frame.name = name
     if (role) frame.role = role
+    if (purpose) frame.purpose = purpose
+    if (expiresIn !== undefined) frame.expires_in = expiresIn
     this.sendFrame(frame)
   }
 

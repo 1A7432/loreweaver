@@ -244,6 +244,7 @@ describe("WsClient", () => {
     client.adminSetModel("openai")
     client.adminListKeys()
     client.adminMintKey("arkham", "Ada", "keeper")
+    client.adminMintKey("arkham", undefined, "keeper", "chat_bind", 600)
     client.adminUpdateKey("kid-1", "dunwich", "Beth", "player")
     client.adminDeleteKey("kid-1")
     client.adminDeleteRoom("dunwich")
@@ -257,6 +258,13 @@ describe("WsClient", () => {
       { type: FrameType.AdminSetModel, provider: "openai" },
       { type: FrameType.AdminListKeys },
       { type: FrameType.AdminMintKey, room: "arkham", name: "Ada", role: "keeper" },
+      {
+        type: FrameType.AdminMintKey,
+        room: "arkham",
+        role: "keeper",
+        purpose: "chat_bind",
+        expires_in: 600,
+      },
       { type: FrameType.AdminUpdateKey, id: "kid-1", room: "dunwich", name: "Beth", role: "player" },
       { type: FrameType.AdminDeleteKey, id: "kid-1" },
       { type: FrameType.AdminDeleteRoom, room: "dunwich" },

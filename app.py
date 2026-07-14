@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib.util
 import os
+import shutil
 import signal
 import sys
 from pathlib import Path
@@ -19,7 +21,7 @@ from core import skills as core_skills
 from core.dice_engine import seed_dice
 from gateway.commands import CommandRouter
 from gateway.hub import RoomHub
-from gateway.registry import platform_registry
+from gateway.registry import AdapterContext, platform_registry
 from gateway.runner import GatewayRunner
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings, LocalEmbeddings
@@ -92,8 +94,6 @@ def build_tui_server(settings: Settings, keystore: Keystore, *, host: str, port:
         keystore,
         host=host,
         port=port,
-        command_router=CommandRouter(services),
-        toolset=build_kp_toolset(services),
     )
 
 
@@ -197,8 +197,8 @@ def _tui_key_add(i18n: I18n, args: argparse.Namespace) -> int:
         return 2
 
     keystore = Keystore.load(args.keys)
-    key = keystore.add(room=args.room, name=args.name or "", role=args.role)
-    keystore.save(args.keys)
+    with keystore.persisted_mutation():
+        key = keystore.add(room=args.room, name=args.name or "", role=args.role)
     print(i18n.t("tui.key.added", key=key, room=args.room, name=args.name or "-", role=args.role))
     return 0
 
@@ -230,6 +230,40 @@ def _run_doctor(settings: Settings, i18n: I18n) -> int:
     )
     print(i18n.t("tui.doctor.data_dir", path=settings.data_dir), file=sys.stderr)
 
+    qq_configured = bool(settings.qq.app_id or settings.qq.secret)
+    qq_ready = bool(settings.qq.app_id and settings.qq.secret)
+    qq_status = (
+        i18n.t(
+            "tui.doctor.qq_ready",
+            markdown=bool(settings.qq.markdown_template_id),
+            keyboard=bool(
+                settings.qq.markdown_template_id
+                and (settings.qq.keyboard_id or settings.qq.keyboard_enabled)
+            ),
+        )
+        if qq_ready
+        else i18n.t("tui.doctor.partial")
+        if qq_configured
+        else i18n.t("tui.doctor.disabled")
+    )
+    print(i18n.t("tui.doctor.platform", platform="QQ", status=qq_status), file=sys.stderr)
+
+    discord_configured = bool(settings.discord.token)
+    discord_sdk = importlib.util.find_spec("discord") is not None
+    voice_ready = all(importlib.util.find_spec(name) is not None for name in ("nacl", "davey"))
+    ffmpeg_ready = shutil.which(settings.discord.ffmpeg) is not None
+    discord_status = (
+        i18n.t(
+            "tui.doctor.discord_ready",
+            sdk=discord_sdk,
+            voice=voice_ready,
+            ffmpeg=ffmpeg_ready,
+        )
+        if discord_configured
+        else i18n.t("tui.doctor.disabled")
+    )
+    print(i18n.t("tui.doctor.platform", platform="Discord", status=discord_status), file=sys.stderr)
+
     missing: list[str] = []
     for locale in ("en", "zh"):
         if locale not in available_locales:
@@ -239,6 +273,10 @@ def _run_doctor(settings: Settings, i18n: I18n) -> int:
             missing.append(i18n.t("tui.doctor.missing_rulepack", rulepack=rulepack))
     if not skill_ids:
         missing.append(i18n.t("tui.doctor.no_skills"))
+    if qq_configured and not qq_ready:
+        missing.append(i18n.t("tui.doctor.qq_incomplete"))
+    if discord_configured and not discord_sdk:
+        missing.append(i18n.t("tui.doctor.discord_sdk_missing"))
 
     if missing:
         print(i18n.t("tui.doctor.fail", reason="; ".join(missing)), file=sys.stderr)
@@ -251,11 +289,11 @@ def _bootstrap_keystore(keystore: Keystore, i18n: I18n, keys_path: str) -> None:
     """First run: if the keystore has no keys, mint ONE keeper key so the operator gets admin
     access with zero CLI, and surface it (a stderr banner + a `keeper-key.txt` sidecar next to
     the keystore). Idempotent — a no-op once any key exists. Room via TRPG_BOOTSTRAP_ROOM."""
-    if not keystore.is_empty():
-        return
     room = os.environ.get("TRPG_BOOTSTRAP_ROOM", "table")
-    key = keystore.add(room=room, name="keeper", role="keeper")
-    keystore.save(keys_path)
+    with keystore.persisted_mutation():
+        if not keystore.is_empty():
+            return
+        key = keystore.add(room=room, name="keeper", role="keeper")
     sidecar = Path(keys_path).with_name("keeper-key.txt")
     try:
         atomic_write_private(sidecar, f"room={room}\nrole=keeper\nkey={key}\n")  # i18n-exempt: data file
@@ -365,13 +403,6 @@ def _announce_iroh_ticket(i18n: I18n, ticket: str, keys_path: str) -> None:
 
 # --- combined `--serve --platforms` mode (M7) -----------------------------
 
-# Per-platform config keys -> the `TRPG_*` env vars they read (see `.env.example`).
-_PLATFORM_ENV = {
-    "qq": {"app_id": "TRPG_QQ__APP_ID", "secret": "TRPG_QQ__SECRET", "token": "TRPG_QQ__TOKEN"},
-    "telegram": {"token": "TRPG_TELEGRAM__TOKEN"},
-    "discord": {"token": "TRPG_DISCORD__TOKEN", "app_id": "TRPG_DISCORD__APP_ID"},
-    "feishu": {"app_id": "TRPG_FEISHU__APP_ID", "app_secret": "TRPG_FEISHU__APP_SECRET"},
-}
 # The config keys that MUST be present or the platform is skipped.
 _PLATFORM_REQUIRED = {
     "qq": ("app_id", "secret"),
@@ -389,7 +420,7 @@ def _run_serve_combined(settings: Settings, i18n: I18n, args: argparse.Namespace
     _bootstrap_keystore(keystore, i18n, args.keys)
     hub = RoomHub()
     command_router = CommandRouter(services, keystore=keystore, hub=hub)
-    toolset = build_kp_toolset(services)
+    toolset = build_kp_toolset(services, hub=hub, command_router=command_router)
 
     server = TuiServer(
         services,
@@ -400,7 +431,7 @@ def _run_serve_combined(settings: Settings, i18n: I18n, args: argparse.Namespace
         toolset=toolset,
         hub=hub,
     )
-    adapters = _build_platform_adapters(args.platforms, i18n)
+    adapters = _build_platform_adapters(args.platforms, i18n, services, command_router)
     runner = GatewayRunner(
         services,
         adapters,
@@ -415,23 +446,28 @@ def _run_serve_combined(settings: Settings, i18n: I18n, args: argparse.Namespace
         i18n.t("cli.combined_listening", host=args.host, port=args.port, platforms=args.platforms),
         file=sys.stderr,
     )
+    started = False
     try:
-        asyncio.run(_serve_combined(server, runner))
+        started = asyncio.run(_serve_combined(server, runner, i18n, args.keys))
     except KeyboardInterrupt:
-        pass
+        started = True
     finally:
         services.store.close()
-    return 0
+    return 0 if started else 1
 
 
-async def _serve_combined(server: TuiServer, runner: GatewayRunner) -> None:
-    """Connect the chat adapters, then serve the TUI until stopped."""
+async def _serve_combined(
+    server: TuiServer,
+    runner: GatewayRunner,
+    i18n: I18n,
+    keys_path: str,
+) -> bool:
+    """Run chat adapters beside the same Iroh server used by the primary TUI."""
     await runner.start()
     try:
-        await server.serve()
+        return await _serve_iroh(server, i18n, keys_path)
     finally:
         await runner.stop()
-        await server.close()
 
 
 def _serve_services(settings: Settings, *, llm=None, embeddings=None):
@@ -449,7 +485,7 @@ def _uses_demo_llm(services) -> bool:
     return isinstance(services.llm, FakeLLM)
 
 
-def _build_platform_adapters(platforms: str, i18n: I18n) -> list:
+def _build_platform_adapters(platforms: str, i18n: I18n, services, command_router: CommandRouter) -> list:
     """Instantiate the requested chat adapters; skip any with missing creds."""
     _register_platform_adapters()
     adapters = []
@@ -458,11 +494,15 @@ def _build_platform_adapters(platforms: str, i18n: I18n) -> list:
         if entry is None:
             print(i18n.t("cli.platform_unknown", platform=name), file=sys.stderr)
             continue
-        config = _platform_config(name)
+        config = _platform_config(name, services.settings)
         if config is None:
             print(i18n.t("cli.platform_skip_no_creds", platform=name), file=sys.stderr)
             continue
-        adapter = platform_registry.create_adapter(name, config)
+        adapter = platform_registry.create_adapter(
+            name,
+            config,
+            AdapterContext(services=services, command_router=command_router),
+        )
         if adapter is None:
             print(i18n.t("cli.platform_skip_no_creds", platform=name), file=sys.stderr)
             continue
@@ -479,12 +519,11 @@ def _split_platforms(platforms: str) -> list[str]:
     return seen
 
 
-def _platform_config(name: str) -> dict[str, str] | None:
-    env_map = _PLATFORM_ENV.get(name)
-    if env_map is None:
+def _platform_config(name: str, settings) -> object | None:
+    config = getattr(settings, name, None)
+    if config is None:
         return None
-    config = {key: value for key, env in env_map.items() if (value := os.environ.get(env, ""))}
-    if any(key not in config for key in _PLATFORM_REQUIRED.get(name, ())):
+    if any(not getattr(config, key, "") for key in _PLATFORM_REQUIRED.get(name, ())):
         return None
     return config
 
