@@ -81,11 +81,10 @@ All settings use the `TRPG_` env prefix with `__` for nesting (see
 | `TRPG_CENSOR__WORDLIST_PATH` | Content-moderation wordlist: a JSON file `{"word": level, ...}` (level `1`-`5`, see `gateway.ops.CensorLevel`). See [Content moderation](#content-moderation) | *(empty = moderation OFF)* |
 | `TRPG_CENSOR__WORDLIST` | Content-moderation wordlist, inline: `word[:level],word2[:level2],...` — an alternative to a file, handy for one env var. Combines with `WORDLIST_PATH` if both are set | *(empty = moderation OFF)* |
 
-The chat-platform adapters (Discord/Telegram/QQ/Feishu) are **in-tree but unmaintained and
-untested against a live platform** — see the [roadmap](roadmap.md). Their tokens
-(`TRPG_DISCORD__TOKEN`, `TRPG_TELEGRAM__TOKEN`, `TRPG_QQ__APP_ID` / `TRPG_QQ__SECRET`, `TRPG_FEISHU__APP_ID`
-/ `TRPG_FEISHU__APP_SECRET`) still exist, and `--serve --platforms discord` runs one in combined
-mode, but treat that as experimental.
+Discord and official QQ have native, mock-tested adapters and can share a room with the TUI, but
+remain **Experimental** until tested with real bots. See [Discord and QQ bots](chat-platforms.md)
+for dependencies, OAuth/platform permissions, capability fallbacks, and the required smoke test.
+Telegram and Feishu remain basic text adapters.
 
 ChatGPT subscriptions are not API keys. For the direct subscription path, start
 the server, run `.model login chatgpt` from a private/local Keeper chat, complete

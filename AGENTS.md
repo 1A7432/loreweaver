@@ -8,7 +8,7 @@ Loreweaver is a self-hosted **AI Game Master / Keeper** for tabletop RPGs: a wor
 - `agent/` — the AI-KP brain: `context` (`AgentCtx`), `tools` (`@tool` schema-gen + gating), `kp_tools*` (the Keeper tools), `forge` (self-extension generators: skill/rulepack/module from a description), `prompt_builder`, `loop` (function-calling loop), `services` (the wiring bundle), `npc`/`npc_actor`/`companion_actor` (knowledge-scoped actors).
 - `gateway/` — platform-independent: `session`, `events`, `base_adapter`, `registry`, `runner`, `commands` (dual-dialect + slash), `ops` (rate-limit/censor/permissions), `hub` (the cross-transport RoomHub), `turn`, `member`, `rooms`, `render_chat`, `director`.
 - `net/` — `session` (transport-agnostic SessionCore), `iroh_server` (p2p QUIC, the DEFAULT carrier), `tui_server` (WebSocket, offline-test/loopback only), `keystore`, `state`, `admin`, `room_backup`.
-- `adapters/` — `cli` (maintained); `discord`, `telegram`, `qq_official`, `feishu`, `onebot` are in-tree but unmaintained/untested against live platforms.
+- `adapters/` — `cli` (maintained); `discord` and `qq_official` are mock-tested Experimental clients pending live-platform acceptance; `telegram`, `feishu`, and `onebot` remain basic/unmaintained adapters.
 - `clients/` — TypeScript: `protocol` (shared types + `WsClient`), `tui` (OpenTUI terminal — the primary client; `IrohClient` and the one-click host live here). Both speak `docs/protocol.md`.
 
 ## Iron rules / red lines (do not break)

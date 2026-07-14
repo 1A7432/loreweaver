@@ -16,6 +16,7 @@ on:
       - agent/**
       - gateway/**
       - net/**
+      - adapters/**
       - app.py
       - scripts/package_server.py
       - loreweaver-server.spec
@@ -71,8 +72,8 @@ jobs:
 
       # Pinned build contract (scripts/package_server.py's own docstring): this exact two-step
       # sequence produces `dist/<asset>` for whatever platform the runner is.
-      - name: uv sync (package + provider extras)
-        run: uv sync --extra package --extra anthropic --extra gemini
+      - name: uv sync (package + provider + Discord extras)
+        run: uv sync --extra package --extra anthropic --extra gemini --extra discord
       - name: Build the server bundle
         run: uv run python scripts/package_server.py --skip-serve-smoke
 

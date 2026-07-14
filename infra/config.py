@@ -95,6 +95,29 @@ class ImageGenSettings(BaseModel):
     per_room_per_hour: int = 10
 
 
+class QQSettings(BaseModel):
+    app_id: str = ""
+    secret: str = ""
+    markdown_template_id: str = ""
+    keyboard_id: str = ""
+    keyboard_enabled: bool = False
+
+
+class DiscordSettings(BaseModel):
+    token: str = ""
+    guild_id: int = 0
+    ffmpeg: str = "ffmpeg"
+
+
+class TelegramSettings(BaseModel):
+    token: str = ""
+
+
+class FeishuSettings(BaseModel):
+    app_id: str = ""
+    app_secret: str = ""
+
+
 class Settings(BaseSettings):
     locale: str = "en"  # default en (see infra/i18n.py)
     data_dir: str = "./data"
@@ -105,7 +128,10 @@ class Settings(BaseSettings):
     imagegen: ImageGenSettings = ImageGenSettings()
     tui: TuiSettings = TuiSettings()
     censor: CensorSettings = CensorSettings()
-    # platform sub-settings (qq/telegram/discord/feishu) added in M3
+    qq: QQSettings = QQSettings()
+    discord: DiscordSettings = DiscordSettings()
+    telegram: TelegramSettings = TelegramSettings()
+    feishu: FeishuSettings = FeishuSettings()
 
     def __init__(self, **values: Any) -> None:
         env_file = values.pop("_env_file", os.environ.get("TRPG_ENV_FILE") or ".env")

@@ -25,3 +25,19 @@ def test_explicit_env_file_overrides_trpg_env_file(tmp_path, monkeypatch):
     settings = Settings(_env_file=str(explicit))
 
     assert settings.locale == "en"
+
+
+def test_platform_settings_use_nested_environment(monkeypatch):
+    monkeypatch.setenv("TRPG_QQ__APP_ID", "qq-app")
+    monkeypatch.setenv("TRPG_QQ__SECRET", "qq-secret")
+    monkeypatch.setenv("TRPG_DISCORD__TOKEN", "discord-token")
+    monkeypatch.setenv("TRPG_DISCORD__GUILD_ID", "123")
+    monkeypatch.setenv("TRPG_DISCORD__FFMPEG", "/opt/ffmpeg")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.qq.app_id == "qq-app"
+    assert settings.qq.secret == "qq-secret"
+    assert settings.discord.token == "discord-token"
+    assert settings.discord.guild_id == 123
+    assert settings.discord.ffmpeg == "/opt/ffmpeg"

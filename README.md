@@ -171,16 +171,18 @@ At startup Loreweaver reads `.env` if you created one; it does not invent provid
 | Entry | Status |
 |---|---|
 | **Terminal · OpenTUI** | ✅ **Primary** — the game lobby above; local or networked p2p (Iroh) |
+| Discord bot | 🧪 Experimental — native commands, cards, attachments, panels, and voice |
+| Official QQ bot | 🧪 Experimental — Markdown/Keyboard and rich-media with plain-text fallback |
 | CLI (headless) | ✅ Development / quick testing / offline demo |
 
-Systems: D&D 5e SRD and CoC 7e ship as data-driven rulepacks (`rulepacks/*.yaml`) — adding a system requires no code changes. (Chat-platform adapters for Discord/Telegram/QQ/Feishu are in-tree but unmaintained and untested against live platforms — see the [roadmap](docs/roadmap.md).)
+Systems: D&D 5e SRD and CoC 7e ship as data-driven rulepacks (`rulepacks/*.yaml`) — adding a system requires no code changes. Discord and QQ share the same cross-platform rooms but remain experimental pending real-bot acceptance; see the [setup and smoke checklist](docs/chat-platforms.md). Telegram and Feishu remain basic text adapters.
 
 ## Architecture
 
 ```
 core/  deterministic engine   infra/  store · config · i18n · llm · embeddings · vector · providers
 agent/ AI-KP brain + tools    gateway/ platform-independent: commands · ops · hub · runner · director
-net/   Iroh p2p + session core  adapters/ cli (chat adapters in-tree, unmaintained)   clients/ protocol · tui
+net/   Iroh p2p + session core  adapters/ CLI · Discord · official QQ · text adapters  clients/ protocol · tui
 ```
 
 The engine isolates all state behind a stable `chat_key`; RoomHub layers cross-transport realtime broadcast on top. Layer contracts, the iron rules (deterministic vs. generative, dice-first, information isolation), and how to add rulepacks / adapters / providers / tools / clients: **[AGENTS.md](AGENTS.md)**. Client wire format: **[docs/protocol.md](docs/protocol.md)**.

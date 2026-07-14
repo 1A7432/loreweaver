@@ -1,4 +1,4 @@
-# -*- mode: python ; coding: utf-8 -*-
+# -*- mode: python -*-
 """PyInstaller build spec for the self-contained `loreweaver-server` bundle.
 
 Built via `scripts/package_server.py` (which also smoke-tests + archives the result); do not
@@ -46,14 +46,19 @@ datas = [
 binaries = []
 hiddenimports = []
 
-# `iroh` ships a native extension (.dylib/.so/.pyd) that plain module-graph analysis won't
-# pick up; `openai`/`anthropic`/`google.genai`/`pydantic` all do enough dynamic/plugin-style
-# importing (pydantic_core, provider SDK submodules) that being explicit here is cheap
-# insurance against a bundle that builds clean but breaks on first real LLM call. `d20` ships
-# a non-Python package-data file (`grammar.lark`, its dice-notation parser grammar) that plain
-# module-graph analysis never picks up at all -- found the hard way via this spec's own
-# `--doctor` smoke (a plain build "succeeds" and then crashes on the very first import).
-for _pkg in ("iroh", "openai", "anthropic", "google.genai", "pydantic", "d20"):
+# Native extensions and dynamically imported SDK modules need explicit collection. `d20` also
+# ships its parser grammar as package data; `nacl` and `davey` provide Discord voice binaries.
+for _pkg in (
+    "iroh",
+    "openai",
+    "anthropic",
+    "google.genai",
+    "pydantic",
+    "d20",
+    "discord",
+    "nacl",
+    "davey",
+):
     _datas, _binaries, _hidden = collect_all(_pkg)
     datas += _datas
     binaries += _binaries

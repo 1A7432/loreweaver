@@ -30,9 +30,8 @@ Issues = "https://github.com/1A7432/loreweaver/issues"
 
 [project.optional-dependencies]
 # Platform SDKs are optional extras so the core + CLI install stays light.
-qq = ["qq-botpy>=1.2.1"]
 telegram = ["python-telegram-bot>=21.0"]
-discord = ["discord.py>=2.3"]
+discord = ["discord.py[voice]>=2.7"]
 feishu = ["lark-oapi>=1.2"]
 vector = ["sqlite-vec>=0.1.1"]
 anthropic = ["anthropic>=0.116.0"]

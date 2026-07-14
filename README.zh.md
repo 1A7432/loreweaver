@@ -181,16 +181,18 @@ uv sync && uv run python -m app --serve   # 用 systemd 守着——见 docs/dep
 | 入口 | 状态 |
 |---|---|
 | **终端 · OpenTUI** | ✅ **主力**：上面那个游戏大厅；本地或联网 p2p(Iroh) |
+| Discord Bot | 🧪 实验性：原生命令、卡片、附件、面板和语音 |
+| QQ 官方机器人 | 🧪 实验性：Markdown/Keyboard 与富媒体，支持纯文本降级 |
 | CLI（无头） | ✅ 开发 / 快速试玩 / 离线 demo |
 
-系统：D&D 5e SRD 和 CoC 7 版以数据驱动的 rulepack(`rulepacks/*.yaml`)随附，加新系统不用改代码。(Discord/Telegram/QQ/飞书这些聊天平台适配器还在仓库里，但没人维护、没在真平台上测过，见[路线图](docs/roadmap.zh.md)。)
+系统：D&D 5e SRD 和 CoC 7 版以数据驱动的 rulepack（`rulepacks/*.yaml`）随附，加新系统不用改代码。Discord 与 QQ 和 TUI 共用跨平台房间，但通过真 Bot 验收前仍为实验性；见[配置与冒烟清单](docs/chat-platforms.zh.md)。Telegram 与飞书目前仍是基础文本适配器。
 
 ## 架构
 
 ```
 core/  确定性引擎        infra/  store · config · i18n · llm · embeddings · vector · providers
 agent/ AI-KP 大脑 + 工具  gateway/ 平台无关层：commands · ops · hub · runner · director
-net/   Iroh p2p + 会话核心  adapters/ cli(聊天适配器在树内、无人维护)   clients/ protocol · tui
+net/   Iroh p2p + 会话核心  adapters/ CLI · Discord · QQ 官方 · 文本适配器  clients/ protocol · tui
 ```
 
 引擎用稳定的 `chat_key` 隔离全部状态；RoomHub 再叠一层跨端实时广播。分层契约、铁律（确定性 vs 生成、掷骰优先、信息隔离），以及怎么加 rulepack / 适配器 / provider / 工具 / 客户端，都在 **[AGENTS.md](AGENTS.md)**。客户端线格式见 **[docs/protocol.zh.md](docs/protocol.zh.md)**。

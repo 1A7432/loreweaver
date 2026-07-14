@@ -10,7 +10,7 @@ The goal is not "an AI stand-in for a game master" — it is to be **the Claude 
 
 ## Where things stand
 
-The deterministic engine — dice (on `d20`), CoC/DnD success levels, character math, rule validation, the game clock — is the solid core, covered by a deterministic, offline test suite. The **terminal (OpenTUI) client is the one focus**, connecting over the **Iroh** p2p transport (dial a ticket — no domain/TLS/port-forward). The chat-platform adapters (Discord · Telegram · QQ · Feishu) are still **in-tree but unmaintained and untested against a live platform** — kept behind the gateway's transport-agnostic seam so they *could* be revived, but not a current commitment. (The React web client, the WebSocket serve path, Docker deployment, and the SSH client were removed to keep the surface to what one maintainer can actually test; WebSocket lives on only as the offline test transport. Rich media now covers self-hosted image handouts and audio blobs over the same room-scoped media channel.)
+The deterministic engine — dice (on `d20`), CoC/DnD success levels, character math, rule validation, the game clock — is the solid core, covered by a deterministic, offline test suite. The **terminal (OpenTUI) client remains primary**, connecting over **Iroh** p2p. Discord and official QQ now have native, mock-tested adapters over the same room hub; both stay **Experimental** until the real-bot checklist passes. Telegram and Feishu remain basic text adapters.
 
 ## Foundations — done
 
@@ -25,7 +25,7 @@ A hardening pass just landed the unglamorous things that have to be right before
 
 ## Near-term
 
-- **Live-test one chat adapter end to end.** Pick one (QQ is the most complete) and drive it against the real platform until it genuinely works; keep the others marked experimental rather than implying they're done.
+- **Real-platform acceptance.** Run the documented Discord and QQ smoke matrices with test bots, capture sanitized QQ API fixtures, and keep both experimental until that evidence is green.
 - **Multiplayer polish.** Now that the permission model is enforced, tighten the remaining networked-play rough edges (a real bot-loop guard, richer late-joiner state) so a room among trusted people is genuinely comfortable.
 
 ## The bigger arc — the world engine

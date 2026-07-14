@@ -69,7 +69,7 @@ journalctl -u loreweaver -f       # 跟日志——ticket + 守秘人 key 启动
 | `TRPG_CENSOR__WORDLIST_PATH` | 内容审核词表：JSON 文件 `{"word": level, ...}`（等级 `1`-`5`，见 `gateway.ops.CensorLevel`）。见 [内容审核](#内容审核) | *（空 = 审核关闭）* |
 | `TRPG_CENSOR__WORDLIST` | 内容审核词表，内联：`word[:level],word2[:level2],...` —— 文件的替代方案，方便用一个环境变量。如果两者都设置，将结合 `WORDLIST_PATH` | *（空 = 审核关闭）* |
 
-聊天平台适配器（Discord/Telegram/QQ/飞书）**代码在树内,但无人维护、未对真平台实测**——见 [roadmap](roadmap.zh.md)。它们的 token（`TRPG_DISCORD__TOKEN`、`TRPG_TELEGRAM__TOKEN`、`TRPG_QQ__APP_ID` / `TRPG_QQ__SECRET`、`TRPG_FEISHU__APP_ID` / `TRPG_FEISHU__APP_SECRET`）仍在,`--serve --platforms discord` 可组合模式跑一个,但视为实验性。
+Discord 与 QQ 官方机器人已经具备原生、Mock 测试覆盖的适配器，并可与 TUI 共用房间；但在真 Bot 验收前仍为 **Experimental**。依赖、OAuth/开放平台权限、能力降级和强制冒烟清单见 [Discord 与 QQ 机器人](chat-platforms.zh.md)。Telegram 与飞书仍是基础文本适配器。
 
 ChatGPT 订阅不是 API key。要使用直接订阅路径，先启动服务器，在私密/本地 Keeper 聊天中运行 `.model login chatgpt`，完成设备码流程，再运行 `.model set chatgpt [model]`。此路径应让 `TRPG_LLM__BASE_URL` 保持为空；Loreweaver 使用保存的 OAuth grant，而不是浏览器 cookie 或网页会话自动化。运行 `.model login supergrok` 后再执行 `.model set supergrok [model]`，即可选择 SuperGrok 订阅路径；同一 grant 也可供其生图使用。
 
