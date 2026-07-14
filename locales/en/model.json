@@ -12,7 +12,7 @@
   "commands.model.unknown_provider": "Unknown provider: {provider}. Use .model list to see the options.",
   "commands.model.set_done": "LLM switched to provider {provider}, chat model {chat_model}.",
   "commands.model.set_saved": "Saved LLM override: provider {provider}, chat model {chat_model} (takes effect on restart).",
-  "commands.model.set_failed": "Could not switch to provider {provider} (its SDK or API key may be missing). Kept the previous LLM; nothing was saved.",
+  "commands.model.set_failed": "Could not finish configuring provider {provider}. Check its SDK, credentials, and storage, then retry.",
   "commands.model.key_usage": "Usage: .model key <api_key>",
   "commands.model.key_public": "Set the API key from a private/DM or the local CLI, not a public channel.",
   "commands.model.key_done": "API key updated ({api_key}).",

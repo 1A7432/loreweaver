@@ -26,7 +26,7 @@ from agent.context import AgentCtx
 from agent.kp_tools import build_kp_toolset
 from agent.kp_tools_companion import CompanionTools
 from agent.services import build_services
-from gateway.commands import CommandRouter
+from gateway.commands import CommandReply, CommandRouter
 from gateway.events import InboundMessage
 from gateway.hub import Event, RoomHub
 from gateway.runner import GatewayRunner
@@ -64,9 +64,6 @@ class _FakeMember:
         self.name = member_id
         self.events: list[Event] = []
 
-    def supports_proactive(self) -> bool:
-        return True
-
     async def deliver(self, event: Event) -> None:
         self.events.append(event)
 
@@ -79,11 +76,8 @@ class _FakeAdapter:
     def __init__(self) -> None:
         self.sends: list[tuple] = []
 
-    def supports_proactive(self, source) -> bool:
-        return True
-
-    async def send(self, source, content, *, reply_to=None):
-        self.sends.append((source, content, reply_to))
+    async def deliver_event(self, source, session_key, event, *, locale, media_store=None):
+        self.sends.append((source, event, session_key))
         return None
 
 
@@ -140,7 +134,7 @@ class _RosterRmwRouter:
     def resolve(self, text: str, locale: str):
         return None
 
-    async def dispatch(self, ctx: AgentCtx, text: str) -> str:
+    async def dispatch_reply(self, ctx: AgentCtx, text: str) -> CommandReply:
         name = text.strip()
         key = f"party_roster.{ctx.chat_key}"
         self.order.append(("enter", name))
@@ -151,7 +145,7 @@ class _RosterRmwRouter:
         roster[name] = {"name": name}
         await self._store.set(user_key="", store_key=key, value=json.dumps(roster))
         self.order.append(("exit", name))
-        return f"added {name}"
+        return CommandReply(f"added {name}")
 
 
 class _BarrierRouter:
@@ -165,12 +159,12 @@ class _BarrierRouter:
     def resolve(self, text: str, locale: str):
         return None
 
-    async def dispatch(self, ctx: AgentCtx, text: str) -> str:
+    async def dispatch_reply(self, ctx: AgentCtx, text: str) -> CommandReply:
         self._arrived[ctx.chat_key].set()
         for key, event in self._arrived.items():
             if key != ctx.chat_key:
                 await asyncio.wait_for(event.wait(), timeout=3.0)
-        return "ok"
+        return CommandReply("ok")
 
 
 # ---------------------------------------------------------------------------
@@ -245,26 +239,26 @@ async def test_queued_turn_reauthorizes_after_acquiring_the_room_lock() -> None:
     assert frames[-1]["code"] == "forbidden"
 
 
-async def test_queued_admin_reauthorizes_after_acquiring_the_config_lock() -> None:
+async def test_read_only_admin_does_not_wait_for_the_config_lock() -> None:
     services = _services()
     member = _ws_member("queued-admin", "conn", "Keeper")
     member.role = "keeper"
     keystore = Keystore()
-    [key] = _authorize(keystore, member)
+    _authorize(keystore, member)
     server = TuiServer(services, keystore)
     await services.config_lock.acquire()
     task = asyncio.create_task(
         server._on_frame(member, json.dumps({"type": "admin_get_config"}))
     )
-    await asyncio.sleep(0)  # request holds the room lock and waits on config_lock
+    await asyncio.sleep(0)
 
-    keystore.remove(key)
+    completed_without_config_lock = task.done()
     services.config_lock.release()
     await task
 
     frames = [json.loads(raw) for raw in member.ws.sent]
-    assert frames[-1]["type"] == "error"
-    assert frames[-1]["code"] == "forbidden"
+    assert completed_without_config_lock
+    assert frames[-1]["type"] == "admin_config"
 
 
 # ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@ import json
 from types import SimpleNamespace
 
 from adapters.feishu import FeishuAdapter
+from gateway.chat import ChatMessage
 from gateway.events import InboundMessage
 from gateway.registry import platform_registry
 from gateway.session import SessionSource
@@ -65,7 +66,7 @@ async def test_send_calls_message_create_with_text_payload() -> None:
     adapter = FeishuAdapter({"app_id": "app", "app_secret": "secret"}, transport=transport)
     source = SessionSource(platform="feishu", chat_type="group", chat_id="oc_group")
 
-    result = await adapter.send(source, "keeper reply")
+    result = await adapter.send_message(source, ChatMessage(text="keeper reply"))
 
     assert result.ok is True
     assert result.message_id == "om_sent"

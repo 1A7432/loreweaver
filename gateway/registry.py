@@ -12,10 +12,16 @@ from typing import Any
 
 
 @dataclass
+class AdapterContext:
+    services: Any
+    command_router: Any
+
+
+@dataclass
 class PlatformEntry:
     name: str
     label: str
-    adapter_factory: Callable[[Any], Any]
+    adapter_factory: Callable[[Any, AdapterContext], Any]
     check_fn: Callable[[], bool]
     required_env: list[str] = field(default_factory=list)
     install_hint: str = ""
@@ -31,13 +37,13 @@ class PlatformRegistry:
     def get(self, name: str) -> PlatformEntry | None:
         return self._entries.get(name)
 
-    def create_adapter(self, name: str, config: Any) -> Any | None:
+    def create_adapter(self, name: str, config: Any, context: AdapterContext) -> Any | None:
         entry = self.get(name)
         if entry is None:
             return None
         if not entry.check_fn():
             return None
-        return entry.adapter_factory(config)
+        return entry.adapter_factory(config, context)
 
     def is_registered(self, name: str) -> bool:
         return name in self._entries

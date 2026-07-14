@@ -1,5 +1,6 @@
 from adapters.telegram.adapter import TelegramAdapter
 from agent.services import build_services
+from gateway.chat import ChatMessage
 from gateway.commands import CommandRouter
 from gateway.events import InboundMessage
 from gateway.session import SessionSource
@@ -72,8 +73,8 @@ async def test_send_calls_transport_send_message() -> None:
     adapter = TelegramAdapter({"token": "token"}, transport=transport)
     source = SessionSource(platform="telegram", chat_id="-1001234567890", chat_type="group")
 
-    result = await adapter.send(source, "hello")
-    reply = await adapter.send(source, "with reply", reply_to="11")
+    result = await adapter.send_message(source, ChatMessage(text="hello"))
+    reply = await adapter.send_message(source, ChatMessage(text="with reply"), reply_to="11")
 
     assert result.ok is True
     assert reply.ok is True

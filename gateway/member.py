@@ -16,15 +16,16 @@ channel's repeated messages.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
-
-from gateway.render_chat import render_chat_event
-from infra.i18n import get_i18n
 
 if TYPE_CHECKING:
     from gateway.base_adapter import BaseAdapter
     from gateway.hub import Event
     from gateway.session import SessionSource
+    from infra.media_store import MediaStore
+
+logger = logging.getLogger(__name__)
 
 
 class AdapterMember:
@@ -45,12 +46,21 @@ class AdapterMember:
         session_key: str,
         *,
         locale: str = "en",
+        media_store: MediaStore | None = None,
     ) -> None:
         self.adapter = adapter
         self.source = source
         self.session_key = session_key
         self.locale = locale
         self.transport = adapter.platform
+        self.media_store = media_store
+        self._identities: dict[str, str] = {}
+        self.observe(source)
+
+    def observe(self, source: SessionSource) -> None:
+        """Refresh the reply target and remember who has spoken in a group channel."""
+        self.source = source
+        self._identities[source.user_key()] = source.user_name or source.user_key()
 
     @property
     def id(self) -> str:
@@ -61,21 +71,31 @@ class AdapterMember:
         return self.source.user_key()
 
     @property
+    def state_user_id(self) -> str:
+        if self.source.chat_type.casefold() in {"dm", "direct", "private", "c2c"}:
+            return self.source.user_key()
+        return self.id
+
+    @property
+    def state_identities(self) -> tuple[tuple[str, str], ...]:
+        return tuple(self._identities.items())
+
+    @property
     def name(self) -> str:
         return self.source.user_name or self.source.user_key()
 
-    def supports_proactive(self) -> bool:
-        """Whether the channel accepts unprompted sends (delegated to the adapter)."""
-        return self.adapter.supports_proactive(self.source)
-
     async def deliver(self, event: Event) -> None:
-        """Render ``event`` for chat and send it; skip when it renders to nothing.
-
-        If the channel does not currently ``supports_proactive`` we still call
-        ``send`` (adapters degrade gracefully — e.g. the QQ adapter queues); a
-        proper proactive queue is Phase 3.
-        """
-        text = render_chat_event(event, get_i18n(self.locale))
-        if not text:
-            return
-        await self.adapter.send(self.source, text, reply_to=self.source.message_id)
+        """Render ``event`` for chat and send it."""
+        result = await self.adapter.deliver_event(
+            self.source,
+            self.session_key,
+            event,
+            locale=self.locale,
+            media_store=self.media_store,
+        )
+        if result is not None and not result.ok:
+            logger.warning(
+                "adapter.delivery_failed platform=%s error=%s",
+                self.adapter.platform,
+                result.error or "send_failed",
+            )

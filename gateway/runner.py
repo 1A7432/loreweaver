@@ -11,16 +11,31 @@ from agent.kp_tools import build_kp_toolset
 from agent.loop import run_kp_turn
 from agent.services import Services
 from agent.tools import Toolset
+from gateway.attachment_fs import AttachmentFs
+from gateway.audio import add_audio_item
 from gateway.base_adapter import BaseAdapter
+from gateway.chat import ChatAttachment, ChatComponent, ChatMessage
 from gateway.commands import CommandRouter, CommandSpec
 from gateway.events import InboundMessage
-from gateway.hub import RoomHub
+from gateway.hub import Event, RoomHub
+from gateway.media import media_frame, record_media_history
 from gateway.member import AdapterMember
 from gateway.ops import Botlist, Censor, RateLimiter, censor_from_settings
-from gateway.rooms import resolve_session_key
+from gateway.rooms import (
+    get_keeper_binding,
+    resolve_session_key,
+    session_key_for_room,
+)
 from gateway.session import SessionSource
 from gateway.turn import run_turn
 from infra.i18n import get_i18n
+from infra.media_store import (
+    ALLOWED_AUDIO_MIMES,
+    ALLOWED_CHAT_ATTACHMENT_MIMES,
+    ALLOWED_IMAGE_MIMES,
+    MediaStore,
+    is_audio_mime,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +43,7 @@ _BOT_ENABLED_PREFIX = "bot_enabled."
 _BOT_ENABLED_VALUE = "1"
 _BOT_DISABLED_VALUE = "0"
 _CHAT_LOCALE_KEYS = ("chat_locale.{chat_key}", "locale.{chat_key}")
-_DIRECT_CHAT_TYPES = {"dm", "direct", "private"}
+_DIRECT_CHAT_TYPES = {"dm", "direct", "private", "c2c"}
 _COMMAND_PREFIXES = (".", "。", "/")
 
 
@@ -46,9 +61,7 @@ class GatewayRunner:
     ) -> None:
         self.services = services
         self.adapters = list(adapters or [])
-        # An injected hub turns every chat channel into a shared-room member
-        # (M7); when None, on_inbound keeps the pre-M7 return-a-string behavior
-        # so standalone adapter usage/tests are unaffected.
+        # Network adapters share a hub; the local CLI uses the direct reply path.
         self.hub = hub
         self.keystore = keystore
         self.command_router = command_router or CommandRouter(services, keystore=keystore, hub=hub)
@@ -69,38 +82,83 @@ class GatewayRunner:
         # Per-channel AdapterMember registry (keyed by the channel's own
         # chat_key) so repeat messages from a channel reuse one hub member.
         self._members: dict[str, AdapterMember] = {}
+        tui = services.settings.tui
+        self.media_store = MediaStore(
+            services.store,
+            services.settings.data_dir,
+            max_file_bytes=tui.media_max_file_bytes,
+            room_quota_bytes=tui.media_room_quota_bytes,
+            allowed_mimes=ALLOWED_IMAGE_MIMES,
+        )
+        self.audio_store = MediaStore(
+            services.store,
+            services.settings.data_dir,
+            max_file_bytes=tui.audio_max_file_bytes,
+            room_quota_bytes=tui.audio_room_quota_bytes,
+            allowed_mimes=ALLOWED_AUDIO_MIMES,
+        )
 
-    async def on_inbound(self, msg: InboundMessage) -> str | None:
+    async def on_inbound(self, msg: InboundMessage) -> ChatMessage | None:
         source = msg.source
-        chat_key = source.chat_key()
+        channel_key = source.chat_key()
+        chat_key = (
+            await resolve_session_key(self.services.store, source)
+            if self.hub is not None
+            else channel_key
+        )
         user_key = source.user_key()
+        keeper_role = await self._keeper_role(source, chat_key)
+        ctx_extra = {"source": source, "raw": msg.raw or {}}
+        if msg.interaction is not None and msg.interaction.private:
+            ctx_extra["private_interaction"] = True
+        if keeper_role is not None:
+            ctx_extra["role"] = keeper_role
 
         if source.is_bot or self.botlist.is_bot(user_key):
             return None
 
-        locale = await self._locale_for(chat_key)
+        preferred_locale = msg.interaction.locale if msg.interaction is not None else ""
+        locale = await self._locale_for(chat_key, preferred=preferred_locale)
         ctx = AgentCtx(
             chat_key=chat_key,
             user_id=user_key,
             platform=source.platform,
             locale=locale,
             fs=self._fs_for(source.platform),
-            extra={"source": source, "raw": msg.raw or {}},
+            extra=ctx_extra,
         )
 
         text = self._normalize_cli_command_text(msg.text, locale, source.platform)
         command = self._resolve_command(text, locale)
         is_command = command is not None
+        if command is None and msg.quoted_text.strip():
+            quote = "\n".join(f"> {line}" for line in msg.quoted_text.strip().splitlines())
+            text = f"{quote}\n\n{text}".rstrip()
 
-        if not await self._bot_enabled(source):
+        bot_setting = await self.services.store.get(
+            user_key="", store_key=f"{_BOT_ENABLED_PREFIX}{chat_key}"
+        )
+        welcome_key = f"chat_welcomed.{channel_key}"
+        if (
+            bot_setting is None
+            and not is_command
+            and msg.at_bot
+            and not self._default_bot_enabled(source)
+            and await self.services.store.get(user_key="", store_key=welcome_key) is None
+        ):
+            await self.services.store.set(user_key="", store_key=welcome_key, value="1")
+            return self._welcome_message(locale)
+        if bot_setting == _BOT_DISABLED_VALUE:
             if not self._is_bot_on_command(text, locale):
                 return None
+        elif bot_setting != _BOT_ENABLED_VALUE and not self._default_bot_enabled(source) and not is_command:
+            return None
 
         if self._requires_mention(source) and not msg.at_bot and not is_command:
             return None
 
         if not self.rate_limiter.allow(user_key) or not self.rate_limiter.allow(chat_key):
-            return get_i18n(locale).t("runner.throttled")
+            return ChatMessage(text=get_i18n(locale).t("runner.throttled"))
 
         # A crashing command / KP turn / tool must degrade to a friendly localized
         # reply, never propagate out of the inbound handler — an unguarded raise here
@@ -109,20 +167,27 @@ class GatewayRunner:
         try:
             if self.hub is None:
                 return await self._answer_standalone(ctx, text)
-            return await self._answer_on_hub(msg, source, user_key, locale, text, command)
+            return await self._answer_on_hub(
+                msg,
+                source,
+                user_key,
+                locale,
+                text,
+                command,
+                chat_key,
+                keeper_role,
+            )
         except Exception:
             logger.exception("runner.turn_failed chat_key=%s", chat_key)
-            return get_i18n(locale).t("runner.error")
+            return ChatMessage(text=get_i18n(locale).t("runner.error"))
 
-    async def _answer_standalone(self, ctx: AgentCtx, text: str) -> str | None:
-        """Pre-M7 path (no hub): resolve one reply string for the origin channel.
-
-        `BaseAdapter.handle_inbound` sends whatever this returns, so the mock
-        adapter tests keep passing unchanged.
-        """
+    async def _answer_standalone(self, ctx: AgentCtx, text: str) -> ChatMessage | None:
+        """Resolve one direct reply for a single-channel adapter such as the CLI."""
         command_reply = await self.command_router.dispatch(ctx, text)
         if command_reply is not None:
-            return command_reply
+            resolved = self.command_router.resolve(text, ctx.locale)
+            private = bool(resolved and resolved[0].private_reply)
+            return ChatMessage(text=command_reply, markdown=False, private=private)
 
         toolset = self.toolset or build_kp_toolset(self.services)
         result = await run_kp_turn(
@@ -132,7 +197,7 @@ class GatewayRunner:
             text,
             output_review=lambda value: self.censor.review(value).cleaned,
         )
-        return result.reply
+        return ChatMessage(text=result.reply, markdown=True)
 
     async def _answer_on_hub(
         self,
@@ -142,32 +207,33 @@ class GatewayRunner:
         locale: str,
         text: str,
         command: tuple[CommandSpec, str] | None,
-    ) -> str | None:
+        session_key: str,
+        keeper_role: str | None,
+    ) -> ChatMessage | None:
         """Shared-hub path (M7): subscribe this channel as a member, run the turn
         through the hub so it fans out to every transport, and keep `.room`
         control replies scoped to the origin channel."""
         adapter = self._adapter_for(source.platform)
-        session_key = await resolve_session_key(self.services.store, source)
+        ctx_extra = {"source": source, "raw": msg.raw or {}}
+        if msg.interaction is not None and msg.interaction.private:
+            ctx_extra["private_interaction"] = True
+        if keeper_role is not None:
+            ctx_extra["role"] = keeper_role
         hub_ctx = AgentCtx(
             chat_key=session_key,
             user_id=user_key,
             platform=source.platform,
             locale=locale,
             fs=self._fs_for(source.platform),
-            extra={"source": source, "raw": msg.raw or {}},
+            extra=ctx_extra,
         )
 
         if adapter is None:
             # No adapter to deliver through: degrade to the single-reply path.
             return await self._answer_standalone(hub_ctx, text)
 
-        member = await self._ensure_member(adapter, source, session_key, locale)
-
-        if command is not None and command[0].canonical == "room":
-            # `.room ...` is a control command: reply to the origin channel only
-            # (returned value is sent by handle_inbound); never publish it, so a
-            # minted join key is not broadcast across the room's other members.
-            return await self.command_router.dispatch(hub_ctx, text)
+        if command is not None and command[0].private_reply and not adapter.supports_private_reply(source):
+            return ChatMessage(text=get_i18n(locale).t("runner.private_reply_unavailable"))
 
         # On the shared-room path the toolset is wired with the hub + router so the KP's
         # `companion_act` tool can drive a live companion turn (M10).
@@ -178,17 +244,75 @@ class GatewayRunner:
         # a TUI turn on the same room; the companion sub-turn re-enters `run_turn` directly (never
         # this choke point), so it never re-acquires this lock and cannot self-deadlock.
         async with self.hub.turn_lock(session_key):
-            await run_turn(
-                self.hub,
-                self.services,
-                hub_ctx,
-                text,
-                command_router=self.command_router,
-                toolset=toolset,
-                censor=self.censor,
-                origin=member,
-                echo_exclude=member,
-            )
+            keeper_role = await self._keeper_role(source, session_key)
+            if keeper_role is None:
+                hub_ctx.extra.pop("role", None)
+            else:
+                hub_ctx.extra["role"] = keeper_role
+            member = await self._ensure_member(adapter, source, session_key, locale)
+            attachment_fs: AttachmentFs | None = None
+            try:
+                private_command = bool(
+                    hub_ctx.extra.get("private_interaction")
+                    or (command is not None and command[0].private_reply)
+                )
+                may_ingest = bool(
+                    command is None
+                    or command[0].required_level == 0
+                    or keeper_role is not None
+                    or source.platform == "cli"
+                )
+                if msg.attachments and may_ingest:
+                    attachment_fs = await self._ingest_attachments(
+                        adapter,
+                        member,
+                        msg,
+                        session_key,
+                        user_key,
+                        publish_events=not private_command,
+                    )
+                    if attachment_fs is not None:
+                        hub_ctx.fs = attachment_fs
+                        hub_ctx.extra["attachment_names"] = list(attachment_fs.names)
+                    if not text.strip():
+                        if attachment_fs is None:
+                            return ChatMessage(
+                                text=get_i18n(locale).t("runner.attachment_unsupported")
+                            )
+                        text = get_i18n(locale).t(
+                            "runner.attachment_input",
+                            names=", ".join(attachment_fs.names),
+                        )
+
+                if command is not None and command[0].canonical in {"room", "bind", "unbind"}:
+                    reply = await self.command_router.dispatch(hub_ctx, text)
+                    new_session = await resolve_session_key(self.services.store, source)
+                    if new_session != member.session_key:
+                        await self.hub.unsubscribe(member)
+                        self._members.pop(source.chat_key(), None)
+                    return (
+                        ChatMessage(
+                            text=reply,
+                            private=command[0].canonical in {"bind", "unbind"},
+                        )
+                        if reply is not None
+                        else None
+                    )
+
+                await run_turn(
+                    self.hub,
+                    self.services,
+                    hub_ctx,
+                    text,
+                    command_router=self.command_router,
+                    toolset=toolset,
+                    censor=self.censor,
+                    origin=member,
+                    echo_exclude=member,
+                )
+            finally:
+                if attachment_fs is not None:
+                    attachment_fs.close()
         return None
 
     def _adapter_for(self, platform: str) -> BaseAdapter | None:
@@ -202,15 +326,86 @@ class GatewayRunner:
         channel_key = source.chat_key()
         existing = self._members.get(channel_key)
         if existing is not None and existing.session_key == session_key:
-            existing.source = source  # refresh reply_to / acting-player name
+            existing.observe(source)
             existing.locale = locale
+            if existing not in self.hub.members(session_key):
+                await self.hub.subscribe(session_key, existing)
             return existing
         if existing is not None:
             await self.hub.unsubscribe(existing)
-        member = AdapterMember(adapter, source, session_key, locale=locale)
+        member = AdapterMember(adapter, source, session_key, locale=locale, media_store=self.media_store)
         self._members[channel_key] = member
         await self.hub.subscribe(session_key, member)
         return member
+
+    async def _ingest_attachments(
+        self,
+        adapter: BaseAdapter,
+        member: AdapterMember,
+        msg: InboundMessage,
+        session_key: str,
+        user_key: str,
+        *,
+        publish_events: bool,
+    ) -> AttachmentFs | None:
+        stored: list[ChatAttachment] = []
+        for attachment in msg.attachments:
+            mime = attachment.mime.casefold()
+            if mime not in ALLOWED_CHAT_ATTACHMENT_MIMES:
+                continue
+            if (
+                mime not in ALLOWED_IMAGE_MIMES
+                and not is_audio_mime(mime)
+                and attachment.size > self.services.settings.tui.media_max_file_bytes
+            ):
+                continue
+            data = await adapter.fetch_attachment(attachment)
+            if mime not in ALLOWED_IMAGE_MIMES and not is_audio_mime(mime):
+                if len(data) > self.services.settings.tui.media_max_file_bytes:
+                    continue
+                stored.append(
+                    ChatAttachment(
+                        id=attachment.id,
+                        name=attachment.name,
+                        mime=mime,
+                        size=len(data),
+                        data=data,
+                    )
+                )
+                continue
+            store = self.audio_store if is_audio_mime(mime) else self.media_store
+            record = await store.register_blob(
+                room=session_key,
+                data=data,
+                mime=mime,
+                name=attachment.name,
+                uploader=user_key,
+            )
+            stored.append(
+                ChatAttachment(
+                    id=record.hash,
+                    name=record.name,
+                    mime=record.mime,
+                    size=record.size,
+                    data=data,
+                )
+            )
+            if is_audio_mime(record.mime):
+                if publish_events:
+                    frame = await add_audio_item(
+                        self.services.store, session_key, record, member.name
+                    )
+                    await self.hub.publish(
+                        session_key, Event.audio(frame), exclude=member
+                    )
+            elif record.mime in ALLOWED_IMAGE_MIMES:
+                if publish_events:
+                    frame = media_frame(record, from_name=member.name)
+                    await record_media_history(self.services.store, session_key, frame)
+                    await self.hub.publish(
+                        session_key, Event.media(frame), exclude=member
+                    )
+        return AttachmentFs(stored) if stored else None
 
     async def start(self) -> None:
         for adapter in self.adapters:
@@ -220,25 +415,39 @@ class GatewayRunner:
     async def stop(self) -> None:
         await asyncio.gather(*(adapter.disconnect() for adapter in self.adapters))
 
-    async def _locale_for(self, chat_key: str) -> str:
+    async def _locale_for(self, chat_key: str, *, preferred: str = "") -> str:
         for template in _CHAT_LOCALE_KEYS:
             value = await self.services.store.get(user_key="", store_key=template.format(chat_key=chat_key))
             if value:
                 return value
-        return self.services.settings.locale
+        return preferred if preferred in {"en", "zh"} else self.services.settings.locale
 
-    async def _bot_enabled(self, source: Any) -> bool:
-        chat_key = source.chat_key()
-        value = await self.services.store.get(user_key="", store_key=f"{_BOT_ENABLED_PREFIX}{chat_key}")
-        if value == _BOT_ENABLED_VALUE:
-            return True
-        if value == _BOT_DISABLED_VALUE:
-            return False
-        return self._default_bot_enabled(source)
+    async def _keeper_role(self, source: SessionSource, session_key: str) -> str | None:
+        binding = await get_keeper_binding(
+            self.services.store,
+            source.platform,
+            source.user_id,
+        )
+        if binding is None or session_key_for_room(binding) != session_key:
+            return None
+        return "keeper"
 
     def _default_bot_enabled(self, source: Any) -> bool:
         chat_type = str(getattr(source, "chat_type", "") or "").casefold()
         return source.platform == "cli" or chat_type in _DIRECT_CHAT_TYPES
+
+    def _welcome_message(self, locale: str) -> ChatMessage:
+        i18n = get_i18n(locale)
+        return ChatMessage(
+            text=i18n.t("runner.welcome"),
+            markdown=True,
+            components=[
+                ChatComponent(id="welcome:help", command=".help", label=i18n.t("runner.welcome.help")),
+                ChatComponent(id="welcome:create", command=".coc", label=i18n.t("runner.welcome.create")),
+                ChatComponent(id="welcome:sheet", command=".sheet", label=i18n.t("runner.welcome.sheet")),
+                ChatComponent(id="welcome:panel", command=".panel", label=i18n.t("runner.welcome.panel")),
+            ],
+        )
 
     def _requires_mention(self, source: Any) -> bool:
         chat_type = str(getattr(source, "chat_type", "") or "").casefold()

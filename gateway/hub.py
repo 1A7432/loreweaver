@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -42,6 +43,7 @@ class Event:
     text: str = ""  # narrative / system text
     fmt: str = "plain"  # "markdown" | "plain"
     data: dict[str, Any] = field(default_factory=dict)  # dice fields / state snapshot / presence list / {level}
+    private: bool = False
 
     @classmethod
     def player_action(cls, name: str, text: str) -> Event:
@@ -55,14 +57,26 @@ class Event:
         return cls(kind="dice", data={"actor": actor, "kind": kind, **fields})
 
     @classmethod
-    def narrative(cls, speaker: str, text: str, *, name: str = "", fmt: str = "markdown") -> Event:
+    def narrative(
+        cls,
+        speaker: str,
+        text: str,
+        *,
+        name: str = "",
+        fmt: str = "markdown",
+        private: bool = False,
+    ) -> Event:
         """One line of story / dialogue from ``speaker`` (kp/npc/player/system)."""
-        return cls(kind="narrative", speaker=speaker, name=name, text=text, fmt=fmt)
+        return cls(kind="narrative", speaker=speaker, name=name, text=text, fmt=fmt, private=private)
 
     @classmethod
     def state(cls, snapshot: dict[str, Any]) -> Event:
         """A room panel snapshot (see ``net.state.build_room_state``)."""
         return cls(kind="state", data=dict(snapshot))
+
+    @classmethod
+    def panel(cls, snapshot: dict[str, Any], *, private: bool = False) -> Event:
+        return cls(kind="panel", data=dict(snapshot), private=private)
 
     @classmethod
     def presence(cls, players: list[dict[str, Any]], online: int) -> Event:
@@ -98,10 +112,6 @@ class Member(Protocol):
     id: str
     user_key: str
     transport: str
-
-    def supports_proactive(self) -> bool:
-        """Whether this member can be sent to unprompted (vs. only in reply)."""
-        ...
 
     async def deliver(self, event: Event) -> None:
         """Render ``event`` and send it over this transport."""
@@ -170,20 +180,76 @@ class RoomHub:
         members = self.rooms.get(session_key)
         if not members:
             return
+        targets = [member for member in list(members) if member is not exclude]
+        results = await asyncio.gather(
+            *(member.deliver(event) for member in targets),
+            return_exceptions=True,
+        )
         dropped = False
-        for member in list(members):
-            if member is exclude:
-                continue
-            try:
-                await member.deliver(event)
-            except Exception:
-                logger.warning("hub: dropping member %s after deliver failed", getattr(member, "id", member), exc_info=True)
+        for member, result in zip(targets, results, strict=True):
+            if isinstance(result, BaseException) and not isinstance(result, Exception):
+                raise result
+            if isinstance(result, Exception):
+                logger.warning(
+                    "hub: dropping member %s after deliver failed: %s",
+                    getattr(member, "id", member),
+                    type(result).__name__,
+                )
                 members.discard(member)
                 dropped = True
         if dropped:
             # Keep the remaining clients' roster consistent with the fail-closed removal.
             # Recursive presence publication terminates because every failing member was
             # removed before this call; an empty room is removed from the registry outright.
+            if members:
+                await self._emit_presence(session_key)
+            else:
+                self.rooms.pop(session_key, None)
+
+    async def publish_each(
+        self,
+        session_key: str,
+        build: Callable[[Member], Awaitable[Event]],
+        *,
+        exclude: Member | None = None,
+    ) -> None:
+        """Build one event per member, preserving the normal drop-on-send-failure policy."""
+        members = self.rooms.get(session_key)
+        if not members:
+            return
+        targets = [member for member in list(members) if member is not exclude]
+
+        built = await asyncio.gather(*(build(member) for member in targets), return_exceptions=True)
+        ready: list[tuple[Member, Event]] = []
+        for member, result in zip(targets, built, strict=True):
+            if isinstance(result, BaseException) and not isinstance(result, Exception):
+                raise result
+            if isinstance(result, Exception):
+                logger.warning(
+                    "hub: could not build personalized event for %s: %s",
+                    getattr(member, "id", member),
+                    type(result).__name__,
+                )
+            else:
+                ready.append((member, result))
+
+        results = await asyncio.gather(
+            *(member.deliver(event) for member, event in ready),
+            return_exceptions=True,
+        )
+        dropped = False
+        for (member, _event), result in zip(ready, results, strict=True):
+            if isinstance(result, BaseException) and not isinstance(result, Exception):
+                raise result
+            if isinstance(result, Exception):
+                logger.warning(
+                    "hub: dropping member %s after deliver failed: %s",
+                    getattr(member, "id", member),
+                    type(result).__name__,
+                )
+                members.discard(member)
+                dropped = True
+        if dropped:
             if members:
                 await self._emit_presence(session_key)
             else:

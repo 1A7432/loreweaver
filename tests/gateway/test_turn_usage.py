@@ -11,6 +11,7 @@ import json
 from agent.context import AgentCtx
 from agent.kp_tools import build_kp_toolset
 from agent.services import build_services
+from gateway.commands import CommandReply
 from gateway.hub import RoomHub
 from gateway.session import SessionSource
 from gateway.turn import run_turn
@@ -33,7 +34,7 @@ class _NullRouter:
     def resolve(self, text: str, locale: str):
         return None
 
-    async def dispatch(self, ctx: AgentCtx, text: str) -> str | None:
+    async def dispatch_reply(self, ctx: AgentCtx, text: str) -> CommandReply | None:
         return None
 
 

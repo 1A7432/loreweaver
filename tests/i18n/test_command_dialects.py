@@ -42,7 +42,7 @@ def test_slash_definitions_include_core_commands_and_valid_names():
     definitions = router.slash_definitions("en")
     names = {item["name"] for item in definitions}
 
-    assert {"roll", "check", "sheet", "init", "sc", "coc", "dnd", "setcoc", "help"} <= names
+    assert {"roll", "check", "sheet", "language", "init", "sc", "coc", "dnd", "setcoc", "help"} <= names
     for item in definitions:
         assert re.fullmatch(r"^[a-z0-9_-]{1,32}$", item["name"])
         assert item["description"]

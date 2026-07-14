@@ -7,7 +7,7 @@ import random
 import re
 import shlex
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from agent.context import AgentCtx
@@ -25,7 +25,16 @@ from gateway.hub import Event
 from gateway.imagegen import allow_imagegen_request, image_name
 from gateway.media import media_frame, publish_media
 from gateway.ops import Botlist, PrivilegeLevel, get_enabled_skills, is_media_enabled, set_enabled_skills
-from gateway.rooms import clear_binding, get_binding, mint_room_id, session_key_for_room, set_binding
+from gateway.rooms import (
+    clear_binding,
+    clear_keeper_binding,
+    get_binding,
+    get_keeper_binding,
+    mint_room_id,
+    session_key_for_room,
+    set_binding,
+    set_keeper_binding,
+)
 from gateway.turn import publish_state
 from infra.i18n import I18n, get_i18n
 from infra.imagegen import ImageGenError
@@ -46,12 +55,6 @@ from infra.providers import (
     describe_settings,
     is_known_provider,
     mask_secret,
-)
-from infra.providers import (
-    restore_live_llm as restore_provider_llm,
-)
-from infra.providers import (
-    snapshot_live_llm as snapshot_provider_llm,
 )
 
 Handler = Callable[["CommandCtx"], Awaitable[str]]
@@ -222,13 +225,7 @@ _AVATAR_CLEAR_WORDS = {"clear", "remove", "rm", "清除", "删除", "刪除"}
 # other reserved `.st` subcommand words above (`clr`/`del`/...).
 _SHEET_FINALIZE_WORDS = {"finalize", "定稿", "初始化"}
 
-# Privilege inputs for `.room` gating. Chat platforms rarely surface a reliable
-# admin flag through the generic InboundMessage.raw, so the gate treats the local
-# CLI/terminal operator and private/DM sessions as owners of their own session,
-# plus any explicit admin/owner marker the adapter happened to include in `raw`.
-_ROOM_ADMIN_CHAT_TYPES = {"dm", "direct", "private"}
-_ROOM_ADMIN_RAW_ROLES = {"admin", "administrator", "owner", "creator", "keeper", "master", "moderator"}
-_ROOM_ADMIN_RAW_FLAGS = ("is_admin", "is_owner", "is_group_admin", "admin", "owner")
+_ROOM_ADMIN_CHAT_TYPES = {"dm", "direct", "private", "c2c"}
 
 # TOPOLOGY, not privilege: platforms whose channel is inherently local/private rather
 # than a public chat group (used e.g. by `_is_private_channel` to decide whether
@@ -275,6 +272,7 @@ class CommandCtx:
     args: str
     locale: str
     i18n: I18n
+    events: list[Event] = field(default_factory=list)
 
     @property
     def chat_key(self) -> str:
@@ -286,6 +284,16 @@ class CommandCtx:
         if hasattr(self.raw_ctx, "uid") and callable(self.raw_ctx.uid):
             return str(self.raw_ctx.uid())
         return str(getattr(self.raw_ctx, "user_id", ""))
+
+    def dice(self, kind: str, **fields: Any) -> None:
+        """Attach one already-rolled public dice result to this command reply."""
+        self.events.append(Event.dice(actor=self.user_id, kind=kind, **fields))
+
+
+@dataclass(frozen=True)
+class CommandReply:
+    text: str
+    events: tuple[Event, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -345,14 +353,21 @@ class CommandRouter:
         return None
 
     async def dispatch(self, ctx: AgentCtx | Any, text: str) -> str | None:
+        """Run a command and return its localized text for non-hub callers."""
+        reply = await self.dispatch_reply(ctx, text)
+        return reply.text if reply is not None else None
+
+    async def dispatch_reply(self, ctx: AgentCtx | Any, text: str) -> CommandReply | None:
+        """Run a command once, preserving any structured events produced by it."""
         locale = _ctx_locale(ctx)
         resolved = self.resolve(text, locale)
         if resolved is None:
-            return self._render_inline_rolls(text, locale)
+            rendered = self._render_inline_rolls(text, locale)
+            return CommandReply(rendered) if rendered is not None else None
 
         spec, args = resolved
         if spec.required_level and _privilege_level(ctx) < spec.required_level:
-            return get_i18n(locale).t("rooms.denied")
+            return CommandReply(get_i18n(locale).t("rooms.denied"))
         command = text.strip()[1:].split(maxsplit=1)[0] if text.strip() else spec.canonical
         command_ctx = CommandCtx(
             services=self.services,
@@ -364,7 +379,8 @@ class CommandRouter:
             locale=locale,
             i18n=get_i18n(locale),
         )
-        return await spec.handler(command_ctx)
+        rendered = await spec.handler(command_ctx)
+        return CommandReply(rendered, tuple(command_ctx.events))
 
     def slash_definitions(self, locale: str = "en") -> list[dict]:
         i18n = get_i18n(locale)
@@ -389,12 +405,16 @@ class CommandRouter:
         times, expression = _split_multi(args)
         times = min(times, 20)
         lines = []
+        results: list[DiceResult] = []
         try:
             for _ in range(times):
                 result = _roll_expression(ctx.services, expression)
                 lines.append(ctx.i18n.t("commands.roll.result", result=_format_roll(result, ctx.i18n)))
+                results.append(result)
         except ValueError:
             return ctx.i18n.t("commands.roll.invalid", expr=expression)
+        for result in results:
+            ctx.dice("roll", **_dice_result_fields(result))
         return "\n".join(lines)
 
     async def cmd_hidden_roll(self, ctx: CommandCtx) -> str:
@@ -403,6 +423,7 @@ class CommandRouter:
             result = _roll_expression(ctx.services, expression)
         except ValueError:
             return ctx.i18n.t("commands.roll.invalid", expr=expression)
+        ctx.dice("roll", **_dice_result_fields(result))
         return ctx.i18n.t("commands.roll.hidden", result=_format_roll(result, ctx.i18n))
 
     async def cmd_check(self, ctx: CommandCtx) -> str:
@@ -425,16 +446,33 @@ class CommandRouter:
         right_roll = ctx.services.dice.roll_coc_check(right_value, rule=rule, difficulty=right.difficulty)
         if left_roll["rank"] > right_roll["rank"]:
             winner = ctx.i18n.t("commands.opposed.left")
+            winner_side = "left"
         elif left_roll["rank"] < right_roll["rank"]:
             winner = ctx.i18n.t("commands.opposed.right")
+            winner_side = "right"
         else:
             winner = ctx.i18n.t("commands.opposed.tie")
+            winner_side = "tie"
+        left_name = pack.display_name(left.canonical, ctx.locale)
+        right_name = pack.display_name(right.canonical, ctx.locale)
+        ctx.dice(
+            "opposed",
+            expr=f"{left_name} vs {right_name}",
+            rolls=[left_roll["roll"], right_roll["roll"]],
+            total=left_roll["roll"],
+            target=left_value,
+            rank=left_roll["rank"],
+            success=left_roll["success"],
+            winner=winner_side,
+            left=_coc_event_side(left_name, left_roll, left_value),
+            right=_coc_event_side(right_name, right_roll, right_value),
+        )
         return ctx.i18n.t(
             "commands.opposed.result",
-            left=pack.display_name(left.canonical, ctx.locale),
+            left=left_name,
             left_roll=left_roll["roll"],
             left_rank=coc_rank_label(left_roll["rank"], ctx.i18n),
-            right=pack.display_name(right.canonical, ctx.locale),
+            right=right_name,
             right_roll=right_roll["roll"],
             right_rank=coc_rank_label(right_roll["rank"], ctx.i18n),
             winner=winner,
@@ -457,6 +495,21 @@ class CommandRouter:
             return ctx.i18n.t("commands.roll.invalid", expr=loss_expr)
         _set_sheet_value(character, pack, "理智", max(0, san - loss))
         await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
+        ctx.dice(
+            "sanity",
+            expr=pack.display_name(parsed.canonical, ctx.locale),
+            rolls=[outcome["roll"]],
+            total=outcome["roll"],
+            target=san,
+            rank=outcome["rank"],
+            success=outcome["success"],
+            difficulty=outcome["difficulty"],
+            bonus=outcome["bonus"],
+            penalty=outcome["penalty"],
+            loss_expr=loss_expr,
+            loss=loss,
+            remaining=max(0, san - loss),
+        )
         return ctx.i18n.t(
             "commands.sanity.result",
             roll=outcome["roll"],
@@ -517,6 +570,22 @@ class CommandRouter:
         notice = render_validation_notice(ctx.i18n, violations)
         return f"{result}\n{notice}" if notice else result
 
+    async def cmd_panel(self, ctx: CommandCtx) -> str:
+        del ctx.args
+        return ctx.i18n.t("commands.panel.ready")
+
+    async def cmd_language(self, ctx: CommandCtx) -> str:
+        locale = ctx.args.strip().casefold()
+        if locale not in {"en", "zh"}:
+            return ctx.i18n.t("commands.language.usage")
+        await ctx.services.store.set(
+            user_key="",
+            store_key=f"chat_locale.{ctx.chat_key}",
+            value=locale,
+        )
+        ctx.raw_ctx.locale = locale
+        return get_i18n(locale).t("commands.language.done")
+
     async def cmd_growth(self, ctx: CommandCtx) -> str:
         character = await ctx.services.characters.get_character(ctx.user_id, ctx.chat_key)
         pack = _pack_for_character(character)
@@ -536,12 +605,14 @@ class CommandRouter:
             modifier = ctx.services.characters.get_dnd_ability_modifier(character, "DEX")
             expr = _d20_expr(modifier)
             result = ctx.services.dice.roll_expression(expr, is_check=True)
+            ctx.dice("init", name=character.name, **_dice_result_fields(result))
             return ctx.i18n.t("commands.init.result", name=character.name, result=_format_roll(result, ctx.i18n))
         try:
             dex = int(character.attributes.get("DEX", 50))
         except (ValueError, TypeError):
             dex = 50
         result = ctx.services.dice.roll_expression(f"1d100+{dex}", is_check=True)
+        ctx.dice("init", name=character.name, dex=dex, **_dice_result_fields(result))
         return ctx.i18n.t("commands.init.result", name=character.name, result=_format_roll(result, ctx.i18n))
 
     async def cmd_make_char(self, ctx: CommandCtx) -> str:
@@ -637,6 +708,8 @@ class CommandRouter:
         without it, a second bot sharing one of those rooms looks like an ordinary
         player and the two can loop off each other's replies forever.
         """
+        if ctx.raw_ctx.platform != "cli":
+            return ctx.i18n.t("rooms.denied")
         parts = ctx.args.split(maxsplit=1)
         sub = parts[0].casefold() if parts else ""
         rest = parts[1].strip() if len(parts) > 1 else ""
@@ -909,6 +982,48 @@ class CommandRouter:
             names.append(f"{ctx.router.prefixes[0]}{aliases[0]}")
         return ctx.i18n.t("commands.help.result", commands=", ".join(names))
 
+    async def cmd_bind(self, ctx: CommandCtx) -> str:
+        """Consume a one-time keeper token in a bot private chat."""
+        source = _origin_source(ctx.raw_ctx)
+        if source is None or not _is_direct_chat(source):
+            return ctx.i18n.t("commands.bind.private_only")
+        if self.keystore is None:
+            return ctx.i18n.t("commands.bind.unavailable")
+        token = ctx.args.strip()
+        if not token:
+            return ctx.i18n.t("commands.bind.usage")
+        entry = self.keystore.consume(token, purpose="chat_bind", required_role="keeper")
+        if entry is None:
+            return ctx.i18n.t("commands.bind.invalid")
+
+        await set_keeper_binding(
+            ctx.services.store,
+            str(source.platform),
+            str(source.user_id),
+            entry.room,
+        )
+        return ctx.i18n.t("commands.bind.done", room=entry.room)
+
+    async def cmd_unbind(self, ctx: CommandCtx) -> str:
+        """Revoke this chat identity's keeper binding and leave its private room."""
+        source = _origin_source(ctx.raw_ctx)
+        if source is None or not _is_direct_chat(source):
+            return ctx.i18n.t("commands.bind.private_only")
+        binding = await get_keeper_binding(
+            ctx.services.store,
+            str(source.platform),
+            source.user_id,
+        )
+        await clear_keeper_binding(
+            ctx.services.store,
+            str(source.platform),
+            source.user_id,
+            expected_room=binding,
+        )
+        if binding is None:
+            return ctx.i18n.t("commands.unbind.none")
+        return ctx.i18n.t("commands.unbind.done", room=binding)
+
     async def cmd_room(self, ctx: CommandCtx) -> str:
         """`.room [open|link <key>|leave]` — bind/inspect this channel's shared
         session (M7 §4). Bindings are keyed by the ORIGIN channel's chat_key, not
@@ -920,10 +1035,16 @@ class CommandRouter:
         channel_key = _channel_chat_key(ctx.raw_ctx)
         store = ctx.services.store
         if sub in _ROOM_OPEN_WORDS:
+            if not _is_keeper(ctx.raw_ctx):
+                return ctx.i18n.t("rooms.denied")
+            if not _is_private_channel(ctx.raw_ctx):
+                return ctx.i18n.t("rooms.private_required")
             return await self._room_open(ctx, store, channel_key)
         if sub in _ROOM_LINK_WORDS:
             return await self._room_link(ctx, store, channel_key, rest)
         if sub in _ROOM_LEAVE_WORDS:
+            if not _is_keeper(ctx.raw_ctx):
+                return ctx.i18n.t("rooms.denied")
             return await self._room_leave(ctx, store, channel_key)
         if sub in _ROOM_SHOW_WORDS:
             return await self._room_show(ctx, store, channel_key)
@@ -939,19 +1060,7 @@ class CommandRouter:
         # authenticate once and then be rejected on its first frame (and disappear on restart).
         with self.keystore.persisted_mutation():
             join_key = self.keystore.add(room=room_id)
-        try:
-            await set_binding(store, channel_key, session_key)
-        except BaseException:
-            # The TOML and SQLite stores cannot share one transaction. Best-effort compensation
-            # avoids leaving an undisclosed orphan key when the channel binding write fails.
-            try:
-                with self.keystore.persisted_mutation():
-                    entry = self.keystore.get(join_key)
-                    if entry is not None and entry.room == room_id:
-                        self.keystore.remove(join_key)
-            except Exception:
-                logger.warning("rooms: could not revoke orphaned join key after binding failure", exc_info=True)
-            raise
+        await set_binding(store, channel_key, session_key)
         return ctx.i18n.t("rooms.open.result", key=join_key, session=session_key)
 
     async def _room_link(self, ctx: CommandCtx, store: Any, channel_key: str, rest: str) -> str:
@@ -1088,7 +1197,7 @@ class CommandRouter:
         rest = parts[1].strip() if len(parts) > 1 else ""
         agent_ctx = self._agent_ctx(ctx)
         tools = WorldbookTools(ctx.services)
-        keeper = _privilege_level(ctx.raw_ctx) >= int(PrivilegeLevel.GROUP_ADMIN)
+        keeper = _is_keeper(ctx.raw_ctx)
 
         if sub in _LORE_LIST_WORDS:
             # A player's `.lore list` must never reveal that a secret entry even exists; only a
@@ -1122,17 +1231,25 @@ class CommandRouter:
         from agent.kp_tools_charcard import CharcardTools
 
         tokens = ctx.args.split()
-        if not tokens:
+        attachment = _first_attachment_name(ctx.raw_ctx)
+        if attachment and (not tokens or tokens[0].casefold() in {"coc7", "coc", "dnd5e", "dnd", "pc", "companion"}):
+            file_path = attachment
+            options = tokens
+        elif tokens:
+            file_path = tokens[0]
+            options = tokens[1:]
+        else:
             return ctx.i18n.t("charcard.commands.import.usage")
-        file_path = tokens[0]
         system = "coc7"
         as_ = "pc"
-        for token in tokens[1:]:
+        for token in options:
             low = token.casefold()
             if low in {"coc7", "coc", "dnd5e", "dnd"}:
                 system = low
             elif low in {"pc", "companion"}:
                 as_ = low
+        if as_ == "companion" and not _is_keeper(ctx.raw_ctx):
+            return ctx.i18n.t("charcard.commands.import.companion_denied")
         tools = CharcardTools(ctx.services)
         return await tools.import_character(self._agent_ctx(ctx), file_path=file_path, system=system, as_=as_)
 
@@ -1141,9 +1258,9 @@ class CommandRouter:
         from agent.kp_tools_knowledge import DocumentTools
 
         tokens = ctx.args.split()
-        if not tokens:
+        file_path = tokens[0] if tokens else _first_attachment_name(ctx.raw_ctx)
+        if not file_path:
             return ctx.i18n.t("commands.module.usage")
-        file_path = tokens[0]
         tools = DocumentTools(ctx.services)
         agent_ctx = self._agent_ctx(ctx)
         return await tools.upload_document(
@@ -1191,8 +1308,8 @@ class CommandRouter:
 
     async def cmd_model(self, ctx: CommandCtx) -> str:
         """`.model [list | set | login | logout | key | reset]` — inspect or
-        switch the Keeper's LLM provider/model at runtime. Viewing is open; mutations are
-        keeper-gated via the shared privilege check. The override persists (see
+        switch the Keeper's LLM provider/model at runtime. The provider catalog is public;
+        deployment details and mutations require a Keeper. The override persists (see
         `infra.runtime_config`) and hot-reconfigures the live `MutableLLM`, so every LLM
         consumer sees the switch without a restart."""
         parts = ctx.args.split(maxsplit=1)
@@ -1201,6 +1318,14 @@ class CommandRouter:
         runtime_config = ctx.services.runtime_config
         if sub in _MODEL_LIST_WORDS:
             return self._model_list(ctx)
+        if sub in _MODEL_SHOW_WORDS:
+            if not await _keeper_still_authorized(
+                ctx.raw_ctx, ctx.chat_key, ctx.services.store
+            ):
+                return ctx.i18n.t("commands.model.denied")
+            return await self._model_show(ctx, runtime_config)
+        if ctx.raw_ctx.platform != "cli" and not _is_keeper(ctx.raw_ctx):
+            return ctx.i18n.t("commands.model.denied")
         if sub in (
             _MODEL_SET_WORDS
             | _MODEL_LOGIN_WORDS
@@ -1209,6 +1334,10 @@ class CommandRouter:
             | _MODEL_RESET_WORDS
         ):
             async with ctx.services.config_lock:
+                if not await _keeper_still_authorized(
+                    ctx.raw_ctx, ctx.chat_key, ctx.services.store
+                ):
+                    return ctx.i18n.t("commands.model.denied")
                 if sub in _MODEL_SET_WORDS:
                     return await self._model_set(ctx, runtime_config, rest)
                 if sub in _MODEL_LOGIN_WORDS:
@@ -1218,8 +1347,6 @@ class CommandRouter:
                 if sub in _MODEL_KEY_WORDS:
                     return await self._model_key(ctx, runtime_config, rest)
                 return await self._model_reset(ctx, runtime_config)
-        if sub in _MODEL_SHOW_WORDS:
-            return await self._model_show(ctx, runtime_config)
         return ctx.i18n.t("commands.model.usage")
 
     async def _model_show(self, ctx: CommandCtx, runtime_config: Any) -> str:
@@ -1280,7 +1407,6 @@ class CommandRouter:
 
         current = await runtime_config.get()
         live = _live_llm_settings(ctx.services)
-        live_snapshot = _snapshot_live_llm(ctx.services)
         same_provider = _provider_identity(provider) == _provider_identity(live.provider)
         saved = await _saved_llm_credentials(ctx.services, provider)
 
@@ -1332,18 +1458,11 @@ class CommandRouter:
             }
         )
 
-        # Validate by reconfiguring the LIVE LLM FIRST, then persist only on success. Building a
-        # native provider whose optional SDK/key is missing raises; if we persisted before that, the
-        # bad override would also brick the next `build_services()` boot. Persistence failure is
-        # compensated with the exact old inner/settings snapshot.
+        # Build/apply first so an invalid provider cannot poison the next boot, then persist it.
         try:
             reconfigured = _reconfigure_llm(ctx.services, overrides)
             await runtime_config.replace(**overrides)
-        except BaseException as exc:
-            _restore_live_llm(ctx.services, live_snapshot, operation="model set")
-            if not isinstance(exc, Exception):
-                raise
-            # Distinguish "not logged in" (already checked) from other build/persistence failures.
+        except Exception:
             return _model_mutation_failed(ctx, provider)
         # Refresh an explicitly configured SuperGrok image client once its
         # shared subscription is ready. Selecting an LLM must not silently turn
@@ -1492,33 +1611,17 @@ class CommandRouter:
                     pass
 
         live = _live_llm_settings(ctx.services)
-        live_snapshot = _snapshot_live_llm(ctx.services)
-        runtime_snapshot = await ctx.services.runtime_config.get()
         current_oauth_path = (live.provider or "").casefold() == "supergrok" or (
             (live.provider or "").casefold() in CHATGPT_SUBSCRIPTION_PROXY_PROVIDER_NAMES
             and not live.base_url
         )
         active_oauth = _provider_identity(live.provider) == canonical and current_oauth_path
-        runtime_changed = False
         try:
             if active_oauth:
-                # Move the live process and restart snapshot off the soon-to-be-revoked grant
-                # BEFORE deleting it. If either step fails, the still-valid credential makes exact
-                # rollback possible and logout reports failure rather than leaving a broken client.
                 _reconfigure_llm(ctx.services, {})
                 await ctx.services.runtime_config.clear()
-                runtime_changed = True
             await ctx.services.llm_credentials.forget_subscription(canonical)
-        except BaseException as exc:
-            if runtime_changed:
-                await _restore_runtime_config(
-                    ctx.services.runtime_config,
-                    runtime_snapshot,
-                    operation="model logout",
-                )
-            _restore_live_llm(ctx.services, live_snapshot, operation="model logout")
-            if not isinstance(exc, Exception):
-                raise
+        except Exception:
             return _model_mutation_failed(ctx, canonical)
 
         if canonical == "supergrok" and (ctx.services.settings.imagegen.provider or "").casefold() == "supergrok":
@@ -1540,52 +1643,28 @@ class CommandRouter:
         )
         if oauth_path:
             return ctx.i18n.t("commands.model.login_required", provider=canonical_subscription_provider(provider))
-        runtime_snapshot = await runtime_config.get()
-        live_snapshot = _snapshot_live_llm(ctx.services)
-        credential_snapshot = await ctx.services.llm_credentials.get(provider)
-        merged = dict(runtime_snapshot)
+        merged = dict(await runtime_config.get())
         merged["api_key"] = api_key
-        credential_changed = False
         try:
-            # Build first; no durable state changes if the new key/provider cannot construct.
             _reconfigure_llm(ctx.services, merged)
-            # Provider credential and active override are separate rows. Write the inactive book
-            # first, then compensate it if the active runtime snapshot cannot be persisted.
             await ctx.services.llm_credentials.replace_static(
                 provider,
                 api_key=api_key,
                 base_url=live.base_url or "",
             )
-            credential_changed = True
             await runtime_config.replace(**merged)
-        except BaseException as exc:
-            if credential_changed:
-                await _restore_static_credential(
-                    ctx.services,
-                    provider,
-                    credential_snapshot,
-                    operation="model key",
-                )
-            _restore_live_llm(ctx.services, live_snapshot, operation="model key")
-            if not isinstance(exc, Exception):
-                raise
+        except Exception:
             return _model_mutation_failed(ctx, provider)
         return ctx.i18n.t("commands.model.key_done", api_key=mask_secret(api_key))
 
     async def _model_reset(self, ctx: CommandCtx, runtime_config: Any) -> str:
         if not _is_keeper(ctx.raw_ctx):
             return ctx.i18n.t("commands.model.denied")
-        live_snapshot = _snapshot_live_llm(ctx.services)
-        provider = live_snapshot.overrides.get("provider", "default")
+        provider = _live_llm_settings(ctx.services).provider or "default"
         try:
-            # Build/reconfigure first so a broken base/env provider cannot erase the last-known-good
-            # restart override. A clear failure restores the exact old live inner.
             _reconfigure_llm(ctx.services, {})
             await runtime_config.clear()
-        except BaseException as exc:
-            _restore_live_llm(ctx.services, live_snapshot, operation="model reset")
-            if not isinstance(exc, Exception):
-                raise
+        except Exception:
             return _model_mutation_failed(ctx, provider)
         info = _describe_llm(ctx.services)
         return ctx.i18n.t("commands.model.reset_done", provider=info["provider"], chat_model=info["chat_model"])
@@ -1593,7 +1672,15 @@ class CommandRouter:
     def _build_specs(self) -> list[CommandSpec]:
         return [
             CommandSpec("roll", self.cmd_roll, ["roll", "r"], ["r", "rd"], {"name": "roll"}, "commands.help.roll"),
-            CommandSpec("hidden_roll", self.cmd_hidden_roll, ["rh", "hroll"], ["rh"], None, "commands.help.hidden_roll"),
+            CommandSpec(
+                "hidden_roll",
+                self.cmd_hidden_roll,
+                ["rh", "hroll"],
+                ["rh"],
+                None,
+                "commands.help.hidden_roll",
+                private_reply=True,
+            ),
             CommandSpec(
                 "check",
                 self.cmd_check,
@@ -1605,6 +1692,40 @@ class CommandRouter:
             CommandSpec("opposed", self.cmd_opposed, ["opposed", "rav", "rcv"], ["rav", "rcv"], None, "commands.help.opposed"),
             CommandSpec("sc", self.cmd_sanity, ["sc", "sanity"], ["sc"], {"name": "sc"}, "commands.help.sc"),
             CommandSpec("sheet", self.cmd_sheet, ["sheet", "st"], ["st"], {"name": "sheet"}, "commands.help.sheet"),
+            CommandSpec(
+                "panel",
+                self.cmd_panel,
+                ["panel"],
+                ["panel", "面板"],
+                {"name": "panel"},
+                "commands.help.panel",
+            ),
+            CommandSpec(
+                "language",
+                self.cmd_language,
+                ["language"],
+                ["language"],
+                {"name": "language"},
+                "commands.help.language",
+            ),
+            CommandSpec(
+                "bind",
+                self.cmd_bind,
+                ["bind"],
+                ["bind", "绑定", "綁定"],
+                None,
+                "commands.help.bind",
+                private_reply=True,
+            ),
+            CommandSpec(
+                "unbind",
+                self.cmd_unbind,
+                ["unbind"],
+                ["unbind", "解绑", "解綁"],
+                None,
+                "commands.help.unbind",
+                private_reply=True,
+            ),
             CommandSpec("growth", self.cmd_growth, ["growth", "en"], ["en"], None, "commands.help.growth"),
             CommandSpec("init", self.cmd_initiative, ["init", "initiative", "ri"], ["ri", "init"], {"name": "init"}, "commands.help.init"),
             CommandSpec("coc", self.cmd_make_char, ["coc", "coc7"], ["coc", "coc7"], {"name": "coc"}, "commands.help.coc"),
@@ -1706,7 +1827,6 @@ class CommandRouter:
                 ["import", "导入", "導入"],
                 None,
                 "charcard.commands.import.help",
-                required_level=int(PrivilegeLevel.GROUP_ADMIN),
             ),
             CommandSpec(
                 "module",
@@ -1724,14 +1844,6 @@ class CommandRouter:
                 ["room", "房间", "房間"],
                 None,
                 "commands.help.room",
-                required_level=int(PrivilegeLevel.GROUP_ADMIN),
-                # `.room open`/`.room link` replies carry a literal join key / session id
-                # that GRANTS room access -- broadcasting it would let every current member
-                # hand the room away. (`gateway.runner.GatewayRunner` already special-cases
-                # `.room` before it ever reaches `run_turn` on the chat-adapter path; this
-                # flag is what protects the direct `net.tui_server` path, which dispatches
-                # `.room` through `run_turn` like any other command.)
-                private_reply=True,
             ),
             CommandSpec(
                 "model",
@@ -1775,10 +1887,24 @@ class CommandRouter:
                 bonus=parsed.bonus,
                 penalty=parsed.penalty,
             )
+            display_name = pack.display_name(parsed.canonical, ctx.locale)
+            ctx.dice(
+                "check",
+                expr=display_name,
+                rolls=[outcome["roll"]],
+                total=outcome["roll"],
+                target=target_value,
+                effective_target=effective_target,
+                rank=outcome["rank"],
+                success=outcome["success"],
+                difficulty=outcome["difficulty"],
+                bonus=outcome["bonus"],
+                penalty=outcome["penalty"],
+            )
             lines.append(
                 ctx.i18n.t(
                     "commands.check.coc",
-                    name=pack.display_name(parsed.canonical, ctx.locale),
+                    name=display_name,
                     target=target_value,
                     effective=effective_target,
                     roll=outcome["roll"],
@@ -1799,6 +1925,11 @@ class CommandRouter:
             result = ctx.services.dice.roll_disadvantage(expr, is_check=True)
         else:
             result = ctx.services.dice.roll_expression(expr, is_check=True)
+        ctx.dice(
+            "check",
+            skill=canonical,
+            **_dice_result_fields(result),
+        )
         return ctx.i18n.t(
             "commands.check.dnd",
             name=pack.display_name(canonical, ctx.locale),
@@ -1874,6 +2005,31 @@ def _is_zh(locale: str) -> bool:
 
 def _format_roll(result: DiceResult, i18n: I18n) -> str:
     return result.format_result(i18n=i18n)
+
+
+def _dice_result_fields(result: DiceResult) -> dict[str, Any]:
+    """Public structured fields from the exact ``DiceResult`` already rendered."""
+    return {
+        "expr": result.expression,
+        "rolls": list(result.rolls),
+        "total": result.total,
+        "modifier": result.modifier,
+        "critical_success": result.is_critical_success(),
+        "critical_failure": result.is_critical_failure(),
+    }
+
+
+def _coc_event_side(name: str, outcome: dict[str, Any], target: int) -> dict[str, Any]:
+    return {
+        "name": name,
+        "target": target,
+        "total": outcome["roll"],
+        "rank": outcome["rank"],
+        "success": outcome["success"],
+        "difficulty": outcome["difficulty"],
+        "bonus": outcome["bonus"],
+        "penalty": outcome["penalty"],
+    }
 
 
 def _normalize_roll_expression(expression: str) -> str:
@@ -2338,34 +2494,63 @@ def _channel_chat_key(ctx: Any) -> str:
     return chat_key() if callable(chat_key) else str(chat_key)
 
 
+def _origin_source(ctx: Any) -> Any | None:
+    extra = getattr(ctx, "extra", None)
+    return extra.get("source") if isinstance(extra, dict) else None
+
+
+def _first_attachment_name(ctx: Any) -> str:
+    extra = getattr(ctx, "extra", None)
+    names = extra.get("attachment_names") if isinstance(extra, dict) else None
+    return str(names[0]) if isinstance(names, list) and names else ""
+
+
+def _is_direct_chat(source: Any) -> bool:
+    return bool(getattr(source, "user_id", None)) and str(
+        getattr(source, "chat_type", "") or ""
+    ).casefold() in _ROOM_ADMIN_CHAT_TYPES
+
+
 def _privilege_level(ctx: Any) -> int:
     """The caller's privilege for command gating (see `_ROOM_*` constants).
 
-    `cli` is a single local operator (no keystore/role concept) and is always the
-    master. `tui` is a multi-user network service, so its level is decided by the
-    AUTHENTICATED keystore role the server stamped into `ctx.extra["role"]`
-    (`net.tui_server._ctx_for`): `keeper` -> master, anything else -> everyone. Every
-    other platform falls through to the generic chat-admin heuristics below."""
+    Local CLI is trusted; every network transport needs an authenticated Keeper role."""
     platform = str(getattr(ctx, "platform", "") or "").casefold()
     if platform in _AUTO_MASTER_PLATFORMS:
         return int(PrivilegeLevel.MASTER)
     extra = getattr(ctx, "extra", None)
-    if platform == "tui":
-        role = extra.get("role") if isinstance(extra, dict) else None
-        return int(PrivilegeLevel.MASTER) if role == _TUI_KEEPER_ROLE else int(PrivilegeLevel.EVERYONE)
-    raw = extra.get("raw") if isinstance(extra, dict) else None
-    source = extra.get("source") if isinstance(extra, dict) else None
-    chat_type = str(getattr(source, "chat_type", "") or "").casefold()
-    if chat_type in _ROOM_ADMIN_CHAT_TYPES:
-        return int(PrivilegeLevel.GROUP_ADMIN)
-    if _raw_indicates_admin(raw):
-        return int(PrivilegeLevel.GROUP_ADMIN)
+    role = extra.get("role") if isinstance(extra, dict) else None
+    if role == _TUI_KEEPER_ROLE:
+        return int(PrivilegeLevel.MASTER)
     return int(PrivilegeLevel.EVERYONE)
 
 
 def _is_keeper(ctx: Any) -> bool:
-    """True if the caller may perform keeper/admin mutations (CLI/DM/group-admin)."""
-    return _privilege_level(ctx) >= int(PrivilegeLevel.GROUP_ADMIN)
+    """True for the local operator or an authenticated keeper identity."""
+    platform = str(getattr(ctx, "platform", "") or "").casefold()
+    if platform in _AUTO_MASTER_PLATFORMS:
+        return True
+    extra = getattr(ctx, "extra", None)
+    return isinstance(extra, dict) and extra.get("role") == _TUI_KEEPER_ROLE
+
+
+async def _keeper_still_authorized(ctx: Any, chat_key: str, store: Any) -> bool:
+    platform = str(getattr(ctx, "platform", "") or "").casefold()
+    if platform in _AUTO_MASTER_PLATFORMS:
+        return True
+    if not _is_keeper(ctx):
+        return False
+    source = _origin_source(ctx)
+    if source is None or platform in {"tui", "iroh"}:
+        extra = getattr(ctx, "extra", None)
+        reauthorize = extra.get("reauthorize") if isinstance(extra, dict) else None
+        return bool(reauthorize()) if callable(reauthorize) else True
+    room = await get_keeper_binding(
+        store,
+        source.platform,
+        source.user_id,
+    )
+    return bool(room and session_key_for_room(room) == chat_key)
 
 
 def _is_private_channel(ctx: Any) -> bool:
@@ -2375,87 +2560,14 @@ def _is_private_channel(ctx: Any) -> bool:
     if platform in _ROOM_LOCAL_PLATFORMS:
         return True
     extra = getattr(ctx, "extra", None)
+    if isinstance(extra, dict) and extra.get("private_interaction"):
+        return True
     source = extra.get("source") if isinstance(extra, dict) else None
     chat_type = str(getattr(source, "chat_type", "") or "").casefold()
     return chat_type in _ROOM_ADMIN_CHAT_TYPES
 
 
-def _snapshot_live_llm(services: Services) -> Any:
-    return snapshot_provider_llm(services.llm, _live_llm_settings(services))
-
-
-def _restore_live_llm(services: Services, snapshot: Any, *, operation: str) -> bool:
-    if not restore_provider_llm(services.llm, snapshot):
-        logger.warning("model: live rollback failed during %s", operation)
-        return False
-    return True
-
-
-async def _restore_runtime_config(runtime_config: Any, snapshot: dict[str, str], *, operation: str) -> bool:
-    """Best-effort compensation after a later step failed."""
-    try:
-        if snapshot:
-            await runtime_config.replace(**snapshot)
-        else:
-            await runtime_config.clear()
-        return True
-    except Exception:
-        logger.warning("model: runtime-config rollback failed during %s", operation, exc_info=True)
-        return False
-
-
-async def _restore_static_credential(
-    services: Services,
-    provider: str,
-    snapshot: dict[str, str],
-    *,
-    operation: str,
-) -> bool:
-    """Restore only a provider's static key/URL, leaving OAuth fields untouched."""
-    try:
-        old_static = {
-            "api_key": snapshot.get("api_key", ""),
-            "base_url": snapshot.get("base_url", ""),
-        }
-        await services.llm_credentials.replace_static(provider, **old_static)
-        return True
-    except Exception:
-        logger.warning(
-            "model: credential rollback failed for provider %s during %s",
-            provider,
-            operation,
-            exc_info=True,
-        )
-        return False
-
-
-async def _restore_subscription_credential(
-    services: Services,
-    provider: str,
-    snapshot: Any | None,
-    *,
-    operation: str,
-) -> bool:
-    """Best-effort OAuth compensation after a later client refresh failed."""
-    try:
-        if snapshot is None:
-            await services.llm_credentials.forget_subscription(provider)
-        else:
-            await services.llm_credentials.save_subscription(provider, snapshot)
-        return True
-    except Exception:
-        logger.warning(
-            "model: subscription rollback failed for provider %s during %s",
-            provider,
-            operation,
-            exc_info=True,
-        )
-        return False
-
-
 def _model_mutation_failed(ctx: CommandCtx, provider: str) -> str:
-    # Reuse the existing localized, non-secret generic mutation failure. The command-specific
-    # success message is only emitted after every durable/live step commits.
     return ctx.i18n.t("commands.model.set_failed", provider=provider)
 
 
@@ -2518,92 +2630,8 @@ def _subscription_login_locks(services: Services) -> dict[str, Any]:
 
 
 async def _install_subscription(services: Services, canonical: str, token: Any) -> None:
-    """Atomically publish a polled OAuth grant and every client that consumes it.
-
-    ``CredentialBook.save_subscription`` deliberately invalidates the previous token manager
-    after its durable write. Therefore restoring only the credential row after a later refresh
-    failure is insufficient: active LLM/image clients holding that manager must be rebuilt from
-    the restored grant. The caller owns ``services.config_lock`` so these compensation writes do
-    not overwrite another admin mutation.
-    """
-    subscription_snapshot = await services.llm_credentials.load_subscription(canonical)
-    credential_snapshot = await services.llm_credentials.get(canonical)
-    runtime_snapshot = await services.runtime_config.get()
-    live_snapshot = _snapshot_live_llm(services)
-    imagegen_snapshot = services.imagegen
-    live_provider = live_snapshot.overrides.get("provider", "").casefold()
-    live_oauth_path = live_provider == "supergrok" or (
-        live_provider in CHATGPT_SUBSCRIPTION_PROXY_PROVIDER_NAMES
-        and not live_snapshot.overrides.get("base_url", "")
-    )
-    active_oauth = _provider_identity(live_provider) == canonical and live_oauth_path
-
-    subscription_changed = False
-    try:
-        await services.llm_credentials.save_subscription(canonical, token)
-        subscription_changed = True
-        await _refresh_active_subscription_clients(services, canonical)
-    except BaseException:
-        if not subscription_changed:
-            raise
-        subscription_restored = await _restore_subscription_credential(
-            services,
-            canonical,
-            subscription_snapshot,
-            operation="subscription login",
-        )
-        # A successful OAuth save strips an independent ChatGPT proxy key/URL,
-        # so restore that pair after restoring the old grant.
-        await _restore_static_credential(
-            services,
-            canonical,
-            credential_snapshot,
-            operation="subscription login",
-        )
-        await _restore_runtime_config(
-            services.runtime_config,
-            runtime_snapshot,
-            operation="subscription login",
-        )
-
-        if active_oauth and subscription_restored:
-            try:
-                # The exact old inner references the manager invalidated by the attempted save;
-                # rebuild it against the manager created from the restored durable token.
-                _reconfigure_llm(services, live_snapshot.overrides)
-            except Exception:
-                logger.warning(
-                    "model: active LLM rebuild failed during subscription login rollback",
-                    exc_info=True,
-                )
-                _restore_live_llm(services, live_snapshot, operation="subscription login")
-        else:
-            # A classic proxy/static provider never used the invalidated manager, so exact object
-            # restoration is both safe and preserves the pre-login client.
-            _restore_live_llm(services, live_snapshot, operation="subscription login")
-
-        if canonical == "supergrok":
-            imagegen_provider = (services.settings.imagegen.provider or "").casefold()
-            snapshot_used_subscription = callable(
-                getattr(imagegen_snapshot, "_token_provider", None)
-            )
-            if (
-                imagegen_provider == "supergrok"
-                and subscription_restored
-                and snapshot_used_subscription
-            ):
-                try:
-                    # SuperGrok image generation shares the same invalidated TokenManager.
-                    _refresh_supergrok_imagegen(services)
-                except Exception:
-                    logger.warning(
-                        "model: image client rebuild failed during subscription login rollback",
-                        exc_info=True,
-                    )
-                    services.imagegen = imagegen_snapshot
-            else:
-                services.imagegen = imagegen_snapshot
-        raise
+    await services.llm_credentials.save_subscription(canonical, token)
+    await _refresh_active_subscription_clients(services, canonical)
 
 
 async def _refresh_active_subscription_clients(services: Services, canonical: str) -> None:
@@ -2633,17 +2661,8 @@ async def _refresh_active_subscription_clients(services: Services, canonical: st
                     "base_url": "",
                 }
             )
-            live_snapshot = _snapshot_live_llm(services)
-            try:
-                _reconfigure_llm(services, overrides)
-                await services.runtime_config.replace(**overrides)
-            except BaseException:
-                _restore_live_llm(
-                    services,
-                    live_snapshot,
-                    operation="subscription login",
-                )
-                raise
+            _reconfigure_llm(services, overrides)
+            await services.runtime_config.replace(**overrides)
         elif oauth_path:
             # A failed persisted override may have left the validated base/env
             # provider live. Rebuild the base snapshot, not an unrelated override.
@@ -2664,15 +2683,6 @@ def _refresh_supergrok_imagegen(services: Services) -> None:
     from infra.imagegen import build_imagegen
 
     services.imagegen = build_imagegen(services.settings, llm_credentials=services.llm_credentials)
-
-
-def _raw_indicates_admin(raw: Any) -> bool:
-    if not isinstance(raw, dict):
-        return False
-    for key in ("role", "sender_role", "member_role", "author_role", "user_role"):
-        if str(raw.get(key, "")).casefold() in _ROOM_ADMIN_RAW_ROLES:
-            return True
-    return any(raw.get(flag) is True for flag in _ROOM_ADMIN_RAW_FLAGS)
 
 
 def _member_label(member: Any) -> str:

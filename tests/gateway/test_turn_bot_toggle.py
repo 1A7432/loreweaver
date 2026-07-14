@@ -29,9 +29,6 @@ class _FakeMember:
         self.name = member_id
         self.events: list[Event] = []
 
-    def supports_proactive(self) -> bool:
-        return True
-
     async def deliver(self, event: Event) -> None:
         self.events.append(event)
 

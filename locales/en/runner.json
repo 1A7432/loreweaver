@@ -1,4 +1,12 @@
 {
+  "runner.attachment_input": "Shared attachment(s): {names}",
+  "runner.attachment_unsupported": "That attachment type or size is not supported.",
   "runner.throttled": "Too many messages too quickly. Please slow down.",
-  "runner.error": "Something went wrong handling that. Please try again."
+  "runner.error": "Something went wrong handling that. Please try again.",
+  "runner.private_reply_unavailable": "Use this command in a private chat with the bot.",
+  "runner.welcome": "Welcome to Loreweaver. Create a character, open the table panel, or view all commands.",
+  "runner.welcome.create": "Create character",
+  "runner.welcome.help": "Help",
+  "runner.welcome.panel": "Table panel",
+  "runner.welcome.sheet": "My character"
 }

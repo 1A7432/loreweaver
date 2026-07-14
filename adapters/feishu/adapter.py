@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from gateway.base_adapter import BaseAdapter, MessageHandler
+from gateway.chat import ChatCapabilities, ChatMessage
 from gateway.events import InboundMessage, SendResult
 from gateway.registry import PlatformEntry, platform_registry
 from gateway.session import SessionSource
@@ -138,7 +139,7 @@ def _response_success(response: Any) -> bool:
 
 class FeishuAdapter(BaseAdapter):
     platform = "feishu"
-    typed_command_prefix = "/"
+    capabilities = ChatCapabilities(max_text_chars=4000)
 
     def __init__(
         self,
@@ -183,12 +184,19 @@ class FeishuAdapter(BaseAdapter):
         await self.handle_inbound(inbound)
         return inbound
 
-    async def send(self, source: SessionSource, content: str, *, reply_to: str | None = None) -> SendResult:
-        del reply_to
+    async def _send_message(
+        self,
+        source: SessionSource,
+        message: ChatMessage,
+        *,
+        reply_to: str | None,
+        session_key: str | None,
+    ) -> SendResult:
+        del reply_to, session_key
         if self._transport is None:
             return SendResult(ok=False, error=localize("feishu.client_unavailable"))
 
-        payload = json.dumps({"text": content}, ensure_ascii=False)
+        payload = json.dumps({"text": message.text}, ensure_ascii=False)
         response = self._transport.im.v1.message.create(
             receive_id=source.chat_id,
             msg_type="text",
@@ -206,7 +214,7 @@ platform_registry.register(
     PlatformEntry(
         name="feishu",
         label="Feishu",
-        adapter_factory=lambda cfg: FeishuAdapter(cfg),
+        adapter_factory=lambda cfg, context: FeishuAdapter(cfg),
         check_fn=lambda: True,
     )
 )

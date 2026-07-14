@@ -16,6 +16,7 @@
   "charcard.tools.preview.failed": "预览角色卡失败：{error}",
   "charcard.commands.import.help": "将 SillyTavern 角色卡导入为玩家角色或 AI 同伴：.import <文件> [coc7|dnd5e] [pc|companion]",
   "charcard.commands.import.usage": "用法：.import <角色卡文件> [coc7|dnd5e] [pc|companion]",
+  "charcard.commands.import.companion_denied": "只有已认证的守秘人可以导入 AI 同伴。",
   "charcard.commands.genchar.done": "已根据描述生成 {system} 角色：{name}",
   "charcard.commands.genchar.help": "根据自由文本描述生成角色卡。",
   "charcard.commands.genchar.usage": "用法：.genchar [coc7|dnd5e] [名称] | <描述>"

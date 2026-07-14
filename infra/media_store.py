@@ -23,6 +23,16 @@ from infra.svg import SVG_MIME, SvgSafetyError, validate_svg_bytes
 ALLOWED_IMAGE_MIMES = frozenset({"image/png", "image/jpeg", "image/webp", "image/gif", SVG_MIME})
 ALLOWED_AUDIO_MIMES = frozenset({"audio/mpeg", "audio/ogg", "audio/wav", "audio/flac", "audio/mp4", "audio/aac"})
 ALLOWED_MEDIA_MIMES = ALLOWED_IMAGE_MIMES | ALLOWED_AUDIO_MIMES
+ALLOWED_DOCUMENT_MIMES = frozenset(
+    {
+        "text/plain",
+        "text/markdown",
+        "application/json",
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }
+)
+ALLOWED_CHAT_ATTACHMENT_MIMES = ALLOWED_MEDIA_MIMES | ALLOWED_DOCUMENT_MIMES
 DEFAULT_MAX_FILE_BYTES = 8 * 1024 * 1024
 DEFAULT_ROOM_QUOTA_BYTES = 512 * 1024 * 1024
 # TODO: EXIF stripping is intentionally out of scope for media P1; blobs stay opaque.
@@ -201,9 +211,12 @@ class MediaStore:
                     conn.rollback()
                     return _row_to_record(row)
 
+                mimes = tuple(allowed_mimes)
+                placeholders = ",".join("?" for _ in mimes)
                 total_row = conn.execute(
-                    "SELECT COALESCE(SUM(size), 0) FROM media_index WHERE room = ?",
-                    (pending.room,),
+                    f"SELECT COALESCE(SUM(size), 0) FROM media_index "
+                    f"WHERE room = ? AND mime IN ({placeholders})",
+                    (pending.room, *mimes),
                 ).fetchone()
                 total = int(total_row[0] or 0) if total_row else 0
                 if total + pending.size > room_quota_bytes:
@@ -260,7 +273,13 @@ class MediaStore:
         await self._ensure_schema()
         async with self._store._lock:
             conn = self._store._ensure_conn()
-            row = conn.execute("SELECT COALESCE(SUM(size), 0) FROM media_index WHERE room = ?", (room,)).fetchone()
+            mimes = tuple(self.allowed_mimes)
+            placeholders = ",".join("?" for _ in mimes)
+            row = conn.execute(
+                f"SELECT COALESCE(SUM(size), 0) FROM media_index "
+                f"WHERE room = ? AND mime IN ({placeholders})",
+                (room, *mimes),
+            ).fetchone()
         return int(row[0] or 0) if row else 0
 
     async def list_room_records(self, room: str) -> list[MediaRecord]:

@@ -27,9 +27,6 @@ class FakeMember:
         self.fail = fail
         self.events: list[Event] = []
 
-    def supports_proactive(self) -> bool:
-        return True
-
     async def deliver(self, event: Event) -> None:
         if self.fail:
             raise RuntimeError("deliver boom")
@@ -42,7 +39,7 @@ def _delivered_kinds(member: FakeMember) -> list[str]:
 
 def test_fake_member_satisfies_the_member_protocol() -> None:
     # The Protocol is runtime_checkable, so this pins the structural contract
-    # (id / user_key / transport / supports_proactive / deliver) the hub relies on.
+    # (id / user_key / transport / deliver) the hub relies on.
     assert isinstance(FakeMember("x"), Member)
 
 
@@ -139,6 +136,25 @@ async def test_member_whose_deliver_raises_is_dropped_without_breaking_others() 
     await hub.publish("room", followup)
     assert all(delivered is not followup for delivered in bad.events)
     assert any(delivered is followup for delivered in good1.events)
+
+
+async def test_personalized_event_build_failure_does_not_drop_the_connection() -> None:
+    hub = RoomHub()
+    good, broken = FakeMember("good"), FakeMember("broken")
+    await hub.subscribe("room", good)
+    await hub.subscribe("room", broken)
+    good.events.clear()
+    broken.events.clear()
+
+    async def build(member: FakeMember) -> Event:
+        if member is broken:
+            raise ValueError("bad state")
+        return Event.state({"member": member.id})
+
+    await hub.publish_each("room", build)
+
+    assert any(event.kind == "state" for event in good.events)
+    assert broken in hub.members("room")
 
 
 async def test_two_members_on_different_transports_both_receive_the_event() -> None:

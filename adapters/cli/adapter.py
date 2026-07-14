@@ -8,6 +8,7 @@ from typing import TextIO
 
 from agent.context import LocalFs
 from gateway.base_adapter import BaseAdapter
+from gateway.chat import ChatCapabilities, ChatMessage
 from gateway.events import InboundMessage, SendResult
 from gateway.session import SessionSource
 
@@ -17,6 +18,7 @@ CLI_USER_ID = "player"
 
 class CliAdapter(BaseAdapter):
     platform = "cli"
+    capabilities = ChatCapabilities(max_text_chars=100_000)
 
     def __init__(
         self,
@@ -37,13 +39,18 @@ class CliAdapter(BaseAdapter):
     async def disconnect(self) -> None:
         return None
 
-    async def send(self, source: SessionSource, content: str, *, reply_to: str | None = None) -> SendResult:
-        self.sent.append(content)
-        print(content, file=self.stdout, flush=True)
+    async def _send_message(
+        self,
+        source: SessionSource,
+        message: ChatMessage,
+        *,
+        reply_to: str | None,
+        session_key: str | None,
+    ) -> SendResult:
+        del source, reply_to, session_key
+        self.sent.append(message.text)
+        print(message.text, file=self.stdout, flush=True)
         return SendResult(ok=True)
-
-    def supports_proactive(self, source: SessionSource) -> bool:
-        return True
 
     def source(self, *, message_id: str | None = None) -> SessionSource:
         return SessionSource(

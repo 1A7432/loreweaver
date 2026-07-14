@@ -9,48 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from gateway.chat import ChatAttachment, ChatInteraction
 from gateway.session import SessionSource
-
-
-@dataclass(frozen=True)
-class MessageChunk:
-    text: str
-
-
-@dataclass(frozen=True)
-class MessageStop:
-    final: bool = False
-
-
-@dataclass(frozen=True)
-class Commentary:
-    text: str
-
-
-@dataclass(frozen=True)
-class ToolCallChunk:
-    tool_name: str
-    preview: str | None = None
-    args: dict[str, Any] | None = None
-    index: int = 0
-
-
-@dataclass(frozen=True)
-class ToolCallFinished:
-    tool_name: str
-    duration: float = 0.0
-    ok: bool = True
-    index: int = 0
-
-
-@dataclass(frozen=True)
-class GatewayNotice:
-    kind: str
-    text: str = ""
-    extra: dict[str, Any] = field(default_factory=dict)
-
-
-StreamEvent = MessageChunk | MessageStop | Commentary | ToolCallChunk | ToolCallFinished | GatewayNotice
 
 
 @dataclass
@@ -58,6 +18,9 @@ class InboundMessage:
     source: SessionSource
     text: str
     at_bot: bool = False
+    attachments: list[ChatAttachment] = field(default_factory=list)
+    interaction: ChatInteraction | None = None
+    quoted_text: str = ""
     raw: dict[str, Any] | None = None
 
 

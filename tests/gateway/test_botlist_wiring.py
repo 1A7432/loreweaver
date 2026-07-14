@@ -74,7 +74,7 @@ async def test_runner_botlist_add_command_makes_gate_ignore_that_sender() -> Non
         InboundMessage(source=admin, text=f".botlist add {peer_bot.user_key()}")
     )
     assert admin_reply is not None
-    assert peer_bot.user_key() in admin_reply
+    assert peer_bot.user_key() in admin_reply.text
     assert runner.botlist.is_bot(peer_bot.user_key())
 
     after = await runner.on_inbound(InboundMessage(source=peer_bot, text="hello again"))

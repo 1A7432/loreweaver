@@ -11,7 +11,12 @@ from agent.context import AgentCtx
 from agent.services import build_services
 from gateway.commands import CommandRouter
 from gateway.hub import RoomHub
-from gateway.rooms import get_binding, resolve_session_key, session_key_for_room
+from gateway.rooms import (
+    get_binding,
+    resolve_session_key,
+    session_key_for_room,
+    set_keeper_binding,
+)
 from gateway.session import SessionSource
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
@@ -34,14 +39,13 @@ def _router(services, *, keystore=None, hub=None) -> CommandRouter:
 
 
 def _admin_ctx(source: SessionSource) -> AgentCtx:
-    # A private/DM channel: its sole participant owns the session, so the gate
-    # grants GROUP_ADMIN and the `.room` family is permitted.
+    # Network transports only gain Keeper commands after chat_bind authentication.
     return AgentCtx(
         chat_key=source.chat_key(),
         user_id=source.user_key(),
         platform=source.platform,
         locale="en",
-        extra={"source": source, "raw": {}},
+        extra={"source": source, "raw": {}, "role": "keeper"},
     )
 
 
@@ -57,6 +61,20 @@ async def test_resolve_session_key_default_then_bound() -> None:
         user_key="", store_key=f"bound_room.{source.chat_key()}", value="tui:group:room-x"
     )
     assert await resolve_session_key(services.store, source) == "tui:group:room-x"
+
+
+async def test_direct_keeper_identity_resolves_without_a_second_channel_binding() -> None:
+    services = _services()
+    source = SessionSource(
+        platform="discord", chat_type="dm", chat_id="dm-1", user_id="keeper-1"
+    )
+
+    await set_keeper_binding(services.store, "discord", "keeper-1", "arkham")
+
+    assert await get_binding(services.store, source.chat_key()) is None
+    assert await resolve_session_key(services.store, source) == session_key_for_room(
+        "arkham"
+    )
 
 
 async def test_room_open_mints_join_key_and_binds_channel() -> None:
@@ -162,11 +180,10 @@ async def test_room_command_is_gated_from_ordinary_group_members() -> None:
     assert await get_binding(services.store, source.chat_key()) is None  # nothing bound
 
 
-async def test_room_command_allowed_with_admin_marker_in_raw() -> None:
+async def test_room_open_rejects_platform_admin_marker_without_keeper_binding() -> None:
     services = _services()
     keystore = Keystore()
     router = _router(services, keystore=keystore)
-    join_key = keystore.add(room="admin-room")
     source = SessionSource(platform="discord", chat_type="group", chat_id="c-6", user_id="u-6")
     ctx = AgentCtx(
         chat_key=source.chat_key(),
@@ -176,5 +193,48 @@ async def test_room_command_allowed_with_admin_marker_in_raw() -> None:
         extra={"source": source, "raw": {"is_admin": True}},
     )
 
+    reply = await router.dispatch(ctx, ".room open")
+    assert reply == get_i18n("en").t("rooms.denied")
+    assert await get_binding(services.store, source.chat_key()) is None
+
+
+async def test_room_link_key_can_explicitly_link_a_group() -> None:
+    services = _services()
+    keystore = Keystore()
+    router = _router(services, keystore=keystore)
+    join_key = keystore.add(room="group-room")
+    source = SessionSource(platform="discord", chat_type="group", chat_id="c-7", user_id="u-7")
+    ctx = AgentCtx(
+        chat_key=source.chat_key(),
+        user_id=source.user_key(),
+        platform="discord",
+        locale="en",
+        extra={"source": source, "raw": {}},
+    )
+
     await router.dispatch(ctx, f".room link {join_key}")
-    assert await get_binding(services.store, source.chat_key()) == session_key_for_room("admin-room")
+
+    assert await get_binding(services.store, source.chat_key()) == session_key_for_room("group-room")
+
+
+async def test_private_interaction_can_open_a_room_from_a_group() -> None:
+    services = _services()
+    keystore = Keystore()
+    router = _router(services, keystore=keystore)
+    source = SessionSource(platform="discord", chat_type="group", chat_id="c-8", user_id="keeper")
+    ctx = AgentCtx(
+        chat_key=source.chat_key(),
+        user_id=source.user_key(),
+        platform="discord",
+        locale="en",
+        extra={
+            "source": source,
+            "raw": {},
+            "role": "keeper",
+            "private_interaction": True,
+        },
+    )
+
+    reply = await router.dispatch(ctx, ".room open")
+
+    assert keystore.entries()[0].key in reply

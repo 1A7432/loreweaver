@@ -20,11 +20,13 @@ same function) before the room ``state`` snapshot is published.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 from typing import TYPE_CHECKING, Any
 
+from agent.context import AgentCtx
 from agent.loop import KPTurnResult, run_kp_turn
 from core.dice_engine import coc_rank_label
 from gateway.hub import Event
@@ -36,7 +38,6 @@ from net.state import build_room_state, resolve_active_character
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from agent.context import AgentCtx
     from agent.services import Services
     from agent.tools import Toolset
     from gateway.commands import CommandRouter, CommandSpec
@@ -113,18 +114,68 @@ async def run_turn(
     """
     i18n = get_i18n(ctx.locale)
     name = actor_name or await _display_name(origin, ctx, services)
-
-    await hub.publish(ctx.chat_key, Event.player_action(name=name, text=text), exclude=echo_exclude)
+    extra = getattr(ctx, "extra", None)
+    interaction_private = bool(
+        isinstance(extra, dict) and extra.get("private_interaction")
+    )
 
     result: KPTurnResult | None = None
     matched_spec = _matched_command_spec(command_router, text, ctx.locale)
-    command_reply = await command_router.dispatch(ctx, text)
+    action_event = Event.player_action(name=name, text=text)
+    if matched_spec is None:
+        await hub.publish(ctx.chat_key, action_event, exclude=echo_exclude)
+    elif origin is not None and echo_exclude is None:
+        # Keep the TUI caller's local echo, but never broadcast raw command arguments
+        # such as attachment paths, provider endpoints, or keys to room peers.
+        await origin.deliver(action_event)
+    reply = await command_router.dispatch_reply(ctx, text)
+    command_reply = reply.text if reply is not None else None
+    command_events = reply.events if reply is not None else ()
     if command_reply is not None:
-        reply_event = Event.narrative(speaker="system", text=command_reply, fmt="plain")
-        if matched_spec is not None and matched_spec.private_reply and origin is not None:
+        if matched_spec is not None and matched_spec.canonical == "panel":
+            snapshot = await _state_for_ctx(hub, services, ctx)
+            event = Event.panel(snapshot)
+            if origin is not None:
+                await origin.deliver(event)
+            else:
+                await hub.publish(ctx.chat_key, event)
+            return None
+        for event in command_events:
+            if event.kind == "dice":
+                # Commands record the stable user id; the room edge owns the active
+                # character/platform display name used by every other turn event.
+                event.data["actor"] = name
+            event_origin_only = bool(
+                event.private
+                or interaction_private
+                or (matched_spec and matched_spec.private_reply)
+            )
+            if event_origin_only:
+                event.private = True
+                if origin is not None:
+                    await origin.deliver(event)
+            else:
+                await hub.publish(ctx.chat_key, event)
+        reply_event = Event.narrative(
+            speaker="system",
+            text=command_reply,
+            fmt="plain",
+            private=bool(
+                interaction_private or (matched_spec and matched_spec.private_reply)
+            ),
+        )
+        origin_only = bool(
+            interaction_private
+            or (
+                matched_spec
+                and (matched_spec.private_reply or matched_spec.canonical == "room")
+            )
+        )
+        if origin_only:
             # Sensitive keeper-command reply (masked API key / keeper-only secret lore /
             # a room join key): unicast to the invoking connection only, never broadcast.
-            await origin.deliver(reply_event)
+            if origin is not None:
+                await origin.deliver(reply_event)
         else:
             await hub.publish(ctx.chat_key, reply_event)
     else:
@@ -259,19 +310,87 @@ async def _record_usage_stats(services: Services, ctx: AgentCtx, usage: Usage) -
 
 
 async def publish_state(hub: RoomHub, services: Services, ctx: AgentCtx) -> None:
-    """Build ``ctx``'s room snapshot and publish it as a ``state`` event.
+    """Build a caller-correct room snapshot for every connected member.
 
     Overlays the live connection count and per-party ``online`` flags from the
     hub's current membership (a presence concern the read-only
     ``net.state.build_room_state`` deliberately leaves at ``0``/``True``).
     """
-    snapshot = await build_room_state(services, ctx)
     members = hub.members(ctx.chat_key)
-    snapshot["online"] = len(members)
-    connected_names = {getattr(member, "name", "") for member in members}
+
+    def member_ctx(member: Member) -> AgentCtx:
+        return AgentCtx(
+            chat_key=ctx.chat_key,
+            user_id=str(getattr(member, "state_user_id", None) or getattr(member, "id", "")),
+            platform=str(getattr(member, "transport", ctx.platform)),
+            locale=str(getattr(member, "locale", ctx.locale)),
+            fs=ctx.fs,
+        )
+
+    identity_contexts: list[tuple[AgentCtx, str]] = []
+    for member in members:
+        identities = getattr(member, "state_identities", ())
+        if identities:
+            for user_id, name in identities:
+                identity_contexts.append(
+                    (
+                        AgentCtx(
+                            chat_key=ctx.chat_key,
+                            user_id=str(user_id),
+                            platform=str(getattr(member, "transport", ctx.platform)),
+                            locale=str(getattr(member, "locale", ctx.locale)),
+                            fs=ctx.fs,
+                        ),
+                        str(name),
+                    )
+                )
+        else:
+            identity_contexts.append((member_ctx(member), str(getattr(member, "name", ""))))
+
+    async def active_name(identity: tuple[AgentCtx, str]) -> str:
+        identity_ctx, fallback = identity
+        sheet = await resolve_active_character(services, identity_ctx)
+        return sheet.name if sheet is not None else fallback
+
+    connected_names = set(
+        await asyncio.gather(*(active_name(identity) for identity in identity_contexts))
+    )
+    online = len({identity_ctx.uid() for identity_ctx, _name in identity_contexts})
+
+    async def event_for(member: Member) -> Event:
+        snapshot = await _state_for_ctx(
+            hub,
+            services,
+            member_ctx(member),
+            members=members,
+            connected_names=connected_names,
+            online=online,
+        )
+        return Event.state(snapshot)
+
+    await hub.publish_each(ctx.chat_key, event_for)
+
+
+async def _state_for_ctx(
+    hub: RoomHub,
+    services: Services,
+    ctx: AgentCtx,
+    *,
+    members: list[Member] | None = None,
+    connected_names: set[str] | None = None,
+    online: int | None = None,
+) -> dict[str, Any]:
+    members = hub.members(ctx.chat_key) if members is None else members
+    connected_names = (
+        {getattr(member, "name", "") for member in members}
+        if connected_names is None
+        else connected_names
+    )
+    snapshot = await build_room_state(services, ctx)
+    snapshot["online"] = len(members) if online is None else online
     for party_member in snapshot.get("party", []):
         party_member["online"] = party_member.get("name") in connected_names
-    await hub.publish(ctx.chat_key, Event.state(snapshot))
+    return snapshot
 
 
 async def _display_name(origin: Member | None, ctx: AgentCtx, services: Services) -> str:

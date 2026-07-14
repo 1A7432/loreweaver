@@ -20,6 +20,11 @@ class _Hub:
     async def publish(self, session_key, event, *, exclude=None):
         self.events.append((session_key, event, exclude))
 
+    async def publish_each(self, session_key, build, *, exclude=None):
+        for member in self.members(session_key):
+            if member is not exclude:
+                self.events.append((session_key, await build(member), exclude))
+
     def members(self, session_key):
         return []
 

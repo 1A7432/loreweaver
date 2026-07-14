@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import pytest
+
 from agent.context import AgentCtx, LocalFs
 from agent.services import build_services
+from gateway.attachment_fs import AttachmentFs
+from gateway.chat import ChatAttachment
 from gateway.commands import CommandRouter
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
@@ -111,3 +115,42 @@ async def test_module_command_without_path_returns_usage(monkeypatch):
 
     assert reply == services.i18n.with_locale("en").t("commands.module.usage")
     assert _FakeDocumentTools.calls == []
+
+
+async def test_module_command_uses_the_current_chat_attachment(monkeypatch):
+    _FakeDocumentTools.calls = []
+    monkeypatch.setattr("agent.kp_tools_knowledge.DocumentTools", _FakeDocumentTools)
+    services = _services()
+    router = CommandRouter(services)
+    fs = AttachmentFs(
+        [ChatAttachment(id="hash", name="mystery.md", mime="text/markdown", data=b"# Mystery")]
+    )
+    ctx = AgentCtx(
+        chat_key="cli:dm:module",
+        user_id="keeper",
+        locale="en",
+        fs=fs,
+        extra={"attachment_names": ["mystery.md"]},
+    )
+    try:
+        reply = await router.dispatch(ctx, ".module")
+        resolved = fs.get_file("mystery.md")
+    finally:
+        fs.close()
+
+    assert reply == "module import ok"
+    assert _FakeDocumentTools.calls[0]["file_path"] == "mystery.md"
+    assert resolved.endswith("0-mystery.md")
+
+
+def test_chat_attachment_filesystem_does_not_publish_temporary_paths() -> None:
+    fs = AttachmentFs(
+        [ChatAttachment(id="hash", name="mystery.md", mime="text/markdown", data=b"# Mystery")]
+    )
+    try:
+        with pytest.raises(NotImplementedError):
+            _ = fs.shared_path
+        with pytest.raises(NotImplementedError):
+            fs.forward_file("report.md")
+    finally:
+        fs.close()

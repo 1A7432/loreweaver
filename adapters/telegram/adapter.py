@@ -6,6 +6,7 @@ import inspect
 from typing import Any
 
 from gateway.base_adapter import BaseAdapter, MessageHandler
+from gateway.chat import ChatCapabilities, ChatMessage
 from gateway.events import InboundMessage, SendResult
 from gateway.registry import PlatformEntry, platform_registry
 from gateway.session import SessionSource
@@ -23,7 +24,7 @@ _GROUP_CHAT_TYPES = {"group", "supergroup"}
 
 class TelegramAdapter(BaseAdapter):
     platform = "telegram"
-    typed_command_prefix = "/"
+    capabilities = ChatCapabilities(max_text_chars=4096)
 
     def __init__(
         self,
@@ -91,10 +92,18 @@ class TelegramAdapter(BaseAdapter):
         await self.handle_inbound(inbound)
         return inbound
 
-    async def send(self, source: SessionSource, content: str, *, reply_to: str | None = None) -> SendResult:
+    async def _send_message(
+        self,
+        source: SessionSource,
+        message: ChatMessage,
+        *,
+        reply_to: str | None,
+        session_key: str | None,
+    ) -> SendResult:
+        del session_key
         params: dict[str, Any] = {
             "chat_id": source.chat_id,
-            "text": content,
+            "text": message.text,
         }
         if reply_to is not None:
             params["reply_to_message_id"] = reply_to
@@ -147,7 +156,10 @@ def register() -> None:
         PlatformEntry(
             name="telegram",
             label="Telegram",
-            adapter_factory=lambda cfg: TelegramAdapter(cfg),
+            adapter_factory=lambda cfg, context: TelegramAdapter(
+                cfg,
+                command_router=context.command_router,
+            ),
             check_fn=lambda: True,
         )
     )

@@ -1,6 +1,7 @@
 from adapters.cli.adapter import CliAdapter
 from adapters.cli.selfplay import run_script
 from agent.services import build_services
+from gateway.chat import ChatMessage
 from gateway.session import SessionSource
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
@@ -14,7 +15,9 @@ def _services():
 async def test_cli_adapter_send_prints(capsys):
     adapter = CliAdapter()
 
-    result = await adapter.send(SessionSource(platform="cli", chat_id="local"), "hello")
+    result = await adapter.send_message(
+        SessionSource(platform="cli", chat_id="local"), ChatMessage(text="hello")
+    )
 
     assert result.ok
     assert capsys.readouterr().out == "hello\n"

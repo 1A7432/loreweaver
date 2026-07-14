@@ -144,6 +144,22 @@ class Store:
             self._commit(conn)
             return cursor.rowcount if cursor.rowcount != -1 else len(items)
 
+    async def delete_rows_if_value(
+        self, rows: Iterable[tuple[str, str, str]]
+    ) -> int:
+        """Delete rows only while their value still matches the caller's read."""
+        items = list(rows)
+        if not items:
+            return 0
+        async with self._lock:
+            conn = self._ensure_conn()
+            cursor = conn.executemany(
+                "DELETE FROM kv WHERE user_key = ? AND store_key = ? AND value = ?",
+                items,
+            )
+            self._commit(conn)
+            return cursor.rowcount if cursor.rowcount != -1 else len(items)
+
     def close(self) -> None:
         """Close the underlying connection, if one has been opened."""
         if self._conn is not None:

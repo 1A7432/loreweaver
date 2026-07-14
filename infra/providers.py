@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
 from inspect import Parameter, signature
 from typing import TYPE_CHECKING, Any
 
@@ -43,40 +42,6 @@ CHATGPT_SUBSCRIPTION_PROXY_PROVIDER_NAMES: tuple[str, ...] = ("chatgpt", "gpt-su
 CHATGPT_SUBSCRIPTION_PROXY_PROVIDERS: frozenset[str] = frozenset(CHATGPT_SUBSCRIPTION_PROXY_PROVIDER_NAMES)
 _AUTHLESS_LOCAL_PROVIDERS: frozenset[str] = frozenset({"ollama", "lmstudio", "vllm"})
 
-
-@dataclass(frozen=True)
-class LiveLLMSnapshot:
-    """Public rollback token for a hot-swappable LLM."""
-
-    overrides: dict[str, str]
-    state: object | None = None
-
-
-def snapshot_live_llm(client: Any, settings: LLMSettings) -> LiveLLMSnapshot:
-    """Capture current settings and exact client state when supported."""
-    overrides = {
-        field: str(value)
-        for field in OVERRIDE_FIELDS
-        if (value := getattr(settings, field, None)) is not None
-    }
-    snapshot = getattr(client, "snapshot", None)
-    state = snapshot() if callable(snapshot) else None
-    return LiveLLMSnapshot(overrides=overrides, state=state)
-
-
-def restore_live_llm(client: Any, snapshot: LiveLLMSnapshot) -> bool:
-    """Restore a snapshot through public APIs; return whether it succeeded."""
-    try:
-        restore = getattr(client, "restore", None)
-        if snapshot.state is not None and callable(restore):
-            restore(snapshot.state)
-            return True
-        apply = getattr(client, "apply", None)
-        if callable(apply):
-            apply(snapshot.overrides)
-        return True
-    except Exception:
-        return False
 
 _GEMINI_SCHEMA_ALLOWED_KEYS = {
     "type",
@@ -378,17 +343,6 @@ class MutableLLM:
         """Recompute effective settings from the pristine baseline + `overrides`
         and reconfigure (empty `overrides` reverts to the env/`Settings` baseline)."""
         self.reconfigure(apply_overrides(self._base, overrides))
-
-    def snapshot(self) -> tuple[LLMSettings, LLMClient]:
-        """Capture an exact, already-validated state for a failed hot swap."""
-        return (self._settings.llm.model_copy(deep=True), self._inner)
-
-    def restore(self, snapshot: tuple[LLMSettings, LLMClient]) -> None:
-        """Restore a state returned by :meth:`snapshot` without rebuilding."""
-        llm_settings, inner = snapshot
-        for field in OVERRIDE_FIELDS:
-            setattr(self._settings.llm, field, getattr(llm_settings, field))
-        self._inner = inner
 
     def describe(self) -> dict[str, str]:
         """Display-safe snapshot of the current effective config (api_key masked)."""

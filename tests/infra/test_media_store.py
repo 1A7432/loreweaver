@@ -100,6 +100,44 @@ async def test_media_store_offer_policy_can_be_overridden_for_audio(tmp_path):
     assert existing is None
 
 
+async def test_image_and_audio_quotas_are_counted_separately(tmp_path):
+    backing = Store()
+    image = _png_bytes()
+    audio = b"ID3audio"
+    image_store = MediaStore(
+        backing,
+        tmp_path,
+        max_file_bytes=len(image),
+        room_quota_bytes=len(image),
+        allowed_mimes=ALLOWED_IMAGE_MIMES,
+    )
+    audio_store = MediaStore(
+        backing,
+        tmp_path,
+        max_file_bytes=len(audio),
+        room_quota_bytes=len(audio),
+        allowed_mimes=ALLOWED_AUDIO_MIMES,
+    )
+
+    await audio_store.register_blob(
+        room="room-a",
+        data=audio,
+        mime="audio/mpeg",
+        name="track.mp3",
+        uploader="u",
+    )
+    await image_store.register_blob(
+        room="room-a",
+        data=image,
+        mime="image/png",
+        name="handout.png",
+        uploader="u",
+    )
+
+    assert await image_store.room_total_size("room-a") == len(image)
+    assert await audio_store.room_total_size("room-a") == len(audio)
+
+
 async def test_media_store_rejects_unsafe_svg_on_commit(tmp_path):
     store = MediaStore(Store(), tmp_path)
     data = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'

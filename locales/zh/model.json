@@ -12,7 +12,7 @@
   "commands.model.unknown_provider": "未知提供方：{provider}。请使用 .model list 查看可选项。",
   "commands.model.set_done": "LLM 已切换为提供方 {provider}，聊天模型 {chat_model}。",
   "commands.model.set_saved": "已保存 LLM 覆盖：提供方 {provider}，聊天模型 {chat_model}（重启后生效）。",
-  "commands.model.set_failed": "无法切换到提供方 {provider}（可能缺少其 SDK 或 API 密钥）。已保留原有 LLM，未保存任何更改。",
+  "commands.model.set_failed": "未能完成提供方 {provider} 的配置。请检查 SDK、凭据和存储后重试。",
   "commands.model.key_usage": "用法：.model key <api_key>",
   "commands.model.key_public": "请在私聊/DM 或本地 CLI 中设置 API 密钥，请勿在公共频道中设置。",
   "commands.model.key_done": "API 密钥已更新（{api_key}）。",

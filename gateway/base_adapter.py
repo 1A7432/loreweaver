@@ -6,19 +6,27 @@ Research) for the platform-independent transport layer.
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
-from typing import Any
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any
 
+from gateway.chat import ChatAttachment, ChatCapabilities, ChatMessage, split_chat_message
 from gateway.events import InboundMessage, SendResult
 from gateway.session import SessionSource
 
-MessageHandler = Callable[[InboundMessage], Awaitable[str | None]]
+if TYPE_CHECKING:
+    from gateway.hub import Event
+    from infra.media_store import MediaStore
+
+MessageHandler = Callable[[InboundMessage], Awaitable[ChatMessage | None]]
+logger = logging.getLogger(__name__)
 
 
 class BaseAdapter(ABC):
     platform: str = "base"
-    typed_command_prefix: str = "/"
+    capabilities = ChatCapabilities()
 
     def __init__(self, config: Any = None, on_message: MessageHandler | None = None) -> None:
         self.config = config
@@ -32,20 +40,126 @@ class BaseAdapter(ABC):
     async def disconnect(self) -> None:
         raise NotImplementedError
 
+    async def send_message(
+        self,
+        source: SessionSource,
+        message: ChatMessage,
+        *,
+        reply_to: str | None = None,
+        session_key: str | None = None,
+    ) -> SendResult:
+        result = SendResult(ok=True)
+        for part in split_chat_message(message, self.capabilities.max_text_chars):
+            result = await self._send_message(source, part, reply_to=reply_to, session_key=session_key)
+            if not result.ok:
+                return result
+        return result
+
     @abstractmethod
-    async def send(self, source: SessionSource, content: str, *, reply_to: str | None = None) -> SendResult:
+    async def _send_message(
+        self,
+        source: SessionSource,
+        message: ChatMessage,
+        *,
+        reply_to: str | None,
+        session_key: str | None,
+    ) -> SendResult:
         raise NotImplementedError
+
+    async def edit_message(
+        self, source: SessionSource, message_id: str, message: ChatMessage
+    ) -> SendResult:
+        return SendResult(ok=False, error=f"{self.platform}.message_edit.unsupported")
+
+    async def set_typing(self, source: SessionSource, active: bool) -> None:
+        del source, active
+
+    async def fetch_attachment(self, attachment: ChatAttachment) -> bytes:
+        if attachment.data is None:
+            raise FileNotFoundError(attachment.id or attachment.name)
+        return attachment.data
+
+    async def deliver_event(
+        self,
+        source: SessionSource,
+        session_key: str,
+        event: Event,
+        *,
+        locale: str,
+        media_store: MediaStore | None = None,
+    ) -> SendResult | None:
+        """Render a room event and deliver it using this adapter's native codec."""
+        from gateway.render_chat import render_chat_event
+        from infra.i18n import get_i18n
+
+        if event.kind == "panel" and source.chat_type.casefold() not in {
+            "dm",
+            "direct",
+            "private",
+            "c2c",
+        }:
+            event = replace(
+                event,
+                data={key: value for key, value in event.data.items() if key != "character"},
+            )
+        try:
+            message = render_chat_event(event, get_i18n(locale))
+        except Exception:
+            logger.warning(
+                "adapter.render_failed platform=%s event=%s",
+                self.platform,
+                event.kind,
+                exc_info=True,
+            )
+            return None
+        if message is None:
+            return None
+        if event.kind in {"media", "audio"} and self.capabilities.attachments and media_store is not None:
+            sha256 = str(event.data.get("hash") or "")
+            if sha256:
+                try:
+                    record, data = await media_store.read_bytes(session_key, sha256)
+                except Exception:
+                    logger.warning(
+                        "adapter.media_unavailable platform=%s hash=%s",
+                        self.platform,
+                        sha256,
+                    )
+                else:
+                    message.attachments.append(
+                        ChatAttachment(
+                            id=record.hash,
+                            name=record.name,
+                            mime=record.mime,
+                            size=record.size,
+                            data=data,
+                        )
+                    )
+        message.private = message.private or event.private
+        return await self.send_message(source, message, session_key=session_key)
 
     def set_message_handler(self, handler: MessageHandler) -> None:
         self._message_handler = handler
 
-    def supports_proactive(self, source: SessionSource) -> bool:
-        return True
+    def supports_private_reply(self, source: SessionSource) -> bool:
+        return source.chat_type.casefold() in {"dm", "direct", "private", "c2c"}
 
     async def handle_inbound(self, msg: InboundMessage) -> None:
         if self._message_handler is None:
             return
 
-        reply = await self._message_handler(msg)
-        if isinstance(reply, str) and reply:
-            await self.send(msg.source, reply, reply_to=msg.source.message_id)
+        if self.capabilities.typing:
+            await self._set_typing_safely(msg.source, True)
+        try:
+            reply = await self._message_handler(msg)
+        finally:
+            if self.capabilities.typing:
+                await self._set_typing_safely(msg.source, False)
+        if reply is not None:
+            await self.send_message(msg.source, reply, reply_to=msg.source.message_id)
+
+    async def _set_typing_safely(self, source: SessionSource, active: bool) -> None:
+        try:
+            await self.set_typing(source, active)
+        except Exception:
+            logger.warning("adapter.typing_failed platform=%s", self.platform)
