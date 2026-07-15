@@ -24,7 +24,7 @@ from gateway.avatar import AvatarError, set_target_avatar, set_user_avatar
 from gateway.hub import Event
 from gateway.imagegen import allow_imagegen_request, image_name
 from gateway.media import media_frame, publish_media
-from gateway.ops import Botlist, PrivilegeLevel, get_enabled_skills, is_media_enabled, set_enabled_skills
+from gateway.ops import Botlist, PrivilegeLevel, get_enabled_skills, is_media_enabled, toggle_enabled_skill
 from gateway.rooms import (
     clear_binding,
     clear_keeper_binding,
@@ -772,16 +772,9 @@ class CommandRouter:
         if not skill_id or skill_id not in known_ids:
             return ctx.i18n.t("commands.skill.unknown", id=skill_id)
 
-        store = ctx.services.store
-        enabled_ids = await get_enabled_skills(store, ctx.chat_key)
+        await toggle_enabled_skill(ctx.services.store, ctx.chat_key, skill_id, on=enable)
         if enable:
-            if skill_id not in enabled_ids:
-                enabled_ids = [*enabled_ids, skill_id]
-            await set_enabled_skills(store, ctx.chat_key, enabled_ids)
             return ctx.i18n.t("commands.skill.enable_done", id=skill_id)
-
-        enabled_ids = [item for item in enabled_ids if item != skill_id]
-        await set_enabled_skills(store, ctx.chat_key, enabled_ids)
         return ctx.i18n.t("commands.skill.disable_done", id=skill_id)
 
     async def cmd_audio(self, ctx: CommandCtx) -> str:

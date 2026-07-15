@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -332,6 +333,39 @@ async def set_enabled_skills(store, chat_key: str, ids: list[str]) -> None:
     await store.set(store_key=f"{_SKILLS_ENABLED_PREFIX}{chat_key}", value=json.dumps(list(ids), ensure_ascii=False))
 
 
+# One asyncio lock per room, so the read-modify-write in `toggle_enabled_skill` is atomic
+# against concurrent toggles for the SAME room. The server is a single process, so a
+# process-local lock is sufficient (unlike the keystore, nothing else writes these flags
+# out of band). `setdefault` is race-free here: there is no await between the get and set.
+_SKILLS_TOGGLE_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _skills_toggle_lock(chat_key: str) -> asyncio.Lock:
+    lock = _SKILLS_TOGGLE_LOCKS.get(chat_key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _SKILLS_TOGGLE_LOCKS[chat_key] = lock
+    return lock
+
+
+async def toggle_enabled_skill(store, chat_key: str, skill_id: str, *, on: bool) -> list[str]:
+    """Atomically add/remove one skill id in ``chat_key``'s enabled set; return the new list.
+
+    Serializes the read-modify-write so two keepers toggling skills for one room
+    concurrently (an admin frame and a ``.skill`` command share this path) cannot lose
+    one another's change.
+    """
+    async with _skills_toggle_lock(chat_key):
+        enabled_ids = await get_enabled_skills(store, chat_key)
+        if on:
+            if skill_id not in enabled_ids:
+                enabled_ids = [*enabled_ids, skill_id]
+        else:
+            enabled_ids = [item for item in enabled_ids if item != skill_id]
+        await set_enabled_skills(store, chat_key, enabled_ids)
+        return enabled_ids
+
+
 async def room_content_unfiltered(store, chat_key: str) -> bool:
     """True if `chat_key`'s room has a skill enabled whose `content_rating` is
     mature/explicit -- the mature-mode signal `gateway.turn.run_turn` uses to bypass
@@ -438,4 +472,5 @@ __all__ = [
     "sanitize_outbound",
     "set_bot_enabled",
     "set_enabled_skills",
+    "toggle_enabled_skill",
 ]

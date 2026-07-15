@@ -157,6 +157,33 @@ async def test_personalized_event_build_failure_does_not_drop_the_connection() -
     assert broken in hub.members("room")
 
 
+async def test_publish_does_not_delete_a_room_recreated_during_fanout() -> None:
+    """Regression: ``publish`` captures the room's member set before awaiting each
+    ``deliver``. If the room is emptied and re-created (a new member joins) during that
+    await, the post-fan-out cleanup must reconcile against the *live* set, not pop the
+    freshly-created one — otherwise the newcomer is silently dropped from all fan-out.
+    """
+    hub = RoomHub()
+    newcomer = FakeMember("newcomer")
+
+    class SwappingMember(FakeMember):
+        async def deliver(self, event: Event) -> None:
+            # Model a concurrent unsubscribe-to-empty + fresh subscribe landing while
+            # this deliver is in flight (a real deliver awaits I/O here), then fail so
+            # publish runs its drop/cleanup path against the now-detached original set.
+            hub.rooms.pop("room", None)
+            hub.rooms.setdefault("room", set()).add(newcomer)
+            raise RuntimeError("deliver boom")
+
+    hub.rooms["room"] = {SwappingMember("swapper")}
+
+    await hub.publish("room", Event.system("info", "x"))
+
+    # The re-created room (holding the newcomer) survived; it was not popped.
+    assert newcomer in hub.members("room")
+    assert hub.online("room") == 1
+
+
 async def test_two_members_on_different_transports_both_receive_the_event() -> None:
     # The whole point of the hub: one logical session, heterogeneous membership.
     hub = RoomHub()

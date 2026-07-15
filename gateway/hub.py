@@ -198,13 +198,7 @@ class RoomHub:
                 members.discard(member)
                 dropped = True
         if dropped:
-            # Keep the remaining clients' roster consistent with the fail-closed removal.
-            # Recursive presence publication terminates because every failing member was
-            # removed before this call; an empty room is removed from the registry outright.
-            if members:
-                await self._emit_presence(session_key)
-            else:
-                self.rooms.pop(session_key, None)
+            await self._reconcile_after_drop(session_key, members)
 
     async def publish_each(
         self,
@@ -250,10 +244,24 @@ class RoomHub:
                 members.discard(member)
                 dropped = True
         if dropped:
-            if members:
-                await self._emit_presence(session_key)
-            else:
-                self.rooms.pop(session_key, None)
+            await self._reconcile_after_drop(session_key, members)
+
+    async def _reconcile_after_drop(self, session_key: str, members: set[Member]) -> None:
+        """Refresh presence or retire an emptied room after fail-closed removals.
+
+        ``members`` was captured before the ``await`` above. During that await another
+        task may have emptied and re-created this session's set (unsubscribe of the last
+        member pops the set, a fresh subscribe installs a new one). Only act when the set
+        we mutated is still the room's live set; otherwise the replacement owns presence
+        and retirement, and popping here would delete the newly-created room out from
+        under a member that just joined.
+        """
+        if self.rooms.get(session_key) is not members:
+            return
+        if members:
+            await self._emit_presence(session_key)
+        else:
+            self.rooms.pop(session_key, None)
 
     def members(self, session_key: str) -> list[Member]:
         """Every member currently connected to ``session_key``."""

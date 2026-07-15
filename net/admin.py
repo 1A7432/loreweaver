@@ -31,7 +31,7 @@ from agent.forge import (
 from agent.services import Services
 from core.rulepacks import available_systems, built_in_rulepack_ids
 from core.skills import available_skills
-from gateway.ops import get_enabled_skills, set_enabled_skills
+from gateway.ops import get_enabled_skills, toggle_enabled_skill
 from gateway.rooms import (
     clear_bindings_for_session,
     clear_keeper_binding,
@@ -399,6 +399,10 @@ async def _set_model(services: Services, frame: dict[str, Any], i18n: I18n) -> d
                 services, provider, api_key=api_key, base_url=base_url
             )
     except Exception:
+        # The live LLM may already be reconfigured while persistence/credentials failed;
+        # surface the cause with a traceback so a real defect is not hidden behind the
+        # client-facing "set failed". Never log the key/base_url themselves.
+        logger.exception("admin_set_model failed (provider=%s)", provider)
         return _error("set_failed", i18n)
     return await _config_frame(services)
 
@@ -500,6 +504,9 @@ async def _set_imagegen(services: Services, frame: dict[str, Any], i18n: I18n) -
                 provider, api_key=api_key, base_url=base_url
             )
     except Exception:
+        # As in _set_model: keep a traceback so a genuine bug is not masked by the
+        # generic client error. Never log the key/base_url themselves.
+        logger.exception("admin_set_imagegen failed (provider=%s)", provider)
         return _error("set_failed", i18n)
     return await _config_frame(services)
 
@@ -901,14 +908,7 @@ async def _enable_skill(
         return _error("bad_request", i18n)
 
     chat_key = chat_key_for_room(caller_room)
-    enabled_ids = await get_enabled_skills(services.store, chat_key)
-    on = bool(frame.get("on"))
-    if on:
-        if skill_id not in enabled_ids:
-            enabled_ids = [*enabled_ids, skill_id]
-    else:
-        enabled_ids = [item for item in enabled_ids if item != skill_id]
-    await set_enabled_skills(services.store, chat_key, enabled_ids)
+    await toggle_enabled_skill(services.store, chat_key, skill_id, on=bool(frame.get("on")))
     return await _skills_frame(services, caller_room)
 
 
