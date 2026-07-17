@@ -13,6 +13,7 @@ from typing import Any
 from agent.context import AgentCtx
 from agent.kp_tools_mechanics import InitiativeTools
 from agent.services import Services
+from core.battle_recording import record_coc_skill_check, record_dice_roll
 from core.char_from_persona import build_sheet_from_description
 from core.character_manager import CharacterSheet, get_hit_points, recompute_dnd_derived, set_hit_points
 from core.character_rules import render_validation_notice, validate_sheet
@@ -414,8 +415,17 @@ class CommandRouter:
                 results.append(result)
         except ValueError:
             return ctx.i18n.t("commands.roll.invalid", expr=expression)
+        character = await ctx.services.characters.get_character(ctx.user_id, ctx.chat_key)
         for result in results:
             ctx.dice("roll", **_dice_result_fields(result))
+            await record_dice_roll(
+                ctx.services.battles,
+                ctx.chat_key,
+                ctx.user_id,
+                character.name,
+                expression,
+                result,
+            )
         return "\n".join(lines)
 
     async def cmd_hidden_roll(self, ctx: CommandCtx) -> str:
@@ -425,6 +435,15 @@ class CommandRouter:
         except ValueError:
             return ctx.i18n.t("commands.roll.invalid", expr=expression)
         ctx.dice("roll", **_dice_result_fields(result))
+        character = await ctx.services.characters.get_character(ctx.user_id, ctx.chat_key)
+        await record_dice_roll(
+            ctx.services.battles,
+            ctx.chat_key,
+            ctx.user_id,
+            character.name,
+            expression,
+            result,
+        )
         return ctx.i18n.t("commands.roll.hidden", result=_format_roll(result, ctx.i18n))
 
     async def cmd_check(self, ctx: CommandCtx) -> str:
@@ -463,6 +482,7 @@ class CommandRouter:
             total=left_roll["roll"],
             target=left_value,
             rank=left_roll["rank"],
+            level=coc_rank_label(left_roll["rank"], ctx.i18n),
             success=left_roll["success"],
             winner=winner_side,
             left=_coc_event_side(left_name, left_roll, left_value),
@@ -503,13 +523,30 @@ class CommandRouter:
             total=outcome["roll"],
             target=san,
             rank=outcome["rank"],
+            level=coc_rank_label(outcome["rank"], ctx.i18n),
             success=outcome["success"],
             difficulty=outcome["difficulty"],
             bonus=outcome["bonus"],
             penalty=outcome["penalty"],
+            raw_roll=outcome["raw_roll"],
+            extra_tens=list(outcome["extra_tens"]),
+            final_tens=outcome["final_tens"],
             loss_expr=loss_expr,
             loss=loss,
             remaining=max(0, san - loss),
+        )
+        await record_coc_skill_check(
+            ctx.services.battles,
+            ctx.chat_key,
+            ctx.user_id,
+            character.name,
+            "SAN",
+            san,
+            outcome,
+            loss_expr=loss_expr,
+            loss=loss,
+            san_before=san,
+            san_after=max(0, san - loss),
         )
         return ctx.i18n.t(
             "commands.sanity.result",
@@ -1913,10 +1950,23 @@ class CommandRouter:
                 target=target_value,
                 effective_target=effective_target,
                 rank=outcome["rank"],
+                level=coc_rank_label(outcome["rank"], ctx.i18n),
                 success=outcome["success"],
                 difficulty=outcome["difficulty"],
                 bonus=outcome["bonus"],
                 penalty=outcome["penalty"],
+                raw_roll=outcome["raw_roll"],
+                extra_tens=list(outcome["extra_tens"]),
+                final_tens=outcome["final_tens"],
+            )
+            await record_coc_skill_check(
+                ctx.services.battles,
+                ctx.chat_key,
+                ctx.user_id,
+                character.name,
+                parsed.canonical,
+                target_value,
+                outcome,
             )
             lines.append(
                 ctx.i18n.t(

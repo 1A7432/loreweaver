@@ -308,6 +308,8 @@ class DiceRoller:
         return {
             "roll": d100,
             "raw_roll": bonus_penalty["roll"],
+            "extra_tens": bonus_penalty["extra_tens"],
+            "final_tens": bonus_penalty["final_tens"],
             "skill_value": skill_value,
             "rank": rank,
             "level_code": rank,

@@ -41,6 +41,7 @@ import time
 from agent.context import AgentCtx
 from agent.services import Services
 from agent.tools import tool
+from core.battle_recording import coc_check_fields, record_dice_roll
 from core.battle_report import NPC_USER_ID, SessionRecord
 from core.character_manager import CharacterSheet, get_hit_points, recompute_dnd_derived, set_hit_points
 from core.character_rules import render_validation_notice, validate_sheet
@@ -483,21 +484,13 @@ class DiceTools:
                 actor,
             )
             user_id = NPC_USER_ID if is_npc else ctx.uid()
-            critical_type = (
-                "success"
-                if result.is_critical_success()
-                else "failure"
-                if result.is_critical_failure()
-                else ""
-            )
-            await self.services.battles.add_dice_roll(
+            await record_dice_roll(
+                self.services.battles,
                 ctx.chat_key,
                 user_id,
                 char_name,
                 expression,
-                result.total,
-                bool(critical_type),
-                critical_type,
+                result,
             )
         except Exception:
             pass
@@ -702,25 +695,16 @@ class DiceTools:
                         "final_tens": result["final_tens"],
                     }
                 )
+                record_fields = coc_check_fields(result)
                 await self._record_skill_check(
                     ctx,
                     character.name,
                     target_skill,
                     skill_value,
                     result["final_roll"],
-                    success=result["success"],
-                    rank=result["rank"],
                     actor=display_name if actor and actor.strip() else None,
                     actor_is_npc=is_npc,
-                    is_critical=result["rank"] in {4, -2},
-                    bonus=bonus,
-                    penalty=penalty,
-                    raw_roll=result["final_roll"],
-                    base_roll=result["roll"],
-                    extra_tens=result["extra_tens"],
-                    final_tens=result["final_tens"],
-                    difficulty=result["difficulty"],
-                    rule=result["rule"],
+                    **record_fields,
                 )
                 return "\n".join(lines)
 
@@ -994,25 +978,18 @@ class DiceTools:
             await characters.save_character(ctx.uid(), ctx.chat_key, character)
 
             level_label = coc_rank_label(result["rank"], i18n)
+            record_fields = coc_check_fields(result)
             await self._record_skill_check(
                 ctx,
                 character.name,
                 "SAN",
                 san_value,
                 result["roll"],
-                success=result["success"],
-                rank=result["rank"],
-                is_critical=result["rank"] in {4, -2},
-                bonus=result.get("bonus", 0),
-                penalty=result.get("penalty", 0),
-                raw_roll=result["roll"],
-                base_roll=result.get("raw_roll"),
-                difficulty=result.get("difficulty"),
-                rule=result.get("rule"),
                 loss_expr=loss_expr,
                 loss=loss,
                 san_before=san_value,
                 san_after=new_san,
+                **record_fields,
             )
             san_max = character.attributes.get("SANMAX", 99)
             ctx.emit_dice(

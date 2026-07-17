@@ -3,7 +3,7 @@ from __future__ import annotations
 from agent.context import AgentCtx
 from agent.kp_tools import build_kp_toolset
 from agent.services import build_services
-from core.dice_engine import seed_dice
+from core.dice_engine import coc_rank_label, seed_dice
 from gateway.commands import CommandRouter
 from gateway.hub import Event, RoomHub
 from gateway.turn import run_turn
@@ -127,3 +127,54 @@ async def test_multi_roll_has_one_structured_event_per_roll_and_hidden_roll_is_p
     )
     assert len([event for event in origin.events if event.kind == "dice"]) == 1
     assert not [event for event in peer.events if event.kind == "dice"]
+
+
+async def test_coc_command_roll_check_opposed_and_sanity_are_recorded_structurally() -> None:
+    services = _services()
+    room = "tui:group:command-recording"
+    ctx = AgentCtx(chat_key=room, user_id="u1", platform="tui", locale="en")
+    router = CommandRouter(services)
+    await router.dispatch(ctx, ".coc Investigator")
+
+    seed_dice(51)
+    roll_reply = await router.dispatch_reply(ctx, ".r 2d6+1")
+    seed_dice(52)
+    check_reply = await router.dispatch_reply(ctx, ".ra b1 spot hidden")
+    seed_dice(53)
+    alias_reply = await router.dispatch_reply(ctx, ".rc listen")
+    seed_dice(54)
+    sanity_reply = await router.dispatch_reply(ctx, ".sc 0/1d4")
+
+    assert roll_reply is not None
+    assert check_reply is not None
+    assert alias_reply is not None
+    assert sanity_reply is not None
+    check_frame = check_reply.events[0].data
+    assert check_frame["level"] == coc_rank_label(
+        check_frame["rank"], services.i18n.with_locale("en")
+    )
+    assert sanity_reply.events[0].data["level"]
+
+    record = await services.battles.generator.get_current_session(room)
+    assert record is not None
+    assert len(record.dice_rolls) == 1
+    assert record.dice_rolls[0]["user_id"] == ctx.uid()
+    assert record.dice_rolls[0]["expression"] == "2d6+1"
+    assert len(record.skill_checks) == 3
+    check = record.skill_checks[0]
+    assert check["user_id"] == ctx.uid()
+    assert check["skill"] == "侦查"
+    assert isinstance(check["success"], bool)
+    assert isinstance(check["rank"], int)
+    assert isinstance(check["is_critical"], bool)
+    assert check["bonus"] == 1
+    assert check["penalty"] == 0
+    assert check["raw_roll"] == check["roll"]
+    assert isinstance(check["base_roll"], int)
+    assert len(check["extra_tens"]) == 1
+    assert isinstance(check["final_tens"], int)
+    san = record.skill_checks[-1]
+    assert san["skill"] == "SAN"
+    assert san["loss_expr"] in {"0", "1d4"}
+    assert isinstance(san["loss"], int)
+    assert san["san_before"] >= san["san_after"]

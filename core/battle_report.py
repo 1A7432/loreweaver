@@ -497,12 +497,13 @@ class BattleReportGenerator:
         stats = record.player_stats.get(user_id, {})
         base = 60
 
-        # participation, via roll count
+        # Participation covers every committed dice action: raw rolls and checks.
         total_rolls = stats.get("total_rolls", 0)
-        participation = min(total_rolls * 2, 15) if total_rolls > 0 else 0
+        total_checks = stats.get("total_checks", 0)
+        participation_count = total_rolls + total_checks
+        participation = min(participation_count * 2, 15) if participation_count > 0 else 0
 
         # skill-check success rate
-        total_checks = stats.get("total_checks", 0)
         successful_checks = stats.get("successful_checks", 0)
         success = int((successful_checks / total_checks) * 15) if total_checks > 0 else 0
 

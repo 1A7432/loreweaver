@@ -390,6 +390,22 @@ def test_report_renders_transparent_score_breakdown_in_both_locales():
     assert "评分明细" in zh
 
 
+def test_report_totals_distinguish_raw_rolls_from_checks_and_checks_count_for_participation():
+    generator = BattleReportGenerator(Store())
+    record = SessionRecord("session-check-only")
+    record.add_skill_check("u1", "Alice", "Listen", 50, 20, success=True, rank=2)
+
+    breakdown = generator.calculate_player_score_breakdown("u1", record)
+    en = generator.generate_markdown_report(record, "Checks", i18n=I18n(locale="en"))
+    zh = generator.generate_markdown_report(record, "检定", i18n=I18n(locale="zh"))
+
+    assert breakdown["participation"] == 2
+    assert "Raw Dice Rolls (non-checks) | 0" in en
+    assert "Skill Checks | 1" in en
+    assert "原始投骰记录（不含检定） | 0" in zh
+    assert "技能检定次数 | 1" in zh
+
+
 async def test_get_last_session_summary_none_without_history():
     store = Store()
     manager = BattleReportManager(store)
