@@ -48,6 +48,8 @@ hiddenimports = []
 
 # Native extensions and dynamically imported SDK modules need explicit collection. `d20` also
 # ships its parser grammar as package data; `nacl` and `davey` provide Discord voice binaries.
+# Telegram and Feishu are optional source-install extras, but release bundles deliberately ship
+# their SDKs so every documented `--platforms` value works in the self-contained executable.
 for _pkg in (
     "iroh",
     "openai",
@@ -58,6 +60,8 @@ for _pkg in (
     "discord",
     "nacl",
     "davey",
+    "telegram",
+    "lark_oapi",
 ):
     _datas, _binaries, _hidden = collect_all(_pkg)
     datas += _datas

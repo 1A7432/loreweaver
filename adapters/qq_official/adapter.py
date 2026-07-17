@@ -247,12 +247,22 @@ class QQOfficialAdapter(BaseAdapter):
     async def dispatch_payload(self, payload: dict[str, Any]) -> None:
         await self._gateway.dispatch_payload(payload)
 
-    async def fetch_attachment(self, attachment: ChatAttachment) -> bytes:
+    async def fetch_attachment(
+        self,
+        attachment: ChatAttachment,
+        *,
+        max_bytes: int | None = None,
+    ) -> bytes:
         if attachment.data is not None:
-            return attachment.data
+            return await super().fetch_attachment(attachment, max_bytes=max_bytes)
+        if max_bytes is not None and attachment.size > max_bytes:
+            raise ValueError("qq.attachment.too_large")
         if not attachment.url:
             raise FileNotFoundError(attachment.id or attachment.name)
-        return await self._transport.fetch(attachment.url)
+        data = await self._transport.fetch(attachment.url)
+        if max_bytes is not None and len(data) > max_bytes:
+            raise ValueError("qq.attachment.too_large")
+        return data
 
     async def send_message(
         self,

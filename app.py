@@ -5,11 +5,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import importlib.util
+import ipaddress
+import math
 import os
 import shutil
 import signal
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 from adapters.cli.adapter import CliAdapter
 from adapters.cli.demo import demo_kp_responder
@@ -207,6 +210,11 @@ def _run_doctor(settings: Settings, i18n: I18n) -> int:
     """`--doctor`: diagnose exactly what a frozen (PyInstaller) bundle tends to break —
     locale catalogs, rulepacks, skills, and the resolved data dir — then exit 0, or
     non-zero naming what's missing. Also a plain sanity check when run from source."""
+    # Import the real adapter modules even when credentials are disabled. A mere
+    # `find_spec()` check can pass in a frozen bundle while a transitive SDK import
+    # or adapter subpackage is absent; the release smoke therefore exercises this
+    # exact registration path before reporting the individual platform status.
+    _register_platform_adapters()
     mode = "frozen" if getattr(sys, "frozen", False) else "source"
     available_locales = i18n.available_locales()
     locale_report = (
@@ -264,6 +272,44 @@ def _run_doctor(settings: Settings, i18n: I18n) -> int:
     )
     print(i18n.t("tui.doctor.platform", platform="Discord", status=discord_status), file=sys.stderr)
 
+    telegram_configured = bool(settings.telegram.token)
+    telegram_sdk = importlib.util.find_spec("telegram") is not None
+    telegram_status = (
+        i18n.t("tui.doctor.sdk_ready", sdk=telegram_sdk)
+        if telegram_configured
+        else i18n.t("tui.doctor.disabled")
+    )
+    print(i18n.t("tui.doctor.platform", platform="Telegram", status=telegram_status), file=sys.stderr)
+
+    feishu_configured = bool(settings.feishu.app_id or settings.feishu.app_secret)
+    feishu_ready = bool(settings.feishu.app_id and settings.feishu.app_secret)
+    feishu_sdk = importlib.util.find_spec("lark_oapi") is not None
+    feishu_status = (
+        i18n.t("tui.doctor.sdk_ready", sdk=feishu_sdk)
+        if feishu_ready
+        else i18n.t("tui.doctor.partial")
+        if feishu_configured
+        else i18n.t("tui.doctor.disabled")
+    )
+    print(i18n.t("tui.doctor.platform", platform="Feishu", status=feishu_status), file=sys.stderr)
+
+    onebot_mode = str(settings.onebot.mode or "forward").casefold()
+    onebot_configured = bool(
+        settings.onebot.ws_url
+        or settings.onebot.access_token
+        or settings.onebot.listen_port
+        or onebot_mode not in {"forward", "client"}
+    )
+    onebot_ready = _onebot_config_ready(settings.onebot)
+    onebot_status = (
+        i18n.t("tui.doctor.onebot_ready", mode=onebot_mode)
+        if onebot_ready
+        else i18n.t("tui.doctor.partial")
+        if onebot_configured
+        else i18n.t("tui.doctor.disabled")
+    )
+    print(i18n.t("tui.doctor.platform", platform="OneBot 11", status=onebot_status), file=sys.stderr)
+
     missing: list[str] = []
     for locale in ("en", "zh"):
         if locale not in available_locales:
@@ -277,6 +323,14 @@ def _run_doctor(settings: Settings, i18n: I18n) -> int:
         missing.append(i18n.t("tui.doctor.qq_incomplete"))
     if discord_configured and not discord_sdk:
         missing.append(i18n.t("tui.doctor.discord_sdk_missing"))
+    if telegram_configured and not telegram_sdk:
+        missing.append(i18n.t("tui.doctor.telegram_sdk_missing"))
+    if feishu_configured and not feishu_ready:
+        missing.append(i18n.t("tui.doctor.feishu_incomplete"))
+    elif feishu_ready and not feishu_sdk:
+        missing.append(i18n.t("tui.doctor.feishu_sdk_missing"))
+    if onebot_configured and not onebot_ready:
+        missing.append(i18n.t("tui.doctor.onebot_incomplete"))
 
     if missing:
         print(i18n.t("tui.doctor.fail", reason="; ".join(missing)), file=sys.stderr)
@@ -523,6 +577,8 @@ def _platform_config(name: str, settings) -> object | None:
     config = getattr(settings, name, None)
     if config is None:
         return None
+    if name == "onebot":
+        return config if _onebot_config_ready(config) else None
     if any(not getattr(config, key, "") for key in _PLATFORM_REQUIRED.get(name, ())):
         return None
     return config
@@ -532,10 +588,66 @@ def _register_platform_adapters() -> None:
     """Import adapter modules so they register on the platform registry."""
     import adapters.discord  # noqa: F401
     import adapters.feishu  # noqa: F401
+    import adapters.onebot  # noqa: F401
     import adapters.qq_official  # noqa: F401
     from adapters.telegram import adapter as telegram_adapter
 
     telegram_adapter.register()
+
+
+def _onebot_config_ready(config: object) -> bool:
+    mode = str(getattr(config, "mode", "forward") or "forward").casefold()
+    request_timeout = getattr(config, "request_timeout", 10.0)
+    if not _finite_number(request_timeout, positive=True):
+        return False
+    if mode in {"forward", "client"}:
+        return _valid_ws_url(str(getattr(config, "ws_url", "") or "")) and _finite_number(
+            getattr(config, "reconnect_delay", 1.0),
+            positive=False,
+        )
+    if mode not in {"reverse", "server"}:
+        return False
+    port = getattr(config, "listen_port", 0)
+    host = str(getattr(config, "listen_host", "") or "")
+    token = str(getattr(config, "access_token", "") or "")
+    return (
+        isinstance(port, int)
+        and 0 < port <= 65535
+        and bool(host.strip())
+        and (_is_loopback_host(host) or bool(token.strip()))
+    )
+
+
+def _finite_number(value: object, *, positive: bool) -> bool:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(number) and (number > 0 if positive else number >= 0)
+
+
+def _valid_ws_url(value: str) -> bool:
+    try:
+        parsed = urlparse(value)
+        _ = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme.casefold() in {"ws", "wss"}
+        and bool(parsed.hostname)
+        and not parsed.fragment
+        and not any(character.isspace() for character in parsed.hostname or "")
+    )
+
+
+def _is_loopback_host(value: str) -> bool:
+    host = value.strip().casefold().rstrip(".")
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 if __name__ == "__main__":

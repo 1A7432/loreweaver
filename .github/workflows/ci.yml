@@ -27,11 +27,11 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
-      # anthropic + gemini extras so the provider unit tests run; platform SDKs
-      # (qq/telegram/discord/feishu) stay optional — adapter tests mock them. The
-      # `dev` dependency-group (pytest/ruff) is installed by default; --locked
-      # asserts uv.lock is up to date.
-      - run: uv sync --locked --extra anthropic --extra gemini
+      # Install the SDKs whose adapters carry version-sensitive contract tests.
+      # QQ/OneBot use core dependencies; Discord remains mock-tested because its
+      # voice stack is platform-specific. The `dev` dependency-group
+      # (pytest/ruff) is installed by default; --locked asserts uv.lock is current.
+      - run: uv sync --locked --extra anthropic --extra gemini --extra telegram --extra feishu
       - name: Ruff
         run: uv run ruff check core infra agent gateway net adapters app.py scripts
       - name: i18n lint (no hardcoded natural-language strings)

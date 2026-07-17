@@ -6,13 +6,12 @@ returned True for anything an admin tried to block -- the "known bot ids"
 half of the anti-loop guard (`docs/specs/M2.md` §7) never actually engaged.
 
 This proves both halves of the gate that now cover it end-to-end:
-1. `SessionSource.is_bot` (a platform's own author-is-a-bot flag, e.g. Discord's
-   `author.bot` -- see `adapters/discord/adapter.py`) short-circuits on its own.
+1. `SessionSource.is_bot` (a platform's own author-is-a-bot flag, e.g. Discord,
+   Telegram, or Feishu) short-circuits on its own.
 2. `gateway.commands.CommandRouter.cmd_botlist` (the `.botlist add` command)
    populates the SAME `Botlist` instance `on_inbound` consults, which now
-   catches the platforms whose adapter does not set `is_bot` at all (Telegram,
-   Feishu, QQ-OneBot) -- the scenario the M2 spec's "ignore known bot ids"
-   design was written for.
+   catches platforms without a reliable native bot flag (including QQ and OneBot)
+   and provides a manual override for any platform.
 """
 
 from __future__ import annotations
@@ -61,10 +60,9 @@ async def test_runner_botlist_add_command_makes_gate_ignore_that_sender() -> Non
     services = _services()
     router = CommandRouter(services)
     runner = GatewayRunner(services, command_router=router)
-    # telegram's adapter does not set `SessionSource.is_bot` (see
-    # `adapters/telegram/adapter.py`), so before `.botlist add` a second bot
-    # sharing this room looks like an ordinary player.
-    peer_bot = SessionSource(platform="telegram", chat_type="dm", chat_id="c-2", user_id="peer-bot")
+    # OneBot doesn't expose a reliable peer-bot author flag, so before
+    # `.botlist add` a second bot sharing this room looks like an ordinary player.
+    peer_bot = SessionSource(platform="onebot", chat_type="dm", chat_id="c-2", user_id="peer-bot")
 
     before = await runner.on_inbound(InboundMessage(source=peer_bot, text="hello"))
     assert before is not None  # reached the KP turn -- not yet blocked

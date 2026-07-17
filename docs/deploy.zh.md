@@ -2,7 +2,7 @@
 
 # 部署 Loreweaver
 
-大多数桌都是**从笔记本 p2p 开的**——`python -m app --serve`,或连接屏一键「本地开服」(见 [README](../README.zh.md))。本页讲**常驻服务器**(7×24 的公共局 + 一个稳定 ticket)。Loreweaver 走 **Iroh**——点对点 QUIC、用 ticket 拨号,**无需域名、TLS、端口转发或反向代理**。玩家用部署者颁发的密钥加入,没有账户系统。(不再有 Docker 镜像和 WebSocket 服务路径——WebSocket 仅作离线测试传输保留。)
+大多数桌都是**从笔记本 p2p 开的**——`python -m app --serve`,或连接屏一键「本地开服」(见 [README](../README.zh.md))。本页讲**常驻服务器**(7×24 的公共局 + 一个稳定 ticket)。Loreweaver 走 **Iroh**——点对点 QUIC、用 ticket 拨号,**无需域名、TLS、端口转发或反向代理**。玩家用部署者颁发的密钥加入,没有账户系统。(不再有 Docker 镜像或 WebSocket **玩家客户端**服务路径——旧 TUI WebSocket 只作离线测试传输保留；实验性 OneBot 适配器会另外使用其协议的 universal WebSocket。)
 
 ## 裸机运行
 
@@ -69,7 +69,15 @@ journalctl -u loreweaver -f       # 跟日志——ticket + 守秘人 key 启动
 | `TRPG_CENSOR__WORDLIST_PATH` | 内容审核词表：JSON 文件 `{"word": level, ...}`（等级 `1`-`5`，见 `gateway.ops.CensorLevel`）。见 [内容审核](#内容审核) | *（空 = 审核关闭）* |
 | `TRPG_CENSOR__WORDLIST` | 内容审核词表，内联：`word[:level],word2[:level2],...` —— 文件的替代方案，方便用一个环境变量。如果两者都设置，将结合 `WORDLIST_PATH` | *（空 = 审核关闭）* |
 
-Discord 与 QQ 官方机器人已经具备原生、Mock 测试覆盖的适配器，并可与 TUI 共用房间；但在真 Bot 验收前仍为 **Experimental**。依赖、OAuth/开放平台权限、能力降级和强制冒烟清单见 [Discord 与 QQ 机器人](chat-platforms.zh.md)。Telegram 与飞书仍是基础文本适配器。
+Discord、QQ 官方、Telegram、飞书与 OneBot 11 都已有 Mock 测试覆盖的适配器，并能通过 RoomHub 与 Iroh TUI 共用房间。各自真平台清单通过前，所有网络适配器都仍为 **Experimental**；OpenTUI 仍是主力客户端。只安装实际使用的 SDK extra（QQ 与 OneBot 使用核心依赖），检查最终配置，再列出要启动的平台子集：
+
+```bash
+uv sync --extra discord --extra telegram --extra feishu
+uv run python -m app --doctor
+uv run python -m app --serve --keys ./data/keys.toml --platforms discord,qq,telegram,feishu,onebot
+```
+
+组合模式会在所选适配器旁继续运行 Iroh 服务端，让所有传输共用数据目录、密钥库与逻辑房间。平台权限、能力降级、OneBot 连接模式和强制冒烟清单见[聊天平台适配器](chat-platforms.zh.md)。
 
 ChatGPT 订阅不是 API key。要使用直接订阅路径，先启动服务器，在私密/本地 Keeper 聊天中运行 `.model login chatgpt`，完成设备码流程，再运行 `.model set chatgpt [model]`。此路径应让 `TRPG_LLM__BASE_URL` 保持为空；Loreweaver 使用保存的 OAuth grant，而不是浏览器 cookie 或网页会话自动化。运行 `.model login supergrok` 后再执行 `.model set supergrok [model]`，即可选择 SuperGrok 订阅路径；同一 grant 也可供其生图使用。
 
@@ -79,11 +87,15 @@ Release 构建会为每个客户端与服务端压缩包发布相邻的 `.sha256
 
 ## 加密
 
-Iroh 连接**天生端到端加密**（QUIC/TLS，每个对端由其公钥认证）——受支持的 serve 路径没有明文 `ws://` 可被嗅探，也没有证书要管理。它保护的是玩家客户端与 Loreweaver 服务端之间的流量，并不代表服务端不会向配置的模型 provider 发送数据。
+Iroh 玩家连接**天生端到端加密**（QUIC/TLS，每个对端由其公钥认证），也没有证书要管理。它保护的是 OpenTUI 玩家与 Loreweaver 服务端之间的流量，并不代表服务端不会向配置的模型 provider 或聊天平台发送数据。
+
+实验性 OneBot 适配器是另一条边界。正向模式使用配置的 `ws://` 或 `wss://` URL；反向监听是明文 WebSocket，默认只绑 loopback。Bearer token 只能认证对端，不能加密流量。反向模式应留在同一主机或可信私网；若要越过这条边界暴露，先放进安全隧道或能终止加密的代理后面。
+非 loopback 的反向监听若未设置 `ACCESS_TOKEN`，会被配置/启动检查拒绝。
 
 ## 数据流与信任边界
 
 - 确定性规则引擎、SQLite 战役状态、媒体、房间 key 与备份留在你运营的服务端。需要 Iroh relay 时，中继只转发加密流量，不终止应用会话。
+- 启用托管聊天平台后，该平台必然会处理用户的平台 ID、入站消息正文/附件和经 Bot API 发出的回复；其留存与运营政策不在 Loreweaver 信任边界内。自托管 OneBot 实现则属于你自己运营的网络边界。
 - **远程** LLM endpoint 是另一家数据处理方。它会收到用于分析的模组正文、Keeper system prompt（当前包含接近完整的守秘人资料）、相关对话历史和本轮玩家输入。标准应用使用本地 hash embedder；只有显式把 embedding backend 换成远程实现时，文档分块才会发往该 endpoint。如果这些内容必须留在自己控制的基础设施，请选 Ollama、LM Studio 等本地 endpoint。
 - 玩家知识池及每个 NPC/同伴 actor 在结构上按作用域隔离：子 actor 只由自己的档案与角色卡构建。主 Keeper 不同——它为了主持谜团必须看到秘密。prompt 约束与每夜真实模型红线评测只能降低并测量泄漏风险，不能证明任意模型都不会泄漏。
 - 玩家 key 按房间隔离。Keeper key 可以读取守秘人状态，并且只能管理自己房间的 key；但 provider/模型配置作用于整台部署。只给完全信任的共同管理员签发 Keeper key。调用者填入新的自定义 provider URL 时，系统不会把旧的已保存 API key 自动带到新 endpoint，除非调用者为新 endpoint 明确提供该 key。

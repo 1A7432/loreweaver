@@ -33,6 +33,13 @@ def test_platform_settings_use_nested_environment(monkeypatch):
     monkeypatch.setenv("TRPG_DISCORD__TOKEN", "discord-token")
     monkeypatch.setenv("TRPG_DISCORD__GUILD_ID", "123")
     monkeypatch.setenv("TRPG_DISCORD__FFMPEG", "/opt/ffmpeg")
+    monkeypatch.setenv("TRPG_TELEGRAM__TOKEN", "telegram-token")
+    monkeypatch.setenv("TRPG_FEISHU__APP_ID", "feishu-app")
+    monkeypatch.setenv("TRPG_FEISHU__APP_SECRET", "feishu-secret")
+    monkeypatch.setenv("TRPG_ONEBOT__MODE", "reverse")
+    monkeypatch.setenv("TRPG_ONEBOT__LISTEN_HOST", "127.0.0.2")
+    monkeypatch.setenv("TRPG_ONEBOT__LISTEN_PORT", "6700")
+    monkeypatch.setenv("TRPG_ONEBOT__ACCESS_TOKEN", "onebot-token")
 
     settings = Settings(_env_file=None)
 
@@ -41,3 +48,10 @@ def test_platform_settings_use_nested_environment(monkeypatch):
     assert settings.discord.token == "discord-token"
     assert settings.discord.guild_id == 123
     assert settings.discord.ffmpeg == "/opt/ffmpeg"
+    assert settings.telegram.token == "telegram-token"
+    assert settings.feishu.app_id == "feishu-app"
+    assert settings.feishu.app_secret == "feishu-secret"
+    assert settings.onebot.mode == "reverse"
+    assert settings.onebot.listen_host == "127.0.0.2"
+    assert settings.onebot.listen_port == 6700
+    assert settings.onebot.access_token == "onebot-token"

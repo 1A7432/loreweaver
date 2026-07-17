@@ -702,11 +702,10 @@ class CommandRouter:
         runner derives from every inbound message, so an id copied from `.room`/a
         platform's own member list matches directly.
 
-        Discord already marks a bot author via `SessionSource.is_bot` (the adapter
-        reads the platform's own `author.bot` flag), so this command is mainly for
-        platforms whose adapter does not set that flag (Telegram/Feishu/QQ-OneBot):
-        without it, a second bot sharing one of those rooms looks like an ordinary
-        player and the two can loop off each other's replies forever.
+        Discord, Telegram, and Feishu can mark bot authors via
+        `SessionSource.is_bot` when their native event exposes that identity. This
+        command covers platforms without a reliable native flag (including QQ and
+        OneBot) and provides an explicit override for every platform.
         """
         if ctx.raw_ctx.platform != "cli":
             return ctx.i18n.t("rooms.denied")

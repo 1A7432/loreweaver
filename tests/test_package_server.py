@@ -6,6 +6,7 @@ packaging task, not something the offline suite does)."""
 from __future__ import annotations
 
 import tarfile
+from pathlib import Path
 
 import pytest
 
@@ -16,6 +17,8 @@ from scripts.package_server import (
     detect_platform_tag,
     executable_name,
 )
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 @pytest.mark.parametrize(
@@ -82,3 +85,11 @@ def test_server_tar_materializes_symlinks_as_regular_files(tmp_path, monkeypatch
         extracted = tf.extractfile(member)
         assert extracted is not None
         assert extracted.read() == b"shared-library"
+
+
+def test_server_bundle_collects_optional_chat_platform_sdks():
+    spec = (REPO_ROOT / "loreweaver-server.spec").read_text(encoding="utf-8")
+
+    assert '"discord"' in spec
+    assert '"telegram"' in spec
+    assert '"lark_oapi"' in spec

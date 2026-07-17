@@ -116,13 +116,17 @@ def split_text(text: str, limit: int) -> list[str]:
     remaining = text
     while len(remaining) > limit:
         window = remaining[: limit + 1]
-        cut = window.rfind("\n\n", 0, limit)
+        # Prefer a natural boundary only in the latter half of the window.
+        # Otherwise a short prefix followed by one long token/paragraph would
+        # create a tiny API call before the unavoidable hard-sized chunks.
+        boundary_floor = max(1, limit // 2)
+        cut = window.rfind("\n\n", boundary_floor, limit)
         separator = 2
         if cut < 1:
-            cut = window.rfind("\n", 0, limit)
+            cut = window.rfind("\n", boundary_floor, limit)
             separator = 1
         if cut < 1:
-            cut = window.rfind(" ", 0, limit)
+            cut = window.rfind(" ", boundary_floor, limit)
             separator = 1
         if cut < 1:
             cut = limit

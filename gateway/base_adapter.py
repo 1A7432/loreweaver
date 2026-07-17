@@ -31,6 +31,7 @@ class BaseAdapter(ABC):
     def __init__(self, config: Any = None, on_message: MessageHandler | None = None) -> None:
         self.config = config
         self._message_handler = on_message
+        self._handler_manages_typing = False
 
     @abstractmethod
     async def connect(self) -> bool:
@@ -74,9 +75,16 @@ class BaseAdapter(ABC):
     async def set_typing(self, source: SessionSource, active: bool) -> None:
         del source, active
 
-    async def fetch_attachment(self, attachment: ChatAttachment) -> bytes:
+    async def fetch_attachment(
+        self,
+        attachment: ChatAttachment,
+        *,
+        max_bytes: int | None = None,
+    ) -> bytes:
         if attachment.data is None:
             raise FileNotFoundError(attachment.id or attachment.name)
+        if max_bytes is not None and len(attachment.data) > max_bytes:
+            raise ValueError(f"{self.platform}.attachment.too_large")
         return attachment.data
 
     async def deliver_event(
@@ -138,8 +146,14 @@ class BaseAdapter(ABC):
         message.private = message.private or event.private
         return await self.send_message(source, message, session_key=session_key)
 
-    def set_message_handler(self, handler: MessageHandler) -> None:
+    def set_message_handler(
+        self,
+        handler: MessageHandler,
+        *,
+        manages_typing: bool = False,
+    ) -> None:
         self._message_handler = handler
+        self._handler_manages_typing = manages_typing
 
     def supports_private_reply(self, source: SessionSource) -> bool:
         return source.chat_type.casefold() in {"dm", "direct", "private", "c2c"}
@@ -148,12 +162,13 @@ class BaseAdapter(ABC):
         if self._message_handler is None:
             return
 
-        if self.capabilities.typing:
+        manage_typing = self.capabilities.typing and not self._handler_manages_typing
+        if manage_typing:
             await self._set_typing_safely(msg.source, True)
         try:
             reply = await self._message_handler(msg)
         finally:
-            if self.capabilities.typing:
+            if manage_typing:
                 await self._set_typing_safely(msg.source, False)
         if reply is not None:
             await self.send_message(msg.source, reply, reply_to=msg.source.message_id)

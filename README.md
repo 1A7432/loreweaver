@@ -128,6 +128,8 @@ Fair warning: how well the AI runs a table depends a lot on the model's capabili
 
 ```bash
 uv sync                                  # environment + dependencies
+# Optional mock-tested chat adapters (QQ/OneBot need no extra):
+uv sync --extra discord --extra telegram --extra feishu
 
 # Taste it offline first — no API key needed, built-in demo KP + real dice:
 uv run python -m app --cli               # try  r 3d6+2 · /roll 4d6kh3 · .ra spot hidden · .setcoc 2
@@ -173,16 +175,19 @@ At startup Loreweaver reads `.env` if you created one; it does not invent provid
 | **Terminal · OpenTUI** | ✅ **Primary** — the game lobby above; local or networked p2p (Iroh) |
 | Discord bot | 🧪 Experimental — native commands, cards, attachments, panels, and voice |
 | Official QQ bot | 🧪 Experimental — Markdown/Keyboard and rich-media with plain-text fallback |
+| Telegram bot | 🧪 Experimental — polling, topics/replies, media, inline controls, and DMs |
+| Feishu bot | 🧪 Experimental — supervised long connection, mentions/threads/replies, media, and plain-text card fallback |
+| OneBot 11 | 🧪 Experimental — forward/reverse universal WebSocket, message segments, media, and DMs |
 | CLI (headless) | ✅ Development / quick testing / offline demo |
 
-Systems: D&D 5e SRD and CoC 7e ship as data-driven rulepacks (`rulepacks/*.yaml`) — adding a system requires no code changes. Discord and QQ share the same cross-platform rooms but remain experimental pending real-bot acceptance; see the [setup and smoke checklist](docs/chat-platforms.md). Telegram and Feishu remain basic text adapters.
+Systems: D&D 5e SRD and CoC 7e ship as data-driven rulepacks (`rulepacks/*.yaml`) — adding a system requires no code changes. Every network adapter above can share the same cross-platform rooms, but all remain mock-tested **Experimental** until their real-platform checklist passes. OpenTUI remains the primary way to play; see the [chat-platform setup and smoke checklist](docs/chat-platforms.md).
 
 ## Architecture
 
 ```
 core/  deterministic engine   infra/  store · config · i18n · llm · embeddings · vector · providers
 agent/ AI-KP brain + tools    gateway/ platform-independent: commands · ops · hub · runner · director
-net/   Iroh p2p + session core  adapters/ CLI · Discord · official QQ · text adapters  clients/ protocol · tui
+net/   Iroh p2p + session core  adapters/ CLI · Discord · QQ · Telegram · Feishu · OneBot  clients/ protocol · tui
 ```
 
 The engine isolates all state behind a stable `chat_key`; RoomHub layers cross-transport realtime broadcast on top. Layer contracts, the iron rules (deterministic vs. generative, dice-first, information isolation), and how to add rulepacks / adapters / providers / tools / clients: **[AGENTS.md](AGENTS.md)**. Client wire format: **[docs/protocol.md](docs/protocol.md)**.
@@ -208,7 +213,7 @@ The roadmap states the ambition plainly: to be the Claude Code of RPGs — right
 
 ## Security
 
-Self-hosting keeps the deterministic engine, campaign database, keys, and files under your control. It does **not** automatically make model traffic local. A remote LLM receives module text during analysis, the Keeper system prompt (including Keeper-only lore), relevant history, and the current player input. The standard app uses a local hash embedder; an explicitly wired remote embedding backend would also receive document chunks. Use a local endpoint such as Ollama or LM Studio if those prompts must stay on infrastructure you control. Iroh's end-to-end encryption protects player-to-server transport; it is a separate boundary from the model provider.
+Self-hosting keeps the deterministic engine, campaign database, keys, and files under your control. It does **not** automatically make model traffic local. A remote LLM receives module text during analysis, the Keeper system prompt (including Keeper-only lore), relevant history, and the current player input. The standard app uses a local hash embedder; an explicitly wired remote embedding backend would also receive document chunks. Use a local endpoint such as Ollama or LM Studio if those prompts must stay on infrastructure you control. Iroh's end-to-end encryption protects OpenTUI player-to-server transport; it is a separate boundary from the model provider. Discord, QQ, Telegram, and Feishu traffic necessarily traverses those platform services, while OneBot follows the security of its configured WebSocket link; see the [deployment trust model](docs/deploy.md#data-flow-and-trust-boundaries).
 
 Provider API keys and OAuth grants are stored unencrypted in the local SQLite database so runtime configuration survives restart. New secret files and dedicated data directories are restricted to the local owner where the filesystem supports POSIX modes, but this is not a secret vault: protect the host account, backups, `.env`, `keys.toml`, `keeper-key.txt`, and `*.db`, and never commit them. See the full [data-flow and deployment trust model](docs/deploy.md#data-flow-and-trust-boundaries).
 

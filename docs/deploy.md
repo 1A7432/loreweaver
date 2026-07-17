@@ -6,8 +6,9 @@ Most tables are hosted **peer-to-peer from a laptop** — just `python -m app --
 **Host locally** from the connect screen (see the [README](../README.md)). This page is for running
 an **always-on server** (a 24/7 public game with a stable ticket). Loreweaver connects over **Iroh**
 — p2p QUIC, dialed by a ticket, with **no domain, TLS, port-forward, or reverse proxy**. Players
-join with deployer-issued keys; there is no account system. (There is no Docker image and no
-WebSocket serve path any more — WebSocket lives on only as the offline test transport.)
+join with deployer-issued keys; there is no account system. (There is no Docker image or
+WebSocket **player-client** serve path — the old TUI WebSocket remains only for offline tests.
+The experimental OneBot adapter separately uses its protocol's universal WebSocket.)
 
 ## Run it (bare metal)
 
@@ -81,10 +82,20 @@ All settings use the `TRPG_` env prefix with `__` for nesting (see
 | `TRPG_CENSOR__WORDLIST_PATH` | Content-moderation wordlist: a JSON file `{"word": level, ...}` (level `1`-`5`, see `gateway.ops.CensorLevel`). See [Content moderation](#content-moderation) | *(empty = moderation OFF)* |
 | `TRPG_CENSOR__WORDLIST` | Content-moderation wordlist, inline: `word[:level],word2[:level2],...` — an alternative to a file, handy for one env var. Combines with `WORDLIST_PATH` if both are set | *(empty = moderation OFF)* |
 
-Discord and official QQ have native, mock-tested adapters and can share a room with the TUI, but
-remain **Experimental** until tested with real bots. See [Discord and QQ bots](chat-platforms.md)
-for dependencies, OAuth/platform permissions, capability fallbacks, and the required smoke test.
-Telegram and Feishu remain basic text adapters.
+Discord, official QQ, Telegram, Feishu, and OneBot 11 all have mock-tested adapters and can share
+a RoomHub with the Iroh TUI. Every network adapter remains **Experimental** until its real-platform
+checklist passes; OpenTUI remains the primary client. Install only the SDK extras you need (QQ and
+OneBot use core dependencies), check the resolved configuration, then name any configured subset:
+
+```bash
+uv sync --extra discord --extra telegram --extra feishu
+uv run python -m app --doctor
+uv run python -m app --serve --keys ./data/keys.toml --platforms discord,qq,telegram,feishu,onebot
+```
+
+Combined mode keeps the Iroh server running alongside the selected adapters and gives every
+transport the same data directory, keystore, and logical rooms. See [Chat platform adapters](chat-platforms.md)
+for platform permissions, capability fallbacks, OneBot connection modes, and the required smoke tests.
 
 ChatGPT subscriptions are not API keys. For the direct subscription path, start
 the server, run `.model login chatgpt` from a private/local Keeper chat, complete
@@ -116,16 +127,26 @@ intentionally choose another registry.
 
 ## Encryption
 
-Iroh connections are **end-to-end encrypted by construction** (QUIC/TLS, each peer
-authenticated by its public key) — there is no plaintext `ws://` in the supported serve path
-and no certificate to manage. This protects traffic between a player client and the Loreweaver
-server. It does not say what the server sends to a configured model provider.
+Iroh player connections are **end-to-end encrypted by construction** (QUIC/TLS, each peer
+authenticated by its public key), with no certificate to manage. This protects traffic between
+an OpenTUI player and the Loreweaver server; it does not say what the server sends to a configured
+model provider or chat platform.
+
+The experimental OneBot adapter is a separate boundary. Forward mode uses the `ws://` or `wss://`
+URL you configure; the reverse listener is plain WebSocket and defaults to loopback. Its Bearer
+token authenticates the peer but does not encrypt traffic. Keep reverse mode on the same host or
+a trusted private network, or put a secure tunnel/terminating proxy in front of it before exposing
+it beyond that boundary. A non-loopback reverse listener is rejected unless `ACCESS_TOKEN` is set.
 
 ## Data flow and trust boundaries
 
 - The deterministic rules engine, SQLite campaign state, media, room keys, and backups stay on
   the server you operate. The Iroh relay, when one is needed, carries encrypted traffic and does
   not terminate the application session.
+- An enabled hosted chat platform necessarily processes its users' platform IDs, inbound message
+  bodies/attachments, and the replies sent through its bot API. Its retention and operator policy
+  are outside Loreweaver's trust boundary. A self-hosted OneBot implementation instead belongs to
+  the network boundary you operate.
 - A **remote** LLM endpoint is a separate data processor. It receives module text for analysis,
   the Keeper system prompt (which currently contains near-full Keeper-only lore), relevant
   conversation history, and the current player input. The standard app uses a local hash

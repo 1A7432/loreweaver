@@ -10,7 +10,7 @@ The goal is not "an AI stand-in for a game master" — it is to be **the Claude 
 
 ## Where things stand
 
-The deterministic engine — dice (on `d20`), CoC/DnD success levels, character math, rule validation, the game clock — is the solid core, covered by a deterministic, offline test suite. The **terminal (OpenTUI) client remains primary**, connecting over **Iroh** p2p. Discord and official QQ now have native, mock-tested adapters over the same room hub; both stay **Experimental** until the real-bot checklist passes. Telegram and Feishu remain basic text adapters.
+The deterministic engine — dice (on `d20`), CoC/DnD success levels, character math, rule validation, the game clock — is the solid core, covered by a deterministic, offline test suite. The **terminal (OpenTUI) client remains primary**, connecting over **Iroh** p2p. Discord, official QQ, Telegram, Feishu, and OneBot 11 now have mock-tested adapters over the same RoomHub. Every network adapter stays **Experimental** until its real-platform checklist passes.
 
 ## Foundations — done
 
@@ -22,10 +22,11 @@ A hardening pass just landed the unglamorous things that have to be right before
 - **Honest moderation.** The content filter ships OFF with no bundled wordlist (configurable), and the docs say so plainly instead of implying built-in moderation.
 - **Real-model red-line gate.** A nightly job runs a real model through the turn pipeline and fails on measured **leak rate** (verbatim *and* paraphrase sentinels for keeper secrets) or **dice-first misses** (a check that should have rolled, didn't). It is a regression signal for one model/run, not a permanent guarantee. (See [below](#offline-tests-vs-real-model-quality) for why this is separate from the offline suite.)
 - **Transport + release housekeeping.** Iroh join timeouts, room-scoped Keeper key administration, owner-only local secret permissions where supported, verified release archives, stable/prerelease separation, CI on Python 3.11 *and* 3.12, and dead-code cleanup.
+- **Chat-adapter breadth.** Telegram owns a complete polling lifecycle and native topics/replies/media/interactions; Feishu uses a supervised long connection pinned to the verified Lark SDK 1.5.5 surface, with scoped mentions, threads, replies, and media while rendering card content/controls as lossless numbered text (not a native interactive card); OneBot 11 supports authenticated forward and reverse universal WebSockets, action/echo correlation, reconnect-safe event handling, message segments, and private delivery. These are offline/mock-tested capabilities, not evidence of live-platform acceptance.
 
 ## Near-term
 
-- **Real-platform acceptance.** Run the documented Discord and QQ smoke matrices with test bots, capture sanitized QQ API fixtures, and keep both experimental until that evidence is green.
+- **Real-platform acceptance.** Run the documented Discord, official QQ, Telegram, Feishu, and OneBot smoke matrices with test bots/implementations, capture sanitized platform fixtures where useful, and keep every network adapter experimental until that evidence is green.
 - **Multiplayer polish.** Now that the permission model is enforced, tighten the remaining networked-play rough edges (a real bot-loop guard, richer late-joiner state) so a room among trusted people is genuinely comfortable.
 
 ## The bigger arc — the world engine

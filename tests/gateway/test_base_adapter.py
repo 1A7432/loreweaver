@@ -99,6 +99,19 @@ async def test_split_never_includes_a_separator_beyond_the_platform_limit() -> N
     assert all(len(part.text) <= 8 for _source, part, _reply, _room in adapter.sent)
 
 
+async def test_split_avoids_tiny_prefix_before_unavoidable_hard_chunks() -> None:
+    adapter = FakeAdapter()
+    adapter.capabilities = ChatCapabilities(max_text_chars=10)
+    source = SessionSource(platform="fake", chat_id="room")
+    text = "p\n\n" + ("x" * 20)
+
+    await adapter.send_message(source, ChatMessage(text=text))
+
+    parts = [part.text for _source, part, _reply, _room in adapter.sent]
+    assert len(parts[0]) == 10
+    assert "".join(parts) == text
+
+
 async def test_markdown_fences_are_balanced_across_parts() -> None:
     adapter = FakeAdapter()
     adapter.capabilities = ChatCapabilities(max_text_chars=16)

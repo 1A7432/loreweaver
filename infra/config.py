@@ -118,6 +118,23 @@ class FeishuSettings(BaseModel):
     app_secret: str = ""
 
 
+class OneBotSettings(BaseModel):
+    """OneBot 11 universal WebSocket connection settings.
+
+    ``forward`` connects to a OneBot implementation's WebSocket endpoint;
+    ``reverse`` listens for the implementation to connect to Loreweaver.
+    """
+
+    mode: str = "forward"
+    ws_url: str = ""
+    access_token: str = ""
+    listen_host: str = "127.0.0.1"
+    listen_port: int = 0
+    path: str = "/onebot/v11/ws"
+    request_timeout: float = 10.0
+    reconnect_delay: float = 1.0
+
+
 class Settings(BaseSettings):
     locale: str = "en"  # default en (see infra/i18n.py)
     data_dir: str = "./data"
@@ -132,6 +149,7 @@ class Settings(BaseSettings):
     discord: DiscordSettings = DiscordSettings()
     telegram: TelegramSettings = TelegramSettings()
     feishu: FeishuSettings = FeishuSettings()
+    onebot: OneBotSettings = OneBotSettings()
 
     def __init__(self, **values: Any) -> None:
         env_file = values.pop("_env_file", os.environ.get("TRPG_ENV_FILE") or ".env")

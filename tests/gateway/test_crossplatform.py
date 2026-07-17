@@ -52,9 +52,12 @@ class FakeAdapter:
     def supports_private_reply(self, source) -> bool:
         return True
 
-    async def fetch_attachment(self, attachment):
+    async def fetch_attachment(self, attachment, *, max_bytes=None):
         self.fetches += 1
-        return attachment.data or b""
+        data = attachment.data or b""
+        if max_bytes is not None and len(data) > max_bytes:
+            raise ValueError("fake.attachment.too_large")
+        return data
 
     async def deliver_event(self, source, session_key, event, *, locale, media_store=None):
         from gateway.render_chat import render_chat_event
@@ -1011,6 +1014,94 @@ async def test_attachment_only_turn_rejects_an_unsupported_file_before_the_llm()
     assert reply is not None
     assert reply.text == get_i18n("en").t("runner.attachment_unsupported")
     assert adapter.fetches == 0
+
+
+async def test_attachment_limits_are_enforced_before_and_during_download() -> None:
+    hub = RoomHub()
+    services = _services(_kp_rolls_then_replies)
+    services.settings.tui.media_max_file_bytes = 4
+    adapter = FakeAdapter()
+    runner = GatewayRunner(services, [adapter], hub=hub)
+    source = SessionSource(
+        platform="discord",
+        chat_type="dm",
+        chat_id="limited-file",
+        user_id="player",
+    )
+
+    known = await runner.on_inbound(
+        InboundMessage(
+            source=source,
+            text="",
+            attachments=[
+                ChatAttachment(
+                    id="known",
+                    name="known.png",
+                    mime="image/png",
+                    size=5,
+                    data=b"12345",
+                )
+            ],
+        )
+    )
+    assert known is not None
+    assert known.text == get_i18n("en").t("runner.attachment_unsupported")
+    assert adapter.fetches == 0
+
+    unknown = await runner.on_inbound(
+        InboundMessage(
+            source=source,
+            text="",
+            attachments=[
+                ChatAttachment(
+                    id="unknown",
+                    name="unknown.png",
+                    mime="image/png",
+                    size=0,
+                    data=b"12345",
+                )
+            ],
+        )
+    )
+    assert unknown is not None
+    assert unknown.text == get_i18n("en").t("runner.attachment_unsupported")
+    assert adapter.fetches == 1
+
+
+async def test_attachment_fetch_errors_never_log_secret_urls(caplog) -> None:
+    class SecretFailingAdapter(FakeAdapter):
+        async def fetch_attachment(self, attachment, *, max_bytes=None):
+            del attachment, max_bytes
+            raise RuntimeError("https://cdn.example/file?token=SUPER_SECRET")
+
+    hub = RoomHub()
+    services = _services(_kp_rolls_then_replies)
+    adapter = SecretFailingAdapter()
+    runner = GatewayRunner(services, [adapter], hub=hub)
+    source = SessionSource(
+        platform="discord",
+        chat_type="dm",
+        chat_id="failed-file",
+        user_id="player",
+    )
+
+    reply = await runner.on_inbound(
+        InboundMessage(
+            source=source,
+            text="",
+            attachments=[
+                ChatAttachment(
+                    id="remote",
+                    name="remote.png",
+                    mime="image/png",
+                )
+            ],
+        )
+    )
+
+    assert reply is not None
+    assert reply.text == get_i18n("en").t("runner.attachment_unsupported")
+    assert "SUPER_SECRET" not in caplog.text
 
 
 class _BoomToolset:

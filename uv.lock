@@ -1007,7 +1007,7 @@ requires-dist = [
     { name = "google-genai", marker = "extra == 'gemini'", specifier = ">=0.3" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "iroh", specifier = ">=1.0" },
-    { name = "lark-oapi", marker = "extra == 'feishu'", specifier = ">=1.2" },
+    { name = "lark-oapi", marker = "extra == 'feishu'", specifier = "==1.5.5" },
     { name = "numpy", specifier = ">=1.24" },
     { name = "openai", specifier = ">=1.40" },
     { name = "pydantic", specifier = ">=2.7" },

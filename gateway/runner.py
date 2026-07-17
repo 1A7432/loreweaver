@@ -160,6 +160,11 @@ class GatewayRunner:
         if not self.rate_limiter.allow(user_key) or not self.rate_limiter.allow(chat_key):
             return ChatMessage(text=get_i18n(locale).t("runner.throttled"))
 
+        adapter = self._adapter_for(source.platform)
+        capabilities = getattr(adapter, "capabilities", None)
+        manage_typing = bool(getattr(capabilities, "typing", False))
+        if manage_typing:
+            await adapter._set_typing_safely(source, True)
         # A crashing command / KP turn / tool must degrade to a friendly localized
         # reply, never propagate out of the inbound handler — an unguarded raise here
         # would tear down the adapter's listen loop and permanently disconnect the bot
@@ -180,6 +185,9 @@ class GatewayRunner:
         except Exception:
             logger.exception("runner.turn_failed chat_key=%s", chat_key)
             return ChatMessage(text=get_i18n(locale).t("runner.error"))
+        finally:
+            if manage_typing:
+                await adapter._set_typing_safely(source, False)
 
     async def _answer_standalone(self, ctx: AgentCtx, text: str) -> ChatMessage | None:
         """Resolve one direct reply for a single-channel adapter such as the CLI."""
@@ -353,16 +361,25 @@ class GatewayRunner:
             mime = attachment.mime.casefold()
             if mime not in ALLOWED_CHAT_ATTACHMENT_MIMES:
                 continue
-            if (
-                mime not in ALLOWED_IMAGE_MIMES
-                and not is_audio_mime(mime)
-                and attachment.size > self.services.settings.tui.media_max_file_bytes
-            ):
+            limit = (
+                self.services.settings.tui.audio_max_file_bytes
+                if is_audio_mime(mime)
+                else self.services.settings.tui.media_max_file_bytes
+            )
+            if attachment.size > limit:
                 continue
-            data = await adapter.fetch_attachment(attachment)
+            try:
+                data = await adapter.fetch_attachment(attachment, max_bytes=limit)
+            except Exception as exc:
+                logger.warning(
+                    "adapter.attachment_fetch_failed platform=%s error=%s",
+                    adapter.platform,
+                    type(exc).__name__,
+                )
+                continue
+            if len(data) > limit:
+                continue
             if mime not in ALLOWED_IMAGE_MIMES and not is_audio_mime(mime):
-                if len(data) > self.services.settings.tui.media_max_file_bytes:
-                    continue
                 stored.append(
                     ChatAttachment(
                         id=attachment.id,
@@ -409,12 +426,71 @@ class GatewayRunner:
 
     async def start(self) -> None:
         for adapter in self.adapters:
-            adapter.set_message_handler(self.on_inbound)
-        await asyncio.gather(*(adapter.connect() for adapter in self.adapters))
+            adapter.set_message_handler(self.on_inbound, manages_typing=True)
+        try:
+            results = await asyncio.gather(
+                *(adapter.connect() for adapter in self.adapters),
+                return_exceptions=True,
+            )
+        except asyncio.CancelledError:
+            # External cancellation (for example SIGTERM during startup) cancels
+            # gather before it can return a CancelledError result. Always unwind
+            # adapters that connected or partially initialized, then preserve the
+            # caller's cancellation.
+            await _disconnect_adapters(self.adapters)
+            raise
+        cancelled = next(
+            (result for result in results if isinstance(result, asyncio.CancelledError)),
+            None,
+        )
+        if cancelled is not None:
+            await asyncio.gather(
+                *(adapter.disconnect() for adapter in self.adapters),
+                return_exceptions=True,
+            )
+            raise cancelled
+        failed: list[BaseAdapter] = []
+        for adapter, result in zip(self.adapters, results, strict=True):
+            if result is True:
+                continue
+            failed.append(adapter)
+            if isinstance(result, BaseException):
+                logger.warning(
+                    "adapter.connect_failed platform=%s error=%s",
+                    adapter.platform,
+                    type(result).__name__,
+                )
+            else:
+                logger.warning("adapter.connect_unavailable platform=%s", adapter.platform)
+        if failed:
+            await asyncio.gather(
+                *(adapter.disconnect() for adapter in failed),
+                return_exceptions=True,
+            )
 
     async def stop(self) -> None:
-        await asyncio.gather(*(adapter.disconnect() for adapter in self.adapters))
-
+        cleanup = asyncio.create_task(_disconnect_adapters(self.adapters))
+        try:
+            results = await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            # Shield keeps the actual resource cleanup alive. One cancellation
+            # has already been delivered, so awaiting the task here completes it
+            # before the same cancellation is propagated to the caller.
+            await cleanup
+            raise
+        cancelled = next(
+            (result for result in results if isinstance(result, asyncio.CancelledError)),
+            None,
+        )
+        if cancelled is not None:
+            raise cancelled
+        for adapter, result in zip(self.adapters, results, strict=True):
+            if isinstance(result, BaseException):
+                logger.warning(
+                    "adapter.disconnect_failed platform=%s error=%s",
+                    adapter.platform,
+                    type(result).__name__,
+                )
     async def _locale_for(self, chat_key: str, *, preferred: str = "") -> str:
         for template in _CHAT_LOCALE_KEYS:
             value = await self.services.store.get(user_key="", store_key=template.format(chat_key=chat_key))
@@ -478,3 +554,10 @@ class GatewayRunner:
             return text
         leading = text[: len(text) - len(stripped)]
         return f"{leading}.{stripped}"
+
+
+async def _disconnect_adapters(adapters: list[BaseAdapter]) -> list[Any]:
+    return await asyncio.gather(
+        *(adapter.disconnect() for adapter in adapters),
+        return_exceptions=True,
+    )

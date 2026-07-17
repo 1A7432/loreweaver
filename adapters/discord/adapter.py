@@ -390,13 +390,24 @@ class DiscordAdapter(BaseAdapter):
             interaction=chat_interaction,
         )
 
-    async def fetch_attachment(self, attachment: ChatAttachment) -> bytes:
+    async def fetch_attachment(
+        self,
+        attachment: ChatAttachment,
+        *,
+        max_bytes: int | None = None,
+    ) -> bytes:
         if attachment.data is not None:
-            return attachment.data
-        raw = self._attachments.pop(attachment.id, None)
+            return await super().fetch_attachment(attachment, max_bytes=max_bytes)
+        if max_bytes is not None and attachment.size > max_bytes:
+            raise ValueError("discord.attachment.too_large")
+        raw = self._attachments.get(attachment.id)
         if raw is None or not hasattr(raw, "read"):
-            return await super().fetch_attachment(attachment)
-        return await raw.read(use_cached=True)
+            return await super().fetch_attachment(attachment, max_bytes=max_bytes)
+        data = await raw.read(use_cached=True)
+        if max_bytes is not None and len(data) > max_bytes:
+            raise ValueError("discord.attachment.too_large")
+        self._attachments.pop(attachment.id, None)
+        return data
 
     def supports_private_reply(self, source: SessionSource) -> bool:
         return bool(source.user_id)

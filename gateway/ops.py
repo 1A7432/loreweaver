@@ -394,10 +394,10 @@ class Botlist:
 
     ``gateway.runner.GatewayRunner`` consults ``is_bot`` on every inbound message
     ALONGSIDE ``SessionSource.is_bot`` (see its ``on_inbound``): the platform-native
-    flag covers adapters that mark a message's author as a bot (Discord); this list
-    covers the rest (Telegram/Feishu/QQ-OneBot none currently populate ``is_bot``,
-    so a second bot sharing one of those rooms would otherwise be treated as an
-    ordinary player and the two could loop off each other's replies forever).
+    flag covers adapters that can identify a bot author from the event itself
+    (Discord, Telegram, and Feishu). This list covers platforms without such a
+    reliable flag (including QQ and OneBot) and manual overrides for any platform,
+    preventing two bots from looping off each other's replies.
     Populated at runtime via the ``.botlist add`` keeper command
     (``gateway.commands.CommandRouter.cmd_botlist``); process-lifetime only, not
     persisted, matching ``RateLimiter``'s in-memory-only precedent.

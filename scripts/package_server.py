@@ -1,6 +1,6 @@
 """Build a self-contained, per-platform Loreweaver SERVER bundle (PyInstaller onedir).
 
-    uv sync --extra package --extra anthropic --extra gemini
+    uv sync --extra package --extra anthropic --extra gemini --extra discord --extra telegram --extra feishu
     uv run python scripts/package_server.py [--skip-serve-smoke] [--no-archive]
 
 Produces one archive in `dist/`:
