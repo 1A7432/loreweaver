@@ -227,6 +227,25 @@ async def test_start_session_recording_is_idempotent_and_force_new_archives(tmp_
     assert await services.store.get(store_key=f"session_history.{CHAT_KEY}.{first.session_id}") is not None
 
 
+async def test_add_session_event_reports_when_a_duplicate_is_suppressed(tmp_path):
+    services = build_services(Settings(), llm=FakeLLM(), embeddings=FakeEmbeddings(8))
+    session_tools = SessionTools(services)
+    ctx = _ctx(fs=LocalFs(base_dir=tmp_path), locale="en")
+    await session_tools.start_session_recording(ctx, session_name="Dedupe")
+
+    first = await session_tools.add_session_event(ctx, description="The seal breaks.")
+    duplicate = await session_tools.add_session_event(ctx, description="The seal breaks.")
+
+    assert first == services.i18n.t(
+        "kp_tools.know.session.event_logged",
+        description="The seal breaks.",
+    )
+    assert duplicate == services.i18n.t("kp_tools.know.session.event_duplicate")
+    record = await services.battles.generator.get_current_session(CHAT_KEY)
+    assert record is not None
+    assert [event["description"] for event in record.key_events] == ["The seal breaks."]
+
+
 # ---------------------------------------------------------------------------
 # end-to-end: upload -> summary -> unlock -> notes -> clock -> session report -> delete
 # ---------------------------------------------------------------------------

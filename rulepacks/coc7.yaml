@@ -104,7 +104,7 @@ alias:
   智力: [int, INT, intelligence, Intelligence, idea, 灵感, 靈感]
   意志: [pow, POW, power, Power, will, willpower]
   教育: [edu, EDU, education, Education, knowledge, 知识, 知識]
-  幸运: [luck, LUCK, luck value, 幸运值, 运气, 幸運, 運氣, 幸運值]
+  幸运: [LUC, luck, LUCK, luck value, 幸运值, 运气, 幸運, 運氣, 幸運值]
   DB: [db, damage bonus, 伤害加值, 傷害加值]
   体格: [build, Build, 體格]
   移动力: [mov, MOV, move, movement, 移動力, 移动速度, 移動速度, 移速]

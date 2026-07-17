@@ -49,11 +49,13 @@ function diceColor(frame: DiceFrame, theme: Palette): string {
 }
 
 function diceLine(frame: DiceFrame, revealTicks: number): string {
+  const hasOutcome = typeof frame.level === "string" || typeof frame.success === "boolean"
   const level = frame.level ?? (frame.success ? "SUCCESS" : "FAIL")
   const target = typeof frame.target === "number" ? ` vs ${frame.target}` : ""
+  const outcome = hasOutcome ? ` -> ${level}` : ""
   const prefix = revealTicks < 2 ? "⚄ ..." : "⚄"
   // actor / expr / level are server-supplied; scrub control bytes off the line.
-  return stripControlChars(`${prefix} ${frame.actor} ${frame.expr} ${frame.total}${target} -> ${level}`)
+  return stripControlChars(`${prefix} ${frame.actor} ${frame.expr} ${frame.total}${target}${outcome}`)
 }
 
 function speakerLabel(frame: NarrativeFrame): string {

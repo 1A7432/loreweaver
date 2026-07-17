@@ -565,6 +565,7 @@ class CommandRouter:
         if args.casefold() in {"clr", "clear", "del", "delete"}:
             await ctx.services.characters.delete_character(ctx.user_id, ctx.chat_key, character.name)
             return ctx.i18n.t("commands.sheet.deleted", name=character.name)
+        _migrate_legacy_coc_luck(character)
         if args.casefold() in _SHEET_FINALIZE_WORDS:
             # A manual build (`.coc`/`.dnd` with DEFAULT characteristics, then one or
             # more `.st` edits to the chosen ones) never re-derives current HP/MP/SAN:
@@ -2403,6 +2404,20 @@ def _set_sheet_value(character: CharacterSheet, pack: RulePack, canonical: str, 
             character._calc_coc_derived_skills()
         return
     character.skills[_COC_SKILL_TO_MANAGER.get(canonical, canonical)] = value
+
+
+def _migrate_legacy_coc_luck(character: CharacterSheet) -> None:
+    """Move values written by the old `.st LUC` bug into the real attribute slot."""
+    if character.system != "CoC":
+        return
+    legacy_keys = [key for key in character.skills if str(key).casefold() == "luc"]
+    for key in legacy_keys:
+        try:
+            value = int(character.skills[key])
+        except (TypeError, ValueError):
+            continue
+        character.attributes["LUC"] = value
+        character.skills.pop(key, None)
 
 
 def _parse_sheet_assignments(text: str) -> list[tuple[str, str]]:

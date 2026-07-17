@@ -1032,11 +1032,13 @@ class BattleReportManager:
         record.add_skill_check(user_id, char_name, skill, target, roll, success_level, **details)
         await self.generator.save_session(chat_key, record)
 
-    async def add_key_event(self, chat_key: str, description: str, event_type: str = "general") -> None:
-        """Record a key event, lazily starting the session when needed."""
+    async def add_key_event(self, chat_key: str, description: str, event_type: str = "general") -> bool:
+        """Record a key event, returning whether deduplication accepted it."""
         record = await self._session_for_write(chat_key)
-        if record.add_key_event(description, event_type):
+        recorded = record.add_key_event(description, event_type)
+        if recorded:
             await self.generator.save_session(chat_key, record)
+        return recorded
 
     async def add_player_action(self, chat_key: str, user_id: str, char_name: str, action: str) -> None:
         """Record a player action, lazily starting the session when needed."""

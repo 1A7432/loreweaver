@@ -16,7 +16,6 @@ import pytest
 import core.rulepacks as rulepacks_module
 from core.rulepacks import available_systems, load_rulepack
 
-
 # ---------------------------------------------------------------------------
 # (a) coc7 / dnd5e must stay byte-identical to the pre-refactor behavior.
 # These expected numbers were computed from the ORIGINAL hardcoded
@@ -169,6 +168,13 @@ def test_load_rulepack_resolves_declared_names_and_set_keys():
     assert load_rulepack("CoC7") is coc
     assert load_rulepack("dnd") is dnd
     assert load_rulepack("d&d5e") is dnd
+
+
+def test_coc7_luc_alias_resolves_to_the_luck_attribute():
+    pack = load_rulepack("coc7")
+
+    assert pack.resolve_skill("LUC") == "幸运"
+    assert pack.resolve_skill("luc") == "幸运"
 
 
 def test_unknown_system_name_raises_value_error():

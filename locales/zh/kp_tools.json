@@ -230,6 +230,7 @@
   "kp_tools.know.search.sensitive_note": "   [此片段包含守秘人专属信息，输出前必须转化为调查员视角]",
   "kp_tools.know.session.event_failed": "❌ 记录事件失败：{error}",
   "kp_tools.know.session.event_logged": "✅ 已记录关键事件：{description}",
+  "kp_tools.know.session.event_duplicate": "已抑制重复事件，本次未记录任何内容。",
   "kp_tools.know.session.export.done": "✅ 已导出团报（{mode}）。",
   "kp_tools.know.session.export.failed": "❌ 导出团报失败：{error}",
   "kp_tools.know.session.export.mode_detailed": "详细记录",

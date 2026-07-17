@@ -1905,6 +1905,41 @@ async def test_sheet_command_clamps_values_through_rule_validation():
     assert character.attributes["STR"] == 90
 
 
+async def test_coc_st_luc_updates_attribute_and_removes_legacy_skill_value():
+    services = _services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:coc-luck", user_id="u1", locale="en")
+    await router.dispatch(ctx, ".coc Investigator")
+    character = await services.characters.get_character(ctx.user_id, ctx.chat_key)
+    character.attributes["LUC"] = 37
+    character.skills["LUC"] = 61
+    await services.characters.save_character(ctx.user_id, ctx.chat_key, character)
+
+    reply = await router.dispatch(ctx, ".st LUC80")
+
+    updated = await services.characters.get_character(ctx.user_id, ctx.chat_key)
+    assert reply is not None and "幸运=80" in reply
+    assert updated.attributes["LUC"] == 80
+    assert "LUC" not in updated.skills
+
+
+async def test_coc_st_migrates_legacy_luc_skill_on_the_next_sheet_write():
+    services = _services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:coc-luck-migrate", user_id="u1", locale="en")
+    await router.dispatch(ctx, ".coc Investigator")
+    character = await services.characters.get_character(ctx.user_id, ctx.chat_key)
+    character.attributes["LUC"] = 37
+    character.skills["LUC"] = 80
+    await services.characters.save_character(ctx.user_id, ctx.chat_key, character)
+
+    await router.dispatch(ctx, ".st STR50")
+
+    updated = await services.characters.get_character(ctx.user_id, ctx.chat_key)
+    assert updated.attributes["LUC"] == 80
+    assert "LUC" not in updated.skills
+
+
 async def test_dnd_st_recomputes_persisted_skill_initiative_and_ac():
     services = _services()
     router = CommandRouter(services)

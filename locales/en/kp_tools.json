@@ -230,6 +230,7 @@
   "kp_tools.know.search.sensitive_note": "   [This fragment contains keeper-only information; it must be converted to an investigator's viewpoint before use]",
   "kp_tools.know.session.event_failed": "❌ Failed to log event: {error}",
   "kp_tools.know.session.event_logged": "✅ Logged key event: {description}",
+  "kp_tools.know.session.event_duplicate": "Duplicate event suppressed; nothing was recorded.",
   "kp_tools.know.session.export.done": "✅ Session report exported ({mode}).",
   "kp_tools.know.session.export.failed": "❌ Failed to export the report: {error}",
   "kp_tools.know.session.export.mode_detailed": "detailed log",

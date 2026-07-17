@@ -1260,7 +1260,13 @@ class SessionTools(_KnowledgeToolsBase):
         """
         i18n = self._i18n(ctx)
         try:
-            await self._services.battles.add_key_event(ctx.chat_key, description, event_type)
+            recorded = await self._services.battles.add_key_event(
+                ctx.chat_key,
+                description,
+                event_type,
+            )
+            if not recorded:
+                return i18n.t("kp_tools.know.session.event_duplicate")
             return i18n.t("kp_tools.know.session.event_logged", description=description)
         except Exception as exc:
             return i18n.t("kp_tools.know.session.event_failed", error=str(exc))
