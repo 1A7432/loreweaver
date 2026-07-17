@@ -36,15 +36,17 @@ from __future__ import annotations
 
 import json
 import random
+import time
 
 from agent.context import AgentCtx
 from agent.services import Services
 from agent.tools import tool
-from core.battle_report import NPC_USER_ID
+from core.battle_report import NPC_USER_ID, SessionRecord
 from core.character_manager import CharacterSheet
 from core.character_rules import render_validation_notice, validate_sheet
 from core.coc_rules import DEFAULT_COC_RULE, DIFFICULTY_REGULAR, result_check_base
 from core.dice_engine import DiceResult, coc_rank_label
+from core.luck import adjust_check_with_luck, find_latest_character_check, is_luck_eligible_check
 from core.rulepacks import load_rulepack
 
 # COC7 base-attribute names, recognized by `skill_check` so "STR"/"POW"/...
@@ -750,6 +752,113 @@ class DiceTools:
             return "\n".join(lines)
         except Exception as exc:
             return i18n.t("kp_tools.dice.skill_check.failed", error=str(exc))
+
+    @tool
+    async def spend_luck(self, ctx: AgentCtx, points: int) -> str:
+        """Spend CoC7 Luck to adjust the active character's most recent eligible check.
+
+        This deterministically subtracts points from the existing roll. It never
+        rerolls dice and never applies to SAN or Luck checks.
+
+        Args:
+            points: Positive number of Luck points to spend.
+        """
+        i18n = self.services.i18n.with_locale(ctx.locale)
+        if isinstance(points, bool) or not isinstance(points, int) or points <= 0:
+            return i18n.t("kp_tools.dice.luck.invalid_points")
+
+        try:
+            active_character = await _get_active_character(self.services, ctx)
+            if not _has_character(active_character):
+                return i18n.t("kp_tools.character.none")
+            if active_character.system != "CoC":
+                return i18n.t("kp_tools.dice.luck.coc_only")
+
+            character_key = f"characters.{ctx.chat_key}.{active_character.name}"
+            session_key = f"session_record.{ctx.chat_key}.current"
+            for _attempt in range(2):
+                raw_character = await self.services.store.get(
+                    user_key=ctx.uid(), store_key=character_key
+                )
+                raw_session = await self.services.store.get(store_key=session_key)
+                if raw_session is None:
+                    return i18n.t("kp_tools.dice.luck.no_session")
+                if raw_character is None:
+                    return i18n.t("kp_tools.character.none")
+
+                character = CharacterSheet.from_dict(json.loads(raw_character))
+                luck = int(character.attributes.get("LUC", 0) or 0)
+                if points > luck:
+                    return i18n.t("kp_tools.dice.luck.insufficient", points=points, luck=luck)
+
+                record = SessionRecord.from_dict(json.loads(raw_session))
+                check = find_latest_character_check(
+                    record.skill_checks, ctx.uid(), character.name
+                )
+                if check is None:
+                    return i18n.t("kp_tools.dice.luck.no_check")
+                if not is_luck_eligible_check(check):
+                    return i18n.t(
+                        "kp_tools.dice.luck.ineligible", skill=check.get("skill", "")
+                    )
+
+                adjustment = adjust_check_with_luck(check, points)
+                luck_after = luck - points
+                character.attributes["LUC"] = luck_after
+                character.last_updated = time.time()
+                check["luck_before"] = luck
+                check["luck_after"] = luck_after
+                record.rebuild_player_stats()
+
+                new_character = json.dumps(character.to_dict(), ensure_ascii=False)
+                new_session = json.dumps(record.to_dict(), ensure_ascii=False)
+                updated = await self.services.store.set_rows_if_values(
+                    expected=[
+                        (ctx.uid(), character_key, raw_character),
+                        ("", session_key, raw_session),
+                    ],
+                    updates=[
+                        (ctx.uid(), character_key, new_character),
+                        ("", session_key, new_session),
+                    ],
+                )
+                if not updated:
+                    continue
+
+                difficulty = int(check.get("difficulty", DIFFICULTY_REGULAR) or DIFFICULTY_REGULAR)
+                target = int(check["target"])
+                ctx.emit_dice(
+                    {
+                        "kind": "check",
+                        "expr": load_rulepack("coc7").display_name(
+                            str(check.get("skill", "")), ctx.locale
+                        ),
+                        "skill": check.get("skill", ""),
+                        "rolls": [adjustment.after_roll],
+                        "total": adjustment.after_roll,
+                        "target": target,
+                        "effective_target": self._effective_coc_target(target, difficulty),
+                        "rank": adjustment.after_rank,
+                        "success": adjustment.after_rank >= 1,
+                        "difficulty": difficulty,
+                        "bonus": int(check.get("bonus", 0) or 0),
+                        "penalty": int(check.get("penalty", 0) or 0),
+                        "raw_roll": int(check["raw_roll"]),
+                        "adjusted_roll": adjustment.after_roll,
+                        "luck_spent": adjustment.total_spent,
+                        "luck_remaining": luck_after,
+                    }
+                )
+                return i18n.t(
+                    "kp_tools.dice.luck.success",
+                    points=points,
+                    before=coc_rank_label(adjustment.before_rank, i18n),
+                    after=coc_rank_label(adjustment.after_rank, i18n),
+                    luck=luck_after,
+                )
+            return i18n.t("kp_tools.dice.luck.conflict")
+        except Exception as exc:
+            return i18n.t("kp_tools.dice.luck.failed", error=str(exc))
 
     @tool
     async def sanity_check(self, ctx: AgentCtx, success_loss: str, failure_loss: str) -> str:

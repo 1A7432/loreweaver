@@ -85,10 +85,18 @@ _HISTORY_CAP = 20
 _CORRECTIVE_MAX_ROUNDS = 2
 _STATE_CORRECTIVE_MAX_ROUNDS = 3
 
-# Tools that roll real dice. If any fired this turn the check WAS resolved for
-# real, so no correction is needed.
+# Tools that resolve real dice outcomes. If any fired this turn, the check was
+# rolled or deterministically adjusted, so no correction is needed.
 _DICE_TOOL_NAMES = frozenset(
-    {"skill_check", "sanity_check", "roll_dice", "opposed_check", "skill_growth", "wod_check"}
+    {
+        "skill_check",
+        "sanity_check",
+        "roll_dice",
+        "opposed_check",
+        "skill_growth",
+        "wod_check",
+        "spend_luck",
+    }
 )
 
 # Tools that update the deterministic HUD/world-state fields. A scene transition

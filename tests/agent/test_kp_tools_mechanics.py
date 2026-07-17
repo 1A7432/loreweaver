@@ -32,11 +32,11 @@ def _build() -> tuple[Services, AgentCtx]:
 
 
 # ---------------------------------------------------------------------------
-# Toolset integration — 17 tools, none keeper_only, valid schemas
+# Toolset integration — 18 tools, none keeper_only, valid schemas
 # ---------------------------------------------------------------------------
 
 
-def test_toolset_collects_all_seventeen_tools_and_none_are_keeper_only():
+def test_toolset_collects_all_eighteen_tools_and_none_are_keeper_only():
     services, _ctx = _build()
     toolset = Toolset(CharacterTools(services), DiceTools(services), InitiativeTools(services))
 
@@ -51,6 +51,7 @@ def test_toolset_collects_all_seventeen_tools_and_none_are_keeper_only():
         "update_character_status",
         "roll_dice",
         "skill_check",
+        "spend_luck",
         "sanity_check",
         "skill_growth",
         "opposed_check",
@@ -59,11 +60,11 @@ def test_toolset_collects_all_seventeen_tools_and_none_are_keeper_only():
         "random_madness",
         "initiative_tracker",
     }
-    assert len(expected_names) == 17
+    assert len(expected_names) == 18
     assert set(toolset.names()) == expected_names
 
     schemas = toolset.schemas()
-    assert len(schemas) == 17
+    assert len(schemas) == 18
     for name in expected_names:
         assert toolset.is_keeper_only(name) is False
 
@@ -512,6 +513,179 @@ async def test_sanity_check_records_roll_rank_and_structured_loss():
     assert payload["success"] == check["success"]
     assert payload["loss"] == check["loss"]
     assert payload["remaining"] == check["san_after"]
+
+
+async def test_spend_luck_atomically_adjusts_latest_own_check_without_reroll(monkeypatch):
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    dice_tools = DiceTools(services)
+    await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)
+    await services.battles.add_skill_check(
+        ctx.chat_key,
+        ctx.uid(),
+        "Vera",
+        "侦查",
+        50,
+        55,
+        success=False,
+        rank=-1,
+        raw_roll=55,
+        difficulty=1,
+        rule=0,
+    )
+    await services.battles.add_skill_check(
+        ctx.chat_key,
+        "another-player",
+        "Harvey",
+        "聆听",
+        40,
+        90,
+        success=False,
+        rank=-1,
+        raw_roll=90,
+        difficulty=1,
+        rule=0,
+    )
+
+    def unexpected_roll(*_args, **_kwargs):
+        raise AssertionError("Luck spending must not roll dice")
+
+    monkeypatch.setattr(services.dice, "roll_expression", unexpected_roll)
+    monkeypatch.setattr(services.dice, "roll_coc_check", unexpected_roll)
+    monkeypatch.setattr(services.dice, "roll_coc_check_with_bonus", unexpected_roll)
+
+    result = await dice_tools.spend_luck(ctx, points=6)
+
+    character = await services.characters.get_character(ctx.uid(), ctx.chat_key)
+    record = await services.battles.generator.get_current_session(ctx.chat_key)
+    assert record is not None
+    own_check, other_check = record.skill_checks
+    assert character.attributes["LUC"] == 44
+    assert own_check["raw_roll"] == 55
+    assert own_check["roll"] == 49
+    assert own_check["adjusted_roll"] == 49
+    assert own_check["luck_spent"] == 6
+    assert own_check["luck_adjusted"] is True
+    assert own_check["rank"] == 1
+    assert own_check["success"] is True
+    assert other_check["roll"] == 90
+    assert record.player_stats[ctx.uid()]["successful_checks"] == 1
+    assert ctx.dice_payloads[-1]["total"] == 49
+    assert ctx.dice_payloads[-1]["raw_roll"] == 55
+    assert result == services.i18n.with_locale(ctx.locale).t(
+        "kp_tools.dice.luck.success",
+        points=6,
+        before="Failure",
+        after="Success",
+        luck=44,
+    )
+
+
+async def test_spend_luck_rejects_insufficient_pool_without_partial_update():
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    dice_tools = DiceTools(services)
+    await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)
+    await services.battles.add_skill_check(
+        ctx.chat_key,
+        ctx.uid(),
+        "Vera",
+        "侦查",
+        50,
+        55,
+        success=False,
+        rank=-1,
+        raw_roll=55,
+        difficulty=1,
+        rule=0,
+    )
+    character_key = f"characters.{ctx.chat_key}.Vera"
+    session_key = f"session_record.{ctx.chat_key}.current"
+    before_character = await services.store.get(user_key=ctx.uid(), store_key=character_key)
+    before_session = await services.store.get(store_key=session_key)
+
+    result = await dice_tools.spend_luck(ctx, points=51)
+
+    assert result == services.i18n.with_locale(ctx.locale).t(
+        "kp_tools.dice.luck.insufficient", points=51, luck=50
+    )
+    assert await services.store.get(user_key=ctx.uid(), store_key=character_key) == before_character
+    assert await services.store.get(store_key=session_key) == before_session
+    assert ctx.dice_payloads == []
+
+
+async def test_spend_luck_conflict_leaves_character_and_check_unchanged(monkeypatch):
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    dice_tools = DiceTools(services)
+    await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)
+    await services.battles.add_skill_check(
+        ctx.chat_key,
+        ctx.uid(),
+        "Vera",
+        "侦查",
+        50,
+        55,
+        success=False,
+        rank=-1,
+        raw_roll=55,
+        difficulty=1,
+        rule=0,
+    )
+    character_key = f"characters.{ctx.chat_key}.Vera"
+    session_key = f"session_record.{ctx.chat_key}.current"
+    before_character = await services.store.get(user_key=ctx.uid(), store_key=character_key)
+    before_session = await services.store.get(store_key=session_key)
+
+    async def always_conflict(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(services.store, "set_rows_if_values", always_conflict, raising=False)
+
+    result = await dice_tools.spend_luck(ctx, points=6)
+
+    assert result == services.i18n.with_locale(ctx.locale).t("kp_tools.dice.luck.conflict")
+    assert await services.store.get(user_key=ctx.uid(), store_key=character_key) == before_character
+    assert await services.store.get(store_key=session_key) == before_session
+    assert ctx.dice_payloads == []
+
+
+async def test_spend_luck_rejects_sanity_and_non_coc_checks():
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    dice_tools = DiceTools(services)
+    await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)
+    await services.battles.add_skill_check(
+        ctx.chat_key,
+        ctx.uid(),
+        "Vera",
+        "SAN",
+        50,
+        60,
+        success=False,
+        rank=-1,
+        raw_roll=60,
+        difficulty=1,
+        rule=0,
+        loss=3,
+        san_before=50,
+        san_after=47,
+    )
+
+    result = await dice_tools.spend_luck(ctx, points=5)
+
+    assert result == services.i18n.with_locale(ctx.locale).t(
+        "kp_tools.dice.luck.ineligible", skill="SAN"
+    )
+
+    other_services, other_ctx = _build()
+    other_tools = DiceTools(other_services)
+    await CharacterTools(other_services).create_character(
+        other_ctx, name="Thorin", system="dnd5e", auto_generate=False
+    )
+    assert await other_tools.spend_luck(other_ctx, points=1) == other_services.i18n.with_locale(
+        other_ctx.locale
+    ).t("kp_tools.dice.luck.coc_only")
 
 
 async def test_npc_actor_is_recorded_by_name_and_excluded_from_player_stats():

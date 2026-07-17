@@ -811,9 +811,10 @@ def test_reply_check_detector_catches_the_violation_but_not_plain_narration():
     ]:
         assert not _reply_requests_or_resolves_check(negative), negative
 
-    # `_dice_rolled` keys off the real dice-rolling tools only.
+    # `_dice_rolled` keys off deterministic dice-resolution tools only.
     assert _dice_rolled([{"name": "skill_check"}])
     assert _dice_rolled([{"name": "lookup_time"}, {"name": "sanity_check"}])
+    assert _dice_rolled([{"name": "spend_luck"}])
     assert not _dice_rolled([{"name": "lookup_time"}, {"name": "get_module_summary"}])
     assert not _dice_rolled([])
 

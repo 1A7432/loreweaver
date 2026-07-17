@@ -160,6 +160,45 @@ class Store:
             self._commit(conn)
             return cursor.rowcount if cursor.rowcount != -1 else len(items)
 
+    async def set_rows_if_values(
+        self,
+        *,
+        expected: Iterable[tuple[str, str, str | None]],
+        updates: Iterable[tuple[str, str, str | None]],
+    ) -> bool:
+        """Atomically update rows only while all expected values still match.
+
+        This compare-and-set primitive prevents a multi-record deterministic
+        mutation from committing a partial or stale result.
+        """
+        expected_items = list(expected)
+        update_items = list(updates)
+        if not update_items:
+            return True
+
+        async with self._lock:
+            conn = self._ensure_conn()
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                for user_key, store_key, expected_value in expected_items:
+                    row = conn.execute(
+                        "SELECT value FROM kv WHERE user_key = ? AND store_key = ?",
+                        (user_key, store_key),
+                    ).fetchone()
+                    current_value = row[0] if row is not None else None
+                    if current_value != expected_value:
+                        conn.rollback()
+                        return False
+                conn.executemany(
+                    "INSERT OR REPLACE INTO kv (user_key, store_key, value) VALUES (?, ?, ?)",
+                    update_items,
+                )
+                self._commit(conn)
+                return True
+            except Exception:
+                conn.rollback()
+                raise
+
     def close(self) -> None:
         """Close the underlying connection, if one has been opened."""
         if self._conn is not None:

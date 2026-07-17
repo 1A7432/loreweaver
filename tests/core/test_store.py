@@ -185,6 +185,30 @@ async def test_json_string_values_survive_round_trip():
     assert json.loads(stored) == payload
 
 
+async def test_set_rows_if_values_updates_all_rows_atomically_or_none() -> None:
+    store = Store()
+    await store.set(user_key="u1", store_key="character", value="old-character")
+    await store.set(store_key="session", value="old-session")
+
+    updated = await store.set_rows_if_values(
+        expected=[("u1", "character", "old-character"), ("", "session", "old-session")],
+        updates=[("u1", "character", "new-character"), ("", "session", "new-session")],
+    )
+
+    assert updated is True
+    assert await store.get(user_key="u1", store_key="character") == "new-character"
+    assert await store.get(store_key="session") == "new-session"
+
+    conflicted = await store.set_rows_if_values(
+        expected=[("u1", "character", "stale-character"), ("", "session", "new-session")],
+        updates=[("u1", "character", "bad-character"), ("", "session", "bad-session")],
+    )
+
+    assert conflicted is False
+    assert await store.get(user_key="u1", store_key="character") == "new-character"
+    assert await store.get(store_key="session") == "new-session"
+
+
 async def test_migration_runner_apply_is_idempotent():
     store = Store()
     runner = MigrationRunner(store)

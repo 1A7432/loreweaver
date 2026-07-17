@@ -166,6 +166,9 @@ class SessionRecord:
         san_after: int | None = None,
         luck_adjusted: bool | None = None,
         luck_spent: int | None = None,
+        adjusted_roll: int | None = None,
+        luck_before: int | None = None,
+        luck_after: int | None = None,
     ) -> None:
         """Record a structured skill check and update the roller's aggregates.
 
@@ -205,6 +208,9 @@ class SessionRecord:
             "san_after": san_after,
             "luck_adjusted": luck_adjusted,
             "luck_spent": luck_spent,
+            "adjusted_roll": adjusted_roll,
+            "luck_before": luck_before,
+            "luck_after": luck_after,
         }
         check.update({key: value for key, value in optional_fields.items() if value is not None})
         self.skill_checks.append(check)

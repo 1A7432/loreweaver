@@ -110,6 +110,14 @@ def _kp_checks_sanity_then_replies(messages, tools):
     return assistant_text(KP_REPLY)
 
 
+def _kp_spends_luck_then_replies(messages, tools):
+    """A KP turn that adjusts the previous check with Luck, without rerolling."""
+    adjusted = any(message.get("role") == "tool" for message in messages)
+    if not adjusted:
+        return assistant_tools(tool_call("spend_luck", points=6))
+    return assistant_text(KP_REPLY)
+
+
 async def _seed_keeper_sentinel(services, chat_key: str) -> None:
     await services.store.set(
         user_key="",
@@ -235,6 +243,56 @@ def test_structured_and_legacy_dice_calls_fall_back_per_trace_in_order() -> None
     assert [event.data["total"] for event in events] == [12, 4]
     assert events[0].data["level"] == coc_rank_label(2, i18n)
     assert events[1].data["expr"] == "1d6"
+
+
+async def test_luck_spend_turn_emits_adjusted_existing_roll_without_a_reroll(monkeypatch) -> None:
+    hub = RoomHub()
+    services = _services(_kp_spends_luck_then_replies)
+    toolset = build_kp_toolset(services)
+    router = CommandRouter(services)
+    ws_member = RecordingWsMember(member_id="luck-player", name="Vera")
+    await hub.subscribe("R-luck", ws_member)
+    ctx = AgentCtx(chat_key="R-luck", user_id=ws_member.id, platform="tui", locale="en")
+    await CharacterTools(services).create_character(ctx, name="Vera", system="coc7", auto_generate=False)
+    await services.battles.add_skill_check(
+        ctx.chat_key,
+        ctx.uid(),
+        "Vera",
+        "侦查",
+        50,
+        55,
+        success=False,
+        rank=-1,
+        raw_roll=55,
+        difficulty=1,
+        rule=0,
+    )
+    ws_member.events.clear()
+
+    def unexpected_roll(*_args, **_kwargs):
+        raise AssertionError("Luck spending must not reroll")
+
+    monkeypatch.setattr(services.dice, "roll_expression", unexpected_roll)
+    monkeypatch.setattr(services.dice, "roll_coc_check", unexpected_roll)
+    await run_turn(
+        hub,
+        services,
+        ctx,
+        "I spend six Luck on that check.",
+        command_router=router,
+        toolset=toolset,
+        censor=Censor(),
+        origin=ws_member,
+        echo_exclude=None,
+    )
+
+    dice = next(event.data for event in ws_member.events if event.kind == "dice")
+    assert dice["kind"] == "check"
+    assert dice["raw_roll"] == 55
+    assert dice["total"] == 49
+    assert dice["rank"] == 1
+    assert dice["success"] is True
+    assert dice["luck_spent"] == 6
 
 
 async def test_terminal_origin_turn_reaches_the_chat_channel() -> None:

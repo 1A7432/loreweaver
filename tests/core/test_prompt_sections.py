@@ -141,6 +141,7 @@ async def test_inject_trpg_system_prompt_is_localized_and_nonempty_en():
     assert result
     assert EN.t("prompt.system.tools_header") in result
     assert EN.t("prompt.system.guidelines_header") in result
+    assert EN.t("prompt.system.luck_spend") in result
 
 
 async def test_inject_trpg_system_prompt_is_localized_and_nonempty_zh():
@@ -149,6 +150,7 @@ async def test_inject_trpg_system_prompt_is_localized_and_nonempty_zh():
     assert result
     assert ZH.t("prompt.system.tools_header") in result
     assert "投掷骰子" in result
+    assert ZH.t("prompt.system.luck_spend") in result
 
 
 async def test_inject_interaction_style_prompt_is_localized_and_nonempty():

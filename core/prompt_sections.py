@@ -100,6 +100,7 @@ async def inject_trpg_system_prompt(ctx: Any, i18n: I18n) -> str:
         i18n.t("prompt.system.tools_character"),
         "",
         i18n.t("prompt.system.tools_dice"),
+        i18n.t("prompt.system.luck_spend"),
         "",
         i18n.t("prompt.system.tools_status"),
         "",
