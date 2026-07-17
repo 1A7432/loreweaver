@@ -7,8 +7,9 @@ toolset's schemas attached. Every round that comes back with tool calls is
 dispatched through ``toolset.dispatch`` and fed back as ``role="tool"``
 messages (recorded to ``tool_trace`` for auditing/tests); the first round
 that comes back with no tool calls supplies the final reply. If
-``max_rounds`` is exhausted without ever reaching a plain-text reply, a
-localized fallback (``loop.max_rounds``) is used instead.
+``max_rounds`` is exhausted without ever reaching a plain-text reply, one
+tools-disabled finalizer narrates the already-committed public tool results.
+Only if that finalizer fails is a localized deterministic fallback used.
 
 Only the user message and the final assistant reply are persisted back to
 history — never the intermediate tool-call chatter — so replayed history
@@ -304,11 +305,9 @@ class KPTurnResult:
     reply: str  # final player-visible text (already `output_review`-ed)
     tool_trace: list[dict]  # [{name, arguments, keeper_only, result}, ...] in call order
     rounds: int  # how many function-calling rounds this turn took
-    # Token/cache usage accumulated across this turn's MAIN loop rounds (see
-    # `_accumulate_usage` and the `run_kp_turn` docstring below) -- all-zero on the
-    # provider-error early return and the `max_rounds`-exhausted fallback, and always
-    # all-zero against `FakeLLM` (which never sets `ChatResult.usage`), so every
-    # existing test's behavior is unchanged.
+    # Token/cache usage accumulated across this turn's main loop and, when
+    # max_rounds is exhausted, its one tools-disabled finalizer. Provider-error
+    # early returns stay all-zero; FakeLLM results without usage stay all-zero.
     usage: Usage = field(default_factory=Usage)
 
 
@@ -327,8 +326,8 @@ async def run_kp_turn(
     `history_key` defaults to `f"chat_history.{ctx.chat_key}"` (room-scoped,
     like the other conversation-level store keys `core.prompt_sections`
     reads). `output_review`, if given, post-processes the final reply (e.g.
-    an M2 output censor) — it runs on the fallback text too, if `max_rounds`
-    was exhausted.
+    an M2 output censor) — it runs on the finalizer or fallback text too, if
+    `max_rounds` was exhausted.
     """
     i18n = services.i18n.with_locale(ctx.locale)
     # AgentCtx instances may be reused by gateways. Never let a direct tool call
@@ -354,7 +353,8 @@ async def run_kp_turn(
     tool_trace: list[dict] = []
     reply: str | None = None
     rounds = 0
-    # Accumulated across MAIN loop rounds only -- the dice-first corrective phase
+    # Accumulated across MAIN loop rounds and the max-rounds finalizer. The
+    # dice-first corrective phase
     # (`_run_dice_correction`, below) makes its own `services.llm.chat` calls but
     # deliberately does NOT fold them in here (see its docstring): the corrective
     # is a bounded, best-effort repair pass, not part of what a context% meter
@@ -407,13 +407,6 @@ async def run_kp_turn(
         reply = result.content or ""
         break
 
-    # `reply` is still `None` here exactly when every round returned tool calls and
-    # `max_rounds` ran out without ever reaching a plain-text reply -- captured BEFORE
-    # the dice-first correction below (which may itself set `reply`) so the usage
-    # decision reflects whether THIS turn ever produced a real reply, not whatever the
-    # corrective phase did afterwards.
-    max_rounds_exhausted = reply is None
-
     # Dice-first enforcement: if no real dice were rolled this turn yet a check
     # plausibly should have -- either the model's reply narrates/asks for one, OR
     # the player's action plausibly attempts a skill-checkable thing -- run one
@@ -461,7 +454,20 @@ async def run_kp_turn(
         )
 
     if reply is None:  # max_rounds exhausted without ever reaching a plain-text reply
-        reply = i18n.t("loop.max_rounds")
+        try:
+            reply = await _run_max_rounds_finalizer(
+                services,
+                messages,
+                tool_trace,
+                i18n,
+                turn_usage,
+                temperature=services.settings.llm.temperature,
+            )
+        except asyncio.CancelledError:
+            _clear_llm_continuation(services, messages)
+            raise
+        if reply is None:
+            reply = _max_rounds_fallback(tool_trace, i18n)
 
     _clear_llm_continuation(services, messages)
     if output_review is not None:
@@ -477,7 +483,7 @@ async def run_kp_turn(
         reply=reply,
         tool_trace=tool_trace,
         rounds=rounds,
-        usage=Usage() if max_rounds_exhausted else turn_usage,
+        usage=turn_usage,
     )
 
 
@@ -541,6 +547,77 @@ def _correction_base_messages(messages: list[dict]) -> list[dict]:
         if message.get("role") != "tool"
         and not (message.get("role") == "assistant" and message.get("tool_calls"))
     ]
+
+
+def _public_committed_results(tool_trace: list[dict], i18n) -> str:
+    """Render public tool results while structurally excluding keeper-only data."""
+    lines = [
+        i18n.t(
+            "loop.max_rounds_result",
+            name=str(entry.get("name", "")),
+            result=str(entry.get("result", "")).strip(),
+        )
+        for entry in tool_trace
+        if not entry.get("keeper_only", False)
+    ]
+    return "\n".join(lines) if lines else i18n.t("loop.max_rounds_no_public_results")
+
+
+def _max_rounds_fallback(tool_trace: list[dict], i18n) -> str:
+    """Build a deterministic fallback that explicitly preserves public outcomes."""
+    return "\n\n".join(
+        [
+            i18n.t("loop.max_rounds"),
+            f'{i18n.t("loop.max_rounds_committed")}\n{_public_committed_results(tool_trace, i18n)}',
+        ]
+    )
+
+
+async def _run_max_rounds_finalizer(
+    services: Services,
+    messages: list[dict],
+    tool_trace: list[dict],
+    i18n,
+    turn_usage: Usage,
+    *,
+    temperature: float | None,
+) -> str | None:
+    """Narrate committed public results once, with tools disabled.
+
+    The finalizer starts from durable context with all assistant tool-call and
+    role=tool messages removed. Its only result block is rebuilt from
+    non-keeper-only trace entries, so hidden tool output cannot enter this
+    closing call or its deterministic fallback.
+    """
+    convo = [
+        *_correction_base_messages(messages),
+        {
+            "role": "user",
+            "content": i18n.t(
+                "loop.max_rounds_finalize",
+                results=_public_committed_results(tool_trace, i18n),
+            ),
+        },
+    ]
+    try:
+        result = await _chat_with_continuation_cleanup(
+            services,
+            convo,
+            tools=[],
+            tool_choice="none",
+            temperature=temperature,
+        )
+    except asyncio.CancelledError:
+        # `_chat_with_continuation_cleanup` already retired `convo`.
+        raise
+    except Exception:
+        logger.warning("max-rounds finalizer failed", exc_info=True)
+        _clear_llm_continuation(services, convo)
+        return None
+
+    _clear_llm_continuation(services, convo)
+    _accumulate_usage(turn_usage, result)
+    return result.content.strip() if result.content and result.content.strip() else None
 
 
 def _assistant_tool_call_message(result: ChatResult) -> dict:

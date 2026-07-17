@@ -13,6 +13,7 @@ import types
 
 import pytest
 
+import core.character_manager as character_manager
 from core.character_manager import CharacterManager, CharacterSheet
 from infra.i18n import t
 from infra.store import Store
@@ -210,6 +211,79 @@ def test_character_sheet_to_dict_from_dict_round_trip():
     assert restored.system == original.system
     assert restored.attributes["STR"] == 70
     assert restored.notes == "left-handed"
+
+
+def test_recompute_dnd_derived_fields_uses_abilities_and_removes_legacy_copies():
+    character = CharacterSheet("Fighter", "DnD5e")
+    character.attributes.update(
+        {
+            "STR": 16,
+            "DEX": 14,
+            "CON": 12,
+            "INT": 10,
+            "WIS": 12,
+            "CHA": 8,
+            "护甲等级": 99,
+            "先攻修正": 99,
+            "速度": 99,
+        }
+    )
+
+    character_manager.recompute_dnd_derived(character)
+
+    assert character.skills["运动"] == 3
+    assert character.skills["体操"] == 2
+    assert character.skills["隐匿"] == 2
+    assert character.secondary_attributes["先攻修正"] == 2
+    assert character.secondary_attributes["护甲等级"] == 12
+    assert character.secondary_attributes["被动感知"] == 11
+    assert character.secondary_attributes["载重"] == 240
+    assert character.secondary_attributes["负重"] == 160
+    assert character.secondary_attributes["熟练加值"] == 2
+    for duplicate in ("护甲等级", "先攻修正", "速度", "载重", "负重", "熟练加值", "被动感知"):
+        assert duplicate not in character.attributes
+
+
+def test_dnd_hp_storage_migrates_legacy_current_and_max():
+    legacy = CharacterSheet("Fighter", "DnD5e").to_dict()
+    legacy.pop("hp_current", None)
+    legacy.pop("hp_max", None)
+    legacy["secondary_attributes"]["生命值"] = 8
+    legacy["secondary_attributes"]["生命值上限"] = 12
+
+    restored = CharacterSheet.from_dict(legacy)
+
+    assert restored.hp_current == 8
+    assert restored.hp_max == 12
+    assert "生命值" not in restored.secondary_attributes
+    assert "生命值上限" not in restored.secondary_attributes
+    serialized = restored.to_dict()
+    assert serialized["hp_current"] == 8
+    assert serialized["hp_max"] == 12
+
+
+def test_set_hit_points_preserves_max_through_damage_heal_and_explicit_raise():
+    character = CharacterSheet("Fighter", "DnD5e")
+    character_manager.set_hit_points(character, current=12, maximum=12, allow_raise_max=True)
+
+    assert character_manager.set_hit_points(character, delta=-4) == (8, 12)
+    assert character_manager.set_hit_points(character, delta=3) == (11, 12)
+    assert character_manager.set_hit_points(character, delta=99) == (12, 12)
+    assert character_manager.set_hit_points(character, current=15, allow_raise_max=True) == (15, 15)
+
+
+async def test_dnd_party_roster_keeps_current_and_max_hp_distinct():
+    store = Store(":memory:")
+    manager = CharacterManager(store)
+    character = CharacterSheet("Fighter", "DnD5e")
+    character_manager.set_hit_points(character, current=8, maximum=12, allow_raise_max=True)
+
+    await manager.sync_party_roster("chat-dnd", character)
+
+    roster = (await manager.get_party_roster("chat-dnd"))[0]
+    assert roster["HP"] == "8/12"
+    assert roster["hp"] == 8
+    assert roster["hpMax"] == 12
 
 
 def test_character_sheet_default_name_is_empty_string():

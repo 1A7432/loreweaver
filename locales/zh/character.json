@@ -1,6 +1,7 @@
 {
   "character.unknown_template": "未知的角色模板：{template_name}",
   "character.validation.notice": "规则校验已调整角色卡：{items}",
+  "character.validation.warning_notice": "规则校验发现以下问题；这些项目未修改角色卡：{items}",
   "character.validation.clamped_item": "{path} {original} -> {corrected}（限制 {limit}；{code}）",
   "character.validation.budget_item": "{path} 已用 {value}，预算 {limit}（{code}）",
   "character.validation.separator": "；"

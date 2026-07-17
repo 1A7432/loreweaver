@@ -27,10 +27,9 @@ from typing import Any
 
 from agent.context import AgentCtx
 from agent.services import Services
-from core.character_manager import CharacterSheet
+from core.character_manager import CharacterSheet, get_hit_points
 
 _COC_SYSTEM = "CoC"
-_DND_CURRENT_HP_KEY = "生命值"
 _UNSET_CHARACTER_NAME = "default"
 
 
@@ -57,6 +56,10 @@ async def build_room_state(services: Services, ctx: AgentCtx) -> dict[str, Any]:
         state["scene"] = scene
 
     clock = await _clock(services, ctx.chat_key)
+    combat_round = await _combat_round(services, ctx.chat_key)
+    if combat_round is not None:
+        clock = clock or {"time": ""}
+        clock["round"] = combat_round
     if clock is not None:
         state["clock"] = clock
 
@@ -92,8 +95,8 @@ async def _character_payload(services: Services, chat_key: str, sheet: Character
         mp, mpmax = attrs.get("MP"), attrs.get("MPMAX")
         san, sanmax = attrs.get("SAN"), attrs.get("SANMAX")
     else:
-        hp = sheet.secondary_attributes.get(_DND_CURRENT_HP_KEY)
-        hpmax, mp, mpmax, san, sanmax = hp, None, None, None, None
+        hp, hpmax = get_hit_points(sheet)
+        mp, mpmax, san, sanmax = None, None, None, None
 
     status_effects: list[Any] = []
     try:
@@ -253,6 +256,16 @@ async def _clock(services: Services, chat_key: str) -> dict[str, Any] | None:
 
     time_value = clock.get("current_time") if isinstance(clock, dict) else None
     return {"time": time_value} if time_value else None
+
+
+async def _combat_round(services: Services, chat_key: str) -> int | None:
+    try:
+        raw = await services.store.get(user_key="", store_key=f"initiative_meta.{chat_key}")
+        meta = json.loads(raw) if raw else {}
+        value = int(meta.get("round", 0)) if isinstance(meta, dict) else 0
+    except Exception:
+        return None
+    return value if value > 0 else None
 
 
 async def _usage(services: Services, chat_key: str) -> dict[str, Any] | None:

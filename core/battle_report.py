@@ -258,6 +258,19 @@ class SessionRecord:
 
         self.player_stats[user_id]["action_count"] = len(self.player_actions[user_id])
 
+    def add_combat_round(self, round_number: int, notes: str = "") -> bool:
+        """Record one transition into a combat round, ignoring duplicates."""
+        if self.combat_rounds and self.combat_rounds[-1].get("round") == round_number:
+            return False
+        self.combat_rounds.append(
+            {
+                "round": max(1, int(round_number)),
+                "notes": notes,
+                "timestamp": time.time(),
+            }
+        )
+        return True
+
     def end_session(self) -> None:
         """Mark the session as ended (stamps ``end_time``)."""
         self.end_time = time.time()
@@ -1019,6 +1032,12 @@ class BattleReportManager:
         record = await self._session_for_write(chat_key)
         record.add_player_action(user_id, char_name, action)
         await self.generator.save_session(chat_key, record)
+
+    async def add_combat_round(self, chat_key: str, round_number: int, notes: str = "") -> None:
+        """Record a combat-round transition, lazily starting the session."""
+        record = await self._session_for_write(chat_key)
+        if record.add_combat_round(round_number, notes):
+            await self.generator.save_session(chat_key, record)
 
     async def generate_battle_report(
         self, chat_key: str, i18n: I18n | None = None

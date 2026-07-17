@@ -41,6 +41,37 @@ from infra.store import Store
 # core/character_manager.py -> core/ -> repo root -> templates/
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 _DND_CURRENT_HP_KEY = "生命值"
+_DND_MAX_HP_KEY = "生命值上限"
+_DND_ABILITY_KEYS = ("STR", "DEX", "CON", "INT", "WIS", "CHA")
+_DND_SKILL_ABILITIES = {
+    "运动": "STR",
+    "体操": "DEX",
+    "巧手": "DEX",
+    "隐匿": "DEX",
+    "奥秘": "INT",
+    "历史": "INT",
+    "调查": "INT",
+    "自然": "INT",
+    "宗教": "INT",
+    "驯兽": "WIS",
+    "洞悉": "WIS",
+    "医药": "WIS",
+    "察觉": "WIS",
+    "生存": "WIS",
+    "欺瞒": "CHA",
+    "威吓": "CHA",
+    "表演": "CHA",
+    "游说": "CHA",
+}
+_DND_DERIVED_KEYS = {
+    "速度",
+    "先攻修正",
+    "载重",
+    "负重",
+    "护甲等级",
+    "熟练加值",
+    "被动感知",
+}
 
 
 def _numeric_stat(value: Any) -> int | None:
@@ -49,6 +80,101 @@ def _numeric_stat(value: Any) -> int | None:
     if isinstance(value, int | float):
         return int(value)
     return None
+
+
+def get_hit_points(character: CharacterSheet) -> tuple[int, int]:
+    """Return authoritative ``(current, maximum)`` hit points."""
+    if character.system == "CoC":
+        current = _numeric_stat(character.attributes.get("HP"))
+        maximum = _numeric_stat(character.attributes.get("HPMAX"))
+    else:
+        current = _numeric_stat(getattr(character, "hp_current", None))
+        maximum = _numeric_stat(getattr(character, "hp_max", None))
+        secondary = getattr(character, "secondary_attributes", {})
+        if current is None:
+            current = _numeric_stat(secondary.get(_DND_CURRENT_HP_KEY))
+        if maximum is None:
+            maximum = _numeric_stat(secondary.get(_DND_MAX_HP_KEY))
+        if current is None:
+            current = _numeric_stat(character.attributes.get("HP"))
+        if maximum is None:
+            maximum = _numeric_stat(character.attributes.get("HPMAX"))
+
+    if current is None and maximum is None:
+        return 0, 0
+    if maximum is None:
+        maximum = max(0, current or 0)
+    if current is None:
+        current = maximum
+    maximum = max(0, maximum)
+    return max(0, min(maximum, current)), maximum
+
+
+def set_hit_points(
+    character: CharacterSheet,
+    *,
+    current: int | None = None,
+    maximum: int | None = None,
+    delta: int | None = None,
+    allow_raise_max: bool = False,
+) -> tuple[int, int]:
+    """Apply one deterministic HP update and persist current/max separately."""
+    old_current, old_maximum = get_hit_points(character)
+    new_maximum = old_maximum if maximum is None else max(0, int(maximum))
+    new_current = old_current if current is None else max(0, int(current))
+    if delta is not None:
+        new_current += int(delta)
+    if allow_raise_max and new_current > new_maximum:
+        new_maximum = new_current
+    new_current = max(0, min(new_maximum, new_current))
+
+    if character.system == "CoC":
+        character.attributes["HP"] = new_current
+        character.attributes["HPMAX"] = new_maximum
+    else:
+        character.hp_current = new_current
+        character.hp_max = new_maximum
+        character.secondary_attributes.pop(_DND_CURRENT_HP_KEY, None)
+        character.secondary_attributes.pop(_DND_MAX_HP_KEY, None)
+        character.attributes.pop("HP", None)
+        character.attributes.pop("HPMAX", None)
+    return new_current, new_maximum
+
+
+def recompute_dnd_derived(character: CharacterSheet, *, preserve_existing: bool = False) -> None:
+    """Recompute every D&D field derived solely from ability scores/level.
+
+    Ability scores remain in ``attributes``; skill modifiers remain in
+    ``skills``; all other derived values live only in
+    ``secondary_attributes``. ``preserve_existing`` is used solely while
+    loading legacy sheets so explicit stored overrides survive migration.
+    """
+    if character.system != "DnD5e":
+        return
+
+    modifiers = {
+        key: ((_numeric_stat(character.attributes.get(key)) or 10) - 10) // 2
+        for key in _DND_ABILITY_KEYS
+    }
+    computed_skills = {skill: modifiers[ability] for skill, ability in _DND_SKILL_ABILITIES.items()}
+    level = max(1, _numeric_stat(getattr(character, "level", 1)) or 1)
+    computed_secondary = {
+        "速度": 30,
+        "先攻修正": modifiers["DEX"],
+        "载重": (_numeric_stat(character.attributes.get("STR")) or 10) * 15,
+        "负重": (_numeric_stat(character.attributes.get("STR")) or 10) * 10,
+        "护甲等级": 10 + modifiers["DEX"],
+        "熟练加值": (level - 1) // 4 + 2,
+        "被动感知": 10 + modifiers["WIS"],
+    }
+    for key, value in computed_skills.items():
+        if not preserve_existing or key not in character.skills:
+            character.skills[key] = value
+    for key, value in computed_secondary.items():
+        if not preserve_existing or key not in character.secondary_attributes:
+            character.secondary_attributes[key] = value
+    for key in _DND_DERIVED_KEYS:
+        character.attributes.pop(key, None)
 
 
 def _character_vitals(character: CharacterSheet) -> dict[str, int]:
@@ -60,10 +186,8 @@ def _character_vitals(character: CharacterSheet) -> dict[str, int]:
             ("mp", "mpMax", attrs.get("MP"), attrs.get("MPMAX")),
         )
     else:
-        hp = getattr(character, "secondary_attributes", {}).get(_DND_CURRENT_HP_KEY)
-        if hp is None:
-            hp = attrs.get("HP")
-        pairs = (("hp", "hpMax", hp, hp),)
+        hp, hp_max = get_hit_points(character)
+        pairs = (("hp", "hpMax", hp, hp_max),)
 
     vitals: dict[str, int] = {}
     for value_key, max_key, raw_value, raw_max in pairs:
@@ -81,6 +205,8 @@ class CharacterSheet:
     def __init__(self, name: str = "", system: str = "CoC") -> None:
         self.name = name
         self.system = system  # "CoC", "DnD5e", "WoD", ...
+        self.hp_current: int | None = None
+        self.hp_max: int | None = None
 
         # Base attributes (official CoC7 defaults).
         if system == "CoC":
@@ -117,9 +243,11 @@ class CharacterSheet:
         elif system == "DnD5e":
             self.attributes = {"STR": 10, "DEX": 10, "CON": 10, "INT": 10, "WIS": 10, "CHA": 10}
             self.secondary_attributes = {
-                "生命值": 8, "护甲等级": 10, "先攻修正": 0, "速度": 30,
+                "护甲等级": 10, "先攻修正": 0, "速度": 30,
                 "熟练加值": 2, "被动感知": 10,
             }
+            self.hp_current = 8
+            self.hp_max = 8
             self.skills = {}
             self.character_class = ""
             self.race = ""
@@ -135,6 +263,8 @@ class CharacterSheet:
         self.avatar: dict[str, Any] | None = None
         self.created_time = time.time()
         self.last_updated = time.time()
+        if system == "DnD5e":
+            recompute_dnd_derived(self)
 
     def _calc_coc_derived_skills(self) -> None:
         """Fill in CoC7 skills whose starting value is derived from an attribute."""
@@ -158,6 +288,8 @@ class CharacterSheet:
             "system": self.system,
             "attributes": self.attributes,
             "secondary_attributes": getattr(self, "secondary_attributes", {}),
+            "hp_current": getattr(self, "hp_current", None),
+            "hp_max": getattr(self, "hp_max", None),
             "skills": self.skills,
             "equipment": getattr(self, "equipment", []),
             "background": getattr(self, "background", ""),
@@ -190,6 +322,30 @@ class CharacterSheet:
         character.level = data.get("level", 1)
         character.created_time = data.get("created_time", time.time())
         character.last_updated = data.get("last_updated", time.time())
+        if character.system == "DnD5e":
+            current = _numeric_stat(data.get("hp_current")) if "hp_current" in data else None
+            maximum = _numeric_stat(data.get("hp_max")) if "hp_max" in data else None
+            if current is None:
+                current = _numeric_stat(character.secondary_attributes.get(_DND_CURRENT_HP_KEY))
+            if maximum is None:
+                maximum = _numeric_stat(character.secondary_attributes.get(_DND_MAX_HP_KEY))
+            if current is None:
+                current = _numeric_stat(character.attributes.get("HP"))
+            if maximum is None:
+                maximum = _numeric_stat(character.attributes.get("HPMAX"))
+            if current is None and maximum is None:
+                current = maximum = 8
+            elif maximum is None:
+                maximum = current
+            elif current is None:
+                current = maximum
+            set_hit_points(
+                character,
+                current=current,
+                maximum=maximum,
+                allow_raise_max=True,
+            )
+            recompute_dnd_derived(character, preserve_existing=True)
         return character
 
 
@@ -271,6 +427,8 @@ class CharacterTemplate:
                 character.skills[skill] = 0
 
         self._calculate_mappings(character)
+        if character.system == "DnD5e":
+            recompute_dnd_derived(character)
 
     def _calculate_mappings(self, character: CharacterSheet) -> None:
         """Evaluate derived-attribute formulas (`self.mapping`) against `character`."""
@@ -574,6 +732,10 @@ class CharacterManager:
     async def save_character(self, user_id: str, chat_key: str, character: CharacterSheet) -> None:
         """Persist `character`, and make it the active character / add it to the
         user's character list / sync it into the party roster."""
+        if character.system == "DnD5e":
+            hp, hp_max = get_hit_points(character)
+            set_hit_points(character, current=hp, maximum=hp_max, allow_raise_max=True)
+            recompute_dnd_derived(character, preserve_existing=True)
         character.last_updated = time.time()
         store_key = f"characters.{chat_key}.{character.name}"
 
@@ -625,11 +787,11 @@ class CharacterManager:
             }
         else:
             sec = getattr(character, "secondary_attributes", {})
-            hp = sec.get(_DND_CURRENT_HP_KEY, attrs.get("HP", "?"))
+            hp, hp_max = get_hit_points(character)
             status_summary = {
                 "name": character.name,
                 "system": character.system,
-                "HP": f"{hp}",
+                "HP": f"{hp}/{hp_max}",
                 "AC": sec.get("护甲等级", "?"),
                 "status_effects": effective_status_effects,
                 "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -795,13 +957,7 @@ class CharacterManager:
 
     # ============ DND5E rules support ============
 
-    DND5E_SKILL_ABILITIES = {
-        "运动": "STR",
-        "体操": "DEX", "巧手": "DEX", "隐匿": "DEX",
-        "奥秘": "INT", "历史": "INT", "调查": "INT", "自然": "INT", "宗教": "INT",
-        "驯兽": "WIS", "洞悉": "WIS", "医药": "WIS", "察觉": "WIS", "生存": "WIS",
-        "欺瞒": "CHA", "威吓": "CHA", "表演": "CHA", "游说": "CHA",
-    }
+    DND5E_SKILL_ABILITIES = _DND_SKILL_ABILITIES
 
     DND5E_ABILITY_NAMES = {
         "STR": "力量", "DEX": "敏捷", "CON": "体质",

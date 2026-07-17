@@ -24,7 +24,11 @@ class SheetViolation:
 
 
 def validate_sheet(
-    sheet: CharacterSheet, system: str | None = None, *, initialize_vitals: bool = False
+    sheet: CharacterSheet,
+    system: str | None = None,
+    *,
+    initialize_vitals: bool = False,
+    creation_method: str | None = None,
 ) -> tuple[CharacterSheet, list[SheetViolation]]:
     """Return a clamped sheet copy plus deterministic rule violations.
 
@@ -37,6 +41,11 @@ def validate_sheet(
     characteristics — full HP/MP and CoC's starting SAN = min(POW, SANMAX). On
     an edit (False, the default) the current values are PRESERVED (only clamped
     to their new maxima) so editing a skill/attribute never heals a wounded PC.
+
+    ``creation_method`` makes method-specific D&D validation explicit. The
+    point-buy budget is enforced only for ``"point_buy"`` creation; rolled,
+    standard-array, imported, and in-play sheets still receive the shared
+    ability-range validation without being guessed to be point-buy sheets.
     """
     pack = load_rulepack(system or sheet.system)
     clamped = CharacterSheet.from_dict(copy.deepcopy(sheet.to_dict()))
@@ -45,17 +54,18 @@ def validate_sheet(
     if pack.system == _COC_SYSTEM:
         _validate_coc_sheet(clamped, pack, violations, initialize=initialize_vitals)
     elif pack.system == _DND_SYSTEM:
-        _validate_dnd_sheet(clamped, pack, violations)
+        _validate_dnd_sheet(clamped, pack, violations, creation_method=creation_method)
     return clamped, violations
 
 
 def render_validation_notice(i18n: Any, violations: list[SheetViolation]) -> str:
     if not violations:
         return ""
-    rendered = []
+    corrected_items = []
+    warning_items = []
     for violation in violations:
         if violation.corrected is None:
-            rendered.append(
+            warning_items.append(
                 i18n.t(
                     "character.validation.budget_item",
                     code=violation.code,
@@ -65,7 +75,7 @@ def render_validation_notice(i18n: Any, violations: list[SheetViolation]) -> str
                 )
             )
         else:
-            rendered.append(
+            corrected_items.append(
                 i18n.t(
                     "character.validation.clamped_item",
                     code=violation.code,
@@ -75,7 +85,13 @@ def render_validation_notice(i18n: Any, violations: list[SheetViolation]) -> str
                     limit=violation.limit,
                 )
             )
-    return i18n.t("character.validation.notice", items=i18n.t("character.validation.separator").join(rendered))
+    separator = i18n.t("character.validation.separator")
+    notices = []
+    if corrected_items:
+        notices.append(i18n.t("character.validation.notice", items=separator.join(corrected_items)))
+    if warning_items:
+        notices.append(i18n.t("character.validation.warning_notice", items=separator.join(warning_items)))
+    return "\n".join(notices)
 
 
 def _validate_coc_sheet(
@@ -105,7 +121,13 @@ def _validate_coc_sheet(
     _check_coc_skill_budget(sheet, constraints.get("budgets") or {}, violations)
 
 
-def _validate_dnd_sheet(sheet: CharacterSheet, pack: RulePack, violations: list[SheetViolation]) -> None:
+def _validate_dnd_sheet(
+    sheet: CharacterSheet,
+    pack: RulePack,
+    violations: list[SheetViolation],
+    *,
+    creation_method: str | None,
+) -> None:
     constraints = pack.creation_constraints
     abilities = constraints.get("abilities") or {}
     for key, rule in abilities.items():
@@ -117,7 +139,9 @@ def _validate_dnd_sheet(sheet: CharacterSheet, pack: RulePack, violations: list[
             "ability",
             violations,
         )
-    _check_dnd_point_buy(sheet, constraints.get("methods", {}).get("point_buy") or {}, violations)
+    method = (creation_method or "").strip().casefold().replace("-", "_")
+    if method == "point_buy":
+        _check_dnd_point_buy(sheet, constraints.get("methods", {}).get("point_buy") or {}, violations)
 
 
 def _clamp_numeric_field(

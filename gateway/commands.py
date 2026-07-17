@@ -13,7 +13,7 @@ from typing import Any
 from agent.context import AgentCtx
 from agent.services import Services
 from core.char_from_persona import build_sheet_from_description
-from core.character_manager import CharacterSheet
+from core.character_manager import CharacterSheet, get_hit_points, recompute_dnd_derived, set_hit_points
 from core.character_rules import render_validation_notice, validate_sheet
 from core.coc_rules import DEFAULT_COC_RULE
 from core.dice_engine import DiceResult, coc_rank_label
@@ -549,6 +549,7 @@ class CommandRouter:
 
         changed = []
         changed_names = []
+        explicit_values: list[tuple[str, int]] = []
         for raw_name, raw_value in assignments:
             canonical = pack.resolve_skill(raw_name) or raw_name.strip()
             current = _get_sheet_value(character, pack, canonical)
@@ -560,7 +561,16 @@ class CommandRouter:
                 return ctx.i18n.t("commands.roll.invalid", expr=raw_value)
             _set_sheet_value(character, pack, canonical, value)
             changed_names.append(canonical)
+            explicit_values.append((canonical, value))
         character, violations = validate_sheet(character, character.system)
+        if character.system == "DnD5e" and any(name in _DND_ATTR_TO_KEY for name in changed_names):
+            # Ability edits invalidate every ability-derived field. Recompute once
+            # after validation has clamped the final scores, then restore explicit
+            # same-command overrides such as ``.st AC18 DEX14``.
+            recompute_dnd_derived(character)
+            for canonical, value in explicit_values:
+                if canonical not in _DND_ATTR_TO_KEY:
+                    _set_sheet_value(character, pack, canonical, value)
         for canonical in changed_names:
             changed.append(
                 ctx.i18n.t("commands.sheet.changed_item", name=canonical, value=_get_sheet_value(character, pack, canonical))
@@ -620,7 +630,12 @@ class CommandRouter:
         default_name_key = "commands.character.dnd_name" if template == "dnd5e" else "commands.character.coc_name"
         name = ctx.args.strip() or ctx.i18n.t(default_name_key)
         character = ctx.services.characters.generate_character(template, name)
-        character, violations = validate_sheet(character, template, initialize_vitals=True)
+        character, violations = validate_sheet(
+            character,
+            template,
+            initialize_vitals=True,
+            creation_method="rolled" if template == "dnd5e" else None,
+        )
         await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
         result = ctx.i18n.t("commands.character.created", name=character.name, system=character.system)
         notice = render_validation_notice(ctx.i18n, violations)
@@ -2234,6 +2249,9 @@ def _canonical_values(character: CharacterSheet, pack: RulePack) -> dict[str, An
     if character.system == "DnD5e":
         for key, value in character.attributes.items():
             values[_DND_KEY_TO_ATTR.get(key, key)] = value
+        hp, hp_max = get_hit_points(character)
+        values["hp"] = hp
+        values["hpmax"] = hp_max
         for key, value in character.secondary_attributes.items():
             canonical = pack.resolve_skill(key) or key
             values[canonical] = value
@@ -2253,6 +2271,9 @@ def _get_sheet_value(character: CharacterSheet, pack: RulePack, canonical: str) 
     if character.system == "DnD5e":
         if canonical in _DND_ATTR_TO_KEY:
             return int(character.attributes.get(_DND_ATTR_TO_KEY[canonical], pack.defaults.get(canonical, 10)))
+        if canonical in {"hp", "hpmax"}:
+            hp, hp_max = get_hit_points(character)
+            return hp if canonical == "hp" else hp_max
         secondary_key = _DND_SECONDARY_TO_KEY.get(canonical)
         if secondary_key:
             return int(character.secondary_attributes.get(secondary_key, pack.defaults.get(canonical, 0)))
@@ -2304,6 +2325,12 @@ def _set_sheet_value(character: CharacterSheet, pack: RulePack, canonical: str, 
         attr_key = _DND_ATTR_TO_KEY.get(canonical)
         if attr_key:
             character.attributes[attr_key] = value
+            return
+        if canonical == "hp":
+            set_hit_points(character, current=value, allow_raise_max=True)
+            return
+        if canonical == "hpmax":
+            set_hit_points(character, maximum=value)
             return
         secondary_key = _DND_SECONDARY_TO_KEY.get(canonical)
         if secondary_key:

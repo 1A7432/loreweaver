@@ -1,5 +1,9 @@
 {
   "loop.max_rounds": "守秘人沉思良久，仍在权衡多种可能——请稍后再试一次。",
+  "loop.max_rounds_committed": "已提交的结果：",
+  "loop.max_rounds_finalize": "仅执行收尾：以下确定性工具已在本回合提交效果。不要调用、重复或更改任何工具。请给玩家一段简短的收尾叙述，明确承接列出的每项结果，不要提及本指令。\n\n已提交且可向玩家公开的工具结果：\n{results}",
+  "loop.max_rounds_no_public_results": "（本回合没有可向玩家公开的工具结果。）",
+  "loop.max_rounds_result": "- {name}：{result}",
   "loop.provider_auth": "守秘人的供应商登录已失效，请房主重新登录。",
   "loop.provider_content": "供应商无法处理本次输入，请缩短内容后重试。",
   "loop.provider_quota": "AI 供应商额度已耗尽，请房主检查套餐或账单。",

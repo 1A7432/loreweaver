@@ -7,6 +7,7 @@ import pytest
 
 from agent.context import AgentCtx
 from agent.services import build_services
+from core.character_manager import CharacterSheet
 from core.dice_engine import seed_dice
 from gateway.commands import CommandRouter
 from gateway.ops import get_enabled_skills
@@ -1858,6 +1859,68 @@ async def test_sheet_command_clamps_values_through_rule_validation():
     assert "attribute_above_max" in reply
     character = await services.characters.get_character("u1", "cli:dm:t")
     assert character.attributes["STR"] == 90
+
+
+async def test_dnd_st_recomputes_persisted_skill_initiative_and_ac():
+    services = _services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:dnd-derived", user_id="u1", locale="en")
+    await services.characters.save_character("u1", ctx.chat_key, CharacterSheet("Fighter", "DnD5e"))
+
+    await router.dispatch(ctx, ".st STR16 DEX14")
+
+    character = await services.characters.get_character("u1", ctx.chat_key)
+    assert character.skills["运动"] == 3
+    assert character.skills["体操"] == 2
+    assert character.skills["隐匿"] == 2
+    assert character.secondary_attributes["先攻修正"] == 2
+    assert character.secondary_attributes["护甲等级"] == 12
+    assert "先攻修正" not in character.attributes
+    assert "护甲等级" not in character.attributes
+
+
+async def test_dnd_same_st_explicit_ac_override_wins_regardless_of_order():
+    services = _services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:dnd-ac", user_id="u1", locale="en")
+    await services.characters.save_character("u1", ctx.chat_key, CharacterSheet("Fighter", "DnD5e"))
+
+    await router.dispatch(ctx, ".st AC18 STR16 DEX14")
+
+    character = await services.characters.get_character("u1", ctx.chat_key)
+    assert character.secondary_attributes["护甲等级"] == 18
+    assert character.secondary_attributes["先攻修正"] == 2
+
+
+async def test_dnd_sheet_hp_edit_uses_authoritative_current_and_max_fields():
+    services = _services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:dnd-hp", user_id="u1", locale="en")
+    await services.characters.save_character("u1", ctx.chat_key, CharacterSheet("Fighter", "DnD5e"))
+
+    await router.dispatch(ctx, ".st HP12")
+    raised = await services.characters.get_character("u1", ctx.chat_key)
+    assert (raised.hp_current, raised.hp_max) == (12, 12)
+
+    await router.dispatch(ctx, ".st HP-4")
+    damaged = await services.characters.get_character("u1", ctx.chat_key)
+    assert (damaged.hp_current, damaged.hp_max) == (8, 12)
+    assert "生命值" not in damaged.secondary_attributes
+    assert "生命值上限" not in damaged.secondary_attributes
+
+
+async def test_dnd_auto_rolled_creation_does_not_render_point_buy_warning():
+    services = _services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:dnd-create", user_id="u1", locale="en")
+    seed_dice(1)
+
+    reply = await router.dispatch(ctx, ".dnd Rolled Hero")
+
+    assert reply is not None
+    assert "point_buy" not in reply
+    character = await services.characters.get_character("u1", ctx.chat_key)
+    assert character.system == "DnD5e"
 
 
 async def test_manual_create_flow_leaves_stale_vitals_until_finalize_word():

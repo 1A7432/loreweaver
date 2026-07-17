@@ -225,25 +225,98 @@ async def test_output_review_is_applied_to_the_final_reply():
 
 
 # ---------------------------------------------------------------------------
-# max_rounds fallback
+# max_rounds finalization + deterministic fallback
 # ---------------------------------------------------------------------------
 
 
-async def test_max_rounds_fallback_triggers_when_the_llm_always_returns_tool_calls():
-    def _always_tool_calls(messages, tools):
-        return assistant_tools(tool_call("lookup_time"))
-
-    llm = FakeLLM(responder=_always_tool_calls)
+async def test_max_rounds_finalizer_narrates_committed_public_tool_results_with_tools_disabled():
+    llm = FakeLLM(
+        script=[
+            assistant_tools(tool_call("lookup_time")),
+            assistant_tools(tool_call("lookup_time")),
+            assistant_text("The clock settles at two in the afternoon; the investigation continues."),
+        ]
+    )
     cleared: list[list[dict]] = []
     llm.clear_continuation = cleared.append  # type: ignore[attr-defined]
     services = _services(llm)
 
-    result = await run_kp_turn(_ctx("chat-5"), services, _toolset(), "hi", max_rounds=3)
+    result = await run_kp_turn(_ctx("chat-5"), services, _toolset(), "hi", max_rounds=2)
 
-    assert result.rounds == 3
-    assert len(result.tool_trace) == 3
-    assert result.reply == services.i18n.with_locale("en").t("loop.max_rounds")
-    assert len(cleared) == 1
+    assert result.rounds == 2
+    assert len(result.tool_trace) == 2
+    assert result.reply == "The clock settles at two in the afternoon; the investigation continues."
+    assert len(llm.calls) == 3
+    finalizer_messages, finalizer_tools = llm.calls[-1]
+    assert finalizer_tools == []
+    assert llm.tool_choices[-1] == "none"
+    finalizer_prompt = finalizer_messages[-1]["content"]
+    assert finalizer_messages[-1]["role"] == "user"
+    assert "lookup_time" in finalizer_prompt
+    assert "1926-03-15 14:00" in finalizer_prompt
+    # The main and sanitized finalizer conversations are both retired.
+    assert len(cleared) == 2
+
+
+async def test_max_rounds_finalizer_excludes_keeper_only_results_from_its_prompt():
+    llm = FakeLLM(
+        script=[
+            assistant_tools(tool_call("secret_truth")),
+            assistant_tools(tool_call("lookup_time")),
+            assistant_text("Time passes, and the investigators remain uneasy."),
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx("chat-finalize-secret"), services, _toolset(), "Who did it?", max_rounds=2)
+
+    finalizer_messages, _ = llm.calls[-1]
+    serialized = json.dumps(finalizer_messages, ensure_ascii=False)
+    assert KEEPER_SECRET not in serialized
+    assert "lookup_time" in serialized
+    assert KEEPER_SECRET not in result.reply
+
+
+async def test_max_rounds_finalizer_failure_falls_back_with_public_results_but_no_secret():
+    calls = 0
+
+    def responder(_messages, tools):
+        nonlocal calls
+        calls += 1
+        if tools == []:
+            raise RuntimeError("finalizer failed")
+        if calls == 1:
+            return assistant_tools(tool_call("secret_truth"))
+        return assistant_tools(tool_call("lookup_time"))
+
+    llm = FakeLLM(responder=responder)
+    services = _services(llm)
+
+    result = await run_kp_turn(
+        _ctx("chat-finalize-fallback"), services, _toolset(), "Who did it?", max_rounds=2
+    )
+
+    assert services.i18n.with_locale("en").t("loop.max_rounds") in result.reply
+    assert "lookup_time" in result.reply
+    assert "1926-03-15 14:00" in result.reply
+    assert KEEPER_SECRET not in result.reply
+
+
+async def test_max_rounds_finalizer_cancellation_propagates():
+    def responder(_messages, tools):
+        if tools == []:
+            raise asyncio.CancelledError
+        return assistant_tools(tool_call("lookup_time"))
+
+    llm = FakeLLM(responder=responder)
+    cleared: list[list[dict]] = []
+    llm.clear_continuation = cleared.append  # type: ignore[attr-defined]
+    services = _services(llm)
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_kp_turn(_ctx("chat-finalize-cancelled"), services, _toolset(), "hi", max_rounds=1)
+
+    assert len(cleared) == 2
 
 
 async def test_cancelled_tool_continuation_is_cleared_before_propagating():
@@ -268,7 +341,9 @@ async def test_cancelled_tool_continuation_is_cleared_before_propagating():
 
 
 async def test_max_rounds_fallback_is_localized_per_ctx_locale():
-    def _always_tool_calls(messages, tools):
+    def _always_tool_calls(_messages, tools):
+        if tools == []:
+            raise RuntimeError("finalizer failed")
         return assistant_tools(tool_call("lookup_time"))
 
     llm = FakeLLM(responder=_always_tool_calls)
@@ -276,12 +351,15 @@ async def test_max_rounds_fallback_is_localized_per_ctx_locale():
 
     result = await run_kp_turn(_ctx("chat-5-zh", locale="zh"), services, _toolset(), "hi", max_rounds=2)
 
-    assert result.reply == services.i18n.with_locale("zh").t("loop.max_rounds")
-    assert result.reply != services.i18n.with_locale("en").t("loop.max_rounds")
+    assert services.i18n.with_locale("zh").t("loop.max_rounds") in result.reply
+    assert services.i18n.with_locale("en").t("loop.max_rounds") not in result.reply
+    assert "lookup_time" in result.reply
 
 
 async def test_max_rounds_fallback_also_goes_through_output_review():
-    def _always_tool_calls(messages, tools):
+    def _always_tool_calls(_messages, tools):
+        if tools == []:
+            raise RuntimeError("finalizer failed")
         return assistant_tools(tool_call("lookup_time"))
 
     llm = FakeLLM(responder=_always_tool_calls)
@@ -289,11 +367,34 @@ async def test_max_rounds_fallback_also_goes_through_output_review():
 
     result = await run_kp_turn(_ctx("chat-6"), services, _toolset(), "hi", max_rounds=2, output_review=str.upper)
 
-    assert result.reply == services.i18n.with_locale("en").t("loop.max_rounds").upper()
+    assert result.reply == result.reply.upper()
+    assert services.i18n.with_locale("en").t("loop.max_rounds").upper() in result.reply
+    assert "LOOKUP_TIME" in result.reply
+
+
+async def test_max_rounds_finalizer_reply_goes_through_output_review():
+    llm = FakeLLM(
+        script=[
+            assistant_tools(tool_call("lookup_time")),
+            assistant_text("The clock strikes two."),
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(
+        _ctx("chat-finalizer-review"), services, _toolset(), "hi", max_rounds=1, output_review=str.upper
+    )
+
+    assert result.reply == "THE CLOCK STRIKES TWO."
 
 
 async def test_max_rounds_clears_continuation_before_output_review_failure():
-    llm = FakeLLM(responder=lambda messages, tools: assistant_tools(tool_call("lookup_time")))
+    def responder(_messages, tools):
+        if tools == []:
+            raise RuntimeError("finalizer failed")
+        return assistant_tools(tool_call("lookup_time"))
+
+    llm = FakeLLM(responder=responder)
     cleared: list[list[dict]] = []
     llm.clear_continuation = cleared.append  # type: ignore[attr-defined]
     services = _services(llm)
@@ -311,7 +412,7 @@ async def test_max_rounds_clears_continuation_before_output_review_failure():
             output_review=broken_review,
         )
 
-    assert len(cleared) == 1
+    assert len(cleared) == 2
 
 
 async def test_unexpected_tool_dispatch_failure_clears_continuation():
@@ -909,21 +1010,56 @@ async def test_usage_stays_all_zero_when_the_llm_reports_no_usage():
     assert result.usage == Usage()
 
 
-async def test_usage_is_zeroed_on_max_rounds_fallback_even_when_rounds_carried_real_usage():
-    def _always_tool_calls_with_usage(messages, tools):
+async def test_usage_merges_main_rounds_and_max_rounds_finalizer():
+    calls = 0
+
+    def responder(_messages, tools):
+        nonlocal calls
+        calls += 1
+        if tools == []:
+            return ChatResult(
+                content="The clock settles at two.",
+                tool_calls=[],
+                usage=Usage(prompt_tokens=80, completion_tokens=9, total_tokens=89),
+            )
         return ChatResult(
             content=None,
             tool_calls=[tool_call("lookup_time")],
-            usage=Usage(prompt_tokens=50, completion_tokens=5, total_tokens=55),
+            usage=Usage(
+                prompt_tokens=40 + calls * 5,
+                completion_tokens=5,
+                total_tokens=45 + calls * 5,
+            ),
         )
 
-    llm = FakeLLM(responder=_always_tool_calls_with_usage)
+    llm = FakeLLM(responder=responder)
     services = _services(llm)
 
     result = await run_kp_turn(_ctx("chat-usage-3"), services, _toolset(), "hi", max_rounds=2)
 
-    assert result.reply == services.i18n.with_locale("en").t("loop.max_rounds")
-    assert result.usage == Usage()
+    assert result.reply == "The clock settles at two."
+    assert result.usage == Usage(prompt_tokens=80, completion_tokens=19, total_tokens=89)
+
+
+async def test_usage_keeps_main_rounds_when_max_rounds_finalizer_fails():
+    calls = 0
+
+    def responder(_messages, tools):
+        nonlocal calls
+        calls += 1
+        if tools == []:
+            raise RuntimeError("finalizer failed")
+        return ChatResult(
+            content=None,
+            tool_calls=[tool_call("lookup_time")],
+            usage=Usage(prompt_tokens=50 + calls, completion_tokens=5, total_tokens=55 + calls),
+        )
+
+    services = _services(FakeLLM(responder=responder))
+
+    result = await run_kp_turn(_ctx("chat-usage-finalizer-failed"), services, _toolset(), "hi", max_rounds=2)
+
+    assert result.usage == Usage(prompt_tokens=52, completion_tokens=10, total_tokens=57)
 
 
 async def test_usage_is_zeroed_on_provider_error():

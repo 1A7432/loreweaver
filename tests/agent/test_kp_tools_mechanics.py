@@ -164,6 +164,26 @@ async def test_update_character_tools_clamp_rule_violations_before_saving():
     assert character.skills["侦查"] == 90
 
 
+async def test_update_dnd_attribute_recomputes_derived_fields_and_routes_hp_edits():
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    await char_tools.create_character(ctx, name="Fighter", system="dnd5e", auto_generate=False)
+    character = await services.characters.get_character(ctx.uid(), ctx.chat_key)
+    character.hp_current = 8
+    character.hp_max = 12
+    await services.characters.save_character(ctx.uid(), ctx.chat_key, character)
+
+    await char_tools.update_character_attribute(ctx, attribute="DEX", value=14)
+    await char_tools.update_character_attribute(ctx, attribute="HP", value=10)
+
+    updated = await services.characters.get_character(ctx.uid(), ctx.chat_key)
+    assert updated.secondary_attributes["先攻修正"] == 2
+    assert updated.secondary_attributes["护甲等级"] == 12
+    assert updated.skills["体操"] == 2
+    assert (updated.hp_current, updated.hp_max) == (10, 12)
+    assert "HP" not in updated.attributes
+
+
 async def test_list_switch_and_delete_characters():
     services, ctx = _build()
     char_tools = CharacterTools(services)
@@ -887,6 +907,27 @@ async def test_hp_manager_add_sub_and_show():
     assert "❌" in unknown_result
 
 
+async def test_dnd_hp_manager_preserves_max_through_damage_and_heal():
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    dice_tools = DiceTools(services)
+    await char_tools.create_character(ctx, name="Fighter", system="dnd5e", auto_generate=False)
+    character = await services.characters.get_character(ctx.uid(), ctx.chat_key)
+    character.hp_current = 12
+    character.hp_max = 12
+    await services.characters.save_character(ctx.uid(), ctx.chat_key, character)
+
+    damaged = await dice_tools.hp_manager(ctx, action="sub", value=4)
+    assert "8/12" in damaged
+    healed = await dice_tools.hp_manager(ctx, action="add", value=3)
+    assert "11/12" in healed
+
+    persisted = await services.characters.get_character(ctx.uid(), ctx.chat_key)
+    assert (persisted.hp_current, persisted.hp_max) == (11, 12)
+    assert "生命值" not in persisted.secondary_attributes
+    assert "生命值上限" not in persisted.secondary_attributes
+
+
 async def test_hp_manager_without_a_character_returns_localized_error():
     services, ctx = _build()
     dice_tools = DiceTools(services)
@@ -941,6 +982,27 @@ async def test_initiative_tracker_add_list_and_next():
     assert "✅" in cleared
     empty = await initiative_tools.initiative_tracker(ctx, action="list")
     assert empty == services.i18n.with_locale(ctx.locale).t("kp_tools.initiative.empty")
+
+
+async def test_initiative_round_counter_wraps_and_records_each_round_transition():
+    services, ctx = _build()
+    initiative_tools = InitiativeTools(services)
+
+    await initiative_tools.initiative_tracker(ctx, action="add", name="Alice", initiative=15)
+    await initiative_tools.initiative_tracker(ctx, action="add", name="Bob", initiative=20)
+
+    first = await services.battles.generator.get_current_session(ctx.chat_key)
+    assert first is not None
+    assert [entry["round"] for entry in first.combat_rounds] == [1]
+
+    await initiative_tools.initiative_tracker(ctx, action="next")
+    await initiative_tools.initiative_tracker(ctx, action="next")
+
+    raw_meta = await services.store.get(user_key="", store_key=f"initiative_meta.{ctx.chat_key}")
+    assert json.loads(raw_meta or "{}")["round"] == 2
+    second = await services.battles.generator.get_current_session(ctx.chat_key)
+    assert second is not None
+    assert [entry["round"] for entry in second.combat_rounds] == [1, 2]
 
 
 async def test_initiative_tracker_add_uses_active_character_and_rolls_dice_when_omitted():

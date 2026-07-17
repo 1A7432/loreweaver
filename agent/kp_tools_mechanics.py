@@ -42,7 +42,7 @@ from agent.context import AgentCtx
 from agent.services import Services
 from agent.tools import tool
 from core.battle_report import NPC_USER_ID, SessionRecord
-from core.character_manager import CharacterSheet
+from core.character_manager import CharacterSheet, get_hit_points, recompute_dnd_derived, set_hit_points
 from core.character_rules import render_validation_notice, validate_sheet
 from core.coc_rules import DEFAULT_COC_RULE, DIFFICULTY_REGULAR, result_check_base
 from core.dice_engine import DiceResult, coc_rank_label
@@ -148,7 +148,12 @@ class CharacterTools:
             else:
                 character = CharacterSheet(name=name, system=system_name)
 
-            character, violations = validate_sheet(character, template_key, initialize_vitals=True)
+            character, violations = validate_sheet(
+                character,
+                template_key,
+                initialize_vitals=True,
+                creation_method="rolled" if template_key == "dnd5e" and auto_generate else None,
+            )
             await self.services.characters.save_character(ctx.uid(), ctx.chat_key, character)
 
             attrs = character.attributes
@@ -231,6 +236,10 @@ class CharacterTools:
             lines.append(i18n.t("kp_tools.character.sheet.attributes_header"))
             for attr, value in attrs.items():
                 lines.append(i18n.t("kp_tools.character.sheet.attr_line", attr=attr, value=value))
+            hp, hp_max = get_hit_points(character)
+            lines.append("")
+            lines.append(i18n.t("kp_tools.character.sheet.status_header"))
+            lines.append(i18n.t("kp_tools.character.sheet.hp_line", hp=hp, hpmax=hp_max))
 
         if character.skills:
             lines.append("")
@@ -300,11 +309,26 @@ class CharacterTools:
             if not _has_character(character):
                 return i18n.t("kp_tools.character.none")
 
-            old_value = character.attributes.get(attribute, i18n.t("kp_tools.character.value_unset"))
-            character.attributes[attribute] = value
+            hp_field = attribute.strip().upper()
+            if hp_field in {"HP", "HPMAX"}:
+                hp, hp_max = get_hit_points(character)
+                old_value = hp if hp_field == "HP" else hp_max
+                if hp_field == "HP":
+                    set_hit_points(character, current=value)
+                else:
+                    set_hit_points(character, maximum=value)
+            else:
+                old_value = character.attributes.get(attribute, i18n.t("kp_tools.character.value_unset"))
+                character.attributes[attribute] = value
 
             character, violations = validate_sheet(character, character.system)
-            new_value = character.attributes.get(attribute, value)
+            if character.system == "DnD5e":
+                recompute_dnd_derived(character)
+            if hp_field in {"HP", "HPMAX"}:
+                hp, hp_max = get_hit_points(character)
+                new_value = hp if hp_field == "HP" else hp_max
+            else:
+                new_value = character.attributes.get(attribute, value)
 
             await characters.save_character(ctx.uid(), ctx.chat_key, character)
 
@@ -1087,28 +1111,19 @@ class DiceTools:
             if not _has_character(character):
                 return i18n.t("kp_tools.character.none")
 
-            if character.system == "CoC":
-                hp = character.attributes.get("HP", 10)
-                hp_max = character.attributes.get("HPMAX", 10)
-            else:
-                hp = character.secondary_attributes.get("生命值", 10)
-                hp_max = hp
+            hp, hp_max = get_hit_points(character)
 
             if action == "show":
                 pass
             elif action == "add":
-                hp = min(hp_max, hp + value)
+                hp, hp_max = set_hit_points(character, delta=value)
             elif action == "sub":
-                hp = max(0, hp - value)
+                hp, hp_max = set_hit_points(character, delta=-value)
             elif action == "set":
-                hp = max(0, min(hp_max, value))
+                hp, hp_max = set_hit_points(character, current=value)
             else:
                 return i18n.t("kp_tools.dice.hp.unknown_action", action=action)
 
-            if character.system == "CoC":
-                character.attributes["HP"] = hp
-            else:
-                character.secondary_attributes["生命值"] = hp
             await characters.save_character(ctx.uid(), ctx.chat_key, character)
 
             ratio = hp / hp_max if hp_max > 0 else 1
@@ -1195,12 +1210,20 @@ class InitiativeTools:
         i18n = self.services.i18n.with_locale(ctx.locale)
         chat_key = ctx.chat_key
         store_key = f"initiative.{chat_key}"
+        meta_key = f"initiative_meta.{chat_key}"
 
         try:
             init_data = await self.services.store.get(user_key="", store_key=store_key)
             init_list = json.loads(init_data) if init_data else []
+            meta_data = await self.services.store.get(user_key="", store_key=meta_key)
+            parsed_meta = json.loads(meta_data) if meta_data else {}
+            meta_exists = isinstance(parsed_meta, dict) and bool(parsed_meta)
+            meta = parsed_meta if isinstance(parsed_meta, dict) else {}
+            round_number = max(1, int(meta.get("round", 1)))
+            turns_in_round = max(0, int(meta.get("turns", 0)))
 
             if action == "add":
+                starting_combat = not init_list
                 if name is None:
                     character = await _get_active_character(self.services, ctx)
                     name = character.name
@@ -1218,6 +1241,16 @@ class InitiativeTools:
                 await self.services.store.set(
                     user_key="", store_key=store_key, value=json.dumps(init_list, ensure_ascii=False)
                 )
+                if starting_combat:
+                    round_number = 1
+                    turns_in_round = 0
+                await self.services.store.set(
+                    user_key="",
+                    store_key=meta_key,
+                    value=json.dumps({"round": round_number, "turns": turns_in_round}),
+                )
+                if starting_combat or not meta_exists:
+                    await self.services.battles.add_combat_round(chat_key, round_number)
                 return i18n.t("kp_tools.initiative.added", name=name, initiative=initiative)
 
             if action == "list":
@@ -1237,16 +1270,31 @@ class InitiativeTools:
 
             if action == "clear":
                 await self.services.store.set(user_key="", store_key=store_key, value="[]")
+                await self.services.store.delete(user_key="", store_key=meta_key)
                 return i18n.t("kp_tools.initiative.cleared")
 
             if action == "next":
                 if not init_list:
                     return i18n.t("kp_tools.initiative.empty")
+                if not meta_exists:
+                    await self.services.battles.add_combat_round(chat_key, round_number)
                 current = init_list.pop(0)
                 init_list.append(current)
+                turns_in_round += 1
+                transitioned = turns_in_round >= len(init_list)
+                if transitioned:
+                    round_number += 1
+                    turns_in_round = 0
                 await self.services.store.set(
                     user_key="", store_key=store_key, value=json.dumps(init_list, ensure_ascii=False)
                 )
+                await self.services.store.set(
+                    user_key="",
+                    store_key=meta_key,
+                    value=json.dumps({"round": round_number, "turns": turns_in_round}),
+                )
+                if transitioned:
+                    await self.services.battles.add_combat_round(chat_key, round_number)
                 return i18n.t("kp_tools.initiative.next_turn", name=current["name"])
 
             return i18n.t("kp_tools.initiative.unknown_action", action=action)
