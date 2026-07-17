@@ -98,6 +98,7 @@
   "kp_tools.dice.skill_check.dnd_header": "🎲 {name} makes a {skill} check {proficient}",
   "kp_tools.dice.skill_check.dnd_roll_line": "🎯 Roll: {roll} + modifier {modifier} = {total} vs DC {dc}",
   "kp_tools.dice.skill_check.failed": "❌ Check failed: {error}",
+  "kp_tools.dice.skill_check.npc_target_required": "❌ Omit actor for the active character, or supply npc_target for an NPC.",
   "kp_tools.dice.skill_check.final_line": "🎲 Final result: {final}",
   "kp_tools.dice.skill_check.outcome_failure": "❌ Result: {level}",
   "kp_tools.dice.skill_check.outcome_success": "✨ Result: {level}",

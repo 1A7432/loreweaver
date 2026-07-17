@@ -467,6 +467,95 @@ async def test_dnd_skill_check_records_structured_advantage_and_critical_fields(
     assert payload["penalty"] == 0
 
 
+async def test_coc_npc_skill_check_requires_and_uses_explicit_target_without_player_sheet_leak():
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    dice_tools = DiceTools(services)
+    await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)
+
+    seed_dice(314)
+    expected = DiceRoller().roll_coc_check_with_bonus(73, bonus=0, penalty=0)
+    seed_dice(314)
+    result = await dice_tools.skill_check(
+        ctx,
+        skill_name="化学",
+        actor="Fire Captain Zhao",
+        npc_target=73,
+    )
+
+    assert "73" in result
+    assert ctx.dice_payloads[-1]["target"] == 73
+    assert ctx.dice_payloads[-1]["total"] == expected["final_roll"]
+    record = await services.battles.generator.get_current_session(ctx.chat_key)
+    assert record is not None
+    assert record.skill_checks[0]["user_id"] == "__npc__"
+    assert record.skill_checks[0]["char_name"] == "Fire Captain Zhao"
+    assert record.skill_checks[0]["target"] == 73
+
+
+async def test_dnd_npc_skill_check_uses_explicit_total_modifier():
+    services, ctx = _build()
+    await CharacterTools(services).create_character(ctx, name="Kael", system="dnd5e", auto_generate=False)
+    dice_tools = DiceTools(services)
+
+    seed_dice(91)
+    natural = DiceRoller().roll_expression("1d20", is_check=True)
+    seed_dice(91)
+    await dice_tools.skill_check(
+        ctx,
+        skill_name="Perception",
+        dc=14,
+        actor="Goblin Scout",
+        npc_target=6,
+    )
+
+    payload = ctx.dice_payloads[-1]
+    assert payload["modifier"] == 6
+    assert payload["total"] == natural.total + 6
+    record = await services.battles.generator.get_current_session(ctx.chat_key)
+    assert record is not None
+    assert record.skill_checks[0]["user_id"] == "__npc__"
+    assert record.skill_checks[0]["roll"] == natural.total + 6
+    assert record.skill_checks[0]["modifier"] == 6
+
+
+@pytest.mark.parametrize("system", ["coc7", "dnd5e"])
+async def test_actor_without_npc_target_errors_before_rolling(system: str):
+    services, ctx = _build()
+    await CharacterTools(services).create_character(ctx, name="Kael Thorn", system=system, auto_generate=False)
+    dice_tools = DiceTools(services)
+
+    seed_dice(117)
+    result = await dice_tools.skill_check(ctx, skill_name="侦查", actor="凯尔")
+    after = services.dice.roll_expression("1d20").total
+    seed_dice(117)
+    expected = services.dice.roll_expression("1d20").total
+
+    assert result == services.i18n.with_locale(ctx.locale).t("kp_tools.dice.skill_check.npc_target_required")
+    assert after == expected
+    assert ctx.dice_payloads == []
+    assert await services.battles.generator.get_current_session(ctx.chat_key) is None
+
+
+async def test_room_roster_actor_name_is_attributed_to_player_for_checks_and_plain_rolls():
+    services, ctx = _build()
+    other_ctx = AgentCtx(chat_key=ctx.chat_key, user_id="u2", locale="en")
+    char_tools = CharacterTools(services)
+    dice_tools = DiceTools(services)
+    await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)
+    await char_tools.create_character(other_ctx, name="Morgan", system="coc7", auto_generate=False)
+
+    await dice_tools.skill_check(ctx, skill_name="侦查", actor="mORGaN")
+    await dice_tools.roll_dice(ctx, expression="1d6", actor="MORGAN")
+
+    record = await services.battles.generator.get_current_session(ctx.chat_key)
+    assert record is not None
+    assert record.skill_checks[0]["user_id"] == ctx.uid()
+    assert record.skill_checks[0]["char_name"] == "Morgan"
+    assert record.dice_rolls[0]["user_id"] == ctx.uid()
+    assert record.dice_rolls[0]["char_name"] == "Morgan"
+
+
 # ---------------------------------------------------------------------------
 # DiceTools — sanity_check / skill_growth / opposed_check / hp_manager / wod_check / random_madness
 # ---------------------------------------------------------------------------
@@ -774,7 +863,7 @@ async def test_npc_actor_is_recorded_by_name_and_excluded_from_player_stats():
 
     seed_dice(7)
     await dice_tools.roll_dice(ctx, expression="1d20", actor="Cultist")
-    await dice_tools.skill_check(ctx, skill_name="侦查", actor="Cultist")
+    await dice_tools.skill_check(ctx, skill_name="侦查", actor="Cultist", npc_target=45)
 
     record = await services.battles.generator.get_current_session(ctx.chat_key)
     assert record is not None

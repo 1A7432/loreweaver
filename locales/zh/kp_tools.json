@@ -98,6 +98,7 @@
   "kp_tools.dice.skill_check.dnd_header": "🎲 {name} 进行 {skill} 检定 {proficient}",
   "kp_tools.dice.skill_check.dnd_roll_line": "🎯 掷出: {roll} + 加值{modifier} = {total} vs DC {dc}",
   "kp_tools.dice.skill_check.failed": "❌ 检定失败: {error}",
+  "kp_tools.dice.skill_check.npc_target_required": "❌ 活动角色请省略 actor；NPC 则必须提供 npc_target。",
   "kp_tools.dice.skill_check.final_line": "🎲 最终结果: {final}",
   "kp_tools.dice.skill_check.outcome_failure": "❌ 结果: {level}",
   "kp_tools.dice.skill_check.outcome_success": "✨ 结果: {level}",

@@ -119,6 +119,33 @@ def _has_character(character: CharacterSheet | None) -> bool:
     return bool(character) and character.name != "default"
 
 
+async def _resolve_actor_identity(
+    services: Services,
+    ctx: AgentCtx,
+    active_name: str,
+    actor: str | None,
+) -> tuple[str, bool]:
+    """Return the canonical actor name and whether it is outside the player roster."""
+    actor_name = (actor or "").strip()
+    if not actor_name:
+        return active_name, False
+
+    roster_names = {active_name.casefold(): active_name} if active_name else {}
+    try:
+        roster = await services.characters.get_party_roster(ctx.chat_key)
+        roster_names.update(
+            {
+                str(member.get("name", "")).strip().casefold(): str(member.get("name", "")).strip()
+                for member in roster
+                if isinstance(member, dict) and str(member.get("name", "")).strip()
+            }
+        )
+    except Exception:
+        pass
+    matched_name = roster_names.get(actor_name.casefold())
+    return (matched_name, False) if matched_name else (actor_name, True)
+
+
 class CharacterTools:
     """AI-KP tools for creating, inspecting and mutating player character sheets."""
 
@@ -449,9 +476,12 @@ class DiceTools:
         try:
             character = await _get_active_character(self.services, ctx)
             active_name = character.name if character else ""
-            actor_name = (actor or "").strip()
-            is_npc = bool(actor_name and actor_name.casefold() != active_name.casefold())
-            char_name = actor_name or active_name
+            char_name, is_npc = await _resolve_actor_identity(
+                self.services,
+                ctx,
+                active_name,
+                actor,
+            )
             user_id = NPC_USER_ID if is_npc else ctx.uid()
             critical_type = (
                 "success"
@@ -483,16 +513,22 @@ class DiceTools:
         success: bool,
         rank: int,
         actor: str | None = None,
+        actor_is_npc: bool | None = None,
         **details: object,
     ) -> None:
         """Best-effort structured battle-report recording for one check."""
         try:
-            actor_name = (actor or "").strip()
-            is_npc = bool(actor_name and actor_name.casefold() != char_name.casefold())
+            actor_name, resolved_is_npc = await _resolve_actor_identity(
+                self.services,
+                ctx,
+                char_name,
+                actor,
+            )
+            is_npc = resolved_is_npc if actor_is_npc is None else actor_is_npc
             await self.services.battles.add_skill_check(
                 ctx.chat_key,
                 NPC_USER_ID if is_npc else ctx.uid(),
-                actor_name or char_name,
+                actor_name,
                 skill,
                 target,
                 roll,
@@ -560,6 +596,7 @@ class DiceTools:
         dc: int | None = None,
         proficient: bool = False,
         actor: str | None = None,
+        npc_target: int | None = None,
     ) -> str:
         """Run a skill check for the active character (auto-detects attribute/Credit-Rating checks).
 
@@ -571,6 +608,8 @@ class DiceTools:
             dc: Difficulty class (DND5E only, defaults to 15).
             proficient: Whether the character is proficient in this skill (DND5E only).
             actor: Set to the NPC/creature name when rolling for a non-player actor.
+            npc_target: Required with a non-player actor: its skill percentage (COC) or total check
+                modifier (DND5E).
         """
         i18n = self.services.i18n.with_locale(ctx.locale)
         characters = self.services.characters
@@ -580,14 +619,24 @@ class DiceTools:
             character = await _get_active_character(self.services, ctx)
             if not _has_character(character):
                 return i18n.t("kp_tools.character.none")
-            display_name = (actor or "").strip() or character.name
+            display_name, is_npc = await _resolve_actor_identity(
+                self.services,
+                ctx,
+                character.name,
+                actor,
+            )
+            if is_npc and npc_target is None:
+                return i18n.t("kp_tools.dice.skill_check.npc_target_required")
 
             standard_name = characters.find_skill_by_alias(character, skill_name)
             attr_upper = skill_name.upper().strip()
             skill_lower = skill_name.lower().strip()
 
             if character.system == "CoC":
-                if attr_upper in _COC_ATTRIBUTE_NAMES:
+                if is_npc:
+                    target_skill = standard_name if standard_name else skill_name
+                    skill_value = npc_target
+                elif attr_upper in _COC_ATTRIBUTE_NAMES:
                     target_skill = attr_upper
                     skill_value = character.attributes.get(target_skill, 0)
                 elif standard_name == "信用" or skill_lower in _CREDIT_RATING_ALIASES:
@@ -636,7 +685,7 @@ class DiceTools:
                 ctx.emit_dice(
                     {
                         "kind": "check",
-                        **({"actor": actor.strip()} if actor and actor.strip() else {}),
+                        **({"actor": display_name} if actor and actor.strip() else {}),
                         "expr": skill_label,
                         "skill": target_skill,
                         "rolls": [result["final_roll"]],
@@ -661,7 +710,8 @@ class DiceTools:
                     result["final_roll"],
                     success=result["success"],
                     rank=result["rank"],
-                    actor=actor,
+                    actor=display_name if actor and actor.strip() else None,
+                    actor_is_npc=is_npc,
                     is_critical=result["rank"] in {4, -2},
                     bonus=bonus,
                     penalty=penalty,
@@ -676,7 +726,11 @@ class DiceTools:
 
             # DND5E: full d20 + ability modifier + proficiency bonus check vs DC.
             target_skill = standard_name if standard_name else skill_name
-            modifier = characters.get_dnd_skill_modifier(character, target_skill, proficient)
+            modifier = (
+                npc_target
+                if is_npc
+                else characters.get_dnd_skill_modifier(character, target_skill, proficient)
+            )
             target_dc = dc if dc is not None else 15
 
             net_advantage = bonus - penalty
@@ -736,7 +790,7 @@ class DiceTools:
             ctx.emit_dice(
                 {
                     "kind": "check",
-                    **({"actor": actor.strip()} if actor and actor.strip() else {}),
+                    **({"actor": display_name} if actor and actor.strip() else {}),
                     "expr": load_rulepack("dnd5e").display_name(target_skill, ctx.locale),
                     "skill": target_skill,
                     "rolls": candidate_rolls,
@@ -765,11 +819,13 @@ class DiceTools:
                 total,
                 success=success,
                 rank=rank,
-                actor=actor,
+                actor=display_name if actor and actor.strip() else None,
+                actor_is_npc=is_npc,
                 is_critical=roll_result.is_critical_success(),
                 bonus=bonus,
                 penalty=penalty,
                 raw_roll=roll_result.total,
+                modifier=modifier,
                 advantage_rolls=advantage_rolls,
                 disadvantage_rolls=disadvantage_rolls,
             )
