@@ -256,7 +256,7 @@ async def _clock(services: Services, chat_key: str) -> dict[str, Any] | None:
 
 
 async def _usage(services: Services, chat_key: str) -> dict[str, Any] | None:
-    """The room's rolling token/cache usage aggregate (`gateway.turn._record_usage_stats`
+    """The room's rolling token/cache usage aggregate (`infra.usage_stats.record_usage_stats`
     writes it), translated to the wire's snake_case shape -- `None` when unset (a
     brand-new room, or one that has never completed a real AI-KP turn), so
     `build_room_state` leaves `state.usage` out entirely rather than sending zeros.

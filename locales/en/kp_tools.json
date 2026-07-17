@@ -167,6 +167,7 @@
   "kp_tools.know.file_types.help": "📄 Supported file types:\n• TXT/MD - Plain text or Markdown files\n• PDF - PDF documents (requires pypdf)\n• DOCX - Microsoft Word documents (requires python-docx)\n\n📚 Document types:\n• module - 📘 Game module / scenario content\n• rule - 📜 Game rules / system reference\n• story - 📖 Background story / plot content\n• background - 🌍 World-setting / lore material\n\n💡 How to use:\n1. Upload the file directly to the chat\n2. Tell me the document type and I'll process it automatically\n3. Once processed, you can search and ask questions about its content",
   "kp_tools.know.init.already_processing": "⏳ Module initialization is already in progress; please wait...",
   "kp_tools.know.init.completed": "✅ Module knowledge-pool initialization complete ({count} chunk(s) processed); status: {status}",
+  "kp_tools.know.init.completed_fallback": "⚠️ Module initialization completed in degraded mode ({count} chunk(s) processed). Retry initialization or re-import the module for a full analysis. Last error: {error}",
   "kp_tools.know.init.no_document": "❌ No module document has been uploaded yet; please upload a module/story document first.",
   "kp_tools.know.init.start_failed": "❌ Failed to start initialization: {error}",
   "kp_tools.know.init.status_failed": "❌ Initialization failed: {error}",
@@ -175,6 +176,7 @@
   "kp_tools.know.init.status_other": "❓ Unknown status: {status}",
   "kp_tools.know.init.status_processing": "⏳ The module knowledge pool is still initializing in the background...",
   "kp_tools.know.init.status_ready": "✅ Module knowledge-pool initialization complete ({count} entries analyzed)",
+  "kp_tools.know.init.status_ready_fallback": "⚠️ Module knowledge-pool initialization completed in degraded mode ({count} entries analyzed). Retry initialization or re-import the module for a full analysis. Last error: {error}",
   "kp_tools.know.inspect.category_header": "## {category} ({count} entries)",
   "kp_tools.know.inspect.failed": "❌ Failed to inspect the knowledge pool: {error}",
   "kp_tools.know.inspect.header": "{pool} raw content",
@@ -273,5 +275,6 @@
   "kp_tools.know.upload.failed": "❌ Upload failed: {error}",
   "kp_tools.know.upload.file_missing": "❌ The specified file does not exist.",
   "kp_tools.know.upload.init_done": "🔄 Module knowledge-pool initialization finished (status: {status}).",
+  "kp_tools.know.upload.init_done_fallback": "⚠️ Module knowledge-pool initialization used degraded fallback analysis. Retry initialization or re-import the module for a full analysis. Last error: {error}",
   "kp_tools.know.upload.parse_failed": "❌ Failed to process the file: {error}"
 }

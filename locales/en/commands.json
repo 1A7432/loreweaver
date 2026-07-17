@@ -106,6 +106,7 @@
   "commands.module.progress.analyze": "③ Analyzing the module (a long module can take 10+ minutes — please wait)",
   "commands.module.progress.build": "④ Building keeper knowledge",
   "commands.module.progress.done": "⑤ Done",
+  "commands.module.progress.done_fallback": "⑤ Done in degraded mode — re-import the module to retry full analysis",
   "commands.opposed.left": "left",
   "commands.opposed.result": "Opposed {left} roll {left_roll} {left_rank} vs {right} roll {right_roll} {right_rank}: {winner}",
   "commands.opposed.right": "right",

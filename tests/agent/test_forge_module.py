@@ -20,6 +20,7 @@ leaking a tmp path into another test's module-forge generation.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -29,7 +30,7 @@ from agent.forge import generate_and_install_module
 from agent.services import build_services
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
-from infra.llm import FakeLLM, assistant_text
+from infra.llm import ChatResult, FakeLLM, Usage, assistant_text
 
 CHAT_KEY = "module-forge-chat"
 SENTINEL = "THE FERRYMAN IS THE FEY BOUND TO THE OLD PACT"
@@ -136,21 +137,82 @@ async def test_empty_llm_response_is_rejected(tmp_path: Path) -> None:
         forge_module._USER_MODULE_DIR = original_user_dir
 
 
-async def test_unsluggable_title_and_description_is_rejected(tmp_path: Path) -> None:
-    """A document with no level-1 heading, whose fallback (the keeper's own `description`) is
-    itself all-punctuation/unsluggable, must be rejected with `bad_id` rather than installing
-    under some empty/garbage id."""
-    services = _services("Just prose, no heading at all.\n")
+async def test_cjk_title_without_usable_id_gets_stable_content_hash_id(tmp_path: Path) -> None:
+    generated = "# 黄泉归影\n\n一场发生在黄泉渡口的调查。"
+    expected_id = f"module-{hashlib.sha256(generated.encode('utf-8')).hexdigest()[:8]}"
+    services = _services(generated)
     ctx = _ctx(tmp_path / "fs")
 
     original_user_dir = forge_module._USER_MODULE_DIR
     forge_module._USER_MODULE_DIR = tmp_path / "modules"
     try:
-        result = await generate_and_install_module(services, ctx, "!!! ???")
+        result = await generate_and_install_module(services, ctx, "黄泉渡口的怪谈")
 
-        assert not result.ok
-        assert result.error.startswith("bad_id")
-        assert not (tmp_path / "modules").exists() or list((tmp_path / "modules").iterdir()) == []
+        assert result.ok, result.error
+        assert result.skill_id == expected_id
+        assert result.name == "黄泉归影"
+        assert Path(result.path).is_file()
+        assert len(services.llm.calls) == 2  # authoring + analysis, never a second generation
+    finally:
+        forge_module._USER_MODULE_DIR = original_user_dir
+
+
+async def test_cjk_title_uses_explicit_ascii_id_without_regeneration(tmp_path: Path) -> None:
+    generated = """---
+id: echoes-from-yellow-springs
+---
+# 黄泉归影
+
+一场发生在黄泉渡口的调查。
+"""
+    services = _services(generated)
+    ctx = _ctx(tmp_path / "fs")
+
+    original_user_dir = forge_module._USER_MODULE_DIR
+    forge_module._USER_MODULE_DIR = tmp_path / "modules"
+    try:
+        result = await generate_and_install_module(services, ctx, "黄泉渡口的怪谈")
+
+        assert result.ok, result.error
+        assert result.skill_id == "echoes-from-yellow-springs"
+        assert result.name == "黄泉归影"
+        assert len(services.llm.calls) == 2
+        system_prompt = services.llm.calls[0][0][0]["content"]
+        assert "ASCII" in system_prompt
+        assert "id:" in system_prompt
+    finally:
+        forge_module._USER_MODULE_DIR = original_user_dir
+
+
+async def test_module_forge_and_analysis_usage_are_both_recorded(tmp_path: Path) -> None:
+    llm = FakeLLM(
+        script=[
+            ChatResult(
+                content=GENERATED_MODULE_MD,
+                tool_calls=[],
+                usage=Usage(prompt_tokens=40, completion_tokens=10, total_tokens=50),
+            ),
+            ChatResult(
+                content=_scripted_analysis_json(),
+                tool_calls=[],
+                usage=Usage(prompt_tokens=80, completion_tokens=20, total_tokens=100),
+            ),
+        ]
+    )
+    services = build_services(Settings(locale="en"), llm=llm, embeddings=FakeEmbeddings(8))
+    ctx = _ctx(tmp_path / "fs")
+
+    original_user_dir = forge_module._USER_MODULE_DIR
+    forge_module._USER_MODULE_DIR = tmp_path / "modules"
+    try:
+        result = await generate_and_install_module(services, ctx, "a marsh-town disappearance mystery")
+
+        assert result.ok, result.error
+        stats = json.loads(await services.store.get(user_key="", store_key=f"usage_stats.{CHAT_KEY}"))
+        assert stats["session"]["turns"] == 2
+        assert stats["session"]["prompt"] == 120
+        assert stats["session"]["completion"] == 30
+        assert stats["last"]["prompt"] == 80
     finally:
         forge_module._USER_MODULE_DIR = original_user_dir
 

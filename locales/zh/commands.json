@@ -106,6 +106,7 @@
   "commands.module.progress.analyze": "③ 分析模组中(长模组可能需要 10 分钟以上,请耐心等待)",
   "commands.module.progress.build": "④ 构建守秘人知识",
   "commands.module.progress.done": "⑤ 完成",
+  "commands.module.progress.done_fallback": "⑤ 已以降级模式完成——请重新导入模组以重试完整分析",
   "commands.opposed.left": "左侧",
   "commands.opposed.result": "对抗 {left} 掷骰 {left_roll} {left_rank} vs {right} 掷骰 {right_roll} {right_rank}：{winner}",
   "commands.opposed.right": "右侧",

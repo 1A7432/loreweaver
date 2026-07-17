@@ -24,7 +24,7 @@ from typing import Any
 from core.module_initializer import ModuleInitializer
 from infra.config import LLMSettings, Settings
 from infra.i18n import I18n
-from infra.llm import ChatResult, FakeLLM, assistant_text
+from infra.llm import ChatResult, FakeLLM, Usage, assistant_text, context_window_for
 from infra.store import Store
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
@@ -191,12 +191,19 @@ async def test_initialize_llm_analysis_keeper_pool_has_secret_player_pool_does_n
 async def test_initialize_falls_back_to_offline_heuristic_on_unparsable_llm_response():
     store = Store()
     await store.set(user_key="", store_key="module_fulltext.chat2", value=MODULE_EN_TEXT)
-    llm = FakeLLM(script=[assistant_text("Sorry, I can't help with that today!")])
+    llm = FakeLLM(
+        script=[
+            assistant_text("Sorry, I can't help with that today!"),
+            assistant_text("Still no structured analysis."),
+        ]
+    )
     mi = _make_initializer(llm=llm, store=store)
 
     await mi.initialize("chat2")
 
-    assert await store.get(user_key="", store_key="module_init_status.chat2") == "ready"
+    assert len(llm.calls) == 2
+    assert await store.get(user_key="", store_key="module_init_status.chat2") == "ready_fallback"
+    assert await store.get(user_key="", store_key="module_init_error.chat2")
 
     keeper = json.loads(await store.get(user_key="", store_key="module_keeper_pool.chat2"))
     player = json.loads(await store.get(user_key="", store_key="module_player_pool.chat2"))
@@ -206,6 +213,76 @@ async def test_initialize_falls_back_to_offline_heuristic_on_unparsable_llm_resp
     assert keeper["scenes"][0]["focus"] == "探索"
     assert len(player["scenes"]) == len(keeper["scenes"])
     assert player["background"] == keeper["background"]
+
+
+async def test_initialize_retries_analysis_once_and_marks_retry_success_ready():
+    store = Store()
+    await store.set(user_key="", store_key="module_fulltext.chat-retry", value=MODULE_EN_TEXT)
+    await store.set(user_key="", store_key="module_init_error.chat-retry", value="stale failure")
+    llm = FakeLLM(script=[assistant_text("not json"), assistant_text(_scripted_analysis_json())])
+    mi = _make_initializer(llm=llm, store=store)
+
+    await mi.initialize("chat-retry")
+
+    assert len(llm.calls) == 2
+    assert await store.get(user_key="", store_key="module_init_status.chat-retry") == "ready"
+    assert await store.get(user_key="", store_key="module_init_error.chat-retry") is None
+
+
+async def test_initialize_records_analysis_usage_for_room():
+    store = Store()
+    await store.set(user_key="", store_key="module_fulltext.chat-usage", value=MODULE_EN_TEXT)
+    settings = Settings(llm=LLMSettings(chat_model="deepseek-chat", analysis_model="gemini-2.5-pro"))
+    llm = FakeLLM(
+        script=[
+            ChatResult(
+                content=_scripted_analysis_json(),
+                tool_calls=[],
+                usage=Usage(
+                    prompt_tokens=120,
+                    completion_tokens=30,
+                    total_tokens=150,
+                    cache_hit_tokens=20,
+                    cache_miss_tokens=100,
+                ),
+            )
+        ]
+    )
+    mi = _make_initializer(llm=llm, store=store, settings=settings)
+
+    await mi.initialize("chat-usage")
+
+    stats = json.loads(await store.get(user_key="", store_key="usage_stats.chat-usage"))
+    assert stats["last"] == {
+        "prompt": 120,
+        "completion": 30,
+        "cache_hit": 20,
+        "cache_miss": 100,
+        "context_window": context_window_for("gemini-2.5-pro"),
+    }
+    assert stats["session"] == {
+        "prompt": 120,
+        "completion": 30,
+        "cache_hit": 20,
+        "cache_miss": 100,
+        "turns": 1,
+    }
+
+
+async def test_initialize_replaces_stale_catalog_and_resets_game_clock():
+    store = Store()
+    await store.set(user_key="", store_key="module_fulltext.chat-state", value=MODULE_EN_TEXT)
+    await store.set(user_key="", store_key="module_catalog.chat-state", value=json.dumps({"summary": "OLD MODULE"}))
+    await store.set(user_key="", store_key="game_clock.chat-state", value=json.dumps({"current_time": "1926-03-15"}))
+    llm = FakeLLM(script=[assistant_text(_scripted_analysis_json())])
+    mi = _make_initializer(llm=llm, store=store)
+
+    await mi.initialize("chat-state")
+
+    keeper_raw = await store.get(user_key="", store_key="module_keeper_pool.chat-state")
+    assert await store.get(user_key="", store_key="module_catalog.chat-state") == keeper_raw
+    assert "OLD MODULE" not in keeper_raw
+    assert await store.get(user_key="", store_key="game_clock.chat-state") is None
 
 
 # ---------------------------------------------------------------------------

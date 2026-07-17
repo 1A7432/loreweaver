@@ -92,7 +92,7 @@ async def test_module_command_streams_progress_bar_frames_when_the_router_has_a_
     assert progress is not None  # the hub-backed router supplies a real reporter
     await progress("read")
     await progress("analyze")
-    await progress("done")
+    await progress("done", "ready_fallback")
 
     assert len(hub.published) == 3
     for chat_key, event in hub.published:
@@ -102,6 +102,8 @@ async def test_module_command_streams_progress_bar_frames_when_the_router_has_a_
     # The bar fills as stages advance: read = 1 filled block, done = all 5.
     assert hub.published[0][1].text.count("█") == 1
     assert hub.published[2][1].text.count("█") == 5
+    fallback_label = services.i18n.with_locale("zh").t("commands.module.progress.done_fallback")
+    assert fallback_label in hub.published[2][1].text
 
 
 async def test_module_command_without_path_returns_usage(monkeypatch):

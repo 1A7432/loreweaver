@@ -163,6 +163,24 @@ async def test_get_supported_file_types_differs_by_locale_and_mentions_txt():
     assert en_text != zh_text
 
 
+async def test_get_module_init_status_surfaces_degraded_fallback_and_retry_hint():
+    services = build_services(Settings(), llm=FakeLLM(), embeddings=FakeEmbeddings(8))
+    tools = ModuleTools(services)
+    await services.store.set(user_key="", store_key=f"module_init_status.{CHAT_KEY}", value="ready_fallback")
+    await services.store.set(user_key="", store_key=f"module_init_error.{CHAT_KEY}", value="provider unavailable")
+    await services.store.set(
+        user_key="",
+        store_key=f"module_keeper_pool.{CHAT_KEY}",
+        value=json.dumps({"scenes": [{"name": "Fallback scene"}]}),
+    )
+
+    result = await tools.get_module_init_status(_ctx(locale="en"))
+
+    assert "degraded" in result.lower()
+    assert "retry" in result.lower()
+    assert "provider unavailable" in result
+
+
 async def test_export_report_tool_saves_player_report_without_ending_session(tmp_path):
     services = build_services(Settings(), llm=FakeLLM(), embeddings=FakeEmbeddings(8))
     session_tools = SessionTools(services)
@@ -316,12 +334,14 @@ async def test_knowledge_tools_end_to_end(tmp_path):
     assert "Blackmoor One-Shot" in markdown
 
     # -- 7. delete_document clears the module pools/catalog/status/fulltext together -------------------
+    await services.store.set(user_key="", store_key=f"module_init_error.{CHAT_KEY}", value="old fallback")
     delete_result = await doc_tools.delete_document(ctx, filename="module_en")
     assert "✅" in delete_result
 
     assert await services.store.get(user_key="", store_key=f"module_init_status.{CHAT_KEY}") == ""
     assert await services.store.get(user_key="", store_key=f"module_keeper_pool.{CHAT_KEY}") == ""
     assert await services.store.get(user_key="", store_key=f"module_fulltext.{CHAT_KEY}") == ""
+    assert await services.store.get(user_key="", store_key=f"module_init_error.{CHAT_KEY}") == ""
 
     status_after_delete = await module_tools.get_module_init_status(ctx)
     assert services.i18n.with_locale("en").t("kp_tools.know.init.status_none") == status_after_delete

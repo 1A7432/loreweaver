@@ -43,7 +43,7 @@ class ForgeTools:
             failed (nothing is installed on failure).
         """
         i18n = self._i18n(ctx)
-        result = await generate_and_install_skill(self._services, description)
+        result = await generate_and_install_skill(self._services, description, chat_key=ctx.chat_key)
         if result.ok:
             return i18n.t("agent.forge.installed", name=result.name, skill_id=result.skill_id, path=result.path)
         if result.error == "no_data_dir":
@@ -68,7 +68,7 @@ class ForgeTools:
             failed (nothing is installed on failure).
         """
         i18n = self._i18n(ctx)
-        result = await generate_and_install_rulepack(self._services, description)
+        result = await generate_and_install_rulepack(self._services, description, chat_key=ctx.chat_key)
         if result.ok:
             return i18n.t("agent.forge.rulepack_installed", name=result.name, rulepack_id=result.skill_id, path=result.path)
         if result.error == "no_data_dir":

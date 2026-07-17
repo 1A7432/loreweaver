@@ -405,6 +405,24 @@ async def test_inject_document_context_prompt_ready_pool_includes_module_fidelit
     assert EN.t("prompt.keeper_discipline") in en
 
 
+async def test_inject_document_context_prompt_ready_fallback_still_uses_keeper_pool():
+    store = Store(":memory:")
+    chat_key = "chat-ready-fallback"
+    await store.set(user_key="", store_key=f"module_init_status.{chat_key}", value="ready_fallback")
+    await store.set(
+        user_key="",
+        store_key=f"module_keeper_pool.{chat_key}",
+        value=json.dumps({"summary": "Fallback analysis remains runnable.", "npcs": [{"name": "Mara"}]}),
+    )
+    ctx = _Ctx(chat_key=chat_key)
+
+    result = await inject_document_context_prompt(ctx, _FakeVectorDB(), store, EN)
+
+    assert EN.t("prompt.keeper_discipline") in result
+    assert EN.t("prompt.module_fidelity") in result
+    assert "Fallback analysis remains runnable." in result
+
+
 async def test_inject_document_context_prompt_processing_state():
     store = Store(":memory:")
     chat_key = "chat-processing"

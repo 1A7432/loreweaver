@@ -948,16 +948,17 @@ async def _generate(
     if not description:
         return _error("bad_request", i18n)
 
+    room_chat_key = chat_key_for_room(caller_room)
     if kind == "skill":
-        result = await generate_and_install_skill(services, description)
+        result = await generate_and_install_skill(services, description, chat_key=room_chat_key)
     elif kind == "rule":
-        result = await generate_and_install_rulepack(services, description)
+        result = await generate_and_install_rulepack(services, description, chat_key=room_chat_key)
     else:
         # Mirrors `net.session.SessionCore._ctx_for`'s AgentCtx construction: a keeper-role
         # context scoped to the CALLER'S room, so the generated module lands in the calling
         # keeper's own knowledge pool via `agent.kp_tools_knowledge.DocumentTools.upload_document`.
         ctx = AgentCtx(
-            chat_key=chat_key_for_room(caller_room),
+            chat_key=room_chat_key,
             user_id="keeper",
             platform="tui",
             locale=i18n.locale,

@@ -1280,7 +1280,8 @@ class CommandRouter:
         async def report(stage: str, detail: str = "") -> None:
             step = steps.get(stage, 0)
             bar = "█" * step + "░" * (total - step)
-            label = i18n.t(f"commands.module.progress.{stage}")
+            label_key = "commands.module.progress.done_fallback" if stage == "done" and detail == "ready_fallback" else f"commands.module.progress.{stage}"
+            label = i18n.t(label_key)
             text = i18n.t("commands.module.progress.line", bar=bar, label=label)
             await hub.publish(chat_key, Event.narrative(speaker="system", text=text, fmt="plain"))
 

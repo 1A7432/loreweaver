@@ -349,8 +349,9 @@ async def inject_document_context_prompt(
 ) -> str:
     """Module knowledge-pool / raw-document context, prioritizing the initialized knowledge pool.
 
-    Precedence: an initialized knowledge pool (``module_init_status`` ==
-    ``"ready"``) beats an in-progress one (``"processing"``), which beats a
+    Precedence: an initialized knowledge pool (``module_init_status`` is
+    ``"ready"`` or ``"ready_fallback"``) beats an in-progress one
+    (``"processing"``), which beats a
     vector-search fallback over raw uploaded documents. Whenever an
     initialized keeper pool is present this always carries two strong,
     localized instructions: ``prompt.keeper_discipline`` (keeper/module-secret
@@ -367,7 +368,7 @@ async def inject_document_context_prompt(
     try:
         status = await store.get(user_key="", store_key=f"module_init_status.{chat_key}")
 
-        if status == "ready":
+        if status in {"ready", "ready_fallback"}:
             keeper_data = await store.get(user_key="", store_key=f"module_keeper_pool.{chat_key}")
             player_data = await store.get(user_key="", store_key=f"module_player_pool.{chat_key}")
 

@@ -68,6 +68,7 @@ _EXACT_BASES = {
     "media_history",
     "module_catalog",
     "module_fulltext",
+    "module_init_error",
     "module_init_status",
     "module_keeper_pool",
     "module_player_pool",

@@ -33,20 +33,39 @@ instead of going through i18n.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 from infra.config import Settings
 from infra.i18n import I18n
 from infra.llm import LLMClient
 from infra.store import Store
+from infra.usage_stats import record_usage_stats
+
+logger = logging.getLogger(__name__)
 
 # An optional progress reporter the gateway may pass in to surface import STAGES to
 # the room while a slow full-module analysis runs. Core only SIGNALS a stage id (+
 # an opaque detail string); the gateway formats + publishes it. Best-effort: a
 # progress hiccup must never fail the import itself.
 ProgressCb = Callable[[str, str], Awaitable[None]] | None
+
+
+@dataclass(frozen=True)
+class _AnalysisOutcome:
+    analysis: dict
+    used_fallback: bool = False
+    error_summary: str = ""
+
+
+def _exception_summary(exc: Exception) -> str:
+    """Return a bounded diagnostic suitable for the module-init sidecar key."""
+    message = str(exc).strip()
+    summary = f"{type(exc).__name__}: {message}" if message else type(exc).__name__
+    return summary[:1000]
 
 
 async def _emit(progress: ProgressCb, stage: str, detail: str = "") -> None:
@@ -195,12 +214,14 @@ class ModuleInitializer:
         Orchestrates: read the stored module full text (or reassemble it
         from vector-store chunks) -> analyze (LLM, falling back to the
         offline heuristic on any failure) -> build the keeper/player
-        knowledge pools -> persist them -> mark
-        `module_init_status.{chat_key}` `"ready"`. Sets `"failed"` instead
-        if there is nothing to analyze, or if persistence itself raises.
+        knowledge pools -> persist them -> mark `module_init_status.{chat_key}`
+        `"ready"` or `"ready_fallback"`. Sets `"failed"` instead if there is
+        nothing to analyze, or if persistence itself raises. Diagnostics live
+        separately under `module_init_error.{chat_key}`.
         A concurrent call while one is already `"processing"` is a no-op.
         """
         status_key = f"module_init_status.{chat_key}"
+        error_key = f"module_init_error.{chat_key}"
 
         current_status = await self.store.get(user_key="", store_key=status_key)
         if current_status == "processing":
@@ -210,26 +231,45 @@ class ModuleInitializer:
         try:
             full_text, doc_name = await self._load_full_text(chat_key)
             if not full_text:
+                await self.store.set(user_key="", store_key=error_key, value="module text unavailable")
                 await self.store.set(user_key="", store_key=status_key, value="failed")
                 return
 
+            # An uploaded module owns its own timeline. Clear the prior module's
+            # clock as soon as the new source text is confirmed, before the
+            # potentially slow analysis can leave stale dates in the sidebar.
+            await self.store.delete(user_key="", store_key=f"game_clock.{chat_key}")
             await _emit(progress, "analyze")
-            analysis = await self._analyze_full_text(full_text, doc_name)
+            outcome = await self._analyze_full_text(full_text, doc_name, chat_key)
             await _emit(progress, "build")
-            keeper_pool, player_pool = self._build_knowledge_pools(analysis)
+            keeper_pool, player_pool = self._build_knowledge_pools(outcome.analysis)
+            keeper_json = json.dumps(keeper_pool, ensure_ascii=False)
 
             await self.store.set(
                 user_key="",
                 store_key=f"module_keeper_pool.{chat_key}",
-                value=json.dumps(keeper_pool, ensure_ascii=False),
+                value=keeper_json,
             )
             await self.store.set(
                 user_key="",
                 store_key=f"module_player_pool.{chat_key}",
                 value=json.dumps(player_pool, ensure_ascii=False),
             )
-            await self.store.set(user_key="", store_key=status_key, value="ready")
-        except Exception:
+            # Keep the lazily-read catalog synchronized with the new keeper
+            # pool in this same initialization pass, rather than allowing a
+            # stale catalog from the previous module to survive.
+            await self.store.set(user_key="", store_key=f"module_catalog.{chat_key}", value=keeper_json)
+            if outcome.used_fallback:
+                await self.store.set(user_key="", store_key=error_key, value=outcome.error_summary)
+                status = "ready_fallback"
+            else:
+                await self.store.delete(user_key="", store_key=error_key)
+                status = "ready"
+            await self.store.set(user_key="", store_key=status_key, value=status)
+        except Exception as exc:
+            summary = _exception_summary(exc)
+            logger.exception("module initialization failed for chat_key=%s", chat_key)
+            await self.store.set(user_key="", store_key=error_key, value=summary)
             await self.store.set(user_key="", store_key=status_key, value="failed")
 
     async def _load_full_text(self, chat_key: str) -> tuple[str, str]:
@@ -256,29 +296,43 @@ class ModuleInitializer:
         doc_name = chunks[0].get("filename") or self.i18n.t("module.default_document_name")
         return full_text, doc_name
 
-    async def _analyze_full_text(self, full_text: str, doc_name: str) -> dict:
-        """Analyze `full_text` via the LLM; fall back to the offline heuristic
-        (`_fallback_full_analysis`) on any exception — network failure,
-        malformed/unparsable JSON, a missing required shape, etc.
-        """
+    async def _analyze_full_text(self, full_text: str, doc_name: str, chat_key: str) -> _AnalysisOutcome:
+        """Analyze with one retry, then return an explicit fallback outcome."""
         prompt = self._build_analysis_prompt(full_text, doc_name)
         model = self.settings.llm.analysis_model or self.settings.llm.chat_model
 
-        try:
-            result = await self.llm.chat(
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                model=model,
-            )
-            analysis = _extract_json_object(result.content or "", self.i18n)
-        except Exception:
-            return self._fallback_full_analysis(full_text)
+        last_error = ""
+        for attempt in range(2):
+            try:
+                result = await self.llm.chat(
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.3,
+                    model=model,
+                )
+                # A response consumed provider tokens even when its JSON is
+                # malformed, so account for usage before parsing it.
+                await record_usage_stats(self.store, chat_key, result.usage, model=model)
+                analysis = _extract_json_object(result.content or "", self.i18n)
+                for field in _LIST_FIELDS:
+                    analysis.setdefault(field, [])
+                for field in _STR_FIELDS:
+                    analysis.setdefault(field, "")
+                return _AnalysisOutcome(analysis=analysis)
+            except Exception as exc:
+                last_error = _exception_summary(exc)
+                logger.warning(
+                    "module analysis attempt %d/2 failed for chat_key=%s: %s",
+                    attempt + 1,
+                    chat_key,
+                    last_error,
+                    exc_info=True,
+                )
 
-        for field in _LIST_FIELDS:
-            analysis.setdefault(field, [])
-        for field in _STR_FIELDS:
-            analysis.setdefault(field, "")
-        return analysis
+        return _AnalysisOutcome(
+            analysis=self._fallback_full_analysis(full_text),
+            used_fallback=True,
+            error_summary=last_error,
+        )
 
     def _build_analysis_prompt(self, full_text: str, doc_name: str) -> str:
         """Render the full-text analysis prompt sent to the LLM: localized

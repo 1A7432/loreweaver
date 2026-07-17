@@ -28,15 +28,19 @@ invisible until its forge skill unlocks it.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
+
+import yaml
 
 import core.rulepacks as rulepacks
 import core.skills as skills
 from agent.context import AgentCtx
 from agent.kp_tools_knowledge import DocumentTools
 from agent.services import Services
+from infra.usage_stats import record_usage_stats
 
 # A placeholder id used only to probe generated content for a name/title before the real id is
 # known (see step (c) in each `generate_and_install_*` function) -- never written to disk, never
@@ -84,7 +88,12 @@ class ForgeResult:
     detail: str = ""
 
 
-async def _llm_authored(services: Services, messages: list[dict]) -> tuple[str | None, ForgeResult | None]:
+async def _llm_authored(
+    services: Services,
+    messages: list[dict],
+    *,
+    chat_key: str | None = None,
+) -> tuple[str | None, ForgeResult | None]:
     """Call the LLM to author an artifact. Returns `(content, None)` on success, or
     `(None, ForgeResult)` when the call itself failed (timeout / rate-limit / auth error) or came
     back empty — so a backend LLM failure becomes a clean `ForgeResult` the admin/tool path reports,
@@ -94,6 +103,13 @@ async def _llm_authored(services: Services, messages: list[dict]) -> tuple[str |
         result = await services.llm.chat(messages)
     except Exception as exc:
         return None, ForgeResult(False, "", "", "", f"llm_failed: {exc}")  # i18n-exempt
+    if chat_key:
+        await record_usage_stats(
+            services.store,
+            chat_key,
+            result.usage,
+            model=services.settings.llm.chat_model,
+        )
     content = (result.content or "").strip()
     if not content:
         return None, ForgeResult(False, "", "", "", "empty_response")
@@ -183,7 +199,12 @@ def _build_messages(services: Services, description: str) -> list[dict]:
     ]
 
 
-async def generate_and_install_skill(services: Services, description: str) -> ForgeResult:
+async def generate_and_install_skill(
+    services: Services,
+    description: str,
+    *,
+    chat_key: str | None = None,
+) -> ForgeResult:
     """Ask `services.llm` to author a SKILL.md for `description`, validate it, and install it.
 
     Never writes anything to disk before the generated text validates as a real `Skill` via the
@@ -196,7 +217,11 @@ async def generate_and_install_skill(services: Services, description: str) -> Fo
     if user_dir is None:
         return ForgeResult(False, "", "", "", "no_data_dir")
 
-    content, failure = await _llm_authored(services, _build_messages(services, description))
+    content, failure = await _llm_authored(
+        services,
+        _build_messages(services, description),
+        chat_key=chat_key,
+    )
     if failure is not None:
         return failure
     assert content is not None  # _llm_authored returns content XOR failure
@@ -286,7 +311,12 @@ def _build_rulepack_messages(services: Services, description: str) -> list[dict]
     ]
 
 
-async def generate_and_install_rulepack(services: Services, description: str) -> ForgeResult:
+async def generate_and_install_rulepack(
+    services: Services,
+    description: str,
+    *,
+    chat_key: str | None = None,
+) -> ForgeResult:
     """Ask `services.llm` to author a rulepack YAML for `description`, validate it, and install it.
 
     Mirrors `generate_and_install_skill` step for step, adapted for a rulepack's FLAT-FILE shape
@@ -303,7 +333,11 @@ async def generate_and_install_rulepack(services: Services, description: str) ->
     if user_dir is None:
         return ForgeResult(False, "", "", "", "no_data_dir")
 
-    content, failure = await _llm_authored(services, _build_rulepack_messages(services, description))
+    content, failure = await _llm_authored(
+        services,
+        _build_rulepack_messages(services, description),
+        chat_key=chat_key,
+    )
     if failure is not None:
         return failure
     assert content is not None  # _llm_authored returns content XOR failure
@@ -370,6 +404,7 @@ async def generate_and_install_rulepack(services: Services, description: str) ->
 # ---------------------------------------------------------------------------
 
 _MODULE_TITLE_RE = re.compile(r"^#\s+(.+)$", re.MULTILINE)
+_MODULE_FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(?P<body>.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
 
 
 def _extract_module_title(content: str) -> str:
@@ -380,6 +415,21 @@ def _extract_module_title(content: str) -> str:
     """
     match = _MODULE_TITLE_RE.search(content)
     return match.group(1).strip() if match else ""
+
+
+def _extract_module_id(content: str) -> str:
+    """Read an explicit module id from YAML frontmatter at the document start."""
+    match = _MODULE_FRONTMATTER_RE.match(content)
+    if match is None:
+        return ""
+    try:
+        frontmatter = yaml.safe_load(match.group("body")) or {}
+    except yaml.YAMLError:
+        return ""
+    if not isinstance(frontmatter, dict):
+        return ""
+    value = frontmatter.get("id")
+    return str(value).strip() if value is not None else ""
 
 
 def _unique_user_module_id(user_dir: Path, base: str) -> str:
@@ -404,8 +454,14 @@ def _build_module_messages(services: Services, description: str) -> list[dict]:
     framing text (`agent.forge.module_system_prompt`) as the system message, and the keeper's raw
     scenario `description` as the user message -- mirrors `_build_messages`/`_build_rulepack_messages`.
     """
+    system_prompt = "\n\n".join(
+        (
+            services.i18n.t("agent.forge.module_system_prompt"),
+            services.i18n.t("agent.forge.module_id_requirement"),
+        )
+    )
     return [
-        {"role": "system", "content": services.i18n.t("agent.forge.module_system_prompt")},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": description},
     ]
 
@@ -432,17 +488,21 @@ async def generate_and_install_module(services: Services, ctx: AgentCtx, descrip
     if user_dir is None:
         return ForgeResult(False, "", "", "", "no_data_dir")
 
-    content, failure = await _llm_authored(services, _build_module_messages(services, description))
+    content, failure = await _llm_authored(
+        services,
+        _build_module_messages(services, description),
+        chat_key=ctx.chat_key,
+    )
     if failure is not None:
         return failure
     assert content is not None  # _llm_authored returns content XOR failure
 
     title = _extract_module_title(content) or description
-    module_id = _slugify(title)
-    if not module_id:
-        # Internal diagnostic (see `ForgeResult.error`'s docstring) -- localized by
-        # `agent.kp_tools_forge` via `agent.forge.module_bad_id`, never shown raw.
-        return ForgeResult(False, "", "", "", "bad_id: could not derive a valid id from the generated title/description")  # i18n-exempt
+    module_id = _slugify(_extract_module_id(content)) or _slugify(title)
+    used_hash_id = not module_id
+    if used_hash_id:
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:8]
+        module_id = f"module-{digest}"
 
     # Non-destructive install: if a generated module of this id already exists on disk, uniquify
     # (base-2, ...) rather than silently overwriting an earlier generation.
@@ -469,5 +529,11 @@ async def generate_and_install_module(services: Services, ctx: AgentCtx, descrip
     # built by the exact same code a manual `.module` upload runs, not a parallel bespoke path.
     doc_tools = DocumentTools(services)
     install_note = await doc_tools.upload_document(ctx, file_path=str(target), doc_type="module")
+    if used_hash_id:
+        fallback_note = services.i18n.with_locale(ctx.locale).t(
+            "agent.forge.module_id_fallback",
+            module_id=module_id,
+        )
+        install_note = f"{fallback_note}\n{install_note}" if install_note else fallback_note
 
     return ForgeResult(True, module_id, title, str(target), "", detail=install_note)

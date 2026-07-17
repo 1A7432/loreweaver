@@ -165,6 +165,10 @@ def _status_key(chat_key: str) -> str:
     return f"module_init_status.{chat_key}"
 
 
+def _error_key(chat_key: str) -> str:
+    return f"module_init_error.{chat_key}"
+
+
 def _catalog_key(chat_key: str) -> str:
     return f"module_catalog.{chat_key}"
 
@@ -849,6 +853,13 @@ class ModuleTools(_KnowledgeToolsBase):
             await self._services.module_init.initialize(chat_key)
 
             new_status = await store.get(user_key="", store_key=_status_key(chat_key))
+            if new_status == "ready_fallback":
+                error = await store.get(user_key="", store_key=_error_key(chat_key))
+                return i18n.t(
+                    "kp_tools.know.init.completed_fallback",
+                    count=len(chunks),
+                    error=error or i18n.t("kp_tools.know.status.unknown_error"),
+                )
             return i18n.t("kp_tools.know.init.completed", count=len(chunks), status=new_status or i18n.t("kp_tools.know.status.unknown"))
         except Exception as exc:
             return i18n.t("kp_tools.know.init.start_failed", error=str(exc))
@@ -867,13 +878,25 @@ class ModuleTools(_KnowledgeToolsBase):
                 return i18n.t("kp_tools.know.init.status_none")
             if status == "processing":
                 return i18n.t("kp_tools.know.init.status_processing")
-            if status == "ready":
+            if status in {"ready", "ready_fallback"}:
                 catalog = await self._load_catalog(ctx.chat_key)
                 total = sum(len(v) for v in (catalog or {}).values() if isinstance(v, list))
+                if status == "ready_fallback":
+                    error = await self._services.store.get(user_key="", store_key=_error_key(ctx.chat_key))
+                    return i18n.t(
+                        "kp_tools.know.init.status_ready_fallback",
+                        count=total,
+                        error=error or i18n.t("kp_tools.know.status.unknown_error"),
+                    )
                 return i18n.t("kp_tools.know.init.status_ready", count=total)
             if status.startswith("failed"):
-                error = status.split(":", 1)[1] if ":" in status else i18n.t("kp_tools.know.status.unknown_error")
-                return i18n.t("kp_tools.know.init.status_failed", error=error)
+                error = await self._services.store.get(user_key="", store_key=_error_key(ctx.chat_key))
+                if not error and ":" in status:  # backward-compatible legacy status payload
+                    error = status.split(":", 1)[1]
+                return i18n.t(
+                    "kp_tools.know.init.status_failed",
+                    error=error or i18n.t("kp_tools.know.status.unknown_error"),
+                )
             return i18n.t("kp_tools.know.init.status_other", status=status)
         except Exception as exc:
             return i18n.t("kp_tools.know.init.status_failed_query", error=str(exc))
@@ -944,7 +967,17 @@ class DocumentTools(_KnowledgeToolsBase):
                 await self._services.module_init.initialize(chat_key, progress=progress)
                 status = await self._services.store.get(user_key="", store_key=_status_key(chat_key))
                 await _emit(progress, "done", status or "")
-                init_note = "\n" + i18n.t("kp_tools.know.upload.init_done", status=status or i18n.t("kp_tools.know.status.unknown"))
+                if status == "ready_fallback":
+                    error = await self._services.store.get(user_key="", store_key=_error_key(chat_key))
+                    init_note = "\n" + i18n.t(
+                        "kp_tools.know.upload.init_done_fallback",
+                        error=error or i18n.t("kp_tools.know.status.unknown_error"),
+                    )
+                else:
+                    init_note = "\n" + i18n.t(
+                        "kp_tools.know.upload.init_done",
+                        status=status or i18n.t("kp_tools.know.status.unknown"),
+                    )
 
             emoji = _DOC_TYPE_EMOJI.get(doc_type, _DEFAULT_DOC_EMOJI)
             return (
@@ -982,7 +1015,14 @@ class DocumentTools(_KnowledgeToolsBase):
 
             if target.get("document_type") in _MODULE_INIT_DOC_TYPES:
                 store = self._services.store
-                for key in (_catalog_key(chat_key), _keeper_key(chat_key), _player_key(chat_key), _status_key(chat_key), _fulltext_key(chat_key)):
+                for key in (
+                    _catalog_key(chat_key),
+                    _keeper_key(chat_key),
+                    _player_key(chat_key),
+                    _status_key(chat_key),
+                    _error_key(chat_key),
+                    _fulltext_key(chat_key),
+                ):
                     await store.set(user_key="", store_key=key, value="")
 
             emoji = _DOC_TYPE_EMOJI.get(target["document_type"], _DEFAULT_DOC_EMOJI)
