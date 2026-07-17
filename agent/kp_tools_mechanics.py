@@ -477,6 +477,16 @@ class DiceTools:
         except Exception:
             pass
 
+    @staticmethod
+    def _effective_coc_target(target: int, difficulty: int) -> int:
+        if difficulty == 2:
+            return target // 2
+        if difficulty == 3:
+            return target // 5
+        if difficulty == 4:
+            return 1
+        return target
+
     @tool
     async def roll_dice(self, ctx: AgentCtx, expression: str, actor: str | None = None) -> str:
         """Roll dice and return the result.
@@ -499,6 +509,18 @@ class DiceTools:
         elif result.is_critical_failure():
             response += i18n.t("kp_tools.dice.critical_failure_suffix")
 
+        payload: dict[str, object] = {
+            "kind": "roll",
+            "expr": expression,
+            "rolls": list(result.rolls),
+            "total": result.total,
+            "modifier": result.modifier,
+            "critical_success": result.is_critical_success(),
+            "critical_failure": result.is_critical_failure(),
+        }
+        if actor and actor.strip():
+            payload["actor"] = actor.strip()
+        ctx.emit_dice(payload)
         await self._record_dice_roll(ctx, expression, result, actor=actor)
         return response
 
@@ -585,6 +607,26 @@ class DiceTools:
                 )
                 lines.append(i18n.t(outcome_key, level=level_label))
 
+                ctx.emit_dice(
+                    {
+                        "kind": "check",
+                        **({"actor": actor.strip()} if actor and actor.strip() else {}),
+                        "expr": skill_label,
+                        "skill": target_skill,
+                        "rolls": [result["final_roll"]],
+                        "total": result["final_roll"],
+                        "target": skill_value,
+                        "effective_target": self._effective_coc_target(skill_value, result["difficulty"]),
+                        "rank": result["rank"],
+                        "success": result["success"],
+                        "difficulty": result["difficulty"],
+                        "bonus": bonus,
+                        "penalty": penalty,
+                        "raw_roll": result["roll"],
+                        "extra_tens": list(result["extra_tens"]),
+                        "final_tens": result["final_tens"],
+                    }
+                )
                 await self._record_skill_check(
                     ctx,
                     character.name,
@@ -664,6 +706,31 @@ class DiceTools:
             )
             lines.append(i18n.t(outcome_key, level=level_label))
             rank = 4 if roll_result.is_critical_success() else -2 if roll_result.is_critical_failure() else 1 if success else -1
+            candidate_rolls = advantage_rolls or disadvantage_rolls or list(roll_result.rolls)
+            ctx.emit_dice(
+                {
+                    "kind": "check",
+                    **({"actor": actor.strip()} if actor and actor.strip() else {}),
+                    "expr": load_rulepack("dnd5e").display_name(target_skill, ctx.locale),
+                    "skill": target_skill,
+                    "rolls": candidate_rolls,
+                    "total": total,
+                    "target": target_dc,
+                    "effective_target": target_dc,
+                    "rank": rank,
+                    "level": level_label,
+                    "success": success,
+                    "difficulty": target_dc,
+                    "bonus": bonus,
+                    "penalty": penalty,
+                    "modifier": modifier,
+                    "raw_roll": roll_result.total,
+                    "advantage_rolls": advantage_rolls,
+                    "disadvantage_rolls": disadvantage_rolls,
+                    "critical_success": roll_result.is_critical_success(),
+                    "critical_failure": roll_result.is_critical_failure(),
+                }
+            )
             await self._record_skill_check(
                 ctx,
                 character.name,
@@ -745,6 +812,27 @@ class DiceTools:
                 san_before=san_value,
                 san_after=new_san,
             )
+            san_max = character.attributes.get("SANMAX", 99)
+            ctx.emit_dice(
+                {
+                    "kind": "sanity",
+                    "expr": "SAN",
+                    "rolls": [result["roll"]],
+                    "total": result["roll"],
+                    "target": san_value,
+                    "effective_target": self._effective_coc_target(san_value, result["difficulty"]),
+                    "rank": result["rank"],
+                    "success": result["success"],
+                    "difficulty": result["difficulty"],
+                    "bonus": result.get("bonus", 0),
+                    "penalty": result.get("penalty", 0),
+                    "raw_roll": result.get("raw_roll", result["roll"]),
+                    "loss_expr": loss_expr,
+                    "loss": loss,
+                    "remaining": new_san,
+                    "san_max": san_max,
+                }
+            )
             header_key = (
                 "kp_tools.dice.sanity.header_success" if result["success"] else "kp_tools.dice.sanity.header_failure"
             )
@@ -760,7 +848,7 @@ class DiceTools:
                     detail=loss_result.format_result(i18n=i18n),
                 ),
                 i18n.t(
-                    "kp_tools.dice.sanity.remaining_line", san=new_san, sanmax=character.attributes.get("SANMAX", 99)
+                    "kp_tools.dice.sanity.remaining_line", san=new_san, sanmax=san_max
                 ),
             ]
             return "\n".join(lines)

@@ -15,9 +15,10 @@ import json
 
 from agent.context import AgentCtx
 from agent.kp_tools import build_kp_toolset
+from agent.kp_tools_mechanics import CharacterTools
 from agent.services import build_services
 from core.character_manager import CharacterSheet
-from core.dice_engine import seed_dice
+from core.dice_engine import coc_rank_label, seed_dice
 from gateway.chat import ChatAttachment, ChatCapabilities, ChatInteraction, ChatMessage
 from gateway.commands import CommandRouter
 from gateway.events import InboundMessage
@@ -27,7 +28,7 @@ from gateway.ops import Censor, get_enabled_skills
 from gateway.rooms import session_key_for_room, set_binding, set_keeper_binding
 from gateway.runner import GatewayRunner
 from gateway.session import SessionSource
-from gateway.turn import publish_state, run_turn
+from gateway.turn import _dice_events, publish_state, run_turn
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.i18n import get_i18n
@@ -101,6 +102,14 @@ def _kp_rolls_then_replies(messages, tools):
     return assistant_text(KP_REPLY)
 
 
+def _kp_checks_sanity_then_replies(messages, tools):
+    """A KP turn that performs one SAN check before narrating."""
+    already_rolled = any(message.get("role") == "tool" for message in messages)
+    if not already_rolled:
+        return assistant_tools(tool_call("sanity_check", success_loss="1", failure_loss="1d6"))
+    return assistant_text(KP_REPLY)
+
+
 async def _seed_keeper_sentinel(services, chat_key: str) -> None:
     await services.store.set(
         user_key="",
@@ -164,6 +173,68 @@ async def test_chat_origin_turn_reaches_terminal_but_not_its_own_echo() -> None:
     # No keeper sentinel leaked to either transport.
     assert all(_no_sentinel(event) for event in ws_member.events)
     assert all(SENTINEL not in text for text in adapter.texts)
+
+
+async def test_sanity_turn_emits_actual_roll_target_rank_and_loss_not_sanmax() -> None:
+    hub = RoomHub()
+    services = _services(_kp_checks_sanity_then_replies)
+    toolset = build_kp_toolset(services)
+    router = CommandRouter(services)
+    ws_member = RecordingWsMember(member_id="san-player", name="Vera")
+    await hub.subscribe("R-san", ws_member)
+    ctx = AgentCtx(chat_key="R-san", user_id=ws_member.id, platform="tui", locale="en")
+    await CharacterTools(services).create_character(ctx, name="Vera", system="coc7", auto_generate=False)
+    ws_member.events.clear()
+
+    seed_dice(5)
+    await run_turn(
+        hub,
+        services,
+        ctx,
+        "I look into the impossible geometry.",
+        command_router=router,
+        toolset=toolset,
+        censor=Censor(),
+        origin=ws_member,
+        echo_exclude=None,
+    )
+
+    record = await services.battles.generator.get_current_session(ctx.chat_key)
+    assert record is not None
+    check = record.skill_checks[-1]
+    dice = next(event.data for event in ws_member.events if event.kind == "dice")
+    assert dice["kind"] == "sanity"
+    assert dice["total"] == check["roll"]
+    assert dice["total"] != 99
+    assert dice["target"] == check["san_before"]
+    assert dice["rank"] == check["rank"]
+    assert dice["success"] == check["success"]
+    assert dice["loss"] == check["loss"]
+    assert dice["remaining"] == check["san_after"]
+    assert dice["level"] == coc_rank_label(check["rank"], services.i18n.with_locale("en"))
+
+
+def test_structured_and_legacy_dice_calls_fall_back_per_trace_in_order() -> None:
+    i18n = get_i18n("en")
+    structured = {
+        "name": "future_dice_tool",
+        "arguments": {},
+        "keeper_only": False,
+        "result": "localized text ending in the wrong number 99",
+        "dice_payloads": [{"kind": "check", "expr": "Listen", "rolls": [12], "total": 12, "rank": 2}],
+    }
+    legacy = {
+        "name": "roll_dice",
+        "arguments": {"expression": "1d6"},
+        "keeper_only": False,
+        "result": "🎲 1d6: [4] = 4",
+    }
+
+    events = [*_dice_events(structured, "Vera", i18n), *_dice_events(legacy, "Vera", i18n)]
+
+    assert [event.data["total"] for event in events] == [12, 4]
+    assert events[0].data["level"] == coc_rank_label(2, i18n)
+    assert events[1].data["expr"] == "1d6"
 
 
 async def test_terminal_origin_turn_reaches_the_chat_channel() -> None:

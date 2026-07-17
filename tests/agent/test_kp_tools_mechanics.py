@@ -254,6 +254,17 @@ async def test_roll_dice_basic_result_contains_the_total():
     result = await dice_tools.roll_dice(ctx, expression="3d6+2")
 
     assert str(expected.total) in result
+    assert ctx.dice_payloads == [
+        {
+            "kind": "roll",
+            "expr": "3d6+2",
+            "rolls": expected.rolls,
+            "total": expected.total,
+            "modifier": expected.modifier,
+            "critical_success": expected.is_critical_success(),
+            "critical_failure": expected.is_critical_failure(),
+        }
+    ]
 
 
 async def test_roll_dice_invalid_expression_returns_localized_error():
@@ -298,6 +309,18 @@ async def test_skill_check_on_a_seeded_skill_yields_deterministic_rank_and_a_rea
     assert "侦查" not in text
     assert str(expected["final_roll"]) in text
     assert expected_label in text
+    payload = ctx.dice_payloads[-1]
+    assert payload["kind"] == "check"
+    assert payload["expr"] == "Spot Hidden"
+    assert payload["rolls"] == [expected["final_roll"]]
+    assert payload["total"] == expected["final_roll"]
+    assert payload["target"] == 25
+    assert payload["effective_target"] == 25
+    assert payload["rank"] == expected["rank"]
+    assert payload["success"] == expected["success"]
+    assert payload["difficulty"] == expected["difficulty"]
+    assert payload["bonus"] == 0
+    assert payload["penalty"] == 0
 
     seed_dice(777)
     zh_text = await dice_tools.skill_check(
@@ -410,6 +433,17 @@ async def test_dnd_skill_check_records_structured_advantage_and_critical_fields(
     assert check["disadvantage_rolls"] == []
     assert check["raw_roll"] in check["advantage_rolls"]
     assert isinstance(check["is_critical"], bool)
+    payload = ctx.dice_payloads[-1]
+    assert payload["kind"] == "check"
+    assert payload["expr"] == "Athletics"
+    assert payload["rolls"] == check["advantage_rolls"]
+    assert payload["total"] == check["roll"]
+    assert payload["target"] == 10
+    assert payload["effective_target"] == 10
+    assert payload["rank"] == check["rank"]
+    assert payload["success"] == check["success"]
+    assert payload["bonus"] == 1
+    assert payload["penalty"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -467,6 +501,17 @@ async def test_sanity_check_records_roll_rank_and_structured_loss():
     assert check["loss_expr"] in {"1", "1d6"}
     assert check["san_before"] == before.attributes["SAN"]
     assert check["san_after"] == check["san_before"] - check["loss"]
+    payload = ctx.dice_payloads[-1]
+    assert payload["kind"] == "sanity"
+    assert payload["expr"] == "SAN"
+    assert payload["rolls"] == [check["roll"]]
+    assert payload["total"] == check["roll"]
+    assert payload["target"] == check["san_before"]
+    assert payload["effective_target"] == check["san_before"]
+    assert payload["rank"] == check["rank"]
+    assert payload["success"] == check["success"]
+    assert payload["loss"] == check["loss"]
+    assert payload["remaining"] == check["san_after"]
 
 
 async def test_npc_actor_is_recorded_by_name_and_excluded_from_player_stats():

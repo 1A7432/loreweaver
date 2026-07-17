@@ -323,6 +323,9 @@ async def run_kp_turn(
     was exhausted.
     """
     i18n = services.i18n.with_locale(ctx.locale)
+    # AgentCtx instances may be reused by gateways. Never let a direct tool call
+    # or an earlier turn's unconsumed dice payload attach to this turn's trace.
+    ctx.consume_dice()
     system_prompt = await build_system_prompt(ctx, services)
     # Layer B.2 -- allowed-tools enforcement (docs/plugins.md "Layer B"): the union
     # of `allowed_tools` across every KP skill enabled for this room. With no
@@ -569,14 +572,16 @@ async def _dispatch_and_record(
     conversation.append(_assistant_tool_call_message(result))
     for call in result.tool_calls:
         tool_result = await toolset.dispatch(call.name, ctx, call.arguments, unlocked)
-        tool_trace.append(
-            {
-                "name": call.name,
-                "arguments": call.arguments,
-                "keeper_only": toolset.is_keeper_only(call.name),
-                "result": tool_result,
-            }
-        )
+        trace_entry = {
+            "name": call.name,
+            "arguments": call.arguments,
+            "keeper_only": toolset.is_keeper_only(call.name),
+            "result": tool_result,
+        }
+        dice_payloads = ctx.consume_dice()
+        if dice_payloads:
+            trace_entry["dice_payloads"] = dice_payloads
+        tool_trace.append(trace_entry)
         conversation.append({"role": "tool", "tool_call_id": call.id, "content": tool_result})
 
 

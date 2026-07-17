@@ -53,6 +53,17 @@ class _DiceProvider:
         return f"{skill_name}: rolled 42 vs 65 -> hard success"
 
 
+class _BufferedDiceProvider:
+    """A dice provider that can emit or omit a structured payload per call."""
+
+    @tool
+    async def roll_dice(self, ctx: AgentCtx, expression: str, emit: bool) -> str:
+        """Return a deterministic roll and optionally publish its structured payload."""
+        if emit:
+            ctx.emit_dice({"kind": "roll", "expr": expression, "rolls": [4], "total": 4})
+        return f"{expression}: 4"
+
+
 class _MixedProvider:
     """A provider with a dice tool AND a non-dice (sheet-reading) tool.
 
@@ -142,6 +153,38 @@ async def test_tool_result_is_fed_back_as_a_role_tool_message_with_matching_call
     assert json.loads(assistant_msg["tool_calls"][0]["function"]["arguments"]) == {}
     assert tool_msg["tool_call_id"] == assistant_msg["tool_calls"][0]["id"]
     assert tool_msg["content"] == "1926-03-15 14:00"
+
+
+async def test_structured_dice_payload_is_bound_to_the_exact_tool_trace_entry():
+    llm = FakeLLM(
+        script=[
+            assistant_tools(
+                tool_call("roll_dice", expression="invalid", emit=False),
+                tool_call("roll_dice", expression="1d6", emit=True),
+            ),
+            assistant_text("The second roll lands on four."),
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx("chat-dice-payload"), services, Toolset(_BufferedDiceProvider()), "roll")
+
+    assert "dice_payloads" not in result.tool_trace[0]
+    assert result.tool_trace[1]["dice_payloads"] == [
+        {"kind": "roll", "expr": "1d6", "rolls": [4], "total": 4}
+    ]
+
+
+async def test_run_kp_turn_discards_stale_dice_payloads_before_dispatch():
+    llm = FakeLLM(script=[assistant_tools(tool_call("lookup_time")), assistant_text("Midnight.")])
+    services = _services(llm)
+    ctx = _ctx("chat-stale-dice-payload")
+    ctx.emit_dice({"kind": "roll", "expr": "stale", "rolls": [99], "total": 99})
+
+    result = await run_kp_turn(ctx, services, _toolset(), "What time is it?")
+
+    assert "dice_payloads" not in result.tool_trace[0]
+    assert ctx.dice_payloads == []
 
 
 # ---------------------------------------------------------------------------

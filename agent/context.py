@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 
 @dataclass
@@ -29,10 +29,21 @@ class AgentCtx:
     locale: str = "en"
     fs: FsAdapter | None = None
     extra: dict = field(default_factory=dict)
+    dice_payloads: list[dict[str, Any]] = field(default_factory=list, init=False, repr=False, compare=False)
 
     def uid(self) -> str:
         """Defensive accessor for the resolved user id."""
         return self.user_id
+
+    def emit_dice(self, payload: dict[str, Any]) -> None:
+        """Buffer one public, already-resolved dice payload for this turn."""
+        self.dice_payloads.append(dict(payload))
+
+    def consume_dice(self) -> list[dict[str, Any]]:
+        """Return and clear every buffered dice payload in emission order."""
+        payloads = self.dice_payloads
+        self.dice_payloads = []
+        return payloads
 
 
 class FsAdapter(Protocol):

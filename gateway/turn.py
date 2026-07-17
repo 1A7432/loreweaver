@@ -207,8 +207,7 @@ async def run_turn(
         review = None if unfiltered else ((lambda value: censor.review(value).cleaned) if censor is not None else None)
         result = await run_kp_turn(ctx, services, toolset, text, output_review=review)
         for entry in result.tool_trace:
-            dice_event = _dice_event(entry, name, i18n)
-            if dice_event is not None:
+            for dice_event in _dice_events(entry, name, i18n):
                 await hub.publish(ctx.chat_key, dice_event)
         for entry in result.tool_trace:
             npc_event = _npc_event(entry, i18n)
@@ -446,16 +445,50 @@ def _npc_event(entry: dict[str, Any], i18n: I18n) -> Event | None:
     )
 
 
-def _dice_event(entry: dict[str, Any], actor: str, i18n: I18n) -> Event | None:
-    """Best-effort ``dice`` event from one `KPTurnResult.tool_trace` entry.
+def _dice_events(entry: dict[str, Any], actor: str, i18n: I18n) -> list[Event]:
+    """Build public dice events, preferring payloads bound during tool dispatch."""
+    if entry.get("keeper_only"):
+        return []
 
-    The KP tools only ever return a rendered, localized string (never a raw
-    `core.dice_engine.DiceResult`), so this recovers what it reasonably can
-    from that text rather than re-rolling: the trailing integer as ``total``,
-    a bracketed roll list when the template rendered one (e.g. ``[15]+3``),
-    and — when the text happens to contain one of the localized COC rank
-    labels `core.dice_engine.coc_rank_label` would have produced — a canonical
-    ``-2..4`` ``rank``/``success``.
+    payloads = entry.get("dice_payloads")
+    if isinstance(payloads, list) and payloads:
+        events: list[Event] = []
+        arguments = entry.get("arguments") or {}
+        for raw_payload in payloads:
+            if not isinstance(raw_payload, dict):
+                continue
+            fields = dict(raw_payload)
+            kind = str(fields.pop("kind", ""))
+            payload_actor = fields.pop("actor", "")
+            if not kind or "total" not in fields:
+                continue
+            rank = fields.get("rank")
+            if isinstance(rank, int) and "level" not in fields:
+                fields["level"] = coc_rank_label(rank, i18n)
+            events.append(
+                Event.dice(
+                    actor=str(
+                        payload_actor
+                        or arguments.get("actor")
+                        or arguments.get("name")
+                        or actor
+                    ),
+                    kind=kind,
+                    **fields,
+                )
+            )
+        # A tool that emitted structured data never falls back to parsing its
+        # localized text, even if a malformed payload was defensively skipped.
+        return events
+
+    legacy = _dice_event(entry, actor, i18n)
+    return [legacy] if legacy is not None else []
+
+
+def _dice_event(entry: dict[str, Any], actor: str, i18n: I18n) -> Event | None:
+    """Legacy best-effort dice event reconstructed from localized tool text.
+
+    Retained for older/custom dice tools that did not call ``ctx.emit_dice``.
     """
     tool_name = str(entry.get("name", ""))
     kind = _DICE_KIND_BY_TOOL.get(tool_name)
@@ -481,7 +514,11 @@ def _dice_event(entry: dict[str, Any], actor: str, i18n: I18n) -> Event | None:
     if rank is not None:
         fields["rank"] = rank
         fields["success"] = rank >= 1
-    return Event.dice(actor=str(arguments.get("name") or actor), kind=kind, **fields)
+    return Event.dice(
+        actor=str(arguments.get("actor") or arguments.get("name") or actor),
+        kind=kind,
+        **fields,
+    )
 
 
 def _dice_expr(name: str, arguments: dict[str, Any]) -> str:
