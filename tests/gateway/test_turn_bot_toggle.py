@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from agent.context import AgentCtx
 from agent.kp_tools import build_kp_toolset
+from agent.kp_tools_mechanics import CharacterTools
 from agent.services import build_services
 from gateway.commands import CommandRouter
 from gateway.hub import Event, RoomHub
@@ -95,3 +96,19 @@ async def test_bot_unset_and_bot_on_run_the_kp_turn():
     result = await run_turn(hub, services, ctx, "I listen at the door", command_router=router, toolset=toolset)
     assert result is not None
     assert any(getattr(event, "speaker", "") == "kp" for event in member.events)
+
+
+async def test_real_kp_turn_records_the_truncated_player_action_and_auto_starts_session():
+    services = _services()
+    hub, _member, router, toolset, ctx = await _room(services)
+    await CharacterTools(services).create_character(ctx, name="Vera", system="coc7", auto_generate=False)
+    action = "search " + ("x" * 1200)
+
+    await run_turn(hub, services, ctx, action, command_router=router, toolset=toolset)
+
+    record = await services.battles.generator.get_current_session(ctx.chat_key)
+    assert record is not None
+    saved = record.player_actions[ctx.uid()][0]
+    assert saved["char_name"] == "Vera"
+    assert len(saved["action"]) == 1000
+    assert action.startswith(saved["action"])

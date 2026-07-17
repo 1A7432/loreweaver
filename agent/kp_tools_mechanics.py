@@ -40,6 +40,7 @@ import random
 from agent.context import AgentCtx
 from agent.services import Services
 from agent.tools import tool
+from core.battle_report import NPC_USER_ID
 from core.character_manager import CharacterSheet
 from core.character_rules import render_validation_notice, validate_sheet
 from core.coc_rules import DEFAULT_COC_RULE, DIFFICULTY_REGULAR, result_check_base
@@ -411,39 +412,78 @@ class DiceTools:
     def __init__(self, services: Services) -> None:
         self.services = services
 
-    async def _record_dice_roll(self, ctx: AgentCtx, expression: str, result: DiceResult) -> None:
+    async def _record_dice_roll(
+        self, ctx: AgentCtx, expression: str, result: DiceResult, actor: str | None = None
+    ) -> None:
         """Best-effort battle-report recording, mirroring plugin.py's `/r` command handler.
 
-        A no-op whenever there's no in-progress session for `ctx.chat_key`
-        (`BattleReportManager.add_dice_roll` itself only records against an
-        active session) and never lets a recording failure break the roll.
+        The manager lazily starts a session when needed. A recording failure
+        never breaks the roll.
         """
         try:
             character = await _get_active_character(self.services, ctx)
-            char_name = character.name if character else ""
+            active_name = character.name if character else ""
+            actor_name = (actor or "").strip()
+            is_npc = bool(actor_name and actor_name.casefold() != active_name.casefold())
+            char_name = actor_name or active_name
+            user_id = NPC_USER_ID if is_npc else ctx.uid()
+            critical_type = (
+                "success"
+                if result.is_critical_success()
+                else "failure"
+                if result.is_critical_failure()
+                else ""
+            )
             await self.services.battles.add_dice_roll(
-                ctx.chat_key, ctx.uid(), char_name, expression, result.total, result.is_critical_success()
+                ctx.chat_key,
+                user_id,
+                char_name,
+                expression,
+                result.total,
+                bool(critical_type),
+                critical_type,
             )
         except Exception:
             pass
 
     async def _record_skill_check(
-        self, ctx: AgentCtx, char_name: str, skill: str, target: int, roll: int, level_label: str
+        self,
+        ctx: AgentCtx,
+        char_name: str,
+        skill: str,
+        target: int,
+        roll: int,
+        *,
+        success: bool,
+        rank: int,
+        actor: str | None = None,
+        **details: object,
     ) -> None:
-        """Best-effort battle-report recording, mirroring plugin.py's `/ra` command handler."""
+        """Best-effort structured battle-report recording for one check."""
         try:
+            actor_name = (actor or "").strip()
+            is_npc = bool(actor_name and actor_name.casefold() != char_name.casefold())
             await self.services.battles.add_skill_check(
-                ctx.chat_key, ctx.uid(), char_name, skill, target, roll, level_label
+                ctx.chat_key,
+                NPC_USER_ID if is_npc else ctx.uid(),
+                actor_name or char_name,
+                skill,
+                target,
+                roll,
+                success=success,
+                rank=rank,
+                **details,
             )
         except Exception:
             pass
 
     @tool
-    async def roll_dice(self, ctx: AgentCtx, expression: str) -> str:
+    async def roll_dice(self, ctx: AgentCtx, expression: str, actor: str | None = None) -> str:
         """Roll dice and return the result.
 
         Args:
             expression: Dice expression, e.g. '1d100', '3d6+2', '2d6*5'.
+            actor: Set to the NPC/creature name when rolling for a non-player actor.
         """
         i18n = self.services.i18n.with_locale(ctx.locale)
         try:
@@ -459,7 +499,7 @@ class DiceTools:
         elif result.is_critical_failure():
             response += i18n.t("kp_tools.dice.critical_failure_suffix")
 
-        await self._record_dice_roll(ctx, expression, result)
+        await self._record_dice_roll(ctx, expression, result, actor=actor)
         return response
 
     @tool
@@ -471,6 +511,7 @@ class DiceTools:
         penalty: int = 0,
         dc: int | None = None,
         proficient: bool = False,
+        actor: str | None = None,
     ) -> str:
         """Run a skill check for the active character (auto-detects attribute/Credit-Rating checks).
 
@@ -481,6 +522,7 @@ class DiceTools:
             penalty: Penalty dice (COC) or disadvantage count (DND5E).
             dc: Difficulty class (DND5E only, defaults to 15).
             proficient: Whether the character is proficient in this skill (DND5E only).
+            actor: Set to the NPC/creature name when rolling for a non-player actor.
         """
         i18n = self.services.i18n.with_locale(ctx.locale)
         characters = self.services.characters
@@ -490,6 +532,7 @@ class DiceTools:
             character = await _get_active_character(self.services, ctx)
             if not _has_character(character):
                 return i18n.t("kp_tools.character.none")
+            display_name = (actor or "").strip() or character.name
 
             standard_name = characters.find_skill_by_alias(character, skill_name)
             attr_upper = skill_name.upper().strip()
@@ -510,7 +553,7 @@ class DiceTools:
                 level_label = coc_rank_label(result["rank"], i18n)
 
                 skill_label = load_rulepack("coc7").display_name(target_skill, ctx.locale)
-                lines = [i18n.t("kp_tools.dice.skill_check.coc_header", name=character.name, skill=skill_label)]
+                lines = [i18n.t("kp_tools.dice.skill_check.coc_header", name=display_name, skill=skill_label)]
                 target_line = i18n.t("kp_tools.dice.skill_check.target_line", value=skill_value)
                 if bonus > 0:
                     target_line += i18n.t("kp_tools.dice.skill_check.bonus_suffix", count=bonus)
@@ -543,7 +586,23 @@ class DiceTools:
                 lines.append(i18n.t(outcome_key, level=level_label))
 
                 await self._record_skill_check(
-                    ctx, character.name, target_skill, skill_value, result["final_roll"], level_label
+                    ctx,
+                    character.name,
+                    target_skill,
+                    skill_value,
+                    result["final_roll"],
+                    success=result["success"],
+                    rank=result["rank"],
+                    actor=actor,
+                    is_critical=result["rank"] in {4, -2},
+                    bonus=bonus,
+                    penalty=penalty,
+                    raw_roll=result["final_roll"],
+                    base_roll=result["roll"],
+                    extra_tens=result["extra_tens"],
+                    final_tens=result["final_tens"],
+                    difficulty=result["difficulty"],
+                    rule=result["rule"],
                 )
                 return "\n".join(lines)
 
@@ -554,11 +613,15 @@ class DiceTools:
 
             net_advantage = bonus - penalty
             adv_label = ""
+            advantage_rolls: list[int] = []
+            disadvantage_rolls: list[int] = []
             if net_advantage > 0:
-                roll_result = dice.roll_advantage("1d20", is_check=True)
+                roll_result, candidates = dice.roll_advantage_with_candidates("1d20", is_check=True)
+                advantage_rolls = [candidate.total for candidate in candidates]
                 adv_label = i18n.t("kp_tools.dice.skill_check.advantage_label", count=net_advantage)
             elif net_advantage < 0:
-                roll_result = dice.roll_disadvantage("1d20", is_check=True)
+                roll_result, candidates = dice.roll_disadvantage_with_candidates("1d20", is_check=True)
+                disadvantage_rolls = [candidate.total for candidate in candidates]
                 adv_label = i18n.t("kp_tools.dice.skill_check.disadvantage_label", count=abs(net_advantage))
             else:
                 roll_result = dice.roll_expression("1d20", is_check=True)
@@ -578,7 +641,7 @@ class DiceTools:
             lines = [
                 i18n.t(
                     "kp_tools.dice.skill_check.dnd_header",
-                    name=character.name,
+                    name=display_name,
                     skill=load_rulepack("dnd5e").display_name(target_skill, ctx.locale),
                     proficient=prof_label,
                 )
@@ -600,6 +663,23 @@ class DiceTools:
                 else "kp_tools.dice.skill_check.outcome_failure"
             )
             lines.append(i18n.t(outcome_key, level=level_label))
+            rank = 4 if roll_result.is_critical_success() else -2 if roll_result.is_critical_failure() else 1 if success else -1
+            await self._record_skill_check(
+                ctx,
+                character.name,
+                target_skill,
+                target_dc,
+                total,
+                success=success,
+                rank=rank,
+                actor=actor,
+                is_critical=roll_result.is_critical_success(),
+                bonus=bonus,
+                penalty=penalty,
+                raw_roll=roll_result.total,
+                advantage_rolls=advantage_rolls,
+                disadvantage_rolls=disadvantage_rolls,
+            )
             return "\n".join(lines)
         except Exception as exc:
             return i18n.t("kp_tools.dice.skill_check.failed", error=str(exc))
@@ -645,6 +725,26 @@ class DiceTools:
             await characters.save_character(ctx.uid(), ctx.chat_key, character)
 
             level_label = coc_rank_label(result["rank"], i18n)
+            await self._record_skill_check(
+                ctx,
+                character.name,
+                "SAN",
+                san_value,
+                result["roll"],
+                success=result["success"],
+                rank=result["rank"],
+                is_critical=result["rank"] in {4, -2},
+                bonus=result.get("bonus", 0),
+                penalty=result.get("penalty", 0),
+                raw_roll=result["roll"],
+                base_roll=result.get("raw_roll"),
+                difficulty=result.get("difficulty"),
+                rule=result.get("rule"),
+                loss_expr=loss_expr,
+                loss=loss,
+                san_before=san_value,
+                san_after=new_san,
+            )
             header_key = (
                 "kp_tools.dice.sanity.header_success" if result["success"] else "kp_tools.dice.sanity.header_failure"
             )

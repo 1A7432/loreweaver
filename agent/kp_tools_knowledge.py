@@ -1171,18 +1171,36 @@ class SessionTools(_KnowledgeToolsBase):
     """
 
     @tool
-    async def start_session_recording(self, ctx: AgentCtx, session_name: str | None = None) -> str:
+    async def start_session_recording(
+        self, ctx: AgentCtx, session_name: str | None = None, force_new: bool = False
+    ) -> str:
         """Start recording this TRPG session, so a battle report can be generated from it later.
 
         Args:
             session_name: Optional session name.
+            force_new: Archive an active recording before starting a fresh one.
 
         Returns:
             Confirmation that recording started.
         """
         i18n = self._i18n(ctx)
         try:
-            await self._services.battles.start_session(ctx.chat_key, session_name)
+            current = await self._services.battles.generator.get_current_session(ctx.chat_key)
+            if current is not None and not force_new:
+                current_name = await self._services.store.get(
+                    store_key=f"session_name.{ctx.chat_key}.current"
+                )
+                return i18n.t(
+                    "kp_tools.know.session.already_active",
+                    session_id=current.session_id,
+                    name=current_name or "-",
+                )
+            await self._services.battles.start_session(
+                ctx.chat_key,
+                session_name,
+                i18n=i18n,
+                force_new=force_new,
+            )
             if session_name:
                 return i18n.t("kp_tools.know.session.started_named", name=session_name)
             return i18n.t("kp_tools.know.session.started")
@@ -1217,7 +1235,9 @@ class SessionTools(_KnowledgeToolsBase):
         """
         i18n = self._i18n(ctx)
         try:
-            text_report, markdown_report, _session_name = await self._services.battles.generate_battle_report(ctx.chat_key)
+            text_report, markdown_report, _session_name = await self._services.battles.generate_battle_report(
+                ctx.chat_key, i18n=i18n
+            )
             if not text_report:
                 return i18n.t("kp_tools.know.session.no_active_session")
             markdown_report = markdown_report or ""

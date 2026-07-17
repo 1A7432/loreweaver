@@ -185,6 +185,30 @@ async def test_export_report_tool_saves_player_report_without_ending_session(tmp
     assert "studies the mural" in written[0].read_text(encoding="utf-8")
 
 
+async def test_start_session_recording_is_idempotent_and_force_new_archives(tmp_path):
+    services = build_services(Settings(), llm=FakeLLM(), embeddings=FakeEmbeddings(8))
+    session_tools = SessionTools(services)
+    ctx = _ctx(fs=LocalFs(base_dir=tmp_path), locale="en")
+
+    await session_tools.start_session_recording(ctx, session_name="First")
+    first = await services.battles.generator.get_current_session(CHAT_KEY)
+    assert first is not None
+    await services.battles.add_key_event(CHAT_KEY, "kept")
+    second_result = await session_tools.start_session_recording(ctx, session_name="Ignored")
+    second = await services.battles.generator.get_current_session(CHAT_KEY)
+
+    assert second is not None
+    assert second.session_id == first.session_id
+    assert second.key_events[0]["description"] == "kept"
+    assert "already active" in second_result
+
+    await session_tools.start_session_recording(ctx, session_name="Fresh", force_new=True)
+    fresh = await services.battles.generator.get_current_session(CHAT_KEY)
+    assert fresh is not None
+    assert fresh.session_id != first.session_id
+    assert await services.store.get(store_key=f"session_history.{CHAT_KEY}.{first.session_id}") is not None
+
+
 # ---------------------------------------------------------------------------
 # end-to-end: upload -> summary -> unlock -> notes -> clock -> session report -> delete
 # ---------------------------------------------------------------------------

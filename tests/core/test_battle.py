@@ -60,13 +60,60 @@ def test_add_dice_roll_non_critical_does_not_affect_critical_counters():
 def test_add_skill_check_detects_success_in_english_and_chinese_labels():
     record = SessionRecord("session-checks")
 
-    record.add_skill_check("u1", "Alice", "Listen", 50, 30, "success")
+    record.add_skill_check("u1", "Alice", "Listen", 50, 30, "Hard Success")
     record.add_skill_check("u1", "Alice", "Spot Hidden", 60, 80, "failure")
     record.add_skill_check("u1", "Alice", "Library Use", 70, 5, "成功")
 
     stats = record.player_stats["u1"]
     assert stats["total_checks"] == 3
     assert stats["successful_checks"] == 2
+
+
+def test_add_skill_check_counts_structured_hard_and_extreme_successes():
+    record = SessionRecord("session-structured-checks")
+
+    record.add_skill_check("u1", "Alice", "Listen", 50, 20, success=True, rank=2)
+    record.add_skill_check("u1", "Alice", "Spot Hidden", 60, 5, success=True, rank=3)
+
+    assert record.player_stats["u1"]["successful_checks"] == 2
+    assert record.skill_checks[0]["success"] is True
+    assert record.skill_checks[0]["rank"] == 2
+    assert "success_level" not in record.skill_checks[0]
+
+
+def test_structured_skill_check_rank_is_localized_only_when_rendered():
+    generator = BattleReportGenerator(Store())
+    record = SessionRecord("session-rank-render")
+    record.add_skill_check("u1", "Alice", "Listen", 50, 20, success=True, rank=2)
+
+    en = generator.generate_markdown_report(record, "Rank", i18n=I18n(locale="en"), detailed=True)
+    zh = generator.generate_markdown_report(record, "等级", i18n=I18n(locale="zh"), detailed=True)
+
+    assert "Hard Success" in en
+    assert "困难成功" in zh
+
+
+def test_legacy_stored_hard_success_is_recounted_case_insensitively():
+    restored = SessionRecord.from_dict(
+        {
+            "session_id": "legacy",
+            "start_time": 1.0,
+            "skill_checks": [
+                {
+                    "user_id": "u1",
+                    "char_name": "Alice",
+                    "skill": "Listen",
+                    "target": 50,
+                    "roll": 20,
+                    "success_level": "Hard Success",
+                    "timestamp": 2.0,
+                }
+            ],
+            "player_stats": {"u1": {"char_name": "Alice", "successful_checks": 0}},
+        }
+    )
+
+    assert restored.player_stats["u1"]["successful_checks"] == 1
 
 
 def test_add_key_event_and_add_player_action_update_stats():
@@ -238,6 +285,109 @@ async def test_ensure_session_started_auto_starts_only_once():
 
     assert started_first is True
     assert started_second is False
+
+
+async def test_start_session_is_idempotent_and_preserves_existing_events():
+    store = Store()
+    manager = BattleReportManager(store)
+    chat_key = "chat-idempotent"
+
+    first_id = await manager.start_session(chat_key, "First")
+    await manager.add_key_event(chat_key, "kept event")
+    second_id = await manager.start_session(chat_key, "Second")
+
+    record = await manager.generator.get_current_session(chat_key)
+    assert record is not None
+    assert second_id == first_id
+    assert [event["description"] for event in record.key_events] == ["kept event"]
+    assert await store.get(store_key=f"session_name.{chat_key}.current") == "First"
+
+
+async def test_add_methods_auto_start_a_session_when_none_exists():
+    manager = BattleReportManager(Store())
+    chat_key = "chat-lazy-start"
+
+    await manager.add_dice_roll(chat_key, "u1", "Alice", "1d6", 4)
+
+    record = await manager.generator.get_current_session(chat_key)
+    assert record is not None
+    assert record.dice_rolls[0]["result"] == 4
+
+
+async def test_force_new_archives_active_session_before_starting_fresh():
+    store = Store()
+    manager = BattleReportManager(store)
+    chat_key = "chat-force-new"
+
+    old_id = await manager.start_session(chat_key, "Old")
+    await manager.add_key_event(chat_key, "archive me")
+    new_id = await manager.start_session(chat_key, "New", force_new=True)
+
+    assert new_id != old_id
+    archived = await store.get(store_key=f"session_history.{chat_key}.{old_id}")
+    assert archived is not None
+    assert json.loads(archived)["key_events"][0]["description"] == "archive me"
+    current = await manager.generator.get_current_session(chat_key)
+    assert current is not None
+    assert current.session_id == new_id
+    assert current.key_events == []
+
+
+def test_npc_rolls_and_checks_are_excluded_from_player_stats():
+    record = SessionRecord("session-npc")
+
+    record.add_dice_roll("__npc__", "Goblin", "1d20+3", 17)
+    record.add_skill_check("__npc__", "Goblin", "Stealth", 12, 18, success=True, rank=1)
+
+    assert len(record.dice_rolls) == 1
+    assert len(record.skill_checks) == 1
+    assert record.player_stats == {}
+    detailed = BattleReportGenerator(Store()).generate_markdown_report(
+        record, "NPC", i18n=I18n(locale="en"), detailed=True
+    )
+    assert "Goblin" in detailed
+
+
+def test_key_event_deduplication_only_suppresses_recent_identical_text(monkeypatch):
+    record = SessionRecord("session-dedupe")
+    now = 10_000.0
+    monkeypatch.setattr("core.battle_report.time.time", lambda: now)
+    record.add_key_event("same event")
+    record.add_key_event("same event")
+    monkeypatch.setattr("core.battle_report.time.time", lambda: now + 301)
+    record.add_key_event("same event")
+
+    assert len(record.key_events) == 2
+
+
+def test_report_recaps_sample_the_timeline_and_cap_rendered_text():
+    generator = BattleReportGenerator(Store())
+    record = SessionRecord("session-recap")
+    for index in range(20):
+        record.add_key_event(f"EVENT-{index:02d} " + ("x" * 240))
+
+    markdown = generator.generate_markdown_report(record, "Recap", i18n=I18n(locale="en"))
+    recap = markdown.split("Key Events Recap", 1)[1]
+
+    assert "EVENT-00" in recap
+    assert "EVENT-19" in recap
+    assert "EVENT-01" not in recap
+    assert "…" in recap
+    assert "x" * 210 not in recap
+
+
+def test_report_renders_transparent_score_breakdown_in_both_locales():
+    generator = BattleReportGenerator(Store())
+    record = SessionRecord("session-score-breakdown")
+    record.add_dice_roll("u1", "Alice", "1d20", 12)
+    record.add_skill_check("u1", "Alice", "Listen", 50, 20, success=True, rank=2)
+    record.add_player_action("u1", "Alice", "listens at the door")
+
+    en = generator.generate_markdown_report(record, "Score", i18n=I18n(locale="en"))
+    zh = generator.generate_markdown_report(record, "评分", i18n=I18n(locale="zh"))
+
+    assert "Score breakdown" in en
+    assert "评分明细" in zh
 
 
 async def test_get_last_session_summary_none_without_history():

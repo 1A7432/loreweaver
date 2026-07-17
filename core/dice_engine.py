@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 import d20
 
-from core.coc_rules import DEFAULT_COC_RULE, RANK_LABEL_KEYS, result_check_base
+from core.coc_rules import DEFAULT_COC_RULE, DIFFICULTY_REGULAR, RANK_LABEL_KEYS, result_check_base
 from infra.i18n import I18n, get_i18n, t
 
 # Matches a leading dice token, e.g. "d10", "2d6", "1d20" (case-insensitive; caller
@@ -216,15 +216,33 @@ class DiceRoller:
         and keeps `dice_count == 1` on a plain d20 check, so crit detection still
         applies to the winning roll.
         """
-        first = self.roll_expression(expression, is_check=is_check)
-        second = self.roll_expression(expression, is_check=is_check)
-        return first if first.total >= second.total else second
+        kept, _candidates = self.roll_advantage_with_candidates(expression, is_check=is_check)
+        return kept
+
+    def roll_advantage_with_candidates(
+        self, expression: str, is_check: bool = False
+    ) -> tuple[DiceResult, list[DiceResult]]:
+        """Roll with advantage and return both the kept result and candidates."""
+        candidates = [
+            self.roll_expression(expression, is_check=is_check),
+            self.roll_expression(expression, is_check=is_check),
+        ]
+        return max(candidates, key=lambda item: item.total), candidates
 
     def roll_disadvantage(self, expression: str, is_check: bool = False) -> DiceResult:
         """Roll `expression` twice and keep the lower total (2d20kl1-equivalent)."""
-        first = self.roll_expression(expression, is_check=is_check)
-        second = self.roll_expression(expression, is_check=is_check)
-        return first if first.total <= second.total else second
+        kept, _candidates = self.roll_disadvantage_with_candidates(expression, is_check=is_check)
+        return kept
+
+    def roll_disadvantage_with_candidates(
+        self, expression: str, is_check: bool = False
+    ) -> tuple[DiceResult, list[DiceResult]]:
+        """Roll with disadvantage and return both the kept result and candidates."""
+        candidates = [
+            self.roll_expression(expression, is_check=is_check),
+            self.roll_expression(expression, is_check=is_check),
+        ]
+        return min(candidates, key=lambda item: item.total), candidates
 
     # -- COC7 --------------------------------------------------------------
     def _roll_bonus_penalty_d100(self, bonus: int = 0, penalty: int = 0) -> dict:
@@ -326,6 +344,8 @@ class DiceRoller:
             "extra_tens": bonus_penalty["extra_tens"],
             "final_tens": bonus_penalty["final_tens"],
             "critical_threshold": critical_threshold,
+            "difficulty": DIFFICULTY_REGULAR,
+            "rule": DEFAULT_COC_RULE,
         }
 
     # -- World of Darkness ---------------------------------------------------

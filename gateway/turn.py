@@ -60,6 +60,7 @@ _BRACKET_RE = re.compile(r"\[([-\d,\s]+)\]")
 # plain success label as a substring in some locales, so crit/fumble must be
 # checked before the plain success/fail codes to avoid a false match.
 _RANK_PROBE_ORDER = (4, 3, 2, -2, 1, -1)
+_SESSION_ACTION_MAX_CHARS = 1000
 
 
 async def run_turn(
@@ -188,6 +189,16 @@ async def run_turn(
         if not await _kp_enabled(services, ctx.chat_key):
             await publish_state(hub, services, ctx)
             return None
+        role = extra.get("role") if isinstance(extra, dict) else None
+        if ctx.platform != "companion" and role != "keeper":
+            character = await resolve_active_character(services, ctx)
+            char_name = character.name if character is not None else name
+            await services.battles.add_player_action(
+                ctx.chat_key,
+                ctx.uid(),
+                char_name,
+                text[:_SESSION_ACTION_MAX_CHARS],
+            )
         # A room with a mature/explicit KP skill enabled (Layer B.1's mature-mode
         # gate — see `gateway.ops.room_content_unfiltered`) opts the output censor
         # OUT entirely for that room, regardless of the configured `Censor`; every

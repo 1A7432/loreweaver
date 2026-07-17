@@ -227,6 +227,7 @@
   "kp_tools.know.session.report_file_note": "📄 Markdown report generated: {path}",
   "kp_tools.know.session.report_not_found": "❌ No report found for that timestamp.",
   "kp_tools.know.session.start_failed": "❌ Failed to start recording: {error}",
+  "kp_tools.know.session.already_active": "ℹ️ Session recording is already active: {name} ({session_id}). Existing data was preserved.",
   "kp_tools.know.session.started": "✅ Started recording the session; a battle report will be generated automatically at the end.",
   "kp_tools.know.session.started_named": "✅ Started recording session: {name}",
   "kp_tools.know.status.unknown": "unknown",

@@ -323,7 +323,29 @@ async def test_skill_check_records_a_real_skill_check_into_battle_report_when_se
     assert record.skill_checks[0]["char_name"] == "Vera"
 
 
-async def test_skill_check_does_not_record_or_crash_without_an_active_session():
+async def test_coc_bonus_check_records_raw_and_candidate_tens_metadata():
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    dice_tools = DiceTools(services)
+    await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)
+
+    seed_dice(23)
+    await dice_tools.skill_check(ctx, skill_name="侦查", bonus=1)
+
+    record = await services.battles.generator.get_current_session(ctx.chat_key)
+    assert record is not None
+    check = record.skill_checks[0]
+    assert check["bonus"] == 1
+    assert check["penalty"] == 0
+    assert check["raw_roll"] == check["roll"]
+    assert isinstance(check["base_roll"], int)
+    assert len(check["extra_tens"]) == 1
+    assert isinstance(check["final_tens"], int)
+    assert check["difficulty"] == 1
+    assert check["rule"] == 0
+
+
+async def test_skill_check_auto_starts_recording_without_an_active_session():
     services, ctx = _build()
     char_tools = CharacterTools(services)
     dice_tools = DiceTools(services)
@@ -333,7 +355,9 @@ async def test_skill_check_does_not_record_or_crash_without_an_active_session():
     result = await dice_tools.skill_check(ctx, skill_name="侦查")
 
     assert result
-    assert await services.battles.generator.get_current_session(ctx.chat_key) is None
+    record = await services.battles.generator.get_current_session(ctx.chat_key)
+    assert record is not None
+    assert len(record.skill_checks) == 1
 
 
 async def test_roll_dice_records_into_battle_report_when_session_active():
@@ -366,6 +390,26 @@ async def test_skill_check_dnd5e_uses_get_dnd_skill_modifier_against_dc():
     assert "Thorin" in result
     assert f"{expected.total}" in result
     assert "DC 10" in result
+
+
+async def test_dnd_skill_check_records_structured_advantage_and_critical_fields():
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    dice_tools = DiceTools(services)
+    await char_tools.create_character(ctx, name="Thorin", system="dnd5e", auto_generate=False)
+
+    seed_dice(19)
+    await dice_tools.skill_check(ctx, skill_name="运动", bonus=1, dc=10, proficient=True)
+
+    record = await services.battles.generator.get_current_session(ctx.chat_key)
+    assert record is not None
+    check = record.skill_checks[0]
+    assert check["target"] == 10
+    assert isinstance(check["success"], bool)
+    assert len(check["advantage_rolls"]) == 2
+    assert check["disadvantage_rolls"] == []
+    assert check["raw_roll"] in check["advantage_rolls"]
+    assert isinstance(check["is_critical"], bool)
 
 
 # ---------------------------------------------------------------------------
@@ -401,6 +445,47 @@ async def test_sanity_check_updates_san_deterministically():
     assert f"{expected_san}/99" in result
     sheet = await char_tools.get_character_sheet(ctx)
     assert f"SAN: {expected_san}/99" in sheet
+
+
+async def test_sanity_check_records_roll_rank_and_structured_loss():
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    dice_tools = DiceTools(services)
+    await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)
+
+    before = await services.characters.get_character(ctx.uid(), ctx.chat_key)
+    assert before is not None
+    seed_dice(5)
+    await dice_tools.sanity_check(ctx, success_loss="1", failure_loss="1d6")
+
+    record = await services.battles.generator.get_current_session(ctx.chat_key)
+    assert record is not None
+    check = record.skill_checks[0]
+    assert check["skill"] == "SAN"
+    assert check["target"] == before.attributes["SAN"]
+    assert check["success"] == (check["rank"] >= 1)
+    assert check["loss_expr"] in {"1", "1d6"}
+    assert check["san_before"] == before.attributes["SAN"]
+    assert check["san_after"] == check["san_before"] - check["loss"]
+
+
+async def test_npc_actor_is_recorded_by_name_and_excluded_from_player_stats():
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    dice_tools = DiceTools(services)
+    await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)
+
+    seed_dice(7)
+    await dice_tools.roll_dice(ctx, expression="1d20", actor="Cultist")
+    await dice_tools.skill_check(ctx, skill_name="侦查", actor="Cultist")
+
+    record = await services.battles.generator.get_current_session(ctx.chat_key)
+    assert record is not None
+    assert record.dice_rolls[0]["user_id"] == "__npc__"
+    assert record.dice_rolls[0]["char_name"] == "Cultist"
+    assert record.skill_checks[0]["user_id"] == "__npc__"
+    assert record.skill_checks[0]["char_name"] == "Cultist"
+    assert record.player_stats == {}
 
 
 async def test_sanity_check_fumble_drains_all_remaining_san_house_rule(monkeypatch):

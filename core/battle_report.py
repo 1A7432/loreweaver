@@ -15,24 +15,56 @@ import json
 import time
 from datetime import datetime
 
+from core.dice_engine import coc_rank_label
 from infra.i18n import I18n, get_i18n
 from infra.store import Store
 
+NPC_USER_ID = "__npc__"
+_KEY_EVENT_DEDUPE_SECONDS = 5 * 60
+_REPORT_RECAP_LIMIT = 10
+_REPORT_RECAP_TEXT_LIMIT = 200
+
 
 def _is_successful_level(success_level: str) -> bool:
-    """Best-effort success detection for a caller-supplied skill-check level label.
+    """Legacy fallback for records that predate structured check outcomes.
 
-    ``success_level`` is a free-text label produced upstream (e.g. by the
-    dice engine's localized level-name renderer), so its language isn't
-    fixed. This checks the localized "success" keyword for every shipped
-    locale — for zh-rendered labels it matches the legacy hardcoded
-    ``"成功" in success_level`` check byte-for-byte.
+    New records carry a canonical boolean and rank. Old stored records only
+    have a localized label, so compare those labels case-insensitively across
+    every shipped locale.
     """
     i18n = get_i18n()
+    normalized = str(success_level).casefold()
     return any(
-        i18n.with_locale(locale).t("battle.skill_check.success_keyword") in success_level
+        i18n.with_locale(locale).t("battle.skill_check.success_keyword").casefold() in normalized
         for locale in i18n.available_locales()
     )
+
+
+def _check_succeeded(check: dict) -> bool:
+    success = check.get("success")
+    if isinstance(success, bool):
+        return success
+    return _is_successful_level(str(check.get("success_level", "")))
+
+
+def _check_level_label(check: dict, i18n: I18n) -> str:
+    rank = check.get("rank")
+    if isinstance(rank, int):
+        return coc_rank_label(rank, i18n)
+    return str(check.get("success_level", ""))
+
+
+def _select_recap_events(events: list[dict], limit: int = _REPORT_RECAP_LIMIT) -> list[dict]:
+    if len(events) <= limit:
+        return list(events)
+    return [events[index * (len(events) - 1) // (limit - 1)] for index in range(limit)]
+
+
+def _render_recap_text(description: object, limit: int = _REPORT_RECAP_TEXT_LIMIT) -> str:
+    text = " ".join(str(description).split())
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 1].rstrip()}…"
 
 
 def _default_session_name(moment: datetime, i18n: I18n) -> str:
@@ -85,6 +117,9 @@ class SessionRecord:
             }
         )
 
+        if user_id == NPC_USER_ID:
+            return
+
         if user_id not in self.player_stats:
             self.player_stats[user_id] = {
                 "char_name": char_name,
@@ -104,20 +139,78 @@ class SessionRecord:
             stats["critical_failure"] += 1
 
     def add_skill_check(
-        self, user_id: str, char_name: str, skill: str, target: int, roll: int, success_level: str
+        self,
+        user_id: str,
+        char_name: str,
+        skill: str,
+        target: int,
+        roll: int,
+        success_level: str | None = None,
+        *,
+        success: bool | None = None,
+        rank: int | None = None,
+        is_critical: bool | None = None,
+        bonus: int | None = None,
+        penalty: int | None = None,
+        raw_roll: int | None = None,
+        base_roll: int | None = None,
+        extra_tens: list[int] | None = None,
+        final_tens: int | None = None,
+        difficulty: int | None = None,
+        rule: int | None = None,
+        advantage_rolls: list[int] | None = None,
+        disadvantage_rolls: list[int] | None = None,
+        loss_expr: str | None = None,
+        loss: int | None = None,
+        san_before: int | None = None,
+        san_after: int | None = None,
+        luck_adjusted: bool | None = None,
+        luck_spent: int | None = None,
     ) -> None:
-        """Record a skill check and update the roller's aggregate stats."""
-        self.skill_checks.append(
-            {
-                "user_id": user_id,
-                "char_name": char_name,
-                "skill": skill,
-                "target": target,
-                "roll": roll,
-                "success_level": success_level,
-                "timestamp": time.time(),
-            }
-        )
+        """Record a structured skill check and update the roller's aggregates.
+
+        ``success_level`` remains accepted only for legacy callers. New callers
+        store the canonical ``success``/``rank`` fields and localize the rank at
+        report-render time.
+        """
+        check = {
+            "user_id": user_id,
+            "char_name": char_name,
+            "skill": skill,
+            "target": target,
+            "roll": roll,
+            "timestamp": time.time(),
+        }
+        if success is not None:
+            check["success"] = success
+        if rank is not None:
+            check["rank"] = rank
+        if success is None and rank is None and success_level is not None:
+            check["success_level"] = success_level
+        optional_fields = {
+            "is_critical": is_critical,
+            "bonus": bonus,
+            "penalty": penalty,
+            "raw_roll": raw_roll,
+            "base_roll": base_roll,
+            "extra_tens": list(extra_tens) if extra_tens is not None else None,
+            "final_tens": final_tens,
+            "difficulty": difficulty,
+            "rule": rule,
+            "advantage_rolls": list(advantage_rolls) if advantage_rolls is not None else None,
+            "disadvantage_rolls": list(disadvantage_rolls) if disadvantage_rolls is not None else None,
+            "loss_expr": loss_expr,
+            "loss": loss,
+            "san_before": san_before,
+            "san_after": san_after,
+            "luck_adjusted": luck_adjusted,
+            "luck_spent": luck_spent,
+        }
+        check.update({key: value for key, value in optional_fields.items() if value is not None})
+        self.skill_checks.append(check)
+
+        if user_id == NPC_USER_ID:
+            return
 
         if user_id not in self.player_stats:
             self.player_stats[user_id] = {
@@ -130,12 +223,22 @@ class SessionRecord:
         stats["char_name"] = stats.get("char_name", char_name)
         stats["total_checks"] = stats.get("total_checks", 0) + 1
         stats["successful_checks"] = stats.get("successful_checks", 0)
-        if _is_successful_level(success_level):
+        if success if success is not None else _is_successful_level(success_level or ""):
             stats["successful_checks"] = stats.get("successful_checks", 0) + 1
+        if is_critical:
+            field = "critical_failure" if rank == -2 else "critical_success"
+            stats[field] = stats.get(field, 0) + 1
 
-    def add_key_event(self, description: str, event_type: str = "general") -> None:
-        """Record a key (plot-relevant) event."""
-        self.key_events.append({"description": description, "event_type": event_type, "timestamp": time.time()})
+    def add_key_event(self, description: str, event_type: str = "general") -> bool:
+        """Record a key event unless identical text was added in the last five minutes."""
+        now = time.time()
+        for event in reversed(self.key_events):
+            if now - float(event.get("timestamp", 0) or 0) > _KEY_EVENT_DEDUPE_SECONDS:
+                break
+            if event.get("description") == description:
+                return False
+        self.key_events.append({"description": description, "event_type": event_type, "timestamp": now})
+        return True
 
     def add_player_action(self, user_id: str, char_name: str, action: str) -> None:
         """Record a free-text player action."""
@@ -152,6 +255,49 @@ class SessionRecord:
     def end_session(self) -> None:
         """Mark the session as ended (stamps ``end_time``)."""
         self.end_time = time.time()
+
+    def rebuild_player_stats(self) -> None:
+        """Rebuild derived player aggregates from canonical recorded events."""
+        stats_by_user: dict[str, dict] = {}
+
+        def player(user_id: str, char_name: str) -> dict | None:
+            if not user_id or user_id == NPC_USER_ID:
+                return None
+            stats = stats_by_user.setdefault(user_id, {"char_name": char_name})
+            if not stats.get("char_name"):
+                stats["char_name"] = char_name
+            return stats
+
+        for roll in self.dice_rolls:
+            stats = player(str(roll.get("user_id", "")), str(roll.get("char_name", "")))
+            if stats is None:
+                continue
+            stats["total_rolls"] = stats.get("total_rolls", 0) + 1
+            stats.setdefault("critical_success", 0)
+            stats.setdefault("critical_failure", 0)
+            if roll.get("is_critical"):
+                field = "critical_failure" if roll.get("critical_type") == "failure" else "critical_success"
+                stats[field] += 1
+
+        for check in self.skill_checks:
+            stats = player(str(check.get("user_id", "")), str(check.get("char_name", "")))
+            if stats is None:
+                continue
+            stats["total_checks"] = stats.get("total_checks", 0) + 1
+            stats["successful_checks"] = stats.get("successful_checks", 0) + int(_check_succeeded(check))
+            if check.get("is_critical"):
+                field = "critical_failure" if check.get("rank") == -2 else "critical_success"
+                stats[field] = stats.get(field, 0) + 1
+
+        for user_id, actions in self.player_actions.items():
+            if not actions:
+                continue
+            latest = actions[-1]
+            stats = player(str(user_id), str(latest.get("char_name", "")))
+            if stats is not None:
+                stats["action_count"] = len(actions)
+
+        self.player_stats = stats_by_user
 
     def get_duration_minutes(self) -> int:
         """Return the session's duration in minutes (ongoing sessions use "now")."""
@@ -186,6 +332,10 @@ class SessionRecord:
         record.npc_interactions = data.get("npc_interactions", [])
         record.player_actions = data.get("player_actions", {})
         record.player_stats = data.get("player_stats", {})
+        if record.dice_rolls or record.skill_checks or record.player_actions:
+            record.rebuild_player_stats()
+        else:
+            record.player_stats.pop(NPC_USER_ID, None)
         return record
 
 
@@ -213,14 +363,22 @@ class BattleReportGenerator:
         session_name: str | None = None,
         auto_start: bool = False,
         i18n: I18n | None = None,
+        force_new: bool = False,
     ) -> str:
-        """Start recording a session for `chat_key`, returning the new `session_id`.
+        """Start recording a session, preserving an active record by default.
 
         `auto_start` distinguishes manual vs. automatic session starts (kept
-        for parity with the source; not otherwise used here).
+        for parity with the source; not otherwise used here). ``force_new``
+        archives an active record before creating a fresh one.
         """
         i18n = i18n or get_i18n()
-        session_id = f"session_{int(time.time())}"
+        current = await self.get_current_session(chat_key)
+        if current is not None and not force_new:
+            return current.session_id
+        if current is not None:
+            await self.end_session(chat_key)
+
+        session_id = f"session_{time.time_ns()}"
 
         if not session_name:
             session_name = _default_session_name(datetime.now(), i18n)
@@ -289,30 +447,8 @@ class BattleReportGenerator:
         if user_id not in record.player_stats:
             return 0, i18n.t("battle.score.not_participated")
 
-        stats = record.player_stats[user_id]
-        score = 60  # base score
-
-        # participation, via roll count
-        total_rolls = stats.get("total_rolls", 0)
-        if total_rolls > 0:
-            score += min(total_rolls * 2, 15)  # capped at 15
-
-        # skill-check success rate
-        total_checks = stats.get("total_checks", 0)
-        successful_checks = stats.get("successful_checks", 0)
-        if total_checks > 0:
-            success_rate = successful_checks / total_checks
-            score += int(success_rate * 15)  # capped at 15
-
-        # roleplay, via action count
-        action_count = stats.get("action_count", 0)
-        score += min(action_count * 1, 10)  # capped at 10
-
-        # bonus for critical successes
-        critical_success = stats.get("critical_success", 0)
-        score += critical_success * 2
-
-        score = max(0, min(100, score))
+        breakdown = self.calculate_player_score_breakdown(user_id, record)
+        score = breakdown["total"]
 
         if score >= 90:
             rating = i18n.t("battle.rating.legendary")
@@ -326,6 +462,37 @@ class BattleReportGenerator:
             rating = i18n.t("battle.rating.needs_effort")
 
         return score, rating
+
+    def calculate_player_score_breakdown(self, user_id: str, record: SessionRecord) -> dict[str, int]:
+        """Return the deterministic components used by ``calculate_player_score``."""
+        stats = record.player_stats.get(user_id, {})
+        base = 60
+
+        # participation, via roll count
+        total_rolls = stats.get("total_rolls", 0)
+        participation = min(total_rolls * 2, 15) if total_rolls > 0 else 0
+
+        # skill-check success rate
+        total_checks = stats.get("total_checks", 0)
+        successful_checks = stats.get("successful_checks", 0)
+        success = int((successful_checks / total_checks) * 15) if total_checks > 0 else 0
+
+        # roleplay, via action count
+        action_count = stats.get("action_count", 0)
+        actions = min(action_count, 10)
+
+        # bonus for critical successes
+        critical_success = stats.get("critical_success", 0)
+        critical = critical_success * 2
+        total = max(0, min(100, base + participation + success + actions + critical))
+        return {
+            "base": base,
+            "participation": participation,
+            "success": success,
+            "actions": actions,
+            "critical": critical,
+            "total": total,
+        }
 
     def generate_report_text(self, record: SessionRecord, session_name: str, i18n: I18n | None = None) -> str:
         """Render the plain-text battle report."""
@@ -361,9 +528,11 @@ class BattleReportGenerator:
         for user_id, stats in record.player_stats.items():
             char_name = stats.get("char_name", i18n.t("battle.player.unknown_character"))
             score, rating = self.calculate_player_score(user_id, record, i18n=i18n)
+            breakdown = self.calculate_player_score_breakdown(user_id, record)
 
             lines.append(i18n.t("battle.report.player_header", name=char_name))
             lines.append(i18n.t("battle.report.total_score_line", score=score, rating=rating))
+            lines.append(i18n.t("battle.report.score_breakdown_line", **breakdown))
             lines.append(i18n.t("battle.report.total_rolls_line", count=stats.get("total_rolls", 0)))
             lines.append(
                 i18n.t(
@@ -417,10 +586,15 @@ class BattleReportGenerator:
             lines.append("=" * 50)
             lines.append("")
 
-            for i, event in enumerate(record.key_events[-10:], 1):  # last 10 only
+            for i, event in enumerate(_select_recap_events(record.key_events), 1):
                 timestamp = datetime.fromtimestamp(event["timestamp"]).strftime("%H:%M:%S")
                 lines.append(
-                    i18n.t("battle.report.key_event_item", index=i, time=timestamp, description=event["description"])
+                    i18n.t(
+                        "battle.report.key_event_item",
+                        index=i,
+                        time=timestamp,
+                        description=_render_recap_text(event["description"]),
+                    )
                 )
             lines.append("")
 
@@ -492,10 +666,12 @@ class BattleReportGenerator:
         for user_id, stats in record.player_stats.items():
             char_name = stats.get("char_name", i18n.t("battle.player.unknown_character"))
             score, rating = self.calculate_player_score(user_id, record, i18n=i18n)
+            breakdown = self.calculate_player_score_breakdown(user_id, record)
 
             lines.append(f"### {i18n.t('battle.report.player_header', name=char_name)}")
             lines.append("")
             lines.append(i18n.t("battle.report.md.total_score_line", score=score, rating=rating))
+            lines.append(i18n.t("battle.report.md.score_breakdown_line", **breakdown))
             lines.append("")
             lines.append(i18n.t("battle.report.md.stats_table_header"))
             lines.append("|--------|------|")
@@ -550,11 +726,14 @@ class BattleReportGenerator:
             lines.append(f"## {i18n.t('battle.report.key_events_heading')}")
             lines.append("")
 
-            for i, event in enumerate(record.key_events[-10:], 1):
+            for i, event in enumerate(_select_recap_events(record.key_events), 1):
                 timestamp = datetime.fromtimestamp(event["timestamp"]).strftime("%H:%M:%S")
                 lines.append(
                     i18n.t(
-                        "battle.report.md.key_event_item", index=i, time=timestamp, description=event["description"]
+                        "battle.report.md.key_event_item",
+                        index=i,
+                        time=timestamp,
+                        description=_render_recap_text(event["description"]),
                     )
                 )
             lines.append("")
@@ -661,7 +840,7 @@ class BattleReportGenerator:
                         skill=check.get("skill", ""),
                         target=check.get("target", ""),
                         roll=check.get("roll", ""),
-                        success_level=check.get("success_level", ""),
+                        success_level=_check_level_label(check, i18n),
                     ),
                 )
             )
@@ -773,9 +952,24 @@ class BattleReportManager:
             return True
         return False
 
-    async def start_session(self, chat_key: str, session_name: str | None = None, i18n: I18n | None = None) -> str:
+    async def start_session(
+        self,
+        chat_key: str,
+        session_name: str | None = None,
+        i18n: I18n | None = None,
+        force_new: bool = False,
+    ) -> str:
         """Start recording a session for `chat_key`."""
-        return await self.generator.start_session(chat_key, session_name, i18n=i18n)
+        return await self.generator.start_session(chat_key, session_name, i18n=i18n, force_new=force_new)
+
+    async def _session_for_write(self, chat_key: str) -> SessionRecord:
+        record = await self.generator.get_current_session(chat_key)
+        if record is None:
+            await self.generator.start_session(chat_key, auto_start=True)
+            record = await self.generator.get_current_session(chat_key)
+        if record is None:  # defensive: a successful start must persist a record
+            raise RuntimeError("session_record_not_available")
+        return record
 
     async def add_dice_roll(
         self,
@@ -787,34 +981,38 @@ class BattleReportManager:
         is_critical: bool = False,
         critical_type: str = "",
     ) -> None:
-        """Record a dice roll against the in-progress session, if any."""
-        record = await self.generator.get_current_session(chat_key)
-        if record:
-            record.add_dice_roll(user_id, char_name, expression, result, is_critical, critical_type)
-            await self.generator.save_session(chat_key, record)
+        """Record a dice roll, lazily starting the session when needed."""
+        record = await self._session_for_write(chat_key)
+        record.add_dice_roll(user_id, char_name, expression, result, is_critical, critical_type)
+        await self.generator.save_session(chat_key, record)
 
     async def add_skill_check(
-        self, chat_key: str, user_id: str, char_name: str, skill: str, target: int, roll: int, success_level: str
+        self,
+        chat_key: str,
+        user_id: str,
+        char_name: str,
+        skill: str,
+        target: int,
+        roll: int,
+        success_level: str | None = None,
+        **details: object,
     ) -> None:
-        """Record a skill check against the in-progress session, if any."""
-        record = await self.generator.get_current_session(chat_key)
-        if record:
-            record.add_skill_check(user_id, char_name, skill, target, roll, success_level)
-            await self.generator.save_session(chat_key, record)
+        """Record a structured skill check, lazily starting the session."""
+        record = await self._session_for_write(chat_key)
+        record.add_skill_check(user_id, char_name, skill, target, roll, success_level, **details)
+        await self.generator.save_session(chat_key, record)
 
     async def add_key_event(self, chat_key: str, description: str, event_type: str = "general") -> None:
-        """Record a key event against the in-progress session, if any."""
-        record = await self.generator.get_current_session(chat_key)
-        if record:
-            record.add_key_event(description, event_type)
+        """Record a key event, lazily starting the session when needed."""
+        record = await self._session_for_write(chat_key)
+        if record.add_key_event(description, event_type):
             await self.generator.save_session(chat_key, record)
 
     async def add_player_action(self, chat_key: str, user_id: str, char_name: str, action: str) -> None:
-        """Record a player action against the in-progress session, if any."""
-        record = await self.generator.get_current_session(chat_key)
-        if record:
-            record.add_player_action(user_id, char_name, action)
-            await self.generator.save_session(chat_key, record)
+        """Record a player action, lazily starting the session when needed."""
+        record = await self._session_for_write(chat_key)
+        record.add_player_action(user_id, char_name, action)
+        await self.generator.save_session(chat_key, record)
 
     async def generate_battle_report(
         self, chat_key: str, i18n: I18n | None = None

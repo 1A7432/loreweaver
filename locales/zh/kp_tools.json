@@ -227,6 +227,7 @@
   "kp_tools.know.session.report_file_note": "📄 Markdown 战报已生成：{path}",
   "kp_tools.know.session.report_not_found": "❌ 未找到指定的战报",
   "kp_tools.know.session.start_failed": "❌ 开始记录失败：{error}",
+  "kp_tools.know.session.already_active": "ℹ️ 跑团会话已在记录中：{name}（{session_id}）。现有数据已保留。",
   "kp_tools.know.session.started": "✅ 已开始记录跑团会话，结束时将自动生成战报",
   "kp_tools.know.session.started_named": "✅ 已开始记录跑团会话：{name}",
   "kp_tools.know.status.unknown": "未知",
