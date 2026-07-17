@@ -121,6 +121,8 @@
   "kp_tools.initiative.failed": "❌ 先攻管理失败: {error}",
   "kp_tools.initiative.list_header": "⚔️ 先攻顺序:",
   "kp_tools.initiative.list_item": "{index}. {name}: {initiative}",
+  "kp_tools.initiative.status": "第 {round} 轮 · 当前行动：{current}",
+  "kp_tools.initiative.next_already_committed": "➡️ 本回合先攻已推进一次；重复的 next 已被抑制。",
   "kp_tools.initiative.next_turn": "➡️ 当前回合: {name}",
   "kp_tools.initiative.unknown_action": "❌ 未知操作: {action}",
   "kp_tools.map.draw.done": "✅ SVG 地图已发送：{name}（{hash}）",

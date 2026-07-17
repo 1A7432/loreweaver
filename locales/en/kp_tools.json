@@ -121,6 +121,8 @@
   "kp_tools.initiative.failed": "❌ Initiative management failed: {error}",
   "kp_tools.initiative.list_header": "⚔️ Initiative Order:",
   "kp_tools.initiative.list_item": "{index}. {name}: {initiative}",
+  "kp_tools.initiative.status": "Round {round} · Current: {current}",
+  "kp_tools.initiative.next_already_committed": "➡️ Initiative already advanced once this turn; duplicate next suppressed.",
   "kp_tools.initiative.next_turn": "➡️ Current turn: {name}",
   "kp_tools.initiative.unknown_action": "❌ Unknown action: {action}",
   "kp_tools.map.draw.done": "✅ SVG map sent: {name} ({hash})",

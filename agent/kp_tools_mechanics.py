@@ -1230,7 +1230,6 @@ class InitiativeTools:
             init_list = json.loads(init_data) if init_data else []
             meta_data = await self.services.store.get(user_key="", store_key=meta_key)
             parsed_meta = json.loads(meta_data) if meta_data else {}
-            meta_exists = isinstance(parsed_meta, dict) and bool(parsed_meta)
             meta = parsed_meta if isinstance(parsed_meta, dict) else {}
             round_number = max(1, int(meta.get("round", 1)))
             turns_in_round = max(0, int(meta.get("turns", 0)))
@@ -1262,14 +1261,25 @@ class InitiativeTools:
                     store_key=meta_key,
                     value=json.dumps({"round": round_number, "turns": turns_in_round}),
                 )
-                if starting_combat or not meta_exists:
-                    await self.services.battles.add_combat_round(chat_key, round_number)
+                await self.services.battles.set_combat_state(
+                    chat_key,
+                    round_number,
+                    str(init_list[0]["name"]),
+                    turns_in_round,
+                )
                 return i18n.t("kp_tools.initiative.added", name=name, initiative=initiative)
 
-            if action == "list":
+            if action in {"list", "show"}:
                 if not init_list:
                     return i18n.t("kp_tools.initiative.empty")
-                lines = [i18n.t("kp_tools.initiative.list_header")]
+                lines = [
+                    i18n.t("kp_tools.initiative.list_header"),
+                    i18n.t(
+                        "kp_tools.initiative.status",
+                        round=round_number,
+                        current=init_list[0]["name"],
+                    ),
+                ]
                 for index, entry in enumerate(init_list, 1):
                     lines.append(
                         i18n.t(
@@ -1287,28 +1297,49 @@ class InitiativeTools:
                 return i18n.t("kp_tools.initiative.cleared")
 
             if action == "next":
-                if not init_list:
-                    return i18n.t("kp_tools.initiative.empty")
-                if not meta_exists:
-                    await self.services.battles.add_combat_round(chat_key, round_number)
-                current = init_list.pop(0)
-                init_list.append(current)
-                turns_in_round += 1
-                transitioned = turns_in_round >= len(init_list)
-                if transitioned:
-                    round_number += 1
-                    turns_in_round = 0
-                await self.services.store.set(
-                    user_key="", store_key=store_key, value=json.dumps(init_list, ensure_ascii=False)
-                )
-                await self.services.store.set(
-                    user_key="",
-                    store_key=meta_key,
-                    value=json.dumps({"round": round_number, "turns": turns_in_round}),
-                )
-                if transitioned:
-                    await self.services.battles.add_combat_round(chat_key, round_number)
-                return i18n.t("kp_tools.initiative.next_turn", name=current["name"])
+                await self.services.battles.ensure_session_started(chat_key, i18n=i18n)
+                session_key = f"session_record.{chat_key}.current"
+                for _attempt in range(3):
+                    current_init_data = await self.services.store.get(user_key="", store_key=store_key)
+                    current_meta_data = await self.services.store.get(user_key="", store_key=meta_key)
+                    current_session_data = await self.services.store.get(user_key="", store_key=session_key)
+                    current_list = json.loads(current_init_data) if current_init_data else []
+                    current_meta = json.loads(current_meta_data) if current_meta_data else {}
+                    if not current_list or not current_session_data:
+                        return i18n.t("kp_tools.initiative.empty")
+
+                    next_round = max(1, int(current_meta.get("round", 1)))
+                    next_turn = max(0, int(current_meta.get("turns", 0))) + 1
+                    finished = current_list.pop(0)
+                    current_list.append(finished)
+                    if next_turn >= len(current_list):
+                        next_round += 1
+                        next_turn = 0
+                    next_name = str(current_list[0]["name"])
+                    next_list_data = json.dumps(current_list, ensure_ascii=False)
+                    next_meta_data = json.dumps(
+                        {"round": next_round, "turns": next_turn, "current": next_name},
+                        ensure_ascii=False,
+                    )
+                    session = SessionRecord.from_dict(json.loads(current_session_data))
+                    session.set_combat_state(next_round, next_name, next_turn)
+                    next_session_data = json.dumps(session.to_dict(), ensure_ascii=False)
+                    committed = await self.services.store.set_rows_if_values(
+                        expected=[
+                            ("", store_key, current_init_data),
+                            ("", meta_key, current_meta_data),
+                            ("", session_key, current_session_data),
+                        ],
+                        updates=[
+                            ("", store_key, next_list_data),
+                            ("", meta_key, next_meta_data),
+                            ("", session_key, next_session_data),
+                        ],
+                    )
+                    if not committed:
+                        continue
+                    return i18n.t("kp_tools.initiative.next_turn", name=next_name)
+                raise RuntimeError("initiative_state_changed")
 
             return i18n.t("kp_tools.initiative.unknown_action", action=action)
         except Exception as exc:

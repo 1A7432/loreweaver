@@ -183,6 +183,50 @@ async def test_both_dialects_use_same_roller_for_same_seed_and_expression():
     assert _total(en_roll) == _total(zh_roll)
 
 
+async def test_initiative_subcommands_share_tracker_and_next_never_rolls():
+    services = _services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:init-command", user_id="u1", locale="en")
+
+    await router.dispatch(ctx, ".dnd Kael")
+    from agent.kp_tools_mechanics import InitiativeTools
+
+    tracker = InitiativeTools(services)
+    await tracker.initiative_tracker(ctx, action="add", name="Goblin", initiative=16)
+    await tracker.initiative_tracker(ctx, action="add", name="Kael", initiative=12)
+    await tracker.initiative_tracker(ctx, action="add", name="Mage", initiative=8)
+
+    shown = await router.dispatch_reply(ctx, ".init")
+    assert shown is not None
+    assert shown.events == ()
+    assert "Goblin" in shown.text
+    assert "round 1" in shown.text.casefold()
+
+    advanced = await router.dispatch_reply(ctx, ".init next")
+    assert advanced is not None
+    assert advanced.events == ()
+    assert "Kael" in advanced.text
+    order = json.loads(
+        await services.store.get(user_key="", store_key=f"initiative.{ctx.chat_key}") or "[]"
+    )
+    assert [entry["name"] for entry in order] == ["Kael", "Mage", "Goblin"]
+
+    rolled = await router.dispatch_reply(ctx, ".init 1d20")
+    assert rolled is not None
+    assert len(rolled.events) == 1
+    order_after_roll = json.loads(
+        await services.store.get(user_key="", store_key=f"initiative.{ctx.chat_key}") or "[]"
+    )
+    assert order_after_roll == order
+
+    cleared = await router.dispatch_reply(ctx, ".init clear")
+    assert cleared is not None
+    assert cleared.events == ()
+    assert json.loads(
+        await services.store.get(user_key="", store_key=f"initiative.{ctx.chat_key}") or "[]"
+    ) == []
+
+
 async def test_report_command_exports_summary_without_keeper_permission():
     services = _services()
     router = CommandRouter(services)

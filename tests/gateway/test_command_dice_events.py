@@ -53,7 +53,7 @@ async def test_deterministic_commands_publish_their_actual_rolls_to_the_hub() ->
         (".check spot hidden", {"expr", "rolls", "total", "target", "rank", "success"}),
         (".sanity 0/1d4", {"expr", "total", "target", "rank", "loss", "remaining"}),
         (".opposed spot, listen", {"expr", "total", "target", "rank", "left", "right", "winner"}),
-        (".init", {"expr", "rolls", "total", "modifier", "name"}),
+        (".init roll", {"expr", "rolls", "total", "modifier", "name"}),
     )
     for index, (command, expected_fields) in enumerate(cases):
         origin.events.clear()

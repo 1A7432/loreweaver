@@ -271,6 +271,14 @@ class SessionRecord:
         )
         return True
 
+    def set_combat_state(self, round_number: int, current: str, turn: int) -> None:
+        """Persist the committed initiative pointer on the current combat round."""
+        normalized_round = max(1, int(round_number))
+        if not self.combat_rounds or self.combat_rounds[-1].get("round") != normalized_round:
+            self.add_combat_round(normalized_round)
+        self.combat_rounds[-1]["current"] = current
+        self.combat_rounds[-1]["turn"] = max(0, int(turn))
+
     def end_session(self) -> None:
         """Mark the session as ended (stamps ``end_time``)."""
         self.end_time = time.time()
@@ -1038,6 +1046,12 @@ class BattleReportManager:
         record = await self._session_for_write(chat_key)
         if record.add_combat_round(round_number, notes):
             await self.generator.save_session(chat_key, record)
+
+    async def set_combat_state(self, chat_key: str, round_number: int, current: str, turn: int) -> None:
+        """Record the round and initiative pointer from one committed tracker state."""
+        record = await self._session_for_write(chat_key)
+        record.set_combat_state(round_number, current, turn)
+        await self.generator.save_session(chat_key, record)
 
     async def generate_battle_report(
         self, chat_key: str, i18n: I18n | None = None

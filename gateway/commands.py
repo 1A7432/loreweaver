@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from agent.context import AgentCtx
+from agent.kp_tools_mechanics import InitiativeTools
 from agent.services import Services
 from core.char_from_persona import build_sheet_from_description
 from core.character_manager import CharacterSheet, get_hit_points, recompute_dnd_derived, set_hit_points
@@ -610,6 +611,12 @@ class CommandRouter:
         return ctx.i18n.t("commands.growth.result", name=canonical, roll=roll, gain=gain, value=current + gain)
 
     async def cmd_initiative(self, ctx: CommandCtx) -> str:
+        action = ctx.args.strip().casefold()
+        if action in {"", "show", "list"}:
+            return await InitiativeTools(ctx.services).initiative_tracker(ctx.raw_ctx, action="list")
+        if action in {"next", "clear"}:
+            return await InitiativeTools(ctx.services).initiative_tracker(ctx.raw_ctx, action=action)
+
         character = await ctx.services.characters.get_character(ctx.user_id, ctx.chat_key)
         if character.system == "DnD5e":
             modifier = ctx.services.characters.get_dnd_ability_modifier(character, "DEX")

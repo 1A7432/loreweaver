@@ -35,6 +35,7 @@ from agent.services import Services
 from agent.session_recap import maybe_refresh_session_recap
 from agent.tools import Toolset
 from core.skills import unlocked_tools_for
+from infra.i18n import t
 from infra.llm import ChatResult, Usage
 
 logger = logging.getLogger(__name__)
@@ -666,7 +667,19 @@ async def _dispatch_and_record(
     """
     conversation.append(_assistant_tool_call_message(result))
     for call in result.tool_calls:
-        tool_result = await toolset.dispatch(call.name, ctx, call.arguments, unlocked)
+        duplicate_initiative_next = (
+            call.name == "initiative_tracker"
+            and (call.arguments or {}).get("action") == "next"
+            and any(
+                entry.get("name") == "initiative_tracker"
+                and (entry.get("arguments") or {}).get("action") == "next"
+                for entry in tool_trace
+            )
+        )
+        if duplicate_initiative_next:
+            tool_result = t("kp_tools.initiative.next_already_committed", locale=ctx.locale)
+        else:
+            tool_result = await toolset.dispatch(call.name, ctx, call.arguments, unlocked)
         trace_entry = {
             "name": call.name,
             "arguments": call.arguments,

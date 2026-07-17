@@ -13,6 +13,7 @@ from copy import deepcopy
 import pytest
 
 from agent.context import AgentCtx
+from agent.kp_tools_mechanics import InitiativeTools
 from agent.loop import (
     KPTurnResult,
     _dice_rolled,
@@ -132,6 +133,35 @@ async def test_run_kp_turn_dispatches_tool_call_and_returns_the_final_narration(
         "keeper_only": False,
         "result": "1926-03-15 14:00",
     }
+
+
+async def test_run_kp_turn_commits_at_most_one_initiative_next_per_player_turn():
+    llm = FakeLLM(
+        script=[
+            assistant_tools(
+                tool_call("initiative_tracker", action="next"),
+                tool_call("initiative_tracker", action="next"),
+            ),
+            assistant_text("Bob acts next."),
+        ]
+    )
+    services = _services(llm)
+    ctx = _ctx("chat-init-idempotent")
+    tracker = InitiativeTools(services)
+    await tracker.initiative_tracker(ctx, action="add", name="Alice", initiative=20)
+    await tracker.initiative_tracker(ctx, action="add", name="Bob", initiative=15)
+    await tracker.initiative_tracker(ctx, action="add", name="Cora", initiative=10)
+
+    result = await run_kp_turn(ctx, services, Toolset(tracker), "Advance initiative once.")
+
+    order = json.loads(
+        await services.store.get(user_key="", store_key=f"initiative.{ctx.chat_key}") or "[]"
+    )
+    assert [entry["name"] for entry in order] == ["Bob", "Cora", "Alice"]
+    assert [entry["result"] for entry in result.tool_trace if entry["name"] == "initiative_tracker"] == [
+        services.i18n.with_locale("en").t("kp_tools.initiative.next_turn", name="Bob"),
+        services.i18n.with_locale("en").t("kp_tools.initiative.next_already_committed"),
+    ]
 
 
 async def test_tool_result_is_fed_back_as_a_role_tool_message_with_matching_call_id():

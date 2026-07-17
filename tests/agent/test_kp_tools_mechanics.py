@@ -1034,7 +1034,7 @@ async def test_initiative_tracker_add_list_and_next():
     assert listed.index("Bob") < listed.index("Alice")
 
     next_result = await initiative_tools.initiative_tracker(ctx, action="next")
-    assert "Bob" in next_result
+    assert "Alice" in next_result
 
     cleared = await initiative_tools.initiative_tracker(ctx, action="clear")
     assert "✅" in cleared
