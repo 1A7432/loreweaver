@@ -112,6 +112,23 @@ async def test_build_system_prompt_is_localized_per_ctx_locale():
     assert SENTINEL_SECRET in prompt
 
 
+async def test_build_system_prompt_filters_party_to_active_character_system():
+    services = _services("en")
+    chat_key = "chat-mixed-system-prompt"
+    ctx = AgentCtx(chat_key=chat_key, user_id="dnd-player", locale="en")
+    coc = services.characters.generate_character("coc7", "Nora Vance")
+    dnd = services.characters.generate_character("dnd5e", "Kael Thorn")
+    await services.characters.save_character("coc-player", chat_key, coc)
+    await services.characters.save_character(ctx.user_id, chat_key, dnd)
+
+    prompt = await build_system_prompt(ctx, services)
+
+    assert "Kael Thorn" in prompt
+    assert "Nora Vance" not in prompt
+    roster = await services.characters.get_party_roster(chat_key)
+    assert {member["name"] for member in roster} == {"Nora Vance", "Kael Thorn"}
+
+
 async def test_build_system_prompt_survives_a_brand_new_chat_with_no_seeded_state():
     services = _services("en")
     ctx = AgentCtx(chat_key="chat-prompt-builder-empty", user_id="u1", locale="en")

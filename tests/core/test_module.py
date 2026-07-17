@@ -21,6 +21,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from core.battle_report import BattleReportManager
 from core.module_initializer import ModuleInitializer
 from infra.config import LLMSettings, Settings
 from infra.i18n import I18n
@@ -139,13 +140,16 @@ class _FakeVectorDb:
         return [c for c in self._chunks if c.get("chat_key") == chat_key][:limit]
 
 
-def _make_initializer(*, llm=None, vector_db=None, store=None, settings=None, locale="en") -> ModuleInitializer:
+def _make_initializer(
+    *, llm=None, vector_db=None, store=None, settings=None, locale="en", battles=None
+) -> ModuleInitializer:
     return ModuleInitializer(
         store=store,
         vector_db=vector_db,
         llm=llm,
         settings=settings or Settings(),
         i18n=I18n(locale=locale),
+        battles=battles,
     )
 
 
@@ -283,6 +287,27 @@ async def test_initialize_replaces_stale_catalog_and_resets_game_clock():
     assert await store.get(user_key="", store_key="module_catalog.chat-state") == keeper_raw
     assert "OLD MODULE" not in keeper_raw
     assert await store.get(user_key="", store_key="game_clock.chat-state") is None
+
+
+async def test_initialize_archives_the_running_session_before_switching_module():
+    store = Store()
+    battles = BattleReportManager(store)
+    chat_key = "chat-module-switch"
+    session_id = await battles.start_session(chat_key, "Old Module")
+    await battles.add_key_event(chat_key, "Event from the old module")
+    await store.set(user_key="", store_key=f"module_fulltext.{chat_key}", value=MODULE_EN_TEXT)
+    initializer = _make_initializer(
+        llm=FakeLLM(script=[assistant_text(_scripted_analysis_json())]),
+        store=store,
+        battles=battles,
+    )
+
+    await initializer.initialize(chat_key)
+
+    assert await battles.generator.get_current_session(chat_key) is None
+    archived_raw = await store.get(store_key=f"session_history.{chat_key}.{session_id}")
+    assert archived_raw is not None
+    assert json.loads(archived_raw)["key_events"][0]["description"] == "Event from the old module"
 
 
 # ---------------------------------------------------------------------------

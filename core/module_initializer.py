@@ -39,6 +39,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from core.battle_report import BattleReportManager
 from infra.config import Settings
 from infra.i18n import I18n
 from infra.llm import LLMClient
@@ -197,7 +198,15 @@ class ModuleInitializer:
     (spoiler-free subset) — see the module docstring for the full contract.
     """
 
-    def __init__(self, store: Store, vector_db: Any, llm: LLMClient, settings: Settings, i18n: I18n) -> None:
+    def __init__(
+        self,
+        store: Store,
+        vector_db: Any,
+        llm: LLMClient,
+        settings: Settings,
+        i18n: I18n,
+        battles: BattleReportManager | None = None,
+    ) -> None:
         self.store = store
         # Duck-typed: only `list_all_chunks(chat_key, limit=...)` is used
         # (shaped like `core.document_manager.VectorDatabaseManager`), and
@@ -207,6 +216,7 @@ class ModuleInitializer:
         self.llm = llm
         self.settings = settings
         self.i18n = i18n
+        self.battles = battles
 
     async def initialize(self, chat_key: str, progress: ProgressCb = None) -> None:
         """Run (or skip, if already running) full-module analysis for `chat_key`.
@@ -236,6 +246,12 @@ class ModuleInitializer:
                 await self.store.set(user_key="", store_key=error_key, value="module text unavailable")
                 await self.store.set(user_key="", store_key=status_key, value="failed")
                 return
+
+            # A module owns one recording boundary. Archive the prior module's active session
+            # before any new-module state is published; the next recorded action lazily starts a
+            # clean session through BattleReportManager's normal semantics.
+            if self.battles is not None:
+                await self.battles.generator.end_session(chat_key)
 
             # An uploaded module owns its own timeline. Clear the prior module's
             # clock as soon as the new source text is confirmed, before the

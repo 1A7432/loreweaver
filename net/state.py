@@ -35,11 +35,12 @@ _UNSET_CHARACTER_NAME = "default"
 
 async def build_room_state(services: Services, ctx: AgentCtx) -> dict[str, Any]:
     """Assemble one `state` frame's payload (including `type`) for `ctx`'s room."""
-    party = await _party(services, ctx.chat_key)
+    sheet = await resolve_active_character(services, ctx)
+    active_system = sheet.system if sheet is not None else None
+    party = await _party(services, ctx.chat_key, active_system=active_system)
     initiative = await _initiative(services, ctx.chat_key)
     initiative_by_name = {entry["name"]: entry["value"] for entry in initiative}
 
-    sheet = await resolve_active_character(services, ctx)
     active_name = sheet.name if sheet is not None else ""
     for member in party:
         member["active"] = bool(active_name) and member["name"] == active_name
@@ -125,7 +126,12 @@ async def _character_payload(services: Services, chat_key: str, sheet: Character
     return payload
 
 
-async def _party(services: Services, chat_key: str) -> list[dict[str, Any]]:
+async def _party(
+    services: Services,
+    chat_key: str,
+    *,
+    active_system: str | None = None,
+) -> list[dict[str, Any]]:
     try:
         roster = await services.characters.get_party_roster(chat_key)
     except Exception:
@@ -133,6 +139,8 @@ async def _party(services: Services, chat_key: str) -> list[dict[str, Any]]:
     companion_names = await _companion_sheet_names(services, chat_key)
     members: list[dict[str, Any]] = []
     for member in roster:
+        if active_system is not None and member.get("system") != active_system:
+            continue
         payload = {
             "name": member.get("name", ""),
             "online": True,

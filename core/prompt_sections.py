@@ -159,7 +159,15 @@ async def inject_game_state_prompt(ctx: Any, character_manager: Any, store: Stor
 
         # -- party roster (fall back to the single active character) -----
         try:
+            character = await character_manager.get_character(user_id, chat_key)
+            active_system = (
+                character.system
+                if character and character.name != "default"
+                else None
+            )
             roster = await character_manager.get_party_roster(chat_key)
+            if active_system is not None:
+                roster = [member for member in roster if member.get("system") == active_system]
             if roster:
                 lines.append("")
                 lines.append(i18n.t("prompt.game_state.roster_header"))
@@ -195,7 +203,6 @@ async def inject_game_state_prompt(ctx: Any, character_manager: Any, store: Stor
                             )
                         )
             else:
-                character = await character_manager.get_character(user_id, chat_key)
                 if character and character.name != "default":
                     attrs = character.attributes
                     if character.system == "CoC":

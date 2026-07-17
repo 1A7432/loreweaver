@@ -121,7 +121,7 @@ def build_services(
     battles = BattleReportManager(store)
     vector_store = VectorStore(embeddings.dim, path=vector_path)
     vector_db = VectorDatabaseManager(embeddings, vector_store, i18n, llm=llm)
-    module_init = ModuleInitializer(store, vector_db, llm, settings, i18n)
+    module_init = ModuleInitializer(store, vector_db, llm, settings, i18n, battles=battles)
     # WorldbookManager talks the raw `infra.vector.VectorStore` upsert/search/delete
     # API (its own "worldbook" collection), so it takes `vector_store` directly --
     # not the higher-level `VectorDatabaseManager`, which exposes a different surface.

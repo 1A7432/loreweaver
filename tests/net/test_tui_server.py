@@ -944,6 +944,22 @@ async def test_build_room_state_reports_character_party_and_clock():
     assert state["clock"]["time"] == "Night 1, 22:00"
 
 
+async def test_build_room_state_filters_party_to_active_character_system():
+    services = _services()
+    ctx = _room_ctx("mixed-system-state", user_id="dnd-player")
+    coc = services.characters.generate_character("coc7", "Nora Vance")
+    dnd = services.characters.generate_character("dnd5e", "Kael Thorn")
+    await services.characters.save_character("coc-player", ctx.chat_key, coc)
+    await services.characters.save_character(ctx.user_id, ctx.chat_key, dnd)
+
+    state = await build_room_state(services, ctx)
+
+    assert state["character"]["system"] == "DnD5e"
+    assert [member["name"] for member in state["party"]] == ["Kael Thorn"]
+    roster = await services.characters.get_party_roster(ctx.chat_key)
+    assert {member["name"] for member in roster} == {"Nora Vance", "Kael Thorn"}
+
+
 # ---------------------------------------------------------------------------
 # BUG B: history replay on join -- a joining/reconnecting player sees the
 # room's recent narrative instead of an empty log.
