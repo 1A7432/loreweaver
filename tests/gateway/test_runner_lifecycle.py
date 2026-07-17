@@ -95,12 +95,18 @@ async def test_start_isolates_failed_adapters_and_cleans_partial_state(caplog, t
     broken = LifecycleAdapter("broken", connect_result=RuntimeError("credential=secret"))
     runner = _runner([healthy, unavailable, broken], str(tmp_path))
 
-    await runner.start()
+    failed = await runner.start()
 
+    assert failed == ["unavailable", "broken"]
+    # Failed adapters are dropped so stop() cannot disconnect them a second time.
+    assert runner.adapters == [healthy]
     assert [item.connect_calls for item in (healthy, unavailable, broken)] == [1, 1, 1]
     assert [item.disconnect_calls for item in (healthy, unavailable, broken)] == [0, 1, 1]
     assert healthy._message_handler == runner.on_inbound
     assert "credential=secret" not in caplog.text
+
+    await runner.stop()
+    assert [item.disconnect_calls for item in (healthy, unavailable, broken)] == [1, 1, 1]
     runner.services.store.close()
 
 

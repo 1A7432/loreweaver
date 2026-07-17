@@ -1,3 +1,4 @@
 {
-  "telegram.error.missing_transport": "Telegram transport is not configured."
+  "telegram.error.missing_transport": "Telegram transport is not configured.",
+  "telegram.private_reply_blocked": "I couldn't send you a private message — open a private chat with this bot (press Start) and run the command again."
 }

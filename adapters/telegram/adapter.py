@@ -20,6 +20,7 @@ from gateway.chat import (
     ChatEmbed,
     ChatInteraction,
     ChatMessage,
+    split_text,
 )
 from gateway.events import InboundMessage, SendResult
 from gateway.hub import Event
@@ -46,6 +47,9 @@ _MESSAGE_KEYS = ("message", "edited_message", "channel_post", "edited_channel_po
 _ALLOWED_UPDATES = [*_MESSAGE_KEYS, "callback_query"]
 _CAPTION_LIMIT = 1024
 _TYPING_REFRESH_SECONDS = 4.0
+# Honor flood-control waits up to this long; anything larger propagates as a
+# send failure rather than stalling a turn indefinitely.
+_FLOOD_RETRY_MAX_SECONDS = 30.0
 _BOT_COMMAND = re.compile(r"^(?P<command>/[^\s@]+)@(?P<username>[A-Za-z0-9_]+)(?=\s|$)")
 
 
@@ -95,8 +99,9 @@ class TelegramAdapter(BaseAdapter):
         self._closing = False
 
         if self._application is None and self._transport is not None:
+            if not await self._refresh_identity_safely():
+                return False
             self._connected = True
-            await self._refresh_identity_safely()
             await self._register_commands_safely()
             return True
 
@@ -115,7 +120,11 @@ class TelegramAdapter(BaseAdapter):
             self._initialized = True
             await _maybe_await(self._application.start())
             self._started = True
-            await self._refresh_identity_safely()
+            if not await self._refresh_identity_safely():
+                # Without getMe the bot cannot recognize @-mentions, so every
+                # mention-gated group message would be dropped silently; fail
+                # closed like Feishu does on its identity lookup.
+                raise RuntimeError("telegram.identity.unavailable")
             await self._register_commands_safely()
             updater = getattr(self._application, "updater", None)
             if updater is None:
@@ -388,12 +397,20 @@ class TelegramAdapter(BaseAdapter):
         session_key: str | None = None,
     ) -> SendResult:
         message = replace(message, text=_render_text(message), embeds=[])
-        return await super().send_message(
-            source,
-            message,
-            reply_to=reply_to,
-            session_key=session_key,
-        )
+        # Telegram counts its 4096 limit in UTF-16 code units, not code points;
+        # pre-split here so the code-point splitter in the base class never
+        # produces a chunk the API rejects (non-BMP emoji weigh 2 units each).
+        result = SendResult(ok=True)
+        for part in _split_message_utf16(message, self.capabilities.max_text_chars):
+            result = await super().send_message(
+                source,
+                part,
+                reply_to=reply_to,
+                session_key=session_key,
+            )
+            if not result.ok:
+                return result
+        return result
 
     async def _send_message(
         self,
@@ -432,8 +449,31 @@ class TelegramAdapter(BaseAdapter):
                 reply_markup=components,
             )
         except Exception as exc:
+            if message.private and target != source.chat_id and _is_forbidden(exc):
+                # Telegram forbids DMs to users who never started the bot; tell
+                # them in the origin chat instead of failing silently.
+                return await self._notify_private_reply_blocked(source, reply_to)
             logger.warning("telegram.send_failed error=%s", type(exc).__name__)
             return SendResult(ok=False, error="telegram.send_failed")
+
+    async def _notify_private_reply_blocked(
+        self,
+        source: SessionSource,
+        reply_to: str | None,
+    ) -> SendResult:
+        notice = localize("telegram.private_reply_blocked", locale=self.locale)
+        try:
+            await self._send_text(
+                source.chat_id,
+                source.thread_id,
+                notice,
+                markdown=False,
+                reply_to=reply_to,
+                reply_markup=None,
+            )
+        except Exception as exc:
+            logger.warning("telegram.private_reply_notice_failed error=%s", type(exc).__name__)
+        return SendResult(ok=False, error="telegram.private_reply_blocked")
 
     async def _send_with_attachments(
         self,
@@ -538,13 +578,30 @@ class TelegramAdapter(BaseAdapter):
         markdown: bool,
     ) -> Any:
         if not markdown:
-            return await self._call_transport(bot_api_name, sdk_name, **params)
+            return await self._call_flood_controlled(bot_api_name, sdk_name, params)
         rich = {**params, "parse_mode": "Markdown"}
         try:
-            return await self._call_transport(bot_api_name, sdk_name, **rich)
+            return await self._call_flood_controlled(bot_api_name, sdk_name, rich)
         except Exception as exc:
             if _is_message_not_modified(exc) or not _is_bad_request(exc):
                 raise
+            return await self._call_flood_controlled(bot_api_name, sdk_name, params)
+
+    async def _call_flood_controlled(
+        self,
+        bot_api_name: str,
+        sdk_name: str,
+        params: dict[str, Any],
+    ) -> Any:
+        """Honor one flood-control (RetryAfter/429) wait instead of dropping the send."""
+        try:
+            return await self._call_transport(bot_api_name, sdk_name, **params)
+        except Exception as exc:
+            delay = _retry_after_seconds(exc)
+            if delay is None or delay > _FLOOD_RETRY_MAX_SECONDS:
+                raise
+            logger.warning("telegram.flood_control retry_after=%.1f", delay)
+            await asyncio.sleep(delay)
             return await self._call_transport(bot_api_name, sdk_name, **params)
 
     async def edit_message(
@@ -607,14 +664,18 @@ class TelegramAdapter(BaseAdapter):
         async with lock:
             panel_id = await self._panel_id(source)
             message = self._panel_message(source, event, locale)
-            if event.kind == "state":
-                if panel_id is None:
-                    return None
-                return await self.edit_message(source, panel_id, message)
+            if event.kind == "state" and panel_id is None:
+                return None
 
             if panel_id is not None:
                 result = await self.edit_message(source, panel_id, message)
                 if result.ok:
+                    return result
+                if event.kind == "state" and len(
+                    _render_text(message)
+                ) > self.capabilities.max_text_chars:
+                    # Re-creating would not be re-rememberable, and state fires
+                    # every turn — bail out rather than re-post a panel per turn.
                     return result
 
             result = await self.send_message(source, message, session_key=session_key)
@@ -764,18 +825,24 @@ class TelegramAdapter(BaseAdapter):
         except Exception as exc:
             logger.warning("telegram.command_registration_failed error=%s", type(exc).__name__)
 
-    async def _refresh_identity_safely(self) -> None:
+    async def _refresh_identity_safely(self) -> bool:
+        """Resolve the bot's own id/username; False means getMe raised.
+
+        A transport without getMe (minimal test double) is not a failure —
+        there is simply no identity to resolve.
+        """
         method = self._transport_method("getMe", "get_me")
         if method is None:
-            return
+            return True
         try:
             value = await _maybe_await(method())
         except Exception as exc:
             logger.warning("telegram.identity_failed error=%s", type(exc).__name__)
-            return
+            return False
         self._bot_id = _string_id(_object_value(value, "id"))
         username = _object_value(value, "username")
         self._bot_username = str(username).lstrip("@").casefold() if username else None
+        return True
 
     def _mentions_self(self, text: str, entities: list[Any]) -> bool:
         for entity in entities:
@@ -1111,6 +1178,78 @@ def _is_bad_request(exc: Exception) -> bool:
 def _is_message_not_modified(exc: Exception) -> bool:
     # i18n-exempt: Telegram Bot API error discriminator, never shown to users.
     return "message is not modified" in str(exc).casefold()
+
+
+def _retry_after_seconds(exc: Exception) -> float | None:
+    """Seconds Telegram asked us to wait, or None when exc is not flood control."""
+    if type(exc).__name__ != "RetryAfter" and getattr(exc, "status", None) != 429:
+        return None
+    delay = getattr(exc, "retry_after", None)
+    try:
+        return max(float(delay), 0.0) if delay is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_forbidden(exc: Exception) -> bool:
+    return (
+        type(exc).__name__ == "Forbidden"
+        or getattr(exc, "status", None) == 403
+        or getattr(exc, "status_code", None) == 403
+    )
+
+
+def _utf16_len(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _split_message_utf16(message: ChatMessage, limit: int) -> list[ChatMessage]:
+    """Split so every part fits Telegram's UTF-16-unit budget.
+
+    Mirrors split_chat_message's contract: rich content rides on the last part.
+    The common all-BMP case returns the message untouched.
+    """
+    if _utf16_len(message.text) <= limit:
+        return [message]
+    chunks: list[str] = []
+    for chunk in split_text(message.text, limit):
+        chunks.extend(_shrink_to_utf16_limit(chunk, limit))
+    last = len(chunks) - 1
+    return [
+        replace(
+            message,
+            text=chunk,
+            attachments=list(message.attachments) if index == last else [],
+            components=list(message.components) if index == last else [],
+        )
+        for index, chunk in enumerate(chunks)
+    ]
+
+
+def _shrink_to_utf16_limit(chunk: str, limit: int) -> list[str]:
+    if _utf16_len(chunk) <= limit:
+        return [chunk]
+    parts: list[str] = []
+    remaining = chunk
+    while _utf16_len(remaining) > limit:
+        units = 0
+        cut = 0
+        for index, char in enumerate(remaining):
+            width = 2 if ord(char) > 0xFFFF else 1
+            if units + width > limit:
+                break
+            units += width
+            cut = index + 1
+        window = remaining[:cut]
+        floor = max(1, cut // 2)
+        boundary = max(window.rfind("\n", floor, cut), window.rfind(" ", floor, cut))
+        if boundary >= floor:
+            cut = boundary + 1
+        parts.append(remaining[:cut])
+        remaining = remaining[cut:]
+    if remaining:
+        parts.append(remaining)
+    return parts
 
 
 def _accepts_keyword(method: Any, name: str) -> bool:

@@ -371,9 +371,13 @@ class GatewayRunner:
             try:
                 data = await adapter.fetch_attachment(attachment, max_bytes=limit)
             except Exception as exc:
+                # The turn continues without this attachment, so name it here —
+                # this log line is the only failure signal. Exception type only:
+                # messages can embed fetch URLs that carry platform tokens.
                 logger.warning(
-                    "adapter.attachment_fetch_failed platform=%s error=%s",
+                    "adapter.attachment_fetch_failed platform=%s attachment=%s error=%s",
                     adapter.platform,
+                    attachment.id or attachment.name,
                     type(exc).__name__,
                 )
                 continue
@@ -424,7 +428,12 @@ class GatewayRunner:
                     )
         return AttachmentFs(stored) if stored else None
 
-    async def start(self) -> None:
+    async def start(self) -> list[str]:
+        """Connect every adapter; returns the platforms that failed to connect.
+
+        Failed adapters are disconnected and dropped from the runner so the
+        rest of the lifecycle never touches them again.
+        """
         for adapter in self.adapters:
             adapter.set_message_handler(self.on_inbound, manages_typing=True)
         try:
@@ -444,14 +453,13 @@ class GatewayRunner:
             None,
         )
         if cancelled is not None:
-            await asyncio.gather(
-                *(adapter.disconnect() for adapter in self.adapters),
-                return_exceptions=True,
-            )
+            await _disconnect_adapters(self.adapters)
             raise cancelled
         failed: list[BaseAdapter] = []
         for adapter, result in zip(self.adapters, results, strict=True):
-            if result is True:
+            # connect() is typed -> bool but only a type hint enforces that;
+            # accept any truthy non-exception result from third-party adapters.
+            if not isinstance(result, BaseException) and bool(result):
                 continue
             failed.append(adapter)
             if isinstance(result, BaseException):
@@ -463,10 +471,9 @@ class GatewayRunner:
             else:
                 logger.warning("adapter.connect_unavailable platform=%s", adapter.platform)
         if failed:
-            await asyncio.gather(
-                *(adapter.disconnect() for adapter in failed),
-                return_exceptions=True,
-            )
+            await _disconnect_adapters(failed)
+            self.adapters = [adapter for adapter in self.adapters if adapter not in failed]
+        return [adapter.platform for adapter in failed]
 
     async def stop(self) -> None:
         cleanup = asyncio.create_task(_disconnect_adapters(self.adapters))

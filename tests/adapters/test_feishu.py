@@ -1088,3 +1088,26 @@ def test_feishu_adapter_registry_reflects_optional_sdk_availability() -> None:
     assert entry.check_fn() is LARK_OAPI_AVAILABLE
     assert entry.required_env == ["TRPG_FEISHU__APP_ID", "TRPG_FEISHU__APP_SECRET"]
     assert entry.install_hint == "uv sync --extra feishu"
+
+
+def test_replace_mentions_handles_prefix_placeholder_keys() -> None:
+    mentions = [
+        {"key": "@_user_1", "id": {"open_id": "ou_alice"}, "name": "Alice"},
+        {"key": "@_user_10", "id": {"open_id": "ou_jack"}, "name": "Jack"},
+        {"key": "@_user_11", "id": {"open_id": "ou_karen"}, "name": "Karen"},
+    ]
+
+    text, at_bot = feishu_adapter_module._replace_mentions(
+        "hi @_user_1 and @_user_10 and @_user_11",
+        mentions,
+        "",
+    )
+
+    assert text == "hi @Alice and @Jack and @Karen"
+    assert at_bot is False
+
+
+def test_receive_id_type_follows_identifier_prefix() -> None:
+    assert feishu_adapter_module._receive_id_type_for("ou_abc") == "open_id"
+    assert feishu_adapter_module._receive_id_type_for("on_abc") == "union_id"
+    assert feishu_adapter_module._receive_id_type_for("7f00") == "user_id"

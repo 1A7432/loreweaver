@@ -22,6 +22,7 @@
   "cli.demo.search_miss": "你摸遍桌面和墙边，但烟雾般的昏暗遮住了可能存在的线索。玛莎看得有些过于仔细。接下来呢？",
   "cli.demo.upload_ready": "演示模组已载入。诺拉·万斯已在盐锚旅店准备就绪。",
   "cli.combined_listening": "已在 {host}:{port} 启动联网 TUI，聊天平台：{platforms}",
+  "cli.platform_connect_failed": "聊天平台 '{platform}' 连接失败，本次运行不可用（详见日志）。",
   "cli.no_mode": "未选择平台。使用 --cli 启动无头 CLI。",
   "cli.offline_demo_notice": "未配置可用的 LLM 凭据，正在使用离线演示模式。",
   "cli.platform_skip_no_creds": "平台 “{platform}” 缺少凭证，已跳过（请设置对应的 TRPG_* 环境变量）。",

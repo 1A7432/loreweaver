@@ -938,3 +938,20 @@ def test_onebot_reverse_factory_requires_token_for_public_listener() -> None:
 
     with pytest.raises(ValueError, match="public_auth_required"):
         OneBotReverseWebSocketTransport("0.0.0.0", 6700)
+
+
+async def test_forward_connect_fails_when_endpoint_unreachable() -> None:
+    def failing_factory(url, **kwargs):
+        raise OSError("unreachable")
+
+    transport = OneBotForwardWebSocketTransport(
+        "ws://127.0.0.1:1",
+        request_timeout=0.05,
+        reconnect_delay=0.01,
+        connect_factory=failing_factory,
+    )
+    adapter = OneBotAdapter(transport=transport)
+
+    assert await adapter.connect() is False
+    # connect() closed the transport after the failed first attempt.
+    assert transport._runner is None

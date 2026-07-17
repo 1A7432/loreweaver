@@ -1,3 +1,4 @@
 {
-  "telegram.error.missing_transport": "Telegram 传输未配置。"
+  "telegram.error.missing_transport": "Telegram 传输未配置。",
+  "telegram.private_reply_blocked": "无法向你发送私聊消息——请先私聊本机器人(点击 Start),然后重新执行该指令。"
 }

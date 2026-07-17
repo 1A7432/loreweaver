@@ -116,6 +116,9 @@ class TelegramSettings(BaseModel):
 class FeishuSettings(BaseModel):
     app_id: str = ""
     app_secret: str = ""
+    # Optional: skip the startup /bot/v3/info lookup (whose one-shot failure
+    # would otherwise disable the platform for the whole process).
+    bot_open_id: str = ""
 
 
 class OneBotSettings(BaseModel):

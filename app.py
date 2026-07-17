@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import importlib.util
 import ipaddress
 import math
@@ -516,11 +517,29 @@ async def _serve_combined(
     i18n: I18n,
     keys_path: str,
 ) -> bool:
-    """Run chat adapters beside the same Iroh server used by the primary TUI."""
-    await runner.start()
+    """Run chat adapters beside the same Iroh server used by the primary TUI.
+
+    Adapter connects run concurrently with the Iroh server: the primary
+    carrier must not wait out a slow optional chat platform, and any platform
+    that fails to connect is reported to the operator instead of only leaving
+    a WARNING in the log.
+    """
+    start_task = asyncio.create_task(runner.start())
+
+    def _report_failures(task: asyncio.Task[list[str]]) -> None:
+        if task.cancelled() or task.exception() is not None:
+            return
+        for platform in task.result() or []:
+            print(i18n.t("cli.platform_connect_failed", platform=platform), file=sys.stderr)
+
+    start_task.add_done_callback(_report_failures)
     try:
         return await _serve_iroh(server, i18n, keys_path)
     finally:
+        if not start_task.done():
+            start_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await start_task
         await runner.stop()
 
 

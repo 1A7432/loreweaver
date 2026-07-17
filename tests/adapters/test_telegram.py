@@ -1096,3 +1096,91 @@ def test_registry_requires_sdk_and_factory_consumes_adapter_context(monkeypatch)
     assert adapter._store is store
     assert entry.required_env == ["TRPG_TELEGRAM__TOKEN"]
     assert entry.install_hint == "uv sync --extra telegram"
+
+
+async def test_connect_fails_closed_when_identity_lookup_fails() -> None:
+    transport = FakeTelegramTransport()
+
+    async def broken_get_me():
+        raise NetworkError("getMe down")
+
+    transport.getMe = broken_get_me
+    adapter = TelegramAdapter({"token": "token"}, transport=transport)
+
+    assert await adapter.connect() is False
+
+    # A later attempt with a healthy getMe succeeds.
+    del transport.getMe
+    assert await adapter.connect() is True
+
+
+async def test_send_retries_once_after_flood_control() -> None:
+    class RetryAfter(Exception):
+        def __init__(self, retry_after: float) -> None:
+            super().__init__("flood")
+            self.retry_after = retry_after
+
+    transport = FakeTelegramTransport()
+    transport.fail_once("sendMessage", RetryAfter(0.01))
+    adapter = _adapter(transport)
+    source = SessionSource(platform="telegram", chat_type="group", chat_id="-100", user_id="7")
+
+    result = await adapter.send_message(source, ChatMessage(text="hello"))
+
+    assert result.ok is True
+    sends = [call for call in transport.calls if call[0] == "sendMessage"]
+    assert len(sends) == 2
+
+
+def test_split_message_utf16_respects_unit_budget() -> None:
+    emoji = "\N{GRINNING FACE}" * 3000  # 3000 code points, 6000 UTF-16 units
+    message = ChatMessage(text=emoji)
+
+    parts = telegram_module._split_message_utf16(message, 4096)
+
+    assert len(parts) >= 2
+    assert all(telegram_module._utf16_len(part.text) <= 4096 for part in parts)
+    assert "".join(part.text for part in parts) == emoji
+
+
+async def test_state_event_recreates_panel_after_edit_failure() -> None:
+    transport = FakeTelegramTransport()
+    adapter = _adapter(transport)
+    source = SessionSource(platform="telegram", chat_type="group", chat_id="-100", user_id="7")
+    key = source.chat_key()
+    adapter._panels[key] = "31"
+    transport.fail_once("editMessageText", NetworkError("message to edit not found"))
+
+    result = await adapter.deliver_event(
+        source,
+        "session",
+        Event.state({"scene": "docks"}),
+        locale="en",
+    )
+
+    assert result is not None and result.ok is True
+    assert [call[0] for call in transport.calls if call[0] in {"editMessageText", "sendMessage"}] == [
+        "editMessageText",
+        "sendMessage",
+    ]
+    assert adapter._panels[key] != "31"
+
+
+async def test_private_reply_forbidden_notifies_origin_chat() -> None:
+    class Forbidden(Exception):
+        pass
+
+    transport = FakeTelegramTransport()
+    transport.fail_once("sendMessage", Forbidden("bot can't initiate conversation"))
+    adapter = _adapter(transport)
+    source = SessionSource(platform="telegram", chat_type="group", chat_id="-100", user_id="7")
+
+    result = await adapter.send_message(source, ChatMessage(text="secret sheet", private=True))
+
+    assert result.ok is False
+    assert result.error == "telegram.private_reply_blocked"
+    sends = [call for call in transport.calls if call[0] == "sendMessage"]
+    assert len(sends) == 2
+    assert sends[0][1]["chat_id"] == "7"
+    assert sends[1][1]["chat_id"] == "-100"
+    assert "secret sheet" not in sends[1][1]["text"]

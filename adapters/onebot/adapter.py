@@ -440,6 +440,17 @@ class OneBotAdapter(BaseAdapter):
         if self._transport is None:
             return False
         await _maybe_await(self._transport.start(self.handle_event))
+        if isinstance(self._transport, OneBotForwardWebSocketTransport):
+            # start() only schedules the dial; without this wait an unreachable
+            # forward endpoint would be reported as a successful connect and the
+            # background retry loop would hide the misconfiguration forever.
+            timeout = getattr(self._transport, "request_timeout", self._attachment_timeout)
+            try:
+                await self._transport.wait_connected(timeout)
+            except TimeoutError:
+                logger.warning("onebot.forward_connect_timeout url=%s", self._transport.url)
+                await self._transport.close()
+                return False
         return True
 
     async def disconnect(self) -> None:
@@ -675,6 +686,9 @@ def register() -> None:
             label="OneBot 11",
             adapter_factory=lambda cfg, context: OneBotAdapter(cfg),
             check_fn=lambda: True,
+            # Forward mode (the default) dials this endpoint; reverse mode is
+            # configured via TRPG_ONEBOT__LISTEN_HOST/PORT instead.
+            required_env=["TRPG_ONEBOT__WS_URL"],
         )
     )
 

@@ -710,7 +710,10 @@ def _mention_open_id(mention: dict[str, Any]) -> str:
 
 def _replace_mentions(text: str, mentions: list[dict[str, Any]], bot_open_id: str) -> tuple[str, bool]:
     at_bot = False
-    for mention in mentions:
+    # Longest keys first: "@_user_1" is a prefix of "@_user_10", so replacing
+    # the short key first would corrupt the longer placeholder.
+    ordered = sorted(mentions, key=lambda item: len(str(item.get("key") or "")), reverse=True)
+    for mention in ordered:
         key = str(mention.get("key") or "")
         if not key:
             continue
@@ -721,6 +724,15 @@ def _replace_mentions(text: str, mentions: list[dict[str, Any]], bot_open_id: st
         if is_bot and mention.get("name"):
             text = text.replace(f"@{mention['name']}", "")
     return text.strip(), at_bot
+
+
+def _receive_id_type_for(identifier: str) -> str:
+    """Map a Feishu identifier to its receive_id_type by documented prefix."""
+    if identifier.startswith("ou_"):
+        return "open_id"
+    if identifier.startswith("on_"):
+        return "union_id"
+    return "user_id"
 
 
 def _extract_message_id(response: Any) -> str | None:
@@ -1142,7 +1154,10 @@ class FeishuAdapter(BaseAdapter):
         if private_target and not source.user_id:
             return SendResult(ok=False, error="feishu.private_target.missing")
         receive_id = source.user_id if private_target else source.chat_id
-        receive_id_type = "open_id" if private_target else "chat_id"
+        # _sender_open_id may fall back to user_id/union_id when the event has
+        # no open_id, so derive the id type from the id itself instead of
+        # assuming open_id (Feishu rejects a mismatched receive_id_type).
+        receive_id_type = _receive_id_type_for(str(receive_id or "")) if private_target else "chat_id"
         effective_reply = None if private_target else reply_to
         payloads: list[tuple[str, str]] = []
         text = _render_text(message)

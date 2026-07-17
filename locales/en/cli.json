@@ -22,6 +22,7 @@
   "cli.demo.search_miss": "You run your hands along the desk and the wall, but the smoky gloom hides whatever might be here. Martha watches you a little too closely. What next?",
   "cli.demo.upload_ready": "Demo module loaded. Nora Vance is ready at the Salt & Anchor Inn.",
   "cli.combined_listening": "Serving networked TUI on {host}:{port} with chat platforms: {platforms}",
+  "cli.platform_connect_failed": "Chat platform '{platform}' failed to connect and is unavailable for this run (see log for details).",
   "cli.no_mode": "No platform selected. Use --cli for the headless CLI.",
   "cli.offline_demo_notice": "No usable LLM credential configured; running offline demo mode.",
   "cli.platform_skip_no_creds": "No credentials for platform '{platform}'; skipping (set its TRPG_* env vars).",

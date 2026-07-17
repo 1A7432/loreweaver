@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -137,12 +138,13 @@ def test_onebot_reverse_allows_unauthenticated_loopback(host: str) -> None:
     assert _platform_config("onebot", settings) is settings.onebot
 
 
-async def test_combined_mode_uses_iroh_and_stops_adapters(monkeypatch) -> None:
+async def test_combined_mode_uses_iroh_and_stops_adapters(monkeypatch, capsys) -> None:
     calls: list[str] = []
 
     class Runner:
-        async def start(self) -> None:
+        async def start(self) -> list[str]:
             calls.append("start")
+            return ["telegram"]
 
         async def stop(self) -> None:
             calls.append("stop")
@@ -150,6 +152,9 @@ async def test_combined_mode_uses_iroh_and_stops_adapters(monkeypatch) -> None:
     async def serve_iroh(server, i18n, keys_path):
         del server, i18n
         calls.append(f"iroh:{keys_path}")
+        # The Iroh server must not wait for adapter connects (they run
+        # concurrently); yield once so the start task can complete.
+        await asyncio.sleep(0)
         return True
 
     monkeypatch.setattr(app, "_serve_iroh", serve_iroh)
@@ -160,6 +165,11 @@ async def test_combined_mode_uses_iroh_and_stops_adapters(monkeypatch) -> None:
         get_i18n("en"),
         "keys.toml",
     )
+    await asyncio.sleep(0)  # flush the failure-report done-callback
 
     assert result is True
-    assert calls == ["start", "iroh:keys.toml", "stop"]
+    assert set(calls[:2]) == {"start", "iroh:keys.toml"}
+    assert calls[-1] == "stop"
+    # A platform that failed to connect is reported to the operator, not
+    # only left as a WARNING in the log.
+    assert "telegram" in capsys.readouterr().err
