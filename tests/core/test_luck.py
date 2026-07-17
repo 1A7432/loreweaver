@@ -1,5 +1,7 @@
 """Deterministic CoC7 Luck-spend outcome adjustment."""
 
+import pytest
+
 from core.luck import adjust_check_with_luck
 
 
@@ -49,3 +51,26 @@ def test_luck_spend_is_allowed_even_when_success_rank_does_not_change() -> None:
     assert adjustment.before_rank == adjustment.after_rank == 2
     assert check["roll"] == 38
     assert check["luck_spent"] == 1
+
+
+def test_luck_cannot_buy_off_a_fumble() -> None:
+    check = {"skill": "Spot Hidden", "target": 45, "roll": 100, "difficulty": 1, "rule": 0}
+
+    with pytest.raises(ValueError, match="luck_cannot_adjust_fumble"):
+        adjust_check_with_luck(check, 60)
+
+    assert check == {"skill": "Spot Hidden", "target": 45, "roll": 100, "difficulty": 1, "rule": 0}
+
+
+def test_luck_spend_cannot_reduce_roll_below_one() -> None:
+    check = {"target": 25, "roll": 27, "difficulty": 1, "rule": 0}
+
+    with pytest.raises(ValueError, match="luck_points_exceed_roll"):
+        adjust_check_with_luck(check, 27)
+
+    assert "luck_adjusted" not in check
+
+    adjustment = adjust_check_with_luck(check, 26)
+
+    assert adjustment.after_roll == 1
+    assert check["raw_roll"] == 27

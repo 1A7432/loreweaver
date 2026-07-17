@@ -826,7 +826,20 @@ class DiceTools:
                         "kp_tools.dice.luck.ineligible", skill=check.get("skill", "")
                     )
 
-                adjustment = adjust_check_with_luck(check, points)
+                try:
+                    adjustment = adjust_check_with_luck(check, points)
+                except ValueError as exc:
+                    code = str(exc)
+                    if code == "luck_cannot_adjust_fumble":
+                        return i18n.t("kp_tools.dice.luck.fumble")
+                    if code == "luck_points_exceed_roll":
+                        return i18n.t(
+                            "kp_tools.dice.luck.exceeds_roll",
+                            points=points,
+                            roll=int(check["roll"]),
+                            max=int(check["roll"]) - 1,
+                        )
+                    raise
                 luck_after = luck - points
                 character.attributes["LUC"] = luck_after
                 character.last_updated = time.time()

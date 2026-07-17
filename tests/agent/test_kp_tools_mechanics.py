@@ -698,6 +698,64 @@ async def test_spend_luck_rejects_sanity_and_non_coc_checks():
         "kp_tools.dice.luck.ineligible", skill="SAN"
     )
 
+
+async def test_spend_luck_rejects_fumble_without_mutation():
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    dice_tools = DiceTools(services)
+    await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)
+    await services.battles.add_skill_check(
+        ctx.chat_key,
+        ctx.uid(),
+        "Vera",
+        "侦查",
+        45,
+        100,
+        success=False,
+        rank=-2,
+        raw_roll=100,
+        difficulty=1,
+        rule=0,
+    )
+    session_key = f"session_record.{ctx.chat_key}.current"
+    before_session = await services.store.get(store_key=session_key)
+
+    result = await dice_tools.spend_luck(ctx, points=10)
+
+    assert result == services.i18n.with_locale(ctx.locale).t("kp_tools.dice.luck.fumble")
+    assert await services.store.get(store_key=session_key) == before_session
+    assert ctx.dice_payloads == []
+
+
+async def test_spend_luck_rejects_overspend_that_would_push_roll_below_one():
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    dice_tools = DiceTools(services)
+    await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)
+    await services.battles.add_skill_check(
+        ctx.chat_key,
+        ctx.uid(),
+        "Vera",
+        "侦查",
+        25,
+        27,
+        success=False,
+        rank=-1,
+        raw_roll=27,
+        difficulty=1,
+        rule=0,
+    )
+    session_key = f"session_record.{ctx.chat_key}.current"
+    before_session = await services.store.get(store_key=session_key)
+
+    result = await dice_tools.spend_luck(ctx, points=27)
+
+    assert result == services.i18n.with_locale(ctx.locale).t(
+        "kp_tools.dice.luck.exceeds_roll", points=27, roll=27, max=26
+    )
+    assert await services.store.get(store_key=session_key) == before_session
+    assert ctx.dice_payloads == []
+
     other_services, other_ctx = _build()
     other_tools = DiceTools(other_services)
     await CharacterTools(other_services).create_character(

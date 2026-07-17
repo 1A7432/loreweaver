@@ -53,6 +53,11 @@ def adjust_check_with_luck(check: dict[str, Any], points: int) -> LuckAdjustment
     difficulty = int(check.get("difficulty", DIFFICULTY_REGULAR) or DIFFICULTY_REGULAR)
     rule = int(check.get("rule", DEFAULT_COC_RULE) or DEFAULT_COC_RULE)
     before_rank, _ = result_check_base(rule, before_roll, target, difficulty)
+    # CoC7 forbids buying off a fumble, and a d100 result can never sit below 1.
+    if before_rank == -2:
+        raise ValueError("luck_cannot_adjust_fumble")
+    if points >= before_roll:
+        raise ValueError("luck_points_exceed_roll")
     after_roll = before_roll - points
     after_rank, _ = result_check_base(rule, after_roll, target, difficulty)
 
