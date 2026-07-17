@@ -229,6 +229,8 @@ class ModuleInitializer:
 
         await self.store.set(user_key="", store_key=status_key, value="processing")
         try:
+            source_key = f"module_fulltext.{chat_key}"
+            source_value = await self.store.get(user_key="", store_key=source_key)
             full_text, doc_name = await self._load_full_text(chat_key)
             if not full_text:
                 await self.store.set(user_key="", store_key=error_key, value="module text unavailable")
@@ -245,27 +247,28 @@ class ModuleInitializer:
             keeper_pool, player_pool = self._build_knowledge_pools(outcome.analysis)
             keeper_json = json.dumps(keeper_pool, ensure_ascii=False)
 
-            await self.store.set(
-                user_key="",
-                store_key=f"module_keeper_pool.{chat_key}",
-                value=keeper_json,
-            )
-            await self.store.set(
-                user_key="",
-                store_key=f"module_player_pool.{chat_key}",
-                value=json.dumps(player_pool, ensure_ascii=False),
-            )
-            # Keep the lazily-read catalog synchronized with the new keeper
-            # pool in this same initialization pass, rather than allowing a
-            # stale catalog from the previous module to survive.
-            await self.store.set(user_key="", store_key=f"module_catalog.{chat_key}", value=keeper_json)
             if outcome.used_fallback:
-                await self.store.set(user_key="", store_key=error_key, value=outcome.error_summary)
                 status = "ready_fallback"
             else:
-                await self.store.delete(user_key="", store_key=error_key)
                 status = "ready"
-            await self.store.set(user_key="", store_key=status_key, value=status)
+            committed = await self.store.set_rows_if_values(
+                expected=[
+                    ("", source_key, source_value),
+                    ("", status_key, "processing"),
+                ],
+                updates=[
+                    ("", f"module_keeper_pool.{chat_key}", keeper_json),
+                    ("", f"module_player_pool.{chat_key}", json.dumps(player_pool, ensure_ascii=False)),
+                    ("", f"module_catalog.{chat_key}", keeper_json),
+                    ("", status_key, status),
+                ],
+            )
+            if not committed:
+                return
+            if outcome.used_fallback:
+                await self.store.set(user_key="", store_key=error_key, value=outcome.error_summary)
+            else:
+                await self.store.delete(user_key="", store_key=error_key)
         except Exception as exc:
             summary = _exception_summary(exc)
             logger.exception("module initialization failed for chat_key=%s", chat_key)

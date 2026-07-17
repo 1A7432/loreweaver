@@ -282,6 +282,49 @@ async def test_generate_module_dispatch_unlocked_installs_and_reports_success(tm
         forge_module._USER_MODULE_DIR = original_user_dir
 
 
+async def test_generate_module_repeat_dispatch_reports_suppression(tmp_path: Path) -> None:
+    services = build_services(
+        Settings(locale="en"),
+        llm=FakeLLM(
+            script=[assistant_text(GENERATED_MODULE_MD), assistant_text(_module_analysis_json())]
+        ),
+        embeddings=FakeEmbeddings(8),
+    )
+    toolset = build_kp_toolset(services)
+    ctx = AgentCtx(
+        chat_key=CHAT_KEY_MODULE,
+        user_id="kp",
+        locale="en",
+        fs=LocalFs(base_dir=tmp_path / "fs"),
+    )
+
+    original_user_dir = forge_module._USER_MODULE_DIR
+    forge_module._USER_MODULE_DIR = tmp_path / "modules"
+    try:
+        await toolset.dispatch(
+            "generate_module",
+            ctx,
+            {"description": "A Marsh-Town  Disappearance Mystery"},
+            unlocked={"generate_module"},
+        )
+        repeated = await toolset.dispatch(
+            "generate_module",
+            ctx,
+            {"description": " a marsh-town disappearance mystery "},
+            unlocked={"generate_module"},
+        )
+
+        path = tmp_path / "modules" / "the-salt-marsh-vanishing.md"
+        assert repeated == t(
+            "agent.forge.module_reused",
+            name="The Salt Marsh Vanishing",
+            path=str(path.resolve()),
+        )
+        assert len(services.llm.calls) == 2
+    finally:
+        forge_module._USER_MODULE_DIR = original_user_dir
+
+
 async def test_generate_module_no_data_dir_reports_localized_message() -> None:
     services = _services()
     toolset = build_kp_toolset(services)

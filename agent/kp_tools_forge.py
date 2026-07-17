@@ -95,6 +95,12 @@ class ForgeTools:
         i18n = self._i18n(ctx)
         result = await generate_and_install_module(self._services, ctx, description)
         if result.ok:
+            if result.reused:
+                return i18n.t(
+                    "agent.forge.module_reused",
+                    name=result.name,
+                    path=result.path,
+                )
             return i18n.t("agent.forge.module_installed", name=result.name, path=result.path, detail=result.detail)
         if result.error == "no_data_dir":
             return i18n.t("agent.forge.module_no_data_dir")

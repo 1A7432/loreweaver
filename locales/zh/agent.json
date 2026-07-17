@@ -11,6 +11,7 @@
   "agent.forge.rulepack_no_data_dir": "规则体系生成功能不可用：服务器未配置数据目录。",
   "agent.forge.rulepack_bad_id": "无法为规则体系生成可用的 id：{error}。未安装任何内容。",
   "agent.forge.module_installed": "已生成并安装新模组：{name}，位于 {path}。\n{detail}",
+  "agent.forge.module_reused": "已抑制重复的模组生成请求：继续使用位于 {path} 的已安装模组 {name}，未重新生成任何内容。",
   "agent.forge.module_invalid": "无法生成有效的模组：{error}。未安装任何内容。",
   "agent.forge.module_no_data_dir": "模组生成功能不可用：服务器未配置数据目录。",
   "agent.forge.module_bad_id": "无法为模组生成可用的 id：{error}。未安装任何内容。",

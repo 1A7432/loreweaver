@@ -11,6 +11,7 @@
   "agent.forge.rulepack_no_data_dir": "Rule-system generation is unavailable: no data directory is configured on this server.",
   "agent.forge.rulepack_bad_id": "Could not derive a usable rule-system id: {error}. Nothing was installed.",
   "agent.forge.module_installed": "Created and installed a new module: {name} at {path}.\n{detail}",
+  "agent.forge.module_reused": "Duplicate module request suppressed: the already-installed module {name} at {path} is unchanged.",
   "agent.forge.module_invalid": "Could not generate a valid module: {error}. Nothing was installed.",
   "agent.forge.module_no_data_dir": "Module generation is unavailable: no data directory is configured on this server.",
   "agent.forge.module_bad_id": "Could not derive a usable module id: {error}. Nothing was installed.",

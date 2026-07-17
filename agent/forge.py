@@ -29,7 +29,10 @@ invisible until its forge skill unlocks it.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
+import time
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,6 +43,7 @@ import core.skills as skills
 from agent.context import AgentCtx
 from agent.kp_tools_knowledge import DocumentTools
 from agent.services import Services
+from infra.file_permissions import atomic_write_private
 from infra.usage_stats import record_usage_stats
 
 # A placeholder id used only to probe generated content for a name/title before the real id is
@@ -61,6 +65,10 @@ _MAX_SLUG_LEN = 64
 # default, and every test unless it opts in) means `generate_and_install_module` refuses with
 # `"no_data_dir"`, exactly like the other two generators.
 _USER_MODULE_DIR: Path | None = None
+
+# A repeated tool call in the next few model turns is almost certainly the same requested forge,
+# not an intentional revision. Different descriptions still install immediately (last write wins).
+_MODULE_FORGE_REPEAT_WINDOW_SECONDS = 5 * 60
 
 
 @dataclass(frozen=True)
@@ -86,6 +94,7 @@ class ForgeResult:
     path: str
     error: str
     detail: str = ""
+    reused: bool = False
 
 
 async def _llm_authored(
@@ -449,6 +458,94 @@ def _unique_user_module_id(user_dir: Path, base: str) -> str:
     return candidate
 
 
+def _normalized_description_hash(description: str) -> str:
+    """Return a stable hash for semantically identical forge request text."""
+    normalized = " ".join(unicodedata.normalize("NFKC", description).casefold().split())
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _module_forge_last_key(chat_key: str) -> str:
+    return f"forge_module_last.{chat_key}"
+
+
+def _module_forge_owner_key(chat_key: str, requested_id: str) -> str:
+    return f"forge_module_owner.{chat_key}.{requested_id}"
+
+
+def _load_json_object(raw: str | None) -> dict:
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+async def _recent_module_forge_result(
+    services: Services,
+    ctx: AgentCtx,
+    user_dir: Path,
+    description_hash: str,
+    *,
+    now: float,
+) -> ForgeResult | None:
+    record = _load_json_object(
+        await services.store.get(user_key="", store_key=_module_forge_last_key(ctx.chat_key))
+    )
+    try:
+        age = now - float(record.get("timestamp", 0))
+    except (TypeError, ValueError):
+        return None
+    installed_id = str(record.get("installed_id", ""))
+    name = str(record.get("name", ""))
+    if not installed_id or not name:
+        return None
+    try:
+        path = _confined_file_target(user_dir, installed_id, f"{installed_id}.md")
+    except ValueError:
+        return None
+    if (
+        record.get("description_hash") != description_hash
+        or not 0 <= age <= _MODULE_FORGE_REPEAT_WINDOW_SECONDS
+        or str(path) != str(record.get("path", ""))
+        or not path.is_file()
+    ):
+        return None
+    try:
+        source_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+    if source_hash != record.get("source_hash"):
+        return None
+    return ForgeResult(True, installed_id, name, str(path), "", reused=True)
+
+
+async def _owned_module_id(
+    services: Services,
+    ctx: AgentCtx,
+    user_dir: Path,
+    requested_id: str,
+) -> str:
+    """Reuse this room's prior path for an id; never overwrite another room's file."""
+    owner = _load_json_object(
+        await services.store.get(
+            user_key="",
+            store_key=_module_forge_owner_key(ctx.chat_key, requested_id),
+        )
+    )
+    installed_id = str(owner.get("installed_id", ""))
+    if installed_id:
+        try:
+            owned_target = _confined_file_target(user_dir, installed_id, f"{installed_id}.md")
+        except ValueError:
+            pass
+        else:
+            if str(owned_target) == str(owner.get("path", "")):
+                return installed_id
+    return _unique_user_module_id(user_dir, requested_id)
+
+
 def _build_module_messages(services: Services, description: str) -> list[dict]:
     """The two-message prompt sent to `services.llm.chat` for module authoring: the localized
     framing text (`agent.forge.module_system_prompt`) as the system message, and the keeper's raw
@@ -488,6 +585,18 @@ async def generate_and_install_module(services: Services, ctx: AgentCtx, descrip
     if user_dir is None:
         return ForgeResult(False, "", "", "", "no_data_dir")
 
+    now = time.time()
+    description_hash = _normalized_description_hash(description)
+    repeated = await _recent_module_forge_result(
+        services,
+        ctx,
+        user_dir,
+        description_hash,
+        now=now,
+    )
+    if repeated is not None:
+        return repeated
+
     content, failure = await _llm_authored(
         services,
         _build_module_messages(services, description),
@@ -504,9 +613,11 @@ async def generate_and_install_module(services: Services, ctx: AgentCtx, descrip
         digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:8]
         module_id = f"module-{digest}"
 
-    # Non-destructive install: if a generated module of this id already exists on disk, uniquify
-    # (base-2, ...) rather than silently overwriting an earlier generation.
-    module_id = _unique_user_module_id(user_dir, module_id)
+    # A module generated by this room owns its stable path and is replaced in place on an
+    # intentional revision. A same-named file owned by another room remains protected by the
+    # suffixing behavior.
+    requested_id = module_id
+    module_id = await _owned_module_id(services, ctx, user_dir, requested_id)
 
     # Write, confined to the user module directory. Nothing downstream (the room install) runs
     # before this succeeds.
@@ -516,8 +627,23 @@ async def generate_and_install_module(services: Services, ctx: AgentCtx, descrip
         return ForgeResult(False, "", "", "", f"path_escape: {exc}")
 
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        previous_file = target.read_bytes() if target.is_file() else None
+    except OSError as exc:
+        return ForgeResult(False, "", "", "", f"write_failed: {exc}")  # i18n-exempt
+    runtime_keys = (
+        f"module_fulltext.{ctx.chat_key}",
+        f"module_keeper_pool.{ctx.chat_key}",
+        f"module_player_pool.{ctx.chat_key}",
+        f"module_catalog.{ctx.chat_key}",
+        f"module_init_status.{ctx.chat_key}",
+        f"module_init_error.{ctx.chat_key}",
+    )
+    previous_runtime = {
+        key: await services.store.get(user_key="", store_key=key) for key in runtime_keys
+    }
+
+    try:
+        atomic_write_private(target, content)
     except OSError as exc:
         # A filesystem-level failure (permissions, name-too-long, disk) is reported through the same
         # ForgeResult contract as every other failure instead of escaping as an unhandled OSError.
@@ -529,11 +655,74 @@ async def generate_and_install_module(services: Services, ctx: AgentCtx, descrip
     # built by the exact same code a manual `.module` upload runs, not a parallel bespoke path.
     doc_tools = DocumentTools(services)
     install_note = await doc_tools.upload_document(ctx, file_path=str(target), doc_type="module")
+    status = await services.store.get(
+        user_key="",
+        store_key=f"module_init_status.{ctx.chat_key}",
+    )
+    installed_fulltext = await services.store.get(
+        user_key="",
+        store_key=f"module_fulltext.{ctx.chat_key}",
+    )
+    keeper_pool = await services.store.get(
+        user_key="",
+        store_key=f"module_keeper_pool.{ctx.chat_key}",
+    )
+    player_pool = await services.store.get(
+        user_key="",
+        store_key=f"module_player_pool.{ctx.chat_key}",
+    )
+    catalog = await services.store.get(
+        user_key="",
+        store_key=f"module_catalog.{ctx.chat_key}",
+    )
+    consistent = (
+        status in {"ready", "ready_fallback"}
+        and installed_fulltext == content
+        and bool(keeper_pool)
+        and bool(player_pool)
+        and catalog == keeper_pool
+    )
+    if not consistent:
+        # Publish the file and runtime state as one logical installation. If analysis/persistence
+        # did not finish coherently, restore the prior version instead of leaving a mixed module.
+        if previous_file is None:
+            target.unlink(missing_ok=True)
+        else:
+            atomic_write_private(target, previous_file)
+        await services.store.set_rows_if_values(
+            expected=[],
+            updates=[("", key, value) for key, value in previous_runtime.items()],
+        )
+        return ForgeResult(False, "", "", "", f"install_inconsistent: status={status}")  # i18n-exempt
+
     if used_hash_id:
         fallback_note = services.i18n.with_locale(ctx.locale).t(
             "agent.forge.module_id_fallback",
             module_id=module_id,
         )
         install_note = f"{fallback_note}\n{install_note}" if install_note else fallback_note
+
+    record = json.dumps(
+        {
+            "description_hash": description_hash,
+            "installed_id": module_id,
+            "name": title,
+            "path": str(target),
+            "source_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            "timestamp": time.time(),
+        },
+        ensure_ascii=False,
+    )
+    owner = json.dumps(
+        {"installed_id": module_id, "path": str(target)},
+        ensure_ascii=False,
+    )
+    await services.store.set_rows_if_values(
+        expected=[],
+        updates=[
+            ("", _module_forge_last_key(ctx.chat_key), record),
+            ("", _module_forge_owner_key(ctx.chat_key, requested_id), owner),
+        ],
+    )
 
     return ForgeResult(True, module_id, title, str(target), "", detail=install_note)
