@@ -646,6 +646,101 @@ async def test_chatgpt_llm_stops_after_one_transient_retry():
     assert requests == 2
 
 
+async def test_chatgpt_llm_retries_connect_timeout_once_and_recovers():
+    requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        if requests == 1:
+            raise httpx.ConnectTimeout("connect timed out", request=request)
+        return httpx.Response(
+            200,
+            json={
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "recovered"}],
+                    }
+                ]
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    llm = ChatGPTSubscriptionLLM(
+        LLMSettings(chat_model="gpt-5.4"),
+        token_manager=_manager(),
+        client=client,
+        responses_url="https://example.test/responses",
+    )
+    try:
+        result = await llm.chat([{"role": "user", "content": "hi"}])
+    finally:
+        await client.aclose()
+
+    assert result.content == "recovered"
+    assert requests == 2
+
+
+async def test_chatgpt_llm_stops_after_one_connect_timeout_retry():
+    requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        raise httpx.ConnectTimeout("connect timed out", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    llm = ChatGPTSubscriptionLLM(
+        LLMSettings(chat_model="gpt-5.4"),
+        token_manager=_manager(),
+        client=client,
+        responses_url="https://example.test/responses",
+    )
+    try:
+        with pytest.raises(OAuthError) as exc:
+            await llm.chat([{"role": "user", "content": "hi"}])
+    finally:
+        await client.aclose()
+
+    assert exc.value.code == "subscription_http_error"
+    assert exc.value.category == "transient"
+    assert requests == 2
+
+
+@pytest.mark.parametrize(
+    ("status_code", "category"),
+    [(402, "quota"), (403, "auth")],
+)
+async def test_chatgpt_llm_classifies_nonretryable_http_statuses(
+    status_code: int,
+    category: str,
+):
+    requests = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(status_code, text="provider rejected request")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    llm = ChatGPTSubscriptionLLM(
+        LLMSettings(chat_model="gpt-5.4"),
+        token_manager=_manager(),
+        client=client,
+        responses_url="https://example.test/responses",
+    )
+    try:
+        with pytest.raises(OAuthError) as exc:
+            await llm.chat([{"role": "user", "content": "hi"}])
+    finally:
+        await client.aclose()
+
+    assert exc.value.code == "subscription_http_error"
+    assert exc.value.category == category
+    assert requests == 1
+
+
 @pytest.mark.parametrize(
     ("event", "category"),
     [

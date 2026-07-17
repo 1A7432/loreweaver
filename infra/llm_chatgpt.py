@@ -129,7 +129,13 @@ def _first_error_field(payload: Any, field: str) -> str:
 class ProviderResponseError(OAuthError):
     """A terminal provider event with preserved structured diagnostic data."""
 
-    def __init__(self, event_type: str, payload: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        event_type: str,
+        payload: dict[str, Any],
+        *,
+        code: str = "subscription_bad_response",
+    ) -> None:
         copied = deepcopy(payload)
         category = _classify_provider_error(copied)
         details = [event_type]
@@ -138,12 +144,48 @@ class ProviderResponseError(OAuthError):
             if value:
                 details.append(f"{field}={value[:300]}")
         super().__init__(
-            "subscription_bad_response",
-            f"subscription_bad_response: {'; '.join(details)}",
+            code,
+            f"{code}: {'; '.join(details)}",
         )
         self.event_type = event_type
         self.payload = copied
         self.category = category
+
+
+def _http_status_signal(status_code: int) -> str:
+    if status_code == 402:
+        return "insufficient_quota"
+    if status_code in {401, 403}:
+        return "permission_denied"
+    if status_code == 408:
+        return "timeout"
+    if status_code == 413:
+        return "input_too_long"
+    if status_code in {425, 429}:
+        return "rate_limit"
+    if status_code >= 500:
+        return "server_error"
+    return "invalid_prompt"
+
+
+def _http_error_payload(response: httpx.Response) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "type": "http_error",
+        "status": _http_status_signal(response.status_code),
+        "http_status": response.status_code,
+    }
+    try:
+        provider_payload = response.json()
+    except Exception:
+        provider_payload = None
+    if isinstance(provider_payload, (dict, list)):
+        payload["provider"] = provider_payload
+    return payload
+
+
+def _transport_error_payload(exc: httpx.HTTPError) -> dict[str, Any]:
+    signal = "timeout" if isinstance(exc, httpx.TimeoutException) else "service_unavailable"
+    return {"type": "transport_error", "error": {"code": signal}}
 
 
 @dataclass
@@ -341,7 +383,11 @@ class ChatGPTSubscriptionLLM:
                         responses_payload_to_chat_result(_aggregate_sse(resp.text)),
                         resp.headers.get("x-codex-turn-state", ""),
                     )
-                raise OAuthError("subscription_http_error", str(resp.status_code))
+                raise ProviderResponseError(
+                    "http.error",
+                    _http_error_payload(resp),
+                    code="subscription_http_error",
+                )
 
             content_type = (resp.headers.get("content-type") or "").lower()
             text = resp.text or ""
@@ -361,7 +407,11 @@ class ChatGPTSubscriptionLLM:
         except OAuthError:
             raise
         except httpx.HTTPError as exc:
-            raise OAuthError("subscription_http_error") from exc
+            raise ProviderResponseError(
+                "transport.error",
+                _transport_error_payload(exc),
+                code="subscription_http_error",
+            ) from exc
         finally:
             if close:
                 await client.aclose()
