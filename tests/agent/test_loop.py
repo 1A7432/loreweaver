@@ -26,6 +26,7 @@ from agent.tools import Toolset, tool
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import ChatResult, FakeLLM, Usage, assistant_text, assistant_tools, tool_call
+from infra.oauth_flows import OAuthError
 
 KEEPER_SECRET = "THE BUTLER POISONED THE WINE"
 
@@ -422,6 +423,49 @@ async def test_provider_error_fallback_is_localized_and_goes_through_output_revi
     )
 
     assert result.reply == services.i18n.with_locale("zh").t("loop.unavailable").upper()
+
+
+@pytest.mark.parametrize(
+    ("category", "message_key"),
+    [
+        ("transient", "loop.provider_transient"),
+        ("auth", "loop.provider_auth"),
+        ("quota", "loop.provider_quota"),
+        ("content", "loop.provider_content"),
+    ],
+)
+@pytest.mark.parametrize("locale", ["en", "zh"])
+async def test_run_kp_turn_maps_provider_error_categories_to_distinct_localized_replies(
+    category: str,
+    message_key: str,
+    locale: str,
+):
+    class _CategorizedProviderError(RuntimeError):
+        def __init__(self) -> None:
+            super().__init__(category)
+            self.category = category
+
+    def _boom(messages, tools):
+        raise _CategorizedProviderError
+
+    chat_key = f"chat-provider-{category}-{locale}"
+    services = _services(FakeLLM(responder=_boom))
+
+    result = await run_kp_turn(_ctx(chat_key, locale=locale), services, _toolset(), "What happens?")
+
+    assert result.reply == services.i18n.with_locale(locale).t(message_key)
+    assert await services.store.get(user_key="", store_key=f"chat_history.{chat_key}") is None
+
+
+async def test_run_kp_turn_maps_subscription_relogin_required_to_auth_reply():
+    def _boom(messages, tools):
+        raise OAuthError("subscription_relogin_required")
+
+    services = _services(FakeLLM(responder=_boom))
+
+    result = await run_kp_turn(_ctx("chat-provider-relogin"), services, _toolset(), "What happens?")
+
+    assert result.reply == services.i18n.with_locale("en").t("loop.provider_auth")
 
 
 # ---------------------------------------------------------------------------

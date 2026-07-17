@@ -25,6 +25,126 @@ from infra.oauth_flows import CHATGPT_RESPONSES_URL, OAuthError, TokenManager
 
 TokenProvider = Callable[[], Awaitable[str]]
 
+_AUTH_SIGNALS = frozenset(
+    {
+        "authentication_error",
+        "access_token_expired",
+        "invalid_api_key",
+        "invalid_token",
+        "permission_denied",
+        "token_expired",
+        "unauthorized",
+    }
+)
+_QUOTA_SIGNALS = frozenset(
+    {
+        "billing_hard_limit",
+        "insufficient_quota",
+        "quota_exceeded",
+        "usage_limit",
+    }
+)
+_CONTENT_SIGNALS = frozenset(
+    {
+        "content_filter",
+        "context_length_exceeded",
+        "input_too_long",
+        "invalid_prompt",
+        "max_output_tokens",
+    }
+)
+_TRANSIENT_SIGNALS = frozenset(
+    {
+        "cancelled",
+        "internal_error",
+        "overloaded",
+        "rate_limit",
+        "rate_limit_exceeded",
+        "server_error",
+        "service_unavailable",
+        "temporarily_unavailable",
+        "timeout",
+    }
+)
+
+
+def _normalized_signal(value: Any) -> str:
+    return str(value).strip().casefold().replace("-", "_").replace(".", "_").replace(" ", "_")
+
+
+def _error_signals(payload: Any) -> set[str]:
+    """Extract stable code/type/reason fields without classifying free-form text."""
+    signals: set[str] = set()
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key in {"code", "type", "reason", "status"} and isinstance(value, (str, int)):
+                normalized = _normalized_signal(value)
+                if normalized:
+                    signals.add(normalized)
+            if isinstance(value, (dict, list)):
+                signals.update(_error_signals(value))
+    elif isinstance(payload, list):
+        for value in payload:
+            signals.update(_error_signals(value))
+    return signals
+
+
+def _matches_signal(signals: set[str], candidates: frozenset[str]) -> bool:
+    return any(signal == candidate or signal.startswith(f"{candidate}_") for signal in signals for candidate in candidates)
+
+
+def _classify_provider_error(payload: dict[str, Any]) -> str:
+    signals = _error_signals(payload)
+    if _matches_signal(signals, _QUOTA_SIGNALS):
+        return "quota"
+    if _matches_signal(signals, _AUTH_SIGNALS):
+        return "auth"
+    if _matches_signal(signals, _CONTENT_SIGNALS):
+        return "content"
+    if _matches_signal(signals, _TRANSIENT_SIGNALS):
+        return "transient"
+    # A terminal provider event with no recognized stable code is normally a
+    # server-side interruption. Malformed/non-terminal streams still raise the
+    # plain OAuthError below and are deliberately not retried.
+    return "transient"
+
+
+def _first_error_field(payload: Any, field: str) -> str:
+    if isinstance(payload, dict):
+        value = payload.get(field)
+        if isinstance(value, (str, int)) and str(value).strip():
+            return str(value).strip()
+        for nested in payload.values():
+            found = _first_error_field(nested, field)
+            if found:
+                return found
+    elif isinstance(payload, list):
+        for nested in payload:
+            found = _first_error_field(nested, field)
+            if found:
+                return found
+    return ""
+
+
+class ProviderResponseError(OAuthError):
+    """A terminal provider event with preserved structured diagnostic data."""
+
+    def __init__(self, event_type: str, payload: dict[str, Any]) -> None:
+        copied = deepcopy(payload)
+        category = _classify_provider_error(copied)
+        details = [event_type]
+        for field in ("code", "reason", "message"):
+            value = _first_error_field(copied, field)
+            if value:
+                details.append(f"{field}={value[:300]}")
+        super().__init__(
+            "subscription_bad_response",
+            f"subscription_bad_response: {'; '.join(details)}",
+        )
+        self.event_type = event_type
+        self.payload = copied
+        self.category = category
+
 
 @dataclass
 class _ContinuationRound:
@@ -162,14 +282,20 @@ class ChatGPTSubscriptionLLM:
         session_id: str,
         turn_state: str,
     ) -> tuple[ChatResult, str]:
-        try:
-            return await self._post(body, session_id=session_id, turn_state=turn_state)
-        except _AuthHTTPError:
-            await self._token_manager.force_refresh()
+        auth_refreshed = False
+        transient_retried = False
+        while True:
             try:
                 return await self._post(body, session_id=session_id, turn_state=turn_state)
             except _AuthHTTPError as exc:
-                raise OAuthError("subscription_relogin_required") from exc
+                if auth_refreshed:
+                    raise OAuthError("subscription_relogin_required") from exc
+                auth_refreshed = True
+                await self._token_manager.force_refresh()
+            except ProviderResponseError as exc:
+                if exc.category != "transient" or transient_retried:
+                    raise
+                transient_retried = True
 
     async def _post(
         self,
@@ -406,9 +532,10 @@ def responses_payload_to_chat_result(data: dict[str, Any] | None) -> ChatResult:
         payload = data
     status = str(payload.get("status") or "")
     if status and status != "completed":
-        raise OAuthError("subscription_bad_response")
+        event_type = f"response.{status}"
+        raise ProviderResponseError(event_type, {"type": event_type, "response": payload})
     if payload.get("error"):
-        raise OAuthError("subscription_bad_response")
+        raise ProviderResponseError("response.error", {"type": "response.error", "response": payload})
 
     content_parts: list[str] = []
     tool_calls: list[ToolCall] = []
@@ -466,7 +593,7 @@ def _aggregate_sse(body_text: str) -> dict[str, Any]:
             "response.failed",
             "response.incomplete",
         }:
-            raise OAuthError("subscription_bad_response")
+            raise ProviderResponseError(event_type, chunk)
         if event_type == "response.output_item.done":
             item = chunk.get("item")
             if isinstance(item, dict):
@@ -474,6 +601,8 @@ def _aggregate_sse(body_text: str) -> dict[str, Any]:
         elif event_type == "response.completed":
             response = chunk.get("response")
             if isinstance(response, dict):
+                if response.get("status") not in {None, "completed"} or response.get("error"):
+                    raise ProviderResponseError(event_type, chunk)
                 completed = response
             else:
                 completed = chunk
@@ -481,7 +610,10 @@ def _aggregate_sse(body_text: str) -> dict[str, Any]:
         raise OAuthError("subscription_bad_response")
     completed = deepcopy(completed)
     if completed.get("status") not in {None, "completed"}:
-        raise OAuthError("subscription_bad_response")
+        raise ProviderResponseError(
+            "response.completed",
+            {"type": "response.completed", "response": completed},
+        )
     if output_items:
         # ``output_item.done`` contains fields such as encrypted_content that
         # may be omitted from the final response summary. Use the summary's

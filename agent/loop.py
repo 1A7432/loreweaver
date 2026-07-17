@@ -371,14 +371,24 @@ async def run_kp_turn(
                 tool_choice="auto",
                 temperature=services.settings.llm.temperature,
             )
-        except Exception:
+        except Exception as exc:
             # A real provider error (network/rate-limit/auth/SDK) must degrade to a friendly,
-            # localized "Keeper temporarily unavailable" reply, never crash the player's turn.
+            # localized diagnosis (or the generic unavailable fallback), never crash the turn.
             # We return early WITHOUT persisting history or refreshing the recap (nothing useful
             # happened this turn, and the summarizer LLM would just fail again). `usage` stays
             # the default all-zero `Usage()` -- nothing usable came back.
             logger.warning("KP turn aborted: LLM chat failed", exc_info=True)
-            reply = i18n.t("loop.unavailable")
+            category = getattr(exc, "category", "")
+            code = getattr(exc, "code", "")
+            if code in {"subscription_relogin_required", "subscription_refresh_failed"}:
+                category = "auth"
+            message_key = {
+                "transient": "loop.provider_transient",
+                "auth": "loop.provider_auth",
+                "quota": "loop.provider_quota",
+                "content": "loop.provider_content",
+            }.get(category, "loop.unavailable")
+            reply = i18n.t(message_key)
             _clear_llm_continuation(services, messages)
             if output_review is not None:
                 reply = output_review(reply)

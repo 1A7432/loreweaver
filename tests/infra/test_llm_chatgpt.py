@@ -502,6 +502,214 @@ def test_aggregate_sse_rejects_terminal_error_events(terminal_event: str):
     assert exc.value.code == "subscription_bad_response"
 
 
+@pytest.mark.parametrize(
+    ("event", "category"),
+    [
+        (
+            {
+                "type": "response.failed",
+                "response": {
+                    "status": "failed",
+                    "error": {"code": "server_error", "message": "backend overloaded"},
+                },
+            },
+            "transient",
+        ),
+        (
+            {
+                "type": "error",
+                "error": {
+                    "type": "authentication_error",
+                    "code": "invalid_token",
+                    "message": "login expired",
+                },
+            },
+            "auth",
+        ),
+        (
+            {
+                "type": "response.failed",
+                "response": {
+                    "status": "failed",
+                    "error": {"code": "insufficient_quota", "message": "quota exhausted"},
+                },
+            },
+            "quota",
+        ),
+        (
+            {
+                "type": "response.incomplete",
+                "response": {
+                    "status": "incomplete",
+                    "incomplete_details": {"reason": "max_output_tokens"},
+                },
+            },
+            "content",
+        ),
+    ],
+)
+def test_aggregate_sse_preserves_terminal_error_payload_and_classifies(
+    event: dict,
+    category: str,
+):
+    body = f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n"
+
+    with pytest.raises(OAuthError) as exc:
+        _aggregate_sse(body)
+
+    assert exc.value.code == "subscription_bad_response"
+    assert exc.value.event_type == event["type"]
+    assert exc.value.payload == event
+    assert exc.value.category == category
+
+
+async def test_chatgpt_llm_retries_transient_sse_error_once():
+    requests = 0
+    transient_event = {
+        "type": "response.failed",
+        "response": {
+            "status": "failed",
+            "error": {"code": "server_error", "message": "temporarily overloaded"},
+        },
+    }
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        if requests == 1:
+            return httpx.Response(
+                200,
+                text=f"data: {json.dumps(transient_event)}\n\ndata: [DONE]\n\n",
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "recovered"}],
+                    }
+                ]
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    llm = ChatGPTSubscriptionLLM(
+        LLMSettings(chat_model="gpt-5.4"),
+        token_manager=_manager(),
+        client=client,
+        responses_url="https://example.test/responses",
+    )
+    try:
+        result = await llm.chat([{"role": "user", "content": "hi"}])
+    finally:
+        await client.aclose()
+
+    assert result.content == "recovered"
+    assert requests == 2
+
+
+async def test_chatgpt_llm_stops_after_one_transient_retry():
+    requests = 0
+    transient_event = {
+        "type": "response.failed",
+        "response": {
+            "status": "failed",
+            "error": {"code": "server_error", "message": "still overloaded"},
+        },
+    }
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(
+            200,
+            text=f"data: {json.dumps(transient_event)}\n\ndata: [DONE]\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    llm = ChatGPTSubscriptionLLM(
+        LLMSettings(chat_model="gpt-5.4"),
+        token_manager=_manager(),
+        client=client,
+        responses_url="https://example.test/responses",
+    )
+    try:
+        with pytest.raises(OAuthError) as exc:
+            await llm.chat([{"role": "user", "content": "hi"}])
+    finally:
+        await client.aclose()
+
+    assert exc.value.category == "transient"
+    assert requests == 2
+
+
+@pytest.mark.parametrize(
+    ("event", "category"),
+    [
+        (
+            {
+                "type": "error",
+                "error": {"code": "invalid_token", "message": "login expired"},
+            },
+            "auth",
+        ),
+        (
+            {
+                "type": "response.failed",
+                "response": {
+                    "status": "failed",
+                    "error": {"code": "insufficient_quota", "message": "quota exhausted"},
+                },
+            },
+            "quota",
+        ),
+        (
+            {
+                "type": "response.incomplete",
+                "response": {
+                    "status": "incomplete",
+                    "incomplete_details": {"reason": "max_output_tokens"},
+                },
+            },
+            "content",
+        ),
+    ],
+)
+async def test_chatgpt_llm_does_not_retry_non_transient_sse_error(
+    event: dict,
+    category: str,
+):
+    requests = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(
+            200,
+            text=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    llm = ChatGPTSubscriptionLLM(
+        LLMSettings(chat_model="gpt-5.4"),
+        token_manager=_manager(),
+        client=client,
+        responses_url="https://example.test/responses",
+    )
+    try:
+        with pytest.raises(OAuthError) as exc:
+            await llm.chat([{"role": "user", "content": "hi"}])
+    finally:
+        await client.aclose()
+
+    assert exc.value.category == category
+    assert requests == 1
+
+
 def test_aggregate_sse_rejects_stream_that_ends_before_response_completed():
     body = "\n".join(
         [

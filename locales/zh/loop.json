@@ -1,5 +1,9 @@
 {
   "loop.max_rounds": "守秘人沉思良久，仍在权衡多种可能——请稍后再试一次。",
+  "loop.provider_auth": "守秘人的供应商登录已失效，请房主重新登录。",
+  "loop.provider_content": "供应商无法处理本次输入，请缩短内容后重试。",
+  "loop.provider_quota": "AI 供应商额度已耗尽，请房主检查套餐或账单。",
+  "loop.provider_transient": "AI 供应商在自动重试一次后仍暂时不可用，请稍后重试。",
   "loop.unavailable": "守秘人暂时无法应答，请稍后再试一次。",
   "loop.dice_correction": "运行时检查：当前玩家刚提交的行动——「{action}」——描述或需要一次掷骰检定，但本回合并没有真正掷骰。请立刻调用 skill_check / sanity_check / roll_dice / opposed_check 掷真骰来解决「该行动」这次待定的检定，再严格依据掷骰结果与成功等级来叙述「该行动」的结果。只处理上面引用的这个行动，不要去解决日志里更早的其他行动——也不要让玩家自己输入「.ra」之类的掷骰指令、或让玩家自己掷。",
   "loop.state_correction": "运行时检查：你的回复里写了场景/时间标题——「{title}」——但本回合没有更新确定性的 HUD 状态。请立刻调用 kp_note 设置 current_scene/current_focus（按需要），并调用 game_clock 设置或推进游戏内时间。自绘标题可以保留，但它不会更新 HUD；只有工具会。工具完成记账后，继续叙述时不要与原叙事矛盾。"
