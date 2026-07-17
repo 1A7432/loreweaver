@@ -544,15 +544,19 @@ async def test_reply_window_keeps_strict_outbox_order() -> None:
     adapter.set_message_handler(handler)
     await _dispatch(adapter, _group_payload("window-current"))
 
+    # 5-reply passive budget: 3 drain pre-turn (max_items), 2 more when the
+    # current reply queues behind them; the reply itself waits for the next
+    # window.
     assert [call["body"]["content"] for call in transport.http] == [
         "old-0",
         "old-1",
         "old-2",
         "old-3",
+        "old-4",
     ]
-    assert await adapter.outbox_size(source, room) == 2
+    assert await adapter.outbox_size(source, room) == 1
     queued = await adapter._load_outbox(adapter._outbox_key(source, room))
-    assert [item["message"]["text"] for item in queued] == ["old-4", "current"]
+    assert [item["message"]["text"] for item in queued] == ["current"]
 
 
 async def test_long_markdown_is_split_without_truncation() -> None:
@@ -993,3 +997,107 @@ async def test_gateway_stop_discards_pending_events_before_restart() -> None:
 
 async def _ignore(_payload) -> None:
     return None
+
+
+async def test_connect_fails_closed_when_gateway_never_ready(monkeypatch) -> None:
+    import adapters.qq_official.adapter as qq_module
+
+    monkeypatch.setattr(qq_module, "CONNECT_READY_TIMEOUT", 0.05)
+    adapter, transport, _ = _adapter()
+
+    assert await adapter.connect() is False
+    assert transport.closed == 1  # gateway.stop() tore the transport down
+
+
+async def test_connect_succeeds_once_gateway_reports_ready() -> None:
+    adapter, _, _ = _adapter()
+
+    task = asyncio.create_task(adapter.connect())
+    await asyncio.sleep(0)
+    await adapter.gateway.dispatch_payload(
+        {"op": 0, "s": 1, "t": "READY", "d": {"session_id": "session"}}
+    )
+
+    assert await task is True
+    await adapter.disconnect()
+
+
+async def test_heartbeat_missing_ack_closes_socket() -> None:
+    transport = GatewayTransport()
+    ticks: asyncio.Queue[None] = asyncio.Queue()
+
+    async def sleep(_delay: float) -> None:
+        await ticks.get()
+
+    gateway = QQGateway(transport, _ignore, intents=1, sleep=sleep)
+    await gateway.dispatch_payload({"op": 10, "d": {"heartbeat_interval": 1000}})
+    ticks.put_nowait(None)  # first beat sends and starts waiting for its ACK
+    await asyncio.sleep(0)
+    assert transport.websocket[-1]["op"] == HEARTBEAT
+    assert transport.closed_ws == 0
+
+    ticks.put_nowait(None)  # no ACK arrived: the zombie socket must be closed
+    await asyncio.sleep(0)
+    assert transport.closed_ws == 1
+    await gateway.stop()
+
+
+async def test_heartbeat_survives_when_acks_arrive() -> None:
+    transport = GatewayTransport()
+    ticks: asyncio.Queue[None] = asyncio.Queue()
+
+    async def sleep(_delay: float) -> None:
+        await ticks.get()
+
+    gateway = QQGateway(transport, _ignore, intents=1, sleep=sleep)
+    await gateway.dispatch_payload({"op": 10, "d": {"heartbeat_interval": 1000}})
+    ticks.put_nowait(None)
+    await asyncio.sleep(0)
+    await gateway.dispatch_payload({"op": 11})  # HEARTBEAT_ACK
+    ticks.put_nowait(None)
+    await asyncio.sleep(0)
+
+    assert transport.closed_ws == 0
+    assert sum(1 for item in transport.websocket if item["op"] == HEARTBEAT) == 2
+    await gateway.stop()
+
+
+async def test_poisoned_outbox_head_is_dropped_after_max_attempts() -> None:
+    adapter, transport, _ = _adapter()
+    source = _source()
+    room = source.chat_key()
+    await adapter.send_message(source, ChatMessage(text="poison"), session_key=room)
+    assert await adapter.outbox_size(source, room) == 1
+
+    async def handler(_message: InboundMessage) -> None:
+        return None
+
+    adapter.set_message_handler(handler)
+    transport.fail = lambda call: RuntimeError("qq.content_audit")
+    for index in range(3):
+        await _dispatch(adapter, _group_payload(f"poison-window-{index}"))
+
+    # The rejected head is dropped after OUTBOX_MAX_ATTEMPTS failed windows
+    # instead of blocking the queue forever.
+    assert await adapter.outbox_size(source, room) == 0
+
+
+async def test_queued_message_not_reported_with_stale_window_error() -> None:
+    adapter, transport, _ = _adapter()
+    source = _source()
+    room = source.chat_key()
+    results = []
+
+    async def handler(_message: InboundMessage) -> None:
+        transport.fail = lambda call: RuntimeError("first send fails")
+        results.append(await adapter.send_message(source, ChatMessage(text="one"), session_key=room))
+        transport.fail = None
+        results.append(await adapter.send_message(source, ChatMessage(text="two"), session_key=room))
+        return None
+
+    adapter.set_message_handler(handler)
+    await _dispatch(adapter, _group_payload("stale-error-window"))
+
+    assert results[0].ok is False  # its own failure is reported
+    assert results[1].ok is True  # safely queued, not the stale error
+    assert await adapter.outbox_size(source, room) == 2

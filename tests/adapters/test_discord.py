@@ -285,6 +285,10 @@ async def test_connect_registers_native_commands_and_syncs_tree() -> None:
         "panel",
         "language",
         "help",
+        "sc",
+        "init",
+        "setcoc",
+        "report",
         "room",
         "model",
         "audio",
@@ -686,7 +690,13 @@ async def test_panel_button_reenters_the_same_command_handler() -> None:
         return ChatMessage(text="done")
 
     adapter.set_message_handler(handler)
-    view = adapter._view(adapter._panel_message(Event.panel({"party": []}), "en").components)
+    view = adapter._view(
+        adapter._panel_message(
+            SessionSource(platform="discord", chat_type="group", chat_id="9"),
+            Event.panel({"party": []}),
+            "en",
+        ).components
+    )
     interaction = FakeInteraction()
 
     await view.children[2].callback(interaction)
@@ -1013,3 +1023,89 @@ async def test_voice_manager_maps_audio_controls_and_playback() -> None:
     assert client.source.volume == 0.5
     client.after(None)
     assert manager._temp_files == {}
+
+
+async def test_connect_fails_closed_when_login_dies_before_ready() -> None:
+    class NeverReadyClient(FakeClient):
+        async def start(self, token) -> None:
+            self.started.append(token)
+            raise RuntimeError("login failure")
+
+        async def wait_until_ready(self) -> None:
+            await asyncio.Event().wait()
+
+    class NeverReadySDK(FakeSDK):
+        Client = NeverReadyClient
+
+    context = AdapterContext(services=SimpleNamespace(store=Store(":memory:")), command_router=None)
+    adapter = DiscordAdapter(
+        DiscordSettings(token="t"),
+        context,
+        sdk=NeverReadySDK,
+        voice_manager=FakeVoiceManager(),
+    )
+
+    assert await adapter.connect() is False
+
+
+async def test_state_edit_failure_recreates_panel() -> None:
+    adapter = make_adapter()
+    channel = FakeChannel()
+    adapter._channels["123"] = channel
+    source = SessionSource(platform="discord", chat_type="group", chat_id="123", user_id="7")
+    adapter._panels["123"] = "999"  # deleted message: fetch_message will fail
+
+    result = await adapter.deliver_event(
+        source,
+        "room",
+        Event.state({"party": [{"name": "Ada"}], "online": 1}),
+        locale="en",
+    )
+
+    assert result is not None and result.ok is True
+    assert len(channel.sent) == 1  # panel re-created instead of frozen
+    assert adapter._panels["123"] != "999"
+
+
+async def test_dm_panel_keeps_character_block() -> None:
+    adapter = make_adapter()
+    dm = SessionSource(platform="discord", chat_type="dm", chat_id="9", user_id="7")
+    group = SessionSource(platform="discord", chat_type="group", chat_id="9", user_id="7")
+    event = Event.panel({"party": [{"name": "Ada"}], "character": {"name": "Nora"}})
+
+    dm_panel = adapter._panel_message(dm, event, "en")
+    group_panel = adapter._panel_message(group, event, "en")
+
+    assert "Nora" in str(dm_panel.embeds)
+    assert "Nora" not in str(group_panel.embeds)
+
+
+async def test_private_reply_forbidden_notifies_origin_channel() -> None:
+    class ForbiddenUser:
+        async def send(self, **kwargs):
+            raise type("Forbidden", (Exception,), {"status": 403})()
+
+    adapter = make_adapter()
+    channel = FakeChannel()
+    adapter._channels["123"] = channel
+    adapter._get_channel = lambda chat_id: _async_return(channel)
+
+    async def private_target(_source):
+        return ForbiddenUser()
+
+    adapter._private_target = private_target
+    source = SessionSource(platform="discord", chat_type="group", chat_id="123", user_id="7")
+
+    result = await adapter.send_message(source, ChatMessage(text="secret", private=True))
+
+    assert result.ok is False
+    assert result.error == "discord.private_reply_blocked"
+    assert len(channel.sent) == 1
+    assert "secret" not in channel.sent[0]["content"]
+
+
+def _async_return(value):
+    async def _inner():
+        return value
+
+    return _inner()

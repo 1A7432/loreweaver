@@ -54,6 +54,11 @@ FILE_GENERIC = 4
 MAX_TEXT_CHARS = 1800
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 OUTBOX_MAX_ITEMS = 64
+# Drop a queued item after this many failed drain attempts so one
+# permanently-rejected message cannot block the whole outbox.
+OUTBOX_MAX_ATTEMPTS = 3
+# How long connect() waits for the gateway's first READY before failing closed.
+CONNECT_READY_TIMEOUT = 30.0
 _AT_PREFIX_RE = re.compile(r"^(?:<@!?[^>]+>|@\S+)\s*")
 
 
@@ -172,7 +177,8 @@ class _DefaultQQTransport:
 class _ReplyWindow:
     message_id: str
     next_sequence: int = 1
-    remaining: int = 4
+    # QQ allows 5 passive replies per msg_id (msg_seq 1..5).
+    remaining: int = 5
     error: str | None = None
     current_turn: bool = False
 
@@ -239,6 +245,17 @@ class QQOfficialAdapter(BaseAdapter):
 
     async def connect(self) -> bool:
         await self._gateway.start()
+        waiter = getattr(self._gateway, "wait_ready", None)
+        if callable(waiter):
+            # start() only schedules the supervisor; without this wait a bad
+            # credential or unreachable gateway is reported as a successful
+            # connect while _supervise() backs off forever in the background.
+            try:
+                await waiter(CONNECT_READY_TIMEOUT)
+            except TimeoutError:
+                logger.warning("qq.connect_not_ready")
+                await self._gateway.stop()
+                return False
         return True
 
     async def disconnect(self) -> None:
@@ -296,6 +313,12 @@ class QQOfficialAdapter(BaseAdapter):
         messages: list[ChatMessage] = []
         for part in split_chat_message(message, self.capabilities.max_text_chars):
             messages.extend(_atomic_messages(part))
+        # Resolve the room once per logical send: a mid-send rebind must not
+        # scatter the parts across two rooms, and the common reply path
+        # (handle_inbound passes no session_key) shouldn't pay one Store read
+        # per chunk.
+        if session_key is None:
+            session_key = await resolve_session_key(self._store, source)
         result = SendResult(ok=True)
         for part in messages:
             result = await self._send_message(source, part, reply_to=reply_to, session_key=session_key)
@@ -315,7 +338,11 @@ class QQOfficialAdapter(BaseAdapter):
         room = session_key or await resolve_session_key(self._store, source)
         key = self._outbox_key(source, room)
         item_id = uuid.uuid4().hex
-        async with self._outbox_locks.setdefault(key, asyncio.Lock()):
+        own_failure: str | None = None
+        # The mutex is per chat (not per chat+room): the reply window it
+        # guards is chat-scoped, so a mid-flight room rebind must not let two
+        # coroutines mutate the same window under different locks.
+        async with self._outbox_locks.setdefault(source.chat_key(), asyncio.Lock()):
             items = await self._load_outbox(key)
             window = self._reply_windows.get(source.chat_key())
             if (
@@ -329,8 +356,16 @@ class QQOfficialAdapter(BaseAdapter):
                 if result.ok:
                     return result
                 window.error = result.error or "qq.send_failed"
+                own_failure = window.error
 
-            queued_message = await self._persist_attachments(source, room, message)
+            try:
+                queued_message = await self._persist_attachments(source, room, message)
+            except Exception as exc:
+                # MediaError (quota/mime/size) must degrade to a clean send
+                # failure — an escaping exception makes the hub drop this
+                # channel from the room until its next inbound message.
+                logger.warning("qq.attachment_persist_failed error=%s", type(exc).__name__)
+                return SendResult(ok=False, error="qq.attachment.persist_failed")
             if queued_message is None:
                 return SendResult(ok=False, error="qq.media_store.required")
             item = {"id": item_id, "message": _message_to_dict(queued_message)}
@@ -339,8 +374,11 @@ class QQOfficialAdapter(BaseAdapter):
             sent = await self._drain_unlocked(source, room, key)
         if item_id in sent:
             return SendResult(ok=True, message_id=sent[item_id])
-        if window is not None and window.error is not None:
-            return SendResult(ok=False, error=window.error)
+        if own_failure is not None:
+            # This call's own immediate send failed; report that, but never a
+            # stale window.error from an earlier message (this one is safely
+            # queued for the next reply window).
+            return SendResult(ok=False, error=own_failure)
         return SendResult(ok=True)
 
     async def _persist_attachments(
@@ -400,7 +438,7 @@ class QQOfficialAdapter(BaseAdapter):
         try:
             room = await resolve_session_key(self._store, inbound.source)
             key = self._outbox_key(inbound.source, room)
-            async with self._outbox_locks.setdefault(key, asyncio.Lock()):
+            async with self._outbox_locks.setdefault(inbound.source.chat_key(), asyncio.Lock()):
                 await self._drain_unlocked(inbound.source, room, key, max_items=3)
             window.current_turn = True
             await self.handle_inbound(inbound)
@@ -475,6 +513,19 @@ class QQOfficialAdapter(BaseAdapter):
             result = await self._send_now(source, room, message, window)
             if not result.ok:
                 window.error = result.error or "qq.send_failed"
+                attempts = int(entry.get("attempts") or 0) + 1
+                if attempts >= OUTBOX_MAX_ATTEMPTS:
+                    # A permanently-rejected head (content audit, revoked
+                    # permission) must not block the queue forever.
+                    logger.warning(
+                        "qq.outbox_dropped id=%s attempts=%s",
+                        entry.get("id"),
+                        attempts,
+                    )
+                    items.pop(0)
+                else:
+                    entry["attempts"] = attempts
+                await self._save_outbox(key, items)
                 break
             sent[str(entry.get("id") or "")] = result.message_id
             items.pop(0)
@@ -861,5 +912,6 @@ platform_registry.register(
         label="QQ",
         adapter_factory=_from_context,
         check_fn=lambda: True,
+        required_env=["TRPG_QQ__APP_ID", "TRPG_QQ__SECRET"],
     )
 )

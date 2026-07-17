@@ -37,6 +37,10 @@ except ImportError:  # pragma: no cover - import without the Discord extra
 
 logger = logging.getLogger(__name__)
 
+# Give the gateway login/READY handshake this long before declaring the
+# connect failed; discord.py normally reaches READY within a few seconds.
+_CONNECT_READY_TIMEOUT = 30.0
+
 
 @dataclass
 class _InteractionState:
@@ -120,6 +124,24 @@ class DiscordAdapter(BaseAdapter):
         self._client = client
         self._client_task = asyncio.create_task(client.start(self.token))
         self._client_task.add_done_callback(self._client_stopped)
+        ready = getattr(client, "wait_until_ready", None)
+        if callable(ready):
+            # Fail closed: a revoked token or missing privileged intents makes
+            # client.start() die in the background while connect() would have
+            # already reported success. Test doubles without wait_until_ready
+            # keep the immediate-success behavior.
+            ready_task = asyncio.create_task(ready())
+            done, _ = await asyncio.wait(
+                {self._client_task, ready_task},
+                timeout=_CONNECT_READY_TIMEOUT,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if not ready_task.done():
+                ready_task.cancel()
+            if self._client_task in done or ready_task not in done:
+                logger.warning("discord.connect_not_ready")
+                await self.disconnect()
+                return False
         return True
 
     def _client_stopped(self, task: asyncio.Task) -> None:
@@ -134,6 +156,10 @@ class DiscordAdapter(BaseAdapter):
             self._channels.clear()
             self._attachments.clear()
             self._interactions.clear()
+            for typing_task in self._typing_tasks.values():
+                typing_task.cancel()
+            self._typing_tasks.clear()
+            self._panels.clear()
 
     async def disconnect(self) -> None:
         await self.voice.close()
@@ -187,6 +213,18 @@ class DiscordAdapter(BaseAdapter):
         async def help_command(interaction: Any) -> None:
             await self.handle_interaction(interaction, ".help")
 
+        async def sc(interaction: Any, expression: str = "") -> None:
+            await self.handle_interaction(interaction, f".sc {expression}".rstrip())
+
+        async def init(interaction: Any, action: str = "") -> None:
+            await self.handle_interaction(interaction, f".init {action}".rstrip())
+
+        async def setcoc(interaction: Any, option: str = "") -> None:
+            await self.handle_interaction(interaction, f".setcoc {option}".rstrip())
+
+        async def report(interaction: Any) -> None:
+            await self.handle_interaction(interaction, ".report")
+
         async def room(interaction: Any, action: str = "", value: str = "") -> None:
             await self.handle_interaction(interaction, f".room {action} {value}".rstrip(), private=True)
 
@@ -227,6 +265,10 @@ class DiscordAdapter(BaseAdapter):
             ("panel", "commands.help.panel", panel),
             ("language", "commands.help.language", language),
             ("help", "commands.help.help", help_command),
+            ("sc", "commands.help.sc", sc),
+            ("init", "commands.help.init", init),
+            ("setcoc", "commands.help.setcoc", setcoc),
+            ("report", "commands.help.report", report),
             ("room", "commands.help.room", room),
             ("model", "commands.help.model", model),
             ("audio", "commands.help.audio", audio),
@@ -246,45 +288,52 @@ class DiscordAdapter(BaseAdapter):
     async def handle_interaction(self, interaction: Any, command: str, *, private: bool = False) -> None:
         inbound = self.to_interaction_message(interaction, command, private=private)
         interaction_id = inbound.interaction.id
-        await interaction.response.defer(ephemeral=private, thinking=True)
-        self._interactions[interaction_id] = _InteractionState(
+        state = _InteractionState(
             interaction=interaction,
             private=private,
             command=command,
             locale=inbound.interaction.locale or "en",
         )
         try:
+            # defer() must be inside the try: an expired/redelivered interaction
+            # raising here would otherwise bypass the adapter's own error
+            # handling and vanish into discord.py's CommandTree.on_error.
+            await interaction.response.defer(ephemeral=private, thinking=True)
+            self._interactions[interaction_id] = state
             if self._message_handler is not None:
                 reply = await self._message_handler(inbound)
                 if reply is not None:
                     result = await self.send_message(inbound.source, reply, reply_to=interaction_id)
                     if not result.ok:
                         raise RuntimeError(result.error or "discord.interaction.send_failed")
-            state = self._interactions.get(interaction_id)
-            if state is not None and not state.responded:
+            if not state.responded:
                 await interaction.delete_original_response()
         except Exception as exc:
             logger.warning("discord.interaction_failed error=%s", type(exc).__name__)
-            state = self._interactions[interaction_id]
-            await self._send_interaction(
-                state,
-                ChatMessage(text=get_i18n(state.locale).t("runner.error"), private=True),
-            )
+            try:
+                await self._send_interaction(
+                    state,
+                    ChatMessage(text=get_i18n(state.locale).t("runner.error"), private=True),
+                )
+            except Exception:
+                # A failed defer leaves nothing to respond to; the warning
+                # above is the only trace we can produce.
+                logger.warning("discord.interaction_error_reply_failed")
         finally:
             self._interactions.pop(interaction_id, None)
 
     async def handle_voice_interaction(self, interaction: Any, action: str) -> None:
         inbound = self.to_interaction_message(interaction, f".audio {action}", private=True)
         interaction_id = inbound.interaction.id
-        await interaction.response.defer(ephemeral=True, thinking=True)
         state = _InteractionState(
             interaction=interaction,
             private=True,
             command=f".audio {action}",
             locale=inbound.interaction.locale or "en",
         )
-        self._interactions[interaction_id] = state
         try:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            self._interactions[interaction_id] = state
             i18n = get_i18n(inbound.interaction.locale or "en")
             session_key = await resolve_session_key(self.context.services.store, inbound.source)
             binding = await get_keeper_binding(
@@ -317,10 +366,13 @@ class DiscordAdapter(BaseAdapter):
                 raise RuntimeError(send_result.error or "discord.interaction.send_failed")
         except Exception as exc:
             logger.warning("discord.voice_control_failed error=%s", type(exc).__name__)
-            await self._send_interaction(
-                state,
-                ChatMessage(text=get_i18n(state.locale).t("runner.error"), private=True),
-            )
+            try:
+                await self._send_interaction(
+                    state,
+                    ChatMessage(text=get_i18n(state.locale).t("runner.error"), private=True),
+                )
+            except Exception:
+                logger.warning("discord.interaction_error_reply_failed")
         finally:
             self._interactions.pop(interaction_id, None)
 
@@ -435,7 +487,35 @@ class DiscordAdapter(BaseAdapter):
             sent = await target.send(**kwargs)
             return SendResult(ok=True, message_id=_response_message_id(sent))
         except Exception as exc:
+            if (
+                message.private
+                and source.chat_type.casefold() not in {"dm", "direct", "private", "c2c"}
+                and _is_forbidden(exc)
+            ):
+                # The user blocks DMs from server members; tell them in the
+                # origin channel instead of failing silently.
+                return await self._notify_private_reply_blocked(source, reply_to)
             return SendResult(ok=False, error=str(exc))
+
+    async def _notify_private_reply_blocked(
+        self,
+        source: SessionSource,
+        reply_to: str | None,
+    ) -> SendResult:
+        settings = getattr(self.context.services, "settings", None)
+        locale = getattr(settings, "locale", "en") or "en"
+        notice = get_i18n(locale).t("discord.private_reply_blocked")
+        try:
+            channel = await self._get_channel(source.chat_id)
+            if channel is not None:
+                kwargs: dict[str, Any] = {"content": notice}
+                if reply_to and hasattr(channel, "get_partial_message"):
+                    kwargs["reference"] = channel.get_partial_message(int(reply_to))
+                    kwargs["mention_author"] = False
+                await channel.send(**kwargs)
+        except Exception as exc:
+            logger.warning("discord.private_reply_notice_failed error=%s", type(exc).__name__)
+        return SendResult(ok=False, error="discord.private_reply_blocked")
 
     async def _send_interaction(self, state: _InteractionState, message: ChatMessage) -> SendResult:
         message = self._interaction_card(state, message)
@@ -548,9 +628,17 @@ class DiscordAdapter(BaseAdapter):
             panel_id = await self._panel_id(source)
             if panel_id is None:
                 return None
-            return await self.edit_message(source, panel_id, self._panel_message(event, locale))
+            message = self._panel_message(source, event, locale)
+            result = await self.edit_message(source, panel_id, message)
+            if result.ok:
+                return result
+            # The tracked panel is gone (deleted / uneditable). Drop the stale
+            # id and re-establish the panel — state fires every turn, so
+            # leaving the dead id would freeze the panel until a manual .panel.
+            self._panels.pop(source.chat_id, None)
+            return await self._create_panel(source, message)
         if event.kind == "panel":
-            result = await self._upsert_panel(source, self._panel_message(event, locale))
+            result = await self._upsert_panel(source, self._panel_message(source, event, locale))
             if (source.message_id or "") in self._interactions:
                 acknowledgement = ChatMessage(
                     text=get_i18n(locale).t("commands.panel.ready"),
@@ -566,9 +654,12 @@ class DiscordAdapter(BaseAdapter):
             media_store=media_store,
         )
 
-    def _panel_message(self, event: Event, locale: str) -> ChatMessage:
+    def _panel_message(self, source: SessionSource, event: Event, locale: str) -> ChatMessage:
         data = dict(event.data)
-        data.pop("character", None)
+        # Private chats keep the character block (same contract as
+        # BaseAdapter.deliver_event and the Telegram panel path).
+        if source.chat_type.casefold() not in {"dm", "direct", "private", "c2c"}:
+            data.pop("character", None)
         panel = render_chat_event(Event.panel(data), get_i18n(locale))
         assert panel is not None
         panel.components = self._panel_components(locale)
@@ -596,6 +687,9 @@ class DiscordAdapter(BaseAdapter):
             result = await self.edit_message(source, panel_id, message)
             if result.ok:
                 return result
+        return await self._create_panel(source, message)
+
+    async def _create_panel(self, source: SessionSource, message: ChatMessage) -> SendResult:
         channel = await self._get_channel(source.chat_id)
         if channel is None:
             return SendResult(ok=False, error="discord.channel.missing")
@@ -730,6 +824,18 @@ async def _typing_loop(channel: Any) -> None:
             await channel.trigger_typing()
     except asyncio.CancelledError:
         pass
+    except Exception as exc:
+        # Permission changes / transient HTTP errors must not vanish as
+        # "Task exception was never retrieved" — log and let the loop end.
+        logger.warning("discord.typing_refresh_failed error=%s", type(exc).__name__)
+
+
+def _is_forbidden(exc: Exception) -> bool:
+    return (
+        type(exc).__name__ == "Forbidden"
+        or getattr(exc, "status", None) == 403
+        or getattr(exc, "status_code", None) == 403
+    )
 
 
 def _string_id(value: Any) -> str:

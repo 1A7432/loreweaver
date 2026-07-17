@@ -48,9 +48,15 @@ class QQGateway:
         self._business_task: asyncio.Task[None] | None = None
         self._business_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._closing = False
+        self._ready = asyncio.Event()
+        self._heartbeat_acked = True
 
         self.session_id: str | None = None
         self.sequence: int | None = None
+
+    async def wait_ready(self, timeout: float) -> None:
+        """Block until the first READY/RESUMED after start(); raises TimeoutError."""
+        await asyncio.wait_for(self._ready.wait(), timeout)
 
     async def start(self) -> None:
         if self._task is None or self._task.done():
@@ -82,6 +88,7 @@ class QQGateway:
             except Exception:
                 logger.warning("qq.gateway_connection_failed", exc_info=True)
             finally:
+                self._ready.clear()
                 await self._stop_heartbeat()
 
             if self._closing:
@@ -105,6 +112,7 @@ class QQGateway:
             await self._authenticate()
             return
         if op == HEARTBEAT_ACK:
+            self._heartbeat_acked = True
             return
         if op == RECONNECT:
             await self.transport.close_ws()
@@ -123,9 +131,11 @@ class QQGateway:
             if isinstance(data, dict):
                 self.session_id = str(data.get("session_id") or "") or None
             self._retry_delay = self._retry_min
+            self._ready.set()
             return
         elif event_type == "RESUMED":
             self._retry_delay = self._retry_min
+            self._ready.set()
             return
 
         if self._business_task is None or self._business_task.done():
@@ -179,6 +189,7 @@ class QQGateway:
 
     async def _start_heartbeat(self, interval: float) -> None:
         await self._stop_heartbeat()
+        self._heartbeat_acked = True
         self._heartbeat_task = asyncio.create_task(self._heartbeat(interval))
 
     async def _stop_heartbeat(self) -> None:
@@ -191,6 +202,13 @@ class QQGateway:
     async def _heartbeat(self, interval: float) -> None:
         while True:
             await self._sleep(interval)
+            if not self._heartbeat_acked:
+                # The previous HEARTBEAT was never ACKed: the socket is a
+                # zombie (open but deaf). Close it so _supervise reconnects.
+                logger.warning("qq.heartbeat_ack_missed")
+                await self.transport.close_ws()
+                return
+            self._heartbeat_acked = False
             try:
                 await self.transport.send_ws({"op": HEARTBEAT, "d": self.sequence})
             except asyncio.CancelledError:

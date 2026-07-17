@@ -1,0 +1,3 @@
+{
+  "discord.private_reply_blocked": "I couldn't send you a direct message — enable \"Allow direct messages from server members\" for this server (or unblock the bot) and run the command again."
+}
