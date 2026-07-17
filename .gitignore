@@ -69,3 +69,6 @@ clients/tui/preview_frame.txt
 # local-only play launcher that loads private module/card material (not for the public repo)
 scripts/play_tui.sh
 .prompts/
+
+# local AI-session state written by external tooling (never publish)
+.omo/
