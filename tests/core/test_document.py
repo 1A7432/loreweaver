@@ -89,7 +89,7 @@ def test_extract_text_by_extension_dispatches_txt():
 
 
 def test_extract_text_by_extension_dispatches_markdown_as_plain_text():
-    content = "# Module\n\nPlain markdown content".encode()
+    content = b"# Module\n\nPlain markdown content"
     assert DocumentProcessor.extract_text_by_extension("module.MD", content) == "# Module\n\nPlain markdown content"
     assert DocumentProcessor.extract_text_by_extension("module.markdown", content) == "# Module\n\nPlain markdown content"
 
