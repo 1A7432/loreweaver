@@ -72,3 +72,6 @@ scripts/play_tui.sh
 
 # local AI-session state written by external tooling (never publish)
 .omo/
+
+# live behavioral-eval transcripts and summaries (local evidence, never publish)
+eval-logs/
