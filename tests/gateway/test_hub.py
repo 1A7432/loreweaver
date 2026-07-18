@@ -131,6 +131,28 @@ async def test_publish_exclude_skips_that_member() -> None:
     assert any(delivered is event for delivered in other.events)
 
 
+async def test_publish_only_user_and_exclude_user_target_every_connection_of_one_human() -> None:
+    """`only_user`/`exclude_user` address a `user_key` — including a second terminal
+    of the same human — without the caller knowing individual members."""
+    hub = RoomHub()
+    keeper_a, keeper_b, player = FakeMember("kp"), FakeMember("kp"), FakeMember("p1")
+    for member in (keeper_a, keeper_b, player):
+        await hub.subscribe("room", member)
+        member.events.clear()
+
+    secret = Event.narrative(speaker="system", text="module progress ①")
+    await hub.publish("room", secret, only_user="user:kp")
+    assert any(delivered is secret for delivered in keeper_a.events)
+    assert any(delivered is secret for delivered in keeper_b.events)
+    assert all(delivered is not secret for delivered in player.events)
+
+    notice = Event.narrative(speaker="system", text="the Keeper is preparing a module")
+    await hub.publish("room", notice, exclude_user="user:kp")
+    assert all(delivered is not notice for delivered in keeper_a.events)
+    assert all(delivered is not notice for delivered in keeper_b.events)
+    assert any(delivered is notice for delivered in player.events)
+
+
 async def test_member_whose_deliver_raises_is_dropped_without_breaking_others() -> None:
     hub = RoomHub()
     good1, bad, good2 = FakeMember("good1"), FakeMember("bad"), FakeMember("good2")

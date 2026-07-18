@@ -79,7 +79,7 @@ async def test_module_command_streams_progress_bar_frames_when_the_router_has_a_
             self.published: list = []
 
         async def publish(self, chat_key, event, **kwargs) -> None:
-            self.published.append((chat_key, event))
+            self.published.append((chat_key, event, kwargs))
 
     services = _services()
     hub = _SpyHub()
@@ -94,16 +94,28 @@ async def test_module_command_streams_progress_bar_frames_when_the_router_has_a_
     await progress("analyze")
     await progress("done", "ready_fallback")
 
-    assert len(hub.published) == 3
-    for chat_key, event in hub.published:
+    # Progress bars are keeper-only (they carry module identity); everyone else
+    # gets exactly ONE spoiler-free notice, sent alongside the first stage.
+    bars = [(chat_key, event, kwargs) for chat_key, event, kwargs in hub.published if kwargs.get("only_user")]
+    notices = [(chat_key, event, kwargs) for chat_key, event, kwargs in hub.published if kwargs.get("exclude_user")]
+    assert len(hub.published) == 4
+    assert len(bars) == 3
+    assert len(notices) == 1
+    for chat_key, event, kwargs in bars:
         assert chat_key == "tui:group:table"
+        assert kwargs["only_user"] == "keeper"
         assert event.speaker == "system"
         assert "█" in event.text or "░" in event.text  # a progress bar
     # The bar fills as stages advance: read = 1 filled block, done = all 5.
-    assert hub.published[0][1].text.count("█") == 1
-    assert hub.published[2][1].text.count("█") == 5
+    assert bars[0][1].text.count("█") == 1
+    assert bars[2][1].text.count("█") == 5
     fallback_label = services.i18n.with_locale("zh").t("commands.module.progress.done_fallback")
-    assert fallback_label in hub.published[2][1].text
+    assert fallback_label in bars[2][1].text
+    notice_chat_key, notice_event, notice_kwargs = notices[0]
+    assert notice_chat_key == "tui:group:table"
+    assert notice_kwargs["exclude_user"] == "keeper"
+    assert notice_event.text == services.i18n.with_locale("zh").t("commands.module.progress.notice")
+    assert "█" not in notice_event.text and "module.txt" not in notice_event.text
 
 
 async def test_module_command_without_path_returns_usage(monkeypatch):

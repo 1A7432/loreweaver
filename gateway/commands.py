@@ -1325,25 +1325,42 @@ class CommandRouter:
         )
 
     def _module_progress(self, ctx: CommandCtx, chat_key: str) -> Any:
-        """Build a progress reporter that STREAMS import-stage frames to the room while a
+        """Build a progress reporter that STREAMS import-stage frames to the issuer while a
         (deliberately slow) full-module analysis runs, so the keeper watches a live progress
         bar advance through read → embed → analyze → build → done instead of staring at a
-        frozen spinner. Returns None (a no-op import) when this router has no hub — e.g. the
-        standalone CLI — so imports still work everywhere, just without the live bar."""
+        frozen spinner. Progress frames carry module identity (filename, chunk counts,
+        knowledge-pool stages) — keeper-only material under the anti-metagaming red line —
+        so they go ONLY to the issuing user's connections; everyone else gets a single
+        spoiler-free notice. Returns None (a no-op import) when this router has no hub —
+        e.g. the standalone CLI — so imports still work everywhere, just without the bar."""
         hub = self.hub
         if hub is None:
             return None
         i18n = ctx.i18n
+        issuer = ctx.user_id
         steps = {"read": 1, "embed": 2, "analyze": 3, "build": 4, "done": 5}
         total = len(steps)
+        notified = False
 
         async def report(stage: str, detail: str = "") -> None:
+            nonlocal notified
             step = steps.get(stage, 0)
             bar = "█" * step + "░" * (total - step)
             label_key = "commands.module.progress.done_fallback" if stage == "done" and detail == "ready_fallback" else f"commands.module.progress.{stage}"
             label = i18n.t(label_key)
             text = i18n.t("commands.module.progress.line", bar=bar, label=label)
-            await hub.publish(chat_key, Event.narrative(speaker="system", text=text, fmt="plain"))
+            await hub.publish(
+                chat_key,
+                Event.narrative(speaker="system", text=text, fmt="plain"),
+                only_user=issuer,
+            )
+            if not notified:
+                notified = True
+                await hub.publish(
+                    chat_key,
+                    Event.narrative(speaker="system", text=i18n.t("commands.module.progress.notice"), fmt="plain"),
+                    exclude_user=issuer,
+                )
 
         return report
 

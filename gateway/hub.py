@@ -209,8 +209,21 @@ class RoomHub:
                 self.rooms.pop(session_key, None)
             await self._emit_presence(session_key)
 
-    async def publish(self, session_key: str, event: Event, *, exclude: Member | None = None) -> None:
+    async def publish(
+        self,
+        session_key: str,
+        event: Event,
+        *,
+        exclude: Member | None = None,
+        only_user: str | None = None,
+        exclude_user: str | None = None,
+    ) -> None:
         """Fan ``event`` out to every member of ``session_key`` (except ``exclude``).
+
+        ``only_user`` / ``exclude_user`` narrow delivery to (or away from) every
+        connection of one ``user_key`` — the hub's unit of human identity — so a
+        caller can address "the person who issued this command" across all of
+        their terminals without knowing individual members.
 
         A member whose ``deliver`` raises is dropped and logged; the fan-out to
         the remaining members always completes.
@@ -218,7 +231,13 @@ class RoomHub:
         members = self.rooms.get(session_key)
         if not members:
             return
-        targets = [member for member in list(members) if member is not exclude]
+        targets = [
+            member
+            for member in list(members)
+            if member is not exclude
+            and (only_user is None or member.user_key == only_user)
+            and (exclude_user is None or member.user_key != exclude_user)
+        ]
         results = await asyncio.gather(
             *(member.deliver(event) for member in targets),
             return_exceptions=True,
