@@ -71,7 +71,7 @@ const CLICK_X = 6
 describe("CharacterScreen", () => {
   test("80 columns gives the creation form full width and clears it when the sheet lands", async () => {
     const client = new MockClient()
-    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client, 80, 34)
+    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client, 80, 24)
     await flush()
     act(() => client.push(PLAYER_WELCOME))
     await waitForFrame((text) => text.includes("我的角色"))
@@ -456,7 +456,7 @@ describe("CharacterScreen", () => {
 
   test("已有角色时可微调:发送 .st 力量60 侦查70", async () => {
     const client = new MockClient()
-    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client, 80, 34)
+    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client, 80, 24)
     await flush()
     act(() => client.push(PLAYER_WELCOME))
     await waitForFrame((t) => t.includes("我的角色"))

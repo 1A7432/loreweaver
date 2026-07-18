@@ -106,7 +106,7 @@ async function enterKeeperModule(harness: Awaited<ReturnType<typeof renderApp>>)
 describe("KeeperModule", () => {
   test("80 columns bounds every line and completion replaces the import progress frame", async () => {
     const client = new MockClient()
-    const harness = await renderApp(client, 80, 34)
+    const harness = await renderApp(client, 80, 24)
     await harness.flush()
     act(() => client.push(KEEPER_WELCOME))
     await enterKeeperModule(harness)
