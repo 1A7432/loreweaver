@@ -26,6 +26,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
@@ -213,10 +214,11 @@ _PLAYER_SKILL_ZH_TERMS = (
 
 _PLAYER_NO_ROLL_RE = re.compile(
     r"(?:\b(?:no|without)\s+(?:a\s+)?(?:roll|check|dice)\b"  # i18n-exempt - detector lexicon
-    r"|\b(?:do\s+not|don't|dont)\s+(?:make|roll|perform|require|need)\b[^.!?\n]{0,24}"
-    r"\b(?:roll|check|dice)\b"
+    r"|\b(?:do\s+not|don't|dont)\s+(?:roll\b|(?:make|perform|require|need)\b[^.!?\n]{0,18}"
+    r"\b(?:roll|check|dice)\b)"
     r"|\bno\s+(?:roll|check)\s+is\s+(?:needed|required)\b"
-    r"|(?:无需|不需|不需要|不要|不用)(?:进行|做|任何)?(?:掷骰|投骰|骰点|检定))",
+    r"|(?:无需|不需|不需要|不要|不用)(?:进行|做|任何)?(?:掷骰|投骰|骰点|检定)"
+    r"|不(?:进行|做|任何)?(?:掷骰|投骰|骰点|检定))",
     re.IGNORECASE,
 )
 _PLAYER_META_HEAD_RE = re.compile(
@@ -224,7 +226,11 @@ _PLAYER_META_HEAD_RE = re.compile(
     r"|\s*(?:元请求|元指令|场外|题外)\s*[:：-]?"
     r"|\s*(?:export|audit|summarize|summarise|show|list|review)\b[^.!?\n]{0,32}"
     r"\b(?:log|report|recap|transcript|session)\b"
-    r"|\s*(?:导出|审计|汇总|查看|列出|复核)[^。！？\n]{0,20}(?:日志|团报|报告|记录|会话))",
+    r"|\s*(?:add|append|record|restate|update)\b[^.!?\n]{0,36}"
+    r"\b(?:log|report|recap|transcript|session)\b"
+    r"|\s*(?:导出|审计|汇总|查看|列出|复核)[^。！？\n]{0,20}(?:日志|团报|报告|记录|会话)"
+    r"|\s*[^。！？\n]{0,40}(?:补进|加入|写入|补充|更新|重述)[^。！？\n]{0,24}"
+    r"(?:回顾|日志|团报|报告|记录|会话))",
     re.IGNORECASE,
 )
 _PLAYER_OBVIOUS_OR_VOLUNTARY_RE = re.compile(
@@ -235,14 +241,24 @@ _PLAYER_OBVIOUS_OR_VOLUNTARY_RE = re.compile(
 )
 _PLAYER_EN_CLAUSE_SPLIT_RE = re.compile(r"\b(?:and|then|while|because|but)\b|[,.!?;\n]", re.IGNORECASE)
 _PLAYER_ZH_CLAUSE_SPLIT_RE = re.compile(r"(?:然后|并且|随后|但是|不过|因为)|[，,。！？；\n]")
+_PLAYER_REPORTED_EN_RE = re.compile(
+    r"\b(?:mention|say|tell|recall|remember|note|explain|report)\b",
+    re.IGNORECASE,
+)
+_PLAYER_REPORTED_ZH_RE = re.compile(r"(?:提到|说起|告诉|回忆|记得|说明|报告|复述)")  # i18n-exempt
 
 _REPLY_RESOLVED_EN_RE = re.compile(
-    r"\byou\s+(?:(?:successfully|clearly|finally)\s+)?(?:find|discover|uncover|spot|notice|identify|"
-    r"determine|confirm|decipher|fail\s+to\s+find|cannot\s+find|can't\s+find)\b",
+    r"(?:\byou\s+(?:successfully|clearly|finally)\s+"
+    r"(?:find|discover|uncover|spot|notice|identify|determine|confirm|decipher)\b"
+    r"|\byou\s+(?:find|discover|uncover|spot|notice|identify|determine|confirm|decipher|"
+    r"fail\s+to\s+find|cannot\s+find|can't\s+find)\b[^.!?\n]{0,72}\b"
+    r"(?:hidden|concealed|secret|faint|subtle|clue|latch|trace|evidence|pattern|anomaly)\b)",
     re.IGNORECASE,
 )
 _REPLY_RESOLVED_ZH_RE = re.compile(
-    r"(?:你|调查员)(?:终于|成功|清楚地|未能|没能)?(?:发现|找到了?|注意到|辨认出|确认|判断出|解读出)"  # i18n-exempt
+    r"(?:(?:你|调查员)(?:终于|成功|清楚地|未能|没能)(?:发现|找到了?|注意到|辨认出|确认|判断出|解读出)"
+    r"|(?:你|调查员)(?:发现|找到了?|注意到|辨认出|确认|判断出|解读出)[^。！？\n]{0,36}"
+    r"(?:暗门|隐藏|藏着|线索|痕迹|秘密|细微|异常|证据|规律|破绽))"  # i18n-exempt
 )
 
 # High-confidence "self-drawn scene card" detector: short title-like lines with
@@ -329,7 +345,7 @@ def _reply_requests_or_resolves_check(reply: str) -> bool:
 
 
 def _player_declares_no_roll_context(text: str) -> bool:
-    """High-confidence whole-action exemption for no-roll, meta, and obvious facts."""
+    """High-confidence whole-message exemption for no-roll and meta requests."""
     stripped = (text or "").strip()
     if not stripped:
         return False
@@ -338,7 +354,6 @@ def _player_declares_no_roll_context(text: str) -> bool:
     return bool(
         _PLAYER_NO_ROLL_RE.search(stripped)
         or _PLAYER_META_HEAD_RE.search(stripped)
-        or _PLAYER_OBVIOUS_OR_VOLUNTARY_RE.search(stripped)
     )
 
 
@@ -354,18 +369,46 @@ def _player_attempts_checkable_action(text: str) -> bool:
         return False
     if _player_declares_no_roll_context(text):
         return False
-    # Approximate the action's HEAD VERB rather than scanning the entire message:
-    # only the first independent clause and a small leading window are eligible.
-    # This keeps "I walk forward and mention we searched yesterday" from
-    # triggering on a stale/incidental skill word while retaining subjects and
-    # NPC titles before verbs such as "Have Captain Ruiz inspect ...".
-    english_clause = _PLAYER_EN_CLAUSE_SPLIT_RE.split(text, maxsplit=1)[0]
-    english_head = " ".join(english_clause.split()[:12])
-    if _PLAYER_SKILL_EN_RE.search(english_head):
+    # Inspect each declared action clause, not arbitrary substrings in the whole
+    # message. This catches a second action after "and/然后" while ignoring a
+    # skill word embedded under "I mention that we searched yesterday". An
+    # obvious/voluntary exemption applies only to the clause it describes; it
+    # must never mask a later uncertain action in the same message.
+    for english_clause in _PLAYER_EN_CLAUSE_SPLIT_RE.split(text):
+        english_head = " ".join(english_clause.split()[:12])
+        match = _PLAYER_SKILL_EN_RE.search(english_head)
+        if match is None:
+            continue
+        prefix = english_head[: match.start()]
+        if _PLAYER_REPORTED_EN_RE.search(prefix):
+            continue
+        if _PLAYER_OBVIOUS_OR_VOLUNTARY_RE.search(english_clause):
+            continue
         return True
-    chinese_clause = _PLAYER_ZH_CLAUSE_SPLIT_RE.split(text, maxsplit=1)[0]
-    chinese_head = chinese_clause[:28]
-    return any(term in chinese_head for term in _PLAYER_SKILL_ZH_TERMS)
+    for chinese_clause in _PLAYER_ZH_CLAUSE_SPLIT_RE.split(text):
+        chinese_head = chinese_clause[:28]
+        for term in _PLAYER_SKILL_ZH_TERMS:
+            index = chinese_head.find(term)
+            if index < 0:
+                continue
+            if _PLAYER_REPORTED_ZH_RE.search(chinese_head[:index]):
+                continue
+            if _PLAYER_OBVIOUS_OR_VOLUNTARY_RE.search(chinese_clause):
+                continue
+            return True
+    return False
+
+
+def _player_forbids_dice(text: str) -> bool:
+    """Return whether this submission has a high-confidence no-dice contract.
+
+    Explicit no-roll/meta requests always win. An obvious/voluntary marker also
+    wins when no separate uncertain action clause remains; this preserves a
+    later checkable action in composite messages.
+    """
+    if _player_declares_no_roll_context(text):
+        return True
+    return bool(_PLAYER_OBVIOUS_OR_VOLUNTARY_RE.search(text or "")) and not _player_attempts_checkable_action(text)
 
 
 @dataclass
@@ -423,6 +466,7 @@ async def run_kp_turn(
     tool_trace: list[dict] = []
     reply: str | None = None
     rounds = 0
+    dice_forbidden = _player_forbids_dice(user_message)
     # Accumulated across MAIN loop rounds and the max-rounds finalizer. The
     # dice-first corrective phase
     # (`_run_dice_correction`, below) makes its own `services.llm.chat` calls but
@@ -468,7 +512,17 @@ async def run_kp_turn(
 
         if result.tool_calls:
             try:
-                await _dispatch_and_record(toolset, ctx, result, messages, tool_trace, unlocked)
+                await _dispatch_and_record(
+                    toolset,
+                    ctx,
+                    services,
+                    result,
+                    messages,
+                    tool_trace,
+                    unlocked,
+                    max_dice_calls=0 if dice_forbidden else None,
+                    dice_policy_suppressed=dice_forbidden,
+                )
             except (asyncio.CancelledError, Exception):
                 _clear_llm_continuation(services, messages)
                 raise
@@ -489,7 +543,7 @@ async def run_kp_turn(
     if (
         reply is not None
         and not _dice_rolled(tool_trace)
-        and not _player_declares_no_roll_context(user_message)
+        and not dice_forbidden
         and (_reply_requests_or_resolves_check(reply) or _player_attempts_checkable_action(user_message))
     ):
         reply = await _run_dice_correction(
@@ -728,36 +782,216 @@ def _normalize_tool_arguments(call_name: str, arguments: dict | None) -> dict:
     actor = normalized.get("actor")
     if actor is None or (isinstance(actor, str) and not actor.strip()):
         normalized.pop("actor", None)
-        if normalized.get("npc_target") in {None, 0, ""}:
+        npc_target = normalized.get("npc_target")
+        if npc_target is None or npc_target == "" or (
+            isinstance(npc_target, (int, float)) and npc_target == 0
+        ):
             normalized.pop("npc_target", None)
     return normalized
 
 
+_EVENT_NEGATION_RE = re.compile(
+    r"\b(?:no|not|never|without|failed?|unable|cannot|can't|didn't|didnt)\b|(?:没有|没能|未能|并未|不是|无法|不能)",  # i18n-exempt
+    re.IGNORECASE,
+)
+_EVENT_EN_STOP_WORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "at",
+        "from",
+        "he",
+        "her",
+        "hers",
+        "him",
+        "his",
+        "in",
+        "is",
+        "it",
+        "its",
+        "now",
+        "of",
+        "our",
+        "she",
+        "the",
+        "their",
+        "them",
+        "they",
+        "to",
+        "us",
+        "up",
+        "was",
+        "we",
+        "were",
+        "with",
+    }
+)
+_EVENT_EN_SYNONYMS = {
+    "acquired": "possess",
+    "carried": "possess",
+    "carries": "possess",
+    "carrying": "possess",
+    "carry": "possess",
+    "claim": "possess",
+    "claimed": "possess",
+    "claims": "possess",
+    "had": "possess",
+    "has": "possess",
+    "have": "possess",
+    "held": "possess",
+    "hold": "possess",
+    "holds": "possess",
+    "inventory": "possess",
+    "keep": "possess",
+    "keeps": "possess",
+    "kept": "possess",
+    "obtained": "possess",
+    "own": "possess",
+    "owned": "possess",
+    "owns": "possess",
+    "picked": "possess",
+    "pocketed": "possess",
+    "possessed": "possess",
+    "possesses": "possess",
+    "possession": "possess",
+    "possessing": "possess",
+    "recovered": "possess",
+    "retrieved": "possess",
+    "secure": "possess",
+    "secured": "possess",
+    "secures": "possess",
+    "take": "possess",
+    "taken": "possess",
+    "takes": "possess",
+    "took": "possess",
+}
+_EVENT_EN_GENERIC_ACTOR_RE = re.compile(
+    r"^\s*(?:the\s+)?(?:investigators?|party|group|team)\b",  # i18n-exempt - semantic event guard
+    re.IGNORECASE,
+)
+_EVENT_EN_GENERIC_ACTOR_TERMS = frozenset({"group", "investigator", "investigators", "party", "team"})
+
+
+def _event_english_sequence(value: str) -> list[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    suppress_generic_holder = False
+    for term in re.findall(r"[a-z0-9]+", value.casefold()):
+        if term in _EVENT_EN_STOP_WORDS:
+            continue
+        normalized = _EVENT_EN_SYNONYMS.get(term, term)
+        if normalized in seen:
+            # “...recovered the key; it is now in the investigators'
+            # possession” restates the same acquisition and appends only a
+            # generic shared-party holder. Drop that holder when the repeated
+            # possession marker proves it is boilerplate, while retaining
+            # generic actors elsewhere in the event sentence.
+            if normalized == "possess" and terms and terms[-1] in _EVENT_EN_GENERIC_ACTOR_TERMS:
+                seen.discard(terms.pop())
+            if normalized == "possess":
+                suppress_generic_holder = True
+            continue
+        if suppress_generic_holder and normalized in _EVENT_EN_GENERIC_ACTOR_TERMS:
+            suppress_generic_holder = False
+            continue
+        suppress_generic_holder = False
+        seen.add(normalized)
+        terms.append(normalized)
+    return terms
+
+
+def _event_english_terms(value: str) -> set[str]:
+    return set(_event_english_sequence(value))
+
+
 def _event_description_is_semantic_duplicate(left: str, right: str) -> bool:
     """Conservative same-turn near-duplicate check for event tool calls."""
-    left_norm = re.sub(r"[^\w\u3400-\u9fff]+", "", (left or "").casefold())
-    right_norm = re.sub(r"[^\w\u3400-\u9fff]+", "", (right or "").casefold())
+    if bool(_EVENT_NEGATION_RE.search(left or "")) != bool(_EVENT_NEGATION_RE.search(right or "")):
+        return False
+    generic_english_actor = bool(
+        _EVENT_EN_GENERIC_ACTOR_RE.search(left or "")
+        or _EVENT_EN_GENERIC_ACTOR_RE.search(right or "")
+    )
+    left_value = re.sub(
+        r"^(?:调查员(?:一行|们)?|众人|队伍|一行人)", "", (left or "").strip()  # i18n-exempt
+    )
+    right_value = re.sub(
+        r"^(?:调查员(?:一行|们)?|众人|队伍|一行人)", "", (right or "").strip()  # i18n-exempt
+    )
+    left_norm = re.sub(r"[^\w\u3400-\u9fff]+", "", left_value.casefold())
+    right_norm = re.sub(r"[^\w\u3400-\u9fff]+", "", right_value.casefold())
     if not left_norm or not right_norm:
         return False
     if left_norm == right_norm:
         return True
     sequence_ratio = SequenceMatcher(None, left_norm, right_norm).ratio()
-    left_terms = set(re.findall(r"[a-z0-9]+|[\u3400-\u9fff]", left_norm))
-    right_terms = set(re.findall(r"[a-z0-9]+|[\u3400-\u9fff]", right_norm))
-    union = left_terms | right_terms
-    overlap = len(left_terms & right_terms) / len(union) if union else 0.0
-    return sequence_ratio >= 0.82 or overlap >= 0.84
+    left_en_sequence = _event_english_sequence(left)
+    right_en_sequence = _event_english_sequence(right)
+    left_en = set(left_en_sequence)
+    right_en = set(right_en_sequence)
+    if left_en and right_en:
+        union = left_en | right_en
+        overlap = len(left_en & right_en) / len(union) if union else 0.0
+        order_ratio = SequenceMatcher(None, left_en_sequence, right_en_sequence).ratio()
+        if order_ratio >= 0.72 and overlap >= 0.90:
+            return True
+        # A shared-party milestone may name the acting PC in one wording and
+        # use “the investigators/party” in the other. Only ignore that subject
+        # when one side is explicitly generic and both descriptions contain the
+        # same possession/acquisition action family; other verbs and two named
+        # actors retain full subject/object order above.
+        if generic_english_actor and "possess" in left_en_sequence and "possess" in right_en_sequence:
+            left_core = left_en_sequence[left_en_sequence.index("possess") :]
+            right_core = right_en_sequence[right_en_sequence.index("possess") :]
+            core_union = set(left_core) | set(right_core)
+            core_overlap = len(set(left_core) & set(right_core)) / len(core_union) if core_union else 0.0
+            core_order = SequenceMatcher(None, left_core, right_core).ratio()
+            return core_order >= 0.90 and core_overlap >= 0.90
+        return False
+    # CJK single-character set overlap erases subject/object order. Sequence
+    # similarity preserves it while still accepting tiny particles such as
+    # “已/一行” in a restatement of the same milestone.
+    return sequence_ratio >= 0.88
+
+
+async def _recent_session_event_is_semantic_duplicate(
+    services: Services,
+    ctx: AgentCtx,
+    description: str,
+) -> bool:
+    """Check recent persisted events so paraphrases across adjacent turns dedupe."""
+    try:
+        session = await services.battles.generator.get_current_session(ctx.chat_key)
+    except Exception:
+        logger.warning("semantic event guard could not read the current session", exc_info=True)
+        return False
+    if session is None:
+        return False
+    now = time.time()
+    for event in reversed(session.key_events):
+        timestamp = event.get("timestamp")
+        if not isinstance(timestamp, (int, float)) or now - timestamp > 5 * 60:
+            continue
+        if _event_description_is_semantic_duplicate(
+            str(event.get("description", "")),
+            description,
+        ):
+            return True
+    return False
 
 
 async def _dispatch_and_record(
     toolset: Toolset,
     ctx: AgentCtx,
+    services: Services,
     result: ChatResult,
     conversation: list[dict],
     tool_trace: list[dict],
     unlocked: set[str] | None = None,
     *,
     max_dice_calls: int | None = None,
+    dice_policy_suppressed: bool = False,
 ) -> None:
     """Dispatch one assistant round's tool calls, feeding results back into `conversation` + `tool_trace`.
 
@@ -785,21 +1019,32 @@ async def _dispatch_and_record(
                 for entry in tool_trace
             )
         )
-        duplicate_session_event = (
-            call.name == "add_session_event"
-            and any(
+        duplicate_session_event = False
+        if call.name == "add_session_event":
+            description = str((call.arguments or {}).get("description", ""))
+            duplicate_session_event = any(
                 entry.get("name") == "add_session_event"
                 and not entry.get("suppressed")
                 and _event_description_is_semantic_duplicate(
                     str((entry.get("arguments") or {}).get("description", "")),
-                    str((call.arguments or {}).get("description", "")),
+                    description,
                 )
                 for entry in tool_trace
             )
-        )
+            if not duplicate_session_event:
+                duplicate_session_event = await _recent_session_event_is_semantic_duplicate(
+                    services,
+                    ctx,
+                    description,
+                )
         suppressed = False
         if suppress_extra_dice:
-            tool_result = t("loop.dice_correction.extra_check_suppressed", locale=ctx.locale)
+            message_key = (
+                "loop.dice_policy.forbidden_check_suppressed"
+                if dice_policy_suppressed
+                else "loop.dice_correction.extra_check_suppressed"
+            )
+            tool_result = t(message_key, locale=ctx.locale)
             suppressed = True
         elif duplicate_initiative_next:
             tool_result = t("kp_tools.initiative.next_already_committed", locale=ctx.locale)
@@ -925,6 +1170,7 @@ async def _run_dice_correction(
                 await _dispatch_and_record(
                     toolset,
                     ctx,
+                    services,
                     result,
                     convo,
                     tool_trace,
@@ -1015,7 +1261,7 @@ async def _run_state_correction(
                 return prior_reply
         if result.tool_calls:
             try:
-                await _dispatch_and_record(toolset, ctx, result, convo, tool_trace, unlocked)
+                await _dispatch_and_record(toolset, ctx, services, result, convo, tool_trace, unlocked)
             except (asyncio.CancelledError, Exception):
                 _clear_llm_continuation(services, convo)
                 raise

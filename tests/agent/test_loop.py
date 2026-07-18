@@ -113,6 +113,19 @@ class _EventProvider:
         return f"recorded:{event_type}:{description}"
 
 
+class _PersistingEventProvider:
+    def __init__(self, services) -> None:
+        self.services = services
+        self.descriptions: list[str] = []
+
+    @tool
+    async def add_session_event(self, ctx: AgentCtx, description: str, event_type: str = "general") -> str:
+        """Record one session event in the real report store."""
+        self.descriptions.append(description)
+        await self.services.battles.add_key_event(ctx.chat_key, description, event_type)
+        return f"recorded:{event_type}:{description}"
+
+
 class _ExplodingProvider:
     @tool
     async def explode(self, ctx: AgentCtx) -> str:
@@ -848,6 +861,49 @@ async def test_explicit_no_roll_and_meta_actions_never_enter_dice_correction(act
     assert len(llm.calls) == 1
 
 
+@pytest.mark.parametrize(
+    ("action", "locale"),
+    [
+        ("OOC: no roll is needed; audit the session log only.", "en"),
+        ("店员已明确同意主动说明营业时间，我安静听他自愿回答。", "zh"),
+        ("不掷骰，把场景准确切换为屋顶花园。", "zh"),
+        ("把我们已经拿到码头储物柜黄铜钥匙这件事补进回顾。", "zh"),
+    ],
+)
+async def test_no_dice_contract_suppresses_a_model_invented_check(action: str, locale: str):
+    llm = FakeLLM(
+        script=[
+            assistant_tools(tool_call("skill_check", skill_name="Listen")),
+            assistant_text("The requested fact is acknowledged without a check."),
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx("chat-no-dice-contract", locale), services, _dice_toolset(), action)
+
+    assert len(result.tool_trace) == 1
+    assert result.tool_trace[0]["suppressed"] is True
+    assert "hard success" not in result.tool_trace[0]["result"]
+    assert not _dice_rolled(result.tool_trace)
+    assert len(llm.calls) == 2
+
+
+async def test_voluntary_clause_does_not_hide_a_later_uncertain_action_from_dice():
+    llm = FakeLLM(
+        script=[
+            assistant_tools(tool_call("skill_check", skill_name="Spot Hidden")),
+            assistant_text("The later uncertain search is resolved by the check."),
+        ]
+    )
+    services = _services(llm)
+    action = "The clerk voluntarily states the hours; then I inspect the hidden latch."
+
+    result = await run_kp_turn(_ctx("chat-voluntary-then-check"), services, _dice_toolset(), action)
+
+    assert _dice_rolled(result.tool_trace)
+    assert not result.tool_trace[0].get("suppressed")
+
+
 async def test_player_action_trigger_forced_round_returning_prose_keeps_reply():
     # The player-action detector fires (via the broadened PLAYER-side trigger) and
     # forces the corrective round. If the model returns prose instead of obeying
@@ -951,6 +1007,35 @@ async def test_empty_player_actor_defaults_are_removed_before_dispatch_and_trace
     assert result.tool_trace[0]["arguments"] == {"skill_name": "Spot Hidden"}
 
 
+async def test_malformed_player_npc_target_reaches_tool_validation_without_crashing():
+    provider = _AttributionDiceProvider()
+    llm = FakeLLM(
+        script=[
+            assistant_tools(
+                tool_call(
+                    "skill_check",
+                    skill_name="Spot Hidden",
+                    actor="",
+                    npc_target=[65],
+                )
+            ),
+            assistant_text("The malformed check was rejected safely."),
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(
+        _ctx("chat-normalize-malformed-target"),
+        services,
+        Toolset(provider),
+        "I search the uncertain desk.",
+    )
+
+    assert provider.calls == []
+    assert result.tool_trace[0]["arguments"] == {"skill_name": "Spot Hidden", "npc_target": [65]}
+    assert "Invalid arguments" in result.tool_trace[0]["result"]
+
+
 async def test_same_turn_semantic_event_duplicate_is_suppressed():
     provider = _EventProvider()
     first = "调查员已从码头储物柜取得黄铜钥匙。"
@@ -977,6 +1062,68 @@ async def test_same_turn_semantic_event_duplicate_is_suppressed():
     assert result.tool_trace[1]["suppressed"] is True
     assert _event_description_is_semantic_duplicate(first, second)
     assert not _event_description_is_semantic_duplicate(first, "调查员在码头发现一处新鲜血迹。")
+    assert not _event_description_is_semantic_duplicate("警察射杀邪教徒", "邪教徒射杀警察")
+    assert not _event_description_is_semantic_duplicate("张三帮助李四逃离仓库", "李四帮助张三逃离仓库")
+    assert not _event_description_is_semantic_duplicate("警察射杀邪教徒", "警察没有射杀邪教徒")
+    assert not _event_description_is_semantic_duplicate(
+        "Police arrested the cultist at the dock.",
+        "Police killed the cultist at the dock.",
+    )
+    assert _event_description_is_semantic_duplicate(
+        "The investigators pocketed the brass key recovered from the dock locker.",
+        "The investigators recovered the brass key from the dock locker and now have it in their possession.",
+    )
+    assert _event_description_is_semantic_duplicate(
+        "The investigators took possession of the brass key from the dock locker.",
+        "The investigators recovered the brass key from the dock locker and now have it in their possession.",
+    )
+    assert _event_description_is_semantic_duplicate(
+        "Mara Vale pocketed the brass key recovered from the dock locker.",
+        "The investigators recovered the brass key from the dock locker and now have it in their possession.",
+    )
+    assert _event_description_is_semantic_duplicate(
+        "Mara Vale retrieved and pocketed the brass key from the dock locker.",
+        "Mara Vale recovered the brass key from the dock locker; it is now in the investigators’ possession.",
+    )
+    assert _event_description_is_semantic_duplicate(
+        "Mara Vale took possession of the brass key recovered from the dock locker.",
+        "Mara Vale recovered the brass key from the dock locker and now carries it in her possession.",
+    )
+    assert not _event_description_is_semantic_duplicate(
+        "Mara Vale pocketed the brass key from Elena's locker.",
+        "The investigators pocketed the brass key from Mara's locker.",
+    )
+    assert not _event_description_is_semantic_duplicate(
+        "The police shot the cultist at the dock.",
+        "The cultist shot the police at the dock.",
+    )
+
+
+async def test_recent_cross_turn_semantic_event_duplicate_is_suppressed():
+    first = "Mara Vale retrieved and pocketed the brass key from the dock locker."
+    second = "Mara Vale pocketed the brass key recovered from the dock locker."
+    llm = FakeLLM(
+        script=[
+            assistant_tools(tool_call("add_session_event", description=first, event_type="discovery")),
+            assistant_text("The milestone is recorded."),
+            assistant_tools(tool_call("add_session_event", description=second, event_type="discovery")),
+            assistant_text("The recap is unchanged."),
+        ]
+    )
+    services = _services(llm)
+    ctx = _ctx("chat-semantic-event-cross-turn")
+    await services.battles.start_session(ctx.chat_key)
+    provider = _PersistingEventProvider(services)
+    toolset = Toolset(provider)
+
+    await run_kp_turn(ctx, services, toolset, "Record the dock key milestone.")
+    second_result = await run_kp_turn(ctx, services, toolset, "Restate the dock key milestone for recap.")
+
+    assert provider.descriptions == [first]
+    assert second_result.tool_trace[0]["suppressed"] is True
+    session = await services.battles.generator.get_current_session(ctx.chat_key)
+    assert session is not None
+    assert [event["description"] for event in session.key_events] == [first]
 
 
 async def test_forced_round_non_dice_tool_keeps_reply_and_does_not_loop():
@@ -1066,6 +1213,9 @@ def test_player_action_detector_catches_attempts_but_not_dialogue():
         "I want to spot any hidden traps.",
         "Have Captain Elena Ruiz professionally inspect the unstable beam.",
         "I study the coded ledger for an uncertain pattern.",
+        "I take out my flashlight and search the basement.",
+        "Martha already agreed to help, and I inspect the suspicious package.",
+        "I open the obvious door and search the room for hidden clues.",
         "我搜查这张书桌。",
         "我想潜行绕到他背后。",
         "我说服他放我们离开。",
@@ -1090,6 +1240,9 @@ def test_player_action_detector_catches_attempts_but_not_dialogue():
         "I tell her my name is Harvey.",
         "I wait quietly for a moment.",
         "I walk forward and mention that we searched yesterday.",
+        "Please do not roll for my search.",
+        "I search the desk, but do not roll.",
+        "I inspect the visually obvious EXIT sign.",
         "OOC: no roll needed; inspect the log only.",
         "Meta request: export the report and audit the transcript.",
         ".report detailed",
@@ -1127,9 +1280,14 @@ def test_reply_check_detector_catches_the_violation_but_not_plain_narration():
         "The investigators sense something is deeply wrong here.",
         "The corridor stretches on into darkness, silent and cold.",
         "You step into the fog. What do you do?",
+        "You find yourself in a silent corridor.",
+        "You notice the clock reads ten.",
+        "You confirm your name at the front desk.",
         "The ritual was a success.",
         "You roll the heavy barrel aside.",
         "你走进浓雾，四周一片死寂。",
+        "你发现自己站在一条寂静的走廊里。",
+        "调查员注意到现在是十点。",
     ]:
         assert not _reply_requests_or_resolves_check(negative), negative
 
