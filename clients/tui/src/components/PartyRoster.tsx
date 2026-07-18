@@ -23,6 +23,7 @@ export interface PartyRosterProps {
   // handled twice.
   focused: boolean
   onFocus: () => void
+  initiativeFirst?: boolean
 }
 
 function keyName(event: KeyEvent): string {
@@ -78,7 +79,17 @@ const DETAIL_BAR_WIDTH = 10
  * bar summary (reusing CharacterPanel's `bar`/`statColor` glyphs), expanded
  * embeds the full `CharacterPanel` (attributes + status effects). Toggle via a
  * mouse click on the row, or Enter while this panel is focused (see `focused`). */
-export function PartyRoster({ character, party, initiative, theme, locale, client, focused, onFocus }: PartyRosterProps) {
+export function PartyRoster({
+  character,
+  party,
+  initiative,
+  theme,
+  locale,
+  client,
+  focused,
+  onFocus,
+  initiativeFirst = false,
+}: PartyRosterProps) {
   const [expanded, setExpanded] = useState(false)
   const [expandedMembers, setExpandedMembers] = useState<Set<string>>(() => new Set())
 
@@ -116,10 +127,21 @@ export function PartyRoster({ character, party, initiative, theme, locale, clien
   const ownName = character?.name
   const ownMember = ownName ? party.find((member) => member.name === ownName) : undefined
   const otherMembers = ownName ? party.filter((member) => member.name !== ownName) : party
+  const initiativeRows = initiative.length > 0 ? (
+    <box flexDirection="column">
+      <text fg={theme.dim} wrapMode="none" truncate>INIT</text>
+      {initiative.map((entry) => (
+        <text key={`${entry.name}-${entry.value}`} fg={entry.current ? theme.accent : theme.fg} wrapMode="none" truncate>
+          {entry.current ? "▶" : " "} {stripControlChars(entry.name)} {entry.value}
+        </text>
+      ))}
+    </box>
+  ) : null
 
   return (
     <box flexDirection="column" border borderColor={focused ? theme.accent : theme.border} paddingX={1}>
       <text fg={theme.accent} wrapMode="none" truncate>{tt(locale, "party.title")}</text>
+      {initiativeFirst ? initiativeRows : null}
 
       {character ? (
         <box flexDirection="column" onMouseDown={toggle}>
@@ -181,12 +203,7 @@ export function PartyRoster({ character, party, initiative, theme, locale, clien
         )
       })}
 
-      {initiative.length > 0 ? <text fg={theme.dim} wrapMode="none" truncate>INIT</text> : null}
-      {initiative.map((entry) => (
-        <text key={`${entry.name}-${entry.value}`} fg={entry.current ? theme.accent : theme.fg} wrapMode="none" truncate>
-          {entry.current ? "▶" : " "} {stripControlChars(entry.name)} {entry.value}
-        </text>
-      ))}
+      {initiativeFirst ? null : initiativeRows}
     </box>
   )
 }

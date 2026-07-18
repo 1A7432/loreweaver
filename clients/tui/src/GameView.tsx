@@ -68,6 +68,9 @@ export const ROOM_BUSY_TIMEOUT_MS = 120_000
 
 export function completesSubmission(frame: ServerFrame): boolean {
   if (frame.type === FrameType.Error || frame.type === FrameType.Dice) return true
+  // `.panel` and a normal message while `.bot off` both complete with only a
+  // state snapshot. Treat it as terminal for the local submit spinner.
+  if (frame.type === FrameType.State) return true
   if (frame.type === FrameType.System) return !frame.spinner
   if (frame.type === FrameType.TurnStatus) return frame.status === "idle"
   if (frame.type !== FrameType.Narrative) return false
@@ -174,6 +177,7 @@ export function GameView({
       if (frame.type === FrameType.State) {
         setStateFrame(frame)
         setOnlineCount(frame.online)
+        if (completesSubmission(frame)) setKpWorking(false)
         return
       }
       if (frame.type === FrameType.TurnStatus) {
@@ -418,19 +422,30 @@ export function GameView({
           />
         </scrollbox>
 
-        {showSidebar ? <box width={sidebarWidth(terminalWidth)} maxWidth="40%" flexShrink={0} flexDirection="column">
-          <PartyRoster
-            character={stateFrame.character}
-            party={stateFrame.party}
-            initiative={stateFrame.initiative}
-            theme={theme}
-            locale={locale}
-            client={client}
-            focused={rosterFocused}
-            onFocus={() => setRosterFocused(true)}
-          />
-          <ScenePanel scene={stateFrame.scene} clock={stateFrame.clock} theme={theme} locale={locale} />
-        </box> : null}
+        {showSidebar ? (
+          <scrollbox
+            width={sidebarWidth(terminalWidth)}
+            maxWidth="40%"
+            flexShrink={0}
+            viewportCulling={false}
+          >
+            <box flexDirection="column" width="100%" minWidth={0} flexShrink={0}>
+              {narrow ? <ScenePanel scene={stateFrame.scene} clock={stateFrame.clock} theme={theme} locale={locale} /> : null}
+              <PartyRoster
+                character={stateFrame.character}
+                party={stateFrame.party}
+                initiative={stateFrame.initiative}
+                theme={theme}
+                locale={locale}
+                client={client}
+                focused={rosterFocused}
+                onFocus={() => setRosterFocused(true)}
+                initiativeFirst={narrow}
+              />
+              {narrow ? null : <ScenePanel scene={stateFrame.scene} clock={stateFrame.clock} theme={theme} locale={locale} />}
+            </box>
+          </scrollbox>
+        ) : null}
       </box>
 
       <box height={3} flexDirection="row" border borderColor={theme.border} paddingX={1}>

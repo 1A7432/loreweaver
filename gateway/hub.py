@@ -197,6 +197,23 @@ class RoomHub:
         """Add ``member`` to ``session_key``'s room and broadcast the new roster."""
         self.rooms.setdefault(session_key, set()).add(member)
         await self._emit_presence(session_key)
+        # A participant may join halfway through a long model turn. Replay the
+        # ephemeral busy edge to that connection so it does not look idle until
+        # the eventual room-wide ``idle`` frame arrives.
+        current = self._active_turns.get(session_key)
+        if current is not None and member in self.rooms.get(session_key, set()):
+            _depth, actor = current
+            try:
+                await member.deliver(Event.turn_status("busy", actor=actor))
+            except BaseException as exc:
+                if not isinstance(exc, Exception):
+                    raise
+                logger.warning(
+                    "hub: dropping member %s after busy replay failed: %s",
+                    getattr(member, "id", member),
+                    type(exc).__name__,
+                )
+                await self.unsubscribe(member)
 
     async def unsubscribe(self, member: Member) -> None:
         """Drop ``member`` from whatever room it is in and broadcast the roster."""

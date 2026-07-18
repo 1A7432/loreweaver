@@ -1337,7 +1337,12 @@ class CommandRouter:
         if hub is None:
             return None
         i18n = ctx.i18n
-        issuer = ctx.user_id
+        extra = getattr(ctx.raw_ctx, "extra", None)
+        issuer = (
+            str(extra.get("member_user_key"))
+            if isinstance(extra, dict) and extra.get("member_user_key")
+            else ctx.user_id
+        )
         steps = {"read": 1, "embed": 2, "analyze": 3, "build": 4, "done": 5}
         total = len(steps)
         notified = False
@@ -1908,6 +1913,10 @@ class CommandRouter:
                 None,
                 "commands.module.help",
                 required_level=int(PrivilegeLevel.GROUP_ADMIN),
+                # Import results include the source filename, document counts, and
+                # initializer diagnostics. Keep both progress and the final reply
+                # on the invoking Keeper's connection.
+                private_reply=True,
             ),
             CommandSpec(
                 "room",

@@ -84,7 +84,14 @@ async def test_module_command_streams_progress_bar_frames_when_the_router_has_a_
     services = _services()
     hub = _SpyHub()
     router = CommandRouter(services, hub=hub)
-    ctx = AgentCtx(chat_key="tui:group:table", user_id="keeper", locale="zh", fs=LocalFs(tmp_path))
+    ctx = AgentCtx(
+        chat_key="tui:group:table",
+        user_id="tui:abc12345",
+        platform="tui",
+        locale="zh",
+        fs=LocalFs(tmp_path),
+        extra={"role": "keeper", "member_user_key": "tui:tui:abc12345"},
+    )
 
     await router.dispatch(ctx, ".module module.txt")
 
@@ -103,7 +110,7 @@ async def test_module_command_streams_progress_bar_frames_when_the_router_has_a_
     assert len(notices) == 1
     for chat_key, event, kwargs in bars:
         assert chat_key == "tui:group:table"
-        assert kwargs["only_user"] == "keeper"
+        assert kwargs["only_user"] == "tui:tui:abc12345"
         assert event.speaker == "system"
         assert "█" in event.text or "░" in event.text  # a progress bar
     # The bar fills as stages advance: read = 1 filled block, done = all 5.
@@ -113,7 +120,7 @@ async def test_module_command_streams_progress_bar_frames_when_the_router_has_a_
     assert fallback_label in bars[2][1].text
     notice_chat_key, notice_event, notice_kwargs = notices[0]
     assert notice_chat_key == "tui:group:table"
-    assert notice_kwargs["exclude_user"] == "keeper"
+    assert notice_kwargs["exclude_user"] == "tui:tui:abc12345"
     assert notice_event.text == services.i18n.with_locale("zh").t("commands.module.progress.notice")
     assert "█" not in notice_event.text and "module.txt" not in notice_event.text
 

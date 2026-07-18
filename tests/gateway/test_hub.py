@@ -75,6 +75,26 @@ async def test_nested_ai_turns_publish_one_outer_busy_idle_pair() -> None:
     ]
 
 
+async def test_subscriber_joining_mid_turn_receives_current_busy_state() -> None:
+    hub = RoomHub()
+    existing = FakeMember("existing")
+    await hub.subscribe("room", existing)
+    await hub.begin_turn("room", "Nora")
+
+    late = FakeMember("late")
+    await hub.subscribe("room", late)
+
+    statuses = [event.data for event in late.events if event.kind == "turn_status"]
+    assert statuses == [{"status": "busy", "actor": "Nora"}]
+
+    await hub.end_turn("room")
+    statuses = [event.data for event in late.events if event.kind == "turn_status"]
+    assert statuses == [
+        {"status": "busy", "actor": "Nora"},
+        {"status": "idle"},
+    ]
+
+
 async def test_subscribe_unsubscribe_and_online_count() -> None:
     hub = RoomHub()
     alice, bob = FakeMember("a"), FakeMember("b")

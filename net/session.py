@@ -714,6 +714,9 @@ class SessionCore:
             fs=self.fs,
             extra={
                 "role": member.role,
+                # Hub filters use Member.user_key, which is transport-qualified
+                # and is not necessarily identical to AgentCtx.user_id.
+                "member_user_key": member.user_key,
                 "reauthorize": lambda: self._refresh_member_authorization(member),
             },
         )

@@ -529,6 +529,25 @@ describe("GameView", () => {
     act(() => renderer.destroy())
   })
 
+  test("a state-only command or muted Keeper turn clears the submit spinner", async () => {
+    const client = new MockClient()
+    const { renderer, flush, captureCharFrame, mockInput } = await renderGame(client)
+    await flush()
+
+    await act(async () => {
+      await mockInput.typeText(".panel")
+      mockInput.pressEnter()
+    })
+    await flush()
+    expect(captureCharFrame()).toContain("Keeper thinking")
+
+    act(() => client.push({ type: FrameType.State, party: [], initiative: [], online: 1 }))
+    await flush()
+    expect(captureCharFrame()).not.toContain("Keeper thinking")
+
+    act(() => renderer.destroy())
+  })
+
   test("room-wide busy status animates for other participants and idle clears it", async () => {
     const client = new MockClient()
     const { renderer, flush, captureCharFrame } = await renderGame(client)
@@ -950,10 +969,24 @@ describe("GameView", () => {
           attributes: { STR: 45, DEX: 60 },
           status_effects: [],
         },
-        party: [{ name: "Ada Investigator With A Deliberately Long Name", online: true, active: true }],
+        party: Array.from({ length: 8 }, (_, index) => ({
+          name: index === 0 ? "Ada Investigator With A Deliberately Long Name" : `Dense Combatant ${index}`,
+          online: true,
+          active: index === 0,
+          hp: 8 + index,
+          hpMax: 12 + index,
+          mp: 5,
+          mpMax: 10,
+          san: 50,
+          sanMax: 60,
+        })),
         scene: { name: "The Extremely Long Library Scene", focus: "search" },
         clock: { time: "23:10", round: 2 },
-        initiative: [{ name: "Ada Investigator With A Deliberately Long Name", value: 12, current: true }],
+        initiative: Array.from({ length: 8 }, (_, index) => ({
+          name: index === 0 ? "Ada Investigator With A Deliberately Long Name" : `Dense Combatant ${index}`,
+          value: 20 - index,
+          current: index === 0,
+        })),
         online: 2,
       })
     })
@@ -972,6 +1005,8 @@ describe("GameView", () => {
     expect(expanded).toContain("ROUND 2")
     expect(expanded).toContain("F6 HIDE")
     expect(expanded.split("\n").every((line) => Bun.stringWidth(line) <= 80)).toBe(true)
+    expect(expanded).not.toContain("SAN██████░850/60g Name")
+    expect(expanded).not.toContain("ROUND─22:00")
 
     act(() => renderer.destroy())
   })
