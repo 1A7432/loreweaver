@@ -113,7 +113,10 @@ export function GameView({
   // Seed from the shell's last-seen frames: the server sends state/presence right after
   // `join` (while the player is still on the menu), so without this the panels open on
   // "empty party / no scene / 0 online" until the first turn completes.
-  const [presence, setPresence] = useState<PresenceFrame | undefined>(initialPresence)
+  // Presence and state frames BOTH carry an online count; whichever arrived last
+  // wins, and every surface (header + status bar) reads this one merged value so
+  // the two can never disagree after a disconnect.
+  const [onlineCount, setOnlineCount] = useState(initialPresence?.online ?? initialState?.online ?? 0)
   const [turnStatus, setTurnStatus] = useState<TurnStatusFrame | undefined>(initialTurnStatus)
   const [stateFrame, setStateFrame] = useState<StateFrame>(
     initialState ?? { type: FrameType.State, party: [], initiative: [], online: 0 },
@@ -165,11 +168,12 @@ export function GameView({
   useEffect(() => {
     return client.onMessage((frame) => {
       if (frame.type === FrameType.Presence) {
-        setPresence(frame)
+        setOnlineCount(frame.online)
         return
       }
       if (frame.type === FrameType.State) {
         setStateFrame(frame)
+        setOnlineCount(frame.online)
         return
       }
       if (frame.type === FrameType.TurnStatus) {
@@ -384,7 +388,7 @@ export function GameView({
         scene={stateFrame.scene}
         clock={stateFrame.clock}
         usage={stateFrame.usage}
-        online={stateFrame.online}
+        online={onlineCount}
         theme={theme}
         locale={locale}
         connectionStatus={connectionStatus}
@@ -496,7 +500,7 @@ export function GameView({
         </box>
       ) : null}
 
-      <StatusBar welcome={welcome} presence={presence} online={stateFrame.online} theme={theme} themeName={themeName} />
+      <StatusBar welcome={welcome} online={onlineCount} theme={theme} themeName={themeName} />
     </box>
   )
 }

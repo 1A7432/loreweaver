@@ -149,6 +149,39 @@ describe("GameView", () => {
     })
   })
 
+  test("header and status bar share one merged online count, last frame wins", async () => {
+    // Regression (TUI-PRESENCE-018): the header used to read `stateFrame.online`
+    // while the status bar preferred the newer PresenceFrame, so after a
+    // disconnect the top said "2 online" and the bottom "1 online" indefinitely.
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame } = await renderGame(client)
+    await flush()
+
+    const counts = (text: string, needle: string) => text.split(needle).length - 1
+
+    act(() => {
+      client.push({ type: FrameType.State, party: [], initiative: [], online: 2 })
+    })
+    await waitForFrame((text) => counts(text, "2 online") === 2)
+
+    // A later presence frame (a disconnect) must update BOTH surfaces.
+    act(() => {
+      client.push({ type: FrameType.Presence, players: [], online: 1 })
+    })
+    const afterPresence = await waitForFrame((text) => counts(text, "1 online") === 2)
+    expect(counts(afterPresence, "2 online")).toBe(0)
+
+    // And a later state frame wins right back (last writer, either source).
+    act(() => {
+      client.push({ type: FrameType.State, party: [], initiative: [], online: 3 })
+    })
+    await waitForFrame((text) => counts(text, "3 online") === 2)
+
+    act(() => {
+      renderer.destroy()
+    })
+  })
+
   test("submitting a line shows it exactly once (no client-side duplicate echo)", async () => {
     // Regression: `submit()` used to append an optimistic local `{speaker:"player"}`
     // frame IN ADDITION TO the server's own `player_action` broadcast (the TUI

@@ -161,7 +161,7 @@ export function MainMenu({
         </box> : null}
       </box>
 
-      <StatusBar welcome={welcome} presence={presence} online={stateFrame.online} theme={theme} themeName={themeName} />
+      <StatusBar welcome={welcome} online={presence?.online ?? stateFrame.online} theme={theme} themeName={themeName} />
     </box>
   )
 }
