@@ -7,11 +7,16 @@ import pytest
 from scripts.playtest import (
     BehaviorMetrics,
     BehaviorThresholds,
+    GateThresholds,
     Recorder,
+    RedlineMetrics,
     _build_behavior_services,
     _contains_eval_sentinel,
+    _event_matches_expectation,
     _fixture_turns,
+    _score_state,
     evaluate_behavior_gate,
+    evaluate_gate,
     load_behavior_fixture,
     run_behavior_suite,
 )
@@ -71,6 +76,52 @@ def test_behavior_gate_fails_closed_on_empty_or_bad_metrics() -> None:
     assert any("actor compliance" in reason for reason in reasons)
     assert any("event recording" in reason for reason in reasons)
 
+    redline_passed, redline_reasons = evaluate_gate(
+        RedlineMetrics(turns=1, errors=1),
+        GateThresholds(min_checkable_turns=0),
+    )
+    assert not redline_passed
+    assert any("errored" in reason for reason in redline_reasons)
+
+
+def test_state_scorer_rejects_negated_expected_values_and_wrong_hud_claims() -> None:
+    turn = {
+        "state_expectation": {
+            "scene": "Rooftop Garden",
+            "clock": "1926-03-15 09:30",
+            "reply_claims": ["Rooftop Garden", "1926-03-15 09:30"],
+        }
+    }
+    snapshot = {
+        "scene": "Rooftop Garden",
+        "focus": "Windy Skylight",
+        "clock": "1926-03-15 09:30",
+        "hp": [8, 12],
+        "status": [],
+    }
+    reply = (
+        "We failed to reach Rooftop Garden and did not set 1926-03-15 09:30. "
+        "Current scene remains Station Hall. HP: 8/8."
+    )
+
+    consistent, failures = _score_state(turn, reply, snapshot)
+
+    assert not consistent
+    assert any("Rooftop Garden" in failure for failure in failures)
+    assert any("1926-03-15 09:30" in failure for failure in failures)
+    assert any("Station Hall" in failure for failure in failures)
+    assert any("8/8" in failure for failure in failures)
+
+
+def test_event_expectation_accepts_fixture_declared_synonyms() -> None:
+    expectation = {
+        "aliases": [["brass key"], ["dock locker", "harbor storage cabinet"]],
+    }
+    assert _event_matches_expectation(
+        "Recovered the small brass key from the harbor storage cabinet.",
+        expectation,
+    )
+
 
 @pytest.mark.asyncio
 async def test_behavior_fake_llm_smoke_runs_real_turn_and_tool_pipeline(tmp_path: Path) -> None:
@@ -96,6 +147,7 @@ async def test_behavior_fake_llm_smoke_runs_real_turn_and_tool_pipeline(tmp_path
     assert passed, reasons
     assert len(records) == 40
     assert metrics.actor_compliant == metrics.actor_cases == 20
+    assert metrics.state_cases == metrics.turns == 40
     assert metrics.state_divergences == 0
     assert metrics.recorded_event_groups == metrics.event_groups == 2
     assert metrics.duplicated_event_groups == 0
@@ -108,3 +160,5 @@ async def test_behavior_fake_llm_smoke_runs_real_turn_and_tool_pipeline(tmp_path
     # headline usage object per turn.
     assert meter.usage.calls > metrics.turns
     assert meter.usage.total_tokens > 0
+    assert services.module_init.llm is meter
+    assert services.vector_db.llm is meter

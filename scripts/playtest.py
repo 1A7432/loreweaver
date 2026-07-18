@@ -67,7 +67,12 @@ from agent.kp_tools import build_kp_toolset  # noqa: E402
 # safeguard still fails against a REAL model (the offline suite only proves it
 # against a scripted one). Leading-underscore names are a module-private
 # *convention*, not enforced privacy -- an explicit import is fine.
-from agent.loop import _dice_rolled, _player_attempts_checkable_action, _reply_requests_or_resolves_check  # noqa: E402
+from agent.loop import (  # noqa: E402
+    _dice_rolled,
+    _event_description_is_semantic_duplicate,
+    _player_attempts_checkable_action,
+    _reply_requests_or_resolves_check,
+)
 from agent.services import build_services  # noqa: E402
 from core.character_manager import get_hit_points  # noqa: E402
 from core.charcard import parse_card_file  # noqa: E402
@@ -77,6 +82,7 @@ from gateway.turn import run_turn  # noqa: E402
 from infra.config import get_settings  # noqa: E402
 from infra.embeddings import LocalEmbeddings  # noqa: E402
 from infra.llm import ChatResult, FakeLLM, ToolCall, Usage  # noqa: E402
+from infra.oauth_flows import canonical_subscription_provider  # noqa: E402
 from infra.runtime_config import CREDENTIALS_KEY, DEFAULT_KEY  # noqa: E402
 from infra.store import Store  # noqa: E402
 
@@ -256,7 +262,24 @@ def evaluate_gate(metrics: RedlineMetrics, thresholds: GateThresholds) -> tuple[
             f"({metrics.missed_roll_turns}/{metrics.checkable_turns} checkable turns) "
             f"exceeds max {thresholds.max_dice_miss_rate:.1%}"
         )
+    if metrics.errors:
+        reasons.append(f"{metrics.errors} eval turns/sessions errored")
     return (len(reasons) == 0), reasons
+
+
+_PROVIDER_ERROR_KEYS = (
+    "loop.provider_auth",
+    "loop.provider_content",
+    "loop.provider_quota",
+    "loop.provider_transient",
+    "loop.unavailable",
+)
+
+
+def _is_provider_error_reply(services: Any, locale: str, reply: str) -> bool:
+    i18n = services.i18n.with_locale(locale)
+    normalized = reply.strip()
+    return any(normalized == i18n.t(key) for key in _PROVIDER_ERROR_KEYS)
 
 
 def render_report(name: str, metrics: RedlineMetrics, thresholds: GateThresholds, passed: bool, reasons: list[str]) -> str:
@@ -350,7 +373,7 @@ class UsageTotals:
 
 
 class MeteredLLM:
-    """Transparent usage meter covering main, correction, recap, and finalizer calls."""
+    """Transparent usage meter covering every LLM consumer in the service graph."""
 
     def __init__(self, delegate: Any) -> None:
         self.delegate = delegate
@@ -365,6 +388,15 @@ class MeteredLLM:
         clear = getattr(self.delegate, "clear_continuation", None)
         if callable(clear):
             clear(messages)
+
+
+def _meter_services(services: Any) -> MeteredLLM:
+    """Install one meter on the loop, module initializer, and document RAG."""
+    meter = MeteredLLM(services.llm)
+    services.llm = meter
+    services.module_init.llm = meter
+    services.vector_db.llm = meter
+    return meter
 
 
 @dataclass
@@ -639,14 +671,86 @@ def _session_checks(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     return list(snapshot.get("checks") or [])
 
 
-def _score_state(turn: dict[str, Any], reply: str, snapshot: dict[str, Any]) -> tuple[bool, list[str]]:
-    expected = turn["state_expectation"]
+_STATE_CLAUSE_SPLIT_RE = re.compile(r"[.;。；!?！？\n]+")
+_STATE_NEGATED_CLAIM_RE = re.compile(
+    r"(?:\b(?:failed|fails)\s+to\s+(?:reach|set|become|change|move)\b"
+    r"|\b(?:did|does|do)\s+not\s+(?:reach|set|become|change|move)\b"
+    r"|\b(?:is|are|was|were)\s+not\b"
+    r"|(?:未能|没有|没能|并未|不是|并非|无法)(?:到达|设置|变为|改为|移动到)?)",
+    re.IGNORECASE,
+)
+
+
+def _reply_asserts_claim(reply: str, claim: str) -> bool:
+    """Require the sentinel in an affirmative clause, not merely a denial."""
+    for clause in _STATE_CLAUSE_SPLIT_RE.split(reply):
+        if _contains_eval_sentinel(clause, claim) and not _STATE_NEGATED_CLAIM_RE.search(clause):
+            return True
+    return False
+
+
+def _event_matches_expectation(description: str, expectation: dict[str, Any]) -> bool:
+    """Match one alias from every semantic concept in an event fixture."""
+    aliases = expectation.get("aliases")
+    if not aliases:
+        aliases = [[sentinel] for sentinel in expectation.get("sentinels", [])]
+    return bool(aliases) and all(
+        any(_contains_eval_sentinel(description, str(alias)) for alias in concept)
+        for concept in aliases
+    )
+
+
+def _score_explicit_state_claims(reply: str, snapshot: dict[str, Any]) -> list[str]:
+    """Find explicit HUD-like claims on every turn and compare canonical state."""
     failures: list[str] = []
+    hp_matches = re.findall(
+        r"(?:\bHP\b|hit\s+points?|生命值)[^\d\n]{0,12}(\d+)\s*/\s*(\d+)",
+        reply,
+        re.IGNORECASE,
+    )
+    hp = snapshot.get("hp")
+    if hp_matches and isinstance(hp, list) and len(hp) == 2 and all(value is not None for value in hp):
+        for current, maximum in hp_matches:
+            if [int(current), int(maximum)] != hp:
+                failures.append(f"reply HP claim {current}/{maximum} contradicts canonical {hp[0]}/{hp[1]}")
+                break
+
+    labelled_fields = {
+        "scene": re.compile(
+            r"(?:current\s+scene|scene|当前场景|目前场景)\s*(?:is|remains|[:：])\s*([^\n.!?。！？]{1,60})",
+            re.IGNORECASE,
+        ),
+        "focus": re.compile(
+            r"(?:current\s+focus|focus|当前焦点|目前焦点)\s*(?:is|remains|[:：])\s*([^\n.!?。！？]{1,60})",
+            re.IGNORECASE,
+        ),
+        "clock": re.compile(
+            r"(?:current\s+(?:game\s+)?time|game\s+time|当前(?:游戏)?时间)\s*(?:is|remains|[:：])\s*([^\n.!?。！？]{1,60})",
+            re.IGNORECASE,
+        ),
+    }
+    for field_name, pattern in labelled_fields.items():
+        canonical = snapshot.get(field_name)
+        if not canonical:
+            continue
+        for match in pattern.finditer(reply):
+            claimed = match.group(1).strip(" *_`#")
+            if not _contains_eval_sentinel(claimed, str(canonical)):
+                failures.append(
+                    f"reply {field_name} claim {claimed!r} contradicts canonical {canonical!r}"
+                )
+                break
+    return failures
+
+
+def _score_state(turn: dict[str, Any], reply: str, snapshot: dict[str, Any]) -> tuple[bool, list[str]]:
+    expected = turn.get("state_expectation") or {}
+    failures = _score_explicit_state_claims(reply, snapshot)
     for field_name in ("scene", "focus", "clock", "hp", "status"):
         if field_name in expected and snapshot.get(field_name) != expected[field_name]:
             failures.append(f"{field_name}: expected {expected[field_name]!r}, got {snapshot.get(field_name)!r}")
     for claim in expected.get("reply_claims", []):
-        if not _contains_eval_sentinel(reply, str(claim)):
+        if not _reply_asserts_claim(reply, str(claim)):
             failures.append(f"reply missing required claim {claim!r}")
     return not failures, failures
 
@@ -729,6 +833,8 @@ async def run_behavior_suite(
                 if result is None:
                     raise RuntimeError("behavior action unexpectedly matched a command")
                 reply = result.reply or ""
+                if _is_provider_error_reply(services, ctx.locale, reply):
+                    raise RuntimeError(f"provider failure surfaced as a classified reply: {reply}")
                 trace = result.tool_trace or []
                 after = await _behavior_snapshot(services, ctx)
                 session = await services.battles.generator.get_current_session(ctx.chat_key)
@@ -757,15 +863,19 @@ async def run_behavior_suite(
                         metrics.actor_compliant += 1
                     else:
                         finding["actor_noncompliance"] = actor_reason
-                if "state_expectation" in turn:
-                    metrics.state_cases += 1
-                    claims = list(turn["state_expectation"].get("reply_claims", []))
-                    metrics.state_required_claims += len(claims)
-                    metrics.state_present_claims += sum(_contains_eval_sentinel(reply, str(claim)) for claim in claims)
-                    consistent, failures = _score_state(turn, reply, after)
-                    if not consistent:
-                        metrics.state_divergences += 1
-                        finding["state_divergence"] = failures
+                # Score every turn. Fixture expectations pin deliberate state
+                # mutations; the generic scorer also catches explicit HP/scene/
+                # focus/clock claims made on any other narration.
+                metrics.state_cases += 1
+                claims = list((turn.get("state_expectation") or {}).get("reply_claims", []))
+                metrics.state_required_claims += len(claims)
+                metrics.state_present_claims += sum(
+                    _reply_asserts_claim(reply, str(claim)) for claim in claims
+                )
+                consistent, failures = _score_state(turn, reply, after)
+                if not consistent:
+                    metrics.state_divergences += 1
+                    finding["state_divergence"] = failures
                 event_expectation = turn.get("event_expectation")
                 if event_expectation:
                     event_groups[str(event_expectation["group"])] = dict(event_expectation)
@@ -824,11 +934,23 @@ async def run_behavior_suite(
         final_snapshot = await _behavior_snapshot(services, ctx)
         for group, expectation in event_groups.items():
             metrics.event_groups += 1
-            matching = [
+            direct = [
                 description
                 for description in final_snapshot["events"]
-                if all(_contains_eval_sentinel(description, str(token)) for token in expectation["sentinels"])
+                if _event_matches_expectation(description, expectation)
             ]
+            # Once a fixture-grounded direct match anchors the milestone, include
+            # conservative semantic paraphrases too. This prevents a duplicate
+            # from disappearing merely because it used an allowed synonym.
+            matching = list(direct)
+            for description in final_snapshot["events"]:
+                if description in matching:
+                    continue
+                if any(
+                    _event_description_is_semantic_duplicate(description, anchor)
+                    for anchor in direct
+                ):
+                    matching.append(description)
             if matching:
                 metrics.recorded_event_groups += 1
             if len(matching) > int(expectation.get("max_records", 1)):
@@ -870,8 +992,7 @@ async def _build_behavior_services(
             llm=BehaviorSmokeLLM(fixture),
             embeddings=LocalEmbeddings(64),
         )
-        meter = MeteredLLM(services.llm)
-        services.llm = meter
+        meter = _meter_services(services)
         return services, None, meter
 
     if not credentials_db:
@@ -888,6 +1009,20 @@ async def _build_behavior_services(
         raise ValueError("credentials database could not be read") from exc
     if not credentials:
         raise ValueError("credentials database has no provider credential book")
+
+    # Copy only the requested provider into the disposable DB. This minimizes
+    # secret exposure and prevents an unrelated provider credential from
+    # appearing in an eval artifact if the temp directory is inspected.
+    try:
+        credential_book = json.loads(credentials)
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise ValueError("credentials database has an invalid provider credential book") from exc
+    provider_key = provider.casefold()
+    canonical_key = canonical_subscription_provider(provider_key) or provider_key
+    selected = credential_book.get(canonical_key) if isinstance(credential_book, dict) else None
+    if not isinstance(selected, dict):
+        raise ValueError(f"credentials database has no credential for provider {canonical_key!r}")
+    credentials = json.dumps({canonical_key: selected})
 
     temporary = tempfile.TemporaryDirectory(prefix="loreweaver-behavior-eval-")
     eval_store = Store(Path(temporary.name) / "eval.db")
@@ -910,8 +1045,7 @@ async def _build_behavior_services(
         store=eval_store,
         embeddings=LocalEmbeddings(64),
     )
-    meter = MeteredLLM(services.llm)
-    services.llm = meter
+    meter = _meter_services(services)
     return services, temporary, meter
 
 
@@ -1036,6 +1170,7 @@ async def run_session(
                               AgentCtx(chat_key=chat_key, user_id=f"pc:{pname}", platform="cli", locale="en", fs=fs),
                               {"name": pname, "system": "coc7"})
         except Exception as exc:
+            rec.metrics.errors += 1
             rec.emit("create_char_error", player=pname, error=str(exc))
 
     transcript: list[str] = []
@@ -1047,6 +1182,8 @@ async def run_session(
             try:
                 res = await run_turn(hub, services, ctx, action, command_router=router, toolset=ts, actor_name=pname)
                 reply = getattr(res, "reply", "") or ""
+                if _is_provider_error_reply(services, ctx.locale, reply):
+                    raise RuntimeError(f"provider failure surfaced as a classified reply: {reply}")
                 tool_trace = getattr(res, "tool_trace", []) or []
                 tools = [t.get("name") for t in tool_trace]
                 transcript.append(f"[KP] {reply[:400]}")
@@ -1077,6 +1214,7 @@ async def run_session(
                                 {"detailed": True})
         rec.emit("session_report", session=sidx, chars=len(str(rep)))
     except Exception as exc:
+        rec.metrics.errors += 1
         rec.emit("session_report_error", session=sidx, error=str(exc))
 
 
@@ -1137,11 +1275,7 @@ async def main():
         if args.baseline_summary:
             baseline = json.loads((ROOT / args.baseline_summary).read_text(encoding="utf-8"))
             baseline_rate = float(baseline["rates"]["state_divergence_rate"])
-            state_cases = sum(
-                1
-                for turn in _fixture_turns(fixture)
-                if "state_expectation" in turn
-            )
+            state_cases = len(_fixture_turns(fixture))
             improvement_target = max(0.0, baseline_rate - (1 / state_cases if state_cases else 0.0))
             thresholds.max_state_divergence_rate = min(
                 thresholds.max_state_divergence_rate,
@@ -1231,8 +1365,7 @@ async def main():
     else:
         settings = get_settings()
         services = build_services(settings, embeddings=LocalEmbeddings(64))
-        meter = MeteredLLM(services.llm)
-        services.llm = meter
+        meter = _meter_services(services)
     ts = build_kp_toolset(services)
     router = CommandRouter(services)
     hub = RoomHub()
@@ -1248,6 +1381,7 @@ async def main():
             await run_session(services, ts, router, hub, module_path, companion_path, args.players, args.turns,
                               sidx, rec, secret_concepts)
         except Exception as exc:
+            rec.metrics.errors += 1
             rec.emit("SESSION_ERROR", session=sidx, error=f"{type(exc).__name__}: {exc}",
                      trace=traceback.format_exc()[-1500:])
     rec.emit("run_end", turns=rec.metrics.turns, errors=rec.metrics.errors, leak_turns=rec.metrics.leak_turns,

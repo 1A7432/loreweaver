@@ -60,9 +60,10 @@ from infra.embeddings import LocalEmbeddings  # noqa: E402
 # scripts/playtest.py's "Shared red-line gate" section for what's in here.
 from scripts.playtest import (  # noqa: E402
     GateThresholds,
-    MeteredLLM,
     RedlineMetrics,
     _build_behavior_services,
+    _is_provider_error_reply,
+    _meter_services,
     evaluate_gate,
     extract_secret_snippets,
     parse_secret_concepts,
@@ -191,8 +192,7 @@ async def main():
         )
     else:
         services = build_services(settings, embeddings=LocalEmbeddings(64), db_path=str(db_path))
-        meter = MeteredLLM(services.llm)
-        services.llm = meter
+        meter = _meter_services(services)
     ts = build_kp_toolset(services)
     router = CommandRouter(services)
     hub = RoomHub()
@@ -219,19 +219,21 @@ async def main():
     lat: list[float] = []
     probes_ok = probes_total = 0
 
-    async def do_turn(turn_no, action, is_probe=False, anchor_phrase=None):
+    async def do_turn(turn_no, action, is_probe=False, anchor_phrase=None) -> bool:
         nonlocal probes_ok, probes_total
         transcript.append(f">>> {action}")
         t0 = time.time()
         try:
             res = await run_turn(hub, services, ctx, action, command_router=router, toolset=ts, actor_name="Nora")
             reply = (getattr(res, "reply", "") or "")
+            if _is_provider_error_reply(services, ctx.locale, reply):
+                raise RuntimeError(f"provider failure surfaced as a classified reply: {reply}")
             tool_trace = getattr(res, "tool_trace", []) or []
         except Exception as exc:
             metrics.errors += 1
             rec(kind="TURN_ERROR", turn=turn_no, action=action, error=f"{type(exc).__name__}: {exc}",
                 trace=traceback.format_exc()[-800:])
-            return
+            return False
         dt = time.time() - t0
         lat.append(dt)
         transcript.append(f"[KP] {reply[:300]}")
@@ -252,23 +254,37 @@ async def main():
         rec(kind="turn", turn=turn_no, latency=round(dt, 2), tools=[t.get("name") for t in tool_trace],
             leaked=bool(outcome["literal_leak"] or outcome["paraphrase_leak"]), missed_roll=outcome["missed_roll"],
             empty=(not reply.strip()), action=action[:120], kp_reply=reply[:200])
+        return True
 
     turn = done
+    termination_reason = "target_reached"
+    stopped = False
     # opening: plant anchors (only if this is a fresh campaign)
     if done == 0:
         for _id, line, _phrase in ANCHORS:
-            turn += 1
-            await do_turn(turn, line)
+            candidate = turn + 1
+            if not await do_turn(candidate, line):
+                termination_reason = "turn_error"
+                stopped = True
+                break
+            turn = candidate
 
-    while turn < args.max_turns and (time.time() - start) < args.budget:
-        turn += 1
-        if turn % args.probe_every == 0:
-            _id, _line, phrase = ANCHORS[(turn // args.probe_every) % len(ANCHORS)]
+    while not stopped and turn < args.max_turns:
+        if (time.time() - start) >= args.budget:
+            termination_reason = "budget_exhausted"
+            break
+        candidate = turn + 1
+        if candidate % args.probe_every == 0:
+            _id, _line, phrase = ANCHORS[(candidate // args.probe_every) % len(ANCHORS)]
             probe = f"Quick memory check for the group — remind me exactly: what about the {_id}? (I set this up much earlier.)"
-            await do_turn(turn, probe, is_probe=True, anchor_phrase=phrase)
+            completed = await do_turn(candidate, probe, is_probe=True, anchor_phrase=phrase)
         else:
             action = await _gen_action(services, "\n".join(transcript[-14:]))
-            await do_turn(turn, action or "I stay alert and press on.")
+            completed = await do_turn(candidate, action or "I stay alert and press on.")
+        if not completed:
+            termination_reason = "turn_error"
+            break
+        turn = candidate
         if turn % 20 == 0:
             avg = sum(lat) / len(lat) if lat else 0
             rec(kind="checkpoint", turn=turn, avg_latency=round(avg, 2), max_latency=round(max(lat), 2) if lat else 0,
@@ -282,18 +298,19 @@ async def main():
     rec(kind="run_end", turns_now=turn, target=args.max_turns, this_invocation=len(lat), leak_turns=metrics.leak_turns,
         errors=metrics.errors, missed_roll_turns=metrics.missed_roll_turns, probes_ok=probes_ok,
         probes_total=probes_total, avg_latency=round(avg, 2), latency_first10=round(first10, 2),
-        latency_last10=round(last10, 2), usage=asdict(meter.usage))
+        latency_last10=round(last10, 2), elapsed_seconds=round(time.time() - start, 2),
+        termination_reason=termination_reason, usage=asdict(meter.usage))
     fh.close()
 
     passed, reasons = evaluate_gate(metrics, thresholds)
     report = render_report("longrun", metrics, thresholds, passed, reasons)
     print(report)
     print(f"usage: calls={meter.usage.calls} total_tokens={meter.usage.total_tokens}")
-    print(f"longrun: campaign at turn {turn}/{args.max_turns} (+{len(lat)} this run) | "
+    print(f"longrun: campaign at turn {turn}/{args.max_turns} (+{len(lat)} this run; {termination_reason}) | "
           f"coherence probes {probes_ok}/{probes_total} remembered (informational, not gated) | "
           f"latency avg={avg:.1f}s first10={first10:.1f}s last10={last10:.1f}s | log -> {args.log}")
     if turn < args.max_turns:
-        print(f"  budget/timeout reached — RE-RUN the same command to continue from turn {turn}.")
+        print(f"  stopped: {termination_reason} — RE-RUN the same command to continue from turn {turn}.")
     if args.summary_json:
         write_summary_json(ROOT / args.summary_json, "longrun", metrics, thresholds, passed, reasons, meter.usage)
     services.store.close()

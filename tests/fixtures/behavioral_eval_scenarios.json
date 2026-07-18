@@ -309,16 +309,26 @@
         {
           "action": "We pocket the brass key from the dock locker; treat this newly completed milestone as worth recording, with no roll.",
           "expect_roll": false,
-          "event_expectation": {"group": "dock-key", "sentinels": ["brass key", "dock locker"], "max_records": 1},
+          "event_expectation": {
+            "group": "dock-key",
+            "sentinels": ["brass key", "dock locker"],
+            "aliases": [["brass key"], ["dock locker", "harbor storage cabinet"]],
+            "max_records": 1
+          },
           "smoke_reply": "The brass key from the dock locker is now recorded once.",
-          "smoke_calls": [{"name": "add_session_event", "arguments": {"description": "Recovered the brass key from the dock locker.", "event_type": "discovery"}}]
+          "smoke_calls": [{"name": "add_session_event", "arguments": {"description": "Recovered and pocketed the brass key from the dock locker.", "event_type": "discovery"}}]
         },
         {
-          "action": "For recap only, restate the same already-recorded milestone: the dock locker brass key is in our possession. Do not create a second event or roll.",
+          "action": "Add to the recap that the brass key recovered from the dock locker is now in our possession.",
           "expect_roll": false,
-          "event_expectation": {"group": "dock-key", "sentinels": ["brass key", "dock locker"], "max_records": 1},
+          "event_expectation": {
+            "group": "dock-key",
+            "sentinels": ["brass key", "dock locker"],
+            "aliases": [["brass key"], ["dock locker", "harbor storage cabinet"]],
+            "max_records": 1
+          },
           "smoke_reply": "Recap: the dock locker brass key remains in your possession; no duplicate event is added.",
-          "smoke_calls": []
+          "smoke_calls": [{"name": "add_session_event", "arguments": {"description": "Pocketed the brass key recovered from the dock locker.", "event_type": "discovery"}}]
         }
       ]
     },
@@ -330,16 +340,26 @@
         {
           "action": "我们已从码头储物柜取得黄铜钥匙；这是刚完成的新里程碑，记录一次即可，不掷骰。",
           "expect_roll": false,
-          "event_expectation": {"group": "码头钥匙", "sentinels": ["黄铜钥匙", "码头储物柜"], "max_records": 1},
+          "event_expectation": {
+            "group": "码头钥匙",
+            "sentinels": ["黄铜钥匙", "码头储物柜"],
+            "aliases": [["黄铜钥匙"], ["码头储物柜", "港口储藏柜"]],
+            "max_records": 1
+          },
           "smoke_reply": "已将从码头储物柜取得黄铜钥匙记录一次。",
           "smoke_calls": [{"name": "add_session_event", "arguments": {"description": "从码头储物柜取得黄铜钥匙。", "event_type": "discovery"}}]
         },
         {
-          "action": "只做回顾：码头储物柜的黄铜钥匙已经在我们手里。不要重复记事件，也不要掷骰。",
+          "action": "把我们已经拿到码头储物柜黄铜钥匙这件事补进回顾。",
           "expect_roll": false,
-          "event_expectation": {"group": "码头钥匙", "sentinels": ["黄铜钥匙", "码头储物柜"], "max_records": 1},
+          "event_expectation": {
+            "group": "码头钥匙",
+            "sentinels": ["黄铜钥匙", "码头储物柜"],
+            "aliases": [["黄铜钥匙"], ["码头储物柜", "港口储藏柜"]],
+            "max_records": 1
+          },
           "smoke_reply": "回顾确认黄铜钥匙已取得，不新增重复事件。",
-          "smoke_calls": []
+          "smoke_calls": [{"name": "add_session_event", "arguments": {"description": "调查员一行从码头储物柜取得黄铜钥匙。", "event_type": "discovery"}}]
         }
       ]
     },
