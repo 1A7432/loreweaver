@@ -17,6 +17,7 @@ from agent.kp_tools_mechanics import InitiativeTools
 from agent.loop import (
     KPTurnResult,
     _dice_rolled,
+    _event_description_is_semantic_duplicate,
     _player_attempts_checkable_action,
     _reply_requests_or_resolves_check,
     _scene_title_lines,
@@ -82,6 +83,34 @@ class _MixedProvider:
     async def get_character_sheet(self, ctx: AgentCtx) -> str:
         """Read the investigator's character sheet (rolls no dice)."""
         return "STR 50, DEX 60, Spot Hidden 65"
+
+
+class _AttributionDiceProvider:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    @tool
+    async def skill_check(
+        self,
+        ctx: AgentCtx,
+        skill_name: str,
+        actor: str | None = None,
+        npc_target: int | None = None,
+    ) -> str:
+        """Roll one attributed skill check."""
+        self.calls.append({"skill_name": skill_name, "actor": actor, "npc_target": npc_target})
+        return f"{skill_name}: rolled"
+
+
+class _EventProvider:
+    def __init__(self) -> None:
+        self.descriptions: list[str] = []
+
+    @tool
+    async def add_session_event(self, ctx: AgentCtx, description: str, event_type: str = "general") -> str:
+        """Record one session event."""
+        self.descriptions.append(description)
+        return f"recorded:{event_type}:{description}"
 
 
 class _ExplodingProvider:
@@ -798,6 +827,27 @@ async def test_pure_dialogue_player_action_triggers_no_corrective_round():
     assert result.reply == "Martha beams and clasps your hand in both of hers."
 
 
+@pytest.mark.parametrize(
+    "action",
+    [
+        "OOC: no roll is needed; audit the session log only.",
+        "Meta request: export the report without an in-world check.",
+        "元请求：只检查日志，不要检定。",
+        ".report detailed",
+    ],
+)
+async def test_explicit_no_roll_and_meta_actions_never_enter_dice_correction(action: str):
+    # The reply-side discovery detector is deliberately positive here. The
+    # player's explicit whole-action exemption must still win.
+    llm = FakeLLM(script=[assistant_text("You discover the requested log entry.")])
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx("chat-no-roll-meta"), services, _dice_toolset(), action)
+
+    assert result.tool_trace == []
+    assert len(llm.calls) == 1
+
+
 async def test_player_action_trigger_forced_round_returning_prose_keeps_reply():
     # The player-action detector fires (via the broadened PLAYER-side trigger) and
     # forces the corrective round. If the model returns prose instead of obeying
@@ -842,6 +892,91 @@ async def test_corrective_round_forces_tool_choice_required_then_narrates():
     assert result.reply == "Your fingers brush a hidden latch beneath the desk."
     # main "auto" round, then the FORCED "required" round, then the "auto" narration.
     assert llm.tool_choices == ["auto", "required", "auto"]
+
+
+async def test_corrective_round_executes_at_most_one_dice_call():
+    provider = _AttributionDiceProvider()
+    llm = FakeLLM(
+        script=[
+            assistant_text("You discover a hidden latch without rolling."),
+            assistant_tools(
+                tool_call("skill_check", skill_name="Spot Hidden"),
+                tool_call("skill_check", skill_name="Listen"),
+            ),
+            assistant_text("The single Spot Hidden check resolves the action."),
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(
+        _ctx("chat-one-correction-check"),
+        services,
+        Toolset(provider),
+        "I search the desk for a hidden latch.",
+    )
+
+    assert len(provider.calls) == 1
+    assert provider.calls[0]["skill_name"] == "Spot Hidden"
+    assert len(result.tool_trace) == 2
+    assert result.tool_trace[1]["suppressed"] is True
+    assert not result.tool_trace[0].get("suppressed")
+    assert result.reply == "The single Spot Hidden check resolves the action."
+
+
+async def test_empty_player_actor_defaults_are_removed_before_dispatch_and_trace():
+    provider = _AttributionDiceProvider()
+    llm = FakeLLM(
+        script=[
+            assistant_tools(
+                tool_call(
+                    "skill_check",
+                    skill_name="Spot Hidden",
+                    actor="",
+                    npc_target=0,
+                )
+            ),
+            assistant_text("The check is resolved."),
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(
+        _ctx("chat-normalize-player-actor"),
+        services,
+        Toolset(provider),
+        "I search the uncertain desk.",
+    )
+
+    assert provider.calls == [{"skill_name": "Spot Hidden", "actor": None, "npc_target": None}]
+    assert result.tool_trace[0]["arguments"] == {"skill_name": "Spot Hidden"}
+
+
+async def test_same_turn_semantic_event_duplicate_is_suppressed():
+    provider = _EventProvider()
+    first = "调查员已从码头储物柜取得黄铜钥匙。"
+    second = "调查员一行从码头储物柜取得黄铜钥匙。"
+    llm = FakeLLM(
+        script=[
+            assistant_tools(
+                tool_call("add_session_event", description=first, event_type="discovery"),
+                tool_call("add_session_event", description=second, event_type="discovery"),
+            ),
+            assistant_text("The milestone is recorded once."),
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(
+        _ctx("chat-semantic-event"),
+        services,
+        Toolset(provider),
+        "Record this milestone once.",
+    )
+
+    assert provider.descriptions == [first]
+    assert result.tool_trace[1]["suppressed"] is True
+    assert _event_description_is_semantic_duplicate(first, second)
+    assert not _event_description_is_semantic_duplicate(first, "调查员在码头发现一处新鲜血迹。")
 
 
 async def test_forced_round_non_dice_tool_keeps_reply_and_does_not_loop():
@@ -929,6 +1064,8 @@ def test_player_action_detector_catches_attempts_but_not_dialogue():
         "I look around the room for another way out.",
         "I use first aid on the wounded man.",
         "I want to spot any hidden traps.",
+        "Have Captain Elena Ruiz professionally inspect the unstable beam.",
+        "I study the coded ledger for an uncertain pattern.",
         "我搜查这张书桌。",
         "我想潜行绕到他背后。",
         "我说服他放我们离开。",
@@ -937,6 +1074,8 @@ def test_player_action_detector_catches_attempts_but_not_dialogue():
         "我去图书馆查阅相关资料。",
         "我聆听门后的动静。",
         "我攻击那个邪教徒。",
+        "让赵队长专业检查不稳定的承重梁。",
+        "我研究加密账本中的规律。",
     ]:
         assert _player_attempts_checkable_action(positive), positive
 
@@ -950,9 +1089,16 @@ def test_player_action_detector_catches_attempts_but_not_dialogue():
         "I walk into the parlor and sit down.",
         "I tell her my name is Harvey.",
         "I wait quietly for a moment.",
+        "I walk forward and mention that we searched yesterday.",
+        "OOC: no roll needed; inspect the log only.",
+        "Meta request: export the report and audit the transcript.",
+        ".report detailed",
         "我向玛莎打招呼。",
         "我对他微笑着点点头。",
         "我看着窗外，一言不发。",
+        "我走上前，并提到昨天搜查过这里。",
+        "元请求：只检查日志，无需检定。",
+        "导出团报并审计日志，不改变游戏状态。",
     ]:
         assert not _player_attempts_checkable_action(negative), negative
 
@@ -969,6 +1115,8 @@ def test_reply_check_detector_catches_the_violation_but_not_plain_narration():
         "请进行一次侦查检定。",
         "这是一次大成功，你看清了墙上的划痕。",
         "自己掷一个理智检定吧。",
+        "You discover a hidden latch beneath the desk.",
+        "你发现书桌底下藏着一枚黄铜钥匙。",
     ]:
         assert _reply_requests_or_resolves_check(positive), positive
 
@@ -979,7 +1127,6 @@ def test_reply_check_detector_catches_the_violation_but_not_plain_narration():
         "The investigators sense something is deeply wrong here.",
         "The corridor stretches on into darkness, silent and cold.",
         "You step into the fog. What do you do?",
-        "You check the desk and the walls but find nothing.",
         "The ritual was a success.",
         "You roll the heavy barrel aside.",
         "你走进浓雾，四周一片死寂。",
@@ -990,6 +1137,7 @@ def test_reply_check_detector_catches_the_violation_but_not_plain_narration():
     assert _dice_rolled([{"name": "skill_check"}])
     assert _dice_rolled([{"name": "lookup_time"}, {"name": "sanity_check"}])
     assert _dice_rolled([{"name": "spend_luck"}])
+    assert not _dice_rolled([{"name": "skill_check", "suppressed": True}])
     assert not _dice_rolled([{"name": "lookup_time"}, {"name": "get_module_summary"}])
     assert not _dice_rolled([])
 

@@ -28,6 +28,7 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 
 from agent.context import AgentCtx
 from agent.prompt_builder import build_system_prompt
@@ -169,6 +170,7 @@ _PLAYER_SKILL_EN_WORDS = (
     "plead", "intimidate", "threaten", "menace", "coerce", "charm", "seduce",
     "flatter", "bluff", "deceive", "negotiate", "bargain", "haggle",
     "interrogate", "bandage", "stabilize", "psychoanalyze", "decipher",
+    "analyze", "analyse", "diagnose", "study",
     "attack", "strike", "punch", "stab", "slash", "shoot", "grapple", "wrestle",
     "tackle", "strangle", "choke", "fight", "pickpocket", "disarm", "track",
     "pry", "spot", "library", "psychology",
@@ -206,6 +208,41 @@ _PLAYER_SKILL_ZH_TERMS = (
     "急救", "包扎", "止血",
     "图书馆", "查资料", "查阅",
     "心理学", "鉴定", "估价", "伪装", "乔装",
+    "分析", "诊断", "研究",
+)
+
+_PLAYER_NO_ROLL_RE = re.compile(
+    r"(?:\b(?:no|without)\s+(?:a\s+)?(?:roll|check|dice)\b"  # i18n-exempt - detector lexicon
+    r"|\b(?:do\s+not|don't|dont)\s+(?:make|roll|perform|require|need)\b[^.!?\n]{0,24}"
+    r"\b(?:roll|check|dice)\b"
+    r"|\bno\s+(?:roll|check)\s+is\s+(?:needed|required)\b"
+    r"|(?:无需|不需|不需要|不要|不用)(?:进行|做|任何)?(?:掷骰|投骰|骰点|检定))",
+    re.IGNORECASE,
+)
+_PLAYER_META_HEAD_RE = re.compile(
+    r"^(?:\s*(?:ooc|meta(?:\s+request)?|out\s+of\s+character)\s*[:：-]?"
+    r"|\s*(?:元请求|元指令|场外|题外)\s*[:：-]?"
+    r"|\s*(?:export|audit|summarize|summarise|show|list|review)\b[^.!?\n]{0,32}"
+    r"\b(?:log|report|recap|transcript|session)\b"
+    r"|\s*(?:导出|审计|汇总|查看|列出|复核)[^。！？\n]{0,20}(?:日志|团报|报告|记录|会话))",
+    re.IGNORECASE,
+)
+_PLAYER_OBVIOUS_OR_VOLUNTARY_RE = re.compile(
+    r"(?:\b(?:visually\s+)?obvious\b|\bunambiguous\b|\bdirectly\s+visible\b"  # i18n-exempt
+    r"|\bvoluntar(?:y|ily)\b|\balready\s+(?:agreed|chose|decided)\b"
+    r"|显而易见|毫无遮挡|毫无歧义|直接可见|自愿回答|主动说明|已经同意)",
+    re.IGNORECASE,
+)
+_PLAYER_EN_CLAUSE_SPLIT_RE = re.compile(r"\b(?:and|then|while|because|but)\b|[,.!?;\n]", re.IGNORECASE)
+_PLAYER_ZH_CLAUSE_SPLIT_RE = re.compile(r"(?:然后|并且|随后|但是|不过|因为)|[，,。！？；\n]")
+
+_REPLY_RESOLVED_EN_RE = re.compile(
+    r"\byou\s+(?:(?:successfully|clearly|finally)\s+)?(?:find|discover|uncover|spot|notice|identify|"
+    r"determine|confirm|decipher|fail\s+to\s+find|cannot\s+find|can't\s+find)\b",
+    re.IGNORECASE,
+)
+_REPLY_RESOLVED_ZH_RE = re.compile(
+    r"(?:你|调查员)(?:终于|成功|清楚地|未能|没能)?(?:发现|找到了?|注意到|辨认出|确认|判断出|解读出)"  # i18n-exempt
 )
 
 # High-confidence "self-drawn scene card" detector: short title-like lines with
@@ -222,7 +259,10 @@ _SCENE_TITLE_TIME_RE = re.compile(
 
 def _dice_rolled(tool_trace: list[dict]) -> bool:
     """True if any real dice-rolling tool fired during this turn."""
-    return any(entry.get("name") in _DICE_TOOL_NAMES for entry in tool_trace)
+    return any(
+        entry.get("name") in _DICE_TOOL_NAMES and not entry.get("suppressed")
+        for entry in tool_trace
+    )
 
 
 def _state_bookkeeping_done(tool_trace: list[dict]) -> bool:
@@ -281,7 +321,25 @@ def _reply_requests_or_resolves_check(reply: str) -> bool:
     if _DICE_COMMAND_RE.search(reply) or _ROLL_REQUEST_EN_RE.search(reply) or _ROLL_REQUEST_ZH_RE.search(reply):
         return True
     lowered = reply.lower()
-    return any(marker in lowered for marker in _CHECK_OUTCOME_MARKERS)
+    return (
+        any(marker in lowered for marker in _CHECK_OUTCOME_MARKERS)
+        or bool(_REPLY_RESOLVED_EN_RE.search(reply))
+        or bool(_REPLY_RESOLVED_ZH_RE.search(reply))
+    )
+
+
+def _player_declares_no_roll_context(text: str) -> bool:
+    """High-confidence whole-action exemption for no-roll, meta, and obvious facts."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return False
+    if stripped.startswith((".", "/")):
+        return True
+    return bool(
+        _PLAYER_NO_ROLL_RE.search(stripped)
+        or _PLAYER_META_HEAD_RE.search(stripped)
+        or _PLAYER_OBVIOUS_OR_VOLUNTARY_RE.search(stripped)
+    )
 
 
 def _player_attempts_checkable_action(text: str) -> bool:
@@ -294,9 +352,20 @@ def _player_attempts_checkable_action(text: str) -> bool:
     """
     if not text:
         return False
-    if _PLAYER_SKILL_EN_RE.search(text):
+    if _player_declares_no_roll_context(text):
+        return False
+    # Approximate the action's HEAD VERB rather than scanning the entire message:
+    # only the first independent clause and a small leading window are eligible.
+    # This keeps "I walk forward and mention we searched yesterday" from
+    # triggering on a stale/incidental skill word while retaining subjects and
+    # NPC titles before verbs such as "Have Captain Ruiz inspect ...".
+    english_clause = _PLAYER_EN_CLAUSE_SPLIT_RE.split(text, maxsplit=1)[0]
+    english_head = " ".join(english_clause.split()[:12])
+    if _PLAYER_SKILL_EN_RE.search(english_head):
         return True
-    return any(term in text for term in _PLAYER_SKILL_ZH_TERMS)
+    chinese_clause = _PLAYER_ZH_CLAUSE_SPLIT_RE.split(text, maxsplit=1)[0]
+    chinese_head = chinese_clause[:28]
+    return any(term in chinese_head for term in _PLAYER_SKILL_ZH_TERMS)
 
 
 @dataclass
@@ -420,6 +489,7 @@ async def run_kp_turn(
     if (
         reply is not None
         and not _dice_rolled(tool_trace)
+        and not _player_declares_no_roll_context(user_message)
         and (_reply_requests_or_resolves_check(reply) or _player_attempts_checkable_action(user_message))
     ):
         reply = await _run_dice_correction(
@@ -650,6 +720,35 @@ def _schemas_for_tool_names(toolset: Toolset, unlocked: set[str] | None, names: 
     return schemas
 
 
+def _normalize_tool_arguments(call_name: str, arguments: dict | None) -> dict:
+    """Drop provider-injected optional sentinels that carry no semantic value."""
+    normalized = dict(arguments or {})
+    if call_name != "skill_check":
+        return normalized
+    actor = normalized.get("actor")
+    if actor is None or (isinstance(actor, str) and not actor.strip()):
+        normalized.pop("actor", None)
+        if normalized.get("npc_target") in {None, 0, ""}:
+            normalized.pop("npc_target", None)
+    return normalized
+
+
+def _event_description_is_semantic_duplicate(left: str, right: str) -> bool:
+    """Conservative same-turn near-duplicate check for event tool calls."""
+    left_norm = re.sub(r"[^\w\u3400-\u9fff]+", "", (left or "").casefold())
+    right_norm = re.sub(r"[^\w\u3400-\u9fff]+", "", (right or "").casefold())
+    if not left_norm or not right_norm:
+        return False
+    if left_norm == right_norm:
+        return True
+    sequence_ratio = SequenceMatcher(None, left_norm, right_norm).ratio()
+    left_terms = set(re.findall(r"[a-z0-9]+|[\u3400-\u9fff]", left_norm))
+    right_terms = set(re.findall(r"[a-z0-9]+|[\u3400-\u9fff]", right_norm))
+    union = left_terms | right_terms
+    overlap = len(left_terms & right_terms) / len(union) if union else 0.0
+    return sequence_ratio >= 0.82 or overlap >= 0.84
+
+
 async def _dispatch_and_record(
     toolset: Toolset,
     ctx: AgentCtx,
@@ -657,6 +756,8 @@ async def _dispatch_and_record(
     conversation: list[dict],
     tool_trace: list[dict],
     unlocked: set[str] | None = None,
+    *,
+    max_dice_calls: int | None = None,
 ) -> None:
     """Dispatch one assistant round's tool calls, feeding results back into `conversation` + `tool_trace`.
 
@@ -665,8 +766,16 @@ async def _dispatch_and_record(
     `unlocked` (Layer B.2 -- see `Toolset.dispatch`) is the room's set of
     unlocked gated-tool names; `None`/empty means no gated tool is callable.
     """
-    conversation.append(_assistant_tool_call_message(result))
     for call in result.tool_calls:
+        call.arguments = _normalize_tool_arguments(call.name, call.arguments)
+    conversation.append(_assistant_tool_call_message(result))
+    dice_calls_dispatched = 0
+    for call in result.tool_calls:
+        suppress_extra_dice = (
+            max_dice_calls is not None
+            and call.name in _DICE_TOOL_NAMES
+            and dice_calls_dispatched >= max_dice_calls
+        )
         duplicate_initiative_next = (
             call.name == "initiative_tracker"
             and (call.arguments or {}).get("action") == "next"
@@ -676,16 +785,40 @@ async def _dispatch_and_record(
                 for entry in tool_trace
             )
         )
-        if duplicate_initiative_next:
+        duplicate_session_event = (
+            call.name == "add_session_event"
+            and any(
+                entry.get("name") == "add_session_event"
+                and not entry.get("suppressed")
+                and _event_description_is_semantic_duplicate(
+                    str((entry.get("arguments") or {}).get("description", "")),
+                    str((call.arguments or {}).get("description", "")),
+                )
+                for entry in tool_trace
+            )
+        )
+        suppressed = False
+        if suppress_extra_dice:
+            tool_result = t("loop.dice_correction.extra_check_suppressed", locale=ctx.locale)
+            suppressed = True
+        elif duplicate_initiative_next:
             tool_result = t("kp_tools.initiative.next_already_committed", locale=ctx.locale)
+            suppressed = True
+        elif duplicate_session_event:
+            tool_result = t("kp_tools.know.session.event_duplicate", locale=ctx.locale)
+            suppressed = True
         else:
             tool_result = await toolset.dispatch(call.name, ctx, call.arguments, unlocked)
+            if call.name in _DICE_TOOL_NAMES:
+                dice_calls_dispatched += 1
         trace_entry = {
             "name": call.name,
             "arguments": call.arguments,
             "keeper_only": toolset.is_keeper_only(call.name),
             "result": tool_result,
         }
+        if suppressed:
+            trace_entry["suppressed"] = True
         dice_payloads = ctx.consume_dice()
         if dice_payloads:
             trace_entry["dice_payloads"] = dice_payloads
@@ -740,6 +873,7 @@ async def _run_dice_correction(
         {"role": "user", "content": i18n.t("loop.dice_correction", action=user_message)},
     ]
     reply = prior_reply
+    correction_start = len(tool_trace)
     for round_index in range(_CORRECTIVE_MAX_ROUNDS):
         # Round 0 FORCES a tool call ("required"); the follow-up narration round is
         # a normal "auto" call.
@@ -784,7 +918,19 @@ async def _run_dice_correction(
                 return prior_reply
         if result.tool_calls:
             try:
-                await _dispatch_and_record(toolset, ctx, result, convo, tool_trace, unlocked)
+                real_correction_dice = sum(
+                    entry.get("name") in _DICE_TOOL_NAMES and not entry.get("suppressed")
+                    for entry in tool_trace[correction_start:]
+                )
+                await _dispatch_and_record(
+                    toolset,
+                    ctx,
+                    result,
+                    convo,
+                    tool_trace,
+                    unlocked,
+                    max_dice_calls=max(0, 1 - real_correction_dice),
+                )
             except (asyncio.CancelledError, Exception):
                 _clear_llm_continuation(services, convo)
                 raise
