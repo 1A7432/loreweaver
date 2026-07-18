@@ -562,6 +562,26 @@ def _contains_eval_sentinel(text: str, sentinel: str) -> bool:
     """Match Latin sentinels on token boundaries; CJK phrases have no whitespace word boundary."""
     if not sentinel:
         return False
+    iso_datetime = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2}) (\d{2}:\d{2})", sentinel)
+    if iso_datetime:
+        year, month, day, clock = iso_datetime.groups()
+        if re.search(
+            rf"(?<!\d){year}-{month}-{day}(?:\s*,)?\s+{re.escape(clock)}(?!\d)",
+            text,
+        ):
+            return True
+        month_name = datetime(int(year), int(month), int(day)).strftime("%B")
+        if re.search(
+            rf"(?<!\d){re.escape(clock)}\s+on\s+{month_name}\s+{int(day)},\s+{year}(?!\d)",
+            text,
+            re.IGNORECASE,
+        ):
+            return True
+        if re.search(
+            rf"(?<!\d){year}年0?{int(month)}月0?{int(day)}日\s*{re.escape(clock)}(?!\d)",
+            text,
+        ):
+            return True
     if re.search(r"[A-Za-z0-9]", sentinel):
         return bool(re.search(rf"(?<![\w]){re.escape(sentinel)}(?![\w])", text, re.IGNORECASE))
     return sentinel in text

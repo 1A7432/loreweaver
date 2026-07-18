@@ -38,6 +38,14 @@ def test_behavior_sentinels_use_token_boundaries_for_latin_text() -> None:
     assert _contains_eval_sentinel("从码头储物柜取得黄铜钥匙。", "黄铜钥匙")
 
 
+def test_behavior_clock_claim_accepts_equivalent_locale_renderings() -> None:
+    sentinel = "1926-03-15 09:30"
+    assert _contains_eval_sentinel("Time: 1926-03-15, 09:30", sentinel)
+    assert _contains_eval_sentinel("At 09:30 on March 15, 1926, the door opens.", sentinel)
+    assert _contains_eval_sentinel("时间：1926年3月15日 09:30", sentinel)
+    assert not _contains_eval_sentinel("Time remains 1926-03-15 09:00.", sentinel)
+
+
 def test_behavior_gate_fails_closed_on_empty_or_bad_metrics() -> None:
     passed, reasons = evaluate_behavior_gate(BehaviorMetrics(), BehaviorThresholds())
     assert not passed
