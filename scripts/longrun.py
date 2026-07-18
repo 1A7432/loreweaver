@@ -62,6 +62,7 @@ from scripts.playtest import (  # noqa: E402
     GateThresholds,
     MeteredLLM,
     RedlineMetrics,
+    _build_behavior_services,
     evaluate_gate,
     extract_secret_snippets,
     parse_secret_concepts,
@@ -137,6 +138,12 @@ async def main():
     ap.add_argument("--probe-every", type=int, default=25)
     ap.add_argument("--budget", type=int, default=520, help="wall-clock seconds this invocation may run")
     ap.add_argument("--log", default="playtest/longrun.jsonl")
+    ap.add_argument("--db", default="data/longrun.db", help="persistent campaign SQLite path")
+    ap.add_argument("--credentials-db", default="",
+                    help="read-only credential source for an isolated subscription LLM")
+    ap.add_argument("--provider", default="chatgpt")
+    ap.add_argument("--model", default="gpt-5.6-sol")
+    ap.add_argument("--reasoning-effort", default="medium")
     ap.add_argument("--secret-concepts", default="",
                      help="comma-separated paraphrase-leak sentinel phrases specific to --module")
     ap.add_argument("--secret-concepts-file", default="",
@@ -162,10 +169,30 @@ async def main():
 
     settings = get_settings()
     # A fresh checkout (CI) has no data/ dir — sqlite can't create the parent, only the file.
-    (ROOT / "data").mkdir(parents=True, exist_ok=True)
-    services = build_services(settings, embeddings=LocalEmbeddings(64), db_path=str(ROOT / "data" / "longrun.db"))
-    meter = MeteredLLM(services.llm)
-    services.llm = meter
+    db_path = (ROOT / args.db).resolve()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    credential_services = None
+    temporary = None
+    if args.credentials_db:
+        credential_services, temporary, meter = await _build_behavior_services(
+            mode="live",
+            fixture={"version": 1, "episodes": []},
+            credentials_db=args.credentials_db,
+            provider=args.provider,
+            model=args.model,
+            reasoning_effort=args.reasoning_effort,
+        )
+        settings = credential_services.settings
+        services = build_services(
+            settings,
+            llm=meter,
+            embeddings=LocalEmbeddings(64),
+            db_path=str(db_path),
+        )
+    else:
+        services = build_services(settings, embeddings=LocalEmbeddings(64), db_path=str(db_path))
+        meter = MeteredLLM(services.llm)
+        services.llm = meter
     ts = build_kp_toolset(services)
     router = CommandRouter(services)
     hub = RoomHub()
@@ -269,6 +296,11 @@ async def main():
         print(f"  budget/timeout reached — RE-RUN the same command to continue from turn {turn}.")
     if args.summary_json:
         write_summary_json(ROOT / args.summary_json, "longrun", metrics, thresholds, passed, reasons, meter.usage)
+    services.store.close()
+    if credential_services is not None:
+        credential_services.store.close()
+    if temporary is not None:
+        temporary.cleanup()
     if args.gate and not passed:
         sys.exit(1)
 

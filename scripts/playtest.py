@@ -1217,10 +1217,22 @@ async def main():
         min_checkable_turns=args.min_checkable_turns,
     )
 
-    settings = get_settings()
-    services = build_services(settings, embeddings=LocalEmbeddings(64))
-    meter = MeteredLLM(services.llm)
-    services.llm = meter
+    temporary = None
+    if args.credentials_db:
+        services, temporary, meter = await _build_behavior_services(
+            mode="live",
+            fixture={"version": 1, "episodes": []},
+            credentials_db=args.credentials_db,
+            provider=args.provider,
+            model=args.model,
+            reasoning_effort=args.reasoning_effort,
+        )
+        settings = services.settings
+    else:
+        settings = get_settings()
+        services = build_services(settings, embeddings=LocalEmbeddings(64))
+        meter = MeteredLLM(services.llm)
+        services.llm = meter
     ts = build_kp_toolset(services)
     router = CommandRouter(services)
     hub = RoomHub()
@@ -1250,6 +1262,9 @@ async def main():
     print(f"log -> {args.log}")
     if args.summary_json:
         write_summary_json(ROOT / args.summary_json, "playtest", rec.metrics, thresholds, passed, reasons, meter.usage)
+    services.store.close()
+    if temporary is not None:
+        temporary.cleanup()
     if args.gate and not passed:
         sys.exit(1)
 
