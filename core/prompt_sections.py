@@ -557,6 +557,8 @@ async def inject_interaction_style_prompt(ctx: Any, i18n: I18n) -> str:
         "",
         i18n.t("prompt.style.tool_usage"),
         "",
+        i18n.t("prompt.style.roll_policy"),
+        "",
         i18n.t("prompt.style.actor_attribution"),
         "",
         i18n.t("prompt.style.companions"),

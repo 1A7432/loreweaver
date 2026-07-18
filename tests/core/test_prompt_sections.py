@@ -163,6 +163,10 @@ async def test_inject_interaction_style_prompt_is_localized_and_nonempty():
     assert ZH.t("prompt.style.principles") in zh_result
     assert EN.t("prompt.style.actor_attribution") in en_result
     assert ZH.t("prompt.style.actor_attribution") in zh_result
+    assert EN.t("prompt.style.roll_policy") in en_result
+    assert ZH.t("prompt.style.roll_policy") in zh_result
+    assert "AT MOST ONE check" in en_result
+    assert "至多进行一次检定" in zh_result
 
 
 async def test_inject_interaction_style_prompt_includes_freshness_and_ensemble_nudges():
