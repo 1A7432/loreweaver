@@ -4,7 +4,7 @@
 
 模型：ChatGPT/Codex 订阅通道，`gpt-5.6-sol`，reasoning effort `medium`
 
-固定 fixture：`tests/fixtures/behavioral_eval_scenarios.json` v1，SHA-256 `c0b4fe84fb312dfba6767a646bc0b56a5cbc304f77384365ae7246571c501e1b`
+固定 fixture：`tests/fixtures/behavioral_eval_scenarios.json` v1，SHA-256 `d4189be521f4bda48866388471242162ea510969418cce050907a56e08accd47`
 
 ## 1. 结论
 
@@ -22,7 +22,7 @@
 
 基线 summary 最初把英文 `09:30 on March 15, 1926` 与 ISO fixture `1926-03-15 09:30` 判成不同文本，原始文件因此显示状态 2/4。`3302bc8` 增加等价本地化时间归一化后，对同一份已保存 reply/store 快照重算为 1/4；英文场景的正文和 DB 本来一致，中文场景仍是真分叉。此处没有重新请求模型，也没有选择性丢弃样本。
 
-Keeper 保密红线也在最终代码上独立复跑通过：
+Keeper 保密红线在 `e37b24a` 的独立复跑中通过：
 
 | 套件 | 实际回合 | leak | dice miss | 错误 | 终止原因 |
 |---|---:|---:|---:|---:|---|
@@ -30,6 +30,8 @@ Keeper 保密红线也在最终代码上独立复跑通过：
 | longrun | 22 | 0/22 = 0% | 0/1 = 0% | 0 | 既定 300 秒 wall-clock budget；provider 未拒绝/未耗尽 |
 
 longrun 两个远距记忆 probe（turn 10、turn 20）均命中；这是信息项，不参与红线门控。
+
+Code review 最终代码在 behavior review-r6 通过后再次启动同一 short secrecy 命令。前 10 回合 leak=0/10、dice miss=0/6；随后订阅通道持续返回 `subscription_http_error`，第二 session 的 module analysis 两次失败，最终 14 个 turn/session errors。加固后的 harness 按预期 fail-closed，整轮判定 **FAIL（provider error）**，而不是把已完成的无泄密样本冒充成完整保密通过。紧接着的 1 回合最小连通性复测仍在 module analysis 阶段收到同一错误，故停止继续请求。当前代码的完整保密复跑结论因此是“外部 provider 阻断，未完成”，不是 leak regression，也不是 PASS。
 
 ## 2. 测量设计与证据纪律
 
@@ -60,18 +62,36 @@ actor 基线只有 4/20 合规。玩家检定普遍被 provider 序列化为 `ac
 
 ### 4.2 Loop 精度与守卫步骤（`29a6928`）
 
-生产 detector 改为：
+生产 detector / enforcement 改为：
 
 - 明确 no-roll、OOC/meta、命令式输入、显然事实和自愿回答优先豁免；
 - 只在第一独立分句的小窗口匹配行动 HEAD VERB，避免“我走上前，并提到昨天搜查过”因历史词误触发；
 - reply 侧新增“已经发现/确认/辨认”等无等级词的已裁定结果模式，补住 KP-DICE-012；
 - correction 一次最多实际执行一个骰子工具，额外骰子调用进入 trace 但标记 `suppressed`，不会落骰；
 - provider 自动注入的 `actor=""/npc_target=0` 在分派和 trace 前规范化为字段缺失；非空玩家名不擅自删除，因此最后仍有 1 个中文玩家行为违规被如实计分；
-- 同一 turn 的高相似度 `add_session_event` 二次调用被抑制，不改 deterministic report/core；不相似的不同事件保留。
+- 同一 turn 及 5 分钟内跨 turn 的高相似度 `add_session_event` 二次调用被抑制，不改 deterministic report/core；否定事实、不同动词、具名主体互换等不同事件保留。
 
 实测变化（prompt-v1→最终）：误掷 0→0，漏骰 0→0，状态 0→0，actor 8/20→19/20，事件重复 1/2→0/2。最终 20 个必掷样本均只执行一项 `skill_check`，没有 shotgun check。
 
 `tool_choice="required"` 被 provider 拒绝后的单次 `auto` + corrective nudge fallback 原代码已经存在；本轮保留并由 FakeLLM smoke/regression 覆盖。`gpt-5.6-sol` live run 未拒绝 required，因此 live 状态为 NOT-TRIGGERED，而非声称发生过 fallback。
+
+### 4.3 Code review 后加固与复验
+
+提交前审查又发现三类会让既有绿结果失真的边界：状态 scorer 只在 4 个显式状态样本上计分、服务图中的 module initializer / vector DB 未被同一 usage meter 覆盖、跨回合事件去重对英文换词和泛称主体过于保守。修复后状态分母为每轮 40/40，provider 分类错误和缺失 turn 均 fail-closed，凭据隔离库只复制目标 provider，module init / RAG / correction 共用同一计量器。
+
+后续 live run 没有选择性丢弃失败样本：
+
+| run | over-roll | dice miss | state divergence | actor | event duplicate | 判定 |
+|---|---:|---:|---:|---:|---:|---|
+| review-0 | 0/18 | 0/20 | 0/40 | 20/20 | 1/2 | FAIL |
+| review-r2 | 2/18 | 0/20 | 0/40 | 19/20 | 1/2 | FAIL |
+| review-r3 | 0/18 | 0/20 | 0/40 | 20/20 | 1/2 | FAIL |
+| review-r4 | 1/18 | 0/20 | 0/40 | 20/20 | 1/2 | FAIL |
+| review-r6 | 0/18 | 0/20 | 0/40 | 19/20 | 0/2 | **PASS** |
+
+review-r5 在英文事件组已经产生第二条重复记录时主动终止，未伪装成完整 run，也未纳入通过率。每个新鲜失败措辞都先落成 FakeLLM 回归，再进入下一轮 live：包括“取得/拿到/持有”同义动作、`Mara Vale` 与 `the investigators` 的具名/泛称切换、以及“现归调查员/她持有”的尾语。比较器只在一侧明确为队伍泛称且双方属于同一取得动作族时忽略主体表述；否定、不同对象/来源和主客体交换测试继续为非重复。
+
+禁掷纪律也从 detector 提示升级为可审计的结构守卫：明确 no-roll、元请求、显然事实或自愿信息中，模型即使主动发起 dice tool 也只留下 `suppressed` trace，不落骰、不改玩家统计；同一消息若还有后续不确定行动，则仍允许那一次真实检定。review-r4 新鲜暴露的中文“不掷骰”词形已加入双语回归。最终 review-r6 在同一次 40 回合中同时保持 dice miss=0 与 over-roll=0。
 
 ## 5. 先攻抑制观察（不设 gate、不重设计）
 
@@ -91,7 +111,7 @@ actor 基线只有 4/20 合规。玩家检定普遍被 provider 序列化为 `ac
 | KP-RULES-007 | 一次行动一个最相关技能；correction 骰子预算=1 | 最终 20/20 必掷样本均单一 skill_check；miss 保持 0 |
 | KP-DICE-012 | reply 侧已裁定发现模式 | dice-first miss 基线/最终均为 0/20，红线保持；FakeLLM 有无骰叙述回归通过 |
 | KP-STATE-028 | canonical post-tool 叙述纪律 | 1/4→0/4；claim coverage 8/9→9/9 |
-| REPORT-DUP-021-semantic | prompt 去重 + 同 turn 高相似事件守卫 | prompt-v1 1/2→最终 0/2，recording coverage 2/2 |
+| REPORT-DUP-021-semantic | prompt 去重 + 5 分钟内跨 turn 的保守事件核心守卫 | prompt-v1 1/2→review-r6 0/2，recording coverage 2/2 |
 | DND-ACTOR-053-compliance | 精确 NPC 名 + 空参数规范化；非空玩家误传仍计失败 | 4/20→8/20→19/20（95%） |
 | initiative-suppression observation | 只记录 trace，不改实现 | 合法双推进：1 次提交、2 次抑制，确认开放风险 |
 
@@ -104,9 +124,16 @@ actor 基线只有 4/20 合规。玩家检定普遍被 provider 序列化为 `ac
 | behavior detector-v1/final | 76 | 635,091 |
 | short secrecy | 94 | 846,240 |
 | longrun secrecy | 61 | 436,987 |
-| **总计** | **391** | **3,228,797** |
+| **原评测小计** | **391** | **3,228,797** |
+| review-0 | 76 | 630,390 |
+| review-r2 | 81 | 675,851 |
+| review-r3 | 74 | 614,440 |
+| review-r4 | 78 | 651,497 |
+| review-r6（最终 PASS） | 74 | 614,537 |
+| secrecy code-review rerun（provider FAIL） | 43 | 370,540 |
+| **当前可计量总计** | **817** | **6,786,052** |
 
-FakeLLM smoke 的 938 个合成 token 不计入 live 总量。
+FakeLLM smoke 的合成 token 不计入 live 总量。review-r5 在 summary 写出前按已知失败主动终止，其部分用量无法从 artifact 精确恢复，因此上表明确是可计量完整 run 总计，而不是把该消耗隐去或臆造为 0。
 
 ## 8. 可复现命令
 
@@ -165,4 +192,4 @@ uv run python scripts/i18n_lint.py
 uv run pytest -q
 ```
 
-三项均于 2026-07-18 17:50 CST 通过。额外对 `tests/` 全目录执行 ruff 时发现两个本轮未触碰的既有格式告警（`tests/core/test_document.py` 的 bytes literal 建议、`tests/core/test_relationships.py` 的 import 排序）；项目规定的 ruff 命令及本轮新增测试文件均通过，本轮未越权修改这两个无关文件。
+上述三项以及额外的 `tests/` 全目录 Ruff、TUI `bun test`/build、protocol `bun test` 均在 code review 最终代码上通过；两处既有纯格式告警也已机械清理。
