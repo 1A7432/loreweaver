@@ -34,13 +34,18 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import re
+import sqlite3
+import subprocess
 import sys
+import tempfile
 import traceback
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -64,12 +69,16 @@ from agent.kp_tools import build_kp_toolset  # noqa: E402
 # *convention*, not enforced privacy -- an explicit import is fine.
 from agent.loop import _dice_rolled, _player_attempts_checkable_action, _reply_requests_or_resolves_check  # noqa: E402
 from agent.services import build_services  # noqa: E402
+from core.character_manager import get_hit_points  # noqa: E402
 from core.charcard import parse_card_file  # noqa: E402
 from gateway.commands import CommandRouter  # noqa: E402
 from gateway.hub import RoomHub  # noqa: E402
 from gateway.turn import run_turn  # noqa: E402
 from infra.config import get_settings  # noqa: E402
 from infra.embeddings import LocalEmbeddings  # noqa: E402
+from infra.llm import ChatResult, FakeLLM, ToolCall, Usage  # noqa: E402
+from infra.runtime_config import CREDENTIALS_KEY, DEFAULT_KEY  # noqa: E402
+from infra.store import Store  # noqa: E402
 
 # Player archetypes -- varied behaviour surfaces different KP/engine paths.
 ARCHETYPES = [
@@ -265,7 +274,13 @@ def render_report(name: str, metrics: RedlineMetrics, thresholds: GateThresholds
 
 
 def write_summary_json(
-    path: Path, name: str, metrics: RedlineMetrics, thresholds: GateThresholds, passed: bool, reasons: list[str]
+    path: Path,
+    name: str,
+    metrics: RedlineMetrics,
+    thresholds: GateThresholds,
+    passed: bool,
+    reasons: list[str],
+    usage: UsageTotals | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -276,6 +291,8 @@ def write_summary_json(
         "rates": {"leak_rate": metrics.leak_rate, "dice_miss_rate": metrics.dice_miss_rate},
         "thresholds": asdict(thresholds),
     }
+    if usage is not None:
+        payload["usage"] = asdict(usage)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
@@ -302,6 +319,621 @@ def parse_secret_concepts(cli_value: str, file_value: str) -> list[str]:
 
 
 # =============================================================================
+# Fixture-grounded Keeper behavior eval. Unlike RedlineMetrics above, every
+# roll/no-roll denominator comes from a committed scenario fixture rather than
+# the production detector under test. This prevents detector tuning from moving
+# its own goalposts.
+# =============================================================================
+
+
+@dataclass
+class UsageTotals:
+    calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cache_hit_tokens: int = 0
+    cache_miss_tokens: int = 0
+
+    def add(self, usage: Usage | None) -> None:
+        self.calls += 1
+        if usage is None:
+            return
+        for field_name in (
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "cache_hit_tokens",
+            "cache_miss_tokens",
+        ):
+            setattr(self, field_name, getattr(self, field_name) + int(getattr(usage, field_name, 0) or 0))
+
+
+class MeteredLLM:
+    """Transparent usage meter covering main, correction, recap, and finalizer calls."""
+
+    def __init__(self, delegate: Any) -> None:
+        self.delegate = delegate
+        self.usage = UsageTotals()
+
+    async def chat(self, messages: list[dict], **kwargs: Any) -> ChatResult:
+        result = await self.delegate.chat(messages, **kwargs)
+        self.usage.add(result.usage)
+        return result
+
+    def clear_continuation(self, messages: list[dict]) -> None:
+        clear = getattr(self.delegate, "clear_continuation", None)
+        if callable(clear):
+            clear(messages)
+
+
+@dataclass
+class BehaviorMetrics:
+    turns: int = 0
+    errors: int = 0
+    no_roll_cases: int = 0
+    over_roll_false_positives: int = 0
+    roll_required_cases: int = 0
+    dice_first_misses: int = 0
+    state_cases: int = 0
+    state_divergences: int = 0
+    state_required_claims: int = 0
+    state_present_claims: int = 0
+    actor_cases: int = 0
+    actor_compliant: int = 0
+    event_groups: int = 0
+    duplicated_event_groups: int = 0
+    recorded_event_groups: int = 0
+    initiative_suppression_observations: list[dict[str, Any]] | None = None
+
+    def __post_init__(self) -> None:
+        if self.initiative_suppression_observations is None:
+            self.initiative_suppression_observations = []
+
+    @staticmethod
+    def _rate(numerator: int, denominator: int) -> float:
+        return numerator / denominator if denominator else 0.0
+
+    @property
+    def over_roll_fp_rate(self) -> float:
+        return self._rate(self.over_roll_false_positives, self.no_roll_cases)
+
+    @property
+    def dice_first_miss_rate(self) -> float:
+        return self._rate(self.dice_first_misses, self.roll_required_cases)
+
+    @property
+    def state_divergence_rate(self) -> float:
+        return self._rate(self.state_divergences, self.state_cases)
+
+    @property
+    def state_claim_coverage(self) -> float:
+        return self._rate(self.state_present_claims, self.state_required_claims)
+
+    @property
+    def actor_compliance_rate(self) -> float:
+        return self._rate(self.actor_compliant, self.actor_cases)
+
+    @property
+    def event_dup_rate(self) -> float:
+        return self._rate(self.duplicated_event_groups, self.event_groups)
+
+    @property
+    def event_recording_coverage(self) -> float:
+        return self._rate(self.recorded_event_groups, self.event_groups)
+
+    def rates(self) -> dict[str, float]:
+        return {
+            "over_roll_fp_rate": self.over_roll_fp_rate,
+            "dice_first_miss_rate": self.dice_first_miss_rate,
+            "state_divergence_rate": self.state_divergence_rate,
+            "state_claim_coverage": self.state_claim_coverage,
+            "actor_compliance_rate": self.actor_compliance_rate,
+            "event_dup_rate": self.event_dup_rate,
+            "event_recording_coverage": self.event_recording_coverage,
+        }
+
+
+@dataclass
+class BehaviorThresholds:
+    max_over_roll_fp_rate: float = 0.10
+    max_dice_first_miss_rate: float = 0.0
+    max_state_divergence_rate: float = 1.0
+    min_actor_compliance_rate: float = 0.95
+    max_event_dup_rate: float = 0.0
+    min_event_recording_coverage: float = 1.0
+
+
+def evaluate_behavior_gate(
+    metrics: BehaviorMetrics, thresholds: BehaviorThresholds
+) -> tuple[bool, list[str]]:
+    reasons: list[str] = []
+    required_denominators = {
+        "no-roll": metrics.no_roll_cases,
+        "roll-required": metrics.roll_required_cases,
+        "state": metrics.state_cases,
+        "actor": metrics.actor_cases,
+        "event": metrics.event_groups,
+    }
+    for name, count in required_denominators.items():
+        if count == 0:
+            reasons.append(f"no {name} cases were scored")
+    comparisons = (
+        (metrics.over_roll_fp_rate, thresholds.max_over_roll_fp_rate, "over-roll false-positive", ">"),
+        (metrics.dice_first_miss_rate, thresholds.max_dice_first_miss_rate, "dice-first miss", ">"),
+        (metrics.state_divergence_rate, thresholds.max_state_divergence_rate, "state divergence", ">"),
+        (metrics.actor_compliance_rate, thresholds.min_actor_compliance_rate, "actor compliance", "<"),
+        (metrics.event_dup_rate, thresholds.max_event_dup_rate, "event duplicate", ">"),
+        (metrics.event_recording_coverage, thresholds.min_event_recording_coverage, "event recording", "<"),
+    )
+    for actual, limit, label, operator in comparisons:
+        violated = actual > limit if operator == ">" else actual < limit
+        if violated:
+            reasons.append(f"{label} rate {actual:.1%} {operator} allowed {limit:.1%}")
+    if metrics.errors:
+        reasons.append(f"{metrics.errors} behavior turns errored")
+    return not reasons, reasons
+
+
+def render_behavior_report(
+    metrics: BehaviorMetrics,
+    thresholds: BehaviorThresholds,
+    passed: bool,
+    reasons: list[str],
+) -> str:
+    return "\n".join(
+        [
+            "=== playtest behavioral gate ===",
+            f"turns={metrics.turns}  errors={metrics.errors}",
+            f"over-roll FP:   {metrics.over_roll_fp_rate:6.1%}  "
+            f"({metrics.over_roll_false_positives}/{metrics.no_roll_cases})  "
+            f"[max {thresholds.max_over_roll_fp_rate:.1%}]",
+            f"dice-first miss:{metrics.dice_first_miss_rate:6.1%}  "
+            f"({metrics.dice_first_misses}/{metrics.roll_required_cases})  "
+            f"[max {thresholds.max_dice_first_miss_rate:.1%}]",
+            f"state divergence:{metrics.state_divergence_rate:5.1%}  "
+            f"({metrics.state_divergences}/{metrics.state_cases}); "
+            f"claim coverage={metrics.state_claim_coverage:.1%}",
+            f"actor compliance:{metrics.actor_compliance_rate:5.1%}  "
+            f"({metrics.actor_compliant}/{metrics.actor_cases})  "
+            f"[min {thresholds.min_actor_compliance_rate:.1%}]",
+            f"event duplicate: {metrics.event_dup_rate:5.1%}  "
+            f"({metrics.duplicated_event_groups}/{metrics.event_groups}); "
+            f"recording coverage={metrics.event_recording_coverage:.1%}",
+            f"initiative suppression observations={len(metrics.initiative_suppression_observations or [])}",
+            "PASS" if passed else "FAIL: " + "; ".join(reasons),
+        ]
+    )
+
+
+def load_behavior_fixture(path: Path) -> dict[str, Any]:
+    fixture = json.loads(path.read_text(encoding="utf-8"))
+    if fixture.get("version") != 1 or not isinstance(fixture.get("episodes"), list):
+        raise ValueError("behavior fixture must have version=1 and an episodes list")
+    return fixture
+
+
+def _fixture_turns(fixture: dict[str, Any]) -> list[dict[str, Any]]:
+    turns: list[dict[str, Any]] = []
+    seen_actions: set[str] = set()
+    for episode in fixture["episodes"]:
+        episode_id = str(episode["id"])
+        for index, turn in enumerate(episode.get("turns", []), 1):
+            action = str(turn["action"])
+            if action in seen_actions:
+                raise ValueError(f"behavior fixture action must be unique: {action}")
+            seen_actions.add(action)
+            turns.append({**turn, "episode_id": episode_id, "turn_id": f"{episode_id}:{index}"})
+    return turns
+
+
+class BehaviorSmokeLLM(FakeLLM):
+    """Fixture-driven model double; all production turn/tool machinery remains real."""
+
+    def __init__(self, fixture: dict[str, Any]) -> None:
+        self._turn_by_action = {turn["action"]: turn for turn in _fixture_turns(fixture)}
+        super().__init__(responder=self._respond)
+
+    def _respond(self, messages: list[dict], _tools: list[dict] | None) -> ChatResult:
+        matched: tuple[int, dict[str, Any]] | None = None
+        for index, message in enumerate(messages):
+            if message.get("role") == "user" and message.get("content") in self._turn_by_action:
+                matched = (index, self._turn_by_action[str(message["content"])])
+        smoke_usage = Usage(prompt_tokens=10, completion_tokens=4, total_tokens=14)
+        if matched is None:
+            return ChatResult(
+                content="## Established Facts\n- smoke\n## Recent Narrative\n- smoke",
+                tool_calls=[],
+                usage=smoke_usage,
+            )
+        action_index, turn = matched
+        if any(message.get("role") == "tool" for message in messages[action_index + 1 :]):
+            return ChatResult(content=str(turn["smoke_reply"]), tool_calls=[], usage=smoke_usage)
+        calls = [
+            ToolCall(id=f"smoke_{turn['turn_id']}_{index}", name=call["name"], arguments=dict(call["arguments"]))
+            for index, call in enumerate(turn.get("smoke_calls", []), 1)
+        ]
+        if calls:
+            return ChatResult(content=None, tool_calls=calls, usage=smoke_usage)
+        return ChatResult(content=str(turn["smoke_reply"]), tool_calls=[], usage=smoke_usage)
+
+
+def _contains_eval_sentinel(text: str, sentinel: str) -> bool:
+    """Match Latin sentinels on token boundaries; CJK phrases have no whitespace word boundary."""
+    if not sentinel:
+        return False
+    if re.search(r"[A-Za-z0-9]", sentinel):
+        return bool(re.search(rf"(?<![\w]){re.escape(sentinel)}(?![\w])", text, re.IGNORECASE))
+    return sentinel in text
+
+
+async def _behavior_snapshot(services: Any, ctx: AgentCtx) -> dict[str, Any]:
+    def _loads(raw: str | None, default: Any) -> Any:
+        try:
+            return json.loads(raw) if raw else default
+        except (json.JSONDecodeError, TypeError):
+            return default
+
+    notes = _loads(await services.store.get(store_key=f"kp_notes.{ctx.chat_key}"), {})
+    clock = _loads(await services.store.get(store_key=f"game_clock.{ctx.chat_key}"), {})
+    sheet = await services.characters.get_character(ctx.uid(), ctx.chat_key)
+    hp = get_hit_points(sheet) if sheet.name != "default" else (None, None)
+    roster = await services.characters.get_party_roster(ctx.chat_key)
+    member = next((item for item in roster if item.get("name") == sheet.name), {})
+    session = await services.battles.generator.get_current_session(ctx.chat_key)
+    initiative = _loads(await services.store.get(store_key=f"initiative.{ctx.chat_key}"), [])
+    initiative_meta = _loads(await services.store.get(store_key=f"initiative_meta.{ctx.chat_key}"), {})
+    return {
+        "scene": notes.get("current_scene"),
+        "focus": notes.get("current_focus"),
+        "clock": clock.get("current_time"),
+        "hp": list(hp),
+        "status": list(member.get("status_effects") or []),
+        "events": [event.get("description", "") for event in (session.key_events if session else [])],
+        "initiative": initiative,
+        "initiative_meta": initiative_meta,
+    }
+
+
+def _score_actor(turn: dict[str, Any], trace: list[dict], snapshot: dict[str, Any]) -> tuple[bool, str]:
+    expected = turn["actor_expectation"]
+    checks = [entry for entry in trace if entry.get("name") == "skill_check"]
+    if len(checks) != 1:
+        return False, f"expected exactly one skill_check, got {len(checks)}"
+    args = checks[0].get("arguments") or {}
+    events = snapshot.get("events") or []
+    if expected["kind"] == "npc":
+        target = args.get("npc_target")
+        compliant = (
+            args.get("actor") == expected["name"]
+            and isinstance(target, int)
+            and not isinstance(target, bool)
+            and any(check.get("user_id") == "__npc__" for check in _session_checks(snapshot))
+        )
+        return compliant, "NPC requires exact actor, integer npc_target, and __npc__ recording"
+    compliant = "actor" not in args and not any(check.get("user_id") == "__npc__" for check in _session_checks(snapshot))
+    return compliant, "player checks must omit actor and remain player-owned" + (f"; events={len(events)}" if events else "")
+
+
+def _session_checks(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    return list(snapshot.get("checks") or [])
+
+
+def _score_state(turn: dict[str, Any], reply: str, snapshot: dict[str, Any]) -> tuple[bool, list[str]]:
+    expected = turn["state_expectation"]
+    failures: list[str] = []
+    for field_name in ("scene", "focus", "clock", "hp", "status"):
+        if field_name in expected and snapshot.get(field_name) != expected[field_name]:
+            failures.append(f"{field_name}: expected {expected[field_name]!r}, got {snapshot.get(field_name)!r}")
+    for claim in expected.get("reply_claims", []):
+        if not _contains_eval_sentinel(reply, str(claim)):
+            failures.append(f"reply missing required claim {claim!r}")
+    return not failures, failures
+
+
+async def _setup_behavior_episode(
+    services: Any,
+    toolset: Any,
+    episode: dict[str, Any],
+) -> AgentCtx:
+    setup = episode.get("setup") or {}
+    locale = str(episode.get("locale", "en"))
+    user_id = f"behavior:{episode['id']}"
+    ctx = AgentCtx(
+        chat_key=f"behavior:{episode['id']}",
+        user_id=user_id,
+        platform="cli",
+        locale=locale,
+        fs=LocalFs(str(ROOT)),
+    )
+    character_name = str(setup.get("player_name", "Evaluator"))
+    await toolset.dispatch(
+        "create_character",
+        ctx,
+        {"name": character_name, "system": str(setup.get("system", "coc7")), "auto_generate": False},
+    )
+    sheet = await services.characters.get_character(ctx.uid(), ctx.chat_key)
+    if "hp" in setup:
+        sheet.attributes["HP"] = int(setup["hp"][0])
+        sheet.attributes["HPMAX"] = int(setup["hp"][1])
+        await services.characters.save_character(ctx.uid(), ctx.chat_key, sheet)
+    if "status" in setup:
+        await services.characters.sync_party_roster(ctx.chat_key, sheet, status_effects=list(setup["status"]))
+    if "scene" in setup or "focus" in setup:
+        notes = {"current_scene": setup.get("scene"), "current_focus": setup.get("focus")}
+        await services.store.set(store_key=f"kp_notes.{ctx.chat_key}", value=json.dumps(notes, ensure_ascii=False))
+    if "clock" in setup:
+        await services.store.set(
+            store_key=f"game_clock.{ctx.chat_key}",
+            value=json.dumps({"current_time": setup["clock"], "events": []}, ensure_ascii=False),
+        )
+    await services.battles.start_session(ctx.chat_key, f"behavior-{episode['id']}")
+    for entry in setup.get("initiative", []):
+        await toolset.dispatch(
+            "initiative_tracker",
+            ctx,
+            {"action": "add", "name": entry["name"], "initiative": int(entry["initiative"])},
+        )
+    return ctx
+
+
+async def run_behavior_suite(
+    services: Any,
+    fixture: dict[str, Any],
+    recorder: Recorder,
+) -> tuple[BehaviorMetrics, list[dict[str, Any]]]:
+    toolset = build_kp_toolset(services)
+    router = CommandRouter(services)
+    hub = RoomHub()
+    metrics = BehaviorMetrics()
+    records: list[dict[str, Any]] = []
+    for episode in fixture["episodes"]:
+        ctx = await _setup_behavior_episode(services, toolset, episode)
+        event_groups: dict[str, dict[str, Any]] = {}
+        for index, turn in enumerate(episode.get("turns", []), 1):
+            turn_id = f"{episode['id']}:{index}"
+            metrics.turns += 1
+            before = await _behavior_snapshot(services, ctx)
+            before_session = await services.battles.generator.get_current_session(ctx.chat_key)
+            before["checks"] = list(before_session.skill_checks if before_session else [])
+            try:
+                result = await run_turn(
+                    hub,
+                    services,
+                    ctx,
+                    str(turn["action"]),
+                    command_router=router,
+                    toolset=toolset,
+                    actor_name=str((episode.get("setup") or {}).get("player_name", "Evaluator")),
+                )
+                if result is None:
+                    raise RuntimeError("behavior action unexpectedly matched a command")
+                reply = result.reply or ""
+                trace = result.tool_trace or []
+                after = await _behavior_snapshot(services, ctx)
+                session = await services.battles.generator.get_current_session(ctx.chat_key)
+                after["checks"] = list(session.skill_checks if session else [])
+                rolled = _dice_rolled(trace)
+                finding: dict[str, Any] = {}
+                if "expect_roll" in turn:
+                    if turn["expect_roll"]:
+                        metrics.roll_required_cases += 1
+                        if not rolled:
+                            metrics.dice_first_misses += 1
+                            finding["dice_first_miss"] = True
+                    else:
+                        metrics.no_roll_cases += 1
+                        if rolled:
+                            metrics.over_roll_false_positives += 1
+                            finding["over_roll_false_positive"] = True
+                if "actor_expectation" in turn:
+                    metrics.actor_cases += 1
+                    actor_snapshot = {
+                        "checks": after["checks"][len(before["checks"]) :],
+                        "events": after["events"],
+                    }
+                    compliant, actor_reason = _score_actor(turn, trace, actor_snapshot)
+                    if compliant:
+                        metrics.actor_compliant += 1
+                    else:
+                        finding["actor_noncompliance"] = actor_reason
+                if "state_expectation" in turn:
+                    metrics.state_cases += 1
+                    claims = list(turn["state_expectation"].get("reply_claims", []))
+                    metrics.state_required_claims += len(claims)
+                    metrics.state_present_claims += sum(_contains_eval_sentinel(reply, str(claim)) for claim in claims)
+                    consistent, failures = _score_state(turn, reply, after)
+                    if not consistent:
+                        metrics.state_divergences += 1
+                        finding["state_divergence"] = failures
+                event_expectation = turn.get("event_expectation")
+                if event_expectation:
+                    event_groups[str(event_expectation["group"])] = dict(event_expectation)
+                initiative_expectation = turn.get("initiative_expectation")
+                if initiative_expectation:
+                    next_entries = [
+                        entry
+                        for entry in trace
+                        if entry.get("name") == "initiative_tracker"
+                        and (entry.get("arguments") or {}).get("action") == "next"
+                    ]
+                    suppressed = [
+                        entry
+                        for entry in next_entries
+                        if "already" in str(entry.get("result", "")).lower()
+                        or "已经" in str(entry.get("result", ""))
+                        or "suppressed" in str(entry.get("result", "")).lower()
+                        or "抑制" in str(entry.get("result", ""))
+                    ]
+                    metrics.initiative_suppression_observations.append(
+                        {
+                            "turn_id": turn_id,
+                            "action": str(turn["action"])[:300],
+                            "reply": reply[:300],
+                            "expected_advances": int(initiative_expectation["expected_advances"]),
+                            "legitimate_multi_advance": bool(initiative_expectation.get("legitimate", False)),
+                            "next_calls": len(next_entries),
+                            "suppressed_calls": len(suppressed),
+                            "trace_excerpt": [
+                                {"arguments": entry.get("arguments"), "result": str(entry.get("result", ""))[:180]}
+                                for entry in next_entries
+                            ],
+                        }
+                    )
+                record = {
+                    "turn_id": turn_id,
+                    "action": turn["action"],
+                    "reply": reply,
+                    "tool_trace": trace,
+                    "state_before": before,
+                    "state_after": after,
+                    "finding": finding,
+                }
+                records.append(record)
+                recorder.emit("behavior_turn", **record)
+            except Exception as exc:
+                metrics.errors += 1
+                error_record = {
+                    "turn_id": turn_id,
+                    "action": turn["action"],
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "traceback": traceback.format_exc()[-1500:],
+                }
+                records.append(error_record)
+                recorder.emit("BEHAVIOR_TURN_ERROR", **error_record)
+        final_snapshot = await _behavior_snapshot(services, ctx)
+        for group, expectation in event_groups.items():
+            metrics.event_groups += 1
+            matching = [
+                description
+                for description in final_snapshot["events"]
+                if all(_contains_eval_sentinel(description, str(token)) for token in expectation["sentinels"])
+            ]
+            if matching:
+                metrics.recorded_event_groups += 1
+            if len(matching) > int(expectation.get("max_records", 1)):
+                metrics.duplicated_event_groups += 1
+            recorder.emit(
+                "behavior_event_group",
+                episode=episode["id"],
+                group=group,
+                matching_events=matching,
+                max_records=int(expectation.get("max_records", 1)),
+            )
+    return metrics, records
+
+
+async def _build_behavior_services(
+    *,
+    mode: str,
+    fixture: dict[str, Any],
+    credentials_db: str,
+    provider: str,
+    model: str,
+    reasoning_effort: str,
+) -> tuple[Any, tempfile.TemporaryDirectory | None, MeteredLLM]:
+    settings = get_settings().model_copy(deep=True)
+    settings.llm = settings.llm.model_copy(
+        update={
+            "provider": provider,
+            "chat_model": model,
+            "analysis_model": model,
+            "npc_model": model,
+            "api_key": "",
+            "base_url": "",
+            "reasoning_effort": reasoning_effort,
+        }
+    )
+    if mode == "smoke":
+        services = build_services(
+            settings,
+            llm=BehaviorSmokeLLM(fixture),
+            embeddings=LocalEmbeddings(64),
+        )
+        meter = MeteredLLM(services.llm)
+        services.llm = meter
+        return services, None, meter
+
+    if not credentials_db:
+        raise ValueError("live behavioral mode requires --credentials-db")
+    try:
+        source_uri = f"file:{Path(credentials_db).resolve()}?mode=ro"
+        with sqlite3.connect(source_uri, uri=True) as source:
+            row = source.execute(
+                "SELECT value FROM kv WHERE user_key = '' AND store_key = ?",
+                (CREDENTIALS_KEY,),
+            ).fetchone()
+        credentials = row[0] if row else None
+    except sqlite3.Error as exc:
+        raise ValueError("credentials database could not be read") from exc
+    if not credentials:
+        raise ValueError("credentials database has no provider credential book")
+
+    temporary = tempfile.TemporaryDirectory(prefix="loreweaver-behavior-eval-")
+    eval_store = Store(Path(temporary.name) / "eval.db")
+    await eval_store.set(store_key=CREDENTIALS_KEY, value=credentials)
+    await eval_store.set(
+        store_key=DEFAULT_KEY,
+        value=json.dumps(
+            {
+                "provider": provider,
+                "chat_model": model,
+                "analysis_model": model,
+                "npc_model": model,
+                "api_key": "",
+                "base_url": "",
+            }
+        ),
+    )
+    services = build_services(
+        settings,
+        store=eval_store,
+        embeddings=LocalEmbeddings(64),
+    )
+    meter = MeteredLLM(services.llm)
+    services.llm = meter
+    return services, temporary, meter
+
+
+def _git_sha() -> str:
+    try:
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+
+
+def write_behavior_summary_json(
+    path: Path,
+    *,
+    metrics: BehaviorMetrics,
+    thresholds: BehaviorThresholds,
+    passed: bool,
+    reasons: list[str],
+    metadata: dict[str, Any],
+    usage: UsageTotals,
+    records: list[dict[str, Any]],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        **metadata,
+        "passed": passed,
+        "reasons": reasons,
+        "counts": asdict(metrics),
+        "rates": metrics.rates(),
+        "thresholds": asdict(thresholds),
+        "usage": asdict(usage),
+        "records": records,
+    }
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+# =============================================================================
 # Play-test harness
 # =============================================================================
 
@@ -309,10 +941,10 @@ def parse_secret_concepts(cli_value: str, file_value: str) -> list[str]:
 class Recorder:
     """Structured JSONL sink + the running `RedlineMetrics` for the end-of-run report."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, append: bool = True):
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.fh = path.open("a", encoding="utf-8")
+        self.fh = path.open("a" if append else "w", encoding="utf-8")
         self.metrics = RedlineMetrics()
 
     def emit(self, kind: str, **fields):
@@ -430,6 +1062,25 @@ async def run_session(
 
 async def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--suite", choices=("generated", "behavioral"), default="generated")
+    ap.add_argument("--mode", choices=("smoke", "live"), default="live",
+                    help="behavioral suite only: deterministic FakeLLM smoke or real subscription model")
+    ap.add_argument("--scenarios", default="tests/fixtures/behavioral_eval_scenarios.json",
+                    help="behavioral suite fixture with fixed roll/no-roll ground truth")
+    ap.add_argument("--run-label", default="run", help="label stored in behavioral artifacts")
+    ap.add_argument("--credentials-db", default="",
+                    help="read-only credential source for behavioral live mode; copied into an isolated temp DB")
+    ap.add_argument("--provider", default="chatgpt", help="behavioral live provider")
+    ap.add_argument("--model", default="gpt-5.6-sol", help="behavioral live model")
+    ap.add_argument("--reasoning-effort", default="medium", help="behavioral live reasoning effort")
+    ap.add_argument("--max-over-roll-fp-rate", type=float, default=0.10)
+    ap.add_argument("--max-behavior-dice-miss-rate", type=float, default=0.0)
+    ap.add_argument("--max-state-divergence-rate", type=float, default=1.0)
+    ap.add_argument("--min-actor-compliance-rate", type=float, default=0.95)
+    ap.add_argument("--max-event-dup-rate", type=float, default=0.0)
+    ap.add_argument("--min-event-recording-coverage", type=float, default=1.0)
+    ap.add_argument("--baseline-summary", default="",
+                    help="optional behavioral baseline; requires final state divergence to improve by >=1 case")
     ap.add_argument("--module", default="tests/fixtures/module_en.txt")
     ap.add_argument("--companion", default="cards/companion_shenmo.json")
     ap.add_argument("--players", type=int, default=2)
@@ -451,6 +1102,94 @@ async def main():
     ap.add_argument("--summary-json", default="", help="optional path to write a machine-readable JSON summary")
     args = ap.parse_args()
 
+    if args.suite == "behavioral":
+        fixture_path = (ROOT / args.scenarios).resolve()
+        fixture = load_behavior_fixture(fixture_path)
+        fixture_bytes = fixture_path.read_bytes()
+        thresholds = BehaviorThresholds(
+            max_over_roll_fp_rate=args.max_over_roll_fp_rate,
+            max_dice_first_miss_rate=args.max_behavior_dice_miss_rate,
+            max_state_divergence_rate=args.max_state_divergence_rate,
+            min_actor_compliance_rate=args.min_actor_compliance_rate,
+            max_event_dup_rate=args.max_event_dup_rate,
+            min_event_recording_coverage=args.min_event_recording_coverage,
+        )
+        if args.baseline_summary:
+            baseline = json.loads((ROOT / args.baseline_summary).read_text(encoding="utf-8"))
+            baseline_rate = float(baseline["rates"]["state_divergence_rate"])
+            state_cases = sum(
+                1
+                for turn in _fixture_turns(fixture)
+                if "state_expectation" in turn
+            )
+            improvement_target = max(0.0, baseline_rate - (1 / state_cases if state_cases else 0.0))
+            thresholds.max_state_divergence_rate = min(
+                thresholds.max_state_divergence_rate,
+                improvement_target,
+            )
+
+        services = None
+        temporary = None
+        rec = Recorder((ROOT / args.log).resolve(), append=False)
+        try:
+            services, temporary, meter = await _build_behavior_services(
+                mode=args.mode,
+                fixture=fixture,
+                credentials_db=args.credentials_db,
+                provider=args.provider,
+                model=args.model,
+                reasoning_effort=args.reasoning_effort,
+            )
+            metadata = {
+                "name": "playtest-behavioral",
+                "run_label": args.run_label,
+                "at": datetime.now().isoformat(timespec="seconds"),
+                "git_sha": _git_sha(),
+                "fixture": str(fixture_path.relative_to(ROOT)),
+                "fixture_version": fixture["version"],
+                "fixture_sha256": hashlib.sha256(fixture_bytes).hexdigest(),
+                "mode": args.mode,
+                "provider": args.provider if args.mode == "live" else "fake",
+                "model": args.model if args.mode == "live" else "BehaviorSmokeLLM",
+                "reasoning_effort": args.reasoning_effort if args.mode == "live" else "",
+            }
+            rec.emit("behavior_run_start", **metadata, thresholds=asdict(thresholds))
+            metrics, records = await run_behavior_suite(services, fixture, rec)
+            passed, reasons = evaluate_behavior_gate(metrics, thresholds)
+            rec.emit(
+                "behavior_run_end",
+                passed=passed,
+                reasons=reasons,
+                counts=asdict(metrics),
+                rates=metrics.rates(),
+                usage=asdict(meter.usage),
+            )
+        finally:
+            rec.close()
+            if services is not None:
+                services.store.close()
+            if temporary is not None:
+                temporary.cleanup()
+
+        report = render_behavior_report(metrics, thresholds, passed, reasons)
+        print(report)
+        print(f"usage: calls={meter.usage.calls} total_tokens={meter.usage.total_tokens}")
+        print(f"log -> {args.log}")
+        if args.summary_json:
+            write_behavior_summary_json(
+                (ROOT / args.summary_json).resolve(),
+                metrics=metrics,
+                thresholds=thresholds,
+                passed=passed,
+                reasons=reasons,
+                metadata=metadata,
+                usage=meter.usage,
+                records=records,
+            )
+        if args.gate and not passed:
+            sys.exit(1)
+        return
+
     secret_concepts = parse_secret_concepts(args.secret_concepts, args.secret_concepts_file)
     thresholds = GateThresholds(
         max_leak_rate=args.max_leak_rate,
@@ -460,6 +1199,8 @@ async def main():
 
     settings = get_settings()
     services = build_services(settings, embeddings=LocalEmbeddings(64))
+    meter = MeteredLLM(services.llm)
+    services.llm = meter
     ts = build_kp_toolset(services)
     router = CommandRouter(services)
     hub = RoomHub()
@@ -479,15 +1220,16 @@ async def main():
                      trace=traceback.format_exc()[-1500:])
     rec.emit("run_end", turns=rec.metrics.turns, errors=rec.metrics.errors, leak_turns=rec.metrics.leak_turns,
              empty_kp=rec.metrics.empty_kp, missed_roll_turns=rec.metrics.missed_roll_turns,
-             checkable_turns=rec.metrics.checkable_turns)
+             checkable_turns=rec.metrics.checkable_turns, usage=asdict(meter.usage))
     rec.close()
 
     passed, reasons = evaluate_gate(rec.metrics, thresholds)
     report = render_report("playtest", rec.metrics, thresholds, passed, reasons)
     print(report)
+    print(f"usage: calls={meter.usage.calls} total_tokens={meter.usage.total_tokens}")
     print(f"log -> {args.log}")
     if args.summary_json:
-        write_summary_json(ROOT / args.summary_json, "playtest", rec.metrics, thresholds, passed, reasons)
+        write_summary_json(ROOT / args.summary_json, "playtest", rec.metrics, thresholds, passed, reasons, meter.usage)
     if args.gate and not passed:
         sys.exit(1)
 

@@ -33,6 +33,7 @@ import json
 import sys
 import time
 import traceback
+from dataclasses import asdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -59,6 +60,7 @@ from infra.embeddings import LocalEmbeddings  # noqa: E402
 # scripts/playtest.py's "Shared red-line gate" section for what's in here.
 from scripts.playtest import (  # noqa: E402
     GateThresholds,
+    MeteredLLM,
     RedlineMetrics,
     evaluate_gate,
     extract_secret_snippets,
@@ -162,6 +164,8 @@ async def main():
     # A fresh checkout (CI) has no data/ dir — sqlite can't create the parent, only the file.
     (ROOT / "data").mkdir(parents=True, exist_ok=True)
     services = build_services(settings, embeddings=LocalEmbeddings(64), db_path=str(ROOT / "data" / "longrun.db"))
+    meter = MeteredLLM(services.llm)
+    services.llm = meter
     ts = build_kp_toolset(services)
     router = CommandRouter(services)
     hub = RoomHub()
@@ -251,19 +255,20 @@ async def main():
     rec(kind="run_end", turns_now=turn, target=args.max_turns, this_invocation=len(lat), leak_turns=metrics.leak_turns,
         errors=metrics.errors, missed_roll_turns=metrics.missed_roll_turns, probes_ok=probes_ok,
         probes_total=probes_total, avg_latency=round(avg, 2), latency_first10=round(first10, 2),
-        latency_last10=round(last10, 2))
+        latency_last10=round(last10, 2), usage=asdict(meter.usage))
     fh.close()
 
     passed, reasons = evaluate_gate(metrics, thresholds)
     report = render_report("longrun", metrics, thresholds, passed, reasons)
     print(report)
+    print(f"usage: calls={meter.usage.calls} total_tokens={meter.usage.total_tokens}")
     print(f"longrun: campaign at turn {turn}/{args.max_turns} (+{len(lat)} this run) | "
           f"coherence probes {probes_ok}/{probes_total} remembered (informational, not gated) | "
           f"latency avg={avg:.1f}s first10={first10:.1f}s last10={last10:.1f}s | log -> {args.log}")
     if turn < args.max_turns:
         print(f"  budget/timeout reached — RE-RUN the same command to continue from turn {turn}.")
     if args.summary_json:
-        write_summary_json(ROOT / args.summary_json, "longrun", metrics, thresholds, passed, reasons)
+        write_summary_json(ROOT / args.summary_json, "longrun", metrics, thresholds, passed, reasons, meter.usage)
     if args.gate and not passed:
         sys.exit(1)
 

@@ -1,0 +1,376 @@
+{
+  "version": 1,
+  "description": "Fixed-ground-truth Keeper behavior eval; player actions are never model-generated.",
+  "episodes": [
+    {
+      "id": "no-roll-ground-truth",
+      "locale": "en",
+      "setup": {"player_name": "Mara Vale"},
+      "turns": [
+        {
+          "action": "OOC: no roll is needed. Just acknowledge that I want to pause here.",
+          "expect_roll": false,
+          "smoke_reply": "Acknowledged; play is paused.",
+          "smoke_calls": []
+        },
+        {
+          "action": "OOC：无需检定，只确认我们保持当前状态，不推进剧情。",
+          "expect_roll": false,
+          "smoke_reply": "已确认，当前状态和剧情进度均保持不变。",
+          "smoke_calls": []
+        },
+        {
+          "action": "I submit the already completed permit form at the open municipal counter and wait for its routine receipt.",
+          "expect_roll": false,
+          "smoke_reply": "The clerk stamps the completed form and hands you the routine receipt.",
+          "smoke_calls": []
+        },
+        {
+          "action": "我把已经填妥的借阅单交给值班馆员，按正常流程领取回执。",
+          "expect_roll": false,
+          "smoke_reply": "值班馆员按流程收单并交给你回执。",
+          "smoke_calls": []
+        },
+        {
+          "action": "I read the large red EXIT sign directly in front of me; it is unobstructed and visually obvious.",
+          "expect_roll": false,
+          "smoke_reply": "The unobstructed red sign plainly reads EXIT.",
+          "smoke_calls": []
+        },
+        {
+          "action": "我数一数眼前整齐摆放、毫无遮挡的三把椅子；数量显而易见。",
+          "expect_roll": false,
+          "smoke_reply": "眼前清楚地摆着三把椅子。",
+          "smoke_calls": []
+        },
+        {
+          "action": "The cooperative receptionist has already agreed to tell us her own name, so I let her answer voluntarily.",
+          "expect_roll": false,
+          "smoke_reply": "She answers voluntarily and gives her name without resistance.",
+          "smoke_calls": []
+        },
+        {
+          "action": "店员已明确同意主动说明营业时间，我安静听他自愿回答。",
+          "expect_roll": false,
+          "smoke_reply": "店员直接说明了营业时间。",
+          "smoke_calls": []
+        },
+        {
+          "action": "Meta request: export the session report only; do not make any in-world check or advance the fiction.",
+          "expect_roll": false,
+          "smoke_reply": "The report-export request is noted without changing the fiction.",
+          "smoke_calls": []
+        },
+        {
+          "action": "元请求：只审计现有日志是否有重复条目，不做检定，也不改变游戏世界。",
+          "expect_roll": false,
+          "smoke_reply": "已按元请求检查现有日志，不改变游戏状态。",
+          "smoke_calls": []
+        }
+      ]
+    },
+    {
+      "id": "actor-en-a",
+      "locale": "en",
+      "setup": {"player_name": "Alice Mercer"},
+      "turns": [
+        {
+          "action": "I carefully search the uncertain dark desk for a hidden compartment.",
+          "expect_roll": true,
+          "actor_expectation": {"kind": "player", "name": "Alice Mercer"},
+          "smoke_reply": "Your Spot Hidden result determines what the desk reveals.",
+          "smoke_calls": [{"name": "skill_check", "arguments": {"skill_name": "Spot Hidden"}}]
+        },
+        {
+          "action": "Have fire captain Elena Ruiz professionally inspect the unstable beam; her Spot Hidden target is 72.",
+          "expect_roll": true,
+          "actor_expectation": {"kind": "npc", "name": "Elena Ruiz"},
+          "smoke_reply": "Elena Ruiz's professional inspection is resolved by the check.",
+          "smoke_calls": [{"name": "skill_check", "arguments": {"skill_name": "Spot Hidden", "actor": "Elena Ruiz", "npc_target": 72}}]
+        },
+        {
+          "action": "I try to persuade the suspicious guard to unlock the uncertain side entrance.",
+          "expect_roll": true,
+          "actor_expectation": {"kind": "player", "name": "Alice Mercer"},
+          "smoke_reply": "Your Persuade result determines the guard's response.",
+          "smoke_calls": [{"name": "skill_check", "arguments": {"skill_name": "Persuade"}}]
+        },
+        {
+          "action": "Let detective Marcus Bell analyze the partial fingerprint; his Library Use target is 68.",
+          "expect_roll": true,
+          "actor_expectation": {"kind": "npc", "name": "Marcus Bell"},
+          "smoke_reply": "Marcus Bell's analysis follows the rolled result.",
+          "smoke_calls": [{"name": "skill_check", "arguments": {"skill_name": "Library Use", "actor": "Marcus Bell", "npc_target": 68}}]
+        },
+        {
+          "action": "I listen at the sealed door for a faint movement whose presence is uncertain.",
+          "expect_roll": true,
+          "actor_expectation": {"kind": "player", "name": "Alice Mercer"},
+          "smoke_reply": "Your Listen check determines whether the faint sound is detected.",
+          "smoke_calls": [{"name": "skill_check", "arguments": {"skill_name": "Listen"}}]
+        }
+      ]
+    },
+    {
+      "id": "actor-zh-a",
+      "locale": "zh",
+      "setup": {"player_name": "柳青"},
+      "turns": [
+        {
+          "action": "我谨慎搜查昏暗书桌，尝试找到不确定是否存在的夹层。",
+          "expect_roll": true,
+          "actor_expectation": {"kind": "player", "name": "柳青"},
+          "smoke_reply": "你的侦查检定结果决定能否找到夹层。",
+          "smoke_calls": [{"name": "skill_check", "arguments": {"skill_name": "侦查"}}]
+        },
+        {
+          "action": "让消防队长赵岚专业检查不稳定的承重梁，她的侦查目标值是75。",
+          "expect_roll": true,
+          "actor_expectation": {"kind": "npc", "name": "赵岚"},
+          "smoke_reply": "赵岚的专业检查按真实骰点结算。",
+          "smoke_calls": [{"name": "skill_check", "arguments": {"skill_name": "侦查", "actor": "赵岚", "npc_target": 75}}]
+        },
+        {
+          "action": "我尝试说服戒备的门卫打开侧门，结果并不确定。",
+          "expect_roll": true,
+          "actor_expectation": {"kind": "player", "name": "柳青"},
+          "smoke_reply": "你的说服检定决定门卫是否同意。",
+          "smoke_calls": [{"name": "skill_check", "arguments": {"skill_name": "说服"}}]
+        },
+        {
+          "action": "请警探陈岳分析残缺指纹，他的图书馆使用目标值是70。",
+          "expect_roll": true,
+          "actor_expectation": {"kind": "npc", "name": "陈岳"},
+          "smoke_reply": "陈岳的分析结果由检定决定。",
+          "smoke_calls": [{"name": "skill_check", "arguments": {"skill_name": "图书馆使用", "actor": "陈岳", "npc_target": 70}}]
+        },
+        {
+          "action": "我贴着密闭的门倾听，判断里面是否有难以分辨的脚步声。",
+          "expect_roll": true,
+          "actor_expectation": {"kind": "player", "name": "柳青"},
+          "smoke_reply": "你的聆听检定决定是否捕捉到脚步声。",
+          "smoke_calls": [{"name": "skill_check", "arguments": {"skill_name": "聆听"}}]
+        }
+      ]
+    },
+    {
+      "id": "actor-en-b",
+      "locale": "en",
+      "setup": {"player_name": "Noah Price"},
+      "turns": [
+        {
+          "action": "I attempt to climb the rain-slick wall despite the uncertain footing.",
+          "expect_roll": true,
+          "actor_expectation": {"kind": "player", "name": "Noah Price"},
+          "smoke_reply": "Your Climb result determines whether you make progress.",
+          "smoke_calls": [{"name": "skill_check", "arguments": {"skill_name": "Climb"}}]
+        },
+        {
+          "action": "Ask paramedic Priya Shah to diagnose the strange wound; her First Aid target is 80.",
+          "expect_roll": true,
+          "actor_expectation": {"kind": "npc", "name": "Priya Shah"},
+          "smoke_reply": "Priya Shah's diagnosis follows her First Aid roll.",
+          "smoke_calls": [{"name": "skill_check", "arguments": {"skill_name": "First Aid", "actor": "Priya Shah", "npc_target": 80}}]
+        },
+        {
+          "action": "I try to sneak past the alert watchman without being noticed.",
+          "expect_roll": true,
+          "actor_expectation": {"kind": "player", "name": "Noah Price"},
+          "smoke_reply": "Your Stealth check resolves the attempt.",
+          "smoke_calls": [{"name": "skill_check", "arguments": {"skill_name": "Stealth"}}]
+        },
+        {
+          "action": "Have engineer Owen Clarke assess the damaged generator; his Mechanical Repair target is 74.",
+          "expect_roll": true,
+          "actor_expectation": {"kind": "npc", "name": "Owen Clarke"},
+          "smoke_reply": "Owen Clarke's technical assessment follows the check.",
+          "smoke_calls": [{"name": "skill_check", "arguments": {"skill_name": "Mechanical Repair", "actor": "Owen Clarke", "npc_target": 74}}]
+        },
+        {
+          "action": "I study the coded ledger and attempt to infer its uncertain accounting pattern.",
+          "expect_roll": true,
+          "actor_expectation": {"kind": "player", "name": "Noah Price"},
+          "smoke_reply": "Your Accounting check determines what pattern you infer.",
+          "smoke_calls": [{"name": "skill_check", "arguments": {"skill_name": "Accounting"}}]
+        }
+      ]
+    },
+    {
+      "id": "actor-zh-b",
+      "locale": "zh",
+      "setup": {"player_name": "林月"},
+      "turns": [
+        {
+          "action": "我尝试攀爬被雨淋湿的高墙，落脚点并不可靠。",
+          "expect_roll": true,
+          "actor_expectation": {"kind": "player", "name": "林月"},
+          "smoke_reply": "你的攀爬检定决定能否继续向上。",
+          "smoke_calls": [{"name": "skill_check", "arguments": {"skill_name": "攀爬"}}]
+        },
+        {
+          "action": "让急救员苏梅诊断这处怪异伤口，她的急救目标值是82。",
+          "expect_roll": true,
+          "actor_expectation": {"kind": "npc", "name": "苏梅"},
+          "smoke_reply": "苏梅的诊断按急救检定结果结算。",
+          "smoke_calls": [{"name": "skill_check", "arguments": {"skill_name": "急救", "actor": "苏梅", "npc_target": 82}}]
+        },
+        {
+          "action": "我尝试避开警觉的守卫，悄无声息地穿过走廊。",
+          "expect_roll": true,
+          "actor_expectation": {"kind": "player", "name": "林月"},
+          "smoke_reply": "你的潜行检定决定能否不被发现。",
+          "smoke_calls": [{"name": "skill_check", "arguments": {"skill_name": "潜行"}}]
+        },
+        {
+          "action": "请工程师周衡评估损坏的发电机，他的机械维修目标值是76。",
+          "expect_roll": true,
+          "actor_expectation": {"kind": "npc", "name": "周衡"},
+          "smoke_reply": "周衡的技术评估由机械维修检定决定。",
+          "smoke_calls": [{"name": "skill_check", "arguments": {"skill_name": "机械维修", "actor": "周衡", "npc_target": 76}}]
+        },
+        {
+          "action": "我研究加密账本，尝试判断其中不易察觉的记账规律。",
+          "expect_roll": true,
+          "actor_expectation": {"kind": "player", "name": "林月"},
+          "smoke_reply": "你的会计检定决定能否看出规律。",
+          "smoke_calls": [{"name": "skill_check", "arguments": {"skill_name": "会计"}}]
+        }
+      ]
+    },
+    {
+      "id": "state-scene-en",
+      "locale": "en",
+      "setup": {"player_name": "Mara Vale", "scene": "Station Hall", "focus": "Waiting", "clock": "1926-03-15 09:00"},
+      "turns": [
+        {
+          "action": "Move us to the exact scene Rooftop Garden at 1926-03-15 09:30, focus Windy Skylight, and state all three facts in the narration without rolling.",
+          "expect_roll": false,
+          "state_expectation": {"scene": "Rooftop Garden", "focus": "Windy Skylight", "clock": "1926-03-15 09:30", "reply_claims": ["Rooftop Garden", "Windy Skylight", "1926-03-15 09:30"]},
+          "smoke_reply": "Scene: Rooftop Garden. Focus: Windy Skylight. Clock: 1926-03-15 09:30.",
+          "smoke_calls": [
+            {"name": "kp_note", "arguments": {"action": "set", "category": "current_scene", "content": "Rooftop Garden"}},
+            {"name": "kp_note", "arguments": {"action": "set", "category": "current_focus", "content": "Windy Skylight"}},
+            {"name": "game_clock", "arguments": {"action": "set", "value": "1926-03-15 09:30"}}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "state-scene-zh",
+      "locale": "zh",
+      "setup": {"player_name": "柳青", "scene": "车站大厅", "focus": "等待", "clock": "1926-03-15 09:00"},
+      "turns": [
+        {
+          "action": "不掷骰，把场景准确切换为屋顶花园，时间设为1926-03-15 09:30，焦点设为风中的天窗，并在正文明确写出三项。",
+          "expect_roll": false,
+          "state_expectation": {"scene": "屋顶花园", "focus": "风中的天窗", "clock": "1926-03-15 09:30", "reply_claims": ["屋顶花园", "风中的天窗", "1926-03-15 09:30"]},
+          "smoke_reply": "场景：屋顶花园。焦点：风中的天窗。时间：1926-03-15 09:30。",
+          "smoke_calls": [
+            {"name": "kp_note", "arguments": {"action": "set", "category": "current_scene", "content": "屋顶花园"}},
+            {"name": "kp_note", "arguments": {"action": "set", "category": "current_focus", "content": "风中的天窗"}},
+            {"name": "game_clock", "arguments": {"action": "set", "value": "1926-03-15 09:30"}}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "state-hp-en",
+      "locale": "en",
+      "setup": {"player_name": "Mara Vale", "hp": [8, 12]},
+      "turns": [
+        {
+          "action": "OOC state audit only, no roll and no state change: report Mara Vale's canonical HP exactly as 8/12.",
+          "expect_roll": false,
+          "state_expectation": {"hp": [8, 12], "reply_claims": ["8/12"]},
+          "smoke_reply": "Mara Vale HP: 8/12.",
+          "smoke_calls": []
+        }
+      ]
+    },
+    {
+      "id": "state-status-zh",
+      "locale": "zh",
+      "setup": {"player_name": "柳青", "status": ["受惊"]},
+      "turns": [
+        {
+          "action": "OOC状态核对，不掷骰也不改状态：在正文明确写出柳青当前状态为受惊。",
+          "expect_roll": false,
+          "state_expectation": {"status": ["受惊"], "reply_claims": ["柳青", "受惊"]},
+          "smoke_reply": "柳青当前状态：受惊。",
+          "smoke_calls": []
+        }
+      ]
+    },
+    {
+      "id": "event-semantic-en",
+      "locale": "en",
+      "setup": {"player_name": "Mara Vale"},
+      "turns": [
+        {
+          "action": "We pocket the brass key from the dock locker; treat this newly completed milestone as worth recording, with no roll.",
+          "expect_roll": false,
+          "event_expectation": {"group": "dock-key", "sentinels": ["brass key", "dock locker"], "max_records": 1},
+          "smoke_reply": "The brass key from the dock locker is now recorded once.",
+          "smoke_calls": [{"name": "add_session_event", "arguments": {"description": "Recovered the brass key from the dock locker.", "event_type": "discovery"}}]
+        },
+        {
+          "action": "For recap only, restate the same already-recorded milestone: the dock locker brass key is in our possession. Do not create a second event or roll.",
+          "expect_roll": false,
+          "event_expectation": {"group": "dock-key", "sentinels": ["brass key", "dock locker"], "max_records": 1},
+          "smoke_reply": "Recap: the dock locker brass key remains in your possession; no duplicate event is added.",
+          "smoke_calls": []
+        }
+      ]
+    },
+    {
+      "id": "event-semantic-zh",
+      "locale": "zh",
+      "setup": {"player_name": "柳青"},
+      "turns": [
+        {
+          "action": "我们已从码头储物柜取得黄铜钥匙；这是刚完成的新里程碑，记录一次即可，不掷骰。",
+          "expect_roll": false,
+          "event_expectation": {"group": "码头钥匙", "sentinels": ["黄铜钥匙", "码头储物柜"], "max_records": 1},
+          "smoke_reply": "已将从码头储物柜取得黄铜钥匙记录一次。",
+          "smoke_calls": [{"name": "add_session_event", "arguments": {"description": "从码头储物柜取得黄铜钥匙。", "event_type": "discovery"}}]
+        },
+        {
+          "action": "只做回顾：码头储物柜的黄铜钥匙已经在我们手里。不要重复记事件，也不要掷骰。",
+          "expect_roll": false,
+          "event_expectation": {"group": "码头钥匙", "sentinels": ["黄铜钥匙", "码头储物柜"], "max_records": 1},
+          "smoke_reply": "回顾确认黄铜钥匙已取得，不新增重复事件。",
+          "smoke_calls": []
+        }
+      ]
+    },
+    {
+      "id": "initiative-single-en",
+      "locale": "en",
+      "setup": {"player_name": "Mara Vale", "initiative": [{"name": "Mara", "initiative": 18}, {"name": "Guard", "initiative": 14}, {"name": "Cultist", "initiative": 9}]},
+      "turns": [
+        {
+          "action": "Advance initiative exactly once to the next combatant and narrate that handoff.",
+          "initiative_expectation": {"expected_advances": 1, "legitimate": false},
+          "smoke_reply": "Initiative advances once to the next combatant.",
+          "smoke_calls": [{"name": "initiative_tracker", "arguments": {"action": "next"}}]
+        }
+      ]
+    },
+    {
+      "id": "initiative-multi-zh",
+      "locale": "zh",
+      "setup": {"player_name": "柳青", "initiative": [{"name": "柳青", "initiative": 18}, {"name": "守卫", "initiative": 14}, {"name": "教徒", "initiative": 9}]},
+      "turns": [
+        {
+          "action": "柳青和守卫的行动都已结算完毕；请在同一回复中合法连续推进两次先攻，直到教徒行动。",
+          "initiative_expectation": {"expected_advances": 2, "legitimate": true},
+          "smoke_reply": "先攻尝试连续推进到教徒，但第二次推进受到同回合抑制。",
+          "smoke_calls": [
+            {"name": "initiative_tracker", "arguments": {"action": "next"}},
+            {"name": "initiative_tracker", "arguments": {"action": "next"}}
+          ]
+        }
+      ]
+    }
+  ]
+}
