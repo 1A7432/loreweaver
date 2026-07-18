@@ -79,11 +79,17 @@ export function KeeperModule({ client, theme, themeName, welcome, stateFrame, on
   useEffect(() => {
     return client.onMessage((frame) => {
       if (frame.type === FrameType.Narrative && frame.speaker === "system" && frame.text.trim()) {
-        setLog((current: string[]) => [...current, frame.text].slice(-MAX_LOG))
         // A progress-bar frame (it carries the █/░ bar) keeps the spinner alive through the
         // long analysis stage; only the final, non-bar reply clears the pending state.
         const isProgress = frame.text.includes("█") || frame.text.includes("░")
-        if (!isProgress) setPending(false)
+        if (isProgress) {
+          setLog((current: string[]) => [...current, frame.text].slice(-MAX_LOG))
+        } else {
+          // Completion replaces the progress region wholesale. Keeping the old progress
+          // children here made OpenTUI composite the final result over their rows at 80 cols.
+          setLog([frame.text])
+          setPending(false)
+        }
       } else if (frame.type === FrameType.AdminGenerated && frame.kind === "module") {
         setGenerating(false)
         if (frame.ok) {
@@ -145,9 +151,9 @@ export function KeeperModule({ client, theme, themeName, welcome, stateFrame, on
     <box flexDirection="column" height="100%" width="100%" backgroundColor={theme.bg}>
       <box height={4} flexDirection="row" border borderColor={theme.border} paddingX={1}>
         <ascii-font text="LOREWEAVER" font="tiny" color={theme.accent} />
-        <box flexDirection="row" marginLeft={2}>
-          <text fg={theme.accent}>{tt(locale, "module.title")}</text>
-          <text fg={theme.dim}>
+        <box flexDirection="row" flexGrow={1} flexShrink={1} minWidth={0} marginLeft={2}>
+          <text fg={theme.accent} wrapMode="none" truncate>{tt(locale, "module.title")}</text>
+          <text fg={theme.dim} wrapMode="none" truncate>
             {" · "}
             {stripControlChars(welcome.room)}
           </text>
@@ -155,15 +161,16 @@ export function KeeperModule({ client, theme, themeName, welcome, stateFrame, on
       </box>
 
       <box flexDirection="row" flexGrow={1} minHeight={8}>
-        <box flexDirection="column" flexGrow={1} paddingX={2} paddingY={1}>
+        <scrollbox flexGrow={1} flexShrink={1} minWidth={0} viewportCulling={false}>
+        <box flexDirection="column" width="100%" minWidth={0} paddingX={2} paddingY={1} flexShrink={0}>
           {!isKeeper ? (
             <box marginBottom={1}>
               <text fg={theme.fumble}>{tt(locale, "module.notKeeper")}</text>
             </box>
           ) : null}
 
-          <box flexDirection="column" border borderColor={theme.border} paddingX={1}>
-            <text fg={theme.accent}>{tt(locale, "module.result")}</text>
+          <box key={pending ? "module-progress" : "module-result"} flexDirection="column" border borderColor={theme.border} paddingX={1} flexShrink={0}>
+            <text fg={theme.accent} wrapMode="none" truncate>{tt(locale, "module.result")}</text>
             <Spinner active={pending} label={tt(locale, "module.pending")} color={theme.hard} />
             {log.length ? (
               log.map((line: string, index: number) => (
@@ -176,7 +183,7 @@ export function KeeperModule({ client, theme, themeName, welcome, stateFrame, on
             )}
           </box>
 
-          <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} marginTop={1} width={60}>
+          <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} marginTop={1} width="100%" maxWidth={60} minWidth={0} flexShrink={0}>
             <text fg={theme.dim}>{tt(locale, "module.intro")}</text>
 
             <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("path")}>
@@ -203,7 +210,7 @@ export function KeeperModule({ client, theme, themeName, welcome, stateFrame, on
             </box>
           </box>
 
-          <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} marginTop={1} width={60}>
+          <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} marginTop={1} width="100%" maxWidth={60} minWidth={0} flexShrink={0}>
             <text fg={theme.dim}>{tt(locale, "module.generateIntro")}</text>
 
             <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("description")}>
@@ -226,9 +233,10 @@ export function KeeperModule({ client, theme, themeName, welcome, stateFrame, on
             </box>
 
             <Spinner active={generating} label={tt(locale, "module.generating")} color={theme.hard} />
-            {!generating && generateResult ? <text fg={theme.fg}>{generateResult}</text> : null}
+            {!generating && generateResult ? <text key="generate-result" fg={theme.fg}>{generateResult}</text> : null}
           </box>
         </box>
+        </scrollbox>
       </box>
 
       <StatusBar welcome={welcome} online={stateFrame.online} theme={theme} themeName={themeName} />

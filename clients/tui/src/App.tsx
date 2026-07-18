@@ -7,6 +7,7 @@ import {
   type PresenceFrame,
   type ServerFrame,
   type StateFrame,
+  type TurnStatusFrame,
   type WelcomeFrame,
 } from "@loreweaver/protocol"
 import { AudioController } from "./audio"
@@ -116,6 +117,7 @@ export function App({
   const [error, setError] = useState<string>()
   const [stateFrame, setStateFrame] = useState<StateFrame>(EMPTY_STATE)
   const [presence, setPresence] = useState<PresenceFrame>()
+  const [turnStatus, setTurnStatus] = useState<TurnStatusFrame>()
   // The room log, accumulated at the shell level from the moment we join — so the
   // join-time history replay (narrative frames the server delivers right after
   // `welcome`, while we're still on the menu, before GameView exists) isn't lost.
@@ -159,6 +161,7 @@ export function App({
           // the previous room's panels, presence, or replay in it.
           setStateFrame(EMPTY_STATE)
           setPresence(undefined)
+          setTurnStatus(undefined)
           setFrames([])
           audioController.stopAll()
         }
@@ -177,6 +180,10 @@ export function App({
       }
       if (frame.type === FrameType.Presence) {
         setPresence(frame)
+        return
+      }
+      if (frame.type === FrameType.TurnStatus) {
+        setTurnStatus(frame)
         return
       }
       if (frame.type === FrameType.AdminConfig && typeof frame.using_demo === "boolean") {
@@ -232,6 +239,7 @@ export function App({
         setWelcome(undefined)
         setStateFrame(EMPTY_STATE)
         setPresence(undefined)
+        setTurnStatus(undefined)
         setFrames([])
         setConnectionStatus(undefined)
         audioController.stopAll()
@@ -383,6 +391,7 @@ export function App({
         initialFrames={frames}
         initialState={stateFrame}
         initialPresence={presence}
+        initialTurnStatus={turnStatus}
         connectionStatus={connectionStatus}
         renderer={renderer}
       />

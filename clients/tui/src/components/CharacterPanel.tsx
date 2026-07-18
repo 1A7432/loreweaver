@@ -34,8 +34,8 @@ export function CharacterPanel({ character, theme, locale }: CharacterPanelProps
       // box first rendered empty (menu mount, pre-state) would stay 5 rows tall forever and
       // composite the full panel's 11 rows on top of each other once the state frame lands.
       <box flexDirection="column" border borderColor={theme.border} paddingX={1} flexShrink={0}>
-        <text fg={theme.accent}>CHARACTER</text>
-        <text fg={theme.dim}>{tt(locale, "character.noCharacter")}</text>
+        <text fg={theme.accent} wrapMode="none" truncate>CHARACTER</text>
+        <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "character.noCharacter")}</text>
       </box>
     )
   }
@@ -45,28 +45,28 @@ export function CharacterPanel({ character, theme, locale }: CharacterPanelProps
     // flexShrink=0: in a tight sidebar column yoga would otherwise squash this panel and
     // composite its rows on top of each other (HP over SIZ, OK over INT, ...).
     <box flexDirection="column" border borderColor={theme.border} paddingX={1} flexShrink={0}>
-      <text fg={theme.accent}>
+      <text fg={theme.accent} wrapMode="none" truncate>
         CHARACTER {incapacitated ? "☠" : ""}
       </text>
-      <text fg={theme.kp}>{stripControlChars(character.name)}</text>
-      <text fg={statColor(character.hp, character.hpmax, theme.hpFull, theme.hpLow)}>
+      <text fg={theme.kp} wrapMode="none" truncate>{stripControlChars(character.name)}</text>
+      <text fg={statColor(character.hp, character.hpmax, theme.hpFull, theme.hpLow)} wrapMode="none" truncate>
         HP {bar(character.hp, character.hpmax)} {character.hp}/{character.hpmax}
       </text>
-      <text fg={theme.success}>
+      <text fg={theme.success} wrapMode="none" truncate>
         MP {bar(character.mp, character.mpmax)} {character.mp}/{character.mpmax}
       </text>
-      <text fg={statColor(character.san, character.sanmax, theme.sanFull, theme.sanLow)}>
+      <text fg={statColor(character.san, character.sanmax, theme.sanFull, theme.sanLow)} wrapMode="none" truncate>
         SAN {bar(character.san, character.sanmax)} {character.san}/{character.sanmax}
       </text>
       {attributeLines(character).slice(0, 6).map(({ key, line }) => (
-        <text key={key} fg={theme.fg}>
+        <text key={key} fg={theme.fg} wrapMode="none" truncate>
           {line}
         </text>
       ))}
       {character.status_effects.length > 0 ? (
-        <text fg={theme.fail}>✖ {stripControlChars(character.status_effects.join(", "))}</text>
+        <text fg={theme.fail} wrapMode="none" truncate>✖ {stripControlChars(character.status_effects.join(", "))}</text>
       ) : (
-        <text fg={theme.dim}>OK</text>
+        <text fg={theme.dim} wrapMode="none" truncate>OK</text>
       )}
     </box>
   )

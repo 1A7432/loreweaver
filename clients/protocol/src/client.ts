@@ -106,6 +106,8 @@ const serverFrameValidators: Record<string, (f: Record<string, unknown>) => bool
   [FrameType.State]: (f) => isArr(f.party) && isArr(f.initiative) && isNum(f.online),
   [FrameType.Presence]: (f) => isArr(f.players) && isNum(f.online),
   [FrameType.System]: (f) => isStr(f.level) && isStr(f.text),
+  [FrameType.TurnStatus]: (f) =>
+    (f.status === "busy" && isStr(f.actor) && f.actor.length > 0) || f.status === "idle",
   [FrameType.Pong]: (f) => isNum(f.t),
   [FrameType.AdminConfig]: (f) => isStr(f.provider) && isStr(f.chat_model) && isArr(f.providers),
   [FrameType.AdminModels]: (f) => isStr(f.provider) && isArr(f.models),

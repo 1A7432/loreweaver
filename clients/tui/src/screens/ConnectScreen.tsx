@@ -3,6 +3,7 @@ import { useKeyboard } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
 import { defaultTuiLocale, tt, type TuiLocale } from "../i18n"
 import type { SavedServer } from "../connectMemory"
+import { MaskedInput } from "../components/MaskedInput"
 import type { Palette } from "../themes"
 
 // Prefilled defaults come from CLI args (see index.tsx); the host falls back to
@@ -107,15 +108,16 @@ export function ConnectScreen({
   const shortHost = (host: string) => (host.length > 40 ? `${host.slice(0, 20)}…${host.slice(-6)}` : host)
 
   return (
-    <box flexDirection="column" height="100%" width="100%" backgroundColor={theme.bg} paddingX={2} paddingY={1}>
+    <scrollbox height="100%" width="100%" backgroundColor={theme.bg} viewportCulling={false}>
+    <box flexDirection="column" width="100%" minWidth={0} backgroundColor={theme.bg} paddingX={2} paddingY={1} flexShrink={0}>
       <box height={3}>
         <ascii-font text="LOREWEAVER" font="tiny" color={theme.accent} />
       </box>
-      <text fg={theme.dim}>{tt(locale, "connect.subtitle")}</text>
+      <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "connect.subtitle")}</text>
 
-      <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} marginTop={1} width={60}>
+      <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} marginTop={1} width="100%" maxWidth={60} minWidth={0} flexShrink={0}>
         <box flexDirection="row" marginBottom={1}>
-          <text fg={theme.dim}>{tt(locale, "connect.language")}{"  "}</text>
+          <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "connect.language")}{"  "}</text>
           <box onMouseDown={() => onLocaleChange?.("en")} backgroundColor={locale === "en" ? theme.accent : theme.bg} paddingX={1}>
             <text fg={locale === "en" ? theme.bg : theme.fg}>English</text>
           </box>
@@ -131,7 +133,7 @@ export function ConnectScreen({
               <text fg={theme.bg}>{connecting ? tt(locale, "connect.connecting") : tt(locale, "connect.hostLocal")}</text>
             </box>
             <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("localServerHome")}>
-              <text fg={fieldColor("localServerHome")}>{tt(locale, "connect.localServerHome")}</text>
+              <text fg={fieldColor("localServerHome")} wrapMode="none" truncate>{tt(locale, "connect.localServerHome")}</text>
               <input
                 flexGrow={1}
                 value={localServerHome}
@@ -143,24 +145,24 @@ export function ConnectScreen({
                 }}
                 onSubmit={() => setFocused("host")}
               />
-              <text fg={theme.dim}>{tt(locale, "connect.localServerHomeHelp")}</text>
+              <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "connect.localServerHomeHelp")}</text>
             </box>
           </box>
         ) : null}
 
         {savedServers && savedServers.length > 0 ? (
           <box flexDirection="column" marginBottom={1}>
-            <text fg={theme.dim}>{tt(locale, "connect.saved")}</text>
+            <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "connect.saved")}</text>
             {savedServers.slice(0, 5).map((server) => (
               <box key={`${server.host}:${server.key}`} flexDirection="row" onMouseDown={() => pickServer(server)}>
-                <box flexGrow={1}>
-                  <text fg={theme.fg}>
+                <box flexGrow={1} flexShrink={1} minWidth={0}>
+                  <text fg={theme.fg} wrapMode="none" truncate>
                     · {server.name ? `${server.name} — ` : ""}
                     {shortHost(server.host)}
                   </text>
                 </box>
                 {onForgetServer ? (
-                  <box
+                  <box flexShrink={0}
                     paddingX={1}
                     onMouseDown={(event) => {
                       // Don't let the delete also pick/fill this row (Part C requirement).
@@ -177,7 +179,7 @@ export function ConnectScreen({
         ) : null}
 
         <box flexDirection="column" onMouseDown={() => setFocused("host")}>
-          <text fg={fieldColor("host")}>{tt(locale, "connect.host")}</text>
+          <text fg={fieldColor("host")} wrapMode="none" truncate>{tt(locale, "connect.host")}</text>
           <input
             flexGrow={1}
             value={host}
@@ -192,12 +194,13 @@ export function ConnectScreen({
         </box>
 
         <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("key")}>
-          <text fg={fieldColor("key")}>{tt(locale, "connect.key")}</text>
-          <input
-            flexGrow={1}
+          <text fg={fieldColor("key")} wrapMode="none" truncate>{tt(locale, "connect.key")}</text>
+          <MaskedInput
             value={key}
             focused={focused === "key"}
-            placeholder="deployer / keeper key"
+            placeholder={tt(locale, "connect.keyPlaceholder")}
+            maskedLabel={tt(locale, "connect.keyMasked")}
+            theme={theme}
             onInput={(value: string) => {
               keyRef.current = value
               setKey(value)
@@ -207,7 +210,7 @@ export function ConnectScreen({
         </box>
 
         <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("name")}>
-          <text fg={fieldColor("name")}>{tt(locale, "connect.name")}</text>
+          <text fg={fieldColor("name")} wrapMode="none" truncate>{tt(locale, "connect.name")}</text>
           <input
             flexGrow={1}
             value={name}
@@ -227,7 +230,7 @@ export function ConnectScreen({
 
         {error ? (
           <box marginTop={1}>
-            <text fg={theme.fumble}>{error}</text>
+            <text fg={theme.fumble} wrapMode="none" truncate>{error}</text>
           </box>
         ) : null}
 
@@ -239,9 +242,10 @@ export function ConnectScreen({
       </box>
 
       <box marginTop={1}>
-        <text fg={theme.dim}>{tt(locale, "connect.help")}</text>
+        <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "connect.help")}</text>
       </box>
     </box>
+    </scrollbox>
   )
 }
 

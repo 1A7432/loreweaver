@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react"
-import { useKeyboard, useTimeline } from "@opentui/react"
+import { useKeyboard, useTerminalDimensions, useTimeline } from "@opentui/react"
 import type { InputRenderable, KeyEvent, ScrollBoxRenderable } from "@opentui/core"
 import {
   FrameType,
+  stripControlChars,
   type ConnectionStatus,
   type DiceFrame,
   type MediaFrame,
@@ -11,6 +12,7 @@ import {
   type PresenceFrame,
   type ServerFrame,
   type StateFrame,
+  type TurnStatusFrame,
   type WelcomeFrame,
 } from "@loreweaver/protocol"
 import { HeaderBar } from "./components/HeaderBar"
@@ -20,6 +22,8 @@ import { ScenePanel } from "./components/ScenePanel"
 import { StatusBar } from "./components/StatusBar"
 import { tt } from "./i18n"
 import { viewImage, type RendererLike } from "./imageViewer"
+import { CHAT_INPUT_LIMIT, inputLimitState } from "./inputLimits"
+import { sidebarCollapsed, sidebarWidth } from "./layout"
 import { droppedImagePath, openMedia, readAudioUpload, readUpload, type HalfBlockLine } from "./media"
 import type { Palette, ThemeName } from "./themes"
 
@@ -49,15 +53,27 @@ export interface GameViewProps {
   // The shell's last state/presence snapshot at mount time (see the seeding note below).
   initialState?: StateFrame
   initialPresence?: PresenceFrame
+  initialTurnStatus?: TurnStatusFrame
   // Threaded from the shell's `client.onStatus?.(...)` subscription (App.tsx); undefined when
   // the client doesn't implement `onStatus` — the HeaderBar then renders no indicator at all.
   connectionStatus?: ConnectionStatus
   renderer?: RendererLike
+  busyTimeoutMs?: number
 }
 
 // Cap a single streaming message so a hostile/runaway stream can't grow the
 // merged text without bound (memory / render blowup).
 const MAX_STREAM_TEXT = 20_000
+export const ROOM_BUSY_TIMEOUT_MS = 120_000
+
+export function completesSubmission(frame: ServerFrame): boolean {
+  if (frame.type === FrameType.Error || frame.type === FrameType.Dice) return true
+  if (frame.type === FrameType.System) return !frame.spinner
+  if (frame.type === FrameType.TurnStatus) return frame.status === "idle"
+  if (frame.type !== FrameType.Narrative) return false
+  if (frame.speaker !== "kp" && frame.speaker !== "system") return false
+  return !frame.stream || Boolean(frame.done)
+}
 
 export function appendFrame(frames: LogFrame[], frame: LogFrame): LogFrame[] {
   if (frame.type !== FrameType.Narrative || !frame.stream) return [...frames, frame].slice(-200)
@@ -86,19 +102,25 @@ export function GameView({
   initialFrames,
   initialState,
   initialPresence,
+  initialTurnStatus,
   connectionStatus,
   renderer,
+  busyTimeoutMs = ROOM_BUSY_TIMEOUT_MS,
 }: GameViewProps) {
+  const { width: terminalWidth } = useTerminalDimensions()
+  const narrow = sidebarCollapsed(terminalWidth)
   const locale = welcome.locale
   // Seed from the shell's last-seen frames: the server sends state/presence right after
   // `join` (while the player is still on the menu), so without this the panels open on
   // "empty party / no scene / 0 online" until the first turn completes.
   const [presence, setPresence] = useState<PresenceFrame | undefined>(initialPresence)
+  const [turnStatus, setTurnStatus] = useState<TurnStatusFrame | undefined>(initialTurnStatus)
   const [stateFrame, setStateFrame] = useState<StateFrame>(
     initialState ?? { type: FrameType.State, party: [], initiative: [], online: 0 },
   )
   const [frames, setFrames] = useState<LogFrame[]>(() => initialFrames ?? [])
   const [command, setCommand] = useState("")
+  const [inputError, setInputError] = useState<string>()
   const [history, setHistory] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState<number | null>(null)
   const [inputVersion, setInputVersion] = useState(0)
@@ -115,10 +137,30 @@ export function GameView({
   // `focused` prop below is kept the logical opposite so Enter is never
   // handled by both at once.
   const [rosterFocused, setRosterFocused] = useState(false)
+  const [narrowSidebarOpen, setNarrowSidebarOpen] = useState(false)
   const scrollRef = useRef<ScrollBoxRenderable>(null)
   const inputRef = useRef<InputRenderable>(null)
 
   const diceTimeline = useTimeline({ duration: 360, loop: false, autoplay: false })
+  const showSidebar = !narrow || narrowSidebarOpen
+  const inputState = inputLimitState(command)
+  const roomBusy = turnStatus?.status === "busy"
+  const workingLabel = roomBusy
+    ? tt(locale, "log.workingFor", { actor: stripControlChars(turnStatus.actor) })
+    : tt(locale, "log.working")
+
+  useEffect(() => {
+    if (!showSidebar) setRosterFocused(false)
+  }, [showSidebar])
+
+  useEffect(() => {
+    if (!roomBusy) return
+    const id = setTimeout(() => {
+      setTurnStatus({ type: FrameType.TurnStatus, status: "idle" })
+      setKpWorking(false)
+    }, busyTimeoutMs)
+    return () => clearTimeout(id)
+  }, [roomBusy, turnStatus, busyTimeoutMs])
 
   useEffect(() => {
     return client.onMessage((frame) => {
@@ -128,6 +170,11 @@ export function GameView({
       }
       if (frame.type === FrameType.State) {
         setStateFrame(frame)
+        return
+      }
+      if (frame.type === FrameType.TurnStatus) {
+        setTurnStatus(frame)
+        if (frame.status === "idle") setKpWorking(false)
         return
       }
       if (
@@ -140,14 +187,10 @@ export function GameView({
       ) {
         setFrames((current) => appendFrame(current, frame))
         if (frame.type === FrameType.Media) setSelectedMedia(frame)
-        // Clear the "Keeper is working" indicator once the reply actually lands. A
-        // dice frame means the Keeper already acted; a `kp` narrative is the reply
-        // itself — but it MAY stream, so a streaming chunk that isn't `done` yet is
-        // still "working" (keep the spinner up until the terminal `done` chunk).
-        if (frame.type === FrameType.Dice) setKpWorking(false)
-        if (frame.type === FrameType.Narrative && frame.speaker === "kp" && (!frame.stream || frame.done)) {
-          setKpWorking(false)
-        }
+        // Command replies are system-authored narratives, while other completed
+        // submissions may end in a system/error/dice frame. Treat every terminal
+        // response consistently; streaming narratives clear only on their done chunk.
+        if (completesSubmission(frame)) setKpWorking(false)
         if (frame.type === FrameType.Dice) {
           setRevealTicks(0)
           diceTimeline.add(
@@ -169,6 +212,7 @@ export function GameView({
       }
       if (frame.type === FrameType.Error) {
         setFrames((current) => appendFrame(current, { type: FrameType.System, level: "warn", text: frame.message }))
+        setKpWorking(false)
         // An unrecognized key is a PERMANENT failure: stop the auto-reconnect loop so it
         // doesn't re-join and spam the same warning on every retry. Transient errors
         // (rate_limited, server_error, a malformed mid-session frame) keep the session.
@@ -180,7 +224,12 @@ export function GameView({
   }, [client, diceTimeline])
 
   const submit = (value?: string) => {
-    const text = String(value ?? command).trim()
+    const raw = String(value ?? command)
+    if (inputLimitState(raw).atLimit) {
+      setInputError(tt(locale, "game.inputAtLimit", { limit: CHAT_INPUT_LIMIT }))
+      return
+    }
+    const text = raw.trim()
     if (!text) {
       if (selectedMedia) {
         void openSelectedMedia(false)
@@ -215,6 +264,7 @@ export function GameView({
     setHistory((current) => [...current, text].slice(-50))
     setHistoryIndex(null)
     setCommand("")
+    setInputError(undefined)
     setInputVersion((current) => current + 1)
   }
 
@@ -314,13 +364,14 @@ export function GameView({
     if (name === "up") recallHistory(-1)
     if (name === "down") recallHistory(1)
     if (hasCtrl(event) && name === "l") setFrames([])
+    if (name === "f6") setNarrowSidebarOpen((value) => !value)
     if (selectedMedia && (name === "o" || name === "O")) void openSelectedMedia(true)
     if (viewerLines && (name === "escape" || name === "q" || name === "return" || name === "enter")) setViewerLines(undefined)
     // Tab moves focus to the roster (only worth it when there's an own character
     // to expand/collapse — otherwise Tab would blur the chat input with nothing
     // for the roster to do with it) and always back, so focus can never get
     // stranded off the input if a character disappears mid-session.
-    if (name === "tab") {
+    if (name === "tab" && showSidebar) {
       if (rosterFocused) setRosterFocused(false)
       else if (stateFrame.character) setRosterFocused(true)
     }
@@ -354,7 +405,8 @@ export function GameView({
             theme={theme}
             revealTicks={revealTicks}
             critFlash={critFlash}
-            kpWorking={kpWorking}
+            kpWorking={kpWorking || roomBusy}
+            workingLabel={workingLabel}
             locale={locale}
             client={client}
             selectedMediaHash={selectedMedia?.hash}
@@ -362,7 +414,7 @@ export function GameView({
           />
         </scrollbox>
 
-        <box width={32} flexDirection="column">
+        {showSidebar ? <box width={sidebarWidth(terminalWidth)} maxWidth="40%" flexShrink={0} flexDirection="column">
           <PartyRoster
             character={stateFrame.character}
             party={stateFrame.party}
@@ -374,7 +426,7 @@ export function GameView({
             onFocus={() => setRosterFocused(true)}
           />
           <ScenePanel scene={stateFrame.scene} clock={stateFrame.clock} theme={theme} locale={locale} />
-        </box>
+        </box> : null}
       </box>
 
       <box height={3} flexDirection="row" border borderColor={theme.border} paddingX={1}>
@@ -383,13 +435,43 @@ export function GameView({
           key={inputVersion}
           ref={inputRef}
           flexGrow={1}
+          flexShrink={1}
+          minWidth={0}
           value={command}
+          maxLength={CHAT_INPUT_LIMIT}
           focused={!rosterFocused}
           placeholder={tt(locale, "game.placeholder")}
-          onInput={(value: string) => setCommand(value)}
+          onInput={(value: string) => {
+            setCommand(value)
+            setInputError(
+              inputLimitState(value).atLimit
+                ? tt(locale, "game.inputAtLimit", { limit: CHAT_INPUT_LIMIT })
+                : undefined,
+            )
+          }}
           onSubmit={(value?: string) => submit(value)}
         />
+        {inputState.showCounter ? (
+          <box flexShrink={0} marginLeft={1}>
+            <text fg={inputState.atLimit ? theme.fumble : theme.dim} wrapMode="none">
+              {tt(locale, "game.inputCount", { count: inputState.count, limit: CHAT_INPUT_LIMIT })}
+            </text>
+          </box>
+        ) : null}
+        {narrow ? (
+          <box flexShrink={0} marginLeft={1}>
+            <text fg={narrowSidebarOpen ? theme.accent : theme.dim} wrapMode="none">
+              {tt(locale, narrowSidebarOpen ? "game.sidebarHide" : "game.sidebarShow")}
+            </text>
+          </box>
+        ) : null}
       </box>
+
+      {inputError ? (
+        <box height={1} paddingX={1} backgroundColor={theme.bg}>
+          <text fg={theme.fumble} wrapMode="none" truncate>{inputError}</text>
+        </box>
+      ) : null}
 
       {showHelp ? (
         <box border borderColor={theme.accent} paddingX={1} backgroundColor={theme.bg}>

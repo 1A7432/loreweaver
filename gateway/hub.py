@@ -37,7 +37,7 @@ class Event:
     ``data``, a ``narrative`` event carries ``speaker``/``text``/``fmt``).
     """
 
-    kind: str  # "player_action" | "dice" | "narrative" | "state" | "presence" | "system" | "media" | "audio"
+    kind: str  # "player_action" | "dice" | "narrative" | "state" | "presence" | "system" | "turn_status" | "media" | "audio"
     speaker: str = ""  # narrative: "kp" | "npc" | "player" | "system"
     name: str = ""  # actor / npc / player display name
     text: str = ""  # narrative / system text
@@ -87,6 +87,14 @@ class Event:
     def system(cls, level: str, text: str) -> Event:
         """An out-of-band notice (``level`` = ``info``/``warn``)."""
         return cls(kind="system", text=text, data={"level": level})
+
+    @classmethod
+    def turn_status(cls, status: str, *, actor: str = "") -> Event:
+        """Ephemeral room-wide AI-KP activity (``busy`` with actor, then ``idle``)."""
+        data = {"status": status}
+        if actor:
+            data["actor"] = actor
+        return cls(kind="turn_status", data=data)
 
     @classmethod
     def media(cls, frame: dict[str, Any]) -> Event:
@@ -141,6 +149,10 @@ class RoomHub:
         # director sub-turn (which re-enters `run_turn` directly, never a choke point)
         # never re-acquires the room's lock and so cannot self-deadlock.
         self._turn_locks: dict[str, asyncio.Lock] = {}
+        # AI turns may nest when the companion director resolves an action inline. Only
+        # the outermost turn owns the room-wide busy/idle transition; otherwise a nested
+        # companion finishing would clear the spinner while the parent turn is still active.
+        self._active_turns: dict[str, tuple[int, str]] = {}
 
     def turn_lock(self, session_key: str) -> asyncio.Lock:
         """The (lazily created) `asyncio.Lock` that serializes whole turns for `session_key`.
@@ -154,6 +166,32 @@ class RoomHub:
             lock = asyncio.Lock()
             self._turn_locks[session_key] = lock
         return lock
+
+    async def begin_turn(self, session_key: str, actor: str) -> None:
+        """Enter an AI-KP turn, publishing ``busy`` only at nesting depth zero."""
+        current = self._active_turns.get(session_key)
+        if current is not None:
+            depth, outer_actor = current
+            self._active_turns[session_key] = (depth + 1, outer_actor)
+            return
+        self._active_turns[session_key] = (1, actor)
+        try:
+            await self.publish(session_key, Event.turn_status("busy", actor=actor))
+        except BaseException:
+            self._active_turns.pop(session_key, None)
+            raise
+
+    async def end_turn(self, session_key: str) -> None:
+        """Leave an AI-KP turn, publishing ``idle`` after the outermost one ends."""
+        current = self._active_turns.get(session_key)
+        if current is None:
+            return
+        depth, actor = current
+        if depth > 1:
+            self._active_turns[session_key] = (depth - 1, actor)
+            return
+        self._active_turns.pop(session_key, None)
+        await self.publish(session_key, Event.turn_status("idle"))
 
     async def subscribe(self, session_key: str, member: Member) -> None:
         """Add ``member`` to ``session_key``'s room and broadcast the new roster."""

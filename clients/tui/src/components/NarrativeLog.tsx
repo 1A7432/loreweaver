@@ -33,6 +33,7 @@ export interface NarrativeLogProps {
   // While the Keeper's reply to the latest player turn is in flight, a trailing
   // "构思中" spinner rides the bottom of the log (like a chat typing indicator).
   kpWorking?: boolean
+  workingLabel?: string
   locale?: string
   client?: AppClient
   selectedMediaHash?: string
@@ -71,6 +72,7 @@ export function NarrativeLog({
   revealTicks = 3,
   critFlash = false,
   kpWorking = false,
+  workingLabel,
   locale,
   client,
   selectedMediaHash,
@@ -86,7 +88,7 @@ export function NarrativeLog({
           // submitted line optimistically (the server's own `narrative{speaker:"player"}`
           // broadcast is the only echo, so it never renders twice) — so right after a
           // submit, `frames` can still be empty for the round trip.
-          <Spinner active label={tt(locale, "log.working")} color={theme.accent} />
+          <Spinner active label={workingLabel ?? tt(locale, "log.working")} color={theme.accent} />
         ) : (
           // Idle (no turn in flight): a STATIC hint, no motion — an animated spinner
           // here with nothing actually happening reads as frozen/deceptive (a player
@@ -171,7 +173,9 @@ export function NarrativeLog({
           )
         })
       )}
-      {frames.length > 0 && kpWorking ? <Spinner active label={tt(locale, "log.working")} trailing color={theme.accent} /> : null}
+      {frames.length > 0 && kpWorking ? (
+        <Spinner active label={workingLabel ?? tt(locale, "log.working")} trailing color={theme.accent} />
+      ) : null}
     </box>
   )
 }

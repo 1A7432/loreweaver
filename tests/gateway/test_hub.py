@@ -52,6 +52,27 @@ def test_event_constructors_tag_kind_and_payload() -> None:
     presence = Event.presence([{"id": "a"}], 1)
     assert presence.data["online"] == 1
     assert Event.system("info", "hi").data["level"] == "info"
+    assert Event.turn_status("busy", actor="Nora").data == {"status": "busy", "actor": "Nora"}
+
+
+async def test_nested_ai_turns_publish_one_outer_busy_idle_pair() -> None:
+    hub = RoomHub()
+    watcher = FakeMember("watcher")
+    await hub.subscribe("room", watcher)
+    watcher.events.clear()
+
+    await hub.begin_turn("room", "Nora")
+    await hub.begin_turn("room", "Silas")
+    await hub.end_turn("room")
+    assert [(event.data["status"], event.data.get("actor")) for event in watcher.events] == [
+        ("busy", "Nora")
+    ]
+
+    await hub.end_turn("room")
+    assert [(event.data["status"], event.data.get("actor")) for event in watcher.events] == [
+        ("busy", "Nora"),
+        ("idle", None),
+    ]
 
 
 async def test_subscribe_unsubscribe_and_online_count() -> None:

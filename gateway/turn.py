@@ -204,24 +204,28 @@ async def run_turn(
         # other room keeps today's behavior exactly.
         unfiltered = await room_content_unfiltered(services.store, ctx.chat_key)
         review = None if unfiltered else ((lambda value: censor.review(value).cleaned) if censor is not None else None)
-        result = await run_kp_turn(ctx, services, toolset, text, output_review=review)
-        for entry in result.tool_trace:
-            for dice_event in _dice_events(entry, name, i18n):
-                await hub.publish(ctx.chat_key, dice_event)
-        for entry in result.tool_trace:
-            npc_event = _npc_event(entry, i18n)
-            if npc_event is not None:
-                await hub.publish(ctx.chat_key, npc_event)
-        await hub.publish(ctx.chat_key, Event.narrative(speaker="kp", text=result.reply, fmt="markdown"))
-        await record_usage_stats(
-            services.store,
-            ctx.chat_key,
-            result.usage,
-            model=services.settings.llm.chat_model,
-        )
+        await hub.begin_turn(ctx.chat_key, name)
+        try:
+            result = await run_kp_turn(ctx, services, toolset, text, output_review=review)
+            for entry in result.tool_trace:
+                for dice_event in _dice_events(entry, name, i18n):
+                    await hub.publish(ctx.chat_key, dice_event)
+            for entry in result.tool_trace:
+                npc_event = _npc_event(entry, i18n)
+                if npc_event is not None:
+                    await hub.publish(ctx.chat_key, npc_event)
+            await hub.publish(ctx.chat_key, Event.narrative(speaker="kp", text=result.reply, fmt="markdown"))
+            await record_usage_stats(
+                services.store,
+                ctx.chat_key,
+                result.usage,
+                model=services.settings.llm.chat_model,
+            )
 
-        if ctx.platform != "companion":
-            await _run_companion_director(hub, services, ctx, command_router, censor, result.reply)
+            if ctx.platform != "companion":
+                await _run_companion_director(hub, services, ctx, command_router, censor, result.reply)
+        finally:
+            await hub.end_turn(ctx.chat_key)
 
     await publish_state(hub, services, ctx)
     return result

@@ -51,8 +51,8 @@ from net.room_backup import room_rows, room_vector_points
 
 logger = logging.getLogger(__name__)
 
-# v1.4 adds image-generation configuration plus avatar/image handout generation.
-_PROTOCOL_VERSION = "1.4"
+# v1.5 adds ephemeral room-wide AI-KP turn status.
+_PROTOCOL_VERSION = "1.5"
 _SERVER_BANNER = "loreweaver/1"
 
 # Hard cap on a single `input` frame's text before it reaches the LLM/history. A client-controlled
@@ -163,8 +163,8 @@ async def guided_demo_available(services: Services, chat_key: str) -> bool:
 def render_frame(event: Event) -> dict[str, Any] | None:
     """Render a normalized :class:`~gateway.hub.Event` into its JSON protocol frame.
 
-    `narrative`/`dice`/`state`/`presence`/`system` map to the like-named frames; a `player_action`
-    echo renders as a `narrative{speaker:"player"}`.
+    `narrative`/`dice`/`state`/`presence`/`system`/`turn_status` map to the like-named
+    frames; a `player_action` echo renders as a `narrative{speaker:"player"}`.
     """
     if event.kind == "player_action":
         return {
@@ -199,6 +199,8 @@ def render_frame(event: Event) -> dict[str, Any] | None:
         if event.data.get("spinner"):
             frame["spinner"] = True
         return frame
+    if event.kind == "turn_status":
+        return {"type": "turn_status", **event.data}
     if event.kind == "media":
         return dict(event.data)
     if event.kind == "audio":
@@ -322,9 +324,14 @@ class SessionCore:
 
         kind = frame.get("type")
         if kind == "input":
-            # Cap the client-controlled text before it hits the LLM/history (dispatch_input wraps
-            # the turn itself in its own try/except -> error frame).
-            text = str(frame.get("text") or "")[:_MAX_INPUT_CHARS]
+            # Reject an oversized client-controlled message explicitly: silently slicing it can
+            # make the Keeper answer a different action than the player submitted. Keep the final
+            # slice as a defense in depth so this choke remains bounded if normalization changes.
+            raw_text = str(frame.get("text") or "")
+            if len(raw_text) > _MAX_INPUT_CHARS:
+                await member.send_frame(error_frame("input_too_long", i18n))
+                return
+            text = raw_text[:_MAX_INPUT_CHARS]
             if text:
                 await self.dispatch_input(member, text)
             return

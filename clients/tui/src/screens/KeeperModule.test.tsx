@@ -74,8 +74,8 @@ const PLAYER_WELCOME: WelcomeFrame = {
   server: "mock",
 }
 
-function renderApp(client: MockClient) {
-  return testRender(<App client={client} prefill={{}} />, { width: 110, height: 40 })
+function renderApp(client: MockClient, width = 110, height = 40) {
+  return testRender(<App client={client} prefill={{}} />, { width, height })
 }
 
 // x=6 hits any full-width row (same coordinate the sibling keeper tests use).
@@ -104,6 +104,29 @@ async function enterKeeperModule(harness: Awaited<ReturnType<typeof renderApp>>)
 }
 
 describe("KeeperModule", () => {
+  test("80 columns bounds every line and completion replaces the import progress frame", async () => {
+    const client = new MockClient()
+    const harness = await renderApp(client, 80, 34)
+    await harness.flush()
+    act(() => client.push(KEEPER_WELCOME))
+    await enterKeeperModule(harness)
+    await harness.waitForFrame((text) => text.includes("模组文件路径"))
+
+    act(() => client.push(systemLine("② Embedding ███████░ 正在构建一个很长但必须保持在终端边界内的进度消息")))
+    await harness.flush()
+    const progress = await harness.waitForFrame((text) => text.includes("Embedding"))
+    expect(progress.split("\n").every((line) => Bun.stringWidth(line) <= 80)).toBe(true)
+
+    act(() => client.push(systemLine("✅ 模组知识池初始化已完成（状态：ready）")))
+    await harness.flush()
+    const done = await harness.waitForFrame((text) => text.includes("状态：ready"))
+    expect(done).not.toContain("Embedding")
+    expect(done).not.toContain("███████")
+    expect(done.split("\n").every((line) => Bun.stringWidth(line) <= 80)).toBe(true)
+
+    act(() => harness.renderer.destroy())
+  })
+
   test("导入模组仅对守秘人可见(玩家菜单里没有)", async () => {
     const client = new MockClient()
     const harness = await renderApp(client)
@@ -188,7 +211,7 @@ describe("KeeperModule", () => {
     act(() => harness.renderer.destroy())
   })
 
-  test("推送 system 叙事回复渲染为结果;player 回声被忽略,多条进度都保留", async () => {
+  test("推送 system 叙事回复渲染为结果;player 回声被忽略,完成态清除旧进度区", async () => {
     const client = new MockClient()
     const harness = await renderApp(client)
     await harness.flush()
@@ -213,15 +236,15 @@ describe("KeeperModule", () => {
     expect(pendingFrame).toContain("分析中")
     expect(pendingFrame).not.toContain("玩家回声")
 
-    // Two system-authored lines arrive; both stay in the short progress log and the
-    // pending state clears once a reply lands.
-    act(() => client.push(systemLine("📄 正在分析模组…")))
+    // A real progress line contains the deterministic progress-bar glyphs. The final
+    // result replaces that region wholesale so stale pixels cannot survive underneath.
+    act(() => client.push(systemLine("📄 正在分析模组… ███░")))
     await harness.flush()
     act(() => client.push(systemLine("✅ 模组「shuxue」分析已完成")))
     await harness.flush()
 
     const done = await harness.waitForFrame((t) => t.includes("分析已完成"))
-    expect(done).toContain("正在分析模组")
+    expect(done).not.toContain("正在分析模组")
     expect(done).toContain("模组「shuxue」分析已完成")
     expect(done).not.toContain("分析中…")
 

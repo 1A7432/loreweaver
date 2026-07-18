@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
 import { FrameType, type MediaFrame, type MediaPayload, type MediaUpload, type ServerFrame, type WelcomeFrame } from "@loreweaver/protocol"
-import { GameView, type GameClient } from "./GameView"
+import { GameView, type GameClient, type GameViewProps } from "./GameView"
 import { SPINNER_FRAMES } from "./components/Spinner"
 import { themes } from "./themes"
 
@@ -47,10 +47,10 @@ const WELCOME: WelcomeFrame = {
   server: "mock",
 }
 
-function renderGame(client: MockClient) {
-  return testRender(<GameView client={client} welcome={WELCOME} theme={themes.lamplight} themeName="lamplight" />, {
-    width: 110,
-    height: 34,
+function renderGame(client: MockClient, width = 110, height = 34, props: Partial<GameViewProps> = {}) {
+  return testRender(<GameView client={client} welcome={WELCOME} theme={themes.lamplight} themeName="lamplight" {...props} />, {
+    width,
+    height,
   })
 }
 
@@ -468,6 +468,93 @@ describe("GameView", () => {
     act(() => renderer.destroy())
   })
 
+  test("a system-authored command reply clears the submit spinner", async () => {
+    const client = new MockClient()
+    const { renderer, flush, captureCharFrame, mockInput } = await renderGame(client)
+    await flush()
+
+    await act(async () => {
+      await mockInput.typeText(".report detailed")
+      mockInput.pressEnter()
+    })
+    await flush()
+    expect(captureCharFrame()).toContain("Keeper thinking")
+
+    act(() => {
+      client.push({
+        type: FrameType.Narrative,
+        id: "report-result",
+        speaker: "system",
+        text: "Report saved.",
+        format: "plain",
+      })
+    })
+    await flush()
+    expect(captureCharFrame()).toContain("Report saved.")
+    expect(captureCharFrame()).not.toContain("Keeper thinking")
+
+    act(() => renderer.destroy())
+  })
+
+  test("room-wide busy status animates for other participants and idle clears it", async () => {
+    const client = new MockClient()
+    const { renderer, flush, captureCharFrame } = await renderGame(client)
+    await flush()
+
+    act(() => client.push({ type: FrameType.TurnStatus, status: "busy", actor: "Nora" }))
+    await flush()
+    const busy = captureCharFrame()
+    expect(busy).toContain("Keeper resolving Nora")
+    expect(SPINNER_FRAMES.some((glyph) => busy.includes(glyph))).toBe(true)
+
+    act(() => client.push({ type: FrameType.TurnStatus, status: "idle" }))
+    await flush()
+    expect(captureCharFrame()).not.toContain("Keeper resolving Nora")
+    expect(SPINNER_FRAMES.some((glyph) => captureCharFrame().includes(glyph))).toBe(false)
+
+    act(() => renderer.destroy())
+  })
+
+  test("room-wide busy status has a safety timeout", async () => {
+    const client = new MockClient()
+    const { renderer, flush, captureCharFrame } = await renderGame(client, 110, 34, { busyTimeoutMs: 1_000 })
+    await flush()
+
+    act(() => client.push({ type: FrameType.TurnStatus, status: "busy", actor: "Nora" }))
+    await flush()
+    expect(captureCharFrame()).toContain("Keeper resolving Nora")
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1_050))
+    })
+    await flush()
+    expect(captureCharFrame()).not.toContain("Keeper resolving Nora")
+    expect(SPINNER_FRAMES.some((glyph) => captureCharFrame().includes(glyph))).toBe(false)
+
+    act(() => renderer.destroy())
+  })
+
+  test("chat input exposes the 4000-character boundary and refuses to submit at the cap", async () => {
+    const client = new MockClient()
+    const { renderer, flush, captureCharFrame, mockInput } = await renderGame(client, 80, 24)
+    await flush()
+
+    await act(async () => {
+      await mockInput.pasteBracketedText("x".repeat(4_500))
+    })
+    await flush()
+    const capped = captureCharFrame()
+    expect(capped).toContain("4000/4000")
+    expect(capped).toContain("Shorten it before sending")
+    expect(capped.split("\n").every((line) => Bun.stringWidth(line) <= 80)).toBe(true)
+
+    await act(async () => mockInput.pressEnter())
+    await flush()
+    expect(client.sent).toEqual([])
+
+    act(() => renderer.destroy())
+  })
+
   test("keeps the working indicator up while the reply streams, clearing on the done chunk", async () => {
     const client = new MockClient()
     const { renderer, flush, captureCharFrame, mockInput } = await renderGame(client)
@@ -806,6 +893,52 @@ describe("GameView", () => {
     const frame = captureCharFrame()
     expect(frame).toContain("●")
     expect(frame).toContain("reconnecting")
+
+    act(() => renderer.destroy())
+  })
+
+  test("80 columns collapses PARTY/SCENE by default and F6 toggles a bounded INIT panel", async () => {
+    const client = new MockClient()
+    const { renderer, flush, captureCharFrame, waitForFrame, mockInput } = await renderGame(client, 80, 24)
+    await flush()
+
+    act(() => {
+      client.push({
+        type: FrameType.State,
+        character: {
+          name: "Ada Investigator With A Deliberately Long Name",
+          system: "coc7",
+          hp: 11,
+          hpmax: 13,
+          mp: 8,
+          mpmax: 10,
+          san: 55,
+          sanmax: 70,
+          attributes: { STR: 45, DEX: 60 },
+          status_effects: [],
+        },
+        party: [{ name: "Ada Investigator With A Deliberately Long Name", online: true, active: true }],
+        scene: { name: "The Extremely Long Library Scene", focus: "search" },
+        clock: { time: "23:10", round: 2 },
+        initiative: [{ name: "Ada Investigator With A Deliberately Long Name", value: 12, current: true }],
+        online: 2,
+      })
+    })
+    await flush()
+
+    const collapsed = captureCharFrame()
+    expect(collapsed).toContain("joined arkham")
+    expect(collapsed).toContain("2 online")
+    expect(collapsed).toContain("F6 PARTY")
+    expect(collapsed).not.toContain("Party / PARTY")
+    expect(collapsed.split("\n").every((line) => Bun.stringWidth(line) <= 80)).toBe(true)
+
+    await act(async () => mockInput.pressKey("F6"))
+    await flush()
+    const expanded = await waitForFrame((text) => text.includes("Party / PARTY") && text.includes("INIT"))
+    expect(expanded).toContain("ROUND 2")
+    expect(expanded).toContain("F6 HIDE")
+    expect(expanded.split("\n").every((line) => Bun.stringWidth(line) <= 80)).toBe(true)
 
     act(() => renderer.destroy())
   })

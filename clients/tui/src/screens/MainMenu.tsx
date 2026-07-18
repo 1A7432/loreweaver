@@ -1,5 +1,5 @@
 import { Fragment, useState } from "react"
-import { useKeyboard } from "@opentui/react"
+import { useKeyboard, useTerminalDimensions } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
 import { stripControlChars, type PresenceFrame, type StateFrame, type WelcomeFrame } from "@loreweaver/protocol"
 import { CharacterPanel } from "../components/CharacterPanel"
@@ -7,6 +7,7 @@ import { PartyPanel } from "../components/PartyPanel"
 import { ScenePanel } from "../components/ScenePanel"
 import { StatusBar } from "../components/StatusBar"
 import { tt } from "../i18n"
+import { sidebarCollapsed, sidebarWidth } from "../layout"
 import type { Palette, ThemeName } from "../themes"
 
 export interface MainMenuProps {
@@ -58,6 +59,8 @@ export function MainMenu({
   onKeeperSkills,
   onQuit,
 }: MainMenuProps) {
+  const { width: terminalWidth } = useTerminalDimensions()
+  const showSidebar = !sidebarCollapsed(terminalWidth)
   const [selected, setSelected] = useState(0)
   const isKeeper = welcome.you.role === "keeper"
   const locale = welcome.locale
@@ -116,9 +119,9 @@ export function MainMenu({
           the room + role still sit side by side on the first content row. */}
       <box height={4} flexDirection="row" border borderColor={theme.border} paddingX={1}>
         <ascii-font text="LOREWEAVER" font="tiny" color={theme.accent} />
-        <box flexDirection="row" marginLeft={2}>
-          <text fg={theme.accent}>{tt(locale, "menu.table", { room: stripControlChars(welcome.room) })}</text>
-          <text fg={theme.dim}>
+        <box flexDirection="row" flexGrow={1} flexShrink={1} minWidth={0} marginLeft={2}>
+          <text fg={theme.accent} wrapMode="none" truncate>{tt(locale, "menu.table", { room: stripControlChars(welcome.room) })}</text>
+          <text fg={theme.dim} wrapMode="none" truncate>
             {" · "}
             {stripControlChars(welcome.you.name)} ·{" "}
             {welcome.you.role === "keeper" ? tt(locale, "menu.role.keeper") : tt(locale, "menu.role.player")}
@@ -151,11 +154,11 @@ export function MainMenu({
           ))}
         </box>
 
-        <box width={32} flexDirection="column">
+        {showSidebar ? <box width={sidebarWidth(terminalWidth)} maxWidth="40%" flexShrink={0} flexDirection="column">
           <CharacterPanel character={stateFrame.character} theme={theme} locale={locale} />
           <PartyPanel party={stateFrame.party} initiative={stateFrame.initiative} theme={theme} locale={locale} />
           <ScenePanel scene={stateFrame.scene} clock={stateFrame.clock} theme={theme} locale={locale} />
-        </box>
+        </box> : null}
       </box>
 
       <StatusBar welcome={welcome} presence={presence} online={stateFrame.online} theme={theme} themeName={themeName} />

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { useTerminalDimensions } from "@opentui/react"
 import {
   stripControlChars,
   type ClockState,
@@ -8,6 +9,7 @@ import {
   type WelcomeFrame,
 } from "@loreweaver/protocol"
 import { tt } from "../i18n"
+import { headerVisibility } from "../layout"
 import type { Palette } from "../themes"
 
 export interface HeaderBarProps {
@@ -75,6 +77,8 @@ function connColor(theme: Palette, status: ConnectionStatus): string {
 // now split into three zones -- room identity (left), scene + in-game clock
 // (center), and a ticking wall clock + optional token/cache statusline (right).
 export function HeaderBar({ welcome, scene, clock, usage, online, theme, locale, connectionStatus }: HeaderBarProps) {
+  const { width } = useTerminalDimensions()
+  const visible = headerVisibility(width)
   const [now, setNow] = useState(() => new Date())
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 1000)
@@ -88,7 +92,7 @@ export function HeaderBar({ welcome, scene, clock, usage, online, theme, locale,
   return (
     <box height={4} flexDirection="row" border borderColor={theme.border} paddingX={1}>
       <ascii-font text="LOREWEAVER" font="tiny" color={theme.accent} />
-      <box flexDirection="column" marginLeft={2} justifyContent="center">
+      <box flexDirection="column" flexShrink={1} minWidth={0} marginLeft={2} justifyContent="center">
         <text fg={theme.accent} wrapMode="none" truncate>
           {tt(locale, "game.joined", { room: stripControlChars(welcome.room) })}
         </text>
@@ -114,38 +118,46 @@ export function HeaderBar({ welcome, scene, clock, usage, online, theme, locale,
         ) : null}
       </box>
 
-      <box flexGrow={1} flexShrink={1} flexDirection="column" marginLeft={2} justifyContent="center">
+      {visible.scene || visible.clock ? (
+      <box flexGrow={1} flexShrink={1} minWidth={0} flexDirection="column" marginLeft={2} justifyContent="center">
         {/* Scene + in-game clock + round share ONE line: the header's top row was sparse while
             the bottom row (liveness + statusline) was cramped, so the whole center rides the top
             row. wrapMode none + truncate: when the usage statusline squeezes this column it must
             TRUNCATE, never wrap into a phantom row (the collision class the reshoot caught). */}
         <text wrapMode="none" truncate>
-          <span fg={theme.kp}>{stripControlChars(scene?.name ?? tt(locale, "scene.unframed"))}</span>
-          <span fg={theme.fg}>
-            {" "}{CLOCK_GLYPH}{stripControlChars(clock?.time ?? "--:--")}
-            {clock?.round ? ` ·${tt(locale, "scene.round")}${clock.round}` : ""}
-          </span>
+          {visible.scene ? <span fg={theme.kp}>{stripControlChars(scene?.name ?? tt(locale, "scene.unframed"))}</span> : null}
+          {visible.clock ? (
+            <span fg={theme.fg}>
+              {visible.scene ? " " : ""}{CLOCK_GLYPH}{stripControlChars(clock?.time ?? "--:--")}
+              {clock?.round ? ` ·${tt(locale, "scene.round")}${clock.round}` : ""}
+            </span>
+          ) : null}
         </text>
       </box>
+      ) : <box flexGrow={1} minWidth={0} />}
 
-      <box flexDirection="column" alignItems="flex-end" justifyContent="center">
-        <text fg={theme.dim}>{wallClock(now)}</text>
-        {usage ? (
-          <box flexDirection="row">
-            {pct !== null ? (
+      {usage && (visible.usage || visible.cache) ? (
+      <box flexShrink={0} flexDirection="column" alignItems="flex-end" justifyContent="center">
+        {visible.usage ? <text fg={theme.dim}>{wallClock(now)}</text> : null}
+        <box flexDirection="row">
+            {visible.usage && pct !== null ? (
               <>
                 <text fg={theme.dim}>{tt(locale, "hud.ctx")} </text>
                 <text fg={ctxColor(theme, pct)}>{pct}%</text>
-                <text fg={theme.dim}> · </text>
+                {visible.cache ? <text fg={theme.dim}> · </text> : null}
               </>
             ) : null}
-            <text fg={theme.dim}>
-              ↑{fmtTokens(usage.input_tokens)} ↓{fmtTokens(usage.output_tokens)} · {tt(locale, "hud.cache")}{" "}
-            </text>
-            <text fg={cacheColor(theme, cacheRate)}>{cacheRate !== null ? `${cacheRate}%` : "—"}</text>
+            {visible.usage ? <text fg={theme.dim}>↑{fmtTokens(usage.input_tokens)} ↓{fmtTokens(usage.output_tokens)}</text> : null}
+            {visible.usage && visible.cache ? <text fg={theme.dim}> · </text> : null}
+            {visible.cache ? (
+              <>
+                <text fg={theme.dim}>{tt(locale, "hud.cache")}{" "}</text>
+                <text fg={cacheColor(theme, cacheRate)}>{cacheRate !== null ? `${cacheRate}%` : "—"}</text>
+              </>
+            ) : null}
           </box>
-        ) : null}
       </box>
+      ) : null}
     </box>
   )
 }

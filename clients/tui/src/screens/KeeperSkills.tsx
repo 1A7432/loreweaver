@@ -180,7 +180,7 @@ export function KeeperSkills({ client, theme, themeName, welcome, stateFrame, on
             )}
           </box>
 
-          <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} marginTop={1} width={72}>
+          <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} marginTop={1} width={72} maxWidth="100%" minWidth={0} flexShrink={0}>
             <text fg={theme.dim}>{tt(locale, "skills.intro")}</text>
 
             <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("description")}>

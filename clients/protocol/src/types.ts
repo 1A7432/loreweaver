@@ -1,6 +1,6 @@
-// Bumped to "1.4" for additive image-generation config/control frames.
+// Bumped to "1.5" for the additive room-wide AI-KP turn-status frame.
 // `WelcomeFrame.protocol` stays a plain string so older minor clients keep accepting it.
-export const PROTOCOL_VERSION = "1.4" as const
+export const PROTOCOL_VERSION = "1.5" as const
 
 export const FrameType = {
   Join: "join",
@@ -22,6 +22,7 @@ export const FrameType = {
   State: "state",
   Presence: "presence",
   System: "system",
+  TurnStatus: "turn_status",
   Pong: "pong",
   // v1.1 additive admin (keeper-gated) frames.
   AdminGetConfig: "admin_get_config",
@@ -60,6 +61,7 @@ export type NarrativeFormat = "markdown" | "plain"
 export type ErrorCode =
   | "bad_key"
   | "bad_frame"
+  | "input_too_long"
   | "rate_limited"
   | "server_error"
   | "join_timeout"
@@ -80,6 +82,7 @@ export type ErrorCode =
   | "avatar_no_character"
 export type DiceKind = "roll" | "check" | "sanity" | "opposed" | "init"
 export type SystemLevel = "info" | "warn"
+export type TurnActivity = "busy" | "idle"
 export type AudioLayer = "bgm" | "ambience" | "sfx"
 export type AudioAction = "play" | "stop" | "pause" | "resume" | "volume"
 export type AdminErrorCode =
@@ -341,6 +344,10 @@ export interface SystemFrame {
   text: string
   spinner?: boolean
 }
+
+export type TurnStatusFrame =
+  | { type: typeof FrameType.TurnStatus; status: "busy"; actor: string }
+  | { type: typeof FrameType.TurnStatus; status: "idle"; actor?: never }
 
 export interface PongFrame {
   type: typeof FrameType.Pong
@@ -621,6 +628,7 @@ export type ServerFrame =
   | StateFrame
   | PresenceFrame
   | SystemFrame
+  | TurnStatusFrame
   | PongFrame
   | AdminConfigFrame
   | AdminModelsFrame

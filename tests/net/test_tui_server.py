@@ -102,7 +102,7 @@ async def test_join_with_good_key_gets_welcome_and_bad_key_gets_error():
         async with websockets.connect(url) as ws:
             welcome = await _join(ws, key, "Alice")
             assert welcome["type"] == "welcome"
-            assert welcome["protocol"] == "1.4"
+            assert welcome["protocol"] == "1.5"
             assert "media" in welcome["features"]
             assert "audio" in welcome["features"]
             assert welcome["room"] == "demo"
@@ -207,9 +207,9 @@ def test_build_ssl_context_is_none_when_unset_and_rejects_a_half_configured_pair
         _build_ssl_context(half)
 
 
-async def test_oversized_input_is_truncated_before_the_turn():
-    # Regression (#8): a client-controlled `input.text` is capped before it reaches the
-    # LLM/history, so it cannot blow up prompt size / stored history unboundedly.
+async def test_oversized_input_is_rejected_without_starting_a_turn():
+    # TUI-INPUT-026: rejecting the whole action is honest; silently truncating it can make the
+    # Keeper answer a different action. The same connection remains usable afterward.
     services = _services(responder=lambda messages, tools: assistant_text("ok"))
     keystore = Keystore()
     key = keystore.add(room="caproom", name="Nora")
@@ -219,12 +219,33 @@ async def test_oversized_input_is_truncated_before_the_turn():
         ws, *_ = await _connect_and_join(url, key, "Nora")
         await ws.send(json.dumps({"type": "input", "text": "x" * (_MAX_INPUT_CHARS + 500)}))
 
+        error = await _recv(ws)
+        assert error == {
+            "type": "error",
+            "code": "input_too_long",
+            "message": "Messages may contain at most 4,000 characters. Nothing was sent.",
+        }
+        assert not server.turns
+
+        # The boundary value is accepted in full, and the prior rejection did not close the socket.
+        await ws.send(json.dumps({"type": "input", "text": "y" * _MAX_INPUT_CHARS}))
         echo = await _recv(ws)
         assert echo["type"] == "narrative" and echo["speaker"] == "player"
-        assert len(echo["text"]) == _MAX_INPUT_CHARS
+        assert echo["text"] == "y" * _MAX_INPUT_CHARS
         await ws.close()
     finally:
         await server.close()
+
+
+def test_input_too_long_error_has_a_chinese_translation():
+    from infra.i18n import get_i18n
+    from net.session import error_frame
+
+    assert error_frame("input_too_long", get_i18n("zh")) == {
+        "type": "error",
+        "code": "input_too_long",
+        "message": "消息最多可输入 4,000 个字符，本次内容未发送。",
+    }
 
 
 async def test_admin_frame_exception_becomes_error_frame_not_a_dropped_socket(monkeypatch):
@@ -780,16 +801,20 @@ async def test_kp_turn_after_module_seed_has_no_sentinel_leak_and_uses_keeper_to
         await ws.send(json.dumps({"type": "input", "text": "let's begin"}))
 
         echo = await _recv(ws)
+        busy = await _recv(ws)
         reply = await _recv(ws)
+        idle = await _recv(ws)
         state = await _recv(ws)
 
         assert echo["type"] == "narrative" and echo["speaker"] == "player"
+        assert busy == {"type": "turn_status", "status": "busy", "actor": "Nora"}
         assert reply["type"] == "narrative" and reply["speaker"] == "kp"
         assert reply["format"] == "markdown"
         assert reply["text"].strip()
+        assert idle == {"type": "turn_status", "status": "idle"}
         assert state["type"] == "state"
 
-        for frame in (echo, reply, state):
+        for frame in (echo, busy, reply, idle, state):
             assert SENTINEL not in json.dumps(frame), "sentinel leaked in frame"
 
         assert server.turns, "no turn was recorded"
@@ -857,20 +882,24 @@ async def test_kp_turn_broadcasts_ai_npc_dialogue_before_kp_narrative_without_le
         await ws.send(json.dumps({"type": "input", "text": "Ask Martha what she heard."}))
 
         echo = await _recv(ws)
+        busy = await _recv(ws)
         npc_frame = await _recv(ws)
         kp_frame = await _recv(ws)
+        idle = await _recv(ws)
         state = await _recv(ws)
 
         assert echo["type"] == "narrative" and echo["speaker"] == "player"
+        assert busy == {"type": "turn_status", "status": "busy", "actor": "Nora"}
         assert npc_frame["type"] == "narrative"
         assert npc_frame["speaker"] == "npc"
         assert npc_frame["name"] == "Martha"
         assert npc_dialogue in npc_frame["text"]
         assert npc_frame["format"] == "markdown"
         assert kp_frame["type"] == "narrative" and kp_frame["speaker"] == "kp"
+        assert idle == {"type": "turn_status", "status": "idle"}
         assert state["type"] == "state"
 
-        for frame in (echo, npc_frame, kp_frame, state):
+        for frame in (echo, busy, npc_frame, kp_frame, idle, state):
             assert SENTINEL not in json.dumps(frame), "sentinel leaked in frame"
 
         await ws.close()

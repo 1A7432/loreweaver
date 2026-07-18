@@ -4,14 +4,14 @@
 
 这是 loreweaver 服务器（通过 `python -m app --serve` 启动）与 OpenTUI 终端客户端之间开放、版本化的 wire protocol。引擎本身（确定性核心 + AI Keeper）不受传输方式影响；传输中立的会话逻辑位于 `net.session.SessionCore`，本文档是与语言无关的接口定义。
 
-控制流使用 `{"type": ...}` 形状的 JSON 帧，协议版本为 `"1.4"`。同一套帧与 `join` 握手可搭载于两种 carrier：
+控制流使用 `{"type": ...}` 形状的 JSON 帧，协议版本为 `"1.5"`。同一套帧与 `join` 握手可搭载于两种 carrier：
 
 - **Iroh** 是 `--serve` 实际启动的默认传输：点对点 QUIC，服务端打印可分享 ticket，不需要域名、证书或端口转发。控制帧是在长连接双向流上的 newline-delimited JSON；媒体字节使用同一连接上的额外双向流。
 - **WebSocket**（`net.tui_server`）只保留作离线测试/loopback carrier，不是 `--serve` 选项。控制帧是文本消息，媒体字节是二进制消息。
 
 两种 carrier 都驱动同一个 `SessionCore` / `RoomHub`。
 
-版本控制是递增式的：`"1.4"` 新增图像生成配置与头像绑定；`"1.3"` 新增房间音频库/播放控制帧；`"1.2"` 新增媒体元数据帧和字节通道；`"1.1"` 新增 Keeper 门控的 `admin_*` 帧（见下文"Admin frames"部分）。只理解 `"1"` 的客户端保持正常工作——它永远不会发送新帧，应该将 `welcome` 的 `protocol` 字段视为不透明字符串（接受任何 `"1.x"`）。
+版本控制是递增式的：`"1.5"` 新增房间级 AI-KP 回合状态；`"1.4"` 新增图像生成配置与头像绑定；`"1.3"` 新增房间音频库/播放控制帧；`"1.2"` 新增媒体元数据帧和字节通道；`"1.1"` 新增 Keeper 门控的 `admin_*` 帧（见下文"Admin frames"部分）。只理解 `"1"` 的客户端保持正常工作——它永远不会发送新帧、会忽略无法识别的服务端帧类型，并应将 `welcome` 的 `protocol` 字段视为不透明字符串（接受任何 `"1.x"`）。
 
 客户端发送的第一帧 MUST 是 `join`。服务器回复 `welcome` 或 `error`，错误时关闭连接。如果在 join 握手超时内未到达（`TRPG_TUI__JOIN_TIMEOUT`，默认 10 秒），服务器将用 `error join_timeout` 关闭连接，而不是无限等待。离线 WebSocket 测试 carrier 另外支持 `TRPG_TUI__MAX_CONNECTIONS` 并发上限；超额测试连接会在读取 `join` 前收到 `error too_many_connections`。
 
@@ -32,10 +32,10 @@
 ## Server → Client
 
 - `welcome` — 成功 `join` 时发送一次：
-  `{type:"welcome", protocol:"1.4", features:["media","audio","imagegen"?,"demo"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string}`
+  `{type:"welcome", protocol:"1.5", features:["media","audio","imagegen"?,"demo"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string}`
   `demo` 表示服务端正在使用离线示例 Keeper、向量功能已启用，且本次检查时这个守秘人房间为空。服务端会在房间回合锁内再次检查，过期 flag 不会覆盖战役状态；客户端收到 `admin_config{using_demo:false}`（例如从模型页保存后）会立即移除入口，否则重连时重新计算，过期操作也会被服务端拒绝。
 - `error` — 本地化的故障通知；`bad_key`、`join_timeout` 和 `too_many_connections` 关闭连接（它们仅在 `join` 握手期间或之前发生），其他不关闭：
-  `{type:"error", code:"bad_key"|"bad_frame"|"rate_limited"|"server_error"|"join_timeout"|"too_many_connections"|"demo_unavailable"|媒体错误码, message:string}`
+  `{type:"error", code:"bad_key"|"bad_frame"|"input_too_long"|"rate_limited"|"server_error"|"join_timeout"|"too_many_connections"|"demo_unavailable"|媒体错误码, message:string}`
 - `media_accept` — 上传被接受；若 `existing` 为 true，则无需 PUT：
   `{type:"media_accept", upload_id:string, existing?:boolean, media?:MediaFrame, audio?:AudioLibraryItem}`
 - `media` — 媒体元数据广播和历史回放条目；字节按需拉取：
@@ -59,6 +59,8 @@
 - `presence` — 连接的玩家名单，在加入/离开时发送：
   `{type:"presence", players:[{id,name,online}], online:int}`
 - `system` — 带外通知：`{type:"system", level:"info"|"warn", text:string}`
+- `turn_status` — 临时的房间级 AI-KP 活动状态。`busy` 携带正在结算其行动的 actor，`idle` 清除状态。客户端应显示动画忙碌指示，并设置安全超时以防结束帧丢失：
+  `{type:"turn_status", status:"busy", actor:string}` 或 `{type:"turn_status", status:"idle"}`
 - `pong`: `{type:"pong", t:number}`
 
 ## Turn flow
@@ -69,11 +71,12 @@
 2. 前置层：`RateLimiter.allow(user)` + `allow(room)`；如果被阻止，仅向该客户端发送 `error rate_limited`（回合在此停止）。
 3. 向整个房间广播 `narrative{speaker:"player", name, text}`（每个人都看到该操作，包括发送者）。
 4. 如果 `CommandRouter.dispatch(ctx, text)` 返回非 `None`，该字符串是回复（一个 `.`/`/` 命令或 SealDice 风格的内联掷骰子）。
-   否则，`run_kp_turn(ctx, services, toolset, text, output_review=censor)` 驱动 AI Keeper 并返回一个 `KPTurnResult`。
+   否则，服务器先广播 `turn_status{status:"busy", actor:name}`，再由 `run_kp_turn(ctx, services, toolset, text, output_review=censor)` 驱动 AI Keeper 并返回一个 `KPTurnResult`。
 5. 对于每个 `tool_trace` 条目，如果是掷骰子/检定工具（`roll_dice`、`skill_check`、`sanity_check`、`opposed_check`、`initiative_tracker`），从其结果中解析并广播一个 `dice` 帧。
 6. 对于每个名为 `speak_as_npc` 的 `tool_trace` 条目，在最终 KP 回复之前广播 `narrative{speaker:"npc", name, text, format:"markdown"}`。`name` 是工具调用的 `npc` 参数，`text` 是玩家安全的工具结果。
 7. 将回复广播为 `narrative{text: reply}`——命令回复为 `speaker:"system"`，AI Keeper 回复为 `speaker:"kp", format:"markdown"`。回复已通过所配置的输出词表；守秘人专用工具的原始结果不会被代码直接复制到此帧，但主 Keeper 模型看过这些结果，仍可能自行复述，因此另由真实模型红线评测测量这种行为风险。
-8. 重新构建并广播一个 `state` 帧（`net.state.build_room_state`）。
+8. AI-KP 分支结束时（包括错误清理）广播 `turn_status{status:"idle"}`；命令回复不发送回合状态。
+9. 重新构建并广播一个 `state` 帧（`net.state.build_room_state`）。
 
 密钥映射到同一房间的多个客户端共享一个 AI-KP 会话；上述每个描述为"广播"的帧都发送给当前连接到该房间的每个成员。
 

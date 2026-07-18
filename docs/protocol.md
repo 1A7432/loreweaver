@@ -7,7 +7,7 @@ This is the open, versioned wire protocol between a loreweaver server (started v
 (deterministic core + AI Keeper) is unaffected by transport; the transport-neutral
 session logic is `net.session.SessionCore`, and this document is the language-agnostic seam.
 
-Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"1.4"`. The same
+Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"1.5"`. The same
 frames + `join` handshake ride the transport; only the carrier + its framing differ:
 
 - **Iroh** (the transport `--serve` starts) — peer-to-peer QUIC. The server
@@ -22,9 +22,10 @@ frames + `join` handshake ride the transport; only the carrier + its framing dif
 
 Both carriers drive the same `SessionCore`/`RoomHub`.
 
-Versioning is additive: `"1.4"` adds image-generation config plus avatar binding; `"1.3"` adds room audio library/control frames; `"1.2"` adds media metadata frames and byte channels; `"1.1"` added the keeper-gated `admin_*` frames
+Versioning is additive: `"1.5"` adds room-wide AI-KP turn status; `"1.4"` adds image-generation config plus avatar binding; `"1.3"` adds room audio library/control frames; `"1.2"` adds media metadata frames and byte channels; `"1.1"` added the keeper-gated `admin_*` frames
 (see "Admin frames" below). A client that only understands `"1"` keeps working
-unchanged — it never sends `admin_*` frames, and it should treat the `welcome`
+unchanged — it never sends `admin_*` frames, ignores server frame types it does not
+recognize, and should treat the `welcome`
 `protocol` field as an opaque string (accept any `"1.x"`).
 
 The first frame a client sends MUST be `join`. The server replies with
@@ -54,7 +55,7 @@ connections receive `error too_many_connections` before `join` is read.
 ## Server → Client
 
 - `welcome` — sent once, on a successful `join`:
-  `{type:"welcome", protocol:"1.4", features:["media","audio", "imagegen"?, "demo"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string}`
+  `{type:"welcome", protocol:"1.5", features:["media","audio", "imagegen"?, "demo"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string}`
   `demo` means the server is using its offline sample Keeper, vector support is
   enabled, and this specific Keeper room was empty when the server checked it.
   The server rechecks under the room turn lock before setup, so a stale flag cannot
@@ -64,7 +65,7 @@ connections receive `error too_many_connections` before `join` is read.
 - `error` — a localized failure notice; `bad_key`, `join_timeout` and
   `too_many_connections` close the connection (they only ever happen during
   or before the `join` handshake), the others do not:
-  `{type:"error", code:"bad_key"|"bad_frame"|"rate_limited"|"server_error"|"join_timeout"|"too_many_connections"|"demo_unavailable"|media error codes, message:string}`
+  `{type:"error", code:"bad_key"|"bad_frame"|"input_too_long"|"rate_limited"|"server_error"|"join_timeout"|"too_many_connections"|"demo_unavailable"|media error codes, message:string}`
 - `media_accept` — upload accepted; if `existing` is true, no PUT is needed:
   `{type:"media_accept", upload_id:string, existing?:boolean, media?:MediaFrame, audio?:AudioLibraryItem}`
 - `media` — media metadata broadcast and history replay entry; bytes are fetched on demand:
@@ -96,6 +97,11 @@ connections receive `error too_many_connections` before `join` is read.
 - `presence` — the connected-player roster, sent on join/leave:
   `{type:"presence", players:[{id,name,online}], online:int}`
 - `system` — an out-of-band notice: `{type:"system", level:"info"|"warn", text:string, spinner?:boolean}`
+- `turn_status` — ephemeral room-wide AI-KP activity. `busy` names the actor whose
+  action is being resolved; `idle` clears the activity. Clients should animate their
+  busy indicator and apply a safety timeout in case an end frame is lost:
+  `{type:"turn_status", status:"busy", actor:string}` or
+  `{type:"turn_status", status:"idle"}`
 - `pong`: `{type:"pong", t:number}`
 
 ## Turn flow
@@ -110,7 +116,8 @@ On an `input` frame from a client in room `R`, the server:
    (everyone sees the action, including the sender).
 4. If `CommandRouter.dispatch(ctx, text)` returns non-`None`, that string is
    the reply (a `.`/`/` command or a SealDice-style inline roll).
-   Otherwise, `run_kp_turn(ctx, services, toolset, text,
+   Otherwise, the server broadcasts `turn_status{status:"busy", actor:name}`, then
+   `run_kp_turn(ctx, services, toolset, text,
    output_review=censor)` drives the AI Keeper and returns a
    `KPTurnResult`.
 5. For each `tool_trace` entry that is a dice/check tool (`roll_dice`,
@@ -126,7 +133,9 @@ On an `input` frame from a client in room `R`, the server:
    Raw keeper-only tool results are never copied directly into this frame, but
    the main Keeper model has seen them and could restate them; that behavioral
    risk is measured separately by the live-model red-line eval.
-8. Rebuilds and broadcasts a `state` frame (`net.state.build_room_state`).
+8. After the AI-KP branch (including error cleanup), broadcasts
+   `turn_status{status:"idle"}`. Command replies do not emit turn status.
+9. Rebuilds and broadcasts a `state` frame (`net.state.build_room_state`).
 
 Multiple clients whose keys map to the same room share one AI-KP session;
 every frame described above as "broadcast" goes to every member currently

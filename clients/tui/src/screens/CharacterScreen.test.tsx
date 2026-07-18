@@ -59,8 +59,8 @@ const PLAYER_WELCOME: WelcomeFrame = {
   server: "mock",
 }
 
-function renderApp(client: MockClient) {
-  return testRender(<App client={client} prefill={{}} />, { width: 110, height: 34 })
+function renderApp(client: MockClient, width = 110, height = 34) {
+  return testRender(<App client={client} prefill={{}} />, { width, height })
 }
 
 // Menu-row / button boxes stretch to fill their column's width (same layout the
@@ -69,6 +69,65 @@ function renderApp(client: MockClient) {
 const CLICK_X = 6
 
 describe("CharacterScreen", () => {
+  test("80 columns gives the creation form full width and clears it when the sheet lands", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client, 80, 34)
+    await flush()
+    act(() => client.push(PLAYER_WELCOME))
+    await waitForFrame((text) => text.includes("我的角色"))
+
+    await act(async () => mockInput.pressArrow("down"))
+    await flush()
+    await act(async () => mockInput.pressEnter())
+    await flush()
+
+    const create = await waitForFrame((text) => text.includes("建卡方式") && text.includes("规则系统"))
+    expect(create).not.toContain("CHARACTER")
+    expect(create.split("\n").every((line) => Bun.stringWidth(line) <= 80)).toBe(true)
+
+    await act(async () => {
+      mockInput.pressTab()
+      mockInput.pressTab()
+    })
+    await flush()
+    await act(async () => {
+      await mockInput.typeText("八十列调查员")
+      mockInput.pressEnter()
+    })
+    await flush()
+
+    act(() => {
+      client.push({
+        type: FrameType.State,
+        character: {
+          name: "八十列调查员",
+          system: "CoC",
+          hp: 10,
+          hpmax: 10,
+          mp: 10,
+          mpmax: 10,
+          san: 65,
+          sanmax: 99,
+          attributes: { STR: 60, CON: 55, SIZ: 65, DEX: 70, APP: 50, INT: 75, POW: 65, EDU: 80 },
+          status_effects: [],
+        },
+        party: [],
+        initiative: [],
+        online: 1,
+      })
+    })
+    await flush()
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 600)))
+    await flush()
+
+    const settled = await waitForFrame((text) => text.includes("重掷 / 新建"))
+    expect(settled).not.toContain("建卡方式")
+    expect(settled).not.toContain("DEXr")
+    expect(settled.split("\n").every((line) => Bun.stringWidth(line) <= 80)).toBe(true)
+
+    act(() => renderer.destroy())
+  })
+
   test("从主菜单键盘进入角色页;无角色时直接展示建卡表单", async () => {
     const client = new MockClient()
     const { renderer, flush, waitForFrame, mockInput } = await renderApp(client)
@@ -397,7 +456,7 @@ describe("CharacterScreen", () => {
 
   test("已有角色时可微调:发送 .st 力量60 侦查70", async () => {
     const client = new MockClient()
-    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client)
+    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client, 80, 34)
     await flush()
     act(() => client.push(PLAYER_WELCOME))
     await waitForFrame((t) => t.includes("我的角色"))
@@ -447,7 +506,9 @@ describe("CharacterScreen", () => {
       mockInput.pressEnter()
     })
     await flush()
-    await waitForFrame((t) => t.includes("微调指令"))
+    const tweak = await waitForFrame((t) => t.includes("微调指令"))
+    expect(tweak).toContain("⚄ 应用")
+    expect(tweak.split("\n").every((line) => Bun.stringWidth(line) <= 80)).toBe(true)
 
     await act(async () => {
       await mockInput.typeText("力量60 侦查70")

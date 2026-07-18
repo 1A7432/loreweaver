@@ -211,6 +211,24 @@ describe("WsClient", () => {
     expect(seen).toEqual([FrameType.State])
   })
 
+  test("room turn-status frames are additive, validated, and dispatched", async () => {
+    const { client, sockets } = createClient()
+    const seen: Array<{ status: string; actor?: string }> = []
+    client.on(FrameType.TurnStatus, (frame) => seen.push(frame))
+
+    await client.connect("ws://example.test")
+    sockets[0].serverSend({ type: FrameType.TurnStatus, status: "busy", actor: "Nora" })
+    sockets[0].serverSend({ type: FrameType.TurnStatus, status: "idle" })
+    sockets[0].serverSend({ type: FrameType.TurnStatus, status: "busy" }) // actor required
+    sockets[0].serverSend({ type: FrameType.TurnStatus, status: "paused", actor: "Nora" })
+    sockets[0].serverSend({ type: "future_additive_frame", value: 1 }) // older clients ignore unknown types
+
+    expect(seen).toEqual([
+      { type: FrameType.TurnStatus, status: "busy", actor: "Nora" },
+      { type: FrameType.TurnStatus, status: "idle" },
+    ])
+  })
+
   test("a non-JSON message is ignored without throwing", async () => {
     const { client, sockets } = createClient()
     const seen: string[] = []

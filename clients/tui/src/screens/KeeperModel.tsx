@@ -460,7 +460,7 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
             </box>
           </box>
 
-          <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} marginTop={1} width={64}>
+          <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} marginTop={1} width={64} maxWidth="100%" minWidth={0} flexShrink={0}>
             <text fg={theme.dim}>{tt(locale, "model.intro")}</text>
 
             <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("provider")}>
@@ -679,7 +679,7 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
             </box>
           </box>
 
-          <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} marginTop={1} width={64}>
+          <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} marginTop={1} width={64} maxWidth="100%" minWidth={0} flexShrink={0}>
             <text fg={theme.accent}>{tt(locale, "imagegen.title")}</text>
             <text fg={theme.dim}>{tt(locale, "imagegen.intro")}</text>
 

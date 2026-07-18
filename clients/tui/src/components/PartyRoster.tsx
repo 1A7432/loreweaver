@@ -119,11 +119,11 @@ export function PartyRoster({ character, party, initiative, theme, locale, clien
 
   return (
     <box flexDirection="column" border borderColor={focused ? theme.accent : theme.border} paddingX={1}>
-      <text fg={theme.accent}>{tt(locale, "party.title")}</text>
+      <text fg={theme.accent} wrapMode="none" truncate>{tt(locale, "party.title")}</text>
 
       {character ? (
         <box flexDirection="column" onMouseDown={toggle}>
-          <text fg={focused ? theme.accent : theme.player}>
+          <text fg={focused ? theme.accent : theme.player} wrapMode="none" truncate>
             {expanded ? "▾" : "▸"} {(ownMember?.online ?? true) ? "●" : "○"} {stripControlChars(character.name)} (
             {tt(locale, "party.you")})
           </text>
@@ -132,13 +132,13 @@ export function PartyRoster({ character, party, initiative, theme, locale, clien
             <CharacterPanel character={character} theme={theme} locale={locale} />
           ) : (
             <>
-              <text fg={statColor(character.hp, character.hpmax, theme.hpFull, theme.hpLow)}>
+              <text fg={statColor(character.hp, character.hpmax, theme.hpFull, theme.hpLow)} wrapMode="none" truncate>
                 HP {bar(character.hp, character.hpmax, COMPACT_BAR_WIDTH)} {character.hp}/{character.hpmax}
               </text>
-              <text fg={theme.success}>
+              <text fg={theme.success} wrapMode="none" truncate>
                 MP {bar(character.mp, character.mpmax, COMPACT_BAR_WIDTH)} {character.mp}/{character.mpmax}
               </text>
-              <text fg={statColor(character.san, character.sanmax, theme.sanFull, theme.sanLow)}>
+              <text fg={statColor(character.san, character.sanmax, theme.sanFull, theme.sanLow)} wrapMode="none" truncate>
                 SAN {bar(character.san, character.sanmax, COMPACT_BAR_WIDTH)} {character.san}/{character.sanmax}
               </text>
             </>
@@ -147,9 +147,9 @@ export function PartyRoster({ character, party, initiative, theme, locale, clien
       ) : otherMembers.length === 0 ? (
         // No own character AND no other members: one clear line, not two stacked
         // empty-state messages (used to show "尚未创建角色" AND "No roster" together).
-        <text fg={theme.dim}>{tt(locale, "party.empty")}</text>
+        <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "party.empty")}</text>
       ) : (
-        <text fg={theme.dim}>{tt(locale, "party.noCharacter")}</text>
+        <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "party.noCharacter")}</text>
       )}
 
       {otherMembers.map((member) => {
@@ -166,14 +166,14 @@ export function PartyRoster({ character, party, initiative, theme, locale, clien
             flexDirection="column"
             onMouseDown={canExpand ? () => toggleMember(member.name) : undefined}
           >
-            <text fg={member.online ? theme.player : theme.dim}>
+            <text fg={member.online ? theme.player : theme.dim} wrapMode="none" truncate>
               {`${marker}${activeMarker} ${onlineMarker} ${stripControlChars(member.name)}`}
               {member.ai ? " [AI]" : ""}
               {initiativeValue(member, initiative)}
             </text>
             <AvatarPreview avatar={member.avatar} client={client} />
             {vitals.map((stat) => (
-              <text key={`${member.name}-${stat.label}`} fg={stat.color}>
+              <text key={`${member.name}-${stat.label}`} fg={stat.color} wrapMode="none" truncate>
                 {stat.label} {bar(stat.value, stat.max, statWidth)} {stat.value}/{stat.max}
               </text>
             ))}
@@ -181,9 +181,9 @@ export function PartyRoster({ character, party, initiative, theme, locale, clien
         )
       })}
 
-      {initiative.length > 0 ? <text fg={theme.dim}>INIT</text> : null}
+      {initiative.length > 0 ? <text fg={theme.dim} wrapMode="none" truncate>INIT</text> : null}
       {initiative.map((entry) => (
-        <text key={`${entry.name}-${entry.value}`} fg={entry.current ? theme.accent : theme.fg}>
+        <text key={`${entry.name}-${entry.value}`} fg={entry.current ? theme.accent : theme.fg} wrapMode="none" truncate>
           {entry.current ? "▶" : " "} {stripControlChars(entry.name)} {entry.value}
         </text>
       ))}

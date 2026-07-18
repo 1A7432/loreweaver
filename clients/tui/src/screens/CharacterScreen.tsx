@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { useKeyboard } from "@opentui/react"
+import { useKeyboard, useTerminalDimensions } from "@opentui/react"
 import type { KeyEvent, SelectOption } from "@opentui/core"
 import { stripControlChars, type CharacterState, type StateFrame, type WelcomeFrame } from "@loreweaver/protocol"
 import { CharacterPanel } from "../components/CharacterPanel"
@@ -7,6 +7,7 @@ import { attributeLines } from "../components/characterAttributes"
 import { StatusBar } from "../components/StatusBar"
 import { tt } from "../i18n"
 import type { MessageKey } from "../i18n"
+import { sidebarCollapsed, sidebarWidth } from "../layout"
 import type { Palette, ThemeName } from "../themes"
 
 // Only `sendInput` is needed here: the screen's data arrives via the `stateFrame`
@@ -180,6 +181,8 @@ function rollLabelsFor(systemValue: unknown, locale: string): string[] {
 }
 
 export function CharacterScreen({ client, theme, themeName, welcome, stateFrame, onBack }: CharacterScreenProps) {
+  const { width: terminalWidth } = useTerminalDimensions()
+  const showSheet = !sidebarCollapsed(terminalWidth)
   const locale = welcome.locale
   const SYSTEM_OPTIONS = systemOptions(locale)
   const CREATE_MODE_OPTIONS = createModeOptions(locale)
@@ -487,26 +490,89 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
   const manualAttrs = systemValue === "dnd" ? manualDndAttrs : manualCocAttrs
   const manualMessages = manualValidation(systemValue, manualAttrs, locale)
   const rollLabels = rollLabelsFor(systemValue, locale)
+  const sheetContent = rolling ? (
+    <box flexDirection="column" border borderColor={theme.accent} paddingX={1}>
+      <text fg={theme.accent} wrapMode="none" truncate>
+        CHARACTER {landed ? `· ${tt(locale, "character.landed")}` : `· ${pendingLabel(pendingKind, locale)}`}
+      </text>
+      {landed ? (
+        <>
+          <text fg={theme.success} wrapMode="none" truncate>
+            {CURSOR} {stripControlChars(stateFrame.character?.name ?? pendingName)}
+          </text>
+          {attributeLines(stateFrame.character).map(({ key, line }) => (
+            <text key={key} fg={theme.success} wrapMode="none" truncate>
+              {line}
+            </text>
+          ))}
+        </>
+      ) : (
+        <>
+          <text fg={theme.accent} wrapMode="none" truncate>
+            {DICE_GLYPHS[rollTick % DICE_GLYPHS.length]}{" "}
+            {stripControlChars(pendingName || tt(locale, "character.newCharacter"))}…
+          </text>
+          {pendingKind === "roll"
+            ? rollLabels.map((label, index) => (
+                <text key={label} fg={theme.accent} wrapMode="none" truncate>
+                  {label} {DICE_GLYPHS[(rollTick + index) % DICE_GLYPHS.length]}
+                  {DICE_GLYPHS[(rollTick + index * 3 + 2) % DICE_GLYPHS.length]}
+                </text>
+              ))
+            : null}
+          {pendingKind === "manual"
+            ? manualDefs.map((def) => (
+                <text key={def.key} fg={theme.accent} wrapMode="none" truncate>
+                  {def.key} {manualAttrs[def.key] ?? def.min}
+                </text>
+              ))
+            : null}
+          {pendingKind === "persona" ? <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "character.personaPending")}</text> : null}
+          {pendingKind === "import" ? <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "character.importPending")}</text> : null}
+        </>
+      )}
+    </box>
+  ) : (
+    <>
+      <CharacterPanel character={stateFrame.character} theme={theme} locale={locale} />
+      {stateFrame.character ? (
+        <box flexDirection="column" border borderColor={theme.border} paddingX={1} marginTop={1}>
+          <text fg={theme.accent} wrapMode="none" truncate>{tt(locale, "character.attributesTitle")}</text>
+          {attributeLines(stateFrame.character).map(({ key, line }) => (
+            <text key={key} fg={theme.fg} wrapMode="none" truncate>
+              {line}
+            </text>
+          ))}
+        </box>
+      ) : null}
+      {viewNote ? (
+        <box marginTop={1} minWidth={0}>
+          <text fg={deleteArmed ? theme.fumble : theme.dim} wrapMode="none" truncate>{stripControlChars(viewNote)}</text>
+        </box>
+      ) : null}
+    </>
+  )
 
   return (
     <box flexDirection="column" height="100%" width="100%" backgroundColor={theme.bg}>
       <box height={4} flexDirection="row" border borderColor={theme.border} paddingX={1}>
         <ascii-font text="LOREWEAVER" font="tiny" color={theme.accent} />
-        <box flexDirection="row" marginLeft={2}>
-          <text fg={theme.accent}>{tt(locale, "character.title")}</text>
-          <text fg={theme.dim}>
+        <box flexDirection="row" flexGrow={1} flexShrink={1} minWidth={0} marginLeft={2}>
+          <text fg={theme.accent} wrapMode="none" truncate>{tt(locale, "character.title")}</text>
+          <text fg={theme.dim} wrapMode="none" truncate>
             {" · "}
             {stripControlChars(welcome.room)}
           </text>
         </box>
       </box>
 
-      <box flexDirection="row" flexGrow={1} minHeight={8}>
-        <box flexDirection="column" flexGrow={1} paddingX={2} paddingY={1}>
+      <box key={mode} flexDirection="row" flexGrow={1} minHeight={8}>
+        <scrollbox flexGrow={1} flexShrink={1} minWidth={0} viewportCulling={false}>
+        <box flexDirection="column" width="100%" minWidth={0} paddingX={2} paddingY={1} flexShrink={0}>
           {mode === "view" ? (
             <>
               <box marginBottom={1}>
-                <text fg={stateFrame.character?.avatar ? theme.success : theme.dim}>
+                <text fg={stateFrame.character?.avatar ? theme.success : theme.dim} wrapMode="none" truncate>
                   {tt(locale, stateFrame.character?.avatar ? "character.avatar.set" : "character.avatar.unset")}
                 </text>
               </box>
@@ -518,24 +584,24 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
                   onMouseOver={() => setSelected(index)}
                   onMouseDown={() => activateView(index)}
                 >
-                  <text fg={selected === index ? theme.bg : theme.fg}>
+                  <text fg={selected === index ? theme.bg : theme.fg} wrapMode="none" truncate>
                     {selected === index ? `${CURSOR} ` : "  "}
                     {action.label}
                   </text>
                 </box>
               ))}
               <box marginTop={1}>
-                <text fg={theme.dim}>{tt(locale, "character.view.help")}</text>
+                <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "character.view.help")}</text>
               </box>
             </>
           ) : null}
 
           {mode === "create" ? (
-            <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} width={72}>
-              <text fg={theme.dim}>{tt(locale, "character.createIntro")}</text>
+            <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} width="100%" maxWidth={72} minWidth={0} flexShrink={0}>
+              <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "character.createIntro")}</text>
 
               <box flexDirection="column" marginTop={1} onMouseDown={() => setCreateFocus("method")}>
-                <text fg={createFocus === "method" ? theme.accent : theme.dim}>{tt(locale, "character.method")}</text>
+                <text fg={createFocus === "method" ? theme.accent : theme.dim} wrapMode="none" truncate>{tt(locale, "character.method")}</text>
                 <select
                   flexGrow={1}
                   height={8}
@@ -559,7 +625,7 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
               </box>
 
               <box flexDirection="column" marginTop={1} onMouseDown={() => setCreateFocus("system")}>
-                <text fg={createFocus === "system" ? theme.accent : theme.dim}>{tt(locale, "character.system")}</text>
+                <text fg={createFocus === "system" ? theme.accent : theme.dim} wrapMode="none" truncate>{tt(locale, "character.system")}</text>
                 <select
                   flexGrow={1}
                   height={4}
@@ -585,7 +651,7 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
 
               {createMode !== "import" ? (
                 <box flexDirection="column" marginTop={1} onMouseDown={() => setCreateFocus("name")}>
-                  <text fg={createFocus === "name" ? theme.accent : theme.dim}>{tt(locale, "character.name")}</text>
+                  <text fg={createFocus === "name" ? theme.accent : theme.dim} wrapMode="none" truncate>{tt(locale, "character.name")}</text>
                   <input
                     flexGrow={1}
                     value={name}
@@ -602,8 +668,8 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
 
               {createMode === "manual" ? (
                 <box flexDirection="column" marginTop={1} onMouseDown={() => setCreateFocus("attrs")}>
-                  <text fg={createFocus === "attrs" ? theme.accent : theme.dim}>{tt(locale, "character.attrs")}</text>
-                  <text fg={manualMessages.length ? theme.fumble : theme.dim}>{manualBudgetText(systemValue, manualAttrs, locale)}</text>
+                  <text fg={createFocus === "attrs" ? theme.accent : theme.dim} wrapMode="none" truncate>{tt(locale, "character.attrs")}</text>
+                  <text fg={manualMessages.length ? theme.fumble : theme.dim} wrapMode="none" truncate>{manualBudgetText(systemValue, manualAttrs, locale)}</text>
                   {manualDefs.map((def, index) => {
                     const selectedAttr = createFocus === "attrs" && manualAttrIndex === index
                     const value = manualAttrs[def.key] ?? def.min
@@ -613,7 +679,7 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
                         flexDirection="row"
                         onMouseOver={() => setManualAttrIndex(index)}
                       >
-                        <text fg={selectedAttr ? theme.accent : theme.fg}>
+                        <text fg={selectedAttr ? theme.accent : theme.fg} wrapMode="none" truncate flexShrink={1} minWidth={0}>
                           {selectedAttr ? `${CURSOR} ` : "  "}
                           {def.key.padEnd(3)} {attrLabel(def.key, locale).padEnd(2)} {String(value).padStart(2)}
                         </text>
@@ -623,7 +689,7 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
                         <box marginLeft={1} paddingX={1} backgroundColor={theme.border} onMouseDown={() => adjustManualAttr(def.key, 1)}>
                           <text fg={theme.fg}>+</text>
                         </box>
-                        <text fg={theme.dim}> {def.min}-{def.max}</text>
+                        <text fg={theme.dim} wrapMode="none" truncate flexShrink={1}> {def.min}-{def.max}</text>
                       </box>
                     )
                   })}
@@ -646,7 +712,7 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
 
               {createMode === "persona" ? (
                 <box flexDirection="column" marginTop={1} onMouseDown={() => setCreateFocus("description")}>
-                  <text fg={createFocus === "description" ? theme.accent : theme.dim}>{tt(locale, "character.description")}</text>
+                  <text fg={createFocus === "description" ? theme.accent : theme.dim} wrapMode="none" truncate>{tt(locale, "character.description")}</text>
                   <input
                     flexGrow={1}
                     value={description}
@@ -666,7 +732,7 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
 
               {createMode === "import" ? (
                 <box flexDirection="column" marginTop={1} onMouseDown={() => setCreateFocus("importPath")}>
-                  <text fg={createFocus === "importPath" ? theme.accent : theme.dim}>{tt(locale, "character.import")}</text>
+                  <text fg={createFocus === "importPath" ? theme.accent : theme.dim} wrapMode="none" truncate>{tt(locale, "character.import")}</text>
                   <input
                     flexGrow={1}
                     value={importPath}
@@ -687,7 +753,7 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
 
               {createNote ? (
                 <box marginTop={1}>
-                  <text fg={theme.dim}>{stripControlChars(createNote)}</text>
+                  <text fg={theme.dim} wrapMode="none" truncate>{stripControlChars(createNote)}</text>
                 </box>
               ) : null}
 
@@ -702,10 +768,10 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
           ) : null}
 
           {mode === "tweak" ? (
-            <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} width={60}>
-              <text fg={theme.dim}>{tt(locale, "character.tweakIntro")}</text>
+            <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} width="100%" maxWidth={60} minWidth={0} flexShrink={0}>
+              <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "character.tweakIntro")}</text>
               <box flexDirection="column" marginTop={1}>
-                <text fg={theme.accent}>{tt(locale, "character.tweakCommand")}</text>
+                <text fg={theme.accent} wrapMode="none" truncate>{tt(locale, "character.tweakCommand")}</text>
                 <input
                   flexGrow={1}
                   value={tweakText}
@@ -723,80 +789,25 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
               </box>
               {tweakNote ? (
                 <box marginTop={1}>
-                  <text fg={theme.dim}>{stripControlChars(tweakNote)}</text>
+                  <text fg={theme.dim} wrapMode="none" truncate>{stripControlChars(tweakNote)}</text>
                 </box>
               ) : null}
               <box marginTop={1}>
-                <text fg={theme.dim}>{tt(locale, "character.tweakHelp")}</text>
+                <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "character.tweakHelp")}</text>
               </box>
             </box>
           ) : null}
-        </box>
-
-        <box width={32} flexDirection="column">
-          {rolling ? (
-            <box flexDirection="column" border borderColor={theme.accent} paddingX={1}>
-              <text fg={theme.accent}>
-                CHARACTER {landed ? `· ${tt(locale, "character.landed")}` : `· ${pendingLabel(pendingKind, locale)}`}
-              </text>
-              {landed ? (
-                <>
-                  <text fg={theme.success}>
-                    {CURSOR} {stripControlChars(stateFrame.character?.name ?? pendingName)}
-                  </text>
-                  {attributeLines(stateFrame.character).map(({ key, line }) => (
-                    <text key={key} fg={theme.success}>
-                      {line}
-                    </text>
-                  ))}
-                </>
-              ) : (
-                <>
-                  <text fg={theme.accent}>
-                    {DICE_GLYPHS[rollTick % DICE_GLYPHS.length]}{" "}
-                    {stripControlChars(pendingName || tt(locale, "character.newCharacter"))}…
-                  </text>
-                  {pendingKind === "roll"
-                    ? rollLabels.map((label, index) => (
-                        <text key={label} fg={theme.accent}>
-                          {label} {DICE_GLYPHS[(rollTick + index) % DICE_GLYPHS.length]}
-                          {DICE_GLYPHS[(rollTick + index * 3 + 2) % DICE_GLYPHS.length]}
-                        </text>
-                      ))
-                    : null}
-                  {pendingKind === "manual"
-                    ? manualDefs.map((def) => (
-                        <text key={def.key} fg={theme.accent}>
-                          {def.key} {manualAttrs[def.key] ?? def.min}
-                        </text>
-                      ))
-                    : null}
-                  {pendingKind === "persona" ? <text fg={theme.dim}>{tt(locale, "character.personaPending")}</text> : null}
-                  {pendingKind === "import" ? <text fg={theme.dim}>{tt(locale, "character.importPending")}</text> : null}
-                </>
-              )}
+          {!showSheet ? (
+            <box key={rolling ? (landed ? "landed-narrow" : "rolling-narrow") : "sheet-narrow"} flexDirection="column" width="100%" minWidth={0} flexShrink={0} marginTop={1}>
+              {sheetContent}
             </box>
-          ) : (
-            <>
-              <CharacterPanel character={stateFrame.character} theme={theme} locale={locale} />
-              {stateFrame.character ? (
-                <box flexDirection="column" border borderColor={theme.border} paddingX={1} marginTop={1}>
-                  <text fg={theme.accent}>{tt(locale, "character.attributesTitle")}</text>
-                  {attributeLines(stateFrame.character).map(({ key, line }) => (
-                    <text key={key} fg={theme.fg}>
-                      {line}
-                    </text>
-                  ))}
-                </box>
-              ) : null}
-              {viewNote ? (
-                <box marginTop={1}>
-                  <text fg={deleteArmed ? theme.fumble : theme.dim}>{stripControlChars(viewNote)}</text>
-                </box>
-              ) : null}
-            </>
-          )}
+          ) : null}
         </box>
+        </scrollbox>
+
+        {showSheet ? <box key={rolling ? (landed ? "landed" : "rolling") : "sheet"} width={sidebarWidth(terminalWidth)} maxWidth="40%" flexShrink={0} flexDirection="column">
+          {sheetContent}
+        </box> : null}
       </box>
 
       <StatusBar welcome={welcome} online={stateFrame.online} theme={theme} themeName={themeName} />

@@ -10,7 +10,7 @@ const SERVERS: SavedServer[] = [
   { host: "ws://b.example:8787", key: "key-b", name: "Away" },
 ]
 
-function renderConnect(overrides: Partial<ConnectScreenProps> = {}) {
+function renderConnect(overrides: Partial<ConnectScreenProps> = {}, width = 110, height = 34) {
   return testRender(
     <ConnectScreen
       theme={themes.lamplight}
@@ -21,7 +21,7 @@ function renderConnect(overrides: Partial<ConnectScreenProps> = {}) {
       onSubmit={() => {}}
       {...overrides}
     />,
-    { width: 110, height: 34 },
+    { width, height },
   )
 }
 
@@ -76,10 +76,12 @@ describe("ConnectScreen saved-server delete", () => {
     act(() => renderer.destroy())
   })
 
-  test("clicking the row body (not the ✕) still fills the form, unaffected by the delete control", async () => {
+  test("clicking the row body fills the form but never paints the saved invite key", async () => {
     const forgotten: SavedServer[] = []
-    const { renderer, flush, waitForFrame, mockMouse } = await renderConnect({
+    const submitted: Array<{ host: string; key: string }> = []
+    const { renderer, flush, waitForFrame, mockMouse, mockInput } = await renderConnect({
       onForgetServer: (entry) => forgotten.push(entry),
+      onSubmit: (host, key) => submitted.push({ host, key }),
     })
     await flush()
 
@@ -95,8 +97,33 @@ describe("ConnectScreen saved-server delete", () => {
     await flush()
 
     expect(forgotten).toEqual([])
-    const filled = await waitForFrame((t) => t.includes("key-a"))
-    expect(filled).toContain("key-a")
+    const filled = await waitForFrame((t) => t.includes("saved invite key (masked)"))
+    expect(filled).not.toContain("key-a")
+    expect(filled).toContain("••••••••••••")
+
+    await act(async () => mockInput.pressEnter())
+    await flush()
+    expect(submitted).toEqual([{ host: SERVERS[0].host, key: SERVERS[0].key }])
+
+    act(() => renderer.destroy())
+  })
+
+  test("a remembered default key is masked on first paint and still submits intact", async () => {
+    const secret = "remembered-bearer-secret"
+    const submitted: string[] = []
+    const { renderer, flush, captureCharFrame, mockInput } = await renderConnect({
+      defaults: { host: "ws://example.test", key: secret },
+      savedServers: [],
+      onSubmit: (_host, key) => submitted.push(key),
+    })
+    await flush()
+
+    expect(captureCharFrame()).not.toContain(secret)
+    expect(captureCharFrame()).toContain("saved invite key (masked)")
+
+    await act(async () => mockInput.pressEnter())
+    await flush()
+    expect(submitted).toEqual([secret])
 
     act(() => renderer.destroy())
   })
@@ -158,6 +185,21 @@ describe("ConnectScreen local server folder", () => {
     await flush()
 
     expect(changed.at(-1)).toBe("/tmp/loreweaver-local-2")
+    act(() => renderer.destroy())
+  })
+
+  test("80 columns keeps the form and saved-row controls within the viewport", async () => {
+    const { renderer, flush, captureCharFrame } = await renderConnect({ onForgetServer: () => {} }, 80, 24)
+    await flush()
+
+    const frame = captureCharFrame()
+    expect(frame).toContain("Ticket / host")
+    expect(frame).toContain("Invite key")
+    expect(frame).toContain("Nickname")
+    expect(frame).toContain("Home")
+    expect(frame).toContain("✕")
+    expect(frame.split("\n").every((line) => Bun.stringWidth(line) <= 80)).toBe(true)
+
     act(() => renderer.destroy())
   })
 })

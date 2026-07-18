@@ -22,7 +22,7 @@ interface RenderOverrides {
   connectionStatus?: ConnectionStatus
 }
 
-function renderHeader(overrides: RenderOverrides = {}) {
+function renderHeader(overrides: RenderOverrides = {}, width = 120) {
   return testRender(
     <HeaderBar
       welcome={WELCOME}
@@ -34,7 +34,7 @@ function renderHeader(overrides: RenderOverrides = {}) {
       usage={overrides.usage}
       connectionStatus={overrides.connectionStatus}
     />,
-    { width: 100, height: 8 },
+    { width, height: 8 },
   )
 }
 
@@ -155,5 +155,33 @@ describe("HeaderBar", () => {
     await none.flush()
     expect(none.captureCharFrame()).not.toContain("●")
     act(() => none.renderer.destroy())
+  })
+
+  test("80 columns keeps room + online intact and drops metadata by priority", async () => {
+    const { renderer, flush, captureCharFrame } = await renderHeader({
+      scene: { name: "A scene name that would compete with the room identity" },
+      clock: { time: "1928-10-12 14:00", round: 12 },
+      usage: {
+        context_tokens: 40000,
+        context_window: 128000,
+        input_tokens: 12000,
+        output_tokens: 3400,
+        cache_hit_tokens: 8000,
+        cache_miss_tokens: 2000,
+      },
+      online: 2,
+    }, 80)
+    await flush()
+
+    const frame = captureCharFrame()
+    expect(frame).toContain("joined arkham")
+    expect(frame).toContain("2 online")
+    expect(frame).not.toContain("A scene name")
+    expect(frame).not.toContain("1928-10-12")
+    expect(frame).not.toContain("ctx")
+    expect(frame).not.toContain("cache")
+    expect(frame.split("\n").every((line) => Bun.stringWidth(line) <= 80)).toBe(true)
+
+    act(() => renderer.destroy())
   })
 })
