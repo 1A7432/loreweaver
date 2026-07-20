@@ -41,7 +41,19 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
-          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
+          # The bare slash command ends the run one step short of posting: the plugin fans out
+          # to background review agents, and the model ends its turn waiting to be woken when
+          # they report ("I'll wait for the notification rather than continuing to poll").
+          # Interactively that works; in CI nothing ever wakes it, so the session closes with
+          # subtype=success having never reached "validation and the final summary".
+          prompt: |
+            /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+
+            You are running non-interactively in CI. Nothing will wake you up: if you end your
+            turn waiting on a background agent, the session closes and the review is lost. Keep
+            working in this one session until the review is actually posted -- poll background
+            agents rather than waiting on a notification. Post the result before you finish,
+            including an explicit "no issues found" when the diff is clean.
           # The /code-review plugin reads the PR and posts the review through `gh`. With the
           # default allowlist the run ends with permission_denials_count=1 and posts nothing
           # (green job, zero output). Kept deliberately broad -- a narrow list risks denying a
@@ -49,8 +61,11 @@ jobs:
           # `pull_request`, so fork PRs get no secrets and the token input is empty, and the
           # action refuses to run at all when this file differs from the default branch.
           claude_args: '--allowed-tools "Bash,Read,Glob,Grep,Write,Edit,TodoWrite"'
+          # Always surface the review, so "clean diff" and "silently broken" stop looking
+          # identical -- the failure mode that made this take four runs to diagnose.
+          display_report: true
           # TEMPORARY: dumps the full transcript into the CI log so a run that still posts
-          # nothing names the tool it was denied. Remove once the lane is confirmed working.
+          # nothing shows where it stopped. Remove once the lane is confirmed working.
           show_full_output: true
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
