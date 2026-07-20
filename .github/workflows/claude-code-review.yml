@@ -42,11 +42,13 @@ jobs:
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
           prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
-          # The /code-review plugin reads the PR and posts the review through `gh`. Without an
-          # explicit allowlist the run ends with permission_denials_count=1 and posts nothing
-          # (green job, zero output). Read/Glob/Grep are listed too so narrowing the allowlist
-          # doesn't take the file-reading tools down with it.
-          claude_args: '--allowed-tools "Bash(gh pr *),Bash(gh api *),Read,Glob,Grep"'
+          # The /code-review plugin reads the PR and posts the review through `gh`. With the
+          # default allowlist the run ends with permission_denials_count=1 and posts nothing
+          # (green job, zero output). Kept deliberately broad -- a narrow list risks denying a
+          # different tool and reproducing the same silent failure. Safe here: this is
+          # `pull_request`, so fork PRs get no secrets and the token input is empty, and the
+          # action refuses to run at all when this file differs from the default branch.
+          claude_args: '--allowed-tools "Bash,Read,Glob,Grep,Write,Edit,TodoWrite"'
           # TEMPORARY: dumps the full transcript into the CI log so a run that still posts
           # nothing names the tool it was denied. Remove once the lane is confirmed working.
           show_full_output: true
