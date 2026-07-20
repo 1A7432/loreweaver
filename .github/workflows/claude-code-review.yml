@@ -21,8 +21,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
-      issues: read
+      # write, not read: posting the review IS the output of this job. The
+      # installer's generated default was read-only, so the job went green
+      # having produced nothing.
+      pull-requests: write
+      issues: write
       id-token: write
 
     steps:
@@ -39,6 +42,14 @@ jobs:
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
           prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
+          # The /code-review plugin reads the PR and posts the review through `gh`. Without an
+          # explicit allowlist the run ends with permission_denials_count=1 and posts nothing
+          # (green job, zero output). Read/Glob/Grep are listed too so narrowing the allowlist
+          # doesn't take the file-reading tools down with it.
+          claude_args: '--allowed-tools "Bash(gh pr *),Bash(gh api *),Read,Glob,Grep"'
+          # TEMPORARY: dumps the full transcript into the CI log so a run that still posts
+          # nothing names the tool it was denied. Remove once the lane is confirmed working.
+          show_full_output: true
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
 
