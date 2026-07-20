@@ -166,6 +166,60 @@ def test_mutable_llm_reports_when_offline_fallback_is_live():
     assert llm.using_fallback is True
 
 
+def _builder_failing_for(bad_provider: str, built=None):
+    """A builder that fails for one provider (its optional SDK/env 'missing')
+    and returns `built` for anything else."""
+
+    def build(settings):
+        if (settings.llm.provider or "").lower() == bad_provider:
+            raise ValueError(f"{bad_provider} SDK missing")
+        return built
+
+    return build
+
+
+def test_mutable_llm_degrades_to_fallback_when_the_baseline_build_fails():
+    # `is_llm_configured` only checks that a key is PRESENT, so a provider can look
+    # configured and still fail to construct (optional SDK never installed, proxy env
+    # httpx can't honor, malformed base_url). Raising here takes the whole server down
+    # -- including `.model set`, the one interface that could repair the config.
+    fallback = object()
+
+    llm = MutableLLM(
+        _settings("anthropic"),
+        builder=_builder_failing_for("anthropic"),
+        fallback_llm=fallback,
+    )
+
+    assert llm.inner is fallback
+    assert llm.using_fallback is True
+
+
+def test_mutable_llm_reraises_baseline_build_failure_when_there_is_no_fallback():
+    # Nothing to degrade to -- the original error must still surface unchanged.
+    with pytest.raises(ValueError, match="anthropic SDK missing"):
+        MutableLLM(_settings("anthropic"), builder=_builder_failing_for("anthropic"))
+
+
+def test_reconfigure_still_raises_on_build_failure_even_when_a_fallback_exists():
+    # Regression guard: the degradation above is BOOT-ONLY. `.model set` has an operator
+    # waiting on a result, so a failed switch must surface. Silently serving demo replies
+    # under a provider the keeper believes is live would be worse than refusing the switch.
+    good = object()
+    llm = MutableLLM(
+        _settings("openai"),
+        builder=_builder_failing_for("anthropic", built=good),
+        fallback_llm=object(),
+    )
+    assert llm.inner is good
+
+    with pytest.raises(ValueError, match="anthropic SDK missing"):
+        llm.apply({"provider": "anthropic", "chat_model": "claude-x"})
+
+    assert llm.inner is good  # live client never swapped
+    assert llm.settings.llm.provider == "openai"  # shared settings never mutated
+
+
 def test_build_llm_selects_anthropic(monkeypatch):
     class FakeAnthropic:
         def __init__(self, **kwargs) -> None:
