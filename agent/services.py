@@ -101,9 +101,11 @@ def build_services(
             # A persisted override that no longer builds (e.g. a native provider whose optional SDK
             # or key went missing) must NOT brick boot. Fall back to the env/`Settings` baseline the
             # `MutableLLM` was constructed with, and log it, instead of raising out of build_services.
-            # The baseline itself is covered one layer down: `MutableLLM.__init__` degrades to the
-            # offline fallback when the baseline provider won't build, so neither path can take the
-            # server down and leave `.model set` -- the repair interface -- unreachable.
+            # The baseline itself is covered one layer down: when a `fallback_llm` is configured
+            # (`app.py` always supplies one on this path), `MutableLLM.__init__` degrades to it
+            # rather than raising, so neither path can take the server down and leave `.model set`
+            # -- the repair interface -- unreachable. Without a fallback there is nothing to
+            # degrade to and the build error still propagates.
             try:
                 mutable.apply(persisted)
             except Exception:
