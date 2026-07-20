@@ -12,6 +12,7 @@ from infra.providers import (
     AnthropicLLM,
     GeminiLLM,
     MutableLLM,
+    anthropic_accepts_temperature,
     build_llm,
     from_anthropic_response,
     from_gemini_response,
@@ -270,6 +271,51 @@ async def test_anthropic_chat_uses_fake_client_without_network():
 
     assert fake_client.messages.create.call_args.kwargs["model"] == "claude-test"
     assert result.tool_calls == [ToolCall(id="toolu_1", name="roll_dice", arguments={"expression": "1d20"})]
+
+
+@pytest.mark.parametrize(
+    ("model", "accepted"),
+    [
+        ("claude-opus-4-6", True),
+        ("claude-sonnet-4-6", True),
+        ("claude-haiku-4-5", True),
+        ("claude-opus-4-7", False),
+        ("claude-opus-4-8", False),
+        ("claude-sonnet-5", False),
+        ("claude-fable-5", False),
+        ("claude-mythos-5", False),
+        ("CLAUDE-OPUS-4-8", False),  # case-insensitive
+        ("anthropic.claude-opus-4-8", False),  # Bedrock-prefixed id
+        ("", True),  # unknown/empty: don't silently drop a caller's temperature
+    ],
+)
+def test_anthropic_accepts_temperature_matches_models_that_removed_sampling_params(model, accepted):
+    assert anthropic_accepts_temperature(model) is accepted
+
+
+async def _anthropic_chat_kwargs(chat_model: str, temperature: float) -> dict:
+    fake_client = SimpleNamespace(messages=SimpleNamespace(create=AsyncMock()))
+    fake_client.messages.create.return_value = SimpleNamespace(content=[SimpleNamespace(type="text", text="ok")])
+    llm = AnthropicLLM(LLMSettings(api_key="sk-test", chat_model=chat_model), client=fake_client)
+
+    await llm.chat([{"role": "user", "content": "roll"}], temperature=temperature)
+
+    return fake_client.messages.create.call_args.kwargs
+
+
+async def test_anthropic_chat_drops_temperature_on_models_that_reject_it():
+    # Opus 4.7+ removed the sampling params -- sending one is a 400, so a caller
+    # that hand-tunes temperature (scripts/playtest.py, scripts/longrun.py) must
+    # not be able to break every request just by picking a newer model.
+    kwargs = await _anthropic_chat_kwargs("claude-opus-4-8", 0.9)
+
+    assert "temperature" not in kwargs
+
+
+async def test_anthropic_chat_keeps_temperature_on_models_that_accept_it():
+    kwargs = await _anthropic_chat_kwargs("claude-opus-4-6", 0.9)
+
+    assert kwargs["temperature"] == 0.9
 
 
 def test_sanitize_gemini_tool_parameters_removes_unsupported_fields_and_bad_numeric_enum():
