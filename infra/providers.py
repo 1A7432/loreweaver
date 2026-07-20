@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterable
 from inspect import Parameter, signature
 from typing import TYPE_CHECKING, Any
@@ -17,6 +18,8 @@ from infra.runtime_config import OVERRIDE_FIELDS, apply_overrides
 
 if TYPE_CHECKING:
     from infra.runtime_config import CredentialBook
+
+logger = logging.getLogger(__name__)
 
 PRESETS: dict[str, str] = {
     "openai": "",
@@ -266,7 +269,38 @@ class MutableLLM:
         self._fallback_llm = fallback_llm
         self._settings = settings  # shared/effective settings (mutated in place)
         self._base = settings.model_copy(deep=True)  # pristine baseline for reset
-        self._inner: LLMClient = self._call_builder(settings)
+        self._inner: LLMClient = self._build_initial(settings)
+
+    def _build_initial(self, settings: Settings) -> LLMClient:
+        """Build the boot-time inner client, degrading instead of bricking startup.
+
+        `is_llm_configured` only asks whether a key/credential is PRESENT, so a
+        provider that looks configured can still fail to construct: an optional SDK
+        that was never installed, a proxy env var httpx can't honor, a malformed
+        base_url. On the startup path there is no operator to report that to, and
+        raising takes the whole server down -- which also takes `.model set`, the
+        one interface designed to repair the config, down with it.
+
+        So when a fallback is configured, degrade to it and warn: the server comes
+        up offline and the keeper can fix the provider live. `reconfigure()` must
+        NOT share this behavior -- an operator running `.model set` is present to
+        read an error, and silently serving demo replies would be far worse than
+        refusing the switch. Without a fallback there is nothing to degrade to,
+        so the original failure propagates unchanged.
+        """
+        try:
+            return self._call_builder(settings)
+        except Exception:
+            if self._fallback_llm is None:
+                raise
+            logger.warning(
+                "LLM provider=%r model=%r failed to build at startup; serving the offline "
+                "fallback so the server stays reachable -- repair it with `.model set`",
+                settings.llm.provider,
+                settings.llm.chat_model,
+                exc_info=True,
+            )
+            return self._fallback_llm
 
     def _call_builder(self, settings: Settings) -> LLMClient:
         if self._fallback_llm is not None and not is_llm_configured(

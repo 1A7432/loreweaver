@@ -110,7 +110,13 @@ def build_services(
                     persisted.get("chat_model"),
                     exc_info=True,
                 )
-                mutable.apply({})  # restore the pristine env/Settings baseline
+                try:
+                    mutable.apply({})  # restore the pristine env/Settings baseline
+                except Exception:
+                    # The baseline is unbuildable too (MutableLLM already degraded to the
+                    # offline fallback at construction and warned). Restoring it can only
+                    # re-raise the same failure, and boot must survive that as well.
+                    logger.warning("Base LLM config is unusable too; staying on the offline fallback")
         llm = mutable
 
     # keep the deterministic-core crit toggle in sync with config

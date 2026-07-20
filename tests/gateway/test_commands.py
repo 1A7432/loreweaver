@@ -1847,6 +1847,51 @@ async def test_build_services_survives_an_unusable_persisted_llm_override(tmp_pa
     assert services.llm.applied[-1] == {}  # then rolled back to the pristine baseline
 
 
+async def test_build_services_survives_an_unbuildable_baseline_llm(tmp_path, monkeypatch):
+    """The blind spot the tests above left: `_raising_builder`'s failing provider was only
+    ever reached via `.model set`, so the BASELINE build -- the one that actually runs at
+    boot -- was never failed. A missing optional SDK there escaped `build_services()` and
+    killed the process, which also took `.model set`, the repair interface, down with it."""
+    from infra.runtime_config import RuntimeConfig
+    from infra.store import Store
+
+    db = str(tmp_path / "state.db")
+    # Unbuildable persisted override too, so the roll-back-to-baseline path fails as well.
+    await RuntimeConfig(Store(db)).set(provider="anthropic", chat_model="claude-x")
+
+    fallback = FakeLLM(script=[])
+    builds: list[str] = []
+    raising = _raising_builder("anthropic")
+
+    def _counting_builder(settings):
+        builds.append(settings.llm.provider or "")
+        return raising(settings)
+
+    def _mutable_with_raising_builder(settings, *, credentials=None, fallback_llm=None):
+        return MutableLLM(
+            settings,
+            builder=_counting_builder,
+            credentials=credentials,
+            fallback_llm=fallback_llm,
+        )
+
+    monkeypatch.setattr("agent.services.MutableLLM", _mutable_with_raising_builder)
+
+    # The BASELINE provider is the unbuildable one. api_key is set so the build is actually
+    # attempted -- without it `is_llm_configured` short-circuits to the fallback and this
+    # test would pass without exercising the fix at all.
+    services = build_services(
+        Settings(llm=LLMSettings(provider="anthropic", chat_model="claude-x", api_key="sk-test")),
+        fallback_llm=fallback,
+        embeddings=FakeEmbeddings(8),
+        db_path=db,
+    )
+
+    assert builds, "the builder was never called -- is_llm_configured short-circuited"
+    assert services.llm.inner is fallback  # degraded, not dead
+    assert services.llm.using_fallback is True
+
+
 # ---------------------------------------------------------------------------
 # F4/F5/F6 — malformed dice-ish input degrades to a localized notice, never a crash
 # ---------------------------------------------------------------------------
