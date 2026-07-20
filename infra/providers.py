@@ -349,6 +349,25 @@ class MutableLLM:
         return describe_settings(self._settings.llm)
 
 
+# Claude models that REMOVED the sampling parameters (`temperature`/`top_p`/`top_k`):
+# sending one is a hard 400, not a silently-ignored field. Callers that hand-tune
+# temperature (e.g. the eval harness generating simulated player turns) would take
+# down every request, so the adapter drops it for these models instead. Prefix match
+# so dated snapshots and provider-prefixed ids (Bedrock's `anthropic.`) are covered.
+ANTHROPIC_NO_SAMPLING_PREFIXES: tuple[str, ...] = (
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-sonnet-5",
+    "claude-fable-5",
+    "claude-mythos-5",
+)
+
+
+def anthropic_accepts_temperature(model: str) -> bool:
+    """False for Claude models that reject `temperature` outright (HTTP 400)."""
+    return not (model or "").lower().removeprefix("anthropic.").startswith(ANTHROPIC_NO_SAMPLING_PREFIXES)
+
+
 class AnthropicLLM:
     """Anthropic Messages API adapter for the repo's LLMClient protocol."""
 
@@ -389,7 +408,7 @@ class AnthropicLLM:
         if tool_choice is not None:
             kwargs["tool_choice"] = _to_anthropic_tool_choice(tool_choice)
         effective_temperature = self._settings.temperature if temperature is None else temperature
-        if effective_temperature is not None:
+        if effective_temperature is not None and anthropic_accepts_temperature(kwargs["model"]):
             kwargs["temperature"] = effective_temperature
 
         response = await self._client.messages.create(**kwargs)
