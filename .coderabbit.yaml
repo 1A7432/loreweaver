@@ -1,12 +1,16 @@
 # CodeRabbit config — free AI review for this public repo (install: github.com/apps/coderabbitai).
-# Complements the Codex CI reviewer: CodeRabbit covers generic quality breadth; the Codex job
-# enforces this repo's iron rules in depth. Schema: https://docs.coderabbit.ai/reference/yaml-template
+# The Codex CI reviewer it used to complement is gone; the Claude Code review lane
+# (.github/workflows/claude-code-review.yml) now covers the iron rules in depth, and CodeRabbit
+# covers generic quality breadth. Schema: https://docs.coderabbit.ai/reference/yaml-template
 language: "zh-CN"
 reviews:
   profile: "chill"
   high_level_summary: true
   auto_review:
-    enabled: true
+    # MUTED while the Claude Code review lane is brought up, so two bots don't review the same PR
+    # and contradict each other. Set back to true to re-enable -- do NOT just comment this line
+    # out, the schema default is true. On-demand reviews still work: comment `@coderabbitai review`.
+    enabled: false
     drafts: false
   path_instructions:
     - path: "core/**"
