@@ -46,8 +46,12 @@ jobs:
           # they report ("I'll wait for the notification rather than continuing to poll").
           # Interactively that works; in CI nothing ever wakes it, so the session closes with
           # subtype=success having never reached "validation and the final summary".
+          # `--comment` is what posts to the PR. Without it the plugin runs the entire review
+          # and prints the report as terminal output only ("No --comment argument was supplied
+          # with this invocation, so per the review process no comment was posted") -- a green
+          # job, a real review, and a silent PR.
           prompt: |
-            /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+            /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }} --comment
 
             You are running non-interactively in CI. Nothing will wake you up: if you end your
             turn waiting on a background agent, the session closes and the review is lost. Keep
