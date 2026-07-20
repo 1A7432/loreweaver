@@ -68,9 +68,6 @@ jobs:
           # Always surface the review, so "clean diff" and "silently broken" stop looking
           # identical -- the failure mode that made this take four runs to diagnose.
           display_report: true
-          # TEMPORARY: dumps the full transcript into the CI log so a run that still posts
-          # nothing shows where it stopped. Remove once the lane is confirmed working.
-          show_full_output: true
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
 
