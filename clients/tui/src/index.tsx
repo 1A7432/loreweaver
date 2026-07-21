@@ -2,8 +2,10 @@
 import { createCliRenderer } from "@opentui/core"
 import { createRoot } from "@opentui/react"
 import App, { type AppPrefill } from "./App"
+import { createClient } from "./client"
 import { forgetServer, loadConnectMemory, rememberServer, saveConnectMemory, type SavedServer } from "./connectMemory"
 import { defaultTuiLocale } from "./i18n"
+import { clientUpdateCommand, triggerServerUpdate } from "./update"
 
 interface Args {
   command?: string
@@ -11,6 +13,8 @@ interface Args {
   key?: string
   name?: string
   solo?: boolean
+  clientOnly?: boolean
+  serverOnly?: boolean
 }
 
 function parseArgs(argv: string[]): Args {
@@ -23,6 +27,8 @@ function parseArgs(argv: string[]): Args {
     else if (part === "--key") args.key = rest.shift()
     else if (part === "--name") args.name = rest.shift()
     else if (part === "--solo") args.solo = true
+    else if (part === "--client-only") args.clientOnly = true
+    else if (part === "--server-only") args.serverOnly = true
   }
   return args
 }
@@ -32,7 +38,9 @@ function usage(): string {
     "Usage:",
     "  loreweaver                    # launch the lobby (connect screen)",
     "  loreweaver connect --host <p2p-ticket> --key <k> [--name N]   # prefilled",
-    "  loreweaver update             # re-fetch + reinstall the latest client",
+    "  loreweaver update             # reinstall the latest client AND update your server",
+    "  loreweaver update --client-only   # just the client",
+    "  loreweaver update --server-only   # just the saved server",
     "",
     "Local server:",
     "  click 'Host locally & play' on the connect screen (or: python -m app --serve)",
@@ -47,6 +55,40 @@ const args = parseArgs(Bun.argv.slice(2))
 if (args.command === "help" || args.command === "--help" || args.command === "-h") {
   console.log(usage())
   process.exit(0)
+}
+
+if (args.command === "update") {
+  // `loreweaver update` reinstalls the client and, by default, also updates the saved
+  // server (keeper key required) so the two stay in step — the more natural one-liner.
+  let ok = true
+  if (!args.serverOnly) {
+    console.log("Updating client…")
+    const proc = Bun.spawn(clientUpdateCommand(), { stdout: "inherit", stderr: "inherit" })
+    const code = await proc.exited
+    ok = code === 0
+    console.log(ok ? "Client updated." : `Client update exited ${code}.`)
+  }
+  if (!args.clientOnly) {
+    const mem = await loadConnectMemory()
+    const host = args.host ?? mem.host
+    const key = args.key ?? mem.key
+    if (!host || !key) {
+      console.log("No saved server to update — connect once first, or pass --host/--key.")
+    } else {
+      console.log("Updating server…")
+      const outcome = await triggerServerUpdate(createClient(), host, key, args.name ?? mem.name)
+      const message: Record<string, string> = {
+        restarting: "Server is updating and will restart.",
+        failed: "Server update command failed — check the server logs.",
+        unsupported: "Server self-update isn't enabled (set TRPG_TUI__UPDATE_COMMAND on it), or your key isn't a keeper.",
+        "no-server": "No saved server to update.",
+        error: "Could not reach the server to update it.",
+      }
+      console.log(message[outcome] ?? outcome)
+      if (outcome === "failed" || outcome === "error") ok = false
+    }
+  }
+  process.exit(ok ? 0 : 1)
 }
 
 const remembered = await loadConnectMemory()

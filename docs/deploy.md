@@ -78,6 +78,10 @@ then the process **re-execs itself into the new code** (same PID, so the Iroh ti
 unchanged and no `systemctl restart` is needed — it works with the `Restart=on-failure`
 unit above). Clients briefly disconnect and reconnect.
 
+`loreweaver update` does the same server update by default after reinstalling the client
+(using your saved keeper connection), so one command keeps both in step —
+`loreweaver update --client-only` skips the server.
+
 Security: the command is yours, from server-side config — a client can only ask the server
 to run *its own* configured command, never supply one. Leave `TRPG_TUI__UPDATE_COMMAND`
 blank to hide the feature entirely. Don't point it at anything you wouldn't run yourself;
