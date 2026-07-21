@@ -9,6 +9,8 @@ import {
   type AdminKeyPurpose,
   type AdminListModelsFrame,
   type AdminMintKeyFrame,
+  type AdminResetRoomFrame,
+  type AdminResetScope,
   type AdminSetImagegenFrame,
   type AdminSetModelFrame,
   type AdminUpdateKeyFrame,
@@ -384,8 +386,10 @@ export class WsClient {
     this.send(frame)
   }
 
-  adminResetRoom(room: string): void {
-    this.send({ type: FrameType.AdminResetRoom, room })
+  adminResetRoom(room: string, scope?: AdminResetScope): void {
+    const frame: AdminResetRoomFrame = { type: FrameType.AdminResetRoom, room }
+    if (scope) frame.scope = scope
+    this.send(frame)
   }
 
   // ---- v1.1 additive: Layer B.4a plugin management (KP skills / rule systems / forge) ----

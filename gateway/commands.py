@@ -203,6 +203,39 @@ _ROOM_OPEN_WORDS = {"open", "new", "create", "开", "开房", "開", "開房"}
 _ROOM_LINK_WORDS = {"link", "join", "bind", "连", "連", "加入"}
 _RESET_CONFIRM_WORDS = {"confirm", "yes", "确认", "確認"}
 _RESET_CONFIRM_WINDOW_SECONDS = 120
+# `.reset [scope]` — how much of the campaign to wipe (see net.room_backup.reset_room_state).
+# Bare `.reset` is the lightest "story only" scope; the wider scopes are opt-in words.
+_RESET_SCOPE_WORDS = {
+    "": "story",
+    "story": "story",
+    "剧情": "story",
+    "劇情": "story",
+    "char": "chars",
+    "chars": "chars",
+    "character": "chars",
+    "characters": "chars",
+    "角色": "chars",
+    "换角色": "chars",
+    "換角色": "chars",
+    "all": "all",
+    "full": "all",
+    "everything": "all",
+    "全部": "all",
+    "全清": "all",
+}
+_RESET_SCOPES = ("story", "chars", "all")
+
+
+def _parse_reset_pending(raw: str | None) -> tuple[float, str | None]:
+    """Decode the `reset_pending` marker (`"<epoch>:<scope>"`) into (armed_at, scope)."""
+    if not raw:
+        return 0.0, None
+    ts, _, scope = raw.partition(":")
+    try:
+        armed_at = float(ts)
+    except ValueError:
+        return 0.0, None
+    return (armed_at, scope) if scope in _RESET_SCOPES else (0.0, None)
 _ROOM_LEAVE_WORDS = {"leave", "unbind", "close", "离开", "離開", "解绑", "解綁"}
 _ROOM_SHOW_WORDS = {"", "show", "status", "info", "查看"}
 
@@ -1224,37 +1257,36 @@ class CommandRouter:
         return ctx.i18n.t("rooms.show.result", session=binding, online=online, members=members_text)
 
     async def cmd_reset(self, ctx: CommandCtx) -> str:
-        """`.reset` then `.reset confirm` — wipe this room's campaign state
-        (characters, story history, module, lore, media) so the table can start
-        over in place after a dead campaign. Keystore keys, room bindings and
-        live connections all survive, so nobody has to re-provision the server
-        or re-join. There is NO automatic backup: the wipe is irreversible,
-        hence the keeper gate plus a persisted two-step confirm."""
+        """`.reset [chars|all]` then `.reset confirm` — restart the campaign in
+        place. `.reset` clears only the story/progress (keeping characters, the
+        module, lore and media); `.reset chars` also rolls new characters (keeping
+        the module); `.reset all` erases everything. Room settings (language, house
+        rules) always survive, as do keys, bindings and connections. There is NO
+        backup, hence the keeper gate plus a persisted two-step confirm."""
         store = ctx.services.store
         if not await _keeper_still_authorized(ctx.raw_ctx, ctx.chat_key, store):
             return ctx.i18n.t("commands.reset.denied")
         pending_key = f"reset_pending.{ctx.chat_key}"
-        if ctx.args.strip().casefold() in _RESET_CONFIRM_WORDS:
-            armed_raw = await store.get(user_key="", store_key=pending_key)
-            try:
-                armed_at = float(armed_raw) if armed_raw else 0.0
-            except ValueError:
-                armed_at = 0.0
-            if time.time() - armed_at <= _RESET_CONFIRM_WINDOW_SECONDS:
+        arg = ctx.args.strip().casefold()
+        if arg in _RESET_CONFIRM_WORDS:
+            armed_at, armed_scope = _parse_reset_pending(
+                await store.get(user_key="", store_key=pending_key)
+            )
+            if armed_scope is not None and time.time() - armed_at <= _RESET_CONFIRM_WINDOW_SECONDS:
                 # The reset itself lives beside the backup/delete machinery so the
                 # room-state key vocabulary stays single-sourced (same gateway->net
                 # seam as gateway/turn.py's `net.state` import).
                 from net.room_backup import reset_room_state
 
                 try:
-                    result = await reset_room_state(ctx.services, ctx.chat_key)
+                    result = await reset_room_state(ctx.services, ctx.chat_key, scope=armed_scope)
                 except Exception:
                     logger.exception("campaign reset failed for %s", ctx.chat_key)
                     return ctx.i18n.t("commands.reset.failed")
                 await store.delete_rows([("", pending_key)])
-                # Push a fresh (now-empty) state frame flagged reset=True so every
-                # connected client refreshes its info panel AND drops its stale local
-                # chat scrollback at once, instead of waiting for the next turn.
+                # Push a fresh state frame flagged reset=True so every connected client
+                # refreshes its info panel AND drops its stale local chat scrollback at
+                # once, instead of waiting for the next turn.
                 if self.hub is not None:
                     await publish_state(
                         self.hub,
@@ -1269,13 +1301,20 @@ class CommandRouter:
                     )
                 return ctx.i18n.t(
                     "commands.reset.done",
+                    what=ctx.i18n.t(f"commands.reset.scope.{armed_scope}"),
                     rows=int(result.get("store_rows") or 0),
-                    vectors=int(result.get("vector_points") or 0),
-                    media=int(result.get("media_files") or 0),
                 )
-        # Bare `.reset` (or a stale/unarmed confirm) arms the pending window.
-        await store.set(user_key="", store_key=pending_key, value=str(time.time()))
-        return ctx.i18n.t("commands.reset.armed", seconds=_RESET_CONFIRM_WINDOW_SECONDS)
+            return ctx.i18n.t("commands.reset.usage")
+        # Bare `.reset` or `.reset <scope>` arms the pending window with that scope.
+        scope = _RESET_SCOPE_WORDS.get(arg)
+        if scope is None:
+            return ctx.i18n.t("commands.reset.usage")
+        await store.set(user_key="", store_key=pending_key, value=f"{time.time()}:{scope}")
+        return ctx.i18n.t(
+            "commands.reset.armed",
+            what=ctx.i18n.t(f"commands.reset.scope.{scope}"),
+            seconds=_RESET_CONFIRM_WINDOW_SECONDS,
+        )
 
     async def cmd_party(self, ctx: CommandCtx) -> str:
         """`.party [add <name> [| persona] | act <name> [hint] | auto on|off | remove <name>]`

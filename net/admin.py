@@ -63,6 +63,7 @@ from infra.providers import (
 )
 from net.keystore import Keystore
 from net.room_backup import (
+    RESET_SCOPES,
     chat_key_for_room,
     delete_room_data,
     export_room,
@@ -902,8 +903,11 @@ async def _reset_room(
         return _error("bad_request", i18n)
     if room != caller_room:  # a keeper can only reset its OWN room
         return _error("forbidden", i18n)
+    scope = str(frame.get("scope") or "story").strip().casefold()
+    if scope not in RESET_SCOPES:
+        return _error("bad_request", i18n)
     try:
-        result = await reset_room_state(services, chat_key_for_room(room))
+        result = await reset_room_state(services, chat_key_for_room(room), scope=scope)
     except Exception:
         return _error("op_failed", i18n)
     result["room"] = room
@@ -923,6 +927,9 @@ def _room_op_frame(action: str, result: dict[str, Any]) -> dict[str, Any]:
     path = str(result.get("path") or "")
     if path:
         frame["path"] = path
+    scope = result.get("scope")
+    if scope:
+        frame["scope"] = str(scope)
     return frame
 
 

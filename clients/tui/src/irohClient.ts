@@ -11,6 +11,8 @@ import {
   type AdminImportRoomFrame,
   type AdminListModelsFrame,
   type AdminMintKeyFrame,
+  type AdminResetRoomFrame,
+  type AdminResetScope,
   type AdminSetImagegenFrame,
   type AdminSetModelFrame,
   type AdminUpdateKeyFrame,
@@ -435,8 +437,10 @@ export class IrohClient implements AppClient {
     this.sendFrame(frame)
   }
 
-  adminResetRoom(room: string): void {
-    this.sendFrame({ type: FrameType.AdminResetRoom, room })
+  adminResetRoom(room: string, scope?: AdminResetScope): void {
+    const frame: AdminResetRoomFrame = { type: FrameType.AdminResetRoom, room }
+    if (scope) frame.scope = scope
+    this.sendFrame(frame)
   }
 
   // ---- v1.1 additive: Layer B.4a plugin management, identical wire to WsClient ------

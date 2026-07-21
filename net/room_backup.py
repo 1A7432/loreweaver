@@ -96,6 +96,76 @@ _PREFIX_BASES = {
     "worldbook",
 }
 
+# --- `.reset` scope groups -----------------------------------------------------
+# A scoped in-place restart, unlike backup/delete, partitions the room's own state
+# rather than taking all of it. Room SETTINGS (language, house rules, enabled skills,
+# media/bot toggles) are configuration, not campaign content, so they survive every
+# reset level and appear in none of the groups below.
+RESET_SCOPES = ("story", "chars", "all")
+
+# `.reset` (lightest): a fresh narrative session — characters, module, lore and media
+# are all kept. (`initiative_meta` and the `forge_module_*` ownership keys are wiped
+# here/at `all` even though the backup allowlist above still omits them.)
+_RESET_STORY_EXACT = frozenset(
+    {
+        "chat_history",
+        "kp_notes",
+        "initiative",
+        "initiative_meta",
+        "game_clock",
+        "session_recap",
+        "session_recap_debug",
+        "session_recap_turns",
+        "relationships",
+        "usage_stats",
+        "npc_list",
+    }
+)
+_RESET_STORY_PREFIX = frozenset({"battle_report", "npc", "session_history", "session_name", "session_record"})
+# `.reset chars`: also drop the party's characters, so fresh investigators face the SAME module.
+_RESET_CHARS_EXACT = frozenset({"active_character", "characters_list", "party_roster", "party_auto"})
+_RESET_CHARS_PREFIX = frozenset({"characters"})
+# `.reset all`: also drop the module, world lore and media (KV rows here; vectors + blobs below).
+_RESET_ALL_EXACT = frozenset(
+    {
+        "module_catalog",
+        "module_fulltext",
+        "module_init_error",
+        "module_init_status",
+        "module_keeper_pool",
+        "module_player_pool",
+        "media_history",
+        "audio_library",
+        "audio_state",
+        "worldbook_index",
+        "forge_module_last",
+    }
+)
+_RESET_ALL_PREFIX = frozenset({"worldbook", "forge_module_owner"})
+
+
+def _reset_bases(scope: str) -> tuple[set[str], set[str]]:
+    """Return the (exact, prefix) store-key bases wiped at ``scope`` (cumulative)."""
+    exact = set(_RESET_STORY_EXACT)
+    prefix = set(_RESET_STORY_PREFIX)
+    if scope in ("chars", "all"):
+        exact |= _RESET_CHARS_EXACT
+        prefix |= _RESET_CHARS_PREFIX
+    if scope == "all":
+        exact |= _RESET_ALL_EXACT
+        prefix |= _RESET_ALL_PREFIX
+    return exact, prefix
+
+
+def _reset_row_matches(store_key: str, chat_key: str, exact: set[str], prefix: set[str]) -> bool:
+    for base in exact:
+        if store_key == f"{base}.{chat_key}":
+            return True
+    for base in prefix:
+        if store_key.startswith(f"{base}.{chat_key}."):
+            return True
+    return False
+
 # Scope note: these allowlists cover DURABLE, chat_key-scoped campaign state. Adapter-transient
 # runtime state (e.g. the QQ adapter's `qq_hint_sent.{group_id}` / `qq_group_mode.{group_id}`,
 # keyed by the raw platform channel id, not the room chat_key) is deliberately NOT captured — it
@@ -967,26 +1037,43 @@ def _discard_stage(root: Path) -> None:
         logger.exception("failed to remove completed room-backup transaction directory")
 
 
-async def reset_room_state(services: Services, chat_key: str) -> dict[str, Any]:
-    """Wipe one room's campaign state (KV rows, vector points, media blobs) while
-    keeping keystore keys, channel/keeper bindings and live connections intact.
+async def reset_room_state(services: Services, chat_key: str, *, scope: str = "story") -> dict[str, Any]:
+    """Wipe part of one room's campaign state in place, keeping keystore keys,
+    channel/keeper bindings and live connections. ``scope`` chooses how much:
 
-    This is the "start a fresh campaign in the same room" operation behind the
-    `.reset` command: unlike ``delete_room_data`` it takes no backup and never
-    touches the keystore, so a table can re-roll characters and load a new module
-    without re-provisioning the server. Each leg is a plain wipe with nothing to
-    restore, so no staging is needed: if a later leg fails, re-running the reset
-    clears whatever remains.
+    - ``"story"`` (default): the narrative session only — chat, session/battle
+      records, KP notes, initiative, clock, recap, relationships and in-play NPCs.
+      Characters, the loaded module, world lore and media are KEPT, so the same
+      table replays the same scenario from a clean slate.
+    - ``"chars"``: the above PLUS the party's characters, so fresh investigators
+      face the SAME module.
+    - ``"all"``: everything above PLUS the module, world lore and media (KV rows,
+      document vectors and blobs) — a brand-new campaign in the same room.
+
+    Room settings (language, house rules, enabled skills, media/bot toggles) survive
+    every level. Channel->session bindings survive too (none of the groups name
+    ``bound_room``). Each leg is a plain wipe with nothing to restore, so re-running
+    the reset simply clears whatever remained after a partial failure.
     """
-    rows = await room_rows(services, chat_key, enforce_limits=False)
-    # Channel->session bindings survive a reset: the room itself lives on, so
-    # external channels linked into it (and every connected member) stay wired.
-    rows = [row for row in rows if not str(row.get("store_key") or "").startswith("bound_room.")]
-    deleted_rows = await _atomic_store_update(services, delete_rows=rows)
-    deleted_vectors = await _delete_room_vectors(services, chat_key)
-    deleted_media = await _media_store(services).delete_room(chat_key)
+    if scope not in RESET_SCOPES:
+        raise ValueError(f"unknown reset scope: {scope}")  # i18n-exempt: internal guard
+    exact, prefix = _reset_bases(scope)
+    prefixes = [f"{base}.{chat_key}" for base in exact]
+    prefixes.extend(f"{base}.{chat_key}." for base in prefix)
+    rows = await services.store.list_rows(store_key_prefixes=prefixes)
+    targets = [
+        row for row in rows if _reset_row_matches(str(row.get("store_key") or ""), chat_key, exact, prefix)
+    ]
+    deleted_rows = await _atomic_store_update(services, delete_rows=targets)
+    deleted_vectors = 0
+    deleted_media = 0
+    if scope == "all":
+        # Module document chunks and uploaded media blobs only a full reset clears.
+        deleted_vectors = await _delete_room_vectors(services, chat_key)
+        deleted_media = await _media_store(services).delete_room(chat_key)
     return {
         "chat_key": chat_key,
+        "scope": scope,
         "store_rows": deleted_rows,
         "vector_points": deleted_vectors,
         "media_files": deleted_media,

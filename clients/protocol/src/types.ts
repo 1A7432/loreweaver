@@ -457,12 +457,20 @@ export interface AdminDeleteRoomDataFrame {
   path?: string
 }
 
-// In-place campaign restart: wipe this room's campaign state (characters, story,
-// module, lore, media) while keeping keystore keys and live connections — no
-// backup, no key removal. Contrast AdminDeleteRoomData, which backs up and evicts.
+// Scope of an in-place campaign restart (see AdminResetRoomFrame):
+//  - "story": clear the story/progress only (keep characters, module, lore, media)
+//  - "chars": also roll new characters (keep the module)
+//  - "all":   erase everything (characters, module, lore, media, story)
+// Room settings (language, house rules) and connections survive every scope.
+export type AdminResetScope = "story" | "chars" | "all"
+
+// In-place campaign restart: wipe part of this room's campaign state while keeping
+// keystore keys and live connections — no backup, no key removal. Contrast
+// AdminDeleteRoomData, which backs up and evicts.
 export interface AdminResetRoomFrame {
   type: typeof FrameType.AdminResetRoom
   room: string
+  scope?: AdminResetScope
 }
 
 export interface AdminConfigFrame {
@@ -532,6 +540,8 @@ export interface AdminRoomOpFrame {
   store_rows: number
   vector_points: number
   media_files?: number
+  // Present on a "reset" op: which scope was applied (see AdminResetScope).
+  scope?: AdminResetScope
 }
 
 export interface AdminErrorFrame {

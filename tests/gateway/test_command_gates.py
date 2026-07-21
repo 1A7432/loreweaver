@@ -256,7 +256,7 @@ async def test_reset_confirm_still_works_under_arg_cap(tmp_path):
     armed = await router.dispatch(ctx, ".reset")
     assert armed is not None and "reset confirm" in armed
     done = await router.dispatch(ctx, ".reset confirm")
-    assert done is not None and done.startswith("Campaign reset")
+    assert done is not None and done.startswith("Reset complete")
 
 
 def test_parse_sheet_assignments_is_linear_on_pathological_input():

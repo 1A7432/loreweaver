@@ -6,6 +6,7 @@ import {
   stripControlChars,
   type AdminKeyPurpose,
   type AdminKeyInfo,
+  type AdminResetScope,
   type MintedKey,
   type PlayerRole,
   type ServerFrame,
@@ -37,7 +38,7 @@ export interface KeeperKeysClient {
   adminExportRoom(room: string, path?: string): void
   adminImportRoom(path: string, room?: string): void
   adminDeleteRoomData(room: string, backup?: boolean, path?: string): void
-  adminResetRoom(room: string): void
+  adminResetRoom(room: string, scope?: AdminResetScope): void
 }
 
 export interface KeeperKeysProps {
@@ -65,13 +66,19 @@ function roleOptions(locale: string): SelectOption[] {
 }
 
 function describeRoomOp(frame: Extract<ServerFrame, { type: typeof FrameType.AdminRoomOp }>, locale: string): string {
+  const resetLabel =
+    frame.scope === "chars"
+      ? tt(locale, "keys.reset.chars")
+      : frame.scope === "all"
+        ? tt(locale, "keys.reset.all")
+        : tt(locale, "keys.reset.story")
   const action =
     frame.action === "export"
       ? tt(locale, "keys.op.export")
       : frame.action === "import"
         ? tt(locale, "keys.op.import")
         : frame.action === "reset"
-          ? tt(locale, "keys.op.reset")
+          ? `${tt(locale, "keys.op.reset")} (${resetLabel})`
           : tt(locale, "keys.op.delete")
   const path = frame.path ? ` · ${frame.path}` : ""
   return tt(locale, "keys.op.summary", {
@@ -98,7 +105,9 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
   const [roleIndex, setRoleIndex] = useState(0)
   const [selectedKey, setSelectedKey] = useState(0)
   const [focused, setFocused] = useState<Field>("name")
-  const [confirming, setConfirming] = useState<"key" | "room" | "roomData" | "roomReset" | null>(null)
+  const [confirming, setConfirming] = useState<
+    "key" | "room" | "roomData" | "resetStory" | "resetChars" | "resetAll" | null
+  >(null)
 
   // Mirror the text fields into refs so submit always reads the latest typed value
   // regardless of render timing (same reason ConnectScreen/CharacterScreen do it).
@@ -166,7 +175,10 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
   // Destructive ops (delete invite / room access / full room) require a SECOND click to fire —
   // a single misclick can't irreversibly wipe a room's data or keys. Arming a different
   // destructive button, or any non-destructive action below, resets the pending confirmation.
-  const armOrRun = (which: "key" | "room" | "roomData" | "roomReset", run: () => void) => {
+  const armOrRun = (
+    which: "key" | "room" | "roomData" | "resetStory" | "resetChars" | "resetAll",
+    run: () => void,
+  ) => {
     if (confirming === which) {
       setConfirming(null)
       run()
@@ -222,12 +234,13 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
     client.adminDeleteRoomData(roomValue, true, pathRef.current.trim() || undefined)
   }
 
-  // Restart the campaign in place: wipe room state, keep keys/connections. No
-  // backup (and no eviction), so unlike deleteRoomData the keeper stays connected.
-  const resetRoomData = () => {
+  // Restart the campaign in place at one of three scopes: story only / new
+  // characters / everything. Keeps keys + connections (no eviction), so unlike
+  // deleteRoomData the keeper stays connected. Room settings always survive.
+  const resetRoomData = (scope: AdminResetScope) => {
     const roomValue = targetRoom().trim()
     if (!roomValue) return
-    client.adminResetRoom(roomValue)
+    client.adminResetRoom(roomValue, scope)
   }
 
   // Scoped to this screen and further scoped by focus: Tab cycles fields, Esc goes
@@ -429,9 +442,17 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
                 not interleaved with the neutral ones; each still confirms on a second click.
                 Restart-in-place leads: it keeps keys/connections (no re-provisioning), so it is
                 the common "my campaign died, start over" action, distinct from the two below
-                which destroy access/keys. */}
-            <box marginTop={1} onMouseDown={() => armOrRun("roomReset", resetRoomData)} backgroundColor={theme.fumble} paddingX={1}>
-              <text fg={theme.bg}>{tt(locale, "keys.resetRoom")}{confirming === "roomReset" ? tt(locale, "keys.confirm") : ""}</text>
+                which destroy access/keys. Its three scopes share one row to stay compact. */}
+            <box flexDirection="row" marginTop={1}>
+              <box onMouseDown={() => armOrRun("resetStory", () => resetRoomData("story"))} backgroundColor={theme.fumble} paddingX={1}>
+                <text fg={theme.bg}>{tt(locale, "keys.reset.verb")}{tt(locale, "keys.reset.story")}{confirming === "resetStory" ? tt(locale, "keys.confirm") : ""}</text>
+              </box>
+              <box marginLeft={1} onMouseDown={() => armOrRun("resetChars", () => resetRoomData("chars"))} backgroundColor={theme.fumble} paddingX={1}>
+                <text fg={theme.bg}>{tt(locale, "keys.reset.chars")}{confirming === "resetChars" ? tt(locale, "keys.confirm") : ""}</text>
+              </box>
+              <box marginLeft={1} onMouseDown={() => armOrRun("resetAll", () => resetRoomData("all"))} backgroundColor={theme.fumble} paddingX={1}>
+                <text fg={theme.bg}>{tt(locale, "keys.reset.all")}{confirming === "resetAll" ? tt(locale, "keys.confirm") : ""}</text>
+              </box>
             </box>
             <box onMouseDown={() => armOrRun("room", deleteRoom)} backgroundColor={theme.fumble} paddingX={1}>
               <text fg={theme.bg}>{tt(locale, "keys.deleteAccess")}{confirming === "room" ? tt(locale, "keys.confirm") : ""}</text>
