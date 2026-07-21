@@ -384,6 +384,10 @@ export class WsClient {
     this.send(frame)
   }
 
+  adminResetRoom(room: string): void {
+    this.send({ type: FrameType.AdminResetRoom, room })
+  }
+
   // ---- v1.1 additive: Layer B.4a plugin management (KP skills / rule systems / forge) ----
 
   adminListSkills(): void {

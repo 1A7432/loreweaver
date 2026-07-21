@@ -152,6 +152,8 @@ role = "player"  # 或 "keeper"；默认为 "player"
   `{type:"admin_import_room", path:string, room?:string}`
 - `admin_delete_room_data` — 删除房间的访问密钥、房间作用域 KV 状态、文档向量和世界书向量。`backup` 默认为 `true`；启用备份时，删除仅在备份写入成功后进行：
   `{type:"admin_delete_room_data", room:string, backup?:boolean, path?:string}`
+- `admin_reset_room` — 原地重开战役：清空房间的战役状态(房间作用域 KV、文档向量、世界书向量、媒体)，同时保留密钥库钥匙、频道/守秘人绑定与在线连接，让本桌无需重新配置即可重开。不做备份，也不驱逐任何成员(与 `admin_delete_room_data` 相反)。仅守秘人可用，且限于调用者自己的房间：
+  `{type:"admin_reset_room", room:string}`
 
 服务器 → 客户端：
 
@@ -165,7 +167,7 @@ role = "player"  # 或 "keeper"；默认为 "player"
 - `admin_keys` — 仅含调用者自己房间的 key 名单；每个条目的 key 值被遮蔽。一个 `mint` 请求额外在 `minted` 下返回新 key 一次明文（供 Keeper 复制）：
   `{type:"admin_keys", keys:[{id:string, key_masked:string, room:string, name:string, role:"player"|"keeper"}], minted?:{key:string, room:string, name:string, role:"player"|"keeper"}}`
 - `admin_room_op` — 导出/导入/完全删除房间操作的结果：
-  `{type:"admin_room_op", action:"export"|"import"|"delete", room:string, path?:string, keys:number, store_rows:number, vector_points:number, media_files?:number}`
+  `{type:"admin_room_op", action:"export"|"import"|"delete"|"reset", room:string, path?:string, keys:number, store_rows:number, vector_points:number, media_files?:number}`
 - `admin_error` — 本地化的故障通知（不关闭连接）：
   `{type:"admin_error", code:"forbidden"|"unknown_provider"|"bad_request"|"set_failed"|"not_found"|"op_failed", message?:string}`
 

@@ -46,6 +46,7 @@ class MockClient implements AppClient {
   adminExportRoom(_room: string, _path?: string): void {}
   adminImportRoom(_path: string, _room?: string): void {}
   adminDeleteRoomData(_room: string, _backup?: boolean, _path?: string): void {}
+  adminResetRoom(_room: string): void {}
   adminListSkills(): void {
     this.listSkillsCalls += 1
   }

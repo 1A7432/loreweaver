@@ -435,6 +435,10 @@ export class IrohClient implements AppClient {
     this.sendFrame(frame)
   }
 
+  adminResetRoom(room: string): void {
+    this.sendFrame({ type: FrameType.AdminResetRoom, room })
+  }
+
   // ---- v1.1 additive: Layer B.4a plugin management, identical wire to WsClient ------
   adminListSkills(): void {
     this.sendFrame({ type: FrameType.AdminListSkills })

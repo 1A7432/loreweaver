@@ -35,6 +35,7 @@ class MockClient implements AppClient {
   adminExportRoom(): void {}
   adminImportRoom(): void {}
   adminDeleteRoomData(): void {}
+  adminResetRoom(): void {}
   adminListSkills(): void {}
   adminEnableSkill(): void {}
   adminListRules(): void {}

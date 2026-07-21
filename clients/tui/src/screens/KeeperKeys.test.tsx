@@ -29,6 +29,7 @@ class MockClient implements AppClient {
   exportRoomCalls: Array<[string, string | undefined]> = []
   importRoomCalls: Array<[string, string | undefined]> = []
   deleteRoomDataCalls: Array<[string, boolean | undefined, string | undefined]> = []
+  resetRoomCalls: string[] = []
   private listeners = new Set<(frame: ServerFrame) => void>()
 
   connect(url: string): Promise<void> {
@@ -83,6 +84,9 @@ class MockClient implements AppClient {
   }
   adminDeleteRoomData(room: string, backup?: boolean, path?: string): void {
     this.deleteRoomDataCalls.push([room, backup, path])
+  }
+  adminResetRoom(room: string): void {
+    this.resetRoomCalls.push(room)
   }
   adminListSkills(): void {}
   adminEnableSkill(_id: string, _on: boolean): void {}
@@ -592,6 +596,20 @@ describe("KeeperKeys", () => {
     })
     await harness.flush()
     expect(client.importRoomCalls).toContainEqual(["/tmp/shuxue.json", undefined])
+
+    const resetY = lines.findIndex((line) => line.includes("重开战役"))
+    expect(resetY).toBeGreaterThan(0)
+    // Reset is its own second-click-to-confirm control and sends no backup/keys.
+    await act(async () => {
+      await harness.mockMouse.click(CLICK_X, resetY)
+    })
+    await harness.flush()
+    expect(client.resetRoomCalls).toEqual([]) // armed, not yet fired
+    await act(async () => {
+      await harness.mockMouse.click(CLICK_X, resetY)
+    })
+    await harness.flush()
+    expect(client.resetRoomCalls).toEqual(["shuxue"])
 
     const deleteY = lines.findIndex((line) => line.includes("完整删除房间"))
     expect(deleteY).toBeGreaterThan(0)

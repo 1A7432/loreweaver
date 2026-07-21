@@ -331,6 +331,7 @@ async def test_player_role_connection_is_refused_every_admin_action():
             {"type": "admin_export_room", "room": "arkham"},
             {"type": "admin_import_room", "path": "backup.json"},
             {"type": "admin_delete_room_data", "room": "arkham"},
+            {"type": "admin_reset_room", "room": "arkham"},
             {"type": "admin_list_skills"},
             {"type": "admin_enable_skill", "id": "mature-mode", "on": True},
             {"type": "admin_list_rules"},
@@ -504,6 +505,57 @@ async def test_admin_set_model_replaces_provider_scoped_credentials():
         "api_key": "sk-chatgpt-proxy",
         "base_url": "https://chatgpt-proxy.example/v1",
     }
+
+
+async def test_admin_reset_room_wipes_state_but_keeps_keys_and_bindings(tmp_path):
+    services = _services(str(tmp_path))
+    keystore = Keystore.load(tmp_path / "keys.toml")
+    with keystore.persisted_mutation():
+        keeper_key = keystore.add(room="arkham", name="Keeper", role="keeper")
+        player_key = keystore.add(room="arkham", name="Ada", role="player")
+        other_key = keystore.add(room="dunwich", name="Other", role="player")
+
+    chat_key = chat_key_for_room("arkham")
+    await services.store.set(user_key="", store_key=f"chat_history.{chat_key}", value='[{"role":"user"}]')
+    await services.store.set(user_key="player-1", store_key=f"characters.{chat_key}.Ada", value='{"name":"Ada"}')
+    await services.store.set(user_key="", store_key=f"module_player_pool.{chat_key}", value='{"summary":"x"}')
+    await services.store.set(user_key="", store_key="bound_room.discord:group:table", value=chat_key)
+    await services.store.set(user_key="", store_key="chat_history.tui:group:dunwich", value="keep")
+    await services.vector_db.vector_store.upsert(
+        [("doc-1:0", [0.1] * 64, {"chat_key": chat_key, "document_id": "doc-1", "chunk_index": 0})]
+    )
+
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        ws, *_ = await _connect_and_join(url, keeper_key, "Keeper")
+
+        # A different room's keeper reset is refused before anything is touched.
+        forbidden = await _send(ws, {"type": "admin_reset_room", "room": "dunwich"})
+        assert forbidden["type"] == "admin_error" and forbidden["code"] == "forbidden"
+
+        reset = await _send(ws, {"type": "admin_reset_room", "room": "arkham"})
+        assert reset["type"] == "admin_room_op"
+        assert reset["action"] == "reset"
+        assert reset["room"] == "arkham"
+        assert reset["store_rows"] == 3
+        assert reset["vector_points"] == 1
+        assert reset["keys"] == 0  # reset never removes keys
+        assert "path" not in reset  # no backup is written
+    finally:
+        await server.close()
+
+    # Campaign state is gone...
+    assert await services.store.get(user_key="", store_key=f"chat_history.{chat_key}") is None
+    assert await services.store.get(user_key="player-1", store_key=f"characters.{chat_key}.Ada") is None
+    assert await services.store.get(user_key="", store_key=f"module_player_pool.{chat_key}") is None
+    assert await services.vector_db.vector_store.count(filter={"chat_key": chat_key}) == 0
+    # ...but keys, channel binding, and the unrelated room all survive.
+    assert keystore.get(keeper_key) is not None
+    assert keystore.get(player_key) is not None
+    assert keystore.get(other_key) is not None
+    assert await services.store.get(user_key="", store_key="bound_room.discord:group:table") == chat_key
+    assert await services.store.get(user_key="", store_key="chat_history.tui:group:dunwich") == "keep"
 
 
 async def test_keeper_can_export_delete_and_import_room_data(tmp_path):

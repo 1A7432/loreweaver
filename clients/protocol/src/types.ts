@@ -37,6 +37,7 @@ export const FrameType = {
   AdminExportRoom: "admin_export_room",
   AdminImportRoom: "admin_import_room",
   AdminDeleteRoomData: "admin_delete_room_data",
+  AdminResetRoom: "admin_reset_room",
   AdminConfig: "admin_config",
   AdminModels: "admin_models",
   AdminKeys: "admin_keys",
@@ -92,7 +93,7 @@ export type AdminErrorCode =
   | "set_failed"
   | "not_found"
   | "op_failed"
-export type AdminRoomOpAction = "export" | "import" | "delete"
+export type AdminRoomOpAction = "export" | "import" | "delete" | "reset"
 export type AdminForgeKind = "skill" | "rule" | "module"
 
 export interface ClientInfo {
@@ -452,6 +453,14 @@ export interface AdminDeleteRoomDataFrame {
   path?: string
 }
 
+// In-place campaign restart: wipe this room's campaign state (characters, story,
+// module, lore, media) while keeping keystore keys and live connections — no
+// backup, no key removal. Contrast AdminDeleteRoomData, which backs up and evicts.
+export interface AdminResetRoomFrame {
+  type: typeof FrameType.AdminResetRoom
+  room: string
+}
+
 export interface AdminConfigFrame {
   type: typeof FrameType.AdminConfig
   provider: string
@@ -609,6 +618,7 @@ export type ClientFrame =
   | AdminExportRoomFrame
   | AdminImportRoomFrame
   | AdminDeleteRoomDataFrame
+  | AdminResetRoomFrame
   | AdminListSkillsFrame
   | AdminEnableSkillFrame
   | AdminListRulesFrame

@@ -272,6 +272,13 @@ Client → server:
   document vectors, and worldbook vectors. `backup` defaults to `true`; with
   backup enabled, deletion only proceeds after the backup write succeeds:
   `{type:"admin_delete_room_data", room:string, backup?:boolean, path?:string}`
+- `admin_reset_room` — restart a campaign in place: wipe the room's campaign
+  state (room-scoped KV, document vectors, worldbook vectors, media) while
+  keeping the keystore keys, channel/keeper bindings and live connections, so
+  the table can start over without re-provisioning. No backup is taken and no
+  members are evicted (contrast `admin_delete_room_data`). Keeper-gated and
+  confined to the caller's own room:
+  `{type:"admin_reset_room", room:string}`
 - `admin_list_skills` — list every discoverable KP skill (Layer B.1), marked
   `enabled` per the CALLER's own room: `{type:"admin_list_skills"}`
 - `admin_enable_skill` — enable/disable one skill for the caller's room; replies
@@ -311,7 +318,7 @@ Server → client:
   under `minted` (so the keeper can copy it):
   `{type:"admin_keys", keys:[{id:string, key_masked:string, room:string, name:string, role:"player"|"keeper"}], minted?:{key:string, room:string, name:string, role:"player"|"keeper"}}`
 - `admin_room_op` — result for export/import/full-delete room operations:
-  `{type:"admin_room_op", action:"export"|"import"|"delete", room:string, path?:string, keys:number, store_rows:number, vector_points:number, media_files?:number}`
+  `{type:"admin_room_op", action:"export"|"import"|"delete"|"reset", room:string, path?:string, keys:number, store_rows:number, vector_points:number, media_files?:number}`
 - `admin_error` — a localized failure notice (does not close the connection):
   `{type:"admin_error", code:"forbidden"|"unknown_provider"|"bad_request"|"set_failed"|"not_found"|"op_failed", message?:string}`
 - `admin_skills` — every discoverable skill, `enabled` reflecting the caller's room:

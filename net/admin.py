@@ -61,7 +61,13 @@ from infra.providers import (
     mask_secret,
 )
 from net.keystore import Keystore
-from net.room_backup import chat_key_for_room, delete_room_data, export_room, import_room
+from net.room_backup import (
+    chat_key_for_room,
+    delete_room_data,
+    export_room,
+    import_room,
+    reset_room_state,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +86,7 @@ _ADMIN_REQUESTS: frozenset[str] = frozenset(
         "admin_export_room",
         "admin_import_room",
         "admin_delete_room_data",
+        "admin_reset_room",
         "admin_list_skills",
         "admin_enable_skill",
         "admin_list_rules",
@@ -261,6 +268,8 @@ async def _dispatch_admin_frame(
         return await _import_room(services, keystore, caller_room, frame, i18n)
     if kind == "admin_delete_room_data":
         return await _delete_room_data(services, keystore, caller_room, frame, i18n)
+    if kind == "admin_reset_room":
+        return await _reset_room(services, caller_room, frame, i18n)
     if kind == "admin_list_skills":
         return await _skills_frame(services, caller_room)
     if kind == "admin_enable_skill":
@@ -860,6 +869,30 @@ async def _delete_room_data(
     if backup_path:
         result["path"] = backup_path
     return _room_op_frame("delete", result)
+
+
+async def _reset_room(
+    services: Services,
+    caller_room: str,
+    frame: dict[str, Any],
+    i18n: I18n,
+) -> dict[str, Any]:
+    """Wipe one room's campaign state in place — the button behind an in-place
+    campaign restart. Unlike ``_delete_room_data`` it takes NO backup and removes
+    NO keys/bindings, so the room's members stay connected and re-provisioning is
+    unnecessary (this is why ``admin_reset_room`` is deliberately absent from the
+    member-eviction set above)."""
+    room = str(frame.get("room") or "").strip()
+    if not room:
+        return _error("bad_request", i18n)
+    if room != caller_room:  # a keeper can only reset its OWN room
+        return _error("forbidden", i18n)
+    try:
+        result = await reset_room_state(services, chat_key_for_room(room))
+    except Exception:
+        return _error("op_failed", i18n)
+    result["room"] = room
+    return _room_op_frame("reset", result)
 
 
 def _room_op_frame(action: str, result: dict[str, Any]) -> dict[str, Any]:

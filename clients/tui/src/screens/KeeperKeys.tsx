@@ -37,6 +37,7 @@ export interface KeeperKeysClient {
   adminExportRoom(room: string, path?: string): void
   adminImportRoom(path: string, room?: string): void
   adminDeleteRoomData(room: string, backup?: boolean, path?: string): void
+  adminResetRoom(room: string): void
 }
 
 export interface KeeperKeysProps {
@@ -65,7 +66,13 @@ function roleOptions(locale: string): SelectOption[] {
 
 function describeRoomOp(frame: Extract<ServerFrame, { type: typeof FrameType.AdminRoomOp }>, locale: string): string {
   const action =
-    frame.action === "export" ? tt(locale, "keys.op.export") : frame.action === "import" ? tt(locale, "keys.op.import") : tt(locale, "keys.op.delete")
+    frame.action === "export"
+      ? tt(locale, "keys.op.export")
+      : frame.action === "import"
+        ? tt(locale, "keys.op.import")
+        : frame.action === "reset"
+          ? tt(locale, "keys.op.reset")
+          : tt(locale, "keys.op.delete")
   const path = frame.path ? ` · ${frame.path}` : ""
   return tt(locale, "keys.op.summary", {
     action,
@@ -91,7 +98,7 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
   const [roleIndex, setRoleIndex] = useState(0)
   const [selectedKey, setSelectedKey] = useState(0)
   const [focused, setFocused] = useState<Field>("name")
-  const [confirming, setConfirming] = useState<"key" | "room" | "roomData" | null>(null)
+  const [confirming, setConfirming] = useState<"key" | "room" | "roomData" | "roomReset" | null>(null)
 
   // Mirror the text fields into refs so submit always reads the latest typed value
   // regardless of render timing (same reason ConnectScreen/CharacterScreen do it).
@@ -159,7 +166,7 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
   // Destructive ops (delete invite / room access / full room) require a SECOND click to fire —
   // a single misclick can't irreversibly wipe a room's data or keys. Arming a different
   // destructive button, or any non-destructive action below, resets the pending confirmation.
-  const armOrRun = (which: "key" | "room" | "roomData", run: () => void) => {
+  const armOrRun = (which: "key" | "room" | "roomData" | "roomReset", run: () => void) => {
     if (confirming === which) {
       setConfirming(null)
       run()
@@ -213,6 +220,14 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
     const roomValue = targetRoom().trim()
     if (!roomValue) return
     client.adminDeleteRoomData(roomValue, true, pathRef.current.trim() || undefined)
+  }
+
+  // Restart the campaign in place: wipe room state, keep keys/connections. No
+  // backup (and no eviction), so unlike deleteRoomData the keeper stays connected.
+  const resetRoomData = () => {
+    const roomValue = targetRoom().trim()
+    if (!roomValue) return
+    client.adminResetRoom(roomValue)
   }
 
   // Scoped to this screen and further scoped by focus: Tab cycles fields, Esc goes
@@ -402,8 +417,8 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
               </box>
             </box>
 
-            {/* Room backup — the two neutral room ops, grouped + gapped off the row above */}
-            <box marginTop={1} onMouseDown={exportRoom} backgroundColor={theme.border} paddingX={1}>
+            {/* Room backup — the two neutral room ops (the danger zone below keeps its own gap) */}
+            <box onMouseDown={exportRoom} backgroundColor={theme.border} paddingX={1}>
               <text fg={theme.fg}>{tt(locale, "keys.export")}</text>
             </box>
             <box onMouseDown={importRoom} backgroundColor={theme.border} paddingX={1}>
@@ -411,8 +426,14 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
             </box>
 
             {/* Danger zone — the destructive ops grouped together and set apart by a gap,
-                not interleaved with the neutral ones; each still confirms on a second click. */}
-            <box marginTop={1} onMouseDown={() => armOrRun("room", deleteRoom)} backgroundColor={theme.fumble} paddingX={1}>
+                not interleaved with the neutral ones; each still confirms on a second click.
+                Restart-in-place leads: it keeps keys/connections (no re-provisioning), so it is
+                the common "my campaign died, start over" action, distinct from the two below
+                which destroy access/keys. */}
+            <box marginTop={1} onMouseDown={() => armOrRun("roomReset", resetRoomData)} backgroundColor={theme.fumble} paddingX={1}>
+              <text fg={theme.bg}>{tt(locale, "keys.resetRoom")}{confirming === "roomReset" ? tt(locale, "keys.confirm") : ""}</text>
+            </box>
+            <box onMouseDown={() => armOrRun("room", deleteRoom)} backgroundColor={theme.fumble} paddingX={1}>
               <text fg={theme.bg}>{tt(locale, "keys.deleteAccess")}{confirming === "room" ? tt(locale, "keys.confirm") : ""}</text>
             </box>
             <box onMouseDown={() => armOrRun("roomData", deleteRoomData)} backgroundColor={theme.fumble} paddingX={1}>
