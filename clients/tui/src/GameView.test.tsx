@@ -149,6 +149,48 @@ describe("GameView", () => {
     })
   })
 
+  test("a reset-flagged state frame clears the accumulated chat log", async () => {
+    // Regression: after a campaign reset the server wipes chat_history, but the
+    // client's local scrollback is not replayed away — the reset-flagged state
+    // frame is what tells it to drop the stale log alongside refreshing the panel.
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame } = await renderGame(client)
+    await flush()
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400))
+    })
+    await flush()
+
+    act(() => {
+      client.push({
+        type: FrameType.Narrative,
+        id: "old1",
+        speaker: "kp",
+        text: "The old campaign's dust settles.",
+        format: "markdown",
+      })
+    })
+    await waitForFrame((text) => text.includes("old campaign's dust settles"))
+
+    // A plain state frame refreshes the panel but must NOT touch the log.
+    act(() => {
+      client.push({ type: FrameType.State, party: [], initiative: [], online: 1 })
+    })
+    const afterPlain = await waitForFrame((text) => text.includes("old campaign's dust settles"))
+    expect(afterPlain).toContain("old campaign's dust settles")
+
+    // The reset-flagged state frame clears the log.
+    act(() => {
+      client.push({ type: FrameType.State, party: [], initiative: [], online: 1, reset: true })
+    })
+    const afterReset = await waitForFrame((text) => !text.includes("old campaign's dust settles"))
+    expect(afterReset).not.toContain("old campaign's dust settles")
+
+    act(() => {
+      renderer.destroy()
+    })
+  })
+
   test("header and status bar share one merged online count, last frame wins", async () => {
     // Regression (TUI-PRESENCE-018): the header used to read `stateFrame.online`
     // while the status bar preferred the newer PresenceFrame, so after a

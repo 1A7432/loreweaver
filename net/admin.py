@@ -39,6 +39,7 @@ from gateway.rooms import (
     list_keeper_bindings_for_room,
     session_key_for_room,
 )
+from gateway.turn import publish_state
 from infra.i18n import I18n
 from infra.imagegen import (
     IMAGEGEN_PRESETS,
@@ -153,6 +154,20 @@ class AdminService:
             "admin_delete_room_data",
         }:
             await self._evict_chat_members(caller_room)
+        if (
+            reply.get("type") != "admin_error"
+            and frame.get("type") == "admin_reset_room"
+            and self.hub is not None
+        ):
+            # The reset keeps everyone connected (no eviction), so proactively push a
+            # fresh reset-flagged state frame: connected clients refresh their info panel
+            # and clear their stale chat scrollback without needing to reconnect or send.
+            await publish_state(
+                self.hub,
+                self.services,
+                AgentCtx(chat_key=chat_key_for_room(caller_room)),
+                reset=True,
+            )
         return await self._with_chat_bindings(reply, caller_room)
 
     async def _evict_chat_members(

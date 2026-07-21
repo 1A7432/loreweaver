@@ -303,12 +303,17 @@ async def _run_companion_director(
         logger.warning("director: companion auto-turn failed for chat_key=%s", ctx.chat_key, exc_info=True)
 
 
-async def publish_state(hub: RoomHub, services: Services, ctx: AgentCtx) -> None:
+async def publish_state(hub: RoomHub, services: Services, ctx: AgentCtx, *, reset: bool = False) -> None:
     """Build a caller-correct room snapshot for every connected member.
 
     Overlays the live connection count and per-party ``online`` flags from the
     hub's current membership (a presence concern the read-only
     ``net.state.build_room_state`` deliberately leaves at ``0``/``True``).
+
+    ``reset=True`` marks the frame published right after a campaign wipe
+    (``.reset`` / ``admin_reset_room``): the panel data in it is already fresh
+    (empty), and the flag additionally tells clients to drop their locally
+    accumulated chat scrollback, which the server can no longer replay away.
     """
     members = hub.members(ctx.chat_key)
 
@@ -360,6 +365,8 @@ async def publish_state(hub: RoomHub, services: Services, ctx: AgentCtx) -> None
             connected_names=connected_names,
             online=online,
         )
+        if reset:
+            snapshot["reset"] = True
         return Event.state(snapshot)
 
     await hub.publish_each(ctx.chat_key, event_for)

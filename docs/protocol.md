@@ -88,7 +88,8 @@ connections receive `error too_many_connections` before `join` is read.
   `rank` (`-2`..`+4`); NEVER carries keeper secrets:
   `{type:"dice", actor:string, kind:"roll"|"check"|"sanity"|"opposed"|"init", expr:string, rolls:number[], total:number, target?:number, rank?:int, level?:string, success?:boolean}`
 - `state` — a panel snapshot, sent on `join` and after every turn:
-  `{type:"state", character?:{name,system,hp,hpmax,mp,mpmax,san,sanmax,attributes:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,hp?:int,hpMax?:int,san?:int,sanMax?:int,mp?:int,mpMax?:int,ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, usage?:{context_tokens:int,context_window:int,input_tokens:int,output_tokens:int,cache_hit_tokens:int,cache_miss_tokens:int}}`
+  `{type:"state", character?:{name,system,hp,hpmax,mp,mpmax,san,sanmax,attributes:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,hp?:int,hpMax?:int,san?:int,sanMax?:int,mp?:int,mpMax?:int,ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, usage?:{context_tokens:int,context_window:int,input_tokens:int,output_tokens:int,cache_hit_tokens:int,cache_miss_tokens:int}, reset?:boolean}`
+  `reset:true` marks the snapshot the server pushes right after a campaign wipe (`.reset` / `admin_reset_room`): the panel data is already fresh (empty) and the client should ALSO clear its locally-accumulated chat scrollback.
   `usage` is a rolling per-room LLM token/cache aggregate (additive/optional — omitted
   until the room's first completed AI-KP turn, and never sent by a pre-1.1 server):
   `context_tokens`/`context_window` describe the MOST RECENT turn's context fullness;

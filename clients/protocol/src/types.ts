@@ -325,6 +325,10 @@ export interface StateFrame {
   initiative: InitiativeEntry[]
   online: number
   usage?: UsageState
+  // Set once, on the state frame the server pushes right after a campaign reset
+  // (`.reset` / `admin_reset_room`): besides the already-fresh (empty) panel data,
+  // the client should also clear its locally-accumulated chat scrollback.
+  reset?: boolean
 }
 
 export interface PresencePlayer {

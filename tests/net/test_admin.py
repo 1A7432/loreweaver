@@ -534,14 +534,27 @@ async def test_admin_reset_room_wipes_state_but_keeps_keys_and_bindings(tmp_path
         forbidden = await _send(ws, {"type": "admin_reset_room", "room": "dunwich"})
         assert forbidden["type"] == "admin_error" and forbidden["code"] == "forbidden"
 
-        reset = await _send(ws, {"type": "admin_reset_room", "room": "arkham"})
-        assert reset["type"] == "admin_room_op"
+        # A successful reset also broadcasts a fresh reset-flagged state frame to the
+        # connected keeper (so its panel + chat log refresh without reconnecting), which
+        # arrives alongside the admin_room_op reply — drain both regardless of order.
+        await ws.send(json.dumps({"type": "admin_reset_room", "room": "arkham"}))
+        reset = None
+        state = None
+        for _ in range(4):
+            frame = await _recv(ws)
+            if frame["type"] == "admin_room_op":
+                reset = frame
+                break
+            if frame["type"] == "state":
+                state = frame
+        assert reset is not None
         assert reset["action"] == "reset"
         assert reset["room"] == "arkham"
         assert reset["store_rows"] == 3
         assert reset["vector_points"] == 1
         assert reset["keys"] == 0  # reset never removes keys
         assert "path" not in reset  # no backup is written
+        assert state is not None and state.get("reset") is True
     finally:
         await server.close()
 

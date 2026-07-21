@@ -55,7 +55,8 @@
 - `dice` — 一次掷骰子/检定，由客户端渲染并按 `rank` 着色（`-2`..`+4`）；NEVER 携带 Keeper 秘密：
   `{type:"dice", actor:string, kind:"roll"|"check"|"sanity"|"opposed"|"init", expr:string, rolls:number[], total:number, target?:number, rank?:int, level?:string, success?:boolean}`
 - `state` — 一个面板快照，在 `join` 时和每回合后发送：
-  `{type:"state", character?:{name,system,hp,hpmax,mp,mpmax,san,sanmax,attributes:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,hp?:int,hpMax?:int,san?:int,sanMax?:int,mp?:int,mpMax?:int,ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int}`
+  `{type:"state", character?:{name,system,hp,hpmax,mp,mpmax,san,sanmax,attributes:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,hp?:int,hpMax?:int,san?:int,sanMax?:int,mp?:int,mpMax?:int,ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, reset?:boolean}`
+  `reset:true` 标记战役清空(`.reset` / `admin_reset_room`)后服务端推送的快照：面板数据已是最新(空)，客户端还应清空本地累积的聊天记录。
 - `presence` — 连接的玩家名单，在加入/离开时发送：
   `{type:"presence", players:[{id,name,online}], online:int}`
 - `system` — 带外通知：`{type:"system", level:"info"|"warn", text:string}`

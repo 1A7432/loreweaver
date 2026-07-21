@@ -1252,6 +1252,21 @@ class CommandRouter:
                     logger.exception("campaign reset failed for %s", ctx.chat_key)
                     return ctx.i18n.t("commands.reset.failed")
                 await store.delete_rows([("", pending_key)])
+                # Push a fresh (now-empty) state frame flagged reset=True so every
+                # connected client refreshes its info panel AND drops its stale local
+                # chat scrollback at once, instead of waiting for the next turn.
+                if self.hub is not None:
+                    await publish_state(
+                        self.hub,
+                        ctx.services,
+                        AgentCtx(
+                            chat_key=ctx.chat_key,
+                            user_id=ctx.user_id,
+                            platform=str(getattr(ctx.raw_ctx, "platform", "cli") or "cli"),
+                            locale=ctx.locale,
+                        ),
+                        reset=True,
+                    )
                 return ctx.i18n.t(
                     "commands.reset.done",
                     rows=int(result.get("store_rows") or 0),

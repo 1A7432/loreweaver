@@ -175,6 +175,9 @@ export function App({
         return
       }
       if (frame.type === FrameType.State) {
+        // A reset-flagged state frame follows a campaign wipe: drop the shell-level
+        // scrollback too, so a later GameView remount seeds from an empty log.
+        if (frame.reset) setFrames([])
         setStateFrame(frame)
         return
       }

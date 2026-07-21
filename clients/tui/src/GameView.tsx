@@ -175,6 +175,9 @@ export function GameView({
         return
       }
       if (frame.type === FrameType.State) {
+        // A reset-flagged state frame follows a campaign wipe: clear the live chat log
+        // so the wiped story doesn't linger next to the fresh (empty) panel.
+        if (frame.reset) setFrames([])
         setStateFrame(frame)
         setOnlineCount(frame.online)
         if (completesSubmission(frame)) setKpWorking(false)

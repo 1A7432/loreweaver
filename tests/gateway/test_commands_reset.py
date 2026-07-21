@@ -12,9 +12,23 @@ import time
 from agent.context import AgentCtx
 from agent.services import build_services
 from gateway.commands import CommandRouter
+from gateway.hub import Event, RoomHub
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM
+
+
+class _FakeMember:
+    transport = "tui"
+
+    def __init__(self, member_id: str) -> None:
+        self.id = member_id
+        self.user_key = f"user:{member_id}"
+        self.name = member_id
+        self.events: list[Event] = []
+
+    async def deliver(self, event: Event) -> None:
+        self.events.append(event)
 
 
 def _services(tmp_path):
@@ -128,3 +142,28 @@ async def test_reset_allowed_for_tui_keeper_and_zh_alias(tmp_path):
     done = await router.dispatch(ctx, ".reset confirm")
     assert done is not None and done.startswith("战役已重置")
     assert await services.store.get(user_key="", store_key=f"kp_notes.{chat_key}") is None
+
+
+async def test_reset_confirm_pushes_a_reset_flagged_state_frame(tmp_path):
+    # Regression for the "panel + chat log stay stale until the next message" report:
+    # the wipe must proactively broadcast a fresh state frame flagged reset=True so
+    # connected clients refresh their panel and drop their local scrollback at once.
+    services = _services(tmp_path)
+    hub = RoomHub()
+    chat_key = "tui:group:room-3"
+    member = _FakeMember("k1")
+    await hub.subscribe(chat_key, member)
+    router = CommandRouter(services, hub=hub)
+    await _seed_room(services, chat_key)
+    ctx = AgentCtx(chat_key=chat_key, user_id="k1", platform="tui", locale="en", extra={"role": "keeper"})
+
+    await router.dispatch(ctx, ".reset")
+    member.events.clear()  # only care about what the confirm publishes
+    done = await router.dispatch(ctx, ".reset confirm")
+    assert done is not None and done.startswith("Campaign reset")
+
+    state_events = [e for e in member.events if e.kind == "state"]
+    assert state_events, "reset confirm must broadcast a state frame"
+    assert state_events[-1].data.get("reset") is True
+    # The broadcast state reflects the now-empty room (no active character/party).
+    assert state_events[-1].data.get("party") == []
