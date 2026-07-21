@@ -51,6 +51,9 @@ export const FrameType = {
   AdminRules: "admin_rules",
   AdminGenerate: "admin_generate",
   AdminGenerated: "admin_generated",
+  // Keeper-triggered in-place server self-update (gated by the server's "update" feature).
+  AdminUpdateServer: "admin_update_server",
+  AdminUpdate: "admin_update",
 } as const
 
 export type FrameType = (typeof FrameType)[keyof typeof FrameType]
@@ -93,6 +96,7 @@ export type AdminErrorCode =
   | "set_failed"
   | "not_found"
   | "op_failed"
+  | "not_configured"
 export type AdminRoomOpAction = "export" | "import" | "delete" | "reset"
 export type AdminForgeKind = "skill" | "rule" | "module"
 
@@ -223,6 +227,10 @@ export interface WelcomeFrame {
   locale: string
   server: string
   features?: string[]
+  // The server's own release version (see infra.version.resolve_version). Absent on
+  // older servers. Clients compare it to their own to detect a version mismatch and,
+  // when `features` includes "update", offer a keeper the server self-update control.
+  version?: string
 }
 
 export interface ErrorFrame {
@@ -473,6 +481,21 @@ export interface AdminResetRoomFrame {
   scope?: AdminResetScope
 }
 
+// Keeper asks the server to run its configured self-update command and re-exec into the
+// new code. No parameters: the command is server-side operator config, never client input.
+export interface AdminUpdateServerFrame {
+  type: typeof FrameType.AdminUpdateServer
+}
+
+// Server's reply to AdminUpdateServer. "restarting": the update succeeded and the server is
+// re-execing (expect a brief disconnect + reconnect). "failed": the command ran but exited
+// non-zero; `output` is the tail of its combined stdout/stderr for the keeper to inspect.
+export interface AdminUpdateFrame {
+  type: typeof FrameType.AdminUpdate
+  status: "restarting" | "failed"
+  output?: string
+}
+
 export interface AdminConfigFrame {
   type: typeof FrameType.AdminConfig
   provider: string
@@ -633,6 +656,7 @@ export type ClientFrame =
   | AdminImportRoomFrame
   | AdminDeleteRoomDataFrame
   | AdminResetRoomFrame
+  | AdminUpdateServerFrame
   | AdminListSkillsFrame
   | AdminEnableSkillFrame
   | AdminListRulesFrame
@@ -662,5 +686,6 @@ export type ServerFrame =
   | AdminSkillsFrame
   | AdminRulesFrame
   | AdminGeneratedFrame
+  | AdminUpdateFrame
 
 export type AnyFrame = ClientFrame | ServerFrame

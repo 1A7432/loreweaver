@@ -120,6 +120,7 @@ const serverFrameValidators: Record<string, (f: Record<string, unknown>) => bool
   [FrameType.AdminSkills]: (f) => isArr(f.skills),
   [FrameType.AdminRules]: (f) => isArr(f.systems),
   [FrameType.AdminGenerated]: (f) => isStr(f.kind) && typeof f.ok === "boolean",
+  [FrameType.AdminUpdate]: (f) => isStr(f.status),
 }
 
 function defaultWebSocketFactory(url: string): WebSocketLike {
@@ -390,6 +391,10 @@ export class WsClient {
     const frame: AdminResetRoomFrame = { type: FrameType.AdminResetRoom, room }
     if (scope) frame.scope = scope
     this.send(frame)
+  }
+
+  adminUpdateServer(): void {
+    this.send({ type: FrameType.AdminUpdateServer })
   }
 
   // ---- v1.1 additive: Layer B.4a plugin management (KP skills / rule systems / forge) ----

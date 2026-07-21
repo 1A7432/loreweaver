@@ -88,6 +88,10 @@ class MockClient implements AppClient {
   adminResetRoom(room: string, scope?: string): void {
     this.resetRoomCalls.push([room, scope])
   }
+  updateServerCalls = 0
+  adminUpdateServer(): void {
+    this.updateServerCalls += 1
+  }
   adminListSkills(): void {}
   adminEnableSkill(_id: string, _on: boolean): void {}
   adminListRules(): void {}
@@ -137,6 +141,48 @@ async function enterKeeperKeys(harness: Awaited<ReturnType<typeof renderApp>>) {
 }
 
 describe("KeeperKeys", () => {
+  test("server-update button appears when the server is behind, and fires on double-click", async () => {
+    const client = new MockClient()
+    const harness = await renderApp(client)
+    await harness.flush()
+    // A keeper welcome that advertises the "update" feature and an older server version
+    // than this client's (package.json 0.5.0) — so the update control is offered.
+    act(() =>
+      client.push({ ...KEEPER_WELCOME, features: ["media", "audio", "update"], version: "0.4.0" }),
+    )
+    await enterKeeperKeys(harness)
+
+    const frame = await harness.waitForFrame((t) => t.includes("更新服务端"))
+    const updateY = frame.split("\n").findIndex((line) => line.includes("更新服务端"))
+    expect(updateY).toBeGreaterThan(0)
+    // Two-click confirm: arms, then fires.
+    await act(async () => {
+      await harness.mockMouse.click(CLICK_X, updateY)
+    })
+    await harness.flush()
+    expect(client.updateServerCalls).toBe(0)
+    await act(async () => {
+      await harness.mockMouse.click(CLICK_X, updateY)
+    })
+    await harness.flush()
+    expect(client.updateServerCalls).toBe(1)
+
+    // The server's "restarting" reply surfaces as a status line.
+    act(() => client.push({ type: FrameType.AdminUpdate, status: "restarting" }))
+    const after = await harness.waitForFrame((t) => t.includes("正在更新"))
+    expect(after).toContain("正在更新")
+  })
+
+  test("no server-update control when the feature is absent", async () => {
+    const client = new MockClient()
+    const harness = await renderApp(client)
+    await harness.flush()
+    act(() => client.push(KEEPER_WELCOME)) // no "update" feature
+    await enterKeeperKeys(harness)
+    const frame = await harness.waitForFrame((t) => t.includes("房间与邀请") || t.includes("邀请码"))
+    expect(frame).not.toContain("更新服务端")
+  })
+
   test("进入房间与邀请:挂载即请求 adminListKeys,收到 admin_keys 渲染成表", async () => {
     const client = new MockClient()
     const harness = await renderApp(client)

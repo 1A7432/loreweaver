@@ -266,6 +266,10 @@ class TuiServer(SessionCore):
                     fields["role"] == "keeper"
                     and await guided_demo_available(self.services, fields["session_key"])
                 ),
+                can_update=(
+                    fields["role"] == "keeper"
+                    and bool(self.services.settings.tui.update_command)
+                ),
             ),
         )
         return member

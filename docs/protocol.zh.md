@@ -32,7 +32,8 @@
 ## Server → Client
 
 - `welcome` — 成功 `join` 时发送一次：
-  `{type:"welcome", protocol:"1.5", features:["media","audio","imagegen"?,"demo"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string}`
+  `{type:"welcome", protocol:"1.5", features:["media","audio","imagegen"?,"demo"?,"update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
+  `version` 是服务端自身的发布版本(与客户端对比可发现版本不一致)。`"update"` 特性仅在守秘人连接且服务端运维配置了自更新命令时出现，用于门控 `admin_update_server`。
   `demo` 表示服务端正在使用离线示例 Keeper、向量功能已启用，且本次检查时这个守秘人房间为空。服务端会在房间回合锁内再次检查，过期 flag 不会覆盖战役状态；客户端收到 `admin_config{using_demo:false}`（例如从模型页保存后）会立即移除入口，否则重连时重新计算，过期操作也会被服务端拒绝。
 - `error` — 本地化的故障通知；`bad_key`、`join_timeout` 和 `too_many_connections` 关闭连接（它们仅在 `join` 握手期间或之前发生），其他不关闭：
   `{type:"error", code:"bad_key"|"bad_frame"|"input_too_long"|"rate_limited"|"server_error"|"join_timeout"|"too_many_connections"|"demo_unavailable"|媒体错误码, message:string}`
@@ -155,6 +156,8 @@ role = "player"  # 或 "keeper"；默认为 "player"
   `{type:"admin_delete_room_data", room:string, backup?:boolean, path?:string}`
 - `admin_reset_room` — 原地重开战役，保留密钥库钥匙、频道/守秘人绑定、在线连接与房间设置(语言、房规、启用技能)，让本桌无需重新配置即可重开。不做备份，也不驱逐任何成员(与 `admin_delete_room_data` 相反)。`scope` 决定清除范围：`"story"`(默认)只清剧情/进度(保留角色、模组、设定、媒体)；`"chars"` 连角色一起换(保留模组)；`"all"` 全部清空(角色、模组、设定、媒体)。仅守秘人可用，且限于调用者自己的房间：
   `{type:"admin_reset_room", room:string, scope?:"story"|"chars"|"all"}`
+- `admin_update_server` — 守秘人请求服务端原地自更新。无参数：服务端运行其运维自己配置的命令(`TRPG_TUI__UPDATE_COMMAND`，如 `git pull && uv sync`)，绝不执行客户端提供的内容，且需要 `welcome` 中通告的 `"update"` 特性。成功后服务端会 re-exec 到新代码，客户端应预期短暂断连后重连：
+  `{type:"admin_update_server"}`
 
 服务器 → 客户端：
 
@@ -170,8 +173,10 @@ role = "player"  # 或 "keeper"；默认为 "player"
 - `admin_room_op` — 导出/导入/完全删除房间操作的结果：
   `{type:"admin_room_op", action:"export"|"import"|"delete"|"reset", room:string, path?:string, keys:number, store_rows:number, vector_points:number, media_files?:number, scope?:"story"|"chars"|"all"}`
   (`scope` 在 `reset` 操作时出现，回显所应用的重置范围。)
+- `admin_update` — `admin_update_server` 的回复。`"restarting"`：命令成功、服务端正在 re-exec；`"failed"`：命令以非零码退出，`output` 为其合并 stdout/stderr 的末尾。（未配置命令时返回 `admin_error{code:"not_configured"}`。）
+  `{type:"admin_update", status:"restarting"|"failed", output?:string}`
 - `admin_error` — 本地化的故障通知（不关闭连接）：
-  `{type:"admin_error", code:"forbidden"|"unknown_provider"|"bad_request"|"set_failed"|"not_found"|"op_failed", message?:string}`
+  `{type:"admin_error", code:"forbidden"|"unknown_provider"|"bad_request"|"set_failed"|"not_found"|"op_failed"|"not_configured", message?:string}`
 
 `admin_set_model` 根据已知 provider 验证 `provider`（`infra.providers.is_known_provider`），通过 `services.runtime_config` 持久化覆盖，并热重配置共享的 `MutableLLM`——与 `.model set` 聊天命令走同一路径——然后回复新的 `admin_config`。API key / `base_url` 按 provider 成对保存在本地凭据簿；只有 endpoint 未变时才会复用。新 endpoint 必须在同一请求提供匹配 key，否则使用并持久化空 key。订阅 OAuth grant 也保存在同一凭据簿的规范 provider 名下。
 

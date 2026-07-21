@@ -16,6 +16,7 @@ import {
 import { StatusBar } from "../components/StatusBar"
 import { tt } from "../i18n"
 import type { Palette, ThemeName } from "../themes"
+import { clientInfo } from "../version"
 
 // Only the admin methods + onMessage are needed here — the narrow superset of the
 // web AdminPanel's `AdminClient`. App owns the socket; this screen drives the
@@ -39,6 +40,7 @@ export interface KeeperKeysClient {
   adminImportRoom(path: string, room?: string): void
   adminDeleteRoomData(room: string, backup?: boolean, path?: string): void
   adminResetRoom(room: string, scope?: AdminResetScope): void
+  adminUpdateServer(): void
 }
 
 export interface KeeperKeysProps {
@@ -95,6 +97,12 @@ function describeRoomOp(frame: Extract<ServerFrame, { type: typeof FrameType.Adm
 export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBack }: KeeperKeysProps) {
   const locale = welcome.locale
   const ROLE_OPTIONS = roleOptions(locale)
+  // Server self-update is offered only when the server advertises the "update" feature
+  // (operator configured a command AND we are a keeper) and its version differs from ours.
+  const clientVersion = clientInfo().version
+  const serverVersion = welcome.version ?? ""
+  const canUpdateServer = (welcome.features ?? []).includes("update")
+  const serverOutdated = canUpdateServer && serverVersion !== "" && serverVersion !== clientVersion
   const [keys, setKeys] = useState<AdminKeyInfo[]>([])
   const [minted, setMinted] = useState<MintedKey>()
   const [error, setError] = useState<string>()
@@ -106,7 +114,7 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
   const [selectedKey, setSelectedKey] = useState(0)
   const [focused, setFocused] = useState<Field>("name")
   const [confirming, setConfirming] = useState<
-    "key" | "room" | "roomData" | "resetStory" | "resetChars" | "resetAll" | null
+    "key" | "room" | "roomData" | "resetStory" | "resetChars" | "resetAll" | "updateServer" | null
   >(null)
 
   // Mirror the text fields into refs so submit always reads the latest typed value
@@ -144,6 +152,13 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
       } else if (frame.type === FrameType.AdminRoomOp) {
         setRoomOp(describeRoomOp(frame, locale))
         setError(undefined)
+      } else if (frame.type === FrameType.AdminUpdate) {
+        setRoomOp(
+          frame.status === "restarting"
+            ? tt(locale, "keys.update.restarting")
+            : tt(locale, "keys.update.failed", { output: (frame.output ?? "").slice(-300) }),
+        )
+        setError(undefined)
       } else if (frame.type === FrameType.AdminError) {
         setError(frame.message ?? frame.code)
       }
@@ -176,7 +191,7 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
   // a single misclick can't irreversibly wipe a room's data or keys. Arming a different
   // destructive button, or any non-destructive action below, resets the pending confirmation.
   const armOrRun = (
-    which: "key" | "room" | "roomData" | "resetStory" | "resetChars" | "resetAll",
+    which: "key" | "room" | "roomData" | "resetStory" | "resetChars" | "resetAll" | "updateServer",
     run: () => void,
   ) => {
     if (confirming === which) {
@@ -243,6 +258,11 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
     client.adminResetRoom(roomValue, scope)
   }
 
+  // Ask the server to run its configured self-update and re-exec into the new code.
+  const updateServer = () => {
+    client.adminUpdateServer()
+  }
+
   // Scoped to this screen and further scoped by focus: Tab cycles fields, Esc goes
   // back. Arrows are left to the focused role <select>; the name/path <input>s
   // get Enter via onSubmit and the select gets it via onSelect.
@@ -283,6 +303,24 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
           </text>
         </box>
       </box>
+
+      {canUpdateServer ? (
+        <box flexDirection="row" paddingX={2} marginTop={1}>
+          {serverOutdated ? (
+            <box onMouseDown={() => armOrRun("updateServer", updateServer)} backgroundColor={theme.accent} paddingX={1}>
+              <text fg={theme.bg}>
+                {tt(locale, "keys.update.button")}
+                {confirming === "updateServer" ? tt(locale, "keys.confirm") : ""}
+              </text>
+            </box>
+          ) : null}
+          <text fg={serverOutdated ? theme.fumble : theme.dim}>
+            {serverOutdated ? " " : ""}
+            {tt(locale, "keys.version.line", { server: serverVersion || "?", client: clientVersion })}
+            {serverOutdated ? "" : `  ${tt(locale, "keys.version.match")}`}
+          </text>
+        </box>
+      ) : null}
 
       <box flexDirection="row" flexGrow={1} minHeight={8}>
         <box flexDirection="column" flexGrow={1} paddingX={2} paddingY={1}>

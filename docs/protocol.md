@@ -55,7 +55,8 @@ connections receive `error too_many_connections` before `join` is read.
 ## Server → Client
 
 - `welcome` — sent once, on a successful `join`:
-  `{type:"welcome", protocol:"1.5", features:["media","audio", "imagegen"?, "demo"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string}`
+  `{type:"welcome", protocol:"1.5", features:["media","audio", "imagegen"?, "demo"?, "update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
+  `version` is the server's own release version (compare it to the client's to detect a mismatch). The `"update"` feature appears only for a keeper on a server whose operator configured a self-update command, and gates the `admin_update_server` control.
   `demo` means the server is using its offline sample Keeper, vector support is
   enabled, and this specific Keeper room was empty when the server checked it.
   The server rechecks under the room turn lock before setup, so a stale flag cannot
@@ -338,6 +339,16 @@ Server → client:
   whether the module actually landed in the room (`ok` merely means a valid document was authored
   and written); it is empty for `skill`/`rule` (no per-room install step):
   `{type:"admin_generated", kind:"skill"|"rule"|"module", ok:boolean, id:string, name:string, error:string, detail:string}`
+- `admin_update_server` — a keeper asks the server to update itself in place. No parameters: the
+  server runs its OWN operator-configured command (`TRPG_TUI__UPDATE_COMMAND`, e.g.
+  `git pull && uv sync`), never anything the client supplies, and requires the `"update"` feature
+  (advertised in `welcome`). On success it re-execs into the new code, so the client should expect
+  a brief disconnect + reconnect:
+  `{type:"admin_update_server"}`
+- `admin_update` — the reply to `admin_update_server`. `"restarting"`: the command succeeded and
+  the server is re-execing. `"failed"`: the command exited non-zero; `output` is the tail of its
+  combined stdout/stderr. (A missing command yields `admin_error{code:"not_configured"}`.):
+  `{type:"admin_update", status:"restarting"|"failed", output?:string}`
 
 `admin_set_model` validates `provider` against the known providers
 (`infra.providers.is_known_provider`), persists the override via

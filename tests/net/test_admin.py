@@ -34,7 +34,7 @@ from gateway.rooms import (
     set_keeper_binding,
 )
 from gateway.session import SessionSource
-from infra.config import LLMSettings, Settings
+from infra.config import LLMSettings, Settings, TuiSettings
 from infra.embeddings import FakeEmbeddings
 from infra.i18n import get_i18n
 from infra.imagegen import IMAGEGEN_PRESETS
@@ -127,6 +127,73 @@ def _services(data_dir: str = "./data"):
 async def _send(ws, frame: dict) -> dict:
     await ws.send(json.dumps(frame))
     return await _recv(ws)
+
+
+def _update_services(command: str):
+    settings = Settings(
+        locale="en",
+        llm=LLMSettings(provider="openai", chat_model="gpt-4o"),
+        tui=TuiSettings(update_command=command),
+    )
+    return build_services(settings, llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64))
+
+
+async def test_admin_update_server_not_configured_is_rejected():
+    services = _update_services("")  # feature off
+    reply = await AdminService(services, Keystore()).dispatch(
+        "keeper", "arkham", {"type": "admin_update_server"}, get_i18n("en")
+    )
+    assert reply["type"] == "admin_error" and reply["code"] == "not_configured"
+
+
+async def test_admin_update_server_requires_keeper():
+    services = _update_services("echo hi")
+    reply = await AdminService(services, Keystore()).dispatch(
+        "player", "arkham", {"type": "admin_update_server"}, get_i18n("en")
+    )
+    assert reply["type"] == "admin_error" and reply["code"] == "forbidden"
+
+
+async def test_admin_update_server_failed_command_reports_output_and_does_not_restart():
+    services = _update_services("echo boom; exit 1")
+    with patch("net.updater.schedule_reexec") as reexec:
+        reply = await AdminService(services, Keystore()).dispatch(
+            "keeper", "arkham", {"type": "admin_update_server"}, get_i18n("en")
+        )
+    assert reply["type"] == "admin_update"
+    assert reply["status"] == "failed"
+    assert "boom" in reply["output"]
+    reexec.assert_not_called()
+
+
+async def test_admin_update_server_success_reports_restarting_and_schedules_reexec():
+    services = _update_services("echo done")
+    with patch("net.updater.schedule_reexec") as reexec:
+        reply = await AdminService(services, Keystore()).dispatch(
+            "keeper", "arkham", {"type": "admin_update_server"}, get_i18n("en")
+        )
+    assert reply["type"] == "admin_update"
+    assert reply["status"] == "restarting"
+    reexec.assert_called_once()
+
+
+def test_welcome_frame_carries_version_and_keeper_gated_update_feature():
+    from net.session import welcome_frame
+
+    fields = {"room": "r", "id": "i", "name": "n", "role": "keeper", "locale": "en"}
+    base = welcome_frame(fields)
+    assert base["version"]  # resolve_version() returns a non-empty string
+    assert "update" not in base["features"]  # no update command configured
+    assert "update" in welcome_frame(fields, can_update=True)["features"]
+
+
+async def test_run_update_command_captures_success_and_failure():
+    from net.updater import run_update_command
+
+    ok = await run_update_command("echo hello")
+    assert ok.ok and "hello" in ok.output
+    bad = await run_update_command("echo oops; exit 2")
+    assert not bad.ok and "oops" in bad.output
 
 
 async def test_admin_service_mints_room_scoped_single_use_chat_bind_token():

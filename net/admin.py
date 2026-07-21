@@ -93,6 +93,7 @@ _ADMIN_REQUESTS: frozenset[str] = frozenset(
         "admin_enable_skill",
         "admin_list_rules",
         "admin_generate",
+        "admin_update_server",
     }
 )
 
@@ -286,6 +287,8 @@ async def _dispatch_admin_frame(
         return await _delete_room_data(services, keystore, caller_room, frame, i18n)
     if kind == "admin_reset_room":
         return await _reset_room(services, caller_room, frame, i18n)
+    if kind == "admin_update_server":
+        return await _update_server(services, i18n)
     if kind == "admin_list_skills":
         return await _skills_frame(services, caller_room)
     if kind == "admin_enable_skill":
@@ -912,6 +915,28 @@ async def _reset_room(
         return _error("op_failed", i18n)
     result["room"] = room
     return _room_op_frame("reset", result)
+
+
+async def _update_server(services: Services, i18n: I18n) -> dict[str, Any]:
+    """Run the operator-configured self-update command, then re-exec into the new code.
+
+    Keeper-gated (like every admin frame). The command is `services.settings.tui.update_command`
+    — the operator's own, never client input — and is a no-op unless configured. On success the
+    server schedules a re-exec so the client should expect a brief disconnect + reconnect."""
+    command = (services.settings.tui.update_command or "").strip()
+    if not command:
+        return _error("not_configured", i18n)
+    from net.updater import run_update_command, schedule_reexec
+
+    try:
+        result = await run_update_command(command)
+    except Exception:
+        logger.exception("server self-update failed to run")
+        return _error("op_failed", i18n)
+    if not result.ok:
+        return {"type": "admin_update", "status": "failed", "output": result.output}
+    schedule_reexec()
+    return {"type": "admin_update", "status": "restarting", "output": result.output}
 
 
 def _room_op_frame(action: str, result: dict[str, Any]) -> dict[str, Any]:

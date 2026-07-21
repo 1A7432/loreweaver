@@ -56,6 +56,7 @@ export interface AppClient {
   adminImportRoom(path: string, room?: string): void
   adminDeleteRoomData(room: string, backup?: boolean, path?: string): void
   adminResetRoom(room: string, scope?: AdminResetScope): void
+  adminUpdateServer(): void
   // v1.1 additive: Layer B.4a plugin management (KP skills / rule systems / self-extension forge).
   adminListSkills(): void
   adminEnableSkill(id: string, on: boolean): void
@@ -159,6 +160,9 @@ class TransportClient implements AppClient {
   }
   adminResetRoom(room: string, scope?: AdminResetScope): void {
     this.inner?.adminResetRoom(room, scope)
+  }
+  adminUpdateServer(): void {
+    this.inner?.adminUpdateServer()
   }
   adminListSkills(): void {
     this.inner?.adminListSkills()

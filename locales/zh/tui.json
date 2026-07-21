@@ -31,6 +31,7 @@
   "tui.admin.error.not_found": "未找到指定的房间或密钥。",
   "tui.admin.error.op_failed": "房间备份、导入或删除操作失败，请检查路径和服务端文件权限。",
   "tui.admin.error.set_failed": "未能完成 LLM 提供方配置。请检查 SDK、凭据和存储后重试。",
+  "tui.admin.error.not_configured": "服务端自更新未启用。请在服务端设置 TRPG_TUI__UPDATE_COMMAND 以允许更新。",
   "tui.serve.listening": "已在 ws://{host}:{port}/ 提供联网 TUI 服务（密钥文件：{path}）",
   "tui.serve.bootstrap.banner": "★ 首次启动：密钥库为空，已为房间「{room}」自动发放一个守秘人 key。",
   "tui.serve.bootstrap.key": "  守秘人 key：{key}",

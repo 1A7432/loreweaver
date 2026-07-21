@@ -45,6 +45,7 @@ from infra.media_store import (
     is_audio_mime,
     is_image_mime,
 )
+from infra.version import resolve_version
 from net.admin import AdminService, is_admin_frame
 from net.keystore import Keystore, member_id_for_key
 from net.room_backup import room_rows, room_vector_points
@@ -98,7 +99,7 @@ def resolve_session_fields(keystore: Keystore, key: str, locale: str) -> dict[st
 
 
 def welcome_frame(
-    fields: dict[str, str], *, imagegen: bool = False, demo: bool = False
+    fields: dict[str, str], *, imagegen: bool = False, demo: bool = False, can_update: bool = False
 ) -> dict[str, Any]:
     """Build the `welcome` frame from resolved session fields (shared by both transports)."""
     features = ["media", "audio"]
@@ -108,6 +109,10 @@ def welcome_frame(
         # Additive capability flag: clients that know it can offer a guided
         # first-run adventure; older clients simply ignore the extra string.
         features.append("demo")
+    if can_update:
+        # The operator configured a self-update command AND this connection is a keeper,
+        # so the client may offer a "update the server" control (see `admin_update_server`).
+        features.append("update")
     return {
         "type": "welcome",
         "protocol": _PROTOCOL_VERSION,
@@ -116,6 +121,7 @@ def welcome_frame(
         "you": {"id": fields["id"], "name": fields["name"], "role": fields["role"]},
         "locale": fields["locale"],
         "server": _SERVER_BANNER,
+        "version": resolve_version(),
     }
 
 

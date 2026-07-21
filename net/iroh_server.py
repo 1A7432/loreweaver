@@ -372,6 +372,10 @@ class IrohServer:
                     fields["role"] == "keeper"
                     and await guided_demo_available(self.core.services, fields["session_key"])
                 ),
+                can_update=(
+                    fields["role"] == "keeper"
+                    and bool(self.core.services.settings.tui.update_command)
+                ),
             )
         )
         return member
