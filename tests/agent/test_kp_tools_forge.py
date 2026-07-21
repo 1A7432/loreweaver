@@ -262,7 +262,7 @@ async def test_generate_module_dispatch_unlocked_installs_and_reports_success(tm
         embeddings=FakeEmbeddings(8),
     )
     toolset = build_kp_toolset(services)
-    ctx = AgentCtx(chat_key=CHAT_KEY_MODULE, user_id="kp", locale="en", fs=LocalFs(base_dir=tmp_path / "fs"))
+    ctx = AgentCtx(chat_key=CHAT_KEY_MODULE, user_id="kp", locale="en", fs=LocalFs(base_dir=tmp_path))
 
     original_user_dir = forge_module._USER_MODULE_DIR
     forge_module._USER_MODULE_DIR = tmp_path / "modules"
@@ -295,7 +295,7 @@ async def test_generate_module_repeat_dispatch_reports_suppression(tmp_path: Pat
         chat_key=CHAT_KEY_MODULE,
         user_id="kp",
         locale="en",
-        fs=LocalFs(base_dir=tmp_path / "fs"),
+        fs=LocalFs(base_dir=tmp_path),
     )
 
     original_user_dir = forge_module._USER_MODULE_DIR

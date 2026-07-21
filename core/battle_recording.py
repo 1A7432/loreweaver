@@ -47,8 +47,14 @@ async def record_dice_roll(
     char_name: str,
     expression: str,
     result: DiceResult,
+    *,
+    hidden: bool = False,
 ) -> None:
-    """Persist one raw roll using the mapping shared by tools and commands."""
+    """Persist one raw roll using the mapping shared by tools and commands.
+
+    ``hidden`` flags a private/keeper roll (e.g. `.rh`) so it is recorded for
+    the keeper's bookkeeping yet excluded from every player-facing report.
+    """
     is_critical, critical_type = dice_critical_fields(result)
     await battles.add_dice_roll(
         chat_key,
@@ -58,6 +64,7 @@ async def record_dice_roll(
         result.total,
         is_critical,
         critical_type,
+        hidden=hidden,
     )
 
 

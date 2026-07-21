@@ -70,10 +70,17 @@ class LocalFs:
         self._base_dir = Path(base_dir)
 
     def get_file(self, path: str) -> str:
+        # Confine every resolution to ``base_dir``. Absolute paths and ``../``
+        # traversal are resolved first, then required to land inside the base
+        # so an attacker-supplied logical path cannot read arbitrary host files
+        # (net.session's SessionCore hands the production Iroh transport a
+        # ``LocalFs(cwd)``, so this is the real read boundary, not just a hint).
         candidate = Path(path)
-        if candidate.is_absolute():
-            return str(candidate)
-        return str((self._base_dir / candidate).resolve())
+        base = self._base_dir.resolve()
+        resolved = candidate.resolve() if candidate.is_absolute() else (base / candidate).resolve()
+        if not resolved.is_relative_to(base):
+            raise ValueError(f"path escapes the allowed base directory: {path}")  # i18n-exempt: folded into localized *-failed messages
+        return str(resolved)
 
     @property
     def shared_path(self) -> Path:

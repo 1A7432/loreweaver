@@ -312,6 +312,7 @@ async def test_companion_subturn_inside_a_player_turn_does_not_deadlock() -> Non
     await hub.subscribe(chat_key, watcher)
 
     keeper = _ws_member(room_id, "kp-conn", "Keeper")
+    keeper.role = "keeper"  # `.party act` is keeper-gated since the audit fix
     keystore = Keystore()
     _authorize(keystore, keeper)
     router = CommandRouter(services, hub=hub)  # hub-wired so `.party act` can drive the director

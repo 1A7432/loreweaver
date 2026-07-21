@@ -74,6 +74,7 @@ async def run_turn(
     origin: Member | None = None,
     echo_exclude: Member | None = None,
     actor_name: str | None = None,
+    model_authored: bool = False,
 ) -> KPTurnResult | None:
     """Run one player turn and publish its normalized events to the room.
 
@@ -94,6 +95,15 @@ async def run_turn(
     ``ctx.uid()``). An AI companion turn (``gateway.director.run_companion_turn``)
     runs with no ``origin`` member but passes the companion's display name here so
     the room sees ``Silas: I cover the door`` rather than the raw ``companion:silas``.
+
+    ``model_authored=True`` marks a turn whose ``text`` is LLM-generated (a companion /
+    director action), NOT human input. It bypasses the command router and the inline-roll
+    fallback ENTIRELY -- model output must never reach a parser built for human input (it
+    would let a generated ".party act X" recurse into the director, a ".bot off" flip room
+    state with EVERYONE privilege, or an inline "[[1d6]]" silently swallow the KP turn) --
+    and instead feeds ``text`` straight into the KP pipeline as pure narration/action, still
+    publishing a ``player_action`` so the room can attribute the effect. Companion dice go
+    ONLY through the KP toolset (``skill_check`` etc.), never via text pattern matching.
 
     A command turn whose matched ``gateway.commands.CommandSpec.private_reply`` is set
     (e.g. ``.model key``/``.lore query``, which can echo a masked API key or keeper-only
@@ -120,15 +130,33 @@ async def run_turn(
     )
 
     result: KPTurnResult | None = None
-    matched_spec = _matched_command_spec(command_router, text, ctx.locale)
     action_event = Event.player_action(name=name, text=text)
-    if matched_spec is None:
+    if model_authored:
+        # This is the ONLY place non-human-authored text reaches run_turn: a
+        # model-authored companion/director turn (see gateway.director.run_companion_turn),
+        # where the "text" is an LLM-generated action/dialogue. The command router and the
+        # inline-roll fallback are parsers built for HUMAN input ONLY, so model output MUST
+        # NEVER reach them. If it did: a companion whose generated action happened to read
+        # ".party act <name>" would re-enter gateway.director and recurse (holding the room
+        # turn lock); a ".bot off"/".st"/".room link" would execute a level-0 command with
+        # EVERYONE privilege straight from pure model output; and an inline "[[1d6]]" would
+        # hit the inline-roll fallback and silently swallow the whole KP turn (the Keeper is
+        # never consulted). So a model-authored turn ALWAYS publishes the player_action (so
+        # the room can attribute the effect) and feeds the text straight into the KP pipeline
+        # as pure narration/action. Companion dice happen ONLY through the KP toolset
+        # (skill_check, ...), adjudicated by the Keeper, never via text pattern matching.
+        matched_spec = None
+        reply = None
         await hub.publish(ctx.chat_key, action_event, exclude=echo_exclude)
-    elif origin is not None and echo_exclude is None:
-        # Keep the TUI caller's local echo, but never broadcast raw command arguments
-        # such as attachment paths, provider endpoints, or keys to room peers.
-        await origin.deliver(action_event)
-    reply = await command_router.dispatch_reply(ctx, text)
+    else:
+        matched_spec = _matched_command_spec(command_router, text, ctx.locale)
+        if matched_spec is None:
+            await hub.publish(ctx.chat_key, action_event, exclude=echo_exclude)
+        elif origin is not None and echo_exclude is None:
+            # Keep the TUI caller's local echo, but never broadcast raw command arguments
+            # such as attachment paths, provider endpoints, or keys to room peers.
+            await origin.deliver(action_event)
+        reply = await command_router.dispatch_reply(ctx, text)
     command_reply = reply.text if reply is not None else None
     command_events = reply.events if reply is not None else ()
     if command_reply is not None:

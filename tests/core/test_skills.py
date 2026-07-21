@@ -16,12 +16,35 @@ another test's (or the real `skills/`) discovery.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
+import yaml
 
 import core.skills as skills_module
 from core.skills import Skill, available_skills, load_skill, unlocked_tools_for
+
+# Wall-clock bound for rejecting a frontmatter alias bomb (see
+# `test_parse_skill_text_rejects_alias_bomb_frontmatter_fast`): a naive `yaml.safe_load` +
+# `str(frontmatter.get("name"))` (the pre-fix code path) would instead expand the alias chain
+# into an exponential structure before ever raising -- this bound catches a regression back to
+# that behavior, not just "it eventually raises."
+_ALIAS_BOMB_FAST_BOUND_SECONDS = 0.5
+
+
+def _alias_bomb_frontmatter(levels: int = 6, branch: int = 10) -> str:
+    """A "billion laughs"-style YAML alias bomb assigned to frontmatter `name:` -- mirrors the
+    reported vulnerability shape (`core/skills.py`'s `str(frontmatter.get("name") ...)`)."""
+    lines = ["a: &a [x,x,x,x,x,x,x,x,x,x]"]
+    prev = "a"
+    for i in range(1, levels):
+        current = chr(ord("a") + i)
+        refs = ",".join(f"*{prev}" for _ in range(branch))
+        lines.append(f"{current}: &{current} [{refs}]")
+        prev = current
+    lines.append(f"name: *{prev}")
+    return "\n".join(lines)
 
 
 def _write_skill(root: Path, skill_id: str, content: str) -> None:
@@ -335,3 +358,22 @@ def test_parse_skill_text_rejects_malformed_frontmatter() -> None:
 def test_parse_skill_text_rejects_non_mapping_frontmatter() -> None:
     with pytest.raises(ValueError):
         skills_module.parse_skill_text("bad-skill", "---\n- just\n- a\n- list\n---\n\nbody\n")
+
+
+def test_parse_skill_text_rejects_alias_bomb_frontmatter_fast() -> None:
+    """Regression test for the alias-bomb CPU/memory-exhaustion finding: a SKILL.md whose
+    frontmatter `name:` aliases a deeply-nested anchor chain must be rejected near-instantly, not
+    parsed and then blown up by `str(frontmatter.get("name") ...)` (`_build_skill`). Before the
+    `core.yaml_safety.NoAliasSafeLoader` fix, plain `yaml.safe_load` would happily resolve the
+    alias and `_build_skill`'s `str(...)` would then materialize an exponential string -- this
+    would neither raise here nor complete within the time bound, so this test fails on that old
+    behavior."""
+    bomb_text = "---\n" + _alias_bomb_frontmatter() + "\n---\n\nbody\n"
+
+    start = time.monotonic()
+    with pytest.raises(yaml.YAMLError, match="alias"):
+        skills_module.parse_skill_text("alias-bomb-skill", bomb_text)
+    elapsed = time.monotonic() - start
+    assert elapsed < _ALIAS_BOMB_FAST_BOUND_SECONDS, (
+        f"alias-bomb frontmatter rejection took {elapsed:.3f}s (bound {_ALIAS_BOMB_FAST_BOUND_SECONDS}s)"
+    )

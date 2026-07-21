@@ -262,7 +262,11 @@ async def test_knowledge_tools_end_to_end(tmp_path):
 
     # -- 1. upload_document stores fulltext + triggers init -----------------------------------------
     fixture_path = FIXTURES_DIR / "module_en.txt"
-    upload_result = await doc_tools.upload_document(ctx, file_path=str(fixture_path), doc_type="module")
+    # get_file confines uploads to the sandbox base_dir, so stage the fixture inside it (a real
+    # client uploads a file already in its sandbox, never an arbitrary absolute host path).
+    staged = tmp_path / "module_en.txt"
+    staged.write_bytes(fixture_path.read_bytes())
+    upload_result = await doc_tools.upload_document(ctx, file_path="module_en.txt", doc_type="module")
     assert "❌" not in upload_result
 
     fulltext = await services.store.get(user_key="", store_key=f"module_fulltext.{CHAT_KEY}")

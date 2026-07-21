@@ -198,22 +198,33 @@ async def test_room_open_rejects_platform_admin_marker_without_keeper_binding() 
     assert await get_binding(services.store, source.chat_key()) is None
 
 
-async def test_room_link_key_can_explicitly_link_a_group() -> None:
+async def test_room_link_requires_keeper_then_links_the_group() -> None:
     services = _services()
     keystore = Keystore()
     router = _router(services, keystore=keystore)
     join_key = keystore.add(room="group-room")
     source = SessionSource(platform="discord", chat_type="group", chat_id="c-7", user_id="u-7")
-    ctx = AgentCtx(
+
+    # An unprivileged member holding the join key must NOT be able to rebind the
+    # channel (that was the audit's channel-hijack finding).
+    player_ctx = AgentCtx(
         chat_key=source.chat_key(),
         user_id=source.user_key(),
         platform="discord",
         locale="en",
         extra={"source": source, "raw": {}},
     )
+    await router.dispatch(player_ctx, f".room link {join_key}")
+    assert await get_binding(services.store, source.chat_key()) is None
 
-    await router.dispatch(ctx, f".room link {join_key}")
-
+    keeper_ctx = AgentCtx(
+        chat_key=source.chat_key(),
+        user_id=source.user_key(),
+        platform="discord",
+        locale="en",
+        extra={"source": source, "raw": {}, "role": "keeper"},
+    )
+    await router.dispatch(keeper_ctx, f".room link {join_key}")
     assert await get_binding(services.store, source.chat_key()) == session_key_for_room("group-room")
 
 

@@ -217,4 +217,9 @@ class CharcardTools:
         """Fold the card's embedded `character_book` into the world lore (M11); 0 when it has none."""
         if not card.character_book:
             return 0
-        return await self._services.worldbook.import_entries(ctx.chat_key, card.character_book, source=card.name)
+        # A character card is untrusted input: its embedded lore lands in the room-local scope with
+        # constant/secret stripped (is_keeper=False) so a crafted card cannot inject always-on or
+        # keeper-only text. See core.worldbook.import_entries.
+        return await self._services.worldbook.import_entries(
+            ctx.chat_key, card.character_book, source=card.name, is_keeper=False
+        )

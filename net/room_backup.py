@@ -967,6 +967,32 @@ def _discard_stage(root: Path) -> None:
         logger.exception("failed to remove completed room-backup transaction directory")
 
 
+async def reset_room_state(services: Services, chat_key: str) -> dict[str, Any]:
+    """Wipe one room's campaign state (KV rows, vector points, media blobs) while
+    keeping keystore keys, channel/keeper bindings and live connections intact.
+
+    This is the "start a fresh campaign in the same room" operation behind the
+    `.reset` command: unlike ``delete_room_data`` it takes no backup and never
+    touches the keystore, so a table can re-roll characters and load a new module
+    without re-provisioning the server. Each leg is a plain wipe with nothing to
+    restore, so no staging is needed: if a later leg fails, re-running the reset
+    clears whatever remains.
+    """
+    rows = await room_rows(services, chat_key, enforce_limits=False)
+    # Channel->session bindings survive a reset: the room itself lives on, so
+    # external channels linked into it (and every connected member) stay wired.
+    rows = [row for row in rows if not str(row.get("store_key") or "").startswith("bound_room.")]
+    deleted_rows = await _atomic_store_update(services, delete_rows=rows)
+    deleted_vectors = await _delete_room_vectors(services, chat_key)
+    deleted_media = await _media_store(services).delete_room(chat_key)
+    return {
+        "chat_key": chat_key,
+        "store_rows": deleted_rows,
+        "vector_points": deleted_vectors,
+        "media_files": deleted_media,
+    }
+
+
 async def delete_room_data(services: Services, keystore: Keystore, room: str) -> dict[str, Any]:
     room = room.strip()
     if not room:

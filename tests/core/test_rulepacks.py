@@ -9,12 +9,35 @@ and (f) discovery robustness against one malformed pack file.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
+import yaml
 
 import core.rulepacks as rulepacks_module
 from core.rulepacks import available_systems, load_rulepack
+
+# Wall-clock bound for rejecting a `names:` alias bomb (see
+# `test_parse_rulepack_text_rejects_alias_bomb_names_fast`): a naive `yaml.safe_load` +
+# `[str(name) for name in data.get("names")]` (the pre-fix code path) would instead expand the
+# alias chain into an exponential structure before ever raising -- this bound catches a
+# regression back to that behavior, not just "it eventually raises."
+_ALIAS_BOMB_FAST_BOUND_SECONDS = 0.5
+
+
+def _alias_bomb_yaml(levels: int = 6, branch: int = 10) -> str:
+    """A "billion laughs"-style YAML alias bomb assigned to `names:` -- mirrors the reported
+    vulnerability shape (`core/rulepacks.py`'s `names:`/`alias:`/`set_keys:` string-coercion)."""
+    lines = ["a: &a [x,x,x,x,x,x,x,x,x,x]"]
+    prev = "a"
+    for i in range(1, levels):
+        current = chr(ord("a") + i)
+        refs = ",".join(f"*{prev}" for _ in range(branch))
+        lines.append(f"{current}: &{current} [{refs}]")
+        prev = current
+    lines.append(f"names: *{prev}")
+    return "\n".join(lines)
 
 # ---------------------------------------------------------------------------
 # (a) coc7 / dnd5e must stay byte-identical to the pre-refactor behavior.
@@ -495,6 +518,25 @@ def test_parse_rulepack_text_rejects_non_mapping_root() -> None:
 def test_parse_rulepack_text_rejects_bad_derived_spec() -> None:
     with pytest.raises(ValueError):
         rulepacks_module.parse_rulepack_text("inline-test", "names: [inline]\nderived:\n  stat: {bogus: 1}\n")
+
+
+def test_parse_rulepack_text_rejects_alias_bomb_names_fast() -> None:
+    """Regression test for the alias-bomb CPU/memory-exhaustion finding: a rulepack whose
+    `names:` aliases a deeply-nested anchor chain must be rejected near-instantly, not parsed and
+    then blown up by `[str(name) for name in data.get("names")]` (`_build_rulepack`). Before the
+    `core.yaml_safety.NoAliasSafeLoader` fix, plain `yaml.safe_load` would happily resolve the
+    alias and that list comprehension would then materialize an exponential structure -- this
+    would neither raise here nor complete within the time bound, so this test fails on that old
+    behavior."""
+    bomb_text = _alias_bomb_yaml()
+
+    start = time.monotonic()
+    with pytest.raises(yaml.YAMLError, match="alias"):
+        rulepacks_module.parse_rulepack_text("alias-bomb-pack", bomb_text)
+    elapsed = time.monotonic() - start
+    assert elapsed < _ALIAS_BOMB_FAST_BOUND_SECONDS, (
+        f"alias-bomb names: rejection took {elapsed:.3f}s (bound {_ALIAS_BOMB_FAST_BOUND_SECONDS}s)"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -43,10 +43,22 @@ from agent.services import Services
 from agent.tools import tool
 from core.battle_recording import coc_check_fields, record_dice_roll
 from core.battle_report import NPC_USER_ID, SessionRecord
-from core.character_manager import CharacterSheet, get_hit_points, recompute_dnd_derived, set_hit_points
+from core.character_manager import (
+    CharacterDataError,
+    CharacterSheet,
+    get_hit_points,
+    recompute_dnd_derived,
+    set_hit_points,
+)
 from core.character_rules import render_validation_notice, validate_sheet
 from core.coc_rules import DEFAULT_COC_RULE, DIFFICULTY_REGULAR, result_check_base
-from core.dice_engine import DiceResult, coc_rank_label
+from core.dice_engine import (
+    _MAX_WOD_DIFFICULTY,
+    _MAX_WOD_POOL,
+    _MIN_WOD_DIFFICULTY,
+    DiceResult,
+    coc_rank_label,
+)
 from core.luck import adjust_check_with_luck, find_latest_character_check, is_luck_eligible_check
 from core.rulepacks import load_rulepack
 
@@ -225,7 +237,10 @@ class CharacterTools:
     async def get_character_sheet(self, ctx: AgentCtx) -> str:
         """Get the current user's character sheet details."""
         i18n = self.services.i18n.with_locale(ctx.locale)
-        character = await _get_active_character(self.services, ctx)
+        try:
+            character = await _get_active_character(self.services, ctx)
+        except CharacterDataError:
+            return i18n.t("kp_tools.character.data_error")
         if not _has_character(character):
             return i18n.t("kp_tools.character.none")
 
@@ -319,6 +334,8 @@ class CharacterTools:
             )
             notice = render_validation_notice(i18n, violations)
             return f"{result}\n{notice}" if notice else result
+        except CharacterDataError:
+            return i18n.t("kp_tools.character.data_error")
         except Exception as exc:
             return i18n.t("kp_tools.character.skill.failed", error=str(exc))
 
@@ -369,6 +386,8 @@ class CharacterTools:
             )
             notice = render_validation_notice(i18n, violations)
             return f"{result}\n{notice}" if notice else result
+        except CharacterDataError:
+            return i18n.t("kp_tools.character.data_error")
         except Exception as exc:
             return i18n.t("kp_tools.character.attribute.failed", error=str(exc))
 
@@ -456,6 +475,8 @@ class CharacterTools:
 
             await self.services.characters.sync_party_roster(ctx.chat_key, character, status_effects=effects)
             return i18n.t("kp_tools.character.status.updated", effects=", ".join(str(effect) for effect in effects))
+        except CharacterDataError:
+            return i18n.t("kp_tools.character.data_error")
         except Exception as exc:
             return i18n.t("kp_tools.character.status.failed", error=str(exc))
 
@@ -934,6 +955,8 @@ class DiceTools:
                     luck=luck_after,
                 )
             return i18n.t("kp_tools.dice.luck.conflict")
+        except CharacterDataError:
+            return i18n.t("kp_tools.character.data_error")
         except Exception as exc:
             return i18n.t("kp_tools.dice.luck.failed", error=str(exc))
 
@@ -1031,6 +1054,8 @@ class DiceTools:
                 ),
             ]
             return "\n".join(lines)
+        except CharacterDataError:
+            return i18n.t("kp_tools.character.data_error")
         except Exception as exc:
             return i18n.t("kp_tools.dice.sanity.failed", error=str(exc))
 
@@ -1077,6 +1102,8 @@ class DiceTools:
             return i18n.t(
                 "kp_tools.dice.growth.failure", name=character.name, skill=target_skill, roll=roll, value=skill_value
             )
+        except CharacterDataError:
+            return i18n.t("kp_tools.character.data_error")
         except Exception as exc:
             return i18n.t("kp_tools.dice.growth.failed", error=str(exc))
 
@@ -1187,6 +1214,8 @@ class DiceTools:
             return i18n.t(
                 "kp_tools.dice.hp.status_line", name=character.name, hp=hp, hpmax=hp_max, status=i18n.t(status_key)
             )
+        except CharacterDataError:
+            return i18n.t("kp_tools.character.data_error")
         except Exception as exc:
             return i18n.t("kp_tools.dice.hp.failed", error=str(exc))
 
@@ -1199,6 +1228,25 @@ class DiceTools:
             difficulty: Difficulty threshold (defaults to 6).
         """
         i18n = self.services.i18n.with_locale(ctx.locale)
+        # Reject wildly out-of-range inputs with a clear message instead of letting
+        # `roll_wod_pool` silently clamp (or, before clamping, allocate a giant list
+        # and block the event loop). `roll_wod_pool` still clamps as a defense in depth.
+        if (
+            not isinstance(pool_size, int)
+            or isinstance(pool_size, bool)
+            or pool_size < 1
+            or pool_size > _MAX_WOD_POOL
+            or not isinstance(difficulty, int)
+            or isinstance(difficulty, bool)
+            or difficulty < _MIN_WOD_DIFFICULTY
+            or difficulty > _MAX_WOD_DIFFICULTY
+        ):
+            return i18n.t(
+                "kp_tools.dice.wod.out_of_range",
+                max_pool=_MAX_WOD_POOL,
+                min_difficulty=_MIN_WOD_DIFFICULTY,
+                max_difficulty=_MAX_WOD_DIFFICULTY,
+            )
         try:
             result = self.services.dice.roll_wod_pool(pool_size, difficulty)
             rolls_str = ", ".join(str(roll) for roll in result["rolls"])

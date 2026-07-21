@@ -215,10 +215,10 @@ class WorldbookTools:
             return i18n.t("worldbook.tools.remove.failed", error=str(exc))
 
     @tool
-    async def import_lorebook(self, ctx: AgentCtx, file_path: str) -> str:
+    async def import_lorebook(self, ctx: AgentCtx, file_path: str, *, _keeper: bool = False) -> str:
         """Import a lorebook file into the world: a SillyTavern `character_book` JSON, a bare
-        `{"entries": [...]}` object, or a plain list of entries. Entries default to non-secret,
-        world-scope unless flagged.
+        `{"entries": [...]}` object, or a plain list of entries. Imported entries are untrusted
+        by default (room scope, constant off, secret stripped).
 
         Args:
             file_path: The sandbox/logical path to the lorebook JSON (resolved to a host path via ctx.fs).
@@ -226,6 +226,8 @@ class WorldbookTools:
         Returns:
             Confirmation with how many entries were imported.
         """
+        # `_keeper` is caller-injected (never model-facing; see `agent.tools._skip_param`): only
+        # the keeper-gated `.lore import` command path may honor a file's `secret` flags.
         i18n = self._i18n(ctx)
         if ctx.fs is None:
             return i18n.t("worldbook.tools.import.no_fs")
@@ -240,7 +242,9 @@ class WorldbookTools:
                 if isinstance(book, dict):
                     data = book
             source = host_path.name
-            count = await self._services.worldbook.import_entries(ctx.chat_key, data, source=source)
+            count = await self._services.worldbook.import_entries(
+                ctx.chat_key, data, source=source, is_keeper=_keeper
+            )
             if not count:
                 return i18n.t("worldbook.tools.import.none", source=source)
             return i18n.t("worldbook.tools.import.done", count=count, source=source)

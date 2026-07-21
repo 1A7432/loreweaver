@@ -16,6 +16,15 @@ from typing import Any
 WORLD_SCOPE = "world"
 WORLDBOOK_COLLECTION = "worldbook"
 
+# Untrusted imports (uploaded lorebooks / SillyTavern cards) are pinned to this scope so a file
+# can never claim the cross-module "world" scope for itself; see `_normalize_import_entry`.
+IMPORT_SCOPE = "session"
+
+# Trust caps for a single import call. These bound both prompt-injection surface and storage
+# growth from an adversarial lorebook; exceeding them fails the whole import closed.
+MAX_IMPORT_ENTRIES = 200
+MAX_IMPORT_CONTENT_CHARS = 4000
+
 
 @dataclass
 class LoreEntry:
@@ -161,15 +170,34 @@ class WorldbookManager:
             await self.vector_db.delete([_vector_id(namespace, entry.id)])
         return True
 
-    async def import_entries(self, chat_key: str, entries: list[dict[str, Any]] | dict[str, Any], *, source: str = "") -> int:
+    async def import_entries(
+        self,
+        chat_key: str,
+        entries: list[dict[str, Any]] | dict[str, Any],
+        *,
+        source: str = "",
+        is_keeper: bool = False,
+    ) -> int:
+        """Import lorebook entries into this room.
+
+        Uploaded lorebooks / character cards are UNTRUSTED by default: every entry is forced to
+        the room-local import scope with ``constant=False`` and (unless ``is_keeper``) ``secret``
+        stripped, so a crafted file cannot inject always-on or keeper-only text. Callers that have
+        verified the importer is the room's keeper pass ``is_keeper=True`` to retain secrecy flags;
+        scope/constant are still forced regardless of trust.
+        """
         raw_entries: Any = entries.get("entries", []) if isinstance(entries, dict) else entries
         if not isinstance(raw_entries, list):
             return 0
+        if len(raw_entries) > MAX_IMPORT_ENTRIES:
+            raise ValueError("worldbook import exceeds the maximum entry count")  # i18n-exempt: surfaced via localized import failure
         count = 0
         for index, raw in enumerate(raw_entries, start=1):
             if not isinstance(raw, dict):
                 continue
-            entry = _normalize_import_entry(raw, source=source, index=index)
+            entry = _normalize_import_entry(raw, source=source, index=index, is_keeper=is_keeper)
+            if len(entry.content) > MAX_IMPORT_CONTENT_CHARS:
+                raise ValueError("worldbook import entry content exceeds the maximum length")  # i18n-exempt: surfaced via localized import failure
             if entry.content:
                 await self.add(chat_key, entry)
                 count += 1
@@ -275,11 +303,17 @@ def _new_id() -> str:
 
 
 def _namespace(chat_key: str, scope: str) -> str:
-    return WORLD_SCOPE if scope == WORLD_SCOPE else str(chat_key)
+    # Every scope — including "world" — is namespaced by the room's chat_key so lore never leaks
+    # across rooms sharing one host. (Historically "world" scope returned the literal global
+    # namespace "world", making worldbook.world.* shared by every room on the host.) Legacy
+    # globally-namespaced worldbook.world.* rows are intentionally NOT read anymore; re-reading
+    # them would re-open that cross-room leak. The `scope` argument is retained for call-site
+    # clarity but no longer changes the physical namespace.
+    return str(chat_key)
 
 
 def _entry_store_key(namespace: str, entry_id: str) -> str:
-    return f"worldbook.world.{entry_id}" if namespace == WORLD_SCOPE else f"worldbook.{namespace}.{entry_id}"
+    return f"worldbook.{namespace}.{entry_id}"
 
 
 def _index_store_key(namespace: str) -> str:
@@ -313,23 +347,28 @@ def _cap_entries(entries: list[LoreEntry], budget_chars: int) -> list[LoreEntry]
     return capped
 
 
-def _normalize_import_entry(raw: dict[str, Any], *, source: str, index: int) -> LoreEntry:
+def _normalize_import_entry(raw: dict[str, Any], *, source: str, index: int, is_keeper: bool) -> LoreEntry:
     extensions = raw.get("extensions") if isinstance(raw.get("extensions"), dict) else {}
     keys = raw.get("keys", raw.get("key", []))
     if isinstance(keys, str):
         keys = [keys]
     title = raw.get("title") or raw.get("comment") or raw.get("name") or f"{source or 'Lore'} {index}"
     priority = raw.get("priority", raw.get("insertion_order", 0))
+    # Trust boundary: the uploaded file does NOT get to choose its own scope/constant/secret.
+    # Scope is pinned room-local and `constant` is forced off (an always-on entry would inject
+    # itself into every prompt regardless of keywords). `secret` is honored only for a keeper
+    # importer; an untrusted card cannot mint keeper-only lore. The `id` is always regenerated so
+    # a card cannot address (and thus shadow) an existing entry.
     return LoreEntry.from_dict(
         {
-            "id": raw.get("id") or _new_id(),
+            "id": _new_id(),
             "title": title,
             "content": raw.get("content", ""),
             "keys": keys,
             "category": raw.get("category", extensions.get("category", "lore")),
-            "scope": raw.get("scope", extensions.get("scope", WORLD_SCOPE)),
-            "secret": raw.get("secret", extensions.get("secret", False)),
-            "constant": raw.get("constant", False),
+            "scope": IMPORT_SCOPE,
+            "secret": bool(raw.get("secret", extensions.get("secret", False))) if is_keeper else False,
+            "constant": False,
             "priority": priority,
             "enabled": raw.get("enabled", True),
         }

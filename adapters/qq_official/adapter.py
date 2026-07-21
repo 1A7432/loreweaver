@@ -151,12 +151,29 @@ class _DefaultQQTransport:
                 raise _api_error(response.status, data)
             return data
 
-    async def fetch(self, url: str) -> bytes:
+    async def fetch(self, url: str, *, max_bytes: int | None = None) -> bytes:
         session = await self._client()
         async with session.get(url) as response:
             if response.status >= 400:
                 raise QQAPIError(response.status)
-            return await response.read()
+            if max_bytes is None:
+                return await response.read()
+            declared = _content_length(response.headers.get("Content-Length"))
+            if declared is not None and declared > max_bytes:
+                raise ValueError("qq.attachment.too_large")
+            chunks: list[bytes] = []
+            size = 0
+            # The declared size (Content-Length header, or the attachment's own
+            # metadata checked by the caller) is untrusted — a missing/zero
+            # value must not let an oversized body buffer fully into memory
+            # before the cap is enforced, so the running total is checked as
+            # each chunk arrives and the transfer is aborted mid-stream.
+            async for chunk in response.content.iter_chunked(64 * 1024):
+                size += len(chunk)
+                if size > max_bytes:
+                    raise ValueError("qq.attachment.too_large")
+                chunks.append(chunk)
+            return b"".join(chunks)
 
     async def close(self) -> None:
         await self.close_ws()
@@ -272,11 +289,14 @@ class QQOfficialAdapter(BaseAdapter):
     ) -> bytes:
         if attachment.data is not None:
             return await super().fetch_attachment(attachment, max_bytes=max_bytes)
+        # Cheap early exit when the platform actually reported a size, but the
+        # field defaults to 0 when absent — it must never be trusted as proof
+        # the attachment is small, so the transport still streams under a cap.
         if max_bytes is not None and attachment.size > max_bytes:
             raise ValueError("qq.attachment.too_large")
         if not attachment.url:
             raise FileNotFoundError(attachment.id or attachment.name)
-        data = await self._transport.fetch(attachment.url)
+        data = await self._transport.fetch(attachment.url, max_bytes=max_bytes)
         if max_bytes is not None and len(data) > max_bytes:
             raise ValueError("qq.attachment.too_large")
         return data
@@ -878,6 +898,13 @@ async def _response_json(response: aiohttp.ClientResponse) -> dict[str, Any]:
 
 def _api_error(status: int, data: dict[str, Any]) -> QQAPIError:
     return QQAPIError(status, str(data.get("code") or data.get("err_code") or ""))
+
+
+def _content_length(value: str | None) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except ValueError:
+        return None
 
 
 def _parse_json(raw: Any) -> dict[str, Any] | None:

@@ -29,7 +29,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-import yaml
+from core.yaml_safety import safe_load_no_aliases
 
 logger = logging.getLogger(__name__)
 
@@ -422,10 +422,12 @@ def parse_rulepack_text(pack_id: str, text: str) -> RulePack:
     later apply -- no separate/divergent parser to keep in sync (mirrors
     `core.skills.parse_skill_text`'s precedent). Raises `ValueError` on any malformed input (bad
     YAML, a non-mapping root, or an invalid `derived:` spec -- see `_compile_derived_section`);
-    never `eval`/`exec`s anything -- the YAML is `yaml.safe_load`-ed only and `derived:` compiles
+    never `eval`/`exec`s anything -- the YAML is `yaml.safe_load`-ed only (via
+    `core.yaml_safety.safe_load_no_aliases`, which also rejects alias/anchor nodes so a small
+    YAML file can never alias-bomb into an exponential in-memory structure) and `derived:` compiles
     through the fixed safe DSL / named-computer vocabulary only.
     """
-    data = yaml.safe_load(text) or {}
+    data = safe_load_no_aliases(text) or {}
     if not isinstance(data, Mapping):
         raise ValueError(f"rulepack '{pack_id}': YAML root must be a mapping, got {type(data).__name__}")
     return _build_rulepack(pack_id, data)

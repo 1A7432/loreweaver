@@ -46,6 +46,16 @@ _SEALDICE_BARE_KEEP_RE = re.compile(r"k(?![hl])(\d+)")
 # freezing the process. It does not change the outcome distribution for realistic inputs.
 _MAX_BONUS_PENALTY_DICE = 100
 
+# Upper bound on the World of Darkness dice-pool size. Mirrors
+# `_MAX_BONUS_PENALTY_DICE`'s philosophy: a model-supplied `pool_size` (e.g.
+# `wod_check` with `pool_size=20000000`) would otherwise build a list that
+# large and block the event loop for seconds. No realistic WoD pool approaches
+# this, so clamping does not change legitimate outcomes.
+_MAX_WOD_POOL = 200
+# WoD difficulty is a d10 threshold; a value outside 2..10 is nonsensical.
+_MIN_WOD_DIFFICULTY = 2
+_MAX_WOD_DIFFICULTY = 10
+
 
 def _normalize_dice_expression(expression: str) -> str:
     """Rewrite SealDice-style notation into `d20` grammar (see the regexes above).
@@ -352,9 +362,18 @@ class DiceRoller:
 
     # -- World of Darkness ---------------------------------------------------
     def roll_wod_pool(self, pool_size: int, difficulty: int = 6, specialization: bool = False) -> dict:
-        """World of Darkness dice-pool check."""
+        """World of Darkness dice-pool check.
+
+        `pool_size` is clamped to `_MAX_WOD_POOL` and `difficulty` to
+        `_MIN_WOD_DIFFICULTY.._MAX_WOD_DIFFICULTY` so a pathological
+        (model-supplied) input cannot allocate an unbounded list / block the
+        event loop. Realistic pools/difficulties are unaffected.
+        """
         if pool_size <= 0:
             return {"successes": 0, "rolls": [], "botch": True}
+
+        pool_size = min(pool_size, _MAX_WOD_POOL)
+        difficulty = max(_MIN_WOD_DIFFICULTY, min(difficulty, _MAX_WOD_DIFFICULTY))
 
         rolls = [random.randint(1, 10) for _ in range(pool_size)]
         successes = 0

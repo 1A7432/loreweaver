@@ -18,12 +18,17 @@ make it immediately live.
 
 Trust boundary (``docs/plugins.md`` "The trust boundary"): all three are still **data plugins**
 even though the model wrote them -- no code ever runs. Nothing here `eval`/`exec`s anything; a
-skill/rulepack is parsed with `yaml.safe_load` exactly like a hand-authored one, and a module is
-opaque Markdown text handed to the same analysis pipeline a manual upload uses. The one privileged
-operation each performs is a scoped filesystem write, confined by construction
-(`_confined_target`/`_confined_file_target` assert the resolved path never escapes its directory)
-and gated behind a `generate_*` tool (`agent.kp_tools_forge`), each itself gated (Layer B.2) and
-invisible until its forge skill unlocks it.
+skill/rulepack is parsed with `yaml.safe_load` (via `core.yaml_safety.safe_load_no_aliases`, which
+additionally rejects alias/anchor nodes -- an alias-bomb document can expand into an exponential
+in-memory structure once something stringifies it) exactly like a hand-authored one, and a module
+is opaque Markdown text handed to the same analysis pipeline a manual upload uses. LLM-authored
+skill/rulepack content is ALSO capped at `_MAX_FORGE_CONTENT_BYTES` before that first parse call --
+independent, defense-in-depth protection against a merely large (non-aliased) document costing
+real CPU/memory on the shared event loop. The one privileged operation each performs is a scoped
+filesystem write, confined by construction (`_confined_target`/`_confined_file_target` assert the
+resolved path never escapes its directory) and gated behind a `generate_*` tool
+(`agent.kp_tools_forge`), each itself gated (Layer B.2) and invisible until its forge skill unlocks
+it.
 """
 
 from __future__ import annotations
@@ -33,16 +38,17 @@ import json
 import re
 import time
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import yaml
 
 import core.rulepacks as rulepacks
 import core.skills as skills
-from agent.context import AgentCtx
+from agent.context import AgentCtx, LocalFs
 from agent.kp_tools_knowledge import DocumentTools
 from agent.services import Services
+from core.yaml_safety import safe_load_no_aliases
 from infra.file_permissions import atomic_write_private
 from infra.usage_stats import record_usage_stats
 
@@ -55,6 +61,25 @@ _SLUG_OK_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # Cap the derived id so a pathologically long generated name can't slugify into a directory/file
 # component longer than the filesystem allows (NAME_MAX) — which would raise OSError at write time.
 _MAX_SLUG_LEN = 64
+
+# Hard byte cap on LLM-authored skill/rulepack content, enforced BEFORE the first parse call
+# (`skills.parse_skill_text`/`rulepacks.parse_rulepack_text`) in each generator below. This is
+# independent of, and in addition to, `core.yaml_safety.NoAliasSafeLoader`'s alias rejection: even
+# with aliases banned outright, a sufficiently large plain (non-aliased) YAML/frontmatter document
+# still costs real CPU/memory to parse and validate on the shared event loop, so a malicious or
+# runaway LLM response is refused by size alone before it ever reaches the parser.
+_MAX_FORGE_CONTENT_BYTES = 64 * 1024
+
+
+def _content_too_large(content: str) -> int | None:
+    """Return the content's UTF-8 byte length if it exceeds `_MAX_FORGE_CONTENT_BYTES`, else `None`.
+
+    Measured in encoded bytes (not `len(content)` characters) so the cap means what "64KB" says
+    regardless of how much of the content is multi-byte (e.g. CJK) text.
+    """
+    size = len(content.encode("utf-8"))
+    return size if size > _MAX_FORGE_CONTENT_BYTES else None
+
 
 # Layer B.3b (`generate_and_install_module`) discovery target: a user data-dir `modules/`
 # directory, set once at startup (`app.py`: `agent.forge._USER_MODULE_DIR =
@@ -235,6 +260,18 @@ async def generate_and_install_skill(
         return failure
     assert content is not None  # _llm_authored returns content XOR failure
 
+    # Hard size cap BEFORE any parse call (see `_MAX_FORGE_CONTENT_BYTES`'s docstring): refuse
+    # oversized LLM output outright rather than ever handing it to the YAML parser.
+    oversize = _content_too_large(content)
+    if oversize is not None:
+        return ForgeResult(
+            False,
+            "",
+            "",
+            "",
+            f"invalid_skill: generated SKILL.md is too large ({oversize} bytes, max {_MAX_FORGE_CONTENT_BYTES})",  # i18n-exempt
+        )
+
     # Step (c): derive the slug BEFORE full validation, from the frontmatter `name` (falling back
     # to the caller's own description when the model omitted one). Reuses the same parser as the
     # real validation below; a parse failure here is reported as "invalid", not "bad_id" -- the id
@@ -351,6 +388,18 @@ async def generate_and_install_rulepack(
         return failure
     assert content is not None  # _llm_authored returns content XOR failure
 
+    # Hard size cap BEFORE any parse call (see `_MAX_FORGE_CONTENT_BYTES`'s docstring): refuse
+    # oversized LLM output outright rather than ever handing it to the YAML parser.
+    oversize = _content_too_large(content)
+    if oversize is not None:
+        return ForgeResult(
+            False,
+            "",
+            "",
+            "",
+            f"invalid_rulepack: generated rulepack YAML is too large ({oversize} bytes, max {_MAX_FORGE_CONTENT_BYTES})",  # i18n-exempt
+        )
+
     # Step (c): derive the slug BEFORE full validation, from the pack's declared `names:` (falling
     # back to the caller's own description when the model omitted any). A parse failure here is
     # reported as "invalid", not "bad_id" -- the id can't be trusted to have been derived from
@@ -427,12 +476,18 @@ def _extract_module_title(content: str) -> str:
 
 
 def _extract_module_id(content: str) -> str:
-    """Read an explicit module id from YAML frontmatter at the document start."""
+    """Read an explicit module id from YAML frontmatter at the document start.
+
+    Uses `core.yaml_safety.safe_load_no_aliases` (not plain `yaml.safe_load`): this frontmatter is
+    LLM-authored content like the skill/rulepack generators', so it must reject alias/anchor nodes
+    the same way, closing off the alias-bomb class of attack here too. A YAML error (bad syntax OR
+    a rejected alias) degrades to `""`, same as before -- the caller falls back to a hash-derived id.
+    """
     match = _MODULE_FRONTMATTER_RE.match(content)
     if match is None:
         return ""
     try:
-        frontmatter = yaml.safe_load(match.group("body")) or {}
+        frontmatter = safe_load_no_aliases(match.group("body")) or {}
     except yaml.YAMLError:
         return ""
     if not isinstance(frontmatter, dict):
@@ -654,7 +709,11 @@ async def generate_and_install_module(services: Services, ctx: AgentCtx, descrip
     # `services.module_init.initialize` -- so `ctx.chat_key`'s keeper/player knowledge pools are
     # built by the exact same code a manual `.module` upload runs, not a parallel bespoke path.
     doc_tools = DocumentTools(services)
-    install_note = await doc_tools.upload_document(ctx, file_path=str(target), doc_type="module")
+    # `target` is a server-authored path under `_USER_MODULE_DIR`, not untrusted caller input,
+    # so the upload runs with an fs scoped to that directory — the transport's confined
+    # LocalFs base (cwd) need not contain data_dir (e.g. an absolute data_dir under systemd).
+    install_ctx = replace(ctx, fs=LocalFs(user_dir))
+    install_note = await doc_tools.upload_document(install_ctx, file_path=str(target), doc_type="module")
     status = await services.store.get(
         user_key="",
         store_key=f"module_init_status.{ctx.chat_key}",

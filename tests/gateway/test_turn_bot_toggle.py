@@ -87,11 +87,13 @@ async def test_bot_unset_and_bot_on_run_the_kp_turn():
     assert result is not None
     assert any(getattr(event, "speaker", "") == "kp" for event in member.events)
 
-    # An explicit `.bot on` after an off round restores the KP.
+    # An explicit `.bot on` after an off round restores the KP (keeper-gated
+    # since the audit fix, so the toggle comes from a keeper ctx).
     await services.store.set(user_key="", store_key=f"bot_enabled.{ROOM}", value="0")
     member.events.clear()
     services.llm._script.append(assistant_text("Back at the table."))
-    await run_turn(hub, services, ctx, ".bot on", command_router=router, toolset=toolset)
+    keeper_ctx = AgentCtx(chat_key=ROOM, user_id="u1", platform="tui", locale="en", extra={"role": "keeper"})
+    await run_turn(hub, services, keeper_ctx, ".bot on", command_router=router, toolset=toolset)
     member.events.clear()
     result = await run_turn(hub, services, ctx, "I listen at the door", command_router=router, toolset=toolset)
     assert result is not None

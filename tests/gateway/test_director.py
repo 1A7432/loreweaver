@@ -23,7 +23,7 @@ from agent.kp_tools import build_kp_toolset
 from agent.kp_tools_companion import CompanionTools
 from agent.services import build_services
 from gateway.commands import CommandRouter
-from gateway.director import run_director
+from gateway.director import request_companion, run_director
 from gateway.hub import Event, RoomHub
 from gateway.turn import run_turn
 from infra.config import Settings
@@ -172,6 +172,119 @@ async def test_run_director_is_a_structural_noop_for_a_companions_own_turn():
     companion_ctx = _ctx(chat_key, user_id="companion:ada", platform="companion")
     result = await run_director(hub, services, companion_ctx, command_router=router)
     assert result == []
+
+
+# --- Model-authored companion text must NEVER reach the command router / inline-roll parser ---
+# (security cluster fix). A companion's action is LLM-generated; feeding it verbatim into the
+# command router let it (a) recurse via ".party act <self>", (b) execute a level-0 command like
+# ".bot off" with EVERYONE privilege from pure model output, and (c) short-circuit the whole KP
+# turn via an inline "[[1d6]]". `run_companion_turn` now runs `run_turn` with `model_authored=True`,
+# which skips `dispatch_reply` and treats the text as pure narration/action for the KP pipeline.
+
+
+def _companion_declares(action: str, kp_reply: str):
+    """A responder whose companion actor declares `action`, and whose KP resolves it to `kp_reply`.
+
+    Counts every LLM call so a test can prove the turn is BOUNDED (no recursion cascade).
+    """
+    calls = {"n": 0}
+
+    def responder(messages, tools):
+        calls["n"] += 1
+        if tools is None:  # the companion actor call (declares an action, no tools attached)
+            return assistant_text(json.dumps({"action": action, "dialogue": ""}))
+        return assistant_text(kp_reply)  # the KP resolving the action
+
+    return responder, calls
+
+
+async def test_companion_action_that_is_a_party_command_never_recurses_or_executes():
+    # (a) A companion whose generated action reads ".party act <its own name>" must NOT re-enter
+    # the director. Fed verbatim to the command router it recursed until RecursionError (an
+    # instrumented run drove 165 real LLM calls); model-authored text now bypasses the router.
+    chat_key = "recurse-room"
+    responder, calls = _companion_declares(".party act Ada", "The Keeper describes Ada's move.")
+    services, store = _services(responder)
+    await _add_companion(services, chat_key, "Ada")
+
+    hub = RoomHub()
+    router, toolset, watcher = await _room(services, hub, chat_key)
+
+    result = await request_companion(
+        hub, services, "Ada", chat_key=chat_key, command_router=router, toolset=toolset
+    )
+
+    # BOUNDED: exactly one companion-actor call + one KP resolution -- no recursive cascade.
+    assert calls["n"] == 2
+    # The Keeper resolved the action as narration; no command executed.
+    assert result is not None
+    kp_lines = [e for e in watcher.events if e.kind == "narrative" and e.speaker == "kp"]
+    assert len(kp_lines) == 1
+    # The room attributes exactly one Ada action -- no second companion turn was spawned.
+    ada_actions = [e for e in watcher.events if e.kind == "player_action" and e.name == "Ada"]
+    assert len(ada_actions) == 1
+    # The `.party` command binding/state was never touched.
+    assert await store.get(user_key="", store_key=f"bot_enabled.{chat_key}") is None
+
+
+async def test_companion_action_bot_off_does_not_mute_the_keeper():
+    # (b) A companion action of ".bot off" must NOT flip `bot_enabled.{chat_key}` -- a level-0
+    # command executing with EVERYONE privilege from pure model output -- and the room must still
+    # get a KP-adjudicated turn (rather than the command reply branch swallowing it).
+    chat_key = "botoff-room"
+    responder, _calls = _companion_declares(".bot off", "The Keeper resolves the move.")
+    services, store = _services(responder)
+    await _add_companion(services, chat_key, "Ada")
+
+    hub = RoomHub()
+    router, toolset, watcher = await _room(services, hub, chat_key)
+
+    result = await request_companion(
+        hub, services, "Ada", chat_key=chat_key, command_router=router, toolset=toolset
+    )
+
+    # The KP mute flag was NOT flipped by the model-authored ".bot off".
+    assert await store.get(user_key="", store_key=f"bot_enabled.{chat_key}") != "0"
+    # And the room still got a KP-adjudicated turn.
+    assert result is not None
+    kp_lines = [e for e in watcher.events if e.kind == "narrative" and e.speaker == "kp"]
+    assert len(kp_lines) == 1
+
+
+async def test_companion_action_with_inline_roll_still_reaches_the_keeper(monkeypatch):
+    # (c) An inline "[[1d6]]" in companion prose must NOT hit the `_render_inline_rolls` fallback
+    # (which short-circuits the whole turn, leaving the Keeper unconsulted and the turn swallowed).
+    # `run_kp_turn` MUST still be invoked.
+    import gateway.turn as turn_mod
+
+    kp_calls = {"n": 0}
+    original_run_kp_turn = turn_mod.run_kp_turn
+
+    async def spy(*args, **kwargs):
+        kp_calls["n"] += 1
+        return await original_run_kp_turn(*args, **kwargs)
+
+    monkeypatch.setattr(turn_mod, "run_kp_turn", spy)
+
+    chat_key = "inline-room"
+    responder, _calls = _companion_declares(
+        "I search the desk, rolling [[1d6]].", "The Keeper describes the search."
+    )
+    services, _store = _services(responder)
+    await _add_companion(services, chat_key, "Ada")
+
+    hub = RoomHub()
+    router, toolset, watcher = await _room(services, hub, chat_key)
+
+    result = await request_companion(
+        hub, services, "Ada", chat_key=chat_key, command_router=router, toolset=toolset
+    )
+
+    # The Keeper WAS consulted -- the inline roll did not swallow the turn.
+    assert kp_calls["n"] == 1
+    assert result is not None, "the KP turn must not be swallowed by the inline-roll fallback"
+    kp_lines = [e for e in watcher.events if e.kind == "narrative" and e.speaker == "kp"]
+    assert len(kp_lines) == 1
 
 
 async def test_run_director_noop_without_auto_or_combat():

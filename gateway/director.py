@@ -26,12 +26,14 @@ point on the normal turn path (``gateway.turn.run_turn``) can never recurse.
 from __future__ import annotations
 
 import json
+import logging
 from typing import TYPE_CHECKING
 
 from agent.companion_actor import companion_action
 from agent.context import AgentCtx
 from agent.kp_tools import build_kp_toolset
 from agent.npc import NpcManager, NpcRecord
+from core.character_manager import CharacterDataError
 from gateway.turn import run_turn
 
 if TYPE_CHECKING:
@@ -67,7 +69,13 @@ async def run_companion_turn(
     events. Because ``ctx.user_id`` is ``companion:{id}``, every character/dice tool the KP reaches
     for during this turn resolves against the companion's own sheet.
     """
-    sheet = await services.characters.get_character(f"companion:{companion.id}", chat_key)
+    try:
+        sheet = await services.characters.get_character(f"companion:{companion.id}", chat_key)
+    except CharacterDataError:
+        # An unreadable companion row must not abort the whole (possibly multi-companion)
+        # turn; the companion simply passes until its sheet is restored.
+        logging.getLogger(__name__).exception("companion sheet unreadable; skipping turn")
+        return None
 
     prompt_situation = f"{situation}\n{cap_note}".strip() if cap_note else situation
     # INFORMATION ISOLATION (M10 red line): a companion actor is built from ONLY its own record +
@@ -84,6 +92,12 @@ async def run_companion_turn(
     text = f"{dialogue} {action}".strip() if dialogue else action
 
     ctx = AgentCtx(chat_key=chat_key, user_id=f"companion:{companion.id}", platform="companion", locale=locale)
+    # ``text`` is LLM-authored (the companion's declared action/dialogue), NOT human input.
+    # ``model_authored=True`` makes ``run_turn`` bypass the command router and the inline-roll
+    # fallback so this generated text can NEVER execute a command or re-enter the director: an
+    # action that happens to read ".party act <name>" would otherwise recurse, and a ".bot off"
+    # would flip room state with EVERYONE privilege straight from model output. The KP resolves
+    # the action as pure narration, and any companion dice go through the KP toolset alone.
     return await run_turn(
         hub,
         services,
@@ -95,6 +109,7 @@ async def run_companion_turn(
         origin=None,
         echo_exclude=None,
         actor_name=companion.name,
+        model_authored=True,
     )
 
 

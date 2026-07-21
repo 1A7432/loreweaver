@@ -35,6 +35,7 @@ class FakeTransport:
         self.closed_ws = 0
         self.closed = 0
         self.downloads: dict[str, bytes] = {}
+        self.fetch_calls: list[tuple[str, int | None]] = []
         self.fail = None
         self.ws_event = asyncio.Event()
 
@@ -65,7 +66,8 @@ class FakeTransport:
             return {"file_info": f"file-{len(self.http)}"}
         return {"id": f"message-{len(self.http)}"}
 
-    async def fetch(self, url: str) -> bytes:
+    async def fetch(self, url: str, *, max_bytes: int | None = None) -> bytes:
+        self.fetch_calls.append((url, max_bytes))
         return self.downloads[url]
 
 
@@ -845,6 +847,108 @@ async def test_fetch_attachment_downloads_remote_bytes() -> None:
     data = await adapter.fetch_attachment(ChatAttachment(url="https://cdn.example/a.png"))
 
     assert data == b"image"
+
+
+async def test_fetch_attachment_rejects_declared_oversize_before_transport_fetch() -> None:
+    adapter, transport, _ = _adapter()
+
+    with pytest.raises(ValueError, match="qq.attachment.too_large"):
+        await adapter.fetch_attachment(
+            ChatAttachment(url="https://cdn.example/huge.bin", size=MAX_ATTACHMENT_BYTES + 1),
+            max_bytes=MAX_ATTACHMENT_BYTES,
+        )
+
+    # The cheap declared-size check must reject before the transport is ever
+    # asked to fetch anything.
+    assert transport.fetch_calls == []
+
+
+class _FetchContent:
+    """Lazily-yielding stand-in for aiohttp's StreamReader, tracking how much
+    of the body the caller actually consumed before it stopped iterating."""
+
+    def __init__(self, chunks: list[bytes]) -> None:
+        self.chunks = chunks
+        self.yielded = 0
+
+    async def iter_chunked(self, _size: int):
+        for chunk in self.chunks:
+            self.yielded += 1
+            yield chunk
+
+
+class _FetchResponse:
+    def __init__(
+        self,
+        chunks: list[bytes],
+        *,
+        status: int = 200,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self.status = status
+        self.headers = headers or {}
+        self.content = _FetchContent(chunks)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args) -> None:
+        return None
+
+
+class _FetchSession:
+    def __init__(self, response: _FetchResponse) -> None:
+        self.response = response
+        self.urls: list[str] = []
+
+    def get(self, url: str):
+        self.urls.append(url)
+        return self.response
+
+
+async def test_default_transport_fetch_aborts_mid_stream_when_declared_size_is_missing() -> None:
+    # Regression test for the confirmed HIGH: a missing `size` field on the
+    # attachment (and no Content-Length header from the server) must not let
+    # an oversized body buffer fully into memory — the running total has to
+    # be enforced chunk by chunk.
+    transport = _DefaultQQTransport(app_id="app", secret="secret")
+    chunk = b"x" * (64 * 1024)
+    chunk_count = 400  # 400 * 64 KiB = 25 MiB, over the 20 MiB cap
+    response = _FetchResponse([chunk] * chunk_count)  # no headers => no declared size
+    session = _FetchSession(response)
+    transport._session = session
+
+    with pytest.raises(ValueError, match="qq.attachment.too_large"):
+        await transport.fetch("https://cdn.example/huge.bin", max_bytes=MAX_ATTACHMENT_BYTES)
+
+    # Must have aborted well before consuming the whole 400-chunk body.
+    assert 0 < response.content.yielded < chunk_count
+
+
+async def test_default_transport_fetch_rejects_oversize_content_length_before_streaming() -> None:
+    transport = _DefaultQQTransport(app_id="app", secret="secret")
+    response = _FetchResponse(
+        [b"not-read"],
+        headers={"Content-Length": str(MAX_ATTACHMENT_BYTES + 1)},
+    )
+    session = _FetchSession(response)
+    transport._session = session
+
+    with pytest.raises(ValueError, match="qq.attachment.too_large"):
+        await transport.fetch("https://cdn.example/huge.bin", max_bytes=MAX_ATTACHMENT_BYTES)
+
+    assert response.content.yielded == 0
+
+
+async def test_default_transport_fetch_streams_small_body_under_cap() -> None:
+    transport = _DefaultQQTransport(app_id="app", secret="secret")
+    response = _FetchResponse([b"hello ", b"world"])
+    session = _FetchSession(response)
+    transport._session = session
+
+    data = await transport.fetch("https://cdn.example/small.png", max_bytes=MAX_ATTACHMENT_BYTES)
+
+    assert data == b"hello world"
 
 
 async def test_private_message_is_never_queued_to_group() -> None:

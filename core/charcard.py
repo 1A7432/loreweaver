@@ -17,6 +17,14 @@ from typing import Any
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
+# Hard caps against attacker-controlled cards fed through `.import` / upload_document.
+# Real SillyTavern cards (PNG portrait + embedded JSON) sit well under a megabyte, so
+# 16MB is generous for a genuine file while refusing an OOM feed like `/dev/zero`.
+MAX_CARD_FILE_BYTES = 16 * 1024 * 1024
+# A zlib bomb in a zTXt/iTXt chunk can inflate ~500KB into gigabytes; cap decompressed
+# text so a malicious chunk raises instead of exhausting memory.
+MAX_DECOMPRESSED_BYTES = 4 * 1024 * 1024
+
 
 @dataclass
 class CharacterCard:
@@ -34,7 +42,21 @@ class CharacterCard:
 
 def parse_card_file(path: str | Path) -> CharacterCard:
     card_path = Path(path)
-    return parse_card_bytes(card_path.read_bytes(), filename=card_path.name)
+    return parse_card_bytes(_read_card_bytes(card_path), filename=card_path.name)
+
+
+def _read_card_bytes(card_path: Path, limit: int = MAX_CARD_FILE_BYTES) -> bytes:
+    # Regular files only: a character device like `/dev/zero` reports st_size 0 yet
+    # never hits EOF, so an unbounded `read_bytes()` would OOM. `is_file()` rejects it.
+    if not card_path.is_file():
+        raise ValueError("character card path is not a regular file")  # i18n-exempt: folded into localized *-failed messages
+    if card_path.stat().st_size > limit:
+        raise ValueError("character card file exceeds the size limit")  # i18n-exempt: folded into localized import-failed messages
+    with card_path.open("rb") as handle:
+        data = handle.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("character card file exceeds the size limit")  # i18n-exempt: folded into localized import-failed messages
+    return data
 
 
 def parse_card_bytes(data: bytes, filename: str = "") -> CharacterCard:
@@ -95,7 +117,7 @@ def _read_text_chunk(chunk_type: bytes, data: bytes) -> tuple[str, str] | None:
         method = rest[0]
         if method != 0:
             return None
-        return _decode_png_text(keyword), zlib.decompress(rest[1:]).decode("utf-8")
+        return _decode_png_text(keyword), _bounded_decompress(rest[1:]).decode("utf-8")
 
     keyword, sep, rest = data.partition(b"\x00")
     if not sep or len(rest) < 2:
@@ -112,8 +134,31 @@ def _read_text_chunk(chunk_type: bytes, data: bytes) -> tuple[str, str] | None:
     if not sep:
         return None
     if compression_flag:
-        text = zlib.decompress(text)
+        text = _bounded_decompress(text)
     return _decode_png_text(keyword), text.decode("utf-8")
+
+
+def _bounded_decompress(data: bytes, limit: int = MAX_DECOMPRESSED_BYTES) -> bytes:
+    """Inflate a PNG text chunk, refusing zlib bombs by capping total output.
+
+    Uses a streaming `decompressobj` with a per-call `max_length` so a chunk that
+    would expand past `limit` bytes raises `ValueError` instead of allocating the
+    whole (potentially gigabyte-scale) output.
+    """
+    decompressor = zlib.decompressobj()
+    out = bytearray()
+    tail = data
+    while True:
+        out += decompressor.decompress(tail, limit + 1 - len(out))
+        if len(out) > limit:
+            raise ValueError("compressed character-card text exceeds the size limit")  # i18n-exempt: folded into localized import-failed messages
+        tail = decompressor.unconsumed_tail
+        if not tail:
+            break
+    out += decompressor.flush()
+    if len(out) > limit:
+        raise ValueError("compressed character-card text exceeds the size limit")  # i18n-exempt: folded into localized import-failed messages
+    return bytes(out)
 
 
 def _decode_png_text(data: bytes) -> str:

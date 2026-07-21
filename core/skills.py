@@ -12,7 +12,8 @@ and parsing only, no ``store``/``infra`` imports. Per-room enablement lives in
 enabled skill's body into the KP system prompt is ``agent.prompt_builder``'s
 job; the content-rating censor gate is ``gateway.ops.room_content_unfiltered``
 + ``gateway.turn``. Nothing here is ever ``eval``/``exec``-ed: the frontmatter
-is parsed with ``yaml.safe_load`` only, and the Markdown body is opaque text.
+is parsed with ``yaml.safe_load`` (via ``core.yaml_safety.safe_load_no_aliases``, which additionally
+rejects alias/anchor nodes -- see that module) only, and the Markdown body is opaque text.
 
 ``unlocked_tools_for`` (Layer B.2 -- ``allowed-tools`` enforcement, see
 ``docs/plugins.md`` "Layer B") is the one exception to "no store imports": it
@@ -32,7 +33,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-import yaml
+from core.yaml_safety import safe_load_no_aliases
 
 logger = logging.getLogger(__name__)
 
@@ -106,10 +107,12 @@ def parse_skill_text(skill_id: str, text: str) -> Skill:
     writing it to disk) can validate against the identical rules real discovery will later apply —
     no separate/divergent parser to keep in sync. Raises `ValueError` on any malformed input
     (missing/unclosed frontmatter fence, or frontmatter that isn't a YAML mapping); never
-    `eval`/`exec`s anything -- the frontmatter is `yaml.safe_load`-ed only.
+    `eval`/`exec`s anything -- the frontmatter is `yaml.safe_load`-ed only (via
+    `core.yaml_safety.safe_load_no_aliases`, which also rejects alias/anchor nodes so a small
+    frontmatter block can never alias-bomb into an exponential in-memory structure).
     """
     frontmatter_text, body = _split_frontmatter(text)
-    data = yaml.safe_load(frontmatter_text) or {}
+    data = safe_load_no_aliases(frontmatter_text) or {}
     if not isinstance(data, dict):
         raise ValueError(f"skill '{skill_id}': frontmatter must be a mapping, got {type(data).__name__}")
     return _build_skill(skill_id, data, body)

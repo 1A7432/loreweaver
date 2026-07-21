@@ -38,6 +38,27 @@ from typing import Any
 from infra.i18n import t
 from infra.store import Store
 
+
+class CharacterDataError(Exception):
+    """A character row exists in the store but cannot be read.
+
+    Raised by `CharacterManager.get_character` when the underlying store read
+    fails, or the stored row is present but undecodable (corrupt/truncated
+    JSON, schema mismatch). This is deliberately distinct from a *genuinely
+    absent* row, which `get_character` still resolves to a fresh default sheet
+    so creation flows keep working.
+
+    Mutating callers MUST catch this and abort — otherwise a blank replacement
+    sheet (carrying the real character's name) would be saved over the
+    unreadable row AND the shared party roster, permanently wiping the
+    character. Read-only callers may catch it and degrade gracefully.
+    """
+
+    def __init__(self, char_name: str, message: str = "") -> None:
+        self.char_name = char_name
+        super().__init__(message or f"character data for {char_name!r} is unreadable")
+
+
 # core/character_manager.py -> core/ -> repo root -> templates/
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 _DND_CURRENT_HP_KEY = "生命值"
@@ -706,8 +727,13 @@ class CharacterManager:
 
         `char_name` defaults to the caller's active character for this
         `chat_key` (falling back to the fixed slot `"default"` if none is
-        set); a not-found lookup returns a fresh `CharacterSheet` named
-        `char_name` rather than raising.
+        set); a *genuinely absent* row returns a fresh `CharacterSheet` named
+        `char_name` rather than raising (creation flows depend on this).
+
+        A row that is present but unreadable (corrupt JSON / schema mismatch),
+        or a store read that fails outright, raises `CharacterDataError` — it
+        must NOT silently degrade to a blank sheet, or a subsequent save would
+        wipe the real character. See `CharacterDataError`.
         """
         if not char_name:
             active_key = f"active_character.{chat_key}"
@@ -721,13 +747,20 @@ class CharacterManager:
 
         try:
             char_data = await self.store.get(user_key=user_id, store_key=store_key)
-            if char_data:
-                data_dict = json.loads(char_data)
-                return CharacterSheet.from_dict(data_dict)
-        except Exception:
-            pass
+        except Exception as exc:
+            raise CharacterDataError(char_name) from exc
 
-        return CharacterSheet(name=char_name)
+        if not char_data:
+            # Row genuinely absent — return a fresh default sheet.
+            return CharacterSheet(name=char_name)
+
+        try:
+            data_dict = json.loads(char_data)
+            return CharacterSheet.from_dict(data_dict)
+        except Exception as exc:
+            # Row present but undecodable — refuse rather than fabricate a
+            # blank sheet that a mutating caller would persist over the real one.
+            raise CharacterDataError(char_name) from exc
 
     async def save_character(self, user_id: str, chat_key: str, character: CharacterSheet) -> None:
         """Persist `character`, and make it the active character / add it to the

@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from core.worldbook import LoreEntry, WorldbookManager, inject_world_lore_prompt
+import pytest
+
+from core.worldbook import (
+    MAX_IMPORT_CONTENT_CHARS,
+    MAX_IMPORT_ENTRIES,
+    LoreEntry,
+    WorldbookManager,
+    inject_world_lore_prompt,
+)
 from infra.embeddings import FakeEmbeddings
 from infra.i18n import I18n
 from infra.store import Store
@@ -140,6 +148,141 @@ async def test_inject_world_lore_prompt_role_filtering_and_empty_case():
     assert "Secret moon lore." not in player_prompt
     assert "Secret moon lore." in keeper_prompt
     assert empty_prompt == ""
+
+
+async def test_world_scope_lore_is_room_scoped_no_cross_room_leak():
+    """Security: a `world`-scope secret added in room A must be invisible to room B on the same
+    host (shared store). Before the fix, world scope used a single global namespace, so every
+    room shared worldbook.world.* — an information-isolation red-line breach."""
+    sentinel = "ROOM_A_ONLY_SECRET"
+    store = Store(":memory:")
+    manager = WorldbookManager(store)
+
+    await manager.add(
+        "tui:group:room-a",
+        LoreEntry(
+            id="hidden",
+            title="Hidden",
+            content=f"{sentinel} is buried below room A.",
+            keys=["vault"],
+            scope="world",
+            secret=True,
+        ),
+    )
+    await manager.add(
+        "tui:group:room-a",
+        LoreEntry(id="always", title="Always", content="Room A premise.", scope="world", constant=True),
+    )
+
+    # Room B shares the same host/store but must see NOTHING from room A.
+    assert await manager.list("tui:group:room-b") == []
+    assert await manager.match("tui:group:room-b", "vault", role="keeper") == []
+    keeper_prompt = await inject_world_lore_prompt(
+        SimpleNamespace(chat_key="tui:group:room-b"),
+        manager,
+        I18n(locale="en"),
+        role="keeper",
+        recent_context="vault",
+    )
+    assert keeper_prompt == ""
+    assert sentinel not in keeper_prompt
+
+    # Room A still sees its own world lore.
+    assert {entry.id for entry in await manager.list("tui:group:room-a")} == {"hidden", "always"}
+
+
+async def test_import_forces_untrusted_defaults():
+    """Security: an uploaded lorebook cannot dictate scope/constant/secret. A crafted entry with
+    constant=true / scope=world / secret=true must land room-local, non-constant, non-secret."""
+    manager = WorldbookManager(Store(":memory:"))
+
+    count = await manager.import_entries(
+        "chat-a",
+        {
+            "entries": [
+                {
+                    "title": "Injected",
+                    "content": "INJECTED_ALWAYS_ON payload.",
+                    "keys": [],
+                    "scope": "world",
+                    "constant": True,
+                    "secret": True,
+                }
+            ]
+        },
+        source="card",
+        is_keeper=False,
+    )
+    assert count == 1
+    [entry] = await manager.list("chat-a")
+    assert entry.scope == "session"
+    assert entry.constant is False
+    assert entry.secret is False
+
+    # A keyless, non-constant entry must NOT be force-injected into a prompt.
+    prompt = await inject_world_lore_prompt(
+        SimpleNamespace(chat_key="chat-a"),
+        manager,
+        I18n(locale="en"),
+        role="keeper",
+        recent_context="an unrelated scene",
+    )
+    assert "INJECTED_ALWAYS_ON" not in prompt
+
+
+async def test_import_keeper_may_retain_secret_but_scope_and_constant_still_forced():
+    manager = WorldbookManager(Store(":memory:"))
+
+    await manager.import_entries(
+        "chat-a",
+        {"entries": [{"title": "K", "content": "keeper lore", "scope": "world", "constant": True, "secret": True}]},
+        source="card",
+        is_keeper=True,
+    )
+    [entry] = await manager.list("chat-a")
+    assert entry.secret is True  # keeper importer keeps the secrecy flag
+    assert entry.scope == "session"  # scope is still forced room-local
+    assert entry.constant is False  # constant is still forced off
+
+
+async def test_import_entry_count_cap_enforced():
+    manager = WorldbookManager(Store(":memory:"))
+    too_many = {"entries": [{"content": f"lore {i}", "keys": ["k"]} for i in range(MAX_IMPORT_ENTRIES + 1)]}
+    with pytest.raises(ValueError):
+        await manager.import_entries("chat-a", too_many, source="card")
+    # Nothing partial was written.
+    assert await manager.list("chat-a") == []
+
+
+async def test_import_entry_content_length_cap_enforced():
+    manager = WorldbookManager(Store(":memory:"))
+    oversized = {"entries": [{"content": "x" * (MAX_IMPORT_CONTENT_CHARS + 1), "keys": ["k"]}]}
+    with pytest.raises(ValueError):
+        await manager.import_entries("chat-a", oversized, source="card")
+
+
+async def test_room_rows_backup_covers_world_scope_entries():
+    """The room backup allowlist must capture room-scoped world lore (entries + index) so a
+    snapshot round-trips it. Regression against world lore silently missing from backups."""
+    from net.room_backup import room_rows
+
+    store = Store(":memory:")
+    manager = WorldbookManager(store)
+    chat_key = "tui:group:room-a"
+    await manager.add(
+        chat_key,
+        LoreEntry(id="wl", title="World Lore", content="A durable world fact.", scope="world"),
+    )
+
+    services = SimpleNamespace(store=store)
+    rows = await room_rows(services, chat_key)
+    store_keys = {row["store_key"] for row in rows}
+
+    assert f"worldbook.{chat_key}.wl" in store_keys  # the entry row
+    assert f"worldbook_index.{chat_key}" in store_keys  # the index row
+
+    # And nothing lands in the legacy global namespace that would cross rooms.
+    assert not any(str(key).startswith("worldbook.world.") for key in store_keys)
 
 
 async def test_one_corrupt_row_is_skipped_and_does_not_break_lookups():

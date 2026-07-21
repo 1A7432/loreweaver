@@ -106,7 +106,7 @@ def _ctx(fs_base: Path) -> AgentCtx:
 
 async def test_happy_path_writes_and_installs_into_the_calling_room(tmp_path: Path) -> None:
     services = _services(GENERATED_MODULE_MD)
-    ctx = _ctx(tmp_path / "fs")
+    ctx = _ctx(tmp_path)
 
     original_user_dir = forge_module._USER_MODULE_DIR
     forge_module._USER_MODULE_DIR = tmp_path / "modules"
@@ -134,7 +134,7 @@ async def test_happy_path_writes_and_installs_into_the_calling_room(tmp_path: Pa
 
 async def test_repeat_description_short_circuits_without_regeneration(tmp_path: Path) -> None:
     services = _services(GENERATED_MODULE_MD)
-    ctx = _ctx(tmp_path / "fs")
+    ctx = _ctx(tmp_path)
 
     original_user_dir = forge_module._USER_MODULE_DIR
     forge_module._USER_MODULE_DIR = tmp_path / "modules"
@@ -184,7 +184,7 @@ async def test_reinstall_same_room_id_overwrites_one_consistent_content_version(
         ),
         embeddings=FakeEmbeddings(8),
     )
-    ctx = _ctx(tmp_path / "fs")
+    ctx = _ctx(tmp_path)
 
     original_user_dir = forge_module._USER_MODULE_DIR
     forge_module._USER_MODULE_DIR = tmp_path / "modules"
@@ -231,7 +231,7 @@ async def test_reinstall_same_room_id_overwrites_one_consistent_content_version(
 
 async def test_empty_llm_response_is_rejected(tmp_path: Path) -> None:
     services = _services("   ")
-    ctx = _ctx(tmp_path / "fs")
+    ctx = _ctx(tmp_path)
 
     original_user_dir = forge_module._USER_MODULE_DIR
     forge_module._USER_MODULE_DIR = tmp_path / "modules"
@@ -252,7 +252,7 @@ async def test_cjk_title_without_usable_id_gets_stable_content_hash_id(tmp_path:
     generated = "# 黄泉归影\n\n一场发生在黄泉渡口的调查。"
     expected_id = f"module-{hashlib.sha256(generated.encode('utf-8')).hexdigest()[:8]}"
     services = _services(generated)
-    ctx = _ctx(tmp_path / "fs")
+    ctx = _ctx(tmp_path)
 
     original_user_dir = forge_module._USER_MODULE_DIR
     forge_module._USER_MODULE_DIR = tmp_path / "modules"
@@ -277,7 +277,7 @@ id: echoes-from-yellow-springs
 一场发生在黄泉渡口的调查。
 """
     services = _services(generated)
-    ctx = _ctx(tmp_path / "fs")
+    ctx = _ctx(tmp_path)
 
     original_user_dir = forge_module._USER_MODULE_DIR
     forge_module._USER_MODULE_DIR = tmp_path / "modules"
@@ -311,7 +311,7 @@ async def test_module_forge_and_analysis_usage_are_both_recorded(tmp_path: Path)
         ]
     )
     services = build_services(Settings(locale="en"), llm=llm, embeddings=FakeEmbeddings(8))
-    ctx = _ctx(tmp_path / "fs")
+    ctx = _ctx(tmp_path)
 
     original_user_dir = forge_module._USER_MODULE_DIR
     forge_module._USER_MODULE_DIR = tmp_path / "modules"
@@ -336,7 +336,7 @@ async def test_module_forge_and_analysis_usage_are_both_recorded(tmp_path: Path)
 async def test_traversal_title_is_sanitized_to_a_safe_id_never_a_path(tmp_path: Path) -> None:
     traversal_md = GENERATED_MODULE_MD.replace("The Salt Marsh Vanishing", "../../etc/passwd")
     services = _services(traversal_md)
-    ctx = _ctx(tmp_path / "fs")
+    ctx = _ctx(tmp_path)
 
     original_user_dir = forge_module._USER_MODULE_DIR
     forge_module._USER_MODULE_DIR = tmp_path / "modules"
@@ -361,7 +361,7 @@ async def test_traversal_title_is_sanitized_to_a_safe_id_never_a_path(tmp_path: 
 
 async def test_no_data_dir_configured_fails_cleanly(tmp_path: Path) -> None:
     services = _services(GENERATED_MODULE_MD)
-    ctx = _ctx(tmp_path / "fs")
+    ctx = _ctx(tmp_path)
     assert forge_module._USER_MODULE_DIR is None  # the default in every test unless opted in
 
     result = await generate_and_install_module(services, ctx, "anything")

@@ -6,6 +6,7 @@ import logging
 import random
 import re
 import shlex
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -15,7 +16,13 @@ from agent.kp_tools_mechanics import InitiativeTools
 from agent.services import Services
 from core.battle_recording import record_coc_skill_check, record_dice_roll
 from core.char_from_persona import build_sheet_from_description
-from core.character_manager import CharacterSheet, get_hit_points, recompute_dnd_derived, set_hit_points
+from core.character_manager import (
+    CharacterDataError,
+    CharacterSheet,
+    get_hit_points,
+    recompute_dnd_derived,
+    set_hit_points,
+)
 from core.character_rules import render_validation_notice, validate_sheet
 from core.coc_rules import DEFAULT_COC_RULE
 from core.dice_engine import DiceResult, coc_rank_label
@@ -66,10 +73,21 @@ _INLINE_RE = re.compile(r"\[\[([^\[\]]+)\]\]")
 _COMMAND_TOKEN_RE = re.compile(r"([^\s]+)(?:\s+(.*))?$", re.S)
 _MULTI_PREFIX_RE = re.compile(r"^\s*(\d{1,2})[#＃]\s*(.*)$", re.S)
 _TRAILING_NUMBER_RE = re.compile(r"^(.+?)(\d{1,3})$")
-_SHEET_ASSIGN_RE = re.compile(r"(.+?)([+-]?(?:\d+d\d+(?:[+\-*/]\d+)?|\d+))(?:\s*|$)", re.I)
+# Matches only the VALUE half of a `.st` assignment (a signed number or dice
+# expression). `_parse_sheet_assignments` scans for these and takes the text before
+# each value as the attribute name. Anchoring on the value (which has no unbounded
+# lazy prefix) makes parsing strictly linear, so no argument can trigger the
+# quadratic backtracking the old `(.+?)(value)` pattern suffered.
+_SHEET_VALUE_RE = re.compile(r"[+-]?(?:\d+d\d+(?:[+\-*/]\d+)?|\d+)", re.I)
 _EXPLODE_BANG_RE = re.compile(r"(\d*d(\d+))!", re.I)
 
 _SLASH_NAME_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
+
+# Hard cap on a command's argument-string length (router-level). Legitimate command
+# arguments are far shorter; the cap defends the whole command surface against an
+# oversized argument being fed into a parser/regex (e.g. `.st`'s quadratic-backtracking
+# assignment regex) and stalling the event loop.
+_MAX_COMMAND_ARG_LEN = 4000
 
 _GENCHAR_SYSTEMS = {
     "coc": "coc7",
@@ -183,6 +201,8 @@ _LORE_IMPORT_WORDS = {"import", "load", "导入", "導入"}
 # `.room` subcommand vocabularies (EN + a couple of CN synonyms).
 _ROOM_OPEN_WORDS = {"open", "new", "create", "开", "开房", "開", "開房"}
 _ROOM_LINK_WORDS = {"link", "join", "bind", "连", "連", "加入"}
+_RESET_CONFIRM_WORDS = {"confirm", "yes", "确认", "確認"}
+_RESET_CONFIRM_WINDOW_SECONDS = 120
 _ROOM_LEAVE_WORDS = {"leave", "unbind", "close", "离开", "離開", "解绑", "解綁"}
 _ROOM_SHOW_WORDS = {"", "show", "status", "info", "查看"}
 
@@ -368,6 +388,11 @@ class CommandRouter:
             return CommandReply(rendered) if rendered is not None else None
 
         spec, args = resolved
+        # Router-level argument cap: bound the untrusted argument string before any
+        # handler (or its parsers/regexes) touches it, so a single oversized argument
+        # cannot stall the event loop (e.g. quadratic backtracking in `.st` parsing).
+        if len(args) > _MAX_COMMAND_ARG_LEN:
+            return CommandReply(get_i18n(locale).t("commands.error.too_long", limit=_MAX_COMMAND_ARG_LEN))
         if spec.required_level and _privilege_level(ctx) < spec.required_level:
             return CommandReply(get_i18n(locale).t("rooms.denied"))
         command = text.strip()[1:].split(maxsplit=1)[0] if text.strip() else spec.canonical
@@ -381,7 +406,13 @@ class CommandRouter:
             locale=locale,
             i18n=get_i18n(locale),
         )
-        rendered = await spec.handler(command_ctx)
+        try:
+            rendered = await spec.handler(command_ctx)
+        except CharacterDataError:
+            # A present-but-unreadable character row must abort the command rather than
+            # let any handler proceed against a blank sheet (the silent-wipe bug class).
+            logger.exception("character row unreadable during command %s", spec.canonical)
+            return CommandReply(get_i18n(locale).t("kp_tools.character.data_error"))
         return CommandReply(rendered, tuple(command_ctx.events))
 
     def slash_definitions(self, locale: str = "en") -> list[dict]:
@@ -436,6 +467,9 @@ class CommandRouter:
             return ctx.i18n.t("commands.roll.invalid", expr=expression)
         ctx.dice("roll", **_dice_result_fields(result))
         character = await ctx.services.characters.get_character(ctx.user_id, ctx.chat_key)
+        # A hidden roll (`.rh`) is unicast to the roller only; it MUST be recorded
+        # as hidden so `.report detailed` (player-facing, ungated) can never replay
+        # the secret result or even count it in the statistics.
         await record_dice_roll(
             ctx.services.battles,
             ctx.chat_key,
@@ -443,6 +477,7 @@ class CommandRouter:
             character.name,
             expression,
             result,
+            hidden=True,
         )
         return ctx.i18n.t("commands.roll.hidden", result=_format_roll(result, ctx.i18n))
 
@@ -745,11 +780,20 @@ class CommandRouter:
         return ctx.i18n.t("commands.draw.result", card=card)
 
     async def cmd_bot_toggle(self, ctx: CommandCtx) -> str:
+        """`.bot [on|off]` — mute/unmute the AI Keeper room-wide. The bare status
+        query is open to anyone, but flipping ``bot_enabled`` is a room-wide control
+        (a muted Keeper stops responding for EVERY member), so on/off require a keeper.
+        Gated in-handler (not via ``required_level``) so a CLI/TUI keeper keeps working
+        while a plain networked player cannot silence the table."""
         value = ctx.args.strip().casefold()
         if value in {"on", "1", "true", "开启", "啟用"}:
+            if not _is_keeper(ctx.raw_ctx):
+                return ctx.i18n.t("rooms.denied")
             await ctx.services.store.set(user_key="", store_key=f"bot_enabled.{ctx.chat_key}", value="1")
             return ctx.i18n.t("commands.bot.on")
         if value in {"off", "0", "false", "关闭", "關閉"}:
+            if not _is_keeper(ctx.raw_ctx):
+                return ctx.i18n.t("rooms.denied")
             await ctx.services.store.set(user_key="", store_key=f"bot_enabled.{ctx.chat_key}", value="0")
             return ctx.i18n.t("commands.bot.off")
         return ctx.i18n.t("commands.bot.status")
@@ -883,9 +927,11 @@ class CommandRouter:
             return ctx.i18n.t("commands.avatar.media_disabled")
         if ctx.services.imagegen is None:
             return ctx.i18n.t("commands.avatar.not_configured")
-        if not allow_imagegen_request(ctx.services, ctx.chat_key):
-            return ctx.i18n.t("commands.avatar.rate_limited")
 
+        # Resolve the target and enforce the keeper gate BEFORE consuming the shared
+        # rate-limit token: a target-avatar request from a non-keeper must be denied
+        # without burning the room's imagegen quota (otherwise a player could exhaust
+        # it with requests that are rejected anyway).
         target_name = ""
         prompt_tokens = tokens
         if len(tokens) >= 2:
@@ -899,6 +945,9 @@ class CommandRouter:
         prompt = " ".join(prompt_tokens).strip()
         if not prompt:
             return ctx.i18n.t("commands.avatar.usage")
+
+        if not allow_imagegen_request(ctx.services, ctx.chat_key):
+            return ctx.i18n.t("commands.avatar.rate_limited")
 
         if ctx.router.hub is not None:
             await ctx.router.hub.publish(
@@ -1095,6 +1144,10 @@ class CommandRouter:
                 return ctx.i18n.t("rooms.private_required")
             return await self._room_open(ctx, store, channel_key)
         if sub in _ROOM_LINK_WORDS:
+            # Linking this channel into a shared session redirects the whole
+            # channel's traffic; keeper-only, consistent with open/leave.
+            if not _is_keeper(ctx.raw_ctx):
+                return ctx.i18n.t("rooms.denied")
             return await self._room_link(ctx, store, channel_key, rest)
         if sub in _ROOM_LEAVE_WORDS:
             if not _is_keeper(ctx.raw_ctx):
@@ -1170,6 +1223,45 @@ class CommandRouter:
                 members_text = ", ".join(names)
         return ctx.i18n.t("rooms.show.result", session=binding, online=online, members=members_text)
 
+    async def cmd_reset(self, ctx: CommandCtx) -> str:
+        """`.reset` then `.reset confirm` — wipe this room's campaign state
+        (characters, story history, module, lore, media) so the table can start
+        over in place after a dead campaign. Keystore keys, room bindings and
+        live connections all survive, so nobody has to re-provision the server
+        or re-join. There is NO automatic backup: the wipe is irreversible,
+        hence the keeper gate plus a persisted two-step confirm."""
+        store = ctx.services.store
+        if not await _keeper_still_authorized(ctx.raw_ctx, ctx.chat_key, store):
+            return ctx.i18n.t("commands.reset.denied")
+        pending_key = f"reset_pending.{ctx.chat_key}"
+        if ctx.args.strip().casefold() in _RESET_CONFIRM_WORDS:
+            armed_raw = await store.get(user_key="", store_key=pending_key)
+            try:
+                armed_at = float(armed_raw) if armed_raw else 0.0
+            except ValueError:
+                armed_at = 0.0
+            if time.time() - armed_at <= _RESET_CONFIRM_WINDOW_SECONDS:
+                # The reset itself lives beside the backup/delete machinery so the
+                # room-state key vocabulary stays single-sourced (same gateway->net
+                # seam as gateway/turn.py's `net.state` import).
+                from net.room_backup import reset_room_state
+
+                try:
+                    result = await reset_room_state(ctx.services, ctx.chat_key)
+                except Exception:
+                    logger.exception("campaign reset failed for %s", ctx.chat_key)
+                    return ctx.i18n.t("commands.reset.failed")
+                await store.delete_rows([("", pending_key)])
+                return ctx.i18n.t(
+                    "commands.reset.done",
+                    rows=int(result.get("store_rows") or 0),
+                    vectors=int(result.get("vector_points") or 0),
+                    media=int(result.get("media_files") or 0),
+                )
+        # Bare `.reset` (or a stale/unarmed confirm) arms the pending window.
+        await store.set(user_key="", store_key=pending_key, value=str(time.time()))
+        return ctx.i18n.t("commands.reset.armed", seconds=_RESET_CONFIRM_WINDOW_SECONDS)
+
     async def cmd_party(self, ctx: CommandCtx) -> str:
         """`.party [add <name> [| persona] | act <name> [hint] | auto on|off | remove <name>]`
         — manage the AI companion party (M10). Bare `.party` lists the party's AI companions."""
@@ -1185,6 +1277,16 @@ class CommandRouter:
             locale=ctx.locale,
         )
         tools = CompanionTools(ctx.services)
+
+        # Bare `.party` (list) is open to any player, but the mutating subcommands
+        # (add/remove/auto/act) change the companion roster and drive LLM spend, so
+        # they are keeper-gated. Gated in-handler (not via `required_level`) so a
+        # CLI/TUI keeper keeps working.
+        if (
+            sub in _PARTY_ADD_WORDS | _PARTY_REMOVE_WORDS | _PARTY_AUTO_WORDS | _PARTY_ACT_WORDS
+            and not _is_keeper(ctx.raw_ctx)
+        ):
+            return ctx.i18n.t("rooms.denied")
 
         if sub in _PARTY_ADD_WORDS:
             if not rest:
@@ -1276,7 +1378,8 @@ class CommandRouter:
                 return ctx.i18n.t("worldbook.commands.lore.denied")
             if not rest:
                 return ctx.i18n.t("worldbook.commands.lore.import_usage")
-            return await tools.import_lorebook(agent_ctx, file_path=rest)
+            # This branch is keeper-gated above, so the import may honor `secret` flags.
+            return await tools.import_lorebook(agent_ctx, file_path=rest, _keeper=True)
         return ctx.i18n.t("worldbook.commands.lore.usage")
 
     async def cmd_import(self, ctx: CommandCtx) -> str:
@@ -1289,11 +1392,18 @@ class CommandRouter:
         if attachment and (not tokens or tokens[0].casefold() in {"coc7", "coc", "dnd5e", "dnd", "pc", "companion"}):
             file_path = attachment
             options = tokens
+            from_attachment = True
         elif tokens:
             file_path = tokens[0]
             options = tokens[1:]
+            from_attachment = False
         else:
             return ctx.i18n.t("charcard.commands.import.usage")
+        # A raw host PATH argument (not a room attachment) reads an arbitrary file
+        # off the server, so it requires a keeper. An attachment-based import stays
+        # open so a player can still self-import their own uploaded card.
+        if not from_attachment and not _is_keeper(ctx.raw_ctx):
+            return ctx.i18n.t("rooms.denied")
         system = "coc7"
         as_ = "pc"
         for token in options:
@@ -1927,6 +2037,14 @@ class CommandRouter:
                 "commands.help.room",
             ),
             CommandSpec(
+                "reset",
+                self.cmd_reset,
+                ["reset"],
+                ["reset", "重置", "重开", "重開"],
+                None,
+                "commands.help.reset",
+            ),
+            CommandSpec(
                 "model",
                 self.cmd_model,
                 ["model"],
@@ -2447,12 +2565,22 @@ def _migrate_legacy_coc_luck(character: CharacterSheet) -> None:
 
 
 def _parse_sheet_assignments(text: str) -> list[tuple[str, str]]:
+    """Parse ``.st`` NAME+VALUE assignments (e.g. ``STR16 DEX14`` / ``力量50，敏捷60``).
+
+    Scanning for the VALUE half (`_SHEET_VALUE_RE`) and taking the text that precedes
+    each value as the attribute name is strictly LINEAR: the previous ``(.+?)(value)``
+    pattern backtracked quadratically, so a ~20k-char argument stalled the event loop
+    for seconds. The name is everything since the prior value, so both glued
+    (``STR16``) and space-separated (``STR 16``) forms still parse.
+    """
     assignments = []
-    for match in _SHEET_ASSIGN_RE.finditer(text.strip()):
-        name = match.group(1).strip(" ,，")
-        value = match.group(2).strip()
+    last = 0
+    for match in _SHEET_VALUE_RE.finditer(text):
+        name = text[last : match.start()].strip(" ,，")
+        value = match.group(0).strip()
         if name and value:
             assignments.append((name, value))
+        last = match.end()
     return assignments
 
 

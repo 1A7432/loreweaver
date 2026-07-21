@@ -72,6 +72,11 @@ def _default_session_name(moment: datetime, i18n: I18n) -> str:
     return i18n.t("battle.session.default_name", timestamp=moment.strftime("%Y%m%d-%H%M"))
 
 
+def _visible_rolls(rolls: list[dict]) -> list[dict]:
+    """Drop hidden (`.rh`) rolls so no report ever replays a secret result."""
+    return [roll for roll in rolls if not roll.get("hidden")]
+
+
 class SessionRecord:
     """A single TRPG session's recorded events and per-player stats."""
 
@@ -98,26 +103,36 @@ class SessionRecord:
         result: int,
         is_critical: bool = False,
         critical_type: str = "",
+        hidden: bool = False,
     ) -> None:
         """Record a dice roll and update the roller's aggregate stats.
 
         ``critical_type`` is ``"success"`` / ``"failure"`` / ``""``; critical
         successes and failures are tracked as SEPARATE counters on
         ``player_stats``.
-        """
-        self.dice_rolls.append(
-            {
-                "user_id": user_id,
-                "char_name": char_name,
-                "expression": expression,
-                "result": result,
-                "is_critical": is_critical,
-                "critical_type": critical_type,
-                "timestamp": time.time(),
-            }
-        )
 
-        if user_id == NPC_USER_ID:
+        ``hidden`` marks a keeper/private roll (e.g. `.rh`): it is retained on
+        the record for the keeper's own bookkeeping, but MUST never surface in
+        any player-facing report -- it is excluded from every rendered
+        transcript, statistic, aggregate and highlight (see ``_visible_rolls``
+        and ``rebuild_player_stats``), so the roller's secret result cannot be
+        replayed via `.report detailed`.
+        """
+        entry = {
+            "user_id": user_id,
+            "char_name": char_name,
+            "expression": expression,
+            "result": result,
+            "is_critical": is_critical,
+            "critical_type": critical_type,
+            "timestamp": time.time(),
+        }
+        if hidden:
+            entry["hidden"] = True
+        self.dice_rolls.append(entry)
+
+        # A hidden roll never contributes to any player-facing aggregate.
+        if user_id == NPC_USER_ID or hidden:
             return
 
         if user_id not in self.player_stats:
@@ -298,6 +313,8 @@ class SessionRecord:
             return stats
 
         for roll in self.dice_rolls:
+            if roll.get("hidden"):
+                continue
             stats = player(str(roll.get("user_id", "")), str(roll.get("char_name", "")))
             if stats is None:
                 continue
@@ -528,6 +545,7 @@ class BattleReportGenerator:
         """Render the plain-text battle report."""
         i18n = i18n or get_i18n()
         lines: list[str] = []
+        visible_rolls = _visible_rolls(record.dice_rolls)
 
         lines.append("=" * 50)
         lines.append(i18n.t("battle.report.title"))
@@ -584,7 +602,7 @@ class BattleReportGenerator:
             i18n.t(
                 "battle.report.stat_line",
                 label=i18n.t("battle.report.label.total_dice_rolls"),
-                count=len(record.dice_rolls),
+                count=len(visible_rolls),
             )
         )
         lines.append(
@@ -629,7 +647,7 @@ class BattleReportGenerator:
             lines.append("")
 
         # highlights (critical successes/failures)
-        critical_moments = [roll for roll in record.dice_rolls if roll.get("is_critical")]
+        critical_moments = [roll for roll in visible_rolls if roll.get("is_critical")]
 
         if critical_moments:
             lines.append("=" * 50)
@@ -668,6 +686,7 @@ class BattleReportGenerator:
         """
         i18n = i18n or get_i18n()
         lines: list[str] = []
+        visible_rolls = _visible_rolls(record.dice_rolls)
 
         lines.append(f"# {i18n.t('battle.report.title')}")
         lines.append("")
@@ -726,7 +745,7 @@ class BattleReportGenerator:
             i18n.t(
                 "battle.report.md.stat_row",
                 label=i18n.t("battle.report.label.total_dice_rolls"),
-                count=len(record.dice_rolls),
+                count=len(visible_rolls),
             )
         )
         lines.append(
@@ -768,7 +787,7 @@ class BattleReportGenerator:
                 )
             lines.append("")
 
-        critical_moments = [roll for roll in record.dice_rolls if roll.get("is_critical")]
+        critical_moments = [roll for roll in visible_rolls if roll.get("is_critical")]
 
         if critical_moments:
             lines.append(f"## {i18n.t('battle.report.highlights_heading')}")
@@ -834,7 +853,7 @@ class BattleReportGenerator:
                     )
                 )
 
-        for roll in record.dice_rolls:
+        for roll in _visible_rolls(record.dice_rolls):
             timestamp = roll.get("timestamp", 0)
             if roll.get("is_critical"):
                 marker = i18n.t(
@@ -953,7 +972,7 @@ class BattleReportGenerator:
         lines.append(
             i18n.t(
                 "battle.summary.progress_line",
-                dice_rolls=len(record.dice_rolls),
+                dice_rolls=len(_visible_rolls(record.dice_rolls)),
                 skill_checks=len(record.skill_checks),
             )
         )
@@ -1010,10 +1029,15 @@ class BattleReportManager:
         result: int,
         is_critical: bool = False,
         critical_type: str = "",
+        hidden: bool = False,
     ) -> None:
-        """Record a dice roll, lazily starting the session when needed."""
+        """Record a dice roll, lazily starting the session when needed.
+
+        ``hidden`` marks a private/keeper roll that must be kept out of every
+        player-facing report (see ``SessionRecord.add_dice_roll``).
+        """
         record = await self._session_for_write(chat_key)
-        record.add_dice_roll(user_id, char_name, expression, result, is_critical, critical_type)
+        record.add_dice_roll(user_id, char_name, expression, result, is_critical, critical_type, hidden)
         await self.generator.save_session(chat_key, record)
 
     async def add_skill_check(
