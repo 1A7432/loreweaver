@@ -84,13 +84,14 @@ class TuiSettings(BaseModel):
     media_uploads_per_minute: int = 10
     audio_max_file_bytes: int = 128 * 1024 * 1024
     audio_room_quota_bytes: int = 2 * 1024 * 1024 * 1024
-    # OPTIONAL keeper-triggered in-place self-update. When set, a keeper can update the
-    # server from the client's "Rooms & invites" page: the server runs THIS command
-    # (e.g. `git pull && uv sync`) and then re-execs itself into the new code. It is the
-    # operator's OWN command, never anything a client supplies — leaving it blank (the
-    # default) hides the feature entirely, so no client can run a server-side command
-    # unless the operator has opted in. See docs/deploy.md (Updating).
-    update_command: str = ""
+    # Keeper-triggered in-place self-update. A keeper updates the server from the client's
+    # "Rooms & invites" page: the server runs THIS command and then re-execs into the new
+    # code. The default matches the documented git-checkout deployment (docs/deploy.md) —
+    # `--ff-only` refuses to run if the checkout diverged, and the re-exec handles the
+    # restart, so no `systemctl restart` is needed here. It is always the OPERATOR's command,
+    # never anything a client supplies; override it for a non-git deployment (docker/pip/
+    # binary), or set it BLANK to disable the feature entirely (the button then never shows).
+    update_command: str = "git pull --ff-only && uv sync"  # i18n-exempt: shell command default, not UI text
 
 
 class ImageGenSettings(BaseModel):

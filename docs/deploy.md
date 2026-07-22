@@ -58,34 +58,37 @@ journalctl -u loreweaver -f       # follow logs — the ticket + keeper key prin
 
 ## Updating
 
-Update by hand from the box:
-
-```bash
-cd ~/loreweaver && git pull && uv sync && sudo systemctl restart loreweaver
-```
-
-Or let a keeper trigger it from the client's **Rooms & invites** page. This is **off by
-default** — set `TRPG_TUI__UPDATE_COMMAND` to the command YOU want the server to run:
-
-```bash
-# in ~/loreweaver/.env
-TRPG_TUI__UPDATE_COMMAND=git pull && uv sync
-```
-
-With it set, a keeper (only) sees the server-vs-client version and an **Update server**
-button whenever the client is newer. Pressing it runs exactly that command on the server,
-then the process **re-execs itself into the new code** (same PID, so the Iroh ticket is
-unchanged and no `systemctl restart` is needed — it works with the `Restart=on-failure`
-unit above). Clients briefly disconnect and reconnect.
+A keeper updates the server from the client's **Rooms & invites** page — no SSH needed.
+It is **on by default** for the git-checkout deployment above: a keeper (only) sees the
+server-vs-client version and an **Update server** button whenever the client is newer.
+Pressing it runs `TRPG_TUI__UPDATE_COMMAND` on the server (default
+`git pull --ff-only && uv sync`), then the process **re-execs itself into the new code**
+(same PID, so the Iroh ticket is unchanged and no `systemctl restart` is needed — it works
+with the `Restart=on-failure` unit above). Clients briefly disconnect and reconnect.
 
 `loreweaver update` does the same server update by default after reinstalling the client
 (using your saved keeper connection), so one command keeps both in step —
 `loreweaver update --client-only` skips the server.
 
+Override the command for a non-git deployment, or disable the feature entirely:
+
+```bash
+# in ~/loreweaver/.env
+TRPG_TUI__UPDATE_COMMAND=git pull --ff-only && uv sync   # default (git checkout)
+# TRPG_TUI__UPDATE_COMMAND=docker compose pull && docker compose up -d   # your own mechanism
+# TRPG_TUI__UPDATE_COMMAND=                                # blank → button hidden, feature off
+```
+
+You can still update by hand any time:
+
+```bash
+cd ~/loreweaver && git pull && uv sync && sudo systemctl restart loreweaver
+```
+
 Security: the command is yours, from server-side config — a client can only ask the server
-to run *its own* configured command, never supply one. Leave `TRPG_TUI__UPDATE_COMMAND`
-blank to hide the feature entirely. Don't point it at anything you wouldn't run yourself;
-the keeper key is the trust boundary, exactly as for `.model`/key management.
+to run *its own* configured command, never supply one. The default only pulls from the
+checkout's own git remote. The keeper key is the trust boundary, exactly as for
+`.model`/key management; set `TRPG_TUI__UPDATE_COMMAND` blank if you'd rather it never run.
 
 ## Configuration
 
