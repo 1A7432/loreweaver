@@ -286,7 +286,7 @@ async def _dispatch_admin_frame(
     if kind == "admin_delete_room_data":
         return await _delete_room_data(services, keystore, caller_room, frame, i18n)
     if kind == "admin_reset_room":
-        return await _reset_room(services, caller_room, frame, i18n)
+        return await _reset_room(services, keystore, caller_room, frame, i18n)
     if kind == "admin_update_server":
         return await _update_server(services, i18n)
     if kind == "admin_list_skills":
@@ -892,6 +892,7 @@ async def _delete_room_data(
 
 async def _reset_room(
     services: Services,
+    keystore: Keystore,
     caller_room: str,
     frame: dict[str, Any],
     i18n: I18n,
@@ -910,7 +911,7 @@ async def _reset_room(
     if scope not in RESET_SCOPES:
         return _error("bad_request", i18n)
     try:
-        result = await reset_room_state(services, chat_key_for_room(room), scope=scope)
+        result = await reset_room_state(services, chat_key_for_room(room), scope=scope, keystore=keystore)
     except Exception:
         return _error("op_failed", i18n)
     result["room"] = room

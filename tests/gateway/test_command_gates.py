@@ -104,6 +104,55 @@ async def test_bot_status_query_open_but_keeper_can_toggle():
 
 
 # ---------------------------------------------------------------------------
+# Fix 2a′ — .setcoc / .language writes are keeper-gated; the bare query stays open
+# (room-wide state: coc_rule regrades every check, chat_locale flips every member's language)
+# ---------------------------------------------------------------------------
+
+
+async def test_setcoc_write_denied_for_player_but_query_open():
+    services = _services()
+    router = CommandRouter(services)
+    chat_key = "tui:group:coc"
+    player = _player_ctx(chat_key)
+
+    denied = await router.dispatch(player, ".setcoc 2")
+    assert denied == _denied(services)
+    # The room-wide rule was NOT changed.
+    assert await services.store.get(user_key="", store_key=f"coc_rule.{chat_key}") is None
+    # The bare query stays open to a player (reads, never writes).
+    current = await router.dispatch(player, ".setcoc")
+    assert current == services.i18n.with_locale("en").t("commands.setcoc.current", rule=0)
+    assert await services.store.get(user_key="", store_key=f"coc_rule.{chat_key}") is None
+
+
+async def test_setcoc_keeper_can_still_set_the_rule():
+    services = _services()
+    router = CommandRouter(services)
+    chat_key = "cli:dm:coc"
+    reply = await router.dispatch(_keeper_ctx(chat_key), ".setcoc 2")
+    assert reply == services.i18n.with_locale("en").t("commands.setcoc.changed", rule=2)
+    assert await services.store.get(user_key="", store_key=f"coc_rule.{chat_key}") == "2"
+
+
+async def test_language_write_denied_for_player_does_not_flip_room_locale():
+    services = _services()
+    router = CommandRouter(services)
+    chat_key = "tui:group:lang"
+    reply = await router.dispatch(_player_ctx(chat_key), ".language zh")
+    assert reply == _denied(services)
+    assert await services.store.get(user_key="", store_key=f"chat_locale.{chat_key}") is None
+
+
+async def test_language_keeper_can_still_set_room_locale():
+    services = _services()
+    router = CommandRouter(services)
+    chat_key = "cli:dm:lang"
+    reply = await router.dispatch(_keeper_ctx(chat_key), ".language zh")
+    assert reply == services.i18n.with_locale("zh").t("commands.language.done")
+    assert await services.store.get(user_key="", store_key=f"chat_locale.{chat_key}") == "zh"
+
+
+# ---------------------------------------------------------------------------
 # Fix 2b — .room link is keeper-gated (consistent with open/leave)
 # ---------------------------------------------------------------------------
 

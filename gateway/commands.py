@@ -692,9 +692,15 @@ class CommandRouter:
         return ctx.i18n.t("commands.panel.ready")
 
     async def cmd_language(self, ctx: CommandCtx) -> str:
+        """`.language <en|zh>` — set the room-wide display locale. ``chat_locale`` is
+        room-scoped (``user_key=""``), so this changes the language for EVERY member;
+        the write is keeper-gated in-handler like ``.setcoc``/``.bot`` so a networked
+        player cannot flip the whole table's language."""
         locale = ctx.args.strip().casefold()
         if locale not in {"en", "zh"}:
             return ctx.i18n.t("commands.language.usage")
+        if not _is_keeper(ctx.raw_ctx):
+            return ctx.i18n.t("rooms.denied")
         await ctx.services.store.set(
             user_key="",
             store_key=f"chat_locale.{ctx.chat_key}",
@@ -772,6 +778,10 @@ class CommandRouter:
         return f"{result}\n{notice}" if notice else result
 
     async def cmd_setcoc(self, ctx: CommandCtx) -> str:
+        """`.setcoc [0-5|dg]` — set the room-wide CoC success-grading rule. The bare
+        query is open to anyone, but changing the rule regrades EVERY member's checks
+        (a house rule), so the write is keeper-gated in-handler — matching ``.bot``, so
+        a CLI/TUI keeper keeps working while a plain networked player cannot."""
         raw = ctx.args.strip().casefold()
         if raw == "dg":
             rule = 11
@@ -783,6 +793,8 @@ class CommandRouter:
 
         if rule not in {0, 1, 2, 3, 4, 5, 11}:
             return ctx.i18n.t("commands.setcoc.invalid")
+        if not _is_keeper(ctx.raw_ctx):
+            return ctx.i18n.t("rooms.denied")
         await ctx.services.store.set(user_key="", store_key=f"coc_rule.{ctx.chat_key}", value=str(rule))
         return ctx.i18n.t("commands.setcoc.changed", rule=rule)
 
@@ -1279,7 +1291,9 @@ class CommandRouter:
                 from net.room_backup import reset_room_state
 
                 try:
-                    result = await reset_room_state(ctx.services, ctx.chat_key, scope=armed_scope)
+                    result = await reset_room_state(
+                        ctx.services, ctx.chat_key, scope=armed_scope, keystore=self.keystore
+                    )
                 except Exception:
                     logger.exception("campaign reset failed for %s", ctx.chat_key)
                     return ctx.i18n.t("commands.reset.failed")

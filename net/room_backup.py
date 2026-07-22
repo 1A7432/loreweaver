@@ -1037,7 +1037,13 @@ def _discard_stage(root: Path) -> None:
         logger.exception("failed to remove completed room-backup transaction directory")
 
 
-async def reset_room_state(services: Services, chat_key: str, *, scope: str = "story") -> dict[str, Any]:
+async def reset_room_state(
+    services: Services,
+    chat_key: str,
+    *,
+    scope: str = "story",
+    keystore: Keystore | None = None,
+) -> dict[str, Any]:
     """Wipe part of one room's campaign state in place, keeping keystore keys,
     channel/keeper bindings and live connections. ``scope`` chooses how much:
 
@@ -1057,6 +1063,19 @@ async def reset_room_state(services: Services, chat_key: str, *, scope: str = "s
     """
     if scope not in RESET_SCOPES:
         raise ValueError(f"unknown reset scope: {scope}")  # i18n-exempt: internal guard
+    # Fail closed on a dotted-child room that aliases this room's prefix-shaped KV namespace:
+    # reset deletes rows by store-key prefix (worldbook/characters/session_history/...), so an
+    # unguarded reset of "camp" would also wipe "camp.side"'s rows. Mirror the guard every other
+    # room op (export/delete/import) already runs. The keystore-backed room set is authoritative —
+    # it names a dotted child even when that child has only prefix-shaped rows, which
+    # `_known_chat_keys_from_rows` deliberately cannot recover; on a keystore-less transport
+    # (single-room CLI, where no neighbor can exist) fall back to the row-derived set.
+    known = (
+        await _known_room_chat_keys(services, keystore)
+        if keystore is not None
+        else _known_chat_keys_from_rows(await services.store.list_rows())
+    )
+    _guard_room_prefix_ambiguity(chat_key, known)
     exact, prefix = _reset_bases(scope)
     prefixes = [f"{base}.{chat_key}" for base in exact]
     prefixes.extend(f"{base}.{chat_key}." for base in prefix)

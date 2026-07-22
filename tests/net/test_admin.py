@@ -48,6 +48,7 @@ from net.room_backup import (
     delete_room_data,
     export_room,
     import_room,
+    reset_room_state,
     room_rows,
     room_vector_points,
 )
@@ -946,14 +947,38 @@ async def test_dotted_child_room_prefix_fails_closed_for_export_delete_and_impor
             Path(exported["path"]).name,
             expected_room="foo",
         ),
+        # reset_room_state deletes by store-key prefix, so it must fail closed on the same
+        # dotted-child ambiguity every other room op guards (else `.reset all` on "foo" would
+        # silently wipe "foo.bar"'s rows — cross-room data loss with no backup). "all" is the
+        # widest scope and therefore the strongest case.
+        lambda: reset_room_state(services, parent_key, scope="all", keystore=keystore),
     ):
         with pytest.raises(ValueError, match="ambiguous dotted-prefix"):
             await operation()
 
-    # Fail-closed means neither the child nor the parent was partially exposed/deleted/imported.
+    # Fail-closed means neither the child nor the parent was partially exposed/deleted/imported/reset.
     assert await services.store.get(store_key=parent_history) == "parent"
     assert await services.store.get(store_key=child_history) == "child"
     assert await services.store.get(store_key=child_character) == '{"name":"Bob"}'
+
+
+async def test_reset_without_ambiguous_neighbor_still_wipes_and_a_prefix_named_sibling_survives(tmp_path):
+    """The guard fails closed only on a TRUE dotted child; an ordinary sibling room whose id merely
+    shares a leading substring (not a dotted prefix) is unaffected, and reset still works normally."""
+    services = _services(str(tmp_path))
+    keystore = Keystore()
+    keystore.add(room="foo", name="Keeper", role="keeper")
+    keystore.add(room="foobar", name="Sibling Keeper", role="keeper")  # NOT a dotted child of "foo"
+    parent_key = chat_key_for_room("foo")
+    sibling_key = chat_key_for_room("foobar")
+    await services.store.set(store_key=f"chat_history.{parent_key}", value="parent-story")
+    await services.store.set(store_key=f"worldbook.{sibling_key}.e1", value='{"title":"sibling"}')
+
+    result = await reset_room_state(services, parent_key, scope="all", keystore=keystore)
+
+    assert int(result.get("store_rows") or 0) >= 1
+    assert await services.store.get(store_key=f"chat_history.{parent_key}") is None  # parent wiped
+    assert await services.store.get(store_key=f"worldbook.{sibling_key}.e1") is not None  # sibling intact
 
 
 async def test_vector_conflicting_ownership_fails_export_and_delete_without_erasing_point(tmp_path):
