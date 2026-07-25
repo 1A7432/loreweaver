@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtemp, writeFile } from "node:fs/promises"
+import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -1051,5 +1051,93 @@ describe("GameView", () => {
     expect(expanded).not.toContain("ROUND─22:00")
 
     act(() => renderer.destroy())
+  })
+})
+
+// Ctrl+S saves the whole log to a file: the counterpart to the Ctrl+C selection copy,
+// and the only route to lines that already scrolled out of the viewport.
+describe("Ctrl+S transcript export", () => {
+  test("writes the log to a file and reports the path in the log", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lw-export-"))
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame, mockInput } = await renderGame(client, 110, 34, { transcriptDir: dir })
+    await flush()
+
+    act(() => {
+      client.push({ type: FrameType.Narrative, id: "n1", speaker: "kp", text: "The stairwell breathes.", format: "markdown" })
+      client.push({
+        type: FrameType.Dice,
+        actor: "Ada",
+        kind: "check",
+        expr: "1d100",
+        rolls: [12],
+        total: 12,
+        target: 65,
+        level: "HARD SUCCESS",
+      })
+    })
+    await flush()
+
+    await act(async () => mockInput.pressKey("s", { ctrl: true }))
+    const frame = await waitForFrame((text) => text.includes("Session log saved to"))
+    expect(frame).toContain("Session log saved to")
+
+    const files = await readdir(dir)
+    expect(files).toHaveLength(1)
+    expect(files[0]).toMatch(/^arkham-\d{8}-\d{6}\.txt$/)
+    const body = await readFile(join(dir, files[0]), "utf8")
+    expect(body).toContain("# room: arkham")
+    expect(body).toContain("KP: The stairwell breathes.")
+    expect(body).toContain("Ada 1d100 12 vs 65 -> HARD SUCCESS")
+
+    act(() => renderer.destroy())
+  })
+
+  test("an empty log says so instead of writing a header-only file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lw-export-empty-"))
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame, mockInput } = await renderGame(client, 110, 34, { transcriptDir: dir })
+    await flush()
+
+    await act(async () => mockInput.pressKey("s", { ctrl: true }))
+    const frame = await waitForFrame((text) => text.includes("Nothing to save yet"))
+    expect(frame).toContain("Nothing to save yet")
+    expect(await readdir(dir)).toEqual([])
+
+    act(() => renderer.destroy())
+  })
+})
+
+describe("copy affordances", () => {
+  test("a copy confirmation from the shell is surfaced as its own line", async () => {
+    const client = new MockClient()
+    const { renderer, flush, captureCharFrame } = await renderGame(client, 110, 34, {
+      copyNotice: "Copied 42 characters to the clipboard",
+    })
+    await flush()
+    expect(captureCharFrame()).toContain("Copied 42 characters to the clipboard")
+    act(() => renderer.destroy())
+  })
+
+  test("the help line names the copy gesture the platform actually supports", async () => {
+    const client = new MockClient()
+    const linux = await renderGame(client, 110, 34, { platform: "linux" })
+    await linux.flush()
+    await act(async () => linux.mockInput.pressKey("?"))
+    const linuxHelp = await linux.waitForFrame((text) => text.includes("Ctrl+C"))
+    // Every hint must be fully on screen: the one-line version used to run off the
+    // terminal edge and hide the copy/save keys entirely.
+    expect(linuxHelp).toContain("Ctrl+S save log")
+    expect(linuxHelp).toContain("Ctrl+L clear")
+    expect(linuxHelp).toContain("drag to select, Ctrl+C to copy")
+    expect(linuxHelp).not.toContain("Cmd+C")
+    act(() => linux.renderer.destroy())
+
+    const mac = await renderGame(new MockClient(), 110, 34, { platform: "darwin" })
+    await mac.flush()
+    await act(async () => mac.mockInput.pressKey("?"))
+    const macHelp = await mac.waitForFrame((text) => text.includes("Cmd+C"))
+    expect(macHelp).toContain("Option")
+    act(() => mac.renderer.destroy())
   })
 })

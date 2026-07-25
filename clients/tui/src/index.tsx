@@ -103,7 +103,12 @@ const prefill: AppPrefill = {
   servers: remembered.servers,
 }
 
-const renderer = await createCliRenderer()
+// `exitOnCtrlC: false` hands Ctrl+C to the App shell, which copies the current
+// selection when there is one and otherwise quits (see `App.tsx`). OpenTUI's
+// built-in handler would `destroy()` the renderer before we ever saw the key —
+// and it skipped App's own teardown (local server, client, audio) anyway, so
+// owning it is also what makes a raw Ctrl+C shut down cleanly.
+const renderer = await createCliRenderer({ exitOnCtrlC: false })
 // Set a clean terminal window title. Without this the shell leaves the title as the
 // full launch command — which overflows the title bar and, worse, exposes the invite
 // key in it. OSC 2 (window title) + BEL terminator.

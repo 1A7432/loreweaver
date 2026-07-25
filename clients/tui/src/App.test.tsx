@@ -4,6 +4,7 @@ import { act } from "react"
 import { FrameType, type ServerFrame, type WelcomeFrame } from "@loreweaver/protocol"
 import App, { type AppClient, type AppPrefill } from "./App"
 import type { SavedServer } from "./connectMemory"
+import type { ClipboardRenderer } from "./copy"
 
 // A mock implementing the full AppClient surface: connect/join are recorded so
 // the connect flow can be asserted; push() delivers server frames like the wire.
@@ -90,6 +91,8 @@ function renderApp(
     onLocalServerHomeChange?: (path: string) => void
     onForgetConnect?: (entry: NonNullable<AppPrefill["servers"]>[number]) => void
     onQuit?: () => void
+    platform?: string
+    renderer?: ClipboardRenderer
   } = {},
 ) {
   return testRender(
@@ -100,9 +103,59 @@ function renderApp(
       onLocalServerHomeChange={options.onLocalServerHomeChange}
       onForgetConnect={options.onForgetConnect}
       onQuit={options.onQuit}
+      platform={options.platform}
+      renderer={options.renderer}
     />,
-    { width: 110, height: 34 },
+    // `exitOnCtrlC: false` mirrors index.tsx: the App shell owns Ctrl+C, so the
+    // renderer must not destroy itself before the handler sees the key.
+    { width: 110, height: 34, exitOnCtrlC: false },
   )
+}
+
+/** A clipboard seam over the REAL test renderer: the selection comes from an actual
+ * mouse drag over the rendered log, only the OSC 52 write to the terminal is captured.
+ * `attach` is called with the renderer once `testRender` has produced it. */
+function clipboardSpy() {
+  let real: ClipboardRenderer | undefined
+  const copied: string[] = []
+  return {
+    copied,
+    attach: (renderer: ClipboardRenderer) => {
+      real = renderer
+    },
+    seam: {
+      getSelection: () => real?.getSelection?.() ?? null,
+      clearSelection: () => real?.clearSelection?.(),
+      copyToClipboardOSC52: (text: string) => {
+        copied.push(text)
+        return true
+      },
+    } satisfies ClipboardRenderer,
+  }
+}
+
+/** Push a welcome, enter the game view, and land a KP line worth selecting. */
+async function enterGameWithNarration(
+  client: MockClient,
+  harness: { flush: () => Promise<void>; waitForFrame: (p: (t: string) => boolean) => Promise<string>; mockInput: { pressEnter: () => void } },
+) {
+  await harness.flush()
+  act(() => client.push(PLAYER_WELCOME))
+  await harness.waitForFrame((t) => t.includes("进入游戏"))
+  await act(async () => {
+    harness.mockInput.pressEnter()
+  })
+  await harness.flush()
+  act(() =>
+    client.push({
+      type: FrameType.Narrative,
+      id: "n-copy",
+      speaker: "kp",
+      text: "SELECTABLE-NARRATION",
+      format: "text",
+    } as ServerFrame),
+  )
+  return harness.waitForFrame((t) => t.includes("SELECTABLE-NARRATION"))
 }
 
 describe("App shell", () => {
@@ -577,6 +630,128 @@ describe("App shell", () => {
     await flush()
 
     expect(client.closed).toBeGreaterThan(0)
+    expect(quitCalls).toBe(1)
+
+    act(() => renderer.destroy())
+  })
+})
+
+// Ctrl+C is scoped: it copies ONLY inside the game room, and never on macOS (where
+// copy is the terminal's own Cmd+C). Everywhere else it must still quit, because
+// that is the habit players arrive with.
+describe("Ctrl+C copy", () => {
+  test("in the game room a dragged selection is copied to the clipboard, not a quit", async () => {
+    const client = new MockClient()
+    const clipboard = clipboardSpy()
+    let quitCalls = 0
+    const harness = await renderApp(client, {
+      onQuit: () => (quitCalls += 1),
+      platform: "linux",
+      renderer: clipboard.seam,
+    })
+    const { renderer, flush, mockInput, mockMouse } = harness
+    clipboard.attach(renderer as unknown as ClipboardRenderer)
+
+    const game = await enterGameWithNarration(client, harness)
+    const row = game.split("\n").findIndex((line) => line.includes("SELECTABLE-NARRATION"))
+    expect(row).toBeGreaterThan(0)
+
+    // A real drag across the narration, then a real Ctrl+C.
+    await act(async () => {
+      await mockMouse.drag(2, row, 40, row)
+    })
+    await flush()
+    await act(async () => {
+      await mockInput.pressKey("c", { ctrl: true })
+    })
+    await flush()
+
+    expect(clipboard.copied.join("\n")).toContain("SELECTABLE-NARRATION")
+    expect(quitCalls).toBe(0)
+    expect(client.closed).toBe(0)
+
+    act(() => renderer.destroy())
+  })
+
+  test("in the game room with nothing selected Ctrl+C still quits", async () => {
+    const client = new MockClient()
+    const clipboard = clipboardSpy()
+    let quitCalls = 0
+    const harness = await renderApp(client, {
+      onQuit: () => (quitCalls += 1),
+      platform: "linux",
+      renderer: clipboard.seam,
+    })
+    const { renderer, flush, mockInput } = harness
+    clipboard.attach(renderer as unknown as ClipboardRenderer)
+    await enterGameWithNarration(client, harness)
+
+    await act(async () => {
+      await mockInput.pressKey("c", { ctrl: true })
+    })
+    await flush()
+
+    expect(clipboard.copied).toEqual([])
+    expect(quitCalls).toBe(1)
+
+    act(() => renderer.destroy())
+  })
+
+  test("on macOS Ctrl+C quits even with a selection — copy there is the terminal's Cmd+C", async () => {
+    const client = new MockClient()
+    const clipboard = clipboardSpy()
+    let quitCalls = 0
+    const harness = await renderApp(client, {
+      onQuit: () => (quitCalls += 1),
+      platform: "darwin",
+      renderer: clipboard.seam,
+    })
+    const { renderer, flush, mockInput, mockMouse } = harness
+    clipboard.attach(renderer as unknown as ClipboardRenderer)
+
+    const game = await enterGameWithNarration(client, harness)
+    const row = game.split("\n").findIndex((line) => line.includes("SELECTABLE-NARRATION"))
+    await act(async () => {
+      await mockMouse.drag(2, row, 40, row)
+    })
+    await flush()
+    await act(async () => {
+      await mockInput.pressKey("c", { ctrl: true })
+    })
+    await flush()
+
+    expect(clipboard.copied).toEqual([])
+    expect(quitCalls).toBe(1)
+
+    act(() => renderer.destroy())
+  })
+
+  test("on the menu Ctrl+C quits, even though a selection exists there too", async () => {
+    const client = new MockClient()
+    const clipboard = clipboardSpy()
+    let quitCalls = 0
+    const harness = await renderApp(client, {
+      onQuit: () => (quitCalls += 1),
+      platform: "linux",
+      renderer: clipboard.seam,
+    })
+    const { renderer, flush, waitForFrame, mockInput, mockMouse } = harness
+    clipboard.attach(renderer as unknown as ClipboardRenderer)
+    await flush()
+    act(() => client.push(PLAYER_WELCOME))
+    const menu = await waitForFrame((t) => t.includes("进入游戏"))
+
+    const row = menu.split("\n").findIndex((line) => line.includes("进入游戏"))
+    await act(async () => {
+      await mockMouse.drag(2, row, 20, row)
+    })
+    await flush()
+    await act(async () => {
+      await mockInput.pressKey("c", { ctrl: true })
+    })
+    await flush()
+
+    expect(clipboard.copied).toEqual([])
     expect(quitCalls).toBe(1)
 
     act(() => renderer.destroy())

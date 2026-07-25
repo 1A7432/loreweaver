@@ -26,6 +26,8 @@ import { CHAT_INPUT_LIMIT, inputLimitState } from "./inputLimits"
 import { sidebarCollapsed, sidebarWidth } from "./layout"
 import { droppedImagePath, openMedia, readAudioUpload, readUpload, type HalfBlockLine } from "./media"
 import type { Palette, ThemeName } from "./themes"
+import { usesAppClipboardCopy } from "./copy"
+import { writeTranscript } from "./transcript"
 
 // The game view needs only these three from the client. `WsClient` (and the
 // shell's wider `AppClient`) satisfies it structurally; tests inject a mock.
@@ -59,6 +61,16 @@ export interface GameViewProps {
   connectionStatus?: ConnectionStatus
   renderer?: RendererLike
   busyTimeoutMs?: number
+  // Transient confirmation for a Ctrl+C clipboard copy. The App shell owns that key
+  // (the same press means quit when nothing is selected), so the outcome is handed
+  // down rather than produced here.
+  copyNotice?: string
+  // Selects the copy hint in the help line: macOS copies with the terminal's own
+  // Cmd+C, everywhere else with the in-app Ctrl+C. See `copy.ts`.
+  platform?: string
+  // Injected by tests so an export can be asserted without touching the real
+  // `~/.loreweaver/transcripts`.
+  transcriptDir?: string
 }
 
 // Cap a single streaming message so a hostile/runaway stream can't grow the
@@ -109,6 +121,9 @@ export function GameView({
   connectionStatus,
   renderer,
   busyTimeoutMs = ROOM_BUSY_TIMEOUT_MS,
+  copyNotice,
+  platform = process.platform,
+  transcriptDir,
 }: GameViewProps) {
   const { width: terminalWidth } = useTerminalDimensions()
   const narrow = sidebarCollapsed(terminalWidth)
@@ -351,6 +366,35 @@ export function GameView({
     }
   }
 
+  // Ctrl+S: dump the whole log to a text file. The counterpart to the Ctrl+C
+  // selection copy — it reaches the lines that have already scrolled out of the
+  // viewport, and it is the fallback on terminals that refuse OSC 52 (and on
+  // macOS, where the in-app copy is not bound at all).
+  const exportTranscript = async () => {
+    if (frames.length === 0) {
+      setFrames((current) => appendFrame(current, { type: FrameType.System, level: "info", text: tt(locale, "transcript.empty") }))
+      return
+    }
+    try {
+      const path = await writeTranscript(frames, {
+        room: welcome.room,
+        at: new Date(),
+        dir: transcriptDir,
+      })
+      setFrames((current) =>
+        appendFrame(current, { type: FrameType.System, level: "info", text: tt(locale, "transcript.saved", { path }) }),
+      )
+    } catch (error) {
+      setFrames((current) =>
+        appendFrame(current, {
+          type: FrameType.System,
+          level: "warn",
+          text: tt(locale, "transcript.failed", { error: error instanceof Error ? error.message : String(error) }),
+        }),
+      )
+    }
+  }
+
   const recallHistory = (direction: -1 | 1) => {
     if (history.length === 0) return
     const nextIndex =
@@ -375,6 +419,7 @@ export function GameView({
     if (name === "up") recallHistory(-1)
     if (name === "down") recallHistory(1)
     if (hasCtrl(event) && name === "l") setFrames([])
+    if (hasCtrl(event) && name === "s") void exportTranscript()
     if (name === "f6") setNarrowSidebarOpen((value) => !value)
     if (selectedMedia && (name === "o" || name === "O")) void openSelectedMedia(true)
     if (viewerLines && (name === "escape" || name === "q" || name === "return" || name === "enter")) setViewerLines(undefined)
@@ -495,11 +540,32 @@ export function GameView({
         </box>
       ) : null}
 
+      {copyNotice ? (
+        <box height={1} paddingX={1} backgroundColor={theme.bg}>
+          <text fg={theme.accent} wrapMode="none" truncate>{copyNotice}</text>
+        </box>
+      ) : null}
+
       {showHelp ? (
-        <box border borderColor={theme.accent} paddingX={1} backgroundColor={theme.bg}>
-          <text fg={theme.fg}>
-            {tt(locale, "game.help")}
-          </text>
+        // One key group per row: the single-line version overflowed the terminal
+        // edge at ordinary widths, which silently hid whatever came last (the
+        // copy/save hints — exactly the part players need to discover).
+        // `height`/`flexShrink` are explicit (like the input box above): the parent
+        // column hands out no leftover space, so without them the three rows collapse
+        // onto one and overprint each other.
+        <box
+          border
+          borderColor={theme.accent}
+          paddingX={1}
+          backgroundColor={theme.bg}
+          flexDirection="column"
+          width="100%"
+          height={5}
+          flexShrink={0}
+        >
+          <text fg={theme.fg}>{tt(locale, "game.help")}</text>
+          <text fg={theme.fg}>{tt(locale, "game.helpLog")}</text>
+          <text fg={theme.accent}>{tt(locale, usesAppClipboardCopy(platform) ? "game.helpCopy" : "game.helpCopyMac")}</text>
         </box>
       ) : null}
 

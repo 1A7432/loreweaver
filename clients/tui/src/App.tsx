@@ -13,6 +13,7 @@ import {
 import { AudioController } from "./audio"
 import { createClient, type AppClient } from "./client"
 import { forgetServer, type SavedServer } from "./connectMemory"
+import { copySelection, usesAppClipboardCopy, type ClipboardRenderer, type CopyOutcome } from "./copy"
 import type { HostHandle } from "./hostLocal"
 import { GameView, appendFrame } from "./GameView"
 import type { LogFrame } from "./components/NarrativeLog"
@@ -58,7 +59,12 @@ export interface AppProps {
   // Restore the terminal (renderer.destroy) and exit the process. Falls back to a no-op so
   // tests (and any caller that doesn't pass it) don't need to stub process teardown.
   onQuit?: () => void
-  renderer?: RendererLike
+  // Also the clipboard/selection owner for Ctrl+C (see `copy.ts`); the real
+  // `CliRenderer` satisfies both shapes structurally.
+  renderer?: RendererLike & ClipboardRenderer
+  // Decides whether Ctrl+C copies (non-macOS) or only ever quits (macOS, where
+  // copy is the terminal's own Cmd+C). Injectable so tests cover both platforms.
+  platform?: string
 }
 
 // Stage 2 adds "character"; Stage 3 adds the keeper-only "keeper_keys" / "keeper_model";
@@ -91,6 +97,7 @@ export function App({
   onForgetConnect,
   onQuit,
   renderer,
+  platform = process.platform,
 }: AppProps) {
   const client = useMemo(() => injected ?? createClient(), [injected])
   const audioController = useMemo(() => new AudioController(), [])
@@ -124,6 +131,29 @@ export function App({
   // GameView seeds its own log from this on mount; see GameViewProps.initialFrames.
   const [frames, setFrames] = useState<LogFrame[]>([])
 
+  // Confirmation for a Ctrl+C copy, surfaced as a transient one-line strip in the
+  // game view. It lives here rather than in GameView because this shell owns the
+  // key (it has to, since the same keypress may instead mean quit).
+  const [copyNotice, setCopyNotice] = useState<string>()
+  const copyNoticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+  const showCopyNotice = (outcome: Exclude<CopyOutcome, { kind: "empty" }>) => {
+    setCopyNotice(
+      outcome.kind === "copied"
+        ? tt(locale, "copy.copied", { chars: String(outcome.chars) })
+        : tt(locale, "copy.unsupported"),
+    )
+    if (copyNoticeTimer.current) clearTimeout(copyNoticeTimer.current)
+    copyNoticeTimer.current = setTimeout(() => setCopyNotice(undefined), 4000)
+  }
+
+  useEffect(
+    () => () => {
+      if (copyNoticeTimer.current) clearTimeout(copyNoticeTimer.current)
+    },
+    [],
+  )
+
   // Theme cycling + Esc are safe to handle globally: F-keys / Escape never
   // collide with typing, arrow navigation, or a focused input, so the theme
   // persists across every screen. Screen-specific keys live in each screen.
@@ -133,6 +163,20 @@ export function App({
     if (index !== undefined && themeOrder[index]) setThemeName(themeOrder[index])
     // Esc returns from the game view to the menu; the menu is the top level.
     if (name === "escape") setScreen((prev) => (prev === "game" ? "menu" : prev))
+    // Ctrl+C. Inside the game room (and only there — the menus have nothing worth
+    // copying) it takes the meaning it has everywhere else: copy the selection,
+    // and still quit when nothing is selected, so the terminal habit survives.
+    // On macOS it is never taken: copy there is Cmd+C, which the terminal itself
+    // consumes (see `usesAppClipboardCopy`). OpenTUI's own exit-on-Ctrl+C is
+    // disabled in index.tsx precisely so this decision can be made here;
+    // `handleQuit` also releases what that handler used to leak (local server,
+    // client, audio).
+    if (event.ctrl && name === "c") {
+      const copyable = screen === "game" && usesAppClipboardCopy(platform)
+      const outcome = copyable ? copySelection(renderer) : { kind: "empty" as const }
+      if (outcome.kind === "empty") handleQuit()
+      else showCopyNotice(outcome)
+    }
   })
 
   useEffect(() => {
@@ -397,6 +441,8 @@ export function App({
         initialTurnStatus={turnStatus}
         connectionStatus={connectionStatus}
         renderer={renderer}
+        copyNotice={copyNotice}
+        platform={platform}
       />
     )
   }
