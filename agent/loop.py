@@ -295,6 +295,18 @@ _REPLY_DICE_RESULT_RE = re.compile(
 )
 
 
+# A die emoji next to a result word is the OTHER shape a stated outcome takes --
+# "🎲 **Intimidate — Fumble.**" with the numbers omitted. 🎲 essentially never
+# appears in ordinary narration, which is what lets the bare result words
+# ("fumble", "success", 成功/失败) be trusted here while they stay untrusted on
+# their own: `_CHECK_OUTCOME_MARKERS` cannot list "fumble" as a substring,
+# because "you fumble with the lock" is plain prose, not a rolled result.
+_REPLY_DICE_MARKUP_RE = re.compile(
+    r"🎲[^\n]{0,80}?(?:fumble|success|failure|\bfail(?:s|ed)?\b|成功|失败)",
+    re.IGNORECASE,
+)
+
+
 def _reply_states_a_dice_outcome(reply: str) -> bool:
     """True if `reply` states a concrete dice result in prose (roll-vs-target or `NdM = total`).
 
@@ -303,7 +315,9 @@ def _reply_states_a_dice_outcome(reply: str) -> bool:
     produced -- without asking the ambiguous question of whether this turn
     warranted a check at all.
     """
-    return bool(reply) and bool(_REPLY_DICE_RESULT_RE.search(reply))
+    if not reply:
+        return False
+    return bool(_REPLY_DICE_RESULT_RE.search(reply) or _REPLY_DICE_MARKUP_RE.search(reply))
 
 
 def _dice_rolled(tool_trace: list[dict]) -> bool:
@@ -368,6 +382,14 @@ def _reply_requests_or_resolves_check(reply: str) -> bool:
     if not reply:
         return False
     if _DICE_COMMAND_RE.search(reply) or _ROLL_REQUEST_EN_RE.search(reply) or _ROLL_REQUEST_ZH_RE.search(reply):
+        return True
+    # A stated dice result counts however it is written. The success-LEVEL
+    # vocabulary below misses any result phrased without a level word -- a live
+    # gate let `🎲 Spot Hidden — 22 vs 25 (Success!)` and
+    # `🎲 Intimidate — Fumble. (rolled 99 vs 15)` straight through, with no dice
+    # tool called on either turn -- so the structural shapes count too, and the
+    # corrective round now gets a chance to replace invented numbers with a roll.
+    if _reply_states_a_dice_outcome(reply):
         return True
     lowered = reply.lower()
     return (

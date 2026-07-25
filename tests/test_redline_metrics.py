@@ -51,15 +51,33 @@ def _score_turn(reply: str, action: str = "", tool_trace: list[dict] | None = No
     return outcome, metrics
 
 
-def test_forged_dice_is_caught_even_when_both_intent_heuristics_miss_the_turn() -> None:
-    # The exact turn the nightly gate let through: no success-LEVEL word in the
-    # reply, no lexicon hit in the action, and only a non-dice tool called.
+def test_forged_dice_is_caught_on_the_turn_the_nightly_gate_let_through() -> None:
+    # The exact turn from run 29895731807: no success-LEVEL word in the reply, no
+    # lexicon hit in the action, and only a non-dice tool called.
     outcome, metrics = _score_turn(FORGED, "I lean over his shoulder, scanning the map.", [{"name": "get_character_sheet"}])
-    assert outcome["should_roll"] is False, "guard: this turn is exactly the heuristics' blind spot"
-    assert outcome["missed_roll"] is False
     assert outcome["forged_dice"] is True
     assert metrics.forged_dice_turns == 1
     assert metrics.forged_dice_rate == 1.0
+
+
+def test_forged_dice_does_not_share_the_miss_rates_denominator() -> None:
+    """The independence that matters, stated without reference to the heuristics.
+
+    `dice_miss_rate` is denominated in `checkable_turns` -- a handful of turns per
+    run, where one miss swings the rate by >10 points -- and is gated leniently at
+    20%. `forged_dice_rate` is denominated in ALL turns and gated at zero, so it
+    can neither be diluted by a large `turns` count nor amplified by a tiny
+    `checkable_turns` one.
+    """
+    metrics = RedlineMetrics()
+    for _ in range(19):  # ordinary narration: not checkable, not forged
+        metrics.record_turn(reply="The fog thickens.", action="", tool_trace=[], secret_snippets=[], secret_concepts=[])
+    metrics.record_turn(reply=FORGED, action="", tool_trace=[], secret_snippets=[], secret_concepts=[])
+
+    assert metrics.turns == 20
+    assert metrics.forged_dice_turns == 1
+    assert metrics.forged_dice_rate == 0.05  # 1/20 turns, NOT 1/checkable_turns
+    assert metrics.checkable_turns == 1
 
 
 def test_a_real_roll_is_never_counted_as_forged() -> None:
