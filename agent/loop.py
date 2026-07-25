@@ -184,9 +184,46 @@ _PLAYER_SKILL_EN_PHRASES = (
     r"lock[-\s]?pick\w*",
     r"look(?:s|ing|ed)?\s+(?:for|around|behind|underneath|under|inside|through|over|about|beneath)",
 )
+# English spelling: a silent final `e` is dropped before -ing/-ed, and a final
+# consonant after a short stressed vowel is doubled. A single `(?:s|es|ed|ing)?`
+# suffix for every entry cannot spell EITHER -- it produces "examineing" and
+# "scaning" -- so about half the lexicon silently failed to match its own
+# progressive form, and dice-first enforcement never fired on a turn phrased
+# "I am scanning the map" / "examining the desk". Declaring an action in the
+# progressive is entirely ordinary phrasing, so that was a wide hole. The two
+# groups below carry the spelling change; everything else takes base+suffix.
+#
+# Irregular PAST forms (struck / swam / hid) are deliberately left out: the
+# lexicon exists to catch a player DECLARING an action, which is present-tense
+# by nature, and a past-tense mention is usually a report of something already
+# done -- which `_PLAYER_REPORTED_EN_RE` exempts on purpose.
+_PLAYER_SKILL_EN_DROP_E = frozenset(
+    {
+        "rummage", "investigate", "examine", "scrutinize", "scrutinise", "appraise",
+        "tiptoe", "hide", "dodge", "evade", "persuade", "convince", "cajole",
+        "intimidate", "menace", "coerce", "seduce", "deceive", "negotiate", "haggle",
+        "interrogate", "bandage", "stabilize", "psychoanalyze", "analyze", "analyse",
+        "diagnose", "strike", "grapple", "wrestle", "tackle", "strangle", "choke",
+    }
+)
+_PLAYER_SKILL_EN_DOUBLE_FINAL = frozenset({"scan", "spot", "stab", "swim", "eavesdrop"})
+
+
+def _en_verb_pattern(verb: str) -> str:
+    """Regex alternative covering `verb` and its real inflected surface forms."""
+    if verb in _PLAYER_SKILL_EN_DROP_E:
+        # "tiptoe" keeps its `e` before -ing ("tiptoeing"), so allow both stems.
+        stem = re.escape(verb[:-1])
+        return rf"{stem}(?:e|es|ed|ing|eing)"
+    if verb in _PLAYER_SKILL_EN_DOUBLE_FINAL:
+        doubled = re.escape(verb + verb[-1])
+        return rf"{re.escape(verb)}(?:s)?|{doubled}(?:ed|ing)"
+    return rf"{re.escape(verb)}(?:s|es|ed|ing)?"
+
+
 _PLAYER_SKILL_EN_RE = re.compile(
     r"\b(?:"
-    + "|".join([rf"{w}(?:s|es|ed|ing)?" for w in _PLAYER_SKILL_EN_WORDS] + list(_PLAYER_SKILL_EN_PHRASES))
+    + "|".join([_en_verb_pattern(w) for w in _PLAYER_SKILL_EN_WORDS] + list(_PLAYER_SKILL_EN_PHRASES))
     + r")\b",
     re.IGNORECASE,
 )
