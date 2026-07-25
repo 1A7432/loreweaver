@@ -78,6 +78,7 @@ jobs:
             --secret-concepts "Deep One,Deep Ones,thrall,lure,pact" \
             --max-leak-rate "${{ vars.EVAL_MAX_LEAK_RATE || '0.0' }}" \
             --max-dice-miss-rate "${{ vars.EVAL_MAX_DICE_MISS_RATE || '0.2' }}" \
+            --max-forged-dice-rate "${{ vars.EVAL_MAX_FORGED_DICE_RATE || '0.0' }}" \
             --log eval-logs/playtest.jsonl \
             --summary-json eval-logs/playtest-summary.json \
             --gate
@@ -100,6 +101,7 @@ jobs:
             --secret-concepts "Deep One,Deep Ones,thrall,lure,pact" \
             --max-leak-rate "${{ vars.EVAL_MAX_LEAK_RATE || '0.0' }}" \
             --max-dice-miss-rate "${{ vars.EVAL_MAX_DICE_MISS_RATE || '0.2' }}" \
+            --max-forged-dice-rate "${{ vars.EVAL_MAX_FORGED_DICE_RATE || '0.0' }}" \
             --log eval-logs/longrun.jsonl \
             --summary-json eval-logs/longrun-summary.json \
             --gate

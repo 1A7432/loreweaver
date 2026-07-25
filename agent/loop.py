@@ -273,6 +273,39 @@ _SCENE_TITLE_TIME_RE = re.compile(
 )
 
 
+# Structural "a dice result is stated here" detector -- deliberately NOT a
+# judgement about whether a check *should* have happened.
+#
+# Every other detector in this module is a heuristic guess at intent, and a
+# heuristic's blind spots are invisible to a gate built on that same heuristic
+# (see `scripts/playtest.py`'s forged-dice metric). This one keys off the
+# SHAPE dice resolution leaves in prose:
+#   - a roll-vs-target pair, "22 vs 25" / "47 vs. 65" / "22 对 25"
+#   - a d-notation total, "1d100 = 47"
+# A bare "22/25" slash pair is deliberately NOT one: ordinary prose has ratios
+# and scores in it ("the odds are 50/50"), and `vs` alone is specific enough.
+# Both are what the real dice tools render, so a reply containing one either came
+# from a tool call or the model invented the numbers. Bare "success"/"roll"
+# deliberately stay inert (they are ordinary prose -- see the negatives in
+# tests/agent/test_loop.py).
+_REPLY_DICE_RESULT_RE = re.compile(
+    r"(?:\b\d{1,3}\s*(?:vs\.?|versus|對|对)\s*\d{1,3}\b"
+    r"|\b\d{0,3}d\d{1,3}(?:\s*[+-]\s*\d{1,3})?\s*(?:=|＝|->|→|:|：)\s*\d{1,4}\b)",
+    re.IGNORECASE,
+)
+
+
+def _reply_states_a_dice_outcome(reply: str) -> bool:
+    """True if `reply` states a concrete dice result in prose (roll-vs-target or `NdM = total`).
+
+    Purely structural, by design: paired with `_dice_rolled` it identifies a
+    FORGED roll -- numbers presented to players that `core.dice_engine` never
+    produced -- without asking the ambiguous question of whether this turn
+    warranted a check at all.
+    """
+    return bool(reply) and bool(_REPLY_DICE_RESULT_RE.search(reply))
+
+
 def _dice_rolled(tool_trace: list[dict]) -> bool:
     """True if any real dice-rolling tool fired during this turn."""
     return any(

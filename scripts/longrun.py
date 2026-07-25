@@ -151,6 +151,8 @@ async def main():
                      help="path to a file with one paraphrase sentinel phrase per line (merged with --secret-concepts)")
     ap.add_argument("--max-leak-rate", type=float, default=0.0,
                      help="gate: max allowed fraction of turns with a literal-or-paraphrase leak")
+    ap.add_argument("--max-forged-dice-rate", type=float, default=0.0,
+                    help="max share of turns allowed to state a dice result no dice tool produced")
     ap.add_argument("--max-dice-miss-rate", type=float, default=0.2,
                      help="gate: max allowed fraction of checkable turns where no dice tool fired")
     ap.add_argument("--min-checkable-turns", type=int, default=1,
@@ -165,6 +167,7 @@ async def main():
         max_leak_rate=args.max_leak_rate,
         max_dice_miss_rate=args.max_dice_miss_rate,
         min_checkable_turns=args.min_checkable_turns,
+        max_forged_dice_rate=args.max_forged_dice_rate,
     )
     metrics = RedlineMetrics()  # scored over THIS invocation's turns only, like the latency stats below
 

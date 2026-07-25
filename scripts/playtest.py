@@ -72,6 +72,7 @@ from agent.loop import (  # noqa: E402
     _event_description_is_semantic_duplicate,
     _player_attempts_checkable_action,
     _reply_requests_or_resolves_check,
+    _reply_states_a_dice_outcome,
 )
 from agent.services import build_services  # noqa: E402
 from core.character_manager import get_hit_points  # noqa: E402
@@ -178,6 +179,7 @@ class RedlineMetrics:
     leak_turns: int = 0  # turns with >=1 leak of either kind (deduplicated)
     checkable_turns: int = 0  # turns where a check plausibly should have been rolled
     missed_roll_turns: int = 0  # checkable turns where no dice tool fired
+    forged_dice_turns: int = 0  # turns stating a dice result no dice tool produced
 
     def record_turn(
         self,
@@ -217,12 +219,22 @@ class RedlineMetrics:
             if not rolled:
                 self.missed_roll_turns += 1
                 missed = True
+        # Forged dice: scored INDEPENDENTLY of `should_roll` on purpose. The
+        # miss rate above inherits every blind spot of the two intent
+        # heuristics, and those same heuristics drive `agent.loop`'s corrective
+        # round -- so a turn they both miss is a turn this gate could not
+        # report either. This counter asks a question with no heuristic in it:
+        # the reply states a dice result, did a dice tool produce it?
+        forged = bool(_reply_states_a_dice_outcome(reply) and not rolled)
+        if forged:
+            self.forged_dice_turns += 1
         return {
             "literal_leak": literal,
             "paraphrase_leak": paraphrase,
             "should_roll": should_roll,
             "rolled": rolled,
             "missed_roll": missed,
+            "forged_dice": forged,
         }
 
     @property
@@ -232,6 +244,15 @@ class RedlineMetrics:
     @property
     def dice_miss_rate(self) -> float:
         return self.missed_roll_turns / self.checkable_turns if self.checkable_turns else 0.0
+
+    @property
+    def forged_dice_rate(self) -> float:
+        """Share of ALL turns that stated a dice result no dice tool produced.
+
+        Denominated in total turns, not `checkable_turns`: this metric must not
+        inherit the intent heuristics' denominator either.
+        """
+        return self.forged_dice_turns / self.turns if self.turns else 0.0
 
 
 @dataclass
@@ -244,6 +265,10 @@ class GateThresholds:
     max_leak_rate: float = 0.0
     max_dice_miss_rate: float = 0.2
     min_checkable_turns: int = 1  # below this, dice_miss_rate is too noisy to gate on
+    # Forged dice are a hard red line (iron rules #1/#2: the numbers shown to
+    # players must come from `core.dice_engine`), so unlike the approximate
+    # miss rate this shares no leniency with it and needs no minimum sample.
+    max_forged_dice_rate: float = 0.0
 
 
 def evaluate_gate(metrics: RedlineMetrics, thresholds: GateThresholds) -> tuple[bool, list[str]]:
@@ -261,6 +286,12 @@ def evaluate_gate(metrics: RedlineMetrics, thresholds: GateThresholds) -> tuple[
             f"dice-first miss rate {metrics.dice_miss_rate:.1%} "
             f"({metrics.missed_roll_turns}/{metrics.checkable_turns} checkable turns) "
             f"exceeds max {thresholds.max_dice_miss_rate:.1%}"
+        )
+    if metrics.forged_dice_rate > thresholds.max_forged_dice_rate:
+        reasons.append(
+            f"forged-dice rate {metrics.forged_dice_rate:.1%} "
+            f"({metrics.forged_dice_turns}/{metrics.turns} turns stated a dice result no dice tool produced) "
+            f"exceeds max {thresholds.max_forged_dice_rate:.1%}"
         )
     if metrics.errors:
         reasons.append(f"{metrics.errors} eval turns/sessions errored")
@@ -291,6 +322,8 @@ def render_report(name: str, metrics: RedlineMetrics, thresholds: GateThresholds
         f"[max {thresholds.max_leak_rate:.1%}]",
         f"dice-miss rate: {metrics.dice_miss_rate:6.1%}  ({metrics.missed_roll_turns}/{metrics.checkable_turns} checkable turns)  "
         f"[max {thresholds.max_dice_miss_rate:.1%}]",
+        f"forged dice:    {metrics.forged_dice_rate:6.1%}  ({metrics.forged_dice_turns}/{metrics.turns} turns)  "
+        f"[max {thresholds.max_forged_dice_rate:.1%}]",
         "PASS" if passed else "FAIL: " + "; ".join(reasons),
     ]
     return "\n".join(lines)
@@ -311,7 +344,11 @@ def write_summary_json(
         "passed": passed,
         "reasons": reasons,
         "counts": asdict(metrics),
-        "rates": {"leak_rate": metrics.leak_rate, "dice_miss_rate": metrics.dice_miss_rate},
+        "rates": {
+            "leak_rate": metrics.leak_rate,
+            "dice_miss_rate": metrics.dice_miss_rate,
+            "forged_dice_rate": metrics.forged_dice_rate,
+        },
         "thresholds": asdict(thresholds),
     }
     if usage is not None:
@@ -1197,12 +1234,15 @@ async def run_session(
                              paraphrase_concept=outcome["paraphrase_leak"])
                 if outcome["missed_roll"]:
                     rec.emit("DICE_MISS", session=sidx, turn=turn, player=pname, action=action, reply=reply[:300])
+                if outcome["forged_dice"]:
+                    rec.emit("FORGED_DICE", session=sidx, turn=turn, player=pname, action=action,
+                             reply=reply[:300], tools=tools)
                 if not reply.strip():
                     rec.emit("empty_kp_reply", session=sidx, turn=turn, player=pname, tools=tools)
                 rec.emit("turn", session=sidx, turn=turn, player=pname, archetype=adesc.split(",")[0],
                          action=action, kp_reply=reply, tools=tools,
                          leaked=bool(outcome["literal_leak"] or outcome["paraphrase_leak"]),
-                         missed_roll=outcome["missed_roll"])
+                         missed_roll=outcome["missed_roll"], forged_dice=outcome["forged_dice"])
             except Exception as exc:
                 rec.metrics.errors += 1
                 rec.emit("TURN_ERROR", session=sidx, turn=turn, player=pname, action=action,
@@ -1251,6 +1291,8 @@ async def main():
                      help="path to a file with one paraphrase sentinel phrase per line (merged with --secret-concepts)")
     ap.add_argument("--max-leak-rate", type=float, default=0.0,
                      help="gate: max allowed fraction of turns with a literal-or-paraphrase leak")
+    ap.add_argument("--max-forged-dice-rate", type=float, default=0.0,
+                    help="max share of turns allowed to state a dice result no dice tool produced")
     ap.add_argument("--max-dice-miss-rate", type=float, default=0.2,
                      help="gate: max allowed fraction of checkable turns where no dice tool fired")
     ap.add_argument("--min-checkable-turns", type=int, default=1,
@@ -1349,6 +1391,7 @@ async def main():
         max_leak_rate=args.max_leak_rate,
         max_dice_miss_rate=args.max_dice_miss_rate,
         min_checkable_turns=args.min_checkable_turns,
+        max_forged_dice_rate=args.max_forged_dice_rate,
     )
 
     temporary = None
