@@ -169,6 +169,26 @@ async def test_inject_interaction_style_prompt_is_localized_and_nonempty():
     assert "至多进行一次检定" in zh_result
 
 
+async def test_inject_interaction_style_prompt_demands_idiomatic_target_language():
+    """Rendering the prompt IN a language is not the same as instructing the model to WRITE it well.
+
+    Players reported Chinese narration full of word-for-word calques of English phrasing
+    ("短窗" for "short window", "合作的天花板" for "ceiling on cooperation"). Nothing in the
+    style guide asked for idiomatic prose -- it only covered sensory description and dice
+    discipline -- so this section is what makes that an explicit instruction.
+    """
+    ctx = _Ctx(chat_key="chat1")
+    en_result = await inject_interaction_style_prompt(ctx, EN)
+    zh_result = await inject_interaction_style_prompt(ctx, ZH)
+    assert EN.t("prompt.style.language") in en_result
+    assert ZH.t("prompt.style.language") in zh_result
+    assert "Idiomatic, never transliterated" in en_result
+    assert "要地道，不要直译" in zh_result
+    # It must not have displaced the dice-first rule it sits next to.
+    assert EN.t("prompt.style.tool_usage") in en_result
+    assert ZH.t("prompt.style.tool_usage") in zh_result
+
+
 async def test_inject_interaction_style_prompt_includes_freshness_and_ensemble_nudges():
     # Play-quality nudges: vary phrasing across turns + keep an unaddressed
     # companion/party member alive. Part of the interaction-style section, and

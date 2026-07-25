@@ -102,6 +102,7 @@ async def companion_action(
     situation: str,
     *,
     recent: list[str] | None = None,
+    locale: str | None = None,
 ) -> dict[str, str]:
     """Voice ONE companion's turn. Returns `{"action": str, "dialogue": str}`.
 
@@ -115,8 +116,11 @@ async def companion_action(
     the NPC-actor model slot). The reply is parsed as JSON tolerantly (fenced or bare); on any parse
     failure the raw reply becomes the `action` (with empty `dialogue`), so a malformed response still
     reads as a stated action rather than surfacing a broken payload.
+
+    `locale` MUST be the room's locale (`ctx.locale`); see `agent.npc_actor.voice_npc` for why the
+    process default is the wrong thing to render this prompt in.
     """
-    i18n = services.i18n
+    i18n = services.i18n if locale is None else services.i18n.with_locale(locale)
     system_prompt = _build_system_prompt(i18n, companion, sheet)
     user_message = _build_user_message(i18n, situation, recent or [])
     model = services.settings.llm.npc_model or services.settings.llm.chat_model

@@ -339,7 +339,13 @@ class NpcTools:
                 return i18n.t("npc.tools.not_found", npc=npc)
 
             voiced = await voice_npc(
-                self._services, record, situation, allowed_actions=allowed_actions, tone=tone, target=target
+                self._services,
+                record,
+                situation,
+                allowed_actions=allowed_actions,
+                tone=tone,
+                target=target,
+                locale=ctx.locale,
             )
             dialogue = voiced.get("dialogue", "")
             mood = voiced.get("mood", "")

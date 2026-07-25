@@ -105,6 +105,7 @@ async def voice_npc(
     tone: str = "",
     target: str = "",
     recent: list[str] | None = None,
+    locale: str | None = None,
 ) -> dict[str, str]:
     """Voice ONE NPC's turn. Returns `{"dialogue": str, "action_intent": str, "mood": str}`.
 
@@ -118,8 +119,13 @@ async def voice_npc(
     addition this spec makes). The reply is parsed as JSON tolerantly (fenced or bare); on any parse
     failure the raw reply becomes `dialogue` with `action_intent`/`mood` left empty, so a malformed
     response still reads as in-character speech rather than surfacing a broken payload.
+
+    `locale` MUST be the room's locale (`ctx.locale`), not the process default: the whole sub-actor
+    prompt -- including the "write idiomatic prose" instruction -- is rendered in it, and the model
+    answers in the language it was addressed in. Passing `None` falls back to the process locale,
+    which is only right for a caller that genuinely has no room context.
     """
-    i18n = services.i18n
+    i18n = services.i18n if locale is None else services.i18n.with_locale(locale)
     system_prompt = _build_system_prompt(i18n, npc, allowed_actions)
     user_message = _build_user_message(i18n, situation, tone, target, recent or [])
     model = services.settings.llm.npc_model or services.settings.llm.chat_model

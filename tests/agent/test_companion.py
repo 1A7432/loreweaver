@@ -124,6 +124,29 @@ async def test_companion_action_never_sees_keeper_pool_or_other_secrets():
     assert "scraping in the dark cellar" in user_content
 
 
+async def test_companion_action_renders_its_prompt_in_the_ROOM_locale():
+    """Same bug as `agent.npc_actor`: the companion actor rendered from the PROCESS locale, so a
+    zh room's companion was instructed in English (see the sibling test in test_npc.py)."""
+    recorded: list[list[dict]] = []
+
+    def responder(messages, tools):
+        recorded.append(messages)
+        return assistant_text(json.dumps({"action": "我挡在地窖门口。", "dialogue": "跟在我后面。"}))
+
+    services = build_services(Settings(), llm=FakeLLM(responder=responder), embeddings=FakeEmbeddings(8))
+    assert services.i18n.locale == "en"
+    record = await NpcManager(Store(":memory:")).create_companion("zh-room", "沈墨")
+
+    await companion_action(services, record, CharacterSheet(name="沈墨"), "地窖里有刮擦声。", locale="zh")
+
+    system_content = recorded[0][0]["content"]
+    assert "你是沈墨" in system_content
+    assert "You are" not in system_content
+    assert "地道" in system_content
+    # The old prompt hard-capped the performance ("short"/"brief"); that constraint is gone.
+    assert "简短地声明" not in system_content
+
+
 async def test_companion_action_falls_back_to_raw_content_when_reply_is_not_json():
     services = build_services(
         Settings(), llm=FakeLLM(script=[assistant_text("I kick the door in.")]), embeddings=FakeEmbeddings(8)

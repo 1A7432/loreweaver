@@ -83,7 +83,7 @@ async def run_companion_turn(
     # key-events into the companion prompt -- its short-term context is just the KP-provided
     # ``situation`` for this turn. Anything the companion "knows" must reach it via its own
     # player-scoped ``knowledge`` (see ``agent.kp_tools_companion.witness``), not the shared log.
-    out = await companion_action(services, companion, sheet, prompt_situation)
+    out = await companion_action(services, companion, sheet, prompt_situation, locale=locale)
 
     action = (out.get("action") or "").strip()
     if not action:  # empty/"hold" action == a pass: the companion sits this one out

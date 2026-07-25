@@ -555,6 +555,12 @@ async def inject_interaction_style_prompt(ctx: Any, i18n: I18n) -> str:
     parts = [
         i18n.t("prompt.style.narrative"),
         "",
+        # Right after narrative voice, before the mechanics blocks: the prompt is
+        # rendered in the room's locale, but rendering it in a language is not the
+        # same as being told to WRITE that language idiomatically -- without this,
+        # models reach for word-for-word calques of English phrasing.
+        i18n.t("prompt.style.language"),
+        "",
         i18n.t("prompt.style.tool_usage"),
         "",
         i18n.t("prompt.style.roll_policy"),

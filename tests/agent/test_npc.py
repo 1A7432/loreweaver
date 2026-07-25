@@ -293,6 +293,48 @@ async def test_voice_npc_parses_fenced_json_and_falls_back_to_raw_content_on_unp
     assert fallback_result == {"dialogue": "just talking, no json here", "action_intent": "", "mood": ""}
 
 
+async def test_voice_npc_renders_its_prompt_in_the_ROOM_locale_not_the_process_default():
+    """A zh room must not hand its NPCs an English system prompt.
+
+    `services.i18n` is built once from the PROCESS locale (`infra.config.Settings.locale`,
+    default "en"), while a room's language is per-room state set by `.language`. The sub-actor
+    used to render from the former, so `.language zh` restyled the main Keeper prompt but left
+    every NPC actor being instructed in English -- and a model instructed in English writes
+    calqued, translated-sounding Chinese.
+    """
+    recorded: list[list[dict]] = []
+
+    def responder(messages, tools):
+        recorded.append(messages)
+        return assistant_text(json.dumps({"dialogue": "别站这么亮。", "action_intent": "退半步", "mood": "害怕"}))
+
+    # Process locale stays "en" (the default) -- only the ROOM is Chinese.
+    services = build_services(Settings(), llm=FakeLLM(responder=responder), embeddings=FakeEmbeddings(8))
+    assert services.i18n.locale == "en"
+
+    await voice_npc(services, NpcRecord(id="clam", name="老克拉姆"), "有人递上一枚银币。", locale="zh")
+
+    system_prompt = recorded[0][0]["content"]
+    assert "你是老克拉姆" in system_prompt
+    assert "You are" not in system_prompt
+    # And the idiomatic-language instruction rides along in the room's language.
+    assert "地道" in system_prompt
+
+
+async def test_voice_npc_still_uses_the_process_locale_when_no_room_locale_is_given():
+    """Back-compat: a caller with no room context keeps the previous behaviour."""
+    recorded: list[list[dict]] = []
+
+    def responder(messages, tools):
+        recorded.append(messages)
+        return assistant_text(json.dumps({"dialogue": "Hello.", "action_intent": "", "mood": "calm"}))
+
+    services = build_services(Settings(), llm=FakeLLM(responder=responder), embeddings=FakeEmbeddings(8))
+    await voice_npc(services, NpcRecord(id="npc-1", name="Guard"), "Someone greets them.")
+
+    assert "You are Guard" in recorded[0][0]["content"]
+
+
 async def test_voice_npc_uses_configured_npc_model_over_chat_model():
     settings = Settings(llm=LLMSettings(chat_model="chat-default", npc_model="npc-special"))
     recording_llm = _ModelRecordingLLM(json.dumps({"dialogue": "Hello.", "action_intent": "", "mood": "calm"}))
@@ -347,6 +389,25 @@ async def test_speak_as_npc_weaves_dialogue_logs_event_and_excludes_keeper_secre
     assert current is not None
     assert any("Old Tomas" in event["description"] for event in current.key_events)
     assert all(keeper_secret not in event["description"] for event in current.key_events)
+
+
+async def test_speak_as_npc_threads_the_rooms_locale_into_the_sub_actor():
+    """End-to-end for the call site: the tool must pass `ctx.locale` down to `voice_npc`."""
+    recorded: list[list[dict]] = []
+
+    def responder(messages, tools):
+        recorded.append(messages)
+        return assistant_text(json.dumps({"dialogue": "别站这么亮。", "action_intent": "退半步", "mood": "害怕"}))
+
+    services = build_services(Settings(), llm=FakeLLM(responder=responder), embeddings=FakeEmbeddings(8))
+    await services.battles.start_session("zh-room")
+    tools = NpcTools(services)
+    ctx = _ctx("zh-room", locale="zh")
+    await tools.create_npc(ctx, name="老克拉姆", persona="码头上的鱼贩。", knowledge="船周二进港。")
+
+    await tools.speak_as_npc(ctx, npc="老克拉姆", situation="有人递上一枚银币。")
+
+    assert "你是老克拉姆" in recorded[-1][0]["content"]
 
 
 async def test_speak_as_npc_reports_not_found_for_unknown_npc():

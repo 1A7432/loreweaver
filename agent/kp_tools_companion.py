@@ -150,7 +150,7 @@ class CompanionTools:
             # No hub wired in (standalone/tool-only path): declare the action for you to weave and
             # adjudicate -- still fully info-isolated, still never rolls its own dice.
             sheet = await self._services.characters.get_character(_companion_uid(companion.id), ctx.chat_key)
-            out = await companion_action(self._services, companion, sheet, situation)
+            out = await companion_action(self._services, companion, sheet, situation, locale=ctx.locale)
             action = out.get("action", "")
             dialogue = out.get("dialogue", "")
             line = i18n.t(
