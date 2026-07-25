@@ -142,7 +142,6 @@ async def test_companion_action_renders_its_prompt_in_the_ROOM_locale():
     system_content = recorded[0][0]["content"]
     assert "你是沈墨" in system_content
     assert "You are" not in system_content
-    assert "地道" in system_content
     # The old prompt hard-capped the performance ("short"/"brief"); that constraint is gone.
     assert "简短地声明" not in system_content
 

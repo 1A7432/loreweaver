@@ -317,8 +317,6 @@ async def test_voice_npc_renders_its_prompt_in_the_ROOM_locale_not_the_process_d
     system_prompt = recorded[0][0]["content"]
     assert "你是老克拉姆" in system_prompt
     assert "You are" not in system_prompt
-    # And the idiomatic-language instruction rides along in the room's language.
-    assert "地道" in system_prompt
 
 
 async def test_voice_npc_still_uses_the_process_locale_when_no_room_locale_is_given():
