@@ -28,6 +28,7 @@ A hardening pass just landed the unglamorous things that have to be right before
 
 - **Real-platform acceptance.** Run the documented Discord, official QQ, Telegram, Feishu, and OneBot smoke matrices with test bots/implementations, capture sanitized platform fixtures where useful, and keep every network adapter experimental until that evidence is green.
 - **Multiplayer polish.** Now that the permission model is enforced, tighten the remaining networked-play rough edges (a real bot-loop guard, richer late-joiner state) so a room among trusted people is genuinely comfortable.
+- **Native card forge.** SillyTavern cards now import and RUN (MVU variable trees, full EJS, trigger semantics — see [docs/plugins.md](plugins.md)); the next step is a first-class AUTHORING path for Loreweaver-native cards: typed trackers (`core.modvars`) instead of raw MVU trees, native `condition` fields instead of EJS workarounds, keeper-only visibility where a mystery needs it — and dual export, a clean Loreweaver bundle AND a SillyTavern-compatible card (InitVar + scaffolding generated), so content authored here plays in either ecosystem. Builds on the existing self-extension forge (`generate_module` and friends).
 
 ## The bigger arc — the world engine
 

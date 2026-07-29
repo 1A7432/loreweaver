@@ -76,6 +76,8 @@ class WorldbookTools:
         secret: bool = False,
         constant: bool = False,
         condition: str = "",
+        secondary_keys: str = "",
+        probability: int = 100,
     ) -> str:
         """Add a world-lore entry -- a durable fact about the WORLD (a faction, place, history,
         cosmology, world-rule, recurring person/item) that should ground future generation.
@@ -92,6 +94,11 @@ class WorldbookTools:
             condition: Optional variable condition gating injection (e.g. "town_fear >= 5" or
                 "stage === 2 && !alerted") over the room's module variables; the entry only
                 fires while it is true. Leave empty for unconditional.
+            secondary_keys: Optional comma-/newline-separated SECONDARY keywords: the entry
+                then fires only when a primary key AND at least one of these appear (finer
+                targeting, e.g. keys "ritual" + secondary "chapel, crypt").
+            probability: Percent chance (1-100) the entry injects each time it triggers;
+                100 = always. Rolled by the engine, never by you.
 
         Returns:
             Confirmation naming the stored entry and its scope.
@@ -108,6 +115,8 @@ class WorldbookTools:
                 secret=secret,
                 constant=constant,
                 condition=condition or "",
+                secondary_keys=_split_keys(secondary_keys),
+                probability=min(100, max(1, probability)),
             )
             saved = await self._services.worldbook.add(ctx.chat_key, entry)
             secret_note = i18n.t("worldbook.tools.add.secret_suffix") if saved.secret else ""

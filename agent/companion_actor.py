@@ -17,6 +17,9 @@ its REAL sheet, adjudicated by the KP.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
+from agent.card_text import build_card_text_renderer
 from agent.npc import NpcRecord
 from agent.npc_actor import _extract_json_object, _knowledge_bullets
 from agent.services import Services
@@ -103,6 +106,8 @@ async def companion_action(
     *,
     recent: list[str] | None = None,
     locale: str | None = None,
+    chat_key: str | None = None,
+    user_uid: str | None = None,
 ) -> dict[str, str]:
     """Voice ONE companion's turn. Returns `{"action": str, "dialogue": str}`.
 
@@ -119,8 +124,21 @@ async def companion_action(
 
     `locale` MUST be the room's locale (`ctx.locale`); see `agent.npc_actor.voice_npc` for why the
     process default is the wrong thing to render this prompt in.
+
+    `chat_key`/`user_uid` (M12 card compatibility): same contract as `voice_npc` -- card-derived
+    record prose (EJS templates, `{{user}}`/`{{char}}` macros) is rendered here at consumption
+    time via `agent.card_text.build_card_text_renderer`, against the PLAYER view of the room's
+    variables only (iron rule #3), read-only. Omitting them still strips templates fail-safe.
     """
     i18n = services.i18n if locale is None else services.i18n.with_locale(locale)
+    render = await build_card_text_renderer(services, chat_key, char_name=companion.name, user_uid=user_uid)
+    # Render on a COPY -- the stored record keeps the raw authored text (see voice_npc).
+    companion = replace(
+        companion,
+        persona=render(companion.persona),
+        playstyle=render(companion.playstyle),
+        knowledge=[render(fact) for fact in companion.knowledge],
+    )
     system_prompt = _build_system_prompt(i18n, companion, sheet)
     user_message = _build_user_message(i18n, situation, recent or [])
     model = services.settings.llm.npc_model or services.settings.llm.chat_model

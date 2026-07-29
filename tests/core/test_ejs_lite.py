@@ -162,3 +162,60 @@ def test_split_decorators_without_decorators_is_identity():
     decorators, body = split_decorators(text)
     assert decorators == {}
     assert body == text
+
+
+# ---------------------------------------------------------------------------
+# MacroContext: ST-native macros (roll/random/time/newline/comment)
+# ---------------------------------------------------------------------------
+
+
+def test_macro_context_native_macros():
+    import random
+
+    from core.ejs_lite import MacroContext
+
+    macros = MacroContext(
+        names={"char": "络络"},
+        clock_time="1926-03-15 22:00",
+        rng=random.Random(7),
+        roll=lambda expr: {"1d20": "17"}[expr],
+    )
+    text = (
+        "{{// keeper note}}{{char}} at {{time}}. Roll: {{roll:1d20}}. "
+        "Mood: {{random: grim, hopeful, grim}}.{{newline}}Done on {{date}}."
+    )
+    out = substitute_macros(text, _resolver({}), None, macros)
+    assert "keeper note" not in out
+    assert "络络 at 1926-03-15 22:00." in out
+    assert "Roll: 17." in out
+    assert ("Mood: grim." in out) or ("Mood: hopeful." in out)
+    assert "\nDone on 1926-03-15 22:00." in out
+
+
+def test_macro_context_names_win_over_the_names_argument():
+    from core.ejs_lite import MacroContext
+
+    out = substitute_macros(
+        "{{user}}", _resolver({}), {"user": "old"}, MacroContext(names={"user": "new"})
+    )
+    assert out == "new"
+
+
+def test_bad_roll_expression_passes_through_untouched():
+    from core.ejs_lite import MacroContext
+
+    def _roll(_expr):
+        raise ValueError("bad dice")
+
+    out = substitute_macros("{{roll:not-dice}}", _resolver({}), None, MacroContext(roll=_roll))
+    assert out == "{{roll:not-dice}}"
+
+
+def test_double_colon_random_form_and_missing_context_pass_through():
+    import random
+
+    from core.ejs_lite import MacroContext
+
+    out = substitute_macros("{{random::a::b}}", _resolver({}), None, MacroContext(rng=random.Random(1)))
+    assert out in ("a", "b")
+    assert substitute_macros("{{roll:1d6}}{{time}}", _resolver({}), None, None) == "{{roll:1d6}}{{time}}"

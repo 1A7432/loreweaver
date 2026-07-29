@@ -18,8 +18,10 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 from typing import Any
 
+from agent.card_text import build_card_text_renderer
 from agent.npc import NpcRecord
 from agent.services import Services
 from infra.i18n import I18n
@@ -106,6 +108,8 @@ async def voice_npc(
     target: str = "",
     recent: list[str] | None = None,
     locale: str | None = None,
+    chat_key: str | None = None,
+    user_uid: str | None = None,
 ) -> dict[str, str]:
     """Voice ONE NPC's turn. Returns `{"dialogue": str, "action_intent": str, "mood": str}`.
 
@@ -124,8 +128,27 @@ async def voice_npc(
     prompt -- including the "write idiomatic prose" instruction -- is rendered in it, and the model
     answers in the language it was addressed in. Passing `None` falls back to the process locale,
     which is only right for a caller that genuinely has no room context.
+
+    `chat_key`/`user_uid` (M12 card compatibility): card-derived record prose may carry EJS
+    templates and `{{user}}`/`{{char}}` macros; it is rendered here, at consumption time, via
+    `agent.card_text.build_card_text_renderer` -- against the PLAYER view of `chat_key`'s
+    variables only (iron rule #3; keeper-only variables are structurally invisible), read-only
+    (template writes discarded), with `{{char}}` -> this NPC's name and `{{user}}` ->
+    `user_uid`'s active character. Callers without a room/user context may omit them: templates
+    are still stripped fail-safe, so raw `<% %>` never reaches the model from any path.
     """
     i18n = services.i18n if locale is None else services.i18n.with_locale(locale)
+    render = await build_card_text_renderer(services, chat_key, char_name=npc.name, user_uid=user_uid)
+    # Render on a COPY -- the stored record keeps the raw authored text so future turns
+    # re-evaluate it against the then-current variables.
+    npc = replace(
+        npc,
+        persona=render(npc.persona),
+        style=render(npc.style),
+        secret_agenda=render(npc.secret_agenda),
+        disposition=render(npc.disposition),
+        knowledge=[render(fact) for fact in npc.knowledge],
+    )
     system_prompt = _build_system_prompt(i18n, npc, allowed_actions)
     user_message = _build_user_message(i18n, situation, tone, target, recent or [])
     model = services.settings.llm.npc_model or services.settings.llm.chat_model

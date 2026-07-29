@@ -49,10 +49,13 @@ tag is the behavioral one). A room with no variables contributes nothing.
 from __future__ import annotations
 
 import json
+import random
 
 from agent.context import AgentCtx
 from agent.services import Services
+from core.dice_engine import DiceRoller
 from core.ejs_full import create_full_engine
+from core.ejs_lite import MacroContext
 from core.modvars import ModvarManager
 from core.mvu_compat import MvuManager, apply_set, flatten_leaves
 from core.prompt_sections import (
@@ -108,6 +111,7 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
             tree=mvu_tree,
             worldinfo={entry.title: entry.content for entry in room_entries},
         )
+    macros = await _build_macro_context(services, ctx)
     world_lore = await inject_world_lore_prompt(
         ctx,
         services.worldbook,
@@ -116,6 +120,8 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
         recent_context=recent_context,
         resolve=variable_resolver,
         engine=engine,
+        macros=macros,
+        advance_timers=True,  # the once-per-turn injection path drives sticky/cooldown/delay
     )
     if engine is not None:
         mvu_tree = await _flush_template_writes(services, ctx.chat_key, engine, mvu_tree)
@@ -153,6 +159,35 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
         sections.append(i18n.t("prompt.mvu_header") + "\n" + leaf_lines)
 
     return "\n\n".join(section for section in sections if section)
+
+
+async def _build_macro_context(services: Services, ctx: AgentCtx) -> MacroContext:
+    """The per-turn ST-native macro context: `{{user}}` = the caller's active PC name (the
+    `"default"` sentinel means unset — mirrors `net.state.resolve_active_character` without
+    importing `net`), `{{time}}`/`{{date}}` = the GAME clock, `{{roll:...}}` = the real dice
+    engine (iron rule #2), `{{random/pick:...}}` = real code randomness. `{{char}}` is bound
+    statically at card import, so it is deliberately absent here. Best-effort throughout."""
+    names: dict[str, str] = {}
+    try:
+        sheet = await services.characters.get_character(ctx.uid(), ctx.chat_key)
+        if sheet is not None and sheet.name and sheet.name != "default":
+            names["user"] = sheet.name
+    except Exception:
+        pass
+    clock_time = ""
+    try:
+        raw = await services.store.get(user_key="", store_key=f"game_clock.{ctx.chat_key}")
+        clock = json.loads(raw) if raw else {}
+        if isinstance(clock, dict):
+            clock_time = str(clock.get("current_time") or "")
+    except Exception:
+        pass
+    roller = DiceRoller()
+
+    def _roll(expression: str) -> str:
+        return str(roller.roll_expression(expression).total)
+
+    return MacroContext(names=names, clock_time=clock_time, rng=random.Random(), roll=_roll)
 
 
 async def _flush_template_writes(services: Services, chat_key: str, engine, mvu_tree: dict) -> dict:

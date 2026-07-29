@@ -28,6 +28,7 @@ Loreweaver 的目标不是"用 AI 替代一个跑团主持人"，而是做 **RPG
 
 - **真平台验收。** 使用测试 Bot/实现跑完文档中的 Discord、QQ 官方、Telegram、飞书与 OneBot 冒烟矩阵，按需采集脱敏平台 fixture；证据全绿前，所有网络适配器都继续保留实验性标签。
 - **多人游戏抛光。** 既然权限模型已执行，收紧其余网络游玩的粗糙边角（真正的机器人循环守护者、更丰富的迟到加入者状态），使可信人员之间的房间真正舒适。
+- **原生制卡机。** 酒馆卡现在导入即可运行（MVU 变量树、完整 EJS、触发语义——见 [docs/plugins.md](plugins.md)）；下一步是给 Loreweaver 原生卡一条一等公民的创作路径：用类型化状态量（`core.modvars`）替代裸 MVU 树、用原生 `condition` 替代 EJS 变通、需要守秘的地方就有守秘可见性——并且双向导出：既出干净的 Loreweaver 包，也出 SillyTavern 兼容卡（自动生成 InitVar 与脚手架），在这里写一次，两个生态都能玩。基于既有的自扩展 forge（`generate_module` 等）。
 
 ## 更大方向——世界引擎
 

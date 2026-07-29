@@ -11,6 +11,7 @@ import json
 from agent.context import AgentCtx
 from agent.prompt_builder import build_system_prompt
 from agent.services import build_services
+from core.modvars import ModvarManager, build_spec
 from core.prompt_sections import (
     inject_document_context_prompt,
     inject_game_state_prompt,
@@ -20,7 +21,6 @@ from core.prompt_sections import (
     inject_system_expertise_prompt,
     inject_trpg_system_prompt,
 )
-from core.modvars import ModvarManager, build_spec
 from core.relationships import RelationshipManager
 from core.worldbook import inject_world_lore_prompt
 from infra.config import Settings

@@ -174,6 +174,18 @@ ST-Prompt-Template EJS extension import and RUN, within a documented subset:
   `@@if` → the entry's `condition` field, `<#escape-ejs>` passthrough. Subset rendering
   is READ-ONLY (template `setvar` is a no-op there) and fail-safe either way: raw
   template syntax never reaches the LLM.
+- **ST worldbook trigger semantics** import and run: secondary keys with all four
+  selective logics (AND ANY / AND ALL / NOT ANY / NOT ALL), `probability` (rolled by real
+  code), case-sensitive and whole-word matching, `scan_depth` windows, `position`
+  ordering buckets, timed effects (`sticky`/`cooldown`/`delay` against a per-room turn
+  counter that only the injection path advances), and inclusion groups (weighted, one
+  member per group per turn). Both the V2 `character_book` and ST-native world-info
+  field names map.
+- **Macros**: `{{getvar::}}`/`{{var:}}`, `{{user}}` (the active PC, resolved at render
+  time), `{{char}}` (bound statically at card import — a card's char never changes),
+  `{{time}}`/`{{date}}` (the GAME clock), `{{random}}`/`{{pick}}`, `{{newline}}`,
+  `{{// comments}}`, and `{{roll:XdY}}` — rolled by the real dice engine, never
+  narrated into existence (iron rule #2).
 - **Still stubbed/inert even in full mode**: `faker` (stub returning empty strings, with
   a warning — nondeterministic flavor, rarely load-bearing), `@INJECT` message-index
   positioning, and render-time UI (`[RENDER:*]`, `@@render_*`, `@@iframe` status bars —

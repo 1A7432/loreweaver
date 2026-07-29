@@ -51,6 +51,11 @@ _STATEMENT_RE = re.compile(r"^(?P<fn>setvar|incvar|decvar)\s*\((?P<args>.*)\)\s*
 _MACRO_GETVAR_RE = re.compile(r"\{\{\s*getvar::(?P<name>[^{}]+?)\s*\}\}")
 _MACRO_VAR_RE = re.compile(r"\{\{\s*var:(?P<name>[^{}]+?)\s*\}\}")
 _MACRO_NAME_RE = re.compile(r"\{\{\s*(?P<name>user|char)\s*\}\}", re.IGNORECASE)
+_MACRO_COMMENT_RE = re.compile(r"\{\{\s*//[^{}]*\}\}")
+_MACRO_NEWLINE_RE = re.compile(r"\{\{\s*newline\s*\}\}", re.IGNORECASE)
+_MACRO_TIME_RE = re.compile(r"\{\{\s*(?:time|date)\s*\}\}", re.IGNORECASE)
+_MACRO_RANDOM_RE = re.compile(r"\{\{\s*(?:random|pick)\s*[:]{1,2}\s*(?P<options>[^{}]+?)\s*\}\}", re.IGNORECASE)
+_MACRO_ROLL_RE = re.compile(r"\{\{\s*roll\s*[:]{1,2}\s*(?P<expr>[^{}]+?)\s*\}\}", re.IGNORECASE)
 
 _AT_DECORATOR_RE = re.compile(r"^@@(?P<name>[A-Za-z_]+)(?:\s+(?P<arg>.*))?$")
 
@@ -302,21 +307,73 @@ def _split_call_args(raw: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def substitute_macros(text: str, resolve: Resolver, names: dict[str, str] | None = None) -> str:
-    """Substitute the compatible macro forms; unknown ``{{...}}`` macros pass through."""
+@dataclass
+class MacroContext:
+    """Runtime context for SillyTavern-native macros beyond plain variable reads.
+
+    All pieces are optional; a macro whose context is absent passes through untouched, so
+    callers only wire what their surface honestly has. ``roll`` MUST be backed by the real
+    dice engine (iron rule #2 — a ``{{roll:1d20}}`` in lore is a real roll, never model-made
+    or ad-hoc randomness); ``rng`` backs ``{{random}}``/``{{pick}}``; ``clock_time`` is the
+    GAME clock (deterministic world state), not the wall clock.
+    """
+
+    names: dict[str, str] = field(default_factory=dict)  # "user"/"char" display names
+    clock_time: str = ""  # {{time}}/{{date}}
+    rng: Any = None  # random.Random-like, for {{random:...}}/{{pick:...}}
+    roll: Callable[[str], str] | None = None  # dice expression -> result text, real dice only
+
+
+def substitute_macros(
+    text: str,
+    resolve: Resolver,
+    names: dict[str, str] | None = None,
+    macros: MacroContext | None = None,
+) -> str:
+    """Substitute the compatible macro forms; unknown ``{{...}}`` macros pass through.
+
+    `names` is the stable back-compat argument; when both are given, entries in
+    `macros.names` win. Comment macros (``{{// ...}}``) always strip.
+    """
+    merged_names = dict(names or {})
+    if macros is not None:
+        merged_names.update(macros.names)
 
     def _sub_var(match: re.Match[str]) -> str:
         value = resolve(match.group("name").strip())
         return "" if value is None else str(value)
 
+    text = _MACRO_COMMENT_RE.sub("", text)
     text = _MACRO_GETVAR_RE.sub(_sub_var, text)
     text = _MACRO_VAR_RE.sub(_sub_var, text)
-    if names:
+    text = _MACRO_NEWLINE_RE.sub("\n", text)
+
+    if merged_names:
         def _sub_name(match: re.Match[str]) -> str:
-            replacement = names.get(match.group("name").lower())
+            replacement = merged_names.get(match.group("name").lower())
             return replacement if replacement else match.group(0)
 
         text = _MACRO_NAME_RE.sub(_sub_name, text)
+
+    if macros is not None:
+        if macros.clock_time:
+            text = _MACRO_TIME_RE.sub(macros.clock_time, text)
+        if macros.rng is not None:
+            def _sub_random(match: re.Match[str]) -> str:
+                raw = match.group("options")
+                options = [part.strip() for part in (raw.split("::") if "::" in raw else raw.split(","))]
+                options = [option for option in options if option]
+                return macros.rng.choice(options) if options else ""
+
+            text = _MACRO_RANDOM_RE.sub(_sub_random, text)
+        if macros.roll is not None:
+            def _sub_roll(match: re.Match[str]) -> str:
+                try:
+                    return str(macros.roll(match.group("expr").strip()))
+                except Exception:
+                    return match.group(0)  # a bad expression passes through untouched
+
+            text = _MACRO_ROLL_RE.sub(_sub_roll, text)
     return text
 
 

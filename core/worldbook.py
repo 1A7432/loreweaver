@@ -22,6 +22,7 @@ must never reach a prompt).
 from __future__ import annotations
 
 import json
+import random
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -34,6 +35,19 @@ from core.mvu_compat import MvuManager, is_initvar_entry, parse_initvar
 
 WORLD_SCOPE = "world"
 WORLDBOOK_COLLECTION = "worldbook"
+
+_SELECTIVE_LOGICS = ("and_any", "and_all", "not_any", "not_all")
+_POSITION_RANK = {"before": 0, "": 1, "after": 2}
+# Probability rolls and inclusion-group picks on the injection path use real code randomness
+# (iron rule #1). Tests inject a seeded random.Random via `match(rng=...)`.
+_RNG = random.Random()
+
+
+def _coerce_entry_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 # Untrusted imports (uploaded lorebooks / SillyTavern cards) are pinned to this scope so a file
 # can never claim the cross-module "world" scope for itself; see `_normalize_import_entry`.
@@ -58,6 +72,19 @@ class LoreEntry:
     priority: int = 0
     enabled: bool = True
     condition: str = ""  # safe condexpr expression; empty = unconditional
+    # --- SillyTavern trigger semantics (all optional; defaults reproduce pre-existing behavior)
+    secondary_keys: list[str] = field(default_factory=list)
+    selective_logic: str = "and_any"  # and_any | and_all | not_any | not_all (over secondary_keys)
+    probability: int = 100  # % chance once triggered; rolled by real code (injection-path rng)
+    case_sensitive: bool = False
+    match_whole_words: bool = False  # ASCII-word keys only; CJK keys are unaffected
+    scan_depth: int = 0  # 0 = whole provided context; N = last N non-empty lines
+    position: str = ""  # ordering bucket within the lore section: "before" | "" | "after"
+    sticky: int = 0  # stays active this many turns after firing
+    cooldown: int = 0  # cannot re-fire this many turns after (sticky expires first)
+    delay: int = 0  # not eligible until the room's turn counter reaches this
+    group: str = ""  # inclusion group: at most ONE member of a group injects per turn
+    group_weight: int = 100
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -72,6 +99,18 @@ class LoreEntry:
             "priority": self.priority,
             "enabled": self.enabled,
             "condition": self.condition,
+            "secondary_keys": list(self.secondary_keys),
+            "selective_logic": self.selective_logic,
+            "probability": self.probability,
+            "case_sensitive": self.case_sensitive,
+            "match_whole_words": self.match_whole_words,
+            "scan_depth": self.scan_depth,
+            "position": self.position,
+            "sticky": self.sticky,
+            "cooldown": self.cooldown,
+            "delay": self.delay,
+            "group": self.group,
+            "group_weight": self.group_weight,
         }
 
     @classmethod
@@ -79,6 +118,10 @@ class LoreEntry:
         keys = data.get("keys", [])
         if isinstance(keys, str):
             keys = [keys]
+        secondary = data.get("secondary_keys", [])
+        if isinstance(secondary, str):
+            secondary = [secondary]
+        logic = str(data.get("selective_logic") or "and_any")
         return cls(
             id=str(data.get("id") or _new_id()),
             title=str(data.get("title") or data.get("name") or data.get("comment") or "Untitled Lore"),
@@ -88,9 +131,21 @@ class LoreEntry:
             scope=str(data.get("scope") or WORLD_SCOPE),
             secret=bool(data.get("secret", False)),
             constant=bool(data.get("constant", False)),
-            priority=int(data.get("priority", 0) or 0),
+            priority=_coerce_entry_int(data.get("priority"), 0),
             enabled=bool(data.get("enabled", True)),
             condition=str(data.get("condition") or "")[:MAX_EXPR_LEN],
+            secondary_keys=[str(key) for key in secondary if str(key).strip()],
+            selective_logic=logic if logic in _SELECTIVE_LOGICS else "and_any",
+            probability=min(100, max(0, _coerce_entry_int(data.get("probability"), 100))),
+            case_sensitive=bool(data.get("case_sensitive", False)),
+            match_whole_words=bool(data.get("match_whole_words", False)),
+            scan_depth=min(200, max(0, _coerce_entry_int(data.get("scan_depth"), 0))),
+            position=data.get("position") if data.get("position") in ("before", "after") else "",
+            sticky=min(999, max(0, _coerce_entry_int(data.get("sticky"), 0))),
+            cooldown=min(999, max(0, _coerce_entry_int(data.get("cooldown"), 0))),
+            delay=min(9999, max(0, _coerce_entry_int(data.get("delay"), 0))),
+            group=str(data.get("group") or ""),
+            group_weight=max(1, _coerce_entry_int(data.get("group_weight"), 100)),
         )
 
 
@@ -199,6 +254,7 @@ class WorldbookManager:
         *,
         source: str = "",
         is_keeper: bool = False,
+        char_name: str = "",
     ) -> int:
         """Import lorebook entries into this room.
 
@@ -227,6 +283,11 @@ class WorldbookManager:
                     await MvuManager(self.store).init_from_initvar(chat_key, parsed_initvar)
                 continue
             entry = _normalize_import_entry(raw, source=source, index=index, is_keeper=is_keeper)
+            if char_name:
+                # A card's own lorebook writes {{char}} for its character's name — that binding
+                # never changes for imported entries, so substitute it STATICALLY at import
+                # ({{user}} stays dynamic and resolves at render time).
+                entry = _bind_char_name(entry, char_name)
             if len(entry.content) > MAX_IMPORT_CONTENT_CHARS:
                 raise ValueError("worldbook import entry content exceeds the maximum length")  # i18n-exempt: surfaced via localized import failure
             if entry.content:
@@ -245,6 +306,8 @@ class WorldbookManager:
         resolve: Any = None,
         engine: Any = None,
         ignore_conditions: bool = False,
+        rng: random.Random | None = None,
+        advance_timers: bool = False,
     ) -> list[LoreEntry]:
         """Select the entries to inject for `context_text`.
 
@@ -254,26 +317,102 @@ class WorldbookManager:
         a condition the closed grammar cannot parse (arbitrary-JS `@@if`) is then evaluated by
         the sandbox before failing closed. `ignore_conditions=True` is the explicit-browse path
         (e.g. the keeper's `query_lore` search) where hiding entries would be misleading.
+
+        ST trigger semantics ride on top of the base keyword/semantic selection: secondary-key
+        logic and scan windows live in `_keyword_hit`; `probability` is rolled here with `rng`
+        (real code randomness — pass a seeded `random.Random` in tests); inclusion groups pick
+        ONE member per group by weight; `position` buckets order the final list. Timed effects
+        (sticky/cooldown/delay) track against a per-room turn counter that ONLY advances when
+        `advance_timers=True` — the once-per-turn injection path (the prompt builder) passes it;
+        browse/search paths leave the counter and effect windows untouched.
         """
         context = context_text or ""
+        rng = rng or _RNG
         entries = [entry for entry in await self.list(chat_key) if entry.enabled]
+        timers = await self._load_timers(chat_key)
+        turn = int(timers.get("turn", 0)) + (1 if advance_timers else 0)
+        timer_entries = timers.get("entries", {})
+
+        def _timer_state(entry: LoreEntry) -> dict[str, Any]:
+            state = timer_entries.get(entry.id)
+            return state if isinstance(state, dict) else {}
+
+        def _sticky_active(entry: LoreEntry) -> bool:
+            return entry.sticky > 0 and _coerce_entry_int(_timer_state(entry).get("sticky_until"), -1) >= turn
+
+        def _timer_eligible(entry: LoreEntry) -> bool:
+            if entry.delay and turn < entry.delay:
+                return False
+            return _coerce_entry_int(_timer_state(entry).get("cooldown_until"), -1) < turn
+
         selected: dict[str, LoreEntry] = {}
+        sticky_ids: set[str] = set()
         for entry in entries:
+            if _sticky_active(entry):
+                selected[entry.id] = entry
+                sticky_ids.add(entry.id)
+                continue
+            if not _timer_eligible(entry):
+                continue
             if entry.constant or _keyword_hit(entry, context):
                 selected[entry.id] = entry
 
         for entry in await self._semantic_hits(chat_key, context, limit=limit):
-            selected.setdefault(entry.id, entry)
+            if entry.id in selected:
+                continue
+            if _sticky_active(entry) or _timer_eligible(entry):
+                selected[entry.id] = entry
 
-        visible = [
-            entry
-            for entry in selected.values()
-            if entry.enabled and (role == "keeper" or not entry.secret)
-        ]
+        # Probability gate (sticky-active entries already "paid" their roll when they fired).
+        survivors = []
+        for entry in selected.values():
+            if entry.id in sticky_ids or entry.probability >= 100:
+                survivors.append(entry)
+            elif entry.probability > 0 and rng.randint(1, 100) <= entry.probability:
+                survivors.append(entry)
+
+        visible = [entry for entry in survivors if role == "keeper" or not entry.secret]
         if not ignore_conditions:
             visible = [entry for entry in visible if _condition_holds(entry.condition, resolve, engine)]
-        visible.sort(key=lambda entry: entry.priority, reverse=True)
-        return _cap_entries(visible[:limit], budget_chars)
+        visible = _resolve_inclusion_groups(visible, rng, sticky_ids)
+        visible.sort(key=lambda entry: (_POSITION_RANK.get(entry.position, 1), -entry.priority))
+        chosen = _cap_entries(visible[:limit], budget_chars)
+
+        if advance_timers:
+            live_ids = {entry.id for entry in entries}
+            kept = {
+                entry_id: state
+                for entry_id, state in timer_entries.items()
+                if entry_id in live_ids and isinstance(state, dict)
+            }
+            for entry in chosen:
+                if entry.id in sticky_ids or (not entry.sticky and not entry.cooldown):
+                    continue
+                state = kept.setdefault(entry.id, {})
+                if entry.sticky:
+                    state["sticky_until"] = turn + entry.sticky
+                if entry.cooldown:
+                    # ST semantics: the cooldown window starts once any sticky window ends.
+                    state["cooldown_until"] = turn + entry.sticky + entry.cooldown
+            await self._save_timers(chat_key, {"turn": turn, "entries": kept})
+        return chosen
+
+    async def _load_timers(self, chat_key: str) -> dict[str, Any]:
+        raw = await self.store.get(user_key="", store_key=_timers_store_key(chat_key))
+        if not raw:
+            return {"turn": 0, "entries": {}}
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return {"turn": 0, "entries": {}}
+        if not isinstance(data, dict) or not isinstance(data.get("entries"), dict):
+            return {"turn": 0, "entries": {}}
+        return {"turn": _coerce_entry_int(data.get("turn"), 0), "entries": data["entries"]}
+
+    async def _save_timers(self, chat_key: str, timers: dict[str, Any]) -> None:
+        await self.store.set(
+            user_key="", store_key=_timers_store_key(chat_key), value=json.dumps(timers, ensure_ascii=False)
+        )
 
     async def _load_index(self, namespace: str) -> list[str]:
         raw = await self.store.get(user_key="", store_key=_index_store_key(namespace))
@@ -363,9 +502,20 @@ async def inject_world_lore_prompt(
     recent_context: str,
     resolve: Any = None,
     engine: Any = None,
+    macros: Any = None,
+    rng: random.Random | None = None,
+    advance_timers: bool = False,
 ) -> str:
-    entries = await worldbook.match(ctx.chat_key, recent_context, role=role, resolve=resolve, engine=engine)
-    rendered = [render_entry_content(entry, resolve, engine) for entry in entries]
+    entries = await worldbook.match(
+        ctx.chat_key,
+        recent_context,
+        role=role,
+        resolve=resolve,
+        engine=engine,
+        rng=rng,
+        advance_timers=advance_timers,
+    )
+    rendered = [render_entry_content(entry, resolve, engine, macros=macros) for entry in entries]
 
     # ST-Prompt-Template's activewi(): a template rendered above may force-activate further
     # entries by name. One additive pass (no recursion — an activation chain stops here),
@@ -378,7 +528,7 @@ async def inject_world_lore_prompt(
             seen.add(name)
             extra = await worldbook.get(ctx.chat_key, name)
             if extra is not None and extra.enabled and (role == "keeper" or not extra.secret):
-                rendered.append(render_entry_content(extra, resolve, engine))
+                rendered.append(render_entry_content(extra, resolve, engine, macros=macros))
 
     rendered = [text for text in rendered if text]
     if not rendered:
@@ -388,7 +538,7 @@ async def inject_world_lore_prompt(
     return "\n".join(lines)
 
 
-def render_entry_content(entry: LoreEntry, resolve: Any = None, engine: Any = None) -> str:
+def render_entry_content(entry: LoreEntry, resolve: Any = None, engine: Any = None, macros: Any = None) -> str:
     """Render one entry's content for prompt injection.
 
     With a `core.ejs_full.FullEjsEngine` the content runs as real EJS (template `setvar`
@@ -408,7 +558,7 @@ def render_entry_content(entry: LoreEntry, resolve: Any = None, engine: Any = No
         if resolve is None:
             return entry.content
         text = render_template(entry.content, resolve).text
-    return substitute_macros(text, resolve) if resolve is not None else text
+    return substitute_macros(text, resolve, macros=macros) if resolve is not None else text
 
 
 def _new_id() -> str:
@@ -437,13 +587,73 @@ def _vector_id(namespace: str, entry_id: str) -> str:
     return f"{namespace}:{entry_id}"
 
 
+def _timers_store_key(chat_key: str) -> str:
+    return f"worldbook_timers.{chat_key}"
+
+
+def _scan_window(context: str, scan_depth: int) -> str:
+    """ST `scan_depth` approximation: our context is a text blob, not a message list, so depth N
+    scans the last N non-empty LINES. 0 = the whole provided context (the historic behavior)."""
+    if scan_depth <= 0:
+        return context
+    lines = [line for line in context.splitlines() if line.strip()]
+    return "\n".join(lines[-scan_depth:])
+
+
+def _key_match(key: str, haystack_raw: str, haystack_lower: str, case_sensitive: bool, whole_words: bool) -> bool:
+    needle = key.strip()
+    if not needle:
+        return False
+    haystack = haystack_raw if case_sensitive else haystack_lower
+    if not case_sensitive:
+        needle = needle.lower()
+    if whole_words and re.fullmatch(r"\w+", needle, re.ASCII):
+        return re.search(rf"\b{re.escape(needle)}\b", haystack) is not None
+    return needle in haystack
+
+
 def _keyword_hit(entry: LoreEntry, context: str) -> bool:
-    lowered = context.lower()
-    for key in entry.keys:
-        normalized = key.strip().lower()
-        if normalized and re.search(re.escape(normalized), lowered):
-            return True
-    return False
+    scan = _scan_window(context, entry.scan_depth)
+    lowered = scan.lower()
+    if not any(_key_match(key, scan, lowered, entry.case_sensitive, entry.match_whole_words) for key in entry.keys):
+        return False
+    if not entry.secondary_keys:
+        return True
+    hits = [
+        _key_match(key, scan, lowered, entry.case_sensitive, entry.match_whole_words)
+        for key in entry.secondary_keys
+    ]
+    if entry.selective_logic == "and_all":
+        return all(hits)
+    if entry.selective_logic == "not_any":
+        return not any(hits)
+    if entry.selective_logic == "not_all":
+        return not all(hits)
+    return any(hits)  # and_any
+
+
+def _resolve_inclusion_groups(
+    entries: list[LoreEntry], rng: random.Random, sticky_ids: set[str]
+) -> list[LoreEntry]:
+    """ST inclusion groups: of the triggered members sharing a non-empty `group`, exactly ONE
+    injects — a sticky-active member wins outright, else a `group_weight`-weighted pick."""
+    chosen: list[LoreEntry] = []
+    groups: dict[str, list[LoreEntry]] = {}
+    for entry in entries:
+        if not entry.group:
+            chosen.append(entry)
+        else:
+            groups.setdefault(entry.group, []).append(entry)
+    for members in groups.values():
+        sticky_members = [entry for entry in members if entry.id in sticky_ids]
+        if sticky_members:
+            chosen.extend(sticky_members)
+        elif len(members) == 1:
+            chosen.append(members[0])
+        else:
+            weights = [max(1, entry.group_weight) for entry in members]
+            chosen.append(rng.choices(members, weights=weights, k=1)[0])
+    return chosen
 
 
 def _cap_entries(entries: list[LoreEntry], budget_chars: int) -> list[LoreEntry]:
@@ -458,6 +668,21 @@ def _cap_entries(entries: list[LoreEntry], budget_chars: int) -> list[LoreEntry]
         capped.append(entry)
         used += size
     return capped
+
+
+_CHAR_MACRO_RE = re.compile(r"\{\{\s*char\s*\}\}|<char>|<BOT>", re.IGNORECASE)
+
+# ST world-info selectiveLogic integers → our named logics.
+_SELECTIVE_LOGIC_INTS = {0: "and_any", 1: "not_all", 2: "not_any", 3: "and_all"}
+
+
+def _bind_char_name(entry: LoreEntry, char_name: str) -> LoreEntry:
+    data = entry.to_dict()
+    for field_name in ("title", "content"):
+        data[field_name] = _CHAR_MACRO_RE.sub(char_name, data[field_name])
+    for field_name in ("keys", "secondary_keys"):
+        data[field_name] = [_CHAR_MACRO_RE.sub(char_name, key) for key in data[field_name]]
+    return LoreEntry.from_dict(data)
 
 
 _RENDER_ONLY_TITLE_RE = re.compile(r"^\s*\[RENDER:", re.IGNORECASE)
@@ -507,13 +732,27 @@ def _normalize_import_entry(raw: dict[str, Any], *, source: str, index: int, is_
         enabled = False
     title = _GENERATE_TITLE_RE.sub("", title) or f"{source or 'Lore'} {index}"
 
+    # ST trigger semantics: accept both the V2 character_book field names and SillyTavern's
+    # native world-info names. Secondary keys apply only when `selective` isn't explicitly off
+    # (V2's gate flag); an int selectiveLogic maps through `_SELECTIVE_LOGIC_INTS`.
+    raw_secondary = raw.get("secondary_keys", raw.get("keysecondary", []))
+    if isinstance(raw_secondary, str):
+        raw_secondary = [raw_secondary]
+    secondary_keys = list(raw_secondary) if raw.get("selective", True) else []
+    raw_logic = raw.get("selective_logic", raw.get("selectiveLogic", "and_any"))
+    selective_logic = _SELECTIVE_LOGIC_INTS.get(raw_logic, raw_logic if isinstance(raw_logic, str) else "and_any")
+    probability = raw.get("probability", 100) if raw.get("useProbability", raw.get("use_probability", True)) else 100
+    raw_position = raw.get("position", "")
+    position = {"before_char": "before", "after_char": "after", 0: "before", 1: "after"}.get(raw_position, "")
+
     # Trust boundary: the uploaded file does NOT get to choose its own scope/constant/secret.
     # Scope is pinned room-local and `constant` is forced off (an always-on entry would inject
     # itself into every prompt regardless of keywords; an imported `@@activate` is ignored for
     # the same reason). `secret` is honored only for a keeper importer; an untrusted card cannot
     # mint keeper-only lore. The `id` is always regenerated so a card cannot address (and thus
     # shadow) an existing entry. A `condition` is safe to honor: it can only NARROW injection,
-    # and it is evaluated by the closed `core.condexpr` grammar, never executed.
+    # and it is evaluated by the closed `core.condexpr` grammar, never executed. The trigger
+    # semantics above can likewise only narrow/reorder — never widen — what injects.
     return LoreEntry.from_dict(
         {
             "id": _new_id(),
@@ -527,5 +766,17 @@ def _normalize_import_entry(raw: dict[str, Any], *, source: str, index: int, is_
             "priority": priority,
             "enabled": enabled,
             "condition": condition,
+            "secondary_keys": secondary_keys,
+            "selective_logic": selective_logic,
+            "probability": probability,
+            "case_sensitive": raw.get("case_sensitive", raw.get("caseSensitive", False)) or False,
+            "match_whole_words": raw.get("match_whole_words", raw.get("matchWholeWords", False)) or False,
+            "scan_depth": raw.get("scan_depth", raw.get("scanDepth", 0)) or 0,
+            "sticky": raw.get("sticky", 0) or 0,
+            "cooldown": raw.get("cooldown", 0) or 0,
+            "delay": raw.get("delay", 0) or 0,
+            "group": raw.get("group", "") or "",
+            "group_weight": raw.get("groupWeight", raw.get("group_weight", 100)) or 100,
+            "position": position,
         }
     )

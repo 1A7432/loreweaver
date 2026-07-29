@@ -61,8 +61,19 @@ def _walk_tree(tree: Any, path: str) -> Any:
     return leaf_value(node) if is_value_with_desc(node) else node
 
 
-async def load_resolver(store: Any, chat_key: str) -> Callable[[str], Any]:
-    """Load both variable stores once and return the pure resolver over them."""
+async def load_resolver(store: Any, chat_key: str, *, player_view: bool = False) -> Callable[[str], Any]:
+    """Load both variable stores once and return the pure resolver over them.
+
+    ``player_view=True`` builds the PLAYER-SIDE resolver (iron rule #3): keeper-only modvars
+    are filtered out structurally, so template rendering inside an NPC/companion actor's
+    context — or any other player-facing surface — can never observe them. The MVU tree has
+    no visibility concept upstream and is included whole in both views.
+    """
     modvar_state = await ModvarManager(store).load(chat_key)
     mvu_tree = await MvuManager(store).load(chat_key)
-    return build_resolver(modvar_state["values"], mvu_tree)
+    values = {
+        var_id: modvar_state["values"][var_id]
+        for var_id, spec in modvar_state["specs"].items()
+        if not player_view or spec.get("visibility") == "player"
+    }
+    return build_resolver(values, mvu_tree)

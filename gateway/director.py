@@ -83,7 +83,10 @@ async def run_companion_turn(
     # key-events into the companion prompt -- its short-term context is just the KP-provided
     # ``situation`` for this turn. Anything the companion "knows" must reach it via its own
     # player-scoped ``knowledge`` (see ``agent.kp_tools_companion.witness``), not the shared log.
-    out = await companion_action(services, companion, sheet, prompt_situation, locale=locale)
+    # M12 card compatibility: chat_key lets card-derived persona templates render at consumption
+    # time against the PLAYER view of the room's variables (agent.card_text). No user_uid: a
+    # director-driven turn has no single acting player, so a card's {{user}} stays untouched.
+    out = await companion_action(services, companion, sheet, prompt_situation, locale=locale, chat_key=chat_key)
 
     action = (out.get("action") or "").strip()
     if not action:  # empty/"hold" action == a pass: the companion sits this one out

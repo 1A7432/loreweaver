@@ -346,6 +346,11 @@ class NpcTools:
                 tone=tone,
                 target=target,
                 locale=ctx.locale,
+                # M12 card compatibility: card-derived record prose renders at consumption time
+                # against the PLAYER view of this room's variables ({{user}} = the acting
+                # player's active character). See agent.card_text.
+                chat_key=ctx.chat_key,
+                user_uid=ctx.uid(),
             )
             dialogue = voiced.get("dialogue", "")
             mood = voiced.get("mood", "")

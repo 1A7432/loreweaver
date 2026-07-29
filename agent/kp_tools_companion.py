@@ -150,7 +150,11 @@ class CompanionTools:
             # No hub wired in (standalone/tool-only path): declare the action for you to weave and
             # adjudicate -- still fully info-isolated, still never rolls its own dice.
             sheet = await self._services.characters.get_character(_companion_uid(companion.id), ctx.chat_key)
-            out = await companion_action(self._services, companion, sheet, situation, locale=ctx.locale)
+            # M12 card compatibility: chat_key/user_uid let card-derived persona templates render
+            # at consumption time (player-view variables only). See agent.card_text.
+            out = await companion_action(
+                self._services, companion, sheet, situation, locale=ctx.locale, chat_key=ctx.chat_key, user_uid=ctx.uid()
+            )
             action = out.get("action", "")
             dialogue = out.get("dialogue", "")
             line = i18n.t(

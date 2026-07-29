@@ -219,7 +219,8 @@ class CharcardTools:
             return 0
         # A character card is untrusted input: its embedded lore lands in the room-local scope with
         # constant/secret stripped (is_keeper=False) so a crafted card cannot inject always-on or
-        # keeper-only text. See core.worldbook.import_entries.
+        # keeper-only text. See core.worldbook.import_entries. `char_name` binds the card's own
+        # {{char}} macro statically — that name never changes for imported entries.
         return await self._services.worldbook.import_entries(
-            ctx.chat_key, card.character_book, source=card.name, is_keeper=False
+            ctx.chat_key, card.character_book, source=card.name, is_keeper=False, char_name=card.name
         )
