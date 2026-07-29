@@ -120,7 +120,7 @@ Release 安装器会先校验客户端压缩包的 SHA-256，一键开服下载�
   <img src="assets/tui-skills-zh.png" width="49%" alt="KP 技能页：开关玩法包，描述一句话生成新技能" />
 </p>
 
-- 建卡有四条路：掷骰生成、手动逐项填（超预算会直接拦下）、写段人设让 AI 起草，或者把酒馆的卡直接丢进来。不管走哪条，最后都要过规则校验这一关，数值不合规，AI 说破天也没用。
+- 建卡有四条路：掷骰生成、手动逐项填（超预算会直接拦下）、写段人设让 AI 起草，或者把[酒馆的卡](docs/cards.zh.md)直接丢进来。不管走哪条，最后都要过规则校验这一关，数值不合规，AI 说破天也没用。
 - 键盘鼠标都能用。KP 思考的时候有个转圈提示，不用对着静止的屏幕干等；顶栏放着场景、游戏内时间、轮次、连接状态灯和 token/缓存开销这些信息。
 - 发邀请码、换模型、导模组、管 KP 技能是守秘人的事，用守秘人钥匙连进来才看得到这些页面。
 - 指令的完整参考（掷骰、检定、角色卡、守秘人命令）单独放在[玩家指令手册](https://1a7432.site/commands.html)里。
@@ -129,16 +129,18 @@ Release 安装器会先校验客户端压缩包的 SHA-256，一键开服下载�
 
 - AI 是真的在带团，不是陪聊。掷骰、翻角色卡、记笔记、推时钟，这些都是它通过 60 多个守秘人工具实际操作引擎完成的。许多 OpenAI-compatible 和原生 provider 都能接，但模型能力仍然重要；当前推荐 `deepseek-v4-pro` 开思考。
 - NPC 不开天眼。NPC 和 AI 队友只由自己的档案与角色卡组装，绝不会拿到守秘人池。主守秘人不同：它为了主持谜团会看到模组秘密，所以防泄漏要靠真实模型评测，不能宣传成纯架构保证。缺人的时候 AI 队友可以拿自己的卡、掷自己的骰来补位。
-- 想要新东西，描述一句就行。新规则系统、新玩法、新模组，在管理页里说清楚你要什么，KP 当场生成、校验、装上。产出的都是通用格式（酒馆卡、世界书、SKILL.md、YAML 规则包），反过来你收藏的老资源也能直接搬进来。细节在 [docs/plugins.md](docs/plugins.md)。
+- 想要新东西，描述一句就行。新规则系统、新玩法、新模组，在管理页里说清楚你要什么，KP 当场生成、校验、装上。产出的都是通用格式（酒馆卡、世界书、SKILL.md、YAML 规则包），反过来你收藏的老资源也能直接搬进来。卡作者看 [docs/cards.zh.md](docs/cards.zh.md)，完整契约在 [docs/plugins.md](docs/plugins.md)。
+- 整部作品打包成一个文件。技能、规则包、角色卡、世界书、媒体素材合成一个 `.lwpack`：作者一行打包，玩家一行安装——本地文件、直链或 GitHub Release（`gh:owner/repo@tag`）都行。安装前先给你看信任卡片，逐项校验通过才落盘；Git Release 就是发布渠道，没有中心商店。
 - 感情戏也有账本。开了浪漫 KP 技能之后，好感和情欲就是实打实的数值，涨没涨代码说了算，不看 AI 心情。
 - 剧情也有计分板。KP 可以随剧情声明状态量——小镇恐慌、怀疑度、任务进度——每次变动都由引擎校验、钳位，不是模型拍脑袋。玩家可见的状态量在侧栏实时显示，仅守秘人可见的永远不出服务器。基于 MVU 变量框架和 EJS 模板的酒馆卡直接导入就能跑：`[InitVar]` 变量树、`<UpdateVariable>` 记账、条件世界书、真 JS 模板（QuickJS 沙箱，装 `ejs` extra 启用）。
+- 模组不光能带文字，还能带行为。技能或卡可以附一个 `hooks.js`——挂在回合生命周期上的沙箱 JavaScript（回合开始、回复就绪、掷骰、变量变更），能读变量树、往守秘人提示里加段落、在叙事后追加文字，还能画声明式 UI——进度条、徽章、选项按钮——终端客户端实时渲染。钩子提出的每个请求都由引擎校验、限量；脚本写坏了顶多钩子失效（留日志），绝不会坏掉一个回合。作者参考：[docs/hooks.zh.md](docs/hooks.zh.md)。
 - 两套指令习惯都认：中文海豹那套（`.ra 侦查`、`.st 力量50`）和英文 Avrae 那套（`/roll 4d6kh3`、`adv/dis`），背后是同一个骰子引擎。
 - 内容过滤默认是关的，私人团想怎么跑怎么跑。真要开的话，也只过滤 KP 的输出，不碰玩家输入（见 [docs/deploy.zh.md](docs/deploy.zh.md#内容审核)）。
 
 ## 给开发者：从源码跑起来
 
 ```bash
-uv sync                                  # 建环境、装依赖
+uv sync --extra ejs                      # 建环境、装依赖（ejs = 跑导入卡 JS 模板和钩子的 QuickJS 沙箱）
 # 可选的 Mock 测试聊天适配器（QQ/OneBot 不需要 extra）：
 uv sync --extra discord --extra telegram --extra feishu
 
@@ -147,7 +149,7 @@ uv run python -m app --cli               # 试试  r 3d6+2 · /roll 4d6kh3 · .r
 
 # 接真模型：复制 .env.example 为 .env,填上你的 key,再跑一次：
 uv run python -m app --cli
-# (没有 uv?python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[dev,anthropic,gemini]")
+# (没有 uv?python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[dev,anthropic,gemini,ejs]")
 ```
 
 `.env` 这样写（以 DeepSeek 为例，别家同理，OpenAI 兼容或原生都行）:
@@ -168,6 +170,17 @@ cd clients/tui && bun install && bun run dev
 ```
 
 把 ticket 和钥匙贴进连接屏就行。更省事的办法：直接点连接屏上的「本地开服并开玩」，这些它全帮你干了。
+
+想自己写客户端或机器人？带类型的协议帧和一个自动重连的 WebSocket 客户端已发布到 npm：[`loreweaver-protocol`](https://www.npmjs.com/package/loreweaver-protocol)；线协议本身见 [docs/protocol.zh.md](docs/protocol.zh.md)。
+
+**内容包——整部作品就是一个文件：**
+
+```bash
+uv run python -m app --pack my-campaign/       # 校验并把技能/规则包/卡/世界书/素材打成 <id>-<version>.lwpack
+uv run python -m app --install gh:owner/repo   # 也接受本地路径 / https 直链；落盘前先打印信任卡片
+```
+
+manifest 格式和完整性规则见 [docs/plugins.md](docs/plugins.md)。
 
 ### 跑一台常驻服务器（可选）
 

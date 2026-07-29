@@ -110,7 +110,7 @@ Fair warning: how well the AI runs a table depends a lot on the model's capabili
   <img src="assets/tui-skills-en.png" width="49%" alt="KP skills: toggle play-style packs, or describe one sentence and generate a new one" />
 </p>
 
-- **Four ways to make a character**: roll one up, fill it in by hand (the UI blocks over-budget stats as you type), describe a persona and let the AI draft it, or drop in a SillyTavern card. Whichever path you take, the rules check the result — if the numbers don't validate, no amount of AI charm gets them through.
+- **Four ways to make a character**: roll one up, fill it in by hand (the UI blocks over-budget stats as you type), describe a persona and let the AI draft it, or drop in a [SillyTavern card](docs/cards.md). Whichever path you take, the rules check the result — if the numbers don't validate, no amount of AI charm gets them through.
 - **Keyboard and mouse both work.** A spinner shows when the KP is thinking, so you're never staring at a frozen screen; the top bar keeps the scene, in-game clock, round, a connection light, and token/cache spend in view; dropped connections reconnect on their own.
 - Invites, model switching, module import, and KP-skill management are the Keeper's business — those screens only appear when you connect with a Keeper key.
 - Looking for a command? The full reference — dice, checks, character sheets, Keeper commands — is the **[player command manual](https://1a7432.site/commands-en.html)**.
@@ -119,16 +119,18 @@ Fair warning: how well the AI runs a table depends a lot on the model's capabili
 
 - **The AI actually runs the game — it isn't just chatting.** Rolling dice, reading character sheets, taking notes, advancing the clock: all real engine operations, via 60+ Keeper tools. Many OpenAI-compatible and native providers work; model capability still matters, and `deepseek-v4-pro` with thinking is the current recommendation.
 - **NPCs don't get X-ray vision.** NPC and companion actors are assembled only from their own record and sheet, never from the Keeper pool. The main Keeper is different: it sees module secrets so it can run the mystery, and live-model leak resistance is measured rather than claimed as an architectural guarantee. Short a player? An AI companion can fill the seat with its own sheet and rolls.
-- **Ask for it, and it exists.** New rule systems, new play styles, new modules: describe what you want on an admin screen and the KP authors, validates, and installs it on the spot. Everything it writes is a portable format (SillyTavern cards, worldbooks, SKILL.md, YAML rulepacks) — and your old collection walks right in through the same door. Details in [docs/plugins.md](docs/plugins.md).
+- **Ask for it, and it exists.** New rule systems, new play styles, new modules: describe what you want on an admin screen and the KP authors, validates, and installs it on the spot. Everything it writes is a portable format (SillyTavern cards, worldbooks, SKILL.md, YAML rulepacks) — and your old collection walks right in through the same door. Card authors: [docs/cards.md](docs/cards.md); the full contract: [docs/plugins.md](docs/plugins.md).
+- **A whole campaign travels as one file.** Skills, rulepacks, cards, lorebooks, and media bundle into a single `.lwpack`: authors build it with one line, players install it with one line — from a local file, a URL, or a GitHub release (`gh:owner/repo@tag`). Installs print a trust card and verify every byte before writing anything; Git releases are the registry, there is no central store.
 - **Romance keeps books too.** With the romance KP skill enabled, affection and desire are actual numbers: when they move, they moved — tracked by code, not by the AI's mood.
 - **The module keeps score.** The Keeper can declare trackers mid-game — town fear, suspicion, quest progress — and every change is validated and clamped by the engine, not eyeballed by the model. Player-visible trackers show live in the sidebar; keeper-only ones never leave the server. SillyTavern cards built on the MVU variable framework and EJS templates import and run: `[InitVar]` trees, `<UpdateVariable>` bookkeeping, conditional worldbook entries, real JS templates (QuickJS-sandboxed, via the `ejs` extra).
+- **Modules can ship behavior, not just text.** A skill or card can carry a `hooks.js` — sandboxed JavaScript on the turn lifecycle (turn start, reply ready, dice rolled, variables changed) that reads the variable tree, injects prompt sections, appends narration, or draws declarative UI — meters, badges, choice buttons — that the terminal client renders live. Everything a hook asks for is validated and capped by the engine, and a broken script degrades to "hooks inert", never a broken turn. Author reference: [docs/hooks.md](docs/hooks.md).
 - **Both command dialects work.** The Chinese SealDice style (`.ra 侦查`, `.st 力量50`) and the English Avrae style (`/roll 4d6kh3`, `adv/dis`) drive the same dice engine.
 - **Content filtering is off by default.** Your private table plays how it wants; if you do enable it, it filters only the KP's output, never player input (see [docs/deploy.md](docs/deploy.md#content-moderation)).
 
 ## For developers: running from source
 
 ```bash
-uv sync                                  # environment + dependencies
+uv sync --extra ejs                      # environment + dependencies (ejs = the QuickJS sandbox that runs imported cards' JS templates & hooks)
 # Optional mock-tested chat adapters (QQ/OneBot need no extra):
 uv sync --extra discord --extra telegram --extra feishu
 
@@ -137,7 +139,7 @@ uv run python -m app --cli               # try  r 3d6+2 · /roll 4d6kh3 · .ra s
 
 # Plug in a real model: copy .env.example to .env, add your key, run again:
 uv run python -m app --cli
-# (No uv?  python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[dev,anthropic,gemini]")
+# (No uv?  python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[dev,anthropic,gemini,ejs]")
 ```
 
 `.env` looks like this (DeepSeek shown; any OpenAI-compatible or native provider works the same way):
@@ -158,6 +160,17 @@ cd clients/tui && bun install && bun run dev
 ```
 
 Paste the ticket and key into the connect screen. Or skip all of it: click "Host locally & play" and the client does the whole dance for you.
+
+Building your own client or bot? The typed protocol frames and a reconnecting WebSocket client ship on npm as [`loreweaver-protocol`](https://www.npmjs.com/package/loreweaver-protocol); the wire format itself is documented in [docs/protocol.md](docs/protocol.md).
+
+**Content packs — a whole campaign as one file:**
+
+```bash
+uv run python -m app --pack my-campaign/       # validate + bundle skills/rulepacks/cards/lorebooks/assets into <id>-<version>.lwpack
+uv run python -m app --install gh:owner/repo   # or a local path / https URL; prints the pack's trust card before touching disk
+```
+
+The manifest format and integrity rules are in [docs/plugins.md](docs/plugins.md).
 
 ### Running a persistent server (optional)
 

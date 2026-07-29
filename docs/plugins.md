@@ -1,6 +1,6 @@
 # Loreweaver extensibility: plugins, skills & content packs
 
-> Status: **design** (2026-07-04). Layer A (rule-system management) has **landed**
+> Status: **contract** (updated 2026-07-30). Layer A (rule-system management) has **landed**
 > (`core/rulepacks.py` is a discovery-based, data-driven loader; coc7/dnd5e migrated
 > behavior-identical). Layer B.1 (KP skills — SKILL.md loader, prompt binding,
 > per-room enable, mature-mode content gate) has **landed**. Layer B.2
@@ -12,9 +12,12 @@
 > `generate_rulepack`/`generate_module` tools + the `rule-forge`/`module-forge`
 > skills; a rulepack installs as a flat `<id>.yaml` to a user data-dir the same
 > way skills do, a module installs PER-ROOM through the existing
-> upload/analysis pipeline) has **landed**; B.4 (TUI management pages with a
-> describe→generate button) is next. Layer C (code plugins) is deferred. This
-> document is the contract contributors build against.
+> upload/analysis pipeline) has **landed**. B.4 (TUI management pages with a
+> describe→generate button) has **landed** (the KP-skills screen). Layer C.1
+> (sandboxed event hooks) and the `.lwpack` content-pack format have **landed**;
+> C.2 (Python entry-point plugins) is deferred. This document is the contract
+> contributors build against; card authors have a friendlier on-ramp in
+> [cards.md](cards.md), hook authors in [hooks.md](hooks.md).
 
 Loreweaver is a self-hosted, world/story-first AI Keeper — not a persona-chat
 frontend. Its long-term leverage is being a **platform the community extends**,
@@ -197,7 +200,7 @@ regenerated) applies unchanged in both modes. With full EJS enabled, imported ca
 code in the sandbox described above — that is the point; operators who want the
 data-only Layer A posture set `TRPG_ENABLE_FULL_EJS=false` or skip the `ejs` extra.
 
-### A.5 Other data packs
+### A.6 Other data packs
 
 Provider presets (`infra/providers.py:PRESETS`) and locale packs
 (`locales/{lang}/*.json`) are already data; they join the same discovery/manifest
@@ -261,6 +264,9 @@ features rather than a toy.
 ## Layer C — Behavior plugins
 
 ### C.1 Event hooks (landed)
+
+> Author-facing reference — events, API, caps, failure semantics, a worked
+> example: **[hooks.md](hooks.md)**. This section states the contract.
 
 Skills and cards can now carry BEHAVIOR, not just data and prompts — sandboxed JavaScript
 handlers on the turn lifecycle (`core.hooks` + `agent.hook_runtime`), the same runtime idea
@@ -369,7 +375,7 @@ description:
 authors: [ada]
 license: CC-BY-4.0
 engine:
-  protocol: "1.6"   # minimum wire protocol the pack's hooks rely on
+  protocol: "1.7"   # minimum wire protocol the pack's hooks rely on
 contents:
   skills: [skills/omen-engine]      # a dir holding SKILL.md (+ hooks.js)
   rulepacks: [rulepacks/pulp.yaml]
@@ -391,7 +397,8 @@ it" summary.
 ## Migration guide (bringing existing assets)
 
 - **From SillyTavern:** character cards (V2/V3) and lorebooks work as-is via
-  `import_character` / the worldbook. No conversion.
+  `import_character` / the worldbook. No conversion. The card-author's guide —
+  what imports, what runs, what differs — is **[cards.md](cards.md)**.
 - **From Claude Code:** a `SKILL.md` skill ports by keeping its frontmatter +
   body; wire its `allowed-tools` to Loreweaver's toolset names and set
   `scope`/`systems`. Scripts that assume a shell/agent runtime become Layer-C
@@ -430,11 +437,15 @@ it" summary.
    document and installs it PER-ROOM through the EXISTING upload/analysis
    pipeline (`agent.kp_tools_knowledge.DocumentTools.upload_document`) rather
    than a new one. All three validate-before-write and never `eval`/`exec`
-   anything. **B.4 next**: TUI management pages with a describe→generate
-   button.
+   anything. **B.4 — landed**: the TUI KP-skills screen toggles skills per room
+   and generates a brand-new one from a one-line description.
 5. **Content-pack formalization** — **landed** as the `.lwpack` format (see
    "Discovery, manifest & versioning" above): `core/pack.py` +
    `infra/pack_source.py` + the `--pack`/`--install` CLI bundle cards, lorebooks,
    skills, rulepacks and assets into one integrity-verified zip with Git-release
    distribution.
-6. **Layer C — code plugins** — deferred; entry points + trust model.
+6. **Layer C.1 — event hooks** — **landed**: sandboxed `hooks.js` on the turn
+   lifecycle with declarative protocol-v1.7 UI emission (see C.1 above; author
+   reference in [hooks.md](hooks.md)).
+7. **Layer C.2 — Python entry-point plugins** — deferred; entry points + trust
+   model.

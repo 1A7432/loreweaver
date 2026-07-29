@@ -12,6 +12,8 @@ The goal is not "an AI stand-in for a game master" — it is to be **the Claude 
 
 The deterministic engine — dice (on `d20`), CoC/DnD success levels, character math, rule validation, the game clock — is the solid core, covered by a deterministic, offline test suite. The **terminal (OpenTUI) client remains primary**, connecting over **Iroh** p2p. Discord, official QQ, Telegram, Feishu, and OneBot 11 now have mock-tested adapters over the same RoomHub. Every network adapter stays **Experimental** until its real-platform checklist passes.
 
+**v1.0.0 is out as the first stable release**, and the module-facing surface has filled in since the hardening pass below: deterministic module variables with a live TUI tracker panel, full SillyTavern compatibility for imported cards (MVU variable trees, the `<UpdateVariable>` text protocol, full EJS in a QuickJS sandbox, ST worldbook trigger semantics), sandboxed event hooks (`hooks.js`) that can draw declarative protocol-v1.7 UI frames, `.lwpack` content packs distributed through Git releases, and the protocol SDK on npm (`loreweaver-protocol`). Details: [plugins.md](plugins.md), [cards.md](cards.md), [hooks.md](hooks.md).
+
 ## Foundations — done
 
 A hardening pass just landed the unglamorous things that have to be right before breadth is worth adding — the project now installs cleanly, behaves correctly, and is safer to run for a small group:
@@ -28,7 +30,7 @@ A hardening pass just landed the unglamorous things that have to be right before
 
 - **Real-platform acceptance.** Run the documented Discord, official QQ, Telegram, Feishu, and OneBot smoke matrices with test bots/implementations, capture sanitized platform fixtures where useful, and keep every network adapter experimental until that evidence is green.
 - **Multiplayer polish.** Now that the permission model is enforced, tighten the remaining networked-play rough edges (a real bot-loop guard, richer late-joiner state) so a room among trusted people is genuinely comfortable.
-- **Native card forge.** SillyTavern cards now import and RUN (MVU variable trees, full EJS, trigger semantics — see [docs/plugins.md](plugins.md)); the next step is a first-class AUTHORING path for Loreweaver-native cards: typed trackers (`core.modvars`) instead of raw MVU trees, native `condition` fields instead of EJS workarounds, keeper-only visibility where a mystery needs it — and dual export, a clean Loreweaver bundle AND a SillyTavern-compatible card (InitVar + scaffolding generated), so content authored here plays in either ecosystem. Builds on the existing self-extension forge (`generate_module` and friends).
+- **Companion client & card workbench — going public.** The engine half of native authoring has landed: typed trackers (`core.modvars`) instead of raw MVU trees, and imported SillyTavern cards that actually run (full EJS, trigger semantics — see [plugins.md](plugins.md)). The authoring half — building Loreweaver-native cards and content without hand-editing JSON — is implemented on the creation side in a companion desktop client and card workbench, which are being prepared for public release; opening them up is the near-term work.
 
 ## The bigger arc — the world engine
 
