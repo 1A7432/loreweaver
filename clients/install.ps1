@@ -92,29 +92,26 @@ function PsQuote([string]$s) { "'" + ($s -replace "'", "''") + "'" }
 function RewriteLockRegistry($ClientsRoot) {
   # bun.lock stores absolute package URLs; writing .npmrc alone cannot redirect
   # those entries. Rewrite the installed copy before bun resolves dependencies.
+  #
+  # Pure PowerShell on purpose (issue #8): Windows PowerShell 5.1 does not escape
+  # embedded double quotes when passing arguments to native commands (only pwsh
+  # 7.3+'s Standard argument passing does), so an inline bun eval whose JS
+  # contains double quotes reaches bun with its quoting destroyed and dies with
+  # "Unterminated string literal" on the stock PowerShell every Windows user
+  # runs. A lockfile rewrite is just a regex replace — no native process, no
+  # quoting hazard, and no hidden "bun must already exist here" dependency.
   $lock = Join-Path $ClientsRoot "bun.lock"
   if (-not (Test-Path $lock)) { return }
-  $previousFile = $env:TRPG_LOCK_FILE
-  $previousRegistry = $env:TRPG_LOCK_REGISTRY
   try {
-    $env:TRPG_LOCK_FILE = $lock
-    $env:TRPG_LOCK_REGISTRY = $Registry
-    bun -e '
-      const path = process.env.TRPG_LOCK_FILE;
-      const registry = (process.env.TRPG_LOCK_REGISTRY || "").replace(/\/+$/, "");
-      if (!path || !registry) process.exit(2);
-      let contents = await Bun.file(path).text();
-      contents = contents.replace(
-        /https:\/\/registry\.(?:npmjs\.org|npmmirror\.com)(?=\/)/g,
-        () => registry,
-      );
-      await Bun.write(path, contents);
-    '
-    if ($LASTEXITCODE -ne 0) { throw "could not apply TRPG_REGISTRY to the client lockfile." }
+    $contents = [IO.File]::ReadAllText($lock)
+    # `$Registry` is already validated + TrimEnd("/")-ed at startup. Escape `$`
+    # so the replacement string cannot be misread as a capture reference.
+    $safeTarget = $Registry -replace '\$', '$$$$'
+    $rewritten = $contents -replace 'https://registry\.(?:npmjs\.org|npmmirror\.com)(?=/)', $safeTarget
+    if ($rewritten -ne $contents) { [IO.File]::WriteAllText($lock, $rewritten) }
   }
-  finally {
-    $env:TRPG_LOCK_FILE = $previousFile
-    $env:TRPG_LOCK_REGISTRY = $previousRegistry
+  catch {
+    throw "could not apply TRPG_REGISTRY to the client lockfile. ($_)"
   }
 }
 

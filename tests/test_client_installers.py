@@ -473,7 +473,14 @@ def test_both_installers_rewrite_absolute_lock_urls_before_bun_install():
 
     for text in (bash, powershell):
         assert "registry\\.(?:npmjs\\.org|npmmirror\\.com)" in text
-        assert "() => registry" in text
+
+    # The bash installer rewrites via an inline `bun -e` script (single-quoted args are safe
+    # there); the PowerShell installer must NOT — Windows PowerShell 5.1 mangles embedded
+    # double quotes in native-command arguments (issue #8), so it rewrites in pure PowerShell.
+    assert "() => registry" in bash
+    assert "bun -e" not in powershell
+    assert "[IO.File]::ReadAllText($lock)" in powershell
+    assert "[IO.File]::WriteAllText($lock, $rewritten)" in powershell
 
     assert bash.index('rewrite_lock_registry "$STAGED_CLIENTS"') < bash.index("bun install --silent")
     assert powershell.rindex("RewriteLockRegistry $StagedClients") < powershell.index("bun install --silent")
