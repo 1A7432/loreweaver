@@ -299,17 +299,94 @@ isolation. Until C.2 ships, code contributions go through normal in-tree PRs.
 
 ---
 
-## Discovery, manifest & versioning
+## Discovery, manifest & versioning — the `.lwpack` format (landed)
 
-- **Discovery dirs:** in-repo (`rulepacks/`, `skills/`) and a user data dir
-  (so a plugin need not live inside the checkout).
-- **Manifest:** each plugin self-describes (`id` = directory/file stem, `names`
-  aliases, `type`, optional `version`, `requires`). Data plugins reuse their
-  native self-description (a rulepack's `names`, a card's `spec`/`character_version`,
-  a skill's frontmatter) rather than a separate wrapper where possible.
-- **Versioning:** the tool API, the wire protocol (`docs/protocol.md`), and the
-  skill schema are versioned. A plugin declaring an incompatible requirement is
-  skipped with a clear message — never silently half-loaded.
+- **Discovery dirs:** in-repo (`rulepacks/`, `skills/`) and the user data dirs
+  (`data_dir/skills`, `data_dir/rulepacks`), so a plugin never has to live inside
+  the checkout. A built-in id always wins over a user-dir file with the same id.
+- **One shippable unit:** a whole work — skills + rulepacks + cards + lorebooks +
+  media assets — travels as ONE self-contained **`.lwpack`**: a zip with a root
+  `pack.yaml` manifest (`core/pack.py`). Authors run `python -m app --pack <src-dir>`;
+  users run `python -m app --install <ref> [--yes]`. No "install plugin X first"
+  instructions, no image-host/OSS links for assets.
+- **Git IS the registry:** an install ref is a local path, an `https://` direct
+  link, or `gh:owner/repo[@tag]` — resolved through the anonymous GitHub API to
+  that release's `*.lwpack` asset (`@tag` pins a release; without it, latest)
+  by `infra/pack_source.py`. There is deliberately no central package registry.
+- **Install ≠ enable** (the existing layering): skills land in the user skill
+  dir and rulepacks in the user rulepack dir — discoverable immediately, but a
+  room still opts in via `.skill enable <id>` / the usual rule commands. Cards,
+  lorebooks and assets land under `data_dir/packs/<id>@<version>/` for the
+  existing in-room import flows (`.import`, `.module`) to consume; re-installing
+  the same `id@version` replaces that pack dir wholesale, never merges.
+- **Trust card, not a gate:** before installing, the CLI prints the pack's
+  auto-generated `trust` summary — skill/rulepack/card/lorebook counts, whether
+  sandboxed hooks JS or EJS templates ship, asset megabytes — then asks for
+  confirmation (`--yes` skips; non-interactive runs require it). The same stance
+  as full EJS: the operator's box, the operator's informed call.
+- **Integrity & confinement (red line):** this is the one place untrusted archive
+  bytes reach the disk, so install verifies BEFORE writing anything — every
+  content file re-parses through the real engine parsers
+  (`core.skills.parse_skill_text`, the rulepack loader, `core.charcard`), every
+  asset's bytes must match its manifest sha256, the archive may contain nothing
+  undeclared, entry names are validated against traversal (zip-slip), symlink
+  entries are rejected, and entry counts/sizes are hard-capped. Builds are
+  byte-deterministic (sorted entries, fixed zip timestamps, stable manifest
+  dump), so a pack's sha256 is reproducible from its source tree.
+- **Dependencies:** flat and vendored — a pack ships everything it needs; there
+  is no inter-pack dependency resolution. `engine` declares MINIMUM versions
+  only (no range syntax); an unmet minimum refuses the install with a clear,
+  localized message.
+
+### `pack.yaml` fields
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `id` | yes | lowercase slug (`[a-z0-9-]`, ≤64) — names the `packs/<id>@<version>` install dir |
+| `version` | yes | semver `MAJOR.MINOR.PATCH` (optional `-pre`/`+build` suffix) |
+| `name`, `description` | yes | a plain string, or an `{en, zh}` mapping |
+| `authors` | yes | list of non-empty strings |
+| `license` | yes | SPDX id or a short name |
+| `engine` | no | minimum versions: `protocol` (wire protocol) and/or `server` — minimum-compare only |
+| `contents.skills` | no | skill DIRECTORIES (`skills/<id>`), each exactly `SKILL.md` + optional `hooks.js` |
+| `contents.rulepacks` | no | rulepack YAML files (`rulepacks/<id>.yaml`) |
+| `contents.cards` | no | SillyTavern character cards (PNG or JSON) |
+| `contents.lorebooks` | no | lorebook JSON (ST `character_book` / `{entries: [...]}` shapes) |
+| `assets` | no | media files: `path` + optional `title`/`license`/`tags`/`mime`; `sha256`/`size`/`mime` are FILLED IN at pack time (a hand-declared `sha256` must match the file) |
+| `trust` | forbidden in source | GENERATED at pack time (counts, `has_hooks`, `has_ejs`, `asset_bytes`); a hand-written block fails the build |
+
+Full example — a source tree's `pack.yaml`:
+
+```yaml
+id: blackmoor
+version: 1.2.0
+name:
+  en: Blackmoor Lighthouse
+  zh: 黑沼灯塔
+description:
+  en: A haunted-lighthouse mystery for 2-4 investigators.
+  zh: 一个 2-4 名调查员的闹鬼灯塔谜团。
+authors: [ada]
+license: CC-BY-4.0
+engine:
+  protocol: "1.6"   # minimum wire protocol the pack's hooks rely on
+contents:
+  skills: [skills/omen-engine]      # a dir holding SKILL.md (+ hooks.js)
+  rulepacks: [rulepacks/pulp.yaml]
+  cards: [cards/keeper.png]
+  lorebooks: [lorebooks/manor.json]
+assets:
+  - path: assets/theme.mp3
+    title: Lighthouse Theme
+    license: CC0-1.0
+    tags: [bgm]
+```
+
+`--pack` validates everything with the real parsers (a bad skill/rulepack/card
+means no pack), rewrites the manifest with the computed integrity + trust
+fields, and emits `<id>-<version>.lwpack`. `--install` shows the trust card,
+verifies, lands the files, and prints a localized "what landed + how to enable
+it" summary.
 
 ## Migration guide (bringing existing assets)
 
@@ -355,6 +432,9 @@ isolation. Until C.2 ships, code contributions go through normal in-tree PRs.
    than a new one. All three validate-before-write and never `eval`/`exec`
    anything. **B.4 next**: TUI management pages with a describe→generate
    button.
-5. **Content-pack formalization** — expose the existing ST card/lorebook import
-   under the unified discovery/manifest.
+5. **Content-pack formalization** — **landed** as the `.lwpack` format (see
+   "Discovery, manifest & versioning" above): `core/pack.py` +
+   `infra/pack_source.py` + the `--pack`/`--install` CLI bundle cards, lorebooks,
+   skills, rulepacks and assets into one integrity-verified zip with Git-release
+   distribution.
 6. **Layer C — code plugins** — deferred; entry points + trust model.

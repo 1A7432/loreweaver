@@ -55,6 +55,8 @@ logger = logging.getLogger(__name__)
 # v1.7 adds declarative hook-emitted `ui` frames (core.hooks emitUI); v1.6 added
 # player-visible module variables on the state frame (core.modvars).
 _PROTOCOL_VERSION = "1.7"
+# Public alias for out-of-band consumers (the `.lwpack` engine-minimum check in app.py).
+PROTOCOL_VERSION = _PROTOCOL_VERSION
 _SERVER_BANNER = "loreweaver/1"
 
 # Hard cap on a single `input` frame's text before it reaches the LLM/history. A client-controlled

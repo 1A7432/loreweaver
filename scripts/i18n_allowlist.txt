@@ -20,3 +20,9 @@ gateway/runner.py::啟用
 core/charcard.py:: PNG does not contain a SillyTavern character card
 core/charcard.py:: embedded character card payload is not a JSON object
 core/charcard.py:: character card JSON must be an object
+
+# Developer-facing PackError/PackRefError diagnostics in the .lwpack build/install layer; these are
+# never shown raw to players — app.py wraps str(exc) in localized pack.* templates
+# (locales/{en,zh}/pack.json), matching the parser-module convention above.
+core/pack.py
+infra/pack_source.py

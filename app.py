@@ -20,6 +20,7 @@ from adapters.cli.demo import demo_kp_responder
 from agent import forge as agent_forge
 from agent.kp_tools import build_kp_toolset
 from agent.services import build_services
+from core import pack as core_pack
 from core import rulepacks as core_rulepacks
 from core import skills as core_skills
 from core.dice_engine import seed_dice
@@ -32,8 +33,10 @@ from infra.embeddings import FakeEmbeddings, LocalEmbeddings
 from infra.file_permissions import atomic_write_private, ensure_private_directory
 from infra.i18n import I18n, get_i18n
 from infra.llm import FakeLLM
+from infra.pack_source import PackRefError, resolve_pack_ref
 from infra.version import resolve_version
 from net.keystore import Keystore
+from net.session import PROTOCOL_VERSION
 from net.tui_server import TuiServer
 
 DEFAULT_TUI_HOST = "127.0.0.1"
@@ -108,6 +111,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--doctor", action="store_true")
     parser.add_argument("--version", action="store_true")
+    parser.add_argument("--pack", metavar="SRC_DIR")
+    parser.add_argument("--out", metavar="PACK_FILE")
+    parser.add_argument("--install", metavar="REF")
+    parser.add_argument("--yes", action="store_true")
     parser.add_argument("--host", default=DEFAULT_TUI_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_TUI_PORT)
     parser.add_argument("--keys", default=os.environ.get("TRPG_TUI_KEYS", DEFAULT_TUI_KEYS_PATH))
@@ -131,6 +138,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.doctor:
         return _run_doctor(settings, i18n)
+
+    if args.pack:
+        return _run_pack(i18n, args)
+
+    if args.install:
+        return _run_install(settings, i18n, args)
 
     if args.tui_key_cmd == "add":
         return _tui_key_add(i18n, args)
@@ -337,6 +350,139 @@ def _run_doctor(settings: Settings, i18n: I18n) -> int:
         print(i18n.t("tui.doctor.fail", reason="; ".join(missing)), file=sys.stderr)
         return 1
     print(i18n.t("tui.doctor.ok"), file=sys.stderr)
+    return 0
+
+
+def _print_trust_card(i18n: I18n, manifest: core_pack.PackManifest, locale: str) -> None:
+    """The pre-install/post-build disclosure card: what's inside, notably whether the
+    pack ships sandboxed hooks/EJS code and how heavy its media is. Disclosure, not a
+    gate — the same trust stance as full EJS (the operator's box, the operator's call)."""
+    trust = manifest.trust
+    if trust is None:
+        return
+    description = manifest.description.get(locale) or manifest.description.get("en") or ""
+    print(
+        i18n.t(
+            "pack.card.header",
+            name=manifest.display_name(locale),
+            id=manifest.id,
+            version=manifest.version,
+        ),
+        file=sys.stderr,
+    )
+    if description:
+        print(i18n.t("pack.card.description", description=description), file=sys.stderr)
+    print(
+        i18n.t(
+            "pack.card.provenance",
+            authors=", ".join(manifest.authors) or "-",
+            license=manifest.license,
+        ),
+        file=sys.stderr,
+    )
+    print(
+        i18n.t(
+            "pack.card.trust",
+            skills=trust.skills,
+            rulepacks=trust.rulepacks,
+            cards=trust.cards,
+            lorebooks=trust.lorebooks,
+            assets=trust.assets,
+            asset_mb=f"{trust.asset_bytes / (1024 * 1024):.1f}",
+            hooks=i18n.t("pack.flag.yes") if trust.has_hooks else i18n.t("pack.flag.no"),
+            ejs=i18n.t("pack.flag.yes") if trust.has_ejs else i18n.t("pack.flag.no"),
+        ),
+        file=sys.stderr,
+    )
+
+
+def _run_pack(i18n: I18n, args: argparse.Namespace) -> int:
+    """`--pack SRC_DIR [--out FILE]`: validate a pack source tree with the real engine
+    parsers and emit a byte-deterministic `.lwpack` (see `core.pack.build_pack`)."""
+    try:
+        built = core_pack.build_pack(Path(args.pack), Path(args.out) if args.out else None)
+    except core_pack.PackError as exc:
+        print(i18n.t("pack.build.failed", error=str(exc)), file=sys.stderr)
+        return 1
+    print(
+        i18n.t(
+            "pack.build.done",
+            path=str(built.path),
+            id=built.manifest.id,
+            version=built.manifest.version,
+            sha256=built.sha256,
+        ),
+        file=sys.stderr,
+    )
+    _print_trust_card(i18n, built.manifest, i18n.locale)
+    return 0
+
+
+def _run_install(settings: Settings, i18n: I18n, args: argparse.Namespace) -> int:
+    """`--install REF [--yes]`: resolve a local/https/gh: ref, show the trust card,
+    confirm, then land the pack (skills/rulepacks into the user discovery dirs,
+    cards/lorebooks/assets under `data_dir/packs/<id>@<version>/`)."""
+    ensure_private_directory(settings.data_dir)
+    packs_dir = Path(settings.data_dir) / "packs"
+    try:
+        pack_path = resolve_pack_ref(args.install, cache_dir=packs_dir / "_cache")
+    except PackRefError as exc:
+        print(i18n.t("pack.ref.failed", error=str(exc)), file=sys.stderr)
+        return 1
+    try:
+        manifest = core_pack.inspect_pack(pack_path)
+    except core_pack.PackError as exc:
+        print(i18n.t("pack.install.failed", error=str(exc)), file=sys.stderr)
+        return 1
+
+    _print_trust_card(i18n, manifest, i18n.locale)
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print(i18n.t("pack.install.need_yes"), file=sys.stderr)
+            return 2
+        answer = input(i18n.t("pack.install.confirm"))
+        if answer.strip().casefold() not in {"y", "yes"}:
+            print(i18n.t("pack.install.aborted"), file=sys.stderr)
+            return 1
+
+    builtin_skill_ids = [entry.parent.name for entry in core_skills._SKILL_DIR.glob("*/SKILL.md")]
+    builtin_rulepack_ids = [entry.stem for entry in core_rulepacks._RULEPACK_DIR.glob("*.yaml")]
+    try:
+        report = core_pack.install_pack(
+            pack_path,
+            packs_dir=packs_dir,
+            skills_dir=Path(settings.data_dir) / "skills",
+            rulepacks_dir=Path(settings.data_dir) / "rulepacks",
+            current_protocol=PROTOCOL_VERSION,
+            current_server=resolve_version(),
+            builtin_skill_ids=builtin_skill_ids,
+            builtin_rulepack_ids=builtin_rulepack_ids,
+        )
+    except core_pack.PackError as exc:
+        print(i18n.t("pack.install.failed", error=str(exc)), file=sys.stderr)
+        return 1
+    # A just-installed skill/rulepack must be discoverable without a restart.
+    core_skills.reload_skills()
+    core_rulepacks.reload_rulepacks()
+
+    print(i18n.t("pack.install.done", id=report.manifest.id, version=report.manifest.version), file=sys.stderr)
+    if report.skills:
+        print(i18n.t("pack.install.skills", ids=", ".join(report.skills)), file=sys.stderr)
+    if report.rulepacks:
+        print(i18n.t("pack.install.rulepacks", ids=", ".join(report.rulepacks)), file=sys.stderr)
+    if report.cards or report.lorebooks or report.assets:
+        print(
+            i18n.t(
+                "pack.install.packdir",
+                path=str(report.pack_dir),
+                cards=len(report.cards),
+                lorebooks=len(report.lorebooks),
+                assets=report.assets,
+            ),
+            file=sys.stderr,
+        )
+    for shadowed_id in report.shadowed:
+        print(i18n.t("pack.install.shadowed", id=shadowed_id), file=sys.stderr)
     return 0
 
 

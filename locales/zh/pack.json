@@ -1,0 +1,20 @@
+{
+  "pack.card.header": "📦 {name} — {id}@{version}",
+  "pack.card.description": "   {description}",
+  "pack.card.provenance": "   作者:{authors} · 许可:{license}",
+  "pack.card.trust": "   内含:{skills} 个技能、{rulepacks} 个规则包、{cards} 张角色卡、{lorebooks} 本世界书、{assets} 个素材({asset_mb} MB)· hooks 代码:{hooks} · EJS 模板:{ejs}",
+  "pack.flag.yes": "有",
+  "pack.flag.no": "无",
+  "pack.build.done": "已打包 {id}@{version} -> {path}\n   sha256:{sha256}",
+  "pack.build.failed": "打包失败:{error}",
+  "pack.ref.failed": "无法解析包引用:{error}",
+  "pack.install.failed": "安装失败(未做任何更改):{error}",
+  "pack.install.need_yes": "当前不是交互终端:请改用 --yes 重新运行以确认安装。",
+  "pack.install.confirm": "安装这个包?[y/N] ",
+  "pack.install.aborted": "已取消安装。",
+  "pack.install.done": "已安装 {id}@{version}。",
+  "pack.install.skills": "   技能:{ids} —— 由守秘人在房间内执行 .skill enable <id> 启用",
+  "pack.install.rulepacks": "   规则包:{ids} —— 已可被发现使用(用常规规则命令切换系统)",
+  "pack.install.packdir": "   角色卡/世界书/素材:{cards}/{lorebooks}/{assets} 个文件,位于 {path} —— 房间内用 .import <文件> / .module 导入",
+  "pack.install.shadowed": "   注意:「{id}」与内置同名;内置版本始终优先(想用包内版本请改名)。"
+}
