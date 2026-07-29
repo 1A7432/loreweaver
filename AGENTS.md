@@ -20,7 +20,7 @@ Loreweaver is a self-hosted **AI Game Master / Keeper** for tabletop RPGs: a wor
 
 ## Develop / test / run
 ```bash
-uv sync --extra anthropic --extra gemini   # env + deps; the `dev` group (pytest/ruff) installs by default. (pip fallback: python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[dev,anthropic,gemini]")
+uv sync --extra anthropic --extra gemini --extra ejs   # env + deps; the `dev` group (pytest/ruff) installs by default; `ejs` = QuickJS-sandboxed full SillyTavern EJS templates (tests skip without it). (pip fallback: python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[dev,anthropic,gemini,ejs]")
 uv sync --extra discord --extra telegram --extra feishu  # optional SDK-backed Experimental adapters; QQ/OneBot use core deps
 uv run pytest -q               # offline: FakeLLM/FakeEmbeddings + seed_dice, no network/keys
 uv run ruff check core infra agent gateway net adapters app.py scripts

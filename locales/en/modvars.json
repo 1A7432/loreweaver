@@ -15,5 +15,13 @@
   "modvars.tools.set.done": "{label} [{id}]: {old} → {new}.",
   "modvars.tools.adjust.done": "{label} [{id}]: {old} → {new} (change: {delta}).",
   "modvars.tools.remove.done": "Removed variable \"{label}\" [{id}].",
-  "modvars.tools.failed": "Module-variable operation failed: {error}"
+  "modvars.tools.failed": "Module-variable operation failed: {error}",
+  "modvars.stat.empty": "This room has no imported card variable tree (MVU stat data) yet.",
+  "modvars.stat.get.header": "Current card variables:",
+  "modvars.stat.get.item": "- {path} = {value}",
+  "modvars.stat.get.value": "{path} = {value}",
+  "modvars.stat.get.missing": "No variable at path \"{path}\".",
+  "modvars.stat.set.done": "{path}: {old} → {new}.",
+  "modvars.stat.adjust.done": "{path}: {old} → {new} (change: {delta}).",
+  "modvars.stat.failed": "Card-variable operation failed: {error}"
 }

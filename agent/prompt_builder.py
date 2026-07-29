@@ -52,7 +52,9 @@ import json
 
 from agent.context import AgentCtx
 from agent.services import Services
+from core.ejs_full import create_full_engine
 from core.modvars import ModvarManager
+from core.mvu_compat import MvuManager, apply_set, flatten_leaves
 from core.prompt_sections import (
     inject_document_context_prompt,
     inject_game_state_prompt,
@@ -64,6 +66,7 @@ from core.prompt_sections import (
 )
 from core.relationships import RelationshipManager
 from core.skills import load_skill
+from core.varspace import build_resolver
 from core.worldbook import inject_world_lore_prompt
 
 
@@ -88,9 +91,34 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
     # narrative + this turn's user message (when threaded via ctx.extra) is the retrieval context.
     extra = getattr(ctx, "extra", {}) or {}
     recent_context = "\n".join(part for part in (session_history, str(extra.get("user_message", "") or "")) if part)
+    # One state load serves every conditioned/templated worldbook entry this turn: the closed
+    # expression grammar resolves through `core.varspace`, and (when the `ejs` extra is
+    # installed and enabled) one per-turn QuickJS sandbox runs full-EJS content against the
+    # same snapshots. Template setvar() writes buffer in the engine and flush to the MVU tree
+    # right after the lore section renders, so the variable sections below show post-template
+    # state — the ST "evaluate at generate time" contract.
+    modvar_state = await ModvarManager(services.store).load(ctx.chat_key)
+    mvu_tree = await MvuManager(services.store).load(ctx.chat_key)
+    variable_resolver = build_resolver(modvar_state["values"], mvu_tree)
+    engine = None
+    if services.settings.enable_full_ejs:
+        room_entries = await services.worldbook.list(ctx.chat_key)
+        engine = create_full_engine(
+            flat_variables=modvar_state["values"],
+            tree=mvu_tree,
+            worldinfo={entry.title: entry.content for entry in room_entries},
+        )
     world_lore = await inject_world_lore_prompt(
-        ctx, services.worldbook, i18n, role="keeper", recent_context=recent_context
+        ctx,
+        services.worldbook,
+        i18n,
+        role="keeper",
+        recent_context=recent_context,
+        resolve=variable_resolver,
+        engine=engine,
     )
+    if engine is not None:
+        mvu_tree = await _flush_template_writes(services, ctx.chat_key, engine, mvu_tree)
 
     sections = [
         session_history,
@@ -115,7 +143,32 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
     if modvar_lines:
         sections.append(i18n.t("prompt.modvars_header") + "\n" + "\n".join(f"- {line}" for line in modvar_lines))
 
+    # Imported MVU card variables (core.mvu_compat) — same fold-in pattern: the Keeper sees the
+    # current tree every turn (post-template-writes — see above) and updates it via
+    # set_stat/adjust_stat (or the card's own UpdateVariable protocol, which agent.loop applies
+    # deterministically on the way out).
+    mvu_leaves = flatten_leaves(mvu_tree, 100)
+    if mvu_leaves:
+        leaf_lines = "\n".join(f"- {leaf['path']} = {leaf['value']}" for leaf in mvu_leaves)
+        sections.append(i18n.t("prompt.mvu_header") + "\n" + leaf_lines)
+
     return "\n\n".join(section for section in sections if section)
+
+
+async def _flush_template_writes(services: Services, chat_key: str, engine, mvu_tree: dict) -> dict:
+    """Apply the full-EJS engine's buffered template `setvar` writes to the MVU tree through
+    `core.mvu_compat.apply_set` (tolerant per write — one bad path never blocks the rest),
+    persist once, and return the updated tree. A template with no writes is a no-op."""
+    writes = engine.pending_writes
+    if not writes:
+        return mvu_tree
+    for path, value in writes:
+        try:
+            mvu_tree = apply_set(mvu_tree, path, value)
+        except (ValueError, TypeError):
+            continue
+    await MvuManager(services.store).save(chat_key, mvu_tree)
+    return mvu_tree
 
 
 async def _enabled_skill_bodies(ctx: AgentCtx, services: Services) -> list[str]:

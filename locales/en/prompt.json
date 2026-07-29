@@ -78,5 +78,6 @@
   "prompt.session_recap.transcript_line": "{role}: {content}",
   "prompt.skills_header": "## Active KP skills (play-style packs) (follow these)",
   "prompt.relationships_header": "## Current relationships (deterministic tracks)",
-  "prompt.modvars_header": "## Module variables (deterministic trackers — the values are authoritative; narrate around them)"
+  "prompt.modvars_header": "## Module variables (deterministic trackers — the values are authoritative; narrate around them)",
+  "prompt.mvu_header": "## Card variables (imported MVU tracker tree — the values are authoritative; update via set_stat/adjust_stat when play changes them)"
 }

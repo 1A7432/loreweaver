@@ -31,6 +31,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
+from core.mvu_compat import MvuManager
+
 from agent.context import AgentCtx
 from agent.prompt_builder import build_system_prompt
 from agent.services import Services
@@ -687,6 +689,16 @@ async def run_kp_turn(
             reply = _max_rounds_fallback(tool_trace, i18n)
 
     _clear_llm_continuation(services, messages)
+    # MVU compatibility (imported SillyTavern cards whose scaffolding instructs the model to
+    # emit <UpdateVariable> text blocks): parse the blocks, apply their commands to the room's
+    # MVU variable tree through validated deterministic code, and strip the blocks from the
+    # player-visible narration — the upstream extension's contract, with real code doing the
+    # bookkeeping. A reply with no blocks comes back byte-identical. Best-effort: a parse/apply
+    # problem must never eat the narration. Runs BEFORE output_review so the censor sees final text.
+    try:
+        reply, _mvu_applied, _mvu_errors = await MvuManager(services.store).apply_text(ctx.chat_key, reply)
+    except Exception:
+        logger.warning("MVU update-block processing failed", exc_info=True)
     if output_review is not None:
         reply = output_review(reply)
 

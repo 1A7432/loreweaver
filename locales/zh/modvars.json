@@ -15,5 +15,13 @@
   "modvars.tools.set.done": "{label}［{id}］：{old} → {new}。",
   "modvars.tools.adjust.done": "{label}［{id}］：{old} → {new}（变化：{delta}）。",
   "modvars.tools.remove.done": "已移除变量 \"{label}\"［{id}］。",
-  "modvars.tools.failed": "模块变量操作失败：{error}"
+  "modvars.tools.failed": "模块变量操作失败：{error}",
+  "modvars.stat.empty": "本房间尚无导入的卡片变量树（MVU stat 数据）。",
+  "modvars.stat.get.header": "当前卡片变量：",
+  "modvars.stat.get.item": "- {path} = {value}",
+  "modvars.stat.get.value": "{path} = {value}",
+  "modvars.stat.get.missing": "路径 \"{path}\" 上没有变量。",
+  "modvars.stat.set.done": "{path}：{old} → {new}。",
+  "modvars.stat.adjust.done": "{path}：{old} → {new}（变化：{delta}）。",
+  "modvars.stat.failed": "卡片变量操作失败：{error}"
 }

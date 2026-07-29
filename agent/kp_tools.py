@@ -24,7 +24,7 @@ from agent.kp_tools_maps import SvgMapTools
 from agent.kp_tools_mechanics import CharacterTools, DiceTools, InitiativeTools
 from agent.kp_tools_npc import NpcTools
 from agent.kp_tools_relationships import RelationshipTools
-from agent.kp_tools_vars import ModuleVarTools
+from agent.kp_tools_vars import ModuleVarTools, MvuStatTools
 from agent.kp_tools_worldbook import WorldbookTools
 from agent.services import Services
 from agent.tools import Toolset
@@ -64,4 +64,5 @@ def build_kp_toolset(
         ForgeTools(services),
         RelationshipTools(services),
         ModuleVarTools(services),
+        MvuStatTools(services),
     )

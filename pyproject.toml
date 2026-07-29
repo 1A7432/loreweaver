@@ -36,6 +36,10 @@ discord = ["discord.py>=2.7", "davey>=0.1.0", "PyNaCl>=1.6.2,<1.7"]
 # The stoppable long-connection wrapper uses the 1.5.5 private WS protocol surface.
 feishu = ["lark-oapi==1.5.5"]
 vector = ["sqlite-vec>=0.1.1"]
+# Full SillyTavern EJS template compatibility: real JavaScript in worldbook/card content,
+# executed in an embedded QuickJS sandbox (memory/time-capped, no host I/O). Without this
+# extra the engine falls back to the safe built-in subset (core/ejs_lite.py).
+ejs = ["quickjs>=1.19.4"]
 anthropic = ["anthropic>=0.116.0"]
 gemini = ["google-genai>=0.3"]
 # PyInstaller onedir packaging (`scripts/package_server.py`) — a self-contained
@@ -103,6 +107,8 @@ packages = [
     "locales",
     "locales.en",
     "locales.zh",
+    "assets",
+    "assets.vendor",
 ]
 py-modules = ["app", "_lw_version"]
 
@@ -110,6 +116,8 @@ py-modules = ["app", "_lw_version"]
 rulepacks = ["*.yaml"]
 "locales.en" = ["*.json"]
 "locales.zh" = ["*.json"]
+# core/ejs_full.py loads the vendored EJS + lodash sources at engine start.
+"assets.vendor" = ["*.js", "*LICENSE*"]
 # adapters/cli/demo.py loads this offline-demo module text via a
 # `Path(__file__).with_name(...)` sibling-file read at import time; without
 # declaring it, setuptools ships only `*.py` for a package and the import

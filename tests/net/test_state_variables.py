@@ -99,3 +99,24 @@ async def test_variables_labels_follow_the_callers_locale():
 
     assert state_zh["variables"][0]["label"] == "小镇恐慌"
     assert state_en["variables"][0]["label"] == "Town Fear"
+
+
+async def test_mvu_leaves_ride_the_variables_list_with_prefixed_ids():
+    services = _services()
+    ctx = _room_ctx("vars-mvu-room")
+    from core.mvu_compat import MvuManager
+
+    await ModvarManager(services.store).define(
+        ctx.chat_key, build_spec("fear", "number", minimum=0, maximum=10)
+    )
+    await MvuManager(services.store).init_from_initvar(
+        ctx.chat_key, {"理": {"好感度": [33, "affinity"], "档案": {"备注": ["長い", "note"]}}}
+    )
+
+    state = await build_room_state(services, ctx)
+
+    ids = [entry["id"] for entry in state["variables"]]
+    assert ids[0] == "fear"  # native trackers first
+    assert "mvu.理.好感度" in ids
+    mvu_entry = next(entry for entry in state["variables"] if entry["id"] == "mvu.理.好感度")
+    assert mvu_entry == {"id": "mvu.理.好感度", "label": "理.好感度", "kind": "number", "value": 33}

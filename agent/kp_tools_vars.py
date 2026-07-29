@@ -17,6 +17,10 @@ All user-visible text is looked up via `services.i18n` under `modvars.*`
 
 from __future__ import annotations
 
+import json
+
+from core.mvu_compat import MvuManager
+
 from agent.context import AgentCtx
 from agent.services import Services
 from agent.tools import tool
@@ -207,3 +211,133 @@ class ModuleVarTools:
             return i18n.t("modvars.tools.remove.done", label=label_for(spec_or_error, ctx.locale), id=slug)
         except Exception as exc:
             return i18n.t("modvars.tools.failed", error=str(exc))
+
+
+class MvuStatTools:
+    """AI-KP tools for the imported MVU variable tree (`core.mvu_compat`).
+
+    A SillyTavern card built on the MVU framework declares nested variables via its [InitVar]
+    entry; import stores them as this room's stat tree. These tools are the function-calling
+    channel onto that tree (the card's own `<UpdateVariable>` text-block protocol also works —
+    `agent.loop` parses and applies it — but tool calls are the preferred, schema-checked path).
+    Engine-native flat trackers live in `ModuleVarTools` above; this class is only for the
+    nested, card-defined tree.
+    """
+
+    def __init__(self, services: Services) -> None:
+        self._services = services
+
+    def _i18n(self, ctx: AgentCtx) -> I18n:
+        return self._services.i18n.with_locale(ctx.locale)
+
+    def _manager(self) -> MvuManager:
+        return MvuManager(self._services.store)
+
+    @tool
+    async def get_stat(self, ctx: AgentCtx, path: str = "") -> str:
+        """Read the imported card's variable tree (MVU stat data), either one value or the
+        whole flattened tree. Prefer the always-on state in your context; this is the
+        read-on-demand path for double-checking.
+
+        Args:
+            path: Dot-separated variable path (e.g. "理.好感度"); empty returns every leaf.
+
+        Returns:
+            The value (or the flattened path list), or an empty-state notice.
+        """
+        i18n = self._i18n(ctx)
+        try:
+            manager = self._manager()
+            if not await manager.has_data(ctx.chat_key):
+                return i18n.t("modvars.stat.empty")
+            if path.strip():
+                leaves = await manager.flatten(ctx.chat_key, 512)
+                wanted = path.strip()
+                for leaf in leaves:
+                    if leaf["path"] == wanted:
+                        return i18n.t("modvars.stat.get.value", path=wanted, value=leaf["value"])
+                return i18n.t("modvars.stat.get.missing", path=wanted)
+            leaves = await manager.flatten(ctx.chat_key, 100)
+            lines = [i18n.t("modvars.stat.get.header")]
+            lines.extend(
+                i18n.t("modvars.stat.get.item", path=leaf["path"], value=leaf["value"]) for leaf in leaves
+            )
+            return "\n".join(lines)
+        except Exception as exc:
+            return i18n.t("modvars.stat.failed", error=str(exc))
+
+    @tool
+    async def set_stat(self, ctx: AgentCtx, path: str, value: str, reason: str = "") -> str:
+        """Set one value in the imported card's variable tree (MVU stat data) when play changes
+        it — the deterministic bookkeeping behind the card's trackers. Numbers, true/false, and
+        quoted JSON parse as themselves; anything else stores as text.
+
+        Args:
+            path: Dot-separated variable path (e.g. "理.情绪状态.pleasure").
+            value: The new value, as text (e.g. "0.4", "true", "教堂").
+            reason: Optional note on why, for your own bookkeeping; not required.
+
+        Returns:
+            Confirmation with the old and new values, or an error naming the problem.
+        """
+        i18n = self._i18n(ctx)
+        try:
+            from core.mvu_compat import apply_set, leaf_value
+
+            manager = self._manager()
+            tree = await manager.load(ctx.chat_key)
+            parsed = _parse_stat_value(value)
+            old = _stat_at(tree, path.strip())
+            new_tree = apply_set(tree, path.strip(), parsed)
+            await manager.save(ctx.chat_key, new_tree)
+            shown_old = leaf_value(old) if isinstance(old, list) else old
+            return i18n.t("modvars.stat.set.done", path=path.strip(), old=shown_old, new=parsed)
+        except Exception as exc:
+            return i18n.t("modvars.stat.failed", error=str(exc))
+
+    @tool
+    async def adjust_stat(self, ctx: AgentCtx, path: str, delta: float, reason: str = "") -> str:
+        """Nudge a numeric value in the imported card's variable tree by a signed delta.
+
+        Args:
+            path: Dot-separated variable path to a number (e.g. "理.好感度").
+            delta: Signed change to apply (e.g. 2, -0.1).
+            reason: Optional note on why, for your own bookkeeping; not required.
+
+        Returns:
+            Confirmation with the old and new values, or an error naming the problem.
+        """
+        i18n = self._i18n(ctx)
+        try:
+            from core.mvu_compat import apply_add
+
+            manager = self._manager()
+            tree = await manager.load(ctx.chat_key)
+            old = _stat_leaf(tree, path.strip())
+            new_tree = apply_add(tree, path.strip(), delta)
+            await manager.save(ctx.chat_key, new_tree)
+            new = _stat_leaf(new_tree, path.strip())
+            return i18n.t("modvars.stat.adjust.done", path=path.strip(), old=old, new=new, delta=delta)
+        except Exception as exc:
+            return i18n.t("modvars.stat.failed", error=str(exc))
+
+
+def _parse_stat_value(value: str):
+    text = value.strip()
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return text
+
+
+def _stat_at(tree, path: str):
+    from core.varspace import _walk_tree
+
+    return _walk_tree(tree, path)
+
+
+def _stat_leaf(tree, path: str):
+    from core.mvu_compat import is_value_with_desc, leaf_value
+
+    node = _stat_at(tree, path)
+    return leaf_value(node) if is_value_with_desc(node) else node

@@ -25,6 +25,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from core.mvu_compat import MvuManager
+
 from agent.context import AgentCtx
 from agent.services import Services
 from core.character_manager import CharacterSheet, get_hit_points
@@ -281,18 +283,39 @@ async def _combat_round(services: Services, chat_key: str) -> int | None:
     return value if value > 0 else None
 
 
+_MVU_PANEL_CAP = 32
+
+
 async def _variables(services: Services, ctx: AgentCtx) -> list[dict[str, Any]]:
-    """Player-visible module variables (`core.modvars`), labels resolved to the caller's locale.
+    """Player-visible module variables (`core.modvars`), labels resolved to the caller's locale,
+    plus the imported MVU card-variable leaves (`core.mvu_compat`) on the same wire shape.
 
     `ModvarManager.player_entries` is the structural anti-metagaming filter (iron rule #3):
     keeper-only variables are dropped THERE, inside the deterministic core, so no state frame —
-    this module or any future transport — can ever carry them. Empty (→ field omitted) when the
-    room has no player-visible variables; best-effort like every other piece of this snapshot.
+    this module or any future transport — can ever carry them. MVU leaves have no visibility
+    concept upstream (the extension shows every variable in its status bar), so they ship as-is,
+    capped at `_MVU_PANEL_CAP` scalar leaves. Empty (→ field omitted) when the room has neither;
+    best-effort like every other piece of this snapshot.
     """
     try:
-        return await ModvarManager(services.store).player_entries(ctx.chat_key, ctx.locale)
+        entries = await ModvarManager(services.store).player_entries(ctx.chat_key, ctx.locale)
     except Exception:
-        return []
+        entries = []
+    try:
+        for leaf in await MvuManager(services.store).flatten(ctx.chat_key, _MVU_PANEL_CAP):
+            value = leaf["value"]
+            if isinstance(value, bool):
+                kind = "bool"
+            elif isinstance(value, (int, float)):
+                kind = "number"
+            elif isinstance(value, str):
+                kind = "text"
+            else:
+                continue  # nested/list leaves are prompt-side detail, not panel material
+            entries.append({"id": f"mvu.{leaf['path']}", "label": leaf["path"], "kind": kind, "value": value})
+    except Exception:
+        pass
+    return entries
 
 
 async def _usage(services: Services, chat_key: str) -> dict[str, Any] | None:

@@ -139,6 +139,52 @@ TUI's tracker panel. Keeper-only variables are filtered inside the engine and ne
 reach a transport (iron rule #3, structural). This is state, not code: nothing here
 executes, so it stays firmly in Layer A's risk class.
 
+### A.5 SillyTavern MVU & EJS compatibility (imported cards)
+
+Cards built on the community's MVU variable framework (MagVarUpdate) and the
+ST-Prompt-Template EJS extension import and RUN, within a documented subset:
+
+- **`[InitVar]` / `[InitialVariables]` / `@@initial_variables` entries** are consumed
+  at import into a per-room variable tree (`core.mvu_compat`, JSON5-tolerant parse,
+  nested CJK paths, `[value, "description"]` leaves; re-import never resets progress) —
+  they are data, not lore, and are not stored as entries.
+- **The MVU text protocol works end-to-end**: the card's own scaffolding entries import
+  as normal lore, the model emits `<UpdateVariable>… _.set('path', old, new)…</UpdateVariable>`
+  blocks, and `agent.loop` parses them with deterministic code (all five ops:
+  set/insert/delete/add/move), applies them to the tree, and strips the blocks from the
+  player-visible narration — the upstream extension's contract, with real code doing the
+  bookkeeping. Tool calls (`set_stat`/`adjust_stat`/`get_stat`) are the preferred,
+  schema-checked channel onto the same tree.
+- **Full EJS — real JavaScript** (`core.ejs_full`, on by default when the `ejs` extra is
+  installed; `TRPG_ENABLE_FULL_EJS=false` disables): worldbook/card content runs through
+  the vendored official EJS library + lodash inside an embedded QuickJS sandbox — loops,
+  functions, `await`, lodash chains, arbitrary-JS `@@if` conditions, template
+  `setvar`/`incvar` (buffered, applied to the MVU tree by deterministic code after
+  rendering), `getwi`/`activewi` over a preloaded room snapshot, `injectPrompt`/
+  `getPromptsInjected`, `execvar`. This is the same trust model SillyTavern itself ships:
+  self-hosted, your cards, your box — extensibility and author freedom over gatekeeping.
+  The sandbox guardrails are crash protection, not restriction: hard memory cap, per-eval
+  time cap (an infinite loop times out instead of hanging the server), zero host I/O, one
+  fresh interpreter per turn (no cross-turn/cross-room state), and a cap on buffered
+  template writes.
+- **EJS subset fallback** (`core.ejs_lite` over `core.condexpr`'s closed expression
+  grammar) renders when the `ejs` extra is missing, the flag is off, or a template
+  errors: `<% if/else if/else %>` blocks, `<%= %>`/`<%- %>` outputs,
+  `getvar()`/`variables.path`/`stat_data.path` reads, `{{getvar::}}`/`{{var:}}` macros,
+  `@@if` → the entry's `condition` field, `<#escape-ejs>` passthrough. Subset rendering
+  is READ-ONLY (template `setvar` is a no-op there) and fail-safe either way: raw
+  template syntax never reaches the LLM.
+- **Still stubbed/inert even in full mode**: `faker` (stub returning empty strings, with
+  a warning — nondeterministic flavor, rarely load-bearing), `@INJECT` message-index
+  positioning, and render-time UI (`[RENDER:*]`, `@@render_*`, `@@iframe` status bars —
+  frontend features with no meaning server-side; those entries import disabled so they
+  never pollute a prompt, and the TUI's tracker panel shows the variable tree instead).
+
+The import trust boundary (scope pinning, constant stripped, secret keeper-gated, ids
+regenerated) applies unchanged in both modes. With full EJS enabled, imported cards run
+code in the sandbox described above — that is the point; operators who want the
+data-only Layer A posture set `TRPG_ENABLE_FULL_EJS=false` or skip the `ejs` extra.
+
 ### A.5 Other data packs
 
 Provider presets (`infra/providers.py:PRESETS`) and locale packs

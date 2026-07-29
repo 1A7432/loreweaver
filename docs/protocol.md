@@ -96,7 +96,9 @@ connections receive `error too_many_connections` before `join` is read.
   filtered inside the engine (`core.modvars.player_entries`) and never reach any transport.
   Entries arrive in definition order (render as-is, don't sort); `label` is already localized
   to the room's locale; `min`/`max` appear only on bounded `number` variables (clients may
-  render those as a meter).
+  render those as a meter). Imported SillyTavern MVU card variables ride the same list with
+  `id` prefixed `mvu.` and the dotted path as `label` (scalar leaves only, server-capped) —
+  no separate frame type, no client change required.
   `reset:true` marks the snapshot the server pushes right after a campaign wipe (`.reset` / `admin_reset_room`): the panel data is already fresh (empty) and the client should ALSO clear its locally-accumulated chat scrollback.
   `usage` is a rolling per-room LLM token/cache aggregate (additive/optional — omitted
   until the room's first completed AI-KP turn, and never sent by a pre-1.1 server):

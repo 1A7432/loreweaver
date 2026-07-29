@@ -152,6 +152,11 @@ class Settings(BaseSettings):
     db_path: str = ""  # empty -> <data_dir>/loreweaver.db; file-backed store = progress persists across restarts
     enable_vector_db: bool = True
     enable_critical_effects: bool = True
+    # Full SillyTavern EJS template compatibility (real JS in imported card/worldbook content,
+    # run in the QuickJS sandbox — see core/ejs_full.py). Takes effect when the `ejs` extra is
+    # installed; without the extra the safe built-in subset (core/ejs_lite.py) renders instead.
+    # Self-hosted trust decision: card templates are as trusted as the cards you import.
+    enable_full_ejs: bool = True
     llm: LLMSettings = LLMSettings()
     imagegen: ImageGenSettings = ImageGenSettings()
     tui: TuiSettings = TuiSettings()

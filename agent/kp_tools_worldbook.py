@@ -75,6 +75,7 @@ class WorldbookTools:
         scope: str = "world",
         secret: bool = False,
         constant: bool = False,
+        condition: str = "",
     ) -> str:
         """Add a world-lore entry -- a durable fact about the WORLD (a faction, place, history,
         cosmology, world-rule, recurring person/item) that should ground future generation.
@@ -88,6 +89,9 @@ class WorldbookTools:
             scope: "world" (persists across sessions/modules), "module", or "session" (this chat only).
             secret: True = keeper-only; players/companions/NPC actors will NEVER see it.
             constant: True = always injected (core premise/world-rules), ignoring keys.
+            condition: Optional variable condition gating injection (e.g. "town_fear >= 5" or
+                "stage === 2 && !alerted") over the room's module variables; the entry only
+                fires while it is true. Leave empty for unconditional.
 
         Returns:
             Confirmation naming the stored entry and its scope.
@@ -103,6 +107,7 @@ class WorldbookTools:
                 scope=scope or "world",
                 secret=secret,
                 constant=constant,
+                condition=condition or "",
             )
             saved = await self._services.worldbook.add(ctx.chat_key, entry)
             secret_note = i18n.t("worldbook.tools.add.secret_suffix") if saved.secret else ""
@@ -123,7 +128,9 @@ class WorldbookTools:
         """
         i18n = self._i18n(ctx)
         try:
-            entries = await self._services.worldbook.match(ctx.chat_key, query, role="keeper")
+            # Explicit keeper browse: conditions must not hide entries here (`query_lore` is the
+            # "show me what exists" path; injection-time gating happens in the prompt builder).
+            entries = await self._services.worldbook.match(ctx.chat_key, query, role="keeper", ignore_conditions=True)
             if not entries:
                 return i18n.t("worldbook.tools.query.empty", query=query)
             secret_tag = i18n.t("worldbook.tools.query.secret_tag")
