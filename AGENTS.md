@@ -33,7 +33,7 @@ Tests are deterministic and offline. To run a real Keeper, set `TRPG_LLM__*` in 
 
 ## How to extend
 - **Rule system** → add a `rulepacks/<system>.yaml` (defaults/derived/alias/st_show/set_keys + optional per-locale `display` names); no code change for data-driven parts.
-- **KP skill** → a `skills/<id>/SKILL.md` (Claude-Code shape: YAML frontmatter `name`/`description`/`allowed-tools` + Markdown body); per-room enable via `.skill enable <id>`.
+- **KP skill** → a `skills/<id>/SKILL.md` (Claude-Code shape: YAML frontmatter `name`/`description`/`allowed-tools` + Markdown body); per-room enable via `.skill enable <id>`. An optional sibling `hooks.js` adds sandboxed turn-lifecycle event handlers (Layer C.1 — see `docs/plugins.md`).
 - **Platform adapter** → subclass `gateway/base_adapter.py:BaseAdapter`, translate payloads → `InboundMessage`, register a `PlatformEntry` at import. Mock the transport in tests.
 - **LLM provider** → most vendors work via the OpenAI-compatible path + a `PRESETS` entry in `infra/providers.py`; add a native class (see `AnthropicLLM`/`GeminiLLM`) only for non-OpenAI APIs.
 - **KP tool** → an `async def name(self, ctx, ...) -> str` decorated `@tool` on a provider class; add the provider to `agent/kp_tools.build_kp_toolset`. Flag secret-reading tools `keeper_only=True`; flag skill-unlocked tools `gated=True`.

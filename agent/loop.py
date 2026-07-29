@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
 from agent.context import AgentCtx
+from agent.hook_runtime import apply_hook_writes, load_room_hook_engine
 from agent.prompt_builder import build_system_prompt
 from agent.services import Services
 from agent.session_recap import maybe_refresh_session_recap
@@ -539,6 +540,18 @@ async def run_kp_turn(
     # AgentCtx instances may be reused by gateways. Never let a direct tool call
     # or an earlier turn's unconsumed dice payload attach to this turn's trace.
     ctx.consume_dice()
+    # Event hooks (Layer C — core.hooks): one sandboxed engine per turn, inert (None) when
+    # nothing is registered. turn_start fires BEFORE prompt assembly so its inject() texts and
+    # variable writes shape this very turn; every later phase fires in the finalization block
+    # below. Hook failures never break a turn (each fire is internally fail-safe).
+    hook_engine = await load_room_hook_engine(services, ctx)
+    hook_writes_this_turn: list[str] = []
+    ctx.extra.pop("hook_injections", None)  # reused ctx must not leak a prior turn's injections
+    if hook_engine is not None:
+        outcome = hook_engine.fire("turn_start", {"user_message": user_message, "actor": ctx.user_id})
+        hook_writes_this_turn += await apply_hook_writes(services, ctx.chat_key, outcome.writes)
+        if outcome.injections:
+            ctx.extra["hook_injections"] = outcome.injections
     system_prompt = await build_system_prompt(ctx, services)
     # Layer B.2 -- allowed-tools enforcement (docs/plugins.md "Layer B"): the union
     # of `allowed_tools` across every KP skill enabled for this room. With no
@@ -694,10 +707,16 @@ async def run_kp_turn(
     # player-visible narration — the upstream extension's contract, with real code doing the
     # bookkeeping. A reply with no blocks comes back byte-identical. Best-effort: a parse/apply
     # problem must never eat the narration. Runs BEFORE output_review so the censor sees final text.
+    mvu_applied: list = []
     try:
-        reply, _mvu_applied, _mvu_errors = await MvuManager(services.store).apply_text(ctx.chat_key, reply)
+        reply, mvu_applied, _mvu_errors = await MvuManager(services.store).apply_text(ctx.chat_key, reply)
     except Exception:
         logger.warning("MVU update-block processing failed", exc_info=True)
+
+    if hook_engine is not None:
+        reply, hook_writes_this_turn = await _run_reply_hooks(
+            services, ctx, hook_engine, reply, tool_trace, mvu_applied, hook_writes_this_turn
+        )
     if output_review is not None:
         reply = output_review(reply)
 
@@ -1397,3 +1416,52 @@ async def _persist_history(services: Services, key: str, prior: list[dict], user
     updated = [*prior, {"role": "user", "content": user_message}, {"role": "assistant", "content": reply}]
     updated = updated[-_HISTORY_CAP:]
     await services.store.set(user_key="", store_key=key, value=json.dumps(updated, ensure_ascii=False))
+
+
+async def _run_reply_hooks(
+    services: Services,
+    ctx: AgentCtx,
+    engine,
+    reply: str,
+    tool_trace: list[dict],
+    mvu_applied: list,
+    hook_writes: list[str],
+) -> tuple[str, list[str]]:
+    """Fire the post-reply hook phases in order: dice_rolled (when any dice tool resolved this
+    turn), reply_ready (narrate/rewrite), then variables_changed exactly once when anything
+    wrote variables this turn. One round only — variables_changed's own writes do NOT re-fire
+    it, so hook cascades terminate by construction. Best-effort: a failing phase logs and the
+    reply passes through unchanged."""
+    try:
+        rolls = [
+            {"tool": item.get("name", ""), "result": str(item.get("result", ""))[:200]}
+            for item in tool_trace
+            if item.get("name") in _DICE_TOOL_NAMES
+        ]
+        if rolls:
+            outcome = engine.fire("dice_rolled", {"rolls": rolls})
+            hook_writes = hook_writes + await apply_hook_writes(services, ctx.chat_key, outcome.writes)
+            if outcome.narrations:
+                reply = reply.rstrip() + "\n\n" + "\n".join(outcome.narrations)
+
+        outcome = engine.fire("reply_ready", {"reply": reply})
+        hook_writes = hook_writes + await apply_hook_writes(services, ctx.chat_key, outcome.writes)
+        if outcome.rewrite is not None:
+            reply = outcome.rewrite
+        if outcome.narrations:
+            reply = reply.rstrip() + "\n\n" + "\n".join(outcome.narrations)
+
+        changed = [{"path": path, "op": "set"} for path in hook_writes]
+        changed += [
+            {"path": str(command.get("path", "")), "op": str(command.get("op", ""))}
+            for command in mvu_applied
+            if isinstance(command, dict)
+        ]
+        if changed:
+            outcome = engine.fire("variables_changed", {"writes": changed})
+            await apply_hook_writes(services, ctx.chat_key, outcome.writes)
+            if outcome.narrations:
+                reply = reply.rstrip() + "\n\n" + "\n".join(outcome.narrations)
+    except Exception:
+        logger.warning("reply-phase hooks failed", exc_info=True)
+    return reply, hook_writes

@@ -79,5 +79,6 @@
   "prompt.skills_header": "## 当前启用的 KP 技能（请遵循以下指示）",
   "prompt.relationships_header": "## 当前关系（确定性关系轨）",
   "prompt.modvars_header": "## 模块变量（确定性状态量——数值以此为准，叙事围绕它展开）",
-  "prompt.mvu_header": "## 卡片变量（导入的 MVU 状态树——数值以此为准；剧情改变它们时用 set_stat/adjust_stat 更新）"
+  "prompt.mvu_header": "## 卡片变量（导入的 MVU 状态树——数值以此为准；剧情改变它们时用 set_stat/adjust_stat 更新）",
+  "prompt.hooks_header": "## 模组事件注记（本回合确定性钩子的输出——叙事时纳入考量）"
 }

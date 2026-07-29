@@ -1,0 +1,130 @@
+"""Integration tests for the event-hook layer through run_kp_turn: room-registered scripts
+fire on the turn lifecycle, effects apply through validated deterministic code, and hooks can
+never break a turn. Skipped as a module without the `ejs` extra (hooks are inert then)."""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+pytest.importorskip("quickjs")
+
+from agent.context import AgentCtx  # noqa: E402
+from agent.hook_runtime import install_room_hooks  # noqa: E402
+from agent.loop import run_kp_turn  # noqa: E402
+from agent.prompt_builder import build_system_prompt  # noqa: E402
+from agent.services import build_services  # noqa: E402
+from agent.tools import Toolset, tool  # noqa: E402
+from core.modvars import ModvarManager, build_spec  # noqa: E402
+from core.mvu_compat import MvuManager  # noqa: E402
+from infra.config import Settings  # noqa: E402
+from infra.embeddings import FakeEmbeddings  # noqa: E402
+from infra.llm import FakeLLM, assistant_text, assistant_tools, tool_call  # noqa: E402
+
+
+def _services(llm):
+    return build_services(Settings(), llm=llm, embeddings=FakeEmbeddings(64))
+
+
+def _ctx(chat_key: str) -> AgentCtx:
+    return AgentCtx(chat_key=chat_key, user_id="u1", locale="en")
+
+
+class _DiceProvider:
+    @tool
+    async def skill_check(self, ctx: AgentCtx, skill_name: str) -> str:
+        """Roll a skill check."""
+        return f"{skill_name}: rolled 42 vs 65 -> hard success"
+
+
+async def test_reply_ready_rewrite_and_narrate_shape_the_final_reply():
+    services = _services(FakeLLM(script=[assistant_text("Night falls.")]))
+    ctx = _ctx("chat-hooks-1")
+    await install_room_hooks(
+        services,
+        ctx.chat_key,
+        "test",
+        ["on('reply_ready', (e) => { rewriteReply(e.reply.toUpperCase()); narrate('[omen intensifies]'); });"],
+    )
+
+    result = await run_kp_turn(ctx, services, Toolset(), "look around")
+
+    assert result.reply.startswith("NIGHT FALLS.")
+    assert "[omen intensifies]" in result.reply
+
+
+async def test_turn_start_writes_validate_and_chain_into_variables_changed():
+    services = _services(FakeLLM(script=[assistant_text("ok")]))
+    ctx = _ctx("chat-hooks-2")
+    await ModvarManager(services.store).define(
+        ctx.chat_key, build_spec("fear", "number", minimum=0, maximum=10)
+    )
+    await install_room_hooks(
+        services,
+        ctx.chat_key,
+        "test",
+        [
+            "on('turn_start', () => { setvar('fear', 99); setvar('trail.seen', true); });"
+            "on('variables_changed', (e) => narrate('changed:' + e.writes.length));"
+        ],
+    )
+
+    result = await run_kp_turn(ctx, services, Toolset(), "go")
+
+    state = await ModvarManager(services.store).load(ctx.chat_key)
+    assert state["values"]["fear"] == 10  # validated + clamped by real code
+    tree = await MvuManager(services.store).load(ctx.chat_key)
+    assert tree["trail"]["seen"] is True  # non-modvar name routes into the MVU tree
+    assert "changed:2" in result.reply  # variables_changed observed both writes
+
+
+async def test_dice_rolled_fires_on_real_dice_tools():
+    llm = FakeLLM(script=[assistant_tools(tool_call("skill_check", skill_name="Spot Hidden")), assistant_text("done")])
+    services = _services(llm)
+    ctx = _ctx("chat-hooks-3")
+    await install_room_hooks(
+        services,
+        ctx.chat_key,
+        "test",
+        ["on('dice_rolled', (e) => narrate('dice:' + e.rolls[0].tool));"],
+    )
+
+    result = await run_kp_turn(ctx, services, Toolset(_DiceProvider()), "I search the room")
+
+    assert "dice:skill_check" in result.reply
+
+
+async def test_turn_start_inject_lands_in_the_system_prompt():
+    services = _services(FakeLLM(script=[]))
+    ctx = _ctx("chat-hooks-4")
+    ctx.extra["hook_injections"] = ["The bells have tolled thirteen times."]
+
+    prompt = await build_system_prompt(ctx, services)
+
+    i18n = services.i18n.with_locale("en")
+    assert i18n.t("prompt.hooks_header") in prompt
+    assert "thirteen times" in prompt
+
+
+async def test_broken_hooks_never_break_the_turn():
+    services = _services(FakeLLM(script=[assistant_text("safe")]))
+    ctx = _ctx("chat-hooks-5")
+    await install_room_hooks(
+        services, ctx.chat_key, "test", ["on('reply_ready', () => { while(true){} });"]
+    )
+
+    result = await run_kp_turn(ctx, services, Toolset(), "hello")
+
+    assert result.reply == "safe"
+
+
+async def test_reimport_replaces_a_sources_scripts_instead_of_stacking():
+    services = _services(FakeLLM(script=[]))
+    await install_room_hooks(services, "room-x", "card:络络", ["on('turn_start', () => {});"])
+    await install_room_hooks(services, "room-x", "card:络络", ["on('reply_ready', () => {});"])
+
+    raw = await services.store.get(store_key="room_hooks.room-x")
+    entries = json.loads(raw)
+    assert len(entries) == 1
+    assert entries[0]["id"] == "card:络络#0"

@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -63,6 +63,10 @@ class Skill:
     systems: list[str] = field(default_factory=list)
     content_rating: str = ""
     body: str = ""
+    # Optional sandboxed event handlers (`hooks.js` next to SKILL.md — Layer C, see
+    # `core.hooks`): raw JS source, NEVER executed here; `agent.hook_runtime` feeds it to the
+    # QuickJS sandbox only while the skill is enabled for a room.
+    hooks: str = ""
 
 
 def _split_frontmatter(text: str) -> tuple[str, str]:
@@ -120,7 +124,14 @@ def parse_skill_text(skill_id: str, text: str) -> Skill:
 
 def _parse_skill_file(path: Path) -> Skill:
     text = path.read_text(encoding="utf-8")
-    return parse_skill_text(path.parent.name, text)
+    skill = parse_skill_text(path.parent.name, text)
+    hooks_path = path.parent / "hooks.js"
+    if hooks_path.is_file():
+        try:
+            skill = replace(skill, hooks=hooks_path.read_text(encoding="utf-8"))
+        except OSError:
+            logger.warning("Skipping unreadable hooks.js for skill %s", skill.id, exc_info=True)
+    return skill
 
 
 def _scan_skill_dir(directory: Path, registry: dict[str, Skill], *, allow_override: bool) -> None:

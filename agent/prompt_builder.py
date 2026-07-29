@@ -137,6 +137,12 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
         await inject_interaction_style_prompt(ctx, i18n),
     ]
 
+    # Event-hook inject() texts for THIS turn (Layer C — agent.hook_runtime stashes them on
+    # ctx.extra before this build; consumed per turn, never persisted).
+    hook_injections = [text for text in (extra.get("hook_injections") or []) if isinstance(text, str)]
+    if hook_injections:
+        sections.append(i18n.t("prompt.hooks_header") + "\n" + "\n".join(hook_injections))
+
     skill_bodies = await _enabled_skill_bodies(ctx, services)
     if skill_bodies:
         sections.append(i18n.t("prompt.skills_header") + "\n\n" + "\n\n".join(skill_bodies))

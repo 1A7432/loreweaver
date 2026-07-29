@@ -258,19 +258,39 @@ features rather than a toy.
 
 ---
 
-## Layer C — Code plugins (deferred)
+## Layer C — Behavior plugins
 
-For genuinely new *code* (KP tools, adapters, providers, exotic derived
-computers) we will use Python **entry points** (`loreweaver.plugins`), so
-`pip install loreweaver-plugin-x` registers it. This layer is **opt-in and
-last**, and requires:
+### C.1 Event hooks (landed)
 
-- a capability declaration (what filesystem/network/secret access it needs),
-- explicit operator enablement (off by default),
-- a prominent "runs untrusted code with server privileges" warning,
-- failure isolation (a crashing plugin degrades, never bricks the server).
+Skills and cards can now carry BEHAVIOR, not just data and prompts — sandboxed JavaScript
+handlers on the turn lifecycle (`core.hooks` + `agent.hook_runtime`), the same runtime idea
+as the community's Tavern Helper scripts, on the same trust stance as full EJS (the
+operator's content, the operator's box):
 
-Until Layer C ships, code contributions go through normal in-tree PRs.
+- **Where they live**: a `hooks.js` next to a skill's `SKILL.md` (active while the skill is
+  enabled for the room — the existing `.skill enable` flow is the on/off switch), or a card's
+  `extensions.loreweaver_hooks` list (installed at import; re-importing a card replaces its
+  scripts rather than stacking).
+- **API**: `on("turn_start"|"reply_ready"|"dice_rolled"|"variables_changed", handler)`, the
+  full variable bridge (`getvar`/`setvar`/`variables`/`stat_data`, lodash as `_`), and the
+  effect emitters `inject(text)` (adds a section to this turn's keeper prompt),
+  `narrate(text)` (appends to the player-visible reply), `rewriteReply(text)`, `log(text)`.
+- **Contract (iron rule #1)**: hooks REQUEST effects; deterministic engine code validates,
+  caps, and applies them — `setvar` on a declared module variable goes through kind/bounds
+  validation, everything else lands in the MVU tree. One sandboxed interpreter per turn
+  (memory/time-capped, no host I/O), `variables_changed` fires at most once per turn so hook
+  cascades terminate by construction, and any failure — broken script, infinite loop, missing
+  `ejs` extra — degrades to "hooks inert (logged)", never to a broken turn.
+  `TRPG_ENABLE_FULL_EJS=false` switches this off along with every other sandboxed-JS surface.
+
+### C.2 Python entry-point plugins (still deferred)
+
+For genuinely new *server code* (KP tools, adapters, providers, exotic derived computers) we
+will use Python **entry points** (`loreweaver.plugins`), so `pip install loreweaver-plugin-x`
+registers it. That layer runs with SERVER privileges — unlike C.1's sandbox — so it stays
+opt-in and last, and requires: a capability declaration, explicit operator enablement (off by
+default), a prominent "runs untrusted code with server privileges" warning, and failure
+isolation. Until C.2 ships, code contributions go through normal in-tree PRs.
 
 ---
 

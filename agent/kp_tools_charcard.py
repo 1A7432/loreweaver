@@ -14,9 +14,11 @@ fields (name/description/tags) are game DATA supplied at runtime, not string lit
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from agent.context import AgentCtx
+from agent.hook_runtime import install_room_hooks
 from agent.npc import NpcManager
 from agent.services import Services
 from agent.tools import tool
@@ -26,6 +28,8 @@ from core.character_rules import render_validation_notice, validate_sheet
 from core.charcard import PNG_SIGNATURE, CharacterCard, parse_card_file
 from infra.i18n import I18n
 from infra.media_store import MediaStore
+
+logger = logging.getLogger(__name__)
 
 _PREVIEW_CHARS = 200
 _KEY_STAT_COUNT = 6
@@ -214,7 +218,10 @@ class CharcardTools:
             return i18n.t("charcard.tools.preview.failed", error=str(exc))
 
     async def _import_card_lore(self, ctx: AgentCtx, card: CharacterCard) -> int:
-        """Fold the card's embedded `character_book` into the world lore (M11); 0 when it has none."""
+        """Fold the card's embedded `character_book` into the world lore (M11); 0 when it has none.
+        Also installs any `extensions.loreweaver_hooks` scripts the card ships (Layer C — see
+        `core.hooks`; the operator's trust decision, same tier as full EJS)."""
+        await self._install_card_hooks(ctx, card)
         if not card.character_book:
             return 0
         # A character card is untrusted input: its embedded lore lands in the room-local scope with
@@ -224,3 +231,26 @@ class CharcardTools:
         return await self._services.worldbook.import_entries(
             ctx.chat_key, card.character_book, source=card.name, is_keeper=False, char_name=card.name
         )
+
+    async def _install_card_hooks(self, ctx: AgentCtx, card: CharacterCard) -> None:
+        """Best-effort install of the card's `extensions.loreweaver_hooks` scripts (native cards /
+        the card forge emit this field; absent on stock SillyTavern cards). Re-importing the same
+        card replaces its scripts rather than stacking duplicates."""
+        try:
+            raw = card.raw if isinstance(card.raw, dict) else {}
+            extensions = raw.get("data", {}).get("extensions") if isinstance(raw.get("data"), dict) else None
+            if not isinstance(extensions, dict):
+                extensions = raw.get("extensions") if isinstance(raw.get("extensions"), dict) else {}
+            entries = extensions.get("loreweaver_hooks")
+            if not isinstance(entries, list):
+                return
+            codes = [
+                entry if isinstance(entry, str) else entry.get("code", "")
+                for entry in entries
+                if isinstance(entry, (str, dict))
+            ]
+            codes = [code for code in codes if isinstance(code, str) and code.strip()]
+            if codes:
+                await install_room_hooks(self._services, ctx.chat_key, f"card:{card.name}", codes)
+        except Exception:
+            logger.warning("card hook install failed for %s", card.name, exc_info=True)
