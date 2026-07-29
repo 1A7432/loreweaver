@@ -52,8 +52,8 @@ from net.room_backup import room_rows, room_vector_points
 
 logger = logging.getLogger(__name__)
 
-# v1.5 adds ephemeral room-wide AI-KP turn status.
-_PROTOCOL_VERSION = "1.5"
+# v1.6 adds player-visible module variables on the state frame (core.modvars).
+_PROTOCOL_VERSION = "1.6"
 _SERVER_BANNER = "loreweaver/1"
 
 # Hard cap on a single `input` frame's text before it reaches the LLM/history. A client-controlled

@@ -37,6 +37,13 @@ straight off the store the same inline way as the skills block above (never
 importing ``agent.kp_tools_relationships`` or ``gateway``). A chat with no
 relationship state set contributes nothing, so its prompt stays byte-identical
 to a build from before this section existed.
+
+Module variables (``core.modvars`` — the same iron-rule-#1 split: validated,
+clamped, persisted values the model only narrates around) follow the same
+pattern right after the relationships section: the Keeper sees EVERY variable,
+with keeper-only ones carrying a localized never-reveal tag (iron rule #3 —
+the transport-side filter in ``net.state`` is the structural guarantee; this
+tag is the behavioral one). A room with no variables contributes nothing.
 """
 
 from __future__ import annotations
@@ -45,6 +52,7 @@ import json
 
 from agent.context import AgentCtx
 from agent.services import Services
+from core.modvars import ModvarManager
 from core.prompt_sections import (
     inject_document_context_prompt,
     inject_game_state_prompt,
@@ -102,6 +110,10 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
     relationship_lines = await RelationshipManager(services.store).describe(ctx.chat_key, i18n)
     if relationship_lines:
         sections.append(i18n.t("prompt.relationships_header") + "\n" + "\n".join(relationship_lines))
+
+    modvar_lines = await ModvarManager(services.store).describe(ctx.chat_key, i18n, ctx.locale)
+    if modvar_lines:
+        sections.append(i18n.t("prompt.modvars_header") + "\n" + "\n".join(f"- {line}" for line in modvar_lines))
 
     return "\n\n".join(section for section in sections if section)
 

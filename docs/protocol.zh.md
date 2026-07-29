@@ -4,14 +4,14 @@
 
 这是 loreweaver 服务器（通过 `python -m app --serve` 启动）与 OpenTUI 终端客户端之间开放、版本化的 wire protocol。引擎本身（确定性核心 + AI Keeper）不受传输方式影响；传输中立的会话逻辑位于 `net.session.SessionCore`，本文档是与语言无关的接口定义。
 
-控制流使用 `{"type": ...}` 形状的 JSON 帧，协议版本为 `"1.5"`。同一套帧与 `join` 握手可搭载于两种 carrier：
+控制流使用 `{"type": ...}` 形状的 JSON 帧，协议版本为 `"1.6"`。同一套帧与 `join` 握手可搭载于两种 carrier：
 
 - **Iroh** 是 `--serve` 实际启动的默认传输：点对点 QUIC，服务端打印可分享 ticket，不需要域名、证书或端口转发。控制帧是在长连接双向流上的 newline-delimited JSON；媒体字节使用同一连接上的额外双向流。
 - **WebSocket**（`net.tui_server`）只保留作离线测试/loopback carrier，不是 `--serve` 选项。控制帧是文本消息，媒体字节是二进制消息。
 
 两种 carrier 都驱动同一个 `SessionCore` / `RoomHub`。
 
-版本控制是递增式的：`"1.5"` 新增房间级 AI-KP 回合状态；`"1.4"` 新增图像生成配置与头像绑定；`"1.3"` 新增房间音频库/播放控制帧；`"1.2"` 新增媒体元数据帧和字节通道；`"1.1"` 新增 Keeper 门控的 `admin_*` 帧（见下文"Admin frames"部分）。只理解 `"1"` 的客户端保持正常工作——它永远不会发送新帧、会忽略无法识别的服务端帧类型，并应将 `welcome` 的 `protocol` 字段视为不透明字符串（接受任何 `"1.x"`）。
+版本控制是递增式的：`"1.6"` 新增可选的 `state.variables` 列表（确定性模块变量——仅玩家可见子集）；`"1.5"` 新增房间级 AI-KP 回合状态；`"1.4"` 新增图像生成配置与头像绑定；`"1.3"` 新增房间音频库/播放控制帧；`"1.2"` 新增媒体元数据帧和字节通道；`"1.1"` 新增 Keeper 门控的 `admin_*` 帧（见下文"Admin frames"部分）。只理解 `"1"` 的客户端保持正常工作——它永远不会发送新帧、会忽略无法识别的服务端帧类型，并应将 `welcome` 的 `protocol` 字段视为不透明字符串（接受任何 `"1.x"`）。
 
 客户端发送的第一帧 MUST 是 `join`。服务器回复 `welcome` 或 `error`，错误时关闭连接。如果在 join 握手超时内未到达（`TRPG_TUI__JOIN_TIMEOUT`，默认 10 秒），服务器将用 `error join_timeout` 关闭连接，而不是无限等待。离线 WebSocket 测试 carrier 另外支持 `TRPG_TUI__MAX_CONNECTIONS` 并发上限；超额测试连接会在读取 `join` 前收到 `error too_many_connections`。
 
@@ -32,7 +32,7 @@
 ## Server → Client
 
 - `welcome` — 成功 `join` 时发送一次：
-  `{type:"welcome", protocol:"1.5", features:["media","audio","imagegen"?,"demo"?,"update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
+  `{type:"welcome", protocol:"1.6", features:["media","audio","imagegen"?,"demo"?,"update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
   `version` 是服务端自身的发布版本(与客户端对比可发现版本不一致)。`"update"` 特性仅在守秘人连接且服务端运维配置了自更新命令时出现，用于门控 `admin_update_server`。
   `demo` 表示服务端正在使用离线示例 Keeper、向量功能已启用，且本次检查时这个守秘人房间为空。服务端会在房间回合锁内再次检查，过期 flag 不会覆盖战役状态；客户端收到 `admin_config{using_demo:false}`（例如从模型页保存后）会立即移除入口，否则重连时重新计算，过期操作也会被服务端拒绝。
 - `error` — 本地化的故障通知；`bad_key`、`join_timeout` 和 `too_many_connections` 关闭连接（它们仅在 `join` 握手期间或之前发生），其他不关闭：
@@ -56,7 +56,8 @@
 - `dice` — 一次掷骰子/检定，由客户端渲染并按 `rank` 着色（`-2`..`+4`）；NEVER 携带 Keeper 秘密：
   `{type:"dice", actor:string, kind:"roll"|"check"|"sanity"|"opposed"|"init", expr:string, rolls:number[], total:number, target?:number, rank?:int, level?:string, success?:boolean}`
 - `state` — 一个面板快照，在 `join` 时和每回合后发送：
-  `{type:"state", character?:{name,system,hp,hpmax,mp,mpmax,san,sanmax,attributes:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,hp?:int,hpMax?:int,san?:int,sanMax?:int,mp?:int,mpMax?:int,ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, reset?:boolean}`
+  `{type:"state", character?:{name,system,hp,hpmax,mp,mpmax,san,sanmax,attributes:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,hp?:int,hpMax?:int,san?:int,sanMax?:int,mp?:int,mpMax?:int,ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, variables?:[{id:string,label:string,kind:"number"|"bool"|"text"|"enum",value:number|boolean|string,min?:int,max?:int}], reset?:boolean}`
+  `variables`（v1.6，递增式/可选——房间没有时整个字段省略）是房间的确定性模块变量，且只含玩家可见子集：仅守密人可见的变量在引擎内部（`core.modvars.player_entries`）就被过滤，永远不会到达任何传输层。条目按定义顺序到达（按原样渲染，不要排序）；`label` 已按房间语言本地化；`min`/`max` 只出现在有界的 `number` 变量上（客户端可将其渲染为进度条）。
   `reset:true` 标记战役清空(`.reset` / `admin_reset_room`)后服务端推送的快照：面板数据已是最新(空)，客户端还应清空本地累积的聊天记录。
 - `presence` — 连接的玩家名单，在加入/离开时发送：
   `{type:"presence", players:[{id,name,online}], online:int}`

@@ -77,5 +77,6 @@
   "prompt.session_recap.keeper_label": "守秘人",
   "prompt.session_recap.transcript_line": "{role}：{content}",
   "prompt.skills_header": "## 当前启用的 KP 技能（请遵循以下指示）",
-  "prompt.relationships_header": "## 当前关系（确定性关系轨）"
+  "prompt.relationships_header": "## 当前关系（确定性关系轨）",
+  "prompt.modvars_header": "## 模块变量（确定性状态量——数值以此为准，叙事围绕它展开）"
 }

@@ -28,6 +28,7 @@ from typing import Any
 from agent.context import AgentCtx
 from agent.services import Services
 from core.character_manager import CharacterSheet, get_hit_points
+from core.modvars import ModvarManager
 
 _COC_SYSTEM = "CoC"
 _UNSET_CHARACTER_NAME = "default"
@@ -67,6 +68,10 @@ async def build_room_state(services: Services, ctx: AgentCtx) -> dict[str, Any]:
     usage = await _usage(services, ctx.chat_key)
     if usage is not None:
         state["usage"] = usage
+
+    variables = await _variables(services, ctx)
+    if variables:
+        state["variables"] = variables
 
     return state
 
@@ -274,6 +279,20 @@ async def _combat_round(services: Services, chat_key: str) -> int | None:
     except Exception:
         return None
     return value if value > 0 else None
+
+
+async def _variables(services: Services, ctx: AgentCtx) -> list[dict[str, Any]]:
+    """Player-visible module variables (`core.modvars`), labels resolved to the caller's locale.
+
+    `ModvarManager.player_entries` is the structural anti-metagaming filter (iron rule #3):
+    keeper-only variables are dropped THERE, inside the deterministic core, so no state frame —
+    this module or any future transport — can ever carry them. Empty (→ field omitted) when the
+    room has no player-visible variables; best-effort like every other piece of this snapshot.
+    """
+    try:
+        return await ModvarManager(services.store).player_entries(ctx.chat_key, ctx.locale)
+    except Exception:
+        return []
 
 
 async def _usage(services: Services, chat_key: str) -> dict[str, Any] | None:

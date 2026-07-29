@@ -1,6 +1,6 @@
-// Bumped to "1.5" for the additive room-wide AI-KP turn-status frame.
+// Bumped to "1.6" for the additive player-visible module-variables list on the state frame.
 // `WelcomeFrame.protocol` stays a plain string so older minor clients keep accepting it.
-export const PROTOCOL_VERSION = "1.5" as const
+export const PROTOCOL_VERSION = "1.6" as const
 
 export const FrameType = {
   Join: "join",
@@ -324,6 +324,22 @@ export interface UsageState {
   cache_miss_tokens: number
 }
 
+export type ModuleVariableKind = "number" | "bool" | "text" | "enum"
+
+// v1.6 additive: one player-visible module/story variable (a "tracker": suspicion,
+// doom, supplies, ...). The server only ever sends player-visible variables — the
+// keeper-only ones are filtered server-side, never here. `label` arrives already
+// localized to the room locale. `min`/`max` apply to the "number" kind only and are
+// present only when the variable is bounded.
+export interface ModuleVariable {
+  id: string
+  label: string
+  kind: ModuleVariableKind
+  value: number | boolean | string
+  min?: number
+  max?: number
+}
+
 export interface StateFrame {
   type: typeof FrameType.State
   character?: CharacterState
@@ -333,6 +349,10 @@ export interface StateFrame {
   initiative: InitiativeEntry[]
   online: number
   usage?: UsageState
+  // v1.6 additive: player-visible module variables in definition order (render as
+  // received, do not sort). Absent — not an empty array — when the room has none;
+  // an older server that never sends it still type-checks fine.
+  variables?: ModuleVariable[]
   // Set once, on the state frame the server pushes right after a campaign reset
   // (`.reset` / `admin_reset_room`): besides the already-fresh (empty) panel data,
   // the client should also clear its locally-accumulated chat scrollback.

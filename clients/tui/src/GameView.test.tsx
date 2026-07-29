@@ -974,6 +974,45 @@ describe("GameView", () => {
     })
   })
 
+  test("a state frame with module variables renders the TRACKERS sidebar panel; a later frame without them hides it", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame, captureCharFrame } = await renderGame(client)
+    await flush()
+
+    // No variables yet (fresh room): the panel is absent entirely, not an empty box.
+    expect(captureCharFrame()).not.toContain("TRACKERS")
+
+    act(() => {
+      client.push({
+        type: FrameType.State,
+        party: [],
+        initiative: [],
+        online: 1,
+        variables: [
+          { id: "suspicion", label: "Suspicion", kind: "number", value: 3, min: 0, max: 10 },
+          { id: "alarm", label: "Alarm", kind: "bool", value: false },
+          { id: "phase", label: "Phase", kind: "enum", value: "night" },
+        ],
+      })
+    })
+    await flush()
+
+    const frame = await waitForFrame((t) => t.includes("TRACKERS"))
+    expect(frame).toContain("Suspicion ▒▒░░░░ 3/10") // bounded: CharacterPanel-style bar
+    expect(frame).toContain("Alarm ✗ no") // bool: cross + localized no
+    expect(frame).toContain("Phase: night") // enum: label: value one-liner
+
+    // A later state frame WITHOUT the field (server dropped every player-visible
+    // variable) removes the whole panel again.
+    act(() => client.push({ type: FrameType.State, party: [], initiative: [], online: 1 }))
+    const gone = await waitForFrame((t) => !t.includes("TRACKERS"))
+    expect(gone).not.toContain("Suspicion")
+
+    act(() => client.push(settleSpinner))
+    await flush()
+    act(() => renderer.destroy())
+  })
+
   test("connectionStatus prop threads through to the HeaderBar's compact indicator", async () => {
     const client = new MockClient()
     const { renderer, flush, captureCharFrame } = await testRender(

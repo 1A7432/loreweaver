@@ -124,7 +124,22 @@ A card's embedded `character_book`, or a standalone lorebook, maps to
 keyword-in-recent-context with budgeted insertion — the ST model — so an
 existing lorebook works unchanged.
 
-### A.4 Other data packs
+### A.4 Module variables (deterministic trackers)
+
+The engine exposes a declared-variable surface (`core.modvars`, inspired by the
+SillyTavern community's MVU variable framework — same idea, but function-calling +
+schema validation instead of a parsed text protocol): the Keeper (or a module, via its
+setup instructions) declares named trackers with `define_variable` — kind
+(`number`/`bool`/`text`/`enum`), optional bounds, a per-locale display label, and a
+`visibility` of `player` or `keeper` — then updates them with
+`set_variable`/`adjust_variable`. Every write is validated and clamped by real code
+(iron rule #1); the current values are folded into the KP prompt each turn, and the
+player-visible subset ships to clients on the `state` frame (protocol v1.6) for the
+TUI's tracker panel. Keeper-only variables are filtered inside the engine and never
+reach a transport (iron rule #3, structural). This is state, not code: nothing here
+executes, so it stays firmly in Layer A's risk class.
+
+### A.5 Other data packs
 
 Provider presets (`infra/providers.py:PRESETS`) and locale packs
 (`locales/{lang}/*.json`) are already data; they join the same discovery/manifest

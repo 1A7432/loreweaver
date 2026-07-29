@@ -20,6 +20,7 @@ import { NarrativeLog, type LogFrame } from "./components/NarrativeLog"
 import { PartyRoster } from "./components/PartyRoster"
 import { ScenePanel } from "./components/ScenePanel"
 import { StatusBar } from "./components/StatusBar"
+import { VariablesPanel } from "./components/VariablesPanel"
 import { tt } from "./i18n"
 import { viewImage, type RendererLike } from "./imageViewer"
 import { CHAT_INPUT_LIMIT, inputLimitState } from "./inputLimits"
@@ -491,6 +492,7 @@ export function GameView({
                 initiativeFirst={narrow}
               />
               {narrow ? null : <ScenePanel scene={stateFrame.scene} clock={stateFrame.clock} theme={theme} locale={locale} />}
+              <VariablesPanel variables={stateFrame.variables} theme={theme} locale={locale} />
             </box>
           </scrollbox>
         ) : null}

@@ -77,5 +77,6 @@
   "prompt.session_recap.keeper_label": "Keeper",
   "prompt.session_recap.transcript_line": "{role}: {content}",
   "prompt.skills_header": "## Active KP skills (play-style packs) (follow these)",
-  "prompt.relationships_header": "## Current relationships (deterministic tracks)"
+  "prompt.relationships_header": "## Current relationships (deterministic tracks)",
+  "prompt.modvars_header": "## Module variables (deterministic trackers — the values are authoritative; narrate around them)"
 }

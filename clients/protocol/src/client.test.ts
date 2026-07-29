@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { FrameType, type NarrativeFrame, type StateFrame } from "./types"
+import { FrameType, type ModuleVariable, type NarrativeFrame, type StateFrame } from "./types"
 import { packMediaMessage, unpackMediaMessage, WsClient, type WebSocketLike } from "./client"
 
 type Listener = (event: any) => void
@@ -209,6 +209,37 @@ describe("WsClient", () => {
     } satisfies StateFrame)
 
     expect(seen).toEqual([FrameType.State])
+  })
+
+  test("a state frame carries the additive v1.6 module-variables list through unchanged", async () => {
+    const { client, sockets } = createClient()
+    const seen: StateFrame[] = []
+    client.on(FrameType.State, (frame) => seen.push(frame))
+
+    await client.connect("ws://example.test")
+    // One of each kind, exercising the whole wire contract: bounded + unbounded
+    // number, bool, text, enum. `satisfies` keeps the shapes honest at compile time.
+    const variables: ModuleVariable[] = [
+      { id: "suspicion", label: "Suspicion", kind: "number", value: 3, min: 0, max: 10 },
+      { id: "rations", label: "Rations", kind: "number", value: 17 },
+      { id: "alarm", label: "Alarm raised", kind: "bool", value: false },
+      { id: "phase", label: "Phase", kind: "enum", value: "night" },
+      { id: "password", label: "Password", kind: "text", value: "swordfish" },
+    ]
+    sockets[0].serverSend({
+      type: FrameType.State,
+      party: [],
+      initiative: [],
+      online: 1,
+      variables,
+    } satisfies StateFrame)
+    // An older server omits the field entirely (never an empty array): the frame
+    // still validates + dispatches, and the consumer sees `undefined`.
+    sockets[0].serverSend({ type: FrameType.State, party: [], initiative: [], online: 1 } satisfies StateFrame)
+
+    expect(seen).toHaveLength(2)
+    expect(seen[0].variables).toEqual(variables) // definition order preserved, not sorted
+    expect(seen[1].variables).toBeUndefined()
   })
 
   test("room turn-status frames are additive, validated, and dispatched", async () => {

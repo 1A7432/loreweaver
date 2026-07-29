@@ -20,6 +20,7 @@ from core.prompt_sections import (
     inject_system_expertise_prompt,
     inject_trpg_system_prompt,
 )
+from core.modvars import ModvarManager, build_spec
 from core.relationships import RelationshipManager
 from core.worldbook import inject_world_lore_prompt
 from infra.config import Settings
@@ -223,3 +224,37 @@ async def test_build_system_prompt_relationship_fold_in_is_localized_per_ctx_loc
 
     assert zh.t("prompt.relationships_header") in prompt
     assert zh.t("relationships.track.affection") in prompt
+
+
+# ---------------------------------------------------------------------------
+# Deterministic module variables (core.modvars) fold-in --
+# ---------------------------------------------------------------------------
+
+
+async def test_build_system_prompt_folds_in_module_variables_with_keeper_tag():
+    services = _services("en")
+    chat_key = "chat-prompt-builder-modvars"
+    ctx = AgentCtx(chat_key=chat_key, user_id="u1", locale="en")
+
+    manager = ModvarManager(services.store)
+    await manager.define(chat_key, build_spec("town_fear", "number", labels={"en": "Town Fear"}, minimum=0, maximum=10))
+    await manager.define(chat_key, build_spec("culprit_alerted", "bool", visibility="keeper"))
+    await manager.set(chat_key, "town_fear", 7)
+
+    prompt = await build_system_prompt(ctx, services)
+    i18n = services.i18n.with_locale("en")
+
+    assert i18n.t("prompt.modvars_header") in prompt
+    assert "Town Fear" in prompt and "7" in prompt
+    # The keeper-only variable IS in the keeper prompt, tagged never-reveal (iron rule #3's
+    # behavioral side; net.state's player filter is the structural side).
+    assert "culprit_alerted" in prompt and "KEEPER-ONLY" in prompt
+
+
+async def test_build_system_prompt_without_module_variables_has_no_modvars_header():
+    services = _services("en")
+    ctx = AgentCtx(chat_key="chat-prompt-builder-no-modvars", user_id="u1", locale="en")
+
+    prompt = await build_system_prompt(ctx, services)
+
+    assert services.i18n.with_locale("en").t("prompt.modvars_header") not in prompt

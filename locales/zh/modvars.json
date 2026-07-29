@@ -1,0 +1,19 @@
+{
+  "modvars.describe.line": "{label}［{id}］：{value}",
+  "modvars.describe.bounded": "{value}（范围 {minimum}–{maximum}）",
+  "modvars.describe.keeper_tagged": "{line} —— 仅守密人可见：绝不能向玩家透露该数值或它的存在",
+  "modvars.describe.bool_true": "是",
+  "modvars.describe.bool_false": "否",
+  "modvars.visibility.player": "玩家可见",
+  "modvars.visibility.keeper": "仅守密人",
+  "modvars.tools.bad_id": "该变量 id 不可用。请使用小写字母、数字和下划线（例如 \"suspicion\"）。",
+  "modvars.tools.bad_kind": "未知的变量类型。可用类型：{allowed}。",
+  "modvars.tools.bad_visibility": "未知的可见性。可用：{allowed}。",
+  "modvars.tools.none_defined": "本房间尚未定义任何模块变量——请先用 define_variable 定义。",
+  "modvars.tools.unknown_var": "未知变量 \"{id}\"。已定义的变量：{known}。",
+  "modvars.tools.define.done": "已定义变量 \"{label}\"［{id}］：{kind}，{visibility}，当前值 {value}。",
+  "modvars.tools.set.done": "{label}［{id}］：{old} → {new}。",
+  "modvars.tools.adjust.done": "{label}［{id}］：{old} → {new}（变化：{delta}）。",
+  "modvars.tools.remove.done": "已移除变量 \"{label}\"［{id}］。",
+  "modvars.tools.failed": "模块变量操作失败：{error}"
+}

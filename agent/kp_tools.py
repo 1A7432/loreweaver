@@ -4,9 +4,11 @@ The tool bodies live in `kp_tools_mechanics` (character / dice / initiative), `k
 (module / document / notes / session), `kp_tools_npc` (AI-played keeper NPC sub-actors --
 `docs/specs/M5.md`), `kp_tools_companion` (AI player companions -- `docs/specs/M10-companions.md`)
 `kp_tools_forge` (the `generate_skill`/`generate_rulepack`/`generate_module` gated tools -- Layer
-B.3, `docs/plugins.md` "Layer B"), and `kp_tools_relationships` (the deterministic relationship-
+B.3, `docs/plugins.md` "Layer B"), `kp_tools_relationships` (the deterministic relationship-
 track gated tools -- `adjust_relationship`/`set_relationship`/`get_relationships`, backed by
-`core.relationships`). This module is the single entry point the agent loop and adapters use to
+`core.relationships`), and `kp_tools_vars` (the deterministic module-variable tools --
+`define_variable`/`set_variable`/`adjust_variable`/`remove_variable`, backed by `core.modvars`).
+This module is the single entry point the agent loop and adapters use to
 build the toolset for a `Services` bundle."""
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from agent.kp_tools_maps import SvgMapTools
 from agent.kp_tools_mechanics import CharacterTools, DiceTools, InitiativeTools
 from agent.kp_tools_npc import NpcTools
 from agent.kp_tools_relationships import RelationshipTools
+from agent.kp_tools_vars import ModuleVarTools
 from agent.kp_tools_worldbook import WorldbookTools
 from agent.services import Services
 from agent.tools import Toolset
@@ -60,4 +63,5 @@ def build_kp_toolset(
         ImageTools(services, hub=hub),
         ForgeTools(services),
         RelationshipTools(services),
+        ModuleVarTools(services),
     )

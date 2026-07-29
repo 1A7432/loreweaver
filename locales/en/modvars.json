@@ -1,0 +1,19 @@
+{
+  "modvars.describe.line": "{label} [{id}]: {value}",
+  "modvars.describe.bounded": "{value} (range {minimum}–{maximum})",
+  "modvars.describe.keeper_tagged": "{line} — KEEPER-ONLY: never reveal this value or its existence to players",
+  "modvars.describe.bool_true": "yes",
+  "modvars.describe.bool_false": "no",
+  "modvars.visibility.player": "player-visible",
+  "modvars.visibility.keeper": "keeper-only",
+  "modvars.tools.bad_id": "That variable id isn't usable. Use lowercase letters, digits, and underscores (e.g. \"suspicion\").",
+  "modvars.tools.bad_kind": "Unknown variable kind. Allowed kinds: {allowed}.",
+  "modvars.tools.bad_visibility": "Unknown visibility. Allowed: {allowed}.",
+  "modvars.tools.none_defined": "No module variables are defined for this room yet — define one with define_variable first.",
+  "modvars.tools.unknown_var": "Unknown variable \"{id}\". Defined variables: {known}.",
+  "modvars.tools.define.done": "Defined variable \"{label}\" [{id}]: {kind}, {visibility}, current value {value}.",
+  "modvars.tools.set.done": "{label} [{id}]: {old} → {new}.",
+  "modvars.tools.adjust.done": "{label} [{id}]: {old} → {new} (change: {delta}).",
+  "modvars.tools.remove.done": "Removed variable \"{label}\" [{id}].",
+  "modvars.tools.failed": "Module-variable operation failed: {error}"
+}
