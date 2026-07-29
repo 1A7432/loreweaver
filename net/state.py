@@ -25,12 +25,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from core.mvu_compat import MvuManager
-
 from agent.context import AgentCtx
 from agent.services import Services
 from core.character_manager import CharacterSheet, get_hit_points
 from core.modvars import ModvarManager
+from core.mvu_compat import MvuManager
 
 _COC_SYSTEM = "CoC"
 _UNSET_CHARACTER_NAME = "default"

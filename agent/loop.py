@@ -31,13 +31,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
-from core.mvu_compat import MvuManager
-
 from agent.context import AgentCtx
 from agent.prompt_builder import build_system_prompt
 from agent.services import Services
 from agent.session_recap import maybe_refresh_session_recap
 from agent.tools import Toolset
+from core.mvu_compat import MvuManager
 from core.skills import unlocked_tools_for
 from infra.i18n import t
 from infra.llm import ChatResult, Usage

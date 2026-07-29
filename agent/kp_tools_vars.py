@@ -19,8 +19,6 @@ from __future__ import annotations
 
 import json
 
-from core.mvu_compat import MvuManager
-
 from agent.context import AgentCtx
 from agent.services import Services
 from agent.tools import tool
@@ -32,6 +30,7 @@ from core.modvars import (
     label_for,
     normalize_id,
 )
+from core.mvu_compat import MvuManager
 from infra.i18n import I18n
 
 
