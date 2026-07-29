@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
-import { FrameType, type ConnectionStatus, type UsageState, type WelcomeFrame } from "@loreweaver/protocol"
+import { FrameType, type ConnectionStatus, type UsageState, type WelcomeFrame } from "loreweaver-protocol"
 import { HeaderBar } from "./HeaderBar"
 import { themes } from "../themes"
 

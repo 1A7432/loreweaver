@@ -15,7 +15,7 @@ import {
   type ServerFrame,
   type StateFrame,
   type WelcomeFrame,
-} from "@loreweaver/protocol"
+} from "loreweaver-protocol"
 import { GameView, type GameClient } from "./GameView"
 import { ConnectScreen } from "./screens/ConnectScreen"
 import { MainMenu } from "./screens/MainMenu"

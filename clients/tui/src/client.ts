@@ -9,14 +9,14 @@ import {
   type MediaUpload,
   type PlayerRole,
   type ServerFrame,
-} from "@loreweaver/protocol"
+} from "loreweaver-protocol"
 import { IrohClient, isIrohTicket } from "./irohClient"
 import { clientInfo } from "./version"
 
 // The full client surface the TUI shell needs. This is the superset the web
 // client declares (`clients/web/src/ws.ts`): connect/join/sendInput/onMessage +
 // the optional close and the keeper-only admin_* requests. The real `WsClient`
-// from `@loreweaver/protocol` implements every method, so it is what `createClient`
+// from `loreweaver-protocol` implements every method, so it is what `createClient`
 // hands back; tests inject a mock that satisfies the same interface.
 //
 // The `admin*` methods are only exercised by keeper-only screens (Stage 3); a

@@ -1,4 +1,4 @@
-import type { UiFrame } from "@loreweaver/protocol"
+import type { UiFrame } from "loreweaver-protocol"
 import { tt } from "../i18n"
 import type { Palette } from "../themes"
 import { UiBlocksView } from "./UiBlocks"

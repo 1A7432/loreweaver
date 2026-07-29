@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { FrameType, type DiceFrame } from "@loreweaver/protocol"
+import { FrameType, type DiceFrame } from "loreweaver-protocol"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
 import { themes } from "../themes"

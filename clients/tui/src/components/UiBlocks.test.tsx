@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
-import type { UiFrame } from "@loreweaver/protocol"
+import type { UiFrame } from "loreweaver-protocol"
 import { themes } from "../themes"
 import { badgeLine, meterLine, statLine, UiBlocksView } from "./UiBlocks"
 

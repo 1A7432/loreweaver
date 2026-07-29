@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { useKeyboard } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
-import { stripControlChars, type CharacterState, type InitiativeEntry, type MediaRef, type PartyMember } from "@loreweaver/protocol"
+import { stripControlChars, type CharacterState, type InitiativeEntry, type MediaRef, type PartyMember } from "loreweaver-protocol"
 import type { AppClient } from "../client"
 import { tt } from "../i18n"
 import { getCachedMedia, renderHalfBlockPreview, type HalfBlockLine } from "../media"

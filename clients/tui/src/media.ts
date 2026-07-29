@@ -7,7 +7,7 @@ import { createHash } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { PNG } from "pngjs"
 import jpeg from "jpeg-js"
-import { stripControlChars, type MediaPayload, type MediaRef } from "@loreweaver/protocol"
+import { stripControlChars, type MediaPayload, type MediaRef } from "loreweaver-protocol"
 import type { AppClient } from "./client"
 import { tt } from "./i18n"
 

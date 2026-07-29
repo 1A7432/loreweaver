@@ -9,7 +9,7 @@ import {
   type StateFrame,
   type TurnStatusFrame,
   type WelcomeFrame,
-} from "@loreweaver/protocol"
+} from "loreweaver-protocol"
 import { AudioController } from "./audio"
 import { createClient, type AppClient } from "./client"
 import { forgetServer, type SavedServer } from "./connectMemory"

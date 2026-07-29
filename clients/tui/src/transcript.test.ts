@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp, readFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { FrameType } from "@loreweaver/protocol"
+import { FrameType } from "loreweaver-protocol"
 import type { LogFrame } from "./components/NarrativeLog"
 import {
   framesToTranscript,

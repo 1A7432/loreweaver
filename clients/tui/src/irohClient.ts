@@ -24,7 +24,7 @@ import {
   type MediaUpload,
   type PlayerRole,
   type ServerFrame,
-} from "@loreweaver/protocol"
+} from "loreweaver-protocol"
 import type { AppClient } from "./client"
 
 // The ALPN + newline framing MUST match net/iroh_server.py. A QUIC bidi stream is a raw byte
@@ -87,7 +87,7 @@ export interface IrohClientOptions {
  * The p2p transport, behind the same `AppClient` contract as `WsClient`. `@number0/iroh` is a
  * native (napi) module, imported DYNAMICALLY in `dial()` — the browser web client never loads
  * this file, and a WS-only run never pulls iroh into memory. Frames are newline-JSON over one
- * long-lived `openBi` stream, dispatched with the shared `@loreweaver/protocol` validators.
+ * long-lived `openBi` stream, dispatched with the shared `loreweaver-protocol` validators.
  *
  * Reconnect parity with `WsClient` (clients/protocol/src/client.ts): `lastJoin` is re-sent on
  * every successful (re)dial; an unexpected end of the read loop (not a manual `close()`)

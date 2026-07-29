@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { useKeyboard } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
-import { stripControlChars, type StateFrame, type WelcomeFrame } from "@loreweaver/protocol"
+import { stripControlChars, type StateFrame, type WelcomeFrame } from "loreweaver-protocol"
 import { StatusBar } from "../components/StatusBar"
 import { tt, type TuiLocale } from "../i18n"
 import { themeOrder, type Palette, type ThemeName } from "../themes"

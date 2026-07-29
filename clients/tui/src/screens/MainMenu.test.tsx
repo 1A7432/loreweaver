@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
-import { FrameType, type StateFrame, type WelcomeFrame } from "@loreweaver/protocol"
+import { FrameType, type StateFrame, type WelcomeFrame } from "loreweaver-protocol"
 import { MainMenu, type MainMenuProps } from "./MainMenu"
 import { themes } from "../themes"
 

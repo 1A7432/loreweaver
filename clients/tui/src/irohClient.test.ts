@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { FrameType } from "@loreweaver/protocol"
+import { FrameType } from "loreweaver-protocol"
 import { IrohClient, isIrohTicket, type LoadIroh } from "./irohClient"
 
 // The transport picker (clients/tui/src/client.ts) routes on this: a ws(s):// URL keeps the

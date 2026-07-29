@@ -7,7 +7,7 @@ import {
   type UiFrame,
   type UiMeterBlock,
   type UiStatBlock,
-} from "@loreweaver/protocol"
+} from "loreweaver-protocol"
 import { tt } from "../i18n"
 import type { Palette } from "../themes"
 import { bar } from "./CharacterPanel"

@@ -13,7 +13,7 @@
 
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { stripControlChars } from "@loreweaver/protocol"
+import { stripControlChars } from "loreweaver-protocol"
 import type { LogFrame } from "./components/NarrativeLog"
 import { badgeLine, meterLine, statLine } from "./components/UiBlocks"
 import { defaultLoreweaverHome, type EnvLike } from "./localPaths"

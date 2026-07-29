@@ -15,7 +15,7 @@ import {
   type TurnStatusFrame,
   type UiFrame,
   type WelcomeFrame,
-} from "@loreweaver/protocol"
+} from "loreweaver-protocol"
 import { HeaderBar } from "./components/HeaderBar"
 import { lastChoicesFrameIndex, NarrativeLog, type LogFrame } from "./components/NarrativeLog"
 import { PartyRoster } from "./components/PartyRoster"

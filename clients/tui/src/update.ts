@@ -5,7 +5,7 @@
 // saved invite key, and if the server advertises the "update" feature (operator opted in
 // AND we are a keeper), send `admin_update_server` and wait for its reply. The server then
 // runs its OWN configured command and re-execs — we never hand it anything to run.
-import { FrameType, type ServerFrame } from "@loreweaver/protocol"
+import { FrameType, type ServerFrame } from "loreweaver-protocol"
 import type { AppClient } from "./client"
 
 const INSTALL_SH = "https://github.com/1A7432/loreweaver/releases/latest/download/install.sh"

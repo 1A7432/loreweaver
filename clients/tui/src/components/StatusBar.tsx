@@ -1,4 +1,4 @@
-import { stripControlChars, type WelcomeFrame } from "@loreweaver/protocol"
+import { stripControlChars, type WelcomeFrame } from "loreweaver-protocol"
 import { tt } from "../i18n"
 import type { Palette, ThemeName } from "../themes"
 

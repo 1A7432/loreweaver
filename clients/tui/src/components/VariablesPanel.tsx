@@ -1,4 +1,4 @@
-import { stripControlChars, type ModuleVariable } from "@loreweaver/protocol"
+import { stripControlChars, type ModuleVariable } from "loreweaver-protocol"
 import { tt } from "../i18n"
 import type { Palette } from "../themes"
 import { bar } from "./CharacterPanel"

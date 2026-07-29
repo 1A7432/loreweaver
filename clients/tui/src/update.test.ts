@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { FrameType, type ServerFrame } from "@loreweaver/protocol"
+import { FrameType, type ServerFrame } from "loreweaver-protocol"
 import type { AppClient } from "./client"
 import { clientUpdateCommand, triggerServerUpdate } from "./update"
 

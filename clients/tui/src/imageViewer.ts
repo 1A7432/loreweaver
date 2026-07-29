@@ -1,5 +1,5 @@
 import { PNG } from "pngjs"
-import type { MediaRef } from "@loreweaver/protocol"
+import type { MediaRef } from "loreweaver-protocol"
 import { decodeImage, getCachedMedia, openMedia, renderHalfBlockPreview, type HalfBlockLine } from "./media"
 import { encodeSixel, resizeRgbaArea } from "./sixel"
 import type { AppClient } from "./client"

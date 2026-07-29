@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
-import { FrameType, type ServerFrame, type WelcomeFrame } from "@loreweaver/protocol"
+import { FrameType, type ServerFrame, type WelcomeFrame } from "loreweaver-protocol"
 import App, { type AppClient, type AppPrefill } from "./App"
 import type { SavedServer } from "./connectMemory"
 import type { ClipboardRenderer } from "./copy"

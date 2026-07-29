@@ -1,4 +1,4 @@
-# @loreweaver/protocol
+# loreweaver-protocol
 
 Typed frames and a reconnecting WebSocket client for the open, versioned wire
 protocol of [Loreweaver](https://github.com/1A7432/loreweaver) — a self-hosted
@@ -9,7 +9,7 @@ protocol version (currently **v1.7**); the protocol document itself lives at
 ## Install
 
 ```sh
-npm install @loreweaver/protocol   # or: bun add @loreweaver/protocol
+npm install loreweaver-protocol   # or: bun add loreweaver-protocol
 ```
 
 ## What you get
@@ -28,7 +28,7 @@ npm install @loreweaver/protocol   # or: bun add @loreweaver/protocol
 ## Usage
 
 ```ts
-import { FrameType, PROTOCOL_VERSION, WsClient } from "@loreweaver/protocol"
+import { FrameType, PROTOCOL_VERSION, WsClient } from "loreweaver-protocol"
 
 const client = new WsClient()
 await client.connect("ws://127.0.0.1:8787/")

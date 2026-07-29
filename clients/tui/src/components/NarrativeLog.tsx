@@ -9,7 +9,7 @@ import {
   type NarrativeFrame,
   type SystemFrame,
   type UiFrame,
-} from "@loreweaver/protocol"
+} from "loreweaver-protocol"
 import type { AppClient } from "../client"
 import { tt } from "../i18n"
 import { getCachedMedia, halfBlockPreviewSize, mediaPlaceholder, renderHalfBlockPreview, type HalfBlockLine } from "../media"

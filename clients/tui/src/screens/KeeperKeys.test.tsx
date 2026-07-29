@@ -7,7 +7,7 @@ import {
   type PlayerRole,
   type ServerFrame,
   type WelcomeFrame,
-} from "@loreweaver/protocol"
+} from "loreweaver-protocol"
 import App, { type AppClient } from "../App"
 
 // Same MockClient shape as App.test.tsx, extended so the keeper admin_* methods are

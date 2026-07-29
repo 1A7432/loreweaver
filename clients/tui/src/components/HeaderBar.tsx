@@ -7,7 +7,7 @@ import {
   type SceneState,
   type UsageState,
   type WelcomeFrame,
-} from "@loreweaver/protocol"
+} from "loreweaver-protocol"
 import { tt } from "../i18n"
 import { headerVisibility } from "../layout"
 import type { Palette } from "../themes"

@@ -10,7 +10,7 @@ import {
   type AudioLibraryItemFrame,
   type AudioStateFrame,
   type MediaRef,
-} from "@loreweaver/protocol"
+} from "loreweaver-protocol"
 import type { AppClient } from "./client"
 import { extensionForMime, sha256Hex } from "./media"
 
