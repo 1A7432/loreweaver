@@ -29,6 +29,20 @@ describe("transcriptLine", () => {
     ).toBe("Liu: I search.")
   })
 
+  test("a v1.7 ui frame writes one plain line per block, options by label only", () => {
+    expect(
+      transcriptLine({
+        type: FrameType.Ui,
+        panel: "inline",
+        blocks: [
+          { kind: "badge", label: "Chapter 2" },
+          { kind: "meter", label: "Fear", value: 3, min: 0, max: 10 },
+          { kind: "choices", prompt: "Pick", options: [{ id: "a", label: "Attack", input: ".ra fight" }] },
+        ],
+      }),
+    ).toBe("[Chapter 2]\nFear ▒▒▒░░░░░░░ 3/10\nPick\n▫ Attack")
+  })
+
   test("a dice line carries target and outcome, and a targetless roll neither", () => {
     expect(
       transcriptLine({

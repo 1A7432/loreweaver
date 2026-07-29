@@ -233,6 +233,13 @@ export function App({
         setTurnStatus(frame)
         return
       }
+      if (frame.type === FrameType.Ui) {
+        // v1.7 hook UI: only the inline panel joins the shell-level scrollback (so a
+        // frame arriving while on the menu isn't lost before GameView mounts). Sidebar
+        // regions are live-view state GameView rebuilds from the turns it renders.
+        if (frame.panel === "inline") setFrames((current) => appendFrame(current, frame))
+        return
+      }
       if (frame.type === FrameType.AdminConfig && typeof frame.using_demo === "boolean") {
         // A model save hot-swaps MutableLLM immediately. Keep the menu's guided
         // demo capability in sync too, instead of leaving a stale button until

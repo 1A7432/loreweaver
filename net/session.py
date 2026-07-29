@@ -52,8 +52,9 @@ from net.room_backup import room_rows, room_vector_points
 
 logger = logging.getLogger(__name__)
 
-# v1.6 adds player-visible module variables on the state frame (core.modvars).
-_PROTOCOL_VERSION = "1.6"
+# v1.7 adds declarative hook-emitted `ui` frames (core.hooks emitUI); v1.6 added
+# player-visible module variables on the state frame (core.modvars).
+_PROTOCOL_VERSION = "1.7"
 _SERVER_BANNER = "loreweaver/1"
 
 # Hard cap on a single `input` frame's text before it reaches the LLM/history. A client-controlled
@@ -169,7 +170,7 @@ async def guided_demo_available(services: Services, chat_key: str) -> bool:
 def render_frame(event: Event) -> dict[str, Any] | None:
     """Render a normalized :class:`~gateway.hub.Event` into its JSON protocol frame.
 
-    `narrative`/`dice`/`state`/`presence`/`system`/`turn_status` map to the like-named
+    `narrative`/`dice`/`ui`/`state`/`presence`/`system`/`turn_status` map to the like-named
     frames; a `player_action` echo renders as a `narrative{speaker:"player"}`.
     """
     if event.kind == "player_action":
@@ -194,6 +195,8 @@ def render_frame(event: Event) -> dict[str, Any] | None:
         return frame
     if event.kind == "dice":
         return {"type": "dice", **event.data}
+    if event.kind == "ui":
+        return {"type": "ui", **event.data}
     if event.kind == "state":
         return dict(event.data)
     if event.kind == "panel":

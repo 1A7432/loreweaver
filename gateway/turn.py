@@ -11,7 +11,8 @@ whatever transport, receives the same fan-out via ``hub.publish``.
 The published order is fixed and matches what the M4 WS server produced:
 ``player_action`` echo -> one ``dice`` event per dice/check tool-trace entry ->
 one ``narrative`` (speaker ``npc``) per ``speak_as_npc`` entry -> the
-``narrative`` (speaker ``kp``) reply -> the room ``state`` snapshot. On a real
+``narrative`` (speaker ``kp``) reply -> one ``ui`` event per hook-emitted UI frame
+(protocol v1.7) -> the room ``state`` snapshot. On a real
 (non-command) AI-KP turn, the KP narrative is also followed by a best-effort
 call into ``gateway.director.run_director`` (M10), which lets the party's AI
 companions take an auto-paced turn (their own sub-turns fan out through this
@@ -243,6 +244,10 @@ async def run_turn(
                 if npc_event is not None:
                     await hub.publish(ctx.chat_key, npc_event)
             await hub.publish(ctx.chat_key, Event.narrative(speaker="kp", text=result.reply, fmt="markdown"))
+            # Hook-emitted declarative UI (protocol v1.7) rides right behind the
+            # narrative it annotates, before the closing `state` snapshot.
+            for ui_frame in result.ui_frames:
+                await hub.publish(ctx.chat_key, Event.ui(ui_frame))
             await record_usage_stats(
                 services.store,
                 ctx.chat_key,

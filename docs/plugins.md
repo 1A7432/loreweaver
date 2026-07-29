@@ -274,7 +274,12 @@ operator's content, the operator's box):
 - **API**: `on("turn_start"|"reply_ready"|"dice_rolled"|"variables_changed", handler)`, the
   full variable bridge (`getvar`/`setvar`/`variables`/`stat_data`, lodash as `_`), and the
   effect emitters `inject(text)` (adds a section to this turn's keeper prompt),
-  `narrate(text)` (appends to the player-visible reply), `rewriteReply(text)`, `log(text)`.
+  `narrate(text)` (appends to the player-visible reply), `rewriteReply(text)`, `log(text)`,
+  and `emitUI(blocks, opts?)` — declarative UI blocks (meter/stat/badge/text/divider/choices)
+  clients render as protocol-v1.7 `ui` frames, e.g.
+  `emitUI([{kind:"meter", label:"Fear", value:3, min:0, max:10}], {panel:"sidebar", id:"hud"})`;
+  see `docs/protocol.md` for the block schema. Emitted UI is PLAYER-VISIBLE authorial output
+  (the same trust stance as `narrate`) — never emit keeper-only secrets into it.
 - **Contract (iron rule #1)**: hooks REQUEST effects; deterministic engine code validates,
   caps, and applies them — `setvar` on a declared module variable goes through kind/bounds
   validation, everything else lands in the MVU tree. One sandboxed interpreter per turn

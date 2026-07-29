@@ -14,7 +14,10 @@ and an imported card may carry ``extensions.loreweaver_hooks``; both register ha
 Inside a handler the full template bridge is available (``getvar``/``setvar``/``incvar``/
 ``variables``/``stat_data``, lodash as ``_``) plus the effect emitters ``inject(text)``
 (turn_start: adds a section to THIS turn's keeper prompt), ``narrate(text)`` (appends to the
-player-visible reply), ``rewriteReply(text)`` (replaces it), and ``log(text)``.
+player-visible reply), ``rewriteReply(text)`` (replaces it), ``emitUI(blocks, opts?)``
+(declarative UI blocks clients render as protocol-v1.7 ``ui`` frames — player-visible
+authorial output, the same trust stance as ``narrate``; keeper secrets must never be
+emitted), and ``log(text)``.
 
 Architecture is the proven zero-callable one: snapshots are serialized INTO the QuickJS sandbox
 (which is why the hard per-eval time limit can stay armed — the binding cannot combine time
@@ -30,6 +33,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -54,10 +58,28 @@ MAX_INJECT_CHARS = 4_000
 MAX_NARRATIONS = 8
 MAX_NARRATION_CHARS = 2_000
 
+# emitUI caps (protocol v1.7 `ui` frames). Slice-then-filter like the other effect
+# buffers (`_read_texts`): extra emissions/blocks/options beyond the cap are dropped
+# from the tail, oversized strings are truncated, and a block that fails its kind's
+# schema is dropped — never fatal to the dispatch.
+MAX_UI_EMISSIONS = 8
+MAX_UI_BLOCKS = 16
+MAX_UI_OPTIONS = 12
+MAX_UI_LABEL_CHARS = 120
+MAX_UI_PROMPT_CHARS = 200
+MAX_UI_TEXT_CHARS = 2_000
+MAX_UI_ID_CHARS = 64
+MAX_UI_OPTION_INPUT_CHARS = 200
+UI_BLOCK_KINDS = frozenset({"meter", "stat", "badge", "text", "divider", "choices"})
+UI_PANELS = frozenset({"inline", "sidebar"})
+UI_BADGE_TONES = frozenset({"info", "warn", "danger"})
+UI_TEXT_STYLES = frozenset({"quote", "warning"})
+
 _HOOK_PRELUDE = r"""
 globalThis.__handlers = {};
 globalThis.__injections = [];
 globalThis.__narrations = [];
+globalThis.__ui = [];
 globalThis.__rewrite = null;
 
 function on(eventType, handler) {
@@ -68,6 +90,14 @@ function on(eventType, handler) {
 function inject(text) { globalThis.__injections.push(String(text)); }
 function narrate(text) { globalThis.__narrations.push(String(text)); }
 function rewriteReply(text) { globalThis.__rewrite = String(text); }
+function emitUI(blocks, opts) {
+    globalThis.__ui.push({
+        blocks: Array.isArray(blocks) ? blocks : [blocks],
+        panel: opts && opts.panel,
+        id: opts && opts.id,
+        replace: opts && opts.replace,
+    });
+}
 function log(text) { globalThis.__warnings.push("log: " + String(text)); }
 
 function __dispatch(eventType, payload) {
@@ -91,6 +121,118 @@ function __dispatch(eventType, payload) {
 """
 
 
+def _capped_str(value: Any, cap: int) -> str | None:
+    """`value` truncated to `cap` when it is a string, else `None` (callers drop)."""
+    return value[:cap] if isinstance(value, str) else None
+
+
+def _finite_number(value: Any) -> int | float | None:
+    """`value` when it is a real, finite number (bool excluded), else `None`."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _sanitize_ui_block(raw: Any) -> dict[str, Any] | None:
+    """One validated, whitelist-rebuilt UI block, or `None` when `raw` fails its kind's
+    schema (bad blocks drop). Required fields of the wrong type drop the block; invalid
+    OPTIONAL fields (an unknown `tone`/`style`) are stripped and the block kept."""
+    if not isinstance(raw, dict) or raw.get("kind") not in UI_BLOCK_KINDS:
+        return None
+    kind = raw["kind"]
+    if kind == "divider":
+        return {"kind": "divider"}
+    if kind == "meter":
+        label = _capped_str(raw.get("label"), MAX_UI_LABEL_CHARS)
+        value = _finite_number(raw.get("value"))
+        minimum = _finite_number(raw.get("min"))
+        maximum = _finite_number(raw.get("max"))
+        if label is None or value is None or minimum is None or maximum is None or maximum <= minimum:
+            return None
+        return {"kind": "meter", "label": label, "value": value, "min": minimum, "max": maximum}
+    if kind == "stat":
+        label = _capped_str(raw.get("label"), MAX_UI_LABEL_CHARS)
+        value: Any = raw.get("value")
+        if isinstance(value, str):
+            value = value[:MAX_UI_LABEL_CHARS]
+        elif not isinstance(value, bool):
+            value = _finite_number(value)
+        if label is None or value is None:
+            return None
+        return {"kind": "stat", "label": label, "value": value}
+    if kind == "badge":
+        label = _capped_str(raw.get("label"), MAX_UI_LABEL_CHARS)
+        if label is None:
+            return None
+        block: dict[str, Any] = {"kind": "badge", "label": label}
+        if raw.get("tone") in UI_BADGE_TONES:
+            block["tone"] = raw["tone"]
+        return block
+    if kind == "text":
+        text = _capped_str(raw.get("text"), MAX_UI_TEXT_CHARS)
+        if text is None:
+            return None
+        block = {"kind": "text", "text": text}
+        if raw.get("style") in UI_TEXT_STYLES:
+            block["style"] = raw["style"]
+        return block
+    # kind == "choices": an option missing any of id/label/input is dropped; a choices
+    # block with no valid option left renders nothing, so it drops entirely.
+    raw_options = raw.get("options")
+    if not isinstance(raw_options, list):
+        return None
+    options = []
+    for raw_option in raw_options[:MAX_UI_OPTIONS]:
+        if not isinstance(raw_option, dict):
+            continue
+        option_id = _capped_str(raw_option.get("id"), MAX_UI_ID_CHARS)
+        option_label = _capped_str(raw_option.get("label"), MAX_UI_LABEL_CHARS)
+        option_input = _capped_str(raw_option.get("input"), MAX_UI_OPTION_INPUT_CHARS)
+        if option_id and option_label and option_input:
+            options.append({"id": option_id, "label": option_label, "input": option_input})
+    if not options:
+        return None
+    block = {"kind": "choices", "options": options}
+    prompt = _capped_str(raw.get("prompt"), MAX_UI_PROMPT_CHARS)
+    if prompt:
+        block["prompt"] = prompt
+    return block
+
+
+def sanitize_ui_emissions(raw: Any) -> list[dict[str, Any]]:
+    """Validate a fire()'s buffered `emitUI()` payloads into wire-ready `ui` frame payloads.
+
+    Each returned dict is one protocol-v1.7 ``ui`` frame minus its ``type`` key:
+    ``{"blocks": [...], "panel": "inline"|"sidebar", "id"?: str, "replace"?: True}``.
+    ``panel`` defaults to ``"inline"`` (unknown values included); ``id``/``replace``
+    pass through only when a non-empty string / literally ``True``.
+    """
+    if not isinstance(raw, list):
+        return []
+    emissions: list[dict[str, Any]] = []
+    for entry in raw[:MAX_UI_EMISSIONS]:
+        if not isinstance(entry, dict) or not isinstance(entry.get("blocks"), list):
+            continue
+        blocks = [
+            block
+            for raw_block in entry["blocks"][:MAX_UI_BLOCKS]
+            if (block := _sanitize_ui_block(raw_block)) is not None
+        ]
+        if not blocks:
+            continue
+        emission: dict[str, Any] = {
+            "blocks": blocks,
+            "panel": entry.get("panel") if entry.get("panel") in UI_PANELS else "inline",
+        }
+        region_id = _capped_str(entry.get("id"), MAX_UI_ID_CHARS)
+        if region_id:
+            emission["id"] = region_id
+        if entry.get("replace") is True:
+            emission["replace"] = True
+        emissions.append(emission)
+    return emissions
+
+
 @dataclass
 class HookScript:
     """One registered script: `source_id` names where it came from (skill id / card name)."""
@@ -108,6 +250,9 @@ class HookOutcome:
     injections: list[str] = field(default_factory=list)
     narrations: list[str] = field(default_factory=list)
     rewrite: str | None = None
+    # Validated emitUI() emissions (see `sanitize_ui_emissions`) — each dict is one
+    # protocol-v1.7 `ui` wire-frame payload the caller broadcasts as-is.
+    ui_blocks: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -150,7 +295,7 @@ class HookEngine:
         try:
             self._context.eval(
                 "globalThis.__writes = []; globalThis.__injections = [];"  # i18n-exempt: JavaScript source, not UI text
-                " globalThis.__narrations = []; globalThis.__rewrite = null;"
+                " globalThis.__narrations = []; globalThis.__rewrite = null; globalThis.__ui = [];"
             )
             outcome.handlers = int(
                 self._context.eval(
@@ -165,6 +310,7 @@ class HookEngine:
             outcome.narrations = self._read_texts("__narrations", MAX_NARRATIONS, MAX_NARRATION_CHARS)
             rewrite = self._read_json("globalThis.__rewrite")
             outcome.rewrite = rewrite[:MAX_INJECT_CHARS] if isinstance(rewrite, str) else None
+            outcome.ui_blocks = sanitize_ui_emissions(self._read_json("globalThis.__ui"))
             warnings = self._read_json("globalThis.__warnings") or []
             self._context.eval("globalThis.__warnings = [];")
             outcome.warnings = [str(warning) for warning in warnings]

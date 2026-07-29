@@ -107,6 +107,34 @@ async def test_turn_start_inject_lands_in_the_system_prompt():
     assert "thirteen times" in prompt
 
 
+async def test_emit_ui_frames_collect_across_phases_in_fire_order():
+    services = _services(FakeLLM(script=[assistant_text("All quiet.")]))
+    ctx = _ctx("chat-hooks-ui")
+    await install_room_hooks(
+        services,
+        ctx.chat_key,
+        "test",
+        [
+            "on('turn_start', () => emitUI([{kind:'badge', label:'Chapter 1'}]));"
+            "on('reply_ready', () => emitUI({kind:'stat', label:'Tension', value:2},"
+            " {panel:'sidebar', id:'hud', replace:true}));"
+        ],
+    )
+
+    result = await run_kp_turn(ctx, services, Toolset(), "hello")
+
+    assert result.reply == "All quiet."
+    assert result.ui_frames == [
+        {"blocks": [{"kind": "badge", "label": "Chapter 1"}], "panel": "inline"},
+        {
+            "blocks": [{"kind": "stat", "label": "Tension", "value": 2}],
+            "panel": "sidebar",
+            "id": "hud",
+            "replace": True,
+        },
+    ]
+
+
 async def test_broken_hooks_never_break_the_turn():
     services = _services(FakeLLM(script=[assistant_text("safe")]))
     ctx = _ctx("chat-hooks-5")

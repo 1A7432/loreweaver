@@ -37,7 +37,7 @@ class Event:
     ``data``, a ``narrative`` event carries ``speaker``/``text``/``fmt``).
     """
 
-    kind: str  # "player_action" | "dice" | "narrative" | "state" | "presence" | "system" | "turn_status" | "media" | "audio"
+    kind: str  # "player_action" | "dice" | "narrative" | "state" | "presence" | "system" | "turn_status" | "media" | "audio" | "ui"
     speaker: str = ""  # narrative: "kp" | "npc" | "player" | "system"
     name: str = ""  # actor / npc / player display name
     text: str = ""  # narrative / system text
@@ -105,6 +105,12 @@ class Event:
     def audio(cls, frame: dict[str, Any]) -> Event:
         """An audio library/control/state frame. Bytes are fetched separately on demand."""
         return cls(kind="audio", data=dict(frame))
+
+    @classmethod
+    def ui(cls, frame: dict[str, Any]) -> Event:
+        """One declarative UI frame payload a room hook emitted (protocol v1.7):
+        pre-validated `blocks` + `panel` placement (see `core.hooks.sanitize_ui_emissions`)."""
+        return cls(kind="ui", data=dict(frame))
 
 
 @runtime_checkable

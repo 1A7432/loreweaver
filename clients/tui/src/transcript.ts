@@ -15,6 +15,7 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { stripControlChars } from "@loreweaver/protocol"
 import type { LogFrame } from "./components/NarrativeLog"
+import { badgeLine, meterLine, statLine } from "./components/UiBlocks"
 import { defaultLoreweaverHome, type EnvLike } from "./localPaths"
 
 /** Directory transcripts land in: `~/.loreweaver/transcripts` (honours `TRPG_HOME`). */
@@ -83,6 +84,25 @@ export function transcriptLine(frame: LogFrame): string | undefined {
   if (frame.type === "audio_control") {
     const label = frame.title || frame.name || frame.hash || frame.layer
     return stripControlChars(`[${frame.layer.toUpperCase()}] ${frame.action}${label ? ` · ${label}` : ""}`)
+  }
+  if (frame.type === "ui") {
+    // Inline v1.7 hook UI, one plain-text line per block via the same formatters
+    // NarrativeLog renders with; a choices block keeps prompt + option labels
+    // (the machine `input` payloads are UI plumbing, not story).
+    const lines = frame.blocks.map((block) => {
+      if (block.kind === "divider") return "─".repeat(24)
+      if (block.kind === "meter") return meterLine(block, 10)
+      if (block.kind === "stat") return statLine(block)
+      if (block.kind === "badge") return badgeLine(block)
+      if (block.kind === "text") return stripControlChars(block.text)
+      return [
+        block.prompt ? stripControlChars(block.prompt) : undefined,
+        ...block.options.map((option) => `▫ ${stripControlChars(option.label)}`),
+      ]
+        .filter((line): line is string => Boolean(line))
+        .join("\n")
+    })
+    return lines.join("\n")
   }
   return stripControlChars(`${speakerLabel(frame)}: ${frame.text}`)
 }

@@ -1180,3 +1180,81 @@ describe("copy affordances", () => {
     act(() => mac.renderer.destroy())
   })
 })
+
+describe("declarative ui frames (v1.7)", () => {
+  test("inline blocks join the log and sidebar regions render, latest per id winning", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame } = await renderGame(client)
+    await flush()
+
+    act(() => {
+      client.push({
+        type: FrameType.Ui,
+        panel: "inline",
+        blocks: [
+          { kind: "badge", label: "Chapter 2", tone: "warn" },
+          { kind: "meter", label: "Fear", value: 3, min: 0, max: 10 },
+          { kind: "text", text: "The bells toll.", style: "quote" },
+        ],
+      })
+      client.push({
+        type: FrameType.Ui,
+        panel: "sidebar",
+        id: "hud",
+        blocks: [{ kind: "stat", label: "Doom", value: "rising" }],
+      })
+      client.push({
+        type: FrameType.Ui,
+        panel: "sidebar",
+        id: "hud",
+        replace: true,
+        blocks: [{ kind: "stat", label: "Doom", value: "peaking" }],
+      })
+    })
+
+    const frame = await waitForFrame((text) => text.includes("[Chapter 2]") && text.includes("MODULE PANEL"))
+    expect(frame).toContain("[Chapter 2]")
+    expect(frame).toContain("Fear")
+    expect(frame).toContain("3/10")
+    expect(frame).toContain("The bells toll.")
+    // The same-id sidebar region was replaced, never stacked.
+    expect(frame).toContain("Doom: peaking")
+    expect(frame).not.toContain("Doom: rising")
+    act(() => renderer.destroy())
+  })
+
+  test("Tab focuses the latest choices select and Enter submits the option's input", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame, mockInput } = await renderGame(client)
+    await flush()
+
+    act(() => {
+      client.push({
+        type: FrameType.Ui,
+        panel: "inline",
+        blocks: [
+          {
+            kind: "choices",
+            prompt: "What do you do?",
+            options: [
+              { id: "listen", label: "Listen at the door", input: ".ra listen" },
+              { id: "open", label: "Open it", input: "I open the door" },
+            ],
+          },
+        ],
+      })
+    })
+
+    const frame = await waitForFrame((text) => text.includes("What do you do?"))
+    expect(frame).toContain("Listen at the door")
+    expect(frame).toContain("Tab: focus")
+
+    await act(async () => mockInput.pressTab())
+    await act(async () => mockInput.pressArrow("down"))
+    await act(async () => mockInput.pressEnter())
+    await flush()
+
+    expect(client.sent).toEqual(["I open the door"])
+    act(() => renderer.destroy())
+  })
+})

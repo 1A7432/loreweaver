@@ -8,14 +8,27 @@ import {
   type MediaFrame,
   type NarrativeFrame,
   type SystemFrame,
+  type UiFrame,
 } from "@loreweaver/protocol"
 import type { AppClient } from "../client"
 import { tt } from "../i18n"
 import { getCachedMedia, halfBlockPreviewSize, mediaPlaceholder, renderHalfBlockPreview, type HalfBlockLine } from "../media"
 import type { Palette } from "../themes"
 import { Spinner } from "./Spinner"
+import { UiBlocksView } from "./UiBlocks"
 
-export type LogFrame = NarrativeFrame | DiceFrame | SystemFrame | MediaFrame | AudioLibraryItemFrame | AudioControlFrame
+export type LogFrame = NarrativeFrame | DiceFrame | SystemFrame | MediaFrame | AudioLibraryItemFrame | AudioControlFrame | UiFrame
+
+/** Index of the LAST inline `ui` frame carrying a choices block — the one whose
+ * select is keyboard-interactive. Exported so GameView's Tab focus cycle and
+ * this renderer agree on exactly one live select. */
+export function lastChoicesFrameIndex(frames: LogFrame[]): number {
+  return frames.reduce(
+    (last, frame, index) =>
+      frame.type === "ui" && frame.blocks.some((block) => block.kind === "choices") ? index : last,
+    -1,
+  )
+}
 
 // Markdown rendering requires a SyntaxStyle instance; one shared instance is enough
 // since KP narrative markdown only needs basic emphasis styling.
@@ -38,6 +51,10 @@ export interface NarrativeLogProps {
   client?: AppClient
   selectedMediaHash?: string
   onSelectMedia?: (frame: MediaFrame) => void
+  // v1.7 inline hook UI: whether the latest choices select owns the keyboard
+  // (GameView's Tab cycle), and what a picked option's `input` is sent through.
+  choicesFocused?: boolean
+  onChoicePick?: (input: string) => void
 }
 
 function diceColor(frame: DiceFrame, theme: Palette): string {
@@ -77,7 +94,10 @@ export function NarrativeLog({
   client,
   selectedMediaHash,
   onSelectMedia,
+  choicesFocused = false,
+  onChoicePick,
 }: NarrativeLogProps) {
+  const activeChoicesIndex = lastChoicesFrameIndex(frames)
   return (
     <box flexDirection="column" width="100%" paddingX={1}>
       {frames.length === 0 ? (
@@ -149,6 +169,23 @@ export function NarrativeLog({
               <text key={`${frame.type}-${frame.id}-${index}`} fg={theme.accent}>
                 {stripControlChars(`[${frame.layer.toUpperCase()}] ${frame.action}${label ? ` · ${label}` : ""}`)}
               </text>
+            )
+          }
+
+          if (frame.type === "ui") {
+            return (
+              <UiBlocksView
+                key={`${frame.type}-${index}`}
+                frame={frame}
+                theme={theme}
+                locale={locale}
+                meterWidth={10}
+                interactive={
+                  onChoicePick && index === activeChoicesIndex
+                    ? { focused: choicesFocused, onPick: onChoicePick }
+                    : undefined
+                }
+              />
             )
           }
 

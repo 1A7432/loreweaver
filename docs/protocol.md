@@ -7,7 +7,7 @@ This is the open, versioned wire protocol between a loreweaver server (started v
 (deterministic core + AI Keeper) is unaffected by transport; the transport-neutral
 session logic is `net.session.SessionCore`, and this document is the language-agnostic seam.
 
-Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"1.6"`. The same
+Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"1.7"`. The same
 frames + `join` handshake ride the transport; only the carrier + its framing differ:
 
 - **Iroh** (the transport `--serve` starts) — peer-to-peer QUIC. The server
@@ -22,7 +22,7 @@ frames + `join` handshake ride the transport; only the carrier + its framing dif
 
 Both carriers drive the same `SessionCore`/`RoomHub`.
 
-Versioning is additive: `"1.6"` adds the optional `state.variables` list (deterministic
+Versioning is additive: `"1.7"` adds the declarative hook-emitted `ui` frame; `"1.6"` adds the optional `state.variables` list (deterministic
 module variables — the player-visible subset only); `"1.5"` adds room-wide AI-KP turn status; `"1.4"` adds image-generation config plus avatar binding; `"1.3"` adds room audio library/control frames; `"1.2"` adds media metadata frames and byte channels; `"1.1"` added the keeper-gated `admin_*` frames
 (see "Admin frames" below). A client that only understands `"1"` keeps working
 unchanged — it never sends `admin_*` frames, ignores server frame types it does not
@@ -56,7 +56,7 @@ connections receive `error too_many_connections` before `join` is read.
 ## Server → Client
 
 - `welcome` — sent once, on a successful `join`:
-  `{type:"welcome", protocol:"1.6", features:["media","audio", "imagegen"?, "demo"?, "update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
+  `{type:"welcome", protocol:"1.7", features:["media","audio", "imagegen"?, "demo"?, "update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
   `version` is the server's own release version (compare it to the client's to detect a mismatch). The `"update"` feature appears only for a keeper on a server whose operator configured a self-update command, and gates the `admin_update_server` control.
   `demo` means the server is using its offline sample Keeper, vector support is
   enabled, and this specific Keeper room was empty when the server checked it.
@@ -89,6 +89,28 @@ connections receive `error too_many_connections` before `join` is read.
 - `dice` — one dice roll/check, rendered client-side and color-coded by
   `rank` (`-2`..`+4`); NEVER carries keeper secrets:
   `{type:"dice", actor:string, kind:"roll"|"check"|"sanity"|"opposed"|"init", expr:string, rolls:number[], total:number, target?:number, rank?:int, level?:string, success?:boolean}`
+- `ui` (v1.7, additive) — declarative module UI emitted by the room's event hooks
+  (`emitUI(blocks, opts?)` in a skill's / card's `hooks.js` — see `docs/plugins.md`),
+  broadcast right after the KP `narrative` it annotates and before the `state`
+  snapshot. Blocks are whitelisted, validated and size-capped server-side
+  (`core.hooks`), so clients may render them as-is. The content is PLAYER-VISIBLE
+  authorial output on the same trust stance as narration: hooks must never emit
+  keeper-only secrets into it, and the engine never routes keeper tool results into
+  this frame. Not replayed on join — a hook that wants a persistent panel simply
+  re-emits it each turn:
+  `{type:"ui", blocks:[UiBlock], panel:"inline"|"sidebar", id?:string, replace?:boolean}`
+  `UiBlock = {kind:"meter", label:string, value:number, min:number, max:number}`
+  `| {kind:"stat", label:string, value:number|string|boolean}`
+  `| {kind:"badge", label:string, tone?:"info"|"warn"|"danger"}`
+  `| {kind:"text", text:string, style?:"quote"|"warning"}`
+  `| {kind:"divider"}`
+  `| {kind:"choices", prompt?:string, options:[{id:string,label:string,input:string}]}`
+  `panel:"inline"` renders into the narrative stream; `"sidebar"` into a persistent
+  panel region. `id` names a UI region: a later sidebar frame with the same `id`
+  replaces that region's content, and an inline frame with `replace:true` MAY update
+  the prior inline frame with the same `id` in place (a client without in-place
+  updates simply appends). Picking a `choices` option sends that option's `input`
+  back verbatim as a NORMAL `input` frame — no new client→server frame type exists.
 - `state` — a panel snapshot, sent on `join` and after every turn:
   `{type:"state", character?:{name,system,hp,hpmax,mp,mpmax,san,sanmax,attributes:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,hp?:int,hpMax?:int,san?:int,sanMax?:int,mp?:int,mpMax?:int,ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, usage?:{context_tokens:int,context_window:int,input_tokens:int,output_tokens:int,cache_hit_tokens:int,cache_miss_tokens:int}, variables?:[{id:string,label:string,kind:"number"|"bool"|"text"|"enum",value:number|boolean|string,min?:int,max?:int}], reset?:boolean}`
   `variables` (v1.6, additive/optional — omitted when the room has none) is the room's
@@ -144,9 +166,12 @@ On an `input` frame from a client in room `R`, the server:
    Raw keeper-only tool results are never copied directly into this frame, but
    the main Keeper model has seen them and could restate them; that behavioral
    risk is measured separately by the live-model red-line eval.
-8. After the AI-KP branch (including error cleanup), broadcasts
+8. Broadcasts one `ui` frame per emission the turn's event hooks buffered via
+   `emitUI` (v1.7, additive) — already validated and capped server-side; rooms
+   with no hooks never see this frame.
+9. After the AI-KP branch (including error cleanup), broadcasts
    `turn_status{status:"idle"}`. Command replies do not emit turn status.
-9. Rebuilds and broadcasts a `state` frame (`net.state.build_room_state`).
+10. Rebuilds and broadcasts a `state` frame (`net.state.build_room_state`).
 
 Multiple clients whose keys map to the same room share one AI-KP session;
 every frame described above as "broadcast" goes to every member currently

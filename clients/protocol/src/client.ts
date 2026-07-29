@@ -105,6 +105,7 @@ const serverFrameValidators: Record<string, (f: Record<string, unknown>) => bool
   [FrameType.AudioState]: (f) => isArr(f.layers),
   [FrameType.Narrative]: (f) => isStr(f.id) && isStr(f.speaker) && isStr(f.text),
   [FrameType.Dice]: (f) => isStr(f.actor) && isStr(f.expr) && isNum(f.total),
+  [FrameType.Ui]: (f) => isArr(f.blocks) && isStr(f.panel),
   [FrameType.State]: (f) => isArr(f.party) && isArr(f.initiative) && isNum(f.online),
   [FrameType.Presence]: (f) => isArr(f.players) && isNum(f.online),
   [FrameType.System]: (f) => isStr(f.level) && isStr(f.text),

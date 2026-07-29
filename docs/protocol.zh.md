@@ -4,14 +4,14 @@
 
 这是 loreweaver 服务器（通过 `python -m app --serve` 启动）与 OpenTUI 终端客户端之间开放、版本化的 wire protocol。引擎本身（确定性核心 + AI Keeper）不受传输方式影响；传输中立的会话逻辑位于 `net.session.SessionCore`，本文档是与语言无关的接口定义。
 
-控制流使用 `{"type": ...}` 形状的 JSON 帧，协议版本为 `"1.6"`。同一套帧与 `join` 握手可搭载于两种 carrier：
+控制流使用 `{"type": ...}` 形状的 JSON 帧，协议版本为 `"1.7"`。同一套帧与 `join` 握手可搭载于两种 carrier：
 
 - **Iroh** 是 `--serve` 实际启动的默认传输：点对点 QUIC，服务端打印可分享 ticket，不需要域名、证书或端口转发。控制帧是在长连接双向流上的 newline-delimited JSON；媒体字节使用同一连接上的额外双向流。
 - **WebSocket**（`net.tui_server`）只保留作离线测试/loopback carrier，不是 `--serve` 选项。控制帧是文本消息，媒体字节是二进制消息。
 
 两种 carrier 都驱动同一个 `SessionCore` / `RoomHub`。
 
-版本控制是递增式的：`"1.6"` 新增可选的 `state.variables` 列表（确定性模块变量——仅玩家可见子集）；`"1.5"` 新增房间级 AI-KP 回合状态；`"1.4"` 新增图像生成配置与头像绑定；`"1.3"` 新增房间音频库/播放控制帧；`"1.2"` 新增媒体元数据帧和字节通道；`"1.1"` 新增 Keeper 门控的 `admin_*` 帧（见下文"Admin frames"部分）。只理解 `"1"` 的客户端保持正常工作——它永远不会发送新帧、会忽略无法识别的服务端帧类型，并应将 `welcome` 的 `protocol` 字段视为不透明字符串（接受任何 `"1.x"`）。
+版本控制是递增式的：`"1.7"` 新增钩子发射的声明式 `ui` 帧；`"1.6"` 新增可选的 `state.variables` 列表（确定性模块变量——仅玩家可见子集）；`"1.5"` 新增房间级 AI-KP 回合状态；`"1.4"` 新增图像生成配置与头像绑定；`"1.3"` 新增房间音频库/播放控制帧；`"1.2"` 新增媒体元数据帧和字节通道；`"1.1"` 新增 Keeper 门控的 `admin_*` 帧（见下文"Admin frames"部分）。只理解 `"1"` 的客户端保持正常工作——它永远不会发送新帧、会忽略无法识别的服务端帧类型，并应将 `welcome` 的 `protocol` 字段视为不透明字符串（接受任何 `"1.x"`）。
 
 客户端发送的第一帧 MUST 是 `join`。服务器回复 `welcome` 或 `error`，错误时关闭连接。如果在 join 握手超时内未到达（`TRPG_TUI__JOIN_TIMEOUT`，默认 10 秒），服务器将用 `error join_timeout` 关闭连接，而不是无限等待。离线 WebSocket 测试 carrier 另外支持 `TRPG_TUI__MAX_CONNECTIONS` 并发上限；超额测试连接会在读取 `join` 前收到 `error too_many_connections`。
 
@@ -32,7 +32,7 @@
 ## Server → Client
 
 - `welcome` — 成功 `join` 时发送一次：
-  `{type:"welcome", protocol:"1.6", features:["media","audio","imagegen"?,"demo"?,"update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
+  `{type:"welcome", protocol:"1.7", features:["media","audio","imagegen"?,"demo"?,"update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
   `version` 是服务端自身的发布版本(与客户端对比可发现版本不一致)。`"update"` 特性仅在守秘人连接且服务端运维配置了自更新命令时出现，用于门控 `admin_update_server`。
   `demo` 表示服务端正在使用离线示例 Keeper、向量功能已启用，且本次检查时这个守秘人房间为空。服务端会在房间回合锁内再次检查，过期 flag 不会覆盖战役状态；客户端收到 `admin_config{using_demo:false}`（例如从模型页保存后）会立即移除入口，否则重连时重新计算，过期操作也会被服务端拒绝。
 - `error` — 本地化的故障通知；`bad_key`、`join_timeout` 和 `too_many_connections` 关闭连接（它们仅在 `join` 握手期间或之前发生），其他不关闭：
@@ -55,6 +55,15 @@
   流式传输是多个帧共享同一 `id` 且 `stream:true`，以 `done:true` 的帧终止；非流式回复只是单个帧，两个字段都未设置。
 - `dice` — 一次掷骰子/检定，由客户端渲染并按 `rank` 着色（`-2`..`+4`）；NEVER 携带 Keeper 秘密：
   `{type:"dice", actor:string, kind:"roll"|"check"|"sanity"|"opposed"|"init", expr:string, rolls:number[], total:number, target?:number, rank?:int, level?:string, success?:boolean}`
+- `ui`（v1.7，递增式）— 房间事件钩子发出的声明式模组 UI（技能/卡片 `hooks.js` 里的 `emitUI(blocks, opts?)`，见 `docs/plugins.md`），在其注解的 KP `narrative` 之后、`state` 快照之前广播。块在服务端（`core.hooks`）经过白名单、校验与大小封顶，客户端可直接渲染。内容是玩家可见的作者产出，信任层级与叙事相同：钩子绝不能把仅守秘人可见的秘密 emit 进来，引擎也从不把守秘人工具结果写入此帧。不参与加入时的历史回放——想要常驻面板的钩子每回合重新发射即可：
+  `{type:"ui", blocks:[UiBlock], panel:"inline"|"sidebar", id?:string, replace?:boolean}`
+  `UiBlock = {kind:"meter", label:string, value:number, min:number, max:number}`
+  `| {kind:"stat", label:string, value:number|string|boolean}`
+  `| {kind:"badge", label:string, tone?:"info"|"warn"|"danger"}`
+  `| {kind:"text", text:string, style?:"quote"|"warning"}`
+  `| {kind:"divider"}`
+  `| {kind:"choices", prompt?:string, options:[{id:string,label:string,input:string}]}`
+  `panel:"inline"` 渲染进叙事流，`"sidebar"` 渲染进常驻侧栏区域。`id` 命名一个 UI 区域：后到的同 `id` sidebar 帧替换该区域内容；带 `replace:true` 的 inline 帧可以就地更新前一个同 `id` 的 inline 帧（不支持就地更新的客户端顺序追加即可）。玩家点选 `choices` 选项时，客户端把该选项的 `input` 原样作为普通 `input` 帧发回——不新增客户端→服务端帧类型。
 - `state` — 一个面板快照，在 `join` 时和每回合后发送：
   `{type:"state", character?:{name,system,hp,hpmax,mp,mpmax,san,sanmax,attributes:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,hp?:int,hpMax?:int,san?:int,sanMax?:int,mp?:int,mpMax?:int,ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, variables?:[{id:string,label:string,kind:"number"|"bool"|"text"|"enum",value:number|boolean|string,min?:int,max?:int}], reset?:boolean}`
   `variables`（v1.6，递增式/可选——房间没有时整个字段省略）是房间的确定性模块变量，且只含玩家可见子集：仅守秘人可见的变量在引擎内部（`core.modvars.player_entries`）就被过滤，永远不会到达任何传输层。条目按定义顺序到达（按原样渲染，不要排序）；`label` 已按房间语言本地化；`min`/`max` 只出现在有界的 `number` 变量上（客户端可将其渲染为进度条）。导入的 SillyTavern MVU 卡片变量共用同一列表：`id` 带 `mvu.` 前缀、点分路径作为 `label`（仅标量叶子，服务端封顶）——不新增帧类型，客户端无需改动。
@@ -78,8 +87,9 @@
 5. 对于每个 `tool_trace` 条目，如果是掷骰子/检定工具（`roll_dice`、`skill_check`、`sanity_check`、`opposed_check`、`initiative_tracker`），从其结果中解析并广播一个 `dice` 帧。
 6. 对于每个名为 `speak_as_npc` 的 `tool_trace` 条目，在最终 KP 回复之前广播 `narrative{speaker:"npc", name, text, format:"markdown"}`。`name` 是工具调用的 `npc` 参数，`text` 是玩家安全的工具结果。
 7. 将回复广播为 `narrative{text: reply}`——命令回复为 `speaker:"system"`，AI Keeper 回复为 `speaker:"kp", format:"markdown"`。回复已通过所配置的输出词表；守秘人专用工具的原始结果不会被代码直接复制到此帧，但主 Keeper 模型看过这些结果，仍可能自行复述，因此另由真实模型红线评测测量这种行为风险。
-8. AI-KP 分支结束时（包括错误清理）广播 `turn_status{status:"idle"}`；命令回复不发送回合状态。
-9. 重新构建并广播一个 `state` 帧（`net.state.build_room_state`）。
+8. 对回合内事件钩子经 `emitUI` 缓冲的每条发射，各广播一个 `ui` 帧（v1.7，递增式）——服务端已完成校验与封顶；没有钩子的房间完全不会出现此帧。
+9. AI-KP 分支结束时（包括错误清理）广播 `turn_status{status:"idle"}`；命令回复不发送回合状态。
+10. 重新构建并广播一个 `state` 帧（`net.state.build_room_state`）。
 
 密钥映射到同一房间的多个客户端共享一个 AI-KP 会话；上述每个描述为"广播"的帧都发送给当前连接到该房间的每个成员。
 

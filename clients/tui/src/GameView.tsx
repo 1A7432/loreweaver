@@ -13,13 +13,15 @@ import {
   type ServerFrame,
   type StateFrame,
   type TurnStatusFrame,
+  type UiFrame,
   type WelcomeFrame,
 } from "@loreweaver/protocol"
 import { HeaderBar } from "./components/HeaderBar"
-import { NarrativeLog, type LogFrame } from "./components/NarrativeLog"
+import { lastChoicesFrameIndex, NarrativeLog, type LogFrame } from "./components/NarrativeLog"
 import { PartyRoster } from "./components/PartyRoster"
 import { ScenePanel } from "./components/ScenePanel"
 import { StatusBar } from "./components/StatusBar"
+import { UiPanel } from "./components/UiPanel"
 import { VariablesPanel } from "./components/VariablesPanel"
 import { tt } from "./i18n"
 import { viewImage, type RendererLike } from "./imageViewer"
@@ -141,6 +143,9 @@ export function GameView({
     initialState ?? { type: FrameType.State, party: [], initiative: [], online: 0 },
   )
   const [frames, setFrames] = useState<LogFrame[]>(() => initialFrames ?? [])
+  // v1.7 sidebar hook-UI regions, keyed by the frame's `id` ("" when absent): the
+  // latest frame per key wins, so a region a hook re-emits replaces itself.
+  const [sidebarUi, setSidebarUi] = useState<Record<string, UiFrame>>({})
   const [command, setCommand] = useState("")
   const [inputError, setInputError] = useState<string>()
   const [history, setHistory] = useState<string[]>([])
@@ -159,6 +164,9 @@ export function GameView({
   // `focused` prop below is kept the logical opposite so Enter is never
   // handled by both at once.
   const [rosterFocused, setRosterFocused] = useState(false)
+  // Whether the latest inline choices select (v1.7 ui frame) owns the keyboard —
+  // third stop of the Tab cycle; the chat input's `focused` is the complement.
+  const [choicesFocused, setChoicesFocused] = useState(false)
   const [narrowSidebarOpen, setNarrowSidebarOpen] = useState(false)
   const scrollRef = useRef<ScrollBoxRenderable>(null)
   const inputRef = useRef<InputRenderable>(null)
@@ -166,6 +174,7 @@ export function GameView({
   const diceTimeline = useTimeline({ duration: 360, loop: false, autoplay: false })
   const showSidebar = !narrow || narrowSidebarOpen
   const inputState = inputLimitState(command)
+  const hasChoices = lastChoicesFrameIndex(frames) !== -1
   const roomBusy = turnStatus?.status === "busy"
   const workingLabel = roomBusy
     ? tt(locale, "log.workingFor", { actor: stripControlChars(turnStatus.actor) })
@@ -174,6 +183,12 @@ export function GameView({
   useEffect(() => {
     if (!showSidebar) setRosterFocused(false)
   }, [showSidebar])
+
+  // When the last choices frame scrolls out of the capped log (or the log is
+  // cleared), focus must fall back to the chat input, never stay stranded.
+  useEffect(() => {
+    if (!hasChoices) setChoicesFocused(false)
+  }, [hasChoices])
 
   useEffect(() => {
     if (!roomBusy) return
@@ -192,8 +207,12 @@ export function GameView({
       }
       if (frame.type === FrameType.State) {
         // A reset-flagged state frame follows a campaign wipe: clear the live chat log
-        // so the wiped story doesn't linger next to the fresh (empty) panel.
-        if (frame.reset) setFrames([])
+        // (and the wiped campaign's sidebar UI regions) so the wiped story doesn't
+        // linger next to the fresh (empty) panel.
+        if (frame.reset) {
+          setFrames([])
+          setSidebarUi({})
+        }
         setStateFrame(frame)
         setOnlineCount(frame.online)
         if (completesSubmission(frame)) setKpWorking(false)
@@ -202,6 +221,16 @@ export function GameView({
       if (frame.type === FrameType.TurnStatus) {
         setTurnStatus(frame)
         if (frame.status === "idle") setKpWorking(false)
+        return
+      }
+      if (frame.type === FrameType.Ui) {
+        // v1.7 declarative hook UI: sidebar frames replace their region (keyed by
+        // id); inline frames ride the narrative log like any other story frame.
+        if (frame.panel === "sidebar") {
+          setSidebarUi((current) => ({ ...current, [frame.id ?? ""]: frame }))
+        } else {
+          setFrames((current) => appendFrame(current, frame))
+        }
         return
       }
       if (
@@ -424,13 +453,21 @@ export function GameView({
     if (name === "f6") setNarrowSidebarOpen((value) => !value)
     if (selectedMedia && (name === "o" || name === "O")) void openSelectedMedia(true)
     if (viewerLines && (name === "escape" || name === "q" || name === "return" || name === "enter")) setViewerLines(undefined)
-    // Tab moves focus to the roster (only worth it when there's an own character
-    // to expand/collapse — otherwise Tab would blur the chat input with nothing
-    // for the roster to do with it) and always back, so focus can never get
-    // stranded off the input if a character disappears mid-session.
-    if (name === "tab" && showSidebar) {
-      if (rosterFocused) setRosterFocused(false)
-      else if (stateFrame.character) setRosterFocused(true)
+    // Tab cycles focus: chat input -> the latest inline choices select (when a
+    // v1.7 ui choices block is live) -> the roster (only when the sidebar shows
+    // an own character to expand/collapse) -> back to the input, so focus can
+    // never get stranded off the input if a stop disappears mid-session.
+    if (name === "tab") {
+      if (choicesFocused) {
+        setChoicesFocused(false)
+        if (showSidebar && stateFrame.character) setRosterFocused(true)
+      } else if (rosterFocused) {
+        setRosterFocused(false)
+      } else if (hasChoices) {
+        setChoicesFocused(true)
+      } else if (showSidebar && stateFrame.character) {
+        setRosterFocused(true)
+      }
     }
   })
 
@@ -468,6 +505,11 @@ export function GameView({
             client={client}
             selectedMediaHash={selectedMedia?.hash}
             onSelectMedia={setSelectedMedia}
+            choicesFocused={choicesFocused}
+            onChoicePick={(input) => {
+              setChoicesFocused(false)
+              submit(input)
+            }}
           />
         </scrollbox>
 
@@ -493,6 +535,7 @@ export function GameView({
               />
               {narrow ? null : <ScenePanel scene={stateFrame.scene} clock={stateFrame.clock} theme={theme} locale={locale} />}
               <VariablesPanel variables={stateFrame.variables} theme={theme} locale={locale} />
+              <UiPanel regions={Object.values(sidebarUi)} theme={theme} locale={locale} />
             </box>
           </scrollbox>
         ) : null}
@@ -508,7 +551,7 @@ export function GameView({
           minWidth={0}
           value={command}
           maxLength={CHAT_INPUT_LIMIT}
-          focused={!rosterFocused}
+          focused={!rosterFocused && !choicesFocused}
           placeholder={tt(locale, "game.placeholder")}
           onInput={(value: string) => {
             setCommand(value)

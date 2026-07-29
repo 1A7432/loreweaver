@@ -1,6 +1,6 @@
-// Bumped to "1.6" for the additive player-visible module-variables list on the state frame.
+// Bumped to "1.7" for the additive hook-emitted declarative `ui` frame.
 // `WelcomeFrame.protocol` stays a plain string so older minor clients keep accepting it.
-export const PROTOCOL_VERSION = "1.6" as const
+export const PROTOCOL_VERSION = "1.7" as const
 
 export const FrameType = {
   Join: "join",
@@ -19,6 +19,7 @@ export const FrameType = {
   Error: "error",
   Narrative: "narrative",
   Dice: "dice",
+  Ui: "ui",
   State: "state",
   Presence: "presence",
   System: "system",
@@ -261,6 +262,80 @@ export interface DiceFrame {
   rank?: number
   level?: string
   success?: boolean
+}
+
+// ---- v1.7 additive: declarative hook-emitted UI frames ---------------------
+// Server-side room hooks (a skill's / card's `hooks.js` — see docs/plugins.md) emit
+// these via `emitUI(blocks, opts?)`. The engine validates, whitelists and caps every
+// block before it reaches the wire, so clients may render them as-is. Content is
+// player-visible authorial output — the same trust stance as narration.
+
+export type UiPanel = "inline" | "sidebar"
+export type UiBadgeTone = "info" | "warn" | "danger"
+export type UiTextStyle = "quote" | "warning"
+
+export interface UiMeterBlock {
+  kind: "meter"
+  label: string
+  value: number
+  min: number
+  max: number
+}
+
+export interface UiStatBlock {
+  kind: "stat"
+  label: string
+  value: number | string | boolean
+}
+
+export interface UiBadgeBlock {
+  kind: "badge"
+  label: string
+  tone?: UiBadgeTone
+}
+
+export interface UiTextBlock {
+  kind: "text"
+  text: string
+  style?: UiTextStyle
+}
+
+export interface UiDividerBlock {
+  kind: "divider"
+}
+
+export interface UiChoiceOption {
+  id: string
+  label: string
+  // Picking this option sends `input` back verbatim as a NORMAL `input` frame —
+  // there is no dedicated client→server frame type for choices.
+  input: string
+}
+
+export interface UiChoicesBlock {
+  kind: "choices"
+  prompt?: string
+  options: UiChoiceOption[]
+}
+
+export type UiBlock =
+  | UiMeterBlock
+  | UiStatBlock
+  | UiBadgeBlock
+  | UiTextBlock
+  | UiDividerBlock
+  | UiChoicesBlock
+
+export interface UiFrame {
+  type: typeof FrameType.Ui
+  blocks: UiBlock[]
+  // "inline" renders into the narrative stream; "sidebar" into a persistent panel region.
+  panel: UiPanel
+  // Names a UI region. A later sidebar frame with the same id replaces that region's
+  // content; an inline frame with `replace:true` MAY update the prior inline frame
+  // with the same id in place (a client without in-place updates simply appends).
+  id?: string
+  replace?: boolean
 }
 
 export interface CharacterState {
@@ -693,6 +768,7 @@ export type ServerFrame =
   | AudioStateFrame
   | NarrativeFrame
   | DiceFrame
+  | UiFrame
   | StateFrame
   | PresenceFrame
   | SystemFrame

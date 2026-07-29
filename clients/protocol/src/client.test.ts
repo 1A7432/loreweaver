@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { FrameType, type ModuleVariable, type NarrativeFrame, type StateFrame } from "./types"
+import { FrameType, type ModuleVariable, type NarrativeFrame, type StateFrame, type UiBlock, type UiFrame } from "./types"
 import { packMediaMessage, unpackMediaMessage, WsClient, type WebSocketLike } from "./client"
 
 type Listener = (event: any) => void
@@ -240,6 +240,39 @@ describe("WsClient", () => {
     expect(seen).toHaveLength(2)
     expect(seen[0].variables).toEqual(variables) // definition order preserved, not sorted
     expect(seen[1].variables).toBeUndefined()
+  })
+
+  test("a v1.7 ui frame validates, dispatches, and passes its blocks through unchanged", async () => {
+    const { client, sockets } = createClient()
+    const seen: UiFrame[] = []
+    client.on(FrameType.Ui, (frame) => seen.push(frame))
+
+    await client.connect("ws://example.test")
+    // One of each block kind — the whole v1.7 wire contract; `satisfies` keeps
+    // the shapes honest at compile time.
+    const blocks: UiBlock[] = [
+      { kind: "meter", label: "Fear", value: 3, min: 0, max: 10 },
+      { kind: "stat", label: "Doom", value: "rising" },
+      { kind: "badge", label: "Chapter 2", tone: "warn" },
+      { kind: "text", text: "The bells toll.", style: "quote" },
+      { kind: "divider" },
+      { kind: "choices", prompt: "What now?", options: [{ id: "run", label: "Run", input: "I run for the door" }] },
+    ]
+    sockets[0].serverSend({ type: FrameType.Ui, blocks, panel: "inline" } satisfies UiFrame)
+    sockets[0].serverSend({
+      type: FrameType.Ui,
+      blocks: [blocks[0]],
+      panel: "sidebar",
+      id: "hud",
+      replace: true,
+    } satisfies UiFrame)
+    // Malformed variants of the load-bearing fields are dropped, not dispatched.
+    sockets[0].serverSend({ type: FrameType.Ui, panel: "inline" }) // no blocks
+    sockets[0].serverSend({ type: FrameType.Ui, blocks: [] }) // no panel
+
+    expect(seen).toHaveLength(2)
+    expect(seen[0].blocks).toEqual(blocks) // block order preserved, content untouched
+    expect(seen[1]).toEqual({ type: FrameType.Ui, blocks: [blocks[0]], panel: "sidebar", id: "hud", replace: true })
   })
 
   test("room turn-status frames are additive, validated, and dispatched", async () => {

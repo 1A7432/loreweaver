@@ -8,7 +8,7 @@ import pytest
 
 pytest.importorskip("quickjs")
 
-from core.hooks import HookScript, create_hook_engine  # noqa: E402
+from core.hooks import HookScript, create_hook_engine, sanitize_ui_emissions  # noqa: E402
 
 
 def _engine(code: str, *, flat=None, tree=None, scripts=None):
@@ -85,6 +85,76 @@ def test_unknown_event_and_lodash_availability():
     engine = _engine("on('turn_start', () => narrate(_.range(3).join('-')));")
     assert engine.fire("bogus_event", {}).warnings
     assert engine.fire("turn_start", {}).narrations == ["0-1-2"]
+
+
+def test_emit_ui_validates_blocks_drops_bad_ones_and_keeps_placement():
+    engine = _engine(
+        "on('turn_start', () => emitUI(["
+        "  {kind:'meter', label:'HP', value:7, min:0, max:10},"
+        "  {kind:'divider', extra:'stripped'},"
+        "  {kind:'badge', label:'omen', tone:'sparkly'},"
+        "  {kind:'text', text:'a whisper', style:'quote'},"
+        "  {kind:'choices', prompt:'Pick', options:["
+        "    {id:'a', label:'Attack', input:'.ra fight'},"
+        "    {id:'', label:'bad', input:'x'},"
+        "    'garbage'"
+        "  ]},"
+        "  {kind:'hologram', label:'nope'},"
+        "  {kind:'meter', label:'bad', value:'seven', min:0, max:10}"
+        "], {panel:'sidebar', id:'hud', replace:true}));"
+    )
+    outcome = engine.fire("turn_start", {})
+    assert outcome.ui_blocks == [
+        {
+            "blocks": [
+                {"kind": "meter", "label": "HP", "value": 7, "min": 0, "max": 10},
+                {"kind": "divider"},
+                {"kind": "badge", "label": "omen"},  # unknown tone stripped, block kept
+                {"kind": "text", "text": "a whisper", "style": "quote"},
+                {
+                    "kind": "choices",
+                    "options": [{"id": "a", "label": "Attack", "input": ".ra fight"}],
+                    "prompt": "Pick",
+                },
+            ],
+            "panel": "sidebar",
+            "id": "hud",
+            "replace": True,
+        }
+    ]
+
+
+def test_emit_ui_caps_emissions_defaults_panel_and_isolates_per_fire():
+    engine = _engine(
+        "on('turn_start', () => {"
+        "  for (var i = 0; i < 12; i++) emitUI({kind:'badge', label:'b' + i}, {panel:'holodeck'});"
+        "});"
+    )
+    outcome = engine.fire("turn_start", {})
+    assert len(outcome.ui_blocks) == 8  # MAX_UI_EMISSIONS, tail dropped
+    assert outcome.ui_blocks[0]["blocks"] == [{"kind": "badge", "label": "b0"}]  # single block auto-wrapped
+    assert all(emission["panel"] == "inline" for emission in outcome.ui_blocks)  # unknown panel -> inline
+    assert engine.fire("reply_ready", {"reply": ""}).ui_blocks == []  # buffers reset per fire
+
+
+def test_sanitize_ui_emissions_shapes_caps_and_truncation():
+    assert sanitize_ui_emissions("nope") == []
+    assert sanitize_ui_emissions(["junk", {"blocks": "nope"}, {"blocks": [{"kind": "text"}]}]) == []
+    # A meter whose range is empty (max <= min) can't render — the block drops.
+    assert sanitize_ui_emissions([{"blocks": [{"kind": "meter", "label": "x", "value": 1, "min": 5, "max": 5}]}]) == []
+    emissions = sanitize_ui_emissions(
+        [
+            {
+                "blocks": [{"kind": "stat", "label": "y" * 500, "value": True}] * 40,
+                "id": 7,
+                "replace": "yes",
+            }
+        ]
+    )
+    assert len(emissions) == 1
+    assert len(emissions[0]["blocks"]) == 16  # MAX_UI_BLOCKS, tail dropped
+    assert emissions[0]["blocks"][0] == {"kind": "stat", "label": "y" * 120, "value": True}
+    assert emissions[0] == {"blocks": emissions[0]["blocks"], "panel": "inline"}  # bad id/replace stripped
 
 
 def test_multiple_scripts_share_the_room_but_broken_one_is_skipped():
