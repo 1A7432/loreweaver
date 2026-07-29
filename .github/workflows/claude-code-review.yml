@@ -61,10 +61,15 @@ jobs:
           # The /code-review plugin reads the PR and posts the review through `gh`. With the
           # default allowlist the run ends with permission_denials_count=1 and posts nothing
           # (green job, zero output). Kept deliberately broad -- a narrow list risks denying a
-          # different tool and reproducing the same silent failure. Safe here: this is
-          # `pull_request`, so fork PRs get no secrets and the token input is empty, and the
-          # action refuses to run at all when this file differs from the default branch.
-          claude_args: '--allowed-tools "Bash,Read,Glob,Grep,Write,Edit,TodoWrite"'
+          # different tool and reproducing the same silent failure. That prophecy came true on
+          # PR #9 (2026-07-29): the plugin now fans out review work through the `Task` tool,
+          # which this list lacked -- one denial at turn 5, review over, job green. `Task`,
+          # `Skill`, `SlashCommand` and `WebFetch` are included so the next plugin evolution
+          # has headroom. Safe here: this is `pull_request`, so fork PRs get no secrets and
+          # the token input is empty, and the action refuses to run at all when this file
+          # differs from the default branch (which also means: this fix can only be verified
+          # by a probe PR opened AFTER it lands on main).
+          claude_args: '--allowed-tools "Task,Bash,Read,Glob,Grep,Write,Edit,TodoWrite,Skill,SlashCommand,WebFetch"'
           # Always surface the review, so "clean diff" and "silently broken" stop looking
           # identical -- the failure mode that made this take four runs to diagnose.
           display_report: true
