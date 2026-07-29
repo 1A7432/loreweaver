@@ -1,23 +1,63 @@
 {
   "name": "@loreweaver/protocol",
-  "version": "0.5.0",
+  "version": "1.7.0",
+  "description": "Typed wire-protocol frames and a reconnecting WebSocket client for Loreweaver, the self-hosted AI Game Master / Keeper (protocol v1.7).",
   "type": "module",
-  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/1A7432/loreweaver.git",
+    "directory": "clients/protocol"
+  },
+  "homepage": "https://github.com/1A7432/loreweaver#readme",
+  "bugs": {
+    "url": "https://github.com/1A7432/loreweaver/issues"
+  },
+  "keywords": [
+    "loreweaver",
+    "ttrpg",
+    "ai-game-master",
+    "coc",
+    "dnd",
+    "wire-protocol",
+    "websocket"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./src/index.ts",
-      "default": "./src/index.ts"
+      "bun": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     },
     "./types": {
-      "types": "./src/types.ts",
-      "default": "./src/types.ts"
+      "bun": "./src/types.ts",
+      "types": "./dist/types.d.ts",
+      "default": "./dist/types.js"
     },
     "./client": {
-      "types": "./src/client.ts",
-      "default": "./src/client.ts"
+      "bun": "./src/client.ts",
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
     }
   },
+  "files": [
+    "dist",
+    "src",
+    "!src/*.test.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "scripts": {
-    "test": "bun test"
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "test": "bun test",
+    "prepublishOnly": "rm -rf dist && tsc -p tsconfig.build.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
   }
 }

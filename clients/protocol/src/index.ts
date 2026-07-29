@@ -1,4 +1,3 @@
-export * from "./types"
-export * from "./client"
-export * from "./sanitize"
-
+export * from "./types.js"
+export * from "./client.js"
+export * from "./sanitize.js"

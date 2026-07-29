@@ -24,7 +24,7 @@ import {
   type PlayerRole,
   type PongFrame,
   type ServerFrame,
-} from "./types"
+} from "./types.js"
 
 export interface WebSocketLike {
   readonly readyState: number
@@ -529,7 +529,7 @@ export class WsClient {
     })
   }
 
-  private sendMedia(header: Record<string, unknown>, bytes = new Uint8Array()): void {
+  private sendMedia(header: Record<string, unknown>, bytes: Uint8Array = new Uint8Array()): void {
     if (!this.socket || this.socket.readyState !== OPEN) {
       throw new Error("WebSocket is not open.")
     }
@@ -556,7 +556,7 @@ export class WsClient {
   }
 }
 
-export function packMediaMessage(header: Record<string, unknown>, body = new Uint8Array()): Uint8Array {
+export function packMediaMessage(header: Record<string, unknown>, body: Uint8Array = new Uint8Array()): Uint8Array {
   const headerBytes = new TextEncoder().encode(JSON.stringify(header))
   const out = new Uint8Array(WS_MEDIA_HEADER_BYTES + headerBytes.byteLength + body.byteLength)
   const view = new DataView(out.buffer, out.byteOffset, out.byteLength)
