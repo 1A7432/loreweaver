@@ -30,16 +30,17 @@ import mimetypes
 import re
 import shutil
 import zipfile
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
 
 import yaml
 
+from core.card_split import WorldPayloads, detect_world_payloads
 from core.charcard import MAX_CARD_FILE_BYTES, parse_card_bytes
 from core.hooks import MAX_HOOK_SOURCE_CHARS
-from core.rulepacks import parse_rulepack_text
+from core.rulepacks import load_raw_rulepack_yaml, parse_rulepack_text
 from core.skills import parse_skill_text
 from core.worldbook import MAX_IMPORT_ENTRIES
 from core.yaml_safety import safe_load_no_aliases
@@ -65,6 +66,11 @@ _SEMVER_RE = re.compile(r"^\d{1,6}\.\d{1,6}\.\d{1,6}(?:[-+][0-9A-Za-z.-]{1,32})?
 _ENGINE_VERSION_RE = re.compile(r"^\d{1,6}(?:\.\d{1,6}){0,3}$")
 _LOCALES = ("en", "zh")
 CONTENT_KINDS = ("skills", "rulepacks", "cards", "lorebooks")
+# The 拆卡 taxonomy at the pack level: a "character" card is a persona + sheet a player may
+# self-import; a "world" card is module machinery (hooks / [InitVar] / EJS) the keeper imports
+# with `.import <file> world`. Labels are enforced against real detection at build AND verify
+# (`core.card_split.detect_world_payloads`), so a manifest can't call a world card a character.
+CARD_KINDS = ("character", "world")
 _SKILL_FILES = frozenset({"SKILL.md", "hooks.js"})
 
 # Fixed zip metadata so builds are byte-reproducible: the zip epoch timestamp and a
@@ -93,6 +99,16 @@ class PackAsset:
 
 
 @dataclass(frozen=True)
+class PackCard:
+    """One bundled card's declaration: its path, its 拆卡 kind, and optional author notes
+    (localized table rules / usage guide, shown at install)."""
+
+    path: str
+    kind: str = "character"
+    notes: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class PackTrust:
     """The auto-generated composition summary shown before install. Hand-written
     trust blocks are rejected at build time — this is disclosure, not marketing."""
@@ -105,11 +121,13 @@ class PackTrust:
     asset_bytes: int = 0
     has_hooks: bool = False
     has_ejs: bool = False
+    world_cards: int = 0
 
 
 @dataclass(frozen=True)
 class PackManifest:
-    """A parsed ``pack.yaml``. ``contents`` maps kind -> relative file/dir paths."""
+    """A parsed ``pack.yaml``. ``contents`` maps kind -> relative file/dir paths;
+    ``card_entries`` carries the per-card declarations aligned with ``contents["cards"]``."""
 
     id: str
     version: str
@@ -121,9 +139,16 @@ class PackManifest:
     contents: dict[str, tuple[str, ...]]
     assets: tuple[PackAsset, ...]
     trust: PackTrust | None = None
+    card_entries: tuple[PackCard, ...] = ()
 
     def display_name(self, locale: str) -> str:
         return self.name.get(locale) or self.name.get("en") or next(iter(self.name.values()), self.id)
+
+    def card_kind(self, path: str) -> str:
+        for card in self.card_entries:
+            if card.path == path:
+                return card.kind
+        return "character"
 
 
 @dataclass(frozen=True)
@@ -145,6 +170,7 @@ class InstallReport:
     assets: int = 0
     asset_bytes: int = 0
     shadowed: list[str] = field(default_factory=list)  # ids a same-named built-in keeps winning over
+    world_cards: list[str] = field(default_factory=list)  # subset of `cards` the keeper world-imports
 
 
 # --- versions ---------------------------------------------------------------
@@ -201,6 +227,24 @@ def _relative_content_path(raw: Any, *, kind: str) -> str:
     return str(_validated_entry_path(raw.strip()))
 
 
+def _parse_card_entry(raw: Any) -> PackCard:
+    """One ``contents.cards`` entry: a plain path string (a character card), or a
+    ``{path, kind, notes}`` mapping for world cards / cards with install notes."""
+    if isinstance(raw, str):
+        return PackCard(path=_relative_content_path(raw, kind="cards"))
+    if not isinstance(raw, dict):
+        raise PackError("contents.cards entries must be path strings or {path, kind, notes} mappings")
+    unknown = set(raw) - {"path", "kind", "notes"}
+    if unknown:
+        raise PackError(f"unknown card entry keys: {sorted(unknown)}")
+    path = _relative_content_path(raw.get("path"), kind="cards")
+    kind = raw.get("kind", "character")
+    if kind not in CARD_KINDS:
+        raise PackError(f"card {path}: kind must be one of {list(CARD_KINDS)}")
+    notes = _localized_field(raw["notes"], f"cards[{path}].notes") if raw.get("notes") is not None else {}
+    return PackCard(path=path, kind=str(kind), notes=notes)
+
+
 def parse_manifest_text(text: str, *, expect_trust: bool) -> PackManifest:
     """Parse manifest YAML. ``expect_trust=False`` is the AUTHOR side (a source
     ``pack.yaml``, where a hand-written ``trust`` block is rejected); ``True`` is the
@@ -249,13 +293,18 @@ def parse_manifest_text(text: str, *, expect_trust: bool) -> PackManifest:
     if unknown_kinds:
         raise PackError(f"unknown contents kinds: {sorted(unknown_kinds)}")
     contents: dict[str, tuple[str, ...]] = {}
+    card_entries: tuple[PackCard, ...] = ()
     for kind in CONTENT_KINDS:
         entries = contents_raw.get(kind) or []
         if not isinstance(entries, list):
             raise PackError(f"contents.{kind} must be a list")
         if len(entries) > MAX_CONTENT_FILES_PER_KIND:
             raise PackError(f"contents.{kind} lists too many files (max {MAX_CONTENT_FILES_PER_KIND})")
-        parsed = tuple(_relative_content_path(entry, kind=kind) for entry in entries)
+        if kind == "cards":
+            card_entries = tuple(_parse_card_entry(entry) for entry in entries)
+            parsed = tuple(card.path for card in card_entries)
+        else:
+            parsed = tuple(_relative_content_path(entry, kind=kind) for entry in entries)
         if len(set(parsed)) != len(parsed):
             raise PackError(f"contents.{kind} lists a duplicate path")
         contents[kind] = parsed
@@ -315,6 +364,7 @@ def parse_manifest_text(text: str, *, expect_trust: bool) -> PackManifest:
                 asset_bytes=int(trust_raw.get("asset_bytes", 0)),
                 has_hooks=bool(trust_raw.get("has_hooks", False)),
                 has_ejs=bool(trust_raw.get("has_ejs", False)),
+                world_cards=int(trust_raw.get("world_cards", 0)),
             )
         except (TypeError, ValueError) as exc:
             raise PackError(f"invalid trust block: {exc}") from exc
@@ -330,6 +380,7 @@ def parse_manifest_text(text: str, *, expect_trust: bool) -> PackManifest:
         contents=contents,
         assets=tuple(assets),
         trust=trust,
+        card_entries=card_entries,
     )
 
 
@@ -412,27 +463,53 @@ def _validate_skill_dir(read_text: Callable[[str], str], skill_dir: str, files: 
     return skill_id, has_hooks, has_ejs
 
 
-def _validate_rulepack_file(read_text: Callable[[str], str], path: str) -> str:
+def _validate_rulepack_file(
+    read_text: Callable[[str], str], path: str, sibling_paths: Mapping[str, str] | None = None
+) -> str:
     stem = PurePosixPath(path).stem
     if not _SLUG_RE.match(stem):
         raise PackError(f"rulepack filename must be a slug: {path!r}")
     if PurePosixPath(path).suffix not in {".yaml", ".yml"}:
         raise PackError(f"rulepack must be a .yaml file: {path!r}")
+
+    def _base_loader(base_id: str) -> Mapping[str, Any] | None:
+        # An `extends:` base resolves against the pack's own bundled rulepacks first (a world
+        # shipping a base + a patch together), then this host's discovery dirs (built-ins).
+        sibling = (sibling_paths or {}).get(base_id)
+        if sibling is not None and sibling != path:
+            raw = safe_load_no_aliases(read_text(sibling)) or {}
+            return raw if isinstance(raw, Mapping) else None
+        return load_raw_rulepack_yaml(base_id)
+
     try:
-        parse_rulepack_text(stem, read_text(path))
+        parse_rulepack_text(stem, read_text(path), base_loader=_base_loader)
     except ValueError as exc:
         raise PackError(f"rulepack {stem}: {exc}") from exc
     return stem
 
 
-def _validate_card_bytes(path: str, data: bytes) -> bool:
+def _validate_card_bytes(path: str, data: bytes) -> tuple[bool, WorldPayloads]:
+    """Parse + cap-check one bundled card; returns ``(has_ejs, world_payloads)``."""
     if len(data) > MAX_CARD_FILE_BYTES:
         raise PackError(f"card {path}: exceeds the {MAX_CARD_FILE_BYTES}-byte cap")
     try:
-        parse_card_bytes(data, filename=PurePosixPath(path).name)
+        card = parse_card_bytes(data, filename=PurePosixPath(path).name)
     except ValueError as exc:
         raise PackError(f"card {path}: {exc}") from exc
-    return _detect_ejs(data.decode("utf-8", errors="ignore"))
+    return _detect_ejs(data.decode("utf-8", errors="ignore")), detect_world_payloads(card)
+
+
+def _enforce_card_kind(path: str, declared: str, payloads: WorldPayloads) -> None:
+    """A card that carries world machinery MUST be declared ``kind: world`` — the label the
+    installer and the docs lean on is checked against real detection, not taken on faith.
+    (The reverse is allowed: a machinery-free card may still be declared world when the
+    author means it as module content.)"""
+    if payloads.any and declared != "world":
+        raise PackError(
+            f"card {path}: carries world machinery ({payloads.hooks} hook script(s), "
+            f"{payloads.initvar_entries} variable declaration(s), {payloads.ejs_blocks} EJS "
+            "block(s)) — declare it `kind: world` in pack.yaml; world cards are keeper-imported"
+        )
 
 
 def _validate_lorebook_bytes(path: str, data: bytes) -> bool:
@@ -459,7 +536,21 @@ def _validate_lorebook_bytes(path: str, data: bytes) -> bool:
 # --- build ------------------------------------------------------------------
 
 
+def _card_entry_to_yaml(card: PackCard) -> Any:
+    """A card entry dumps back to a plain path string when it carries no declarations —
+    old manifests round-trip byte-identically — and to a mapping otherwise."""
+    if card.kind == "character" and not card.notes:
+        return card.path
+    entry: dict[str, Any] = {"path": card.path, "kind": card.kind}
+    if card.notes:
+        entry["notes"] = dict(card.notes)
+    return entry
+
+
 def _manifest_to_yaml(manifest: PackManifest) -> str:
+    contents: dict[str, Any] = {kind: list(paths) for kind, paths in manifest.contents.items() if paths}
+    if manifest.card_entries:
+        contents["cards"] = [_card_entry_to_yaml(card) for card in manifest.card_entries]
     data: dict[str, Any] = {
         "id": manifest.id,
         "version": manifest.version,
@@ -468,7 +559,7 @@ def _manifest_to_yaml(manifest: PackManifest) -> str:
         "authors": list(manifest.authors),
         "license": manifest.license,
         "engine": dict(manifest.engine),
-        "contents": {kind: list(paths) for kind, paths in manifest.contents.items() if paths},
+        "contents": contents,
         "assets": [
             {
                 key: value
@@ -494,6 +585,7 @@ def _manifest_to_yaml(manifest: PackManifest) -> str:
             "asset_bytes": manifest.trust.asset_bytes,
             "has_hooks": manifest.trust.has_hooks,
             "has_ejs": manifest.trust.has_ejs,
+            "world_cards": manifest.trust.world_cards,
         },
     }
     return yaml.safe_dump(data, sort_keys=True, allow_unicode=True, default_flow_style=False)
@@ -547,12 +639,14 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
         if skill_hooks:
             archive_files.append(f"{skill_dir}/hooks.js")
 
+    rulepack_siblings = {PurePosixPath(path).stem: path for path in manifest.contents["rulepacks"]}
     for rulepack_path in manifest.contents["rulepacks"]:
-        _validate_rulepack_file(read_text, rulepack_path)
+        _validate_rulepack_file(read_text, rulepack_path, rulepack_siblings)
         archive_files.append(rulepack_path)
 
     for card_path in manifest.contents["cards"]:
-        card_ejs = _validate_card_bytes(card_path, _source_file(source_dir, card_path).read_bytes())
+        card_ejs, payloads = _validate_card_bytes(card_path, _source_file(source_dir, card_path).read_bytes())
+        _enforce_card_kind(card_path, manifest.card_kind(card_path), payloads)
         has_ejs = has_ejs or card_ejs
         archive_files.append(card_path)
 
@@ -603,6 +697,7 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
         asset_bytes=asset_bytes,
         has_hooks=has_hooks,
         has_ejs=has_ejs,
+        world_cards=sum(1 for card in manifest.card_entries if card.kind == "world"),
     )
     built_manifest = PackManifest(
         id=manifest.id,
@@ -615,6 +710,7 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
         contents=manifest.contents,
         assets=tuple(completed_assets),
         trust=trust,
+        card_entries=manifest.card_entries,
     )
 
     if out_path is None:
@@ -730,10 +826,11 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
         prefix = f"{skill_dir}/"
         files = {name[len(prefix):] for name in names if name.startswith(prefix) and "/" not in name[len(prefix):]}
         _validate_skill_dir(read_text, skill_dir, files)
+    rulepack_siblings = {PurePosixPath(path).stem: path for path in manifest.contents["rulepacks"]}
     for rulepack_path in manifest.contents["rulepacks"]:
         if rulepack_path not in names:
             raise PackError(f"declared rulepack missing from archive: {rulepack_path!r}")
-        _validate_rulepack_file(read_text, rulepack_path)
+        _validate_rulepack_file(read_text, rulepack_path, rulepack_siblings)
     for card_path in manifest.contents["cards"]:
         if card_path not in names:
             raise PackError(f"declared card missing from archive: {card_path!r}")
@@ -742,7 +839,8 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
             raise PackError(f"card {card_path}: exceeds the {MAX_CARD_FILE_BYTES}-byte cap")
         with archive.open(info) as handle:
             data = handle.read(MAX_CARD_FILE_BYTES + 1)
-        _validate_card_bytes(card_path, data)
+        _, payloads = _validate_card_bytes(card_path, data)
+        _enforce_card_kind(card_path, manifest.card_kind(card_path), payloads)
     for lorebook_path in manifest.contents["lorebooks"]:
         if lorebook_path not in names:
             raise PackError(f"declared lorebook missing from archive: {lorebook_path!r}")
@@ -832,6 +930,8 @@ def install_pack(
                 for name in manifest.contents[kind]:
                     _extract_entry(archive, name, _confined_target(staging, name))
                     getattr(report, kind).append(name)
+                    if kind == "cards" and manifest.card_kind(name) == "world":
+                        report.world_cards.append(name)
             for asset in manifest.assets:
                 report.asset_bytes += _extract_entry(archive, asset.path, _confined_target(staging, asset.path))
                 report.assets += 1

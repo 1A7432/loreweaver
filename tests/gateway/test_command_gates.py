@@ -322,3 +322,94 @@ def test_parse_sheet_assignments_still_parses_valid_glued_pairs():
     assert _parse_sheet_assignments("STR16 DEX14") == [("STR", "16"), ("DEX", "14")]
     assert _parse_sheet_assignments("力量50，敏捷60") == [("力量", "50"), ("敏捷", "60")]
     assert _parse_sheet_assignments("HP-4") == [("HP", "-4")]
+
+
+# ---------------------------------------------------------------------------
+# 拆卡 — the world-import verb is keeper-gated even for a room attachment,
+# and `.var` (imported-variable exposure) is keeper-gated on every subcommand.
+# ---------------------------------------------------------------------------
+
+
+async def test_import_world_denied_for_player_even_via_attachment(tmp_path):
+    import json as _json
+
+    from agent.context import LocalFs
+
+    services = _services()
+    router = CommandRouter(services)
+    chat_key = "tui:group:worldgate"
+    (tmp_path / "w.json").write_text(_json.dumps({"name": "W"}), encoding="utf-8")
+    player = AgentCtx(
+        chat_key=chat_key,
+        user_id="p1",
+        platform="tui",
+        locale="en",
+        fs=LocalFs(str(tmp_path)),
+        extra={"role": "player", "attachment_names": ["w.json"]},
+    )
+
+    reply = await router.dispatch(player, ".import world")
+
+    assert reply == services.i18n.with_locale("en").t("charcard.commands.import.world_denied")
+    # Nothing reached the room: no hooks, no variable tree.
+    assert await services.store.get(user_key="", store_key=f"room_hooks.{chat_key}") is None
+
+
+async def test_import_world_runs_for_the_keeper(tmp_path):
+    import json as _json
+
+    from agent.context import LocalFs
+    from core.mvu_compat import MvuManager
+
+    services = _services()
+    router = CommandRouter(services)
+    chat_key = "tui:group:worldok"
+    heavy = {
+        "name": "Manor",
+        "extensions": {"loreweaver_hooks": ["on('turn_start', () => {});"]},
+        "character_book": {"entries": [{"comment": "[InitVar]", "content": '{"真凶": ["butler", "t"]}'}]},
+    }
+    (tmp_path / "w.json").write_text(_json.dumps(heavy, ensure_ascii=False), encoding="utf-8")
+    keeper = AgentCtx(
+        chat_key=chat_key,
+        user_id="k1",
+        platform="tui",
+        locale="en",
+        fs=LocalFs(str(tmp_path)),
+        extra={"role": "keeper", "attachment_names": ["w.json"]},
+    )
+
+    reply = await router.dispatch(keeper, ".import world")
+
+    assert reply is not None and "hook script" in reply
+    assert (await MvuManager(services.store).load(chat_key))["真凶"][0] == "butler"
+    raw = await services.store.get(user_key="", store_key=f"room_hooks.{chat_key}")
+    assert raw and "card:Manor" in raw
+
+
+async def test_var_command_is_keeper_gated_and_curates_exposure():
+    from core.mvu_compat import MvuManager
+
+    services = _services()
+    router = CommandRouter(services)
+    chat_key = "tui:group:vargate"
+    await MvuManager(services.store).init_from_initvar(chat_key, {"理": {"好感度": [33, "a"]}, "真凶": ["管家", "t"]})
+
+    player = _player_ctx(chat_key)
+    for line in (".var", ".var list", ".var expose 理", ".var hide 理"):
+        reply = await router.dispatch(player, line)
+        assert reply == services.i18n.with_locale("en").t("vars.commands.denied")
+
+    keeper = AgentCtx(chat_key=chat_key, user_id="k1", platform="tui", locale="en", extra={"role": "keeper"})
+    exposed = await router.dispatch(keeper, ".var expose 理")
+    assert exposed is not None and "理" in exposed
+    assert await MvuManager(services.store).exposed_prefixes(chat_key) == ["理"]
+
+    listing = await router.dispatch(keeper, ".var list")
+    assert listing is not None
+    assert "[visible]" in listing and "[hidden]" in listing
+    assert "真凶" in listing  # the keeper's own listing shows the hidden remainder
+
+    hidden = await router.dispatch(keeper, ".var hide 理")
+    assert hidden is not None
+    assert await MvuManager(services.store).exposed_prefixes(chat_key) == []

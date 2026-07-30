@@ -28,10 +28,11 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+from core.card_split import is_variable_declaration_entry
 from core.condexpr import MAX_EXPR_LEN, CondExprError, evaluate_bool
 from core.ejs_lite import render as render_template
 from core.ejs_lite import split_decorators, substitute_macros
-from core.mvu_compat import MvuManager, is_initvar_entry, parse_initvar
+from core.mvu_compat import MvuManager, parse_initvar
 
 WORLD_SCOPE = "world"
 WORLDBOOK_COLLECTION = "worldbook"
@@ -277,9 +278,12 @@ class WorldbookManager:
             # [InitialVariables]) are DATA, not lore: consume them into the room's MVU variable
             # tree (existing values win — a re-import never resets play progress) and store no
             # entry. Checked before the content-length cap: a large InitVar block is legitimate.
+            # KEEPER-ONLY: the tree is shared room state, so only the keeper's world import may
+            # seed it — a player upload's declaration entries are dropped without effect (the
+            # card splitter already removed them upstream; this is the structural backstop).
             parsed_initvar = _consume_initvar(raw)
             if parsed_initvar is not None:
-                if parsed_initvar:
+                if parsed_initvar and is_keeper:
                     await MvuManager(self.store).init_from_initvar(chat_key, parsed_initvar)
                 continue
             entry = _normalize_import_entry(raw, source=source, index=index, is_keeper=is_keeper)
@@ -697,17 +701,12 @@ def _entry_title(raw: dict[str, Any]) -> str:
 def _consume_initvar(raw: dict[str, Any]) -> dict[str, Any] | None:
     """Return the parsed initial-variable dict when `raw` is a variable-declaration entry
     (MVU `[InitVar]` name, ST `[InitialVariables]` name, or an `@@initial_variables` decorator);
-    `{}` when it is one but unparseable; `None` for an ordinary lore entry."""
-    title = _entry_title(raw)
-    content = str(raw.get("content") or "")
-    decorators, body = split_decorators(content)
-    is_declaration = (
-        is_initvar_entry(title)
-        or "[initialvariables]" in title.replace(" ", "").lower()
-        or "initial_variables" in decorators
-    )
-    if not is_declaration:
+    `{}` when it is one but unparseable; `None` for an ordinary lore entry. Detection is
+    `core.card_split.is_variable_declaration_entry` — the SAME predicate the card splitter
+    uses, so the split and the import can never disagree about what counts as machinery."""
+    if not is_variable_declaration_entry(raw):
         return None
+    body = split_decorators(str(raw.get("content") or ""))[1]
     return parse_initvar(body) or {}
 
 

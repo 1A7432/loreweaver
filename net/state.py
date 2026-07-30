@@ -29,7 +29,7 @@ from agent.context import AgentCtx
 from agent.services import Services
 from core.character_manager import CharacterSheet, get_hit_points
 from core.modvars import ModvarManager
-from core.mvu_compat import MvuManager
+from core.mvu_compat import MvuManager, path_is_exposed
 
 _COC_SYSTEM = "CoC"
 _UNSET_CHARACTER_NAME = "default"
@@ -283,25 +283,54 @@ async def _combat_round(services: Services, chat_key: str) -> int | None:
 
 
 _MVU_PANEL_CAP = 32
+_KEEPER_ROLE = "keeper"
+# The single-operator platform set (mirrors `gateway.commands._AUTO_MASTER_PLATFORMS`): a
+# `--cli` session is the box's owner running their own table, keeper by construction.
+_LOCAL_OPERATOR_PLATFORMS = {"cli"}
+
+
+def _viewer_is_keeper(ctx: AgentCtx) -> bool:
+    """Whether THIS state frame's recipient is the keeper: the local operator platform, or a
+    connection whose keystore-authenticated role was threaded into ``ctx.extra["role"]`` by
+    `gateway.turn.publish_state` (networked members) / `net.session._ctx_for` (commands)."""
+    if ctx.platform in _LOCAL_OPERATOR_PLATFORMS:
+        return True
+    extra = ctx.extra if isinstance(ctx.extra, dict) else {}
+    return extra.get("role") == _KEEPER_ROLE
 
 
 async def _variables(services: Services, ctx: AgentCtx) -> list[dict[str, Any]]:
-    """Player-visible module variables (`core.modvars`), labels resolved to the caller's locale,
-    plus the imported MVU card-variable leaves (`core.mvu_compat`) on the same wire shape.
+    """Module variables for THIS viewer (state frames are built per member), on one wire shape.
 
-    `ModvarManager.player_entries` is the structural anti-metagaming filter (iron rule #3):
-    keeper-only variables are dropped THERE, inside the deterministic core, so no state frame —
-    this module or any future transport — can ever carry them. MVU leaves have no visibility
-    concept upstream (the extension shows every variable in its status bar), so they ship as-is,
-    capped at `_MVU_PANEL_CAP` scalar leaves. Empty (→ field omitted) when the room has neither;
-    best-effort like every other piece of this snapshot.
+    Two sources, one visibility discipline (iron rule #3, fail-closed):
+
+    - `ModvarManager.player_entries` is the structural filter for engine-native trackers:
+      keeper-only variables are dropped inside the deterministic core, so no state frame —
+      any viewer, any transport — ever carries them.
+    - MVU leaves (`core.mvu_compat`) are an imported card's OPAQUE module state — heavy cards
+      routinely keep hidden plot flags in the tree — so by default they ship to NOBODY's
+      panel. The keeper curates player-visible paths (`.var expose <prefix>`); a keeper
+      viewer additionally sees the unexposed remainder flagged ``"hidden": true`` so they can
+      watch their module's internals live (keeper-bound data to the keeper is not a leak).
+
+    Empty (→ field omitted) when the room has neither; best-effort like every other piece of
+    this snapshot.
     """
     try:
         entries = await ModvarManager(services.store).player_entries(ctx.chat_key, ctx.locale)
     except Exception:
         entries = []
     try:
-        for leaf in await MvuManager(services.store).flatten(ctx.chat_key, _MVU_PANEL_CAP):
+        manager = MvuManager(services.store)
+        # Flatten past the panel cap so exposure filtering happens BEFORE capping — a player's
+        # panel fits up to `_MVU_PANEL_CAP` *visible* leaves even when hidden ones outnumber them.
+        leaves = await manager.flatten(ctx.chat_key)
+        exposed = await manager.exposed_prefixes(ctx.chat_key) if leaves else []
+        keeper_view = _viewer_is_keeper(ctx)
+        shown = 0
+        for leaf in leaves:
+            if shown >= _MVU_PANEL_CAP:
+                break
             value = leaf["value"]
             if isinstance(value, bool):
                 kind = "bool"
@@ -311,7 +340,14 @@ async def _variables(services: Services, ctx: AgentCtx) -> list[dict[str, Any]]:
                 kind = "text"
             else:
                 continue  # nested/list leaves are prompt-side detail, not panel material
-            entries.append({"id": f"mvu.{leaf['path']}", "label": leaf["path"], "kind": kind, "value": value})
+            visible = path_is_exposed(leaf["path"], exposed)
+            if not visible and not keeper_view:
+                continue
+            entry: dict[str, Any] = {"id": f"mvu.{leaf['path']}", "label": leaf["path"], "kind": kind, "value": value}
+            if not visible:
+                entry["hidden"] = True
+            entries.append(entry)
+            shown += 1
     except Exception:
         pass
     return entries

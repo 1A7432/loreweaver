@@ -12,6 +12,14 @@ The one-sentence summary: **cards and lorebooks import as-is — no conversion s
 and the variable / template / trigger machinery your card relies on runs**, inside
 an engine that rolls real dice and validates every number.
 
+One concept to hold onto first: Loreweaver **splits every card** (拆卡). An ST "heavy
+card" fuses a character with a whole world — hook scripts, variable schemas,
+executable templates — because single-player ST had nowhere else to put them. Here
+those are two artifacts: the **character half** (persona, memory, abilities, a sheet)
+that any player may import, and the **world half** (the machinery) that only the
+room's Keeper imports, because it reprograms play for the whole table. Your card
+isn't rejected either way — it's decomposed.
+
 ## What imports
 
 - **Character cards** — SillyTavern **V2/V3** (`chara_card_v2` / `chara_card_v3`),
@@ -23,13 +31,13 @@ an engine that rolls real dice and validates every number.
 - **Lorebooks** — the card's embedded `character_book`, or a standalone lorebook
   JSON. Both the V2 `character_book` field names and ST-native world-info names map.
 - **MVU variables** — `[InitVar]` / `[InitialVariables]` / `@@initial_variables`
-  entries are consumed at import into a per-room variable tree (JSON5-tolerant,
-  nested CJK paths, `[value, "description"]` leaves). They are treated as data, not
-  lore — they don't occupy prompt budget, and **re-importing a card never resets a
-  room's variable progress**.
+  entries are consumed at **world import** into a per-room variable tree
+  (JSON5-tolerant, nested CJK paths, `[value, "description"]` leaves). They are
+  treated as data, not lore — they don't occupy prompt budget, and **re-importing a
+  card never resets a room's variable progress**.
 - **Hooks** — a card may carry `extensions.loreweaver_hooks`: sandboxed JavaScript
-  on the turn lifecycle. That's Loreweaver's own extension point (the Tavern Helper
-  idea, engine-validated); see [hooks.md](hooks.md).
+  on the turn lifecycle, installed at **world import**. That's Loreweaver's own
+  extension point (the Tavern Helper idea, engine-validated); see [hooks.md](hooks.md).
 
 ## How to import
 
@@ -37,11 +45,17 @@ an engine that rolls real dice and validates every number.
   AI draft, or **import a card**. Whichever path, the resulting sheet is validated
   against the rule system; a card whose numbers don't fit the rulepack gets fixed
   numbers, not a free pass.
-- **By command:** `.import <card file> [coc7|dnd5e] [pc|companion]`. A player can
-  self-import a card they uploaded to the room; importing from a server-side path,
-  or importing the card as an AI **companion** (it plays at the table with its own
-  sheet and its own rolls), is Keeper-only. Standalone lorebooks: `.lore import
-  <file>` (Keeper-only).
+- **By command:** `.import <card file> [coc7|dnd5e] [pc|companion|world]`.
+  - `pc` (any player, via a room attachment) and `companion` (Keeper-only) take the
+    **character half**. If the card also carries world machinery, the import strips
+    it and tells you exactly what was stripped — the card still works as a
+    character, and the message points the Keeper at the world half.
+  - `world` (**Keeper-only**) imports the machinery half as module content: the full
+    lorebook with Keeper trust, `[InitVar]` seeded, hooks installed. It does NOT
+    create a character — a Keeper who also wants the card's narrator at the table
+    runs `.import <file> companion` as a second step.
+  - Importing from a server-side path (rather than a room attachment) is Keeper-only
+    in every mode. Standalone lorebooks: `.lore import <file>` (Keeper-only).
 - **As part of a pack:** cards and lorebooks travel inside `.lwpack` content packs —
   `python -m app --install gh:owner/repo` — alongside skills, rulepacks and assets
   (see [plugins.md](plugins.md)).
@@ -49,7 +63,8 @@ an engine that rolls real dice and validates every number.
 ## What actually runs
 
 Imported cards don't just contribute prose — the machinery runs, with deterministic
-code doing the bookkeeping:
+code doing the bookkeeping. (Everything below describes the **world half**, live after
+a Keeper's `.import <file> world`; a character import carries none of it.)
 
 - **Worldbook trigger semantics.** Primary `keys`; `secondary_keys` with all four
   selective logics (AND ANY / AND ALL / NOT ANY / NOT ALL); `probability` — rolled
@@ -72,8 +87,13 @@ code doing the bookkeeping:
 - **Macros.** `{{user}}` (the active PC, resolved at render time), `{{char}}`,
   `{{time}}` / `{{date}}`, `{{roll:XdY}}`, `{{random}}`, `{{pick}}`, `{{newline}}`,
   `{{// comments}}`, `{{getvar::}}` / `{{var:}}`.
-- **Player-visible variables** from your card's tree show up live in the terminal
-  client's tracker panel — scalar leaves, `mvu.`-prefixed, no extra work on your side.
+- **The tracker panel is Keeper-curated.** Your card's tree is module state, and heavy
+  cards routinely keep hidden plot flags in it — so leaves reach NO player panel until
+  the Keeper exposes them: `.var expose <prefix|*>` puts a path (and its subtree) on
+  the party's panel, `.var hide` takes it off, `.var list` shows the whole tree with
+  visibility markers. The Keeper's own panel always shows everything (hidden leaves
+  flagged). Tell your users which prefixes to expose — or ship that line in your
+  pack's card `notes`.
 
 ## What's different here (read this before debugging)
 
@@ -114,6 +134,10 @@ that:
 
 An imported file doesn't get to pick its own privileges:
 
+- **The card split is structural.** A player's character import cannot install hooks,
+  seed the variable tree, or land executable templates — the machinery is stripped by
+  deterministic code before anything touches room state, not filtered by a prompt.
+  Only the Keeper's `world` import carries it in.
 - **Scope is pinned** to the importing room — a card can't write global lore.
 - **`constant` is forced off** for imported entries, for everyone. An always-on
   entry would let any card permanently occupy the prompt; imported lore activates
@@ -125,6 +149,8 @@ An imported file doesn't get to pick its own privileges:
 - **Re-importing replaces** that card's hooks and entries rather than stacking
   duplicates — and, as above, never resets variable progress.
 
-With full EJS enabled, an imported card runs code in the sandbox described above —
-that is the point, and it is the operator's informed call. An operator who wants the
-data-only posture sets `TRPG_ENABLE_FULL_EJS=false` or skips the `ejs` extra.
+With full EJS enabled, world content runs code in the sandbox described above — that
+is the point, and it is the operator's informed call: "your box, your cards" is the
+**Keeper's** stance about the Keeper's own table, which is exactly why the world half
+goes through the Keeper's hands. An operator who wants the data-only posture sets
+`TRPG_ENABLE_FULL_EJS=false` or skips the `ejs` extra.

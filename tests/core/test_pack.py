@@ -328,3 +328,108 @@ def test_builtin_collisions_are_reported_as_shadowed(tmp_path: Path):
         builtin_rulepack_ids={"pulp"},
     )
     assert sorted(report.shadowed) == ["omen-engine", "pulp"]
+
+
+# --- 拆卡 at the pack level: world vs character card kinds -------------------
+
+WORLD_CARD_JSON = json.dumps(
+    {
+        "spec": "chara_card_v2",
+        "data": {
+            "name": "Manor",
+            "description": "The estate itself.",
+            "extensions": {"loreweaver_hooks": ["on('turn_start', () => {});"]},
+            "character_book": {
+                "entries": [{"comment": "[InitVar]", "content": '{"真凶": ["butler", "twist"]}'}]
+            },
+        },
+    }
+)
+
+
+def _write_world_source(root: Path, cards_yaml: str) -> Path:
+    src = root / "world-src"
+    (src / "cards").mkdir(parents=True)
+    (src / "cards/keeper.json").write_text(CARD_JSON, encoding="utf-8")
+    (src / "cards/world.json").write_text(WORLD_CARD_JSON, encoding="utf-8")
+    (src / MANIFEST_NAME).write_text(
+        "id: worldpack\nversion: 1.0.0\nname: World Pack\ndescription: test\n"
+        "authors: [ada]\nlicense: MIT\nengine: {}\n"
+        f"contents:\n  cards:\n{cards_yaml}",
+        encoding="utf-8",
+    )
+    return src
+
+
+def test_build_rejects_world_machinery_in_a_character_labeled_card(tmp_path: Path):
+    src = _write_world_source(tmp_path, "    - cards/keeper.json\n    - cards/world.json\n")
+    with pytest.raises(PackError, match="kind: world"):
+        build_pack(src, tmp_path / "bad.lwpack")
+
+
+def test_world_card_kind_builds_counts_trust_and_survives_roundtrip(tmp_path: Path):
+    cards_yaml = (
+        "    - cards/keeper.json\n"
+        "    - path: cards/world.json\n"
+        "      kind: world\n"
+        "      notes:\n"
+        "        en: Import last, after the rulepack.\n"
+        "        zh: 最后导入，先装规则包。\n"
+    )
+    src = _write_world_source(tmp_path, cards_yaml)
+    built = build_pack(src, tmp_path / "world.lwpack")
+    assert built.manifest.trust is not None and built.manifest.trust.world_cards == 1
+
+    # Determinism holds with mapping-form card entries.
+    again = build_pack(src, tmp_path / "world2.lwpack")
+    assert again.sha256 == built.sha256
+
+    manifest = inspect_pack(built.path)
+    assert manifest.card_kind("cards/world.json") == "world"
+    assert manifest.card_kind("cards/keeper.json") == "character"
+    entry = next(card for card in manifest.card_entries if card.path == "cards/world.json")
+    assert entry.notes["zh"] == "最后导入，先装规则包。"
+
+    report = _install(built.path, tmp_path)
+    assert report.world_cards == ["cards/world.json"]
+    assert set(report.cards) == {"cards/keeper.json", "cards/world.json"}
+
+
+def test_verify_reenforces_card_kind_against_a_tampered_manifest(tmp_path: Path):
+    cards_yaml = "    - cards/keeper.json\n    - path: cards/world.json\n      kind: world\n"
+    src = _write_world_source(tmp_path, cards_yaml)
+    built = build_pack(src, tmp_path / "world.lwpack")
+
+    def relabel(entries):
+        out = []
+        for info, data in entries:
+            if info.filename == MANIFEST_NAME:
+                text = data.decode("utf-8").replace("kind: world", "kind: character")
+                data = text.encode("utf-8")
+            out.append((info, data))
+        return out
+
+    tampered = _rewrite_pack(built.path, tmp_path / "tampered.lwpack", relabel)
+    with pytest.raises(PackError, match="kind: world"):
+        _install(tampered, tmp_path)
+
+
+def test_bundled_rulepack_may_extend_a_bundled_base_and_builtin(tmp_path: Path):
+    src = tmp_path / "rules-src"
+    (src / "rulepacks").mkdir(parents=True)
+    (src / "rulepacks/base-sys.yaml").write_text("names: [base-sys]\ndefaults:\n  力量: 40\n", encoding="utf-8")
+    (src / "rulepacks/patch-sys.yaml").write_text(
+        "extends: base-sys\nnames: [patch-sys]\ndefaults:\n  敏捷: 60\n", encoding="utf-8"
+    )
+    (src / "rulepacks/pulp-coc.yaml").write_text(
+        "extends: coc7\nnames: [pulp-coc]\ndefaults:\n  幸运: 99\n", encoding="utf-8"
+    )
+    (src / MANIFEST_NAME).write_text(
+        "id: rulespack\nversion: 1.0.0\nname: Rules\ndescription: test\nauthors: [ada]\n"
+        "license: MIT\nengine: {}\ncontents:\n  rulepacks:\n"
+        "    - rulepacks/base-sys.yaml\n    - rulepacks/patch-sys.yaml\n    - rulepacks/pulp-coc.yaml\n",
+        encoding="utf-8",
+    )
+    built = build_pack(src, tmp_path / "rules.lwpack")
+    report = _install(built.path, tmp_path)
+    assert set(report.rulepacks) == {"base-sys", "patch-sys", "pulp-coc"}

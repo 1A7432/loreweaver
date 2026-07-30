@@ -12,7 +12,7 @@ Loreweaver 的目标不是"用 AI 替代一个跑团主持人"，而是做 **RPG
 
 确定性引擎——骰子（基于 `d20`）、CoC/DnD 成功等级、角色数学、规则验证、游戏时钟——是稳固核心，由确定性离线测试覆盖。**终端 OpenTUI 仍是主要客户端**，经 **Iroh** p2p 连接。Discord、QQ 官方、Telegram、飞书与 OneBot 11 已经通过同一 RoomHub 获得 Mock 测试覆盖的适配器；各自真平台清单通过前，所有网络适配器都仍为 **Experimental**。
 
-**v1.0.0 正式版已发布**。下文硬化清单之后，面向模组的这一层也补齐了：确定性模组变量加 TUI 实时状态量面板、导入酒馆卡的完整兼容（MVU 变量树、`<UpdateVariable>` 文本协议、QuickJS 沙箱里的完整 EJS、酒馆世界书触发语义）、能画协议 v1.7 声明式 UI 帧的沙箱事件钩子（`hooks.js`）、走 Git Release 分发的 `.lwpack` 内容包，以及发布到 npm 的协议 SDK（`loreweaver-protocol`）。细节见 [plugins.md](plugins.md)、[cards.zh.md](cards.zh.md)、[hooks.zh.md](hooks.zh.md)。
+**v1.0.0 正式版已发布**。下文硬化清单之后，面向模组的这一层也补齐了：确定性模组变量加 TUI 实时状态量面板、导入酒馆卡的完整兼容（MVU 变量树、`<UpdateVariable>` 文本协议、QuickJS 沙箱里的完整 EJS、酒馆世界书触发语义）、能画协议 v1.7 声明式 UI 帧的沙箱事件钩子（`hooks.js`）、走 Git Release 分发的 `.lwpack` 内容包，以及发布到 npm 的协议 SDK（`loreweaver-protocol`）。在此之上是**拆卡**：导入会把一张酒馆卡拆成人物半（玩家可自带，机制被结构性剥离）和世界半（仅守秘人的 `.import … world`——钩子、变量架构、守秘人设定）；内容包给卡标注 `world` / `character` 且标签由真实检测强制；导入的变量树默认不上玩家面板、由守秘人逐路径公开；模组还能以规则包*补丁*（`extends: coc7` + 增量）的形式携带自己的规则。细节见 [plugins.md](plugins.md)、[cards.zh.md](cards.zh.md)、[hooks.zh.md](hooks.zh.md)。
 
 ## 基础设施——已完成
 

@@ -6,6 +6,14 @@ persona (`core.char_from_persona`), then drops the character in as EITHER the ac
 an AI player companion (M10). A card's embedded `character_book` is folded into the world lore
 (M11), so the character brings its setting with it.
 
+Every character import runs through `core.card_split` first (拆卡): the module machinery a
+"heavy" ST card carries — hook scripts, `[InitVar]` variable declarations, executable EJS —
+is STRIPPED from the character half and reported, because those payloads reprogram the whole
+room and are the keeper's to bring in. The keeper does so with `.import <file> world`, which
+calls `import_world_card` — deliberately a plain method, NOT an `@tool`: the world path exists
+only behind the command surface's deterministic keeper gate, so no phrasing aimed at the model
+can trigger it on a player's behalf.
+
 Composes the already-built leaf modules with the shared services; every user-visible string is
 looked up via `services.i18n` under `charcard.tools.*` (`locales/{en,zh}/charcard.json`). Card
 fields (name/description/tags) are game DATA supplied at runtime, not string literals here.
@@ -14,7 +22,6 @@ fields (name/description/tags) are game DATA supplied at runtime, not string lit
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
 
 from agent.context import AgentCtx
@@ -22,14 +29,13 @@ from agent.hook_runtime import install_room_hooks
 from agent.npc import NpcManager
 from agent.services import Services
 from agent.tools import tool
+from core.card_split import WorldPayloads, card_hook_codes, detect_world_payloads, split_card
 from core.char_from_persona import build_sheet_from_persona, infer_pronoun_note
 from core.character_manager import CharacterSheet
 from core.character_rules import render_validation_notice, validate_sheet
 from core.charcard import PNG_SIGNATURE, CharacterCard, parse_card_file
 from infra.i18n import I18n
 from infra.media_store import MediaStore
-
-logger = logging.getLogger(__name__)
 
 _PREVIEW_CHARS = 200
 _KEY_STAT_COUNT = 6
@@ -92,6 +98,18 @@ async def _register_png_avatar(services: Services, ctx: AgentCtx, host_path: Pat
     sheet.avatar = record.ref()
 
 
+def _stripped_notice(i18n: I18n, world: WorldPayloads) -> str:
+    """The itemized what-was-stripped line for a character import; "" for a plain card."""
+    if not world.any:
+        return ""
+    return i18n.t(
+        "charcard.tools.import.stripped",
+        hooks=world.hooks,
+        vars=world.initvar_entries,
+        ejs=world.ejs_blocks,
+    )
+
+
 async def _module_summary(services: Services, chat_key: str) -> str:
     """A brief, player-safe module summary (from the analyzed player pool) to fit the character to
     the adventure; best-effort -- returns "" when no module has been initialized."""
@@ -139,14 +157,18 @@ class CharcardTools:
             if not host_path.exists():
                 return i18n.t("charcard.tools.import.no_file", path=file_path)
 
-            card = parse_card_file(host_path)
+            # 拆卡: a character import takes ONLY the character half. Hook scripts, variable
+            # declarations and EJS are module machinery — stripped here (structurally, before
+            # anything touches room state) and reported so the keeper knows the card has a
+            # world half waiting behind `.import <file> world`.
+            card, world = split_card(parse_card_file(host_path))
             module_context = await _module_summary(self._services, ctx.chat_key)
             sheet = await build_sheet_from_persona(self._services, card, system, module_context=module_context)
             final_name = name.strip() or card.name or sheet.name
             sheet.name = final_name
             sheet, violations = validate_sheet(sheet, system)
             await _register_png_avatar(self._services, ctx, host_path, sheet)
-            validation_notice = render_validation_notice(i18n, violations)
+            notices = [render_validation_notice(i18n, violations), _stripped_notice(i18n, world)]
 
             if as_.strip().lower() == "companion":
                 record = await self._npcs.create_companion(
@@ -167,7 +189,7 @@ class CharcardTools:
                     stats=_key_stats(sheet),
                     lore=lore,
                 )
-                return f"{result}\n{validation_notice}" if validation_notice else result
+                return "\n".join([result, *[notice for notice in notices if notice]])
 
             # Default: the acting player plays AS the card -- save + set active under their own uid.
             await self._services.characters.save_character(ctx.uid(), ctx.chat_key, sheet)
@@ -179,7 +201,7 @@ class CharcardTools:
                 stats=_key_stats(sheet),
                 lore=lore,
             )
-            return f"{result}\n{validation_notice}" if validation_notice else result
+            return "\n".join([result, *[notice for notice in notices if notice]])
         except Exception as exc:
             return i18n.t("charcard.tools.import.failed", error=str(exc))
 
@@ -213,15 +235,24 @@ class CharcardTools:
             if card.tags:
                 lines.append(i18n.t("charcard.tools.preview.tags_line", tags=", ".join(card.tags)))
             lines.append(i18n.t("charcard.tools.preview.lore_line", count=len(card.character_book)))
+            world = detect_world_payloads(card)
+            if world.any:
+                lines.append(
+                    i18n.t(
+                        "charcard.tools.preview.world_line",
+                        hooks=world.hooks,
+                        vars=world.initvar_entries,
+                        ejs=world.ejs_blocks,
+                    )
+                )
             return "\n".join(lines)
         except Exception as exc:
             return i18n.t("charcard.tools.preview.failed", error=str(exc))
 
     async def _import_card_lore(self, ctx: AgentCtx, card: CharacterCard) -> int:
         """Fold the card's embedded `character_book` into the world lore (M11); 0 when it has none.
-        Also installs any `extensions.loreweaver_hooks` scripts the card ships (Layer C — see
-        `core.hooks`; the operator's trust decision, same tier as full EJS)."""
-        await self._install_card_hooks(ctx, card)
+        `card` is always the CHARACTER half of a split (`core.card_split`), so no hook scripts or
+        variable declarations can reach this path."""
         if not card.character_book:
             return 0
         # A character card is untrusted input: its embedded lore lands in the room-local scope with
@@ -232,25 +263,42 @@ class CharcardTools:
             ctx.chat_key, card.character_book, source=card.name, is_keeper=False, char_name=card.name
         )
 
-    async def _install_card_hooks(self, ctx: AgentCtx, card: CharacterCard) -> None:
-        """Best-effort install of the card's `extensions.loreweaver_hooks` scripts (native cards /
-        the card forge emit this field; absent on stock SillyTavern cards). Re-importing the same
-        card replaces its scripts rather than stacking duplicates."""
+    async def import_world_card(self, ctx: AgentCtx, file_path: str) -> str:
+        """Import a card's WORLD half as module machinery: full lorebook with keeper trust
+        (secret flags honored, `[InitVar]` declarations seeded into the room's variable tree)
+        plus its `extensions.loreweaver_hooks` scripts installed room-wide.
+
+        Deliberately NOT an `@tool`: reprogramming the room is the human keeper's decision, so
+        this is reachable only through `.import <file> world`, whose keeper check is
+        deterministic (`gateway.commands`). The persona half is untouched — a keeper who also
+        wants the card's narrator as a party presence imports it separately as a companion.
+        """
+        i18n = self._i18n(ctx)
+        if ctx.fs is None:
+            return i18n.t("charcard.tools.import.no_fs")
         try:
-            raw = card.raw if isinstance(card.raw, dict) else {}
-            extensions = raw.get("data", {}).get("extensions") if isinstance(raw.get("data"), dict) else None
-            if not isinstance(extensions, dict):
-                extensions = raw.get("extensions") if isinstance(raw.get("extensions"), dict) else {}
-            entries = extensions.get("loreweaver_hooks")
-            if not isinstance(entries, list):
-                return
-            codes = [
-                entry if isinstance(entry, str) else entry.get("code", "")
-                for entry in entries
-                if isinstance(entry, (str, dict))
-            ]
-            codes = [code for code in codes if isinstance(code, str) and code.strip()]
-            if codes:
-                await install_room_hooks(self._services, ctx.chat_key, f"card:{card.name}", codes)
-        except Exception:
-            logger.warning("card hook install failed for %s", card.name, exc_info=True)
+            host_path = Path(ctx.fs.get_file(file_path))
+            if not host_path.exists():
+                return i18n.t("charcard.tools.import.no_file", path=file_path)
+
+            card = parse_card_file(host_path)
+            world = detect_world_payloads(card)
+            # Keeper trust: secrecy flags are honored and InitVar declarations are consumed
+            # into the shared MVU tree (`core.worldbook.import_entries` gates that on
+            # `is_keeper=True`). The ORIGINAL entries are imported, not the stripped half —
+            # render-time EJS in world lore is exactly what this path exists to carry.
+            lore = await self._services.worldbook.import_entries(
+                ctx.chat_key, card.character_book, source=card.name, is_keeper=True, char_name=card.name
+            )
+            hooks = card_hook_codes(card)
+            if hooks:
+                await install_room_hooks(self._services, ctx.chat_key, f"card:{card.name}", hooks)
+            return i18n.t(
+                "charcard.tools.world.done",
+                name=card.name or i18n.t("common.unknown"),
+                lore=lore,
+                vars=world.initvar_entries,
+                hooks=len(hooks),
+            )
+        except Exception as exc:
+            return i18n.t("charcard.tools.world.failed", error=str(exc))

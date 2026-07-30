@@ -323,12 +323,16 @@ async def publish_state(hub: RoomHub, services: Services, ctx: AgentCtx, *, rese
     members = hub.members(ctx.chat_key)
 
     def member_ctx(member: Member) -> AgentCtx:
+        # `extra["role"]` carries the connection's keystore-authenticated role (WsMember/Iroh
+        # members; chat-adapter members have none → player view) so `net.state._variables`
+        # can build each viewer's panel — same convention as `net.session._ctx_for`.
         return AgentCtx(
             chat_key=ctx.chat_key,
             user_id=str(getattr(member, "state_user_id", None) or getattr(member, "id", "")),
             platform=str(getattr(member, "transport", ctx.platform)),
             locale=str(getattr(member, "locale", ctx.locale)),
             fs=ctx.fs,
+            extra={"role": str(getattr(member, "role", "") or "")},
         )
 
     identity_contexts: list[tuple[AgentCtx, str]] = []

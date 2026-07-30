@@ -194,3 +194,79 @@ async def test_build_system_prompt_includes_keeper_secret_world_lore():
     i18n = services.i18n.with_locale("en")
     assert i18n.t("worldbook.section.title") in prompt
     assert sentinel in prompt
+
+
+# ---------------------------------------------------------------------------
+# 拆卡 (M12): the character path strips world machinery; only the keeper's
+# world import brings it in. RED LINE tests — a player upload must never
+# install hooks, seed the shared variable tree, or land executable EJS.
+# ---------------------------------------------------------------------------
+
+_HEAVY_CARD = {
+    "spec": "chara_card_v2",
+    "data": {
+        "name": "理",
+        "description": "A caretaker. <% setvar('好感度', 50) %>Quiet.",
+        "personality": "curious",
+        "extensions": {"loreweaver_hooks": ["on('turn_start', () => {});"]},
+        "character_book": {
+            "entries": [
+                {"comment": "[InitVar]", "content": '{"理": {"好感度": [33, "affinity"]}, "真凶": ["管家", "t"]}'},
+                {"comment": "manor", "keys": ["manor"], "content": "The manor looms. <% incvar('visits') %>"},
+            ]
+        },
+    },
+}
+
+
+def _write_heavy_card(tmp_path) -> LocalFs:
+    (tmp_path / "heavy.json").write_text(json.dumps(_HEAVY_CARD, ensure_ascii=False), encoding="utf-8")
+    return LocalFs(str(tmp_path))
+
+
+async def test_player_import_strips_world_machinery_and_reports(tmp_path):
+    from core.mvu_compat import MvuManager
+
+    services = _services()
+    fs = _write_heavy_card(tmp_path)
+    ctx = AgentCtx(chat_key="chat-split", user_id="player-1", locale="en", fs=fs)
+
+    result = await CharcardTools(services).import_character(ctx, file_path="heavy.json", system="coc7", as_="pc")
+
+    # The itemized strip report names each machinery class and points at the world path.
+    assert "hook script" in result
+    assert "variable declaration" in result
+    assert "world" in result
+    # RED LINES: no hooks installed, no shared tree seeded, no EJS in stored lore.
+    assert await services.store.get(user_key="", store_key="room_hooks.chat-split") is None
+    assert await MvuManager(services.store).load("chat-split") == {}
+    entries = await services.worldbook.list("chat-split")
+    assert [entry.title for entry in entries] == ["manor"]
+    assert "<%" not in entries[0].content
+
+
+async def test_keeper_world_import_installs_the_module_half(tmp_path):
+    from core.mvu_compat import MvuManager
+
+    services = _services()
+    fs = _write_heavy_card(tmp_path)
+    ctx = AgentCtx(chat_key="chat-world", user_id="kp", locale="en", fs=fs)
+
+    result = await CharcardTools(services).import_world_card(ctx, file_path="heavy.json")
+
+    assert "1 hook script" in result
+    # Hooks registered under the card's source id (idempotent per source).
+    raw = await services.store.get(user_key="", store_key="room_hooks.chat-world")
+    assert raw and "card:理" in raw
+    # The variable tree is seeded, hidden state included.
+    tree = await MvuManager(services.store).load("chat-world")
+    assert tree["理"]["好感度"][0] == 33
+    assert tree["真凶"][0] == "管家"
+    # World lore keeps its render-time EJS (that is what this path exists to carry),
+    # and the world card never became the importing keeper's character (a default
+    # placeholder sheet may exist; the card's persona must not).
+    entries = await services.worldbook.list("chat-world")
+    assert [entry.title for entry in entries] == ["manor"]
+    assert "<%" in entries[0].content
+    sheet = await services.characters.get_character("kp", "chat-world")
+    assert sheet is None or sheet.name != "理"

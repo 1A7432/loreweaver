@@ -569,3 +569,72 @@ def test_parse_rulepack_text_rejects_bad_display_shapes() -> None:
         rulepacks_module.parse_rulepack_text("inline-test", "names: [inline]\ndisplay: [en]\n")
     with pytest.raises(ValueError):
         rulepacks_module.parse_rulepack_text("inline-test", "names: [inline]\ndisplay:\n  en: [not, a, map]\n")
+
+
+# ---------------------------------------------------------------------------
+# (g) `extends:` — a world patches or reworks a base system (module<->rules coupling)
+# ---------------------------------------------------------------------------
+
+
+def _raw_loader(packs: dict[str, dict]):
+    return lambda base_id: packs.get(base_id)
+
+
+def test_extends_deep_merges_child_over_base_and_null_deletes() -> None:
+    base = {
+        "names": ["base"],
+        "defaults": {"力量": 50, "体质": 50},
+        "alias": {"力量": ["str"], "体质": ["con"]},
+        "set_keys": ["base"],
+    }
+    child_yaml = (
+        "extends: base\n"
+        "names: [patched]\n"
+        "defaults:\n"
+        "  力量: 70\n"
+        "alias:\n"
+        "  体质: null\n"
+        "  意志: [pow]\n"
+    )
+    pack = rulepacks_module.parse_rulepack_text("patched", child_yaml, base_loader=_raw_loader({"base": base}))
+
+    assert pack.defaults == {"力量": 70, "体质": 50}  # child wins, untouched keys inherit
+    assert pack.names == ["patched"]  # lists replace wholesale
+    assert "体质" not in pack.alias  # explicit null deletes an inherited key
+    assert pack.alias["意志"] == ["pow"]
+    assert pack.set_keys == ["base"]  # unmentioned sections inherit
+
+
+def test_extends_resolves_builtin_coc7_as_a_patch_base() -> None:
+    pack = rulepacks_module.parse_rulepack_text(
+        "pulp-coc", "extends: coc7\nnames: [pulp-coc]\ndefaults:\n  幸运: 99\n"
+    )
+    assert pack.defaults["幸运"] == 99
+    # The inherited base still computes its bespoke derived math (named computers survive).
+    derived = pack.compute_derived({"力量": 60, "体型": 70, "敏捷": 50, "教育": 60, "意志": 55})
+    assert derived["DB"] == "1d4"  # STR 60 + SIZ 70 = 130 -> the 125..164 bracket
+
+
+def test_extends_chains_resolve_grandparents_and_cap_depth() -> None:
+    packs = {
+        "a": {"defaults": {"x": 1, "y": 1, "z": 1}},
+        "b": {"extends": "a", "defaults": {"y": 2}},
+    }
+    pack = rulepacks_module.parse_rulepack_text(
+        "c", "extends: b\ndefaults:\n  z: 3\n", base_loader=_raw_loader(packs)
+    )
+    assert pack.defaults == {"x": 1, "y": 2, "z": 3}
+
+    deep = {f"p{i}": {"extends": f"p{i + 1}"} for i in range(8)}
+    with pytest.raises(ValueError, match="deeper than"):
+        rulepacks_module.parse_rulepack_text("top", "extends: p0\n", base_loader=_raw_loader(deep))
+
+
+def test_extends_rejects_cycles_unknown_bases_and_self_reference() -> None:
+    cyclic = {"a": {"extends": "b"}, "b": {"extends": "a"}}
+    with pytest.raises(ValueError, match="cycle"):
+        rulepacks_module.parse_rulepack_text("c", "extends: a\n", base_loader=_raw_loader(cyclic))
+    with pytest.raises(ValueError, match="unknown base"):
+        rulepacks_module.parse_rulepack_text("c", "extends: nope\n", base_loader=_raw_loader({}))
+    with pytest.raises(ValueError, match="cycle"):
+        rulepacks_module.parse_rulepack_text("self", "extends: self\n", base_loader=_raw_loader({"self": {}}))

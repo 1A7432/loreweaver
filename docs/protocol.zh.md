@@ -66,7 +66,7 @@
   `panel:"inline"` 渲染进叙事流，`"sidebar"` 渲染进常驻侧栏区域。`id` 命名一个 UI 区域：后到的同 `id` sidebar 帧替换该区域内容；带 `replace:true` 的 inline 帧可以就地更新前一个同 `id` 的 inline 帧（不支持就地更新的客户端顺序追加即可）。玩家点选 `choices` 选项时，客户端把该选项的 `input` 原样作为普通 `input` 帧发回——不新增客户端→服务端帧类型。
 - `state` — 一个面板快照，在 `join` 时和每回合后发送：
   `{type:"state", character?:{name,system,hp,hpmax,mp,mpmax,san,sanmax,attributes:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,hp?:int,hpMax?:int,san?:int,sanMax?:int,mp?:int,mpMax?:int,ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, variables?:[{id:string,label:string,kind:"number"|"bool"|"text"|"enum",value:number|boolean|string,min?:int,max?:int}], reset?:boolean}`
-  `variables`（v1.6，递增式/可选——房间没有时整个字段省略）是房间的确定性模块变量，且只含玩家可见子集：仅守秘人可见的变量在引擎内部（`core.modvars.player_entries`）就被过滤，永远不会到达任何传输层。条目按定义顺序到达（按原样渲染，不要排序）；`label` 已按房间语言本地化；`min`/`max` 只出现在有界的 `number` 变量上（客户端可将其渲染为进度条）。导入的 SillyTavern MVU 卡片变量共用同一列表：`id` 带 `mvu.` 前缀、点分路径作为 `label`（仅标量叶子，服务端封顶）——不新增帧类型，客户端无需改动。
+  `variables`（v1.6，递增式/可选——房间没有时整个字段省略）是房间的确定性模块变量，且只含玩家可见子集：仅守秘人可见的变量在引擎内部（`core.modvars.player_entries`）就被过滤，永远不会到达任何传输层。条目按定义顺序到达（按原样渲染，不要排序）；`label` 已按房间语言本地化；`min`/`max` 只出现在有界的 `number` 变量上（客户端可将其渲染为进度条）。导入的 SillyTavern MVU 卡片变量共用同一列表：`id` 带 `mvu.` 前缀、点分路径作为 `label`（仅标量叶子，服务端封顶）——不新增帧类型，客户端无需改动。MVU 叶子由**守秘人策展**（默认全隐、fail-closed）：玩家帧只携带守秘人公开过的路径（`.var expose`）；守秘人自己连接的帧额外携带未公开的其余叶子，每条带 `hidden:true` 标记（递增式/可选——不认识该字段的客户端照常渲染，认识的可以做置灰或加锁标记）。
   `reset:true` 标记战役清空(`.reset` / `admin_reset_room`)后服务端推送的快照：面板数据已是最新(空)，客户端还应清空本地累积的聊天记录。
 - `presence` — 连接的玩家名单，在加入/离开时发送：
   `{type:"presence", players:[{id,name,online}], online:int}`

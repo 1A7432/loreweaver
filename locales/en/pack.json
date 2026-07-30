@@ -16,5 +16,8 @@
   "pack.install.skills": "   skills: {ids} — a keeper enables one in-room with .skill enable <id>",
   "pack.install.rulepacks": "   rulepacks: {ids} — discoverable right away (switch systems with the usual rule commands)",
   "pack.install.packdir": "   cards/lorebooks/assets: {cards}/{lorebooks}/{assets} file(s) under {path} — import in-room with .import <file> / .module",
-  "pack.install.shadowed": "   note: '{id}' shares a built-in id; the built-in keeps winning (rename the packed one to use it)."
+  "pack.install.shadowed": "   note: '{id}' shares a built-in id; the built-in keeps winning (rename the packed one to use it).",
+  "pack.card.world_cards": "Contains {count} WORLD card(s) — module machinery (hooks/variables/EJS); the keeper imports them with `.import <file> world`.",
+  "pack.install.world_cards": "World cards (keeper-imported via `.import <file> world`): {names}",
+  "pack.install.card_note": "Note for {path}: {note}"
 }

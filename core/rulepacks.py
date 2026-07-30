@@ -413,7 +413,83 @@ def _build_rulepack(pack_id: str, data: Mapping[str, Any]) -> RulePack:
     )
 
 
-def parse_rulepack_text(pack_id: str, text: str) -> RulePack:
+MAX_EXTENDS_DEPTH = 4
+
+
+def load_raw_rulepack_yaml(pack_id: str) -> Mapping[str, Any] | None:
+    """The raw YAML mapping for `pack_id` from the discovery dirs (built-in dir first, then
+    `_USER_RULEPACK_DIR`), or `None` when no such file exists / it isn't a mapping. This is the
+    default `extends:` base loader — deliberately file-based rather than registry-based so
+    resolution is independent of discovery scan order."""
+    for directory in (_RULEPACK_DIR, _USER_RULEPACK_DIR):
+        if directory is None or not directory.is_dir():
+            continue
+        path = directory / f"{pack_id}.yaml"
+        if path.is_file():
+            data = safe_load_no_aliases(path.read_text(encoding="utf-8")) or {}
+            return data if isinstance(data, Mapping) else None
+    return None
+
+
+def _merge_extends(base: Mapping[str, Any], child: Mapping[str, Any]) -> dict[str, Any]:
+    """Deep-merge `child` over `base`: mappings merge recursively, an explicit `null` child
+    value DELETES the inherited key (how a patch removes a base alias/derived/default), and
+    everything else — scalars and lists — replaces wholesale."""
+    merged: dict[str, Any] = dict(base)
+    for key, value in child.items():
+        if value is None:
+            merged.pop(key, None)
+        elif isinstance(value, Mapping) and isinstance(merged.get(key), Mapping):
+            merged[key] = _merge_extends(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def resolve_extends(
+    pack_id: str,
+    data: Mapping[str, Any],
+    *,
+    base_loader: Callable[[str], Mapping[str, Any] | None] | None = None,
+) -> dict[str, Any]:
+    """Resolve a rulepack's ``extends: <base-id>`` chain into one flat raw mapping.
+
+    This is how a WORLD ships its own rules without rewriting a whole system (the
+    module <-> rules coupling `docs/plugins.md` describes): a pack file patches a base —
+    `extends: coc7` plus only the deltas — or replaces it outright by not extending at all.
+    Chains resolve base-first (`_merge_extends`, child wins, `null` deletes), are capped at
+    `MAX_EXTENDS_DEPTH`, and fail loudly on a cycle or an unknown base. NOTE: a patch needs
+    its own NEW id — discovery never lets a user-dir file shadow a built-in of the same id.
+    """
+    loader = base_loader or load_raw_rulepack_yaml
+    seen = {pack_id}
+    resolved = dict(data)
+    while True:
+        base_ref = resolved.pop("extends", None)
+        if base_ref is None:
+            return resolved
+        if not isinstance(base_ref, str) or not base_ref.strip():
+            raise ValueError(f"rulepack '{pack_id}': extends must name a base rulepack id")
+        base_id = base_ref.strip()
+        if base_id in seen:
+            raise ValueError(f"rulepack '{pack_id}': extends cycle through '{base_id}'")
+        if len(seen) > MAX_EXTENDS_DEPTH:
+            raise ValueError(f"rulepack '{pack_id}': extends chain deeper than {MAX_EXTENDS_DEPTH}")
+        base = loader(base_id)
+        if base is None:
+            raise ValueError(f"rulepack '{pack_id}': extends unknown base rulepack '{base_id}'")
+        seen.add(base_id)
+        # The base's own `extends` key (if any) survives the merge — the loop resolves the
+        # grandparent on the next pass, so multi-level patches compose naturally.
+        resolved = _merge_extends(base, resolved)
+
+
+def parse_rulepack_text(
+    pack_id: str,
+    text: str,
+    *,
+    base_loader: Callable[[str], Mapping[str, Any] | None] | None = None,
+) -> RulePack:
     """Parse rulepack YAML `text` into a `RulePack`, assigning it `pack_id`.
 
     The same YAML-to-`RulePack` builder `_discover_registry` uses on-disk, exposed so a caller
@@ -421,15 +497,19 @@ def parse_rulepack_text(pack_id: str, text: str) -> RulePack:
     before ever writing it to disk) can validate against the identical rules real discovery will
     later apply -- no separate/divergent parser to keep in sync (mirrors
     `core.skills.parse_skill_text`'s precedent). Raises `ValueError` on any malformed input (bad
-    YAML, a non-mapping root, or an invalid `derived:` spec -- see `_compile_derived_section`);
-    never `eval`/`exec`s anything -- the YAML is `yaml.safe_load`-ed only (via
-    `core.yaml_safety.safe_load_no_aliases`, which also rejects alias/anchor nodes so a small
-    YAML file can never alias-bomb into an exponential in-memory structure) and `derived:` compiles
-    through the fixed safe DSL / named-computer vocabulary only.
+    YAML, a non-mapping root, an unresolvable `extends:` chain, or an invalid `derived:` spec --
+    see `_compile_derived_section`); never `eval`/`exec`s anything -- the YAML is
+    `yaml.safe_load`-ed only (via `core.yaml_safety.safe_load_no_aliases`, which also rejects
+    alias/anchor nodes so a small YAML file can never alias-bomb into an exponential in-memory
+    structure) and `derived:` compiles through the fixed safe DSL / named-computer vocabulary
+    only. `base_loader` overrides where `extends:` bases are read from (`core.pack` resolves a
+    pack's bundled siblings through the archive before falling back to the discovery dirs).
     """
     data = safe_load_no_aliases(text) or {}
     if not isinstance(data, Mapping):
         raise ValueError(f"rulepack '{pack_id}': YAML root must be a mapping, got {type(data).__name__}")
+    if "extends" in data:
+        data = resolve_extends(pack_id, data, base_loader=base_loader)
     return _build_rulepack(pack_id, data)
 
 

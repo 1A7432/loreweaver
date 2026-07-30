@@ -101,7 +101,27 @@ async def test_variables_labels_follow_the_callers_locale():
     assert state_en["variables"][0]["label"] == "Town Fear"
 
 
-async def test_mvu_leaves_ride_the_variables_list_with_prefixed_ids():
+async def test_mvu_leaves_are_hidden_from_players_until_exposed():
+    """RED LINE: an imported tree is opaque module state — with no exposure list, a player
+    frame carries NO mvu.* entries at all (heavy cards keep hidden plot flags in the tree)."""
+    services = _services()
+    ctx = _room_ctx("vars-mvu-hidden-room")
+    from core.mvu_compat import MvuManager
+
+    await ModvarManager(services.store).define(
+        ctx.chat_key, build_spec("fear", "number", minimum=0, maximum=10)
+    )
+    await MvuManager(services.store).init_from_initvar(
+        ctx.chat_key, {"理": {"好感度": [33, "affinity"]}, "真凶": ["管家", "hidden twist"]}
+    )
+
+    state = await build_room_state(services, ctx)
+
+    assert [entry["id"] for entry in state["variables"]] == ["fear"]
+    assert "真凶" not in json.dumps(state, ensure_ascii=False)
+
+
+async def test_exposed_mvu_leaves_ride_the_variables_list_with_prefixed_ids():
     services = _services()
     ctx = _room_ctx("vars-mvu-room")
     from core.mvu_compat import MvuManager
@@ -109,14 +129,45 @@ async def test_mvu_leaves_ride_the_variables_list_with_prefixed_ids():
     await ModvarManager(services.store).define(
         ctx.chat_key, build_spec("fear", "number", minimum=0, maximum=10)
     )
-    await MvuManager(services.store).init_from_initvar(
-        ctx.chat_key, {"理": {"好感度": [33, "affinity"], "档案": {"备注": ["長い", "note"]}}}
+    manager = MvuManager(services.store)
+    await manager.init_from_initvar(
+        ctx.chat_key, {"理": {"好感度": [33, "affinity"], "档案": {"备注": ["長い", "note"]}}, "真凶": ["管家", "twist"]}
     )
+    await manager.expose(ctx.chat_key, "理")  # keeper puts the 理 subtree on the panel
 
     state = await build_room_state(services, ctx)
 
     ids = [entry["id"] for entry in state["variables"]]
     assert ids[0] == "fear"  # native trackers first
     assert "mvu.理.好感度" in ids
+    assert "mvu.真凶" not in ids  # unexposed sibling stays off every player frame
     mvu_entry = next(entry for entry in state["variables"] if entry["id"] == "mvu.理.好感度")
     assert mvu_entry == {"id": "mvu.理.好感度", "label": "理.好感度", "kind": "number", "value": 33}
+
+
+async def test_keeper_viewer_sees_unexposed_leaves_flagged_hidden():
+    """A keeper connection (authenticated role in ctx.extra, or the local `cli` operator)
+    still watches the whole tree — unexposed leaves arrive flagged `hidden: true`."""
+    services = _services()
+    player_ctx = _room_ctx("vars-mvu-keeper-room")
+    keeper_ctx = AgentCtx(
+        chat_key=player_ctx.chat_key,
+        user_id="kp",
+        platform="tui",
+        locale="en",
+        extra={"role": "keeper"},
+    )
+    from core.mvu_compat import MvuManager
+
+    manager = MvuManager(services.store)
+    await manager.init_from_initvar(ctx_key := player_ctx.chat_key, {"理": {"好感度": [33, "a"]}, "真凶": ["管家", "t"]})
+    await manager.expose(ctx_key, "理")
+
+    keeper_state = await build_room_state(services, keeper_ctx)
+    entries = {entry["id"]: entry for entry in keeper_state["variables"]}
+    assert entries["mvu.理.好感度"].get("hidden") is None  # exposed → plain entry
+    assert entries["mvu.真凶"]["hidden"] is True
+
+    cli_ctx = AgentCtx(chat_key=ctx_key, user_id="op", platform="cli", locale="en")
+    cli_state = await build_room_state(services, cli_ctx)
+    assert "mvu.真凶" in {entry["id"] for entry in cli_state["variables"]}

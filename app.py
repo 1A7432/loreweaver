@@ -394,6 +394,8 @@ def _print_trust_card(i18n: I18n, manifest: core_pack.PackManifest, locale: str)
         ),
         file=sys.stderr,
     )
+    if trust.world_cards:
+        print(i18n.t("pack.card.world_cards", count=trust.world_cards), file=sys.stderr)
 
 
 def _run_pack(i18n: I18n, args: argparse.Namespace) -> int:
@@ -481,6 +483,12 @@ def _run_install(settings: Settings, i18n: I18n, args: argparse.Namespace) -> in
             ),
             file=sys.stderr,
         )
+    if report.world_cards:
+        print(i18n.t("pack.install.world_cards", names=", ".join(report.world_cards)), file=sys.stderr)
+    for card in report.manifest.card_entries:
+        note = card.notes.get(i18n.locale) or card.notes.get("en") or ""
+        if note:
+            print(i18n.t("pack.install.card_note", path=card.path, note=note), file=sys.stderr)
     for shadowed_id in report.shadowed:
         print(i18n.t("pack.install.shadowed", id=shadowed_id), file=sys.stderr)
     return 0

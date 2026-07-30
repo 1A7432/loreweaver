@@ -107,6 +107,15 @@ an exotic one *may* use code):
 The two built-ins (`coc7`, `dnd5e`) are migrated to this format with **identical
 behavior** and serve as reference packs.
 
+**Rules may couple to worlds** (`extends:`): a module that needs bespoke rules ships a
+rulepack that *patches* a base system instead of rewriting it — `extends: coc7` plus only
+the deltas. Resolution is a deterministic deep-merge (child wins; mappings merge
+recursively; an explicit `null` deletes an inherited key; lists replace wholesale), chains
+resolve through grandparents (capped at 4), and cycles/unknown bases fail the parse. A
+patch needs its own new id — discovery never lets a user file shadow a built-in's id. Inside
+an `.lwpack`, `extends:` resolves against the pack's own bundled rulepacks first, then this
+host's discovery dirs, so a world can carry base + patch together.
+
 ### A.2 Character cards — SillyTavern V2/V3
 
 Loreweaver already imports SillyTavern cards (`core/charcard.py` →
@@ -117,6 +126,29 @@ scenario, first_mes, mes_example, system_prompt, post_history_instructions,
 alternate_greetings, tags, creator, character_version, character_book,
 extensions`. Unknown fields are ignored, not rejected — forward-compatible with
 V3 additions.
+
+**The card split (拆卡).** An ST "heavy card" fuses two artifacts that Loreweaver keeps
+separate: the CHARACTER (persona, memory, abilities, a sheet) and the WORLD (hook scripts,
+`[InitVar]` variable schemas, executable EJS — machinery that reprograms the whole room).
+That fusion is upstream's single-player architecture, not a design to preserve, so import
+decomposes every card deterministically (`core.card_split`):
+
+- **Character import** (`.import <file> [pc|companion]`) takes only the character half.
+  World machinery is *structurally stripped* — hooks are not installed, declaration entries
+  are neither stored nor consumed, EJS spans are removed from prose and lore — and the
+  result message itemizes exactly what was stripped. This is what a player may self-import
+  into a shared room.
+- **World import** (`.import <file> world`, keeper-only, deliberately not a model tool)
+  brings in the machinery half as module content: the full lorebook with keeper trust
+  (secrecy flags honored), `[InitVar]` seeded into the room's variable tree, hooks installed
+  room-wide. The persona is untouched — a keeper who also wants the card's narrator at the
+  table imports it separately as a companion.
+
+The boundary is the room's trust boundary, not a capability cut: "author freedom over
+gatekeeping" is the *operator's* stance about the operator's own box, and the keeper is the
+operator of the room. Everything that reprograms shared play — skills (`.skill enable`),
+hooks, variable schemas, rules — goes through the keeper's hands; nothing a player uploads
+can execute or mutate shared state by construction.
 
 ### A.3 World info / lore — SillyTavern lorebook
 
@@ -141,6 +173,12 @@ player-visible subset ships to clients on the `state` frame (protocol v1.6) for 
 TUI's tracker panel. Keeper-only variables are filtered inside the engine and never
 reach a transport (iron rule #3, structural). This is state, not code: nothing here
 executes, so it stays firmly in Layer A's risk class.
+
+An **imported card's MVU tree** gets the same discipline from the other direction: it is
+opaque module state (heavy cards routinely keep hidden plot flags in it), so its leaves
+reach NO player panel by default. The keeper curates exposure with `.var expose
+<prefix|*>` / `.var hide <prefix>` / `.var list`; keeper connections see the unexposed
+remainder flagged `hidden: true` on their own frames, players never see it at all.
 
 ### A.5 SillyTavern MVU & EJS compatibility (imported cards)
 
@@ -196,9 +234,12 @@ ST-Prompt-Template EJS extension import and RUN, within a documented subset:
   never pollute a prompt, and the TUI's tracker panel shows the variable tree instead).
 
 The import trust boundary (scope pinning, constant stripped, secret keeper-gated, ids
-regenerated) applies unchanged in both modes. With full EJS enabled, imported cards run
-code in the sandbox described above — that is the point; operators who want the
-data-only Layer A posture set `TRPG_ENABLE_FULL_EJS=false` or skip the `ejs` extra.
+regenerated) applies unchanged in both modes — and everything in this section describes
+what runs after a **keeper world-import** (see the card split in A.2): a player's
+character import carries none of this machinery in the first place. With full EJS
+enabled, world content runs code in the sandbox described above — that is the point;
+operators who want the data-only Layer A posture set `TRPG_ENABLE_FULL_EJS=false` or
+skip the `ejs` extra.
 
 ### A.6 Other data packs
 
@@ -275,8 +316,9 @@ operator's content, the operator's box):
 
 - **Where they live**: a `hooks.js` next to a skill's `SKILL.md` (active while the skill is
   enabled for the room — the existing `.skill enable` flow is the on/off switch), or a card's
-  `extensions.loreweaver_hooks` list (installed at import; re-importing a card replaces its
-  scripts rather than stacking).
+  `extensions.loreweaver_hooks` list (installed by the KEEPER's `.import <file> world` — a
+  card with hooks is a world card, see the split in A.2; re-importing replaces its scripts
+  rather than stacking).
 - **API**: `on("turn_start"|"reply_ready"|"dice_rolled"|"variables_changed", handler)`, the
   full variable bridge (`getvar`/`setvar`/`variables`/`stat_data`, lodash as `_`), and the
   effect emitters `inject(text)` (adds a section to this turn's keeper prompt),
@@ -356,7 +398,7 @@ isolation. Until C.2 ships, code contributions go through normal in-tree PRs.
 | `engine` | no | minimum versions: `protocol` (wire protocol) and/or `server` — minimum-compare only |
 | `contents.skills` | no | skill DIRECTORIES (`skills/<id>`), each exactly `SKILL.md` + optional `hooks.js` |
 | `contents.rulepacks` | no | rulepack YAML files (`rulepacks/<id>.yaml`) |
-| `contents.cards` | no | SillyTavern character cards (PNG or JSON) |
+| `contents.cards` | no | SillyTavern cards (PNG or JSON): a plain path = a `character` card; a `{path, kind: world, notes: {en, zh}}` mapping declares a WORLD card (module machinery, keeper-imported via `.import <file> world`). The label is enforced against real detection at build AND install — a card carrying hooks/`[InitVar]`/EJS must be declared `kind: world` |
 | `contents.lorebooks` | no | lorebook JSON (ST `character_book` / `{entries: [...]}` shapes) |
 | `assets` | no | media files: `path` + optional `title`/`license`/`tags`/`mime`; `sha256`/`size`/`mime` are FILLED IN at pack time (a hand-declared `sha256` must match the file) |
 | `trust` | forbidden in source | GENERATED at pack time (counts, `has_hooks`, `has_ejs`, `asset_bytes`); a hand-written block fails the build |
@@ -378,8 +420,14 @@ engine:
   protocol: "1.7"   # minimum wire protocol the pack's hooks rely on
 contents:
   skills: [skills/omen-engine]      # a dir holding SKILL.md (+ hooks.js)
-  rulepacks: [rulepacks/pulp.yaml]
-  cards: [cards/keeper.png]
+  rulepacks: [rulepacks/pulp.yaml]  # full systems, or patches (`extends: coc7` + deltas)
+  cards:
+    - cards/investigator.png        # plain path = character card (player-importable)
+    - path: cards/keeper.png        # world card: hooks/[InitVar]/EJS ride here
+      kind: world
+      notes:
+        en: Import last, after enabling the omen-engine skill.
+        zh: 最后导入，先启用 omen-engine 技能。
   lorebooks: [lorebooks/manor.json]
 assets:
   - path: assets/theme.mp3

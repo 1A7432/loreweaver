@@ -49,6 +49,12 @@ MAX_TREE_DEPTH = 8
 MAX_TREE_NODES = 512
 MAX_FLAT_LEAVES = 200
 
+# Player-exposure list caps (`exposed_prefixes` below): keeper-curated, so the caps are
+# sanity bounds, not an attack surface.
+MAX_EXPOSED_PREFIXES = 64
+MAX_EXPOSED_PREFIX_CHARS = 200
+EXPOSE_ALL = "*"
+
 _SCALAR_TYPES = (str, int, float, bool, type(None))
 
 # One MVU variable tree: nested dicts/lists, CJK-keyed, ValueWithDescription leaves.
@@ -842,6 +848,33 @@ def _store_key(chat_key: str) -> str:
     return f"mvu_data.{chat_key}"
 
 
+def _exposed_key(chat_key: str) -> str:
+    return f"mvu_exposed.{chat_key}"
+
+
+def path_is_exposed(path: str, prefixes: list[str]) -> bool:
+    """Whether one flattened leaf path is player-visible under the keeper's exposure list.
+
+    ``"*"`` exposes everything; any other prefix matches itself and its dotted subtree
+    (segment-aligned: ``悟空`` exposes ``悟空.好感度`` but never ``悟空二号``). An empty
+    list — the default — exposes nothing: an imported tree is keeper-side module state
+    until the keeper deliberately puts a path on the party's panel (iron rule #3,
+    fail-closed like `core.modvars`' keeper-only visibility).
+    """
+    return any(
+        prefix == EXPOSE_ALL or path == prefix or path.startswith(prefix + ".")
+        for prefix in prefixes
+    )
+
+
+def _normalize_prefix(prefix: str) -> str:
+    """Trim and cap one exposure prefix; "" when unusable."""
+    cleaned = str(prefix).strip().strip(".")
+    if not cleaned or len(cleaned) > MAX_EXPOSED_PREFIX_CHARS:
+        return ""
+    return cleaned
+
+
 def _merge_missing(target: dict, incoming: dict) -> bool:
     """Recursively copy keys `target` lacks from `incoming` (in place on `target`); existing
     values always win. Returns whether anything was added."""
@@ -910,3 +943,51 @@ class MvuManager:
     async def has_data(self, chat_key: str) -> bool:
         """Whether this room has any (recoverable) MVU state."""
         return bool(await self.load(chat_key))
+
+    async def exposed_prefixes(self, chat_key: str) -> list[str]:
+        """The keeper-curated player-visible path prefixes; ``[]`` (nothing exposed) on a
+        miss or corrupt value — the fail-closed default `path_is_exposed` documents."""
+        raw = await self._store.get(user_key="", store_key=_exposed_key(chat_key))
+        if not raw:
+            return []
+        try:
+            data = json.loads(raw)
+        except (ValueError, TypeError):
+            return []
+        if not isinstance(data, list):
+            return []
+        prefixes: list[str] = []
+        for item in data:
+            cleaned = _normalize_prefix(item) if isinstance(item, str) else ""
+            if cleaned and cleaned not in prefixes:
+                prefixes.append(cleaned)
+        return prefixes[:MAX_EXPOSED_PREFIXES]
+
+    async def expose(self, chat_key: str, prefix: str) -> bool:
+        """Add one exposure prefix (keeper action). False when it was invalid, already
+        present, or the list is full; True when newly added (and persisted)."""
+        cleaned = _normalize_prefix(prefix)
+        if not cleaned:
+            return False
+        prefixes = await self.exposed_prefixes(chat_key)
+        if cleaned in prefixes or len(prefixes) >= MAX_EXPOSED_PREFIXES:
+            return False
+        prefixes.append(cleaned)
+        await self._store.set(
+            user_key="", store_key=_exposed_key(chat_key), value=json.dumps(prefixes, ensure_ascii=False)
+        )
+        return True
+
+    async def hide(self, chat_key: str, prefix: str) -> bool:
+        """Remove one exposure prefix exactly as stored; True when something was removed."""
+        cleaned = _normalize_prefix(prefix)
+        if not cleaned:
+            return False
+        prefixes = await self.exposed_prefixes(chat_key)
+        if cleaned not in prefixes:
+            return False
+        prefixes = [item for item in prefixes if item != cleaned]
+        await self._store.set(
+            user_key="", store_key=_exposed_key(chat_key), value=json.dumps(prefixes, ensure_ascii=False)
+        )
+        return True

@@ -574,3 +574,45 @@ async def test_manager_flatten_wrapper_and_has_data():
         {"path": "世界.link", "value": "https://example.com/wiki//page"},
     ]
     assert await manager.has_data("room1") is True
+
+
+# ---------------------------------------------------------------------------
+# Player exposure (state-panel visibility) — fail-closed by default
+# ---------------------------------------------------------------------------
+
+
+def test_path_is_exposed_is_segment_aligned_and_star_exposes_all():
+    from core.mvu_compat import path_is_exposed
+
+    assert path_is_exposed("理.好感度", ["理"])
+    assert path_is_exposed("理", ["理"])
+    assert not path_is_exposed("理二号.好感度", ["理"])  # prefix must end on a segment
+    assert not path_is_exposed("理.好感度", [])  # empty list exposes nothing
+    assert path_is_exposed("anything.at.all", ["*"])
+
+
+@pytest.mark.asyncio
+async def test_expose_hide_round_trip_with_caps_and_corrupt_store():
+    from core.mvu_compat import MAX_EXPOSED_PREFIXES, MvuManager
+
+    store = Store()
+    manager = MvuManager(store)
+    assert await manager.exposed_prefixes("room1") == []
+
+    assert await manager.expose("room1", " 理. ") is True  # trimmed + normalized
+    assert await manager.expose("room1", "理") is False  # duplicate
+    assert await manager.expose("room1", "   ") is False  # unusable
+    assert await manager.exposed_prefixes("room1") == ["理"]
+
+    assert await manager.hide("room1", "理") is True
+    assert await manager.hide("room1", "理") is False
+    assert await manager.exposed_prefixes("room1") == []
+
+    # Corrupt stored value degrades to the fail-closed default.
+    await store.set(user_key="", store_key="mvu_exposed.room1", value="{not json")
+    assert await manager.exposed_prefixes("room1") == []
+
+    # The list cap holds.
+    for index in range(MAX_EXPOSED_PREFIXES + 5):
+        await manager.expose("room2", f"p{index}")
+    assert len(await manager.exposed_prefixes("room2")) == MAX_EXPOSED_PREFIXES

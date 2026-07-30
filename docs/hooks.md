@@ -26,9 +26,11 @@ is not `false` (one switch governs every sandboxed-JS surface).
 - **In a skill:** a `hooks.js` file next to the skill's `SKILL.md`. It is active
   while the skill is enabled for the room — `.skill enable <id>` is the on/off
   switch, nothing new to learn.
-- **In a card:** an `extensions.loreweaver_hooks` list of script strings. The
-  scripts install when the card is imported; **re-importing the card replaces its
-  scripts** rather than stacking duplicates.
+- **In a card:** an `extensions.loreweaver_hooks` list of script strings. A card
+  carrying hooks is a **world card**: the scripts install when the Keeper imports
+  it with `.import <file> world` (a player's character import strips them — see
+  [cards.md](cards.md)); **re-importing the card replaces its scripts** rather
+  than stacking duplicates.
 
 A room runs at most **16 scripts**, each at most **40,000 characters**; anything
 beyond is skipped with a logged warning.

@@ -97,7 +97,7 @@ async def test_import_maps_at_if_to_condition_and_strips_decorator_lines():
     assert entry.content == "The cult mobilizes."
 
 
-async def test_import_consumes_initvar_into_the_mvu_tree_not_as_lore():
+async def test_keeper_import_consumes_initvar_into_the_mvu_tree_not_as_lore():
     store = Store()
     manager = WorldbookManager(store)
     initvar_content = '{\n  // starting state\n  "理": {"好感度": [33, "desc"],},\n}'
@@ -107,11 +107,30 @@ async def test_import_consumes_initvar_into_the_mvu_tree_not_as_lore():
             {"comment": "[InitVar]变量初始化", "content": initvar_content},
             {"comment": "real lore", "content": "The chapel is locked.", "keys": ["chapel"]},
         ],
+        is_keeper=True,
     )
     assert count == 1  # only the real lore entry stored
     assert [entry.title for entry in await manager.list("room1")] == ["real lore"]
     tree = await MvuManager(store).load("room1")
     assert tree["理"]["好感度"][0] == 33
+
+
+async def test_player_import_drops_initvar_without_seeding_the_shared_tree():
+    """RED LINE (拆卡): only the keeper's world import may write the room's variable tree.
+    A player upload's declaration entries are neither stored as lore nor consumed."""
+    store = Store()
+    manager = WorldbookManager(store)
+    count = await manager.import_entries(
+        "room1",
+        [
+            {"comment": "[InitVar]", "content": '{"真凶": ["管家", "twist"]}'},
+            {"comment": "real lore", "content": "The chapel is locked.", "keys": ["chapel"]},
+        ],
+        is_keeper=False,
+    )
+    assert count == 1
+    assert [entry.title for entry in await manager.list("room1")] == ["real lore"]
+    assert await MvuManager(store).load("room1") == {}
 
 
 async def test_import_initvar_bypasses_the_content_length_cap():
@@ -121,7 +140,7 @@ async def test_import_initvar_bypasses_the_content_length_cap():
     # far exceeds the 4000-char lore cap — the point is the cap bypass, not the budget.
     big = "{" + ",".join(f'"k{i}": [{i}, "some longer description text"]' for i in range(150)) + "}"
     assert len(big) > 4000
-    count = await manager.import_entries("room1", [{"comment": "[InitVar]", "content": big}])
+    count = await manager.import_entries("room1", [{"comment": "[InitVar]", "content": big}], is_keeper=True)
     assert count == 0
     assert (await MvuManager(store).load("room1"))["k149"][0] == 149
 

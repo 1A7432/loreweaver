@@ -1451,13 +1451,19 @@ class CommandRouter:
         return ctx.i18n.t("worldbook.commands.lore.usage")
 
     async def cmd_import(self, ctx: CommandCtx) -> str:
-        """`.import <card file> [coc7|dnd5e] [pc|companion]` — import a SillyTavern card as the
-        acting player's PC or an AI companion (M12)."""
+        """`.import <card file> [coc7|dnd5e] [pc|companion|world]` — import a SillyTavern card.
+
+        `pc`/`companion` take the card's CHARACTER half only (`core.card_split` strips hook
+        scripts, variable declarations and EJS — module machinery is never player-importable).
+        `world` imports that machinery half as the room's module content and is KEEPER-ONLY:
+        it installs room hooks, seeds the variable tree, and honors secrecy flags (M12/拆卡).
+        """
         from agent.kp_tools_charcard import CharcardTools
 
+        option_words = {"coc7", "coc", "dnd5e", "dnd", "pc", "companion", "world", "世界"}
         tokens = ctx.args.split()
         attachment = _first_attachment_name(ctx.raw_ctx)
-        if attachment and (not tokens or tokens[0].casefold() in {"coc7", "coc", "dnd5e", "dnd", "pc", "companion"}):
+        if attachment and (not tokens or tokens[0].casefold() in option_words):
             file_path = attachment
             options = tokens
             from_attachment = True
@@ -1480,10 +1486,74 @@ class CommandRouter:
                 system = low
             elif low in {"pc", "companion"}:
                 as_ = low
+            elif low in {"world", "世界"}:
+                as_ = "world"
+        tools = CharcardTools(ctx.services)
+        if as_ == "world":
+            # The ONLY entrance to the world-import path (deliberately not a model tool):
+            # this deterministic check is what makes "module machinery goes through the
+            # keeper" structural rather than behavioral.
+            if not _is_keeper(ctx.raw_ctx):
+                return ctx.i18n.t("charcard.commands.import.world_denied")
+            return await tools.import_world_card(self._agent_ctx(ctx), file_path=file_path)
         if as_ == "companion" and not _is_keeper(ctx.raw_ctx):
             return ctx.i18n.t("charcard.commands.import.companion_denied")
-        tools = CharcardTools(ctx.services)
         return await tools.import_character(self._agent_ctx(ctx), file_path=file_path, system=system, as_=as_)
+
+    async def cmd_var(self, ctx: CommandCtx) -> str:
+        """`.var [list|expose <prefix|*>|hide <prefix>]` — keeper curation of which imported-card
+        variables (the MVU tree) appear on the party's state panel.
+
+        Engine-native module variables declare `visibility` at definition time (`core.modvars`);
+        an imported tree is opaque module state, so it starts fully hidden (iron rule #3,
+        fail-closed) and this command is the deterministic lever that puts chosen paths on the
+        players' panel. Keeper-only on every subcommand — even `list`, since the listing shows
+        the hidden remainder."""
+        from core.mvu_compat import MvuManager, path_is_exposed
+
+        if not _is_keeper(ctx.raw_ctx):
+            return ctx.i18n.t("vars.commands.denied")
+        tokens = ctx.args.split()
+        sub = tokens[0].casefold() if tokens else "list"
+        rest = " ".join(tokens[1:]).strip()
+        manager = MvuManager(ctx.services.store)
+        if sub in {"expose", "show", "公开", "公開"}:
+            if not rest:
+                return ctx.i18n.t("vars.commands.usage")
+            changed = await manager.expose(ctx.chat_key, rest)
+            if changed and ctx.router.hub is not None:
+                await publish_state(ctx.router.hub, ctx.services, ctx.raw_ctx)
+            return ctx.i18n.t("vars.commands.exposed" if changed else "vars.commands.expose_noop", prefix=rest)
+        if sub in {"hide", "隐藏", "隱藏"}:
+            if not rest:
+                return ctx.i18n.t("vars.commands.usage")
+            changed = await manager.hide(ctx.chat_key, rest)
+            if changed and ctx.router.hub is not None:
+                await publish_state(ctx.router.hub, ctx.services, ctx.raw_ctx)
+            return ctx.i18n.t("vars.commands.hidden" if changed else "vars.commands.hide_noop", prefix=rest)
+        if sub not in {"list", "列表"}:
+            return ctx.i18n.t("vars.commands.usage")
+        leaves = await manager.flatten(ctx.chat_key)
+        exposed = await manager.exposed_prefixes(ctx.chat_key)
+        if not leaves and not exposed:
+            return ctx.i18n.t("vars.commands.empty")
+        lines = [ctx.i18n.t("vars.commands.list_header", count=len(leaves))]
+        if exposed:
+            lines.append(ctx.i18n.t("vars.commands.exposed_line", prefixes=", ".join(exposed)))
+        max_lines = 40
+        for leaf in leaves[:max_lines]:
+            value = str(leaf["value"])
+            if len(value) > 60:
+                value = f"{value[:60]}…"
+            tag = (
+                ctx.i18n.t("vars.commands.visible_tag")
+                if path_is_exposed(leaf["path"], exposed)
+                else ctx.i18n.t("vars.commands.hidden_tag")
+            )
+            lines.append(f"· {leaf['path']} = {value} {tag}")
+        if len(leaves) > max_lines:
+            lines.append(ctx.i18n.t("vars.commands.more", count=len(leaves) - max_lines))
+        return "\n".join(lines)
 
     async def cmd_module(self, ctx: CommandCtx) -> str:
         """`.module <module file>` — import a module document and run module analysis."""
@@ -2082,6 +2152,17 @@ class CommandRouter:
                 ["import", "导入", "導入"],
                 None,
                 "charcard.commands.import.help",
+            ),
+            CommandSpec(
+                "var",
+                self.cmd_var,
+                ["var", "vars"],
+                ["var", "变量", "變量"],
+                None,
+                "vars.commands.help",
+                # Keeper-only curation of the imported variable tree's player visibility;
+                # `list` prints the hidden remainder, so replies stay on the caller.
+                private_reply=True,
             ),
             CommandSpec(
                 "module",

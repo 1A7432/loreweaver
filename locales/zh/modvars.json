@@ -23,5 +23,18 @@
   "modvars.stat.get.missing": "路径 \"{path}\" 上没有变量。",
   "modvars.stat.set.done": "{path}：{old} → {new}。",
   "modvars.stat.adjust.done": "{path}：{old} → {new}（变化：{delta}）。",
-  "modvars.stat.failed": "卡片变量操作失败：{error}"
+  "modvars.stat.failed": "卡片变量操作失败：{error}",
+  "vars.commands.help": "守秘人：管理导入卡变量在队伍面板上的可见性：.var list | expose <前缀|*> | hide <前缀>",
+  "vars.commands.usage": "用法：.var list | .var expose <前缀|*> | .var hide <前缀>",
+  "vars.commands.denied": "只有已认证的守秘人可以管理变量可见性。",
+  "vars.commands.empty": "本房间没有导入卡变量。",
+  "vars.commands.list_header": "导入卡变量（共 {count} 个叶子；隐藏项永不进入玩家面板）：",
+  "vars.commands.exposed_line": "已公开前缀：{prefixes}",
+  "vars.commands.visible_tag": "[可见]",
+  "vars.commands.hidden_tag": "[隐藏]",
+  "vars.commands.more": "……另有 {count} 个叶子。",
+  "vars.commands.exposed": "已将「{prefix}」公开到队伍面板。",
+  "vars.commands.expose_noop": "「{prefix}」已在公开列表中（或列表已满）。",
+  "vars.commands.hidden": "已将「{prefix}」从队伍面板隐藏。",
+  "vars.commands.hide_noop": "「{prefix}」不在公开列表中（用 .var list 查看）。"
 }
