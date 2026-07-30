@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "loreweaver contributors" }]
-keywords = ["ttrpg", "dnd", "coc", "dice", "ai", "game-master", "keeper", "discord"]
+keywords = ["ttrpg", "dnd", "coc", "dice", "ai", "game-master", "keeper"]
 
 dependencies = [
     "d20>=1.1.2",
@@ -29,12 +29,6 @@ Documentation = "https://1a7432.site/commands-en.html"
 Issues = "https://github.com/1A7432/loreweaver/issues"
 
 [project.optional-dependencies]
-# Platform SDKs are optional extras so the core + CLI install stays light.
-telegram = ["python-telegram-bot>=21.0"]
-# discord.py 2.7.1's voice extra still pins vulnerable PyNaCl below 1.6.
-discord = ["discord.py>=2.7", "davey>=0.1.0", "PyNaCl>=1.6.2,<1.7"]
-# The stoppable long-connection wrapper uses the 1.5.5 private WS protocol surface.
-feishu = ["lark-oapi==1.5.5"]
 vector = ["sqlite-vec>=0.1.1"]
 # Full SillyTavern EJS template compatibility: real JavaScript in worldbook/card content,
 # executed in an embedded QuickJS sandbox (memory/time-capped, no host I/O). Without this
@@ -85,10 +79,9 @@ version_file = "_lw_version.py"
 # installed (non-editable) wheel, not the source repo root.
 #
 # Also folds in a second, same-shape pre-existing omission found while
-# hard-verifying this fix: `adapters` has real subpackages (adapters.cli,
-# .discord, .feishu, .onebot, .qq_official, .telegram) that the old flat
-# `["core", ..., "adapters"]` list never declared, so they were silently
-# absent from the wheel too — `python -m app --cli` imports
+# hard-verifying this fix: `adapters` has a real subpackage (adapters.cli)
+# that the old flat `["core", ..., "adapters"]` list never declared, so it was
+# silently absent from the wheel too — `python -m app --cli` imports
 # `adapters.cli.adapter` and would ModuleNotFoundError on a clean install.
 packages = [
     "core",
@@ -97,11 +90,6 @@ packages = [
     "gateway",
     "adapters",
     "adapters.cli",
-    "adapters.discord",
-    "adapters.feishu",
-    "adapters.onebot",
-    "adapters.qq_official",
-    "adapters.telegram",
     "net",
     "rulepacks",
     "locales",

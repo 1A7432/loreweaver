@@ -8,7 +8,7 @@ Loreweaver is a self-hosted **AI Game Master / Keeper** for tabletop RPGs: a wor
 - `agent/` — the AI-KP brain: `AgentCtx`, `tools` (`@tool` schema-gen + gating), `kp_tools*` (the Keeper tools), `forge` (self-extension generators: skill/rulepack/module from a description), `prompt_builder`, `loop` (function-calling loop), `services` (the wiring bundle), knowledge-scoped `npc`/`companion` actors.
 - `gateway/` — platform-independent: session/events/turn/member/room state, `commands` (dual-dialect + slash), `ops` (rate-limit/censor/permissions), `hub` (the cross-transport RoomHub), `director`.
 - `net/` — `session` (transport-agnostic SessionCore), `iroh_server` (p2p QUIC, the DEFAULT carrier), `tui_server` (WebSocket, offline-test/loopback only), `keystore`, `admin`, `room_backup`.
-- `adapters/` — `cli` (maintained); `discord`, `qq_official`, `telegram`, `feishu`, and `onebot` are mock-tested **Experimental** adapters pending live-platform acceptance. OpenTUI remains the primary client.
+- `adapters/` — `cli` only (the local operator REPL). The five chat-platform adapters (Discord/QQ/Telegram/Feishu/OneBot) were REMOVED 2026-07-30: the UI direction is protocol clients with a deeply customizable UI extension layer (`ui` frames, panels), which text-chat platforms structurally cannot render. Don't re-add platform adapters; build against `docs/protocol.md` instead.
 - `clients/` — TypeScript: `protocol` (shared types + `WsClient`), `tui` (OpenTUI terminal — the primary client; `IrohClient` and the one-click host live here). Both speak `docs/protocol.md`.
 
 ## Iron rules / red lines (do not break)
@@ -21,7 +21,6 @@ Loreweaver is a self-hosted **AI Game Master / Keeper** for tabletop RPGs: a wor
 ## Develop / test / run
 ```bash
 uv sync --extra anthropic --extra gemini --extra ejs   # env + deps; the `dev` group (pytest/ruff) installs by default; `ejs` = QuickJS-sandboxed full SillyTavern EJS templates (tests skip without it). (pip fallback: python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[dev,anthropic,gemini,ejs]")
-uv sync --extra discord --extra telegram --extra feishu  # optional SDK-backed Experimental adapters; QQ/OneBot use core deps
 uv run pytest -q               # offline: FakeLLM/FakeEmbeddings + seed_dice, no network/keys
 uv run ruff check core infra agent gateway net adapters app.py scripts
 uv run python scripts/i18n_lint.py    # NO ARGS (passing a path wrongly scans .venv)
@@ -35,7 +34,6 @@ Tests are deterministic and offline. To run a real Keeper, set `TRPG_LLM__*` in 
 - **Rule system** → add a `rulepacks/<system>.yaml` (defaults/derived/alias/st_show/set_keys + optional per-locale `display` names); no code change for data-driven parts.
 - **KP skill** → a `skills/<id>/SKILL.md` (Claude-Code shape: YAML frontmatter `name`/`description`/`allowed-tools` + Markdown body); per-room enable via `.skill enable <id>`. An optional sibling `hooks.js` adds sandboxed turn-lifecycle event handlers (Layer C.1 — see `docs/plugins.md`).
 - **Content pack** → bundle a whole work (skills + rulepacks + cards + lorebooks + assets) as one `.lwpack` zip with a `pack.yaml` manifest: `python -m app --pack <src-dir>` to build, `--install <path|https|gh:owner/repo[@tag]> [--yes]` to install (Git releases ARE the registry; see `docs/plugins.md`). Cards declare `kind: world|character` (enforced against real payload detection); a bundled rulepack may patch a base system via `extends:`.
-- **Platform adapter** → subclass `gateway/base_adapter.py:BaseAdapter`, translate payloads → `InboundMessage`, register a `PlatformEntry` at import. Mock the transport in tests.
 - **LLM provider** → most vendors work via the OpenAI-compatible path + a `PRESETS` entry in `infra/providers.py`; add a native class (see `AnthropicLLM`/`GeminiLLM`) only for non-OpenAI APIs.
 - **KP tool** → an `async def name(self, ctx, ...) -> str` decorated `@tool` on a provider class; add the provider to `agent/kp_tools.build_kp_toolset`. Flag secret-reading tools `keeper_only=True`; flag skill-unlocked tools `gated=True`.
 - **Client** → build against `docs/protocol.md` (the versioned WS/Iroh protocol) + reuse `loreweaver-protocol` types.

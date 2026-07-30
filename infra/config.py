@@ -103,49 +103,6 @@ class ImageGenSettings(BaseModel):
     per_room_per_hour: int = 10
 
 
-class QQSettings(BaseModel):
-    app_id: str = ""
-    secret: str = ""
-    markdown_template_id: str = ""
-    keyboard_id: str = ""
-    keyboard_enabled: bool = False
-
-
-class DiscordSettings(BaseModel):
-    token: str = ""
-    guild_id: int = 0
-    ffmpeg: str = "ffmpeg"
-
-
-class TelegramSettings(BaseModel):
-    token: str = ""
-
-
-class FeishuSettings(BaseModel):
-    app_id: str = ""
-    app_secret: str = ""
-    # Optional: skip the startup /bot/v3/info lookup (whose one-shot failure
-    # would otherwise disable the platform for the whole process).
-    bot_open_id: str = ""
-
-
-class OneBotSettings(BaseModel):
-    """OneBot 11 universal WebSocket connection settings.
-
-    ``forward`` connects to a OneBot implementation's WebSocket endpoint;
-    ``reverse`` listens for the implementation to connect to Loreweaver.
-    """
-
-    mode: str = "forward"
-    ws_url: str = ""
-    access_token: str = ""
-    listen_host: str = "127.0.0.1"
-    listen_port: int = 0
-    path: str = "/onebot/v11/ws"
-    request_timeout: float = 10.0
-    reconnect_delay: float = 1.0
-
-
 class Settings(BaseSettings):
     locale: str = "en"  # default en (see infra/i18n.py)
     data_dir: str = "./data"
@@ -161,11 +118,6 @@ class Settings(BaseSettings):
     imagegen: ImageGenSettings = ImageGenSettings()
     tui: TuiSettings = TuiSettings()
     censor: CensorSettings = CensorSettings()
-    qq: QQSettings = QQSettings()
-    discord: DiscordSettings = DiscordSettings()
-    telegram: TelegramSettings = TelegramSettings()
-    feishu: FeishuSettings = FeishuSettings()
-    onebot: OneBotSettings = OneBotSettings()
 
     def __init__(self, **values: Any) -> None:
         env_file = values.pop("_env_file", os.environ.get("TRPG_ENV_FILE") or ".env")

@@ -141,8 +141,6 @@ Release 安装器会先校验客户端压缩包的 SHA-256，一键开服下载�
 
 ```bash
 uv sync --extra ejs                      # 建环境、装依赖（ejs = 跑导入卡 JS 模板和钩子的 QuickJS 沙箱）
-# 可选的 Mock 测试聊天适配器（QQ/OneBot 不需要 extra）：
-uv sync --extra discord --extra telegram --extra feishu
 
 # 先离线尝个鲜——不用 API key,内置演示 KP + 真骰子：
 uv run python -m app --cli               # 试试  r 3d6+2 · /roll 4d6kh3 · .ra 侦查 · .setcoc 2
@@ -197,24 +195,20 @@ uv sync && uv run python -m app --serve   # 用 systemd 守着——见 docs/dep
 | 入口 | 状态 |
 |---|---|
 | **终端 · OpenTUI** | ✅ **主力**：上面那个游戏大厅；本地或联网 p2p(Iroh) |
-| Discord Bot | 🧪 实验性：原生命令、卡片、附件、面板和语音 |
-| QQ 官方机器人 | 🧪 实验性：Markdown/Keyboard 与富媒体，支持纯文本降级 |
-| Telegram Bot | 🧪 实验性：polling、话题/回复、媒体、内联控件与私聊 |
-| 飞书 Bot | 🧪 实验性：受监督长连接、mention/thread/回复、媒体与卡片内容纯文本降级 |
-| OneBot 11 | 🧪 实验性：正向/反向 universal WebSocket、消息段、媒体与私聊 |
 | CLI（无头） | ✅ 开发 / 快速试玩 / 离线 demo |
+| 自己写客户端 | 基于开放的版本化[线协议](docs/protocol.zh.md) + npm SDK（`loreweaver-protocol`） |
 
-系统：D&D 5e SRD 和 CoC 7 版以数据驱动的 rulepack（`rulepacks/*.yaml`）随附，加新系统不用改代码。上面的所有网络适配器都能共用同一个跨平台房间，但在各自真平台清单通过前都只是经过 Mock 测试的 **Experimental**。OpenTUI 仍是主力游玩方式；见[聊天平台配置与冒烟清单](docs/chat-platforms.zh.md)。
+系统：D&D 5e SRD 和 CoC 7 版以数据驱动的 rulepack（`rulepacks/*.yaml`）随附，加新系统不用改代码。聊天平台机器人（Discord/QQ/Telegram/飞书/OneBot）是主动裁掉的：路线图押在高度可定制的 UI 层上——声明式 `ui` 帧、实时状态量面板、模组自绘界面——纯文本聊天平台在结构上就渲染不了这些。客户端一律走开放协议。
 
 ## 架构
 
 ```
 core/  确定性引擎        infra/  store · config · i18n · llm · embeddings · vector · providers
 agent/ AI-KP 大脑 + 工具  gateway/ 平台无关层：commands · ops · hub · runner · director
-net/   Iroh p2p + 会话核心  adapters/ CLI · Discord · QQ · Telegram · 飞书 · OneBot  clients/ protocol · tui
+net/   Iroh p2p + 会话核心  adapters/ CLI  clients/ protocol · tui
 ```
 
-引擎用稳定的 `chat_key` 隔离全部状态；RoomHub 再叠一层跨端实时广播。分层契约、铁律（确定性 vs 生成、掷骰优先、信息隔离），以及怎么加 rulepack / 适配器 / provider / 工具 / 客户端，都在 **[AGENTS.md](AGENTS.md)**。客户端线格式见 **[docs/protocol.zh.md](docs/protocol.zh.md)**。
+引擎用稳定的 `chat_key` 隔离全部状态；RoomHub 再叠一层跨端实时广播。分层契约、铁律（确定性 vs 生成、掷骰优先、信息隔离），以及怎么加 rulepack / provider / 工具 / 客户端，都在 **[AGENTS.md](AGENTS.md)**。客户端线格式见 **[docs/protocol.zh.md](docs/protocol.zh.md)**。
 
 ## 测试
 
@@ -237,7 +231,7 @@ cd clients/tui && bun install && bun test   # 客户端(protocol · tui)
 
 ## 安全
 
-自托管意味着确定性引擎、战役数据库、钥匙和文件由你控制，**不意味着接了云模型之后数据仍不出本机**。远程 LLM 会收到用于分析的模组正文、Keeper system prompt（其中包含守秘人资料）、相关历史与本轮玩家输入。标准应用默认使用本地 hash embedder；只有显式接入远程 embedding backend 时，文档分块才会发往该 backend。若这些 prompt 必须留在自己控制的基础设施，请使用 Ollama、LM Studio 等本地 endpoint。Iroh 的端到端加密保护 OpenTUI 玩家到服务端的传输；它和模型 provider 是两条不同的信任边界。Discord、QQ、Telegram 与飞书流量必然经过相应平台服务，OneBot 则取决于所配置 WebSocket 链路的安全性；见[部署信任模型](docs/deploy.zh.md#数据流与信任边界)。
+自托管意味着确定性引擎、战役数据库、钥匙和文件由你控制，**不意味着接了云模型之后数据仍不出本机**。远程 LLM 会收到用于分析的模组正文、Keeper system prompt（其中包含守秘人资料）、相关历史与本轮玩家输入。标准应用默认使用本地 hash embedder；只有显式接入远程 embedding backend 时，文档分块才会发往该 backend。若这些 prompt 必须留在自己控制的基础设施，请使用 Ollama、LM Studio 等本地 endpoint。Iroh 的端到端加密保护 OpenTUI 玩家到服务端的传输；它和模型 provider 是两条不同的信任边界。见[部署信任模型](docs/deploy.zh.md#数据流与信任边界)。
 
 运行时 provider API key 和 OAuth grant 会以未加密形式保存在本地 SQLite 中，以便重启后继续使用。文件系统支持 POSIX mode 时，新建的敏感文件会收紧为仅本机用户可读写、专用数据目录仅本机用户可访问；但它不是密码库。请保护宿主账号、备份、`.env`、`keys.toml`、`keeper-key.txt` 和 `*.db`，也别提交它们。完整边界见[数据流与信任边界](docs/deploy.zh.md#数据流与信任边界)。
 
@@ -253,4 +247,4 @@ MIT——见 [`LICENSE`](LICENSE) 和 [`NOTICE`](NOTICE)。含 **D&D 5e SRD 5.1*
 
 ## 路线图
 
-完整计划见 **[docs/roadmap.zh.md](docs/roadmap.zh.md)**。更远的方向：会生长的世界引擎（生成式世界、活的因果时间线、设定一致性）、迟到玩家的剧情追进度、D&D Beyond 角色卡导入，以及把聊天适配器放到真平台上端到端测一遍。
+完整计划见 **[docs/roadmap.zh.md](docs/roadmap.zh.md)**。更远的方向：会生长的世界引擎（生成式世界、活的因果时间线、设定一致性）、迟到玩家的剧情追进度、D&D Beyond 角色卡导入，以及面向客户端的高度可定制 UI 拓展层。

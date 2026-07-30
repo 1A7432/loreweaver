@@ -4,16 +4,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import contextlib
-import importlib.util
-import ipaddress
-import math
 import os
-import shutil
 import signal
 import sys
 from pathlib import Path
-from urllib.parse import urlparse
 
 from adapters.cli.adapter import CliAdapter
 from adapters.cli.demo import demo_kp_responder
@@ -25,8 +19,6 @@ from core import rulepacks as core_rulepacks
 from core import skills as core_skills
 from core.dice_engine import seed_dice
 from gateway.commands import CommandRouter
-from gateway.hub import RoomHub
-from gateway.registry import AdapterContext, platform_registry
 from gateway.runner import GatewayRunner
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings, LocalEmbeddings
@@ -107,7 +99,6 @@ def build_tui_server(settings: Settings, keystore: Keystore, *, host: str, port:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cli", action="store_true")
-    parser.add_argument("--platforms")
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--doctor", action="store_true")
     parser.add_argument("--version", action="store_true")
@@ -150,10 +141,6 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.serve:
         return _run_serve(settings, i18n, args)
-
-    if args.platforms and not args.cli:
-        print(i18n.t("cli.platforms_stub", platforms=args.platforms), file=sys.stderr)
-        return 0
 
     if not args.cli:
         print(i18n.t("cli.no_mode"), file=sys.stderr)
@@ -224,11 +211,6 @@ def _run_doctor(settings: Settings, i18n: I18n) -> int:
     """`--doctor`: diagnose exactly what a frozen (PyInstaller) bundle tends to break —
     locale catalogs, rulepacks, skills, and the resolved data dir — then exit 0, or
     non-zero naming what's missing. Also a plain sanity check when run from source."""
-    # Import the real adapter modules even when credentials are disabled. A mere
-    # `find_spec()` check can pass in a frozen bundle while a transitive SDK import
-    # or adapter subpackage is absent; the release smoke therefore exercises this
-    # exact registration path before reporting the individual platform status.
-    _register_platform_adapters()
     mode = "frozen" if getattr(sys, "frozen", False) else "source"
     available_locales = i18n.available_locales()
     locale_report = (
@@ -252,78 +234,6 @@ def _run_doctor(settings: Settings, i18n: I18n) -> int:
     )
     print(i18n.t("tui.doctor.data_dir", path=settings.data_dir), file=sys.stderr)
 
-    qq_configured = bool(settings.qq.app_id or settings.qq.secret)
-    qq_ready = bool(settings.qq.app_id and settings.qq.secret)
-    qq_status = (
-        i18n.t(
-            "tui.doctor.qq_ready",
-            markdown=bool(settings.qq.markdown_template_id),
-            keyboard=bool(
-                settings.qq.markdown_template_id
-                and (settings.qq.keyboard_id or settings.qq.keyboard_enabled)
-            ),
-        )
-        if qq_ready
-        else i18n.t("tui.doctor.partial")
-        if qq_configured
-        else i18n.t("tui.doctor.disabled")
-    )
-    print(i18n.t("tui.doctor.platform", platform="QQ", status=qq_status), file=sys.stderr)
-
-    discord_configured = bool(settings.discord.token)
-    discord_sdk = importlib.util.find_spec("discord") is not None
-    voice_ready = all(importlib.util.find_spec(name) is not None for name in ("nacl", "davey"))
-    ffmpeg_ready = shutil.which(settings.discord.ffmpeg) is not None
-    discord_status = (
-        i18n.t(
-            "tui.doctor.discord_ready",
-            sdk=discord_sdk,
-            voice=voice_ready,
-            ffmpeg=ffmpeg_ready,
-        )
-        if discord_configured
-        else i18n.t("tui.doctor.disabled")
-    )
-    print(i18n.t("tui.doctor.platform", platform="Discord", status=discord_status), file=sys.stderr)
-
-    telegram_configured = bool(settings.telegram.token)
-    telegram_sdk = importlib.util.find_spec("telegram") is not None
-    telegram_status = (
-        i18n.t("tui.doctor.sdk_ready", sdk=telegram_sdk)
-        if telegram_configured
-        else i18n.t("tui.doctor.disabled")
-    )
-    print(i18n.t("tui.doctor.platform", platform="Telegram", status=telegram_status), file=sys.stderr)
-
-    feishu_configured = bool(settings.feishu.app_id or settings.feishu.app_secret)
-    feishu_ready = bool(settings.feishu.app_id and settings.feishu.app_secret)
-    feishu_sdk = importlib.util.find_spec("lark_oapi") is not None
-    feishu_status = (
-        i18n.t("tui.doctor.sdk_ready", sdk=feishu_sdk)
-        if feishu_ready
-        else i18n.t("tui.doctor.partial")
-        if feishu_configured
-        else i18n.t("tui.doctor.disabled")
-    )
-    print(i18n.t("tui.doctor.platform", platform="Feishu", status=feishu_status), file=sys.stderr)
-
-    onebot_mode = str(settings.onebot.mode or "forward").casefold()
-    onebot_configured = bool(
-        settings.onebot.ws_url
-        or settings.onebot.access_token
-        or settings.onebot.listen_port
-        or onebot_mode not in {"forward", "client"}
-    )
-    onebot_ready = _onebot_config_ready(settings.onebot)
-    onebot_status = (
-        i18n.t("tui.doctor.onebot_ready", mode=onebot_mode)
-        if onebot_ready
-        else i18n.t("tui.doctor.partial")
-        if onebot_configured
-        else i18n.t("tui.doctor.disabled")
-    )
-    print(i18n.t("tui.doctor.platform", platform="OneBot 11", status=onebot_status), file=sys.stderr)
-
     missing: list[str] = []
     for locale in ("en", "zh"):
         if locale not in available_locales:
@@ -333,18 +243,6 @@ def _run_doctor(settings: Settings, i18n: I18n) -> int:
             missing.append(i18n.t("tui.doctor.missing_rulepack", rulepack=rulepack))
     if not skill_ids:
         missing.append(i18n.t("tui.doctor.no_skills"))
-    if qq_configured and not qq_ready:
-        missing.append(i18n.t("tui.doctor.qq_incomplete"))
-    if discord_configured and not discord_sdk:
-        missing.append(i18n.t("tui.doctor.discord_sdk_missing"))
-    if telegram_configured and not telegram_sdk:
-        missing.append(i18n.t("tui.doctor.telegram_sdk_missing"))
-    if feishu_configured and not feishu_ready:
-        missing.append(i18n.t("tui.doctor.feishu_incomplete"))
-    elif feishu_ready and not feishu_sdk:
-        missing.append(i18n.t("tui.doctor.feishu_sdk_missing"))
-    if onebot_configured and not onebot_ready:
-        missing.append(i18n.t("tui.doctor.onebot_incomplete"))
 
     if missing:
         print(i18n.t("tui.doctor.fail", reason="; ".join(missing)), file=sys.stderr)
@@ -517,13 +415,7 @@ def _run_serve(settings: Settings, i18n: I18n, args: argparse.Namespace) -> int:
     """`--serve [--keys FILE]`: run the networked TUI server over the Iroh p2p transport — it
     prints a shareable ticket (no domain/TLS/port-forward). WebSocket is not a serve option; it
     lives on only as the offline test / loopback carrier (tests instantiate `TuiServer` directly).
-
-    With `--platforms a,b` the server runs in COMBINED mode: one `RoomHub`/`Services` shared by the
-    TUI server AND a `GatewayRunner` driving the (experimental, roadmap-only) chat adapters.
     """
-    if args.platforms:
-        return _run_serve_combined(settings, i18n, args)
-
     keystore = Keystore.load(args.keys)
     _bootstrap_keystore(keystore, i18n, args.keys)
     server = build_tui_server(settings, keystore, host=args.host, port=args.port)
@@ -610,217 +502,12 @@ def _announce_iroh_ticket(i18n: I18n, ticket: str, keys_path: str) -> None:
     print(i18n.t("tui.serve.iroh.hint", path=str(sidecar)), file=sys.stderr)
 
 
-# --- combined `--serve --platforms` mode (M7) -----------------------------
-
-# The config keys that MUST be present or the platform is skipped.
-_PLATFORM_REQUIRED = {
-    "qq": ("app_id", "secret"),
-    "telegram": ("token",),
-    "discord": ("token",),
-    "feishu": ("app_id", "app_secret"),
-}
-
-
-def _run_serve_combined(settings: Settings, i18n: I18n, args: argparse.Namespace) -> int:
-    services = _serve_services(settings)
-    if _uses_demo_llm(services):
-        print(i18n.t("cli.offline_demo_notice"), file=sys.stderr)
-    keystore = Keystore.load(args.keys)
-    _bootstrap_keystore(keystore, i18n, args.keys)
-    hub = RoomHub()
-    command_router = CommandRouter(services, keystore=keystore, hub=hub)
-    toolset = build_kp_toolset(services, hub=hub, command_router=command_router)
-
-    server = TuiServer(
-        services,
-        keystore,
-        host=args.host,
-        port=args.port,
-        command_router=command_router,
-        toolset=toolset,
-        hub=hub,
-    )
-    adapters = _build_platform_adapters(args.platforms, i18n, services, command_router)
-    runner = GatewayRunner(
-        services,
-        adapters,
-        command_router=command_router,
-        toolset=toolset,
-        hub=hub,
-        keystore=keystore,
-    )
-
-    seed_dice(0)
-    print(
-        i18n.t("cli.combined_listening", host=args.host, port=args.port, platforms=args.platforms),
-        file=sys.stderr,
-    )
-    started = False
-    try:
-        started = asyncio.run(_serve_combined(server, runner, i18n, args.keys))
-    except KeyboardInterrupt:
-        started = True
-    finally:
-        services.store.close()
-    return 0 if started else 1
-
-
-async def _serve_combined(
-    server: TuiServer,
-    runner: GatewayRunner,
-    i18n: I18n,
-    keys_path: str,
-) -> bool:
-    """Run chat adapters beside the same Iroh server used by the primary TUI.
-
-    Adapter connects run concurrently with the Iroh server: the primary
-    carrier must not wait out a slow optional chat platform, and any platform
-    that fails to connect is reported to the operator instead of only leaving
-    a WARNING in the log.
-    """
-    start_task = asyncio.create_task(runner.start())
-
-    def _report_failures(task: asyncio.Task[list[str]]) -> None:
-        if task.cancelled() or task.exception() is not None:
-            return
-        for platform in task.result() or []:
-            print(i18n.t("cli.platform_connect_failed", platform=platform), file=sys.stderr)
-
-    start_task.add_done_callback(_report_failures)
-    try:
-        return await _serve_iroh(server, i18n, keys_path)
-    finally:
-        if not start_task.done():
-            start_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await start_task
-        await runner.stop()
-
-
-def _serve_services(settings: Settings, *, llm=None, embeddings=None):
-    """Build one graph, retaining a hot-swappable offline demo fallback."""
-    if not settings.llm.api_key:
-        embeddings = embeddings or FakeEmbeddings(64)
-    return _app_services(settings, llm=llm, embeddings=embeddings)
-
-
 def _uses_demo_llm(services) -> bool:
     """Whether the effective MutableLLM inner client is the offline demo."""
     using_fallback = getattr(services.llm, "using_fallback", None)
     if using_fallback is not None:
         return bool(using_fallback)
     return isinstance(services.llm, FakeLLM)
-
-
-def _build_platform_adapters(platforms: str, i18n: I18n, services, command_router: CommandRouter) -> list:
-    """Instantiate the requested chat adapters; skip any with missing creds."""
-    _register_platform_adapters()
-    adapters = []
-    for name in _split_platforms(platforms):
-        entry = platform_registry.get(name)
-        if entry is None:
-            print(i18n.t("cli.platform_unknown", platform=name), file=sys.stderr)
-            continue
-        config = _platform_config(name, services.settings)
-        if config is None:
-            print(i18n.t("cli.platform_skip_no_creds", platform=name), file=sys.stderr)
-            continue
-        adapter = platform_registry.create_adapter(
-            name,
-            config,
-            AdapterContext(services=services, command_router=command_router),
-        )
-        if adapter is None:
-            print(i18n.t("cli.platform_skip_no_creds", platform=name), file=sys.stderr)
-            continue
-        adapters.append(adapter)
-    return adapters
-
-
-def _split_platforms(platforms: str) -> list[str]:
-    seen: list[str] = []
-    for raw in (platforms or "").split(","):
-        name = raw.strip().casefold()
-        if name and name not in seen:
-            seen.append(name)
-    return seen
-
-
-def _platform_config(name: str, settings) -> object | None:
-    config = getattr(settings, name, None)
-    if config is None:
-        return None
-    if name == "onebot":
-        return config if _onebot_config_ready(config) else None
-    if any(not getattr(config, key, "") for key in _PLATFORM_REQUIRED.get(name, ())):
-        return None
-    return config
-
-
-def _register_platform_adapters() -> None:
-    """Import adapter modules so they register on the platform registry."""
-    import adapters.discord  # noqa: F401
-    import adapters.feishu  # noqa: F401
-    import adapters.onebot  # noqa: F401
-    import adapters.qq_official  # noqa: F401
-    from adapters.telegram import adapter as telegram_adapter
-
-    telegram_adapter.register()
-
-
-def _onebot_config_ready(config: object) -> bool:
-    mode = str(getattr(config, "mode", "forward") or "forward").casefold()
-    request_timeout = getattr(config, "request_timeout", 10.0)
-    if not _finite_number(request_timeout, positive=True):
-        return False
-    if mode in {"forward", "client"}:
-        return _valid_ws_url(str(getattr(config, "ws_url", "") or "")) and _finite_number(
-            getattr(config, "reconnect_delay", 1.0),
-            positive=False,
-        )
-    if mode not in {"reverse", "server"}:
-        return False
-    port = getattr(config, "listen_port", 0)
-    host = str(getattr(config, "listen_host", "") or "")
-    token = str(getattr(config, "access_token", "") or "")
-    return (
-        isinstance(port, int)
-        and 0 < port <= 65535
-        and bool(host.strip())
-        and (_is_loopback_host(host) or bool(token.strip()))
-    )
-
-
-def _finite_number(value: object, *, positive: bool) -> bool:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return False
-    return math.isfinite(number) and (number > 0 if positive else number >= 0)
-
-
-def _valid_ws_url(value: str) -> bool:
-    try:
-        parsed = urlparse(value)
-        _ = parsed.port
-    except ValueError:
-        return False
-    return (
-        parsed.scheme.casefold() in {"ws", "wss"}
-        and bool(parsed.hostname)
-        and not parsed.fragment
-        and not any(character.isspace() for character in parsed.hostname or "")
-    )
-
-
-def _is_loopback_host(value: str) -> bool:
-    host = value.strip().casefold().rstrip(".")
-    if host == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
 
 
 if __name__ == "__main__":

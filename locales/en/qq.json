@@ -1,3 +1,0 @@
-{
-  "qq.outbox_overflow": "Some older queued messages were dropped because the QQ reply window stayed closed too long."
-}
