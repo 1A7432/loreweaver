@@ -139,10 +139,13 @@ decomposes every card deterministically (`core.card_split`):
   result message itemizes exactly what was stripped. This is what a player may self-import
   into a shared room.
 - **World import** (`.import <file> world`, keeper-only, deliberately not a model tool)
-  brings in the machinery half as module content: the full lorebook with keeper trust
+  brings in BOTH halves as module content: the machinery — full lorebook with keeper trust
   (secrecy flags honored), `[InitVar]` seeded into the room's variable tree, hooks installed
-  room-wide. The persona is untouched — a keeper who also wants the card's narrator at the
-  table imports it separately as a companion.
+  room-wide — and the character half, which joins the room's pre-generated roster
+  (`core.pregen_roster`) as a claimable, rule-validated PC (`.pc list/claim/release`;
+  claims are exclusive, releases restore the pristine sheet). One keeper import ships a
+  module's world AND its cast; an AI-played companion remains a separate
+  `.import <file> companion`.
 
 The boundary is the room's trust boundary, not a capability cut: "author freedom over
 gatekeeping" is the *operator's* stance about the operator's own box, and the keeper is the

@@ -34,6 +34,7 @@ from core.char_from_persona import build_sheet_from_persona, infer_pronoun_note
 from core.character_manager import CharacterSheet
 from core.character_rules import render_validation_notice, validate_sheet
 from core.charcard import PNG_SIGNATURE, CharacterCard, parse_card_file
+from core.pregen_roster import PregenRoster
 from infra.i18n import I18n
 from infra.media_store import MediaStore
 
@@ -263,15 +264,20 @@ class CharcardTools:
             ctx.chat_key, card.character_book, source=card.name, is_keeper=False, char_name=card.name
         )
 
-    async def import_world_card(self, ctx: AgentCtx, file_path: str) -> str:
-        """Import a card's WORLD half as module machinery: full lorebook with keeper trust
-        (secret flags honored, `[InitVar]` declarations seeded into the room's variable tree)
-        plus its `extensions.loreweaver_hooks` scripts installed room-wide.
+    async def import_world_card(self, ctx: AgentCtx, file_path: str, system: str = "coc7") -> str:
+        """Import a card as a MODULE, both halves at once (拆卡, keeper trust):
 
-        Deliberately NOT an `@tool`: reprogramming the room is the human keeper's decision, so
-        this is reachable only through `.import <file> world`, whose keeper check is
-        deterministic (`gateway.commands`). The persona half is untouched — a keeper who also
-        wants the card's narrator as a party presence imports it separately as a companion.
+        - the WORLD half — full lorebook with secrecy flags honored, `[InitVar]`
+          declarations seeded into the room's variable tree, and any
+          `extensions.loreweaver_hooks` scripts installed room-wide;
+        - the CHARACTER half — a rule-legal sheet built from the persona and placed on the
+          room's pre-generated roster (`core.pregen_roster`) as a claimable PC: players
+          pick it up with `.pc claim <name>`. (An AI-played version is still a separate
+          `.import <file> companion`.)
+
+        Deliberately NOT an `@tool`: reprogramming the room is the human keeper's decision,
+        so this is reachable only through `.import <file> world`, whose keeper check is
+        deterministic (`gateway.commands`).
         """
         i18n = self._i18n(ctx)
         if ctx.fs is None:
@@ -282,7 +288,7 @@ class CharcardTools:
                 return i18n.t("charcard.tools.import.no_file", path=file_path)
 
             card = parse_card_file(host_path)
-            world = detect_world_payloads(card)
+            character, world = split_card(card)
             # Keeper trust: secrecy flags are honored and InitVar declarations are consumed
             # into the shared MVU tree (`core.worldbook.import_entries` gates that on
             # `is_keeper=True`). The ORIGINAL entries are imported, not the stripped half —
@@ -293,12 +299,35 @@ class CharcardTools:
             hooks = card_hook_codes(card)
             if hooks:
                 await install_room_hooks(self._services, ctx.chat_key, f"card:{card.name}", hooks)
-            return i18n.t(
+
+            pregen_line = ""
+            if character.name.strip():
+                sheet = await self._build_pregen_sheet(ctx, character, system, host_path)
+                entry = await PregenRoster(self._services.store).add(
+                    ctx.chat_key, sheet, source=f"card:{card.name}"
+                )
+                if entry is not None:
+                    pregen_line = i18n.t("charcard.tools.world.pregen_line", name=sheet.name)
+
+            result = i18n.t(
                 "charcard.tools.world.done",
                 name=card.name or i18n.t("common.unknown"),
                 lore=lore,
                 vars=world.initvar_entries,
                 hooks=len(hooks),
             )
+            return f"{result}\n{pregen_line}" if pregen_line else result
         except Exception as exc:
             return i18n.t("charcard.tools.world.failed", error=str(exc))
+
+    async def _build_pregen_sheet(
+        self, ctx: AgentCtx, character: CharacterCard, system: str, host_path: Path
+    ) -> CharacterSheet:
+        """A rule-legal, validated sheet from the split CHARACTER half (same pipeline as a
+        player import: persona-biased build + rulepack validation + PNG avatar)."""
+        module_context = await _module_summary(self._services, ctx.chat_key)
+        sheet = await build_sheet_from_persona(self._services, character, system, module_context=module_context)
+        sheet.name = character.name or sheet.name
+        sheet, _violations = validate_sheet(sheet, system)
+        await _register_png_avatar(self._services, ctx, host_path, sheet)
+        return sheet

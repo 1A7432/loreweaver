@@ -413,3 +413,36 @@ async def test_var_command_is_keeper_gated_and_curates_exposure():
     hidden = await router.dispatch(keeper, ".var hide 理")
     assert hidden is not None
     assert await MvuManager(services.store).exposed_prefixes(chat_key) == []
+
+
+async def test_pc_roster_claim_is_player_open_but_foreign_release_is_keeper_only():
+    from core.character_manager import CharacterSheet
+    from core.pregen_roster import PregenRoster
+
+    services = _services()
+    router = CommandRouter(services)
+    chat_key = "tui:group:cast"
+    sheet = CharacterSheet(name="理", system="CoC")
+    await PregenRoster(services.store).add(chat_key, sheet, source="card:test")
+
+    p1 = _player_ctx(chat_key)
+    listing = await router.dispatch(p1, ".pc")
+    assert listing is not None and "理" in listing
+
+    claimed = await router.dispatch(p1, ".pc claim 理")
+    assert claimed == services.i18n.with_locale("en").t("pregen.commands.claimed", name="理", system="CoC")
+    assert (await services.characters.get_character("p1", chat_key)).name == "理"
+
+    # Another player can neither claim nor release someone else's character...
+    p2 = AgentCtx(chat_key=chat_key, user_id="p2", platform="tui", locale="en", extra={"role": "player"})
+    taken = await router.dispatch(p2, ".pc claim 理")
+    assert taken == services.i18n.with_locale("en").t("pregen.commands.claim_taken", name="理")
+    denied = await router.dispatch(p2, ".pc release 理")
+    assert denied == services.i18n.with_locale("en").t("pregen.commands.release_not_yours", name="理")
+
+    # ...but the keeper force-releases, and the slot opens again.
+    keeper = AgentCtx(chat_key=chat_key, user_id="k1", platform="tui", locale="en", extra={"role": "keeper"})
+    released = await router.dispatch(keeper, ".pc release 理")
+    assert released == services.i18n.with_locale("en").t("pregen.commands.released", name="理")
+    reclaim = await router.dispatch(p2, ".pc claim 理")
+    assert reclaim == services.i18n.with_locale("en").t("pregen.commands.claimed", name="理", system="CoC")

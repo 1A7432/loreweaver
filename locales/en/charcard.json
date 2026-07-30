@@ -14,7 +14,7 @@
   "charcard.tools.preview.no_fs": "No file access is available in this context.",
   "charcard.tools.preview.no_file": "Could not read the character card at {path}.",
   "charcard.tools.preview.failed": "Failed to preview card: {error}",
-  "charcard.commands.import.help": "Import a SillyTavern card: .import <file> [coc7|dnd5e] [pc|companion|world] — pc/companion take the character half (world machinery stripped); world (keeper-only) imports the module half: hooks, variables, keeper lore.",
+  "charcard.commands.import.help": "Import a SillyTavern card: .import <file> [coc7|dnd5e] [pc|companion|world] — pc/companion take the character half (world machinery stripped); world (keeper-only) imports the module: hooks, variables, keeper lore, and the card's character joins the claimable roster (.pc claim).",
   "charcard.commands.import.usage": "Usage: .import <card file> [coc7|dnd5e] [pc|companion|world]",
   "charcard.commands.import.companion_denied": "Only an authenticated Keeper can import an AI companion.",
   "charcard.commands.genchar.done": "Generated {system} character from description: {name}",
@@ -22,7 +22,8 @@
   "charcard.commands.genchar.usage": "Usage: .genchar [coc7|dnd5e] [name] | <description>",
   "charcard.commands.import.world_denied": "Only an authenticated Keeper can import a world card (it installs room hooks and seeds shared variables).",
   "charcard.tools.import.stripped": "World machinery was left out of this character import: {hooks} hook script(s), {vars} variable declaration(s), {ejs} template block(s). Module content is keeper-imported: `.import <card file> world`.",
-  "charcard.tools.world.done": "Imported “{name}” as world content: {lore} lore entries (keeper trust), {vars} variable declaration(s) seeded, {hooks} hook script(s) installed. The persona was not imported — use `.import <card file> companion` if you also want the character at the table.",
+  "charcard.tools.world.done": "Imported “{name}” as world content: {lore} lore entries (keeper trust), {vars} variable declaration(s) seeded, {hooks} hook script(s) installed.",
   "charcard.tools.world.failed": "Failed to import world card: {error}",
-  "charcard.tools.preview.world_line": "World machinery: {hooks} hook script(s), {vars} variable declaration(s), {ejs} template block(s) — keeper-imported via `.import <card file> world`."
+  "charcard.tools.preview.world_line": "World machinery: {hooks} hook script(s), {vars} variable declaration(s), {ejs} template block(s) — keeper-imported via `.import <card file> world`.",
+  "charcard.tools.world.pregen_line": "Cast: “{name}” is on the room's pre-generated roster — players take it with `.pc claim {name}` (for an AI-played version use `.import <card file> companion`)."
 }

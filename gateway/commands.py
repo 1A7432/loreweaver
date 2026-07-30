@@ -1495,10 +1495,54 @@ class CommandRouter:
             # keeper" structural rather than behavioral.
             if not _is_keeper(ctx.raw_ctx):
                 return ctx.i18n.t("charcard.commands.import.world_denied")
-            return await tools.import_world_card(self._agent_ctx(ctx), file_path=file_path)
+            return await tools.import_world_card(self._agent_ctx(ctx), file_path=file_path, system=system)
         if as_ == "companion" and not _is_keeper(ctx.raw_ctx):
             return ctx.i18n.t("charcard.commands.import.companion_denied")
         return await tools.import_character(self._agent_ctx(ctx), file_path=file_path, system=system, as_=as_)
+
+    async def cmd_pc(self, ctx: CommandCtx) -> str:
+        """`.pc [list]|claim <name>|release [name]` — the room's pre-generated character
+        roster (`core.pregen_roster`): the cast a keeper's world imports ship. Listing and
+        claiming are PLAYER actions (claiming is the whole point); releasing someone
+        else's claim is keeper-only."""
+        from core.pregen_roster import PregenRoster
+
+        tokens = ctx.args.split()
+        sub = tokens[0].casefold() if tokens else "list"
+        rest = " ".join(tokens[1:]).strip()
+        roster = PregenRoster(ctx.services.store)
+        chat_key = ctx.chat_key
+        if sub in {"claim", "认领", "認領"}:
+            if not rest:
+                return ctx.i18n.t("pregen.commands.claim_usage")
+            status, sheet = await roster.claim(chat_key, rest, ctx.user_id, ctx.services.characters)
+            if status in {"ok", "yours"} and sheet is not None:
+                if ctx.router.hub is not None:
+                    await publish_state(ctx.router.hub, ctx.services, ctx.raw_ctx)
+                key = "pregen.commands.claimed" if status == "ok" else "pregen.commands.reclaimed"
+                return ctx.i18n.t(key, name=sheet.name, system=sheet.system)
+            return ctx.i18n.t(f"pregen.commands.claim_{status}", name=rest)
+        if sub in {"release", "放弃", "放棄", "释放", "釋放"}:
+            if not rest:
+                return ctx.i18n.t("pregen.commands.release_usage")
+            status = await roster.release(
+                chat_key, rest, ctx.user_id, ctx.services.characters, force=_is_keeper(ctx.raw_ctx)
+            )
+            if status == "ok":
+                if ctx.router.hub is not None:
+                    await publish_state(ctx.router.hub, ctx.services, ctx.raw_ctx)
+                return ctx.i18n.t("pregen.commands.released", name=rest)
+            return ctx.i18n.t(f"pregen.commands.release_{status}", name=rest)
+        if sub not in {"list", "列表"}:
+            return ctx.i18n.t("pregen.commands.usage")
+        entries = await roster.entries(chat_key)
+        if not entries:
+            return ctx.i18n.t("pregen.commands.empty")
+        lines = [ctx.i18n.t("pregen.commands.list_header", count=len(entries))]
+        for entry in entries:
+            key = "pregen.commands.line_claimed" if entry.get("claimed_by") else "pregen.commands.line_free"
+            lines.append(ctx.i18n.t(key, name=entry.get("name", ""), system=entry.get("system", "")))
+        return "\n".join(lines)
 
     async def cmd_var(self, ctx: CommandCtx) -> str:
         """`.var [list|expose <prefix|*>|hide <prefix>]` — keeper curation of which imported-card
@@ -2163,6 +2207,14 @@ class CommandRouter:
                 # Keeper-only curation of the imported variable tree's player visibility;
                 # `list` prints the hidden remainder, so replies stay on the caller.
                 private_reply=True,
+            ),
+            CommandSpec(
+                "pc",
+                self.cmd_pc,
+                ["pc", "roster"],
+                ["pc", "角色池", "预设角色"],
+                None,
+                "pregen.commands.help",
             ),
             CommandSpec(
                 "module",

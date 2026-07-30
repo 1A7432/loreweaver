@@ -263,10 +263,34 @@ async def test_keeper_world_import_installs_the_module_half(tmp_path):
     assert tree["理"]["好感度"][0] == 33
     assert tree["真凶"][0] == "管家"
     # World lore keeps its render-time EJS (that is what this path exists to carry),
-    # and the world card never became the importing keeper's character (a default
+    # and the world card never became the importing keeper's OWN character (a default
     # placeholder sheet may exist; the card's persona must not).
     entries = await services.worldbook.list("chat-world")
     assert [entry.title for entry in entries] == ["manor"]
     assert "<%" in entries[0].content
     sheet = await services.characters.get_character("kp", "chat-world")
     assert sheet is None or sheet.name != "理"
+
+
+async def test_world_import_puts_the_character_half_on_the_claimable_roster(tmp_path):
+    from core.pregen_roster import PregenRoster
+
+    services = _services()
+    fs = _write_heavy_card(tmp_path)
+    keeper_ctx = AgentCtx(chat_key="chat-cast", user_id="kp", locale="en", fs=fs)
+
+    result = await CharcardTools(services).import_world_card(keeper_ctx, file_path="heavy.json")
+
+    assert "pc claim" in result  # the summary points players at the roster
+    roster = PregenRoster(services.store)
+    entries = await roster.entries("chat-cast")
+    assert [entry["name"] for entry in entries] == ["理"]
+    assert entries[0]["claimed_by"] == ""
+    # Unclaimed cast stays off the party panel until someone claims it.
+    assert await services.characters.get_party_roster("chat-cast") == []
+
+    status, sheet = await roster.claim("chat-cast", "理", "player-1", services.characters)
+    assert status == "ok" and sheet is not None
+    active = await services.characters.get_character("player-1", "chat-cast")
+    assert active.name == "理"
+    assert active.system == "CoC"  # rule-validated sheet, not a raw persona blob

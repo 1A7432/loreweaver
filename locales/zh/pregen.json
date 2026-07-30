@@ -1,0 +1,19 @@
+{
+  "pregen.commands.help": "房间预设角色池：.pc [list] | .pc claim <名字> | .pc release [名字]——守秘人的世界导入负责入池，玩家从池里认领自己的角色。",
+  "pregen.commands.usage": "用法：.pc [list] | .pc claim <名字> | .pc release <名字>",
+  "pregen.commands.claim_usage": "用法：.pc claim <名字>",
+  "pregen.commands.release_usage": "用法：.pc release <名字>",
+  "pregen.commands.empty": "还没有预设角色——守秘人用 `.import <文件> world` 导入模组卡即可入池。",
+  "pregen.commands.list_header": "预设角色（{count}）：",
+  "pregen.commands.line_free": "· {name}（{system}）——空闲",
+  "pregen.commands.line_claimed": "· {name}（{system}）——已认领",
+  "pregen.commands.claimed": "你现在扮演「{name}」（{system}）——卡已存到你名下并设为当前角色。",
+  "pregen.commands.reclaimed": "「{name}」（{system}）本来就是你的——已重新设为当前角色。",
+  "pregen.commands.claim_unknown": "没有叫「{name}」的预设角色（用 .pc list 查看）。",
+  "pregen.commands.claim_taken": "「{name}」已被其他玩家认领。",
+  "pregen.commands.claim_corrupt": "「{name}」的存档不可读——请守秘人重新导入模组卡。",
+  "pregen.commands.released": "已释放「{name}」——可再次认领（游玩副本已丢弃，下一位认领者从净卡开始）。",
+  "pregen.commands.release_unknown": "没有叫「{name}」的预设角色（用 .pc list 查看）。",
+  "pregen.commands.release_free": "「{name}」当前无人认领。",
+  "pregen.commands.release_not_yours": "只有认领者本人（或守秘人）能释放「{name}」。"
+}

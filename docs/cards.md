@@ -50,10 +50,13 @@ isn't rejected either way — it's decomposed.
     **character half**. If the card also carries world machinery, the import strips
     it and tells you exactly what was stripped — the card still works as a
     character, and the message points the Keeper at the world half.
-  - `world` (**Keeper-only**) imports the machinery half as module content: the full
-    lorebook with Keeper trust, `[InitVar]` seeded, hooks installed. It does NOT
-    create a character — a Keeper who also wants the card's narrator at the table
-    runs `.import <file> companion` as a second step.
+  - `world` (**Keeper-only**) imports the whole module in one step: the machinery
+    half — full lorebook with Keeper trust, `[InitVar]` seeded, hooks installed —
+    AND the character half, which lands on the room's **pre-generated roster** as a
+    claimable, rule-validated PC. Players pick their character with `.pc list` /
+    `.pc claim <name>` (claims are exclusive; `.pc release` frees the slot and the
+    next claimant starts from the pristine sheet). For an AI-played version of the
+    same character, `.import <file> companion` still works.
   - Importing from a server-side path (rather than a room attachment) is Keeper-only
     in every mode. Standalone lorebooks: `.lore import <file>` (Keeper-only).
 - **As part of a pack:** cards and lorebooks travel inside `.lwpack` content packs —
