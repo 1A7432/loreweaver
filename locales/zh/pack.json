@@ -2,7 +2,7 @@
   "pack.card.header": "📦 {name} — {id}@{version}",
   "pack.card.description": "   {description}",
   "pack.card.provenance": "   作者:{authors} · 许可:{license}",
-  "pack.card.trust": "   内含:{skills} 个技能、{rulepacks} 个规则包、{cards} 张角色卡、{lorebooks} 本世界书、{assets} 个素材({asset_mb} MB)· hooks 代码:{hooks} · EJS 模板:{ejs}",
+  "pack.card.trust": "   内含:{skills} 个技能、{rulepacks} 个规则包、{cards} 张角色卡、{lorebooks} 本世界书、{panels} 个 UI 面板、{assets} 个素材({asset_mb} MB)· hooks 代码:{hooks} · EJS 模板:{ejs}",
   "pack.flag.yes": "有",
   "pack.flag.no": "无",
   "pack.build.done": "已打包 {id}@{version} -> {path}\n   sha256:{sha256}",

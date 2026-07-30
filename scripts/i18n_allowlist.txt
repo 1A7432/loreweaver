@@ -26,3 +26,7 @@ core/charcard.py:: character card JSON must be an object
 # (locales/{en,zh}/pack.json), matching the parser-module convention above.
 core/pack.py
 infra/pack_source.py
+
+# Developer-facing ValueError diagnostics in the panels.yaml schema validator (M15); raised into
+# core/pack.py's PackError wrapping (author-time build/install errors), same convention as above.
+core/panels.py

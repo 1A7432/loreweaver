@@ -170,3 +170,41 @@ def test_multiple_scripts_share_the_room_but_broken_one_is_skipped():
     assert engine is not None
     assert any("broken" in warning for warning in engine.load_warnings)
     assert engine.fire("turn_start", {}).narrations == ["A", "B"]
+
+
+def test_emit_panel_buffers_validate_and_reset_per_fire():
+    engine = _engine(
+        "on('turn_start', () => {"
+        "  emitPanel('blackmoor/case-board', {clue: 'ash'});"
+        "  emitPanel('', {dropped: true});"
+        "  emitPanel('blackmoor/case-board', 7);"
+        "});"
+    )
+    outcome = engine.fire("turn_start", {})
+    assert outcome.panel_events == [
+        {"panel": "blackmoor/case-board", "payload": {"clue": "ash"}},
+        {"panel": "blackmoor/case-board", "payload": 7},
+    ]
+    # Buffers reset between fires, like every other effect buffer.
+    assert engine.fire("reply_ready", {"reply": ""}).panel_events == []
+
+
+def test_sanitize_panel_events_drops_oversized_and_malformed_entries():
+    from core.hooks import MAX_PANEL_EVENT_BYTES, sanitize_panel_events
+
+    big = "x" * (MAX_PANEL_EVENT_BYTES + 1)
+    events = sanitize_panel_events(
+        [
+            {"panel": "p/a", "payload": {"ok": 1}},
+            {"panel": "p/a", "payload": big},          # oversized -> dropped whole
+            {"panel": "x" * 200, "payload": 1},         # id too long -> dropped
+            {"panel": "p/b"},                            # missing payload -> null payload is fine
+            "junk",
+            {"panel": "p/c", "payload": float("nan")},  # non-JSON-serializable -> dropped
+        ]
+    )
+    assert events == [
+        {"panel": "p/a", "payload": {"ok": 1}},
+        {"panel": "p/b", "payload": None},
+    ]
+    assert sanitize_panel_events("nope") == []

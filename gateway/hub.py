@@ -112,6 +112,18 @@ class Event:
         pre-validated `blocks` + `panel` placement (see `core.hooks.sanitize_ui_emissions`)."""
         return cls(kind="ui", data=dict(frame))
 
+    @classmethod
+    def ui_manifest(cls, frame: dict[str, Any]) -> Event:
+        """One viewer's complete module-panel manifest (protocol v1.8, full-replace;
+        audience already resolved server-side — see `gateway.panels`)."""
+        return cls(kind="ui_manifest", data=dict(frame))
+
+    @classmethod
+    def panel_event(cls, frame: dict[str, Any]) -> Event:
+        """One hook-emitted `panel_event` payload (protocol v1.8), already validated
+        (`core.hooks.sanitize_panel_events`) and manifest-filtered per recipient."""
+        return cls(kind="panel_event", data=dict(frame))
+
 
 @runtime_checkable
 class Member(Protocol):

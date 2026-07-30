@@ -207,6 +207,7 @@ class TuiServer(SessionCore):
             try:
                 await self._replay_history(member)
                 await publish_state(self.hub, self.services, self._ctx_for(member))
+                await self.send_ui_manifest(member)
                 async for raw in ws:
                     if isinstance(raw, bytes | bytearray | memoryview):
                         await self._on_media_message(member, bytes(raw))

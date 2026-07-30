@@ -15,7 +15,10 @@
 > upload/analysis pipeline) has **landed**. B.4 (TUI management pages with a
 > describe→generate button) has **landed** (the KP-skills screen). Layer C.1
 > (sandboxed event hooks) and the `.lwpack` content-pack format have **landed**;
-> C.2 (Python entry-point plugins) is deferred. This document is the contract
+> C.2 (Python entry-point plugins) is deferred. Layer D (module UI panels, M15) has
+> its **engine half landed** (pack schema, `.panels` room enablement, protocol v1.8,
+> TUI tier-1/fallback rendering); the rich-client tier-2 host ships with the studio.
+> This document is the contract
 > contributors build against; card authors have a friendlier on-ramp in
 > [cards.md](cards.md), hook authors in [hooks.md](hooks.md).
 
@@ -331,6 +334,11 @@ operator's content, the operator's box):
   `emitUI([{kind:"meter", label:"Fear", value:3, min:0, max:10}], {panel:"sidebar", id:"hud"})`;
   see `docs/protocol.md` for the block schema. Emitted UI is PLAYER-VISIBLE authorial output
   (the same trust stance as `narrate`) — never emit keeper-only secrets into it.
+  With module UI panels (Layer D) there is additionally `emitPanel(panelId, payload)` — an
+  opaque JSON payload (≤ 32 KB, ≤ 20 per turn) for one pack-declared panel, delivered as a
+  protocol-v1.8 `panel_event` ONLY to viewers whose manifest contains that panel. The same
+  trust stance applies, with one sharpening: a payload for an `audience: all` panel reaches
+  players — keeper secrets go, if anywhere, into `audience: keeper` panels only.
 - **Contract (iron rule #1)**: hooks REQUEST effects; deterministic engine code validates,
   caps, and applies them — `setvar` on a declared module variable goes through kind/bounds
   validation, everything else lands in the MVU tree. One sandboxed interpreter per turn
@@ -347,6 +355,45 @@ registers it. That layer runs with SERVER privileges — unlike C.1's sandbox �
 opt-in and last, and requires: a capability declaration, explicit operator enablement (off by
 default), a prominent "runs untrusted code with server privileges" warning, and failure
 isolation. Until C.2 ships, code contributions go through normal in-tree PRs.
+
+## Layer D — Module UI panels (M15; engine half landed)
+
+Modules dress the table: a pack ships its own interface — HUDs, case boards, maps —
+rendered by protocol clients. This is the presentation direction that replaced the retired
+chat adapters. The canonical spec is `docs/specs/M15-ui-panels.md`; the wire contract is
+`docs/protocol.md` ("Module UI panels", v1.8). The layer is three tiers, by authoring
+effort and risk:
+
+- **Tier 0 — declarative blocks** (v1.7, Layer C.1's `emitUI`): meter/stat/badge/text/
+  divider/choices, emitted per turn by hooks. Every client renders them natively.
+- **Tier 1 — declarative panels** (landed with M15a): a pack declares NAMED panels in
+  `ui/panels.yaml` (`contents.panels` in `pack.yaml`) — layouts of Tier-0 blocks with
+  live variable bindings (`{$var: id}` against the viewer's own `state.variables`,
+  `repeat` over an id prefix) plus `slot` (`sidebar`/`tray`/`modal`) and `audience`
+  (`all`/`player`/`keeper`, resolved SERVER-side). Pure data; renders on every client,
+  the TUI included.
+- **Tier 2 — sandboxed custom views** (pack format + wire landed; the rich-client host
+  ships with the studio): real HTML/JS/CSS in a locked-down iframe for interactive maps
+  and bespoke sheets. `entry:` marks a panel tier 2; it must declare every asset it
+  ships (folded into the pack's content-addressed asset pipeline at build) and an
+  explicit tier-1 `fallback` (or `fallback: null`) for text-first clients.
+
+The rules that make this safe are the same iron rules, extended to UI:
+
+- **拆卡, extended:** panels enter a room only via a keeper's `.panels enable <packId>`
+  of an installed pack (install ≠ enable). Players cannot upload panels.
+- **A panel acts as the player viewing it:** inbound it sees only that viewer's
+  filtered variables (an unresolved `$var` omits the whole block, fail-closed);
+  outbound (`panel_intent`) it can send only what that player could type — `roll`
+  intents go through the real dice engine as that player.
+- **Keeper panels never reach players:** `audience` is resolved into per-viewer
+  manifests before the wire; a keeper-only panel structurally never appears in a
+  player's manifest.
+- **No new privilege surface:** panels render and collect intent; every judgment stays
+  server-side, and keeper-only actions stay on the command surface.
+
+Keeper commands: `.panels` / `.panels list` (anyone), `.panels enable|disable <packId>`
+(keeper). Hooks address panels with `emitPanel("<packId>/<panelId>", payload)` (C.1).
 
 ---
 
@@ -403,8 +450,9 @@ isolation. Until C.2 ships, code contributions go through normal in-tree PRs.
 | `contents.rulepacks` | no | rulepack YAML files (`rulepacks/<id>.yaml`) |
 | `contents.cards` | no | SillyTavern cards (PNG or JSON): a plain path = a `character` card; a `{path, kind: world, notes: {en, zh}}` mapping declares a WORLD card (module machinery, keeper-imported via `.import <file> world`). The label is enforced against real detection at build AND install — a card carrying hooks/`[InitVar]`/EJS must be declared `kind: world` |
 | `contents.lorebooks` | no | lorebook JSON (ST `character_book` / `{entries: [...]}` shapes) |
+| `contents.panels` | no | panels YAML files (`ui/panels.yaml`) declaring module UI panels (Layer D) — ≤ 16 panels per pack; a tier-2 panel's `entry`/`assets` files are folded into the pack asset pipeline at build (sha256'd, code payload ≤ 2 MB per panel) |
 | `assets` | no | media files: `path` + optional `title`/`license`/`tags`/`mime`; `sha256`/`size`/`mime` are FILLED IN at pack time (a hand-declared `sha256` must match the file) |
-| `trust` | forbidden in source | GENERATED at pack time (counts, `has_hooks`, `has_ejs`, `asset_bytes`); a hand-written block fails the build |
+| `trust` | forbidden in source | GENERATED at pack time (counts incl. `panels`, `has_hooks`, `has_ejs`, `asset_bytes`); a hand-written block fails the build |
 
 Full example — a source tree's `pack.yaml`:
 

@@ -530,3 +530,41 @@ describe("WsClient", () => {
     expect(statuses).toEqual(["connecting", "online", "reconnecting", "connecting", "online"])
   })
 })
+
+describe("module UI panels (v1.8)", () => {
+  test("ui_manifest and panel_event frames validate and dispatch; malformed ones drop", async () => {
+    const { client, sockets } = createClient()
+    const manifests: unknown[] = []
+    const events: unknown[] = []
+    client.on(FrameType.UiManifest, (frame) => manifests.push(frame))
+    client.on(FrameType.PanelEvent, (frame) => events.push(frame))
+
+    await client.connect("ws://example.test")
+    sockets[0].serverSend({ type: "ui_manifest", panels: [] })
+    sockets[0].serverSend({
+      type: "ui_manifest",
+      panels: [{ id: "pack/board", title: { en: "Board" }, slot: "sidebar", tier: 1, blocks: [] }],
+    })
+    sockets[0].serverSend({ type: "ui_manifest" }) // no panels array -> dropped
+    sockets[0].serverSend({ type: "panel_event", panel: "pack/board", payload: { clue: 1 } })
+    sockets[0].serverSend({ type: "panel_event", panel: "pack/board" }) // opaque payload may be absent
+    sockets[0].serverSend({ type: "panel_event", panel: "" }) // no target panel -> dropped
+    await Promise.resolve()
+
+    expect(manifests.length).toBe(2)
+    expect(events.length).toBe(2)
+  })
+
+  test("sendPanelIntent emits the panel_intent frame verbatim", async () => {
+    const { client, sockets } = createClient()
+    await client.connect("ws://example.test")
+    client.sendPanelIntent("pack/board", "roll", "1d100")
+
+    expect(JSON.parse(sockets[0].sent.at(-1) as string)).toEqual({
+      type: FrameType.PanelIntent,
+      panel: "pack/board",
+      kind: "roll",
+      value: "1d100",
+    })
+  })
+})

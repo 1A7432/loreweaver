@@ -2287,3 +2287,87 @@ async def test_skill_enable_disable_denied_for_ordinary_group_member_and_store_u
     # Viewing (list/status) is still open to the same non-keeper player.
     status = await router.dispatch(player, ".skill status")
     assert status == i18n.t("commands.skill.status", items=i18n.t("commands.skill.enabled_none"))
+
+
+# --- .panels (M15 module UI panels, room enablement) -------------------------
+
+_PANELPACK_MANIFEST = """\
+id: panelpack
+version: 1.0.0
+name: {en: Panels}
+description: {en: test}
+authors: [ada]
+license: MIT
+engine: {}
+contents: {panels: [ui/panels.yaml]}
+trust: {panels: 1}
+"""
+
+_PANELPACK_PANELS = """\
+panels:
+  - id: board
+    title: {en: Board}
+    slot: sidebar
+    blocks: [{kind: divider}]
+"""
+
+
+def _services_with_panel_pack(tmp_path):
+    from infra.config import Settings as _Settings
+
+    home = tmp_path / "data/packs/panelpack@1.0.0"
+    (home / "ui").mkdir(parents=True)
+    (home / "pack.yaml").write_text(_PANELPACK_MANIFEST, encoding="utf-8")
+    (home / "ui/panels.yaml").write_text(_PANELPACK_PANELS, encoding="utf-8")
+    return build_services(
+        _Settings(data_dir=str(tmp_path / "data")), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64)
+    )
+
+
+async def test_panels_enable_disable_updates_room_store_and_list_marks_state(tmp_path):
+    from gateway.ops import get_enabled_panel_packs
+
+    services = _services_with_panel_pack(tmp_path)
+    router = CommandRouter(services)
+    keeper = AgentCtx(chat_key="cli:dm:panels-1", user_id="u1", locale="en")
+    i18n = services.i18n.with_locale("en")
+
+    listing = await router.dispatch(keeper, ".panels")
+    assert "panelpack" in listing
+
+    enabled = await router.dispatch(keeper, ".panels enable panelpack")
+    assert enabled == i18n.t("commands.panels.enable_done", id="panelpack")
+    assert await get_enabled_panel_packs(services.store, keeper.chat_key) == ["panelpack"]
+    listing = await router.dispatch(keeper, ".panels list")
+    assert f"[{i18n.t('commands.skill.enabled_some')}] panelpack" in listing
+
+    disabled = await router.dispatch(keeper, ".panels disable panelpack")
+    assert disabled == i18n.t("commands.panels.disable_done", id="panelpack")
+    assert await get_enabled_panel_packs(services.store, keeper.chat_key) == []
+
+
+async def test_panels_enable_rejects_unknown_packs_and_non_keepers(tmp_path):
+    from gateway.ops import get_enabled_panel_packs
+
+    services = _services_with_panel_pack(tmp_path)
+    router = CommandRouter(services)
+    i18n = services.i18n.with_locale("en")
+
+    keeper = AgentCtx(chat_key="cli:dm:panels-2", user_id="u1", locale="en")
+    unknown = await router.dispatch(keeper, ".panels enable ghost")
+    assert unknown == i18n.t("commands.panels.unknown", id="ghost")
+
+    source = SimpleNamespace(chat_type="group")
+    player = AgentCtx(
+        chat_key="tui:group:panels-2",
+        user_id="tui:u-1",
+        platform="tui",
+        locale="en",
+        extra={"source": source, "raw": {}},
+    )
+    denied = await router.dispatch(player, ".panels enable panelpack")
+    assert denied == i18n.t("commands.panels.denied")
+    assert await get_enabled_panel_packs(services.store, player.chat_key) == []
+    # Viewing stays open to any player.
+    listing = await router.dispatch(player, ".panels")
+    assert "panelpack" in listing

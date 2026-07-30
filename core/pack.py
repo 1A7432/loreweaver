@@ -40,6 +40,13 @@ import yaml
 from core.card_split import WorldPayloads, detect_world_payloads
 from core.charcard import MAX_CARD_FILE_BYTES, parse_card_bytes
 from core.hooks import MAX_HOOK_SOURCE_CHARS
+from core.panels import (
+    CODE_MIMES,
+    MAX_PANEL_CODE_BYTES,
+    MAX_PANELS_PER_PACK,
+    PanelSpec,
+    parse_panels_text,
+)
 from core.rulepacks import load_raw_rulepack_yaml, parse_rulepack_text
 from core.skills import parse_skill_text
 from core.worldbook import MAX_IMPORT_ENTRIES
@@ -65,7 +72,7 @@ _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _SEMVER_RE = re.compile(r"^\d{1,6}\.\d{1,6}\.\d{1,6}(?:[-+][0-9A-Za-z.-]{1,32})?$")
 _ENGINE_VERSION_RE = re.compile(r"^\d{1,6}(?:\.\d{1,6}){0,3}$")
 _LOCALES = ("en", "zh")
-CONTENT_KINDS = ("skills", "rulepacks", "cards", "lorebooks")
+CONTENT_KINDS = ("skills", "rulepacks", "cards", "lorebooks", "panels")
 # The 拆卡 taxonomy at the pack level: a "character" card is a persona + sheet a player may
 # self-import; a "world" card is module machinery (hooks / [InitVar] / EJS) the keeper imports
 # with `.import <file> world`. Labels are enforced against real detection at build AND verify
@@ -122,6 +129,7 @@ class PackTrust:
     has_hooks: bool = False
     has_ejs: bool = False
     world_cards: int = 0
+    panels: int = 0
 
 
 @dataclass(frozen=True)
@@ -167,6 +175,7 @@ class InstallReport:
     rulepacks: list[str] = field(default_factory=list)
     cards: list[str] = field(default_factory=list)
     lorebooks: list[str] = field(default_factory=list)
+    panels: list[str] = field(default_factory=list)  # panels.yaml paths landed in the pack home
     assets: int = 0
     asset_bytes: int = 0
     shadowed: list[str] = field(default_factory=list)  # ids a same-named built-in keeps winning over
@@ -365,6 +374,7 @@ def parse_manifest_text(text: str, *, expect_trust: bool) -> PackManifest:
                 has_hooks=bool(trust_raw.get("has_hooks", False)),
                 has_ejs=bool(trust_raw.get("has_ejs", False)),
                 world_cards=int(trust_raw.get("world_cards", 0)),
+                panels=int(trust_raw.get("panels", 0)),
             )
         except (TypeError, ValueError) as exc:
             raise PackError(f"invalid trust block: {exc}") from exc
@@ -533,6 +543,60 @@ def _validate_lorebook_bytes(path: str, data: bytes) -> bool:
     return _detect_ejs(data.decode("utf-8", errors="ignore"))
 
 
+def _validate_pack_panels(read_text: Callable[[str], str], manifest: PackManifest) -> tuple[list[PanelSpec], list[str]]:
+    """Parse + cross-validate every declared panels file (build AND verify side).
+
+    Per-file schema validation is `core.panels.parse_panels_text`; this adds the
+    pack-level discipline: panel ids unique ACROSS files, the pack-wide panel cap,
+    and zip-slip validation of every tier-2 asset path. Returns the parsed panels
+    plus the ordered, de-duplicated list of tier-2 asset paths (entry included).
+    """
+    panels: list[PanelSpec] = []
+    seen_ids: set[str] = set()
+    asset_paths: list[str] = []
+    seen_assets: set[str] = set()
+    for panels_path in manifest.contents["panels"]:
+        if PurePosixPath(panels_path).suffix not in {".yaml", ".yml"}:
+            raise PackError(f"panels file must be a .yaml file: {panels_path!r}")
+        try:
+            parsed = parse_panels_text(read_text(panels_path))
+        except ValueError as exc:
+            raise PackError(f"panels {panels_path}: {exc}") from exc
+        for panel in parsed:
+            if panel.id in seen_ids:
+                raise PackError(f"panels {panels_path}: duplicate panel id {panel.id!r} across the pack")
+            seen_ids.add(panel.id)
+            panels.append(panel)
+            for asset in panel.assets:
+                _validated_entry_path(asset)
+                if asset not in seen_assets:
+                    seen_assets.add(asset)
+                    asset_paths.append(asset)
+    if len(panels) > MAX_PANELS_PER_PACK:
+        raise PackError(f"pack declares too many panels (max {MAX_PANELS_PER_PACK})")
+    return panels, asset_paths
+
+
+def _enforce_panel_code_cap(panels: list[PanelSpec], assets_by_path: Mapping[str, PackAsset]) -> None:
+    """Every tier-2 asset must have an integrity record, and each panel's code payload
+    (entry html + js + css) must fit `MAX_PANEL_CODE_BYTES`. Runs after asset digesting
+    on the build side and against the built manifest's asset block on the verify side."""
+    for panel in panels:
+        if panel.tier != 2:
+            continue
+        code_bytes = 0
+        for path in panel.assets:
+            asset = assets_by_path.get(path)
+            if asset is None:
+                raise PackError(f"panel {panel.id}: asset {path!r} is missing from the manifest asset block")
+            if path == panel.entry or asset.mime in CODE_MIMES:
+                code_bytes += asset.size
+        if code_bytes > MAX_PANEL_CODE_BYTES:
+            raise PackError(
+                f"panel {panel.id}: entry+js+css total {code_bytes} bytes exceeds the {MAX_PANEL_CODE_BYTES}-byte cap"
+            )
+
+
 # --- build ------------------------------------------------------------------
 
 
@@ -586,6 +650,7 @@ def _manifest_to_yaml(manifest: PackManifest) -> str:
             "has_hooks": manifest.trust.has_hooks,
             "has_ejs": manifest.trust.has_ejs,
             "world_cards": manifest.trust.world_cards,
+            "panels": manifest.trust.panels,
         },
     }
     return yaml.safe_dump(data, sort_keys=True, allow_unicode=True, default_flow_style=False)
@@ -655,9 +720,22 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
         has_ejs = has_ejs or lore_ejs
         archive_files.append(lorebook_path)
 
+    # Panels (M15): validate every declared panels file, then fold each tier-2 asset
+    # the author did not also list under top-level `assets:` into the SAME asset
+    # pipeline below — one sha256/mime/size stamping + verification path for
+    # everything content-addressed, and the trust card's asset numbers stay honest.
+    pack_panels, panel_asset_paths = _validate_pack_panels(read_text, manifest)
+    archive_files.extend(manifest.contents["panels"])
+    declared_asset_paths = {asset.path for asset in manifest.assets}
+    all_assets = list(manifest.assets) + [
+        PackAsset(path=path, sha256="", mime="", size=0)
+        for path in panel_asset_paths
+        if path not in declared_asset_paths
+    ]
+
     completed_assets: list[PackAsset] = []
     asset_bytes = 0
-    for asset in manifest.assets:
+    for asset in all_assets:
         asset_file = _source_file(source_dir, asset.path)
         if not asset_file.is_file():
             raise PackError(f"asset missing from source: {asset.path!r}")
@@ -680,6 +758,8 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
         asset_bytes += len(data)
         archive_files.append(asset.path)
 
+    _enforce_panel_code_cap(pack_panels, {asset.path: asset for asset in completed_assets})
+
     if len(set(archive_files)) != len(archive_files):
         raise PackError("a file is declared under more than one contents kind")
     total_bytes = sum(_source_file(source_dir, name).stat().st_size for name in archive_files)
@@ -698,6 +778,7 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
         has_hooks=has_hooks,
         has_ejs=has_ejs,
         world_cards=sum(1 for card in manifest.card_entries if card.kind == "world"),
+        panels=len(pack_panels),
     )
     built_manifest = PackManifest(
         id=manifest.id,
@@ -812,7 +893,7 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
     for skill_dir in manifest.contents["skills"]:
         declared.add(f"{skill_dir}/SKILL.md")
         declared.add(f"{skill_dir}/hooks.js")
-    for kind in ("rulepacks", "cards", "lorebooks"):
+    for kind in ("rulepacks", "cards", "lorebooks", "panels"):
         declared.update(manifest.contents[kind])
     declared.update(asset.path for asset in manifest.assets)
     undeclared = sorted(names - declared)
@@ -847,6 +928,14 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
         with archive.open(lorebook_path) as handle:
             data = handle.read(MAX_LOREBOOK_BYTES + 1)
         _validate_lorebook_bytes(lorebook_path, data)
+    for panels_path in manifest.contents["panels"]:
+        if panels_path not in names:
+            raise PackError(f"declared panels file missing from archive: {panels_path!r}")
+    # Re-run the pack-level panel validation and re-check the code cap against the BUILT
+    # manifest's asset block — a tampered manifest that drops a panel asset's integrity
+    # record (or understates sizes) fails here before anything is written.
+    verify_panels, _ = _validate_pack_panels(read_text, manifest)
+    _enforce_panel_code_cap(verify_panels, {asset.path: asset for asset in manifest.assets})
     for asset in manifest.assets:
         if asset.path not in names:
             raise PackError(f"declared asset missing from archive: {asset.path!r}")
@@ -926,7 +1015,7 @@ def install_pack(
             staging.mkdir(parents=True)
             manifest_target = _confined_target(staging, MANIFEST_NAME)
             manifest_target.write_text(_archive_read_text(archive, MANIFEST_NAME), encoding="utf-8")
-            for kind in ("cards", "lorebooks"):
+            for kind in ("cards", "lorebooks", "panels"):
                 for name in manifest.contents[kind]:
                     _extract_entry(archive, name, _confined_target(staging, name))
                     getattr(report, kind).append(name)

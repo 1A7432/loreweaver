@@ -22,6 +22,8 @@ _BOT_DISABLED_VALUE = "0"
 _MEDIA_ENABLED_PREFIX = "media_enabled."
 _DIRECT_CHAT_TYPES = {"dm", "direct", "private"}
 _SKILLS_ENABLED_PREFIX = "skills_enabled."
+# Packs whose module UI panels the keeper turned on for a room (M15 `.panels enable`).
+_PANELS_ENABLED_PREFIX = "room_panels."
 # Skill `metadata.content-rating` values that lift the output censor for a room
 # (see `room_content_unfiltered` / `gateway.turn.run_turn`).
 _UNFILTERED_CONTENT_RATINGS = {"mature", "explicit"}
@@ -363,6 +365,43 @@ async def toggle_enabled_skill(store, chat_key: str, skill_id: str, *, on: bool)
         else:
             enabled_ids = [item for item in enabled_ids if item != skill_id]
         await set_enabled_skills(store, chat_key, enabled_ids)
+        return enabled_ids
+
+
+async def get_enabled_panel_packs(store, chat_key: str) -> list[str]:
+    """Pack ids whose UI panels are enabled for `chat_key`'s room (`[]` if unset/corrupt).
+
+    Install ≠ enable, exactly like skills: `.lwpack` install only lands panels on disk;
+    a keeper's `.panels enable <packId>` (stored here) is what admits them to a room.
+    Same degrade-to-empty stance as `get_enabled_skills`.
+    """
+    raw = await store.get(store_key=f"{_PANELS_ENABLED_PREFIX}{chat_key}")
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value]
+
+
+async def set_enabled_panel_packs(store, chat_key: str, ids: list[str]) -> None:
+    await store.set(store_key=f"{_PANELS_ENABLED_PREFIX}{chat_key}", value=json.dumps(list(ids), ensure_ascii=False))
+
+
+async def toggle_enabled_panel_pack(store, chat_key: str, pack_id: str, *, on: bool) -> list[str]:
+    """Atomically add/remove one pack id in ``chat_key``'s enabled-panels set (shares the
+    per-room toggle lock with skills — both are rare keeper actions on the same room)."""
+    async with _skills_toggle_lock(chat_key):
+        enabled_ids = await get_enabled_panel_packs(store, chat_key)
+        if on:
+            if pack_id not in enabled_ids:
+                enabled_ids = [*enabled_ids, pack_id]
+        else:
+            enabled_ids = [item for item in enabled_ids if item != pack_id]
+        await set_enabled_panel_packs(store, chat_key, enabled_ids)
         return enabled_ids
 
 

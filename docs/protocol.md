@@ -7,7 +7,7 @@ This is the open, versioned wire protocol between a loreweaver server (started v
 (deterministic core + AI Keeper) is unaffected by transport; the transport-neutral
 session logic is `net.session.SessionCore`, and this document is the language-agnostic seam.
 
-Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"1.7"`. The same
+Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"1.8"`. The same
 frames + `join` handshake ride the transport; only the carrier + its framing differ:
 
 - **Iroh** (the transport `--serve` starts) — peer-to-peer QUIC. The server
@@ -22,7 +22,9 @@ frames + `join` handshake ride the transport; only the carrier + its framing dif
 
 Both carriers drive the same `SessionCore`/`RoomHub`.
 
-Versioning is additive: `"1.7"` adds the declarative hook-emitted `ui` frame; `"1.6"` adds the optional `state.variables` list (deterministic
+Versioning is additive: `"1.8"` adds module UI panels (M15) — the per-viewer `ui_manifest`
+frame, hook-emitted `panel_event`, the `panel_intent` client frame, and installed-pack
+asset resolution on the media byte channel (see "Module UI panels" below); `"1.7"` adds the declarative hook-emitted `ui` frame; `"1.6"` adds the optional `state.variables` list (deterministic
 module variables — the player-visible subset only); `"1.5"` adds room-wide AI-KP turn status; `"1.4"` adds image-generation config plus avatar binding; `"1.3"` adds room audio library/control frames; `"1.2"` adds media metadata frames and byte channels; `"1.1"` added the keeper-gated `admin_*` frames
 (see "Admin frames" below). A client that only understands `"1"` keeps working
 unchanged — it never sends `admin_*` frames, ignores server frame types it does not
@@ -51,12 +53,20 @@ connections receive `error too_many_connections` before `join` is read.
   own active character. The server rejects frames that try to name another
   character/user:
   `{type:"avatar_set", hash:string}`
+- `panel_intent` (v1.8, additive) — a module-panel interaction. The server first checks
+  the named panel is in THIS member's own manifest (else `error forbidden`), then routes
+  the value exactly as if the member typed it — the panel privilege model in one move:
+  `choice` and `input` submit `value` verbatim through the normal input choke (rate
+  limits, turn lock, command privilege gates all apply); `roll` runs a public
+  `.r <value>` as that player, so the real dice engine validates the expression.
+  `value` is capped at 2000 chars (`error input_too_long`):
+  `{type:"panel_intent", panel:string, kind:"choice"|"input"|"roll", value:string}`
 - `ping`: `{type:"ping", t:number}`
 
 ## Server → Client
 
 - `welcome` — sent once, on a successful `join`:
-  `{type:"welcome", protocol:"1.7", features:["media","audio", "imagegen"?, "demo"?, "update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
+  `{type:"welcome", protocol:"1.8", features:["media","audio", "imagegen"?, "demo"?, "update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
   `version` is the server's own release version (compare it to the client's to detect a mismatch). The `"update"` feature appears only for a keeper on a server whose operator configured a self-update command, and gates the `admin_update_server` control.
   `demo` means the server is using its offline sample Keeper, vector support is
   enabled, and this specific Keeper room was empty when the server checked it.
@@ -111,6 +121,22 @@ connections receive `error too_many_connections` before `join` is read.
   the prior inline frame with the same `id` in place (a client without in-place
   updates simply appends). Picking a `choices` option sends that option's `input`
   back verbatim as a NORMAL `input` frame — no new client→server frame type exists.
+- `ui_manifest` (v1.8, additive) — this VIEWER's complete module-panel list, sent on
+  `join` right after the initial `state` frame and pushed to every connected member
+  after a keeper's `.panels enable|disable`. FULL-REPLACE semantics: the frame carries
+  the whole list (empty = no panels, which also clears stale panels on reconnect). The
+  pack's `audience` declarations are resolved server-side per the viewer's keystore
+  role BEFORE this frame is built — a keeper-only panel structurally never appears in
+  a player's manifest, and `audience` itself never rides the wire. See "Module UI
+  panels" below for the panel/template shapes:
+  `{type:"ui_manifest", panels:[UiManifestPanel]}`
+- `panel_event` (v1.8, additive) — an opaque JSON payload a room hook emitted via
+  `emitPanel(panelId, payload)` (see `docs/plugins.md`), for the named panel's own
+  code (tier-2). Delivered — right after the turn's `ui` frames — ONLY to members
+  whose manifest contains that panel; ≤ 20 per turn (excess dropped + logged) and
+  ≤ 32 KB serialized per payload. Clients that do not run panel code (the TUI)
+  simply ignore it:
+  `{type:"panel_event", panel:string, payload:any}`
 - `state` — a panel snapshot, sent on `join` and after every turn:
   `{type:"state", character?:{name,system,hp,hpmax,mp,mpmax,san,sanmax,attributes:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,hp?:int,hpMax?:int,san?:int,sanMax?:int,mp?:int,mpMax?:int,ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, usage?:{context_tokens:int,context_window:int,input_tokens:int,output_tokens:int,cache_hit_tokens:int,cache_miss_tokens:int}, variables?:[{id:string,label:string,kind:"number"|"bool"|"text"|"enum",value:number|boolean|string,min?:int,max?:int}], reset?:boolean}`
   `variables` (v1.6, additive/optional — omitted when the room has none) is the room's
@@ -173,13 +199,61 @@ On an `input` frame from a client in room `R`, the server:
 8. Broadcasts one `ui` frame per emission the turn's event hooks buffered via
    `emitUI` (v1.7, additive) — already validated and capped server-side; rooms
    with no hooks never see this frame.
-9. After the AI-KP branch (including error cleanup), broadcasts
-   `turn_status{status:"idle"}`. Command replies do not emit turn status.
-10. Rebuilds and broadcasts a `state` frame (`net.state.build_room_state`).
+9. Delivers one `panel_event` frame per emission the turn's hooks buffered via
+   `emitPanel` (v1.8, additive) — NOT a broadcast: each event reaches only members
+   whose own manifest contains the target panel.
+10. After the AI-KP branch (including error cleanup), broadcasts
+    `turn_status{status:"idle"}`. Command replies do not emit turn status.
+11. Rebuilds and broadcasts a `state` frame (`net.state.build_room_state`).
 
 Multiple clients whose keys map to the same room share one AI-KP session;
 every frame described above as "broadcast" goes to every member currently
 connected to that room.
+
+## Module UI panels (v1.8)
+
+A `.lwpack` may ship named UI panels (`contents.panels` + `ui/panels.yaml` — authoring
+guide in `docs/plugins.md`); a keeper admits an installed pack's panels to a room with
+`.panels enable <packId>` (install ≠ enable, exactly like skills). The room manifest is
+resolved per viewer and delivered via `ui_manifest` (above). The privilege model is one
+sentence: **a panel acts as the player viewing it** — inbound it receives only that
+viewer's filtered data, outbound (`panel_intent`) it can send only what that player
+could type.
+
+`UiManifestPanel` (audience never appears — it was resolved server-side):
+
+```jsonc
+{"id": "<packId>/<panelId>", "title": {"en": "...", "zh": "..."}, "slot": "sidebar|tray|modal",
+ "tier": 1, "blocks": [/* template blocks */]}
+// or tier 2:
+{"id": "...", "title": {...}, "slot": "modal", "tier": 2,
+ "entry": {"hash": "<sha256>", "size": 1234},
+ "assets": [{"path": "app.js", "hash": "<sha256>", "size": 999, "mime": "text/javascript"}],
+ "fallback": [/* template blocks */] /* or null */}
+```
+
+**Tier-1 template blocks** are the v1.7 `UiBlock` vocabulary with two additions the
+CLIENT resolves against its OWN `state.variables` (ids exactly as they appear there —
+modvar ids, `mvu.`-prefixed leaves):
+
+- any scalar field may be `{"$var": "<variable id>"}`; the variable being absent/hidden
+  for this viewer omits the WHOLE block (fail-closed — a panel can never widen
+  visibility; the `state` wire filter remains the single choke point);
+- `{"repeat": {"prefix": "<id prefix>", "block": <TemplateBlock>}}` renders one
+  instance per visible variable whose id starts with the prefix (≤ 32 instances);
+  inside, `{"$leaf": "id"|"label"|"value"}` substitutes the matched variable's field.
+
+Localized strings are `{en,zh}` maps; the client picks its locale (fallback `en`).
+Picking a tier-1 `choices` option sends `panel_intent{kind:"choice", value: <option
+input>}`. Text-first clients (the TUI) render tier-1 blocks with the existing block
+renderer, fold `tray`/`modal` into sidebar sections, render a tier-2 panel's
+`fallback` blocks, and show one localized "available in the rich client" line for an
+explicit `fallback: null`.
+
+**Tier-2 assets** are content-addressed: fetch each manifest hash over the EXISTING
+media byte channel (`{op:"get", hash}` — see "Media transfer"); wire `path`s are
+relative to the entry document's directory (each panel is a self-contained static
+root). Verify the sha256 before caching (immutable, keyed by hash).
 
 ## Media transfer (v1.2+) and audio (v1.3)
 
@@ -214,6 +288,11 @@ Download flow:
 2. Server checks the hash belongs to the caller's room, then replies with `{op:"get",hash,size,mime,name}`
    plus raw bytes. The client should verify sha256 and may cache under
    `~/.loreweaver/cache/media/<hash>`.
+3. (v1.8) A hash that is not room media additionally resolves against installed-pack
+   assets of packs ENABLED in the caller's room — the panel asset path. Same reply
+   shape; the server re-verifies the bytes against their manifest digest before
+   serving. A hash from a pack the room has not enabled stays `media_not_found`
+   (no arbitrary blob oracle).
 
 MediaChannel wire formats:
 

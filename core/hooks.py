@@ -17,7 +17,9 @@ Inside a handler the full template bridge is available (``getvar``/``setvar``/``
 player-visible reply), ``rewriteReply(text)`` (replaces it), ``emitUI(blocks, opts?)``
 (declarative UI blocks clients render as protocol-v1.7 ``ui`` frames — player-visible
 authorial output, the same trust stance as ``narrate``; keeper secrets must never be
-emitted), and ``log(text)``.
+emitted), ``emitPanel(panelId, payload)`` (an opaque JSON payload for one module UI panel —
+protocol-v1.8 ``panel_event`` frames, delivered only to viewers whose manifest contains
+that panel; same trust stance as ``emitUI``), and ``log(text)``.
 
 Architecture is the proven zero-callable one: snapshots are serialized INTO the QuickJS sandbox
 (which is why the hard per-eval time limit can stay armed — the binding cannot combine time
@@ -75,11 +77,21 @@ UI_PANELS = frozenset({"inline", "sidebar"})
 UI_BADGE_TONES = frozenset({"info", "warn", "danger"})
 UI_TEXT_STYLES = frozenset({"quote", "warning"})
 
+# emitPanel caps (protocol v1.8 `panel_event` frames, M15). The per-TURN budget is
+# enforced where the phases' outcomes aggregate (`agent.loop`); the sanitize below
+# additionally slices any single dispatch to the same budget. A payload is an opaque
+# JSON value for the target panel's own code — size-capped, never schema'd.
+MAX_PANEL_EVENTS_PER_TURN = 20
+MAX_PANEL_EVENT_BYTES = 32 * 1024
+# Wire panel id "<pack slug>/<panel slug>": two 64-char slugs + the separator.
+MAX_PANEL_WIRE_ID_CHARS = 129
+
 _HOOK_PRELUDE = r"""
 globalThis.__handlers = {};
 globalThis.__injections = [];
 globalThis.__narrations = [];
 globalThis.__ui = [];
+globalThis.__panel_events = [];
 globalThis.__rewrite = null;
 
 function on(eventType, handler) {
@@ -97,6 +109,9 @@ function emitUI(blocks, opts) {
         id: opts && opts.id,
         replace: opts && opts.replace,
     });
+}
+function emitPanel(panelId, payload) {
+    globalThis.__panel_events.push({ panel: String(panelId), payload: payload });
 }
 function log(text) { globalThis.__warnings.push("log: " + String(text)); }
 
@@ -233,6 +248,39 @@ def sanitize_ui_emissions(raw: Any) -> list[dict[str, Any]]:
     return emissions
 
 
+def sanitize_panel_events(raw: Any) -> list[dict[str, Any]]:
+    """Validate a fire()'s buffered `emitPanel()` calls into wire-ready `panel_event`
+    frame payloads (protocol v1.8, minus the ``type`` key): ``{"panel": <wire id>,
+    "payload": <JSON value>}``.
+
+    Same slice-then-filter stance as `sanitize_ui_emissions`: entries past the budget
+    drop from the tail, and an entry with a bad panel id or an oversized payload
+    (> `MAX_PANEL_EVENT_BYTES` serialized) drops entirely — a payload is opaque JSON
+    for the target panel's own code, so truncating it would corrupt it. The per-TURN
+    budget across phases is the caller's job (`agent.loop`).
+    """
+    if not isinstance(raw, list):
+        return []
+    events: list[dict[str, Any]] = []
+    for entry in raw[:MAX_PANEL_EVENTS_PER_TURN]:
+        if not isinstance(entry, dict):
+            continue
+        panel = entry.get("panel")
+        if not isinstance(panel, str) or not panel.strip() or len(panel) > MAX_PANEL_WIRE_ID_CHARS:
+            continue
+        payload = entry.get("payload")
+        try:
+            # allow_nan=False: NaN/Infinity would serialize as non-standard JSON that a
+            # client-side JSON.parse rejects — drop the entry instead of poisoning the wire.
+            serialized = json.dumps(payload, ensure_ascii=False, allow_nan=False)
+        except (TypeError, ValueError):
+            continue
+        if len(serialized.encode("utf-8")) > MAX_PANEL_EVENT_BYTES:
+            continue
+        events.append({"panel": panel.strip(), "payload": payload})
+    return events
+
+
 @dataclass
 class HookScript:
     """One registered script: `source_id` names where it came from (skill id / card name)."""
@@ -253,6 +301,9 @@ class HookOutcome:
     # Validated emitUI() emissions (see `sanitize_ui_emissions`) — each dict is one
     # protocol-v1.7 `ui` wire-frame payload the caller broadcasts as-is.
     ui_blocks: list[dict[str, Any]] = field(default_factory=list)
+    # Validated emitPanel() emissions (see `sanitize_panel_events`) — each dict is one
+    # protocol-v1.8 `panel_event` payload; delivery is manifest-filtered per viewer.
+    panel_events: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -295,7 +346,8 @@ class HookEngine:
         try:
             self._context.eval(
                 "globalThis.__writes = []; globalThis.__injections = [];"  # i18n-exempt: JavaScript source, not UI text
-                " globalThis.__narrations = []; globalThis.__rewrite = null; globalThis.__ui = [];"
+                " globalThis.__narrations = []; globalThis.__rewrite = null;"
+                " globalThis.__ui = []; globalThis.__panel_events = [];"
             )
             outcome.handlers = int(
                 self._context.eval(
@@ -311,6 +363,7 @@ class HookEngine:
             rewrite = self._read_json("globalThis.__rewrite")
             outcome.rewrite = rewrite[:MAX_INJECT_CHARS] if isinstance(rewrite, str) else None
             outcome.ui_blocks = sanitize_ui_emissions(self._read_json("globalThis.__ui"))
+            outcome.panel_events = sanitize_panel_events(self._read_json("globalThis.__panel_events"))
             warnings = self._read_json("globalThis.__warnings") or []
             self._context.eval("globalThis.__warnings = [];")
             outcome.warnings = [str(warning) for warning in warnings]

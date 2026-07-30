@@ -156,3 +156,43 @@ async def test_reimport_replaces_a_sources_scripts_instead_of_stacking():
     entries = json.loads(raw)
     assert len(entries) == 1
     assert entries[0]["id"] == "card:络络#0"
+
+
+async def test_emit_panel_events_aggregate_across_phases_into_the_turn_result():
+    services = _services(FakeLLM(script=[assistant_text("Night falls.")]))
+    ctx = _ctx("chat-hooks-panels-1")
+    await install_room_hooks(
+        services,
+        ctx.chat_key,
+        "test",
+        [
+            "on('turn_start', () => emitPanel('pack/board', {phase: 'start'}));"
+            "on('reply_ready', () => emitPanel('pack/board', {phase: 'reply'}));"
+        ],
+    )
+
+    result = await run_kp_turn(ctx, services, Toolset(), "look around")
+
+    assert [event["payload"]["phase"] for event in result.panel_events] == ["start", "reply"]
+
+
+async def test_emit_panel_per_turn_budget_keeps_the_head_and_drops_the_rest():
+    from core.hooks import MAX_PANEL_EVENTS_PER_TURN
+
+    services = _services(FakeLLM(script=[assistant_text("ok")]))
+    ctx = _ctx("chat-hooks-panels-2")
+    await install_room_hooks(
+        services,
+        ctx.chat_key,
+        "test",
+        [
+            "on('turn_start', () => { for (var i = 0; i < 15; i++) emitPanel('pack/a', i); });"
+            "on('reply_ready', () => { for (var i = 0; i < 15; i++) emitPanel('pack/b', i); });"
+        ],
+    )
+
+    result = await run_kp_turn(ctx, services, Toolset(), "poke")
+
+    assert len(result.panel_events) == MAX_PANEL_EVENTS_PER_TURN
+    assert [event["panel"] for event in result.panel_events[:15]] == ["pack/a"] * 15
+    assert [event["panel"] for event in result.panel_events[15:]] == ["pack/b"] * 5

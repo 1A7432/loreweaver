@@ -31,6 +31,7 @@ from agent.loop import KPTurnResult, run_kp_turn
 from core.dice_engine import coc_rank_label
 from gateway.hub import Event
 from gateway.ops import room_content_unfiltered
+from gateway.panels import deliver_panel_events
 from infra.i18n import I18n, get_i18n
 from infra.usage_stats import record_usage_stats
 from net.state import build_room_state, resolve_active_character
@@ -248,6 +249,11 @@ async def run_turn(
             # narrative it annotates, before the closing `state` snapshot.
             for ui_frame in result.ui_frames:
                 await hub.publish(ctx.chat_key, Event.ui(ui_frame))
+            # Hook-emitted module-panel events (protocol v1.8) follow the same slot,
+            # but are NOT a broadcast: each reaches only members whose own manifest
+            # contains the target panel (gateway.panels.deliver_panel_events).
+            if result.panel_events:
+                await deliver_panel_events(hub, services, ctx.chat_key, result.panel_events)
             await record_usage_stats(
                 services.store,
                 ctx.chat_key,

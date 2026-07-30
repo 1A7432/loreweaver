@@ -33,7 +33,15 @@ from gateway.avatar import AvatarError, set_target_avatar, set_user_avatar
 from gateway.hub import Event
 from gateway.imagegen import allow_imagegen_request, image_name
 from gateway.media import media_frame, publish_media
-from gateway.ops import Botlist, PrivilegeLevel, get_enabled_skills, is_media_enabled, toggle_enabled_skill
+from gateway.ops import (
+    Botlist,
+    PrivilegeLevel,
+    get_enabled_panel_packs,
+    get_enabled_skills,
+    is_media_enabled,
+    toggle_enabled_panel_pack,
+    toggle_enabled_skill,
+)
 from gateway.rooms import (
     clear_binding,
     clear_keeper_binding,
@@ -926,6 +934,52 @@ class CommandRouter:
         if enable:
             return ctx.i18n.t("commands.skill.enable_done", id=skill_id)
         return ctx.i18n.t("commands.skill.disable_done", id=skill_id)
+
+    async def cmd_panels(self, ctx: CommandCtx) -> str:
+        """`.panels [list | enable <packId> | disable <packId>]` — admit an installed
+        pack's module UI panels (M15) to this room, `.skill`-style: bare `.panels` /
+        `.panels list` is open viewing, enable/disable is keeper-gated. Panels reach a
+        room ONLY through this command (the 拆卡 rule extended to UI); a change pushes
+        fresh per-viewer `ui_manifest` frames to every connected member immediately.
+        """
+        parts = ctx.args.split(maxsplit=1)
+        sub = parts[0].casefold() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+
+        if sub in _SKILL_ENABLE_WORDS:
+            return await self._panels_set(ctx, rest, enable=True)
+        if sub in _SKILL_DISABLE_WORDS:
+            return await self._panels_set(ctx, rest, enable=False)
+        return await self._panels_list(ctx)
+
+    async def _panels_list(self, ctx: CommandCtx) -> str:
+        from gateway.panels import list_installed_panel_packs
+
+        enabled_ids = set(await get_enabled_panel_packs(ctx.services.store, ctx.chat_key))
+        installed = list_installed_panel_packs(ctx.services)
+        if not installed:
+            return ctx.i18n.t("commands.panels.none_installed")
+        lines = []
+        for pack_id, count in installed:
+            marker_key = "commands.skill.enabled_some" if pack_id in enabled_ids else "commands.skill.enabled_none"
+            lines.append(f"[{ctx.i18n.t(marker_key)}] {pack_id} — {ctx.i18n.t('commands.panels.count', count=count)}")
+        return ctx.i18n.t("commands.panels.list", items="\n".join(lines))
+
+    async def _panels_set(self, ctx: CommandCtx, pack_id: str, *, enable: bool) -> str:
+        from gateway.panels import installed_panel_count, publish_ui_manifests
+
+        if not _is_keeper(ctx.raw_ctx):
+            return ctx.i18n.t("commands.panels.denied")
+        pack_id = pack_id.strip()
+        if not pack_id or (enable and installed_panel_count(ctx.services, pack_id) <= 0):
+            return ctx.i18n.t("commands.panels.unknown", id=pack_id)
+
+        await toggle_enabled_panel_pack(ctx.services.store, ctx.chat_key, pack_id, on=enable)
+        if self.hub is not None:
+            await publish_ui_manifests(self.hub, ctx.services, ctx.chat_key)
+        if enable:
+            return ctx.i18n.t("commands.panels.enable_done", id=pack_id)
+        return ctx.i18n.t("commands.panels.disable_done", id=pack_id)
 
     async def cmd_audio(self, ctx: CommandCtx) -> str:
         tokens = _shell_words(ctx.args)
@@ -2113,6 +2167,7 @@ class CommandRouter:
             CommandSpec("draw", self.cmd_draw, ["draw"], ["draw", "抽牌"], None, "commands.help.draw"),
             CommandSpec("bot", self.cmd_bot_toggle, ["bot"], ["bot"], None, "commands.help.bot"),
             CommandSpec("skill", self.cmd_skill, ["skill"], ["skill"], None, "commands.help.skill"),
+            CommandSpec("panels", self.cmd_panels, ["panels"], ["panels", "模组面板"], None, "commands.help.panels"),
             CommandSpec("avatar", self.cmd_avatar, ["avatar"], ["avatar", "头像"], None, "commands.help.avatar"),
             CommandSpec(
                 "audio",

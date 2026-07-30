@@ -2,7 +2,7 @@
   "pack.card.header": "📦 {name} — {id}@{version}",
   "pack.card.description": "   {description}",
   "pack.card.provenance": "   by {authors} · license: {license}",
-  "pack.card.trust": "   contains: {skills} skill(s), {rulepacks} rulepack(s), {cards} card(s), {lorebooks} lorebook(s), {assets} asset(s) ({asset_mb} MB) · hooks code: {hooks} · EJS templates: {ejs}",
+  "pack.card.trust": "   contains: {skills} skill(s), {rulepacks} rulepack(s), {cards} card(s), {lorebooks} lorebook(s), {panels} UI panel(s), {assets} asset(s) ({asset_mb} MB) · hooks code: {hooks} · EJS templates: {ejs}",
   "pack.flag.yes": "yes",
   "pack.flag.no": "no",
   "pack.build.done": "Packed {id}@{version} -> {path}\n   sha256: {sha256}",

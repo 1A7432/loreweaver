@@ -37,6 +37,7 @@ from agent.prompt_builder import build_system_prompt
 from agent.services import Services
 from agent.session_recap import maybe_refresh_session_recap
 from agent.tools import Toolset
+from core.hooks import MAX_PANEL_EVENTS_PER_TURN
 from core.mvu_compat import MvuManager
 from core.skills import unlocked_tools_for
 from infra.i18n import t
@@ -521,6 +522,10 @@ class KPTurnResult:
     # ({blocks, panel, id?, replace?}) that `gateway.turn.run_turn` broadcasts right
     # after the KP narrative. Empty whenever hooks are inert.
     ui_frames: list[dict] = field(default_factory=list)
+    # Validated emitPanel() emissions (protocol v1.8), capped per turn; each dict is one
+    # `panel_event` payload ({panel, payload}) `gateway.turn.run_turn` delivers only to
+    # viewers whose panel manifest contains that panel. Empty whenever hooks are inert.
+    panel_events: list[dict] = field(default_factory=list)
 
 
 async def run_kp_turn(
@@ -552,11 +557,13 @@ async def run_kp_turn(
     hook_engine = await load_room_hook_engine(services, ctx)
     hook_writes_this_turn: list[str] = []
     hook_ui_frames: list[dict] = []
+    hook_panel_events: list[dict] = []
     ctx.extra.pop("hook_injections", None)  # reused ctx must not leak a prior turn's injections
     if hook_engine is not None:
         outcome = hook_engine.fire("turn_start", {"user_message": user_message, "actor": ctx.user_id})
         hook_writes_this_turn += await apply_hook_writes(services, ctx.chat_key, outcome.writes)
         hook_ui_frames += outcome.ui_blocks
+        hook_panel_events += outcome.panel_events
         if outcome.injections:
             ctx.extra["hook_injections"] = outcome.injections
     system_prompt = await build_system_prompt(ctx, services)
@@ -619,7 +626,13 @@ async def run_kp_turn(
             _clear_llm_continuation(services, messages)
             if output_review is not None:
                 reply = output_review(reply)
-            return KPTurnResult(reply=reply, tool_trace=tool_trace, rounds=rounds, ui_frames=hook_ui_frames)
+            return KPTurnResult(
+                reply=reply,
+                tool_trace=tool_trace,
+                rounds=rounds,
+                ui_frames=hook_ui_frames,
+                panel_events=_capped_panel_events(hook_panel_events, ctx.chat_key),
+            )
 
         _accumulate_usage(turn_usage, result)
 
@@ -721,10 +734,11 @@ async def run_kp_turn(
         logger.warning("MVU update-block processing failed", exc_info=True)
 
     if hook_engine is not None:
-        reply, hook_writes_this_turn, reply_ui_frames = await _run_reply_hooks(
+        reply, hook_writes_this_turn, reply_ui_frames, reply_panel_events = await _run_reply_hooks(
             services, ctx, hook_engine, reply, tool_trace, mvu_applied, hook_writes_this_turn
         )
         hook_ui_frames += reply_ui_frames
+        hook_panel_events += reply_panel_events
     if output_review is not None:
         reply = output_review(reply)
 
@@ -740,6 +754,7 @@ async def run_kp_turn(
         rounds=rounds,
         usage=turn_usage,
         ui_frames=hook_ui_frames,
+        panel_events=_capped_panel_events(hook_panel_events, ctx.chat_key),
     )
 
 
@@ -1435,14 +1450,16 @@ async def _run_reply_hooks(
     tool_trace: list[dict],
     mvu_applied: list,
     hook_writes: list[str],
-) -> tuple[str, list[str], list[dict]]:
+) -> tuple[str, list[str], list[dict], list[dict]]:
     """Fire the post-reply hook phases in order: dice_rolled (when any dice tool resolved this
     turn), reply_ready (narrate/rewrite), then variables_changed exactly once when anything
     wrote variables this turn. One round only — variables_changed's own writes do NOT re-fire
     it, so hook cascades terminate by construction. Best-effort: a failing phase logs and the
-    reply passes through unchanged. The third return value collects every phase's validated
-    emitUI() emissions in fire order (protocol-v1.7 `ui` frame payloads)."""
+    reply passes through unchanged. The third/fourth return values collect every phase's
+    validated emitUI() / emitPanel() emissions in fire order (protocol v1.7 `ui` frame
+    payloads / v1.8 `panel_event` payloads)."""
     ui_frames: list[dict] = []
+    panel_events: list[dict] = []
     try:
         rolls = [
             {"tool": item.get("name", ""), "result": str(item.get("result", ""))[:200]}
@@ -1453,12 +1470,14 @@ async def _run_reply_hooks(
             outcome = engine.fire("dice_rolled", {"rolls": rolls})
             hook_writes = hook_writes + await apply_hook_writes(services, ctx.chat_key, outcome.writes)
             ui_frames += outcome.ui_blocks
+            panel_events += outcome.panel_events
             if outcome.narrations:
                 reply = reply.rstrip() + "\n\n" + "\n".join(outcome.narrations)
 
         outcome = engine.fire("reply_ready", {"reply": reply})
         hook_writes = hook_writes + await apply_hook_writes(services, ctx.chat_key, outcome.writes)
         ui_frames += outcome.ui_blocks
+        panel_events += outcome.panel_events
         if outcome.rewrite is not None:
             reply = outcome.rewrite
         if outcome.narrations:
@@ -1474,8 +1493,23 @@ async def _run_reply_hooks(
             outcome = engine.fire("variables_changed", {"writes": changed})
             await apply_hook_writes(services, ctx.chat_key, outcome.writes)
             ui_frames += outcome.ui_blocks
+            panel_events += outcome.panel_events
             if outcome.narrations:
                 reply = reply.rstrip() + "\n\n" + "\n".join(outcome.narrations)
     except Exception:
         logger.warning("reply-phase hooks failed", exc_info=True)
-    return reply, hook_writes, ui_frames
+    return reply, hook_writes, ui_frames, panel_events
+
+
+def _capped_panel_events(events: list[dict], chat_key: str) -> list[dict]:
+    """Apply the per-TURN emitPanel budget across all phases: keep the head, drop + log
+    the excess (the same "excess dropped + logged" stance as the other hook caps)."""
+    if len(events) <= MAX_PANEL_EVENTS_PER_TURN:
+        return events
+    logger.warning(
+        "hooks emitted %d panel events for %s; keeping the first %d",
+        len(events),
+        chat_key,
+        MAX_PANEL_EVENTS_PER_TURN,
+    )
+    return events[:MAX_PANEL_EVENTS_PER_TURN]

@@ -144,6 +144,13 @@
   "commands.skill.disable_done": "Disabled KP skill: {id}",
   "commands.skill.unknown": "Unknown KP skill: {id}",
   "commands.skill.denied": "Only the keeper may manage KP skills.",
+  "commands.panels.list": "Installed panel packs:\n{items}",
+  "commands.panels.count": "{count} panel(s)",
+  "commands.panels.none_installed": "No installed pack ships UI panels. Install one with: python -m app --install <pack>",
+  "commands.panels.enable_done": "Enabled UI panels from pack: {id}",
+  "commands.panels.disable_done": "Disabled UI panels from pack: {id}",
+  "commands.panels.unknown": "No installed pack with UI panels named: {id}",
+  "commands.panels.denied": "Only the keeper may manage module UI panels.",
   "commands.roll.invalid": "Invalid dice expression: {expr}",
   "commands.unbind.done": "Keeper identity unbound from room {room}.",
   "commands.unbind.none": "This chat identity is not bound as a keeper."

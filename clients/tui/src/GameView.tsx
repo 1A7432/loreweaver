@@ -14,10 +14,12 @@ import {
   type StateFrame,
   type TurnStatusFrame,
   type UiFrame,
+  type UiManifestPanel,
   type WelcomeFrame,
 } from "loreweaver-protocol"
 import { HeaderBar } from "./components/HeaderBar"
 import { lastChoicesFrameIndex, NarrativeLog, type LogFrame } from "./components/NarrativeLog"
+import { PanelsPanel } from "./components/PanelsPanel"
 import { PartyRoster } from "./components/PartyRoster"
 import { ScenePanel } from "./components/ScenePanel"
 import { StatusBar } from "./components/StatusBar"
@@ -146,6 +148,9 @@ export function GameView({
   // v1.7 sidebar hook-UI regions, keyed by the frame's `id` ("" when absent): the
   // latest frame per key wins, so a region a hook re-emits replaces itself.
   const [sidebarUi, setSidebarUi] = useState<Record<string, UiFrame>>({})
+  // v1.8 module-panel manifest: this viewer's complete panel list, full-replace
+  // semantics (an empty frame legitimately clears every panel).
+  const [panelManifest, setPanelManifest] = useState<UiManifestPanel[]>([])
   const [command, setCommand] = useState("")
   const [inputError, setInputError] = useState<string>()
   const [history, setHistory] = useState<string[]>([])
@@ -231,6 +236,13 @@ export function GameView({
         } else {
           setFrames((current) => appendFrame(current, frame))
         }
+        return
+      }
+      if (frame.type === FrameType.UiManifest) {
+        // v1.8 module panels: the frame IS this viewer's whole list (full replace).
+        // `panel_event` frames go unhandled by design — they feed tier-2 panel code,
+        // which the TUI does not run (it renders fallbacks instead).
+        setPanelManifest(frame.panels)
         return
       }
       if (
@@ -536,6 +548,12 @@ export function GameView({
               {narrow ? null : <ScenePanel scene={stateFrame.scene} clock={stateFrame.clock} theme={theme} locale={locale} />}
               <VariablesPanel variables={stateFrame.variables} theme={theme} locale={locale} />
               <UiPanel regions={Object.values(sidebarUi)} theme={theme} locale={locale} />
+              <PanelsPanel
+                panels={panelManifest}
+                variables={stateFrame.variables}
+                theme={theme}
+                locale={locale}
+              />
             </box>
           </scrollbox>
         ) : null}

@@ -144,6 +144,13 @@
   "commands.skill.disable_done": "已禁用 KP 技能：{id}",
   "commands.skill.unknown": "未知的 KP 技能：{id}",
   "commands.skill.denied": "只有守秘人可以管理 KP 技能。",
+  "commands.panels.list": "已安装的面板包：\n{items}",
+  "commands.panels.count": "{count} 个面板",
+  "commands.panels.none_installed": "没有安装任何带 UI 面板的包。可用 python -m app --install <包> 安装。",
+  "commands.panels.enable_done": "已启用包的 UI 面板：{id}",
+  "commands.panels.disable_done": "已禁用包的 UI 面板：{id}",
+  "commands.panels.unknown": "没有名为 {id} 的已安装面板包。",
+  "commands.panels.denied": "只有守秘人可以管理模组 UI 面板。",
   "commands.roll.invalid": "无效的骰子表达式：{expr}",
   "commands.unbind.done": "已解除房间 {room} 的守秘人身份绑定。",
   "commands.unbind.none": "当前聊天身份尚未绑定为守秘人。"

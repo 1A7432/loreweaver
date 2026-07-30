@@ -279,6 +279,7 @@ class IrohServer:
         try:
             await core._replay_history(member)
             await publish_state(core.hub, core.services, core._ctx_for(member))
+            await core.send_ui_manifest(member)
             while True:
                 line = await reader.readline()
                 if line is None:

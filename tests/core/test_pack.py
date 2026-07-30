@@ -433,3 +433,90 @@ def test_bundled_rulepack_may_extend_a_bundled_base_and_builtin(tmp_path: Path):
     built = build_pack(src, tmp_path / "rules.lwpack")
     report = _install(built.path, tmp_path)
     assert set(report.rulepacks) == {"base-sys", "patch-sys", "pulp-coc"}
+
+
+# --- M15 module UI panels ----------------------------------------------------
+
+PANELS_YAML = """\
+panels:
+  - id: case-board
+    title: {en: Case Board, zh: 案情板}
+    slot: sidebar
+    audience: all
+    blocks:
+      - {kind: meter, label: {en: Fear}, value: {$var: town_fear}, min: 0, max: 10}
+  - id: manor-map
+    title: {en: Manor Map}
+    slot: modal
+    audience: player
+    entry: ui/manor-map/index.html
+    assets: [ui/manor-map/index.html, ui/manor-map/app.js]
+    fallback: null
+"""
+
+
+def _write_panels_source(root: Path) -> Path:
+    src = root / "panels-src"
+    (src / "ui/manor-map").mkdir(parents=True)
+    (src / "ui/panels.yaml").write_text(PANELS_YAML, encoding="utf-8")
+    (src / "ui/manor-map/index.html").write_text("<main>map</main>", encoding="utf-8")
+    (src / "ui/manor-map/app.js").write_text("console.log('map')", encoding="utf-8")
+    (src / MANIFEST_NAME).write_text(
+        "id: panelpack\nversion: 1.0.0\nname: Panels\ndescription: test\nauthors: [ada]\n"
+        "license: MIT\nengine: {}\ncontents:\n  panels: [ui/panels.yaml]\n",
+        encoding="utf-8",
+    )
+    return src
+
+
+def test_panels_build_folds_assets_into_the_pipeline_and_counts_trust(tmp_path: Path):
+    src = _write_panels_source(tmp_path)
+    built = build_pack(src, tmp_path / "panels.lwpack")
+    assert built.manifest.trust is not None and built.manifest.trust.panels == 2
+    # The tier-2 files the author never listed under `assets:` were folded into the
+    # built manifest's asset block, sha256/mime/size stamped by the one pipeline.
+    by_path = {asset.path: asset for asset in built.manifest.assets}
+    assert set(by_path) == {"ui/manor-map/index.html", "ui/manor-map/app.js"}
+    assert by_path["ui/manor-map/app.js"].mime == "text/javascript"
+    assert all(len(asset.sha256) == 64 and asset.size > 0 for asset in built.manifest.assets)
+
+    report = _install(built.path, tmp_path)
+    assert report.panels == ["ui/panels.yaml"]
+    home = report.pack_dir
+    assert home is not None
+    assert (home / "ui/panels.yaml").is_file()
+    assert (home / "ui/manor-map/app.js").is_file()
+
+
+def test_panels_verify_rejects_a_manifest_stripped_of_panel_asset_records(tmp_path: Path):
+    src = _write_panels_source(tmp_path)
+    built = build_pack(src, tmp_path / "panels.lwpack")
+
+    def strip_assets(entries):
+        out = []
+        for info, data in entries:
+            if info.filename == MANIFEST_NAME:
+                text = data.decode("utf-8")
+                head, _, _tail = text.partition("assets:")
+                trust = _tail.partition("trust:")[2]
+                data = (head + "trust:" + trust).encode("utf-8")
+            out.append((info, data))
+        return out
+
+    tampered = _rewrite_pack(built.path, tmp_path / "tampered-panels.lwpack", strip_assets)
+    with pytest.raises(PackError):
+        _install(tampered, tmp_path)
+
+
+def test_panels_code_cap_is_enforced_at_build(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("core.pack.MAX_PANEL_CODE_BYTES", 8)
+    src = _write_panels_source(tmp_path)
+    with pytest.raises(PackError, match="exceeds"):
+        build_pack(src, tmp_path / "panels.lwpack")
+
+
+def test_panels_file_declared_but_missing_asset_fails_build(tmp_path: Path):
+    src = _write_panels_source(tmp_path)
+    (src / "ui/manor-map/app.js").unlink()
+    with pytest.raises(PackError, match="asset missing"):
+        build_pack(src, tmp_path / "panels.lwpack")

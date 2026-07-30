@@ -4,14 +4,14 @@
 
 这是 loreweaver 服务器（通过 `python -m app --serve` 启动）与 OpenTUI 终端客户端之间开放、版本化的 wire protocol。引擎本身（确定性核心 + AI Keeper）不受传输方式影响；传输中立的会话逻辑位于 `net.session.SessionCore`，本文档是与语言无关的接口定义。
 
-控制流使用 `{"type": ...}` 形状的 JSON 帧，协议版本为 `"1.7"`。同一套帧与 `join` 握手可搭载于两种 carrier：
+控制流使用 `{"type": ...}` 形状的 JSON 帧，协议版本为 `"1.8"`。同一套帧与 `join` 握手可搭载于两种 carrier：
 
 - **Iroh** 是 `--serve` 实际启动的默认传输：点对点 QUIC，服务端打印可分享 ticket，不需要域名、证书或端口转发。控制帧是在长连接双向流上的 newline-delimited JSON；媒体字节使用同一连接上的额外双向流。
 - **WebSocket**（`net.tui_server`）只保留作离线测试/loopback carrier，不是 `--serve` 选项。控制帧是文本消息，媒体字节是二进制消息。
 
 两种 carrier 都驱动同一个 `SessionCore` / `RoomHub`。
 
-版本控制是递增式的：`"1.7"` 新增钩子发射的声明式 `ui` 帧；`"1.6"` 新增可选的 `state.variables` 列表（确定性模块变量——仅玩家可见子集）；`"1.5"` 新增房间级 AI-KP 回合状态；`"1.4"` 新增图像生成配置与头像绑定；`"1.3"` 新增房间音频库/播放控制帧；`"1.2"` 新增媒体元数据帧和字节通道；`"1.1"` 新增 Keeper 门控的 `admin_*` 帧（见下文"Admin frames"部分）。只理解 `"1"` 的客户端保持正常工作——它永远不会发送新帧、会忽略无法识别的服务端帧类型，并应将 `welcome` 的 `protocol` 字段视为不透明字符串（接受任何 `"1.x"`）。
+版本控制是递增式的：`"1.8"` 新增模组 UI 面板（M15）——按观看者下发的 `ui_manifest` 帧、钩子发射的 `panel_event`、客户端的 `panel_intent` 帧，以及媒体字节通道上对已安装包资产的解析（见下文"模组 UI 面板"一节）；`"1.7"` 新增钩子发射的声明式 `ui` 帧；`"1.6"` 新增可选的 `state.variables` 列表（确定性模块变量——仅玩家可见子集）；`"1.5"` 新增房间级 AI-KP 回合状态；`"1.4"` 新增图像生成配置与头像绑定；`"1.3"` 新增房间音频库/播放控制帧；`"1.2"` 新增媒体元数据帧和字节通道；`"1.1"` 新增 Keeper 门控的 `admin_*` 帧（见下文"Admin frames"部分）。只理解 `"1"` 的客户端保持正常工作——它永远不会发送新帧、会忽略无法识别的服务端帧类型，并应将 `welcome` 的 `protocol` 字段视为不透明字符串（接受任何 `"1.x"`）。
 
 客户端发送的第一帧 MUST 是 `join`。服务器回复 `welcome` 或 `error`，错误时关闭连接。如果在 join 握手超时内未到达（`TRPG_TUI__JOIN_TIMEOUT`，默认 10 秒），服务器将用 `error join_timeout` 关闭连接，而不是无限等待。离线 WebSocket 测试 carrier 另外支持 `TRPG_TUI__MAX_CONNECTIONS` 并发上限；超额测试连接会在读取 `join` 前收到 `error too_many_connections`。
 
@@ -27,12 +27,14 @@
   `{type:"media_set_enabled", enabled:boolean}`
 - `avatar_set` — 将本房间已经上传的一张图片绑定到调用者自己的当前角色头像。服务端会拒绝试图指定其他角色/用户的帧：
   `{type:"avatar_set", hash:string}`
+- `panel_intent`（v1.8，递增式）— 一次模组面板交互。服务端先校验所指面板确在**这名成员自己的**清单里（否则 `error forbidden`），然后把 value 完全按"这名玩家自己敲的"来路由——面板特权模型一步到位：`choice` 与 `input` 把 `value` 原样送进正常输入 choke（限速、回合锁、命令权限门全部生效）；`roll` 以该玩家身份执行公开的 `.r <value>`，由真实骰子引擎校验表达式。`value` 上限 2000 字符（超出 `error input_too_long`）：
+  `{type:"panel_intent", panel:string, kind:"choice"|"input"|"roll", value:string}`
 - `ping`: `{type:"ping", t:number}`
 
 ## Server → Client
 
 - `welcome` — 成功 `join` 时发送一次：
-  `{type:"welcome", protocol:"1.7", features:["media","audio","imagegen"?,"demo"?,"update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
+  `{type:"welcome", protocol:"1.8", features:["media","audio","imagegen"?,"demo"?,"update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
   `version` 是服务端自身的发布版本(与客户端对比可发现版本不一致)。`"update"` 特性仅在守秘人连接且服务端运维配置了自更新命令时出现，用于门控 `admin_update_server`。
   `demo` 表示服务端正在使用离线示例 Keeper、向量功能已启用，且本次检查时这个守秘人房间为空。服务端会在房间回合锁内再次检查，过期 flag 不会覆盖战役状态；客户端收到 `admin_config{using_demo:false}`（例如从模型页保存后）会立即移除入口，否则重连时重新计算，过期操作也会被服务端拒绝。
 - `error` — 本地化的故障通知；`bad_key`、`join_timeout` 和 `too_many_connections` 关闭连接（它们仅在 `join` 握手期间或之前发生），其他不关闭：
@@ -64,6 +66,10 @@
   `| {kind:"divider"}`
   `| {kind:"choices", prompt?:string, options:[{id:string,label:string,input:string}]}`
   `panel:"inline"` 渲染进叙事流，`"sidebar"` 渲染进常驻侧栏区域。`id` 命名一个 UI 区域：后到的同 `id` sidebar 帧替换该区域内容；带 `replace:true` 的 inline 帧可以就地更新前一个同 `id` 的 inline 帧（不支持就地更新的客户端顺序追加即可）。玩家点选 `choices` 选项时，客户端把该选项的 `input` 原样作为普通 `input` 帧发回——不新增客户端→服务端帧类型。
+- `ui_manifest`（v1.8，递增式）— **这名观看者**的完整模组面板清单：`join` 时紧随首个 `state` 帧下发，守秘人执行 `.panels enable|disable` 后向每个在线成员重新推送。全量替换语义：帧携带整张清单（空表 = 没有面板，重连时也借此清掉旧面板）。包声明的 `audience` 在服务端按观看者的 keystore 角色**先行**解析——仅守秘人可见的面板在结构上就不会出现在玩家清单里，`audience` 字段本身也永不上线。面板/模板形状见下文"模组 UI 面板"：
+  `{type:"ui_manifest", panels:[UiManifestPanel]}`
+- `panel_event`（v1.8，递增式）— 房间钩子经 `emitPanel(panelId, payload)` 发射的不透明 JSON 载荷（见 `docs/plugins.md`），供目标面板自己的代码（Tier 2）消费。在本回合 `ui` 帧之后送达，且**只**送达清单中含该面板的成员；每回合 ≤ 20 条（超额丢弃并记日志）、单条序列化 ≤ 32 KB。不运行面板代码的客户端（TUI）直接忽略：
+  `{type:"panel_event", panel:string, payload:any}`
 - `state` — 一个面板快照，在 `join` 时和每回合后发送：
   `{type:"state", character?:{name,system,hp,hpmax,mp,mpmax,san,sanmax,attributes:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,hp?:int,hpMax?:int,san?:int,sanMax?:int,mp?:int,mpMax?:int,ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, variables?:[{id:string,label:string,kind:"number"|"bool"|"text"|"enum",value:number|boolean|string,min?:int,max?:int}], reset?:boolean}`
   `variables`（v1.6，递增式/可选——房间没有时整个字段省略）是房间的确定性模块变量，且只含玩家可见子集：仅守秘人可见的变量在引擎内部（`core.modvars.player_entries`）就被过滤，永远不会到达任何传输层。条目按定义顺序到达（按原样渲染，不要排序）；`label` 已按房间语言本地化；`min`/`max` 只出现在有界的 `number` 变量上（客户端可将其渲染为进度条）。导入的 SillyTavern MVU 卡片变量共用同一列表：`id` 带 `mvu.` 前缀、点分路径作为 `label`（仅标量叶子，服务端封顶）——不新增帧类型，客户端无需改动。MVU 叶子由**守秘人策展**（默认全隐、fail-closed）：玩家帧只携带守秘人公开过的路径（`.var expose`）；守秘人自己连接的帧额外携带未公开的其余叶子，每条带 `hidden:true` 标记（递增式/可选——不认识该字段的客户端照常渲染，认识的可以做置灰或加锁标记）。
@@ -88,10 +94,36 @@
 6. 对于每个名为 `speak_as_npc` 的 `tool_trace` 条目，在最终 KP 回复之前广播 `narrative{speaker:"npc", name, text, format:"markdown"}`。`name` 是工具调用的 `npc` 参数，`text` 是玩家安全的工具结果。
 7. 将回复广播为 `narrative{text: reply}`——命令回复为 `speaker:"system"`，AI Keeper 回复为 `speaker:"kp", format:"markdown"`。回复已通过所配置的输出词表；守秘人专用工具的原始结果不会被代码直接复制到此帧，但主 Keeper 模型看过这些结果，仍可能自行复述，因此另由真实模型红线评测测量这种行为风险。
 8. 对回合内事件钩子经 `emitUI` 缓冲的每条发射，各广播一个 `ui` 帧（v1.7，递增式）——服务端已完成校验与封顶；没有钩子的房间完全不会出现此帧。
-9. AI-KP 分支结束时（包括错误清理）广播 `turn_status{status:"idle"}`；命令回复不发送回合状态。
-10. 重新构建并广播一个 `state` 帧（`net.state.build_room_state`）。
+9. 对钩子经 `emitPanel` 缓冲的每条发射，各送达一个 `panel_event` 帧（v1.8，递增式）——**不是**广播：每条只送达自己清单里含目标面板的成员。
+10. AI-KP 分支结束时（包括错误清理）广播 `turn_status{status:"idle"}`；命令回复不发送回合状态。
+11. 重新构建并广播一个 `state` 帧（`net.state.build_room_state`）。
 
 密钥映射到同一房间的多个客户端共享一个 AI-KP 会话；上述每个描述为"广播"的帧都发送给当前连接到该房间的每个成员。
+
+## 模组 UI 面板（v1.8）
+
+`.lwpack` 可以携带命名 UI 面板（`contents.panels` + `ui/panels.yaml`——创作指南见 `docs/plugins.md`）；守秘人用 `.panels enable <packId>` 才把已安装包的面板准入房间（安装 ≠ 启用，与技能完全一致）。房间清单按观看者解析后经 `ui_manifest` 下发（见上文）。特权模型一句话说完：**面板以正在观看它的玩家身份行事**——入站只收到该观看者过滤后的数据，出站（`panel_intent`）只能发出该玩家自己能敲出的东西。
+
+`UiManifestPanel`（`audience` 永不出现——已在服务端解析）：
+
+```jsonc
+{"id": "<packId>/<panelId>", "title": {"en": "...", "zh": "..."}, "slot": "sidebar|tray|modal",
+ "tier": 1, "blocks": [/* 模板块 */]}
+// 或 tier 2：
+{"id": "...", "title": {...}, "slot": "modal", "tier": 2,
+ "entry": {"hash": "<sha256>", "size": 1234},
+ "assets": [{"path": "app.js", "hash": "<sha256>", "size": 999, "mime": "text/javascript"}],
+ "fallback": [/* 模板块 */] /* 或 null */}
+```
+
+**Tier-1 模板块**是 v1.7 `UiBlock` 词汇表加两个模板扩展，由**客户端**对照自己的 `state.variables` 解析（id 与该列表完全一致——modvar id、带 `mvu.` 前缀的叶子）：
+
+- 任何标量字段可写 `{"$var": "<变量 id>"}`；该变量对本观看者不存在/未公开时**整块省略**（fail-closed——面板永远无法放大可见性；`state` 线上的过滤器仍是唯一 choke point）；
+- `{"repeat": {"prefix": "<id 前缀>", "block": <模板块>}}` 对每个 id 以该前缀开头的可见变量渲染一个实例（≤ 32 个）；块内 `{"$leaf": "id"|"label"|"value"}` 代入匹配变量的对应字段。
+
+本地化文本是 `{en,zh}` 映射；客户端按自己语言选取（回退 `en`）。点选 Tier-1 `choices` 选项发送 `panel_intent{kind:"choice", value: <选项的 input>}`。文本客户端（TUI）用既有块渲染器画 Tier-1，`tray`/`modal` 折进侧栏分区，Tier-2 渲染其 `fallback` 块，对显式 `fallback: null` 显示一行本地化的"请在富客户端查看"。
+
+**Tier-2 资产**按内容寻址：对清单里的每个 hash 走**既有**媒体字节通道拉取（`{op:"get", hash}`——见"Media transfer"）；线上 `path` 是相对 entry 文档所在目录的路径（每个面板是一个自包含静态根）。缓存前校验 sha256（不可变，按 hash 键）。
 
 ## Media transfer（v1.2+）与音频（v1.3）
 
@@ -110,6 +142,7 @@ SVG 是“不透明存储”的例外：服务端只接受静态安全子集（`
 
 1. 客户端通过 MediaChannel 发送 GET：header `{op:"get", hash}`。
 2. 服务端确认该 hash 属于调用者房间，然后返回 `{op:"get",hash,size,mime,name}` 加原始字节。客户端应校验 sha256，并可缓存到 `~/.loreweaver/cache/media/<hash>`。
+3. （v1.8）不属于房间媒体的 hash 会继续在**本房间已启用**包的已安装资产里解析——这就是面板资产的拉取路径。回复形状相同；服务端在返回前会把字节重新对照 manifest 摘要校验。房间未启用的包的 hash 仍然是 `media_not_found`（不做任意 blob 预言机）。
 
 MediaChannel 线格式：
 

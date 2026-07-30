@@ -1,6 +1,7 @@
-// Bumped to "1.7" for the additive hook-emitted declarative `ui` frame.
+// Bumped to "1.8" for module UI panels (M15): the per-viewer `ui_manifest` frame,
+// hook-emitted `panel_event`, and the `panel_intent` client frame.
 // `WelcomeFrame.protocol` stays a plain string so older minor clients keep accepting it.
-export const PROTOCOL_VERSION = "1.7" as const
+export const PROTOCOL_VERSION = "1.8" as const
 
 export const FrameType = {
   Join: "join",
@@ -20,6 +21,10 @@ export const FrameType = {
   Narrative: "narrative",
   Dice: "dice",
   Ui: "ui",
+  // v1.8 additive: module UI panels (M15).
+  UiManifest: "ui_manifest",
+  PanelEvent: "panel_event",
+  PanelIntent: "panel_intent",
   State: "state",
   Presence: "presence",
   System: "system",
@@ -336,6 +341,153 @@ export interface UiFrame {
   // with the same id in place (a client without in-place updates simply appends).
   id?: string
   replace?: boolean
+}
+
+// ---- v1.8 additive: module UI panels (M15) ---------------------------------
+// A pack declares named panels (`ui/panels.yaml`); the keeper admits them to a room
+// with `.panels enable <packId>`. The server resolves `audience` per viewer BEFORE the
+// wire — a manifest is this viewer's complete panel list (full-replace semantics), and
+// keeper-only panels structurally never appear in a player's manifest. Tier-1 panels
+// are templates over the v1.7 `ui` block vocabulary with live variable bindings the
+// CLIENT substitutes from its own `state.variables`; tier-2 panels ship sandboxed
+// HTML/JS assets (rich clients) plus a tier-1 `fallback` for everyone else.
+
+export type PanelSlot = "sidebar" | "tray" | "modal"
+export type PanelIntentKind = "choice" | "input" | "roll"
+
+// Localized template text: the server normalizes plain strings to `{en: ...}`.
+export interface PanelText {
+  en?: string
+  zh?: string
+}
+
+// `{$var: "<id>"}` — substitute the viewer's own `state.variables` entry with that id.
+// The variable being absent/hidden for this viewer omits the WHOLE block (fail-closed:
+// a panel can never widen visibility; the state wire filter stays the choke point).
+export interface PanelVarBinding {
+  $var: string
+}
+
+// `{$leaf: ...}` — inside a `repeat` template only: the matched variable's field.
+export interface PanelLeafBinding {
+  $leaf: "id" | "label" | "value"
+}
+
+export type PanelBindable<T> = T | PanelVarBinding | PanelLeafBinding
+export type PanelTextValue = PanelBindable<PanelText>
+
+export interface PanelMeterBlock {
+  kind: "meter"
+  label: PanelTextValue
+  value: PanelBindable<number>
+  min: PanelBindable<number>
+  max: PanelBindable<number>
+}
+
+export interface PanelStatBlock {
+  kind: "stat"
+  label: PanelTextValue
+  value: PanelBindable<number | string | boolean>
+}
+
+export interface PanelBadgeBlock {
+  kind: "badge"
+  label: PanelTextValue
+  tone?: PanelBindable<UiBadgeTone>
+}
+
+export interface PanelTextBlock {
+  kind: "text"
+  text: PanelTextValue
+  style?: UiTextStyle
+}
+
+export interface PanelDividerBlock {
+  kind: "divider"
+}
+
+export interface PanelChoiceOption {
+  id: string
+  label: PanelTextValue
+  // Picking this option sends a `panel_intent{kind:"choice", value: input}`.
+  input: string
+}
+
+export interface PanelChoicesBlock {
+  kind: "choices"
+  prompt?: PanelTextValue
+  options: PanelChoiceOption[]
+}
+
+// One instance per visible variable whose id starts with `prefix` (client-capped at
+// MAX_PANEL_REPEAT_INSTANCES); `$leaf` bindings substitute inside. Does not nest.
+export interface PanelRepeatBlock {
+  repeat: {
+    prefix: string
+    block: PanelTemplateBlock
+  }
+}
+
+export type PanelTemplateBlock =
+  | PanelMeterBlock
+  | PanelStatBlock
+  | PanelBadgeBlock
+  | PanelTextBlock
+  | PanelDividerBlock
+  | PanelChoicesBlock
+  | PanelRepeatBlock
+
+// Render-side cap on `repeat` expansion, mirrored from the server-side schema.
+export const MAX_PANEL_REPEAT_INSTANCES = 32
+
+export interface PanelAssetRef {
+  // RELATIVE to the entry document's directory (each tier-2 panel is a self-contained
+  // static root); fetch by `hash` over the media byte channel and verify before use.
+  path: string
+  hash: string
+  size: number
+  mime: string
+}
+
+export interface UiManifestPanel {
+  // Wire id "<packId>/<panelId>" — the id `panel_event`/`panel_intent` frames carry.
+  id: string
+  title: PanelText
+  slot: PanelSlot
+  tier: 1 | 2
+  // Tier 1 only.
+  blocks?: PanelTemplateBlock[]
+  // Tier 2 only: the entry document + its assets, content-addressed.
+  entry?: { hash: string; size: number }
+  assets?: PanelAssetRef[]
+  // Tier 2 only: tier-1 blocks for clients that do not run panel code; an explicit
+  // `null` means the author opted out (render a localized "rich client only" line).
+  fallback?: PanelTemplateBlock[] | null
+}
+
+// Server→client, on join (after `state`) and after any `.panels` enable change.
+// FULL-REPLACE: this viewer's complete panel list; empty = no panels.
+export interface UiManifestFrame {
+  type: typeof FrameType.UiManifest
+  panels: UiManifestPanel[]
+}
+
+// Server→client: an opaque JSON payload a room hook emitted via `emitPanel(...)`,
+// delivered only to viewers whose manifest contains `panel`.
+export interface PanelEventFrame {
+  type: typeof FrameType.PanelEvent
+  panel: string
+  payload: unknown
+}
+
+// Client→server: a panel interaction, routed server-side exactly as if this player
+// typed it (`choice`/`input` verbatim; `roll` becomes a public `.r <value>`). The
+// server refuses intents against panels outside the sender's own manifest.
+export interface PanelIntentFrame {
+  type: typeof FrameType.PanelIntent
+  panel: string
+  kind: PanelIntentKind
+  value: string
 }
 
 export interface CharacterState {
@@ -735,6 +887,7 @@ export type ClientFrame =
   | JoinFrame
   | InputFrame
   | PingFrame
+  | PanelIntentFrame
   | MediaOfferFrame
   | MediaSetEnabledFrame
   | AvatarSetFrame
@@ -769,6 +922,8 @@ export type ServerFrame =
   | NarrativeFrame
   | DiceFrame
   | UiFrame
+  | UiManifestFrame
+  | PanelEventFrame
   | StateFrame
   | PresenceFrame
   | SystemFrame

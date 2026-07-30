@@ -285,6 +285,7 @@ def _print_trust_card(i18n: I18n, manifest: core_pack.PackManifest, locale: str)
             rulepacks=trust.rulepacks,
             cards=trust.cards,
             lorebooks=trust.lorebooks,
+            panels=trust.panels,
             assets=trust.assets,
             asset_mb=f"{trust.asset_bytes / (1024 * 1024):.1f}",
             hooks=i18n.t("pack.flag.yes") if trust.has_hooks else i18n.t("pack.flag.no"),

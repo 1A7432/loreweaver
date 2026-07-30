@@ -52,9 +52,11 @@ from net.room_backup import room_rows, room_vector_points
 
 logger = logging.getLogger(__name__)
 
-# v1.7 adds declarative hook-emitted `ui` frames (core.hooks emitUI); v1.6 added
-# player-visible module variables on the state frame (core.modvars).
-_PROTOCOL_VERSION = "1.7"
+# v1.8 adds module UI panels (M15): per-viewer `ui_manifest`, hook-emitted
+# `panel_event`, the `panel_intent` client frame, and pack-asset resolution on the
+# media byte channel. v1.7 added declarative hook-emitted `ui` frames (core.hooks
+# emitUI); v1.6 added player-visible module variables on the state frame.
+_PROTOCOL_VERSION = "1.8"
 # Public alias for out-of-band consumers (the `.lwpack` engine-minimum check in app.py).
 PROTOCOL_VERSION = _PROTOCOL_VERSION
 _SERVER_BANNER = "loreweaver/1"
@@ -62,6 +64,11 @@ _SERVER_BANNER = "loreweaver/1"
 # Hard cap on a single `input` frame's text before it reaches the LLM/history. A client-controlled
 # unbounded string would otherwise blow up prompt size, context cost and stored history.
 _MAX_INPUT_CHARS = 4000
+
+# Hard cap on a `panel_intent` frame's value (protocol v1.8) — tighter than the input
+# cap because an intent is a single choice/expression, never free prose.
+_MAX_PANEL_INTENT_CHARS = 2000
+_PANEL_INTENT_KINDS = frozenset({"choice", "input", "roll"})
 
 # How many trailing chat-history messages a join/reconnect replays to the joining connection.
 _HISTORY_REPLAY_CAP = 30
@@ -202,6 +209,10 @@ def render_frame(event: Event) -> dict[str, Any] | None:
     if event.kind == "state":
         return dict(event.data)
     if event.kind == "panel":
+        return dict(event.data)
+    if event.kind in ("ui_manifest", "panel_event"):
+        # v1.8 module-panel frames: the event data IS the wire frame (type included),
+        # already validated + per-viewer filtered by `gateway.panels`.
         return dict(event.data)
     if event.kind == "presence":
         return {"type": "presence", **event.data}
@@ -354,6 +365,9 @@ class SessionCore:
                 return
             if not self._refresh_member_authorization(member):
                 await member.send_frame(error_frame("forbidden", i18n))
+                return
+            if kind == "panel_intent":
+                await self._handle_panel_intent(member, frame)
                 return
             if kind == "media_offer":
                 async with self.hub.turn_lock(member.session_key):
@@ -536,6 +550,59 @@ class SessionCore:
             "allowed_mimes": ALLOWED_MEDIA_MIMES,
         }
 
+    async def _handle_panel_intent(self, member: Any, frame: dict[str, Any]) -> None:
+        """Route one `panel_intent` frame (protocol v1.8) exactly as if the member typed it.
+
+        The privilege model is "a panel acts as the player viewing it": after checking
+        the named panel is in THIS member's own manifest (audience-filtered by role —
+        an intent against a panel outside it is refused, so a player can never actuate
+        a keeper-only panel), the value re-enters the NORMAL input choke
+        (`dispatch_input`: rate limits, turn lock, re-auth, command privilege gates all
+        apply). `choice`/`input` submit the value verbatim; `roll` runs a public
+        `.r <value>` as that player, so the real dice engine validates the expression.
+        """
+        i18n = get_i18n(member.locale)
+        panel = str(frame.get("panel") or "")
+        intent_kind = frame.get("kind")
+        raw_value = frame.get("value")
+        if not panel or intent_kind not in _PANEL_INTENT_KINDS or not isinstance(raw_value, str):
+            await member.send_frame(error_frame("bad_frame", i18n))
+            return
+        if len(raw_value) > _MAX_PANEL_INTENT_CHARS:
+            await member.send_frame(error_frame("input_too_long", i18n))
+            return
+        value = raw_value.strip()
+        if not value:
+            await member.send_frame(error_frame("bad_frame", i18n))
+            return
+        from gateway.panels import member_panel_ids
+
+        allowed = await member_panel_ids(self.services, member.session_key, str(member.role or ""))
+        if panel not in allowed:
+            await member.send_frame(error_frame("forbidden", i18n))
+            return
+        if intent_kind == "roll":
+            # Collapse all whitespace: a roll value is one dice expression for the
+            # command line being synthesized, never multi-line text.
+            value = ".r " + " ".join(value.split())
+        await self.dispatch_input(member, value)
+
+    async def send_ui_manifest(self, member: Any) -> None:
+        """Send this member its own audience-filtered panel manifest (protocol v1.8).
+
+        Called by the transports right after the join-time `state` frame, and cheap to
+        call unconditionally: a room with no enabled panel packs yields the empty
+        full-replace manifest, which also clears stale panels on reconnect. Best-effort
+        — a failure here never breaks the join.
+        """
+        try:
+            from gateway.panels import build_ui_manifest_frame
+
+            frame = await build_ui_manifest_frame(self.services, member.session_key, str(member.role or ""))
+            await member.send_frame(frame)
+        except Exception:
+            logger.warning("panels: could not send ui_manifest to %s", getattr(member, "id", member), exc_info=True)
+
     async def _handle_media_set_enabled(self, member: Any, frame: dict[str, Any]) -> None:
         i18n = get_i18n(member.locale)
         if member.role != "keeper":
@@ -623,9 +690,31 @@ class SessionCore:
             }
 
     async def get_media_bytes(self, member: Any, sha256: str) -> tuple[dict[str, Any], bytes]:
+        """Resolve one byte-channel GET: room media first, then (v1.8) installed-pack
+        assets of packs ENABLED in the caller's room — the same content-addressed reply
+        either way, and never an arbitrary blob oracle (an un-enabled pack's hashes stay
+        `media_not_found` here exactly like a hash from another room)."""
         if not self._refresh_member_authorization(member):
             raise MediaError("forbidden")
-        record, data = await self.media_store.read_bytes(member.session_key, sha256)
+        try:
+            record, data = await self.media_store.read_bytes(member.session_key, sha256)
+        except MediaError as exc:
+            if exc.code != "media_not_found":
+                raise
+            from gateway.panels import resolve_pack_asset
+
+            resolved = await resolve_pack_asset(self.services, member.session_key, sha256)
+            if resolved is None:
+                raise
+            asset_data, mime, name = resolved
+            header = {
+                "op": "get",
+                "hash": sha256.lower(),
+                "size": len(asset_data),
+                "mime": mime,
+                "name": name,
+            }
+            return header, asset_data
         header = {
             "op": "get",
             "hash": record.hash,

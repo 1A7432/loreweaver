@@ -77,11 +77,14 @@ async def _join(ws, key: str, name: str | None = None) -> dict:
 
 async def _connect_and_join(url: str, key: str, name: str | None = None, **connect_kwargs):
     """Connect + `join`, draining the `welcome` and the join-time `presence` +
-    `state` frames every successful join triggers (see `TuiServer.handle`)."""
+    `state` + `ui_manifest` frames every successful join triggers (see
+    `TuiServer.handle`)."""
     ws = await websockets.connect(url, **connect_kwargs)
     welcome = await _join(ws, key, name)
     presence = await _recv(ws)
     state = await _recv(ws)
+    manifest = await _recv(ws)
+    assert manifest["type"] == "ui_manifest"
     return ws, welcome, presence, state
 
 
@@ -102,7 +105,7 @@ async def test_join_with_good_key_gets_welcome_and_bad_key_gets_error():
         async with websockets.connect(url) as ws:
             welcome = await _join(ws, key, "Alice")
             assert welcome["type"] == "welcome"
-            assert welcome["protocol"] == "1.7"
+            assert welcome["protocol"] == "1.8"
             assert "media" in welcome["features"]
             assert "audio" in welcome["features"]
             assert welcome["room"] == "demo"
@@ -1017,6 +1020,7 @@ async def test_join_replays_recent_chat_history_to_the_joiner_only():
         replay1 = await _recv(ws_ann)
         replay2 = await _recv(ws_ann)
         state_ann = await _recv(ws_ann)
+        await _recv(ws_ann)  # Ann's own join-time ui_manifest (v1.8)
 
         assert replay1["type"] == "narrative"
         assert replay1["speaker"] == "player"
