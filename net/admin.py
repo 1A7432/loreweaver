@@ -290,7 +290,7 @@ async def _dispatch_admin_frame(
     if kind == "admin_update_server":
         return await _update_server(services, i18n)
     if kind == "admin_list_skills":
-        return await _skills_frame(services, caller_room)
+        return await _skills_frame(services, caller_room, i18n)
     if kind == "admin_enable_skill":
         return await _enable_skill(services, caller_room, frame, i18n)
     if kind == "admin_list_rules":
@@ -962,16 +962,24 @@ def _room_op_frame(action: str, result: dict[str, Any]) -> dict[str, Any]:
 # -- KP skills (Layer B.1/B.2) ----------------------------------------------
 
 
-async def _skills_frame(services: Services, caller_room: str) -> dict[str, Any]:
+async def _skills_frame(services: Services, caller_room: str, i18n: I18n) -> dict[str, Any]:
     """Answer `admin_list_skills`/a fresh post-`admin_enable_skill` reply: every discoverable
-    skill (`core.skills.available_skills`), each marked `enabled` per the CALLER'S room."""
+    skill (`core.skills.available_skills`), each marked `enabled` per the CALLER'S room.
+
+    `name`/`description` follow the caller's locale when a skill ships `name-zh` /
+    `description-zh` frontmatter (falling back to the English fields), so the list is
+    readable in Chinese without duplicating the skill registry per client.
+    """
     chat_key = chat_key_for_room(caller_room)
     enabled_ids = set(await get_enabled_skills(services.store, chat_key))
+    use_zh = i18n.locale == "zh"
     skills = [
         {
             "id": skill.id,
-            "name": skill.name,
-            "description": skill.description,
+            "name": (skill.name_zh if use_zh and skill.name_zh else skill.name),
+            "description": (
+                skill.description_zh if use_zh and skill.description_zh else skill.description
+            ),
             "content_rating": skill.content_rating,
             "enabled": skill.id in enabled_ids,
         }
@@ -990,7 +998,7 @@ async def _enable_skill(
 
     chat_key = chat_key_for_room(caller_room)
     await toggle_enabled_skill(services.store, chat_key, skill_id, on=bool(frame.get("on")))
-    return await _skills_frame(services, caller_room)
+    return await _skills_frame(services, caller_room, i18n)
 
 
 # -- rule systems (Layer A) ---------------------------------------------------

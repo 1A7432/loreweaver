@@ -5,6 +5,9 @@ description: >
   desired play-style -- the "skill that creates skills." Turn this on only when you want the
   Keeper itself to generate and install new skills at your request.
 allowed-tools: [generate_skill]
+name-zh: 技能锻造
+description-zh: >
+  开启后，Keeper 可根据自然语言描述的目标玩法风格，创作全新的 KP 技能——即“创造技能的技能”。
 metadata:
   scope: room
   content-rating: ""

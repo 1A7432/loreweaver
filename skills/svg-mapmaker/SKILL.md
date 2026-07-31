@@ -4,6 +4,9 @@ description: >
   Enable to let the Keeper draw simple player-visible SVG handout maps: location maps,
   room hierarchy diagrams, clue-route sketches, and relationship/area structures with labels.
 allowed-tools: [draw_svg_map]
+name-zh: SVG 地图制作
+description-zh: >
+  开启后，Keeper 可绘制简单的玩家可见 SVG 地图：地点地图、房间层级图、线索路线草图，以及带标签的关系/区域结构图。
 metadata:
   scope: room
   content-rating: ""

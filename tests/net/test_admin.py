@@ -139,6 +139,28 @@ def _update_services(command: str):
     return build_services(settings, llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64))
 
 
+async def test_admin_skills_list_follows_the_caller_locale():
+    """`admin_list_skills` returns the skill's `name-zh`/`description-zh` for a
+    Chinese-locale caller and the English fields otherwise, so the KeeperSkills
+    screen is readable in either language without client-side mappings."""
+    services = _services()
+    admin = AdminService(services, Keystore())
+
+    zh = await admin.dispatch("keeper", "arkham", {"type": "admin_list_skills"}, get_i18n("zh"))
+    assert zh["type"] == "admin_skills"
+    romance = next(s for s in zh["skills"] if s["id"] == "romance-relationships")
+    assert romance["name"] == "恋爱与关系"
+    assert romance["description"].startswith("为以浪漫/亲密为核心的战役开启")
+    assert romance["content_rating"] == "mature"
+    assert romance["enabled"] is False
+
+    en = await admin.dispatch("keeper", "arkham", {"type": "admin_list_skills"}, get_i18n("en"))
+    assert en["type"] == "admin_skills"
+    romance_en = next(s for s in en["skills"] if s["id"] == "romance-relationships")
+    assert romance_en["name"] == "Romance & relationships"
+    assert romance_en["description"].startswith("Enable for a campaign centered on romance")
+
+
 async def test_admin_update_server_not_configured_is_rejected():
     services = _update_services("")  # feature off
     reply = await AdminService(services, Keystore()).dispatch(
