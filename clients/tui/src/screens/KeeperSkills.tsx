@@ -87,12 +87,12 @@ export function KeeperSkills({ client, theme, themeName, welcome, stateFrame, on
         setGenerating(false)
       }
     })
-    client.adminListSkills()
+    client.adminListSkills(locale)
     return off
   }, [client, locale])
 
   const toggle = (entry: AdminSkillInfo) => {
-    client.adminEnableSkill(entry.id, !entry.enabled)
+    client.adminEnableSkill(entry.id, !entry.enabled, locale)
   }
 
   const generate = () => {

@@ -160,6 +160,14 @@ async def test_admin_skills_list_follows_the_caller_locale():
     assert romance_en["name"] == "Romance & relationships"
     assert romance_en["description"].startswith("Enable for a campaign centered on romance")
 
+    # A request-frame locale overrides the server locale: a Chinese-pinned client on an
+    # English-locale server must still get the localized list.
+    pinned = await admin.dispatch(
+        "keeper", "arkham", {"type": "admin_list_skills", "locale": "zh"}, get_i18n("en")
+    )
+    romance_pinned = next(s for s in pinned["skills"] if s["id"] == "romance-relationships")
+    assert romance_pinned["name"] == "恋爱与关系"
+
 
 async def test_admin_update_server_not_configured_is_rejected():
     services = _update_services("")  # feature off
