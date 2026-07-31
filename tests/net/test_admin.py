@@ -337,6 +337,60 @@ async def test_keeper_can_get_and_set_config_list_and_mint_keys():
         await server.close()
 
 
+async def test_last_keeper_key_cannot_be_demoted_or_deleted():
+    """Anti-lockout: the room's only keeper key can never lose the keeper role.
+
+    Regression for the TUI form bug that demoted the bootstrap keeper key to
+    player (name/role form state is shared between mint and edit; a stale role
+    was written back onto the selected key), after which the room permanently
+    loses every keeper surface and no new keeper key can be minted.
+    """
+    services = _services()
+    keystore = Keystore()
+    keeper_key = keystore.add(room="arkham", name="Keeper", role="keeper")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        ws, *_ = await _connect_and_join(url, keeper_key, "Keeper")
+
+        listed = await _send(ws, {"type": "admin_list_keys"})
+        keeper_id = next(entry["id"] for entry in listed["keys"] if entry["role"] == "keeper")
+
+        # Demoting the last keeper is refused, and nothing is mutated.
+        demote = await _send(ws, {"type": "admin_update_key", "id": keeper_id, "role": "player"})
+        assert demote["type"] == "admin_error"
+        assert demote["code"] == "last_keeper"
+        assert keystore.get(keeper_key).role == "keeper"
+
+        # Deleting the last keeper is refused too.
+        delete = await _send(ws, {"type": "admin_delete_key", "id": keeper_id})
+        assert delete["type"] == "admin_error"
+        assert delete["code"] == "last_keeper"
+        assert keystore.get(keeper_key) is not None
+
+        # With a second keeper key in the room, the FIRST (non-caller) may be demoted.
+        minted = await _send(
+            ws, {"type": "admin_mint_key", "room": "arkham", "name": "Co-Keeper", "role": "keeper"}
+        )
+        second_id = next(entry["id"] for entry in minted["keys"] if entry["name"] == "Co-Keeper")
+        demote = await _send(ws, {"type": "admin_update_key", "id": second_id, "role": "player"})
+        assert demote["type"] == "admin_keys"
+        changed = next(entry for entry in demote["keys"] if entry["id"] == second_id)
+        assert changed["role"] == "player"
+
+        # The caller's key is now the room's last keeper — protected again.
+        delete = await _send(ws, {"type": "admin_delete_key", "id": keeper_id})
+        assert delete["type"] == "admin_error"
+        assert delete["code"] == "last_keeper"
+        demote = await _send(ws, {"type": "admin_update_key", "id": keeper_id, "role": "player"})
+        assert demote["type"] == "admin_error"
+        assert demote["code"] == "last_keeper"
+
+        await ws.close()
+    finally:
+        await server.close()
+
+
 async def test_key_mutation_rechecks_room_after_external_move(tmp_path):
     services = _services(str(tmp_path))
     key_path = tmp_path / "keys.toml"
