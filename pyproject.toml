@@ -10,16 +10,16 @@ keywords = ["ttrpg", "dnd", "coc", "dice", "ai", "game-master", "keeper"]
 
 dependencies = [
     "d20>=1.1.2",
-    "openai>=1.40",
+    "openai>=2.50.0",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
     "pyyaml>=6.0",
     "python-dotenv>=1.0",
     "httpx>=0.27",
-    "aiohttp>=3.9",
+    "aiohttp>=3.14.3",
     "numpy>=1.24",
-    "websockets>=16",  # net/tui_server WebSocket server + clients (15.x proxy handling breaks localhost)
-    "iroh>=1.0",  # net/iroh_server p2p QUIC transport — the DEFAULT carrier (dial a ticket, not a domain)
+    "websockets>=16.1.1",  # net/tui_server WebSocket server + clients (15.x proxy handling breaks localhost)
+    "iroh>=1.1.0",  # net/iroh_server p2p QUIC transport — the DEFAULT carrier (dial a ticket, not a domain)
 ]
 
 [project.urls]
@@ -34,8 +34,8 @@ vector = ["sqlite-vec>=0.1.1"]
 # executed in an embedded QuickJS sandbox (memory/time-capped, no host I/O). Without this
 # extra the engine falls back to the safe built-in subset (core/ejs_lite.py).
 ejs = ["quickjs>=1.19.4"]
-anthropic = ["anthropic>=0.116.0"]
-gemini = ["google-genai>=0.3"]
+anthropic = ["anthropic>=0.120.2"]
+gemini = ["google-genai>=2.14.0"]
 # PyInstaller onedir packaging (`scripts/package_server.py`) — a self-contained
 # per-platform server bundle; not needed to develop/run/test loreweaver itself.
 package = ["pyinstaller>=6.11"]
@@ -44,13 +44,13 @@ package = ["pyinstaller>=6.11"]
 # Dev tooling as a uv-native group (PEP 735): `uv sync` installs it by default.
 # pip users (fallback): `pip install -e . && pip install pytest pytest-asyncio ruff`,
 # or with pip >= 25.1: `pip install --group dev`.
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.5"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.16.0"]
 
 [project.scripts]
 loreweaver = "app:main"
 
 [build-system]
-requires = ["setuptools>=83.0.0", "setuptools-scm>=10.2.0"]
+requires = ["setuptools>=83.0.0", "setuptools-scm>=10.2.1"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools_scm]
