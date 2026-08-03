@@ -368,6 +368,17 @@ async def test_last_keeper_key_cannot_be_demoted_or_deleted():
         assert delete["code"] == "last_keeper"
         assert keystore.get(keeper_key) is not None
 
+        # A pending keeper chat_bind token must NOT inflate the keeper count: it
+        # cannot authenticate a connection, so the join key is still the room's only
+        # keeper access and stays protected while the token is outstanding.
+        minted_bind = await _send(
+            ws, {"type": "admin_mint_key", "room": "arkham", "name": "bind", "purpose": "chat_bind"}
+        )
+        assert minted_bind["type"] == "admin_keys"
+        demote = await _send(ws, {"type": "admin_update_key", "id": keeper_id, "role": "player"})
+        assert demote["type"] == "admin_error"
+        assert demote["code"] == "last_keeper"
+
         # With a second keeper key in the room, the FIRST (non-caller) may be demoted.
         minted = await _send(
             ws, {"type": "admin_mint_key", "room": "arkham", "name": "Co-Keeper", "role": "keeper"}

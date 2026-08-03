@@ -762,7 +762,9 @@ def _last_keeper_error(i18n: I18n) -> dict[str, Any]:
 
 
 def _keeper_count(keystore: Keystore, room: str) -> int:
-    return sum(1 for e in keystore.entries(purpose=None) if e.room == room and e.role == "keeper")
+    # Join keys only (the entries() default): a pending keeper chat_bind token cannot
+    # authenticate a connection, so it must not count toward "the room still has a keeper".
+    return sum(1 for e in keystore.entries() if e.room == room and e.role == "keeper")
 
 
 def _update_key(keystore: Keystore, caller_room: str, frame: dict[str, Any], i18n: I18n) -> dict[str, Any]:
