@@ -374,9 +374,12 @@ Client → server:
 - `admin_mint_key` — mint an access key for the caller's bound room only; a
   different `room` is forbidden (the field may be omitted to select the caller's room):
   `{type:"admin_mint_key", room?:string, name?:string, role?:"player"|"keeper"}`
-- `admin_update_key` — update one key by its stable non-secret id:
+- `admin_update_key` — update one key by its stable non-secret id. Demoting the
+  room's LAST keeper join key is refused with `admin_error{code:"last_keeper"}`
+  (anti-lockout — mint a second keeper key first):
   `{type:"admin_update_key", id:string, room?:string, name?:string, role?:"player"|"keeper"}`
-- `admin_delete_key` — delete one key by id:
+- `admin_delete_key` — delete one key by id; deleting the room's last keeper
+  join key is refused the same way (`last_keeper`):
   `{type:"admin_delete_key", id:string}`
 - `admin_delete_room` — delete every access key bound to a room; room data is
   left untouched:
@@ -402,9 +405,14 @@ Client → server:
   caller's own room:
   `{type:"admin_reset_room", room:string, scope?:"story"|"chars"|"all"}`
 - `admin_list_skills` — list every discoverable KP skill (Layer B.1), marked
-  `enabled` per the CALLER's own room: `{type:"admin_list_skills"}`
+  `enabled` per the CALLER's own room. The optional `locale` (`"en"`/`"zh"`,
+  additive) asks for skill display names/descriptions localized to the CLIENT's
+  own UI language (for skills shipping `name-zh`/`description-zh` frontmatter),
+  independent of the server locale; absent means the server locale applies:
+  `{type:"admin_list_skills", locale?:string}`
 - `admin_enable_skill` — enable/disable one skill for the caller's room; replies
-  a fresh `admin_skills`: `{type:"admin_enable_skill", id:string, on:boolean}`
+  a fresh `admin_skills` (same optional `locale` hint):
+  `{type:"admin_enable_skill", id:string, on:boolean, locale?:string}`
 - `admin_list_rules` — list every discoverable rule system (Layer A):
   `{type:"admin_list_rules"}`
 - `admin_generate` — author + install a brand-new skill/rule system/module from a
@@ -443,7 +451,7 @@ Server → client:
   `{type:"admin_room_op", action:"export"|"import"|"delete"|"reset", room:string, path?:string, keys:number, store_rows:number, vector_points:number, media_files?:number, scope?:"story"|"chars"|"all"}`
   (`scope` is present on a `reset` op, echoing which reset scope was applied.)
 - `admin_error` — a localized failure notice (does not close the connection):
-  `{type:"admin_error", code:"forbidden"|"unknown_provider"|"bad_request"|"set_failed"|"not_found"|"op_failed", message?:string}`
+  `{type:"admin_error", code:"forbidden"|"unknown_provider"|"bad_request"|"set_failed"|"not_found"|"op_failed"|"not_configured"|"last_keeper", message?:string}`
 - `admin_skills` — every discoverable skill, `enabled` reflecting the caller's room:
   `{type:"admin_skills", skills:[{id:string, name:string, description:string, content_rating:string, enabled:boolean}]}`
 - `admin_rules` — every discoverable rule system, `built_in` marking a shipped

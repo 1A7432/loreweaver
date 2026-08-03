@@ -12,11 +12,15 @@ on:
 
 jobs:
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
+    # Same-repo branches only. GitHub never hands secrets to `pull_request` runs
+    # from forks, and dependabot runs read the separate Dependabot secret store —
+    # in both cases the token input is empty and the job can only fail. Skipping
+    # beats a guaranteed red X on every outside contribution (the review path for
+    # external PRs is a maintainer `@claude` comment, which runs in base context
+    # WITH secrets).
+    if: >
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]'
 
     runs-on: ubuntu-latest
     permissions:

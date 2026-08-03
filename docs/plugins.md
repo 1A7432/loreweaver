@@ -276,6 +276,9 @@ description: >
   Enable when the campaign centers on romance/intimacy: tracks attraction and
   tension, prompts consent beats, resolves seduction as social checks.
 allowed-tools: [skill_check, kp_note, update_character_status]   # gates the toolset
+name-zh: 恋爱与关系             # optional localized display metadata for skill
+description-zh: >              # lists; the English fields stay the fallback
+  为以浪漫/亲密为核心的战役开启：追踪吸引与张力，将诱惑作为社交检定判定。
 metadata:
   scope: room                 # per-room toggle (keeper-enabled)
   systems: [coc7]             # applicable rule systems (optional)

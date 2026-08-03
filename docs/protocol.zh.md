@@ -186,9 +186,9 @@ role = "player"  # 或 "keeper"；默认为 "player"
 - `admin_list_keys` — 只列出调用者 key 所绑定房间的访问 key：`{type:"admin_list_keys"}`
 - `admin_mint_key` — 只为调用者所绑定的房间创建访问 key；`room` 可省略，指定其他房间会被拒绝：
   `{type:"admin_mint_key", room?:string, name?:string, role?:"player"|"keeper"}`
-- `admin_update_key` — 按稳定的非秘密 id 更新一个密钥：
+- `admin_update_key` — 按稳定的非秘密 id 更新一个密钥。把房间**最后一个**守秘人加入密钥降级会被拒绝并返回 `admin_error{code:"last_keeper"}`（防锁死——请先铸造第二个守秘人密钥）：
   `{type:"admin_update_key", id:string, room?:string, name?:string, role?:"player"|"keeper"}`
-- `admin_delete_key` — 按 id 删除一个密钥：
+- `admin_delete_key` — 按 id 删除一个密钥；删除房间最后一个守秘人加入密钥同样被拒绝（`last_keeper`）：
   `{type:"admin_delete_key", id:string}`
 - `admin_delete_room` — 删除绑定到房间的每个访问密钥；房间数据保持不变：
   `{type:"admin_delete_room", room:string}`
@@ -202,6 +202,14 @@ role = "player"  # 或 "keeper"；默认为 "player"
   `{type:"admin_reset_room", room:string, scope?:"story"|"chars"|"all"}`
 - `admin_update_server` — 守秘人请求服务端原地自更新。无参数：服务端运行其运维自己配置的命令(`TRPG_TUI__UPDATE_COMMAND`，如 `git pull && uv sync`)，绝不执行客户端提供的内容，且需要 `welcome` 中通告的 `"update"` 特性。成功后服务端会 re-exec 到新代码，客户端应预期短暂断连后重连：
   `{type:"admin_update_server"}`
+- `admin_list_skills` — 列出所有可发现的 KP 技能（Layer B.1），并按调用者自己的房间标记 `enabled`。可选 `locale`（`"en"`/`"zh"`，增量字段）请求按客户端自身界面语言返回技能显示名/描述（技能需带 `name-zh`/`description-zh` frontmatter），与服务端语言无关；缺省时按服务端语言返回：
+  `{type:"admin_list_skills", locale?:string}`
+- `admin_enable_skill` — 为调用者房间启用/停用一个技能；回复一份新的 `admin_skills`（同样支持可选 `locale`）：
+  `{type:"admin_enable_skill", id:string, on:boolean, locale?:string}`
+- `admin_list_rules` — 列出所有可发现的规则系统（Layer A）：
+  `{type:"admin_list_rules"}`
+- `admin_generate` — 通过对应的 `agent.forge` 自扩展引擎，从自然语言描述创作并安装全新的技能/规则系统/模组（Layer B.3）；`kind:"module"` 的生成会安装进调用者自己的房间。这是一次较慢的 LLM 调用，按普通请求/应答处理——客户端在等待 `admin_generated` 期间显示加载动画：
+  `{type:"admin_generate", kind:"skill"|"rule"|"module", description:string}`
 
 服务器 → 客户端：
 
@@ -219,8 +227,14 @@ role = "player"  # 或 "keeper"；默认为 "player"
   (`scope` 在 `reset` 操作时出现，回显所应用的重置范围。)
 - `admin_update` — `admin_update_server` 的回复。`"restarting"`：命令成功、服务端正在 re-exec；`"failed"`：命令以非零码退出，`output` 为其合并 stdout/stderr 的末尾。（未配置命令时返回 `admin_error{code:"not_configured"}`。）
   `{type:"admin_update", status:"restarting"|"failed", output?:string}`
+- `admin_skills` — 所有可发现技能，`enabled` 反映调用者房间的启用状态（`name`/`description` 已按请求的 `locale` 本地化）：
+  `{type:"admin_skills", skills:[{id:string, name:string, description:string, content_rating:string, enabled:boolean}]}`
+- `admin_rules` — 所有可发现的规则系统，`built_in` 区分内置系统（`coc7`/`dnd5e`）与生成/用户安装的系统：
+  `{type:"admin_rules", systems:[{id:string, built_in:boolean}]}`
+- `admin_generated` — 锻造引擎的结果；`ok` 为 `false` 时 `id`/`name` 为空、`error` 携带（未翻译的）诊断信息，且没有任何东西被安装。`detail` 携带按房间的安装结果——对 `kind:"module"` 它是模组是否真正落进房间的唯一信号（`ok` 只表示成功创作并写出了合法文档）；对 `skill`/`rule` 为空（无按房间安装步骤）：
+  `{type:"admin_generated", kind:"skill"|"rule"|"module", ok:boolean, id:string, name:string, error:string, detail:string}`
 - `admin_error` — 本地化的故障通知（不关闭连接）：
-  `{type:"admin_error", code:"forbidden"|"unknown_provider"|"bad_request"|"set_failed"|"not_found"|"op_failed"|"not_configured", message?:string}`
+  `{type:"admin_error", code:"forbidden"|"unknown_provider"|"bad_request"|"set_failed"|"not_found"|"op_failed"|"not_configured"|"last_keeper", message?:string}`
 
 `admin_set_model` 根据已知 provider 验证 `provider`（`infra.providers.is_known_provider`），通过 `services.runtime_config` 持久化覆盖，并热重配置共享的 `MutableLLM`——与 `.model set` 聊天命令走同一路径——然后回复新的 `admin_config`。API key / `base_url` 按 provider 成对保存在本地凭据簿；只有 endpoint 未变时才会复用。新 endpoint 必须在同一请求提供匹配 key，否则使用并持久化空 key。订阅 OAuth grant 也保存在同一凭据簿的规范 provider 名下。
 
