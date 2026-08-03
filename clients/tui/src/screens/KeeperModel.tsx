@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useKeyboard } from "@opentui/react"
-import type { KeyEvent, SelectOption } from "@opentui/core"
+import type { KeyEvent, ScrollBoxRenderable, SelectOption } from "@opentui/core"
 import {
   FrameType,
   stripControlChars,
@@ -141,6 +141,7 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
   const providerRef = useRef(provider)
   const apiKeyRef = useRef(apiKey)
   const baseUrlRef = useRef(baseUrl)
+  const scrollRef = useRef<ScrollBoxRenderable>(null)
   const apiKeyTouchedRef = useRef(false)
   const baseUrlTouchedRef = useRef(false)
   const selectedModelRef = useRef(selectedModel)
@@ -351,13 +352,16 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
   }
 
   // Scoped to this screen; Tab cycles fields, Esc goes back. Arrows are left to the focused
-  // <select>; the text inputs submit on Enter.
+  // <select>; the text inputs submit on Enter. PgUp/PgDn scroll the content column, which can
+  // overflow on short terminals (the image-gen section sits below the chat-model fields).
   useKeyboard((event: KeyEvent) => {
     const keyName = typeof event.name === "string" ? event.name.toLowerCase() : ""
     if (keyName === "escape") {
       onBack()
       return
     }
+    if (keyName === "pageup") scrollRef.current?.scrollBy?.(-1, "viewport")
+    if (keyName === "pagedown") scrollRef.current?.scrollBy?.(1, "viewport")
     if ((keyName === "return" || keyName === "enter") && focused === "proxyMode") {
       setProxyEditing(true)
       setFocused("apiKey")
@@ -387,7 +391,8 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
       </box>
 
       <box flexDirection="row" flexGrow={1} minHeight={8}>
-        <box flexDirection="column" flexGrow={1} paddingX={2} paddingY={1}>
+        <scrollbox ref={scrollRef} flexGrow={1} flexShrink={1} minWidth={0} viewportCulling={false}>
+        <box flexDirection="column" width="100%" minWidth={0} paddingX={2} paddingY={1} flexShrink={0}>
           {!isKeeper ? (
             <box marginBottom={1}>
               <text fg={theme.fumble}>{tt(locale, "keeper.notKeeper")}</text>
@@ -826,6 +831,7 @@ export function KeeperModel({ client, theme, themeName, welcome, stateFrame, onB
             </box>
           </box>
         </box>
+        </scrollbox>
       </box>
 
       <StatusBar welcome={welcome} online={stateFrame.online} theme={theme} themeName={themeName} />
