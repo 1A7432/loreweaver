@@ -825,6 +825,11 @@ export interface AdminErrorFrame {
 
 export interface AdminListSkillsFrame {
   type: typeof FrameType.AdminListSkills
+  // Optional UI-locale hint ("en" | "zh"): the server localizes skill display
+  // metadata (`name-zh`/`description-zh` frontmatter) to it when present;
+  // absent means the server's own locale applies. Additive — older servers
+  // ignore it and reply with the server-locale list.
+  locale?: string
 }
 
 export interface AdminSkillInfo {
@@ -845,6 +850,9 @@ export interface AdminEnableSkillFrame {
   type: typeof FrameType.AdminEnableSkill
   id: string
   on: boolean
+  // Same optional locale hint as `AdminListSkillsFrame` — the post-toggle
+  // refresh is localized to the requesting client's UI language.
+  locale?: string
 }
 
 export interface AdminListRulesFrame {

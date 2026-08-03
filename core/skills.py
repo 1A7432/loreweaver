@@ -58,6 +58,10 @@ class Skill:
     id: str
     name: str
     description: str
+    # Optional localized display metadata (frontmatter `name-zh` / `description-zh`);
+    # empty means the English name/description are used for that locale too.
+    name_zh: str = ""
+    description_zh: str = ""
     allowed_tools: list[str] = field(default_factory=list)
     scope: str = "room"
     systems: list[str] = field(default_factory=list)
@@ -93,8 +97,10 @@ def _build_skill(skill_id: str, frontmatter: Mapping[str, Any], body: str) -> Sk
         metadata = {}
     return Skill(
         id=skill_id,
-        name=str(frontmatter.get("name") or skill_id),
-        description=str(frontmatter.get("description") or ""),
+        name=str(frontmatter.get("name") or skill_id).strip(),
+        description=str(frontmatter.get("description") or "").strip(),
+        name_zh=str(frontmatter.get("name-zh") or "").strip(),
+        description_zh=str(frontmatter.get("description-zh") or "").strip(),
         allowed_tools=[str(item) for item in (frontmatter.get("allowed-tools") or [])],
         scope=str(metadata.get("scope") or "room"),
         systems=[str(item) for item in (metadata.get("systems") or [])],

@@ -4,6 +4,9 @@ description: >
   Enable to let the Keeper generate occasional player-visible scene, portrait, or item handouts
   through the configured external image provider.
 allowed-tools: [generate_image]
+name-zh: 图像生成
+description-zh: >
+  开启后，Keeper 可通过已配置的外部图像服务，偶尔生成玩家可见的场景、肖像或物品插图。
 metadata:
   scope: room
   content-rating: ""

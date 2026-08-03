@@ -68,6 +68,20 @@ metadata:
 This is the markdown body folded into the KP prompt.
 """
 
+LOCALIZED_SKILL = """---
+name: Localized Skill
+description: English description.
+name-zh: 本地化技能
+description-zh: >
+  中文描述。
+metadata:
+  scope: room
+  content-rating: mature
+---
+
+# Localized Skill Body
+"""
+
 MALFORMED_NO_FENCE = """name: Malformed
 description: missing the frontmatter fences entirely.
 
@@ -97,6 +111,38 @@ def test_discovers_and_parses_a_fixture_skill_frontmatter_and_body(tmp_path: Pat
     finally:
         skills_module._SKILL_DIR = original_dir
         skills_module._discover_registry.cache_clear()
+
+
+def test_localized_frontmatter_fields_are_parsed(tmp_path: Path) -> None:
+    """A SKILL.md may carry optional `name-zh` / `description-zh` frontmatter so the
+    admin skills list can follow the caller's locale; absent fields stay empty and
+    callers fall back to the English name/description."""
+    _write_skill(tmp_path, "localized-skill", LOCALIZED_SKILL)
+
+    original_dir = skills_module._SKILL_DIR
+    skills_module._SKILL_DIR = tmp_path
+    skills_module._discover_registry.cache_clear()
+    try:
+        skill = load_skill("localized-skill")
+        assert skill is not None
+        assert skill.name == "Localized Skill"
+        assert skill.description == "English description."
+        assert skill.name_zh == "本地化技能"
+        assert skill.description_zh == "中文描述。"
+        # The localized block must not swallow the metadata children that follow it.
+        assert skill.content_rating == "mature"
+        assert skill.scope == "room"
+    finally:
+        skills_module._SKILL_DIR = original_dir
+        skills_module._discover_registry.cache_clear()
+
+
+def test_real_built_in_skills_ship_chinese_display_metadata() -> None:
+    """Every built-in skill carries `name-zh`/`description-zh` so a Chinese-locale
+    client never sees a bare English list."""
+    for skill in available_skills():
+        assert skill.name_zh, f"built-in skill {skill.id} is missing name-zh"
+        assert skill.description_zh, f"built-in skill {skill.id} is missing description-zh"
 
 
 def test_malformed_skill_is_skipped_but_good_skill_still_discovered(tmp_path: Path) -> None:

@@ -448,12 +448,12 @@ export class IrohClient implements AppClient {
   }
 
   // ---- v1.1 additive: Layer B.4a plugin management, identical wire to WsClient ------
-  adminListSkills(): void {
-    this.sendFrame({ type: FrameType.AdminListSkills })
+  adminListSkills(locale?: string): void {
+    this.sendFrame({ type: FrameType.AdminListSkills, ...(locale ? { locale } : {}) })
   }
 
-  adminEnableSkill(id: string, on: boolean): void {
-    const frame: AdminEnableSkillFrame = { type: FrameType.AdminEnableSkill, id, on }
+  adminEnableSkill(id: string, on: boolean, locale?: string): void {
+    const frame: AdminEnableSkillFrame = { type: FrameType.AdminEnableSkill, id, on, ...(locale ? { locale } : {}) }
     this.sendFrame(frame)
   }
 

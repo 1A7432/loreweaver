@@ -5,6 +5,9 @@ description: >
   from a natural-language description of its sheet and checks. Turn this on only when you want the
   Keeper itself to generate and install a new rule system at your request.
 allowed-tools: [generate_rulepack]
+name-zh: 规则锻造
+description-zh: >
+  开启后，Keeper 可根据自然语言描述的属性表与检定方式，创作全新的 TTRPG 规则系统（rulepacks/<id>.yaml 数据包）。
 metadata:
   scope: room
   content-rating: ""

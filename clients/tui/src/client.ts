@@ -58,8 +58,8 @@ export interface AppClient {
   adminResetRoom(room: string, scope?: AdminResetScope): void
   adminUpdateServer(): void
   // v1.1 additive: Layer B.4a plugin management (KP skills / rule systems / self-extension forge).
-  adminListSkills(): void
-  adminEnableSkill(id: string, on: boolean): void
+  adminListSkills(locale?: string): void
+  adminEnableSkill(id: string, on: boolean, locale?: string): void
   adminListRules(): void
   adminGenerate(kind: AdminForgeKind, description: string): void
 }
@@ -164,11 +164,11 @@ class TransportClient implements AppClient {
   adminUpdateServer(): void {
     this.inner?.adminUpdateServer()
   }
-  adminListSkills(): void {
-    this.inner?.adminListSkills()
+  adminListSkills(locale?: string): void {
+    this.inner?.adminListSkills(locale)
   }
-  adminEnableSkill(id: string, on: boolean): void {
-    this.inner?.adminEnableSkill(id, on)
+  adminEnableSkill(id: string, on: boolean, locale?: string): void {
+    this.inner?.adminEnableSkill(id, on, locale)
   }
   adminListRules(): void {
     this.inner?.adminListRules()

@@ -5,6 +5,9 @@ description: >
   explicitly opted in. Lifts the Keeper's self-censorship for explicit
   romance/intimacy scenes and the room's output word-filter while it is on.
 allowed-tools: []
+name-zh: 成熟模式
+description-zh: >
+  为仅限邀请的私密成人/恋爱战役开启。开启期间解除 Keeper 对露骨浪漫/亲密场景的自我审查，并放宽房间输出的词汇过滤。
 metadata:
   scope: room
   content-rating: explicit

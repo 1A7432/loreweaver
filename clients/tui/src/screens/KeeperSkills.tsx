@@ -87,12 +87,12 @@ export function KeeperSkills({ client, theme, themeName, welcome, stateFrame, on
         setGenerating(false)
       }
     })
-    client.adminListSkills()
+    client.adminListSkills(locale)
     return off
   }, [client, locale])
 
   const toggle = (entry: AdminSkillInfo) => {
-    client.adminEnableSkill(entry.id, !entry.enabled)
+    client.adminEnableSkill(entry.id, !entry.enabled, locale)
   }
 
   const generate = () => {
@@ -166,9 +166,10 @@ export function KeeperSkills({ client, theme, themeName, welcome, stateFrame, on
             {skills.length ? (
               skills.map((entry: AdminSkillInfo, index: number) => (
                 <box key={entry.id} onMouseDown={() => toggle(entry)}>
-                  <text fg={index === selectedIndex ? theme.accent : theme.fg}>
+                  <text fg={index === selectedIndex ? theme.accent : theme.fg} wrapMode="none" truncate>
                     {index === selectedIndex ? CURSOR : " "} {stripControlChars(entry.name)} ·{" "}
-                    {stripControlChars(entry.description)} · {stripControlChars(entry.content_rating)} ·{" "}
+                    {stripControlChars(entry.description)}
+                    {entry.content_rating ? ` · ${stripControlChars(entry.content_rating)}` : ""} ·{" "}
                     <span fg={entry.enabled ? theme.success : theme.dim}>
                       {entry.enabled ? tt(locale, "skills.on") : tt(locale, "skills.off")}
                     </span>

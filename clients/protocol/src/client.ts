@@ -410,12 +410,12 @@ export class WsClient {
 
   // ---- v1.1 additive: Layer B.4a plugin management (KP skills / rule systems / forge) ----
 
-  adminListSkills(): void {
-    this.send({ type: FrameType.AdminListSkills })
+  adminListSkills(locale?: string): void {
+    this.send({ type: FrameType.AdminListSkills, ...(locale ? { locale } : {}) })
   }
 
-  adminEnableSkill(id: string, on: boolean): void {
-    const frame: AdminEnableSkillFrame = { type: FrameType.AdminEnableSkill, id, on }
+  adminEnableSkill(id: string, on: boolean, locale?: string): void {
+    const frame: AdminEnableSkillFrame = { type: FrameType.AdminEnableSkill, id, on, ...(locale ? { locale } : {}) }
     this.send(frame)
   }
 

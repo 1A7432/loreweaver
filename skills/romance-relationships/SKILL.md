@@ -5,6 +5,9 @@ description: >
   tension, resolves seduction and reading feelings as social checks, and
   prompts consent beats before a scene turns intimate.
 allowed-tools: [adjust_relationship, set_relationship, get_relationships]
+name-zh: 恋爱与关系
+description-zh: >
+  为以浪漫/亲密为核心的战役开启：追踪吸引与张力，将诱惑与读心作为社交检定来判定，并在场景转向亲密前提示同意确认。
 metadata:
   scope: room
   systems: [coc7]

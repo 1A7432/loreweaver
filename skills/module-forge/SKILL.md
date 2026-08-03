@@ -6,6 +6,9 @@ description: >
   knowledge pool. Turn this on only when you want the Keeper itself to generate and install a new
   module at your request.
 allowed-tools: [generate_module]
+name-zh: 模组锻造
+description-zh: >
+  开启后，Keeper 可根据自然语言描述（或守秘人提供的设定前提）创作一份全新的模组/剧本文档，并直接安装到本房间的模组知识库中。
 metadata:
   scope: room
   content-rating: ""
