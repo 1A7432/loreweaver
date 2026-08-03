@@ -750,6 +750,23 @@ def _mint_key(
     return _keys_frame(keystore, caller_room, minted=minted)
 
 
+def _last_keeper_error(i18n: I18n) -> dict[str, Any]:
+    """Anti-lockout: a room's last keeper key can never be demoted or deleted.
+
+    The TUI's KeeperKeys form doubles as mint + edit surface; a stale role in the
+    form has already demoted the bootstrap keeper key in the wild (the room then
+    permanently loses every keeper surface). Refusing the transition server-side
+    makes lockout impossible even if a client misbehaves.
+    """
+    return _error("last_keeper", i18n)
+
+
+def _keeper_count(keystore: Keystore, room: str) -> int:
+    # Join keys only (the entries() default): a pending keeper chat_bind token cannot
+    # authenticate a connection, so it must not count toward "the room still has a keeper".
+    return sum(1 for e in keystore.entries() if e.room == room and e.role == "keeper")
+
+
 def _update_key(keystore: Keystore, caller_room: str, frame: dict[str, Any], i18n: I18n) -> dict[str, Any]:
     key_id = str(frame.get("id") or "").strip()
     updates: dict[str, str] = {}
@@ -780,6 +797,11 @@ def _update_key(keystore: Keystore, caller_room: str, frame: dict[str, Any], i18
         entry = keystore.get(key, purpose=None)
         if entry is None or entry.room != caller_room:
             return _error("forbidden", i18n)
+        # Never demote the room's last keeper key: the keeper surface is the only
+        # way to mint new keeper keys, so losing it is a permanent lockout.
+        if entry.role == "keeper" and updates.get("role", "keeper") != "keeper":
+            if _keeper_count(keystore, caller_room) <= 1:
+                return _last_keeper_error(i18n)
         keystore.update(key, **updates)
     return _keys_frame(keystore, caller_room)
 
@@ -793,6 +815,10 @@ def _delete_key(keystore: Keystore, caller_room: str, frame: dict[str, Any], i18
         entry = keystore.get(key, purpose=None)
         if entry is None or entry.room != caller_room:
             return _error("forbidden", i18n)
+        # Same anti-lockout rule as update: deleting the last keeper key would
+        # strand the room without any way to recover keeper access.
+        if entry.role == "keeper" and _keeper_count(keystore, caller_room) <= 1:
+            return _last_keeper_error(i18n)
         keystore.remove(key)
     return _keys_frame(keystore, caller_room)
 

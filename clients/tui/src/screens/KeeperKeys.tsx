@@ -210,6 +210,13 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
     setRoleIndex(selected.role === "keeper" ? 1 : 0)
   }
 
+  // The edit form doubles as the mint form; keep it synced to the SELECTED key whenever the
+  // selection or the key list changes, so a save can never write a stale role/name onto a
+  // different key (this has demoted the bootstrap keeper key in the wild).
+  useEffect(() => {
+    loadSelected()
+  }, [selectedKey, keys])
+
   const updateSelected = () => {
     setConfirming(null)
     if (!selected || selectedChatBinding) return
