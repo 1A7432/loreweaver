@@ -16,8 +16,9 @@ Upstream shapes this module implements (verified against the original MVU projec
 - InitVar content: nested dicts whose LEAVES are plain scalars/arrays or the
   ValueWithDescription form ``[initial_value, "description/update-conditions"]``, e.g.
   ``{"理": {"情绪状态": {"pleasure": [0.1, "[-1,1] range; updates on emotion change"]}}}``.
-  Keys are routinely CJK. JSON5-isms seen in the wild: ``//`` and ``/* */`` comments, trailing
-  commas, single-quoted strings, unquoted ASCII identifier keys.
+  Keys are routinely CJK. TWO wire shapes carry that tree: the original JSON5 object
+  (``//`` and ``/* */`` comments, trailing commas, single-quoted strings, unquoted ASCII
+  identifier keys) and — in 2026-era cards — a YAML block mapping of the same structure.
 - Update blocks: ``<UpdateVariable> ... </UpdateVariable>`` (case-insensitive, attributes and
   whitespace tolerated, optionally fenced in triple backticks), optionally containing an
   ``<Analysis>...</Analysis>`` sub-block to discard. Command lines look like
@@ -29,17 +30,23 @@ Upstream shapes this module implements (verified against the original MVU projec
   dot-separated, CJK-heavy, and may address list indices numerically (``a.b.0``).
 
 Mirrors ``core.modvars``/``core.relationships``' layering: intentionally self-contained
-(stdlib + json only), pure non-mutating functions plus a thin async ``MvuManager`` over a
-duck-typed store ``Protocol``, and defensive normalization of stored garbage.
+(stdlib + json, plus `core.yaml_safety` for the YAML InitVar shape), pure non-mutating
+functions plus a thin async ``MvuManager`` over a duck-typed store ``Protocol``, and
+defensive normalization of stored garbage.
 """
 
 from __future__ import annotations
 
 import copy
+import datetime
 import json
 import math
 import re
 from typing import Any, Protocol
+
+import yaml
+
+from core.yaml_safety import safe_load_no_aliases
 
 # ---------------------------------------------------------------------------
 # Limits and shapes
@@ -87,24 +94,57 @@ def is_initvar_entry(name: Any) -> bool:
 
 
 def parse_initvar(text: str) -> dict | None:
-    """Parse an InitVar entry's JSON5-lite content into a dict; `None` when unrecoverable.
+    """Parse an InitVar entry's content into a dict; `None` when unrecoverable.
 
-    Tolerates the JSON5-isms seen in real MVU cards — ``//`` and ``/* */`` comments
-    (string-aware: a ``//`` inside a string, e.g. a URL, is data), trailing commas,
-    single-quoted strings, and unquoted ASCII identifier keys — then hands the normalized text
-    to `json.loads`. Anything else unrecoverable, or a non-dict top level, degrades to `None`
-    rather than raising. CJK keys/values pass through untouched.
+    Real cards ship two wire shapes, tried in order. The original JSON5-lite object comes
+    first: ``//`` and ``/* */`` comments (string-aware: a ``//`` inside a string, e.g. a URL,
+    is data), trailing commas, single-quoted strings, and unquoted ASCII identifier keys are
+    tolerated, then the normalized text goes to `json.loads`. When that route yields no dict,
+    the text is re-read as YAML — the 2026-era shape, a block mapping of the same tree
+    (`_parse_initvar_yaml`). Either way anything unrecoverable, or a non-dict top level,
+    degrades to `None` rather than raising. CJK keys/values pass through untouched.
     """
     if not isinstance(text, str) or not text.strip():
         return None
     normalized = _json5_normalize(text)
-    if normalized is None:
-        return None
+    if normalized is not None:
+        try:
+            data = json.loads(normalized)
+        except (ValueError, RecursionError):
+            data = None
+        if isinstance(data, dict):
+            return data
+    return _parse_initvar_yaml(text)
+
+
+def _parse_initvar_yaml(text: str) -> dict | None:
+    """The YAML route of `parse_initvar`: `safe_load_no_aliases` with every failure degraded
+    to `None`.
+
+    Imported cards are untrusted input, so anchor/alias documents are rejected outright
+    (never expanded) by the shared no-alias loader. PyYAML is YAML 1.1: ``yes``/``no`` load
+    as booleans and duplicate keys last-win — the studio mirror pins the same semantics. Its
+    auto-typed dates/datetimes are re-coerced to ISO strings because `normalize_tree` would
+    otherwise drop them as non-JSON leaves."""
     try:
-        data = json.loads(normalized)
-    except (ValueError, RecursionError):
+        data = safe_load_no_aliases(text)
+        if not isinstance(data, dict):
+            return None
+        return _stringify_yaml_dates(data)
+    except (yaml.YAMLError, RecursionError, ValueError):
         return None
-    return data if isinstance(data, dict) else None
+
+
+def _stringify_yaml_dates(node: Any) -> Any:
+    """Recursively replace `datetime.date`/`datetime.datetime` leaves (PyYAML auto-typing)
+    with their ISO strings, leaving every other node untouched."""
+    if isinstance(node, dict):
+        return {key: _stringify_yaml_dates(value) for key, value in node.items()}
+    if isinstance(node, list):
+        return [_stringify_yaml_dates(value) for value in node]
+    if isinstance(node, datetime.date):  # datetime.datetime subclasses date — both covered
+        return node.isoformat()
+    return node
 
 
 def _json5_normalize(text: str) -> str | None:

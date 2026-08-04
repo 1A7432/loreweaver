@@ -130,6 +130,72 @@ def test_parse_initvar_rejects_unrecoverable_or_non_dict():
 
 
 # ---------------------------------------------------------------------------
+# parse_initvar — YAML fallback (the 2026-era MVU wire shape)
+# ---------------------------------------------------------------------------
+
+# A realistic YAML-form InitVar: block mapping with CJK keys, inline flow maps/lists,
+# underscore-prefixed keys, quoted and plain scalars, a comment, and a
+# ValueWithDescription leaf riding a flow list.
+YAML_INITVAR_TEXT = """\
+世界:
+  日: 1
+  时段: 上午  # 注释与数据同行
+  今日访客配额: 3
+  监控录像: ""
+  声望: { 圣哺: 20, 残堇: 20 }
+  已登记访客: []
+玩家资源:
+  精力: { 当前值: 8, 训练经验: 0 }
+  _小憩日: -1
+  保护准备: false
+结局标记: [进行中, "本周目状态"]
+"""
+
+
+def test_parse_initvar_yaml_block_mapping():
+    parsed = parse_initvar(YAML_INITVAR_TEXT)
+    assert parsed is not None
+    assert parsed["世界"]["日"] == 1
+    assert parsed["世界"]["时段"] == "上午"
+    assert parsed["世界"]["监控录像"] == ""
+    assert parsed["世界"]["声望"] == {"圣哺": 20, "残堇": 20}
+    assert parsed["世界"]["已登记访客"] == []
+    assert parsed["玩家资源"]["精力"] == {"当前值": 8, "训练经验": 0}
+    assert parsed["玩家资源"]["_小憩日"] == -1
+    assert parsed["玩家资源"]["保护准备"] is False
+    assert parsed["结局标记"] == ["进行中", "本周目状态"]
+
+
+def test_parse_initvar_yaml_survives_apostrophe_prose():
+    # A bare apostrophe wrecks the JSON5 route (unterminated string) — YAML doesn't care.
+    assert parse_initvar("提示: today's visitor knocks\n计数: 2\n") == {
+        "提示": "today's visitor knocks",
+        "计数": 2,
+    }
+
+
+def test_parse_initvar_yaml_rejects_aliases_and_non_mappings():
+    assert parse_initvar("a: &x [1, 2]\nb: *x\n") is None  # alias-bomb class rejected outright
+    assert parse_initvar("- 1\n- 2\n") is None
+    assert parse_initvar("just prose\n") is None
+    assert parse_initvar("a:\n\tb: 1\n") is None  # tab indentation = YAML scanner error
+
+
+def test_parse_initvar_yaml_11_semantics_are_pinned():
+    # PyYAML is YAML 1.1: `yes`/`no` load as booleans, duplicate keys last-win. The studio
+    # mirror (yaml-1.1 schema) pins the same pair — keep both tests in sync.
+    assert parse_initvar("开关: yes\n开关: no\n") == {"开关": False}
+
+
+def test_parse_initvar_yaml_dates_become_iso_strings():
+    # PyYAML auto-types ISO dates; `normalize_tree` would drop date objects as non-JSON.
+    assert parse_initvar("下次检查: 2026-08-04\n嵌套: { 时刻: [2026-08-04, 备注] }\n") == {
+        "下次检查": "2026-08-04",
+        "嵌套": {"时刻": ["2026-08-04", "备注"]},
+    }
+
+
+# ---------------------------------------------------------------------------
 # ValueWithDescription helpers
 # ---------------------------------------------------------------------------
 
