@@ -85,3 +85,49 @@ async def test_sole_active_route_family_follows_the_variable_tree(tmp_path):
     final_prompt = captured_prompts[-1]
     assert "主线规则：验人配额照常。" in final_prompt
     assert "判官线规则：墨水配给制。" not in final_prompt
+
+
+async def test_discipline_and_fidelity_blocks_ride_world_lore_without_a_pool(tmp_path):
+    """A card-imported room has no knowledge pool, so the pool section's
+    keeper_discipline/module_fidelity blocks used to never fire — the model ran whole
+    imported modules with neither block in context. They now fold in ahead of the lore
+    section (exactly once) whenever world lore injects."""
+    from core.worldbook import LoreEntry
+
+    captured_prompts: list[str] = []
+
+    def responder(messages, tools):
+        captured_prompts.append(messages[0]["content"])
+        return assistant_text("The rain thickens.")
+
+    services = _services(FakeLLM(responder=responder))
+    ctx = AgentCtx(chat_key="discipline-room", user_id="p1", locale="en")
+    await services.worldbook.add(
+        "discipline-room",
+        LoreEntry(id="", title="模组规则", content="访客审判每日一次。", constant=True),
+    )
+
+    await run_kp_turn(ctx, services, build_kp_toolset(services), "开始今天的审判。")
+
+    prompt = captured_prompts[-1]
+    i18n = services.i18n.with_locale("en")
+    assert prompt.count(i18n.t("prompt.keeper_discipline")) == 1
+    assert prompt.count(i18n.t("prompt.module_fidelity")) == 1
+    # And ahead of the lore section they govern.
+    assert prompt.index(i18n.t("prompt.keeper_discipline")) < prompt.index("访客审判每日一次。")
+
+
+async def test_no_world_lore_means_no_discipline_fold(tmp_path):
+    captured_prompts: list[str] = []
+
+    def responder(messages, tools):
+        captured_prompts.append(messages[0]["content"])
+        return assistant_text("A calm night.")
+
+    services = _services(FakeLLM(responder=responder))
+    ctx = AgentCtx(chat_key="plain-room", user_id="p1", locale="en")
+
+    await run_kp_turn(ctx, services, build_kp_toolset(services), "我们聊聊天。")
+
+    i18n = services.i18n.with_locale("en")
+    assert i18n.t("prompt.module_fidelity") not in captured_prompts[-1]

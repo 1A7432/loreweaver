@@ -46,7 +46,7 @@ _UNIT_SECONDS = {
 # Advancing keeps the D/第 style and RECOMPUTES day+time, dropping the period word: the
 # narration re-adds flavor, while a stale "上午" carried past 21:00 would simply lie.
 _DAY_FACE_RE = re.compile(
-    r"^(?:[Dd](\d{1,4})|第(\d{1,4})[天日])\s*(?:[^\d\s:：]{1,3})?\s*(\d{1,2})[:：](\d{2})$"
+    r"^(?:[Dd](\d{1,4})|第(\d{1,4})[天日])\s*(?:[^\d\s:：]{1,3})?\s*(\d{1,2})[:：](\d{2})\s*(?:[^\d\s:：]{1,3})?$"
 )
 
 

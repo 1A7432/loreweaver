@@ -87,3 +87,12 @@ def test_iso_faces_still_advance_unchanged_behavior():
 
     advanced, ok = advance_game_time("2026-08-05 09:30", "+90分钟")
     assert (advanced, ok) == ("2026-08-05 11:00", True)
+
+
+def test_advance_day_face_tolerates_period_word_after_the_time():
+    from core.game_clock import advance_game_time
+
+    advanced, ok = advance_game_time("D1 09:00 上午", "+10分钟")
+    assert (advanced, ok) == ("D1 09:10", True)
+    advanced, ok = advance_game_time("第2天 23:30 深夜", "+1小时")
+    assert (advanced, ok) == ("第3天 00:30", True)

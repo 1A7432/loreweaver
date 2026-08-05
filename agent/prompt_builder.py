@@ -150,6 +150,17 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
     if engine is not None:
         mvu_tree = await _flush_template_writes(services, ctx.chat_key, engine, mvu_tree)
 
+    # Card-imported module rooms (`.import … world`) have no knowledge pool, so the pool
+    # section's keeper_discipline / module_fidelity blocks never fired for them — the
+    # model ran whole imported modules with NEITHER block in context (2026-08-05 round-3
+    # root cause: an invented faction, and every discipline clause silently inapplicable).
+    # Whenever world lore injects and the document section did not already carry the
+    # discipline, fold both blocks in directly ahead of the lore they govern.
+    if world_lore:
+        discipline = i18n.t("prompt.keeper_discipline")
+        if discipline not in document_context:
+            world_lore = "\n\n".join([discipline, i18n.t("prompt.module_fidelity"), world_lore])
+
     sections = [
         session_history,
         session_recap,
