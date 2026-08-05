@@ -37,8 +37,10 @@ from gateway.ops import (
     Botlist,
     PrivilegeLevel,
     get_enabled_panel_packs,
+    get_enabled_preset,
     get_enabled_skills,
     is_media_enabled,
+    set_enabled_preset,
     toggle_enabled_panel_pack,
     toggle_enabled_skill,
 )
@@ -935,6 +937,98 @@ class CommandRouter:
             return ctx.i18n.t("commands.skill.enable_done", id=skill_id)
         return ctx.i18n.t("commands.skill.disable_done", id=skill_id)
 
+    async def cmd_preset(self, ctx: CommandCtx) -> str:
+        """`.preset [list | import <path> | enable <id> | disable | show <id>]` — imported
+        SillyTavern completion presets as a per-room STYLE layer.
+
+        Listing/showing is open; `import` (reads a server-side file, same trust as a raw
+        `.import` path) and `enable`/`disable` (reshape the room's prompt) are keeper-only.
+        One preset per room: the prompt builder folds the enabled preset's effective
+        system prompts as a single bounded section (`core.preset.style_segments`); its
+        sampling params are REPORTED (`show`), not applied — engine sampling stays on the
+        operator's `.model` surface.
+        """
+        from pathlib import Path
+
+        from core.preset import effective_prompts, macro_report
+        from core.preset_store import (
+            list_preset_ids,
+            load_preset,
+            sanitize_preset_id,
+            save_preset_text,
+        )
+
+        parts = ctx.args.split(maxsplit=1)
+        sub = parts[0].casefold() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        store = ctx.services.store
+        data_dir = ctx.services.settings.data_dir
+
+        if sub in _LORE_IMPORT_WORDS:
+            if not _is_keeper(ctx.raw_ctx):
+                return ctx.i18n.t("preset.commands.denied")
+            if not rest:
+                return ctx.i18n.t("preset.commands.usage")
+            path = Path(rest).expanduser()
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError, ValueError):
+                return ctx.i18n.t("preset.commands.no_file", path=rest)
+            preset_id = sanitize_preset_id(path.name)
+            if not preset_id:
+                return ctx.i18n.t("preset.commands.usage")
+            try:
+                from core.preset import parse_st_preset
+
+                preset = parse_st_preset(text, preset_id)
+                save_preset_text(data_dir, preset_id, text)
+            except (ValueError, OSError) as exc:
+                return ctx.i18n.t("preset.commands.import_failed", error=str(exc))
+            return ctx.i18n.t(
+                "preset.commands.imported",
+                id=preset_id,
+                prompts=len(preset.prompts),
+                effective=len(effective_prompts(preset)),
+                warnings=len(preset.warnings),
+            )
+        if sub in _SKILL_ENABLE_WORDS:
+            if not _is_keeper(ctx.raw_ctx):
+                return ctx.i18n.t("preset.commands.denied")
+            preset_id = rest.strip()
+            if load_preset(data_dir, preset_id) is None:
+                return ctx.i18n.t("preset.commands.unknown", id=preset_id)
+            await set_enabled_preset(store, ctx.chat_key, preset_id)
+            return ctx.i18n.t("preset.commands.enabled", id=preset_id)
+        if sub in _SKILL_DISABLE_WORDS:
+            if not _is_keeper(ctx.raw_ctx):
+                return ctx.i18n.t("preset.commands.denied")
+            await set_enabled_preset(store, ctx.chat_key, "")
+            return ctx.i18n.t("preset.commands.disabled")
+        if sub in {"show", "查看"}:
+            preset = load_preset(data_dir, rest)
+            if preset is None:
+                return ctx.i18n.t("preset.commands.unknown", id=rest)
+            sampling = ", ".join(f"{key}={value}" for key, value in sorted(preset.sampling.items())) or "-"
+            macros = ", ".join(f"{name}×{count}" for name, count in list(macro_report(preset).items())[:8]) or "-"
+            return ctx.i18n.t(
+                "preset.commands.show",
+                id=rest,
+                name=preset.name,
+                prompts=len(preset.prompts),
+                effective=len(effective_prompts(preset)),
+                sampling=sampling,
+                macros=macros,
+                warnings=len(preset.warnings),
+            )
+        # list (default)
+        installed = list_preset_ids(data_dir)
+        if not installed:
+            return ctx.i18n.t("preset.commands.list_empty")
+        enabled_id = await get_enabled_preset(store, ctx.chat_key)
+        lines = [f"- {preset_id}" + (" ✓" if preset_id == enabled_id else "") for preset_id in installed]
+        status = enabled_id or ctx.i18n.t("preset.commands.none")
+        return ctx.i18n.t("preset.commands.list", items="\n".join(lines), enabled=status)
+
     async def cmd_panels(self, ctx: CommandCtx) -> str:
         """`.panels [list | enable <packId> | disable <packId>]` — admit an installed
         pack's module UI panels (M15) to this room, `.skill`-style: bare `.panels` /
@@ -1532,6 +1626,15 @@ class CommandRouter:
         # open so a player can still self-import their own uploaded card.
         if not from_attachment and not _is_keeper(ctx.raw_ctx):
             return ctx.i18n.t("rooms.denied")
+        if not from_attachment:
+            # Pack-relative convenience: `.import <packId>/cards/x.png` resolves against the
+            # newest installed `data_dir/packs/<id>@<version>/` (confined; falls through to
+            # the literal path when it isn't pack-shaped or nothing is installed).
+            from core.pack import resolve_installed_path
+
+            resolved = resolve_installed_path(ctx.services.settings.data_dir, file_path)
+            if resolved is not None:
+                file_path = str(resolved)
         system = "coc7"
         as_ = "pc"
         for token in options:
@@ -2270,6 +2373,17 @@ class CommandRouter:
                 ["pc", "角色池", "预设角色"],
                 None,
                 "pregen.commands.help",
+            ),
+            CommandSpec(
+                "preset",
+                self.cmd_preset,
+                ["preset"],
+                ["preset", "预设", "預設"],
+                None,
+                "preset.commands.help",
+                # `import` echoes server-side paths and parse errors; keep replies off
+                # the room bus.
+                private_reply=True,
             ),
             CommandSpec(
                 "module",

@@ -368,6 +368,24 @@ async def toggle_enabled_skill(store, chat_key: str, skill_id: str, *, on: bool)
         return enabled_ids
 
 
+_PRESET_ENABLED_PREFIX = "preset_enabled."
+
+
+async def get_enabled_preset(store, chat_key: str) -> str:
+    """The ONE imported-preset id enabled for this room (``""`` when none).
+
+    Unlike skills/panels this flag is a single id, not a list: a preset is a whole
+    style layer (`agent.prompt_builder` folds exactly one), so enabling a second one
+    replaces the first. Same degrade-to-empty stance as every other room flag."""
+    raw = await store.get(store_key=f"{_PRESET_ENABLED_PREFIX}{chat_key}")
+    return str(raw or "").strip()
+
+
+async def set_enabled_preset(store, chat_key: str, preset_id: str) -> None:
+    """Set (or clear, with ``""``) the room's enabled preset id."""
+    await store.set(store_key=f"{_PRESET_ENABLED_PREFIX}{chat_key}", value=str(preset_id or "").strip())
+
+
 async def get_enabled_panel_packs(store, chat_key: str) -> list[str]:
     """Pack ids whose UI panels are enabled for `chat_key`'s room (`[]` if unset/corrupt).
 

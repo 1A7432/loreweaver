@@ -1,0 +1,15 @@
+{
+  "preset.commands.help": "Imported ST completion presets as a room style layer: .preset [list] | import <server file> | enable <id> | disable | show <id>. One preset per room; sampling params are reported, not applied.",
+  "preset.commands.usage": "Usage: .preset [list] | import <server file> | enable <id> | disable | show <id>",
+  "preset.commands.denied": "Only an authenticated Keeper can import or switch presets (they reshape the room's prompt).",
+  "preset.commands.no_file": "Could not read a preset file at {path}.",
+  "preset.commands.import_failed": "Preset import failed: {error}",
+  "preset.commands.imported": "Imported preset “{id}”: {prompts} prompt(s), {effective} effective, {warnings} warning(s). Enable with `.preset enable {id}`.",
+  "preset.commands.unknown": "No installed preset named “{id}” (see `.preset list`).",
+  "preset.commands.enabled": "Preset “{id}” is now this room's style layer.",
+  "preset.commands.disabled": "Preset style layer disabled for this room.",
+  "preset.commands.none": "none",
+  "preset.commands.list_empty": "No presets installed. A keeper imports one with `.preset import <server file>`.",
+  "preset.commands.list": "Installed presets (✓ = enabled here, room: {enabled}):\n{items}",
+  "preset.commands.show": "Preset “{id}” ({name}): {prompts} prompt(s), {effective} effective; sampling: {sampling}; macros: {macros}; warnings: {warnings}."
+}

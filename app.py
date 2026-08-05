@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import signal
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 from adapters.cli.adapter import CliAdapter
@@ -104,6 +106,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="store_true")
     parser.add_argument("--pack", metavar="SRC_DIR")
     parser.add_argument("--out", metavar="PACK_FILE")
+    # Machine-readable `--pack` result on stdout (the studio pack wizard's interface);
+    # every human-facing line already goes to stderr, so stdout stays exactly one object.
+    parser.add_argument("--json", action="store_true")
     parser.add_argument("--install", metavar="REF")
     parser.add_argument("--yes", action="store_true")
     parser.add_argument("--host", default=DEFAULT_TUI_HOST)
@@ -298,13 +303,35 @@ def _print_trust_card(i18n: I18n, manifest: core_pack.PackManifest, locale: str)
 
 
 def _run_pack(i18n: I18n, args: argparse.Namespace) -> int:
-    """`--pack SRC_DIR [--out FILE]`: validate a pack source tree with the real engine
-    parsers and emit a byte-deterministic `.lwpack` (see `core.pack.build_pack`)."""
+    """`--pack SRC_DIR [--out FILE] [--json]`: validate a pack source tree with the real
+    engine parsers and emit a byte-deterministic `.lwpack` (see `core.pack.build_pack`).
+
+    With `--json`, stdout carries exactly ONE machine-readable result object — success:
+    ``{"ok": true, "path", "id", "version", "sha256", "trust"}``; failure:
+    ``{"ok": false, "error"}`` — while the localized human lines (including the trust
+    card) stay on stderr. JSON keys/values are data, not UI text (i18n-exempt)."""
     try:
         built = core_pack.build_pack(Path(args.pack), Path(args.out) if args.out else None)
     except core_pack.PackError as exc:
+        if args.json:
+            print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
         print(i18n.t("pack.build.failed", error=str(exc)), file=sys.stderr)
         return 1
+    if args.json:
+        trust = asdict(built.manifest.trust) if built.manifest.trust is not None else None
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "path": str(built.path),
+                    "id": built.manifest.id,
+                    "version": built.manifest.version,
+                    "sha256": built.sha256,
+                    "trust": trust,
+                },
+                ensure_ascii=False,
+            )
+        )
     print(
         i18n.t(
             "pack.build.done",

@@ -1055,3 +1055,52 @@ def install_pack(
             raise
 
     return report
+
+
+def resolve_installed_path(data_dir: Path | str, ref: str) -> Path | None:
+    """Resolve a pack-relative ref — ``<packId>/<relative path>`` — against the newest
+    installed ``data_dir/packs/<id>@<version>/`` directory.
+
+    The keeper-facing convenience behind ``.import blackmoor/cards/keeper.png``: installed
+    packs land under versioned dirs (see :func:`install_pack`), and retyping the full
+    server-side path is the friction this removes. Returns the confined absolute path, or
+    ``None`` whenever the ref is not pack-shaped (no ``/``, first segment not a pack slug),
+    no such pack is installed, the relative part escapes the pack dir (``..``, absolute,
+    symlink out — resolved before comparison), or it names no regular file. Deliberately
+    never raises: callers fall back to treating ``ref`` as an ordinary path. "Newest" is
+    the highest ``MAJOR.MINOR.PATCH`` numeric triple (the manifest schema's semver shape),
+    full dir-name string as the tiebreak.
+    """
+    text = str(ref).strip()
+    if "/" not in text:
+        return None
+    pack_id, _, rest = text.partition("/")
+    rest = rest.strip()
+    if not _SLUG_RE.match(pack_id) or not rest:
+        return None
+    packs_dir = Path(data_dir) / "packs"
+    try:
+        candidates = [
+            entry
+            for entry in packs_dir.iterdir()
+            if entry.is_dir() and entry.name.startswith(f"{pack_id}@")
+        ]
+    except OSError:
+        return None
+
+    def version_key(entry: Path) -> tuple[tuple[int, int, int], str]:
+        version = entry.name.partition("@")[2]
+        numbers = re.match(r"^(\d{1,6})\.(\d{1,6})\.(\d{1,6})", version)
+        triple = tuple(int(part) for part in numbers.groups()) if numbers else (0, 0, 0)
+        return (triple, entry.name)  # type: ignore[return-value]
+
+    for pack_dir in sorted(candidates, key=version_key, reverse=True):
+        base = pack_dir.resolve()
+        try:
+            target = (pack_dir / rest).resolve(strict=True)
+            target.relative_to(base)
+        except (OSError, ValueError):
+            continue
+        if target.is_file():
+            return target
+    return None

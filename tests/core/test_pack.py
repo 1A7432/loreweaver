@@ -520,3 +520,56 @@ def test_panels_file_declared_but_missing_asset_fails_build(tmp_path: Path):
     (src / "ui/manor-map/app.js").unlink()
     with pytest.raises(PackError, match="asset missing"):
         build_pack(src, tmp_path / "panels.lwpack")
+
+
+# ---------------------------------------------------------------------------
+# resolve_installed_path — pack-relative `.import` refs
+# ---------------------------------------------------------------------------
+
+
+def _installed(tmp_path, name, files=("cards/hero.png",)):
+    pack_dir = tmp_path / "packs" / name
+    for rel in files:
+        target = pack_dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"x")
+    return pack_dir
+
+
+def test_resolve_installed_path_picks_newest_version(tmp_path):
+    from core.pack import resolve_installed_path
+
+    _installed(tmp_path, "blackmoor@1.2.0")
+    newest = _installed(tmp_path, "blackmoor@1.10.0")
+    resolved = resolve_installed_path(tmp_path, "blackmoor/cards/hero.png")
+    assert resolved == (newest / "cards/hero.png").resolve()
+
+
+def test_resolve_installed_path_rejects_traversal_and_non_pack_refs(tmp_path):
+    from core.pack import resolve_installed_path
+
+    _installed(tmp_path, "blackmoor@1.0.0")
+    (tmp_path / "secret.txt").write_text("nope")
+    assert resolve_installed_path(tmp_path, "blackmoor/../secret.txt") is None
+    assert resolve_installed_path(tmp_path, "blackmoor/../../etc/passwd") is None
+    assert resolve_installed_path(tmp_path, "no-slash-ref") is None
+    assert resolve_installed_path(tmp_path, "Not_A_Slug/cards/hero.png") is None
+    assert resolve_installed_path(tmp_path, "blackmoor/") is None
+    assert resolve_installed_path(tmp_path, "ghost/cards/hero.png") is None
+
+
+def test_resolve_installed_path_requires_a_regular_file(tmp_path):
+    from core.pack import resolve_installed_path
+
+    _installed(tmp_path, "blackmoor@1.0.0")
+    assert resolve_installed_path(tmp_path, "blackmoor/cards") is None  # a directory
+    assert resolve_installed_path(tmp_path, "blackmoor/cards/missing.png") is None
+
+
+def test_resolve_installed_path_falls_back_across_versions_missing_the_file(tmp_path):
+    from core.pack import resolve_installed_path
+
+    old = _installed(tmp_path, "blackmoor@1.0.0", files=("cards/hero.png", "cards/old.png"))
+    _installed(tmp_path, "blackmoor@2.0.0", files=("cards/hero.png",))
+    resolved = resolve_installed_path(tmp_path, "blackmoor/cards/old.png")
+    assert resolved == (old / "cards/old.png").resolve()

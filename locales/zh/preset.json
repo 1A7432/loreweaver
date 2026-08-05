@@ -1,0 +1,15 @@
+{
+  "preset.commands.help": "导入的 ST 预设作为房间风格层：.preset [list] | import <服务器文件> | enable <id> | disable | show <id>。每房间一个预设；采样参数只报告、不应用。",
+  "preset.commands.usage": "用法：.preset [list] | import <服务器文件> | enable <id> | disable | show <id>",
+  "preset.commands.denied": "只有已认证的守秘人可以导入或切换预设（它会重塑本房间的提示词）。",
+  "preset.commands.no_file": "无法读取预设文件：{path}。",
+  "preset.commands.import_failed": "预设导入失败：{error}",
+  "preset.commands.imported": "已导入预设「{id}」：{prompts} 条 prompt，生效 {effective} 条，警告 {warnings} 条。用 `.preset enable {id}` 启用。",
+  "preset.commands.unknown": "没有名为「{id}」的已安装预设（见 `.preset list`）。",
+  "preset.commands.enabled": "预设「{id}」已成为本房间的风格层。",
+  "preset.commands.disabled": "已关闭本房间的预设风格层。",
+  "preset.commands.none": "无",
+  "preset.commands.list_empty": "尚未安装任何预设。守秘人可用 `.preset import <服务器文件>` 导入。",
+  "preset.commands.list": "已安装预设（✓ = 本房间启用，当前：{enabled}）：\n{items}",
+  "preset.commands.show": "预设「{id}」（{name}）：{prompts} 条 prompt，生效 {effective} 条；采样：{sampling}；宏：{macros}；警告 {warnings} 条。"
+}

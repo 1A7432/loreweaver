@@ -58,6 +58,8 @@ from core.ejs_full import create_full_engine
 from core.ejs_lite import MacroContext
 from core.modvars import ModvarManager
 from core.mvu_compat import MvuManager, apply_set, flatten_leaves
+from core.preset import style_segments
+from core.preset_store import load_preset
 from core.prompt_sections import (
     inject_document_context_prompt,
     inject_game_state_prompt,
@@ -137,6 +139,15 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
         await inject_interaction_style_prompt(ctx, i18n),
     ]
 
+    # Imported-preset style layer (`.preset enable <id>`): folded right after the six
+    # sections so keeper-enabled skills (below) still read as the stronger directive.
+    # One bounded section — iron rule #5 (single prompt injection) stays intact: the
+    # preset shapes style/framework, structurally after (never inside) the state and
+    # secrecy sections above.
+    preset_section = await _enabled_preset_section(ctx, services, i18n)
+    if preset_section:
+        sections.append(preset_section)
+
     # Event-hook inject() texts for THIS turn (Layer C — agent.hook_runtime stashes them on
     # ctx.extra before this build; consumed per turn, never persisted).
     hook_injections = [text for text in (extra.get("hook_injections") or []) if isinstance(text, str)]
@@ -210,6 +221,32 @@ async def _flush_template_writes(services: Services, chat_key: str, engine, mvu_
             continue
     await MvuManager(services.store).save(chat_key, mvu_tree)
     return mvu_tree
+
+
+async def _enabled_preset_section(ctx: AgentCtx, services: Services, i18n) -> str:
+    """The imported-preset style layer for this room, or ``""``.
+
+    Reads the ``preset_enabled.<chat_key>`` flag inline off the store (the same
+    layering rule as the skills block below: never import ``gateway.ops``), loads the
+    preset via `core.preset_store.load_preset`, and joins the non-marker text runs of
+    `core.preset.style_segments` (v0 marker policy: markers are boundaries only — the
+    finer marker→section mapping can land once real presets demand it; the fold is
+    already size-capped inside ``style_segments``). Contributes nothing when no preset
+    is enabled or the file is missing/broken — a bad preset never breaks a turn."""
+    try:
+        raw = await services.store.get(store_key=f"preset_enabled.{ctx.chat_key}")
+    except Exception:
+        return ""
+    preset_id = str(raw or "").strip()
+    if not preset_id:
+        return ""
+    preset = load_preset(services.settings.data_dir, preset_id)
+    if preset is None:
+        return ""
+    texts = [text for slot, text in style_segments(preset) if slot is None and text]
+    if not texts:
+        return ""
+    return i18n.t("prompt.preset_header") + "\n\n" + "\n\n".join(texts)
 
 
 async def _enabled_skill_bodies(ctx: AgentCtx, services: Services) -> list[str]:
