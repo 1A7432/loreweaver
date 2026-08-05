@@ -353,7 +353,8 @@ class WorldbookManager:
         """
         context = context_text or ""
         rng = rng or _RNG
-        entries = [entry for entry in await self.list(chat_key) if entry.enabled]
+        all_entries = await self.list(chat_key)
+        entries = [entry for entry in all_entries if entry.enabled]
         timers = await self._load_timers(chat_key)
         turn = int(timers.get("turn", 0)) + (1 if advance_timers else 0)
         timer_entries = timers.get("entries", {})
@@ -383,7 +384,19 @@ class WorldbookManager:
                 selected[entry.id] = entry
 
         if active_variants:
-            _filter_sole_active_constants(selected, entries, active_variants, sticky_ids)
+            # Families build over ALL constant entries — enabled or not. An ST card's file
+            # carries the author's LAST panel toggle state (round-3 live finding: the card
+            # shipped 大侦探线 enabled and every other route disabled, so an enabled-only
+            # family had one member and the filter no-opped all game). The room's variable
+            # tree is the runtime authority and overrides that snapshot BOTH ways: matched
+            # members inject even when file-disabled, non-matched drop even when enabled.
+            drop_ids, resurrect = _resolve_sole_active(all_entries, active_variants)
+            for entry_id in drop_ids:
+                if entry_id not in sticky_ids:
+                    selected.pop(entry_id, None)
+            for entry in resurrect:
+                if entry.id not in selected and _timer_eligible(entry):
+                    selected[entry.id] = entry
 
         for entry in await self._semantic_hits(chat_key, context, limit=limit):
             if entry.id in selected:
@@ -596,6 +609,22 @@ def scrub_frontend_templates(text: str) -> str:
     return cleaned.strip()
 
 
+def _is_frontend_residue(content: str) -> bool:
+    """Whether `content` carries NO prompt meaning once frontend templates are scrubbed:
+    nothing left, or only separator rules (``---`` and friends) and blank lines. Round-3
+    live finding: a template entry's leading ``---`` survived the scrub, so the entry
+    kept re-occupying an injection slot to render one inert divider line."""
+    remainder = scrub_frontend_templates(content)
+    if not remainder:
+        return True
+    if remainder == content:
+        return False  # nothing was scrubbed — a plain divider entry is the author's own
+    return all(
+        not line.strip() or re.fullmatch(r"[-=_*·—]{3,}", line.strip())
+        for line in remainder.splitlines()
+    )
+
+
 def render_entry_content(entry: LoreEntry, resolve: Any = None, engine: Any = None, macros: Any = None) -> str:
     """Render one entry's content for prompt injection.
 
@@ -722,23 +751,26 @@ def _resolve_inclusion_groups(
 _VARIANT_SEPARATOR = "·"
 
 
-def _filter_sole_active_constants(
-    selected: dict[str, LoreEntry],
+def _resolve_sole_active(
     all_entries: list[LoreEntry],
     active_variants: Any,
-    sticky_ids: set[str],
-) -> None:
-    """Keep only the variant the room's variables name, per mutually-exclusive family.
+) -> tuple[set[str], list[LoreEntry]]:
+    """Resolve mutually-exclusive constant families against the room's variable values.
 
-    A family = ≥2 CONSTANT entries whose titles share a ``前缀·`` prefix. When any of the
-    room's string variable values equals one member's variant name (配置.路线 = "主线" →
-    路线·主线), the other members drop from `selected`. FAIL-OPEN by family: no value
-    matching any member's variant → that family keeps all members (modules without a
-    matching tracker keep the old priority behavior). Sticky-active members never drop —
-    they already earned their slot."""
+    A family = ≥2 CONSTANT entries — **enabled or disabled** — whose titles share a
+    ``前缀·`` prefix. When any of the room's string variable values equals one member's
+    variant name (配置.路线 = "主线" → 路线·主线), returns ``(drop_ids, resurrect)``:
+    every OTHER member's id to drop, and the matched members themselves so the caller can
+    inject them even when the card file left them panel-disabled (the file's enabled
+    flags are the author's last SillyTavern toggle snapshot; the variable tree is the
+    runtime authority). FAIL-OPEN by family: no value matching any member → that family
+    contributes nothing to either set (file behavior stands). Callers still apply timer
+    eligibility to resurrected members and never drop sticky-active winners."""
     values = {str(value).strip() for value in active_variants if str(value).strip()}
+    drop_ids: set[str] = set()
+    resurrect: list[LoreEntry] = []
     if not values:
-        return
+        return drop_ids, resurrect
     families: dict[str, list[LoreEntry]] = {}
     for entry in all_entries:
         if not entry.constant:
@@ -749,16 +781,17 @@ def _filter_sole_active_constants(
     for members in families.values():
         if len(members) < 2:
             continue
-        matched_ids = {
-            entry.id
+        matched = [
+            entry
             for entry in members
             if entry.title.partition(_VARIANT_SEPARATOR)[2].strip() in values
-        }
-        if not matched_ids:
+        ]
+        if not matched:
             continue
-        for entry in members:
-            if entry.id not in matched_ids and entry.id not in sticky_ids:
-                selected.pop(entry.id, None)
+        matched_ids = {entry.id for entry in matched}
+        drop_ids.update(entry.id for entry in members if entry.id not in matched_ids)
+        resurrect.extend(matched)
+    return drop_ids, resurrect
 
 
 def _cap_entries(entries: list[LoreEntry], budget_chars: int) -> list[LoreEntry]:
@@ -838,10 +871,10 @@ def _normalize_import_entry(raw: dict[str, Any], *, source: str, index: int, is_
     if _RENDER_ONLY_TITLE_RE.match(title):
         enabled = False
     # Pure frontend-template entries (e.g. `<status_current_variables>{{format_message_
-    # variable::stat_data}}</status_current_variables>`) have no prompt meaning at all —
-    # import them disabled so they never occupy an injection slot; mixed content stays
-    # enabled and gets scrubbed at render instead.
-    if content and not scrub_frontend_templates(content):
+    # variable::stat_data}}</status_current_variables>`, possibly wrapped in `---`
+    # separators) have no prompt meaning at all — import them disabled so they never
+    # occupy an injection slot; mixed content stays enabled and gets scrubbed at render.
+    if content and _is_frontend_residue(content):
         enabled = False
     title = _GENERATE_TITLE_RE.sub("", title) or f"{source or 'Lore'} {index}"
 

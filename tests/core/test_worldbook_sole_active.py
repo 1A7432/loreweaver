@@ -101,3 +101,55 @@ async def test_pure_template_entry_imports_disabled_and_never_injects():
 
     chosen = await manager.match("room", "", role="keeper", rng=random.Random(1))
     assert {entry.title for entry in chosen} == {"正经规则"}
+
+
+async def test_tree_value_overrides_the_card_files_panel_snapshot():
+    """Round-3 live finding: real cards ship the author's LAST panel toggle state — the
+    wrong variant enabled, every other member disabled. Enabled-only family building made
+    the filter a no-op. The variable tree is the runtime authority BOTH ways: the matched
+    member injects even when file-disabled, the enabled non-match drops."""
+    manager = WorldbookManager(Store(":memory:"))
+    await manager.add("room", _entry("路线·大侦探线", priority=75))  # file default: enabled
+    disabled = _entry("路线·主线", priority=71)
+    disabled.enabled = False  # the card's panel snapshot left it off
+    await manager.add("room", disabled)
+
+    chosen = await manager.match(
+        "room", "", role="keeper", rng=random.Random(1), active_variants={"主线"}
+    )
+    titles = {entry.title for entry in chosen}
+    assert "路线·主线" in titles  # resurrected by the tree value
+    assert "路线·大侦探线" not in titles  # file-enabled but not the module state
+
+
+async def test_disabled_members_do_not_resurrect_without_a_matching_value():
+    manager = WorldbookManager(Store(":memory:"))
+    await manager.add("room", _entry("路线·大侦探线", priority=75))
+    disabled = _entry("路线·主线", priority=71)
+    disabled.enabled = False
+    await manager.add("room", disabled)
+
+    chosen = await manager.match(
+        "room", "", role="keeper", rng=random.Random(1), active_variants={"无关值"}
+    )
+    titles = {entry.title for entry in chosen}
+    assert titles == {"路线·大侦探线"}  # fail-open: the file snapshot stands
+
+
+async def test_residue_wrapped_in_separators_still_imports_disabled():
+    manager = WorldbookManager(Store(":memory:"))
+    payload = {
+        "entries": [
+            {
+                "title": "变量列表",
+                "content": "---\n<status_current_variables>\n{{format_message_variable::stat_data}}\n</status_current_variables>",
+                "keys": [],
+                "constant": True,
+            },
+            {"title": "纯分隔线条目", "content": "---", "keys": [], "constant": True},
+        ]
+    }
+    await manager.import_entries("room", payload, source="card", is_keeper=True)
+    by_title = {entry.title: entry for entry in await manager.list("room")}
+    assert by_title["变量列表"].enabled is False  # separator残渣 counts as residue
+    assert by_title["纯分隔线条目"].enabled is True  # an author's own divider is NOT residue
