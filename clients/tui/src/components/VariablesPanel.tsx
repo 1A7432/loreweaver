@@ -14,6 +14,15 @@ export interface VariablesPanelProps {
 // label + value room inside the 24–32-col sidebar before `truncate` kicks in.
 const VARIABLE_BAR_WIDTH = 6
 
+// A keeper-only (not-yet-`.var expose`d) imported-card leaf is prefixed with a lock and
+// drawn dim, per the protocol's "render hidden rows visually locked/dimmed, never as
+// player data". Only keeper connections ever receive one — players are filtered
+// server-side — but on the keeper's own screen an unexposed module internal must never
+// look like something the table can already see. Single-width BMP glyph like the
+// panel's other markers (✓/✗) — an emoji lock would be double-width and terminal
+// support for its advance width is inconsistent.
+const HIDDEN_GLYPH = "⊘"
+
 /** A "number" variable renders a bar only when the server bounded it (both ends). */
 export function isBounded(variable: ModuleVariable): boolean {
   return variable.kind === "number" && typeof variable.min === "number" && typeof variable.max === "number"
@@ -25,7 +34,7 @@ export function isBounded(variable: ModuleVariable): boolean {
  * everything else is a `label: value` one-liner. Label and value are untrusted
  * server text — control characters are stripped like every other panel does. */
 export function variableLine(variable: ModuleVariable, locale?: string): string {
-  const label = stripControlChars(variable.label)
+  const label = `${variable.hidden ? HIDDEN_GLYPH : ""}${stripControlChars(variable.label)}`
   if (variable.kind === "bool") {
     return variable.value
       ? `${label} ✓ ${tt(locale, "vars.yes")}`
@@ -51,7 +60,7 @@ export function VariablesPanel({ variables, theme, locale }: VariablesPanelProps
     <box flexDirection="column" border borderColor={theme.border} paddingX={1} flexShrink={0}>
       <text fg={theme.accent} wrapMode="none" truncate>{tt(locale, "vars.title")}</text>
       {variables.map((variable) => (
-        <text key={variable.id} fg={theme.fg} wrapMode="none" truncate>
+        <text key={variable.id} fg={variable.hidden ? theme.dim : theme.fg} wrapMode="none" truncate>
           {variableLine(variable, locale)}
         </text>
       ))}

@@ -145,7 +145,14 @@ export function resolvePanelBlocks(
   variables: ModuleVariable[] | undefined,
   locale?: string,
 ): UiBlock[] {
-  const visible = variables ?? []
+  // `hidden` variables are dropped BEFORE any binding resolves, so a `$var` pointing at
+  // one misses and fail-closes its whole block, and `repeat` never instantiates over
+  // one. Protocol: "the variable being absent/hidden for this viewer omits the WHOLE
+  // block"; `repeat` expands "one instance per VISIBLE variable". Hidden leaves only
+  // reach keeper connections (an imported-card MVU leaf before `.var expose`), so this
+  // is not a player-facing leak — but a pack-authored panel must not be able to surface
+  // un-exposed module internals as ordinary panel content on any screen.
+  const visible = (variables ?? []).filter((entry) => !entry.hidden)
   const resolved: UiBlock[] = []
   for (const block of blocks ?? []) {
     if ("repeat" in block) {

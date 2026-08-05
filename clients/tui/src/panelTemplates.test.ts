@@ -81,3 +81,44 @@ describe("resolvePanelBlocks", () => {
     expect(resolvePanelBlocks(blocks, VARS, "en")).toEqual([{ kind: "badge", label: "Hot" }])
   })
 })
+
+// An imported card's MVU leaves reach a KEEPER connection flagged `hidden: true` until
+// `.var expose`. The wire filter is the choke point for players, but a pack-authored
+// panel template must not be able to render an un-exposed module internal as ordinary
+// panel content on any screen: protocol says a variable "absent/hidden for this viewer
+// omits the WHOLE block", and `repeat` expands over VISIBLE variables only.
+describe("hidden imported-card leaves are fail-closed", () => {
+  const KEEPER_VARS: ModuleVariable[] = [
+    { id: "mvu.酒馆.声望", label: "酒馆.声望", kind: "number", value: 34 },
+    { id: "mvu.内部.剧本阶段", label: "内部.剧本阶段", kind: "text", value: "第二幕", hidden: true },
+    { id: "mvu.内部.真凶", label: "内部.真凶", kind: "text", value: "掌柜的兄长", hidden: true },
+  ]
+
+  test("a $var bound to a hidden leaf omits its whole block", () => {
+    const blocks: PanelTemplateBlock[] = [
+      { kind: "stat", label: { zh: "阶段" }, value: { $var: "mvu.内部.剧本阶段" } },
+      { kind: "stat", label: { zh: "声望" }, value: { $var: "mvu.酒馆.声望" } },
+    ]
+    // The visible leaf resolves; the hidden one drops entirely rather than rendering.
+    expect(resolvePanelBlocks(blocks, KEEPER_VARS, "zh")).toEqual([{ kind: "stat", label: "声望", value: 34 }])
+  })
+
+  test("a hidden leaf cannot leak through a label, a meter bound, or a choice option", () => {
+    const blocks: PanelTemplateBlock[] = [
+      { kind: "badge", label: { $var: "mvu.内部.真凶" } },
+      { kind: "meter", label: { zh: "阶段" }, value: { $var: "mvu.内部.剧本阶段" }, min: 0, max: 10 },
+      { kind: "choices", options: [{ id: "a", label: { $var: "mvu.内部.真凶" }, input: "x" }] },
+      { kind: "text", text: { $var: "mvu.内部.剧本阶段" } },
+    ]
+    expect(resolvePanelBlocks(blocks, KEEPER_VARS, "zh")).toEqual([])
+    expect(JSON.stringify(resolvePanelBlocks(blocks, KEEPER_VARS, "zh"))).not.toContain("兄长")
+  })
+
+  test("repeat expands over visible leaves only", () => {
+    const blocks: PanelTemplateBlock[] = [
+      { repeat: { prefix: "mvu.", block: { kind: "badge", label: { $leaf: "label" } } } },
+    ]
+    // Three leaves share the prefix; only the exposed one instantiates.
+    expect(resolvePanelBlocks(blocks, KEEPER_VARS, "zh")).toEqual([{ kind: "badge", label: "酒馆.声望" }])
+  })
+})

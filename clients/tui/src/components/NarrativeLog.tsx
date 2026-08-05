@@ -76,6 +76,39 @@ function diceLine(frame: DiceFrame, revealTicks: number): string {
   return stripControlChars(`${prefix} ${frame.actor} ${frame.expr} ${frame.total}${target}${outcome}`)
 }
 
+// Markdown image syntax, e.g. `![alt](https://host/path.png)`. Alt text stops at the
+// first `]`, the target at the first `)` — enough for the `![alt](url)` an imported
+// card's CG line emits, and it degrades to "leave the text alone" on anything odder.
+const MARKDOWN_IMAGE = /!\[([^\]]*)\]\([^)]*\)/g
+const FENCE = /^\s*(?:```|~~~)/
+
+/** Rewrite markdown images to a labelled text placeholder before the renderer sees
+ * them. A terminal cannot fetch a remote CG, and OpenTUI's markdown renderer drops
+ * the URL and prints the BARE alt text (or the hardcoded English word "image" when
+ * the alt is empty) — so a card's illustration line reads as a stray sentence of
+ * narration. `[图] alt` keeps it honest and stays literal through the parser (an
+ * undefined shortcut reference renders as-is). Fenced code is left untouched.
+ * Exported so tests can pin the formatting without a renderer. */
+export function imagePlaceholders(text: string, locale?: string): string {
+  if (!text.includes("![")) return text
+  const tag = tt(locale, "log.image")
+  let fenced = false
+  return text
+    .split("\n")
+    .map((line) => {
+      if (FENCE.test(line)) {
+        fenced = !fenced
+        return line
+      }
+      if (fenced) return line
+      return line.replace(MARKDOWN_IMAGE, (_match, alt: string) => {
+        const label = alt.trim()
+        return label ? `[${tag}] ${label}` : `[${tag}]`
+      })
+    })
+    .join("\n")
+}
+
 function speakerLabel(frame: NarrativeFrame): string {
   if (frame.speaker === "kp") return "KP"
   if (frame.speaker === "npc") return frame.name ? `[${stripControlChars(frame.name)}]` : "[NPC]"
@@ -197,7 +230,12 @@ export function NarrativeLog({
             return (
               <box key={`${frame.type}-${frame.id}-${index}`} flexDirection="column" width="100%">
                 <text fg={theme.dim}>{speakerLabel(frame)}</text>
-                <markdown content={stripControlChars(frame.text)} fg={theme.kp} syntaxStyle={narrativeSyntaxStyle} streaming={!frame.done} />
+                <markdown
+                  content={imagePlaceholders(stripControlChars(frame.text), locale)}
+                  fg={theme.kp}
+                  syntaxStyle={narrativeSyntaxStyle}
+                  streaming={!frame.done}
+                />
               </box>
             )
           }

@@ -75,3 +75,8 @@ scripts/play_tui.sh
 
 # live behavioral-eval transcripts and summaries (local evidence, never publish)
 eval-logs/
+
+# hostLocal test artifacts (clients/tui bun test spins a local server at repo root)
+.keys.toml.lock
+iroh-secret.key
+iroh-ticket.txt

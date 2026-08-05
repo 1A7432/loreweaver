@@ -4,6 +4,7 @@ import { act } from "react"
 import type { UiFrame } from "loreweaver-protocol"
 import { themes } from "../themes"
 import { badgeLine, meterLine, statLine, UiBlocksView } from "./UiBlocks"
+import { UiPanel } from "./UiPanel"
 
 const theme = themes.lamplight
 
@@ -84,6 +85,89 @@ describe("UiBlocksView", () => {
     await act(async () => mockInput.pressArrow("down"))
     await act(async () => mockInput.pressEnter())
     expect(picked).toEqual(["I open the door"])
+    act(() => renderer.destroy())
+  })
+})
+
+// The shared rendering path for an imported card's hook-emitted UI: CJK labels, and
+// authored option text far longer than the English fixtures above.
+describe("UiBlocksView with imported-card CJK content", () => {
+  const CHOICES: UiFrame = {
+    type: "ui",
+    panel: "inline",
+    blocks: [
+      { kind: "badge", label: "第二幕·雨夜", tone: "warn" },
+      { kind: "meter", label: "月雅好感", value: 12, min: 0, max: 100 },
+      { kind: "stat", label: "酒馆声望", value: "尚可" },
+      { kind: "text", text: "檐角的雨声忽然停了。", style: "quote" },
+      {
+        kind: "choices",
+        prompt: "你要如何应对",
+        options: [
+          { id: "a", label: "推门查看", input: "我推门查看" },
+          { id: "b", label: "假装没听见", input: "我继续擦柜台" },
+          { id: "c", label: "点亮门口的灯笼", input: "我点灯" },
+          { id: "d", label: "退回后厨", input: "我退回后厨" },
+        ],
+      },
+    ],
+  }
+
+  test("every authored option stays visible in the interactive select", async () => {
+    // Regression: OpenTUI's select spends a second row per item while descriptions are
+    // on, so a height of `options.length` showed only HALF an authored menu — a
+    // four-way card choice rendered as two, with no hint the rest existed.
+    const { renderer, flush, captureCharFrame } = await testRender(
+      <UiBlocksView frame={CHOICES} theme={theme} locale="zh" interactive={{ focused: true, onPick: () => {} }} />,
+      { width: 40, height: 16 },
+    )
+    await flush()
+
+    const text = captureCharFrame()
+    for (const label of ["推门查看", "假装没听见", "点亮门口的灯笼", "退回后厨"]) {
+      expect(text).toContain(label)
+    }
+    expect(text).toContain("[第二幕·雨夜]")
+    expect(text).toContain("月雅好感 ▒░░░░░ 12/100")
+    expect(text).toContain("酒馆声望: 尚可")
+    expect(text).toContain("❝ 檐角的雨声忽然停了。")
+
+    act(() => renderer.destroy())
+  })
+
+  test("over-long CJK blocks truncate one-per-line through the real sidebar panel", async () => {
+    // Mounted the way GameView mounts it (UiPanel's bordered, padded, flexShrink=0
+    // box) — a bare UiBlocksView with no width owner squashes its rows together, so
+    // asserting layout on one would only measure the harness.
+    const width = 32
+    const long: UiFrame = {
+      type: "ui",
+      panel: "sidebar",
+      blocks: [
+        { kind: "stat", label: "一个相当冗长的中文状态名", value: "同样冗长的中文取值内容" },
+        { kind: "badge", label: "一个塞不进侧栏的中文徽标文本" },
+        { kind: "meter", label: "同样很长的中文计量名", value: 3, min: 0, max: 10 },
+        { kind: "choices", prompt: "你要如何应对", options: [{ id: "a", label: "一个长到必须截断的中文选项", input: "x" }] },
+      ],
+    }
+    const { renderer, flush, captureCharFrame } = await testRender(
+      <UiPanel regions={[long]} theme={theme} locale="zh" />,
+      { width, height: 14 },
+    )
+    await flush()
+
+    const lines = captureCharFrame().split("\n").filter((line) => line.trim())
+    // 2 borders + title + stat + badge + meter + the choices block's prompt and its
+    // one option: every block on its own line, nothing composited, nothing dropped.
+    expect(lines.length).toBe(8)
+    expect(lines.some((line) => line.includes("你要如何应对"))).toBe(true)
+    // KNOWN LIMITATION, pinned so it cannot get worse: OpenTUI's `truncate` cuts on a
+    // character boundary, so a line ending on a double-width CJK glyph can run ONE
+    // column past the panel and push its right border out. Everything else fits.
+    const widths = lines.map((line) => Bun.stringWidth(line))
+    expect(Math.max(...widths)).toBeLessThanOrEqual(width + 1)
+    expect(widths.filter((value) => value > width).length).toBeLessThanOrEqual(2)
+
     act(() => renderer.destroy())
   })
 })

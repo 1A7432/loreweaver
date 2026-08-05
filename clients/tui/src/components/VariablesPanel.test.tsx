@@ -154,3 +154,60 @@ describe("VariablesPanel rendering", () => {
     act(() => renderer.destroy())
   })
 })
+
+// An imported SillyTavern module card lands its MVU state as dozens of dotted,
+// CJK-labelled leaves. On a KEEPER connection the ones not yet `.var expose`d arrive
+// flagged `hidden: true` (protocol v1.9); a player connection never receives them.
+describe("VariablesPanel imported-card MVU leaves", () => {
+  const LEAVES: ModuleVariable[] = [
+    { id: "mvu.世界.日", label: "世界.日", kind: "number", value: 2 },
+    { id: "mvu.世界.时辰", label: "世界.时辰", kind: "text", value: "酉时" },
+    { id: "mvu.酒馆.声望", label: "酒馆.声望", kind: "number", value: 34, min: 0, max: 100 },
+    { id: "mvu.访客.月雅.好感", label: "访客.月雅.好感", kind: "number", value: 12, min: 0, max: 100 },
+    { id: "mvu.标志.初次相遇已完成", label: "标志.初次相遇已完成", kind: "bool", value: true },
+    { id: "mvu.内部.剧本阶段", label: "内部.剧本阶段", kind: "text", value: "第二幕", hidden: true },
+    { id: "mvu.内部.真凶已锁定", label: "内部.真凶已锁定", kind: "bool", value: false, hidden: true },
+  ]
+
+  test("a keeper-only leaf is marked; an exposed one is not", () => {
+    // Protocol: "clients should render hidden rows visually locked/dimmed, never as
+    // player data". Unmarked, an un-exposed module internal reads on the keeper's own
+    // screen exactly like something the table can already see.
+    expect(variableLine(LEAVES[5]!, "zh")).toBe("⊘内部.剧本阶段: 第二幕")
+    expect(variableLine(LEAVES[6]!, "zh")).toBe("⊘内部.真凶已锁定 ✗ 否")
+    expect(variableLine(LEAVES[0]!, "zh")).toBe("世界.日: 2")
+    expect(variableLine(LEAVES[0]!, "zh")).not.toContain("⊘")
+    // The mark rides the label, so a bounded number keeps its bar and value intact.
+    const hiddenBounded: ModuleVariable = { ...LEAVES[2]!, hidden: true }
+    expect(variableLine(hiddenBounded, "zh")).toBe("⊘酒馆.声望 ▓▓░░░░ 34/100")
+  })
+
+  test("32 CJK leaves all render, in received order, inside the sidebar width", async () => {
+    // 32 is a realistic import: a card's whole `[InitVar]` schema flattens to this.
+    const width = 32
+    const many: ModuleVariable[] = Array.from({ length: 32 }, (_, index) => ({
+      ...LEAVES[index % LEAVES.length]!,
+      id: `${LEAVES[index % LEAVES.length]!.id}#${index}`,
+    }))
+    const { renderer, flush, captureCharFrame } = await testRender(
+      <VariablesPanel variables={many} theme={themes.lamplight} locale="zh" />,
+      { width, height: 40 },
+    )
+    await flush()
+
+    const frame = captureCharFrame()
+    const rows = frame.split("\n").filter((line) => line.includes("│") && !line.includes("─"))
+    // Title + 32 leaves, nothing dropped or collapsed by the CJK labels.
+    expect(rows.length).toBe(33)
+    // Double-width CJK still respects the panel budget at the real sidebar width
+    // (GameView pins it to 32 for every terminal >= the 96-col collapse threshold).
+    expect(frame.split("\n").every((line) => Bun.stringWidth(line) <= width)).toBe(true)
+    // Definition order survives: day before hour before reputation.
+    expect(frame.indexOf("世界.日")).toBeLessThan(frame.indexOf("世界.时辰"))
+    expect(frame.indexOf("世界.时辰")).toBeLessThan(frame.indexOf("酒馆.声望"))
+    // Hidden rows are still distinguishable this far down the list.
+    expect(frame).toContain("⊘内部.剧本阶段")
+
+    act(() => renderer.destroy())
+  })
+})

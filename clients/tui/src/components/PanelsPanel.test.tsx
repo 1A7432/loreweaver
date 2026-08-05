@@ -81,6 +81,68 @@ describe("PanelsPanel", () => {
     act(() => renderer.destroy())
   })
 
+  // A card that ships a tier-2 (rich) panel is expected to also ship `fallback`
+  // blocks for text-first clients — the TUI's only view of that panel.
+  test("a tier-2 panel's CJK fallback blocks are the TUI's whole view of it", async () => {
+    const width = 32
+    const cardVars: ModuleVariable[] = [
+      { id: "mvu.酒馆.声望", label: "酒馆.声望", kind: "number", value: 34 },
+      { id: "mvu.内部.剧本阶段", label: "内部.剧本阶段", kind: "text", value: "第二幕", hidden: true },
+    ]
+    const ledger: UiManifestPanel = {
+      id: "jiuguan/ledger",
+      title: { zh: "账簿", en: "Ledger" },
+      slot: "modal",
+      tier: 2,
+      entry: { hash: "c".repeat(64), size: 10 },
+      assets: [],
+      fallback: [
+        { kind: "text", text: { zh: "今日流水请向掌柜索取。" } },
+        { kind: "meter", label: { zh: "酒馆声望" }, value: { $var: "mvu.酒馆.声望" }, min: 0, max: 100 },
+        // Bound to a not-yet-exposed leaf: fail-closed, so this block never appears.
+        { kind: "stat", label: { zh: "内部阶段" }, value: { $var: "mvu.内部.剧本阶段" } },
+        { kind: "choices", prompt: { zh: "要做什么" }, options: [{ id: "o1", label: { zh: "查看今日流水" }, input: "查账" }] },
+      ],
+    }
+    const { renderer, flush, captureCharFrame } = await testRender(
+      <PanelsPanel panels={[ledger]} variables={cardVars} theme={theme} locale="zh" />,
+      { width, height: 14 },
+    )
+    await flush()
+
+    const text = captureCharFrame()
+    expect(text).toContain("账簿")
+    expect(text).toContain("酒馆声望 ▓▓░░░░ 34/100")
+    expect(text).toContain("要做什么")
+    // Sidebar choices stay a static list — the interactive surface is the rich client.
+    expect(text).toContain("▫ 查看今日流水")
+    expect(text).not.toContain("内部阶段")
+    expect(text).not.toContain("第二幕")
+    expect(text.split("\n").every((line) => Bun.stringWidth(line) <= width)).toBe(true)
+
+    act(() => renderer.destroy())
+  })
+
+  test("a fallback bound only to un-exposed card leaves collapses the whole section", async () => {
+    const cardVars: ModuleVariable[] = [
+      { id: "mvu.内部.真凶", label: "内部.真凶", kind: "text", value: "掌柜的兄长", hidden: true },
+    ]
+    const spoiler: UiManifestPanel = {
+      id: "jiuguan/truth",
+      title: { zh: "真相板" },
+      slot: "sidebar",
+      tier: 1,
+      blocks: [{ kind: "stat", label: { zh: "真凶" }, value: { $var: "mvu.内部.真凶" } }],
+    }
+    const { renderer, flush, captureCharFrame } = await testRender(
+      <PanelsPanel panels={[spoiler]} variables={cardVars} theme={theme} locale="zh" />,
+      { width: 32, height: 10 },
+    )
+    await flush()
+    expect(captureCharFrame().trim()).toBe("")
+    act(() => renderer.destroy())
+  })
+
   test("renders nothing at all for an empty manifest", async () => {
     const { renderer, flush, captureCharFrame } = await testRender(
       <PanelsPanel panels={[]} variables={VARS} theme={theme} locale="en" />,

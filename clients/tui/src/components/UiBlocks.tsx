@@ -159,6 +159,11 @@ function UiChoices({
       {prompt ? <text fg={theme.accent}>{prompt}</text> : null}
       <select
         height={Math.min(block.options.length, 8)}
+        // Every option carries an empty `description`, and OpenTUI's select spends a
+        // SECOND row per item whenever descriptions are on — which silently halved the
+        // visible menu (4 authored choices showed 2). Off, one row per option, so the
+        // height above is the real option count.
+        showDescription={false}
         focused={interactive.focused}
         options={options}
         selectedIndex={selectedIndex}
