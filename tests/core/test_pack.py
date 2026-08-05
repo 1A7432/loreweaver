@@ -468,6 +468,17 @@ def test_native_lorecard_is_a_first_class_pack_card(tmp_path: Path):
     assert report.world_cards == ["cards/shirasagi.lorecard.json"]
 
 
+def test_card_borne_hooks_are_disclosed_in_the_trust_card(tmp_path: Path):
+    """A world card's `extensions.loreweaver_hooks` is code the keeper's world import
+    installs; the trust summary must say so even when the pack ships no skill."""
+    src = _write_world_source(tmp_path, "    - path: cards/world.json\n      kind: world\n")
+    (src / "cards/keeper.json").unlink()
+    built = build_pack(src, tmp_path / "hooky.lwpack")
+    assert built.manifest.trust is not None
+    assert built.manifest.trust.skills == 0
+    assert built.manifest.trust.has_hooks is True
+
+
 def test_broken_native_lorecard_fails_the_build_instead_of_passing_as_generic_json(tmp_path: Path):
     """The dispatch regression guard: an unsupported `format_version` must surface as a
     PackError from the native parser — without the sniff, the lenient generic-JSON card

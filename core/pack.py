@@ -732,6 +732,10 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
         card_ejs, payloads = _validate_card_bytes(card_path, _source_file(source_dir, card_path).read_bytes())
         _enforce_card_kind(card_path, manifest.card_kind(card_path), payloads)
         has_ejs = has_ejs or card_ejs
+        # A world card's `extensions.loreweaver_hooks` is code the keeper's `.import … world`
+        # installs — the same disclosure a skill's hooks.js gets. Counting only skills would
+        # let a pack ship handlers behind a `has_hooks: false` trust card.
+        has_hooks = has_hooks or payloads.hooks > 0
         archive_files.append(card_path)
 
     for lorebook_path in manifest.contents["lorebooks"]:
