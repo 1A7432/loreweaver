@@ -192,8 +192,11 @@ async def test_world_scope_lore_is_room_scoped_no_cross_room_leak():
 
 
 async def test_import_forces_untrusted_defaults():
-    """Security: an uploaded lorebook cannot dictate scope/constant/secret. A crafted entry with
-    constant=true / scope=world / secret=true must land room-local, non-constant, non-secret."""
+    """Security: an uploaded lorebook cannot dictate scope/constant/secret. A crafted
+    non-secret entry with constant=true / scope=world lands room-local and non-constant;
+    a secret=true entry on a NON-keeper import is dropped outright — honoring it would
+    mint keeper-only lore, importing it as public (the pre-M14 behavior) would launder
+    keeper-only content into player-visible state."""
     manager = WorldbookManager(Store(":memory:"))
 
     count = await manager.import_entries(
@@ -206,15 +209,21 @@ async def test_import_forces_untrusted_defaults():
                     "keys": [],
                     "scope": "world",
                     "constant": True,
+                },
+                {
+                    "title": "Smuggled secret",
+                    "content": "keeper-only payload",
+                    "keys": [],
                     "secret": True,
-                }
+                },
             ]
         },
         source="card",
         is_keeper=False,
     )
-    assert count == 1
+    assert count == 1  # the secret-flagged entry never lands, in any form
     [entry] = await manager.list("chat-a")
+    assert entry.title == "Injected"
     assert entry.scope == "session"
     assert entry.constant is False
     assert entry.secret is False

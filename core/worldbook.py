@@ -287,6 +287,8 @@ class WorldbookManager:
                     await MvuManager(self.store).init_from_initvar(chat_key, parsed_initvar)
                 continue
             entry = _normalize_import_entry(raw, source=source, index=index, is_keeper=is_keeper)
+            if entry is None:
+                continue
             if char_name:
                 # A card's own lorebook writes {{char}} for its character's name — that binding
                 # never changes for imported entries, so substitute it STATICALLY at import
@@ -710,8 +712,15 @@ def _consume_initvar(raw: dict[str, Any]) -> dict[str, Any] | None:
     return parse_initvar(body) or {}
 
 
-def _normalize_import_entry(raw: dict[str, Any], *, source: str, index: int, is_keeper: bool) -> LoreEntry:
+def _normalize_import_entry(raw: dict[str, Any], *, source: str, index: int, is_keeper: bool) -> LoreEntry | None:
     extensions = raw.get("extensions") if isinstance(raw.get("extensions"), dict) else {}
+    # Fail closed on secrecy BEFORE anything else: a secret-flagged entry on a NON-keeper
+    # import is dropped outright (`None`), never imported. Honoring the flag would let an
+    # untrusted card mint keeper-only lore; importing it as public (the pre-M14 behavior,
+    # harmless while no importable format carried the flag) would launder keeper-only
+    # content into player-visible room state now that native bundles ship real `secret`s.
+    if bool(raw.get("secret", extensions.get("secret", False))) and not is_keeper:
+        return None
     keys = raw.get("keys", raw.get("key", []))
     if isinstance(keys, str):
         keys = [keys]
@@ -747,8 +756,9 @@ def _normalize_import_entry(raw: dict[str, Any], *, source: str, index: int, is_
     # Trust boundary: the uploaded file does NOT get to choose its own scope/constant/secret.
     # Scope is pinned room-local and `constant` is forced off (an always-on entry would inject
     # itself into every prompt regardless of keywords; an imported `@@activate` is ignored for
-    # the same reason). `secret` is honored only for a keeper importer; an untrusted card cannot
-    # mint keeper-only lore. The `id` is always regenerated so a card cannot address (and thus
+    # the same reason). `secret` is honored only for a keeper importer — a non-keeper import of
+    # a secret-flagged entry already returned `None` at the top of this function. The `id` is
+    # always regenerated so a card cannot address (and thus
     # shadow) an existing entry. A `condition` is safe to honor: it can only NARROW injection,
     # and it is evaluated by the closed `core.condexpr` grammar, never executed. The trigger
     # semantics above can likewise only narrow/reorder — never widen — what injects.
@@ -760,7 +770,7 @@ def _normalize_import_entry(raw: dict[str, Any], *, source: str, index: int, is_
             "keys": keys,
             "category": raw.get("category", extensions.get("category", "lore")),
             "scope": IMPORT_SCOPE,
-            "secret": bool(raw.get("secret", extensions.get("secret", False))) if is_keeper else False,
+            "secret": bool(raw.get("secret", extensions.get("secret", False))),
             "constant": False,
             "priority": priority,
             "enabled": enabled,

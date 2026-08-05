@@ -1,0 +1,166 @@
+{
+ "spec": "chara_card_v3",
+ "spec_version": "3.0",
+ "data": {
+  "name": "回廊公寓",
+  "description": "一栋只在雨夜出现第五层的公寓。",
+  "personality": "",
+  "scenario": "调查员受托寻找失踪的房客。",
+  "first_mes": "雨声里，公寓的门牌忽明忽暗。",
+  "mes_example": "",
+  "creator_notes": "roundtrip fixture",
+  "system_prompt": "",
+  "post_history_instructions": "",
+  "alternate_greetings": [
+   "你在五层的楼梯间醒来。"
+  ],
+  "tags": [
+   "调查",
+   "都市怪谈"
+  ],
+  "creator": "",
+  "character_version": "",
+  "group_only_greetings": [],
+  "extensions": {},
+  "character_book": {
+   "name": "回廊公寓 Worldbook",
+   "entries": [
+    {
+     "id": 0,
+     "keys": [],
+     "secondary_keys": [],
+     "comment": "[InitVar]",
+     "content": "世界:\n  日: 1\n  时段: 雨夜\n  公寓:\n    五层可见: false\n    住户: []\n玩家:\n  理智: 80\n  线索: []\n",
+     "constant": true,
+     "selective": false,
+     "insertion_order": 0,
+     "enabled": true,
+     "position": "before_char",
+     "use_regex": false,
+     "extensions": {
+      "display_index": 0,
+      "probability": 100,
+      "useProbability": true,
+      "selectiveLogic": 0
+     }
+    },
+    {
+     "id": 1,
+     "keys": [],
+     "secondary_keys": [],
+     "comment": "变量更新规则",
+     "content": "当剧情推进一天时 _.set('世界.日', 旧值, 旧值+1); 理智受创时 _.add('玩家.理智', -1d3。",
+     "constant": true,
+     "selective": false,
+     "insertion_order": 0,
+     "enabled": true,
+     "position": "before_char",
+     "use_regex": false,
+     "extensions": {
+      "display_index": 1,
+      "probability": 100,
+      "useProbability": true,
+      "selectiveLogic": 0
+     }
+    },
+    {
+     "id": 2,
+     "keys": [
+      "五层",
+      "雨夜"
+     ],
+     "secondary_keys": [],
+     "comment": "五层的规则",
+     "content": "五层只在雨夜出现。",
+     "constant": true,
+     "selective": false,
+     "insertion_order": 10,
+     "enabled": true,
+     "position": "after_char",
+     "use_regex": false,
+     "extensions": {
+      "display_index": 2,
+      "probability": 100,
+      "useProbability": true,
+      "selectiveLogic": 0,
+      "case_sensitive": false,
+      "match_whole_words": false,
+      "scan_depth": 4,
+      "sticky": 0,
+      "cooldown": 0,
+      "delay": 0,
+      "exclude_recursion": false,
+      "prevent_recursion": false,
+      "group": "",
+      "group_weight": 100
+     }
+    },
+    {
+     "id": 3,
+     "keys": [
+      "管理员"
+     ],
+     "secondary_keys": [],
+     "comment": "管理员的秘密",
+     "content": "管理员早已不是人类。",
+     "constant": true,
+     "selective": false,
+     "insertion_order": 10,
+     "enabled": true,
+     "position": "after_char",
+     "use_regex": false,
+     "extensions": {
+      "display_index": 3,
+      "probability": 100,
+      "useProbability": true,
+      "selectiveLogic": 0,
+      "case_sensitive": false,
+      "match_whole_words": false,
+      "scan_depth": 4,
+      "sticky": 0,
+      "cooldown": 0,
+      "delay": 0,
+      "exclude_recursion": false,
+      "prevent_recursion": false,
+      "group": "",
+      "group_weight": 100
+     }
+    },
+    {
+     "id": 4,
+     "keys": [
+      "名册"
+     ],
+     "secondary_keys": [
+      "末页"
+     ],
+     "comment": "住户名册",
+     "content": "@@if 世界.日 >= 2\n名册末页有一行湿掉的字。",
+     "constant": false,
+     "selective": true,
+     "insertion_order": 10,
+     "enabled": true,
+     "position": "after_char",
+     "use_regex": false,
+     "extensions": {
+      "display_index": 4,
+      "probability": 100,
+      "useProbability": true,
+      "selectiveLogic": 0,
+      "case_sensitive": false,
+      "match_whole_words": false,
+      "scan_depth": 4,
+      "sticky": 0,
+      "cooldown": 0,
+      "delay": 0,
+      "exclude_recursion": false,
+      "prevent_recursion": false,
+      "group": "",
+      "group_weight": 100
+     }
+    }
+   ],
+   "extensions": {}
+  }
+ }
+}

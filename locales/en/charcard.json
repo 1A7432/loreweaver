@@ -21,9 +21,10 @@
   "charcard.commands.genchar.help": "Generate a character from a free-text description.",
   "charcard.commands.genchar.usage": "Usage: .genchar [coc7|dnd5e] [name] | <description>",
   "charcard.commands.import.world_denied": "Only an authenticated Keeper can import a world card (it installs room hooks and seeds shared variables).",
-  "charcard.tools.import.stripped": "World machinery was left out of this character import: {hooks} hook script(s), {vars} variable declaration(s), {ejs} template block(s). Module content is keeper-imported: `.import <card file> world`.",
+  "charcard.tools.import.stripped": "World machinery was left out of this character import: {hooks} hook script(s), {vars} variable declaration(s), {ejs} template block(s), {secret} keeper-only entr(y/ies). Module content is keeper-imported: `.import <card file> world`.",
   "charcard.tools.world.done": "Imported “{name}” as world content: {lore} lore entries (keeper trust), {vars} variable declaration(s) seeded, {hooks} hook script(s) installed.",
   "charcard.tools.world.failed": "Failed to import world card: {error}",
   "charcard.tools.preview.world_line": "World machinery: {hooks} hook script(s), {vars} variable declaration(s), {ejs} template block(s) — keeper-imported via `.import <card file> world`.",
-  "charcard.tools.world.pregen_line": "Cast: “{name}” is on the room's pre-generated roster — players take it with `.pc claim {name}` (for an AI-played version use `.import <card file> companion`)."
+  "charcard.tools.world.pregen_line": "Cast: “{name}” is on the room's pre-generated roster — players take it with `.pc claim {name}` (for an AI-played version use `.import <card file> companion`).",
+  "charcard.tools.world.specs_line": "Typed variables: {count} tracker(s) defined from the native bundle."
 }

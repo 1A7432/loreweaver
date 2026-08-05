@@ -39,7 +39,6 @@ def test_normalize_id_lowers_and_slugifies():
 
 def test_normalize_id_rejects_garbage():
     assert normalize_id("") is None
-    assert normalize_id("变量") is None
     assert normalize_id("a" * 65) is None
     assert normalize_id(42) is None
 
@@ -332,3 +331,16 @@ async def test_manager_player_entries_and_describe_wrappers():
     assert [entry["label"] for entry in entries] == ["恐惧"]
     lines = await manager.describe("room1", I18n(locale="zh"), "zh")
     assert len(lines) == 2
+
+
+def test_normalize_id_accepts_cjk_ids_first_class():
+    # The studio forge and native bundles (M14) author CJK tracker ids; they ride the
+    # same `state.variables` wire field where MVU CJK ids are already normal.
+    assert normalize_id("理智") == "理智"
+    assert normalize_id("怀疑度") == "怀疑度"
+    assert normalize_id("雨 夜") == "雨_夜"  # spaces still slug to underscores
+    assert normalize_id("Town Fear") == "town_fear"  # ASCII path unchanged
+    assert normalize_id("bad!id") is None  # ASCII punctuation still rejected
+    assert normalize_id("零宽​间隔") is None  # unicode format chars rejected
+    assert normalize_id("响铃\x07符") is None  # ASCII control chars rejected
+    assert normalize_id("变量") == "变量"  # the pre-M14 blanket CJK rejection is gone

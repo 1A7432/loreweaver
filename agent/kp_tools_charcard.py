@@ -33,7 +33,9 @@ from core.card_split import WorldPayloads, card_hook_codes, detect_world_payload
 from core.char_from_persona import build_sheet_from_persona, infer_pronoun_note
 from core.character_manager import CharacterSheet
 from core.character_rules import render_validation_notice, validate_sheet
-from core.charcard import PNG_SIGNATURE, CharacterCard, parse_card_file
+from core.charcard import PNG_SIGNATURE, CharacterCard, parse_card_bytes
+from core.lorecard import Lorecard, looks_like_lorecard, parse_lorecard_bytes
+from core.modvars import ModvarManager
 from core.pregen_roster import PregenRoster
 from infra.i18n import I18n
 from infra.media_store import MediaStore
@@ -41,6 +43,18 @@ from infra.media_store import MediaStore
 _PREVIEW_CHARS = 200
 _KEY_STAT_COUNT = 6
 _COC_CORE_ATTRS = ("STR", "CON", "SIZ", "DEX", "APP", "INT", "POW", "EDU", "LUC")
+
+
+def _parse_any_card_file(host_path: Path) -> tuple[CharacterCard, Lorecard | None]:
+    """`core.charcard.parse_card_bytes`, extended with the native-bundle sniff (M14):
+    a `*.lorecard.json` (the studio forge's lossless export) parses through
+    `core.lorecard` and hands back its extras — typed variable specs — alongside the
+    embedded card; anything else is a stock SillyTavern card with no extras."""
+    data = host_path.read_bytes()
+    if looks_like_lorecard(data):
+        lorecard = parse_lorecard_bytes(data, host_path.name)
+        return lorecard.card, lorecard
+    return parse_card_bytes(data, host_path.name), None
 
 
 def _companion_uid(companion_id: str) -> str:
@@ -108,6 +122,7 @@ def _stripped_notice(i18n: I18n, world: WorldPayloads) -> str:
         hooks=world.hooks,
         vars=world.initvar_entries,
         ejs=world.ejs_blocks,
+        secret=world.secret_entries,
     )
 
 
@@ -162,7 +177,8 @@ class CharcardTools:
             # declarations and EJS are module machinery — stripped here (structurally, before
             # anything touches room state) and reported so the keeper knows the card has a
             # world half waiting behind `.import <file> world`.
-            card, world = split_card(parse_card_file(host_path))
+            full_card, _lorecard = _parse_any_card_file(host_path)
+            card, world = split_card(full_card)
             module_context = await _module_summary(self._services, ctx.chat_key)
             sheet = await build_sheet_from_persona(self._services, card, system, module_context=module_context)
             final_name = name.strip() or card.name or sheet.name
@@ -225,7 +241,7 @@ class CharcardTools:
             if not host_path.exists():
                 return i18n.t("charcard.tools.preview.no_file", path=file_path)
 
-            card = parse_card_file(host_path)
+            card, _lorecard = _parse_any_card_file(host_path)
             lines = [i18n.t("charcard.tools.preview.name_line", name=card.name or i18n.t("common.unknown"))]
             if card.description:
                 lines.append(i18n.t("charcard.tools.preview.description_line", description=_truncate(card.description)))
@@ -287,7 +303,7 @@ class CharcardTools:
             if not host_path.exists():
                 return i18n.t("charcard.tools.import.no_file", path=file_path)
 
-            card = parse_card_file(host_path)
+            card, lorecard = _parse_any_card_file(host_path)
             character, world = split_card(card)
             # Keeper trust: secrecy flags are honored and InitVar declarations are consumed
             # into the shared MVU tree (`core.worldbook.import_entries` gates that on
@@ -299,6 +315,16 @@ class CharcardTools:
             hooks = card_hook_codes(card)
             if hooks:
                 await install_room_hooks(self._services, ctx.chat_key, f"card:{card.name}", hooks)
+
+            # A native bundle (M14) additionally carries TYPED variable specs — the lossless
+            # flavor of what an ST card can only ship as an [InitVar] tree. Keeper trust:
+            # they land as real `core.modvars` trackers (validated/clamped from here on).
+            specs_line = ""
+            if lorecard is not None and lorecard.variable_specs:
+                manager = ModvarManager(self._services.store)
+                for spec in lorecard.variable_specs:
+                    await manager.define(ctx.chat_key, dict(spec))
+                specs_line = i18n.t("charcard.tools.world.specs_line", count=len(lorecard.variable_specs))
 
             pregen_line = ""
             if character.name.strip():
@@ -316,7 +342,8 @@ class CharcardTools:
                 vars=world.initvar_entries,
                 hooks=len(hooks),
             )
-            return f"{result}\n{pregen_line}" if pregen_line else result
+            extra_lines = [line for line in (specs_line, pregen_line) if line]
+            return "\n".join([result, *extra_lines])
         except Exception as exc:
             return i18n.t("charcard.tools.world.failed", error=str(exc))
 

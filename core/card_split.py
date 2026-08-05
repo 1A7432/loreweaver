@@ -48,10 +48,13 @@ class WorldPayloads:
     hooks: int = 0
     initvar_entries: int = 0
     ejs_blocks: int = 0
+    # Keeper-only (`secret: true`) worldbook entries — a native bundle (M14) can carry
+    # them; stock ST cards never do. Keeper-only lore IS world machinery.
+    secret_entries: int = 0
 
     @property
     def any(self) -> bool:
-        return bool(self.hooks or self.initvar_entries or self.ejs_blocks)
+        return bool(self.hooks or self.initvar_entries or self.ejs_blocks or self.secret_entries)
 
 
 def card_hook_codes(card: CharacterCard) -> list[str]:
@@ -125,9 +128,16 @@ def split_card(card: CharacterCard) -> tuple[CharacterCard, WorldPayloads]:
 
     entries: list[dict[str, Any]] = []
     initvar_entries = 0
+    secret_entries = 0
     for raw_entry in card.character_book:
         if is_variable_declaration_entry(raw_entry):
             initvar_entries += 1
+            continue
+        # Keeper-only lore never rides the character half (a native bundle can flag it;
+        # the worldbook import chokepoint additionally drops it fail-closed on any
+        # non-keeper path — two layers, same rule).
+        if bool(raw_entry.get("secret")):
+            secret_entries += 1
             continue
         entry = dict(raw_entry)
         content = entry.get("content")
@@ -147,7 +157,12 @@ def split_card(card: CharacterCard) -> tuple[CharacterCard, WorldPayloads]:
         character_book=entries,
         raw=_raw_without_hooks(card.raw) if hooks else card.raw,
     )
-    return character, WorldPayloads(hooks=len(hooks), initvar_entries=initvar_entries, ejs_blocks=ejs_blocks)
+    return character, WorldPayloads(
+        hooks=len(hooks),
+        initvar_entries=initvar_entries,
+        ejs_blocks=ejs_blocks,
+        secret_entries=secret_entries,
+    )
 
 
 def _raw_without_hooks(raw: Any) -> Any:

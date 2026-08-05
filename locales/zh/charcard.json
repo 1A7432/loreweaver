@@ -21,9 +21,10 @@
   "charcard.commands.genchar.help": "根据自由文本描述生成角色卡。",
   "charcard.commands.genchar.usage": "用法：.genchar [coc7|dnd5e] [名称] | <描述>",
   "charcard.commands.import.world_denied": "只有已认证的守秘人可以导入世界卡（它会安装全房间钩子并注入共享变量）。",
-  "charcard.tools.import.stripped": "本次角色导入已剥离世界机制：钩子脚本 {hooks} 个、变量声明 {vars} 条、模板代码块 {ejs} 处。模组内容需由守秘人导入：`.import <角色卡文件> world`。",
+  "charcard.tools.import.stripped": "本次角色导入已剥离世界机制：钩子脚本 {hooks} 个、变量声明 {vars} 条、模板代码块 {ejs} 处、守秘条目 {secret} 条。模组内容需由守秘人导入：`.import <角色卡文件> world`。",
   "charcard.tools.world.done": "已将「{name}」导入为世界内容：设定条目 {lore} 条（守秘人信任级）、变量声明 {vars} 条已注入、钩子脚本 {hooks} 个已安装。",
   "charcard.tools.world.failed": "导入世界卡失败：{error}",
   "charcard.tools.preview.world_line": "世界机制：钩子脚本 {hooks} 个、变量声明 {vars} 条、模板代码块 {ejs} 处——需守秘人以 `.import <角色卡文件> world` 导入。",
-  "charcard.tools.world.pregen_line": "角色入池：「{name}」已进入本房间的预设角色池，玩家用 `.pc claim {name}` 认领（想要 AI 扮演请另行 `.import <角色卡文件> companion`）。"
+  "charcard.tools.world.pregen_line": "角色入池：「{name}」已进入本房间的预设角色池，玩家用 `.pc claim {name}` 认领（想要 AI 扮演请另行 `.import <角色卡文件> companion`）。",
+  "charcard.tools.world.specs_line": "类型化变量：已从原生卡包定义 {count} 个追踪器。"
 }

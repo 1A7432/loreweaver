@@ -27,6 +27,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+import unicodedata
 from typing import Any, Protocol
 
 # ---------------------------------------------------------------------------
@@ -42,7 +43,23 @@ MAX_LABEL_LEN = 50
 MAX_OPTIONS = 20
 MAX_OPTION_LEN = 50
 
-_ID_RE = re.compile(r"^[a-z0-9_]{1,64}$")
+# ASCII stays slug-strict (lowercase/digits/underscore); non-ASCII characters ride
+# verbatim unless they are separators or controls -- CJK variable ids (理智, 怀疑度) are
+# first-class for this audience, exactly as they already are on the MVU side of the same
+# `state.variables` wire field. Spaces/hyphens normalize to `_` upstream (`normalize_id`).
+_ID_ASCII_ALLOWED = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
+
+
+def _valid_id(slug: str) -> bool:
+    if not 1 <= len(slug) <= 64:
+        return False
+    for char in slug:
+        if ord(char) < 0x80:
+            if char not in _ID_ASCII_ALLOWED:
+                return False
+        elif unicodedata.category(char).startswith(("Z", "C")):
+            return False
+    return True
 
 # ``{"specs": {id: spec_dict}, "values": {id: value}}`` — see module docstring.
 ModvarState = dict[str, dict[str, Any]]
@@ -77,7 +94,7 @@ def normalize_id(raw: Any) -> str | None:
     if not isinstance(raw, str):
         return None
     slug = re.sub(r"[\s\-]+", "_", raw.strip().lower())
-    return slug if _ID_RE.match(slug) else None
+    return slug if _valid_id(slug) else None
 
 
 def coerce_int(value: Any) -> int | None:
