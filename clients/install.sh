@@ -6,8 +6,10 @@
 # It: (1) makes sure `bun` is on PATH (bun is both the runtime AND the package
 # manager that auto-resolves the right @opentui/core native core per platform),
 # (2) downloads the client tarball — GitHub Release by default, AUTO-FALLING-BACK to the
-# 1a7432.site mirror if GitHub is unreachable, (3) `bun install`s it via the official npm
-# registry by default, (4) drops a `loreweaver` launcher. Nothing needs root.
+# 1a7432.site mirror if GitHub is unreachable, (3) moves the verified payload into
+# $TRPG_HOME/clients and `bun install`s it THERE via the official npm registry by default
+# (never in a staging directory — see the note above the commit step), (4) drops a
+# `loreweaver` launcher. Nothing needs root.
 #
 # Force a source with TRPG_ORIGIN (e.g. TRPG_ORIGIN=https://1a7432.site/trpg to prefer the
 # China mirror and skip the GitHub attempt). Pin or roll back a release with
@@ -255,19 +257,63 @@ else
   fi
 fi
 
-# 3) deps — bun install resolves the per-platform @opentui/core native core for us.
-say "installing dependencies (registry: ${TRPG_REGISTRY})…"
+# 3) commit the verified payload into its final home BEFORE installing dependencies.
+# `bun install` links a dependency graph that is only valid where it was created:
+# bun's isolated linker (the default for workspaces since 1.3) points every
+# node_modules entry at the `node_modules/.bun` store, and on Windows those links
+# are NTFS junctions, which can only store an ABSOLUTE target. Installing into a
+# staging directory and renaming it afterwards therefore left every junction —
+# react included — pointing into the deleted staging path, so the launcher died
+# with "Cannot find module 'react/jsx-dev-runtime'" (issue #17). POSIX relative
+# symlinks happened to survive the rename; the install location must not be a
+# platform-dependent detail, so install where the launcher will run. Any failure
+# from here on rolls the previous client back.
 STAGED_CLIENTS="$CLIENT_STAGE/clients"
-printf 'registry=%s\n' "$TRPG_REGISTRY" > "$STAGED_CLIENTS/.npmrc"
-rewrite_lock_registry "$STAGED_CLIENTS" \
-  || die "could not apply TRPG_REGISTRY to the client lockfile."
-( cd "$STAGED_CLIENTS" && bun install --silent ) \
-  || die "bun install failed. Try again, or set TRPG_REGISTRY to another mirror."
-
-# 4) launcher — `loreweaver` (matches the project name). `loreweaver update` re-runs
-#    this installer to fetch + reinstall the latest client; anything else launches the TUI.
+CLIENT_BACKUP="$INSTALL_STAGING/previous-clients"
+HAD_PREVIOUS_CLIENT=0
 mkdir -p "$TRPG_BIN"
 [ ! -d "$TRPG_BIN/loreweaver" ] || die "$TRPG_BIN/loreweaver is a directory; cannot install the launcher"
+if [ -e "$TRPG_HOME/clients" ] || [ -L "$TRPG_HOME/clients" ]; then
+  mv "$TRPG_HOME/clients" "$CLIENT_BACKUP" \
+    || die "could not stage the previous client for upgrade"
+  HAD_PREVIOUS_CLIENT=1
+fi
+restore_previous_client() {  # $1 = failure message; never returns
+  rm -rf "$TRPG_HOME/clients"
+  if [ "$HAD_PREVIOUS_CLIENT" -eq 1 ]; then
+    if mv "$CLIENT_BACKUP" "$TRPG_HOME/clients"; then
+      HAD_PREVIOUS_CLIENT=0
+    else
+      INSTALL_STAGING=""   # keep the backup instead of letting the EXIT trap delete it
+      die "$1; the previous client could not be restored — backup retained at $CLIENT_BACKUP"
+    fi
+  fi
+  die "$1"
+}
+mv "$STAGED_CLIENTS" "$TRPG_HOME/clients" \
+  || restore_previous_client "could not commit the verified client"
+INSTALLED_CLIENTS="$TRPG_HOME/clients"
+
+# 4) deps — bun install resolves the per-platform @opentui/core native core for us.
+say "installing dependencies (registry: ${TRPG_REGISTRY})…"
+printf 'registry=%s\n' "$TRPG_REGISTRY" > "$INSTALLED_CLIENTS/.npmrc" \
+  || restore_previous_client "could not write the client .npmrc"
+rewrite_lock_registry "$INSTALLED_CLIENTS" \
+  || restore_previous_client "could not apply TRPG_REGISTRY to the client lockfile."
+( cd "$INSTALLED_CLIENTS" && bun install --silent ) \
+  || restore_previous_client "bun install failed. Try again, or set TRPG_REGISTRY to another mirror."
+# A dependency tree the launcher cannot resolve is a broken install, not a warning:
+# fail here (and roll back) instead of shipping a launcher that dies on first run.
+# `[ -f ]` follows links, so a dangling link fails the check; both node_modules
+# locations are accepted so the check holds for either bun linker.
+for module in react loreweaver-protocol "@opentui/core"; do
+  [ -f "$INSTALLED_CLIENTS/tui/node_modules/$module/package.json" ] \
+    || [ -f "$INSTALLED_CLIENTS/node_modules/$module/package.json" ] \
+    || restore_previous_client "the installed client cannot resolve '$module' — dependency installation did not complete"
+done
+
+# 5) launcher — `loreweaver` (matches the project name). `loreweaver update` re-runs
+#    this installer to fetch + reinstall the latest client; anything else launches the TUI.
 UPDATE_INSTALLER="$(installer_of "$USED")"   # re-update from whichever source actually worked
 Q_TRPG_HOME="$(shell_quote "$TRPG_HOME")"
 Q_TRPG_BIN="$(shell_quote "$TRPG_BIN")"
@@ -288,7 +334,7 @@ else
   UPDATE_ORIGIN_COMMAND="unset TRPG_ORIGIN"
 fi
 LAUNCHER_STAGE="$(mktemp "$TRPG_BIN/.loreweaver.install.XXXXXX")" \
-  || die "could not create a launcher staging file"
+  || restore_previous_client "could not create a launcher staging file"
 cat > "$LAUNCHER_STAGE" <<EOF
 #!/usr/bin/env bash
 set -o pipefail
@@ -329,33 +375,13 @@ if [ "\${1:-}" = "update" ]; then
 fi
 exec bun run "\${TRPG_HOME}/clients/tui/src/index.tsx" "\$@"
 EOF
-chmod +x "$LAUNCHER_STAGE"
+chmod +x "$LAUNCHER_STAGE" \
+  || restore_previous_client "could not prepare the launcher"
 
-# Commit only after verification, extraction, dependency installation, and
-# launcher generation have all succeeded. Keep the old client inside the same
-# staging tree until the launcher rename finishes, so either version remains runnable.
-CLIENT_BACKUP="$INSTALL_STAGING/previous-clients"
-HAD_PREVIOUS_CLIENT=0
-if [ -e "$TRPG_HOME/clients" ] || [ -L "$TRPG_HOME/clients" ]; then
-  mv "$TRPG_HOME/clients" "$CLIENT_BACKUP" \
-    || die "could not stage the previous client for upgrade"
-  HAD_PREVIOUS_CLIENT=1
-fi
-if ! mv "$STAGED_CLIENTS" "$TRPG_HOME/clients"; then
-  if [ "$HAD_PREVIOUS_CLIENT" -eq 1 ] && ! mv "$CLIENT_BACKUP" "$TRPG_HOME/clients"; then
-    INSTALL_STAGING=""
-    die "install failed and the previous client could not be restored; backup retained at $CLIENT_BACKUP"
-  fi
-  die "could not commit the verified client; the previous client was restored"
-fi
-if ! mv -f "$LAUNCHER_STAGE" "$TRPG_BIN/loreweaver"; then
-  rm -rf "$TRPG_HOME/clients"
-  if [ "$HAD_PREVIOUS_CLIENT" -eq 1 ] && ! mv "$CLIENT_BACKUP" "$TRPG_HOME/clients"; then
-    INSTALL_STAGING=""
-    die "launcher install failed and the previous client could not be restored; backup retained at $CLIENT_BACKUP"
-  fi
-  die "could not commit the launcher; the previous client was restored"
-fi
+# The launcher rename is the last commit step; until it lands the previous client
+# is still recoverable from the backup inside the staging tree.
+mv -f "$LAUNCHER_STAGE" "$TRPG_BIN/loreweaver" \
+  || restore_previous_client "could not commit the launcher"
 LAUNCHER_STAGE=""
 rm -rf "$CLIENT_BACKUP"
 

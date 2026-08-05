@@ -133,10 +133,23 @@ esac
     )
     curl.chmod(0o755)
     bun = fake_bin / "bun"
+    # `bun install` links a dependency graph that is only valid in the directory it
+    # ran in (bun's isolated linker, and on Windows junctions that can only hold an
+    # absolute target), so the stub records its working directory and materialises the
+    # modules the launcher must be able to resolve.
     bun.write_text(
         """#!/usr/bin/env bash
 if [ "${1:-}" = "--version" ]; then printf 'test-bun\n'; fi
-if [ "${1:-}" = "install" ] && [ "${FAIL_BUN_INSTALL:-0}" = "1" ]; then exit 42; fi
+if [ "${1:-}" = "install" ]; then
+  printf '%s\n' "$PWD" >> "$BUN_INSTALL_CWD_LOG"
+  [ "${FAIL_BUN_INSTALL:-0}" != "1" ] || exit 42
+  if [ "${SKIP_BUN_LINKS:-0}" != "1" ]; then
+    for module in react loreweaver-protocol @opentui/core; do
+      mkdir -p "tui/node_modules/$module"
+      printf '{}\n' > "tui/node_modules/$module/package.json"
+    done
+  fi
+fi
 exit 0
 """
     )
@@ -154,6 +167,7 @@ def _run_installer(
     mirror_sidecar: Path,
     fail_primary: bool = False,
     fail_bun_install: bool = False,
+    skip_bun_links: bool = False,
     release_tag: str = "",
     existing_client: str = "",
 ) -> tuple[subprocess.CompletedProcess[str], list[str], Path]:
@@ -178,6 +192,8 @@ def _run_installer(
         "MIRROR_SIDECAR": str(mirror_sidecar),
         "FAIL_PRIMARY": "1" if fail_primary else "0",
         "FAIL_BUN_INSTALL": "1" if fail_bun_install else "0",
+        "SKIP_BUN_LINKS": "1" if skip_bun_links else "0",
+        "BUN_INSTALL_CWD_LOG": str(tmp_path / "bun-install-cwd.log"),
     }
     if release_tag:
         env["TRPG_RELEASE_TAG"] = release_tag
@@ -404,6 +420,57 @@ def test_dependency_failure_restores_the_previous_client(tmp_path: Path):
     assert not (home / "clients" / "candidate.txt").exists()
 
 
+def test_bun_install_runs_in_the_final_client_directory(tmp_path: Path):
+    # Issue #17: dependencies installed in a staging directory and renamed afterwards
+    # leave every link naming a path that no longer exists — on Windows bun's isolated
+    # linker writes junctions, which can only hold an absolute target, so the launcher
+    # died with "Cannot find module 'react/jsx-dev-runtime'". Install where the launcher
+    # runs, never in a directory that is about to be renamed away.
+    archive = tmp_path / "candidate.tar.gz"
+    digest = _archive(archive, "candidate")
+    sidecar = _sidecar(archive, digest)
+
+    result, _, home = _run_installer(
+        tmp_path,
+        BASH_INSTALLER,
+        primary_archive=archive,
+        primary_sidecar=sidecar,
+        mirror_archive=archive,
+        mirror_sidecar=sidecar,
+    )
+
+    assert result.returncode == 0, result.stderr
+    install_dirs = (tmp_path / "bun-install-cwd.log").read_text().split()
+    assert install_dirs == [str(home / "clients")]
+    assert (home / "clients" / "tui" / "node_modules" / "react" / "package.json").exists()
+
+
+def test_unresolvable_dependency_tree_restores_the_previous_client(tmp_path: Path):
+    # A `bun install` that reports success but leaves the entry unable to resolve its
+    # modules is a broken install, not a warning: fail loudly instead of committing a
+    # launcher that dies on first run.
+    archive = tmp_path / "candidate.tar.gz"
+    digest = _archive(archive, "candidate")
+    sidecar = _sidecar(archive, digest)
+
+    result, _, home = _run_installer(
+        tmp_path,
+        BASH_INSTALLER,
+        primary_archive=archive,
+        primary_sidecar=sidecar,
+        mirror_archive=archive,
+        mirror_sidecar=sidecar,
+        skip_bun_links=True,
+        existing_client="working version",
+    )
+
+    assert result.returncode != 0
+    assert "cannot resolve 'react'" in result.stderr
+    assert (home / "clients" / "previous.txt").read_text() == "working version"
+    assert not (home / "clients" / "candidate.txt").exists()
+    assert not (tmp_path / "launcher-bin" / "loreweaver").exists()
+
+
 def test_system_tar_rejects_verified_archive_path_traversal(tmp_path: Path):
     archive = tmp_path / "traversal.tar.gz"
     digest = _unsafe_archive(archive)
@@ -482,8 +549,30 @@ def test_both_installers_rewrite_absolute_lock_urls_before_bun_install():
     assert "[IO.File]::ReadAllText($lock)" in powershell
     assert "[IO.File]::WriteAllText($lock, $rewritten)" in powershell
 
-    assert bash.index('rewrite_lock_registry "$STAGED_CLIENTS"') < bash.index("bun install --silent")
-    assert powershell.rindex("RewriteLockRegistry $StagedClients") < powershell.index("bun install --silent")
+    assert bash.index('rewrite_lock_registry "$INSTALLED_CLIENTS"') < bash.index("bun install --silent")
+    assert powershell.rindex("RewriteLockRegistry $TargetClients") < powershell.index("bun install --silent")
+
+
+def test_both_installers_install_dependencies_after_committing_the_client():
+    # The PowerShell half of the issue #17 fix; the bash half is executed in
+    # test_bun_install_runs_in_the_final_client_directory. Both must resolve their
+    # dependency graph inside the directory the launcher will run from.
+    bash = BASH_INSTALLER.read_text()
+    powershell = POWERSHELL_INSTALLER.read_text()
+
+    assert bash.index('mv "$STAGED_CLIENTS" "$TRPG_HOME/clients"') < bash.index("bun install --silent")
+    assert 'cd "$INSTALLED_CLIENTS" && bun install --silent' in bash
+    assert "bun install --silent" not in bash[: bash.index('mv "$STAGED_CLIENTS" "$TRPG_HOME/clients"')]
+
+    assert powershell.index("Move-Item $StagedClients $TargetClients") < powershell.index("bun install --silent")
+    assert powershell.index("Push-Location $TargetClients") < powershell.index("bun install --silent")
+    assert "Push-Location $StagedClients" not in powershell
+
+    # And a dependency tree the entry cannot resolve must fail the install outright.
+    for text in (bash, powershell):
+        assert "cannot resolve" in text
+        assert "loreweaver-protocol" in text
+        assert "@opentui/core" in text
 
 
 @pytest.mark.parametrize(

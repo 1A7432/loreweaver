@@ -209,21 +209,56 @@ elseif (($result -eq "unavailable") -and ($Primary -ne $Mirror)) {
 elseif ($result -eq "unavailable") { throw "could not fetch the client or its checksum from the mirror — check your network." }
 else { throw "$FetchError; refusing to install." }
 
-# 3) deps
+# 3) commit the verified payload into its final home BEFORE installing dependencies.
+# `bun install` links a dependency graph that is only valid where it was created:
+# bun's isolated linker (the default for workspaces since 1.3) points every
+# node_modules entry at the `node_modules\.bun` store, and on Windows those links
+# are NTFS junctions, which can only store an ABSOLUTE target. Installing into a
+# staging directory and renaming it afterwards therefore left every junction —
+# react included — pointing into the deleted staging path, so the launcher died
+# with "Cannot find module 'react/jsx-dev-runtime'" (issue #17). Install where the
+# launcher will actually run; the previous client stays recoverable in the staging
+# tree until dependencies AND the launcher are in place.
+New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+$TargetClients = Join-Path $Home_ "clients"
+$PreviousClients = Join-Path $StagingRoot "previous-clients"
+$HadPreviousClient = Test-Path $TargetClients
+$PreviousClientStaged = $false
+$NewClientCommitted = $false
+if ($HadPreviousClient) {
+  $PreserveStaging = $true
+  Move-Item $TargetClients $PreviousClients
+  $PreviousClientStaged = $true
+}
+try {
+Move-Item $StagedClients $TargetClients
+$NewClientCommitted = $true
+
+# 4) deps — installed in place, so every junction bun writes names its final path.
 Say "installing dependencies (registry: $Registry)…"
-[IO.File]::WriteAllText((Join-Path $StagedClients ".npmrc"), "registry=$Registry`n", [Text.UTF8Encoding]::new($false))
-RewriteLockRegistry $StagedClients
-Push-Location $StagedClients
+[IO.File]::WriteAllText((Join-Path $TargetClients ".npmrc"), "registry=$Registry`n", [Text.UTF8Encoding]::new($false))
+RewriteLockRegistry $TargetClients
+Push-Location $TargetClients
 try {
   & bun install --silent
   $bunInstallExit = $LASTEXITCODE
 }
 finally { Pop-Location }
 if ($bunInstallExit -ne 0) { throw "bun install failed. Try again, or set TRPG_REGISTRY to another mirror." }
+# A dependency tree the launcher cannot resolve is a broken install, not a warning:
+# fail (and roll back) instead of shipping a launcher that dies on first run.
+# Test-Path resolves reparse points, so a dangling junction fails the check; both
+# node_modules locations are accepted so the check holds for either bun linker.
+foreach ($module in @("react", "loreweaver-protocol", "@opentui/core")) {
+  $relative = $module.Replace("/", "\") + "\package.json"
+  if ((-not (Test-Path (Join-Path $TargetClients "tui\node_modules\$relative") -PathType Leaf)) -and
+      (-not (Test-Path (Join-Path $TargetClients "node_modules\$relative") -PathType Leaf))) {
+    throw "the installed client cannot resolve '$module' — dependency installation did not complete"
+  }
+}
 
-# 4) launcher — `loreweaver` (matches the project name). `loreweaver update` re-runs the
+# 5) launcher — `loreweaver` (matches the project name). `loreweaver update` re-runs the
 #    installer to fetch the latest client; anything else launches the TUI.
-New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 $entry = (Join-Path $Home_ "clients\tui\src\index.tsx")
 $updInstaller = InstallerOf $Used   # re-update from whichever source actually worked
 function AssertLauncherValue([string]$name, [string]$value) {
@@ -265,23 +300,10 @@ $cmd += "bun run `"$(CmdEscape $entry)`" %*"
 $LauncherStage = Join-Path $BinDir (".loreweaver.install-" + [guid]::NewGuid().ToString("N") + ".cmd")
 [IO.File]::WriteAllText($LauncherStage, $cmd, [Text.Encoding]::Default)
 
-# Commit only after the archive, dependencies, and launcher are ready. The old
-# client remains in the staging tree until both final moves have succeeded.
-$TargetClients = Join-Path $Home_ "clients"
-$PreviousClients = Join-Path $StagingRoot "previous-clients"
-$HadPreviousClient = Test-Path $TargetClients
-$PreviousClientStaged = $false
-$NewClientCommitted = $false
-if ($HadPreviousClient) {
-  $PreserveStaging = $true
-  Move-Item $TargetClients $PreviousClients
-  $PreviousClientStaged = $true
-}
-try {
-  Move-Item $StagedClients $TargetClients
-  $NewClientCommitted = $true
-  Move-Item $LauncherStage (Join-Path $BinDir "loreweaver.cmd") -Force
-  $LauncherStage = ""
+# The launcher rename is the last commit step; until it lands the previous client
+# is still recoverable from the backup inside the staging tree.
+Move-Item $LauncherStage (Join-Path $BinDir "loreweaver.cmd") -Force
+$LauncherStage = ""
 }
 catch {
   $commitError = $_
