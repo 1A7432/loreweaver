@@ -114,6 +114,19 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
             worldinfo={entry.title: entry.content for entry in room_entries},
         )
     macros = await _build_macro_context(services, ctx)
+    # Sole-active variant values for mutually-exclusive constant families (路线·X/难度·X):
+    # every STRING value currently held by the room's variables, from both tracker layers.
+    # `worldbook.match` uses them to keep only the family member the module state names.
+    variant_values = {
+        str(leaf["value"]).strip()
+        for leaf in flatten_leaves(mvu_tree, 200)
+        if isinstance(leaf["value"], str) and str(leaf["value"]).strip()
+    }
+    variant_values.update(
+        str(value).strip()
+        for value in modvar_state["values"].values()
+        if isinstance(value, str) and str(value).strip()
+    )
     world_lore = await inject_world_lore_prompt(
         ctx,
         services.worldbook,
@@ -132,6 +145,7 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
         # steering the model off the engine's `_.set` wire.
         limit=12,
         budget_chars=12_000,
+        active_variants=variant_values,
     )
     if engine is not None:
         mvu_tree = await _flush_template_writes(services, ctx.chat_key, engine, mvu_tree)

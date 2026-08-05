@@ -328,8 +328,13 @@ class WorldbookManager:
         ignore_conditions: bool = False,
         rng: random.Random | None = None,
         advance_timers: bool = False,
+        active_variants: Any = None,
     ) -> list[LoreEntry]:
         """Select the entries to inject for `context_text`.
+
+        `active_variants` (an optional collection of the room's current STRING variable
+        values) drives the sole-active filter for mutually-exclusive constant families —
+        see `_filter_sole_active_constants`.
 
         `resolve` is a `core.condexpr` resolver over the room's variables; a conditioned entry
         fires only when its condition evaluates true, and FAILS CLOSED (broken expression, or no
@@ -376,6 +381,9 @@ class WorldbookManager:
                 continue
             if entry.constant or _keyword_hit(entry, context):
                 selected[entry.id] = entry
+
+        if active_variants:
+            _filter_sole_active_constants(selected, entries, active_variants, sticky_ids)
 
         for entry in await self._semantic_hits(chat_key, context, limit=limit):
             if entry.id in selected:
@@ -527,6 +535,7 @@ async def inject_world_lore_prompt(
     advance_timers: bool = False,
     limit: int = 8,
     budget_chars: int = 4000,
+    active_variants: Any = None,
 ) -> str:
     entries = await worldbook.match(
         ctx.chat_key,
@@ -538,6 +547,7 @@ async def inject_world_lore_prompt(
         engine=engine,
         rng=rng,
         advance_timers=advance_timers,
+        active_variants=active_variants,
     )
     rendered = [render_entry_content(entry, resolve, engine, macros=macros) for entry in entries]
 
@@ -562,6 +572,30 @@ async def inject_world_lore_prompt(
     return "\n".join(lines)
 
 
+# ST frontend-template residue: status-bar macros a prompt must never carry
+# ({{format_message_variable::…}} / {{get_message_variable::…}}) and the <status_*>-style
+# wrapper tags they live in. They are FRONTEND render directives — in a prompt they are
+# noise at best and a copyable leak surface at worst (one model quote puts raw template
+# text into player-visible narration). Scrubbed at render time; wrapper pairs left empty
+# by the scrub collapse away entirely, and an entry that is NOTHING BUT template residue
+# imports disabled (same "kept, not silently vanished" stance as the render-only
+# decorators above).
+_FRONTEND_MACRO_RE = re.compile(r"\{\{(?:format|get)_message_variable::[^{}]*\}\}")
+_EMPTY_WRAPPER_RE = re.compile(r"<([A-Za-z_][\w-]*)>\s*</\1>")
+
+
+def scrub_frontend_templates(text: str) -> str:
+    """Remove ST status-bar macros and any wrapper tags left empty by that removal."""
+    cleaned = _FRONTEND_MACRO_RE.sub("", text)
+    if cleaned == text and not _EMPTY_WRAPPER_RE.search(cleaned):
+        return text
+    previous = None
+    while previous != cleaned:
+        previous = cleaned
+        cleaned = _EMPTY_WRAPPER_RE.sub("", cleaned)
+    return cleaned.strip()
+
+
 def render_entry_content(entry: LoreEntry, resolve: Any = None, engine: Any = None, macros: Any = None) -> str:
     """Render one entry's content for prompt injection.
 
@@ -580,9 +614,10 @@ def render_entry_content(entry: LoreEntry, resolve: Any = None, engine: Any = No
             text = None  # template error → subset fallback below (never raw syntax out)
     if text is None:
         if resolve is None:
-            return entry.content
+            return scrub_frontend_templates(entry.content)
         text = render_template(entry.content, resolve).text
-    return substitute_macros(text, resolve, macros=macros) if resolve is not None else text
+    rendered = substitute_macros(text, resolve, macros=macros) if resolve is not None else text
+    return scrub_frontend_templates(rendered)
 
 
 def _new_id() -> str:
@@ -680,6 +715,52 @@ def _resolve_inclusion_groups(
     return chosen
 
 
+# The community's sole-active family convention: `前缀·变体` titles (难度·标准, 路线·主线,
+# 色度·浓). ST module cards toggle exactly one member per family from their frontend panel;
+# imported flat, every member is constant and PRIORITY (not module state) used to decide
+# which injected — the 2026-08-05 rerun shipped 路线·大侦探线 into a 主线 run that way.
+_VARIANT_SEPARATOR = "·"
+
+
+def _filter_sole_active_constants(
+    selected: dict[str, LoreEntry],
+    all_entries: list[LoreEntry],
+    active_variants: Any,
+    sticky_ids: set[str],
+) -> None:
+    """Keep only the variant the room's variables name, per mutually-exclusive family.
+
+    A family = ≥2 CONSTANT entries whose titles share a ``前缀·`` prefix. When any of the
+    room's string variable values equals one member's variant name (配置.路线 = "主线" →
+    路线·主线), the other members drop from `selected`. FAIL-OPEN by family: no value
+    matching any member's variant → that family keeps all members (modules without a
+    matching tracker keep the old priority behavior). Sticky-active members never drop —
+    they already earned their slot."""
+    values = {str(value).strip() for value in active_variants if str(value).strip()}
+    if not values:
+        return
+    families: dict[str, list[LoreEntry]] = {}
+    for entry in all_entries:
+        if not entry.constant:
+            continue
+        prefix, sep, variant = entry.title.partition(_VARIANT_SEPARATOR)
+        if sep and prefix.strip() and variant.strip():
+            families.setdefault(prefix.strip(), []).append(entry)
+    for members in families.values():
+        if len(members) < 2:
+            continue
+        matched_ids = {
+            entry.id
+            for entry in members
+            if entry.title.partition(_VARIANT_SEPARATOR)[2].strip() in values
+        }
+        if not matched_ids:
+            continue
+        for entry in members:
+            if entry.id not in matched_ids and entry.id not in sticky_ids:
+                selected.pop(entry.id, None)
+
+
 def _cap_entries(entries: list[LoreEntry], budget_chars: int) -> list[LoreEntry]:
     if budget_chars <= 0:
         return []
@@ -755,6 +836,12 @@ def _normalize_import_entry(raw: dict[str, Any], *, source: str, index: int, is_
     if "dont_activate" in decorators or _RENDER_ONLY_DECORATORS & decorators.keys():
         enabled = False
     if _RENDER_ONLY_TITLE_RE.match(title):
+        enabled = False
+    # Pure frontend-template entries (e.g. `<status_current_variables>{{format_message_
+    # variable::stat_data}}</status_current_variables>`) have no prompt meaning at all —
+    # import them disabled so they never occupy an injection slot; mixed content stays
+    # enabled and gets scrubbed at render instead.
+    if content and not scrub_frontend_templates(content):
         enabled = False
     title = _GENERATE_TITLE_RE.sub("", title) or f"{source or 'Lore'} {index}"
 

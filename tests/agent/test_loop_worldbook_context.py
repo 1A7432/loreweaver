@@ -56,3 +56,32 @@ async def test_unrelated_message_does_not_fire_keyword_lore(tmp_path):
     await run_kp_turn(ctx, services, build_kp_toolset(services), "我在酒馆里点了一杯麦酒。")
 
     assert all("灯塔曾三次易主" not in prompt for prompt in captured_prompts)
+
+
+async def test_sole_active_route_family_follows_the_variable_tree(tmp_path):
+    """End-to-end: with 配置.路线 = 主线 in the MVU tree, only the matching route entry
+    reaches the system prompt even when a sibling outranks it on priority."""
+    from core.mvu_compat import MvuManager
+    from core.worldbook import LoreEntry
+
+    captured_prompts: list[str] = []
+
+    def responder(messages, tools):
+        captured_prompts.append(messages[0]["content"])
+        return assistant_text("Rain keeps falling.")
+
+    services = _services(FakeLLM(responder=responder))
+    ctx = AgentCtx(chat_key="route-room", user_id="p1", locale="en")
+    await services.worldbook.add(
+        "route-room", LoreEntry(id="", title="路线·主线", content="主线规则：验人配额照常。", constant=True, priority=71)
+    )
+    await services.worldbook.add(
+        "route-room", LoreEntry(id="", title="路线·判官线", content="判官线规则：墨水配给制。", constant=True, priority=75)
+    )
+    await MvuManager(services.store).save("route-room", {"配置": {"路线": "主线"}})
+
+    await run_kp_turn(ctx, services, build_kp_toolset(services), "我按流程开门验人。")
+
+    final_prompt = captured_prompts[-1]
+    assert "主线规则：验人配额照常。" in final_prompt
+    assert "判官线规则：墨水配给制。" not in final_prompt
