@@ -1,7 +1,7 @@
 // Bumped to "1.8" for module UI panels (M15): the per-viewer `ui_manifest` frame,
 // hook-emitted `panel_event`, and the `panel_intent` client frame.
 // `WelcomeFrame.protocol` stays a plain string so older minor clients keep accepting it.
-export const PROTOCOL_VERSION = "1.8" as const
+export const PROTOCOL_VERSION = "1.9" as const
 
 export const FrameType = {
   Join: "join",
@@ -554,10 +554,10 @@ export interface UsageState {
 export type ModuleVariableKind = "number" | "bool" | "text" | "enum"
 
 // v1.6 additive: one player-visible module/story variable (a "tracker": suspicion,
-// doom, supplies, ...). The server only ever sends player-visible variables — the
-// keeper-only ones are filtered server-side, never here. `label` arrives already
-// localized to the room locale. `min`/`max` apply to the "number" kind only and are
-// present only when the variable is bounded.
+// doom, supplies, ...). Player connections only ever receive player-visible
+// variables — keeper-only ones are filtered server-side, never here. `label`
+// arrives already localized to the room locale. `min`/`max` apply to the "number"
+// kind only and are present only when the variable is bounded.
 export interface ModuleVariable {
   id: string
   label: string
@@ -565,6 +565,20 @@ export interface ModuleVariable {
   value: number | boolean | string
   min?: number
   max?: number
+  // v1.7 additive (type added in v1.9 — servers have sent it since v1.7): on KEEPER
+  // connections only, an imported-card (MVU) variable the keeper has not `.var expose`d
+  // yet arrives flagged `hidden: true` so the keeper can watch module internals live.
+  // A player connection never receives a hidden variable at all (filtered server-side);
+  // clients should render hidden rows visually locked/dimmed, never as player data.
+  hidden?: boolean
+}
+
+// v1.9 additive: one claimable pre-generated character from the module's cast
+// (`.pc list` / `.pc claim` on the command surface). `claimed_by` is the claiming
+// member's id, or "" while unclaimed. Public to every viewer.
+export interface PregenEntry {
+  name: string
+  claimed_by: string
 }
 
 export interface StateFrame {
@@ -580,6 +594,9 @@ export interface StateFrame {
   // received, do not sort). Absent — not an empty array — when the room has none;
   // an older server that never sends it still type-checks fine.
   variables?: ModuleVariable[]
+  // v1.9 additive: the module's claimable pregen cast, insertion-ordered. Absent —
+  // never an empty array — when the room has no roster (no world import landed one).
+  pregens?: PregenEntry[]
   // Set once, on the state frame the server pushes right after a campaign reset
   // (`.reset` / `admin_reset_room`): besides the already-fresh (empty) panel data,
   // the client should also clear its locally-accumulated chat scrollback.

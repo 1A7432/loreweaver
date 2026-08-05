@@ -30,6 +30,7 @@ from agent.services import Services
 from core.character_manager import CharacterSheet, get_hit_points
 from core.modvars import ModvarManager
 from core.mvu_compat import MvuManager, path_is_exposed
+from core.pregen_roster import PregenRoster
 
 _COC_SYSTEM = "CoC"
 _UNSET_CHARACTER_NAME = "default"
@@ -73,6 +74,10 @@ async def build_room_state(services: Services, ctx: AgentCtx) -> dict[str, Any]:
     variables = await _variables(services, ctx)
     if variables:
         state["variables"] = variables
+
+    pregens = await _pregens(services, ctx.chat_key)
+    if pregens:
+        state["pregens"] = pregens
 
     return state
 
@@ -351,6 +356,22 @@ async def _variables(services: Services, ctx: AgentCtx) -> list[dict[str, Any]]:
     except Exception:
         pass
     return entries
+
+
+async def _pregens(services: Services, chat_key: str) -> list[dict[str, Any]]:
+    """The claimable pregen cast (`core.pregen_roster`), v1.9 additive: one
+    ``{name, claimed_by}`` per entry, insertion-ordered. Public to every viewer — who the
+    module's cast is and who claimed whom is table talk, not a secret — and omitted (never
+    an empty list) for roster-less rooms. Best-effort like the rest of this snapshot."""
+    try:
+        entries = await PregenRoster(services.store).entries(chat_key)
+    except Exception:
+        return []
+    return [
+        {"name": str(entry.get("name", "")), "claimed_by": str(entry.get("claimed_by", ""))}
+        for entry in entries
+        if entry.get("name")
+    ]
 
 
 async def _usage(services: Services, chat_key: str) -> dict[str, Any] | None:

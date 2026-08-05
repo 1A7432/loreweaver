@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 # `panel_event`, the `panel_intent` client frame, and pack-asset resolution on the
 # media byte channel. v1.7 added declarative hook-emitted `ui` frames (core.hooks
 # emitUI); v1.6 added player-visible module variables on the state frame.
-_PROTOCOL_VERSION = "1.8"
+_PROTOCOL_VERSION = "1.9"
 # Public alias for out-of-band consumers (the `.lwpack` engine-minimum check in app.py).
 PROTOCOL_VERSION = _PROTOCOL_VERSION
 _SERVER_BANNER = "loreweaver/1"

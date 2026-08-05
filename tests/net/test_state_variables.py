@@ -38,6 +38,27 @@ async def test_build_room_state_omits_variables_when_none_defined():
     state = await build_room_state(services, ctx)
 
     assert "variables" not in state
+    # v1.9: no roster → no `pregens` field either (omitted, never an empty list).
+    assert "pregens" not in state
+
+
+async def test_build_room_state_surfaces_pregen_roster_to_every_viewer():
+    from core.character_manager import CharacterSheet
+    from core.pregen_roster import PregenRoster
+
+    services = _services()
+    ctx = _room_ctx("pregen-room")
+    roster = PregenRoster(services.store)
+    await roster.add(ctx.chat_key, CharacterSheet(name="Mira Vane", system="CoC"), source="module")
+    await roster.add(ctx.chat_key, CharacterSheet(name="老陈", system="CoC"), source="module")
+    await roster.claim(ctx.chat_key, "Mira Vane", "player-1", services.characters)
+
+    state = await build_room_state(services, ctx)
+
+    assert state["pregens"] == [
+        {"name": "Mira Vane", "claimed_by": "player-1"},
+        {"name": "老陈", "claimed_by": ""},
+    ]
 
 
 async def test_build_room_state_surfaces_player_visible_variables_in_definition_order():
