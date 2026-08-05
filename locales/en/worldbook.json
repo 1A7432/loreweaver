@@ -31,5 +31,6 @@
   "worldbook.commands.lore.add_usage": "Usage: .lore add <title> | <content>",
   "worldbook.commands.lore.query_usage": "Usage: .lore query <text>",
   "worldbook.commands.lore.import_usage": "Usage: .lore import <file path>",
-  "worldbook.commands.lore.denied": "Only the Keeper can author or reveal world lore."
+  "worldbook.commands.lore.denied": "Only the Keeper can author or reveal world lore.",
+  "worldbook.tools.import.skipped_line": "Oversized entries left out: {count} (first: {titles})."
 }

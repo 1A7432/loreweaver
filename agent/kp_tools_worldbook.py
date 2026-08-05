@@ -258,11 +258,19 @@ class WorldbookTools:
                 if isinstance(book, dict):
                     data = book
             source = host_path.name
+            skipped_titles: list[str] = []
             count = await self._services.worldbook.import_entries(
-                ctx.chat_key, data, source=source, is_keeper=_keeper
+                ctx.chat_key, data, source=source, is_keeper=_keeper, skipped_titles=skipped_titles
             )
-            if not count:
+            if not count and not skipped_titles:
                 return i18n.t("worldbook.tools.import.none", source=source)
-            return i18n.t("worldbook.tools.import.done", count=count, source=source)
+            done = i18n.t("worldbook.tools.import.done", count=count, source=source)
+            if skipped_titles:
+                done += "\n" + i18n.t(
+                    "worldbook.tools.import.skipped_line",
+                    count=len(skipped_titles),
+                    titles="、".join(skipped_titles[:5]),
+                )
+            return done
         except Exception as exc:
             return i18n.t("worldbook.tools.import.failed", error=str(exc))

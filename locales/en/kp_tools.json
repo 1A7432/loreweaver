@@ -284,5 +284,6 @@
   "kp_tools.know.upload.file_missing": "❌ The specified file does not exist.",
   "kp_tools.know.upload.init_done": "🔄 Module knowledge-pool initialization finished (status: {status}).",
   "kp_tools.know.upload.init_done_fallback": "⚠️ Module knowledge-pool initialization used degraded fallback analysis. Retry initialization or re-import the module for a full analysis. Last error: {error}",
-  "kp_tools.know.upload.parse_failed": "❌ Failed to process the file: {error}"
+  "kp_tools.know.upload.parse_failed": "❌ Failed to process the file: {error}",
+  "kp_tools.dice.skill_check.unknown_skill": "Unknown skill or attribute “{name}” — use a skill from the character sheet or an attribute name (e.g. 侦查, Spot Hidden, STR, 力量)."
 }

@@ -54,10 +54,15 @@ def _coerce_entry_int(value: Any, default: int) -> int:
 # can never claim the cross-module "world" scope for itself; see `_normalize_import_entry`.
 IMPORT_SCOPE = "session"
 
-# Trust caps for a single import call. These bound both prompt-injection surface and storage
-# growth from an adversarial lorebook; exceeding them fails the whole import closed.
+# Trust caps for a single import call, bounding prompt-injection surface and storage growth
+# from an adversarial lorebook. Exceeding the ENTRY COUNT fails the whole import closed; an
+# oversized single entry is skipped (and reported) instead — real module cards routinely mix
+# ordinary lore with 10-13KB protocol/teaching blocks (the 2026-08-05 play-test card carried
+# seven above the old 4000 cap, which used to fail the entire card). Injection-time prompt
+# pressure is bounded separately by `match(budget_chars=...)`, so this cap is a storage bound:
+# 200 × 16000 ≈ 3.2 MB worst case.
 MAX_IMPORT_ENTRIES = 200
-MAX_IMPORT_CONTENT_CHARS = 4000
+MAX_IMPORT_CONTENT_CHARS = 16000
 
 
 @dataclass
@@ -256,14 +261,21 @@ class WorldbookManager:
         source: str = "",
         is_keeper: bool = False,
         char_name: str = "",
+        skipped_titles: list[str] | None = None,
     ) -> int:
         """Import lorebook entries into this room.
 
         Uploaded lorebooks / character cards are UNTRUSTED by default: every entry is forced to
-        the room-local import scope with ``constant=False`` and (unless ``is_keeper``) ``secret``
-        stripped, so a crafted file cannot inject always-on or keeper-only text. Callers that have
-        verified the importer is the room's keeper pass ``is_keeper=True`` to retain secrecy flags;
-        scope/constant are still forced regardless of trust.
+        the room-local import scope, and a non-keeper upload additionally gets ``constant``
+        forced off and secret-flagged entries dropped, so a crafted file cannot inject always-on
+        or keeper-only text. Callers that have verified the importer is the room's keeper pass
+        ``is_keeper=True`` to retain both flags (module cards ship their rules as constant
+        entries); scope is still forced regardless of trust.
+
+        An entry whose content exceeds ``MAX_IMPORT_CONTENT_CHARS`` is SKIPPED (never a
+        whole-import failure — real module cards mix ordinary lore with a few oversized
+        protocol/teaching blocks); its title is appended to the caller-supplied
+        ``skipped_titles`` accumulator so command surfaces can itemize what was left out.
         """
         raw_entries: Any = entries.get("entries", []) if isinstance(entries, dict) else entries
         if not isinstance(raw_entries, list):
@@ -295,7 +307,9 @@ class WorldbookManager:
                 # ({{user}} stays dynamic and resolves at render time).
                 entry = _bind_char_name(entry, char_name)
             if len(entry.content) > MAX_IMPORT_CONTENT_CHARS:
-                raise ValueError("worldbook import entry content exceeds the maximum length")  # i18n-exempt: surfaced via localized import failure
+                if skipped_titles is not None:
+                    skipped_titles.append(entry.title)
+                continue
             if entry.content:
                 await self.add(chat_key, entry)
                 count += 1
@@ -511,11 +525,15 @@ async def inject_world_lore_prompt(
     macros: Any = None,
     rng: random.Random | None = None,
     advance_timers: bool = False,
+    limit: int = 8,
+    budget_chars: int = 4000,
 ) -> str:
     entries = await worldbook.match(
         ctx.chat_key,
         recent_context,
         role=role,
+        limit=limit,
+        budget_chars=budget_chars,
         resolve=resolve,
         engine=engine,
         rng=rng,
@@ -754,10 +772,13 @@ def _normalize_import_entry(raw: dict[str, Any], *, source: str, index: int, is_
     position = {"before_char": "before", "after_char": "after", 0: "before", 1: "after"}.get(raw_position, "")
 
     # Trust boundary: the uploaded file does NOT get to choose its own scope/constant/secret.
-    # Scope is pinned room-local and `constant` is forced off (an always-on entry would inject
+    # Scope is pinned room-local. `constant` and `secret` are honored only for a KEEPER
+    # importer: a player upload gets `constant` forced off (an always-on entry would inject
     # itself into every prompt regardless of keywords; an imported `@@activate` is ignored for
-    # the same reason). `secret` is honored only for a keeper importer — a non-keeper import of
-    # a secret-flagged entry already returned `None` at the top of this function. The `id` is
+    # the same reason), while a keeper world import keeps it — ST module cards carry their
+    # rules/timelines as constant entries and stripping the flag left every imported module
+    # rule keyword-gated (2026-08-05 play-test finding). A non-keeper import of a
+    # secret-flagged entry already returned `None` at the top of this function. The `id` is
     # always regenerated so a card cannot address (and thus
     # shadow) an existing entry. A `condition` is safe to honor: it can only NARROW injection,
     # and it is evaluated by the closed `core.condexpr` grammar, never executed. The trigger
@@ -771,7 +792,7 @@ def _normalize_import_entry(raw: dict[str, Any], *, source: str, index: int, is_
             "category": raw.get("category", extensions.get("category", "lore")),
             "scope": IMPORT_SCOPE,
             "secret": bool(raw.get("secret", extensions.get("secret", False))),
-            "constant": False,
+            "constant": bool(raw.get("constant", False)) if is_keeper else False,
             "priority": priority,
             "enabled": enabled,
             "condition": condition,

@@ -66,6 +66,22 @@ from core.rulepacks import load_rulepack
 # route to an attribute check instead of a skill lookup. Game data (mirrors
 # `core.character_manager.CharacterSheet`'s CoC attribute keys), not UI text.
 _COC_ATTRIBUTE_NAMES = {"STR", "CON", "SIZ", "DEX", "APP", "INT", "POW", "EDU", "LUC"}
+# Chinese attribute names the model naturally reaches for ("力量" for a STR check). Without
+# this map they fell through to `skills.get(名, 0)` → a degenerate target-0 check that a
+# roll of 1 turns into a critical (2026-08-05 play-test, Bug6).
+_COC_ATTRIBUTE_ALIASES = {
+    "力量": "STR",
+    "体质": "CON",
+    "体型": "SIZ",
+    "敏捷": "DEX",
+    "外貌": "APP",
+    "智力": "INT",
+    "灵感": "INT",
+    "意志": "POW",
+    "教育": "EDU",
+    "幸运": "LUC",
+    "运气": "LUC",
+}
 
 # "Credit Rating" skill aliases (CN/EN), routed to the "信用" skill under the
 # display name "信用评级". CJK/EN game-data skill-name aliases, exempt from
@@ -643,7 +659,9 @@ class DiceTools:
                 return i18n.t("kp_tools.dice.skill_check.npc_target_required")
 
             standard_name = characters.find_skill_by_alias(character, skill_name)
-            attr_upper = skill_name.upper().strip()
+            # Chinese attribute names resolve to their codes BEFORE the attribute check, so
+            # "力量" rolls STR instead of a nonexistent skill.
+            attr_upper = _COC_ATTRIBUTE_ALIASES.get(skill_name.strip(), skill_name.upper().strip())
             skill_lower = skill_name.lower().strip()
 
             if character.system == "CoC":
@@ -658,6 +676,11 @@ class DiceTools:
                     skill_value = character.skills.get("信用", 0)
                 else:
                     target_skill = standard_name if standard_name else skill_name
+                    if target_skill not in character.skills:
+                        # Unknown name (no alias, no attribute, not on the sheet): refuse the
+                        # roll instead of running a degenerate target-0 check where a 1 reads
+                        # as a critical success.
+                        return i18n.t("kp_tools.dice.skill_check.unknown_skill", name=skill_name)
                     skill_value = character.skills.get(target_skill, 0)
 
                 result = dice.roll_coc_check_with_bonus(skill_value, bonus, penalty)

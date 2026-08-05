@@ -284,5 +284,6 @@
   "kp_tools.know.upload.file_missing": "❌ 指定的文件不存在",
   "kp_tools.know.upload.init_done": "🔄 模组知识池初始化已完成（状态：{status}）",
   "kp_tools.know.upload.init_done_fallback": "⚠️ 模组知识池使用了降级后备分析。请重试初始化或重新导入模组以进行完整分析。最近错误：{error}",
-  "kp_tools.know.upload.parse_failed": "❌ 文件处理失败：{error}"
+  "kp_tools.know.upload.parse_failed": "❌ 文件处理失败：{error}",
+  "kp_tools.dice.skill_check.unknown_skill": "未知的技能或属性「{name}」——请使用角色卡上的技能名或属性名（如 侦查、Spot Hidden、STR、力量）。"
 }

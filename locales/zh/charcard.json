@@ -26,5 +26,6 @@
   "charcard.tools.world.failed": "导入世界卡失败：{error}",
   "charcard.tools.preview.world_line": "世界机制：钩子脚本 {hooks} 个、变量声明 {vars} 条、模板代码块 {ejs} 处——需守秘人以 `.import <角色卡文件> world` 导入。",
   "charcard.tools.world.pregen_line": "角色入池：「{name}」已进入本房间的预设角色池，玩家用 `.pc claim {name}` 认领（想要 AI 扮演请另行 `.import <角色卡文件> companion`）。",
-  "charcard.tools.world.specs_line": "类型化变量：已从原生卡包定义 {count} 个追踪器。"
+  "charcard.tools.world.specs_line": "类型化变量：已从原生卡包定义 {count} 个追踪器。",
+  "charcard.tools.world.skipped_line": "超长条目未导入：{count} 条（前几条：{titles}）——超出单条导入上限，请在卡内精简或拆分。"
 }

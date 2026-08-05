@@ -31,5 +31,6 @@
   "worldbook.commands.lore.add_usage": "用法：.lore add <标题> | <内容>",
   "worldbook.commands.lore.query_usage": "用法：.lore query <文本>",
   "worldbook.commands.lore.import_usage": "用法：.lore import <文件路径>",
-  "worldbook.commands.lore.denied": "只有主持人才能编写或揭示世界设定。"
+  "worldbook.commands.lore.denied": "只有主持人才能编写或揭示世界设定。",
+  "worldbook.tools.import.skipped_line": "超长条目未导入：{count} 条（前几条：{titles}）。"
 }

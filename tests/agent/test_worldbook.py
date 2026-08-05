@@ -239,7 +239,7 @@ async def test_import_forces_untrusted_defaults():
     assert "INJECTED_ALWAYS_ON" not in prompt
 
 
-async def test_import_keeper_may_retain_secret_but_scope_and_constant_still_forced():
+async def test_import_keeper_retains_secret_and_constant_but_scope_still_forced():
     manager = WorldbookManager(Store(":memory:"))
 
     await manager.import_entries(
@@ -250,8 +250,8 @@ async def test_import_keeper_may_retain_secret_but_scope_and_constant_still_forc
     )
     [entry] = await manager.list("chat-a")
     assert entry.secret is True  # keeper importer keeps the secrecy flag
-    assert entry.scope == "session"  # scope is still forced room-local
-    assert entry.constant is False  # constant is still forced off
+    assert entry.constant is True  # …and the constant flag (module rules are constant entries)
+    assert entry.scope == "session"  # scope is still forced room-local, keeper or not
 
 
 async def test_import_entry_count_cap_enforced():
@@ -263,11 +263,41 @@ async def test_import_entry_count_cap_enforced():
     assert await manager.list("chat-a") == []
 
 
-async def test_import_entry_content_length_cap_enforced():
+async def test_import_oversized_entry_is_skipped_and_itemized_not_fatal():
+    """Real module cards mix ordinary lore with 10KB+ protocol blocks: an oversized entry
+    is skipped (title reported via the accumulator), the REST of the import still lands —
+    the pre-2026-08-05 whole-import ValueError left ten entries half-written and no clue
+    which entry was at fault."""
     manager = WorldbookManager(Store(":memory:"))
-    oversized = {"entries": [{"content": "x" * (MAX_IMPORT_CONTENT_CHARS + 1), "keys": ["k"]}]}
-    with pytest.raises(ValueError):
-        await manager.import_entries("chat-a", oversized, source="card")
+    payload = {
+        "entries": [
+            {"title": "正常条目", "content": "short lore", "keys": ["k"]},
+            {"title": "巨型协议块", "content": "x" * (MAX_IMPORT_CONTENT_CHARS + 1), "keys": ["p"]},
+            {"title": "另一条", "content": "more lore", "keys": ["m"]},
+        ]
+    }
+    skipped: list[str] = []
+    count = await manager.import_entries("chat-a", payload, source="card", skipped_titles=skipped)
+    assert count == 2
+    assert skipped == ["巨型协议块"]
+    titles = {entry.title for entry in await manager.list("chat-a")}
+    assert titles == {"正常条目", "另一条"}
+
+
+async def test_keeper_world_import_preserves_constant_player_import_does_not():
+    """ST module cards ship rules/timelines as constant entries; a keeper world import keeps
+    the flag (same trust precedent as `secret`), while a player upload still gets it forced
+    off — an untrusted file cannot self-promote to always-on injection."""
+    manager = WorldbookManager(Store(":memory:"))
+    payload = {"entries": [{"title": "难度·标准", "content": "原作时间线规则。", "keys": [], "constant": True}]}
+
+    await manager.import_entries("keeper-room", payload, source="card", is_keeper=True)
+    [keeper_entry] = await manager.list("keeper-room")
+    assert keeper_entry.constant is True
+
+    await manager.import_entries("player-room", payload, source="card", is_keeper=False)
+    [player_entry] = await manager.list("player-room")
+    assert player_entry.constant is False
 
 
 async def test_room_rows_backup_covers_world_scope_entries():

@@ -309,8 +309,14 @@ class CharcardTools:
             # into the shared MVU tree (`core.worldbook.import_entries` gates that on
             # `is_keeper=True`). The ORIGINAL entries are imported, not the stripped half —
             # render-time EJS in world lore is exactly what this path exists to carry.
+            skipped_titles: list[str] = []
             lore = await self._services.worldbook.import_entries(
-                ctx.chat_key, card.character_book, source=card.name, is_keeper=True, char_name=card.name
+                ctx.chat_key,
+                card.character_book,
+                source=card.name,
+                is_keeper=True,
+                char_name=card.name,
+                skipped_titles=skipped_titles,
             )
             hooks = card_hook_codes(card)
             if hooks:
@@ -342,7 +348,14 @@ class CharcardTools:
                 vars=world.initvar_entries,
                 hooks=len(hooks),
             )
-            extra_lines = [line for line in (specs_line, pregen_line) if line]
+            skipped_line = ""
+            if skipped_titles:
+                skipped_line = i18n.t(
+                    "charcard.tools.world.skipped_line",
+                    count=len(skipped_titles),
+                    titles="、".join(skipped_titles[:5]),
+                )
+            extra_lines = [line for line in (specs_line, pregen_line, skipped_line) if line]
             return "\n".join([result, *extra_lines])
         except Exception as exc:
             return i18n.t("charcard.tools.world.failed", error=str(exc))

@@ -46,3 +46,44 @@ def test_parse_time_delta_supports_chinese_and_english_units():
     assert parse_time_delta("-1小时").total_seconds() == -3600
     assert parse_time_delta("+2days").total_seconds() == 2 * 86400
     assert parse_time_delta("gibberish") is None
+
+
+# ---------------------------------------------------------------------------
+# Module-card day faces (D1 上午 09:30 / 第3天 22:00) — 2026-08-05 play-test Bug5
+# ---------------------------------------------------------------------------
+
+
+def test_advance_day_face_crosses_days_and_drops_period_word():
+    from core.game_clock import advance_game_time
+
+    advanced, ok = advance_game_time("D1 上午 09:30", "+21小时")
+    assert (advanced, ok) == ("D2 06:30", True)
+
+
+def test_advance_day_face_keeps_the_第_family():
+    from core.game_clock import advance_game_time
+
+    advanced, ok = advance_game_time("第3天 22:00", "+3小时")
+    assert (advanced, ok) == ("第4天 01:00", True)
+
+
+def test_advance_day_face_without_period_word_and_minutes():
+    from core.game_clock import advance_game_time
+
+    advanced, ok = advance_game_time("D7 23:50", "+15分钟")
+    assert (advanced, ok) == ("D8 00:05", True)
+
+
+def test_advance_day_face_refuses_moving_before_day_one():
+    from core.game_clock import advance_game_time
+
+    face = "D1 01:00"
+    advanced, ok = advance_game_time(face, "-2天")
+    assert (advanced, ok) == (face, False)
+
+
+def test_iso_faces_still_advance_unchanged_behavior():
+    from core.game_clock import advance_game_time
+
+    advanced, ok = advance_game_time("2026-08-05 09:30", "+90分钟")
+    assert (advanced, ok) == ("2026-08-05 11:00", True)

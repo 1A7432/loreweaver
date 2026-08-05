@@ -559,6 +559,12 @@ async def run_kp_turn(
     hook_ui_frames: list[dict] = []
     hook_panel_events: list[dict] = []
     ctx.extra.pop("hook_injections", None)  # reused ctx must not leak a prior turn's injections
+    # This turn's player message doubles as the worldbook retrieval context —
+    # `agent.prompt_builder` reads `extra["user_message"]` for `worldbook.match`. Nothing
+    # else ever wrote this key, which left live-play lorebook injection retrieving against
+    # an empty context (found by the 2026-08-05 imported-card play-test): imported cards'
+    # keyword entries could never fire outside archived-session recaps.
+    ctx.extra["user_message"] = user_message
     if hook_engine is not None:
         outcome = hook_engine.fire("turn_start", {"user_message": user_message, "actor": ctx.user_id})
         hook_writes_this_turn += await apply_hook_writes(services, ctx.chat_key, outcome.writes)

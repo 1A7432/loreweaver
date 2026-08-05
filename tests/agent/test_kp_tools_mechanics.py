@@ -1195,3 +1195,39 @@ async def test_output_is_localized_per_ctx_locale():
     assert result_zh == services.i18n.with_locale("zh").t("kp_tools.character.none")
     assert result_en != result_zh
     assert "角色卡" in result_zh
+
+
+async def test_skill_check_resolves_chinese_attribute_names_to_codes():
+    """"力量" must roll against STR's attribute value, not fall through to a nonexistent
+    skill with target 0 (2026-08-05 play-test Bug6: a roll of 1 read as a critical)."""
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    dice_tools = DiceTools(services)
+
+    seed_dice(1)
+    await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=True)
+    character = await services.characters.get_character(ctx.uid(), ctx.chat_key)
+    strength = character.attributes.get("STR", 0)
+    assert strength > 0
+
+    seed_dice(777)
+    text = await dice_tools.skill_check(ctx, skill_name="力量")
+
+    assert f"{strength}" in text  # the target line carries STR's real value
+    assert "0" != f"{strength}"
+
+
+async def test_skill_check_refuses_unknown_skill_names():
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    dice_tools = DiceTools(services)
+
+    seed_dice(1)
+    await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=True)
+
+    text = await dice_tools.skill_check(ctx, skill_name="呼啦圈精通")
+
+    expected = services.i18n.with_locale(ctx.locale).t(
+        "kp_tools.dice.skill_check.unknown_skill", name="呼啦圈精通"
+    )
+    assert text == expected

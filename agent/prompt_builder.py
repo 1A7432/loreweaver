@@ -124,6 +124,14 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
         engine=engine,
         macros=macros,
         advance_timers=True,  # the once-per-turn injection path drives sticky/cooldown/delay
+        # Keeper-turn injection budget, tuned for imported module cards: their rule/timeline
+        # entries are constant (a keeper world import preserves the flag) and a handful run
+        # 2-5KB each, so the browse-path default (8 entries / 4000 chars) starves the module.
+        # Oversized protocol/teaching blocks (10KB+) still stay out — `_cap_entries` skips
+        # anything that alone exceeds the budget, which also keeps ST JSONPatch tutors from
+        # steering the model off the engine's `_.set` wire.
+        limit=12,
+        budget_chars=12_000,
     )
     if engine is not None:
         mvu_tree = await _flush_template_writes(services, ctx.chat_key, engine, mvu_tree)
