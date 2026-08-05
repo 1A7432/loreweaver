@@ -414,6 +414,73 @@ def test_verify_reenforces_card_kind_against_a_tampered_manifest(tmp_path: Path)
         _install(tampered, tmp_path)
 
 
+LORECARD_JSON = json.dumps(
+    {
+        "format": "loreweaver.card",
+        "format_version": 0,
+        "name": "Shirasagi",
+        "description": "a native world bundle",
+        "first_mes": "It is raining in Shinjuku.",
+        "variables": [{"id": "heat", "kind": "number", "default": 1, "minimum": 0, "maximum": 10}],
+        "worldbook": [
+            {"title": "公开传闻", "content": "白鹭账号又更新了。", "keys": ["白鹭"]},
+            {"title": "真相层", "content": "手帐在深川。", "secret": True},
+        ],
+        "extensions": {"loreweaver_hooks": ["on('turn_start', () => {});"]},
+    }
+)
+
+
+def _write_native_source(root: Path, cards_yaml: str) -> Path:
+    src = root / "native-src"
+    (src / "cards").mkdir(parents=True)
+    (src / "cards/shirasagi.lorecard.json").write_text(LORECARD_JSON, encoding="utf-8")
+    (src / MANIFEST_NAME).write_text(
+        "id: nativepack\nversion: 1.0.0\nname: Native Pack\ndescription: test\n"
+        "authors: [ada]\nlicense: MIT\nengine: {}\n"
+        f"contents:\n  cards:\n{cards_yaml}",
+        encoding="utf-8",
+    )
+    return src
+
+
+def test_native_lorecard_is_a_first_class_pack_card(tmp_path: Path):
+    """A `*.lorecard.json` under cards/ goes through the NATIVE parser: its secret lore
+    and hooks count as world machinery (a character label is rejected), and the world
+    label builds, installs, and reports honest trust numbers."""
+    src = _write_native_source(tmp_path, "    - cards/shirasagi.lorecard.json\n")
+    with pytest.raises(PackError, match="kind: world"):
+        build_pack(src, tmp_path / "bad.lwpack")
+
+    (src / MANIFEST_NAME).write_text(
+        (src / MANIFEST_NAME)
+        .read_text(encoding="utf-8")
+        .replace(
+            "  cards:\n    - cards/shirasagi.lorecard.json\n",
+            "  cards:\n    - path: cards/shirasagi.lorecard.json\n      kind: world\n",
+        ),
+        encoding="utf-8",
+    )
+    built = build_pack(src, tmp_path / "native.lwpack")
+    assert built.manifest.trust is not None and built.manifest.trust.world_cards == 1
+
+    report = _install(built.path, tmp_path)
+    assert report.world_cards == ["cards/shirasagi.lorecard.json"]
+
+
+def test_broken_native_lorecard_fails_the_build_instead_of_passing_as_generic_json(tmp_path: Path):
+    """The dispatch regression guard: an unsupported `format_version` must surface as a
+    PackError from the native parser — without the sniff, the lenient generic-JSON card
+    read would swallow this document (it has a `name`) and mislabel its machinery."""
+    src = _write_native_source(tmp_path, "    - cards/shirasagi.lorecard.json\n")
+    (src / "cards/shirasagi.lorecard.json").write_text(
+        json.dumps({"format": "loreweaver.card", "format_version": 99, "name": "X"}),
+        encoding="utf-8",
+    )
+    with pytest.raises(PackError, match="format_version"):
+        build_pack(src, tmp_path / "bad.lwpack")
+
+
 def test_bundled_rulepack_may_extend_a_bundled_base_and_builtin(tmp_path: Path):
     src = tmp_path / "rules-src"
     (src / "rulepacks").mkdir(parents=True)
@@ -573,3 +640,30 @@ def test_resolve_installed_path_falls_back_across_versions_missing_the_file(tmp_
     _installed(tmp_path, "blackmoor@2.0.0", files=("cards/hero.png",))
     resolved = resolve_installed_path(tmp_path, "blackmoor/cards/old.png")
     assert resolved == (old / "cards/old.png").resolve()
+
+
+def test_specs_only_lorecard_still_requires_the_world_label(tmp_path: Path):
+    """Typed variable specs live on the BUNDLE, not the embedded card — a lorecard whose
+    only machinery is specs must not slip past the kind gate with a clean character half."""
+    specs_only = json.dumps(
+        {
+            "format": "loreweaver.card",
+            "format_version": 0,
+            "name": "Meter Maid",
+            "description": "a persona with trackers and nothing else",
+            "variables": [{"id": "heat", "kind": "number", "default": 1, "minimum": 0, "maximum": 10}],
+            "worldbook": [],
+            "extensions": {},
+        }
+    )
+    src = tmp_path / "specs-src"
+    (src / "cards").mkdir(parents=True)
+    (src / "cards/meter.lorecard.json").write_text(specs_only, encoding="utf-8")
+    (src / MANIFEST_NAME).write_text(
+        "id: specspack\nversion: 1.0.0\nname: Specs Pack\ndescription: test\n"
+        "authors: [ada]\nlicense: MIT\nengine: {}\n"
+        "contents:\n  cards:\n    - cards/meter.lorecard.json\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(PackError, match="kind: world"):
+        build_pack(src, tmp_path / "specs.lwpack")

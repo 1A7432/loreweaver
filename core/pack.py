@@ -31,7 +31,7 @@ import re
 import shutil
 import zipfile
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
 
@@ -40,6 +40,7 @@ import yaml
 from core.card_split import WorldPayloads, detect_world_payloads
 from core.charcard import MAX_CARD_FILE_BYTES, parse_card_bytes
 from core.hooks import MAX_HOOK_SOURCE_CHARS
+from core.lorecard import looks_like_lorecard, parse_lorecard_bytes
 from core.panels import (
     CODE_MIMES,
     MAX_PANEL_CODE_BYTES,
@@ -499,10 +500,28 @@ def _validate_rulepack_file(
 
 
 def _validate_card_bytes(path: str, data: bytes) -> tuple[bool, WorldPayloads]:
-    """Parse + cap-check one bundled card; returns ``(has_ejs, world_payloads)``."""
+    """Parse + cap-check one bundled card; returns ``(has_ejs, world_payloads)``.
+
+    Native bundles (``*.lorecard.json``) are first-class pack cards: they dispatch to the
+    M14 parser rather than the SillyTavern one, so their machinery (typed specs aside —
+    hooks, ``secret`` lore, declaration entries) reaches ``detect_world_payloads`` and the
+    ``kind: world`` rule instead of hiding behind a lenient generic-JSON read."""
     if len(data) > MAX_CARD_FILE_BYTES:
         raise PackError(f"card {path}: exceeds the {MAX_CARD_FILE_BYTES}-byte cap")
     try:
+        if looks_like_lorecard(data):
+            bundle = parse_lorecard_bytes(data, filename=PurePosixPath(path).name)
+            payloads = detect_world_payloads(bundle.card)
+            if bundle.variable_specs:
+                # Typed specs are the native flavor of variable declarations — the same
+                # world machinery an ST card ships as an [InitVar] entry. They live on the
+                # bundle (not the embedded card), so a specs-only lorecard would otherwise
+                # slip past the `kind: world` gate with a clean-looking character half.
+                payloads = replace(
+                    payloads,
+                    initvar_entries=payloads.initvar_entries + len(bundle.variable_specs),
+                )
+            return _detect_ejs(data.decode("utf-8", errors="ignore")), payloads
         card = parse_card_bytes(data, filename=PurePosixPath(path).name)
     except ValueError as exc:
         raise PackError(f"card {path}: {exc}") from exc
