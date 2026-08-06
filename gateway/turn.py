@@ -236,7 +236,29 @@ async def run_turn(
         review = None if unfiltered else ((lambda value: censor.review(value).cleaned) if censor is not None else None)
         await hub.begin_turn(ctx.chat_key, name)
         try:
-            result = await run_kp_turn(ctx, services, toolset, text, output_review=review)
+            # Streaming narrative (docs/protocol.md): frames sharing an id carry text
+            # DELTAS clients concatenate; `done` closes the stream. Each loop epoch (one
+            # model round) gets a fresh id, so a discarded tool-round draft never bleeds
+            # into the final bubble.
+            from net.session import new_id  # gateway->net seam; module-level would cycle
+
+            stream_state = {"id": "", "epoch": 0, "text": ""}
+
+            async def _emit_reply_delta(frame: dict) -> None:
+                if frame["epoch"] != stream_state["epoch"]:
+                    stream_state.update(id=new_id(), epoch=frame["epoch"], text="")
+                stream_state["text"] += frame["text"]
+                await hub.publish(
+                    ctx.chat_key,
+                    Event.narrative(
+                        speaker="kp", text=frame["text"], fmt="markdown",
+                        frame_id=stream_state["id"], stream=True,
+                    ),
+                )
+
+            result = await run_kp_turn(
+                ctx, services, toolset, text, output_review=review, on_reply_delta=_emit_reply_delta
+            )
             for entry in result.tool_trace:
                 for dice_event in _dice_events(entry, name, i18n):
                     await hub.publish(ctx.chat_key, dice_event)
@@ -244,7 +266,20 @@ async def run_turn(
                 npc_event = _npc_event(entry, i18n)
                 if npc_event is not None:
                     await hub.publish(ctx.chat_key, npc_event)
-            await hub.publish(ctx.chat_key, Event.narrative(speaker="kp", text=result.reply, fmt="markdown"))
+            if stream_state["id"] and result.reply.startswith(stream_state["text"]):
+                # Common path: the stream matches the final reply — close the SAME bubble
+                # with the remaining tail (deployed clients concatenate deltas).
+                await hub.publish(
+                    ctx.chat_key,
+                    Event.narrative(
+                        speaker="kp", text=result.reply[len(stream_state["text"]):], fmt="markdown",
+                        frame_id=stream_state["id"], stream=True, done=True,
+                    ),
+                )
+            else:
+                # Rewritten reply (dice/state corrective, censor) or nothing streamed:
+                # a plain one-shot narrative; up-to-date clients supersede any undone draft.
+                await hub.publish(ctx.chat_key, Event.narrative(speaker="kp", text=result.reply, fmt="markdown"))
             # Hook-emitted declarative UI (protocol v1.7) rides right behind the
             # narrative it annotates, before the closing `state` snapshot.
             for ui_frame in result.ui_frames:

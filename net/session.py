@@ -194,13 +194,17 @@ def render_frame(event: Event) -> dict[str, Any] | None:
     if event.kind == "narrative":
         frame: dict[str, Any] = {
             "type": "narrative",
-            "id": new_id(),
+            "id": event.data.get("frame_id") or new_id(),
             "speaker": event.speaker,
             "text": event.text,
             "format": event.fmt,
         }
         if event.name:
             frame["name"] = event.name
+        if event.data.get("stream"):
+            frame["stream"] = True
+        if event.data.get("done"):
+            frame["done"] = True
         return frame
     if event.kind == "dice":
         return {"type": "dice", **event.data}

@@ -105,7 +105,13 @@ async def test_player_turn_auto_triggers_a_companion_turn_when_auto_on_and_in_co
     # The companion's own turn broadcast to the room -- the KP never called `companion_act` itself.
     companion_actions = [e for e in watcher.events if e.kind == "player_action" and e.name == "Ada"]
     assert companion_actions, "the party's companion must have auto-acted on the player's turn"
-    kp_lines = [e for e in watcher.events if e.kind == "narrative" and e.speaker == "kp"]
+    kp_lines = [
+        e
+        for e in watcher.events
+        if e.kind == "narrative"
+        and e.speaker == "kp"
+        and (not e.data.get("stream") or e.data.get("done"))
+    ]
     assert len(kp_lines) == 2  # the player's own KP reply + the companion's turn's KP resolution
 
 
@@ -218,7 +224,14 @@ async def test_companion_action_that_is_a_party_command_never_recurses_or_execut
     assert calls["n"] == 2
     # The Keeper resolved the action as narration; no command executed.
     assert result is not None
-    kp_lines = [e for e in watcher.events if e.kind == "narrative" and e.speaker == "kp"]
+    kp_lines = [
+        e
+        for e in watcher.events
+        if e.kind == "narrative"
+        and e.speaker == "kp"
+        # Streaming deltas share the final bubble; count only the closing/plain line.
+        and (not e.data.get("stream") or e.data.get("done"))
+    ]
     assert len(kp_lines) == 1
     # The room attributes exactly one Ada action -- no second companion turn was spawned.
     ada_actions = [e for e in watcher.events if e.kind == "player_action" and e.name == "Ada"]
@@ -247,7 +260,14 @@ async def test_companion_action_bot_off_does_not_mute_the_keeper():
     assert await store.get(user_key="", store_key=f"bot_enabled.{chat_key}") != "0"
     # And the room still got a KP-adjudicated turn.
     assert result is not None
-    kp_lines = [e for e in watcher.events if e.kind == "narrative" and e.speaker == "kp"]
+    kp_lines = [
+        e
+        for e in watcher.events
+        if e.kind == "narrative"
+        and e.speaker == "kp"
+        # Streaming deltas share the final bubble; count only the closing/plain line.
+        and (not e.data.get("stream") or e.data.get("done"))
+    ]
     assert len(kp_lines) == 1
 
 
@@ -283,7 +303,14 @@ async def test_companion_action_with_inline_roll_still_reaches_the_keeper(monkey
     # The Keeper WAS consulted -- the inline roll did not swallow the turn.
     assert kp_calls["n"] == 1
     assert result is not None, "the KP turn must not be swallowed by the inline-roll fallback"
-    kp_lines = [e for e in watcher.events if e.kind == "narrative" and e.speaker == "kp"]
+    kp_lines = [
+        e
+        for e in watcher.events
+        if e.kind == "narrative"
+        and e.speaker == "kp"
+        # Streaming deltas share the final bubble; count only the closing/plain line.
+        and (not e.data.get("stream") or e.data.get("done"))
+    ]
     assert len(kp_lines) == 1
 
 

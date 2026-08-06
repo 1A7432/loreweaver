@@ -45,7 +45,7 @@ class _ModelRecordingLLM:
         self._content = content
         self.models: list[str | None] = []
 
-    async def chat(self, messages, *, tools=None, tool_choice=None, temperature=None, model=None, reasoning_effort=None):
+    async def chat(self, messages, *, tools=None, tool_choice=None, temperature=None, model=None, reasoning_effort=None, on_text_delta=None):
         self.models.append(model)
         return ChatResult(content=self._content, tool_calls=[])
 

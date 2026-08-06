@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
 import { FrameType, type MediaFrame, type MediaPayload, type MediaUpload, type ServerFrame, type WelcomeFrame } from "loreweaver-protocol"
-import { GameView, type GameClient, type GameViewProps } from "./GameView"
+import { appendFrame, GameView, type GameClient, type GameViewProps } from "./GameView"
 import { SPINNER_FRAMES } from "./components/Spinner"
 import { themes } from "./themes"
 
@@ -1256,5 +1256,53 @@ describe("declarative ui frames (v1.7)", () => {
 
     expect(client.sent).toEqual(["I open the door"])
     act(() => renderer.destroy())
+  })
+})
+
+describe("appendFrame streaming-narrative semantics", () => {
+  const draft = {
+    type: FrameType.Narrative,
+    id: "s1",
+    speaker: "kp",
+    text: "雨声",
+    format: "markdown",
+    stream: true,
+  } as const
+
+  test("stream frames sharing an id concatenate their deltas", () => {
+    const log = appendFrame([draft], {
+      type: FrameType.Narrative,
+      id: "s1",
+      speaker: "kp",
+      text: "落在窗台。",
+      format: "markdown",
+      stream: true,
+      done: true,
+    })
+    expect(log).toHaveLength(1)
+    expect(log[0]).toMatchObject({ id: "s1", text: "雨声落在窗台。", done: true })
+  })
+
+  test("a plain kp reply supersedes an abandoned draft from another id", () => {
+    const log = appendFrame([draft], {
+      type: FrameType.Narrative,
+      id: "n2",
+      speaker: "kp",
+      text: "修正后的最终文本。",
+      format: "markdown",
+    })
+    expect(log).toHaveLength(1)
+    expect(log[0]).toMatchObject({ id: "n2", text: "修正后的最终文本。" })
+  })
+
+  test("a player line never disturbs an open kp draft", () => {
+    const log = appendFrame([draft], {
+      type: FrameType.Narrative,
+      id: "p1",
+      speaker: "player",
+      text: "我继续听。",
+      format: "plain",
+    })
+    expect(log).toHaveLength(2)
   })
 })

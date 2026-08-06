@@ -27,7 +27,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
@@ -141,6 +141,108 @@ def _strip_text_tool_calls(reply: str) -> str:
     if cleaned == reply:
         return reply
     return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+# Tag-name prefixes that may open a machinery block (`_TEXT_TOOL_CALL_WRAPPER_RE`) or an
+# MVU update block — while streaming, text is held from such an opener until it resolves.
+_STREAM_SUSPECT_PREFIXES = (
+    "deep", "use", "tool_call", "tool_use", "function_call", "function_calls", "invoke", "updatevariable",
+)
+_STREAM_TAG_RE = re.compile(r"\s*/?\s*([A-Za-z_][\w-]*)")
+
+
+class _ReplyStreamGate:
+    """Fail-closed incremental release of the in-progress reply.
+
+    A leak cannot be streamed first and stripped later, so text leaves for the client
+    only once it can no longer become part of a machinery/MVU block: everything from a
+    plausible suspicious opener onward is HELD until the block closes (then dropped
+    whole via `_strip_text_tool_calls`) or the round ends (unclosed suspicious tail
+    dropped). The final `narrative` frame remains authoritative — clients replace the
+    whole draft with it. Emission is coalesced and scheduled as ordered tasks so the
+    provider's sync callback can feed the async transport."""
+
+    def __init__(self, emit: Callable[[dict], Awaitable[None]]) -> None:
+        self._emit = emit
+        self._epoch = 0
+        self._seq = 0
+        self._pending = ""
+        self._held = ""
+        self._tasks: list[asyncio.Task] = []
+
+    def begin_round(self) -> None:
+        self._epoch += 1
+        self._seq = 0
+        self._pending = ""
+        self._held = ""
+
+    def feed(self, delta: str) -> None:
+        self._held += delta
+        self._release_safe()
+        if len(self._pending) >= 48 or "\n" in self._pending:
+            self._flush()
+
+    def finish_round(self, *, discard: bool) -> None:
+        """Round over: a tool round discards its draft (the client clears on the next
+        epoch); a final round releases the held remainder through the full strip."""
+        if discard:
+            self._pending = ""
+            self._held = ""
+            return
+        remainder = _strip_text_tool_calls(self._held)
+        cut = self._suspect_hold_index(remainder)
+        self._held = ""
+        self._pending += remainder[:cut]
+        self._flush()
+
+    async def drain(self) -> None:
+        for task in self._tasks:
+            try:
+                await task
+            except Exception:
+                logger.debug("reply-delta emit failed", exc_info=True)
+        self._tasks.clear()
+
+    def _suspect_hold_index(self, text: str) -> int:
+        search = 0
+        while True:
+            idx = text.find("<", search)
+            if idx == -1:
+                return len(text)
+            rest = text[idx + 1 :]
+            if not rest.strip():
+                return idx  # a trailing '<' could still become anything
+            tag = _STREAM_TAG_RE.match(rest)
+            if tag is None:
+                search = idx + 1  # '<' into non-tag prose
+                continue
+            name = tag.group(1).lower()
+            if any(name.startswith(p) or p.startswith(name) for p in _STREAM_SUSPECT_PREFIXES):
+                return idx
+            search = idx + 1
+
+    def _release_safe(self) -> None:
+        cut = self._suspect_hold_index(self._held)
+        if cut < len(self._held):
+            stripped = _strip_text_tool_calls(self._held)
+            if stripped != self._held:
+                self._held = stripped  # a machinery block completed and was dropped whole
+                self._release_safe()
+                return
+        self._pending += self._held[:cut]
+        self._held = self._held[cut:]
+
+    def _flush(self) -> None:
+        if not self._pending:
+            return
+        frame = {"epoch": self._epoch, "seq": self._seq, "text": self._pending}
+        self._seq += 1
+        self._pending = ""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._tasks.append(asyncio.ensure_future(self._emit(frame)))
 
 
 _DICE_COMMAND_RE = re.compile(
@@ -565,8 +667,15 @@ async def run_kp_turn(
     history_key: str | None = None,
     max_rounds: int = 12,
     output_review: Callable[[str], str] | None = None,
+    on_reply_delta: Callable[[dict], Awaitable[None]] | None = None,
 ) -> KPTurnResult:
     """Drive one AI-KP turn to completion and return its `KPTurnResult`.
+
+    `on_reply_delta`, if given, receives `{"epoch", "seq", "text"}` slices of the
+    in-progress reply as the model generates it, released through the fail-closed
+    `_ReplyStreamGate` (machinery/MVU blocks can never stream). A tool round's draft
+    is discarded (clients clear on the next epoch); the final `reply` remains the
+    authoritative text clients reconcile to.
 
     `history_key` defaults to `f"chat_history.{ctx.chat_key}"` (room-scoped,
     like the other conversation-level store keys `core.prompt_sections`
@@ -628,9 +737,12 @@ async def run_kp_turn(
     # is a bounded, best-effort repair pass, not part of what a context% meter
     # should describe as "this turn's usage".
     turn_usage = Usage()
+    gate = _ReplyStreamGate(on_reply_delta) if on_reply_delta is not None else None
 
     for round_index in range(1, max_rounds + 1):
         rounds = round_index
+        if gate is not None:
+            gate.begin_round()
         try:
             result = await _chat_with_continuation_cleanup(
                 services,
@@ -638,6 +750,7 @@ async def run_kp_turn(
                 tools=toolset.schemas(unlocked),
                 tool_choice="auto",
                 temperature=services.settings.llm.temperature,
+                on_text_delta=gate.feed if gate is not None else None,
             )
         except Exception as exc:
             # A real provider error (network/rate-limit/auth/SDK) must degrade to a friendly,
@@ -671,6 +784,8 @@ async def run_kp_turn(
         _accumulate_usage(turn_usage, result)
 
         if result.tool_calls:
+            if gate is not None:
+                gate.finish_round(discard=True)
             try:
                 await _dispatch_and_record(
                     toolset,
@@ -688,6 +803,8 @@ async def run_kp_turn(
                 raise
             continue
 
+        if gate is not None:
+            gate.finish_round(discard=False)
         reply = result.content or ""
         break
 
@@ -777,6 +894,8 @@ async def run_kp_turn(
     if output_review is not None:
         reply = output_review(reply)
 
+    if gate is not None:
+        await gate.drain()
     await _persist_history(services, key, history, user_message, reply)
     # Fold this turn into the rolling "story so far" recap when one is due, so
     # the KP keeps facts established far earlier in the session even after they
@@ -831,6 +950,7 @@ async def _chat_with_continuation_cleanup(
     tools: list[dict],
     tool_choice: str | dict,
     temperature: float | None,
+    on_text_delta: Callable[[str], None] | None = None,
 ) -> ChatResult:
     """Call the LLM and release list-owned state if the turn is cancelled."""
     try:
@@ -839,6 +959,7 @@ async def _chat_with_continuation_cleanup(
             tools=tools,
             tool_choice=tool_choice,
             temperature=temperature,
+            on_text_delta=on_text_delta,
         )
     except asyncio.CancelledError:
         _clear_llm_continuation(services, messages)

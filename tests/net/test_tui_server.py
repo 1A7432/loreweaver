@@ -805,7 +805,11 @@ async def test_kp_turn_after_module_seed_has_no_sentinel_leak_and_uses_keeper_to
 
         echo = await _recv(ws)
         busy = await _recv(ws)
+        streamed = []
         reply = await _recv(ws)
+        while reply["type"] == "narrative" and reply.get("stream") and not reply.get("done"):
+            streamed.append(reply)  # spec streaming: delta frames share the reply's id
+            reply = await _recv(ws)
         idle = await _recv(ws)
         state = await _recv(ws)
 
@@ -813,11 +817,12 @@ async def test_kp_turn_after_module_seed_has_no_sentinel_leak_and_uses_keeper_to
         assert busy == {"type": "turn_status", "status": "busy", "actor": "Nora"}
         assert reply["type"] == "narrative" and reply["speaker"] == "kp"
         assert reply["format"] == "markdown"
-        assert reply["text"].strip()
+        full_reply = "".join(frame["text"] for frame in streamed) + reply["text"]
+        assert full_reply.strip()
         assert idle == {"type": "turn_status", "status": "idle"}
         assert state["type"] == "state"
 
-        for frame in (echo, busy, reply, idle, state):
+        for frame in (echo, busy, *streamed, reply, idle, state):
             assert SENTINEL not in json.dumps(frame), "sentinel leaked in frame"
 
         assert server.turns, "no turn was recorded"
@@ -886,7 +891,11 @@ async def test_kp_turn_broadcasts_ai_npc_dialogue_before_kp_narrative_without_le
 
         echo = await _recv(ws)
         busy = await _recv(ws)
+        streamed = []
         npc_frame = await _recv(ws)
+        while npc_frame["type"] == "narrative" and npc_frame.get("stream") and not npc_frame.get("done"):
+            streamed.append(npc_frame)  # the KP reply streams before the npc/kp order pair
+            npc_frame = await _recv(ws)
         kp_frame = await _recv(ws)
         idle = await _recv(ws)
         state = await _recv(ws)
@@ -902,7 +911,7 @@ async def test_kp_turn_broadcasts_ai_npc_dialogue_before_kp_narrative_without_le
         assert idle == {"type": "turn_status", "status": "idle"}
         assert state["type"] == "state"
 
-        for frame in (echo, busy, npc_frame, kp_frame, idle, state):
+        for frame in (echo, busy, *streamed, npc_frame, kp_frame, idle, state):
             assert SENTINEL not in json.dumps(frame), "sentinel leaked in frame"
 
         await ws.close()

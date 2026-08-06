@@ -65,9 +65,23 @@ class Event:
         name: str = "",
         fmt: str = "markdown",
         private: bool = False,
+        frame_id: str = "",
+        stream: bool = False,
+        done: bool = False,
     ) -> Event:
-        """One line of story / dialogue from ``speaker`` (kp/npc/player/system)."""
-        return cls(kind="narrative", speaker=speaker, name=name, text=text, fmt=fmt, private=private)
+        """One line of story / dialogue from ``speaker`` (kp/npc/player/system).
+
+        ``frame_id``/``stream``/``done`` drive the protocol's streaming-narrative
+        semantics (frames sharing an id carry text DELTAS clients concatenate,
+        ``done`` closes the stream); leave them unset for a plain one-shot line."""
+        data: dict[str, Any] = {}
+        if frame_id:
+            data["frame_id"] = frame_id
+        if stream:
+            data["stream"] = True
+        if done:
+            data["done"] = True
+        return cls(kind="narrative", speaker=speaker, name=name, text=text, fmt=fmt, private=private, data=data)
 
     @classmethod
     def state(cls, snapshot: dict[str, Any]) -> Event:

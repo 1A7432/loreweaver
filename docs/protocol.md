@@ -95,7 +95,13 @@ connections receive `error too_many_connections` before `join` is read.
   For `speaker:"npc"`, `name` carries the NPC name.
   Streaming is multiple frames sharing the same `id` with `stream:true`,
   terminated by a frame with `done:true`; a non-streaming reply is simply a
-  single frame with neither field set.
+  single frame with neither field set. Each stream frame carries a text DELTA
+  the client concatenates onto that id's bubble (the `done` frame carries the
+  final tail). Servers stream the AI-KP's reply as it generates, sanitized
+  fail-closed (machinery/MVU blocks never stream); when a post-generation
+  correction rewrites the reply, the server sends the corrected text as a
+  fresh plain `narrative` instead — clients should let a finished or plain
+  KP reply supersede any still-open KP draft bubble with a different id.
 - `dice` — one dice roll/check, rendered client-side and color-coded by
   `rank` (`-2`..`+4`); NEVER carries keeper secrets:
   `{type:"dice", actor:string, kind:"roll"|"check"|"sanity"|"opposed"|"init", expr:string, rolls:number[], total:number, target?:number, rank?:int, level?:string, success?:boolean}`

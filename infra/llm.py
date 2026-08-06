@@ -71,6 +71,7 @@ class LLMClient(Protocol):
         temperature: float | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        on_text_delta: Callable[[str], None] | None = None,
     ) -> ChatResult: ...
 
 
@@ -113,6 +114,7 @@ class OpenAILLM:
         temperature: float | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        on_text_delta: Callable[[str], None] | None = None,
     ) -> ChatResult:
         if self._token_provider is not None:
             token = await self._token_provider()
@@ -136,16 +138,48 @@ class OpenAILLM:
             if effective_temperature is not None:
                 kwargs["temperature"] = effective_temperature
 
-        response = await self._client.chat.completions.create(**kwargs)
-        if not response.choices:
-            return ChatResult(content=None, tool_calls=[], raw=response, usage=parse_usage(response))
+        if on_text_delta is None:
+            response = await self._client.chat.completions.create(**kwargs)
+            if not response.choices:
+                return ChatResult(content=None, tool_calls=[], raw=response, usage=parse_usage(response))
 
-        message = response.choices[0].message
+            message = response.choices[0].message
+            tool_calls = [
+                ToolCall(id=call.id, name=call.function.name, arguments=_parse_tool_arguments(call.function.arguments))
+                for call in (message.tool_calls or [])
+            ]
+            return ChatResult(content=message.content, tool_calls=tool_calls, raw=response, usage=parse_usage(response))
+
+        # Streaming path: text deltas reach the caller as they generate; tool calls are
+        # reassembled from their indexed argument fragments. Token usage is best-effort
+        # absent here (`stream_options` support varies across OpenAI-compatible vendors,
+        # and a zero-usage turn is already tolerated everywhere).
+        kwargs["stream"] = True
+        content_parts: list[str] = []
+        slots: dict[int, dict[str, str]] = {}
+        stream = await self._client.chat.completions.create(**kwargs)
+        async for chunk in stream:
+            if not getattr(chunk, "choices", None):
+                continue
+            delta = chunk.choices[0].delta
+            if delta is None:
+                continue
+            if delta.content:
+                content_parts.append(delta.content)
+                on_text_delta(delta.content)
+            for call in delta.tool_calls or []:
+                slot = slots.setdefault(call.index or 0, {"id": "", "name": "", "arguments": ""})
+                if call.id:
+                    slot["id"] = call.id
+                if call.function and call.function.name:
+                    slot["name"] = call.function.name
+                if call.function and call.function.arguments:
+                    slot["arguments"] += call.function.arguments
         tool_calls = [
-            ToolCall(id=call.id, name=call.function.name, arguments=_parse_tool_arguments(call.function.arguments))
-            for call in (message.tool_calls or [])
+            ToolCall(id=slot["id"], name=slot["name"], arguments=_parse_tool_arguments(slot["arguments"]))
+            for _, slot in sorted(slots.items())
         ]
-        return ChatResult(content=message.content, tool_calls=tool_calls, raw=response, usage=parse_usage(response))
+        return ChatResult(content="".join(content_parts) or None, tool_calls=tool_calls, raw=None, usage=None)
 
 
 def _parse_tool_arguments(raw: str | None) -> dict:
@@ -356,6 +390,7 @@ class FakeLLM:
         temperature: float | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        on_text_delta: Callable[[str], None] | None = None,
     ) -> ChatResult:
         self.calls.append((messages, tools))
         self.tool_choices.append(tool_choice)
@@ -363,10 +398,17 @@ class FakeLLM:
         if self._script is not None:
             if not self._script:
                 raise RuntimeError(t("infra.llm.fake_script_exhausted"))
-            return self._script.popleft()
-        if self._responder is not None:
-            return self._responder(messages, tools)
-        raise RuntimeError(t("infra.llm.fake_not_configured"))
+            result = self._script.popleft()
+        elif self._responder is not None:
+            result = self._responder(messages, tools)
+        else:
+            raise RuntimeError(t("infra.llm.fake_not_configured"))
+        if on_text_delta is not None and result.content:
+            # Mimic a real stream: the reply arrives in two slices so accumulation is tested.
+            middle = max(1, len(result.content) // 2)
+            on_text_delta(result.content[:middle])
+            on_text_delta(result.content[middle:])
+        return result
 
 
 _tool_call_ids = itertools.count(1)

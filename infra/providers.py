@@ -345,6 +345,7 @@ class MutableLLM:
         temperature: float | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        on_text_delta: Callable[[str], None] | None = None,
     ) -> ChatResult:
         return await self._inner.chat(
             messages,
@@ -353,6 +354,7 @@ class MutableLLM:
             temperature=temperature,
             model=model,
             reasoning_effort=reasoning_effort,
+            on_text_delta=on_text_delta,
         )
 
     def clear_continuation(self, messages: list[dict]) -> None:
@@ -442,6 +444,7 @@ class AnthropicLLM:
         temperature: float | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        on_text_delta: Callable[[str], None] | None = None,
     ) -> ChatResult:
         system, anthropic_messages = to_anthropic_messages(messages)
         choice = _to_anthropic_tool_choice(tool_choice) if tool_choice is not None else None
@@ -475,11 +478,19 @@ class AnthropicLLM:
         if not thinking and effective_temperature is not None and anthropic_accepts_temperature(kwargs["model"]):
             kwargs["temperature"] = effective_temperature
 
-        if "thinking" in kwargs:
-            # The SDK refuses non-streaming requests sized past its ~10-minute estimate,
-            # which a thinking budget's raised max_tokens triggers. Stream and reassemble
-            # the final message instead — same Message object, same ChatResult contract.
+        if "thinking" in kwargs or on_text_delta is not None:
+            # Streaming serves two masters: the SDK refuses non-streaming requests sized
+            # past its ~10-minute estimate (thinking budgets), and a caller-supplied
+            # on_text_delta wants text as it generates. Either way the reassembled final
+            # Message keeps the ChatResult contract identical.
             async with self._client.messages.stream(**kwargs) as stream:
+                if on_text_delta is not None:
+                    async for event in stream:
+                        if (
+                            getattr(event, "type", "") == "content_block_delta"
+                            and getattr(getattr(event, "delta", None), "type", "") == "text_delta"
+                        ):
+                            on_text_delta(event.delta.text)
                 response = await stream.get_final_message()
         else:
             response = await self._client.messages.create(**kwargs)
@@ -509,9 +520,11 @@ class GeminiLLM:
         temperature: float | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        on_text_delta: Callable[[str], None] | None = None,
     ) -> ChatResult:
         del tool_choice  # Gemini SDK handles tool selection through tool config; keep best-effort parity.
         del reasoning_effort  # No Gemini thinking mapping yet; accepted for LLMClient parity.
+        del on_text_delta  # No Gemini streaming mapping yet; the final reply frame still lands.
         system, contents = to_gemini_contents(messages)
         config = to_gemini_config(
             tools=tools,

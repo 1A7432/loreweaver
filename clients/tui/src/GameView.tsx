@@ -96,6 +96,20 @@ export function completesSubmission(frame: ServerFrame): boolean {
 }
 
 export function appendFrame(frames: LogFrame[], frame: LogFrame): LogFrame[] {
+  if (frame.type === FrameType.Narrative && frame.speaker === "kp" && (!frame.stream || frame.done)) {
+    // A finished or plain KP reply supersedes any still-open KP draft bubble from a
+    // DIFFERENT stream id: a corrected/rewritten reply replaces its own abandoned draft.
+    frames = frames.filter(
+      (item) =>
+        !(
+          item.type === FrameType.Narrative &&
+          item.speaker === "kp" &&
+          item.stream &&
+          !item.done &&
+          item.id !== frame.id
+        ),
+    )
+  }
   if (frame.type !== FrameType.Narrative || !frame.stream) return [...frames, frame].slice(-200)
   const next = [...frames]
   const index = next.findIndex((item) => item.type === FrameType.Narrative && item.id === frame.id)
