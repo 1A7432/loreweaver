@@ -637,9 +637,11 @@ class DiceTools:
             penalty: Penalty dice (COC) or disadvantage count (DND5E).
             dc: Difficulty class (DND5E only, defaults to 15).
             proficient: Whether the character is proficient in this skill (DND5E only).
-            actor: Set to the NPC/creature name when rolling for a non-player actor.
-            npc_target: Required with a non-player actor: its skill percentage (COC) or total check
-                modifier (DND5E).
+            actor: ONLY for a non-player actor: copy the NPC/creature's exact stated name, without
+                added titles or roles. For a player character's check OMIT actor entirely — never
+                send actor="" or the player's name.
+            npc_target: Required with actor: the NPC's real skill percentage (COC) or total check
+                modifier (DND5E), as a real integer. Omit for player checks — never send 0.
         """
         i18n = self.services.i18n.with_locale(ctx.locale)
         characters = self.services.characters
@@ -863,10 +865,10 @@ class DiceTools:
 
     @tool
     async def spend_luck(self, ctx: AgentCtx, points: int) -> str:
-        """Spend CoC7 Luck to adjust the active character's most recent eligible check.
-
-        This deterministically subtracts points from the existing roll. It never
-        rerolls dice and never applies to SAN or Luck checks.
+        """Spend CoC7 Luck to adjust the active character's most recent eligible check —
+        the ONLY correct way to apply a Luck adjustment: it deterministically subtracts
+        points from the existing roll, never rerolls, never applies to SAN or Luck
+        checks, and never hand-edits LUC.
 
         Args:
             points: Positive number of Luck points to spend.

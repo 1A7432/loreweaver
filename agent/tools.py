@@ -292,13 +292,21 @@ def _is_optional(annotation: Any) -> bool:
 
 
 def _first_doc_line(doc: str | None) -> str:
+    """The docstring's SUMMARY PARAGRAPH, collapsed to one line.
+
+    Taking only the first physical line silently truncated every summary that
+    wrapped (18 tool descriptions shipped ending mid-sentence, and annotations
+    like KEEPER-ONLY on a wrapped line never reached the model). The summary
+    runs to the first blank line or a Google-style section header."""
     if not doc:
         return ""
+    lines: list[str] = []
     for line in doc.strip().splitlines():
         stripped = line.strip()
-        if stripped:
-            return stripped
-    return ""
+        if not stripped or stripped.rstrip(":") in ("Args", "Returns", "Raises", "Yields", "Examples"):
+            break
+        lines.append(stripped)
+    return " ".join(lines)
 
 
 def _parse_docstring_args(doc: str | None) -> dict[str, str]:

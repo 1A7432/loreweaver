@@ -136,21 +136,24 @@ def test_summarize_knowledge_item_spoiler_free_extras_join_with_chinese_semicolo
 
 
 async def test_inject_trpg_system_prompt_is_localized_and_nonempty_en():
+    # The system section is identity + operating rules ONLY: the per-tool catalog
+    # deliberately lives in the function-calling schemas, never restated in prose.
     ctx = _Ctx(chat_key="chat1")
     result = await inject_trpg_system_prompt(ctx, EN)
     assert result
-    assert EN.t("prompt.system.tools_header") in result
+    assert EN.t("prompt.system.intro") in result
     assert EN.t("prompt.system.guidelines_header") in result
-    assert EN.t("prompt.system.luck_spend") in result
+    assert EN.t("prompt.system.guidelines") in result
+    assert "roll_dice(expression)" not in result  # no hand-written tool catalog
 
 
 async def test_inject_trpg_system_prompt_is_localized_and_nonempty_zh():
     ctx = _Ctx(chat_key="chat1")
     result = await inject_trpg_system_prompt(ctx, ZH)
     assert result
-    assert ZH.t("prompt.system.tools_header") in result
-    assert "投掷骰子" in result
-    assert ZH.t("prompt.system.luck_spend") in result
+    assert ZH.t("prompt.system.intro") in result
+    assert "世界一致性" in result
+    assert "roll_dice(expression)" not in result
 
 
 async def test_inject_interaction_style_prompt_is_localized_and_nonempty():
@@ -159,14 +162,12 @@ async def test_inject_interaction_style_prompt_is_localized_and_nonempty():
     zh_result = await inject_interaction_style_prompt(ctx, ZH)
     assert en_result and zh_result
     assert en_result != zh_result
-    assert EN.t("prompt.style.principles") in en_result
-    assert ZH.t("prompt.style.principles") in zh_result
-    assert EN.t("prompt.style.actor_attribution") in en_result
-    assert ZH.t("prompt.style.actor_attribution") in zh_result
+    assert EN.t("prompt.style.narrative") in en_result
+    assert ZH.t("prompt.style.narrative") in zh_result
     assert EN.t("prompt.style.roll_policy") in en_result
     assert ZH.t("prompt.style.roll_policy") in zh_result
-    assert "AT MOST ONE check" in en_result
-    assert "至多进行一次检定" in zh_result
+    assert "at most one check" in en_result
+    assert "至多一次检定" in zh_result
 
 
 async def test_inject_interaction_style_prompt_asks_for_idiomatic_prose():
@@ -180,28 +181,28 @@ async def test_inject_interaction_style_prompt_asks_for_idiomatic_prose():
     ctx = _Ctx(chat_key="chat1")
     en_result = await inject_interaction_style_prompt(ctx, EN)
     zh_result = await inject_interaction_style_prompt(ctx, ZH)
-    assert "Idiomatic Prose" in en_result
-    assert "地道的语言" in zh_result
-    # It must not have displaced the dice-first rule that shares the section.
-    assert EN.t("prompt.style.tool_usage") in en_result
-    assert ZH.t("prompt.style.tool_usage") in zh_result
+    assert "idiomatic prose" in en_result
+    assert "地道的文字" in zh_result
+    # It must not have displaced the dice contract that shares the section.
+    assert EN.t("prompt.style.roll_policy") in en_result
+    assert ZH.t("prompt.style.roll_policy") in zh_result
 
 
 async def test_inject_interaction_style_prompt_includes_freshness_and_ensemble_nudges():
     # Play-quality nudges: vary phrasing across turns + keep an unaddressed
     # companion/party member alive. Part of the interaction-style section, and
-    # must never displace the dice-first tool-usage rule that shares it.
+    # must never displace the dice contract that shares it.
     ctx = _Ctx(chat_key="chat1")
     en_result = await inject_interaction_style_prompt(ctx, EN)
     zh_result = await inject_interaction_style_prompt(ctx, ZH)
     assert EN.t("prompt.style.freshness") in en_result
     assert ZH.t("prompt.style.freshness") in zh_result
-    # The freshness bullets are additive: the dice-first tool-usage rule stays.
-    assert EN.t("prompt.style.tool_usage") in en_result
-    # Strengthened wording: it must explicitly warn against reusing the same SCENE-ENDING
-    # image/beat across CONSECUTIVE turns (not just avoiding a repeated word).
+    # The freshness bullets are additive: the dice contract stays.
+    assert EN.t("prompt.style.roll_policy") in en_result
+    # It must explicitly warn against reusing the same SCENE-ENDING image/beat
+    # across CONSECUTIVE turns (not just avoiding a repeated word).
     en_fresh = EN.t("prompt.style.freshness")
-    assert "two turns in a row" in en_fresh and "END a turn" in en_fresh
+    assert "two consecutive turns" in en_fresh and "closing" in en_fresh
     zh_fresh = ZH.t("prompt.style.freshness")
     assert "连续两回合" in zh_fresh and "收尾" in zh_fresh
 

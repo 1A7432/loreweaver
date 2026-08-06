@@ -88,23 +88,15 @@ def summarize_knowledge_item(item: Any) -> str:
 
 
 async def inject_trpg_system_prompt(ctx: Any, i18n: I18n) -> str:
-    """TRPG system-identity section: available AI-KP tools and behavior guidelines.
+    """TRPG system-identity section: GM identity plus the table's operating rules.
 
-    Pure framing text (no game state involved), so it never fails and is
-    always non-empty for any ``i18n``.
+    The tool CATALOG deliberately lives in the function-calling schemas alone
+    (docstring-generated, `agent.tools`) — the prompt never restates per-tool
+    signatures, only workflow that spans tools. Pure framing text (no game
+    state involved), so it never fails and is always non-empty for any ``i18n``.
     """
     parts = [
         i18n.t("prompt.system.intro"),
-        "",
-        i18n.t("prompt.system.tools_header"),
-        i18n.t("prompt.system.tools_character"),
-        "",
-        i18n.t("prompt.system.tools_dice"),
-        i18n.t("prompt.system.luck_spend"),
-        "",
-        i18n.t("prompt.system.tools_status"),
-        "",
-        i18n.t("prompt.system.tools_document"),
         "",
         i18n.t("prompt.system.guidelines_header"),
         i18n.t("prompt.system.guidelines"),
@@ -547,27 +539,19 @@ async def inject_session_recap_prompt(ctx: Any, store: Store, i18n: I18n) -> str
 
 
 async def inject_interaction_style_prompt(ctx: Any, i18n: I18n) -> str:
-    """Fixed narrative-voice / tool-usage / scene-response guidance for the KP.
+    """Narrative voice, the dice contract, companion cueing, and freshness.
 
-    Pure framing text (no game state involved), so it never fails and is
-    always non-empty for any ``i18n``.
+    Each block earns its place with a measured failure mode (formulaic voice,
+    roll abuse, hand-voiced companions, repeated closings) — generic GM advice
+    and per-scene micromanagement stay out; the model's own judgment covers
+    those. Pure framing text, so it never fails and is always non-empty.
     """
     parts = [
         i18n.t("prompt.style.narrative"),
         "",
-        i18n.t("prompt.style.tool_usage"),
-        "",
         i18n.t("prompt.style.roll_policy"),
         "",
-        i18n.t("prompt.style.actor_attribution"),
-        "",
         i18n.t("prompt.style.companions"),
-        "",
-        i18n.t("prompt.style.scene_response"),
-        "",
-        i18n.t("prompt.style.examples"),
-        "",
-        i18n.t("prompt.style.principles"),
         "",
         i18n.t("prompt.style.freshness"),
     ]

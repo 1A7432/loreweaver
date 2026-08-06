@@ -88,7 +88,7 @@ async def test_build_system_prompt_includes_keeper_discipline_and_joins_all_six_
         i18n.t("prompt.game_state.title"),  # game_state
         i18n.t("prompt.document.pool_title"),  # document_context
         i18n.t("prompt.expertise.coc"),  # system_expertise (no character -> defaults to CoC)
-        i18n.t("prompt.system.tools_header"),  # trpg_system
+        i18n.t("prompt.system.intro"),  # trpg_system
         i18n.t("prompt.style.narrative"),  # interaction_style
     ]
     positions = [prompt.index(marker) for marker in markers]
