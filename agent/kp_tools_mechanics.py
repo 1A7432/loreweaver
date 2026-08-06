@@ -51,7 +51,7 @@ from core.character_manager import (
     set_hit_points,
 )
 from core.character_rules import render_validation_notice, validate_sheet
-from core.check_outcome import CheckOutcome, Rank, RollDetail
+from core.check_outcome import CheckOutcome, Rank, RollDetail, outcome_wire
 from core.coc_rules import (
     DEFAULT_COC_RULE,
     DIFFICULTY_REGULAR,
@@ -154,9 +154,6 @@ _DND_RANKS: dict[str, Rank] = {
     "fail": Rank(id="fail", tier=1, label_key="kp_tools.dice.dnd.failure"),
     "fumble": Rank(id="fumble", tier=0, label_key="kp_tools.dice.dnd.critical_failure", fumble=True),
 }
-# Legacy wire codes for the bridge period (the 2.0 dice frame replaces these).
-_DND_RANK_CODES = {"crit": 4, "success": 1, "fail": -1, "fumble": -2}
-_COC_RANK_CODES = {rank.id: code for code, rank in RANKS.items()}
 
 
 async def _get_active_character(services: Services, ctx: AgentCtx) -> CharacterSheet:
@@ -614,9 +611,11 @@ class DiceTools:
             "expr": expression,
             "rolls": list(result.rolls),
             "total": result.total,
-            "modifier": result.modifier,
-            "critical_success": result.is_critical_success(),
-            "critical_failure": result.is_critical_failure(),
+            "detail": {
+                "modifier": result.modifier,
+                "critical_success": result.is_critical_success(),
+                "critical_failure": result.is_critical_failure(),
+            },
         }
         if actor and actor.strip():
             payload["actor"] = actor.strip()
@@ -740,15 +739,15 @@ class DiceTools:
                         "total": result["final_roll"],
                         "target": skill_value,
                         "effective_target": effective_target(skill_value, result["difficulty"]),
-                        "rank": result["rank"],
-                        "label": level_label,
-                        "success": outcome.rank.success,
-                        "difficulty": result["difficulty"],
-                        "bonus": bonus,
-                        "penalty": penalty,
-                        "raw_roll": result["roll"],
-                        "extra_tens": list(result["extra_tens"]),
-                        "final_tens": result["final_tens"],
+                        "outcome": outcome_wire(outcome, level_label),
+                        "detail": {
+                            "difficulty": result["difficulty"],
+                            "bonus": bonus,
+                            "penalty": penalty,
+                            "base_roll": result["roll"],
+                            "extra_tens": list(result["extra_tens"]),
+                            "final_tens": result["final_tens"],
+                        },
                     }
                 )
                 await self._record_check(
@@ -855,19 +854,15 @@ class DiceTools:
                     "total": total,
                     "target": target_dc,
                     "effective_target": target_dc,
-                    "rank": _DND_RANK_CODES[dnd_rank.id],
-                    "label": level_label,
-                    "level": level_label,
-                    "success": success,
-                    "difficulty": target_dc,
-                    "bonus": bonus,
-                    "penalty": penalty,
-                    "modifier": modifier,
-                    "raw_roll": roll_result.total,
-                    "advantage_rolls": advantage_rolls,
-                    "disadvantage_rolls": disadvantage_rolls,
-                    "critical_success": roll_result.is_critical_success(),
-                    "critical_failure": roll_result.is_critical_failure(),
+                    "outcome": outcome_wire(outcome, level_label),
+                    "detail": {
+                        "bonus": bonus,
+                        "penalty": penalty,
+                        "modifier": modifier,
+                        "base_roll": roll_result.total,
+                        "advantage_rolls": advantage_rolls,
+                        "disadvantage_rolls": disadvantage_rolls,
+                    },
                 }
             )
             await self._record_check(
@@ -972,6 +967,17 @@ class DiceTools:
                 target = int(check["target"])
                 after_label = i18n.t(adjustment.after.label_key)
                 check["label"] = after_label
+                after_outcome = CheckOutcome(
+                    rolled=RollDetail(
+                        expression="1d100",
+                        dice=(adjustment.after_roll,),
+                        total=adjustment.after_roll,
+                        modifiers={"difficulty": difficulty, "rule": int(check.get("rule", 0) or 0)},
+                    ),
+                    target=target,
+                    rank=adjustment.after,
+                    margin=effective_target(target, difficulty) - adjustment.after_roll,
+                )
                 ctx.emit_dice(
                     {
                         "kind": "check",
@@ -983,16 +989,16 @@ class DiceTools:
                         "total": adjustment.after_roll,
                         "target": target,
                         "effective_target": effective_target(target, difficulty),
-                        "rank": _COC_RANK_CODES[adjustment.after.id],
-                        "label": after_label,
-                        "success": adjustment.after.success,
-                        "difficulty": difficulty,
-                        "bonus": int(check.get("bonus", 0) or 0),
-                        "penalty": int(check.get("penalty", 0) or 0),
-                        "raw_roll": int(check["raw_roll"]),
-                        "adjusted_roll": adjustment.after_roll,
-                        "luck_spent": adjustment.total_spent,
-                        "luck_remaining": luck_after,
+                        "outcome": outcome_wire(after_outcome, after_label),
+                        "detail": {
+                            "difficulty": difficulty,
+                            "bonus": int(check.get("bonus", 0) or 0),
+                            "penalty": int(check.get("penalty", 0) or 0),
+                            "raw_roll": int(check["raw_roll"]),
+                            "adjusted_roll": adjustment.after_roll,
+                            "luck_spent": adjustment.total_spent,
+                            "luck_remaining": luck_after,
+                        },
                     }
                 )
                 return i18n.t(
@@ -1064,23 +1070,24 @@ class DiceTools:
             san_max = character.attributes.get("SANMAX", 99)
             ctx.emit_dice(
                 {
-                    "kind": "sanity",
+                    "kind": "subsystem",
+                    "subsystem": "sanity",
                     "expr": "SAN",
                     "rolls": [result["roll"]],
                     "total": result["roll"],
                     "target": san_value,
                     "effective_target": effective_target(san_value, result["difficulty"]),
-                    "rank": result["rank"],
-                    "label": level_label,
-                    "success": outcome.rank.success,
-                    "difficulty": result["difficulty"],
-                    "bonus": result.get("bonus", 0),
-                    "penalty": result.get("penalty", 0),
-                    "raw_roll": result.get("raw_roll", result["roll"]),
-                    "loss_expr": loss_expr,
-                    "loss": loss,
-                    "remaining": new_san,
-                    "san_max": san_max,
+                    "outcome": outcome_wire(outcome, level_label),
+                    "detail": {
+                        "difficulty": result["difficulty"],
+                        "bonus": result.get("bonus", 0),
+                        "penalty": result.get("penalty", 0),
+                        "base_roll": result.get("raw_roll", result["roll"]),
+                        "loss_expr": loss_expr,
+                        "loss": loss,
+                        "remaining": new_san,
+                        "resource_max": san_max,
+                    },
                 }
             )
             header_key = (
@@ -1381,6 +1388,7 @@ class InitiativeTools:
 
                 init_list.append({"name": name, "init": initiative})
                 init_list.sort(key=lambda entry: entry["init"], reverse=True)
+                ctx.emit_dice({"kind": "init", "actor": name, "expr": name, "rolls": [], "total": initiative})
                 await self.services.store.set(
                     user_key="", store_key=store_key, value=json.dumps(init_list, ensure_ascii=False)
                 )

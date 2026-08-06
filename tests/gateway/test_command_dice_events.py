@@ -3,7 +3,7 @@ from __future__ import annotations
 from agent.context import AgentCtx
 from agent.kp_tools import build_kp_toolset
 from agent.services import build_services
-from core.dice_engine import coc_rank_label, seed_dice
+from core.dice_engine import seed_dice
 from gateway.commands import CommandRouter
 from gateway.hub import Event, RoomHub
 from gateway.turn import run_turn
@@ -49,11 +49,11 @@ async def test_deterministic_commands_publish_their_actual_rolls_to_the_hub() ->
     await hub.subscribe(room, peer)
 
     cases = (
-        (".roll 2d6+1", {"expr", "rolls", "total", "modifier"}),
-        (".check spot hidden", {"expr", "rolls", "total", "target", "rank", "success"}),
-        (".sanity 0/1d4", {"expr", "total", "target", "rank", "loss", "remaining"}),
-        (".opposed spot, listen", {"expr", "total", "target", "rank", "left", "right", "winner"}),
-        (".init roll", {"expr", "rolls", "total", "modifier", "name"}),
+        (".roll 2d6+1", {"expr", "rolls", "total", "detail"}),
+        (".check spot hidden", {"expr", "rolls", "total", "target", "outcome", "detail"}),
+        (".sanity 0/1d4", {"expr", "total", "target", "subsystem", "outcome", "detail"}),
+        (".opposed spot, listen", {"expr", "total", "target", "outcome", "detail"}),
+        (".init roll", {"expr", "rolls", "total", "detail", "name"}),
     )
     for index, (command, expected_fields) in enumerate(cases):
         origin.events.clear()
@@ -150,10 +150,10 @@ async def test_coc_command_roll_check_opposed_and_sanity_are_recorded_structural
     assert alias_reply is not None
     assert sanity_reply is not None
     check_frame = check_reply.events[0].data
-    assert check_frame["level"] == coc_rank_label(
-        check_frame["rank"], services.i18n.with_locale("en")
-    )
-    assert sanity_reply.events[0].data["level"]
+    assert check_frame["outcome"]["label"]
+    assert check_frame["outcome"]["id"]
+    assert isinstance(check_frame["outcome"]["tier"], int)
+    assert sanity_reply.events[0].data["outcome"]["label"]
 
     record = await services.battles.generator.get_current_session(room)
     assert record is not None

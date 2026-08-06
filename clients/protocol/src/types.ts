@@ -1,7 +1,7 @@
-// Bumped to "1.8" for module UI panels (M15): the per-viewer `ui_manifest` frame,
-// hook-emitted `panel_event`, and the `panel_intent` client frame.
-// `WelcomeFrame.protocol` stays a plain string so older minor clients keep accepting it.
-export const PROTOCOL_VERSION = "1.9" as const
+// Protocol 2.0 — the breaking consolidation of the 1.x line. The MAJOR version is
+// the compatibility contract: refuse (or clearly warn on) a `welcome.protocol`
+// whose major differs; minors within a major stay additive.
+export const PROTOCOL_VERSION = "2.0" as const
 
 export const FrameType = {
   Join: "join",
@@ -19,6 +19,7 @@ export const FrameType = {
   Welcome: "welcome",
   Error: "error",
   Narrative: "narrative",
+  NarrativeDelta: "narrative_delta",
   Dice: "dice",
   Ui: "ui",
   // v1.8 additive: module UI panels (M15).
@@ -90,7 +91,7 @@ export type ErrorCode =
   | "media_hash_mismatch"
   | "media_not_found"
   | "avatar_no_character"
-export type DiceKind = "roll" | "check" | "sanity" | "opposed" | "init"
+export type DiceKind = "roll" | "check" | "subsystem" | "opposed" | "init"
 export type SystemLevel = "info" | "warn"
 export type TurnActivity = "busy" | "idle"
 export type AudioLayer = "bgm" | "ambience" | "sfx"
@@ -245,6 +246,9 @@ export interface ErrorFrame {
   message: string
 }
 
+// A `narrative` frame always carries the COMPLETE final text. When its `id`
+// matches a draft bubble accumulated from `narrative_delta` frames, the final
+// text REPLACES that draft (post-generation corrections are already folded in).
 export interface NarrativeFrame {
   type: typeof FrameType.Narrative
   id: string
@@ -252,8 +256,32 @@ export interface NarrativeFrame {
   name?: string
   text: string
   format: NarrativeFormat
-  stream?: boolean
-  done?: boolean
+}
+
+// One streaming text delta for the draft bubble `id`; concatenate deltas
+// sharing an id. The stream ends when the `narrative` frame with the SAME id
+// arrives (servers guarantee that closing frame, even on a failed turn).
+export interface NarrativeDeltaFrame {
+  type: typeof FrameType.NarrativeDelta
+  id: string
+  speaker: NarrativeSpeaker
+  name?: string
+  text: string
+}
+
+// A graded check's outcome: `id` is the rule system's own rank vocabulary
+// (presentation only — never branch on it), `label` is already localized, and
+// clients color by the semantic flags, optionally shading by `tier` (ladder
+// ordinal, higher is better). `margin` is the signed distance from the target
+// in the system's own metric (positive = success side).
+export interface DiceOutcome {
+  id: string
+  label: string
+  success: boolean
+  critical: boolean
+  fumble: boolean
+  tier: number
+  margin?: number
 }
 
 export interface DiceFrame {
@@ -264,9 +292,14 @@ export interface DiceFrame {
   rolls: number[]
   total: number
   target?: number
-  rank?: number
-  level?: string
-  success?: boolean
+  effective_target?: number
+  // kind === "subsystem": which rule subsystem ran (e.g. a sanity check).
+  subsystem?: string
+  outcome?: DiceOutcome
+  // System-declared roll data (bonus/penalty dice, loss/remaining, advantage
+  // candidates, opposed left/right/winner, ...) a client may surface verbatim
+  // but never needs to understand.
+  detail?: Record<string, unknown>
 }
 
 // ---- v1.7 additive: declarative hook-emitted UI frames ---------------------
@@ -490,15 +523,20 @@ export interface PanelIntentFrame {
   value: string
 }
 
+// One vital meter (HP, sanity, mana, ...) as generic data: clients render the
+// list without knowing any rule system's field names. Entries arrive in render
+// order.
+export interface ResourceState {
+  id: string
+  label: string
+  value: number
+  max?: number
+}
+
 export interface CharacterState {
   name: string
   system: string
-  hp: number
-  hpmax: number
-  mp: number
-  mpmax: number
-  san: number
-  sanmax: number
+  resources: ResourceState[]
   attributes: Record<string, unknown>
   status_effects: string[]
   avatar?: MediaRef
@@ -509,12 +547,7 @@ export interface PartyMember {
   online: boolean
   active: boolean
   initiative?: number
-  hp?: number
-  hpMax?: number
-  san?: number
-  sanMax?: number
-  mp?: number
-  mpMax?: number
+  resources?: ResourceState[]
   // M10: set when this roster member is an AI player-companion (vs a human
   // player's character), so clients can render an "AI" badge. Additive/
   // optional so older server payloads without it still type-check.
@@ -945,6 +978,7 @@ export type ServerFrame =
   | AudioControlFrame
   | AudioStateFrame
   | NarrativeFrame
+  | NarrativeDeltaFrame
   | DiceFrame
   | UiFrame
   | UiManifestFrame

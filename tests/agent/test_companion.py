@@ -420,12 +420,11 @@ async def test_build_room_state_tags_ai_companions_in_the_party():
     state = await build_room_state(services, ctx)
     party = {member["name"]: member for member in state["party"]}
     assert party["Silas"]["ai"] is True
-    assert isinstance(party["Silas"]["hp"], int)
-    assert isinstance(party["Silas"]["hpMax"], int)
-    assert isinstance(party["Silas"]["san"], int)
-    assert isinstance(party["Silas"]["sanMax"], int)
-    assert isinstance(party["Silas"]["mp"], int)
-    assert isinstance(party["Silas"]["mpMax"], int)
+    silas_resources = {res["id"]: res for res in party["Silas"]["resources"]}
+    for res_id in ("hp", "san", "mp"):
+        assert isinstance(silas_resources[res_id]["value"], int)
+        assert isinstance(silas_resources[res_id]["max"], int)
+        assert silas_resources[res_id]["label"]
     assert party["Nora"]["ai"] is False
 
 

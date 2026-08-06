@@ -29,7 +29,7 @@ describe("NarrativeLog dice lines", () => {
     act(() => renderer.destroy())
   })
 
-  test("an explicit boolean check outcome still renders its suffix", async () => {
+  test("a graded outcome renders its localized label suffix; a plain roll has none", async () => {
     const check: DiceFrame = {
       type: FrameType.Dice,
       actor: "Investigator",
@@ -37,7 +37,7 @@ describe("NarrativeLog dice lines", () => {
       expr: "1d100",
       rolls: [82],
       total: 82,
-      success: false,
+      outcome: { id: "fail", label: "Failure", success: false, critical: false, fumble: false, tier: 1 },
     }
     const { renderer, flush, captureCharFrame } = await testRender(
       <NarrativeLog frames={[check]} theme={themes.lamplight} />,
@@ -45,7 +45,7 @@ describe("NarrativeLog dice lines", () => {
     )
 
     await flush()
-    expect(captureCharFrame()).toContain("-> FAIL")
+    expect(captureCharFrame()).toContain("-> Failure")
 
     act(() => renderer.destroy())
   })
@@ -99,9 +99,9 @@ describe("NarrativeLog imported-card CG images", () => {
       speaker: "kp",
       text: `灯下的影子拉长。\n\n![月下的第一位访客](${CG_URL})\n\n她推门而入。`,
       format: "markdown",
-      // `done` false keeps MarkdownRenderable on its synchronous unstyled path; the
+      // `draft` keeps MarkdownRenderable on its synchronous unstyled path; the
       // async tree-sitter pass a finished frame takes never settles in one flush.
-      done: false,
+      draft: true,
     }
     const { renderer, flush, captureCharFrame } = await testRender(
       <NarrativeLog frames={[cg]} theme={themes.lamplight} locale="zh" />,

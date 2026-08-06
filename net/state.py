@@ -101,14 +101,24 @@ async def resolve_active_character(services: Services, ctx: AgentCtx) -> Charact
 
 
 async def _character_payload(services: Services, chat_key: str, sheet: CharacterSheet) -> dict[str, Any]:
+    """Protocol 2.0: vitals ride a generic ``resources`` list ({id,label,value,max})
+    instead of per-system field names — a client renders meters without knowing
+    any rule system. The per-system extraction below is the stage-B seam (the
+    sheet layer will declare its own resources); the WIRE shape is final."""
     attrs = sheet.attributes
+    resources: list[dict[str, Any]] = []
     if sheet.system == _COC_SYSTEM:
-        hp, hpmax = attrs.get("HP"), attrs.get("HPMAX")
-        mp, mpmax = attrs.get("MP"), attrs.get("MPMAX")
-        san, sanmax = attrs.get("SAN"), attrs.get("SANMAX")
+        for res_id, label, value_key, max_key in (
+            ("hp", "HP", "HP", "HPMAX"),
+            ("san", "SAN", "SAN", "SANMAX"),
+            ("mp", "MP", "MP", "MPMAX"),
+        ):
+            value, maximum = attrs.get(value_key), attrs.get(max_key)
+            if value is not None and maximum is not None:
+                resources.append({"id": res_id, "label": label, "value": value, "max": maximum})
     else:
         hp, hpmax = get_hit_points(sheet)
-        mp, mpmax, san, sanmax = None, None, None, None
+        resources.append({"id": "hp", "label": "HP", "value": hp, "max": hpmax})
 
     status_effects: list[Any] = []
     try:
@@ -122,12 +132,7 @@ async def _character_payload(services: Services, chat_key: str, sheet: Character
     payload = {
         "name": sheet.name,
         "system": sheet.system,
-        "hp": hp,
-        "hpmax": hpmax,
-        "mp": mp,
-        "mpmax": mpmax,
-        "san": san,
-        "sanmax": sanmax,
+        "resources": resources,
         "attributes": dict(attrs),
         "status_effects": status_effects,
     }
@@ -162,28 +167,27 @@ async def _party(
         avatar = member.get("avatar")
         if isinstance(avatar, dict):
             payload["avatar"] = avatar
-        payload.update(_party_member_vitals(member))
+        resources = _party_member_resources(member)
+        if resources:
+            payload["resources"] = resources
         members.append(payload)
     return members
 
 
-def _party_member_vitals(member: dict[str, Any]) -> dict[str, int]:
-    vitals: dict[str, int] = {}
-    for value_key, max_key, legacy_key in (
-        ("hp", "hpMax", "HP"),
-        ("san", "sanMax", "SAN"),
-        ("mp", "mpMax", "MP"),
+def _party_member_resources(member: dict[str, Any]) -> list[dict[str, Any]]:
+    """Protocol 2.0 party vitals: the same generic ``resources`` list shape as
+    ``state.character`` (the pre-2.0 hp/hpMax-vs-hpmax casing split is gone)."""
+    resources: list[dict[str, Any]] = []
+    for res_id, label, value_key, max_key in (
+        ("hp", "HP", "hp", "hpMax"),
+        ("san", "SAN", "san", "sanMax"),
+        ("mp", "MP", "mp", "mpMax"),
     ):
         value = _int_value(member.get(value_key))
         max_value = _int_value(member.get(max_key))
-        if value is None or max_value is None:
-            legacy_value, legacy_max = _parse_legacy_vital(member.get(legacy_key))
-            value = value if value is not None else legacy_value
-            max_value = max_value if max_value is not None else legacy_max
         if value is not None and max_value is not None:
-            vitals[value_key] = value
-            vitals[max_key] = max_value
-    return vitals
+            resources.append({"id": res_id, "label": label, "value": value, "max": max_value})
+    return resources
 
 
 def _int_value(value: Any) -> int | None:
@@ -194,19 +198,6 @@ def _int_value(value: Any) -> int | None:
     if isinstance(value, str) and value.strip().isdigit():
         return int(value.strip())
     return None
-
-
-def _parse_legacy_vital(value: Any) -> tuple[int | None, int | None]:
-    if not isinstance(value, str):
-        return (None, None)
-    current, separator, maximum = value.partition("/")
-    current_value = _int_value(current.strip())
-    if current_value is None:
-        return (None, None)
-    if not separator:
-        return (current_value, current_value)
-    max_value = _int_value(maximum.strip())
-    return (current_value, max_value)
 
 
 async def _companion_sheet_names(services: Services, chat_key: str) -> set[str]:

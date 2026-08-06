@@ -40,7 +40,11 @@ export function CharacterPanel({ character, theme, locale }: CharacterPanelProps
     )
   }
 
-  const incapacitated = character.hp <= 0
+  const resources = character.resources ?? []
+  // The first resource is the system's primary vital (HP-like); at 0 the
+  // character is down. Generic: no rule-system field names anywhere.
+  const primary = resources[0]
+  const incapacitated = primary != null && primary.value <= 0
   return (
     // flexShrink=0: in a tight sidebar column yoga would otherwise squash this panel and
     // composite its rows on top of each other (HP over SIZ, OK over INT, ...).
@@ -49,15 +53,16 @@ export function CharacterPanel({ character, theme, locale }: CharacterPanelProps
         CHARACTER {incapacitated ? "☠" : ""}
       </text>
       <text fg={theme.kp} wrapMode="none" truncate>{stripControlChars(character.name)}</text>
-      <text fg={statColor(character.hp, character.hpmax, theme.hpFull, theme.hpLow)} wrapMode="none" truncate>
-        HP {bar(character.hp, character.hpmax)} {character.hp}/{character.hpmax}
-      </text>
-      <text fg={theme.success} wrapMode="none" truncate>
-        MP {bar(character.mp, character.mpmax)} {character.mp}/{character.mpmax}
-      </text>
-      <text fg={statColor(character.san, character.sanmax, theme.sanFull, theme.sanLow)} wrapMode="none" truncate>
-        SAN {bar(character.san, character.sanmax)} {character.san}/{character.sanmax}
-      </text>
+      {resources.map((res) => (
+        <text
+          key={res.id}
+          fg={statColor(res.value, res.max ?? res.value, theme.hpFull, theme.hpLow)}
+          wrapMode="none"
+          truncate
+        >
+          {stripControlChars(res.label)} {bar(res.value, res.max ?? res.value)} {res.value}/{res.max ?? res.value}
+        </text>
+      ))}
       {attributeLines(character).slice(0, 6).map(({ key, line }) => (
         <text key={key} fg={theme.fg} wrapMode="none" truncate>
           {line}

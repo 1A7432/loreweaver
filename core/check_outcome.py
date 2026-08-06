@@ -63,3 +63,22 @@ class CheckOutcome:
     target: int | None
     rank: Rank
     margin: int | None = None
+
+
+def outcome_wire(outcome: CheckOutcome, label: str) -> dict[str, Any]:
+    """The protocol-2.0 ``dice.outcome`` object for one graded check.
+
+    ``label`` is the display label rendered in the room's locale; clients
+    color by the semantic flags/``tier`` and print ``label`` verbatim.
+    """
+    wire: dict[str, Any] = {
+        "id": outcome.rank.id,
+        "label": label,
+        "success": outcome.rank.success,
+        "critical": outcome.rank.critical,
+        "fumble": outcome.rank.fumble,
+        "tier": outcome.rank.tier,
+    }
+    if outcome.margin is not None:
+        wire["margin"] = outcome.margin
+    return wire

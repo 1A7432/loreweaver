@@ -36,35 +36,23 @@ function initiativeValue(member: PartyMember, initiative: InitiativeEntry[]): st
 }
 
 interface VitalLine {
-  label: "HP" | "MP" | "SAN"
+  label: string
   value: number
   max: number
   color: string
 }
 
 function partyVitals(member: PartyMember, theme: Palette): VitalLine[] {
-  const stats: VitalLine[] = []
-  const { hp, hpMax, mp, mpMax, san, sanMax } = member
-  if (typeof hp === "number" && typeof hpMax === "number") {
-    stats.push({
-      label: "HP",
-      value: hp,
-      max: hpMax,
-      color: statColor(hp, hpMax, theme.hpFull, theme.hpLow),
-    })
-  }
-  if (typeof mp === "number" && typeof mpMax === "number") {
-    stats.push({ label: "MP", value: mp, max: mpMax, color: theme.success })
-  }
-  if (typeof san === "number" && typeof sanMax === "number") {
-    stats.push({
-      label: "SAN",
-      value: san,
-      max: sanMax,
-      color: statColor(san, sanMax, theme.sanFull, theme.sanLow),
-    })
-  }
-  return stats
+  // Protocol 2.0: vitals arrive as the generic `resources` list; render each as
+  // a ratio-colored bar without knowing any rule system's field names.
+  return (member.resources ?? [])
+    .filter((res) => typeof res.value === "number" && typeof res.max === "number")
+    .map((res) => ({
+      label: res.label || res.id,
+      value: res.value,
+      max: res.max as number,
+      color: statColor(res.value, res.max as number, theme.hpFull, theme.hpLow),
+    }))
 }
 
 // The compact bar width used inline in the collapsed own-character row — narrower
@@ -154,15 +142,16 @@ export function PartyRoster({
             <CharacterPanel character={character} theme={theme} locale={locale} />
           ) : (
             <>
-              <text fg={statColor(character.hp, character.hpmax, theme.hpFull, theme.hpLow)} wrapMode="none" truncate>
-                HP {bar(character.hp, character.hpmax, COMPACT_BAR_WIDTH)} {character.hp}/{character.hpmax}
-              </text>
-              <text fg={theme.success} wrapMode="none" truncate>
-                MP {bar(character.mp, character.mpmax, COMPACT_BAR_WIDTH)} {character.mp}/{character.mpmax}
-              </text>
-              <text fg={statColor(character.san, character.sanmax, theme.sanFull, theme.sanLow)} wrapMode="none" truncate>
-                SAN {bar(character.san, character.sanmax, COMPACT_BAR_WIDTH)} {character.san}/{character.sanmax}
-              </text>
+              {(character.resources ?? []).map((res) => (
+                <text
+                  key={res.id}
+                  fg={statColor(res.value, res.max ?? res.value, theme.hpFull, theme.hpLow)}
+                  wrapMode="none"
+                  truncate
+                >
+                  {res.label || res.id} {bar(res.value, res.max ?? res.value, COMPACT_BAR_WIDTH)} {res.value}/{res.max ?? res.value}
+                </text>
+              ))}
             </>
           )}
         </box>

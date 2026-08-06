@@ -17,7 +17,12 @@ import type { Palette } from "../themes"
 import { Spinner } from "./Spinner"
 import { UiBlocksView } from "./UiBlocks"
 
-export type LogFrame = NarrativeFrame | DiceFrame | SystemFrame | MediaFrame | AudioLibraryItemFrame | AudioControlFrame | UiFrame
+// `draft` is CLIENT-LOCAL three-state streaming bookkeeping: `true` while
+// `narrative_delta` frames are still accumulating into this bubble, `false`
+// once the closing `narrative` (full final text, same id) replaced the draft,
+// and absent on a plain one-shot line that never streamed.
+export type LogNarrative = NarrativeFrame & { draft?: boolean }
+export type LogFrame = LogNarrative | DiceFrame | SystemFrame | MediaFrame | AudioLibraryItemFrame | AudioControlFrame | UiFrame
 
 /** Index of the LAST inline `ui` frame carrying a choices block — the one whose
  * select is keyboard-interactive. Exported so GameView's Tab focus cycle and
@@ -58,21 +63,20 @@ export interface NarrativeLogProps {
 }
 
 function diceColor(frame: DiceFrame, theme: Palette): string {
-  if ((frame.rank ?? 0) >= 4) return theme.crit
-  if ((frame.rank ?? 0) >= 2) return frame.rank === 2 ? theme.hard : theme.extreme
-  if ((frame.rank ?? 0) >= 1) return theme.success
-  if ((frame.rank ?? 0) <= -2) return theme.fumble
-  if ((frame.rank ?? 0) <= -1) return theme.fail
-  return theme.system
+  // Color by the outcome's SEMANTIC flags (protocol 2.0) — never by a rank id.
+  const outcome = frame.outcome
+  if (!outcome) return theme.system
+  if (outcome.critical) return theme.crit
+  if (outcome.fumble) return theme.fumble
+  if (outcome.success) return theme.success
+  return theme.fail
 }
 
 function diceLine(frame: DiceFrame, revealTicks: number): string {
-  const hasOutcome = typeof frame.level === "string" || typeof frame.success === "boolean"
-  const level = frame.level ?? (frame.success ? "SUCCESS" : "FAIL")
   const target = typeof frame.target === "number" ? ` vs ${frame.target}` : ""
-  const outcome = hasOutcome ? ` -> ${level}` : ""
+  const outcome = frame.outcome?.label ? ` -> ${frame.outcome.label}` : ""
   const prefix = revealTicks < 2 ? "⚄ ..." : "⚄"
-  // actor / expr / level are server-supplied; scrub control bytes off the line.
+  // actor / expr / label are server-supplied; scrub control bytes off the line.
   return stripControlChars(`${prefix} ${frame.actor} ${frame.expr} ${frame.total}${target}${outcome}`)
 }
 
@@ -153,8 +157,8 @@ export function NarrativeLog({
       ) : (
         frames.map((frame, index) => {
           if (frame.type === "dice") {
-            const color = critFlash && (frame.rank ?? 0) >= 4 ? theme.bg : diceColor(frame, theme)
-            const backgroundColor = critFlash && (frame.rank ?? 0) >= 4 ? theme.crit : theme.bg
+            const color = critFlash && frame.outcome?.critical ? theme.bg : diceColor(frame, theme)
+            const backgroundColor = critFlash && frame.outcome?.critical ? theme.crit : theme.bg
             return (
               <text key={`${frame.type}-${index}`} fg={color} bg={backgroundColor}>
                 {diceLine(frame, revealTicks)}
@@ -223,10 +227,12 @@ export function NarrativeLog({
           }
 
           if (frame.speaker === "kp" && frame.format === "markdown") {
-            // `streaming` must stay true until the frame is marked done: besides matching
-            // "chunks still being appended", it also makes MarkdownRenderable draw its
-            // synchronous unstyled fallback instead of waiting on async tree-sitter
-            // highlighting (which never resolves inside a single render pass/test flush).
+            // `streaming` stays true for accumulating drafts AND plain one-shot lines:
+            // besides matching "chunks still being appended", it makes MarkdownRenderable
+            // draw its synchronous unstyled fallback instead of waiting on async
+            // tree-sitter highlighting (which never resolves inside a single render
+            // pass/test flush). Only a REPLACED draft (draft === false — the finished
+            // stream) takes the styled async path.
             return (
               <box key={`${frame.type}-${frame.id}-${index}`} flexDirection="column" width="100%">
                 <text fg={theme.dim}>{speakerLabel(frame)}</text>
@@ -234,7 +240,7 @@ export function NarrativeLog({
                   content={imagePlaceholders(stripControlChars(frame.text), locale)}
                   fg={theme.kp}
                   syntaxStyle={narrativeSyntaxStyle}
-                  streaming={!frame.done}
+                  streaming={frame.draft !== false}
                 />
               </box>
             )

@@ -8,7 +8,6 @@ do not; and the dice line carries only public roll fields.
 
 from __future__ import annotations
 
-from core.dice_engine import coc_rank_label
 from gateway.hub import Event
 from gateway.render_chat import render_chat_event
 from infra.i18n import get_i18n
@@ -44,14 +43,21 @@ def test_player_action_renders_for_other_channels() -> None:
 
 
 def test_dice_renders_public_one_liner_with_level_and_no_keeper_data() -> None:
-    event = Event.dice("Nora", "check", expr="Spot Hidden", rolls=[15], total=15, rank=2, success=True)
+    event = Event.dice(
+        "Nora",
+        "check",
+        expr="Spot Hidden",
+        rolls=[15],
+        total=15,
+        outcome={"id": "hard", "label": "Hard Success", "success": True, "critical": False, "fumble": False, "tier": 3},
+    )
     message = render_chat_event(event, _i18n())
     assert message is not None
     assert "🎲" in message.text
     assert "Nora" in message.text and "Spot Hidden" in message.text and "15" in message.text
     assert message.embeds
-    # the level is the localized COC rank label (rank 2 == a hard success)
-    assert coc_rank_label(2, _i18n()) in message.text
+    # the level is the outcome's already-localized label, printed verbatim
+    assert "Hard Success" in message.text
 
 
 def test_dice_without_rank_falls_back_to_plain_one_liner() -> None:
@@ -75,8 +81,7 @@ def test_dice_card_renders_existing_critical_flags_only_when_true() -> None:
             expr="1d20",
             rolls=[20],
             total=20,
-            critical_success=True,
-            critical_failure=False,
+            detail={"critical_success": True, "critical_failure": False},
         )
     )
     failure = _dice_fields(
@@ -86,8 +91,7 @@ def test_dice_card_renders_existing_critical_flags_only_when_true() -> None:
             expr="1d20",
             rolls=[1],
             total=1,
-            critical_success=False,
-            critical_failure=True,
+            detail={"critical_success": False, "critical_failure": True},
         )
     )
     ordinary = _dice_fields(
@@ -97,8 +101,7 @@ def test_dice_card_renders_existing_critical_flags_only_when_true() -> None:
             expr="1d20",
             rolls=[10],
             total=10,
-            critical_success=False,
-            critical_failure=False,
+            detail={"critical_success": False, "critical_failure": False},
         )
     )
 
@@ -114,9 +117,16 @@ def test_dice_card_renders_opposed_right_side_and_winner() -> None:
             "opposed",
             expr="Spot Hidden vs Listen",
             total=35,
-            rank=2,
-            right={"name": "Listen", "total": 61, "target": 50, "rank": 0},
-            winner="left",
+            outcome={"id": "hard", "label": "Hard Success", "success": True, "critical": False, "fumble": False, "tier": 3},
+            detail={
+                "right": {
+                    "name": "Listen",
+                    "total": 61,
+                    "target": 50,
+                    "outcome": {"id": "fail", "label": "Failure", "success": False, "critical": False, "fumble": False, "tier": 1},
+                },
+                "winner": "left",
+            },
         )
     )
 
@@ -128,12 +138,11 @@ def test_dice_card_renders_san_loss_and_remaining() -> None:
     fields = _dice_fields(
         Event.dice(
             "Nora",
-            "sanity",
+            "subsystem",
+            subsystem="sanity",
             expr="SAN",
             total=72,
-            rank=0,
-            loss=4,
-            remaining=36,
+            detail={"loss": 4, "remaining": 36},
         )
     )
 

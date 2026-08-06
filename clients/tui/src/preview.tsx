@@ -46,11 +46,11 @@ act(() => {
   client.push({ type: FrameType.Narrative, id: "n4", speaker: "kp", format: "markdown", text: "Behind the water-stained map, a scratched tide table — three dates circled in a shaky hand." })
   client.push({
     type: FrameType.State,
-    character: { name: "Nora Vance", system: "coc7", hp: 11, hpmax: 13, mp: 8, mpmax: 10, san: 55, sanmax: 70, attributes: { STR: 60, DEX: 65, INT: 70, POW: 55 }, status_effects: ["shaken"] },
+    character: { name: "Nora Vance", system: "coc7", resources: [{ id: "hp", label: "HP", value: 11, max: 13 }, { id: "san", label: "SAN", value: 55, max: 70 }, { id: "mp", label: "MP", value: 8, max: 10 }], attributes: { STR: 60, DEX: 65, INT: 70, POW: 55 }, status_effects: ["shaken"] },
     party: [
-      { name: "Nora Vance", online: true, active: true, initiative: 14, hp: 11, hpMax: 13, mp: 8, mpMax: 10, san: 55, sanMax: 70 },
-      { name: "Silas", online: true, active: false, initiative: 9, ai: true, hp: 8, hpMax: 10, mp: 7, mpMax: 10, san: 48, sanMax: 60 },
-      { name: "Gil", online: false, active: false, hp: 3, hpMax: 9 },
+      { name: "Nora Vance", online: true, active: true, initiative: 14, resources: [{ id: "hp", label: "HP", value: 11, max: 13 }, { id: "mp", label: "MP", value: 8, max: 10 }, { id: "san", label: "SAN", value: 55, max: 70 }] },
+      { name: "Silas", online: true, active: false, initiative: 9, ai: true, resources: [{ id: "hp", label: "HP", value: 8, max: 10 }, { id: "mp", label: "MP", value: 7, max: 10 }, { id: "san", label: "SAN", value: 48, max: 60 }] },
+      { name: "Gil", online: false, active: false, resources: [{ id: "hp", label: "HP", value: 3, max: 9 }] },
     ],
     scene: { name: "Salt & Anchor Inn" },
     clock: { time: "1926-03-15 22:14", round: 1 },

@@ -18,7 +18,7 @@ from agent.kp_tools import build_kp_toolset
 from agent.kp_tools_mechanics import CharacterTools
 from agent.services import build_services
 from core.character_manager import CharacterSheet
-from core.dice_engine import coc_rank_label, seed_dice
+from core.dice_engine import seed_dice
 from gateway.chat import ChatAttachment, ChatCapabilities, ChatInteraction, ChatMessage
 from gateway.commands import CommandRouter
 from gateway.events import InboundMessage
@@ -211,38 +211,39 @@ async def test_sanity_turn_emits_actual_roll_target_rank_and_loss_not_sanmax() -
     assert record is not None
     check = record.skill_checks[-1]
     dice = next(event.data for event in ws_member.events if event.kind == "dice")
-    assert dice["kind"] == "sanity"
+    assert dice["kind"] == "subsystem"
+    assert dice["subsystem"] == "sanity"
     assert dice["total"] == check["roll"]
     assert dice["total"] != 99
     assert dice["target"] == check["san_before"]
-    assert dice["success"] == check["success"]
-    assert dice["loss"] == check["loss"]
-    assert dice["remaining"] == check["san_after"]
+    assert dice["outcome"]["success"] == check["success"]
+    assert dice["detail"]["loss"] == check["loss"]
+    assert dice["detail"]["remaining"] == check["san_after"]
     # The tool renders the label once and both the record and the frame carry it.
-    assert dice["label"] == check["label"]
+    assert dice["outcome"]["label"] == check["label"]
 
 
-def test_structured_and_legacy_dice_calls_fall_back_per_trace_in_order() -> None:
-    i18n = get_i18n("en")
+def test_dice_events_come_only_from_structured_payloads() -> None:
+    """Protocol 2.0: no dice frame is ever reverse-parsed from a tool's localized
+    text — a trace entry without `dice_payloads` contributes nothing."""
     structured = {
         "name": "future_dice_tool",
         "arguments": {},
         "keeper_only": False,
         "result": "localized text ending in the wrong number 99",
-        "dice_payloads": [{"kind": "check", "expr": "Listen", "rolls": [12], "total": 12, "rank": 2}],
+        "dice_payloads": [{"kind": "check", "expr": "Listen", "rolls": [12], "total": 12}],
     }
-    legacy = {
+    payloadless = {
         "name": "roll_dice",
         "arguments": {"expression": "1d6"},
         "keeper_only": False,
         "result": "🎲 1d6: [4] = 4",
     }
 
-    events = [*_dice_events(structured, "Vera", i18n), *_dice_events(legacy, "Vera", i18n)]
+    events = [*_dice_events(structured, "Vera"), *_dice_events(payloadless, "Vera")]
 
-    assert [event.data["total"] for event in events] == [12, 4]
-    assert events[0].data["level"] == coc_rank_label(2, i18n)
-    assert events[1].data["expr"] == "1d6"
+    assert [event.data["total"] for event in events] == [12]
+    assert events[0].data["expr"] == "Listen"
 
 
 async def test_luck_spend_turn_emits_adjusted_existing_roll_without_a_reroll(monkeypatch) -> None:
@@ -288,11 +289,11 @@ async def test_luck_spend_turn_emits_adjusted_existing_roll_without_a_reroll(mon
 
     dice = next(event.data for event in ws_member.events if event.kind == "dice")
     assert dice["kind"] == "check"
-    assert dice["raw_roll"] == 55
+    assert dice["detail"]["raw_roll"] == 55
     assert dice["total"] == 49
-    assert dice["rank"] == 1
-    assert dice["success"] is True
-    assert dice["luck_spent"] == 6
+    assert dice["outcome"]["success"] is True
+    assert dice["outcome"]["id"] == "regular"
+    assert dice["detail"]["luck_spent"] == 6
 
 
 async def test_terminal_origin_turn_reaches_the_chat_channel() -> None:

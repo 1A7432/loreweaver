@@ -97,21 +97,18 @@ describe("GameView", () => {
         rolls: [7],
         total: 7,
         target: 65,
-        rank: 2,
-        level: "HARD SUCCESS",
-        success: true,
+        outcome: { id: "hard", label: "HARD SUCCESS", success: true, critical: false, fumble: false, tier: 3 },
       })
       client.push({
         type: FrameType.State,
         character: {
           name: "Ada",
           system: "coc7",
-          hp: 11,
-          hpmax: 13,
-          mp: 8,
-          mpmax: 10,
-          san: 55,
-          sanmax: 70,
+          resources: [
+            { id: "hp", label: "HP", value: 11, max: 13 },
+            { id: "san", label: "SAN", value: 55, max: 70 },
+            { id: "mp", label: "MP", value: 8, max: 10 },
+          ],
           attributes: { str: 45, dex: 60 },
           status_effects: [],
         },
@@ -668,14 +665,14 @@ describe("GameView", () => {
     // A streaming chunk that isn't `done`: the Keeper is visibly producing text, but
     // it's still in flight — the indicator must stay up.
     await act(async () => {
-      client.push({ type: FrameType.Narrative, id: "s1", speaker: "kp", text: "The hinge ", format: "markdown", stream: true, done: false })
+      client.push({ type: FrameType.NarrativeDelta, id: "s1", speaker: "kp", text: "The hinge " })
       await flush()
     })
     expect(captureCharFrame()).toContain("Keeper thinking")
 
     // The terminal `done` chunk clears it (ends with no active spinner).
     act(() => {
-      client.push({ type: FrameType.Narrative, id: "s1", speaker: "kp", text: "shrieks.", format: "markdown", stream: true, done: true })
+      client.push({ type: FrameType.Narrative, id: "s1", speaker: "kp", text: "The hinge shrieks.", format: "markdown" })
     })
     await flush()
     expect(captureCharFrame()).not.toContain("Keeper thinking")
@@ -688,12 +685,11 @@ describe("GameView", () => {
     character: {
       name: "Ada",
       system: "coc7",
-      hp: 11,
-      hpmax: 13,
-      mp: 8,
-      mpmax: 10,
-      san: 55,
-      sanmax: 70,
+      resources: [
+        { id: "hp", label: "HP", value: 11, max: 13 },
+        { id: "san", label: "SAN", value: 55, max: 70 },
+        { id: "mp", label: "MP", value: 8, max: 10 },
+      ],
       attributes: { str: 45, dex: 60 },
       status_effects: [],
     },
@@ -892,12 +888,11 @@ describe("GameView", () => {
           character: {
             name: "Ada",
             system: "coc7",
-            hp: 11,
-            hpmax: 13,
-            mp: 8,
-            mpmax: 10,
-            san: 55,
-            sanmax: 70,
+            resources: [
+              { id: "hp", label: "HP", value: 11, max: 13 },
+              { id: "san", label: "SAN", value: 55, max: 70 },
+              { id: "mp", label: "MP", value: 8, max: 10 },
+            ],
             attributes: { str: 45, dex: 60 },
             status_effects: [],
           },
@@ -907,12 +902,11 @@ describe("GameView", () => {
               name: "Bob",
               online: true,
               active: false,
-              hp: 4,
-              hpMax: 8,
-              mp: 3,
-              mpMax: 6,
-              san: 42,
-              sanMax: 60,
+              resources: [
+                { id: "hp", label: "HP", value: 4, max: 8 },
+                { id: "mp", label: "MP", value: 3, max: 6 },
+                { id: "san", label: "SAN", value: 42, max: 60 },
+              ],
             },
           ],
           initiative: [],
@@ -1041,12 +1035,11 @@ describe("GameView", () => {
         character: {
           name: "Ada Investigator With A Deliberately Long Name",
           system: "coc7",
-          hp: 11,
-          hpmax: 13,
-          mp: 8,
-          mpmax: 10,
-          san: 55,
-          sanmax: 70,
+          resources: [
+            { id: "hp", label: "HP", value: 11, max: 13 },
+            { id: "san", label: "SAN", value: 55, max: 70 },
+            { id: "mp", label: "MP", value: 8, max: 10 },
+          ],
           attributes: { STR: 45, DEX: 60 },
           status_effects: [],
         },
@@ -1054,12 +1047,11 @@ describe("GameView", () => {
           name: index === 0 ? "Ada Investigator With A Deliberately Long Name" : `Dense Combatant ${index}`,
           online: true,
           active: index === 0,
-          hp: 8 + index,
-          hpMax: 12 + index,
-          mp: 5,
-          mpMax: 10,
-          san: 50,
-          sanMax: 60,
+          resources: [
+            { id: "hp", label: "HP", value: 8 + index, max: 12 + index },
+            { id: "mp", label: "MP", value: 5, max: 10 },
+            { id: "san", label: "SAN", value: 50, max: 60 },
+          ],
         })),
         scene: { name: "The Extremely Long Library Scene", focus: "search" },
         clock: { time: "23:10", round: 2 },
@@ -1112,7 +1104,7 @@ describe("Ctrl+S transcript export", () => {
         rolls: [12],
         total: 12,
         target: 65,
-        level: "HARD SUCCESS",
+        outcome: { id: "hard", label: "HARD SUCCESS", success: true, critical: false, fumble: false, tier: 3 },
       })
     })
     await flush()
@@ -1266,33 +1258,55 @@ describe("appendFrame streaming-narrative semantics", () => {
     speaker: "kp",
     text: "雨声",
     format: "markdown",
-    stream: true,
+    draft: true,
   } as const
 
-  test("stream frames sharing an id concatenate their deltas", () => {
+  test("delta frames sharing an id concatenate into the draft bubble", () => {
+    const log = appendFrame([draft], {
+      type: FrameType.NarrativeDelta,
+      id: "s1",
+      speaker: "kp",
+      text: "落在窗台。",
+    })
+    expect(log).toHaveLength(1)
+    expect(log[0]).toMatchObject({ id: "s1", text: "雨声落在窗台。", draft: true })
+  })
+
+  test("the closing narrative replaces the draft with the full final text", () => {
     const log = appendFrame([draft], {
       type: FrameType.Narrative,
       id: "s1",
       speaker: "kp",
-      text: "落在窗台。",
+      text: "雨声落在窗台。（修正后）",
       format: "markdown",
-      stream: true,
-      done: true,
     })
     expect(log).toHaveLength(1)
-    expect(log[0]).toMatchObject({ id: "s1", text: "雨声落在窗台。", done: true })
+    // draft === false marks the finished stream (the styled-render path).
+    expect(log[0]).toMatchObject({ id: "s1", text: "雨声落在窗台。（修正后）", draft: false })
   })
 
-  test("a plain kp reply supersedes an abandoned draft from another id", () => {
+  test("an empty closing narrative drops an abandoned tool-round draft", () => {
+    const log = appendFrame([draft], {
+      type: FrameType.Narrative,
+      id: "s1",
+      speaker: "kp",
+      text: "",
+      format: "markdown",
+    })
+    expect(log).toHaveLength(0)
+  })
+
+  test("a kp reply with a different id leaves an open draft alone (the server closes every draft it opened)", () => {
     const log = appendFrame([draft], {
       type: FrameType.Narrative,
       id: "n2",
       speaker: "kp",
-      text: "修正后的最终文本。",
+      text: "另一条完整回复。",
       format: "markdown",
     })
-    expect(log).toHaveLength(1)
-    expect(log[0]).toMatchObject({ id: "n2", text: "修正后的最终文本。" })
+    expect(log).toHaveLength(2)
+    expect(log[0]).toMatchObject({ id: "s1", draft: true })
+    expect(log[1]).toMatchObject({ id: "n2", text: "另一条完整回复。" })
   })
 
   test("a player line never disturbs an open kp draft", () => {

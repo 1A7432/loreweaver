@@ -66,22 +66,24 @@ class Event:
         fmt: str = "markdown",
         private: bool = False,
         frame_id: str = "",
-        stream: bool = False,
-        done: bool = False,
     ) -> Event:
-        """One line of story / dialogue from ``speaker`` (kp/npc/player/system).
+        """One COMPLETE line of story / dialogue from ``speaker`` (kp/npc/player/system).
 
-        ``frame_id``/``stream``/``done`` drive the protocol's streaming-narrative
-        semantics (frames sharing an id carry text DELTAS clients concatenate,
-        ``done`` closes the stream); leave them unset for a plain one-shot line."""
-        data: dict[str, Any] = {}
-        if frame_id:
-            data["frame_id"] = frame_id
-        if stream:
-            data["stream"] = True
-        if done:
-            data["done"] = True
+        Protocol 2.0: a ``narrative`` frame always carries the full, final text.
+        Pass the ``frame_id`` of a preceding ``narrative_delta`` stream to make
+        clients REPLACE that draft bubble with this final text; leave it unset
+        for a plain one-shot line."""
+        data: dict[str, Any] = {"frame_id": frame_id} if frame_id else {}
         return cls(kind="narrative", speaker=speaker, name=name, text=text, fmt=fmt, private=private, data=data)
+
+    @classmethod
+    def narrative_delta(cls, speaker: str, text: str, *, frame_id: str, name: str = "") -> Event:
+        """One streaming text DELTA for the draft bubble ``frame_id`` (protocol 2.0).
+
+        Clients concatenate deltas sharing an id; the stream ends when a
+        ``narrative`` frame with the SAME id arrives carrying the full final
+        text (which replaces the accumulated draft — no tail/supersede rules)."""
+        return cls(kind="narrative_delta", speaker=speaker, name=name, text=text, fmt="markdown", data={"frame_id": frame_id})
 
     @classmethod
     def state(cls, snapshot: dict[str, Any]) -> Event:

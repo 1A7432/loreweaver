@@ -24,7 +24,8 @@ from core.character_manager import (
     set_hit_points,
 )
 from core.character_rules import render_validation_notice, validate_sheet
-from core.coc_rules import DEFAULT_COC_RULE, RANKS, outcome_from_check
+from core.check_outcome import CheckOutcome, outcome_wire
+from core.coc_rules import DEFAULT_COC_RULE, outcome_from_check
 from core.dice_engine import DiceResult
 from core.rulepacks import RulePack, load_rulepack
 from core.skills import available_skills
@@ -542,7 +543,9 @@ class CommandRouter:
         right_value = _coc_check_value(character, pack, right.name, right.temp_value)
         left_roll = ctx.services.dice.roll_coc_check(left_value, rule=rule, difficulty=left.difficulty)
         right_roll = ctx.services.dice.roll_coc_check(right_value, rule=rule, difficulty=right.difficulty)
-        left_rank, right_rank = RANKS[left_roll["rank"]], RANKS[right_roll["rank"]]
+        left_outcome = outcome_from_check(left_roll)
+        right_outcome = outcome_from_check(right_roll)
+        left_rank, right_rank = left_outcome.rank, right_outcome.rank
         if left_rank.tier > right_rank.tier:
             winner = ctx.i18n.t("commands.opposed.left")
             winner_side = "left"
@@ -560,12 +563,12 @@ class CommandRouter:
             rolls=[left_roll["roll"], right_roll["roll"]],
             total=left_roll["roll"],
             target=left_value,
-            rank=left_roll["rank"],
-            level=ctx.i18n.t(left_rank.label_key),
-            success=left_rank.success,
-            winner=winner_side,
-            left=_coc_event_side(left_name, left_roll, left_value),
-            right=_coc_event_side(right_name, right_roll, right_value),
+            outcome=outcome_wire(left_outcome, ctx.i18n.t(left_rank.label_key)),
+            detail={
+                "winner": winner_side,
+                "left": _coc_event_side(left_name, left_outcome, ctx.i18n.t(left_rank.label_key)),
+                "right": _coc_event_side(right_name, right_outcome, ctx.i18n.t(right_rank.label_key)),
+            },
         )
         return ctx.i18n.t(
             "commands.opposed.result",
@@ -598,23 +601,24 @@ class CommandRouter:
         _set_sheet_value(character, pack, "理智", max(0, san - loss))
         await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
         ctx.dice(
-            "sanity",
+            "subsystem",
+            subsystem="sanity",
             expr=pack.display_name(parsed.canonical, ctx.locale),
             rolls=[result["roll"]],
             total=result["roll"],
             target=san,
-            rank=result["rank"],
-            level=label,
-            success=outcome.rank.success,
-            difficulty=result["difficulty"],
-            bonus=result["bonus"],
-            penalty=result["penalty"],
-            raw_roll=result["raw_roll"],
-            extra_tens=list(result["extra_tens"]),
-            final_tens=result["final_tens"],
-            loss_expr=loss_expr,
-            loss=loss,
-            remaining=max(0, san - loss),
+            outcome=outcome_wire(outcome, label),
+            detail={
+                "difficulty": result["difficulty"],
+                "bonus": result["bonus"],
+                "penalty": result["penalty"],
+                "base_roll": result["raw_roll"],
+                "extra_tens": list(result["extra_tens"]),
+                "final_tens": result["final_tens"],
+                "loss_expr": loss_expr,
+                "loss": loss,
+                "remaining": max(0, san - loss),
+            },
         )
         await record_check(
             ctx.services.battles,
@@ -754,7 +758,7 @@ class CommandRouter:
         except (ValueError, TypeError):
             dex = 50
         result = ctx.services.dice.roll_expression(f"1d100+{dex}", is_check=True)
-        ctx.dice("init", name=character.name, dex=dex, **_dice_result_fields(result))
+        ctx.dice("init", name=character.name, **_dice_result_fields(result))
         return ctx.i18n.t("commands.init.result", name=character.name, result=_format_roll(result, ctx.i18n))
 
     async def cmd_make_char(self, ctx: CommandCtx) -> str:
@@ -2469,15 +2473,15 @@ class CommandRouter:
                 total=result["roll"],
                 target=target_value,
                 effective_target=effective_target,
-                rank=result["rank"],
-                level=label,
-                success=outcome.rank.success,
-                difficulty=result["difficulty"],
-                bonus=result["bonus"],
-                penalty=result["penalty"],
-                raw_roll=result["raw_roll"],
-                extra_tens=list(result["extra_tens"]),
-                final_tens=result["final_tens"],
+                outcome=outcome_wire(outcome, label),
+                detail={
+                    "difficulty": result["difficulty"],
+                    "bonus": result["bonus"],
+                    "penalty": result["penalty"],
+                    "base_roll": result["raw_roll"],
+                    "extra_tens": list(result["extra_tens"]),
+                    "final_tens": result["final_tens"],
+                },
             )
             await record_check(
                 ctx.services.battles,
@@ -2600,22 +2604,20 @@ def _dice_result_fields(result: DiceResult) -> dict[str, Any]:
         "expr": result.expression,
         "rolls": list(result.rolls),
         "total": result.total,
-        "modifier": result.modifier,
-        "critical_success": result.is_critical_success(),
-        "critical_failure": result.is_critical_failure(),
+        "detail": {
+            "modifier": result.modifier,
+            "critical_success": result.is_critical_success(),
+            "critical_failure": result.is_critical_failure(),
+        },
     }
 
 
-def _coc_event_side(name: str, outcome: dict[str, Any], target: int) -> dict[str, Any]:
+def _coc_event_side(name: str, outcome: CheckOutcome, label: str) -> dict[str, Any]:
     return {
         "name": name,
-        "target": target,
-        "total": outcome["roll"],
-        "rank": outcome["rank"],
-        "success": outcome["success"],
-        "difficulty": outcome["difficulty"],
-        "bonus": outcome["bonus"],
-        "penalty": outcome["penalty"],
+        "target": outcome.target,
+        "total": outcome.rolled.total,
+        "outcome": outcome_wire(outcome, label),
     }
 
 

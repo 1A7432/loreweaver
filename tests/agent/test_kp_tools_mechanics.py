@@ -281,9 +281,11 @@ async def test_roll_dice_basic_result_contains_the_total():
             "expr": "3d6+2",
             "rolls": expected.rolls,
             "total": expected.total,
-            "modifier": expected.modifier,
-            "critical_success": expected.is_critical_success(),
-            "critical_failure": expected.is_critical_failure(),
+            "detail": {
+                "modifier": expected.modifier,
+                "critical_success": expected.is_critical_success(),
+                "critical_failure": expected.is_critical_failure(),
+            },
         }
     ]
 
@@ -337,11 +339,14 @@ async def test_skill_check_on_a_seeded_skill_yields_deterministic_rank_and_a_rea
     assert payload["total"] == expected["final_roll"]
     assert payload["target"] == 25
     assert payload["effective_target"] == 25
-    assert payload["rank"] == expected["rank"]
-    assert payload["success"] == expected["success"]
-    assert payload["difficulty"] == expected["difficulty"]
-    assert payload["bonus"] == 0
-    assert payload["penalty"] == 0
+    expected_outcome = outcome_from_check(expected)
+    assert payload["outcome"]["id"] == expected_outcome.rank.id
+    assert payload["outcome"]["label"] == expected_label
+    assert payload["outcome"]["success"] == expected_outcome.rank.success
+    assert payload["outcome"]["tier"] == expected_outcome.rank.tier
+    assert payload["detail"]["difficulty"] == expected["difficulty"]
+    assert payload["detail"]["bonus"] == 0
+    assert payload["detail"]["penalty"] == 0
 
     seed_dice(777)
     zh_text = await dice_tools.skill_check(
@@ -466,10 +471,11 @@ async def test_dnd_skill_check_records_structured_advantage_and_critical_fields(
     assert payload["total"] == check["roll"]
     assert payload["target"] == 10
     assert payload["effective_target"] == 10
-    assert payload["success"] == check["success"]
-    assert payload["label"]
-    assert payload["bonus"] == 1
-    assert payload["penalty"] == 0
+    assert payload["outcome"]["success"] == check["success"]
+    assert payload["outcome"]["id"] == check["rank_id"]
+    assert payload["outcome"]["label"]
+    assert payload["detail"]["bonus"] == 1
+    assert payload["detail"]["penalty"] == 0
 
 
 async def test_coc_npc_skill_check_requires_and_uses_explicit_target_without_player_sheet_leak():
@@ -515,7 +521,7 @@ async def test_dnd_npc_skill_check_uses_explicit_total_modifier():
     )
 
     payload = ctx.dice_payloads[-1]
-    assert payload["modifier"] == 6
+    assert payload["detail"]["modifier"] == 6
     assert payload["total"] == natural.total + 6
     record = await services.battles.generator.get_current_session(ctx.chat_key)
     assert record is not None
@@ -619,16 +625,17 @@ async def test_sanity_check_records_roll_rank_and_structured_loss():
     assert check["san_before"] == before.attributes["SAN"]
     assert check["san_after"] == check["san_before"] - check["loss"]
     payload = ctx.dice_payloads[-1]
-    assert payload["kind"] == "sanity"
+    assert payload["kind"] == "subsystem"
+    assert payload["subsystem"] == "sanity"
     assert payload["expr"] == "SAN"
     assert payload["rolls"] == [check["roll"]]
     assert payload["total"] == check["roll"]
     assert payload["target"] == check["san_before"]
     assert payload["effective_target"] == check["san_before"]
-    assert payload["label"] == check["label"]
-    assert payload["success"] == check["success"]
-    assert payload["loss"] == check["loss"]
-    assert payload["remaining"] == check["san_after"]
+    assert payload["outcome"]["label"] == check["label"]
+    assert payload["outcome"]["success"] == check["success"]
+    assert payload["detail"]["loss"] == check["loss"]
+    assert payload["detail"]["remaining"] == check["san_after"]
 
 
 async def test_spend_luck_atomically_adjusts_latest_own_check_without_reroll(monkeypatch):
@@ -687,7 +694,7 @@ async def test_spend_luck_atomically_adjusts_latest_own_check_without_reroll(mon
     assert other_check["roll"] == 90
     assert record.player_stats[ctx.uid()]["successful_checks"] == 1
     assert ctx.dice_payloads[-1]["total"] == 49
-    assert ctx.dice_payloads[-1]["raw_roll"] == 55
+    assert ctx.dice_payloads[-1]["detail"]["raw_roll"] == 55
     assert result == services.i18n.with_locale(ctx.locale).t(
         "kp_tools.dice.luck.success",
         points=6,

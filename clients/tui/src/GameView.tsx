@@ -90,34 +90,50 @@ export function completesSubmission(frame: ServerFrame): boolean {
   if (frame.type === FrameType.State) return true
   if (frame.type === FrameType.System) return !frame.spinner
   if (frame.type === FrameType.TurnStatus) return frame.status === "idle"
+  // Protocol 2.0: deltas never complete a turn; the closing `narrative` (full
+  // final text, same id) does.
   if (frame.type !== FrameType.Narrative) return false
-  if (frame.speaker !== "kp" && frame.speaker !== "system") return false
-  return !frame.stream || Boolean(frame.done)
+  return frame.speaker === "kp" || frame.speaker === "system"
 }
 
 export function appendFrame(frames: LogFrame[], frame: LogFrame): LogFrame[] {
-  if (frame.type === FrameType.Narrative && frame.speaker === "kp" && (!frame.stream || frame.done)) {
-    // A finished or plain KP reply supersedes any still-open KP draft bubble from a
-    // DIFFERENT stream id: a corrected/rewritten reply replaces its own abandoned draft.
-    frames = frames.filter(
-      (item) =>
-        !(
-          item.type === FrameType.Narrative &&
-          item.speaker === "kp" &&
-          item.stream &&
-          !item.done &&
-          item.id !== frame.id
-        ),
-    )
+  if (frame.type === FrameType.NarrativeDelta) {
+    // Accumulate deltas sharing an id into one draft bubble.
+    const index = frames.findIndex((item) => item.type === FrameType.Narrative && item.id === frame.id)
+    if (index === -1) {
+      const draft: LogFrame = {
+        type: FrameType.Narrative,
+        id: frame.id,
+        speaker: frame.speaker,
+        ...(frame.name ? { name: frame.name } : {}),
+        text: frame.text.slice(0, MAX_STREAM_TEXT),
+        format: "markdown",
+        draft: true,
+      }
+      return [...frames, draft].slice(-200)
+    }
+    const next = [...frames]
+    const existing = next[index]
+    if (existing.type !== FrameType.Narrative) return next
+    next[index] = { ...existing, text: (existing.text + frame.text).slice(0, MAX_STREAM_TEXT) }
+    return next
   }
-  if (frame.type !== FrameType.Narrative || !frame.stream) return [...frames, frame].slice(-200)
-  const next = [...frames]
-  const index = next.findIndex((item) => item.type === FrameType.Narrative && item.id === frame.id)
-  if (index === -1) return [...next, frame].slice(-200)
-  const existing = next[index]
-  if (existing.type !== FrameType.Narrative) return [...next, frame].slice(-200)
-  next[index] = { ...existing, text: (existing.text + frame.text).slice(0, MAX_STREAM_TEXT), done: frame.done }
-  return next
+  if (frame.type === FrameType.Narrative) {
+    // The closing narrative (same id) REPLACES the accumulated draft with the
+    // full final text; an empty final drops an abandoned draft outright.
+    const index = frames.findIndex((item) => item.type === FrameType.Narrative && item.id === frame.id)
+    if (index !== -1) {
+      const next = [...frames]
+      if (!frame.text) {
+        next.splice(index, 1)
+        return next
+      }
+      next[index] = { ...frame, draft: false }
+      return next
+    }
+    if (!frame.text) return frames
+  }
+  return [...frames, frame].slice(-200)
 }
 
 function keyName(event: KeyEvent): string {
@@ -285,7 +301,7 @@ export function GameView({
               },
             },
           )
-          if ((frame as DiceFrame).rank === 4) {
+          if ((frame as DiceFrame).outcome?.critical) {
             setCritFlash(true)
             setTimeout(() => setCritFlash(false), 220)
           }

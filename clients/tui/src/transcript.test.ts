@@ -53,7 +53,7 @@ describe("transcriptLine", () => {
         rolls: [24],
         total: 24,
         target: 70,
-        level: "HARD SUCCESS",
+        outcome: { id: "hard", label: "HARD SUCCESS", success: true, critical: false, fumble: false, tier: 3 },
       }),
     ).toBe("⚄ Liu 1d100 24 vs 70 -> HARD SUCCESS")
     expect(transcriptLine({ type: FrameType.Dice, actor: "Goblin", kind: "roll", expr: "1d6", rolls: [4], total: 4 })).toBe(

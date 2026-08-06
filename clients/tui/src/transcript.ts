@@ -66,9 +66,7 @@ function speakerLabel(frame: Extract<LogFrame, { type: "narrative" }>): string {
 export function transcriptLine(frame: LogFrame): string | undefined {
   if (frame.type === "dice") {
     const target = typeof frame.target === "number" ? ` vs ${frame.target}` : ""
-    const hasOutcome = typeof frame.level === "string" || typeof frame.success === "boolean"
-    const level = frame.level ?? (frame.success ? "SUCCESS" : "FAIL")
-    const outcome = hasOutcome ? ` -> ${level}` : ""
+    const outcome = frame.outcome?.label ? ` -> ${frame.outcome.label}` : ""
     return stripControlChars(`⚄ ${frame.actor} ${frame.expr} ${frame.total}${target}${outcome}`)
   }
   if (frame.type === "system") {

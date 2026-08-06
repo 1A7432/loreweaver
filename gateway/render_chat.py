@@ -27,7 +27,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from core.dice_engine import coc_rank_label
 from gateway.chat import ChatEmbed, ChatField, ChatMessage
 
 if TYPE_CHECKING:
@@ -75,23 +74,23 @@ def _render_narrative(event: Event, i18n: I18n) -> ChatMessage | None:
 
 
 def _render_dice(event: Event, i18n: I18n) -> ChatMessage | None:
-    """One public dice line — actor / expr / total, plus a rank-derived level
-    when the roll carried a COC success rank. Never touches keeper data."""
+    """One public dice line — actor / expr / total, plus the graded outcome's
+    already-localized label when present. Never touches keeper data."""
     data = event.data
     actor = str(data.get("actor", "")).strip()
     expr = str(data.get("expr", "")).strip()
     total = data.get("total", "")
-    rank = data.get("rank")
-    if rank is not None:
-        level = coc_rank_label(int(rank), i18n)
+    outcome = data.get("outcome") if isinstance(data.get("outcome"), dict) else {}
+    level = str(outcome.get("label", "") or "")
+    if level:
         text = i18n.t("rooms.chat.dice_line", actor=actor, expr=expr, level=level, total=total)
     else:
-        level = ""
         text = i18n.t("rooms.chat.dice_line_plain", actor=actor, expr=expr, total=total)
     fields = [ChatField(i18n.t("rooms.chat.dice.expression"), expr, True)]
     if level:
         fields.append(ChatField(i18n.t("rooms.chat.dice.level"), level, True))
-    if data.get("critical_success") is True:
+    detail = data.get("detail") if isinstance(data.get("detail"), dict) else {}
+    if detail.get("critical_success") is True:
         fields.append(
             ChatField(
                 i18n.t("rooms.chat.dice.critical"),
@@ -99,7 +98,7 @@ def _render_dice(event: Event, i18n: I18n) -> ChatMessage | None:
                 True,
             )
         )
-    elif data.get("critical_failure") is True:
+    elif detail.get("critical_failure") is True:
         fields.append(
             ChatField(
                 i18n.t("rooms.chat.dice.critical"),
@@ -109,7 +108,7 @@ def _render_dice(event: Event, i18n: I18n) -> ChatMessage | None:
         )
     fields.append(ChatField(i18n.t("rooms.chat.dice.total"), str(total), True))
 
-    right = data.get("right")
+    right = detail.get("right")
     if isinstance(right, dict):
         parts = [str(right["name"])] if right.get("name") else []
         if right.get("total") is not None:
@@ -117,14 +116,15 @@ def _render_dice(event: Event, i18n: I18n) -> ChatMessage | None:
             if right.get("target") is not None:
                 roll = f"{roll}/{right['target']}"
             parts.append(roll)
-        if right.get("rank") is not None:
-            parts.append(coc_rank_label(int(right["rank"]), i18n))
+        right_outcome = right.get("outcome")
+        if isinstance(right_outcome, dict) and right_outcome.get("label"):
+            parts.append(str(right_outcome["label"]))
         if parts:
             fields.append(
                 ChatField(i18n.t("rooms.chat.dice.opposed_right"), " · ".join(parts), False)
             )
 
-    winner = data.get("winner")
+    winner = detail.get("winner")
     if winner in {"left", "right", "tie"}:
         fields.append(
             ChatField(
@@ -134,11 +134,11 @@ def _render_dice(event: Event, i18n: I18n) -> ChatMessage | None:
             )
         )
 
-    if data.get("loss") is not None:
-        fields.append(ChatField(i18n.t("rooms.chat.dice.san_loss"), str(data["loss"]), True))
-    if data.get("remaining") is not None:
+    if detail.get("loss") is not None:
+        fields.append(ChatField(i18n.t("rooms.chat.dice.san_loss"), str(detail["loss"]), True))
+    if detail.get("remaining") is not None:
         fields.append(
-            ChatField(i18n.t("rooms.chat.dice.san_remaining"), str(data["remaining"]), True)
+            ChatField(i18n.t("rooms.chat.dice.san_remaining"), str(detail["remaining"]), True)
         )
     return ChatMessage(
         text=text,
@@ -218,14 +218,12 @@ def _render_panel(event: Event, i18n: I18n) -> ChatMessage:
 
 
 def _with_vitals(name: str, data: dict) -> str:
-    vitals = []
-    for label, value_key, max_key in (
-        ("HP", "hp", "hpmax"),
-        ("MP", "mp", "mpmax"),
-        ("SAN", "san", "sanmax"),
-    ):
-        value = data.get(value_key)
-        maximum = data.get(max_key) if max_key in data else data.get(f"{value_key}Max")
-        if value is not None and maximum is not None:
-            vitals.append(f"{label} {value}/{maximum}")
+    resources = data.get("resources")
+    if not isinstance(resources, list):
+        return name
+    vitals = [
+        f"{res.get('label', res.get('id', ''))} {res['value']}/{res['max']}"
+        for res in resources
+        if isinstance(res, dict) and res.get("value") is not None and res.get("max") is not None
+    ]
     return f"{name} · {' · '.join(vitals)}" if vitals else name

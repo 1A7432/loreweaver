@@ -23,12 +23,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from typing import TYPE_CHECKING, Any
 
 from agent.context import AgentCtx
 from agent.loop import KPTurnResult, run_kp_turn
-from core.dice_engine import coc_rank_label
 from gateway.hub import Event
 from gateway.ops import room_content_unfiltered
 from gateway.panels import deliver_panel_events
@@ -45,22 +43,6 @@ if TYPE_CHECKING:
     from gateway.hub import Member, RoomHub
     from gateway.ops import Censor
 
-# tool_trace `name` -> the `dice` event's `kind` (M4 §1's turn-flow step 5).
-# None of these are `keeper_only` (they never touch module secrets), matching
-# the wire protocol's "dice frames NEVER contain keeper secrets" guarantee.
-_DICE_KIND_BY_TOOL = {
-    "roll_dice": "roll",
-    "skill_check": "check",
-    "sanity_check": "sanity",
-    "opposed_check": "opposed",
-    "initiative_tracker": "init",
-}
-_INT_RE = re.compile(r"-?\d+")
-_BRACKET_RE = re.compile(r"\[([-\d,\s]+)\]")
-# Probed most-specific-first: "Critical Success"/"大成功" also contains the
-# plain success label as a substring in some locales, so crit/fumble must be
-# checked before the plain success/fail codes to avoid a false match.
-_RANK_PROBE_ORDER = (4, 3, 2, -2, 1, -1)
 _SESSION_ACTION_MAX_CHARS = 1000
 
 
@@ -236,50 +218,57 @@ async def run_turn(
         review = None if unfiltered else ((lambda value: censor.review(value).cleaned) if censor is not None else None)
         await hub.begin_turn(ctx.chat_key, name)
         try:
-            # Streaming narrative (docs/protocol.md): frames sharing an id carry text
-            # DELTAS clients concatenate; `done` closes the stream. Each loop epoch (one
-            # model round) gets a fresh id, so a discarded tool-round draft never bleeds
-            # into the final bubble.
+            # Streaming narrative (docs/protocol.md 2.0): `narrative_delta` frames sharing
+            # an id carry text deltas clients concatenate into a draft bubble; the ONE
+            # closing `narrative` frame with the SAME id carries the full final text and
+            # REPLACES the draft — post-generation corrections (dice-first, censor) simply
+            # land in that final text, no supersede rules. Each loop epoch (one model
+            # round) gets a fresh id, so a discarded tool-round draft never becomes the
+            # final bubble.
             from net.session import new_id  # gateway->net seam; module-level would cycle
 
-            stream_state = {"id": "", "epoch": 0, "text": ""}
+            stream_state = {"id": "", "epoch": 0}
 
             async def _emit_reply_delta(frame: dict) -> None:
                 if frame["epoch"] != stream_state["epoch"]:
-                    stream_state.update(id=new_id(), epoch=frame["epoch"], text="")
-                stream_state["text"] += frame["text"]
+                    if stream_state["id"]:
+                        # Every delta stream ends with a same-id narrative: close the
+                        # abandoned tool-round draft with an empty final (clients drop it).
+                        await hub.publish(
+                            ctx.chat_key,
+                            Event.narrative(speaker="kp", text="", fmt="markdown", frame_id=stream_state["id"]),
+                        )
+                    stream_state.update(id=new_id(), epoch=frame["epoch"])
                 await hub.publish(
                     ctx.chat_key,
-                    Event.narrative(
-                        speaker="kp", text=frame["text"], fmt="markdown",
-                        frame_id=stream_state["id"], stream=True,
-                    ),
+                    Event.narrative_delta(speaker="kp", text=frame["text"], frame_id=stream_state["id"]),
                 )
 
-            result = await run_kp_turn(
-                ctx, services, toolset, text, output_review=review, on_reply_delta=_emit_reply_delta
-            )
-            for entry in result.tool_trace:
-                for dice_event in _dice_events(entry, name, i18n):
-                    await hub.publish(ctx.chat_key, dice_event)
-            for entry in result.tool_trace:
-                npc_event = _npc_event(entry, i18n)
-                if npc_event is not None:
-                    await hub.publish(ctx.chat_key, npc_event)
-            if stream_state["id"] and result.reply.startswith(stream_state["text"]):
-                # Common path: the stream matches the final reply — close the SAME bubble
-                # with the remaining tail (deployed clients concatenate deltas).
+            final_published = False
+            try:
+                result = await run_kp_turn(
+                    ctx, services, toolset, text, output_review=review, on_reply_delta=_emit_reply_delta
+                )
+                for entry in result.tool_trace:
+                    for dice_event in _dice_events(entry, name):
+                        await hub.publish(ctx.chat_key, dice_event)
+                for entry in result.tool_trace:
+                    npc_event = _npc_event(entry, i18n)
+                    if npc_event is not None:
+                        await hub.publish(ctx.chat_key, npc_event)
                 await hub.publish(
                     ctx.chat_key,
-                    Event.narrative(
-                        speaker="kp", text=result.reply[len(stream_state["text"]):], fmt="markdown",
-                        frame_id=stream_state["id"], stream=True, done=True,
-                    ),
+                    Event.narrative(speaker="kp", text=result.reply, fmt="markdown", frame_id=stream_state["id"]),
                 )
-            else:
-                # Rewritten reply (dice/state corrective, censor) or nothing streamed:
-                # a plain one-shot narrative; up-to-date clients supersede any undone draft.
-                await hub.publish(ctx.chat_key, Event.narrative(speaker="kp", text=result.reply, fmt="markdown"))
+                final_published = True
+            finally:
+                if stream_state["id"] and not final_published:
+                    # The turn died mid-stream: close the draft bubble with a final
+                    # frame so no client is left holding an open draft forever.
+                    await hub.publish(
+                        ctx.chat_key,
+                        Event.narrative(speaker="kp", text="", fmt="markdown", frame_id=stream_state["id"]),
+                    )
             # Hook-emitted declarative UI (protocol v1.7) rides right behind the
             # narrative it annotates, before the closing `state` snapshot.
             for ui_frame in result.ui_frames:
@@ -486,96 +475,39 @@ def _npc_event(entry: dict[str, Any], i18n: I18n) -> Event | None:
     )
 
 
-def _dice_events(entry: dict[str, Any], actor: str, i18n: I18n) -> list[Event]:
-    """Build public dice events, preferring payloads bound during tool dispatch."""
+def _dice_events(entry: dict[str, Any], actor: str) -> list[Event]:
+    """Build public dice events from the payloads bound during tool dispatch.
+
+    Protocol 2.0: dice frames come ONLY from structured `ctx.emit_dice`
+    payloads — the pre-2.0 fallback that re-parsed a tool's localized text to
+    guess ranks is gone (a tool that emits no payload emits no dice frame).
+    """
     if entry.get("keeper_only"):
         return []
 
     payloads = entry.get("dice_payloads")
-    if isinstance(payloads, list) and payloads:
-        events: list[Event] = []
-        arguments = entry.get("arguments") or {}
-        for raw_payload in payloads:
-            if not isinstance(raw_payload, dict):
-                continue
-            fields = dict(raw_payload)
-            kind = str(fields.pop("kind", ""))
-            payload_actor = fields.pop("actor", "")
-            if not kind or "total" not in fields:
-                continue
-            rank = fields.get("rank")
-            if isinstance(rank, int) and "level" not in fields:
-                fields["level"] = coc_rank_label(rank, i18n)
-            events.append(
-                Event.dice(
-                    actor=str(
-                        payload_actor
-                        or arguments.get("actor")
-                        or arguments.get("name")
-                        or actor
-                    ),
-                    kind=kind,
-                    **fields,
-                )
-            )
-        # A tool that emitted structured data never falls back to parsing its
-        # localized text, even if a malformed payload was defensively skipped.
-        return events
-
-    legacy = _dice_event(entry, actor, i18n)
-    return [legacy] if legacy is not None else []
-
-
-def _dice_event(entry: dict[str, Any], actor: str, i18n: I18n) -> Event | None:
-    """Legacy best-effort dice event reconstructed from localized tool text.
-
-    Retained for older/custom dice tools that did not call ``ctx.emit_dice``.
-    """
-    tool_name = str(entry.get("name", ""))
-    kind = _DICE_KIND_BY_TOOL.get(tool_name)
-    if kind is None or entry.get("keeper_only"):
-        return None
-
-    text = str(entry.get("result", ""))
-    numbers = [int(match) for match in _INT_RE.findall(text)]
-    if not numbers:
-        return None
-
-    bracket = _BRACKET_RE.search(text)
-    rolls = [int(match) for match in _INT_RE.findall(bracket.group(1))] if bracket else numbers
-
+    if not isinstance(payloads, list):
+        return []
+    events: list[Event] = []
     arguments = entry.get("arguments") or {}
-    fields: dict[str, Any] = {
-        "expr": _dice_expr(tool_name, arguments),
-        "rolls": rolls,
-        "total": numbers[-1],
-    }
-
-    rank = _infer_rank(text, i18n)
-    if rank is not None:
-        fields["rank"] = rank
-        fields["success"] = rank >= 1
-    return Event.dice(
-        actor=str(arguments.get("actor") or arguments.get("name") or actor),
-        kind=kind,
-        **fields,
-    )
-
-
-def _dice_expr(name: str, arguments: dict[str, Any]) -> str:
-    if name == "roll_dice":
-        return str(arguments.get("expression", ""))
-    if name == "skill_check":
-        return str(arguments.get("skill_name", ""))
-    if name == "sanity_check":
-        return f"{arguments.get('success_loss', '')}/{arguments.get('failure_loss', '')}"
-    if name == "opposed_check":
-        return f"{arguments.get('skill1', '')} vs {arguments.get('skill2', '')}"
-    return str(arguments.get("name") or name)
-
-
-def _infer_rank(text: str, i18n: I18n) -> int | None:
-    for code in _RANK_PROBE_ORDER:
-        if coc_rank_label(code, i18n) in text:
-            return code
-    return None
+    for raw_payload in payloads:
+        if not isinstance(raw_payload, dict):
+            continue
+        fields = dict(raw_payload)
+        kind = str(fields.pop("kind", ""))
+        payload_actor = fields.pop("actor", "")
+        if not kind or "total" not in fields:
+            continue
+        events.append(
+            Event.dice(
+                actor=str(
+                    payload_actor
+                    or arguments.get("actor")
+                    or arguments.get("name")
+                    or actor
+                ),
+                kind=kind,
+                **fields,
+            )
+        )
+    return events

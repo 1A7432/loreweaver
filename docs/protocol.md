@@ -1,13 +1,13 @@
 *English · [中文](protocol.zh.md)*
 
-# loreweaver networked TUI — wire protocol v1
+# loreweaver networked TUI — wire protocol 2.0
 
 This is the open, versioned wire protocol between a loreweaver server (started via
 `python -m app --serve`) and the OpenTUI terminal client. The engine itself
 (deterministic core + AI Keeper) is unaffected by transport; the transport-neutral
 session logic is `net.session.SessionCore`, and this document is the language-agnostic seam.
 
-Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"1.9"`. The same
+Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"2.0"`. The same
 frames + `join` handshake ride the transport; only the carrier + its framing differ:
 
 - **Iroh** (the transport `--serve` starts) — peer-to-peer QUIC. The server
@@ -22,14 +22,29 @@ frames + `join` handshake ride the transport; only the carrier + its framing dif
 
 Both carriers drive the same `SessionCore`/`RoomHub`.
 
-Versioning is additive: `"1.9"` adds `state.pregens` (the claimable pregen cast) and documents the keeper-view `variables[].hidden` flag servers have sent since v1.7; `"1.8"` adds module UI panels (M15) — the per-viewer `ui_manifest`
-frame, hook-emitted `panel_event`, the `panel_intent` client frame, and installed-pack
-asset resolution on the media byte channel (see "Module UI panels" below); `"1.7"` adds the declarative hook-emitted `ui` frame; `"1.6"` adds the optional `state.variables` list (deterministic
-module variables — the player-visible subset only); `"1.5"` adds room-wide AI-KP turn status; `"1.4"` adds image-generation config plus avatar binding; `"1.3"` adds room audio library/control frames; `"1.2"` adds media metadata frames and byte channels; `"1.1"` added the keeper-gated `admin_*` frames
-(see "Admin frames" below). A client that only understands `"1"` keeps working
-unchanged — it never sends `admin_*` frames, ignores server frame types it does not
-recognize, and should treat the `welcome`
-`protocol` field as an opaque string (accept any `"1.x"`).
+**Versioning.** `"2.0"` is a BREAKING consolidation of the 1.x line — the major version
+is the compatibility contract: a client and server must agree on the major (`2`), and a
+client should refuse (or clearly warn on) a `welcome.protocol` with a different major.
+Minor versions within a major are additive; a client ignores frame types and fields it
+does not recognize. What 2.0 broke, and the wart each break settles:
+
+- `dice` frames are redesigned around the engine's neutral check-outcome contract: the
+  1.x CoC-shaped `rank:int(-2..4)` / `level:string` fields are gone; a graded check
+  carries `outcome:{id,label,success,critical,fumble,tier,margin?}` and clients color
+  by the semantic flags instead of embedding one system's rank ladder. The 1.x
+  `kind:"sanity"` becomes the generic `kind:"subsystem"` + a `subsystem` id, and
+  system-shaped extras (bonus/penalty tens dice, SAN loss, luck spend, advantage
+  candidates) ride an opaque `detail` object.
+- Streaming is two frame types with one rule: `narrative_delta` frames carry text
+  deltas for a draft bubble; the ONE closing `narrative` frame with the same `id`
+  carries the FULL final text and REPLACES the draft. The 1.x tail-suffix `done`
+  frame, the `stream`/`done` booleans, and the "a plain narrative supersedes an open
+  draft" rule are gone — post-generation corrections simply land in the final text.
+- `state.character` / `state.party[]` vitals ride one generic
+  `resources:[{id,label,value,max}]` list; the 1.x per-system field names (`hp`,
+  `hpmax`, `san`, …) and the `hpmax`-vs-`hpMax` casing split are gone.
+- Dice frames come ONLY from structured tool payloads; the 1.x server fallback that
+  re-parsed a tool's localized text to guess a rank no longer exists.
 
 The first frame a client sends MUST be `join`. The server replies with
 either `welcome` or `error`, closing the connection on error. If it doesn't
@@ -53,7 +68,7 @@ connections receive `error too_many_connections` before `join` is read.
   own active character. The server rejects frames that try to name another
   character/user:
   `{type:"avatar_set", hash:string}`
-- `panel_intent` (v1.8, additive) — a module-panel interaction. The server first checks
+- `panel_intent` — a module-panel interaction. The server first checks
   the named panel is in THIS member's own manifest (else `error forbidden`), then routes
   the value exactly as if the member typed it — the panel privilege model in one move:
   `choice` and `input` submit `value` verbatim through the normal input choke (rate
@@ -66,7 +81,7 @@ connections receive `error too_many_connections` before `join` is read.
 ## Server → Client
 
 - `welcome` — sent once, on a successful `join`:
-  `{type:"welcome", protocol:"1.9", features:["media","audio", "imagegen"?, "demo"?, "update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
+  `{type:"welcome", protocol:"2.0", features:["media","audio", "imagegen"?, "demo"?, "update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
   `version` is the server's own release version (compare it to the client's to detect a mismatch). The `"update"` feature appears only for a keeper on a server whose operator configured a self-update command, and gates the `admin_update_server` control.
   `demo` means the server is using its offline sample Keeper, vector support is
   enabled, and this specific Keeper room was empty when the server checked it.
@@ -90,22 +105,34 @@ connections receive `error too_many_connections` before `join` is read.
   `{type:"audio_control", id:string, action:"play"|"stop"|"pause"|"resume"|"volume", layer:"bgm"|"ambience"|"sfx", hash?:string, mime?:string, name?:string, title?:string, loop?:boolean, volume?:number, fade_ms?:int, position_ms?:int, server_ts?:number}`
 - `audio_state` — best-effort persisted BGM/ambience state, replayed on join:
   `{type:"audio_state", layers:[{layer:"bgm"|"ambience"|"sfx", hash?:string, mime?:string, name?:string, title?:string, playing:boolean, volume?:number, loop?:boolean, started_at?:number}]}`
-- `narrative` — one line of story/chat text:
-  `{type:"narrative", id:string, speaker:"kp"|"player"|"system"|"npc", name?:string, text:string, format:"markdown"|"plain", stream?:boolean, done?:boolean}`
-  For `speaker:"npc"`, `name` carries the NPC name.
-  Streaming is multiple frames sharing the same `id` with `stream:true`,
-  terminated by a frame with `done:true`; a non-streaming reply is simply a
-  single frame with neither field set. Each stream frame carries a text DELTA
-  the client concatenates onto that id's bubble (the `done` frame carries the
-  final tail). Servers stream the AI-KP's reply as it generates, sanitized
-  fail-closed (machinery/MVU blocks never stream); when a post-generation
-  correction rewrites the reply, the server sends the corrected text as a
-  fresh plain `narrative` instead — clients should let a finished or plain
-  KP reply supersede any still-open KP draft bubble with a different id.
-- `dice` — one dice roll/check, rendered client-side and color-coded by
-  `rank` (`-2`..`+4`); NEVER carries keeper secrets:
-  `{type:"dice", actor:string, kind:"roll"|"check"|"sanity"|"opposed"|"init", expr:string, rolls:number[], total:number, target?:number, rank?:int, level?:string, success?:boolean}`
-- `ui` (v1.7, additive) — declarative module UI emitted by the room's event hooks
+- `narrative` — one COMPLETE line of story/chat text:
+  `{type:"narrative", id:string, speaker:"kp"|"player"|"system"|"npc", name?:string, text:string, format:"markdown"|"plain"}`
+  For `speaker:"npc"`, `name` carries the NPC name. A `narrative` frame always
+  carries the full, final text. When its `id` matches a draft bubble the client
+  accumulated from `narrative_delta` frames, the final text REPLACES that
+  draft (post-generation corrections are already folded in); otherwise it is a
+  plain one-shot line.
+- `narrative_delta` — one streaming text delta for a draft bubble:
+  `{type:"narrative_delta", id:string, speaker:"kp", name?:string, text:string}`
+  Clients concatenate deltas sharing an `id` into a draft bubble (render as
+  markdown). The stream ends when the `narrative` frame with the SAME `id`
+  arrives; servers guarantee that closing frame (even on a failed turn, which
+  closes with the text streamed so far). Servers stream the AI-KP's reply as it
+  generates, sanitized fail-closed (machinery/MVU blocks never stream).
+- `dice` — one dice roll/check, rendered client-side; NEVER carries keeper secrets:
+  `{type:"dice", actor:string, kind:"roll"|"check"|"subsystem"|"opposed"|"init", expr:string, rolls:number[], total:number, target?:number, effective_target?:number, subsystem?:string, outcome?:Outcome, detail?:object}`
+  `Outcome = {id:string, label:string, success:boolean, critical:boolean, fumble:boolean, tier:number, margin?:number}`
+  `outcome` is present on graded checks: `id` is the rule system's own rank
+  vocabulary (presentation only — never branch on it), `label` is the
+  already-localized display label, and clients color by the semantic flags
+  (`critical`/`fumble`/`success`) and may shade by `tier` (the ladder ordinal;
+  higher is better). `kind:"subsystem"` marks a rule-subsystem check
+  (`subsystem` names it, e.g. a sanity check); `kind:"opposed"` carries
+  `detail.left`/`detail.right` (`{name,total,target?,outcome?}`) and
+  `detail.winner:"left"|"right"|"tie"`. `detail` is otherwise system-declared
+  roll data (bonus/penalty dice, loss/remaining, advantage candidates, …) a
+  client may surface verbatim but never needs to understand.
+- `ui` — declarative module UI emitted by the room's event hooks
   (`emitUI(blocks, opts?)` in a skill's / card's `hooks.js` — see `docs/plugins.md`),
   broadcast right after the KP `narrative` it annotates and before the `state`
   snapshot. Blocks are whitelisted, validated and size-capped server-side
@@ -127,7 +154,7 @@ connections receive `error too_many_connections` before `join` is read.
   the prior inline frame with the same `id` in place (a client without in-place
   updates simply appends). Picking a `choices` option sends that option's `input`
   back verbatim as a NORMAL `input` frame — no new client→server frame type exists.
-- `ui_manifest` (v1.8, additive) — this VIEWER's complete module-panel list, sent on
+- `ui_manifest` — this VIEWER's complete module-panel list, sent on
   `join` right after the initial `state` frame and pushed to every connected member
   after a keeper's `.panels enable|disable`. FULL-REPLACE semantics: the frame carries
   the whole list (empty = no panels, which also clears stale panels on reconnect). The
@@ -136,7 +163,7 @@ connections receive `error too_many_connections` before `join` is read.
   a player's manifest, and `audience` itself never rides the wire. See "Module UI
   panels" below for the panel/template shapes:
   `{type:"ui_manifest", panels:[UiManifestPanel]}`
-- `panel_event` (v1.8, additive) — an opaque JSON payload a room hook emitted via
+- `panel_event` — an opaque JSON payload a room hook emitted via
   `emitPanel(panelId, payload)` (see `docs/plugins.md`), for the named panel's own
   code (tier-2). Delivered — right after the turn's `ui` frames — ONLY to members
   whose manifest contains that panel; ≤ 20 per turn (excess dropped + logged) and
@@ -144,9 +171,13 @@ connections receive `error too_many_connections` before `join` is read.
   simply ignore it:
   `{type:"panel_event", panel:string, payload:any}`
 - `state` — a panel snapshot, sent on `join` and after every turn:
-  `{type:"state", character?:{name,system,hp,hpmax,mp,mpmax,san,sanmax,attributes:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,hp?:int,hpMax?:int,san?:int,sanMax?:int,mp?:int,mpMax?:int,ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, usage?:{context_tokens:int,context_window:int,input_tokens:int,output_tokens:int,cache_hit_tokens:int,cache_miss_tokens:int}, variables?:[{id:string,label:string,kind:"number"|"bool"|"text"|"enum",value:number|boolean|string,min?:int,max?:int,hidden?:boolean}], pregens?:[{name:string,claimed_by:string}], reset?:boolean}`
-  `variables[].hidden` (v1.7 behavior, typed v1.9) marks a keeper-connection-only row the keeper has not `.var expose`d yet — players never receive hidden rows at all. `pregens` (v1.9, additive) is the module's claimable cast (`.pc list`/`.pc claim`); `claimed_by` is the claiming member id, `""` while unclaimed; omitted when no roster exists.
-  `variables` (v1.6, additive/optional — omitted when the room has none) is the room's
+  `{type:"state", character?:{name,system,resources:[Resource],attributes:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,resources?:[Resource],ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, usage?:{context_tokens:int,context_window:int,input_tokens:int,output_tokens:int,cache_hit_tokens:int,cache_miss_tokens:int}, variables?:[{id:string,label:string,kind:"number"|"bool"|"text"|"enum",value:number|boolean|string,min?:int,max?:int,hidden?:boolean}], pregens?:[{name:string,claimed_by:string}], reset?:boolean}`
+  `Resource = {id:string, label:string, value:number, max?:number}` — the rule
+  system's vital meters (HP, sanity, mana, …) as generic data: a client renders
+  the list as meters without knowing any system's field names. Entries arrive in
+  render order.
+  `variables[].hidden` marks a keeper-connection-only row the keeper has not `.var expose`d yet — players never receive hidden rows at all. `pregens` is the module's claimable cast (`.pc list`/`.pc claim`); `claimed_by` is the claiming member id, `""` while unclaimed; omitted when no roster exists.
+  `variables` (optional — omitted when the room has none) is the room's
   deterministic module variables, PLAYER-VISIBLE subset only: keeper-only variables are
   filtered inside the engine (`core.modvars.player_entries`) and never reach any transport.
   Entries arrive in definition order (render as-is, don't sort); `label` is already localized
@@ -192,7 +223,9 @@ On an `input` frame from a client in room `R`, the server:
    `KPTurnResult`.
 5. For each `tool_trace` entry that is a dice/check tool (`roll_dice`,
    `skill_check`, `sanity_check`, `opposed_check`, `initiative_tracker`),
-   broadcasts a `dice` frame parsed from its result.
+   broadcasts one `dice` frame per structured payload the tool bound during
+   dispatch (a tool that emitted no payload emits no dice frame — frames are
+   never reconstructed from tool text).
 6. For each `tool_trace` entry named `speak_as_npc`, broadcasts
    `narrative{speaker:"npc", name, text, format:"markdown"}` before the final
    KP reply. `name` is the tool call's `npc` argument and `text` is the
@@ -204,10 +237,10 @@ On an `input` frame from a client in room `R`, the server:
    the main Keeper model has seen them and could restate them; that behavioral
    risk is measured separately by the live-model red-line eval.
 8. Broadcasts one `ui` frame per emission the turn's event hooks buffered via
-   `emitUI` (v1.7, additive) — already validated and capped server-side; rooms
+   `emitUI` — already validated and capped server-side; rooms
    with no hooks never see this frame.
 9. Delivers one `panel_event` frame per emission the turn's hooks buffered via
-   `emitPanel` (v1.8, additive) — NOT a broadcast: each event reaches only members
+   `emitPanel` — NOT a broadcast: each event reaches only members
    whose own manifest contains the target panel.
 10. After the AI-KP branch (including error cleanup), broadcasts
     `turn_status{status:"idle"}`. Command replies do not emit turn status.
@@ -217,7 +250,7 @@ Multiple clients whose keys map to the same room share one AI-KP session;
 every frame described above as "broadcast" goes to every member currently
 connected to that room.
 
-## Module UI panels (v1.8)
+## Module UI panels
 
 A `.lwpack` may ship named UI panels (`contents.panels` + `ui/panels.yaml` — authoring
 guide in `docs/plugins.md`); a keeper admits an installed pack's panels to a room with
@@ -239,7 +272,7 @@ could type.
  "fallback": [/* template blocks */] /* or null */}
 ```
 
-**Tier-1 template blocks** are the v1.7 `UiBlock` vocabulary with two additions the
+**Tier-1 template blocks** are the `ui` frame's `UiBlock` vocabulary with two additions the
 CLIENT resolves against its OWN `state.variables` (ids exactly as they appear there —
 modvar ids, `mvu.`-prefixed leaves):
 
@@ -262,7 +295,7 @@ media byte channel (`{op:"get", hash}` — see "Media transfer"); wire `path`s a
 relative to the entry document's directory (each panel is a self-contained static
 root). Verify the sha256 before caching (immutable, keyed by hash).
 
-## Media transfer (v1.2+) and audio (v1.3)
+## Media transfer and audio
 
 All media is server-stored and server-forwarded. The JSON control stream carries only metadata;
 raw bytes never appear in JSON and are never base64-encoded. Supported upload MIME types are
@@ -295,7 +328,7 @@ Download flow:
 2. Server checks the hash belongs to the caller's room, then replies with `{op:"get",hash,size,mime,name}`
    plus raw bytes. The client should verify sha256 and may cache under
    `~/.loreweaver/cache/media/<hash>`.
-3. (v1.8) A hash that is not room media additionally resolves against installed-pack
+3. A hash that is not room media additionally resolves against installed-pack
    assets of packs ENABLED in the caller's room — the panel asset path. Same reply
    shape; the server re-verifies the bytes against their manifest digest before
    serving. A hash from a pack the room has not enabled stays `media_not_found`
@@ -345,7 +378,7 @@ connection to `SessionSource(platform="tui", chat_type="group",
 chat_id=room, user_id="tui:" + sha1(key)[:8], user_name=name)` — see
 `net/keystore.py` and the shipped `keys.example.toml`.
 
-## Admin frames (v1.1, keeper-gated)
+## Admin frames (keeper-gated)
 
 A deployer/keeper can manage the server from the client's keeper screens (Rooms &
 invites, Model) over the SAME connection, using a **keeper-role
@@ -506,12 +539,10 @@ Room backup snapshots contain the room's raw access keys as well as campaign
 state and vector points. Treat exported JSON like `keys.toml` or the SQLite
 database: it is sensitive server-side data and should not be shared publicly.
 
-## Additive v1 NPC frames
+## NPC frames
 
-This adds AI-played, knowledge-scoped NPC sub-actors
-(`agent/npc.py`, `agent/npc_actor.py`, `agent/kp_tools_npc.py`). The server
-surfaces each `speak_as_npc` tool result as an additional
-`narrative{speaker:"npc", name:<npc>, format:"markdown"}` frame before the
-KP's own narration. This is v1-compatible and additive: existing
-`speaker:"kp"|"player"|"system"` frames and clients that ignore unknown
-speaker values are unaffected.
+AI-played, knowledge-scoped NPC sub-actors (`agent/npc.py`, `agent/npc_actor.py`,
+`agent/kp_tools_npc.py`) surface as additional
+`narrative{speaker:"npc", name:<npc>, format:"markdown"}` frames before the
+KP's own narration. Clients that ignore unknown speaker values render them as
+ordinary narrative lines.

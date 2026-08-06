@@ -105,7 +105,7 @@ async def test_join_with_good_key_gets_welcome_and_bad_key_gets_error():
         async with websockets.connect(url) as ws:
             welcome = await _join(ws, key, "Alice")
             assert welcome["type"] == "welcome"
-            assert welcome["protocol"] == "1.9"
+            assert welcome["protocol"] == "2.0"
             assert "media" in welcome["features"]
             assert "audio" in welcome["features"]
             assert welcome["room"] == "demo"
@@ -807,7 +807,7 @@ async def test_kp_turn_after_module_seed_has_no_sentinel_leak_and_uses_keeper_to
         busy = await _recv(ws)
         streamed = []
         reply = await _recv(ws)
-        while reply["type"] == "narrative" and reply.get("stream") and not reply.get("done"):
+        while reply["type"] == "narrative_delta":
             streamed.append(reply)  # spec streaming: delta frames share the reply's id
             reply = await _recv(ws)
         idle = await _recv(ws)
@@ -817,8 +817,13 @@ async def test_kp_turn_after_module_seed_has_no_sentinel_leak_and_uses_keeper_to
         assert busy == {"type": "turn_status", "status": "busy", "actor": "Nora"}
         assert reply["type"] == "narrative" and reply["speaker"] == "kp"
         assert reply["format"] == "markdown"
-        full_reply = "".join(frame["text"] for frame in streamed) + reply["text"]
+        # Protocol 2.0: the closing narrative carries the FULL final text and
+        # replaces the streamed draft (deltas concatenate to the same text).
+        full_reply = reply["text"]
         assert full_reply.strip()
+        if streamed:
+            assert "".join(frame["text"] for frame in streamed) == reply["text"]
+            assert all(frame["id"] == reply["id"] for frame in streamed)
         assert idle == {"type": "turn_status", "status": "idle"}
         assert state["type"] == "state"
 
@@ -893,7 +898,7 @@ async def test_kp_turn_broadcasts_ai_npc_dialogue_before_kp_narrative_without_le
         busy = await _recv(ws)
         streamed = []
         npc_frame = await _recv(ws)
-        while npc_frame["type"] == "narrative" and npc_frame.get("stream") and not npc_frame.get("done"):
+        while npc_frame["type"] == "narrative_delta":
             streamed.append(npc_frame)  # the KP reply streams before the npc/kp order pair
             npc_frame = await _recv(ws)
         kp_frame = await _recv(ws)
@@ -971,17 +976,14 @@ async def test_build_room_state_reports_character_party_and_clock():
     state = await build_room_state(services, ctx)
 
     assert state["character"]["name"] == "Nora Vance"
-    assert state["character"]["hp"] == 10
-    assert state["character"]["hpmax"] == 10
-    assert state["character"]["san"] == 50
-    assert state["character"]["sanmax"] == 99
+    character_resources = {res["id"]: res for res in state["character"]["resources"]}
+    assert character_resources["hp"] == {"id": "hp", "label": "HP", "value": 10, "max": 10}
+    assert character_resources["san"] == {"id": "san", "label": "SAN", "value": 50, "max": 99}
     nora = next(member for member in state["party"] if member["name"] == "Nora Vance")
-    assert nora["hp"] == 10
-    assert nora["hpMax"] == 10
-    assert nora["san"] == 50
-    assert nora["sanMax"] == 99
-    assert nora["mp"] == 10
-    assert nora["mpMax"] == 10
+    party_resources = {res["id"]: res for res in nora["resources"]}
+    assert party_resources["hp"] == {"id": "hp", "label": "HP", "value": 10, "max": 10}
+    assert party_resources["san"] == {"id": "san", "label": "SAN", "value": 50, "max": 99}
+    assert party_resources["mp"] == {"id": "mp", "label": "MP", "value": 10, "max": 10}
     assert state["clock"]["time"] == "Night 1, 22:00"
 
 
