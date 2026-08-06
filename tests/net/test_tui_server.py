@@ -387,10 +387,8 @@ async def test_guided_demo_is_rejected_without_mutating_an_existing_room(tmp_pat
     keystore = Keystore()
     key = keystore.add(room="arkham", name="Keeper", role="keeper")
     chat_key = SessionSource(platform="tui", chat_type="group", chat_id="arkham").chat_key()
-    record_key = f"session_record.{chat_key}.current"
-    module_key = f"module_fulltext.{chat_key}"
-    await services.store.set(user_key="", store_key=record_key, value='{"name":"existing"}')
-    await services.store.set(user_key="", store_key=module_key, value="existing module")
+    await services.store.state_set(chat_key, "session_record.current", '{"name":"existing"}')
+    await services.store.state_set(chat_key, "module_fulltext", "existing module")
 
     server = TuiServer(services, keystore, port=0)
     url = await _start(server)
@@ -402,8 +400,8 @@ async def test_guided_demo_is_rejected_without_mutating_an_existing_room(tmp_pat
         denied = await _recv(ws)
         assert denied["type"] == "error"
         assert denied["code"] == "demo_unavailable"
-        assert await services.store.get(user_key="", store_key=record_key) == '{"name":"existing"}'
-        assert await services.store.get(user_key="", store_key=module_key) == "existing module"
+        assert await services.store.state_get(chat_key, "session_record.current") == '{"name":"existing"}'
+        assert await services.store.state_get(chat_key, "module_fulltext") == "existing module"
 
         # The scripted fallback's legacy CLI phrase reaches the same destructive setup tools.
         # It must not bypass the room-emptiness guard merely by avoiding the TUI button text.
@@ -411,8 +409,8 @@ async def test_guided_demo_is_rejected_without_mutating_an_existing_room(tmp_pat
         legacy_denied = await _recv(ws)
         assert legacy_denied["type"] == "error"
         assert legacy_denied["code"] == "demo_unavailable"
-        assert await services.store.get(user_key="", store_key=record_key) == '{"name":"existing"}'
-        assert await services.store.get(user_key="", store_key=module_key) == "existing module"
+        assert await services.store.state_get(chat_key, "session_record.current") == '{"name":"existing"}'
+        assert await services.store.state_get(chat_key, "module_fulltext") == "existing module"
 
         # Ordinary prose is not a hidden demo command merely because it mentions a module.
         await ws.send(json.dumps({"type": "input", "text": "let's check the module again"}))
@@ -420,8 +418,8 @@ async def test_guided_demo_is_rejected_without_mutating_an_existing_room(tmp_pat
         assert ordinary["type"] == "narrative"
         assert ordinary["speaker"] == "player"
         assert ordinary["text"] == "let's check the module again"
-        assert await services.store.get(user_key="", store_key=record_key) == '{"name":"existing"}'
-        assert await services.store.get(user_key="", store_key=module_key) == "existing module"
+        assert await services.store.state_get(chat_key, "session_record.current") == '{"name":"existing"}'
+        assert await services.store.state_get(chat_key, "module_fulltext") == "existing module"
         await ws.close()
     finally:
         await server.close()
@@ -966,10 +964,7 @@ async def test_build_room_state_reports_character_party_and_clock():
     ctx = _room_ctx("state-room", user_id="tui:abc123")
 
     await toolset.dispatch("create_character", ctx, {"name": "Nora Vance", "system": "coc7", "auto_generate": False})
-    await services.store.set(
-        user_key="",
-        store_key=f"game_clock.{ctx.chat_key}",
-        value=json.dumps({"current_time": "Night 1, 22:00"}),
+    await services.store.state_set(ctx.chat_key, "game_clock", json.dumps({"current_time": "Night 1, 22:00"}),
     )
 
     state = await build_room_state(services, ctx)
@@ -1021,7 +1016,7 @@ async def test_join_replays_recent_chat_history_to_the_joiner_only():
             {"role": "user", "content": "I open the door"},
             {"role": "assistant", "content": "The door creaks open onto a dark hallway."},
         ]
-        await services.store.set(user_key="", store_key=f"chat_history.{chat_key}", value=json.dumps(history))
+        await services.store.state_set(chat_key, "chat_history", json.dumps(history))
 
         ws_ann = await websockets.connect(url)
         await _join(ws_ann, key_ann, "Ann")
@@ -1070,7 +1065,7 @@ async def test_join_replay_is_capped_and_skips_a_brand_new_room():
     try:
         chat_key = _room_ctx("cap-room").chat_key
         history = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"line {i}"} for i in range(40)]
-        await services.store.set(user_key="", store_key=f"chat_history.{chat_key}", value=json.dumps(history))
+        await services.store.state_set(chat_key, "chat_history", json.dumps(history))
 
         ws = await websockets.connect(url)
         await _join(ws, key, "Nora")

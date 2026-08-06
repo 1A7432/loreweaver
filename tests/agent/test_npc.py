@@ -13,10 +13,11 @@ from __future__ import annotations
 
 import json
 
+from agent import npc as npc_records
 from agent.context import AgentCtx
 from agent.kp_tools import build_kp_toolset
 from agent.kp_tools_npc import NpcTools
-from agent.npc import NpcManager, NpcRecord
+from agent.npc import NpcRecord
 from agent.npc_actor import voice_npc
 from agent.services import build_services
 from core.documents import DocumentStore
@@ -84,9 +85,9 @@ def test_npc_record_to_dict_from_dict_round_trip():
 
 
 async def test_create_npc_then_get_npc_round_trip():
-    manager = NpcManager(Store(":memory:"))
+    manager = DocumentStore(Store(":memory:"))
 
-    created = await manager.create_npc(
+    created = await npc_records.create_npc(manager,
         CHAT_KEY,
         "Martha Higgins",
         persona="The wary innkeeper of the Salt & Anchor Inn.",
@@ -100,9 +101,9 @@ async def test_create_npc_then_get_npc_round_trip():
 
     assert created.id == "martha-higgins"
 
-    by_id = await manager.get_npc(CHAT_KEY, "martha-higgins")
-    by_exact_name = await manager.get_npc(CHAT_KEY, "Martha Higgins")
-    by_fuzzy_name = await manager.get_npc(CHAT_KEY, "martha")
+    by_id = await npc_records.get_npc(manager, CHAT_KEY, "martha-higgins")
+    by_exact_name = await npc_records.get_npc(manager, CHAT_KEY, "Martha Higgins")
+    by_fuzzy_name = await npc_records.get_npc(manager, CHAT_KEY, "martha")
 
     for fetched in (by_id, by_exact_name, by_fuzzy_name):
         assert fetched is not None
@@ -111,35 +112,35 @@ async def test_create_npc_then_get_npc_round_trip():
         assert fetched.knowledge == ["Sailors have been vanishing.", "The lighthouse light changed color."]
         assert fetched.major is True
 
-    assert await manager.get_npc(CHAT_KEY, "nobody-here") is None
+    assert await npc_records.get_npc(manager, CHAT_KEY, "nobody-here") is None
 
 
 async def test_create_npc_id_collision_is_suffixed():
     # DIFFERENT names whose slugs collide get suffixed ids; the SAME name never
     # duplicates (it returns the existing record — see the re-create test below).
-    manager = NpcManager(Store(":memory:"))
+    manager = DocumentStore(Store(":memory:"))
 
-    first = await manager.create_npc(CHAT_KEY, "Bob!")
-    second = await manager.create_npc(CHAT_KEY, "Bob?")
+    first = await npc_records.create_npc(manager, CHAT_KEY, "Bob!")
+    second = await npc_records.create_npc(manager, CHAT_KEY, "Bob?")
 
     assert first.id == "bob"
     assert second.id == "bob-2"
-    assert {npc.id for npc in await manager.list_npcs(CHAT_KEY)} == {"bob", "bob-2"}
+    assert {npc.id for npc in await npc_records.list_npcs(manager, CHAT_KEY)} == {"bob", "bob-2"}
 
 
 async def test_create_npc_with_no_alnum_name_falls_back_to_npc_slug():
-    manager = NpcManager(Store(":memory:"))
+    manager = DocumentStore(Store(":memory:"))
 
-    record = await manager.create_npc(CHAT_KEY, "!!!")
+    record = await npc_records.create_npc(manager, CHAT_KEY, "!!!")
 
     assert record.id == "npc"
 
 
 async def test_create_npc_role_becomes_persona_hint_only_when_persona_unset():
-    manager = NpcManager(Store(":memory:"))
+    manager = DocumentStore(Store(":memory:"))
 
-    with_role_only = await manager.create_npc(CHAT_KEY, "Elias Crane", role="antagonist")
-    with_persona = await manager.create_npc(CHAT_KEY, "Martha", persona="The innkeeper.", role="innkeeper")
+    with_role_only = await npc_records.create_npc(manager, CHAT_KEY, "Elias Crane", role="antagonist")
+    with_persona = await npc_records.create_npc(manager, CHAT_KEY, "Martha", persona="The innkeeper.", role="innkeeper")
 
     assert with_role_only.persona == "antagonist"
     assert with_persona.persona == "The innkeeper."  # explicit persona wins over the role hint
@@ -150,51 +151,51 @@ async def test_list_update_move_disposition_learns_persist_across_manager_instan
     freshly-constructed `NpcManager` bound to the SAME `Store`, proving they round-tripped through
     the store rather than only mutating an in-memory dataclass instance."""
     store = Store(":memory:")
-    writer = NpcManager(store)
+    writer = DocumentStore(store)
 
-    await writer.create_npc(CHAT_KEY, "Martha", location="Inn", disposition="wary", knowledge=["Sailors vanish."])
-    await writer.create_npc(CHAT_KEY, "Elias Crane", major=True)
+    await npc_records.create_npc(writer, CHAT_KEY, "Martha", location="Inn", disposition="wary", knowledge=["Sailors vanish."])
+    await npc_records.create_npc(writer, CHAT_KEY, "Elias Crane", major=True)
 
-    reader = NpcManager(store)
-    listed = await reader.list_npcs(CHAT_KEY)
+    reader = DocumentStore(store)
+    listed = await npc_records.list_npcs(reader, CHAT_KEY)
     assert {npc.name for npc in listed} == {"Martha", "Elias Crane"}
 
-    updated = await reader.update_npc(CHAT_KEY, "Martha", style="clipped, suspicious")
+    updated = await npc_records.update_npc(reader, CHAT_KEY, "Martha", style="clipped, suspicious")
     assert updated is not None
     assert updated.style == "clipped, suspicious"
 
-    moved = await reader.move_npc(CHAT_KEY, "Martha", "The docks")
+    moved = await npc_records.move_npc(reader, CHAT_KEY, "Martha", "The docks")
     assert moved.location == "The docks"
 
-    disposed = await reader.set_disposition(CHAT_KEY, "Martha", "hostile")
+    disposed = await npc_records.set_disposition(reader, CHAT_KEY, "Martha", "hostile")
     assert disposed.disposition == "hostile"
 
-    learned = await reader.npc_learns(CHAT_KEY, "Martha", "A stranger asked about the keeper.")
+    learned = await npc_records.npc_learns(reader, CHAT_KEY, "Martha", "A stranger asked about the keeper.")
     assert learned.knowledge == ["Sailors vanish.", "A stranger asked about the keeper."]
 
     # a THIRD manager instance, to make sure every mutation above genuinely round-tripped
-    verifier = NpcManager(store)
-    final = await verifier.get_npc(CHAT_KEY, "Martha")
+    verifier = DocumentStore(store)
+    final = await npc_records.get_npc(verifier, CHAT_KEY, "Martha")
     assert final is not None
     assert final.style == "clipped, suspicious"
     assert final.location == "The docks"
     assert final.disposition == "hostile"
     assert final.knowledge == ["Sailors vanish.", "A stranger asked about the keeper."]
 
-    assert await verifier.delete_npc(CHAT_KEY, "Elias Crane") is True
-    assert await verifier.get_npc(CHAT_KEY, "Elias Crane") is None
-    assert [npc.name for npc in await verifier.list_npcs(CHAT_KEY)] == ["Martha"]
-    assert await verifier.delete_npc(CHAT_KEY, "Elias Crane") is False  # already gone
+    assert await npc_records.delete_npc(verifier, CHAT_KEY, "Elias Crane") is True
+    assert await npc_records.get_npc(verifier, CHAT_KEY, "Elias Crane") is None
+    assert [npc.name for npc in await npc_records.list_npcs(verifier, CHAT_KEY)] == ["Martha"]
+    assert await npc_records.delete_npc(verifier, CHAT_KEY, "Elias Crane") is False  # already gone
 
 
 async def test_add_knowledge_replace_mode_overwrites_add_mode_appends():
-    manager = NpcManager(Store(":memory:"))
-    await manager.create_npc(CHAT_KEY, "Martha", knowledge=["fact one"])
+    manager = DocumentStore(Store(":memory:"))
+    await npc_records.create_npc(manager, CHAT_KEY, "Martha", knowledge=["fact one"])
 
-    appended = await manager.add_knowledge(CHAT_KEY, "Martha", ["fact two"], mode="add")
+    appended = await npc_records.add_knowledge(manager, CHAT_KEY, "Martha", ["fact two"], mode="add")
     assert appended.knowledge == ["fact one", "fact two"]
 
-    replaced = await manager.add_knowledge(CHAT_KEY, "Martha", ["only this now"], mode="replace")
+    replaced = await npc_records.add_knowledge(manager, CHAT_KEY, "Martha", ["only this now"], mode="replace")
     assert replaced.knowledge == ["only this now"]
 
 
@@ -202,39 +203,39 @@ async def test_cjk_names_resolve_to_their_own_npc_not_the_fallback_slug_holder()
     """2026-08-06 live playtest bug: every CJK-only name slugifies to the bare "npc"
     fallback, and slug-before-name resolution sent updates for 老周 to 沈茉 (the NPC
     that happened to hold the fallback id), silently cross-contaminating knowledge."""
-    manager = NpcManager(Store(":memory:"))
-    first = await manager.create_npc(CHAT_KEY, "沈茉", knowledge=["妹妹的事实"])
-    second = await manager.create_npc(CHAT_KEY, "老周", knowledge=["门房的事实"])
+    manager = DocumentStore(Store(":memory:"))
+    first = await npc_records.create_npc(manager, CHAT_KEY, "沈茉", knowledge=["妹妹的事实"])
+    second = await npc_records.create_npc(manager, CHAT_KEY, "老周", knowledge=["门房的事实"])
     assert first.id != second.id  # CJK names both fall back to "npc"-family ids
 
-    updated = await manager.add_knowledge(CHAT_KEY, "老周", ["它在数上楼的人"], mode="replace")
+    updated = await npc_records.add_knowledge(manager, CHAT_KEY, "老周", ["它在数上楼的人"], mode="replace")
     assert updated is not None and updated.name == "老周"
-    assert (await manager.get_npc(CHAT_KEY, "沈茉")).knowledge == ["妹妹的事实"]  # untouched
-    assert (await manager.get_npc(CHAT_KEY, "老周")).knowledge == ["它在数上楼的人"]
+    assert (await npc_records.get_npc(manager, CHAT_KEY, "沈茉")).knowledge == ["妹妹的事实"]  # untouched
+    assert (await npc_records.get_npc(manager, CHAT_KEY, "老周")).knowledge == ["它在数上楼的人"]
 
 
 async def test_recreating_an_existing_name_returns_the_seeded_record_not_a_duplicate():
     """History drops tool chatter, so a later turn legitimately re-'creates' an NPC it
     already seeded — the fresh surface persona must never shadow the seeded record."""
-    manager = NpcManager(Store(":memory:"))
-    seeded = await manager.create_npc(CHAT_KEY, "老周", secret_agenda="看门物", knowledge=["数上楼的人"])
+    manager = DocumentStore(Store(":memory:"))
+    seeded = await npc_records.create_npc(manager, CHAT_KEY, "老周", secret_agenda="看门物", knowledge=["数上楼的人"])
 
-    again = await manager.create_npc(CHAT_KEY, "老周", persona="表面上的管理员")
+    again = await npc_records.create_npc(manager, CHAT_KEY, "老周", persona="表面上的管理员")
 
     assert again.id == seeded.id
     assert again.secret_agenda == "看门物"  # untouched — surface re-create never clobbers
-    assert [npc.id for npc in await manager.list_npcs(CHAT_KEY)] == [seeded.id]
+    assert [npc.id for npc in await npc_records.list_npcs(manager, CHAT_KEY)] == [seeded.id]
 
 
 async def test_unknown_npc_mutations_return_none_or_false_not_raise():
-    manager = NpcManager(Store(":memory:"))
+    manager = DocumentStore(Store(":memory:"))
 
-    assert await manager.update_npc(CHAT_KEY, "nobody", location="x") is None
-    assert await manager.move_npc(CHAT_KEY, "nobody", "x") is None
-    assert await manager.set_disposition(CHAT_KEY, "nobody", "x") is None
-    assert await manager.npc_learns(CHAT_KEY, "nobody", "x") is None
-    assert await manager.add_knowledge(CHAT_KEY, "nobody", ["x"]) is None
-    assert await manager.delete_npc(CHAT_KEY, "nobody") is False
+    assert await npc_records.update_npc(manager, CHAT_KEY, "nobody", location="x") is None
+    assert await npc_records.move_npc(manager, CHAT_KEY, "nobody", "x") is None
+    assert await npc_records.set_disposition(manager, CHAT_KEY, "nobody", "x") is None
+    assert await npc_records.npc_learns(manager, CHAT_KEY, "nobody", "x") is None
+    assert await npc_records.add_knowledge(manager, CHAT_KEY, "nobody", ["x"]) is None
+    assert await npc_records.delete_npc(manager, CHAT_KEY, "nobody") is False
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +261,7 @@ async def test_voice_npc_passes_the_lines_dramatic_weight_as_reasoning_effort():
 async def test_voice_npc_never_leaks_keeper_secrets_or_other_npcs_knowledge():
     chat_key = "lighthouse-room"
     store = Store(":memory:")
-    npcs = NpcManager(store)
+    npcs = DocumentStore(store)
 
     # The module keeper pool holds the sentinel world-truth.
     await DocumentStore(store).put_singleton(
@@ -269,14 +270,14 @@ async def test_voice_npc_never_leaks_keeper_secrets_or_other_npcs_knowledge():
         {"keeper": {"npcs": [{"name": "Elias Crane", "description": "The keeper.", "secret": SENTINEL, "role": "antagonist"}]}, "player": {}},
     )
     # A DIFFERENT NPC's own knowledge also holds the sentinel.
-    await npcs.create_npc(
+    await npc_records.create_npc(npcs,
         chat_key,
         "Elias Crane",
         secret_agenda=SENTINEL,
         knowledge=[SENTINEL, "The light still burns every night."],
     )
     # The NPC under test knows nothing of any of that.
-    martha = await npcs.create_npc(
+    martha = await npc_records.create_npc(npcs,
         chat_key,
         "Martha",
         persona="The wary innkeeper of the Salt & Anchor Inn.",
@@ -487,18 +488,18 @@ async def test_import_module_npcs_seeds_from_module_keeper_pool_and_skips_existi
     result = await tools.import_module_npcs(ctx)
     assert "Elias Crane" in result
 
-    npcs = NpcManager(services.store)
-    elias = await npcs.get_npc(chat_key, "Elias Crane")
+    npcs = services.documents
+    elias = await npc_records.get_npc(npcs, chat_key, "Elias Crane")
     assert elias is not None
     assert elias.secret_agenda == SENTINEL
     assert elias.public_description == "the keeper"
     assert elias.persona == "antagonist"  # role -> persona hint, since no persona was given
 
-    martha = await npcs.get_npc(chat_key, "Martha")
+    martha = await npc_records.get_npc(npcs, chat_key, "Martha")
     assert martha is not None
     assert martha.secret_agenda == ""  # untouched: the pre-existing NPC was skipped, not overwritten
 
-    listed_names = sorted(npc.name for npc in await npcs.list_npcs(chat_key))
+    listed_names = sorted(npc.name for npc in await npc_records.list_npcs(npcs, chat_key))
     assert listed_names == ["Elias Crane", "Martha"]  # no duplicate "martha-2" from a failed skip
 
 

@@ -11,7 +11,7 @@ import json
 from agent.context import AgentCtx
 from agent.prompt_builder import build_system_prompt
 from agent.services import build_services
-from core.modvars import ModvarManager, build_spec
+from core.modvars import build_spec, define_modvar, set_modvar
 from core.prompt_sections import (
     inject_document_context_prompt,
     inject_game_state_prompt,
@@ -36,7 +36,7 @@ def _services(locale: str = "en"):
 
 
 async def _seed_ready_keeper_pool(services, chat_key: str) -> None:
-    await services.store.set(user_key="", store_key=f"module_init_status.{chat_key}", value="ready")
+    await services.store.state_set(chat_key, "module_init_status", "ready")
     await services.documents.put_singleton(
         chat_key,
         "module_pool",
@@ -231,10 +231,13 @@ async def test_build_system_prompt_folds_in_module_variables_with_keeper_tag():
     chat_key = "chat-prompt-builder-modvars"
     ctx = AgentCtx(chat_key=chat_key, user_id="u1", locale="en")
 
-    manager = ModvarManager(services.store)
-    await manager.define(chat_key, build_spec("town_fear", "number", labels={"en": "Town Fear"}, minimum=0, maximum=10))
-    await manager.define(chat_key, build_spec("culprit_alerted", "bool", visibility="keeper"))
-    await manager.set(chat_key, "town_fear", 7)
+    await define_modvar(
+        services.documents,
+        chat_key,
+        build_spec("town_fear", "number", labels={"en": "Town Fear"}, minimum=0, maximum=10),
+    )
+    await define_modvar(services.documents, chat_key, build_spec("culprit_alerted", "bool", visibility="keeper"))
+    await set_modvar(services.documents, chat_key, "town_fear", 7)
 
     prompt = await build_system_prompt(ctx, services)
     i18n = services.i18n.with_locale("en")

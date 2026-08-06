@@ -326,8 +326,8 @@ class BattleReportGenerator:
     async def get_latest_history(self, chat_key: str) -> SessionRecord | None:
         """Return the most recently archived session for `chat_key`, if any."""
         try:
-            latest_key = f"session_history.{chat_key}.latest"
-            data = await self.store.get(store_key=latest_key)
+            latest_key = "session_history.latest"
+            data = await self.store.state_get(chat_key, latest_key)
             if data:
                 return SessionRecord.from_dict(json.loads(data))
         except Exception:
@@ -363,20 +363,20 @@ class BattleReportGenerator:
 
         record = SessionRecord(session_id)
 
-        store_key = f"session_record.{chat_key}.current"
-        await self.store.set(store_key=store_key, value=json.dumps(record.to_dict(), ensure_ascii=False))
+        store_key = "session_record.current"
+        await self.store.state_set(chat_key, store_key, json.dumps(record.to_dict(), ensure_ascii=False))
 
-        name_key = f"session_name.{chat_key}.current"
-        await self.store.set(store_key=name_key, value=session_name)
+        name_key = "session_name.current"
+        await self.store.state_set(chat_key, name_key, session_name)
 
         return session_id
 
     async def get_current_session(self, chat_key: str) -> SessionRecord | None:
         """Return the in-progress session for `chat_key`, if one exists."""
-        store_key = f"session_record.{chat_key}.current"
+        store_key = "session_record.current"
 
         try:
-            data = await self.store.get(store_key=store_key)
+            data = await self.store.state_get(chat_key, store_key)
             if data:
                 return SessionRecord.from_dict(json.loads(data))
         except Exception:
@@ -386,8 +386,8 @@ class BattleReportGenerator:
 
     async def save_session(self, chat_key: str, record: SessionRecord) -> None:
         """Persist `record` as the in-progress session for `chat_key`."""
-        store_key = f"session_record.{chat_key}.current"
-        await self.store.set(store_key=store_key, value=json.dumps(record.to_dict(), ensure_ascii=False))
+        store_key = "session_record.current"
+        await self.store.state_set(chat_key, store_key, json.dumps(record.to_dict(), ensure_ascii=False))
 
     async def end_session(self, chat_key: str) -> SessionRecord | None:
         """End the in-progress session for `chat_key`, archiving it to history."""
@@ -395,23 +395,23 @@ class BattleReportGenerator:
         if record:
             record.end_session()
 
-            name_key = f"session_name.{chat_key}.current"
-            session_name = await self.store.get(store_key=name_key)
+            name_key = "session_name.current"
+            session_name = await self.store.state_get(chat_key, name_key)
 
-            history_key = f"session_history.{chat_key}.{record.session_id}"
-            latest_key = f"session_history.{chat_key}.latest"
-            latest_name_key = f"session_name.{chat_key}.latest"
+            history_key = f"session_history.{record.session_id}"
+            latest_key = "session_history.latest"
+            latest_name_key = "session_name.latest"
             record_json = json.dumps(record.to_dict(), ensure_ascii=False)
 
-            await self.store.set(store_key=history_key, value=record_json)
-            await self.store.set(store_key=latest_key, value=record_json)
+            await self.store.state_set(chat_key, history_key, record_json)
+            await self.store.state_set(chat_key, latest_key, record_json)
 
             if session_name:
-                await self.store.set(store_key=latest_name_key, value=session_name)
+                await self.store.state_set(chat_key, latest_name_key, session_name)
 
-            current_key = f"session_record.{chat_key}.current"
-            await self.store.delete(store_key=current_key)
-            await self.store.delete(store_key=name_key)
+            current_key = "session_record.current"
+            await self.store.state_delete(chat_key, current_key)
+            await self.store.state_delete(chat_key, name_key)
 
             return record
 
@@ -1025,8 +1025,8 @@ class BattleReportManager:
         archiving the session.
         """
         i18n = i18n or get_i18n()
-        name_key = f"session_name.{chat_key}.current"
-        session_name = await self.store.get(store_key=name_key)
+        name_key = "session_name.current"
+        session_name = await self.store.state_get(chat_key, name_key)
         record = await self.generator.end_session(chat_key)
         if not record:
             return None, None, None
@@ -1042,8 +1042,8 @@ class BattleReportManager:
         latest_record = await self.generator.get_latest_history(chat_key)
         if not latest_record:
             return None
-        name_key = f"session_name.{chat_key}.latest"
-        session_name = await self.store.get(store_key=name_key)
+        name_key = "session_name.latest"
+        session_name = await self.store.state_get(chat_key, name_key)
         if not session_name:
             session_name = _default_session_name(datetime.fromtimestamp(latest_record.start_time), i18n)
         return self.generator.generate_summary_for_prompt(latest_record, session_name, i18n=i18n)

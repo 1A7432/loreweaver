@@ -383,15 +383,15 @@ def test_anthropic_base_url_drops_openai_style_v1_suffix():
 class _FakeAnthropicStream:
     """Captures messages.stream(**kwargs) the way the SDK's context manager works."""
 
-    def __init__(self, holder: dict, message: "Any") -> None:
+    def __init__(self, holder: dict, message: Any) -> None:
         self._holder = holder
         self._message = message
 
-    def __call__(self, **kwargs: Any) -> "_FakeAnthropicStream":
+    def __call__(self, **kwargs: Any) -> _FakeAnthropicStream:
         self._holder["kwargs"] = kwargs
         return self
 
-    async def __aenter__(self) -> "_FakeAnthropicStream":
+    async def __aenter__(self) -> _FakeAnthropicStream:
         return self
 
     async def __aexit__(self, *exc: Any) -> None:

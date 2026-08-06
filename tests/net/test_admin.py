@@ -671,12 +671,12 @@ async def test_admin_set_model_replaces_provider_scoped_credentials():
 
 
 async def _seed_reset_room(services, chat_key):
-    await services.store.set(user_key="", store_key=f"chat_history.{chat_key}", value='[{"role":"user"}]')
-    await services.store.set(user_key="player-1", store_key=f"characters.{chat_key}.Ada", value='{"name":"Ada"}')
-    await services.store.set(user_key="", store_key=f"module_player_pool.{chat_key}", value='{"summary":"x"}')
-    await services.store.set(user_key="", store_key=f"coc_rule.{chat_key}", value="2")
+    await services.store.state_set(chat_key, "chat_history", '[{"role":"user"}]')
+    await services.documents.put(chat_key, "sheet", "Ada", {"name": "Ada", "owner": "player-1"})
+    await services.documents.put_singleton(chat_key, "module_pool", {"keeper": {}, "player": {"summary": "x"}})
+    await services.store.state_set(chat_key, "rule_variant", "rule2")
     await services.store.set(user_key="", store_key="bound_room.discord:group:table", value=chat_key)
-    await services.store.set(user_key="", store_key="chat_history.tui:group:dunwich", value="keep")
+    await services.store.state_set("tui:group:dunwich", "chat_history", "keep")
     await services.vector_db.vector_store.upsert(
         [("doc-1:0", [0.1] * 64, {"chat_key": chat_key, "document_id": "doc-1", "chunk_index": 0})]
     )
@@ -722,7 +722,8 @@ async def test_admin_reset_room_all_wipes_everything_but_settings_and_keys(tmp_p
         assert reset["action"] == "reset"
         assert reset["room"] == "arkham"
         assert reset["scope"] == "all"
-        assert reset["store_rows"] == 3  # chat_history + characters.Ada + module_player_pool
+        assert reset["store_rows"] == 1  # chat_history (runtime state)
+        assert reset["documents"] == 2  # the Ada sheet + the module pool document
         assert reset["vector_points"] == 1
         assert reset["keys"] == 0  # reset never removes keys
         assert "path" not in reset  # no backup is written
@@ -731,12 +732,12 @@ async def test_admin_reset_room_all_wipes_everything_but_settings_and_keys(tmp_p
         await server.close()
 
     # Campaign state is gone...
-    assert await services.store.get(user_key="", store_key=f"chat_history.{chat_key}") is None
-    assert await services.store.get(user_key="player-1", store_key=f"characters.{chat_key}.Ada") is None
-    assert await services.store.get(user_key="", store_key=f"module_player_pool.{chat_key}") is None
+    assert await services.store.state_get(chat_key, "chat_history") is None
+    assert await services.documents.get(chat_key, "sheet", "Ada") is None
+    assert await services.documents.get_singleton(chat_key, "module_pool") is None
     assert await services.vector_db.vector_store.count(filter={"chat_key": chat_key}) == 0
     # ...but room settings, keys, channel binding, and the unrelated room all survive.
-    assert await services.store.get(user_key="", store_key=f"coc_rule.{chat_key}") == "2"
+    assert await services.store.state_get(chat_key, "rule_variant") == "rule2"
     assert keystore.get(keeper_key) is not None
     assert keystore.get(player_key) is not None
     assert keystore.get(other_key) is not None
@@ -772,12 +773,12 @@ async def test_admin_reset_room_story_scope_keeps_characters_module_and_vectors(
         await server.close()
 
     # Story gone, but the character, module and its vectors all survive.
-    assert await services.store.get(user_key="", store_key=f"chat_history.{chat_key}") is None
-    assert await services.store.get(user_key="player-1", store_key=f"characters.{chat_key}.Ada") is not None
-    assert await services.store.get(user_key="", store_key=f"module_player_pool.{chat_key}") is not None
+    assert await services.store.state_get(chat_key, "chat_history") is None
+    assert await services.documents.get(chat_key, "sheet", "Ada") is not None
+    assert await services.documents.get_singleton(chat_key, "module_pool") is not None
     assert await services.vector_db.vector_store.count(filter={"chat_key": chat_key}) == 1
     assert await services.store.get(user_key="", store_key="bound_room.discord:group:table") == chat_key
-    assert await services.store.get(user_key="", store_key="chat_history.tui:group:dunwich") == "keep"
+    assert await services.store.state_get("tui:group:dunwich", "chat_history") == "keep"
 
 
 async def test_keeper_can_export_delete_and_import_room_data(tmp_path):
@@ -789,16 +790,13 @@ async def test_keeper_can_export_delete_and_import_room_data(tmp_path):
         other_key = keystore.add(room="dunwich", name="Other", role="player")
 
     chat_key = chat_key_for_room("arkham")
-    await services.store.set(user_key="", store_key=f"chat_history.{chat_key}", value='[{"role":"user"}]')
-    await services.store.set(user_key="player-1", store_key=f"active_character.{chat_key}", value="Ada")
-    await services.store.set(user_key="player-1", store_key=f"characters_list.{chat_key}", value='["Ada"]')
-    await services.store.set(user_key="player-1", store_key=f"characters.{chat_key}.Ada", value='{"name":"Ada"}')
-    await services.store.set(user_key="", store_key=f"npc_list.{chat_key}", value='["n1"]')
-    await services.store.set(user_key="", store_key=f"npc.{chat_key}.n1", value='{"name":"Dr. West"}')
-    await services.store.set(user_key="", store_key=f"worldbook_index.{chat_key}", value='["l1"]')
-    await services.store.set(user_key="", store_key=f"worldbook.{chat_key}.l1", value='{"title":"Kingsport"}')
+    await services.store.state_set(chat_key, "chat_history", '[{"role":"user"}]')
+    await services.store.state_set(chat_key, "active_character.player-1", "Ada")
+    await services.documents.put(chat_key, "sheet", "Ada", {"name": "Ada", "owner": "player-1"})
+    await services.documents.put(chat_key, "npc", "n1", {"name": "Dr. West"})
+    await services.documents.put(chat_key, "lore", "l1", {"title": "Kingsport", "content": "a foggy port"})
     await services.store.set(user_key="", store_key="bound_room.discord:group:table", value=chat_key)
-    await services.store.set(user_key="", store_key="chat_history.tui:group:dunwich", value="keep")
+    await services.store.state_set("tui:group:dunwich", "chat_history", "keep")
     for base, value in {
         "skills_enabled": '["romance-relationships"]',
         "media_enabled": "1",
@@ -808,7 +806,7 @@ async def test_keeper_can_export_delete_and_import_room_data(tmp_path):
         "relationships": '{"Ada":{"West":{"affection":5}}}',
         "usage_stats": '{"input_tokens":12}',
     }.items():
-        await services.store.set(user_key="", store_key=f"{base}.{chat_key}", value=value)
+        await services.store.state_set(chat_key, base, value)
     media_store = MediaStore(
         services.store,
         services.settings.data_dir,
@@ -847,7 +845,9 @@ async def test_keeper_can_export_delete_and_import_room_data(tmp_path):
         assert exported["room"] == "arkham"
         assert exported["path"].startswith(backups) and exported["path"].endswith("arkham-export.json")
         assert exported["keys"] == 2
-        assert exported["store_rows"] == 16
+        assert exported["store_rows"] == 1  # the channel binding
+        assert exported["documents"] == 3  # sheet + npc + lore
+        assert exported["room_state_rows"] == 9  # chat_history + active pointer + 7 runtime rows
         assert exported["vector_points"] == 2
         assert exported["media_files"] == 1
         snapshot = json.loads(Path(exported["path"]).read_text(encoding="utf-8"))
@@ -865,20 +865,18 @@ async def test_keeper_can_export_delete_and_import_room_data(tmp_path):
         assert deleted["action"] == "delete"
         assert deleted["path"].startswith(backups) and deleted["path"].endswith("arkham-delete-backup.json")
         assert deleted["keys"] == 2
-        assert deleted["store_rows"] == 16
         assert deleted["vector_points"] == 2
         assert deleted["media_files"] == 1
         assert Path(deleted["path"]).is_file()
         assert keystore.get(keeper_key) is None
         assert keystore.get(player_key) is None
         assert keystore.get(other_key) is not None  # a DIFFERENT room's key is untouched
-        assert await services.store.get(user_key="", store_key=f"chat_history.{chat_key}") is None
-        assert await services.store.get(user_key="player-1", store_key=f"active_character.{chat_key}") is None
-        assert await services.store.get(user_key="player-1", store_key=f"characters_list.{chat_key}") is None
-        assert await services.store.get(user_key="player-1", store_key=f"characters.{chat_key}.Ada") is None
-        assert await services.store.get(user_key="", store_key=f"npc.{chat_key}.n1") is None
+        assert await services.store.state_get(chat_key, "chat_history") is None
+        assert await services.store.state_get(chat_key, "active_character.player-1") is None
+        assert await services.documents.get(chat_key, "sheet", "Ada") is None
+        assert await services.documents.get(chat_key, "npc", "n1") is None
         assert await services.store.get(user_key="", store_key="bound_room.discord:group:table") is None
-        assert await services.store.get(user_key="", store_key="chat_history.tui:group:dunwich") == "keep"
+        assert await services.store.state_get("tui:group:dunwich", "chat_history") == "keep"
         assert await services.vector_db.vector_store.count(filter={"chat_key": chat_key}) == 0
         assert await services.vector_db.vector_store.count(filter={"collection": "worldbook", "namespace": chat_key}) == 0
         for base in (
@@ -890,7 +888,7 @@ async def test_keeper_can_export_delete_and_import_room_data(tmp_path):
             "relationships",
             "usage_stats",
         ):
-            assert await services.store.get(user_key="", store_key=f"{base}.{chat_key}") is None
+            assert await services.store.state_get(chat_key, base) is None
         with pytest.raises(MediaError, match="media_not_found"):
             await media_store.read_bytes(chat_key, media_record.hash)
 
@@ -913,26 +911,29 @@ async def test_keeper_can_export_delete_and_import_room_data(tmp_path):
         assert imported["action"] == "import"
         assert imported["room"] == "arkham"
         assert imported["keys"] == 2
-        assert imported["store_rows"] == 16
+        assert imported["store_rows"] == 1
+        assert imported["documents"] == 3
+        assert imported["room_state_rows"] == 9
         assert imported["vector_points"] == 2
         assert imported["media_files"] == 1
         if os.name == "posix":
             assert stat.S_IMODE(Path(deleted["path"]).stat().st_mode) == 0o600
         assert keystore.get(keeper_key).room == "arkham"
         assert keystore.get(player_key).room == "arkham"
-        assert await services.store.get(user_key="", store_key=f"chat_history.{chat_key}") == '[{"role":"user"}]'
-        assert await services.store.get(user_key="player-1", store_key=f"active_character.{chat_key}") == "Ada"
-        assert await services.store.get(user_key="player-1", store_key=f"characters_list.{chat_key}") == '["Ada"]'
-        assert await services.store.get(user_key="player-1", store_key=f"characters.{chat_key}.Ada") == '{"name":"Ada"}'
-        assert await services.store.get(user_key="", store_key=f"npc.{chat_key}.n1") == '{"name":"Dr. West"}'
+        assert await services.store.state_get(chat_key, "chat_history") == '[{"role":"user"}]'
+        assert await services.store.state_get(chat_key, "active_character.player-1") == "Ada"
+        restored_sheet = await services.documents.get(chat_key, "sheet", "Ada")
+        assert restored_sheet is not None and restored_sheet.data["name"] == "Ada"
+        restored_npc = await services.documents.get(chat_key, "npc", "n1")
+        assert restored_npc is not None and restored_npc.data["name"] == "Dr. West"
         assert await services.store.get(user_key="", store_key="bound_room.discord:group:table") == chat_key
         assert await services.vector_db.vector_store.count(filter={"chat_key": chat_key}) == 1
         assert await services.vector_db.vector_store.count(filter={"collection": "worldbook", "namespace": chat_key}) == 1
         restored_record, restored_data = await media_store.read_bytes(chat_key, media_record.hash)
         assert restored_record.name == "clue.png"
         assert restored_data == b"private handout"
-        assert await services.store.get(user_key="", store_key=f"skills_enabled.{chat_key}") == '["romance-relationships"]'
-        assert await services.store.get(user_key="", store_key=f"relationships.{chat_key}") == '{"Ada":{"West":{"affection":5}}}'
+        assert await services.store.state_get(chat_key, "skills_enabled") == '["romance-relationships"]'
+        assert await services.store.state_get(chat_key, "relationships") == '{"Ada":{"West":{"affection":5}}}'
 
         await ws.close()
     finally:
@@ -946,8 +947,8 @@ async def test_room_backup_paths_are_room_owned_and_default_names_are_unique(tmp
     keystore.add(room="dunwich", name="Keeper", role="keeper")
     arkham_key = chat_key_for_room("arkham")
     dunwich_key = chat_key_for_room("dunwich")
-    await services.store.set(store_key=f"chat_history.{arkham_key}", value="arkham-v1")
-    await services.store.set(store_key=f"chat_history.{dunwich_key}", value="dunwich-v1")
+    await services.store.state_set(arkham_key, "chat_history", "arkham-v1")
+    await services.store.state_set(dunwich_key, "chat_history", "dunwich-v1")
 
     arkham = await export_room(services, keystore, "arkham", "shared.json")
     dunwich = await export_room(services, keystore, "dunwich", "shared.json")
@@ -959,7 +960,7 @@ async def test_room_backup_paths_are_room_owned_and_default_names_are_unique(tmp
     assert arkham_path.name == dunwich_path.name == "shared.json"
 
     # Replacing a named snapshot is confined to the exact room namespace.
-    await services.store.set(store_key=f"chat_history.{arkham_key}", value="arkham-v2")
+    await services.store.state_set(arkham_key, "chat_history", "arkham-v2")
     replaced = await export_room(services, keystore, "arkham", "shared.json")
     assert Path(replaced["path"]) == arkham_path
     assert dunwich_path.read_bytes() == dunwich_bytes
@@ -1016,45 +1017,35 @@ async def test_room_backup_rejects_a_symlinked_room_directory(tmp_path):
         await export_room(services, Keystore(), room, "snapshot.json")
 
 
-async def test_dotted_child_room_prefix_fails_closed_for_export_delete_and_import(tmp_path):
+async def test_dotted_child_room_is_structurally_isolated_from_parent_room_ops(tmp_path):
+    """Pre-M17, room content lived under prefix-shaped KV keys, so a dotted child room
+    ("foo.bar") aliased its parent's key namespace and every room op had to FAIL CLOSED
+    on ambiguity. M17 stores content in room-COLUMN-scoped tables, so the ambiguity class
+    is gone structurally: parent ops must simply never touch the child's rows."""
     services = _services(str(tmp_path))
     keystore = Keystore()
     keystore.add(room="foo", name="Parent Keeper", role="keeper")
+    keystore.add(room="foo.bar", name="Child Keeper", role="keeper")
     parent_key = chat_key_for_room("foo")
     child_key = chat_key_for_room("foo.bar")
-    parent_history = f"chat_history.{parent_key}"
-    child_history = f"chat_history.{child_key}"
-    child_character = f"characters.{child_key}.Bob"
-    await services.store.set(store_key=parent_history, value="parent")
+    await services.store.state_set(parent_key, "chat_history", "parent")
+    await services.store.state_set(child_key, "chat_history", "child")
+    await services.documents.put(child_key, "sheet", "Bob", {"name": "Bob", "owner": "p1"})
 
-    # Produce a legitimate parent snapshot before the ambiguous child exists.
-    exported = await export_room(services, keystore, "foo", "before-child.json")
-    keystore.add(room="foo.bar", name="Child Keeper", role="keeper")
-    await services.store.set(store_key=child_history, value="child")
-    await services.store.set(store_key=child_character, value='{"name":"Bob"}')
+    exported = await export_room(services, keystore, "foo", "parent.json")
+    snapshot = json.loads(Path(exported["path"]).read_text(encoding="utf-8"))
+    assert all(row["key"] != "chat_history" or row["value"] == "parent" for row in snapshot["room_state"])
+    assert snapshot["documents"] == []  # the child's sheet never leaks into the parent snapshot
 
-    for operation in (
-        lambda: export_room(services, keystore, "foo", "after-child.json"),
-        lambda: delete_room_data(services, keystore, "foo"),
-        lambda: import_room(
-            services,
-            keystore,
-            Path(exported["path"]).name,
-            expected_room="foo",
-        ),
-        # reset_room_state deletes by store-key prefix, so it must fail closed on the same
-        # dotted-child ambiguity every other room op guards (else `.reset all` on "foo" would
-        # silently wipe "foo.bar"'s rows — cross-room data loss with no backup). "all" is the
-        # widest scope and therefore the strongest case.
-        lambda: reset_room_state(services, parent_key, scope="all", keystore=keystore),
-    ):
-        with pytest.raises(ValueError, match="ambiguous dotted-prefix"):
-            await operation()
+    await delete_room_data(services, keystore, "foo")
+    assert await services.store.state_get(child_key, "chat_history") == "child"
+    assert await services.documents.get(child_key, "sheet", "Bob") is not None
 
-    # Fail-closed means neither the child nor the parent was partially exposed/deleted/imported/reset.
-    assert await services.store.get(store_key=parent_history) == "parent"
-    assert await services.store.get(store_key=child_history) == "child"
-    assert await services.store.get(store_key=child_character) == '{"name":"Bob"}'
+    await services.store.state_set(parent_key, "chat_history", "parent-again")
+    await reset_room_state(services, parent_key, scope="all", keystore=keystore)
+    assert await services.store.state_get(parent_key, "chat_history") is None
+    assert await services.store.state_get(child_key, "chat_history") == "child"
+    assert await services.documents.get(child_key, "sheet", "Bob") is not None
 
 
 async def test_reset_without_ambiguous_neighbor_still_wipes_and_a_prefix_named_sibling_survives(tmp_path):
@@ -1066,14 +1057,14 @@ async def test_reset_without_ambiguous_neighbor_still_wipes_and_a_prefix_named_s
     keystore.add(room="foobar", name="Sibling Keeper", role="keeper")  # NOT a dotted child of "foo"
     parent_key = chat_key_for_room("foo")
     sibling_key = chat_key_for_room("foobar")
-    await services.store.set(store_key=f"chat_history.{parent_key}", value="parent-story")
-    await services.store.set(store_key=f"worldbook.{sibling_key}.e1", value='{"title":"sibling"}')
+    await services.store.state_set(parent_key, "chat_history", "parent-story")
+    await services.documents.put(sibling_key, "lore", "e1", {"title": "sibling", "content": "x"})
 
     result = await reset_room_state(services, parent_key, scope="all", keystore=keystore)
 
     assert int(result.get("store_rows") or 0) >= 1
-    assert await services.store.get(store_key=f"chat_history.{parent_key}") is None  # parent wiped
-    assert await services.store.get(store_key=f"worldbook.{sibling_key}.e1") is not None  # sibling intact
+    assert await services.store.state_get(parent_key, "chat_history") is None  # parent wiped
+    assert await services.documents.get(sibling_key, "lore", "e1") is not None  # sibling intact
 
 
 async def test_vector_conflicting_ownership_fails_export_and_delete_without_erasing_point(tmp_path):
@@ -1389,8 +1380,7 @@ async def test_delete_room_rolls_back_every_component_after_late_media_failure(t
     with keystore.persisted_mutation():
         keeper_key = keystore.add(room="arkham", name="Keeper", role="keeper")
     chat_key = chat_key_for_room("arkham")
-    store_key = f"chat_history.{chat_key}"
-    await services.store.set(store_key=store_key, value="original")
+    await services.store.state_set(chat_key, "chat_history", "original")
     await services.vector_db.vector_store.upsert(
         [("original:0", [0.25] * 64, {"chat_key": chat_key, "document_id": "original"})]
     )
@@ -1429,7 +1419,7 @@ async def test_delete_room_rolls_back_every_component_after_late_media_failure(t
     assert failed["type"] == "admin_error"
     assert failed["code"] == "op_failed"
 
-    assert await services.store.get(store_key=store_key) == "original"
+    assert await services.store.state_get(chat_key, "chat_history") == "original"
     restored_vectors = await room_vector_points(services, chat_key)
     assert [point["id"] for point in restored_vectors] == ["original:0"]
     persisted_keys = Keystore.load(key_path)
@@ -1446,10 +1436,9 @@ async def test_import_room_rolls_back_every_component_when_key_persistence_fails
     keystore = Keystore.load(key_path)
     room = "arkham"
     chat_key = chat_key_for_room(room)
-    store_key = f"chat_history.{chat_key}"
     with keystore.persisted_mutation():
         backup_key = keystore.add(room=room, name="Old Keeper", role="keeper")
-    await services.store.set(store_key=store_key, value="backup")
+    await services.store.state_set(chat_key, "chat_history", "backup")
     await services.vector_db.vector_store.upsert(
         [("backup:0", [0.1] * 64, {"chat_key": chat_key, "document_id": "backup"})]
     )
@@ -1470,7 +1459,7 @@ async def test_import_room_rolls_back_every_component_when_key_persistence_fails
 
     with keystore.persisted_mutation():
         recovery_key = keystore.add(room=room, name="Recovery", role="keeper")
-    await services.store.set(store_key=store_key, value="live")
+    await services.store.state_set(chat_key, "chat_history", "live")
     await services.vector_db.vector_store.upsert(
         [("live:0", [0.9] * 64, {"chat_key": chat_key, "document_id": "live"})]
     )
@@ -1561,7 +1550,7 @@ async def test_admin_export_confines_the_path_to_the_backups_directory(tmp_path)
     services = _services(str(tmp_path))
     keystore = Keystore()
     keeper_key = keystore.add(room="arkham", name="Keeper", role="keeper")
-    await services.store.set(user_key="", store_key=f"chat_history.{chat_key_for_room('arkham')}", value="[]")
+    await services.store.state_set(chat_key_for_room('arkham'), "chat_history", "[]")
     server = TuiServer(services, keystore, port=0)
     url = await _start(server)
     try:

@@ -49,9 +49,9 @@ RelationshipState = dict[str, dict[str, dict[str, int]]]
 class _StoreProtocol(Protocol):
     """Duck-typed shape of `infra.store.Store` — just enough to load/save relationship state."""
 
-    async def get(self, user_key: str = "", store_key: str = "") -> str | None: ...
+    async def state_get(self, room: str, key: str) -> str | None: ...
 
-    async def set(self, user_key: str = "", store_key: str = "", value: str | None = None) -> None: ...
+    async def state_set(self, room: str, key: str, value: str | None) -> None: ...
 
 
 class _I18nProtocol(Protocol):
@@ -212,8 +212,7 @@ def describe(state: RelationshipState, i18n: _I18nProtocol) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def _store_key(chat_key: str) -> str:
-    return f"relationships.{chat_key}"
+_STATE_KEY = "relationships"
 
 
 class RelationshipManager:
@@ -224,7 +223,7 @@ class RelationshipManager:
 
     async def load(self, chat_key: str) -> RelationshipState:
         """Load and normalize this chat's relationship state; `{}` on a miss or corrupt value."""
-        raw = await self._store.get(user_key="", store_key=_store_key(chat_key))
+        raw = await self._store.state_get(chat_key, _STATE_KEY)
         if not raw:
             return {}
         try:
@@ -235,7 +234,7 @@ class RelationshipManager:
 
     async def save(self, chat_key: str, state: RelationshipState) -> None:
         """Persist `state` verbatim (already normalized/clamped by the caller)."""
-        await self._store.set(user_key="", store_key=_store_key(chat_key), value=json.dumps(state, ensure_ascii=False))
+        await self._store.state_set(chat_key, _STATE_KEY, json.dumps(state, ensure_ascii=False))
 
     async def adjust(self, chat_key: str, subject: str, target: str, track_id: str, delta: int) -> tuple[int, int]:
         """Load, apply `delta`, save, and return ``(old_value, new_value)``."""

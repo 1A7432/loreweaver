@@ -846,19 +846,18 @@ class DiceTools:
             if active_character.system != "CoC":
                 return i18n.t("kp_tools.dice.luck.coc_only")
 
-            character_key = f"characters.{ctx.chat_key}.{active_character.name}"
-            session_key = f"session_record.{ctx.chat_key}.current"
+            session_key = "session_record.current"
             for _attempt in range(2):
-                raw_character = await self.services.store.get(
-                    user_key=ctx.uid(), store_key=character_key
+                sheet_doc = await self.services.documents.get(
+                    ctx.chat_key, "sheet", active_character.name
                 )
-                raw_session = await self.services.store.get(store_key=session_key)
+                raw_session = await self.services.store.state_get(ctx.chat_key, session_key)
                 if raw_session is None:
                     return i18n.t("kp_tools.dice.luck.no_session")
-                if raw_character is None:
+                if sheet_doc is None or sheet_doc.corrupt:
                     return i18n.t("kp_tools.character.none")
 
-                character = CharacterSheet.from_dict(json.loads(raw_character))
+                character = CharacterSheet.from_dict(sheet_doc.data)
                 luck = int(character.attributes.get("LUC", 0) or 0)
                 if points > luck:
                     return i18n.t("kp_tools.dice.luck.insufficient", points=points, luck=luck)
@@ -916,20 +915,24 @@ class DiceTools:
                 check["luck_after"] = luck_after
                 record.rebuild_player_stats()
 
-                new_character = json.dumps(character.to_dict(), ensure_ascii=False)
                 new_session = json.dumps(record.to_dict(), ensure_ascii=False)
-                updated = await self.services.store.set_rows_if_values(
-                    expected=[
-                        (ctx.uid(), character_key, raw_character),
-                        ("", session_key, raw_session),
-                    ],
-                    updates=[
-                        (ctx.uid(), character_key, new_character),
-                        ("", session_key, new_session),
-                    ],
+                # The session record is the contended resource (double-spend guard):
+                # CAS it first, then persist the sheet document. Same-room tool calls
+                # are already serialized by the room turn lock; the CAS is the
+                # defense-in-depth retry trigger.
+                updated = await self.services.store.state_set_if_values(
+                    ctx.chat_key,
+                    expected=[(session_key, raw_session)],
+                    updates=[(session_key, new_session)],
                 )
                 if not updated:
                     continue
+                await self.services.documents.put(
+                    ctx.chat_key,
+                    "sheet",
+                    active_character.name,
+                    dict(character.to_dict(), owner=sheet_doc.data.get("owner", ctx.uid())),
+                )
 
                 after_label = pack.rank_label(adjustment.after.id, ctx.locale)
                 check["label"] = after_label
@@ -1324,13 +1327,13 @@ class InitiativeTools:
         """
         i18n = self.services.i18n.with_locale(ctx.locale)
         chat_key = ctx.chat_key
-        store_key = f"initiative.{chat_key}"
-        meta_key = f"initiative_meta.{chat_key}"
+        store_key = "initiative"
+        meta_key = "initiative_meta"
 
         try:
-            init_data = await self.services.store.get(user_key="", store_key=store_key)
+            init_data = await self.services.store.state_get(chat_key, store_key)
             init_list = json.loads(init_data) if init_data else []
-            meta_data = await self.services.store.get(user_key="", store_key=meta_key)
+            meta_data = await self.services.store.state_get(chat_key, meta_key)
             parsed_meta = json.loads(meta_data) if meta_data else {}
             meta = parsed_meta if isinstance(parsed_meta, dict) else {}
             round_number = max(1, int(meta.get("round", 1)))
@@ -1353,16 +1356,14 @@ class InitiativeTools:
                 init_list.append({"name": name, "init": initiative})
                 init_list.sort(key=lambda entry: entry["init"], reverse=True)
                 ctx.emit_dice({"kind": "init", "actor": name, "expr": name, "rolls": [], "total": initiative})
-                await self.services.store.set(
-                    user_key="", store_key=store_key, value=json.dumps(init_list, ensure_ascii=False)
+                await self.services.store.state_set(
+                    chat_key, store_key, json.dumps(init_list, ensure_ascii=False)
                 )
                 if starting_combat:
                     round_number = 1
                     turns_in_round = 0
-                await self.services.store.set(
-                    user_key="",
-                    store_key=meta_key,
-                    value=json.dumps({"round": round_number, "turns": turns_in_round}),
+                await self.services.store.state_set(
+                    chat_key, meta_key, json.dumps({"round": round_number, "turns": turns_in_round})
                 )
                 await self.services.battles.set_combat_state(
                     chat_key,
@@ -1395,17 +1396,17 @@ class InitiativeTools:
                 return "\n".join(lines)
 
             if action == "clear":
-                await self.services.store.set(user_key="", store_key=store_key, value="[]")
-                await self.services.store.delete(user_key="", store_key=meta_key)
+                await self.services.store.state_set(chat_key, store_key, "[]")
+                await self.services.store.state_delete(chat_key, meta_key)
                 return i18n.t("kp_tools.initiative.cleared")
 
             if action == "next":
                 await self.services.battles.ensure_session_started(chat_key, i18n=i18n)
-                session_key = f"session_record.{chat_key}.current"
+                session_key = "session_record.current"
                 for _attempt in range(3):
-                    current_init_data = await self.services.store.get(user_key="", store_key=store_key)
-                    current_meta_data = await self.services.store.get(user_key="", store_key=meta_key)
-                    current_session_data = await self.services.store.get(user_key="", store_key=session_key)
+                    current_init_data = await self.services.store.state_get(chat_key, store_key)
+                    current_meta_data = await self.services.store.state_get(chat_key, meta_key)
+                    current_session_data = await self.services.store.state_get(chat_key, session_key)
                     current_list = json.loads(current_init_data) if current_init_data else []
                     current_meta = json.loads(current_meta_data) if current_meta_data else {}
                     if not current_list or not current_session_data:
@@ -1427,16 +1428,17 @@ class InitiativeTools:
                     session = SessionRecord.from_dict(json.loads(current_session_data))
                     session.set_combat_state(next_round, next_name, next_turn)
                     next_session_data = json.dumps(session.to_dict(), ensure_ascii=False)
-                    committed = await self.services.store.set_rows_if_values(
+                    committed = await self.services.store.state_set_if_values(
+                        chat_key,
                         expected=[
-                            ("", store_key, current_init_data),
-                            ("", meta_key, current_meta_data),
-                            ("", session_key, current_session_data),
+                            (store_key, current_init_data),
+                            (meta_key, current_meta_data),
+                            (session_key, current_session_data),
                         ],
                         updates=[
-                            ("", store_key, next_list_data),
-                            ("", meta_key, next_meta_data),
-                            ("", session_key, next_session_data),
+                            (store_key, next_list_data),
+                            (meta_key, next_meta_data),
+                            (session_key, next_session_data),
                         ],
                     )
                     if not committed:

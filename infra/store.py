@@ -412,6 +412,41 @@ class Store:
             self._commit(conn)
             return cursor.rowcount if cursor.rowcount != -1 else 0
 
+    async def state_set_if_values(
+        self,
+        room: str,
+        *,
+        expected: Iterable[tuple[str, str | None]],
+        updates: Iterable[tuple[str, str | None]],
+    ) -> bool:
+        """Atomically update `room` rows only while all expected values still match
+        (the room_state twin of `set_rows_if_values`)."""
+        expected_items = list(expected)
+        update_items = list(updates)
+        if not update_items:
+            return True
+        async with self._lock:
+            conn = self._ensure_conn()
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                for key, expected_value in expected_items:
+                    row = conn.execute(
+                        "SELECT value FROM room_state WHERE room = ? AND key = ?", (room, key)
+                    ).fetchone()
+                    current_value = row[0] if row is not None else None
+                    if current_value != expected_value:
+                        conn.rollback()
+                        return False
+                conn.executemany(
+                    "INSERT OR REPLACE INTO room_state (room, key, value) VALUES (?, ?, ?)",
+                    [(room, key, value) for key, value in update_items],
+                )
+                self._commit(conn)
+                return True
+            except Exception:
+                conn.rollback()
+                raise
+
     def close(self) -> None:
         """Close the underlying connection, if one has been opened."""
         if self._conn is not None:

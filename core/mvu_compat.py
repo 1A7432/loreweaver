@@ -31,7 +31,7 @@ Upstream shapes this module implements (verified against the original MVU projec
 
 Mirrors ``core.modvars``/``core.relationships``' layering: intentionally self-contained
 (stdlib + json, plus `core.yaml_safety` for the YAML InitVar shape), pure non-mutating
-functions plus a thin async ``MvuManager`` over a duck-typed store ``Protocol``, and
+functions plus thin async document accessors (`load_mvu`/`save_mvu`/…), and
 defensive normalization of stored garbage.
 """
 
@@ -42,7 +42,7 @@ import datetime
 import json
 import math
 import re
-from typing import Any, Protocol
+from typing import Any
 
 import yaml
 
@@ -69,14 +69,6 @@ MvuTree = dict[str, Any]
 
 # Sentinel used by `normalize_tree` to say "drop this node" (None is a legal stored value).
 _DROP = object()
-
-
-class _StoreProtocol(Protocol):
-    """Duck-typed shape of `infra.store.Store` — just enough to load/save MVU state."""
-
-    async def get(self, user_key: str = "", store_key: str = "") -> str | None: ...
-
-    async def set(self, user_key: str = "", store_key: str = "", value: str | None = None) -> None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -880,16 +872,11 @@ def normalize_tree(raw: Any) -> MvuTree:
 
 
 # ---------------------------------------------------------------------------
-# MvuManager — thin async persistence wrapper over the pure functions
+# Document persistence (M17) — the whole MVU state is ONE `mvu_tree` document:
+# ``data = {"tree": <MvuTree>, "exposed": [<prefix>, …]}``. Its projection
+# (core.documents) is the fail-closed player filter; the async functions below
+# are the only write/read path and preserve whichever half they don't touch.
 # ---------------------------------------------------------------------------
-
-
-def _store_key(chat_key: str) -> str:
-    return f"mvu_data.{chat_key}"
-
-
-def _exposed_key(chat_key: str) -> str:
-    return f"mvu_exposed.{chat_key}"
 
 
 def path_is_exposed(path: str, prefixes: list[str]) -> bool:
@@ -929,105 +916,114 @@ def _merge_missing(target: dict, incoming: dict) -> bool:
     return added
 
 
-class MvuManager:
-    """Async load/save wrapper over the pure MVU functions above, keyed by `chat_key`."""
+MVU_DOC_TYPE = "mvu_tree"
+MVU_DOC_ID = "mvu"
 
-    def __init__(self, store: _StoreProtocol) -> None:
-        self._store = store
 
-    async def load(self, chat_key: str) -> MvuTree:
-        """Load and normalize this room's variable tree; ``{}`` on a miss or corrupt value."""
-        raw = await self._store.get(user_key="", store_key=_store_key(chat_key))
-        if not raw:
-            return {}
-        try:
-            data = json.loads(raw)
-        except (ValueError, TypeError, RecursionError):
-            return {}
-        return normalize_tree(data)
+def _normalize_exposed(raw: Any) -> list[str]:
+    """Normalize a stored exposure list; ``[]`` (nothing exposed) on anything corrupt —
+    the fail-closed default `path_is_exposed` documents."""
+    if not isinstance(raw, list):
+        return []
+    prefixes: list[str] = []
+    for item in raw:
+        cleaned = _normalize_prefix(item) if isinstance(item, str) else ""
+        if cleaned and cleaned not in prefixes:
+            prefixes.append(cleaned)
+    return prefixes[:MAX_EXPOSED_PREFIXES]
 
-    async def save(self, chat_key: str, tree: MvuTree) -> None:
-        """Persist `tree` verbatim (already normalized/validated by the caller)."""
-        await self._store.set(user_key="", store_key=_store_key(chat_key), value=json.dumps(tree, ensure_ascii=False))
 
-    async def init_from_initvar(self, chat_key: str, parsed: dict) -> bool:
-        """Deep-merge a parsed InitVar tree into this room's state — EXISTING VALUES WIN, so a
-        re-import never resets progress. Returns whether anything new was added (and saved)."""
-        incoming = normalize_tree(parsed)
-        if not incoming:
-            return False
-        merged = await self.load(chat_key)
-        if not _merge_missing(merged, incoming):
-            return False
-        await self.save(chat_key, merged)
-        return True
+async def _load_doc(documents: Any, chat_key: str) -> tuple[MvuTree, list[str]]:
+    doc = await documents.get(chat_key, MVU_DOC_TYPE, MVU_DOC_ID)
+    if doc is None:
+        return {}, []
+    tree = doc.data.get("tree")
+    return normalize_tree(tree), _normalize_exposed(doc.data.get("exposed"))
 
-    async def apply_text(self, chat_key: str, text: str) -> tuple[str, list[dict[str, Any]], list[str]]:
-        """Run one model reply through the MVU text protocol: extract ``<UpdateVariable>``
-        blocks, apply the commands to this room's tree, and persist when anything applied.
-        Returns ``(cleaned_text, applied_commands, errors)``. (Block parsing runs before the
-        store load so ordinary narration — the hot path — never touches the store.)"""
-        commands, cleaned = parse_update_blocks(text)
-        if not commands:
-            return cleaned, [], []
-        tree = await self.load(chat_key)
-        new_tree, applied, errors = apply_commands(tree, commands)
-        if applied:
-            await self.save(chat_key, new_tree)
-        return cleaned, applied, errors
 
-    async def flatten(self, chat_key: str, limit: int = MAX_FLAT_LEAVES) -> list[dict[str, Any]]:
-        """Load this room's tree and flatten it via `flatten_leaves`."""
-        return flatten_leaves(await self.load(chat_key), limit)
+async def _save_doc(documents: Any, chat_key: str, tree: MvuTree, exposed: list[str]) -> None:
+    await documents.put(chat_key, MVU_DOC_TYPE, MVU_DOC_ID, {"tree": tree, "exposed": exposed})
 
-    async def has_data(self, chat_key: str) -> bool:
-        """Whether this room has any (recoverable) MVU state."""
-        return bool(await self.load(chat_key))
 
-    async def exposed_prefixes(self, chat_key: str) -> list[str]:
-        """The keeper-curated player-visible path prefixes; ``[]`` (nothing exposed) on a
-        miss or corrupt value — the fail-closed default `path_is_exposed` documents."""
-        raw = await self._store.get(user_key="", store_key=_exposed_key(chat_key))
-        if not raw:
-            return []
-        try:
-            data = json.loads(raw)
-        except (ValueError, TypeError):
-            return []
-        if not isinstance(data, list):
-            return []
-        prefixes: list[str] = []
-        for item in data:
-            cleaned = _normalize_prefix(item) if isinstance(item, str) else ""
-            if cleaned and cleaned not in prefixes:
-                prefixes.append(cleaned)
-        return prefixes[:MAX_EXPOSED_PREFIXES]
+async def load_mvu(documents: Any, chat_key: str) -> MvuTree:
+    """Load and normalize this room's variable tree; ``{}`` on a miss or corrupt value."""
+    tree, _exposed = await _load_doc(documents, chat_key)
+    return tree
 
-    async def expose(self, chat_key: str, prefix: str) -> bool:
-        """Add one exposure prefix (keeper action). False when it was invalid, already
-        present, or the list is full; True when newly added (and persisted)."""
-        cleaned = _normalize_prefix(prefix)
-        if not cleaned:
-            return False
-        prefixes = await self.exposed_prefixes(chat_key)
-        if cleaned in prefixes or len(prefixes) >= MAX_EXPOSED_PREFIXES:
-            return False
-        prefixes.append(cleaned)
-        await self._store.set(
-            user_key="", store_key=_exposed_key(chat_key), value=json.dumps(prefixes, ensure_ascii=False)
-        )
-        return True
 
-    async def hide(self, chat_key: str, prefix: str) -> bool:
-        """Remove one exposure prefix exactly as stored; True when something was removed."""
-        cleaned = _normalize_prefix(prefix)
-        if not cleaned:
-            return False
-        prefixes = await self.exposed_prefixes(chat_key)
-        if cleaned not in prefixes:
-            return False
-        prefixes = [item for item in prefixes if item != cleaned]
-        await self._store.set(
-            user_key="", store_key=_exposed_key(chat_key), value=json.dumps(prefixes, ensure_ascii=False)
-        )
-        return True
+async def save_mvu(documents: Any, chat_key: str, tree: MvuTree) -> None:
+    """Persist `tree` verbatim (already normalized/validated by the caller), preserving
+    the keeper's exposure list."""
+    _old_tree, exposed = await _load_doc(documents, chat_key)
+    await _save_doc(documents, chat_key, tree, exposed)
+
+
+async def mvu_init_from_initvar(documents: Any, chat_key: str, parsed: dict) -> bool:
+    """Deep-merge a parsed InitVar tree into this room's state — EXISTING VALUES WIN, so a
+    re-import never resets progress. Returns whether anything new was added (and saved)."""
+    incoming = normalize_tree(parsed)
+    if not incoming:
+        return False
+    merged, exposed = await _load_doc(documents, chat_key)
+    if not _merge_missing(merged, incoming):
+        return False
+    await _save_doc(documents, chat_key, merged, exposed)
+    return True
+
+
+async def mvu_apply_text(documents: Any, chat_key: str, text: str) -> tuple[str, list[dict[str, Any]], list[str]]:
+    """Run one model reply through the MVU text protocol: extract ``<UpdateVariable>``
+    blocks, apply the commands to this room's tree, and persist when anything applied.
+    Returns ``(cleaned_text, applied_commands, errors)``. (Block parsing runs before the
+    store load so ordinary narration — the hot path — never touches the store.)"""
+    commands, cleaned = parse_update_blocks(text)
+    if not commands:
+        return cleaned, [], []
+    tree, exposed = await _load_doc(documents, chat_key)
+    new_tree, applied, errors = apply_commands(tree, commands)
+    if applied:
+        await _save_doc(documents, chat_key, new_tree, exposed)
+    return cleaned, applied, errors
+
+
+async def mvu_flatten(documents: Any, chat_key: str, limit: int = MAX_FLAT_LEAVES) -> list[dict[str, Any]]:
+    """Load this room's tree and flatten it via `flatten_leaves`."""
+    return flatten_leaves(await load_mvu(documents, chat_key), limit)
+
+
+async def mvu_has_data(documents: Any, chat_key: str) -> bool:
+    """Whether this room has any (recoverable) MVU state."""
+    return bool(await load_mvu(documents, chat_key))
+
+
+async def mvu_exposed_prefixes(documents: Any, chat_key: str) -> list[str]:
+    """The keeper-curated player-visible path prefixes; ``[]`` fail-closed."""
+    _tree, exposed = await _load_doc(documents, chat_key)
+    return exposed
+
+
+async def mvu_expose(documents: Any, chat_key: str, prefix: str) -> bool:
+    """Add one exposure prefix (keeper action). False when it was invalid, already
+    present, or the list is full; True when newly added (and persisted)."""
+    cleaned = _normalize_prefix(prefix)
+    if not cleaned:
+        return False
+    tree, prefixes = await _load_doc(documents, chat_key)
+    if cleaned in prefixes or len(prefixes) >= MAX_EXPOSED_PREFIXES:
+        return False
+    prefixes.append(cleaned)
+    await _save_doc(documents, chat_key, tree, prefixes)
+    return True
+
+
+async def mvu_hide(documents: Any, chat_key: str, prefix: str) -> bool:
+    """Remove one exposure prefix exactly as stored; True when something was removed."""
+    cleaned = _normalize_prefix(prefix)
+    if not cleaned:
+        return False
+    tree, prefixes = await _load_doc(documents, chat_key)
+    if cleaned not in prefixes:
+        return False
+    prefixes = [item for item in prefixes if item != cleaned]
+    await _save_doc(documents, chat_key, tree, prefixes)
+    return True

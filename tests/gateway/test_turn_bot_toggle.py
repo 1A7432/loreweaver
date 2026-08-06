@@ -55,7 +55,7 @@ async def _room(services):
 async def test_bot_off_still_echoes_chat_but_runs_no_kp_turn():
     services = _services()
     hub, member, router, toolset, ctx = await _room(services)
-    await services.store.set(user_key="", store_key=f"bot_enabled.{ROOM}", value="0")
+    await services.store.state_set(ROOM, "bot_enabled", "0")
 
     result = await run_turn(hub, services, ctx, "we gather around the map", command_router=router, toolset=toolset)
 
@@ -68,7 +68,7 @@ async def test_bot_off_still_echoes_chat_but_runs_no_kp_turn():
 async def test_bot_off_keeps_dice_commands_working():
     services = _services()
     hub, member, router, toolset, ctx = await _room(services)
-    await services.store.set(user_key="", store_key=f"bot_enabled.{ROOM}", value="0")
+    await services.store.state_set(ROOM, "bot_enabled", "0")
 
     result = await run_turn(hub, services, ctx, ".r 3d6", command_router=router, toolset=toolset)
 
@@ -89,7 +89,7 @@ async def test_bot_unset_and_bot_on_run_the_kp_turn():
 
     # An explicit `.bot on` after an off round restores the KP (keeper-gated
     # since the audit fix, so the toggle comes from a keeper ctx).
-    await services.store.set(user_key="", store_key=f"bot_enabled.{ROOM}", value="0")
+    await services.store.state_set(ROOM, "bot_enabled", "0")
     member.events.clear()
     services.llm._script.append(assistant_text("Back at the table."))
     keeper_ctx = AgentCtx(chat_key=ROOM, user_id="u1", platform="tui", locale="en", extra={"role": "keeper"})

@@ -93,7 +93,7 @@ async def test_en_commands_roll_inline_setcoc_make_and_check():
 
     setcoc = await router.dispatch(ctx, "/setcoc 2")
     assert setcoc == "CoC rule set to 2."
-    assert await services.store.get(user_key="", store_key="rule_variant.cli:dm:t") == "rule2"
+    assert await services.store.state_get("cli:dm:t", "rule_variant") == "rule2"
 
     created = await router.dispatch(ctx, "/coc")
     assert created is not None
@@ -116,12 +116,12 @@ async def test_language_persists_room_locale_and_replies_in_new_language():
 
     invalid = await router.dispatch(ctx, ".language fr")
     assert invalid == "Usage: .language en|zh"
-    assert await services.store.get(user_key="", store_key=f"chat_locale.{ctx.chat_key}") is None
+    assert await services.store.state_get(ctx.chat_key, "chat_locale") is None
 
     changed = await router.dispatch(ctx, "/language zh")
     assert changed == "房间语言已切换为中文。"
     assert ctx.locale == "zh"
-    assert await services.store.get(user_key="", store_key=f"chat_locale.{ctx.chat_key}") == "zh"
+    assert await services.store.state_get(ctx.chat_key, "chat_locale") == "zh"
 
     changed_back = await router.dispatch(ctx, ".language en")
     assert changed_back == "Room language set to English."
@@ -164,7 +164,7 @@ async def test_zh_commands_roll_check_sheet_fullwidth_and_setcoc():
 
     setcoc = await router.dispatch(ctx, ".setcoc 2")
     assert setcoc == "CoC 房规已设为 2。"
-    assert await services.store.get(user_key="", store_key="rule_variant.cli:dm:t") == "rule2"
+    assert await services.store.state_get("cli:dm:t", "rule_variant") == "rule2"
 
 
 async def test_both_dialects_use_same_roller_for_same_seed_and_expression():
@@ -207,7 +207,7 @@ async def test_initiative_subcommands_share_tracker_and_next_never_rolls():
     assert advanced.events == ()
     assert "Kael" in advanced.text
     order = json.loads(
-        await services.store.get(user_key="", store_key=f"initiative.{ctx.chat_key}") or "[]"
+        await services.store.state_get(ctx.chat_key, "initiative") or "[]"
     )
     assert [entry["name"] for entry in order] == ["Kael", "Mage", "Goblin"]
 
@@ -215,7 +215,7 @@ async def test_initiative_subcommands_share_tracker_and_next_never_rolls():
     assert rolled is not None
     assert len(rolled.events) == 1
     order_after_roll = json.loads(
-        await services.store.get(user_key="", store_key=f"initiative.{ctx.chat_key}") or "[]"
+        await services.store.state_get(ctx.chat_key, "initiative") or "[]"
     )
     assert order_after_roll == order
 
@@ -223,7 +223,7 @@ async def test_initiative_subcommands_share_tracker_and_next_never_rolls():
     assert cleared is not None
     assert cleared.events == ()
     assert json.loads(
-        await services.store.get(user_key="", store_key=f"initiative.{ctx.chat_key}") or "[]"
+        await services.store.state_get(ctx.chat_key, "initiative") or "[]"
     ) == []
 
 

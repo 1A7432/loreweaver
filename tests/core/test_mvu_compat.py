@@ -1,17 +1,17 @@
 """Tests for core.mvu_compat: InitVar detection + JSON5-lite parsing, the five pure MVU path
 ops, ``<UpdateVariable>`` block extraction/tokenizing, tolerant command application, flattening,
-defensive tree normalization, and the thin async `MvuManager` persistence wrapper over an
-in-memory `infra.store.Store`.
+defensive tree normalization, and the thin async document-persistence functions
+(`load_mvu`/`save_mvu`/...) over an in-memory `infra.store.Store`, via `core.documents.DocumentStore`.
 """
 
 from __future__ import annotations
 
 import pytest
 
+from core.documents import DocumentStore
 from core.mvu_compat import (
     MAX_TREE_DEPTH,
     MAX_TREE_NODES,
-    MvuManager,
     apply_add,
     apply_commands,
     apply_delete,
@@ -22,6 +22,14 @@ from core.mvu_compat import (
     is_initvar_entry,
     is_value_with_desc,
     leaf_value,
+    load_mvu,
+    mvu_apply_text,
+    mvu_expose,
+    mvu_exposed_prefixes,
+    mvu_flatten,
+    mvu_has_data,
+    mvu_hide,
+    mvu_init_from_initvar,
     normalize_tree,
     parse_initvar,
     parse_update_blocks,
@@ -562,84 +570,86 @@ def test_normalize_tree_caps_total_nodes():
 
 
 # ---------------------------------------------------------------------------
-# MvuManager — persistence wrapper
+# Document persistence — load_mvu/save_mvu/mvu_* wrappers
 # ---------------------------------------------------------------------------
 
 
-async def test_manager_load_on_a_fresh_room_is_empty():
-    manager = MvuManager(Store())
-    assert await manager.load("room1") == {}
-    assert await manager.has_data("room1") is False
+async def test_load_mvu_on_a_fresh_room_is_empty():
+    documents = DocumentStore(Store())
+    assert await load_mvu(documents, "room1") == {}
+    assert await mvu_has_data(documents, "room1") is False
 
 
-async def test_manager_load_tolerates_corrupt_stored_json():
-    store = Store()
-    await store.set(user_key="", store_key="mvu_data.room1", value="{not json")
-    assert await MvuManager(store).load("room1") == {}
-    await store.set(user_key="", store_key="mvu_data.room1", value="[1, 2]")
-    assert await MvuManager(store).load("room1") == {}
+async def test_load_mvu_tolerates_a_malformed_stored_document():
+    documents = DocumentStore(Store())
+    await documents.put("room1", "mvu_tree", "mvu", {"tree": "not-a-dict"})
+    assert await load_mvu(documents, "room1") == {}
+    await documents.put("room1", "mvu_tree", "mvu", {"tree": [1, 2]})
+    assert await load_mvu(documents, "room1") == {}
 
 
-async def test_manager_init_from_initvar_merge_existing_wins():
-    manager = MvuManager(Store())
+async def test_init_from_initvar_merge_existing_wins():
+    documents = DocumentStore(Store())
     parsed = parse_initvar(INITVAR_TEXT)
-    assert await manager.init_from_initvar("room1", parsed) is True
-    await manager.apply_text("room1", NARRATION)  # progress: 好感度 33 → 35, day 1 → 2
-    assert await manager.init_from_initvar("room1", parsed) is False  # nothing new
-    tree = await manager.load("room1")
+    assert await mvu_init_from_initvar(documents, "room1", parsed) is True
+    await mvu_apply_text(documents, "room1", NARRATION)  # progress: 好感度 33 → 35, day 1 → 2
+    assert await mvu_init_from_initvar(documents, "room1", parsed) is False  # nothing new
+    tree = await load_mvu(documents, "room1")
     assert tree["理"]["好感度"] == [35, "对主角的好感"]  # re-import kept the progress
     assert tree["世界"]["day"] == 2
-    assert await manager.init_from_initvar("room1", {"新章节": {"进度": 0}}) is True
-    tree = await manager.load("room1")
+    assert await mvu_init_from_initvar(documents, "room1", {"新章节": {"进度": 0}}) is True
+    tree = await load_mvu(documents, "room1")
     assert tree["新章节"] == {"进度": 0}
     assert tree["理"]["好感度"] == [35, "对主角的好感"]
 
 
-async def test_manager_apply_text_end_to_end_persists():
-    manager = MvuManager(Store())
-    await manager.init_from_initvar("room1", parse_initvar(INITVAR_TEXT))
-    cleaned, applied, errors = await manager.apply_text("room1", NARRATION)
+async def test_apply_text_end_to_end_persists():
+    documents = DocumentStore(Store())
+    await mvu_init_from_initvar(documents, "room1", parse_initvar(INITVAR_TEXT))
+    cleaned, applied, errors = await mvu_apply_text(documents, "room1", NARRATION)
     assert cleaned == "他微微一笑。\n\n雨停了。"
     assert [command["op"] for command in applied] == ["set", "add"]
     assert applied[0]["reason"] == "pleasant discussion"
     assert errors == []
-    tree = await manager.load("room1")
+    tree = await load_mvu(documents, "room1")
     assert tree["理"]["好感度"] == [35, "对主角的好感"]
     assert tree["世界"]["day"] == 2
 
 
-async def test_manager_apply_text_without_block_is_a_no_op():
-    manager = MvuManager(Store())
-    cleaned, applied, errors = await manager.apply_text("room1", "plain narration")
+async def test_apply_text_without_block_is_a_no_op():
+    documents = DocumentStore(Store())
+    cleaned, applied, errors = await mvu_apply_text(documents, "room1", "plain narration")
     assert (cleaned, applied, errors) == ("plain narration", [], [])
-    assert await manager.has_data("room1") is False
+    assert await mvu_has_data(documents, "room1") is False
 
 
-async def test_manager_apply_text_all_failing_commands_saves_nothing():
-    manager = MvuManager(Store())
-    cleaned, applied, errors = await manager.apply_text("room1", "<UpdateVariable>_.delete('ghost')</UpdateVariable>")
+async def test_apply_text_all_failing_commands_saves_nothing():
+    documents = DocumentStore(Store())
+    cleaned, applied, errors = await mvu_apply_text(
+        documents, "room1", "<UpdateVariable>_.delete('ghost')</UpdateVariable>"
+    )
     assert cleaned == "" and applied == [] and len(errors) == 1
-    assert await manager.has_data("room1") is False
+    assert await mvu_has_data(documents, "room1") is False
 
 
-async def test_manager_state_is_scoped_per_chat_key():
-    manager = MvuManager(Store())
-    assert await manager.init_from_initvar("room1", {"a": 1}) is True
-    assert await manager.has_data("room1") is True
-    assert await manager.has_data("room2") is False
-    assert await manager.load("room2") == {}
+async def test_mvu_state_is_scoped_per_chat_key():
+    documents = DocumentStore(Store())
+    assert await mvu_init_from_initvar(documents, "room1", {"a": 1}) is True
+    assert await mvu_has_data(documents, "room1") is True
+    assert await mvu_has_data(documents, "room2") is False
+    assert await load_mvu(documents, "room2") == {}
 
 
-async def test_manager_flatten_wrapper_and_has_data():
-    manager = MvuManager(Store())
-    await manager.init_from_initvar("room1", parse_initvar(INITVAR_TEXT))
-    entries = await manager.flatten("room1", 3)
+async def test_mvu_flatten_wrapper_and_has_data():
+    documents = DocumentStore(Store())
+    await mvu_init_from_initvar(documents, "room1", parse_initvar(INITVAR_TEXT))
+    entries = await mvu_flatten(documents, "room1", 3)
     assert entries == [
         {"path": "理.情绪状态.pleasure", "value": 0.1},
         {"path": "理.好感度", "value": 33},
         {"path": "世界.link", "value": "https://example.com/wiki//page"},
     ]
-    assert await manager.has_data("room1") is True
+    assert await mvu_has_data(documents, "room1") is True
 
 
 # ---------------------------------------------------------------------------
@@ -657,28 +667,26 @@ def test_path_is_exposed_is_segment_aligned_and_star_exposes_all():
     assert path_is_exposed("anything.at.all", ["*"])
 
 
-@pytest.mark.asyncio
-async def test_expose_hide_round_trip_with_caps_and_corrupt_store():
-    from core.mvu_compat import MAX_EXPOSED_PREFIXES, MvuManager
+async def test_expose_hide_round_trip_with_caps_and_malformed_document():
+    from core.mvu_compat import MAX_EXPOSED_PREFIXES
 
-    store = Store()
-    manager = MvuManager(store)
-    assert await manager.exposed_prefixes("room1") == []
+    documents = DocumentStore(Store())
+    assert await mvu_exposed_prefixes(documents, "room1") == []
 
-    assert await manager.expose("room1", " 理. ") is True  # trimmed + normalized
-    assert await manager.expose("room1", "理") is False  # duplicate
-    assert await manager.expose("room1", "   ") is False  # unusable
-    assert await manager.exposed_prefixes("room1") == ["理"]
+    assert await mvu_expose(documents, "room1", " 理. ") is True  # trimmed + normalized
+    assert await mvu_expose(documents, "room1", "理") is False  # duplicate
+    assert await mvu_expose(documents, "room1", "   ") is False  # unusable
+    assert await mvu_exposed_prefixes(documents, "room1") == ["理"]
 
-    assert await manager.hide("room1", "理") is True
-    assert await manager.hide("room1", "理") is False
-    assert await manager.exposed_prefixes("room1") == []
+    assert await mvu_hide(documents, "room1", "理") is True
+    assert await mvu_hide(documents, "room1", "理") is False
+    assert await mvu_exposed_prefixes(documents, "room1") == []
 
-    # Corrupt stored value degrades to the fail-closed default.
-    await store.set(user_key="", store_key="mvu_exposed.room1", value="{not json")
-    assert await manager.exposed_prefixes("room1") == []
+    # A malformed stored document degrades to the fail-closed default.
+    await documents.put("room1", "mvu_tree", "mvu", {"tree": {}, "exposed": "not-a-list"})
+    assert await mvu_exposed_prefixes(documents, "room1") == []
 
     # The list cap holds.
     for index in range(MAX_EXPOSED_PREFIXES + 5):
-        await manager.expose("room2", f"p{index}")
-    assert len(await manager.exposed_prefixes("room2")) == MAX_EXPOSED_PREFIXES
+        await mvu_expose(documents, "room2", f"p{index}")
+    assert len(await mvu_exposed_prefixes(documents, "room2")) == MAX_EXPOSED_PREFIXES

@@ -12,8 +12,9 @@ The ST/MVU-style root prefixes ``variables.`` and ``stat_data.`` are stripped be
 land in the same space. Missing paths resolve to `None` — expression semantics (fail-closed
 conditions) live in `core.condexpr`, not here.
 
-Load once per prompt/state build: `load_resolver` reads both stores a single time and returns a
-pure synchronous closure, so a build over many worldbook entries costs two KV reads total.
+Load once per prompt/state build: `load_resolver` reads both variable documents a single time
+and returns a pure synchronous closure, so a build over many worldbook entries costs two
+document reads total.
 """
 
 from __future__ import annotations
@@ -21,8 +22,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from core.modvars import ModvarManager
-from core.mvu_compat import MvuManager, is_value_with_desc, leaf_value
+from core.documents import KEEPER_VIEWER, MODVARS_ID, PLAYER_VIEWER, DocumentStore
+from core.modvars import MODVARS_DOC_TYPE
+from core.mvu_compat import is_value_with_desc, leaf_value, load_mvu
 
 _ROOT_PREFIXES = ("variables.", "stat_data.")
 
@@ -61,19 +63,32 @@ def _walk_tree(tree: Any, path: str) -> Any:
     return leaf_value(node) if is_value_with_desc(node) else node
 
 
-async def load_resolver(store: Any, chat_key: str, *, player_view: bool = False) -> Callable[[str], Any]:
-    """Load both variable stores once and return the pure resolver over them.
-
-    ``player_view=True`` builds the PLAYER-SIDE resolver (iron rule #3): keeper-only modvars
-    are filtered out structurally, so template rendering inside an NPC/companion actor's
-    context — or any other player-facing surface — can never observe them. The MVU tree has
-    no visibility concept upstream and is included whole in both views.
-    """
-    modvar_state = await ModvarManager(store).load(chat_key)
-    mvu_tree = await MvuManager(store).load(chat_key)
-    values = {
-        var_id: modvar_state["values"][var_id]
-        for var_id, spec in modvar_state["specs"].items()
-        if not player_view or spec.get("visibility") == "player"
+def modvar_values_from_view(view: dict[str, Any] | None) -> dict[str, Any]:
+    """Flat ``{id: value}`` from a projected `modvars` view, defaults filled in."""
+    if not isinstance(view, dict):
+        return {}
+    specs = view.get("specs")
+    values = view.get("values")
+    specs = specs if isinstance(specs, dict) else {}
+    values = values if isinstance(values, dict) else {}
+    return {
+        var_id: values.get(var_id, spec.get("default") if isinstance(spec, dict) else None)
+        for var_id, spec in specs.items()
     }
-    return build_resolver(values, mvu_tree)
+
+
+async def load_resolver(store: Any, chat_key: str, *, player_view: bool = False) -> Callable[[str], Any]:
+    """Load both variable documents once and return the pure resolver over them.
+
+    ``player_view=True`` builds the PLAYER-SIDE resolver (iron rule #3): the `modvars`
+    document is read through its PLAYER projection, so keeper-only trackers are filtered
+    out structurally and template rendering inside an NPC/companion actor's context — or
+    any other player-facing surface — can never observe them. The MVU tree has no
+    visibility concept upstream and is included whole in both views (server-side template
+    rendering, not transport).
+    """
+    documents = DocumentStore(store)
+    viewer = PLAYER_VIEWER if player_view else KEEPER_VIEWER
+    view = await documents.get_view(chat_key, MODVARS_DOC_TYPE, MODVARS_ID, viewer)
+    mvu_tree = await load_mvu(documents, chat_key)
+    return build_resolver(modvar_values_from_view(view), mvu_tree)

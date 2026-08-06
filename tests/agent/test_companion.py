@@ -19,14 +19,15 @@ from __future__ import annotations
 
 import json
 
+from agent import npc as npc_records
 from agent.companion_actor import companion_action
 from agent.context import AgentCtx
 from agent.kp_tools import build_kp_toolset
 from agent.kp_tools_companion import CompanionTools, witness
-from agent.npc import NpcManager
 from agent.services import build_services
 from core.character_manager import CharacterSheet
 from core.dice_engine import seed_dice
+from core.documents import DocumentStore
 from gateway.commands import CommandRouter
 from gateway.director import MAX_COMPANION_TURNS, request_companion, run_combat_round, run_companion_turn
 from gateway.hub import Event, RoomHub
@@ -80,11 +81,11 @@ async def test_companion_action_never_sees_keeper_pool_or_other_secrets():
         store_key=f"module_keeper_pool.{chat_key}",
         value=json.dumps({"truths": [{"description": SENTINEL}], "npcs": [{"name": "Villain", "secret": SENTINEL}]}),
     )
-    npcs = NpcManager(store)
-    await npcs.create_npc(chat_key, "Villain", secret_agenda=SENTINEL, knowledge=[SENTINEL])
+    npcs = DocumentStore(store)
+    await npc_records.create_npc(npcs, chat_key, "Villain", secret_agenda=SENTINEL, knowledge=[SENTINEL])
 
     # The companion under test knows nothing of any of that.
-    companion = await npcs.create_companion(
+    companion = await npc_records.create_companion(npcs,
         chat_key,
         "Silas",
         persona="A steady gunslinger with a dry wit.",
@@ -135,7 +136,7 @@ async def test_companion_action_renders_its_prompt_in_the_ROOM_locale():
 
     services = build_services(Settings(), llm=FakeLLM(responder=responder), embeddings=FakeEmbeddings(8))
     assert services.i18n.locale == "en"
-    record = await NpcManager(Store(":memory:")).create_companion("zh-room", "沈墨")
+    record = await npc_records.create_companion(DocumentStore(Store(":memory:")), "zh-room", "沈墨")
 
     await companion_action(services, record, CharacterSheet(name="沈墨"), "地窖里有刮擦声。", locale="zh")
 
@@ -150,7 +151,7 @@ async def test_companion_action_falls_back_to_raw_content_when_reply_is_not_json
     services = build_services(
         Settings(), llm=FakeLLM(script=[assistant_text("I kick the door in.")]), embeddings=FakeEmbeddings(8)
     )
-    record = await NpcManager(Store(":memory:")).create_companion("fallback-room", "Silas")
+    record = await npc_records.create_companion(DocumentStore(Store(":memory:")), "fallback-room", "Silas")
     out = await companion_action(services, record, CharacterSheet(name="Silas"), "The door is locked.")
     assert out == {"action": "I kick the door in.", "dialogue": ""}
 
@@ -188,8 +189,8 @@ async def test_companion_acts_through_pipeline_with_real_dice_on_its_own_sheet()
     tools = CompanionTools(services)
     await tools.add_companion(_ctx(chat_key), name="Silas", persona="A steady gunslinger.", playstyle="cover fire")
 
-    npcs = NpcManager(store)
-    companion = await npcs.get_npc(chat_key, "Silas")
+    npcs = DocumentStore(store)
+    companion = await npc_records.get_npc(npcs, chat_key, "Silas")
     # Give the companion Firearms(handgun) 60 on its OWN sheet, under the virtual user_key.
     sheet = await services.characters.get_character(f"companion:{companion.id}", chat_key)
     sheet.skills["手枪"] = 60
@@ -264,10 +265,10 @@ async def test_director_requests_one_and_runs_a_capped_ordered_pass_aware_round(
         await tools.add_companion(_ctx(chat_key), name=name)
 
     # Initiative order: Cid (20) > Ada (15) > Ben (10).
-    await store.set(
-        user_key="",
-        store_key=f"initiative.{chat_key}",
-        value=json.dumps([{"name": "Cid", "init": 20}, {"name": "Ada", "init": 15}, {"name": "Ben", "init": 10}]),
+    await store.state_set(
+        chat_key,
+        "initiative",
+        json.dumps([{"name": "Cid", "init": 20}, {"name": "Ada", "init": 15}, {"name": "Ben", "init": 10}]),
     )
 
     hub = RoomHub()
@@ -302,7 +303,7 @@ async def test_request_companion_returns_none_for_a_non_companion_name():
     chat_key = "empty-room"
     services = build_services(Settings(), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(8))
     # a keeper NPC is NOT a companion and must not be driven as one
-    await NpcManager(services.store).create_npc(chat_key, "Elias Crane")
+    await npc_records.create_npc(services.documents, chat_key, "Elias Crane")
     result = await request_companion(
         RoomHub(),
         services,
@@ -328,8 +329,8 @@ async def test_add_companion_creates_player_companion_record_and_real_sheet():
     added = await tools.add_companion(ctx, name="Silas", persona="A steady gunslinger.", playstyle="cover fire")
     assert "Silas" in added
 
-    npcs = NpcManager(services.store)
-    companion = await npcs.get_npc(chat_key, "Silas")
+    npcs = services.documents
+    companion = await npc_records.get_npc(npcs, chat_key, "Silas")
     assert companion is not None
     assert companion.role == "player_companion"
     assert companion.is_pc is True
@@ -348,15 +349,15 @@ async def test_companion_steering_tools_persist():
     services = build_services(Settings(locale="en"), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(8))
     tools = CompanionTools(services)
     ctx = _ctx(chat_key)
-    npcs = NpcManager(services.store)
+    npcs = services.documents
 
     await tools.add_companion(ctx, name="Silas")
 
     # party_auto toggles and persists to the store.
     await tools.party_auto(ctx, "on")
-    assert await services.store.get(user_key="", store_key=f"party_auto.{chat_key}") == "1"
+    assert await services.store.state_get(chat_key, "party_auto") == "1"
     await tools.party_auto(ctx, "off")
-    assert await services.store.get(user_key="", store_key=f"party_auto.{chat_key}") == "0"
+    assert await services.store.state_get(chat_key, "party_auto") == "0"
 
     # list surfaces the companion.
     assert "Silas" in await tools.list_companions(ctx)
@@ -364,32 +365,32 @@ async def test_companion_steering_tools_persist():
     # set_companion_playstyle persists.
     set_result = await tools.set_companion_playstyle(ctx, "Silas", "reckless brawler")
     assert "reckless brawler" in set_result
-    assert (await npcs.get_npc(chat_key, "Silas")).playstyle == "reckless brawler"
+    assert (await npc_records.get_npc(npcs, chat_key, "Silas")).playstyle == "reckless brawler"
 
     # companion_learns grows player-scoped knowledge.
     learn_result = await tools.companion_learns(ctx, "Silas", "The cellar door is unlocked.")
     assert "The cellar door is unlocked." in learn_result
-    assert "The cellar door is unlocked." in (await npcs.get_npc(chat_key, "Silas")).knowledge
+    assert "The cellar door is unlocked." in (await npc_records.get_npc(npcs, chat_key, "Silas")).knowledge
 
     # remove deletes the record.
     assert "Silas" in await tools.remove_companion(ctx, "Silas")
-    assert await npcs.get_npc(chat_key, "Silas") is None
-    assert await npcs.list_companions(chat_key) == []
+    assert await npc_records.get_npc(npcs, chat_key, "Silas") is None
+    assert await npc_records.list_companions(npcs, chat_key) == []
 
 
 async def test_witness_grows_companion_knowledge_but_not_keeper_npcs():
     chat_key = "witness-room"
     services = build_services(Settings(), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(8))
-    npcs = NpcManager(services.store)
-    await npcs.create_companion(chat_key, "Ada")
-    await npcs.create_companion(chat_key, "Ben")
-    await npcs.create_npc(chat_key, "Villain")  # a keeper NPC -- must NOT receive party discoveries
+    npcs = services.documents
+    await npc_records.create_companion(npcs, chat_key, "Ada")
+    await npc_records.create_companion(npcs, chat_key, "Ben")
+    await npc_records.create_npc(npcs, chat_key, "Villain")  # a keeper NPC -- must NOT receive party discoveries
 
     await witness(services, chat_key, "The vault code is 1926.")
 
-    assert "The vault code is 1926." in (await npcs.get_npc(chat_key, "Ada")).knowledge
-    assert "The vault code is 1926." in (await npcs.get_npc(chat_key, "Ben")).knowledge
-    assert "The vault code is 1926." not in (await npcs.get_npc(chat_key, "Villain")).knowledge
+    assert "The vault code is 1926." in (await npc_records.get_npc(npcs, chat_key, "Ada")).knowledge
+    assert "The vault code is 1926." in (await npc_records.get_npc(npcs, chat_key, "Ben")).knowledge
+    assert "The vault code is 1926." not in (await npc_records.get_npc(npcs, chat_key, "Villain")).knowledge
 
 
 def test_companion_tools_registered_and_player_safe_in_build_kp_toolset():
@@ -451,7 +452,7 @@ async def test_companion_turn_never_feeds_room_wide_session_events_to_the_actor(
     services = build_services(
         Settings(locale="en"), llm=FakeLLM(responder=responder), embeddings=FakeEmbeddings(8), store=store
     )
-    companion = await NpcManager(store).create_companion(chat_key, "Silas")
+    companion = await npc_records.create_companion(DocumentStore(store), chat_key, "Silas")
 
     # A room-wide session key-event the companion has NOT personally witnessed.
     await services.battles.start_session(chat_key)

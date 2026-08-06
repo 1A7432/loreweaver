@@ -43,9 +43,9 @@ async def set_target_avatar(
     target: str,
     avatar: dict[str, Any] | None,
 ) -> CharacterSheet:
-    from agent.npc import NpcManager
+    from agent import npc as npc_records
 
-    record = await NpcManager(services.store).get_npc(chat_key, target)
+    record = await npc_records.get_npc(services.documents, chat_key, target)
     if record is None or not record.stat_char:
         raise AvatarError("avatar_target_not_found")
 

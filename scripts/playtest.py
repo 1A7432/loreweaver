@@ -666,14 +666,14 @@ async def _behavior_snapshot(services: Any, ctx: AgentCtx) -> dict[str, Any]:
     scene_doc = await services.documents.get_singleton(ctx.chat_key, "scene")
     notes = dict(scene_doc.data) if scene_doc is not None else {}
     notes = {"current_scene": notes.get("name"), "current_focus": notes.get("focus")}
-    clock = _loads(await services.store.get(store_key=f"game_clock.{ctx.chat_key}"), {})
+    clock = _loads(await services.store.state_get(ctx.chat_key, "game_clock"), {})
     sheet = await services.characters.get_character(ctx.uid(), ctx.chat_key)
     hp = get_hit_points(sheet) if sheet.name != "default" else (None, None)
     roster = await services.characters.get_party_roster(ctx.chat_key)
     member = next((item for item in roster if item.get("name") == sheet.name), {})
     session = await services.battles.generator.get_current_session(ctx.chat_key)
-    initiative = _loads(await services.store.get(store_key=f"initiative.{ctx.chat_key}"), [])
-    initiative_meta = _loads(await services.store.get(store_key=f"initiative_meta.{ctx.chat_key}"), {})
+    initiative = _loads(await services.store.state_get(ctx.chat_key, "initiative"), [])
+    initiative_meta = _loads(await services.store.state_get(ctx.chat_key, "initiative_meta"), {})
     return {
         "scene": notes.get("current_scene"),
         "focus": notes.get("current_focus"),
@@ -826,10 +826,7 @@ async def _setup_behavior_episode(
         scene_data = {"name": setup.get("scene") or "", "focus": setup.get("focus") or ""}
         await services.documents.put_singleton(ctx.chat_key, "scene", scene_data)
     if "clock" in setup:
-        await services.store.set(
-            store_key=f"game_clock.{ctx.chat_key}",
-            value=json.dumps({"current_time": setup["clock"], "events": []}, ensure_ascii=False),
-        )
+        await services.store.state_set(ctx.chat_key, "game_clock", json.dumps({"current_time": setup["clock"], "events": []}, ensure_ascii=False))
     await services.battles.start_session(ctx.chat_key, f"behavior-{episode['id']}")
     for entry in setup.get("initiative", []):
         await toolset.dispatch(
@@ -1174,9 +1171,9 @@ async def _setup(services, ts, module_path: Path, companion_path: Path | None, c
     kp_ctx = AgentCtx(chat_key=chat_key, user_id="playtest:setup", platform="cli", locale="en", fs=fs)
     # seed + analyze the module via the real Keeper LLM
     text = module_path.read_text(encoding="utf-8")
-    await services.store.set(store_key=f"module_fulltext.{chat_key}", value=text)
+    await services.store.state_set(chat_key, "module_fulltext", text)
     await services.module_init.initialize(chat_key)
-    status = await services.store.get(store_key=f"module_init_status.{chat_key}")
+    status = await services.store.state_get(chat_key, "module_init_status")
     pool_doc = await services.documents.get_singleton(chat_key, "module_pool")
     keeper_pool = json.dumps((pool_doc.data.get("keeper") if pool_doc else None) or {}, ensure_ascii=False) if pool_doc else ""
     rec.emit("setup", chat_key=chat_key, module=str(module_path), module_status=status,

@@ -1,6 +1,6 @@
 """AI-KP tools for deterministic module variables (author/keeper-declared trackers).
 
-`ModuleVarTools` is the function-calling surface over `core.modvars.ModvarManager`: the Keeper
+`ModuleVarTools` is the function-calling surface over `core.modvars`: the Keeper
 declares a variable once (`define_variable` — kind, bounds, visibility, display label) and then
 nudges/sets it as play evolves. Per iron rule #1 (deterministic vs generative split) every write is
 validated and clamped by `core.modvars` — the model only narrates around the resulting values;
@@ -25,12 +25,16 @@ from agent.tools import tool
 from core.modvars import (
     KINDS,
     VISIBILITIES,
-    ModvarManager,
+    adjust_modvar,
     build_spec,
+    define_modvar,
     label_for,
+    load_modvars,
     normalize_id,
+    remove_modvar,
+    set_modvar,
 )
-from core.mvu_compat import MvuManager
+from core.mvu_compat import load_mvu, mvu_flatten, mvu_has_data, save_mvu
 from infra.i18n import I18n
 
 
@@ -43,9 +47,6 @@ class ModuleVarTools:
     def _i18n(self, ctx: AgentCtx) -> I18n:
         return self._services.i18n.with_locale(ctx.locale)
 
-    def _manager(self) -> ModvarManager:
-        return ModvarManager(self._services.store)
-
     def _language(self, ctx: AgentCtx) -> str:
         return (ctx.locale or "en").split("-")[0].lower()
 
@@ -53,7 +54,7 @@ class ModuleVarTools:
         """Resolve a model-supplied id to a defined variable's (id, spec), or (None, None) after
         composing the localized error into the second slot — callers return the error string."""
         slug = normalize_id(var_id)
-        state = await self._manager().load(ctx.chat_key)
+        state = await load_modvars(self._services.documents, ctx.chat_key)
         if slug is not None and slug in state["specs"]:
             return slug, state["specs"][slug]
         if not state["specs"]:
@@ -121,8 +122,8 @@ class ModuleVarTools:
                 default=default,
                 options=options,
             )
-            await self._manager().define(ctx.chat_key, spec)
-            state = await self._manager().load(ctx.chat_key)
+            await define_modvar(self._services.documents, ctx.chat_key, spec)
+            state = await load_modvars(self._services.documents, ctx.chat_key)
             return i18n.t(
                 "modvars.tools.define.done",
                 label=label_for(spec, ctx.locale),
@@ -152,7 +153,7 @@ class ModuleVarTools:
         if slug is None:
             return spec_or_error["error"]
         try:
-            old, new = await self._manager().set(ctx.chat_key, slug, value)
+            old, new = await set_modvar(self._services.documents, ctx.chat_key, slug, value)
             return i18n.t(
                 "modvars.tools.set.done", label=label_for(spec_or_error, ctx.locale), id=slug, old=old, new=new
             )
@@ -178,7 +179,7 @@ class ModuleVarTools:
         if slug is None:
             return spec_or_error["error"]
         try:
-            old, new = await self._manager().adjust(ctx.chat_key, slug, delta)
+            old, new = await adjust_modvar(self._services.documents, ctx.chat_key, slug, delta)
             return i18n.t(
                 "modvars.tools.adjust.done",
                 label=label_for(spec_or_error, ctx.locale),
@@ -206,7 +207,7 @@ class ModuleVarTools:
         if slug is None:
             return spec_or_error["error"]
         try:
-            await self._manager().remove(ctx.chat_key, slug)
+            await remove_modvar(self._services.documents, ctx.chat_key, slug)
             return i18n.t("modvars.tools.remove.done", label=label_for(spec_or_error, ctx.locale), id=slug)
         except Exception as exc:
             return i18n.t("modvars.tools.failed", error=str(exc))
@@ -229,9 +230,6 @@ class MvuStatTools:
     def _i18n(self, ctx: AgentCtx) -> I18n:
         return self._services.i18n.with_locale(ctx.locale)
 
-    def _manager(self) -> MvuManager:
-        return MvuManager(self._services.store)
-
     @tool
     async def get_stat(self, ctx: AgentCtx, path: str = "") -> str:
         """Read the imported card's variable tree (MVU stat data), either one value or the
@@ -246,17 +244,17 @@ class MvuStatTools:
         """
         i18n = self._i18n(ctx)
         try:
-            manager = self._manager()
-            if not await manager.has_data(ctx.chat_key):
+            documents = self._services.documents
+            if not await mvu_has_data(documents, ctx.chat_key):
                 return i18n.t("modvars.stat.empty")
             if path.strip():
-                leaves = await manager.flatten(ctx.chat_key, 512)
+                leaves = await mvu_flatten(documents, ctx.chat_key, 512)
                 wanted = path.strip()
                 for leaf in leaves:
                     if leaf["path"] == wanted:
                         return i18n.t("modvars.stat.get.value", path=wanted, value=leaf["value"])
                 return i18n.t("modvars.stat.get.missing", path=wanted)
-            leaves = await manager.flatten(ctx.chat_key, 100)
+            leaves = await mvu_flatten(documents, ctx.chat_key, 100)
             lines = [i18n.t("modvars.stat.get.header")]
             lines.extend(
                 i18n.t("modvars.stat.get.item", path=leaf["path"], value=leaf["value"]) for leaf in leaves
@@ -283,12 +281,12 @@ class MvuStatTools:
         try:
             from core.mvu_compat import apply_set, leaf_value
 
-            manager = self._manager()
-            tree = await manager.load(ctx.chat_key)
+            documents = self._services.documents
+            tree = await load_mvu(documents, ctx.chat_key)
             parsed = _parse_stat_value(value)
             old = _stat_at(tree, path.strip())
             new_tree = apply_set(tree, path.strip(), parsed)
-            await manager.save(ctx.chat_key, new_tree)
+            await save_mvu(documents, ctx.chat_key, new_tree)
             shown_old = leaf_value(old) if isinstance(old, list) else old
             return i18n.t("modvars.stat.set.done", path=path.strip(), old=shown_old, new=parsed)
         except Exception as exc:
@@ -310,11 +308,11 @@ class MvuStatTools:
         try:
             from core.mvu_compat import apply_add
 
-            manager = self._manager()
-            tree = await manager.load(ctx.chat_key)
+            documents = self._services.documents
+            tree = await load_mvu(documents, ctx.chat_key)
             old = _stat_leaf(tree, path.strip())
             new_tree = apply_add(tree, path.strip(), delta)
-            await manager.save(ctx.chat_key, new_tree)
+            await save_mvu(documents, ctx.chat_key, new_tree)
             new = _stat_leaf(new_tree, path.strip())
             return i18n.t("modvars.stat.adjust.done", path=path.strip(), old=old, new=new, delta=delta)
         except Exception as exc:

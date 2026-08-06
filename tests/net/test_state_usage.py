@@ -29,10 +29,7 @@ async def test_build_room_state_surfaces_usage_when_stats_are_seeded():
     services = _services()
     ctx = _room_ctx("usage-room")
 
-    await services.store.set(
-        user_key="",
-        store_key=f"usage_stats.{ctx.chat_key}",
-        value=json.dumps(
+    await services.store.state_set(ctx.chat_key, "usage_stats", json.dumps(
             {
                 "last": {"prompt": 3000, "completion": 400, "cache_hit": 1000, "cache_miss": 2000, "context_window": 128000},
                 "session": {"prompt": 9000, "completion": 1200, "cache_hit": 2500, "cache_miss": 6500, "turns": 3},
@@ -65,7 +62,7 @@ async def test_build_room_state_omits_usage_on_corrupt_stats():
     services = _services()
     ctx = _room_ctx("usage-room-corrupt")
 
-    await services.store.set(user_key="", store_key=f"usage_stats.{ctx.chat_key}", value="{not valid json")
+    await services.store.state_set(ctx.chat_key, "usage_stats", "{not valid json")
 
     state = await build_room_state(services, ctx)
 
@@ -78,10 +75,7 @@ async def test_build_room_state_usage_tolerates_missing_subfields():
 
     # A "last"-only payload (e.g. a very first recorded turn, or a hand-edited
     # store) with no "session" key yet -- every session.* field defaults to 0.
-    await services.store.set(
-        user_key="",
-        store_key=f"usage_stats.{ctx.chat_key}",
-        value=json.dumps({"last": {"prompt": 500, "context_window": 65536}}),
+    await services.store.state_set(ctx.chat_key, "usage_stats", json.dumps({"last": {"prompt": 500, "context_window": 65536}}),
     )
 
     state = await build_room_state(services, ctx)

@@ -301,7 +301,7 @@ async def _kp_enabled(services: Services, chat_key: str) -> bool:
     see `gateway.commands.cmd_bot_toggle` and `GatewayRunner._bot_enabled`);
     only an explicit "0" mutes the KP, so existing rooms keep today's behavior.
     """
-    value = await services.store.get(user_key="", store_key=f"bot_enabled.{chat_key}")
+    value = await services.store.state_get(chat_key, "bot_enabled")
     return value != "0"
 
 

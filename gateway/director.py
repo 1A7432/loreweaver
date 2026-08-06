@@ -29,10 +29,11 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
+from agent import npc as npc_records
 from agent.companion_actor import companion_action
 from agent.context import AgentCtx
 from agent.kp_tools import build_kp_toolset
-from agent.npc import NpcManager, NpcRecord
+from agent.npc import NpcRecord
 from core.character_manager import CharacterDataError
 from gateway.turn import run_turn
 
@@ -134,8 +135,8 @@ async def request_companion(
     name matches no companion (or the companion passes). Never iterates the party -- this is the
     single-actor path, the anti-runaway counterpart to :func:`run_combat_round`.
     """
-    npcs = NpcManager(services.store)
-    companion = await npcs.get_npc(chat_key, name)
+    documents = services.documents
+    companion = await npc_records.get_npc(documents, chat_key, name)
     if companion is None or companion.role != "player_companion":
         return None
     return await run_companion_turn(
@@ -170,8 +171,8 @@ async def run_combat_round(
     for a companion that passed. At most ``max_turns`` companions are processed (the anti-runaway
     cap). A companion turn never recursively schedules another -- only this loop schedules turns.
     """
-    npcs = NpcManager(services.store)
-    companions = await npcs.list_companions(chat_key)
+    documents = services.documents
+    companions = await npc_records.list_companions(documents, chat_key)
     ordered = await _order_by_initiative(services, chat_key, companions)
 
     results: list[tuple[str, KPTurnResult | None]] = []
@@ -251,7 +252,7 @@ async def _party_auto_enabled(services: Services, chat_key: str) -> bool:
     """Whether `.party auto` is on for `chat_key` (mirrors `agent.kp_tools_companion.party_auto`'s
     ``party_auto.{chat_key}`` store key -- ``"1"`` means on)."""
     try:
-        value = await services.store.get(user_key="", store_key=f"party_auto.{chat_key}")
+        value = await services.store.state_get(chat_key, "party_auto")
     except Exception:
         return False
     return value == "1"
@@ -287,7 +288,7 @@ async def _order_by_initiative(
 async def _initiative_order(services: Services, chat_key: str) -> list[str]:
     """The initiative-tracker names for ``chat_key``, in turn order (highest initiative first)."""
     try:
-        raw = await services.store.get(user_key="", store_key=f"initiative.{chat_key}")
+        raw = await services.store.state_get(chat_key, "initiative")
         entries = json.loads(raw) if raw else []
     except Exception:
         return []

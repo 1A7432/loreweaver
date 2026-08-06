@@ -1,14 +1,14 @@
 """Room-level loading and effect application for the event-hook layer (`core.hooks`).
 
 `load_room_hook_engine` collects a room's registered hook scripts — every enabled skill's
-`hooks.js` plus any card-installed scripts under ``room_hooks.{chat_key}`` — and builds one
+`hooks.js` plus any card-installed scripts under the room_state ``room_hooks`` row — and builds one
 sandboxed `HookEngine` per turn over the room's variable snapshots (KEEPER view: hooks are
 module logic, the same trust tier as the Keeper prompt; what they choose to `narrate()` is
 authorial output, exactly like lore text).
 
 `apply_hook_writes` is the deterministic half of the contract: buffered `setvar` writes route
 through validation — a name matching a declared module variable goes through
-`core.modvars.ModvarManager.set` (kind/bounds enforced), anything else lands in the MVU tree
+`core.modvars.set_modvar` (kind/bounds enforced), anything else lands in the MVU tree
 via `core.mvu_compat.apply_set`. A failing write is skipped and reported, never fatal.
 """
 
@@ -21,17 +21,13 @@ from typing import Any
 from agent.context import AgentCtx
 from agent.services import Services
 from core.hooks import HookEngine, HookScript, create_hook_engine
-from core.modvars import ModvarManager
-from core.mvu_compat import MvuManager, apply_set
+from core.modvars import load_modvars, set_modvar
+from core.mvu_compat import apply_set, load_mvu, save_mvu
 from core.skills import load_skill
 
 logger = logging.getLogger(__name__)
 
 ROOM_HOOKS_CAP = 16
-
-
-def _room_hooks_key(chat_key: str) -> str:
-    return f"room_hooks.{chat_key}"
 
 
 async def load_room_hook_engine(services: Services, ctx: AgentCtx) -> HookEngine | None:
@@ -42,7 +38,7 @@ async def load_room_hook_engine(services: Services, ctx: AgentCtx) -> HookEngine
         return None
     try:
         scripts: list[HookScript] = []
-        raw = await services.store.get(store_key=f"skills_enabled.{ctx.chat_key}")
+        raw = await services.store.state_get(ctx.chat_key, "skills_enabled")
         skill_ids = []
         if raw:
             try:
@@ -58,8 +54,8 @@ async def load_room_hook_engine(services: Services, ctx: AgentCtx) -> HookEngine
         if not scripts:
             return None
 
-        modvar_state = await ModvarManager(services.store).load(ctx.chat_key)
-        mvu_tree = await MvuManager(services.store).load(ctx.chat_key)
+        modvar_state = await load_modvars(services.documents, ctx.chat_key)
+        mvu_tree = await load_mvu(services.documents, ctx.chat_key)
         engine = create_hook_engine(scripts, flat_variables=modvar_state["values"], tree=mvu_tree)
         if engine is not None and engine.load_warnings:
             logger.warning("hook script load warnings for %s: %s", ctx.chat_key, engine.load_warnings)
@@ -70,7 +66,7 @@ async def load_room_hook_engine(services: Services, ctx: AgentCtx) -> HookEngine
 
 
 async def _room_scripts(services: Services, chat_key: str) -> list[HookScript]:
-    raw = await services.store.get(store_key=_room_hooks_key(chat_key))
+    raw = await services.store.state_get(chat_key, "room_hooks")
     if not raw:
         return []
     try:
@@ -95,7 +91,7 @@ async def install_room_hooks(services: Services, chat_key: str, source_id: str, 
         if isinstance(code, str) and code.strip():
             kept.append(HookScript(source_id=f"{source_id}#{index}", code=code))
     payload = [{"id": script.source_id, "code": script.code} for script in kept[:ROOM_HOOKS_CAP]]
-    await services.store.set(store_key=_room_hooks_key(chat_key), value=json.dumps(payload, ensure_ascii=False))
+    await services.store.state_set(chat_key, "room_hooks", json.dumps(payload, ensure_ascii=False))
     return len(payload)
 
 
@@ -104,15 +100,13 @@ async def apply_hook_writes(services: Services, chat_key: str, writes: list[tupl
     if not writes:
         return []
     applied: list[str] = []
-    modvars = ModvarManager(services.store)
-    modvar_state = await modvars.load(chat_key)
-    mvu = MvuManager(services.store)
-    tree = await mvu.load(chat_key)
+    modvar_state = await load_modvars(services.documents, chat_key)
+    tree = await load_mvu(services.documents, chat_key)
     tree_dirty = False
     for name, value in writes:
         try:
             if name in modvar_state["specs"]:
-                await modvars.set(chat_key, name, value)
+                await set_modvar(services.documents, chat_key, name, value)
             else:
                 tree = apply_set(tree, name, value)
                 tree_dirty = True
@@ -120,5 +114,5 @@ async def apply_hook_writes(services: Services, chat_key: str, writes: list[tupl
         except (ValueError, TypeError):
             continue
     if tree_dirty:
-        await mvu.save(chat_key, tree)
+        await save_mvu(services.documents, chat_key, tree)
     return applied

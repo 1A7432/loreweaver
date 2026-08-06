@@ -73,11 +73,7 @@ async def test_guided_demo_requires_an_empty_room(tmp_path):
 
     assert await guided_demo_available(services, chat_key) is True
 
-    await services.store.set(
-        user_key="",
-        store_key=f"session_record.{chat_key}.current",
-        value='{"name":"existing"}',
-    )
+    await services.store.state_set(chat_key, "session_record.current", '{"name":"existing"}')
     assert await guided_demo_available(services, chat_key) is False
 
 

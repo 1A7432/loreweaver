@@ -1,5 +1,5 @@
 """Tests for agent.kp_tools_vars: the `define_variable`/`set_variable`/`adjust_variable`/
-`remove_variable` tools over `core.modvars.ModvarManager`.
+`remove_variable` tools over `core.modvars`'s document-persisted variable state.
 
 Covers: (a) define persists a validated spec + default value and returns a localized
 confirmation; (b) set/adjust validate + clamp against the spec; (c) model-friendly id
@@ -10,12 +10,11 @@ handled without raising; (e) the tools are ungated and present in the assembled 
 
 from __future__ import annotations
 
-import json
-
 from agent.context import AgentCtx
 from agent.kp_tools import build_kp_toolset
 from agent.kp_tools_vars import ModuleVarTools
 from agent.services import Services, build_services
+from core.modvars import load_modvars
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM
@@ -49,8 +48,7 @@ async def test_define_variable_persists_spec_and_default():
         visibility=i18n.t("modvars.visibility.player"),
         value=0,
     )
-    raw = await services.store.get(user_key="", store_key=f"module_vars.{ctx.chat_key}")
-    stored = json.loads(raw)
+    stored = await load_modvars(services.documents, ctx.chat_key)
     assert stored["specs"]["town_fear"]["minimum"] == 0
     assert stored["values"]["town_fear"] == 0
 

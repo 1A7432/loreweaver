@@ -197,7 +197,7 @@ async def test_run_kp_turn_commits_at_most_one_initiative_next_per_player_turn()
     result = await run_kp_turn(ctx, services, Toolset(tracker), "Advance initiative once.")
 
     order = json.loads(
-        await services.store.get(user_key="", store_key=f"initiative.{ctx.chat_key}") or "[]"
+        await services.store.state_get(ctx.chat_key, "initiative") or "[]"
     )
     assert [entry["name"] for entry in order] == ["Bob", "Cora", "Alice"]
     assert [entry["result"] for entry in result.tool_trace if entry["name"] == "initiative_tracker"] == [
@@ -515,7 +515,7 @@ async def test_history_persists_only_the_user_message_and_final_reply():
 
     await run_kp_turn(_ctx("chat-7"), services, _toolset(), "What time is it?")
 
-    raw = await services.store.get(user_key="", store_key="chat_history.chat-7")
+    raw = await services.store.state_get("chat-7", "chat_history")
     history = json.loads(raw)
     assert history == [
         {"role": "user", "content": "What time is it?"},
@@ -539,7 +539,7 @@ async def test_history_reloads_across_turns_and_honors_a_custom_history_key():
     assert ("user", "second message") in roles_and_content
 
     # A default-keyed history (`chat_history.{chat_key}`) was never touched.
-    default_raw = await services.store.get(user_key="", store_key="chat_history.chat-8")
+    default_raw = await services.store.state_get("chat-8", "chat_history")
     assert default_raw is None
 
 
@@ -550,7 +550,7 @@ async def test_history_is_capped_to_the_last_twenty_messages():
 
     # Seed 30 already-persisted messages (well past the cap).
     seeded = [{"role": "user", "content": f"msg-{i}"} for i in range(30)]
-    await services.store.set(user_key="", store_key=f"chat_history.{chat_key}", value=json.dumps(seeded))
+    await services.store.state_set(chat_key, "chat_history", json.dumps(seeded))
 
     await run_kp_turn(_ctx(chat_key), services, _toolset(), "newest message")
 
@@ -559,7 +559,7 @@ async def test_history_is_capped_to_the_last_twenty_messages():
     assert len(outgoing_messages) <= 1 + 20 + 1
     assert {"role": "user", "content": "msg-0"} not in outgoing_messages  # oldest entries dropped
 
-    raw = await services.store.get(user_key="", store_key=f"chat_history.{chat_key}")
+    raw = await services.store.state_get(chat_key, "chat_history")
     persisted = json.loads(raw)
     assert len(persisted) <= 20
     assert persisted[-1] == {"role": "assistant", "content": "newest reply"}
@@ -582,7 +582,7 @@ async def test_run_kp_turn_survives_a_provider_error_with_a_localized_reply():
     assert result.reply == services.i18n.with_locale("en").t("loop.unavailable")
     assert result.tool_trace == []
     # A failed turn persists nothing (nothing useful happened this turn).
-    assert await services.store.get(user_key="", store_key="chat_history.chat-boom") is None
+    assert await services.store.state_get("chat-boom", "chat_history") is None
 
 
 async def test_provider_error_fallback_is_localized_and_goes_through_output_review():
@@ -627,7 +627,7 @@ async def test_run_kp_turn_maps_provider_error_categories_to_distinct_localized_
     result = await run_kp_turn(_ctx(chat_key, locale=locale), services, _toolset(), "What happens?")
 
     assert result.reply == services.i18n.with_locale(locale).t(message_key)
-    assert await services.store.get(user_key="", store_key=f"chat_history.{chat_key}") is None
+    assert await services.store.state_get(chat_key, "chat_history") is None
 
 
 async def test_run_kp_turn_maps_subscription_relogin_required_to_auth_reply():
@@ -1167,7 +1167,7 @@ async def test_forced_correction_round_provider_error_keeps_original_reply():
     # main round + the forced attempt that raised + its single "auto" fallback that also raised
     assert calls["n"] == 3
     # The turn still persisted (the corrective error is best-effort, not a turn crash).
-    assert await services.store.get(user_key="", store_key="chat_history.chat-forced-boom") is not None
+    assert await services.store.state_get("chat-forced-boom", "chat_history") is not None
 
 
 async def test_dice_correction_nudge_binds_to_the_current_player_action():

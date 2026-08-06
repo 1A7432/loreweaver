@@ -257,9 +257,9 @@ async def test_generate_battle_report_writes_session_history_store_keys():
     await manager.add_key_event(chat_key, "Something happened")
     await manager.generate_battle_report(chat_key)
 
-    history_raw = await store.get(store_key=f"session_history.{chat_key}.{session_id}")
-    latest_raw = await store.get(store_key=f"session_history.{chat_key}.latest")
-    latest_name = await store.get(store_key=f"session_name.{chat_key}.latest")
+    history_raw = await store.state_get(chat_key, f"session_history.{session_id}")
+    latest_raw = await store.state_get(chat_key, "session_history.latest")
+    latest_name = await store.state_get(chat_key, "session_name.latest")
 
     assert history_raw is not None
     assert latest_raw == history_raw
@@ -304,7 +304,7 @@ async def test_start_session_is_idempotent_and_preserves_existing_events():
     assert record is not None
     assert second_id == first_id
     assert [event["description"] for event in record.key_events] == ["kept event"]
-    assert await store.get(store_key=f"session_name.{chat_key}.current") == "First"
+    assert await store.state_get(chat_key, "session_name.current") == "First"
 
 
 async def test_add_methods_auto_start_a_session_when_none_exists():
@@ -328,7 +328,7 @@ async def test_force_new_archives_active_session_before_starting_fresh():
     new_id = await manager.start_session(chat_key, "New", force_new=True)
 
     assert new_id != old_id
-    archived = await store.get(store_key=f"session_history.{chat_key}.{old_id}")
+    archived = await store.state_get(chat_key, f"session_history.{old_id}")
     assert archived is not None
     assert json.loads(archived)["key_events"][0]["description"] == "archive me"
     current = await manager.generator.get_current_session(chat_key)

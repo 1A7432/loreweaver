@@ -8,7 +8,7 @@ import random
 
 from core.worldbook import (
     LoreEntry,
-    WorldbookManager,
+    Worldbook,
     render_entry_content,
     scrub_frontend_templates,
 )
@@ -35,7 +35,7 @@ def test_render_entry_content_scrubs_residue_with_and_without_resolver():
 
 
 async def test_pure_template_entry_imports_disabled_and_never_injects():
-    manager = WorldbookManager(Store(":memory:"))
+    manager = Worldbook(Store(":memory:"))
     payload = {
         "entries": [
             {
@@ -57,7 +57,7 @@ async def test_pure_template_entry_imports_disabled_and_never_injects():
 
 
 async def test_residue_wrapped_in_separators_still_imports_disabled():
-    manager = WorldbookManager(Store(":memory:"))
+    manager = Worldbook(Store(":memory:"))
     payload = {
         "entries": [
             {

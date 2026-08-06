@@ -16,8 +16,8 @@ pytest.importorskip("quickjs")
 from agent.npc import NpcRecord  # noqa: E402
 from agent.npc_actor import voice_npc  # noqa: E402
 from agent.services import build_services  # noqa: E402
-from core.modvars import ModvarManager, build_spec  # noqa: E402
-from core.mvu_compat import MvuManager  # noqa: E402
+from core.modvars import build_spec, define_modvar, load_modvars, set_modvar  # noqa: E402
+from core.mvu_compat import load_mvu, mvu_init_from_initvar  # noqa: E402
 from infra.config import Settings  # noqa: E402
 from infra.embeddings import FakeEmbeddings  # noqa: E402
 from infra.llm import FakeLLM, assistant_text  # noqa: E402
@@ -55,12 +55,13 @@ async def test_real_js_template_in_persona_renders_via_the_full_engine():
 async def test_full_engine_sees_player_variables_and_mvu_tree_but_never_keeper_modvars():
     recorded: list[list[dict]] = []
     services = _recording_services(recorded)
-    manager = ModvarManager(services.store)
-    await manager.define(CHAT_KEY, build_spec("fear", "number", visibility="player", minimum=0, maximum=10))
-    await manager.set(CHAT_KEY, "fear", 7)
-    await manager.define(CHAT_KEY, build_spec("true_culprit", "text", visibility="keeper"))
-    await manager.set(CHAT_KEY, "true_culprit", KEEPER_SENTINEL)
-    await MvuManager(services.store).init_from_initvar(CHAT_KEY, {"stage": [2, "story stage"]})
+    await define_modvar(
+        services.documents, CHAT_KEY, build_spec("fear", "number", visibility="player", minimum=0, maximum=10)
+    )
+    await set_modvar(services.documents, CHAT_KEY, "fear", 7)
+    await define_modvar(services.documents, CHAT_KEY, build_spec("true_culprit", "text", visibility="keeper"))
+    await set_modvar(services.documents, CHAT_KEY, "true_culprit", KEEPER_SENTINEL)
+    await mvu_init_from_initvar(services.documents, CHAT_KEY, {"stage": [2, "story stage"]})
 
     npc = NpcRecord(
         id="martha",
@@ -84,17 +85,18 @@ async def test_full_engine_sees_player_variables_and_mvu_tree_but_never_keeper_m
 async def test_full_engine_template_writes_are_discarded_on_the_actor_path():
     recorded: list[list[dict]] = []
     services = _recording_services(recorded)
-    manager = ModvarManager(services.store)
-    await manager.define(CHAT_KEY, build_spec("fear", "number", visibility="player", minimum=0, maximum=10))
-    await manager.set(CHAT_KEY, "fear", 7)
-    await MvuManager(services.store).init_from_initvar(CHAT_KEY, {"stage": [2, "story stage"]})
+    await define_modvar(
+        services.documents, CHAT_KEY, build_spec("fear", "number", visibility="player", minimum=0, maximum=10)
+    )
+    await set_modvar(services.documents, CHAT_KEY, "fear", 7)
+    await mvu_init_from_initvar(services.documents, CHAT_KEY, {"stage": [2, "story stage"]})
 
     npc = NpcRecord(id="martha", name="Martha", persona="<% setvar('stage', 9); setvar('fear', 0) %>She waits.")
     await voice_npc(services, npc, "...", chat_key=CHAT_KEY)
 
     assert "She waits." in recorded[-1][0]["content"]
     # Neither store flushed: the engine's pending_writes are never read back on this path.
-    state = await manager.load(CHAT_KEY)
+    state = await load_modvars(services.documents, CHAT_KEY)
     assert state["values"]["fear"] == 7
-    tree = await MvuManager(services.store).load(CHAT_KEY)
+    tree = await load_mvu(services.documents, CHAT_KEY)
     assert tree["stage"][0] == 2

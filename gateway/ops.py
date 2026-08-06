@@ -292,24 +292,24 @@ def _coerce_level(level: Any) -> int:
 
 
 async def is_bot_enabled(store, chat_key: str) -> bool:
-    value = await store.get(store_key=f"{_BOT_ENABLED_PREFIX}{chat_key}")
+    value = await store.state_get(chat_key, "bot_enabled")
     return value == _BOT_ENABLED_VALUE
 
 
 async def set_bot_enabled(store, chat_key: str, on: bool) -> None:
     value = _BOT_ENABLED_VALUE if on else _BOT_DISABLED_VALUE
-    await store.set(store_key=f"{_BOT_ENABLED_PREFIX}{chat_key}", value=value)
+    await store.state_set(chat_key, "bot_enabled", value)
 
 
 async def is_media_enabled(store, chat_key: str) -> bool:
     """Whether players may upload media in `chat_key`; default is enabled."""
-    value = await store.get(store_key=f"{_MEDIA_ENABLED_PREFIX}{chat_key}")
+    value = await store.state_get(chat_key, "media_enabled")
     return value != _BOT_DISABLED_VALUE
 
 
 async def set_media_enabled(store, chat_key: str, on: bool) -> None:
     value = _BOT_ENABLED_VALUE if on else _BOT_DISABLED_VALUE
-    await store.set(store_key=f"{_MEDIA_ENABLED_PREFIX}{chat_key}", value=value)
+    await store.state_set(chat_key, "media_enabled", value)
 
 
 async def get_enabled_skills(store, chat_key: str) -> list[str]:
@@ -319,7 +319,7 @@ async def get_enabled_skills(store, chat_key: str) -> list[str]:
     JSON value that isn't a list all degrade to the empty (no skills enabled) default
     rather than raising -- a corrupt flag must never break a room's turn.
     """
-    raw = await store.get(store_key=f"{_SKILLS_ENABLED_PREFIX}{chat_key}")
+    raw = await store.state_get(chat_key, "skills_enabled")
     if not raw:
         return []
     try:
@@ -332,7 +332,7 @@ async def get_enabled_skills(store, chat_key: str) -> list[str]:
 
 
 async def set_enabled_skills(store, chat_key: str, ids: list[str]) -> None:
-    await store.set(store_key=f"{_SKILLS_ENABLED_PREFIX}{chat_key}", value=json.dumps(list(ids), ensure_ascii=False))
+    await store.state_set(chat_key, "skills_enabled", json.dumps(list(ids), ensure_ascii=False))
 
 
 # One asyncio lock per room, so the read-modify-write in `toggle_enabled_skill` is atomic
@@ -377,13 +377,13 @@ async def get_enabled_preset(store, chat_key: str) -> str:
     Unlike skills/panels this flag is a single id, not a list: a preset is a whole
     style layer (`agent.prompt_builder` folds exactly one), so enabling a second one
     replaces the first. Same degrade-to-empty stance as every other room flag."""
-    raw = await store.get(store_key=f"{_PRESET_ENABLED_PREFIX}{chat_key}")
+    raw = await store.state_get(chat_key, "preset_enabled")
     return str(raw or "").strip()
 
 
 async def set_enabled_preset(store, chat_key: str, preset_id: str) -> None:
     """Set (or clear, with ``""``) the room's enabled preset id."""
-    await store.set(store_key=f"{_PRESET_ENABLED_PREFIX}{chat_key}", value=str(preset_id or "").strip())
+    await store.state_set(chat_key, "preset_enabled", str(preset_id or "").strip())
 
 
 async def get_enabled_panel_packs(store, chat_key: str) -> list[str]:
@@ -393,7 +393,7 @@ async def get_enabled_panel_packs(store, chat_key: str) -> list[str]:
     a keeper's `.panels enable <packId>` (stored here) is what admits them to a room.
     Same degrade-to-empty stance as `get_enabled_skills`.
     """
-    raw = await store.get(store_key=f"{_PANELS_ENABLED_PREFIX}{chat_key}")
+    raw = await store.state_get(chat_key, "panels_enabled")
     if not raw:
         return []
     try:
@@ -406,7 +406,7 @@ async def get_enabled_panel_packs(store, chat_key: str) -> list[str]:
 
 
 async def set_enabled_panel_packs(store, chat_key: str, ids: list[str]) -> None:
-    await store.set(store_key=f"{_PANELS_ENABLED_PREFIX}{chat_key}", value=json.dumps(list(ids), ensure_ascii=False))
+    await store.state_set(chat_key, "panels_enabled", json.dumps(list(ids), ensure_ascii=False))
 
 
 async def toggle_enabled_panel_pack(store, chat_key: str, pack_id: str, *, on: bool) -> list[str]:

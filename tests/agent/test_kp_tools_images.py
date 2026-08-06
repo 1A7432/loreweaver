@@ -65,7 +65,7 @@ async def test_generate_image_fake_end_to_end_records_media_history_and_event(tm
     )
 
     assert "scene-misty-chapel.png" in result
-    raw = await services.store.get(user_key="", store_key="media_history.chat-image")
+    raw = await services.store.state_get("chat-image", "media_history")
     history = json.loads(raw or "[]")
     assert history[-1]["mime"] == "image/png"
     assert history[-1]["name"] == "scene-misty-chapel.png"

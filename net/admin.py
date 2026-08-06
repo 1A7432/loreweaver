@@ -972,6 +972,8 @@ def _room_op_frame(action: str, result: dict[str, Any]) -> dict[str, Any]:
         "action": action,
         "room": str(result.get("room") or ""),
         "keys": int(result.get("keys") or 0),
+        "documents": int(result.get("documents") or 0),
+        "room_state_rows": int(result.get("room_state_rows") or 0),
         "store_rows": int(result.get("store_rows") or 0),
         "vector_points": int(result.get("vector_points") or 0),
         "media_files": int(result.get("media_files") or 0),

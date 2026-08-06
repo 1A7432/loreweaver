@@ -51,7 +51,7 @@ async def test_draw_svg_map_dispatch_generates_media_history_and_event(tmp_path)
     )
 
     assert "old-chapel.svg" in result
-    raw = await services.store.get(user_key="", store_key="media_history.chat-map")
+    raw = await services.store.state_get("chat-map", "media_history")
     history = json.loads(raw or "[]")
     assert history[-1]["mime"] == "image/svg+xml"
     assert history[-1]["name"] == "old-chapel.svg"

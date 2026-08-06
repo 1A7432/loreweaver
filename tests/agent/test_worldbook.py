@@ -8,7 +8,7 @@ from core.worldbook import (
     MAX_IMPORT_CONTENT_CHARS,
     MAX_IMPORT_ENTRIES,
     LoreEntry,
-    WorldbookManager,
+    Worldbook,
     inject_world_lore_prompt,
 )
 from infra.embeddings import FakeEmbeddings
@@ -18,7 +18,7 @@ from infra.vector import VectorStore
 
 
 async def test_crud_lore_entries():
-    manager = WorldbookManager(Store(":memory:"))
+    manager = Worldbook(Store(":memory:"))
 
     entry = await manager.add(
         "chat-a",
@@ -40,7 +40,7 @@ async def test_crud_lore_entries():
 
 
 async def test_keyword_match_constant_and_disabled_filtering():
-    manager = WorldbookManager(Store(":memory:"))
+    manager = Worldbook(Store(":memory:"))
     await manager.add(
         "chat-a",
         LoreEntry(id="light", title="Lighthouse", content="The lighthouse lens is cracked.", keys=["lighthouse"]),
@@ -61,7 +61,7 @@ async def test_keyword_match_constant_and_disabled_filtering():
 
 async def test_vector_retrieval_finds_semantic_entry_without_exact_key():
     embeddings = FakeEmbeddings()
-    manager = WorldbookManager(Store(":memory:"), VectorStore(dim=embeddings.dim), embeddings)
+    manager = Worldbook(Store(":memory:"), VectorStore(dim=embeddings.dim), embeddings)
     await manager.add(
         "chat-a",
         LoreEntry(
@@ -79,7 +79,7 @@ async def test_vector_retrieval_finds_semantic_entry_without_exact_key():
 
 async def test_secret_filtering_for_match_and_prompt():
     sentinel = "KEEPER_SECRET_SENTINEL"
-    manager = WorldbookManager(Store(":memory:"))
+    manager = Worldbook(Store(":memory:"))
     await manager.add(
         "chat-a",
         LoreEntry(
@@ -112,7 +112,7 @@ async def test_secret_filtering_for_match_and_prompt():
 
 
 async def test_import_sillytavern_character_book_entries():
-    manager = WorldbookManager(Store(":memory:"))
+    manager = Worldbook(Store(":memory:"))
 
     count = await manager.import_entries(
         "chat-a",
@@ -127,7 +127,7 @@ async def test_import_sillytavern_character_book_entries():
 
 
 async def test_inject_world_lore_prompt_role_filtering_and_empty_case():
-    manager = WorldbookManager(Store(":memory:"))
+    manager = Worldbook(Store(":memory:"))
     ctx = SimpleNamespace(chat_key="chat-a")
     i18n = I18n(locale="en")
     await manager.add(
@@ -156,7 +156,7 @@ async def test_world_scope_lore_is_room_scoped_no_cross_room_leak():
     room shared worldbook.world.* — an information-isolation red-line breach."""
     sentinel = "ROOM_A_ONLY_SECRET"
     store = Store(":memory:")
-    manager = WorldbookManager(store)
+    manager = Worldbook(store)
 
     await manager.add(
         "tui:group:room-a",
@@ -197,7 +197,7 @@ async def test_import_forces_untrusted_defaults():
     a secret=true entry on a NON-keeper import is dropped outright — honoring it would
     mint keeper-only lore, importing it as public (the pre-M14 behavior) would launder
     keeper-only content into player-visible state."""
-    manager = WorldbookManager(Store(":memory:"))
+    manager = Worldbook(Store(":memory:"))
 
     count = await manager.import_entries(
         "chat-a",
@@ -240,7 +240,7 @@ async def test_import_forces_untrusted_defaults():
 
 
 async def test_import_keeper_retains_secret_and_constant_but_scope_still_forced():
-    manager = WorldbookManager(Store(":memory:"))
+    manager = Worldbook(Store(":memory:"))
 
     await manager.import_entries(
         "chat-a",
@@ -255,7 +255,7 @@ async def test_import_keeper_retains_secret_and_constant_but_scope_still_forced(
 
 
 async def test_import_entry_count_cap_enforced():
-    manager = WorldbookManager(Store(":memory:"))
+    manager = Worldbook(Store(":memory:"))
     too_many = {"entries": [{"content": f"lore {i}", "keys": ["k"]} for i in range(MAX_IMPORT_ENTRIES + 1)]}
     with pytest.raises(ValueError):
         await manager.import_entries("chat-a", too_many, source="card")
@@ -268,7 +268,7 @@ async def test_import_oversized_entry_is_skipped_and_itemized_not_fatal():
     is skipped (title reported via the accumulator), the REST of the import still lands —
     the pre-2026-08-05 whole-import ValueError left ten entries half-written and no clue
     which entry was at fault."""
-    manager = WorldbookManager(Store(":memory:"))
+    manager = Worldbook(Store(":memory:"))
     payload = {
         "entries": [
             {"title": "正常条目", "content": "short lore", "keys": ["k"]},
@@ -288,7 +288,7 @@ async def test_keeper_world_import_preserves_constant_player_import_does_not():
     """ST module cards ship rules/timelines as constant entries; a keeper world import keeps
     the flag (same trust precedent as `secret`), while a player upload still gets it forced
     off — an untrusted file cannot self-promote to always-on injection."""
-    manager = WorldbookManager(Store(":memory:"))
+    manager = Worldbook(Store(":memory:"))
     payload = {"entries": [{"title": "难度·标准", "content": "原作时间线规则。", "keys": [], "constant": True}]}
 
     await manager.import_entries("keeper-room", payload, source="card", is_keeper=True)
@@ -300,48 +300,38 @@ async def test_keeper_world_import_preserves_constant_player_import_does_not():
     assert player_entry.constant is False
 
 
-async def test_room_rows_backup_covers_world_scope_entries():
-    """The room backup allowlist must capture room-scoped world lore (entries + index) so a
-    snapshot round-trips it. Regression against world lore silently missing from backups."""
-    from net.room_backup import room_rows
-
+async def test_world_scope_entries_live_room_scoped_in_the_documents_table():
+    """World lore persists as this ROOM's `lore` documents (M17): room-scoped by the
+    documents table's room column, so a snapshot of the room carries it and nothing
+    can land in a cross-room global namespace."""
     store = Store(":memory:")
-    manager = WorldbookManager(store)
+    manager = Worldbook(store)
     chat_key = "tui:group:room-a"
     await manager.add(
         chat_key,
         LoreEntry(id="wl", title="World Lore", content="A durable world fact.", scope="world"),
     )
 
-    services = SimpleNamespace(store=store)
-    rows = await room_rows(services, chat_key)
-    store_keys = {row["store_key"] for row in rows}
-
-    assert f"worldbook.{chat_key}.wl" in store_keys  # the entry row
-    assert f"worldbook_index.{chat_key}" in store_keys  # the index row
-
-    # And nothing lands in the legacy global namespace that would cross rooms.
-    assert not any(str(key).startswith("worldbook.world.") for key in store_keys)
+    docs = await manager.documents.list(chat_key, "lore")
+    assert [doc.id for doc in docs] == ["wl"]
+    assert await manager.documents.list("some-other-room", "lore") == []
 
 
-async def test_one_corrupt_row_is_skipped_and_does_not_break_lookups():
-    """F7: a single unreadable worldbook row (bad JSON / wrong shape) must not break
-    list()/get()/match() for the whole book — the bad row is skipped, good ones survive."""
-    from core.worldbook import _entry_store_key, _index_store_key, _namespace
-
+async def test_one_corrupt_document_is_skipped_and_does_not_break_lookups():
+    """F7: a single unreadable lore document (shape that LoreEntry.from_dict rejects)
+    must not break list()/get()/match() for the whole book — the bad document is
+    skipped, good ones survive."""
     store = Store(":memory:")
-    manager = WorldbookManager(store)
+    manager = Worldbook(store)
     await manager.add(
         "chat-a", LoreEntry(id="ok", title="Good Lore", content="The harbor is calm.", keys=["harbor"])
     )
 
-    # Poison the index with a second id whose stored blob is not valid JSON.
-    namespace = _namespace("chat-a", "world")
-    await store.set(user_key="", store_key=_entry_store_key(namespace, "broken"), value="{not valid json")
-    await store.set(user_key="", store_key=_index_store_key(namespace), value='["ok", "broken"]')
+    # Poison the book with a document whose data shape from_dict rejects.
+    await manager.documents.put("chat-a", "lore", "broken", {"title": "Broken", "keys": 123})
 
     listed = await manager.list("chat-a")
-    assert [entry.id for entry in listed] == ["ok"]  # broken row skipped, good row survives
+    assert [entry.id for entry in listed] == ["ok"]  # broken document skipped, good one survives
     assert (await manager.get("chat-a", "Good Lore")).content == "The harbor is calm."
     matches = await manager.match("chat-a", "We reach the harbor.", role="player")
     assert [entry.id for entry in matches] == ["ok"]

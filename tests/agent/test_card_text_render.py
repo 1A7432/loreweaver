@@ -21,7 +21,7 @@ from agent.npc import NpcRecord
 from agent.npc_actor import voice_npc
 from agent.services import build_services
 from core.character_manager import CharacterSheet
-from core.modvars import ModvarManager, build_spec
+from core.modvars import build_spec, define_modvar, load_modvars, set_modvar
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM, assistant_text
@@ -51,15 +51,15 @@ def _prompt_text(recorded: list[list[dict]]) -> str:
 
 
 async def _define_player_fear(services, value: int = 6) -> None:
-    manager = ModvarManager(services.store)
-    await manager.define(CHAT_KEY, build_spec("fear", "number", visibility="player", minimum=0, maximum=10))
-    await manager.set(CHAT_KEY, "fear", value)
+    await define_modvar(
+        services.documents, CHAT_KEY, build_spec("fear", "number", visibility="player", minimum=0, maximum=10)
+    )
+    await set_modvar(services.documents, CHAT_KEY, "fear", value)
 
 
 async def _define_keeper_culprit(services) -> None:
-    manager = ModvarManager(services.store)
-    await manager.define(CHAT_KEY, build_spec("true_culprit", "text", visibility="keeper"))
-    await manager.set(CHAT_KEY, "true_culprit", KEEPER_SENTINEL)
+    await define_modvar(services.documents, CHAT_KEY, build_spec("true_culprit", "text", visibility="keeper"))
+    await set_modvar(services.documents, CHAT_KEY, "true_culprit", KEEPER_SENTINEL)
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +88,7 @@ async def test_npc_persona_ejs_conditional_renders_per_current_variables():
     assert "<%" not in system_content and "%>" not in system_content
 
     # Consumption-time, not import-time: the SAME stored text re-renders against the NEW state.
-    await ModvarManager(services.store).set(CHAT_KEY, "fear", 2)
+    await set_modvar(services.documents, CHAT_KEY, "fear", 2)
     await voice_npc(services, npc, "The stranger returns the next day.", chat_key=CHAT_KEY)
     system_content = recorded[-1][0]["content"]
     assert "He is calm tonight." in system_content
@@ -182,7 +182,7 @@ async def test_template_setvar_writes_are_discarded_on_the_actor_path():
     await voice_npc(services, npc, "...", chat_key=CHAT_KEY)
 
     assert "She breathes." in recorded[-1][0]["content"]
-    state = await ModvarManager(services.store).load(CHAT_KEY)
+    state = await load_modvars(services.documents, CHAT_KEY)
     assert state["values"]["fear"] == 6  # actor-side rendering is read-only
 
 

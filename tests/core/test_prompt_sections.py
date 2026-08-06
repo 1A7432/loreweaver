@@ -17,6 +17,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from core.documents import DocumentStore
 from core.prompt_sections import (
     inject_document_context_prompt,
     inject_game_state_prompt,
@@ -28,7 +29,6 @@ from core.prompt_sections import (
 )
 from infra.i18n import I18n
 from infra.store import Store
-from core.documents import DocumentStore
 
 EN = I18n(locale="en")
 ZH = I18n(locale="zh")
@@ -260,10 +260,10 @@ async def test_inject_system_expertise_prompt_swallows_manager_errors():
 
 
 async def _seed_game_state_store(store: Store, chat_key: str, user_id: str) -> None:
-    await store.set(
-        user_key="",
-        store_key=f"game_clock.{chat_key}",
-        value=json.dumps({"current_time": "1926-03-15 14:00"}),
+    await store.state_set(
+        chat_key,
+        "game_clock",
+        json.dumps({"current_time": "1926-03-15 14:00"}),
     )
     documents = DocumentStore(store)
     await documents.put_singleton(chat_key, "scene", {"name": "Innsmouth docks", "focus": "Investigation"})
@@ -289,10 +289,10 @@ async def _seed_game_state_store(store: Store, chat_key: str, user_id: str) -> N
         chat_key, "module_pool",
         {"keeper": {}, "player": {"clues": [{"name": "Torn Letter", "description": "Mentions a hidden cellar."}]}},
     )
-    await store.set(
-        user_key=user_id,
-        store_key=f"initiative.{chat_key}",
-        value=json.dumps([{"name": "Alice", "init": 18}, {"name": "Cultist", "init": 12}]),
+    await store.state_set(
+        chat_key,
+        "initiative",
+        json.dumps([{"name": "Alice", "init": 18}, {"name": "Cultist", "init": 12}]),
     )
 
 
@@ -369,7 +369,7 @@ async def test_inject_game_state_prompt_swallows_manager_errors():
 async def test_inject_document_context_prompt_ready_pool_includes_keeper_discipline():
     store = Store(":memory:")
     chat_key = "chat-ready"
-    await store.set(user_key="", store_key=f"module_init_status.{chat_key}", value="ready")
+    await store.state_set(chat_key, "module_init_status", "ready")
     await DocumentStore(store).put_singleton(
         chat_key,
         "module_pool",
@@ -410,7 +410,7 @@ async def test_inject_document_context_prompt_ready_pool_includes_module_fidelit
     # not replacing, the keeper-secrecy discipline block.
     store = Store(":memory:")
     chat_key = "chat-fidelity"
-    await store.set(user_key="", store_key=f"module_init_status.{chat_key}", value="ready")
+    await store.state_set(chat_key, "module_init_status", "ready")
     await DocumentStore(store).put_singleton(
         chat_key,
         "module_pool",
@@ -431,7 +431,7 @@ async def test_inject_document_context_prompt_ready_pool_includes_module_fidelit
 async def test_inject_document_context_prompt_ready_fallback_still_uses_keeper_pool():
     store = Store(":memory:")
     chat_key = "chat-ready-fallback"
-    await store.set(user_key="", store_key=f"module_init_status.{chat_key}", value="ready_fallback")
+    await store.state_set(chat_key, "module_init_status", "ready_fallback")
     await DocumentStore(store).put_singleton(
         chat_key,
         "module_pool",
@@ -449,7 +449,7 @@ async def test_inject_document_context_prompt_ready_fallback_still_uses_keeper_p
 async def test_inject_document_context_prompt_processing_state():
     store = Store(":memory:")
     chat_key = "chat-processing"
-    await store.set(user_key="", store_key=f"module_init_status.{chat_key}", value="processing")
+    await store.state_set(chat_key, "module_init_status", "processing")
     ctx = _Ctx(chat_key=chat_key)
 
     result = await inject_document_context_prompt(ctx, _FakeVectorDB(), store, ZH)

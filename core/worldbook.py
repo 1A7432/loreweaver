@@ -30,11 +30,13 @@ from typing import Any
 
 from core.card_split import is_variable_declaration_entry
 from core.condexpr import MAX_EXPR_LEN, CondExprError, evaluate_bool
+from core.documents import DocumentStore
 from core.ejs_lite import render as render_template
 from core.ejs_lite import split_decorators, substitute_macros
-from core.mvu_compat import MvuManager, parse_initvar
+from core.mvu_compat import parse_initvar
 
 WORLD_SCOPE = "world"
+LORE_DOC_TYPE = "lore"
 WORLDBOOK_COLLECTION = "worldbook"
 
 _SELECTIVE_LOGICS = ("and_any", "and_all", "not_any", "not_all")
@@ -155,25 +157,28 @@ class LoreEntry:
         )
 
 
-class WorldbookManager:
+class Worldbook:
+    """Domain service over the room's `lore` documents + the vector index.
+
+    M17: entry persistence is the documents table (one `lore` document per
+    entry, insertion-ordered by `seq` — the old `worldbook.{ns}.{id}` rows and
+    the separate index row are gone). The vector index and match/render logic
+    stay here; the entry SECRECY contract lives in the `lore` document
+    projection (`core.documents`)."""
+
     def __init__(self, store: Any, vector_db: Any = None, embeddings: Any = None) -> None:
         self.store = store
+        self.documents = DocumentStore(store)
         self.vector_db = vector_db
         self.embeddings = embeddings
 
-    async def add(self, chat_key: str, entry: LoreEntry) -> LoreEntry:
+    async def add(self, chat_key: str, entry: LoreEntry, *, source: str = "") -> LoreEntry:
         entry = LoreEntry.from_dict(entry.to_dict())
         if not entry.id:
             entry.id = _new_id()
-        namespace = _namespace(chat_key, entry.scope)
-        existing = await self.get(chat_key, entry.id)
-        if existing is not None:
+        if await self.documents.get(chat_key, LORE_DOC_TYPE, entry.id) is not None:
             entry.id = _new_id()
-        await self.store.set(user_key="", store_key=_entry_store_key(namespace, entry.id), value=json.dumps(entry.to_dict()))
-        index = await self._load_index(namespace)
-        if entry.id not in index:
-            index.append(entry.id)
-            await self._save_index(namespace, index)
+        await self.documents.put(chat_key, LORE_DOC_TYPE, entry.id, entry.to_dict(), source=source or None)
         await self._upsert_vector(chat_key, entry)
         return entry
 
@@ -185,35 +190,14 @@ class WorldbookManager:
         return None
 
     async def list(self, chat_key: str, *, scope: str | None = None) -> list[LoreEntry]:
-        namespaces = [_namespace(chat_key, WORLD_SCOPE)] if scope in {None, WORLD_SCOPE} else []
-        if scope is None or scope in {"module", "session"}:
-            namespaces.append(_namespace(chat_key, "session"))
-        if scope not in {None, WORLD_SCOPE, "module", "session"}:
-            namespaces.append(_namespace(chat_key, scope))
-
         entries: list[LoreEntry] = []
-        seen: set[tuple[str, str]] = set()
-        for namespace in namespaces:
-            for entry_id in await self._load_index(namespace):
-                key = (namespace, entry_id)
-                if key in seen:
-                    continue
-                seen.add(key)
-                raw = await self.store.get(user_key="", store_key=_entry_store_key(namespace, entry_id))
-                if raw is None:
-                    continue
-                # A single corrupt row (bad JSON / wrong shape) must never break every lore
-                # lookup for the whole book — skip it, mirroring `_load_index`'s tolerant decode.
-                try:
-                    data = json.loads(raw)
-                except (json.JSONDecodeError, TypeError, ValueError):
-                    continue
-                if not isinstance(data, dict):
-                    continue
-                try:
-                    entries.append(LoreEntry.from_dict(data))
-                except (TypeError, ValueError):
-                    continue
+        for doc in await self.documents.list(chat_key, LORE_DOC_TYPE):
+            # A single corrupt document must never break every lore lookup for
+            # the whole book — skip it.
+            try:
+                entries.append(LoreEntry.from_dict(dict(doc.data, id=doc.id)))
+            except (TypeError, ValueError):
+                continue
         if scope in {"module", "session"}:
             return [entry for entry in entries if entry.scope == scope]
         return entries
@@ -227,17 +211,7 @@ class WorldbookManager:
             if key in data and key != "id":
                 data[key] = value
         updated = LoreEntry.from_dict(data)
-        old_namespace = _namespace(chat_key, current.scope)
-        new_namespace = _namespace(chat_key, updated.scope)
-        if old_namespace != new_namespace:
-            await self.store.delete(user_key="", store_key=_entry_store_key(old_namespace, current.id))
-            old_index = [entry_id for entry_id in await self._load_index(old_namespace) if entry_id != current.id]
-            await self._save_index(old_namespace, old_index)
-            new_index = await self._load_index(new_namespace)
-            if updated.id not in new_index:
-                new_index.append(updated.id)
-                await self._save_index(new_namespace, new_index)
-        await self.store.set(user_key="", store_key=_entry_store_key(new_namespace, updated.id), value=json.dumps(updated.to_dict()))
+        await self.documents.put(chat_key, LORE_DOC_TYPE, updated.id, updated.to_dict())
         await self._upsert_vector(chat_key, updated)
         return updated
 
@@ -245,12 +219,9 @@ class WorldbookManager:
         entry = await self.get(chat_key, id_or_title)
         if entry is None:
             return False
-        namespace = _namespace(chat_key, entry.scope)
-        await self.store.delete(user_key="", store_key=_entry_store_key(namespace, entry.id))
-        index = [entry_id for entry_id in await self._load_index(namespace) if entry_id != entry.id]
-        await self._save_index(namespace, index)
+        await self.documents.delete(chat_key, LORE_DOC_TYPE, entry.id)
         if self.vector_db is not None:
-            await self.vector_db.delete([_vector_id(namespace, entry.id)])
+            await self.vector_db.delete([_vector_id(_namespace(chat_key, entry.scope), entry.id)])
         return True
 
     async def import_entries(
@@ -296,7 +267,10 @@ class WorldbookManager:
             parsed_initvar = _consume_initvar(raw)
             if parsed_initvar is not None:
                 if parsed_initvar and is_keeper:
-                    await MvuManager(self.store).init_from_initvar(chat_key, parsed_initvar)
+                    from core.documents import DocumentStore
+                    from core.mvu_compat import mvu_init_from_initvar
+
+                    await mvu_init_from_initvar(DocumentStore(self.store), chat_key, parsed_initvar)
                 continue
             entry = _normalize_import_entry(raw, source=source, index=index, is_keeper=is_keeper)
             if entry is None:
@@ -418,7 +392,7 @@ class WorldbookManager:
         return chosen
 
     async def _load_timers(self, chat_key: str) -> dict[str, Any]:
-        raw = await self.store.get(user_key="", store_key=_timers_store_key(chat_key))
+        raw = await self.store.state_get(chat_key, _TIMERS_STATE_KEY)
         if not raw:
             return {"turn": 0, "entries": {}}
         try:
@@ -430,24 +404,7 @@ class WorldbookManager:
         return {"turn": _coerce_entry_int(data.get("turn"), 0), "entries": data["entries"]}
 
     async def _save_timers(self, chat_key: str, timers: dict[str, Any]) -> None:
-        await self.store.set(
-            user_key="", store_key=_timers_store_key(chat_key), value=json.dumps(timers, ensure_ascii=False)
-        )
-
-    async def _load_index(self, namespace: str) -> list[str]:
-        raw = await self.store.get(user_key="", store_key=_index_store_key(namespace))
-        if raw is None:
-            return []
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            return []
-        if not isinstance(data, list):
-            return []
-        return [str(entry_id) for entry_id in data]
-
-    async def _save_index(self, namespace: str, ids: list[str]) -> None:
-        await self.store.set(user_key="", store_key=_index_store_key(namespace), value=json.dumps(ids))
+        await self.store.state_set(chat_key, _TIMERS_STATE_KEY, json.dumps(timers, ensure_ascii=False))
 
     async def _upsert_vector(self, chat_key: str, entry: LoreEntry) -> None:
         if self.vector_db is None or self.embeddings is None:
@@ -515,7 +472,7 @@ def _condition_holds(condition: str, resolve: Any, engine: Any) -> bool:
 
 async def inject_world_lore_prompt(
     ctx: Any,
-    worldbook: WorldbookManager,
+    worldbook: Worldbook,
     i18n: Any,
     *,
     role: str,
@@ -640,20 +597,11 @@ def _namespace(chat_key: str, scope: str) -> str:
     return str(chat_key)
 
 
-def _entry_store_key(namespace: str, entry_id: str) -> str:
-    return f"worldbook.{namespace}.{entry_id}"
-
-
-def _index_store_key(namespace: str) -> str:
-    return f"worldbook_index.{namespace}"
-
-
 def _vector_id(namespace: str, entry_id: str) -> str:
     return f"{namespace}:{entry_id}"
 
 
-def _timers_store_key(chat_key: str) -> str:
-    return f"worldbook_timers.{chat_key}"
+_TIMERS_STATE_KEY = "worldbook_timers"
 
 
 def _scan_window(context: str, scan_depth: int) -> str:

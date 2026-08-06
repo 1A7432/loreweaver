@@ -31,7 +31,13 @@ from infra.media_store import (
 from infra.svg import SVG_MIME, SvgSafetyError, validate_svg_bytes
 from net.keystore import Keystore
 
-SNAPSHOT_VERSION = 1
+# Snapshot format 2 (M17): content rides `documents` + `room_state` sections; the
+# KV `store_rows` section carries only cross-transport bindings. Per the M16
+# addendum every 2.0-era format carries a version and a designed migration slot —
+# empty until a future version needs one (v1 KV-era snapshots are pre-adoption and
+# deliberately unmigratable, zero-compat for the past).
+SNAPSHOT_VERSION = 2
+SNAPSHOT_MIGRATIONS: dict[int, object] = {}
 
 # A snapshot is deliberately much smaller than the live media quota (which may be 2 GiB
 # for audio).  JSON + base64 is not a streaming container: letting the live quota dictate
@@ -53,71 +59,23 @@ _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 _TUI_CHAT_KEY_PREFIX = "tui:group:"
 _VECTOR_OWNERSHIP_FIELDS = frozenset({"chat_key", "namespace"})
 
-_EXACT_BASES = {
-    "active_character",
-    "bot_enabled",
-    "chat_locale",
-    "chat_history",
-    "characters_list",
-    "coc_rule",
-    "game_clock",
-    "initiative",
-    "kp_notes",
-    "locale",
-    "media_enabled",
-    "media_history",
-    "module_catalog",
-    "module_fulltext",
-    "module_init_error",
-    "module_init_status",
-    "module_keeper_pool",
-    "module_player_pool",
-    "module_vars",
-    "mvu_data",
-    "mvu_exposed",
-    "npc_list",
-    "pregen_roster",
-    "room_hooks",
-    "world_import",
-    "worldbook_timers",
-    "party_auto",
-    "party_roster",
-    "relationships",
-    "session_recap",
-    "session_recap_debug",
-    "session_recap_turns",
-    "skills_enabled",
-    "audio_library",
-    "audio_state",
-    "usage_stats",
-    "worldbook_index",
-}
-
-_PREFIX_BASES = {
-    "battle_report",
-    "characters",
-    "npc",
-    "pregen_sheet",
-    "session_history",
-    "session_name",
-    "session_record",
-    "worldbook",
-}
-
 # --- `.reset` scope groups -----------------------------------------------------
-# A scoped in-place restart, unlike backup/delete, partitions the room's own state
-# rather than taking all of it. Room SETTINGS (language, house rules, enabled skills,
-# media/bot toggles) are configuration, not campaign content, so they survive every
-# reset level and appear in none of the groups below.
+# M17: room CONTENT lives in the documents table and room-scoped RUNTIME state in
+# the room_state table — both room-scoped by COLUMN, so backup/export/delete simply
+# dump whole rooms and need NO per-store key allowlist (the drift bug class died
+# with the KV era). What remains named here is the SEMANTIC partition `.reset`
+# scopes need: which document types and which runtime keys each scope wipes. Room
+# SETTINGS (language, house rules, enabled skills/presets/panels, media/bot
+# toggles) are configuration, not campaign content, so they appear in no group and
+# survive every reset level.
 RESET_SCOPES = ("story", "chars", "all")
 
 # `.reset` (lightest): a fresh narrative session — characters, module, lore and media
-# are all kept. (`initiative_meta` and the `forge_module_*` ownership keys are wiped
-# here/at `all` even though the backup allowlist above still omits them.)
-_RESET_STORY_EXACT = frozenset(
+# are all kept.
+_RESET_STORY_DOC_TYPES = frozenset({"note", "scene", "npc"})
+_RESET_STORY_STATE_KEYS = frozenset(
     {
         "chat_history",
-        "kp_notes",
         "initiative",
         "initiative_meta",
         "game_clock",
@@ -126,70 +84,51 @@ _RESET_STORY_EXACT = frozenset(
         "session_recap_turns",
         "relationships",
         "usage_stats",
-        "npc_list",
         # Worldbook sticky/cooldown/delay windows track the narrative session's turn
         # counter — a clean-slate replay restarts them just like the clock and initiative.
         "worldbook_timers",
     }
 )
-_RESET_STORY_PREFIX = frozenset({"battle_report", "npc", "session_history", "session_name", "session_record"})
+_RESET_STORY_STATE_PREFIXES = frozenset({"battle_report.", "session_history.", "session_name.", "session_record."})
 # `.reset chars`: also drop the party's characters, so fresh investigators face the SAME module.
-_RESET_CHARS_EXACT = frozenset({"active_character", "characters_list", "party_roster", "party_auto"})
-_RESET_CHARS_PREFIX = frozenset({"characters"})
-# `.reset all`: also drop the module, world lore and media (KV rows here; vectors + blobs below).
-_RESET_ALL_EXACT = frozenset(
+_RESET_CHARS_DOC_TYPES = frozenset({"sheet"})
+_RESET_CHARS_STATE_KEYS = frozenset({"party_roster", "party_auto"})
+_RESET_CHARS_STATE_PREFIXES = frozenset({"active_character."})
+# `.reset all`: also drop the module, world lore and media (documents here; vectors + blobs below).
+_RESET_ALL_DOC_TYPES = frozenset({"lore", "mvu_tree", "modvars", "module_pool", "pregen"})
+_RESET_ALL_STATE_KEYS = frozenset(
     {
-        "module_catalog",
         "module_fulltext",
         "module_init_error",
         "module_init_status",
-        "module_keeper_pool",
-        "module_player_pool",
         # Module machinery a keeper world-card import installs lives exactly as long as
-        # the module: the import marker, MVU variable tree + exposure list, modvar
-        # trackers, room hooks and the claimable pregen roster all go with it.
+        # the module: the import marker, room hooks, media/audio history and the forge
+        # ownership records all go with it.
         "world_import",
-        "mvu_data",
-        "mvu_exposed",
-        "module_vars",
         "room_hooks",
-        "pregen_roster",
         "media_history",
         "audio_library",
         "audio_state",
-        "worldbook_index",
         "forge_module_last",
     }
 )
-_RESET_ALL_PREFIX = frozenset({"worldbook", "forge_module_owner", "pregen_sheet"})
+_RESET_ALL_STATE_PREFIXES = frozenset({"forge_module_owner."})
 
 
-def _reset_bases(scope: str) -> tuple[set[str], set[str]]:
-    """Return the (exact, prefix) store-key bases wiped at ``scope`` (cumulative)."""
-    exact = set(_RESET_STORY_EXACT)
-    prefix = set(_RESET_STORY_PREFIX)
+def _reset_targets(scope: str) -> tuple[set[str], set[str], set[str]]:
+    """Return the (document types, state keys, state key prefixes) wiped at ``scope``."""
+    doc_types = set(_RESET_STORY_DOC_TYPES)
+    keys = set(_RESET_STORY_STATE_KEYS)
+    prefixes = set(_RESET_STORY_STATE_PREFIXES)
     if scope in ("chars", "all"):
-        exact |= _RESET_CHARS_EXACT
-        prefix |= _RESET_CHARS_PREFIX
+        doc_types |= _RESET_CHARS_DOC_TYPES
+        keys |= _RESET_CHARS_STATE_KEYS
+        prefixes |= _RESET_CHARS_STATE_PREFIXES
     if scope == "all":
-        exact |= _RESET_ALL_EXACT
-        prefix |= _RESET_ALL_PREFIX
-    return exact, prefix
-
-
-def _reset_row_matches(store_key: str, chat_key: str, exact: set[str], prefix: set[str]) -> bool:
-    for base in exact:
-        if store_key == f"{base}.{chat_key}":
-            return True
-    for base in prefix:
-        if store_key.startswith(f"{base}.{chat_key}."):
-            return True
-    return False
-
-# Scope note: these allowlists cover DURABLE, chat_key-scoped campaign state. Adapter-transient
-# runtime state (e.g. the QQ adapter's `qq_hint_sent.{group_id}` / `qq_group_mode.{group_id}`,
-# keyed by the raw platform channel id, not the room chat_key) is deliberately NOT captured — it
-# is ephemeral per-channel bookkeeping, not campaign data, and is re-established at runtime.
+        doc_types |= _RESET_ALL_DOC_TYPES
+        keys |= _RESET_ALL_STATE_KEYS
+        prefixes |= _RESET_ALL_STATE_PREFIXES
+    return doc_types, keys, prefixes
 
 
 def chat_key_for_room(room: str) -> str:
@@ -282,59 +221,10 @@ def _resolve_import_path(services: Services, path: str, expected_room: str) -> P
 
 
 def _matches_room_store_key(store_key: str, value: str | None, chat_key: str) -> bool:
-    for base in _EXACT_BASES:
-        if store_key == f"{base}.{chat_key}":
-            return True
-    for base in _PREFIX_BASES:
-        if store_key.startswith(f"{base}.{chat_key}."):
-            return True
-    # Cross-transport room bindings store the target session key as the value.
+    """M17: the only room-owned KV rows left are cross-transport bindings, which
+    store the target session key as the VALUE (content lives in the documents
+    table, runtime state in room_state — both room-scoped by column)."""
     return store_key.startswith("bound_room.") and value == chat_key
-
-
-def _known_chat_keys_from_rows(rows: list[dict[str, Any]]) -> set[str]:
-    """Recover unambiguous logical-room ids from exact KV rows and bindings.
-
-    Prefix-shaped rows cannot be parsed safely (the suffix may be either an entity id or a
-    dotted child room), so they deliberately do not contribute candidates here.
-    """
-    known: set[str] = set()
-    for row in rows:
-        store_key = row.get("store_key")
-        value = row.get("value")
-        if isinstance(store_key, str):
-            for base in _EXACT_BASES:
-                prefix = f"{base}."
-                if store_key.startswith(prefix):
-                    candidate = store_key[len(prefix) :]
-                    if candidate.startswith(_TUI_CHAT_KEY_PREFIX):
-                        known.add(candidate)
-                    break
-        if (
-            isinstance(store_key, str)
-            and store_key.startswith("bound_room.")
-            and isinstance(value, str)
-            and value.startswith(_TUI_CHAT_KEY_PREFIX)
-        ):
-            known.add(value)
-    return known
-
-
-async def _known_room_chat_keys(services: Services, keystore: Keystore) -> set[str]:
-    # Refresh first so an externally moved/minted room key participates in the ambiguity guard.
-    keystore.refresh()
-    known = {chat_key_for_room(entry.room) for entry in keystore.entries() if entry.room.strip()}
-    known.update(_known_chat_keys_from_rows(await services.store.list_rows()))
-    return known
-
-
-def _guard_room_prefix_ambiguity(chat_key: str, known_chat_keys: set[str]) -> None:
-    """Fail closed when a dotted child room aliases this room's prefix-shaped KV namespace."""
-    child_prefix = f"{chat_key}."
-    if any(candidate != chat_key and candidate.startswith(child_prefix) for candidate in known_chat_keys):
-        raise ValueError(
-            "room id has an ambiguous dotted-prefix neighbor"  # i18n-exempt: internal invariant
-        )
 
 
 def _rewrite_room_row(row: dict[str, Any], old_chat_key: str, new_chat_key: str) -> dict[str, Any]:
@@ -496,10 +386,7 @@ async def room_rows(
     *,
     enforce_limits: bool = False,
 ) -> list[dict[str, str | None]]:
-    prefixes = [f"{base}.{chat_key}" for base in _EXACT_BASES]
-    prefixes.extend(f"{base}.{chat_key}." for base in _PREFIX_BASES)
-    prefixes.append("bound_room.")
-    rows = await services.store.list_rows(store_key_prefixes=prefixes)
+    rows = await services.store.list_rows(store_key_prefixes=("bound_room.",))
     selected = [
         row
         for row in rows
@@ -513,6 +400,42 @@ async def room_rows(
             name="store rows",
         )
     return selected
+
+
+async def room_documents(
+    services: Services,
+    chat_key: str,
+    *,
+    enforce_limits: bool = False,
+) -> list[dict[str, Any]]:
+    """Every document row of the room, verbatim (data/meta/grants stay JSON strings)."""
+    rows = await services.store.doc_list(chat_key)
+    if enforce_limits:
+        _bounded_section(
+            rows,
+            count_limit=MAX_BACKUP_STORE_ROWS,
+            byte_limit=MAX_BACKUP_STORE_BYTES,
+            name="documents",
+        )
+    return rows
+
+
+async def room_state_rows(
+    services: Services,
+    chat_key: str,
+    *,
+    enforce_limits: bool = False,
+) -> list[dict[str, str | None]]:
+    """Every room_state row of the room."""
+    rows = await services.store.state_list(chat_key)
+    if enforce_limits:
+        _bounded_section(
+            rows,
+            count_limit=MAX_BACKUP_STORE_ROWS,
+            byte_limit=MAX_BACKUP_STORE_BYTES,
+            name="room state rows",
+        )
+    return rows
 
 
 async def room_vector_points(
@@ -638,11 +561,9 @@ async def export_room(services: Services, keystore: Keystore, room: str, path: s
     if not room:
         raise ValueError("snapshot room is empty")
     chat_key = chat_key_for_room(room)
-    _guard_room_prefix_ambiguity(chat_key, await _known_room_chat_keys(services, keystore))
     rows = await room_rows(services, chat_key, enforce_limits=True)
-    # Close the guard/read race: if a dotted child appeared before the prefix query, detect it
-    # before serializing any selected row; if it appeared afterwards, it was not selected.
-    _guard_room_prefix_ambiguity(chat_key, await _known_room_chat_keys(services, keystore))
+    documents = await room_documents(services, chat_key, enforce_limits=True)
+    state_rows = await room_state_rows(services, chat_key, enforce_limits=True)
     vectors = await room_vector_points(services, chat_key, enforce_limits=True)
     media = await room_media_entries(services, chat_key)
     # A file-backed keystore may have been changed by a simultaneous operations CLI.
@@ -659,6 +580,8 @@ async def export_room(services: Services, keystore: Keystore, room: str, path: s
         "room": room,
         "chat_key": chat_key,
         "keys": keys,
+        "documents": documents,
+        "room_state": state_rows,
         "store_rows": rows,
         "vector_points": vectors,
         "media": media,
@@ -672,6 +595,8 @@ async def export_room(services: Services, keystore: Keystore, room: str, path: s
         "chat_key": chat_key,
         "path": str(target),
         "keys": len(keys),
+        "documents": len(documents),
+        "room_state_rows": len(state_rows),
         "store_rows": len(rows),
         "vector_points": len(vectors),
         "media_files": len(media),
@@ -681,6 +606,8 @@ async def export_room(services: Services, keystore: Keystore, room: str, path: s
 @dataclass(frozen=True)
 class _RoomState:
     rows: list[dict[str, str | None]]
+    documents: list[dict[str, Any]]
+    state_rows: list[dict[str, str | None]]
     vectors: list[dict[str, Any]]
     keys: list[dict[str, str]]
     media: list[MediaRecord]
@@ -699,12 +626,12 @@ async def _capture_room_state(
     room: str,
     chat_key: str,
 ) -> _RoomState:
-    _guard_room_prefix_ambiguity(chat_key, await _known_room_chat_keys(services, keystore))
     media = await _media_store(services).list_room_records(chat_key)
     rows = await room_rows(services, chat_key, enforce_limits=False)
-    _guard_room_prefix_ambiguity(chat_key, await _known_room_chat_keys(services, keystore))
     return _RoomState(
         rows=rows,
+        documents=await room_documents(services, chat_key, enforce_limits=False),
+        state_rows=await room_state_rows(services, chat_key, enforce_limits=False),
         vectors=await room_vector_points(services, chat_key, enforce_limits=False),
         keys=[
             {"key": entry.key, "room": entry.room, "name": entry.name, "role": entry.role}
@@ -720,15 +647,21 @@ async def _atomic_store_update(
     *,
     delete_rows: list[dict[str, Any]] | None = None,
     upsert_rows: list[dict[str, Any]] | None = None,
+    delete_documents_room: str | None = None,
+    upsert_documents: list[dict[str, Any]] | None = None,
+    delete_state_room: str | None = None,
+    upsert_state: tuple[str, list[dict[str, Any]]] | None = None,
     preserve_foreign_bindings: bool = False,
 ) -> int:
-    """Apply the room KV portion in one SQLite transaction.
+    """Apply the room's store portion (KV bindings + documents + room_state) in ONE
+    SQLite transaction.
 
     ``Store.set`` intentionally commits every call for ordinary use; backup restore needs a
     batch boundary, so this small internal operation uses the same guarded connection directly.
     """
     delete_rows = delete_rows or []
     upsert_rows = upsert_rows or []
+    upsert_documents = upsert_documents or []
     async with services.store._lock:
         conn = services.store._ensure_conn()
         try:
@@ -790,6 +723,39 @@ async def _atomic_store_update(
                         for row in safe_upserts
                     ],
                 )
+            if delete_documents_room is not None:
+                conn.execute("DELETE FROM documents WHERE room = ?", (delete_documents_room,))
+            if upsert_documents:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO documents"
+                    " (room, type, id, schema_version, data, meta, grants, seq)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    [
+                        (
+                            str(row.get("room") or ""),
+                            str(row.get("type") or ""),
+                            str(row.get("id") or ""),
+                            int(row.get("schema_version") or 1),
+                            str(row.get("data") or "{}"),
+                            str(row.get("meta") or "{}"),
+                            str(row.get("grants") or "[]"),
+                            int(row.get("seq") or 0),
+                        )
+                        for row in upsert_documents
+                    ],
+                )
+            if delete_state_room is not None:
+                conn.execute("DELETE FROM room_state WHERE room = ?", (delete_state_room,))
+            if upsert_state is not None:
+                state_room, state_rows = upsert_state
+                if state_rows:
+                    conn.executemany(
+                        "INSERT OR REPLACE INTO room_state (room, key, value) VALUES (?, ?, ?)",
+                        [
+                            (state_room, str(row.get("key") or ""), row.get("value"))
+                            for row in state_rows
+                        ],
+                    )
             services.store._commit(conn)
         except BaseException:
             conn.rollback()
@@ -797,16 +763,22 @@ async def _atomic_store_update(
     return deleted
 
 
-async def _replace_room_rows(
+async def _replace_room_content(
     services: Services,
     chat_key: str,
     rows: list[dict[str, Any]],
+    documents: list[dict[str, Any]],
+    state_rows: list[dict[str, Any]],
 ) -> None:
     current = await room_rows(services, chat_key, enforce_limits=False)
     await _atomic_store_update(
         services,
         delete_rows=current,
         upsert_rows=rows,
+        delete_documents_room=chat_key,
+        upsert_documents=documents,
+        delete_state_room=chat_key,
+        upsert_state=(chat_key, state_rows),
         preserve_foreign_bindings=True,
     )
 
@@ -1029,7 +1001,7 @@ async def _rollback_room_state(
         lambda: _remove_imported_media(services, chat_key, imported_media),
         lambda: _restore_staged_media(services, staged_media),
         lambda: _replace_room_vectors(services, chat_key, state.vectors),
-        lambda: _replace_room_rows(services, chat_key, state.rows),
+        lambda: _replace_room_content(services, chat_key, state.rows, state.documents, state.state_rows),
     ):
         try:
             await action()
@@ -1083,27 +1055,16 @@ async def reset_room_state(
     """
     if scope not in RESET_SCOPES:
         raise ValueError(f"unknown reset scope: {scope}")  # i18n-exempt: internal guard
-    # Fail closed on a dotted-child room that aliases this room's prefix-shaped KV namespace:
-    # reset deletes rows by store-key prefix (worldbook/characters/session_history/...), so an
-    # unguarded reset of "camp" would also wipe "camp.side"'s rows. Mirror the guard every other
-    # room op (export/delete/import) already runs. The keystore-backed room set is authoritative —
-    # it names a dotted child even when that child has only prefix-shaped rows, which
-    # `_known_chat_keys_from_rows` deliberately cannot recover; on a keystore-less transport
-    # (single-room CLI, where no neighbor can exist) fall back to the row-derived set.
-    known = (
-        await _known_room_chat_keys(services, keystore)
-        if keystore is not None
-        else _known_chat_keys_from_rows(await services.store.list_rows())
+    # M17: content lives in the documents table and runtime state in room_state, both
+    # room-scoped by an exact COLUMN — a dotted-neighbor room can no longer alias this
+    # room's rows, so the pre-M17 prefix-ambiguity guard is structurally unnecessary here.
+    doc_types, state_keys, state_prefixes = _reset_targets(scope)
+    deleted_docs = 0
+    for doc_type in sorted(doc_types):
+        deleted_docs += await services.store.doc_delete_type(chat_key, doc_type)
+    deleted_state = await services.store.state_delete_keys(
+        chat_key, keys=sorted(state_keys), prefixes=sorted(state_prefixes)
     )
-    _guard_room_prefix_ambiguity(chat_key, known)
-    exact, prefix = _reset_bases(scope)
-    prefixes = [f"{base}.{chat_key}" for base in exact]
-    prefixes.extend(f"{base}.{chat_key}." for base in prefix)
-    rows = await services.store.list_rows(store_key_prefixes=prefixes)
-    targets = [
-        row for row in rows if _reset_row_matches(str(row.get("store_key") or ""), chat_key, exact, prefix)
-    ]
-    deleted_rows = await _atomic_store_update(services, delete_rows=targets)
     deleted_vectors = 0
     deleted_media = 0
     if scope == "all":
@@ -1113,7 +1074,8 @@ async def reset_room_state(
     return {
         "chat_key": chat_key,
         "scope": scope,
-        "store_rows": deleted_rows,
+        "documents": deleted_docs,
+        "store_rows": deleted_state,
         "vector_points": deleted_vectors,
         "media_files": deleted_media,
     }
@@ -1130,7 +1092,13 @@ async def delete_room_data(services: Services, keystore: Keystore, room: str) ->
     keys_mutated = False
 
     try:
-        deleted_rows = await _atomic_store_update(services, delete_rows=state.rows)
+        deleted_rows = await _atomic_store_update(
+            services,
+            delete_rows=state.rows,
+            delete_documents_room=chat_key,
+            delete_state_room=chat_key,
+        )
+        deleted_rows += len(state.documents) + len(state.state_rows)
         deleted_vectors = await _delete_room_vectors(services, chat_key)
         with keystore.persisted_mutation():
             # ``persisted_mutation`` refreshes a file-backed keystore under its cross-process
@@ -1145,6 +1113,8 @@ async def delete_room_data(services: Services, keystore: Keystore, room: str) ->
     except BaseException:
         rollback_state = _RoomState(
             rows=state.rows,
+            documents=state.documents,
+            state_rows=state.state_rows,
             vectors=state.vectors,
             keys=keys_before_delete,
             media=state.media,
@@ -1211,8 +1181,6 @@ async def import_room(
         raise ValueError("snapshot belongs to a different room")  # i18n-exempt: mapped to localized op_failed
     room = expected or old_room
     new_chat_key = chat_key_for_room(room)
-    known_chat_keys = await _known_room_chat_keys(services, keystore)
-    _guard_room_prefix_ambiguity(new_chat_key, known_chat_keys)
 
     # Validate every section before mutating any live component.  Invalid entries fail the
     # whole restore; silently skipping a forged row/key would produce a deceptively "successful"
@@ -1223,16 +1191,6 @@ async def import_room(
         count_limit=MAX_BACKUP_STORE_ROWS,
         byte_limit=MAX_BACKUP_STORE_BYTES,
         name="store rows",
-    )
-    # Old snapshots may have been produced by the formerly ambiguous prefix matcher. Exact rows
-    # inside the snapshot can therefore reveal a dotted child room even if that room is currently
-    # offline; reject the whole import instead of reclassifying its rows as the parent room.
-    snapshot_known_chat_keys = _known_chat_keys_from_rows(
-        [row for row in raw_rows if isinstance(row, dict)]
-    )
-    _guard_room_prefix_ambiguity(
-        new_chat_key,
-        known_chat_keys | snapshot_known_chat_keys,
     )
     validated_rows: list[dict[str, Any]] = []
     row_ids: set[tuple[str, str]] = set()
@@ -1259,6 +1217,77 @@ async def import_room(
         validated_rows.append(
             {"user_key": user_key, "store_key": rewritten_key, "value": rewritten.get("value")}
         )
+
+    raw_documents = _list_field(raw, "documents")
+    _bounded_section(
+        raw_documents,
+        count_limit=MAX_BACKUP_STORE_ROWS,
+        byte_limit=MAX_BACKUP_STORE_BYTES,
+        name="documents",
+    )
+    validated_documents: list[dict[str, Any]] = []
+    doc_ids: set[tuple[str, str]] = set()
+    for row in raw_documents:
+        if not isinstance(row, dict):
+            raise ValueError("invalid document row")
+        doc_type = row.get("type")
+        doc_id = row.get("id")
+        data = row.get("data")
+        meta = row.get("meta", "{}")
+        grants = row.get("grants", "[]")
+        if not isinstance(doc_type, str) or not doc_type or not isinstance(doc_id, str) or not doc_id:
+            raise ValueError("invalid document row")
+        if not isinstance(data, str) or not isinstance(meta, str) or not isinstance(grants, str):
+            raise ValueError("invalid document row")
+        row_room = row.get("room", old_chat_key)
+        if row_room != old_chat_key:
+            raise ValueError("snapshot contains a document owned by another room")  # i18n-exempt: internal detail
+        dedup = (doc_type, doc_id)
+        if dedup in doc_ids:
+            raise ValueError("snapshot contains duplicate documents")
+        doc_ids.add(dedup)
+        try:
+            schema_version = int(row.get("schema_version") or 1)
+            seq = int(row.get("seq") or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid document row") from exc
+        validated_documents.append(
+            {
+                "room": new_chat_key,
+                "type": doc_type,
+                "id": doc_id,
+                "schema_version": schema_version,
+                "data": data.replace(old_chat_key, new_chat_key) if old_chat_key != new_chat_key else data,
+                "meta": meta,
+                "grants": grants,
+                "seq": seq,
+            }
+        )
+
+    raw_state = _list_field(raw, "room_state")
+    _bounded_section(
+        raw_state,
+        count_limit=MAX_BACKUP_STORE_ROWS,
+        byte_limit=MAX_BACKUP_STORE_BYTES,
+        name="room state rows",
+    )
+    validated_state: list[dict[str, Any]] = []
+    state_keys_seen: set[str] = set()
+    for row in raw_state:
+        if not isinstance(row, dict):
+            raise ValueError("invalid room state row")
+        key = row.get("key")
+        value = row.get("value")
+        if not isinstance(key, str) or not key:
+            raise ValueError("invalid room state row")
+        if value is not None and not isinstance(value, str):
+            raise ValueError("invalid room state row")
+        if key in state_keys_seen:
+            raise ValueError("snapshot contains duplicate room state rows")  # i18n-exempt: internal detail
+        state_keys_seen.add(key)
+        if value is not None and old_chat_key != new_chat_key:
+            value = value.replace(old_chat_key, new_chat_key)
+        validated_state.append({"key": key, "value": value})
 
     raw_vectors = _list_field(raw, "vector_points")
     _bounded_section(
@@ -1405,7 +1434,12 @@ async def import_room(
     state = await _capture_room_state(services, keystore, room, new_chat_key)
     created_media_hashes: set[str] = set()
     try:
-        await _atomic_store_update(services, upsert_rows=validated_rows)
+        await _atomic_store_update(
+            services,
+            upsert_rows=validated_rows,
+            upsert_documents=validated_documents,
+            upsert_state=(new_chat_key, validated_state),
+        )
         if validated_vectors:
             await vector_store.upsert(validated_vectors)
         if stale_vector_ids:
@@ -1460,6 +1494,8 @@ async def import_room(
         "chat_key": new_chat_key,
         "path": str(source),
         "keys": imported_keys,
+        "documents": len(validated_documents),
+        "room_state_rows": len(validated_state),
         "store_rows": len(validated_rows),
         "vector_points": len(validated_vectors),
         "media_files": len(validated_media),

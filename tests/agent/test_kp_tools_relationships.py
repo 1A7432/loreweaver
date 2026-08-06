@@ -51,7 +51,7 @@ async def test_adjust_relationship_persists_and_returns_localized_done():
         delta=15,
     )
 
-    raw = await services.store.get(user_key="", store_key=f"relationships.{ctx.chat_key}")
+    raw = await services.store.state_get(ctx.chat_key, "relationships")
     assert raw is not None
     assert '"affection": 15' in raw or '"affection":15' in raw
 

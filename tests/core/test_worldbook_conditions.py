@@ -5,8 +5,9 @@ the MVU tree, render-time-only entries disabled, [GENERATE:*] title prefixes str
 
 from __future__ import annotations
 
-from core.mvu_compat import MvuManager
-from core.worldbook import LoreEntry, WorldbookManager, render_entry_content
+from core.documents import DocumentStore
+from core.mvu_compat import load_mvu
+from core.worldbook import LoreEntry, Worldbook, render_entry_content
 from infra.store import Store
 
 
@@ -31,7 +32,7 @@ def test_condition_survives_the_dict_round_trip():
 
 
 async def test_match_fires_condition_only_when_true():
-    manager = WorldbookManager(Store())
+    manager = Worldbook(Store())
     await manager.add("room1", _entry(title="panic", condition="fear >= 5"))
     await manager.add("room1", _entry(title="always"))
 
@@ -43,7 +44,7 @@ async def test_match_fires_condition_only_when_true():
 
 
 async def test_match_conditions_fail_closed():
-    manager = WorldbookManager(Store())
+    manager = Worldbook(Store())
     await manager.add("room1", _entry(title="conditioned", condition="fear >= 5"))
     await manager.add("room1", _entry(title="broken", condition="1 ~ 2"))
 
@@ -55,7 +56,7 @@ async def test_match_conditions_fail_closed():
 
 
 async def test_match_ignore_conditions_shows_everything():
-    manager = WorldbookManager(Store())
+    manager = Worldbook(Store())
     await manager.add("room1", _entry(title="conditioned", condition="fear >= 5"))
 
     entries = await manager.match("room1", "", role="keeper", ignore_conditions=True)
@@ -86,7 +87,7 @@ def test_render_entry_content_never_leaks_template_syntax():
 
 
 async def test_import_maps_at_if_to_condition_and_strips_decorator_lines():
-    manager = WorldbookManager(Store())
+    manager = Worldbook(Store())
     count = await manager.import_entries(
         "room1",
         [{"comment": "stage two lore", "content": "@@if variables.stage === 2\nThe cult mobilizes.", "keys": ["cult"]}],
@@ -99,7 +100,7 @@ async def test_import_maps_at_if_to_condition_and_strips_decorator_lines():
 
 async def test_keeper_import_consumes_initvar_into_the_mvu_tree_not_as_lore():
     store = Store()
-    manager = WorldbookManager(store)
+    manager = Worldbook(store)
     initvar_content = '{\n  // starting state\n  "理": {"好感度": [33, "desc"],},\n}'
     count = await manager.import_entries(
         "room1",
@@ -111,7 +112,7 @@ async def test_keeper_import_consumes_initvar_into_the_mvu_tree_not_as_lore():
     )
     assert count == 1  # only the real lore entry stored
     assert [entry.title for entry in await manager.list("room1")] == ["real lore"]
-    tree = await MvuManager(store).load("room1")
+    tree = await load_mvu(DocumentStore(store), "room1")
     assert tree["理"]["好感度"][0] == 33
 
 
@@ -119,7 +120,7 @@ async def test_player_import_drops_initvar_without_seeding_the_shared_tree():
     """RED LINE (拆卡): only the keeper's world import may write the room's variable tree.
     A player upload's declaration entries are neither stored as lore nor consumed."""
     store = Store()
-    manager = WorldbookManager(store)
+    manager = Worldbook(store)
     count = await manager.import_entries(
         "room1",
         [
@@ -130,23 +131,23 @@ async def test_player_import_drops_initvar_without_seeding_the_shared_tree():
     )
     assert count == 1
     assert [entry.title for entry in await manager.list("room1")] == ["real lore"]
-    assert await MvuManager(store).load("room1") == {}
+    assert await load_mvu(DocumentStore(store), "room1") == {}
 
 
 async def test_import_initvar_bypasses_the_content_length_cap():
     store = Store()
-    manager = WorldbookManager(store)
+    manager = Worldbook(store)
     # 150 keys stays inside normalize_tree's defensive node budget while the raw text still
     # far exceeds the 4000-char lore cap — the point is the cap bypass, not the budget.
     big = "{" + ",".join(f'"k{i}": [{i}, "some longer description text"]' for i in range(150)) + "}"
     assert len(big) > 4000
     count = await manager.import_entries("room1", [{"comment": "[InitVar]", "content": big}], is_keeper=True)
     assert count == 0
-    assert (await MvuManager(store).load("room1"))["k149"][0] == 149
+    assert (await load_mvu(DocumentStore(store), "room1"))["k149"][0] == 149
 
 
 async def test_import_disables_render_time_only_entries():
-    manager = WorldbookManager(Store())
+    manager = Worldbook(Store())
     await manager.import_entries(
         "room1",
         [
@@ -161,7 +162,7 @@ async def test_import_disables_render_time_only_entries():
 
 
 async def test_import_strips_generate_title_prefix_but_keeps_the_entry():
-    manager = WorldbookManager(Store())
+    manager = Worldbook(Store())
     await manager.import_entries(
         "room1", [{"comment": "[GENERATE:BEFORE] opening scene", "content": "It rains.", "keys": ["rain"]}]
     )

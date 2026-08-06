@@ -16,8 +16,8 @@ from agent.loop import run_kp_turn  # noqa: E402
 from agent.prompt_builder import build_system_prompt  # noqa: E402
 from agent.services import build_services  # noqa: E402
 from agent.tools import Toolset, tool  # noqa: E402
-from core.modvars import ModvarManager, build_spec  # noqa: E402
-from core.mvu_compat import MvuManager  # noqa: E402
+from core.modvars import build_spec, define_modvar, load_modvars  # noqa: E402
+from core.mvu_compat import load_mvu  # noqa: E402
 from infra.config import Settings  # noqa: E402
 from infra.embeddings import FakeEmbeddings  # noqa: E402
 from infra.llm import FakeLLM, assistant_text, assistant_tools, tool_call  # noqa: E402
@@ -57,9 +57,7 @@ async def test_reply_ready_rewrite_and_narrate_shape_the_final_reply():
 async def test_turn_start_writes_validate_and_chain_into_variables_changed():
     services = _services(FakeLLM(script=[assistant_text("ok")]))
     ctx = _ctx("chat-hooks-2")
-    await ModvarManager(services.store).define(
-        ctx.chat_key, build_spec("fear", "number", minimum=0, maximum=10)
-    )
+    await define_modvar(services.documents, ctx.chat_key, build_spec("fear", "number", minimum=0, maximum=10))
     await install_room_hooks(
         services,
         ctx.chat_key,
@@ -72,9 +70,9 @@ async def test_turn_start_writes_validate_and_chain_into_variables_changed():
 
     result = await run_kp_turn(ctx, services, Toolset(), "go")
 
-    state = await ModvarManager(services.store).load(ctx.chat_key)
+    state = await load_modvars(services.documents, ctx.chat_key)
     assert state["values"]["fear"] == 10  # validated + clamped by real code
-    tree = await MvuManager(services.store).load(ctx.chat_key)
+    tree = await load_mvu(services.documents, ctx.chat_key)
     assert tree["trail"]["seen"] is True  # non-modvar name routes into the MVU tree
     assert "changed:2" in result.reply  # variables_changed observed both writes
 
@@ -152,7 +150,7 @@ async def test_reimport_replaces_a_sources_scripts_instead_of_stacking():
     await install_room_hooks(services, "room-x", "card:络络", ["on('turn_start', () => {});"])
     await install_room_hooks(services, "room-x", "card:络络", ["on('reply_ready', () => {});"])
 
-    raw = await services.store.get(store_key="room_hooks.room-x")
+    raw = await services.store.state_get("room-x", "room_hooks")
     entries = json.loads(raw)
     assert len(entries) == 1
     assert entries[0]["id"] == "card:络络#0"

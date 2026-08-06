@@ -712,11 +712,21 @@ class CharacterTemplate:
 
 
 class CharacterManager:
-    """Character sheet manager: CRUD over `store`, template-based generation,
-    skill/attribute alias resolution and DND5e modifier math."""
+    """Character sheet domain service: document-backed CRUD, template-based
+    generation, skill/attribute alias resolution and DND5e modifier math.
+
+    M17 storage: each sheet is one `sheet` document, id = the character NAME
+    (room-unique — the same identity the party roster always keyed on), with
+    ``data.owner`` recording the controlling uid. The per-user active-character
+    pointer and the party-roster display cache are room_state rows. The old
+    per-user `characters.{chat}.{name}` KV rows are gone: a room's cast is one
+    namespace, and importing/claiming flows set `owner` accordingly."""
 
     def __init__(self, store: Store) -> None:
         self.store = store
+        from core.documents import DocumentStore
+
+        self.documents = DocumentStore(store)
         self.templates = {
             "coc7": CharacterTemplate.get_coc7_template(),
             "dnd5e": CharacterTemplate.get_dnd5e_template(),
@@ -736,30 +746,28 @@ class CharacterManager:
         wipe the real character. See `CharacterDataError`.
         """
         if not char_name:
-            active_key = f"active_character.{chat_key}"
             try:
-                active_name = await self.store.get(user_key=user_id, store_key=active_key)
+                active_name = await self.store.state_get(chat_key, f"active_character.{user_id}")
                 char_name = active_name if active_name else "default"
             except Exception:
                 char_name = "default"
 
-        store_key = f"characters.{chat_key}.{char_name}"
-
         try:
-            char_data = await self.store.get(user_key=user_id, store_key=store_key)
+            doc = await self.documents.get(chat_key, "sheet", char_name)
         except Exception as exc:
             raise CharacterDataError(char_name) from exc
 
-        if not char_data:
-            # Row genuinely absent — return a fresh default sheet.
+        if doc is None:
+            # Document genuinely absent — return a fresh default sheet.
             return CharacterSheet(name=char_name)
 
-        try:
-            data_dict = json.loads(char_data)
-            return CharacterSheet.from_dict(data_dict)
-        except Exception as exc:
-            # Row present but undecodable — refuse rather than fabricate a
+        if doc.corrupt:
+            # Document present but undecodable — refuse rather than fabricate a
             # blank sheet that a mutating caller would persist over the real one.
+            raise CharacterDataError(char_name)
+        try:
+            return CharacterSheet.from_dict(doc.data)
+        except Exception as exc:
             raise CharacterDataError(char_name) from exc
 
     async def save_character(self, user_id: str, chat_key: str, character: CharacterSheet) -> None:
@@ -770,16 +778,11 @@ class CharacterManager:
             set_hit_points(character, current=hp, maximum=hp_max, allow_raise_max=True)
             recompute_dnd_derived(character, preserve_existing=True)
         character.last_updated = time.time()
-        store_key = f"characters.{chat_key}.{character.name}"
-
-        await self.store.set(
-            user_key=user_id,
-            store_key=store_key,
-            value=json.dumps(character.to_dict(), ensure_ascii=False),
+        await self.documents.put(
+            chat_key, "sheet", character.name, dict(character.to_dict(), owner=user_id)
         )
 
         await self.set_active_character(user_id, chat_key, character.name)
-        await self._update_char_list(user_id, chat_key, character.name, add=True)
         await self.sync_party_roster(chat_key, character)
 
     async def sync_party_roster(
@@ -792,9 +795,8 @@ class CharacterManager:
         recorded `status_effects` in the roster are preserved rather than
         cleared.
         """
-        roster_key = f"party_roster.{chat_key}"
         try:
-            roster_data = await self.store.get(user_key="", store_key=roster_key)
+            roster_data = await self.store.state_get(chat_key, "party_roster")
             roster = json.loads(roster_data) if roster_data else {}
         except Exception:
             roster = {}
@@ -835,14 +837,13 @@ class CharacterManager:
         status_summary.update(vitals)
         roster[character.name] = status_summary
         try:
-            await self.store.set(user_key="", store_key=roster_key, value=json.dumps(roster, ensure_ascii=False))
+            await self.store.state_set(chat_key, "party_roster", json.dumps(roster, ensure_ascii=False))
         except Exception:
             pass
 
     async def get_party_roster(self, chat_key: str) -> list[dict[str, Any]]:
-        roster_key = f"party_roster.{chat_key}"
         try:
-            roster_data = await self.store.get(user_key="", store_key=roster_key)
+            roster_data = await self.store.state_get(chat_key, "party_roster")
             if roster_data:
                 roster = json.loads(roster_data)
                 return list(roster.values())
@@ -851,76 +852,44 @@ class CharacterManager:
         return []
 
     async def set_active_character(self, user_id: str, chat_key: str, char_name: str) -> None:
-        active_key = f"active_character.{chat_key}"
-        await self.store.set(user_key=user_id, store_key=active_key, value=char_name)
-
-    def _get_char_list_key(self, chat_key: str) -> str:
-        return f"characters_list.{chat_key}"
-
-    async def _update_char_list(self, user_id: str, chat_key: str, char_name: str, add: bool = True) -> None:
-        list_key = self._get_char_list_key(chat_key)
-        try:
-            list_data = await self.store.get(user_key=user_id, store_key=list_key)
-            char_list = json.loads(list_data) if list_data else []
-        except Exception:
-            char_list = []
-
-        if add and char_name not in char_list:
-            char_list.append(char_name)
-        elif not add and char_name in char_list:
-            char_list.remove(char_name)
-
-        try:
-            await self.store.set(user_key=user_id, store_key=list_key, value=json.dumps(char_list))
-        except Exception:
-            pass
+        await self.store.state_set(chat_key, f"active_character.{user_id}", char_name)
 
     async def list_characters(self, user_id: str, chat_key: str) -> list[dict[str, Any]]:
-        list_key = self._get_char_list_key(chat_key)
+        """`user_id`'s characters in this room — the sheet documents whose ``owner``
+        is them (the old separate per-user list row is derived state, gone)."""
         characters = []
         try:
-            list_data = await self.store.get(user_key=user_id, store_key=list_key)
-            char_list = json.loads(list_data) if list_data else []
-            for char_name in char_list:
-                store_key = f"characters.{chat_key}.{char_name}"
-                try:
-                    char_data = await self.store.get(user_key=user_id, store_key=store_key)
-                    if char_data:
-                        data = json.loads(char_data)
-                        characters.append(
-                            {
-                                "name": data.get("name", char_name),
-                                "system": data.get("system", "CoC"),
-                                "last_updated": data.get("last_updated", 0),
-                            }
-                        )
-                except Exception:
-                    pass
+            for doc in await self.documents.list(chat_key, "sheet"):
+                if doc.data.get("owner") != user_id:
+                    continue
+                characters.append(
+                    {
+                        "name": doc.data.get("name", doc.id),
+                        "system": doc.data.get("system", "CoC"),
+                        "last_updated": doc.data.get("last_updated", 0),
+                    }
+                )
         except Exception:
             pass
         return characters
 
     async def delete_character(self, user_id: str, chat_key: str, char_name: str) -> bool:
-        store_key = f"characters.{chat_key}.{char_name}"
         try:
-            await self.store.delete(user_key=user_id, store_key=store_key)
-            await self._update_char_list(user_id, chat_key, char_name, add=False)
-            active_key = f"active_character.{chat_key}"
-            if await self.store.get(user_key=user_id, store_key=active_key) == char_name:
-                await self.store.delete(user_key=user_id, store_key=active_key)
+            await self.documents.delete(chat_key, "sheet", char_name)
+            if await self.store.state_get(chat_key, f"active_character.{user_id}") == char_name:
+                await self.store.state_delete(chat_key, f"active_character.{user_id}")
             await self.remove_from_party_roster(chat_key, char_name)
             return True
         except Exception:
             return False
 
     async def remove_from_party_roster(self, chat_key: str, char_name: str) -> None:
-        roster_key = f"party_roster.{chat_key}"
         try:
-            roster_data = await self.store.get(user_key="", store_key=roster_key)
+            roster_data = await self.store.state_get(chat_key, "party_roster")
             roster = json.loads(roster_data) if roster_data else {}
             if char_name in roster:
                 roster.pop(char_name, None)
-                await self.store.set(user_key="", store_key=roster_key, value=json.dumps(roster, ensure_ascii=False))
+                await self.store.state_set(chat_key, "party_roster", json.dumps(roster, ensure_ascii=False))
         except Exception:
             pass
 

@@ -16,7 +16,7 @@ from agent.kp_tools import build_kp_toolset
 from agent.kp_tools_charcard import CharcardTools
 from agent.kp_tools_companion import CompanionTools
 from agent.kp_tools_worldbook import WorldbookTools
-from agent.npc import NpcManager
+from agent.npc import list_companions
 from agent.prompt_builder import build_system_prompt
 from agent.services import build_services
 from core.worldbook import LoreEntry
@@ -101,7 +101,7 @@ async def test_import_character_as_companion_creates_record_sheet_and_lore(tmp_p
     assert "Beric" in result
 
     # A player_companion record exists, with the card persona carried over.
-    companions = await NpcManager(services.store).list_companions("chat-comp")
+    companions = await list_companions(services.documents, "chat-comp")
     assert len(companions) == 1
     companion = companions[0]
     assert companion.role == "player_companion"
@@ -145,7 +145,7 @@ async def test_import_male_card_as_companion_carries_he_him_to_the_keeper(tmp_pa
     await CharcardTools(services).import_character(ctx, file_path="shenmo.json", system="coc7", as_="companion")
 
     # (1) The pronoun hint is carried structurally on the companion record.
-    companions = await NpcManager(services.store).list_companions("chat-shenmo")
+    companions = await list_companions(services.documents, "chat-shenmo")
     assert len(companions) == 1
     assert companions[0].name == "沈墨"
     assert companions[0].pronouns == "he/him"
@@ -225,7 +225,7 @@ def _write_heavy_card(tmp_path) -> LocalFs:
 
 
 async def test_player_import_strips_world_machinery_and_reports(tmp_path):
-    from core.mvu_compat import MvuManager
+    from core.mvu_compat import load_mvu
 
     services = _services()
     fs = _write_heavy_card(tmp_path)
@@ -238,15 +238,15 @@ async def test_player_import_strips_world_machinery_and_reports(tmp_path):
     assert "variable declaration" in result
     assert "world" in result
     # RED LINES: no hooks installed, no shared tree seeded, no EJS in stored lore.
-    assert await services.store.get(user_key="", store_key="room_hooks.chat-split") is None
-    assert await MvuManager(services.store).load("chat-split") == {}
+    assert await services.store.state_get("chat-split", "room_hooks") is None
+    assert await load_mvu(services.documents, "chat-split") == {}
     entries = await services.worldbook.list("chat-split")
     assert [entry.title for entry in entries] == ["manor"]
     assert "<%" not in entries[0].content
 
 
 async def test_keeper_world_import_installs_the_module_half(tmp_path):
-    from core.mvu_compat import MvuManager
+    from core.mvu_compat import load_mvu
 
     services = _services()
     fs = _write_heavy_card(tmp_path)
@@ -256,15 +256,15 @@ async def test_keeper_world_import_installs_the_module_half(tmp_path):
 
     assert "1 hook script" in result
     # Hooks registered under the card's source id (idempotent per source).
-    raw = await services.store.get(user_key="", store_key="room_hooks.chat-world")
+    raw = await services.store.state_get("chat-world", "room_hooks")
     assert raw and "card:理" in raw
     # The variable tree is seeded, hidden state included.
-    tree = await MvuManager(services.store).load("chat-world")
+    tree = await load_mvu(services.documents, "chat-world")
     assert tree["理"]["好感度"][0] == 33
     assert tree["真凶"][0] == "管家"
     # The durable "this room runs an imported module" marker the prompt builder gates
     # the keeper_discipline/module_fidelity fold-in on.
-    assert await services.store.get(user_key="", store_key="world_import.chat-world") == "理"
+    assert await services.store.state_get("chat-world", "world_import") == "理"
     # World lore keeps its render-time EJS (that is what this path exists to carry),
     # and the world card never became the importing keeper's OWN character (a default
     # placeholder sheet may exist; the card's persona must not).
@@ -276,7 +276,7 @@ async def test_keeper_world_import_installs_the_module_half(tmp_path):
 
 
 async def test_world_import_puts_the_character_half_on_the_claimable_roster(tmp_path):
-    from core.pregen_roster import PregenRoster
+    from core.pregen_roster import pregen_claim, pregen_entries
 
     services = _services()
     fs = _write_heavy_card(tmp_path)
@@ -285,14 +285,13 @@ async def test_world_import_puts_the_character_half_on_the_claimable_roster(tmp_
     result = await CharcardTools(services).import_world_card(keeper_ctx, file_path="heavy.json")
 
     assert "pc claim" in result  # the summary points players at the roster
-    roster = PregenRoster(services.store)
-    entries = await roster.entries("chat-cast")
+    entries = await pregen_entries(services.documents, "chat-cast")
     assert [entry["name"] for entry in entries] == ["理"]
     assert entries[0]["claimed_by"] == ""
     # Unclaimed cast stays off the party panel until someone claims it.
     assert await services.characters.get_party_roster("chat-cast") == []
 
-    status, sheet = await roster.claim("chat-cast", "理", "player-1", services.characters)
+    status, sheet = await pregen_claim(services.documents, "chat-cast", "理", "player-1", services.characters)
     assert status == "ok" and sheet is not None
     active = await services.characters.get_character("player-1", "chat-cast")
     assert active.name == "理"

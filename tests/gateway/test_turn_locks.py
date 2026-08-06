@@ -136,14 +136,13 @@ class _RosterRmwRouter:
 
     async def dispatch_reply(self, ctx: AgentCtx, text: str) -> CommandReply:
         name = text.strip()
-        key = f"party_roster.{ctx.chat_key}"
         self.order.append(("enter", name))
-        raw = await self._store.get(user_key="", store_key=key)
+        raw = await self._store.state_get(ctx.chat_key, "party_roster")
         roster = json.loads(raw) if raw else {}
         for _ in range(5):
             await asyncio.sleep(0)  # let an unserialized peer turn read the same stale roster
         roster[name] = {"name": name}
-        await self._store.set(user_key="", store_key=key, value=json.dumps(roster))
+        await self._store.state_set(ctx.chat_key, "party_roster", json.dumps(roster))
         self.order.append(("exit", name))
         return CommandReply(f"added {name}")
 
@@ -199,7 +198,7 @@ async def test_same_room_turns_serialize_and_do_not_lose_an_update() -> None:
 
     await asyncio.gather(server.dispatch_input(ann, "Ann"), server.dispatch_input(bob, "Bob"))
 
-    raw = await services.store.get(user_key="", store_key=f"party_roster.{ann.session_key}")
+    raw = await services.store.state_get(ann.session_key, "party_roster")
     roster = json.loads(raw)
     assert set(roster) == {"Ann", "Bob"}  # neither turn's write was lost
 
@@ -351,7 +350,7 @@ async def test_runner_hub_path_serializes_same_session_no_lost_update() -> None:
         runner.on_inbound(InboundMessage(source=source, text="Bob", at_bot=True)),
     )
 
-    raw = await services.store.get(user_key="", store_key=f"party_roster.{session_key}")
+    raw = await services.store.state_get(session_key, "party_roster")
     roster = json.loads(raw)
     assert set(roster) == {"Ann", "Bob"}  # neither turn's write was lost
     assert [op for op, _ in order] == ["enter", "exit", "enter", "exit"]  # serialized, not interleaved

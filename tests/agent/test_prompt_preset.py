@@ -60,7 +60,7 @@ def _ctx(room: str) -> AgentCtx:
 async def test_enabled_preset_folds_one_style_section(tmp_path):
     services = _services(tmp_path)
     save_preset_text(tmp_path, "terse", _PRESET_TEXT)
-    await services.store.set(store_key="preset_enabled.preset-room", value="terse")
+    await services.store.state_set("preset-room", "preset_enabled", "terse")
 
     prompt = await build_system_prompt(_ctx("preset-room"), services)
 
@@ -83,12 +83,12 @@ async def test_no_preset_enabled_contributes_nothing(tmp_path):
 
 async def test_broken_or_missing_preset_never_breaks_the_turn(tmp_path):
     services = _services(tmp_path)
-    await services.store.set(store_key="preset_enabled.broken-room", value="ghost")
+    await services.store.state_set("broken-room", "preset_enabled", "ghost")
     prompt = await build_system_prompt(_ctx("broken-room"), services)
     assert "Imported style preset" not in prompt
 
     (presets_dir(tmp_path) / "bad.json").parent.mkdir(parents=True, exist_ok=True)
     (presets_dir(tmp_path) / "bad.json").write_text("not json", encoding="utf-8")
-    await services.store.set(store_key="preset_enabled.broken-room", value="bad")
+    await services.store.state_set("broken-room", "preset_enabled", "bad")
     prompt = await build_system_prompt(_ctx("broken-room"), services)
     assert "Imported style preset" not in prompt

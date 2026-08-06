@@ -9,7 +9,7 @@ companion's own sheet when it takes a turn.
 The heavy lifting -- generating a companion's action under strict information isolation, then running
 it through the normal turn pipeline so the KP resolves real dice -- lives in
 `agent.companion_actor` + `gateway.director`. These tools are the thin CRUD/steering layer over
-`agent.npc.NpcManager`; every user-visible string is looked up via `services.i18n` under
+`agent.npc` (document-backed records); every user-visible string is looked up via `services.i18n` under
 `companion.tools.*` (`locales/{en,zh}/companion.json`). Companion persona/knowledge/names are game
 DATA supplied at runtime, not literals here, so they need no i18n of their own (same convention as
 `agent.kp_tools_npc`).
@@ -25,9 +25,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from agent import npc as npc_records
 from agent.companion_actor import companion_action
 from agent.context import AgentCtx
-from agent.npc import NpcManager
 from agent.services import Services
 from agent.tools import tool
 from core.character_manager import CharacterSheet
@@ -58,7 +58,6 @@ class CompanionTools:
         command_router: CommandRouter | None = None,
     ) -> None:
         self._services = services
-        self._npcs = NpcManager(services.store)
         # Present only on the shared-room (hub) path; when set, `companion_act` can drive a live
         # companion turn via the director. Absent everywhere else, where it degrades gracefully.
         self._hub = hub
@@ -95,8 +94,8 @@ class CompanionTools:
             template_key = _SYSTEM_MAP.get(system, "coc7")
             system_name = "CoC" if template_key == "coc7" else "DnD5e"
 
-            record = await self._npcs.create_companion(
-                ctx.chat_key, name, persona=persona, playstyle=playstyle, stat_char=name
+            record = await npc_records.create_companion(
+                self._services.documents, ctx.chat_key, name, persona=persona, playstyle=playstyle, stat_char=name
             )
 
             if generate:
@@ -128,7 +127,7 @@ class CompanionTools:
         if ctx.platform == "companion":
             return i18n.t("companion.tools.act.nested")
         try:
-            companion = await self._npcs.get_npc(ctx.chat_key, name)
+            companion = await npc_records.get_npc(self._services.documents, ctx.chat_key, name)
             if companion is None or companion.role != "player_companion":
                 return i18n.t("companion.tools.not_found", name=name)
 
@@ -179,16 +178,15 @@ class CompanionTools:
             The new (or current) auto-turn state.
         """
         i18n = self._i18n(ctx)
-        store_key = f"party_auto.{ctx.chat_key}"
         value = action.strip().casefold()
         try:
             if value in _TRUTHY:
-                await self._services.store.set(user_key="", store_key=store_key, value="1")
+                await self._services.store.state_set(ctx.chat_key, "party_auto", "1")
                 return i18n.t("companion.tools.auto.on")
             if value in _FALSY:
-                await self._services.store.set(user_key="", store_key=store_key, value="0")
+                await self._services.store.state_set(ctx.chat_key, "party_auto", "0")
                 return i18n.t("companion.tools.auto.off")
-            current = await self._services.store.get(user_key="", store_key=store_key)
+            current = await self._services.store.state_get(ctx.chat_key, "party_auto")
             return i18n.t("companion.tools.auto.on" if current == "1" else "companion.tools.auto.off")
         except Exception as exc:
             return i18n.t("companion.tools.auto.failed", error=str(exc))
@@ -202,7 +200,7 @@ class CompanionTools:
         """
         i18n = self._i18n(ctx)
         try:
-            companions = await self._npcs.list_companions(ctx.chat_key)
+            companions = await npc_records.list_companions(self._services.documents, ctx.chat_key)
             if not companions:
                 return i18n.t("companion.tools.list.empty")
             lines = [i18n.t("companion.tools.list.header", count=len(companions))]
@@ -234,10 +232,10 @@ class CompanionTools:
         """
         i18n = self._i18n(ctx)
         try:
-            companion = await self._npcs.get_npc(ctx.chat_key, name)
+            companion = await npc_records.get_npc(self._services.documents, ctx.chat_key, name)
             if companion is None or companion.role != "player_companion":
                 return i18n.t("companion.tools.not_found", name=name)
-            await self._npcs.delete_npc(ctx.chat_key, companion.id)
+            await npc_records.delete_npc(self._services.documents, ctx.chat_key, companion.id)
             return i18n.t("companion.tools.remove.done", name=companion.name)
         except Exception as exc:
             return i18n.t("companion.tools.remove.failed", error=str(exc))
@@ -255,10 +253,10 @@ class CompanionTools:
         """
         i18n = self._i18n(ctx)
         try:
-            companion = await self._npcs.get_npc(ctx.chat_key, name)
+            companion = await npc_records.get_npc(self._services.documents, ctx.chat_key, name)
             if companion is None or companion.role != "player_companion":
                 return i18n.t("companion.tools.not_found", name=name)
-            record = await self._npcs.update_npc(ctx.chat_key, companion.id, playstyle=playstyle)
+            record = await npc_records.update_npc(self._services.documents, ctx.chat_key, companion.id, playstyle=playstyle)
             return i18n.t("companion.tools.playstyle.done", name=record.name, playstyle=record.playstyle)
         except Exception as exc:
             return i18n.t("companion.tools.playstyle.failed", error=str(exc))
@@ -277,10 +275,10 @@ class CompanionTools:
         """
         i18n = self._i18n(ctx)
         try:
-            companion = await self._npcs.get_npc(ctx.chat_key, name)
+            companion = await npc_records.get_npc(self._services.documents, ctx.chat_key, name)
             if companion is None or companion.role != "player_companion":
                 return i18n.t("companion.tools.not_found", name=name)
-            record = await self._npcs.npc_learns(ctx.chat_key, companion.id, fact)
+            record = await npc_records.npc_learns(self._services.documents, ctx.chat_key, companion.id, fact)
             return i18n.t("companion.tools.learns.done", name=record.name, fact=fact)
         except Exception as exc:
             return i18n.t("companion.tools.learns.failed", error=str(exc))
@@ -301,8 +299,7 @@ async def witness(services: Services, chat_key: str, fact: str) -> None:
     party. Silently no-ops on any error and never raises into the caller.
     """
     try:
-        npcs = NpcManager(services.store)
-        for companion in await npcs.list_companions(chat_key):
-            await npcs.npc_learns(chat_key, companion.id, fact)
+        for companion in await npc_records.list_companions(services.documents, chat_key):
+            await npc_records.npc_learns(services.documents, chat_key, companion.id, fact)
     except Exception:
         pass

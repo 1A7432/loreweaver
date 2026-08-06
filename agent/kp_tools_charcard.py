@@ -23,9 +23,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from agent import npc as npc_records
 from agent.context import AgentCtx
 from agent.hook_runtime import install_room_hooks
-from agent.npc import NpcManager
 from agent.services import Services
 from agent.tools import tool
 from core.card_split import WorldPayloads, card_hook_codes, detect_world_payloads, split_card
@@ -35,8 +35,8 @@ from core.character_rules import render_validation_notice, validate_sheet
 from core.charcard import PNG_SIGNATURE, CharacterCard, parse_card_bytes
 from core.documents import MODULE_POOL_ID, PLAYER_VIEWER
 from core.lorecard import Lorecard, looks_like_lorecard, parse_lorecard_bytes
-from core.modvars import ModvarManager
-from core.pregen_roster import PregenRoster
+from core.modvars import define_modvar
+from core.pregen_roster import pregen_add
 from infra.i18n import I18n
 from infra.media_store import MediaStore
 
@@ -142,7 +142,6 @@ class CharcardTools:
 
     def __init__(self, services: Services) -> None:
         self._services = services
-        self._npcs = NpcManager(services.store)
 
     def _i18n(self, ctx: AgentCtx) -> I18n:
         return self._services.i18n.with_locale(ctx.locale)
@@ -185,7 +184,7 @@ class CharcardTools:
             notices = [render_validation_notice(i18n, violations), _stripped_notice(i18n, world)]
 
             if as_.strip().lower() == "companion":
-                record = await self._npcs.create_companion(
+                record = await npc_records.create_companion(self._services.documents,
                     ctx.chat_key,
                     final_name,
                     persona=_persona_text(card),
@@ -322,25 +321,22 @@ class CharcardTools:
             # keeper_discipline/module_fidelity blocks into the lore section ONLY for rooms
             # that actually loaded a module this way — a free-sandbox room whose keeper merely
             # `.lore add`ed some setting notes must never receive run-the-module directives.
-            await self._services.store.set(
-                user_key="", store_key=f"world_import.{ctx.chat_key}", value=card.name or "card"
-            )
+            await self._services.store.state_set(ctx.chat_key, "world_import", card.name or "card")
 
             # A native bundle (M14) additionally carries TYPED variable specs — the lossless
             # flavor of what an ST card can only ship as an [InitVar] tree. Keeper trust:
             # they land as real `core.modvars` trackers (validated/clamped from here on).
             specs_line = ""
             if lorecard is not None and lorecard.variable_specs:
-                manager = ModvarManager(self._services.store)
                 for spec in lorecard.variable_specs:
-                    await manager.define(ctx.chat_key, dict(spec))
+                    await define_modvar(self._services.documents, ctx.chat_key, dict(spec))
                 specs_line = i18n.t("charcard.tools.world.specs_line", count=len(lorecard.variable_specs))
 
             pregen_line = ""
             if character.name.strip():
                 sheet = await self._build_pregen_sheet(ctx, character, system, host_path)
-                entry = await PregenRoster(self._services.store).add(
-                    ctx.chat_key, sheet, source=f"card:{card.name}"
+                entry = await pregen_add(
+                    self._services.documents, ctx.chat_key, sheet, source=f"card:{card.name}"
                 )
                 if entry is not None:
                     pregen_line = i18n.t("charcard.tools.world.pregen_line", name=sheet.name)

@@ -1,6 +1,6 @@
 """AI-KP tools for the world lore / worldbook layer (`docs/specs/M11-worldbook.md` §3).
 
-`WorldbookTools` is the function-calling surface over `core.worldbook.WorldbookManager`: the
+`WorldbookTools` is the function-calling surface over `core.worldbook.Worldbook`: the
 structured, secret-aware WORLD setting (factions, history, geography, cosmology, world-rules,
 recurring people/places) that grounds ALL AI generation and persists across sessions/modules --
 deeper than any single adventure's module pool.

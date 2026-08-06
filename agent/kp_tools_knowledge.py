@@ -163,15 +163,15 @@ async def _save_pools(services: Services, chat_key: str, keeper: dict, player: d
 
 
 def _status_key(chat_key: str) -> str:
-    return f"module_init_status.{chat_key}"
+    return "module_init_status"
 
 
 def _error_key(chat_key: str) -> str:
-    return f"module_init_error.{chat_key}"
+    return "module_init_error"
 
 
 def _fulltext_key(chat_key: str) -> str:
-    return f"module_fulltext.{chat_key}"
+    return "module_fulltext"
 
 
 # kp_note categories that live on the player-visible `scene` singleton document
@@ -180,11 +180,11 @@ _SCENE_CATEGORIES = ("current_scene", "current_focus")
 
 
 def _game_clock_key(chat_key: str) -> str:
-    return f"game_clock.{chat_key}"
+    return "game_clock"
 
 
 def _battle_report_key(chat_key: str, timestamp: str) -> str:
-    return f"battle_report.{chat_key}.{timestamp}"
+    return f"battle_report.{timestamp}"
 
 
 def _deep_merge(base: dict, patch: dict) -> dict:
@@ -250,14 +250,14 @@ async def render_session_report(
 
     name = session_name.strip()
     if not name:
-        name = await services.store.get(store_key=f"session_name.{ctx.chat_key}.{scope}")
+        name = await services.store.state_get(ctx.chat_key, f"session_name.{scope}")
     if not name:
         name = _default_session_name(datetime.fromtimestamp(record.start_time), i18n)
 
     markdown = generator.generate_markdown_report(record, name, i18n=i18n, detailed=detailed)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    await services.store.set(store_key=_battle_report_key(ctx.chat_key, timestamp), value=markdown)
+    await services.store.state_set(ctx.chat_key, _battle_report_key(ctx.chat_key, timestamp), markdown)
 
     saved_note = ""
     if ctx.fs is not None:
@@ -312,7 +312,7 @@ class ModuleTools(_KnowledgeToolsBase):
             if not catalog:
                 body = i18n.t("kp_tools.know.catalog.empty")
             else:
-                status = await self._services.store.get(user_key="", store_key=_status_key(ctx.chat_key))
+                status = await self._services.store.state_get(ctx.chat_key, _status_key(ctx.chat_key))
                 lines = [i18n.t("kp_tools.know.catalog.header", status=status or i18n.t("kp_tools.know.status.unknown"))]
                 for category in ("scenes", "npcs", "clues", "timeline", "threats", "truths"):
                     items = catalog.get(category) or []
@@ -793,7 +793,7 @@ class ModuleTools(_KnowledgeToolsBase):
                 fact_doc = await docs.get(chat_key, "note", "confirmed_facts")
                 entries = fact_doc.data.get("content") if fact_doc is not None else None
                 entries = entries if isinstance(entries, list) else []
-                clock_data = await store.get(user_key="", store_key=_game_clock_key(chat_key))
+                clock_data = await store.state_get(chat_key, _game_clock_key(chat_key))
                 game_time = json.loads(clock_data).get("current_time", "?") if clock_data else "?"
                 fact_content = i18n.t("kp_tools.know.unlock.confirmed_fact", time=game_time, element_type=element_type, name=target_name)
                 entries.append({"time": game_time, "content": fact_content})
@@ -829,20 +829,20 @@ class ModuleTools(_KnowledgeToolsBase):
         store = self._services.store
         chat_key = ctx.chat_key
         try:
-            status = await store.get(user_key="", store_key=_status_key(chat_key))
+            status = await store.state_get(chat_key, _status_key(chat_key))
             if status == "processing":
                 return i18n.t("kp_tools.know.init.already_processing")
 
-            fulltext = await store.get(user_key="", store_key=_fulltext_key(chat_key))
+            fulltext = await store.state_get(chat_key, _fulltext_key(chat_key))
             chunks = await self._services.vector_db.list_all_chunks(chat_key)
             if not fulltext and not chunks:
                 return i18n.t("kp_tools.know.init.no_document")
 
             await self._services.module_init.initialize(chat_key)
 
-            new_status = await store.get(user_key="", store_key=_status_key(chat_key))
+            new_status = await store.state_get(chat_key, _status_key(chat_key))
             if new_status == "ready_fallback":
-                error = await store.get(user_key="", store_key=_error_key(chat_key))
+                error = await store.state_get(chat_key, _error_key(chat_key))
                 return i18n.t(
                     "kp_tools.know.init.completed_fallback",
                     count=len(chunks),
@@ -861,7 +861,7 @@ class ModuleTools(_KnowledgeToolsBase):
         """
         i18n = self._i18n(ctx)
         try:
-            status = await self._services.store.get(user_key="", store_key=_status_key(ctx.chat_key))
+            status = await self._services.store.state_get(ctx.chat_key, _status_key(ctx.chat_key))
             if not status:
                 return i18n.t("kp_tools.know.init.status_none")
             if status == "processing":
@@ -870,7 +870,7 @@ class ModuleTools(_KnowledgeToolsBase):
                 catalog = await self._load_catalog(ctx.chat_key)
                 total = sum(len(v) for v in (catalog or {}).values() if isinstance(v, list))
                 if status == "ready_fallback":
-                    error = await self._services.store.get(user_key="", store_key=_error_key(ctx.chat_key))
+                    error = await self._services.store.state_get(ctx.chat_key, _error_key(ctx.chat_key))
                     return i18n.t(
                         "kp_tools.know.init.status_ready_fallback",
                         count=total,
@@ -878,7 +878,7 @@ class ModuleTools(_KnowledgeToolsBase):
                     )
                 return i18n.t("kp_tools.know.init.status_ready", count=total)
             if status.startswith("failed"):
-                error = await self._services.store.get(user_key="", store_key=_error_key(ctx.chat_key))
+                error = await self._services.store.state_get(ctx.chat_key, _error_key(ctx.chat_key))
                 if not error and ":" in status:  # backward-compatible legacy status payload
                     error = status.split(":", 1)[1]
                 return i18n.t(
@@ -949,14 +949,14 @@ class DocumentTools(_KnowledgeToolsBase):
                 # core/module_initializer.py's `_load_full_text`); only module/story uploads are
                 # "the module" being analyzed, so only those may (over)write it -- a `rule`/
                 # `background` upload must never clobber a previously uploaded module's full text.
-                await self._services.store.set(user_key="", store_key=_fulltext_key(chat_key), value=text_content)
+                await self._services.store.state_set(chat_key, _fulltext_key(chat_key), text_content)
                 # `initialize` emits the "analyze"/"build" stages itself (its LLM analysis is the
                 # slow one); we bracket it with the fast read/embed and the final done here.
                 await self._services.module_init.initialize(chat_key, progress=progress)
-                status = await self._services.store.get(user_key="", store_key=_status_key(chat_key))
+                status = await self._services.store.state_get(chat_key, _status_key(chat_key))
                 await _emit(progress, "done", status or "")
                 if status == "ready_fallback":
-                    error = await self._services.store.get(user_key="", store_key=_error_key(chat_key))
+                    error = await self._services.store.state_get(chat_key, _error_key(chat_key))
                     init_note = "\n" + i18n.t(
                         "kp_tools.know.upload.init_done_fallback",
                         error=error or i18n.t("kp_tools.know.status.unknown_error"),
@@ -1009,7 +1009,7 @@ class DocumentTools(_KnowledgeToolsBase):
                     _error_key(chat_key),
                     _fulltext_key(chat_key),
                 ):
-                    await store.set(user_key="", store_key=key, value="")
+                    await store.state_set(chat_key, key, "")
 
             emoji = _DOC_TYPE_EMOJI.get(target["document_type"], _DEFAULT_DOC_EMOJI)
             return i18n.t("kp_tools.know.delete.done", emoji=emoji, filename=filename)
@@ -1181,7 +1181,7 @@ class NoteTools(_KnowledgeToolsBase):
         store = self._services.store
         store_key = _game_clock_key(ctx.chat_key)
         try:
-            clock_data = await store.get(user_key="", store_key=store_key)
+            clock_data = await store.state_get(ctx.chat_key, store_key)
             clock = json.loads(clock_data) if clock_data else {"current_time": i18n.t("kp_tools.know.clock.unset"), "events": []}
 
             if action == "show":
@@ -1197,7 +1197,7 @@ class NoteTools(_KnowledgeToolsBase):
 
             if action == "set":
                 clock["current_time"] = value
-                await store.set(user_key="", store_key=store_key, value=json.dumps(clock, ensure_ascii=False))
+                await store.state_set(ctx.chat_key, store_key, json.dumps(clock, ensure_ascii=False))
                 return i18n.t("kp_tools.know.clock.set_done", time=value)
 
             if action == "advance":
@@ -1208,13 +1208,13 @@ class NoteTools(_KnowledgeToolsBase):
                     # pollute the HUD); tell the model to `set` a parseable time instead.
                     return i18n.t("kp_tools.know.clock.advance_unparsed", delta=value, time=current)
                 clock["current_time"] = advanced_time
-                await store.set(user_key="", store_key=store_key, value=json.dumps(clock, ensure_ascii=False))
+                await store.state_set(ctx.chat_key, store_key, json.dumps(clock, ensure_ascii=False))
                 return i18n.t("kp_tools.know.clock.advance_done", delta=value, time=advanced_time)
 
             if action == "add_event":
                 event = {"time": clock.get("current_time", "?"), "description": value}
                 clock.setdefault("events", []).append(event)
-                await store.set(user_key="", store_key=store_key, value=json.dumps(clock, ensure_ascii=False))
+                await store.state_set(ctx.chat_key, store_key, json.dumps(clock, ensure_ascii=False))
                 return i18n.t("kp_tools.know.clock.event_added", time=event["time"], description=value)
 
             if action == "list_events":
@@ -1254,7 +1254,7 @@ class SessionTools(_KnowledgeToolsBase):
             current = await self._services.battles.generator.get_current_session(ctx.chat_key)
             if current is not None and not force_new:
                 current_name = await self._services.store.get(
-                    store_key=f"session_name.{ctx.chat_key}.current"
+                    "session_name.current"
                 )
                 return i18n.t(
                     "kp_tools.know.session.already_active",
@@ -1315,7 +1315,7 @@ class SessionTools(_KnowledgeToolsBase):
             markdown_report = markdown_report or ""
 
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            await self._services.store.set(store_key=_battle_report_key(ctx.chat_key, timestamp), value=markdown_report)
+            await self._services.store.state_set(ctx.chat_key, _battle_report_key(ctx.chat_key, timestamp), markdown_report)
 
             file_note = ""
             if ctx.fs is not None:
@@ -1343,7 +1343,7 @@ class SessionTools(_KnowledgeToolsBase):
         """
         i18n = self._i18n(ctx)
         try:
-            markdown_report = await self._services.store.get(store_key=_battle_report_key(ctx.chat_key, timestamp))
+            markdown_report = await self._services.store.state_get(ctx.chat_key, _battle_report_key(ctx.chat_key, timestamp))
             if not markdown_report:
                 return i18n.t("kp_tools.know.session.report_not_found")
             return markdown_report

@@ -10,7 +10,7 @@ from agent.context import AgentCtx
 from agent.loop import run_kp_turn
 from agent.services import build_services
 from agent.tools import Toolset
-from core.mvu_compat import MvuManager
+from core.mvu_compat import load_mvu, mvu_init_from_initvar
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM, assistant_text
@@ -36,24 +36,24 @@ UPDATE_REPLY = (
 async def test_update_blocks_are_applied_and_stripped_from_the_reply():
     services = _services(FakeLLM(script=[assistant_text(UPDATE_REPLY)]))
     ctx = _ctx("chat-mvu-1")
-    await MvuManager(services.store).init_from_initvar(ctx.chat_key, {"理": {"好感度": [33, "affinity"]}})
+    await mvu_init_from_initvar(services.documents, ctx.chat_key, {"理": {"好感度": [33, "affinity"]}})
 
     result = await run_kp_turn(ctx, services, Toolset(), "I compliment her.")
 
     assert result.reply.strip() == "She smiles at you, warmer than before."
     assert "UpdateVariable" not in result.reply
-    tree = await MvuManager(services.store).load(ctx.chat_key)
+    tree = await load_mvu(services.documents, ctx.chat_key)
     assert tree["理"]["好感度"][0] == 35
 
 
 async def test_persisted_history_stores_the_cleaned_reply():
     services = _services(FakeLLM(script=[assistant_text(UPDATE_REPLY)]))
     ctx = _ctx("chat-mvu-2")
-    await MvuManager(services.store).init_from_initvar(ctx.chat_key, {"理": {"好感度": [33, "affinity"]}})
+    await mvu_init_from_initvar(services.documents, ctx.chat_key, {"理": {"好感度": [33, "affinity"]}})
 
     await run_kp_turn(ctx, services, Toolset(), "I compliment her.")
 
-    raw = await services.store.get(user_key="", store_key=f"chat_history.{ctx.chat_key}")
+    raw = await services.store.state_get(ctx.chat_key, "chat_history")
     history = json.loads(raw)
     assert all("UpdateVariable" not in message.get("content", "") for message in history)
 

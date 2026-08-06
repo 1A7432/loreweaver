@@ -1,6 +1,6 @@
 """AI-KP tools for AI-played, knowledge-scoped NPC sub-actors (`docs/specs/M5.md` §4).
 
-`NpcTools` is the function-calling surface over `agent.npc.NpcManager` (CRUD) and
+`NpcTools` is the function-calling surface over `agent.npc` (document-backed CRUD) and
 `agent.npc_actor.voice_npc` (the actual in-character sub-actor call). The tool bodies here never
 build an NPC's prompt themselves -- `speak_as_npc` resolves the `agent.npc.NpcRecord` and hands it
 straight to `voice_npc`, which is the ONLY place that record's fields get woven into an LLM call (see
@@ -25,8 +25,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from agent import npc as npc_records
 from agent.context import AgentCtx
-from agent.npc import NpcManager, NpcRecord
+from agent.npc import NpcRecord
 from agent.npc_actor import voice_npc
 from agent.services import Services
 from agent.tools import tool
@@ -96,7 +97,6 @@ class NpcTools:
 
     def __init__(self, services: Services) -> None:
         self._services = services
-        self._npcs = NpcManager(services.store)
 
     def _i18n(self, ctx: AgentCtx) -> I18n:
         return self._services.i18n.with_locale(ctx.locale)
@@ -136,7 +136,8 @@ class NpcTools:
         """
         i18n = self._i18n(ctx)
         try:
-            npc = await self._npcs.create_npc(
+            npc = await npc_records.create_npc(
+                self._services.documents,
                 ctx.chat_key,
                 name,
                 persona=persona,
@@ -172,7 +173,7 @@ class NpcTools:
             if not entries:
                 return i18n.t("npc.tools.import.empty")
 
-            existing_names = {record.name.strip().lower() for record in await self._npcs.list_npcs(ctx.chat_key)}
+            existing_names = {record.name.strip().lower() for record in await npc_records.list_npcs(self._services.documents, ctx.chat_key)}
             imported: list[str] = []
             skipped: list[str] = []
             for entry in entries:
@@ -185,7 +186,7 @@ class NpcTools:
                     skipped.append(name)
                     continue
 
-                await self._npcs.create_npc(
+                await npc_records.create_npc(self._services.documents,
                     ctx.chat_key,
                     name,
                     public_description=str(entry.get("description", "")),
@@ -219,7 +220,7 @@ class NpcTools:
         """
         i18n = self._i18n(ctx)
         try:
-            record = await self._npcs.add_knowledge(ctx.chat_key, npc, _split_knowledge(facts), mode=mode)
+            record = await npc_records.add_knowledge(self._services.documents, ctx.chat_key, npc, _split_knowledge(facts), mode=mode)
             if record is None:
                 return i18n.t("npc.tools.not_found", npc=npc)
             return i18n.t("npc.tools.knowledge.done", name=record.name, count=len(record.knowledge))
@@ -239,7 +240,7 @@ class NpcTools:
         """
         i18n = self._i18n(ctx)
         try:
-            record = await self._npcs.npc_learns(ctx.chat_key, npc, fact)
+            record = await npc_records.npc_learns(self._services.documents, ctx.chat_key, npc, fact)
             if record is None:
                 return i18n.t("npc.tools.not_found", npc=npc)
             return i18n.t("npc.tools.learns.done", name=record.name, fact=fact)
@@ -259,7 +260,7 @@ class NpcTools:
         """
         i18n = self._i18n(ctx)
         try:
-            record = await self._npcs.set_disposition(ctx.chat_key, npc, disposition)
+            record = await npc_records.set_disposition(self._services.documents, ctx.chat_key, npc, disposition)
             if record is None:
                 return i18n.t("npc.tools.not_found", npc=npc)
             return i18n.t("npc.tools.disposition.done", name=record.name, disposition=record.disposition)
@@ -279,7 +280,7 @@ class NpcTools:
         """
         i18n = self._i18n(ctx)
         try:
-            record = await self._npcs.move_npc(ctx.chat_key, npc, location)
+            record = await npc_records.move_npc(self._services.documents, ctx.chat_key, npc, location)
             if record is None:
                 return i18n.t("npc.tools.not_found", npc=npc)
             return i18n.t("npc.tools.move.done", name=record.name, location=record.location)
@@ -304,7 +305,7 @@ class NpcTools:
         if field not in _UPDATABLE_FIELDS:
             return i18n.t("npc.tools.update.bad_field", field=field, allowed=", ".join(sorted(_UPDATABLE_FIELDS)))
         try:
-            record = await self._npcs.update_npc(ctx.chat_key, npc, **{field: _coerce_field_value(field, value)})
+            record = await npc_records.update_npc(self._services.documents, ctx.chat_key, npc, **{field: _coerce_field_value(field, value)})
             if record is None:
                 return i18n.t("npc.tools.not_found", npc=npc)
             return i18n.t("npc.tools.update.done", name=record.name, field=field, value=value)
@@ -343,7 +344,7 @@ class NpcTools:
         """
         i18n = self._i18n(ctx)
         try:
-            record = await self._npcs.get_npc(ctx.chat_key, npc)
+            record = await npc_records.get_npc(self._services.documents, ctx.chat_key, npc)
             if record is None:
                 return i18n.t("npc.tools.not_found", npc=npc)
 
@@ -401,7 +402,7 @@ class NpcTools:
         """
         i18n = self._i18n(ctx)
         try:
-            record = await self._npcs.get_npc(ctx.chat_key, npc)
+            record = await npc_records.get_npc(self._services.documents, ctx.chat_key, npc)
             if record is None:
                 return i18n.t("npc.tools.not_found", npc=npc)
             return f"{i18n.t('npc.tools.keeper_banner')}\n\n{_render_npc_detail(i18n, record)}"
@@ -418,7 +419,7 @@ class NpcTools:
         """
         i18n = self._i18n(ctx)
         try:
-            records = await self._npcs.list_npcs(ctx.chat_key)
+            records = await npc_records.list_npcs(self._services.documents, ctx.chat_key)
             banner = i18n.t("npc.tools.keeper_banner")
             if not records:
                 return f"{banner}\n\n{i18n.t('npc.tools.list.empty')}"

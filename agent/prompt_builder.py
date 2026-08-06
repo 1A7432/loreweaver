@@ -56,8 +56,8 @@ from agent.services import Services
 from core.dice_engine import DiceRoller
 from core.ejs_full import create_full_engine
 from core.ejs_lite import MacroContext
-from core.modvars import ModvarManager
-from core.mvu_compat import MvuManager, apply_set, flatten_leaves
+from core.modvars import describe_modvars, load_modvars
+from core.mvu_compat import apply_set, flatten_leaves, load_mvu, save_mvu
 from core.preset import style_segments
 from core.preset_store import load_preset
 from core.prompt_sections import (
@@ -102,8 +102,8 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
     # same snapshots. Template setvar() writes buffer in the engine and flush to the MVU tree
     # right after the lore section renders, so the variable sections below show post-template
     # state — the ST "evaluate at generate time" contract.
-    modvar_state = await ModvarManager(services.store).load(ctx.chat_key)
-    mvu_tree = await MvuManager(services.store).load(ctx.chat_key)
+    modvar_state = await load_modvars(services.documents, ctx.chat_key)
+    mvu_tree = await load_mvu(services.documents, ctx.chat_key)
     variable_resolver = build_resolver(modvar_state["values"], mvu_tree)
     engine = None
     if services.settings.enable_full_ejs:
@@ -145,9 +145,7 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
     # room whose keeper `.lore add`ed a few setting notes gets plain lore, no
     # run-the-module directives: improvisation is the job there.
     if world_lore:
-        world_imported = await services.store.get(
-            user_key="", store_key=f"world_import.{ctx.chat_key}"
-        )
+        world_imported = await services.store.state_get(ctx.chat_key, "world_import")
         if world_imported:
             discipline = i18n.t("prompt.keeper_discipline")
             if discipline not in document_context:
@@ -187,7 +185,7 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
     if relationship_lines:
         sections.append(i18n.t("prompt.relationships_header") + "\n" + "\n".join(relationship_lines))
 
-    modvar_lines = await ModvarManager(services.store).describe(ctx.chat_key, i18n, ctx.locale)
+    modvar_lines = await describe_modvars(services.documents, ctx.chat_key, i18n, ctx.locale)
     if modvar_lines:
         sections.append(i18n.t("prompt.modvars_header") + "\n" + "\n".join(f"- {line}" for line in modvar_lines))
 
@@ -218,7 +216,7 @@ async def _build_macro_context(services: Services, ctx: AgentCtx) -> MacroContex
         pass
     clock_time = ""
     try:
-        raw = await services.store.get(user_key="", store_key=f"game_clock.{ctx.chat_key}")
+        raw = await services.store.state_get(ctx.chat_key, "game_clock")
         clock = json.loads(raw) if raw else {}
         if isinstance(clock, dict):
             clock_time = str(clock.get("current_time") or "")
@@ -244,14 +242,14 @@ async def _flush_template_writes(services: Services, chat_key: str, engine, mvu_
             mvu_tree = apply_set(mvu_tree, path, value)
         except (ValueError, TypeError):
             continue
-    await MvuManager(services.store).save(chat_key, mvu_tree)
+    await save_mvu(services.documents, chat_key, mvu_tree)
     return mvu_tree
 
 
 async def _enabled_preset_section(ctx: AgentCtx, services: Services, i18n) -> str:
     """The imported-preset style layer for this room, or ``""``.
 
-    Reads the ``preset_enabled.<chat_key>`` flag inline off the store (the same
+    Reads the ``preset_enabled`` room_state flag inline off the store (the same
     layering rule as the skills block below: never import ``gateway.ops``), loads the
     preset via `core.preset_store.load_preset`, and joins the non-marker text runs of
     `core.preset.style_segments` (v0 marker policy: markers are boundaries only — the
@@ -259,7 +257,7 @@ async def _enabled_preset_section(ctx: AgentCtx, services: Services, i18n) -> st
     already size-capped inside ``style_segments``). Contributes nothing when no preset
     is enabled or the file is missing/broken — a bad preset never breaks a turn."""
     try:
-        raw = await services.store.get(store_key=f"preset_enabled.{ctx.chat_key}")
+        raw = await services.store.state_get(ctx.chat_key, "preset_enabled")
     except Exception:
         return ""
     preset_id = str(raw or "").strip()
@@ -280,7 +278,7 @@ async def _enabled_skill_bodies(ctx: AgentCtx, services: Services) -> list[str]:
     than importing `gateway.ops.get_enabled_skills`; an unknown skill id (already
     removed from `skills/`) is silently skipped via `load_skill` returning `None`.
     """
-    raw = await services.store.get(store_key=f"skills_enabled.{ctx.chat_key}")
+    raw = await services.store.state_get(ctx.chat_key, "skills_enabled")
     if not raw:
         return []
     try:

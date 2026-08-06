@@ -1,27 +1,34 @@
 """Tests for core.modvars: the pure spec-building/validation/state-transition/rendering functions
-and the thin async `ModvarManager` persistence wrapper over an in-memory `infra.store.Store`.
+and the thin async document-persistence functions (`load_modvars`/`save_modvars`/...) over an
+in-memory `infra.store.Store`, via `core.documents.DocumentStore`.
 """
 
 from __future__ import annotations
 
 import pytest
 
+from core.documents import KEEPER_VIEWER, MODVARS_ID, PLAYER_VIEWER, Document, DocumentStore, project
 from core.modvars import (
     MAX_TEXT_LEN,
     MAX_VARS,
-    ModvarManager,
+    adjust_modvar,
     apply_adjust,
     apply_define,
     apply_remove,
     apply_set,
     build_spec,
+    define_modvar,
     describe,
+    describe_modvars,
     empty_state,
     label_for,
+    load_modvars,
     normalize_id,
     normalize_state,
-    player_entries,
+    remove_modvar,
+    set_modvar,
     validate_value,
+    wire_entries,
 )
 from infra.i18n import I18n
 from infra.store import Store
@@ -252,19 +259,26 @@ def test_label_for_fallback_chain():
     assert label_for(build_spec("bare", "bool"), "en") == "bare"
 
 
-def test_player_entries_filters_keeper_only_structurally():
+def test_modvars_projection_filters_keeper_only_structurally():
     state = apply_define(empty_state(), build_spec("fear", "number", minimum=0, maximum=10))
     state = apply_define(state, build_spec("true_culprit", "text", visibility="keeper"))
-    entries = player_entries(state, "en")
+    doc = Document(id="modvars", type="modvars", schema_version=1, data=state)
+
+    player_view = project(doc, PLAYER_VIEWER)
+    entries = wire_entries(player_view, "en")
     assert [entry["id"] for entry in entries] == ["fear"]
     assert entries[0]["min"] == 0 and entries[0]["max"] == 10
     # the keeper-only variable must not appear in ANY field of the wire payload
     assert "true_culprit" not in str(entries)
 
+    keeper_view = project(doc, KEEPER_VIEWER)
+    assert "true_culprit" in keeper_view["specs"]  # the keeper still sees everything
 
-def test_player_entries_omits_absent_bounds():
+
+def test_modvars_projection_omits_absent_bounds():
     state = apply_define(empty_state(), build_spec("score", "number"))
-    (entry,) = player_entries(state, "en")
+    doc = Document(id="modvars", type="modvars", schema_version=1, data=state)
+    (entry,) = wire_entries(project(doc, PLAYER_VIEWER), "en")
     assert "min" not in entry and "max" not in entry
 
 
@@ -284,52 +298,53 @@ def test_describe_empty_state_is_empty():
 
 
 # ---------------------------------------------------------------------------
-# ModvarManager — persistence wrapper
+# Document persistence — load_modvars/save_modvars/define_modvar/... wrappers
 # ---------------------------------------------------------------------------
 
 
-async def test_manager_load_on_a_fresh_room_is_empty():
-    manager = ModvarManager(Store())
-    assert await manager.load("room1") == empty_state()
+async def test_load_modvars_on_a_fresh_room_is_empty():
+    documents = DocumentStore(Store())
+    assert await load_modvars(documents, "room1") == empty_state()
 
 
-async def test_manager_define_set_adjust_persist():
-    manager = ModvarManager(Store())
-    await manager.define("room1", build_spec("n", "number", minimum=0, maximum=10))
-    old, new = await manager.set("room1", "n", 4)
+async def test_define_set_adjust_modvar_persist():
+    documents = DocumentStore(Store())
+    await define_modvar(documents, "room1", build_spec("n", "number", minimum=0, maximum=10))
+    old, new = await set_modvar(documents, "room1", "n", 4)
     assert (old, new) == (0, 4)
-    old, new = await manager.adjust("room1", "n", 99)
+    old, new = await adjust_modvar(documents, "room1", "n", 99)
     assert (old, new) == (4, 10)
-    state = await manager.load("room1")
+    state = await load_modvars(documents, "room1")
     assert state["values"]["n"] == 10
 
 
-async def test_manager_remove_persists():
-    manager = ModvarManager(Store())
-    await manager.define("room1", build_spec("n", "bool"))
-    await manager.remove("room1", "n")
-    assert await manager.load("room1") == empty_state()
+async def test_remove_modvar_persists():
+    documents = DocumentStore(Store())
+    await define_modvar(documents, "room1", build_spec("n", "bool"))
+    await remove_modvar(documents, "room1", "n")
+    assert await load_modvars(documents, "room1") == empty_state()
 
 
-async def test_manager_load_tolerates_corrupt_stored_json():
-    store = Store()
-    await store.set(user_key="", store_key="module_vars.room1", value="{not json")
-    assert await ModvarManager(store).load("room1") == empty_state()
+async def test_load_modvars_tolerates_a_malformed_stored_document():
+    documents = DocumentStore(Store())
+    await documents.put("room1", "modvars", MODVARS_ID, {"specs": "not-a-dict", "values": {}})
+    assert await load_modvars(documents, "room1") == empty_state()
 
 
-async def test_manager_state_is_scoped_per_chat_key():
-    manager = ModvarManager(Store())
-    await manager.define("room1", build_spec("n", "bool"))
-    assert await manager.load("room2") == empty_state()
+async def test_modvars_state_is_scoped_per_chat_key():
+    documents = DocumentStore(Store())
+    await define_modvar(documents, "room1", build_spec("n", "bool"))
+    assert await load_modvars(documents, "room2") == empty_state()
 
 
-async def test_manager_player_entries_and_describe_wrappers():
-    manager = ModvarManager(Store())
-    await manager.define("room1", build_spec("fear", "number", labels={"zh": "恐惧"}, minimum=0, maximum=10))
-    await manager.define("room1", build_spec("secret", "text", visibility="keeper"))
-    entries = await manager.player_entries("room1", "zh")
+async def test_modvars_projection_and_describe_modvars_wrappers():
+    documents = DocumentStore(Store())
+    await define_modvar(documents, "room1", build_spec("fear", "number", labels={"zh": "恐惧"}, minimum=0, maximum=10))
+    await define_modvar(documents, "room1", build_spec("secret", "text", visibility="keeper"))
+    view = await documents.get_view("room1", "modvars", MODVARS_ID, PLAYER_VIEWER)
+    entries = wire_entries(view or {}, "zh")
     assert [entry["label"] for entry in entries] == ["恐惧"]
-    lines = await manager.describe("room1", I18n(locale="zh"), "zh")
+    lines = await describe_modvars(documents, "room1", I18n(locale="zh"), "zh")
     assert len(lines) == 2
 
 

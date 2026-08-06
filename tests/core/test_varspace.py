@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from core.modvars import ModvarManager, build_spec
+from core.documents import DocumentStore
+from core.modvars import build_spec, define_modvar
 from core.varspace import build_resolver, load_resolver
 from infra.store import Store
 
@@ -36,10 +37,11 @@ def test_missing_paths_and_bad_input_resolve_to_none():
 
 async def test_load_resolver_reads_both_stores():
     store = Store()
-    await ModvarManager(store).define("room1", build_spec("fear", "number", default="4"))
-    from core.mvu_compat import MvuManager
+    documents = DocumentStore(store)
+    await define_modvar(documents, "room1", build_spec("fear", "number", default="4"))
+    from core.mvu_compat import mvu_init_from_initvar
 
-    await MvuManager(store).init_from_initvar("room1", {"理": {"好感度": [33, "d"]}})
+    await mvu_init_from_initvar(documents, "room1", {"理": {"好感度": [33, "d"]}})
     resolve = await load_resolver(store, "room1")
     assert resolve("fear") == 4
     assert resolve("理.好感度") == 33

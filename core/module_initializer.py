@@ -232,21 +232,21 @@ class ModuleInitializer:
         separately under `module_init_error.{chat_key}`.
         A concurrent call while one is already `"processing"` is a no-op.
         """
-        status_key = f"module_init_status.{chat_key}"
-        error_key = f"module_init_error.{chat_key}"
+        status_key = "module_init_status"
+        error_key = "module_init_error"
 
-        current_status = await self.store.get(user_key="", store_key=status_key)
+        current_status = await self.store.state_get(chat_key, status_key)
         if current_status == "processing":
             return
 
-        await self.store.set(user_key="", store_key=status_key, value="processing")
+        await self.store.state_set(chat_key, status_key, "processing")
         try:
-            source_key = f"module_fulltext.{chat_key}"
-            source_value = await self.store.get(user_key="", store_key=source_key)
+            source_key = "module_fulltext"
+            source_value = await self.store.state_get(chat_key, source_key)
             full_text, doc_name = await self._load_full_text(chat_key)
             if not full_text:
-                await self.store.set(user_key="", store_key=error_key, value="module text unavailable")
-                await self.store.set(user_key="", store_key=status_key, value="failed")
+                await self.store.state_set(chat_key, error_key, "module text unavailable")
+                await self.store.state_set(chat_key, status_key, "failed")
                 return
 
             # A module owns one recording boundary. Archive the prior module's active session
@@ -258,7 +258,7 @@ class ModuleInitializer:
             # An uploaded module owns its own timeline. Clear the prior module's
             # clock as soon as the new source text is confirmed, before the
             # potentially slow analysis can leave stale dates in the sidebar.
-            await self.store.delete(user_key="", store_key=f"game_clock.{chat_key}")
+            await self.store.state_delete(chat_key, "game_clock")
             await _emit(progress, "analyze")
             outcome = await self._analyze_full_text(full_text, doc_name, chat_key)
             await _emit(progress, "build")
@@ -276,26 +276,27 @@ class ModuleInitializer:
             await self.documents.put_singleton(
                 chat_key, "module_pool", {"keeper": keeper_pool, "player": player_pool}
             )
-            committed = await self.store.set_rows_if_values(
+            committed = await self.store.state_set_if_values(
+                chat_key,
                 expected=[
-                    ("", source_key, source_value),
-                    ("", status_key, "processing"),
+                    (source_key, source_value),
+                    (status_key, "processing"),
                 ],
                 updates=[
-                    ("", status_key, status),
+                    (status_key, status),
                 ],
             )
             if not committed:
                 return
             if outcome.used_fallback:
-                await self.store.set(user_key="", store_key=error_key, value=outcome.error_summary)
+                await self.store.state_set(chat_key, error_key, outcome.error_summary)
             else:
-                await self.store.delete(user_key="", store_key=error_key)
+                await self.store.state_delete(chat_key, error_key)
         except Exception as exc:
             summary = _exception_summary(exc)
             logger.exception("module initialization failed for chat_key=%s", chat_key)
-            await self.store.set(user_key="", store_key=error_key, value=summary)
-            await self.store.set(user_key="", store_key=status_key, value="failed")
+            await self.store.state_set(chat_key, error_key, summary)
+            await self.store.state_set(chat_key, status_key, "failed")
 
     async def _load_full_text(self, chat_key: str) -> tuple[str, str]:
         """Return `(full_text, doc_name)` for `chat_key`.
@@ -305,7 +306,7 @@ class ModuleInitializer:
         by filename then chunk index, matching upload order) when that key
         is unset. Returns `("", "")` if neither source has anything.
         """
-        stored = await self.store.get(user_key="", store_key=f"module_fulltext.{chat_key}")
+        stored = await self.store.state_get(chat_key, "module_fulltext")
         if stored:
             return stored, self.i18n.t("module.default_document_name")
 

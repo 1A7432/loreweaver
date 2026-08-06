@@ -174,7 +174,7 @@ async def test_kp_selfplay_en_no_leak():
     # 1) Upload + analyze the module through the real tool path.
     up = await toolset.dispatch("upload_document", ctx, {"file_path": "module_en.txt", "doc_type": "module"})
     assert isinstance(up, str) and up
-    status = await services.store.get(store_key=f"module_init_status.{ctx.chat_key}")
+    status = await services.store.state_get(ctx.chat_key, "module_init_status")
     assert status == "ready"
     pool_doc = await services.documents.get_singleton(ctx.chat_key, "module_pool")
     keeper_pool = json.dumps(pool_doc.data.get("keeper") if pool_doc else {}, ensure_ascii=False)

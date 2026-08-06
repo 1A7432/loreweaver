@@ -9,7 +9,8 @@ import json
 from agent.context import AgentCtx, LocalFs
 from agent.kp_tools_charcard import CharcardTools
 from agent.services import build_services
-from core.modvars import ModvarManager
+from core.documents import MODVARS_ID, PLAYER_VIEWER
+from core.modvars import wire_entries
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM, assistant_text
@@ -113,7 +114,8 @@ async def test_world_import_lands_specs_secret_lore_and_cast(tmp_path):
 
     assert "回廊公寓" in result
     # Typed specs became real modvar trackers (validated, clamped, player-visible).
-    entries = await ModvarManager(services.store).player_entries("lorecard-world", "en")
+    view = await services.documents.get_view("lorecard-world", "modvars", MODVARS_ID, PLAYER_VIEWER)
+    entries = wire_entries(view or {}, "en")
     assert [entry["id"] for entry in entries] == ["suspicion"]
     assert entries[0] == {"id": "suspicion", "label": "Suspicion", "kind": "number", "value": 0, "min": 0, "max": 10}
     # Both lore entries landed; the secret one kept its keeper-only flag.
@@ -121,9 +123,9 @@ async def test_world_import_lands_specs_secret_lore_and_cast(tmp_path):
     assert lore["五层的规则"].secret is False
     assert lore["管理员的秘密"].secret is True
     # The embedded persona joined the claimable pregen roster.
-    from core.pregen_roster import PregenRoster
+    from core.pregen_roster import pregen_entries
 
-    roster = await PregenRoster(services.store).entries("lorecard-world")
+    roster = await pregen_entries(services.documents, "lorecard-world")
     assert [entry["name"] for entry in roster] == ["回廊公寓"]
 
 
@@ -137,7 +139,8 @@ async def test_player_import_strips_native_bundle_machinery(tmp_path):
 
     assert result
     # No typed trackers land through a player import.
-    assert await ModvarManager(services.store).player_entries("lorecard-pc", "en") == []
+    view = await services.documents.get_view("lorecard-pc", "modvars", MODVARS_ID, PLAYER_VIEWER)
+    assert wire_entries(view or {}, "en") == []
     # The persona's PUBLIC lore rides along (that is what a character's book is for);
     # the keeper-only entry is stripped by the split AND dropped by the import
     # chokepoint — its content must not exist anywhere in the player room, public

@@ -51,15 +51,15 @@ _RECENT_MESSAGES = 20
 
 def recap_store_key(chat_key: str) -> str:
     """Store key holding the rolling recap text for ``chat_key``."""
-    return f"session_recap.{chat_key}"
+    return "session_recap"
 
 
 def _counter_key(chat_key: str) -> str:
-    return f"session_recap_turns.{chat_key}"
+    return "session_recap_turns"
 
 
 def _debug_key(chat_key: str) -> str:
-    return f"session_recap_debug.{chat_key}"
+    return "session_recap_debug"
 
 
 async def maybe_refresh_session_recap(ctx: AgentCtx, services: Services, *, history_key: str) -> None:
@@ -73,11 +73,11 @@ async def maybe_refresh_session_recap(ctx: AgentCtx, services: Services, *, hist
     try:
         counter = await _load_counter(services, ctx.chat_key) + 1
         if counter < _RECAP_REFRESH_EVERY:
-            await services.store.set(user_key="", store_key=_counter_key(ctx.chat_key), value=str(counter))
+            await services.store.state_set(ctx.chat_key, _counter_key(ctx.chat_key), str(counter))
             return
         # Due: reset the counter FIRST so a summarizer failure simply waits for
         # the next window instead of retrying on every subsequent turn.
-        await services.store.set(user_key="", store_key=_counter_key(ctx.chat_key), value="0")
+        await services.store.state_set(ctx.chat_key, _counter_key(ctx.chat_key), "0")
         await refresh_session_recap(ctx, services, history_key=history_key)
     except Exception:
         return
@@ -92,8 +92,8 @@ async def refresh_session_recap(ctx: AgentCtx, services: Services, *, history_ke
     """
     try:
         i18n = services.i18n.with_locale(ctx.locale)
-        previous = await services.store.get(user_key="", store_key=recap_store_key(ctx.chat_key))
-        recent = await _recent_transcript(services, history_key, i18n)
+        previous = await services.store.state_get(ctx.chat_key, recap_store_key(ctx.chat_key))
+        recent = await _recent_transcript(services, ctx.chat_key, history_key, i18n)
         if not recent and not previous:
             return  # nothing has happened yet -- nothing to summarize
 
@@ -127,7 +127,7 @@ async def refresh_session_recap(ctx: AgentCtx, services: Services, *, history_ke
             await _note_recap_outcome(services, ctx.chat_key, ok=False, length=0)
             return
         bounded = _bound(text, narrative_heading)
-        await services.store.set(user_key="", store_key=recap_store_key(ctx.chat_key), value=bounded)
+        await services.store.state_set(ctx.chat_key, recap_store_key(ctx.chat_key), bounded)
         await _note_recap_outcome(services, ctx.chat_key, ok=True, length=len(bounded))
     except Exception:
         # Still non-fatal, but leave a breadcrumb so a silently-swallowed summarizer
@@ -172,9 +172,9 @@ async def _note_recap_outcome(services: Services, chat_key: str, *, ok: bool, le
     recap's non-fatal behavior.
     """
     try:
-        await services.store.set(
-            user_key="",
-            store_key=_debug_key(chat_key),
+        await services.store.state_set(
+            chat_key,
+            _debug_key(chat_key),
             value=json.dumps({"ran": True, "ok": ok, "length": length}),
         )
     except Exception:
@@ -182,16 +182,16 @@ async def _note_recap_outcome(services: Services, chat_key: str, *, ok: bool, le
 
 
 async def _load_counter(services: Services, chat_key: str) -> int:
-    raw = await services.store.get(user_key="", store_key=_counter_key(chat_key))
+    raw = await services.store.state_get(chat_key, _counter_key(chat_key))
     try:
         return int(raw) if raw is not None else 0
     except (TypeError, ValueError):
         return 0
 
 
-async def _recent_transcript(services: Services, history_key: str, i18n: I18n) -> str:
+async def _recent_transcript(services: Services, chat_key: str, history_key: str, i18n: I18n) -> str:
     """Render the last ``_RECENT_MESSAGES`` persisted history messages as a labelled transcript."""
-    raw = await services.store.get(user_key="", store_key=history_key)
+    raw = await services.store.state_get(chat_key, history_key)
     if not raw:
         return ""
     try:

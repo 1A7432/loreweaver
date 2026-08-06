@@ -161,13 +161,13 @@ def _make_initializer(
 
 async def test_initialize_llm_analysis_keeper_pool_has_secret_player_pool_does_not():
     store = Store()
-    await store.set(user_key="", store_key="module_fulltext.chat1", value=MODULE_EN_TEXT)
+    await store.state_set("chat1", "module_fulltext", MODULE_EN_TEXT)
     llm = FakeLLM(script=[assistant_text(_scripted_analysis_json())])
     mi = _make_initializer(llm=llm, store=store)
 
     await mi.initialize("chat1")
 
-    assert await store.get(user_key="", store_key="module_init_status.chat1") == "ready"
+    assert await store.state_get("chat1", "module_init_status") == "ready"
 
     documents = DocumentStore(store)
     keeper = await documents.get_view("chat1", "module_pool", MODULE_POOL_ID, KEEPER_VIEWER)
@@ -195,7 +195,7 @@ async def test_initialize_llm_analysis_keeper_pool_has_secret_player_pool_does_n
 
 async def test_initialize_falls_back_to_offline_heuristic_on_unparsable_llm_response():
     store = Store()
-    await store.set(user_key="", store_key="module_fulltext.chat2", value=MODULE_EN_TEXT)
+    await store.state_set("chat2", "module_fulltext", MODULE_EN_TEXT)
     llm = FakeLLM(
         script=[
             assistant_text("Sorry, I can't help with that today!"),
@@ -207,8 +207,8 @@ async def test_initialize_falls_back_to_offline_heuristic_on_unparsable_llm_resp
     await mi.initialize("chat2")
 
     assert len(llm.calls) == 2
-    assert await store.get(user_key="", store_key="module_init_status.chat2") == "ready_fallback"
-    assert await store.get(user_key="", store_key="module_init_error.chat2")
+    assert await store.state_get("chat2", "module_init_status") == "ready_fallback"
+    assert await store.state_get("chat2", "module_init_error")
 
     documents = DocumentStore(store)
     keeper = await documents.get_view("chat2", "module_pool", MODULE_POOL_ID, KEEPER_VIEWER)
@@ -224,21 +224,21 @@ async def test_initialize_falls_back_to_offline_heuristic_on_unparsable_llm_resp
 
 async def test_initialize_retries_analysis_once_and_marks_retry_success_ready():
     store = Store()
-    await store.set(user_key="", store_key="module_fulltext.chat-retry", value=MODULE_EN_TEXT)
-    await store.set(user_key="", store_key="module_init_error.chat-retry", value="stale failure")
+    await store.state_set("chat-retry", "module_fulltext", MODULE_EN_TEXT)
+    await store.state_set("chat-retry", "module_init_error", "stale failure")
     llm = FakeLLM(script=[assistant_text("not json"), assistant_text(_scripted_analysis_json())])
     mi = _make_initializer(llm=llm, store=store)
 
     await mi.initialize("chat-retry")
 
     assert len(llm.calls) == 2
-    assert await store.get(user_key="", store_key="module_init_status.chat-retry") == "ready"
-    assert await store.get(user_key="", store_key="module_init_error.chat-retry") is None
+    assert await store.state_get("chat-retry", "module_init_status") == "ready"
+    assert await store.state_get("chat-retry", "module_init_error") is None
 
 
 async def test_initialize_records_analysis_usage_for_room():
     store = Store()
-    await store.set(user_key="", store_key="module_fulltext.chat-usage", value=MODULE_EN_TEXT)
+    await store.state_set("chat-usage", "module_fulltext", MODULE_EN_TEXT)
     settings = Settings(llm=LLMSettings(chat_model="deepseek-chat", analysis_model="gemini-2.5-pro"))
     llm = FakeLLM(
         script=[
@@ -259,7 +259,7 @@ async def test_initialize_records_analysis_usage_for_room():
 
     await mi.initialize("chat-usage")
 
-    stats = json.loads(await store.get(user_key="", store_key="usage_stats.chat-usage"))
+    stats = json.loads(await store.state_get("chat-usage", "usage_stats"))
     assert stats["last"] == {
         "prompt": 120,
         "completion": 30,
@@ -278,10 +278,10 @@ async def test_initialize_records_analysis_usage_for_room():
 
 async def test_initialize_replaces_stale_pool_and_resets_game_clock():
     store = Store()
-    await store.set(user_key="", store_key="module_fulltext.chat-state", value=MODULE_EN_TEXT)
+    await store.state_set("chat-state", "module_fulltext", MODULE_EN_TEXT)
     documents = DocumentStore(store)
     await documents.put_singleton("chat-state", "module_pool", {"keeper": {"summary": "OLD MODULE"}, "player": {}})
-    await store.set(user_key="", store_key="game_clock.chat-state", value=json.dumps({"current_time": "1926-03-15"}))
+    await store.state_set("chat-state", "game_clock", json.dumps({"current_time": "1926-03-15"}))
     llm = FakeLLM(script=[assistant_text(_scripted_analysis_json())])
     mi = _make_initializer(llm=llm, store=store)
 
@@ -289,7 +289,7 @@ async def test_initialize_replaces_stale_pool_and_resets_game_clock():
 
     keeper = await documents.get_view("chat-state", "module_pool", MODULE_POOL_ID, KEEPER_VIEWER)
     assert "OLD MODULE" not in json.dumps(keeper, ensure_ascii=False)
-    assert await store.get(user_key="", store_key="game_clock.chat-state") is None
+    assert await store.state_get("chat-state", "game_clock") is None
 
 
 async def test_initialize_archives_the_running_session_before_switching_module():
@@ -298,7 +298,7 @@ async def test_initialize_archives_the_running_session_before_switching_module()
     chat_key = "chat-module-switch"
     session_id = await battles.start_session(chat_key, "Old Module")
     await battles.add_key_event(chat_key, "Event from the old module")
-    await store.set(user_key="", store_key=f"module_fulltext.{chat_key}", value=MODULE_EN_TEXT)
+    await store.state_set(chat_key, "module_fulltext", MODULE_EN_TEXT)
     initializer = _make_initializer(
         llm=FakeLLM(script=[assistant_text(_scripted_analysis_json())]),
         store=store,
@@ -308,7 +308,7 @@ async def test_initialize_archives_the_running_session_before_switching_module()
     await initializer.initialize(chat_key)
 
     assert await battles.generator.get_current_session(chat_key) is None
-    archived_raw = await store.get(store_key=f"session_history.{chat_key}.{session_id}")
+    archived_raw = await store.state_get(chat_key, f"session_history.{session_id}")
     assert archived_raw is not None
     assert json.loads(archived_raw)["key_events"][0]["description"] == "Event from the old module"
 
@@ -320,14 +320,14 @@ async def test_initialize_archives_the_running_session_before_switching_module()
 
 async def test_initialize_is_a_noop_while_already_processing():
     store = Store()
-    await store.set(user_key="", store_key="module_fulltext.chat3", value=MODULE_EN_TEXT)
-    await store.set(user_key="", store_key="module_init_status.chat3", value="processing")
+    await store.state_set("chat3", "module_fulltext", MODULE_EN_TEXT)
+    await store.state_set("chat3", "module_init_status", "processing")
     llm = FakeLLM()  # unconfigured: chat() would raise if it were ever called
     mi = _make_initializer(llm=llm, store=store)
 
     await mi.initialize("chat3")
 
-    assert await store.get(user_key="", store_key="module_init_status.chat3") == "processing"
+    assert await store.state_get("chat3", "module_init_status") == "processing"
     assert llm.calls == []
 
 
@@ -338,7 +338,7 @@ async def test_initialize_marks_failed_when_no_module_text_is_available():
 
     await mi.initialize("chat-empty")
 
-    assert await store.get(user_key="", store_key="module_init_status.chat-empty") == "failed"
+    assert await store.state_get("chat-empty", "module_init_status") == "failed"
     assert await DocumentStore(store).get_singleton("chat-empty", "module_pool") is None
     assert llm.calls == []
 
@@ -355,7 +355,7 @@ async def test_initialize_falls_back_to_vector_db_chunks_when_no_fulltext_stored
 
     await mi.initialize("chat4")
 
-    assert await store.get(user_key="", store_key="module_init_status.chat4") == "ready"
+    assert await store.state_get("chat4", "module_init_status") == "ready"
     sent_prompt = llm.calls[0][0][0]["content"]
     assert "first half" in sent_prompt
     assert "second half" in sent_prompt
@@ -370,7 +370,7 @@ async def test_initialize_falls_back_to_vector_db_chunks_when_no_fulltext_stored
 
 async def test_analyze_full_text_uses_temperature_0_3_and_prefers_analysis_model():
     store = Store()
-    await store.set(user_key="", store_key="module_fulltext.chat5", value=MODULE_EN_TEXT)
+    await store.state_set("chat5", "module_fulltext", MODULE_EN_TEXT)
     settings = Settings(llm=LLMSettings(chat_model="gpt-4o-mini", analysis_model="big-context-model"))
     llm = _RecordingLLM(assistant_text("{}"))
     mi = _make_initializer(llm=llm, store=store, settings=settings)
@@ -383,7 +383,7 @@ async def test_analyze_full_text_uses_temperature_0_3_and_prefers_analysis_model
 
 async def test_analyze_full_text_falls_back_to_chat_model_when_analysis_model_unset():
     store = Store()
-    await store.set(user_key="", store_key="module_fulltext.chat6", value=MODULE_EN_TEXT)
+    await store.state_set("chat6", "module_fulltext", MODULE_EN_TEXT)
     settings = Settings(llm=LLMSettings(chat_model="gpt-4o-mini"))  # analysis_model defaults to ""
     llm = _RecordingLLM(assistant_text("{}"))
     mi = _make_initializer(llm=llm, store=store, settings=settings)
@@ -395,12 +395,12 @@ async def test_analyze_full_text_falls_back_to_chat_model_when_analysis_model_un
 
 async def test_analysis_prompt_is_localized_and_always_embeds_the_fixed_schema():
     store_en = Store()
-    await store_en.set(user_key="", store_key="module_fulltext.chat7", value=MODULE_EN_TEXT)
+    await store_en.state_set("chat7", "module_fulltext", MODULE_EN_TEXT)
     llm_en = _RecordingLLM(assistant_text("{}"))
     await _make_initializer(llm=llm_en, store=store_en, locale="en").initialize("chat7")
 
     store_zh = Store()
-    await store_zh.set(user_key="", store_key="module_fulltext.chat8", value=MODULE_EN_TEXT)
+    await store_zh.state_set("chat8", "module_fulltext", MODULE_EN_TEXT)
     llm_zh = _RecordingLLM(assistant_text("{}"))
     await _make_initializer(llm=llm_zh, store=store_zh, locale="zh").initialize("chat8")
 

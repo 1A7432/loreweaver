@@ -16,7 +16,6 @@ Services are built fully offline (`FakeLLM`/`FakeEmbeddings`); see the sibling
 
 from __future__ import annotations
 
-import json
 import time
 
 import pytest
@@ -52,14 +51,15 @@ async def test_update_skill_on_corrupt_row_errors_and_wipes_nothing():
 
     await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=True)
 
-    char_key = f"characters.{ctx.chat_key}.Vera"
-    roster_key = f"party_roster.{ctx.chat_key}"
-    roster_before = await services.store.get(user_key="", store_key=roster_key)
+    roster_before = await services.store.state_get(ctx.chat_key, "party_roster")
     assert roster_before is not None and "Vera" in roster_before
 
-    # Corrupt the stored row (truncated JSON), mimicking a partial/failed write.
+    # Corrupt the stored row (truncated JSON), mimicking a partial/failed write --
+    # written below the typed document layer so readers see `doc.corrupt=True`.
     corrupt_value = '{"name": "Vera", "sys'
-    await services.store.set(user_key=ctx.uid(), store_key=char_key, value=corrupt_value)
+    await services.store.doc_put(
+        ctx.chat_key, "sheet", "Vera", schema_version=1, data=corrupt_value, meta="{}", grants="[]"
+    )
 
     result = await char_tools.update_character_skill(ctx, skill_name="侦查", value=70)
 
@@ -67,9 +67,10 @@ async def test_update_skill_on_corrupt_row_errors_and_wipes_nothing():
     assert result == i18n.t("kp_tools.character.data_error")
 
     # The corrupt row was NOT overwritten with a blank sheet...
-    assert await services.store.get(user_key=ctx.uid(), store_key=char_key) == corrupt_value
+    stored_row = await services.store.doc_get(ctx.chat_key, "sheet", "Vera")
+    assert stored_row is not None and stored_row["data"] == corrupt_value
     # ...and the shared party roster is byte-for-byte unchanged.
-    assert await services.store.get(user_key="", store_key=roster_key) == roster_before
+    assert await services.store.state_get(ctx.chat_key, "party_roster") == roster_before
 
 
 async def test_update_attribute_on_corrupt_row_errors_and_wipes_nothing():
@@ -78,19 +79,20 @@ async def test_update_attribute_on_corrupt_row_errors_and_wipes_nothing():
 
     await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=True)
 
-    char_key = f"characters.{ctx.chat_key}.Vera"
-    roster_key = f"party_roster.{ctx.chat_key}"
-    roster_before = await services.store.get(user_key="", store_key=roster_key)
+    roster_before = await services.store.state_get(ctx.chat_key, "party_roster")
 
     corrupt_value = "not-json-at-all"
-    await services.store.set(user_key=ctx.uid(), store_key=char_key, value=corrupt_value)
+    await services.store.doc_put(
+        ctx.chat_key, "sheet", "Vera", schema_version=1, data=corrupt_value, meta="{}", grants="[]"
+    )
 
     result = await char_tools.update_character_attribute(ctx, attribute="STR", value=80)
 
     i18n = services.i18n.with_locale(ctx.locale)
     assert result == i18n.t("kp_tools.character.data_error")
-    assert await services.store.get(user_key=ctx.uid(), store_key=char_key) == corrupt_value
-    assert await services.store.get(user_key="", store_key=roster_key) == roster_before
+    stored_row = await services.store.doc_get(ctx.chat_key, "sheet", "Vera")
+    assert stored_row is not None and stored_row["data"] == corrupt_value
+    assert await services.store.state_get(ctx.chat_key, "party_roster") == roster_before
 
 
 async def test_get_character_sheet_on_corrupt_row_degrades_gracefully():
@@ -99,8 +101,8 @@ async def test_get_character_sheet_on_corrupt_row_degrades_gracefully():
     char_tools = CharacterTools(services)
 
     await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=True)
-    await services.store.set(
-        user_key=ctx.uid(), store_key=f"characters.{ctx.chat_key}.Vera", value="{corrupt"
+    await services.store.doc_put(
+        ctx.chat_key, "sheet", "Vera", schema_version=1, data="{corrupt", meta="{}", grants="[]"
     )
 
     result = await char_tools.get_character_sheet(ctx)
@@ -121,8 +123,8 @@ async def test_healthy_row_still_updates_normally():
     assert result != i18n.t("kp_tools.character.data_error")
     assert "Vera" in result
 
-    stored = await services.store.get(user_key=ctx.uid(), store_key=f"characters.{ctx.chat_key}.Vera")
-    assert json.loads(stored)["name"] == "Vera"
+    stored = await services.documents.get(ctx.chat_key, "sheet", "Vera")
+    assert stored is not None and stored.data["name"] == "Vera"
 
 
 # ---------------------------------------------------------------------------

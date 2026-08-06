@@ -705,11 +705,7 @@ class CommandRouter:
             return ctx.i18n.t("commands.language.usage")
         if not _is_keeper(ctx.raw_ctx):
             return ctx.i18n.t("rooms.denied")
-        await ctx.services.store.set(
-            user_key="",
-            store_key=f"chat_locale.{ctx.chat_key}",
-            value=locale,
-        )
+        await ctx.services.store.state_set(ctx.chat_key, "chat_locale", locale)
         ctx.raw_ctx.locale = locale
         return get_i18n(locale).t("commands.language.done")
 
@@ -844,12 +840,12 @@ class CommandRouter:
         if value in {"on", "1", "true", "开启", "啟用"}:
             if not _is_keeper(ctx.raw_ctx):
                 return ctx.i18n.t("rooms.denied")
-            await ctx.services.store.set(user_key="", store_key=f"bot_enabled.{ctx.chat_key}", value="1")
+            await ctx.services.store.state_set(ctx.chat_key, "bot_enabled", "1")
             return ctx.i18n.t("commands.bot.on")
         if value in {"off", "0", "false", "关闭", "關閉"}:
             if not _is_keeper(ctx.raw_ctx):
                 return ctx.i18n.t("rooms.denied")
-            await ctx.services.store.set(user_key="", store_key=f"bot_enabled.{ctx.chat_key}", value="0")
+            await ctx.services.store.state_set(ctx.chat_key, "bot_enabled", "0")
             return ctx.i18n.t("commands.bot.off")
         return ctx.i18n.t("commands.bot.status")
 
@@ -1426,11 +1422,11 @@ class CommandRouter:
         store = ctx.services.store
         if not await _keeper_still_authorized(ctx.raw_ctx, ctx.chat_key, store):
             return ctx.i18n.t("commands.reset.denied")
-        pending_key = f"reset_pending.{ctx.chat_key}"
+        pending_key = "reset_pending"
         arg = ctx.args.strip().casefold()
         if arg in _RESET_CONFIRM_WORDS:
             armed_at, armed_scope = _parse_reset_pending(
-                await store.get(user_key="", store_key=pending_key)
+                await store.state_get(ctx.chat_key, pending_key)
             )
             if armed_scope is not None and time.time() - armed_at <= _RESET_CONFIRM_WINDOW_SECONDS:
                 # The reset itself lives beside the backup/delete machinery so the
@@ -1445,7 +1441,7 @@ class CommandRouter:
                 except Exception:
                     logger.exception("campaign reset failed for %s", ctx.chat_key)
                     return ctx.i18n.t("commands.reset.failed")
-                await store.delete_rows([("", pending_key)])
+                await store.state_delete(ctx.chat_key, pending_key)
                 # Push a fresh state frame flagged reset=True so every connected client
                 # refreshes its info panel AND drops its stale local chat scrollback at
                 # once, instead of waiting for the next turn.
@@ -1471,7 +1467,7 @@ class CommandRouter:
         scope = _RESET_SCOPE_WORDS.get(arg)
         if scope is None:
             return ctx.i18n.t("commands.reset.usage")
-        await store.set(user_key="", store_key=pending_key, value=f"{time.time()}:{scope}")
+        await store.state_set(ctx.chat_key, pending_key, f"{time.time()}:{scope}")
         return ctx.i18n.t(
             "commands.reset.armed",
             what=ctx.i18n.t(f"commands.reset.scope.{scope}"),
@@ -1662,17 +1658,17 @@ class CommandRouter:
         roster (`core.pregen_roster`): the cast a keeper's world imports ship. Listing and
         claiming are PLAYER actions (claiming is the whole point); releasing someone
         else's claim is keeper-only."""
-        from core.pregen_roster import PregenRoster
+        from core.pregen_roster import pregen_claim, pregen_entries, pregen_release
 
         tokens = ctx.args.split()
         sub = tokens[0].casefold() if tokens else "list"
         rest = " ".join(tokens[1:]).strip()
-        roster = PregenRoster(ctx.services.store)
+        documents = ctx.services.documents
         chat_key = ctx.chat_key
         if sub in {"claim", "认领", "認領"}:
             if not rest:
                 return ctx.i18n.t("pregen.commands.claim_usage")
-            status, sheet = await roster.claim(chat_key, rest, ctx.user_id, ctx.services.characters)
+            status, sheet = await pregen_claim(documents, chat_key, rest, ctx.user_id, ctx.services.characters)
             if status in {"ok", "yours"} and sheet is not None:
                 if ctx.router.hub is not None:
                     await publish_state(ctx.router.hub, ctx.services, ctx.raw_ctx)
@@ -1682,8 +1678,8 @@ class CommandRouter:
         if sub in {"release", "放弃", "放棄", "释放", "釋放"}:
             if not rest:
                 return ctx.i18n.t("pregen.commands.release_usage")
-            status = await roster.release(
-                chat_key, rest, ctx.user_id, ctx.services.characters, force=_is_keeper(ctx.raw_ctx)
+            status = await pregen_release(
+                documents, chat_key, rest, ctx.user_id, ctx.services.characters, force=_is_keeper(ctx.raw_ctx)
             )
             if status == "ok":
                 if ctx.router.hub is not None:
@@ -1692,7 +1688,7 @@ class CommandRouter:
             return ctx.i18n.t(f"pregen.commands.release_{status}", name=rest)
         if sub not in {"list", "列表"}:
             return ctx.i18n.t("pregen.commands.usage")
-        entries = await roster.entries(chat_key)
+        entries = await pregen_entries(documents, chat_key)
         if not entries:
             return ctx.i18n.t("pregen.commands.empty")
         lines = [ctx.i18n.t("pregen.commands.list_header", count=len(entries))]
@@ -1710,32 +1706,37 @@ class CommandRouter:
         fail-closed) and this command is the deterministic lever that puts chosen paths on the
         players' panel. Keeper-only on every subcommand — even `list`, since the listing shows
         the hidden remainder."""
-        from core.mvu_compat import MvuManager, path_is_exposed
+        from core.documents import KEEPER_VIEWER, MVU_ID
+        from core.mvu_compat import mvu_expose, mvu_hide
 
         if not _is_keeper(ctx.raw_ctx):
             return ctx.i18n.t("vars.commands.denied")
         tokens = ctx.args.split()
         sub = tokens[0].casefold() if tokens else "list"
         rest = " ".join(tokens[1:]).strip()
-        manager = MvuManager(ctx.services.store)
+        documents = ctx.services.documents
         if sub in {"expose", "show", "公开", "公開"}:
             if not rest:
                 return ctx.i18n.t("vars.commands.usage")
-            changed = await manager.expose(ctx.chat_key, rest)
+            changed = await mvu_expose(documents, ctx.chat_key, rest)
             if changed and ctx.router.hub is not None:
                 await publish_state(ctx.router.hub, ctx.services, ctx.raw_ctx)
             return ctx.i18n.t("vars.commands.exposed" if changed else "vars.commands.expose_noop", prefix=rest)
         if sub in {"hide", "隐藏", "隱藏"}:
             if not rest:
                 return ctx.i18n.t("vars.commands.usage")
-            changed = await manager.hide(ctx.chat_key, rest)
+            changed = await mvu_hide(documents, ctx.chat_key, rest)
             if changed and ctx.router.hub is not None:
                 await publish_state(ctx.router.hub, ctx.services, ctx.raw_ctx)
             return ctx.i18n.t("vars.commands.hidden" if changed else "vars.commands.hide_noop", prefix=rest)
         if sub not in {"list", "列表"}:
             return ctx.i18n.t("vars.commands.usage")
-        leaves = await manager.flatten(ctx.chat_key)
-        exposed = await manager.exposed_prefixes(ctx.chat_key)
+        # This is the keeper's curation listing: consume the KEEPER projection,
+        # whose leaves come pre-tagged with their exposure (the one filter lives
+        # in the document projection, never re-applied here).
+        view = await documents.get_view(ctx.chat_key, "mvu_tree", MVU_ID, KEEPER_VIEWER)
+        leaves = (view or {}).get("leaves", [])
+        exposed = (view or {}).get("exposed", [])
         if not leaves and not exposed:
             return ctx.i18n.t("vars.commands.empty")
         lines = [ctx.i18n.t("vars.commands.list_header", count=len(leaves))]
@@ -1748,7 +1749,7 @@ class CommandRouter:
                 value = f"{value[:60]}…"
             tag = (
                 ctx.i18n.t("vars.commands.visible_tag")
-                if path_is_exposed(leaf["path"], exposed)
+                if leaf.get("exposed")
                 else ctx.i18n.t("vars.commands.hidden_tag")
             )
             lines.append(f"· {leaf['path']} = {value} {tag}")
@@ -2988,9 +2989,9 @@ def _shell_words(text: str) -> list[str]:
 
 async def _resolve_avatar_target(ctx: CommandCtx, target: str) -> Any | None:
     try:
-        from agent.npc import NpcManager
+        from agent import npc as npc_records
 
-        return await NpcManager(ctx.services.store).get_npc(ctx.chat_key, target)
+        return await npc_records.get_npc(ctx.services.documents, ctx.chat_key, target)
     except Exception:
         return None
 

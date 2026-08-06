@@ -39,7 +39,7 @@ from agent.services import Services
 from agent.session_recap import maybe_refresh_session_recap
 from agent.tools import Toolset
 from core.hooks import MAX_PANEL_EVENTS_PER_TURN
-from core.mvu_compat import MvuManager
+from core.mvu_compat import mvu_apply_text
 from core.rulepacks import all_check_terms, all_outcome_labels
 from core.skills import unlocked_tools_for
 from infra.i18n import t
@@ -699,9 +699,8 @@ async def run_kp_turn(
     is discarded (clients clear on the next epoch); the final `reply` remains the
     authoritative text clients reconcile to.
 
-    `history_key` defaults to `f"chat_history.{ctx.chat_key}"` (room-scoped,
-    like the other conversation-level store keys `core.prompt_sections`
-    reads). `output_review`, if given, post-processes the final reply (e.g.
+    `history_key` defaults to the room_state key ``"chat_history"`` (room-scoped
+    by the room_state table's room column). `output_review`, if given, post-processes the final reply (e.g.
     an M2 output censor) — it runs on the finalizer or fallback text too, if
     `max_rounds` was exhausted.
     """
@@ -739,8 +738,8 @@ async def run_kp_turn(
     # existed -- see `Toolset.schemas`'s docstring.
     unlocked = await unlocked_tools_for(services.store, ctx.chat_key)
 
-    key = history_key or f"chat_history.{ctx.chat_key}"
-    history = await _load_history(services, key)
+    key = history_key or "chat_history"
+    history = await _load_history(services, ctx.chat_key, key)
 
     messages: list[dict] = [
         {"role": "system", "content": system_prompt},
@@ -902,7 +901,7 @@ async def run_kp_turn(
     # problem must never eat the narration. Runs BEFORE output_review so the censor sees final text.
     mvu_applied: list = []
     try:
-        reply, mvu_applied, _mvu_errors = await MvuManager(services.store).apply_text(ctx.chat_key, reply)
+        reply, mvu_applied, _mvu_errors = await mvu_apply_text(services.documents, ctx.chat_key, reply)
     except Exception:
         logger.warning("MVU update-block processing failed", exc_info=True)
     reply = _strip_text_tool_calls(reply)
@@ -918,7 +917,7 @@ async def run_kp_turn(
 
     if gate is not None:
         await gate.drain()
-    await _persist_history(services, key, history, user_message, reply)
+    await _persist_history(services, ctx.chat_key, key, history, user_message, reply)
     # Fold this turn into the rolling "story so far" recap when one is due, so
     # the KP keeps facts established far earlier in the session even after they
     # scroll out of the ~20-message replay window. Best-effort: never fatal.
@@ -1604,9 +1603,9 @@ async def _run_state_correction(
     return reply
 
 
-async def _load_history(services: Services, key: str) -> list[dict]:
+async def _load_history(services: Services, chat_key: str, key: str) -> list[dict]:
     """Load the last `_HISTORY_CAP` persisted history messages for `key` (`[]` if unset/invalid)."""
-    raw = await services.store.get(user_key="", store_key=key)
+    raw = await services.store.state_get(chat_key, key)
     if not raw:
         return []
     try:
@@ -1618,11 +1617,13 @@ async def _load_history(services: Services, key: str) -> list[dict]:
     return history[-_HISTORY_CAP:]
 
 
-async def _persist_history(services: Services, key: str, prior: list[dict], user_message: str, reply: str) -> None:
+async def _persist_history(
+    services: Services, chat_key: str, key: str, prior: list[dict], user_message: str, reply: str
+) -> None:
     """Append this turn's user message + final reply (NOT tool chatter) to history, capped."""
     updated = [*prior, {"role": "user", "content": user_message}, {"role": "assistant", "content": reply}]
     updated = updated[-_HISTORY_CAP:]
-    await services.store.set(user_key="", store_key=key, value=json.dumps(updated, ensure_ascii=False))
+    await services.store.state_set(chat_key, key, json.dumps(updated, ensure_ascii=False))
 
 
 async def _run_reply_hooks(

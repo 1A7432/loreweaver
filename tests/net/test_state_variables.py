@@ -4,8 +4,8 @@ when the room has none).
 
 RED LINE (iron rule #3, information isolation): a `visibility="keeper"` variable must NEVER
 appear ANYWHERE in the state payload — not its id, not its label, not its value. That filter
-lives in `core.modvars.player_entries` (structural, by construction), and these tests are the
-tripwire that keeps it that way.
+lives in the `modvars` document's PLAYER projection (`core.documents`, structural, by
+construction), and these tests are the tripwire that keeps it that way.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import json
 
 from agent.context import AgentCtx
 from agent.services import build_services
-from core.modvars import ModvarManager, build_spec
+from core.modvars import build_spec, define_modvar, set_modvar
 from gateway.session import SessionSource
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
@@ -44,14 +44,17 @@ async def test_build_room_state_omits_variables_when_none_defined():
 
 async def test_build_room_state_surfaces_pregen_roster_to_every_viewer():
     from core.character_manager import CharacterSheet
-    from core.pregen_roster import PregenRoster
+    from core.pregen_roster import pregen_add, pregen_claim
 
     services = _services()
     ctx = _room_ctx("pregen-room")
-    roster = PregenRoster(services.store)
-    await roster.add(ctx.chat_key, CharacterSheet(name="Mira Vane", system="CoC"), source="module")
-    await roster.add(ctx.chat_key, CharacterSheet(name="老陈", system="CoC"), source="module")
-    await roster.claim(ctx.chat_key, "Mira Vane", "player-1", services.characters)
+    await pregen_add(
+        services.documents, ctx.chat_key, CharacterSheet(name="Mira Vane", system="CoC"), source="module"
+    )
+    await pregen_add(
+        services.documents, ctx.chat_key, CharacterSheet(name="老陈", system="CoC"), source="module"
+    )
+    await pregen_claim(services.documents, ctx.chat_key, "Mira Vane", "player-1", services.characters)
 
     state = await build_room_state(services, ctx)
 
@@ -64,12 +67,13 @@ async def test_build_room_state_surfaces_pregen_roster_to_every_viewer():
 async def test_build_room_state_surfaces_player_visible_variables_in_definition_order():
     services = _services()
     ctx = _room_ctx("vars-room")
-    manager = ModvarManager(services.store)
-    await manager.define(
-        ctx.chat_key, build_spec("town_fear", "number", labels={"en": "Town Fear"}, minimum=0, maximum=10)
+    await define_modvar(
+        services.documents,
+        ctx.chat_key,
+        build_spec("town_fear", "number", labels={"en": "Town Fear"}, minimum=0, maximum=10),
     )
-    await manager.define(ctx.chat_key, build_spec("mood", "enum", options=["calm", "tense"]))
-    await manager.set(ctx.chat_key, "town_fear", 7)
+    await define_modvar(services.documents, ctx.chat_key, build_spec("mood", "enum", options=["calm", "tense"]))
+    await set_modvar(services.documents, ctx.chat_key, "town_fear", 7)
 
     state = await build_room_state(services, ctx)
 
@@ -84,9 +88,9 @@ async def test_red_line_keeper_only_variables_never_appear_anywhere_in_the_state
     ENTIRE serialized state frame — not just from `state["variables"]`."""
     services = _services()
     ctx = _room_ctx("vars-secret-room")
-    manager = ModvarManager(services.store)
-    await manager.define(ctx.chat_key, build_spec("fear", "number", minimum=0, maximum=10))
-    await manager.define(
+    await define_modvar(services.documents, ctx.chat_key, build_spec("fear", "number", minimum=0, maximum=10))
+    await define_modvar(
+        services.documents,
         ctx.chat_key,
         build_spec(
             "true_culprit",
@@ -108,9 +112,9 @@ async def test_red_line_keeper_only_variables_never_appear_anywhere_in_the_state
 
 async def test_variables_labels_follow_the_callers_locale():
     services = _services()
-    manager = ModvarManager(services.store)
     ctx_zh = _room_ctx("vars-locale-room", locale="zh")
-    await manager.define(
+    await define_modvar(
+        services.documents,
         ctx_zh.chat_key,
         build_spec("town_fear", "number", labels={"en": "Town Fear", "zh": "小镇恐慌"}, minimum=0, maximum=10),
     )
@@ -127,13 +131,11 @@ async def test_mvu_leaves_are_hidden_from_players_until_exposed():
     frame carries NO mvu.* entries at all (heavy cards keep hidden plot flags in the tree)."""
     services = _services()
     ctx = _room_ctx("vars-mvu-hidden-room")
-    from core.mvu_compat import MvuManager
+    from core.mvu_compat import mvu_init_from_initvar
 
-    await ModvarManager(services.store).define(
-        ctx.chat_key, build_spec("fear", "number", minimum=0, maximum=10)
-    )
-    await MvuManager(services.store).init_from_initvar(
-        ctx.chat_key, {"理": {"好感度": [33, "affinity"]}, "真凶": ["管家", "hidden twist"]}
+    await define_modvar(services.documents, ctx.chat_key, build_spec("fear", "number", minimum=0, maximum=10))
+    await mvu_init_from_initvar(
+        services.documents, ctx.chat_key, {"理": {"好感度": [33, "affinity"]}, "真凶": ["管家", "hidden twist"]}
     )
 
     state = await build_room_state(services, ctx)
@@ -145,16 +147,15 @@ async def test_mvu_leaves_are_hidden_from_players_until_exposed():
 async def test_exposed_mvu_leaves_ride_the_variables_list_with_prefixed_ids():
     services = _services()
     ctx = _room_ctx("vars-mvu-room")
-    from core.mvu_compat import MvuManager
+    from core.mvu_compat import mvu_expose, mvu_init_from_initvar
 
-    await ModvarManager(services.store).define(
-        ctx.chat_key, build_spec("fear", "number", minimum=0, maximum=10)
+    await define_modvar(services.documents, ctx.chat_key, build_spec("fear", "number", minimum=0, maximum=10))
+    await mvu_init_from_initvar(
+        services.documents,
+        ctx.chat_key,
+        {"理": {"好感度": [33, "affinity"], "档案": {"备注": ["長い", "note"]}}, "真凶": ["管家", "twist"]},
     )
-    manager = MvuManager(services.store)
-    await manager.init_from_initvar(
-        ctx.chat_key, {"理": {"好感度": [33, "affinity"], "档案": {"备注": ["長い", "note"]}}, "真凶": ["管家", "twist"]}
-    )
-    await manager.expose(ctx.chat_key, "理")  # keeper puts the 理 subtree on the panel
+    await mvu_expose(services.documents, ctx.chat_key, "理")  # keeper puts the 理 subtree on the panel
 
     state = await build_room_state(services, ctx)
 
@@ -178,11 +179,12 @@ async def test_keeper_viewer_sees_unexposed_leaves_flagged_hidden():
         locale="en",
         extra={"role": "keeper"},
     )
-    from core.mvu_compat import MvuManager
+    from core.mvu_compat import mvu_expose, mvu_init_from_initvar
 
-    manager = MvuManager(services.store)
-    await manager.init_from_initvar(ctx_key := player_ctx.chat_key, {"理": {"好感度": [33, "a"]}, "真凶": ["管家", "t"]})
-    await manager.expose(ctx_key, "理")
+    await mvu_init_from_initvar(
+        services.documents, ctx_key := player_ctx.chat_key, {"理": {"好感度": [33, "a"]}, "真凶": ["管家", "t"]}
+    )
+    await mvu_expose(services.documents, ctx_key, "理")
 
     keeper_state = await build_room_state(services, keeper_ctx)
     entries = {entry["id"]: entry for entry in keeper_state["variables"]}

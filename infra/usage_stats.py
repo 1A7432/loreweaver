@@ -47,10 +47,10 @@ async def record_usage_stats(
     ):
         return
 
-    key = f"usage_stats.{chat_key}"
+    key = "usage_stats"
     session = dict(_EMPTY_SESSION)
     try:
-        raw = await store.get(user_key="", store_key=key)
+        raw = await store.state_get(chat_key, key)
         prior = json.loads(raw) if raw else {}
         prior_session = prior.get("session") if isinstance(prior, dict) else None
         if isinstance(prior_session, dict):
@@ -78,10 +78,10 @@ async def record_usage_stats(
         "session": session,
     }
     try:
-        await store.set(
-            user_key="",
-            store_key=key,
-            value=json.dumps(payload, ensure_ascii=False),
+        await store.state_set(
+            chat_key,
+            key,
+            json.dumps(payload, ensure_ascii=False),
         )
     except Exception:
         logger.warning(

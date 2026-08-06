@@ -59,7 +59,7 @@ async def test_sync_party_roster_preserves_status_effects_without_explicit_updat
     await manager.sync_party_roster("chat-a", character, status_effects=["中毒"])
     await manager.sync_party_roster("chat-a", character)
 
-    roster_data = await store.get(user_key="", store_key="party_roster.chat-a")
+    roster_data = await store.state_get("chat-a", "party_roster")
     assert roster_data is not None
     roster = json.loads(roster_data)
     assert roster["调查员"]["status_effects"] == ["中毒"]

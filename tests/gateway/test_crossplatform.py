@@ -652,10 +652,7 @@ async def test_saved_room_locale_overrides_interaction_locale() -> None:
         chat_id="saved-locale-group",
         user_id="player",
     )
-    await services.store.set(
-        user_key="",
-        store_key=f"chat_locale.{source.chat_key()}",
-        value="en",
+    await services.store.state_set(source.chat_key(), "chat_locale", "en",
     )
 
     await runner.on_inbound(
@@ -817,9 +814,7 @@ async def test_private_interaction_attachment_is_not_published_or_indexed() -> N
     assert adapter.fetches == 1
     assert not any(event.kind in {"media", "audio"} for event in bystander.events)
     assert (
-        await services.store.get(
-            user_key="", store_key=f"media_history.{session_key}"
-        )
+        await services.store.state_get(session_key, "media_history")
         is None
     )
 
@@ -892,8 +887,8 @@ async def test_runner_keeper_identity_only_elevates_inside_its_bound_room() -> N
     await set_binding(services.store, own.chat_key(), own_session)
     await set_binding(services.store, foreign.chat_key(), foreign_session)
     await set_keeper_binding(services.store, "discord", "keeper-1", "arkham")
-    await services.store.set(store_key=f"bot_enabled.{own_session}", value="1")
-    await services.store.set(store_key=f"bot_enabled.{foreign_session}", value="1")
+    await services.store.state_set(own_session, "bot_enabled", "1")
+    await services.store.state_set(foreign_session, "bot_enabled", "1")
 
     await runner.on_inbound(
         InboundMessage(source=foreign, text="/skill enable mature-mode", at_bot=True)

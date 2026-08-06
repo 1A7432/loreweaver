@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 _BOT_ENABLED_PREFIX = "bot_enabled."
 _BOT_ENABLED_VALUE = "1"
 _BOT_DISABLED_VALUE = "0"
-_CHAT_LOCALE_KEYS = ("chat_locale.{chat_key}", "locale.{chat_key}")
+_CHAT_LOCALE_KEYS = ("chat_locale",)
 _DIRECT_CHAT_TYPES = {"dm", "direct", "private", "c2c"}
 _COMMAND_PREFIXES = (".", "。", "/")
 
@@ -135,9 +135,7 @@ class GatewayRunner:
             quote = "\n".join(f"> {line}" for line in msg.quoted_text.strip().splitlines())
             text = f"{quote}\n\n{text}".rstrip()
 
-        bot_setting = await self.services.store.get(
-            user_key="", store_key=f"{_BOT_ENABLED_PREFIX}{chat_key}"
-        )
+        bot_setting = await self.services.store.state_get(chat_key, "bot_enabled")
         welcome_key = f"chat_welcomed.{channel_key}"
         if (
             bot_setting is None
@@ -500,7 +498,7 @@ class GatewayRunner:
                 )
     async def _locale_for(self, chat_key: str, *, preferred: str = "") -> str:
         for template in _CHAT_LOCALE_KEYS:
-            value = await self.services.store.get(user_key="", store_key=template.format(chat_key=chat_key))
+            value = await self.services.store.state_get(chat_key, template)
             if value:
                 return value
         return preferred if preferred in {"en", "zh"} else self.services.settings.locale

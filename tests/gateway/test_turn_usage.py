@@ -65,7 +65,7 @@ async def test_run_turn_records_usage_stats_after_a_real_kp_turn():
 
     await run_turn(hub, services, ctx, "open the door", command_router=_NullRouter(), toolset=build_kp_toolset(services))
 
-    raw = await services.store.get(user_key="", store_key=f"usage_stats.{ctx.chat_key}")
+    raw = await services.store.state_get(ctx.chat_key, "usage_stats")
     assert raw is not None
     stats = json.loads(raw)
     # Window is computed from the pinned model (see `_WINDOW`) so it can't drift from the fixture.
@@ -84,7 +84,7 @@ async def test_run_turn_accumulates_session_usage_across_multiple_turns():
     await run_turn(hub, services, ctx, "one", command_router=_NullRouter(), toolset=build_kp_toolset(services))
     await run_turn(hub, services, ctx, "two", command_router=_NullRouter(), toolset=build_kp_toolset(services))
 
-    raw = await services.store.get(user_key="", store_key=f"usage_stats.{ctx.chat_key}")
+    raw = await services.store.state_get(ctx.chat_key, "usage_stats")
     stats = json.loads(raw)
     assert stats["session"]["turns"] == 2
     assert stats["session"]["prompt"] == 200
@@ -103,4 +103,4 @@ async def test_run_turn_never_writes_usage_stats_for_a_zero_usage_turn():
 
     await run_turn(hub, services, ctx, "hi", command_router=_NullRouter(), toolset=build_kp_toolset(services))
 
-    assert await services.store.get(user_key="", store_key=f"usage_stats.{ctx.chat_key}") is None
+    assert await services.store.state_get(ctx.chat_key, "usage_stats") is None

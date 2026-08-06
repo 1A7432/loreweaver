@@ -45,12 +45,12 @@ async def add_audio_item(store: Store, chat_key: str, record: MediaRecord, from_
                 frame[key] = previous[key]
     next_items = [item for item in items if item.get("hash") != record.hash]
     next_items.append(frame)
-    await _set_json(store, _library_key(chat_key), next_items[-_LIBRARY_REPLAY_CAP:])
+    await _set_json(store, chat_key, _LIBRARY_KEY, next_items[-_LIBRARY_REPLAY_CAP:])
     return frame
 
 
 async def list_audio_items(store: Store, chat_key: str) -> list[dict[str, Any]]:
-    raw = await _get_json(store, _library_key(chat_key), [])
+    raw = await _get_json(store, chat_key, _LIBRARY_KEY, [])
     if not isinstance(raw, list):
         return []
     items = [_normalize_item(item) for item in raw if isinstance(item, dict)]
@@ -108,7 +108,7 @@ async def update_audio_item(store: Store, chat_key: str, query: str, metadata: d
         else:
             updated.pop("tags", None)
     next_items = [updated if item.get("hash") == updated["hash"] else item for item in items]
-    await _set_json(store, _library_key(chat_key), next_items[-_LIBRARY_REPLAY_CAP:])
+    await _set_json(store, chat_key, _LIBRARY_KEY, next_items[-_LIBRARY_REPLAY_CAP:])
     return AudioResolve("ok", updated, (updated,))
 
 
@@ -118,7 +118,7 @@ async def audio_state_frame(store: Store, chat_key: str) -> dict[str, Any]:
 
 
 async def has_audio_state(store: Store, chat_key: str) -> bool:
-    raw = await _get_json(store, _state_key(chat_key), {})
+    raw = await _get_json(store, chat_key, _STATE_KEY, {})
     return isinstance(raw, dict) and any(isinstance(value, dict) and value for value in raw.values())
 
 
@@ -189,7 +189,7 @@ async def build_audio_control(
         current["volume"] = volume_value
 
     state[layer] = current
-    await _set_json(store, _state_key(chat_key), state)
+    await _set_json(store, chat_key, _STATE_KEY, state)
     return control, await audio_state_frame(store, chat_key)
 
 
@@ -258,28 +258,24 @@ def _normalize_layer_state(layer: str, state: Any) -> dict[str, Any]:
 
 
 async def _load_state(store: Store, chat_key: str) -> dict[str, Any]:
-    raw = await _get_json(store, _state_key(chat_key), {})
+    raw = await _get_json(store, chat_key, _STATE_KEY, {})
     return raw if isinstance(raw, dict) else {}
 
 
-async def _get_json(store: Store, key: str, default: Any) -> Any:
+async def _get_json(store: Store, chat_key: str, key: str, default: Any) -> Any:
     try:
-        raw = await store.get(user_key="", store_key=key)
+        raw = await store.state_get(chat_key, key)
         return json.loads(raw) if raw else default
     except Exception:
         return default
 
 
-async def _set_json(store: Store, key: str, value: Any) -> None:
-    await store.set(user_key="", store_key=key, value=json.dumps(value, ensure_ascii=False))
+async def _set_json(store: Store, chat_key: str, key: str, value: Any) -> None:
+    await store.state_set(chat_key, key, json.dumps(value, ensure_ascii=False))
 
 
-def _library_key(chat_key: str) -> str:
-    return f"audio_library.{chat_key}"
-
-
-def _state_key(chat_key: str) -> str:
-    return f"audio_state.{chat_key}"
+_LIBRARY_KEY = "audio_library"
+_STATE_KEY = "audio_state"
 
 
 def _clean_text(value: Any) -> str:

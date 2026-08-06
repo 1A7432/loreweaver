@@ -167,8 +167,8 @@ async def test_get_supported_file_types_differs_by_locale_and_mentions_txt():
 async def test_get_module_init_status_surfaces_degraded_fallback_and_retry_hint():
     services = build_services(Settings(), llm=FakeLLM(), embeddings=FakeEmbeddings(8))
     tools = ModuleTools(services)
-    await services.store.set(user_key="", store_key=f"module_init_status.{CHAT_KEY}", value="ready_fallback")
-    await services.store.set(user_key="", store_key=f"module_init_error.{CHAT_KEY}", value="provider unavailable")
+    await services.store.state_set(CHAT_KEY, "module_init_status", "ready_fallback")
+    await services.store.state_set(CHAT_KEY, "module_init_error", "provider unavailable")
     await services.documents.put_singleton(
         CHAT_KEY, "module_pool", {"keeper": {"scenes": [{"name": "Fallback scene"}]}, "player": {}}
     )
@@ -225,7 +225,7 @@ async def test_start_session_recording_is_idempotent_and_force_new_archives(tmp_
     fresh = await services.battles.generator.get_current_session(CHAT_KEY)
     assert fresh is not None
     assert fresh.session_id != first.session_id
-    assert await services.store.get(store_key=f"session_history.{CHAT_KEY}.{first.session_id}") is not None
+    assert await services.store.state_get(CHAT_KEY, f"session_history.{first.session_id}") is not None
 
 
 async def test_add_session_event_reports_when_a_duplicate_is_suppressed(tmp_path):
@@ -270,10 +270,10 @@ async def test_knowledge_tools_end_to_end(tmp_path):
     upload_result = await doc_tools.upload_document(ctx, file_path="module_en.txt", doc_type="module")
     assert "❌" not in upload_result
 
-    fulltext = await services.store.get(user_key="", store_key=f"module_fulltext.{CHAT_KEY}")
+    fulltext = await services.store.state_get(CHAT_KEY, "module_fulltext")
     assert fulltext == fixture_path.read_text(encoding="utf-8")
 
-    status = await services.store.get(user_key="", store_key=f"module_init_status.{CHAT_KEY}")
+    status = await services.store.state_get(CHAT_KEY, "module_init_status")
     assert status == "ready"
 
     keeper_view = await services.documents.get_view(CHAT_KEY, "module_pool", MODULE_POOL_ID, KEEPER_VIEWER)
@@ -324,7 +324,7 @@ async def test_knowledge_tools_end_to_end(tmp_path):
     await note_tools.game_clock(ctx, action="set", value="1926-03-15 09:00")
     advance_result = await note_tools.game_clock(ctx, action="advance", value="+2 hours")
     assert "1926" in advance_result
-    clock_raw = json.loads(await services.store.get(user_key="", store_key=f"game_clock.{CHAT_KEY}"))
+    clock_raw = json.loads(await services.store.state_get(CHAT_KEY, "game_clock"))
     # Advancing preserves the input's format family: an ISO clock stays ISO
     # (see core/game_clock.py -- a zh 年月日 clock would stay 年月日 the same way).
     assert clock_raw["current_time"] == "1926-03-15 11:00"
@@ -332,7 +332,7 @@ async def test_knowledge_tools_end_to_end(tmp_path):
     # An unparseable delta leaves the clock untouched and reports it instead.
     unparsed = await note_tools.game_clock(ctx, action="advance", value="a little while")
     assert "⚠️" in unparsed
-    clock_raw = json.loads(await services.store.get(user_key="", store_key=f"game_clock.{CHAT_KEY}"))
+    clock_raw = json.loads(await services.store.state_get(CHAT_KEY, "game_clock"))
     assert clock_raw["current_time"] == "1926-03-15 11:00"
 
     # -- 6. start_session_recording + add_session_event + generate_session_report produce a report ------
@@ -359,14 +359,14 @@ async def test_knowledge_tools_end_to_end(tmp_path):
     assert "Blackmoor One-Shot" in markdown
 
     # -- 7. delete_document clears the module pools/catalog/status/fulltext together -------------------
-    await services.store.set(user_key="", store_key=f"module_init_error.{CHAT_KEY}", value="old fallback")
+    await services.store.state_set(CHAT_KEY, "module_init_error", "old fallback")
     delete_result = await doc_tools.delete_document(ctx, filename="module_en")
     assert "✅" in delete_result
 
-    assert await services.store.get(user_key="", store_key=f"module_init_status.{CHAT_KEY}") == ""
+    assert await services.store.state_get(CHAT_KEY, "module_init_status") == ""
     assert await services.documents.get_singleton(CHAT_KEY, "module_pool") is None
-    assert await services.store.get(user_key="", store_key=f"module_fulltext.{CHAT_KEY}") == ""
-    assert await services.store.get(user_key="", store_key=f"module_init_error.{CHAT_KEY}") == ""
+    assert await services.store.state_get(CHAT_KEY, "module_fulltext") == ""
+    assert await services.store.state_get(CHAT_KEY, "module_init_error") == ""
 
     status_after_delete = await module_tools.get_module_init_status(ctx)
     assert services.i18n.with_locale("en").t("kp_tools.know.init.status_none") == status_after_delete

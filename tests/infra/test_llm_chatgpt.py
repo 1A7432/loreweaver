@@ -75,7 +75,7 @@ class _FakeRaw:
         self.headers = headers
         self._events = events
 
-    def parse(self) -> "_FakeStream":
+    def parse(self) -> _FakeStream:
         return _FakeStream(self._events)
 
 

@@ -69,7 +69,13 @@ def actor_viewer(actor_id: str, *, locale: str = "en") -> Viewer:
 
 @dataclass(frozen=True)
 class Document:
-    """One unit of room content. ``data`` is the type-specific payload."""
+    """One unit of room content. ``data`` is the type-specific payload.
+
+    ``corrupt`` marks a row whose stored data column failed to parse: the
+    payload degrades to ``{}`` for tolerant readers, but readers protecting
+    against destructive rewrites (character sheets) MUST check it — silently
+    treating a corrupt sheet as blank would let the next save wipe the real
+    one."""
 
     id: str
     type: str
@@ -77,6 +83,7 @@ class Document:
     data: dict[str, Any]
     meta: dict[str, Any] = field(default_factory=dict)
     grants: tuple[str, ...] = ()
+    corrupt: bool = False
 
     @property
     def source(self) -> str:
@@ -203,7 +210,8 @@ def _project_mvu(doc: Document, viewer: Viewer) -> dict[str, Any] | None:
     """Imported MVU tree: an opaque card's module state, hidden by default.
     Players see ONLY leaves under keeper-exposed path prefixes (fail-closed:
     nothing exposed → nothing shipped); the keeper view carries every leaf
-    plus the exposure list so keeper surfaces can flag the hidden remainder."""
+    tagged with its exposure so keeper surfaces can flag the hidden remainder
+    without re-implementing the filter."""
     from core.mvu_compat import flatten_leaves, path_is_exposed
 
     tree = doc.data.get("tree")
@@ -211,7 +219,10 @@ def _project_mvu(doc: Document, viewer: Viewer) -> dict[str, Any] | None:
     exposed_raw = doc.data.get("exposed")
     exposed = [p for p in exposed_raw if isinstance(p, str)] if isinstance(exposed_raw, list) else []
     if viewer.is_keeper:
-        return {"leaves": leaves, "exposed": exposed}
+        return {
+            "leaves": [{**leaf, "exposed": path_is_exposed(leaf["path"], exposed)} for leaf in leaves],
+            "exposed": exposed,
+        }
     return {"leaves": [leaf for leaf in leaves if path_is_exposed(leaf["path"], exposed)]}
 
 
@@ -380,7 +391,7 @@ class DocumentStore:
 
 
 def _from_row(row: dict) -> Document:
-    data = _json_field(row.get("data"), {})
+    data = _json_field(row.get("data"), None)
     meta = _json_field(row.get("meta"), {})
     grants_raw = _json_field(row.get("grants"), [])
     grants = tuple(str(item) for item in grants_raw) if isinstance(grants_raw, list) else ()
@@ -391,6 +402,7 @@ def _from_row(row: dict) -> Document:
         data=data if isinstance(data, dict) else {},
         meta=meta if isinstance(meta, dict) else {},
         grants=grants,
+        corrupt=not isinstance(data, dict),
     )
     return _migrate(doc)
 

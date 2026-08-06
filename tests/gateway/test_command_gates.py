@@ -86,7 +86,7 @@ async def test_bot_off_denied_for_player_and_does_not_mute_room():
     reply = await router.dispatch(ctx, ".bot off")
     assert reply == _denied(services)
     # The room was NOT muted.
-    assert await services.store.get(user_key="", store_key=f"bot_enabled.{chat_key}") is None
+    assert await services.store.state_get(chat_key, "bot_enabled") is None
 
 
 async def test_bot_status_query_open_but_keeper_can_toggle():
@@ -100,7 +100,7 @@ async def test_bot_status_query_open_but_keeper_can_toggle():
     keeper = AgentCtx(chat_key=chat_key, user_id="k1", platform="tui", locale="en", extra={"role": "keeper"})
     toggled = await router.dispatch(keeper, ".bot off")
     assert toggled == services.i18n.with_locale("en").t("commands.bot.off")
-    assert await services.store.get(user_key="", store_key=f"bot_enabled.{chat_key}") == "0"
+    assert await services.store.state_get(chat_key, "bot_enabled") == "0"
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +132,7 @@ async def test_setcoc_keeper_can_still_set_the_rule():
     reply = await router.dispatch(_keeper_ctx(chat_key), ".setcoc 2")
     assert reply == services.i18n.with_locale("en").t("commands.setcoc.changed", rule="2")
     # The store keeps the full ladder-variant id; the reply shows the dialect form.
-    assert await services.store.get(user_key="", store_key=f"rule_variant.{chat_key}") == "rule2"
+    assert await services.store.state_get(chat_key, "rule_variant") == "rule2"
 
 
 async def test_language_write_denied_for_player_does_not_flip_room_locale():
@@ -141,7 +141,7 @@ async def test_language_write_denied_for_player_does_not_flip_room_locale():
     chat_key = "tui:group:lang"
     reply = await router.dispatch(_player_ctx(chat_key), ".language zh")
     assert reply == _denied(services)
-    assert await services.store.get(user_key="", store_key=f"chat_locale.{chat_key}") is None
+    assert await services.store.state_get(chat_key, "chat_locale") is None
 
 
 async def test_language_keeper_can_still_set_room_locale():
@@ -150,7 +150,7 @@ async def test_language_keeper_can_still_set_room_locale():
     chat_key = "cli:dm:lang"
     reply = await router.dispatch(_keeper_ctx(chat_key), ".language zh")
     assert reply == services.i18n.with_locale("zh").t("commands.language.done")
-    assert await services.store.get(user_key="", store_key=f"chat_locale.{chat_key}") == "zh"
+    assert await services.store.state_get(chat_key, "chat_locale") == "zh"
 
 
 # ---------------------------------------------------------------------------
@@ -353,14 +353,14 @@ async def test_import_world_denied_for_player_even_via_attachment(tmp_path):
 
     assert reply == services.i18n.with_locale("en").t("charcard.commands.import.world_denied")
     # Nothing reached the room: no hooks, no variable tree.
-    assert await services.store.get(user_key="", store_key=f"room_hooks.{chat_key}") is None
+    assert await services.store.state_get(chat_key, "room_hooks") is None
 
 
 async def test_import_world_runs_for_the_keeper(tmp_path):
     import json as _json
 
     from agent.context import LocalFs
-    from core.mvu_compat import MvuManager
+    from core.mvu_compat import load_mvu
 
     services = _services()
     router = CommandRouter(services)
@@ -383,18 +383,18 @@ async def test_import_world_runs_for_the_keeper(tmp_path):
     reply = await router.dispatch(keeper, ".import world")
 
     assert reply is not None and "hook script" in reply
-    assert (await MvuManager(services.store).load(chat_key))["真凶"][0] == "butler"
-    raw = await services.store.get(user_key="", store_key=f"room_hooks.{chat_key}")
+    assert (await load_mvu(services.documents, chat_key))["真凶"][0] == "butler"
+    raw = await services.store.state_get(chat_key, "room_hooks")
     assert raw and "card:Manor" in raw
 
 
 async def test_var_command_is_keeper_gated_and_curates_exposure():
-    from core.mvu_compat import MvuManager
+    from core.mvu_compat import mvu_exposed_prefixes, mvu_init_from_initvar
 
     services = _services()
     router = CommandRouter(services)
     chat_key = "tui:group:vargate"
-    await MvuManager(services.store).init_from_initvar(chat_key, {"理": {"好感度": [33, "a"]}, "真凶": ["管家", "t"]})
+    await mvu_init_from_initvar(services.documents, chat_key, {"理": {"好感度": [33, "a"]}, "真凶": ["管家", "t"]})
 
     player = _player_ctx(chat_key)
     for line in (".var", ".var list", ".var expose 理", ".var hide 理"):
@@ -404,7 +404,7 @@ async def test_var_command_is_keeper_gated_and_curates_exposure():
     keeper = AgentCtx(chat_key=chat_key, user_id="k1", platform="tui", locale="en", extra={"role": "keeper"})
     exposed = await router.dispatch(keeper, ".var expose 理")
     assert exposed is not None and "理" in exposed
-    assert await MvuManager(services.store).exposed_prefixes(chat_key) == ["理"]
+    assert await mvu_exposed_prefixes(services.documents, chat_key) == ["理"]
 
     listing = await router.dispatch(keeper, ".var list")
     assert listing is not None
@@ -413,18 +413,18 @@ async def test_var_command_is_keeper_gated_and_curates_exposure():
 
     hidden = await router.dispatch(keeper, ".var hide 理")
     assert hidden is not None
-    assert await MvuManager(services.store).exposed_prefixes(chat_key) == []
+    assert await mvu_exposed_prefixes(services.documents, chat_key) == []
 
 
 async def test_pc_roster_claim_is_player_open_but_foreign_release_is_keeper_only():
     from core.character_manager import CharacterSheet
-    from core.pregen_roster import PregenRoster
+    from core.pregen_roster import pregen_add
 
     services = _services()
     router = CommandRouter(services)
     chat_key = "tui:group:cast"
     sheet = CharacterSheet(name="理", system="CoC")
-    await PregenRoster(services.store).add(chat_key, sheet, source="card:test")
+    await pregen_add(services.documents, chat_key, sheet, source="card:test")
 
     p1 = _player_ctx(chat_key)
     listing = await router.dispatch(p1, ".pc")

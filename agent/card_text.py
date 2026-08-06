@@ -30,12 +30,13 @@ from collections.abc import Callable
 from typing import Any
 
 from agent.services import Services
+from core.documents import MODVARS_ID, PLAYER_VIEWER
 from core.ejs_full import EjsFullError, FullEjsEngine, create_full_engine
 from core.ejs_lite import render as render_subset
 from core.ejs_lite import substitute_macros
-from core.modvars import ModvarManager
-from core.mvu_compat import MvuManager
-from core.varspace import build_resolver
+from core.modvars import MODVARS_DOC_TYPE
+from core.mvu_compat import load_mvu
+from core.varspace import build_resolver, modvar_values_from_view
 
 # Mirrors `net.state.resolve_active_character`'s sentinel (agent must not import net):
 # `CharacterManager.get_character` resolves an unset active-character pointer to a fresh,
@@ -84,17 +85,12 @@ async def build_card_text_renderer(
     player_values: dict[str, Any] = {}
     mvu_tree: dict[str, Any] = {}
     if chat_key:
-        modvar_state = await ModvarManager(services.store).load(chat_key)
-        mvu_tree = await MvuManager(services.store).load(chat_key)
-        # The player-view filter of core.varspace.load_resolver, inlined so the SAME snapshot
-        # feeds both the subset resolver and the full engine's flat_variables (one store load,
-        # structurally identical views). Keeper-only modvars are dropped here, before either
-        # renderer can observe them.
-        player_values = {
-            var_id: modvar_state["values"][var_id]
-            for var_id, spec in modvar_state["specs"].items()
-            if spec.get("visibility") == "player"
-        }
+        # The PLAYER projection of the modvars document feeds both the subset resolver and
+        # the full engine's flat_variables (one document read, structurally identical views).
+        # Keeper-only modvars never reach either renderer — the projection dropped them.
+        view = await services.documents.get_view(chat_key, MODVARS_DOC_TYPE, MODVARS_ID, PLAYER_VIEWER)
+        player_values = modvar_values_from_view(view)
+        mvu_tree = await load_mvu(services.documents, chat_key)
     resolve = build_resolver(player_values, mvu_tree)
 
     user_name = ""

@@ -27,19 +27,16 @@ def media_frame(record: MediaRecord, *, from_name: str, frame_id: str | None = N
 
 
 async def record_media_history(store: Store, chat_key: str, frame: dict[str, Any]) -> None:
-    store_key = f"media_history.{chat_key}"
+    store_key = "media_history"
     try:
-        raw = await store.get(user_key="", store_key=store_key)
+        raw = await store.state_get(chat_key, store_key)
         history = json.loads(raw) if raw else []
     except Exception:
         history = []
     if not isinstance(history, list):
         history = []
     history.append(dict(frame))
-    await store.set(
-        user_key="",
-        store_key=store_key,
-        value=json.dumps(history[-MEDIA_HISTORY_REPLAY_CAP:], ensure_ascii=False),
+    await store.state_set(chat_key, store_key, json.dumps(history[-MEDIA_HISTORY_REPLAY_CAP:], ensure_ascii=False),
     )
 
 

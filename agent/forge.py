@@ -521,11 +521,11 @@ def _normalized_description_hash(description: str) -> str:
 
 
 def _module_forge_last_key(chat_key: str) -> str:
-    return f"forge_module_last.{chat_key}"
+    return "forge_module_last"
 
 
 def _module_forge_owner_key(chat_key: str, requested_id: str) -> str:
-    return f"forge_module_owner.{chat_key}.{requested_id}"
+    return f"forge_module_owner.{requested_id}"
 
 
 def _load_json_object(raw: str | None) -> dict:
@@ -547,7 +547,7 @@ async def _recent_module_forge_result(
     now: float,
 ) -> ForgeResult | None:
     record = _load_json_object(
-        await services.store.get(user_key="", store_key=_module_forge_last_key(ctx.chat_key))
+        await services.store.state_get(ctx.chat_key, _module_forge_last_key(ctx.chat_key))
     )
     try:
         age = now - float(record.get("timestamp", 0))
@@ -585,10 +585,7 @@ async def _owned_module_id(
 ) -> str:
     """Reuse this room's prior path for an id; never overwrite another room's file."""
     owner = _load_json_object(
-        await services.store.get(
-            user_key="",
-            store_key=_module_forge_owner_key(ctx.chat_key, requested_id),
-        )
+        await services.store.state_get(ctx.chat_key, _module_forge_owner_key(ctx.chat_key, requested_id))
     )
     installed_id = str(owner.get("installed_id", ""))
     if installed_id:
@@ -687,12 +684,12 @@ async def generate_and_install_module(services: Services, ctx: AgentCtx, descrip
     except OSError as exc:
         return ForgeResult(False, "", "", "", f"write_failed: {exc}")  # i18n-exempt
     runtime_keys = (
-        f"module_fulltext.{ctx.chat_key}",
-        f"module_init_status.{ctx.chat_key}",
-        f"module_init_error.{ctx.chat_key}",
+        "module_fulltext",
+        "module_init_status",
+        "module_init_error",
     )
     previous_runtime = {
-        key: await services.store.get(user_key="", store_key=key) for key in runtime_keys
+        key: await services.store.state_get(ctx.chat_key, key) for key in runtime_keys
     }
     previous_pool_doc = await services.documents.get(ctx.chat_key, "module_pool", MODULE_POOL_ID)
 
@@ -713,14 +710,8 @@ async def generate_and_install_module(services: Services, ctx: AgentCtx, descrip
     # LocalFs base (cwd) need not contain data_dir (e.g. an absolute data_dir under systemd).
     install_ctx = replace(ctx, fs=LocalFs(user_dir))
     install_note = await doc_tools.upload_document(install_ctx, file_path=str(target), doc_type="module")
-    status = await services.store.get(
-        user_key="",
-        store_key=f"module_init_status.{ctx.chat_key}",
-    )
-    installed_fulltext = await services.store.get(
-        user_key="",
-        store_key=f"module_fulltext.{ctx.chat_key}",
-    )
+    status = await services.store.state_get(ctx.chat_key, "module_init_status")
+    installed_fulltext = await services.store.state_get(ctx.chat_key, "module_fulltext")
     pool_view = await services.documents.get_view(
         ctx.chat_key, "module_pool", MODULE_POOL_ID, KEEPER_VIEWER
     )
@@ -737,10 +728,11 @@ async def generate_and_install_module(services: Services, ctx: AgentCtx, descrip
             target.unlink(missing_ok=True)
         else:
             atomic_write_private(target, previous_file)
-        await services.store.set_rows_if_values(
-            expected=[],
-            updates=[("", key, value) for key, value in previous_runtime.items()],
-        )
+        for key, value in previous_runtime.items():
+            if value is None:
+                await services.store.state_delete(ctx.chat_key, key)
+            else:
+                await services.store.state_set(ctx.chat_key, key, value)
         if previous_pool_doc is None:
             await services.documents.delete(ctx.chat_key, "module_pool", MODULE_POOL_ID)
         else:
@@ -771,12 +763,7 @@ async def generate_and_install_module(services: Services, ctx: AgentCtx, descrip
         {"installed_id": module_id, "path": str(target)},
         ensure_ascii=False,
     )
-    await services.store.set_rows_if_values(
-        expected=[],
-        updates=[
-            ("", _module_forge_last_key(ctx.chat_key), record),
-            ("", _module_forge_owner_key(ctx.chat_key, requested_id), owner),
-        ],
-    )
+    await services.store.state_set(ctx.chat_key, _module_forge_last_key(ctx.chat_key), record)
+    await services.store.state_set(ctx.chat_key, _module_forge_owner_key(ctx.chat_key, requested_id), owner)
 
     return ForgeResult(True, module_id, title, str(target), "", detail=install_note)

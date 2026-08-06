@@ -28,10 +28,8 @@ from typing import Any
 from agent.context import AgentCtx
 from agent.services import Services
 from core.character_manager import CharacterSheet, get_hit_points
-from core.documents import MODULE_POOL_ID, PLAYER_VIEWER, SCENE_ID
-from core.modvars import ModvarManager
-from core.mvu_compat import MvuManager, path_is_exposed
-from core.pregen_roster import PregenRoster
+from core.documents import KEEPER_VIEWER, MODULE_POOL_ID, MVU_ID, PLAYER_VIEWER, SCENE_ID
+from core.modvars import MODVARS_DOC_ID, MODVARS_DOC_TYPE, wire_entries
 
 _COC_SYSTEM = "CoC"
 _UNSET_CHARACTER_NAME = "default"
@@ -204,9 +202,9 @@ def _int_value(value: Any) -> int | None:
 async def _companion_sheet_names(services: Services, chat_key: str) -> set[str]:
     """Character-sheet names belonging to AI player companions in this room (best-effort, may be empty)."""
     try:
-        from agent.npc import NpcManager
+        from agent.npc import list_companions
 
-        records = await NpcManager(services.store).list_companions(chat_key)
+        records = await list_companions(services.documents, chat_key)
     except Exception:
         return set()
     return {record.stat_char or record.name for record in records}
@@ -214,7 +212,7 @@ async def _companion_sheet_names(services: Services, chat_key: str) -> set[str]:
 
 async def _initiative(services: Services, chat_key: str) -> list[dict[str, Any]]:
     try:
-        raw = await services.store.get(user_key="", store_key=f"initiative.{chat_key}")
+        raw = await services.store.state_get(chat_key, "initiative")
         entries = json.loads(raw) if raw else []
     except Exception:
         return []
@@ -260,7 +258,7 @@ async def _scene(services: Services, chat_key: str) -> dict[str, Any] | None:
 
 async def _clock(services: Services, chat_key: str) -> dict[str, Any] | None:
     try:
-        raw = await services.store.get(user_key="", store_key=f"game_clock.{chat_key}")
+        raw = await services.store.state_get(chat_key, "game_clock")
         clock = json.loads(raw) if raw else {}
     except Exception:
         clock = {}
@@ -271,7 +269,7 @@ async def _clock(services: Services, chat_key: str) -> dict[str, Any] | None:
 
 async def _combat_round(services: Services, chat_key: str) -> int | None:
     try:
-        raw = await services.store.get(user_key="", store_key=f"initiative_meta.{chat_key}")
+        raw = await services.store.state_get(chat_key, "initiative_meta")
         meta = json.loads(raw) if raw else {}
         value = int(meta.get("round", 0)) if isinstance(meta, dict) else 0
     except Exception:
@@ -299,33 +297,36 @@ def _viewer_is_keeper(ctx: AgentCtx) -> bool:
 async def _variables(services: Services, ctx: AgentCtx) -> list[dict[str, Any]]:
     """Module variables for THIS viewer (state frames are built per member), on one wire shape.
 
-    Two sources, one visibility discipline (iron rule #3, fail-closed):
+    Both sources are consumed as DOCUMENT PROJECTIONS — the one structural
+    visibility discipline (iron rule #3, fail-closed):
 
-    - `ModvarManager.player_entries` is the structural filter for engine-native trackers:
-      keeper-only variables are dropped inside the deterministic core, so no state frame —
-      any viewer, any transport — ever carries them.
-    - MVU leaves (`core.mvu_compat`) are an imported card's OPAQUE module state — heavy cards
-      routinely keep hidden plot flags in the tree — so by default they ship to NOBODY's
-      panel. The keeper curates player-visible paths (`.var expose <prefix>`); a keeper
-      viewer additionally sees the unexposed remainder flagged ``"hidden": true`` so they can
-      watch their module's internals live (keeper-bound data to the keeper is not a leak).
+    - the `modvars` document's PLAYER projection drops keeper-only trackers spec and
+      value, so no state frame — any viewer, any transport — ever carries them (the
+      panel deliberately shows the player set even to the keeper; keeper-only values
+      live in the keeper's prompt, not the HUD);
+    - the `mvu_tree` document's player projection ships ONLY keeper-exposed leaves
+      (`.var expose <prefix>`); the keeper projection carries every leaf tagged with
+      its exposure, so a keeper viewer sees the unexposed remainder flagged
+      ``"hidden": true`` and can watch their module's internals live.
 
     Empty (→ field omitted) when the room has neither; best-effort like every other piece of
     this snapshot.
     """
     try:
-        entries = await ModvarManager(services.store).player_entries(ctx.chat_key, ctx.locale)
+        modvar_view = await services.documents.get_view(
+            ctx.chat_key, MODVARS_DOC_TYPE, MODVARS_DOC_ID, PLAYER_VIEWER
+        )
+        entries = wire_entries(modvar_view or {}, ctx.locale)
     except Exception:
         entries = []
     try:
-        manager = MvuManager(services.store)
-        # Flatten past the panel cap so exposure filtering happens BEFORE capping — a player's
-        # panel fits up to `_MVU_PANEL_CAP` *visible* leaves even when hidden ones outnumber them.
-        leaves = await manager.flatten(ctx.chat_key)
-        exposed = await manager.exposed_prefixes(ctx.chat_key) if leaves else []
         keeper_view = _viewer_is_keeper(ctx)
+        viewer = KEEPER_VIEWER if keeper_view else PLAYER_VIEWER
+        mvu_view = await services.documents.get_view(ctx.chat_key, "mvu_tree", MVU_ID, viewer)
+        # The projection already filtered a player's leaves (fail-closed) and tagged the
+        # keeper's with per-leaf exposure; the panel cap applies to what the viewer SEES.
         shown = 0
-        for leaf in leaves:
+        for leaf in (mvu_view or {}).get("leaves", []):
             if shown >= _MVU_PANEL_CAP:
                 break
             value = leaf["value"]
@@ -337,11 +338,8 @@ async def _variables(services: Services, ctx: AgentCtx) -> list[dict[str, Any]]:
                 kind = "text"
             else:
                 continue  # nested/list leaves are prompt-side detail, not panel material
-            visible = path_is_exposed(leaf["path"], exposed)
-            if not visible and not keeper_view:
-                continue
             entry: dict[str, Any] = {"id": f"mvu.{leaf['path']}", "label": leaf["path"], "kind": kind, "value": value}
-            if not visible:
+            if keeper_view and not leaf.get("exposed", False):
                 entry["hidden"] = True
             entries.append(entry)
             shown += 1
@@ -351,18 +349,19 @@ async def _variables(services: Services, ctx: AgentCtx) -> list[dict[str, Any]]:
 
 
 async def _pregens(services: Services, chat_key: str) -> list[dict[str, Any]]:
-    """The claimable pregen cast (`core.pregen_roster`), v1.9 additive: one
-    ``{name, claimed_by}`` per entry, insertion-ordered. Public to every viewer — who the
-    module's cast is and who claimed whom is table talk, not a secret — and omitted (never
-    an empty list) for roster-less rooms. Best-effort like the rest of this snapshot."""
+    """The claimable pregen cast, v1.9 additive: one ``{name, claimed_by}`` per entry,
+    insertion-ordered, consumed from the `pregen` documents' PLAYER projection (the cast
+    list is table talk; the pristine sheet payload is what the projection withholds).
+    Omitted (never an empty list) for roster-less rooms. Best-effort like the rest of
+    this snapshot."""
     try:
-        entries = await PregenRoster(services.store).entries(chat_key)
+        pairs = await services.documents.list_views(chat_key, "pregen", PLAYER_VIEWER)
     except Exception:
         return []
     return [
-        {"name": str(entry.get("name", "")), "claimed_by": str(entry.get("claimed_by", ""))}
-        for entry in entries
-        if entry.get("name")
+        {"name": str(view.get("name", "")), "claimed_by": str(view.get("claimed_by", ""))}
+        for _doc, view in pairs
+        if view.get("name")
     ]
 
 
@@ -373,7 +372,7 @@ async def _usage(services: Services, chat_key: str) -> dict[str, Any] | None:
     `build_room_state` leaves `state.usage` out entirely rather than sending zeros.
     """
     try:
-        raw = await services.store.get(user_key="", store_key=f"usage_stats.{chat_key}")
+        raw = await services.store.state_get(chat_key, "usage_stats")
         stats = json.loads(raw) if raw else {}
     except Exception:
         stats = {}

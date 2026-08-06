@@ -121,7 +121,7 @@ async def test_happy_path_writes_and_installs_into_the_calling_room(tmp_path: Pa
         assert result.detail  # upload_document's own confirmation, the "room summary"
 
         # The EXISTING module pipeline actually ran for THIS room's chat_key.
-        status = await services.store.get(user_key="", store_key=f"module_init_status.{CHAT_KEY}")
+        status = await services.store.state_get(CHAT_KEY, "module_init_status")
         assert status == "ready"
 
         pool_doc = await services.documents.get_singleton(CHAT_KEY, "module_pool")
@@ -158,10 +158,7 @@ async def test_repeat_description_short_circuits_without_regeneration(tmp_path: 
         assert repeated.path == first.path
         assert len(services.llm.calls) == 2  # one authoring call and one analysis call
 
-        record_raw = await services.store.get(
-            user_key="",
-            store_key=f"forge_module_last.{CHAT_KEY}",
-        )
+        record_raw = await services.store.state_get(CHAT_KEY, "forge_module_last")
         record = json.loads(record_raw)
         assert record["installed_id"] == first.skill_id
         assert record["description_hash"]
@@ -201,10 +198,7 @@ async def test_reinstall_same_room_id_overwrites_one_consistent_content_version(
         ]
         assert Path(second.path).read_text(encoding="utf-8") == version_2.strip()
 
-        fulltext = await services.store.get(
-            user_key="",
-            store_key=f"module_fulltext.{CHAT_KEY}",
-        )
+        fulltext = await services.store.state_get(CHAT_KEY, "module_fulltext")
         pool_doc = await services.documents.get_singleton(CHAT_KEY, "module_pool")
         keeper = json.dumps(pool_doc.data.get("keeper") if pool_doc else {}, ensure_ascii=False)
         player = json.dumps(pool_doc.data.get("player") if pool_doc else {}, ensure_ascii=False)
@@ -233,7 +227,7 @@ async def test_empty_llm_response_is_rejected(tmp_path: Path) -> None:
         assert result.error == "empty_response"
         assert not (tmp_path / "modules").exists() or list((tmp_path / "modules").iterdir()) == []
 
-        status = await services.store.get(user_key="", store_key=f"module_init_status.{CHAT_KEY}")
+        status = await services.store.state_get(CHAT_KEY, "module_init_status")
         assert not status  # the room's module pipeline never ran
     finally:
         forge_module._USER_MODULE_DIR = original_user_dir
@@ -310,7 +304,7 @@ async def test_module_forge_and_analysis_usage_are_both_recorded(tmp_path: Path)
         result = await generate_and_install_module(services, ctx, "a marsh-town disappearance mystery")
 
         assert result.ok, result.error
-        stats = json.loads(await services.store.get(user_key="", store_key=f"usage_stats.{CHAT_KEY}"))
+        stats = json.loads(await services.store.state_get(CHAT_KEY, "usage_stats"))
         assert stats["session"]["turns"] == 2
         assert stats["session"]["prompt"] == 120
         assert stats["session"]["completion"] == 30

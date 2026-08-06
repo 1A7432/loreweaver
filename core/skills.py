@@ -18,7 +18,7 @@ rejects alias/anchor nodes -- see that module) only, and the Markdown body is op
 ``unlocked_tools_for`` (Layer B.2 -- ``allowed-tools`` enforcement, see
 ``docs/plugins.md`` "Layer B") is the one exception to "no store imports": it
 takes a duck-typed `store` parameter (shaped like ``infra.store.Store`` --
-an async ``get(store_key=...)``) rather than importing ``infra.store``, so
+an async ``state_get(room, key)``) rather than importing ``infra.store``, so
 this module still imports nothing from ``infra``/``agent``/``gateway`` and
 stays below both in the layering; callers in either layer can use it directly.
 """
@@ -232,7 +232,7 @@ async def unlocked_tools_for(store: Any, chat_key: str) -> set[str]:
     discoverable skill (``load_skill`` returns ``None``) contributes nothing --
     same as everywhere else this flag is read.
     """
-    raw = await store.get(store_key=f"skills_enabled.{chat_key}")
+    raw = await store.state_get(chat_key, "skills_enabled")
     if not raw:
         return set()
     try:

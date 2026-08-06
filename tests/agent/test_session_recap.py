@@ -56,9 +56,9 @@ def _ctx(chat_key: str, locale: str = "en") -> AgentCtx:
 
 async def _seed_history(services, chat_key: str, *messages: tuple[str, str]) -> str:
     """Persist `(role, content)` messages under the default history key; return that key."""
-    key = f"chat_history.{chat_key}"
+    key = "chat_history"
     payload = [{"role": role, "content": content} for role, content in messages]
-    await services.store.set(user_key="", store_key=key, value=json.dumps(payload, ensure_ascii=False))
+    await services.store.state_set(chat_key, key, json.dumps(payload, ensure_ascii=False))
     return key
 
 
@@ -74,14 +74,14 @@ async def test_recap_populates_and_stays_bounded_when_a_refresh_is_due():
     key = await _seed_history(services, ctx.chat_key, ("user", "I open the door."), ("assistant", "It creaks open."))
 
     # Pre-arm the counter to the very edge of the window so the next turn is due.
-    await services.store.set(user_key="", store_key=f"session_recap_turns.{ctx.chat_key}", value=str(_RECAP_REFRESH_EVERY - 1))
+    await services.store.state_set(ctx.chat_key, "session_recap_turns", str(_RECAP_REFRESH_EVERY - 1))
     await maybe_refresh_session_recap(ctx, services, history_key=key)
 
-    stored = await services.store.get(user_key="", store_key=recap_store_key(ctx.chat_key))
+    stored = await services.store.state_get(ctx.chat_key, recap_store_key(ctx.chat_key))
     assert stored, "a refresh was due -> the recap must be populated"
     assert len(stored) <= _RECAP_MAX_CHARS, "the stored recap must be hard-bounded"
     # The counter is reset once a refresh fires.
-    assert await services.store.get(user_key="", store_key=f"session_recap_turns.{ctx.chat_key}") == "0"
+    assert await services.store.state_get(ctx.chat_key, "session_recap_turns") == "0"
 
 
 async def test_refresh_truncates_an_overlong_summary_with_an_ellipsis():
@@ -92,7 +92,7 @@ async def test_refresh_truncates_an_overlong_summary_with_an_ellipsis():
 
     await refresh_session_recap(ctx, services, history_key=key)
 
-    stored = await services.store.get(user_key="", store_key=recap_store_key(ctx.chat_key))
+    stored = await services.store.state_get(ctx.chat_key, recap_store_key(ctx.chat_key))
     assert stored is not None
     assert len(stored) <= _RECAP_MAX_CHARS
     assert stored.endswith("…")
@@ -106,8 +106,8 @@ async def test_recap_is_not_due_before_the_window_and_only_advances_the_counter(
 
     await maybe_refresh_session_recap(ctx, services, history_key=key)
 
-    assert await services.store.get(user_key="", store_key=recap_store_key(ctx.chat_key)) is None
-    assert await services.store.get(user_key="", store_key=f"session_recap_turns.{ctx.chat_key}") == "1"
+    assert await services.store.state_get(ctx.chat_key, recap_store_key(ctx.chat_key)) is None
+    assert await services.store.state_get(ctx.chat_key, "session_recap_turns") == "1"
 
 
 async def test_run_kp_turn_populates_the_recap_after_the_refresh_window():
@@ -120,7 +120,7 @@ async def test_run_kp_turn_populates_the_recap_after_the_refresh_window():
     for i in range(_RECAP_REFRESH_EVERY):
         await run_kp_turn(ctx, services, _toolset(), f"turn {i}")
 
-    stored = await services.store.get(user_key="", store_key=recap_store_key(ctx.chat_key))
+    stored = await services.store.state_get(ctx.chat_key, recap_store_key(ctx.chat_key))
     assert stored, "driving a full refresh window through run_kp_turn must populate the recap"
 
 
@@ -132,10 +132,10 @@ async def test_run_kp_turn_populates_the_recap_after_the_refresh_window():
 async def test_build_system_prompt_surfaces_a_stored_recap():
     services = _services(FakeLLM())
     ctx = _ctx("recap-inject")
-    await services.store.set(
-        user_key="",
-        store_key=recap_store_key(ctx.chat_key),
-        value=f"Established facts: {BRASS_KEY_FACT}.",
+    await services.store.state_set(
+        ctx.chat_key,
+        recap_store_key(ctx.chat_key),
+        f"Established facts: {BRASS_KEY_FACT}.",
     )
 
     prompt = await build_system_prompt(ctx, services)
@@ -157,7 +157,7 @@ async def test_build_system_prompt_omits_the_recap_section_when_none_is_stored()
 async def test_recap_header_is_localized_per_ctx_locale():
     services = _services(FakeLLM(), locale="en")  # process default en; ctx asks for zh
     ctx = _ctx("recap-zh", locale="zh")
-    await services.store.set(user_key="", store_key=recap_store_key(ctx.chat_key), value="要点：黄铜钥匙在地板下。")
+    await services.store.state_set(ctx.chat_key, recap_store_key(ctx.chat_key), "要点：黄铜钥匙在地板下。")
 
     prompt = await build_system_prompt(ctx, services)
 
@@ -183,7 +183,7 @@ async def test_an_early_fact_survives_into_the_refreshed_recap_and_reaches_the_p
 
     await refresh_session_recap(ctx, services, history_key=key)
 
-    stored = await services.store.get(user_key="", store_key=recap_store_key(ctx.chat_key))
+    stored = await services.store.state_get(ctx.chat_key, recap_store_key(ctx.chat_key))
     assert stored and BRASS_KEY_FACT in stored
     prompt = await build_system_prompt(ctx, services)
     assert BRASS_KEY_FACT in prompt  # the KP would still "know" it turns later
@@ -202,11 +202,11 @@ async def test_a_failing_summarizer_call_does_not_raise_or_clobber_the_recap():
     ctx = _ctx("recap-fail")
     key = await _seed_history(services, ctx.chat_key, ("user", "something happened"))
     # An existing recap must survive a failed refresh untouched.
-    await services.store.set(user_key="", store_key=recap_store_key(ctx.chat_key), value="prior recap")
+    await services.store.state_set(ctx.chat_key, recap_store_key(ctx.chat_key), "prior recap")
 
     await refresh_session_recap(ctx, services, history_key=key)  # must NOT raise
 
-    assert await services.store.get(user_key="", store_key=recap_store_key(ctx.chat_key)) == "prior recap"
+    assert await services.store.state_get(ctx.chat_key, recap_store_key(ctx.chat_key)) == "prior recap"
 
 
 async def test_recap_refresh_records_debug_observability_on_success_and_failure():
@@ -217,7 +217,7 @@ async def test_recap_refresh_records_debug_observability_on_success_and_failure(
 
     await refresh_session_recap(ctx, services, history_key=key)
 
-    debug = json.loads(await services.store.get(user_key="", store_key=f"session_recap_debug.{ctx.chat_key}"))
+    debug = json.loads(await services.store.state_get(ctx.chat_key, "session_recap_debug"))
     assert debug["ran"] is True
     assert debug["ok"] is True
     assert debug["length"] > 0
@@ -230,17 +230,17 @@ async def test_recap_refresh_records_debug_observability_on_success_and_failure(
     services_fail = _services(FakeLLM(responder=boom))
     ctx_fail = _ctx("recap-obs-fail")
     key_fail = await _seed_history(services_fail, ctx_fail.chat_key, ("user", "something happened"))
-    await services_fail.store.set(user_key="", store_key=recap_store_key(ctx_fail.chat_key), value="prior recap")
+    await services_fail.store.state_set(ctx_fail.chat_key, recap_store_key(ctx_fail.chat_key), "prior recap")
 
     await refresh_session_recap(ctx_fail, services_fail, history_key=key_fail)  # must NOT raise
 
     debug_fail = json.loads(
-        await services_fail.store.get(user_key="", store_key=f"session_recap_debug.{ctx_fail.chat_key}")
+        await services_fail.store.state_get(ctx_fail.chat_key, "session_recap_debug")
     )
     assert debug_fail["ran"] is True
     assert debug_fail["ok"] is False
     # The recap itself is untouched by the failed refresh.
-    assert await services_fail.store.get(user_key="", store_key=recap_store_key(ctx_fail.chat_key)) == "prior recap"
+    assert await services_fail.store.state_get(ctx_fail.chat_key, recap_store_key(ctx_fail.chat_key)) == "prior recap"
 
 
 async def test_maybe_refresh_swallows_a_summarizer_failure_at_the_window_boundary():
@@ -250,13 +250,13 @@ async def test_maybe_refresh_swallows_a_summarizer_failure_at_the_window_boundar
     services = _services(FakeLLM(responder=boom))
     ctx = _ctx("recap-fail-window")
     key = await _seed_history(services, ctx.chat_key, ("user", "something happened"))
-    await services.store.set(user_key="", store_key=f"session_recap_turns.{ctx.chat_key}", value=str(_RECAP_REFRESH_EVERY - 1))
+    await services.store.state_set(ctx.chat_key, "session_recap_turns", str(_RECAP_REFRESH_EVERY - 1))
 
     await maybe_refresh_session_recap(ctx, services, history_key=key)  # must NOT raise
 
     # No recap written, and the counter was still reset so we wait a full window.
-    assert await services.store.get(user_key="", store_key=recap_store_key(ctx.chat_key)) is None
-    assert await services.store.get(user_key="", store_key=f"session_recap_turns.{ctx.chat_key}") == "0"
+    assert await services.store.state_get(ctx.chat_key, recap_store_key(ctx.chat_key)) is None
+    assert await services.store.state_get(ctx.chat_key, "session_recap_turns") == "0"
 
 
 async def test_run_kp_turn_stays_functional_even_if_the_recap_refresh_fails():
@@ -272,7 +272,7 @@ async def test_run_kp_turn_stays_functional_even_if_the_recap_refresh_fails():
 
     services = _services(FakeLLM(responder=flaky))
     ctx = _ctx("recap-turn-safe")
-    await services.store.set(user_key="", store_key=f"session_recap_turns.{ctx.chat_key}", value=str(_RECAP_REFRESH_EVERY - 1))
+    await services.store.state_set(ctx.chat_key, "session_recap_turns", str(_RECAP_REFRESH_EVERY - 1))
 
     result = await run_kp_turn(ctx, services, _toolset(), "I walk forward.")
 
@@ -321,13 +321,13 @@ async def test_an_early_fact_survives_many_refreshes_that_pile_on_new_narrative(
 
     # Seed the very first recap already holding the early concrete fact as a bullet.
     seed = f"{holder['facts_heading']}\n- {BRASS_KEY_FACT}\n\n{holder['narrative_heading']}\nThe session begins."
-    await services.store.set(user_key="", store_key=recap_store_key(ctx.chat_key), value=seed)
+    await services.store.state_set(ctx.chat_key, recap_store_key(ctx.chat_key), seed)
     key = await _seed_history(services, ctx.chat_key, ("user", "we continue"), ("assistant", "Onward."))
 
     # Drive many refreshes; each one dumps a fresh flood of narrative on top.
     for _ in range(12):
         await refresh_session_recap(ctx, services, history_key=key)
-        stored = await services.store.get(user_key="", store_key=recap_store_key(ctx.chat_key))
+        stored = await services.store.state_get(ctx.chat_key, recap_store_key(ctx.chat_key))
         assert stored is not None
         assert len(stored) <= _RECAP_MAX_CHARS  # never blows the hard ceiling
         assert BRASS_KEY_FACT in stored  # ...and the early fact is never dropped

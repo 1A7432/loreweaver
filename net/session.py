@@ -153,14 +153,20 @@ def is_guided_demo_action(text: str) -> bool:
 async def guided_demo_available(services: Services, chat_key: str) -> bool:
     """Offer the destructive sample setup only to a genuinely empty room.
 
-    The check includes KV campaign state, vector documents, and indexed media.
-    Any inspection failure fails closed. The room turn lock rechecks this immediately
-    before the guided turn, so a stale welcome frame cannot overwrite a live campaign.
+    The check includes the room's documents, its room_state rows, binding KV
+    rows, vector documents, and indexed media. Any inspection failure fails
+    closed. The room turn lock rechecks this immediately before the guided
+    turn, so a stale welcome frame cannot overwrite a live campaign.
     """
     if not uses_demo_llm(services) or not services.settings.enable_vector_db:
         return False
     try:
-        if await room_rows(services, chat_key) or await room_vector_points(services, chat_key):
+        if (
+            await services.store.doc_list(chat_key)
+            or await services.store.state_list(chat_key)
+            or await room_rows(services, chat_key)
+            or await room_vector_points(services, chat_key)
+        ):
             return False
         tui = services.settings.tui
         media = MediaStore(
@@ -320,7 +326,7 @@ class SessionCore:
         """
         chat_key = self._ctx_for(member).chat_key
         try:
-            raw = await self.services.store.get(user_key="", store_key=f"chat_history.{chat_key}")
+            raw = await self.services.store.state_get(chat_key, "chat_history")
             history = json.loads(raw) if raw else []
             if isinstance(history, list):
                 for entry in history[-_HISTORY_REPLAY_CAP:]:
@@ -333,7 +339,7 @@ class SessionCore:
                     speaker = "player" if role == "user" else "kp" if role == "assistant" else "system"
                     fmt = "plain" if speaker == "player" else "markdown"
                     await member.deliver(Event.narrative(speaker=speaker, text=text, fmt=fmt))
-            media_raw = await self.services.store.get(user_key="", store_key=f"media_history.{chat_key}")
+            media_raw = await self.services.store.state_get(chat_key, "media_history")
             media_history = json.loads(media_raw) if media_raw else []
             if isinstance(media_history, list):
                 for frame in media_history[-MEDIA_HISTORY_REPLAY_CAP:]:

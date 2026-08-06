@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import random
 
-from core.worldbook import LoreEntry, WorldbookManager, _keyword_hit
+from core.worldbook import LoreEntry, Worldbook, _keyword_hit
 from infra.store import Store
 
 
@@ -17,8 +17,8 @@ def _entry(**overrides) -> LoreEntry:
     return LoreEntry.from_dict(base)
 
 
-async def _manager_with(entries) -> WorldbookManager:
-    manager = WorldbookManager(Store())
+async def _manager_with(entries) -> Worldbook:
+    manager = Worldbook(Store())
     for entry in entries:
         await manager.add("room1", entry)
     return manager
@@ -150,7 +150,7 @@ async def test_browse_paths_do_not_advance_timers():
 
 
 async def test_import_maps_st_native_field_names():
-    manager = WorldbookManager(Store())
+    manager = Worldbook(Store())
     await manager.import_entries(
         "room1",
         [
@@ -186,7 +186,7 @@ async def test_import_maps_st_native_field_names():
 
 
 async def test_import_selective_off_drops_secondary_keys_and_use_probability_off_means_100():
-    manager = WorldbookManager(Store())
+    manager = Worldbook(Store())
     await manager.import_entries(
         "room1",
         [
@@ -207,7 +207,7 @@ async def test_import_selective_off_drops_secondary_keys_and_use_probability_off
 
 
 async def test_import_binds_char_macro_statically():
-    manager = WorldbookManager(Store())
+    manager = Worldbook(Store())
     await manager.import_entries(
         "room1",
         [{"comment": "about {{char}}", "content": "{{char}} fears <BOT>'s past. {{user}} may ask.", "keys": ["{{char}}"]}],

@@ -117,7 +117,7 @@ async def inject_game_state_prompt(ctx: Any, character_manager: Any, store: Stor
 
     Reads the ``scene`` singleton / ``note`` / ``module_pool`` documents (this
     is the KEEPER's prompt, so keeper-view projections), the
-    ``game_clock.{chat_key}``/``initiative.{chat_key}`` runtime state, and
+    ``game_clock``/``initiative`` room_state rows, and
     ``character_manager.get_party_roster``/``get_character``. Every optional
     lookup is independently guarded so a partially-seeded (or entirely
     empty) game state still renders the fixed header/footer instead of
@@ -135,7 +135,7 @@ async def inject_game_state_prompt(ctx: Any, character_manager: Any, store: Stor
         clock_time = i18n.t("prompt.game_state.clock_not_set")
 
         try:
-            clock_data = await store.get(user_key="", store_key=f"game_clock.{chat_key}")
+            clock_data = await store.state_get(chat_key, "game_clock")
             if clock_data:
                 clock = json.loads(clock_data)
                 clock_time = clock.get("current_time", clock_time)
@@ -293,7 +293,7 @@ async def inject_game_state_prompt(ctx: Any, character_manager: Any, store: Stor
 
         # -- initiative order (combat only) ---------------------------------
         try:
-            init_data = await store.get(user_key=user_id, store_key=f"initiative.{chat_key}")
+            init_data = await store.state_get(chat_key, "initiative")
             if init_data:
                 initiative_list = json.loads(init_data)
                 if initiative_list:
@@ -361,7 +361,7 @@ async def inject_document_context_prompt(
     chat_key = ctx.chat_key
 
     try:
-        status = await store.get(user_key="", store_key=f"module_init_status.{chat_key}")
+        status = await store.state_get(chat_key, "module_init_status")
 
         if status in {"ready", "ready_fallback"}:
             pools = await DocumentStore(store).get_view(chat_key, "module_pool", MODULE_POOL_ID, KEEPER_VIEWER)
@@ -525,7 +525,7 @@ async def inject_session_recap_prompt(ctx: Any, store: Store, i18n: I18n) -> str
     discipline block.
     """
     try:
-        recap = await store.get(user_key="", store_key=f"session_recap.{ctx.chat_key}")
+        recap = await store.state_get(ctx.chat_key, "session_recap")
         if not recap or not recap.strip():
             return ""
         return "\n".join([i18n.t("prompt.session_recap.header"), "", recap.strip()])

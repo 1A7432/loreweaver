@@ -79,7 +79,7 @@ async def test_discipline_and_fidelity_blocks_ride_world_lore_in_module_rooms(tm
         LoreEntry(id="", title="模组规则", content="访客审判每日一次。", constant=True),
     )
     # The durable marker `.import … world` persists (agent.kp_tools_charcard).
-    await services.store.set(user_key="", store_key="world_import.discipline-room", value="测试模组")
+    await services.store.state_set("discipline-room", "world_import", "测试模组")
 
     await run_kp_turn(ctx, services, build_kp_toolset(services), "开始今天的审判。")
 

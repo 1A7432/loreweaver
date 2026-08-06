@@ -121,7 +121,7 @@ async def _setup(services, ts, module_path, companion_path, rec):
         keeper = await _keeper_pool_json(services)
         return keeper
     text = module_path.read_text(encoding="utf-8")
-    await services.store.set(store_key=f"module_fulltext.{CHAT_KEY}", value=text)
+    await services.store.state_set(CHAT_KEY, "module_fulltext", text)
     await services.module_init.initialize(CHAT_KEY)
     keeper = await _keeper_pool_json(services)
     if companion_path and companion_path.exists():

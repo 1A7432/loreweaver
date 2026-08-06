@@ -724,18 +724,16 @@ async def test_spend_luck_rejects_insufficient_pool_without_partial_update():
         difficulty=1,
         rule=0,
     )
-    character_key = f"characters.{ctx.chat_key}.Vera"
-    session_key = f"session_record.{ctx.chat_key}.current"
-    before_character = await services.store.get(user_key=ctx.uid(), store_key=character_key)
-    before_session = await services.store.get(store_key=session_key)
+    before_character = await services.documents.get(ctx.chat_key, "sheet", "Vera")
+    before_session = await services.store.state_get(ctx.chat_key, "session_record.current")
 
     result = await dice_tools.spend_luck(ctx, points=51)
 
     assert result == services.i18n.with_locale(ctx.locale).t(
         "kp_tools.dice.luck.insufficient", points=51, luck=50
     )
-    assert await services.store.get(user_key=ctx.uid(), store_key=character_key) == before_character
-    assert await services.store.get(store_key=session_key) == before_session
+    assert await services.documents.get(ctx.chat_key, "sheet", "Vera") == before_character
+    assert await services.store.state_get(ctx.chat_key, "session_record.current") == before_session
     assert ctx.dice_payloads == []
 
 
@@ -757,21 +755,22 @@ async def test_spend_luck_conflict_leaves_character_and_check_unchanged(monkeypa
         difficulty=1,
         rule=0,
     )
-    character_key = f"characters.{ctx.chat_key}.Vera"
-    session_key = f"session_record.{ctx.chat_key}.current"
-    before_character = await services.store.get(user_key=ctx.uid(), store_key=character_key)
-    before_session = await services.store.get(store_key=session_key)
+    before_character = await services.documents.get(ctx.chat_key, "sheet", "Vera")
+    before_session = await services.store.state_get(ctx.chat_key, "session_record.current")
 
     async def always_conflict(*_args, **_kwargs):
         return False
 
-    monkeypatch.setattr(services.store, "set_rows_if_values", always_conflict, raising=False)
+    # The session record is now the room_state CAS resource `spend_luck` contends
+    # on (`store.state_set_if_values`) — force every attempt to lose the race so
+    # both retries exhaust and the tool reports a conflict.
+    monkeypatch.setattr(services.store, "state_set_if_values", always_conflict, raising=False)
 
     result = await dice_tools.spend_luck(ctx, points=6)
 
     assert result == services.i18n.with_locale(ctx.locale).t("kp_tools.dice.luck.conflict")
-    assert await services.store.get(user_key=ctx.uid(), store_key=character_key) == before_character
-    assert await services.store.get(store_key=session_key) == before_session
+    assert await services.documents.get(ctx.chat_key, "sheet", "Vera") == before_character
+    assert await services.store.state_get(ctx.chat_key, "session_record.current") == before_session
     assert ctx.dice_payloads == []
 
 
@@ -822,13 +821,12 @@ async def test_spend_luck_rejects_fumble_without_mutation():
         difficulty=1,
         rule=0,
     )
-    session_key = f"session_record.{ctx.chat_key}.current"
-    before_session = await services.store.get(store_key=session_key)
+    before_session = await services.store.state_get(ctx.chat_key, "session_record.current")
 
     result = await dice_tools.spend_luck(ctx, points=10)
 
     assert result == services.i18n.with_locale(ctx.locale).t("kp_tools.dice.luck.fumble")
-    assert await services.store.get(store_key=session_key) == before_session
+    assert await services.store.state_get(ctx.chat_key, "session_record.current") == before_session
     assert ctx.dice_payloads == []
 
 
@@ -850,15 +848,14 @@ async def test_spend_luck_rejects_overspend_that_would_push_roll_below_one():
         difficulty=1,
         rule=0,
     )
-    session_key = f"session_record.{ctx.chat_key}.current"
-    before_session = await services.store.get(store_key=session_key)
+    before_session = await services.store.state_get(ctx.chat_key, "session_record.current")
 
     result = await dice_tools.spend_luck(ctx, points=27)
 
     assert result == services.i18n.with_locale(ctx.locale).t(
         "kp_tools.dice.luck.exceeds_roll", points=27, roll=27, max=26
     )
-    assert await services.store.get(store_key=session_key) == before_session
+    assert await services.store.state_get(ctx.chat_key, "session_record.current") == before_session
     assert ctx.dice_payloads == []
 
     other_services, other_ctx = _build()
@@ -1143,7 +1140,7 @@ async def test_initiative_round_counter_wraps_and_records_each_round_transition(
     await initiative_tools.initiative_tracker(ctx, action="next")
     await initiative_tools.initiative_tracker(ctx, action="next")
 
-    raw_meta = await services.store.get(user_key="", store_key=f"initiative_meta.{ctx.chat_key}")
+    raw_meta = await services.store.state_get(ctx.chat_key, "initiative_meta")
     assert json.loads(raw_meta or "{}")["round"] == 2
     second = await services.battles.generator.get_current_session(ctx.chat_key)
     assert second is not None

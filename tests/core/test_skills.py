@@ -212,14 +212,14 @@ def test_real_romance_relationships_skill_exists_and_is_mature_rated() -> None:
 
 
 class _FakeStore:
-    """Minimal duck-typed store: an async `get(store_key=...)` over an in-memory
+    """Minimal duck-typed store: an async `state_get(room, key)` over an in-memory
     dict, matching the shape `unlocked_tools_for` (and `infra.store.Store`) expect."""
 
     def __init__(self, values: dict[str, str] | None = None) -> None:
         self._values = dict(values or {})
 
-    async def get(self, user_key: str = "", store_key: str = "") -> str | None:
-        return self._values.get(store_key)
+    async def state_get(self, room: str, key: str) -> str | None:
+        return self._values.get(f"{key}.{room}")
 
 
 SKILL_A = """---

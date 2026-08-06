@@ -6,13 +6,12 @@ world `agent.npc_actor.voice_npc` is allowed to draw on — see that module's
 docstring for the information-isolation contract this record exists to
 support), and light session-state (`disposition`, `location`, `status`).
 
-`NpcManager` is a thin CRUD layer over `infra.store.Store`, mirroring
-`core.character_manager.CharacterManager`'s shape: async get/save-style
-methods keyed by `chat_key`, a room-scoped id list for enumeration, and
-fuzzy (id-or-name) lookup so KP tools can resolve an NPC from whatever the
-model/player typed. Store keys: `npc.{chat_key}.{id}` (a single NPC record,
-JSON; `user_key=""` since NPCs are room-scoped, not per-player) and
-`npc_list.{chat_key}` (a JSON array of that room's NPC ids, insertion-ordered).
+Persistence (M17): each NPC is one `npc` document (id = the slugified name,
+insertion-ordered by the documents table's `seq` — no separate id-list row).
+The `npc` document PROJECTION (`core.documents`) is the structural secrecy
+contract: the keeper and the NPC's own actor view the full record; every
+other viewer gets only the public subset. The async functions below are the
+only read/write path; they hand back `NpcRecord`s built from document data.
 
 No user-visible text originates here: every method either returns a
 `NpcRecord`/`bool`/`None` or silently no-ops on a missing id, so there is
@@ -22,13 +21,10 @@ framing text lives in the tools/actor layers that call this one.
 
 from __future__ import annotations
 
-import json
 import re
 import time
 from dataclasses import dataclass, field, fields
 from typing import Any
-
-from infra.store import Store
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -39,12 +35,7 @@ def _slugify(name: str) -> str:
     return slug or "npc"
 
 
-def _npc_key(chat_key: str, npc_id: str) -> str:
-    return f"npc.{chat_key}.{npc_id}"
-
-
-def _list_key(chat_key: str) -> str:
-    return f"npc_list.{chat_key}"
+NPC_DOC_TYPE = "npc"
 
 
 @dataclass
@@ -138,229 +129,206 @@ class NpcRecord:
 _MUTABLE_FIELDS = {f.name for f in fields(NpcRecord)} - {"id", "created_time", "updated_time"}
 
 
-class NpcManager:
-    """CRUD over room-scoped `NpcRecord`s, keyed by `chat_key` (mirrors `CharacterManager`'s shape)."""
-
-    def __init__(self, store: Store) -> None:
-        self.store = store
-
-    async def _load_ids(self, chat_key: str) -> list[str]:
-        raw = await self.store.get(user_key="", store_key=_list_key(chat_key))
+async def _load_all(documents: Any, chat_key: str) -> list[tuple[str, NpcRecord]]:
+    pairs: list[tuple[str, NpcRecord]] = []
+    for doc in await documents.list(chat_key, NPC_DOC_TYPE):
         try:
-            ids = json.loads(raw) if raw else []
-        except (json.JSONDecodeError, TypeError):
-            return []
-        return ids if isinstance(ids, list) else []
+            record = NpcRecord.from_dict(dict(doc.data, id=doc.id))
+        except Exception:
+            continue
+        pairs.append((doc.id, record))
+    return pairs
 
-    async def _save_ids(self, chat_key: str, ids: list[str]) -> None:
-        await self.store.set(user_key="", store_key=_list_key(chat_key), value=json.dumps(ids, ensure_ascii=False))
 
-    async def _load_record(self, chat_key: str, npc_id: str) -> NpcRecord | None:
-        raw = await self.store.get(user_key="", store_key=_npc_key(chat_key, npc_id))
-        if not raw:
-            return None
-        try:
-            return NpcRecord.from_dict(json.loads(raw))
-        except (json.JSONDecodeError, TypeError):
-            return None
+async def _save_record(documents: Any, chat_key: str, record: NpcRecord) -> None:
+    record.updated_time = time.time()
+    await documents.put(chat_key, NPC_DOC_TYPE, record.id, record.to_dict())
 
-    async def _save_record(self, chat_key: str, record: NpcRecord) -> None:
-        record.updated_time = time.time()
-        await self.store.set(
-            user_key="", store_key=_npc_key(chat_key, record.id), value=json.dumps(record.to_dict(), ensure_ascii=False)
-        )
 
-    async def _resolve_id(self, chat_key: str, name_or_id: str) -> str | None:
-        """Fuzzy id-or-name resolution: exact id -> exact name (case-insensitive) -> slugified id ->
-        substring-of-name (case-insensitive). Returns `None` rather than raising when nothing matches.
+async def _resolve_id(documents: Any, chat_key: str, name_or_id: str) -> str | None:
+    """Fuzzy id-or-name resolution: exact id -> exact name (case-insensitive) -> slugified id ->
+    substring-of-name (case-insensitive). Returns `None` rather than raising when nothing matches.
 
-        Exact NAME outranks the slug lookup: every CJK-only name slugifies to the bare "npc"
-        fallback, so a slug-first order resolved any such name to whichever NPC happened to
-        hold the fallback id — updating 老周 silently edited 沈茉 (2026-08-06 live playtest)."""
-        if not name_or_id or not name_or_id.strip():
-            return None
-
-        ids = await self._load_ids(chat_key)
-        if name_or_id in ids:
-            return name_or_id
-
-        records: list[tuple[str, NpcRecord]] = []
-        for npc_id in ids:
-            record = await self._load_record(chat_key, npc_id)
-            if record is not None:
-                records.append((npc_id, record))
-
-        lowered = name_or_id.strip().lower()
-        for npc_id, record in records:
-            if record.name.strip().lower() == lowered:
-                return npc_id
-
-        slug = _slugify(name_or_id)
-        if slug != "npc" and slug in ids:
-            # The "npc" fallback slug carries none of the name's content — matching it
-            # would hijack resolution instead of resolving it.
-            return slug
-
-        for npc_id, record in records:
-            if lowered in record.name.strip().lower():
-                return npc_id
+    Exact NAME outranks the slug lookup: every CJK-only name slugifies to the bare "npc"
+    fallback, so a slug-first order resolved any such name to whichever NPC happened to
+    hold the fallback id — updating 老周 silently edited 沈茉 (2026-08-06 live playtest)."""
+    if not name_or_id or not name_or_id.strip():
         return None
 
-    async def create_npc(
-        self,
-        chat_key: str,
-        name: str,
-        *,
-        persona: str = "",
-        public_description: str = "",
-        secret_agenda: str = "",
-        knowledge: list[str] | None = None,
-        disposition: str = "neutral",
-        location: str = "",
-        role: str = "",
-        major: bool = True,
-        stat_char: str | None = None,
-    ) -> NpcRecord:
-        """Create and persist a new NPC for `chat_key`, id = `slugify(name)` (collision-suffixed).
+    pairs = await _load_all(documents, chat_key)
+    ids = [npc_id for npc_id, _record in pairs]
+    if name_or_id in ids:
+        return name_or_id
 
-        `role` is a persona HINT only (used by `agent.kp_tools_npc.NpcTools.import_module_npcs` when
-        seeding from a module's `npcs[]`, which has a `role` field but no `persona`): it becomes this
-        NPC's `persona` only when `persona` itself is not given.
+    lowered = name_or_id.strip().lower()
+    for npc_id, record in pairs:
+        if record.name.strip().lower() == lowered:
+            return npc_id
 
-        Creating an EXACT already-existing name returns that record untouched instead of
-        minting a duplicate: the model's persisted history keeps only final replies (tool
-        chatter is dropped by design), so a later turn legitimately re-"creates" an NPC it
-        already seeded — and a fresh surface-persona duplicate must never shadow or race a
-        record that carries the seeded secret_agenda/knowledge (2026-08-06 live playtest).
-        """
-        ids = await self._load_ids(chat_key)
-        wanted = name.strip().lower()
-        for existing_id in ids:
-            existing = await self._load_record(chat_key, existing_id)
-            if existing is not None and existing.name.strip().lower() == wanted:
-                return existing
-        base_slug = _slugify(name)
-        npc_id = base_slug
-        suffix = 2
-        while npc_id in ids:
-            npc_id = f"{base_slug}-{suffix}"
-            suffix += 1
+    slug = _slugify(name_or_id)
+    if slug != "npc" and slug in ids:
+        # The "npc" fallback slug carries none of the name's content — matching it
+        # would hijack resolution instead of resolving it.
+        return slug
 
-        record = NpcRecord(
-            id=npc_id,
-            name=name,
-            persona=persona or role,
-            public_description=public_description,
-            secret_agenda=secret_agenda,
-            knowledge=list(knowledge or []),
-            disposition=disposition,
-            location=location,
-            major=major,
-            stat_char=stat_char,
-        )
-        await self._save_record(chat_key, record)
+    for npc_id, record in pairs:
+        if lowered in record.name.strip().lower():
+            return npc_id
+    return None
 
-        ids.append(npc_id)
-        await self._save_ids(chat_key, ids)
-        return record
 
-    async def create_companion(
-        self,
-        chat_key: str,
-        name: str,
-        *,
-        persona: str = "",
-        playstyle: str = "",
-        knowledge: list[str] | None = None,
-        stat_char: str | None = None,
-        pronouns: str = "",
-    ) -> NpcRecord:
-        """Create a `player_companion` record (M10): a party-side PC voiced by
-        `agent.companion_actor`, linked to a CharacterSheet via `stat_char`.
+async def create_npc(
+    documents: Any,
+    chat_key: str,
+    name: str,
+    *,
+    persona: str = "",
+    public_description: str = "",
+    secret_agenda: str = "",
+    knowledge: list[str] | None = None,
+    disposition: str = "neutral",
+    location: str = "",
+    role: str = "",
+    major: bool = True,
+    stat_char: str | None = None,
+) -> NpcRecord:
+    """Create and persist a new NPC for `chat_key`, id = `slugify(name)` (collision-suffixed).
 
-        Thin wrapper over `create_npc` (so id-collision suffixing and the room id
-        list are reused unchanged) that then stamps the companion-only fields
-        `role="player_companion"`, `is_pc=True`, `playstyle`, `pronouns` and
-        `stat_char`. The legacy `create_npc(role=...)` *persona-hint* param is
-        deliberately left alone so keeper NPCs are wholly unaffected.
-        """
-        record = await self.create_npc(
-            chat_key, name, persona=persona, knowledge=knowledge, stat_char=stat_char, major=True
-        )
-        record.role = "player_companion"
-        record.is_pc = True
-        record.playstyle = playstyle
-        record.pronouns = pronouns
-        await self._save_record(chat_key, record)
-        return record
+    `role` is a persona HINT only (used by `agent.kp_tools_npc.NpcTools.import_module_npcs` when
+    seeding from a module's `npcs[]`, which has a `role` field but no `persona`): it becomes this
+    NPC's `persona` only when `persona` itself is not given.
 
-    async def list_companions(self, chat_key: str) -> list[NpcRecord]:
-        """Every `player_companion` in this room, in insertion order (keeper NPCs excluded)."""
-        return [record for record in await self.list_npcs(chat_key) if record.role == "player_companion"]
+    Creating an EXACT already-existing name returns that record untouched instead of
+    minting a duplicate: the model's persisted history keeps only final replies (tool
+    chatter is dropped by design), so a later turn legitimately re-"creates" an NPC it
+    already seeded — and a fresh surface-persona duplicate must never shadow or race a
+    record that carries the seeded secret_agenda/knowledge (2026-08-06 live playtest).
+    """
+    pairs = await _load_all(documents, chat_key)
+    ids = [npc_id for npc_id, _record in pairs]
+    wanted = name.strip().lower()
+    for _npc_id, existing in pairs:
+        if existing.name.strip().lower() == wanted:
+            return existing
+    base_slug = _slugify(name)
+    npc_id = base_slug
+    suffix = 2
+    while npc_id in ids:
+        npc_id = f"{base_slug}-{suffix}"
+        suffix += 1
 
-    async def get_npc(self, chat_key: str, name_or_id: str) -> NpcRecord | None:
-        npc_id = await self._resolve_id(chat_key, name_or_id)
-        return await self._load_record(chat_key, npc_id) if npc_id is not None else None
+    record = NpcRecord(
+        id=npc_id,
+        name=name,
+        persona=persona or role,
+        public_description=public_description,
+        secret_agenda=secret_agenda,
+        knowledge=list(knowledge or []),
+        disposition=disposition,
+        location=location,
+        major=major,
+        stat_char=stat_char,
+    )
+    await _save_record(documents, chat_key, record)
+    return record
 
-    async def list_npcs(self, chat_key: str) -> list[NpcRecord]:
-        records = []
-        for npc_id in await self._load_ids(chat_key):
-            record = await self._load_record(chat_key, npc_id)
-            if record is not None:
-                records.append(record)
-        return records
 
-    async def update_npc(self, chat_key: str, name_or_id: str, **updates: Any) -> NpcRecord | None:
-        npc_id = await self._resolve_id(chat_key, name_or_id)
-        if npc_id is None:
-            return None
-        record = await self._load_record(chat_key, npc_id)
-        if record is None:
-            return None
+async def create_companion(
+    documents: Any,
+    chat_key: str,
+    name: str,
+    *,
+    persona: str = "",
+    playstyle: str = "",
+    knowledge: list[str] | None = None,
+    stat_char: str | None = None,
+    pronouns: str = "",
+) -> NpcRecord:
+    """Create a `player_companion` record (M10): a party-side PC voiced by
+    `agent.companion_actor`, linked to a CharacterSheet via `stat_char`.
 
-        for key, value in updates.items():
-            if key in _MUTABLE_FIELDS:
-                setattr(record, key, value)
+    Thin wrapper over `create_npc` (so id-collision suffixing is reused unchanged)
+    that then stamps the companion-only fields `role="player_companion"`,
+    `is_pc=True`, `playstyle`, `pronouns` and `stat_char`."""
+    record = await create_npc(
+        documents, chat_key, name, persona=persona, knowledge=knowledge, stat_char=stat_char, major=True
+    )
+    record.role = "player_companion"
+    record.is_pc = True
+    record.playstyle = playstyle
+    record.pronouns = pronouns
+    await _save_record(documents, chat_key, record)
+    return record
 
-        await self._save_record(chat_key, record)
-        return record
 
-    async def delete_npc(self, chat_key: str, name_or_id: str) -> bool:
-        npc_id = await self._resolve_id(chat_key, name_or_id)
-        if npc_id is None:
-            return False
+async def list_npcs(documents: Any, chat_key: str) -> list[NpcRecord]:
+    return [record for _npc_id, record in await _load_all(documents, chat_key)]
 
-        ids = await self._load_ids(chat_key)
-        if npc_id in ids:
-            ids.remove(npc_id)
-            await self._save_ids(chat_key, ids)
-        await self.store.delete(user_key="", store_key=_npc_key(chat_key, npc_id))
-        return True
 
-    async def move_npc(self, chat_key: str, name_or_id: str, location: str) -> NpcRecord | None:
-        return await self.update_npc(chat_key, name_or_id, location=location)
+async def list_companions(documents: Any, chat_key: str) -> list[NpcRecord]:
+    """Every `player_companion` in this room, in insertion order (keeper NPCs excluded)."""
+    return [record for record in await list_npcs(documents, chat_key) if record.role == "player_companion"]
 
-    async def set_disposition(self, chat_key: str, name_or_id: str, disposition: str) -> NpcRecord | None:
-        return await self.update_npc(chat_key, name_or_id, disposition=disposition)
 
-    async def add_knowledge(self, chat_key: str, name_or_id: str, facts: list[str], mode: str = "add") -> NpcRecord | None:
-        """Add (append) or replace (overwrite) `name_or_id`'s `knowledge` list.
+async def get_npc(documents: Any, chat_key: str, name_or_id: str) -> NpcRecord | None:
+    npc_id = await _resolve_id(documents, chat_key, name_or_id)
+    if npc_id is None:
+        return None
+    doc = await documents.get(chat_key, NPC_DOC_TYPE, npc_id)
+    if doc is None:
+        return None
+    try:
+        return NpcRecord.from_dict(dict(doc.data, id=doc.id))
+    except Exception:
+        return None
 
-        `facts` entries are stripped; blank entries are dropped either way.
-        """
-        npc_id = await self._resolve_id(chat_key, name_or_id)
-        if npc_id is None:
-            return None
-        record = await self._load_record(chat_key, npc_id)
-        if record is None:
-            return None
 
-        cleaned = [fact.strip() for fact in facts if fact and fact.strip()]
-        record.knowledge = cleaned if mode == "replace" else [*record.knowledge, *cleaned]
+async def update_npc(documents: Any, chat_key: str, name_or_id: str, **updates: Any) -> NpcRecord | None:
+    record = await get_npc(documents, chat_key, name_or_id)
+    if record is None:
+        return None
 
-        await self._save_record(chat_key, record)
-        return record
+    for key, value in updates.items():
+        if key in _MUTABLE_FIELDS:
+            setattr(record, key, value)
 
-    async def npc_learns(self, chat_key: str, name_or_id: str, fact: str) -> NpcRecord | None:
-        """Append a single newly-learned fact -- a thin convenience over `add_knowledge`."""
-        return await self.add_knowledge(chat_key, name_or_id, [fact], mode="add")
+    await _save_record(documents, chat_key, record)
+    return record
+
+
+async def delete_npc(documents: Any, chat_key: str, name_or_id: str) -> bool:
+    npc_id = await _resolve_id(documents, chat_key, name_or_id)
+    if npc_id is None:
+        return False
+    return await documents.delete(chat_key, NPC_DOC_TYPE, npc_id)
+
+
+async def move_npc(documents: Any, chat_key: str, name_or_id: str, location: str) -> NpcRecord | None:
+    return await update_npc(documents, chat_key, name_or_id, location=location)
+
+
+async def set_disposition(documents: Any, chat_key: str, name_or_id: str, disposition: str) -> NpcRecord | None:
+    return await update_npc(documents, chat_key, name_or_id, disposition=disposition)
+
+
+async def add_knowledge(
+    documents: Any, chat_key: str, name_or_id: str, facts: list[str], mode: str = "add"
+) -> NpcRecord | None:
+    """Add (append) or replace (overwrite) `name_or_id`'s `knowledge` list.
+
+    `facts` entries are stripped; blank entries are dropped either way.
+    """
+    record = await get_npc(documents, chat_key, name_or_id)
+    if record is None:
+        return None
+
+    cleaned = [fact.strip() for fact in facts if fact and fact.strip()]
+    record.knowledge = cleaned if mode == "replace" else [*record.knowledge, *cleaned]
+
+    await _save_record(documents, chat_key, record)
+    return record
+
+
+async def npc_learns(documents: Any, chat_key: str, name_or_id: str, fact: str) -> NpcRecord | None:
+    """Append a single newly-learned fact -- a thin convenience over `add_knowledge`."""
+    return await add_knowledge(documents, chat_key, name_or_id, [fact], mode="add")

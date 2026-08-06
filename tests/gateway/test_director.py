@@ -55,12 +55,12 @@ async def _add_companion(services, chat_key: str, name: str = "Ada") -> None:
 
 
 async def _set_party_auto(services, chat_key: str, on: bool) -> None:
-    await services.store.set(user_key="", store_key=f"party_auto.{chat_key}", value="1" if on else "0")
+    await services.store.state_set(chat_key, "party_auto", "1" if on else "0")
 
 
 async def _seed_initiative(services, chat_key: str, names: list[str]) -> None:
     entries = [{"name": name, "init": 20 - index} for index, name in enumerate(names)]
-    await services.store.set(user_key="", store_key=f"initiative.{chat_key}", value=json.dumps(entries))
+    await services.store.state_set(chat_key, "initiative", json.dumps(entries))
 
 
 def _kp_narrates(text: str):

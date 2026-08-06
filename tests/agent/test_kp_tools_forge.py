@@ -276,7 +276,7 @@ async def test_generate_module_dispatch_unlocked_installs_and_reports_success(tm
 
         assert "The Salt Marsh Vanishing" in result
 
-        status = await services.store.get(user_key="", store_key=f"module_init_status.{CHAT_KEY_MODULE}")
+        status = await services.store.state_get(CHAT_KEY_MODULE, "module_init_status")
         assert status == "ready"
     finally:
         forge_module._USER_MODULE_DIR = original_user_dir

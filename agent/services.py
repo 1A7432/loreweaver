@@ -18,7 +18,7 @@ from core.dice_engine import config as dice_config
 from core.document_manager import VectorDatabaseManager
 from core.documents import DocumentStore
 from core.module_initializer import ModuleInitializer
-from core.worldbook import WorldbookManager
+from core.worldbook import Worldbook
 from infra.config import Settings, get_settings
 from infra.embeddings import Embeddings, OpenAIEmbeddings
 from infra.i18n import I18n, get_i18n
@@ -45,7 +45,7 @@ class Services:
     battles: BattleReportManager
     vector_db: VectorDatabaseManager
     module_init: ModuleInitializer
-    worldbook: WorldbookManager
+    worldbook: Worldbook
     llm: LLMClient
     imagegen: ImageGen | None
     embeddings: Embeddings
@@ -136,10 +136,10 @@ def build_services(
     vector_store = VectorStore(embeddings.dim, path=vector_path)
     vector_db = VectorDatabaseManager(embeddings, vector_store, i18n, llm=llm)
     module_init = ModuleInitializer(store, vector_db, llm, settings, i18n, battles=battles)
-    # WorldbookManager talks the raw `infra.vector.VectorStore` upsert/search/delete
+    # Worldbook talks the raw `infra.vector.VectorStore` upsert/search/delete
     # API (its own "worldbook" collection), so it takes `vector_store` directly --
     # not the higher-level `VectorDatabaseManager`, which exposes a different surface.
-    worldbook = WorldbookManager(store, vector_db=vector_store, embeddings=embeddings)
+    worldbook = Worldbook(store, vector_db=vector_store, embeddings=embeddings)
     imagegen = build_imagegen(settings, llm_credentials=llm_credentials)
 
     return Services(
@@ -170,12 +170,12 @@ async def room_rule_variant(store, chat_key: str) -> str | None:
     """The room's selected house-rule ladder (a rulepack `variants:` id), or
     ``None`` for the pack's default ladder. Set by the rule-variant command
     (`.setcoc` today); read by every check path so grading and Luck re-grading
-    agree. Stored per room under ``rule_variant.{chat_key}``."""
-    value = await store.get(user_key="", store_key=f"{_RULE_VARIANT_KEY}.{chat_key}")
+    agree. Stored per room in room_state under ``rule_variant``."""
+    value = await store.state_get(chat_key, _RULE_VARIANT_KEY)
     value = (value or "").strip()
     return value or None
 
 
 async def set_room_rule_variant(store, chat_key: str, variant: str | None) -> None:
     """Persist the room's house-rule ladder selection ("" clears to the default)."""
-    await store.set(user_key="", store_key=f"{_RULE_VARIANT_KEY}.{chat_key}", value=variant or "")
+    await store.state_set(chat_key, _RULE_VARIANT_KEY, variant or "")

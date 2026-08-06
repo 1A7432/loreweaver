@@ -11,9 +11,10 @@ State shape is one JSON document per room: ``{"specs": {id: spec}, "values": {id
 Python dicts preserve insertion order and JSON round-trips it, so definition order is stable and
 meaningful — clients render variables in the order they were declared, no sorting anywhere.
 
-Iron rule #3 (information isolation): every spec carries ``visibility`` — ``"player"`` variables
-ship to clients via `player_entries`, ``"keeper"`` variables are STRUCTURALLY filtered out there
-(they only ever reach the Keeper's own prompt), so a hidden tracker can never leak by transport.
+Iron rule #3 (information isolation): every spec carries ``visibility`` — the `modvars`
+document projection (`core.documents`) STRUCTURALLY drops ``"keeper"`` variables from every
+player-grade view (they only ever reach the Keeper's own prompt), so a hidden tracker can
+never leak by transport; `wire_entries` below formats an already-projected view.
 
 Four kinds, all deterministic:
 - ``number`` — integers, optionally clamped to ``[minimum, maximum]`` (each bound independent).
@@ -25,7 +26,6 @@ Four kinds, all deterministic:
 from __future__ import annotations
 
 import copy
-import json
 import re
 import unicodedata
 from typing import Any, Protocol
@@ -63,14 +63,6 @@ def _valid_id(slug: str) -> bool:
 
 # ``{"specs": {id: spec_dict}, "values": {id: value}}`` — see module docstring.
 ModvarState = dict[str, dict[str, Any]]
-
-
-class _StoreProtocol(Protocol):
-    """Duck-typed shape of `infra.store.Store` — just enough to load/save modvar state."""
-
-    async def get(self, user_key: str = "", store_key: str = "") -> str | None: ...
-
-    async def set(self, user_key: str = "", store_key: str = "", value: str | None = None) -> None: ...
 
 
 class _I18nProtocol(Protocol):
@@ -406,22 +398,28 @@ def label_for(spec: dict[str, Any], locale: str) -> str:
     return spec["id"]
 
 
-def player_entries(state: ModvarState, locale: str) -> list[dict[str, Any]]:
-    """Wire-ready entries for the `state` frame: ONLY ``visibility == "player"`` variables, in
-    definition order, labels resolved to `locale`. This is the structural anti-metagaming filter
-    (iron rule #3) — keeper-only variables never appear here, so they can never leave the server.
-    """
+def wire_entries(view: dict[str, Any], locale: str) -> list[dict[str, Any]]:
+    """Wire-ready entries from an already-PROJECTED modvars view (``{"specs", "values"}``),
+    in definition order, labels resolved to `locale`.
+
+    This function does NO visibility filtering: the anti-metagaming filter (iron rule #3)
+    is the `modvars` document projection in `core.documents` — a player viewer's view
+    already lacks every keeper-only spec AND value, so they can never leave the server."""
+    specs = view.get("specs")
+    values = view.get("values")
+    specs = specs if isinstance(specs, dict) else {}
+    values = values if isinstance(values, dict) else {}
     entries: list[dict[str, Any]] = []
-    for var_id, spec in state["specs"].items():
-        if spec.get("visibility") != "player":
+    for var_id, spec in specs.items():
+        if not isinstance(spec, dict):
             continue
         entry: dict[str, Any] = {
             "id": var_id,
             "label": label_for(spec, locale),
-            "kind": spec["kind"],
-            "value": state["values"].get(var_id, spec["default"]),
+            "kind": spec.get("kind", "text"),
+            "value": values.get(var_id, spec.get("default")),
         }
-        if spec["kind"] == "number":
+        if spec.get("kind") == "number":
             if spec.get("minimum") is not None:
                 entry["min"] = spec["minimum"]
             if spec.get("maximum") is not None:
@@ -460,65 +458,55 @@ def describe(state: ModvarState, i18n: _I18nProtocol, locale: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# ModvarManager — thin async persistence wrapper over the pure functions
+# Document persistence (M17) — the whole modvar state is ONE `modvars`
+# document (``data = {"specs", "values"}``); its projection in
+# `core.documents` is the structural keeper-visibility filter.
 # ---------------------------------------------------------------------------
 
+MODVARS_DOC_TYPE = "modvars"
+MODVARS_DOC_ID = "modvars"
 
-def _store_key(chat_key: str) -> str:
-    return f"module_vars.{chat_key}"
+
+async def load_modvars(documents: Any, chat_key: str) -> ModvarState:
+    """Load and normalize this room's variable state; empty on a miss or corrupt value."""
+    doc = await documents.get(chat_key, MODVARS_DOC_TYPE, MODVARS_DOC_ID)
+    return normalize_state(doc.data) if doc is not None else empty_state()
 
 
-class ModvarManager:
-    """Async load/save wrapper over the pure state functions above, keyed by `chat_key`."""
+async def save_modvars(documents: Any, chat_key: str, state: ModvarState) -> None:
+    """Persist `state` verbatim (already normalized/validated by the caller)."""
+    await documents.put(chat_key, MODVARS_DOC_TYPE, MODVARS_DOC_ID, state)
 
-    def __init__(self, store: _StoreProtocol) -> None:
-        self._store = store
 
-    async def load(self, chat_key: str) -> ModvarState:
-        """Load and normalize this room's variable state; empty on a miss or corrupt value."""
-        raw = await self._store.get(user_key="", store_key=_store_key(chat_key))
-        if not raw:
-            return empty_state()
-        try:
-            data = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            return empty_state()
-        return normalize_state(data)
+async def define_modvar(documents: Any, chat_key: str, spec: dict[str, Any]) -> None:
+    """Load, add/redefine `spec`, save."""
+    state = await load_modvars(documents, chat_key)
+    await save_modvars(documents, chat_key, apply_define(state, spec))
 
-    async def save(self, chat_key: str, state: ModvarState) -> None:
-        """Persist `state` verbatim (already normalized/validated by the caller)."""
-        await self._store.set(user_key="", store_key=_store_key(chat_key), value=json.dumps(state, ensure_ascii=False))
 
-    async def define(self, chat_key: str, spec: dict[str, Any]) -> None:
-        """Load, add/redefine `spec`, save."""
-        state = await self.load(chat_key)
-        await self.save(chat_key, apply_define(state, spec))
+async def set_modvar(documents: Any, chat_key: str, var_id: str, value: Any) -> tuple[Any, Any]:
+    """Load, set the validated `value`, save, and return ``(old_value, new_value)``."""
+    state = await load_modvars(documents, chat_key)
+    new_state, old_value, new_value = apply_set(state, var_id, value)
+    await save_modvars(documents, chat_key, new_state)
+    return old_value, new_value
 
-    async def set(self, chat_key: str, var_id: str, value: Any) -> tuple[Any, Any]:
-        """Load, set the validated `value`, save, and return ``(old_value, new_value)``."""
-        state = await self.load(chat_key)
-        new_state, old_value, new_value = apply_set(state, var_id, value)
-        await self.save(chat_key, new_state)
-        return old_value, new_value
 
-    async def adjust(self, chat_key: str, var_id: str, delta: int) -> tuple[int, int]:
-        """Load, apply `delta` to a number variable, save, and return ``(old_value, new_value)``."""
-        state = await self.load(chat_key)
-        new_state, old_value, new_value = apply_adjust(state, var_id, delta)
-        await self.save(chat_key, new_state)
-        return old_value, new_value
+async def adjust_modvar(documents: Any, chat_key: str, var_id: str, delta: int) -> tuple[int, int]:
+    """Load, apply `delta` to a number variable, save, and return ``(old_value, new_value)``."""
+    state = await load_modvars(documents, chat_key)
+    new_state, old_value, new_value = apply_adjust(state, var_id, delta)
+    await save_modvars(documents, chat_key, new_state)
+    return old_value, new_value
 
-    async def remove(self, chat_key: str, var_id: str) -> None:
-        """Load, remove `var_id`, save."""
-        state = await self.load(chat_key)
-        await self.save(chat_key, apply_remove(state, var_id))
 
-    async def describe(self, chat_key: str, i18n: _I18nProtocol, locale: str) -> list[str]:
-        """Load this room's state and render it via `describe`."""
-        state = await self.load(chat_key)
-        return describe(state, i18n, locale)
+async def remove_modvar(documents: Any, chat_key: str, var_id: str) -> None:
+    """Load, remove `var_id`, save."""
+    state = await load_modvars(documents, chat_key)
+    await save_modvars(documents, chat_key, apply_remove(state, var_id))
 
-    async def player_entries(self, chat_key: str, locale: str) -> list[dict[str, Any]]:
-        """Load this room's state and render the player-visible wire entries."""
-        state = await self.load(chat_key)
-        return player_entries(state, locale)
+
+async def describe_modvars(documents: Any, chat_key: str, i18n: _I18nProtocol, locale: str) -> list[str]:
+    """Load this room's state and render it via `describe`."""
+    state = await load_modvars(documents, chat_key)
+    return describe(state, i18n, locale)

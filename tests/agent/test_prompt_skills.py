@@ -64,7 +64,7 @@ async def test_no_skills_enabled_prompt_is_byte_identical_between_two_fresh_room
     services = _services("en")
     ctx_a = AgentCtx(chat_key="chat-skills-baseline-a", user_id="u1", locale="en")
     ctx_b = AgentCtx(chat_key="chat-skills-baseline-b", user_id="u1", locale="en")
-    await services.store.set(store_key=f"skills_enabled.{ctx_b.chat_key}", value=json.dumps([]))
+    await services.store.state_set(ctx_b.chat_key, "skills_enabled", json.dumps([]))
 
     prompt_a = await build_system_prompt(ctx_a, services)
     prompt_b = await build_system_prompt(ctx_b, services)
@@ -85,7 +85,7 @@ async def test_enabled_skill_body_is_folded_in_as_the_final_section(tmp_path):
         baseline = await build_system_prompt(ctx, services)
         assert "SENTINEL_FIXTURE_SKILL_BODY_MARKER" not in baseline
 
-        await services.store.set(store_key=f"skills_enabled.{chat_key}", value=json.dumps(["fixture-skill"]))
+        await services.store.state_set(chat_key, "skills_enabled", json.dumps(["fixture-skill"]))
         with_skill = await build_system_prompt(ctx, services)
 
         assert "SENTINEL_FIXTURE_SKILL_BODY_MARKER" in with_skill
@@ -106,8 +106,7 @@ async def test_unknown_enabled_skill_id_is_skipped_not_fatal():
     services = _services("en")
     chat_key = "chat-skills-unknown-id"
     ctx = AgentCtx(chat_key=chat_key, user_id="u1", locale="en")
-    await services.store.set(
-        store_key=f"skills_enabled.{chat_key}", value=json.dumps(["definitely-not-a-real-skill"])
+    await services.store.state_set(chat_key, "skills_enabled", json.dumps(["definitely-not-a-real-skill"])
     )
 
     prompt = await build_system_prompt(ctx, services)
