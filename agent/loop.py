@@ -30,6 +30,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
+from functools import lru_cache
 
 from agent.context import AgentCtx
 from agent.hook_runtime import apply_hook_writes, load_room_hook_engine
@@ -39,6 +40,7 @@ from agent.session_recap import maybe_refresh_session_recap
 from agent.tools import Toolset
 from core.hooks import MAX_PANEL_EVENTS_PER_TURN
 from core.mvu_compat import MvuManager
+from core.rulepacks import all_check_terms
 from core.skills import unlocked_tools_for
 from infra.i18n import t
 from infra.llm import ChatResult, Usage
@@ -307,12 +309,9 @@ _PLAYER_SKILL_EN_WORDS = (
     "analyze", "analyse", "diagnose", "study",
     "attack", "strike", "punch", "stab", "slash", "shoot", "grapple", "wrestle",
     "tackle", "strangle", "choke", "fight", "pickpocket", "disarm", "track",
-    "pry", "spot", "library", "psychology",
+    "pry", "spot",
 )
 _PLAYER_SKILL_EN_PHRASES = (
-    r"first[-\s]?aid",
-    r"fast[-\s]?talk",
-    r"sleight\s+of\s+hand",
     r"pick(?:s|ing|ed)?\s+(?:the\s+)?lock",
     r"lock[-\s]?pick\w*",
     r"look(?:s|ing|ed)?\s+(?:for|around|behind|underneath|under|inside|through|over|about|beneath)",
@@ -354,12 +353,9 @@ def _en_verb_pattern(verb: str) -> str:
     return rf"{re.escape(verb)}(?:s|es|ed|ing)?"
 
 
-_PLAYER_SKILL_EN_RE = re.compile(
-    r"\b(?:"
-    + "|".join([_en_verb_pattern(w) for w in _PLAYER_SKILL_EN_WORDS] + list(_PLAYER_SKILL_EN_PHRASES))
-    + r")\b",
-    re.IGNORECASE,
-)
+# Generic ACTION language only — system-specific skill NOUNS live in the rulepack
+# layer (`core.rulepacks.all_check_terms`) and join the detectors at runtime, so a
+# custom system's skills earn dice-first discipline with zero engine change.
 _PLAYER_SKILL_ZH_TERMS = (
     "搜", "搜查", "搜索", "搜身", "翻找", "翻查", "查看", "察看", "检查", "调查",
     "侦查", "侦察", "观察", "寻找", "找寻", "探查", "探索", "摸索",
@@ -377,10 +373,36 @@ _PLAYER_SKILL_ZH_TERMS = (
     "欺骗", "哄骗", "花言巧语", "说谎", "撒谎",
     "攻击", "袭击", "揍", "殴打", "射击", "开枪", "扭打", "擒抱",
     "急救", "包扎", "止血",
-    "图书馆", "查资料", "查阅",
-    "心理学", "鉴定", "估价", "伪装", "乔装",
+    "查资料", "查阅",
+    "鉴定", "估价", "伪装", "乔装",
     "分析", "诊断", "研究",
 )
+
+
+@lru_cache(maxsize=4)
+def _compiled_skill_detectors(terms: frozenset[str]) -> tuple[re.Pattern[str], tuple[str, ...]]:
+    """Detector pair (EN regex, ZH substring terms) for one vocabulary snapshot.
+
+    Cached per snapshot: rulepack discovery is itself cached, so this recompiles
+    only when the installed rule systems actually change (e.g. a forged pack)."""
+    ascii_extra = sorted({t.lower() for t in terms if t.isascii() and len(t) >= 3}, key=len, reverse=True)
+    en = re.compile(
+        r"\b(?:"
+        + "|".join(
+            [_en_verb_pattern(w) for w in _PLAYER_SKILL_EN_WORDS]
+            + list(_PLAYER_SKILL_EN_PHRASES)
+            + [re.escape(t) for t in ascii_extra]
+        )
+        + r")\b",
+        re.IGNORECASE,
+    )
+    cjk_extra = sorted((t for t in terms if not t.isascii()), key=len, reverse=True)
+    zh = tuple(dict.fromkeys([*cjk_extra, *_PLAYER_SKILL_ZH_TERMS]))
+    return en, zh
+
+
+def _skill_detectors() -> tuple[re.Pattern[str], tuple[str, ...]]:
+    return _compiled_skill_detectors(all_check_terms())
 
 _PLAYER_NO_ROLL_RE = re.compile(
     r"(?:\b(?:no|without)\s+(?:a\s+)?(?:roll|check|dice)\b"  # i18n-exempt - detector lexicon
@@ -599,9 +621,10 @@ def _player_attempts_checkable_action(text: str) -> bool:
     # skill word embedded under "I mention that we searched yesterday". An
     # obvious/voluntary exemption applies only to the clause it describes; it
     # must never mask a later uncertain action in the same message.
+    skill_en_re, skill_zh_terms = _skill_detectors()
     for english_clause in _PLAYER_EN_CLAUSE_SPLIT_RE.split(text):
         english_head = " ".join(english_clause.split()[:12])
-        match = _PLAYER_SKILL_EN_RE.search(english_head)
+        match = skill_en_re.search(english_head)
         if match is None:
             continue
         prefix = english_head[: match.start()]
@@ -612,7 +635,7 @@ def _player_attempts_checkable_action(text: str) -> bool:
         return True
     for chinese_clause in _PLAYER_ZH_CLAUSE_SPLIT_RE.split(text):
         chinese_head = chinese_clause[:28]
-        for term in _PLAYER_SKILL_ZH_TERMS:
+        for term in skill_zh_terms:
             index = chinese_head.find(term)
             if index < 0:
                 continue

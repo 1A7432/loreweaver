@@ -634,3 +634,23 @@ def load_rulepack(system: str) -> RulePack:
     if pack_id is None:
         raise ValueError(f"unknown rulepack: {system}")
     return _discover_registry()[pack_id]
+
+
+def all_check_terms() -> frozenset[str]:
+    """Every skill/attribute surface form across ALL discovered rule systems —
+    ``defaults`` keys, alias canonicals and variants, and localized display names.
+
+    The agent's dice-first detectors compile their skill vocabulary from this,
+    so a custom system's skills earn roll discipline with zero engine change:
+    the engine stays system-agnostic (iron rule #1) and the rulepack layer owns
+    the vocabulary. Terms shorter than 2 characters are dropped (single CJK
+    characters and one-letter aliases match far too much ordinary prose)."""
+    terms: set[str] = set()
+    for pack in _discover_registry().values():
+        terms.update(pack.defaults.keys())
+        for canonical, variants in pack.alias.items():
+            terms.add(canonical)
+            terms.update(variants)
+        for table in pack.display.values():
+            terms.update(table.values())
+    return frozenset(term.strip() for term in terms if isinstance(term, str) and len(term.strip()) >= 2)

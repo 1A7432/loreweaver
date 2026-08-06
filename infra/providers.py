@@ -524,19 +524,42 @@ class GeminiLLM:
     ) -> ChatResult:
         del tool_choice  # Gemini SDK handles tool selection through tool config; keep best-effort parity.
         del reasoning_effort  # No Gemini thinking mapping yet; accepted for LLMClient parity.
-        del on_text_delta  # No Gemini streaming mapping yet; the final reply frame still lands.
         system, contents = to_gemini_contents(messages)
         config = to_gemini_config(
             tools=tools,
             system=system,
             temperature=self._settings.temperature if temperature is None else temperature,
         )
-        response = await self._client.aio.models.generate_content(
+        if on_text_delta is None:
+            response = await self._client.aio.models.generate_content(
+                model=model or self._settings.chat_model,
+                contents=contents,
+                config=config,
+            )
+            return from_gemini_response(response)
+        # Streaming: every chunk is itself a GenerateContentResponse, so the normal
+        # parser walks each one — text parts become live deltas, function calls and
+        # usage accumulate into the same ChatResult contract.
+        text_parts: list[str] = []
+        tool_calls: list[ToolCall] = []
+        last_chunk: Any = None
+        async for chunk in await self._client.aio.models.generate_content_stream(
             model=model or self._settings.chat_model,
             contents=contents,
             config=config,
+        ):
+            last_chunk = chunk
+            partial = from_gemini_response(chunk)
+            if partial.content:
+                text_parts.append(partial.content)
+                on_text_delta(partial.content)
+            tool_calls.extend(partial.tool_calls)
+        return ChatResult(
+            content="".join(text_parts) or None,
+            tool_calls=tool_calls,
+            raw=last_chunk,
+            usage=parse_usage(last_chunk) if last_chunk is not None else None,
         )
-        return from_gemini_response(response)
 
 
 def to_anthropic_messages(messages: list[dict]) -> tuple[str | None, list[dict[str, Any]]]:
