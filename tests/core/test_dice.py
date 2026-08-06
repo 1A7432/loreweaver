@@ -514,3 +514,15 @@ def test_tens_reroll_dice_are_clamped_against_unbounded_range():
     seed_dice(1)
     penalized = DiceRoller()._roll_d100_tens_reroll(-100_000_000)
     assert 1 <= penalized["final_roll"] <= 100
+
+
+def test_roll_expression_pool_counts_successes_not_boolean():
+    """`.r 5d10>=7`-style raw pools must count hits (substrate semantics), never
+    fall through to d20's `>=` comparison (which yields a boolean total and a
+    nonsense back-computed modifier)."""
+    seed_dice(7)
+    result = DiceRoller().roll_expression("4d10>=7")
+    assert result.rolls == [6, 3, 7, 1]
+    assert result.total == 1  # one face >= 7
+    assert result.modifier == 0
+    assert not result.is_critical_success() and not result.is_critical_failure()

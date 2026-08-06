@@ -221,6 +221,22 @@ class DiceRoller:
         `_normalize_dice_expression`.
         """
         normalized = _normalize_dice_expression(expression.strip().lower())
+        pool = _POOL_RE.match(normalized)
+        if pool:
+            # Success-counting pools are substrate syntax, not d20 grammar: d20 would
+            # evaluate `>=` as a boolean comparison (total 1/0, nonsense modifier).
+            # Route through the pool roller and keep its semantics: total = successes.
+            detail = self.roll_detail(normalized)
+            parsed = DiceResult(
+                expression=expression,
+                rolls=list(detail.dice),
+                modifier=0,
+                dice_count=len(detail.dice),
+                dice_sides=int(pool.group(2)),
+                is_check=False,
+            )
+            parsed.total = detail.total
+            return parsed
         try:
             result = d20.roll(normalized)
         except d20.RollError as exc:
