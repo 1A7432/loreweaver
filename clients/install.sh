@@ -401,6 +401,7 @@ PRESERVE_STAGING=0
 
 echo
 say "installed ✓"
+echo "  Client:   $INSTALLED_CLIENTS"
 echo "  Launcher: $TRPG_BIN/loreweaver"
 echo "  Local server folder: $TRPG_LOCAL_SERVER_HOME"
 case ":$PATH:" in

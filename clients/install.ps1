@@ -26,7 +26,11 @@ function VersionFromReleaseTag($tag) {
 
 $Home_    = if ($env:TRPG_HOME)     { $env:TRPG_HOME }     else { Join-Path $HOME ".loreweaver" }
 $Registry = if ($env:TRPG_REGISTRY) { $env:TRPG_REGISTRY } else { "https://registry.npmjs.org" }
-$BinDir   = if ($env:TRPG_BIN)      { $env:TRPG_BIN }      else { Join-Path $HOME ".loreweaver\bin" }
+# Windows has no ~/.local/bin convention, so the launcher lives under the install home:
+# a custom TRPG_HOME moves EVERYTHING (client, launcher, default server state) unless
+# TRPG_BIN pins the launcher elsewhere. Hardcoding $HOME\.loreweaver\bin here left the
+# launcher behind in the profile when TRPG_HOME pointed at another drive (issue #17).
+$BinDir   = if ($env:TRPG_BIN)      { $env:TRPG_BIN }      else { Join-Path $Home_ "bin" }
 $LocalServerHome = if ($env:TRPG_LOCAL_SERVER_HOME) { $env:TRPG_LOCAL_SERVER_HOME } else { $Home_ }
 $PinnedReleaseTag = if ($env:TRPG_RELEASE_TAG) { $env:TRPG_RELEASE_TAG } else { "" }
 $InstallReleaseTag = if ($PinnedReleaseTag) { $PinnedReleaseTag } elseif ($EmbeddedReleaseTag) { $EmbeddedReleaseTag } else { "latest" }
@@ -330,6 +334,7 @@ finally {
 
 Write-Host ""
 Say "installed ✓"
+Write-Host "  Client:   $TargetClients"
 Write-Host "  Launcher: $BinDir\loreweaver.cmd"
 Write-Host "  Local server folder: $LocalServerHome"
 Write-Host "  Add '$BinDir' to PATH, then run:  loreweaver   (update later with: loreweaver update)"

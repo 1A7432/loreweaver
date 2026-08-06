@@ -557,6 +557,15 @@ def test_system_tar_rejects_verified_archive_link_pivot(tmp_path: Path):
     assert not list(tmp_path.rglob("escaped.txt"))
 
 
+def test_powershell_installer_derives_the_default_bin_dir_from_trpg_home():
+    # Issue #17 follow-up: on Windows there is no ~/.local/bin convention, so with
+    # TRPG_HOME set (and no TRPG_BIN) the launcher must land under the chosen home,
+    # not stay behind in the profile's $HOME\.loreweaver\bin.
+    text = POWERSHELL_INSTALLER.read_text()
+    assert 'Join-Path $Home_ "bin"' in text
+    assert 'Join-Path $HOME ".loreweaver\\bin"' not in text
+
+
 def test_powershell_installer_keeps_the_same_release_and_fallback_guards():
     text = POWERSHELL_INSTALLER.read_text()
     assert 'return "https://github.com/1A7432/loreweaver/releases/latest/download"' in text
