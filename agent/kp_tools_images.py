@@ -36,6 +36,7 @@ class ImageTools:
         players already know.
 
         Args:
+            ctx: Framework-injected call context; never part of the model-facing schema.
             prompt: Player-safe image prompt sent to the external image provider.
             kind: scene, portrait, or item. Used only for the generated file name and reply text.
             caption: Optional player-visible caption for the Keeper to narrate after sending.
