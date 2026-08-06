@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from core.battle_report import BattleReportManager
+from core.documents import DocumentStore
 from infra.config import Settings
 from infra.i18n import I18n
 from infra.llm import LLMClient
@@ -208,6 +209,7 @@ class ModuleInitializer:
         battles: BattleReportManager | None = None,
     ) -> None:
         self.store = store
+        self.documents = DocumentStore(store)
         # Duck-typed: only `list_all_chunks(chat_key, limit=...)` is used
         # (shaped like `core.document_manager.VectorDatabaseManager`), and
         # only as a fallback when no `module_fulltext.{chat_key}` is stored.
@@ -261,21 +263,25 @@ class ModuleInitializer:
             outcome = await self._analyze_full_text(full_text, doc_name, chat_key)
             await _emit(progress, "build")
             keeper_pool, player_pool = self._build_knowledge_pools(outcome.analysis)
-            keeper_json = json.dumps(keeper_pool, ensure_ascii=False)
 
             if outcome.used_fallback:
                 status = "ready_fallback"
             else:
                 status = "ready"
+            # Publish the pool document FIRST, then commit the status flip with a
+            # compare-and-set on the source text + processing marker. A "ready"
+            # status therefore always implies the document exists; if the CAS
+            # loses (a concurrent re-upload restarted analysis), the newer run
+            # owns the document and will overwrite it on its own completion.
+            await self.documents.put_singleton(
+                chat_key, "module_pool", {"keeper": keeper_pool, "player": player_pool}
+            )
             committed = await self.store.set_rows_if_values(
                 expected=[
                     ("", source_key, source_value),
                     ("", status_key, "processing"),
                 ],
                 updates=[
-                    ("", f"module_keeper_pool.{chat_key}", keeper_json),
-                    ("", f"module_player_pool.{chat_key}", json.dumps(player_pool, ensure_ascii=False)),
-                    ("", f"module_catalog.{chat_key}", keeper_json),
                     ("", status_key, status),
                 ],
             )

@@ -16,6 +16,7 @@ from core.character_manager import CharacterManager
 from core.dice_engine import DiceRoller
 from core.dice_engine import config as dice_config
 from core.document_manager import VectorDatabaseManager
+from core.documents import DocumentStore
 from core.module_initializer import ModuleInitializer
 from core.worldbook import WorldbookManager
 from infra.config import Settings, get_settings
@@ -37,6 +38,7 @@ class Services:
 
     settings: Settings
     store: Store
+    documents: DocumentStore
     i18n: I18n
     dice: DiceRoller
     characters: CharacterManager
@@ -128,6 +130,7 @@ def build_services(
     dice_config.ENABLE_CRITICAL_EFFECTS = settings.enable_critical_effects
     dice = DiceRoller()
 
+    documents = DocumentStore(store)
     characters = CharacterManager(store)
     battles = BattleReportManager(store)
     vector_store = VectorStore(embeddings.dim, path=vector_path)
@@ -142,6 +145,7 @@ def build_services(
     return Services(
         settings=settings,
         store=store,
+        documents=documents,
         i18n=i18n,
         dice=dice,
         characters=characters,

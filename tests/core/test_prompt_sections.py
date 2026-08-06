@@ -28,6 +28,7 @@ from core.prompt_sections import (
 )
 from infra.i18n import I18n
 from infra.store import Store
+from core.documents import DocumentStore
 
 EN = I18n(locale="en")
 ZH = I18n(locale="zh")
@@ -264,26 +265,29 @@ async def _seed_game_state_store(store: Store, chat_key: str, user_id: str) -> N
         store_key=f"game_clock.{chat_key}",
         value=json.dumps({"current_time": "1926-03-15 14:00"}),
     )
-    await store.set(
-        user_key="",
-        store_key=f"kp_notes.{chat_key}",
-        value=json.dumps(
-            {
-                "current_scene": "Innsmouth docks",
-                "current_focus": "Investigation",
-                "npc_status": [{"content": "Zadok watches from the shadows"}],
-                "confirmed_facts": [
-                    {"time": "开局", "content": "You were hired to investigate a disappearance."},
-                    {"time": "day1", "content": "The ship never left port."},
-                ],
-                "world_changes": [{"content": "The tavern door is now locked."}],
-            }
-        ),
+    documents = DocumentStore(store)
+    await documents.put_singleton(chat_key, "scene", {"name": "Innsmouth docks", "focus": "Investigation"})
+    await documents.put(
+        chat_key, "note", "npc_status",
+        {"category": "npc_status", "content": [{"content": "Zadok watches from the shadows"}]},
     )
-    await store.set(
-        user_key="",
-        store_key=f"module_player_pool.{chat_key}",
-        value=json.dumps({"clues": [{"name": "Torn Letter", "description": "Mentions a hidden cellar."}]}),
+    await documents.put(
+        chat_key, "note", "confirmed_facts",
+        {
+            "category": "confirmed_facts",
+            "content": [
+                {"time": "开局", "content": "You were hired to investigate a disappearance."},
+                {"time": "day1", "content": "The ship never left port."},
+            ],
+        },
+    )
+    await documents.put(
+        chat_key, "note", "world_changes",
+        {"category": "world_changes", "content": [{"content": "The tavern door is now locked."}]},
+    )
+    await documents.put_singleton(
+        chat_key, "module_pool",
+        {"keeper": {}, "player": {"clues": [{"name": "Torn Letter", "description": "Mentions a hidden cellar."}]}},
     )
     await store.set(
         user_key=user_id,
@@ -366,11 +370,11 @@ async def test_inject_document_context_prompt_ready_pool_includes_keeper_discipl
     store = Store(":memory:")
     chat_key = "chat-ready"
     await store.set(user_key="", store_key=f"module_init_status.{chat_key}", value="ready")
-    await store.set(
-        user_key="",
-        store_key=f"module_keeper_pool.{chat_key}",
-        value=json.dumps(
-            {
+    await DocumentStore(store).put_singleton(
+        chat_key,
+        "module_pool",
+        {
+            "keeper": {
                 "summary": "A cult worships an ancient horror beneath the lighthouse.",
                 "scenes": [{"name": "大厅", "description": "潮湿阴冷", "focus": "探索"}],
                 "npcs": [
@@ -381,13 +385,9 @@ async def test_inject_document_context_prompt_ready_pool_includes_keeper_discipl
                     }
                 ],
                 "truths": [{"name": "真相", "description": "管家是邪教徒", "revealed_by": "账本"}],
-            }
-        ),
-    )
-    await store.set(
-        user_key="",
-        store_key=f"module_player_pool.{chat_key}",
-        value=json.dumps({"scenes": [{"name": "大厅", "description": "潮湿阴冷", "focus": "探索"}]}),
+            },
+            "player": {"scenes": [{"name": "大厅", "description": "潮湿阴冷", "focus": "探索"}]},
+        },
     )
     ctx = _Ctx(chat_key=chat_key)
 
@@ -411,12 +411,10 @@ async def test_inject_document_context_prompt_ready_pool_includes_module_fidelit
     store = Store(":memory:")
     chat_key = "chat-fidelity"
     await store.set(user_key="", store_key=f"module_init_status.{chat_key}", value="ready")
-    await store.set(
-        user_key="",
-        store_key=f"module_keeper_pool.{chat_key}",
-        value=json.dumps(
-            {"summary": "A village sacrifices to a dragon king.", "npcs": [{"name": "老严", "role": "村民向导"}]}
-        ),
+    await DocumentStore(store).put_singleton(
+        chat_key,
+        "module_pool",
+        {"keeper": {"summary": "A village sacrifices to a dragon king.", "npcs": [{"name": "老严", "role": "村民向导"}]}, "player": {}},
     )
     ctx = _Ctx(chat_key=chat_key)
 
@@ -434,10 +432,10 @@ async def test_inject_document_context_prompt_ready_fallback_still_uses_keeper_p
     store = Store(":memory:")
     chat_key = "chat-ready-fallback"
     await store.set(user_key="", store_key=f"module_init_status.{chat_key}", value="ready_fallback")
-    await store.set(
-        user_key="",
-        store_key=f"module_keeper_pool.{chat_key}",
-        value=json.dumps({"summary": "Fallback analysis remains runnable.", "npcs": [{"name": "Mara"}]}),
+    await DocumentStore(store).put_singleton(
+        chat_key,
+        "module_pool",
+        {"keeper": {"summary": "Fallback analysis remains runnable.", "npcs": [{"name": "Mara"}]}, "player": {}},
     )
     ctx = _Ctx(chat_key=chat_key)
 

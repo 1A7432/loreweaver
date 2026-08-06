@@ -48,6 +48,7 @@ import core.skills as skills
 from agent.context import AgentCtx, LocalFs
 from agent.kp_tools_knowledge import DocumentTools
 from agent.services import Services
+from core.documents import KEEPER_VIEWER, MODULE_POOL_ID
 from core.yaml_safety import safe_load_no_aliases
 from infra.file_permissions import atomic_write_private
 from infra.usage_stats import record_usage_stats
@@ -687,15 +688,13 @@ async def generate_and_install_module(services: Services, ctx: AgentCtx, descrip
         return ForgeResult(False, "", "", "", f"write_failed: {exc}")  # i18n-exempt
     runtime_keys = (
         f"module_fulltext.{ctx.chat_key}",
-        f"module_keeper_pool.{ctx.chat_key}",
-        f"module_player_pool.{ctx.chat_key}",
-        f"module_catalog.{ctx.chat_key}",
         f"module_init_status.{ctx.chat_key}",
         f"module_init_error.{ctx.chat_key}",
     )
     previous_runtime = {
         key: await services.store.get(user_key="", store_key=key) for key in runtime_keys
     }
+    previous_pool_doc = await services.documents.get(ctx.chat_key, "module_pool", MODULE_POOL_ID)
 
     try:
         atomic_write_private(target, content)
@@ -722,24 +721,14 @@ async def generate_and_install_module(services: Services, ctx: AgentCtx, descrip
         user_key="",
         store_key=f"module_fulltext.{ctx.chat_key}",
     )
-    keeper_pool = await services.store.get(
-        user_key="",
-        store_key=f"module_keeper_pool.{ctx.chat_key}",
-    )
-    player_pool = await services.store.get(
-        user_key="",
-        store_key=f"module_player_pool.{ctx.chat_key}",
-    )
-    catalog = await services.store.get(
-        user_key="",
-        store_key=f"module_catalog.{ctx.chat_key}",
+    pool_view = await services.documents.get_view(
+        ctx.chat_key, "module_pool", MODULE_POOL_ID, KEEPER_VIEWER
     )
     consistent = (
         status in {"ready", "ready_fallback"}
         and installed_fulltext == content
-        and bool(keeper_pool)
-        and bool(player_pool)
-        and catalog == keeper_pool
+        and bool((pool_view or {}).get("keeper"))
+        and bool((pool_view or {}).get("player"))
     )
     if not consistent:
         # Publish the file and runtime state as one logical installation. If analysis/persistence
@@ -752,6 +741,12 @@ async def generate_and_install_module(services: Services, ctx: AgentCtx, descrip
             expected=[],
             updates=[("", key, value) for key, value in previous_runtime.items()],
         )
+        if previous_pool_doc is None:
+            await services.documents.delete(ctx.chat_key, "module_pool", MODULE_POOL_ID)
+        else:
+            await services.documents.put_singleton(
+                ctx.chat_key, "module_pool", previous_pool_doc.data, source=previous_pool_doc.source
+            )
         return ForgeResult(False, "", "", "", f"install_inconsistent: status={status}")  # i18n-exempt
 
     if used_hash_id:

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from core.battle_report import BattleReportManager
+from core.documents import KEEPER_VIEWER, MODULE_POOL_ID, PLAYER_VIEWER, DocumentStore
 from core.module_initializer import ModuleInitializer
 from infra.config import LLMSettings, Settings
 from infra.i18n import I18n
@@ -168,17 +169,17 @@ async def test_initialize_llm_analysis_keeper_pool_has_secret_player_pool_does_n
 
     assert await store.get(user_key="", store_key="module_init_status.chat1") == "ready"
 
-    keeper_raw = await store.get(user_key="", store_key="module_keeper_pool.chat1")
-    player_raw = await store.get(user_key="", store_key="module_player_pool.chat1")
+    documents = DocumentStore(store)
+    keeper = await documents.get_view("chat1", "module_pool", MODULE_POOL_ID, KEEPER_VIEWER)
+    player = await documents.get_view("chat1", "module_pool", MODULE_POOL_ID, PLAYER_VIEWER)
 
-    # Red-line leak assertion on the raw persisted JSON text, not just the
+    # Red-line leak assertion on the serialized projection text, not just the
     # parsed structure — the sentinel must appear nowhere in what a player
     # pool consumer could ever read.
-    assert SENTINEL in keeper_raw
-    assert SENTINEL not in player_raw
+    assert SENTINEL in json.dumps(keeper, ensure_ascii=False)
+    assert SENTINEL not in json.dumps(player, ensure_ascii=False)
 
-    keeper = json.loads(keeper_raw)
-    player = json.loads(player_raw)
+    keeper = keeper["keeper"]
 
     assert keeper["npcs"][1]["secret"].startswith(SENTINEL)
     assert keeper["truths"][0]["description"].startswith(SENTINEL)
@@ -209,8 +210,10 @@ async def test_initialize_falls_back_to_offline_heuristic_on_unparsable_llm_resp
     assert await store.get(user_key="", store_key="module_init_status.chat2") == "ready_fallback"
     assert await store.get(user_key="", store_key="module_init_error.chat2")
 
-    keeper = json.loads(await store.get(user_key="", store_key="module_keeper_pool.chat2"))
-    player = json.loads(await store.get(user_key="", store_key="module_player_pool.chat2"))
+    documents = DocumentStore(store)
+    keeper = await documents.get_view("chat2", "module_pool", MODULE_POOL_ID, KEEPER_VIEWER)
+    keeper = keeper["keeper"]
+    player = await documents.get_view("chat2", "module_pool", MODULE_POOL_ID, PLAYER_VIEWER)
 
     assert len(keeper["scenes"]) > 0
     assert keeper["scenes"][0]["name"] == "场景1"  # source's literal fallback default, ported verbatim
@@ -273,19 +276,19 @@ async def test_initialize_records_analysis_usage_for_room():
     }
 
 
-async def test_initialize_replaces_stale_catalog_and_resets_game_clock():
+async def test_initialize_replaces_stale_pool_and_resets_game_clock():
     store = Store()
     await store.set(user_key="", store_key="module_fulltext.chat-state", value=MODULE_EN_TEXT)
-    await store.set(user_key="", store_key="module_catalog.chat-state", value=json.dumps({"summary": "OLD MODULE"}))
+    documents = DocumentStore(store)
+    await documents.put_singleton("chat-state", "module_pool", {"keeper": {"summary": "OLD MODULE"}, "player": {}})
     await store.set(user_key="", store_key="game_clock.chat-state", value=json.dumps({"current_time": "1926-03-15"}))
     llm = FakeLLM(script=[assistant_text(_scripted_analysis_json())])
     mi = _make_initializer(llm=llm, store=store)
 
     await mi.initialize("chat-state")
 
-    keeper_raw = await store.get(user_key="", store_key="module_keeper_pool.chat-state")
-    assert await store.get(user_key="", store_key="module_catalog.chat-state") == keeper_raw
-    assert "OLD MODULE" not in keeper_raw
+    keeper = await documents.get_view("chat-state", "module_pool", MODULE_POOL_ID, KEEPER_VIEWER)
+    assert "OLD MODULE" not in json.dumps(keeper, ensure_ascii=False)
     assert await store.get(user_key="", store_key="game_clock.chat-state") is None
 
 
@@ -336,8 +339,7 @@ async def test_initialize_marks_failed_when_no_module_text_is_available():
     await mi.initialize("chat-empty")
 
     assert await store.get(user_key="", store_key="module_init_status.chat-empty") == "failed"
-    assert await store.get(user_key="", store_key="module_keeper_pool.chat-empty") is None
-    assert await store.get(user_key="", store_key="module_player_pool.chat-empty") is None
+    assert await DocumentStore(store).get_singleton("chat-empty", "module_pool") is None
     assert llm.calls == []
 
 

@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from core.documents import KEEPER_VIEWER, MODULE_POOL_ID, PLAYER_VIEWER, DocumentStore
 from infra.i18n import I18n
 from infra.store import Store
 
@@ -87,6 +88,13 @@ def summarize_knowledge_item(item: Any) -> str:
     return f"- {title}: {detail}" if detail else f"- {title}"
 
 
+async def _note_entries(documents: DocumentStore, chat_key: str, category: str) -> list:
+    """A keeper `note` document's entry list (``[]`` for absent/str-valued notes)."""
+    view = await documents.get_view(chat_key, "note", category, KEEPER_VIEWER)
+    content = view.get("content") if view else None
+    return content if isinstance(content, list) else []
+
+
 async def inject_trpg_system_prompt(ctx: Any, i18n: I18n) -> str:
     """TRPG system-identity section: GM identity plus the table's operating rules.
 
@@ -107,8 +115,9 @@ async def inject_trpg_system_prompt(ctx: Any, i18n: I18n) -> str:
 async def inject_game_state_prompt(ctx: Any, character_manager: Any, store: Store, i18n: I18n) -> str:
     """Minimal "battle status" panel: scene, clock, party roster, NPCs, clues, world changes, initiative.
 
-    Reads store keys ``game_clock.{chat_key}``, ``kp_notes.{chat_key}``,
-    ``module_player_pool.{chat_key}``, ``initiative.{chat_key}`` and
+    Reads the ``scene`` singleton / ``note`` / ``module_pool`` documents (this
+    is the KEEPER's prompt, so keeper-view projections), the
+    ``game_clock.{chat_key}``/``initiative.{chat_key}`` runtime state, and
     ``character_manager.get_party_roster``/``get_character``. Every optional
     lookup is independently guarded so a partially-seeded (or entirely
     empty) game state still renders the fixed header/footer instead of
@@ -117,6 +126,7 @@ async def inject_game_state_prompt(ctx: Any, character_manager: Any, store: Stor
     try:
         user_id = ctx.user_id
         chat_key = ctx.chat_key
+        documents = DocumentStore(store)
         divider = i18n.t("prompt.divider")
         lines = [divider, i18n.t("prompt.game_state.title"), divider]
 
@@ -133,11 +143,10 @@ async def inject_game_state_prompt(ctx: Any, character_manager: Any, store: Stor
             pass
 
         try:
-            notes_data = await store.get(user_key="", store_key=f"kp_notes.{chat_key}")
-            if notes_data:
-                notes = json.loads(notes_data)
-                scene_name = notes.get("current_scene", scene_name)
-                focus = notes.get("current_focus", focus)
+            scene_view = await documents.get_view(chat_key, "scene", "scene", KEEPER_VIEWER)
+            if scene_view:
+                scene_name = scene_view.get("name") or scene_name
+                focus = scene_view.get("focus") or focus
         except Exception:
             pass
 
@@ -221,77 +230,64 @@ async def inject_game_state_prompt(ctx: Any, character_manager: Any, store: Stor
 
         # -- active NPCs (last 3) -----------------------------------------
         try:
-            notes_data = await store.get(user_key="", store_key=f"kp_notes.{chat_key}")
-            if notes_data:
-                notes = json.loads(notes_data)
-                npc_items = notes.get("npc_status", [])[-3:]
-                if npc_items:
-                    lines.append("")
-                    lines.append(i18n.t("prompt.game_state.npc_header"))
-                    for item in npc_items:
-                        lines.append(i18n.t("prompt.game_state.bullet", content=item.get("content", "")))
+            npc_items = (await _note_entries(documents, chat_key, "npc_status"))[-3:]
+            if npc_items:
+                lines.append("")
+                lines.append(i18n.t("prompt.game_state.npc_header"))
+                for item in npc_items:
+                    lines.append(i18n.t("prompt.game_state.bullet", content=item.get("content", "")))
         except Exception:
             pass
 
         # -- investigation background (opening facts, tagged "开局") -------
         try:
-            notes_data = await store.get(user_key="", store_key=f"kp_notes.{chat_key}")
-            if notes_data:
-                notes = json.loads(notes_data)
-                all_facts = notes.get("confirmed_facts", [])
-                opening = [f for f in all_facts if f.get("time") == "开局"]
-                if opening:
-                    lines.append("")
-                    lines.append(i18n.t("prompt.game_state.background_header"))
-                    for item in opening[-5:]:
-                        lines.append(i18n.t("prompt.game_state.bullet", content=item.get("content", "")))
+            all_facts = await _note_entries(documents, chat_key, "confirmed_facts")
+            opening = [f for f in all_facts if f.get("time") == "开局"]
+            if opening:
+                lines.append("")
+                lines.append(i18n.t("prompt.game_state.background_header"))
+                for item in opening[-5:]:
+                    lines.append(i18n.t("prompt.game_state.bullet", content=item.get("content", "")))
         except Exception:
             pass
 
         # -- confirmed facts (last 5, excluding the opening ones) ---------
         try:
-            notes_data = await store.get(user_key="", store_key=f"kp_notes.{chat_key}")
-            if notes_data:
-                notes = json.loads(notes_data)
-                facts = [f for f in notes.get("confirmed_facts", []) if f.get("time") != "开局"][-5:]
-                lines.append("")
-                if facts:
-                    lines.append(i18n.t("prompt.game_state.facts_header"))
-                    for item in facts:
-                        lines.append(i18n.t("prompt.game_state.bullet", content=item.get("content", "")))
-                else:
-                    lines.append(i18n.t("prompt.game_state.facts_empty"))
+            all_facts = await _note_entries(documents, chat_key, "confirmed_facts")
+            facts = [f for f in all_facts if f.get("time") != "开局"][-5:]
+            lines.append("")
+            if facts:
+                lines.append(i18n.t("prompt.game_state.facts_header"))
+                for item in facts:
+                    lines.append(i18n.t("prompt.game_state.bullet", content=item.get("content", "")))
+            else:
+                lines.append(i18n.t("prompt.game_state.facts_empty"))
         except Exception:
             pass
 
         # -- ongoing clues (from the player pool) --------------------------
         try:
-            player_data = await store.get(user_key="", store_key=f"module_player_pool.{chat_key}")
-            if player_data:
-                player = json.loads(player_data)
-                clues = player.get("clues", [])
-                if clues:
-                    lines.append("")
-                    lines.append(i18n.t("prompt.game_state.clues_header"))
-                    for c in clues[-5:]:
-                        desc = c.get("description", "")[:40]
-                        lines.append(
-                            i18n.t("prompt.game_state.clue_line", name=c.get("name", "?"), description=desc)
-                        )
+            player_pool = await documents.get_view(chat_key, "module_pool", MODULE_POOL_ID, PLAYER_VIEWER)
+            clues = (player_pool or {}).get("clues", [])
+            if clues:
+                lines.append("")
+                lines.append(i18n.t("prompt.game_state.clues_header"))
+                for c in clues[-5:]:
+                    desc = c.get("description", "")[:40]
+                    lines.append(
+                        i18n.t("prompt.game_state.clue_line", name=c.get("name", "?"), description=desc)
+                    )
         except Exception:
             pass
 
         # -- world changes (last 3) ----------------------------------------
         try:
-            notes_data = await store.get(user_key="", store_key=f"kp_notes.{chat_key}")
-            if notes_data:
-                notes = json.loads(notes_data)
-                changes = notes.get("world_changes", [])[-3:]
-                if changes:
-                    lines.append("")
-                    lines.append(i18n.t("prompt.game_state.world_changes_header"))
-                    for item in changes:
-                        lines.append(i18n.t("prompt.game_state.bullet", content=item.get("content", "")))
+            changes = (await _note_entries(documents, chat_key, "world_changes"))[-3:]
+            if changes:
+                lines.append("")
+                lines.append(i18n.t("prompt.game_state.world_changes_header"))
+                for item in changes:
+                    lines.append(i18n.t("prompt.game_state.bullet", content=item.get("content", "")))
         except Exception:
             pass
 
@@ -368,8 +364,9 @@ async def inject_document_context_prompt(
         status = await store.get(user_key="", store_key=f"module_init_status.{chat_key}")
 
         if status in {"ready", "ready_fallback"}:
-            keeper_data = await store.get(user_key="", store_key=f"module_keeper_pool.{chat_key}")
-            player_data = await store.get(user_key="", store_key=f"module_player_pool.{chat_key}")
+            pools = await DocumentStore(store).get_view(chat_key, "module_pool", MODULE_POOL_ID, KEEPER_VIEWER)
+            keeper_pool = (pools or {}).get("keeper")
+            player_pool = (pools or {}).get("player")
 
             divider = i18n.t("prompt.divider")
             prompt_parts = [
@@ -383,8 +380,7 @@ async def inject_document_context_prompt(
                 "",
             ]
 
-            if keeper_data:
-                keeper_pool = json.loads(keeper_data)
+            if keeper_pool:
                 prompt_parts.append(i18n.t("prompt.document.keeper_pool_label"))
                 for category, items in keeper_pool.items():
                     if category in ("summary", "background"):
@@ -403,8 +399,7 @@ async def inject_document_context_prompt(
                                 )
                 prompt_parts.append("")
 
-            if player_data:
-                player_pool = json.loads(player_data)
+            if player_pool:
                 prompt_parts.append(i18n.t("prompt.document.player_pool_label"))
                 for category, items in player_pool.items():
                     if category in ("summary", "background"):

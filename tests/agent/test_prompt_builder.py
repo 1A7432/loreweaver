@@ -37,21 +37,16 @@ def _services(locale: str = "en"):
 
 async def _seed_ready_keeper_pool(services, chat_key: str) -> None:
     await services.store.set(user_key="", store_key=f"module_init_status.{chat_key}", value="ready")
-    await services.store.set(
-        user_key="",
-        store_key=f"module_keeper_pool.{chat_key}",
-        value=json.dumps(
-            {
+    await services.documents.put_singleton(
+        chat_key,
+        "module_pool",
+        {
+            "keeper": {
                 "summary": "A quiet fishing town hides a cult beneath the lighthouse.",
                 "truths": [{"name": "The Truth", "description": SENTINEL_SECRET}],
             },
-            ensure_ascii=False,
-        ),
-    )
-    await services.store.set(
-        user_key="",
-        store_key=f"module_player_pool.{chat_key}",
-        value=json.dumps({"summary": "A quiet fishing town."}, ensure_ascii=False),
+            "player": {"summary": "A quiet fishing town."},
+        },
     )
 
 

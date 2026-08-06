@@ -28,6 +28,7 @@ from typing import Any
 from agent.context import AgentCtx
 from agent.services import Services
 from core.character_manager import CharacterSheet, get_hit_points
+from core.documents import MODULE_POOL_ID, PLAYER_VIEWER, SCENE_ID
 from core.modvars import ModvarManager
 from core.mvu_compat import MvuManager, path_is_exposed
 from core.pregen_roster import PregenRoster
@@ -227,27 +228,27 @@ async def _initiative(services: Services, chat_key: str) -> list[dict[str, Any]]
 
 
 async def _scene(services: Services, chat_key: str) -> dict[str, Any] | None:
+    """The `scene` singleton document (all-viewer projection), falling back to
+    the module pool's first PLAYER-visible scene for rooms the keeper hasn't
+    scened yet."""
     try:
-        raw = await services.store.get(user_key="", store_key=f"kp_notes.{chat_key}")
-        notes = json.loads(raw) if raw else {}
+        view = await services.documents.get_view(chat_key, "scene", SCENE_ID, PLAYER_VIEWER)
     except Exception:
-        notes = {}
-
-    name = notes.get("current_scene") if isinstance(notes, dict) else None
+        view = None
+    name = (view or {}).get("name")
     if name:
         scene: dict[str, Any] = {"name": name}
-        focus = notes.get("current_focus")
+        focus = (view or {}).get("focus")
         if focus:
             scene["focus"] = focus
         return scene
 
     try:
-        raw = await services.store.get(user_key="", store_key=f"module_player_pool.{chat_key}")
-        pool = json.loads(raw) if raw else {}
+        pool = await services.documents.get_view(chat_key, "module_pool", MODULE_POOL_ID, PLAYER_VIEWER)
     except Exception:
-        pool = {}
+        pool = None
 
-    scenes = pool.get("scenes") if isinstance(pool, dict) else None
+    scenes = (pool or {}).get("scenes")
     if scenes:
         first = scenes[0]
         scene = {"name": first.get("name", "")}

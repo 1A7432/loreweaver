@@ -663,7 +663,9 @@ async def _behavior_snapshot(services: Any, ctx: AgentCtx) -> dict[str, Any]:
         except (json.JSONDecodeError, TypeError):
             return default
 
-    notes = _loads(await services.store.get(store_key=f"kp_notes.{ctx.chat_key}"), {})
+    scene_doc = await services.documents.get_singleton(ctx.chat_key, "scene")
+    notes = dict(scene_doc.data) if scene_doc is not None else {}
+    notes = {"current_scene": notes.get("name"), "current_focus": notes.get("focus")}
     clock = _loads(await services.store.get(store_key=f"game_clock.{ctx.chat_key}"), {})
     sheet = await services.characters.get_character(ctx.uid(), ctx.chat_key)
     hp = get_hit_points(sheet) if sheet.name != "default" else (None, None)
@@ -821,8 +823,8 @@ async def _setup_behavior_episode(
     if "status" in setup:
         await services.characters.sync_party_roster(ctx.chat_key, sheet, status_effects=list(setup["status"]))
     if "scene" in setup or "focus" in setup:
-        notes = {"current_scene": setup.get("scene"), "current_focus": setup.get("focus")}
-        await services.store.set(store_key=f"kp_notes.{ctx.chat_key}", value=json.dumps(notes, ensure_ascii=False))
+        scene_data = {"name": setup.get("scene") or "", "focus": setup.get("focus") or ""}
+        await services.documents.put_singleton(ctx.chat_key, "scene", scene_data)
     if "clock" in setup:
         await services.store.set(
             store_key=f"game_clock.{ctx.chat_key}",
@@ -1175,7 +1177,8 @@ async def _setup(services, ts, module_path: Path, companion_path: Path | None, c
     await services.store.set(store_key=f"module_fulltext.{chat_key}", value=text)
     await services.module_init.initialize(chat_key)
     status = await services.store.get(store_key=f"module_init_status.{chat_key}")
-    keeper_pool = (await services.store.get(store_key=f"module_keeper_pool.{chat_key}")) or ""
+    pool_doc = await services.documents.get_singleton(chat_key, "module_pool")
+    keeper_pool = json.dumps((pool_doc.data.get("keeper") if pool_doc else None) or {}, ensure_ascii=False) if pool_doc else ""
     rec.emit("setup", chat_key=chat_key, module=str(module_path), module_status=status,
              keeper_pool_chars=len(keeper_pool))
     # import the ST companion card (parse -> rule-legal sheet -> player_companion + character_book->worldbook)

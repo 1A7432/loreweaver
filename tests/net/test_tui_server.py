@@ -795,8 +795,9 @@ async def test_kp_turn_after_module_seed_has_no_sentinel_leak_and_uses_keeper_to
     seed_ctx = _room_ctx("blackmoor", fs=LocalFs(str(FIXTURES)))
     uploaded = await toolset.dispatch("upload_document", seed_ctx, {"file_path": "module_en.txt", "doc_type": "module"})
     assert isinstance(uploaded, str) and uploaded
-    keeper_pool = await services.store.get(store_key=f"module_keeper_pool.{seed_ctx.chat_key}")
-    assert SENTINEL in (keeper_pool or ""), "seed must include sentinel"
+    pool_doc = await services.documents.get_singleton(seed_ctx.chat_key, "module_pool")
+    keeper_pool = json.dumps(pool_doc.data.get("keeper") if pool_doc else {}, ensure_ascii=False)
+    assert SENTINEL in keeper_pool, "seed must include sentinel"
 
     url = await _start(server)
     try:
@@ -883,10 +884,8 @@ async def test_kp_turn_broadcasts_ai_npc_dialogue_before_kp_narrative_without_le
     server = TuiServer(services, keystore, port=0, toolset=toolset)
 
     seed_ctx = _room_ctx("npc-room")
-    await services.store.set(
-        user_key="",
-        store_key=f"module_keeper_pool.{seed_ctx.chat_key}",
-        value=json.dumps({"truths": [{"description": SENTINEL}]}),
+    await services.documents.put_singleton(
+        seed_ctx.chat_key, "module_pool", {"keeper": {"truths": [{"description": SENTINEL}]}, "player": {}}
     )
 
     url = await _start(server)

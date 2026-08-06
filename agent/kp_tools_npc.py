@@ -22,7 +22,6 @@ of their own (same convention `core.character_manager`/`agent.kp_tools_knowledge
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 
@@ -31,6 +30,7 @@ from agent.npc import NpcManager, NpcRecord
 from agent.npc_actor import voice_npc
 from agent.services import Services
 from agent.tools import tool
+from core.documents import KEEPER_VIEWER, MODULE_POOL_ID
 from infra.i18n import I18n
 
 # `update_npc`'s allowed field names: plain string/optional-string/bool fields only -- `knowledge`
@@ -161,12 +161,14 @@ class NpcTools:
         """
         i18n = self._i18n(ctx)
         try:
-            raw = await self._services.store.get(user_key="", store_key=f"module_keeper_pool.{ctx.chat_key}")
-            if not raw:
+            pools = await self._services.documents.get_view(
+                ctx.chat_key, "module_pool", MODULE_POOL_ID, KEEPER_VIEWER
+            )
+            keeper_pool = (pools or {}).get("keeper")
+            if not keeper_pool:
                 return i18n.t("npc.tools.import.no_pool")
 
-            pool = json.loads(raw)
-            entries = pool.get("npcs") or []
+            entries = keeper_pool.get("npcs") or []
             if not entries:
                 return i18n.t("npc.tools.import.empty")
 

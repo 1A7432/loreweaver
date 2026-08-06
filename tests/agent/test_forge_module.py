@@ -124,8 +124,9 @@ async def test_happy_path_writes_and_installs_into_the_calling_room(tmp_path: Pa
         status = await services.store.get(user_key="", store_key=f"module_init_status.{CHAT_KEY}")
         assert status == "ready"
 
-        keeper_raw = await services.store.get(user_key="", store_key=f"module_keeper_pool.{CHAT_KEY}")
-        player_raw = await services.store.get(user_key="", store_key=f"module_player_pool.{CHAT_KEY}")
+        pool_doc = await services.documents.get_singleton(CHAT_KEY, "module_pool")
+        keeper_raw = json.dumps(pool_doc.data.get("keeper") if pool_doc else {}, ensure_ascii=False)
+        player_raw = json.dumps(pool_doc.data.get("player") if pool_doc else {}, ensure_ascii=False)
         assert SENTINEL in keeper_raw
         assert SENTINEL not in player_raw  # red line: the secret never reaches the player pool
     finally:
@@ -204,22 +205,12 @@ async def test_reinstall_same_room_id_overwrites_one_consistent_content_version(
             user_key="",
             store_key=f"module_fulltext.{CHAT_KEY}",
         )
-        keeper = await services.store.get(
-            user_key="",
-            store_key=f"module_keeper_pool.{CHAT_KEY}",
-        )
-        player = await services.store.get(
-            user_key="",
-            store_key=f"module_player_pool.{CHAT_KEY}",
-        )
-        catalog = await services.store.get(
-            user_key="",
-            store_key=f"module_catalog.{CHAT_KEY}",
-        )
+        pool_doc = await services.documents.get_singleton(CHAT_KEY, "module_pool")
+        keeper = json.dumps(pool_doc.data.get("keeper") if pool_doc else {}, ensure_ascii=False)
+        player = json.dumps(pool_doc.data.get("player") if pool_doc else {}, ensure_ascii=False)
         assert fulltext == version_2.strip()
         assert "v2" in keeper and "v1" not in keeper
         assert "v2" in player and "v1" not in player
-        assert catalog == keeper
     finally:
         forge_module._USER_MODULE_DIR = original_user_dir
 

@@ -21,7 +21,6 @@ fields (name/description/tags) are game DATA supplied at runtime, not string lit
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from agent.context import AgentCtx
@@ -34,6 +33,7 @@ from core.char_from_persona import build_sheet_from_persona, infer_pronoun_note
 from core.character_manager import CharacterSheet
 from core.character_rules import render_validation_notice, validate_sheet
 from core.charcard import PNG_SIGNATURE, CharacterCard, parse_card_bytes
+from core.documents import MODULE_POOL_ID, PLAYER_VIEWER
 from core.lorecard import Lorecard, looks_like_lorecard, parse_lorecard_bytes
 from core.modvars import ModvarManager
 from core.pregen_roster import PregenRoster
@@ -130,11 +130,8 @@ async def _module_summary(services: Services, chat_key: str) -> str:
     """A brief, player-safe module summary (from the analyzed player pool) to fit the character to
     the adventure; best-effort -- returns "" when no module has been initialized."""
     try:
-        raw = await services.store.get(user_key="", store_key=f"module_player_pool.{chat_key}")
-        if not raw:
-            return ""
-        data = json.loads(raw)
-        summary = data.get("summary") if isinstance(data, dict) else ""
+        view = await services.documents.get_view(chat_key, "module_pool", MODULE_POOL_ID, PLAYER_VIEWER)
+        summary = view.get("summary") if isinstance(view, dict) else ""
         return str(summary or "")[:400]
     except Exception:
         return ""

@@ -22,25 +22,20 @@ Two deliberate deviations from a byte-for-byte port, both required because
 this repo's ``core.module_initializer.ModuleInitializer`` (M1 §5, DONE/GREEN,
 not modified here) persists a different shape than the legacy source:
 
-- **No separate per-chunk ``module_catalog`` writer.** The source's v2
-  initializer wrote the *raw full-text analysis* dict to
-  ``module_catalog.{chat_key}`` (scenes/npcs/clues/timeline/threats/truths/
-  background/summary) separately from the keeper/player pools it derived
-  from that same dict. This repo's ``ModuleInitializer.initialize`` only
-  persists the derived ``module_keeper_pool``/``module_player_pool``/
-  ``module_init_status`` (see ``core/module_initializer.py``'s docstring) --
-  which is fine, because ``module_keeper_pool`` carries the exact same
-  fields as the old catalog (minus ``opening_facts``, which lives in
-  ``kp_notes`` instead). ``ModuleTools._load_catalog`` below treats
-  ``module_keeper_pool`` as the catalog's source of truth and mirrors it
-  into ``module_catalog.{chat_key}`` on every read, so the catalog-reading
-  tools (``get_module_catalog``/``list_module_elements``/
-  ``get_module_element_detail``/``get_module_summary``) both use the
-  ``module_catalog`` store key the M1 spec names AND never go stale after an
-  ``update_knowledge_pool`` patch. ``get_module_catalog`` itself renders a
-  per-category directory (counts + names) instead of the source's per-chunk
-  risk-level listing, since nothing in this port's data model produces
-  chunk-level ``risk_level``/``spoiler_tags`` entries.
+- **No separate catalog copy at all (M17).** The source's v2 initializer
+  wrote a *raw full-text analysis* dict to a ``module_catalog`` store key
+  separately from the keeper/player pools derived from that same dict — a
+  persisted derived copy that could only drift. Under the M17 document model
+  the knowledge pools are ONE ``module_pool`` document (``data = {"keeper",
+  "player"}``, keeper half = the catalog's exact fields), and
+  ``ModuleTools._load_catalog`` below simply reads the document's keeper
+  half, so the catalog-reading tools
+  (``get_module_catalog``/``list_module_elements``/
+  ``get_module_element_detail``/``get_module_summary``) can never go stale
+  after an ``update_knowledge_pool`` patch. ``get_module_catalog`` itself
+  renders a per-category directory (counts + names) instead of the source's
+  per-chunk risk-level listing, since nothing in this port's data model
+  produces chunk-level ``risk_level``/``spoiler_tags`` entries.
 - **``query_knowledge_pool``'s search fields.** The source searched
   ``title``/``summary``/``keywords``/``spoiler_tags`` -- fields that only
   ever existed on the legacy per-chunk catalog, never on this port's
@@ -96,6 +91,7 @@ from agent.context import AgentCtx
 from agent.services import Services
 from agent.tools import tool
 from core.battle_report import _default_session_name
+from core.documents import KEEPER_VIEWER, MODULE_POOL_ID
 from core.game_clock import advance_game_time
 from core.module_initializer import ProgressCb, _emit
 from infra.i18n import I18n
@@ -153,12 +149,17 @@ _KEEPER_SENSITIVE_PATTERNS = [
 ]
 
 
-def _keeper_key(chat_key: str) -> str:
-    return f"module_keeper_pool.{chat_key}"
+async def _load_pools(services: Services, chat_key: str) -> dict[str, Any]:
+    """The module knowledge-pool document's keeper-side view: ``{"keeper": …,
+    "player": …}`` (``{}`` when no module has been initialized). These tools run
+    on the keeper side of the table, so they read the FULL projection; every
+    player-facing surface projects the same document with a player viewer."""
+    view = await services.documents.get_view(chat_key, "module_pool", MODULE_POOL_ID, KEEPER_VIEWER)
+    return view if isinstance(view, dict) else {}
 
 
-def _player_key(chat_key: str) -> str:
-    return f"module_player_pool.{chat_key}"
+async def _save_pools(services: Services, chat_key: str, keeper: dict, player: dict) -> None:
+    await services.documents.put_singleton(chat_key, "module_pool", {"keeper": keeper, "player": player})
 
 
 def _status_key(chat_key: str) -> str:
@@ -169,16 +170,13 @@ def _error_key(chat_key: str) -> str:
     return f"module_init_error.{chat_key}"
 
 
-def _catalog_key(chat_key: str) -> str:
-    return f"module_catalog.{chat_key}"
-
-
 def _fulltext_key(chat_key: str) -> str:
     return f"module_fulltext.{chat_key}"
 
 
-def _kp_notes_key(chat_key: str) -> str:
-    return f"kp_notes.{chat_key}"
+# kp_note categories that live on the player-visible `scene` singleton document
+# instead of keeper-only `note` documents.
+_SCENE_CATEGORIES = ("current_scene", "current_focus")
 
 
 def _game_clock_key(chat_key: str) -> str:
@@ -293,19 +291,12 @@ class ModuleTools(_KnowledgeToolsBase):
         return f"{i18n.t('kp_tools.know.keeper_banner')}\n\n{body}"
 
     async def _load_catalog(self, chat_key: str) -> dict | None:
-        """Catalog view of the module: `module_keeper_pool.{chat_key}` (the source of truth
-        `core.module_initializer.ModuleInitializer` persists) mirrored into
-        `module_catalog.{chat_key}` on every read -- see the module docstring's first deviation note.
-        """
-        store = self._services.store
-        keeper_raw = await store.get(user_key="", store_key=_keeper_key(chat_key))
-        if keeper_raw:
-            catalog = json.loads(keeper_raw)
-            await store.set(user_key="", store_key=_catalog_key(chat_key), value=json.dumps(catalog, ensure_ascii=False))
-            return catalog
-
-        cached = await store.get(user_key="", store_key=_catalog_key(chat_key))
-        return json.loads(cached) if cached else None
+        """Catalog view of the module: the knowledge-pool document's keeper half
+        (the source of truth `core.module_initializer.ModuleInitializer`
+        persists) — no mirrored copy exists to go stale, see the module
+        docstring's first deviation note."""
+        keeper = (await _load_pools(self._services, chat_key)).get("keeper")
+        return keeper if isinstance(keeper, dict) and keeper else None
 
     @tool(keeper_only=True)
     async def get_module_catalog(self, ctx: AgentCtx) -> str:
@@ -359,11 +350,10 @@ class ModuleTools(_KnowledgeToolsBase):
                 body = i18n.t("kp_tools.know.pool.invalid_type")
             else:
                 pool_label = i18n.t(f"kp_tools.know.pool.label.{pool_type}")
-                pool_data = await self._services.store.get(user_key="", store_key=f"module_{pool_type}_pool.{ctx.chat_key}")
-                if not pool_data:
+                pool = (await _load_pools(self._services, ctx.chat_key)).get(pool_type)
+                if not pool:
                     body = i18n.t("kp_tools.know.pool.missing", pool=pool_label)
                 else:
-                    pool = json.loads(pool_data)
                     tokens = [
                         token
                         for token in re.split(r"[\s,，、]+", query.lower())
@@ -439,11 +429,10 @@ class ModuleTools(_KnowledgeToolsBase):
                 body = i18n.t("kp_tools.know.pool.invalid_type")
             else:
                 pool_label = i18n.t(f"kp_tools.know.pool.label.{pool_type}")
-                pool_data = await self._services.store.get(user_key="", store_key=f"module_{pool_type}_pool.{ctx.chat_key}")
-                if not pool_data:
+                pool = (await _load_pools(self._services, ctx.chat_key)).get(pool_type)
+                if not pool:
                     body = i18n.t("kp_tools.know.pool.missing", pool=pool_label)
                 else:
-                    pool = json.loads(pool_data)
                     background = str(pool.get("background", ""))
                     if len(background) > 200:
                         background = background[:200] + "..."
@@ -716,18 +705,18 @@ class ModuleTools(_KnowledgeToolsBase):
             Confirmation that the pool(s) were updated.
         """
         i18n = self._i18n(ctx)
-        store = self._services.store
         chat_key = ctx.chat_key
         try:
+            pools = await _load_pools(self._services, chat_key)
+            keeper_raw, player_raw = pools.get("keeper"), pools.get("player")
+            keeper = keeper_raw if isinstance(keeper_raw, dict) else {}
+            player = player_raw if isinstance(player_raw, dict) else {}
             if player_visible_patch:
-                current = await store.get(user_key="", store_key=_player_key(chat_key))
-                pool = _deep_merge(json.loads(current) if current else {}, json.loads(player_visible_patch))
-                await store.set(user_key="", store_key=_player_key(chat_key), value=json.dumps(pool, ensure_ascii=False))
-
+                player = _deep_merge(player, json.loads(player_visible_patch))
             if keeper_only_patch:
-                current = await store.get(user_key="", store_key=_keeper_key(chat_key))
-                pool = _deep_merge(json.loads(current) if current else {}, json.loads(keeper_only_patch))
-                await store.set(user_key="", store_key=_keeper_key(chat_key), value=json.dumps(pool, ensure_ascii=False))
+                keeper = _deep_merge(keeper, json.loads(keeper_only_patch))
+            if player_visible_patch or keeper_only_patch:
+                await _save_pools(self._services, chat_key, keeper, player)
 
             return i18n.t("kp_tools.know.update.done")
         except Exception as exc:
@@ -750,13 +739,12 @@ class ModuleTools(_KnowledgeToolsBase):
         store = self._services.store
         chat_key = ctx.chat_key
         try:
-            keeper_data = await store.get(user_key="", store_key=_keeper_key(chat_key))
-            if not keeper_data:
+            pools = await _load_pools(self._services, chat_key)
+            keeper = pools.get("keeper")
+            if not isinstance(keeper, dict) or not keeper:
                 return i18n.t("kp_tools.know.unlock.no_keeper_pool")
-
-            keeper = json.loads(keeper_data)
-            player_data = await store.get(user_key="", store_key=_player_key(chat_key))
-            player = json.loads(player_data) if player_data else {}
+            player_raw = pools.get("player")
+            player = player_raw if isinstance(player_raw, dict) else {}
 
             target = _find_by_name(keeper.get(element_type, []), name)
             if target is None:
@@ -798,18 +786,18 @@ class ModuleTools(_KnowledgeToolsBase):
                 return i18n.t("kp_tools.know.unlock.already_unlocked", element_type=element_type, name=target_name)
 
             player[element_type].append(unlocked)
-            await store.set(user_key="", store_key=_player_key(chat_key), value=json.dumps(player, ensure_ascii=False))
+            await _save_pools(self._services, chat_key, keeper, player)
 
             try:
-                notes_key = _kp_notes_key(chat_key)
-                notes_data = await store.get(user_key="", store_key=notes_key)
-                notes = json.loads(notes_data) if notes_data else {}
-                notes.setdefault("confirmed_facts", [])
+                docs = self._services.documents
+                fact_doc = await docs.get(chat_key, "note", "confirmed_facts")
+                entries = fact_doc.data.get("content") if fact_doc is not None else None
+                entries = entries if isinstance(entries, list) else []
                 clock_data = await store.get(user_key="", store_key=_game_clock_key(chat_key))
                 game_time = json.loads(clock_data).get("current_time", "?") if clock_data else "?"
                 fact_content = i18n.t("kp_tools.know.unlock.confirmed_fact", time=game_time, element_type=element_type, name=target_name)
-                notes["confirmed_facts"].append({"time": game_time, "content": fact_content})
-                await store.set(user_key="", store_key=notes_key, value=json.dumps(notes, ensure_ascii=False))
+                entries.append({"time": game_time, "content": fact_content})
+                await docs.put(chat_key, "note", "confirmed_facts", {"category": "confirmed_facts", "content": entries})
             except Exception:
                 pass  # best-effort sync; the unlock itself already succeeded above
 
@@ -1015,10 +1003,8 @@ class DocumentTools(_KnowledgeToolsBase):
 
             if target.get("document_type") in _MODULE_INIT_DOC_TYPES:
                 store = self._services.store
+                await self._services.documents.delete_type(chat_key, "module_pool")
                 for key in (
-                    _catalog_key(chat_key),
-                    _keeper_key(chat_key),
-                    _player_key(chat_key),
                     _status_key(chat_key),
                     _error_key(chat_key),
                     _fulltext_key(chat_key),
@@ -1091,41 +1077,45 @@ class NoteTools(_KnowledgeToolsBase):
             Confirmation of the note operation, or its listing.
         """
         i18n = self._i18n(ctx)
-        store = self._services.store
-        store_key = _kp_notes_key(ctx.chat_key)
+        docs = self._services.documents
+        chat_key = ctx.chat_key
         try:
-            notes_data = await store.get(user_key="", store_key=store_key)
-            notes = json.loads(notes_data) if notes_data else {}
+            # current_scene/current_focus are the player-visible `scene` singleton
+            # document (its projection is all-viewer); everything else is a
+            # keeper-only `note` document per category.
+            if category in _SCENE_CATEGORIES:
+                return await self._scene_note(i18n, chat_key, action, category, content)
+
+            doc = await docs.get(chat_key, "note", category)
+            stored = doc.data.get("content") if doc is not None else None
 
             if action == "set":
-                notes[category] = content
-                await store.set(user_key="", store_key=store_key, value=json.dumps(notes, ensure_ascii=False))
+                await docs.put(chat_key, "note", category, {"category": category, "content": content})
                 return i18n.t("kp_tools.know.note.set_done", category=category, content=content)
 
             if action == "add":
-                notes.setdefault(category, [])
-                notes[category].append({"time": datetime.now().strftime("%Y-%m-%d %H:%M"), "content": content})
-                await store.set(user_key="", store_key=store_key, value=json.dumps(notes, ensure_ascii=False))
+                entries = stored if isinstance(stored, list) else []
+                entries.append({"time": datetime.now().strftime("%Y-%m-%d %H:%M"), "content": content})
+                await docs.put(chat_key, "note", category, {"category": category, "content": entries})
                 return i18n.t("kp_tools.know.note.add_done", category=category, preview=content[:50])
 
             if action == "update":
-                if category not in notes:
+                if doc is None:
                     return i18n.t("kp_tools.know.note.category_missing", category=category)
-                if not notes[category]:
+                if not isinstance(stored, list) or not stored:
                     return i18n.t("kp_tools.know.note.empty_category", category=category)
-                notes[category][-1]["content"] = content
-                await store.set(user_key="", store_key=store_key, value=json.dumps(notes, ensure_ascii=False))
+                stored[-1]["content"] = content
+                await docs.put(chat_key, "note", category, {"category": category, "content": stored})
                 return i18n.t("kp_tools.know.note.update_done", category=category)
 
             if action == "delete":
-                if category not in notes:
+                if doc is None:
                     return i18n.t("kp_tools.know.note.category_missing", category=category)
-                del notes[category]
-                await store.set(user_key="", store_key=store_key, value=json.dumps(notes, ensure_ascii=False))
+                await docs.delete(chat_key, "note", category)
                 return i18n.t("kp_tools.know.note.delete_done", category=category)
 
             if action == "list":
-                items = notes.get(category, [])
+                items = stored if isinstance(stored, list) else []
                 if not items:
                     return i18n.t("kp_tools.know.note.list_empty", category=category)
                 lines = [i18n.t("kp_tools.know.note.list_header", category=category, count=len(items)), ""]
@@ -1136,6 +1126,42 @@ class NoteTools(_KnowledgeToolsBase):
             return i18n.t("kp_tools.know.note.bad_action", action=action)
         except Exception as exc:
             return i18n.t("kp_tools.know.note.failed", error=str(exc))
+
+    async def _scene_note(self, i18n: I18n, chat_key: str, action: str, category: str, content: str) -> str:
+        """current_scene/current_focus route to the `scene` singleton document.
+
+        `add`/`update` coerce to `set` — a singleton scene value has no entry
+        list to append to (pre-M17 they silently corrupted the scene display).
+        """
+        docs = self._services.documents
+        doc = await docs.get_singleton(chat_key, "scene")
+        data = dict(doc.data) if doc is not None else {}
+        field = "name" if category == "current_scene" else "focus"
+
+        if action in ("set", "add", "update"):
+            data[field] = content
+            await docs.put_singleton(chat_key, "scene", data)
+            return i18n.t("kp_tools.know.note.set_done", category=category, content=content)
+
+        if action == "delete":
+            if field not in data:
+                return i18n.t("kp_tools.know.note.category_missing", category=category)
+            data.pop(field, None)
+            await docs.put_singleton(chat_key, "scene", data)
+            return i18n.t("kp_tools.know.note.delete_done", category=category)
+
+        if action == "list":
+            value = data.get(field, "")
+            if not value:
+                return i18n.t("kp_tools.know.note.list_empty", category=category)
+            lines = [
+                i18n.t("kp_tools.know.note.list_header", category=category, count=1),
+                "",
+                i18n.t("kp_tools.know.note.list_item", index=1, time="-", content=value),
+            ]
+            return "\n".join(lines)
+
+        return i18n.t("kp_tools.know.note.bad_action", action=action)
 
     @tool
     async def game_clock(self, ctx: AgentCtx, action: str = "show", value: str = "") -> str:

@@ -1,3 +1,4 @@
+import json
 import re
 
 from adapters.cli.adapter import CLI_CHAT_ID
@@ -29,8 +30,9 @@ async def test_cli_selfplay_demo_no_keeper_secret_leak():
     assert DEMO_SENTINEL not in combined
     assert not re.search(r"[\u4e00-\u9fff]", combined)
 
-    keeper_pool = await services.store.get(store_key=f"module_keeper_pool.cli:dm:{CLI_CHAT_ID}")
-    assert keeper_pool and DEMO_SENTINEL in keeper_pool
+    pool_doc = await services.documents.get_singleton(f"cli:dm:{CLI_CHAT_ID}", "module_pool")
+    keeper_pool = json.dumps(pool_doc.data.get("keeper") if pool_doc else {}, ensure_ascii=False)
+    assert DEMO_SENTINEL in keeper_pool
 
 
 async def test_guided_demo_action_loads_module_and_opens_in_one_turn():
@@ -49,5 +51,6 @@ async def test_guided_demo_action_loads_module_and_opens_in_one_turn():
     assert len(replies) == 2
     assert "Salt & Anchor Inn" in replies[0]
     assert "tide table" in replies[1]
-    keeper_pool = await services.store.get(store_key=f"module_keeper_pool.cli:dm:{CLI_CHAT_ID}")
-    assert keeper_pool and DEMO_SENTINEL in keeper_pool
+    pool_doc = await services.documents.get_singleton(f"cli:dm:{CLI_CHAT_ID}", "module_pool")
+    keeper_pool = json.dumps(pool_doc.data.get("keeper") if pool_doc else {}, ensure_ascii=False)
+    assert DEMO_SENTINEL in keeper_pool

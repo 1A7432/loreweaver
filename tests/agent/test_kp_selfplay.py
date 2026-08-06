@@ -176,10 +176,11 @@ async def test_kp_selfplay_en_no_leak():
     assert isinstance(up, str) and up
     status = await services.store.get(store_key=f"module_init_status.{ctx.chat_key}")
     assert status == "ready"
-    keeper_pool = await services.store.get(store_key=f"module_keeper_pool.{ctx.chat_key}")
-    player_pool = await services.store.get(store_key=f"module_player_pool.{ctx.chat_key}")
-    assert SENTINEL in (keeper_pool or ""), "keeper pool must hold the hidden truth"
-    assert SENTINEL not in (player_pool or ""), "player pool must NOT hold the hidden truth"
+    pool_doc = await services.documents.get_singleton(ctx.chat_key, "module_pool")
+    keeper_pool = json.dumps(pool_doc.data.get("keeper") if pool_doc else {}, ensure_ascii=False)
+    player_pool = json.dumps(pool_doc.data.get("player") if pool_doc else {}, ensure_ascii=False)
+    assert SENTINEL in keeper_pool, "keeper pool must hold the hidden truth"
+    assert SENTINEL not in player_pool, "player pool must NOT hold the hidden truth"
 
     # 2) Character + session setup (deterministic, no LLM).
     await toolset.dispatch("create_character", ctx, {"name": "Nora Vance", "system": "coc7"})

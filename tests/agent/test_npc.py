@@ -19,6 +19,7 @@ from agent.kp_tools_npc import NpcTools
 from agent.npc import NpcManager, NpcRecord
 from agent.npc_actor import voice_npc
 from agent.services import build_services
+from core.documents import DocumentStore
 from infra.config import LLMSettings, Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import ChatResult, FakeLLM, assistant_text
@@ -262,12 +263,10 @@ async def test_voice_npc_never_leaks_keeper_secrets_or_other_npcs_knowledge():
     npcs = NpcManager(store)
 
     # The module keeper pool holds the sentinel world-truth.
-    await store.set(
-        user_key="",
-        store_key=f"module_keeper_pool.{chat_key}",
-        value=json.dumps(
-            {"npcs": [{"name": "Elias Crane", "description": "The keeper.", "secret": SENTINEL, "role": "antagonist"}]}
-        ),
+    await DocumentStore(store).put_singleton(
+        chat_key,
+        "module_pool",
+        {"keeper": {"npcs": [{"name": "Elias Crane", "description": "The keeper.", "secret": SENTINEL, "role": "antagonist"}]}, "player": {}},
     )
     # A DIFFERENT NPC's own knowledge also holds the sentinel.
     await npcs.create_npc(
@@ -410,10 +409,10 @@ async def test_speak_as_npc_weaves_dialogue_logs_event_and_excludes_keeper_secre
         script=[assistant_text(json.dumps({"dialogue": "I've heard nothing of the sort.", "action_intent": "shrug and turn away", "mood": "evasive"}))]
     )
     services = build_services(Settings(), llm=llm, embeddings=FakeEmbeddings(8))
-    await services.store.set(
-        user_key="",
-        store_key=f"module_keeper_pool.{chat_key}",
-        value=json.dumps({"npcs": [{"name": "The Mayor", "description": "...", "secret": keeper_secret, "role": "antagonist"}]}),
+    await services.documents.put_singleton(
+        chat_key,
+        "module_pool",
+        {"keeper": {"npcs": [{"name": "The Mayor", "description": "...", "secret": keeper_secret, "role": "antagonist"}]}, "player": {}},
     )
     await services.battles.start_session(chat_key)
 
@@ -471,17 +470,18 @@ async def test_import_module_npcs_seeds_from_module_keeper_pool_and_skips_existi
 
     await tools.create_npc(ctx, name="Martha")  # pre-existing -- import must not duplicate this one
 
-    await services.store.set(
-        user_key="",
-        store_key=f"module_keeper_pool.{chat_key}",
-        value=json.dumps(
-            {
+    await services.documents.put_singleton(
+        chat_key,
+        "module_pool",
+        {
+            "keeper": {
                 "npcs": [
                     {"name": "Martha", "description": "innkeeper", "secret": "she knows more than she lets on", "role": "innkeeper"},
                     {"name": "Elias Crane", "description": "the keeper", "secret": SENTINEL, "role": "antagonist"},
                 ]
-            }
-        ),
+            },
+            "player": {},
+        },
     )
 
     result = await tools.import_module_npcs(ctx)

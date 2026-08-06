@@ -107,16 +107,23 @@ async def _gen_action(services, recent):
     return (await _chat(services, p)).splitlines()[0][:220] if True else ""
 
 
+async def _keeper_pool_json(services) -> str:
+    doc = await services.documents.get_singleton(CHAT_KEY, "module_pool")
+    if doc is None:
+        return ""
+    return json.dumps(doc.data.get("keeper") or {}, ensure_ascii=False)
+
+
 async def _setup(services, ts, module_path, companion_path, rec):
     fs = LocalFs(str(ROOT))
     ctx = AgentCtx(chat_key=CHAT_KEY, user_id="longrun:setup", platform="cli", locale="en", fs=fs)
     if await services.store.get(store_key=f"longrun.setup_done.{CHAT_KEY}"):
-        keeper = (await services.store.get(store_key=f"module_keeper_pool.{CHAT_KEY}")) or ""
+        keeper = await _keeper_pool_json(services)
         return keeper
     text = module_path.read_text(encoding="utf-8")
     await services.store.set(store_key=f"module_fulltext.{CHAT_KEY}", value=text)
     await services.module_init.initialize(CHAT_KEY)
-    keeper = (await services.store.get(store_key=f"module_keeper_pool.{CHAT_KEY}")) or ""
+    keeper = await _keeper_pool_json(services)
     if companion_path and companion_path.exists():
         try:
             card = parse_card_file(companion_path)

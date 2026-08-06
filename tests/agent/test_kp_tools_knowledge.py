@@ -22,6 +22,7 @@ from agent.context import AgentCtx, LocalFs
 from agent.kp_tools_knowledge import DocumentTools, ModuleTools, NoteTools, SessionTools
 from agent.services import Services, build_services
 from agent.tools import Toolset
+from core.documents import KEEPER_VIEWER, MODULE_POOL_ID, PLAYER_VIEWER
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM, assistant_text
@@ -168,10 +169,8 @@ async def test_get_module_init_status_surfaces_degraded_fallback_and_retry_hint(
     tools = ModuleTools(services)
     await services.store.set(user_key="", store_key=f"module_init_status.{CHAT_KEY}", value="ready_fallback")
     await services.store.set(user_key="", store_key=f"module_init_error.{CHAT_KEY}", value="provider unavailable")
-    await services.store.set(
-        user_key="",
-        store_key=f"module_keeper_pool.{CHAT_KEY}",
-        value=json.dumps({"scenes": [{"name": "Fallback scene"}]}),
+    await services.documents.put_singleton(
+        CHAT_KEY, "module_pool", {"keeper": {"scenes": [{"name": "Fallback scene"}]}, "player": {}}
     )
 
     result = await tools.get_module_init_status(_ctx(locale="en"))
@@ -277,10 +276,11 @@ async def test_knowledge_tools_end_to_end(tmp_path):
     status = await services.store.get(user_key="", store_key=f"module_init_status.{CHAT_KEY}")
     assert status == "ready"
 
-    keeper_raw = await services.store.get(user_key="", store_key=f"module_keeper_pool.{CHAT_KEY}")
-    player_raw = await services.store.get(user_key="", store_key=f"module_player_pool.{CHAT_KEY}")
-    assert SENTINEL in keeper_raw
-    assert SENTINEL not in player_raw  # red line: the sentinel must never reach the player-visible pool
+    keeper_view = await services.documents.get_view(CHAT_KEY, "module_pool", MODULE_POOL_ID, KEEPER_VIEWER)
+    player_view = await services.documents.get_view(CHAT_KEY, "module_pool", MODULE_POOL_ID, PLAYER_VIEWER)
+    assert SENTINEL in json.dumps(keeper_view, ensure_ascii=False)
+    # red line: the sentinel must never reach the player-visible projection
+    assert SENTINEL not in json.dumps(player_view, ensure_ascii=False)
 
     # -- 2. get_module_summary: keeper banner + sentinel + flagged keeper_only in a Toolset -----------
     toolset = Toolset(module_tools)
@@ -299,21 +299,21 @@ async def test_knowledge_tools_end_to_end(tmp_path):
     # `ModuleInitializer._build_knowledge_pools` (see core/module_initializer.py); only the
     # module-wide `clues` catalog starts empty, so unlocking a clue is what actually demonstrates a
     # keeper -> player move here.
-    player_before = json.loads(await services.store.get(user_key="", store_key=f"module_player_pool.{CHAT_KEY}"))
+    player_before = await services.documents.get_view(CHAT_KEY, "module_pool", MODULE_POOL_ID, PLAYER_VIEWER)
     assert player_before["clues"] == []
 
     unlock_result = await module_tools.unlock_for_player(ctx, element_type="clues", name="Human teeth in the lens")
     assert "✅" in unlock_result
 
-    player_after = json.loads(await services.store.get(user_key="", store_key=f"module_player_pool.{CHAT_KEY}"))
+    player_after = await services.documents.get_view(CHAT_KEY, "module_pool", MODULE_POOL_ID, PLAYER_VIEWER)
     assert any(clue["name"] == "Human teeth in the lens" for clue in player_after["clues"])
     assert SENTINEL not in json.dumps(player_after, ensure_ascii=False)  # still holds for this unlocked clue
 
     # -- 4. kp_note set/add/list round-trips -----------------------------------------------------------
     set_result = await note_tools.kp_note(ctx, action="set", category="current_scene", content="The Salt & Anchor Inn")
     assert "current_scene" in set_result
-    notes_raw = json.loads(await services.store.get(user_key="", store_key=f"kp_notes.{CHAT_KEY}"))
-    assert notes_raw["current_scene"] == "The Salt & Anchor Inn"
+    scene_doc = await services.documents.get_singleton(CHAT_KEY, "scene")
+    assert scene_doc is not None and scene_doc.data["name"] == "The Salt & Anchor Inn"
 
     add_result = await note_tools.kp_note(ctx, action="add", category="player_actions", content="Investigators search the tavern hearth.")
     assert "player_actions" in add_result
@@ -364,7 +364,7 @@ async def test_knowledge_tools_end_to_end(tmp_path):
     assert "✅" in delete_result
 
     assert await services.store.get(user_key="", store_key=f"module_init_status.{CHAT_KEY}") == ""
-    assert await services.store.get(user_key="", store_key=f"module_keeper_pool.{CHAT_KEY}") == ""
+    assert await services.documents.get_singleton(CHAT_KEY, "module_pool") is None
     assert await services.store.get(user_key="", store_key=f"module_fulltext.{CHAT_KEY}") == ""
     assert await services.store.get(user_key="", store_key=f"module_init_error.{CHAT_KEY}") == ""
 
