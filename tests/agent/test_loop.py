@@ -216,7 +216,10 @@ async def test_tool_result_is_fed_back_as_a_role_tool_message_with_matching_call
     # message plus a matching role="tool" reply appended to the conversation.
     assert len(llm.calls) == 2
     second_call_messages, second_call_tools = llm.calls[1]
-    assert second_call_tools == _toolset().schemas()
+    from agent.kp_tools_subsystems import subsystem_schemas
+    from core.rulepacks import load_rulepack
+
+    assert second_call_tools == [*_toolset().schemas(), *subsystem_schemas(load_rulepack("coc7"))]
 
     assistant_msg = next(m for m in second_call_messages if m.get("role") == "assistant" and "tool_calls" in m)
     tool_msg = next(m for m in second_call_messages if m.get("role") == "tool")

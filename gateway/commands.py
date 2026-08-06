@@ -26,7 +26,7 @@ from core.character_manager import (
 from core.character_rules import render_validation_notice, validate_sheet
 from core.check_outcome import CheckOutcome, outcome_wire
 from core.dice_engine import DiceResult
-from core.rulepacks import RulePack, load_rulepack
+from core.rulepacks import RulePack, all_command_words, load_rulepack
 from core.skills import available_skills
 from gateway.audio import build_audio_control, list_audio_items, resolve_audio_item, update_audio_item
 from gateway.avatar import AvatarError, set_target_avatar, set_user_avatar
@@ -570,11 +570,17 @@ class CommandRouter:
 
     async def cmd_sanity(self, ctx: CommandCtx) -> str:
         character = await ctx.services.characters.get_character(ctx.user_id, ctx.chat_key)
-        pack = load_rulepack("coc7")
-        parsed = _parse_coc_check_args(ctx.args or "0/1", pack, default_name="理智")
+        pack = _pack_for_character(character)
+        loss_spec = next(
+            (spec for spec in pack.subsystems.values() if spec.template == "check_with_loss"), None
+        )
+        if loss_spec is None or pack.resolver is None:
+            return ctx.i18n.t("commands.pack_word.not_in_system", word=ctx.spec.canonical)
+        stat_canonical = pack.resolve_skill(loss_spec.stat) or loss_spec.stat
+        parsed = _parse_coc_check_args(ctx.args or "0/1", pack, default_name=stat_canonical)
         loss_text = parsed.remaining or ctx.args or "0/1"
         success_loss, failure_loss = _parse_sanity_loss(loss_text)
-        san = _get_sheet_value(character, pack, "理智")
+        san = _get_sheet_value(character, pack, stat_canonical)
         variant = await _get_rule_variant(ctx)
         resolver = pack.resolver
         rolled = ctx.services.dice.roll_for_check(
@@ -588,11 +594,11 @@ class CommandRouter:
             loss = _roll_loss(ctx.services, loss_expr)
         except ValueError:
             return ctx.i18n.t("commands.roll.invalid", expr=loss_expr)
-        _set_sheet_value(character, pack, "理智", max(0, san - loss))
+        _set_sheet_value(character, pack, stat_canonical, max(0, san - loss))
         await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
         ctx.dice(
             "subsystem",
-            subsystem="sanity",
+            subsystem=loss_spec.id,
             expr=pack.display_name(parsed.canonical, ctx.locale),
             rolls=[rolled.total],
             total=rolled.total,
@@ -615,8 +621,8 @@ class CommandRouter:
             label=label,
             loss_expr=loss_expr,
             loss=loss,
-            san_before=san,
-            san_after=max(0, san - loss),
+            stat_before=san,
+            stat_after=max(0, san - loss),
             **({"variant": variant} if variant else {}),
             **({"difficulty": parsed.difficulty} if parsed.difficulty else {}),
         )
@@ -777,32 +783,68 @@ class CommandRouter:
         notice = render_validation_notice(ctx.i18n, violations)
         return f"{result}\n{notice}" if notice else result
 
-    async def cmd_setcoc(self, ctx: CommandCtx) -> str:
-        """`.setcoc [0-5|dg]` — select the room's house-rule ladder (a rulepack
-        `variants:` id; the dice-bot community dialect maps 1-5/dg onto them,
-        0 = the pack's default ladder). The bare query is open to anyone, but
-        changing the ladder regrades EVERY member's checks (a house rule), so
-        the write is keeper-gated in-handler — matching ``.bot``."""
-        pack = load_rulepack("coc7")
+    async def cmd_rule(self, ctx: CommandCtx) -> str:
+        """`.rule [<variant>|0|off]` — select the room rule system's house-rule
+        ladder (a rulepack `variants:` id; a bare digit maps onto the community
+        ``rule<N>`` naming, 0/off = the pack's default ladder). The bare query
+        is open to anyone and lists the pack's variants — including a warning
+        when the STORED variant no longer exists (e.g. a pack update dropped
+        it; checks then grade under the default ladder). Changing the ladder
+        regrades EVERY member's checks (a house rule), so the write is
+        keeper-gated in-handler — matching ``.bot``."""
+        from agent.kp_tools_subsystems import room_rulepack
+
+        pack = await room_rulepack(ctx.services, ctx.raw_ctx)
         resolver = pack.resolver
         known = set(resolver.variant_ids()) if resolver is not None else set()
         raw = ctx.args.strip().casefold()
-        if not raw:
+        if not raw or raw in {"list", "列表"}:
             current = await _get_rule_variant(ctx)
-            return ctx.i18n.t("commands.setcoc.current", rule=_variant_display(current))
+            lines = [ctx.i18n.t("commands.rule.current", rule=_variant_display(current))]
+            if current and current not in known:
+                lines.append(ctx.i18n.t("commands.rule.stored_invalid"))
+            if known:
+                lines.append(ctx.i18n.t("commands.rule.available", rules=", ".join(sorted(known))))
+            return "\n".join(lines)
 
-        if raw == "0":
+        if raw in {"0", "off", "default"}:
             variant = None
         elif raw.isdigit() and f"rule{raw}" in known:
             variant = f"rule{raw}"
         elif raw in known:
             variant = raw
         else:
-            return ctx.i18n.t("commands.setcoc.invalid")
+            return ctx.i18n.t("commands.rule.invalid", rules=", ".join(sorted(known)) or "-")
         if not _is_keeper(ctx.raw_ctx):
             return ctx.i18n.t("rooms.denied")
         await set_room_rule_variant(ctx.services.store, ctx.chat_key, variant)
-        return ctx.i18n.t("commands.setcoc.changed", rule=_variant_display(variant))
+        return ctx.i18n.t("commands.rule.changed", rule=_variant_display(variant))
+
+    async def cmd_pack_word(self, ctx: CommandCtx) -> str:
+        """A pack-declared dot-command dialect word (`.sc`, `.en`, `.ti`, …):
+        resolved through the ROOM's rule system — a word the room's pack does
+        not declare is refused, so a system without the mechanic simply does
+        not have the command (stage D materialization at the command layer)."""
+        from agent.kp_tools_subsystems import dispatch_subsystem, room_rulepack
+
+        pack = await room_rulepack(ctx.services, ctx.raw_ctx)
+        binding = pack.commands.get(ctx.spec.canonical)
+        if binding is None:
+            return ctx.i18n.t("commands.pack_word.not_in_system", word=ctx.spec.canonical)
+        if binding.action == "check":
+            return await self.cmd_check(ctx)
+        spec = pack.subsystems.get(binding.tool)
+        if spec is None:
+            return ctx.i18n.t("commands.pack_word.not_in_system", word=ctx.spec.canonical)
+        if spec.template == "check_with_loss":
+            return await self.cmd_sanity(ctx)
+        if spec.template == "improvement_check":
+            return await self.cmd_growth(ctx)
+        arguments = dict(binding.args)
+        if ctx.args.strip():
+            arguments.setdefault("table", ctx.args.strip())
+        result = await dispatch_subsystem(ctx.services, ctx.raw_ctx, pack, binding.tool, arguments)
+        return result if result is not None else ctx.i18n.t("commands.pack_word.not_in_system", word=ctx.spec.canonical)
 
     async def cmd_rename(self, ctx: CommandCtx) -> str:
         new_name = ctx.args.strip()
@@ -2197,6 +2239,22 @@ class CommandRouter:
         return ctx.i18n.t("commands.model.reset_done", provider=info["provider"], chat_model=info["chat_model"])
 
     def _build_specs(self) -> list[CommandSpec]:
+        specs = self._static_specs()
+        # Pack-declared dot-command dialect words (stage D): every word ANY
+        # discovered pack declares gets one spec routed through cmd_pack_word,
+        # which resolves it against the ROOM's pack at dispatch (a word the
+        # room's system doesn't declare is refused there). Words a static spec
+        # already claims (ra/rc on `check`) stay with that spec.
+        claimed = {word for spec in specs for word in (*spec.aliases_en, *spec.aliases_zh)}
+        for word in sorted(all_command_words()):
+            if word in claimed:
+                continue
+            specs.append(
+                CommandSpec(word, self.cmd_pack_word, [word], [word], None, "commands.help.pack_word")
+            )
+        return specs
+
+    def _static_specs(self) -> list[CommandSpec]:
         return [
             CommandSpec("roll", self.cmd_roll, ["roll", "r"], ["r", "rd"], {"name": "roll"}, "commands.help.roll"),
             CommandSpec(
@@ -2217,7 +2275,7 @@ class CommandRouter:
                 "commands.help.check",
             ),
             CommandSpec("opposed", self.cmd_opposed, ["opposed", "rav", "rcv"], ["rav", "rcv"], None, "commands.help.opposed"),
-            CommandSpec("sc", self.cmd_sanity, ["sc", "sanity"], ["sc"], {"name": "sc"}, "commands.help.sc"),
+
             CommandSpec("sheet", self.cmd_sheet, ["sheet", "st"], ["st"], {"name": "sheet"}, "commands.help.sheet"),
             CommandSpec(
                 "panel",
@@ -2253,7 +2311,6 @@ class CommandRouter:
                 "commands.help.unbind",
                 private_reply=True,
             ),
-            CommandSpec("growth", self.cmd_growth, ["growth", "en"], ["en"], None, "commands.help.growth"),
             CommandSpec("init", self.cmd_initiative, ["init", "initiative", "ri"], ["ri", "init"], {"name": "init"}, "commands.help.init"),
             CommandSpec("coc", self.cmd_make_char, ["coc", "coc7"], ["coc", "coc7"], {"name": "coc"}, "commands.help.coc"),
             CommandSpec("dnd", self.cmd_make_char, ["dnd", "dnd5e"], ["dnd", "dnd5e"], {"name": "dnd"}, "commands.help.dnd"),
@@ -2265,7 +2322,7 @@ class CommandRouter:
                 None,
                 "charcard.commands.genchar.help",
             ),
-            CommandSpec("setcoc", self.cmd_setcoc, ["setcoc"], ["setcoc"], {"name": "setcoc"}, "commands.help.setcoc"),
+            CommandSpec("rule", self.cmd_rule, ["rule"], ["rule", "规则"], {"name": "rule"}, "commands.help.rule"),
             CommandSpec("rename", self.cmd_rename, ["rename", "nn"], ["nn"], None, "commands.help.rename"),
             CommandSpec("jrrp", self.cmd_jrrp, ["jrrp", "luck"], ["jrrp"], None, "commands.help.jrrp"),
             CommandSpec("draw", self.cmd_draw, ["draw"], ["draw", "抽牌"], None, "commands.help.draw"),

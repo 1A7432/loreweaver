@@ -148,3 +148,14 @@ display:
     欺瞒: Deception
     威吓: Intimidation
     表演: Performance
+
+subsystems:
+  opposed_check:
+    template: opposed
+    display: {en: Opposed check, zh: 对抗检定}
+commands:
+  ra: {action: check}
+  rc: {action: check}
+expertise:
+  en: "# Dungeons & Dragons 5E — DM\nHeroic adventure across the three pillars: combat, exploration, and social play. Run tactical, readable combat and reward creative use of abilities. The engine computes checks, advantage/disadvantage, and criticals; you narrate from its results."
+  zh: "# 龙与地下城 5E——DM\n横跨战斗、探索、社交三大支柱的英雄冒险。把战斗跑得有战术、看得清，奖励对能力的创造性使用。检定、优势/劣势与大成功大失败由引擎计算；你按结果叙事。"

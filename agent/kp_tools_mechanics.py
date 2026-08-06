@@ -33,8 +33,6 @@ exempt from i18n, the same convention ``core`` already uses (see
 from __future__ import annotations
 
 import json
-import random
-import time
 
 from agent.context import AgentCtx
 from agent.services import Services, room_rule_variant
@@ -49,9 +47,8 @@ from core.character_manager import (
     set_hit_points,
 )
 from core.character_rules import render_validation_notice, validate_sheet
-from core.check_outcome import CheckOutcome, RollDetail, outcome_wire
+from core.check_outcome import CheckOutcome, outcome_wire
 from core.dice_engine import DiceResult
-from core.luck import adjust_check_with_luck, find_latest_character_check, is_luck_eligible_check
 from core.rulepacks import load_rulepack
 
 # COC7 base-attribute names, recognized by `skill_check` so "STR"/"POW"/...
@@ -79,56 +76,6 @@ _COC_ATTRIBUTE_ALIASES = {
 # display name "信用评级". CJK/EN game-data skill-name aliases, exempt from
 # i18n per the same convention as `core.character_manager.CharacterTemplate.synonyms`.
 _CREDIT_RATING_ALIASES = {"信用", "credit rating", "信用评级", "信誉"}
-
-# COC7 random-madness symptom tables, ported verbatim from plugin.py's
-# `random_madness`. Madness-table entries are CJK game data, explicitly
-# exempt from i18n (same convention `core` already uses).
-_MADNESS_SYMPTOMS: dict[str, list[str]] = {
-    "temp": [
-        "失忆：调查员会发现自己只记得最后身处的安全地点，却没有任何来到这里的记忆。",
-        "假性残疾：调查员陷入了心理性的失明、失聪或躯体缺失感中。",
-        "暴力倾向：调查员陷入了六亲不认的暴力行为中。",
-        "偏执：调查员陷入了严重的偏执妄想之中，所有人都想要伤害他。",
-        "人际依赖：调查员因为一些原因而将某人当作了支柱。",
-        "昏厥：调查员当场昏倒。",
-        "逃避行为：调查员会用任何手段试图逃离现场。",
-        "歇斯底里：调查员表现出大笑、哭泣、嘶吼、害怕等极端情绪反应。",
-    ],
-    "long": [
-        "恐惧症：调查员患上了一种恐惧症，如幽闭恐惧症、恐高症等。",
-        "躁狂症：调查员患上了一种躁狂症，如盗窃癖、纵火癖等。",
-        "幻觉：调查员持续产生幻觉。",
-        "偏执：调查员持续处于偏执状态。",
-        "解离性障碍：调查员的人格发生分裂或记忆丧失。",
-        "强迫症：调查员产生了强迫性的行为模式。",
-        "抑郁症：调查员陷入了严重的抑郁状态。",
-        "创伤后应激障碍：调查员因恐怖经历而产生持续的心理创伤。",
-    ],
-    "indefinite": [
-        "强烈的被迫害妄想，认为周围的一切都在针对自己。",
-        "无法控制的重复行为，如不断洗手、检查门锁等。",
-        "严重的解离症状，感觉自己不属于这个世界。",
-        "持续的噩梦和失眠，精神极度衰弱。",
-        "对某种颜色或声音的极度恐惧和排斥。",
-        "出现第二人格，完全不同于平时的自己。",
-        "失去对时间的感知，认为时间倒流或停滞。",
-        "坚信自己变成了某种非人生物。",
-    ],
-}
-
-# madness_type input (CN/EN aliases) -> canonical `_MADNESS_SYMPTOMS` key.
-_MADNESS_TYPE_ALIASES = {
-    "temp": "temp",
-    "临时": "temp",
-    "temporary": "temp",
-    "long": "long",
-    "总结": "long",
-    "总结性": "long",
-    "indefinite": "indefinite",
-    "不定": "indefinite",
-    "不定性": "indefinite",
-}
-
 
 async def _get_active_character(services: Services, ctx: AgentCtx) -> CharacterSheet:
     """Fetch `ctx`'s active character (a fresh, unsaved `"default"`-named sheet if none exists)."""
@@ -597,6 +544,59 @@ class DiceTools:
         await self._record_dice_roll(ctx, expression, result, actor=actor)
         return response
 
+    async def _pool_check(self, ctx: AgentCtx, i18n, params: dict, actor: str | None) -> str:
+        """Graded pool check for parameterized systems, under the ROOM's pack."""
+        from agent.kp_tools_subsystems import room_rulepack
+
+        pack = await room_rulepack(self.services, ctx)
+        resolver = pack.resolver
+        if resolver is None or not resolver.params:
+            return i18n.t("kp_tools.dice.pool.not_parameterized")
+        bounds = {spec.id: spec for spec in resolver.params}
+        cleaned: dict[str, int] = {}
+        for key, spec in bounds.items():
+            raw = params.get(key, spec.default)
+            if raw is None:
+                return i18n.t("kp_tools.dice.pool.missing_param", param=key)
+            try:
+                value = int(raw)
+            except (TypeError, ValueError):
+                return i18n.t("kp_tools.dice.pool.missing_param", param=key)
+            if isinstance(raw, bool) or not spec.minimum <= value <= spec.maximum:
+                return i18n.t(
+                    "kp_tools.dice.pool.out_of_range",
+                    param=key,
+                    minimum=spec.minimum,
+                    maximum=spec.maximum,
+                )
+            cleaned[key] = value
+        unknown = set(params) - set(bounds)
+        if unknown:
+            return i18n.t("kp_tools.dice.pool.unknown_param", param=", ".join(sorted(unknown)))
+
+        rolled = self.services.dice.roll_for_check(resolver, params=cleaned)
+        outcome = resolver.interpret(rolled, None)
+        level = pack.rank_label(outcome.rank.id, ctx.locale)
+        rolls_str = ", ".join(str(face) for face in rolled.dice)
+        ctx.emit_dice(
+            {
+                "kind": "check",
+                **({"actor": actor} if actor and actor.strip() else {}),
+                "expr": rolled.expression,
+                "rolls": list(rolled.dice),
+                "total": rolled.total,
+                "outcome": outcome_wire(outcome, level),
+                "detail": {**dict(rolled.modifiers), **cleaned},
+            }
+        )
+        lines = [
+            i18n.t("kp_tools.dice.pool.header", expr=rolled.expression),
+            i18n.t("kp_tools.dice.pool.rolls_line", rolls=rolls_str),
+            i18n.t("kp_tools.dice.pool.margin_line", count=outcome.margin if outcome.margin is not None else 0),
+            level,
+        ]
+        return "\n".join(lines)
+
     @tool
     async def skill_check(
         self,
@@ -608,6 +608,7 @@ class DiceTools:
         proficient: bool = False,
         actor: str | None = None,
         npc_target: int | None = None,
+        params: dict | None = None,
     ) -> str:
         """Run a skill check for the active character (auto-detects attribute/Credit-Rating checks).
 
@@ -618,6 +619,8 @@ class DiceTools:
             penalty: Penalty dice (COC) or disadvantage count (DND5E).
             dc: Difficulty class (DND5E only, defaults to 15).
             proficient: Whether the character is proficient in this skill (DND5E only).
+            params: Roll parameters for rule systems whose check declares them (e.g. a dice-pool
+                size and threshold), as an integer mapping. Omit for systems that don't.
             actor: ONLY for a non-player actor: copy the NPC/creature's exact stated name, without
                 added titles or roles. For a player character's check OMIT actor entirely — never
                 send actor="" or the player's name.
@@ -629,6 +632,10 @@ class DiceTools:
         dice = self.services.dice
 
         try:
+            if params:
+                # Pool-parameterized systems (the resolver declares {slot}s):
+                # the params ARE the whole input — no sheet required.
+                return await self._pool_check(ctx, i18n, params, actor)
             character = await _get_active_character(self.services, ctx)
             if not _has_character(character):
                 return i18n.t("kp_tools.character.none")
@@ -826,368 +833,6 @@ class DiceTools:
             return i18n.t("kp_tools.dice.skill_check.failed", error=str(exc))
 
     @tool
-    async def spend_luck(self, ctx: AgentCtx, points: int) -> str:
-        """Spend CoC7 Luck to adjust the active character's most recent eligible check —
-        the ONLY correct way to apply a Luck adjustment: it deterministically subtracts
-        points from the existing roll, never rerolls, never applies to SAN or Luck
-        checks, and never hand-edits LUC.
-
-        Args:
-            points: Positive number of Luck points to spend.
-        """
-        i18n = self.services.i18n.with_locale(ctx.locale)
-        if isinstance(points, bool) or not isinstance(points, int) or points <= 0:
-            return i18n.t("kp_tools.dice.luck.invalid_points")
-
-        try:
-            active_character = await _get_active_character(self.services, ctx)
-            if not _has_character(active_character):
-                return i18n.t("kp_tools.character.none")
-            if active_character.system != "CoC":
-                return i18n.t("kp_tools.dice.luck.coc_only")
-
-            session_key = "session_record.current"
-            for _attempt in range(2):
-                sheet_doc = await self.services.documents.get(
-                    ctx.chat_key, "sheet", active_character.name
-                )
-                raw_session = await self.services.store.state_get(ctx.chat_key, session_key)
-                if raw_session is None:
-                    return i18n.t("kp_tools.dice.luck.no_session")
-                if sheet_doc is None or sheet_doc.corrupt:
-                    return i18n.t("kp_tools.character.none")
-
-                character = CharacterSheet.from_dict(sheet_doc.data)
-                luck = int(character.attributes.get("LUC", 0) or 0)
-                if points > luck:
-                    return i18n.t("kp_tools.dice.luck.insufficient", points=points, luck=luck)
-
-                record = SessionRecord.from_dict(json.loads(raw_session))
-                check = find_latest_character_check(
-                    record.skill_checks, ctx.uid(), character.name
-                )
-                if check is None:
-                    return i18n.t("kp_tools.dice.luck.no_check")
-                if not is_luck_eligible_check(check):
-                    return i18n.t(
-                        "kp_tools.dice.luck.ineligible", skill=check.get("skill", "")
-                    )
-
-                pack = load_rulepack(active_character.system)
-                resolver = pack.resolver
-                check_variant = str(check.get("variant", "") or "") or None
-                check_difficulty = str(check.get("difficulty", "") or "") or None
-                check_target = int(check["target"])
-
-                def _grade(
-                    roll_value: int,
-                    *,
-                    _resolver=resolver,
-                    _target=check_target,
-                    _variant=check_variant,
-                    _difficulty=check_difficulty,
-                ):
-                    return _resolver.interpret(
-                        RollDetail("1d100", (roll_value,), roll_value),
-                        _target,
-                        variant=_variant,
-                        difficulty=_difficulty,
-                    ).rank
-
-                try:
-                    adjustment = adjust_check_with_luck(check, points, grade=_grade)
-                except ValueError as exc:
-                    code = str(exc)
-                    if code == "luck_cannot_adjust_fumble":
-                        return i18n.t("kp_tools.dice.luck.fumble")
-                    if code == "luck_points_exceed_roll":
-                        return i18n.t(
-                            "kp_tools.dice.luck.exceeds_roll",
-                            points=points,
-                            roll=int(check["roll"]),
-                            max=int(check["roll"]) - 1,
-                        )
-                    raise
-                luck_after = luck - points
-                character.attributes["LUC"] = luck_after
-                character.last_updated = time.time()
-                check["luck_before"] = luck
-                check["luck_after"] = luck_after
-                record.rebuild_player_stats()
-
-                new_session = json.dumps(record.to_dict(), ensure_ascii=False)
-                # The session record is the contended resource (double-spend guard):
-                # CAS it first, then persist the sheet document. Same-room tool calls
-                # are already serialized by the room turn lock; the CAS is the
-                # defense-in-depth retry trigger.
-                updated = await self.services.store.state_set_if_values(
-                    ctx.chat_key,
-                    expected=[(session_key, raw_session)],
-                    updates=[(session_key, new_session)],
-                )
-                if not updated:
-                    continue
-                await self.services.documents.put(
-                    ctx.chat_key,
-                    "sheet",
-                    active_character.name,
-                    dict(character.to_dict(), owner=sheet_doc.data.get("owner", ctx.uid())),
-                )
-
-                after_label = pack.rank_label(adjustment.after.id, ctx.locale)
-                check["label"] = after_label
-                after_outcome = resolver.interpret(
-                    RollDetail("1d100", (adjustment.after_roll,), adjustment.after_roll),
-                    check_target,
-                    variant=check_variant,
-                    difficulty=check_difficulty,
-                )
-                ctx.emit_dice(
-                    {
-                        "kind": "check",
-                        "expr": pack.display_name(str(check.get("skill", "")), ctx.locale),
-                        "skill": check.get("skill", ""),
-                        "rolls": [adjustment.after_roll],
-                        "total": adjustment.after_roll,
-                        "target": check_target,
-                        "effective_target": resolver.effective_target(check_target, difficulty=check_difficulty),
-                        "outcome": outcome_wire(after_outcome, after_label),
-                        "detail": {
-                            "bonus": int(check.get("bonus", 0) or 0),
-                            "penalty": int(check.get("penalty", 0) or 0),
-                            "raw_roll": int(check["raw_roll"]),
-                            "adjusted_roll": adjustment.after_roll,
-                            "luck_spent": adjustment.total_spent,
-                            "luck_remaining": luck_after,
-                        },
-                    }
-                )
-                return i18n.t(
-                    "kp_tools.dice.luck.success",
-                    points=points,
-                    before=pack.rank_label(adjustment.before.id, ctx.locale),
-                    after=after_label,
-                    luck=luck_after,
-                )
-            return i18n.t("kp_tools.dice.luck.conflict")
-        except CharacterDataError:
-            return i18n.t("kp_tools.character.data_error")
-        except Exception as exc:
-            return i18n.t("kp_tools.dice.luck.failed", error=str(exc))
-
-    @tool
-    async def sanity_check(self, ctx: AgentCtx, success_loss: str, failure_loss: str) -> str:
-        """Run a COC7 Sanity (SAN) check for the active character.
-
-        Args:
-            success_loss: Sanity-loss dice expression on success, e.g. "1", "1d4".
-            failure_loss: Sanity-loss dice expression on failure, e.g. "1d6", "1d100".
-        """
-        i18n = self.services.i18n.with_locale(ctx.locale)
-        characters = self.services.characters
-        dice = self.services.dice
-        try:
-            character = await _get_active_character(self.services, ctx)
-            if not _has_character(character):
-                return i18n.t("kp_tools.character.none")
-            if character.system != "CoC":
-                return i18n.t("kp_tools.dice.sanity.coc_only")
-
-            san_value = character.attributes.get("SAN", 50)
-            pack = load_rulepack(character.system)
-            resolver = pack.resolver
-            variant = await room_rule_variant(self.services.store, ctx.chat_key)
-            rolled = dice.roll_for_check(resolver)
-            outcome = resolver.interpret(rolled, san_value, variant=variant)
-
-            loss_expr = success_loss if outcome.rank.success else failure_loss
-            loss_result = dice.roll_expression(loss_expr)
-            loss = loss_result.total
-
-            if outcome.rank.fumble:
-                # Intentional house rule, not CoC7e RAW: a fumble drains ALL remaining SAN,
-                # rather than RAW's "loss = the max of the loss-dice range" (e.g. 1d6 -> 6).
-                # Faithfully ported from `nekro_trpg_dice_plugin/trpg_dice/plugin.py`'s
-                # `sanity_check` (`if result["level"] == "大失败": loss = san_value`, with
-                # its own comment "大失败时损失所有SAN" - "lose all SAN on a fumble") - this
-                # predates this port and is confirmed intentional, not an accidental
-                # divergence introduced here. Locked by
-                # `test_sanity_check_fumble_drains_all_remaining_san_house_rule`.
-                loss = san_value
-
-            new_san = max(0, san_value - loss)
-            character.attributes["SAN"] = new_san
-            await characters.save_character(ctx.uid(), ctx.chat_key, character)
-
-            level_label = pack.rank_label(outcome.rank.id, ctx.locale)
-            await self._record_check(
-                ctx,
-                character.name,
-                "SAN",
-                outcome,
-                label=level_label,
-                loss_expr=loss_expr,
-                loss=loss,
-                san_before=san_value,
-                san_after=new_san,
-                **({"variant": variant} if variant else {}),
-            )
-            san_max = character.attributes.get("SANMAX", 99)
-            ctx.emit_dice(
-                {
-                    "kind": "subsystem",
-                    "subsystem": "sanity",
-                    "expr": "SAN",
-                    "rolls": [rolled.total],
-                    "total": rolled.total,
-                    "target": san_value,
-                    "effective_target": resolver.effective_target(san_value),
-                    "outcome": outcome_wire(outcome, level_label),
-                    "detail": {
-                        **dict(rolled.modifiers),
-                        "loss_expr": loss_expr,
-                        "loss": loss,
-                        "remaining": new_san,
-                        "resource_max": san_max,
-                    },
-                }
-            )
-            header_key = (
-                "kp_tools.dice.sanity.header_success"
-                if outcome.rank.success
-                else "kp_tools.dice.sanity.header_failure"
-            )
-
-            lines = [
-                i18n.t(header_key, name=character.name),
-                i18n.t("kp_tools.dice.sanity.roll_line", san=san_value, roll=rolled.total),
-                i18n.t("kp_tools.dice.sanity.result_line", level=level_label),
-                i18n.t(
-                    "kp_tools.dice.sanity.loss_line",
-                    loss=loss,
-                    expr=loss_expr,
-                    detail=loss_result.format_result(i18n=i18n),
-                ),
-                i18n.t(
-                    "kp_tools.dice.sanity.remaining_line", san=new_san, sanmax=san_max
-                ),
-            ]
-            return "\n".join(lines)
-        except CharacterDataError:
-            return i18n.t("kp_tools.character.data_error")
-        except Exception as exc:
-            return i18n.t("kp_tools.dice.sanity.failed", error=str(exc))
-
-    @tool
-    async def skill_growth(self, ctx: AgentCtx, skill_name: str) -> str:
-        """Run a COC7 skill-growth (EN) check for the active character.
-
-        Args:
-            skill_name: Skill name.
-        """
-        i18n = self.services.i18n.with_locale(ctx.locale)
-        characters = self.services.characters
-        try:
-            character = await _get_active_character(self.services, ctx)
-            if not _has_character(character):
-                return i18n.t("kp_tools.character.none")
-
-            standard_name = characters.find_skill_by_alias(character, skill_name)
-            target_skill = standard_name if standard_name else skill_name
-            skill_value = character.skills.get(target_skill, 0)
-
-            if skill_value >= 100:
-                return i18n.t("kp_tools.dice.growth.maxed", skill=target_skill, value=skill_value)
-
-            roll = random.randint(1, 100)
-            # CoC7e experience check: the skill grows on a roll ABOVE the skill value, and
-            # a roll above 95 also always succeeds (so 96-100 grow even at high skill).
-            if roll > skill_value or roll > 95:
-                growth = random.randint(1, 10)
-                old_value = skill_value
-                new_value = min(100, skill_value + growth)
-                character.skills[target_skill] = new_value
-                await characters.save_character(ctx.uid(), ctx.chat_key, character)
-                return i18n.t(
-                    "kp_tools.dice.growth.success",
-                    name=character.name,
-                    skill=target_skill,
-                    roll=roll,
-                    old=old_value,
-                    new=new_value,
-                    delta=new_value - old_value,
-                )
-
-            return i18n.t(
-                "kp_tools.dice.growth.failure", name=character.name, skill=target_skill, roll=roll, value=skill_value
-            )
-        except CharacterDataError:
-            return i18n.t("kp_tools.character.data_error")
-        except Exception as exc:
-            return i18n.t("kp_tools.dice.growth.failed", error=str(exc))
-
-    @tool
-    async def opposed_check(
-        self,
-        ctx: AgentCtx,
-        skill1: str,
-        skill2: str,
-        skill1_value: int | None = None,
-        skill2_value: int | None = None,
-    ) -> str:
-        """Run a COC7 opposed check between the active character and an opponent.
-
-        Args:
-            skill1: The active side's skill name.
-            skill2: The passive side's skill name.
-            skill1_value: The active side's skill value (read off the active character if omitted).
-            skill2_value: The passive side's skill value (defaults to 50 if omitted).
-        """
-        i18n = self.services.i18n.with_locale(ctx.locale)
-        characters = self.services.characters
-        try:
-            character = await _get_active_character(self.services, ctx)
-            if not _has_character(character):
-                return i18n.t("kp_tools.character.none")
-
-            s1 = characters.get_skill_value(character, skill1) if skill1_value is None else skill1_value
-            s2 = character.skills.get(skill2, 50) if skill2_value is None else skill2_value
-
-            # Both sides roll and grade through the room system's compiled
-            # resolver; the opposed comparison is `Rank.tier` — the contract's
-            # ladder ordinal — then the raw skill values as the tiebreak.
-            pack = load_rulepack(character.system)
-            resolver = pack.resolver
-            variant = await room_rule_variant(self.services.store, ctx.chat_key)
-            rolled1 = self.services.dice.roll_for_check(resolver)
-            rolled2 = self.services.dice.roll_for_check(resolver)
-            outcome1 = resolver.interpret(rolled1, s1, variant=variant)
-            outcome2 = resolver.interpret(rolled2, s2, variant=variant)
-            name1 = pack.rank_label(outcome1.rank.id, ctx.locale)
-            name2 = pack.rank_label(outcome2.rank.id, ctx.locale)
-
-            if outcome1.rank.tier > outcome2.rank.tier:
-                winner = i18n.t("kp_tools.dice.opposed.winner_active", skill=skill1)
-            elif outcome2.rank.tier > outcome1.rank.tier:
-                winner = i18n.t("kp_tools.dice.opposed.winner_passive", skill=skill2)
-            elif s1 > s2:
-                winner = i18n.t("kp_tools.dice.opposed.winner_active_tiebreak", skill=skill1)
-            elif s2 > s1:
-                winner = i18n.t("kp_tools.dice.opposed.winner_passive_tiebreak", skill=skill2)
-            else:
-                winner = i18n.t("kp_tools.dice.opposed.tie")
-
-            lines = [
-                i18n.t("kp_tools.dice.opposed.header", skill1=skill1, skill2=skill2),
-                i18n.t("kp_tools.dice.opposed.active_line", skill=skill1, value=s1, roll=rolled1.total, level=name1),
-                i18n.t("kp_tools.dice.opposed.passive_line", skill=skill2, value=s2, roll=rolled2.total, level=name2),
-                i18n.t("kp_tools.dice.opposed.result_line", winner=winner),
-            ]
-            return "\n".join(lines)
-        except Exception as exc:
-            return i18n.t("kp_tools.dice.opposed.failed", error=str(exc))
-
-    @tool
     async def hp_manager(self, ctx: AgentCtx, action: str, value: int = 0) -> str:
         """Manage the active character's hit points.
 
@@ -1236,77 +881,6 @@ class DiceTools:
             return i18n.t("kp_tools.character.data_error")
         except Exception as exc:
             return i18n.t("kp_tools.dice.hp.failed", error=str(exc))
-
-    @tool
-    async def wod_check(self, ctx: AgentCtx, pool_size: int, difficulty: int = 6) -> str:
-        """Run a World of Darkness dice-pool check.
-
-        Args:
-            pool_size: Number of d10s in the pool.
-            difficulty: Difficulty threshold (defaults to 6).
-        """
-        i18n = self.services.i18n.with_locale(ctx.locale)
-        pack = load_rulepack("wod")
-        resolver = pack.resolver
-        # Reject wildly out-of-range inputs with a clear message (the pack's own
-        # declared param bounds) instead of silently clamping a model-supplied value.
-        bounds = {spec.id: spec for spec in resolver.params}
-        pool_spec, diff_spec = bounds["pool"], bounds["difficulty"]
-        if (
-            not isinstance(pool_size, int)
-            or isinstance(pool_size, bool)
-            or not pool_spec.minimum <= pool_size <= pool_spec.maximum
-            or not isinstance(difficulty, int)
-            or isinstance(difficulty, bool)
-            or not diff_spec.minimum <= difficulty <= diff_spec.maximum
-        ):
-            return i18n.t(
-                "kp_tools.dice.wod.out_of_range",
-                max_pool=pool_spec.maximum,
-                min_difficulty=diff_spec.minimum,
-                max_difficulty=diff_spec.maximum,
-            )
-        try:
-            rolled = self.services.dice.roll_for_check(
-                resolver, params={"pool": pool_size, "difficulty": difficulty}
-            )
-            outcome = resolver.interpret(rolled, None)
-            rolls_str = ", ".join(str(face) for face in rolled.dice)
-            level = pack.rank_label(outcome.rank.id, ctx.locale)
-
-            ctx.emit_dice(
-                {
-                    "kind": "check",
-                    "expr": rolled.expression,
-                    "rolls": list(rolled.dice),
-                    "total": rolled.total,
-                    "outcome": outcome_wire(outcome, level),
-                    "detail": dict(rolled.modifiers),
-                }
-            )
-            lines = [
-                i18n.t("kp_tools.dice.wod.header", pool=pool_size, difficulty=difficulty),
-                i18n.t("kp_tools.dice.wod.rolls_line", rolls=rolls_str),
-                i18n.t("kp_tools.dice.wod.successes_line", count=outcome.margin),
-                level,
-            ]
-            return "\n".join(lines)
-        except Exception as exc:
-            return i18n.t("kp_tools.dice.wod.failed", error=str(exc))
-
-    @tool
-    async def random_madness(self, ctx: AgentCtx, madness_type: str = "temp") -> str:
-        """Generate a random COC7 madness symptom, for the KP/DM to use as needed.
-
-        Args:
-            madness_type: Madness category (temp/临时, long/总结, indefinite/不定).
-        """
-        i18n = self.services.i18n.with_locale(ctx.locale)
-        key = _MADNESS_TYPE_ALIASES.get(madness_type.lower(), "temp")
-        symptom = random.choice(_MADNESS_SYMPTOMS[key])
-        type_label = i18n.t(f"kp_tools.dice.madness.type.{key}")
-        return i18n.t("kp_tools.dice.madness.result", type_label=type_label, symptom=symptom)
-
 
 class InitiativeTools:
     """AI-KP tool for tracking combat initiative order."""

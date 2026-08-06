@@ -179,4 +179,4 @@ async def test_coc_command_roll_check_opposed_and_sanity_are_recorded_structural
     assert san["skill"] == "SAN"
     assert san["loss_expr"] in {"0", "1d4"}
     assert isinstance(san["loss"], int)
-    assert san["san_before"] >= san["san_after"]
+    assert san["stat_before"] >= san["stat_after"]

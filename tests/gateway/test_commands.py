@@ -91,8 +91,8 @@ async def test_en_commands_roll_inline_setcoc_make_and_check():
     assert "Inline" in inline
     assert _total(inline) == 7
 
-    setcoc = await router.dispatch(ctx, "/setcoc 2")
-    assert setcoc == "CoC rule set to 2."
+    setcoc = await router.dispatch(ctx, "/rule 2")
+    assert setcoc == "House-rule ladder set to 2"
     assert await services.store.state_get("cli:dm:t", "rule_variant") == "rule2"
 
     created = await router.dispatch(ctx, "/coc")
@@ -162,8 +162,8 @@ async def test_zh_commands_roll_check_sheet_fullwidth_and_setcoc():
     assert fullwidth is not None
     assert _total(fullwidth) == 12
 
-    setcoc = await router.dispatch(ctx, ".setcoc 2")
-    assert setcoc == "CoC 房规已设为 2。"
+    setcoc = await router.dispatch(ctx, ".rule 2")
+    assert setcoc == "房规阶梯已设为 2"
     assert await services.store.state_get("cli:dm:t", "rule_variant") == "rule2"
 
 

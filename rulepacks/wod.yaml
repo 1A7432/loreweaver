@@ -27,3 +27,9 @@ labels:
     botch: [大失败]
     fail: {display: 失败, markers: []}
     success: {display: 成功, markers: []}
+
+commands:
+  ra: {action: check}
+expertise:
+  en: "# World of Darkness — Storyteller\nPersonal horror: the character's inner moral conflict is the story; keep Humanity and Willpower under pressure. The engine computes dice pools; you narrate from its results."
+  zh: "# 黑暗世界——ST\n个人恐怖：角色内心的道德冲突就是故事本身；让人性与意志持续承压。骰池由引擎计算；你按结果叙事。"

@@ -32,12 +32,11 @@ _FORBIDDEN_IMPORTS = {"core.coc_rules"}
 
 # file name -> why it is still coupled; the M16 stage that clears it.
 SYSTEM_TOKEN_ALLOWLIST: dict[str, str] = {
-    "companion_actor.py": "stage D: per-system sheet template hints in the companion prompt",
+    "companion_actor.py": "stage B: per-system sheet VITALS formatting (the resources seam)",
     "forge.py": "stage E: forge references built-in systems as generation examples",
     "kp_tools_charcard.py": "stage B: sheet-from-card fills per-system vitals",
     "kp_tools_companion.py": "stage B: companion sheet creation branches per system",
     "kp_tools_mechanics.py": "stage B/D: per-system tool branches + attribute alias data (resolution itself is pack-compiled)",
-    "loop.py": "stage D: dice tool-name lists (wod_check/sanity_check) pending materialization",
 }
 
 IMPORT_ALLOWLIST: dict[str, str] = {}

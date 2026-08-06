@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from core.resolution import CheckResolver, compile_resolution
+from core.subsystems import SubsystemSpec, parse_subsystems
 from core.yaml_safety import safe_load_no_aliases
 
 logger = logging.getLogger(__name__)
@@ -353,6 +354,16 @@ class RankLabel:
 
 
 @dataclass(frozen=True)
+class CommandBinding:
+    """One dot-command dialect word's binding: either the generic ``check``
+    action or a pack-declared subsystem tool (with optional preset args)."""
+
+    action: str = ""  # "check" | "" (tool binding)
+    tool: str = ""  # a subsystems: key
+    args: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class RulePack:
     """Loaded command rule-pack with flattened alias resolution."""
 
@@ -368,6 +379,9 @@ class RulePack:
     display: dict[str, dict[str, str]] = field(default_factory=dict)
     labels: dict[str, dict[str, RankLabel]] = field(default_factory=dict)
     resolver: CheckResolver | None = None
+    subsystems: dict[str, SubsystemSpec] = field(default_factory=dict)
+    expertise: dict[str, str] = field(default_factory=dict)
+    commands: dict[str, CommandBinding] = field(default_factory=dict)
 
     def resolve_skill(self, name: str) -> str | None:
         """Resolve a player-entered skill/attribute name to this pack's canonical key."""
@@ -394,6 +408,11 @@ class RulePack:
             if table and rank_id in table:
                 return table[rank_id].display
         return rank_id
+
+    def expertise_text(self, locale: str) -> str:
+        """The pack's per-locale keeper-expertise prompt text ("" when undeclared)."""
+        base = str(locale or "en").replace("_", "-").split("-")[0].casefold()
+        return self.expertise.get(base) or self.expertise.get("en") or ""
 
 
 def _build_alias_map(alias: Mapping[str, Any]) -> dict[str, str]:
@@ -471,7 +490,50 @@ def _build_rulepack(pack_id: str, data: Mapping[str, Any]) -> RulePack:
         display=_parse_display_section(pack_id, data.get("display")),
         labels=_parse_labels_section(pack_id, data.get("labels")),
         resolver=compile_resolution(pack_id, data["resolution"]) if data.get("resolution") is not None else None,
+        subsystems=parse_subsystems(pack_id, data.get("subsystems")),
+        expertise=_parse_expertise_section(pack_id, data.get("expertise")),
+        commands=_parse_commands_section(pack_id, data.get("commands"), data.get("subsystems") or {}),
     )
+
+
+def _parse_commands_section(pack_id: str, raw: Any, subsystems_raw: Mapping[str, Any]) -> dict[str, CommandBinding]:
+    """Parse a pack's dot-command dialect table (``word -> binding``)."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"rulepack '{pack_id}': 'commands' must be a mapping of word -> binding")
+    bindings: dict[str, CommandBinding] = {}
+    for word, spec in raw.items():
+        word_key = str(word).strip().casefold()
+        if not word_key:
+            raise ValueError(f"rulepack '{pack_id}': 'commands' has an empty word")
+        if not isinstance(spec, Mapping):
+            raise ValueError(f"rulepack '{pack_id}': commands.{word_key} must be a mapping")
+        unknown = set(spec) - {"action", "tool", "args"}
+        if unknown:
+            raise ValueError(f"rulepack '{pack_id}': commands.{word_key} has unknown keys {sorted(unknown)}")
+        action = str(spec.get("action") or "")
+        tool = str(spec.get("tool") or "")
+        if bool(action) == bool(tool):
+            raise ValueError(f"rulepack '{pack_id}': commands.{word_key} needs exactly one of action/tool")
+        if action and action != "check":
+            raise ValueError(f"rulepack '{pack_id}': commands.{word_key}.action must be 'check'")
+        if tool and tool not in subsystems_raw:
+            raise ValueError(f"rulepack '{pack_id}': commands.{word_key}.tool names an undeclared subsystem {tool!r}")
+        args = spec.get("args") or {}
+        if not isinstance(args, Mapping):
+            raise ValueError(f"rulepack '{pack_id}': commands.{word_key}.args must be a mapping")
+        bindings[word_key] = CommandBinding(action=action, tool=tool, args=dict(args))
+    return bindings
+
+
+def _parse_expertise_section(pack_id: str, raw: Any) -> dict[str, str]:
+    """Parse a pack's per-locale ``expertise:`` prompt text (locale -> str)."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"rulepack '{pack_id}': 'expertise' must be a mapping of locale -> text")
+    return {str(locale).casefold(): str(text) for locale, text in raw.items() if str(text).strip()}
 
 
 MAX_EXTENDS_DEPTH = 4
@@ -715,6 +777,24 @@ def all_check_terms() -> frozenset[str]:
         for table in pack.display.values():
             terms.update(table.values())
     return frozenset(term.strip() for term in terms if isinstance(term, str) and len(term.strip()) >= 2)
+
+
+def all_command_words() -> frozenset[str]:
+    """Every dot-command dialect word any discovered pack declares."""
+    words: set[str] = set()
+    for pack in _discover_registry().values():
+        words.update(pack.commands)
+    return frozenset(words)
+
+
+def all_subsystem_tool_names() -> frozenset[str]:
+    """Every subsystem tool name any discovered pack declares — the loop's
+    dice-first detectors treat these as dice tools (same union pattern as
+    `all_check_terms`)."""
+    names: set[str] = set()
+    for pack in _discover_registry().values():
+        names.update(pack.subsystems)
+    return frozenset(names)
 
 
 def all_outcome_labels() -> frozenset[str]:

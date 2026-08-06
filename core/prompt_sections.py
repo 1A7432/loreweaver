@@ -321,18 +321,24 @@ async def inject_game_state_prompt(ctx: Any, character_manager: Any, store: Stor
 
 
 async def inject_system_expertise_prompt(ctx: Any, character_manager: Any, i18n: I18n) -> str:
-    """Game-system-specific Keeper/DM guidance (CoC7 / DnD5e / WoD / generic fallback)."""
+    """The room system's keeper-expertise guidance — the PACK's per-locale
+    ``expertise:`` text (stage D: prompts are pack data), falling back to the
+    generic game-master framing for systems that declare none."""
     try:
+        from core.rulepacks import load_rulepack
+
         user_id = ctx.user_id
         character = await character_manager.get_character(user_id, ctx.chat_key)
-        game_system = character.system if character else "CoC"
-
-        if game_system == "CoC":
-            return i18n.t("prompt.expertise.coc")
-        if game_system == "DnD5e":
-            return i18n.t("prompt.expertise.dnd5e")
-        if game_system == "WoD":
-            return i18n.t("prompt.expertise.wod")
+        system = character.system if character and getattr(character, "system", "") else ""
+        try:
+            pack = load_rulepack(system) if system else None
+        except Exception:
+            pack = None
+        if pack is not None:
+            locale = getattr(i18n, "locale", "") or getattr(ctx, "locale", "") or ""
+            text = pack.expertise_text(locale)
+            if text:
+                return text
         return i18n.t("prompt.expertise.generic")
 
     except Exception:

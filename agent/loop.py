@@ -23,6 +23,7 @@ prompt carries — see ``agent/prompt_builder.py``).
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import re
@@ -34,13 +35,20 @@ from functools import lru_cache
 
 from agent.context import AgentCtx
 from agent.hook_runtime import apply_hook_writes, load_room_hook_engine
+from agent.kp_tools_subsystems import dispatch_subsystem, room_rulepack, subsystem_schemas
 from agent.prompt_builder import build_system_prompt
 from agent.services import Services
 from agent.session_recap import maybe_refresh_session_recap
 from agent.tools import Toolset
 from core.hooks import MAX_PANEL_EVENTS_PER_TURN
 from core.mvu_compat import mvu_apply_text
-from core.rulepacks import all_check_terms, all_outcome_labels
+from core.rulepacks import (
+    RulePack,
+    all_check_terms,
+    all_command_words,
+    all_outcome_labels,
+    all_subsystem_tool_names,
+)
 from core.skills import unlocked_tools_for
 from infra.i18n import t
 from infra.llm import ChatResult, Usage
@@ -95,18 +103,15 @@ _CORRECTIVE_MAX_ROUNDS = 2
 _STATE_CORRECTIVE_MAX_ROUNDS = 3
 
 # Tools that resolve real dice outcomes. If any fired this turn, the check was
-# rolled or deterministically adjusted, so no correction is needed.
-_DICE_TOOL_NAMES = frozenset(
-    {
-        "skill_check",
-        "sanity_check",
-        "roll_dice",
-        "opposed_check",
-        "skill_growth",
-        "wod_check",
-        "spend_luck",
-    }
-)
+# rolled or deterministically adjusted, so no correction is needed. The engine
+# names only its own generic tools; every pack-declared subsystem tool joins
+# at runtime (`core.rulepacks.all_subsystem_tool_names` — the same union
+# pattern as `all_check_terms`).
+_BASE_DICE_TOOL_NAMES = frozenset({"skill_check", "roll_dice"})
+
+
+def _dice_tool_names() -> frozenset[str]:
+    return _BASE_DICE_TOOL_NAMES | all_subsystem_tool_names()
 
 # Tools that update the deterministic HUD/world-state fields. A scene transition
 # narrated only in prose leaves the HUD reading stale `kp_notes` / `game_clock`
@@ -247,10 +252,22 @@ class _ReplyStreamGate:
         self._tasks.append(asyncio.ensure_future(self._emit(frame)))
 
 
-_DICE_COMMAND_RE = re.compile(
-    r"(?<![0-9A-Za-z])[./](?:ra|rah|rav|rab|rap|rc|sc|sca|en|ti|li|rd|ww|wod|roll)\b",
-    re.IGNORECASE,
-)
+# Generic dice-bot ecosystem command forms the model may emit as text (language,
+# not rules); every pack-declared dialect word joins at runtime.
+_BASE_DICE_COMMAND_WORDS = ("rah", "rav", "rab", "rap", "rd", "sca", "roll", "r")
+
+
+def _dice_command_re() -> re.Pattern[str]:
+    words = sorted({*_BASE_DICE_COMMAND_WORDS, *all_command_words()}, key=len, reverse=True)
+    return _compiled_dice_command_re(tuple(words))
+
+
+@functools.lru_cache(maxsize=4)
+def _compiled_dice_command_re(words: tuple[str, ...]) -> re.Pattern[str]:
+    return re.compile(
+        r"(?<![0-9A-Za-z])[./](?:" + "|".join(re.escape(word) for word in words) + r")\b",
+        re.IGNORECASE,
+    )
 # English "you (the player) roll it" imperatives.
 _ROLL_REQUEST_EN_RE = re.compile(
     r"\b(?:please\s+(?:roll|make)"
@@ -514,7 +531,7 @@ def _reply_states_a_dice_outcome(reply: str) -> bool:
 def _dice_rolled(tool_trace: list[dict]) -> bool:
     """True if any real dice-rolling tool fired during this turn."""
     return any(
-        entry.get("name") in _DICE_TOOL_NAMES and not entry.get("suppressed")
+        entry.get("name") in _dice_tool_names() and not entry.get("suppressed")
         for entry in tool_trace
     )
 
@@ -572,7 +589,7 @@ def _reply_requests_or_resolves_check(reply: str) -> bool:
     """
     if not reply:
         return False
-    if _DICE_COMMAND_RE.search(reply) or _ROLL_REQUEST_EN_RE.search(reply) or _ROLL_REQUEST_ZH_RE.search(reply):
+    if _dice_command_re().search(reply) or _ROLL_REQUEST_EN_RE.search(reply) or _ROLL_REQUEST_ZH_RE.search(reply):
         return True
     # A stated dice result counts however it is written. The success-LEVEL
     # vocabulary below misses any result phrased without a level word -- a live
@@ -737,6 +754,11 @@ async def run_kp_turn(
     # `toolset.schemas()`/`toolset.dispatch()` behave exactly as before gating
     # existed -- see `Toolset.schemas`'s docstring.
     unlocked = await unlocked_tools_for(services.store, ctx.chat_key)
+    # Stage D tool materialization: the room's rulepack declares which subsystem
+    # tools exist here (a system that declares none materializes none), and their
+    # schemas ride alongside the static toolset for this turn.
+    room_pack = await room_rulepack(services, ctx)
+    subsystem_tools = subsystem_schemas(room_pack)
 
     key = history_key or "chat_history"
     history = await _load_history(services, ctx.chat_key, key)
@@ -768,7 +790,7 @@ async def run_kp_turn(
             result = await _chat_with_continuation_cleanup(
                 services,
                 messages,
-                tools=toolset.schemas(unlocked),
+                tools=[*toolset.schemas(unlocked), *subsystem_tools],
                 tool_choice="auto",
                 temperature=services.settings.llm.temperature,
                 on_text_delta=gate.feed if gate is not None else None,
@@ -816,6 +838,7 @@ async def run_kp_turn(
                     messages,
                     tool_trace,
                     unlocked,
+                    room_pack=room_pack,
                     max_dice_calls=0 if dice_forbidden else None,
                     dice_policy_suppressed=dice_forbidden,
                 )
@@ -854,6 +877,8 @@ async def run_kp_turn(
             user_message,
             i18n,
             unlocked,
+            room_pack=room_pack,
+            subsystem_tools=subsystem_tools,
             temperature=services.settings.llm.temperature,
         )
 
@@ -873,6 +898,7 @@ async def run_kp_turn(
             pre_correction_reply,
             i18n,
             unlocked,
+            room_pack=room_pack,
             temperature=services.settings.llm.temperature,
         )
 
@@ -1318,6 +1344,7 @@ async def _dispatch_and_record(
     tool_trace: list[dict],
     unlocked: set[str] | None = None,
     *,
+    room_pack: RulePack | None = None,
     max_dice_calls: int | None = None,
     dice_policy_suppressed: bool = False,
 ) -> None:
@@ -1335,7 +1362,7 @@ async def _dispatch_and_record(
     for call in result.tool_calls:
         suppress_extra_dice = (
             max_dice_calls is not None
-            and call.name in _DICE_TOOL_NAMES
+            and call.name in _dice_tool_names()
             and dice_calls_dispatched >= max_dice_calls
         )
         duplicate_initiative_next = (
@@ -1381,8 +1408,14 @@ async def _dispatch_and_record(
             tool_result = t("kp_tools.know.session.event_duplicate", locale=ctx.locale)
             suppressed = True
         else:
-            tool_result = await toolset.dispatch(call.name, ctx, call.arguments, unlocked)
-            if call.name in _DICE_TOOL_NAMES:
+            tool_result = (
+                await dispatch_subsystem(services, ctx, room_pack, call.name, call.arguments)
+                if room_pack is not None
+                else None
+            )
+            if tool_result is None:
+                tool_result = await toolset.dispatch(call.name, ctx, call.arguments, unlocked)
+            if call.name in _dice_tool_names():
                 dice_calls_dispatched += 1
         trace_entry = {
             "name": call.name,
@@ -1410,6 +1443,8 @@ async def _run_dice_correction(
     i18n,
     unlocked: set[str] | None = None,
     *,
+    room_pack: RulePack | None = None,
+    subsystem_tools: list[dict] | None = None,
     temperature: float | None,
 ) -> str:
     """One bounded, one-shot corrective phase that FORCES a dice resolution, then re-narrates.
@@ -1419,8 +1454,8 @@ async def _run_dice_correction(
     on 0 turns. So the FIRST corrective round now compels a tool call via
     `tool_choice="required"` (the OpenAI-compatible "must call some tool" value):
     the model MUST call a tool, and the accompanying instruction directs it to
-    skill_check / sanity_check / roll_dice / opposed_check to resolve the pending
-    check. If a real dice tool fires, one more NORMAL (`tool_choice="auto"`) round
+    the room's dice tools (skill_check / roll_dice / the pack's materialized
+    subsystem tools) to resolve the pending check. If a real dice tool fires, one more NORMAL (`tool_choice="auto"`) round
     narrates the graded outcome.
 
     The nudge quotes `user_message` -- THE CURRENT player's just-submitted action --
@@ -1458,7 +1493,7 @@ async def _run_dice_correction(
             result = await _chat_with_continuation_cleanup(
                 services,
                 convo,
-                tools=toolset.schemas(unlocked),
+                tools=[*toolset.schemas(unlocked), *(subsystem_tools or [])],
                 tool_choice="required" if forced else "auto",
                 temperature=temperature,
             )
@@ -1481,7 +1516,7 @@ async def _run_dice_correction(
                 result = await _chat_with_continuation_cleanup(
                     services,
                     convo,
-                    tools=toolset.schemas(unlocked),
+                    tools=[*toolset.schemas(unlocked), *(subsystem_tools or [])],
                     tool_choice="auto",
                     temperature=temperature,
                 )
@@ -1492,7 +1527,7 @@ async def _run_dice_correction(
         if result.tool_calls:
             try:
                 real_correction_dice = sum(
-                    entry.get("name") in _DICE_TOOL_NAMES and not entry.get("suppressed")
+                    entry.get("name") in _dice_tool_names() and not entry.get("suppressed")
                     for entry in tool_trace[correction_start:]
                 )
                 await _dispatch_and_record(
@@ -1503,6 +1538,7 @@ async def _run_dice_correction(
                     convo,
                     tool_trace,
                     unlocked,
+                    room_pack=room_pack,
                     max_dice_calls=max(0, 1 - real_correction_dice),
                 )
             except (asyncio.CancelledError, Exception):
@@ -1537,6 +1573,7 @@ async def _run_state_correction(
     i18n,
     unlocked: set[str] | None = None,
     *,
+    room_pack: RulePack | None = None,
     temperature: float | None,
 ) -> str:
     """One bounded repair pass for prose-only scene/time transitions.
@@ -1589,7 +1626,7 @@ async def _run_state_correction(
                 return prior_reply
         if result.tool_calls:
             try:
-                await _dispatch_and_record(toolset, ctx, services, result, convo, tool_trace, unlocked)
+                await _dispatch_and_record(toolset, ctx, services, result, convo, tool_trace, unlocked, room_pack=room_pack)
             except (asyncio.CancelledError, Exception):
                 _clear_llm_continuation(services, convo)
                 raise
@@ -1648,7 +1685,7 @@ async def _run_reply_hooks(
         rolls = [
             {"tool": item.get("name", ""), "result": str(item.get("result", ""))[:200]}
             for item in tool_trace
-            if item.get("name") in _DICE_TOOL_NAMES
+            if item.get("name") in _dice_tool_names()
         ]
         if rolls:
             outcome = engine.fire("dice_rolled", {"rolls": rolls})

@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import json
 import random
+from types import SimpleNamespace
 
 import pytest
 
 from agent.context import AgentCtx
-from agent.kp_tools_mechanics import _MADNESS_SYMPTOMS, CharacterTools, DiceTools, InitiativeTools
+from agent.kp_tools_mechanics import CharacterTools, DiceTools, InitiativeTools
+from agent.kp_tools_subsystems import dispatch_subsystem, subsystem_schemas
 from agent.services import Services, build_services
 from agent.tools import Toolset
 from core.check_outcome import RollDetail
@@ -24,6 +26,11 @@ from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.i18n import I18n
 from infra.llm import FakeLLM
+
+
+async def _run_sub(services: Services, ctx: AgentCtx, name: str, **args):
+    """Dispatch a pack-materialized subsystem tool the way the loop does."""
+    return await dispatch_subsystem(services, ctx, load_rulepack("coc7"), name, args)
 
 
 def _build() -> tuple[Services, AgentCtx]:
@@ -37,7 +44,7 @@ def _build() -> tuple[Services, AgentCtx]:
 # ---------------------------------------------------------------------------
 
 
-def test_toolset_collects_all_eighteen_tools_and_none_are_keeper_only():
+def test_toolset_collects_all_twelve_static_tools_and_none_are_keeper_only():
     services, _ctx = _build()
     toolset = Toolset(CharacterTools(services), DiceTools(services), InitiativeTools(services))
 
@@ -52,20 +59,14 @@ def test_toolset_collects_all_eighteen_tools_and_none_are_keeper_only():
         "update_character_status",
         "roll_dice",
         "skill_check",
-        "spend_luck",
-        "sanity_check",
-        "skill_growth",
-        "opposed_check",
         "hp_manager",
-        "wod_check",
-        "random_madness",
         "initiative_tracker",
     }
-    assert len(expected_names) == 18
+    assert len(expected_names) == 12
     assert set(toolset.names()) == expected_names
 
     schemas = toolset.schemas()
-    assert len(schemas) == 18
+    assert len(schemas) == 12
     for name in expected_names:
         assert toolset.is_keeper_only(name) is False
 
@@ -573,15 +574,20 @@ async def test_room_roster_actor_name_is_attributed_to_player_for_checks_and_pla
 # ---------------------------------------------------------------------------
 
 
-async def test_sanity_check_requires_the_coc_system():
+async def test_subsystem_tools_materialize_only_from_the_declaring_pack():
+    """Stage D materialization: a subsystem tool exists exactly where the pack
+    declares it — schema absent AND dispatch falls through elsewhere."""
     services, ctx = _build()
-    char_tools = CharacterTools(services)
-    dice_tools = DiceTools(services)
-    await char_tools.create_character(ctx, name="Thorin", system="dnd5e", auto_generate=False)
 
-    result = await dice_tools.sanity_check(ctx, success_loss="1", failure_loss="1d6")
+    coc_names = {schema["function"]["name"] for schema in subsystem_schemas(load_rulepack("coc7"))}
+    dnd_names = {schema["function"]["name"] for schema in subsystem_schemas(load_rulepack("dnd5e"))}
+    assert {"sanity_check", "skill_growth", "spend_luck", "opposed_check", "random_madness"} <= coc_names
+    assert "sanity_check" not in dnd_names and "random_madness" not in dnd_names
 
-    assert "COC7" in result
+    undeclared = await dispatch_subsystem(
+        services, ctx, load_rulepack("dnd5e"), "sanity_check", {"success_loss": "1", "failure_loss": "1d6"}
+    )
+    assert undeclared is None  # the loop falls through to the static toolset (unknown tool)
 
 
 async def test_sanity_check_updates_san_deterministically():
@@ -597,7 +603,7 @@ async def test_sanity_check_updates_san_deterministically():
     expected_san = max(0, 50 - expected_loss)
 
     seed_dice(11)
-    result = await dice_tools.sanity_check(ctx, success_loss="0", failure_loss="0")
+    result = await _run_sub(services, ctx, "sanity_check", success_loss="0", failure_loss="0")
 
     assert f"{expected_san}/99" in result
     sheet = await char_tools.get_character_sheet(ctx)
@@ -613,7 +619,7 @@ async def test_sanity_check_records_roll_rank_and_structured_loss():
     before = await services.characters.get_character(ctx.uid(), ctx.chat_key)
     assert before is not None
     seed_dice(5)
-    await dice_tools.sanity_check(ctx, success_loss="1", failure_loss="1d6")
+    await _run_sub(services, ctx, "sanity_check", success_loss="1", failure_loss="1d6")
 
     record = await services.battles.generator.get_current_session(ctx.chat_key)
     assert record is not None
@@ -624,20 +630,20 @@ async def test_sanity_check_records_roll_rank_and_structured_loss():
     assert check["rank_id"] in {"crit", "extreme", "hard", "regular", "fail", "fumble"}
     assert check["label"]
     assert check["loss_expr"] in {"1", "1d6"}
-    assert check["san_before"] == before.attributes["SAN"]
-    assert check["san_after"] == check["san_before"] - check["loss"]
+    assert check["stat_before"] == before.attributes["SAN"]
+    assert check["stat_after"] == check["stat_before"] - check["loss"]
     payload = ctx.dice_payloads[-1]
     assert payload["kind"] == "subsystem"
-    assert payload["subsystem"] == "sanity"
+    assert payload["subsystem"] == "sanity_check"
     assert payload["expr"] == "SAN"
     assert payload["rolls"] == [check["roll"]]
     assert payload["total"] == check["roll"]
-    assert payload["target"] == check["san_before"]
-    assert payload["effective_target"] == check["san_before"]
+    assert payload["target"] == check["stat_before"]
+    assert payload["effective_target"] == check["stat_before"]
     assert payload["outcome"]["label"] == check["label"]
     assert payload["outcome"]["success"] == check["success"]
     assert payload["detail"]["loss"] == check["loss"]
-    assert payload["detail"]["remaining"] == check["san_after"]
+    assert payload["detail"]["remaining"] == check["stat_after"]
 
 
 async def test_spend_luck_atomically_adjusts_latest_own_check_without_reroll(monkeypatch):
@@ -679,7 +685,7 @@ async def test_spend_luck_atomically_adjusts_latest_own_check_without_reroll(mon
     monkeypatch.setattr(services.dice, "roll_for_check", unexpected_roll)
     monkeypatch.setattr(services.dice, "roll_detail", unexpected_roll)
 
-    result = await dice_tools.spend_luck(ctx, points=6)
+    result = await _run_sub(services, ctx, "spend_luck", points=6)
 
     character = await services.characters.get_character(ctx.uid(), ctx.chat_key)
     record = await services.battles.generator.get_current_session(ctx.chat_key)
@@ -698,11 +704,15 @@ async def test_spend_luck_atomically_adjusts_latest_own_check_without_reroll(mon
     assert ctx.dice_payloads[-1]["total"] == 49
     assert ctx.dice_payloads[-1]["detail"]["raw_roll"] == 55
     assert result == services.i18n.with_locale(ctx.locale).t(
-        "kp_tools.dice.luck.success",
+        "kp_tools.subsystem.spend.done",
+        label="Luck",
+        name="Vera",
         points=6,
-        before="Failure",
-        after="Success",
-        luck=44,
+        skill="侦查",
+        before=55,
+        after=49,
+        level="Success",
+        remaining=44,
     )
 
 
@@ -727,10 +737,10 @@ async def test_spend_luck_rejects_insufficient_pool_without_partial_update():
     before_character = await services.documents.get(ctx.chat_key, "sheet", "Vera")
     before_session = await services.store.state_get(ctx.chat_key, "session_record.current")
 
-    result = await dice_tools.spend_luck(ctx, points=51)
+    result = await _run_sub(services, ctx, "spend_luck", points=51)
 
     assert result == services.i18n.with_locale(ctx.locale).t(
-        "kp_tools.dice.luck.insufficient", points=51, luck=50
+        "kp_tools.subsystem.spend.insufficient", label="Luck", points=51, available=50
     )
     assert await services.documents.get(ctx.chat_key, "sheet", "Vera") == before_character
     assert await services.store.state_get(ctx.chat_key, "session_record.current") == before_session
@@ -766,9 +776,9 @@ async def test_spend_luck_conflict_leaves_character_and_check_unchanged(monkeypa
     # both retries exhaust and the tool reports a conflict.
     monkeypatch.setattr(services.store, "state_set_if_values", always_conflict, raising=False)
 
-    result = await dice_tools.spend_luck(ctx, points=6)
+    result = await _run_sub(services, ctx, "spend_luck", points=6)
 
-    assert result == services.i18n.with_locale(ctx.locale).t("kp_tools.dice.luck.conflict")
+    assert result == services.i18n.with_locale(ctx.locale).t("kp_tools.subsystem.spend.conflict", label="Luck")
     assert await services.documents.get(ctx.chat_key, "sheet", "Vera") == before_character
     assert await services.store.state_get(ctx.chat_key, "session_record.current") == before_session
     assert ctx.dice_payloads == []
@@ -796,10 +806,10 @@ async def test_spend_luck_rejects_sanity_and_non_coc_checks():
         san_after=47,
     )
 
-    result = await dice_tools.spend_luck(ctx, points=5)
+    result = await _run_sub(services, ctx, "spend_luck", points=5)
 
     assert result == services.i18n.with_locale(ctx.locale).t(
-        "kp_tools.dice.luck.ineligible", skill="SAN"
+        "kp_tools.subsystem.spend.ineligible", label="Luck", skill="SAN"
     )
 
 
@@ -823,9 +833,9 @@ async def test_spend_luck_rejects_fumble_without_mutation():
     )
     before_session = await services.store.state_get(ctx.chat_key, "session_record.current")
 
-    result = await dice_tools.spend_luck(ctx, points=10)
+    result = await _run_sub(services, ctx, "spend_luck", points=10)
 
-    assert result == services.i18n.with_locale(ctx.locale).t("kp_tools.dice.luck.fumble")
+    assert result == services.i18n.with_locale(ctx.locale).t("kp_tools.subsystem.spend.fumble", label="Luck")
     assert await services.store.state_get(ctx.chat_key, "session_record.current") == before_session
     assert ctx.dice_payloads == []
 
@@ -850,22 +860,23 @@ async def test_spend_luck_rejects_overspend_that_would_push_roll_below_one():
     )
     before_session = await services.store.state_get(ctx.chat_key, "session_record.current")
 
-    result = await dice_tools.spend_luck(ctx, points=27)
+    result = await _run_sub(services, ctx, "spend_luck", points=27)
 
     assert result == services.i18n.with_locale(ctx.locale).t(
-        "kp_tools.dice.luck.exceeds_roll", points=27, roll=27, max=26
+        "kp_tools.subsystem.spend.exceeds_roll", label="Luck", points=27, roll=27, max=26
     )
     assert await services.store.state_get(ctx.chat_key, "session_record.current") == before_session
     assert ctx.dice_payloads == []
 
     other_services, other_ctx = _build()
-    other_tools = DiceTools(other_services)
     await CharacterTools(other_services).create_character(
         other_ctx, name="Thorin", system="dnd5e", auto_generate=False
     )
-    assert await other_tools.spend_luck(other_ctx, points=1) == other_services.i18n.with_locale(
-        other_ctx.locale
-    ).t("kp_tools.dice.luck.coc_only")
+    # A system that declares no luck-family subsystem simply has no such tool.
+    assert (
+        await dispatch_subsystem(other_services, other_ctx, load_rulepack("dnd5e"), "spend_luck", {"points": 1})
+        is None
+    )
 
 
 async def test_npc_actor_is_recorded_by_name_and_excluded_from_player_stats():
@@ -888,14 +899,10 @@ async def test_npc_actor_is_recorded_by_name_and_excluded_from_player_stats():
 
 
 async def test_sanity_check_fumble_drains_all_remaining_san_house_rule(monkeypatch):
-    """Locks the intentional house rule on `sanity_check`'s fumble branch (see the
-    comment on the `rank == -2` branch in `agent/kp_tools_mechanics.py`): CoC7e RAW
-    says a fumble's SAN loss is the MAX of the loss-dice range (e.g. "1d4" tops out
-    at 4), but this port faithfully carries over `nekro_trpg_dice_plugin`'s house
-    rule of draining ALL remaining SAN instead - confirmed intentional (not a bug
-    introduced by this port) since the upstream source has the same behavior with
-    its own explicit comment ("大失败时损失所有SAN" - "lose all SAN on a fumble").
-    """
+    """Locks the intentional house rule the coc7 pack declares (``fumble_loss:
+    all`` on its check_with_loss subsystem): CoC7e RAW would take the loss
+    dice's maximum ("1d4" tops out at 4); the pack drains ALL remaining points,
+    faithfully carried over from the pre-M16 engine."""
     services, ctx = _build()
     char_tools = CharacterTools(services)
     dice_tools = DiceTools(services)
@@ -908,7 +915,7 @@ async def test_sanity_check_fumble_drains_all_remaining_san_house_rule(monkeypat
         services.dice, "roll_for_check", lambda resolver, **kwargs: RollDetail("1d100", (100,), 100)
     )
 
-    result = await dice_tools.sanity_check(ctx, success_loss="1", failure_loss="1d4")
+    result = await _run_sub(services, ctx, "sanity_check", success_loss="1", failure_loss="1d4")
 
     # A "1d4" failure_loss maxes out at 4 under RAW; the house rule drains all 50.
     assert "0/99" in result
@@ -923,11 +930,11 @@ async def test_skill_growth_deterministic_outcome():
     await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)  # "会计" starts at 5
 
     seed_dice(6)
-    expected_roll = random.randint(1, 100)
-    expected_growth = random.randint(1, 10) if expected_roll > 5 else None
+    expected_roll = DiceRoller().roll_expression("1d100").total
+    expected_growth = DiceRoller().roll_expression("1d10").total if expected_roll > 5 else None
 
     seed_dice(6)
-    result = await dice_tools.skill_growth(ctx, skill_name="会计")
+    result = await _run_sub(services, ctx, "skill_growth", skill_name="会计")
 
     if expected_growth is None:
         assert "No growth" in result
@@ -946,7 +953,7 @@ async def test_skill_growth_maxed_skill_reports_no_growth_needed():
     character.skills["会计"] = 100
     await services.characters.save_character(ctx.uid(), ctx.chat_key, character)
 
-    result = await dice_tools.skill_growth(ctx, skill_name="会计")
+    result = await _run_sub(services, ctx, "skill_growth", skill_name="会计")
 
     assert "100" in result
     assert "maxed" in result.lower() or "无需成长" in result
@@ -961,12 +968,15 @@ async def test_skill_growth_succeeds_on_roll_above_95_even_when_not_above_skill(
     character.skills["会计"] = 99
     await services.characters.save_character(ctx.uid(), ctx.chat_key, character)
 
-    # roll 97 is NOT > skill (99) but IS > 95, so the CoC7e experience check still grows
-    # (+1d10 -> capped at 100). random.randint is called for the check roll, then the gain.
+    # roll 97 is NOT > skill (99) but IS > the pack's auto_success_above (95), so the
+    # experience check still grows (+1d10 -> capped at 100). The improvement roll and the
+    # gain roll both go through the dice engine.
     queued = iter([97, 4])
-    monkeypatch.setattr(random, "randint", lambda _lo, _hi: next(queued))
+    monkeypatch.setattr(
+        services.dice, "roll_expression", lambda _expr, **_kw: SimpleNamespace(total=next(queued))
+    )
 
-    result = await dice_tools.skill_growth(ctx, skill_name="会计")
+    result = await _run_sub(services, ctx, "skill_growth", skill_name="会计")
 
     assert "Success" in result
     sheet = await char_tools.get_character_sheet(ctx)
@@ -979,12 +989,13 @@ async def test_opposed_check_deterministic_outcome():
     dice_tools = DiceTools(services)
     await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)  # "侦查" starts at 25
 
+    pack = load_rulepack("coc7")
     seed_dice(8)
-    r1 = random.randint(1, 100)
-    r2 = random.randint(1, 100)
+    r1 = DiceRoller().roll_for_check(pack.resolver).total
+    r2 = DiceRoller().roll_for_check(pack.resolver).total
 
     seed_dice(8)
-    result = await dice_tools.opposed_check(ctx, skill1="侦查", skill2="聆听", skill2_value=60)
+    result = await _run_sub(services, ctx, "opposed_check", skill1="侦查", skill2="聆听", skill2_value=60)
 
     assert str(r1) in result
     assert str(r2) in result
@@ -1007,8 +1018,8 @@ async def test_opposed_check_levels_come_from_the_pack_ladder():
     expected_passive = pack.resolver.interpret(DiceRoller().roll_for_check(pack.resolver), passive_value)
 
     seed_dice(19)
-    result = await dice_tools.opposed_check(
-        ctx, skill1="侦查", skill2="聆听", skill1_value=value, skill2_value=passive_value
+    result = await _run_sub(
+        services, ctx, "opposed_check", skill1="侦查", skill2="聆听", skill1_value=value, skill2_value=passive_value
     )
 
     i18n = services.i18n.with_locale(ctx.locale)
@@ -1079,24 +1090,38 @@ async def test_hp_manager_without_a_character_returns_localized_error():
     assert result == services.i18n.with_locale(ctx.locale).t("kp_tools.character.none")
 
 
-async def test_wod_check_result_shape():
-    services, ctx = _build()
+async def test_pool_parameterized_check_rides_skill_check_params():
+    """The old dedicated pool tool is gone (stage D): a pool system's graded
+    check is `skill_check(params=...)` under the ROOM's pack."""
+    services = build_services(
+        Settings(default_rulepack="wod"), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64)
+    )
+    ctx = AgentCtx(chat_key="cli:dm:pool", user_id="u1")
     dice_tools = DiceTools(services)
 
     seed_dice(4)
-    result = await dice_tools.wod_check(ctx, pool_size=5, difficulty=6)
+    result = await dice_tools.skill_check(ctx, skill_name="", params={"pool": 5, "difficulty": 6})
 
-    assert "WoD" in result
     assert "5d10" in result
 
+    out_of_range = await dice_tools.skill_check(ctx, skill_name="", params={"pool": 20_000_000})
+    assert out_of_range == services.i18n.with_locale(ctx.locale).t(
+        "kp_tools.dice.pool.out_of_range", param="pool", minimum=1, maximum=200
+    )
 
-async def test_random_madness_returns_a_symptom_from_the_requested_table():
+
+async def test_random_madness_draws_from_the_packs_declared_table():
     services, ctx = _build()
-    dice_tools = DiceTools(services)
 
-    result = await dice_tools.random_madness(ctx, madness_type="long")
+    spec = load_rulepack("coc7").subsystems["random_madness"]
+    long_table = spec.table("long")
+    assert long_table is not None
 
-    assert any(symptom in result for symptom in _MADNESS_SYMPTOMS["long"])
+    result = await _run_sub(services, ctx, "random_madness", table="long")
+    assert any(entry in result for entry in long_table.entries)
+
+    aliased = await _run_sub(services, ctx, "random_madness", table="总结")
+    assert any(entry in aliased for entry in long_table.entries)
 
 
 # ---------------------------------------------------------------------------

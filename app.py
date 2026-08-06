@@ -232,8 +232,9 @@ def _run_doctor(settings: Settings, i18n: I18n) -> int:
         if pack.resolver is None:
             return pack_id
         variants = pack.resolver.variant_ids()
-        suffix = f"+{len(variants)} variants" if variants else "dsl"
-        return f"{pack_id} (resolution: {suffix if not variants else 'dsl ' + suffix})"
+        resolution = "dsl" + (f" +{len(variants)} variants" if variants else "")
+        subsystems = f"; subsystems: {', '.join(pack.subsystems)}" if pack.subsystems else ""
+        return f"{pack_id} (resolution: {resolution}{subsystems})"
 
     rulepack_report = ", ".join(_rulepack_line(pack_id) for pack_id in rulepack_ids)
     skill_ids = [skill.id for skill in core_skills.available_skills()]

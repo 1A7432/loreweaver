@@ -212,13 +212,13 @@ async def test_sanity_turn_emits_actual_roll_target_rank_and_loss_not_sanmax() -
     check = record.skill_checks[-1]
     dice = next(event.data for event in ws_member.events if event.kind == "dice")
     assert dice["kind"] == "subsystem"
-    assert dice["subsystem"] == "sanity"
+    assert dice["subsystem"] == "sanity_check"
     assert dice["total"] == check["roll"]
     assert dice["total"] != 99
-    assert dice["target"] == check["san_before"]
+    assert dice["target"] == check["stat_before"]
     assert dice["outcome"]["success"] == check["success"]
     assert dice["detail"]["loss"] == check["loss"]
-    assert dice["detail"]["remaining"] == check["san_after"]
+    assert dice["detail"]["remaining"] == check["stat_after"]
     # The tool renders the label once and both the record and the frame carry it.
     assert dice["outcome"]["label"] == check["label"]
 
@@ -289,12 +289,13 @@ async def test_luck_spend_turn_emits_adjusted_existing_roll_without_a_reroll(mon
     )
 
     dice = next(event.data for event in ws_member.events if event.kind == "dice")
-    assert dice["kind"] == "check"
+    assert dice["kind"] == "subsystem"
+    assert dice["subsystem"] == "spend_luck"
     assert dice["detail"]["raw_roll"] == 55
     assert dice["total"] == 49
     assert dice["outcome"]["success"] is True
     assert dice["outcome"]["id"] == "regular"
-    assert dice["detail"]["luck_spent"] == 6
+    assert dice["detail"]["points"] == 6
 
 
 async def test_terminal_origin_turn_reaches_the_chat_channel() -> None:

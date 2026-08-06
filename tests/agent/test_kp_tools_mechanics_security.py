@@ -132,46 +132,46 @@ async def test_healthy_row_still_updates_normally():
 # ---------------------------------------------------------------------------
 
 
-async def test_wod_check_huge_pool_returns_fast_and_bounded():
-    services, ctx = _build()
+def _build_pool() -> tuple[Services, AgentCtx]:
+    services = build_services(
+        Settings(default_rulepack="wod"), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64)
+    )
+    return services, AgentCtx(chat_key="cli:dm:pool", user_id="u1")
+
+
+async def test_pool_check_huge_pool_returns_fast_and_bounded():
+    services, ctx = _build_pool()
     dice_tools = DiceTools(services)
 
     seed_dice(4)
     start = time.perf_counter()
-    result = await dice_tools.wod_check(ctx, pool_size=20_000_000, difficulty=6)
+    result = await dice_tools.skill_check(ctx, skill_name="", params={"pool": 20_000_000, "difficulty": 6})
     elapsed = time.perf_counter() - start
 
     i18n = services.i18n.with_locale(ctx.locale)
     assert result == i18n.t(
-        "kp_tools.dice.wod.out_of_range",
-        max_pool=_MAX_WOD_POOL,
-        min_difficulty=2,
-        max_difficulty=10,
+        "kp_tools.dice.pool.out_of_range", param="pool", minimum=1, maximum=_MAX_WOD_POOL
     )
     assert elapsed < 1.0
 
 
-async def test_wod_check_bad_difficulty_is_rejected():
-    services, ctx = _build()
+async def test_pool_check_bad_difficulty_is_rejected():
+    services, ctx = _build_pool()
     dice_tools = DiceTools(services)
 
-    result = await dice_tools.wod_check(ctx, pool_size=5, difficulty=99)
+    result = await dice_tools.skill_check(ctx, skill_name="", params={"pool": 5, "difficulty": 99})
 
     i18n = services.i18n.with_locale(ctx.locale)
     assert result == i18n.t(
-        "kp_tools.dice.wod.out_of_range",
-        max_pool=_MAX_WOD_POOL,
-        min_difficulty=2,
-        max_difficulty=10,
+        "kp_tools.dice.pool.out_of_range", param="difficulty", minimum=2, maximum=10
     )
 
 
-async def test_wod_check_valid_input_still_rolls():
-    services, ctx = _build()
+async def test_pool_check_valid_input_still_rolls():
+    services, ctx = _build_pool()
     dice_tools = DiceTools(services)
 
     seed_dice(4)
-    result = await dice_tools.wod_check(ctx, pool_size=5, difficulty=6)
+    result = await dice_tools.skill_check(ctx, skill_name="", params={"pool": 5, "difficulty": 6})
 
-    assert "WoD" in result
     assert "5d10" in result

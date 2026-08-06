@@ -452,3 +452,92 @@ display:
     物理学: Science (Physics)
     动物学: Science (Zoology)
     克苏鲁神话: Cthulhu Mythos
+
+# Extra play mechanics beyond the basic check (M16 stage D): each key is the
+# KP TOOL NAME this pack materializes (and the wire `subsystem` id), bound to
+# one of the engine's generic behavior templates. All vocabulary is this
+# pack's own — the engine knows only the template semantics.
+subsystems:
+  sanity_check:
+    template: check_with_loss
+    stat: SAN
+    stat_max: SANMAX
+    # Intentional house rule, not CoC7e RAW: a fumbled check drains ALL
+    # remaining points (RAW would take the loss dice's maximum, "max").
+    # Faithfully ported from the pre-M16 engine implementation.
+    fumble_loss: all
+    display: {en: Sanity, zh: 理智}
+  skill_growth:
+    template: improvement_check
+    roll: 1d100
+    improve: 1d10
+    cap: 100
+    # Rulebook experience check: a roll above the skill grows it, and 96-100
+    # always grows even at high skill.
+    auto_success_above: 95
+    display: {en: Skill growth, zh: 技能成长}
+  spend_luck:
+    template: resource_spend_adjust
+    stat: LUC
+    display: {en: Luck, zh: 幸运}
+  opposed_check:
+    template: opposed
+    display: {en: Opposed check, zh: 对抗检定}
+  random_madness:
+    template: table_draw
+    default: temp
+    display: {en: Madness symptom, zh: 疯狂症状}
+    # Madness-table entries are CJK game DATA (i18n-exempt by convention),
+    # ported verbatim from the pre-M16 engine tables.
+    tables:
+      temp:
+        display: {en: Temporary madness, zh: 临时性疯狂}
+        aliases: [临时, temporary]
+        entries:
+          - 失忆：调查员会发现自己只记得最后身处的安全地点，却没有任何来到这里的记忆。
+          - 假性残疾：调查员陷入了心理性的失明、失聪或躯体缺失感中。
+          - 暴力倾向：调查员陷入了六亲不认的暴力行为中。
+          - 偏执：调查员陷入了严重的偏执妄想之中，所有人都想要伤害他。
+          - 人际依赖：调查员因为一些原因而将某人当作了支柱。
+          - 昏厥：调查员当场昏倒。
+          - 逃避行为：调查员会用任何手段试图逃离现场。
+          - 歇斯底里：调查员表现出大笑、哭泣、嘶吼、害怕等极端情绪反应。
+      long:
+        display: {en: Long-term madness, zh: 总结性疯狂}
+        aliases: [总结, 总结性]
+        entries:
+          - 恐惧症：调查员患上了一种恐惧症，如幽闭恐惧症、恐高症等。
+          - 躁狂症：调查员患上了一种躁狂症，如盗窃癖、纵火癖等。
+          - 幻觉：调查员持续产生幻觉。
+          - 偏执：调查员持续处于偏执状态。
+          - 解离性障碍：调查员的人格发生分裂或记忆丧失。
+          - 强迫症：调查员产生了强迫性的行为模式。
+          - 抑郁症：调查员陷入了严重的抑郁状态。
+          - 创伤后应激障碍：调查员因恐怖经历而产生持续的心理创伤。
+      indefinite:
+        display: {en: Indefinite madness, zh: 不定性疯狂}
+        aliases: [不定, 不定性]
+        entries:
+          - 强烈的被迫害妄想，认为周围的一切都在针对自己。
+          - 无法控制的重复行为，如不断洗手、检查门锁等。
+          - 严重的解离症状，感觉自己不属于这个世界。
+          - 持续的噩梦和失眠，精神极度衰弱。
+          - 对某种颜色或声音的极度恐惧和排斥。
+          - 出现第二人格，完全不同于平时的自己。
+          - 失去对时间的感知，认为时间倒流或停滞。
+          - 坚信自己变成了某种非人生物。
+# Dot-command dialect (dice-bot community convention words -> this pack's
+# actions; the command layer resolves them per room).
+commands:
+  ra: {action: check}
+  rc: {action: check}
+  sc: {tool: sanity_check}
+  sanity: {tool: sanity_check}
+  en: {tool: skill_growth}
+  growth: {tool: skill_growth}
+  ti: {tool: random_madness, args: {table: temp}}
+  li: {tool: random_madness, args: {table: long}}
+# Per-locale keeper-expertise prompt text (stage D: prompts are pack data).
+expertise:
+  en: "# Call of Cthulhu (CoC7) — Keeper\nPsychological horror over gore: reveal the truth gradually, and pace the descent with sanity checks at genuine horror exposures. Investigation drives play — clues move the story, and failures move it too. The engine computes success levels, bonus/penalty dice, and criticals; you narrate from its results."
+  zh: "# 克苏鲁的呼唤（CoC7）——守秘人\n心理恐怖重于血浆：逐步揭示真相，在真正的恐怖暴露处用理智检定为疯狂的降临定节奏。调查驱动游戏——线索推动故事，失败同样推动故事。成功等级、奖惩骰与大成功大失败由引擎计算；你按结果叙事。"

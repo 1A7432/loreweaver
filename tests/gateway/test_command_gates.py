@@ -104,33 +104,35 @@ async def test_bot_status_query_open_but_keeper_can_toggle():
 
 
 # ---------------------------------------------------------------------------
-# Fix 2a′ — .setcoc / .language writes are keeper-gated; the bare query stays open
+# Fix 2a′ — .rule / .language writes are keeper-gated; the bare query stays open
 # (room-wide state: coc_rule regrades every check, chat_locale flips every member's language)
 # ---------------------------------------------------------------------------
 
 
-async def test_setcoc_write_denied_for_player_but_query_open():
+async def test_rule_write_denied_for_player_but_query_open():
     services = _services()
     router = CommandRouter(services)
     chat_key = "tui:group:coc"
     player = _player_ctx(chat_key)
 
-    denied = await router.dispatch(player, ".setcoc 2")
+    denied = await router.dispatch(player, ".rule 2")
     assert denied == _denied(services)
     # The room-wide ladder variant was NOT changed.
     assert (await services.store.get(user_key="", store_key=f"rule_variant.{chat_key}") or "") == ""
     # The bare query stays open to a player (reads, never writes).
-    current = await router.dispatch(player, ".setcoc")
-    assert current == services.i18n.with_locale("en").t("commands.setcoc.current", rule="0")
+    current = await router.dispatch(player, ".rule")
+    assert current is not None and current.startswith(
+        services.i18n.with_locale("en").t("commands.rule.current", rule="0")
+    )
     assert (await services.store.get(user_key="", store_key=f"rule_variant.{chat_key}") or "") == ""
 
 
-async def test_setcoc_keeper_can_still_set_the_rule():
+async def test_rule_keeper_can_still_set_the_ladder():
     services = _services()
     router = CommandRouter(services)
     chat_key = "cli:dm:coc"
-    reply = await router.dispatch(_keeper_ctx(chat_key), ".setcoc 2")
-    assert reply == services.i18n.with_locale("en").t("commands.setcoc.changed", rule="2")
+    reply = await router.dispatch(_keeper_ctx(chat_key), ".rule 2")
+    assert reply == services.i18n.with_locale("en").t("commands.rule.changed", rule="2")
     # The store keeps the full ladder-variant id; the reply shows the dialect form.
     assert await services.store.state_get(chat_key, "rule_variant") == "rule2"
 

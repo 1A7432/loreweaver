@@ -22,6 +22,7 @@ from core.prompt_sections import (
     inject_trpg_system_prompt,
 )
 from core.relationships import RelationshipManager
+from core.rulepacks import load_rulepack
 from core.worldbook import inject_world_lore_prompt
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
@@ -82,7 +83,7 @@ async def test_build_system_prompt_includes_keeper_discipline_and_joins_all_six_
         i18n.t("battle.summary.title"),  # session_history
         i18n.t("prompt.game_state.title"),  # game_state
         i18n.t("prompt.document.pool_title"),  # document_context
-        i18n.t("prompt.expertise.coc"),  # system_expertise (no character -> defaults to CoC)
+        load_rulepack("coc7").expertise_text("en"),  # system_expertise (no character -> the default sheet system)
         i18n.t("prompt.system.intro"),  # trpg_system
         i18n.t("prompt.style.narrative"),  # interaction_style
     ]

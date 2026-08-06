@@ -27,6 +27,7 @@ from core.prompt_sections import (
     inject_trpg_system_prompt,
     summarize_knowledge_item,
 )
+from core.rulepacks import load_rulepack
 from infra.i18n import I18n
 from infra.store import Store
 
@@ -217,21 +218,21 @@ async def test_inject_system_expertise_prompt_selects_coc_guidance():
     ctx = _Ctx(chat_key="chat1")
     manager = _FakeCharacterManager(character=_FakeCharacter(name="Ada", system="CoC"))
     result = await inject_system_expertise_prompt(ctx, manager, EN)
-    assert result == EN.t("prompt.expertise.coc")
+    assert result == load_rulepack("coc7").expertise_text("en")
 
 
 async def test_inject_system_expertise_prompt_selects_dnd5e_guidance():
     ctx = _Ctx(chat_key="chat1")
     manager = _FakeCharacterManager(character=_FakeCharacter(name="Rill", system="DnD5e"))
     result = await inject_system_expertise_prompt(ctx, manager, ZH)
-    assert result == ZH.t("prompt.expertise.dnd5e")
+    assert result == load_rulepack("dnd5e").expertise_text("zh")
 
 
 async def test_inject_system_expertise_prompt_selects_wod_guidance():
     ctx = _Ctx(chat_key="chat1")
     manager = _FakeCharacterManager(character=_FakeCharacter(name="Vex", system="WoD"))
     result = await inject_system_expertise_prompt(ctx, manager, EN)
-    assert result == EN.t("prompt.expertise.wod")
+    assert result == load_rulepack("wod").expertise_text("en")
 
 
 async def test_inject_system_expertise_prompt_falls_back_to_generic_guidance():
@@ -245,7 +246,7 @@ async def test_inject_system_expertise_prompt_empty_state_does_not_crash():
     ctx = _Ctx(chat_key="chat1")
     manager = _FakeCharacterManager()  # default character, system="CoC"
     result = await inject_system_expertise_prompt(ctx, manager, EN)
-    assert result == EN.t("prompt.expertise.coc")
+    assert result == load_rulepack("coc7").expertise_text("en")
 
 
 async def test_inject_system_expertise_prompt_swallows_manager_errors():
