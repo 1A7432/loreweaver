@@ -56,6 +56,14 @@ from core.yaml_safety import safe_load_no_aliases
 PACK_SUFFIX = ".lwpack"
 MANIFEST_NAME = "pack.yaml"
 
+# Manifest schema version (M16 2.0 consolidation). Bump when the manifest shape
+# changes; register an N -> N+1 migration in `_MANIFEST_MIGRATIONS` so already-
+# published packs keep installing (zero-compat was for the past, not the future).
+MANIFEST_VERSION = 2
+# version -> migration(raw dict) -> raw dict for version+1. Applied lowest-first
+# by `parse_manifest_text` until the raw mapping reaches `MANIFEST_VERSION`.
+_MANIFEST_MIGRATIONS: dict[int, Callable[[dict], dict]] = {}
+
 # Hard caps — the archive is untrusted input. Sizes are checked BOTH against the
 # manifest's own declarations and while streaming, so neither a lying manifest nor a
 # zip-bomb entry (small compressed, huge inflated) can blow past them.
@@ -107,9 +115,26 @@ class PackAsset:
 
 
 @dataclass(frozen=True)
+class PackFile:
+    """One archive member in the built manifest's complete `files:` inventory.
+
+    Manifest v2: the built manifest lists EVERY member (except itself) with its
+    sha256/size, and install verifies set-equality plus per-file integrity — the
+    declaration IS the shipped set, with no derived "a skill may always carry a
+    hooks.js" holes."""
+
+    path: str
+    sha256: str
+    size: int
+
+
+@dataclass(frozen=True)
 class PackCard:
-    """One bundled card's declaration: its path, its 拆卡 kind, and optional author notes
-    (localized table rules / usage guide, shown at install)."""
+    """One bundled card's entry. Manifest v2: `kind` is DETECTED from the real
+    payload at build time (`core.card_split.detect_world_payloads`) and written
+    into the built manifest — authors never declare it (detection is the single
+    source of truth); author entries carry only `path` and optional localized
+    `notes` (table rules / usage guide, shown at install)."""
 
     path: str
     kind: str = "character"
@@ -149,6 +174,8 @@ class PackManifest:
     assets: tuple[PackAsset, ...]
     trust: PackTrust | None = None
     card_entries: tuple[PackCard, ...] = ()
+    manifest_version: int = MANIFEST_VERSION
+    files: tuple[PackFile, ...] = ()
 
     def display_name(self, locale: str) -> str:
         return self.name.get(locale) or self.name.get("en") or next(iter(self.name.values()), self.id)
@@ -237,15 +264,23 @@ def _relative_content_path(raw: Any, *, kind: str) -> str:
     return str(_validated_entry_path(raw.strip()))
 
 
-def _parse_card_entry(raw: Any) -> PackCard:
-    """One ``contents.cards`` entry: a plain path string (a character card), or a
-    ``{path, kind, notes}`` mapping for world cards / cards with install notes."""
+def _parse_card_entry(raw: Any, *, built: bool) -> PackCard:
+    """One ``contents.cards`` entry: a plain path string, or a ``{path, notes}``
+    mapping for cards with install notes. `kind` is detection-derived: only a
+    BUILT manifest carries it (stamped from the real payload at build time);
+    an author manifest declaring `kind` is rejected — detection is the single
+    source of truth."""
     if isinstance(raw, str):
         return PackCard(path=_relative_content_path(raw, kind="cards"))
     if not isinstance(raw, dict):
-        raise PackError("contents.cards entries must be path strings or {path, kind, notes} mappings")
-    unknown = set(raw) - {"path", "kind", "notes"}
+        raise PackError("contents.cards entries must be path strings or {path, notes} mappings")
+    allowed = {"path", "kind", "notes"} if built else {"path", "notes"}
+    unknown = set(raw) - allowed
     if unknown:
+        if "kind" in unknown:
+            raise PackError(
+                "card kind is detected from the real payload at build time and must not be declared"
+            )
         raise PackError(f"unknown card entry keys: {sorted(unknown)}")
     path = _relative_content_path(raw.get("path"), kind="cards")
     kind = raw.get("kind", "character")
@@ -265,6 +300,25 @@ def parse_manifest_text(text: str, *, expect_trust: bool) -> PackManifest:
         raise PackError(f"invalid manifest YAML: {exc}") from exc
     if not isinstance(raw, dict):
         raise PackError("manifest root must be a mapping")
+
+    # Schema versioning: an author manifest may omit `manifest_version` (it means
+    # "current"); a built archive always carries it explicitly. Older versions
+    # upgrade through `_MANIFEST_MIGRATIONS` step by step; a version with no
+    # registered migration (v1 — the pre-2.0 shape, deliberately unmigratable)
+    # or one newer than this engine refuses cleanly.
+    raw_version = raw.get("manifest_version", None if expect_trust else MANIFEST_VERSION)
+    if not isinstance(raw_version, int) or isinstance(raw_version, bool):
+        raise PackError("manifest_version must be an integer")
+    if raw_version > MANIFEST_VERSION:
+        raise PackError(
+            f"manifest_version {raw_version} is newer than this engine supports ({MANIFEST_VERSION})"
+        )
+    while raw_version < MANIFEST_VERSION:
+        migrate = _MANIFEST_MIGRATIONS.get(raw_version)
+        if migrate is None:
+            raise PackError(f"manifest_version {raw_version} is not supported (no migration path)")
+        raw = migrate(raw)
+        raw_version += 1
 
     pack_id = raw.get("id")
     if not isinstance(pack_id, str) or not _SLUG_RE.match(pack_id):
@@ -311,7 +365,7 @@ def parse_manifest_text(text: str, *, expect_trust: bool) -> PackManifest:
         if len(entries) > MAX_CONTENT_FILES_PER_KIND:
             raise PackError(f"contents.{kind} lists too many files (max {MAX_CONTENT_FILES_PER_KIND})")
         if kind == "cards":
-            card_entries = tuple(_parse_card_entry(entry) for entry in entries)
+            card_entries = tuple(_parse_card_entry(entry, built=expect_trust) for entry in entries)
             parsed = tuple(card.path for card in card_entries)
         else:
             parsed = tuple(_relative_content_path(entry, kind=kind) for entry in entries)
@@ -356,6 +410,32 @@ def parse_manifest_text(text: str, *, expect_trust: bool) -> PackManifest:
             )
         )
 
+    files_raw = raw.get("files")
+    files: list[PackFile] = []
+    if not expect_trust:
+        if files_raw is not None:
+            raise PackError("files is generated at pack time and must not be hand-written")
+    else:
+        if not isinstance(files_raw, list) or not files_raw:
+            raise PackError("built pack manifest is missing its generated files inventory")
+        if len(files_raw) > MAX_PACK_ENTRIES:
+            raise PackError(f"files inventory lists too many entries (max {MAX_PACK_ENTRIES})")
+        seen_file_paths: set[str] = set()
+        for entry in files_raw:
+            if not isinstance(entry, dict):
+                raise PackError("each files entry must be a {path, sha256, size} mapping")
+            file_path = _relative_content_path(entry.get("path"), kind="files")
+            if file_path in seen_file_paths:
+                raise PackError(f"files inventory lists a path twice: {file_path}")
+            seen_file_paths.add(file_path)
+            file_sha = entry.get("sha256")
+            if not isinstance(file_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", file_sha):
+                raise PackError(f"files entry {file_path}: sha256 must be 64 lowercase hex chars")
+            file_size = entry.get("size")
+            if not isinstance(file_size, int) or isinstance(file_size, bool) or file_size < 0:
+                raise PackError(f"files entry {file_path}: size must be a non-negative integer")
+            files.append(PackFile(path=file_path, sha256=file_sha, size=file_size))
+
     trust_raw = raw.get("trust")
     if not expect_trust:
         if trust_raw is not None:
@@ -392,6 +472,8 @@ def parse_manifest_text(text: str, *, expect_trust: bool) -> PackManifest:
         assets=tuple(assets),
         trust=trust,
         card_entries=card_entries,
+        manifest_version=MANIFEST_VERSION,
+        files=tuple(files),
     )
 
 
@@ -528,16 +610,23 @@ def _validate_card_bytes(path: str, data: bytes) -> tuple[bool, WorldPayloads]:
     return _detect_ejs(data.decode("utf-8", errors="ignore")), detect_world_payloads(card)
 
 
-def _enforce_card_kind(path: str, declared: str, payloads: WorldPayloads) -> None:
-    """A card that carries world machinery MUST be declared ``kind: world`` — the label the
-    installer and the docs lean on is checked against real detection, not taken on faith.
-    (The reverse is allowed: a machinery-free card may still be declared world when the
-    author means it as module content.)"""
-    if payloads.any and declared != "world":
+def _detected_card_kind(payloads: WorldPayloads) -> str:
+    """Manifest v2: a card's 拆卡 kind comes from real payload detection ONLY —
+    machinery (hooks / variable declarations / EJS / secret entries) makes it a
+    keeper-imported world card; a clean persona card is a character card. There
+    is no author declaration to disagree with."""
+    return "world" if payloads.any else "character"
+
+
+def _enforce_card_kind(path: str, stored: str, payloads: WorldPayloads) -> None:
+    """Verify side: the BUILT manifest's stamped kind must equal detection —
+    a hand-edited manifest cannot relabel a machinery-carrying card."""
+    detected = _detected_card_kind(payloads)
+    if stored != detected:
         raise PackError(
-            f"card {path}: carries world machinery ({payloads.hooks} hook script(s), "
-            f"{payloads.initvar_entries} variable declaration(s), {payloads.ejs_blocks} EJS "
-            "block(s)) — declare it `kind: world` in pack.yaml; world cards are keeper-imported"
+            f"card {path}: manifest says kind={stored!r} but the payload detects {detected!r} "
+            f"({payloads.hooks} hook script(s), {payloads.initvar_entries} variable declaration(s), "
+            f"{payloads.ejs_blocks} EJS block(s), {payloads.secret_entries} secret entr(ies))"
         )
 
 
@@ -620,10 +709,8 @@ def _enforce_panel_code_cap(panels: list[PanelSpec], assets_by_path: Mapping[str
 
 
 def _card_entry_to_yaml(card: PackCard) -> Any:
-    """A card entry dumps back to a plain path string when it carries no declarations —
-    old manifests round-trip byte-identically — and to a mapping otherwise."""
-    if card.kind == "character" and not card.notes:
-        return card.path
+    """The BUILT manifest always stamps the detected `kind`; a bare character
+    card with no notes still dumps as a mapping so the stamp is explicit."""
     entry: dict[str, Any] = {"path": card.path, "kind": card.kind}
     if card.notes:
         entry["notes"] = dict(card.notes)
@@ -635,6 +722,7 @@ def _manifest_to_yaml(manifest: PackManifest) -> str:
     if manifest.card_entries:
         contents["cards"] = [_card_entry_to_yaml(card) for card in manifest.card_entries]
     data: dict[str, Any] = {
+        "manifest_version": manifest.manifest_version,
         "id": manifest.id,
         "version": manifest.version,
         "name": dict(manifest.name),
@@ -658,6 +746,9 @@ def _manifest_to_yaml(manifest: PackManifest) -> str:
                 if value not in ("", [], None)
             }
             for asset in manifest.assets
+        ],
+        "files": [
+            {"path": item.path, "sha256": item.sha256, "size": item.size} for item in manifest.files
         ],
         "trust": {
             "skills": manifest.trust.skills,
@@ -728,15 +819,16 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
         _validate_rulepack_file(read_text, rulepack_path, rulepack_siblings)
         archive_files.append(rulepack_path)
 
-    for card_path in manifest.contents["cards"]:
-        card_ejs, payloads = _validate_card_bytes(card_path, _source_file(source_dir, card_path).read_bytes())
-        _enforce_card_kind(card_path, manifest.card_kind(card_path), payloads)
+    detected_cards: list[PackCard] = []
+    for card in manifest.card_entries:
+        card_ejs, payloads = _validate_card_bytes(card.path, _source_file(source_dir, card.path).read_bytes())
+        detected_cards.append(replace(card, kind=_detected_card_kind(payloads)))
         has_ejs = has_ejs or card_ejs
         # A world card's `extensions.loreweaver_hooks` is code the keeper's `.import … world`
         # installs — the same disclosure a skill's hooks.js gets. Counting only skills would
         # let a pack ship handlers behind a `has_hooks: false` trust card.
         has_hooks = has_hooks or payloads.hooks > 0
-        archive_files.append(card_path)
+        archive_files.append(card.path)
 
     for lorebook_path in manifest.contents["lorebooks"]:
         lore_ejs = _validate_lorebook_bytes(lorebook_path, _source_file(source_dir, lorebook_path).read_bytes())
@@ -800,8 +892,18 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
         asset_bytes=asset_bytes,
         has_hooks=has_hooks,
         has_ejs=has_ejs,
-        world_cards=sum(1 for card in manifest.card_entries if card.kind == "world"),
+        world_cards=sum(1 for card in detected_cards if card.kind == "world"),
         panels=len(pack_panels),
+    )
+    # The complete member inventory (manifest v2): every archive file except the
+    # manifest itself, with its integrity record. Install verifies set-equality.
+    inventory = tuple(
+        PackFile(
+            path=name,
+            sha256=hashlib.sha256(_source_file(source_dir, name).read_bytes()).hexdigest(),
+            size=_source_file(source_dir, name).stat().st_size,
+        )
+        for name in sorted(set(archive_files))
     )
     built_manifest = PackManifest(
         id=manifest.id,
@@ -814,7 +916,9 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
         contents=manifest.contents,
         assets=tuple(completed_assets),
         trust=trust,
-        card_entries=manifest.card_entries,
+        card_entries=tuple(detected_cards),
+        manifest_version=MANIFEST_VERSION,
+        files=inventory,
     )
 
     if out_path is None:
@@ -913,19 +1017,33 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
     block is re-derived from the archive with the SAME detectors the build used and must
     match: a hand-assembled pack cannot show the operator a `has_hooks: false` card while
     actually shipping handlers (Git releases are the registry — the archive, not its
-    builder, is what gets trusted)."""
+    builder, is what gets trusted).
+
+    Manifest v2: membership is verified against the generated ``files:`` inventory
+    with SET EQUALITY plus per-file sha256/size — the declaration is exactly the
+    shipped byte set (no derived may-also-carry holes), and nothing undeclared can
+    ride along even inertly."""
     names = {name for name in archive.namelist() if not name.endswith("/")}
 
-    declared: set[str] = {MANIFEST_NAME}
-    for skill_dir in manifest.contents["skills"]:
-        declared.add(f"{skill_dir}/SKILL.md")
-        declared.add(f"{skill_dir}/hooks.js")
-    for kind in ("rulepacks", "cards", "lorebooks", "panels"):
-        declared.update(manifest.contents[kind])
-    declared.update(asset.path for asset in manifest.assets)
-    undeclared = sorted(names - declared)
+    inventory = {item.path: item for item in manifest.files}
+    undeclared = sorted(names - set(inventory) - {MANIFEST_NAME})
     if undeclared:
-        raise PackError(f"archive contains undeclared entries: {undeclared[:5]}")
+        raise PackError(f"archive contains entries missing from the files inventory: {undeclared[:5]}")
+    missing = sorted(set(inventory) - names)
+    if missing:
+        raise PackError(f"files inventory lists entries missing from the archive: {missing[:5]}")
+    for item in manifest.files:
+        digest = hashlib.sha256()
+        with archive.open(item.path) as handle:
+            total = _stream_copy(handle, expected_size=item.size, digest=digest, sink=None)
+        if total != item.size:
+            raise PackError(f"file {item.path}: size does not match the files inventory")
+        if digest.hexdigest() != item.sha256:
+            raise PackError(f"file {item.path}: sha256 does not match the files inventory")
+    for asset in manifest.assets:
+        stamped = inventory.get(asset.path)
+        if stamped is None or stamped.sha256 != asset.sha256 or stamped.size != asset.size:
+            raise PackError(f"asset {asset.path}: integrity record disagrees with the files inventory")
 
     def read_text(name: str) -> str:
         return _archive_read_text(archive, name)
@@ -969,16 +1087,9 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
     # record (or understates sizes) fails here before anything is written.
     verify_panels, _ = _validate_pack_panels(read_text, manifest)
     _enforce_panel_code_cap(verify_panels, {asset.path: asset for asset in manifest.assets})
-    for asset in manifest.assets:
-        if asset.path not in names:
-            raise PackError(f"declared asset missing from archive: {asset.path!r}")
-        digest = hashlib.sha256()
-        with archive.open(asset.path) as handle:
-            total = _stream_copy(handle, expected_size=asset.size, digest=digest, sink=None)
-        if total != asset.size:
-            raise PackError(f"asset {asset.path}: size does not match the manifest")
-        if digest.hexdigest() != asset.sha256:
-            raise PackError(f"asset {asset.path}: sha256 does not match the manifest")
+    # Asset bytes were already verified via the files inventory (set equality +
+    # per-file sha256/size above); the asset block's own records were cross-checked
+    # against that inventory, so no second streaming pass is needed here.
 
     # Every constituent fact above is now enforced against real bytes; the stored trust
     # card must say the same thing. (`world_cards` counts DECLARED kinds, which

@@ -2294,6 +2294,7 @@ async def test_skill_enable_disable_denied_for_ordinary_group_member_and_store_u
 # --- .panels (M15 module UI panels, room enablement) -------------------------
 
 _PANELPACK_MANIFEST = """\
+manifest_version: 2
 id: panelpack
 version: 1.0.0
 name: {en: Panels}
@@ -2302,6 +2303,8 @@ authors: [ada]
 license: MIT
 engine: {}
 contents: {panels: [ui/panels.yaml]}
+files:
+  - {path: ui/panels.yaml, sha256: 603f434c239743ff3ab70ddc6d22ffea16ee2decaa51815c6309c895b7d397b3, size: 93}
 trust: {panels: 1}
 """
 

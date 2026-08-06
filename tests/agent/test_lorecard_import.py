@@ -30,15 +30,15 @@ def _services():
 def _bundle() -> dict:
     return {
         "format": "loreweaver.card",
-        "format_version": 0,
+        "format_version": 1,
         "name": "回廊公寓",
         "description": "A corridor building whose fifth floor exists only on rainy nights.",
         "personality": "",
         "scenario": "Find the missing tenant.",
-        "first_mes": "Rain again.",
-        "mes_example": "",
-        "alternate_greetings": [],
-        "creator_notes": "fixture",
+        "opening": "Rain again.",
+        "dialogue_examples": "",
+        "alternate_openings": [],
+        "author_notes": "fixture",
         "tags": ["investigation"],
         "variables": [
             {
@@ -95,7 +95,6 @@ def _bundle() -> dict:
                 "delay": 0,
             },
         ],
-        "extensions": {},
     }
 
 

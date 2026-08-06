@@ -39,6 +39,8 @@ _EJS_SPAN_RE = re.compile(r"<%[\s\S]*?%>")
 _EJS_DANGLING_RE = re.compile(r"<%[\s\S]*\Z")
 
 HOOKS_EXTENSION_KEY = "loreweaver_hooks"
+# The native lorecard's (format v1) top-level hooks list — see `core.lorecard.HOOKS_KEY`.
+NATIVE_HOOKS_KEY = "hooks"
 
 
 @dataclass(frozen=True)
@@ -58,16 +60,20 @@ class WorldPayloads:
 
 
 def card_hook_codes(card: CharacterCard) -> list[str]:
-    """The card's ``extensions.loreweaver_hooks`` scripts (native cards / the card forge emit
-    this field; absent on stock SillyTavern cards). Tolerates both v2/v3 ``data.extensions``
-    and a root-level ``extensions``; entries may be code strings or ``{code: ...}`` dicts."""
+    """The card's hook scripts. A native lorecard (format v1) carries them as the
+    top-level ``hooks`` list; imported ST-shaped cards (and the card forge) use
+    ``extensions.loreweaver_hooks`` in both the v2/v3 ``data.extensions`` and
+    root-level ``extensions`` locations. Entries may be code strings or
+    ``{code: ...}`` dicts."""
     raw = card.raw if isinstance(card.raw, dict) else {}
-    data = raw.get("data")
-    extensions = data.get("extensions") if isinstance(data, dict) else None
-    if not isinstance(extensions, dict):
-        root_extensions = raw.get("extensions")
-        extensions = root_extensions if isinstance(root_extensions, dict) else {}
-    entries = extensions.get(HOOKS_EXTENSION_KEY)
+    entries = raw.get(NATIVE_HOOKS_KEY)
+    if not isinstance(entries, list):
+        data = raw.get("data")
+        extensions = data.get("extensions") if isinstance(data, dict) else None
+        if not isinstance(extensions, dict):
+            root_extensions = raw.get("extensions")
+            extensions = root_extensions if isinstance(root_extensions, dict) else {}
+        entries = extensions.get(HOOKS_EXTENSION_KEY)
     if not isinstance(entries, list):
         return []
     codes = [
@@ -166,11 +172,13 @@ def split_card(card: CharacterCard) -> tuple[CharacterCard, WorldPayloads]:
 
 
 def _raw_without_hooks(raw: Any) -> Any:
-    """A shallow-per-level copy of `raw` with ``extensions.loreweaver_hooks`` dropped from
-    both the v2/v3 ``data.extensions`` location and the root-level ``extensions``."""
+    """A shallow-per-level copy of `raw` with hook scripts dropped: the native
+    top-level ``hooks`` list, plus ``extensions.loreweaver_hooks`` in both the
+    v2/v3 ``data.extensions`` location and the root-level ``extensions``."""
     if not isinstance(raw, dict):
         return raw
     clean = dict(raw)
+    clean.pop(NATIVE_HOOKS_KEY, None)
     for holder_key in ("data", None):
         holder = clean if holder_key is None else clean.get(holder_key)
         if not isinstance(holder, dict):

@@ -325,9 +325,10 @@ operator's content, the operator's box):
 
 - **Where they live**: a `hooks.js` next to a skill's `SKILL.md` (active while the skill is
   enabled for the room — the existing `.skill enable` flow is the on/off switch), or a card's
-  `extensions.loreweaver_hooks` list (installed by the KEEPER's `.import <file> world` — a
-  card with hooks is a world card, see the split in A.2; re-importing replaces its scripts
-  rather than stacking).
+  hook scripts — a native bundle's top-level `hooks: [...]` list (format v1), or an imported
+  ST-shaped card's `extensions.loreweaver_hooks` (installed by the KEEPER's
+  `.import <file> world` — a card with hooks is a world card, see the split in A.2;
+  re-importing replaces its scripts rather than stacking).
 - **API**: `on("turn_start"|"reply_ready"|"dice_rolled"|"variables_changed", handler)`, the
   full variable bridge (`getvar`/`setvar`/`variables`/`stat_data`, lodash as `_`), and the
   effect emitters `inject(text)` (adds a section to this turn's keeper prompt),
@@ -451,11 +452,13 @@ Keeper commands: `.panels` / `.panels list` (anyone), `.panels enable|disable <p
 | `engine` | no | minimum versions: `protocol` (wire protocol) and/or `server` — minimum-compare only |
 | `contents.skills` | no | skill DIRECTORIES (`skills/<id>`), each exactly `SKILL.md` + optional `hooks.js` |
 | `contents.rulepacks` | no | rulepack YAML files (`rulepacks/<id>.yaml`) |
-| `contents.cards` | no | SillyTavern cards (PNG or JSON) **or native bundles** (`*.lorecard.json`, dispatched to the M14 parser by content sniff so their machinery is detected honestly): a plain path = a `character` card; a `{path, kind: world, notes: {en, zh}}` mapping declares a WORLD card (module machinery, keeper-imported via `.import <file> world`). The label is enforced against real detection at build AND install — a card carrying hooks/`[InitVar]`/EJS/`secret` lore must be declared `kind: world` |
+| `contents.cards` | no | SillyTavern cards (PNG or JSON) **or native bundles** (`*.lorecard.json`, dispatched to the native parser by content sniff so their machinery is detected honestly): a plain path, or a `{path, notes: {en, zh}}` mapping to attach install notes. The 拆卡 `kind` is **detected, never declared**: build stamps `character`/`world` into the built manifest from the real payload (hooks/`[InitVar]`/EJS/`secret` lore/typed specs ⇒ `world`, keeper-imported via `.import <file> world`), and install re-checks the stamp against detection |
 | `contents.lorebooks` | no | lorebook JSON (ST `character_book` / `{entries: [...]}` shapes) |
 | `contents.panels` | no | panels YAML files (`ui/panels.yaml`) declaring module UI panels (Layer D) — ≤ 16 panels per pack; a tier-2 panel's `entry`/`assets` files are folded into the pack asset pipeline at build (sha256'd, code payload ≤ 2 MB per panel) |
 | `assets` | no | media files: `path` + optional `title`/`license`/`tags`/`mime`; `sha256`/`size`/`mime` are FILLED IN at pack time (a hand-declared `sha256` must match the file) |
 | `trust` | forbidden in source | GENERATED at pack time (counts incl. `panels`, `has_hooks`, `has_ejs`, `asset_bytes`); a hand-written block fails the build. Install RE-DERIVES it from the archive with the same detectors and rejects a mismatch — a hand-assembled pack cannot understate what it ships |
+| `files` | forbidden in source | GENERATED at pack time (manifest v2): the complete archive inventory — every member except the manifest itself with its `sha256`/`size`. Install verifies SET EQUALITY plus per-file integrity, so the declaration is exactly the shipped byte set and nothing undeclared can ride along |
+| `manifest_version` | no (source) | manifest schema version; omitted means current (2). A built archive always carries it explicitly. Older versions upgrade through registered migrations; unknown/newer versions refuse cleanly |
 
 Full example — a source tree's `pack.yaml`:
 
@@ -476,9 +479,8 @@ contents:
   skills: [skills/omen-engine]      # a dir holding SKILL.md (+ hooks.js)
   rulepacks: [rulepacks/pulp.yaml]  # full systems, or patches (`extends: coc7` + deltas)
   cards:
-    - cards/investigator.png        # plain path = character card (player-importable)
-    - path: cards/keeper.png        # world card: hooks/[InitVar]/EJS ride here
-      kind: world
+    - cards/investigator.png        # a clean persona -> detected `character` (player-importable)
+    - path: cards/keeper.png        # hooks/[InitVar]/EJS ride here -> detected `world` at build
       notes:
         en: Import last, after enabling the omen-engine skill.
         zh: 最后导入，先启用 omen-engine 技能。
@@ -491,8 +493,26 @@ assets:
 ```
 
 `--pack` validates everything with the real parsers (a bad skill/rulepack/card
-means no pack), rewrites the manifest with the computed integrity + trust
-fields, and emits `<id>-<version>.lwpack`. `--install` shows the trust card,
+means no pack), rewrites the manifest with the computed integrity (`files`
+inventory) + detected card kinds + trust fields, and emits
+`<id>-<version>.lwpack`.
+
+**Stable content ids & cross-pack references.** A native bundle's worldbook
+entries may carry a stable `id`; together with the pack id it forms the
+cross-pack reference handle `<pack-id>#<entry-id>` (e.g.
+`blackmoor#lighthouse-keeper`) — how a serialized module's later installment
+references the shared world's canonical entries instead of copying them. Ids
+are author-owned and must stay stable across versions; the studio generates
+them on export. (The reference RESOLVER is future work; the handles are the
+part that must exist from day one.)
+
+**Native bundle format v1** (`*.lorecard.json`, `format: "loreweaver.card"`,
+`format_version: 1`): native-optimal field names — `opening`,
+`alternate_openings`, `dialogue_examples`, `author_notes` — plus top-level
+`hooks: [...]`, typed `variables`, per-entry `condition`/`secret`/`id`.
+`format_version` is the schema version: older documents upgrade through
+registered migrations (v0, the pre-freeze provisional shape, deliberately has
+none), newer ones refuse cleanly. `--install` shows the trust card,
 verifies, lands the files, and prints a localized "what landed + how to enable
 it" summary.
 

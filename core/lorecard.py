@@ -4,8 +4,18 @@ The card studio's lossless export ("imported cards adapt to us; forged cards are
 still play everywhere") is a flat JSON object tagged ``format: "loreweaver.card"``. Unlike a
 SillyTavern card it keeps everything ST has no safe shape for: keeper-only variables, ``secret``
 lore, typed variable specs (``core.modvars`` shape verbatim), per-entry ``condition`` expressions,
-and hook scripts. ``docs/plugins.md`` and the studio's ``docs/FORMATS.md`` document the shape;
-this module is the engine side of that contract.
+optional stable entry ``id``s (the cross-pack reference handle — ``<pack-id>#<entry-id>``), and
+top-level ``hooks`` scripts. ``docs/plugins.md`` and the studio's ``docs/FORMATS.md`` document the
+shape; this module is the engine side of that contract.
+
+Format v1 (the M16 2.0 consolidation) is native-optimal: ``opening`` /
+``alternate_openings`` / ``dialogue_examples`` / ``author_notes`` replace the ST-copied
+``first_mes`` / ``alternate_greetings`` / ``mes_example`` / ``creator_notes`` names, and hook
+scripts are the first-class top-level ``hooks`` list instead of hiding under ``extensions``.
+ST compatibility remains an IMPORT-boundary concern (``core.charcard``), never a shape this
+format carries. ``format_version`` is the schema version: older versions upgrade through
+``_FORMAT_MIGRATIONS`` step by step (v0, the pre-freeze provisional shape, is deliberately
+unmigratable), and newer versions are refused.
 
 It ONLY parses. No I/O, no network, no ``exec`` — bytes in, a :class:`Lorecard` out. Every trust
 decision (who may bring world machinery into a room, whether hooks get installed, whether
@@ -39,14 +49,17 @@ from core.charcard import MAX_CARD_FILE_BYTES, CharacterCard
 from core.modvars import normalize_spec
 
 LORECARD_FORMAT = "loreweaver.card"
-# Every bundle version this build reads. The studio currently emits 0 ("provisional" — the shape
-# may still move before it is frozen); an unknown version is refused rather than guessed at.
-SUPPORTED_FORMAT_VERSIONS = frozenset({0})
+# The schema version this build writes/reads natively. Older documents upgrade through
+# `_FORMAT_MIGRATIONS` (version -> migration(raw) -> raw for version+1, applied until the
+# document reaches CURRENT); a version with no registered migration — v0, the pre-freeze
+# provisional shape — is refused, as is anything newer than this build.
+CURRENT_FORMAT_VERSION = 1
+_FORMAT_MIGRATIONS: dict[int, Any] = {}
+SUPPORTED_FORMAT_VERSIONS = frozenset({CURRENT_FORMAT_VERSION})
 
-# Mirrors ``core.card_split.HOOKS_EXTENSION_KEY``. Kept local rather than imported so this module
-# stays dependency-light (stdlib + charcard + modvars); the two are the same string by contract,
-# and card_split re-reads the field off ``card.raw`` anyway.
-HOOKS_EXTENSION_KEY = "loreweaver_hooks"
+# v1: hooks are the top-level ``hooks`` list. ``core.card_split.card_hook_codes`` reads the
+# same key off ``card.raw`` for native bundles.
+HOOKS_KEY = "hooks"
 
 # Hard caps against a hostile or simply broken bundle fed through `.import`. The file cap is the
 # character-card cap (same upload path, same OOM concern); the rest bound prompt-injection surface
@@ -125,30 +138,40 @@ def parse_lorecard_bytes(data: bytes, filename: str = "") -> Lorecard:
     if declared != LORECARD_FORMAT:
         raise _fail(label, f"not a Loreweaver native card: format is {declared!r}, want {LORECARD_FORMAT!r}")  # i18n-exempt: author diagnostic, wrapped in a localized import summary
     version = raw.get("format_version")
-    if isinstance(version, bool) or version not in SUPPORTED_FORMAT_VERSIONS:
-        supported = ", ".join(str(item) for item in sorted(SUPPORTED_FORMAT_VERSIONS))
-        raise _fail(label, f"unsupported format_version {version!r}; this build reads: {supported}")
+    if isinstance(version, bool) or not isinstance(version, int):
+        raise _fail(label, f"format_version must be an integer, got {version!r}")  # i18n-exempt: author diagnostic, wrapped in a localized import summary
+    if version > CURRENT_FORMAT_VERSION:
+        raise _fail(
+            label,
+            f"unsupported format_version {version}; this build reads up to {CURRENT_FORMAT_VERSION}",  # i18n-exempt: author diagnostic, wrapped in a localized import summary
+        )
+    while version < CURRENT_FORMAT_VERSION:
+        migrate = _FORMAT_MIGRATIONS.get(version)
+        if migrate is None:
+            raise _fail(label, f"unsupported format_version {version}; this build reads: {CURRENT_FORMAT_VERSION}")
+        raw = migrate(raw)
+        version += 1
 
     warnings: list[str] = []
     entries = _parse_worldbook(raw.get("worldbook"), label, warnings)
     specs = _parse_variables(raw.get("variables"), label, warnings)
-    hooks = _parse_hooks(raw.get("extensions"), warnings)
+    hooks = _parse_hooks(raw.get(HOOKS_KEY), warnings)
 
     card = CharacterCard(
         name=_text(raw.get("name")).strip(),
         description=_text(raw.get("description")),
         personality=_text(raw.get("personality")),
         scenario=_text(raw.get("scenario")),
-        first_mes=_text(raw.get("first_mes")),
-        mes_example=_text(raw.get("mes_example")),
-        creator_notes=_text(raw.get("creator_notes")),
+        first_mes=_text(raw.get("opening")),
+        mes_example=_text(raw.get("dialogue_examples")),
+        creator_notes=_text(raw.get("author_notes")),
         tags=_text_list(raw.get("tags")),
         character_book=entries,
         raw=raw,
     )
     return Lorecard(
         card=card,
-        alternate_greetings=tuple(_text_list(raw.get("alternate_greetings"))),
+        alternate_greetings=tuple(_text_list(raw.get("alternate_openings"))),
         hooks=hooks,
         variable_specs=specs,
         warnings=tuple(warnings),
@@ -210,7 +233,12 @@ def _parse_entry(raw: Any, index: int, label: str, warnings: list[str]) -> dict[
 
     secondary_keys = _text_list(raw.get("secondary_keys"))
     logic = _text(raw.get("selective_logic")).strip()
+    # The optional stable entry id — the cross-pack reference handle
+    # (`<pack-id>#<entry-id>`). Carried verbatim; uniqueness is warned about at
+    # parse time so authors catch collisions before anyone references them.
+    entry_id = _text(raw.get("id")).strip()
     return {
+        **({"id": entry_id} if entry_id else {}),
         "comment": title,
         "content": content,
         "keys": _text_list(raw.get("keys")),
@@ -272,21 +300,15 @@ def _parse_variables(raw: Any, label: str, warnings: list[str]) -> tuple[dict[st
     return tuple(specs)
 
 
-def _parse_hooks(raw: Any, warnings: list[str]) -> tuple[str, ...]:
-    """``extensions.loreweaver_hooks`` → hook sources. Tolerates code strings and ``{code: …}``
+def _parse_hooks(entries: Any, warnings: list[str]) -> tuple[str, ...]:
+    """The top-level ``hooks`` list → hook sources. Tolerates code strings and ``{code: …}``
     dicts, matching ``core.card_split.card_hook_codes``; installing them is the caller's call."""
-    if raw is None:
-        return ()
-    if not isinstance(raw, dict):
-        warnings.append("extensions: ignored (must be a JSON object)")  # i18n-exempt: author diagnostic, wrapped in a localized import summary
-        return ()
-    entries = raw.get(HOOKS_EXTENSION_KEY)
     if entries is None:
         return ()
     if isinstance(entries, str):
         entries = [entries]
     if not isinstance(entries, list):
-        warnings.append(f"extensions.{HOOKS_EXTENSION_KEY}: ignored (must be a list of scripts)")  # i18n-exempt: author diagnostic, wrapped in a localized import summary
+        warnings.append(f"{HOOKS_KEY}: ignored (must be a list of scripts)")  # i18n-exempt: author diagnostic, wrapped in a localized import summary
         return ()
     codes = []
     for item in entries:

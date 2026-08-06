@@ -275,20 +275,21 @@ def test_install_rejects_a_trust_card_that_hides_hooks(tmp_path: Path):
 
 
 def test_install_rejects_hooks_smuggled_into_a_hookless_pack(tmp_path: Path):
-    # A skill dir's hooks.js is always in the declared-entry set (it is optional), so the
-    # undeclared-entry check alone would let an added hooks.js ride behind an honest
-    # `has_hooks: false` card; the trust recomputation is what catches it.
+    # Manifest v2: membership is set-equality against the generated `files:` inventory,
+    # so an added hooks.js is caught as an uninventoried entry outright — no derived
+    # "a skill may always carry hooks.js" hole for it to ride through.
     src = _write_source(tmp_path)
     (src / "skills/omen-engine/hooks.js").unlink()
     built = build_pack(src, tmp_path / "hookless.lwpack")
     assert built.manifest.trust is not None and built.manifest.trust.has_hooks is False
+    assert all(item.path != "skills/omen-engine/hooks.js" for item in built.manifest.files)
 
     def smuggle(entries):
         info = zipfile.ZipInfo("skills/omen-engine/hooks.js")
         return [*entries, (info, HOOKS_JS.encode())]
 
     tampered = _rewrite_pack(built.path, tmp_path / "smuggled-hooks.lwpack", smuggle)
-    with pytest.raises(PackError, match="trust block does not match.*has_hooks"):
+    with pytest.raises(PackError, match="missing from the files inventory"):
         _install(tampered, tmp_path)
 
 
@@ -401,17 +402,28 @@ def _write_world_source(root: Path, cards_yaml: str) -> Path:
     return src
 
 
-def test_build_rejects_world_machinery_in_a_character_labeled_card(tmp_path: Path):
+def test_build_detects_world_machinery_without_any_author_label(tmp_path: Path):
+    # Manifest v2: kind is DETECTED, never declared — a bare path entry carrying
+    # machinery is stamped `world` in the built manifest automatically.
     src = _write_world_source(tmp_path, "    - cards/keeper.json\n    - cards/world.json\n")
-    with pytest.raises(PackError, match="kind: world"):
-        build_pack(src, tmp_path / "bad.lwpack")
+    built = build_pack(src, tmp_path / "auto.lwpack")
+    assert built.manifest.card_kind("cards/world.json") == "world"
+    assert built.manifest.card_kind("cards/keeper.json") == "character"
+    assert built.manifest.trust is not None and built.manifest.trust.world_cards == 1
+
+
+def test_author_declared_card_kind_is_rejected(tmp_path: Path):
+    src = _write_world_source(
+        tmp_path, "    - path: cards/world.json\n      kind: world\n"
+    )
+    with pytest.raises(PackError, match="detected from the real payload"):
+        build_pack(src, tmp_path / "declared.lwpack")
 
 
 def test_world_card_kind_builds_counts_trust_and_survives_roundtrip(tmp_path: Path):
     cards_yaml = (
         "    - cards/keeper.json\n"
         "    - path: cards/world.json\n"
-        "      kind: world\n"
         "      notes:\n"
         "        en: Import last, after the rulepack.\n"
         "        zh: 最后导入，先装规则包。\n"
@@ -436,9 +448,10 @@ def test_world_card_kind_builds_counts_trust_and_survives_roundtrip(tmp_path: Pa
 
 
 def test_verify_reenforces_card_kind_against_a_tampered_manifest(tmp_path: Path):
-    cards_yaml = "    - cards/keeper.json\n    - path: cards/world.json\n      kind: world\n"
+    cards_yaml = "    - cards/keeper.json\n    - path: cards/world.json\n"
     src = _write_world_source(tmp_path, cards_yaml)
     built = build_pack(src, tmp_path / "world.lwpack")
+    assert built.manifest.card_kind("cards/world.json") == "world"
 
     def relabel(entries):
         out = []
@@ -450,23 +463,23 @@ def test_verify_reenforces_card_kind_against_a_tampered_manifest(tmp_path: Path)
         return out
 
     tampered = _rewrite_pack(built.path, tmp_path / "tampered.lwpack", relabel)
-    with pytest.raises(PackError, match="kind: world"):
+    with pytest.raises(PackError, match="payload detects"):
         _install(tampered, tmp_path)
 
 
 LORECARD_JSON = json.dumps(
     {
         "format": "loreweaver.card",
-        "format_version": 0,
+        "format_version": 1,
         "name": "Shirasagi",
         "description": "a native world bundle",
-        "first_mes": "It is raining in Shinjuku.",
+        "opening": "It is raining in Shinjuku.",
         "variables": [{"id": "heat", "kind": "number", "default": 1, "minimum": 0, "maximum": 10}],
         "worldbook": [
             {"title": "公开传闻", "content": "白鹭账号又更新了。", "keys": ["白鹭"]},
             {"title": "真相层", "content": "手帐在深川。", "secret": True},
         ],
-        "extensions": {"loreweaver_hooks": ["on('turn_start', () => {});"]},
+        "hooks": ["on('turn_start', () => {});"],
     }
 )
 
@@ -486,22 +499,11 @@ def _write_native_source(root: Path, cards_yaml: str) -> Path:
 
 def test_native_lorecard_is_a_first_class_pack_card(tmp_path: Path):
     """A `*.lorecard.json` under cards/ goes through the NATIVE parser: its secret lore
-    and hooks count as world machinery (a character label is rejected), and the world
-    label builds, installs, and reports honest trust numbers."""
+    and hooks count as world machinery, the built manifest stamps it `world`
+    automatically, and it installs with honest trust numbers."""
     src = _write_native_source(tmp_path, "    - cards/shirasagi.lorecard.json\n")
-    with pytest.raises(PackError, match="kind: world"):
-        build_pack(src, tmp_path / "bad.lwpack")
-
-    (src / MANIFEST_NAME).write_text(
-        (src / MANIFEST_NAME)
-        .read_text(encoding="utf-8")
-        .replace(
-            "  cards:\n    - cards/shirasagi.lorecard.json\n",
-            "  cards:\n    - path: cards/shirasagi.lorecard.json\n      kind: world\n",
-        ),
-        encoding="utf-8",
-    )
     built = build_pack(src, tmp_path / "native.lwpack")
+    assert built.manifest.card_kind("cards/shirasagi.lorecard.json") == "world"
     assert built.manifest.trust is not None and built.manifest.trust.world_cards == 1
 
     report = _install(built.path, tmp_path)
@@ -511,7 +513,7 @@ def test_native_lorecard_is_a_first_class_pack_card(tmp_path: Path):
 def test_card_borne_hooks_are_disclosed_in_the_trust_card(tmp_path: Path):
     """A world card's `extensions.loreweaver_hooks` is code the keeper's world import
     installs; the trust summary must say so even when the pack ships no skill."""
-    src = _write_world_source(tmp_path, "    - path: cards/world.json\n      kind: world\n")
+    src = _write_world_source(tmp_path, "    - cards/world.json\n")
     (src / "cards/keeper.json").unlink()
     built = build_pack(src, tmp_path / "hooky.lwpack")
     assert built.manifest.trust is not None
@@ -693,18 +695,17 @@ def test_resolve_installed_path_falls_back_across_versions_missing_the_file(tmp_
     assert resolved == (old / "cards/old.png").resolve()
 
 
-def test_specs_only_lorecard_still_requires_the_world_label(tmp_path: Path):
+def test_specs_only_lorecard_is_detected_world_kind(tmp_path: Path):
     """Typed variable specs live on the BUNDLE, not the embedded card — a lorecard whose
-    only machinery is specs must not slip past the kind gate with a clean character half."""
+    only machinery is specs must still be detected (and stamped) world-kind."""
     specs_only = json.dumps(
         {
             "format": "loreweaver.card",
-            "format_version": 0,
+            "format_version": 1,
             "name": "Meter Maid",
             "description": "a persona with trackers and nothing else",
             "variables": [{"id": "heat", "kind": "number", "default": 1, "minimum": 0, "maximum": 10}],
             "worldbook": [],
-            "extensions": {},
         }
     )
     src = tmp_path / "specs-src"
@@ -716,5 +717,6 @@ def test_specs_only_lorecard_still_requires_the_world_label(tmp_path: Path):
         "contents:\n  cards:\n    - cards/meter.lorecard.json\n",
         encoding="utf-8",
     )
-    with pytest.raises(PackError, match="kind: world"):
-        build_pack(src, tmp_path / "specs.lwpack")
+    built = build_pack(src, tmp_path / "specs.lwpack")
+    assert built.manifest.card_kind("cards/meter.lorecard.json") == "world"
+    assert built.manifest.trust is not None and built.manifest.trust.world_cards == 1

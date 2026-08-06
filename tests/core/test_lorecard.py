@@ -65,15 +65,15 @@ def _bundle(**overrides) -> dict:
     """A full native bundle, shaped like `exportNativeBundle(project, specs)`."""
     bundle = {
         "format": LORECARD_FORMAT,
-        "format_version": 0,
+        "format_version": 1,
         "name": "雾锁山庄",
         "description": "A rain-soaked manor on the cliff road.",
         "personality": "Watchful.",
         "scenario": "The guests arrive at dusk.",
-        "first_mes": "The door swings open.",
-        "mes_example": "<START>\n{{user}}: Hello.",
-        "alternate_greetings": ["Lightning splits the sky.", "   ", ""],
-        "creator_notes": "Run it slow.",
+        "opening": "The door swings open.",
+        "dialogue_examples": "<START>\n{{user}}: Hello.",
+        "alternate_openings": ["Lightning splits the sky.", "   ", ""],
+        "author_notes": "Run it slow.",
         "tags": ["mystery", "克苏鲁"],
         "variables": [
             {
@@ -124,7 +124,7 @@ def _bundle(**overrides) -> dict:
             "not an entry at all",
             _entry(title="Blank", content="   "),
         ],
-        "extensions": {"loreweaver_hooks": [HOOK_SOURCE]},
+        "hooks": [HOOK_SOURCE],
     }
     bundle.update(overrides)
     return bundle
@@ -163,23 +163,23 @@ def test_full_bundle_populates_every_card_field():
     assert card.raw["format"] == LORECARD_FORMAT
 
 
-def test_alternate_greetings_are_blank_filtered():
+def test_alternate_openings_are_blank_filtered():
     assert _parse().alternate_greetings == ("Lightning splits the sky.",)
-    assert _parse(alternate_greetings=[]).alternate_greetings == ()
-    assert _parse(alternate_greetings="only one").alternate_greetings == ("only one",)
+    assert _parse(alternate_openings=[]).alternate_greetings == ()
+    assert _parse(alternate_openings="only one").alternate_greetings == ("only one",)
 
 
-def test_hooks_ride_extensions_and_stay_visible_to_the_card_splitter():
+def test_hooks_are_top_level_and_stay_visible_to_the_card_splitter():
     parsed = _parse()
     assert parsed.hooks == (HOOK_SOURCE,)
     # card_split reads the same field off `card.raw` — a native bundle with hooks is world-kind.
     assert card_hook_codes(parsed.card) == [HOOK_SOURCE]
     assert detect_world_payloads(parsed.card).any
 
-    assert _parse(extensions={}).hooks == ()
-    assert parse_lorecard_bytes(_bytes({k: v for k, v in _bundle().items() if k != "extensions"})).hooks == ()
+    assert _parse(hooks=[]).hooks == ()
+    assert parse_lorecard_bytes(_bytes({k: v for k, v in _bundle().items() if k != "hooks"})).hooks == ()
     # `{code: ...}` dicts are tolerated, matching core.card_split.card_hook_codes.
-    assert _parse(extensions={"loreweaver_hooks": [{"code": HOOK_SOURCE}, "  ", 7]}).hooks == (HOOK_SOURCE,)
+    assert _parse(hooks=[{"code": HOOK_SOURCE}, "  ", 7]).hooks == (HOOK_SOURCE,)
 
 
 def test_variables_pass_through_modvars_normalization():
@@ -351,9 +351,13 @@ def test_wrong_format_tag_raises():
 
 
 def test_unsupported_format_version_raises():
-    assert SUPPORTED_FORMAT_VERSIONS == frozenset({0})
-    for version in (1, -1, "0", None, True):
+    assert SUPPORTED_FORMAT_VERSIONS == frozenset({1})
+    # v0 (the pre-freeze provisional shape) has no migration path — deliberately.
+    for version in (0, 2, -1):
         with pytest.raises(ValueError, match="unsupported format_version"):
+            parse_lorecard_bytes(_bytes(_bundle(format_version=version)))
+    for version in ("1", None, True):
+        with pytest.raises(ValueError, match="format_version must be an integer"):
             parse_lorecard_bytes(_bytes(_bundle(format_version=version)))
 
 
@@ -406,14 +410,14 @@ def test_variable_count_cap_is_enforced():
 
 
 def test_minimal_bundle_parses_to_empty_extras():
-    parsed = parse_lorecard_bytes(_bytes({"format": LORECARD_FORMAT, "format_version": 0, "name": "Bare"}))
+    parsed = parse_lorecard_bytes(_bytes({"format": LORECARD_FORMAT, "format_version": 1, "name": "Bare"}))
     assert parsed.card.name == "Bare"
     assert parsed.card.character_book == []
     assert (parsed.hooks, parsed.variable_specs, parsed.alternate_greetings, parsed.warnings) == ((), (), (), ())
 
 
 def test_wrong_typed_sections_warn_instead_of_raising():
-    parsed = _parse(worldbook={"entries": []}, variables="none", extensions=[HOOK_SOURCE])
+    parsed = _parse(worldbook={"entries": []}, variables="none", hooks=7)
     assert parsed.card.character_book == []
     assert parsed.variable_specs == ()
     assert parsed.hooks == ()

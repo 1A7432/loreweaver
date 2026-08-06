@@ -1,119 +1,118 @@
 {
- "format": "loreweaver.card",
- "format_version": 0,
- "name": "回廊公寓",
- "description": "一栋只在雨夜出现第五层的公寓。",
- "personality": "",
- "scenario": "调查员受托寻找失踪的房客。",
- "first_mes": "雨声里，公寓的门牌忽明忽暗。",
- "mes_example": "",
- "alternate_greetings": [
-  "你在五层的楼梯间醒来。"
- ],
- "creator_notes": "roundtrip fixture",
- "tags": [
-  "调查",
-  "都市怪谈"
- ],
- "variables": [
-  {
-   "id": "理智",
-   "kind": "number",
-   "labels": {
-    "en": "Sanity",
-    "zh": "理智"
-   },
-   "default": 80,
-   "minimum": 0,
-   "maximum": 100,
-   "visibility": "player"
-  },
-  {
-   "id": "真相进度",
-   "kind": "number",
-   "labels": {
-    "en": "Truth",
-    "zh": "真相进度"
-   },
-   "default": 0,
-   "minimum": 0,
-   "maximum": 5,
-   "visibility": "keeper"
-  }
- ],
- "worldbook": [
-  {
-   "title": "五层的规则",
-   "content": "五层只在雨夜出现。",
-   "keys": [
-    "五层",
-    "雨夜"
-   ],
-   "category": "lore",
-   "secret": false,
-   "constant": true,
-   "priority": 10,
-   "enabled": true,
-   "condition": "",
-   "secondary_keys": [],
-   "selective_logic": "and_any",
-   "probability": 100,
-   "case_sensitive": false,
-   "match_whole_words": false,
-   "scan_depth": 4,
-   "position": "after",
-   "sticky": 0,
-   "cooldown": 0,
-   "delay": 0
-  },
-  {
-   "title": "管理员的秘密",
-   "content": "管理员早已不是人类。",
-   "keys": [
-    "管理员"
-   ],
-   "category": "lore",
-   "secret": true,
-   "constant": true,
-   "priority": 10,
-   "enabled": true,
-   "condition": "",
-   "secondary_keys": [],
-   "selective_logic": "and_any",
-   "probability": 100,
-   "case_sensitive": false,
-   "match_whole_words": false,
-   "scan_depth": 4,
-   "position": "after",
-   "sticky": 0,
-   "cooldown": 0,
-   "delay": 0
-  },
-  {
-   "title": "住户名册",
-   "content": "名册末页有一行湿掉的字。",
-   "keys": [
-    "名册"
-   ],
-   "category": "lore",
-   "secret": false,
-   "constant": false,
-   "priority": 10,
-   "enabled": true,
-   "condition": "世界.日 >= 2",
-   "secondary_keys": [
-    "末页"
-   ],
-   "selective_logic": "and_any",
-   "probability": 100,
-   "case_sensitive": false,
-   "match_whole_words": false,
-   "scan_depth": 4,
-   "position": "after",
-   "sticky": 0,
-   "cooldown": 0,
-   "delay": 0
-  }
- ],
- "extensions": {}
+  "format": "loreweaver.card",
+  "format_version": 1,
+  "name": "回廊公寓",
+  "description": "一栋只在雨夜出现第五层的公寓。",
+  "personality": "",
+  "scenario": "调查员受托寻找失踪的房客。",
+  "tags": [
+    "调查",
+    "都市怪谈"
+  ],
+  "variables": [
+    {
+      "id": "理智",
+      "kind": "number",
+      "labels": {
+        "en": "Sanity",
+        "zh": "理智"
+      },
+      "default": 80,
+      "minimum": 0,
+      "maximum": 100,
+      "visibility": "player"
+    },
+    {
+      "id": "真相进度",
+      "kind": "number",
+      "labels": {
+        "en": "Truth",
+        "zh": "真相进度"
+      },
+      "default": 0,
+      "minimum": 0,
+      "maximum": 5,
+      "visibility": "keeper"
+    }
+  ],
+  "worldbook": [
+    {
+      "title": "五层的规则",
+      "content": "五层只在雨夜出现。",
+      "keys": [
+        "五层",
+        "雨夜"
+      ],
+      "category": "lore",
+      "secret": false,
+      "constant": true,
+      "priority": 10,
+      "enabled": true,
+      "condition": "",
+      "secondary_keys": [],
+      "selective_logic": "and_any",
+      "probability": 100,
+      "case_sensitive": false,
+      "match_whole_words": false,
+      "scan_depth": 4,
+      "position": "after",
+      "sticky": 0,
+      "cooldown": 0,
+      "delay": 0
+    },
+    {
+      "title": "管理员的秘密",
+      "content": "管理员早已不是人类。",
+      "keys": [
+        "管理员"
+      ],
+      "category": "lore",
+      "secret": true,
+      "constant": true,
+      "priority": 10,
+      "enabled": true,
+      "condition": "",
+      "secondary_keys": [],
+      "selective_logic": "and_any",
+      "probability": 100,
+      "case_sensitive": false,
+      "match_whole_words": false,
+      "scan_depth": 4,
+      "position": "after",
+      "sticky": 0,
+      "cooldown": 0,
+      "delay": 0
+    },
+    {
+      "title": "住户名册",
+      "content": "名册末页有一行湿掉的字。",
+      "keys": [
+        "名册"
+      ],
+      "category": "lore",
+      "secret": false,
+      "constant": false,
+      "priority": 10,
+      "enabled": true,
+      "condition": "世界.日 >= 2",
+      "secondary_keys": [
+        "末页"
+      ],
+      "selective_logic": "and_any",
+      "probability": 100,
+      "case_sensitive": false,
+      "match_whole_words": false,
+      "scan_depth": 4,
+      "position": "after",
+      "sticky": 0,
+      "cooldown": 0,
+      "delay": 0
+    }
+  ],
+  "opening": "雨声里，公寓的门牌忽明忽暗。",
+  "alternate_openings": [
+    "你在五层的楼梯间醒来。"
+  ],
+  "dialogue_examples": "",
+  "author_notes": "roundtrip fixture"
 }

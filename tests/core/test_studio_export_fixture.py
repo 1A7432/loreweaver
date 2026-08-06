@@ -3,7 +3,12 @@ loreweaver-studio exporters (`exportSillyTavernCard` release flavor, `embedCardI
 `exportNativeBundle`) from a neutral synthetic project ("回廊公寓"). They pin the
 cross-repo contract in CI: if either side drifts — the studio's emitted shape or the
 engine's parsers — one of these breaks. Regenerate with the studio's exporters, never
-by hand."""
+by hand.
+
+ONE sanctioned exception: `studio_export.lorecard.json` was mechanically migrated to
+lorecard format v1 (M16 2.0 consolidation — field renames + top-level hooks) ahead of
+the studio's v1 exporter. It expresses the NEW contract the studio must emit; replace
+it with a real `exportNativeBundle` v1 output as soon as the studio side lands."""
 
 from __future__ import annotations
 
