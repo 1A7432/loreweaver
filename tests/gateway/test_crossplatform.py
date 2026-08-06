@@ -274,7 +274,8 @@ async def test_luck_spend_turn_emits_adjusted_existing_roll_without_a_reroll(mon
         raise AssertionError("Luck spending must not reroll")
 
     monkeypatch.setattr(services.dice, "roll_expression", unexpected_roll)
-    monkeypatch.setattr(services.dice, "roll_coc_check", unexpected_roll)
+    monkeypatch.setattr(services.dice, "roll_for_check", unexpected_roll)
+    monkeypatch.setattr(services.dice, "roll_detail", unexpected_roll)
     await run_turn(
         hub,
         services,

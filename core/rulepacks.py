@@ -29,6 +29,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
+from core.resolution import CheckResolver, compile_resolution
 from core.yaml_safety import safe_load_no_aliases
 
 logger = logging.getLogger(__name__)
@@ -366,6 +367,7 @@ class RulePack:
     names: list[str] = field(default_factory=list)
     display: dict[str, dict[str, str]] = field(default_factory=dict)
     labels: dict[str, dict[str, RankLabel]] = field(default_factory=dict)
+    resolver: CheckResolver | None = None
 
     def resolve_skill(self, name: str) -> str | None:
         """Resolve a player-entered skill/attribute name to this pack's canonical key."""
@@ -468,6 +470,7 @@ def _build_rulepack(pack_id: str, data: Mapping[str, Any]) -> RulePack:
         names=[str(name) for name in (data.get("names") or [])],
         display=_parse_display_section(pack_id, data.get("display")),
         labels=_parse_labels_section(pack_id, data.get("labels")),
+        resolver=compile_resolution(pack_id, data["resolution"]) if data.get("resolution") is not None else None,
     )
 
 

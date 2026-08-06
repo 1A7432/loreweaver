@@ -1,10 +1,11 @@
-"""TRPG dice engine — `d20`-backed roller with COC7/DND success-level helpers.
+"""TRPG dice engine — the `d20`-backed roller and the check pipeline's ROLL phase.
 
-Ported from `nekro_trpg_dice_plugin/trpg_dice/core/dice_engine.py`: the regex
-expression parser/roller internals are replaced with the `d20` library
-(https://github.com/avrae/d20), while the `DiceResult` semantic layer
-(critical success/failure detection) and the COC/DND check helpers keep their
-original nekro behavior. See `docs/specs/M0.md` §2 and `docs/specs/rules_coc.md`.
+System-agnostic by construction (M16): this module is the SUBSTRATE — the
+expression language (d20 grammar plus success-counting pools ``7d10>=8``,
+fudge dice ``4df``, exploding shorthand ``5d6!``, ``{param}`` slots), the
+generic d100 tens-reroll modifier mechanic, and seeded randomness. Which
+expression to roll and how to grade it live in the rulepacks' compiled
+``resolution:`` blocks (`core.resolution`); randomness never leaves here.
 
 Determinism: `d20` draws randomness from the stdlib `random` module's global
 instance (`random.randrange`), so `seed_dice(seed)` (== `random.seed(seed)`)
@@ -16,11 +17,14 @@ from __future__ import annotations
 import random
 import re
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 import d20
 
-from core.coc_rules import DEFAULT_COC_RULE, DIFFICULTY_REGULAR, RANK_LABEL_KEYS, result_check_base
+from core.check_outcome import RollDetail
+from core.resolution import CheckResolver
 from infra.i18n import I18n, get_i18n, t
 
 # Matches a leading dice token, e.g. "d10", "2d6", "1d20" (case-insensitive; caller
@@ -40,22 +44,23 @@ _SEALDICE_MULTIPLY_RE = re.compile(r"(?<=[0-9)])\s*[x×]\s*(?=[0-9(])")
 # lookahead leaves already-valid `d20` selectors (`kh3`/`kl3`) untouched.
 _SEALDICE_BARE_KEEP_RE = re.compile(r"k(?![hl])(\d+)")
 
+# A success-counting dice pool, e.g. "7d10>=8" (count faces meeting the threshold;
+# also counts natural 1s so a pack ladder can express botch rules) — a GENERIC
+# substrate operator, not a system's.
+_POOL_RE = re.compile(r"^(\d{1,3})d(\d{1,4})\s*(>=|<=)\s*(\d{1,4})$")
+# Fudge/Fate dice, e.g. "4df" (each die -1/0/+1).
+_FUDGE_RE = re.compile(r"^(\d{0,3})df\s*([+-]\s*\d{1,4})?$")
+# Exploding-dice shorthand: "5d6!" → d20's native explode operator "5d6e6".
+_EXPLODE_BANG_RE = re.compile(r"(\d*)d(\d+)!")
+# {param} substitution slots in a pack's roll expression (integers only, range-clamped
+# by the pack's own declaration before they get here).
+_PARAM_RE = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
+
 # Upper bound on the number of SealDice bonus/penalty *tens dice* rolled. Past a handful
 # the kept min/max tens digit is already statistically saturated, so this only guards
 # against a pathological, unbounded `range()` (e.g. `.sc b100000000`, `.ra b100000000 ...`)
 # freezing the process. It does not change the outcome distribution for realistic inputs.
 _MAX_BONUS_PENALTY_DICE = 100
-
-# Upper bound on the World of Darkness dice-pool size. Mirrors
-# `_MAX_BONUS_PENALTY_DICE`'s philosophy: a model-supplied `pool_size` (e.g.
-# `wod_check` with `pool_size=20000000`) would otherwise build a list that
-# large and block the event loop for seconds. No realistic WoD pool approaches
-# this, so clamping does not change legitimate outcomes.
-_MAX_WOD_POOL = 200
-# WoD difficulty is a d10 threshold; a value outside 2..10 is nonsensical.
-_MIN_WOD_DIFFICULTY = 2
-_MAX_WOD_DIFFICULTY = 10
-
 
 def _normalize_dice_expression(expression: str) -> str:
     """Rewrite SealDice-style notation into `d20` grammar (see the regexes above).
@@ -110,8 +115,9 @@ class DiceResult:
     def is_critical_success(self) -> bool:
         """Critical success only applies to single-die checks.
 
-        A plain d20-style check crits on the max face; a d100 (COC-style percentile)
-        check crits on a natural 1.
+        A plain d20-style check crits on the max face; a d100 percentile check
+        crits on a natural 1 (the generic roll-under intuition for bare rolls —
+        graded checks go through the pack resolvers instead).
         """
         if not config.ENABLE_CRITICAL_EFFECTS:
             return False
@@ -124,9 +130,9 @@ class DiceResult:
     def is_critical_failure(self) -> bool:
         """Critical failure only applies to single-die checks.
 
-        A plain d20-style check fumbles on a natural 1; a d100 (COC-style percentile)
-        check fumbles on a natural 100. (Skill-relative 96-100 fumble bands are handled
-        by the dedicated COC check helpers, not here.)
+        A plain d20-style check fumbles on a natural 1; a d100 percentile check
+        fumbles on a natural 100. (Skill-relative fumble bands are pack ladder
+        rules, not this bare-roll intuition.)
         """
         if not config.ENABLE_CRITICAL_EFFECTS:
             return False
@@ -179,6 +185,7 @@ def _dice_result_from_roll(expression: str, result: d20.RollResult, *, is_check:
     else:
         rolls = []
         dice_sides = 0
+    all_faces = [int(die.total) for die in primary.set] if primary is not None else []
 
     dice_count = len(rolls)  # 0 when no dice were actually rolled (a pure `+N` modifier)
     if not rolls:
@@ -186,7 +193,7 @@ def _dice_result_from_roll(expression: str, result: d20.RollResult, *, is_check:
 
     total = int(result.total)
     modifier = total - sum(rolls)
-    return DiceResult(
+    parsed = DiceResult(
         expression=expression,
         rolls=rolls,
         modifier=modifier,
@@ -194,10 +201,15 @@ def _dice_result_from_roll(expression: str, result: d20.RollResult, *, is_check:
         dice_sides=dice_sides,
         is_check=is_check,
     )
+    # Every primary face incl. dropped ones (2d20kh1 keeps one, rolled two) — a
+    # display concern records/frames surface without re-rolling anything.
+    parsed.all_rolls = all_faces if len(all_faces) > len(rolls) else list(rolls)
+    return parsed
 
 
 class DiceRoller:
-    """`d20`-backed dice roller with advantage/disadvantage, COC7, WoD and Fate helpers."""
+    """`d20`-backed dice roller: generic expressions, the check pipeline's ROLL
+    phase (`roll_for_check`), advantage/disadvantage, explode/Fate/repeat."""
 
     def __init__(self, config: DiceConfig = config) -> None:
         self.config = config
@@ -217,6 +229,140 @@ class DiceRoller:
             # a raw d20 traceback.
             raise ValueError(t("dice.error.invalid_expression", expression=expression)) from exc
         return _dice_result_from_roll(expression, result, is_check=is_check)
+
+    def roll_detail(self, expression: str, params: Mapping[str, int] | None = None) -> RollDetail:
+        """Roll one resolution-DSL expression into the neutral `RollDetail` contract.
+
+        This is the ROLL phase of the check pipeline: the ONLY place randomness
+        happens. On top of the d20 grammar it understands the substrate
+        extensions every pack's ``resolution:`` may use — success-counting
+        pools (``7d10>=8`` → `successes`/`ones`), fudge dice (``4df``),
+        exploding shorthand (``5d6!``) — and ``{param}`` slots substituted from
+        `params` (integers only; the pack declaration clamps ranges upstream).
+        """
+        text = expression.strip().lower()
+        if params:
+            def _slot(match: re.Match[str]) -> str:
+                name = match.group(1)
+                if name not in params:
+                    raise ValueError(t("dice.error.invalid_expression", expression=expression))
+                return str(int(params[name]))
+
+            text = _PARAM_RE.sub(_slot, text)
+        if _PARAM_RE.search(text):
+            raise ValueError(t("dice.error.invalid_expression", expression=expression))
+
+        pool = _POOL_RE.match(text)
+        if pool:
+            count, sides = int(pool.group(1)), int(pool.group(2))
+            op, threshold = pool.group(3), int(pool.group(4))
+            if count < 1 or sides < 2:
+                raise ValueError(t("dice.error.invalid_expression", expression=expression))
+            faces = [random.randint(1, sides) for _ in range(count)]
+            if op == ">=":
+                successes = sum(1 for face in faces if face >= threshold)
+            else:
+                successes = sum(1 for face in faces if face <= threshold)
+            ones = sum(1 for face in faces if face == 1)
+            return RollDetail(
+                expression=text,
+                dice=tuple(faces),
+                total=successes,
+                modifiers={"threshold": threshold},
+                successes=successes,
+                ones=ones,
+            )
+
+        fudge = _FUDGE_RE.match(text)
+        if fudge:
+            count = int(fudge.group(1) or 4)
+            modifier = int(fudge.group(2).replace(" ", "")) if fudge.group(2) else 0
+            result = self.roll_fate(count, modifier)
+            return RollDetail(
+                expression=text,
+                dice=tuple(result.rolls),
+                total=result.total,
+                modifiers={"modifier": modifier} if modifier else {},
+            )
+
+        normalized = _EXPLODE_BANG_RE.sub(lambda match: f"{match.group(1)}d{match.group(2)}e{match.group(2)}", text)
+        result = self.roll_expression(normalized, is_check=True)
+        modifiers: dict[str, Any] = {"modifier": result.modifier} if result.modifier else {}
+        all_rolls = getattr(result, "all_rolls", list(result.rolls))
+        if len(all_rolls) > len(result.rolls):
+            modifiers["dice_all"] = list(all_rolls)
+        return RollDetail(
+            expression=text,
+            dice=tuple(result.rolls),
+            total=result.total,
+            modifiers=modifiers,
+        )
+
+    def roll_for_check(
+        self,
+        resolver: CheckResolver,
+        *,
+        params: Mapping[str, int] | None = None,
+        modifiers: Mapping[str, int] | None = None,
+    ) -> RollDetail:
+        """The check pipeline's ROLL phase for one compiled resolver.
+
+        ``modifiers`` maps the pack's declared modifier NAMES to counts. A
+        ``roll:`` override replaces the roll expression (advantage-style); a
+        ``tens_reroll:`` modifier nets its counts (keep_lowest positive,
+        keep_highest negative) into the generic d100 tens-reroll mechanic.
+        Applied modifier data is recorded on ``RollDetail.modifiers`` so
+        records and wire frames can replay what happened.
+        """
+        roll_expr = resolver.roll
+        net_tens = 0
+        applied: dict[str, Any] = {}
+        for name, count in (modifiers or {}).items():
+            spec = resolver.modifiers.get(name)
+            try:
+                count = int(count)
+            except (TypeError, ValueError):
+                count = 0
+            if spec is None or count <= 0:
+                continue
+            applied[name] = count
+            if "roll" in spec:
+                roll_expr = str(spec["roll"])
+            if spec.get("tens_reroll") == "keep_lowest":
+                net_tens += count
+            elif spec.get("tens_reroll") == "keep_highest":
+                net_tens -= count
+
+        if net_tens != 0:
+            tens = self._roll_d100_tens_reroll(net_tens)
+            detail_modifiers = {
+                **applied,
+                "base_roll": tens["roll"],
+                "extra_tens": tens["extra_tens"],
+                "final_tens": tens["final_tens"],
+            }
+            return RollDetail(
+                expression=roll_expr,
+                dice=(tens["final_roll"],),
+                total=tens["final_roll"],
+                modifiers=detail_modifiers,
+            )
+
+        rolled = self.roll_detail(roll_expr, self._check_params(resolver, params))
+        if applied:
+            rolled = RollDetail(
+                expression=rolled.expression,
+                dice=rolled.dice,
+                total=rolled.total,
+                modifiers={**dict(rolled.modifiers), **applied},
+                successes=rolled.successes,
+                ones=rolled.ones,
+            )
+        return rolled
+
+    @staticmethod
+    def _check_params(resolver: CheckResolver, params: Mapping[str, int] | None) -> dict[str, int] | None:
+        return resolver.clamp_params(params) if resolver.params else None
 
     def roll_advantage(self, expression: str, is_check: bool = False) -> DiceResult:
         """Roll `expression` twice and keep the higher total (2d20kh1-equivalent).
@@ -254,19 +400,20 @@ class DiceRoller:
         ]
         return min(candidates, key=lambda item: item.total), candidates
 
-    # -- COC7 --------------------------------------------------------------
-    def _roll_bonus_penalty_d100(self, bonus: int = 0, penalty: int = 0) -> dict:
-        """SealDice-style d100 with tens bonus/penalty dice (ported from nekro).
+    # -- d100 tens-reroll modifier -------------------------------------------
+    def _roll_d100_tens_reroll(self, net: int) -> dict:
+        """The generic d100 tens-reroll mechanic packs declare as a named
+        ``tens_reroll:`` modifier (``keep_lowest`` counts positive, ``keep_highest``
+        negative; opposing counts cancel 1-for-1).
 
-        d100 = tens*10 + ones (00+0 == 100). Bonus dice: roll extra tens dice and
-        keep the tens digit giving the *lowest* d100 value. Penalty dice: keep the
-        one giving the *highest* value. Net bonus/penalty dice cancel out 1-for-1.
+        d100 = tens*10 + ones (00+0 == 100): roll |net| extra tens dice and keep
+        the tens digit giving the lowest (net > 0) or highest (net < 0) d100.
 
         Candidates are compared by full d100 VALUE, never by bare tens digit: the
-        kept ones die is shared across every tens candidate (SealDice swaps only
-        the tens), and a tens of 0 with a ones of 0 is 100 - the *largest* roll,
-        not the smallest. Comparing bare tens would let a penalty die improve, or
-        a bonus die worsen, any `x0` roll (e.g. raw 100 dropping to 30).
+        kept ones die is shared across every tens candidate, and a tens of 0 with
+        a ones of 0 is 100 - the *largest* roll, not the smallest. Comparing bare
+        tens would let a keep_highest die improve, or a keep_lowest die worsen,
+        any `x0` roll (e.g. raw 100 dropping to 30).
         """
         roll = random.randint(1, 100)
         ones = roll % 10
@@ -276,13 +423,12 @@ class DiceRoller:
             # d100 built from a tens candidate sharing the kept ones die (00+0 == 100).
             return 100 if candidate_tens == 0 and ones == 0 else candidate_tens * 10 + ones
 
-        net_bonus = bonus - penalty
-        extra_count = min(abs(net_bonus), _MAX_BONUS_PENALTY_DICE)
+        extra_count = min(abs(net), _MAX_BONUS_PENALTY_DICE)
         extra_tens: list[int] = [random.randint(0, 9) for _ in range(extra_count)]
 
-        if net_bonus > 0:
+        if net > 0:
             final_tens = min([tens, *extra_tens], key=_value)
-        elif net_bonus < 0:
+        elif net < 0:
             final_tens = max([tens, *extra_tens], key=_value)
         else:
             final_tens = tens
@@ -295,104 +441,6 @@ class DiceRoller:
             "ones": ones,
             "extra_tens": extra_tens,
             "final_tens": final_tens,
-        }
-
-    def roll_coc_check(
-        self,
-        skill_value: int,
-        rule: int = 0,
-        difficulty: int = 1,
-        bonus: int = 0,
-        penalty: int = 0,
-    ) -> dict:
-        """CoC7 skill check wired to `coc_rules.result_check_base` (SealDice port).
-
-        Applies SealDice tens bonus/penalty dice (see `_roll_bonus_penalty_d100`)
-        before computing the success rank; `rank`/`level_code`/`level` are the same
-        canonical -2..4 code (see `coc_rules.RANK_LABEL_KEYS`) - render a localized
-        label at the edge via `coc_rank_label`, never store the CN/EN label itself.
-        """
-        bonus_penalty = self._roll_bonus_penalty_d100(bonus, penalty)
-        d100 = bonus_penalty["final_roll"]
-        rank, critical_threshold = result_check_base(rule, d100, skill_value, difficulty)
-        return {
-            "roll": d100,
-            "raw_roll": bonus_penalty["roll"],
-            "extra_tens": bonus_penalty["extra_tens"],
-            "final_tens": bonus_penalty["final_tens"],
-            "skill_value": skill_value,
-            "rank": rank,
-            "level_code": rank,
-            "level": rank,  # compatibility field (legacy nekro callers)
-            "success": rank >= 1,
-            "difficulty": difficulty,
-            "rule": rule,
-            "bonus": bonus,
-            "penalty": penalty,
-            "critical_threshold": critical_threshold,
-        }
-
-    def roll_coc_check_with_bonus(self, skill_value: int, bonus: int = 0, penalty: int = 0) -> dict:
-        """Legacy-shaped CoC check exposing the raw bonus/penalty tens-dice mechanics.
-
-        Same success-rank math as `roll_coc_check` (default rule/difficulty) but keeps
-        nekro's original diagnostic fields (`tens`/`ones`/`extra_tens`/`final_tens`,
-        plus both the raw `roll` and the bonus/penalty-adjusted `final_roll`).
-        """
-        bonus_penalty = self._roll_bonus_penalty_d100(bonus, penalty)
-        rank, critical_threshold = result_check_base(DEFAULT_COC_RULE, bonus_penalty["final_roll"], skill_value, 1)
-        return {
-            "roll": bonus_penalty["roll"],
-            "final_roll": bonus_penalty["final_roll"],
-            "skill_value": skill_value,
-            "level": rank,  # compatibility field (legacy nekro callers)
-            "level_code": rank,
-            "rank": rank,
-            "success": rank >= 1,
-            "bonus": bonus,
-            "penalty": penalty,
-            "tens": bonus_penalty["tens"],
-            "ones": bonus_penalty["ones"],
-            "extra_tens": bonus_penalty["extra_tens"],
-            "final_tens": bonus_penalty["final_tens"],
-            "critical_threshold": critical_threshold,
-            "difficulty": DIFFICULTY_REGULAR,
-            "rule": DEFAULT_COC_RULE,
-        }
-
-    # -- World of Darkness ---------------------------------------------------
-    def roll_wod_pool(self, pool_size: int, difficulty: int = 6, specialization: bool = False) -> dict:
-        """World of Darkness dice-pool check.
-
-        `pool_size` is clamped to `_MAX_WOD_POOL` and `difficulty` to
-        `_MIN_WOD_DIFFICULTY.._MAX_WOD_DIFFICULTY` so a pathological
-        (model-supplied) input cannot allocate an unbounded list / block the
-        event loop. Realistic pools/difficulties are unaffected.
-        """
-        if pool_size <= 0:
-            return {"successes": 0, "rolls": [], "botch": True}
-
-        pool_size = min(pool_size, _MAX_WOD_POOL)
-        difficulty = max(_MIN_WOD_DIFFICULTY, min(difficulty, _MAX_WOD_DIFFICULTY))
-
-        rolls = [random.randint(1, 10) for _ in range(pool_size)]
-        successes = 0
-        ones = 0
-        for roll in rolls:
-            if roll >= difficulty:
-                successes += 1
-                if specialization and roll == 10:
-                    successes += 1  # specialization: a 10 counts as two successes
-            elif roll == 1:
-                ones += 1
-
-        botch = successes == 0 and ones > 0
-        return {
-            "successes": successes,
-            "rolls": rolls,
-            "botch": botch,
-            "difficulty": difficulty,
-            "pool_size": pool_size,
         }
 
     # -- exploding / Fate / repeat -------------------------------------------
@@ -443,15 +491,9 @@ class DiceRoller:
 def seed_dice(seed: int) -> None:
     """Seed the shared stdlib `random` instance so dice rolls become deterministic.
 
-    Both the plain-`random.randint` helpers in this module (bonus/penalty dice, WoD
-    pools, Fate dice) and the `d20` library itself (`random.randrange`) draw from this
-    same global instance, so tests can call `seed_dice(N)` before rolling to get
-    reproducible faces/totals.
+    Both the plain-`random.randint` helpers in this module (tens-reroll dice,
+    success pools, Fate dice) and the `d20` library itself (`random.randrange`)
+    draw from this same global instance, so tests can call `seed_dice(N)` before
+    rolling to get reproducible faces/totals.
     """
     random.seed(seed)
-
-
-def coc_rank_label(rank: int, i18n: I18n | None = None) -> str:
-    """Localized label for a `coc_rules.result_check_base` success-rank code."""
-    active_i18n = i18n or get_i18n()
-    return active_i18n.t(RANK_LABEL_KEYS.get(rank, "coc.rank.fail"))

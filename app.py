@@ -226,13 +226,23 @@ def _run_doctor(settings: Settings, i18n: I18n) -> int:
         or "-"
     )
     rulepack_ids = core_rulepacks.available_systems()
+
+    def _rulepack_line(pack_id: str) -> str:
+        pack = core_rulepacks.load_rulepack(pack_id)
+        if pack.resolver is None:
+            return pack_id
+        variants = pack.resolver.variant_ids()
+        suffix = f"+{len(variants)} variants" if variants else "dsl"
+        return f"{pack_id} (resolution: {suffix if not variants else 'dsl ' + suffix})"
+
+    rulepack_report = ", ".join(_rulepack_line(pack_id) for pack_id in rulepack_ids)
     skill_ids = [skill.id for skill in core_skills.available_skills()]
 
     print(i18n.t("tui.doctor.header"), file=sys.stderr)
     print(i18n.t("tui.doctor.version", version=resolve_version()), file=sys.stderr)
     print(i18n.t("tui.doctor.mode", mode=mode), file=sys.stderr)
     print(i18n.t("tui.doctor.locales", locales=locale_report), file=sys.stderr)
-    print(i18n.t("tui.doctor.rulepacks", rulepacks=", ".join(rulepack_ids) or "-"), file=sys.stderr)
+    print(i18n.t("tui.doctor.rulepacks", rulepacks=rulepack_report or "-"), file=sys.stderr)
     print(
         i18n.t("tui.doctor.skills", skills=", ".join(skill_ids) or "-", count=len(skill_ids)),
         file=sys.stderr,

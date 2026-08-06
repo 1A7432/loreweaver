@@ -68,6 +68,23 @@ st_show:
   sortBy: Name
   ignores: [DSS, DSF, hpmax]
 set_keys: [dnd, dnd5e]
+# Check resolution (M16): d20 + modifier vs DC. Natural-die crits read the kept
+# face via dice[0]; `modifier` (ability + proficiency + situational) is folded
+# into `roll` by the engine before the ladder runs. advantage/disadvantage are
+# whole-roll overrides the KP tool / commands select by name.
+resolution:
+  version: 1
+  roll: 1d20
+  target: dc
+  compare: ">="
+  modifiers:
+    advantage: {roll: 2d20kh1}
+    disadvantage: {roll: 2d20kl1}
+  ranks:
+    - {id: crit, when: "dice[0] == 20", success: true, critical: true, tier: 3}
+    - {id: fumble, when: "dice[0] == 1", fumble: true, tier: 0}
+    - {id: success, when: "roll >= target", success: true, tier: 2}
+    - {id: fail, tier: 1}
 # Success-ladder presentation labels; see rulepacks/coc7.yaml for the shape.
 labels:
   en:

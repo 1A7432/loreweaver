@@ -117,12 +117,12 @@ async def test_setcoc_write_denied_for_player_but_query_open():
 
     denied = await router.dispatch(player, ".setcoc 2")
     assert denied == _denied(services)
-    # The room-wide rule was NOT changed.
-    assert await services.store.get(user_key="", store_key=f"coc_rule.{chat_key}") is None
+    # The room-wide ladder variant was NOT changed.
+    assert (await services.store.get(user_key="", store_key=f"rule_variant.{chat_key}") or "") == ""
     # The bare query stays open to a player (reads, never writes).
     current = await router.dispatch(player, ".setcoc")
-    assert current == services.i18n.with_locale("en").t("commands.setcoc.current", rule=0)
-    assert await services.store.get(user_key="", store_key=f"coc_rule.{chat_key}") is None
+    assert current == services.i18n.with_locale("en").t("commands.setcoc.current", rule="0")
+    assert (await services.store.get(user_key="", store_key=f"rule_variant.{chat_key}") or "") == ""
 
 
 async def test_setcoc_keeper_can_still_set_the_rule():
@@ -130,8 +130,9 @@ async def test_setcoc_keeper_can_still_set_the_rule():
     router = CommandRouter(services)
     chat_key = "cli:dm:coc"
     reply = await router.dispatch(_keeper_ctx(chat_key), ".setcoc 2")
-    assert reply == services.i18n.with_locale("en").t("commands.setcoc.changed", rule=2)
-    assert await services.store.get(user_key="", store_key=f"coc_rule.{chat_key}") == "2"
+    assert reply == services.i18n.with_locale("en").t("commands.setcoc.changed", rule="2")
+    # The store keeps the full ladder-variant id; the reply shows the dialect form.
+    assert await services.store.get(user_key="", store_key=f"rule_variant.{chat_key}") == "rule2"
 
 
 async def test_language_write_denied_for_player_does_not_flip_room_locale():

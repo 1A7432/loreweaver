@@ -1,0 +1,29 @@
+# World of Darkness — a success-counting d10 pool system, expressed entirely as
+# pack data (M16): the dice-expression substrate rolls `{pool}d10>=<difficulty>`
+# and the ladder below grades the counted successes. No engine code knows this
+# system exists; deleting this file removes it.
+names: [wod, "world of darkness"]
+set_keys: [wod]
+defaults: {}
+resolution:
+  version: 1
+  roll: "{pool}d10>={difficulty}"
+  target: none
+  compare: ">="
+  params:
+    pool: {min: 1, max: 200}
+    difficulty: {min: 2, max: 10, default: 6}
+  ranks:
+    - {id: botch, when: "successes == 0 && ones > 0", fumble: true, tier: 0}
+    - {id: fail, when: "successes == 0", tier: 1}
+    - {id: success, success: true, tier: 2}
+  margin: successes
+labels:
+  en:
+    botch: [Botch]
+    fail: {display: Failure, markers: []}
+    success: {display: Success, markers: []}
+  zh:
+    botch: [大失败]
+    fail: {display: 失败, markers: []}
+    success: {display: 成功, markers: []}

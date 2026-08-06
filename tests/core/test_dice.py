@@ -1,18 +1,18 @@
-"""Tests for core.dice_engine and core.coc_rules.
+"""Tests for core.dice_engine — the system-agnostic dice substrate.
 
-- Critical-success/failure semantics are ported from nekro
-  `tests/test_core_fixes.py::test_dice_result_d20_and_d100_critical_semantics`.
-- COC success-rank vectors are the ones listed in `docs/specs/rules_coc.md` §Test
-  vectors; per that doc's instructions they were derived by *running* the ported
-  `result_check_base` (not hand-computed), and all matched the doc's own worked
-  values exactly (no port-vs-doc disagreement to reconcile).
+Critical-success/failure semantics are ported from nekro
+`tests/test_core_fixes.py::test_dice_result_d20_and_d100_critical_semantics`.
+Check GRADING lives in the compiled rulepack resolvers and is exhaustively
+tabled in `tests/core/test_resolution_tables.py`; this file covers the roll
+side: expressions, the generic d100 tens-reroll modifier mechanic, pools,
+fudge/explode, and seeding.
 """
 
 import pytest
 
 from core import dice_engine
-from core.coc_rules import result_check_base
-from core.dice_engine import DiceConfig, DiceResult, DiceRoller, coc_rank_label, seed_dice
+from core.dice_engine import DiceConfig, DiceResult, DiceRoller, seed_dice
+from core.rulepacks import load_rulepack
 from infra.i18n import I18n
 
 # ---------------------------------------------------------------------------
@@ -97,62 +97,6 @@ def test_format_result_respects_explicit_zh_locale():
     result = DiceResult("1d20", [15], dice_sides=20)
     assert result.format_result(i18n=I18n(locale="zh")) == "1d20 = [15] = 15"
     assert result.format_result(show_details=False, i18n=I18n(locale="zh")) == "结果: 15"
-
-
-# ---------------------------------------------------------------------------
-# core.coc_rules.result_check_base — vectors from docs/specs/rules_coc.md
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("rule", "d100", "skill", "difficulty", "expected_rank"),
-    [
-        # rule 0, skill 50
-        (0, 1, 50, 1, 4),  # crit (d100 == 1)
-        (0, 3, 50, 1, 3),  # extreme: 3 <= 50 // 5 == 10
-        (0, 25, 50, 1, 2),  # hard: 25 <= 50 // 2 == 25
-        (0, 50, 50, 1, 1),  # regular success: 50 <= 50
-        (0, 51, 50, 1, -1),  # regular failure
-        (0, 100, 50, 1, -2),  # fumble: d100 == 100 always fumbles under rule 0
-        (0, 96, 50, 1, -1),  # skill >= 50 -> no 96-100 fumble band, plain failure
-        # rule 0, skill 40 (fumble band widens to 96-100 because skill < 50)
-        (0, 96, 40, 1, -2),
-        (0, 95, 40, 1, -1),
-        # rule 2 (domestic common), skill 70
-        (2, 5, 70, 1, 4),  # 1-5 & success -> crit
-        (2, 100, 70, 1, -2),
-        (2, 96, 70, 1, -2),
-        # rule 3 (strict), skill 30 — crit/fumble bands override the check result
-        (3, 4, 30, 1, 4),
-        (3, 97, 30, 1, -2),
-        # dg (Delta Green, rule 11), skill 60
-        (11, 1, 60, 1, 4),  # 1 always crits
-        (11, 11, 60, 1, 4),  # success & units(1) == tens(1) -> crit
-        (11, 99, 60, 1, -2),  # fail & units(9) == tens(9) -> fumble
-        (11, 23, 60, 1, 1),  # success, units(3) != tens(2) -> regular success
-        (11, 100, 60, 1, -2),  # 100 -> fumble
-    ],
-)
-def test_result_check_base_matches_rules_coc_vectors(rule, d100, skill, difficulty, expected_rank):
-    rank, _critical_threshold = result_check_base(rule, d100, skill, difficulty)
-    assert rank == expected_rank
-
-
-def test_result_check_base_success_is_rank_gte_one():
-    for rank_expected_success, d100 in ((True, 50), (False, 51)):
-        rank, _ = result_check_base(0, d100, 50, 1)
-        assert (rank >= 1) is rank_expected_success
-
-
-def test_coc_rank_label_localizes_by_rank_code():
-    assert coc_rank_label(4) == "Critical Success"
-    assert coc_rank_label(3) == "Extreme Success"
-    assert coc_rank_label(2) == "Hard Success"
-    assert coc_rank_label(1) == "Success"
-    assert coc_rank_label(-1) == "Failure"
-    assert coc_rank_label(-2) == "Fumble"
-    assert coc_rank_label(4, I18n(locale="zh")) == "大成功"
-    assert coc_rank_label(-2, I18n(locale="zh")) == "大失败"
 
 
 # ---------------------------------------------------------------------------
@@ -295,47 +239,19 @@ def test_roll_advantage_end_to_end_returns_a_single_kept_d20_face():
 
 
 # ---------------------------------------------------------------------------
-# CoC7 checks
+# The generic d100 tens-reroll modifier mechanic + roll_for_check
 # ---------------------------------------------------------------------------
 
 
-def test_roll_coc_check_returns_required_shape_and_wires_result_check_base():
-    roller = DiceRoller()
-    seed_dice(1)
-    result = roller.roll_coc_check(50)
-
-    for key in ("roll", "skill_value", "rank", "level_code", "success", "difficulty"):
-        assert key in result
-    assert result["skill_value"] == 50
-    assert result["difficulty"] == 1
-    assert result["level_code"] == result["rank"]
-    assert result["level"] == result["rank"]
-    assert result["success"] == (result["rank"] >= 1)
-
-    expected_rank, expected_crit = result_check_base(0, result["roll"], 50, 1)
-    assert result["rank"] == expected_rank
-    assert result["critical_threshold"] == expected_crit
-
-
-def test_roll_coc_check_forwards_rule_and_difficulty():
-    roller = DiceRoller()
-    seed_dice(7)
-    result = roller.roll_coc_check(30, rule=3, difficulty=2)
-    assert result["rule"] == 3
-    assert result["difficulty"] == 2
-    expected_rank, _ = result_check_base(3, result["roll"], 30, 2)
-    assert result["rank"] == expected_rank
-
-
-def test_bonus_dice_keeps_the_lowest_tens_digit(monkeypatch):
+def test_tens_reroll_keep_lowest_keeps_the_lowest_tens_digit(monkeypatch):
     roller = DiceRoller()
     # roll=47 -> tens=4, ones=7; two extra tens dice roll 8 then 2 -> min(4, 8, 2) == 2
     queued = iter([47, 8, 2])
     monkeypatch.setattr(dice_engine.random, "randint", lambda _lo, _hi: next(queued))
 
-    bonus_penalty = roller._roll_bonus_penalty_d100(bonus=2, penalty=0)
+    tens = roller._roll_d100_tens_reroll(2)
 
-    assert bonus_penalty == {
+    assert tens == {
         "roll": 47,
         "final_roll": 27,
         "tens": 4,
@@ -345,14 +261,14 @@ def test_bonus_dice_keeps_the_lowest_tens_digit(monkeypatch):
     }
 
 
-def test_penalty_dice_keeps_the_highest_tens_digit(monkeypatch):
+def test_tens_reroll_keep_highest_keeps_the_highest_tens_digit(monkeypatch):
     roller = DiceRoller()
     queued = iter([47, 8, 2])
     monkeypatch.setattr(dice_engine.random, "randint", lambda _lo, _hi: next(queued))
 
-    bonus_penalty = roller._roll_bonus_penalty_d100(bonus=0, penalty=2)
+    tens = roller._roll_d100_tens_reroll(-2)
 
-    assert bonus_penalty == {
+    assert tens == {
         "roll": 47,
         "final_roll": 87,
         "tens": 4,
@@ -362,34 +278,25 @@ def test_penalty_dice_keeps_the_highest_tens_digit(monkeypatch):
     }
 
 
-def test_bonus_penalty_net_zero_cancels_out(monkeypatch):
+def test_tens_reroll_net_zero_rolls_no_extra_dice(monkeypatch):
     roller = DiceRoller()
     monkeypatch.setattr(dice_engine.random, "randint", lambda _lo, _hi: 47)
 
-    bonus_penalty = roller._roll_bonus_penalty_d100(bonus=1, penalty=1)
+    tens = roller._roll_d100_tens_reroll(0)
 
-    assert bonus_penalty == {"roll": 47, "final_roll": 47, "tens": 4, "ones": 7, "extra_tens": [], "final_tens": 4}
+    assert tens == {"roll": 47, "final_roll": 47, "tens": 4, "ones": 7, "extra_tens": [], "final_tens": 4}
 
 
-def test_bonus_penalty_helper_handles_natural_hundred(monkeypatch):
+def test_keep_highest_die_does_not_shrink_a_natural_hundred(monkeypatch):
     roller = DiceRoller()
-    monkeypatch.setattr(dice_engine.random, "randint", lambda _lo, _hi: 100)
-
-    bonus_penalty = roller._roll_bonus_penalty_d100()
-
-    assert bonus_penalty == {"roll": 100, "final_roll": 100, "tens": 0, "ones": 0, "extra_tens": [], "final_tens": 0}
-
-
-def test_penalty_die_does_not_shrink_a_natural_hundred(monkeypatch):
-    roller = DiceRoller()
-    # raw 100 (tens 0, ones 0) is the LARGEST d100. A penalty (keep-highest) die whose
-    # extra tens is 3 must stay 100, never treat the bare tens 0 as "highest -> value 30".
+    # raw 100 (tens 0, ones 0) is the LARGEST d100. A keep-highest die whose
+    # extra tens is 3 must stay 100, never treat the bare tens 0 as "highest -> 30".
     queued = iter([100, 3])
     monkeypatch.setattr(dice_engine.random, "randint", lambda _lo, _hi: next(queued))
 
-    bonus_penalty = roller._roll_bonus_penalty_d100(bonus=0, penalty=1)
+    tens = roller._roll_d100_tens_reroll(-1)
 
-    assert bonus_penalty == {
+    assert tens == {
         "roll": 100,
         "final_roll": 100,
         "tens": 0,
@@ -399,16 +306,16 @@ def test_penalty_die_does_not_shrink_a_natural_hundred(monkeypatch):
     }
 
 
-def test_bonus_die_does_not_inflate_an_x0_roll_via_a_zero_tens(monkeypatch):
+def test_keep_lowest_die_does_not_inflate_an_x0_roll_via_a_zero_tens(monkeypatch):
     roller = DiceRoller()
-    # raw 70 (tens 7, ones 0). A bonus (keep-lowest) die whose extra tens is 0 must NOT
-    # pick tens 0 -> that is 00+0 == 100, the LARGEST value, the opposite of an improvement.
+    # raw 70 (tens 7, ones 0). A keep-lowest die whose extra tens is 0 must NOT
+    # pick tens 0 -> that is 00+0 == 100, the LARGEST value, not an improvement.
     queued = iter([70, 0])
     monkeypatch.setattr(dice_engine.random, "randint", lambda _lo, _hi: next(queued))
 
-    bonus_penalty = roller._roll_bonus_penalty_d100(bonus=1, penalty=0)
+    tens = roller._roll_d100_tens_reroll(1)
 
-    assert bonus_penalty == {
+    assert tens == {
         "roll": 70,
         "final_roll": 70,
         "tens": 7,
@@ -418,86 +325,41 @@ def test_bonus_die_does_not_inflate_an_x0_roll_via_a_zero_tens(monkeypatch):
     }
 
 
-def test_bonus_die_never_worse_and_penalty_die_never_better_than_base():
-    # Property (all d100 outcomes, incl. the x0 edge): a bonus die can only keep or lower
-    # the roll (better on a roll-under check), a penalty die can only keep or raise it.
+def test_keep_lowest_never_worse_and_keep_highest_never_better_than_base():
+    # Property (all d100 outcomes, incl. the x0 edge): a keep-lowest die can only
+    # keep or lower the roll, a keep-highest die can only keep or raise it.
     roller = DiceRoller()
     seed_dice(2026)
     for _ in range(500):
-        bonus = roller._roll_bonus_penalty_d100(bonus=1, penalty=0)
-        assert bonus["final_roll"] <= bonus["roll"]
-        penalty = roller._roll_bonus_penalty_d100(bonus=0, penalty=1)
-        assert penalty["final_roll"] >= penalty["roll"]
+        low = roller._roll_d100_tens_reroll(1)
+        assert low["final_roll"] <= low["roll"]
+        high = roller._roll_d100_tens_reroll(-1)
+        assert high["final_roll"] >= high["roll"]
 
 
-def test_roll_coc_check_with_bonus_exposes_tens_dice_diagnostics():
+def test_roll_for_check_applies_pack_declared_tens_modifiers():
+    resolver = load_rulepack("coc7").resolver
     roller = DiceRoller()
     seed_dice(3)
-    result = roller.roll_coc_check_with_bonus(50, bonus=1)
+    rolled = roller.roll_for_check(resolver, modifiers={"bonus": 1})
 
-    for key in (
-        "roll",
-        "final_roll",
-        "skill_value",
-        "level",
-        "level_code",
-        "rank",
-        "success",
-        "bonus",
-        "penalty",
-        "tens",
-        "ones",
-        "extra_tens",
-        "final_tens",
-    ):
-        assert key in result
-    assert result["bonus"] == 1
-    assert result["penalty"] == 0
-    assert len(result["extra_tens"]) == 1
-
-    expected_rank, _ = result_check_base(0, result["final_roll"], 50, 1)
-    assert result["rank"] == expected_rank
-    assert result["level"] == expected_rank
+    assert rolled.modifiers["bonus"] == 1
+    assert len(rolled.modifiers["extra_tens"]) == 1
+    assert isinstance(rolled.modifiers["base_roll"], int)
+    assert 1 <= rolled.total <= 100
+    # Opposing counts cancel 1-for-1 -> a plain 1d100 with no tens bookkeeping.
+    plain = roller.roll_for_check(resolver, modifiers={"bonus": 2, "penalty": 2})
+    assert "extra_tens" not in plain.modifiers
 
 
-# ---------------------------------------------------------------------------
-# World of Darkness pool
-# ---------------------------------------------------------------------------
-
-
-def test_roll_wod_pool_result_shape():
+def test_roll_for_check_roll_override_modifier_swaps_the_expression():
+    resolver = load_rulepack("dnd5e").resolver
     roller = DiceRoller()
-    seed_dice(1)
-    result = roller.roll_wod_pool(5, difficulty=6)
-
-    assert set(result) == {"successes", "rolls", "botch", "difficulty", "pool_size"}
-    assert len(result["rolls"]) == 5
-    assert result["successes"] == sum(1 for roll in result["rolls"] if roll >= 6)
-
-
-def test_roll_wod_pool_zero_size_is_a_botch():
-    roller = DiceRoller()
-    assert roller.roll_wod_pool(0) == {"successes": 0, "rolls": [], "botch": True}
-
-
-def test_roll_wod_pool_all_ones_is_a_botch(monkeypatch):
-    roller = DiceRoller()
-    monkeypatch.setattr(dice_engine.random, "randint", lambda _lo, _hi: 1)
-
-    result = roller.roll_wod_pool(3, difficulty=6)
-
-    assert result["successes"] == 0
-    assert result["botch"] is True
-
-
-def test_roll_wod_pool_specialization_counts_natural_ten_twice(monkeypatch):
-    roller = DiceRoller()
-    monkeypatch.setattr(dice_engine.random, "randint", lambda _lo, _hi: 10)
-
-    result = roller.roll_wod_pool(3, difficulty=6, specialization=True)
-
-    assert result["successes"] == 6
-    assert result["botch"] is False
+    seed_dice(5)
+    rolled = roller.roll_for_check(resolver, modifiers={"advantage": 1})
+    assert rolled.expression == "2d20kh1"
+    assert len(rolled.dice) == 1  # kept face only
+    assert rolled.modifiers["advantage"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -639,17 +501,16 @@ def test_normalize_dice_expression_examples():
 # ---------------------------------------------------------------------------
 
 
-def test_bonus_penalty_tens_dice_are_clamped_against_unbounded_range():
-    """A pathological bonus/penalty magnitude (e.g. from `.sc b100000000`) must not
-    spin an unbounded `range()`; the number of extra tens dice is clamped, so the
-    check returns promptly with a sane d100 result and success rank."""
+def test_tens_reroll_dice_are_clamped_against_unbounded_range():
+    """A pathological modifier magnitude (e.g. from `.sc b100000000`) must not
+    spin an unbounded `range()`; the number of extra tens dice is clamped, so
+    the roll returns promptly with a sane d100 result."""
     seed_dice(1)
-    out = DiceRoller().roll_coc_check_with_bonus(50, bonus=100_000_000)
+    out = DiceRoller()._roll_d100_tens_reroll(100_000_000)
 
     assert len(out["extra_tens"]) == dice_engine._MAX_BONUS_PENALTY_DICE  # clamped, not 100_000_000
-    assert 1 <= out["roll"] <= 100
-    assert -2 <= out["rank"] <= 4
+    assert 1 <= out["final_roll"] <= 100
 
     seed_dice(1)
-    penalized = DiceRoller().roll_coc_check(50, penalty=100_000_000)
-    assert 1 <= penalized["roll"] <= 100
+    penalized = DiceRoller()._roll_d100_tens_reroll(-100_000_000)
+    assert 1 <= penalized["final_roll"] <= 100

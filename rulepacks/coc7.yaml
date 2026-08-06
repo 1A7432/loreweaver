@@ -204,6 +204,98 @@ st_show:
   itemsPerLine: 4
   ignores: [生命值上限, 魔法值上限, 理智上限]
 set_keys: [coc, coc7]
+# Check resolution (M16): the d100 roll-under ladder, compiled by core.resolution.
+# The ENGINE rolls (`roll:`, with the named tens-dice modifiers) and the ladder
+# below INTERPRETS — a pure (roll, target) -> rank grading the engine can replay,
+# re-grade after a Luck spend, and exhaustively table-test. Expression namespace:
+# roll (final d100), target (difficulty-adjusted), raw_target (before difficulty),
+# dice[i], plus floor/ceil/min/max/abs. First matching rule wins; every ladder
+# ends with an unconditional fallback. `variants:` are the SealDice `.setcoc`
+# house rules — whole replacement ladders, selected per room at interpret time.
+resolution:
+  version: 1
+  roll: 1d100
+  target: skill
+  compare: "<="
+  modifiers:
+    bonus: {tens_reroll: keep_lowest}
+    penalty: {tens_reroll: keep_highest}
+  difficulties:
+    regular: {prefixes: {en: [regular], zh: []}}
+    hard: {target: "floor(target / 2)", prefixes: {en: [hard], zh: [困难]}}
+    extreme: {target: "floor(target / 5)", prefixes: {en: [extreme], zh: [极难]}}
+    critical: {target: "1", prefixes: {en: [critical], zh: [大成功]}}
+  # Rulebook rule (SealDice rule 0): 1 always crits; 100 always fumbles; the
+  # 96-100 fumble band applies when the EFFECTIVE target is below 50.
+  ranks:
+    - {id: crit, when: "roll == 1", success: true, critical: true, tier: 5}
+    - {id: fumble, when: "roll == 100", fumble: true, tier: 0}
+    - {id: extreme, when: "roll <= target && roll <= floor(raw_target / 5)", success: true, tier: 4}
+    - {id: hard, when: "roll <= target && roll <= floor(raw_target / 2)", success: true, tier: 3}
+    - {id: regular, when: "roll <= target", success: true, tier: 2}
+    - {id: fumble, when: "roll >= 96 && target < 50", fumble: true, tier: 0}
+    - {id: fail, tier: 1}
+  variants:
+    # rule 1: crit 1-5 at skill>=50 (else 1); fumble 96-100 below 50 (else 100).
+    rule1:
+      ranks:
+        - {id: crit, when: "roll == 1", success: true, critical: true, tier: 5}
+        - {id: crit, when: "raw_target >= 50 && roll <= 5", success: true, critical: true, tier: 5}
+        - {id: extreme, when: "roll <= target && roll <= floor(raw_target / 5)", success: true, tier: 4}
+        - {id: hard, when: "roll <= target && roll <= floor(raw_target / 2)", success: true, tier: 3}
+        - {id: regular, when: "roll <= target", success: true, tier: 2}
+        - {id: fumble, when: "raw_target < 50 && roll >= 96", fumble: true, tier: 0}
+        - {id: fumble, when: "raw_target >= 50 && roll == 100", fumble: true, tier: 0}
+        - {id: fail, tier: 1}
+    # rule 2 (domestic common): crit = 1-5 capped by the skill; fumble 96-100
+    # (a 96+ skill only fumbles above its own value).
+    rule2:
+      ranks:
+        - {id: crit, when: "roll == 1", success: true, critical: true, tier: 5}
+        - {id: crit, when: "roll <= 5 && roll <= raw_target", success: true, critical: true, tier: 5}
+        - {id: extreme, when: "roll <= target && roll <= floor(raw_target / 5)", success: true, tier: 4}
+        - {id: hard, when: "roll <= target && roll <= floor(raw_target / 2)", success: true, tier: 3}
+        - {id: regular, when: "roll <= target", success: true, tier: 2}
+        - {id: fumble, when: "raw_target < 96 && roll >= 96", fumble: true, tier: 0}
+        - {id: fumble, when: "raw_target >= 96 && roll >= min(raw_target + 1, 100)", fumble: true, tier: 0}
+        - {id: fail, tier: 1}
+    # rule 3 (strict): 1-5 crit and 96-100 fumble OVERRIDE the check result.
+    rule3:
+      ranks:
+        - {id: fumble, when: "roll >= 96", fumble: true, tier: 0}
+        - {id: crit, when: "roll <= 5", success: true, critical: true, tier: 5}
+        - {id: extreme, when: "roll <= target && roll <= floor(raw_target / 5)", success: true, tier: 4}
+        - {id: hard, when: "roll <= target && roll <= floor(raw_target / 2)", success: true, tier: 3}
+        - {id: regular, when: "roll <= target", success: true, tier: 2}
+        - {id: fail, tier: 1}
+    # rule 4 (balanced): crit 1..min(skill/10, 5); fumble from 96 + skill/10.
+    rule4:
+      ranks:
+        - {id: crit, when: "roll <= min(floor(raw_target / 10), 5)", success: true, critical: true, tier: 5}
+        - {id: extreme, when: "roll <= target && roll <= floor(raw_target / 5)", success: true, tier: 4}
+        - {id: hard, when: "roll <= target && roll <= floor(raw_target / 2)", success: true, tier: 3}
+        - {id: regular, when: "roll <= target", success: true, tier: 2}
+        - {id: fumble, when: "roll >= min(96 + floor(raw_target / 10), 100)", fumble: true, tier: 0}
+        - {id: fail, tier: 1}
+    # rule 5 (hard): crit 1..min(skill/5, 2); fumble 96-100 below 50, else 99-100.
+    rule5:
+      ranks:
+        - {id: crit, when: "roll <= min(floor(raw_target / 5), 2)", success: true, critical: true, tier: 5}
+        - {id: extreme, when: "roll <= target && roll <= floor(raw_target / 5)", success: true, tier: 4}
+        - {id: hard, when: "roll <= target && roll <= floor(raw_target / 2)", success: true, tier: 3}
+        - {id: regular, when: "roll <= target", success: true, tier: 2}
+        - {id: fumble, when: "raw_target < 50 && roll >= 96", fumble: true, tier: 0}
+        - {id: fumble, when: "raw_target >= 50 && roll >= 99", fumble: true, tier: 0}
+        - {id: fail, tier: 1}
+    # dg (Delta Green): matching digits decide — doubles crit on a success and
+    # fumble on a failure; no hard/extreme tiers; 1 always crits.
+    dg:
+      ranks:
+        - {id: crit, when: "roll == 1", success: true, critical: true, tier: 5}
+        - {id: crit, when: "roll <= target && roll % 10 == floor(roll / 10) % 10", success: true, critical: true, tier: 5}
+        - {id: fumble, when: "roll > target && roll % 10 == floor(roll / 10) % 10", fumble: true, tier: 0}
+        - {id: regular, when: "roll <= target", success: true, tier: 2}
+        - {id: fail, tier: 1}
 # Success-ladder presentation labels (rank id -> display + detector markers).
 # `display` renders in tool output and wire frames; `markers` join the agent's
 # dice-first outcome detectors (core.rulepacks.all_outcome_labels). Generic

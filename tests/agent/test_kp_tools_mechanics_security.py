@@ -24,7 +24,12 @@ import pytest
 from agent.context import AgentCtx
 from agent.kp_tools_mechanics import CharacterTools, DiceTools
 from agent.services import Services, build_services
-from core.dice_engine import _MAX_WOD_POOL, seed_dice
+from core.dice_engine import seed_dice
+from core.rulepacks import load_rulepack
+
+_MAX_WOD_POOL = next(
+    spec.maximum for spec in load_rulepack("wod").resolver.params if spec.id == "pool"
+)
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM

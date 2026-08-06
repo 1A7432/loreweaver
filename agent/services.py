@@ -157,3 +157,21 @@ def build_services(
         imagegen_runtime_config=imagegen_runtime_config,
         imagegen_credentials=imagegen_credentials,
     )
+
+
+_RULE_VARIANT_KEY = "rule_variant"
+
+
+async def room_rule_variant(store, chat_key: str) -> str | None:
+    """The room's selected house-rule ladder (a rulepack `variants:` id), or
+    ``None`` for the pack's default ladder. Set by the rule-variant command
+    (`.setcoc` today); read by every check path so grading and Luck re-grading
+    agree. Stored per room under ``rule_variant.{chat_key}``."""
+    value = await store.get(user_key="", store_key=f"{_RULE_VARIANT_KEY}.{chat_key}")
+    value = (value or "").strip()
+    return value or None
+
+
+async def set_room_rule_variant(store, chat_key: str, variant: str | None) -> None:
+    """Persist the room's house-rule ladder selection ("" clears to the default)."""
+    await store.set(user_key="", store_key=f"{_RULE_VARIANT_KEY}.{chat_key}", value=variant or "")

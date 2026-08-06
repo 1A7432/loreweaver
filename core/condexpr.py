@@ -16,6 +16,11 @@ Variable access forms, all resolved through a caller-supplied ``resolve(path) ->
 - ``getvar('name')`` — extra arguments tolerated and ignored
 - ``a.b[0]`` / ``a['key']`` bracket segments fold into the dotted path
 
+Callers may additionally inject a CLOSED table of pure functions (``functions=``,
+e.g. ``floor``/``min``/``max`` for the rulepack resolution DSL): a call ``name(a, b)``
+evaluates its arguments in this same grammar and applies the Python callable. Nothing
+outside that table is ever callable; ``getvar`` stays the only built-in.
+
 Operators: ``|| && !`` (plus word forms ``or/and/not``), ``=== !== == != >= <= > <``, arithmetic
 ``+ - * / %``, parentheses, unary minus. ``==``/``!=`` are LOOSE (numeric strings compare equal
 to their numbers, JS-style); ``===``/``!==`` are strict. Truthiness is JS-ish: ``0``, ``""``,
@@ -28,7 +33,7 @@ caller-supplied default instead (the worldbook treats a broken condition as "don
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 MAX_EXPR_LEN = 500
@@ -132,10 +137,16 @@ def _read_string(text: str, start: int) -> tuple[str, int]:
 
 
 class _Evaluator:
-    def __init__(self, tokens: list[tuple[str, Any]], resolve: Resolver) -> None:
+    def __init__(
+        self,
+        tokens: list[tuple[str, Any]],
+        resolve: Resolver,
+        functions: Mapping[str, Callable[..., Any]] | None = None,
+    ) -> None:
         self._tokens = tokens
         self._pos = 0
         self._resolve = resolve
+        self._functions = functions or {}
 
     # -- token helpers -----------------------------------------------------
 
@@ -237,7 +248,7 @@ class _Evaluator:
         raise CondExprError(f"unexpected token {value!r}")
 
     def _reference(self, first: str) -> Any:
-        # getvar('name'[, ...]) — the only callable in the grammar.
+        # getvar('name'[, ...]) — the one built-in callable in the grammar.
         if first == "getvar" and self._accept_op("("):
             kind, name = self._next()
             if kind != "str":
@@ -246,6 +257,20 @@ class _Evaluator:
                 self._next()  # tolerate and ignore extra arguments ({defaults: ...} etc.)
             self._expect_op(")")
             return self._resolve(name)
+        # Caller-injected pure functions (a CLOSED table — see the module docstring).
+        if first in self._functions and self._accept_op("("):
+            arguments: list[Any] = []
+            if not self._accept_op(")"):
+                arguments.append(self._or_expr())
+                while self._accept_op(","):
+                    arguments.append(self._or_expr())
+                self._expect_op(")")
+            try:
+                return self._functions[first](*arguments)
+            except CondExprError:
+                raise
+            except Exception as exc:
+                raise CondExprError(f"{first}() failed: {exc}") from exc
         segments = [first]
         while True:
             if self._accept_op("."):
@@ -264,16 +289,20 @@ class _Evaluator:
         return self._resolve(".".join(segments))
 
     # -- short-circuit skippers (parse without resolving) -------------------
+    # The skipped side still walks the normal evaluator over a BENIGN resolver;
+    # every reference resolves to 1 so arithmetic/ordering in the dead branch
+    # stays well-typed (a None placeholder used to make `false && x > 5` blow
+    # up as "cannot order None and 5" instead of short-circuiting cleanly).
 
     def _skip_and_expr(self) -> None:
-        resolve, self._resolve = self._resolve, lambda _path: None
+        resolve, self._resolve = self._resolve, lambda _path: 1
         try:
             self._and_expr()
         finally:
             self._resolve = resolve
 
     def _skip_not_expr(self) -> None:
-        resolve, self._resolve = self._resolve, lambda _path: None
+        resolve, self._resolve = self._resolve, lambda _path: 1
         try:
             self._not_expr()
         finally:
@@ -367,12 +396,42 @@ def _arith(op: str, left: Any, right: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def evaluate(expression: str, resolve: Resolver) -> Any:
+def evaluate(
+    expression: str,
+    resolve: Resolver,
+    *,
+    functions: Mapping[str, Callable[..., Any]] | None = None,
+) -> Any:
     """Evaluate `expression` against `resolve`, raising `CondExprError` on any problem."""
     tokens = _tokenize(expression)
     if not tokens:
         raise CondExprError("empty expression")
-    return _Evaluator(tokens, resolve).evaluate()
+    return _Evaluator(tokens, resolve, functions).evaluate()
+
+
+def compile_expression(
+    expression: str,
+    *,
+    functions: Mapping[str, Callable[..., Any]] | None = None,
+) -> Callable[[Resolver], Any]:
+    """Tokenize `expression` ONCE and return a reusable evaluator.
+
+    Lex/parse errors surface at compile time; the returned callable re-walks the
+    cached token stream per call (the resolution DSL evaluates its rank ladders
+    hot — per check, and hundreds of thousands of times in the exhaustive
+    rulebook tables — so re-tokenizing every evaluation would dominate)."""
+    tokens = _tokenize(expression)
+    if not tokens:
+        raise CondExprError("empty expression")
+    # Eager syntax check: evaluate once against a benign all-ones resolver so a
+    # malformed expression fails at COMPILE time (pack load), not mid-check.
+    # Every reference resolves to 1, keeping arithmetic/comparisons well-typed.
+    _Evaluator(tokens, lambda _path: 1, functions).evaluate()
+
+    def run(resolve: Resolver) -> Any:
+        return _Evaluator(tokens, resolve, functions).evaluate()
+
+    return run
 
 
 def evaluate_bool(expression: str, resolve: Resolver) -> bool:

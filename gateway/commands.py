@@ -13,7 +13,7 @@ from typing import Any
 
 from agent.context import AgentCtx
 from agent.kp_tools_mechanics import InitiativeTools
-from agent.services import Services
+from agent.services import Services, room_rule_variant, set_room_rule_variant
 from core.battle_recording import record_check, record_dice_roll
 from core.char_from_persona import build_sheet_from_description
 from core.character_manager import (
@@ -25,7 +25,6 @@ from core.character_manager import (
 )
 from core.character_rules import render_validation_notice, validate_sheet
 from core.check_outcome import CheckOutcome, outcome_wire
-from core.coc_rules import DEFAULT_COC_RULE, outcome_from_check
 from core.dice_engine import DiceResult
 from core.rulepacks import RulePack, load_rulepack
 from core.skills import available_skills
@@ -177,21 +176,6 @@ _DND_SKILLS = {
     "表演",
 }
 
-_DIFFICULTY_PREFIXES = (
-    ("大成功", 4),
-    ("极难", 3),
-    ("極難", 3),
-    ("困难", 2),
-    ("困難", 2),
-)
-_DIFFICULTY_WORDS = {
-    "critical": 4,
-    "crit": 4,
-    "extreme": 3,
-    "hard": 2,
-    "regular": 1,
-    "normal": 1,
-}
 _ADV_WORDS = {"adv", "advantage", "优势", "優勢"}
 _DIS_WORDS = {"dis", "disadvantage", "劣势", "劣勢"}
 _PROF_WORDS = {"prof", "proficient", "proficiency", "熟练", "熟練"}
@@ -538,13 +522,14 @@ class CommandRouter:
         left_text, right_text = _split_two_args(args)
         left = _parse_coc_check_args(left_text or "侦查", pack)
         right = _parse_coc_check_args(right_text or left.name, pack)
-        rule = await _get_coc_rule(ctx)
+        variant = await _get_rule_variant(ctx)
+        resolver = pack.resolver
         left_value = _coc_check_value(character, pack, left.name, left.temp_value)
         right_value = _coc_check_value(character, pack, right.name, right.temp_value)
-        left_roll = ctx.services.dice.roll_coc_check(left_value, rule=rule, difficulty=left.difficulty)
-        right_roll = ctx.services.dice.roll_coc_check(right_value, rule=rule, difficulty=right.difficulty)
-        left_outcome = outcome_from_check(left_roll)
-        right_outcome = outcome_from_check(right_roll)
+        left_rolled = ctx.services.dice.roll_for_check(resolver)
+        right_rolled = ctx.services.dice.roll_for_check(resolver)
+        left_outcome = resolver.interpret(left_rolled, left_value, variant=variant, difficulty=left.difficulty)
+        right_outcome = resolver.interpret(right_rolled, right_value, variant=variant, difficulty=right.difficulty)
         left_rank, right_rank = left_outcome.rank, right_outcome.rank
         if left_rank.tier > right_rank.tier:
             winner = ctx.i18n.t("commands.opposed.left")
@@ -557,27 +542,29 @@ class CommandRouter:
             winner_side = "tie"
         left_name = pack.display_name(left.canonical, ctx.locale)
         right_name = pack.display_name(right.canonical, ctx.locale)
+        left_label = pack.rank_label(left_rank.id, ctx.locale)
+        right_label = pack.rank_label(right_rank.id, ctx.locale)
         ctx.dice(
             "opposed",
             expr=f"{left_name} vs {right_name}",
-            rolls=[left_roll["roll"], right_roll["roll"]],
-            total=left_roll["roll"],
+            rolls=[left_rolled.total, right_rolled.total],
+            total=left_rolled.total,
             target=left_value,
-            outcome=outcome_wire(left_outcome, ctx.i18n.t(left_rank.label_key)),
+            outcome=outcome_wire(left_outcome, left_label),
             detail={
                 "winner": winner_side,
-                "left": _coc_event_side(left_name, left_outcome, ctx.i18n.t(left_rank.label_key)),
-                "right": _coc_event_side(right_name, right_outcome, ctx.i18n.t(right_rank.label_key)),
+                "left": _coc_event_side(left_name, left_outcome, left_label),
+                "right": _coc_event_side(right_name, right_outcome, right_label),
             },
         )
         return ctx.i18n.t(
             "commands.opposed.result",
             left=left_name,
-            left_roll=left_roll["roll"],
-            left_rank=ctx.i18n.t(left_rank.label_key),
+            left_roll=left_rolled.total,
+            left_rank=left_label,
             right=right_name,
-            right_roll=right_roll["roll"],
-            right_rank=ctx.i18n.t(right_rank.label_key),
+            right_roll=right_rolled.total,
+            right_rank=right_label,
             winner=winner,
         )
 
@@ -588,10 +575,13 @@ class CommandRouter:
         loss_text = parsed.remaining or ctx.args or "0/1"
         success_loss, failure_loss = _parse_sanity_loss(loss_text)
         san = _get_sheet_value(character, pack, "理智")
-        rule = await _get_coc_rule(ctx)
-        result = ctx.services.dice.roll_coc_check(san, rule=rule, bonus=parsed.bonus, penalty=parsed.penalty)
-        outcome = outcome_from_check(result)
-        label = ctx.i18n.t(outcome.rank.label_key)
+        variant = await _get_rule_variant(ctx)
+        resolver = pack.resolver
+        rolled = ctx.services.dice.roll_for_check(
+            resolver, modifiers={"bonus": parsed.bonus, "penalty": parsed.penalty}
+        )
+        outcome = resolver.interpret(rolled, san, variant=variant, difficulty=parsed.difficulty)
+        label = pack.rank_label(outcome.rank.id, ctx.locale)
         loss_expr = success_loss if outcome.rank.success else failure_loss
         # A non-numeric SAN-loss expression (e.g. `.sc 侦查/侦查`) must not crash the turn.
         try:
@@ -604,17 +594,12 @@ class CommandRouter:
             "subsystem",
             subsystem="sanity",
             expr=pack.display_name(parsed.canonical, ctx.locale),
-            rolls=[result["roll"]],
-            total=result["roll"],
+            rolls=[rolled.total],
+            total=rolled.total,
             target=san,
             outcome=outcome_wire(outcome, label),
             detail={
-                "difficulty": result["difficulty"],
-                "bonus": result["bonus"],
-                "penalty": result["penalty"],
-                "base_roll": result["raw_roll"],
-                "extra_tens": list(result["extra_tens"]),
-                "final_tens": result["final_tens"],
+                **dict(rolled.modifiers),
                 "loss_expr": loss_expr,
                 "loss": loss,
                 "remaining": max(0, san - loss),
@@ -632,10 +617,12 @@ class CommandRouter:
             loss=loss,
             san_before=san,
             san_after=max(0, san - loss),
+            **({"variant": variant} if variant else {}),
+            **({"difficulty": parsed.difficulty} if parsed.difficulty else {}),
         )
         return ctx.i18n.t(
             "commands.sanity.result",
-            roll=result["roll"],
+            roll=rolled.total,
             rank=label,
             loss=loss,
             san=max(0, san - loss),
@@ -795,25 +782,31 @@ class CommandRouter:
         return f"{result}\n{notice}" if notice else result
 
     async def cmd_setcoc(self, ctx: CommandCtx) -> str:
-        """`.setcoc [0-5|dg]` — set the room-wide CoC success-grading rule. The bare
-        query is open to anyone, but changing the rule regrades EVERY member's checks
-        (a house rule), so the write is keeper-gated in-handler — matching ``.bot``, so
-        a CLI/TUI keeper keeps working while a plain networked player cannot."""
+        """`.setcoc [0-5|dg]` — select the room's house-rule ladder (a rulepack
+        `variants:` id; the dice-bot community dialect maps 1-5/dg onto them,
+        0 = the pack's default ladder). The bare query is open to anyone, but
+        changing the ladder regrades EVERY member's checks (a house rule), so
+        the write is keeper-gated in-handler — matching ``.bot``."""
+        pack = load_rulepack("coc7")
+        resolver = pack.resolver
+        known = set(resolver.variant_ids()) if resolver is not None else set()
         raw = ctx.args.strip().casefold()
-        if raw == "dg":
-            rule = 11
-        elif raw.isdigit():
-            rule = int(raw)
-        else:
-            rule = await _get_coc_rule(ctx)
-            return ctx.i18n.t("commands.setcoc.current", rule=rule)
+        if not raw:
+            current = await _get_rule_variant(ctx)
+            return ctx.i18n.t("commands.setcoc.current", rule=_variant_display(current))
 
-        if rule not in {0, 1, 2, 3, 4, 5, 11}:
+        if raw == "0":
+            variant = None
+        elif raw.isdigit() and f"rule{raw}" in known:
+            variant = f"rule{raw}"
+        elif raw in known:
+            variant = raw
+        else:
             return ctx.i18n.t("commands.setcoc.invalid")
         if not _is_keeper(ctx.raw_ctx):
             return ctx.i18n.t("rooms.denied")
-        await ctx.services.store.set(user_key="", store_key=f"coc_rule.{ctx.chat_key}", value=str(rule))
-        return ctx.i18n.t("commands.setcoc.changed", rule=rule)
+        await set_room_rule_variant(ctx.services.store, ctx.chat_key, variant)
+        return ctx.i18n.t("commands.setcoc.changed", rule=_variant_display(variant))
 
     async def cmd_rename(self, ctx: CommandCtx) -> str:
         new_name = ctx.args.strip()
@@ -2452,36 +2445,28 @@ class CommandRouter:
         times, rest = _split_multi(args)
         parsed = _parse_coc_check_args(rest, pack)
         target_value = _coc_check_value(character, pack, parsed.name, parsed.temp_value)
-        effective_target = _effective_coc_target(target_value, parsed.difficulty)
-        rule = await _get_coc_rule(ctx)
+        variant = await _get_rule_variant(ctx)
+        resolver = pack.resolver
+        effective_target = resolver.effective_target(target_value, difficulty=parsed.difficulty)
         lines = []
         for _ in range(min(times, 20)):
-            result = ctx.services.dice.roll_coc_check(
-                target_value,
-                rule=rule,
-                difficulty=parsed.difficulty,
-                bonus=parsed.bonus,
-                penalty=parsed.penalty,
+            rolled = ctx.services.dice.roll_for_check(
+                resolver, modifiers={"bonus": parsed.bonus, "penalty": parsed.penalty}
             )
-            outcome = outcome_from_check(result)
-            label = ctx.i18n.t(outcome.rank.label_key)
+            outcome = resolver.interpret(
+                rolled, target_value, variant=variant, difficulty=parsed.difficulty
+            )
+            label = pack.rank_label(outcome.rank.id, ctx.locale)
             display_name = pack.display_name(parsed.canonical, ctx.locale)
             ctx.dice(
                 "check",
                 expr=display_name,
-                rolls=[result["roll"]],
-                total=result["roll"],
+                rolls=[rolled.total],
+                total=rolled.total,
                 target=target_value,
                 effective_target=effective_target,
                 outcome=outcome_wire(outcome, label),
-                detail={
-                    "difficulty": result["difficulty"],
-                    "bonus": result["bonus"],
-                    "penalty": result["penalty"],
-                    "base_roll": result["raw_roll"],
-                    "extra_tens": list(result["extra_tens"]),
-                    "final_tens": result["final_tens"],
-                },
+                detail=dict(rolled.modifiers),
             )
             await record_check(
                 ctx.services.battles,
@@ -2491,6 +2476,10 @@ class CommandRouter:
                 parsed.canonical,
                 outcome,
                 label=label,
+                bonus=parsed.bonus,
+                penalty=parsed.penalty,
+                **({"variant": variant} if variant else {}),
+                **({"difficulty": parsed.difficulty} if parsed.difficulty else {}),
             )
             lines.append(
                 ctx.i18n.t(
@@ -2498,7 +2487,7 @@ class CommandRouter:
                     name=display_name,
                     target=target_value,
                     effective=effective_target,
-                    roll=result["roll"],
+                    roll=rolled.total,
                     rank=label,
                 )
             )
@@ -2551,7 +2540,7 @@ class CommandRouter:
 class _CocParsedCheck:
     name: str
     canonical: str
-    difficulty: int = 1
+    difficulty: str | None = None
     bonus: int = 0
     penalty: int = 0
     temp_value: int | None = None
@@ -2665,7 +2654,7 @@ def _parse_coc_check_args(text: str, pack: RulePack, default_name: str = "侦查
     bonus = 0
     penalty = 0
     rest, bonus, penalty = _consume_bonus_penalty(rest, bonus, penalty)
-    difficulty, rest = _consume_difficulty(rest)
+    difficulty, rest = _consume_difficulty(rest, pack)
     rest, bonus, penalty = _consume_bonus_penalty(rest, bonus, penalty)
 
     name_text = rest.strip() or default_name
@@ -2718,33 +2707,33 @@ def _consume_bonus_penalty(text: str, bonus: int, penalty: int) -> tuple[str, in
     return rest, bonus, penalty
 
 
-def _consume_difficulty(text: str) -> tuple[int, str]:
+def _consume_difficulty(text: str, pack: RulePack) -> tuple[str | None, str]:
+    """Match a leading difficulty word against the pack's OWN declared dialect
+    (`resolution.difficulties[*].prefixes`, all locales) — the engine holds no
+    difficulty vocabulary of its own."""
     rest = text.strip()
-    for prefix, difficulty in _DIFFICULTY_PREFIXES:
-        if rest.startswith(prefix):
-            return difficulty, rest[len(prefix) :].strip()
+    resolver = pack.resolver
+    if resolver is None:
+        return None, rest
     parts = rest.split(maxsplit=1)
-    if parts:
-        word = parts[0].casefold()
-        if word in _DIFFICULTY_WORDS:
-            return _DIFFICULTY_WORDS[word], parts[1].strip() if len(parts) > 1 else ""
-    return 1, rest
+    first_word = parts[0].casefold() if parts else ""
+    for difficulty in resolver.difficulties:
+        for words in difficulty.prefixes.values():
+            for word in words:
+                if not word:
+                    continue
+                if word.isascii():
+                    if first_word == word.casefold():
+                        return difficulty.id, parts[1].strip() if len(parts) > 1 else ""
+                elif rest.startswith(word):
+                    return difficulty.id, rest[len(word):].strip()
+    return None, rest
 
 
 def _coc_check_value(character: CharacterSheet, pack: RulePack, canonical: str, temp_value: int | None) -> int:
     if temp_value is not None:
         return temp_value
     return _get_sheet_value(character, pack, canonical)
-
-
-def _effective_coc_target(value: int, difficulty: int) -> int:
-    if difficulty == 2:
-        return value // 2
-    if difficulty == 3:
-        return value // 5
-    if difficulty == 4:
-        return 1
-    return value
 
 
 def _parse_dnd_check_args(text: str, pack: RulePack) -> dict[str, Any]:
@@ -2809,14 +2798,15 @@ def _roll_loss(services: Services, expression: str) -> int:
     return max(0, services.dice.roll_expression(text).total)
 
 
-async def _get_coc_rule(ctx: CommandCtx) -> int:
-    raw = await ctx.services.store.get(user_key="", store_key=f"coc_rule.{ctx.chat_key}")
-    if raw is None:
-        return DEFAULT_COC_RULE
-    try:
-        return int(raw)
-    except ValueError:
-        return DEFAULT_COC_RULE
+async def _get_rule_variant(ctx: CommandCtx) -> str | None:
+    return await room_rule_variant(ctx.services.store, ctx.chat_key)
+
+
+def _variant_display(variant: str | None) -> str:
+    """The community short form for a ladder-variant id (rule2 -> "2", dg stays)."""
+    if not variant:
+        return "0"
+    return variant[4:] if variant.startswith("rule") and variant[4:].isdigit() else variant
 
 
 def _pack_for_character(character: CharacterSheet) -> RulePack:

@@ -93,7 +93,7 @@ async def test_en_commands_roll_inline_setcoc_make_and_check():
 
     setcoc = await router.dispatch(ctx, "/setcoc 2")
     assert setcoc == "CoC rule set to 2."
-    assert await services.store.get(user_key="", store_key="coc_rule.cli:dm:t") == "2"
+    assert await services.store.get(user_key="", store_key="rule_variant.cli:dm:t") == "rule2"
 
     created = await router.dispatch(ctx, "/coc")
     assert created is not None
@@ -164,7 +164,7 @@ async def test_zh_commands_roll_check_sheet_fullwidth_and_setcoc():
 
     setcoc = await router.dispatch(ctx, ".setcoc 2")
     assert setcoc == "CoC 房规已设为 2。"
-    assert await services.store.get(user_key="", store_key="coc_rule.cli:dm:t") == "2"
+    assert await services.store.get(user_key="", store_key="rule_variant.cli:dm:t") == "rule2"
 
 
 async def test_both_dialects_use_same_roller_for_same_seed_and_expression():

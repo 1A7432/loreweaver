@@ -25,8 +25,9 @@ AGENT_DIR = REPO_ROOT / "agent"
 # has no reason to even TALK about a specific system inside agent/.
 _SYSTEM_TOKEN_RE = re.compile(r"(?i)(?<![a-z0-9_])(coc7?|dnd(?:5e)?|wod)(?![0-9]?[a-z])")
 
-# Rules modules the agent layer must never import (grows as stage C/D move
-# more system knowledge out of the engine).
+# Rules modules the agent layer must never import. `core.coc_rules` itself was
+# DELETED in stage C (the compiled pack resolvers replaced it); the name stays
+# on the blocklist so a revival is caught immediately.
 _FORBIDDEN_IMPORTS = {"core.coc_rules"}
 
 # file name -> why it is still coupled; the M16 stage that clears it.
@@ -35,13 +36,11 @@ SYSTEM_TOKEN_ALLOWLIST: dict[str, str] = {
     "forge.py": "stage E: forge references built-in systems as generation examples",
     "kp_tools_charcard.py": "stage B: sheet-from-card fills per-system vitals",
     "kp_tools_companion.py": "stage B: companion sheet creation branches per system",
-    "kp_tools_mechanics.py": "stage C/D: legacy check branches + CoC/DND bridge ranks",
+    "kp_tools_mechanics.py": "stage B/D: per-system tool branches + attribute alias data (resolution itself is pack-compiled)",
     "loop.py": "stage D: dice tool-name lists (wod_check/sanity_check) pending materialization",
 }
 
-IMPORT_ALLOWLIST: dict[str, str] = {
-    "kp_tools_mechanics.py": "stage C: legacy result_check_base bridge until the compiled resolver lands",
-}
+IMPORT_ALLOWLIST: dict[str, str] = {}
 
 
 def _agent_sources() -> dict[str, str]:

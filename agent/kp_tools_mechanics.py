@@ -16,13 +16,11 @@ faithful to the source; only the wiring changes:
   ``self.services.dice.roll_expression(...)`` instance calls - the ported
   ``core.dice_engine.DiceRoller`` requires an instance (see its module
   docstring);
-- COC success levels are the canonical ``-2..4`` rank codes produced by
-  ``core.coc_rules.result_check_base`` - called directly (``opposed_check``)
-  or surfaced through ``core.dice_engine``'s check helpers (``sanity_check``,
-  ``skill_check``) - and rendered to a localized label at the edge via
-  ``coc_rank_label``/``services.i18n``; never compared against a hardcoded CN
-  string the way the source compares ``result["level"] == "大失败"``, and
-  never re-implemented as a second, private ladder.
+- check grading goes through the room system's COMPILED rulepack resolver
+  (`core.resolution`): the engine rolls (`DiceRoller.roll_for_check`), the
+  pack ladder interprets, and labels render via `RulePack.rank_label` — this
+  module never re-implements a success ladder and only ever branches on the
+  outcome contract's semantic flags.
 
 Every user-visible string is localized via ``self.services.i18n`` (see
 ``locales/{en,zh}/kp_tools.json``). CJK/EN game-data literals - skill and
@@ -39,7 +37,7 @@ import random
 import time
 
 from agent.context import AgentCtx
-from agent.services import Services
+from agent.services import Services, room_rule_variant
 from agent.tools import tool
 from core.battle_recording import record_check, record_dice_roll
 from core.battle_report import NPC_USER_ID, SessionRecord
@@ -51,21 +49,8 @@ from core.character_manager import (
     set_hit_points,
 )
 from core.character_rules import render_validation_notice, validate_sheet
-from core.check_outcome import CheckOutcome, Rank, RollDetail, outcome_wire
-from core.coc_rules import (
-    DEFAULT_COC_RULE,
-    DIFFICULTY_REGULAR,
-    RANKS,
-    effective_target,
-    outcome_from_check,
-    result_check_base,
-)
-from core.dice_engine import (
-    _MAX_WOD_DIFFICULTY,
-    _MAX_WOD_POOL,
-    _MIN_WOD_DIFFICULTY,
-    DiceResult,
-)
+from core.check_outcome import CheckOutcome, RollDetail, outcome_wire
+from core.dice_engine import DiceResult
 from core.luck import adjust_check_with_luck, find_latest_character_check, is_luck_eligible_check
 from core.rulepacks import load_rulepack
 
@@ -142,17 +127,6 @@ _MADNESS_TYPE_ALIASES = {
     "indefinite": "indefinite",
     "不定": "indefinite",
     "不定性": "indefinite",
-}
-
-
-# The D&D5e d20 ladder as `Rank` values (stage-A bridge; replaced by the
-# compiled dnd5e.yaml resolution ladder in stage C). `label_key` stays an
-# i18n key while the legacy renderer is alive.
-_DND_RANKS: dict[str, Rank] = {
-    "crit": Rank(id="crit", tier=3, label_key="kp_tools.dice.dnd.critical_success", success=True, critical=True),
-    "success": Rank(id="success", tier=2, label_key="kp_tools.dice.dnd.success", success=True),
-    "fail": Rank(id="fail", tier=1, label_key="kp_tools.dice.dnd.failure"),
-    "fumble": Rank(id="fumble", tier=0, label_key="kp_tools.dice.dnd.critical_failure", fumble=True),
 }
 
 
@@ -692,11 +666,14 @@ class DiceTools:
                         return i18n.t("kp_tools.dice.skill_check.unknown_skill", name=skill_name)
                     skill_value = character.skills.get(target_skill, 0)
 
-                result = dice.roll_coc_check_with_bonus(skill_value, bonus, penalty)
-                outcome = outcome_from_check(result)
-                level_label = i18n.t(outcome.rank.label_key)
+                pack = load_rulepack(character.system)
+                resolver = pack.resolver
+                variant = await room_rule_variant(self.services.store, ctx.chat_key)
+                rolled = dice.roll_for_check(resolver, modifiers={"bonus": bonus, "penalty": penalty})
+                outcome = resolver.interpret(rolled, skill_value, variant=variant)
+                level_label = pack.rank_label(outcome.rank.id, ctx.locale)
 
-                skill_label = load_rulepack("coc7").display_name(target_skill, ctx.locale)
+                skill_label = pack.display_name(target_skill, ctx.locale)
                 lines = [i18n.t("kp_tools.dice.skill_check.coc_header", name=display_name, skill=skill_label)]
                 target_line = i18n.t("kp_tools.dice.skill_check.target_line", value=skill_value)
                 if bonus > 0:
@@ -704,7 +681,8 @@ class DiceTools:
                 elif penalty > 0:
                     target_line += i18n.t("kp_tools.dice.skill_check.penalty_suffix", count=penalty)
                 lines.append(target_line)
-                lines.append(i18n.t("kp_tools.dice.skill_check.raw_roll_line", roll=result["roll"]))
+                base_roll = int(rolled.modifiers.get("base_roll", rolled.total))
+                lines.append(i18n.t("kp_tools.dice.skill_check.raw_roll_line", roll=base_roll))
 
                 if bonus > 0 or penalty > 0:
                     bp_key = (
@@ -716,12 +694,12 @@ class DiceTools:
                         i18n.t(
                             "kp_tools.dice.skill_check.tens_line",
                             label=i18n.t(bp_key),
-                            extra=result["extra_tens"],
-                            final=result["final_tens"],
+                            extra=list(rolled.modifiers.get("extra_tens", [])),
+                            final=rolled.modifiers.get("final_tens", rolled.total // 10 % 10),
                         )
                     )
 
-                lines.append(i18n.t("kp_tools.dice.skill_check.final_line", final=result["final_roll"]))
+                lines.append(i18n.t("kp_tools.dice.skill_check.final_line", final=rolled.total))
                 outcome_key = (
                     "kp_tools.dice.skill_check.outcome_success"
                     if outcome.rank.success
@@ -735,19 +713,12 @@ class DiceTools:
                         **({"actor": display_name} if actor and actor.strip() else {}),
                         "expr": skill_label,
                         "skill": target_skill,
-                        "rolls": [result["final_roll"]],
-                        "total": result["final_roll"],
+                        "rolls": [rolled.total],
+                        "total": rolled.total,
                         "target": skill_value,
-                        "effective_target": effective_target(skill_value, result["difficulty"]),
+                        "effective_target": resolver.effective_target(skill_value),
                         "outcome": outcome_wire(outcome, level_label),
-                        "detail": {
-                            "difficulty": result["difficulty"],
-                            "bonus": bonus,
-                            "penalty": penalty,
-                            "base_roll": result["roll"],
-                            "extra_tens": list(result["extra_tens"]),
-                            "final_tens": result["final_tens"],
-                        },
+                        "detail": {"bonus": bonus, "penalty": penalty, **dict(rolled.modifiers)},
                     }
                 )
                 await self._record_check(
@@ -758,10 +729,16 @@ class DiceTools:
                     label=level_label,
                     actor=display_name if actor and actor.strip() else None,
                     actor_is_npc=is_npc,
+                    bonus=bonus,
+                    penalty=penalty,
+                    **({"variant": variant} if variant else {}),
                 )
                 return "\n".join(lines)
 
-            # DND5E: full d20 + ability modifier + proficiency bonus check vs DC.
+            # d20-family: roll + modifier vs DC through the compiled resolver
+            # (advantage/disadvantage are the pack's named roll overrides).
+            pack = load_rulepack(character.system)
+            resolver = pack.resolver
             target_skill = standard_name if standard_name else skill_name
             modifier = (
                 npc_target
@@ -772,35 +749,26 @@ class DiceTools:
 
             net_advantage = bonus - penalty
             adv_label = ""
-            advantage_rolls: list[int] = []
-            disadvantage_rolls: list[int] = []
             if net_advantage > 0:
-                roll_result, candidates = dice.roll_advantage_with_candidates("1d20", is_check=True)
-                advantage_rolls = [candidate.total for candidate in candidates]
                 adv_label = i18n.t("kp_tools.dice.skill_check.advantage_label", count=net_advantage)
+                rolled = dice.roll_for_check(resolver, modifiers={"advantage": 1})
             elif net_advantage < 0:
-                roll_result, candidates = dice.roll_disadvantage_with_candidates("1d20", is_check=True)
-                disadvantage_rolls = [candidate.total for candidate in candidates]
                 adv_label = i18n.t("kp_tools.dice.skill_check.disadvantage_label", count=abs(net_advantage))
+                rolled = dice.roll_for_check(resolver, modifiers={"disadvantage": 1})
             else:
-                roll_result = dice.roll_expression("1d20", is_check=True)
+                rolled = dice.roll_for_check(resolver)
 
-            total = roll_result.total + modifier
-            if roll_result.is_critical_success():
-                dnd_rank = _DND_RANKS["crit"]
-            elif roll_result.is_critical_failure():
-                dnd_rank = _DND_RANKS["fumble"]
-            else:
-                dnd_rank = _DND_RANKS["success"] if total >= target_dc else _DND_RANKS["fail"]
-            success = dnd_rank.success
-            level_label = i18n.t(dnd_rank.label_key)
+            outcome = resolver.interpret(rolled, target_dc, modifier=modifier)
+            total = rolled.total + modifier
+            success = outcome.rank.success
+            level_label = pack.rank_label(outcome.rank.id, ctx.locale)
 
             prof_label = i18n.t("kp_tools.dice.skill_check.proficient_label") if proficient else ""
             lines = [
                 i18n.t(
                     "kp_tools.dice.skill_check.dnd_header",
                     name=display_name,
-                    skill=load_rulepack("dnd5e").display_name(target_skill, ctx.locale),
+                    skill=pack.display_name(target_skill, ctx.locale),
                     proficient=prof_label,
                 )
             ]
@@ -809,7 +777,7 @@ class DiceTools:
             lines.append(
                 i18n.t(
                     "kp_tools.dice.skill_check.dnd_roll_line",
-                    roll=roll_result.total,
+                    roll=rolled.total,
                     modifier=modifier,
                     total=total,
                     dc=target_dc,
@@ -821,47 +789,24 @@ class DiceTools:
                 else "kp_tools.dice.skill_check.outcome_failure"
             )
             lines.append(i18n.t(outcome_key, level=level_label))
-            candidate_rolls = advantage_rolls or disadvantage_rolls or list(roll_result.rolls)
-            dnd_modifiers: dict[str, object] = {
-                "modifier": modifier,
-                "proficient": proficient,
-                "bonus": bonus,
-                "penalty": penalty,
-                "base_roll": roll_result.total,
-            }
-            if advantage_rolls:
-                dnd_modifiers["advantage_rolls"] = advantage_rolls
-            if disadvantage_rolls:
-                dnd_modifiers["disadvantage_rolls"] = disadvantage_rolls
-            outcome = CheckOutcome(
-                rolled=RollDetail(
-                    expression="1d20",
-                    dice=tuple(candidate_rolls),
-                    total=total,
-                    modifiers=dnd_modifiers,
-                ),
-                target=target_dc,
-                rank=dnd_rank,
-                margin=total - target_dc,
-            )
+            candidate_rolls = list(rolled.modifiers.get("dice_all", rolled.dice))
             ctx.emit_dice(
                 {
                     "kind": "check",
                     **({"actor": display_name} if actor and actor.strip() else {}),
-                    "expr": load_rulepack("dnd5e").display_name(target_skill, ctx.locale),
+                    "expr": pack.display_name(target_skill, ctx.locale),
                     "skill": target_skill,
                     "rolls": candidate_rolls,
                     "total": total,
                     "target": target_dc,
-                    "effective_target": target_dc,
+                    "effective_target": resolver.effective_target(target_dc),
                     "outcome": outcome_wire(outcome, level_label),
                     "detail": {
                         "bonus": bonus,
                         "penalty": penalty,
                         "modifier": modifier,
-                        "base_roll": roll_result.total,
-                        "advantage_rolls": advantage_rolls,
-                        "disadvantage_rolls": disadvantage_rolls,
+                        "proficient": proficient,
+                        **dict(rolled.modifiers),
                     },
                 }
             )
@@ -873,6 +818,8 @@ class DiceTools:
                 label=level_label,
                 actor=display_name if actor and actor.strip() else None,
                 actor_is_npc=is_npc,
+                modifier=modifier,
+                proficient=proficient,
             )
             return "\n".join(lines)
         except Exception as exc:
@@ -927,8 +874,29 @@ class DiceTools:
                         "kp_tools.dice.luck.ineligible", skill=check.get("skill", "")
                     )
 
+                pack = load_rulepack(active_character.system)
+                resolver = pack.resolver
+                check_variant = str(check.get("variant", "") or "") or None
+                check_difficulty = str(check.get("difficulty", "") or "") or None
+                check_target = int(check["target"])
+
+                def _grade(
+                    roll_value: int,
+                    *,
+                    _resolver=resolver,
+                    _target=check_target,
+                    _variant=check_variant,
+                    _difficulty=check_difficulty,
+                ):
+                    return _resolver.interpret(
+                        RollDetail("1d100", (roll_value,), roll_value),
+                        _target,
+                        variant=_variant,
+                        difficulty=_difficulty,
+                    ).rank
+
                 try:
-                    adjustment = adjust_check_with_luck(check, points)
+                    adjustment = adjust_check_with_luck(check, points, grade=_grade)
                 except ValueError as exc:
                     code = str(exc)
                     if code == "luck_cannot_adjust_fumble":
@@ -963,35 +931,25 @@ class DiceTools:
                 if not updated:
                     continue
 
-                difficulty = int(check.get("difficulty", DIFFICULTY_REGULAR) or DIFFICULTY_REGULAR)
-                target = int(check["target"])
-                after_label = i18n.t(adjustment.after.label_key)
+                after_label = pack.rank_label(adjustment.after.id, ctx.locale)
                 check["label"] = after_label
-                after_outcome = CheckOutcome(
-                    rolled=RollDetail(
-                        expression="1d100",
-                        dice=(adjustment.after_roll,),
-                        total=adjustment.after_roll,
-                        modifiers={"difficulty": difficulty, "rule": int(check.get("rule", 0) or 0)},
-                    ),
-                    target=target,
-                    rank=adjustment.after,
-                    margin=effective_target(target, difficulty) - adjustment.after_roll,
+                after_outcome = resolver.interpret(
+                    RollDetail("1d100", (adjustment.after_roll,), adjustment.after_roll),
+                    check_target,
+                    variant=check_variant,
+                    difficulty=check_difficulty,
                 )
                 ctx.emit_dice(
                     {
                         "kind": "check",
-                        "expr": load_rulepack("coc7").display_name(
-                            str(check.get("skill", "")), ctx.locale
-                        ),
+                        "expr": pack.display_name(str(check.get("skill", "")), ctx.locale),
                         "skill": check.get("skill", ""),
                         "rolls": [adjustment.after_roll],
                         "total": adjustment.after_roll,
-                        "target": target,
-                        "effective_target": effective_target(target, difficulty),
+                        "target": check_target,
+                        "effective_target": resolver.effective_target(check_target, difficulty=check_difficulty),
                         "outcome": outcome_wire(after_outcome, after_label),
                         "detail": {
-                            "difficulty": difficulty,
                             "bonus": int(check.get("bonus", 0) or 0),
                             "penalty": int(check.get("penalty", 0) or 0),
                             "raw_roll": int(check["raw_roll"]),
@@ -1004,7 +962,7 @@ class DiceTools:
                 return i18n.t(
                     "kp_tools.dice.luck.success",
                     points=points,
-                    before=i18n.t(adjustment.before.label_key),
+                    before=pack.rank_label(adjustment.before.id, ctx.locale),
                     after=after_label,
                     luck=luck_after,
                 )
@@ -1033,8 +991,11 @@ class DiceTools:
                 return i18n.t("kp_tools.dice.sanity.coc_only")
 
             san_value = character.attributes.get("SAN", 50)
-            result = dice.roll_coc_check(san_value)
-            outcome = outcome_from_check(result)
+            pack = load_rulepack(character.system)
+            resolver = pack.resolver
+            variant = await room_rule_variant(self.services.store, ctx.chat_key)
+            rolled = dice.roll_for_check(resolver)
+            outcome = resolver.interpret(rolled, san_value, variant=variant)
 
             loss_expr = success_loss if outcome.rank.success else failure_loss
             loss_result = dice.roll_expression(loss_expr)
@@ -1055,7 +1016,7 @@ class DiceTools:
             character.attributes["SAN"] = new_san
             await characters.save_character(ctx.uid(), ctx.chat_key, character)
 
-            level_label = i18n.t(outcome.rank.label_key)
+            level_label = pack.rank_label(outcome.rank.id, ctx.locale)
             await self._record_check(
                 ctx,
                 character.name,
@@ -1066,6 +1027,7 @@ class DiceTools:
                 loss=loss,
                 san_before=san_value,
                 san_after=new_san,
+                **({"variant": variant} if variant else {}),
             )
             san_max = character.attributes.get("SANMAX", 99)
             ctx.emit_dice(
@@ -1073,16 +1035,13 @@ class DiceTools:
                     "kind": "subsystem",
                     "subsystem": "sanity",
                     "expr": "SAN",
-                    "rolls": [result["roll"]],
-                    "total": result["roll"],
+                    "rolls": [rolled.total],
+                    "total": rolled.total,
                     "target": san_value,
-                    "effective_target": effective_target(san_value, result["difficulty"]),
+                    "effective_target": resolver.effective_target(san_value),
                     "outcome": outcome_wire(outcome, level_label),
                     "detail": {
-                        "difficulty": result["difficulty"],
-                        "bonus": result.get("bonus", 0),
-                        "penalty": result.get("penalty", 0),
-                        "base_roll": result.get("raw_roll", result["roll"]),
+                        **dict(rolled.modifiers),
                         "loss_expr": loss_expr,
                         "loss": loss,
                         "remaining": new_san,
@@ -1098,7 +1057,7 @@ class DiceTools:
 
             lines = [
                 i18n.t(header_key, name=character.name),
-                i18n.t("kp_tools.dice.sanity.roll_line", san=san_value, roll=result["roll"]),
+                i18n.t("kp_tools.dice.sanity.roll_line", san=san_value, roll=rolled.total),
                 i18n.t("kp_tools.dice.sanity.result_line", level=level_label),
                 i18n.t(
                     "kp_tools.dice.sanity.loss_line",
@@ -1191,23 +1150,22 @@ class DiceTools:
             s1 = characters.get_skill_value(character, skill1) if skill1_value is None else skill1_value
             s2 = character.skills.get(skill2, 50) if skill2_value is None else skill2_value
 
-            r1 = random.randint(1, 100)
-            r2 = random.randint(1, 100)
+            # Both sides roll and grade through the room system's compiled
+            # resolver; the opposed comparison is `Rank.tier` — the contract's
+            # ladder ordinal — then the raw skill values as the tiebreak.
+            pack = load_rulepack(character.system)
+            resolver = pack.resolver
+            variant = await room_rule_variant(self.services.store, ctx.chat_key)
+            rolled1 = self.services.dice.roll_for_check(resolver)
+            rolled2 = self.services.dice.roll_for_check(resolver)
+            outcome1 = resolver.interpret(rolled1, s1, variant=variant)
+            outcome2 = resolver.interpret(rolled2, s2, variant=variant)
+            name1 = pack.rank_label(outcome1.rank.id, ctx.locale)
+            name2 = pack.rank_label(outcome2.rank.id, ctx.locale)
 
-            # Per-side success level: reuse `core.coc_rules.result_check_base` (the
-            # authoritative CoC7 ladder, also used by `skill_check`/`sanity_check` via
-            # `core.dice_engine`) under the default rulebook rule/difficulty, instead of
-            # re-implementing the crit/extreme/hard/fail/fumble bands here. The opposed
-            # comparison is `Rank.tier` — the contract's ladder ordinal — never a rank id.
-            lv1, _ = result_check_base(DEFAULT_COC_RULE, r1, s1, DIFFICULTY_REGULAR)
-            lv2, _ = result_check_base(DEFAULT_COC_RULE, r2, s2, DIFFICULTY_REGULAR)
-            rank1, rank2 = RANKS[lv1], RANKS[lv2]
-            name1 = i18n.t(rank1.label_key)
-            name2 = i18n.t(rank2.label_key)
-
-            if rank1.tier > rank2.tier:
+            if outcome1.rank.tier > outcome2.rank.tier:
                 winner = i18n.t("kp_tools.dice.opposed.winner_active", skill=skill1)
-            elif rank2.tier > rank1.tier:
+            elif outcome2.rank.tier > outcome1.rank.tier:
                 winner = i18n.t("kp_tools.dice.opposed.winner_passive", skill=skill2)
             elif s1 > s2:
                 winner = i18n.t("kp_tools.dice.opposed.winner_active_tiebreak", skill=skill1)
@@ -1218,8 +1176,8 @@ class DiceTools:
 
             lines = [
                 i18n.t("kp_tools.dice.opposed.header", skill1=skill1, skill2=skill2),
-                i18n.t("kp_tools.dice.opposed.active_line", skill=skill1, value=s1, roll=r1, level=name1),
-                i18n.t("kp_tools.dice.opposed.passive_line", skill=skill2, value=s2, roll=r2, level=name2),
+                i18n.t("kp_tools.dice.opposed.active_line", skill=skill1, value=s1, roll=rolled1.total, level=name1),
+                i18n.t("kp_tools.dice.opposed.passive_line", skill=skill2, value=s2, roll=rolled2.total, level=name2),
                 i18n.t("kp_tools.dice.opposed.result_line", winner=winner),
             ]
             return "\n".join(lines)
@@ -1285,42 +1243,48 @@ class DiceTools:
             difficulty: Difficulty threshold (defaults to 6).
         """
         i18n = self.services.i18n.with_locale(ctx.locale)
-        # Reject wildly out-of-range inputs with a clear message instead of letting
-        # `roll_wod_pool` silently clamp (or, before clamping, allocate a giant list
-        # and block the event loop). `roll_wod_pool` still clamps as a defense in depth.
+        pack = load_rulepack("wod")
+        resolver = pack.resolver
+        # Reject wildly out-of-range inputs with a clear message (the pack's own
+        # declared param bounds) instead of silently clamping a model-supplied value.
+        bounds = {spec.id: spec for spec in resolver.params}
+        pool_spec, diff_spec = bounds["pool"], bounds["difficulty"]
         if (
             not isinstance(pool_size, int)
             or isinstance(pool_size, bool)
-            or pool_size < 1
-            or pool_size > _MAX_WOD_POOL
+            or not pool_spec.minimum <= pool_size <= pool_spec.maximum
             or not isinstance(difficulty, int)
             or isinstance(difficulty, bool)
-            or difficulty < _MIN_WOD_DIFFICULTY
-            or difficulty > _MAX_WOD_DIFFICULTY
+            or not diff_spec.minimum <= difficulty <= diff_spec.maximum
         ):
             return i18n.t(
                 "kp_tools.dice.wod.out_of_range",
-                max_pool=_MAX_WOD_POOL,
-                min_difficulty=_MIN_WOD_DIFFICULTY,
-                max_difficulty=_MAX_WOD_DIFFICULTY,
+                max_pool=pool_spec.maximum,
+                min_difficulty=diff_spec.minimum,
+                max_difficulty=diff_spec.maximum,
             )
         try:
-            result = self.services.dice.roll_wod_pool(pool_size, difficulty)
-            rolls_str = ", ".join(str(roll) for roll in result["rolls"])
+            rolled = self.services.dice.roll_for_check(
+                resolver, params={"pool": pool_size, "difficulty": difficulty}
+            )
+            outcome = resolver.interpret(rolled, None)
+            rolls_str = ", ".join(str(face) for face in rolled.dice)
+            level = pack.rank_label(outcome.rank.id, ctx.locale)
 
-            if result["botch"]:
-                level = i18n.t("kp_tools.dice.wod.botch")
-            elif result["successes"] == 0:
-                level = i18n.t("kp_tools.dice.wod.failure")
-            elif result["successes"] == 1:
-                level = i18n.t("kp_tools.dice.wod.single_success")
-            else:
-                level = i18n.t("kp_tools.dice.wod.multi_success", count=result["successes"])
-
+            ctx.emit_dice(
+                {
+                    "kind": "check",
+                    "expr": rolled.expression,
+                    "rolls": list(rolled.dice),
+                    "total": rolled.total,
+                    "outcome": outcome_wire(outcome, level),
+                    "detail": dict(rolled.modifiers),
+                }
+            )
             lines = [
                 i18n.t("kp_tools.dice.wod.header", pool=pool_size, difficulty=difficulty),
                 i18n.t("kp_tools.dice.wod.rolls_line", rolls=rolls_str),
-                i18n.t("kp_tools.dice.wod.successes_line", count=result["successes"]),
+                i18n.t("kp_tools.dice.wod.successes_line", count=outcome.margin),
                 level,
             ]
             return "\n".join(lines)

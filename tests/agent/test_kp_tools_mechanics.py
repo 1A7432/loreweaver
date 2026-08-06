@@ -17,8 +17,9 @@ from agent.context import AgentCtx
 from agent.kp_tools_mechanics import _MADNESS_SYMPTOMS, CharacterTools, DiceTools, InitiativeTools
 from agent.services import Services, build_services
 from agent.tools import Toolset
-from core.coc_rules import DEFAULT_COC_RULE, DIFFICULTY_REGULAR, outcome_from_check, result_check_base
-from core.dice_engine import DiceRoller, coc_rank_label, seed_dice
+from core.check_outcome import RollDetail
+from core.dice_engine import DiceRoller, seed_dice
+from core.rulepacks import load_rulepack
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.i18n import I18n
@@ -319,9 +320,11 @@ async def test_skill_check_on_a_seeded_skill_yields_deterministic_rank_and_a_rea
     seed_dice(1)
     await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=True)
 
+    pack = load_rulepack("coc7")
     seed_dice(777)
-    expected = DiceRoller().roll_coc_check_with_bonus(25, bonus=0, penalty=0)
-    expected_label = coc_rank_label(expected["rank"], I18n(locale="en"))
+    expected_rolled = DiceRoller().roll_for_check(pack.resolver)
+    expected_outcome = pack.resolver.interpret(expected_rolled, 25)
+    expected_label = pack.rank_label(expected_outcome.rank.id, "en")
 
     seed_dice(777)
     text = await dice_tools.skill_check(ctx, skill_name="侦查")
@@ -330,21 +333,19 @@ async def test_skill_check_on_a_seeded_skill_yields_deterministic_rank_and_a_rea
     # The default (en) locale renders the rulepack display name, not the canonical key.
     assert "Spot Hidden" in text
     assert "侦查" not in text
-    assert str(expected["final_roll"]) in text
+    assert str(expected_rolled.total) in text
     assert expected_label in text
     payload = ctx.dice_payloads[-1]
     assert payload["kind"] == "check"
     assert payload["expr"] == "Spot Hidden"
-    assert payload["rolls"] == [expected["final_roll"]]
-    assert payload["total"] == expected["final_roll"]
+    assert payload["rolls"] == [expected_rolled.total]
+    assert payload["total"] == expected_rolled.total
     assert payload["target"] == 25
     assert payload["effective_target"] == 25
-    expected_outcome = outcome_from_check(expected)
     assert payload["outcome"]["id"] == expected_outcome.rank.id
     assert payload["outcome"]["label"] == expected_label
     assert payload["outcome"]["success"] == expected_outcome.rank.success
     assert payload["outcome"]["tier"] == expected_outcome.rank.tier
-    assert payload["detail"]["difficulty"] == expected["difficulty"]
     assert payload["detail"]["bonus"] == 0
     assert payload["detail"]["penalty"] == 0
 
@@ -391,8 +392,6 @@ async def test_coc_bonus_check_records_raw_and_candidate_tens_metadata():
     assert "raw_roll" not in check
     assert len(check["extra_tens"]) == 1
     assert isinstance(check["final_tens"], int)
-    assert check["difficulty"] == 1
-    assert check["rule"] == 0
     assert check["rank_id"] in {"crit", "extreme", "hard", "regular", "fail", "fumble"}
     assert isinstance(check["tier"], int)
 
@@ -458,17 +457,17 @@ async def test_dnd_skill_check_records_structured_advantage_and_critical_fields(
     check = record.skill_checks[0]
     assert check["target"] == 10
     assert isinstance(check["success"], bool)
-    assert len(check["advantage_rolls"]) == 2
-    assert "disadvantage_rolls" not in check
-    assert check["base_roll"] in check["advantage_rolls"]
+    # Advantage rolled 2d20kh1: every candidate face is recorded, one was kept.
+    assert len(check["dice_all"]) == 2
+    assert check["advantage"] == 1
+    assert check["modifier"] == 2  # proficiency bonus on a 10-ability sheet
     assert isinstance(check["critical"], bool)
     assert isinstance(check["fumble"], bool)
     assert check["rank_id"] in {"crit", "success", "fail", "fumble"}
     payload = ctx.dice_payloads[-1]
     assert payload["kind"] == "check"
     assert payload["expr"] == "Athletics"
-    assert payload["rolls"] == check["advantage_rolls"]
-    assert payload["total"] == check["roll"]
+    assert payload["rolls"] == check["dice_all"]
     assert payload["target"] == 10
     assert payload["effective_target"] == 10
     assert payload["outcome"]["success"] == check["success"]
@@ -485,7 +484,7 @@ async def test_coc_npc_skill_check_requires_and_uses_explicit_target_without_pla
     await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)
 
     seed_dice(314)
-    expected = DiceRoller().roll_coc_check_with_bonus(73, bonus=0, penalty=0)
+    expected_rolled = DiceRoller().roll_for_check(load_rulepack("coc7").resolver)
     seed_dice(314)
     result = await dice_tools.skill_check(
         ctx,
@@ -496,7 +495,7 @@ async def test_coc_npc_skill_check_requires_and_uses_explicit_target_without_pla
 
     assert "73" in result
     assert ctx.dice_payloads[-1]["target"] == 73
-    assert ctx.dice_payloads[-1]["total"] == expected["final_roll"]
+    assert ctx.dice_payloads[-1]["total"] == expected_rolled.total
     record = await services.battles.generator.get_current_session(ctx.chat_key)
     assert record is not None
     assert record.skill_checks[0]["user_id"] == "__npc__"
@@ -526,7 +525,9 @@ async def test_dnd_npc_skill_check_uses_explicit_total_modifier():
     record = await services.battles.generator.get_current_session(ctx.chat_key)
     assert record is not None
     assert record.skill_checks[0]["user_id"] == "__npc__"
-    assert record.skill_checks[0]["roll"] == natural.total + 6
+    # The record keeps the natural roll and the modifier separately (their sum
+    # is the compared value, mirrored by outcome margin vs the DC).
+    assert record.skill_checks[0]["roll"] == natural.total
     assert record.skill_checks[0]["modifier"] == 6
 
 
@@ -589,8 +590,9 @@ async def test_sanity_check_updates_san_deterministically():
     dice_tools = DiceTools(services)
     await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)  # SAN starts at 50/99
 
+    pack = load_rulepack("coc7")
     seed_dice(11)
-    expected_check = outcome_from_check(DiceRoller().roll_coc_check(50))
+    expected_check = pack.resolver.interpret(DiceRoller().roll_for_check(pack.resolver), 50)
     expected_loss = 50 if expected_check.rank.fumble else 0  # loss expressions are both "0" below
     expected_san = max(0, 50 - expected_loss)
 
@@ -674,8 +676,8 @@ async def test_spend_luck_atomically_adjusts_latest_own_check_without_reroll(mon
         raise AssertionError("Luck spending must not roll dice")
 
     monkeypatch.setattr(services.dice, "roll_expression", unexpected_roll)
-    monkeypatch.setattr(services.dice, "roll_coc_check", unexpected_roll)
-    monkeypatch.setattr(services.dice, "roll_coc_check_with_bonus", unexpected_roll)
+    monkeypatch.setattr(services.dice, "roll_for_check", unexpected_roll)
+    monkeypatch.setattr(services.dice, "roll_detail", unexpected_roll)
 
     result = await dice_tools.spend_luck(ctx, points=6)
 
@@ -902,11 +904,12 @@ async def test_sanity_check_fumble_drains_all_remaining_san_house_rule(monkeypat
     dice_tools = DiceTools(services)
     await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)  # SAN starts at 50/99
 
-    # d100 == 100 is always a fumble under the default CoC rule (rule 0), regardless
-    # of skill value (`core.coc_rules.result_check_base`) - force the SAN-check roll.
-    # `d20` (used for the "1d4" loss-dice roll below) draws from `random.randrange`,
-    # never `random.randint`, so this only pins the SAN-check's own d100 roll.
-    monkeypatch.setattr(random, "randint", lambda _lo, _hi: 100)
+    # d100 == 100 is always a fumble under the default ladder, regardless of
+    # skill value — pin the SAN-check's own roll to 100 (the "1d4" loss dice
+    # below still roll for real).
+    monkeypatch.setattr(
+        services.dice, "roll_for_check", lambda resolver, **kwargs: RollDetail("1d100", (100,), 100)
+    )
 
     result = await dice_tools.sanity_check(ctx, success_loss="1", failure_loss="1d4")
 
@@ -991,59 +994,40 @@ async def test_opposed_check_deterministic_outcome():
     assert "侦查" in result and "聆听" in result
 
 
-@pytest.mark.parametrize(
-    ("value", "roll"),
-    [
-        (25, 1),  # natural-1 crit regardless of skill
-        (25, 5),  # extreme (roll <= 25 // 5)
-        (25, 10),  # hard (roll <= 25 // 2)
-        (25, 25),  # regular success (roll <= value)
-        (25, 26),  # fail
-        (25, 96),  # fumble: skill < 50 -> 96-100 band
-        (60, 1),  # natural-1 crit
-        (60, 12),  # extreme (roll <= 60 // 5)
-        (60, 30),  # hard (roll <= 60 // 2)
-        (60, 60),  # regular success
-        (60, 61),  # fail
-        (60, 100),  # fumble: natural 100, any skill
-    ],
-)
-async def test_opposed_check_per_side_level_matches_core_coc_rules(monkeypatch, value, roll):
-    """`opposed_check`'s per-side level must come from the SAME authoritative
-    `core.coc_rules.result_check_base` ladder used by `skill_check`/`sanity_check`
-    (via `core.dice_engine`) - not a private re-implementation that can silently
-    drift from it. Covers a natural-1 crit, the extreme/hard/regular-success bands,
-    a plain fail, and both fumble bands (96-100 under skill 50, natural 100 otherwise).
-    """
+async def test_opposed_check_levels_come_from_the_pack_ladder():
+    """`opposed_check`'s per-side levels must come from the SAME compiled pack
+    ladder used by `skill_check`/`sanity_check` — never a private
+    re-implementation that can drift. Seed-replayed against the resolver."""
     services, ctx = _build()
     char_tools = CharacterTools(services)
     dice_tools = DiceTools(services)
     await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)
 
-    passive_value, passive_roll = 60, 50
-    queued = iter([roll, passive_roll])
-    monkeypatch.setattr(random, "randint", lambda _lo, _hi: next(queued))
+    pack = load_rulepack("coc7")
+    value, passive_value = 60, 60
+    seed_dice(19)
+    expected_active = pack.resolver.interpret(DiceRoller().roll_for_check(pack.resolver), value)
+    expected_passive = pack.resolver.interpret(DiceRoller().roll_for_check(pack.resolver), passive_value)
 
+    seed_dice(19)
     result = await dice_tools.opposed_check(
         ctx, skill1="侦查", skill2="聆听", skill1_value=value, skill2_value=passive_value
     )
 
     i18n = services.i18n.with_locale(ctx.locale)
-    expected_rank, _ = result_check_base(DEFAULT_COC_RULE, roll, value, DIFFICULTY_REGULAR)
-    expected_passive_rank, _ = result_check_base(DEFAULT_COC_RULE, passive_roll, passive_value, DIFFICULTY_REGULAR)
     expected_active_line = i18n.t(
         "kp_tools.dice.opposed.active_line",
         skill="侦查",
         value=value,
-        roll=roll,
-        level=coc_rank_label(expected_rank, i18n),
+        roll=expected_active.rolled.total,
+        level=pack.rank_label(expected_active.rank.id, ctx.locale),
     )
     expected_passive_line = i18n.t(
         "kp_tools.dice.opposed.passive_line",
         skill="聆听",
         value=passive_value,
-        roll=passive_roll,
-        level=coc_rank_label(expected_passive_rank, i18n),
+        roll=expected_passive.rolled.total,
+        level=pack.rank_label(expected_passive.rank.id, ctx.locale),
     )
     assert expected_active_line in result
     assert expected_passive_line in result

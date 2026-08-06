@@ -1,50 +1,40 @@
-"""Regression tests for the World of Darkness pool-size DoS cap.
+"""Bounds on the success-pool substrate and pack roll params (DoS guards).
 
-`roll_wod_pool` used to build a `pool_size`-length list with no bound, so a
-model-supplied `pool_size=20000000` would allocate that list and block the
-event loop for seconds. It now clamps `pool_size` to `_MAX_WOD_POOL` and
-`difficulty` to `_MIN_WOD_DIFFICULTY.._MAX_WOD_DIFFICULTY`.
+The pre-M16 `roll_wod_pool` helper clamped a pathological model-supplied pool
+size. Its replacements bound the same risk structurally: the pool expression
+grammar caps the dice count at three digits, and a pack's declared `params:`
+ranges clamp caller-supplied values before any dice are rolled.
 """
 
 import time
 
-from core.dice_engine import (
-    _MAX_WOD_DIFFICULTY,
-    _MAX_WOD_POOL,
-    _MIN_WOD_DIFFICULTY,
-    DiceRoller,
-    seed_dice,
-)
+import pytest
+
+from core.dice_engine import DiceRoller, seed_dice
+from core.rulepacks import load_rulepack
 
 
-def test_huge_pool_size_is_clamped_and_returns_fast():
+def test_pool_expression_grammar_caps_the_dice_count():
     roller = DiceRoller()
     seed_dice(1)
 
     start = time.perf_counter()
-    result = roller.roll_wod_pool(20_000_000, difficulty=6)
+    detail = roller.roll_detail("999d10>=6")
     elapsed = time.perf_counter() - start
+    assert len(detail.dice) == 999
+    assert elapsed < 1.0
 
-    assert len(result["rolls"]) == _MAX_WOD_POOL
-    assert result["pool_size"] == _MAX_WOD_POOL
-    assert elapsed < 1.0  # would be many seconds without the cap
-
-
-def test_realistic_pool_size_is_unaffected():
-    roller = DiceRoller()
-    seed_dice(1)
-
-    result = roller.roll_wod_pool(5, difficulty=6)
-    assert len(result["rolls"]) == 5
-    assert result["pool_size"] == 5
+    # Four-plus digits never parse as a pool (and the d20 grammar's own
+    # max_rolls guard rejects them), so a 20-million-die pool cannot exist.
+    with pytest.raises(ValueError):
+        roller.roll_detail("20000000d10>=6")
 
 
-def test_difficulty_is_clamped_into_valid_range():
-    roller = DiceRoller()
-    seed_dice(1)
+def test_pack_declared_params_clamp_caller_values():
+    resolver = load_rulepack("wod").resolver
+    assert resolver.clamp_params({"pool": 20_000_000, "difficulty": 1}) == {"pool": 200, "difficulty": 2}
+    assert resolver.clamp_params({"pool": -5}) == {"pool": 1, "difficulty": 6}
 
-    too_high = roller.roll_wod_pool(3, difficulty=9999)
-    assert too_high["difficulty"] == _MAX_WOD_DIFFICULTY
-
-    too_low = roller.roll_wod_pool(3, difficulty=-5)
-    assert too_low["difficulty"] == _MIN_WOD_DIFFICULTY
+    seed_dice(2)
+    detail = DiceRoller().roll_for_check(resolver, params={"pool": 20_000_000, "difficulty": 6})
+    assert len(detail.dice) == 200
