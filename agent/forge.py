@@ -333,8 +333,8 @@ async def generate_and_install_skill(
 def _unique_user_rulepack_id(user_dir: Path, base: str) -> str:
     """Rulepack analogue of `_unique_user_id`: a rulepack installs as a flat `<id>.yaml` file (not
     a `<id>/` directory), so existence is checked against the FILE. Also mirrors `_unique_user_id`
-    in never landing on a built-in id, so a generated pack can never silently occupy `coc7`'s or
-    `dnd5e`'s name even after the earlier explicit collision rejection in
+    in never landing on a built-in id, so a generated pack can never silently occupy a bundled
+    system's name even after the earlier explicit collision rejection in
     `generate_and_install_rulepack` -- defense in depth against the same class of bug.
     """
     candidate = base
@@ -372,7 +372,7 @@ async def generate_and_install_rulepack(
     (`core.rulepacks.parse_rulepack_text`) real discovery uses -- including its `derived:` section
     compiling through the safe DSL / named-computer vocabulary, so a bad derived spec raises and is
     rejected here -- and refuses both an empty/unsafe derived id and a collision with a built-in
-    system id (`coc7`, `dnd5e`). On success, installs under `core.rulepacks._USER_RULEPACK_DIR` and
+    system id. On success, installs under `core.rulepacks._USER_RULEPACK_DIR` and
     reloads discovery (`core.rulepacks.reload_rulepacks()`) so the new system is immediately visible
     to `available_systems()`/`load_rulepack()`.
     """
@@ -428,7 +428,7 @@ async def generate_and_install_rulepack(
 
     # Also refuse a pack that DECLARES a built-in's name/alias (not just a colliding id): the
     # built-in wins resolution anyway, so such a claim would be a dead alias -- reject it explicitly
-    # rather than silently write a pack that half-shadows coc7/dnd5e. Nothing is written yet.
+    # rather than silently write a pack that half-shadows a built-in. Nothing is written yet.
     if rulepacks.claims_built_in_alias((*parsed.names, *parsed.set_keys)):
         return ForgeResult(False, "", "", "", "bad_id: the generated pack claims a name/alias reserved by a built-in system")  # i18n-exempt
 

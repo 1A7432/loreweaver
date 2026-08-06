@@ -154,6 +154,7 @@ class PackTrust:
     asset_bytes: int = 0
     has_hooks: bool = False
     has_ejs: bool = False
+    has_rules_script: bool = False
     world_cards: int = 0
     panels: int = 0
 
@@ -453,6 +454,7 @@ def parse_manifest_text(text: str, *, expect_trust: bool) -> PackManifest:
                 assets=int(trust_raw.get("assets", 0)),
                 asset_bytes=int(trust_raw.get("asset_bytes", 0)),
                 has_hooks=bool(trust_raw.get("has_hooks", False)),
+                has_rules_script=bool(trust_raw.get("has_rules_script", False)),
                 has_ejs=bool(trust_raw.get("has_ejs", False)),
                 world_cards=int(trust_raw.get("world_cards", 0)),
                 panels=int(trust_raw.get("panels", 0)),
@@ -556,9 +558,34 @@ def _validate_skill_dir(read_text: Callable[[str], str], skill_dir: str, files: 
     return skill_id, has_hooks, has_ejs
 
 
+def _rulepack_script_files(path: str, text: str) -> list[str]:
+    """The rules-script filenames a rulepack YAML declares (resolution.script +
+    subsystems.*.script), validated as BARE names — a pack script always sits
+    next to its YAML, so path separators are refused before any read."""
+    try:
+        data = safe_load_no_aliases(text) or {}
+    except Exception:
+        return []  # the real parser reports the YAML error with full context
+    if not isinstance(data, Mapping):
+        return []
+    names: list[str] = []
+    resolution = data.get("resolution")
+    if isinstance(resolution, Mapping) and isinstance(resolution.get("script"), str):
+        names.append(resolution["script"].strip())
+    subsystems = data.get("subsystems")
+    if isinstance(subsystems, Mapping):
+        for spec in subsystems.values():
+            if isinstance(spec, Mapping) and isinstance(spec.get("script"), str):
+                names.append(spec["script"].strip())
+    for name in names:
+        if not name or "/" in name or "\\" in name or name != PurePosixPath(name).name:
+            raise PackError(f"rulepack {path}: script filename must be a bare name, got {name!r}")
+    return sorted(set(names))
+
+
 def _validate_rulepack_file(
     read_text: Callable[[str], str], path: str, sibling_paths: Mapping[str, str] | None = None
-) -> str:
+) -> tuple[str, list[str]]:
     stem = PurePosixPath(path).stem
     if not _SLUG_RE.match(stem):
         raise PackError(f"rulepack filename must be a slug: {path!r}")
@@ -574,11 +601,21 @@ def _validate_rulepack_file(
             return raw if isinstance(raw, Mapping) else None
         return load_raw_rulepack_yaml(base_id)
 
+    yaml_text = read_text(path)
+    script_files = _rulepack_script_files(path, yaml_text)
+    parent = str(PurePosixPath(path).parent)
+
+    def _script_loader(name: str) -> str:
+        # Names were bare-name-validated above; read next to the YAML.
+        return read_text(f"{parent}/{name}" if parent not in ("", ".") else name)
+
     try:
-        parse_rulepack_text(stem, read_text(path), base_loader=_base_loader)
+        parse_rulepack_text(stem, yaml_text, base_loader=_base_loader, script_loader=_script_loader)
     except ValueError as exc:
         raise PackError(f"rulepack {stem}: {exc}") from exc
-    return stem
+    return stem, [
+        f"{parent}/{name}" if parent not in ("", ".") else name for name in script_files
+    ]
 
 
 def _validate_card_bytes(path: str, data: bytes) -> tuple[bool, WorldPayloads]:
@@ -759,6 +796,7 @@ def _manifest_to_yaml(manifest: PackManifest) -> str:
             "asset_bytes": manifest.trust.asset_bytes,
             "has_hooks": manifest.trust.has_hooks,
             "has_ejs": manifest.trust.has_ejs,
+            "has_rules_script": manifest.trust.has_rules_script,
             "world_cards": manifest.trust.world_cards,
             "panels": manifest.trust.panels,
         },
@@ -814,10 +852,14 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
         if skill_hooks:
             archive_files.append(f"{skill_dir}/hooks.js")
 
+    has_rules_script = False
     rulepack_siblings = {PurePosixPath(path).stem: path for path in manifest.contents["rulepacks"]}
     for rulepack_path in manifest.contents["rulepacks"]:
-        _validate_rulepack_file(read_text, rulepack_path, rulepack_siblings)
+        _, script_paths = _validate_rulepack_file(read_text, rulepack_path, rulepack_siblings)
         archive_files.append(rulepack_path)
+        # Rules scripts ship next to their YAML and ride the same inventory.
+        has_rules_script = has_rules_script or bool(script_paths)
+        archive_files.extend(script_paths)
 
     detected_cards: list[PackCard] = []
     for card in manifest.card_entries:
@@ -892,6 +934,7 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
         asset_bytes=asset_bytes,
         has_hooks=has_hooks,
         has_ejs=has_ejs,
+        has_rules_script=has_rules_script,
         world_cards=sum(1 for card in detected_cards if card.kind == "world"),
         panels=len(pack_panels),
     )
@@ -1056,11 +1099,16 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
         _, skill_hooks, skill_ejs = _validate_skill_dir(read_text, skill_dir, files)
         has_hooks = has_hooks or skill_hooks
         has_ejs = has_ejs or skill_ejs
+    has_rules_script = False
     rulepack_siblings = {PurePosixPath(path).stem: path for path in manifest.contents["rulepacks"]}
     for rulepack_path in manifest.contents["rulepacks"]:
         if rulepack_path not in names:
             raise PackError(f"declared rulepack missing from archive: {rulepack_path!r}")
-        _validate_rulepack_file(read_text, rulepack_path, rulepack_siblings)
+        _, script_paths = _validate_rulepack_file(read_text, rulepack_path, rulepack_siblings)
+        has_rules_script = has_rules_script or bool(script_paths)
+        for script_path in script_paths:
+            if script_path not in names:
+                raise PackError(f"declared rules script missing from archive: {script_path!r}")
     for card_path in manifest.contents["cards"]:
         if card_path not in names:
             raise PackError(f"declared card missing from archive: {card_path!r}")
@@ -1103,6 +1151,7 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
         asset_bytes=sum(asset.size for asset in manifest.assets),
         has_hooks=has_hooks,
         has_ejs=has_ejs,
+        has_rules_script=has_rules_script,
         world_cards=sum(1 for card in manifest.card_entries if card.kind == "world"),
         panels=len(verify_panels),
     )
@@ -1112,7 +1161,7 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
             name
             for name in (
                 "skills", "rulepacks", "cards", "lorebooks", "assets",
-                "asset_bytes", "has_hooks", "has_ejs", "world_cards", "panels",
+                "asset_bytes", "has_hooks", "has_ejs", "has_rules_script", "world_cards", "panels",
             )
             if stored is None or getattr(stored, name) != getattr(computed, name)
         ]
@@ -1212,6 +1261,13 @@ def install_pack(
             for rulepack_path in manifest.contents["rulepacks"]:
                 stem = PurePosixPath(rulepack_path).stem
                 _extract_entry(archive, rulepack_path, _confined_target(rulepacks_dir, f"{stem}.yaml"))
+                # Rules scripts (stage E) live next to their YAML in the
+                # discovery dir; names were bare-name-validated at verify.
+                for script_name in _rulepack_script_files(rulepack_path, _archive_read_text(archive, rulepack_path)):
+                    parent = str(PurePosixPath(rulepack_path).parent)
+                    archive_name = f"{parent}/{script_name}" if parent not in ("", ".") else script_name
+                    if archive_name in names:
+                        _extract_entry(archive, archive_name, _confined_target(rulepacks_dir, script_name))
                 report.rulepacks.append(stem)
                 if stem in builtin_rulepacks:
                     report.shadowed.append(stem)

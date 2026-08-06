@@ -720,3 +720,73 @@ def test_specs_only_lorecard_is_detected_world_kind(tmp_path: Path):
     built = build_pack(src, tmp_path / "specs.lwpack")
     assert built.manifest.card_kind("cards/meter.lorecard.json") == "world"
     assert built.manifest.trust is not None and built.manifest.trust.world_cards == 1
+
+
+# --- stage E: rules-script disclosure ---------------------------------------
+
+
+SCRIPT_RULEPACK_YAML = """
+names: [scriptpulp]
+defaults: {勇气: 2}
+resolution:
+  version: 1
+  roll: 1d6
+  target: dc
+  compare: ">="
+  script: pulp_resolver.js
+labels:
+  en:
+    win: [Win]
+    lose: [Lose]
+"""
+
+SCRIPT_RESOLVER_JS = """
+function resolve(input) {
+  var target = input.target === null ? 4 : input.target;
+  if (input.roll >= target) { return {rank: {id: "win", tier: 1, success: true}, margin: input.roll - target}; }
+  return {rank: {id: "lose", tier: 0}, margin: input.roll - target};
+}
+"""
+
+
+def _quickjs_ok() -> bool:
+    from core.ejs_full import quickjs_available
+
+    return quickjs_available()
+
+
+@pytest.mark.skipif(not _quickjs_ok(), reason="quickjs extra not installed")
+def test_pack_with_rules_script_discloses_and_installs(tmp_path):
+    src = _write_source(tmp_path)
+    (src / "rulepacks/scriptpulp.yaml").write_text(SCRIPT_RULEPACK_YAML, encoding="utf-8")
+    (src / "rulepacks/pulp_resolver.js").write_text(SCRIPT_RESOLVER_JS, encoding="utf-8")
+    manifest_text = (src / MANIFEST_NAME).read_text(encoding="utf-8")
+    manifest_text = manifest_text.replace(
+        "rulepacks: [rulepacks/pulp.yaml]",
+        "rulepacks: [rulepacks/pulp.yaml, rulepacks/scriptpulp.yaml]",
+    )
+    (src / MANIFEST_NAME).write_text(manifest_text, encoding="utf-8")
+
+    built = build_pack(src, tmp_path / "script.lwpack")
+    assert built.manifest.trust.has_rules_script is True
+    with zipfile.ZipFile(built.path) as archive:
+        assert "rulepacks/pulp_resolver.js" in archive.namelist()
+
+    report = _install(built.path, tmp_path)
+    assert "scriptpulp" in report.rulepacks
+    installed_script = tmp_path / "data/rulepacks/pulp_resolver.js"
+    assert installed_script.is_file() or (tmp_path / "data/rulepacks").joinpath("pulp_resolver.js").exists()
+
+
+def test_rules_script_filename_with_path_separator_fails_the_build(tmp_path):
+    src = _write_source(tmp_path)
+    bad = SCRIPT_RULEPACK_YAML.replace("script: pulp_resolver.js", "script: ../evil.js")
+    (src / "rulepacks/scriptpulp.yaml").write_text(bad, encoding="utf-8")
+    manifest_text = (src / MANIFEST_NAME).read_text(encoding="utf-8")
+    manifest_text = manifest_text.replace(
+        "rulepacks: [rulepacks/pulp.yaml]",
+        "rulepacks: [rulepacks/pulp.yaml, rulepacks/scriptpulp.yaml]",
+    )
+    (src / MANIFEST_NAME).write_text(manifest_text, encoding="utf-8")
+    with pytest.raises(PackError, match="bare name"):
+        build_pack(src, tmp_path / "bad.lwpack")

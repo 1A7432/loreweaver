@@ -30,10 +30,9 @@ _SYSTEM_TOKEN_RE = re.compile(r"(?i)(?<![a-z0-9_])(coc7?|dnd(?:5e)?|wod)(?![0-9]
 # on the blocklist so a revival is caught immediately.
 _FORBIDDEN_IMPORTS = {"core.coc_rules"}
 
-# file name -> why it is still coupled; the M16 stage that clears it.
-SYSTEM_TOKEN_ALLOWLIST: dict[str, str] = {
-    "forge.py": "stage E: forge references built-in systems as generation examples",
-}
+# M16 COMPLETE: the allowlist is EMPTY and stays empty — a file that regains a
+# system token fails the gate below.
+SYSTEM_TOKEN_ALLOWLIST: dict[str, str] = {}
 
 IMPORT_ALLOWLIST: dict[str, str] = {}
 

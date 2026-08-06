@@ -124,6 +124,7 @@ class CheckResolver:
     params: tuple[ParamSpec, ...]
     margin: Callable[[Resolver], Any] | None = None
     check: CheckSpec = field(default_factory=CheckSpec)
+    script: Any = None  # RulesScriptEngine — the stage-E lane replacing the DSL ladder
 
     def variant_ids(self) -> tuple[str, ...]:
         return tuple(sorted(key for key in self.ladders if key))
@@ -175,6 +176,8 @@ class CheckResolver:
         ``difficulty`` applies the named target transform; ``modifier`` is the
         situational flat add (d20-style systems) folded into ``roll``.
         """
+        if self.script is not None:
+            return self._interpret_script(rolled, target, variant=variant, difficulty=difficulty, modifier=modifier)
         ladder = self.ladders.get(variant or "") or self.ladders[""]
         effective = self.effective_target(target, difficulty=difficulty)
         roll_value = rolled.total + modifier
@@ -207,6 +210,52 @@ class CheckResolver:
         else:
             margin_value = roll_value - effective
         return CheckOutcome(rolled=rolled, target=target, rank=rank, margin=margin_value)
+
+
+    def _interpret_script(
+        self,
+        rolled: RollDetail,
+        target: int | None,
+        *,
+        variant: str | None,
+        difficulty: str | None,
+        modifier: int,
+    ) -> CheckOutcome:
+        """Stage-E script lane: same PURE contract, the ladder lives in QuickJS.
+
+        The engine has already rolled; the script sees the full input as data
+        and returns rank-shaped JSON that `validate_rank_result` clamps. The
+        script computes its own margin (or returns null for none).
+        """
+        from core.rules_script import validate_rank_result
+
+        effective = self.effective_target(target, difficulty=difficulty)
+        result = validate_rank_result(
+            "script",
+            self.script.run(
+                {
+                    "roll": rolled.total + modifier,
+                    "dice": list(rolled.dice),
+                    "total": rolled.total,
+                    "target": effective if effective is not None else None,
+                    "raw_target": int(target) if target is not None else None,
+                    "modifier": modifier,
+                    "successes": rolled.successes,
+                    "ones": rolled.ones,
+                    "variant": variant or "",
+                    "difficulty": difficulty or "",
+                }
+            ),
+        )
+        rank = Rank(
+            id=result["id"],
+            tier=result["tier"],
+            label_key=result["id"],
+            success=result["success"],
+            critical=result["critical"],
+            fumble=result["fumble"],
+        )
+        return CheckOutcome(rolled=rolled, target=target, rank=rank, margin=result["margin"])
 
 
 def _namespace_resolver(names: Mapping[str, Any]) -> Resolver:
@@ -369,9 +418,17 @@ def _compile_params(pack_id: str, raw: Any) -> tuple[ParamSpec, ...]:
     return tuple(specs)
 
 
-def compile_resolution(pack_id: str, raw: Any) -> CheckResolver:
+def compile_resolution(
+    pack_id: str,
+    raw: Any,
+    *,
+    script_loader: Callable[[str], str] | None = None,
+) -> CheckResolver:
     """Compile one ``resolution:`` block. Raises :class:`ResolutionError` on any
-    malformed shape — a pack whose resolution does not compile does not load."""
+    malformed shape — a pack whose resolution does not compile does not load.
+
+    ``script_loader`` resolves a ``script:`` filename to its source (stage E);
+    a pack declaring a script without a loader (or with a bad file) fails."""
     if not isinstance(raw, Mapping):
         raise ResolutionError(f"rulepack '{pack_id}': resolution must be a mapping")  # i18n-exempt: pack-author diagnostic, raised at compile/load time
 
@@ -391,7 +448,7 @@ def compile_resolution(pack_id: str, raw: Any) -> CheckResolver:
 
     unknown = set(raw) - {
         "version", "roll", "target", "compare", "modifiers", "ranks", "variants", "difficulties", "params", "margin",
-        "check",
+        "check", "script",
     }
     if unknown:
         raise ResolutionError(f"rulepack '{pack_id}': resolution has unknown keys {sorted(unknown)}")  # i18n-exempt: pack-author diagnostic, raised at compile/load time
@@ -428,8 +485,34 @@ def compile_resolution(pack_id: str, raw: Any) -> CheckResolver:
             raise ResolutionError(f"rulepack '{pack_id}': modifier {name!r}.roll must be a dice expression string")  # i18n-exempt: pack-author diagnostic, raised at compile/load time
         modifiers[name] = dict(spec)
 
+    script_name = raw.get("script")
+    script_engine = None
+    if script_name is not None:
+        if not isinstance(script_name, str) or not script_name.strip():
+            raise ResolutionError(f"rulepack '{pack_id}': resolution.script must be a filename")  # i18n-exempt: pack-author diagnostic, raised at compile/load time
+        if raw.get("ranks") is not None or raw.get("variants"):
+            raise ResolutionError(
+                f"rulepack '{pack_id}': resolution.script replaces ranks/variants — declare one lane, not both"  # i18n-exempt: pack-author diagnostic, raised at compile/load time
+            )
+        if script_loader is None:
+            raise ResolutionError(f"rulepack '{pack_id}': resolution.script needs a pack file context")  # i18n-exempt: pack-author diagnostic, raised at compile/load time
+        from core.rules_script import RulesScriptEngine, RulesScriptError
+
+        try:
+            source = script_loader(script_name.strip())
+            script_engine = RulesScriptEngine(pack_id, "resolution.script", source, "resolve")
+        except RulesScriptError as exc:
+            raise ResolutionError(str(exc)) from exc
+        except OSError as exc:
+            raise ResolutionError(f"rulepack '{pack_id}': resolution.script unreadable: {exc}") from exc  # i18n-exempt: pack-author diagnostic, raised at compile/load time
+        # A synthetic always-fail fallback ladder keeps the dataclass total; the
+        # script branch in `interpret` runs before any ladder lookup.
+        ladders_raw: Any = [{"id": "fail", "tier": 0}]
+    else:
+        ladders_raw = raw.get("ranks")
+
     ladders: dict[str, tuple[RankRule, ...]] = {
-        "": _compile_rank_rules(pack_id, "resolution.ranks", raw.get("ranks"))
+        "": _compile_rank_rules(pack_id, "resolution.ranks", ladders_raw)
     }
     variants_raw = raw.get("variants") or {}
     if not isinstance(variants_raw, Mapping):
@@ -460,6 +543,7 @@ def compile_resolution(pack_id: str, raw: Any) -> CheckResolver:
         params=_compile_params(pack_id, raw.get("params")),
         margin=margin,
         check=_compile_check(pack_id, raw.get("check"), modifiers),
+        script=script_engine,
     )
 
 

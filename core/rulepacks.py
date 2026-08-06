@@ -426,7 +426,25 @@ def _parse_display_section(pack_id: str, raw: Any) -> dict[str, dict[str, str]]:
     return display
 
 
-def _build_rulepack(pack_id: str, data: Mapping[str, Any]) -> RulePack:
+def _dir_script_loader(pack_id: str, directory: Path | None) -> Callable[[str], str] | None:
+    """A `resolution.script` loader confined to `directory` (the pack YAML's own
+    directory): bare filenames only — path separators/parents are rejected so a
+    pack can never read outside its dir. None when there is no file context."""
+    if directory is None:
+        return None
+
+    def _load(filename: str) -> str:
+        name = filename.strip()
+        if not name or "/" in name or "\\" in name or name != Path(name).name or name.startswith(".."):
+            raise ValueError(f"rulepack '{pack_id}': script filename must be a bare name, got {filename!r}")
+        return (directory / name).read_text(encoding="utf-8")
+
+    return _load
+
+
+def _build_rulepack(
+    pack_id: str, data: Mapping[str, Any], *, script_loader: Callable[[str], str] | None = None
+) -> RulePack:
     alias = data.get("alias") or {}
     derived = data.get("derived") or {}
     defaults = dict(data.get("defaults") or {})
@@ -442,8 +460,12 @@ def _build_rulepack(pack_id: str, data: Mapping[str, Any]) -> RulePack:
         names=[str(name) for name in (data.get("names") or [])],
         display=_parse_display_section(pack_id, data.get("display")),
         labels=_parse_labels_section(pack_id, data.get("labels")),
-        resolver=compile_resolution(pack_id, data["resolution"]) if data.get("resolution") is not None else None,
-        subsystems=parse_subsystems(pack_id, data.get("subsystems")),
+        resolver=(
+            compile_resolution(pack_id, data["resolution"], script_loader=script_loader)
+            if data.get("resolution") is not None
+            else None
+        ),
+        subsystems=parse_subsystems(pack_id, data.get("subsystems"), script_loader=script_loader),
         expertise=_parse_expertise_section(pack_id, data.get("expertise")),
         commands=_parse_commands_section(pack_id, data.get("commands"), data.get("subsystems") or {}),
         sheet_spec=parse_sheet_section(pack_id, data.get("sheet")),
@@ -575,6 +597,8 @@ def parse_rulepack_text(
     text: str,
     *,
     base_loader: Callable[[str], Mapping[str, Any] | None] | None = None,
+    script_dir: Path | None = None,
+    script_loader: Callable[[str], str] | None = None,
 ) -> RulePack:
     """Parse rulepack YAML `text` into a `RulePack`, assigning it `pack_id`.
 
@@ -596,11 +620,13 @@ def parse_rulepack_text(
         raise ValueError(f"rulepack '{pack_id}': YAML root must be a mapping, got {type(data).__name__}")
     if "extends" in data:
         data = resolve_extends(pack_id, data, base_loader=base_loader)
-    return _build_rulepack(pack_id, data)
+    return _build_rulepack(
+        pack_id, data, script_loader=script_loader or _dir_script_loader(pack_id, script_dir)
+    )
 
 
 def _parse_rulepack_file(path: Path) -> RulePack:
-    return parse_rulepack_text(path.stem, path.read_text(encoding="utf-8"))
+    return parse_rulepack_text(path.stem, path.read_text(encoding="utf-8"), script_dir=path.parent)
 
 
 def _scan_rulepack_dir(directory: Path, registry: dict[str, RulePack], *, allow_override: bool) -> None:

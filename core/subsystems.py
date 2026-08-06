@@ -86,6 +86,8 @@ class SubsystemSpec:
     auto_success_above: int | None = None  # improvement_check: roll > N always grows
     tables: tuple[DrawTable, ...] = ()  # table_draw
     default_table: str = ""  # table_draw
+    script: Any = None  # RulesScriptEngine — stage-E script flow (template == "script")
+    rolls: Mapping[str, str] = field(default_factory=dict)  # script flow: slot -> pre-rolled dice expr
 
     def label(self, locale: str) -> str:
         """The pack's display name for this subsystem, for `locale` (falls back
@@ -109,6 +111,48 @@ class SubsystemSpec:
             if entry.id == wanted or wanted in entry.aliases:
                 return entry
         return None
+
+
+def _parse_script_subsystem(
+    pack_id: str, tool_name: str, spec_raw: Mapping[str, Any], script_loader: Any
+) -> SubsystemSpec:
+    where = f"subsystems.{tool_name}"
+    unknown = set(spec_raw) - {"script", "display", "rolls"}
+    if unknown:
+        raise SubsystemError(f"rulepack '{pack_id}': {where} has unknown keys {sorted(unknown)}")  # i18n-exempt: pack-author diagnostic, raised at load time
+    filename = spec_raw.get("script")
+    if not isinstance(filename, str) or not filename.strip():
+        raise SubsystemError(f"rulepack '{pack_id}': {where}.script must be a filename")  # i18n-exempt: pack-author diagnostic, raised at load time
+    if script_loader is None:
+        raise SubsystemError(f"rulepack '{pack_id}': {where}.script needs a pack file context")  # i18n-exempt: pack-author diagnostic, raised at load time
+    rolls_raw = spec_raw.get("rolls") or {}
+    if not isinstance(rolls_raw, Mapping) or len(rolls_raw) > 8:
+        raise SubsystemError(f"rulepack '{pack_id}': {where}.rolls must be a small mapping of slot -> dice expr")  # i18n-exempt: pack-author diagnostic, raised at load time
+    rolls: dict[str, str] = {}
+    for slot, expr in rolls_raw.items():
+        slot_key = str(slot).strip()
+        if not slot_key.isidentifier():
+            raise SubsystemError(f"rulepack '{pack_id}': {where}.rolls slot {slot!r} must be an identifier")  # i18n-exempt: pack-author diagnostic, raised at load time
+        if not isinstance(expr, str) or not expr.strip():
+            raise SubsystemError(f"rulepack '{pack_id}': {where}.rolls.{slot_key} must be a dice expression")  # i18n-exempt: pack-author diagnostic, raised at load time
+        rolls[slot_key] = expr.strip()
+
+    from core.rules_script import RulesScriptEngine, RulesScriptError
+
+    try:
+        source = script_loader(filename.strip())
+        engine = RulesScriptEngine(pack_id, f"{where}.script", source, "flow")
+    except RulesScriptError as exc:
+        raise SubsystemError(str(exc)) from exc
+    except (OSError, ValueError) as exc:
+        raise SubsystemError(f"rulepack '{pack_id}': {where}.script unreadable: {exc}") from exc  # i18n-exempt: pack-author diagnostic, raised at load time
+    return SubsystemSpec(
+        id=tool_name,
+        template="script",
+        display=_parse_display(pack_id, where, spec_raw.get("display")),
+        script=engine,
+        rolls=rolls,
+    )
 
 
 def _parse_display(pack_id: str, where: str, raw: Any) -> dict[str, str]:
@@ -154,7 +198,9 @@ def _parse_tables(pack_id: str, where: str, raw: Any) -> tuple[DrawTable, ...]:
     return tuple(tables)
 
 
-def parse_subsystems(pack_id: str, raw: Any) -> dict[str, SubsystemSpec]:
+def parse_subsystems(
+    pack_id: str, raw: Any, *, script_loader: Any = None
+) -> dict[str, SubsystemSpec]:
     """Parse and validate a pack's ``subsystems:`` section (empty dict when absent).
 
     The section is a mapping ``tool_name -> spec``; every spec names one of the
@@ -175,6 +221,12 @@ def parse_subsystems(pack_id: str, raw: Any) -> dict[str, SubsystemSpec]:
             raise SubsystemError(f"rulepack '{pack_id}': subsystem name {name!r} must be an identifier")  # i18n-exempt: pack-author diagnostic, raised at load time
         if not isinstance(spec_raw, Mapping):
             raise SubsystemError(f"rulepack '{pack_id}': subsystems.{tool_name} must be a mapping")  # i18n-exempt: pack-author diagnostic, raised at load time
+        if "script" in spec_raw:
+            # Stage-E script flow: the pack ships its own flow logic; the
+            # engine pre-rolls the declared dice and applies the returned,
+            # closed-vocabulary effect. Mutually exclusive with a template.
+            specs[tool_name] = _parse_script_subsystem(pack_id, tool_name, spec_raw, script_loader)
+            continue
         template = spec_raw.get("template")
         if template not in TEMPLATES:
             raise SubsystemError(

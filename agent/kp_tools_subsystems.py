@@ -132,12 +132,24 @@ _TEMPLATE_SUMMARY = {
 }
 
 
+_SCRIPT_FLOW_PARAMETERS: dict[str, Any] = {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": False,
+}
+_SCRIPT_FLOW_SUMMARY = "Run the {label} mechanic (this system's own scripted flow); the engine rolls and applies the result."  # i18n-exempt: model-facing tool schema text
+
+
 def subsystem_schemas(pack: RulePack) -> list[dict[str, Any]]:
     """Function-calling schemas for every subsystem tool `pack` declares."""
     schemas: list[dict[str, Any]] = []
     for name, spec in pack.subsystems.items():
-        parameters = _TEMPLATE_PARAMETERS.get(spec.template)
-        summary = _TEMPLATE_SUMMARY.get(spec.template)
+        if spec.template == "script":
+            parameters: Any = _SCRIPT_FLOW_PARAMETERS
+            summary: Any = _SCRIPT_FLOW_SUMMARY
+        else:
+            parameters = _TEMPLATE_PARAMETERS.get(spec.template)
+            summary = _TEMPLATE_SUMMARY.get(spec.template)
         if parameters is None or summary is None:
             continue
         description = summary.format(label=spec.label("en"))
@@ -185,11 +197,90 @@ async def dispatch_subsystem(
             return await _run_opposed(services, ctx, i18n, spec, arguments)
         if spec.template == "table_draw":
             return await _run_table_draw(services, ctx, i18n, spec, str(arguments.get("table", "")))
+        if spec.template == "script":
+            return await _run_script_flow(services, ctx, i18n, spec)
     except CharacterDataError:
         return i18n.t("kp_tools.character.data_error")
     except Exception as exc:
         return i18n.t("kp_tools.subsystem.failed", label=spec.label(ctx.locale), error=str(exc))
     return None
+
+
+async def _run_script_flow(services: Services, ctx: AgentCtx, i18n: I18n, spec: SubsystemSpec) -> str:
+    """Stage-E script flow: ENGINE rolls the declared dice, the script sees data
+    only (pre-rolled values + a read-only sheet snapshot) and returns an effect
+    from the closed vocabulary, which the engine validates and APPLIES."""
+    from core.character_rules import validate_sheet
+    from core.rules_script import validate_flow_effect
+    from core.sheets import canonical_values, set_sheet_value, sheet_value
+
+    character = await _active_character(services, ctx)
+    if not _has_character(character):
+        return i18n.t("kp_tools.character.none")
+    pack = load_rulepack(character.system)
+    if pack.subsystems.get(spec.id) is None:
+        return i18n.t("kp_tools.subsystem.not_declared", label=spec.label(ctx.locale))
+    label = spec.label(ctx.locale)
+
+    rolls: dict[str, Any] = {}
+    for slot, expression in spec.rolls.items():
+        result = services.dice.roll_expression(expression)
+        rolls[slot] = {"expr": expression, "total": result.total, "dice": list(result.rolls)}
+
+    snapshot = canonical_values(character, pack)
+    snapshot.update(pack.compute_derived(snapshot))
+    effect = validate_flow_effect(
+        pack.system,
+        spec.id,
+        spec.script.run(
+            {
+                "rolls": rolls,
+                "sheet": {key: value for key, value in snapshot.items() if isinstance(value, (int, float, str, bool))},
+            }
+        ),
+    )
+
+    changed: list[str] = []
+    for canonical, delta in effect["stat_delta"].items():
+        resolved = pack.resolve_skill(canonical) or canonical
+        current = sheet_value(character, pack, resolved)
+        set_sheet_value(character, pack, resolved, current + delta)
+        changed.append(f"{resolved} {current} -> {current + delta}")
+    if effect["stat_delta"]:
+        character, _violations = validate_sheet(character, pack.system)
+        await services.characters.save_character(ctx.uid(), ctx.chat_key, character)
+
+    ctx.emit_dice(
+        {
+            "kind": "subsystem",
+            "subsystem": spec.id,
+            "expr": label,
+            "rolls": [entry["total"] for entry in rolls.values()],
+            "total": sum(entry["total"] for entry in rolls.values()),
+            "detail": {"rolls": rolls, "stat_delta": effect["stat_delta"], "mark": effect["mark"]},
+        }
+    )
+    lines = [i18n.t("kp_tools.subsystem.script_header", label=label)]
+    for slot, entry in rolls.items():
+        lines.append(i18n.t("kp_tools.subsystem.script_roll_line", slot=slot, expr=entry["expr"], total=entry["total"]))
+    if changed:
+        lines.append(i18n.t("kp_tools.subsystem.script_changes_line", changes=", ".join(changed)))
+    if effect["narration"]:
+        lines.append(effect["narration"])
+    await _record_subsystem_check_safe(services, ctx, character.name, spec.id, effect["mark"])
+    return "\n".join(line for line in lines if line)
+
+
+async def _record_subsystem_check_safe(
+    services: Services, ctx: AgentCtx, char_name: str, subsystem_id: str, mark: str
+) -> None:
+    """Best-effort battle-report note for a script flow (never breaks the turn)."""
+    if not mark:
+        return
+    try:
+        await services.battles.add_key_event(ctx.chat_key, f"{subsystem_id}: {mark}")
+    except Exception:
+        pass
 
 
 async def _run_check_with_loss(
