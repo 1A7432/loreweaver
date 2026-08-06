@@ -215,11 +215,11 @@ async def test_sanity_turn_emits_actual_roll_target_rank_and_loss_not_sanmax() -
     assert dice["total"] == check["roll"]
     assert dice["total"] != 99
     assert dice["target"] == check["san_before"]
-    assert dice["rank"] == check["rank"]
     assert dice["success"] == check["success"]
     assert dice["loss"] == check["loss"]
     assert dice["remaining"] == check["san_after"]
-    assert dice["level"] == coc_rank_label(check["rank"], services.i18n.with_locale("en"))
+    # The tool renders the label once and both the record and the frame carry it.
+    assert dice["label"] == check["label"]
 
 
 def test_structured_and_legacy_dice_calls_fall_back_per_trace_in_order() -> None:

@@ -40,7 +40,7 @@ from agent.session_recap import maybe_refresh_session_recap
 from agent.tools import Toolset
 from core.hooks import MAX_PANEL_EVENTS_PER_TURN
 from core.mvu_compat import MvuManager
-from core.rulepacks import all_check_terms
+from core.rulepacks import all_check_terms, all_outcome_labels
 from core.skills import unlocked_tools_for
 from infra.i18n import t
 from infra.llm import ChatResult, Usage
@@ -269,23 +269,22 @@ _ROLL_REQUEST_ZH_RE = re.compile(
     r"|做(?:一次|一个|个)?检定"
     r"|掷出你的"
 )
-# Success-LEVEL result vocabulary. These grade a resolved check and essentially
-# never appear in pure flavour prose, so they signal the model already DECIDED a
-# check's outcome. Bare "success"/"成功" is intentionally excluded (too common in
-# ordinary narration to trigger on).
-_CHECK_OUTCOME_MARKERS = (
-    "critical success",
-    "extreme success",
-    "hard success",
-    "regular success",
-    "critical failure",
-    "极难成功",
-    "困难成功",
-    "常规成功",
-    "普通成功",
-    "大成功",
-    "大失败",
-)
+# Success-LEVEL result vocabulary: words that grade a resolved check and
+# essentially never appear in pure flavour prose, so they signal the model
+# already DECIDED a check's outcome. Compiled from every discovered rulepack's
+# `labels:` markers (`core.rulepacks.all_outcome_labels`) — the same
+# engine-stays-agnostic pattern as `all_check_terms`. Packs keep bare
+# "success"/"成功" display-only (not a marker) because ordinary narration would
+# trigger on it.
+
+
+@lru_cache(maxsize=4)
+def _compiled_outcome_markers(markers: frozenset[str]) -> tuple[str, ...]:
+    return tuple(sorted(markers))
+
+
+def _outcome_markers() -> tuple[str, ...]:
+    return _compiled_outcome_markers(all_outcome_labels())
 
 # --- Player-action skill-attempt lexicon (the broadened trigger) -------------
 # Curated verbs/nouns a player uses when ATTEMPTING a skill-checkable action. If
@@ -491,7 +490,7 @@ _REPLY_DICE_RESULT_RE = re.compile(
 # "🎲 **Intimidate — Fumble.**" with the numbers omitted. 🎲 essentially never
 # appears in ordinary narration, which is what lets the bare result words
 # ("fumble", "success", 成功/失败) be trusted here while they stay untrusted on
-# their own: `_CHECK_OUTCOME_MARKERS` cannot list "fumble" as a substring,
+# their own: the rulepack label markers cannot list "fumble" as a substring,
 # because "you fumble with the lock" is plain prose, not a rolled result.
 _REPLY_DICE_MARKUP_RE = re.compile(
     r"🎲[^\n]{0,80}?(?:fumble|success|failure|\bfail(?:s|ed)?\b|成功|失败)",
@@ -585,7 +584,7 @@ def _reply_requests_or_resolves_check(reply: str) -> bool:
         return True
     lowered = reply.lower()
     return (
-        any(marker in lowered for marker in _CHECK_OUTCOME_MARKERS)
+        any(marker in lowered for marker in _outcome_markers())
         or bool(_REPLY_RESOLVED_EN_RE.search(reply))
         or bool(_REPLY_RESOLVED_ZH_RE.search(reply))
     )

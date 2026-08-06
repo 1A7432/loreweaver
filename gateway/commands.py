@@ -14,7 +14,7 @@ from typing import Any
 from agent.context import AgentCtx
 from agent.kp_tools_mechanics import InitiativeTools
 from agent.services import Services
-from core.battle_recording import record_coc_skill_check, record_dice_roll
+from core.battle_recording import record_check, record_dice_roll
 from core.char_from_persona import build_sheet_from_description
 from core.character_manager import (
     CharacterDataError,
@@ -24,8 +24,8 @@ from core.character_manager import (
     set_hit_points,
 )
 from core.character_rules import render_validation_notice, validate_sheet
-from core.coc_rules import DEFAULT_COC_RULE
-from core.dice_engine import DiceResult, coc_rank_label
+from core.coc_rules import DEFAULT_COC_RULE, RANKS, outcome_from_check
+from core.dice_engine import DiceResult
 from core.rulepacks import RulePack, load_rulepack
 from core.skills import available_skills
 from gateway.audio import build_audio_control, list_audio_items, resolve_audio_item, update_audio_item
@@ -542,10 +542,11 @@ class CommandRouter:
         right_value = _coc_check_value(character, pack, right.name, right.temp_value)
         left_roll = ctx.services.dice.roll_coc_check(left_value, rule=rule, difficulty=left.difficulty)
         right_roll = ctx.services.dice.roll_coc_check(right_value, rule=rule, difficulty=right.difficulty)
-        if left_roll["rank"] > right_roll["rank"]:
+        left_rank, right_rank = RANKS[left_roll["rank"]], RANKS[right_roll["rank"]]
+        if left_rank.tier > right_rank.tier:
             winner = ctx.i18n.t("commands.opposed.left")
             winner_side = "left"
-        elif left_roll["rank"] < right_roll["rank"]:
+        elif left_rank.tier < right_rank.tier:
             winner = ctx.i18n.t("commands.opposed.right")
             winner_side = "right"
         else:
@@ -560,8 +561,8 @@ class CommandRouter:
             total=left_roll["roll"],
             target=left_value,
             rank=left_roll["rank"],
-            level=coc_rank_label(left_roll["rank"], ctx.i18n),
-            success=left_roll["success"],
+            level=ctx.i18n.t(left_rank.label_key),
+            success=left_rank.success,
             winner=winner_side,
             left=_coc_event_side(left_name, left_roll, left_value),
             right=_coc_event_side(right_name, right_roll, right_value),
@@ -570,10 +571,10 @@ class CommandRouter:
             "commands.opposed.result",
             left=left_name,
             left_roll=left_roll["roll"],
-            left_rank=coc_rank_label(left_roll["rank"], ctx.i18n),
+            left_rank=ctx.i18n.t(left_rank.label_key),
             right=right_name,
             right_roll=right_roll["roll"],
-            right_rank=coc_rank_label(right_roll["rank"], ctx.i18n),
+            right_rank=ctx.i18n.t(right_rank.label_key),
             winner=winner,
         )
 
@@ -585,8 +586,10 @@ class CommandRouter:
         success_loss, failure_loss = _parse_sanity_loss(loss_text)
         san = _get_sheet_value(character, pack, "理智")
         rule = await _get_coc_rule(ctx)
-        outcome = ctx.services.dice.roll_coc_check(san, rule=rule, bonus=parsed.bonus, penalty=parsed.penalty)
-        loss_expr = success_loss if outcome["success"] else failure_loss
+        result = ctx.services.dice.roll_coc_check(san, rule=rule, bonus=parsed.bonus, penalty=parsed.penalty)
+        outcome = outcome_from_check(result)
+        label = ctx.i18n.t(outcome.rank.label_key)
+        loss_expr = success_loss if outcome.rank.success else failure_loss
         # A non-numeric SAN-loss expression (e.g. `.sc 侦查/侦查`) must not crash the turn.
         try:
             loss = _roll_loss(ctx.services, loss_expr)
@@ -597,30 +600,30 @@ class CommandRouter:
         ctx.dice(
             "sanity",
             expr=pack.display_name(parsed.canonical, ctx.locale),
-            rolls=[outcome["roll"]],
-            total=outcome["roll"],
+            rolls=[result["roll"]],
+            total=result["roll"],
             target=san,
-            rank=outcome["rank"],
-            level=coc_rank_label(outcome["rank"], ctx.i18n),
-            success=outcome["success"],
-            difficulty=outcome["difficulty"],
-            bonus=outcome["bonus"],
-            penalty=outcome["penalty"],
-            raw_roll=outcome["raw_roll"],
-            extra_tens=list(outcome["extra_tens"]),
-            final_tens=outcome["final_tens"],
+            rank=result["rank"],
+            level=label,
+            success=outcome.rank.success,
+            difficulty=result["difficulty"],
+            bonus=result["bonus"],
+            penalty=result["penalty"],
+            raw_roll=result["raw_roll"],
+            extra_tens=list(result["extra_tens"]),
+            final_tens=result["final_tens"],
             loss_expr=loss_expr,
             loss=loss,
             remaining=max(0, san - loss),
         )
-        await record_coc_skill_check(
+        await record_check(
             ctx.services.battles,
             ctx.chat_key,
             ctx.user_id,
             character.name,
             "SAN",
-            san,
             outcome,
+            label=label,
             loss_expr=loss_expr,
             loss=loss,
             san_before=san,
@@ -628,8 +631,8 @@ class CommandRouter:
         )
         return ctx.i18n.t(
             "commands.sanity.result",
-            roll=outcome["roll"],
-            rank=coc_rank_label(outcome["rank"], ctx.i18n),
+            roll=result["roll"],
+            rank=label,
             loss=loss,
             san=max(0, san - loss),
         )
@@ -2449,39 +2452,41 @@ class CommandRouter:
         rule = await _get_coc_rule(ctx)
         lines = []
         for _ in range(min(times, 20)):
-            outcome = ctx.services.dice.roll_coc_check(
+            result = ctx.services.dice.roll_coc_check(
                 target_value,
                 rule=rule,
                 difficulty=parsed.difficulty,
                 bonus=parsed.bonus,
                 penalty=parsed.penalty,
             )
+            outcome = outcome_from_check(result)
+            label = ctx.i18n.t(outcome.rank.label_key)
             display_name = pack.display_name(parsed.canonical, ctx.locale)
             ctx.dice(
                 "check",
                 expr=display_name,
-                rolls=[outcome["roll"]],
-                total=outcome["roll"],
+                rolls=[result["roll"]],
+                total=result["roll"],
                 target=target_value,
                 effective_target=effective_target,
-                rank=outcome["rank"],
-                level=coc_rank_label(outcome["rank"], ctx.i18n),
-                success=outcome["success"],
-                difficulty=outcome["difficulty"],
-                bonus=outcome["bonus"],
-                penalty=outcome["penalty"],
-                raw_roll=outcome["raw_roll"],
-                extra_tens=list(outcome["extra_tens"]),
-                final_tens=outcome["final_tens"],
+                rank=result["rank"],
+                level=label,
+                success=outcome.rank.success,
+                difficulty=result["difficulty"],
+                bonus=result["bonus"],
+                penalty=result["penalty"],
+                raw_roll=result["raw_roll"],
+                extra_tens=list(result["extra_tens"]),
+                final_tens=result["final_tens"],
             )
-            await record_coc_skill_check(
+            await record_check(
                 ctx.services.battles,
                 ctx.chat_key,
                 ctx.user_id,
                 character.name,
                 parsed.canonical,
-                target_value,
                 outcome,
+                label=label,
             )
             lines.append(
                 ctx.i18n.t(
@@ -2489,8 +2494,8 @@ class CommandRouter:
                     name=display_name,
                     target=target_value,
                     effective=effective_target,
-                    roll=outcome["roll"],
-                    rank=coc_rank_label(outcome["rank"], ctx.i18n),
+                    roll=result["roll"],
+                    rank=label,
                 )
             )
         return "\n".join(lines)

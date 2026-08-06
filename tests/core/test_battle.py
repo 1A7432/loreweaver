@@ -57,46 +57,48 @@ def test_add_dice_roll_non_critical_does_not_affect_critical_counters():
     assert stats["critical_failure"] == 0
 
 
-def test_add_skill_check_detects_success_in_english_and_chinese_labels():
+def test_add_skill_check_counts_semantic_success_flags():
     record = SessionRecord("session-checks")
 
-    record.add_skill_check("u1", "Alice", "Listen", 50, 30, "Hard Success")
-    record.add_skill_check("u1", "Alice", "Spot Hidden", 60, 80, "failure")
-    record.add_skill_check("u1", "Alice", "Library Use", 70, 5, "成功")
+    record.add_skill_check("u1", "Alice", "Listen", 50, 30, success=True, rank_id="hard", tier=3, label="Hard Success")
+    record.add_skill_check("u1", "Alice", "Spot Hidden", 60, 80, success=False, rank_id="fail", tier=1, label="失败")
+    record.add_skill_check("u1", "Alice", "Library Use", 70, 5, success=True, rank_id="extreme", tier=4, label="成功")
 
     stats = record.player_stats["u1"]
     assert stats["total_checks"] == 3
     assert stats["successful_checks"] == 2
 
 
-def test_add_skill_check_counts_structured_hard_and_extreme_successes():
+def test_add_skill_check_counts_critical_and_fumble_separately():
     record = SessionRecord("session-structured-checks")
 
-    record.add_skill_check("u1", "Alice", "Listen", 50, 20, success=True, rank=2)
-    record.add_skill_check("u1", "Alice", "Spot Hidden", 60, 5, success=True, rank=3)
+    record.add_skill_check("u1", "Alice", "Listen", 50, 1, success=True, rank_id="crit", tier=5, critical=True)
+    record.add_skill_check("u1", "Alice", "Spot Hidden", 60, 100, success=False, rank_id="fumble", tier=0, fumble=True)
 
-    assert record.player_stats["u1"]["successful_checks"] == 2
+    stats = record.player_stats["u1"]
+    assert stats["successful_checks"] == 1
+    assert stats["critical_success"] == 1
+    assert stats["critical_failure"] == 1
     assert record.skill_checks[0]["success"] is True
-    assert record.skill_checks[0]["rank"] == 2
+    assert record.skill_checks[0]["rank_id"] == "crit"
     assert "success_level" not in record.skill_checks[0]
 
 
-def test_structured_skill_check_rank_is_localized_only_when_rendered():
+def test_skill_check_label_is_recorded_verbatim_and_rendered_in_reports():
     generator = BattleReportGenerator(Store())
     record = SessionRecord("session-rank-render")
-    record.add_skill_check("u1", "Alice", "Listen", 50, 20, success=True, rank=2)
+    record.add_skill_check("u1", "Alice", "Listen", 50, 20, success=True, rank_id="hard", tier=3, label="困难成功")
 
-    en = generator.generate_markdown_report(record, "Rank", i18n=I18n(locale="en"), detailed=True)
-    zh = generator.generate_markdown_report(record, "等级", i18n=I18n(locale="zh"), detailed=True)
+    detailed = generator.generate_markdown_report(record, "Rank", i18n=I18n(locale="en"), detailed=True)
 
-    assert "Hard Success" in en
-    assert "困难成功" in zh
+    # A historical record replays the label it was recorded with, verbatim.
+    assert "困难成功" in detailed
 
 
-def test_legacy_stored_hard_success_is_recounted_case_insensitively():
+def test_restored_record_recounts_structured_success_flags():
     restored = SessionRecord.from_dict(
         {
-            "session_id": "legacy",
+            "session_id": "restored",
             "start_time": 1.0,
             "skill_checks": [
                 {
@@ -105,7 +107,9 @@ def test_legacy_stored_hard_success_is_recounted_case_insensitively():
                     "skill": "Listen",
                     "target": 50,
                     "roll": 20,
-                    "success_level": "Hard Success",
+                    "success": True,
+                    "rank_id": "hard",
+                    "tier": 3,
                     "timestamp": 2.0,
                 }
             ],
@@ -140,7 +144,7 @@ def test_session_record_full_round_trip_via_to_dict_from_dict():
     record = SessionRecord("session-rt")
     record.add_dice_roll("u1", "Alice", "1d20", 20, True, "success")
     record.add_dice_roll("u1", "Alice", "1d20", 1, True, "failure")
-    record.add_skill_check("u1", "Alice", "Spot Hidden", 60, 45, "success")
+    record.add_skill_check("u1", "Alice", "Spot Hidden", 60, 45, success=True, rank_id="regular", tier=2)
     record.add_key_event("The door creaks open", event_type="discovery")
     record.add_player_action("u1", "Alice", "searches the bookshelf")
     record.combat_rounds.append({"round": 1, "notes": "ambush"})
@@ -208,7 +212,7 @@ async def test_generate_battle_report_returns_text_markdown_session_name_tuple()
 
     await manager.start_session(chat_key, "Tuple Shape Test")
     await manager.add_dice_roll(chat_key, "u1", "Bob", "1d20", 20, True, "success")
-    await manager.add_skill_check(chat_key, "u1", "Bob", "Listen", 50, 30, "success")
+    await manager.add_skill_check(chat_key, "u1", "Bob", "Listen", 50, 30, success=True, rank_id="regular", tier=2)
     await manager.add_key_event(chat_key, "Found a clue")
 
     result = await manager.generate_battle_report(chat_key)
@@ -445,7 +449,7 @@ def test_calculate_player_score_rewards_rolls_checks_actions_and_crits():
     generator = BattleReportGenerator(store)
     record = SessionRecord("session-score-2")
     record.add_dice_roll("u1", "Alice", "1d20", 20, True, "success")
-    record.add_skill_check("u1", "Alice", "Listen", 50, 10, "success")
+    record.add_skill_check("u1", "Alice", "Listen", 50, 10, success=True, rank_id="hard", tier=3)
     record.add_player_action("u1", "Alice", "investigates the desk")
 
     score, rating = generator.calculate_player_score("u1", record)
@@ -514,7 +518,9 @@ def _detailed_record() -> SessionRecord:
     record = SessionRecord("session-detailed")
     record.add_player_action("u1", "Alice", "pries open the rusted locker")
     record.add_dice_roll("u1", "Alice", "1d20", 15)  # non-critical: not a summary "highlight"
-    record.add_skill_check("u1", "Alice", "Spot Hidden", 60, 42, "regular success")
+    record.add_skill_check(
+        "u1", "Alice", "Spot Hidden", 60, 42, success=True, rank_id="regular", tier=2, label="regular success"
+    )
     record.add_key_event("A hidden compartment clicks open", event_type="discovery")
     return record
 

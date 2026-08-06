@@ -1,10 +1,18 @@
-"""Shared structured battle-record mappings for tools and deterministic commands."""
+"""Shared structured battle-record mappings for tools and deterministic commands.
+
+M16 stage A: check records are written from the neutral `core.check_outcome`
+contract — semantic flags (`success`/`critical`/`fumble`), the pack-vocabulary
+`rank_id`, ladder `tier`, and the rendered `label` — never a system's private
+rank code. System-shaped roll details (bonus/penalty tens dice, difficulty,
+house-rule selector, ...) ride in from `RollDetail.modifiers` as plain data.
+"""
 
 from __future__ import annotations
 
 from typing import Any
 
 from core.battle_report import BattleReportManager
+from core.check_outcome import CheckOutcome
 from core.dice_engine import DiceResult
 
 
@@ -17,26 +25,24 @@ def dice_critical_fields(result: DiceResult) -> tuple[bool, str]:
     return False, ""
 
 
-def coc_check_fields(outcome: dict[str, Any]) -> dict[str, Any]:
-    """Map either CoC roller result shape to one canonical report detail set."""
-    final_roll = int(outcome.get("final_roll", outcome["roll"]))
-    base_roll = int(outcome.get("raw_roll", outcome.get("roll", final_roll)))
-    rank = int(outcome["rank"])
+def check_fields(outcome: CheckOutcome, *, label: str = "") -> dict[str, Any]:
+    """Map one `CheckOutcome` to the canonical stored check-detail set.
+
+    `label` is the display label rendered at record time (reports replay it
+    verbatim — a historical record keeps the language it was played in).
+    """
     fields: dict[str, Any] = {
-        "success": bool(outcome["success"]),
-        "rank": rank,
-        "is_critical": rank in {4, -2},
-        "bonus": int(outcome.get("bonus", 0) or 0),
-        "penalty": int(outcome.get("penalty", 0) or 0),
-        "raw_roll": final_roll,
-        "base_roll": base_roll,
-        "difficulty": int(outcome.get("difficulty", 1) or 1),
-        "rule": int(outcome.get("rule", 0) or 0),
+        "success": outcome.rank.success,
+        "rank_id": outcome.rank.id,
+        "tier": outcome.rank.tier,
+        "critical": outcome.rank.critical,
+        "fumble": outcome.rank.fumble,
+        **dict(outcome.rolled.modifiers),
     }
-    if "extra_tens" in outcome:
-        fields["extra_tens"] = list(outcome.get("extra_tens") or [])
-    if outcome.get("final_tens") is not None:
-        fields["final_tens"] = int(outcome["final_tens"])
+    if label:
+        fields["label"] = label
+    if outcome.margin is not None:
+        fields["margin"] = outcome.margin
     return fields
 
 
@@ -68,26 +74,26 @@ async def record_dice_roll(
     )
 
 
-async def record_coc_skill_check(
+async def record_check(
     battles: BattleReportManager,
     chat_key: str,
     user_id: str,
     char_name: str,
     skill: str,
-    target: int,
-    outcome: dict[str, Any],
+    outcome: CheckOutcome,
+    *,
+    label: str = "",
     **extra: object,
 ) -> None:
-    """Persist one CoC check with canonical outcome, raw-roll, and candidate metadata."""
-    details = coc_check_fields(outcome)
+    """Persist one graded check with its canonical outcome fields."""
+    details = check_fields(outcome, label=label)
     details.update(extra)
-    final_roll = int(outcome.get("final_roll", outcome["roll"]))
     await battles.add_skill_check(
         chat_key,
         user_id,
         char_name,
         skill,
-        target,
-        final_roll,
+        int(outcome.target or 0),
+        outcome.rolled.total,
         **details,
     )

@@ -17,7 +17,7 @@ from agent.context import AgentCtx
 from agent.kp_tools_mechanics import _MADNESS_SYMPTOMS, CharacterTools, DiceTools, InitiativeTools
 from agent.services import Services, build_services
 from agent.tools import Toolset
-from core.coc_rules import DEFAULT_COC_RULE, DIFFICULTY_REGULAR, result_check_base
+from core.coc_rules import DEFAULT_COC_RULE, DIFFICULTY_REGULAR, outcome_from_check, result_check_base
 from core.dice_engine import DiceRoller, coc_rank_label, seed_dice
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
@@ -381,12 +381,15 @@ async def test_coc_bonus_check_records_raw_and_candidate_tens_metadata():
     check = record.skill_checks[0]
     assert check["bonus"] == 1
     assert check["penalty"] == 0
-    assert check["raw_roll"] == check["roll"]
+    # `base_roll` is the pre-bonus d100; `raw_roll` belongs to the Luck layer only.
     assert isinstance(check["base_roll"], int)
+    assert "raw_roll" not in check
     assert len(check["extra_tens"]) == 1
     assert isinstance(check["final_tens"], int)
     assert check["difficulty"] == 1
     assert check["rule"] == 0
+    assert check["rank_id"] in {"crit", "extreme", "hard", "regular", "fail", "fumble"}
+    assert isinstance(check["tier"], int)
 
 
 async def test_skill_check_auto_starts_recording_without_an_active_session():
@@ -451,9 +454,11 @@ async def test_dnd_skill_check_records_structured_advantage_and_critical_fields(
     assert check["target"] == 10
     assert isinstance(check["success"], bool)
     assert len(check["advantage_rolls"]) == 2
-    assert check["disadvantage_rolls"] == []
-    assert check["raw_roll"] in check["advantage_rolls"]
-    assert isinstance(check["is_critical"], bool)
+    assert "disadvantage_rolls" not in check
+    assert check["base_roll"] in check["advantage_rolls"]
+    assert isinstance(check["critical"], bool)
+    assert isinstance(check["fumble"], bool)
+    assert check["rank_id"] in {"crit", "success", "fail", "fumble"}
     payload = ctx.dice_payloads[-1]
     assert payload["kind"] == "check"
     assert payload["expr"] == "Athletics"
@@ -461,8 +466,8 @@ async def test_dnd_skill_check_records_structured_advantage_and_critical_fields(
     assert payload["total"] == check["roll"]
     assert payload["target"] == 10
     assert payload["effective_target"] == 10
-    assert payload["rank"] == check["rank"]
     assert payload["success"] == check["success"]
+    assert payload["label"]
     assert payload["bonus"] == 1
     assert payload["penalty"] == 0
 
@@ -579,8 +584,8 @@ async def test_sanity_check_updates_san_deterministically():
     await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)  # SAN starts at 50/99
 
     seed_dice(11)
-    expected_check = DiceRoller().roll_coc_check(50)
-    expected_loss = 50 if expected_check["rank"] == -2 else 0  # loss expressions are both "0" below
+    expected_check = outcome_from_check(DiceRoller().roll_coc_check(50))
+    expected_loss = 50 if expected_check.rank.fumble else 0  # loss expressions are both "0" below
     expected_san = max(0, 50 - expected_loss)
 
     seed_dice(11)
@@ -607,7 +612,9 @@ async def test_sanity_check_records_roll_rank_and_structured_loss():
     check = record.skill_checks[0]
     assert check["skill"] == "SAN"
     assert check["target"] == before.attributes["SAN"]
-    assert check["success"] == (check["rank"] >= 1)
+    assert check["success"] == (check["tier"] >= 2)  # tiers 2+ are the CoC success rungs
+    assert check["rank_id"] in {"crit", "extreme", "hard", "regular", "fail", "fumble"}
+    assert check["label"]
     assert check["loss_expr"] in {"1", "1d6"}
     assert check["san_before"] == before.attributes["SAN"]
     assert check["san_after"] == check["san_before"] - check["loss"]
@@ -618,7 +625,7 @@ async def test_sanity_check_records_roll_rank_and_structured_loss():
     assert payload["total"] == check["roll"]
     assert payload["target"] == check["san_before"]
     assert payload["effective_target"] == check["san_before"]
-    assert payload["rank"] == check["rank"]
+    assert payload["label"] == check["label"]
     assert payload["success"] == check["success"]
     assert payload["loss"] == check["loss"]
     assert payload["remaining"] == check["san_after"]
@@ -637,8 +644,8 @@ async def test_spend_luck_atomically_adjusts_latest_own_check_without_reroll(mon
         50,
         55,
         success=False,
-        rank=-1,
-        raw_roll=55,
+        rank_id="fail",
+        tier=1,
         difficulty=1,
         rule=0,
     )
@@ -650,8 +657,8 @@ async def test_spend_luck_atomically_adjusts_latest_own_check_without_reroll(mon
         40,
         90,
         success=False,
-        rank=-1,
-        raw_roll=90,
+        rank_id="fail",
+        tier=1,
         difficulty=1,
         rule=0,
     )
@@ -675,7 +682,7 @@ async def test_spend_luck_atomically_adjusts_latest_own_check_without_reroll(mon
     assert own_check["adjusted_roll"] == 49
     assert own_check["luck_spent"] == 6
     assert own_check["luck_adjusted"] is True
-    assert own_check["rank"] == 1
+    assert own_check["rank_id"] == "regular"
     assert own_check["success"] is True
     assert other_check["roll"] == 90
     assert record.player_stats[ctx.uid()]["successful_checks"] == 1

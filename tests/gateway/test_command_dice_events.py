@@ -165,11 +165,13 @@ async def test_coc_command_roll_check_opposed_and_sanity_are_recorded_structural
     assert check["user_id"] == ctx.uid()
     assert check["skill"] == "侦查"
     assert isinstance(check["success"], bool)
-    assert isinstance(check["rank"], int)
-    assert isinstance(check["is_critical"], bool)
+    assert isinstance(check["rank_id"], str)
+    assert isinstance(check["tier"], int)
+    assert isinstance(check["critical"], bool)
+    assert isinstance(check["fumble"], bool)
+    assert check["label"]
     assert check["bonus"] == 1
     assert check["penalty"] == 0
-    assert check["raw_roll"] == check["roll"]
     assert isinstance(check["base_roll"], int)
     assert len(check["extra_tens"]) == 1
     assert isinstance(check["final_tens"], int)

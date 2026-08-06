@@ -204,6 +204,26 @@ st_show:
   itemsPerLine: 4
   ignores: [生命值上限, 魔法值上限, 理智上限]
 set_keys: [coc, coc7]
+# Success-ladder presentation labels (rank id -> display + detector markers).
+# `display` renders in tool output and wire frames; `markers` join the agent's
+# dice-first outcome detectors (core.rulepacks.all_outcome_labels). Generic
+# words ("Success"/"成功") stay display-only so ordinary narration never
+# false-positives as an already-graded check.
+labels:
+  en:
+    crit: [Critical Success]
+    extreme: [Extreme Success]
+    hard: [Hard Success]
+    regular: {display: Success, markers: [Regular Success]}
+    fail: {display: Failure, markers: []}
+    fumble: [Fumble, Critical Failure]
+  zh:
+    crit: [大成功]
+    extreme: [极难成功]
+    hard: [困难成功]
+    regular: {display: 成功, markers: [常规成功, 普通成功]}
+    fail: {display: 失败, markers: []}
+    fumble: [大失败]
 derived:
   DB: {computer: coc_db}
   体格: {computer: coc_build}

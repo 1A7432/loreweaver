@@ -7,9 +7,19 @@ never "improve" or AI-rewrite the branching below. See `docs/specs/rules_coc.md`
 
 Used by `core.dice_engine` (`DiceRoller.roll_coc_check*`) and the future `.setcoc`
 command (per-group rule stored under `coc_rule.{chat_key}`, default `DEFAULT_COC_RULE`).
+
+M16 stage A adds the `CheckOutcome` bridge (`RANKS`/`outcome_from_check`): every
+consumer now reads the neutral contract while this legacy resolver stays alive.
+The whole module is deleted in stage C once the compiled pack resolver passes the
+exhaustive rulebook tables.
 """
 
 from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
+from core.check_outcome import CheckOutcome, Rank, RollDetail
 
 
 def result_check_base(coc_rule: int, d100: int, attr_value: int, difficulty_required: int = 1) -> tuple[int, int]:
@@ -143,3 +153,61 @@ RANK_LABEL_KEYS: dict[int, str] = {
     -1: "coc.rank.fail",
     -2: "coc.rank.fumble",
 }
+
+# --------------------------------------------------------------------------
+# Stage-A bridge onto the neutral `CheckOutcome` contract. Dies with this
+# module in stage C, when the compiled rulepack resolver produces outcomes.
+# --------------------------------------------------------------------------
+
+# The CoC7 ladder as `Rank` values, keyed by the legacy -2..4 code.
+RANKS: dict[int, Rank] = {
+    4: Rank(id="crit", tier=5, label_key="coc.rank.crit", success=True, critical=True),
+    3: Rank(id="extreme", tier=4, label_key="coc.rank.extreme", success=True),
+    2: Rank(id="hard", tier=3, label_key="coc.rank.hard", success=True),
+    1: Rank(id="regular", tier=2, label_key="coc.rank.success", success=True),
+    -1: Rank(id="fail", tier=1, label_key="coc.rank.fail"),
+    -2: Rank(id="fumble", tier=0, label_key="coc.rank.fumble", fumble=True),
+}
+
+
+def effective_target(target: int, difficulty: int) -> int:
+    """The d100 value a roll must not exceed under a `DIFFICULTY_*` code."""
+    if difficulty == DIFFICULTY_HARD:
+        return target // 2
+    if difficulty == DIFFICULTY_EXTREME:
+        return target // 5
+    if difficulty == DIFFICULTY_CRITICAL:
+        return 1
+    return target
+
+
+def outcome_from_check(result: Mapping[str, Any]) -> CheckOutcome:
+    """Bridge one legacy ``roll_coc_check*`` result dict onto ``CheckOutcome``.
+
+    ``margin`` is measured against the difficulty-adjusted target (the number
+    the d100 actually had to beat), positive on the success side.
+    """
+    roll = int(result.get("final_roll", result["roll"]))
+    target = int(result["skill_value"])
+    difficulty = int(result.get("difficulty", DIFFICULTY_REGULAR) or DIFFICULTY_REGULAR)
+    modifiers: dict[str, Any] = {
+        "bonus": int(result.get("bonus", 0) or 0),
+        "penalty": int(result.get("penalty", 0) or 0),
+        "difficulty": difficulty,
+        "rule": int(result.get("rule", DEFAULT_COC_RULE) or DEFAULT_COC_RULE),
+    }
+    # `base_roll` = the pre-bonus/penalty d100 as rolled ("raw_roll" is owned by
+    # the Luck layer: the pre-Luck effective roll).
+    base_roll = int(result.get("raw_roll", result["roll"]))
+    if base_roll != roll or modifiers["bonus"] or modifiers["penalty"]:
+        modifiers["base_roll"] = base_roll
+    if "extra_tens" in result:
+        modifiers["extra_tens"] = list(result.get("extra_tens") or [])
+    if result.get("final_tens") is not None:
+        modifiers["final_tens"] = int(result["final_tens"])
+    return CheckOutcome(
+        rolled=RollDetail(expression="1d100", dice=(roll,), total=roll, modifiers=modifiers),
+        target=target,
+        rank=RANKS[int(result["rank"])],
+        margin=effective_target(target, difficulty) - roll,
+    )

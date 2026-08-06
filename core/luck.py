@@ -1,11 +1,18 @@
-"""Deterministic CoC7 Luck-spend adjustment for an already-rolled check."""
+"""Deterministic CoC7 Luck-spend adjustment for an already-rolled check.
+
+Eligibility branches ONLY on the recorded check's semantic flags (`fumble`)
+and skill identity — never on a rank code. Re-grading the adjusted roll goes
+through the legacy `core.coc_rules` resolver while it remains alive (stage A);
+the compiled pack resolver's pure INTERPRET replaces it in stage C.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
 
-from core.coc_rules import DEFAULT_COC_RULE, DIFFICULTY_REGULAR, result_check_base
+from core.check_outcome import Rank
+from core.coc_rules import DEFAULT_COC_RULE, DIFFICULTY_REGULAR, RANKS, result_check_base
 
 _INELIGIBLE_SKILLS = {"san", "luc", "luck", "理智", "幸运"}
 
@@ -16,8 +23,8 @@ class LuckAdjustment:
 
     before_roll: int
     after_roll: int
-    before_rank: int
-    after_rank: int
+    before: Rank
+    after: Rank
     total_spent: int
 
 
@@ -44,6 +51,7 @@ def adjust_check_with_luck(check: dict[str, Any], points: int) -> LuckAdjustment
 
     This function never rolls dice. The original effective d100 result remains
     in ``raw_roll`` while ``roll`` becomes the adjusted deterministic result.
+    The caller re-renders ``label`` (a locale concern this module never owns).
     """
     if isinstance(points, bool) or not isinstance(points, int) or points <= 0:
         raise ValueError("luck_points_must_be_positive")
@@ -52,14 +60,16 @@ def adjust_check_with_luck(check: dict[str, Any], points: int) -> LuckAdjustment
     target = int(check["target"])
     difficulty = int(check.get("difficulty", DIFFICULTY_REGULAR) or DIFFICULTY_REGULAR)
     rule = int(check.get("rule", DEFAULT_COC_RULE) or DEFAULT_COC_RULE)
-    before_rank, _ = result_check_base(rule, before_roll, target, difficulty)
+    before_code, _ = result_check_base(rule, before_roll, target, difficulty)
+    before = RANKS[before_code]
     # CoC7 forbids buying off a fumble, and a d100 result can never sit below 1.
-    if before_rank == -2:
+    if before.fumble:
         raise ValueError("luck_cannot_adjust_fumble")
     if points >= before_roll:
         raise ValueError("luck_points_exceed_roll")
     after_roll = before_roll - points
-    after_rank, _ = result_check_base(rule, after_roll, target, difficulty)
+    after_code, _ = result_check_base(rule, after_roll, target, difficulty)
+    after = RANKS[after_code]
 
     if not check.get("luck_adjusted"):
         check["raw_roll"] = before_roll
@@ -70,9 +80,11 @@ def adjust_check_with_luck(check: dict[str, Any], points: int) -> LuckAdjustment
         {
             "roll": after_roll,
             "adjusted_roll": after_roll,
-            "rank": after_rank,
-            "success": after_rank >= 1,
-            "is_critical": after_rank in {4, -2},
+            "rank_id": after.id,
+            "tier": after.tier,
+            "success": after.success,
+            "critical": after.critical,
+            "fumble": after.fumble,
             "luck_adjusted": True,
             "luck_spent": total_spent,
         }
@@ -80,7 +92,7 @@ def adjust_check_with_luck(check: dict[str, Any], points: int) -> LuckAdjustment
     return LuckAdjustment(
         before_roll=before_roll,
         after_roll=after_roll,
-        before_rank=before_rank,
-        after_rank=after_rank,
+        before=before,
+        after=after,
         total_spent=total_spent,
     )

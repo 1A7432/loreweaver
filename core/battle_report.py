@@ -15,7 +15,6 @@ import json
 import time
 from datetime import datetime
 
-from core.dice_engine import coc_rank_label
 from infra.i18n import I18n, get_i18n
 from infra.store import Store
 
@@ -25,33 +24,17 @@ _REPORT_RECAP_LIMIT = 10
 _REPORT_RECAP_TEXT_LIMIT = 200
 
 
-def _is_successful_level(success_level: str) -> bool:
-    """Legacy fallback for records that predate structured check outcomes.
-
-    New records carry a canonical boolean and rank. Old stored records only
-    have a localized label, so compare those labels case-insensitively across
-    every shipped locale.
-    """
-    i18n = get_i18n()
-    normalized = str(success_level).casefold()
-    return any(
-        i18n.with_locale(locale).t("battle.skill_check.success_keyword").casefold() in normalized
-        for locale in i18n.available_locales()
-    )
-
-
 def _check_succeeded(check: dict) -> bool:
-    success = check.get("success")
-    if isinstance(success, bool):
-        return success
-    return _is_successful_level(str(check.get("success_level", "")))
+    return bool(check.get("success"))
 
 
 def _check_level_label(check: dict, i18n: I18n) -> str:
-    rank = check.get("rank")
-    if isinstance(rank, int):
-        return coc_rank_label(rank, i18n)
-    return str(check.get("success_level", ""))
+    """The display label recorded with the check (already localized at record
+    time — a historical record keeps the language it was played in)."""
+    label = check.get("label")
+    if label:
+        return str(label)
+    return str(check.get("rank_id", ""))
 
 
 def _select_recap_events(events: list[dict], limit: int = _REPORT_RECAP_LIMIT) -> list[dict]:
@@ -160,39 +143,17 @@ class SessionRecord:
         skill: str,
         target: int,
         roll: int,
-        success_level: str | None = None,
-        *,
-        success: bool | None = None,
-        rank: int | None = None,
-        is_critical: bool | None = None,
-        bonus: int | None = None,
-        penalty: int | None = None,
-        raw_roll: int | None = None,
-        base_roll: int | None = None,
-        extra_tens: list[int] | None = None,
-        final_tens: int | None = None,
-        difficulty: int | None = None,
-        rule: int | None = None,
-        modifier: int | None = None,
-        advantage_rolls: list[int] | None = None,
-        disadvantage_rolls: list[int] | None = None,
-        loss_expr: str | None = None,
-        loss: int | None = None,
-        san_before: int | None = None,
-        san_after: int | None = None,
-        luck_adjusted: bool | None = None,
-        luck_spent: int | None = None,
-        adjusted_roll: int | None = None,
-        luck_before: int | None = None,
-        luck_after: int | None = None,
+        **details: object,
     ) -> None:
         """Record a structured skill check and update the roller's aggregates.
 
-        ``success_level`` remains accepted only for legacy callers. New callers
-        store the canonical ``success``/``rank`` fields and localize the rank at
-        report-render time.
+        ``details`` is the canonical `core.battle_recording.check_fields` shape
+        — semantic flags (``success``/``critical``/``fumble``), the pack rank
+        id/tier, the rendered ``label``, plus any system-declared roll
+        modifiers — stored as-is (``None`` values dropped). Aggregates branch
+        only on the semantic flags.
         """
-        check = {
+        check: dict = {
             "user_id": user_id,
             "char_name": char_name,
             "skill": skill,
@@ -200,36 +161,7 @@ class SessionRecord:
             "roll": roll,
             "timestamp": time.time(),
         }
-        if success is not None:
-            check["success"] = success
-        if rank is not None:
-            check["rank"] = rank
-        if success is None and rank is None and success_level is not None:
-            check["success_level"] = success_level
-        optional_fields = {
-            "is_critical": is_critical,
-            "bonus": bonus,
-            "penalty": penalty,
-            "raw_roll": raw_roll,
-            "base_roll": base_roll,
-            "extra_tens": list(extra_tens) if extra_tens is not None else None,
-            "final_tens": final_tens,
-            "difficulty": difficulty,
-            "rule": rule,
-            "modifier": modifier,
-            "advantage_rolls": list(advantage_rolls) if advantage_rolls is not None else None,
-            "disadvantage_rolls": list(disadvantage_rolls) if disadvantage_rolls is not None else None,
-            "loss_expr": loss_expr,
-            "loss": loss,
-            "san_before": san_before,
-            "san_after": san_after,
-            "luck_adjusted": luck_adjusted,
-            "luck_spent": luck_spent,
-            "adjusted_roll": adjusted_roll,
-            "luck_before": luck_before,
-            "luck_after": luck_after,
-        }
-        check.update({key: value for key, value in optional_fields.items() if value is not None})
+        check.update({key: value for key, value in details.items() if value is not None})
         self.skill_checks.append(check)
 
         if user_id == NPC_USER_ID:
@@ -245,12 +177,11 @@ class SessionRecord:
         stats = self.player_stats[user_id]
         stats["char_name"] = stats.get("char_name", char_name)
         stats["total_checks"] = stats.get("total_checks", 0) + 1
-        stats["successful_checks"] = stats.get("successful_checks", 0)
-        if success if success is not None else _is_successful_level(success_level or ""):
-            stats["successful_checks"] = stats.get("successful_checks", 0) + 1
-        if is_critical:
-            field = "critical_failure" if rank == -2 else "critical_success"
-            stats[field] = stats.get(field, 0) + 1
+        stats["successful_checks"] = stats.get("successful_checks", 0) + int(_check_succeeded(check))
+        if check.get("critical"):
+            stats["critical_success"] = stats.get("critical_success", 0) + 1
+        elif check.get("fumble"):
+            stats["critical_failure"] = stats.get("critical_failure", 0) + 1
 
     def add_key_event(self, description: str, event_type: str = "general") -> bool:
         """Record a key event unless identical text was added in the last five minutes."""
@@ -331,9 +262,10 @@ class SessionRecord:
                 continue
             stats["total_checks"] = stats.get("total_checks", 0) + 1
             stats["successful_checks"] = stats.get("successful_checks", 0) + int(_check_succeeded(check))
-            if check.get("is_critical"):
-                field = "critical_failure" if check.get("rank") == -2 else "critical_success"
-                stats[field] = stats.get(field, 0) + 1
+            if check.get("critical"):
+                stats["critical_success"] = stats.get("critical_success", 0) + 1
+            elif check.get("fumble"):
+                stats["critical_failure"] = stats.get("critical_failure", 0) + 1
 
         for user_id, actions in self.player_actions.items():
             if not actions:
@@ -1048,12 +980,11 @@ class BattleReportManager:
         skill: str,
         target: int,
         roll: int,
-        success_level: str | None = None,
         **details: object,
     ) -> None:
         """Record a structured skill check, lazily starting the session."""
         record = await self._session_for_write(chat_key)
-        record.add_skill_check(user_id, char_name, skill, target, roll, success_level, **details)
+        record.add_skill_check(user_id, char_name, skill, target, roll, **details)
         await self.generator.save_session(chat_key, record)
 
     async def add_key_event(self, chat_key: str, description: str, event_type: str = "general") -> bool:

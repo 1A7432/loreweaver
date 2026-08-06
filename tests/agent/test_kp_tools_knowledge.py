@@ -188,7 +188,9 @@ async def test_export_report_tool_saves_player_report_without_ending_session(tmp
 
     await services.battles.start_session(CHAT_KEY, "Export Tool Report")
     await services.battles.add_player_action(CHAT_KEY, "u1", "Nora", "studies the mural")
-    await services.battles.add_skill_check(CHAT_KEY, "u1", "Nora", "Occult", 60, 18, "success")
+    await services.battles.add_skill_check(
+        CHAT_KEY, "u1", "Nora", "Occult", 60, 18, success=True, rank_id="regular", tier=2
+    )
 
     result = await session_tools.export_report(ctx, detailed=True)
 

@@ -337,6 +337,21 @@ def _compile_derived_section(
 
 
 @dataclass(frozen=True)
+class RankLabel:
+    """One rank's presentation labels for one locale.
+
+    ``display`` renders in tool output / wire frames; ``markers`` are the
+    surface forms (display variants, common synonyms) the agent's dice-first
+    detectors treat as proof the model already narrated a graded outcome. A
+    pack keeps a too-generic display word ("Success", "成功") OUT of
+    ``markers`` so ordinary narration doesn't false-positive.
+    """
+
+    display: str
+    markers: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class RulePack:
     """Loaded command rule-pack with flattened alias resolution."""
 
@@ -350,6 +365,7 @@ class RulePack:
     derived_formulas: dict[str, Callable[[Mapping[str, Any]], Any]]
     names: list[str] = field(default_factory=list)
     display: dict[str, dict[str, str]] = field(default_factory=dict)
+    labels: dict[str, dict[str, RankLabel]] = field(default_factory=dict)
 
     def resolve_skill(self, name: str) -> str | None:
         """Resolve a player-entered skill/attribute name to this pack's canonical key."""
@@ -369,6 +385,14 @@ class RulePack:
         """Compute fixed derived attributes for `values` without evaluating pack code."""
         return {name: func(values) for name, func in self.derived_formulas.items()}
 
+    def rank_label(self, rank_id: str, locale: str) -> str:
+        """Localized display label for a rank id; falls back to `en`, then the id."""
+        base = str(locale or "").replace("_", "-").split("-")[0].casefold()
+        for table in (self.labels.get(base), self.labels.get("en")):
+            if table and rank_id in table:
+                return table[rank_id].display
+        return rank_id
+
 
 def _build_alias_map(alias: Mapping[str, Any]) -> dict[str, str]:
     flattened: dict[str, str] = {}
@@ -380,6 +404,39 @@ def _build_alias_map(alias: Mapping[str, Any]) -> dict[str, str]:
         for variant in variants:
             flattened[_normalize_alias(str(variant))] = canonical_str
     return flattened
+
+
+def _parse_labels_section(pack_id: str, raw: Any) -> dict[str, dict[str, RankLabel]]:
+    """Parse a pack's ``labels:`` (locale -> rank id -> label spec) section.
+
+    A label spec is either a bare string (display == the only marker), a list
+    (first entry displays, every entry is a marker), or a mapping
+    ``{display: ..., markers: [...]}`` for the explicit split — how a pack
+    keeps a too-generic display word out of the detector vocabulary.
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"rulepack '{pack_id}': 'labels' must be a mapping of locale -> rank table")
+    labels: dict[str, dict[str, RankLabel]] = {}
+    for locale, table in raw.items():
+        if not isinstance(table, Mapping):
+            raise ValueError(f"rulepack '{pack_id}': 'labels.{locale}' must be a mapping of rank id -> label")
+        parsed: dict[str, RankLabel] = {}
+        for rank_id, spec in table.items():
+            if isinstance(spec, str):
+                parsed[str(rank_id)] = RankLabel(display=spec, markers=(spec,))
+            elif isinstance(spec, (list, tuple)) and spec and all(isinstance(item, str) for item in spec):
+                parsed[str(rank_id)] = RankLabel(display=str(spec[0]), markers=tuple(str(item) for item in spec))
+            elif isinstance(spec, Mapping) and isinstance(spec.get("display"), str):
+                markers = spec.get("markers", ())
+                if not isinstance(markers, (list, tuple)) or not all(isinstance(item, str) for item in markers):
+                    raise ValueError(f"rulepack '{pack_id}': 'labels.{locale}.{rank_id}' markers must be a string list")
+                parsed[str(rank_id)] = RankLabel(display=str(spec["display"]), markers=tuple(str(m) for m in markers))
+            else:
+                raise ValueError(f"rulepack '{pack_id}': bad label spec for 'labels.{locale}.{rank_id}': {spec!r}")
+        labels[str(locale).casefold()] = parsed
+    return labels
 
 
 def _parse_display_section(pack_id: str, raw: Any) -> dict[str, dict[str, str]]:
@@ -410,6 +467,7 @@ def _build_rulepack(pack_id: str, data: Mapping[str, Any]) -> RulePack:
         derived_formulas=_compile_derived_section(pack_id, derived, defaults),
         names=[str(name) for name in (data.get("names") or [])],
         display=_parse_display_section(pack_id, data.get("display")),
+        labels=_parse_labels_section(pack_id, data.get("labels")),
     )
 
 
@@ -654,3 +712,17 @@ def all_check_terms() -> frozenset[str]:
         for table in pack.display.values():
             terms.update(table.values())
     return frozenset(term.strip() for term in terms if isinstance(term, str) and len(term.strip()) >= 2)
+
+
+def all_outcome_labels() -> frozenset[str]:
+    """Every success-level marker across ALL discovered rule systems' ``labels:``
+    tables, casefolded — the vocabulary `agent.loop`'s dice-first corrective uses
+    to detect that the model already narrated a graded check outcome. Same
+    pattern as `all_check_terms`: the engine stays system-agnostic and the
+    rulepack layer owns the words."""
+    markers: set[str] = set()
+    for pack in _discover_registry().values():
+        for table in pack.labels.values():
+            for label in table.values():
+                markers.update(marker.strip().casefold() for marker in label.markers)
+    return frozenset(marker for marker in markers if marker)

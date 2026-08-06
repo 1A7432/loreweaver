@@ -11,7 +11,7 @@ def test_adjust_check_with_luck_mutates_outcome_without_rerolling() -> None:
         "target": 50,
         "roll": 55,
         "success": False,
-        "rank": -1,
+        "rank_id": "fail",
         "difficulty": 1,
         "rule": 0,
     }
@@ -20,19 +20,21 @@ def test_adjust_check_with_luck_mutates_outcome_without_rerolling() -> None:
 
     assert adjustment.before_roll == 55
     assert adjustment.after_roll == 49
-    assert adjustment.before_rank == -1
-    assert adjustment.after_rank == 1
+    assert adjustment.before.success is False
+    assert adjustment.after.success is True
+    assert adjustment.before.tier < adjustment.after.tier
     assert check["raw_roll"] == 55
     assert check["roll"] == 49
     assert check["adjusted_roll"] == 49
-    assert check["rank"] == 1
+    assert check["rank_id"] == "regular"
     assert check["success"] is True
+    assert check["fumble"] is False
     assert check["luck_adjusted"] is True
     assert check["luck_spent"] == 6
 
 
 def test_repeated_luck_spend_preserves_original_roll_and_accumulates_points() -> None:
-    check = {"target": 50, "roll": 55, "rank": -1, "difficulty": 1, "rule": 0}
+    check = {"target": 50, "roll": 55, "difficulty": 1, "rule": 0}
 
     adjust_check_with_luck(check, 3)
     adjustment = adjust_check_with_luck(check, 4)
@@ -44,11 +46,12 @@ def test_repeated_luck_spend_preserves_original_roll_and_accumulates_points() ->
 
 
 def test_luck_spend_is_allowed_even_when_success_rank_does_not_change() -> None:
-    check = {"target": 80, "roll": 39, "rank": 2, "difficulty": 1, "rule": 0}
+    check = {"target": 80, "roll": 39, "difficulty": 1, "rule": 0}
 
     adjustment = adjust_check_with_luck(check, 1)
 
-    assert adjustment.before_rank == adjustment.after_rank == 2
+    assert adjustment.before.id == adjustment.after.id == "hard"
+    assert adjustment.before.tier == adjustment.after.tier
     assert check["roll"] == 38
     assert check["luck_spent"] == 1
 

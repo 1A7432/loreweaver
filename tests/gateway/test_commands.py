@@ -252,7 +252,9 @@ async def test_report_detailed_command_exports_full_transcript():
 
     await services.battles.start_session(ctx.chat_key, "Detailed Command")
     await services.battles.add_player_action(ctx.chat_key, "player", "Nora", "checks the locked desk")
-    await services.battles.add_skill_check(ctx.chat_key, "player", "Nora", "Locksmith", 50, 21, "success")
+    await services.battles.add_skill_check(
+        ctx.chat_key, "player", "Nora", "Locksmith", 50, 21, success=True, rank_id="regular", tier=2, label="success"
+    )
 
     report = await router.dispatch(ctx, ".report detailed")
 

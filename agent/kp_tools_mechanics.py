@@ -41,7 +41,7 @@ import time
 from agent.context import AgentCtx
 from agent.services import Services
 from agent.tools import tool
-from core.battle_recording import coc_check_fields, record_dice_roll
+from core.battle_recording import record_check, record_dice_roll
 from core.battle_report import NPC_USER_ID, SessionRecord
 from core.character_manager import (
     CharacterDataError,
@@ -51,13 +51,20 @@ from core.character_manager import (
     set_hit_points,
 )
 from core.character_rules import render_validation_notice, validate_sheet
-from core.coc_rules import DEFAULT_COC_RULE, DIFFICULTY_REGULAR, result_check_base
+from core.check_outcome import CheckOutcome, Rank, RollDetail
+from core.coc_rules import (
+    DEFAULT_COC_RULE,
+    DIFFICULTY_REGULAR,
+    RANKS,
+    effective_target,
+    outcome_from_check,
+    result_check_base,
+)
 from core.dice_engine import (
     _MAX_WOD_DIFFICULTY,
     _MAX_WOD_POOL,
     _MIN_WOD_DIFFICULTY,
     DiceResult,
-    coc_rank_label,
 )
 from core.luck import adjust_check_with_luck, find_latest_character_check, is_luck_eligible_check
 from core.rulepacks import load_rulepack
@@ -136,6 +143,20 @@ _MADNESS_TYPE_ALIASES = {
     "不定": "indefinite",
     "不定性": "indefinite",
 }
+
+
+# The D&D5e d20 ladder as `Rank` values (stage-A bridge; replaced by the
+# compiled dnd5e.yaml resolution ladder in stage C). `label_key` stays an
+# i18n key while the legacy renderer is alive.
+_DND_RANKS: dict[str, Rank] = {
+    "crit": Rank(id="crit", tier=3, label_key="kp_tools.dice.dnd.critical_success", success=True, critical=True),
+    "success": Rank(id="success", tier=2, label_key="kp_tools.dice.dnd.success", success=True),
+    "fail": Rank(id="fail", tier=1, label_key="kp_tools.dice.dnd.failure"),
+    "fumble": Rank(id="fumble", tier=0, label_key="kp_tools.dice.dnd.critical_failure", fumble=True),
+}
+# Legacy wire codes for the bridge period (the 2.0 dice frame replaces these).
+_DND_RANK_CODES = {"crit": 4, "success": 1, "fail": -1, "fumble": -2}
+_COC_RANK_CODES = {rank.id: code for code, rank in RANKS.items()}
 
 
 async def _get_active_character(services: Services, ctx: AgentCtx) -> CharacterSheet:
@@ -532,16 +553,14 @@ class DiceTools:
         except Exception:
             pass
 
-    async def _record_skill_check(
+    async def _record_check(
         self,
         ctx: AgentCtx,
         char_name: str,
         skill: str,
-        target: int,
-        roll: int,
+        outcome: CheckOutcome,
         *,
-        success: bool,
-        rank: int,
+        label: str = "",
         actor: str | None = None,
         actor_is_npc: bool | None = None,
         **details: object,
@@ -555,29 +574,18 @@ class DiceTools:
                 actor,
             )
             is_npc = resolved_is_npc if actor_is_npc is None else actor_is_npc
-            await self.services.battles.add_skill_check(
+            await record_check(
+                self.services.battles,
                 ctx.chat_key,
                 NPC_USER_ID if is_npc else ctx.uid(),
                 actor_name,
                 skill,
-                target,
-                roll,
-                success=success,
-                rank=rank,
+                outcome,
+                label=label,
                 **details,
             )
         except Exception:
             pass
-
-    @staticmethod
-    def _effective_coc_target(target: int, difficulty: int) -> int:
-        if difficulty == 2:
-            return target // 2
-        if difficulty == 3:
-            return target // 5
-        if difficulty == 4:
-            return 1
-        return target
 
     @tool
     async def roll_dice(self, ctx: AgentCtx, expression: str, actor: str | None = None) -> str:
@@ -686,7 +694,8 @@ class DiceTools:
                     skill_value = character.skills.get(target_skill, 0)
 
                 result = dice.roll_coc_check_with_bonus(skill_value, bonus, penalty)
-                level_label = coc_rank_label(result["rank"], i18n)
+                outcome = outcome_from_check(result)
+                level_label = i18n.t(outcome.rank.label_key)
 
                 skill_label = load_rulepack("coc7").display_name(target_skill, ctx.locale)
                 lines = [i18n.t("kp_tools.dice.skill_check.coc_header", name=display_name, skill=skill_label)]
@@ -716,7 +725,7 @@ class DiceTools:
                 lines.append(i18n.t("kp_tools.dice.skill_check.final_line", final=result["final_roll"]))
                 outcome_key = (
                     "kp_tools.dice.skill_check.outcome_success"
-                    if result["success"]
+                    if outcome.rank.success
                     else "kp_tools.dice.skill_check.outcome_failure"
                 )
                 lines.append(i18n.t(outcome_key, level=level_label))
@@ -730,9 +739,10 @@ class DiceTools:
                         "rolls": [result["final_roll"]],
                         "total": result["final_roll"],
                         "target": skill_value,
-                        "effective_target": self._effective_coc_target(skill_value, result["difficulty"]),
+                        "effective_target": effective_target(skill_value, result["difficulty"]),
                         "rank": result["rank"],
-                        "success": result["success"],
+                        "label": level_label,
+                        "success": outcome.rank.success,
                         "difficulty": result["difficulty"],
                         "bonus": bonus,
                         "penalty": penalty,
@@ -741,16 +751,14 @@ class DiceTools:
                         "final_tens": result["final_tens"],
                     }
                 )
-                record_fields = coc_check_fields(result)
-                await self._record_skill_check(
+                await self._record_check(
                     ctx,
                     character.name,
                     target_skill,
-                    skill_value,
-                    result["final_roll"],
+                    outcome,
+                    label=level_label,
                     actor=display_name if actor and actor.strip() else None,
                     actor_is_npc=is_npc,
-                    **record_fields,
                 )
                 return "\n".join(lines)
 
@@ -780,14 +788,13 @@ class DiceTools:
 
             total = roll_result.total + modifier
             if roll_result.is_critical_success():
-                level_label = i18n.t("kp_tools.dice.dnd.critical_success")
-                success = True
+                dnd_rank = _DND_RANKS["crit"]
             elif roll_result.is_critical_failure():
-                level_label = i18n.t("kp_tools.dice.dnd.critical_failure")
-                success = False
+                dnd_rank = _DND_RANKS["fumble"]
             else:
-                success = total >= target_dc
-                level_label = i18n.t("kp_tools.dice.dnd.success" if success else "kp_tools.dice.dnd.failure")
+                dnd_rank = _DND_RANKS["success"] if total >= target_dc else _DND_RANKS["fail"]
+            success = dnd_rank.success
+            level_label = i18n.t(dnd_rank.label_key)
 
             prof_label = i18n.t("kp_tools.dice.skill_check.proficient_label") if proficient else ""
             lines = [
@@ -815,8 +822,29 @@ class DiceTools:
                 else "kp_tools.dice.skill_check.outcome_failure"
             )
             lines.append(i18n.t(outcome_key, level=level_label))
-            rank = 4 if roll_result.is_critical_success() else -2 if roll_result.is_critical_failure() else 1 if success else -1
             candidate_rolls = advantage_rolls or disadvantage_rolls or list(roll_result.rolls)
+            dnd_modifiers: dict[str, object] = {
+                "modifier": modifier,
+                "proficient": proficient,
+                "bonus": bonus,
+                "penalty": penalty,
+                "base_roll": roll_result.total,
+            }
+            if advantage_rolls:
+                dnd_modifiers["advantage_rolls"] = advantage_rolls
+            if disadvantage_rolls:
+                dnd_modifiers["disadvantage_rolls"] = disadvantage_rolls
+            outcome = CheckOutcome(
+                rolled=RollDetail(
+                    expression="1d20",
+                    dice=tuple(candidate_rolls),
+                    total=total,
+                    modifiers=dnd_modifiers,
+                ),
+                target=target_dc,
+                rank=dnd_rank,
+                margin=total - target_dc,
+            )
             ctx.emit_dice(
                 {
                     "kind": "check",
@@ -827,7 +855,8 @@ class DiceTools:
                     "total": total,
                     "target": target_dc,
                     "effective_target": target_dc,
-                    "rank": rank,
+                    "rank": _DND_RANK_CODES[dnd_rank.id],
+                    "label": level_label,
                     "level": level_label,
                     "success": success,
                     "difficulty": target_dc,
@@ -841,23 +870,14 @@ class DiceTools:
                     "critical_failure": roll_result.is_critical_failure(),
                 }
             )
-            await self._record_skill_check(
+            await self._record_check(
                 ctx,
                 character.name,
                 target_skill,
-                target_dc,
-                total,
-                success=success,
-                rank=rank,
+                outcome,
+                label=level_label,
                 actor=display_name if actor and actor.strip() else None,
                 actor_is_npc=is_npc,
-                is_critical=roll_result.is_critical_success(),
-                bonus=bonus,
-                penalty=penalty,
-                raw_roll=roll_result.total,
-                modifier=modifier,
-                advantage_rolls=advantage_rolls,
-                disadvantage_rolls=disadvantage_rolls,
             )
             return "\n".join(lines)
         except Exception as exc:
@@ -950,6 +970,8 @@ class DiceTools:
 
                 difficulty = int(check.get("difficulty", DIFFICULTY_REGULAR) or DIFFICULTY_REGULAR)
                 target = int(check["target"])
+                after_label = i18n.t(adjustment.after.label_key)
+                check["label"] = after_label
                 ctx.emit_dice(
                     {
                         "kind": "check",
@@ -960,9 +982,10 @@ class DiceTools:
                         "rolls": [adjustment.after_roll],
                         "total": adjustment.after_roll,
                         "target": target,
-                        "effective_target": self._effective_coc_target(target, difficulty),
-                        "rank": adjustment.after_rank,
-                        "success": adjustment.after_rank >= 1,
+                        "effective_target": effective_target(target, difficulty),
+                        "rank": _COC_RANK_CODES[adjustment.after.id],
+                        "label": after_label,
+                        "success": adjustment.after.success,
                         "difficulty": difficulty,
                         "bonus": int(check.get("bonus", 0) or 0),
                         "penalty": int(check.get("penalty", 0) or 0),
@@ -975,8 +998,8 @@ class DiceTools:
                 return i18n.t(
                     "kp_tools.dice.luck.success",
                     points=points,
-                    before=coc_rank_label(adjustment.before_rank, i18n),
-                    after=coc_rank_label(adjustment.after_rank, i18n),
+                    before=i18n.t(adjustment.before.label_key),
+                    after=after_label,
                     luck=luck_after,
                 )
             return i18n.t("kp_tools.dice.luck.conflict")
@@ -1005,12 +1028,13 @@ class DiceTools:
 
             san_value = character.attributes.get("SAN", 50)
             result = dice.roll_coc_check(san_value)
+            outcome = outcome_from_check(result)
 
-            loss_expr = success_loss if result["success"] else failure_loss
+            loss_expr = success_loss if outcome.rank.success else failure_loss
             loss_result = dice.roll_expression(loss_expr)
             loss = loss_result.total
 
-            if result["rank"] == -2:
+            if outcome.rank.fumble:
                 # Intentional house rule, not CoC7e RAW: a fumble drains ALL remaining SAN,
                 # rather than RAW's "loss = the max of the loss-dice range" (e.g. 1d6 -> 6).
                 # Faithfully ported from `nekro_trpg_dice_plugin/trpg_dice/plugin.py`'s
@@ -1025,19 +1049,17 @@ class DiceTools:
             character.attributes["SAN"] = new_san
             await characters.save_character(ctx.uid(), ctx.chat_key, character)
 
-            level_label = coc_rank_label(result["rank"], i18n)
-            record_fields = coc_check_fields(result)
-            await self._record_skill_check(
+            level_label = i18n.t(outcome.rank.label_key)
+            await self._record_check(
                 ctx,
                 character.name,
                 "SAN",
-                san_value,
-                result["roll"],
+                outcome,
+                label=level_label,
                 loss_expr=loss_expr,
                 loss=loss,
                 san_before=san_value,
                 san_after=new_san,
-                **record_fields,
             )
             san_max = character.attributes.get("SANMAX", 99)
             ctx.emit_dice(
@@ -1047,9 +1069,10 @@ class DiceTools:
                     "rolls": [result["roll"]],
                     "total": result["roll"],
                     "target": san_value,
-                    "effective_target": self._effective_coc_target(san_value, result["difficulty"]),
+                    "effective_target": effective_target(san_value, result["difficulty"]),
                     "rank": result["rank"],
-                    "success": result["success"],
+                    "label": level_label,
+                    "success": outcome.rank.success,
                     "difficulty": result["difficulty"],
                     "bonus": result.get("bonus", 0),
                     "penalty": result.get("penalty", 0),
@@ -1061,7 +1084,9 @@ class DiceTools:
                 }
             )
             header_key = (
-                "kp_tools.dice.sanity.header_success" if result["success"] else "kp_tools.dice.sanity.header_failure"
+                "kp_tools.dice.sanity.header_success"
+                if outcome.rank.success
+                else "kp_tools.dice.sanity.header_failure"
             )
 
             lines = [
@@ -1165,17 +1190,17 @@ class DiceTools:
             # Per-side success level: reuse `core.coc_rules.result_check_base` (the
             # authoritative CoC7 ladder, also used by `skill_check`/`sanity_check` via
             # `core.dice_engine`) under the default rulebook rule/difficulty, instead of
-            # re-implementing the crit/extreme/hard/fail/fumble bands here. Only the
-            # canonical `-2..4` rank is needed for the opposed comparison below - the
-            # `critical_success_value` threshold is irrelevant to who wins.
+            # re-implementing the crit/extreme/hard/fail/fumble bands here. The opposed
+            # comparison is `Rank.tier` — the contract's ladder ordinal — never a rank id.
             lv1, _ = result_check_base(DEFAULT_COC_RULE, r1, s1, DIFFICULTY_REGULAR)
             lv2, _ = result_check_base(DEFAULT_COC_RULE, r2, s2, DIFFICULTY_REGULAR)
-            name1 = coc_rank_label(lv1, i18n)
-            name2 = coc_rank_label(lv2, i18n)
+            rank1, rank2 = RANKS[lv1], RANKS[lv2]
+            name1 = i18n.t(rank1.label_key)
+            name2 = i18n.t(rank2.label_key)
 
-            if lv1 > lv2:
+            if rank1.tier > rank2.tier:
                 winner = i18n.t("kp_tools.dice.opposed.winner_active", skill=skill1)
-            elif lv2 > lv1:
+            elif rank2.tier > rank1.tier:
                 winner = i18n.t("kp_tools.dice.opposed.winner_passive", skill=skill2)
             elif s1 > s2:
                 winner = i18n.t("kp_tools.dice.opposed.winner_active_tiebreak", skill=skill1)

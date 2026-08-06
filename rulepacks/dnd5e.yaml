@@ -68,6 +68,18 @@ st_show:
   sortBy: Name
   ignores: [DSS, DSF, hpmax]
 set_keys: [dnd, dnd5e]
+# Success-ladder presentation labels; see rulepacks/coc7.yaml for the shape.
+labels:
+  en:
+    crit: [Critical Success, Natural 20]
+    success: {display: Success, markers: []}
+    fail: {display: Failure, markers: []}
+    fumble: [Critical Failure, Natural 1]
+  zh:
+    crit: [大成功]
+    success: {display: 成功, markers: []}
+    fail: {display: 失败, markers: []}
+    fumble: [大失败]
 derived:
   _generated: {computer_group: dnd5e}
 creation_constraints:
