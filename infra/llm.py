@@ -70,6 +70,7 @@ class LLMClient(Protocol):
         tool_choice: str | dict | None = None,
         temperature: float | None = None,
         model: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> ChatResult: ...
 
 
@@ -111,6 +112,7 @@ class OpenAILLM:
         tool_choice: str | dict | None = None,
         temperature: float | None = None,
         model: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> ChatResult:
         if self._token_provider is not None:
             token = await self._token_provider()
@@ -125,8 +127,10 @@ class OpenAILLM:
             kwargs["tool_choice"] = tool_choice
         if self._settings.reasoning_effort:
             # Reasoning models (deepseek-v4-pro, o-series) take a thinking budget and
-            # ignore/reject `temperature`, so send one xor the other.
-            kwargs["reasoning_effort"] = self._settings.reasoning_effort
+            # ignore/reject `temperature`, so send one xor the other. A per-call override
+            # (e.g. an NPC line's dramatic weight) engages only when the deployment opted
+            # into reasoning at all — the operator's off switch always wins.
+            kwargs["reasoning_effort"] = reasoning_effort or self._settings.reasoning_effort
         else:
             effective_temperature = self._settings.temperature if temperature is None else temperature
             if effective_temperature is not None:
@@ -341,6 +345,7 @@ class FakeLLM:
         self._script: deque[ChatResult] | None = deque(script) if script is not None else None
         self.calls: list[tuple[list[dict], list[dict] | None]] = []
         self.tool_choices: list[str | dict | None] = []
+        self.reasoning_efforts: list[str | None] = []
 
     async def chat(
         self,
@@ -350,9 +355,11 @@ class FakeLLM:
         tool_choice: str | dict | None = None,
         temperature: float | None = None,
         model: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> ChatResult:
         self.calls.append((messages, tools))
         self.tool_choices.append(tool_choice)
+        self.reasoning_efforts.append(reasoning_effort)
         if self._script is not None:
             if not self._script:
                 raise RuntimeError(t("infra.llm.fake_script_exhausted"))

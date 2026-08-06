@@ -110,6 +110,7 @@ async def voice_npc(
     locale: str | None = None,
     chat_key: str | None = None,
     user_uid: str | None = None,
+    effort: str = "medium",
 ) -> dict[str, str]:
     """Voice ONE NPC's turn. Returns `{"dialogue": str, "action_intent": str, "mood": str}`.
 
@@ -153,12 +154,18 @@ async def voice_npc(
     user_message = _build_user_message(i18n, situation, tone, target, recent or [])
     model = services.settings.llm.npc_model or services.settings.llm.chat_model
 
+    # A sub-actor line rarely needs the session's full thinking budget: the KP picks this
+    # line's dramatic weight per call (speak_as_npc's `effort`), defaulting to medium.
+    # Providers apply it only when the deployment runs with reasoning at all.
+    if effort not in ("low", "medium", "high"):
+        effort = "medium"
     result = await services.llm.chat(
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
         ],
         model=model,
+        reasoning_effort=effort,
     )
 
     content = result.content or ""

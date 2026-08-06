@@ -249,8 +249,10 @@ class ChatGPTSubscriptionLLM:
         tool_choice: str | dict | None = None,
         temperature: float | None = None,
         model: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> ChatResult:
         del temperature  # ChatGPT backend rejects temperature / token limits.
+        del reasoning_effort  # Effort is fixed by the subscription backend; accepted for parity.
         continuation = self._continuations.get(id(messages))
         if continuation is not None and continuation.messages is not messages:
             self._continuations.pop(id(messages), None)

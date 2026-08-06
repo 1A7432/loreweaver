@@ -45,7 +45,7 @@ class _ModelRecordingLLM:
         self._content = content
         self.models: list[str | None] = []
 
-    async def chat(self, messages, *, tools=None, tool_choice=None, temperature=None, model=None):
+    async def chat(self, messages, *, tools=None, tool_choice=None, temperature=None, model=None, reasoning_effort=None):
         self.models.append(model)
         return ChatResult(content=self._content, tool_calls=[])
 
@@ -239,6 +239,21 @@ async def test_unknown_npc_mutations_return_none_or_false_not_raise():
 # ---------------------------------------------------------------------------
 # agent.npc_actor.voice_npc -- the information-isolation signature test (the red line)
 # ---------------------------------------------------------------------------
+
+
+async def test_voice_npc_passes_the_lines_dramatic_weight_as_reasoning_effort():
+    """The KP picks each NPC line's thinking depth (speak_as_npc `effort`); voice_npc
+    forwards it per call, defaulting to medium and clamping junk — a sub-actor line must
+    never silently inherit the session's full (possibly max) thinking budget."""
+    fake = FakeLLM(script=[assistant_text("{}")] * 3)
+    services = build_services(Settings(), llm=fake, embeddings=FakeEmbeddings(8))
+    npc = NpcRecord(id="martha", name="Martha")
+
+    await voice_npc(services, npc, "a quiet nod")
+    await voice_npc(services, npc, "the confession", effort="high")
+    await voice_npc(services, npc, "junk tier", effort="dramatic!!")
+
+    assert fake.reasoning_efforts == ["medium", "high", "medium"]
 
 
 async def test_voice_npc_never_leaks_keeper_secrets_or_other_npcs_knowledge():

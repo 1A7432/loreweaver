@@ -423,6 +423,29 @@ async def test_anthropic_chat_maps_reasoning_effort_to_extended_thinking():
     fake_client.messages.create.assert_not_called()
 
 
+async def test_anthropic_per_call_effort_overrides_session_effort_but_never_the_off_switch():
+    # An NPC line's dramatic weight may lower (or raise) the session effort per call,
+    # but a deployment that turned reasoning OFF stays off — the operator wins.
+    holder: dict = {}
+    stream = _FakeAnthropicStream(holder, SimpleNamespace(content=[SimpleNamespace(type="text", text="ok")]))
+    fake_client = SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(), stream=stream))
+    fake_client.messages.create.return_value = SimpleNamespace(content=[SimpleNamespace(type="text", text="ok")])
+
+    with_session_effort = AnthropicLLM(
+        LLMSettings(api_key="sk-test", chat_model="claude-opus-4-6", reasoning_effort="max"),
+        client=fake_client,
+    )
+    await with_session_effort.chat([{"role": "user", "content": "line"}], reasoning_effort="low")
+    assert holder["kwargs"]["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+
+    reasoning_off = AnthropicLLM(
+        LLMSettings(api_key="sk-test", chat_model="claude-opus-4-6", reasoning_effort=""),
+        client=fake_client,
+    )
+    await reasoning_off.chat([{"role": "user", "content": "line"}], reasoning_effort="medium")
+    assert "thinking" not in fake_client.messages.create.call_args.kwargs
+
+
 async def test_anthropic_chat_forced_tool_choice_runs_without_thinking():
     # Anthropic requires tool_choice auto/none while thinking — the deterministic
     # dice corrective forces a specific tool, so that call must drop thinking, not 400.

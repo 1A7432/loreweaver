@@ -114,7 +114,10 @@ class NpcTools:
         location: str = "",
         major: bool = True,
     ) -> str:
-        """Create a new AI-played NPC, scoped to this room. Only major NPCs need this + speak_as_npc;
+        """Create a new AI-played NPC, scoped to this room, seeding the WHOLE record in this one
+        call -- pass persona, secret_agenda, knowledge, disposition and location together here
+        rather than chaining update_npc/set_npc_knowledge afterwards. Re-creating an existing name
+        returns that record untouched (never a duplicate). Only major NPCs need this + speak_as_npc;
         voice trivial/one-line NPCs yourself inline instead of creating a record for every extra.
 
         Args:
@@ -315,6 +318,7 @@ class NpcTools:
         allowed_actions: str = "",
         tone: str = "",
         target: str = "",
+        effort: str = "medium",
     ) -> str:
         """Delegate one NPC's in-character line to their knowledge-scoped AI sub-actor. The sub-actor
         sees ONLY this NPC's own persona/knowledge -- never the keeper pool or other NPCs' secrets --
@@ -328,6 +332,9 @@ class NpcTools:
             allowed_actions: Optional constraint on what the NPC may do right now.
             tone: Optional tone hint (e.g. "nervous", "defiant").
             target: Optional name of who the NPC is speaking/reacting to.
+            effort: The line's dramatic weight, which sets the sub-actor's thinking depth --
+                "low" for routine/filler lines, "medium" (default) for normal beats, "high"
+                for confessions, climaxes, and lines that must thread a secret.
 
         Returns:
             A formatted line combining the NPC's dialogue/mood/intent, for you to weave into the scene.
@@ -351,6 +358,7 @@ class NpcTools:
                 # player's active character). See agent.card_text.
                 chat_key=ctx.chat_key,
                 user_uid=ctx.uid(),
+                effort=effort,
             )
             dialogue = voiced.get("dialogue", "")
             mood = voiced.get("mood", "")

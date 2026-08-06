@@ -709,7 +709,7 @@ class _RequiredRejectingLLM(FakeLLM):
     """DeepSeek v4-pro's thinking-mode shape: tool_choice="required" 400s outright (thinking is
     the server-side default there); every other call behaves like a normal FakeLLM."""
 
-    async def chat(self, messages, *, tools=None, tool_choice=None, temperature=None, model=None):
+    async def chat(self, messages, *, tools=None, tool_choice=None, temperature=None, model=None, reasoning_effort=None):
         if tool_choice == "required":
             self.calls.append((messages, tools))
             self.tool_choices.append(tool_choice)

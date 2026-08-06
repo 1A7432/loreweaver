@@ -344,6 +344,7 @@ class MutableLLM:
         tool_choice: str | dict | None = None,
         temperature: float | None = None,
         model: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> ChatResult:
         return await self._inner.chat(
             messages,
@@ -351,6 +352,7 @@ class MutableLLM:
             tool_choice=tool_choice,
             temperature=temperature,
             model=model,
+            reasoning_effort=reasoning_effort,
         )
 
     def clear_continuation(self, messages: list[dict]) -> None:
@@ -439,14 +441,20 @@ class AnthropicLLM:
         tool_choice: str | dict | None = None,
         temperature: float | None = None,
         model: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> ChatResult:
         system, anthropic_messages = to_anthropic_messages(messages)
         choice = _to_anthropic_tool_choice(tool_choice) if tool_choice is not None else None
         # Extended thinking honors the SAME `reasoning_effort` knob the OpenAI path already
-        # reads — Anthropic-path parity, not a new setting. API constraints while thinking:
+        # reads — Anthropic-path parity, not a new setting. A per-call override (an NPC
+        # line's dramatic weight) engages only when the deployment opted into reasoning at
+        # all — the operator's off switch always wins. API constraints while thinking:
         # temperature must stay unset and tool_choice must remain auto/none, so a forced-tool
         # call (e.g. the deterministic dice corrective) runs without thinking instead of 400ing.
-        budget = _ANTHROPIC_THINKING_BUDGETS.get((self._settings.reasoning_effort or "").strip().lower())
+        effort = self._settings.reasoning_effort
+        if effort and reasoning_effort:
+            effort = reasoning_effort
+        budget = _ANTHROPIC_THINKING_BUDGETS.get((effort or "").strip().lower())
         forced_tool = isinstance(choice, dict) and choice.get("type") in {"tool", "any"}
         thinking = budget is not None and not forced_tool
         kwargs: dict[str, Any] = {
@@ -500,8 +508,10 @@ class GeminiLLM:
         tool_choice: str | dict | None = None,
         temperature: float | None = None,
         model: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> ChatResult:
         del tool_choice  # Gemini SDK handles tool selection through tool config; keep best-effort parity.
+        del reasoning_effort  # No Gemini thinking mapping yet; accepted for LLMClient parity.
         system, contents = to_gemini_contents(messages)
         config = to_gemini_config(
             tools=tools,
