@@ -171,18 +171,18 @@ class NpcManager:
         )
 
     async def _resolve_id(self, chat_key: str, name_or_id: str) -> str | None:
-        """Fuzzy id-or-name resolution: exact id -> slugified id -> exact name (case-insensitive) ->
-        substring-of-name (case-insensitive). Returns `None` rather than raising when nothing matches."""
+        """Fuzzy id-or-name resolution: exact id -> exact name (case-insensitive) -> slugified id ->
+        substring-of-name (case-insensitive). Returns `None` rather than raising when nothing matches.
+
+        Exact NAME outranks the slug lookup: every CJK-only name slugifies to the bare "npc"
+        fallback, so a slug-first order resolved any such name to whichever NPC happened to
+        hold the fallback id — updating 老周 silently edited 沈茉 (2026-08-06 live playtest)."""
         if not name_or_id or not name_or_id.strip():
             return None
 
         ids = await self._load_ids(chat_key)
         if name_or_id in ids:
             return name_or_id
-
-        slug = _slugify(name_or_id)
-        if slug in ids:
-            return slug
 
         records: list[tuple[str, NpcRecord]] = []
         for npc_id in ids:
@@ -194,6 +194,13 @@ class NpcManager:
         for npc_id, record in records:
             if record.name.strip().lower() == lowered:
                 return npc_id
+
+        slug = _slugify(name_or_id)
+        if slug != "npc" and slug in ids:
+            # The "npc" fallback slug carries none of the name's content — matching it
+            # would hijack resolution instead of resolving it.
+            return slug
+
         for npc_id, record in records:
             if lowered in record.name.strip().lower():
                 return npc_id
@@ -219,8 +226,19 @@ class NpcManager:
         `role` is a persona HINT only (used by `agent.kp_tools_npc.NpcTools.import_module_npcs` when
         seeding from a module's `npcs[]`, which has a `role` field but no `persona`): it becomes this
         NPC's `persona` only when `persona` itself is not given.
+
+        Creating an EXACT already-existing name returns that record untouched instead of
+        minting a duplicate: the model's persisted history keeps only final replies (tool
+        chatter is dropped by design), so a later turn legitimately re-"creates" an NPC it
+        already seeded — and a fresh surface-persona duplicate must never shadow or race a
+        record that carries the seeded secret_agenda/knowledge (2026-08-06 live playtest).
         """
         ids = await self._load_ids(chat_key)
+        wanted = name.strip().lower()
+        for existing_id in ids:
+            existing = await self._load_record(chat_key, existing_id)
+            if existing is not None and existing.name.strip().lower() == wanted:
+                return existing
         base_slug = _slugify(name)
         npc_id = base_slug
         suffix = 2

@@ -402,6 +402,13 @@ def anthropic_accepts_temperature(model: str) -> bool:
     return not (model or "").lower().removeprefix("anthropic.").startswith(ANTHROPIC_NO_SAMPLING_PREFIXES)
 
 
+# Extended-thinking budgets for the shared `reasoning_effort` levels. Conservative by
+# design: max_tokens must exceed the budget, and budget+headroom stays within every
+# current Claude model's output ceiling.
+_ANTHROPIC_THINKING_BUDGETS = {"low": 2048, "medium": 8192, "high": 16384, "xhigh": 24576, "max": 31744}
+_ANTHROPIC_THINKING_HEADROOM = 8192  # response tokens on top of the thinking budget
+
+
 class AnthropicLLM:
     """Anthropic Messages API adapter for the repo's LLMClient protocol."""
 
@@ -414,9 +421,14 @@ class AnthropicLLM:
             import anthropic
         except ImportError as exc:
             raise ValueError("缺少 anthropic SDK；请安装 loreweaver[anthropic] 或 anthropic。") from exc
+        base_url = (settings.base_url or "").rstrip("/")
+        if base_url.endswith("/v1"):
+            # OpenAI-convention configs paste a trailing /v1, but the anthropic SDK itself
+            # appends /v1/messages to base_url — keeping it would request /v1/v1/messages.
+            base_url = base_url[: -len("/v1")].rstrip("/")
         self._client = anthropic.AsyncAnthropic(
             api_key=settings.api_key or None,
-            base_url=settings.base_url or None,
+            base_url=base_url or None,
         )
 
     async def chat(
@@ -429,23 +441,40 @@ class AnthropicLLM:
         model: str | None = None,
     ) -> ChatResult:
         system, anthropic_messages = to_anthropic_messages(messages)
+        choice = _to_anthropic_tool_choice(tool_choice) if tool_choice is not None else None
+        # Extended thinking honors the SAME `reasoning_effort` knob the OpenAI path already
+        # reads — Anthropic-path parity, not a new setting. API constraints while thinking:
+        # temperature must stay unset and tool_choice must remain auto/none, so a forced-tool
+        # call (e.g. the deterministic dice corrective) runs without thinking instead of 400ing.
+        budget = _ANTHROPIC_THINKING_BUDGETS.get((self._settings.reasoning_effort or "").strip().lower())
+        forced_tool = isinstance(choice, dict) and choice.get("type") in {"tool", "any"}
+        thinking = budget is not None and not forced_tool
         kwargs: dict[str, Any] = {
             "model": model or self._settings.chat_model,
-            "max_tokens": 4096,
+            "max_tokens": budget + _ANTHROPIC_THINKING_HEADROOM if thinking and budget else 4096,
             "messages": anthropic_messages,
         }
+        if thinking and budget:
+            kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
         if system:
             kwargs["system"] = system
         anthropic_tools = to_anthropic_tools(tools)
         if anthropic_tools:
             kwargs["tools"] = anthropic_tools
-        if tool_choice is not None:
-            kwargs["tool_choice"] = _to_anthropic_tool_choice(tool_choice)
+        if choice is not None:
+            kwargs["tool_choice"] = choice
         effective_temperature = self._settings.temperature if temperature is None else temperature
-        if effective_temperature is not None and anthropic_accepts_temperature(kwargs["model"]):
+        if not thinking and effective_temperature is not None and anthropic_accepts_temperature(kwargs["model"]):
             kwargs["temperature"] = effective_temperature
 
-        response = await self._client.messages.create(**kwargs)
+        if "thinking" in kwargs:
+            # The SDK refuses non-streaming requests sized past its ~10-minute estimate,
+            # which a thinking budget's raised max_tokens triggers. Stream and reassemble
+            # the final message instead — same Message object, same ChatResult contract.
+            async with self._client.messages.stream(**kwargs) as stream:
+                response = await stream.get_final_message()
+        else:
+            response = await self._client.messages.create(**kwargs)
         return from_anthropic_response(response)
 
 
@@ -500,6 +529,13 @@ def to_anthropic_messages(messages: list[dict]) -> tuple[str | None, list[dict[s
                 system_parts.append(text)
             continue
         if role == "assistant":
+            raw_blocks = message.get("provider_blocks")
+            if raw_blocks:
+                # Faithful same-turn replay: an Anthropic assistant turn produced under
+                # extended thinking must ride back with its SIGNED thinking blocks intact,
+                # or the API rejects the following tool_result exchange.
+                out.append({"role": "assistant", "content": raw_blocks})
+                continue
             blocks = _anthropic_text_blocks(message.get("content"))
             for call in message.get("tool_calls") or []:
                 function = _get_value(call, "function", {})
@@ -567,7 +603,33 @@ def from_anthropic_response(response: Any) -> ChatResult:
                     arguments=_ensure_dict(_get_value(block, "input", {})),
                 )
             )
-    return ChatResult(content="".join(text_parts) or None, tool_calls=tool_calls, raw=response, usage=parse_usage(response))
+    return ChatResult(
+        content="".join(text_parts) or None,
+        tool_calls=tool_calls,
+        raw=response,
+        usage=parse_usage(response),
+        provider_blocks=_serialize_anthropic_blocks(response),
+    )
+
+
+def _serialize_anthropic_blocks(response: Any) -> list[dict[str, Any]] | None:
+    """The response's content blocks as plain dicts, for faithful same-turn replay.
+
+    Thinking/redacted_thinking blocks carry a server signature that must survive the
+    round-trip verbatim. Returns None when any block can't be serialized (replay then
+    falls back to the rebuilt text+tool_use shape, which is valid without thinking)."""
+    blocks: list[dict[str, Any]] = []
+    for block in _iter_response_blocks(response):
+        if isinstance(block, dict):
+            blocks.append(block)
+        elif hasattr(block, "model_dump"):
+            try:
+                blocks.append(block.model_dump(exclude_none=True))
+            except Exception:
+                return None
+        else:
+            return None
+    return blocks or None
 
 
 def sanitize_gemini_schema(schema: Any) -> dict[str, Any]:

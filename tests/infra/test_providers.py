@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -370,6 +371,97 @@ async def test_anthropic_chat_keeps_temperature_on_models_that_accept_it():
     kwargs = await _anthropic_chat_kwargs("claude-opus-4-6", 0.9)
 
     assert kwargs["temperature"] == 0.9
+
+
+def test_anthropic_base_url_drops_openai_style_v1_suffix():
+    # The anthropic SDK appends /v1/messages itself; an OpenAI-convention base_url
+    # ending in /v1 would otherwise request /v1/v1/messages and 404.
+    llm = AnthropicLLM(LLMSettings(api_key="sk-test", base_url="https://proxy.example/claude/v1"))
+    assert str(llm._client.base_url).rstrip("/") == "https://proxy.example/claude"
+
+
+class _FakeAnthropicStream:
+    """Captures messages.stream(**kwargs) the way the SDK's context manager works."""
+
+    def __init__(self, holder: dict, message: "Any") -> None:
+        self._holder = holder
+        self._message = message
+
+    def __call__(self, **kwargs: Any) -> "_FakeAnthropicStream":
+        self._holder["kwargs"] = kwargs
+        return self
+
+    async def __aenter__(self) -> "_FakeAnthropicStream":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        return None
+
+    async def get_final_message(self) -> Any:
+        return self._message
+
+
+async def test_anthropic_chat_maps_reasoning_effort_to_extended_thinking():
+    # The SAME reasoning_effort knob the OpenAI path reads: thinking budget on,
+    # max_tokens raised above it, temperature omitted (API constraint while thinking),
+    # and the call STREAMS (the SDK refuses non-streaming at thinking-sized max_tokens).
+    holder: dict = {}
+    stream = _FakeAnthropicStream(holder, SimpleNamespace(content=[SimpleNamespace(type="text", text="ok")]))
+    fake_client = SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(), stream=stream))
+    llm = AnthropicLLM(
+        LLMSettings(api_key="sk-test", chat_model="claude-opus-4-6", reasoning_effort="max"),
+        client=fake_client,
+    )
+
+    result = await llm.chat([{"role": "user", "content": "act"}], temperature=0.9)
+
+    kwargs = holder["kwargs"]
+    assert kwargs["thinking"] == {"type": "enabled", "budget_tokens": 31744}
+    assert kwargs["max_tokens"] > 31744
+    assert "temperature" not in kwargs
+    assert result.content == "ok"
+    fake_client.messages.create.assert_not_called()
+
+
+async def test_anthropic_chat_forced_tool_choice_runs_without_thinking():
+    # Anthropic requires tool_choice auto/none while thinking — the deterministic
+    # dice corrective forces a specific tool, so that call must drop thinking, not 400.
+    fake_client = SimpleNamespace(messages=SimpleNamespace(create=AsyncMock()))
+    fake_client.messages.create.return_value = SimpleNamespace(content=[SimpleNamespace(type="text", text="ok")])
+    llm = AnthropicLLM(
+        LLMSettings(api_key="sk-test", chat_model="claude-opus-4-6", reasoning_effort="max"),
+        client=fake_client,
+    )
+
+    await llm.chat([{"role": "user", "content": "act"}], tool_choice="skill_check")
+
+    kwargs = fake_client.messages.create.call_args.kwargs
+    assert "thinking" not in kwargs
+    assert kwargs["max_tokens"] == 4096
+    assert kwargs["tool_choice"] == {"type": "tool", "name": "skill_check"}
+
+
+def test_anthropic_thinking_blocks_replay_verbatim_through_the_tool_loop():
+    # Signed thinking blocks must ride back with their assistant turn during the
+    # SAME turn's tool loop; the loop attaches them and the converter replays them
+    # verbatim instead of rebuilding a text+tool_use shape that would drop them.
+    from agent.loop import _assistant_tool_call_message
+
+    thinking_block = {"type": "thinking", "thinking": "…", "signature": "sig-1"}
+    tool_block = {"type": "tool_use", "id": "toolu_9", "name": "roll_dice", "input": {"expression": "1d100"}}
+    response = SimpleNamespace(content=[thinking_block, tool_block])
+
+    result = from_anthropic_response(response)
+    assert result.provider_blocks == [thinking_block, tool_block]
+
+    assistant = _assistant_tool_call_message(result)
+    assert assistant["provider_blocks"] == [thinking_block, tool_block]
+
+    _, messages = to_anthropic_messages(
+        [assistant, {"role": "tool", "tool_call_id": "toolu_9", "content": "42"}]
+    )
+    assert messages[0] == {"role": "assistant", "content": [thinking_block, tool_block]}
+    assert messages[1]["content"][0]["type"] == "tool_result"
 
 
 def test_sanitize_gemini_tool_parameters_removes_unsupported_fields_and_bad_numeric_enum():

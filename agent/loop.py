@@ -115,6 +115,34 @@ _STATE_BOOKKEEPING_TOOL_NAMES = frozenset({"kp_note", "game_clock"})
 # Dot-/slash-prefixed dice commands (".ra Spot Hidden", ".sc 1/1d6", "/roll") are
 # unique to tabletop play; in a player-facing reply they mean the Keeper is
 # telling the player to type the command instead of rolling it via a tool.
+# A model occasionally writes a TOOL CALL as literal text instead of using the
+# function-calling channel — foreign-harness XML dialects were observed live
+# (2026-08-06: a `<Deep><use><name>mcp__…` block, its fake kp_note args carrying
+# keeper-side meta into the player-visible reply). Machinery-shaped blocks are
+# never legitimate narration and their payloads can hold keeper-only reasoning,
+# so any wrapper that contains tool-call markers is stripped WHOLE, content
+# unseen — the same fail-closed stance as the ST template scrub.
+_TEXT_TOOL_CALL_WRAPPER_RE = re.compile(
+    r"<(Deep|use|tool_call|tool_use|function_call|function_calls|invoke)\b[^>]*>.*?</\1\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
+_TEXT_TOOL_CALL_MARKER_RE = re.compile(
+    r"<\s*(?:name|tool_name|args|arguments|parameter)\b|mcp__", re.IGNORECASE
+)
+
+
+def _strip_text_tool_calls(reply: str) -> str:
+    """Remove tool-call-shaped machinery blocks a model wrote as plain text."""
+
+    def _drop_if_machinery(match: re.Match[str]) -> str:
+        return "" if _TEXT_TOOL_CALL_MARKER_RE.search(match.group(0)) else match.group(0)
+
+    cleaned = _TEXT_TOOL_CALL_WRAPPER_RE.sub(_drop_if_machinery, reply)
+    if cleaned == reply:
+        return reply
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
 _DICE_COMMAND_RE = re.compile(
     r"(?<![0-9A-Za-z])[./](?:ra|rah|rav|rab|rap|rc|sc|sca|en|ti|li|rd|ww|wod|roll)\b",
     re.IGNORECASE,
@@ -738,6 +766,7 @@ async def run_kp_turn(
         reply, mvu_applied, _mvu_errors = await MvuManager(services.store).apply_text(ctx.chat_key, reply)
     except Exception:
         logger.warning("MVU update-block processing failed", exc_info=True)
+    reply = _strip_text_tool_calls(reply)
 
     if hook_engine is not None:
         reply, hook_writes_this_turn, reply_ui_frames, reply_panel_events = await _run_reply_hooks(
@@ -899,7 +928,7 @@ async def _run_max_rounds_finalizer(
 
 def _assistant_tool_call_message(result: ChatResult) -> dict:
     """Render an assistant turn's tool calls in the OpenAI message shape."""
-    return {
+    message = {
         "role": "assistant",
         "content": result.content,
         "tool_calls": [
@@ -911,6 +940,11 @@ def _assistant_tool_call_message(result: ChatResult) -> dict:
             for call in result.tool_calls
         ],
     }
+    if result.provider_blocks is not None:
+        # Same-turn faithful replay (Anthropic thinking blocks must accompany their
+        # assistant turn); never persisted — history keeps only user text + final reply.
+        message["provider_blocks"] = result.provider_blocks
+    return message
 
 
 def _schemas_for_tool_names(toolset: Toolset, unlocked: set[str] | None, names: frozenset[str]) -> list[dict]:

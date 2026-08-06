@@ -114,10 +114,12 @@ async def test_create_npc_then_get_npc_round_trip():
 
 
 async def test_create_npc_id_collision_is_suffixed():
+    # DIFFERENT names whose slugs collide get suffixed ids; the SAME name never
+    # duplicates (it returns the existing record — see the re-create test below).
     manager = NpcManager(Store(":memory:"))
 
-    first = await manager.create_npc(CHAT_KEY, "Bob")
-    second = await manager.create_npc(CHAT_KEY, "Bob")
+    first = await manager.create_npc(CHAT_KEY, "Bob!")
+    second = await manager.create_npc(CHAT_KEY, "Bob?")
 
     assert first.id == "bob"
     assert second.id == "bob-2"
@@ -193,6 +195,34 @@ async def test_add_knowledge_replace_mode_overwrites_add_mode_appends():
 
     replaced = await manager.add_knowledge(CHAT_KEY, "Martha", ["only this now"], mode="replace")
     assert replaced.knowledge == ["only this now"]
+
+
+async def test_cjk_names_resolve_to_their_own_npc_not_the_fallback_slug_holder():
+    """2026-08-06 live playtest bug: every CJK-only name slugifies to the bare "npc"
+    fallback, and slug-before-name resolution sent updates for 老周 to 沈茉 (the NPC
+    that happened to hold the fallback id), silently cross-contaminating knowledge."""
+    manager = NpcManager(Store(":memory:"))
+    first = await manager.create_npc(CHAT_KEY, "沈茉", knowledge=["妹妹的事实"])
+    second = await manager.create_npc(CHAT_KEY, "老周", knowledge=["门房的事实"])
+    assert first.id != second.id  # CJK names both fall back to "npc"-family ids
+
+    updated = await manager.add_knowledge(CHAT_KEY, "老周", ["它在数上楼的人"], mode="replace")
+    assert updated is not None and updated.name == "老周"
+    assert (await manager.get_npc(CHAT_KEY, "沈茉")).knowledge == ["妹妹的事实"]  # untouched
+    assert (await manager.get_npc(CHAT_KEY, "老周")).knowledge == ["它在数上楼的人"]
+
+
+async def test_recreating_an_existing_name_returns_the_seeded_record_not_a_duplicate():
+    """History drops tool chatter, so a later turn legitimately re-'creates' an NPC it
+    already seeded — the fresh surface persona must never shadow the seeded record."""
+    manager = NpcManager(Store(":memory:"))
+    seeded = await manager.create_npc(CHAT_KEY, "老周", secret_agenda="看门物", knowledge=["数上楼的人"])
+
+    again = await manager.create_npc(CHAT_KEY, "老周", persona="表面上的管理员")
+
+    assert again.id == seeded.id
+    assert again.secret_agenda == "看门物"  # untouched — surface re-create never clobbers
+    assert [npc.id for npc in await manager.list_npcs(CHAT_KEY)] == [seeded.id]
 
 
 async def test_unknown_npc_mutations_return_none_or_false_not_raise():

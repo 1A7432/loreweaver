@@ -54,6 +54,11 @@ class ChatResult:
     tool_calls: list[ToolCall]  # [] when none
     raw: Any = None
     usage: Usage | None = None  # best-effort `parse_usage(raw)`; None when unavailable/unparsed
+    # Raw provider content blocks for FAITHFUL same-turn replay, when the provider requires
+    # it (Anthropic extended thinking: the signed thinking blocks must ride back with their
+    # assistant turn during the tool loop). Ephemeral by construction — the loop's persisted
+    # history keeps only user text + final reply, so these never reach the store.
+    provider_blocks: Any = None
 
 
 class LLMClient(Protocol):
