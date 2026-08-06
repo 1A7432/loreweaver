@@ -142,6 +142,13 @@ esac
 if [ "${1:-}" = "--version" ]; then printf 'test-bun\n'; fi
 if [ "${1:-}" = "install" ]; then
   printf '%s\n' "$PWD" >> "$BUN_INSTALL_CWD_LOG"
+  if [ "${INTERRUPT_BUN_INSTALL:-0}" = "1" ]; then
+    # A user's Ctrl-C lands on the whole foreground process group; the installer runs
+    # in its own session (start_new_session below), so group 0 is the installer tree.
+    kill -INT 0
+    sleep 2
+    exit 0
+  fi
   [ "${FAIL_BUN_INSTALL:-0}" != "1" ] || exit 42
   if [ "${SKIP_BUN_LINKS:-0}" != "1" ]; then
     for module in react loreweaver-protocol @opentui/core; do
@@ -167,6 +174,7 @@ def _run_installer(
     mirror_sidecar: Path,
     fail_primary: bool = False,
     fail_bun_install: bool = False,
+    interrupt_bun_install: bool = False,
     skip_bun_links: bool = False,
     release_tag: str = "",
     existing_client: str = "",
@@ -192,6 +200,7 @@ def _run_installer(
         "MIRROR_SIDECAR": str(mirror_sidecar),
         "FAIL_PRIMARY": "1" if fail_primary else "0",
         "FAIL_BUN_INSTALL": "1" if fail_bun_install else "0",
+        "INTERRUPT_BUN_INSTALL": "1" if interrupt_bun_install else "0",
         "SKIP_BUN_LINKS": "1" if skip_bun_links else "0",
         "BUN_INSTALL_CWD_LOG": str(tmp_path / "bun-install-cwd.log"),
     }
@@ -206,6 +215,9 @@ def _run_installer(
         text=True,
         capture_output=True,
         check=False,
+        # Give the installer its own session so the interrupt stub's process-group
+        # signal reaches the installer tree and never the test runner itself.
+        start_new_session=True,
     )
     urls = url_log.read_text().splitlines() if url_log.exists() else []
     return result, urls, home
@@ -418,6 +430,38 @@ def test_dependency_failure_restores_the_previous_client(tmp_path: Path):
     assert "bun install failed" in result.stderr
     assert (home / "clients" / "previous.txt").read_text() == "working version"
     assert not (home / "clients" / "candidate.txt").exists()
+
+
+def test_interrupt_during_bun_install_never_loses_the_previous_client(tmp_path: Path):
+    # An upgrader's Ctrl-C during the slowest network step (bun install) used to fire the
+    # EXIT trap, which swept the staging tree — previous-client backup included. The
+    # invariant: however the interrupt lands, the old client survives, either restored
+    # into place or preserved inside the staging tree the cleanup now refuses to delete.
+    archive = tmp_path / "candidate.tar.gz"
+    digest = _archive(archive, "candidate")
+    sidecar = _sidecar(archive, digest)
+
+    result, _, home = _run_installer(
+        tmp_path,
+        BASH_INSTALLER,
+        primary_archive=archive,
+        primary_sidecar=sidecar,
+        mirror_archive=archive,
+        mirror_sidecar=sidecar,
+        interrupt_bun_install=True,
+        existing_client="working version",
+    )
+
+    assert result.returncode != 0
+    survivors = [
+        path
+        for path in (
+            home / "clients" / "previous.txt",
+            *home.glob(".client-install.*/previous-clients/previous.txt"),
+        )
+        if path.is_file() and path.read_text() == "working version"
+    ]
+    assert survivors, "the previous client must survive an interrupt during bun install"
 
 
 def test_bun_install_runs_in_the_final_client_directory(tmp_path: Path):

@@ -190,9 +190,20 @@ INSTALL_STAGING="$(mktemp -d "$TRPG_HOME/.client-install.XXXXXX")" \
   || die "could not create a client staging directory"
 CLIENT_STAGE="$INSTALL_STAGING/payload"
 LAUNCHER_STAGE=""
+# While the previous client lives inside the staging tree (from the commit step until
+# the new install fully lands), an interrupt must NOT sweep the staging away with it —
+# Ctrl-C during `bun install` would otherwise delete an upgrader's only working client.
+# Mirrors the PowerShell installer's $PreserveStaging.
+PRESERVE_STAGING=0
 cleanup_install() {
   [ -z "${LAUNCHER_STAGE:-}" ] || rm -f "$LAUNCHER_STAGE"
-  [ -z "${INSTALL_STAGING:-}" ] || rm -rf "$INSTALL_STAGING"
+  [ -n "${INSTALL_STAGING:-}" ] || return 0
+  if [ "${PRESERVE_STAGING:-0}" -eq 1 ]; then
+    printf '\033[1;33m▸ install interrupted — the previous client is preserved at %s\033[0m\n' \
+      "$INSTALL_STAGING/previous-clients" >&2
+    return 0
+  fi
+  rm -rf "$INSTALL_STAGING"
 }
 trap cleanup_install EXIT
 trap 'exit 130' HUP INT TERM
@@ -274,6 +285,7 @@ HAD_PREVIOUS_CLIENT=0
 mkdir -p "$TRPG_BIN"
 [ ! -d "$TRPG_BIN/loreweaver" ] || die "$TRPG_BIN/loreweaver is a directory; cannot install the launcher"
 if [ -e "$TRPG_HOME/clients" ] || [ -L "$TRPG_HOME/clients" ]; then
+  PRESERVE_STAGING=1
   mv "$TRPG_HOME/clients" "$CLIENT_BACKUP" \
     || die "could not stage the previous client for upgrade"
   HAD_PREVIOUS_CLIENT=1
@@ -283,6 +295,7 @@ restore_previous_client() {  # $1 = failure message; never returns
   if [ "$HAD_PREVIOUS_CLIENT" -eq 1 ]; then
     if mv "$CLIENT_BACKUP" "$TRPG_HOME/clients"; then
       HAD_PREVIOUS_CLIENT=0
+      PRESERVE_STAGING=0   # the backup is home again; the staging tree is disposable
     else
       INSTALL_STAGING=""   # keep the backup instead of letting the EXIT trap delete it
       die "$1; the previous client could not be restored — backup retained at $CLIENT_BACKUP"
@@ -384,6 +397,7 @@ mv -f "$LAUNCHER_STAGE" "$TRPG_BIN/loreweaver" \
   || restore_previous_client "could not commit the launcher"
 LAUNCHER_STAGE=""
 rm -rf "$CLIENT_BACKUP"
+PRESERVE_STAGING=0
 
 echo
 say "installed ✓"
