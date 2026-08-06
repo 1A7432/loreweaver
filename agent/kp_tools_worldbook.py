@@ -269,7 +269,7 @@ class WorldbookTools:
                 done += "\n" + i18n.t(
                     "worldbook.tools.import.skipped_line",
                     count=len(skipped_titles),
-                    titles="、".join(skipped_titles[:5]),
+                    titles=i18n.t("common.list_separator").join(skipped_titles[:5]),
                 )
             return done
         except Exception as exc:

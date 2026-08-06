@@ -58,40 +58,12 @@ async def test_unrelated_message_does_not_fire_keyword_lore(tmp_path):
     assert all("灯塔曾三次易主" not in prompt for prompt in captured_prompts)
 
 
-async def test_sole_active_route_family_follows_the_variable_tree(tmp_path):
-    """End-to-end: with 配置.路线 = 主线 in the MVU tree, only the matching route entry
-    reaches the system prompt even when a sibling outranks it on priority."""
-    from core.mvu_compat import MvuManager
-    from core.worldbook import LoreEntry
-
-    captured_prompts: list[str] = []
-
-    def responder(messages, tools):
-        captured_prompts.append(messages[0]["content"])
-        return assistant_text("Rain keeps falling.")
-
-    services = _services(FakeLLM(responder=responder))
-    ctx = AgentCtx(chat_key="route-room", user_id="p1", locale="en")
-    await services.worldbook.add(
-        "route-room", LoreEntry(id="", title="路线·主线", content="主线规则：验人配额照常。", constant=True, priority=71)
-    )
-    await services.worldbook.add(
-        "route-room", LoreEntry(id="", title="路线·判官线", content="判官线规则：墨水配给制。", constant=True, priority=75)
-    )
-    await MvuManager(services.store).save("route-room", {"配置": {"路线": "主线"}})
-
-    await run_kp_turn(ctx, services, build_kp_toolset(services), "我按流程开门验人。")
-
-    final_prompt = captured_prompts[-1]
-    assert "主线规则：验人配额照常。" in final_prompt
-    assert "判官线规则：墨水配给制。" not in final_prompt
-
-
-async def test_discipline_and_fidelity_blocks_ride_world_lore_without_a_pool(tmp_path):
+async def test_discipline_and_fidelity_blocks_ride_world_lore_in_module_rooms(tmp_path):
     """A card-imported room has no knowledge pool, so the pool section's
     keeper_discipline/module_fidelity blocks used to never fire — the model ran whole
-    imported modules with neither block in context. They now fold in ahead of the lore
-    section (exactly once) whenever world lore injects."""
+    imported modules with neither block in context. They fold in ahead of the lore
+    section (exactly once) when world lore injects in a room the keeper's
+    `.import … world` marked as running a module."""
     from core.worldbook import LoreEntry
 
     captured_prompts: list[str] = []
@@ -106,6 +78,8 @@ async def test_discipline_and_fidelity_blocks_ride_world_lore_without_a_pool(tmp
         "discipline-room",
         LoreEntry(id="", title="模组规则", content="访客审判每日一次。", constant=True),
     )
+    # The durable marker `.import … world` persists (agent.kp_tools_charcard).
+    await services.store.set(user_key="", store_key="world_import.discipline-room", value="测试模组")
 
     await run_kp_turn(ctx, services, build_kp_toolset(services), "开始今天的审判。")
 
@@ -115,6 +89,34 @@ async def test_discipline_and_fidelity_blocks_ride_world_lore_without_a_pool(tmp
     assert prompt.count(i18n.t("prompt.module_fidelity")) == 1
     # And ahead of the lore section they govern.
     assert prompt.index(i18n.t("prompt.keeper_discipline")) < prompt.index("访客审判每日一次。")
+
+
+async def test_sandbox_lore_never_pulls_in_module_directives(tmp_path):
+    """A free-sandbox room whose keeper merely `.lore add`ed setting notes must get its
+    lore WITHOUT the run-the-module blocks: there is no module to be faithful to, and
+    improvising is the keeper's job there."""
+    from core.worldbook import LoreEntry
+
+    captured_prompts: list[str] = []
+
+    def responder(messages, tools):
+        captured_prompts.append(messages[0]["content"])
+        return assistant_text("The tavern hums.")
+
+    services = _services(FakeLLM(responder=responder))
+    ctx = AgentCtx(chat_key="sandbox-room", user_id="p1", locale="en")
+    await services.worldbook.add(
+        "sandbox-room",
+        LoreEntry(id="", title="酒馆设定", content="酒馆的地窖通向旧运河。", constant=True),
+    )
+
+    await run_kp_turn(ctx, services, build_kp_toolset(services), "我们在酒馆里聊聊。")
+
+    prompt = captured_prompts[-1]
+    i18n = services.i18n.with_locale("en")
+    assert "酒馆的地窖通向旧运河。" in prompt  # the lore itself still injects
+    assert i18n.t("prompt.module_fidelity") not in prompt
+    assert i18n.t("prompt.keeper_discipline") not in prompt
 
 
 async def test_no_world_lore_means_no_discipline_fold(tmp_path):

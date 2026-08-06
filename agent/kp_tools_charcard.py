@@ -321,6 +321,13 @@ class CharcardTools:
             hooks = card_hook_codes(card)
             if hooks:
                 await install_room_hooks(self._services, ctx.chat_key, f"card:{card.name}", hooks)
+            # Durable "this room runs an imported module" marker: the prompt builder folds the
+            # keeper_discipline/module_fidelity blocks into the lore section ONLY for rooms
+            # that actually loaded a module this way — a free-sandbox room whose keeper merely
+            # `.lore add`ed some setting notes must never receive run-the-module directives.
+            await self._services.store.set(
+                user_key="", store_key=f"world_import.{ctx.chat_key}", value=card.name or "card"
+            )
 
             # A native bundle (M14) additionally carries TYPED variable specs — the lossless
             # flavor of what an ST card can only ship as an [InitVar] tree. Keeper trust:
@@ -353,7 +360,7 @@ class CharcardTools:
                 skipped_line = i18n.t(
                     "charcard.tools.world.skipped_line",
                     count=len(skipped_titles),
-                    titles="、".join(skipped_titles[:5]),
+                    titles=i18n.t("common.list_separator").join(skipped_titles[:5]),
                 )
             extra_lines = [line for line in (specs_line, pregen_line, skipped_line) if line]
             return "\n".join([result, *extra_lines])

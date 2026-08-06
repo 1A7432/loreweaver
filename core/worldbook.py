@@ -328,13 +328,8 @@ class WorldbookManager:
         ignore_conditions: bool = False,
         rng: random.Random | None = None,
         advance_timers: bool = False,
-        active_variants: Any = None,
     ) -> list[LoreEntry]:
         """Select the entries to inject for `context_text`.
-
-        `active_variants` (an optional collection of the room's current STRING variable
-        values) drives the sole-active filter for mutually-exclusive constant families —
-        see `_filter_sole_active_constants`.
 
         `resolve` is a `core.condexpr` resolver over the room's variables; a conditioned entry
         fires only when its condition evaluates true, and FAILS CLOSED (broken expression, or no
@@ -353,8 +348,7 @@ class WorldbookManager:
         """
         context = context_text or ""
         rng = rng or _RNG
-        all_entries = await self.list(chat_key)
-        entries = [entry for entry in all_entries if entry.enabled]
+        entries = [entry for entry in await self.list(chat_key) if entry.enabled]
         timers = await self._load_timers(chat_key)
         turn = int(timers.get("turn", 0)) + (1 if advance_timers else 0)
         timer_entries = timers.get("entries", {})
@@ -382,21 +376,6 @@ class WorldbookManager:
                 continue
             if entry.constant or _keyword_hit(entry, context):
                 selected[entry.id] = entry
-
-        if active_variants:
-            # Families build over ALL constant entries — enabled or not. An ST card's file
-            # carries the author's LAST panel toggle state (round-3 live finding: the card
-            # shipped 大侦探线 enabled and every other route disabled, so an enabled-only
-            # family had one member and the filter no-opped all game). The room's variable
-            # tree is the runtime authority and overrides that snapshot BOTH ways: matched
-            # members inject even when file-disabled, non-matched drop even when enabled.
-            drop_ids, resurrect = _resolve_sole_active(all_entries, active_variants)
-            for entry_id in drop_ids:
-                if entry_id not in sticky_ids:
-                    selected.pop(entry_id, None)
-            for entry in resurrect:
-                if entry.id not in selected and _timer_eligible(entry):
-                    selected[entry.id] = entry
 
         for entry in await self._semantic_hits(chat_key, context, limit=limit):
             if entry.id in selected:
@@ -548,7 +527,6 @@ async def inject_world_lore_prompt(
     advance_timers: bool = False,
     limit: int = 8,
     budget_chars: int = 4000,
-    active_variants: Any = None,
 ) -> str:
     entries = await worldbook.match(
         ctx.chat_key,
@@ -560,7 +538,6 @@ async def inject_world_lore_prompt(
         engine=engine,
         rng=rng,
         advance_timers=advance_timers,
-        active_variants=active_variants,
     )
     rendered = [render_entry_content(entry, resolve, engine, macros=macros) for entry in entries]
 
@@ -742,56 +719,6 @@ def _resolve_inclusion_groups(
             weights = [max(1, entry.group_weight) for entry in members]
             chosen.append(rng.choices(members, weights=weights, k=1)[0])
     return chosen
-
-
-# The community's sole-active family convention: `前缀·变体` titles (难度·标准, 路线·主线,
-# 色度·浓). ST module cards toggle exactly one member per family from their frontend panel;
-# imported flat, every member is constant and PRIORITY (not module state) used to decide
-# which injected — the 2026-08-05 rerun shipped 路线·大侦探线 into a 主线 run that way.
-_VARIANT_SEPARATOR = "·"
-
-
-def _resolve_sole_active(
-    all_entries: list[LoreEntry],
-    active_variants: Any,
-) -> tuple[set[str], list[LoreEntry]]:
-    """Resolve mutually-exclusive constant families against the room's variable values.
-
-    A family = ≥2 CONSTANT entries — **enabled or disabled** — whose titles share a
-    ``前缀·`` prefix. When any of the room's string variable values equals one member's
-    variant name (配置.路线 = "主线" → 路线·主线), returns ``(drop_ids, resurrect)``:
-    every OTHER member's id to drop, and the matched members themselves so the caller can
-    inject them even when the card file left them panel-disabled (the file's enabled
-    flags are the author's last SillyTavern toggle snapshot; the variable tree is the
-    runtime authority). FAIL-OPEN by family: no value matching any member → that family
-    contributes nothing to either set (file behavior stands). Callers still apply timer
-    eligibility to resurrected members and never drop sticky-active winners."""
-    values = {str(value).strip() for value in active_variants if str(value).strip()}
-    drop_ids: set[str] = set()
-    resurrect: list[LoreEntry] = []
-    if not values:
-        return drop_ids, resurrect
-    families: dict[str, list[LoreEntry]] = {}
-    for entry in all_entries:
-        if not entry.constant:
-            continue
-        prefix, sep, variant = entry.title.partition(_VARIANT_SEPARATOR)
-        if sep and prefix.strip() and variant.strip():
-            families.setdefault(prefix.strip(), []).append(entry)
-    for members in families.values():
-        if len(members) < 2:
-            continue
-        matched = [
-            entry
-            for entry in members
-            if entry.title.partition(_VARIANT_SEPARATOR)[2].strip() in values
-        ]
-        if not matched:
-            continue
-        matched_ids = {entry.id for entry in matched}
-        drop_ids.update(entry.id for entry in members if entry.id not in matched_ids)
-        resurrect.extend(matched)
-    return drop_ids, resurrect
 
 
 def _cap_entries(entries: list[LoreEntry], budget_chars: int) -> list[LoreEntry]:

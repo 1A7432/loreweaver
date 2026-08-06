@@ -4,5 +4,6 @@
   "common.unknown": "Unknown",
   "common.error": "Error",
   "common.none": "None",
+  "common.list_separator": ", ",
   "character.default_name": "Unnamed"
 }

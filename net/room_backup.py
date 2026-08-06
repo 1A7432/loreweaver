@@ -72,7 +72,14 @@ _EXACT_BASES = {
     "module_init_status",
     "module_keeper_pool",
     "module_player_pool",
+    "module_vars",
+    "mvu_data",
+    "mvu_exposed",
     "npc_list",
+    "pregen_roster",
+    "room_hooks",
+    "world_import",
+    "worldbook_timers",
     "party_auto",
     "party_roster",
     "relationships",
@@ -90,6 +97,7 @@ _PREFIX_BASES = {
     "battle_report",
     "characters",
     "npc",
+    "pregen_sheet",
     "session_history",
     "session_name",
     "session_record",
@@ -119,6 +127,9 @@ _RESET_STORY_EXACT = frozenset(
         "relationships",
         "usage_stats",
         "npc_list",
+        # Worldbook sticky/cooldown/delay windows track the narrative session's turn
+        # counter — a clean-slate replay restarts them just like the clock and initiative.
+        "worldbook_timers",
     }
 )
 _RESET_STORY_PREFIX = frozenset({"battle_report", "npc", "session_history", "session_name", "session_record"})
@@ -134,6 +145,15 @@ _RESET_ALL_EXACT = frozenset(
         "module_init_status",
         "module_keeper_pool",
         "module_player_pool",
+        # Module machinery a keeper world-card import installs lives exactly as long as
+        # the module: the import marker, MVU variable tree + exposure list, modvar
+        # trackers, room hooks and the claimable pregen roster all go with it.
+        "world_import",
+        "mvu_data",
+        "mvu_exposed",
+        "module_vars",
+        "room_hooks",
+        "pregen_roster",
         "media_history",
         "audio_library",
         "audio_state",
@@ -141,7 +161,7 @@ _RESET_ALL_EXACT = frozenset(
         "forge_module_last",
     }
 )
-_RESET_ALL_PREFIX = frozenset({"worldbook", "forge_module_owner"})
+_RESET_ALL_PREFIX = frozenset({"worldbook", "forge_module_owner", "pregen_sheet"})
 
 
 def _reset_bases(scope: str) -> tuple[set[str], set[str]]:

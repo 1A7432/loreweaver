@@ -262,6 +262,9 @@ async def test_keeper_world_import_installs_the_module_half(tmp_path):
     tree = await MvuManager(services.store).load("chat-world")
     assert tree["理"]["好感度"][0] == 33
     assert tree["真凶"][0] == "管家"
+    # The durable "this room runs an imported module" marker the prompt builder gates
+    # the keeper_discipline/module_fidelity fold-in on.
+    assert await services.store.get(user_key="", store_key="world_import.chat-world") == "理"
     # World lore keeps its render-time EJS (that is what this path exists to carry),
     # and the world card never became the importing keeper's OWN character (a default
     # placeholder sheet may exist; the card's persona must not).

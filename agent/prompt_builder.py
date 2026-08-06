@@ -114,19 +114,6 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
             worldinfo={entry.title: entry.content for entry in room_entries},
         )
     macros = await _build_macro_context(services, ctx)
-    # Sole-active variant values for mutually-exclusive constant families (路线·X/难度·X):
-    # every STRING value currently held by the room's variables, from both tracker layers.
-    # `worldbook.match` uses them to keep only the family member the module state names.
-    variant_values = {
-        str(leaf["value"]).strip()
-        for leaf in flatten_leaves(mvu_tree, 200)
-        if isinstance(leaf["value"], str) and str(leaf["value"]).strip()
-    }
-    variant_values.update(
-        str(value).strip()
-        for value in modvar_state["values"].values()
-        if isinstance(value, str) and str(value).strip()
-    )
     world_lore = await inject_world_lore_prompt(
         ctx,
         services.worldbook,
@@ -145,7 +132,6 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
         # steering the model off the engine's `_.set` wire.
         limit=12,
         budget_chars=12_000,
-        active_variants=variant_values,
     )
     if engine is not None:
         mvu_tree = await _flush_template_writes(services, ctx.chat_key, engine, mvu_tree)
@@ -153,13 +139,19 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
     # Card-imported module rooms (`.import … world`) have no knowledge pool, so the pool
     # section's keeper_discipline / module_fidelity blocks never fired for them — the
     # model ran whole imported modules with NEITHER block in context (2026-08-05 round-3
-    # root cause: an invented faction, and every discipline clause silently inapplicable).
-    # Whenever world lore injects and the document section did not already carry the
-    # discipline, fold both blocks in directly ahead of the lore they govern.
+    # root cause: every discipline clause silently inapplicable). Fold both blocks in
+    # ahead of the lore they govern — but ONLY for rooms that actually loaded a module
+    # (the `world_import` marker the keeper's `.import … world` persists). A free-sandbox
+    # room whose keeper `.lore add`ed a few setting notes gets plain lore, no
+    # run-the-module directives: improvisation is the job there.
     if world_lore:
-        discipline = i18n.t("prompt.keeper_discipline")
-        if discipline not in document_context:
-            world_lore = "\n\n".join([discipline, i18n.t("prompt.module_fidelity"), world_lore])
+        world_imported = await services.store.get(
+            user_key="", store_key=f"world_import.{ctx.chat_key}"
+        )
+        if world_imported:
+            discipline = i18n.t("prompt.keeper_discipline")
+            if discipline not in document_context:
+                world_lore = "\n\n".join([discipline, i18n.t("prompt.module_fidelity"), world_lore])
 
     sections = [
         session_history,
