@@ -252,6 +252,46 @@ def test_install_rejects_undeclared_archive_entries(tmp_path: Path):
         _install(tampered, tmp_path)
 
 
+def test_install_rejects_a_trust_card_that_hides_hooks(tmp_path: Path):
+    # Git releases are the registry: a hand-assembled archive can store any trust block
+    # it likes, so install re-derives trust with the build-time detectors and compares.
+    src = _write_source(tmp_path)
+    built = build_pack(src, tmp_path / "good.lwpack")
+
+    def undersell(entries):
+        return [
+            (
+                info,
+                data.replace(b"has_hooks: true", b"has_hooks: false")
+                if info.filename == MANIFEST_NAME
+                else data,
+            )
+            for info, data in entries
+        ]
+
+    tampered = _rewrite_pack(built.path, tmp_path / "lying.lwpack", undersell)
+    with pytest.raises(PackError, match="trust block does not match.*has_hooks"):
+        _install(tampered, tmp_path)
+
+
+def test_install_rejects_hooks_smuggled_into_a_hookless_pack(tmp_path: Path):
+    # A skill dir's hooks.js is always in the declared-entry set (it is optional), so the
+    # undeclared-entry check alone would let an added hooks.js ride behind an honest
+    # `has_hooks: false` card; the trust recomputation is what catches it.
+    src = _write_source(tmp_path)
+    (src / "skills/omen-engine/hooks.js").unlink()
+    built = build_pack(src, tmp_path / "hookless.lwpack")
+    assert built.manifest.trust is not None and built.manifest.trust.has_hooks is False
+
+    def smuggle(entries):
+        info = zipfile.ZipInfo("skills/omen-engine/hooks.js")
+        return [*entries, (info, HOOKS_JS.encode())]
+
+    tampered = _rewrite_pack(built.path, tmp_path / "smuggled-hooks.lwpack", smuggle)
+    with pytest.raises(PackError, match="trust block does not match.*has_hooks"):
+        _install(tampered, tmp_path)
+
+
 def test_install_rejects_unmet_engine_minimums(tmp_path: Path):
     src = _write_source(tmp_path)
     (src / MANIFEST_NAME).write_text(

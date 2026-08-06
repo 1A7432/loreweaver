@@ -455,7 +455,7 @@ Keeper commands: `.panels` / `.panels list` (anyone), `.panels enable|disable <p
 | `contents.lorebooks` | no | lorebook JSON (ST `character_book` / `{entries: [...]}` shapes) |
 | `contents.panels` | no | panels YAML files (`ui/panels.yaml`) declaring module UI panels (Layer D) — ≤ 16 panels per pack; a tier-2 panel's `entry`/`assets` files are folded into the pack asset pipeline at build (sha256'd, code payload ≤ 2 MB per panel) |
 | `assets` | no | media files: `path` + optional `title`/`license`/`tags`/`mime`; `sha256`/`size`/`mime` are FILLED IN at pack time (a hand-declared `sha256` must match the file) |
-| `trust` | forbidden in source | GENERATED at pack time (counts incl. `panels`, `has_hooks`, `has_ejs`, `asset_bytes`); a hand-written block fails the build |
+| `trust` | forbidden in source | GENERATED at pack time (counts incl. `panels`, `has_hooks`, `has_ejs`, `asset_bytes`); a hand-written block fails the build. Install RE-DERIVES it from the archive with the same detectors and rejects a mismatch — a hand-assembled pack cannot understate what it ships |
 
 Full example — a source tree's `pack.yaml`:
 

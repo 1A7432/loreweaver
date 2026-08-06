@@ -909,7 +909,11 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
     """The no-write validation pass: every declared file must exist, parse with the same
     engine parsers used at build time, every asset's bytes must match its sha256, and the
     archive must contain NOTHING beyond the manifest's declarations — bytes that were
-    never declared never get a chance to ride along, even inertly."""
+    never declared never get a chance to ride along, even inertly. The stored ``trust``
+    block is re-derived from the archive with the SAME detectors the build used and must
+    match: a hand-assembled pack cannot show the operator a `has_hooks: false` card while
+    actually shipping handlers (Git releases are the registry — the archive, not its
+    builder, is what gets trusted)."""
     names = {name for name in archive.namelist() if not name.endswith("/")}
 
     declared: set[str] = {MANIFEST_NAME}
@@ -926,10 +930,14 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
     def read_text(name: str) -> str:
         return _archive_read_text(archive, name)
 
+    has_hooks = False
+    has_ejs = False
     for skill_dir in manifest.contents["skills"]:
         prefix = f"{skill_dir}/"
         files = {name[len(prefix):] for name in names if name.startswith(prefix) and "/" not in name[len(prefix):]}
-        _validate_skill_dir(read_text, skill_dir, files)
+        _, skill_hooks, skill_ejs = _validate_skill_dir(read_text, skill_dir, files)
+        has_hooks = has_hooks or skill_hooks
+        has_ejs = has_ejs or skill_ejs
     rulepack_siblings = {PurePosixPath(path).stem: path for path in manifest.contents["rulepacks"]}
     for rulepack_path in manifest.contents["rulepacks"]:
         if rulepack_path not in names:
@@ -943,14 +951,16 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
             raise PackError(f"card {card_path}: exceeds the {MAX_CARD_FILE_BYTES}-byte cap")
         with archive.open(info) as handle:
             data = handle.read(MAX_CARD_FILE_BYTES + 1)
-        _, payloads = _validate_card_bytes(card_path, data)
+        card_ejs, payloads = _validate_card_bytes(card_path, data)
         _enforce_card_kind(card_path, manifest.card_kind(card_path), payloads)
+        has_ejs = has_ejs or card_ejs
+        has_hooks = has_hooks or payloads.hooks > 0
     for lorebook_path in manifest.contents["lorebooks"]:
         if lorebook_path not in names:
             raise PackError(f"declared lorebook missing from archive: {lorebook_path!r}")
         with archive.open(lorebook_path) as handle:
             data = handle.read(MAX_LOREBOOK_BYTES + 1)
-        _validate_lorebook_bytes(lorebook_path, data)
+        has_ejs = _validate_lorebook_bytes(lorebook_path, data) or has_ejs
     for panels_path in manifest.contents["panels"]:
         if panels_path not in names:
             raise PackError(f"declared panels file missing from archive: {panels_path!r}")
@@ -969,6 +979,33 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
             raise PackError(f"asset {asset.path}: size does not match the manifest")
         if digest.hexdigest() != asset.sha256:
             raise PackError(f"asset {asset.path}: sha256 does not match the manifest")
+
+    # Every constituent fact above is now enforced against real bytes; the stored trust
+    # card must say the same thing. (`world_cards` counts DECLARED kinds, which
+    # `_enforce_card_kind` has just pinned to the real payload detection.)
+    computed = PackTrust(
+        skills=len(manifest.contents["skills"]),
+        rulepacks=len(manifest.contents["rulepacks"]),
+        cards=len(manifest.contents["cards"]),
+        lorebooks=len(manifest.contents["lorebooks"]),
+        assets=len(manifest.assets),
+        asset_bytes=sum(asset.size for asset in manifest.assets),
+        has_hooks=has_hooks,
+        has_ejs=has_ejs,
+        world_cards=sum(1 for card in manifest.card_entries if card.kind == "world"),
+        panels=len(verify_panels),
+    )
+    if manifest.trust != computed:
+        stored = manifest.trust
+        mismatched = [
+            name
+            for name in (
+                "skills", "rulepacks", "cards", "lorebooks", "assets",
+                "asset_bytes", "has_hooks", "has_ejs", "world_cards", "panels",
+            )
+            if stored is None or getattr(stored, name) != getattr(computed, name)
+        ]
+        raise PackError(f"trust block does not match the archive contents: {', '.join(mismatched)}")
 
 
 def _extract_entry(archive: zipfile.ZipFile, name: str, target: Path) -> int:
