@@ -27,10 +27,11 @@ class CliAdapter(BaseAdapter):
         *,
         cwd: str | Path | None = None,
         stdout: TextIO | None = None,
+        extra_fs_bases: tuple[str | Path, ...] = (),
     ) -> None:
         super().__init__(config=config, on_message=on_message)
         self.stdout = stdout or sys.stdout
-        self.fs = LocalFs(cwd or Path.cwd())
+        self.fs = LocalFs(cwd or Path.cwd(), extra_bases=extra_fs_bases)
         self.sent: list[str] = []
 
     async def connect(self) -> bool:

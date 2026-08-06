@@ -347,14 +347,56 @@ class CharcardTools:
                     await define_modvar(self._services.documents, ctx.chat_key, dict(spec))
                 specs_line = i18n.t("charcard.tools.world.specs_line", count=len(lorecard.variable_specs))
 
+            # Only a card with an actual PERSONA half self-registers as a claimable PC.
+            # A pure world/module card (no personality; for native bundles `opening` is
+            # module text, not a greeting) is machinery — putting IT on the roster gave
+            # players ".pc claim <a bronze dial>". Multi-PC casts ride `pregens:` below.
+            has_persona = bool(character.personality.strip()) or (
+                lorecard is None and bool(character.first_mes.strip())
+            )
             pregen_line = ""
-            if character.name.strip():
+            if character.name.strip() and has_persona:
                 sheet = await self._build_pregen_sheet(ctx, character, system, host_path)
                 entry = await pregen_add(
                     self._services.documents, ctx.chat_key, sheet, source=f"card:{card.name}"
                 )
                 if entry is not None:
                     pregen_line = i18n.t("charcard.tools.world.pregen_line", name=sheet.name)
+
+            # Native bundles may ship a claimable CAST (`pregens:`): deterministic sheets
+            # from the system's defaults + declared skill overrides — no LLM in the path.
+            cast_line = ""
+            if lorecard is not None and lorecard.pregens:
+                from core.rulepacks import load_rulepack
+                from core.sheets import set_sheet_value
+
+                pack = load_rulepack(system)
+                cast_names: list[str] = []
+                for spec in lorecard.pregens:
+                    sheet = self._services.characters.generate_character(system, spec["name"])
+                    for skill_name, value in dict(spec.get("skills", {})).items():
+                        try:
+                            set_sheet_value(sheet, pack, skill_name, int(value))
+                        except Exception:
+                            sheet.skills[skill_name] = int(value)
+                    sheet, _cast_violations = validate_sheet(
+                        sheet, system, initialize_vitals=True, creation_method="rolled"
+                    )
+                    entry = await pregen_add(
+                        self._services.documents,
+                        ctx.chat_key,
+                        sheet,
+                        source=f"card:{card.name}",
+                        blurb=str(spec.get("blurb", "")),
+                    )
+                    if entry is not None:
+                        cast_names.append(sheet.name)
+                if cast_names:
+                    cast_line = i18n.t(
+                        "charcard.tools.world.cast_line",
+                        count=len(cast_names),
+                        names=i18n.t("common.list_separator").join(cast_names),
+                    )
 
             result = i18n.t(
                 "charcard.tools.world.done",
@@ -370,7 +412,7 @@ class CharcardTools:
                     count=len(skipped_titles),
                     titles=i18n.t("common.list_separator").join(skipped_titles[:5]),
                 )
-            extra_lines = [line for line in (specs_line, pregen_line, skipped_line) if line]
+            extra_lines = [line for line in (specs_line, pregen_line, cast_line, skipped_line) if line]
             return "\n".join([result, *extra_lines])
         except Exception as exc:
             return i18n.t("charcard.tools.world.failed", error=str(exc))

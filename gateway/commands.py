@@ -27,7 +27,7 @@ from core.rulepacks import RulePack, all_command_words, load_rulepack
 from core.sheets import canonical_values as sheet_canonical_values
 from core.sheets import check_value, set_sheet_value, sheet_value
 from core.skills import available_skills
-from gateway.audio import build_audio_control, list_audio_items, resolve_audio_item, update_audio_item
+from gateway.audio import add_audio_item, build_audio_control, list_audio_items, resolve_audio_item, update_audio_item
 from gateway.avatar import AvatarError, set_target_avatar, set_user_avatar
 from gateway.hub import Event
 from gateway.imagegen import allow_imagegen_request, image_name
@@ -56,7 +56,7 @@ from gateway.rooms import (
 from gateway.turn import publish_state
 from infra.i18n import I18n, get_i18n
 from infra.imagegen import ImageGenError
-from infra.media_store import ALLOWED_IMAGE_MIMES, MediaStore
+from infra.media_store import ALLOWED_AUDIO_MIMES, ALLOWED_IMAGE_MIMES, MediaError, MediaStore
 from infra.oauth_flows import (
     LOGIN_TIMEOUT_SECONDS,
     SUBSCRIPTION_DEFAULT_MODELS,
@@ -186,6 +186,7 @@ _SKILL_DISABLE_WORDS = {"disable", "off", "禁用", "关闭", "關閉"}
 # `.audio` / `.bgm` / `.ambience` / `.sfx` subcommand vocabularies.
 _AUDIO_LIST_WORDS = {"", "list", "ls", "show", "列表", "查看"}
 _AUDIO_SET_WORDS = {"set", "meta", "metadata", "设置", "設置", "元数据", "元資料"}
+_AUDIO_IMPORT_WORDS = {"import", "load", "导入", "導入"}
 _AUDIO_PLAY_WORDS = {"play", "start", "播放", "开始", "開始"}
 _AUDIO_STOP_WORDS = {"stop", "停止"}
 _AUDIO_PAUSE_WORDS = {"pause", "暂停", "暫停"}
@@ -1065,7 +1066,77 @@ class CommandRouter:
             return await self._audio_list(ctx)
         if sub in _AUDIO_SET_WORDS:
             return await self._audio_set(ctx, rest)
+        if sub in _AUDIO_IMPORT_WORDS:
+            return await self._audio_import(ctx, rest)
         return ctx.i18n.t("commands.audio.usage")
+
+    async def _audio_import(self, ctx: CommandCtx, rest: list[str]) -> str:
+        """`.audio import <packId>` — register an installed pack's audio assets into THIS
+        room's library. Packs ship soundtracks, but the room library only ever filled from
+        uploads; this is the deliberate keeper lever that bridges the two (a pack install
+        is host-wide, a room's soundscape is the keeper's call)."""
+        if not _is_keeper(ctx.raw_ctx):
+            return ctx.i18n.t("rooms.denied")
+        pack_id = rest[0].strip() if rest else ""
+        if not pack_id:
+            return ctx.i18n.t("commands.audio.import_usage")
+        import mimetypes
+
+        from core.pack import MANIFEST_NAME, installed_pack_dir, parse_manifest_text
+
+        pack_dir = installed_pack_dir(ctx.services.settings.data_dir, pack_id)
+        if pack_dir is None:
+            return ctx.i18n.t("commands.audio.import_missing", pack=pack_id)
+        # Manifest titles/tags become the library metadata when present (the built
+        # manifest ships with the install); a missing/unreadable manifest just
+        # degrades to filename stems.
+        titles: dict[str, tuple[str, tuple[str, ...]]] = {}
+        try:
+            manifest = parse_manifest_text((pack_dir / MANIFEST_NAME).read_text("utf-8"))
+            for asset in manifest.assets:
+                titles[asset.path] = (asset.title, asset.tags)
+        except Exception:  # noqa: BLE001 — metadata is best-effort, import proceeds
+            titles = {}
+        tui_settings = ctx.services.settings.tui
+        store = MediaStore(
+            ctx.services.store,
+            ctx.services.settings.data_dir,
+            max_file_bytes=tui_settings.audio_max_file_bytes,
+            room_quota_bytes=tui_settings.audio_room_quota_bytes,
+            allowed_mimes=ALLOWED_AUDIO_MIMES,
+        )
+        imported: list[str] = []
+        for path in sorted(pack_dir.rglob("*")):
+            if len(imported) >= 24:
+                break
+            if not path.is_file():
+                continue
+            mime = mimetypes.guess_type(path.name)[0] or ""
+            if mime not in ALLOWED_AUDIO_MIMES:
+                continue
+            rel = path.relative_to(pack_dir).as_posix()
+            title, tags = titles.get(rel, ("", ()))
+            display = title or path.stem
+            try:
+                record = await store.register_blob(
+                    room=ctx.chat_key, data=path.read_bytes(), mime=mime, name=display, uploader=ctx.user_id
+                )
+            except (MediaError, OSError):
+                continue
+            await add_audio_item(ctx.services.store, ctx.chat_key, record, ctx.user_id)
+            if title or tags:
+                await update_audio_item(
+                    ctx.services.store, ctx.chat_key, record.hash, {"title": display, "tags": list(tags)}
+                )
+            imported.append(display)
+        if not imported:
+            return ctx.i18n.t("commands.audio.import_none", pack=pack_id)
+        return ctx.i18n.t(
+            "commands.audio.import_done",
+            pack=pack_id,
+            count=len(imported),
+            names=ctx.i18n.t("common.list_separator").join(imported),
+        )
 
     async def cmd_bgm(self, ctx: CommandCtx) -> str:
         return await self._audio_layer(ctx, "bgm", default_loop=True)
@@ -1576,6 +1647,13 @@ class CommandRouter:
                 return ctx.i18n.t("worldbook.commands.lore.denied")
             if not rest:
                 return ctx.i18n.t("worldbook.commands.lore.import_usage")
+            # Pack-relative convenience, same as `.import`: `<packId>/lorebooks/x.json`
+            # resolves against the newest installed pack before the literal path.
+            from core.pack import resolve_installed_path
+
+            resolved = resolve_installed_path(ctx.services.settings.data_dir, rest)
+            if resolved is not None:
+                rest = str(resolved)
             # This branch is keeper-gated above, so the import may honor `secret` flags.
             return await tools.import_lorebook(agent_ctx, file_path=rest, _keeper=True)
         return ctx.i18n.t("worldbook.commands.lore.usage")
@@ -1684,7 +1762,11 @@ class CommandRouter:
         lines = [ctx.i18n.t("pregen.commands.list_header", count=len(entries))]
         for entry in entries:
             key = "pregen.commands.line_claimed" if entry.get("claimed_by") else "pregen.commands.line_free"
-            lines.append(ctx.i18n.t(key, name=entry.get("name", ""), system=entry.get("system", "")))
+            line = ctx.i18n.t(key, name=entry.get("name", ""), system=entry.get("system", ""))
+            blurb = str(entry.get("blurb", "")).strip()
+            if blurb:
+                line += ctx.i18n.t("pregen.commands.blurb_suffix", blurb=blurb)
+            lines.append(line)
         return "\n".join(lines)
 
     async def cmd_var(self, ctx: CommandCtx) -> str:

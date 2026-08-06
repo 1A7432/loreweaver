@@ -422,3 +422,26 @@ def test_wrong_typed_sections_warn_instead_of_raising():
     assert parsed.variable_specs == ()
     assert parsed.hooks == ()
     assert len(parsed.warnings) == 3
+
+
+def test_pregens_parse_normalizes_and_caps():
+    """`pregens:` ships a claimable cast: name required, concept|blurb merged,
+    integer skills kept, junk rows warned and skipped."""
+    raw = {
+        "format": "loreweaver.card",
+        "format_version": 1,
+        "name": "cast-test",
+        "pregens": [
+            {"name": "顾晚棠", "concept": "记者", "skills": {"潮汐学": 5, "坏的": "x"}},
+            {"blurb": "no name -> skipped"},
+            "not-an-object",
+            {"name": "白榆生", "notes": "医生", "skills": "not-a-map"},
+        ],
+    }
+    parsed = parse_lorecard_bytes(json.dumps(raw).encode("utf-8"))
+    assert [entry["name"] for entry in parsed.pregens] == ["顾晚棠", "白榆生"]
+    assert parsed.pregens[0]["blurb"] == "记者"
+    assert parsed.pregens[0]["skills"] == {"潮汐学": 5}
+    assert parsed.pregens[1]["notes"] == "医生"
+    assert any("pregens[1]" in warning for warning in parsed.warnings)
+    assert any("skills" in warning for warning in parsed.warnings)

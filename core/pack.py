@@ -1303,25 +1303,9 @@ def resolve_installed_path(data_dir: Path | str, ref: str) -> Path | None:
         return None
     pack_id, _, rest = text.partition("/")
     rest = rest.strip()
-    if not _SLUG_RE.match(pack_id) or not rest:
+    if not rest:
         return None
-    packs_dir = Path(data_dir) / "packs"
-    try:
-        candidates = [
-            entry
-            for entry in packs_dir.iterdir()
-            if entry.is_dir() and entry.name.startswith(f"{pack_id}@")
-        ]
-    except OSError:
-        return None
-
-    def version_key(entry: Path) -> tuple[tuple[int, int, int], str]:
-        version = entry.name.partition("@")[2]
-        numbers = re.match(r"^(\d{1,6})\.(\d{1,6})\.(\d{1,6})", version)
-        triple = tuple(int(part) for part in numbers.groups()) if numbers else (0, 0, 0)
-        return (triple, entry.name)  # type: ignore[return-value]
-
-    for pack_dir in sorted(candidates, key=version_key, reverse=True):
+    for pack_dir in _installed_pack_dirs(data_dir, pack_id):
         base = pack_dir.resolve()
         try:
             target = (pack_dir / rest).resolve(strict=True)
@@ -1331,3 +1315,34 @@ def resolve_installed_path(data_dir: Path | str, ref: str) -> Path | None:
         if target.is_file():
             return target
     return None
+
+
+def _installed_pack_dirs(data_dir: Path | str, pack_id: str) -> list[Path]:
+    """Installed ``data_dir/packs/<id>@<version>/`` dirs, newest first ("newest" =
+    highest MAJOR.MINOR.PATCH triple, full dir name as tiebreak). Never raises."""
+    text = str(pack_id).strip()
+    if not _SLUG_RE.match(text):
+        return []
+    packs_dir = Path(data_dir) / "packs"
+    try:
+        candidates = [
+            entry
+            for entry in packs_dir.iterdir()
+            if entry.is_dir() and entry.name.startswith(f"{text}@")
+        ]
+    except OSError:
+        return []
+
+    def version_key(entry: Path) -> tuple[tuple[int, int, int], str]:
+        version = entry.name.partition("@")[2]
+        numbers = re.match(r"^(\d{1,6})\.(\d{1,6})\.(\d{1,6})", version)
+        triple = tuple(int(part) for part in numbers.groups()) if numbers else (0, 0, 0)
+        return (triple, entry.name)  # type: ignore[return-value]
+
+    return sorted(candidates, key=version_key, reverse=True)
+
+
+def installed_pack_dir(data_dir: Path | str, pack_id: str) -> Path | None:
+    """The newest installed pack dir for ``pack_id``, or ``None`` when absent."""
+    dirs = _installed_pack_dirs(data_dir, pack_id)
+    return dirs[0] if dirs else None

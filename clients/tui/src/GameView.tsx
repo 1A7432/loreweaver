@@ -280,7 +280,6 @@ export function GameView({
         frame.type === FrameType.Dice ||
         frame.type === FrameType.System ||
         frame.type === FrameType.Media ||
-        frame.type === FrameType.AudioLibraryItem ||
         frame.type === FrameType.AudioControl
       ) {
         setFrames((current) => appendFrame(current, frame))
@@ -653,11 +652,13 @@ export function GameView({
           backgroundColor={theme.bg}
           flexDirection="column"
           width="100%"
-          height={5}
+          height={7}
           flexShrink={0}
         >
           <text fg={theme.fg}>{tt(locale, "game.help")}</text>
           <text fg={theme.fg}>{tt(locale, "game.helpLog")}</text>
+          <text fg={theme.fg}>{tt(locale, "game.helpDice")}</text>
+          <text fg={theme.fg}>{tt(locale, "game.helpTiers")}</text>
           <text fg={theme.accent}>{tt(locale, usesAppClipboardCopy(platform) ? "game.helpCopy" : "game.helpCopyMac")}</text>
         </box>
       ) : null}

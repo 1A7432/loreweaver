@@ -41,6 +41,9 @@ def _bundle() -> dict:
         "alternate_openings": [],
         "author_notes": "fixture",
         "tags": ["investigation"],
+        "pregens": [
+            {"name": "林晚照", "concept": "记者", "skills": {"侦查": 60}},
+        ],
         "variables": [
             {
                 "id": "suspicion",
@@ -122,11 +125,14 @@ async def test_world_import_lands_specs_secret_lore_and_cast(tmp_path):
     lore = {entry.title: entry for entry in await services.worldbook.list("lorecard-world")}
     assert lore["五层的规则"].secret is False
     assert lore["管理员的秘密"].secret is True
-    # The embedded persona joined the claimable pregen roster.
+    # A persona-less MODULE bundle must NOT put itself on the claimable roster
+    # (F4, K3 live test: ".pc claim <a bronze dial>"); the declared `pregens:`
+    # cast registers instead, deterministic sheets with declared skill overrides.
     from core.pregen_roster import pregen_entries
 
     roster = await pregen_entries(services.documents, "lorecard-world")
-    assert [entry["name"] for entry in roster] == ["回廊公寓"]
+    assert [entry["name"] for entry in roster] == ["林晚照"]
+    assert roster[0]["blurb"] == "记者"
 
 
 async def test_player_import_strips_native_bundle_machinery(tmp_path):

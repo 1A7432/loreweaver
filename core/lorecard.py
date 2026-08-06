@@ -70,6 +70,7 @@ MAX_LORECARD_FILE_BYTES = MAX_CARD_FILE_BYTES
 MAX_LORECARD_ENTRIES = 512
 MAX_LORECARD_ENTRY_CONTENT_BYTES = 128 * 1024
 MAX_LORECARD_VARIABLES = 256
+MAX_LORECARD_PREGENS = 8
 # Mirrors ``core.condexpr.MAX_EXPR_LEN`` (not imported — see HOOKS_EXTENSION_KEY). A longer
 # condition still rides along, but fails closed downstream, so the author gets a warning here.
 MAX_CONDITION_CHARS = 500
@@ -95,6 +96,7 @@ class Lorecard:
     alternate_greetings: tuple[str, ...] = ()
     hooks: tuple[str, ...] = ()
     variable_specs: tuple[dict[str, Any], ...] = ()
+    pregens: tuple[dict[str, Any], ...] = ()
     warnings: tuple[str, ...] = ()
 
 
@@ -156,6 +158,7 @@ def parse_lorecard_bytes(data: bytes, filename: str = "") -> Lorecard:
     entries = _parse_worldbook(raw.get("worldbook"), label, warnings)
     specs = _parse_variables(raw.get("variables"), label, warnings)
     hooks = _parse_hooks(raw.get(HOOKS_KEY), warnings)
+    pregens = _parse_pregens(raw.get("pregens"), warnings)
 
     card = CharacterCard(
         name=_text(raw.get("name")).strip(),
@@ -174,6 +177,7 @@ def parse_lorecard_bytes(data: bytes, filename: str = "") -> Lorecard:
         alternate_greetings=tuple(_text_list(raw.get("alternate_openings"))),
         hooks=hooks,
         variable_specs=specs,
+        pregens=pregens,
         warnings=tuple(warnings),
     )
 
@@ -181,6 +185,45 @@ def parse_lorecard_bytes(data: bytes, filename: str = "") -> Lorecard:
 # ---------------------------------------------------------------------------
 # Sections
 # ---------------------------------------------------------------------------
+
+
+def _parse_pregens(raw: Any, warnings: list[str]) -> tuple[dict[str, Any], ...]:
+    """Native pregen-cast list → normalized entries the world importer registers.
+
+    Shape: ``[{name, concept|blurb?, notes?, skills?: {canonical: int}}]``. Sheets are
+    built downstream from the target system's DEFAULTS plus these skill overrides —
+    deterministic, no LLM — so a module ships a claimable multi-investigator cast."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        warnings.append("pregens: ignored (must be a list of entries)")  # i18n-exempt: author diagnostic, wrapped in a localized import summary
+        return ()
+    out: list[dict[str, Any]] = []
+    for index, item in enumerate(raw):
+        if len(out) >= MAX_LORECARD_PREGENS:
+            warnings.append(f"pregens: truncated to {MAX_LORECARD_PREGENS} entries")  # i18n-exempt: author diagnostic, wrapped in a localized import summary
+            break
+        if not isinstance(item, dict):
+            warnings.append(f"pregens[{index}]: ignored (must be an object)")  # i18n-exempt: author diagnostic, wrapped in a localized import summary
+            continue
+        name = _text(item.get("name")).strip()[:60]
+        if not name:
+            warnings.append(f"pregens[{index}]: ignored (missing name)")  # i18n-exempt: author diagnostic, wrapped in a localized import summary
+            continue
+        blurb = _text(item.get("concept") or item.get("blurb")).strip()[:200]
+        notes = _text(item.get("notes")).strip()[:400]
+        skills: dict[str, int] = {}
+        skills_raw = item.get("skills")
+        if isinstance(skills_raw, dict):
+            for key, value in list(skills_raw.items())[:32]:
+                try:
+                    skills[str(key).strip()[:60]] = int(value)
+                except (TypeError, ValueError):
+                    warnings.append(f"pregens[{index}].skills.{key}: ignored (not an integer)")  # i18n-exempt: author diagnostic, wrapped in a localized import summary
+        elif skills_raw is not None:
+            warnings.append(f"pregens[{index}].skills: ignored (must be a mapping)")  # i18n-exempt: author diagnostic, wrapped in a localized import summary
+        out.append({"name": name, "blurb": blurb, "notes": notes, "skills": skills})
+    return tuple(out)
 
 
 def _parse_worldbook(raw: Any, label: str, warnings: list[str]) -> list[dict[str, Any]]:

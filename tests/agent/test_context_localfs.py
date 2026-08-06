@@ -59,3 +59,18 @@ def test_symlink_escaping_base_is_rejected(tmp_path):
 def test_base_directory_itself_is_allowed(tmp_path):
     fs = LocalFs(tmp_path)
     assert fs.get_file(".") == str(tmp_path.resolve())
+
+
+def test_extra_bases_allow_data_dir_outside_cwd(tmp_path):
+    """F1 (K3 live test): installed-pack content under a data_dir OUTSIDE the
+    process cwd must stay importable — data_dir rides as a second allowed base."""
+    cwd = tmp_path / "cwd"
+    data = tmp_path / "elsewhere" / "data"
+    (data / "packs").mkdir(parents=True)
+    cwd.mkdir()
+    card = data / "packs" / "demo@1.0.0-card.json"
+    card.write_text("{}")
+    fs = LocalFs(cwd, extra_bases=(data,))
+    assert fs.get_file(str(card)) == str(card.resolve())
+    with pytest.raises(ValueError, match="escapes the allowed base directory"):
+        fs.get_file(str(tmp_path / "elsewhere" / "outside.txt"))

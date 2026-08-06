@@ -75,7 +75,7 @@ def build_runner(settings: Settings, *, llm=None, embeddings=None) -> GatewayRun
     if not settings.llm.api_key:
         embeddings = embeddings or FakeEmbeddings(64)
     services = _app_services(settings, llm=llm, embeddings=embeddings)
-    adapter = CliAdapter()
+    adapter = CliAdapter(extra_fs_bases=(settings.data_dir,))
     return GatewayRunner(
         services,
         adapters=[adapter],

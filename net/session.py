@@ -287,7 +287,9 @@ class SessionCore:
     ) -> None:
         self.services = services
         self.keystore = keystore
-        self.fs = fs if fs is not None else LocalFs(Path.cwd())
+        # data_dir rides along as an extra allowed base so installed-pack refs
+        # (`.import <packId>/...`) resolve even when data_dir is outside cwd.
+        self.fs = fs if fs is not None else LocalFs(Path.cwd(), extra_bases=(Path(services.settings.data_dir),))
         # An injected hub lets a transport share ONE bus with another; standalone it owns its own.
         # Built BEFORE the router + toolset so both receive it (live `.module` import progress +
         # hub-driven KP tools like companion_act publish through it).
@@ -336,7 +338,15 @@ class SessionCore:
                     if not text:
                         continue
                     role = entry.get("role")
-                    speaker = "player" if role == "user" else "kp" if role == "assistant" else "system"
+                    # Replay is STORY continuity, not an ops log: dot-command echoes and
+                    # their system responses (setup acks, ".panels enable" …) read as
+                    # backstage noise to a joining player, so only the narrative lanes
+                    # (player utterances + KP prose) replay.
+                    if role == "user" and text.startswith((".", "/")):
+                        continue
+                    if role not in ("user", "assistant"):
+                        continue
+                    speaker = "player" if role == "user" else "kp"
                     fmt = "plain" if speaker == "player" else "markdown"
                     await member.deliver(Event.narrative(speaker=speaker, text=text, fmt=fmt))
             media_raw = await self.services.store.state_get(chat_key, "media_history")

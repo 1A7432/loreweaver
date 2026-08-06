@@ -46,6 +46,7 @@ def _entry(doc_id: str, data: dict[str, Any]) -> dict[str, Any]:
         "name": str(data.get("name", "")),
         "system": str(data.get("system", "")),
         "source": str(data.get("source", "")),
+        "blurb": str(data.get("blurb", "")),
         "claimed_by": str(data.get("claimed_by", "")),
     }
 
@@ -69,7 +70,7 @@ async def pregen_find(documents: Any, chat_key: str, ref: str) -> dict[str, Any]
 
 
 async def pregen_add(
-    documents: Any, chat_key: str, sheet: CharacterSheet, *, source: str = ""
+    documents: Any, chat_key: str, sheet: CharacterSheet, *, source: str = "", blurb: str = ""
 ) -> dict[str, Any] | None:
     """Register `sheet` as a claimable pregen (pristine copy stored verbatim).
 
@@ -88,6 +89,7 @@ async def pregen_add(
         "name": sheet.name,
         "system": sheet.system,
         "source": str(source)[:200],
+        "blurb": str(blurb)[:200],
         "claimed_by": str(existing.data.get("claimed_by", "")) if existing is not None else "",
         "sheet": sheet.to_dict(),
     }

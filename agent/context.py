@@ -64,21 +64,29 @@ class FsAdapter(Protocol):
 
 
 class LocalFs:
-    """CLI/tests `FsAdapter`: identity-ish mapping over a plain base directory."""
+    """CLI/tests `FsAdapter`: identity-ish mapping over a plain base directory.
 
-    def __init__(self, base_dir: str | Path) -> None:
+    ``extra_bases`` names additional allowed roots — the deployment's data_dir in
+    production, so installed-pack content (``data_dir/packs/...``) stays importable
+    when data_dir lives OUTSIDE the process cwd (systemd WorkingDirectory vs
+    TRPG_DATA_DIR). Confinement stays a strict allowlist of resolved roots."""
+
+    def __init__(self, base_dir: str | Path, *, extra_bases: tuple[str | Path, ...] = ()) -> None:
         self._base_dir = Path(base_dir)
+        self._extra_bases = tuple(Path(extra) for extra in extra_bases)
 
     def get_file(self, path: str) -> str:
-        # Confine every resolution to ``base_dir``. Absolute paths and ``../``
-        # traversal are resolved first, then required to land inside the base
-        # so an attacker-supplied logical path cannot read arbitrary host files
-        # (net.session's SessionCore hands the production Iroh transport a
-        # ``LocalFs(cwd)``, so this is the real read boundary, not just a hint).
+        # Confine every resolution to ``base_dir`` (or a declared extra base).
+        # Absolute paths and ``../`` traversal are resolved first, then required
+        # to land inside an allowed root so an attacker-supplied logical path
+        # cannot read arbitrary host files (net.session's SessionCore hands the
+        # production Iroh transport this adapter, so this is the real read
+        # boundary, not just a hint).
         candidate = Path(path)
         base = self._base_dir.resolve()
         resolved = candidate.resolve() if candidate.is_absolute() else (base / candidate).resolve()
-        if not resolved.is_relative_to(base):
+        allowed = (base, *(extra.resolve() for extra in self._extra_bases))
+        if not any(resolved.is_relative_to(root) for root in allowed):
             raise ValueError(f"path escapes the allowed base directory: {path}")  # i18n-exempt: folded into localized *-failed messages
         return str(resolved)
 

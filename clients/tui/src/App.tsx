@@ -270,12 +270,14 @@ export function App({
         frame.type === FrameType.Dice ||
         frame.type === FrameType.System ||
         frame.type === FrameType.Media ||
-        frame.type === FrameType.AudioLibraryItem ||
         frame.type === FrameType.AudioControl
       ) {
         // Accumulate the room log even while off the game view (e.g. the menu), so
         // the join-time replay survives until the player opens GameView, which
         // seeds from it. GameView keeps its own copy for live play + dice effects.
+        // AudioLibraryItem frames deliberately stay OUT of the chat log: they are
+        // library bookkeeping (join replays the whole library, which read as
+        // backstage "[AUDIO] setup:" noise) — audioController owns them above.
         setFrames((current) => appendFrame(current, frame))
         return
       }
