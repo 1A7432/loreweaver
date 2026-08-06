@@ -1,18 +1,27 @@
-"""Offline tests for ChatGPTSubscriptionLLM (Responses API translation)."""
+"""Offline tests for ChatGPTSubscriptionLLM (official openai SDK Responses surface).
+
+The fake below stands in for ``openai.AsyncOpenAI``: ``responses.with_raw_response.create``
+records kwargs + the bearer in force, and returns (headers, events) outcomes — events are
+dicts with attribute access and ``model_dump`` so the client's SDK-object handling is the
+code path under test. Real ``openai`` exception classes exercise the error mapping.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import time
+from collections.abc import Callable
+from types import SimpleNamespace
+from typing import Any
 
 import httpx
+import openai
 import pytest
 
 from infra.config import LLMSettings
 from infra.llm_chatgpt import (
     ChatGPTSubscriptionLLM,
-    _aggregate_sse,
     messages_to_responses_body,
     responses_payload_to_chat_result,
     tools_to_responses,
@@ -46,6 +55,104 @@ def _manager(access: str = "access-token", account_id: str = "acc-1") -> TokenMa
         ),
         _StaticFlow(),  # type: ignore[arg-type]
     )
+
+
+class _Event(dict):
+    """A wire event with SDK-object ergonomics: attribute access + model_dump."""
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self[name]
+        except KeyError as exc:  # pragma: no cover - attribute misuse in a test
+            raise AttributeError(name) from exc
+
+    def model_dump(self, **_: Any) -> dict[str, Any]:
+        return {key: value for key, value in self.items() if value is not None}
+
+
+class _FakeRaw:
+    def __init__(self, headers: dict[str, str], events: list[dict]) -> None:
+        self.headers = headers
+        self._events = events
+
+    def parse(self) -> "_FakeStream":
+        return _FakeStream(self._events)
+
+
+class _FakeStream:
+    def __init__(self, events: list[dict]) -> None:
+        self._events = list(events)
+
+    def __aiter__(self):
+        return self._generate()
+
+    async def _generate(self):
+        for event in self._events:
+            if isinstance(event, Exception):
+                raise event
+            yield _Event(event)
+
+
+Outcome = "tuple[dict[str, str], list[dict]] | Exception"
+
+
+class _FakeClient:
+    """openai.AsyncOpenAI stand-in: respond(call_index, kwargs) -> (headers, events) | Exception."""
+
+    def __init__(self, respond: Callable[[int, dict], Any]) -> None:
+        self.api_key = ""
+        self.calls: list[dict] = []
+        self.api_keys: list[str] = []
+        outer = self
+
+        class _RawResponses:
+            async def create(self, **kwargs: Any) -> _FakeRaw:
+                outer.calls.append(kwargs)
+                outer.api_keys.append(outer.api_key)
+                outcome = respond(len(outer.calls), kwargs)
+                if isinstance(outcome, Exception):
+                    raise outcome
+                headers, events = outcome
+                return _FakeRaw(headers, events)
+
+        self.responses = SimpleNamespace(with_raw_response=_RawResponses())
+
+
+def _llm(respond: Callable[[int, dict], Any], manager: TokenManager | None = None) -> tuple[ChatGPTSubscriptionLLM, _FakeClient]:
+    client = _FakeClient(respond)
+    llm = ChatGPTSubscriptionLLM(
+        LLMSettings(provider="chatgpt", chat_model="gpt-5.4"),
+        token_manager=manager or _manager(),
+        client=client,
+    )
+    return llm, client
+
+
+def _completed(output: list[dict], usage: dict | None = None) -> dict:
+    response: dict[str, Any] = {"id": "resp", "output": output}
+    if usage is not None:
+        response["usage"] = usage
+    return {"type": "response.completed", "response": response}
+
+
+def _message(text: str) -> dict:
+    return {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}
+
+
+def _request(url: str = "https://example.test/responses") -> httpx.Request:
+    return httpx.Request("POST", url)
+
+
+def _status_error(status_code: int, text: str = "provider rejected request") -> openai.APIStatusError:
+    response = httpx.Response(status_code, text=text, request=_request())
+    if status_code == 401:
+        return openai.AuthenticationError("unauthorized", response=response, body=None)
+    return openai.APIStatusError("http error", response=response, body=None)
+
+
+# ---------------------------------------------------------------------------
+# Pure conversion layer (unchanged by the SDK rebase)
+# ---------------------------------------------------------------------------
 
 
 def test_messages_tools_to_responses_golden():
@@ -127,48 +234,43 @@ def test_responses_payload_rejects_noncompleted_status(status: str):
         responses_payload_to_chat_result({"status": status, "output": []})
 
 
-async def test_chatgpt_llm_posts_responses_and_parses():
-    seen: dict = {}
+# ---------------------------------------------------------------------------
+# Transport via the official SDK surface
+# ---------------------------------------------------------------------------
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen["url"] = str(request.url)
-        seen["auth"] = request.headers.get("authorization")
-        seen["account"] = request.headers.get("chatgpt-account-id")
-        seen["originator"] = request.headers.get("originator")
-        seen["body"] = json.loads(request.content)
-        return httpx.Response(
-            200,
-            json={
-                "output": [
-                    {
-                        "type": "message",
-                        "content": [{"type": "output_text", "text": "Hello"}],
-                    }
-                ],
-                "usage": {"input_tokens": 1, "output_tokens": 1},
-            },
-        )
 
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    llm = ChatGPTSubscriptionLLM(
-        LLMSettings(provider="chatgpt", chat_model="gpt-5.4"),
-        token_manager=_manager(),
-        client=client,
-        responses_url="https://example.test/responses",
-    )
-    try:
-        result = await llm.chat([{"role": "user", "content": "hi"}])
-    finally:
-        await client.aclose()
+async def test_chatgpt_llm_creates_responses_and_parses():
+    llm, client = _llm(lambda index, kwargs: ({}, [_completed([_message("Hello")], usage={"input_tokens": 1, "output_tokens": 1})]))
+
+    result = await llm.chat([{"role": "user", "content": "hi"}])
 
     assert result.content == "Hello"
-    assert seen["auth"] == "Bearer access-token"
-    assert seen["account"] == "acc-1"
-    assert seen["body"]["model"] == "gpt-5.4"
-    assert seen["body"]["store"] is False
-    assert seen["body"]["stream"] is True
-    assert seen["body"]["include"] == ["reasoning.encrypted_content"]
-    assert seen["originator"] == "Codex Loreweaver"
+    kwargs = client.calls[0]
+    assert client.api_keys == ["access-token"]  # bearer lands on the SDK client per call
+    assert kwargs["stream"] is True
+    assert kwargs["model"] == "gpt-5.4"
+    assert kwargs["store"] is False
+    assert kwargs["include"] == ["reasoning.encrypted_content"]
+    headers = kwargs["extra_headers"]
+    assert headers["ChatGPT-Account-Id"] == "acc-1"
+    assert headers["originator"] == "Codex Loreweaver"
+    assert headers["User-Agent"] == "Codex Loreweaver"
+    assert "x-codex-turn-state" not in headers
+
+
+async def test_chatgpt_llm_streams_output_text_deltas():
+    events = [
+        {"type": "response.output_text.delta", "delta": "Hel"},
+        {"type": "response.output_text.delta", "delta": "lo"},
+        _completed([_message("Hello")]),
+    ]
+    llm, _ = _llm(lambda index, kwargs: ({}, list(events)))
+    deltas: list[str] = []
+
+    result = await llm.chat([{"role": "user", "content": "hi"}], on_text_delta=deltas.append)
+
+    assert deltas == ["Hel", "lo"]
+    assert result.content == "Hello"
 
 
 async def test_chatgpt_llm_stream_replays_raw_reasoning_and_function_call_items():
@@ -187,85 +289,50 @@ async def test_chatgpt_llm_stream_replays_raw_reasoning_and_function_call_items(
         "arguments": '{"expr":"1d20"}',
         "status": "completed",
     }
-    requests: list[dict] = []
-    request_headers: list[httpx.Headers] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content)
-        requests.append(body)
-        request_headers.append(request.headers)
-        if len(requests) == 1:
-            events = [
-                {"type": "response.output_item.done", "item": reasoning},
-                {"type": "response.output_item.done", "item": function_call},
-                {
-                    "type": "response.completed",
-                    "response": {"id": "resp_1", "output": [], "usage": {}},
-                },
-            ]
-            text = "\n\n".join(f"data: {json.dumps(event)}" for event in events)
-            return httpx.Response(
-                200,
-                text=f"{text}\n\ndata: [DONE]\n\n",
-                headers={
-                    "content-type": "text/event-stream",
-                    "x-codex-turn-state": "sticky-turn-1",
-                },
+    def respond(index: int, kwargs: dict) -> Any:
+        if index == 1:
+            return (
+                {"x-codex-turn-state": "sticky-turn-1"},
+                [
+                    {"type": "response.output_item.done", "item": reasoning},
+                    {"type": "response.output_item.done", "item": function_call},
+                    _completed([]),
+                ],
             )
-        return httpx.Response(
-            200,
-            json={
-                "output": [
-                    {
-                        "type": "message",
-                        "role": "assistant",
-                        "content": [{"type": "output_text", "text": "done"}],
-                    }
-                ]
-            },
-        )
+        return ({}, [_completed([_message("done")])])
 
+    llm, client = _llm(respond)
     messages = [{"role": "user", "content": "roll"}]
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    llm = ChatGPTSubscriptionLLM(
-        LLMSettings(chat_model="gpt-5.4"),
-        token_manager=_manager(),
-        client=client,
-        responses_url="https://example.test/responses",
+
+    first = await llm.chat(messages)
+    assert first.tool_calls[0].id == "call_1"
+    messages.extend(
+        [
+            {
+                "role": "assistant",
+                "content": first.content,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "roll_dice", "arguments": '{"expr":"1d20"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "17"},
+        ]
     )
-    try:
-        first = await llm.chat(messages)
-        assert first.tool_calls[0].id == "call_1"
-        messages.extend(
-            [
-                {
-                    "role": "assistant",
-                    "content": first.content,
-                    "tool_calls": [
-                        {
-                            "id": "call_1",
-                            "type": "function",
-                            "function": {
-                                "name": "roll_dice",
-                                "arguments": '{"expr":"1d20"}',
-                            },
-                        }
-                    ],
-                },
-                {"role": "tool", "tool_call_id": "call_1", "content": "17"},
-            ]
-        )
-        second = await llm.chat(messages)
-    finally:
-        await client.aclose()
+    second = await llm.chat(messages)
 
     assert second.content == "done"
-    assert request_headers[0]["session_id"] == request_headers[1]["session_id"]
-    assert "x-codex-turn-state" not in request_headers[0]
-    assert request_headers[1]["x-codex-turn-state"] == "sticky-turn-1"
-    assert request_headers[0]["user-agent"] == "Codex Loreweaver"
-    assert requests[1]["input"][1:3] == [reasoning, function_call]
-    assert requests[1]["input"][3] == {
+    first_headers = client.calls[0]["extra_headers"]
+    second_headers = client.calls[1]["extra_headers"]
+    assert first_headers["session_id"] == second_headers["session_id"]
+    assert "x-codex-turn-state" not in first_headers
+    assert second_headers["x-codex-turn-state"] == "sticky-turn-1"  # read from response headers
+    assert client.calls[1]["input"][1:3] == [reasoning, function_call]
+    assert client.calls[1]["input"][3] == {
         "type": "function_call_output",
         "call_id": "call_1",
         "output": "17",
@@ -292,25 +359,11 @@ async def test_chatgpt_llm_replays_every_prior_raw_round_after_consecutive_tool_
         ]
         for index in (1, 2)
     ]
-    requests: list[dict] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content)
-        requests.append(body)
-        if len(requests) <= 2:
-            return httpx.Response(200, json={"output": raw_rounds[len(requests) - 1]})
-        return httpx.Response(
-            200,
-            json={
-                "output": [
-                    {
-                        "type": "message",
-                        "role": "assistant",
-                        "content": [{"type": "output_text", "text": "complete"}],
-                    }
-                ]
-            },
-        )
+    def respond(index: int, kwargs: dict) -> Any:
+        if index <= 2:
+            return ({}, [_completed(raw_rounds[index - 1])])
+        return ({}, [_completed([_message("complete")])])
 
     def append_tool_round(messages: list[dict], result, output: str) -> None:
         call = result.tool_calls[0]
@@ -323,10 +376,7 @@ async def test_chatgpt_llm_replays_every_prior_raw_round_after_consecutive_tool_
                         {
                             "id": call.id,
                             "type": "function",
-                            "function": {
-                                "name": call.name,
-                                "arguments": json.dumps(call.arguments),
-                            },
+                            "function": {"name": call.name, "arguments": json.dumps(call.arguments)},
                         }
                     ],
                 },
@@ -334,172 +384,124 @@ async def test_chatgpt_llm_replays_every_prior_raw_round_after_consecutive_tool_
             ]
         )
 
+    llm, client = _llm(respond)
     messages = [{"role": "user", "content": "use two tools"}]
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    llm = ChatGPTSubscriptionLLM(
-        LLMSettings(chat_model="gpt-5.4"),
-        token_manager=_manager(),
-        client=client,
-        responses_url="https://example.test/responses",
-    )
-    try:
-        first = await llm.chat(messages)
-        append_tool_round(messages, first, "first-output")
-        second = await llm.chat(messages)
-        append_tool_round(messages, second, "second-output")
-        final = await llm.chat(messages)
-    finally:
-        await client.aclose()
+
+    first = await llm.chat(messages)
+    append_tool_round(messages, first, "first-output")
+    second = await llm.chat(messages)
+    append_tool_round(messages, second, "second-output")
+    final = await llm.chat(messages)
 
     assert final.content == "complete"
-    assert requests[1]["input"][1:3] == raw_rounds[0]
-    assert requests[2]["input"][1:3] == raw_rounds[0]
-    assert requests[2]["input"][4:6] == raw_rounds[1]
+    assert client.calls[1]["input"][1:3] == raw_rounds[0]
+    assert client.calls[2]["input"][1:3] == raw_rounds[0]
+    assert client.calls[2]["input"][4:6] == raw_rounds[1]
     assert llm._continuations == {}
 
 
 async def test_chatgpt_llm_continuations_are_isolated_by_message_list():
     replayed: dict[str, str] = {}
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content)
-        output = next(
-            (item for item in body["input"] if item.get("type") == "function_call_output"),
-            None,
-        )
+    def respond(index: int, kwargs: dict) -> Any:
+        body_input = kwargs["input"]
+        output = next((item for item in body_input if item.get("type") == "function_call_output"), None)
         if output is not None:
-            reasoning = next(item for item in body["input"] if item.get("type") == "reasoning")
+            reasoning = next(item for item in body_input if item.get("type") == "reasoning")
             replayed[output["output"]] = reasoning["encrypted_content"]
-            return httpx.Response(
-                200,
-                json={
-                    "output": [
+            return ({}, [_completed([_message("done")])])
+        suffix = body_input[0]["content"][0]["text"][-1]
+        return (
+            {},
+            [
+                _completed(
+                    [
+                        {"id": f"rs_{suffix}", "type": "reasoning", "encrypted_content": f"cipher-{suffix}"},
                         {
-                            "type": "message",
-                            "content": [{"type": "output_text", "text": "done"}],
-                        }
+                            "id": f"fc_{suffix}",
+                            "type": "function_call",
+                            "call_id": "call_shared",
+                            "name": "roll_dice",
+                            "arguments": "{}",
+                        },
                     ]
-                },
-            )
-        prompt = body["input"][0]["content"][0]["text"]
-        suffix = prompt[-1]
-        return httpx.Response(
-            200,
-            json={
-                "output": [
-                    {
-                        "id": f"rs_{suffix}",
-                        "type": "reasoning",
-                        "encrypted_content": f"cipher-{suffix}",
-                    },
-                    {
-                        "id": f"fc_{suffix}",
-                        "type": "function_call",
-                        "call_id": "call_shared",
-                        "name": "roll_dice",
-                        "arguments": "{}",
-                    },
-                ]
-            },
+                )
+            ],
         )
 
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    llm = ChatGPTSubscriptionLLM(
-        LLMSettings(chat_model="gpt-5.4"),
-        token_manager=_manager(),
-        client=client,
-        responses_url="https://example.test/responses",
-    )
+    llm, _ = _llm(respond)
     messages_a = [{"role": "user", "content": "session-A"}]
     messages_b = [{"role": "user", "content": "session-B"}]
-    try:
-        first_a, first_b = await asyncio.gather(llm.chat(messages_a), llm.chat(messages_b))
-        for messages, result, output in (
-            (messages_a, first_a, "tool-A"),
-            (messages_b, first_b, "tool-B"),
-        ):
-            messages.extend(
-                [
-                    {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [
-                            {
-                                "id": "call_shared",
-                                "type": "function",
-                                "function": {"name": result.tool_calls[0].name, "arguments": "{}"},
-                            }
-                        ],
-                    },
-                    {"role": "tool", "tool_call_id": "call_shared", "content": output},
-                ]
-            )
-        await asyncio.gather(llm.chat(messages_a), llm.chat(messages_b))
-    finally:
-        await client.aclose()
+    first_a, first_b = await asyncio.gather(llm.chat(messages_a), llm.chat(messages_b))
+    for messages, result, output in ((messages_a, first_a, "tool-A"), (messages_b, first_b, "tool-B")):
+        messages.extend(
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_shared",
+                            "type": "function",
+                            "function": {"name": result.tool_calls[0].name, "arguments": "{}"},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_shared", "content": output},
+            ]
+        )
+    await asyncio.gather(llm.chat(messages_a), llm.chat(messages_b))
 
     assert replayed == {"tool-A": "cipher-A", "tool-B": "cipher-B"}
     assert llm._continuations == {}
 
 
 async def test_chatgpt_llm_does_not_evict_active_continuations_and_clears_explicitly():
-    def handler(request: httpx.Request) -> httpx.Response:
-        prompt = json.loads(request.content)["input"][0]["content"][0]["text"]
-        return httpx.Response(
-            200,
-            json={
-                "output": [
-                    {
-                        "type": "reasoning",
-                        "id": f"rs_{prompt}",
-                        "encrypted_content": f"cipher-{prompt}",
-                    },
-                    {
-                        "type": "function_call",
-                        "id": f"fc_{prompt}",
-                        "call_id": f"call_{prompt}",
-                        "name": "roll_dice",
-                        "arguments": "{}",
-                    },
-                ]
-            },
+    def respond(index: int, kwargs: dict) -> Any:
+        prompt = kwargs["input"][0]["content"][0]["text"]
+        return (
+            {},
+            [
+                _completed(
+                    [
+                        {"type": "reasoning", "id": f"rs_{prompt}", "encrypted_content": f"cipher-{prompt}"},
+                        {
+                            "type": "function_call",
+                            "id": f"fc_{prompt}",
+                            "call_id": f"call_{prompt}",
+                            "name": "roll_dice",
+                            "arguments": "{}",
+                        },
+                    ]
+                )
+            ],
         )
 
+    llm, _ = _llm(respond)
     conversations = [[{"role": "user", "content": str(index)}] for index in range(130)]
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    llm = ChatGPTSubscriptionLLM(
-        LLMSettings(chat_model="gpt-5.4"),
-        token_manager=_manager(),
-        client=client,
-        responses_url="https://example.test/responses",
-    )
-    try:
-        await asyncio.gather(*(llm.chat(messages) for messages in conversations))
-        assert len(llm._continuations) == len(conversations)
-        for messages in conversations:
-            llm.clear_continuation(messages)
-        assert llm._continuations == {}
-    finally:
-        await client.aclose()
+    await asyncio.gather(*(llm.chat(messages) for messages in conversations))
+    assert len(llm._continuations) == len(conversations)
+    for messages in conversations:
+        llm.clear_continuation(messages)
+    assert llm._continuations == {}
 
 
 @pytest.mark.parametrize(
     "terminal_event",
     ["error", "response.error", "response.cancelled", "response.failed", "response.incomplete"],
 )
-def test_aggregate_sse_rejects_terminal_error_events(terminal_event: str):
-    body = "\n".join(
-        [
-            'data: {"type":"response.output_item.done","item":{"type":"message"}}',
-            f'data: {{"type":"{terminal_event}"}}',
-            "data: [DONE]",
-        ]
-    )
+async def test_terminal_error_events_reject_the_turn(terminal_event: str):
+    events = [
+        {"type": "response.output_item.done", "item": {"type": "message"}},
+        {"type": terminal_event, "error": {"code": "server_error"}},
+    ]
+    llm, client = _llm(lambda index, kwargs: ({}, list(events)))
 
     with pytest.raises(OAuthError) as exc:
-        _aggregate_sse(body)
+        await llm.chat([{"role": "user", "content": "hi"}])
 
     assert exc.value.code == "subscription_bad_response"
+    assert len(client.calls) == 2  # server_error classifies transient → one retry
 
 
 @pytest.mark.parametrize(
@@ -507,353 +509,137 @@ def test_aggregate_sse_rejects_terminal_error_events(terminal_event: str):
     [
         (
             {
-                "type": "response.failed",
-                "response": {
-                    "status": "failed",
-                    "error": {"code": "server_error", "message": "backend overloaded"},
-                },
-            },
-            "transient",
-        ),
-        (
-            {
                 "type": "error",
-                "error": {
-                    "type": "authentication_error",
-                    "code": "invalid_token",
-                    "message": "login expired",
-                },
+                "error": {"type": "authentication_error", "code": "invalid_token", "message": "login expired"},
             },
             "auth",
         ),
         (
             {
                 "type": "response.failed",
-                "response": {
-                    "status": "failed",
-                    "error": {"code": "insufficient_quota", "message": "quota exhausted"},
-                },
+                "response": {"status": "failed", "error": {"code": "insufficient_quota", "message": "quota exhausted"}},
             },
             "quota",
         ),
         (
             {
                 "type": "response.incomplete",
-                "response": {
-                    "status": "incomplete",
-                    "incomplete_details": {"reason": "max_output_tokens"},
-                },
+                "response": {"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}},
             },
             "content",
         ),
     ],
 )
-def test_aggregate_sse_preserves_terminal_error_payload_and_classifies(
-    event: dict,
-    category: str,
+async def test_chatgpt_llm_preserves_terminal_error_payload_and_never_retries_non_transient(
+    event: dict, category: str
 ):
-    body = f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n"
+    llm, client = _llm(lambda index, kwargs: ({}, [dict(event)]))
 
     with pytest.raises(OAuthError) as exc:
-        _aggregate_sse(body)
+        await llm.chat([{"role": "user", "content": "hi"}])
 
     assert exc.value.code == "subscription_bad_response"
     assert exc.value.event_type == event["type"]
     assert exc.value.payload == event
     assert exc.value.category == category
+    assert len(client.calls) == 1
 
 
-async def test_chatgpt_llm_retries_transient_sse_error_once():
-    requests = 0
-    transient_event = {
+async def test_chatgpt_llm_retries_transient_stream_error_once():
+    transient = {
         "type": "response.failed",
-        "response": {
-            "status": "failed",
-            "error": {"code": "server_error", "message": "temporarily overloaded"},
-        },
+        "response": {"status": "failed", "error": {"code": "server_error", "message": "temporarily overloaded"}},
     }
 
-    def handler(_request: httpx.Request) -> httpx.Response:
-        nonlocal requests
-        requests += 1
-        if requests == 1:
-            return httpx.Response(
-                200,
-                text=f"data: {json.dumps(transient_event)}\n\ndata: [DONE]\n\n",
-                headers={"content-type": "text/event-stream"},
-            )
-        return httpx.Response(
-            200,
-            json={
-                "output": [
-                    {
-                        "type": "message",
-                        "content": [{"type": "output_text", "text": "recovered"}],
-                    }
-                ]
-            },
-        )
+    def respond(index: int, kwargs: dict) -> Any:
+        if index == 1:
+            return ({}, [dict(transient)])
+        return ({}, [_completed([_message("recovered")])])
 
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    llm = ChatGPTSubscriptionLLM(
-        LLMSettings(chat_model="gpt-5.4"),
-        token_manager=_manager(),
-        client=client,
-        responses_url="https://example.test/responses",
-    )
-    try:
-        result = await llm.chat([{"role": "user", "content": "hi"}])
-    finally:
-        await client.aclose()
+    llm, client = _llm(respond)
+    result = await llm.chat([{"role": "user", "content": "hi"}])
 
     assert result.content == "recovered"
-    assert requests == 2
+    assert len(client.calls) == 2
 
 
 async def test_chatgpt_llm_stops_after_one_transient_retry():
-    requests = 0
-    transient_event = {
+    transient = {
         "type": "response.failed",
-        "response": {
-            "status": "failed",
-            "error": {"code": "server_error", "message": "still overloaded"},
-        },
+        "response": {"status": "failed", "error": {"code": "server_error", "message": "still overloaded"}},
     }
+    llm, client = _llm(lambda index, kwargs: ({}, [dict(transient)]))
 
-    def handler(_request: httpx.Request) -> httpx.Response:
-        nonlocal requests
-        requests += 1
-        return httpx.Response(
-            200,
-            text=f"data: {json.dumps(transient_event)}\n\ndata: [DONE]\n\n",
-            headers={"content-type": "text/event-stream"},
-        )
-
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    llm = ChatGPTSubscriptionLLM(
-        LLMSettings(chat_model="gpt-5.4"),
-        token_manager=_manager(),
-        client=client,
-        responses_url="https://example.test/responses",
-    )
-    try:
-        with pytest.raises(OAuthError) as exc:
-            await llm.chat([{"role": "user", "content": "hi"}])
-    finally:
-        await client.aclose()
+    with pytest.raises(OAuthError) as exc:
+        await llm.chat([{"role": "user", "content": "hi"}])
 
     assert exc.value.category == "transient"
-    assert requests == 2
+    assert len(client.calls) == 2
 
 
 async def test_chatgpt_llm_retries_connect_timeout_once_and_recovers():
-    requests = 0
+    def respond(index: int, kwargs: dict) -> Any:
+        if index == 1:
+            return openai.APITimeoutError(request=_request())
+        return ({}, [_completed([_message("recovered")])])
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal requests
-        requests += 1
-        if requests == 1:
-            raise httpx.ConnectTimeout("connect timed out", request=request)
-        return httpx.Response(
-            200,
-            json={
-                "output": [
-                    {
-                        "type": "message",
-                        "content": [{"type": "output_text", "text": "recovered"}],
-                    }
-                ]
-            },
-        )
-
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    llm = ChatGPTSubscriptionLLM(
-        LLMSettings(chat_model="gpt-5.4"),
-        token_manager=_manager(),
-        client=client,
-        responses_url="https://example.test/responses",
-    )
-    try:
-        result = await llm.chat([{"role": "user", "content": "hi"}])
-    finally:
-        await client.aclose()
+    llm, client = _llm(respond)
+    result = await llm.chat([{"role": "user", "content": "hi"}])
 
     assert result.content == "recovered"
-    assert requests == 2
+    assert len(client.calls) == 2
 
 
 async def test_chatgpt_llm_stops_after_one_connect_timeout_retry():
-    requests = 0
+    llm, client = _llm(lambda index, kwargs: openai.APITimeoutError(request=_request()))
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal requests
-        requests += 1
-        raise httpx.ConnectTimeout("connect timed out", request=request)
-
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    llm = ChatGPTSubscriptionLLM(
-        LLMSettings(chat_model="gpt-5.4"),
-        token_manager=_manager(),
-        client=client,
-        responses_url="https://example.test/responses",
-    )
-    try:
-        with pytest.raises(OAuthError) as exc:
-            await llm.chat([{"role": "user", "content": "hi"}])
-    finally:
-        await client.aclose()
+    with pytest.raises(OAuthError) as exc:
+        await llm.chat([{"role": "user", "content": "hi"}])
 
     assert exc.value.code == "subscription_http_error"
     assert exc.value.category == "transient"
-    assert requests == 2
+    assert len(client.calls) == 2
 
 
-@pytest.mark.parametrize(
-    ("status_code", "category"),
-    [(402, "quota"), (403, "auth")],
-)
-async def test_chatgpt_llm_classifies_nonretryable_http_statuses(
-    status_code: int,
-    category: str,
-):
-    requests = 0
+@pytest.mark.parametrize(("status_code", "category"), [(402, "quota"), (403, "auth")])
+async def test_chatgpt_llm_classifies_nonretryable_http_statuses(status_code: int, category: str):
+    llm, client = _llm(lambda index, kwargs: _status_error(status_code))
 
-    def handler(_request: httpx.Request) -> httpx.Response:
-        nonlocal requests
-        requests += 1
-        return httpx.Response(status_code, text="provider rejected request")
-
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    llm = ChatGPTSubscriptionLLM(
-        LLMSettings(chat_model="gpt-5.4"),
-        token_manager=_manager(),
-        client=client,
-        responses_url="https://example.test/responses",
-    )
-    try:
-        with pytest.raises(OAuthError) as exc:
-            await llm.chat([{"role": "user", "content": "hi"}])
-    finally:
-        await client.aclose()
+    with pytest.raises(OAuthError) as exc:
+        await llm.chat([{"role": "user", "content": "hi"}])
 
     assert exc.value.code == "subscription_http_error"
     assert exc.value.category == category
-    assert requests == 1
+    assert len(client.calls) == 1
 
 
-@pytest.mark.parametrize(
-    ("event", "category"),
-    [
-        (
-            {
-                "type": "error",
-                "error": {"code": "invalid_token", "message": "login expired"},
-            },
-            "auth",
-        ),
-        (
-            {
-                "type": "response.failed",
-                "response": {
-                    "status": "failed",
-                    "error": {"code": "insufficient_quota", "message": "quota exhausted"},
-                },
-            },
-            "quota",
-        ),
-        (
-            {
-                "type": "response.incomplete",
-                "response": {
-                    "status": "incomplete",
-                    "incomplete_details": {"reason": "max_output_tokens"},
-                },
-            },
-            "content",
-        ),
-    ],
-)
-async def test_chatgpt_llm_does_not_retry_non_transient_sse_error(
-    event: dict,
-    category: str,
-):
-    requests = 0
+async def test_stream_that_ends_before_response_completed_is_rejected():
+    events = [
+        {
+            "type": "response.output_item.done",
+            "item": {"type": "function_call", "call_id": "call_1", "name": "roll_dice", "arguments": "{}"},
+        }
+    ]
+    llm, _ = _llm(lambda index, kwargs: ({}, list(events)))
 
-    def handler(_request: httpx.Request) -> httpx.Response:
-        nonlocal requests
-        requests += 1
-        return httpx.Response(
-            200,
-            text=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n",
-            headers={"content-type": "text/event-stream"},
-        )
-
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    llm = ChatGPTSubscriptionLLM(
-        LLMSettings(chat_model="gpt-5.4"),
-        token_manager=_manager(),
-        client=client,
-        responses_url="https://example.test/responses",
-    )
-    try:
-        with pytest.raises(OAuthError) as exc:
-            await llm.chat([{"role": "user", "content": "hi"}])
-    finally:
-        await client.aclose()
-
-    assert exc.value.category == category
-    assert requests == 1
+    with pytest.raises(OAuthError, match="subscription_bad_response"):
+        await llm.chat([{"role": "user", "content": "hi"}])
 
 
-def test_aggregate_sse_rejects_stream_that_ends_before_response_completed():
-    body = "\n".join(
-        [
-            (
-                'data: {"type":"response.output_item.done","item":'
-                '{"type":"function_call","call_id":"call_1","name":"roll_dice",'
-                '"arguments":"{}"}}'
-            ),
-            "data: [DONE]",
-        ]
-    )
+async def test_nonterminal_output_snapshot_is_ignored_not_trusted():
+    llm, _ = _llm(lambda index, kwargs: ({}, [{"type": "response.in_progress", "output": []}]))
 
-    with pytest.raises(OAuthError) as exc:
-        _aggregate_sse(body)
-
-    assert exc.value.code == "subscription_bad_response"
-
-
-def test_aggregate_sse_rejects_nonterminal_output_snapshot():
-    body = "\n".join(
-        [
-            'data: {"type":"response.in_progress","output":[]}',
-            "data: [DONE]",
-        ]
-    )
-
-    with pytest.raises(OAuthError) as exc:
-        _aggregate_sse(body)
-
-    assert exc.value.code == "subscription_bad_response"
+    with pytest.raises(OAuthError, match="subscription_bad_response"):
+        await llm.chat([{"role": "user", "content": "hi"}])
 
 
 async def test_chatgpt_llm_401_refreshes_once():
-    state = {"n": 0}
+    def respond(index: int, kwargs: dict) -> Any:
+        if index == 1:
+            return _status_error(401)
+        return ({}, [_completed([_message("ok")])])
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        state["n"] += 1
-        auth = request.headers.get("authorization")
-        if state["n"] == 1:
-            assert auth == "Bearer stale"
-            return httpx.Response(401, text="unauthorized")
-        assert auth == "Bearer refreshed-token"
-        return httpx.Response(
-            200,
-            json={"output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}]},
-        )
-
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    mgr = TokenManager(
+    manager = TokenManager(
         SubscriptionToken(
             access_token="stale",
             refresh_token="rt",
@@ -862,35 +648,23 @@ async def test_chatgpt_llm_401_refreshes_once():
         ),
         _StaticFlow(),  # type: ignore[arg-type]
     )
-    llm = ChatGPTSubscriptionLLM(
-        LLMSettings(chat_model="gpt-5.4"),
-        token_manager=mgr,
-        client=client,
-        responses_url="https://example.test/responses",
-    )
-    try:
-        result = await llm.chat([{"role": "user", "content": "hi"}])
-    finally:
-        await client.aclose()
+    llm, client = _llm(respond, manager=manager)
+    result = await llm.chat([{"role": "user", "content": "hi"}])
 
     assert result.content == "ok"
-    assert state["n"] == 2
+    assert client.api_keys == ["stale", "refreshed-token"]
 
 
 async def test_chatgpt_llm_double_401_raises_relogin():
-    def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(401, text="nope")
+    llm, client = _llm(lambda index, kwargs: _status_error(401))
 
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    llm = ChatGPTSubscriptionLLM(
-        LLMSettings(chat_model="gpt-5.4"),
-        token_manager=_manager(access="x"),
-        client=client,
-        responses_url="https://example.test/responses",
-    )
-    try:
-        with pytest.raises(OAuthError) as exc:
-            await llm.chat([{"role": "user", "content": "hi"}])
-        assert exc.value.code == "subscription_relogin_required"
-    finally:
-        await client.aclose()
+    with pytest.raises(OAuthError) as exc:
+        await llm.chat([{"role": "user", "content": "hi"}])
+
+    assert exc.value.code == "subscription_relogin_required"
+    assert len(client.calls) == 2
+
+
+def test_default_construction_targets_the_codex_backend():
+    llm = ChatGPTSubscriptionLLM(LLMSettings(provider="chatgpt", chat_model="gpt-5.4"), token_manager=_manager())
+    assert str(llm._client.base_url).rstrip("/").endswith("backend-api/codex")

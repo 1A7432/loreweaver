@@ -1,8 +1,13 @@
 """ChatGPT subscription LLM via the ChatGPT backend Responses API.
 
-Uses a subscription OAuth bearer (not a platform API key). Wire format mirrors
-LiteLLM's ``chatgpt`` provider: ``POST {CHATGPT_API_BASE}/responses`` with
-``Authorization: Bearer …`` and ``ChatGPT-Account-Id``.
+Uses a subscription OAuth bearer (not a platform API key) on top of the
+OFFICIAL ``openai`` SDK: an ``AsyncOpenAI`` client pointed at the ChatGPT
+Codex backend (``{CHATGPT_API_BASE}``) speaks ``client.responses`` with the
+subscription's extra headers (``ChatGPT-Account-Id``, ``session_id``, the
+sticky ``x-codex-turn-state`` routing token read back from response headers).
+This module is only the THIN subscription layer — auth refresh, tool-round
+continuation replay (encrypted reasoning items), backend quirks and error
+classification; all HTTP/SSE mechanics belong to the SDK.
 
 Translates OpenAI chat-completions messages/tools ⇄ Responses API so the KP
 function-calling loop is unchanged.
@@ -17,11 +22,9 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
-
 from infra.config import LLMSettings
 from infra.llm import ChatResult, ToolCall, _parse_tool_arguments, parse_usage
-from infra.oauth_flows import CHATGPT_RESPONSES_URL, OAuthError, TokenManager
+from infra.oauth_flows import CHATGPT_API_BASE, CHATGPT_RESPONSES_URL, OAuthError, TokenManager
 
 TokenProvider = Callable[[], Awaitable[str]]
 
@@ -168,24 +171,25 @@ def _http_status_signal(status_code: int) -> str:
     return "invalid_prompt"
 
 
-def _http_error_payload(response: httpx.Response) -> dict[str, Any]:
+def _status_error_payload(status_code: int, body: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "type": "http_error",
-        "status": _http_status_signal(response.status_code),
-        "http_status": response.status_code,
+        "status": _http_status_signal(status_code),
+        "http_status": status_code,
     }
-    try:
-        provider_payload = response.json()
-    except Exception:
-        provider_payload = None
-    if isinstance(provider_payload, (dict, list)):
-        payload["provider"] = provider_payload
+    if isinstance(body, (dict, list)):
+        payload["provider"] = body
     return payload
 
 
-def _transport_error_payload(exc: httpx.HTTPError) -> dict[str, Any]:
-    signal = "timeout" if isinstance(exc, httpx.TimeoutException) else "service_unavailable"
-    return {"type": "transport_error", "error": {"code": signal}}
+def _plain(value: Any) -> Any:
+    """An SDK pydantic object as its wire-shaped dict (dicts pass straight through).
+
+    ``exclude_none`` matters: continuation replay sends these items back verbatim,
+    and the backend must not receive null-stuffed fields the wire never carried."""
+    if hasattr(value, "model_dump"):
+        return value.model_dump(exclude_none=True)
+    return value
 
 
 @dataclass
@@ -214,16 +218,26 @@ class ChatGPTSubscriptionLLM:
         settings: LLMSettings,
         *,
         token_manager: TokenManager,
-        client: httpx.AsyncClient | None = None,
+        client: Any | None = None,
         responses_url: str = CHATGPT_RESPONSES_URL,
         timeout: float = 120.0,
     ) -> None:
         self._settings = settings
         self._token_manager = token_manager
-        self._client = client
         self._owns_client = client is None
-        self._responses_url = responses_url
-        self._timeout = timeout
+        if client is not None:
+            self._client = client
+        else:
+            from openai import AsyncOpenAI
+
+            base_url = (
+                responses_url[: -len("/responses")]
+                if responses_url.endswith("/responses")
+                else CHATGPT_API_BASE
+            )
+            # max_retries=0: this layer owns its own single-retry policy (one auth
+            # refresh + one transient retry) — SDK retries on top would stack.
+            self._client = AsyncOpenAI(api_key="subscription", base_url=base_url, timeout=timeout, max_retries=0)
         # The agent loop keeps one list object for all tool rounds in a turn.
         # Keying by that identity isolates simultaneous rooms without exposing a
         # provider-specific continuation field in the generic chat messages.
@@ -231,9 +245,10 @@ class ChatGPTSubscriptionLLM:
 
     async def aclose(self) -> None:
         self._continuations.clear()
-        if self._owns_client and self._client is not None:
-            await self._client.aclose()
-            self._client = None
+        if self._owns_client:
+            close = getattr(self._client, "close", None)
+            if callable(close):
+                await close()
 
     def clear_continuation(self, messages: list[dict]) -> None:
         """Release provider state when its owning agent turn has ended."""
@@ -254,7 +269,6 @@ class ChatGPTSubscriptionLLM:
     ) -> ChatResult:
         del temperature  # ChatGPT backend rejects temperature / token limits.
         del reasoning_effort  # Effort is fixed by the subscription backend; accepted for parity.
-        del on_text_delta  # No streaming mapping for this backend yet; the final reply still lands.
         continuation = self._continuations.get(id(messages))
         if continuation is not None and continuation.messages is not messages:
             self._continuations.pop(id(messages), None)
@@ -272,6 +286,7 @@ class ChatGPTSubscriptionLLM:
             body,
             session_id=session_id,
             turn_state=turn_state,
+            on_text_delta=on_text_delta,
         )
         if result.tool_calls:
             self._remember_continuation(
@@ -327,12 +342,15 @@ class ChatGPTSubscriptionLLM:
         *,
         session_id: str,
         turn_state: str,
+        on_text_delta: Callable[[str], None] | None = None,
     ) -> tuple[ChatResult, str]:
         auth_refreshed = False
         transient_retried = False
         while True:
             try:
-                return await self._post(body, session_id=session_id, turn_state=turn_state)
+                return await self._create(
+                    body, session_id=session_id, turn_state=turn_state, on_text_delta=on_text_delta
+                )
             except _AuthHTTPError as exc:
                 if auth_refreshed:
                     raise OAuthError("subscription_relogin_required") from exc
@@ -343,18 +361,20 @@ class ChatGPTSubscriptionLLM:
                     raise
                 transient_retried = True
 
-    async def _post(
+    async def _create(
         self,
         body: dict[str, Any],
         *,
         session_id: str,
         turn_state: str,
+        on_text_delta: Callable[[str], None] | None = None,
     ) -> tuple[ChatResult, str]:
-        access = await self._token_manager.access_token()
+        import openai
+
+        # A refreshed bearer must reach the SDK client before every request.
+        self._client.api_key = await self._token_manager.access_token()
         account_id = self._token_manager.token.account_id
-        headers = {
-            "Authorization": f"Bearer {access}",
-            "content-type": "application/json",
+        extra_headers = {
             "accept": "text/event-stream",
             # ChatGPT's Codex backend accepts recognizable ``Codex `` clients.
             # Keep Loreweaver attribution instead of impersonating the CLI.
@@ -363,62 +383,78 @@ class ChatGPTSubscriptionLLM:
             "session_id": session_id,
         }
         if account_id:
-            headers["ChatGPT-Account-Id"] = account_id
+            extra_headers["ChatGPT-Account-Id"] = account_id
         if turn_state:
             # ChatGPT returns this sticky-routing token on the first request in
             # a turn and requires it on every subsequent tool continuation.
-            headers["x-codex-turn-state"] = turn_state
+            extra_headers["x-codex-turn-state"] = turn_state
 
-        client = self._client
-        close = False
-        if client is None:
-            client = httpx.AsyncClient(timeout=self._timeout)
-            close = True
         try:
-            # ChatGPT's Codex backend requires streaming Responses requests.
-            payload = {**body, "stream": True}
-            resp = await client.post(self._responses_url, headers=headers, json=payload)
-            if resp.status_code == 401:
-                raise _AuthHTTPError()
-            if resp.status_code < 200 or resp.status_code >= 300:
-                # Some backends force SSE even when stream=false — retry as stream.
-                if "text/event-stream" in (resp.headers.get("content-type") or ""):
-                    return (
-                        responses_payload_to_chat_result(_aggregate_sse(resp.text)),
-                        resp.headers.get("x-codex-turn-state", ""),
-                    )
-                raise ProviderResponseError(
-                    "http.error",
-                    _http_error_payload(resp),
-                    code="subscription_http_error",
-                )
-
-            content_type = (resp.headers.get("content-type") or "").lower()
-            text = resp.text or ""
-            if "text/event-stream" in content_type or text.lstrip().startswith(("event:", "data:")):
-                data = _aggregate_sse(text)
-            else:
-                try:
-                    data = resp.json()
-                except Exception as exc:
-                    raise OAuthError("subscription_bad_response") from exc
-            return (
-                responses_payload_to_chat_result(data),
-                resp.headers.get("x-codex-turn-state", ""),
+            # The Codex backend requires streaming Responses requests; with_raw_response
+            # exposes the HTTP headers the sticky-routing token rides back on.
+            raw = await self._client.responses.with_raw_response.create(
+                stream=True, extra_headers=extra_headers, **body
             )
-        except _AuthHTTPError:
-            raise
-        except OAuthError:
-            raise
-        except httpx.HTTPError as exc:
+        except openai.AuthenticationError as exc:
+            raise _AuthHTTPError() from exc
+        except openai.APIStatusError as exc:
+            if exc.status_code == 401:
+                raise _AuthHTTPError() from exc
+            provider_body = exc.body if isinstance(exc.body, (dict, list)) else None
             raise ProviderResponseError(
-                "transport.error",
-                _transport_error_payload(exc),
+                "http.error",
+                _status_error_payload(exc.status_code, provider_body),
                 code="subscription_http_error",
             ) from exc
-        finally:
-            if close:
-                await client.aclose()
+        except openai.APIConnectionError as exc:
+            signal = "timeout" if isinstance(exc, openai.APITimeoutError) else "service_unavailable"
+            raise ProviderResponseError(
+                "transport.error",
+                {"type": "transport_error", "error": {"code": signal}},
+                code="subscription_http_error",
+            ) from exc
+
+        turn_state_out = str(raw.headers.get("x-codex-turn-state", "") or "")
+        completed: dict[str, Any] | None = None
+        output_items: list[dict[str, Any]] = []
+        try:
+            async for event in raw.parse():
+                event_type = str(getattr(event, "type", "") or "")
+                if event_type == "response.output_text.delta":
+                    delta = getattr(event, "delta", None)
+                    if on_text_delta is not None and delta:
+                        on_text_delta(str(delta))
+                elif event_type == "response.output_item.done":
+                    item = _plain(getattr(event, "item", None))
+                    if isinstance(item, dict):
+                        output_items.append(item)
+                elif event_type in {
+                    "error",
+                    "response.error",
+                    "response.cancelled",
+                    "response.failed",
+                    "response.incomplete",
+                }:
+                    payload = _plain(event)
+                    raise ProviderResponseError(
+                        event_type, payload if isinstance(payload, dict) else {"type": event_type}
+                    )
+                elif event_type == "response.completed":
+                    response = _plain(getattr(event, "response", None))
+                    if isinstance(response, dict):
+                        if response.get("status") not in {None, "completed"} or response.get("error"):
+                            raise ProviderResponseError(event_type, {"type": event_type, "response": response})
+                        completed = response
+        except openai.APIError as exc:
+            raise ProviderResponseError(
+                "transport.error",
+                {"type": "transport_error", "error": {"code": "service_unavailable"}},
+                code="subscription_http_error",
+            ) from exc
+        if completed is None:
+            raise OAuthError("subscription_bad_response")
+        merged = _merge_done_output_items(deepcopy(completed), output_items)
+        return responses_payload_to_chat_result(merged), turn_state_out
 
 
 class _AuthHTTPError(Exception):
@@ -622,78 +658,32 @@ def responses_payload_to_chat_result(data: dict[str, Any] | None) -> ChatResult:
     return ChatResult(content=content, tool_calls=tool_calls, raw=payload, usage=usage)
 
 
-def _aggregate_sse(body_text: str) -> dict[str, Any]:
-    """Pull the final response object out of an SSE Responses stream."""
-    completed: dict[str, Any] | None = None
-    output_items: list[dict[str, Any]] = []
-    for line in body_text.splitlines():
-        line = line.strip()
-        if not line.startswith("data:"):
+def _merge_done_output_items(
+    completed: dict[str, Any], output_items: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Prefer each ``response.output_item.done`` item over its summary twin.
+
+    The done events carry fields such as ``reasoning.encrypted_content`` that the
+    final ``response.completed`` summary may omit — and continuation replay must
+    send those items back verbatim. Uses the summary's ordering while swapping in
+    the richer done item with the same id; done items absent from the summary are
+    appended."""
+    if not output_items:
+        return completed
+    done_by_id = {str(item.get("id")): item for item in output_items if item.get("id") is not None}
+    merged: list[dict[str, Any]] = []
+    used_ids: set[str] = set()
+    for item in completed.get("output") or []:
+        if not isinstance(item, dict):
             continue
-        raw = line[5:].strip()
-        if not raw or raw == "[DONE]":
-            continue
-        try:
-            chunk = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(chunk, dict):
-            continue
-        event_type = str(chunk.get("type") or "")
-        if event_type in {
-            "error",
-            "response.error",
-            "response.cancelled",
-            "response.failed",
-            "response.incomplete",
-        }:
-            raise ProviderResponseError(event_type, chunk)
-        if event_type == "response.output_item.done":
-            item = chunk.get("item")
-            if isinstance(item, dict):
-                output_items.append(deepcopy(item))
-        elif event_type == "response.completed":
-            response = chunk.get("response")
-            if isinstance(response, dict):
-                if response.get("status") not in {None, "completed"} or response.get("error"):
-                    raise ProviderResponseError(event_type, chunk)
-                completed = response
-            else:
-                completed = chunk
-    if completed is None:
-        raise OAuthError("subscription_bad_response")
-    completed = deepcopy(completed)
-    if completed.get("status") not in {None, "completed"}:
-        raise ProviderResponseError(
-            "response.completed",
-            {"type": "response.completed", "response": completed},
-        )
-    if output_items:
-        # ``output_item.done`` contains fields such as encrypted_content that
-        # may be omitted from the final response summary. Use the summary's
-        # ordering while preferring the richer done item with the same id.
-        done_by_id = {
-            str(item.get("id")): item
-            for item in output_items
-            if item.get("id") is not None
-        }
-        merged: list[dict[str, Any]] = []
-        used_ids: set[str] = set()
-        for item in completed.get("output") or []:
-            if not isinstance(item, dict):
-                continue
-            item_id = str(item.get("id")) if item.get("id") is not None else ""
-            if item_id and item_id in done_by_id:
-                merged.append(done_by_id[item_id])
-                used_ids.add(item_id)
-            else:
-                merged.append(deepcopy(item))
-        merged.extend(
-            item
-            for item in output_items
-            if not item.get("id") or str(item.get("id")) not in used_ids
-        )
-        completed["output"] = merged
+        item_id = str(item.get("id")) if item.get("id") is not None else ""
+        if item_id and item_id in done_by_id:
+            merged.append(done_by_id[item_id])
+            used_ids.add(item_id)
+        else:
+            merged.append(deepcopy(item))
+    merged.extend(item for item in output_items if not item.get("id") or str(item.get("id")) not in used_ids)
+    completed["output"] = merged
     return completed
 
 
