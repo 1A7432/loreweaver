@@ -99,7 +99,7 @@ def test_validate_coc_skills_clamps_and_marks_budget_overrun():
 
     assert clamped.skills["侦查"] == 90
     assert any(violation.code == "skill_above_max" and violation.path == "skills.侦查" for violation in violations)
-    budget = next(violation for violation in violations if violation.code == "coc_skill_budget_exceeded")
+    budget = next(violation for violation in violations if violation.code == "skill_points_exceeded")
     assert budget.original > budget.limit
 
 
@@ -110,8 +110,8 @@ def test_validate_dnd_rolled_array_clamps_ranges_without_point_buy_budget_check(
     clamped, violations = validate_sheet(sheet, "dnd5e", creation_method="rolled")
 
     assert clamped.attributes["STR"] == 18
-    assert any(violation.code == "ability_above_max" and violation.path == "abilities.STR" for violation in violations)
-    assert not any(violation.code == "dnd_point_buy_budget_exceeded" for violation in violations)
+    assert any(violation.code == "attribute_above_max" and violation.path == "attributes.STR" for violation in violations)
+    assert not any(violation.code == "point_buy_budget_exceeded" for violation in violations)
 
 
 def test_validate_dnd_marks_point_buy_budget_overrun_when_all_scores_are_point_buy_scores():
@@ -121,7 +121,7 @@ def test_validate_dnd_marks_point_buy_budget_overrun_when_all_scores_are_point_b
     clamped, violations = validate_sheet(sheet, "dnd5e", creation_method="point_buy")
 
     assert all(clamped.attributes[key] == 15 for key in ("STR", "DEX", "CON", "INT", "WIS", "CHA"))
-    budget = next(violation for violation in violations if violation.code == "dnd_point_buy_budget_exceeded")
+    budget = next(violation for violation in violations if violation.code == "point_buy_budget_exceeded")
     assert budget.original == 54
     assert budget.limit == 27
 
@@ -132,7 +132,7 @@ def test_validate_dnd_does_not_infer_point_buy_for_unspecified_creation_method()
 
     _, violations = validate_sheet(sheet, "dnd5e")
 
-    assert not any(violation.code == "dnd_point_buy_budget_exceeded" for violation in violations)
+    assert not any(violation.code == "point_buy_budget_exceeded" for violation in violations)
 
 
 def test_validation_notice_does_not_claim_uncorrected_budget_warning_adjusted_sheet():

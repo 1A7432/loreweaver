@@ -6,7 +6,7 @@ Covers two confirmed findings:
    row is corrupt must return a localized error and leave BOTH the stored row
    and the shared party roster untouched (previously it saved a blank sheet
    over the real character and the roster).
-2. WOD POOL DoS — `wod_check` with a wildly out-of-range `pool_size` must
+2. POOL DoS — a params pool check with a wildly out-of-range pool size must
    return fast with a bounded, localized message instead of allocating a giant
    list and blocking the event loop.
 
@@ -128,7 +128,7 @@ async def test_healthy_row_still_updates_normally():
 
 
 # ---------------------------------------------------------------------------
-# Finding 2 — wod_check DoS guard
+# Finding 2 — pool-check DoS guard
 # ---------------------------------------------------------------------------
 
 

@@ -40,9 +40,11 @@ def _alias_bomb_yaml(levels: int = 6, branch: int = 10) -> str:
     return "\n".join(lines)
 
 # ---------------------------------------------------------------------------
-# (a) coc7 / dnd5e must stay byte-identical to the pre-refactor behavior.
-# These expected numbers were computed from the ORIGINAL hardcoded
-# `_COC_DERIVED`/`_DND_DERIVED` tables before the YAML-driven refactor.
+# (a) coc7 / dnd5e derived math must match the rulebook baselines. The shared
+# numbers were computed from the ORIGINAL hardcoded tables before the YAML
+# refactor; stage B added entries the hardcoded tables kept elsewhere (coc7
+# 灵感/知识, dnd5e's secondary block + 熟练加值) — those extend the baseline,
+# every pre-existing number is unchanged.
 # ---------------------------------------------------------------------------
 
 
@@ -62,6 +64,8 @@ def test_coc7_compute_derived_matches_pre_refactor_baseline():
         "理智上限": 89,
         "母语": 60,
         "闪避": 27,
+        "灵感": 50,
+        "知识": 60,
     }
 
 
@@ -81,6 +85,8 @@ def test_coc7_compute_derived_matches_baseline_low_totals():
         "理智上限": 99,
         "母语": 45,
         "闪避": 45,
+        "灵感": 50,
+        "知识": 45,
     }
 
 
@@ -100,6 +106,8 @@ def test_coc7_compute_derived_matches_baseline_high_totals_multidice_db():
         "理智上限": 99,
         "母语": 90,
         "闪避": 25,
+        "灵感": 50,
+        "知识": 90,
     }
 
 
@@ -134,6 +142,14 @@ def test_dnd5e_compute_derived_matches_pre_refactor_baseline():
         "欺瞒": -1,
         "威吓": -1,
         "表演": -1,
+        # Stage B: the old recompute_dnd_derived secondary block, now pack DSL.
+        "先攻修正": 3,
+        "速度": 30,
+        "载重": 210,
+        "负重": 140,
+        "护甲等级": 13,
+        "熟练加值": 2,
+        "被动感知": 10,
     }
 
 
@@ -281,9 +297,15 @@ def test_primitive_sum_ranges_inclusive_boundaries():
     assert calc({"力量": 900, "体型": 900}) == "extreme"  # no range matches
 
 
-def test_primitive_computer_resolves_named_computer():
-    calc = rulepacks_module._compile_derived_spec("test", "DB", {"computer": "coc_db"})
-    assert calc({"力量": 90, "体型": 90}) == "1d6"
+def test_primitive_computer_resolves_registered_computer():
+    """The registries ship EMPTY (bundled math is pack DSL data); a third-party
+    weirdo registers real code at startup and references it by name."""
+    rulepacks_module.register_computer("thirdparty_sum", lambda values: values.get("a", 0) + values.get("b", 0))
+    try:
+        calc = rulepacks_module._compile_derived_spec("test", "total", {"computer": "thirdparty_sum"})
+        assert calc({"a": 2, "b": 3}) == 5
+    finally:
+        rulepacks_module._NAMED_COMPUTERS.pop("thirdparty_sum", None)
 
 
 def test_unknown_computer_name_raises_value_error():

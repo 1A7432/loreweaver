@@ -97,7 +97,7 @@ async def test_en_commands_roll_inline_setcoc_make_and_check():
 
     created = await router.dispatch(ctx, "/coc")
     assert created is not None
-    assert "CoC" in created
+    assert "coc7" in created
 
     seed_dice(3)
     checked = await router.dispatch(ctx, "/check spot hidden")
@@ -1996,11 +1996,16 @@ async def test_dnd_st_recomputes_persisted_skill_initiative_and_ac():
     await router.dispatch(ctx, ".st STR16 DEX14")
 
     character = await services.characters.get_character("u1", ctx.chat_key)
-    assert character.skills["运动"] == 3
-    assert character.skills["体操"] == 2
-    assert character.skills["隐匿"] == 2
-    assert character.secondary_attributes["先攻修正"] == 2
-    assert character.secondary_attributes["护甲等级"] == 12
+    # Untrained derived slots are never persisted; they recompute on read.
+    from core.rulepacks import load_rulepack
+    from core.sheets import sheet_value
+
+    pack = load_rulepack("dnd5e")
+    assert sheet_value(character, pack, "运动") == 3
+    assert sheet_value(character, pack, "体操") == 2
+    assert sheet_value(character, pack, "隐匿") == 2
+    assert sheet_value(character, pack, "先攻修正") == 2
+    assert sheet_value(character, pack, "护甲等级") == 12
     assert "先攻修正" not in character.attributes
     assert "护甲等级" not in character.attributes
 
@@ -2014,8 +2019,15 @@ async def test_dnd_same_st_explicit_ac_override_wins_regardless_of_order():
     await router.dispatch(ctx, ".st AC18 STR16 DEX14")
 
     character = await services.characters.get_character("u1", ctx.chat_key)
+    from core.rulepacks import load_rulepack
+    from core.sheets import sheet_value
+
+    pack = load_rulepack("dnd5e")
+    # The explicit AC override survives (a stored value differing from its
+    # derivation is a manual override); untrained slots recompute on read.
     assert character.secondary_attributes["护甲等级"] == 18
-    assert character.secondary_attributes["先攻修正"] == 2
+    assert sheet_value(character, pack, "护甲等级") == 18
+    assert sheet_value(character, pack, "先攻修正") == 2
 
 
 async def test_dnd_sheet_hp_edit_uses_authoritative_current_and_max_fields():
@@ -2046,7 +2058,7 @@ async def test_dnd_auto_rolled_creation_does_not_render_point_buy_warning():
     assert reply is not None
     assert "point_buy" not in reply
     character = await services.characters.get_character("u1", ctx.chat_key)
-    assert character.system == "DnD5e"
+    assert character.system == "dnd5e"
 
 
 async def test_manual_create_flow_leaves_stale_vitals_until_finalize_word():
@@ -2131,10 +2143,10 @@ async def test_genchar_command_builds_and_validates_sheet_from_description():
     reply = await router.dispatch(ctx, ".genchar coc7 Ada | A sharp-eyed scholar of forbidden lore.")
 
     assert reply is not None
-    assert "Generated CoC character from description: Ada" in reply
+    assert "Generated coc7 character from description: Ada" in reply
     character = await services.characters.get_character("u1", "cli:dm:genchar")
     assert character.name == "Ada"
-    assert character.system == "CoC"
+    assert character.system == "coc7"
     assert character.occupation == "Investigator"
     assert character.skills["图书馆"] >= 60
     assert character.attributes["SAN"] <= character.attributes["SANMAX"]

@@ -6,6 +6,7 @@ defaults:
   智力: 10
   感知: 10
   魅力: 10
+  等级: 1
   熟练: 2
   ac: 10
   hp: 8
@@ -80,6 +81,15 @@ resolution:
   modifiers:
     advantage: {roll: 2d20kh1}
     disadvantage: {roll: 2d20kl1}
+  # How the generic check tool/commands feed this system: favorable/unfavorable
+  # counts route to these roll modifiers; a dc-target check without an explicit
+  # DC uses default_target; the proficient flag adds the named canonical stat.
+  check:
+    favorable: advantage
+    unfavorable: disadvantage
+    default_target: 15
+    proficiency: 熟练加值
+    default_skill: 察觉
   ranks:
     - {id: crit, when: "dice[0] == 20", success: true, critical: true, tier: 3}
     - {id: fumble, when: "dice[0] == 1", fumble: true, tier: 0}
@@ -98,15 +108,46 @@ labels:
     fail: {display: 失败, markers: []}
     fumble: [大失败]
 derived:
-  _generated: {computer_group: dnd5e}
+  力量调整值: {expr: "floor((力量 - 10) / 2)"}
+  敏捷调整值: {expr: "floor((敏捷 - 10) / 2)"}
+  体质调整值: {expr: "floor((体质 - 10) / 2)"}
+  智力调整值: {expr: "floor((智力 - 10) / 2)"}
+  感知调整值: {expr: "floor((感知 - 10) / 2)"}
+  魅力调整值: {expr: "floor((魅力 - 10) / 2)"}
+  运动: {copy_of: 力量调整值}
+  体操: {copy_of: 敏捷调整值}
+  巧手: {copy_of: 敏捷调整值}
+  隐匿: {copy_of: 敏捷调整值}
+  调查: {copy_of: 智力调整值}
+  奥秘: {copy_of: 智力调整值}
+  历史: {copy_of: 智力调整值}
+  自然: {copy_of: 智力调整值}
+  宗教: {copy_of: 智力调整值}
+  察觉: {copy_of: 感知调整值}
+  洞悉: {copy_of: 感知调整值}
+  驯兽: {copy_of: 感知调整值}
+  医药: {copy_of: 感知调整值}
+  求生: {copy_of: 感知调整值}
+  游说: {copy_of: 魅力调整值}
+  欺瞒: {copy_of: 魅力调整值}
+  威吓: {copy_of: 魅力调整值}
+  表演: {copy_of: 魅力调整值}
+  pp: {expr: "10 + 察觉"}
+  先攻修正: {copy_of: 敏捷调整值}
+  速度: {expr: "30"}
+  载重: {expr: "力量 * 15"}
+  负重: {expr: "力量 * 10"}
+  护甲等级: {expr: "10 + 敏捷调整值"}
+  熟练加值: {expr: "floor((等级 - 1) / 4) + 2"}
+  被动感知: {copy_of: pp}
 creation_constraints:
-  abilities:
-    STR: {min: 3, max: 18, point_buy_min: 8, point_buy_max: 15, roll: "4d6kh3"}
-    DEX: {min: 3, max: 18, point_buy_min: 8, point_buy_max: 15, roll: "4d6kh3"}
-    CON: {min: 3, max: 18, point_buy_min: 8, point_buy_max: 15, roll: "4d6kh3"}
-    INT: {min: 3, max: 18, point_buy_min: 8, point_buy_max: 15, roll: "4d6kh3"}
-    WIS: {min: 3, max: 18, point_buy_min: 8, point_buy_max: 15, roll: "4d6kh3"}
-    CHA: {min: 3, max: 18, point_buy_min: 8, point_buy_max: 15, roll: "4d6kh3"}
+  attributes:
+    STR: {min: 3, max: 18, roll: "4d6kh3"}
+    DEX: {min: 3, max: 18, roll: "4d6kh3"}
+    CON: {min: 3, max: 18, roll: "4d6kh3"}
+    INT: {min: 3, max: 18, roll: "4d6kh3"}
+    WIS: {min: 3, max: 18, roll: "4d6kh3"}
+    CHA: {min: 3, max: 18, roll: "4d6kh3"}
   methods:
     point_buy:
       budget: 27
@@ -119,9 +160,34 @@ creation_constraints:
       formula: "4d6kh3"
       min: 3
       max: 18
+  # Concept-driven placement priority for standard-array creation: which
+  # attribute (storage key) gets the best value per archetype keyword. Pure
+  # game DATA consumed by the generic persona->sheet builder.
+  archetype_priorities:
+    barbarian: [STR, CON, DEX, WIS, CHA, INT]
+    bard: [CHA, DEX, CON, WIS, INT, STR]
+    cleric: [WIS, CON, STR, CHA, INT, DEX]
+    druid: [WIS, CON, DEX, INT, CHA, STR]
+    fighter: [STR, CON, DEX, WIS, INT, CHA]
+    monk: [DEX, WIS, CON, STR, INT, CHA]
+    paladin: [STR, CHA, CON, WIS, DEX, INT]
+    ranger: [DEX, WIS, CON, STR, INT, CHA]
+    rogue: [DEX, INT, CON, CHA, WIS, STR]
+    sorcerer: [CHA, CON, DEX, WIS, INT, STR]
+    warlock: [CHA, CON, DEX, WIS, INT, STR]
+    wizard: [INT, CON, DEX, WIS, CHA, STR]
+  default_archetype: fighter
+# Initiative order roll: {name} slots read the sheet's canonical values.
+initiative:
+  roll: "1d20 + {先攻修正}"
 # Presentation-only localized names for canonical keys (see coc7.yaml display note).
 display:
+  zh:
+    advantage: 优势
+    disadvantage: 劣势
   en:
+    advantage: Advantage
+    disadvantage: Disadvantage
     力量: STR
     敏捷: DEX
     体质: CON
@@ -156,6 +222,96 @@ subsystems:
 commands:
   ra: {action: check}
   rc: {action: check}
+  dnd: {action: make_char}
+  dnd5e: {action: make_char}
 expertise:
   en: "# Dungeons & Dragons 5E — DM\nHeroic adventure across the three pillars: combat, exploration, and social play. Run tactical, readable combat and reward creative use of abilities. The engine computes checks, advantage/disadvantage, and criticals; you narrate from its results."
   zh: "# 龙与地下城 5E——DM\n横跨战斗、探索、社交三大支柱的英雄冒险。把战斗跑得有战术、看得清，奖励对能力的创造性使用。检定、优势/劣势与大成功大失败由引擎计算；你按结果叙事。"
+
+sheet:
+  label: DnD5e
+  attr_keys:
+    力量: STR
+    敏捷: DEX
+    体质: CON
+    智力: INT
+    感知: WIS
+    魅力: CHA
+  skill_keys:
+    求生: 生存
+  secondary_keys:
+    hp: 生命值
+    hpmax: 生命值上限
+    ac: 护甲等级
+    dc: 难度等级
+    pp: 被动感知
+    熟练: 熟练加值
+    先攻修正: 先攻修正
+    速度: 速度
+    载重: 载重
+    负重: 负重
+    护甲等级: 护甲等级
+    熟练加值: 熟练加值
+    被动感知: 被动感知
+  field_keys:
+    等级: level
+    职业: character_class
+    种族: race
+  # Check-input bridge: rolling a check "on" the LEFT canonical feeds the
+  # RIGHT canonical's value into the roll (an ability check uses its modifier).
+  check_values:
+    力量: 力量调整值
+    敏捷: 敏捷调整值
+    体质: 体质调整值
+    智力: 智力调整值
+    感知: 感知调整值
+    魅力: 魅力调整值
+  attributes:
+    STR: 10
+    DEX: 10
+    CON: 10
+    INT: 10
+    WIS: 10
+    CHA: 10
+  secondary:
+    护甲等级: 10
+    先攻修正: 0
+    速度: 30
+    熟练加值: 2
+    被动感知: 10
+  fields:
+    character_class: ""
+    race: ""
+    level: 1
+  hit_points: {current: 8, max: 8}
+  # Untrained skill modifiers + secondary stats recompute from abilities/level;
+  # a trained (stored) skill value wins over its derived base.
+  derived_skills:
+    运动: 运动
+    体操: 体操
+    巧手: 巧手
+    隐匿: 隐匿
+    调查: 调查
+    奥秘: 奥秘
+    历史: 历史
+    自然: 自然
+    宗教: 宗教
+    察觉: 察觉
+    洞悉: 洞悉
+    驯兽: 驯兽
+    医药: 医药
+    生存: 求生
+    游说: 游说
+    欺瞒: 欺瞒
+    威吓: 威吓
+    表演: 表演
+  derived_secondary:
+    先攻修正: 先攻修正
+    速度: 速度
+    载重: 载重
+    负重: 负重
+    护甲等级: 护甲等级
+    熟练加值: 熟练加值
+    被动感知: 被动感知
+  resources:
+    - {id: hp, label: HP, source: hit_points}

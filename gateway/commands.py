@@ -12,21 +12,20 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from agent.context import AgentCtx
-from agent.kp_tools_mechanics import InitiativeTools
+from agent.kp_tools_mechanics import InitiativeTools, roll_initiative
 from agent.services import Services, room_rule_variant, set_room_rule_variant
 from core.battle_recording import record_check, record_dice_roll
 from core.char_from_persona import build_sheet_from_description
 from core.character_manager import (
     CharacterDataError,
     CharacterSheet,
-    get_hit_points,
-    recompute_dnd_derived,
-    set_hit_points,
 )
 from core.character_rules import render_validation_notice, validate_sheet
 from core.check_outcome import CheckOutcome, outcome_wire
 from core.dice_engine import DiceResult
 from core.rulepacks import RulePack, all_command_words, load_rulepack
+from core.sheets import canonical_values as sheet_canonical_values
+from core.sheets import check_value, set_sheet_value, sheet_value
 from core.skills import available_skills
 from gateway.audio import build_audio_control, list_audio_items, resolve_audio_item, update_audio_item
 from gateway.avatar import AvatarError, set_target_avatar, set_user_avatar
@@ -99,85 +98,11 @@ _SLASH_NAME_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
 # assignment regex) and stalling the event loop.
 _MAX_COMMAND_ARG_LEN = 4000
 
-_GENCHAR_SYSTEMS = {
-    "coc": "coc7",
-    "coc7": "coc7",
-    "dnd": "dnd5e",
-    "dnd5e": "dnd5e",
-    "d&d5e": "dnd5e",
-}
-
-_COC_ATTR_TO_KEY = {
-    "力量": "STR",
-    "体质": "CON",
-    "体型": "SIZ",
-    "敏捷": "DEX",
-    "外貌": "APP",
-    "智力": "INT",
-    "意志": "POW",
-    "教育": "EDU",
-    "幸运": "LUC",
-    "理智": "SAN",
-    "理智上限": "SANMAX",
-    "生命值": "HP",
-    "生命值上限": "HPMAX",
-    "魔法值": "MP",
-    "魔法值上限": "MPMAX",
-    "DB": "DB",
-    "体格": "BUILD",
-    "移动力": "MOV",
-    "护甲": "AR",
-}
-_COC_KEY_TO_ATTR = {value: key for key, value in _COC_ATTR_TO_KEY.items()}
-_COC_SKILL_TO_MANAGER = {
-    "信用评级": "信用",
-    "图书馆": "图书馆",
-    "博物": "博物",
-    "骑乘": "骑乘",
-    "驯兽": "驯兽",
-}
-
-_DND_ATTR_TO_KEY = {
-    "力量": "STR",
-    "敏捷": "DEX",
-    "体质": "CON",
-    "智力": "INT",
-    "感知": "WIS",
-    "魅力": "CHA",
-}
-_DND_KEY_TO_ATTR = {value: key for key, value in _DND_ATTR_TO_KEY.items()}
-_DND_SECONDARY_TO_KEY = {
-    "hp": "生命值",
-    "hpmax": "生命值上限",
-    "ac": "护甲等级",
-    "dc": "难度等级",
-    "pp": "被动感知",
-    "熟练": "熟练加值",
-}
-_DND_SKILL_TO_MANAGER = {"求生": "生存"}
-_DND_SKILLS = {
-    "运动",
-    "体操",
-    "巧手",
-    "隐匿",
-    "调查",
-    "奥秘",
-    "历史",
-    "自然",
-    "宗教",
-    "察觉",
-    "洞悉",
-    "驯兽",
-    "医药",
-    "求生",
-    "游说",
-    "欺瞒",
-    "威吓",
-    "表演",
-}
-
-_ADV_WORDS = {"adv", "advantage", "优势", "優勢"}
-_DIS_WORDS = {"dis", "disadvantage", "劣势", "劣勢"}
+# Generic favorable/unfavorable/proficiency command words for check arguments.
+# The words route to whatever roll modifiers the room pack's `resolution.check`
+# declares; game-term vocabulary, exempt from i18n.
+_FAVOR_WORDS = {"adv", "advantage", "优势", "優勢"}
+_DISFAVOR_WORDS = {"dis", "disadvantage", "劣势", "劣勢"}
 _PROF_WORDS = {"prof", "proficient", "proficiency", "熟练", "熟練"}
 
 # `.party` subcommand vocabularies (EN + a couple of CN synonyms) -- AI companion party (M10).
@@ -511,25 +436,32 @@ class CommandRouter:
 
     async def cmd_check(self, ctx: CommandCtx) -> str:
         character = await ctx.services.characters.get_character(ctx.user_id, ctx.chat_key)
-        if character.system == "DnD5e":
-            return await self._cmd_check_dnd(ctx, character)
-        return await self._cmd_check_coc(ctx, character)
+        return await self._cmd_check_generic(ctx, character)
 
     async def cmd_opposed(self, ctx: CommandCtx) -> str:
         character = await ctx.services.characters.get_character(ctx.user_id, ctx.chat_key)
-        pack = load_rulepack("coc7")
-        args = ctx.args or "侦查"
-        left_text, right_text = _split_two_args(args)
-        left = _parse_coc_check_args(left_text or "侦查", pack)
-        right = _parse_coc_check_args(right_text or left.name, pack)
-        variant = await _get_rule_variant(ctx)
+        pack = await _pack_for_character(ctx, character)
         resolver = pack.resolver
-        left_value = _coc_check_value(character, pack, left.name, left.temp_value)
-        right_value = _coc_check_value(character, pack, right.name, right.temp_value)
+        if resolver is None:
+            return ctx.i18n.t("commands.pack_word.not_in_system", word=ctx.spec.canonical)
+        default_skill = resolver.check.default_skill
+        args = ctx.args or default_skill
+        left_text, right_text = _split_two_args(args)
+        left = _parse_check_args(left_text or default_skill, pack)
+        right = _parse_check_args(right_text or left.name, pack)
+        variant = await _get_rule_variant(ctx)
+        left_value = _target_value(character, pack, left.canonical, left.temp_value)
+        right_value = _target_value(character, pack, right.canonical, right.temp_value)
         left_rolled = ctx.services.dice.roll_for_check(resolver)
         right_rolled = ctx.services.dice.roll_for_check(resolver)
-        left_outcome = resolver.interpret(left_rolled, left_value, variant=variant, difficulty=left.difficulty)
-        right_outcome = resolver.interpret(right_rolled, right_value, variant=variant, difficulty=right.difficulty)
+        if resolver.target_kind == "dc":
+            # Modifier-vs-modifier systems: each side's check value folds into
+            # its roll; ranks (nat-crit/fumble) still grade, totals break ties.
+            left_outcome = resolver.interpret(left_rolled, None, variant=variant, modifier=left_value)
+            right_outcome = resolver.interpret(right_rolled, None, variant=variant, modifier=right_value)
+        else:
+            left_outcome = resolver.interpret(left_rolled, left_value, variant=variant, difficulty=left.difficulty)
+            right_outcome = resolver.interpret(right_rolled, right_value, variant=variant, difficulty=right.difficulty)
         left_rank, right_rank = left_outcome.rank, right_outcome.rank
         if left_rank.tier > right_rank.tier:
             winner = ctx.i18n.t("commands.opposed.left")
@@ -553,8 +485,8 @@ class CommandRouter:
             outcome=outcome_wire(left_outcome, left_label),
             detail={
                 "winner": winner_side,
-                "left": _coc_event_side(left_name, left_outcome, left_label),
-                "right": _coc_event_side(right_name, right_outcome, right_label),
+                "left": _event_side(left_name, left_outcome, left_label),
+                "right": _event_side(right_name, right_outcome, right_label),
             },
         )
         return ctx.i18n.t(
@@ -570,17 +502,17 @@ class CommandRouter:
 
     async def cmd_sanity(self, ctx: CommandCtx) -> str:
         character = await ctx.services.characters.get_character(ctx.user_id, ctx.chat_key)
-        pack = _pack_for_character(character)
+        pack = await _pack_for_character(ctx, character)
         loss_spec = next(
             (spec for spec in pack.subsystems.values() if spec.template == "check_with_loss"), None
         )
         if loss_spec is None or pack.resolver is None:
             return ctx.i18n.t("commands.pack_word.not_in_system", word=ctx.spec.canonical)
         stat_canonical = pack.resolve_skill(loss_spec.stat) or loss_spec.stat
-        parsed = _parse_coc_check_args(ctx.args or "0/1", pack, default_name=stat_canonical)
+        parsed = _parse_check_args(ctx.args or "0/1", pack, default_name=stat_canonical, split_loss=True)
         loss_text = parsed.remaining or ctx.args or "0/1"
         success_loss, failure_loss = _parse_sanity_loss(loss_text)
-        san = _get_sheet_value(character, pack, stat_canonical)
+        san = sheet_value(character, pack, stat_canonical)
         variant = await _get_rule_variant(ctx)
         resolver = pack.resolver
         rolled = ctx.services.dice.roll_for_check(
@@ -594,7 +526,7 @@ class CommandRouter:
             loss = _roll_loss(ctx.services, loss_expr)
         except ValueError:
             return ctx.i18n.t("commands.roll.invalid", expr=loss_expr)
-        _set_sheet_value(character, pack, stat_canonical, max(0, san - loss))
+        set_sheet_value(character, pack, stat_canonical, max(0, san - loss))
         await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
         ctx.dice(
             "subsystem",
@@ -636,22 +568,22 @@ class CommandRouter:
 
     async def cmd_sheet(self, ctx: CommandCtx) -> str:
         character = await ctx.services.characters.get_character(ctx.user_id, ctx.chat_key)
-        pack = _pack_for_character(character)
+        pack = await _pack_for_character(ctx, character)
         args = ctx.args.strip()
         if not args or args.casefold() == "show":
             return _render_sheet(ctx, character, pack)
         if args.casefold() in {"clr", "clear", "del", "delete"}:
             await ctx.services.characters.delete_character(ctx.user_id, ctx.chat_key, character.name)
             return ctx.i18n.t("commands.sheet.deleted", name=character.name)
-        _migrate_legacy_coc_luck(character)
+        _migrate_legacy_luck(character, pack)
         if args.casefold() in _SHEET_FINALIZE_WORDS:
-            # A manual build (`.coc`/`.dnd` with DEFAULT characteristics, then one or
+            # A manual build (a make-char word with DEFAULT characteristics, then one or
             # more `.st` edits to the chosen ones) never re-derives current HP/MP/SAN:
             # `.st` validates with `initialize_vitals=False` (in-play EDIT semantics —
             # preserve, never heal) by design (see `core.character_rules.validate_sheet`).
             # This finalize word is the CREATION-side re-derive: it forces the current
             # vitals back to their maxima for the sheet's final characteristics, same as
-            # `.coc`/`.dnd`/`.genchar` do at birth. Safe to reuse mid-play too (a player
+            # the make-char/`.genchar` commands do at birth. Safe to reuse mid-play too (a player
             # who wants to top off HP/MP/SAN to the current max after e.g. levelling can
             # invoke it deliberately) since it is the same explicit, opt-in verb.
             character, violations = validate_sheet(character, character.system, initialize_vitals=True)
@@ -669,28 +601,24 @@ class CommandRouter:
         explicit_values: list[tuple[str, int]] = []
         for raw_name, raw_value in assignments:
             canonical = pack.resolve_skill(raw_name) or raw_name.strip()
-            current = _get_sheet_value(character, pack, canonical)
+            current = sheet_value(character, pack, canonical)
             # A malformed value expression (bad int, or an over-large dice term like
             # `力量+9999d6` that trips d20's roll cap) must not crash the turn.
             try:
                 value = _apply_value_expr(ctx.services, current, raw_value)
             except ValueError:
                 return ctx.i18n.t("commands.roll.invalid", expr=raw_value)
-            _set_sheet_value(character, pack, canonical, value)
+            set_sheet_value(character, pack, canonical, value)
             changed_names.append(canonical)
             explicit_values.append((canonical, value))
-        character, violations = validate_sheet(character, character.system)
-        if character.system == "DnD5e" and any(name in _DND_ATTR_TO_KEY for name in changed_names):
-            # Ability edits invalidate every ability-derived field. Recompute once
-            # after validation has clamped the final scores, then restore explicit
-            # same-command overrides such as ``.st AC18 DEX14``.
-            recompute_dnd_derived(character)
-            for canonical, value in explicit_values:
-                if canonical not in _DND_ATTR_TO_KEY:
-                    _set_sheet_value(character, pack, canonical, value)
+        # Derived slots refresh inside validate_sheet/save; an explicit override
+        # written in the SAME command (``.st AC18 DEX14``) survives through the
+        # trained-value semantics of the derived pipeline (a stored value that
+        # differs from its derivation is a manual override and is preserved).
+        character, violations = validate_sheet(character, pack.system)
         for canonical in changed_names:
             changed.append(
-                ctx.i18n.t("commands.sheet.changed_item", name=canonical, value=_get_sheet_value(character, pack, canonical))
+                ctx.i18n.t("commands.sheet.changed_item", name=canonical, value=sheet_value(character, pack, canonical))
             )
         await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
         result = ctx.i18n.t("commands.sheet.changed", items=", ".join(changed))
@@ -704,7 +632,7 @@ class CommandRouter:
     async def cmd_language(self, ctx: CommandCtx) -> str:
         """`.language <en|zh>` — set the room-wide display locale. ``chat_locale`` is
         room-scoped (``user_key=""``), so this changes the language for EVERY member;
-        the write is keeper-gated in-handler like ``.setcoc``/``.bot`` so a networked
+        the write is keeper-gated in-handler like ``.rule``/``.bot`` so a networked
         player cannot flip the whole table's language."""
         locale = ctx.args.strip().casefold()
         if locale not in {"en", "zh"}:
@@ -716,17 +644,26 @@ class CommandRouter:
         return get_i18n(locale).t("commands.language.done")
 
     async def cmd_growth(self, ctx: CommandCtx) -> str:
+        """The pack-declared improvement check (`improvement_check` template):
+        roll above the current value (or above the auto-success line) to grow
+        the stat by the declared improvement roll."""
         character = await ctx.services.characters.get_character(ctx.user_id, ctx.chat_key)
-        pack = _pack_for_character(character)
-        name = ctx.args or ("侦查" if character.system != "DnD5e" else "察觉")
+        pack = await _pack_for_character(ctx, character)
+        spec = next((entry for entry in pack.subsystems.values() if entry.template == "improvement_check"), None)
+        if spec is None:
+            return ctx.i18n.t("commands.pack_word.not_in_system", word=ctx.spec.canonical)
+        default_skill = pack.resolver.check.default_skill if pack.resolver else ""
+        name = ctx.args or default_skill
         canonical = pack.resolve_skill(name) or name
-        current = _get_sheet_value(character, pack, canonical)
-        roll = ctx.services.dice.roll_expression("1d100").total
-        gain = ctx.services.dice.roll_expression("1d10").total if roll > current else 0
+        current = sheet_value(character, pack, canonical)
+        roll = ctx.services.dice.roll_expression(spec.roll).total
+        grows = roll > current or (spec.auto_success_above is not None and roll > spec.auto_success_above)
+        gain = ctx.services.dice.roll_expression(spec.improve).total if grows else 0
+        new_value = min(spec.cap, current + gain)
         if gain:
-            _set_sheet_value(character, pack, canonical, current + gain)
+            set_sheet_value(character, pack, canonical, new_value)
             await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
-        return ctx.i18n.t("commands.growth.result", name=canonical, roll=roll, gain=gain, value=current + gain)
+        return ctx.i18n.t("commands.growth.result", name=canonical, roll=roll, gain=gain, value=new_value)
 
     async def cmd_initiative(self, ctx: CommandCtx) -> str:
         action = ctx.args.strip().casefold()
@@ -736,30 +673,25 @@ class CommandRouter:
             return await InitiativeTools(ctx.services).initiative_tracker(ctx.raw_ctx, action=action)
 
         character = await ctx.services.characters.get_character(ctx.user_id, ctx.chat_key)
-        if character.system == "DnD5e":
-            modifier = ctx.services.characters.get_dnd_ability_modifier(character, "DEX")
-            expr = _d20_expr(modifier)
-            result = ctx.services.dice.roll_expression(expr, is_check=True)
-            ctx.dice("init", name=character.name, **_dice_result_fields(result))
-            return ctx.i18n.t("commands.init.result", name=character.name, result=_format_roll(result, ctx.i18n))
-        try:
-            dex = int(character.attributes.get("DEX", 50))
-        except (ValueError, TypeError):
-            dex = 50
-        result = ctx.services.dice.roll_expression(f"1d100+{dex}", is_check=True)
+        result = roll_initiative(ctx.services, character)
         ctx.dice("init", name=character.name, **_dice_result_fields(result))
         return ctx.i18n.t("commands.init.result", name=character.name, result=_format_roll(result, ctx.i18n))
 
-    async def cmd_make_char(self, ctx: CommandCtx) -> str:
-        template = "dnd5e" if ctx.spec.canonical == "dnd" else "coc7"
-        default_name_key = "commands.character.dnd_name" if template == "dnd5e" else "commands.character.coc_name"
-        name = ctx.args.strip() or ctx.i18n.t(default_name_key)
-        character = ctx.services.characters.generate_character(template, name)
+    async def cmd_make_char(self, ctx: CommandCtx, pack: RulePack | None = None) -> str:
+        """Create a sheet for `pack`'s system (the pack whose `make_char`
+        command word routed here — the word set itself is pack data), falling
+        back to the room's active system."""
+        if pack is None:
+            from agent.kp_tools_subsystems import room_rulepack
+
+            pack = await room_rulepack(ctx.services, ctx.raw_ctx)
+        name = ctx.args.strip() or ctx.i18n.t("commands.character.default_name")
+        character = ctx.services.characters.generate_character(pack.system, name)
         character, violations = validate_sheet(
             character,
-            template,
+            pack.system,
             initialize_vitals=True,
-            creation_method="rolled" if template == "dnd5e" else None,
+            creation_method="rolled",
         )
         await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
         result = ctx.i18n.t("commands.character.created", name=character.name, system=character.system)
@@ -770,14 +702,19 @@ class CommandRouter:
         request = _parse_genchar_args(ctx.args)
         if request is None:
             return ctx.i18n.t("charcard.commands.genchar.usage")
+        system = request.system
+        if not system:
+            from agent.kp_tools_subsystems import room_rulepack
+
+            system = (await room_rulepack(ctx.services, ctx.raw_ctx)).system
 
         character = await build_sheet_from_description(
             ctx.services,
             request.description,
-            request.system,
+            system,
             name=request.name,
         )
-        character, violations = validate_sheet(character, request.system, initialize_vitals=True)
+        character, violations = validate_sheet(character, system, initialize_vitals=True)
         await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
         result = ctx.i18n.t("charcard.commands.genchar.done", name=character.name, system=character.system)
         notice = render_validation_notice(ctx.i18n, violations)
@@ -824,8 +761,15 @@ class CommandRouter:
         """A pack-declared dot-command dialect word (`.sc`, `.en`, `.ti`, …):
         resolved through the ROOM's rule system — a word the room's pack does
         not declare is refused, so a system without the mechanic simply does
-        not have the command (stage D materialization at the command layer)."""
+        not have the command (stage D materialization at the command layer).
+        Exception: a make-char word is the ENTRY POINT into the pack that
+        declares it, so it resolves across all installed packs."""
         from agent.kp_tools_subsystems import dispatch_subsystem, room_rulepack
+        from core.rulepacks import pack_declaring_command
+
+        maker = pack_declaring_command(ctx.spec.canonical, "make_char")
+        if maker is not None:
+            return await self.cmd_make_char(ctx, maker)
 
         pack = await room_rulepack(ctx.services, ctx.raw_ctx)
         binding = pack.commands.get(ctx.spec.canonical)
@@ -1637,7 +1581,7 @@ class CommandRouter:
         return ctx.i18n.t("worldbook.commands.lore.usage")
 
     async def cmd_import(self, ctx: CommandCtx) -> str:
-        """`.import <card file> [coc7|dnd5e] [pc|companion|world]` — import a SillyTavern card.
+        """`.import <card file> [system] [pc|companion|world]` — import a SillyTavern card.
 
         `pc`/`companion` take the card's CHARACTER half only (`core.card_split` strips hook
         scripts, variable declarations and EJS — module machinery is never player-importable).
@@ -1646,10 +1590,12 @@ class CommandRouter:
         """
         from agent.kp_tools_charcard import CharcardTools
 
-        option_words = {"coc7", "coc", "dnd5e", "dnd", "pc", "companion", "world", "世界"}
+        def _is_option(word: str) -> bool:
+            return word in {"pc", "companion", "world", "世界"} or _resolve_system_token(word) is not None
+
         tokens = ctx.args.split()
         attachment = _first_attachment_name(ctx.raw_ctx)
-        if attachment and (not tokens or tokens[0].casefold() in option_words):
+        if attachment and (not tokens or _is_option(tokens[0].casefold())):
             file_path = attachment
             options = tokens
             from_attachment = True
@@ -1673,16 +1619,18 @@ class CommandRouter:
             resolved = resolve_installed_path(ctx.services.settings.data_dir, file_path)
             if resolved is not None:
                 file_path = str(resolved)
-        system = "coc7"
+        system = ""
         as_ = "pc"
         for token in options:
             low = token.casefold()
-            if low in {"coc7", "coc", "dnd5e", "dnd"}:
-                system = low
-            elif low in {"pc", "companion"}:
+            if low in {"pc", "companion"}:
                 as_ = low
             elif low in {"world", "世界"}:
                 as_ = "world"
+            else:
+                resolved = _resolve_system_token(low)
+                if resolved:
+                    system = resolved
         tools = CharcardTools(ctx.services)
         if as_ == "world":
             # The ONLY entrance to the world-import path (deliberately not a model tool):
@@ -2312,8 +2260,6 @@ class CommandRouter:
                 private_reply=True,
             ),
             CommandSpec("init", self.cmd_initiative, ["init", "initiative", "ri"], ["ri", "init"], {"name": "init"}, "commands.help.init"),
-            CommandSpec("coc", self.cmd_make_char, ["coc", "coc7"], ["coc", "coc7"], {"name": "coc"}, "commands.help.coc"),
-            CommandSpec("dnd", self.cmd_make_char, ["dnd", "dnd5e"], ["dnd", "dnd5e"], {"name": "dnd"}, "commands.help.dnd"),
             CommandSpec(
                 "genchar",
                 self.cmd_genchar,
@@ -2497,34 +2443,82 @@ class CommandRouter:
     def _locale_order(self, locale: str) -> tuple[str, str]:
         return ("zh", "en") if _is_zh(locale) else ("en", "zh")
 
-    async def _cmd_check_coc(self, ctx: CommandCtx, character: CharacterSheet) -> str:
-        pack = load_rulepack("coc7")
-        args = ctx.args or "侦查"
-        times, rest = _split_multi(args)
-        parsed = _parse_coc_check_args(rest, pack)
-        target_value = _coc_check_value(character, pack, parsed.name, parsed.temp_value)
-        variant = await _get_rule_variant(ctx)
+    async def _cmd_check_generic(self, ctx: CommandCtx, character: CharacterSheet) -> str:
+        """One check command for every system, shaped entirely by the pack:
+        ``target_kind`` picks whether the sheet value IS the target (roll-under
+        family) or folds into the roll as a modifier against an explicit target
+        (d20 family; a bare command shows the roll ungraded), and the parsed
+        favorable/unfavorable counts route to the pack's declared modifiers."""
+        pack = await _pack_for_character(ctx, character)
         resolver = pack.resolver
-        effective_target = resolver.effective_target(target_value, difficulty=parsed.difficulty)
+        if resolver is None:
+            return ctx.i18n.t("commands.pack_word.not_in_system", word=ctx.spec.canonical)
+        check = resolver.check
+        args = ctx.args or check.default_skill
+        times, rest = _split_multi(args)
+        parsed = _parse_check_args(rest, pack, default_name=check.default_skill)
+        variant = await _get_rule_variant(ctx)
+
+        modifiers: dict[str, int] = {}
+        favor_net = parsed.bonus - parsed.penalty
+        if favor_net > 0 and check.favorable:
+            modifiers[check.favorable] = favor_net
+        elif favor_net < 0 and check.unfavorable:
+            modifiers[check.unfavorable] = -favor_net
+
+        if resolver.target_kind == "dc":
+            target_value = parsed.temp_value  # explicit target; None = ungraded roll
+            modifier = check_value(character, pack, parsed.canonical)
+            if parsed.proficient and check.proficiency:
+                modifier += sheet_value(character, pack, check.proficiency)
+        else:
+            target_value = _target_value(character, pack, parsed.canonical, parsed.temp_value)
+            modifier = 0
+
+        effective_target = (
+            resolver.effective_target(target_value, difficulty=parsed.difficulty)
+            if target_value is not None
+            else None
+        )
+        display_name = pack.display_name(parsed.canonical, ctx.locale)
         lines = []
         for _ in range(min(times, 20)):
-            rolled = ctx.services.dice.roll_for_check(
-                resolver, modifiers={"bonus": parsed.bonus, "penalty": parsed.penalty}
-            )
+            rolled = ctx.services.dice.roll_for_check(resolver, modifiers=modifiers or None)
+            total = rolled.total + modifier
+            if target_value is None:
+                # No target declared for a modifier-style system: show the roll.
+                ctx.dice(
+                    "check",
+                    skill=parsed.canonical,
+                    expr=display_name,
+                    rolls=list(rolled.modifiers.get("dice_all", rolled.dice)) or [rolled.total],
+                    total=total,
+                    detail={"modifier": modifier, **dict(rolled.modifiers)},
+                )
+                lines.append(
+                    ctx.i18n.t(
+                        "commands.check.roll",
+                        name=display_name,
+                        modifier=_signed(modifier),
+                        roll=rolled.total,
+                        total=total,
+                    )
+                )
+                continue
             outcome = resolver.interpret(
-                rolled, target_value, variant=variant, difficulty=parsed.difficulty
+                rolled, target_value, variant=variant, difficulty=parsed.difficulty, modifier=modifier
             )
             label = pack.rank_label(outcome.rank.id, ctx.locale)
-            display_name = pack.display_name(parsed.canonical, ctx.locale)
             ctx.dice(
                 "check",
                 expr=display_name,
+                skill=parsed.canonical,
                 rolls=[rolled.total],
-                total=rolled.total,
+                total=total,
                 target=target_value,
                 effective_target=effective_target,
                 outcome=outcome_wire(outcome, label),
-                detail=dict(rolled.modifiers),
+                detail={"modifier": modifier, **dict(rolled.modifiers)},
             )
             await record_check(
                 ctx.services.battles,
@@ -2536,44 +2530,21 @@ class CommandRouter:
                 label=label,
                 bonus=parsed.bonus,
                 penalty=parsed.penalty,
+                **({"modifier": modifier} if modifier else {}),
                 **({"variant": variant} if variant else {}),
                 **({"difficulty": parsed.difficulty} if parsed.difficulty else {}),
             )
             lines.append(
                 ctx.i18n.t(
-                    "commands.check.coc",
+                    "commands.check.result",
                     name=display_name,
                     target=target_value,
                     effective=effective_target,
-                    roll=rolled.total,
+                    roll=total,
                     rank=label,
                 )
             )
         return "\n".join(lines)
-
-    async def _cmd_check_dnd(self, ctx: CommandCtx, character: CharacterSheet) -> str:
-        pack = load_rulepack("dnd5e")
-        parsed = _parse_dnd_check_args(ctx.args or "perception", pack)
-        canonical = parsed["canonical"]
-        modifier = _dnd_modifier(ctx.services, character, canonical, parsed["proficient"])
-        expr = _d20_expr(modifier)
-        if parsed["mode"] == "adv":
-            result = ctx.services.dice.roll_advantage(expr, is_check=True)
-        elif parsed["mode"] == "dis":
-            result = ctx.services.dice.roll_disadvantage(expr, is_check=True)
-        else:
-            result = ctx.services.dice.roll_expression(expr, is_check=True)
-        ctx.dice(
-            "check",
-            skill=canonical,
-            **_dice_result_fields(result),
-        )
-        return ctx.i18n.t(
-            "commands.check.dnd",
-            name=pack.display_name(canonical, ctx.locale),
-            modifier=_signed(modifier),
-            result=_format_roll(result, ctx.i18n),
-        )
 
     def _render_inline_rolls(self, text: str, locale: str) -> str | None:
         matches = _INLINE_RE.findall(text)
@@ -2595,17 +2566,33 @@ class CommandRouter:
 
 
 @dataclass
-class _CocParsedCheck:
+class _ParsedCheck:
     name: str
     canonical: str
     difficulty: str | None = None
     bonus: int = 0
     penalty: int = 0
+    proficient: bool = False
     temp_value: int | None = None
     remaining: str = ""
 
 
+def _resolve_system_token(token: str) -> str | None:
+    """Resolve a command token to a canonical rule-system id via the pack
+    registry's declared names (None when it names no installed system)."""
+    word = token.strip()
+    if not word:
+        return None
+    try:
+        return load_rulepack(word).system
+    except Exception:
+        return None
+
+
 def _parse_genchar_args(args: str) -> GenCharRequest | None:
+    """Parse `.genchar [system] [name] | <description>`. A leading token naming
+    an installed rule system selects it; ``system=""`` means the caller should
+    fall back to the room's active system."""
     raw = args.strip()
     if not raw:
         return None
@@ -2613,20 +2600,24 @@ def _parse_genchar_args(args: str) -> GenCharRequest | None:
     head, sep, body = raw.partition("|")
     if sep:
         tokens = head.split()
-        system = "coc7"
+        system = ""
         name = head.strip()
-        if tokens and tokens[0].casefold() in _GENCHAR_SYSTEMS:
-            system = _GENCHAR_SYSTEMS[tokens[0].casefold()]
-            name = " ".join(tokens[1:]).strip()
+        if tokens:
+            resolved = _resolve_system_token(tokens[0])
+            if resolved:
+                system = resolved
+                name = " ".join(tokens[1:]).strip()
         description = body.strip()
     else:
         tokens = raw.split(maxsplit=1)
-        system = "coc7"
+        system = ""
         description = raw
         name = ""
-        if tokens and tokens[0].casefold() in _GENCHAR_SYSTEMS:
-            system = _GENCHAR_SYSTEMS[tokens[0].casefold()]
-            description = tokens[1].strip() if len(tokens) > 1 else ""
+        if tokens:
+            resolved = _resolve_system_token(tokens[0])
+            if resolved:
+                system = resolved
+                description = tokens[1].strip() if len(tokens) > 1 else ""
 
     if not description:
         return None
@@ -2659,7 +2650,7 @@ def _dice_result_fields(result: DiceResult) -> dict[str, Any]:
     }
 
 
-def _coc_event_side(name: str, outcome: CheckOutcome, label: str) -> dict[str, Any]:
+def _event_side(name: str, outcome: CheckOutcome, label: str) -> dict[str, Any]:
     return {
         "name": name,
         "target": outcome.target,
@@ -2689,13 +2680,13 @@ def _extract_roll_mode(expression: str) -> tuple[str, str]:
         return "", "1d20"
     first = tokens[0].casefold()
     last = tokens[-1].casefold()
-    if first in _ADV_WORDS:
+    if first in _FAVOR_WORDS:
         return "adv", " ".join(tokens[1:]) or "1d20"
-    if first in _DIS_WORDS:
+    if first in _DISFAVOR_WORDS:
         return "dis", " ".join(tokens[1:]) or "1d20"
-    if last in _ADV_WORDS:
+    if last in _FAVOR_WORDS:
         return "adv", " ".join(tokens[:-1]) or "1d20"
-    if last in _DIS_WORDS:
+    if last in _DISFAVOR_WORDS:
         return "dis", " ".join(tokens[:-1]) or "1d20"
     return "", expression
 
@@ -2707,17 +2698,38 @@ def _split_multi(args: str) -> tuple[int, str]:
     return max(1, int(match.group(1))), match.group(2).strip() or "1d20"
 
 
-def _parse_coc_check_args(text: str, pack: RulePack, default_name: str = "侦查") -> _CocParsedCheck:
+def _parse_check_args(
+    text: str, pack: RulePack, default_name: str = "", *, split_loss: bool = False
+) -> _ParsedCheck:
+    """Parse one check-command argument string against `pack`'s vocabulary:
+    b/p modifier counts, favorable/unfavorable/proficiency words, pack-declared
+    difficulty prefixes, and a trailing number as this check's target override.
+    ``split_loss`` (loss-rolling subsystem commands) keeps a `/`-bearing tail
+    intact in ``remaining`` instead of reading it as the stat name."""
     rest = text.strip() or default_name
     bonus = 0
     penalty = 0
+    proficient = False
     rest, bonus, penalty = _consume_bonus_penalty(rest, bonus, penalty)
     difficulty, rest = _consume_difficulty(rest, pack)
     rest, bonus, penalty = _consume_bonus_penalty(rest, bonus, penalty)
 
+    kept_tokens = []
+    for token in rest.split():
+        word = token.casefold()
+        if word in _FAVOR_WORDS:
+            bonus += 1
+        elif word in _DISFAVOR_WORDS:
+            penalty += 1
+        elif word in _PROF_WORDS:
+            proficient = True
+        else:
+            kept_tokens.append(token)
+    rest = " ".join(kept_tokens)
+
     name_text = rest.strip() or default_name
     remaining = ""
-    if "/" in name_text and default_name == "理智":
+    if split_loss and "/" in name_text:
         name_text, remaining = default_name, name_text
 
     temp_value = None
@@ -2728,15 +2740,35 @@ def _parse_coc_check_args(text: str, pack: RulePack, default_name: str = "侦查
             temp_value = int(match.group(2))
 
     canonical = pack.resolve_skill(name_text) or name_text
-    return _CocParsedCheck(
+    return _ParsedCheck(
         name=canonical,
         canonical=canonical,
         difficulty=difficulty,
         bonus=bonus,
         penalty=penalty,
+        proficient=proficient,
         temp_value=temp_value,
         remaining=remaining,
     )
+
+
+def _target_value(character: CharacterSheet, pack: RulePack, canonical: str, temp_value: int | None) -> int:
+    """The roll-under target for one check: an explicit per-check override wins,
+    else the sheet's check value for the canonical name."""
+    if temp_value is not None:
+        return temp_value
+    return check_value(character, pack, canonical)
+
+
+async def _pack_for_character(ctx: CommandCtx, character: CharacterSheet) -> RulePack:
+    """The rulepack governing `character`: its own system when resolvable,
+    falling back to the ROOM's active pack (bare/unset sheets)."""
+    try:
+        return load_rulepack(character.system)
+    except Exception:
+        from agent.kp_tools_subsystems import room_rulepack
+
+        return await room_rulepack(ctx.services, ctx.raw_ctx)
 
 
 def _consume_bonus_penalty(text: str, bonus: int, penalty: int) -> tuple[str, int, int]:
@@ -2788,45 +2820,6 @@ def _consume_difficulty(text: str, pack: RulePack) -> tuple[str | None, str]:
     return None, rest
 
 
-def _coc_check_value(character: CharacterSheet, pack: RulePack, canonical: str, temp_value: int | None) -> int:
-    if temp_value is not None:
-        return temp_value
-    return _get_sheet_value(character, pack, canonical)
-
-
-def _parse_dnd_check_args(text: str, pack: RulePack) -> dict[str, Any]:
-    tokens = text.split()
-    mode = ""
-    proficient = False
-    kept = []
-    for token in tokens:
-        word = token.casefold()
-        if word in _ADV_WORDS:
-            mode = "adv"
-        elif word in _DIS_WORDS:
-            mode = "dis"
-        elif word in _PROF_WORDS:
-            proficient = True
-        else:
-            kept.append(token)
-    name = " ".join(kept) or "perception"
-    canonical = pack.resolve_skill(name) or name
-    return {"canonical": canonical, "mode": mode, "proficient": proficient}
-
-
-def _dnd_modifier(services: Services, character: CharacterSheet, canonical: str, proficient: bool) -> int:
-    if canonical in _DND_ATTR_TO_KEY:
-        return services.characters.get_dnd_ability_modifier(character, _DND_ATTR_TO_KEY[canonical])
-    manager_name = _DND_SKILL_TO_MANAGER.get(canonical, canonical)
-    return services.characters.get_dnd_skill_modifier(character, manager_name, proficient=proficient)
-
-
-def _d20_expr(modifier: int) -> str:
-    if modifier == 0:
-        return "1d20"
-    return f"1d20{_signed(modifier)}"
-
-
 def _signed(value: int) -> str:
     return f"+{value}" if value >= 0 else str(value)
 
@@ -2867,117 +2860,15 @@ def _variant_display(variant: str | None) -> str:
     return variant[4:] if variant.startswith("rule") and variant[4:].isdigit() else variant
 
 
-def _pack_for_character(character: CharacterSheet) -> RulePack:
-    return load_rulepack("dnd5e" if character.system == "DnD5e" else "coc7")
-
-
-def _canonical_values(character: CharacterSheet, pack: RulePack) -> dict[str, Any]:
-    values = dict(pack.defaults)
-    if character.system == "DnD5e":
-        for key, value in character.attributes.items():
-            values[_DND_KEY_TO_ATTR.get(key, key)] = value
-        hp, hp_max = get_hit_points(character)
-        values["hp"] = hp
-        values["hpmax"] = hp_max
-        for key, value in character.secondary_attributes.items():
-            canonical = pack.resolve_skill(key) or key
-            values[canonical] = value
-        for key, value in character.skills.items():
-            canonical = pack.resolve_skill(key) or key
-            values[canonical] = value
-    else:
-        for key, value in character.attributes.items():
-            values[_COC_KEY_TO_ATTR.get(key, key)] = value
-        for key, value in character.skills.items():
-            canonical = pack.resolve_skill(key) or key
-            values[canonical] = value
-    return values
-
-
-def _get_sheet_value(character: CharacterSheet, pack: RulePack, canonical: str) -> int:
-    if character.system == "DnD5e":
-        if canonical in _DND_ATTR_TO_KEY:
-            return int(character.attributes.get(_DND_ATTR_TO_KEY[canonical], pack.defaults.get(canonical, 10)))
-        if canonical in {"hp", "hpmax"}:
-            hp, hp_max = get_hit_points(character)
-            return hp if canonical == "hp" else hp_max
-        secondary_key = _DND_SECONDARY_TO_KEY.get(canonical)
-        if secondary_key:
-            return int(character.secondary_attributes.get(secondary_key, pack.defaults.get(canonical, 0)))
-        if canonical in character.skills:
-            return int(character.skills[canonical])
-        if canonical in _DND_SKILLS:
-            return _dnd_modifier_for_values(_canonical_values(character, pack), canonical)
-    else:
-        attr_key = _COC_ATTR_TO_KEY.get(canonical)
-        if attr_key and attr_key in character.attributes:
-            return int(character.attributes[attr_key])
-        skill_key = _COC_SKILL_TO_MANAGER.get(canonical, canonical)
-        if skill_key in character.skills:
-            return int(character.skills[skill_key])
-
-    values = _canonical_values(character, pack)
-    derived = pack.compute_derived(values)
-    if canonical in derived:
-        return int(derived[canonical]) if isinstance(derived[canonical], int) else 0
-    return int(pack.defaults.get(canonical, 0))
-
-
-def _dnd_modifier_for_values(values: dict[str, Any], canonical: str) -> int:
-    ability = {
-        "运动": "力量",
-        "体操": "敏捷",
-        "巧手": "敏捷",
-        "隐匿": "敏捷",
-        "调查": "智力",
-        "奥秘": "智力",
-        "历史": "智力",
-        "自然": "智力",
-        "宗教": "智力",
-        "察觉": "感知",
-        "洞悉": "感知",
-        "驯兽": "感知",
-        "医药": "感知",
-        "求生": "感知",
-        "游说": "魅力",
-        "欺瞒": "魅力",
-        "威吓": "魅力",
-        "表演": "魅力",
-    }.get(canonical, "力量")
-    return (int(values.get(ability, 10)) - 10) // 2
-
-
-def _set_sheet_value(character: CharacterSheet, pack: RulePack, canonical: str, value: int) -> None:
-    if character.system == "DnD5e":
-        attr_key = _DND_ATTR_TO_KEY.get(canonical)
-        if attr_key:
-            character.attributes[attr_key] = value
-            return
-        if canonical == "hp":
-            set_hit_points(character, current=value, allow_raise_max=True)
-            return
-        if canonical == "hpmax":
-            set_hit_points(character, maximum=value)
-            return
-        secondary_key = _DND_SECONDARY_TO_KEY.get(canonical)
-        if secondary_key:
-            character.secondary_attributes[secondary_key] = value
-            return
-        character.skills[canonical] = value
+def _migrate_legacy_luck(character: CharacterSheet, pack: RulePack) -> None:
+    """Move values written by the old `.st LUC` bug (skill slot instead of the
+    declared attribute slot) into the real slot, per the pack's key bridge."""
+    spec = pack.sheet_spec
+    if spec is None:
         return
-
-    attr_key = _COC_ATTR_TO_KEY.get(canonical)
-    if attr_key:
-        character.attributes[attr_key] = value
-        if attr_key in {"DEX", "EDU"}:
-            character._calc_coc_derived_skills()
-        return
-    character.skills[_COC_SKILL_TO_MANAGER.get(canonical, canonical)] = value
-
-
-def _migrate_legacy_coc_luck(character: CharacterSheet) -> None:
-    """Move values written by the old `.st LUC` bug into the real attribute slot."""
-    if character.system != "CoC":
+    canonical = pack.resolve_skill("luc")
+    attr_key = spec.attr_keys.get(canonical or "")
+    if not attr_key:
         return
     legacy_keys = [key for key in character.skills if str(key).casefold() == "luc"]
     for key in legacy_keys:
@@ -2985,7 +2876,7 @@ def _migrate_legacy_coc_luck(character: CharacterSheet) -> None:
             value = int(character.skills[key])
         except (TypeError, ValueError):
             continue
-        character.attributes["LUC"] = value
+        character.attributes[attr_key] = value
         character.skills.pop(key, None)
 
 
@@ -3025,14 +2916,15 @@ def _apply_value_expr(services: Services, current: int, raw_value: str) -> int:
 
 
 def _render_sheet(ctx: CommandCtx, character: CharacterSheet, pack: RulePack) -> str:
-    values = _canonical_values(character, pack)
+    values = dict(pack.defaults)
+    values.update(sheet_canonical_values(character, pack))
     values.update(pack.compute_derived(values))
     top = pack.st_show.get("top") or list(values.keys())[:12]
     items = []
     for name in top:
         value = values.get(name)
         if value is None:
-            value = _get_sheet_value(character, pack, str(name))
+            value = sheet_value(character, pack, str(name))
         items.append(ctx.i18n.t("commands.sheet.item", name=name, value=value))
     return ctx.i18n.t("commands.sheet.show", name=character.name, items=", ".join(items))
 

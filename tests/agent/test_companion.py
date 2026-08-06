@@ -340,7 +340,7 @@ async def test_add_companion_creates_player_companion_record_and_real_sheet():
     # A real, generated character sheet exists under the virtual companion user_key.
     sheet = await services.characters.get_character(f"companion:{companion.id}", chat_key)
     assert sheet.name == "Silas"
-    assert sheet.system == "CoC"
+    assert sheet.system == "coc7"
     assert sheet.attributes.get("STR")  # auto-generated, not the bare default
 
 

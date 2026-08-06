@@ -89,7 +89,7 @@ async def test_build_sheet_from_persona_coc7_is_rule_legal_and_biased():
     sheet = await build_sheet_from_persona(services, card, "coc7")
 
     assert sheet.name == "Ada"
-    assert sheet.system == "CoC"
+    assert sheet.system == "coc7"
     assert sheet.occupation == "Professor"
 
     rolled_attrs = ["STR", "CON", "SIZ", "DEX", "APP", "INT", "POW", "EDU", "LUC"]
@@ -97,9 +97,13 @@ async def test_build_sheet_from_persona_coc7_is_rule_legal_and_biased():
         low = 40 if attr in {"SIZ", "INT", "EDU"} else 15
         assert low <= sheet.attributes[attr] <= 90
 
-    ranked = sorted((sheet.attributes[attr], attr) for attr in rolled_attrs)
-    top_attrs = {attr for _value, attr in ranked[-4:]}
-    assert {"INT", "EDU"}.issubset(top_attrs)
+    # Emphasis places INT/EDU at the top of their OWN rolled group -- SIZ/INT/EDU
+    # share one roll/min/max in coc7's creation_constraints and are redistributed
+    # as a unit, so this is a structural guarantee of the algorithm, not a
+    # coincidence of the seed or of the pack's attribute declaration order.
+    high_min_group = sorted(sheet.attributes[attr] for attr in ("SIZ", "INT", "EDU"))
+    assert sheet.attributes["INT"] == high_min_group[-1]
+    assert sheet.attributes["EDU"] == high_min_group[-2]
     assert sheet.skills["图书馆"] >= 60
     assert sheet.skills["神秘学"] >= 60
     assert sheet.attributes["SAN"] == sheet.attributes["POW"]
@@ -130,7 +134,7 @@ async def test_build_sheet_from_description_wraps_text_as_minimal_persona_card()
     sheet = await build_sheet_from_description(services, description, "dnd5e", name="Mira")
 
     assert sheet.name == "Mira"
-    assert sheet.system == "DnD5e"
+    assert sheet.system == "dnd5e"
     assert sheet.character_class == "Rogue"
     assert sheet.attributes["DEX"] == 15
     assert sheet.attributes["INT"] == 14

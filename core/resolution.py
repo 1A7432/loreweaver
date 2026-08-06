@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from core.check_outcome import CheckOutcome, Rank, RollDetail
-from core.condexpr import CondExprError, Resolver, compile_expression, truthy
+from core.condexpr import CondExprError, Resolver, compile_expression, referenced_names, truthy
 
 # The resolution block's own schema version (M16 addendum: every 2.0-minted
 # format versions itself from day one). Bump on shape changes; register an
@@ -98,6 +98,20 @@ class ParamSpec:
 
 
 @dataclass(frozen=True)
+class CheckSpec:
+    """How the GENERIC check tool/commands feed this system (all pack-declared):
+    which named roll modifiers the favorable/unfavorable counts route to, the
+    default target for dc-kind systems, and the canonical stat a "proficient"
+    check adds on top of the sheet's check value."""
+
+    favorable: str = ""
+    unfavorable: str = ""
+    default_target: int | None = None
+    proficiency: str = ""
+    default_skill: str = ""  # canonical stat a bare check command rolls
+
+
+@dataclass(frozen=True)
 class CheckResolver:
     """One system's compiled check resolution. ``interpret`` is pure."""
 
@@ -109,6 +123,7 @@ class CheckResolver:
     difficulties: tuple[Difficulty, ...]
     params: tuple[ParamSpec, ...]
     margin: Callable[[Resolver], Any] | None = None
+    check: CheckSpec = field(default_factory=CheckSpec)
 
     def variant_ids(self) -> tuple[str, ...]:
         return tuple(sorted(key for key in self.ladders if key))
@@ -208,13 +223,32 @@ def _namespace_resolver(names: Mapping[str, Any]) -> Resolver:
 # ---------------------------------------------------------------------------
 
 
+# The CLOSED namespace resolution expressions may read. `dice.<i>` indexes the
+# kept natural faces. A name outside this set fails at PACK LOAD (statically —
+# a dry-run alone can't prove coverage because `&&` short-circuits), giving a
+# third-party/forge-generated pack a pointable diagnostic instead of a
+# first-check crash (M16 window-1 review note 1).
+_EXPR_NAMES = frozenset({"roll", "target", "raw_target", "modifier", "successes", "ones", "dice"})
+_DICE_NAME_RE = re.compile(r"^dice\.\d+$")
+
+
 def _compile_expr(pack_id: str, where: str, text: Any) -> Callable[[Resolver], Any]:
     if not isinstance(text, str) or not text.strip():
         raise ResolutionError(f"rulepack '{pack_id}': {where} must be a non-empty expression string")  # i18n-exempt: pack-author diagnostic, raised at compile/load time
     try:
-        return compile_expression(text, functions=_EXPR_FUNCTIONS)
+        compiled = compile_expression(text, functions=_EXPR_FUNCTIONS)
+        unknown = {
+            name
+            for name in referenced_names(text, functions=_EXPR_FUNCTIONS)
+            if name not in _EXPR_NAMES and not _DICE_NAME_RE.match(name)
+        }
     except CondExprError as exc:
         raise ResolutionError(f"rulepack '{pack_id}': {where}: bad expression ({exc})") from exc  # i18n-exempt: pack-author diagnostic, raised at compile/load time
+    if unknown:
+        raise ResolutionError(
+            f"rulepack '{pack_id}': {where} references unknown name(s) {sorted(unknown)}"  # i18n-exempt: pack-author diagnostic, raised at compile/load time
+        )
+    return compiled
 
 
 def _compile_rank_rules(
@@ -357,6 +391,7 @@ def compile_resolution(pack_id: str, raw: Any) -> CheckResolver:
 
     unknown = set(raw) - {
         "version", "roll", "target", "compare", "modifiers", "ranks", "variants", "difficulties", "params", "margin",
+        "check",
     }
     if unknown:
         raise ResolutionError(f"rulepack '{pack_id}': resolution has unknown keys {sorted(unknown)}")  # i18n-exempt: pack-author diagnostic, raised at compile/load time
@@ -424,4 +459,35 @@ def compile_resolution(pack_id: str, raw: Any) -> CheckResolver:
         difficulties=_compile_difficulties(pack_id, raw.get("difficulties")),
         params=_compile_params(pack_id, raw.get("params")),
         margin=margin,
+        check=_compile_check(pack_id, raw.get("check"), modifiers),
+    )
+
+
+def _compile_check(pack_id: str, raw: Any, modifiers: Mapping[str, Any]) -> CheckSpec:
+    if raw is None:
+        return CheckSpec()
+    if not isinstance(raw, Mapping):
+        raise ResolutionError(f"rulepack '{pack_id}': resolution.check must be a mapping")  # i18n-exempt: pack-author diagnostic, raised at compile/load time
+    unknown = set(raw) - {"favorable", "unfavorable", "default_target", "proficiency", "default_skill"}
+    if unknown:
+        raise ResolutionError(f"rulepack '{pack_id}': resolution.check has unknown keys {sorted(unknown)}")  # i18n-exempt: pack-author diagnostic, raised at compile/load time
+    favorable = str(raw.get("favorable") or "")
+    unfavorable = str(raw.get("unfavorable") or "")
+    for name in (favorable, unfavorable):
+        if name and name not in modifiers:
+            raise ResolutionError(
+                f"rulepack '{pack_id}': resolution.check routes to undeclared modifier {name!r}"  # i18n-exempt: pack-author diagnostic, raised at compile/load time
+            )
+    default_target = raw.get("default_target")
+    if default_target is not None:
+        try:
+            default_target = int(default_target)
+        except (TypeError, ValueError) as exc:
+            raise ResolutionError(f"rulepack '{pack_id}': resolution.check.default_target must be an integer") from exc  # i18n-exempt: pack-author diagnostic, raised at compile/load time
+    return CheckSpec(
+        favorable=favorable,
+        unfavorable=unfavorable,
+        default_target=default_target,
+        proficiency=str(raw.get("proficiency") or ""),
+        default_skill=str(raw.get("default_skill") or ""),
     )

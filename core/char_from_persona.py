@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from typing import Any
 
 from core.character_manager import CharacterManager, CharacterSheet
 from core.charcard import CharacterCard
+from core.rulepacks import RulePack, load_rulepack
+from core.sheets import has_check_value, refresh_sheet, set_sheet_value, sheet_value
 from infra.i18n import t
 from infra.store import Store
 
@@ -38,24 +41,6 @@ def infer_pronoun_note(text: str) -> str:
         return "she/her"
     return ""
 
-COC_CHARACTERISTICS = ["STR", "CON", "SIZ", "DEX", "APP", "INT", "POW", "EDU", "LUC"]
-COC_HIGH_MIN_CHARACTERISTICS = {"SIZ", "INT", "EDU"}
-DND_STANDARD_ARRAY = [15, 14, 13, 12, 10, 8]
-DND_CLASS_PRIORITIES = {
-    "barbarian": ["STR", "CON", "DEX", "WIS", "CHA", "INT"],
-    "bard": ["CHA", "DEX", "CON", "WIS", "INT", "STR"],
-    "cleric": ["WIS", "CON", "STR", "CHA", "INT", "DEX"],
-    "druid": ["WIS", "CON", "DEX", "INT", "CHA", "STR"],
-    "fighter": ["STR", "CON", "DEX", "WIS", "INT", "CHA"],
-    "monk": ["DEX", "WIS", "CON", "STR", "INT", "CHA"],
-    "paladin": ["STR", "CHA", "CON", "WIS", "DEX", "INT"],
-    "ranger": ["DEX", "WIS", "CON", "STR", "INT", "CHA"],
-    "rogue": ["DEX", "INT", "CON", "CHA", "WIS", "STR"],
-    "sorcerer": ["CHA", "CON", "DEX", "WIS", "INT", "STR"],
-    "warlock": ["CHA", "CON", "DEX", "WIS", "INT", "STR"],
-    "wizard": ["INT", "CON", "DEX", "WIS", "CHA", "STR"],
-}
-
 
 async def build_sheet_from_persona(
     services: Any,
@@ -65,19 +50,16 @@ async def build_sheet_from_persona(
     module_context: str = "",
 ) -> CharacterSheet:
     manager = _character_manager_from_services(services)
-    template_name = _template_name(system)
-    concept = await _ask_concept(services, card, template_name, module_context)
-    sheet = manager.generate_character(template_name, card.name or None)
+    pack = load_rulepack(system)  # unknown systems raise ValueError with a clear message
+    concept = await _ask_concept(services, card, pack.system, module_context)
+    sheet = manager.generate_character(pack.system, card.name or None)
     sheet.name = card.name or sheet.name
 
     if not concept:
         _apply_persona_text(sheet, card, {})
         return sheet
 
-    if template_name == "coc7":
-        _bias_coc7_sheet(manager, sheet, concept)
-    else:
-        _bias_dnd5e_sheet(manager, sheet, concept)
+    _bias_sheet(manager, sheet, pack, concept)
     _apply_persona_text(sheet, card, concept)
     return sheet
 
@@ -101,15 +83,6 @@ def _character_manager_from_services(services: Any) -> CharacterManager:
         return manager
     store = getattr(services, "store", None)
     return CharacterManager(store if isinstance(store, Store) else Store(":memory:"))
-
-
-def _template_name(system: str) -> str:
-    normalized = system.strip().lower()
-    if normalized in {"coc", "coc7", "call of cthulhu"}:
-        return "coc7"
-    if normalized in {"dnd", "dnd5e", "d&d5e"}:
-        return "dnd5e"
-    return normalized
 
 
 async def _ask_concept(
@@ -176,54 +149,96 @@ def _parse_concept(content: str | None) -> dict[str, Any]:
     return {}
 
 
-def _bias_coc7_sheet(manager: CharacterManager, sheet: CharacterSheet, concept: dict[str, Any]) -> None:
-    emphasis = _normalized_attrs(concept.get("attribute_emphasis") or concept.get("emphasis"), COC_CHARACTERISTICS)
-    _assign_coc_group(sheet, emphasis, [attr for attr in COC_CHARACTERISTICS if attr in COC_HIGH_MIN_CHARACTERISTICS])
-    _assign_coc_group(sheet, emphasis, [attr for attr in COC_CHARACTERISTICS if attr not in COC_HIGH_MIN_CHARACTERISTICS])
+def _bias_sheet(manager: CharacterManager, sheet: CharacterSheet, pack: RulePack, concept: dict[str, Any]) -> None:
+    """Bias a freshly generated sheet toward `concept`: reassign its rolled or
+    arrayed attributes to favor the concept's emphasis, set its occupation/class
+    meta field, and raise its signature skills to a competent floor.
 
-    occupation = _as_text(concept.get("occupation") or concept.get("class"))
-    if occupation:
-        sheet.occupation = occupation
+    Entirely generic over the pack's own ``creation_constraints`` shape -- a
+    pack that declares a ``standard_array`` method plus ``archetype_priorities``
+    places values by best-first archetype list; one that only declares rolled
+    attributes redistributes each same-roll group's already-rolled values
+    (never re-rolling). A pack with neither section (or no ``sheet:`` at all)
+    is simply left at its freshly generated values.
+    """
+    constraints = pack.creation_constraints or {}
+    attribute_rules: dict[str, Any] = constraints.get("attributes") or {}
+    emphasis = _normalized_attrs(
+        concept.get("attribute_emphasis") or concept.get("emphasis"), list(attribute_rules.keys())
+    )
+    role_text = _as_text(concept.get("occupation") or concept.get("class"))
+
+    methods = constraints.get("methods") or {}
+    array_values = (methods.get("standard_array") or {}).get("values")
+    archetypes = constraints.get("archetype_priorities")
+    if array_values and archetypes:
+        _assign_by_archetype(sheet, emphasis, array_values, archetypes, constraints.get("default_archetype"), role_text)
+    else:
+        _assign_rolled_groups(sheet, emphasis, attribute_rules)
+
+    spec = pack.sheet_spec
+    if role_text and spec is not None:
+        for field_name in ("occupation", "character_class"):
+            if field_name in spec.fields:
+                setattr(sheet, field_name, role_text)
+                break
+
     for skill in _list_text(concept.get("signature_skills") or concept.get("skills")):
-        standard = manager.find_skill_by_alias(sheet, skill) or skill
-        if standard in sheet.skills:
-            sheet.skills[standard] = min(99, max(int(sheet.skills.get(standard, 0)), 60))
+        canonical = manager.find_skill_by_alias(sheet, skill) or skill
+        if has_check_value(sheet, pack, canonical):
+            trained = min(99, max(int(sheet_value(sheet, pack, canonical)), 60))
+            set_sheet_value(sheet, pack, canonical, trained)
 
-    template = manager.templates.get("coc7")
-    if template is not None:
-        template._calculate_mappings(sheet)
-    sheet._calc_coc_derived_skills()
-
-
-def _assign_coc_group(sheet: CharacterSheet, emphasis: list[str], attrs: list[str]) -> None:
-    values = sorted((int(sheet.attributes[attr]) for attr in attrs), reverse=True)
-    preferred = [attr for attr in emphasis if attr in attrs]
-    ordered_attrs = preferred + [attr for attr in attrs if attr not in preferred]
-    for attr, value in zip(ordered_attrs, values, strict=True):
-        sheet.attributes[attr] = value
+    # A full creation-style refresh: the reassignment above may have moved the
+    # very attributes a current-pool vital (HP/SAN/MP-alike) derives from, so
+    # this sheet -- never having been played -- starts fresh at its recomputed
+    # full values, exactly like `CharacterManager.generate_character` itself.
+    refresh_sheet(sheet, pack, initialize_vitals=True)
 
 
-def _bias_dnd5e_sheet(manager: CharacterManager, sheet: CharacterSheet, concept: dict[str, Any]) -> None:
-    class_name = _as_text(concept.get("class") or concept.get("occupation")) or "Fighter"
-    sheet.character_class = class_name
-    emphasis = _normalized_attrs(concept.get("attribute_emphasis") or concept.get("emphasis"), list(sheet.attributes))
-    priority = _dnd_priority(class_name, emphasis)
-    for attr, value in zip(priority, DND_STANDARD_ARRAY, strict=True):
-        sheet.attributes[attr] = value
-
-    template = manager.templates.get("dnd5e")
-    if template is not None:
-        template._calculate_mappings(sheet)
-        for skill, formula in template.skills.items():
-            if isinstance(formula, str) and "{" in formula:
-                sheet.skills[skill] = _eval_attr_formula(formula, sheet.attributes)
-
-
-def _dnd_priority(class_name: str, emphasis: list[str]) -> list[str]:
-    key = class_name.strip().lower()
-    base = DND_CLASS_PRIORITIES.get(key, DND_CLASS_PRIORITIES["fighter"])
+def _assign_by_archetype(
+    sheet: CharacterSheet,
+    emphasis: list[str],
+    values: list[Any],
+    archetypes: Mapping[str, Any],
+    default_archetype: Any,
+    role_text: str,
+) -> None:
+    """Assign a declared standard array of values to attribute keys, following
+    the archetype (a pack-declared, best-first attribute priority list) the
+    concept's class/occupation text names -- falling back to the pack's
+    declared default archetype, then to an arbitrary declared one."""
+    base = archetypes.get(role_text.strip().casefold())
+    if base is None:
+        base = archetypes.get(str(default_archetype or "").strip().casefold())
+    if base is None and archetypes:
+        base = next(iter(archetypes.values()))
+    if not base:
+        return
     preferred = [attr for attr in emphasis if attr in base]
-    return preferred + [attr for attr in base if attr not in preferred]
+    priority = preferred + [attr for attr in base if attr not in preferred]
+    for attr, value in zip(priority, values, strict=True):
+        sheet.attributes[str(attr)] = value
+
+
+def _assign_rolled_groups(sheet: CharacterSheet, emphasis: list[str], attribute_rules: Mapping[str, Any]) -> None:
+    """Within each set of attribute keys sharing an identical roll/min/max (the
+    pack's own rolled-attribute groups), redistribute their already-rolled
+    values so the concept's emphasized attributes land on the group's highest
+    rolls -- a same-distribution swap, never a re-roll."""
+    groups: dict[tuple[Any, Any, Any], list[str]] = {}
+    for key, rule in attribute_rules.items():
+        if not isinstance(rule, Mapping):
+            continue
+        signature = (rule.get("roll"), rule.get("min"), rule.get("max"))
+        groups.setdefault(signature, []).append(str(key))
+
+    for attrs in groups.values():
+        values = sorted((int(sheet.attributes.get(attr, 0)) for attr in attrs), reverse=True)
+        preferred = [attr for attr in emphasis if attr in attrs]
+        ordered_attrs = preferred + [attr for attr in attrs if attr not in preferred]
+        for attr, value in zip(ordered_attrs, values, strict=True):
+            sheet.attributes[attr] = value
 
 
 def _normalized_attrs(value: Any, allowed: list[str]) -> list[str]:
@@ -235,16 +250,6 @@ def _normalized_attrs(value: Any, allowed: list[str]) -> list[str]:
         if key in allowed_set and key not in normalized:
             normalized.append(key)
     return normalized
-
-
-def _eval_attr_formula(formula: str, attributes: dict[str, Any]) -> int:
-    expression = formula
-    for attr, value in attributes.items():
-        expression = expression.replace(f"{{{attr}}}", str(value))
-    try:
-        return int(eval(expression, {"__builtins__": {}}))  # noqa: S307
-    except Exception:
-        return 0
 
 
 def _list_text(value: Any) -> list[str]:

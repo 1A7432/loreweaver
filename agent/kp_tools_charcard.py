@@ -26,6 +26,7 @@ from pathlib import Path
 from agent import npc as npc_records
 from agent.context import AgentCtx
 from agent.hook_runtime import install_room_hooks
+from agent.kp_tools_subsystems import room_rulepack
 from agent.services import Services
 from agent.tools import tool
 from core.card_split import WorldPayloads, card_hook_codes, detect_world_payloads, split_card
@@ -37,12 +38,12 @@ from core.documents import MODULE_POOL_ID, PLAYER_VIEWER
 from core.lorecard import Lorecard, looks_like_lorecard, parse_lorecard_bytes
 from core.modvars import define_modvar
 from core.pregen_roster import pregen_add
+from core.rulepacks import load_rulepack
 from infra.i18n import I18n
 from infra.media_store import MediaStore
 
 _PREVIEW_CHARS = 200
 _KEY_STAT_COUNT = 6
-_COC_CORE_ATTRS = ("STR", "CON", "SIZ", "DEX", "APP", "INT", "POW", "EDU", "LUC")
 
 
 def _parse_any_card_file(host_path: Path) -> tuple[CharacterCard, Lorecard | None]:
@@ -83,7 +84,11 @@ def _truncate(text: str) -> str:
 def _key_stats(sheet: CharacterSheet) -> str:
     """A short, comma-joined recap of the sheet's headline attributes (data only)."""
     attrs = sheet.attributes or {}
-    keys = [attr for attr in _COC_CORE_ATTRS if attr in attrs] if sheet.system == "CoC" else list(attrs)
+    try:
+        spec = load_rulepack(sheet.system).sheet_spec
+    except Exception:
+        spec = None
+    keys = [attr for attr in spec.attributes if attr in attrs] if spec is not None else list(attrs)
     return ", ".join(f"{attr} {attrs[attr]}" for attr in keys[:_KEY_STAT_COUNT])
 
 
@@ -147,14 +152,15 @@ class CharcardTools:
         return self._services.i18n.with_locale(ctx.locale)
 
     @tool
-    async def import_character(self, ctx: AgentCtx, file_path: str, system: str = "coc7", as_: str = "pc", name: str = "") -> str:
+    async def import_character(self, ctx: AgentCtx, file_path: str, system: str = "", as_: str = "pc", name: str = "") -> str:
         """Import a SillyTavern character card and drop it into the adventure with an auto-generated,
         rule-legal sheet -- as the acting player's PC, or as an AI player companion. Any lore in the
         card's character_book is imported into the world.
 
         Args:
             file_path: The sandbox/logical path to the card (PNG or JSON), resolved via ctx.fs.
-            system: Target rules system for the generated sheet (coc7/dnd5e).
+            system: Target rules system for the generated sheet; the room's active rule system is
+                used when omitted.
             as_: "pc" to make it the acting player's character, or "companion" for an AI party member.
             name: Optional name override (defaults to the card's name).
 
@@ -162,6 +168,9 @@ class CharcardTools:
             A localized summary: name, system, key stats, and how many lore entries were imported.
         """
         i18n = self._i18n(ctx)
+        if not system.strip():
+            pack = await room_rulepack(self._services, ctx)
+            system = pack.system
         if ctx.fs is None:
             return i18n.t("charcard.tools.import.no_fs")
         try:
@@ -276,7 +285,7 @@ class CharcardTools:
             ctx.chat_key, card.character_book, source=card.name, is_keeper=False, char_name=card.name
         )
 
-    async def import_world_card(self, ctx: AgentCtx, file_path: str, system: str = "coc7") -> str:
+    async def import_world_card(self, ctx: AgentCtx, file_path: str, system: str = "") -> str:
         """Import a card as a MODULE, both halves at once (拆卡, keeper trust):
 
         - the WORLD half — full lorebook with secrecy flags honored, `[InitVar]`
@@ -287,11 +296,17 @@ class CharcardTools:
           pick it up with `.pc claim <name>`. (An AI-played version is still a separate
           `.import <file> companion`.)
 
+        `system` targets the rules system for the generated pregen sheet; the room's active
+        rule system is used when omitted.
+
         Deliberately NOT an `@tool`: reprogramming the room is the human keeper's decision,
         so this is reachable only through `.import <file> world`, whose keeper check is
         deterministic (`gateway.commands`).
         """
         i18n = self._i18n(ctx)
+        if not system.strip():
+            pack = await room_rulepack(self._services, ctx)
+            system = pack.system
         if ctx.fs is None:
             return i18n.t("charcard.tools.import.no_fs")
         try:

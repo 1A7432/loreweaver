@@ -434,6 +434,32 @@ def compile_expression(
     return run
 
 
+def referenced_names(
+    expression: str,
+    *,
+    functions: Mapping[str, Callable[..., Any]] | None = None,
+) -> frozenset[str]:
+    """Every reference-path identifier `expression` reads, STATICALLY.
+
+    An identifier immediately followed by ``(`` is a function call, not a
+    reference (and unknown function names already fail the compile dry-run).
+    This exists because a dry-run alone cannot prove name coverage — ``&&``
+    short-circuiting can skip a misspelled operand — so closed-namespace
+    consumers (the resolution DSL) validate the full set at pack load.
+    """
+    tokens = _tokenize(expression)
+    known_functions = set(functions or ())
+    names: set[str] = set()
+    for index, (kind, value) in enumerate(tokens):
+        if kind != "ident":
+            continue
+        follower = tokens[index + 1] if index + 1 < len(tokens) else None
+        if follower == ("op", "(") and str(value) in known_functions:
+            continue
+        names.add(str(value))
+    return frozenset(names)
+
+
 def evaluate_bool(expression: str, resolve: Resolver) -> bool:
     """`evaluate` folded through JS-ish truthiness."""
     return truthy(evaluate(expression, resolve))

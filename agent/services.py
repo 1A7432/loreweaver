@@ -169,7 +169,7 @@ _RULE_VARIANT_KEY = "rule_variant"
 async def room_rule_variant(store, chat_key: str) -> str | None:
     """The room's selected house-rule ladder (a rulepack `variants:` id), or
     ``None`` for the pack's default ladder. Set by the rule-variant command
-    (`.setcoc` today); read by every check path so grading and Luck re-grading
+    (`.rule`); read by every check path so grading and Luck re-grading
     agree. Stored per room in room_state under ``rule_variant``."""
     value = await store.state_get(chat_key, _RULE_VARIANT_KEY)
     value = (value or "").strip()

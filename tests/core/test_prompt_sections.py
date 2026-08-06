@@ -302,9 +302,25 @@ async def test_inject_game_state_prompt_seeded_state_is_localized_and_nonempty()
     ctx = _Ctx(chat_key="chat1", user_id="u1")
     await _seed_game_state_store(store, ctx.chat_key, ctx.user_id)
 
+    # M17: roster entries carry a pack-declared generic `resources` meter list
+    # (`{id,label,value,max}`) -- no more flat per-system HP/SAN/MP/AC keys.
     roster = [
-        {"name": "Alice", "system": "CoC", "HP": "10/12", "SAN": "40/60", "MP": "8/8", "status_effects": ["poisoned"]},
-        {"name": "Bob", "system": "DnD5e", "HP": 15, "AC": 16, "status_effects": []},
+        {
+            "name": "Alice",
+            "system": "coc7",
+            "resources": [
+                {"id": "hp", "label": "HP", "value": 10, "max": 12},
+                {"id": "san", "label": "SAN", "value": 40, "max": 60},
+                {"id": "mp", "label": "MP", "value": 8, "max": 8},
+            ],
+            "status_effects": ["poisoned"],
+        },
+        {
+            "name": "Bob",
+            "system": "dnd5e",
+            "resources": [{"id": "hp", "label": "HP", "value": 15, "max": 20}],
+            "status_effects": [],
+        },
     ]
     manager = _FakeCharacterManager(roster=roster)
 
@@ -317,6 +333,9 @@ async def test_inject_game_state_prompt_seeded_state_is_localized_and_nonempty()
     assert "1926-03-15 14:00" in result
     assert EN.t("prompt.game_state.roster_header") in result
     assert "Alice" in result and "Bob" in result
+    # The generic meter line renders the pack-declared resources, no per-system branching.
+    assert "HP 10/12" in result and "SAN 40/60" in result and "MP 8/8" in result
+    assert "HP 15/20" in result
     assert EN.t("common.none") in result  # Bob has no status effects
     assert "Zadok watches from the shadows" in result
     assert "You were hired to investigate a disappearance." in result
@@ -338,6 +357,26 @@ async def test_inject_game_state_prompt_seeded_state_zh_localized():
     assert "【战情面板】" in result
     assert "爱丽丝" in result
     assert ZH.t("common.none") in result
+
+
+async def test_inject_game_state_prompt_solo_character_shows_generic_meters():
+    """No party roster yet: the lone active character's own pack-declared resource
+    meters render via `core.rulepacks`/`core.sheets` directly -- `core.prompt_sections`
+    never imports `core.character_manager` (see the module docstring), so this exercises
+    that decoupled path against a duck-typed fake exactly like a real sheet would."""
+    store = Store(":memory:")
+    ctx = _Ctx(chat_key="solo-chat", user_id="u1")
+    character = _FakeCharacter(
+        name="Nora",
+        system="coc7",
+        attributes={"HP": 8, "HPMAX": 10, "SAN": 40, "SANMAX": 60, "MP": 9, "MPMAX": 10},
+    )
+    manager = _FakeCharacterManager(character=character)  # empty roster -> solo fallback
+
+    result = await inject_game_state_prompt(ctx, manager, store, EN)
+
+    assert "Nora" in result
+    assert "HP 8/10" in result and "SAN 40/60" in result and "MP 9/10" in result
 
 
 async def test_inject_game_state_prompt_empty_state_does_not_crash():

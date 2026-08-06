@@ -174,7 +174,9 @@ async def test_build_system_prompt_with_no_relationship_state_is_byte_identical_
         await inject_game_state_prompt(ctx, services.characters, services.store, i18n),
         document_context,
         world_lore,
-        await inject_system_expertise_prompt(ctx, services.characters, i18n),
+        await inject_system_expertise_prompt(
+            ctx, services.characters, i18n, default_system=services.settings.default_rulepack
+        ),
         await inject_trpg_system_prompt(ctx, i18n),
         await inject_interaction_style_prompt(ctx, i18n),
     ]

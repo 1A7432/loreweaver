@@ -991,7 +991,7 @@ async def test_build_room_state_filters_party_to_active_character_system():
 
     state = await build_room_state(services, ctx)
 
-    assert state["character"]["system"] == "DnD5e"
+    assert state["character"]["system"] == "dnd5e"
     assert [member["name"] for member in state["party"]] == ["Kael Thorn"]
     roster = await services.characters.get_party_roster(ctx.chat_key)
     assert {member["name"] for member in roster} == {"Nora Vance", "Kael Thorn"}

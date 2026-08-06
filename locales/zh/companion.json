@@ -5,7 +5,7 @@
   "companion.actor_user.recent_heading": "近期事件：",
   "companion.actor_user.no_situation": "轮到你了。你要做什么？",
   "companion.sheet.name_line": "{name} —— {system}",
-  "companion.sheet.coc_status": "HP {hp}/{hpmax}，SAN {san}/{sanmax}，MP {mp}/{mpmax}",
+  "companion.sheet.status_line": "状态：{meters}",
   "companion.sheet.attributes_line": "属性：{attributes}",
   "companion.sheet.skills_header": "主要技能：",
   "companion.tools.not_found": "❌ 未找到匹配“{name}”的 AI 同伴。",

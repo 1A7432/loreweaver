@@ -23,7 +23,8 @@ from agent.card_text import build_card_text_renderer
 from agent.npc import NpcRecord
 from agent.npc_actor import _extract_json_object, _knowledge_bullets
 from agent.services import Services
-from core.character_manager import CharacterSheet
+from core.character_manager import CharacterSheet, character_resources
+from core.rulepacks import load_rulepack
 from infra.i18n import I18n
 
 # How many of the companion's highest-value skills to surface in its sheet summary, so the actor
@@ -32,36 +33,37 @@ _TOP_SKILLS = 8
 
 
 def _sheet_summary(i18n: I18n, sheet: CharacterSheet) -> str:
-    """A compact, player-safe recap of the companion's OWN sheet (stats/HP/SAN + top skills).
+    """A compact, player-safe recap of the companion's OWN sheet (resources/vitals,
+    core attributes, and top skills).
 
     Built purely from `sheet`; nothing here consults the store or any keeper material.
+    Generic over any pack (M16 stage B): vitals come from the pack-declared
+    `resources` meters, and the attribute line orders by the pack's own sheet spec
+    when the sheet's system resolves to one, else lists whatever attributes it has.
     """
     lines = [i18n.t("companion.sheet.name_line", name=sheet.name or i18n.t("common.unknown"), system=sheet.system)]
     attrs = sheet.attributes
 
-    if sheet.system == "CoC":
+    meters = character_resources(sheet)
+    if meters:
         lines.append(
             i18n.t(
-                "companion.sheet.coc_status",
-                hp=attrs.get("HP", "?"),
-                hpmax=attrs.get("HPMAX", "?"),
-                san=attrs.get("SAN", "?"),
-                sanmax=attrs.get("SANMAX", "?"),
-                mp=attrs.get("MP", "?"),
-                mpmax=attrs.get("MPMAX", "?"),
+                "companion.sheet.status_line",
+                meters=" | ".join(f"{meter['label']} {meter['value']}/{meter['max']}" for meter in meters),
             )
         )
-        core_attrs = [attr for attr in ("STR", "CON", "SIZ", "DEX", "APP", "INT", "POW", "EDU", "LUC") if attr in attrs]
-        if core_attrs:
-            lines.append(
-                i18n.t(
-                    "companion.sheet.attributes_line",
-                    attributes=", ".join(f"{attr} {attrs[attr]}" for attr in core_attrs),
-                )
-            )
-    elif attrs:
+
+    try:
+        spec = load_rulepack(sheet.system).sheet_spec
+    except Exception:
+        spec = None
+    keys = [key for key in spec.attributes if key in attrs] if spec is not None else list(attrs)
+    if keys:
         lines.append(
-            i18n.t("companion.sheet.attributes_line", attributes=", ".join(f"{k} {v}" for k, v in attrs.items()))
+            i18n.t(
+                "companion.sheet.attributes_line",
+                attributes=", ".join(f"{key} {attrs[key]}" for key in keys),
+            )
         )
 
     top_skills = sorted(sheet.skills.items(), key=lambda item: item[1], reverse=True)[:_TOP_SKILLS]

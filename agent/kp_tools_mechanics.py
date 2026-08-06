@@ -16,18 +16,19 @@ faithful to the source; only the wiring changes:
   ``self.services.dice.roll_expression(...)`` instance calls - the ported
   ``core.dice_engine.DiceRoller`` requires an instance (see its module
   docstring);
-- check grading goes through the room system's COMPILED rulepack resolver
+- check grading goes through the sheet system's COMPILED rulepack resolver
   (`core.resolution`): the engine rolls (`DiceRoller.roll_for_check`), the
   pack ladder interprets, and labels render via `RulePack.rank_label` — this
-  module never re-implements a success ladder and only ever branches on the
-  outcome contract's semantic flags.
+  module never re-implements a success ladder, never names a rule system, and
+  only ever branches on the outcome contract's semantic flags plus the pack's
+  declared shapes (`resolver.target_kind`, `resolver.check`, sheet spec).
+  Name resolution (attribute aliases, bridged skills) is the pack alias table;
+  check inputs read through `core.sheets.check_value`.
 
 Every user-visible string is localized via ``self.services.i18n`` (see
-``locales/{en,zh}/kp_tools.json``). CJK/EN game-data literals - skill and
-attribute names/aliases, and the ``random_madness`` symptom tables - are
-exempt from i18n, the same convention ``core`` already uses (see
-``core/character_manager.py``'s ``CharacterTemplate.synonyms`` and
-``core/prompt_sections.py``'s module docstring).
+``locales/{en,zh}/kp_tools.json``). CJK/EN game-data literals - the
+``random_madness`` symptom tables - are exempt from i18n, the same convention
+``core`` already uses (see ``core/prompt_sections.py``'s module docstring).
 """
 
 from __future__ import annotations
@@ -42,44 +43,31 @@ from core.battle_report import NPC_USER_ID, SessionRecord
 from core.character_manager import (
     CharacterDataError,
     CharacterSheet,
+    character_resources,
     get_hit_points,
-    recompute_dnd_derived,
     set_hit_points,
 )
 from core.character_rules import render_validation_notice, validate_sheet
 from core.check_outcome import CheckOutcome, outcome_wire
 from core.dice_engine import DiceResult
-from core.rulepacks import load_rulepack
+from core.rulepacks import RulePack, load_rulepack
+from core.sheets import check_value, has_check_value, set_sheet_value, sheet_value
 
-# COC7 base-attribute names, recognized by `skill_check` so "STR"/"POW"/...
-# route to an attribute check instead of a skill lookup. Game data (mirrors
-# `core.character_manager.CharacterSheet`'s CoC attribute keys), not UI text.
-_COC_ATTRIBUTE_NAMES = {"STR", "CON", "SIZ", "DEX", "APP", "INT", "POW", "EDU", "LUC"}
-# Chinese attribute names the model naturally reaches for ("力量" for a STR check). Without
-# this map they fell through to `skills.get(名, 0)` → a degenerate target-0 check that a
-# roll of 1 turns into a critical (2026-08-05 play-test, Bug6).
-_COC_ATTRIBUTE_ALIASES = {
-    "力量": "STR",
-    "体质": "CON",
-    "体型": "SIZ",
-    "敏捷": "DEX",
-    "外貌": "APP",
-    "智力": "INT",
-    "灵感": "INT",
-    "意志": "POW",
-    "教育": "EDU",
-    "幸运": "LUC",
-    "运气": "LUC",
-}
-
-# "Credit Rating" skill aliases (CN/EN), routed to the "信用" skill under the
-# display name "信用评级". CJK/EN game-data skill-name aliases, exempt from
-# i18n per the same convention as `core.character_manager.CharacterTemplate.synonyms`.
-_CREDIT_RATING_ALIASES = {"信用", "credit rating", "信用评级", "信誉"}
 
 async def _get_active_character(services: Services, ctx: AgentCtx) -> CharacterSheet:
     """Fetch `ctx`'s active character (a fresh, unsaved `"default"`-named sheet if none exists)."""
     return await services.characters.get_character(ctx.uid(), ctx.chat_key)
+
+
+async def _sheet_pack(services: Services, ctx: AgentCtx, character: CharacterSheet) -> RulePack:
+    """The rulepack governing `character`: its own system when resolvable,
+    falling back to the room's active pack (bare/unset sheets)."""
+    from agent.kp_tools_subsystems import room_rulepack
+
+    try:
+        return load_rulepack(character.system)
+    except Exception:
+        return await room_rulepack(services, ctx)
 
 
 def _has_character(character: CharacterSheet | None) -> bool:
@@ -122,67 +110,52 @@ class CharacterTools:
 
     @tool
     async def create_character(
-        self, ctx: AgentCtx, name: str, system: str = "coc7", auto_generate: bool = True
+        self, ctx: AgentCtx, name: str, system: str = "", auto_generate: bool = True
     ) -> str:
         """Create a new TRPG character sheet.
 
         Args:
             name: Character name.
-            system: Game system (coc7/dnd5e).
+            system: Rule system id; omit to use the room's active system.
             auto_generate: Whether to auto-roll attributes per the system's rules.
         """
         i18n = self.services.i18n.with_locale(ctx.locale)
-        system_map = {"coc7": "coc7", "dnd5e": "dnd5e", "CoC": "coc7", "DnD5e": "dnd5e"}
-        template_key = system_map.get(system, "coc7")
-        system_name = "CoC" if template_key == "coc7" else "DnD5e"
-
         try:
-            if auto_generate:
-                character = self.services.characters.generate_character(template_key, name)
-                character.system = system_name
+            if system.strip():
+                pack = load_rulepack(system)
             else:
-                character = CharacterSheet(name=name, system=system_name)
+                from agent.kp_tools_subsystems import room_rulepack
+
+                pack = await room_rulepack(self.services, ctx)
+
+            if auto_generate:
+                character = self.services.characters.generate_character(pack.system, name)
+            else:
+                character = CharacterSheet(name=name, system=pack.system)
 
             character, violations = validate_sheet(
                 character,
-                template_key,
+                pack.system,
                 initialize_vitals=True,
-                creation_method="rolled" if template_key == "dnd5e" and auto_generate else None,
+                creation_method="rolled" if auto_generate else None,
             )
             await self.services.characters.save_character(ctx.uid(), ctx.chat_key, character)
 
-            attrs = character.attributes
-            if system_name == "CoC":
-                result = i18n.t(
-                    "kp_tools.character.create.success_coc",
-                    name=name,
-                    STR=attrs.get("STR", "?"),
-                    CON=attrs.get("CON", "?"),
-                    DEX=attrs.get("DEX", "?"),
-                    INT=attrs.get("INT", "?"),
-                    POW=attrs.get("POW", "?"),
-                    APP=attrs.get("APP", "?"),
-                    SIZ=attrs.get("SIZ", "?"),
-                    EDU=attrs.get("EDU", "?"),
-                    LUC=attrs.get("LUC", "?"),
-                    HP=attrs.get("HP", "?"),
-                    HPMAX=attrs.get("HPMAX", "?"),
-                    SAN=attrs.get("SAN", "?"),
-                    SANMAX=attrs.get("SANMAX", "?"),
-                    MP=attrs.get("MP", "?"),
-                    MPMAX=attrs.get("MPMAX", "?"),
-                )
-            else:
-                result = i18n.t(
-                    "kp_tools.character.create.success_dnd",
-                    name=name,
-                    STR=attrs.get("STR", "?"),
-                    DEX=attrs.get("DEX", "?"),
-                    CON=attrs.get("CON", "?"),
-                    INT=attrs.get("INT", "?"),
-                    WIS=attrs.get("WIS", "?"),
-                    CHA=attrs.get("CHA", "?"),
-                )
+            spec = pack.sheet_spec
+            source_keys = list(spec.attributes) if spec is not None else list(character.attributes)
+            attributes_str = ", ".join(
+                f"{key} {character.attributes[key]}" for key in source_keys if key in character.attributes
+            )
+            meters_str = " | ".join(
+                f"{meter['label']} {meter['value']}/{meter['max']}" for meter in character_resources(character)
+            )
+            result = i18n.t(
+                "kp_tools.character.create.success",
+                name=character.name,
+                system=character.system,
+                attributes=attributes_str,
+                meters=meters_str or i18n.t("common.none"),
+            )
             notice = render_validation_notice(i18n, violations)
             return f"{result}\n{notice}" if notice else result
         except Exception as exc:
@@ -205,44 +178,59 @@ class CharacterTools:
             i18n.t("kp_tools.character.sheet.system_line", system=character.system),
         ]
 
-        if character.system == "CoC":
+        try:
+            pack = load_rulepack(character.system)
+        except Exception:
+            pack = None
+        spec = pack.sheet_spec if pack is not None else None
+
+        source_keys = [key for key in (spec.attributes if spec is not None else attrs) if key in attrs]
+        if source_keys:
             lines.append("")
             lines.append(i18n.t("kp_tools.character.sheet.attributes_header"))
-            for attr in ("STR", "CON", "SIZ", "DEX", "APP", "INT", "POW", "EDU", "LUC"):
-                if attr in attrs:
-                    lines.append(i18n.t("kp_tools.character.sheet.attr_line", attr=attr, value=attrs[attr]))
+            for attr in source_keys:
+                lines.append(i18n.t("kp_tools.character.sheet.attr_line", attr=attr, value=attrs[attr]))
 
+        meters = character_resources(character)
+        if meters:
             lines.append("")
             lines.append(i18n.t("kp_tools.character.sheet.status_header"))
-            lines.append(
-                i18n.t("kp_tools.character.sheet.hp_line", hp=attrs.get("HP", "?"), hpmax=attrs.get("HPMAX", "?"))
-            )
-            lines.append(
-                i18n.t("kp_tools.character.sheet.san_line", san=attrs.get("SAN", "?"), sanmax=attrs.get("SANMAX", "?"))
-            )
-            lines.append(
-                i18n.t("kp_tools.character.sheet.mp_line", mp=attrs.get("MP", "?"), mpmax=attrs.get("MPMAX", "?"))
-            )
-
-            if character.occupation:
-                lines.append("")
-                lines.append(i18n.t("kp_tools.character.sheet.occupation_line", occupation=character.occupation))
-            if character.age:
-                lines.append(i18n.t("kp_tools.character.sheet.age_line", age=character.age))
-        else:
-            lines.append("")
-            lines.append(i18n.t("kp_tools.character.sheet.attributes_header"))
-            for attr, value in attrs.items():
-                lines.append(i18n.t("kp_tools.character.sheet.attr_line", attr=attr, value=value))
+            for meter in meters:
+                lines.append(
+                    i18n.t(
+                        "kp_tools.character.sheet.meter_line",
+                        label=meter["label"],
+                        value=meter["value"],
+                        max=meter["max"],
+                    )
+                )
+        elif spec is None:
             hp, hp_max = get_hit_points(character)
-            lines.append("")
-            lines.append(i18n.t("kp_tools.character.sheet.status_header"))
-            lines.append(i18n.t("kp_tools.character.sheet.hp_line", hp=hp, hpmax=hp_max))
+            if hp_max:
+                lines.append("")
+                lines.append(i18n.t("kp_tools.character.sheet.status_header"))
+                lines.append(i18n.t("kp_tools.character.sheet.meter_line", label="HP", value=hp, max=hp_max))
 
-        if character.skills:
+        field_lines = [
+            i18n.t("kp_tools.character.sheet.field_line", name=name, value=value)
+            for name, value in character.field_values().items()
+            if value not in (None, "")
+        ]
+        if field_lines:
+            lines.append("")
+            lines.extend(field_lines)
+
+        skill_entries = dict(character.skills)
+        if pack is not None and spec is not None:
+            # Untrained derived skills are not stored; surface their computed
+            # values so the sheet reads complete.
+            for skill_key in spec.derived_skills:
+                if skill_key not in skill_entries:
+                    skill_entries[skill_key] = sheet_value(character, pack, skill_key)
+        if skill_entries:
             lines.append("")
             lines.append(i18n.t("kp_tools.character.sheet.skills_header"))
-            for skill, value in sorted(character.skills.items(), key=lambda item: item[1], reverse=True):
+            for skill, value in sorted(skill_entries.items(), key=lambda item: item[1], reverse=True):
                 lines.append(i18n.t("kp_tools.character.sheet.skill_line", skill=skill, value=value))
 
         if character.equipment:
@@ -274,13 +262,15 @@ class CharacterTools:
             if not _has_character(character):
                 return i18n.t("kp_tools.character.none")
 
-            standard_name = characters.find_skill_by_alias(character, skill_name)
-            target_skill = standard_name if standard_name else skill_name
+            pack = await _sheet_pack(self.services, ctx, character)
+            canonical = pack.resolve_skill(skill_name) or skill_name
 
-            old_value = character.skills.get(target_skill, i18n.t("kp_tools.character.value_unset"))
-            character.skills[target_skill] = value
-            character, violations = validate_sheet(character, character.system)
-            new_value = character.skills.get(target_skill, value)
+            had_value = has_check_value(character, pack, canonical)
+            old_value = sheet_value(character, pack, canonical) if had_value else i18n.t("kp_tools.character.value_unset")
+            set_sheet_value(character, pack, canonical, value)
+            character, violations = validate_sheet(character, pack.system)
+            new_value = sheet_value(character, pack, canonical)
+            target_skill = canonical
 
             await characters.save_character(ctx.uid(), ctx.chat_key, character)
 
@@ -309,7 +299,9 @@ class CharacterTools:
             if not _has_character(character):
                 return i18n.t("kp_tools.character.none")
 
+            pack = await _sheet_pack(self.services, ctx, character)
             hp_field = attribute.strip().upper()
+            canonical = pack.resolve_skill(attribute)
             if hp_field in {"HP", "HPMAX"}:
                 hp, hp_max = get_hit_points(character)
                 old_value = hp if hp_field == "HP" else hp_max
@@ -317,16 +309,19 @@ class CharacterTools:
                     set_hit_points(character, current=value)
                 else:
                     set_hit_points(character, maximum=value)
+            elif canonical:
+                old_value = sheet_value(character, pack, canonical)
+                set_sheet_value(character, pack, canonical, value)
             else:
                 old_value = character.attributes.get(attribute, i18n.t("kp_tools.character.value_unset"))
                 character.attributes[attribute] = value
 
-            character, violations = validate_sheet(character, character.system)
-            if character.system == "DnD5e":
-                recompute_dnd_derived(character)
+            character, violations = validate_sheet(character, pack.system)
             if hp_field in {"HP", "HPMAX"}:
                 hp, hp_max = get_hit_points(character)
                 new_value = hp if hp_field == "HP" else hp_max
+            elif canonical:
+                new_value = sheet_value(character, pack, canonical)
             else:
                 new_value = character.attributes.get(attribute, value)
 
@@ -437,7 +432,7 @@ class CharacterTools:
 
 
 class DiceTools:
-    """AI-KP tools for dice rolls, skill/sanity/growth/opposed checks, HP and WoD pools."""
+    """AI-KP tools for dice rolls, graded checks, HP management and dice pools."""
 
     def __init__(self, services: Services) -> None:
         self.services = services
@@ -610,25 +605,25 @@ class DiceTools:
         npc_target: int | None = None,
         params: dict | None = None,
     ) -> str:
-        """Run a skill check for the active character (auto-detects attribute/Credit-Rating checks).
+        """Run a skill check for the active character (attribute names and bridged skills resolve too).
 
         Args:
-            skill_name: Skill name (CN/EN aliases supported; also accepts attribute names like STR, or
-                Credit Rating).
-            bonus: Bonus dice (COC) or advantage count (DND5E).
-            penalty: Penalty dice (COC) or disadvantage count (DND5E).
-            dc: Difficulty class (DND5E only, defaults to 15).
-            proficient: Whether the character is proficient in this skill (DND5E only).
+            skill_name: Skill or attribute name (CN/EN aliases supported).
+            bonus: Count of the system's favorable roll modifier (bonus dice / advantage).
+            penalty: Count of the system's unfavorable roll modifier (penalty dice / disadvantage).
+            dc: Difficulty target, for systems whose checks roll against a declared DC; omit to use
+                the system's default. Ignored by systems that roll against the sheet value.
+            proficient: Whether the sheet's proficiency bonus applies (systems that declare one).
             params: Roll parameters for rule systems whose check declares them (e.g. a dice-pool
                 size and threshold), as an integer mapping. Omit for systems that don't.
             actor: ONLY for a non-player actor: copy the NPC/creature's exact stated name, without
                 added titles or roles. For a player character's check OMIT actor entirely — never
                 send actor="" or the player's name.
-            npc_target: Required with actor: the NPC's real skill percentage (COC) or total check
-                modifier (DND5E), as a real integer. Omit for player checks — never send 0.
+            npc_target: Required with actor: the NPC's real check number — its skill/target value or
+                its total check modifier, whichever this system's checks use — as a real integer.
+                Omit for player checks — never send 0.
         """
         i18n = self.services.i18n.with_locale(ctx.locale)
-        characters = self.services.characters
         dice = self.services.dice
 
         try:
@@ -648,165 +643,108 @@ class DiceTools:
             if is_npc and npc_target is None:
                 return i18n.t("kp_tools.dice.skill_check.npc_target_required")
 
-            standard_name = characters.find_skill_by_alias(character, skill_name)
-            # Chinese attribute names resolve to their codes BEFORE the attribute check, so
-            # "力量" rolls STR instead of a nonexistent skill.
-            attr_upper = _COC_ATTRIBUTE_ALIASES.get(skill_name.strip(), skill_name.upper().strip())
-            skill_lower = skill_name.lower().strip()
+            pack = await _sheet_pack(self.services, ctx, character)
+            resolver = pack.resolver
+            if resolver is None:
+                return i18n.t("kp_tools.dice.skill_check.unknown_skill", name=skill_name)
+            if resolver.params:
+                return i18n.t("kp_tools.dice.pool.missing_param", param=resolver.params[0].id)
+            check = resolver.check
 
-            if character.system == "CoC":
-                if is_npc:
-                    target_skill = standard_name if standard_name else skill_name
-                    skill_value = npc_target
-                elif attr_upper in _COC_ATTRIBUTE_NAMES:
-                    target_skill = attr_upper
-                    skill_value = character.attributes.get(target_skill, 0)
-                elif standard_name == "信用" or skill_lower in _CREDIT_RATING_ALIASES:
-                    target_skill = "信用评级"
-                    skill_value = character.skills.get("信用", 0)
-                else:
-                    target_skill = standard_name if standard_name else skill_name
-                    if target_skill not in character.skills:
-                        # Unknown name (no alias, no attribute, not on the sheet): refuse the
-                        # roll instead of running a degenerate target-0 check where a 1 reads
-                        # as a critical success.
-                        return i18n.t("kp_tools.dice.skill_check.unknown_skill", name=skill_name)
-                    skill_value = character.skills.get(target_skill, 0)
+            canonical = pack.resolve_skill(skill_name) or skill_name.strip()
+            if not is_npc and not has_check_value(character, pack, canonical):
+                # Unknown name (no alias, not on the sheet): refuse the roll
+                # instead of running a degenerate target-0 check where a
+                # minimal roll reads as a critical success.
+                return i18n.t("kp_tools.dice.skill_check.unknown_skill", name=skill_name)
+            sheet_check_value = None if is_npc else check_value(character, pack, canonical)
 
-                pack = load_rulepack(character.system)
-                resolver = pack.resolver
-                variant = await room_rule_variant(self.services.store, ctx.chat_key)
-                rolled = dice.roll_for_check(resolver, modifiers={"bonus": bonus, "penalty": penalty})
-                outcome = resolver.interpret(rolled, skill_value, variant=variant)
-                level_label = pack.rank_label(outcome.rank.id, ctx.locale)
+            # The pack routes the favorable/unfavorable counts to its declared
+            # roll modifiers; opposing counts cancel (net), and the engine
+            # replays multi-dice semantics for count-style modifiers.
+            net_favor = bonus - penalty
+            modifiers: dict[str, int] = {}
+            favor_label = ""
+            if net_favor > 0 and check.favorable:
+                modifiers[check.favorable] = net_favor
+                favor_label = pack.display_name(check.favorable, ctx.locale)
+            elif net_favor < 0 and check.unfavorable:
+                modifiers[check.unfavorable] = -net_favor
+                favor_label = pack.display_name(check.unfavorable, ctx.locale)
 
-                skill_label = pack.display_name(target_skill, ctx.locale)
-                lines = [i18n.t("kp_tools.dice.skill_check.coc_header", name=display_name, skill=skill_label)]
-                target_line = i18n.t("kp_tools.dice.skill_check.target_line", value=skill_value)
-                if bonus > 0:
-                    target_line += i18n.t("kp_tools.dice.skill_check.bonus_suffix", count=bonus)
-                elif penalty > 0:
-                    target_line += i18n.t("kp_tools.dice.skill_check.penalty_suffix", count=penalty)
+            variant = await room_rule_variant(self.services.store, ctx.chat_key)
+            rolled = dice.roll_for_check(resolver, modifiers=modifiers or None)
+
+            if resolver.target_kind == "dc":
+                # Roll + sheet modifier against an external difficulty target.
+                target = int(dc) if dc is not None else int(check.default_target or 0)
+                modifier = int(npc_target) if is_npc else int(sheet_check_value or 0)
+                if not is_npc and proficient and check.proficiency:
+                    modifier += sheet_value(character, pack, check.proficiency)
+            else:
+                # Roll against the sheet's own value as the target.
+                target = int(npc_target) if is_npc else int(sheet_check_value or 0)
+                modifier = 0
+
+            outcome = resolver.interpret(rolled, target, variant=variant, modifier=modifier)
+            level_label = pack.rank_label(outcome.rank.id, ctx.locale)
+            skill_label = pack.display_name(canonical, ctx.locale)
+            total = rolled.total + modifier
+
+            prof_label = i18n.t("kp_tools.dice.skill_check.proficient_label") if proficient and check.proficiency else ""
+            lines = [i18n.t("kp_tools.dice.skill_check.header", name=display_name, skill=skill_label, extra=prof_label)]
+            if resolver.target_kind == "dc":
+                if favor_label:
+                    lines.append(
+                        i18n.t("kp_tools.dice.skill_check.modifier_line", label=favor_label, count=abs(net_favor))
+                    )
+                lines.append(
+                    i18n.t(
+                        "kp_tools.dice.skill_check.roll_vs_line",
+                        roll=rolled.total,
+                        modifier=modifier,
+                        total=total,
+                        target=target,
+                    )
+                )
+            else:
+                target_line = i18n.t("kp_tools.dice.skill_check.target_line", value=target)
+                if favor_label:
+                    target_line += i18n.t(
+                        "kp_tools.dice.skill_check.modifier_suffix", label=favor_label, count=abs(net_favor)
+                    )
                 lines.append(target_line)
                 base_roll = int(rolled.modifiers.get("base_roll", rolled.total))
                 lines.append(i18n.t("kp_tools.dice.skill_check.raw_roll_line", roll=base_roll))
-
-                if bonus > 0 or penalty > 0:
-                    bp_key = (
-                        "kp_tools.dice.skill_check.bonus_label"
-                        if bonus > 0
-                        else "kp_tools.dice.skill_check.penalty_label"
-                    )
+                if favor_label and "final_tens" in rolled.modifiers:
                     lines.append(
                         i18n.t(
                             "kp_tools.dice.skill_check.tens_line",
-                            label=i18n.t(bp_key),
+                            label=favor_label,
                             extra=list(rolled.modifiers.get("extra_tens", [])),
                             final=rolled.modifiers.get("final_tens", rolled.total // 10 % 10),
                         )
                     )
-
                 lines.append(i18n.t("kp_tools.dice.skill_check.final_line", final=rolled.total))
-                outcome_key = (
-                    "kp_tools.dice.skill_check.outcome_success"
-                    if outcome.rank.success
-                    else "kp_tools.dice.skill_check.outcome_failure"
-                )
-                lines.append(i18n.t(outcome_key, level=level_label))
 
-                ctx.emit_dice(
-                    {
-                        "kind": "check",
-                        **({"actor": display_name} if actor and actor.strip() else {}),
-                        "expr": skill_label,
-                        "skill": target_skill,
-                        "rolls": [rolled.total],
-                        "total": rolled.total,
-                        "target": skill_value,
-                        "effective_target": resolver.effective_target(skill_value),
-                        "outcome": outcome_wire(outcome, level_label),
-                        "detail": {"bonus": bonus, "penalty": penalty, **dict(rolled.modifiers)},
-                    }
-                )
-                await self._record_check(
-                    ctx,
-                    character.name,
-                    target_skill,
-                    outcome,
-                    label=level_label,
-                    actor=display_name if actor and actor.strip() else None,
-                    actor_is_npc=is_npc,
-                    bonus=bonus,
-                    penalty=penalty,
-                    **({"variant": variant} if variant else {}),
-                )
-                return "\n".join(lines)
-
-            # d20-family: roll + modifier vs DC through the compiled resolver
-            # (advantage/disadvantage are the pack's named roll overrides).
-            pack = load_rulepack(character.system)
-            resolver = pack.resolver
-            target_skill = standard_name if standard_name else skill_name
-            modifier = (
-                npc_target
-                if is_npc
-                else characters.get_dnd_skill_modifier(character, target_skill, proficient)
-            )
-            target_dc = dc if dc is not None else 15
-
-            net_advantage = bonus - penalty
-            adv_label = ""
-            if net_advantage > 0:
-                adv_label = i18n.t("kp_tools.dice.skill_check.advantage_label", count=net_advantage)
-                rolled = dice.roll_for_check(resolver, modifiers={"advantage": 1})
-            elif net_advantage < 0:
-                adv_label = i18n.t("kp_tools.dice.skill_check.disadvantage_label", count=abs(net_advantage))
-                rolled = dice.roll_for_check(resolver, modifiers={"disadvantage": 1})
-            else:
-                rolled = dice.roll_for_check(resolver)
-
-            outcome = resolver.interpret(rolled, target_dc, modifier=modifier)
-            total = rolled.total + modifier
-            success = outcome.rank.success
-            level_label = pack.rank_label(outcome.rank.id, ctx.locale)
-
-            prof_label = i18n.t("kp_tools.dice.skill_check.proficient_label") if proficient else ""
-            lines = [
-                i18n.t(
-                    "kp_tools.dice.skill_check.dnd_header",
-                    name=display_name,
-                    skill=pack.display_name(target_skill, ctx.locale),
-                    proficient=prof_label,
-                )
-            ]
-            if adv_label:
-                lines.append(adv_label)
-            lines.append(
-                i18n.t(
-                    "kp_tools.dice.skill_check.dnd_roll_line",
-                    roll=rolled.total,
-                    modifier=modifier,
-                    total=total,
-                    dc=target_dc,
-                )
-            )
             outcome_key = (
                 "kp_tools.dice.skill_check.outcome_success"
-                if success
+                if outcome.rank.success
                 else "kp_tools.dice.skill_check.outcome_failure"
             )
             lines.append(i18n.t(outcome_key, level=level_label))
-            candidate_rolls = list(rolled.modifiers.get("dice_all", rolled.dice))
+
+            candidate_rolls = list(rolled.modifiers.get("dice_all", rolled.dice)) or [rolled.total]
             ctx.emit_dice(
                 {
                     "kind": "check",
                     **({"actor": display_name} if actor and actor.strip() else {}),
-                    "expr": pack.display_name(target_skill, ctx.locale),
-                    "skill": target_skill,
+                    "expr": skill_label,
+                    "skill": canonical,
                     "rolls": candidate_rolls,
                     "total": total,
-                    "target": target_dc,
-                    "effective_target": resolver.effective_target(target_dc),
+                    "target": target,
+                    "effective_target": resolver.effective_target(target),
                     "outcome": outcome_wire(outcome, level_label),
                     "detail": {
                         "bonus": bonus,
@@ -820,13 +758,15 @@ class DiceTools:
             await self._record_check(
                 ctx,
                 character.name,
-                target_skill,
+                canonical,
                 outcome,
                 label=level_label,
                 actor=display_name if actor and actor.strip() else None,
                 actor_is_npc=is_npc,
+                bonus=bonus,
+                penalty=penalty,
                 modifier=modifier,
-                proficient=proficient,
+                **({"variant": variant} if variant else {}),
             )
             return "\n".join(lines)
         except Exception as exc:
@@ -882,6 +822,29 @@ class DiceTools:
         except Exception as exc:
             return i18n.t("kp_tools.dice.hp.failed", error=str(exc))
 
+def roll_initiative(services: Services, character: CharacterSheet) -> DiceResult:
+    """Roll the pack-declared initiative expression for `character`.
+
+    ``{name}`` slots in the expression read the sheet's canonical values; a
+    system with no declaration falls back to the engine's plain d100 order.
+    """
+    import re as _re
+
+    try:
+        pack = load_rulepack(character.system)
+    except Exception:
+        pack = None
+    expression = pack.initiative_roll if pack is not None else ""
+    if expression and pack is not None:
+        filled = _re.sub(
+            r"\{([^{}]+)\}",
+            lambda match: str(sheet_value(character, pack, match.group(1))),
+            expression,
+        )
+        return services.dice.roll_expression(filled, is_check=True)
+    return services.dice.roll_expression("1d100", is_check=True)
+
+
 class InitiativeTools:
     """AI-KP tool for tracking combat initiative order."""
 
@@ -919,13 +882,7 @@ class InitiativeTools:
                     character = await _get_active_character(self.services, ctx)
                     name = character.name
                     if initiative is None:
-                        if character.system == "DnD5e":
-                            init_mod = character.secondary_attributes.get("先攻修正", 0)
-                            roll_result = self.services.dice.roll_expression("1d20")
-                            initiative = roll_result.total + init_mod
-                        else:
-                            roll_result = self.services.dice.roll_expression("1d100")
-                            initiative = roll_result.total
+                        initiative = roll_initiative(self.services, character).total
 
                 init_list.append({"name": name, "init": initiative})
                 init_list.sort(key=lambda entry: entry["init"], reverse=True)

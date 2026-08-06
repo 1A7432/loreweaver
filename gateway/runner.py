@@ -524,7 +524,9 @@ class GatewayRunner:
             markdown=True,
             components=[
                 ChatComponent(id="welcome:help", command=".help", label=i18n.t("runner.welcome.help")),
-                ChatComponent(id="welcome:create", command=".coc", label=i18n.t("runner.welcome.create")),
+                ChatComponent(
+                    id="welcome:create", command=_make_char_command(), label=i18n.t("runner.welcome.create")
+                ),
                 ChatComponent(id="welcome:sheet", command=".sheet", label=i18n.t("runner.welcome.sheet")),
                 ChatComponent(id="welcome:panel", command=".panel", label=i18n.t("runner.welcome.panel")),
             ],
@@ -566,3 +568,18 @@ async def _disconnect_adapters(adapters: list[BaseAdapter]) -> list[Any]:
         *(adapter.disconnect() for adapter in adapters),
         return_exceptions=True,
     )
+
+
+def _make_char_command() -> str:
+    """The default rule system's make-char command word (welcome-panel button)."""
+    from core.rulepacks import load_rulepack
+    from infra.config import Settings
+
+    try:
+        pack = load_rulepack(Settings().default_rulepack)
+        for word, binding in pack.commands.items():
+            if binding.action == "make_char":
+                return f".{word}"
+    except Exception:
+        pass
+    return ".genchar"

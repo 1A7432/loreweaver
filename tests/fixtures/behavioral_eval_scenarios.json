@@ -276,13 +276,13 @@
     {
       "id": "state-hp-en",
       "locale": "en",
-      "setup": {"player_name": "Mara Vale", "hp": [8, 12]},
+      "setup": {"player_name": "Mara Vale", "hp": [8, 10]},
       "turns": [
         {
-          "action": "OOC state audit only, no roll and no state change: report Mara Vale's canonical HP exactly as 8/12.",
+          "action": "OOC state audit only, no roll and no state change: report Mara Vale's canonical HP exactly as 8/10.",
           "expect_roll": false,
-          "state_expectation": {"hp": [8, 12], "reply_claims": ["8/12"]},
-          "smoke_reply": "Mara Vale HP: 8/12.",
+          "state_expectation": {"hp": [8, 10], "reply_claims": ["8/10"]},
+          "smoke_reply": "Mara Vale HP: 8/10.",
           "smoke_calls": []
         }
       ]

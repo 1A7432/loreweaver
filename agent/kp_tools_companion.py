@@ -28,16 +28,17 @@ from typing import TYPE_CHECKING
 from agent import npc as npc_records
 from agent.companion_actor import companion_action
 from agent.context import AgentCtx
+from agent.kp_tools_subsystems import room_rulepack
 from agent.services import Services
 from agent.tools import tool
 from core.character_manager import CharacterSheet
+from core.rulepacks import load_rulepack
 from infra.i18n import I18n
 
 if TYPE_CHECKING:
     from gateway.commands import CommandRouter
     from gateway.hub import RoomHub
 
-_SYSTEM_MAP = {"coc7": "coc7", "dnd5e": "dnd5e", "CoC": "coc7", "DnD5e": "dnd5e"}
 _TRUTHY = {"on", "1", "true", "yes", "y", "开", "开启", "啟用", "開"}
 _FALSY = {"off", "0", "false", "no", "n", "关", "关闭", "關閉"}
 
@@ -72,7 +73,7 @@ class CompanionTools:
         ctx: AgentCtx,
         name: str,
         persona: str = "",
-        system: str = "coc7",
+        system: str = "",
         playstyle: str = "",
         generate: bool = True,
     ) -> str:
@@ -82,7 +83,7 @@ class CompanionTools:
         Args:
             name: The companion's name (also its character-sheet name).
             persona: Who they are -- voice, goals, mannerisms (full roleplay).
-            system: Game system for the sheet (coc7/dnd5e).
+            system: Game system for the sheet; the room's active rule system is used when omitted.
             playstyle: Tactical/roleplay leaning, e.g. "cautious support" or "aggressive brawler".
             generate: Whether to auto-roll the sheet's attributes per the system's rules.
 
@@ -91,21 +92,19 @@ class CompanionTools:
         """
         i18n = self._i18n(ctx)
         try:
-            template_key = _SYSTEM_MAP.get(system, "coc7")
-            system_name = "CoC" if template_key == "coc7" else "DnD5e"
+            pack = await room_rulepack(self._services, ctx) if not system.strip() else load_rulepack(system)
 
             record = await npc_records.create_companion(
                 self._services.documents, ctx.chat_key, name, persona=persona, playstyle=playstyle, stat_char=name
             )
 
             if generate:
-                sheet = self._services.characters.generate_character(template_key, name)
-                sheet.system = system_name
+                sheet = self._services.characters.generate_character(pack.system, name)
             else:
-                sheet = CharacterSheet(name=name, system=system_name)
+                sheet = CharacterSheet(name=name, system=pack.system)
             await self._services.characters.save_character(_companion_uid(record.id), ctx.chat_key, sheet)
 
-            return i18n.t("companion.tools.add.done", name=record.name, id=record.id, system=system_name)
+            return i18n.t("companion.tools.add.done", name=record.name, id=record.id, system=pack.system)
         except Exception as exc:
             return i18n.t("companion.tools.add.failed", error=str(exc))
 

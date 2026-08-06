@@ -8,8 +8,8 @@ compiled into safe, non-evaluated derived-stat formulas.
 Derived stats are HYBRID:
   - a small SAFE declarative DSL (copy_of / half_of / floor_div / sum_ranges)
     for pure-data systems that need no code, and
-  - a named-computer registry (real Python callables, `_NAMED_COMPUTERS`) for
-    the built-in systems' bespoke math (CoC damage bonus, D&D ability mods, ...).
+  - a named-computer registry (real Python callables, `_NAMED_COMPUTERS`) as
+    the LAST-RESORT lane for third-party math the DSL cannot express.
 Nothing in the `derived:` section is ever `eval`/`exec`-ed.
 
 Discovery additionally scans a user data-dir, `_USER_RULEPACK_DIR` (Layer B.3b -- see
@@ -22,6 +22,7 @@ byte-identical to before this existed.
 from __future__ import annotations
 
 import logging
+import math
 import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -29,7 +30,9 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
+from core.condexpr import CondExprError, compile_expression
 from core.resolution import CheckResolver, compile_resolution
+from core.sheets import SheetSpec, parse_sheet_section
 from core.subsystems import SubsystemSpec, parse_subsystems
 from core.yaml_safety import safe_load_no_aliases
 
@@ -65,160 +68,23 @@ def _int_value(values: Mapping[str, Any], key: str, default: int = 0) -> int:
 
 
 # --------------------------------------------------------------------------
-# Built-in derived-stat computers (real code; the deterministic core).
+# Derived-stat computer registries — the LAST-RESORT extension point (M16
+# addendum: replaceable strategies over hookable internals). The engine ships
+# them EMPTY: every bundled system's derived math is pack DSL data below; a
+# genuinely inexpressible third-party weirdo may register real code here at
+# startup and reference it via `{computer: <name>}` / `{computer_group: <id>}`.
 # --------------------------------------------------------------------------
 
-
-def _coc_str_siz(values: Mapping[str, Any]) -> int:
-    return _int_value(values, "力量", 50) + _int_value(values, "体型", 50)
-
-
-def _coc_db(values: Mapping[str, Any]) -> str:
-    total = _coc_str_siz(values)
-    if total < 65:
-        return "-2"
-    if total < 85:
-        return "-1"
-    if total < 125:
-        return "0"
-    if total < 165:
-        return "1d4"
-    if total < 205:
-        return "1d6"
-    dice_count = ((total - 205) // 80) + 2
-    return f"{dice_count}d6"
+_NAMED_COMPUTERS: dict[str, Callable[[Mapping[str, Any]], Any]] = {}
+_COMPUTER_GROUPS: dict[str, dict[str, Callable[[Mapping[str, Any]], Any]]] = {}
 
 
-def _coc_build(values: Mapping[str, Any]) -> int:
-    total = _coc_str_siz(values)
-    if total < 65:
-        return -2
-    if total < 85:
-        return -1
-    if total < 125:
-        return 0
-    if total < 165:
-        return 1
-    if total < 205:
-        return 2
-    return ((total - 205) // 80) + 3
+def register_computer(name: str, func: Callable[[Mapping[str, Any]], Any]) -> None:
+    _NAMED_COMPUTERS[str(name)] = func
 
 
-def _coc_mov(values: Mapping[str, Any]) -> int:
-    dex = _int_value(values, "敏捷", 50)
-    strength = _int_value(values, "力量", 50)
-    siz = _int_value(values, "体型", 50)
-    if dex > siz and strength > siz:
-        return 9
-    if dex < siz and strength < siz:
-        return 7
-    return 8
-
-
-def _coc_hp(values: Mapping[str, Any]) -> int:
-    return (_int_value(values, "体质", 50) + _int_value(values, "体型", 50)) // 10
-
-
-def _coc_mp(values: Mapping[str, Any]) -> int:
-    return _int_value(values, "意志", 50) // 5
-
-
-def _coc_sanmax(values: Mapping[str, Any]) -> int:
-    return 99 - _int_value(values, "克苏鲁神话", 0)
-
-
-def _coc_own_language(values: Mapping[str, Any]) -> int:
-    return _int_value(values, "教育", 50)
-
-
-def _coc_dodge(values: Mapping[str, Any]) -> int:
-    return _int_value(values, "敏捷", 50) // 2
-
-
-def _dnd_mod_for(ability: str) -> Callable[[Mapping[str, Any]], int]:
-    def _calc(values: Mapping[str, Any]) -> int:
-        return (_int_value(values, ability, 10) - 10) // 2
-
-    return _calc
-
-
-_DND_SKILL_ABILITIES: dict[str, str] = {
-    "运动": "力量",
-    "体操": "敏捷",
-    "巧手": "敏捷",
-    "隐匿": "敏捷",
-    "调查": "智力",
-    "奥秘": "智力",
-    "历史": "智力",
-    "自然": "智力",
-    "宗教": "智力",
-    "察觉": "感知",
-    "洞悉": "感知",
-    "驯兽": "感知",
-    "医药": "感知",
-    "求生": "感知",
-    "游说": "魅力",
-    "欺瞒": "魅力",
-    "威吓": "魅力",
-    "表演": "魅力",
-}
-
-
-def _dnd_skill_for(skill: str) -> Callable[[Mapping[str, Any]], int]:
-    ability = _DND_SKILL_ABILITIES[skill]
-    return _dnd_mod_for(ability)
-
-
-def _dnd_pp(values: Mapping[str, Any]) -> int:
-    perception = values.get("察觉")
-    if perception is None:
-        perception = _dnd_skill_for("察觉")(values)
-    return 10 + _int_value({"察觉": perception}, "察觉", 0)
-
-
-# Individually-named computers, referenceable from YAML via `{computer: <name>}`.
-_NAMED_COMPUTERS: dict[str, Callable[[Mapping[str, Any]], Any]] = {
-    "coc_db": _coc_db,
-    "coc_build": _coc_build,
-    "coc_mov": _coc_mov,
-    "coc_hp": _coc_hp,
-    "coc_mp": _coc_mp,
-    "coc_sanmax": _coc_sanmax,
-    "coc_own_language": _coc_own_language,
-    "coc_dodge": _coc_dodge,
-}
-
-_COC_DERIVED: dict[str, Callable[[Mapping[str, Any]], Any]] = {
-    "DB": _coc_db,
-    "体格": _coc_build,
-    "移动力": _coc_mov,
-    "生命值上限": _coc_hp,
-    "生命值": _coc_hp,
-    "魔法值上限": _coc_mp,
-    "魔法值": _coc_mp,
-    "理智上限": _coc_sanmax,
-    "母语": _coc_own_language,
-    "闪避": _coc_dodge,
-}
-
-_DND_DERIVED: dict[str, Callable[[Mapping[str, Any]], Any]] = {
-    "pp": _dnd_pp,
-    "力量调整值": _dnd_mod_for("力量"),
-    "敏捷调整值": _dnd_mod_for("敏捷"),
-    "体质调整值": _dnd_mod_for("体质"),
-    "智力调整值": _dnd_mod_for("智力"),
-    "感知调整值": _dnd_mod_for("感知"),
-    "魅力调整值": _dnd_mod_for("魅力"),
-    **{skill: _dnd_skill_for(skill) for skill in _DND_SKILL_ABILITIES},
-}
-
-# Whole generated tables, referenceable from YAML via `{computer_group: <id>}`.
-# Lets a pack reuse a built-in system's entire generated derived table (e.g.
-# dnd5e's per-skill ability-modifier table) without hand-transcribing it.
-_COMPUTER_GROUPS: dict[str, dict[str, Callable[[Mapping[str, Any]], Any]]] = {
-    "coc7": _COC_DERIVED,
-    "dnd5e": _DND_DERIVED,
-}
+def register_computer_group(group_id: str, table: Mapping[str, Callable[[Mapping[str, Any]], Any]]) -> None:
+    _COMPUTER_GROUPS[str(group_id)] = dict(table)
 
 
 # --------------------------------------------------------------------------
@@ -259,8 +125,66 @@ def _compile_sum_ranges(
         total = sum(_int_value(values, stat, default) for stat, default in stats)
         for lo, hi, result in ranges:
             if lo <= total <= hi:
-                return result
-        return fallback
+                return result(values) if callable(result) else result
+        return fallback(values) if callable(fallback) else fallback
+
+    return _calc
+
+
+_DERIVED_EXPR_FUNCTIONS: dict[str, Callable[..., Any]] = {
+    "floor": lambda value: math.floor(value),
+    "ceil": lambda value: math.ceil(value),
+    "min": lambda *values: min(values),
+    "max": lambda *values: max(values),
+    "abs": lambda value: abs(value),
+    # Function-form conditional (kept OUT of the shared condexpr grammar — the
+    # one expression grammar never grows syntax for one consumer). Eager, pure.
+    "if": lambda condition, then_value, else_value: then_value if condition else else_value,
+}
+
+
+def _compile_expr_value(
+    pack_id: str, stat_name: str, spec: Any, defaults: Mapping[str, Any]
+) -> Callable[[Mapping[str, Any]], Any]:
+    """Compile an ``{expr: ..., format: ...}`` value: `core.condexpr` arithmetic
+    over the stat namespace (missing / non-numeric names fall back to the
+    pack's declared default, else 0), with an optional str.format wrapper —
+    how a banded table's open tail expresses computed dice grades."""
+    if isinstance(spec, Mapping):
+        expr_text = spec.get("expr")
+        format_text = spec.get("format")
+        unknown = set(spec) - {"expr", "format"}
+        if unknown:
+            raise ValueError(f"rulepack '{pack_id}': expr spec for '{stat_name}' has unknown keys {sorted(unknown)}")
+    else:
+        expr_text, format_text = spec, None
+    if not isinstance(expr_text, str) or not expr_text.strip():
+        raise ValueError(f"rulepack '{pack_id}': expr for '{stat_name}' must be a non-empty string")
+    if format_text is not None and not isinstance(format_text, str):
+        raise ValueError(f"rulepack '{pack_id}': format for '{stat_name}' must be a string")
+    try:
+        compiled = compile_expression(expr_text, functions=_DERIVED_EXPR_FUNCTIONS)
+    except CondExprError as exc:
+        raise ValueError(f"rulepack '{pack_id}': bad expr for '{stat_name}': {exc}") from exc
+
+    def _calc(values: Mapping[str, Any]) -> Any:
+        def resolve(path: str) -> Any:
+            raw = values.get(path, defaults.get(path, 0))
+            if isinstance(raw, bool):
+                return int(raw)
+            if isinstance(raw, (int, float)):
+                return raw
+            try:
+                return int(str(raw).strip())
+            except (TypeError, ValueError):
+                return _int_value(defaults, path, 0)
+
+        result = compiled(resolve)
+        if isinstance(result, float) and result.is_integer():
+            result = int(result)
+        if format_text is not None:
+            return format_text.format(result)
+        return result
 
     return _calc
 
@@ -301,18 +225,27 @@ def _compile_derived_spec(
         stat = str(params["of"])
         return _compile_floor_div(stat, int(params["by"]), _int_value(defaults, stat, 0))
 
+    if "expr" in spec:
+        return _compile_expr_value(pack_id, stat_name, spec, defaults)
+
     if "sum_ranges" in spec:
         params = spec["sum_ranges"]
         if not isinstance(params, Mapping) or "of" not in params or "ranges" not in params:
             raise ValueError(f"rulepack '{pack_id}': 'sum_ranges' for '{stat_name}' needs 'of' and 'ranges'")
         stats = [(str(item), _int_value(defaults, str(item), 0)) for item in params["of"]]
+
+        def _range_value(raw: Any) -> Any:
+            if isinstance(raw, Mapping) and "expr" in raw:
+                return _compile_expr_value(pack_id, stat_name, raw, defaults)
+            return raw
+
         ranges: list[tuple[int, int, Any]] = []
         for entry in params["ranges"]:
             if not isinstance(entry, (list, tuple)) or len(entry) != 3:
                 raise ValueError(f"rulepack '{pack_id}': 'sum_ranges' range entries must be [lo, hi, value]")
             lo, hi, result = entry
-            ranges.append((int(lo), int(hi), result))
-        return _compile_sum_ranges(stats, ranges, params.get("else"))
+            ranges.append((int(lo), int(hi), _range_value(result)))
+        return _compile_sum_ranges(stats, ranges, _range_value(params.get("else")))
 
     raise ValueError(f"rulepack '{pack_id}': unrecognized derived spec shape for '{stat_name}': {spec!r}")
 
@@ -382,6 +315,8 @@ class RulePack:
     subsystems: dict[str, SubsystemSpec] = field(default_factory=dict)
     expertise: dict[str, str] = field(default_factory=dict)
     commands: dict[str, CommandBinding] = field(default_factory=dict)
+    sheet_spec: SheetSpec | None = None
+    initiative_roll: str = ""  # dice expression; {name} slots read canonical sheet values
 
     def resolve_skill(self, name: str) -> str | None:
         """Resolve a player-entered skill/attribute name to this pack's canonical key."""
@@ -398,8 +333,26 @@ class RulePack:
         return self.display.get(base, {}).get(name, name)
 
     def compute_derived(self, values: Mapping[str, Any]) -> dict[str, Any]:
-        """Compute fixed derived attributes for `values` without evaluating pack code."""
-        return {name: func(values) for name, func in self.derived_formulas.items()}
+        """Compute derived attributes for `values` without evaluating pack code.
+
+        Evaluation is a DAG FOLD in declaration order: each computed value joins
+        the namespace, so later entries may reference earlier derived results
+        (the pack orders its own dependencies). The pipeline is
+        ``source -> (modifier layer) -> derived`` — the modifier layer is a
+        RESERVED, currently-empty insertion point (M16 addendum): when
+        effects/conditions arrive they slot in between without reshaping the DAG.
+        """
+        namespace: dict[str, Any] = dict(values)
+        out: dict[str, Any] = {}
+        for name, func in self.derived_formulas.items():
+            result = func(namespace)
+            out[name] = result
+            if name not in values:
+                # Later entries see earlier DERIVED results, but a SOURCE value
+                # the caller supplied always wins as a reference (e.g. a trained
+                # skill overriding its derived untrained base).
+                namespace[name] = result
+        return out
 
     def rank_label(self, rank_id: str, locale: str) -> str:
         """Localized display label for a rank id; falls back to `en`, then the id."""
@@ -493,7 +446,17 @@ def _build_rulepack(pack_id: str, data: Mapping[str, Any]) -> RulePack:
         subsystems=parse_subsystems(pack_id, data.get("subsystems")),
         expertise=_parse_expertise_section(pack_id, data.get("expertise")),
         commands=_parse_commands_section(pack_id, data.get("commands"), data.get("subsystems") or {}),
+        sheet_spec=parse_sheet_section(pack_id, data.get("sheet")),
+        initiative_roll=_parse_initiative_section(pack_id, data.get("initiative")),
     )
+
+
+def _parse_initiative_section(pack_id: str, raw: Any) -> str:
+    if raw is None:
+        return ""
+    if not isinstance(raw, Mapping) or not isinstance(raw.get("roll"), str) or not raw["roll"].strip():
+        raise ValueError(f"rulepack '{pack_id}': 'initiative' must be a mapping with a 'roll' expression")
+    return raw["roll"].strip()
 
 
 def _parse_commands_section(pack_id: str, raw: Any, subsystems_raw: Mapping[str, Any]) -> dict[str, CommandBinding]:
@@ -516,8 +479,8 @@ def _parse_commands_section(pack_id: str, raw: Any, subsystems_raw: Mapping[str,
         tool = str(spec.get("tool") or "")
         if bool(action) == bool(tool):
             raise ValueError(f"rulepack '{pack_id}': commands.{word_key} needs exactly one of action/tool")
-        if action and action != "check":
-            raise ValueError(f"rulepack '{pack_id}': commands.{word_key}.action must be 'check'")
+        if action and action not in ("check", "make_char"):
+            raise ValueError(f"rulepack '{pack_id}': commands.{word_key}.action must be 'check' or 'make_char'")
         if tool and tool not in subsystems_raw:
             raise ValueError(f"rulepack '{pack_id}': commands.{word_key}.tool names an undeclared subsystem {tool!r}")
         args = spec.get("args") or {}
@@ -579,7 +542,7 @@ def resolve_extends(
 
     This is how a WORLD ships its own rules without rewriting a whole system (the
     module <-> rules coupling `docs/plugins.md` describes): a pack file patches a base —
-    `extends: coc7` plus only the deltas — or replaces it outright by not extending at all.
+    `extends: <base-id>` plus only the deltas — or replaces it outright by not extending at all.
     Chains resolve base-first (`_merge_extends`, child wins, `null` deletes), are capped at
     `MAX_EXTENDS_DEPTH`, and fail loudly on a cycle or an unknown base. NOTE: a patch needs
     its own NEW id — discovery never lets a user-dir file shadow a built-in of the same id.
@@ -668,7 +631,7 @@ def _discover_registry() -> dict[str, RulePack]:
     an invalid `derived:` spec) is logged and skipped — it never prevents discovery of the other,
     valid packs. A built-in id always wins over a same-named user-dir entry
     (`_scan_rulepack_dir`'s `allow_override=False` for the user dir), so a generated pack can
-    never override e.g. `coc7`/`dnd5e`. With `_USER_RULEPACK_DIR` left at its default `None`
+    never override a built-in id. With `_USER_RULEPACK_DIR` left at its default `None`
     (every test unless it opts in), this scans ONLY `_RULEPACK_DIR` -- byte-identical to before
     the user data-dir existed.
     """
@@ -706,7 +669,7 @@ def built_in_rulepack_ids() -> set[str]:
     """File stems under `_RULEPACK_DIR` — the BUILT-IN rulepacks only, never `_USER_RULEPACK_DIR`.
 
     Used by `agent.forge` to reject a generated rulepack id that collides with a built-in (e.g.
-    `coc7`, `dnd5e`) before ever writing it -- deliberately a raw file listing rather than going
+    a built-in id) before ever writing it -- deliberately a raw file listing rather than going
     through `_discover_registry`/`available_systems`, so this stays accurate even if a built-in's
     own YAML happens to be malformed at the moment of the check.
     """
@@ -719,7 +682,7 @@ def built_in_aliases() -> set[str]:
     """Every normalized alias (id + declared `names:` + `set_keys:`) claimed by a BUILT-IN rulepack.
 
     Used by `agent.forge` to refuse a generated pack that tries to CLAIM a built-in's name/alias
-    (e.g. a user pack with `names: [..., coc7]`). A built-in already wins resolution today via
+    (e.g. a user pack claiming a built-in name). A built-in already wins resolution today via
     `_alias_resolver`'s insertion order, but rejecting up front makes the invariant explicit rather
     than dependent on scan order, and stops a generated pack from declaring a dead alias it could
     never actually resolve as.
@@ -785,6 +748,21 @@ def all_command_words() -> frozenset[str]:
     for pack in _discover_registry().values():
         words.update(pack.commands)
     return frozenset(words)
+
+
+def pack_declaring_command(word: str, action: str) -> RulePack | None:
+    """The discovered pack whose ``commands:`` table binds `word` to `action`.
+
+    Cross-pack words (a make-char word is the ENTRY POINT into its system, so
+    it must resolve regardless of the room's current pack) route through this;
+    ordinary dialect words stay room-scoped.
+    """
+    word_key = str(word).strip().casefold()
+    for pack in _discover_registry().values():
+        binding = pack.commands.get(word_key)
+        if binding is not None and binding.action == action:
+            return pack
+    return None
 
 
 def all_subsystem_tool_names() -> frozenset[str]:

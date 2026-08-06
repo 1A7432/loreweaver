@@ -1,17 +1,26 @@
-"""Deterministic character-sheet validation against rulepack creation constraints."""
+"""Deterministic character-sheet validation against rulepack creation constraints.
+
+M16 stage B: fully pack-data-driven — numeric clamps come from
+``creation_constraints.attributes`` / ``.skills``, derived slots recompute
+through the pack DAG (storage is never trusted for them), and budget checks are
+typed data (``budgets.<id>.parts`` condexpr formulas over the canonical value
+namespace; ``methods.point_buy`` applies only when the caller says the sheet
+was point-bought). Every stat write path funnels through `validate_sheet`, so
+manual edits, AI tool writes, rolled generation and imports all get the same
+deterministic enforcement.
+"""
 
 from __future__ import annotations
 
 import copy
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from core.character_manager import CharacterSheet
+from core.condexpr import CondExprError, compile_expression
 from core.rulepacks import RulePack, load_rulepack
-
-_COC_SYSTEM = "coc7"
-_DND_SYSTEM = "dnd5e"
-_COC_DERIVED_SKILLS = {"母语", "闪避"}
+from core.sheets import canonical_values, refresh_sheet
 
 
 @dataclass(frozen=True)
@@ -33,28 +42,57 @@ def validate_sheet(
     """Return a clamped sheet copy plus deterministic rule violations.
 
     The validator never consults an LLM. It enforces the rulepack's creation
-    constraints for core ability/characteristic ranges, skill ranges, and the
-    budget checks that can be inferred from a complete sheet.
+    constraints for attribute ranges, skill ranges, and the budget checks that
+    can be inferred from a complete sheet.
 
     ``initialize_vitals`` distinguishes character CREATION from an in-play EDIT.
-    On creation (True) the current HP/MP/SAN are (re)derived from the final
-    characteristics — full HP/MP and CoC's starting SAN = min(POW, SANMAX). On
-    an edit (False, the default) the current values are PRESERVED (only clamped
-    to their new maxima) so editing a skill/attribute never heals a wounded PC.
+    On creation (True) the current pools are (re)derived from the final stats
+    per each vital's declared start; on an edit (False, the default) current
+    values are PRESERVED (only clamped to their new maxima) so editing a
+    skill/attribute never heals a wounded PC.
 
-    ``creation_method`` makes method-specific D&D validation explicit. The
+    ``creation_method`` makes method-specific validation explicit: the
     point-buy budget is enforced only for ``"point_buy"`` creation; rolled,
     standard-array, imported, and in-play sheets still receive the shared
-    ability-range validation without being guessed to be point-buy sheets.
+    range validation without being guessed to be point-buy sheets.
     """
     pack = load_rulepack(system or sheet.system)
     clamped = CharacterSheet.from_dict(copy.deepcopy(sheet.to_dict()))
     violations: list[SheetViolation] = []
+    constraints = pack.creation_constraints
 
-    if pack.system == _COC_SYSTEM:
-        _validate_coc_sheet(clamped, pack, violations, initialize=initialize_vitals)
-    elif pack.system == _DND_SYSTEM:
-        _validate_dnd_sheet(clamped, pack, violations, creation_method=creation_method)
+    for key, rule in (constraints.get("attributes") or {}).items():
+        if not isinstance(rule, Mapping):
+            continue
+        _clamp_numeric_field(
+            clamped.attributes,
+            str(key),
+            int(rule.get("min", 0)),
+            int(rule.get("max", 100)),
+            "attribute",
+            violations,
+        )
+
+    default_skill_rule = (constraints.get("skills") or {}).get("default") or {}
+    if default_skill_rule:
+        min_skill = int(default_skill_rule.get("min", 0))
+        max_skill = int(default_skill_rule.get("max", 99))
+        derived_keys = set(pack.sheet_spec.derived_skills) if pack.sheet_spec else set()
+        for key in list(clamped.skills):
+            if key in derived_keys:
+                # Derived slots recompute below; clamping them would masquerade
+                # the clamped copy as a trained override.
+                continue
+            _clamp_numeric_field(clamped.skills, key, min_skill, max_skill, "skill", violations)
+
+    refresh_sheet(clamped, pack, initialize_vitals=initialize_vitals)
+
+    _check_budgets(clamped, pack, violations)
+    method = (creation_method or "").strip().casefold().replace("-", "_")
+    if method == "point_buy":
+        _check_point_buy(
+            clamped, pack, (constraints.get("methods") or {}).get("point_buy") or {}, violations
+        )
     return clamped, violations
 
 
@@ -94,56 +132,6 @@ def render_validation_notice(i18n: Any, violations: list[SheetViolation]) -> str
     return "\n".join(notices)
 
 
-def _validate_coc_sheet(
-    sheet: CharacterSheet, pack: RulePack, violations: list[SheetViolation], *, initialize: bool = False
-) -> None:
-    constraints = pack.creation_constraints
-    characteristics = constraints.get("characteristics") or {}
-    for key, rule in characteristics.items():
-        _clamp_numeric_field(
-            sheet.attributes,
-            str(key),
-            int(rule.get("min", 0)),
-            int(rule.get("max", 100)),
-            "attribute",
-            violations,
-        )
-
-    skills = constraints.get("skills") or {}
-    default_skill_rule = skills.get("default") or {}
-    min_skill = int(default_skill_rule.get("min", 0))
-    max_skill = int(default_skill_rule.get("max", 99))
-    for key in list(sheet.skills):
-        _clamp_numeric_field(sheet.skills, key, min_skill, max_skill, "skill", violations)
-
-    sheet._calc_coc_derived_skills()
-    _recompute_coc_vitals(sheet, initialize=initialize)
-    _check_coc_skill_budget(sheet, constraints.get("budgets") or {}, violations)
-
-
-def _validate_dnd_sheet(
-    sheet: CharacterSheet,
-    pack: RulePack,
-    violations: list[SheetViolation],
-    *,
-    creation_method: str | None,
-) -> None:
-    constraints = pack.creation_constraints
-    abilities = constraints.get("abilities") or {}
-    for key, rule in abilities.items():
-        _clamp_numeric_field(
-            sheet.attributes,
-            str(key),
-            int(rule.get("min", 3)),
-            int(rule.get("max", 18)),
-            "ability",
-            violations,
-        )
-    method = (creation_method or "").strip().casefold().replace("-", "_")
-    if method == "point_buy":
-        _check_dnd_point_buy(sheet, constraints.get("methods", {}).get("point_buy") or {}, violations)
-
-
 def _clamp_numeric_field(
     values: dict[str, Any],
     key: str,
@@ -156,7 +144,7 @@ def _clamp_numeric_field(
         return
     original = values[key]
     numeric = _coerce_int(original)
-    plural = "abilities" if kind == "ability" else f"{kind}s"
+    plural = f"{kind}s"
     if numeric is None:
         values[key] = minimum
         violations.append(
@@ -183,98 +171,75 @@ def _coerce_int(value: Any) -> int | None:
     return None
 
 
-def _recompute_coc_vitals(sheet: CharacterSheet, *, initialize: bool = False) -> None:
-    """Recompute the CoC derived maxima (HPMAX/MPMAX/SANMAX/IDEA/KNOW), then set
-    the current HP/MP/SAN.
-
-    ``initialize`` is the CREATION vs in-play EDIT switch. On creation (True) the
-    current values are (re)derived from the final characteristics — full HP/MP and
-    CoC's starting SAN = min(POW, SANMAX). On an edit (False) an existing current
-    value is PRESERVED (only clamped to its new max), so editing a skill/attribute
-    never heals a wounded character back to full; an absent value is initialized
-    (a genuinely bare sheet). IDEA/KNOW are pure derivations and always recompute.
-    """
-    attrs = sheet.attributes
-    skills = sheet.skills
-    con = _int(attrs.get("CON"), 50)
-    siz = _int(attrs.get("SIZ"), 50)
-    pow_value = _int(attrs.get("POW"), 50)
-    mythos = _int(skills.get("克苏鲁神话"), 0)
-    hpmax = (con + siz) // 10
-    mpmax = pow_value // 5
-    sanmax = max(0, 99 - mythos)
-    san_start = min(pow_value, sanmax)
-    attrs["HPMAX"] = hpmax
-    attrs["MPMAX"] = mpmax
-    attrs["SANMAX"] = sanmax
-    attrs["HP"] = hpmax if initialize else _clamp_current_vital(attrs, "HP", hpmax)
-    attrs["MP"] = mpmax if initialize else _clamp_current_vital(attrs, "MP", mpmax)
-    attrs["SAN"] = san_start if initialize else _clamp_current_vital(attrs, "SAN", sanmax, default=san_start)
-    attrs["IDEA"] = _int(attrs.get("INT"), 50)
-    attrs["KNOW"] = _int(attrs.get("EDU"), 50)
-
-
-def _clamp_current_vital(attrs: dict[str, Any], key: str, maximum: int, default: int | None = None) -> int:
-    """Preserve an existing current vital (clamped to [0, maximum]); initialize a
-    genuinely absent one to ``default`` (or ``maximum``). Used for in-play edits."""
-    fallback = maximum if default is None else default
-    if key not in attrs:
-        return fallback
-    current = _int(attrs.get(key), fallback)
-    return max(0, min(maximum, current))
-
-
-def _check_coc_skill_budget(sheet: CharacterSheet, budgets: dict[str, Any], violations: list[SheetViolation]) -> None:
+def _check_budgets(sheet: CharacterSheet, pack: RulePack, violations: list[SheetViolation]) -> None:
+    """Typed budget checks. ``skill-points`` semantics: spent = the points every
+    non-derived skill sits above its fresh-sheet base; budget = the sum of the
+    declared parts (a ``{max: [...]}`` part takes the best alternative)."""
+    budgets = pack.creation_constraints.get("budgets") or {}
     if not budgets:
         return
-    base = CharacterSheet("", "CoC").skills
-    spent = 0
-    for skill, value in sheet.skills.items():
-        if skill in _COC_DERIVED_SKILLS:
+    spec = pack.sheet_spec
+    base_skills: Mapping[str, Any] = spec.skills if spec is not None else {}
+    derived_keys = set(spec.derived_skills) if spec is not None else set()
+
+    namespace = canonical_values(sheet, pack)
+    namespace.update(pack.compute_derived(namespace))
+
+    for budget_id, rule in budgets.items():
+        parts = rule.get("parts") if isinstance(rule, Mapping) else None
+        if not isinstance(parts, list) or not parts:
             continue
-        spent += max(0, _int(value, 0) - _int(base.get(skill), 0))
+        spent = 0
+        for skill, value in sheet.skills.items():
+            if skill in derived_keys:
+                continue
+            spent += max(0, _int(value, 0) - _int(base_skills.get(skill), 0))
+        budget = 0
+        for part in parts:
+            if isinstance(part, Mapping) and "max" in part:
+                budget += max(
+                    (_eval_budget_formula(pack, str(formula), namespace) for formula in (part["max"] or [])),
+                    default=0,
+                )
+            else:
+                budget += _eval_budget_formula(pack, str(part), namespace)
+        if spent > budget:
+            violations.append(SheetViolation(f"{budget_id}_exceeded", "skills", spent, limit=budget))
 
-    attrs = {key: _int(value, 0) for key, value in sheet.attributes.items()}
-    interest_budget = _eval_budget_formula(
-        str((budgets.get("personal_interest_points") or {}).get("formula", "0")),
-        attrs,
-    )
-    occupation = budgets.get("occupational_points") or {}
-    occupation_formulas = [str(item) for item in occupation.get("formulas") or []]
-    if not occupation_formulas and occupation.get("default_formula"):
-        occupation_formulas = [str(occupation["default_formula"])]
-    occupation_budget = max((_eval_budget_formula(formula, attrs) for formula in occupation_formulas), default=0)
-    budget = interest_budget + occupation_budget
-    if spent > budget:
-        violations.append(SheetViolation("coc_skill_budget_exceeded", "skills", spent, limit=budget))
 
-
-def _check_dnd_point_buy(sheet: CharacterSheet, point_buy: dict[str, Any], violations: list[SheetViolation]) -> None:
+def _check_point_buy(
+    sheet: CharacterSheet, pack: RulePack, point_buy: Mapping[str, Any], violations: list[SheetViolation]
+) -> None:
     if not point_buy:
         return
-    minimum = int(point_buy.get("min", 8))
-    maximum = int(point_buy.get("max", 15))
+    minimum = int(point_buy.get("min", 0))
+    maximum = int(point_buy.get("max", 0))
     costs = {_int(key, -1): _int(value, 0) for key, value in (point_buy.get("costs") or {}).items()}
-    abilities = [sheet.attributes.get(key) for key in ("STR", "DEX", "CON", "INT", "WIS", "CHA")]
-    numeric = [_coerce_int(value) for value in abilities]
-    if any(value is None or value < minimum or value > maximum for value in numeric):
+    keys = list((pack.creation_constraints.get("attributes") or {}).keys())
+    numeric = [_coerce_int(sheet.attributes.get(key)) for key in keys]
+    if not numeric or any(value is None or value < minimum or value > maximum for value in numeric):
         return
     spent = sum(costs.get(int(value), 0) for value in numeric if value is not None)
-    budget = int(point_buy.get("budget", 27))
+    budget = int(point_buy.get("budget", 0))
     if spent > budget:
-        violations.append(SheetViolation("dnd_point_buy_budget_exceeded", "attributes", spent, limit=budget))
+        violations.append(SheetViolation("point_buy_budget_exceeded", "attributes", spent, limit=budget))
 
 
-def _eval_budget_formula(formula: str, attrs: dict[str, int]) -> int:
-    total = 0
-    for term in formula.replace(" ", "").split("+"):
-        if not term:
-            continue
-        product = 1
-        for factor in term.split("*"):
-            product *= _int(attrs.get(factor, factor), 0)
-        total += product
-    return total
+def _eval_budget_formula(pack: RulePack, formula: str, namespace: Mapping[str, Any]) -> int:
+    """Evaluate one condexpr budget formula over the canonical value namespace
+    (unknown / non-numeric names fall back to the pack default, then 0)."""
+    try:
+        compiled = compile_expression(formula)
+    except CondExprError:
+        return 0
+
+    def resolve(path: str) -> Any:
+        return _int(namespace.get(path, pack.defaults.get(path, 0)), 0)
+
+    try:
+        return int(compiled(resolve))
+    except (CondExprError, TypeError, ValueError):
+        return 0
 
 
 def _int(value: Any, default: int = 0) -> int:

@@ -27,11 +27,10 @@ from typing import Any
 
 from agent.context import AgentCtx
 from agent.services import Services
-from core.character_manager import CharacterSheet, get_hit_points
+from core.character_manager import CharacterSheet, character_resources
 from core.documents import KEEPER_VIEWER, MODULE_POOL_ID, MVU_ID, PLAYER_VIEWER, SCENE_ID
 from core.modvars import MODVARS_DOC_ID, MODVARS_DOC_TYPE, wire_entries
 
-_COC_SYSTEM = "CoC"
 _UNSET_CHARACTER_NAME = "default"
 
 
@@ -102,22 +101,11 @@ async def resolve_active_character(services: Services, ctx: AgentCtx) -> Charact
 async def _character_payload(services: Services, chat_key: str, sheet: CharacterSheet) -> dict[str, Any]:
     """Protocol 2.0: vitals ride a generic ``resources`` list ({id,label,value,max})
     instead of per-system field names — a client renders meters without knowing
-    any rule system. The per-system extraction below is the stage-B seam (the
-    sheet layer will declare its own resources); the WIRE shape is final."""
+    any rule system. The sheet layer declares its own resources (M16 stage B:
+    `core.character_manager.character_resources`, pack-driven); the WIRE shape
+    is final."""
     attrs = sheet.attributes
-    resources: list[dict[str, Any]] = []
-    if sheet.system == _COC_SYSTEM:
-        for res_id, label, value_key, max_key in (
-            ("hp", "HP", "HP", "HPMAX"),
-            ("san", "SAN", "SAN", "SANMAX"),
-            ("mp", "MP", "MP", "MPMAX"),
-        ):
-            value, maximum = attrs.get(value_key), attrs.get(max_key)
-            if value is not None and maximum is not None:
-                resources.append({"id": res_id, "label": label, "value": value, "max": maximum})
-    else:
-        hp, hpmax = get_hit_points(sheet)
-        resources.append({"id": "hp", "label": "HP", "value": hp, "max": hpmax})
+    resources = character_resources(sheet)
 
     status_effects: list[Any] = []
     try:
@@ -152,9 +140,10 @@ async def _party(
     except Exception:
         return []
     companion_names = await _companion_sheet_names(services, chat_key)
+    canonical_active = _canonical_system(active_system) if active_system is not None else None
     members: list[dict[str, Any]] = []
     for member in roster:
-        if active_system is not None and member.get("system") != active_system:
+        if canonical_active is not None and _canonical_system(member.get("system", "")) != canonical_active:
             continue
         payload = {
             "name": member.get("name", ""),
@@ -175,18 +164,37 @@ async def _party(
 
 def _party_member_resources(member: dict[str, Any]) -> list[dict[str, Any]]:
     """Protocol 2.0 party vitals: the same generic ``resources`` list shape as
-    ``state.character`` (the pre-2.0 hp/hpMax-vs-hpmax casing split is gone)."""
+    ``state.character`` -- read straight off the roster entry. M17:
+    `CharacterManager.sync_party_roster` already stores the pack-declared
+    meter list (`core.character_manager.character_resources`) verbatim; this
+    only validates the wire shape survived the JSON round-trip."""
     resources: list[dict[str, Any]] = []
-    for res_id, label, value_key, max_key in (
-        ("hp", "HP", "hp", "hpMax"),
-        ("san", "SAN", "san", "sanMax"),
-        ("mp", "MP", "mp", "mpMax"),
-    ):
-        value = _int_value(member.get(value_key))
-        max_value = _int_value(member.get(max_key))
-        if value is not None and max_value is not None:
-            resources.append({"id": res_id, "label": label, "value": value, "max": max_value})
+    for entry in member.get("resources") or []:
+        if not isinstance(entry, dict):
+            continue
+        res_id, label = entry.get("id"), entry.get("label")
+        if not res_id or not label:
+            continue
+        value = _int_value(entry.get("value"))
+        maximum = _int_value(entry.get("max"))
+        if value is None or maximum is None:
+            continue
+        resources.append({"id": res_id, "label": label, "value": value, "max": maximum})
     return resources
+
+
+def _canonical_system(name: str) -> str:
+    """`name` resolved to its rulepack's canonical system id, else `name`
+    unchanged (an unresolvable or blank name has nothing to canonicalize
+    against). Lets an active-character filter compare like with like even when
+    a roster entry's `system` predates a pack's canonical id -- imported
+    lazily to avoid a module-level cycle."""
+    from core.rulepacks import load_rulepack
+
+    try:
+        return load_rulepack(name).system
+    except Exception:
+        return name
 
 
 def _int_value(value: Any) -> int | None:

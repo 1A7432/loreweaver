@@ -68,7 +68,7 @@ async def test_import_character_as_pc_saves_active_sheet(tmp_path):
     # The sheet is saved AND set active for the acting user -> get_character (active) round-trips.
     sheet = await services.characters.get_character("player-1", "chat-pc")
     assert sheet.name == "Ada"
-    assert sheet.system == "CoC"
+    assert sheet.system == "coc7"
     assert sheet.occupation == "Professor"
 
 
@@ -111,7 +111,7 @@ async def test_import_character_as_companion_creates_record_sheet_and_lore(tmp_p
     # Its sheet is saved under companion:{id} (active for that virtual user_key).
     sheet = await services.characters.get_character(f"companion:{companion.id}", "chat-comp")
     assert sheet.name == "Beric"
-    assert sheet.system == "CoC"
+    assert sheet.system == "coc7"
 
     # The card's character_book was folded into the world lore, findable via query_lore.
     lore = await WorldbookTools(services).query_lore(
@@ -295,4 +295,4 @@ async def test_world_import_puts_the_character_half_on_the_claimable_roster(tmp_
     assert status == "ok" and sheet is not None
     active = await services.characters.get_character("player-1", "chat-cast")
     assert active.name == "理"
-    assert active.system == "CoC"  # rule-validated sheet, not a raw persona blob
+    assert active.system == "coc7"  # rule-validated sheet, not a raw persona blob

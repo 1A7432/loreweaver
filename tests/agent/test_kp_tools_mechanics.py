@@ -22,6 +22,7 @@ from agent.tools import Toolset
 from core.check_outcome import RollDetail
 from core.dice_engine import DiceRoller, seed_dice
 from core.rulepacks import load_rulepack
+from core.sheets import sheet_value
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.i18n import I18n
@@ -92,7 +93,7 @@ async def test_create_character_then_get_character_sheet_returns_the_sheet():
 
     created = await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=True)
     assert "Vera" in created
-    assert "COC7" in created
+    assert "coc7" in created
 
     sheet = await char_tools.get_character_sheet(ctx)
     assert "Vera" in sheet
@@ -107,11 +108,11 @@ async def test_create_character_dnd5e_auto_generate_false_uses_defaults():
 
     created = await char_tools.create_character(ctx, name="Thorin", system="dnd5e", auto_generate=False)
     assert "Thorin" in created
-    assert "DND5E" in created
+    assert "dnd5e" in created
 
     sheet = await char_tools.get_character_sheet(ctx)
     assert "Thorin" in sheet
-    assert "DnD5e" in sheet
+    assert "dnd5e" in sheet
 
 
 async def test_get_character_sheet_without_a_character_returns_localized_error():
@@ -179,9 +180,10 @@ async def test_update_dnd_attribute_recomputes_derived_fields_and_routes_hp_edit
     await char_tools.update_character_attribute(ctx, attribute="HP", value=10)
 
     updated = await services.characters.get_character(ctx.uid(), ctx.chat_key)
-    assert updated.secondary_attributes["先攻修正"] == 2
-    assert updated.secondary_attributes["护甲等级"] == 12
-    assert updated.skills["体操"] == 2
+    dnd_pack = load_rulepack("dnd5e")
+    assert sheet_value(updated, dnd_pack, "先攻修正") == 2
+    assert sheet_value(updated, dnd_pack, "护甲等级") == 12
+    assert sheet_value(updated, dnd_pack, "体操") == 2
     assert (updated.hp_current, updated.hp_max) == (10, 12)
     assert "HP" not in updated.attributes
 
@@ -441,7 +443,7 @@ async def test_skill_check_dnd5e_uses_get_dnd_skill_modifier_against_dc():
 
     assert "Thorin" in result
     assert f"{expected.total}" in result
-    assert "DC 10" in result
+    assert "target 10" in result
 
 
 async def test_dnd_skill_check_records_structured_advantage_and_critical_fields():
@@ -570,7 +572,7 @@ async def test_room_roster_actor_name_is_attributed_to_player_for_checks_and_pla
 
 
 # ---------------------------------------------------------------------------
-# DiceTools — sanity_check / skill_growth / opposed_check / hp_manager / wod_check / random_madness
+# DiceTools — subsystem tools (loss/growth/opposed/tables) / hp_manager / pool checks
 # ---------------------------------------------------------------------------
 
 

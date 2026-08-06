@@ -95,6 +95,43 @@ async def _note_entries(documents: DocumentStore, chat_key: str, category: str) 
     return content if isinstance(content, list) else []
 
 
+def _canonical_system(name: str) -> str:
+    """`name` resolved to its rulepack's canonical system id, else `name`
+    unchanged (an unresolvable or blank name has nothing to canonicalize
+    against). Lets the active-character roster filter below compare like with
+    like even when a roster entry's `system` predates a pack's canonical id."""
+    from core.rulepacks import load_rulepack
+
+    try:
+        return load_rulepack(name).system
+    except Exception:
+        return name
+
+
+def _character_meters(character: Any) -> list[dict[str, Any]]:
+    """The (duck-typed) solo character's generic resource meters: its
+    rulepack's declared ``resources`` (HP/SAN/MP-alike), or ``[]`` when its
+    system doesn't resolve to a pack.
+
+    Goes through `core.rulepacks`/`core.sheets` directly rather than
+    `core.character_manager.character_resources` -- this module never imports
+    `core.character_manager` (see the module docstring: `character_manager`
+    stays an injected, duck-typed parameter), so any sheet-shaped object --
+    the real thing or a test fake -- works here the same way.
+    """
+    from core.rulepacks import load_rulepack
+    from core.sheets import wire_resources
+
+    try:
+        pack = load_rulepack(getattr(character, "system", "") or "")
+    except Exception:
+        return []
+    try:
+        return wire_resources(character, pack)
+    except Exception:
+        return []
+
+
 async def inject_trpg_system_prompt(ctx: Any, i18n: I18n) -> str:
     """TRPG system-identity section: GM identity plus the table's operating rules.
 
@@ -168,63 +205,36 @@ async def inject_game_state_prompt(ctx: Any, character_manager: Any, store: Stor
             )
             roster = await character_manager.get_party_roster(chat_key)
             if active_system is not None:
-                roster = [member for member in roster if member.get("system") == active_system]
+                canonical_active = _canonical_system(active_system)
+                roster = [
+                    member for member in roster if _canonical_system(member.get("system", "")) == canonical_active
+                ]
             if roster:
                 lines.append("")
                 lines.append(i18n.t("prompt.game_state.roster_header"))
                 for member in roster:
                     name = member.get("name", "?")
-                    system = member.get("system", "CoC")
                     status_eff = member.get("status_effects", [])
                     eff_str = " | ".join(status_eff) if status_eff else i18n.t("common.none")
-                    if system == "CoC":
-                        hp = member.get("HP", "?/?")
-                        san = member.get("SAN", "?/?")
-                        mp = member.get("MP", "?/?")
-                        lines.append(
-                            i18n.t(
-                                "prompt.game_state.roster_coc_line",
-                                name=name,
-                                hp=hp,
-                                san=san,
-                                mp=mp,
-                                effects=eff_str,
-                            )
+                    meters_str = (
+                        " | ".join(f"{m['label']} {m['value']}/{m['max']}" for m in member.get("resources") or [])
+                        or i18n.t("common.none")
+                    )
+                    lines.append(
+                        i18n.t(
+                            "prompt.game_state.roster_line",
+                            name=name,
+                            meters=meters_str,
+                            effects=eff_str,
                         )
-                    else:
-                        hp = member.get("HP", "?")
-                        ac = member.get("AC", "?")
-                        lines.append(
-                            i18n.t(
-                                "prompt.game_state.roster_other_line",
-                                name=name,
-                                hp=hp,
-                                ac=ac,
-                                effects=eff_str,
-                            )
-                        )
+                    )
             else:
                 if character and character.name != "default":
-                    attrs = character.attributes
-                    if character.system == "CoC":
-                        hp = f"{attrs.get('HP', '?')}/{attrs.get('HPMAX', '?')}"
-                        san = f"{attrs.get('SAN', '?')}/{attrs.get('SANMAX', '?')}"
-                        mp = f"{attrs.get('MP', '?')}/{attrs.get('MPMAX', '?')}"
-                        lines.append(
-                            i18n.t(
-                                "prompt.game_state.solo_coc_line",
-                                name=character.name,
-                                hp=hp,
-                                san=san,
-                                mp=mp,
-                            )
-                        )
-                    else:
-                        hp = attrs.get("HP", "?")
-                        ac = getattr(character, "secondary_attributes", {}).get("护甲等级", "?")
-                        lines.append(
-                            i18n.t("prompt.game_state.solo_other_line", name=character.name, hp=hp, ac=ac)
-                        )
+                    meters_str = (
+                        " | ".join(f"{m['label']} {m['value']}/{m['max']}" for m in _character_meters(character))
+                        or i18n.t("common.none")
+                    )
+                    lines.append(i18n.t("prompt.game_state.solo_line", name=character.name, meters=meters_str))
         except Exception:
             pass
 
@@ -320,16 +330,21 @@ async def inject_game_state_prompt(ctx: Any, character_manager: Any, store: Stor
         return ""
 
 
-async def inject_system_expertise_prompt(ctx: Any, character_manager: Any, i18n: I18n) -> str:
+async def inject_system_expertise_prompt(
+    ctx: Any, character_manager: Any, i18n: I18n, default_system: str = ""
+) -> str:
     """The room system's keeper-expertise guidance — the PACK's per-locale
-    ``expertise:`` text (stage D: prompts are pack data), falling back to the
-    generic game-master framing for systems that declare none."""
+    ``expertise:`` text (stage D: prompts are pack data). The active character's
+    system wins; a room with no character yet uses `default_system` (the
+    deployment default pack), falling back to the generic game-master framing
+    for systems that declare none."""
     try:
         from core.rulepacks import load_rulepack
 
         user_id = ctx.user_id
         character = await character_manager.get_character(user_id, ctx.chat_key)
         system = character.system if character and getattr(character, "system", "") else ""
+        system = system or default_system
         try:
             pack = load_rulepack(system) if system else None
         except Exception:

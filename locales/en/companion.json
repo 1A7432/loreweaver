@@ -5,7 +5,7 @@
   "companion.actor_user.recent_heading": "Recent events:",
   "companion.actor_user.no_situation": "It is your turn. What do you do?",
   "companion.sheet.name_line": "{name} — {system}",
-  "companion.sheet.coc_status": "HP {hp}/{hpmax}, SAN {san}/{sanmax}, MP {mp}/{mpmax}",
+  "companion.sheet.status_line": "Status: {meters}",
   "companion.sheet.attributes_line": "Attributes: {attributes}",
   "companion.sheet.skills_header": "Notable skills:",
   "companion.tools.not_found": "❌ No AI companion found matching \"{name}\".",
