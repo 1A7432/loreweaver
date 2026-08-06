@@ -44,6 +44,9 @@ if TYPE_CHECKING:
     from gateway.ops import Censor
 
 _SESSION_ACTION_MAX_CHARS = 1000
+# Strong refs to in-flight post-turn scribe tasks (fire-and-forget asyncio tasks
+# are garbage-collected mid-run without one).
+_SCRIBE_TASKS: set[asyncio.Task] = set()
 
 
 async def run_turn(
@@ -289,6 +292,26 @@ async def run_turn(
                 await _run_companion_director(hub, services, ctx, command_router, censor, result.reply)
         finally:
             await hub.end_turn(ctx.chat_key)
+
+    # Post-turn Scribe (agent.scribe): fire-and-forget bookkeeping reconciliation.
+    # It runs AFTER the reply has already streamed (zero perceived latency); when
+    # it lands tracker writes it republishes room state, so panels move within
+    # seconds of the narration instead of freezing at their defaults.
+    if result is not None and services.settings.scribe.enabled:
+        tool_names = [str(entry.get("name", "")) for entry in result.tool_trace]
+
+        async def _scribe_pass(turn_result: KPTurnResult = result, names: list[str] = tool_names) -> None:
+            try:
+                from agent.scribe import run_scribe
+
+                if await run_scribe(services, ctx, text, turn_result.reply, names):
+                    await publish_state(hub, services, ctx)
+            except Exception:  # noqa: BLE001 — bookkeeping must never break the table
+                logging.getLogger(__name__).debug("scribe pass failed", exc_info=True)
+
+        task = asyncio.create_task(_scribe_pass())
+        _SCRIBE_TASKS.add(task)
+        task.add_done_callback(_SCRIBE_TASKS.discard)
 
     await publish_state(hub, services, ctx)
     return result

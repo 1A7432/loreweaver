@@ -1092,7 +1092,7 @@ class CommandRouter:
         # degrades to filename stems.
         titles: dict[str, tuple[str, tuple[str, ...]]] = {}
         try:
-            manifest = parse_manifest_text((pack_dir / MANIFEST_NAME).read_text("utf-8"))
+            manifest = parse_manifest_text((pack_dir / MANIFEST_NAME).read_text("utf-8"), expect_trust=True)
             for asset in manifest.assets:
                 titles[asset.path] = (asset.title, asset.tags)
         except Exception:  # noqa: BLE001 — metadata is best-effort, import proceeds

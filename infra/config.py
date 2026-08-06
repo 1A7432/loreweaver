@@ -31,6 +31,24 @@ class LLMSettings(BaseModel):
     reasoning_effort: str = ""  # "high"/"max" for DeepSeek thinking mode / o-series. "" = off. When set, temperature is not sent (thinking mode ignores it).
 
 
+class ScribeSettings(BaseModel):
+    """The post-turn bookkeeping Scribe (`agent.scribe`) — 书记官.
+
+    ON by default. It runs one extra LLM call after each AI-KP turn to reconcile
+    the deterministic state layer (module trackers, and reminder whispers for the
+    KP), so a SMALL/CHEAP model is the recommended configuration: set the
+    `TRPG_SCRIBE__*` fields to point at one. With every field left blank it
+    reuses the main `TRPG_LLM__*` client (correct, but you are paying flagship
+    prices for ledger work)."""
+
+    enabled: bool = True
+    provider: str = ""  # "" -> reuse the main LLM client
+    api_key: str = ""
+    base_url: str = ""
+    chat_model: str = ""
+    reasoning_effort: str = ""  # "" = provider default; "low" is plenty for ledger work
+
+
 class CensorSettings(BaseModel):
     """Content-moderation wordlist for `gateway.ops.Censor`.
 
@@ -120,6 +138,7 @@ class Settings(BaseSettings):
     imagegen: ImageGenSettings = ImageGenSettings()
     tui: TuiSettings = TuiSettings()
     censor: CensorSettings = CensorSettings()
+    scribe: ScribeSettings = ScribeSettings()
 
     def __init__(self, **values: Any) -> None:
         env_file = values.pop("_env_file", os.environ.get("TRPG_ENV_FILE") or ".env")

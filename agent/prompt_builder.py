@@ -173,6 +173,16 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
     if preset_section:
         sections.append(preset_section)
 
+    # Scribe whispers (agent.scribe): keeper-side bookkeeping reminders from the
+    # post-turn reconciliation pass, consumed read-and-clear. Marker-gated by
+    # their own existence — a room with nothing pending gets no section at all,
+    # and the KP keeps full judgment over what to do with each note.
+    from agent.scribe import pop_whispers
+
+    whispers = await pop_whispers(services, ctx.chat_key)
+    if whispers:
+        sections.append(i18n.t("prompt.scribe_notes") + "\n" + "\n".join(f"- {note}" for note in whispers))
+
     # Event-hook inject() texts for THIS turn (Layer C — agent.hook_runtime stashes them on
     # ctx.extra before this build; consumed per turn, never persisted).
     hook_injections = [text for text in (extra.get("hook_injections") or []) if isinstance(text, str)]
