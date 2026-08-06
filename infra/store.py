@@ -66,6 +66,39 @@ class Store:
             )
             """
         )
+        # M17 unified document model: every piece of room CONTENT lives in one
+        # `documents` table (room, type, id); `seq` preserves insertion order per
+        # (room, type) so listing never needs a separate index row. Room-scoped
+        # RUNTIME/machinery state (clocks, histories, timers, caches) lives in
+        # `room_state`, room-scoped by COLUMN — which is what lets backup/export/
+        # reset enumerate a room without any per-store key allowlist. The old kv
+        # table keeps only non-room-scoped data (config, credentials, bindings,
+        # per-user caches).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS documents (
+                room TEXT NOT NULL,
+                type TEXT NOT NULL,
+                id TEXT NOT NULL,
+                schema_version INTEGER NOT NULL,
+                data TEXT NOT NULL,
+                meta TEXT NOT NULL,
+                grants TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                PRIMARY KEY (room, type, id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS room_state (
+                room TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT,
+                PRIMARY KEY (room, key)
+            )
+            """
+        )
         conn.commit()
         restrict_sqlite_files(self._db_path)
         return conn
@@ -198,6 +231,186 @@ class Store:
             except Exception:
                 conn.rollback()
                 raise
+
+    # ------------------------------------------------------------------
+    # Documents table (M17) — raw row transport; typed semantics (schema
+    # validation, projections) live in `core.documents`, never here.
+    # ------------------------------------------------------------------
+
+    async def doc_get(self, room: str, doc_type: str, doc_id: str) -> dict | None:
+        async with self._lock:
+            conn = self._ensure_conn()
+            row = conn.execute(
+                "SELECT room, type, id, schema_version, data, meta, grants, seq"
+                " FROM documents WHERE room = ? AND type = ? AND id = ?",
+                (room, doc_type, doc_id),
+            ).fetchone()
+            return self._doc_row(row) if row is not None else None
+
+    async def doc_put(
+        self,
+        room: str,
+        doc_type: str,
+        doc_id: str,
+        *,
+        schema_version: int,
+        data: str,
+        meta: str,
+        grants: str,
+    ) -> None:
+        """Insert or update one document row, preserving its insertion `seq`."""
+        async with self._lock:
+            conn = self._ensure_conn()
+            existing = conn.execute(
+                "SELECT seq FROM documents WHERE room = ? AND type = ? AND id = ?",
+                (room, doc_type, doc_id),
+            ).fetchone()
+            if existing is not None:
+                seq = existing[0]
+            else:
+                row = conn.execute(
+                    "SELECT COALESCE(MAX(seq) + 1, 0) FROM documents WHERE room = ? AND type = ?",
+                    (room, doc_type),
+                ).fetchone()
+                seq = row[0]
+            conn.execute(
+                "INSERT OR REPLACE INTO documents (room, type, id, schema_version, data, meta, grants, seq)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (room, doc_type, doc_id, schema_version, data, meta, grants, seq),
+            )
+            self._commit(conn)
+
+    async def doc_list(self, room: str, doc_type: str | None = None) -> list[dict]:
+        """All of `room`'s document rows (optionally one type), in insertion order."""
+        async with self._lock:
+            conn = self._ensure_conn()
+            if doc_type is None:
+                rows = conn.execute(
+                    "SELECT room, type, id, schema_version, data, meta, grants, seq"
+                    " FROM documents WHERE room = ? ORDER BY type, seq",
+                    (room,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT room, type, id, schema_version, data, meta, grants, seq"
+                    " FROM documents WHERE room = ? AND type = ? ORDER BY seq",
+                    (room, doc_type),
+                ).fetchall()
+            return [self._doc_row(row) for row in rows]
+
+    async def doc_delete(self, room: str, doc_type: str, doc_id: str) -> bool:
+        async with self._lock:
+            conn = self._ensure_conn()
+            cursor = conn.execute(
+                "DELETE FROM documents WHERE room = ? AND type = ? AND id = ?",
+                (room, doc_type, doc_id),
+            )
+            self._commit(conn)
+            return cursor.rowcount > 0
+
+    async def doc_delete_type(self, room: str, doc_type: str) -> int:
+        async with self._lock:
+            conn = self._ensure_conn()
+            cursor = conn.execute(
+                "DELETE FROM documents WHERE room = ? AND type = ?", (room, doc_type)
+            )
+            self._commit(conn)
+            return cursor.rowcount if cursor.rowcount != -1 else 0
+
+    async def doc_delete_room(self, room: str) -> int:
+        async with self._lock:
+            conn = self._ensure_conn()
+            cursor = conn.execute("DELETE FROM documents WHERE room = ?", (room,))
+            self._commit(conn)
+            return cursor.rowcount if cursor.rowcount != -1 else 0
+
+    @staticmethod
+    def _doc_row(row: tuple) -> dict:
+        return {
+            "room": row[0],
+            "type": row[1],
+            "id": row[2],
+            "schema_version": row[3],
+            "data": row[4],
+            "meta": row[5],
+            "grants": row[6],
+            "seq": row[7],
+        }
+
+    # ------------------------------------------------------------------
+    # Room-state table (M17) — room-scoped runtime/machinery values. The
+    # room lives in its own COLUMN, so a whole room enumerates/backs up/
+    # deletes without any key allowlist.
+    # ------------------------------------------------------------------
+
+    async def state_get(self, room: str, key: str) -> str | None:
+        async with self._lock:
+            conn = self._ensure_conn()
+            row = conn.execute(
+                "SELECT value FROM room_state WHERE room = ? AND key = ?", (room, key)
+            ).fetchone()
+            return row[0] if row is not None else None
+
+    async def state_set(self, room: str, key: str, value: str | None) -> None:
+        async with self._lock:
+            conn = self._ensure_conn()
+            conn.execute(
+                "INSERT OR REPLACE INTO room_state (room, key, value) VALUES (?, ?, ?)",
+                (room, key, value),
+            )
+            self._commit(conn)
+
+    async def state_delete(self, room: str, key: str) -> None:
+        async with self._lock:
+            conn = self._ensure_conn()
+            conn.execute("DELETE FROM room_state WHERE room = ? AND key = ?", (room, key))
+            self._commit(conn)
+
+    async def state_list(self, room: str, prefix: str | None = None) -> list[dict[str, str | None]]:
+        """`room`'s runtime rows, optionally narrowed to keys starting with `prefix`."""
+        async with self._lock:
+            conn = self._ensure_conn()
+            if prefix is None:
+                rows = conn.execute(
+                    "SELECT key, value FROM room_state WHERE room = ?", (room,)
+                ).fetchall()
+            else:
+                escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                rows = conn.execute(
+                    "SELECT key, value FROM room_state WHERE room = ? AND key LIKE ? ESCAPE '\\'",
+                    (room, f"{escaped}%"),
+                ).fetchall()
+            return [{"key": row[0], "value": row[1]} for row in rows]
+
+    async def state_delete_keys(self, room: str, keys: Iterable[str] = (), prefixes: Iterable[str] = ()) -> int:
+        """Delete `room` rows matching any exact key or key prefix; return the count."""
+        exact = list(keys)
+        prefix_list = list(prefixes)
+        deleted = 0
+        async with self._lock:
+            conn = self._ensure_conn()
+            if exact:
+                cursor = conn.executemany(
+                    "DELETE FROM room_state WHERE room = ? AND key = ?",
+                    [(room, key) for key in exact],
+                )
+                deleted += cursor.rowcount if cursor.rowcount != -1 else 0
+            for prefix in prefix_list:
+                escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                cursor = conn.execute(
+                    "DELETE FROM room_state WHERE room = ? AND key LIKE ? ESCAPE '\\'",
+                    (room, f"{escaped}%"),
+                )
+                deleted += cursor.rowcount if cursor.rowcount != -1 else 0
+            self._commit(conn)
+            return deleted
+
+    async def state_delete_room(self, room: str) -> int:
+        async with self._lock:
+            conn = self._ensure_conn()
+            cursor = conn.execute("DELETE FROM room_state WHERE room = ?", (room,))
+            self._commit(conn)
+            return cursor.rowcount if cursor.rowcount != -1 else 0
 
     def close(self) -> None:
         """Close the underlying connection, if one has been opened."""
