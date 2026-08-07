@@ -563,7 +563,7 @@ Could not resolve the pack ref: release for 'gh:1A7432/loreweaver@v1.0.0' has no
 
 **依赖是扁平且内联的。** 一个包自带它需要的一切，没有包间依赖解析。`engine:` 只声明**最低**版本（`protocol`、`server`），达不到就明确拒绝安装，而不是半工作。
 
-**做连载？** 从第一部就给每条世界书条目一个稳定的 `id`。后续installment 用 `<pack-id>#<entry-id>` 引用共享世界，而不是复制它；引擎按文档记录来源（`meta.source`），所以更新时分得清哪些是主人改过的、哪些应该跟着包走。
+**做连载？** 从第一部就给每条世界书条目一个稳定的 `id`。后续几部用 `<pack-id>#<entry-id>` 引用共享世界，而不是复制它。引擎会按文档记录来源（`meta.source`），所以更新时分得清哪些是这一桌自己改过的、哪些该跟着包走。
 
 ---
 

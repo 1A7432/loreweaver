@@ -312,7 +312,7 @@ audio:                       # 导演可以调用的音频提示
 ## 发现、清单与版本——`.lwpack` 格式
 
 - **发现目录**：仓库内（`rulepacks/`、`skills/`）和用户数据目录（`data_dir/skills`、`data_dir/rulepacks`），所以一个插件不必住在检出目录里。内置 id 永远赢过同名的用户目录文件。
-- **一个可发布单元**：一整个作品——技能 + 规则包 + 卡 + 世界书 + 媒体素材——作为**一个自包含的 `.lwpack`** travel：一个带根 `pack.yaml` 清单的 zip（`core/pack.py`）。作者跑 `python -m app --pack <源目录>`，用户跑 `python -m app --install <ref> [--yes]`。没有"先装 X 插件"的说明，也没有素材要挂图床。
+- **一个可发布单元**：一整个作品——技能 + 规则包 + 卡 + 世界书 + 媒体素材——作为**一个自包含的 `.lwpack`** 一起走：一个带根 `pack.yaml` 清单的 zip（`core/pack.py`）。作者跑 `python -m app --pack <源目录>`，用户跑 `python -m app --install <ref> [--yes]`。没有"先装 X 插件"的说明，也没有素材要挂图床。
 - **Git 就是仓库**：一个安装引用可以是本地路径、`https://` 直链，或者 `gh:owner/repo[@tag]`——由 `infra/pack_source.py` 通过匿名 GitHub API 解析到那个 release 的 `*.lwpack` asset（`@tag` 钉住一个 release，不写就是最新）。这里刻意没有中心化包仓库。
 - **装上不等于启用**：技能落进用户技能目录、规则包落进用户规则包目录——立刻可发现，但房间仍然要自己点头（`.skill enable <id>` / 常规规则命令）。卡、世界书和素材落到 `data_dir/packs/<id>@<version>/`，供已有的房间内导入流程（`.import`、`.module`）消费；重装同一个 `id@version` 会整个替换那个包目录，绝不合并。
 - **信任卡，不是关卡**：安装前 CLI 打印这个包自动生成的 `trust` 摘要——技能／规则包／卡／世界书数量、是否带沙箱 hooks JS 或 EJS 模板、素材有多少 MB——然后请求确认（`--yes` 跳过；非交互运行必须显式给）。和完整 EJS 同一个立场：运营者的机器，运营者的知情决定。
