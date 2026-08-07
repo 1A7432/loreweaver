@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from infra.config import LLMSettings, Settings
 from infra.llm import ChatResult, LLMClient, OpenAILLM, ToolCall, parse_usage
+from infra.llm_retry import RetryingLLM
 from infra.oauth_flows import (
     XAI_API_BASE,
     TokenManager,
@@ -81,8 +82,23 @@ def build_llm(
 
     Optional ``credentials`` supplies subscription OAuth tokens for
     ``chatgpt`` / ``supergrok`` (and aliases). Classic API-key providers ignore it.
+
+    EVERY path comes back wrapped in `infra.llm_retry.RetryingLLM` (F22): a 429 is the
+    provider saying "not right now", and a table should slow down, never die. Wrapping
+    here rather than per adapter means the five provider paths — plus the separately
+    built Scribe and Director clients, which also come through here — share one
+    implementation instead of five that drift.
     """
 
+    return RetryingLLM(_build_provider(settings, credentials=credentials))
+
+
+def _build_provider(
+    settings: Settings,
+    *,
+    credentials: CredentialBook | None = None,
+) -> LLMClient:
+    """The raw provider client, before the shared retry wrapper (see `build_llm`)."""
     llm_settings = settings.llm
     provider = (llm_settings.provider or "openai").lower()
     if provider in {"anthropic", "claude"}:

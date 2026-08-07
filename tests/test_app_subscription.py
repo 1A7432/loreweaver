@@ -10,6 +10,7 @@ from gateway.commands import CommandRouter
 from infra.config import LLMSettings, Settings
 from infra.embeddings import FakeEmbeddings
 from infra.i18n import get_i18n
+from infra.llm_retry import unwrap_llm
 from infra.llm import OpenAILLM
 from infra.oauth_flows import SubscriptionToken
 from infra.providers import MutableLLM
@@ -67,7 +68,7 @@ async def test_app_model_screen_switches_demo_to_api_provider_and_restores_on_re
     assert response["type"] == "admin_config"
     assert response["provider"] == "deepseek"
     assert response["using_demo"] is False
-    assert isinstance(services.llm.inner, _OfflineProviderLLM)
+    assert isinstance(unwrap_llm(services.llm), _OfflineProviderLLM)
     assert services.llm.inner.provider_settings.provider == "deepseek"
     assert services.llm.inner.provider_settings.chat_model == "deepseek-chat"
     assert services.llm.inner.provider_settings.api_key == "sk-offline-test"
@@ -84,7 +85,7 @@ async def test_app_model_screen_switches_demo_to_api_provider_and_restores_on_re
     restarted = _app_services(settings(), embeddings=FakeEmbeddings(64))
     try:
         assert isinstance(restarted.llm, MutableLLM)
-        assert isinstance(restarted.llm.inner, _OfflineProviderLLM)
+        assert isinstance(unwrap_llm(restarted.llm), _OfflineProviderLLM)
         assert restarted.llm.using_fallback is False
         assert not _uses_demo_llm(restarted)
         assert restarted.settings.llm.provider == "deepseek"
@@ -121,7 +122,7 @@ async def test_app_demo_hot_switches_to_subscription_and_restores_on_restart(tmp
     )
 
     assert reply is not None and "supergrok" in reply
-    assert isinstance(services.llm.inner, OpenAILLM)
+    assert isinstance(unwrap_llm(services.llm), OpenAILLM)
     assert services.llm.using_fallback is False
     assert not _uses_demo_llm(services)
     assert await services.llm.inner._token_provider() == "access-token"
@@ -130,7 +131,7 @@ async def test_app_demo_hot_switches_to_subscription_and_restores_on_restart(tmp
     restarted = _app_services(settings(), embeddings=FakeEmbeddings(64))
     try:
         assert isinstance(restarted.llm, MutableLLM)
-        assert isinstance(restarted.llm.inner, OpenAILLM)
+        assert isinstance(unwrap_llm(restarted.llm), OpenAILLM)
         assert restarted.llm.using_fallback is False
         assert not _uses_demo_llm(restarted)
         assert restarted.settings.llm.provider == "supergrok"

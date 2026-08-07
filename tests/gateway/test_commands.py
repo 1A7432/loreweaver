@@ -22,6 +22,7 @@ from gateway.rooms import (
 from gateway.session import SessionSource
 from infra.config import LLMSettings, Settings
 from infra.embeddings import FakeEmbeddings
+from infra.llm_retry import unwrap_llm
 from infra.llm import FakeLLM, assistant_text
 from infra.providers import MutableLLM
 from infra.runtime_config import CREDENTIALS_KEY, DEFAULT_KEY
@@ -472,7 +473,7 @@ async def test_model_login_switches_current_chatgpt_proxy_to_oauth(monkeypatch):
 
     started = await router.dispatch(ctx, ".model login chatgpt")
     for _ in range(50):
-        if isinstance(services.llm.inner, ChatGPTSubscriptionLLM):
+        if isinstance(unwrap_llm(services.llm), ChatGPTSubscriptionLLM):
             break
         await asyncio.sleep(0.01)
     else:
@@ -1811,7 +1812,7 @@ async def test_model_set_build_failure_leaves_live_and_persisted_config_unchange
     assert services.settings.llm.chat_model == "gpt-4o"
     assert await services.runtime_config.get() == {}
     # The failed candidate was never installed.
-    assert isinstance(services.llm.inner, FakeLLM)
+    assert isinstance(unwrap_llm(services.llm), FakeLLM)
 
 
 class _BoomMutableLLM:

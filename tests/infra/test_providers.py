@@ -42,7 +42,7 @@ def test_build_llm_selects_openai_default(monkeypatch):
 
     llm = build_llm(_settings("openai"))
 
-    assert isinstance(llm, OpenAILLM)
+    assert isinstance(llm.inner, OpenAILLM)
     assert llm._client.init_kwargs["base_url"] is None
 
 
@@ -51,7 +51,7 @@ def test_build_llm_selects_openai_compatible_preset(monkeypatch):
 
     llm = build_llm(_settings("deepseek"))
 
-    assert isinstance(llm, OpenAILLM)
+    assert isinstance(llm.inner, OpenAILLM)
     assert llm._client.init_kwargs["base_url"] == PRESETS["deepseek"]
 
 
@@ -60,7 +60,7 @@ def test_build_llm_explicit_base_url_overrides_preset(monkeypatch):
 
     llm = build_llm(_settings("deepseek", base_url="https://example.test/v1"))
 
-    assert isinstance(llm, OpenAILLM)
+    assert isinstance(llm.inner, OpenAILLM)
     assert llm._client.init_kwargs["base_url"] == "https://example.test/v1"
 
 
@@ -71,7 +71,7 @@ def test_build_llm_selects_chatgpt_subscription_proxy_with_explicit_base_url(mon
 
     assert is_known_provider("gpt-subscription")
     assert is_known_provider("chatgpt")
-    assert isinstance(llm, OpenAILLM)
+    assert isinstance(llm.inner, OpenAILLM)
     assert llm._client.init_kwargs["base_url"] == "https://proxy.example/v1"
 
 
@@ -89,7 +89,7 @@ def test_openai_compat_client_never_borrows_ambient_openai_key(monkeypatch):
         )
     )
 
-    assert isinstance(llm, OpenAILLM)
+    assert isinstance(llm.inner, OpenAILLM)
     assert llm._client.init_kwargs["api_key"] == "missing"
 
 
@@ -230,7 +230,7 @@ def test_build_llm_selects_anthropic(monkeypatch):
 
     llm = build_llm(_settings("anthropic"))
 
-    assert isinstance(llm, AnthropicLLM)
+    assert isinstance(llm.inner, AnthropicLLM)
 
 
 def test_build_llm_selects_gemini(monkeypatch):
@@ -242,7 +242,7 @@ def test_build_llm_selects_gemini(monkeypatch):
 
     llm = build_llm(_settings("gemini"))
 
-    assert isinstance(llm, GeminiLLM)
+    assert isinstance(llm.inner, GeminiLLM)
 
 
 def test_to_anthropic_messages_maps_system_text_tool_use_and_tool_result():

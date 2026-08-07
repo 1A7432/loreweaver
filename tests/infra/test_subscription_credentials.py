@@ -200,7 +200,7 @@ def test_build_llm_chatgpt_proxy_still_works(monkeypatch):
     )
     from infra.llm import OpenAILLM
 
-    assert isinstance(llm, OpenAILLM)
+    assert isinstance(llm.inner, OpenAILLM)
     assert llm._client.kwargs["base_url"] == "https://proxy.example/v1"
 
 
@@ -227,13 +227,13 @@ async def test_build_llm_chatgpt_and_supergrok_with_subscription(monkeypatch):
     monkeypatch.setattr("infra.llm.AsyncOpenAI", _Fake)
 
     chatgpt = build_llm(Settings(llm=LLMSettings(provider="chatgpt", chat_model="gpt-5.4")), credentials=book)
-    assert isinstance(chatgpt, ChatGPTSubscriptionLLM)
+    assert isinstance(chatgpt.inner, ChatGPTSubscriptionLLM)
 
     supergrok = build_llm(
         Settings(llm=LLMSettings(provider="supergrok", chat_model="grok-4.3")),
         credentials=book,
     )
-    assert isinstance(supergrok, OpenAILLM)
+    assert isinstance(supergrok.inner, OpenAILLM)
     assert supergrok._token_provider is not None
     assert is_known_provider("supergrok")
 
@@ -273,7 +273,7 @@ async def test_supergrok_llm_and_imagegen_share_manager_and_logout_invalidates_b
 
     from infra.llm import OpenAILLM
 
-    assert isinstance(llm, OpenAILLM)
+    assert isinstance(llm.inner, OpenAILLM)
     assert isinstance(imagegen, OpenAICompatImageGen)
     assert llm._settings.base_url == XAI_API_BASE
     assert imagegen._settings.base_url == XAI_API_BASE
