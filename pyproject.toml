@@ -51,7 +51,12 @@ loreweaver = "app:main"
 
 [build-system]
 requires = ["setuptools>=83.0.0", "setuptools-scm>=10.2.1"]
-build-backend = "setuptools.build_meta"
+# `__legacy__` differs from plain `build_meta` in exactly one way: it puts the source
+# tree on `sys.path` for the backend. That is what lets setuptools_scm import the
+# `lw_versioning` module named below; with plain `build_meta` the import fails, the
+# scheme silently falls through to the default guess, and the version quietly stops
+# following the protocol. Verified by `test_built_version_follows_the_protocol`.
+build-backend = "setuptools.build_meta:__legacy__"
 
 [tool.setuptools_scm]
 # Auto, git-derived versioning: the version increases with every commit; milestone
@@ -59,6 +64,14 @@ build-backend = "setuptools.build_meta"
 # NOT source-version tags — `--match` on the describe command excludes them so they can
 # never poison the derivation.
 git_describe_command = "git describe --dirty --tags --long --match v[0-9]*"
+# The package version FOLLOWS THE WIRE PROTOCOL version (owner rule 2026-08-07): a
+# development build is `<protocol>.dev<N>+g<sha>`, so bumping `_PROTOCOL_VERSION` in
+# `net/session.py` moves the package on its own and the two can never drift again.
+# `lw_versioning` explains the monotonicity rule and returns None when it cannot read
+# the constant, which falls through to the default guess below. The list form is how
+# `vcs_versioning` chains schemes; the object reference is resolved by importlib, so the
+# module must stay a top-level file next to `pyproject.toml`.
+version_scheme = ["lw_versioning:protocol_dev_version", "guess-next-dev"]
 # The one-click host's source-tarball install tier has no `.git` dir at all (a plain
 # GitHub tarball checkout) — `uv sync`/`pip install` there must not explode.
 fallback_version = "0.0.0+unknown"

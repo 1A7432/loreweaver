@@ -44,8 +44,8 @@ irm https://github.com/1A7432/loreweaver/releases/latest/download/install.ps1 | 
 ```
 
 > **Read this before you paste it.** Development builds are published as ordinary GitHub releases,
-> so `releases/latest` resolves to the **newest build**, not the newest *stable* one — as of writing
-> that is `release-1.0.1.dev78+g682eac3`, not `v1.0.0`. For a project moving this fast that is the
+> so `releases/latest` resolves to the **newest build**, not the newest *stable* one — a
+> `release-<version>.dev<N>+g<sha>` tag rather than `v1.0.0`. For a project moving this fast that is the
 > right default, but it should be a choice you make knowingly rather than one the word "latest"
 > makes for you. To install a specific release instead, fetch that release's own installer — it
 > pins itself:
@@ -300,7 +300,7 @@ everything through tool calls, and budget models tend to say "you succeed" witho
 
 ```bash
 uv run pytest -q                                  # the offline suite
-uv run ruff check core infra agent gateway net adapters app.py scripts
+uv run ruff check core infra agent gateway net adapters app.py lw_versioning.py scripts
 uv run python scripts/i18n_lint.py                # no hardcoded user-facing strings
 cd clients/protocol && bun test                   # protocol package
 cd clients/tui && bun test                        # terminal client

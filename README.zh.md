@@ -43,7 +43,7 @@ Windows（PowerShell）：
 irm https://github.com/1A7432/loreweaver/releases/latest/download/install.ps1 | iex
 ```
 
-> **粘贴之前先读这段。** 开发版是作为普通 GitHub Release 发布的，所以 `releases/latest` 指的是**最新的构建**，不是最新的*稳定版*——写这行字时它是 `release-1.0.1.dev78+g682eac3`，不是 `v1.0.0`。对一个迭代这么快的项目，这是对的默认值，但这该是你自己知情做出的选择，而不是"latest"这个词替你做的。想装某个确定的版本，就去取那个 Release 自带的安装脚本，它会把自己钉在那一版上：
+> **粘贴之前先读这段。** 开发版是作为普通 GitHub Release 发布的，所以 `releases/latest` 指的是**最新的构建**，不是最新的*稳定版*——是一个 `release-<版本>.dev<N>+g<sha>` 形状的 tag，不是 `v1.0.0`。对一个迭代这么快的项目，这是对的默认值，但这该是你自己知情做出的选择，而不是"latest"这个词替你做的。想装某个确定的版本，就去取那个 Release 自带的安装脚本，它会把自己钉在那一版上：
 >
 > ```bash
 > curl -fsSL https://github.com/1A7432/loreweaver/releases/download/v1.0.0/install.sh | bash
@@ -208,7 +208,7 @@ TRPG_LLM__CHAT_MODEL=deepseek-v4-pro   TRPG_LLM__REASONING_EFFORT=high
 
 ```bash
 uv run pytest -q                                  # 离线测试套件
-uv run ruff check core infra agent gateway net adapters app.py scripts
+uv run ruff check core infra agent gateway net adapters app.py lw_versioning.py scripts
 uv run python scripts/i18n_lint.py                # 不许有硬编码的用户可见字符串
 cd clients/protocol && bun test                   # 协议包
 cd clients/tui && bun test                        # 终端客户端
