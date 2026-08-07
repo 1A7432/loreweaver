@@ -106,6 +106,52 @@ async def _seed_entries(services, chat_key: str, turns: list[int], *, tokens: in
         )
 
 
+# --- render-unit fixtures for the fold-SIZING oracles --------------------------
+# How many records a fold consumes is solved against what the prompt's chronicle
+# SECTION renders, so these fixtures make that render hand-checkable:
+#
+#   record line  = "- [turn NN] " + text = 12 + 147            = 159 ASCII chars
+#   N lines joined by "\n"                                     = 160N - 1 chars
+#   estimate_tokens(pure ASCII) = (chars + 3) // 4             = 40N
+#
+# i.e. EXACTLY 40 prompt tokens per RENDERED record, for any N. Ten rendered
+# records (the `_TAIL_MAX_ENTRIES` cap) are 1599 chars — far under the 6000-char
+# budget, so `_render_lines` truncation never enters the arithmetic. Two-digit
+# turns keep the 12-char prefix uniform.
+_RECORD_TEXT_CHARS = 147
+_TOKENS_PER_RENDERED_RECORD = 40
+_TAIL_CAP = 10  # agent.chronicle._TAIL_MAX_ENTRIES
+
+
+def _sized_text(turn: int) -> str:
+    """Record text of an EXACT ASCII length (see the block above)."""
+    assert 10 <= turn <= 99, "two-digit turns keep the rendered prefix 12 chars wide"
+    seed = f"turn{turn} " + FILLER * 2
+    text = seed[:_RECORD_TEXT_CHARS].rstrip().ljust(_RECORD_TEXT_CHARS, ".")
+    assert len(text) == _RECORD_TEXT_CHARS and text == text.strip()
+    return text
+
+
+async def _seed_sized_entries(services, chat_key: str, turns: list[int]) -> None:
+    """Seed records whose RENDER is a known size — the `tokens` stamp is left at 0
+    deliberately: nothing sizes a fold by it any more."""
+    for turn in turns:
+        await services.documents.put(
+            chat_key,
+            CHRONICLE_DOC_TYPE,
+            f"c{turn:05d}",
+            {
+                "text": _sized_text(turn),
+                "keeper": "",
+                "turn": turn,
+                "pcs": [],
+                "scene": "",
+                "folded": False,
+                "tokens": 0,
+            },
+        )
+
+
 def _is_fold_call(messages: list[dict], tools) -> bool:
     """The fold-generation call: no tools attached, and the localized fold instruction."""
     return tools is None and "campaign summary" in str(messages[0].get("content", ""))
@@ -157,25 +203,38 @@ async def test_trigger_at_060_folds_one_batch_down_to_the_040_floor():
         return assistant_text("Previously: the party entered the drowned archive.")
 
     services = _services(FakeLLM(responder=responder))
-    await _set_turn(services, CHAT, 20)
-    # 12 entries x 100 tokens; meter exactly at the 0.60 trigger of a 2000-token window.
-    await _seed_entries(services, CHAT, list(range(1, 13)), tokens=100)
-    await _set_meter(services, CHAT, 1200, window=2000)
+    await _set_turn(services, CHAT, 40)
+    # 14 records, turns 10..23; counter 40 - lag 4 = watermark 36, so all 14 foldable.
+    await _seed_sized_entries(services, CHAT, list(range(10, 24)))
+    await _set_meter(services, CHAT, 600, window=1000)
 
     outcome = await maybe_fold_chronicle(_ctx(), services)
 
-    assert outcome.ran and outcome.level == "fold"
-    # Floor projection: needed = 1200 - 0.40*2000 = 400 tokens -> exactly 4 entries.
-    assert outcome.entries_folded == 4 and outcome.batches == 1 and folds["n"] == 1
-    assert outcome.after <= 0.40 + 1e-9, "folding stops at the floor, not below it"
+    assert outcome.ran and outcome.level == "fold", "600/1000 is exactly the 0.60 trigger"
+    # HAND-DERIVED. deficit = 600 - 0.40*1000 = 200 prompt tokens.
+    # The tail renders the NEWEST 10 (turns 14..23) = 10*40 = 400 tokens, so a full
+    # fold could free 400 > 200: the section CAN cover the deficit, and the answer is
+    # the smallest oldest-first prefix that does. Folding the oldest k leaves 14-k
+    # unfolded, of which the tail renders min(10, 14-k):
+    #   k<=4 -> 10 lines, 400 tokens, delta   0   (dropping records the tail never showed)
+    #   k=5  ->  9 lines, 360 tokens, delta  40
+    #   k=6  ->  8 lines, 320 tokens, delta  80
+    #   k=7  ->  7 lines, 280 tokens, delta 120
+    #   k=8  ->  6 lines, 240 tokens, delta 160
+    #   k=9  ->  5 lines, 200 tokens, delta 200  >= 200  <- the answer
+    # 9 records is one batch (cap 12) and therefore one fold call. Note the step:
+    # the first four records are free to fold and free nothing, which is precisely
+    # what a "tokens of the records folded" sum cannot express.
+    assert outcome.entries_folded == 9 and outcome.batches == 1 and folds["n"] == 1
+    # after = (600 - 200) / 1000 — the floor, reached in the renderer's own unit.
+    assert outcome.after == 0.40
 
     summary = await services.documents.get(CHAT, CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID)
     assert summary is not None
-    assert summary.data["through_turn"] == 4, "the summary watermark covers the folded batch"
+    assert summary.data["through_turn"] == 18, "turns 10..18 folded, oldest first"
     assert summary.data["fold_count"] == 1
     entries = await services.documents.list(CHAT, CHRONICLE_DOC_TYPE)
-    assert sum(1 for entry in entries if entry.data["folded"]) == 4
-    assert [entry.id for entry in entries if entry.data["folded"]] == ["c00001", "c00002", "c00003", "c00004"]
+    assert [entry.id for entry in entries if entry.data["folded"]] == [f"c{turn:05d}" for turn in range(10, 19)]
 
 
 async def test_batch_folding_iterates_until_the_floor_is_reached():
@@ -186,17 +245,75 @@ async def test_batch_folding_iterates_until_the_floor_is_reached():
         return assistant_text(f"summary after batch {folds['n']}")
 
     services = _services(FakeLLM(responder=responder))
-    await _set_turn(services, CHAT, 40)
-    # 30 small entries x 50 tokens; a full meter (2000/2000) needs 1200 freed to
-    # reach the 0.40 floor, and a batch caps at 12 entries (600 tokens) -> 2 batches.
-    await _seed_entries(services, CHAT, list(range(1, 31)), tokens=50)
+    await _set_turn(services, CHAT, 60)
+    # 30 records, turns 10..39; counter 60 - lag 4 = watermark 56, so all 30 foldable.
+    await _seed_sized_entries(services, CHAT, list(range(10, 40)))
     await _set_meter(services, CHAT, 2000, window=2000)
 
     outcome = await maybe_fold_chronicle(_ctx(), services)
 
-    assert outcome.batches == 2 and folds["n"] == 2, "batch folding: iterate, never one-entry-per-turn churn"
-    assert outcome.entries_folded == 24
-    assert outcome.after <= 0.40 + 1e-9
+    # HAND-DERIVED. deficit = 2000 - 0.40*2000 = 1200 prompt tokens, but the tail
+    # renders only the NEWEST 10 (turns 30..39) = 400 tokens, so a COMPLETE fold
+    # frees 400 < 1200: the section cannot cover the deficit at any size. That is
+    # the spec's small-window edge — the answer is every foldable record, not a
+    # number derived from a deficit the chronicle was never going to close.
+    # 30 records at 12 per batch = 12 + 12 + 6 = 3 batches, exactly the per-turn
+    # budget, so the whole backlog drains this turn.
+    assert outcome.batches == 3 and folds["n"] == 3, "batch folding: iterate, never one-entry-per-turn churn"
+    assert outcome.entries_folded == 30
+    # after = (2000 - 400) / 2000. NOT at the floor, and honestly so: the fold gave
+    # everything it had. The old ledger reported reaching 0.40 on savings that only
+    # existed in its own arithmetic.
+    assert outcome.after == 0.80
+
+
+async def test_pressure_elsewhere_drains_the_backlog_once_and_then_stops():
+    """F13 regression: sizing in the renderer's unit, and the guards that outlive it.
+
+    The room is over the ceiling for a reason the chronicle cannot touch (a big
+    module), while its tail is full. The old arithmetic credited each folded record's
+    own token stamp against the WHOLE-prompt meter, so it declared the floor reached
+    after a handful of records — savings that existed only in its ledger — and then,
+    because the real prompt had not moved, folded again the next turn, and the next.
+    """
+    folds = {"n": 0}
+
+    def responder(messages, tools):
+        assert _is_fold_call(messages, tools), "the only LLM call here is the fold"
+        folds["n"] += 1
+        return assistant_text("Previously: the archive district drowned by degrees.")
+
+    services = _services(FakeLLM(responder=responder))
+    await _set_turn(services, CHAT, 60)
+    # 24 records, turns 10..33; counter 60 - lag 4 = watermark 56, so all 24 foldable.
+    await _seed_sized_entries(services, CHAT, list(range(10, 34)))
+    await _set_meter(services, CHAT, 1900, window=2000)
+
+    outcome = await maybe_fold_chronicle(_ctx(), services)
+
+    # HAND-DERIVED. deficit = 1900 - 0.40*2000 = 1100; the tail renders the newest
+    # 10 (turns 24..33) = 10*40 = 400, so a complete fold frees 400 < 1100 -> fold
+    # does its best: all 24 records, at 12 per batch = 2 batches.
+    assert outcome.entries_folded == 24, "the whole backlog drains, not a fictional floor's worth"
+    assert outcome.batches == 2 and folds["n"] == 2
+    assert _TAIL_CAP * _TOKENS_PER_RENDERED_RECORD == 400  # the render the derivation rests on
+    # after = (1900 - 400) / 2000: what the section actually gave up, not what the
+    # records weighed.
+    assert outcome.after == 0.75
+
+    # Turn 2. New records arrive (so there IS something foldable and the section
+    # floor gate would pass), but the meter has not moved: the fold demonstrably
+    # freed nothing the prompt noticed, so it must not buy another call. This is the
+    # re-arm guard, still load-bearing now that the arithmetic is honest — the
+    # remaining approximation is the tokenizer gap and recall reflow, and only the
+    # meter can see those.
+    await _seed_sized_entries(services, CHAT, list(range(34, 44)))
+    await _set_meter(services, CHAT, 1900, window=2000)
+
+    again = await maybe_fold_chronicle(_ctx(), services)
+
+    assert folds["n"] == 2, "an unmoved meter buys no further folds"
+    assert again.entries_folded == 0 and not again.ran
 
 
 async def test_emergency_level_folds_before_the_model_call():

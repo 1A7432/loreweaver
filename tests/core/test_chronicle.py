@@ -57,29 +57,28 @@ def _candidates(turns: list[int], tokens: int = 30) -> list[FoldCandidate]:
 
 def test_select_fold_batch_never_touches_the_lag_window() -> None:
     candidates = _candidates(list(range(1, 11)))  # turns 1..10
-    batch = select_fold_batch(candidates, watermark=6, needed_free_tokens=10_000, max_entries=100)
+    batch = select_fold_batch(candidates, watermark=6, max_entries=100)
     assert batch, "entries at or before the watermark ARE foldable"
     assert max(entry.turn for entry in batch) <= 6, "the trailing 4 turns (7-10) stay raw"
 
 
-def test_select_fold_batch_is_oldest_first_and_stops_at_the_floor_projection() -> None:
+def test_select_fold_batch_is_oldest_first() -> None:
     candidates = _candidates([3, 1, 2, 4, 5], tokens=30)  # unsorted input
-    batch = select_fold_batch(candidates, watermark=6, needed_free_tokens=100, max_entries=100)
-    assert [entry.turn for entry in batch] == [1, 2, 3, 4], "30*3=90 < 100, so the 4th entry joins the batch"
-
-    single = select_fold_batch(candidates, watermark=6, needed_free_tokens=30, max_entries=100)
-    assert [entry.turn for entry in single] == [1], "a small deficit folds one entry, not a churn of them"
+    batch = select_fold_batch(candidates, watermark=6, max_entries=100)
+    assert [entry.turn for entry in batch] == [1, 2, 3, 4, 5], "oldest first, every eligible entry"
+    # HOW MANY of these the caller actually folds is decided agent-side against the
+    # prompt section's own render (agent.chronicle), not by a token sum here.
 
 
 def test_select_fold_batch_caps_the_batch_size() -> None:
     candidates = _candidates(list(range(1, 31)), tokens=10)
-    batch = select_fold_batch(candidates, watermark=100, needed_free_tokens=10_000, max_entries=12)
+    batch = select_fold_batch(candidates, watermark=100, max_entries=12)
     assert len(batch) == 12, "one fold call consumes at most one batch — the loop iterates instead"
 
 
 def test_select_fold_batch_empty_when_nothing_is_eligible() -> None:
-    assert select_fold_batch(_candidates([7, 8, 9]), watermark=6, needed_free_tokens=100, max_entries=12) == []
-    assert select_fold_batch([], watermark=6, needed_free_tokens=100, max_entries=12) == []
+    assert select_fold_batch(_candidates([7, 8, 9]), watermark=6, max_entries=12) == []
+    assert select_fold_batch([], watermark=6, max_entries=12) == []
 
 
 # -- the no-future guard (engine-side rejection) ---------------------------------

@@ -208,24 +208,21 @@ def select_fold_batch(
     candidates: list[FoldCandidate],
     *,
     watermark: int,
-    needed_free_tokens: float,
     max_entries: int,
 ) -> list[FoldCandidate]:
     """One fold batch: eligible entries (at/below the watermark), oldest first,
-    accumulated until the freed-token projection covers the deficit OR the batch
-    cap binds. The caller iterates batches until the floor is reached — one fold
-    call never consumes an unbounded backlog."""
+    capped at `max_entries`. The caller iterates batches — one fold call never
+    consumes an unbounded backlog.
+
+    HOW MANY records to fold is deliberately NOT decided here. It depends on what
+    the prompt's chronicle SECTION renders, which is agent-side knowledge (the
+    renderer, its caps and its locale); this function only decides which records
+    are eligible and in what order. It used to take a `needed_free_tokens` deficit
+    and accumulate `candidate.tokens` until it was covered — sizing in a unit the
+    section's render caps falsify, since a record the tail never renders costs the
+    prompt nothing to keep and frees nothing when folded."""
     eligible = sorted((c for c in candidates if c.turn <= watermark), key=lambda c: (c.turn, c.id))
-    batch: list[FoldCandidate] = []
-    freed = 0
-    for candidate in eligible:
-        if len(batch) >= max_entries:
-            break
-        batch.append(candidate)
-        freed += candidate.tokens
-        if freed >= needed_free_tokens:
-            break
-    return batch
+    return eligible[:max_entries]
 
 
 def validate_fold_input(batch: list[FoldCandidate], *, watermark: int) -> list[str]:

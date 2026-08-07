@@ -9,13 +9,22 @@ on top of it:
   land before the next model call). Measured from the room's `usage_stats`
   meter (last turn's provider-reported prompt tokens — a reactive meter, the
   only honest source). Batch-folds the oldest chronicle records into the
-  rolling `campaign_summary` until the projected fullness reaches the floor,
-  bounded by a per-turn batch budget. That projection is only ever a PREDICTION
-  — the meter sizes the whole prompt while the fold sizes records — so two
-  guards keep a routine fold honest: it does not run at all when the section is
-  already at its own floor (nothing foldable is even rendered in the prompt),
-  and it does not re-arm until the measured meter actually grows past the
-  reading the previous fold acted on. Synchronous by design: a fire-and-forget
+  rolling `campaign_summary` until the prompt's chronicle SECTION has given up
+  as many tokens as the floor needs, bounded by a per-turn batch budget.
+  How many records that is, is solved against the section's own render
+  (`_render_delta`) rather than by summing the records' sizes: the section is
+  capped (`_TAIL_MAX_ENTRIES`/`_TAIL_MAX_CHARS`), so folding a record it never
+  renders frees nothing, and there is no per-record token price to divide by.
+  When the section cannot cover the deficit at all, the fold takes everything it
+  has — the spec's small-window edge, "fold does its best".
+  What remains approximate is only the UNIT: the meter is the provider's
+  tokenizer over the whole prompt, `_render_delta` is `estimate_tokens` over the
+  section, and folded records can flow back in through topical recall. So both
+  guards stay — a routine fold does not run when the section is already at its
+  own floor, and does not re-arm until the measured meter actually grows past
+  the reading the previous fold acted on. Neither is redundant now that the
+  arithmetic is honest: they answer "did this fold pay for itself" from the
+  meter, which is the only authority on that. Synchronous by design: a fire-and-forget
   fold could race the NEXT turn's prompt assembly, and folds are rare by
   hysteresis. Best-effort throughout — a fold failure never breaks a turn (the
   session-recap posture).
@@ -205,11 +214,11 @@ async def maybe_fold_chronicle(ctx: AgentCtx, services: Services, *, force: bool
     back (the meter measures the whole assembled prompt; a fold can only ever
     remove chronicle records from it):
 
-    - **the section floor** — `_reducible_tail_tokens` renders the chronicle tail
-      as it stands and as it would stand with every foldable record gone, through
-      the same renderer the prompt uses. Zero difference means the section is
-      already at its own floor: the pressure is somewhere else (a big module), and
-      folding would free nothing, so no call is spent.
+    - **the section floor** — `_render_delta` renders the chronicle tail as it
+      stands and as it would stand with every foldable record gone, through the
+      same renderer the prompt uses. Zero difference means the section is already
+      at its own floor: the pressure is somewhere else (a big module), and folding
+      would free nothing, so no call is spent.
     - **the observed-effect re-arm** — a fold stamps the meter reading it acted on;
       the next turn compares against it. A meter that came DOWN retires the stamp
       (the prediction held). A meter that did NOT disarms the fold until the room
@@ -251,30 +260,33 @@ async def _fold_flow(ctx: AgentCtx, services: Services, *, force: bool) -> FoldO
     docs_by_id = {doc.id: doc for doc in entries}
     i18n = services.i18n.with_locale(ctx.locale)
 
-    if not force and _reducible_tail_tokens(i18n, entries, watermark) <= 0:
+    foldable = _foldable_ids(entries, watermark)
+    reducible = _render_delta(i18n, entries, set(foldable))
+    if not force and reducible <= 0:
         logger.debug("chronicle fold skipped: the section is already at its own floor")
         return FoldOutcome(before=before, after=before)
 
+    # HOW MANY records this pass intends to fold, solved in the renderer's unit —
+    # the same `_render_delta` the gate above just used. `deficit` is in METER
+    # tokens (what the provider reported for the whole prompt) and the delta is in
+    # `estimate_tokens` (CJK-aware, computed over the section's own render), so the
+    # two units are close but not identical. That residual approximation — tokenizer
+    # differences, plus folded records flowing back in through topical recall
+    # (`_RECALL_LIMIT`) — is exactly why BOTH guards above stay: the meter remains
+    # the only authority on whether a fold actually paid for itself.
+    deficit = 0 if force else max(0, int(measured - settings.fold_floor * window))
+    pending = list(foldable) if force else _fold_prefix(
+        i18n, entries, foldable, deficit=deficit, reducible=reducible
+    )
+
     outcome = FoldOutcome(ran=True, level=level, before=before, after=before)
-    freed = 0
     attempted = False
-    while True:
+    while pending:
         candidates = [
-            FoldCandidate(id=doc.id, turn=_entry_turn(doc), tokens=_entry_tokens(doc))
-            for doc in entries
-            if not doc.data.get("folded") and doc.id not in outcome.folded_ids
+            FoldCandidate(id=doc_id, turn=_entry_turn(docs_by_id[doc_id]), tokens=_entry_tokens(docs_by_id[doc_id]))
+            for doc_id in pending
         ]
-        # A PREDICTION, not a measurement: `measured` sizes the whole assembled
-        # prompt while `freed` sizes the records this loop consumed. It decides
-        # only how much to fold in one go; whether folding is worth a call at all
-        # is settled by the two guards above, against the prompt itself.
-        needed = float("inf") if force else max(1.0, (measured - freed) - settings.fold_floor * window)
-        batch = select_fold_batch(
-            candidates,
-            watermark=watermark,
-            needed_free_tokens=needed,
-            max_entries=_FOLD_BATCH_MAX_ENTRIES,
-        )
+        batch = select_fold_batch(candidates, watermark=watermark, max_entries=_FOLD_BATCH_MAX_ENTRIES)
         if not batch:
             break  # nothing eligible: either done, or fold did its best (small-window edge)
         violations = validate_fold_input(batch, watermark=watermark)
@@ -288,11 +300,12 @@ async def _fold_flow(ctx: AgentCtx, services: Services, *, force: bool) -> FoldO
         if not await _fold_batch(services, chat_key, i18n, batch, docs_by_id):
             break  # a failed generation leaves state untouched; retry next turn
         outcome.batches += 1
-        freed += sum(candidate.tokens for candidate in batch)
         outcome.entries_folded += len(batch)
         outcome.folded_ids.extend(candidate.id for candidate in batch)
-        if not force and (measured - freed) <= settings.fold_floor * window:
-            break  # the floor is reached — stop folding, keep the rest raw
+        pending = pending[len(batch) :]
+        # No floor re-check here: the target set was solved against the section's own
+        # render before the first call, so reaching the end of it IS reaching the floor
+        # (or the small-window edge, where there was no floor to reach).
         if not force and outcome.batches >= _FOLD_MAX_BATCHES_PER_TURN:
             break  # this turn's fold budget is spent; the rest drains on later turns
     if not force and attempted:
@@ -302,7 +315,11 @@ async def _fold_flow(ctx: AgentCtx, services: Services, *, force: bool) -> FoldO
     if outcome.folded_ids:
         outcome.through_turn = max(_entry_turn(docs_by_id[doc_id]) for doc_id in outcome.folded_ids)
     if window > 0:
-        outcome.after = (measured - freed) / window
+        # What the fold actually removed from the prompt, in the renderer's unit —
+        # not the size of the records it consumed. A partial drain (a backlog larger
+        # than this turn's batch budget) can legitimately report `after == before`:
+        # the records folded so far were all outside what the tail renders.
+        outcome.after = (measured - _render_delta(i18n, entries, set(outcome.folded_ids))) / window
     return outcome
 
 
@@ -475,23 +492,60 @@ async def _write_summary_fields(
         logger.debug("chronicle fold meter bookkeeping failed", exc_info=True)
 
 
-def _reducible_tail_tokens(i18n: I18n, entries: list[Document], watermark: int) -> int:
-    """How many ASSEMBLED-PROMPT tokens a complete fold could actually remove.
+def _render_delta(i18n: I18n, entries: list[Document], exclude: frozenset[str] | set[str]) -> int:
+    """How many ASSEMBLED-PROMPT tokens dropping `exclude` from the tail removes.
 
-    The chronicle's prompt footprint is capped by construction (`_TAIL_MAX_ENTRIES`
-    /`_TAIL_MAX_CHARS`), so a record the section never renders costs the prompt
-    nothing and folding it frees nothing — the mismatch that let the fold "reach the
-    floor" on savings that existed only in its own ledger. This measures the fold's
-    side in the meter's unit: render the tail as it stands, render it again with
-    every foldable record gone, through the SAME renderer the prompt uses, and
-    report the difference. Zero means the section is already at its own floor.
+    THE one measurement both the fold's gate and its batch sizing speak, so the two
+    can never drift into different units. The chronicle's prompt footprint is capped
+    by construction (`_TAIL_MAX_ENTRIES`/`_TAIL_MAX_CHARS`), so a record the section
+    never renders costs the prompt nothing to keep and frees nothing when folded —
+    which makes "tokens of the records folded" a unit the section itself falsifies.
+    This renders the tail as it stands and again without `exclude`, through the SAME
+    `_tail_docs`/`_render_lines` the prompt section uses, and reports the difference.
+
+    The result steps rather than slopes: while more than `_TAIL_MAX_ENTRIES` records
+    remain unfolded, dropping the oldest ones changes nothing the prompt renders and
+    the delta is exactly 0.
     """
-    foldable = {doc.id for doc in entries if not doc.data.get("folded") and _entry_turn(doc) <= watermark}
-    if not foldable:
-        return 0
     now = _render_lines(i18n, _tail_docs(entries), _TAIL_MAX_CHARS)
-    after = _render_lines(i18n, _tail_docs(entries, exclude=foldable), _TAIL_MAX_CHARS)
+    after = _render_lines(i18n, _tail_docs(entries, exclude=exclude), _TAIL_MAX_CHARS)
     return max(0, estimate_tokens(now) - estimate_tokens(after))
+
+
+def _foldable_ids(entries: list[Document], watermark: int) -> list[str]:
+    """Every unfolded record at or below the watermark, OLDEST FIRST.
+
+    Order is load-bearing twice over: the tail renders the newest records, so only
+    folding from the oldest end can shrink it, and the no-future guard requires the
+    lag window to stay raw."""
+    foldable = [doc for doc in entries if not doc.data.get("folded") and _entry_turn(doc) <= watermark]
+    return [doc.id for doc in sorted(foldable, key=lambda doc: (_entry_turn(doc), doc.id))]
+
+
+def _fold_prefix(
+    i18n: I18n, entries: list[Document], foldable: list[str], *, deficit: int, reducible: int
+) -> list[str]:
+    """The oldest-first prefix of `foldable` whose removal covers `deficit` prompt
+    tokens — or all of `foldable` when the section cannot cover it.
+
+    That second case is the spec's small-window edge (M18, "only the foldable portion
+    shrinks … fold does its best"): the pressure is somewhere the chronicle cannot
+    reach, so the honest answer is everything it has, not a number derived from a
+    deficit it was never going to close.
+
+    Solved by walking the prefix rather than dividing a deficit by a per-record size,
+    because there is no per-record size: `_render_delta` steps. The walk is linear in
+    the backlog and each step renders at most `_TAIL_MAX_ENTRIES` lines; it is not
+    hoisted past the leading zero-delta stretch on purpose, since `_render_lines`
+    spends its character budget from the oldest side and can therefore change what it
+    renders before the entry count alone would predict.
+    """
+    if deficit >= reducible:
+        return list(foldable)
+    for count in range(1, len(foldable) + 1):
+        if _render_delta(i18n, entries, set(foldable[:count])) >= deficit:
+            return foldable[:count]
+    return list(foldable)
 
 
 def _tail_docs(entries: list[Document], *, exclude: frozenset[str] | set[str] = frozenset()) -> list[Document]:
