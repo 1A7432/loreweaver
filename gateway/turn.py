@@ -164,6 +164,7 @@ async def run_turn(
             event_origin_only = bool(
                 event.private
                 or interaction_private
+                or (reply is not None and reply.error)
                 or (matched_spec and matched_spec.private_reply)
             )
             if event_origin_only:
@@ -172,16 +173,22 @@ async def run_turn(
                     await origin.deliver(event)
             else:
                 await hub.publish(ctx.chat_key, event)
+        # F16: a reply that says the command did NOT happen is feedback for whoever
+        # typed it, never table content — and broadcasting one advertises the command's
+        # existence, arguments and privilege gate to everyone. A 2026-08-07 session had
+        # a player read the keeper's `.rule` error and start probing the console.
+        command_failed = bool(reply is not None and reply.error)
         reply_event = Event.narrative(
             speaker="system",
             text=command_reply,
             fmt="plain",
             private=bool(
-                interaction_private or (matched_spec and matched_spec.private_reply)
+                interaction_private or command_failed or (matched_spec and matched_spec.private_reply)
             ),
         )
         origin_only = bool(
             interaction_private
+            or command_failed
             or (
                 matched_spec
                 and (matched_spec.private_reply or matched_spec.canonical == "room")

@@ -249,6 +249,9 @@ class CommandCtx:
     locale: str
     i18n: I18n
     events: list[Event] = field(default_factory=list)
+    # Set by `fail()`: this reply reports that nothing happened, so it is unicast to
+    # the caller rather than broadcast to the room (F16).
+    failed: bool = False
 
     @property
     def chat_key(self) -> str:
@@ -265,11 +268,27 @@ class CommandCtx:
         """Attach one already-rolled public dice result to this command reply."""
         self.events.append(Event.dice(actor=self.user_id, kind=kind, **fields))
 
+    def fail(self, text: str) -> str:
+        """Return `text` as a FAILED command reply — unicast to whoever typed it (F16).
+
+        A reply that says the command did not work is feedback for its author, never
+        table content. Broadcasting one also advertises the command's existence, its
+        arguments and its privilege gate to everyone in the room: a 2026-08-07 session
+        had a player read the keeper's `.rule` error and start probing the console.
+
+        Use this for every "didn't happen" answer — bad usage, unknown target, denied,
+        broken input. A reply that reports something that DID happen stays broadcast."""
+        self.failed = True
+        return text
+
 
 @dataclass(frozen=True)
 class CommandReply:
     text: str
     events: tuple[Event, ...] = ()
+    # F16: a reply that reports the command did NOT happen. `gateway.turn` unicasts
+    # these to the invoking connection; success replies broadcast exactly as before.
+    error: bool = False
 
 
 @dataclass(frozen=True)
@@ -346,9 +365,11 @@ class CommandRouter:
         # handler (or its parsers/regexes) touches it, so a single oversized argument
         # cannot stall the event loop (e.g. quadratic backtracking in `.st` parsing).
         if len(args) > _MAX_COMMAND_ARG_LEN:
-            return CommandReply(get_i18n(locale).t("commands.error.too_long", limit=_MAX_COMMAND_ARG_LEN))
+            return CommandReply(get_i18n(locale).t("commands.error.too_long", limit=_MAX_COMMAND_ARG_LEN), error=True)
         if spec.required_level and _privilege_level(ctx) < spec.required_level:
-            return CommandReply(get_i18n(locale).t("rooms.denied"))
+            # Broadcasting "you may not do that" tells the whole room the command
+            # exists AND that it is privileged — the exact F16 probe vector.
+            return CommandReply(get_i18n(locale).t("rooms.denied"), error=True)
         command = text.strip()[1:].split(maxsplit=1)[0] if text.strip() else spec.canonical
         command_ctx = CommandCtx(
             services=self.services,
@@ -366,8 +387,8 @@ class CommandRouter:
             # A present-but-unreadable character row must abort the command rather than
             # let any handler proceed against a blank sheet (the silent-wipe bug class).
             logger.exception("character row unreadable during command %s", spec.canonical)
-            return CommandReply(get_i18n(locale).t("kp_tools.character.data_error"))
-        return CommandReply(rendered, tuple(command_ctx.events))
+            return CommandReply(get_i18n(locale).t("kp_tools.character.data_error"), error=True)
+        return CommandReply(rendered, tuple(command_ctx.events), error=command_ctx.failed)
 
     def slash_definitions(self, locale: str = "en") -> list[dict]:
         i18n = get_i18n(locale)
@@ -639,7 +660,7 @@ class CommandRouter:
         if locale not in {"en", "zh"}:
             return ctx.i18n.t("commands.language.usage")
         if not _is_keeper(ctx.raw_ctx):
-            return ctx.i18n.t("rooms.denied")
+            return ctx.fail(ctx.i18n.t("rooms.denied"))
         await ctx.services.store.state_set(ctx.chat_key, "chat_locale", locale)
         ctx.raw_ctx.locale = locale
         return get_i18n(locale).t("commands.language.done")
@@ -752,9 +773,9 @@ class CommandRouter:
         elif raw in known:
             variant = raw
         else:
-            return ctx.i18n.t("commands.rule.invalid", rules=", ".join(sorted(known)) or "-")
+            return ctx.fail(ctx.i18n.t("commands.rule.invalid", rules=", ".join(sorted(known)) or "-"))
         if not _is_keeper(ctx.raw_ctx):
-            return ctx.i18n.t("rooms.denied")
+            return ctx.fail(ctx.i18n.t("rooms.denied"))
         await set_room_rule_variant(ctx.services.store, ctx.chat_key, variant)
         return ctx.i18n.t("commands.rule.changed", rule=_variant_display(variant))
 
@@ -826,12 +847,12 @@ class CommandRouter:
         value = ctx.args.strip().casefold()
         if value in {"on", "1", "true", "开启", "啟用"}:
             if not _is_keeper(ctx.raw_ctx):
-                return ctx.i18n.t("rooms.denied")
+                return ctx.fail(ctx.i18n.t("rooms.denied"))
             await ctx.services.store.state_set(ctx.chat_key, "bot_enabled", "1")
             return ctx.i18n.t("commands.bot.on")
         if value in {"off", "0", "false", "关闭", "關閉"}:
             if not _is_keeper(ctx.raw_ctx):
-                return ctx.i18n.t("rooms.denied")
+                return ctx.fail(ctx.i18n.t("rooms.denied"))
             await ctx.services.store.state_set(ctx.chat_key, "bot_enabled", "0")
             return ctx.i18n.t("commands.bot.off")
         return ctx.i18n.t("commands.bot.status")
@@ -852,7 +873,7 @@ class CommandRouter:
         explicit override for every platform.
         """
         if ctx.raw_ctx.platform != "cli":
-            return ctx.i18n.t("rooms.denied")
+            return ctx.fail(ctx.i18n.t("rooms.denied"))
         parts = ctx.args.split(maxsplit=1)
         sub = parts[0].casefold() if parts else ""
         rest = parts[1].strip() if len(parts) > 1 else ""
@@ -909,7 +930,7 @@ class CommandRouter:
 
     async def _skill_set(self, ctx: CommandCtx, skill_id: str, *, enable: bool) -> str:
         if not _is_keeper(ctx.raw_ctx):
-            return ctx.i18n.t("commands.skill.denied")
+            return ctx.fail(ctx.i18n.t("commands.skill.denied"))
         skill_id = skill_id.strip()
         known_ids = {skill.id for skill in available_skills()}
         if not skill_id or skill_id not in known_ids:
@@ -949,7 +970,7 @@ class CommandRouter:
 
         if sub in _LORE_IMPORT_WORDS:
             if not _is_keeper(ctx.raw_ctx):
-                return ctx.i18n.t("preset.commands.denied")
+                return ctx.fail(ctx.i18n.t("preset.commands.denied"))
             if not rest:
                 return ctx.i18n.t("preset.commands.usage")
             path = Path(rest).expanduser()
@@ -976,7 +997,7 @@ class CommandRouter:
             )
         if sub in _SKILL_ENABLE_WORDS:
             if not _is_keeper(ctx.raw_ctx):
-                return ctx.i18n.t("preset.commands.denied")
+                return ctx.fail(ctx.i18n.t("preset.commands.denied"))
             preset_id = rest.strip()
             if load_preset(data_dir, preset_id) is None:
                 return ctx.i18n.t("preset.commands.unknown", id=preset_id)
@@ -984,7 +1005,7 @@ class CommandRouter:
             return ctx.i18n.t("preset.commands.enabled", id=preset_id)
         if sub in _SKILL_DISABLE_WORDS:
             if not _is_keeper(ctx.raw_ctx):
-                return ctx.i18n.t("preset.commands.denied")
+                return ctx.fail(ctx.i18n.t("preset.commands.denied"))
             await set_enabled_preset(store, ctx.chat_key, "")
             return ctx.i18n.t("preset.commands.disabled")
         if sub in {"show", "查看"}:
@@ -1046,7 +1067,7 @@ class CommandRouter:
         from gateway.panels import installed_panel_count, publish_ui_manifests
 
         if not _is_keeper(ctx.raw_ctx):
-            return ctx.i18n.t("commands.panels.denied")
+            return ctx.fail(ctx.i18n.t("commands.panels.denied"))
         pack_id = pack_id.strip()
         if not pack_id or (enable and installed_panel_count(ctx.services, pack_id) <= 0):
             return ctx.i18n.t("commands.panels.unknown", id=pack_id)
@@ -1076,7 +1097,7 @@ class CommandRouter:
         uploads; this is the deliberate keeper lever that bridges the two (a pack install
         is host-wide, a room's soundscape is the keeper's call)."""
         if not _is_keeper(ctx.raw_ctx):
-            return ctx.i18n.t("rooms.denied")
+            return ctx.fail(ctx.i18n.t("rooms.denied"))
         pack_id = rest[0].strip() if rest else ""
         if not pack_id:
             return ctx.i18n.t("commands.audio.import_usage")
@@ -1185,7 +1206,7 @@ class CommandRouter:
             target_record = await _resolve_avatar_target(ctx, maybe_target)
             if target_record is not None:
                 if not _is_keeper(ctx.raw_ctx):
-                    return ctx.i18n.t("commands.avatar.denied")
+                    return ctx.fail(ctx.i18n.t("commands.avatar.denied"))
                 target_name = maybe_target
                 prompt_tokens = tokens[1:]
         prompt = " ".join(prompt_tokens).strip()
@@ -1385,7 +1406,7 @@ class CommandRouter:
         store = ctx.services.store
         if sub in _ROOM_OPEN_WORDS:
             if not _is_keeper(ctx.raw_ctx):
-                return ctx.i18n.t("rooms.denied")
+                return ctx.fail(ctx.i18n.t("rooms.denied"))
             if not _is_private_channel(ctx.raw_ctx):
                 return ctx.i18n.t("rooms.private_required")
             return await self._room_open(ctx, store, channel_key)
@@ -1393,11 +1414,11 @@ class CommandRouter:
             # Linking this channel into a shared session redirects the whole
             # channel's traffic; keeper-only, consistent with open/leave.
             if not _is_keeper(ctx.raw_ctx):
-                return ctx.i18n.t("rooms.denied")
+                return ctx.fail(ctx.i18n.t("rooms.denied"))
             return await self._room_link(ctx, store, channel_key, rest)
         if sub in _ROOM_LEAVE_WORDS:
             if not _is_keeper(ctx.raw_ctx):
-                return ctx.i18n.t("rooms.denied")
+                return ctx.fail(ctx.i18n.t("rooms.denied"))
             return await self._room_leave(ctx, store, channel_key)
         if sub in _ROOM_SHOW_WORDS:
             return await self._room_show(ctx, store, channel_key)
@@ -1478,7 +1499,7 @@ class CommandRouter:
         backup, hence the keeper gate plus a persisted two-step confirm."""
         store = ctx.services.store
         if not await _keeper_still_authorized(ctx.raw_ctx, ctx.chat_key, store):
-            return ctx.i18n.t("commands.reset.denied")
+            return ctx.fail(ctx.i18n.t("commands.reset.denied"))
         pending_key = "reset_pending"
         arg = ctx.args.strip().casefold()
         if arg in _RESET_CONFIRM_WORDS:
@@ -1555,7 +1576,7 @@ class CommandRouter:
             sub in _PARTY_ADD_WORDS | _PARTY_REMOVE_WORDS | _PARTY_AUTO_WORDS | _PARTY_ACT_WORDS
             and not _is_keeper(ctx.raw_ctx)
         ):
-            return ctx.i18n.t("rooms.denied")
+            return ctx.fail(ctx.i18n.t("rooms.denied"))
 
         if sub in _PARTY_ADD_WORDS:
             if not rest:
@@ -1630,7 +1651,7 @@ class CommandRouter:
             return await tools.list_lore(agent_ctx, scope=rest, _keeper=keeper)
         if sub in _LORE_ADD_WORDS:
             if not keeper:
-                return ctx.i18n.t("worldbook.commands.lore.denied")
+                return ctx.fail(ctx.i18n.t("worldbook.commands.lore.denied"))
             title, _, content = rest.partition("|")
             title, content = title.strip(), content.strip()
             if not title or not content:
@@ -1638,13 +1659,13 @@ class CommandRouter:
             return await tools.add_lore(agent_ctx, title=title, content=content)
         if sub in _LORE_QUERY_WORDS:
             if not keeper:
-                return ctx.i18n.t("worldbook.commands.lore.denied")
+                return ctx.fail(ctx.i18n.t("worldbook.commands.lore.denied"))
             if not rest:
                 return ctx.i18n.t("worldbook.commands.lore.query_usage")
             return await tools.query_lore(agent_ctx, query=rest)
         if sub in _LORE_IMPORT_WORDS:
             if not keeper:
-                return ctx.i18n.t("worldbook.commands.lore.denied")
+                return ctx.fail(ctx.i18n.t("worldbook.commands.lore.denied"))
             if not rest:
                 return ctx.i18n.t("worldbook.commands.lore.import_usage")
             # Pack-relative convenience, same as `.import`: `<packId>/lorebooks/x.json`
@@ -1687,7 +1708,7 @@ class CommandRouter:
         # off the server, so it requires a keeper. An attachment-based import stays
         # open so a player can still self-import their own uploaded card.
         if not from_attachment and not _is_keeper(ctx.raw_ctx):
-            return ctx.i18n.t("rooms.denied")
+            return ctx.fail(ctx.i18n.t("rooms.denied"))
         if not from_attachment:
             # Pack-relative convenience: `.import <packId>/cards/x.png` resolves against the
             # newest installed `data_dir/packs/<id>@<version>/` (confined; falls through to
@@ -1715,10 +1736,10 @@ class CommandRouter:
             # this deterministic check is what makes "module machinery goes through the
             # keeper" structural rather than behavioral.
             if not _is_keeper(ctx.raw_ctx):
-                return ctx.i18n.t("charcard.commands.import.world_denied")
+                return ctx.fail(ctx.i18n.t("charcard.commands.import.world_denied"))
             return await tools.import_world_card(self._agent_ctx(ctx), file_path=file_path, system=system)
         if as_ == "companion" and not _is_keeper(ctx.raw_ctx):
-            return ctx.i18n.t("charcard.commands.import.companion_denied")
+            return ctx.fail(ctx.i18n.t("charcard.commands.import.companion_denied"))
         return await tools.import_character(self._agent_ctx(ctx), file_path=file_path, system=system, as_=as_)
 
     async def cmd_pc(self, ctx: CommandCtx) -> str:
@@ -1782,7 +1803,7 @@ class CommandRouter:
         from core.mvu_compat import mvu_expose, mvu_hide
 
         if not _is_keeper(ctx.raw_ctx):
-            return ctx.i18n.t("vars.commands.denied")
+            return ctx.fail(ctx.i18n.t("vars.commands.denied"))
         tokens = ctx.args.split()
         sub = tokens[0].casefold() if tokens else "list"
         rest = " ".join(tokens[1:]).strip()
@@ -1921,10 +1942,10 @@ class CommandRouter:
             if not await _keeper_still_authorized(
                 ctx.raw_ctx, ctx.chat_key, ctx.services.store
             ):
-                return ctx.i18n.t("commands.model.denied")
+                return ctx.fail(ctx.i18n.t("commands.model.denied"))
             return await self._model_show(ctx, runtime_config)
         if ctx.raw_ctx.platform != "cli" and not _is_keeper(ctx.raw_ctx):
-            return ctx.i18n.t("commands.model.denied")
+            return ctx.fail(ctx.i18n.t("commands.model.denied"))
         if sub in (
             _MODEL_SET_WORDS
             | _MODEL_LOGIN_WORDS
@@ -1936,7 +1957,7 @@ class CommandRouter:
                 if not await _keeper_still_authorized(
                     ctx.raw_ctx, ctx.chat_key, ctx.services.store
                 ):
-                    return ctx.i18n.t("commands.model.denied")
+                    return ctx.fail(ctx.i18n.t("commands.model.denied"))
                 if sub in _MODEL_SET_WORDS:
                     return await self._model_set(ctx, runtime_config, rest)
                 if sub in _MODEL_LOGIN_WORDS:
@@ -1996,7 +2017,7 @@ class CommandRouter:
 
     async def _model_set(self, ctx: CommandCtx, runtime_config: Any, rest: str) -> str:
         if not _is_keeper(ctx.raw_ctx):
-            return ctx.i18n.t("commands.model.denied")
+            return ctx.fail(ctx.i18n.t("commands.model.denied"))
         tokens = rest.split()
         if not tokens:
             return ctx.i18n.t("commands.model.set_usage")
@@ -2078,7 +2099,7 @@ class CommandRouter:
     async def _model_login(self, ctx: CommandCtx, rest: str) -> str:
         """`.model login <chatgpt|supergrok>` — start device-code OAuth (keeper-only)."""
         if not _is_keeper(ctx.raw_ctx):
-            return ctx.i18n.t("commands.model.denied")
+            return ctx.fail(ctx.i18n.t("commands.model.denied"))
         provider = rest.strip().casefold().split()[0] if rest.strip() else ""
         if not provider or not is_subscription_provider(provider):
             return ctx.i18n.t("commands.model.login_usage")
@@ -2191,7 +2212,7 @@ class CommandRouter:
 
     async def _model_logout(self, ctx: CommandCtx, rest: str) -> str:
         if not _is_keeper(ctx.raw_ctx):
-            return ctx.i18n.t("commands.model.denied")
+            return ctx.fail(ctx.i18n.t("commands.model.denied"))
         provider = rest.strip().casefold().split()[0] if rest.strip() else ""
         if not provider or not is_subscription_provider(provider):
             return ctx.i18n.t("commands.model.logout_usage")
@@ -2229,7 +2250,7 @@ class CommandRouter:
 
     async def _model_key(self, ctx: CommandCtx, runtime_config: Any, rest: str) -> str:
         if not _is_keeper(ctx.raw_ctx):
-            return ctx.i18n.t("commands.model.denied")
+            return ctx.fail(ctx.i18n.t("commands.model.denied"))
         if not _is_private_channel(ctx.raw_ctx):
             return ctx.i18n.t("commands.model.key_public")
         api_key = rest.strip()
@@ -2258,7 +2279,7 @@ class CommandRouter:
 
     async def _model_reset(self, ctx: CommandCtx, runtime_config: Any) -> str:
         if not _is_keeper(ctx.raw_ctx):
-            return ctx.i18n.t("commands.model.denied")
+            return ctx.fail(ctx.i18n.t("commands.model.denied"))
         provider = _live_llm_settings(ctx.services).provider or "default"
         try:
             _reconfigure_llm(ctx.services, {})
