@@ -108,7 +108,9 @@ async def run_turn(
     companion's own turn re-enters this function and must never re-trigger the
     director — the structural anti-runaway `gateway.director` describes). A
     companion-pacing failure is logged and swallowed, never allowed to turn a
-    successful player turn into a surfaced error.
+    successful player turn into a surfaced error. The post-turn Scribe pass
+    carries the same ``ctx.platform != "companion"`` guard for the same reason:
+    one PLAYER turn buys exactly one reconciliation pass, however large the party.
     """
     i18n = get_i18n(ctx.locale)
     name = actor_name or await _display_name(origin, ctx, services)
@@ -309,7 +311,15 @@ async def run_turn(
     # seconds of the narration instead of freezing at their defaults. Its 场记 lane
     # additionally classifies the turn as a BEAT, which cues the Stage Director
     # (M19) — one extra call on beats only, never per turn.
-    if result is not None and services.settings.scribe.enabled:
+    #
+    # Gated on `ctx.platform != "companion"` for the SAME structural reason as the
+    # director call-out above (and `gateway.director.run_director`'s own guard): a
+    # companion's own turn re-enters this function, so without it one player turn
+    # with N companions spent 1+N Scribe calls, reconciled the same trackers 1+N
+    # times off the same narrated fact, and drained the keeper whisper channel
+    # into its own sub-turns. The PLAYER turn's pass already sees the whole
+    # exchange — the companions' beats are part of what it reads.
+    if result is not None and ctx.platform != "companion" and services.settings.scribe.enabled:
         tool_names = [str(entry.get("name", "")) for entry in result.tool_trace]
 
         async def _scribe_pass(turn_result: KPTurnResult = result, names: list[str] = tool_names) -> None:

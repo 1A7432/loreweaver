@@ -9,10 +9,16 @@ on top of it:
   land before the next model call). Measured from the room's `usage_stats`
   meter (last turn's provider-reported prompt tokens — a reactive meter, the
   only honest source). Batch-folds the oldest chronicle records into the
-  rolling `campaign_summary` until the projected fullness reaches the floor.
-  Synchronous by design: a fire-and-forget fold could race the NEXT turn's
-  prompt assembly, and folds are rare by hysteresis. Best-effort throughout —
-  a fold failure never breaks a turn (the session-recap posture).
+  rolling `campaign_summary` until the projected fullness reaches the floor,
+  bounded by a per-turn batch budget. That projection is only ever a PREDICTION
+  — the meter sizes the whole prompt while the fold sizes records — so two
+  guards keep a routine fold honest: it does not run at all when the section is
+  already at its own floor (nothing foldable is even rendered in the prompt),
+  and it does not re-arm until the measured meter actually grows past the
+  reading the previous fold acted on. Synchronous by design: a fire-and-forget
+  fold could race the NEXT turn's prompt assembly, and folds are rare by
+  hysteresis. Best-effort throughout — a fold failure never breaks a turn (the
+  session-recap posture).
 - `record_entry` — the append path behind the `record_chronicle` tool. Entries
   are stamped with the in-progress turn index (counter + 1); the tool accepts
   no turn parameter, so nothing can be recorded speculatively (past-only).
@@ -82,6 +88,20 @@ CHRONICLE_COLLECTION = "chronicle"
 # One fold call consumes at most this many records — a bounded generation input;
 # the loop iterates batches until the floor is reached instead.
 _FOLD_BATCH_MAX_ENTRIES = 12
+# ... and one TURN spends at most this many fold generation calls. A long backlog
+# drains over several turns rather than stalling one player's turn behind an
+# unbounded chain of sequential summarizations (a 1000-entry backlog was ~84).
+# `.chronicle fold` (force) is the manual, unbounded drain.
+_FOLD_MAX_BATCHES_PER_TURN = 3
+# Re-arm threshold, as a fraction of the context window: after a fold, the next
+# ROUTINE fold waits until the measured meter has actually grown this much. See
+# `_last_fold_meter` for why the observed meter, not the predicted saving, decides.
+_FOLD_REARM_GROWTH = 0.05
+# Where that observation is parked: a field on the summary singleton, so it is
+# room-scoped, exported, and reset alongside the records it describes — no second
+# runtime key to keep in sync. Keeper-side by construction (the player projection
+# is a field allowlist).
+_FOLD_METER_FIELD = "fold_meter"
 # Prompt-section caps: the raw tail is small by design (the lag window plus one
 # fold cycle); the caps bound the pathological "fold did its best" case.
 _TAIL_MAX_ENTRIES = 10
@@ -177,8 +197,25 @@ async def maybe_fold_chronicle(ctx: AgentCtx, services: Services, *, force: bool
     """Fold old chronicle records into the rolling summary when the meter says so.
 
     With `force` (the manual `.chronicle fold`) every record past the lag window
-    folds regardless of the meter. Never raises — a broken fold must never break
-    a turn; the previously stored summary simply stays in use.
+    folds regardless of the meter, of the section floor and of the per-turn batch
+    budget. Never raises — a broken fold must never break a turn; the previously
+    stored summary simply stays in use.
+
+    Two guards keep a ROUTINE fold from spending a generation call it cannot earn
+    back (the meter measures the whole assembled prompt; a fold can only ever
+    remove chronicle records from it):
+
+    - **the section floor** — `_reducible_tail_tokens` renders the chronicle tail
+      as it stands and as it would stand with every foldable record gone, through
+      the same renderer the prompt uses. Zero difference means the section is
+      already at its own floor: the pressure is somewhere else (a big module), and
+      folding would free nothing, so no call is spent.
+    - **the observed-effect re-arm** — a fold stamps the meter reading it acted on;
+      the next turn compares against it. A meter that came DOWN retires the stamp
+      (the prediction held). A meter that did NOT disarms the fold until the room
+      genuinely grows past it by `_FOLD_REARM_GROWTH` of the window, so a room over
+      the trigger for reasons the chronicle cannot touch stops buying one wasted
+      fold call every single turn, forever.
     """
     settings = services.settings.chronicle
     if not settings.enabled:
@@ -201,7 +238,11 @@ async def _fold_flow(ctx: AgentCtx, services: Services, *, force: bool) -> FoldO
         if window <= 0:
             return FoldOutcome()  # no meter yet (a fresh room's first turn)
         level = fold_decision(before, trigger=settings.fold_trigger, emergency=settings.fold_emergency)
-        if level == "none":
+        # Runs on EVERY routine turn, including below the trigger: that is where a
+        # fold's effect becomes observable, and where a stamp that has done its job
+        # is retired (see `_rearm_check`).
+        armed = await _rearm_check(services, chat_key, measured, window)
+        if level == "none" or not armed:
             return FoldOutcome(before=before, after=before)
 
     current_turn = await chronicle_turn(services.store, chat_key)
@@ -210,14 +251,23 @@ async def _fold_flow(ctx: AgentCtx, services: Services, *, force: bool) -> FoldO
     docs_by_id = {doc.id: doc for doc in entries}
     i18n = services.i18n.with_locale(ctx.locale)
 
+    if not force and _reducible_tail_tokens(i18n, entries, watermark) <= 0:
+        logger.debug("chronicle fold skipped: the section is already at its own floor")
+        return FoldOutcome(before=before, after=before)
+
     outcome = FoldOutcome(ran=True, level=level, before=before, after=before)
     freed = 0
+    attempted = False
     while True:
         candidates = [
             FoldCandidate(id=doc.id, turn=_entry_turn(doc), tokens=_entry_tokens(doc))
             for doc in entries
             if not doc.data.get("folded") and doc.id not in outcome.folded_ids
         ]
+        # A PREDICTION, not a measurement: `measured` sizes the whole assembled
+        # prompt while `freed` sizes the records this loop consumed. It decides
+        # only how much to fold in one go; whether folding is worth a call at all
+        # is settled by the two guards above, against the prompt itself.
         needed = float("inf") if force else max(1.0, (measured - freed) - settings.fold_floor * window)
         batch = select_fold_batch(
             candidates,
@@ -234,6 +284,7 @@ async def _fold_flow(ctx: AgentCtx, services: Services, *, force: bool) -> FoldO
             outcome.rejected += len(violations)
             logger.warning("chronicle fold refused (no-future guard): %s", "; ".join(violations))
             break
+        attempted = True
         if not await _fold_batch(services, chat_key, i18n, batch, docs_by_id):
             break  # a failed generation leaves state untouched; retry next turn
         outcome.batches += 1
@@ -242,6 +293,12 @@ async def _fold_flow(ctx: AgentCtx, services: Services, *, force: bool) -> FoldO
         outcome.folded_ids.extend(candidate.id for candidate in batch)
         if not force and (measured - freed) <= settings.fold_floor * window:
             break  # the floor is reached — stop folding, keep the rest raw
+        if not force and outcome.batches >= _FOLD_MAX_BATCHES_PER_TURN:
+            break  # this turn's fold budget is spent; the rest drains on later turns
+    if not force and attempted:
+        # Stamp what the meter read when we acted, successful batch or not: the next
+        # turn compares against it instead of trusting this turn's prediction.
+        await _stamp_fold_meter(services, chat_key, measured)
     if outcome.folded_ids:
         outcome.through_turn = max(_entry_turn(docs_by_id[doc_id]) for doc_id in outcome.folded_ids)
     if window > 0:
@@ -343,6 +400,110 @@ async def _read_meter(services: Services, chat_key: str) -> tuple[int, int]:
         return (int(last.get("prompt", 0) or 0), int(last.get("context_window", 0) or 0))
     except Exception:  # noqa: BLE001 — a corrupt meter reads as "no pressure"
         return (0, 0)
+
+
+async def _last_fold_meter(services: Services, chat_key: str) -> int | None:
+    """The meter reading the previous fold acted on, or `None` if none ever did.
+
+    The fold's own arithmetic can only ever PREDICT a saving: it sizes the records
+    it consumes, while the meter sizes the whole assembled prompt. The prompt is the
+    authority on whether that prediction came true, and this is where the comparison
+    starts from.
+    """
+    try:
+        summary = await services.documents.get(chat_key, CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID)
+        if summary is None:
+            return None
+        raw = summary.data.get(_FOLD_METER_FIELD)
+        return int(raw) if isinstance(raw, int) and not isinstance(raw, bool) else None
+    except Exception:  # noqa: BLE001 — an unreadable stamp simply means "armed"
+        return None
+
+
+async def _rearm_check(services: Services, chat_key: str, measured: int, window: int) -> bool:
+    """Is a ROUTINE fold armed, judged by what the LAST one actually achieved?
+
+    Three states, and the middle one is the whole point:
+
+    - no stamp — nothing to prove: armed.
+    - the meter came DOWN since the fold that stamped it — the prediction held, so
+      the stamp is retired and the plain trigger governs again. (Without this the
+      guard would ratchet: every fold would raise the bar for the next one by the
+      re-arm margin, until a long campaign stopped folding altogether.)
+    - the meter did NOT come down — that fold freed nothing the prompt noticed, so
+      the next one would not either. Disarmed until the room genuinely grows past
+      the stamp by `_FOLD_REARM_GROWTH` of the window.
+    """
+    last = await _last_fold_meter(services, chat_key)
+    if last is None:
+        return True
+    if measured < last:
+        await _clear_fold_meter(services, chat_key)
+        return True
+    return measured >= last + _FOLD_REARM_GROWTH * window
+
+
+async def _clear_fold_meter(services: Services, chat_key: str) -> None:
+    """Retire the stamp (its fold demonstrably worked)."""
+    await _write_summary_fields(services, chat_key, drop=_FOLD_METER_FIELD)
+
+
+async def _stamp_fold_meter(services: Services, chat_key: str, measured: int) -> None:
+    """Record the meter this fold acted on, on the summary singleton it just wrote.
+
+    Only ever UPDATES an existing summary: a fold that produced no summary (the
+    no-future refusal) must not conjure one, and an empty chronicle must stay empty.
+    """
+    await _write_summary_fields(services, chat_key, set_meter=int(measured))
+
+
+async def _write_summary_fields(
+    services: Services, chat_key: str, *, set_meter: int | None = None, drop: str = ""
+) -> None:
+    """Patch the summary singleton's bookkeeping fields, if it exists at all."""
+    try:
+        summary = await services.documents.get(chat_key, CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID)
+        if summary is None:
+            return
+        data = {key: value for key, value in summary.data.items() if key != drop}
+        if set_meter is not None:
+            data[_FOLD_METER_FIELD] = set_meter
+        if data == summary.data:
+            return
+        await services.documents.put(chat_key, CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID, data)
+    except Exception:  # noqa: BLE001 — bookkeeping, never a failure path
+        logger.debug("chronicle fold meter bookkeeping failed", exc_info=True)
+
+
+def _reducible_tail_tokens(i18n: I18n, entries: list[Document], watermark: int) -> int:
+    """How many ASSEMBLED-PROMPT tokens a complete fold could actually remove.
+
+    The chronicle's prompt footprint is capped by construction (`_TAIL_MAX_ENTRIES`
+    /`_TAIL_MAX_CHARS`), so a record the section never renders costs the prompt
+    nothing and folding it frees nothing — the mismatch that let the fold "reach the
+    floor" on savings that existed only in its own ledger. This measures the fold's
+    side in the meter's unit: render the tail as it stands, render it again with
+    every foldable record gone, through the SAME renderer the prompt uses, and
+    report the difference. Zero means the section is already at its own floor.
+    """
+    foldable = {doc.id for doc in entries if not doc.data.get("folded") and _entry_turn(doc) <= watermark}
+    if not foldable:
+        return 0
+    now = _render_lines(i18n, _tail_docs(entries), _TAIL_MAX_CHARS)
+    after = _render_lines(i18n, _tail_docs(entries, exclude=foldable), _TAIL_MAX_CHARS)
+    return max(0, estimate_tokens(now) - estimate_tokens(after))
+
+
+def _tail_docs(entries: list[Document], *, exclude: frozenset[str] | set[str] = frozenset()) -> list[Document]:
+    """The unfolded records the prompt section renders, oldest to newest.
+
+    One definition, shared by `build_chronicle_section` (what the prompt costs) and
+    `_reducible_tail_tokens` (what a fold could remove), so the two can never drift.
+    """
+    return sorted(
+        (doc for doc in entries if not doc.data.get("folded") and doc.id not in exclude),
+        key=lambda doc: (_entry_turn(doc), doc.id),
+    )[-_TAIL_MAX_ENTRIES:]
 
 
 def _entry_turn(doc: Document) -> int:
@@ -472,10 +633,7 @@ async def build_chronicle_section(ctx: AgentCtx, services: Services, i18n: I18n,
             parts.append(i18n.t("prompt.chronicle.threads_label") + "\n" + "\n".join(lines))
 
         entries = await services.documents.list(ctx.chat_key, CHRONICLE_DOC_TYPE)
-        tail = sorted(
-            (doc for doc in entries if not doc.data.get("folded")),
-            key=lambda doc: (_entry_turn(doc), doc.id),
-        )[-_TAIL_MAX_ENTRIES:]
+        tail = _tail_docs(entries)
         if tail:
             parts.append(i18n.t("prompt.chronicle.tail_label") + "\n" + _render_lines(i18n, tail, _TAIL_MAX_CHARS))
 

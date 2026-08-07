@@ -1,0 +1,348 @@
+"""The per-turn model-call budget (audit batch F09 / F13 / item 11).
+
+Three related regressions, all about how many `llm.chat` calls ONE player turn is
+allowed to spend:
+
+- **F09** — the post-turn Scribe fired on every companion sub-turn: a companion's
+  own turn re-enters `gateway.turn.run_turn` (`gateway.director.run_companion_turn`),
+  and the Scribe block carried no `ctx.platform != "companion"` guard, unlike the
+  companion-director call ten lines above it. One player turn with N companions
+  spent 1+N Scribe calls and reconciled the same trackers 1+N times.
+- **F13** — the chronicle fold's accounting compared the WHOLE assembled prompt's
+  meter against the token size of the RECORDS it folded, two different things. The
+  chronicle prompt section is capped (`_TAIL_MAX_ENTRIES`/`_TAIL_MAX_CHARS`), so a
+  fold can not measurably shrink the prompt once the section is at its own floor —
+  yet the meter stayed over the trigger and re-armed the fold on the very next turn,
+  forever, for any room whose pressure comes from somewhere else (a big module).
+- **item 11** — the resulting bound was written down nowhere. One turn is driven
+  through a counting fake client and pinned against the ceiling AGENTS.md documents.
+
+Everything here is offline: `FakeLLM` + `FakeEmbeddings`, no network, no keys.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+
+from agent.chronicle import maybe_fold_chronicle
+from agent.context import AgentCtx
+from agent.kp_tools import build_kp_toolset
+from agent.kp_tools_companion import CompanionTools
+from agent.services import build_services
+from core.chronicle import CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID, CHRONICLE_DOC_TYPE
+from gateway.commands import CommandRouter
+from gateway.hub import Event, RoomHub
+from gateway.turn import run_turn
+from infra.config import Settings
+from infra.embeddings import FakeEmbeddings
+from infra.llm import FakeLLM, assistant_text
+from infra.store import Store
+
+# The Scribe prompt's opening line and the fold instruction's stable phrase: the two
+# markers that tell the lanes apart when every call arrives on the same fake client.
+SCRIBE_MARK = "You are the table Scribe"
+FOLD_MARK = "campaign summary"
+
+FILLER = "the party searched the drowned stacks of the archive district and mapped another gallery "
+
+
+class FakeMember:
+    """A recording hub member (mirrors `tests/gateway/test_director.py`'s)."""
+
+    def __init__(self, id: str) -> None:
+        self.id = id
+        self.user_key = f"user:{id}"
+        self.transport = "tui"
+        self.name = id
+        self.events: list[Event] = []
+
+    async def deliver(self, event: Event) -> None:
+        self.events.append(event)
+
+
+def _ctx(chat_key: str, user_id: str = "nora", *, platform: str = "tui") -> AgentCtx:
+    return AgentCtx(chat_key=chat_key, user_id=user_id, platform=platform, locale="en")
+
+
+def _counting_responder(counts: dict[str, int]):
+    """One responder for every lane, tallying which actor made each call.
+
+    The Scribe and the companion actor both call with `tools=None`; they are told
+    apart by the prompt itself, which is what a real deployment sees too.
+    """
+
+    def responder(messages, tools):
+        counts["total"] += 1
+        head = str(messages[0].get("content", ""))
+        if tools is None and SCRIBE_MARK in head:
+            counts["scribe"] += 1
+            return assistant_text('{"ops": [], "whispers": [], "beat": "none"}')
+        if tools is None:
+            counts["companion"] += 1
+            return assistant_text(json.dumps({"action": "I ready my blade.", "dialogue": ""}))
+        counts["kp"] += 1
+        return assistant_text("The hallway stays quiet.")
+
+    return responder
+
+
+def _services(responder, *, scribe: bool = True):
+    store = Store(":memory:")
+    services = build_services(Settings(locale="en"), llm=FakeLLM(responder=responder), embeddings=FakeEmbeddings(8), store=store)
+    # The suite-wide conftest turns the Scribe off for every other test; these tests
+    # are ABOUT what it costs (the `tests/agent/test_scribe.py` posture).
+    services.settings.scribe.enabled = scribe
+    return services
+
+
+async def _room(services, hub: RoomHub, chat_key: str, *, companions: int):
+    router = CommandRouter(services, hub=hub)
+    toolset = build_kp_toolset(services, hub=hub, command_router=router)
+    names = [f"Ada{index}" for index in range(companions)]
+    for name in names:
+        await CompanionTools(services).add_companion(_ctx(chat_key, user_id="kp"), name=name)
+    if names:
+        await services.store.state_set(chat_key, "party_auto", "1")
+        await services.store.state_set(
+            chat_key,
+            "initiative",
+            json.dumps([{"name": name, "init": 20 - index} for index, name in enumerate(names)]),
+        )
+    watcher = FakeMember("watcher")
+    await hub.subscribe(chat_key, watcher)
+    watcher.events.clear()
+    return router, toolset, watcher
+
+
+async def _drain_scribe_tasks() -> None:
+    """Await the fire-and-forget Scribe tasks `run_turn` spawned."""
+    import gateway.turn as turn_module
+
+    for _ in range(20):
+        tasks = [task for task in turn_module._SCRIBE_TASKS if not task.done()]
+        if not tasks:
+            await asyncio.sleep(0)
+            if not [task for task in turn_module._SCRIBE_TASKS if not task.done()]:
+                return
+            continue
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+# ---------------------------------------------------------------------------
+# F09 — the Scribe is a PLAYER-turn pass, not a per-sub-turn pass
+# ---------------------------------------------------------------------------
+
+
+async def test_one_player_turn_fires_exactly_one_scribe_pass_with_companions_acting():
+    chat_key = "scribe-budget-room"
+    counts = {"total": 0, "scribe": 0, "companion": 0, "kp": 0}
+    services = _services(_counting_responder(counts))
+    hub = RoomHub()
+    router, toolset, watcher = await _room(services, hub, chat_key, companions=3)
+
+    await run_turn(hub, services, _ctx(chat_key), "I creep down the hallway", command_router=router, toolset=toolset)
+    await _drain_scribe_tasks()
+
+    # POSITIVE CONTROL: the companions really did act (otherwise "one scribe pass"
+    # would be trivially true because nothing re-entered run_turn at all).
+    companion_actions = [event for event in watcher.events if event.kind == "player_action" and event.name.startswith("Ada")]
+    assert len(companion_actions) == 3, "the three companions must have auto-acted on the player's turn"
+    assert counts["companion"] == 3
+    assert counts["scribe"] > 0, "the scribe must run at all (control against a vacuous pass)"
+
+    # The regression: one PLAYER turn = one Scribe pass, whatever the party size.
+    assert counts["scribe"] == 1
+
+
+async def test_a_companion_sub_turn_alone_never_runs_the_scribe():
+    # Directly: a companion-platform turn is a SUB-turn of the player's; its parent
+    # already reconciles the whole exchange.
+    from gateway.director import request_companion
+
+    chat_key = "companion-only-room"
+    counts = {"total": 0, "scribe": 0, "companion": 0, "kp": 0}
+    services = _services(_counting_responder(counts))
+    hub = RoomHub()
+    router, toolset, _watcher = await _room(services, hub, chat_key, companions=1)
+
+    result = await request_companion(hub, services, "Ada0", chat_key=chat_key, command_router=router, toolset=toolset)
+    await _drain_scribe_tasks()
+
+    assert result is not None, "positive control: the companion turn really ran"
+    assert counts["companion"] == 1 and counts["kp"] == 1
+    assert counts["scribe"] == 0
+
+
+# ---------------------------------------------------------------------------
+# item 11 — the documented per-turn ceiling
+# ---------------------------------------------------------------------------
+
+# AGENTS.md ("Per-turn model-call budget") states the worst case for ONE player
+# turn: 3 fold + 12 rounds + 5 corrective + 1 recap = 21 per KP turn, plus 1
+# Scribe + 1 Director beat, plus 6 companion sub-turns of (1 actor + 21). This
+# pins the SHAPE of that bound as well as the ceiling itself: a turn costs a
+# fixed keeper cost plus a per-companion cost, and never more than the ceiling.
+DOCUMENTED_CEILING = 155
+
+
+async def test_per_turn_call_count_tracks_the_companion_count_and_stays_under_the_ceiling():
+    baseline = {"total": 0, "scribe": 0, "companion": 0, "kp": 0}
+    services = _services(_counting_responder(baseline))
+    hub = RoomHub()
+    router, toolset, _watcher = await _room(services, hub, "budget-solo", companions=0)
+    await run_turn(hub, services, _ctx("budget-solo"), "I wait for a moment.", command_router=router, toolset=toolset)
+    await _drain_scribe_tasks()
+
+    party = {"total": 0, "scribe": 0, "companion": 0, "kp": 0}
+    services = _services(_counting_responder(party))
+    hub = RoomHub()
+    router, toolset, _watcher = await _room(services, hub, "budget-party", companions=3)
+    await run_turn(hub, services, _ctx("budget-party"), "I wait for a moment.", command_router=router, toolset=toolset)
+    await _drain_scribe_tasks()
+
+    # POSITIVE CONTROL: the counter counts something, and it tracks the party size.
+    assert baseline["total"] > 0
+    assert party["total"] > baseline["total"]
+    # A settled turn: one keeper round + one scribe pass; each companion adds its
+    # own actor call plus the keeper resolving its action, and nothing else.
+    assert baseline["total"] == 2
+    assert party["total"] == baseline["total"] + 3 * 2
+
+    assert baseline["total"] <= DOCUMENTED_CEILING
+    assert party["total"] <= DOCUMENTED_CEILING
+
+
+# ---------------------------------------------------------------------------
+# F13 — the fold must not re-arm on savings it never made
+# ---------------------------------------------------------------------------
+
+WINDOW = 2000
+
+
+async def _set_meter(services, chat_key: str, prompt_tokens: int, window: int = WINDOW) -> None:
+    payload = {
+        "last": {"prompt": prompt_tokens, "completion": 0, "cache_hit": 0, "cache_miss": 0, "context_window": window},
+        "session": {"prompt": prompt_tokens, "completion": 0, "cache_hit": 0, "cache_miss": 0, "turns": 1},
+    }
+    await services.store.state_set(chat_key, "usage_stats", json.dumps(payload))
+
+
+async def _seed_entries(services, chat_key: str, turns: list[int], *, tokens: int = 100) -> None:
+    for turn in turns:
+        await services.documents.put(
+            chat_key,
+            CHRONICLE_DOC_TYPE,
+            f"c{turn:05d}",
+            {
+                "text": f"turn{turn} " + FILLER * 3,
+                "keeper": "",
+                "turn": turn,
+                "pcs": [],
+                "scene": "",
+                "folded": False,
+                "tokens": tokens,
+            },
+        )
+
+
+def _fold_counter():
+    counts = {"folds": 0}
+
+    def responder(messages, tools):
+        assert tools is None and FOLD_MARK in str(messages[0].get("content", "")), "only the fold may call here"
+        counts["folds"] += 1
+        return assistant_text(f"Previously, in batch {counts['folds']}: the party pressed on.")
+
+    return responder, counts
+
+
+def _chronicle_services(responder):
+    services = build_services(Settings(locale="en"), llm=FakeLLM(responder=responder), embeddings=FakeEmbeddings(8), store=Store(":memory:"))
+    # conftest disables the chronicle for the rest of the suite; these tests are ABOUT it.
+    services.settings.chronicle.enabled = True
+    return services
+
+
+async def test_a_fold_that_did_not_move_the_meter_does_not_re_arm_next_turn():
+    """The F13 churn: the meter measures the WHOLE prompt, the fold frees only
+    chronicle records. A room over the trigger for any other reason (a big module)
+    used to buy one fold generation call EVERY turn, forever, freeing nothing."""
+    responder, counts = _fold_counter()
+    services = _chronicle_services(responder)
+    chat_key = "fold-churn-room"
+    await services.store.state_set(chat_key, "chronicle_turn", "40")
+    await _seed_entries(services, chat_key, list(range(1, 31)), tokens=50)
+    await _set_meter(services, chat_key, WINDOW)  # pinned full by the module, not the chronicle
+
+    first = await maybe_fold_chronicle(_ctx(chat_key), services)
+    # POSITIVE CONTROL: the first fold really ran and really folded records.
+    assert first.ran and first.entries_folded > 0 and counts["folds"] > 0
+    after_first = counts["folds"]
+
+    # Next turn: the assembled prompt did NOT shrink (the meter is unchanged), which
+    # is the observed proof that the previous fold freed nothing.
+    second = await maybe_fold_chronicle(_ctx(chat_key), services)
+
+    assert counts["folds"] == after_first, "a fold that demonstrably freed nothing must not re-arm"
+    assert second.entries_folded == 0
+
+
+async def test_a_meter_that_really_grows_re_arms_the_fold():
+    """The control for the hysteresis above: real growth is still folded."""
+    responder, counts = _fold_counter()
+    services = _chronicle_services(responder)
+    chat_key = "fold-rearm-room"
+    await services.store.state_set(chat_key, "chronicle_turn", "40")
+    await _seed_entries(services, chat_key, list(range(1, 31)), tokens=50)
+    await _set_meter(services, chat_key, int(0.62 * WINDOW))
+
+    await maybe_fold_chronicle(_ctx(chat_key), services)
+    after_first = counts["folds"]
+    assert after_first > 0
+
+    # The room genuinely grew past the re-arm margin: fold again.
+    await _set_meter(services, chat_key, int(0.95 * WINDOW))
+    again = await maybe_fold_chronicle(_ctx(chat_key), services)
+
+    assert counts["folds"] > after_first, "real growth must still re-arm the fold"
+    assert again.entries_folded > 0
+
+
+async def test_a_chronicle_at_its_own_floor_makes_no_fold_call():
+    """"The section is already at its own floor" resolves to "no fold", not "fold
+    again": nothing foldable can leave the assembled prompt, so no call is spent."""
+
+    def _explode(messages, tools):
+        raise AssertionError("a chronicle at its own floor must spend no fold call")
+
+    services = _chronicle_services(_explode)
+    chat_key = "fold-floor-room"
+    await services.store.state_set(chat_key, "chronicle_turn", "10")
+    # Everything is inside the 4-turn lag window: nothing a fold could remove.
+    await _seed_entries(services, chat_key, [7, 8, 9, 10])
+    await _set_meter(services, chat_key, WINDOW)
+
+    outcome = await maybe_fold_chronicle(_ctx(chat_key), services)
+
+    assert outcome.entries_folded == 0 and outcome.batches == 0
+    assert await services.documents.get(chat_key, CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID) is None
+
+
+async def test_one_turn_never_spends_more_than_the_per_turn_fold_batch_budget():
+    """A huge backlog is drained in bounded batches, not in one unbounded burst —
+    the per-turn fold budget AGENTS.md documents."""
+    responder, counts = _fold_counter()
+    services = _chronicle_services(responder)
+    chat_key = "fold-backlog-room"
+    await services.store.state_set(chat_key, "chronicle_turn", "400")
+    # Tiny records: the projected floor is unreachable by folding them, which is
+    # exactly the case that used to drain all 300 in one turn (25 sequential calls).
+    await _seed_entries(services, chat_key, list(range(1, 301)), tokens=1)
+    await _set_meter(services, chat_key, WINDOW)
+
+    outcome = await maybe_fold_chronicle(_ctx(chat_key), services)
+
+    assert counts["folds"] > 0, "positive control: a real backlog does fold"
+    assert counts["folds"] <= 3, "a single turn's fold budget is bounded"
+    assert outcome.batches == counts["folds"]
