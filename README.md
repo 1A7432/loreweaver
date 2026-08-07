@@ -130,23 +130,23 @@ A Loreweaver table has **four actors**. Only one of them writes fiction; the one
 number isn't a model at all.
 
 ```
-   you type  ─────────────────────────────────────────────────────────────────────────┐
-                                                                                       ▼
- ┌─────────────────────────────────────────────────────────────────────────────────────────────┐
- │  KP · the Keeper        model, every turn   narration, NPC voices, rulings, what happens next│
- │  engine                 code,  always       dice, sheets, clocks, trackers, validation,      │
- │                                             permissions — and every projection below         │
- └─────────────────────────────────────────────────────────────────────────────────────────────┘
-                                                                                       │
-                     the reply streams to the table ────────────────────────────────────┤
-                                                                                       ▼
- ┌─────────────────────────────────────────────────────────────────────────────────────────────┐
- │  Scribe · 书记官        small model,        reconciles the ledger against what was narrated, │
- │                         every turn          whispers judgment calls to the KP's next turn,   │
- │                                             and classifies the turn's story beat             │
- │  Director · 演出导演    model, on beats     act cards, letters, clippings, map pins, audio   │
- │                                             cues, generated art — what the table sees        │
- └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   you type ───────────────────────────────────────────────────────────────────────────────────────┐
+                                                                                                   ▼
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│  KP · the Keeper         model, every turn   narration, NPC voices, rulings, what happens next   │
+│  engine                  code, always        dice, sheets, clocks, trackers, validation,         │
+│                                              permissions — and every projection below            │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                                                                                   │
+   the reply streams to the table ─────────────────────────────────────────────────────────────────┤
+                                                                                                   ▼
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│  Scribe · 书记官         small model,        reconciles the ledger against what was narrated,    │
+│                          every turn          whispers judgment calls into the KP's next turn,    │
+│                                              and classifies the turn's story beat                │
+│  Director · 演出导演     model, on beats     act cards, letters, clippings, map pins, audio      │
+│                                              cues, generated art — what the table sees           │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 The **Scribe** exists because of a measured failure. In a live playtest a strong narrative model ran
