@@ -2,7 +2,7 @@
 
 # Loreweaver 扩展契约：插件、技能与内容包
 
-> 状态：**契约**（2026-08-07 更新；线协议 **2.1**）。这份是贡献者照着建的规范。作者向的入口更友好：从零到发布的教程在 [authoring.zh.md](authoring.zh.md)，卡的细节在 [cards.zh.md](cards.zh.md)，钩子在 [hooks.zh.md](hooks.zh.md)。
+> 状态：**契约**（2026-08-07 更新；协议 **2.1**）。这份是贡献者照着建的规范。作者向的入口更友好：从零到发布的教程在 [authoring.zh.md](authoring.zh.md)，卡的细节在 [cards.zh.md](cards.zh.md)，钩子在 [hooks.zh.md](hooks.zh.md)。
 >
 > **已落地的层，以及各自的含义：**
 >
@@ -12,7 +12,7 @@
 > | **B.1——KP 技能** | `SKILL.md` 加载器、提示段绑定、按房间 `.skill enable`、成人内容闸门 |
 > | **B.2——`allowed-tools`** | `@tool(gated=…)` 上的增量工具门控；`romance-relationships` 跑在这套上 |
 > | **B.3——自扩展 forge** | 受门控的 `generate_skill` / `generate_rulepack` / `generate_module`，各自在对应的 forge 技能启用前完全不可见。规则包 forge 说的是 M16 的 `resolution:` / `subsystems:` / `expertise:` 词汇 |
-> | **B.4——TUI 管理页** | KP 技能页支持"描述一句话→生成" |
+> | **B.4——TUI 管理页** | KP 技能页支持“描述一句话→生成” |
 > | **C.1——事件钩子** | 沙箱 `hooks.js` 挂在回合生命周期上，带声明式 UI 输出 |
 > | **C.2——Python 入口点插件** | **推迟**——唯一会以服务端权限运行的一层 |
 > | **`.lwpack` 打包** | 清单 v2：完整文件清册、按真实载荷检测的卡类型、带迁移槽的 schema 版本；`gh:` release 分发 |
@@ -22,7 +22,7 @@
 > | **M18——战役编年史** | `chronicle` / `campaign_summary` / `thread` 文档、确定性折叠策略、`.recap` / `.chronicle` |
 > | **M19——演出导演** | 演出资料包（`ui/presentation.yaml`）、演出区块词汇（`letter` / `clipping` / `map_pin` / `title_card` / `image`）、区块级 `visible_when`、按人解析的资源条标签——协议 2.1 |
 
-Loreweaver 是一个自托管的、世界与故事优先的 AI 守秘人，不是一个角色扮演聊天前端。它长期的杠杆是**成为一个被社区扩展的平台**，而不是一份人人 fork 的代码。这份文档定义"怎么扩展"。
+Loreweaver 是一个自托管的、世界与故事优先的 AI 守秘人，不是一个角色扮演聊天前端。它长期的杠杆是**成为一个被社区扩展的平台**，而不是一份人人 fork 的代码。这份文档定义“怎么扩展”。
 
 ## 指导原则：沿用惯例，不发明惯例
 
@@ -44,9 +44,9 @@ Loreweaver 跑在运营者自己的机器上，握有完整权限：文件系统
 
 - **数据插件（安全）：** 被校验的数据，*不执行代码*。卡、世界书、规则系统、provider 预设、本地化包。
 - **声明式技能（安全）：** 提示文本 + 一份对已有内置工具的*白名单* + 可选数据。没有新代码运行。
-- **代码插件（危险）：** 任意 Python。最后发布，只能显式开启，需要能力声明和明确的"来源可信"警告。
+- **代码插件（危险）：** 任意 Python。最后发布，只能显式开启，需要能力声明和明确的“来源可信”警告。
 
-由此有一条推论，塑造了 A 层：任何声明式"公式"设施（比如衍生属性）都使用**固定的原语词汇，绝不 `eval` 任意字符串**——所以一个数据插件永远没法夹带代码。
+由此有一条推论，塑造了 A 层：任何声明式“公式”设施（比如衍生属性）都使用**固定的原语词汇，绝不 `eval` 任意字符串**——所以一个数据插件永远没法夹带代码。
 
 第二条推论：**一个坏包绝不能让启动挂掉。** 发现机制会捕获并跳过一个畸形插件。
 
@@ -89,7 +89,7 @@ sheet:                                   # 卡表形状（属性／生命／资�
 - `{computer_group: <system_id>}`——直接复用另一个系统整套生成结果。
 - 声明式原语（安全，不 eval）：`{copy_of: <stat>}`、`{half_of: <stat>}`、`{floor_div: {of: <stat>, by: N}}`、`{sum_ranges: {of: [<stats>], ranges: [[lo, hi, value], ...], else: <value>}}`。
 
-随包发的三个系统（`coc7`、`dnd5e`、`wod`）就是这个格式的普通包，也是参考词汇。"规则即数据"有一条字面意义上的验收标准：把 `rulepacks/coc7.yaml` 从一个部署里删掉，CoC 就没了，引擎里不留残渣。
+随包发的三个系统（`coc7`、`dnd5e`、`wod`）就是这个格式的普通包，也是参考词汇。“规则即数据”有一条字面意义上的验收标准：把 `rulepacks/coc7.yaml` 从一个部署里删掉，CoC 就没了，引擎里不留残渣。
 
 **规则的行为也是包数据（M16）。** 规则外化之后，一个包不只声明卡表：它声明检定怎么结算、有哪些子系统、响应哪些点命令、以及要告诉守秘人什么。`agent/` 从不点名系统，也从不比较 rank id——它只读语义标志——所以一个包可以自造词汇而不碰代码。
 
@@ -128,16 +128,16 @@ labels:      {en: {crit: [Critical Success], …}, zh: {crit: [大成功], …}}
 
 Loreweaver 本来就导入酒馆卡（`core/charcard.py` → `char_from_persona.py` → `import_character` 工具）。我们把这条正式定为卡插件契约：一份 `chara_card_v2` / `chara_card_v3` JSON（或者带 `chara` tEXt chunk 的 PNG）。消费的字段：`name, description, personality, scenario, first_mes, mes_example, system_prompt, post_history_instructions, alternate_greetings, tags, creator, character_version, character_book, extensions`。未知字段被忽略而不是拒绝，对 V3 的新增保持前向兼容。
 
-**拆卡。** 一张酒馆"重卡"把两件 Loreweaver 坚持分开的东西焊在了一起：**人物**（人设、记忆、能力、一张卡表）和**世界**（钩子脚本、`[InitVar]` 变量架构、可执行 EJS——会重编程整个房间的机制）。那种融合是上游单人架构的产物，不是需要保留的设计，所以导入会确定性地拆开每一张卡（`core.card_split`）：
+**拆卡。** 一张酒馆“重卡”把两件 Loreweaver 坚持分开的东西焊在了一起：**人物**（人设、记忆、能力、一张卡表）和**世界**（钩子脚本、`[InitVar]` 变量架构、可执行 EJS——会重编程整个房间的机制）。那种融合是上游单人架构的产物，不是需要保留的设计，所以导入会确定性地拆开每一张卡（`core.card_split`）：
 
 - **人物导入**（`.import <文件> [pc|companion]`）只取人物那一半。世界机制被*结构性剥离*——钩子不安装，声明条目既不存储也不消费，EJS 片段从正文和设定里移除——结果消息会逐项列出剥掉了什么。这是玩家可以自己往共享房间里导入的东西。
 - **世界导入**（`.import <文件> world`，仅守秘人，刻意不作为模型工具）把两半都作为模组内容带进来：机制那一半（完整世界书带守秘人信任、保密标志被尊重；`[InitVar]` 播种进房间变量树；钩子按房间安装），以及人物那一半——它会加入房间的预设角色池（`core.pregen_roster`），成为一个可认领、经规则校验的 PC（`.pc list/claim/release`；认领是排他的，释放会恢复原始卡表）。一次守秘人导入既带来模组的世界，也带来它的演员表；AI 扮演的同伴仍然是单独的 `.import <文件> companion`。
 
-这条边界是房间的信任边界，不是能力削减："作者自由高于把关"是**运营者**对自己那台机器的立场，而守秘人就是房间的运营者。任何会重编程共享玩法的东西——技能（`.skill enable`）、钩子、变量架构、规则——都要过守秘人的手；玩家上传的东西按构造无法执行、也无法改动共享状态。
+这条边界是房间的信任边界，不是能力削减：“作者自由高于把关”是**运营者**对自己那台机器的立场，而守秘人就是房间的运营者。任何会重编程共享玩法的东西——技能（`.skill enable`）、钩子、变量架构、规则——都要过守秘人的手；玩家上传的东西按构造无法执行、也无法改动共享状态。
 
 ### A.3 世界信息 / 设定——酒馆世界书
 
-卡内嵌的 `character_book`，或者一份独立世界书，映射到 `core/worldbook.py`。尊重的条目字段：`keys`（主）、`secondary_keys`、`content`、`comment`、`constant`、`selective`、`insertion_order`、`enabled`、`position`、`case_sensitive`、`priority`、`extensions`。激活是"最近上下文里的关键词命中 + 预算内插入"，就是酒馆那套模型，所以一份已有的世界书原样就能用。
+卡内嵌的 `character_book`，或者一份独立世界书，映射到 `core/worldbook.py`。尊重的条目字段：`keys`（主）、`secondary_keys`、`content`、`comment`、`constant`、`selective`、`insertion_order`、`enabled`、`position`、`case_sensitive`、`priority`、`extensions`。激活是“最近上下文里的关键词命中 + 预算内插入”，就是酒馆那套模型，所以一份已有的世界书原样就能用。
 
 ### A.4 模组变量（确定性追踪器）
 
@@ -212,8 +212,8 @@ metadata:
 
 - **住在哪**：技能 `SKILL.md` 旁边的 `hooks.js`（在该技能对这个房间启用期间生效——已有的 `.skill enable` 就是开关），或者一张卡的钩子脚本——原生包的顶层 `hooks: [...]` 列表（format v1），或者一张酒馆形状的卡的 `extensions.loreweaver_hooks`（由**守秘人**的 `.import <文件> world` 安装；带钩子的卡就是世界卡，见 A.2 的拆卡；重复导入会替换它的脚本而不是叠加）。
 - **API**：`on("turn_start"|"reply_ready"|"dice_rolled"|"variables_changed", handler)`，完整的变量桥（`getvar`/`setvar`/`variables`/`stat_data`，lodash 作为 `_`），以及效果发射器 `inject(text)`（给这一回合的守秘人提示加一段）、`narrate(text)`（追加到玩家可见回复）、`rewriteReply(text)`、`log(text)`、`emitUI(blocks, opts?)`——客户端渲染成 `ui` 帧的声明式区块（meter/stat/badge/text/divider/choices/image 等），比如 `emitUI([{kind:"meter", label:"Fear", value:3, min:0, max:10}], {panel:"sidebar", id:"hud"})`；区块 schema 见 [protocol.zh.md](protocol.zh.md)。发出的 UI 是**玩家可见的作者输出**（和 `narrate` 同一个信任立场）——永远不要往里面发守秘人秘密。配合模组 UI 面板（D 层）还有 `emitPanel(panelId, payload)`——给某一个包声明的面板的不透明 JSON 载荷（≤ 32 KB，每回合 ≤ 20 条），只投递给清单里含有那个面板的观看者。同样的信任立场，外加一条收紧：`audience: all` 面板的载荷会到达玩家——守秘人的秘密要放，也只能放进 `audience: keeper` 的面板。
-- **契约（铁律 #1）**：钩子**请求**效果；确定性的引擎代码校验、夹紧并施加它们——对已声明模组变量的 `setvar` 会走类型／边界校验，其余落进 MVU 树。每回合一个沙箱解释器（内存／时间受限、无宿主 I/O），`variables_changed` 每回合最多触发一次，所以钩子级联按构造会终止；任何失败——脚本坏了、死循环、缺 `ejs` extra——都降级成"钩子失效（已记录）"，绝不会变成一个坏掉的回合。
-- **`globalThis` 只活一个回合——这个坑值得点名。** "每回合一个解释器"意味着解释器每回合都被*重建*，所以一个存在 JS 变量里的计数器每回合都会归零。它不报错，只是永远不往前走，而这是 bug 最糟糕的一种表现方式。一次 2026-08-07 的实测为它丢了一整场的计量条：
+- **契约（铁律 #1）**：钩子**请求**效果；确定性的引擎代码校验、夹紧并施加它们——对已声明模组变量的 `setvar` 会走类型／边界校验，其余落进 MVU 树。每回合一个沙箱解释器（内存／时间受限、无宿主 I/O），`variables_changed` 每回合最多触发一次，所以钩子级联按构造会终止；任何失败——脚本坏了、死循环、缺 `ejs` extra——都降级成“钩子失效（已记录）”，绝不会变成一个坏掉的回合。
+- **`globalThis` 只活一个回合——这个坑值得点名。** “每回合一个解释器”意味着解释器每回合都被*重建*，所以一个存在 JS 变量里的计数器每回合都会归零。它不报错，只是永远不往前走，而这是 bug 最糟糕的一种表现方式。一次 2026-08-07 的实测为它丢了一整场的计量条：
 
   ```js
   // 错的——永远读到 1/40，而且一声不吭。
@@ -234,7 +234,7 @@ metadata:
 
 ### C.2 Python 入口点插件（仍然推迟）
 
-真正需要新的*服务端代码*的场合（KP 工具、适配器、provider、奇特的衍生计算器），我们会用 Python **入口点**（`loreweaver.plugins`），这样 `pip install loreweaver-plugin-x` 就能注册它。那一层以**服务端权限**运行——不像 C.1 的沙箱——所以它排在最后、默认关闭，并且要求：能力声明、运营者显式启用、显著的"以服务端权限运行不受信代码"警告，以及失败隔离。在 C.2 之前，代码贡献走正常的 in-tree PR。
+真正需要新的*服务端代码*的场合（KP 工具、适配器、provider、奇特的衍生计算器），我们会用 Python **入口点**（`loreweaver.plugins`），这样 `pip install loreweaver-plugin-x` 就能注册它。那一层以**服务端权限**运行——不像 C.1 的沙箱——所以它排在最后、默认关闭，并且要求：能力声明、运营者显式启用、显著的“以服务端权限运行不受信代码”警告，以及失败隔离。在 C.2 之前，代码贡献走正常的 in-tree PR。
 
 ## D 层——模组 UI 面板（M15）
 
@@ -260,7 +260,7 @@ metadata:
   - {kind: badge, label: {zh: 已警觉}, visible_when: "stage === 2 && !alerted"}
   ```
 
-  它由**客户端**求值，对着那个观看者自己的 `state.variables`——数值是运行时会动的，别无他法。这意味着每个客户端都是同一套语法的一个实现，所以这套语法被刻意做得很小：比较、`&& || !`、字面量、裸变量 id。**算术、`getvar()`、任何函数调用和 `a[0]` 在构建时被拒绝**——每一样都是两个客户端可能悄悄给出不同答案的地方，而"能不能看见"上的悄悄分歧就是剧透。需要 `day >= -1`？反过来写成 `day < 0`。
+  它由**客户端**求值，对着那个观看者自己的 `state.variables`——数值是运行时会动的，别无他法。这意味着每个客户端都是同一套语法的一个实现，所以这套语法被刻意做得很小：比较、`&& || !`、字面量、裸变量 id。**算术、`getvar()`、任何函数调用和 `a[0]` 在构建时被拒绝**——每一样都是两个客户端可能悄悄给出不同答案的地方，而“能不能看见”上的悄悄分歧就是剧透。需要 `day >= -1`？反过来写成 `day < 0`。
 
   两条作者守则：
 
@@ -305,14 +305,14 @@ audio:                       # 导演可以调用的音频提示
 - **宁缺毋滥。** `generation: pack_only` 是你的否决权——导演只用你自己的美术做舞台。运营方的设置覆盖不了它；一个房间跑两个模组时，只要有一个 `pack_only`，整个房间的生成就停了。
 - **慢菜先备。** 导演会提前热身它预计很快要用的对象，所以一个节拍端上来的画，是在它之前那几个安静回合里做好的。这个不用配；把对象命名出来，就让它成为可能。
 
-资料包引用的一切都走和面板代码同一条内容寻址素材流水线，信任卡会同时披露对象数量和"这个模组到底会不会花运营方的出图预算"。房间用**同一个** `.panels enable <packId>` 开启它——演出是模组在布置牌桌，不是第二个开关。运营方那侧的旋钮（用哪个模型、每个房间的出图上限）是 `TRPG_DIRECTOR__*`；一个房间启用的模组都不带资料包，就永远不会唤醒导演，所以在有作者提出要求之前，这一层不花任何钱。
+资料包引用的一切都走和面板代码同一条内容寻址素材流水线，信任卡会同时披露对象数量和“这个模组到底会不会花运营方的出图预算”。房间用**同一个** `.panels enable <packId>` 开启它——演出是模组在布置牌桌，不是第二个开关。运营方那侧的旋钮（用哪个模型、每个房间的出图上限）是 `TRPG_DIRECTOR__*`；一个房间启用的模组都不带资料包，就永远不会唤醒导演，所以在有作者提出要求之前，这一层不花任何钱。
 
 ---
 
 ## 发现、清单与版本——`.lwpack` 格式
 
 - **发现目录**：仓库内（`rulepacks/`、`skills/`）和用户数据目录（`data_dir/skills`、`data_dir/rulepacks`），所以一个插件不必住在检出目录里。内置 id 永远赢过同名的用户目录文件。
-- **一个可发布单元**：一整个作品——技能 + 规则包 + 卡 + 世界书 + 媒体素材——作为**一个自包含的 `.lwpack`** 一起走：一个带根 `pack.yaml` 清单的 zip（`core/pack.py`）。作者跑 `python -m app --pack <源目录>`，用户跑 `python -m app --install <ref> [--yes]`。没有"先装 X 插件"的说明，也没有素材要挂图床。
+- **一个可发布单元**：一整个作品——技能 + 规则包 + 卡 + 世界书 + 媒体素材——作为**一个自包含的 `.lwpack`** 一起走：一个带根 `pack.yaml` 清单的 zip（`core/pack.py`）。作者跑 `python -m app --pack <源目录>`，用户跑 `python -m app --install <ref> [--yes]`。没有“先装 X 插件”的说明，也没有素材要挂图床。
 - **Git 就是仓库**：一个安装引用可以是本地路径、`https://` 直链，或者 `gh:owner/repo[@tag]`——由 `infra/pack_source.py` 通过匿名 GitHub API 解析到那个 release 的 `*.lwpack` asset（`@tag` 钉住一个 release，不写就是最新）。这里刻意没有中心化包仓库。
 - **装上不等于启用**：技能落进用户技能目录、规则包落进用户规则包目录——立刻可发现，但房间仍然要自己点头（`.skill enable <id>` / 常规规则命令）。卡、世界书和素材落到 `data_dir/packs/<id>@<version>/`，供已有的房间内导入流程（`.import`、`.module`）消费；重装同一个 `id@version` 会整个替换那个包目录，绝不合并。
 - **信任卡，不是关卡**：安装前 CLI 打印这个包自动生成的 `trust` 摘要——技能／规则包／卡／世界书数量、是否带沙箱 hooks JS 或 EJS 模板、素材有多少 MB——然后请求确认（`--yes` 跳过；非交互运行必须显式给）。和完整 EJS 同一个立场：运营者的机器，运营者的知情决定。
@@ -328,7 +328,7 @@ audio:                       # 导演可以调用的音频提示
 | `name`、`description` | 是 | 一个普通字符串，或者一个 `{en, zh}` 映射 |
 | `authors` | 是 | 非空字符串列表 |
 | `license` | 是 | SPDX id 或者一个简短名字 |
-| `engine` | 否 | 最低版本：`protocol`（线协议）和／或 `server`——只比较最低值 |
+| `engine` | 否 | 最低版本：`protocol`（协议）和／或 `server`——只比较最低值 |
 | `contents.skills` | 否 | 技能**目录**（`skills/<id>`），每个恰好是 `SKILL.md` + 可选 `hooks.js` |
 | `contents.rulepacks` | 否 | 规则包 YAML 文件（`rulepacks/<id>.yaml`） |
 | `contents.cards` | 否 | 酒馆卡（PNG 或 JSON）**或者原生包**（`*.lorecard.json`，按内容嗅探分派给原生解析器，好让它们的机制被如实检测）：可以是一个路径，也可以是 `{path, notes: {en, zh}}` 映射来附上安装说明。拆卡的 `kind` 是**检测出来的，不是声明的**：构建会从真实载荷把 `character`/`world` 盖进构建后的清单（hooks/`[InitVar]`/EJS/`secret` 设定/类型化规格 ⇒ `world`，需由守秘人 `.import <文件> world`），安装时再拿检测结果核对这个戳 |

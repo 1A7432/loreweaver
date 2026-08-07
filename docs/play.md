@@ -3,7 +3,7 @@
 # Playing Loreweaver — a five-minute start
 
 *For players. If you are the one hosting, read this first anyway — you play too — then
-[docs/operating.md](operating.md).*
+[Running a table](operating.md).*
 
 You do not need to learn a command language to play. Type what your character does, in ordinary
 words, and the Keeper takes it from there. Everything below is what makes the table *readable*: how

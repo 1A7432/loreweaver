@@ -1,10 +1,10 @@
 *[English](protocol.md) · 中文*
 
-# loreweaver networked TUI — wire protocol 2.1
+# Loreweaver 联网 TUI —— 协议 2.1
 
-这是 loreweaver 服务器（通过 `python -m app --serve` 启动）与 OpenTUI 终端客户端之间开放、版本化的 wire protocol。引擎本身（确定性核心 + AI Keeper）不受传输方式影响；传输中立的会话逻辑位于 `net.session.SessionCore`，本文档是与语言无关的接口定义。
+这是 loreweaver 服务器（通过 `python -m app --serve` 启动）与 OpenTUI 终端客户端之间开放、带版本的协议。引擎本身（确定性核心 + AI Keeper）不受传输方式影响；传输中立的会话逻辑位于 `net.session.SessionCore`，本文档是与语言无关的接口定义。
 
-控制流使用 `{"type": ...}` 形状的 JSON 帧，协议版本为 `"2.0"`。同一套帧与 `join` 握手可搭载于两种 carrier：
+控制流使用 `{"type": ...}` 形状的 JSON 帧，协议版本为 `"2.1"`。同一套帧与 `join` 握手可搭载于两种 carrier：
 
 - **Iroh** 是 `--serve` 实际启动的默认传输：点对点 QUIC，服务端打印可分享 ticket，不需要域名、证书或端口转发。控制帧是在长连接双向流上的 newline-delimited JSON；媒体字节使用同一连接上的额外双向流。
 - **WebSocket**（`net.tui_server`）只保留作离线测试/loopback carrier，不是 `--serve` 选项。控制帧是文本消息，媒体字节是二进制消息。
@@ -14,9 +14,9 @@
 **版本控制。**`"2.0"` 是对 1.x 的一次性破坏性整并——主版本号即兼容契约：客户端与服务端必须在主版本（`2`）上一致，`welcome.protocol` 主版本不同的客户端应拒绝连接（或明确警告）。同一主版本内的小版本是递增式的；客户端忽略无法识别的帧类型与字段——但有**一条规范性例外：能拦下渲染的字段永远不可忽略**。客户端遇到带 `visible_when` 的面板模板块而无法对该条件求值（不实现这个字段、不实现语法的某个角落、或求值本身出错）时，**必须不渲染该块**：忽略这道闸门等于把作者藏起来的内容画出来，所以不可判定的情形一律 fail-closed，与 `$var` 落空同一条规则。线上没有任何东西能让服务端核对这一点（`welcome.protocol` 报的是**服务端**版本，`join` 不携带客户端版本），因此这是一条客户端一致性要求，用到 `visible_when` 的包即以 2.1 为最低版本。同时也要看清这道闸门**不是**什么：被 gate 的块，其内容无论条件如何都随清单下发——`visible_when` 决定的是块**何时**画出来，不是其内容是否到达客户端；保密靠 `audience`（服务端解析）与 `state` 变量过滤器。2.0 打破了什么、各自清算了哪个疣：
 
 - `dice` 帧围绕引擎的中立检定结果契约重新设计：1.x 的 CoC 形状 `rank:int(-2..4)` / `level:string` 字段删除；分级检定携带 `outcome:{id,label,success,critical,fumble,tier,margin?}`，客户端按语义标志上色，而不是内嵌某个规则系统的成功阶梯。1.x 的 `kind:"sanity"` 变为通用的 `kind:"subsystem"` + `subsystem` id；系统形状的附加数据（奖励/惩罚骰、SAN 损失、幸运消耗、优势候选骰）放入不透明的 `detail` 对象。
-- 流式传输收敛为两种帧、一条规则：`narrative_delta` 帧携带草稿气泡的文本增量；同 `id` 的那一条收尾 `narrative` 帧携带**完整**最终文本并**替换**草稿。1.x 的尾缀式 `done` 帧、`stream`/`done` 布尔组合、以及"普通 narrative 顶替未完成草稿"的规则全部删除——生成后修正直接落在最终文本里。
+- 流式传输收敛为两种帧、一条规则：`narrative_delta` 帧携带草稿气泡的文本增量；同 `id` 的那一条收尾 `narrative` 帧携带**完整**最终文本并**替换**草稿。1.x 的尾缀式 `done` 帧、`stream`/`done` 布尔组合、以及“普通 narrative 顶替未完成草稿”的规则全部删除——生成后修正直接落在最终文本里。
 - `state.character` / `state.party[]` 的生命体征改为一个通用 `resources:[{id,label,value,max}]` 列表；1.x 的按系统字段名（`hp`、`hpmax`、`san`……）与 `hpmax`/`hpMax` 大小写不一致一并删除。
-- `dice` 帧只来源于工具绑定的结构化 payload；1.x 服务端"从工具的本地化文本反解析猜 rank"的回退路径不复存在。
+- `dice` 帧只来源于工具绑定的结构化 payload；1.x 服务端“从工具的本地化文本反解析猜 rank”的回退路径不复存在。
 
 客户端发送的第一帧 MUST 是 `join`。服务器回复 `welcome` 或 `error`，错误时关闭连接。如果在 join 握手超时内未到达（`TRPG_TUI__JOIN_TIMEOUT`，默认 10 秒），服务器将用 `error join_timeout` 关闭连接，而不是无限等待。离线 WebSocket 测试 carrier 另外支持 `TRPG_TUI__MAX_CONNECTIONS` 并发上限；超额测试连接会在读取 `join` 前收到 `error too_many_connections`。
 
@@ -32,7 +32,7 @@
   `{type:"media_set_enabled", enabled:boolean}`
 - `avatar_set` — 将本房间已经上传的一张图片绑定到调用者自己的当前角色头像。服务端会拒绝试图指定其他角色/用户的帧：
   `{type:"avatar_set", hash:string}`
-- `panel_intent`— 一次模组面板交互。服务端先校验所指面板确在**这名成员自己的**清单里（否则 `error forbidden`），然后把 value 完全按"这名玩家自己敲的"来路由——面板特权模型一步到位：`choice` 与 `input` 把 `value` 原样送进正常输入 choke（限速、回合锁、命令权限门全部生效）；`roll` 以该玩家身份执行公开的 `.r <value>`，由真实骰子引擎校验表达式。`value` 上限 2000 字符（超出 `error input_too_long`）：
+- `panel_intent`— 一次模组面板交互。服务端先校验所指面板确在**这名成员自己的**清单里（否则 `error forbidden`），然后把 value 完全按“这名玩家自己敲的”来路由——面板特权模型一步到位：`choice` 与 `input` 把 `value` 原样送进正常输入 choke（限速、回合锁、命令权限门全部生效）；`roll` 以该玩家身份执行公开的 `.r <value>`，由真实骰子引擎校验表达式。`value` 上限 2000 字符（超出 `error input_too_long`）：
   `{type:"panel_intent", panel:string, kind:"choice"|"input"|"roll", value:string}`
 - `ping`: `{type:"ping", t:number}`
 
@@ -82,7 +82,7 @@
   后四种是 M19 的**演出模板**：声明式，不是标记语言。富客户端把 `letter` 画成信笺、把 `title_card` 画成整幅幕卡；文本优先客户端把同样的字段打成几行。`map_pin` 的 `x`/`y` 是地图图片自身画框的**比例**（0..1），客户端按自己渲染的尺寸缩放标记。它们由房间的演出导演（`agent.stage_director`）在剧情节拍上发出，钩子与模组面板同样可用。
   `image` 块用**内容 hash** 指名一张图——正是媒体字节通道已经在应答的地址（`{op:"get", hash}`）。服务端只会发出**本房间**可取的 hash（房间自己的媒体，或本房间已启用包的资产），并盖上权威 `mime`，因此客户端可以像对待任何媒体一样拉取与缓存；取不到的 hash 在组帧前就已在服务端丢弃。文本优先客户端降级为 `caption`/`alt` 一行文字加自己既有的媒体查看方式。
   `panel:"inline"` 渲染进叙事流，`"sidebar"` 渲染进常驻侧栏区域。`id` 命名一个 UI 区域：后到的同 `id` sidebar 帧替换该区域内容；带 `replace:true` 的 inline 帧可以就地更新前一个同 `id` 的 inline 帧（不支持就地更新的客户端顺序追加即可）。玩家点选 `choices` 选项时，客户端把该选项的 `input` 原样作为普通 `input` 帧发回——不新增客户端→服务端帧类型。
-- `ui_manifest`— **这名观看者**的完整模组面板清单：`join` 时紧随首个 `state` 帧下发，守秘人执行 `.panels enable|disable` 后向每个在线成员重新推送。全量替换语义：帧携带整张清单（空表 = 没有面板，重连时也借此清掉旧面板）。包声明的 `audience` 在服务端按观看者的 keystore 角色**先行**解析——仅守秘人可见的面板在结构上就不会出现在玩家清单里，`audience` 字段本身也永不上线。面板/模板形状见下文"模组 UI 面板"：
+- `ui_manifest`— **这名观看者**的完整模组面板清单：`join` 时紧随首个 `state` 帧下发，守秘人执行 `.panels enable|disable` 后向每个在线成员重新推送。全量替换语义：帧携带整张清单（空表 = 没有面板，重连时也借此清掉旧面板）。包声明的 `audience` 在服务端按观看者的 keystore 角色**先行**解析——仅守秘人可见的面板在结构上就不会出现在玩家清单里，`audience` 字段本身也永不上线。面板/模板形状见下文“模组 UI 面板”：
   `{type:"ui_manifest", panels:[UiManifestPanel]}`
 - `panel_event`— 房间钩子经 `emitPanel(panelId, payload)` 发射的不透明 JSON 载荷（见 `docs/plugins.md`），供目标面板自己的代码（Tier 2）消费。在本回合 `ui` 帧之后送达，且**只**送达清单中含该面板的成员；每回合 ≤ 20 条（超额丢弃并记日志）、单条序列化 ≤ 32 KB。不运行面板代码的客户端（TUI）直接忽略：
   `{type:"panel_event", panel:string, payload:any}`
@@ -115,7 +115,7 @@
 10. AI-KP 分支结束时（包括错误清理）广播 `turn_status{status:"idle"}`；命令回复不发送回合状态。
 11. 重新构建并广播一个 `state` 帧（`net.state.build_room_state`）。
 
-密钥映射到同一房间的多个客户端共享一个 AI-KP 会话；上述每个描述为"广播"的帧都发送给当前连接到该房间的每个成员。
+密钥映射到同一房间的多个客户端共享一个 AI-KP 会话；上述每个描述为“广播”的帧都发送给当前连接到该房间的每个成员。
 
 ## 模组 UI 面板
 
@@ -149,7 +149,7 @@
 
 语义以参考实现为准，而非 JavaScript 自己的运算符：`==`/`!=` 会对数字字符串做强制转换，`===`/`!==` 是严格比较（布尔永远不严格等于数字），无法比较大小的组合（`"abc" > 5`、`null > 5`）是**错误**。**求值出错、或客户端无法求值的条件必须隐藏该块**——fail-closed，与 `$var` 落空同一条规则，也是小版本新增字段里唯一不许被忽略的那个（见「版本控制」）。这条规则对条件可以落在的每一种块都成立，`repeat` 也不例外：闸门写在 repeat 自己身上就抑制整段展开，写在其内层模板上就逐个实例抑制。隐藏变量在求值前就被剔除，因此条件永远无法把线上过滤掉的东西试探出来；反过来说，被 gate 的块其内容无论条件如何都在清单里，所以 `visible_when` 属于呈现，绝不是保密手段。`tests/fixtures/visible_when_vectors.json` 是各实现共用的一致性向量表。
 
-本地化文本是 `{en,zh}` 映射；客户端按自己语言选取（回退 `en`）。点选 Tier-1 `choices` 选项发送 `panel_intent{kind:"choice", value: <选项的 input>}`。文本客户端（TUI）用既有块渲染器画 Tier-1，`tray`/`modal` 折进侧栏分区，Tier-2 渲染其 `fallback` 块，对显式 `fallback: null` 显示一行本地化的"请在富客户端查看"。
+本地化文本是 `{en,zh}` 映射；客户端按自己语言选取（回退 `en`）。点选 Tier-1 `choices` 选项发送 `panel_intent{kind:"choice", value: <选项的 input>}`。文本客户端（TUI）用既有块渲染器画 Tier-1，`tray`/`modal` 折进侧栏分区，Tier-2 渲染其 `fallback` 块，对显式 `fallback: null` 显示一行本地化的“请在富客户端查看”。
 
 **Tier-2 资产**按内容寻址：对清单里的每个 hash 走**既有**媒体字节通道拉取（`{op:"get", hash}`——见"Media transfer"）；线上 `path` 是相对 entry 文档所在目录的路径（每个面板是一个自包含静态根）。缓存前校验 sha256（不可变，按 hash 键）。
 
