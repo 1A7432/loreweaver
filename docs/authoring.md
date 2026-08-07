@@ -1,17 +1,17 @@
 # Authoring a Loreweaver module
 
-*From an empty directory to an installable `.lwpack`, with a real shipped module as the worked
-example.*
+*From an empty directory to an installable `.lwpack`, with a real module as the worked example.*
 
 This is the practical tutorial. The normative contract — every field, every cap, every trust rule —
 is [plugins.md](plugins.md); when the two disagree, that one is right. What you get here is the
-order to do things in and a module you can read while you do them.
+order to do things in, and real files rather than invented ones.
 
-**The worked example** is 《汐浦送灯》 (*Xipu: The Lantern Sending*), which lives in
-[`content/xipu-songdeng/`](../content/xipu-songdeng/) in this repository. It is a real module: a
-1925 coastal-town mystery that was played twice, end to end, by live models, and the write-ups of
-both sessions are checked in at [`docs/specs/playtests/`](specs/playtests/). Every snippet below is
-copied from it.
+**The worked example** is 《汐浦送灯》 (*Xipu: The Lantern Sending*) — a real module, a 1925
+coastal-town mystery, played twice end to end by live models. The two session write-ups are checked
+in at [`docs/specs/playtests/`](specs/playtests/), findings and all. Every snippet below is copied
+verbatim from its source tree, so this page stands on its own; the module's own files are not
+published in this repository (publishing a solved mystery spoils it), so treat the paths below as
+the shape of a pack rather than something to clone.
 
 ---
 
@@ -583,7 +583,7 @@ file is a runbook.
 ### Build
 
 ```console
-$ uv run python -m app --pack content/xipu-songdeng
+$ uv run python -m app --pack xipu-songdeng/
 Packed xipu-songdeng@1.0.0 -> …/xipu-songdeng-1.0.0.lwpack
    sha256: 8c34dd524911a6f1def97fff57a51f1e9d455e695f32668053e5c5302fd51e0e
 📦 Xipu: The Lantern Sending — xipu-songdeng@1.0.0
@@ -727,4 +727,4 @@ channel leaks. Neither report flatters anyone. That is what made them useful.
 | The hooks API, events, effect buffer, failure semantics | [hooks.md](hooks.md) |
 | Panel and block shapes on the wire | [protocol.md](protocol.md) |
 | Operating a table with your module on it | [operating.md](operating.md) |
-| A complete module you can read | [`content/xipu-songdeng/`](../content/xipu-songdeng/) |
+| Two live playtests of the example module, written up honestly | [`docs/specs/playtests/`](specs/playtests/) |

@@ -15,7 +15,7 @@ corner mean.
 Install the client (one line, [see the README](../README.md#1-install-the-client)), run
 `loreweaver`, and paste the two things your Keeper sent you:
 
-- a **ticket** — the server's peer-to-peer address, a long string starting with `node`;
+- a **ticket** — the server's peer-to-peer address, a long string starting with `endpoint`;
 - an **invite key** — yours alone, and it is also your identity: there are no accounts and no
   passwords.
 
