@@ -14,7 +14,7 @@ from pathlib import Path
 
 import core.skills as skills_module
 from agent.context import AgentCtx
-from agent.prompt_builder import build_system_prompt
+from agent.prompt_builder import build_system_prompt, build_system_prompt_parts
 from agent.services import build_services
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
@@ -72,7 +72,7 @@ async def test_no_skills_enabled_prompt_is_byte_identical_between_two_fresh_room
     assert prompt_a == prompt_b
 
 
-async def test_enabled_skill_body_is_folded_in_as_the_final_section(tmp_path):
+async def test_enabled_skill_body_is_the_last_section_of_the_stable_head(tmp_path):
     services = _services("en")
     chat_key = "chat-skills-enabled"
     ctx = AgentCtx(chat_key=chat_key, user_id="u1", locale="en")
@@ -82,19 +82,22 @@ async def test_enabled_skill_body_is_folded_in_as_the_final_section(tmp_path):
     skills_module._SKILL_DIR = _use_tmp_skill_dir(tmp_path)
     skills_module._discover_registry.cache_clear()
     try:
-        baseline = await build_system_prompt(ctx, services)
-        assert "SENTINEL_FIXTURE_SKILL_BODY_MARKER" not in baseline
+        baseline = await build_system_prompt_parts(ctx, services)
+        assert "SENTINEL_FIXTURE_SKILL_BODY_MARKER" not in baseline.text
 
         await services.store.state_set(chat_key, "skills_enabled", json.dumps(["fixture-skill"]))
-        with_skill = await build_system_prompt(ctx, services)
+        with_skill = await build_system_prompt_parts(ctx, services)
 
-        assert "SENTINEL_FIXTURE_SKILL_BODY_MARKER" in with_skill
-        assert i18n.t("prompt.skills_header") in with_skill
-        # The skill section is the FINAL section: the baseline prompt is a strict
-        # prefix of the skill-enabled prompt (skills fold in LAST, nothing before
-        # it changes).
-        assert with_skill.startswith(baseline)
-        assert with_skill[len(baseline) :].startswith("\n\n" + i18n.t("prompt.skills_header"))
+        assert "SENTINEL_FIXTURE_SKILL_BODY_MARKER" in with_skill.text
+        assert i18n.t("prompt.skills_header") in with_skill.stable
+        # P1: skills are the last section of the STABLE HEAD — the strongest STANDING
+        # directive, with only per-turn state and direction after them. So the baseline
+        # head is a strict prefix of the skill-enabled head...
+        assert with_skill.stable.startswith(baseline.stable)
+        assert with_skill.stable[len(baseline.stable) :].startswith("\n\n" + i18n.t("prompt.skills_header"))
+        # ...and enabling a skill changes NOTHING in the volatile tail. (Which is also
+        # why enabling one costs exactly one cache miss, not a permanently split prompt.)
+        assert with_skill.volatile == baseline.volatile
     finally:
         skills_module._SKILL_DIR = original_dir
         skills_module._discover_registry.cache_clear()

@@ -1,16 +1,38 @@
 """Assembles the AI-KP system prompt for one turn from the 6 ``core.prompt_sections``
 section builders.
 
-Per the M1 spec (``docs/specs/M1.md`` §6.4), the 6 sections are called in a
-fixed order — session history, game state, document/knowledge-pool context,
-system-specific expertise, TRPG-system identity, interaction style — and
-joined with a blank line between every NON-empty section (a section that
-legitimately has nothing to say, e.g. no prior session, is simply omitted
-rather than leaving a stray blank block). Immediately after session history a
-rolling "story so far" recap of the CURRENT session
-(``inject_session_recap_prompt``) is folded in, so the KP keeps concrete facts
-established earlier this session even after they scroll out of the loop's
-~20-message replay window; it too is omitted until the first recap exists.
+**Section order is STABLE HEAD → VOLATILE TAIL (P1, 2026-08-07).** Every section
+still lands in ONE system prompt (iron rule #5 is untouched); only their order
+changed, and it changed for a measurable reason. The 1.x order opened with session
+history and game state — the two things that change every single turn — so each turn
+invalidated the whole downstream prefix: the module pool, the rulepack expertise, the
+style layer and the skill bodies were re-read from scratch every time, at full price.
+A 2026-08-07 long session burned 40% of a weekly quota partly this way.
+
+So the assembly is now two explicit halves (see :class:`SystemPrompt`):
+
+- **stable head** — TRPG identity, system expertise, interaction style, the module
+  knowledge pool, the preset layer, the enabled skill bodies. These change when the
+  ROOM's configuration changes (a module loads, a keeper enables a skill), not when
+  the story moves. This is the cacheable prefix.
+- **volatile tail** — world lore (retrieval-dependent), the session recap and
+  history, live game state, relationship tracks, module variables, MVU leaves,
+  scribe whispers, hook injections.
+
+Two properties were deliberately preserved through the move:
+
+- the preset layer still precedes the skill bodies, so keeper-enabled skills remain
+  the strongest STANDING directive, and the volatile tail's own instructional items
+  (whispers, hook injections) still come last, so per-turn direction keeps recency;
+- ``inject_document_context_prompt``'s knowledge pool sits at the END of the stable
+  head, directly adjacent to the world lore it governs — the keeper-discipline and
+  module-fidelity blocks it carries still read as framing for the lore below them.
+
+The one nuance worth knowing: a room with NO initialized module pool falls back to
+vector search over raw uploads, and that text varies per turn. Such a section is
+routed to the volatile tail instead, so the stable head stays honestly stable rather
+than nominally stable. ``tests/agent/test_prompt_cache_layout.py`` is the oracle.
+
 ``i18n`` is rebound to ``ctx.locale`` so the whole prompt renders in the
 caller's locale for this turn, independent of the process-wide default locale.
 
@@ -21,35 +43,31 @@ keeper-only material is for its own reasoning only and must never be quoted
 to players; that instruction rides along automatically as part of this
 assembly, it needs no special handling here.
 
-After the 6 sections, any KP skills (Layer B.1 — ``docs/plugins.md`` "Layer B")
-enabled for this room are folded in LAST, so they read as the final/strongest
-directive. This module reads the room's enabled-skill ids DIRECTLY off the
+KP skills (Layer B.1 — ``docs/plugins.md`` "Layer B") enabled for this room close
+the stable head. This module reads the room's enabled-skill ids DIRECTLY off the
 store (never importing ``gateway.ops`` — that would invert the layering; only
 ``core.skills`` is imported, which is below `agent`), tolerating a
 missing/corrupt flag the same way ``gateway.ops.get_enabled_skills`` does. A
 room with no skills enabled contributes nothing, so its prompt stays
 byte-identical to a build with no skills layer at all.
 
-Finally, current deterministic relationship tracks (``core.relationships`` —
-好感/情欲, see iron rule #1: the values are real code, only the narration
-around them is the model's job) are folded in as the last section, read
-straight off the store the same inline way as the skills block above (never
-importing ``agent.kp_tools_relationships`` or ``gateway``). A chat with no
-relationship state set contributes nothing, so its prompt stays byte-identical
-to a build from before this section existed.
-
-Module variables (``core.modvars`` — the same iron-rule-#1 split: validated,
-clamped, persisted values the model only narrates around) follow the same
-pattern right after the relationships section: the Keeper sees EVERY variable,
-with keeper-only ones carrying a localized never-reveal tag (iron rule #3 —
-the transport-side filter in ``net.state`` is the structural guarantee; this
-tag is the behavioral one). A room with no variables contributes nothing.
+Deterministic relationship tracks (``core.relationships`` — 好感/情欲, see iron
+rule #1: the values are real code, only the narration around them is the model's
+job) and module variables (``core.modvars`` — the same split: validated, clamped,
+persisted values the model only narrates around) are live state and sit in the
+volatile tail, read straight off the store the same inline way as the skills block
+(never importing ``agent.kp_tools_relationships`` or ``gateway``). The Keeper sees
+EVERY variable, with keeper-only ones carrying a localized never-reveal tag (iron
+rule #3 — the transport-side filter in ``net.state`` is the structural guarantee;
+this tag is the behavioral one). A room with neither contributes neither section,
+not even an empty header.
 """
 
 from __future__ import annotations
 
 import json
 import random
+from dataclasses import dataclass
 
 from agent.context import AgentCtx
 from agent.services import Services
@@ -75,13 +93,48 @@ from core.varspace import build_resolver
 from core.worldbook import inject_world_lore_prompt
 
 
-async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
-    """Build the full AI-KP system prompt for `ctx`'s current turn.
+@dataclass(frozen=True)
+class SystemPrompt:
+    """One system prompt, split at its cache boundary (P1 — module docstring).
 
-    Calls the `core.prompt_sections` builders in the exact order the M1 spec
-    requires, folds in the M11 world-lore section (retrieved against the recent
-    narrative/history, `role="keeper"` so the KP — and only the KP — also sees
-    secret lore), and joins every non-empty result with `"\\n\\n"`.
+    ``text`` is what actually reaches the model: still a single string, still one
+    injection. The split exists so the provider layer can mark where the reusable
+    prefix ends — on the Anthropic path that becomes an explicit ``cache_control``
+    breakpoint; OpenAI-compatible endpoints cache by prefix automatically and need
+    no marker, but they benefit from the same ORDER regardless.
+    """
+
+    stable: str
+    volatile: str
+
+    @property
+    def text(self) -> str:
+        return "\n\n".join(part for part in (self.stable, self.volatile) if part)
+
+    @property
+    def cache_prefix_chars(self) -> int:
+        """Length of the cacheable prefix within ``text`` (0 when there is none).
+
+        Counts the joining blank line, so ``text[:cache_prefix_chars]`` is exactly the
+        stable half plus its separator — the boundary a provider marks."""
+        if not self.stable or not self.volatile:
+            return len(self.text)
+        return len(self.stable) + 2
+
+
+async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
+    """The assembled system prompt as one string — see :func:`build_system_prompt_parts`."""
+    return (await build_system_prompt_parts(ctx, services)).text
+
+
+async def build_system_prompt_parts(ctx: AgentCtx, services: Services) -> SystemPrompt:
+    """Build the full AI-KP system prompt for `ctx`'s current turn, split at its
+    cache boundary.
+
+    Calls the `core.prompt_sections` builders, folds in the M11 world-lore section
+    (retrieved against the recent narrative/history, `role="keeper"` so the KP — and
+    only the KP — also sees secret lore), and joins every non-empty result with
+    `"\\n\\n"`, stable half first (module docstring).
     """
     i18n = services.i18n.with_locale(ctx.locale)
 
@@ -151,55 +204,52 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
             if discipline not in document_context:
                 world_lore = "\n\n".join([discipline, i18n.t("prompt.module_fidelity"), world_lore])
 
-    sections = [
-        session_history,
-        session_recap,
-        await inject_game_state_prompt(ctx, services.characters, services.store, i18n),
-        document_context,
-        world_lore,
+    # --- STABLE HEAD: changes when the ROOM's configuration changes, not per turn ---
+    stable: list[str] = [
+        await inject_trpg_system_prompt(ctx, i18n),
         await inject_system_expertise_prompt(
             ctx, services.characters, i18n, default_system=services.settings.default_rulepack
         ),
-        await inject_trpg_system_prompt(ctx, i18n),
         await inject_interaction_style_prompt(ctx, i18n),
     ]
+    # The knowledge pool is a stored document — genuinely constant between turns. The
+    # vector-search FALLBACK for a room with no initialized module is retrieval-driven
+    # and is not; routing it to the tail keeps the head honestly stable instead of
+    # nominally stable (an unstable section inside the head would invalidate the whole
+    # prefix anyway, just invisibly).
+    document_context_is_stable = await _module_pool_ready(services, ctx.chat_key)
+    if document_context_is_stable:
+        stable.append(document_context)
 
-    # Imported-preset style layer (`.preset enable <id>`): folded right after the six
-    # sections so keeper-enabled skills (below) still read as the stronger directive.
-    # One bounded section — iron rule #5 (single prompt injection) stays intact: the
-    # preset shapes style/framework, structurally after (never inside) the state and
-    # secrecy sections above.
-    preset_section = await _enabled_preset_section(ctx, services, i18n)
-    if preset_section:
-        sections.append(preset_section)
-
-    # Scribe whispers (agent.scribe): keeper-side bookkeeping reminders from the
-    # post-turn reconciliation pass, consumed read-and-clear. Marker-gated by
-    # their own existence — a room with nothing pending gets no section at all,
-    # and the KP keeps full judgment over what to do with each note.
-    from agent.scribe import pop_whispers
-
-    whispers = await pop_whispers(services, ctx.chat_key)
-    if whispers:
-        sections.append(i18n.t("prompt.scribe_notes") + "\n" + "\n".join(f"- {note}" for note in whispers))
-
-    # Event-hook inject() texts for THIS turn (Layer C — agent.hook_runtime stashes them on
-    # ctx.extra before this build; consumed per turn, never persisted).
-    hook_injections = [text for text in (extra.get("hook_injections") or []) if isinstance(text, str)]
-    if hook_injections:
-        sections.append(i18n.t("prompt.hooks_header") + "\n" + "\n".join(hook_injections))
+    # Imported-preset style layer (`.preset enable <id>`): folded before the skill
+    # bodies so keeper-enabled skills still read as the stronger STANDING directive.
+    # One bounded section — iron rule #5 (single prompt injection) stays intact.
+    stable.append(await _enabled_preset_section(ctx, services, i18n))
 
     skill_bodies = await _enabled_skill_bodies(ctx, services)
     if skill_bodies:
-        sections.append(i18n.t("prompt.skills_header") + "\n\n" + "\n\n".join(skill_bodies))
+        stable.append(i18n.t("prompt.skills_header") + "\n\n" + "\n\n".join(skill_bodies))
+
+    # --- VOLATILE TAIL: rebuilt most turns -------------------------------------
+    volatile: list[str] = []
+    if not document_context_is_stable:
+        volatile.append(document_context)
+    volatile.extend(
+        [
+            world_lore,
+            session_recap,
+            session_history,
+            await inject_game_state_prompt(ctx, services.characters, services.store, i18n),
+        ]
+    )
 
     relationship_lines = await RelationshipManager(services.store).describe(ctx.chat_key, i18n)
     if relationship_lines:
-        sections.append(i18n.t("prompt.relationships_header") + "\n" + "\n".join(relationship_lines))
+        volatile.append(i18n.t("prompt.relationships_header") + "\n" + "\n".join(relationship_lines))
 
     modvar_lines = await describe_modvars(services.documents, ctx.chat_key, i18n, ctx.locale)
     if modvar_lines:
-        sections.append(i18n.t("prompt.modvars_header") + "\n" + "\n".join(f"- {line}" for line in modvar_lines))
+        volatile.append(i18n.t("prompt.modvars_header") + "\n" + "\n".join(f"- {line}" for line in modvar_lines))
 
     # Imported MVU card variables (core.mvu_compat) — same fold-in pattern: the Keeper sees the
     # current tree every turn (post-template-writes — see above) and updates it via
@@ -208,9 +258,43 @@ async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
     mvu_leaves = flatten_leaves(mvu_tree, 100)
     if mvu_leaves:
         leaf_lines = "\n".join(f"- {leaf['path']} = {leaf['value']}" for leaf in mvu_leaves)
-        sections.append(i18n.t("prompt.mvu_header") + "\n" + leaf_lines)
+        volatile.append(i18n.t("prompt.mvu_header") + "\n" + leaf_lines)
 
-    return "\n\n".join(section for section in sections if section)
+    # This turn's own direction goes LAST, keeping recency where it matters most.
+    # Scribe whispers (agent.scribe): keeper-side bookkeeping reminders from the
+    # post-turn reconciliation pass, consumed read-and-clear. Marker-gated by their
+    # own existence — a room with nothing pending gets no section at all, and the KP
+    # keeps full judgment over what to do with each note.
+    from agent.scribe import pop_whispers
+
+    whispers = await pop_whispers(services, ctx.chat_key)
+    if whispers:
+        volatile.append(i18n.t("prompt.scribe_notes") + "\n" + "\n".join(f"- {note}" for note in whispers))
+
+    # Event-hook inject() texts for THIS turn (Layer C — agent.hook_runtime stashes them on
+    # ctx.extra before this build; consumed per turn, never persisted).
+    hook_injections = [text for text in (extra.get("hook_injections") or []) if isinstance(text, str)]
+    if hook_injections:
+        volatile.append(i18n.t("prompt.hooks_header") + "\n" + "\n".join(hook_injections))
+
+    return SystemPrompt(
+        stable="\n\n".join(section for section in stable if section),
+        volatile="\n\n".join(section for section in volatile if section),
+    )
+
+
+async def _module_pool_ready(services: Services, chat_key: str) -> bool:
+    """Whether this room's document context comes from an initialized knowledge pool
+    (a stored document, constant between turns) rather than per-turn vector search.
+
+    Mirrors the precedence `core.prompt_sections.inject_document_context_prompt` applies;
+    reading the same flag here is what lets the cache boundary be drawn honestly."""
+    if not services.settings.enable_vector_db:
+        return False
+    try:
+        return await services.store.state_get(chat_key, "module_init_status") in {"ready", "ready_fallback"}
+    except Exception:  # noqa: BLE001 — an unreadable flag just means "treat it as volatile"
+        return False
 
 
 async def _build_macro_context(services: Services, ctx: AgentCtx) -> MacroContext:

@@ -8,7 +8,7 @@ from inspect import Parameter, signature
 from typing import TYPE_CHECKING, Any
 
 from infra.config import LLMSettings, Settings
-from infra.llm import ChatResult, LLMClient, OpenAILLM, ToolCall, parse_usage
+from infra.llm import CACHE_PREFIX_KEY, ChatResult, LLMClient, OpenAILLM, ToolCall, parse_usage
 from infra.llm_retry import RetryingLLM
 from infra.oauth_flows import (
     XAI_API_BASE,
@@ -578,16 +578,32 @@ class GeminiLLM:
         )
 
 
-def to_anthropic_messages(messages: list[dict]) -> tuple[str | None, list[dict[str, Any]]]:
-    """Translate OpenAI-style messages to Anthropic Messages API turns."""
+def to_anthropic_messages(
+    messages: list[dict],
+) -> tuple[str | list[dict[str, Any]] | None, list[dict[str, Any]]]:
+    """Translate OpenAI-style messages to Anthropic Messages API turns.
+
+    The system value comes back as a plain string normally, or — when the agent layer
+    marked a cache boundary (`infra.llm.CACHE_PREFIX_KEY`, P1) — as TWO text blocks with
+    an explicit `cache_control` breakpoint after the stable prefix. Anthropic caches only
+    at declared breakpoints, so without this the reordering would help the
+    OpenAI-compatible endpoints (automatic prefix caching) and do nothing here.
+    """
 
     system_parts: list[str] = []
+    cache_prefix = 0
     out: list[dict[str, Any]] = []
     for message in messages:
         role = message.get("role")
         if role == "system" and not out:
             text = _content_to_text(message.get("content"))
             if text:
+                # Only the FIRST system message can carry the boundary: a second one
+                # would sit past the prefix it claims to describe.
+                if not system_parts:
+                    marked = message.get(CACHE_PREFIX_KEY)
+                    if isinstance(marked, int) and 0 < marked < len(text):
+                        cache_prefix = marked
                 system_parts.append(text)
             continue
         if role == "assistant":
@@ -626,7 +642,18 @@ def to_anthropic_messages(messages: list[dict]) -> tuple[str | None, list[dict[s
             )
             continue
         out.append({"role": "user", "content": _content_to_text(message.get("content"))})
-    return ("\n\n".join(system_parts) if system_parts else None), out
+    if not system_parts:
+        return None, out
+    system_text = "\n\n".join(system_parts)
+    if not cache_prefix:
+        return system_text, out
+    return (
+        [
+            {"type": "text", "text": system_text[:cache_prefix], "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": system_text[cache_prefix:]},
+        ],
+        out,
+    )
 
 
 def to_anthropic_tools(tools: list[dict] | None) -> list[dict[str, Any]]:

@@ -76,16 +76,17 @@ async def test_build_system_prompt_includes_keeper_discipline_and_joins_all_six_
     assert i18n.t("prompt.keeper_discipline") in prompt
     assert SENTINEL_SECRET in prompt
 
-    # All 6 sections contributed non-empty content, in the exact order the
-    # M1 spec requires: session_history, game_state, document_context,
-    # system_expertise, trpg_system, interaction_style.
+    # All 6 sections contributed non-empty content, in the STABLE HEAD -> VOLATILE
+    # TAIL order (P1, M1 §6.4 revision): identity, expertise, style and the module
+    # pool are the room's configuration and lead; the session's own history and live
+    # game state follow, because they are what changes every turn.
     markers = [
-        i18n.t("battle.summary.title"),  # session_history
-        i18n.t("prompt.game_state.title"),  # game_state
-        i18n.t("prompt.document.pool_title"),  # document_context
-        load_rulepack("coc7").expertise_text("en"),  # system_expertise (no character -> the default sheet system)
-        i18n.t("prompt.system.intro"),  # trpg_system
-        i18n.t("prompt.style.narrative"),  # interaction_style
+        i18n.t("prompt.system.intro"),  # trpg_system        \
+        load_rulepack("coc7").expertise_text("en"),  # system_expertise  > stable head
+        i18n.t("prompt.style.narrative"),  # interaction_style       |
+        i18n.t("prompt.document.pool_title"),  # document_context    /
+        i18n.t("battle.summary.title"),  # session_history      \ volatile tail
+        i18n.t("prompt.game_state.title"),  # game_state       /
     ]
     positions = [prompt.index(marker) for marker in markers]
     assert positions == sorted(positions), "sections must appear in the fixed §6.4 order"
@@ -149,9 +150,9 @@ async def test_build_system_prompt_survives_a_brand_new_chat_with_no_seeded_stat
 
 async def test_build_system_prompt_with_no_relationship_state_is_byte_identical_to_before():
     """CRITICAL INVARIANT: a chat with no relationship tracks ever set must assemble EXACTLY the
-    same prompt as the pre-relationships assembly logic (the 6 sections + skills fold-in, joined
-    the same way) -- the fold-in contributes nothing at all, not even an empty header, when the
-    room's relationship state is empty."""
+    prompt the plain section list produces -- the fold-in contributes nothing at all, not even an
+    empty header, when the room's relationship state is empty. (Re-expressed against the P1
+    stable-head/volatile-tail order; the invariant itself is unchanged.)"""
     services = _services("en")
     chat_key = "chat-prompt-builder-no-relationships"
     ctx = AgentCtx(chat_key=chat_key, user_id="u1", locale="en")
@@ -168,19 +169,21 @@ async def test_build_system_prompt_with_no_relationship_state_is_byte_identical_
     extra = getattr(ctx, "extra", {}) or {}
     recent_context = "\n".join(part for part in (session_history, str(extra.get("user_message", "") or "")) if part)
     world_lore = await inject_world_lore_prompt(ctx, services.worldbook, i18n, role="keeper", recent_context=recent_context)
-    legacy_sections = [
-        session_history,
-        session_recap,
-        await inject_game_state_prompt(ctx, services.characters, services.store, i18n),
-        document_context,
-        world_lore,
+    # The P1 layout, hand-assembled: stable head (identity, expertise, style, the
+    # module pool) then volatile tail (lore, recap, history, live state).
+    plain_sections = [
+        await inject_trpg_system_prompt(ctx, i18n),
         await inject_system_expertise_prompt(
             ctx, services.characters, i18n, default_system=services.settings.default_rulepack
         ),
-        await inject_trpg_system_prompt(ctx, i18n),
         await inject_interaction_style_prompt(ctx, i18n),
+        document_context,
+        world_lore,
+        session_recap,
+        session_history,
+        await inject_game_state_prompt(ctx, services.characters, services.store, i18n),
     ]
-    expected = "\n\n".join(section for section in legacy_sections if section)  # no skills enabled here
+    expected = "\n\n".join(section for section in plain_sections if section)  # no skills enabled here
 
     actual = await build_system_prompt(ctx, services)
 

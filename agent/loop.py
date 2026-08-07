@@ -36,7 +36,7 @@ from functools import lru_cache
 from agent.context import AgentCtx
 from agent.hook_runtime import apply_hook_writes, load_room_hook_engine
 from agent.kp_tools_subsystems import dispatch_subsystem, room_rulepack, subsystem_schemas
-from agent.prompt_builder import build_system_prompt
+from agent.prompt_builder import build_system_prompt_parts
 from agent.services import Services
 from agent.session_recap import maybe_refresh_session_recap
 from agent.tools import Toolset
@@ -51,7 +51,7 @@ from core.rulepacks import (
 )
 from core.skills import unlocked_tools_for
 from infra.i18n import t
-from infra.llm import ChatResult, Usage
+from infra.llm import CACHE_PREFIX_KEY, ChatResult, Usage
 
 logger = logging.getLogger(__name__)
 
@@ -748,7 +748,7 @@ async def run_kp_turn(
         hook_panel_events += outcome.panel_events
         if outcome.injections:
             ctx.extra["hook_injections"] = outcome.injections
-    system_prompt = await build_system_prompt(ctx, services)
+    system_prompt = await build_system_prompt_parts(ctx, services)
     # Layer B.2 -- allowed-tools enforcement (docs/plugins.md "Layer B"): the union
     # of `allowed_tools` across every KP skill enabled for this room. With no
     # skills enabled (or none of them declaring gated tools) this is `set()`, so
@@ -764,8 +764,15 @@ async def run_kp_turn(
     key = history_key or "chat_history"
     history = await _load_history(services, ctx.chat_key, key)
 
+    # ONE system message, as always (iron rule #5). `_lw_cache_prefix` is agent->adapter
+    # metadata marking where the stable half ends (P1): the Anthropic path turns it into
+    # a `cache_control` breakpoint, the OpenAI-compatible path strips it and caches by
+    # prefix on its own. It never reaches a vendor's wire (`infra.llm.wire_messages`).
+    system_message: dict = {"role": "system", "content": system_prompt.text}
+    if system_prompt.stable and system_prompt.volatile:
+        system_message[CACHE_PREFIX_KEY] = system_prompt.cache_prefix_chars
     messages: list[dict] = [
-        {"role": "system", "content": system_prompt},
+        system_message,
         *history,
         {"role": "user", "content": user_message},
     ]

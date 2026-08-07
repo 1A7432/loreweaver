@@ -24,6 +24,24 @@ from infra.i18n import t
 
 TokenProvider = Callable[[], Awaitable[str]]
 
+# Private message keys (P1): metadata the AGENT layer attaches to a message for the
+# provider adapters, which must never reach a vendor's wire. `_lw_cache_prefix` marks
+# how many characters of a system message are the stable, cacheable prefix; the
+# Anthropic adapter turns it into an explicit `cache_control` breakpoint, and
+# OpenAI-compatible endpoints (which cache by prefix automatically) simply have it
+# stripped. `provider_blocks` predates this and follows the same rule.
+CACHE_PREFIX_KEY = "_lw_cache_prefix"
+PRIVATE_MESSAGE_KEYS = frozenset({CACHE_PREFIX_KEY, "provider_blocks"})
+
+
+def wire_messages(messages: list[dict]) -> list[dict]:
+    """`messages` with every private key removed — what an OpenAI-compatible endpoint
+    may actually be sent. A vendor rejects unknown message properties, so this is the
+    difference between "extra metadata" and "HTTP 400 on every turn"."""
+    if not any(key in message for message in messages for key in PRIVATE_MESSAGE_KEYS):
+        return messages
+    return [{key: value for key, value in message.items() if key not in PRIVATE_MESSAGE_KEYS} for message in messages]
+
 
 @dataclass
 class ToolCall:
@@ -121,7 +139,7 @@ class OpenAILLM:
             self._client.api_key = token
         kwargs: dict[str, Any] = {
             "model": model or self._settings.chat_model,
-            "messages": messages,
+            "messages": wire_messages(messages),
         }
         if tools:
             kwargs["tools"] = tools
