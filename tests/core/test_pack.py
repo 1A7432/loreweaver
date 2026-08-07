@@ -774,8 +774,12 @@ def test_pack_with_rules_script_discloses_and_installs(tmp_path):
 
     report = _install(built.path, tmp_path)
     assert "scriptpulp" in report.rulepacks
-    installed_script = tmp_path / "data/rulepacks/pulp_resolver.js"
-    assert installed_script.is_file() or (tmp_path / "data/rulepacks").joinpath("pulp_resolver.js").exists()
+    # Namespaced under its own rulepack, never the shared bare name: two packs both
+    # shipping `resolver.js` would otherwise overwrite each other in the shared dir,
+    # and the second installer's code would silently resolve the first pack's checks.
+    rulepacks_dir = tmp_path / "data/rulepacks"
+    assert (rulepacks_dir / "scriptpulp" / "pulp_resolver.js").is_file()
+    assert not (rulepacks_dir / "pulp_resolver.js").exists()
 
 
 def test_rules_script_filename_with_path_separator_fails_the_build(tmp_path):

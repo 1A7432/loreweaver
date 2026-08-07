@@ -1351,13 +1351,19 @@ def install_pack(
             for rulepack_path in manifest.contents["rulepacks"]:
                 stem = PurePosixPath(rulepack_path).stem
                 _extract_entry(archive, rulepack_path, _confined_target(rulepacks_dir, f"{stem}.yaml"))
-                # Rules scripts (stage E) live next to their YAML in the
-                # discovery dir; names were bare-name-validated at verify.
+                # Rules scripts (stage E) land in a per-rulepack subdirectory of the
+                # shared discovery dir — `<rulepacks_dir>/<stem>/<script>` — because the
+                # BARE filename is not a name a pack owns: two packs shipping
+                # `resolver.js` (M16's own example name) used to overwrite each other,
+                # and the survivor then decided both packs' checks. Authored YAML is
+                # untouched (`script: resolver.js`); `core.rulepacks._dir_script_loader`
+                # looks in the namespaced dir first. Names were bare-name-validated at
+                # verify, so the subdirectory is the only path segment either side adds.
                 for script_name in _rulepack_script_files(rulepack_path, _archive_read_text(archive, rulepack_path)):
                     parent = str(PurePosixPath(rulepack_path).parent)
                     archive_name = f"{parent}/{script_name}" if parent not in ("", ".") else script_name
                     if archive_name in names:
-                        _extract_entry(archive, archive_name, _confined_target(rulepacks_dir, script_name))
+                        _extract_entry(archive, archive_name, _confined_target(rulepacks_dir, f"{stem}/{script_name}"))
                 report.rulepacks.append(stem)
                 if stem in builtin_rulepacks:
                     report.shadowed.append(stem)

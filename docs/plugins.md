@@ -497,7 +497,10 @@ effort and risk:
     condition string itself ships with your pack — every viewer's client holds it — so a
     keeper-only tracker named in a player panel's condition is a leak of that tracker's
     NAME even though its value never arrives. (The value genuinely does not: hidden
-    variables are dropped before evaluation, so the block simply never shows.)
+    variables are dropped before evaluation, so the block simply never shows.) It ships
+    WHOLE, so the compared literal leaks with it too — `visible_when: "mvu.内部.真凶 === '顾晚棠'"`
+    hands every player the answer, however innocuous the variable name reads. Gate on a
+    player-visible consequence, never on the secret itself.
   - **Undecidable means hidden.** A condition that errors, or names something absent in
     a way it cannot compare, hides its block — never shows it. Write conditions that
     read correctly when the variable is missing.

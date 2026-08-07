@@ -429,7 +429,14 @@ def _parse_display_section(pack_id: str, raw: Any) -> dict[str, dict[str, str]]:
 def _dir_script_loader(pack_id: str, directory: Path | None) -> Callable[[str], str] | None:
     """A `resolution.script` loader confined to `directory` (the pack YAML's own
     directory): bare filenames only — path separators/parents are rejected so a
-    pack can never read outside its dir. None when there is no file context."""
+    pack can never read outside its dir. None when there is no file context.
+
+    Two layouts resolve, in this order: `directory/<pack_id>/<name>`, where
+    `core.pack.install_pack` namespaces an installed pack's scripts so two packs
+    shipping `resolver.js` into this shared dir cannot overwrite each other; then
+    `directory/<name>`, the loose layout an author writes by hand and `agent.forge`
+    generates. Authored YAML says `script: resolver.js` either way.
+    """
     if directory is None:
         return None
 
@@ -437,6 +444,12 @@ def _dir_script_loader(pack_id: str, directory: Path | None) -> Callable[[str], 
         name = filename.strip()
         if not name or "/" in name or "\\" in name or name != Path(name).name or name.startswith(".."):
             raise ValueError(f"rulepack '{pack_id}': script filename must be a bare name, got {filename!r}")
+        # `pack_id` is a file stem on the discovery path, but callers pass it freely:
+        # only ever treat a bare id as a directory segment.
+        if pack_id and pack_id == Path(pack_id).name and pack_id not in (".", ".."):
+            namespaced = directory / pack_id / name
+            if namespaced.is_file():
+                return namespaced.read_text(encoding="utf-8")
         return (directory / name).read_text(encoding="utf-8")
 
     return _load

@@ -233,7 +233,11 @@ def _run_doctor(settings: Settings, i18n: I18n) -> int:
         if pack.resolver is None:
             return pack_id
         variants = pack.resolver.variant_ids()
-        resolution = "dsl" + (f" +{len(variants)} variants" if variants else "")
+        # Which lane grades this pack's checks: the declarative ladder, or the
+        # QuickJS script the pack ships (M16-E). A diagnostic that called both
+        # "dsl" hid exactly the one an operator would want to know about.
+        lane = "script" if pack.resolver.script is not None else "dsl"
+        resolution = lane + (f" +{len(variants)} variants" if variants else "")
         subsystems = f"; subsystems: {', '.join(pack.subsystems)}" if pack.subsystems else ""
         return f"{pack_id} (resolution: {resolution}{subsystems})"
 
@@ -335,9 +339,14 @@ def _print_trust_card(i18n: I18n, manifest: core_pack.PackManifest, locale: str)
             asset_mb=f"{trust.asset_bytes / (1024 * 1024):.1f}",
             hooks=i18n.t("pack.flag.yes") if trust.has_hooks else i18n.t("pack.flag.no"),
             ejs=i18n.t("pack.flag.yes") if trust.has_ejs else i18n.t("pack.flag.no"),
+            rules_script=i18n.t("pack.flag.yes") if trust.has_rules_script else i18n.t("pack.flag.no"),
         ),
         file=sys.stderr,
     )
+    if trust.has_rules_script:
+        # The flag alone undersells it: hooks decorate a turn, but a rules script
+        # IS the check ladder — it decides whether the operator's players succeed.
+        print(i18n.t("pack.card.rules_script"), file=sys.stderr)
     if trust.world_cards:
         print(i18n.t("pack.card.world_cards", count=trust.world_cards), file=sys.stderr)
     if trust.presentation:
