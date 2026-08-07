@@ -21,6 +21,7 @@ from agent.services import Services, room_rule_variant
 from core.character_manager import CharacterDataError, CharacterSheet
 from core.check_outcome import RollDetail, outcome_wire
 from core.luck import adjust_check_with_luck, find_latest_character_check, is_luck_eligible_check
+from core.resolution import InvalidRollParamError, MissingRollParamError
 from core.rulepacks import RulePack, load_rulepack
 from core.subsystems import SubsystemSpec
 from infra.i18n import I18n
@@ -208,6 +209,16 @@ async def dispatch_subsystem(
             return await _run_script_flow(services, ctx, i18n, spec)
     except CharacterDataError:
         return i18n.t("kp_tools.character.data_error")
+    except MissingRollParamError as exc:
+        # THE choke for every subsystem template: none of them wires caller
+        # params, so a pack that declares a roll `{slot}` without a default is
+        # unrollable here. Name the slot in the room's language instead of
+        # leaking the engine's English diagnostic through the generic branch.
+        return i18n.t("kp_tools.dice.pool.missing_param", param=exc.param)
+    except InvalidRollParamError as exc:
+        return i18n.t(
+            "kp_tools.dice.pool.out_of_range", param=exc.param, minimum=exc.minimum, maximum=exc.maximum
+        )
     except Exception as exc:
         return i18n.t("kp_tools.subsystem.failed", label=spec.label(ctx.locale), error=str(exc))
     return None

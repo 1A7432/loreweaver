@@ -11,7 +11,13 @@ resolution:
   target: none
   compare: ">="
   params:
-    pool: {min: 1, max: 200}
+    # Every `{slot}` a shipped pack declares NEEDS a default: only the keeper's
+    # check tool wires caller params, so a slot without one makes every other
+    # lane (the player check/opposed commands, subsystems) unrollable. There is
+    # no "standard" WoD pool — it is always Attribute + Ability — so the honest
+    # default is the declared floor: an omitted pool rolls one die and can never
+    # fabricate dice the character did not earn. Difficulty 6 IS the WoD standard.
+    pool: {min: 1, max: 200, default: 1}
     difficulty: {min: 2, max: 10, default: 6}
   ranks:
     - {id: botch, when: "successes == 0 && ones > 0", fumble: true, tier: 0}

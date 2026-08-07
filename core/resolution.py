@@ -72,6 +72,37 @@ class ResolutionError(ValueError):
     """A malformed ``resolution:`` block (raised at pack compile time)."""
 
 
+class RollParamError(ResolutionError):
+    """A declared roll ``{slot}`` reached the ROLL phase without a usable value.
+
+    Unlike the rest of :class:`ResolutionError` — pack-author diagnostics raised
+    at compile time, where no turn is in flight — these fire while a player is
+    waiting. Every lane that rolls a check catches them and renders a localized
+    notice NAMING the parameter, so a pack whose slot genuinely cannot be
+    defaulted fails loudly and legibly instead of dropping the turn.
+    """
+
+    def __init__(self, message: str, param: str) -> None:
+        super().__init__(message)
+        self.param = param
+
+
+class MissingRollParamError(RollParamError):
+    """No value supplied for a ``{slot}`` and the pack declared no ``default``."""
+
+    def __init__(self, param: str) -> None:
+        super().__init__(f"missing roll parameter {param!r}", param)  # i18n-exempt: operator log text; callers localize via `param`
+
+
+class InvalidRollParamError(RollParamError):
+    """A ``{slot}`` value that is not an integer at all."""
+
+    def __init__(self, param: str, minimum: int, maximum: int) -> None:
+        super().__init__(f"roll parameter {param!r} must be an integer", param)  # i18n-exempt: operator log text; callers localize via `param`
+        self.minimum = minimum
+        self.maximum = maximum
+
+
 @dataclass(frozen=True)
 class RankRule:
     rank: Rank
@@ -143,11 +174,11 @@ class CheckResolver:
         for spec in self.params:
             raw = (values or {}).get(spec.id, spec.default)
             if raw is None:
-                raise ResolutionError(f"missing roll parameter {spec.id!r}")  # i18n-exempt: pack-author diagnostic, raised at compile/load time
+                raise MissingRollParamError(spec.id)
             try:
                 value = int(raw)
             except (TypeError, ValueError) as exc:
-                raise ResolutionError(f"roll parameter {spec.id!r} must be an integer") from exc  # i18n-exempt: pack-author diagnostic, raised at compile/load time
+                raise InvalidRollParamError(spec.id, spec.minimum, spec.maximum) from exc
             clamped[spec.id] = max(spec.minimum, min(spec.maximum, value))
         return clamped
 
@@ -183,26 +214,40 @@ class CheckResolver:
         roll_value = rolled.total + modifier
         names: dict[str, Any] = {
             "roll": roll_value,
-            "target": effective if effective is not None else 0,
-            "raw_target": int(target) if target is not None else 0,
             "modifier": modifier,
             "successes": rolled.successes if rolled.successes is not None else 0,
             "ones": rolled.ones if rolled.ones is not None else 0,
         }
+        # A target the caller does not have is ABSENT from the namespace, never
+        # a silent 0: substituting 0 turned `roll >= target` into a tautology, so
+        # every side of a dc-kind contest graded "success" and nobody noticed for
+        # a release (audit F08). A `target: none` pack cannot reference these
+        # names at all (rejected at compile time), so the only way to reach the
+        # miss below is a caller that owes this resolver a real target.
+        if effective is not None:
+            names["target"] = effective
+        if target is not None:
+            names["raw_target"] = int(target)
         for index, face in enumerate(rolled.dice):
             names[f"dice.{index}"] = face
         resolver = _namespace_resolver(names)
 
-        rank: Rank | None = None
-        for rule in ladder:
-            if rule.when is None or truthy(rule.when(resolver)):
-                rank = rule.rank
-                break
+        try:
+            rank: Rank | None = None
+            for rule in ladder:
+                if rule.when is None or truthy(rule.when(resolver)):
+                    rank = rule.rank
+                    break
+            margin_expr = int(_number(self.margin(resolver))) if self.margin is not None else None
+        except CondExprError as exc:
+            # Reached when a rank/margin expression reads a name this check does
+            # not carry — in practice `target` on a check the caller gave none.
+            raise ResolutionError(f"rank ladder could not grade this check ({exc})") from exc  # i18n-exempt: caller diagnostic; lanes localize the notice
         if rank is None:  # unreachable: compilation guarantees a fallback rule
             raise ResolutionError("rank ladder resolved no rank")
 
         if self.margin is not None:
-            margin_value: int | None = int(_number(self.margin(resolver)))
+            margin_value: int | None = margin_expr
         elif effective is None:
             margin_value = None
         elif self.compare == "<=":
@@ -279,17 +324,23 @@ def _namespace_resolver(names: Mapping[str, Any]) -> Resolver:
 # first-check crash (M16 window-1 review note 1).
 _EXPR_NAMES = frozenset({"roll", "target", "raw_target", "modifier", "successes", "ones", "dice"})
 _DICE_NAME_RE = re.compile(r"^dice\.\d+$")
+# Names that only exist when a check HAS a target. A `target: none` pack has no
+# target to compare against, so reading them is a pack bug — caught at load,
+# where the author can fix it, rather than at grade time where the engine would
+# have to invent a number (audit F08).
+_TARGET_NAMES = frozenset({"target", "raw_target"})
 
 
-def _compile_expr(pack_id: str, where: str, text: Any) -> Callable[[Resolver], Any]:
+def _compile_expr(
+    pack_id: str, where: str, text: Any, *, forbidden: frozenset[str] = frozenset()
+) -> Callable[[Resolver], Any]:
     if not isinstance(text, str) or not text.strip():
         raise ResolutionError(f"rulepack '{pack_id}': {where} must be a non-empty expression string")  # i18n-exempt: pack-author diagnostic, raised at compile/load time
     try:
         compiled = compile_expression(text, functions=_EXPR_FUNCTIONS)
+        referenced = referenced_names(text, functions=_EXPR_FUNCTIONS)
         unknown = {
-            name
-            for name in referenced_names(text, functions=_EXPR_FUNCTIONS)
-            if name not in _EXPR_NAMES and not _DICE_NAME_RE.match(name)
+            name for name in referenced if name not in _EXPR_NAMES and not _DICE_NAME_RE.match(name)
         }
     except CondExprError as exc:
         raise ResolutionError(f"rulepack '{pack_id}': {where}: bad expression ({exc})") from exc  # i18n-exempt: pack-author diagnostic, raised at compile/load time
@@ -297,11 +348,22 @@ def _compile_expr(pack_id: str, where: str, text: Any) -> Callable[[Resolver], A
         raise ResolutionError(
             f"rulepack '{pack_id}': {where} references unknown name(s) {sorted(unknown)}"  # i18n-exempt: pack-author diagnostic, raised at compile/load time
         )
+    banned = sorted(referenced & forbidden)
+    if banned:
+        raise ResolutionError(
+            f"rulepack '{pack_id}': {where} reads {banned}, but resolution.target is 'none' — "  # i18n-exempt: pack-author diagnostic, raised at compile/load time
+            "a targetless check has no target to compare against"
+        )
     return compiled
 
 
 def _compile_rank_rules(
-    pack_id: str, where: str, raw: Any, *, labels_hint: Callable[[str], None] | None = None
+    pack_id: str,
+    where: str,
+    raw: Any,
+    *,
+    labels_hint: Callable[[str], None] | None = None,
+    forbidden: frozenset[str] = frozenset(),
 ) -> tuple[RankRule, ...]:
     if not isinstance(raw, list) or not raw:
         raise ResolutionError(f"rulepack '{pack_id}': {where} must be a non-empty list of rank rules")  # i18n-exempt: pack-author diagnostic, raised at compile/load time
@@ -326,7 +388,9 @@ def _compile_rank_rules(
         if not isinstance(tier, int) or isinstance(tier, bool) or tier < 0 or tier > MAX_RANKS:
             raise ResolutionError(f"rulepack '{pack_id}': {where}[{index}].tier must be an integer 0..{MAX_RANKS}")  # i18n-exempt: pack-author diagnostic, raised at compile/load time
         when = entry.get("when")
-        compiled = None if when is None else _compile_expr(pack_id, f"{where}[{index}].when", when)
+        compiled = (
+            None if when is None else _compile_expr(pack_id, f"{where}[{index}].when", when, forbidden=forbidden)
+        )
         if labels_hint is not None:
             labels_hint(rank_id)
         rules.append(
@@ -352,7 +416,9 @@ def _compile_rank_rules(
     return tuple(rules)
 
 
-def _compile_difficulties(pack_id: str, raw: Any) -> tuple[Difficulty, ...]:
+def _compile_difficulties(
+    pack_id: str, raw: Any, *, forbidden: frozenset[str] = frozenset()
+) -> tuple[Difficulty, ...]:
     if raw is None:
         return ()
     if not isinstance(raw, Mapping):
@@ -372,7 +438,7 @@ def _compile_difficulties(pack_id: str, raw: Any) -> tuple[Difficulty, ...]:
                 f"rulepack '{pack_id}': difficulty {difficulty_id!r} has unknown keys {sorted(unknown)}"  # i18n-exempt: pack-author diagnostic, raised at compile/load time
             )
         transform = (
-            _compile_expr(pack_id, f"difficulties.{difficulty_id}.target", spec["target"])
+            _compile_expr(pack_id, f"difficulties.{difficulty_id}.target", spec["target"], forbidden=forbidden)
             if spec.get("target") is not None
             else None
         )
@@ -511,8 +577,12 @@ def compile_resolution(
     else:
         ladders_raw = raw.get("ranks")
 
+    # A `target: none` system never receives a target, so no expression it
+    # compiles may read one (see `_TARGET_NAMES`).
+    forbidden = _TARGET_NAMES if target_kind == "none" else frozenset()
+
     ladders: dict[str, tuple[RankRule, ...]] = {
-        "": _compile_rank_rules(pack_id, "resolution.ranks", ladders_raw)
+        "": _compile_rank_rules(pack_id, "resolution.ranks", ladders_raw, forbidden=forbidden)
     }
     variants_raw = raw.get("variants") or {}
     if not isinstance(variants_raw, Mapping):
@@ -529,9 +599,15 @@ def compile_resolution(
             raise ResolutionError(
                 f"rulepack '{pack_id}': variant {variant_id!r} has unknown keys {sorted(unknown_keys)}"  # i18n-exempt: pack-author diagnostic, raised at compile/load time
             )
-        ladders[variant_id] = _compile_rank_rules(pack_id, f"variants.{variant_id}.ranks", spec["ranks"])
+        ladders[variant_id] = _compile_rank_rules(
+            pack_id, f"variants.{variant_id}.ranks", spec["ranks"], forbidden=forbidden
+        )
 
-    margin = _compile_expr(pack_id, "resolution.margin", raw["margin"]) if raw.get("margin") is not None else None
+    margin = (
+        _compile_expr(pack_id, "resolution.margin", raw["margin"], forbidden=forbidden)
+        if raw.get("margin") is not None
+        else None
+    )
 
     return CheckResolver(
         roll=roll.strip(),
@@ -539,7 +615,7 @@ def compile_resolution(
         target_kind=target_kind,
         modifiers=modifiers,
         ladders=ladders,
-        difficulties=_compile_difficulties(pack_id, raw.get("difficulties")),
+        difficulties=_compile_difficulties(pack_id, raw.get("difficulties"), forbidden=forbidden),
         params=_compile_params(pack_id, raw.get("params")),
         margin=margin,
         check=_compile_check(pack_id, raw.get("check"), modifiers),

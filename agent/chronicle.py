@@ -372,6 +372,14 @@ def _raw_vector_store(services: Services) -> Any | None:
 
 
 async def _index_folded_entries(services: Services, chat_key: str, docs: list[Document]) -> None:
+    """Index folded records under the collection lane's payload scheme.
+
+    `namespace` is the ONE ownership field of a collection point (worldbook's
+    scheme, shared verbatim); the room's `chat_key` is deliberately NOT repeated
+    here. A second owner field would be a second source of truth that can drift,
+    and `net.room_backup` treats disagreeing owner fields as corrupt by design —
+    one field per lane is what keeps export/backup/delete unambiguous.
+    """
     try:
         if not docs or not services.settings.enable_vector_db:
             return

@@ -239,7 +239,27 @@ def _rewrite_room_row(row: dict[str, Any], old_chat_key: str, new_chat_key: str)
     return copied
 
 
+def _vector_scope_field(payload: dict[str, Any]) -> str:
+    """The ownership field a point of THIS kind must carry to be attributable at all.
+
+    Vector payloads come in two lanes, distinguishable by SHAPE: a named
+    ``collection`` (worldbook, chronicle, …) shares one namespace-scoped payload
+    scheme, while the document-RAG lane declares no collection and is chat-key
+    scoped. Reading the lane off the shape — rather than off a list of known
+    collection names — is the point: a name list is exactly what silently filed
+    the M18 chronicle under the chat-key lane, where it matched nothing and made
+    every room-wide vector path fail closed on a perfectly well-owned point.
+    """
+    collection = payload.get("collection")
+    return "namespace" if isinstance(collection, str) and collection else "chat_key"
+
+
 def _rewrite_payload_ownership(value: Any, old_chat_key: str, new_chat_key: str) -> Any:
+    """Re-home every ownership field of a point onto the target room.
+
+    Field-set driven (``_VECTOR_OWNERSHIP_FIELDS``) exactly like the predicate
+    below, so both stay true for any lane: a rewrite makes every field the point
+    DOES carry name the new room, and never invents the scope field it lacks."""
     if isinstance(value, dict):
         return {
             key: (
@@ -255,11 +275,14 @@ def _rewrite_payload_ownership(value: Any, old_chat_key: str, new_chat_key: str)
 
 
 def _vector_payload_owned_by_room(payload: dict[str, Any], chat_key: str) -> bool:
-    """Require both the vector kind's primary scope and every ownership field to agree.
+    """Require both the vector kind's own scope field and every ownership field to agree.
 
-    Worldbook points are namespace-scoped; document/other room vectors are chat-key-scoped.
-    A second ownership field is allowed only when it points to the same target room. Nested
-    metadata is checked too so a forged payload cannot smuggle a foreign owner through backup.
+    A point is owned by the room iff (a) every ownership field it carries — at any
+    nesting depth, so a forged payload cannot smuggle a foreign owner through backup —
+    names that room, and (b) it carries its lane's scope field (`_vector_scope_field`).
+    Clause (b) keeps an unattributed point (no `namespace` on a collection point, no
+    `chat_key` on a document point) from being adopted by whichever room happens to
+    scroll past it; clause (a) keeps a point that names two rooms failing closed.
     """
 
     def _all_ownership_fields_match(value: Any) -> bool:
@@ -275,9 +298,7 @@ def _vector_payload_owned_by_room(payload: dict[str, Any], chat_key: str) -> boo
 
     if not _all_ownership_fields_match(payload):
         return False
-    if payload.get("collection") == "worldbook":
-        return payload.get("namespace") == chat_key
-    return payload.get("chat_key") == chat_key
+    return payload.get(_vector_scope_field(payload)) == chat_key
 
 
 def _document_point_id_from_payload(payload: dict[str, Any]) -> str | None:

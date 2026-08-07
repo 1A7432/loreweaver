@@ -24,6 +24,7 @@ from core.character_manager import (
 from core.character_rules import render_validation_notice, validate_sheet
 from core.check_outcome import CheckOutcome, outcome_wire
 from core.dice_engine import DiceResult
+from core.resolution import InvalidRollParamError, MissingRollParamError, ResolutionError
 from core.rulepacks import RulePack, all_command_words, load_rulepack
 from core.sheets import canonical_values as sheet_canonical_values
 from core.sheets import check_value, set_sheet_value, sheet_value
@@ -397,6 +398,15 @@ class CommandRouter:
             # let any handler proceed against a blank sheet (the silent-wipe bug class).
             logger.exception("character row unreadable during command %s", spec.canonical)
             return CommandReply(get_i18n(locale).t("kp_tools.character.data_error"), error=True)
+        except ResolutionError as exc:
+            # THE choke for the whole command lane: every check/opposed/subsystem
+            # word rolls through one compiled resolver, and a resolver that cannot
+            # roll (a `{slot}` the pack never defaulted, a ladder handed no target)
+            # used to escape as a bare `server_error` and drop the turn (audit F07).
+            # A pack that genuinely cannot be defaulted still fails — loudly, in the
+            # room's language, NAMING what it needs.
+            logger.warning("resolution failed during command %s: %s", spec.canonical, exc)
+            return CommandReply(_resolution_notice(get_i18n(locale), exc), error=True)
         return CommandReply(rendered, tuple(command_ctx.events), error=command_ctx.failed)
 
     def slash_definitions(self, locale: str = "en") -> list[dict]:
@@ -485,24 +495,38 @@ class CommandRouter:
         right_value = _target_value(character, pack, right.canonical, right.temp_value)
         left_rolled = ctx.services.dice.roll_for_check(resolver)
         right_rolled = ctx.services.dice.roll_for_check(resolver)
-        if resolver.target_kind == "dc":
+        is_contest_of_totals = resolver.target_kind == "dc"
+        if is_contest_of_totals:
             # Modifier-vs-modifier systems: each side's check value folds into
-            # its roll; ranks (nat-crit/fumble) still grade, totals break ties.
-            left_outcome = resolver.interpret(left_rolled, None, variant=variant, modifier=left_value)
-            right_outcome = resolver.interpret(right_rolled, None, variant=variant, modifier=right_value)
+            # its roll, and the number it has to beat is the OPPOSING total — a
+            # contest declares no external difficulty. (Passing None here graded
+            # both sides against a silently-substituted 0, so `roll >= target`
+            # was a tautology and ~82% of contests reported a tie — audit F08.)
+            left_score = left_rolled.total + left_value
+            right_score = right_rolled.total + right_value
+            left_outcome = resolver.interpret(left_rolled, right_score, variant=variant, modifier=left_value)
+            right_outcome = resolver.interpret(right_rolled, left_score, variant=variant, modifier=right_value)
         else:
+            # Roll-under systems: the sheet value IS each side's target, so the
+            # roll totals are not comparable across sides — rank tier decides.
+            left_score, right_score = left_rolled.total, right_rolled.total
             left_outcome = resolver.interpret(left_rolled, left_value, variant=variant, difficulty=left.difficulty)
             right_outcome = resolver.interpret(right_rolled, right_value, variant=variant, difficulty=right.difficulty)
         left_rank, right_rank = left_outcome.rank, right_outcome.rank
-        if left_rank.tier > right_rank.tier:
-            winner = ctx.i18n.t("commands.opposed.left")
-            winner_side = "left"
-        elif left_rank.tier < right_rank.tier:
-            winner = ctx.i18n.t("commands.opposed.right")
-            winner_side = "right"
+        # Rank tier first (a nat-crit beats a bigger total), then the totals, then
+        # a genuine tie — what the comment above has always promised.
+        if left_rank.tier != right_rank.tier:
+            left_wins = left_rank.tier > right_rank.tier
+        elif is_contest_of_totals and left_score != right_score:
+            left_wins = left_score > right_score
         else:
-            winner = ctx.i18n.t("commands.opposed.tie")
-            winner_side = "tie"
+            left_wins = None
+        if left_wins is None:
+            winner, winner_side = ctx.i18n.t("commands.opposed.tie"), "tie"
+        elif left_wins:
+            winner, winner_side = ctx.i18n.t("commands.opposed.left"), "left"
+        else:
+            winner, winner_side = ctx.i18n.t("commands.opposed.right"), "right"
         left_name = pack.display_name(left.canonical, ctx.locale)
         right_name = pack.display_name(right.canonical, ctx.locale)
         left_label = pack.rank_label(left_rank.id, ctx.locale)
@@ -511,22 +535,24 @@ class CommandRouter:
             "opposed",
             expr=f"{left_name} vs {right_name}",
             rolls=[left_rolled.total, right_rolled.total],
-            total=left_rolled.total,
-            target=left_value,
+            total=left_score,
+            # The number the grading actually compared against, never a sheet
+            # value the ladder never saw.
+            target=left_outcome.target,
             outcome=outcome_wire(left_outcome, left_label),
             detail={
                 "winner": winner_side,
-                "left": _event_side(left_name, left_outcome, left_label),
-                "right": _event_side(right_name, right_outcome, right_label),
+                "left": _event_side(left_name, left_outcome, left_label, left_score),
+                "right": _event_side(right_name, right_outcome, right_label, right_score),
             },
         )
         return ctx.i18n.t(
             "commands.opposed.result",
             left=left_name,
-            left_roll=left_rolled.total,
+            left_roll=left_score,
             left_rank=left_label,
             right=right_name,
-            right_roll=right_rolled.total,
+            right_roll=right_score,
             right_rank=right_label,
             winner=winner,
         )
@@ -2912,13 +2938,26 @@ def _dice_result_fields(result: DiceResult) -> dict[str, Any]:
     }
 
 
-def _event_side(name: str, outcome: CheckOutcome, label: str) -> dict[str, Any]:
+def _event_side(name: str, outcome: CheckOutcome, label: str, total: int) -> dict[str, Any]:
     return {
         "name": name,
         "target": outcome.target,
-        "total": outcome.rolled.total,
+        # The number this side actually brought to the contest (a dc-kind system
+        # folds the sheet value into it), so the frame agrees with the grading.
+        "total": total,
         "outcome": outcome_wire(outcome, label),
     }
+
+
+def _resolution_notice(i18n: I18n, exc: ResolutionError) -> str:
+    """A localized, actionable reply for a check the rule system cannot roll."""
+    if isinstance(exc, MissingRollParamError):
+        return i18n.t("kp_tools.dice.pool.missing_param", param=exc.param)
+    if isinstance(exc, InvalidRollParamError):
+        return i18n.t(
+            "kp_tools.dice.pool.out_of_range", param=exc.param, minimum=exc.minimum, maximum=exc.maximum
+        )
+    return i18n.t("runner.error")
 
 
 def _normalize_roll_expression(expression: str) -> str:
