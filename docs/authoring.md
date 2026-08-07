@@ -7,11 +7,9 @@ is [plugins.md](plugins.md); when the two disagree, that one is right. What you 
 order to do things in, and real files rather than invented ones.
 
 **The worked example** is 《汐浦送灯》 (*Xipu: The Lantern Sending*) — a real module, a 1925
-coastal-town mystery, played twice end to end by live models. The two session write-ups are checked
-in at [`docs/specs/playtests/`](specs/playtests/), findings and all. Every snippet below is copied
-verbatim from its source tree, so this page stands on its own; the module's own files are not
-published in this repository (publishing a solved mystery spoils it), so treat the paths below as
-the shape of a pack rather than something to clone.
+coastal-town mystery, played twice end to end by live models. Its own files are not published here
+(publishing a solved mystery spoils it), so treat the paths below as the shape of a pack rather than
+something to clone; every snippet is quoted in full, so this page stands on its own.
 
 ---
 
@@ -710,11 +708,10 @@ appears:
 .pc list
 ```
 
-And when it is time for a real model, **play it twice and write down what went wrong.** Both of this
-module's playtests are checked in — the [first](specs/playtests/2026-08-07-k3xk3/) found that a
-strong narrative model never touched the state layer at all, which is why the Scribe exists; the
-[second](specs/playtests/2026-08-07-fable5-scribe/) found the opposite failure and a handful of
-channel leaks. Neither report flatters anyone. That is what made them useful.
+And when it is time for a real model, **play it twice and write down what went wrong.** The first
+run of this module found that a strong narrative model never touched the state layer at all — which
+is why the Scribe exists; the second found the opposite failure, plus a handful of channel leaks.
+Neither write-up flattered anyone. That is what made them useful.
 
 ---
 
@@ -727,4 +724,3 @@ channel leaks. Neither report flatters anyone. That is what made them useful.
 | The hooks API, events, effect buffer, failure semantics | [hooks.md](hooks.md) |
 | Panel and block shapes on the wire | [protocol.md](protocol.md) |
 | Operating a table with your module on it | [operating.md](operating.md) |
-| Two live playtests of the example module, written up honestly | [`docs/specs/playtests/`](specs/playtests/) |

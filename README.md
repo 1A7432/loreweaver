@@ -152,10 +152,8 @@ number isn't a model at all.
 The **Scribe** exists because of a measured failure. In a live playtest a strong narrative model ran
 an entire module without ever touching the state layer: trackers frozen at their defaults while the
 fiction sprinted three days ahead. Bookkeeping cannot live on model discipline, so it got its own
-quiet actor. It proposes; the engine validates and clamps. In the follow-up run the same module's
-trackers moved with the story, and dice usage went from ~5 checks in 17 rounds to 33 checks plus 8
-sanity checks in ~50. Both reports are checked in: [run 1](docs/specs/playtests/2026-08-07-k3xk3/),
-[run 2](docs/specs/playtests/2026-08-07-fable5-scribe/).
+quiet actor. It proposes; the engine validates and clamps. In the follow-up run of the same module
+the trackers moved with the story, and dice usage rose several-fold.
 
 The **Director** is the newest actor and the most carefully fenced one. Everything it emits is
 player-visible, so it is built like an NPC: its entire input is the projected player stream plus the
@@ -267,8 +265,7 @@ entire pipeline end to end.
 not be read as answering it. A [nightly red-line eval](https://github.com/1A7432/loreweaver/actions/workflows/redline-eval.yml)
 runs scripted players against a real model and scores every turn for secret leakage and dice-first
 misses; threshold violations, provider failures and auth failures all make the run red. Results are
-per model and per run. Two full two-ended live playtests are written up in the open, findings and
-all, in [`docs/specs/playtests/`](docs/specs/playtests/) — including the ones that went badly.
+per model and per run, not a standing guarantee.
 
 **Young.** Networked multiplayer is comfortable for a table of friends but has rough edges. The
 rich client and the card studio live in a [companion repo](https://github.com/1A7432/loreweaver-studio)

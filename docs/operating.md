@@ -31,8 +31,7 @@ TRPG_LLM__REASONING_EFFORT=max
 writing trackers, advancing the clock. Strong instruction-following models roll real dice and stay on
 the module; budget models narrate "you succeed" without ever calling the check tool and drift off the
 scenario. This is not a theoretical concern: it is the single most reliable difference between a good
-session and a bad one, and it is visible in both of the checked-in
-[playtest reports](specs/playtests/).
+session and a bad one.
 
 A note on `REASONING_EFFORT`: on thinking models, don't set a temperature alongside it. Thinking mode
 ignores temperature and a low value degrades the reasoning trace — omit it and let the provider
@@ -100,9 +99,8 @@ TRPG_SCRIBE__REASONING_EFFORT=low
 
 `TRPG_SCRIBE__ENABLED=0` turns it off. Before you do: the reason it exists is that a live playtest
 watched a strong narrative model run an entire module without touching the state layer once —
-trackers frozen at their defaults while the fiction sprinted three days ahead. The follow-up run with
-the Scribe on had live trackers and 33 checks in ~50 rounds against ~5 in 17. Bookkeeping does not
-survive on model discipline.
+trackers frozen at their defaults while the fiction sprinted three days ahead. With the Scribe on,
+the same module's trackers moved with the story. Bookkeeping does not survive on model discipline.
 
 > `--doctor` reports the *bundled* catalogs — locales, built-in rulepacks, built-in skills — plus the
 > resolved data dir. Packs installed into the data dir are not listed there; check those in-room with
