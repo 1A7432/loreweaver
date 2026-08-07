@@ -262,6 +262,32 @@ for _name, _project_fn, _singleton in (
         DocumentType(name=_name, schema_version=1, project=_project_fn, singleton_id=_singleton)
     )
 
+# M18 campaign chronicle types. Their projections/validators live in
+# `core.chronicle` (imported here at module level — that module depends on this
+# one only under TYPE_CHECKING, so there is no import cycle); registering them
+# in the same built-in table keeps `project()` the single chokepoint.
+from core import chronicle as _chronicle  # noqa: E402
+
+for _name, _project_fn, _validate_fn, _singleton in (
+    (_chronicle.CHRONICLE_DOC_TYPE, _chronicle.project_chronicle, _chronicle.validate_chronicle_write, None),
+    (
+        _chronicle.CAMPAIGN_SUMMARY_DOC_TYPE,
+        _chronicle.project_campaign_summary,
+        _chronicle.validate_campaign_summary_write,
+        _chronicle.CAMPAIGN_SUMMARY_ID,
+    ),
+    (_chronicle.THREAD_DOC_TYPE, _chronicle.project_thread, _chronicle.validate_thread_write, None),
+):
+    register_document_type(
+        DocumentType(
+            name=_name,
+            schema_version=1,
+            project=_project_fn,
+            validate_write=_validate_fn,
+            singleton_id=_singleton,
+        )
+    )
+
 
 # ---------------------------------------------------------------------------
 # Storage

@@ -81,6 +81,31 @@ class DirectorSettings(BaseModel):
     pregen_per_beat: int = 2
 
 
+class ChronicleSettings(BaseModel):
+    """The campaign chronicle (M18, `core.chronicle` + `agent.chronicle`) — 战役编年史.
+
+    ON by default. The fold is an occasional extra LLM call: when the assembled
+    prompt's fullness (the per-turn `usage_stats` meter) reaches `fold_trigger`
+    of the room model's context window, the oldest chronicle records fold into
+    the rolling `campaign_summary` in batches until the projection reaches
+    `fold_floor`; at `fold_emergency` the fold runs before the next model call.
+    Ratios, not absolute tokens, so every window size behaves uniformly
+    (`TRPG_CHRONICLE__FOLD_TRIGGER` etc.). The trailing `lag_turns` turns always
+    stay raw — the no-future guard: the in-flight scene is not summarizable
+    history yet. The fold call reuses the main `TRPG_LLM__*` client (same
+    posture as the session recap; summarizing narrative is core KP work).
+    """
+
+    enabled: bool = True
+    fold_trigger: float = 0.60
+    fold_floor: float = 0.40
+    fold_emergency: float = 0.85
+    lag_turns: int = 4
+    # Hard char ceiling on the rolling campaign summary (the codebase's prompt
+    # budgets are char-based; ~4000 chars ≈ 1-2k tokens depending on language).
+    summary_max_chars: int = 4000
+
+
 class CensorSettings(BaseModel):
     """Content-moderation wordlist for `gateway.ops.Censor`.
 
@@ -172,6 +197,7 @@ class Settings(BaseSettings):
     censor: CensorSettings = CensorSettings()
     scribe: ScribeSettings = ScribeSettings()
     director: DirectorSettings = DirectorSettings()
+    chronicle: ChronicleSettings = ChronicleSettings()
 
     def __init__(self, **values: Any) -> None:
         env_file = values.pop("_env_file", os.environ.get("TRPG_ENV_FILE") or ".env")
