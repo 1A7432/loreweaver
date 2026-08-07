@@ -2,7 +2,7 @@
 
 # 部署 Loreweaver
 
-大多数桌都是**从笔记本 p2p 开的**——`python -m app --serve`,或连接屏一键「本地开服」(见 [README](../README.zh.md))。本页讲**常驻服务器**(7×24 的公共局 + 一个稳定 ticket)。Loreweaver 走 **Iroh**——点对点 QUIC、用 ticket 拨号,**无需域名、TLS、端口转发或反向代理**。玩家用部署者颁发的密钥加入,没有账户系统。(不再有 Docker 镜像或 WebSocket **玩家客户端**服务路径——旧 TUI WebSocket 只作离线测试传输保留。)
+大多数桌都是**从笔记本 p2p 开的**——`python -m app --serve`,或连接屏一键「本地开服」（见 [README](../README.zh.md)）。本页讲**常驻服务器**(7×24 的公共局 + 一个稳定 ticket)。Loreweaver 走 **Iroh**——点对点 QUIC、用 ticket 拨号，**无需域名、TLS、端口转发或反向代理**。玩家用部署者颁发的密钥加入，没有账户系统。（不再有 Docker 镜像或 WebSocket **玩家客户端**服务路径——旧 TUI WebSocket 只作离线测试传输保留。）
 
 ## 裸机运行
 
@@ -15,11 +15,11 @@ uv sync                       # env + 依赖(iroh 是默认依赖)
 uv run python -m app --serve --keys ./data/keys.toml
 ```
 
-首次运行服务器会**自动发一个守秘人 key** 并打印一个可分享的 **Iroh ticket**——两者也写到 keystore 旁的 `keeper-key.txt` / `iroh-ticket.txt`。把 ticket + 守秘人 key 发出去;连进去后,在客户端的「房间与邀请」界面发更多 key / 建房,不用碰服务器。状态(SQLite + key)存在 `--keys` 旁边。
+首次运行服务器会**自动发一个守秘人 key** 并打印一个可分享的 **Iroh ticket**——两者也写到 keystore 旁的 `keeper-key.txt` / `iroh-ticket.txt`。把 ticket + 守秘人 key 发出去；连进去后，在客户端的「房间与邀请」界面发更多 key / 建房，不用碰服务器。状态（SQLite + key）存在 `--keys` 旁边。
 
-> 非国内 LLM 走 SOCKS 代理?`uv pip install socksio`。国内直连的 provider(如 DeepSeek)不用代理,干净 env 跑即可。
+> 非国内 LLM 走 SOCKS 代理？`uv pip install socksio`。国内直连的 provider(如 DeepSeek)不用代理，干净 env 跑即可。
 
-## 常驻(systemd)
+## 常驻（systemd）
 
 ```ini
 # /etc/systemd/system/loreweaver.service  —— 把 YOU 换成你的用户名
@@ -117,7 +117,7 @@ Iroh 玩家连接**天生端到端加密**（QUIC/TLS，每个对端由其公钥
 
 ## 连接客户端
 
-客户端使用 [`docs/protocol.md`](protocol.md) 中的版本化协议,经 Iroh 连接。把终端客户端指向服务器的 **ticket**(启动时打印)+ 一个已生成的密钥:
+客户端使用 [`docs/protocol.md`](protocol.md) 中的版本化协议，经 Iroh 连接。把终端客户端指向服务器的 **ticket**(启动时打印)+ 一个已生成的密钥：
 
 ```bash
 cd clients/tui && bun install
@@ -125,4 +125,4 @@ bun run dev -- connect --host <ticket> --key <key> --name <name>
 # 或直接 `loreweaver`(装好的客户端),在连接屏粘 ticket + 密钥
 ```
 
-连接端到端加密;服务器是密钥门控的,但要把密钥当机密对待。
+连接端到端加密；服务器是密钥门控的，但要把密钥当机密对待。
