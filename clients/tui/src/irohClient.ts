@@ -168,6 +168,14 @@ export class IrohClient implements AppClient {
     this.endpoint = endpoint
     this.connection = conn
     this.sendStream = bi.send
+    // F13: START A FRESH WRITE CHAIN. Every send serializes through one promise chain
+    // (see `sendFrame`), and `writeAll` on a QUIC stream that was reset out from under
+    // us can HANG rather than reject — so one write left pending against the dead
+    // stream silences the uplink FOREVER while the read loop reconnects perfectly.
+    // That is exactly the reported symptom: after a server restart the TUI still
+    // rendered frames but the keyboard did nothing, with no error anywhere. The
+    // abandoned chain is left to settle or not; nothing waits on it again.
+    this.writeChain = Promise.resolve()
     this.reconnectAttempts = 0
     if (superseded && superseded !== endpoint) this.closeEndpoint(superseded)
     this.setStatus("online")

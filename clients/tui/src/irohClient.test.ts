@@ -251,3 +251,107 @@ describe("IrohClient media channel", () => {
     await expect(promise).rejects.toThrow("not found")
   })
 })
+
+// F13: after a server restart the TUI recovered the DOWNLINK only — frames rendered,
+// the keyboard did nothing, and nothing surfaced an error. Every send serializes through
+// one promise chain, and `writeAll` on a QUIC stream reset out from under us can HANG
+// rather than reject: one write left pending against the dead stream silenced the uplink
+// forever while the read loop reconnected perfectly. The chain must not outlive the
+// stream it was queued against.
+function createHangingWriteIroh() {
+  const enc = new TextEncoder()
+  const dec = new TextDecoder()
+  const sent: string[] = []
+  const streams: Array<{ end(): void; read(): Promise<number[] | null> }> = []
+  let openBiCount = 0
+
+  function makeRecvStream() {
+    let waiter: ((value: number[] | null) => void) | undefined
+    const queue: Array<number[] | null> = []
+    return {
+      end(): void {
+        if (waiter) {
+          const resolve = waiter
+          waiter = undefined
+          resolve(null)
+        } else queue.push(null)
+      },
+      async read(): Promise<number[] | null> {
+        if (queue.length > 0) return queue.shift()!
+        return new Promise((resolve) => {
+          waiter = resolve
+        })
+      },
+    }
+  }
+
+  const loadIroh: LoadIroh = async () => ({
+    Endpoint: {
+      builder: () => ({
+        bind: async () => ({
+          online: async () => {},
+          connect: async () => ({
+            openBi: async () => {
+              const recv = makeRecvStream()
+              streams.push(recv)
+              // The FIRST connection's writes hang forever once the server is gone —
+              // exactly what a reset QUIC stream does instead of rejecting.
+              const isDeadStream = openBiCount++ === 0
+              return {
+                send: {
+                  writeAll: async (buf: number[]) => {
+                    if (isDeadStream && streams[0] && (streams[0] as { dead?: boolean }).dead) {
+                      await new Promise(() => {}) // never settles
+                    }
+                    sent.push(dec.decode(Uint8Array.from(buf)))
+                  },
+                },
+                recv,
+              }
+            },
+          }),
+          close: () => {},
+        }),
+      }),
+    },
+    presetN0: () => {},
+    EndpointTicket: { fromString: () => ({ endpointAddr: () => ({}) }) },
+  })
+
+  void enc
+  return { loadIroh, sent, streams }
+}
+
+describe("IrohClient uplink recovery (F13)", () => {
+  test("a write hung on the dead stream never blocks the reconnected one", async () => {
+    const { loadIroh, sent, streams } = createHangingWriteIroh()
+    const client = new IrohClient({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20 })
+
+    await client.connect("endpointaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    client.join("key", "Keeper")
+    await settle(0)
+    expect(sent.length).toBe(1)
+
+    // The server goes away: the next write on this stream will hang forever, and the
+    // read side hits EOF.
+    ;(streams[0] as { dead?: boolean }).dead = true
+    client.sendInput("this one is swallowed by the dying stream")
+    streams[0]!.end()
+
+    await settle(60) // let the redial land
+
+    // The uplink is alive again: the re-join went out over the fresh stream, and so does
+    // everything typed afterwards. Before the fix both queued behind the hung write and
+    // the keyboard stayed dead for the rest of the session.
+    client.sendInput("I open the door")
+    await settle(10)
+
+    expect(sent.some((line) => line.includes("I open the door"))).toBe(true)
+    // Two joins reached the server: the original, and the re-join the redial sent. (Both
+    // lines are byte-identical, so this counts rather than looking one up.)
+    expect(sent.filter((line) => JSON.parse(line).type === FrameType.Join).length).toBe(2)
+    // The input typed into the dying stream is genuinely lost — the connection was gone.
+    // That is honest; what must not happen is everything AFTER it being lost too.
+    expect(sent.some((line) => line.includes("swallowed by the dying stream"))).toBe(false)
+  })
+})
