@@ -17,7 +17,7 @@ from agent.npc import NpcRecord  # noqa: E402
 from agent.npc_actor import voice_npc  # noqa: E402
 from agent.services import build_services  # noqa: E402
 from core.modvars import build_spec, define_modvar, load_modvars, set_modvar  # noqa: E402
-from core.mvu_compat import load_mvu, mvu_init_from_initvar  # noqa: E402
+from core.mvu_compat import load_mvu, mvu_expose, mvu_init_from_initvar  # noqa: E402
 from infra.config import Settings  # noqa: E402
 from infra.embeddings import FakeEmbeddings  # noqa: E402
 from infra.llm import FakeLLM, assistant_text  # noqa: E402
@@ -61,13 +61,20 @@ async def test_full_engine_sees_player_variables_and_mvu_tree_but_never_keeper_m
     await set_modvar(services.documents, CHAT_KEY, "fear", 7)
     await define_modvar(services.documents, CHAT_KEY, build_spec("true_culprit", "text", visibility="keeper"))
     await set_modvar(services.documents, CHAT_KEY, "true_culprit", KEEPER_SENTINEL)
-    await mvu_init_from_initvar(services.documents, CHAT_KEY, {"stage": [2, "story stage"]})
+    await mvu_init_from_initvar(
+        services.documents, CHAT_KEY, {"stage": [2, "story stage"], "culprit": [KEEPER_SENTINEL, "the culprit"]}
+    )
+    # An imported tree is keeper-side module state until the keeper exposes a path (拆卡
+    # doctrine, `.var expose`): `stage` is exposed so the actor may read it, `culprit`
+    # deliberately is not.
+    await mvu_expose(services.documents, CHAT_KEY, "stage")
 
     npc = NpcRecord(
         id="martha",
         name="Martha",
         persona=(
             "Fear=<%= getvar('fear') %> Stage=<%= getvar('stage') %>"
+            " Hidden=<%= getvar('culprit') || 'unknown' %> Dump=<%- JSON.stringify(stat_data) %>"
             " Culprit=<%= getvar('true_culprit') || 'unknown' %> Note:{{getvar::true_culprit}}(end)"
         ),
     )
@@ -75,7 +82,10 @@ async def test_full_engine_sees_player_variables_and_mvu_tree_but_never_keeper_m
 
     everything = "\n".join(str(m.get("content") or "") for m in recorded[-1])
     assert "Fear=7" in everything
-    assert "Stage=2" in everything  # the MVU tree (no upstream visibility concept) is available
+    assert "Stage=2" in everything  # an EXPOSED MVU leaf is available to the actor
+    assert "Hidden=unknown" in everything  # an un-exposed MVU leaf behaves as UNSET
+    assert '"stage"' in everything  # the tree still reaches templates as `stat_data`…
+    assert "culprit" not in everything.replace("true_culprit", "")  # …pruned to the exposed half
     assert "Culprit=unknown" in everything  # keeper-only modvar behaves as UNSET in the sandbox
     assert "Note:(end)" in everything
     assert KEEPER_SENTINEL not in everything  # the red line, on the full-engine path

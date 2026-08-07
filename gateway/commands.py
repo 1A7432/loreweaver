@@ -18,6 +18,7 @@ from core.battle_recording import record_check, record_dice_roll
 from core.char_from_persona import build_sheet_from_description
 from core.character_manager import (
     CharacterDataError,
+    CharacterNameTakenError,
     CharacterSheet,
 )
 from core.character_rules import render_validation_notice, validate_sheet
@@ -723,7 +724,18 @@ class CommandRouter:
             initialize_vitals=True,
             creation_method="rolled",
         )
-        await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
+        try:
+            await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
+        except CharacterNameTakenError:
+            # The bare make-char word falls back to the pack's localized default
+            # name, so two players typing it collide with no attacker involved —
+            # and sheets are keyed by NAME room-wide. Refusing (rather than
+            # silently de-duplicating to "Adventurer 2") is the live-table
+            # behaviour: it costs one re-typed command, names the conflict out
+            # loud, and never saddles a 20-session character with a machine name.
+            return ctx.fail(
+                ctx.i18n.t("commands.character.name_taken", name=character.name, command=ctx.command)
+            )
         result = ctx.i18n.t("commands.character.created", name=character.name, system=character.system)
         notice = render_validation_notice(ctx.i18n, violations)
         return f"{result}\n{notice}" if notice else result
@@ -827,7 +839,12 @@ class CommandRouter:
         character = await ctx.services.characters.get_character(ctx.user_id, ctx.chat_key)
         old_name = character.name
         character.name = new_name
-        await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
+        try:
+            await ctx.services.characters.save_character(ctx.user_id, ctx.chat_key, character)
+        except CharacterNameTakenError:
+            # Sheets are keyed by NAME room-wide: renaming onto someone else's
+            # character would overwrite their sheet and steal it. Refuse instead.
+            return ctx.fail(ctx.i18n.t("commands.rename.name_taken", name=new_name))
         if old_name and old_name != new_name:
             await ctx.services.characters.delete_character(ctx.user_id, ctx.chat_key, old_name)
         return ctx.i18n.t("commands.rename.changed", old=old_name, new=new_name)

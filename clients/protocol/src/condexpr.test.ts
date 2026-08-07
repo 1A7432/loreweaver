@@ -63,4 +63,33 @@ describe("isVisible", () => {
     expect(isVisible("", resolver({}))).toBe(false)
     expect(isVisible("day > 'abc'", resolver({ day: 1 }))).toBe(false)
   })
+
+  test("fails closed on an absent variable and on grammar this build does not implement", () => {
+    // The protocol rule a client MUST obey: a gate it cannot evaluate hides its block.
+    // An absent reference is `null`, which is unorderable — hidden, never shown.
+    expect(isVisible("day >= 46", resolver({}))).toBe(false)
+    expect(isVisible("mvu.真相已揭 === true", resolver({}))).toBe(false)
+    // Out-of-subset grammar (a future minor's syntax, or a hand-edited manifest) is a
+    // condition this build cannot decide, so it hides too.
+    for (const condition of ["day + 1 > 46", "getvar('day') > 5", "clues[0] === 'ash'", "day ?? 1"]) {
+      expect(isVisible(condition, resolver({ day: 99 }))).toBe(false)
+    }
+    // Positive control: the same variable set, a condition this build DOES implement.
+    expect(isVisible("day >= 46", resolver({ day: 46 }))).toBe(true)
+  })
+
+  test("fails closed on a malformed condition value and on a resolver that throws", () => {
+    // A `visible_when` that is not a string at all (hand-edited manifest, a future
+    // structured form) is undecidable — it must not fall through to "visible".
+    for (const bad of [null, 0, 1, true, {}, [], "   "]) {
+      expect(isVisible(bad as unknown as string, resolver({}))).toBe(false)
+    }
+    expect(
+      isVisible("day >= 46", () => {
+        throw new Error("variable lookup failed")
+      }),
+    ).toBe(false)
+    // Positive control: only an ABSENT condition means "no gate, draw it".
+    expect(isVisible(undefined, resolver({}))).toBe(true)
+  })
 })

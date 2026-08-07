@@ -61,9 +61,13 @@ async def test_two_viewers_of_one_room_read_their_own_labels(tmp_path: Path) -> 
         services = _services()
         zh_ctx = _ctx("labels", user_id="tui:zh", locale="zh")
         en_ctx = _ctx("labels", user_id="tui:en", locale="en")
-        sheet = services.characters.generate_character("chaozhan-fixture", "顾晚棠")
-        await services.characters.save_character(zh_ctx.user_id, zh_ctx.chat_key, sheet)
-        await services.characters.save_character(en_ctx.user_id, en_ctx.chat_key, sheet)
+        # One character EACH: sheets are room-scoped documents keyed by the character
+        # name, and a name another player owns is refused (`CharacterNameTakenError`).
+        # Two viewers of one room is the point here, not two owners of one sheet.
+        zh_sheet = services.characters.generate_character("chaozhan-fixture", "顾晚棠")
+        en_sheet = services.characters.generate_character("chaozhan-fixture", "Wan Tang")
+        await services.characters.save_character(zh_ctx.user_id, zh_ctx.chat_key, zh_sheet)
+        await services.characters.save_character(en_ctx.user_id, en_ctx.chat_key, en_sheet)
 
         zh_state = await build_room_state(services, zh_ctx)
         en_state = await build_room_state(services, en_ctx)

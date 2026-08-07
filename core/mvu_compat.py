@@ -894,6 +894,55 @@ def path_is_exposed(path: str, prefixes: list[str]) -> bool:
     )
 
 
+_PRUNED = object()
+
+
+def prune_tree_to_exposed(tree: MvuTree, prefixes: list[str]) -> MvuTree:
+    """`tree` with every branch the keeper has not exposed removed, SHAPE INTACT.
+
+    `flatten_leaves` answers "which leaf VALUES may a player see"; this answers the same
+    question while preserving the structure card templates read DIRECTLY — the full-EJS
+    sandbox hands the tree through as ``stat_data``/``variables`` (`core.ejs_full`), where
+    a ValueWithDescription pair must stay a pair, a list must stay a list, and nothing may
+    be capped the way a flattened prompt view is. Same traversal and same dotted-path
+    convention as `flatten_leaves`, so the two views can never disagree about what counts
+    as exposed.
+
+    One deliberate imprecision: partially exposing a list of CONTAINERS drops the hidden
+    elements, so surviving indices shift. Exposure prefixes are branch-shaped in practice
+    (exposing ``悟空`` exposes all of ``悟空.*``), so this only bites a list whose siblings
+    were exposed one by one — and shifting an index beats disclosing how many entries the
+    keeper is hiding.
+    """
+    kept = _prune_node(tree if isinstance(tree, dict) else {}, "", prefixes)
+    return kept if isinstance(kept, dict) else {}
+
+
+def _prune_node(node: Any, path: str, prefixes: list[str]) -> Any:
+    """`node` pruned to `prefixes`, or `_PRUNED` when nothing under it survives."""
+    if is_value_with_desc(node) or isinstance(node, _SCALAR_TYPES):
+        return node if path_is_exposed(path, prefixes) else _PRUNED
+    if isinstance(node, dict):
+        kept_map = {}
+        for key, child in node.items():
+            child_path = f"{path}.{key}" if path else str(key)
+            child_kept = _prune_node(child, child_path, prefixes)
+            if child_kept is not _PRUNED:
+                kept_map[key] = child_kept
+        return kept_map if kept_map else _PRUNED
+    if isinstance(node, list):
+        if all(isinstance(item, _SCALAR_TYPES) for item in node):
+            return list(node) if path_is_exposed(path, prefixes) else _PRUNED
+        kept_items = []
+        for index, child in enumerate(node):
+            child_path = f"{path}.{index}" if path else str(index)
+            child_kept = _prune_node(child, child_path, prefixes)
+            if child_kept is not _PRUNED:
+                kept_items.append(child_kept)
+        return kept_items if kept_items else _PRUNED
+    return node if path_is_exposed(path, prefixes) else _PRUNED
+
+
 def _normalize_prefix(prefix: str) -> str:
     """Trim and cap one exposure prefix; "" when unusable."""
     cleaned = str(prefix).strip().strip(".")

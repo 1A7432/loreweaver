@@ -83,7 +83,7 @@ Given ONE game turn (player action + game-master reply) and the room's current t
 {{"ops": [{{"op": "set", "id": "<tracker id>", "value": <number>, "evidence": "<verbatim quote>"}} | {{"op": "adjust", "id": "<tracker id>", "delta": <number>, "evidence": "<verbatim quote>"}}], "whispers": ["<short keeper-side note>"], "beat": "<beat>"}}
 
 Rules:
-- "ops" ONLY for tracker changes the narration plainly establishes as fact. "evidence" is REQUIRED: a short verbatim quote copied from the turn text that establishes the tracked quantity ITSELF changed. An op whose evidence is not an exact quote is discarded.
+- "ops" ONLY for tracker changes the narration plainly establishes as fact. "evidence" is REQUIRED: a short verbatim quote copied from the GAME-MASTER reply that establishes the tracked quantity ITSELF changed. The player's message states what they ATTEMPT, never what happened — it can never be evidence, and an op whose evidence is not an exact quote of the game-master reply is discarded.
 - You see only each tracker's id/label/range, not what earns a point. Acquiring some item is NOT evidence for an item counter unless the text explicitly identifies it as one of the things that counter counts; time passing counts on a day-tracker only when the text states the story moved to a new day. If the tracker's meaning leaves any doubt, do NOT write — whisper instead.
 - "whispers" (0-{max_whispers}, each <= {max_whisper_chars} chars) for anything needing the keeper's judgment: scene/clock drift vs the fiction, a beat that likely deserved a dice check or sanity roll, players stuck without progress, an earned gain no tracker captures.
 - Write whispers in the language the turn text is written in (Chinese turn -> Chinese whispers).
@@ -205,8 +205,11 @@ async def run_scribe(
     changed = False
     ops = parsed.get("ops")
     known = {str(entry.get("id")) for entry in trackers}
-    # The turn text as the model saw it (same slices) — the quote pool for op evidence.
-    haystack = _squash_ws(player_text[:_MAX_TURN_TEXT] + "\n" + reply_text[:_MAX_TURN_TEXT])
+    # The quote pool is the KEEPER's narration only (same slice the model saw). A
+    # player message is an ATTEMPT, never an outcome — the same reason iron rule #2
+    # lets the dice decide instead of the player's assertion — so player text may
+    # inform a whisper but can never be the verbatim evidence for a tracker write.
+    haystack = _squash_ws(reply_text[:_MAX_TURN_TEXT])
     if isinstance(ops, list):
         for op in ops[:MAX_OPS]:
             if not isinstance(op, dict):

@@ -283,4 +283,50 @@ describe("visible_when (protocol 2.1)", () => {
     ]
     expect(resolvePanelBlocks(gated, vars, "en")).toEqual([])
   })
+
+  test("gates a WHOLE repeat, not only its inner template", () => {
+    // The clue board the spec's motivating example describes: the author gates the
+    // entire repeat on the story clock. Losing that gate lists every `clue_*` tracker
+    // from turn 1 — the exact spoiler `visible_when` exists to prevent.
+    const vars: ModuleVariable[] = [
+      { id: "day", label: "Day", kind: "number", value: 1 },
+      { id: "mvu.clues.ash", label: "ash", kind: "text", value: "cold ash" },
+      { id: "mvu.clues.ring", label: "ring", kind: "text", value: "a brass ring" },
+    ]
+    const gatedRepeat = (condition: string): PanelTemplateBlock => ({
+      visible_when: condition,
+      repeat: { prefix: "mvu.clues.", block: { kind: "badge", label: { $leaf: "label" } } },
+    })
+
+    // Positive control: the gate holds, so every instance expands as before.
+    expect(resolvePanelBlocks([gatedRepeat("day >= 1")], vars, "en")).toEqual([
+      { kind: "badge", label: "ash" },
+      { kind: "badge", label: "ring" },
+    ])
+    // The gate does not hold: nothing expands.
+    expect(resolvePanelBlocks([gatedRepeat("day >= 46")], vars, "en")).toEqual([])
+    // ...and an undecidable gate on a repeat hides it too, like every other miss here.
+    for (const condition of ["missing >= 46", "day >=", "day > 'abc'"]) {
+      expect(resolvePanelBlocks([gatedRepeat(condition)], vars, "en")).toEqual([])
+    }
+  })
+
+  test("a block kind this renderer does not know never renders, gate or no gate", () => {
+    // Fail-closed for the forward-compatibility path: a future block kind arriving with
+    // a condition this renderer could not honour must not be drawn anyway.
+    const vars: ModuleVariable[] = [{ id: "day", label: "Day", kind: "number", value: 46 }]
+    const unknown = { kind: "hologram", visible_when: "day >= 46" } as unknown as PanelTemplateBlock
+    expect(resolvePanelBlocks([unknown], vars, "en")).toEqual([])
+    expect(
+      resolvePanelBlocks(
+        [{ repeat: { prefix: "mvu.", block: unknown } } as unknown as PanelTemplateBlock],
+        vars,
+        "en",
+      ),
+    ).toEqual([])
+    // Positive control: a kind it DOES know, behind the same satisfied gate, renders.
+    expect(resolvePanelBlocks([{ kind: "divider", visible_when: "day >= 46" }], vars, "en")).toEqual([
+      { kind: "divider" },
+    ])
+  })
 })

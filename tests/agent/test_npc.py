@@ -425,7 +425,10 @@ async def test_speak_as_npc_weaves_dialogue_logs_event_and_excludes_keeper_secre
 
     assert "I've heard nothing of the sort." in line
     assert "evasive" in line
-    assert "shrug and turn away" in line
+    # The NPC's private action_intent is keeper-side staging, not part of the line the
+    # Keeper relays to the table — it rides the session key event instead (see
+    # tests/agent/test_npc_intent_channel.py).
+    assert "shrug and turn away" not in line
     assert keeper_secret not in line
 
     current = await services.battles.generator.get_current_session(chat_key)

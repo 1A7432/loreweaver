@@ -11,6 +11,12 @@ Iron rule (repeated at the tool level so the model sees it at the exact point it
 invents world facts -- the KP narrates the returned line and adjudicates any resulting mechanics
 itself via the existing dice/check tools, exactly as `docs/specs/M5.md` §5 describes.
 
+Channel split (`speak_as_npc`): what that tool RETURNS is what the room reads -- `gateway.turn`
+republishes it verbatim as an `npc` narrative frame to every member -- so the returned line carries
+the performance only (name + mood + dialogue). The sub-actor's `action_intent` is its private plan,
+usually the very thing the dialogue conceals; it is parked on the keeper-only `note` surface instead
+(`_park_action_intent`), never concatenated onto the quotable line.
+
 `get_npc`/`list_npcs` are `keeper_only` (they surface `secret_agenda` and full `knowledge`, matching
 `agent.kp_tools_knowledge`'s convention of prefixing keeper-only bodies with a localized banner so the
 model is reminded at the exact point it reads secret material). Every other tool here returns
@@ -23,6 +29,7 @@ of their own (same convention `core.character_manager`/`agent.kp_tools_knowledge
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any
 
 from agent import npc as npc_records
@@ -49,6 +56,12 @@ _UPDATABLE_FIELDS = {
     "major",
 }
 _TRUTHY_STRINGS = {"true", "1", "yes", "y", "on"}
+
+# Where `speak_as_npc` parks a sub-actor's private `action_intent`: its own keeper-only
+# `note` category (see `NpcTools._park_action_intent`), capped so an always-on per-line
+# write cannot grow one document without bound over a long campaign.
+_INTENT_NOTE_CATEGORY = "npc_intents"
+_INTENT_NOTE_KEEP = 20
 
 
 def _split_knowledge(text: str) -> list[str]:
@@ -312,6 +325,41 @@ class NpcTools:
         except Exception as exc:
             return i18n.t("npc.tools.update.failed", error=str(exc))
 
+    async def _park_action_intent(self, i18n: I18n, chat_key: str, name: str, action_intent: str) -> None:
+        """Record one NPC's private `action_intent` on the keeper-only note surface.
+
+        `note` documents project to `None` for every non-keeper viewer
+        (`core.documents._project_note`), which makes this the one place the staging
+        information can be kept without it becoming quotable. The session key-event log is
+        deliberately NOT used: `.report` renders every key event and is a level-0,
+        room-broadcast command, so an intent parked there would leak on the next export.
+
+        Written under its own `_INTENT_NOTE_CATEGORY` rather than the model's `npc_status`
+        notebook so an automatic per-line write never crowds the keeper's own curated
+        entries out of the prompt's game-state block; the KP reads them back on demand with
+        `kp_note('list', ...)`. Best-effort: the NPC's line already succeeded, and losing a
+        staging note must never turn into a failed performance.
+        """
+        try:
+            documents = self._services.documents
+            doc = await documents.get(chat_key, "note", _INTENT_NOTE_CATEGORY)
+            stored = doc.data.get("content") if doc is not None else None
+            entries = list(stored) if isinstance(stored, list) else []
+            entries.append(
+                {
+                    "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "content": i18n.t("npc.tools.speak.intent_note", name=name, action_intent=action_intent),
+                }
+            )
+            await documents.put(
+                chat_key,
+                "note",
+                _INTENT_NOTE_CATEGORY,
+                {"category": _INTENT_NOTE_CATEGORY, "content": entries[-_INTENT_NOTE_KEEP:]},
+            )
+        except Exception:
+            pass  # best-effort keeper-side staging note only -- see the docstring above
+
     @tool
     async def speak_as_npc(
         self,
@@ -340,7 +388,10 @@ class NpcTools:
                 for confessions, climaxes, and lines that must thread a secret.
 
         Returns:
-            A formatted line combining the NPC's dialogue/mood/intent, for you to weave into the scene.
+            The NPC's spoken line and mood, for you to weave into the scene. Their private
+            action intent is NOT in it -- it goes to your `npc_intents` notes, since the
+            players read this line as-is; pull it with kp_note('list', 'npc_intents') when
+            you need to adjudicate what the NPC does next.
         """
         i18n = self._i18n(ctx)
         try:
@@ -367,6 +418,12 @@ class NpcTools:
             mood = voiced.get("mood", "")
             action_intent = voiced.get("action_intent", "")
 
+            # This return value IS the room's line: `gateway.turn._npc_event` republishes it
+            # verbatim as an `npc` narrative frame to every member, so only PERFORMED material
+            # belongs in it -- the words spoken and the affect they were spoken with. The
+            # sub-actor's `action_intent` is the opposite: what the NPC privately means to do
+            # NEXT, routinely the very thing the dialogue is concealing. It goes to the
+            # keeper-only note surface instead (`_park_action_intent`).
             line = i18n.t(
                 "npc.tools.speak.line",
                 name=record.name,
@@ -374,7 +431,7 @@ class NpcTools:
                 dialogue=dialogue,
             )
             if action_intent:
-                line += i18n.t("npc.tools.speak.intent_suffix", action_intent=action_intent)
+                await self._park_action_intent(i18n, ctx.chat_key, record.name, action_intent)
 
             try:
                 await self._services.battles.add_key_event(

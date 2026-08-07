@@ -212,7 +212,7 @@ def _project_mvu(doc: Document, viewer: Viewer) -> dict[str, Any] | None:
     nothing exposed → nothing shipped); the keeper view carries every leaf
     tagged with its exposure so keeper surfaces can flag the hidden remainder
     without re-implementing the filter."""
-    from core.mvu_compat import flatten_leaves, path_is_exposed
+    from core.mvu_compat import flatten_leaves, path_is_exposed, prune_tree_to_exposed
 
     tree = doc.data.get("tree")
     leaves = flatten_leaves(tree if isinstance(tree, dict) else {})
@@ -223,7 +223,13 @@ def _project_mvu(doc: Document, viewer: Viewer) -> dict[str, Any] | None:
             "leaves": [{**leaf, "exposed": path_is_exposed(leaf["path"], exposed)} for leaf in leaves],
             "exposed": exposed,
         }
-    return {"leaves": [leaf for leaf in leaves if path_is_exposed(leaf["path"], exposed)]}
+    # `leaves` is the flat panel/prompt view; `tree` is the SAME filter applied with the
+    # structure intact, for the card-template renderers that read the tree directly
+    # (`agent.card_text` -> the full-EJS `stat_data`). Two shapes, one exposure rule.
+    return {
+        "leaves": [leaf for leaf in leaves if path_is_exposed(leaf["path"], exposed)],
+        "tree": prune_tree_to_exposed(tree if isinstance(tree, dict) else {}, exposed),
+    }
 
 
 def _project_module_pool(doc: Document, viewer: Viewer) -> dict[str, Any] | None:

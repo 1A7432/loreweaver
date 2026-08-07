@@ -7,12 +7,16 @@ evaluates against the CURRENT room variables); this module renders it at the mom
 prompt is assembled (`agent.npc_actor` / `agent.companion_actor`), never at import time.
 
 RED LINE (iron rule #3 -- information isolation): everything rendered here resolves through the
-PLAYER view of the room's variable state (the same filter as
-``core.varspace.load_resolver(..., player_view=True)``), and the full-EJS engine -- when
-``settings.enable_full_ejs`` is on -- is fed ONLY the player-visible modvars, the MVU tree
-(which has no visibility concept upstream), and an EMPTY worldinfo map. An NPC/companion actor
-must never observe keeper-only variables or the room worldbook through a card template; a
-template branch that reads a keeper-only variable behaves exactly as if it were unset.
+PLAYER PROJECTION of BOTH room variable documents -- `modvars` (keeper-only trackers dropped)
+AND the imported `mvu_tree` (only leaves under a keeper-exposed prefix survive, fail-closed:
+nothing exposed -> nothing rendered, the card-split (拆卡) doctrine's `.var expose` gate). The
+full-EJS engine -- when ``settings.enable_full_ejs`` is on -- is fed ONLY those two projected
+views and an EMPTY worldinfo map; note it hands templates the tree RAW as
+``stat_data``/``variables``, so projecting the tree BEFORE it is handed over is the only thing
+standing between an un-exposed leaf and a ``<%- JSON.stringify(stat_data) %>``. An
+NPC/companion actor must never observe
+keeper-only variables or the room worldbook through a card template; a template branch that
+reads one behaves exactly as if it were unset.
 
 Rendering here is READ-ONLY: template ``setvar()``/``incvar()`` writes are deliberately
 DISCARDED (subset path: ``setter=None`` so statements no-op; full engine: ``pending_writes``
@@ -30,12 +34,12 @@ from collections.abc import Callable
 from typing import Any
 
 from agent.services import Services
-from core.documents import MODVARS_ID, PLAYER_VIEWER
+from core.documents import MODVARS_ID, MVU_ID, PLAYER_VIEWER
 from core.ejs_full import EjsFullError, FullEjsEngine, create_full_engine
 from core.ejs_lite import render as render_subset
 from core.ejs_lite import substitute_macros
 from core.modvars import MODVARS_DOC_TYPE
-from core.mvu_compat import load_mvu
+from core.mvu_compat import MVU_DOC_TYPE
 from core.varspace import build_resolver, modvar_values_from_view
 
 # Mirrors `net.state.resolve_active_character`'s sentinel (agent must not import net):
@@ -85,12 +89,20 @@ async def build_card_text_renderer(
     player_values: dict[str, Any] = {}
     mvu_tree: dict[str, Any] = {}
     if chat_key:
-        # The PLAYER projection of the modvars document feeds both the subset resolver and
-        # the full engine's flat_variables (one document read, structurally identical views).
-        # Keeper-only modvars never reach either renderer — the projection dropped them.
+        # BOTH variable documents are read through their PLAYER projection, and both feed the
+        # subset resolver and the full engine alike (structurally identical views):
+        #   - `modvars`  -> flat_variables; keeper-only trackers were dropped by the projection.
+        #   - `mvu_tree` -> the projection's `tree`: the SAME tree with every branch the
+        #     keeper has not exposed pruned away, shape intact, so an un-exposed leaf
+        #     reaches NEITHER renderer while a real card's ValueWithDescription pairs and
+        #     lists still read the way their templates expect.
+        # Never swap either read for a raw loader (`load_modvars`/`load_mvu`) here — those are
+        # the KEEPER lane's (`agent.prompt_builder`), and this lane's output is spoken to players.
         view = await services.documents.get_view(chat_key, MODVARS_DOC_TYPE, MODVARS_ID, PLAYER_VIEWER)
         player_values = modvar_values_from_view(view)
-        mvu_tree = await load_mvu(services.documents, chat_key)
+        mvu_view = await services.documents.get_view(chat_key, MVU_DOC_TYPE, MVU_ID, PLAYER_VIEWER)
+        pruned = (mvu_view or {}).get("tree")
+        mvu_tree = pruned if isinstance(pruned, dict) else {}
     resolve = build_resolver(player_values, mvu_tree)
 
     user_name = ""

@@ -223,6 +223,10 @@ export function resolvePanelBlocks(
   const resolved: UiBlock[] = []
   for (const block of blocks ?? []) {
     if ("repeat" in block) {
+      // A repeat may carry its own `visible_when` (the author gating the WHOLE list, not
+      // each instance). `resolveOne` never sees a repeat, so the gate is checked here —
+      // undecidable hides the whole expansion, same fail-closed rule as everywhere else.
+      if (!isVisible(block.visible_when, (path) => variableValue(visible, path))) continue
       const prefix = block.repeat?.prefix
       const inner = block.repeat?.block
       if (typeof prefix !== "string" || !prefix || !inner || "repeat" in inner) continue

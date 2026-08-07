@@ -43,6 +43,24 @@ class CharacterDataError(Exception):
         super().__init__(message or f"character data for {char_name!r} is unreadable")
 
 
+class CharacterNameTakenError(Exception):
+    """A sheet write would land on a character owned by a DIFFERENT user.
+
+    Sheet documents are room-scoped and keyed by the character NAME (M17), so
+    the name IS the identity: writing one that someone else owns destroys their
+    sheet outright. `CharacterManager.save_character` raises this instead of
+    writing; callers turn it into a localized "pick another name" answer.
+
+    The `force=True` escape hatch on `save_character`/`delete_character` exists
+    for administrative flows that legitimately re-home a sheet across uids.
+    """
+
+    def __init__(self, char_name: str, owner: str = "") -> None:
+        self.char_name = char_name
+        self.owner = owner
+        super().__init__(f"character name {char_name!r} belongs to another player")
+
+
 # Legacy secondary-attribute HP slots some imported sheets still carry (game-data
 # keys, read-side only).
 _SECONDARY_CURRENT_HP_KEY = "生命值"
@@ -336,13 +354,39 @@ class CharacterManager:
         except Exception as exc:
             raise CharacterDataError(char_name) from exc
 
-    async def save_character(self, user_id: str, chat_key: str, character: CharacterSheet) -> None:
+    async def _sheet_owner(self, chat_key: str, char_name: str) -> str:
+        """The uid recorded on the stored sheet named `char_name` (`""` when the
+        sheet is absent, unreadable, or carries no owner)."""
+        try:
+            doc = await self.documents.get(chat_key, "sheet", char_name)
+        except Exception:
+            return ""
+        if doc is None:
+            return ""
+        owner = doc.data.get("owner")
+        return owner if isinstance(owner, str) else ""
+
+    async def save_character(
+        self, user_id: str, chat_key: str, character: CharacterSheet, *, force: bool = False
+    ) -> None:
         """Persist `character`, and make it the active character / add it to the
         user's character list / sync it into the party roster.
+
+        Sheets are room-scoped documents keyed by the character NAME, so the name
+        is the identity: writing one another player owns would destroy their
+        sheet. Such a write raises `CharacterNameTakenError` and touches nothing —
+        not the document, not the active-character pointer, not the roster.
+        `force=True` is the administrative escape hatch that re-homes a sheet
+        across uids deliberately.
 
         Derived slots refresh from the pack DAG before the write (never persist
         stale derived state); the current-pool clamp rides along.
         """
+        if not force:
+            owner = await self._sheet_owner(chat_key, character.name)
+            if owner and owner != user_id:
+                raise CharacterNameTakenError(character.name, owner)
+
         pack = _pack_for(character)
         if pack is not None:
             from core.sheets import refresh_sheet
@@ -432,7 +476,19 @@ class CharacterManager:
             pass
         return characters
 
-    async def delete_character(self, user_id: str, chat_key: str, char_name: str) -> bool:
+    async def delete_character(
+        self, user_id: str, chat_key: str, char_name: str, *, force: bool = False
+    ) -> bool:
+        """Delete `user_id`'s character `char_name`, returning whether it happened.
+
+        A sheet owned by a DIFFERENT uid is refused (`False`) rather than deleted —
+        the room-wide name key would otherwise let any member erase any other
+        member's character. `force=True` is the administrative escape hatch.
+        """
+        if not force:
+            owner = await self._sheet_owner(chat_key, char_name)
+            if owner and owner != user_id:
+                return False
         try:
             await self.documents.delete(chat_key, "sheet", char_name)
             if await self.store.state_get(chat_key, f"active_character.{user_id}") == char_name:

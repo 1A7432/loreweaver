@@ -6,6 +6,7 @@
   "kp_tools.character.data_error": "❌ This character's stored data is corrupted or unreadable, so the sheet can't be updated safely. No changes were made. Please restore or recreate the character.",
   "kp_tools.character.delete.failed": "❌ Failed to delete character: {error}",
   "kp_tools.character.delete.failed_generic": "❌ Failed to delete character \"{name}\"",
+  "kp_tools.character.delete.not_yours": "❌ Character \"{name}\" belongs to another player — only its owner can delete it",
   "kp_tools.character.delete.success": "✅ Character \"{name}\" deleted",
   "kp_tools.character.list.empty": "📄 No characters yet. Use create_character to create one.",
   "kp_tools.character.list.failed": "❌ Failed to list characters: {error}",

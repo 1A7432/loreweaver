@@ -537,8 +537,14 @@ def _wire_block(block: Mapping[str, Any], ref: str, asset_info: Mapping[str, Map
     except ``image``, whose authored ``src`` path becomes the ``{hash,size,mime}``
     triple a client fetches over the media byte channel."""
     if "repeat" in block:
+        # Rewrite the repeat IN PLACE inside a copy of the block: a repeat may carry
+        # sibling keys — notably the ``visible_when`` gate ``_validate_block`` attaches to
+        # any block — and rebuilding the dict from scratch would drop them, turning an
+        # author's gate into a block that ships unconditionally (fail-OPEN).
+        wired = dict(block)
         spec = block["repeat"]
-        return {"repeat": {"prefix": spec["prefix"], "block": _wire_block(spec["block"], ref, asset_info)}}
+        wired["repeat"] = {"prefix": spec["prefix"], "block": _wire_block(spec["block"], ref, asset_info)}
+        return wired
     if "src" not in block:
         return dict(block)
     source = str(block.get("src") or "")

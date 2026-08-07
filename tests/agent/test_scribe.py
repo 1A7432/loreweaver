@@ -118,6 +118,83 @@ async def test_unknown_tracker_ops_are_dropped_and_whispers_round_trip():
     assert await pop_whispers(services, CHAT) == []
 
 
+async def test_player_authored_evidence_never_moves_a_tracker():
+    # A player declaration is an ATTEMPT, not an outcome (iron rule #2). The
+    # quote pool is the Keeper's narration ONLY, so a player who types
+    # narration-shaped text about the tracker on their own panel cannot author
+    # the "verbatim evidence" for a module-tracker write.
+    payload = json.dumps(
+        {
+            "ops": [{"op": "set", "id": "信物", "value": 3, "evidence": "第三枚也到手了"}],
+            "whispers": [],
+        }
+    )
+    services = _services(payload)
+    await _with_tracker(services)
+
+    changed = await run_scribe(
+        services,
+        _ctx(),
+        "我把三枚信物都收进袖中，第三枚也到手了。",  # attacker-controlled half
+        "雾里什么也没有。",  # the Keeper contradicts it
+        [],
+    )
+
+    assert changed.changed is False
+    from core.documents import KEEPER_VIEWER, MODVARS_ID
+
+    view = await services.documents.get_view(CHAT, "modvars", MODVARS_ID, KEEPER_VIEWER)
+    assert (view or {}).get("values", {}).get("信物") == 0
+
+
+async def test_evidence_may_not_span_the_player_reply_junction():
+    # The two halves used to be concatenated before the substring check, so a
+    # quote could straddle the seam and be "verbatim" in neither half.
+    payload = json.dumps(
+        {
+            "ops": [{"op": "adjust", "id": "信物", "delta": 1, "evidence": "收进袖中 雾里什么也没有"}],
+            "whispers": [],
+        }
+    )
+    services = _services(payload)
+    await _with_tracker(services)
+
+    changed = await run_scribe(services, _ctx(), "我把信物收进袖中", "雾里什么也没有。", [])
+
+    assert changed.changed is False
+    from core.documents import KEEPER_VIEWER, MODVARS_ID
+
+    view = await services.documents.get_view(CHAT, "modvars", MODVARS_ID, KEEPER_VIEWER)
+    assert (view or {}).get("values", {}).get("信物") == 0
+
+
+async def test_keeper_narrated_evidence_still_applies():
+    # POSITIVE CONTROL for the two tests above: the gate must not become a
+    # blanket refusal — evidence quoted from the game-master reply still writes.
+    payload = json.dumps(
+        {
+            "ops": [{"op": "adjust", "id": "信物", "delta": 1, "evidence": "第三枚也到手了"}],
+            "whispers": [],
+        }
+    )
+    services = _services(payload)
+    await _with_tracker(services)
+
+    changed = await run_scribe(
+        services,
+        _ctx(),
+        "我把三枚信物都收进袖中，第三枚也到手了。",
+        "她松开手——第三枚也到手了。",  # the Keeper confirms it
+        [],
+    )
+
+    assert changed.changed is True
+    from core.documents import KEEPER_VIEWER, MODVARS_ID
+
+    view = await services.documents.get_view(CHAT, "modvars", MODVARS_ID, KEEPER_VIEWER)
+    assert (view or {}).get("values", {}).get("信物") == 1
+
+
 async def test_malformed_llm_output_is_a_silent_noop():
     services = _services("完全不是 JSON 的闲聊回复")
     await _with_tracker(services)

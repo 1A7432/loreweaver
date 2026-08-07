@@ -42,7 +42,7 @@
   "npc.tools.move.failed": "❌ 移动 NPC 失败：{error}",
   "npc.tools.not_found": "❌ 未找到匹配“{npc}”的 NPC。",
   "npc.tools.speak.failed": "❌ 让 NPC 发言失败：{error}",
-  "npc.tools.speak.intent_suffix": "  【意图：{action_intent}】",
+  "npc.tools.speak.intent_note": "{name} 打算：{action_intent}",
   "npc.tools.speak.line": "{name}（{mood}）：“{dialogue}”",
   "npc.tools.speak.log_event": "{name} 说：{dialogue}",
   "npc.tools.speak.mood_unset": "平静",

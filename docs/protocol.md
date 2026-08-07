@@ -25,14 +25,25 @@ Both carriers drive the same `SessionCore`/`RoomHub`.
 **Versioning.** The major version is the compatibility contract: a client and server
 must agree on the major (`2`), and a client should refuse (or clearly warn on) a
 `welcome.protocol` with a different major. Minor versions within a major are additive;
-a client ignores frame types and fields it does not recognize.
+a client ignores frame types and fields it does not recognize — with one NORMATIVE
+exception: **a field that GATES rendering is never ignorable.** A client that encounters
+a panel template block carrying `visible_when` and cannot evaluate that condition — because
+it does not implement the field, or does not implement that corner of the grammar, or the
+evaluation errors — MUST NOT render the block. Ignoring the gate draws content the author
+hid, so the undecidable case fails CLOSED, exactly as an unresolved `$var` does.
 
 **2.1 (additive, M19)** adds the presentation surface: the `image` block kind and the
 four performance templates (`letter`, `clipping`, `map_pin`, `title_card`) in the `ui`
 vocabulary and in panel templates; `visible_when` on panel template blocks; and
 `state` `Resource.label` resolved to the viewer's own locale. A 2.0 client ignores an
-unknown block kind and an unknown template field, so it degrades to exactly what it
-rendered before.
+unknown block kind and every unknown template field EXCEPT `visible_when` — for that one
+it drops the whole block under the rule above — so it degrades to at most what it
+rendered before, never to more. Nothing on the wire lets the server check this — `welcome.protocol`
+announces the SERVER's version and `join` carries no client version — so it is a client
+conformance requirement, and a pack that uses `visible_when` is 2.1-minimum. Note also
+what the gate is NOT: a gated block's content rides the manifest whatever the condition
+says, so `visible_when` decides WHEN a block draws, never whether its content reaches the
+client. Secrecy is `audience` (resolved server-side) and the `state` variable filter.
 
 `"2.0"` was a BREAKING consolidation of the 1.x line. What it broke, and the wart each
 break settles:
@@ -337,9 +348,14 @@ a condition that reaches you is always in it):
 Semantics follow the reference implementation, not JavaScript's own operators: `==`/`!=`
 coerce numeric strings, `===`/`!==` are strict (a bool is never strictly equal to a
 number), and an unorderable comparison (`"abc" > 5`, `null > 5`) is an ERROR. **A
-condition that errors, or that a client cannot evaluate, HIDES its block** — fail-closed,
-the same rule as an unresolved `$var`. Hidden variables are dropped before evaluation,
-so a condition can never surface what the wire filter withheld.
+condition that errors, or that a client cannot evaluate, MUST hide its block** —
+fail-closed, the same rule as an unresolved `$var`, and the one place a minor version's
+new field may not be ignored (see "Versioning"). This holds for every block a condition
+can sit on, `repeat` included: a gate on the repeat itself suppresses the whole
+expansion, a gate on its inner template suppresses each instance. Hidden variables are
+dropped before evaluation, so a condition can never surface what the wire filter
+withheld — and, the other way round, the gated block's own content is in the manifest
+regardless of the condition, so `visible_when` is presentation, never secrecy.
 `tests/fixtures/visible_when_vectors.json` is the shared conformance table every
 implementation runs.
 

@@ -394,8 +394,16 @@ class CharacterTools:
             name: The character name to delete.
         """
         i18n = self.services.i18n.with_locale(ctx.locale)
+        characters = self.services.characters
         try:
-            success = await self.services.characters.delete_character(ctx.uid(), ctx.chat_key, name)
+            # Sheets are room-scoped documents keyed by the character NAME, so a bare
+            # name reaches every player's sheet. Only the CALLING user's own characters
+            # are deletable — same ownership gate `switch_character` carries above.
+            owned = await characters.list_characters(ctx.uid(), ctx.chat_key)
+            if not any(entry.get("name") == name for entry in owned):
+                return i18n.t("kp_tools.character.delete.not_yours", name=name)
+
+            success = await characters.delete_character(ctx.uid(), ctx.chat_key, name)
             if success:
                 return i18n.t("kp_tools.character.delete.success", name=name)
             return i18n.t("kp_tools.character.delete.failed_generic", name=name)

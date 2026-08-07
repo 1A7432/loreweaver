@@ -6,6 +6,7 @@
   "kp_tools.character.data_error": "❌ 该角色的存档数据已损坏或无法读取，无法安全更新角色卡，未做任何修改。请恢复或重新创建该角色。",
   "kp_tools.character.delete.failed": "❌ 删除失败: {error}",
   "kp_tools.character.delete.failed_generic": "❌ 删除角色卡 \"{name}\" 失败",
+  "kp_tools.character.delete.not_yours": "❌ 角色「{name}」属于其他玩家，只有其拥有者才能删除",
   "kp_tools.character.delete.success": "✅ 角色卡 \"{name}\" 已删除",
   "kp_tools.character.list.empty": "📄 当前没有角色卡，使用 create_character 创建新角色",
   "kp_tools.character.list.failed": "❌ 获取角色列表失败: {error}",
