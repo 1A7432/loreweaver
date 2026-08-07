@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react"
 import { SyntaxStyle } from "@opentui/core"
 import {
   stripControlChars,
@@ -12,8 +11,9 @@ import {
 } from "loreweaver-protocol"
 import type { AppClient } from "../client"
 import { tt } from "../i18n"
-import { getCachedMedia, halfBlockPreviewSize, mediaPlaceholder, renderHalfBlockPreview, type HalfBlockLine } from "../media"
+import { mediaPlaceholder } from "../media"
 import type { Palette } from "../themes"
+import { MediaPreviewRows, useMediaPreview } from "./MediaPreview"
 import { Spinner } from "./Spinner"
 import { UiBlocksView } from "./UiBlocks"
 
@@ -217,6 +217,7 @@ export function NarrativeLog({
                 theme={theme}
                 locale={locale}
                 meterWidth={10}
+                client={client}
                 interactive={
                   onChoicePick && index === activeChoicesIndex
                     ? { focused: choicesFocused, onPick: onChoicePick }
@@ -276,44 +277,14 @@ function MediaLogEntry({
   selected: boolean
   onSelect: () => void
 }) {
-  const [lines, setLines] = useState<HalfBlockLine[] | undefined>()
-  const [failed, setFailed] = useState(false)
-
-  useEffect(() => {
-    let cancelled = false
-    setLines(undefined)
-    setFailed(false)
-    if (!client || frame.mime === "image/gif" || frame.mime === "image/webp") return
-    void getCachedMedia(client, frame)
-      .then((payload) => {
-        const size = halfBlockPreviewSize(56, 28)
-        return renderHalfBlockPreview(payload.bytes, payload.mime, size.width, size.height)
-      })
-      .then((preview) => {
-        if (!cancelled) setLines(preview)
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [client, frame.hash, frame.mime])
+  const { lines, failed } = useMediaPreview(frame, client)
 
   const label = `${selected ? "▶ " : ""}${stripControlChars(frame.from)}: ${mediaPlaceholder(frame, locale)}`
   return (
     <box flexDirection="column" width="100%" onMouseDown={onSelect}>
       <text fg={selected ? theme.accent : theme.system}>{label}</text>
       {lines ? (
-        lines.map((line, row) => (
-          <box key={`${frame.hash}-${row}`} flexDirection="row">
-            {line.cells.map((cell, col) => (
-              <text key={`${frame.hash}-${row}-${col}`} fg={cell.fg} bg={cell.bg}>
-                {cell.char}
-              </text>
-            ))}
-          </box>
-        ))
+        <MediaPreviewRows lines={lines} keyPrefix={frame.hash} />
       ) : (
         <text fg={failed ? theme.fail : theme.dim}>{failed ? mediaPlaceholder(frame, locale) : stripControlChars(frame.name)}</text>
       )}

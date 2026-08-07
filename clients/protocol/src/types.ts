@@ -342,6 +342,22 @@ export interface UiDividerBlock {
   kind: "divider"
 }
 
+// v2.1 additive (M19): a picture the room can already fetch, named by CONTENT HASH —
+// the same address the media byte channel answers (`{op:"get", hash}`). The server
+// only ever emits a hash reachable from this room (room media or an enabled pack's
+// asset) and stamps the authoritative `mime`, so a client may fetch it directly.
+// Text-first clients degrade to the caption/alt line plus their normal media
+// affordance.
+export interface UiImageBlock {
+  kind: "image"
+  hash: string
+  mime?: string
+  // Byte length, present on pack-asset images (a manifest knows it up front).
+  size?: number
+  caption?: string
+  alt?: string
+}
+
 export interface UiChoiceOption {
   id: string
   label: string
@@ -363,6 +379,7 @@ export type UiBlock =
   | UiTextBlock
   | UiDividerBlock
   | UiChoicesBlock
+  | UiImageBlock
 
 export interface UiFrame {
   type: typeof FrameType.Ui
@@ -439,6 +456,19 @@ export interface PanelDividerBlock {
   kind: "divider"
 }
 
+// The panel form of `UiImageBlock`. Authors write a pack-relative `src` path; the
+// server resolves it to this content-addressed triple at manifest build, so a panel
+// can only ever point at a picture its own pack ships. No `$var` binding: the address
+// is decided by the pack build, never by live state.
+export interface PanelImageBlock {
+  kind: "image"
+  hash: string
+  mime: string
+  size: number
+  caption?: PanelText
+  alt?: PanelText
+}
+
 export interface PanelChoiceOption {
   id: string
   label: PanelTextValue
@@ -468,6 +498,7 @@ export type PanelTemplateBlock =
   | PanelTextBlock
   | PanelDividerBlock
   | PanelChoicesBlock
+  | PanelImageBlock
   | PanelRepeatBlock
 
 // Render-side cap on `repeat` expansion, mirrored from the server-side schema.

@@ -122,3 +122,39 @@ describe("hidden imported-card leaves are fail-closed", () => {
     expect(resolvePanelBlocks(blocks, KEEPER_VARS, "zh")).toEqual([{ kind: "badge", label: "酒馆.声望" }])
   })
 })
+
+describe("image blocks (M19 item 6)", () => {
+  test("pass through content-addressed and localize caption/alt", () => {
+    const blocks: PanelTemplateBlock[] = [
+      {
+        kind: "image",
+        hash: "c".repeat(64),
+        mime: "image/png",
+        size: 4096,
+        caption: { en: "The Wen portraits", zh: "温府画像组" },
+        alt: { en: "Three hanging scrolls" },
+      },
+    ]
+    expect(resolvePanelBlocks(blocks, VARS, "zh")).toEqual([
+      {
+        kind: "image",
+        hash: "c".repeat(64),
+        mime: "image/png",
+        size: 4096,
+        caption: "温府画像组",
+        alt: "Three hanging scrolls",
+      },
+    ])
+  })
+
+  test("a hashless block resolves to nothing rather than a dead fetch", () => {
+    expect(resolvePanelBlocks([{ kind: "image", hash: "" } as PanelTemplateBlock], VARS, "en")).toEqual([])
+  })
+
+  test("survives a repeat template without a caption", () => {
+    const blocks: PanelTemplateBlock[] = [{ kind: "image", hash: "d".repeat(64), mime: "image/png", size: 1 }]
+    expect(resolvePanelBlocks(blocks, VARS, "en")).toEqual([
+      { kind: "image", hash: "d".repeat(64), mime: "image/png", size: 1 },
+    ])
+  })
+})

@@ -148,6 +148,14 @@ connections receive `error too_many_connections` before `join` is read.
   `| {kind:"text", text:string, style?:"quote"|"warning"}`
   `| {kind:"divider"}`
   `| {kind:"choices", prompt?:string, options:[{id:string,label:string,input:string}]}`
+  `| {kind:"image", hash:string, mime?:string, size?:int, caption?:string, alt?:string}`
+  An `image` block names a picture by CONTENT HASH — the same address the media byte
+  channel answers (`{op:"get", hash}`). The server only ever emits a hash reachable
+  from THIS room (its own media, or an asset of a pack enabled in it) and stamps the
+  authoritative `mime`, so a client may fetch and cache it exactly like any other
+  media; an unreachable hash is dropped server-side before the frame is built.
+  Text-first clients degrade to the `caption`/`alt` line plus their usual media
+  affordance.
   `panel:"inline"` renders into the narrative stream; `"sidebar"` into a persistent
   panel region. `id` names a UI region: a later sidebar frame with the same `id`
   replaces that region's content, and an inline frame with `replace:true` MAY update
@@ -175,7 +183,9 @@ connections receive `error too_many_connections` before `join` is read.
   `Resource = {id:string, label:string, value:number, max?:number}` — the rule
   system's vital meters (HP, sanity, mana, …) as generic data: a client renders
   the list as meters without knowing any system's field names. Entries arrive in
-  render order.
+  render order. `label` is already resolved to THIS viewer's locale: a rulepack may
+  declare `sheet.resources[].label` as a locale map, so one pack's bars read
+  correctly at an `en` and a `zh` connection of the SAME room.
   `variables[].hidden` marks a keeper-connection-only row the keeper has not `.var expose`d yet — players never receive hidden rows at all. `pregens` is the module's claimable cast (`.pc list`/`.pc claim`); `claimed_by` is the claiming member id, `""` while unclaimed; omitted when no roster exists.
   `variables` (optional — omitted when the room has none) is the room's
   deterministic module variables, PLAYER-VISIBLE subset only: keeper-only variables are
@@ -282,6 +292,12 @@ modvar ids, `mvu.`-prefixed leaves):
 - `{"repeat": {"prefix": "<id prefix>", "block": <TemplateBlock>}}` renders one
   instance per visible variable whose id starts with the prefix (≤ 32 instances);
   inside, `{"$leaf": "id"|"label"|"value"}` substitutes the matched variable's field.
+
+An `image` block is the one template block the server rewrites rather than passes
+through: the author writes a pack-relative `src` path, and the manifest carries
+`{kind:"image", hash, mime, size, caption?, alt?}` (localized `caption`/`alt`) —
+addressing is decided by the pack build, so a panel can only point at a picture its
+own pack ships. Fetch it over the media byte channel like a tier-2 asset.
 
 Localized strings are `{en,zh}` maps; the client picks its locale (fallback `en`).
 Picking a tier-1 `choices` option sends `panel_intent{kind:"choice", value: <option

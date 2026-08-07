@@ -187,3 +187,82 @@ def test_wire_panel_shapes_tier1_and_tier2_entries():
 
     with pytest.raises(ValueError, match="integrity"):
         wire_panel("blackmoor", tier2, {})
+
+
+# --- M19 item 6: the static `image` block ------------------------------------
+
+IMAGE_YAML = """\
+panels:
+  - id: handouts
+    title: {en: Handouts, zh: 手边物}
+    slot: sidebar
+    blocks:
+      - {kind: image, src: assets/portrait.png, caption: {en: The Wen portraits, zh: 温府画像组}}
+      - {kind: image, src: assets/rubbing.png, alt: A relief rubbing}
+      - {kind: text, text: {en: Look closely.}}
+"""
+
+IMAGE_ASSETS = {
+    "assets/portrait.png": {"sha256": "c" * 64, "size": 4096, "mime": "image/png"},
+    "assets/rubbing.png": {"sha256": "d" * 64, "size": 2048, "mime": "image/webp"},
+}
+
+
+def test_image_block_authors_a_path_and_wires_a_content_hash():
+    (panel,) = parse_panels_text(IMAGE_YAML)
+    # Authored form keeps the pack-relative path; the pack build owns the addressing.
+    assert panel.blocks[0] == {
+        "kind": "image",
+        "src": "assets/portrait.png",
+        "caption": {"en": "The Wen portraits", "zh": "温府画像组"},
+    }
+    assert panel.image_sources == ("assets/portrait.png", "assets/rubbing.png")
+
+    wired = wire_panel("wenfu", panel, IMAGE_ASSETS)["blocks"]
+    assert wired[0] == {
+        "kind": "image",
+        "hash": "c" * 64,
+        "size": 4096,
+        "mime": "image/png",
+        "caption": {"en": "The Wen portraits", "zh": "温府画像组"},
+    }
+    assert wired[1]["hash"] == "d" * 64 and wired[1]["alt"] == {"en": "A relief rubbing"}
+    assert wired[2]["kind"] == "text"
+
+
+def test_image_without_an_integrity_record_refuses_to_wire():
+    # Same fail-closed stance as a tier-2 entry: a hand-edited pack home serves no
+    # panel rather than a panel pointing at nothing.
+    (panel,) = parse_panels_text(IMAGE_YAML)
+    with pytest.raises(ValueError, match="integrity record for image"):
+        wire_panel("wenfu", panel, {})
+
+
+def test_image_src_is_a_literal_relative_path_never_a_binding():
+    with pytest.raises(ValueError, match="relative path"):
+        parse_panels_text(
+            "panels:\n  - {id: p, title: T, slot: sidebar, blocks: [{kind: image, src: {$var: pic}}]}\n"
+        )
+    with pytest.raises(ValueError, match="no .. segments"):
+        parse_panels_text(
+            "panels:\n  - {id: p, title: T, slot: sidebar, blocks: [{kind: image, src: ../../etc/passwd}]}\n"
+        )
+    with pytest.raises(ValueError, match="missing"):
+        parse_panels_text("panels:\n  - {id: p, title: T, slot: sidebar, blocks: [{kind: image}]}\n")
+
+
+def test_tier2_fallback_images_wire_and_count_as_panel_sources():
+    yaml = """\
+panels:
+  - id: array
+    title: Array
+    slot: modal
+    entry: ui/array/index.html
+    assets: [ui/array/index.html]
+    fallback:
+      - {kind: image, src: assets/portrait.png, caption: Nine lanterns}
+"""
+    (panel,) = parse_panels_text(yaml)
+    assert panel.image_sources == ("assets/portrait.png",)
+    entry = wire_panel("wenfu", panel, {**IMAGE_ASSETS, "ui/array/index.html": {"sha256": "e" * 64, "size": 10}})
+    assert entry["fallback"][0]["hash"] == "c" * 64

@@ -159,6 +159,22 @@ async def member_panel_ids(services: Services, chat_key: str, role: str) -> set[
     return ids
 
 
+async def pack_asset_mime(services: Services, chat_key: str, sha256: str) -> str | None:
+    """The declared MIME of ``sha256`` when a pack ENABLED in this room ships it, else
+    ``None`` — the metadata-only sibling of :func:`resolve_pack_asset`, for callers that
+    only need to know a hash is reachable (`gateway.ui_media`) and must not pay a disk
+    read + re-digest per lookup. Same room scoping: a pack the room has not enabled
+    answers ``None``."""
+    wanted = sha256.lower()
+    if not wanted:
+        return None
+    for _pack_id, _home, manifest in await _enabled_packs(services, chat_key):
+        for asset in manifest.assets:
+            if asset.sha256 == wanted:
+                return asset.mime or None
+    return None
+
+
 async def resolve_pack_asset(services: Services, chat_key: str, sha256: str) -> tuple[bytes, str, str] | None:
     """``(bytes, mime, name)`` for a pack-asset hash, or ``None`` when no pack enabled in
     THIS room declares it. Bytes are re-hashed against the manifest digest before serving

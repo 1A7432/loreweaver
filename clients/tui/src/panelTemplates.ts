@@ -122,6 +122,17 @@ function resolveOne(
     if (text === undefined) return undefined
     return block.style === undefined ? { kind: "text", text } : { kind: "text", text, style: block.style }
   }
+  if (block.kind === "image") {
+    // Content-addressed by the pack build — nothing to resolve against state, but a
+    // manifest hand-edited into a hashless block would render as a dead fetch.
+    if (typeof block.hash !== "string" || !block.hash) return undefined
+    const image: UiBlock = { kind: "image", hash: block.hash, mime: block.mime, size: block.size }
+    const caption = resolveText(block.caption, variables, locale, leaf)
+    if (caption !== undefined) image.caption = caption
+    const alt = resolveText(block.alt, variables, locale, leaf)
+    if (alt !== undefined) image.alt = alt
+    return image
+  }
   if (block.kind === "choices") {
     const options: UiChoiceOption[] = []
     for (const option of block.options ?? []) {

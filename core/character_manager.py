@@ -138,18 +138,39 @@ def set_hit_points(
     return new_current, new_maximum
 
 
-def character_resources(character: CharacterSheet) -> list[dict[str, Any]]:
+def character_resources(character: CharacterSheet, locale: str | None = None) -> list[dict[str, Any]]:
     """The pack-declared generic resource meters (`{id,label,value,max}`) for
-    `character` — the wire/panel/roster vitals shape. Empty when no pack."""
+    `character` — the wire/panel/roster vitals shape. Empty when no pack.
+
+    `locale` picks the label a pack declared per language (M19 item 8); callers on a
+    per-VIEWER wire path pass the viewer's, persistence paths leave it unset."""
     from core.sheets import wire_resources
 
     pack = _pack_for(character)
     if pack is None:
         return []
     try:
-        return wire_resources(character, pack)
+        return wire_resources(character, pack, locale)
     except Exception:
         return []
+
+
+def resource_label_map(system: str, locale: str | None) -> dict[str, str]:
+    """`resource id -> label` for `system` in `locale` (`{}` when it doesn't resolve).
+
+    The roster persists each member's meters with whatever label was current when they
+    were saved; a viewer-locale wire build re-labels through this instead of shipping
+    that frozen string to every language."""
+    from core.rulepacks import load_rulepack
+
+    try:
+        pack = load_rulepack(system or "")
+        spec = pack.sheet_spec
+    except Exception:
+        return {}
+    if spec is None:
+        return {}
+    return {resource.id: resource.label_for(locale) for resource in spec.resources}
 
 
 class CharacterSheet:

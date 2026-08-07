@@ -39,13 +39,28 @@ class VitalSpec:
 
 @dataclass(frozen=True)
 class ResourceSpec:
-    """One wire/panel resource meter."""
+    """One wire/panel resource meter.
+
+    ``labels`` maps locale -> display text. A pack may write ``label: HP`` (stored
+    under the ``en`` key) or ``label: {en: HP, zh: 体力}``; the wire build resolves
+    it per VIEWER locale, so one pack's bar reads correctly at every table instead
+    of showing the author's language to everyone (M19 item 8)."""
 
     id: str
-    label: str
+    labels: Mapping[str, str]
     value_key: str = ""  # attributes-dict key (attribute-backed resources)
     max_key: str = ""
     source: str = "attributes"  # "attributes" | "hit_points"
+
+    def label_for(self, locale: str | None) -> str:
+        """This resource's display label for ``locale``: exact match, then ``en``,
+        then any declared locale (an author who wrote only ``zh`` still shows text)."""
+        short = (locale or "en").split("-", 1)[0].split("_", 1)[0]
+        for candidate in (short, "en"):
+            text = self.labels.get(candidate)
+            if text:
+                return text
+        return next((text for text in self.labels.values() if text), self.id)
 
 
 @dataclass(frozen=True)
@@ -88,6 +103,24 @@ def _any_map(pack_id: str, where: str, raw: Any) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
         raise SheetSpecError(f"rulepack '{pack_id}': {where} must be a mapping")  # i18n-exempt: pack-author diagnostic, raised at load time
     return {str(key): value for key, value in raw.items()}
+
+
+def _resource_labels(pack_id: str, resource_id: Any, raw: Any) -> dict[str, str]:
+    """One ``sheet.resources[].label``: a plain string (the author's own language,
+    stored as ``en``) or a locale map. Accepts any locale key a pack cares to ship —
+    the runtime asks for the viewer's and falls back — so adding a language is pack
+    data, never an engine change."""
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            raise SheetSpecError(f"rulepack '{pack_id}': sheet.resource {resource_id} has an empty label")  # i18n-exempt: pack-author diagnostic, raised at load time
+        return {"en": text}
+    if isinstance(raw, Mapping):
+        labels = {str(locale): str(text).strip() for locale, text in raw.items() if str(text).strip()}
+        if not labels:
+            raise SheetSpecError(f"rulepack '{pack_id}': sheet.resource {resource_id} has an empty label map")  # i18n-exempt: pack-author diagnostic, raised at load time
+        return labels
+    raise SheetSpecError(f"rulepack '{pack_id}': sheet.resource {resource_id} label must be a string or locale map")  # i18n-exempt: pack-author diagnostic, raised at load time
 
 
 def parse_sheet_section(pack_id: str, raw: Any) -> SheetSpec | None:
@@ -145,7 +178,7 @@ def parse_sheet_section(pack_id: str, raw: Any) -> SheetSpec | None:
         resources.append(
             ResourceSpec(
                 id=str(entry["id"]),
-                label=str(entry["label"]),
+                labels=_resource_labels(pack_id, entry["id"], entry["label"]),
                 value_key=str(entry.get("value") or ""),
                 max_key=str(entry.get("max") or ""),
                 source=source,
@@ -379,8 +412,12 @@ def refresh_sheet(sheet: Any, pack: Any, *, initialize_vitals: bool = False, pre
             sheet.attributes[vital.key] = max(0, min(maximum, _int_or(sheet.attributes[vital.key], maximum)))
 
 
-def wire_resources(sheet: Any, pack: Any) -> list[dict[str, Any]]:
-    """The generic ``resources`` meter list for the wire/panels."""
+def wire_resources(sheet: Any, pack: Any, locale: str | None = None) -> list[dict[str, Any]]:
+    """The generic ``resources`` meter list for the wire/panels.
+
+    ``locale`` is the VIEWER's, not the process's: labels are resolved here, at the
+    wire boundary, so the same room can serve an ``en`` and a ``zh`` client their own
+    reading of one pack's bars. Omitting it keeps the pack's ``en`` label."""
     spec = pack.sheet_spec
     if spec is None:
         return []
@@ -396,5 +433,5 @@ def wire_resources(sheet: Any, pack: Any) -> list[dict[str, Any]]:
             if value is None or maximum is None:
                 continue
             value, maximum = _int_or(value), _int_or(maximum)
-        out.append({"id": resource.id, "label": resource.label, "value": value, "max": maximum})
+        out.append({"id": resource.id, "label": resource.label_for(locale), "value": value, "max": maximum})
     return out

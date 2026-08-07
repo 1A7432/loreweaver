@@ -3,7 +3,7 @@ import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
 import type { UiFrame } from "loreweaver-protocol"
 import { themes } from "../themes"
-import { badgeLine, meterLine, statLine, UiBlocksView } from "./UiBlocks"
+import { badgeLine, imageLine, meterLine, statLine, UiBlocksView } from "./UiBlocks"
 import { UiPanel } from "./UiPanel"
 
 const theme = themes.lamplight
@@ -169,5 +169,29 @@ describe("UiBlocksView with imported-card CJK content", () => {
     expect(widths.filter((value) => value > width).length).toBeLessThanOrEqual(2)
 
     act(() => renderer.destroy())
+  })
+})
+
+describe("image blocks (M19 item 6)", () => {
+  test("imageLine falls back caption -> alt -> short hash", () => {
+    const hash = "a".repeat(64)
+    expect(imageLine({ kind: "image", hash, caption: "灯谱残页" }, "zh")).toBe("🖼 灯谱残页")
+    expect(imageLine({ kind: "image", hash, alt: "A torn page" })).toBe("🖼 A torn page")
+    expect(imageLine({ kind: "image", hash })).toBe("🖼 aaaaaaaaaaaa")
+  })
+
+  test("renders as a caption line with no fetch channel — the sidebar degradation", async () => {
+    const frame: UiFrame = {
+      type: "ui",
+      panel: "sidebar",
+      blocks: [{ kind: "image", hash: "b".repeat(64), mime: "image/png", caption: "温府画像组" }],
+    }
+    const { renderOnce, captureCharFrame } = await testRender(
+      <UiBlocksView frame={frame} theme={theme} locale="zh" />,
+    )
+    await act(async () => {
+      renderOnce()
+    })
+    expect(captureCharFrame()).toContain("温府画像组")
   })
 })

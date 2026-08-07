@@ -5,12 +5,15 @@ import {
   type UiBadgeTone,
   type UiChoicesBlock,
   type UiFrame,
+  type UiImageBlock,
   type UiMeterBlock,
   type UiStatBlock,
 } from "loreweaver-protocol"
+import type { AppClient } from "../client"
 import { tt } from "../i18n"
 import type { Palette } from "../themes"
 import { bar } from "./CharacterPanel"
+import { MediaPreviewRows, useMediaPreview } from "./MediaPreview"
 
 // Sidebar meters match VariablesPanel's compact tracker width; the inline log has
 // room for CharacterPanel's full-width bars (NarrativeLog passes 10).
@@ -39,6 +42,14 @@ export function badgeLine(block: { label: string }): string {
   return `[${stripControlChars(block.label)}]`
 }
 
+/** One image block's text line — the whole block on a text-first client without a
+ * fetch channel, and the caption above the preview when there is one. Falls back
+ * through caption -> alt -> the short hash so the line is never empty. */
+export function imageLine(block: UiImageBlock, locale?: string): string {
+  const text = stripControlChars(block.caption || block.alt || "").trim()
+  return tt(locale, "ui.image", { text: text || block.hash.slice(0, 12) })
+}
+
 export function badgeColor(tone: UiBadgeTone | undefined, theme: Palette): string {
   if (tone === "danger") return theme.fumble
   if (tone === "warn") return theme.fail
@@ -59,12 +70,23 @@ export interface UiBlocksViewProps {
   // it, choices render as a static option list — the sidebar baseline.
   interactive?: UiChoicesInteraction
   meterWidth?: number
+  // When set, `image` blocks fetch their bytes and draw a terminal preview. The
+  // inline narrative log passes it; the narrow sidebars deliberately do not — a
+  // half-block picture in a 24-column column is worse than its caption line.
+  client?: AppClient
 }
 
-/** Renders one v1.7 `ui` frame's block list. Blocks arrive server-validated
+/** Renders one `ui` frame's block list. Blocks arrive server-validated
  * (kind whitelist, caps — core.hooks), so rendering trusts the shapes but still
  * strips control bytes off every string like the other panels do. */
-export function UiBlocksView({ frame, theme, locale, interactive, meterWidth = METER_BAR_WIDTH }: UiBlocksViewProps) {
+export function UiBlocksView({
+  frame,
+  theme,
+  locale,
+  interactive,
+  meterWidth = METER_BAR_WIDTH,
+  client,
+}: UiBlocksViewProps) {
   const lastChoicesIndex = frame.blocks.reduce(
     (last, block, index) => (block.kind === "choices" ? index : last),
     -1,
@@ -101,6 +123,9 @@ export function UiBlocksView({ frame, theme, locale, interactive, meterWidth = M
             </text>
           )
         }
+        if (block.kind === "image") {
+          return <UiImage key={key} block={block} theme={theme} locale={locale} client={client} />
+        }
         if (block.kind === "text") {
           const color = block.style === "warning" ? theme.fail : block.style === "quote" ? theme.dim : theme.fg
           const prefix = block.style === "warning" ? "⚠ " : block.style === "quote" ? "❝ " : ""
@@ -120,6 +145,29 @@ export function UiBlocksView({ frame, theme, locale, interactive, meterWidth = M
           />
         )
       })}
+    </box>
+  )
+}
+
+/** An `image` block: the caption line always, plus the same half-block preview the
+ * media log draws when this view was given a fetch channel. A failed fetch keeps the
+ * caption — the picture is an enhancement, never the only content. */
+function UiImage({
+  block,
+  theme,
+  locale,
+  client,
+}: {
+  block: UiImageBlock
+  theme: Palette
+  locale?: string
+  client?: AppClient
+}) {
+  const { lines } = useMediaPreview(block.mime ? { hash: block.hash, mime: block.mime } : undefined, client)
+  return (
+    <box flexDirection="column" width="100%" flexShrink={0}>
+      <text fg={theme.system}>{imageLine(block, locale)}</text>
+      {lines ? <MediaPreviewRows lines={lines} keyPrefix={block.hash} /> : null}
     </box>
   )
 }

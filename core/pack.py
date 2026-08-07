@@ -39,7 +39,7 @@ import yaml
 
 from core.card_split import WorldPayloads, detect_world_payloads
 from core.charcard import MAX_CARD_FILE_BYTES, parse_card_bytes
-from core.hooks import MAX_HOOK_SOURCE_CHARS
+from core.hooks import MAX_HOOK_SOURCE_CHARS, UI_IMAGE_MIMES
 from core.lorecard import looks_like_lorecard, parse_lorecard_bytes
 from core.panels import (
     CODE_MIMES,
@@ -712,7 +712,9 @@ def _validate_pack_panels(read_text: Callable[[str], str], manifest: PackManifes
                 raise PackError(f"panels {panels_path}: duplicate panel id {panel.id!r} across the pack")
             seen_ids.add(panel.id)
             panels.append(panel)
-            for asset in panel.assets:
+            # Tier-2 code assets and tier-1 `image` srcs land in ONE content-addressed
+            # pipeline: both are files the pack ships and a client fetches by hash.
+            for asset in (*panel.assets, *panel.image_sources):
                 _validated_entry_path(asset)
                 if asset not in seen_assets:
                     seen_assets.add(asset)
@@ -740,6 +742,21 @@ def _enforce_panel_code_cap(panels: list[PanelSpec], assets_by_path: Mapping[str
             raise PackError(
                 f"panel {panel.id}: entry+js+css total {code_bytes} bytes exceeds the {MAX_PANEL_CODE_BYTES}-byte cap"
             )
+
+
+def _enforce_panel_images(panels: list[PanelSpec], assets_by_path: Mapping[str, PackAsset]) -> None:
+    """Every tier-1 ``image`` src must resolve to a real asset that is actually a
+    picture. Caught at build time so an author learns it from the packer, not from a
+    player staring at a block their client silently dropped."""
+    for panel in panels:
+        for path in panel.image_sources:
+            asset = assets_by_path.get(path)
+            if asset is None:
+                raise PackError(f"panel {panel.id}: image {path!r} is missing from the manifest asset block")
+            if asset.mime not in UI_IMAGE_MIMES:
+                raise PackError(
+                    f"panel {panel.id}: image {path!r} is {asset.mime or 'untyped'}, not one of {sorted(UI_IMAGE_MIMES)}"
+                )
 
 
 # --- build ------------------------------------------------------------------
@@ -915,7 +932,9 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
         asset_bytes += len(data)
         archive_files.append(asset.path)
 
-    _enforce_panel_code_cap(pack_panels, {asset.path: asset for asset in completed_assets})
+    assets_by_path = {asset.path: asset for asset in completed_assets}
+    _enforce_panel_code_cap(pack_panels, assets_by_path)
+    _enforce_panel_images(pack_panels, assets_by_path)
 
     if len(set(archive_files)) != len(archive_files):
         raise PackError("a file is declared under more than one contents kind")
@@ -1134,7 +1153,9 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
     # manifest's asset block — a tampered manifest that drops a panel asset's integrity
     # record (or understates sizes) fails here before anything is written.
     verify_panels, _ = _validate_pack_panels(read_text, manifest)
-    _enforce_panel_code_cap(verify_panels, {asset.path: asset for asset in manifest.assets})
+    verify_assets_by_path = {asset.path: asset for asset in manifest.assets}
+    _enforce_panel_code_cap(verify_panels, verify_assets_by_path)
+    _enforce_panel_images(verify_panels, verify_assets_by_path)
     # Asset bytes were already verified via the files inventory (set equality +
     # per-file sha256/size above); the asset block's own records were cross-checked
     # against that inventory, so no second streaming pass is needed here.

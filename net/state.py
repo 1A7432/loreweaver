@@ -27,7 +27,7 @@ from typing import Any
 
 from agent.context import AgentCtx
 from agent.services import Services
-from core.character_manager import CharacterSheet, character_resources
+from core.character_manager import CharacterSheet, character_resources, resource_label_map
 from core.documents import KEEPER_VIEWER, MODULE_POOL_ID, MVU_ID, PLAYER_VIEWER, SCENE_ID
 from core.modvars import MODVARS_DOC_ID, MODVARS_DOC_TYPE, wire_entries
 
@@ -38,7 +38,7 @@ async def build_room_state(services: Services, ctx: AgentCtx) -> dict[str, Any]:
     """Assemble one `state` frame's payload (including `type`) for `ctx`'s room."""
     sheet = await resolve_active_character(services, ctx)
     active_system = sheet.system if sheet is not None else None
-    party = await _party(services, ctx.chat_key, active_system=active_system)
+    party = await _party(services, ctx.chat_key, active_system=active_system, locale=ctx.locale)
     initiative = await _initiative(services, ctx.chat_key)
     initiative_by_name = {entry["name"]: entry["value"] for entry in initiative}
 
@@ -51,7 +51,7 @@ async def build_room_state(services: Services, ctx: AgentCtx) -> dict[str, Any]:
     state: dict[str, Any] = {"type": "state", "party": party, "initiative": initiative, "online": 0}
 
     if sheet is not None:
-        state["character"] = await _character_payload(services, ctx.chat_key, sheet)
+        state["character"] = await _character_payload(services, ctx.chat_key, sheet, ctx.locale)
 
     scene = await _scene(services, ctx.chat_key)
     if scene is not None:
@@ -98,14 +98,16 @@ async def resolve_active_character(services: Services, ctx: AgentCtx) -> Charact
     return sheet
 
 
-async def _character_payload(services: Services, chat_key: str, sheet: CharacterSheet) -> dict[str, Any]:
+async def _character_payload(
+    services: Services, chat_key: str, sheet: CharacterSheet, locale: str | None = None
+) -> dict[str, Any]:
     """Protocol 2.0: vitals ride a generic ``resources`` list ({id,label,value,max})
     instead of per-system field names — a client renders meters without knowing
     any rule system. The sheet layer declares its own resources (M16 stage B:
     `core.character_manager.character_resources`, pack-driven); the WIRE shape
-    is final."""
+    is final. Labels resolve to ``locale`` here, at the per-viewer boundary (M19)."""
     attrs = sheet.attributes
-    resources = character_resources(sheet)
+    resources = character_resources(sheet, locale)
 
     status_effects: list[Any] = []
     try:
@@ -134,6 +136,7 @@ async def _party(
     chat_key: str,
     *,
     active_system: str | None = None,
+    locale: str | None = None,
 ) -> list[dict[str, Any]]:
     try:
         roster = await services.characters.get_party_roster(chat_key)
@@ -141,6 +144,7 @@ async def _party(
         return []
     companion_names = await _companion_sheet_names(services, chat_key)
     canonical_active = _canonical_system(active_system) if active_system is not None else None
+    label_maps: dict[str, dict[str, str]] = {}
     members: list[dict[str, Any]] = []
     for member in roster:
         if canonical_active is not None and _canonical_system(member.get("system", "")) != canonical_active:
@@ -155,19 +159,27 @@ async def _party(
         avatar = member.get("avatar")
         if isinstance(avatar, dict):
             payload["avatar"] = avatar
-        resources = _party_member_resources(member)
+        system = str(member.get("system", "") or "")
+        if system not in label_maps:
+            label_maps[system] = resource_label_map(system, locale)
+        resources = _party_member_resources(member, label_maps[system])
         if resources:
             payload["resources"] = resources
         members.append(payload)
     return members
 
 
-def _party_member_resources(member: dict[str, Any]) -> list[dict[str, Any]]:
+def _party_member_resources(member: dict[str, Any], labels: dict[str, str]) -> list[dict[str, Any]]:
     """Protocol 2.0 party vitals: the same generic ``resources`` list shape as
     ``state.character`` -- read straight off the roster entry. M17:
     `CharacterManager.sync_party_roster` already stores the pack-declared
     meter list (`core.character_manager.character_resources`) verbatim; this
-    only validates the wire shape survived the JSON round-trip."""
+    only validates the wire shape survived the JSON round-trip.
+
+    M19: the STORED label froze whatever locale was current when the roster was
+    synced, so ``labels`` (this viewer's, from the member's own system) wins when it
+    knows the id; the stored string stays the fallback for a system that no longer
+    resolves to a pack."""
     resources: list[dict[str, Any]] = []
     for entry in member.get("resources") or []:
         if not isinstance(entry, dict):
@@ -179,7 +191,7 @@ def _party_member_resources(member: dict[str, Any]) -> list[dict[str, Any]]:
         maximum = _int_value(entry.get("max"))
         if value is None or maximum is None:
             continue
-        resources.append({"id": res_id, "label": label, "value": value, "max": maximum})
+        resources.append({"id": res_id, "label": labels.get(res_id, label), "value": value, "max": maximum})
     return resources
 
 

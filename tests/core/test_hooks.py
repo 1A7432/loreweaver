@@ -208,3 +208,38 @@ def test_sanitize_panel_events_drops_oversized_and_malformed_entries():
         {"panel": "p/b", "payload": None},
     ]
     assert sanitize_panel_events("nope") == []
+
+
+# --- M19 item 6: the `image` block --------------------------------------------
+
+
+def test_sanitize_ui_image_blocks_require_a_whole_sha256():
+    emissions = sanitize_ui_emissions(
+        [
+            {
+                "blocks": [
+                    {"kind": "image", "hash": f"  {'A' * 64}  ", "mime": "IMAGE/PNG", "caption": "a lantern chart"},
+                    # A longer string must NOT be truncated into shape — that would
+                    # address a different blob than the author named.
+                    {"kind": "image", "hash": "b" * 128},
+                    {"kind": "image", "hash": "not-a-hash"},
+                    {"kind": "image"},
+                    # A non-image mime is stripped as an invalid OPTIONAL field; the
+                    # gateway reachability gate stamps the authoritative one anyway.
+                    {"kind": "image", "hash": "c" * 64, "mime": "audio/mpeg", "alt": "x" * 500},
+                ]
+            }
+        ]
+    )
+    blocks = emissions[0]["blocks"]
+    assert blocks[0] == {"kind": "image", "hash": "a" * 64, "mime": "image/png", "caption": "a lantern chart"}
+    assert [block["hash"] for block in blocks] == ["a" * 64, "c" * 64]
+    assert "mime" not in blocks[1] and len(blocks[1]["alt"]) == 120
+
+
+def test_emit_ui_image_from_a_hook_reaches_the_outcome():
+    engine = _engine(
+        'on("reply_ready", () => emitUI([{kind: "image", hash: "' + "f" * 64 + '", caption: "手记"}]))'
+    )
+    outcome = engine.fire("reply_ready", {"reply": "..."})
+    assert outcome.ui_blocks[0]["blocks"] == [{"kind": "image", "hash": "f" * 64, "caption": "手记"}]

@@ -91,7 +91,18 @@ derived:                                 # HYBRID derived stats — see below
   闪避: { half_of: 敏捷 }                #  (b) declarative primitive (pure data)
 display:                                 # OPTIONAL presentation-only localized names
   en: { 侦查: Spot Hidden, ... }         #  locale -> canonical -> display name
+sheet:                                   # the sheet shape (attributes/vitals/resources…)
+  resources:                             #  the meters clients draw as bars
+    - {id: hp,  label: HP,               #   a bare string = your own language
+       value: HP, max: HPMAX}
+    - {id: chao, label: {en: Tide, zh: 潮位},   # a locale map = one bar, every table
+       value: CHAO, max: CHAOMAX}
 ```
+
+`sheet.resources[].label` is resolved per VIEWER at the wire, so a room with an `en`
+and a `zh` player shows each of them their own reading of the same bar. A bare string
+is not a mistake — abbreviations like HP/SAN/MP read the same everywhere — but any
+label that is a real WORD should ship a locale map.
 
 `display` never affects resolution — canonical keys stay the single identity in
 sheets/aliases/derived; check output renders `display_name(canonical, locale)`
@@ -369,13 +380,27 @@ chat adapters. The canonical spec is `docs/specs/M15-ui-panels.md`; the wire con
 effort and risk:
 
 - **Tier 0 — declarative blocks** (v1.7, Layer C.1's `emitUI`): meter/stat/badge/text/
-  divider/choices, emitted per turn by hooks. Every client renders them natively.
+  divider/choices/image, emitted per turn by hooks. Every client renders them natively.
 - **Tier 1 — declarative panels** (landed with M15a): a pack declares NAMED panels in
   `ui/panels.yaml` (`contents.panels` in `pack.yaml`) — layouts of Tier-0 blocks with
   live variable bindings (`{$var: id}` against the viewer's own `state.variables`,
   `repeat` over an id prefix) plus `slot` (`sidebar`/`tray`/`modal`) and `audience`
   (`all`/`player`/`keeper`, resolved SERVER-side). Pure data; renders on every client,
   the TUI included.
+
+  **Pictures without a tier-2 page.** A handout — a portrait set, a rubbing, a printed
+  letter — is one `image` block, not a hand-written HTML panel:
+
+  ```yaml
+  - {kind: image, src: assets/wen-portraits.png,
+     caption: {en: The Wen portraits, zh: 温府画像组},
+     alt: {en: Three hanging scrolls}}
+  ```
+
+  `src` is a pack-relative path to a file your pack ships (PNG/JPEG/WebP/GIF/SVG); the
+  build folds it into the same content-addressed asset pipeline as tier-2 code, and the
+  manifest carries its hash. Authors never write hashes, and a panel can never point at
+  a picture from outside its own pack. Text-first clients show the caption line.
 - **Tier 2 — sandboxed custom views** (pack format + wire landed; the rich-client host
   ships with the studio): real HTML/JS/CSS in a locked-down iframe for interactive maps
   and bespoke sheets. `entry:` marks a panel tier 2; it must declare every asset it

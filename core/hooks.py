@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -73,10 +74,17 @@ MAX_UI_PROMPT_CHARS = 200
 MAX_UI_TEXT_CHARS = 2_000
 MAX_UI_ID_CHARS = 64
 MAX_UI_OPTION_INPUT_CHARS = 200
-UI_BLOCK_KINDS = frozenset({"meter", "stat", "badge", "text", "divider", "choices"})
+MAX_UI_CAPTION_CHARS = 300
+UI_BLOCK_KINDS = frozenset({"meter", "stat", "badge", "text", "divider", "choices", "image"})
 UI_PANELS = frozenset({"inline", "sidebar"})
 UI_BADGE_TONES = frozenset({"info", "warn", "danger"})
 UI_TEXT_STYLES = frozenset({"quote", "warning"})
+# An `image` block names its picture by CONTENT HASH — the same address the media
+# byte channel already answers (`{op:"get", hash}`). The shape check here is purely
+# syntactic; whether the room may actually see that blob is decided later, by
+# `gateway.ui_media.filter_ui_media` against real room media / enabled-pack assets.
+UI_IMAGE_MIMES = frozenset({"image/png", "image/jpeg", "image/webp", "image/gif", "image/svg+xml"})
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 # emitPanel caps (protocol v1.8 `panel_event` frames, M15). The per-TURN budget is
 # enforced where the phases' outcomes aggregate (`agent.loop`); the sanitize below
@@ -191,6 +199,23 @@ def _sanitize_ui_block(raw: Any) -> dict[str, Any] | None:
         block = {"kind": "text", "text": text}
         if raw.get("style") in UI_TEXT_STYLES:
             block["style"] = raw["style"]
+        return block
+    if kind == "image":
+        # The hash is matched WHOLE, never truncated into shape: a 128-char string
+        # sliced to 64 hex chars would address a different blob than the author meant.
+        raw_hash = raw.get("hash")
+        if not isinstance(raw_hash, str) or not _SHA256_RE.match(raw_hash.strip().casefold()):
+            return None
+        block = {"kind": "image", "hash": raw_hash.strip().casefold()}
+        mime = raw.get("mime")
+        if isinstance(mime, str) and mime.strip().casefold() in UI_IMAGE_MIMES:
+            block["mime"] = mime.strip().casefold()
+        caption = _capped_str(raw.get("caption"), MAX_UI_CAPTION_CHARS)
+        if caption:
+            block["caption"] = caption
+        alt = _capped_str(raw.get("alt"), MAX_UI_LABEL_CHARS)
+        if alt:
+            block["alt"] = alt
         return block
     # kind == "choices": an option missing any of id/label/input is dropped; a choices
     # block with no valid option left renders nothing, so it drops entirely.

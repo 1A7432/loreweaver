@@ -23,6 +23,11 @@ Template additions over the v1.7 block vocabulary (deliberately tiny):
   substitutes. Instances are client-capped (:data:`MAX_REPEAT_INSTANCES`); ``repeat``
   does not nest.
 - localized strings are ``{en,zh}`` maps (or a plain string, treated as ``en``).
+- an ``image`` block names its picture by pack-relative ``src`` path; :func:`wire_panel`
+  resolves it to the ``{hash,size,mime}`` triple clients fetch over the media byte
+  channel. A path (not a hash, and never a ``$var`` binding) is the authored form so
+  the pack build owns the addressing — an author cannot aim a panel at a blob their
+  pack does not ship.
 
 The privilege model stays one sentence long: a panel acts as the player viewing it.
 ``audience`` is resolved server-side into per-viewer manifests and never rides the
@@ -39,6 +44,7 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from core.hooks import (
+    MAX_UI_CAPTION_CHARS,
     MAX_UI_ID_CHARS,
     MAX_UI_LABEL_CHARS,
     MAX_UI_OPTION_INPUT_CHARS,
@@ -95,6 +101,14 @@ class PanelSpec:
     @property
     def entry_dir(self) -> str:
         return str(PurePosixPath(self.entry).parent) if self.entry else ""
+
+    @property
+    def image_sources(self) -> tuple[str, ...]:
+        """Every pack-relative ``image`` src this panel references (tier-1 blocks and a
+        tier-2 ``fallback`` alike), de-duplicated in declaration order. The pack build
+        folds these into its asset pipeline so each one gets a real integrity record —
+        without which :func:`wire_panel` cannot address the picture at all."""
+        return tuple(_collect_image_sources((*self.blocks, *(self.fallback or ()))))
 
 
 def _is_binding(value: Any, *, in_repeat: bool) -> bool:
@@ -235,6 +249,16 @@ def _validate_block(raw: Any, label: str, *, in_repeat: bool = False) -> dict[st
                 raise ValueError(f"{label}.style: must be one of {sorted(UI_TEXT_STYLES)}")
             block["style"] = style
         return block
+    if kind == "image":
+        _require_keys(raw, label, required={"kind", "src"}, optional={"caption", "alt"})
+        block = {"kind": "image", "src": _validated_asset_path(raw["src"], f"{label}.src")}
+        if "caption" in raw:
+            block["caption"] = _localized(
+                raw["caption"], f"{label}.caption", in_repeat=in_repeat, cap=MAX_UI_CAPTION_CHARS
+            )
+        if "alt" in raw:
+            block["alt"] = _localized(raw["alt"], f"{label}.alt", in_repeat=in_repeat, cap=MAX_UI_LABEL_CHARS)
+        return block
     # kind == "choices"
     _require_keys(raw, label, required={"kind", "options"}, optional={"prompt"})
     raw_options = raw["options"]
@@ -269,6 +293,26 @@ def _validate_block(raw: Any, label: str, *, in_repeat: bool = False) -> dict[st
     if "prompt" in raw:
         block["prompt"] = _localized(raw["prompt"], f"{label}.prompt", in_repeat=in_repeat, cap=MAX_UI_PROMPT_CHARS)
     return block
+
+
+def _collect_image_sources(blocks: Any) -> list[str]:
+    """The ``image`` srcs in ``blocks``, de-duplicated, order-preserving. Descends into
+    ``repeat`` templates (whose inner block is a normal template block)."""
+    sources: list[str] = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        if "repeat" in block:
+            inner = block["repeat"].get("block") if isinstance(block.get("repeat"), dict) else None
+            candidates = _collect_image_sources([inner]) if inner is not None else []
+        elif block.get("kind") == "image":
+            candidates = [str(block.get("src") or "")]
+        else:
+            continue
+        for source in candidates:
+            if source and source not in sources:
+                sources.append(source)
+    return sources
 
 
 def _validate_blocks(raw: Any, label: str) -> tuple[dict[str, Any], ...]:
@@ -405,28 +449,55 @@ def audience_allows(audience: str, role: str) -> bool:
     return False
 
 
+def _wire_block(block: Mapping[str, Any], ref: str, asset_info: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    """One template block as it rides the wire. Everything passes through unchanged
+    except ``image``, whose authored ``src`` path becomes the ``{hash,size,mime}``
+    triple a client fetches over the media byte channel."""
+    if "repeat" in block:
+        spec = block["repeat"]
+        return {"repeat": {"prefix": spec["prefix"], "block": _wire_block(spec["block"], ref, asset_info)}}
+    if block.get("kind") != "image":
+        return dict(block)
+    source = str(block.get("src") or "")
+    info = asset_info.get(source)
+    if info is None:
+        raise ValueError(f"panel {ref}: no integrity record for image {source!r}")
+    wired: dict[str, Any] = {
+        "kind": "image",
+        "hash": str(info["sha256"]),
+        "size": int(info["size"]),
+        "mime": str(info.get("mime") or "application/octet-stream"),
+    }
+    for key in ("caption", "alt"):
+        if key in block:
+            wired[key] = dict(block[key])
+    return wired
+
+
 def wire_panel(pack_id: str, panel: PanelSpec, asset_info: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
     """One ``ui_manifest`` panel entry (protocol v1.8) for ``panel``.
 
     ``asset_info`` maps pack-relative asset paths to their integrity records
     (``{"sha256", "size", "mime"}`` — the built manifest's asset block). Tier-2 asset
     paths ride the wire RELATIVE to the entry's directory (each panel is a
-    self-contained static root). ``audience`` deliberately never appears: the caller
-    already resolved it per viewer. Raises ``ValueError`` when a tier-2 panel's
-    integrity records are missing (the caller skips that panel and logs).
+    self-contained static root); ``image`` block srcs resolve to content hashes the
+    same way. ``audience`` deliberately never appears: the caller already resolved it
+    per viewer. Raises ``ValueError`` when a panel's integrity records are missing
+    (the caller skips that panel and logs).
     """
+    ref = f"{pack_id}/{panel.id}"
     entry: dict[str, Any] = {
-        "id": f"{pack_id}/{panel.id}",
+        "id": ref,
         "title": dict(panel.title),
         "slot": panel.slot,
         "tier": panel.tier,
     }
     if panel.tier == 1:
-        entry["blocks"] = [dict(block) for block in panel.blocks]
+        entry["blocks"] = [_wire_block(block, ref, asset_info) for block in panel.blocks]
         return entry
     entry_info = asset_info.get(panel.entry)
     if entry_info is None:
-        raise ValueError(f"panel {pack_id}/{panel.id}: no integrity record for entry {panel.entry!r}")
+        raise ValueError(f"panel {ref}: no integrity record for entry {panel.entry!r}")
     entry["entry"] = {"hash": str(entry_info["sha256"]), "size": int(entry_info["size"])}
     assets = []
     for path in panel.assets:
@@ -434,7 +505,7 @@ def wire_panel(pack_id: str, panel: PanelSpec, asset_info: Mapping[str, Mapping[
             continue
         info = asset_info.get(path)
         if info is None:
-            raise ValueError(f"panel {pack_id}/{panel.id}: no integrity record for asset {path!r}")
+            raise ValueError(f"panel {ref}: no integrity record for asset {path!r}")
         assets.append(
             {
                 "path": posixpath.relpath(path, panel.entry_dir or "."),
@@ -444,5 +515,7 @@ def wire_panel(pack_id: str, panel: PanelSpec, asset_info: Mapping[str, Mapping[
             }
         )
     entry["assets"] = assets
-    entry["fallback"] = None if panel.fallback is None else [dict(block) for block in panel.fallback]
+    entry["fallback"] = (
+        None if panel.fallback is None else [_wire_block(block, ref, asset_info) for block in panel.fallback]
+    )
     return entry

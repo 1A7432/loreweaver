@@ -74,6 +74,8 @@
   `| {kind:"text", text:string, style?:"quote"|"warning"}`
   `| {kind:"divider"}`
   `| {kind:"choices", prompt?:string, options:[{id:string,label:string,input:string}]}`
+  `| {kind:"image", hash:string, mime?:string, size?:int, caption?:string, alt?:string}`
+  `image` 块用**内容 hash** 指名一张图——正是媒体字节通道已经在应答的地址（`{op:"get", hash}`）。服务端只会发出**本房间**可取的 hash（房间自己的媒体，或本房间已启用包的资产），并盖上权威 `mime`，因此客户端可以像对待任何媒体一样拉取与缓存；取不到的 hash 在组帧前就已在服务端丢弃。文本优先客户端降级为 `caption`/`alt` 一行文字加自己既有的媒体查看方式。
   `panel:"inline"` 渲染进叙事流，`"sidebar"` 渲染进常驻侧栏区域。`id` 命名一个 UI 区域：后到的同 `id` sidebar 帧替换该区域内容；带 `replace:true` 的 inline 帧可以就地更新前一个同 `id` 的 inline 帧（不支持就地更新的客户端顺序追加即可）。玩家点选 `choices` 选项时，客户端把该选项的 `input` 原样作为普通 `input` 帧发回——不新增客户端→服务端帧类型。
 - `ui_manifest`— **这名观看者**的完整模组面板清单：`join` 时紧随首个 `state` 帧下发，守秘人执行 `.panels enable|disable` 后向每个在线成员重新推送。全量替换语义：帧携带整张清单（空表 = 没有面板，重连时也借此清掉旧面板）。包声明的 `audience` 在服务端按观看者的 keystore 角色**先行**解析——仅守秘人可见的面板在结构上就不会出现在玩家清单里，`audience` 字段本身也永不上线。面板/模板形状见下文"模组 UI 面板"：
   `{type:"ui_manifest", panels:[UiManifestPanel]}`
@@ -81,7 +83,7 @@
   `{type:"panel_event", panel:string, payload:any}`
 - `state` — 一个面板快照，在 `join` 时和每回合后发送：
   `{type:"state", character?:{name,system,resources:[Resource],attributes:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,resources?:[Resource],ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, variables?:[{id:string,label:string,kind:"number"|"bool"|"text"|"enum",value:number|boolean|string,min?:int,max?:int,hidden?:boolean}], pregens?:[{name:string,claimed_by:string}], reset?:boolean}`
-  `Resource = {id:string, label:string, value:number, max?:number}` — 规则系统的生命体征条（HP、理智、魔法值……）作为通用数据：客户端按列表渲染条形量表，无需知道任何系统的字段名。条目按渲染顺序到达。
+  `Resource = {id:string, label:string, value:number, max?:number}` — 规则系统的生命体征条（HP、理智、魔法值……）作为通用数据：客户端按列表渲染条形量表，无需知道任何系统的字段名。条目按渲染顺序到达。`label` 已按**本观看者**的语言解析：规则包的 `sheet.resources[].label` 可写成语言映射，于是同一个房间的 `en` 与 `zh` 连接各自读到自己那一版。
   `variables`（v1.6，递增式/可选——房间没有时整个字段省略）是房间的确定性模块变量，且只含玩家可见子集：仅守秘人可见的变量在引擎内部（`core.modvars.player_entries`）就被过滤，永远不会到达任何传输层。条目按定义顺序到达（按原样渲染，不要排序）；`label` 已按房间语言本地化；`min`/`max` 只出现在有界的 `number` 变量上（客户端可将其渲染为进度条）。导入的 SillyTavern MVU 卡片变量共用同一列表：`id` 带 `mvu.` 前缀、点分路径作为 `label`（仅标量叶子，服务端封顶）——不新增帧类型，客户端无需改动。MVU 叶子由**守秘人策展**（默认全隐、fail-closed）：玩家帧只携带守秘人公开过的路径（`.var expose`）；守秘人自己连接的帧额外携带未公开的其余叶子，每条带 `hidden:true` 标记（递增式/可选——不认识该字段的客户端照常渲染，认识的可以做置灰或加锁标记）。
   `reset:true` 标记战役清空(`.reset` / `admin_reset_room`)后服务端推送的快照：面板数据已是最新(空)，客户端还应清空本地累积的聊天记录。
 - `presence` — 连接的玩家名单，在加入/离开时发送：
@@ -130,6 +132,8 @@
 
 - 任何标量字段可写 `{"$var": "<变量 id>"}`；该变量对本观看者不存在/未公开时**整块省略**（fail-closed——面板永远无法放大可见性；`state` 线上的过滤器仍是唯一 choke point）；
 - `{"repeat": {"prefix": "<id 前缀>", "block": <模板块>}}` 对每个 id 以该前缀开头的可见变量渲染一个实例（≤ 32 个）；块内 `{"$leaf": "id"|"label"|"value"}` 代入匹配变量的对应字段。
+
+`image` 是唯一由服务端**改写**而非原样透传的模板块：作者写包内相对路径 `src`，清单里携带的是 `{kind:"image", hash, mime, size, caption?, alt?}`（`caption`/`alt` 为本地化文本）——寻址由打包过程决定，因此面板只可能指向**它自己这个包所附带**的图片。拉取方式与 Tier-2 资产一致，走媒体字节通道。
 
 本地化文本是 `{en,zh}` 映射；客户端按自己语言选取（回退 `en`）。点选 Tier-1 `choices` 选项发送 `panel_intent{kind:"choice", value: <选项的 input>}`。文本客户端（TUI）用既有块渲染器画 Tier-1，`tray`/`modal` 折进侧栏分区，Tier-2 渲染其 `fallback` 块，对显式 `fallback: null` 显示一行本地化的"请在富客户端查看"。
 

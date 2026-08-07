@@ -30,6 +30,7 @@ from agent.loop import KPTurnResult, run_kp_turn
 from gateway.hub import Event
 from gateway.ops import room_content_unfiltered
 from gateway.panels import deliver_panel_events
+from gateway.ui_media import filter_ui_media
 from infra.i18n import I18n, get_i18n
 from infra.usage_stats import record_usage_stats
 from net.state import build_room_state, resolve_active_character
@@ -273,8 +274,10 @@ async def run_turn(
                         Event.narrative(speaker="kp", text="", fmt="markdown", frame_id=stream_state["id"]),
                     )
             # Hook-emitted declarative UI (protocol v1.7) rides right behind the
-            # narrative it annotates, before the closing `state` snapshot.
-            for ui_frame in result.ui_frames:
+            # narrative it annotates, before the closing `state` snapshot. Image
+            # blocks pass the reachability gate first: a hash this room cannot fetch
+            # would render as a permanent broken picture (`gateway.ui_media`).
+            for ui_frame in await filter_ui_media(services, ctx.chat_key, result.ui_frames):
                 await hub.publish(ctx.chat_key, Event.ui(ui_frame))
             # Hook-emitted module-panel events (protocol v1.8) follow the same slot,
             # but are NOT a broadcast: each reaches only members whose own manifest

@@ -5,12 +5,16 @@ packs — no per-system code paths exist to test anymore; the packs' YAML is the
 system-specific half.
 """
 
+import pytest
+
 from core.character_manager import CharacterSheet, get_hit_points
 from core.rulepacks import load_rulepack
 from core.sheets import (
+    SheetSpecError,
     canonical_values,
     check_value,
     has_check_value,
+    parse_sheet_section,
     refresh_sheet,
     sheet_value,
     set_sheet_value,
@@ -157,3 +161,51 @@ def test_canonical_values_translate_storage_keys():
     assert values["力量"] == 65
     assert values["信用评级"] == 30
     assert values["职业"] == ""  # field_keys expose meta fields
+
+
+# --- M19 item 8: per-viewer resource labels ----------------------------------
+
+_LOCALIZED_SHEET = {
+    "label": "潮占者",
+    "attributes": {"CHAO": 3, "CHAOMAX": 9},
+    "resources": [
+        {"id": "chao", "label": {"en": "Tide", "zh": "潮位"}, "value": "CHAO", "max": "CHAOMAX"},
+        {"id": "plain", "label": "Ledger", "value": "CHAO", "max": "CHAOMAX"},
+        {"id": "zh_only", "label": {"zh": "灯签"}, "value": "CHAO", "max": "CHAOMAX"},
+    ],
+}
+
+
+def test_resource_labels_accept_a_string_or_a_locale_map():
+    spec = parse_sheet_section("chaozhan", _LOCALIZED_SHEET)
+    tide, plain, zh_only = spec.resources
+
+    # A locale map resolves per viewer; a bare string is the author's own language,
+    # stored under `en` so it still answers every viewer.
+    assert (tide.label_for("zh"), tide.label_for("en"), tide.label_for(None)) == ("潮位", "Tide", "Tide")
+    assert plain.labels == {"en": "Ledger"} and plain.label_for("zh") == "Ledger"
+    # A pack that declared ONLY zh still shows text to an en viewer rather than a blank bar.
+    assert zh_only.label_for("en") == "灯签"
+    # Regional tags fall back to their base language.
+    assert tide.label_for("zh-Hans") == "潮位"
+
+
+def test_resource_label_errors_are_author_actionable():
+    for bad in ({}, "", 7, {"zh": "  "}, [".."]):
+        entry = {"id": "x", "label": bad, "value": "CHAO", "max": "CHAOMAX"}
+        with pytest.raises(SheetSpecError, match="label"):
+            parse_sheet_section("chaozhan", {**_LOCALIZED_SHEET, "resources": [entry]})
+
+
+def test_wire_resources_resolves_labels_to_the_viewer_locale():
+    class _Pack:
+        sheet_spec = parse_sheet_section("chaozhan", _LOCALIZED_SHEET)
+
+    class _Sheet:
+        attributes = {"CHAO": 4, "CHAOMAX": 9}
+
+    zh = {entry["id"]: entry["label"] for entry in wire_resources(_Sheet(), _Pack(), "zh")}
+    en = {entry["id"]: entry["label"] for entry in wire_resources(_Sheet(), _Pack(), "en")}
+    assert zh["chao"] == "潮位" and en["chao"] == "Tide"
+    # Same room, same pack, two viewers, two readings — that is the whole point.
+    assert zh["plain"] == en["plain"] == "Ledger"
