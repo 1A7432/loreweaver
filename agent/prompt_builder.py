@@ -17,7 +17,9 @@ So the assembly is now two explicit halves (see :class:`SystemPrompt`):
   the story moves. This is the cacheable prefix.
 - **volatile tail** — world lore (retrieval-dependent), the session recap and
   history, live game state, relationship tracks, module variables, MVU leaves,
-  scribe whispers, hook injections.
+  scribe whispers, hook injections, and the M18 campaign-chronicle section
+  (rolling summary + open threads + raw tail + recalled records), which closes
+  the tail: emergent history changes every turn, so it can never ride the head.
 
 Two properties were deliberately preserved through the move:
 
