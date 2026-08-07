@@ -41,12 +41,18 @@ async def _with_tracker(services) -> None:
 
 async def test_objective_ops_write_through_validation_and_clamp():
     payload = json.dumps(
-        {"ops": [{"op": "adjust", "id": "信物", "delta": 1}, {"op": "set", "id": "信物", "value": 99}], "whispers": []}
+        {
+            "ops": [
+                {"op": "adjust", "id": "信物", "delta": 1, "evidence": "信物已得其一"},
+                {"op": "set", "id": "信物", "value": 99, "evidence": "信物已得其一"},
+            ],
+            "whispers": [],
+        }
     )
     services = _services(payload)
     await _with_tracker(services)
 
-    changed = await run_scribe(services, _ctx(), "我把指环收进口袋", "你确实拿到了指环。", ["skill_check"])
+    changed = await run_scribe(services, _ctx(), "我把指环收进口袋", "你确实拿到了指环——信物已得其一。", ["skill_check"])
 
     assert changed is True
     from core.documents import KEEPER_VIEWER, MODVARS_ID
@@ -55,6 +61,45 @@ async def test_objective_ops_write_through_validation_and_clamp():
     values = (view or {}).get("values", {})
     # adjust applied, then the out-of-range set clamped to the declared max.
     assert values.get("信物") == 3
+
+
+async def test_ops_without_verbatim_evidence_are_dropped():
+    # Born from the fable5×K3 live run: the scribe counted a random prop as a
+    # module token. An op must quote the turn text establishing the tracked
+    # quantity itself changed — fabricated or missing evidence means no write.
+    payload = json.dumps(
+        {
+            "ops": [
+                {"op": "adjust", "id": "信物", "delta": 1},  # no evidence at all
+                {"op": "adjust", "id": "信物", "delta": 1, "evidence": "她把信物递给你"},  # not in the turn
+            ],
+            "whispers": [],
+        }
+    )
+    services = _services(payload)
+    await _with_tracker(services)
+
+    changed = await run_scribe(services, _ctx(), "我收下红纸签", "小满把一张红纸签留在柜台上。", [])
+
+    assert changed is False
+    from core.documents import KEEPER_VIEWER, MODVARS_ID
+
+    view = await services.documents.get_view(CHAT, "modvars", MODVARS_ID, KEEPER_VIEWER)
+    assert (view or {}).get("values", {}).get("信物") == 0
+
+
+async def test_evidence_survives_whitespace_reflow():
+    # Quotes are matched with whitespace squashed, so a line-wrapped narration
+    # still verifies; the quote itself must still be verbatim.
+    payload = json.dumps(
+        {"ops": [{"op": "set", "id": "信物", "value": 1, "evidence": "第一枚信物 到手了"}], "whispers": []}
+    )
+    services = _services(payload)
+    await _with_tracker(services)
+
+    changed = await run_scribe(services, _ctx(), "收好指环", "第一枚信物\n到手了。", [])
+
+    assert changed is True
 
 
 async def test_unknown_tracker_ops_are_dropped_and_whispers_round_trip():

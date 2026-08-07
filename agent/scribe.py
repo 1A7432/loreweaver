@@ -45,15 +45,18 @@ MAX_WHISPERS = 3
 MAX_WHISPER_CHARS = 300
 MAX_STORED_WHISPERS = 5
 _MAX_TURN_TEXT = 4_000
+_MIN_EVIDENCE_CHARS = 4
 
 _PROMPT = """You are the table Scribe for a TTRPG engine — a silent ledger clerk, not a storyteller.
 
 Given ONE game turn (player action + game-master reply) and the room's current trackers, output ONLY a JSON object:
-{{"ops": [{{"op": "set", "id": "<tracker id>", "value": <number>}} | {{"op": "adjust", "id": "<tracker id>", "delta": <number>}}], "whispers": ["<short keeper-side note>"]}}
+{{"ops": [{{"op": "set", "id": "<tracker id>", "value": <number>, "evidence": "<verbatim quote>"}} | {{"op": "adjust", "id": "<tracker id>", "delta": <number>, "evidence": "<verbatim quote>"}}], "whispers": ["<short keeper-side note>"]}}
 
 Rules:
-- "ops" ONLY for tracker changes the narration plainly establishes as fact (an item gained, a day passed on a day-tracker, a counter the story explicitly moved). When in doubt, do NOT write — whisper instead.
-- "whispers" (0-{max_whispers}, each <= {max_whisper_chars} chars, same language as the turn) for anything needing the keeper's judgment: scene/clock drift vs the fiction, a beat that likely deserved a dice check or sanity roll, players stuck without progress, an earned gain no tracker captures.
+- "ops" ONLY for tracker changes the narration plainly establishes as fact. "evidence" is REQUIRED: a short verbatim quote copied from the turn text that establishes the tracked quantity ITSELF changed. An op whose evidence is not an exact quote is discarded.
+- You see only each tracker's id/label/range, not what earns a point. Acquiring some item is NOT evidence for an item counter unless the text explicitly identifies it as one of the things that counter counts; time passing counts on a day-tracker only when the text states the story moved to a new day. If the tracker's meaning leaves any doubt, do NOT write — whisper instead.
+- "whispers" (0-{max_whispers}, each <= {max_whisper_chars} chars) for anything needing the keeper's judgment: scene/clock drift vs the fiction, a beat that likely deserved a dice check or sanity roll, players stuck without progress, an earned gain no tracker captures.
+- Write whispers in the language the turn text is written in (Chinese turn -> Chinese whispers).
 - Never invent trackers not listed. Never narrate. Empty ops and empty whispers is a fine answer.
 
 Trackers (id | label | value | range):
@@ -90,6 +93,12 @@ def _scribe_llm(services: Services) -> LLMClient:
         client = services.llm
     services._scribe_llm_cache = client  # noqa: SLF001 — our own bundle, deliberate cache slot
     return client
+
+
+def _squash_ws(text: str) -> str:
+    """Collapse all whitespace runs to single spaces so a model quote survives
+    line-wrapping differences while staying a verbatim-substring check."""
+    return " ".join(text.split())
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:
@@ -160,12 +169,18 @@ async def run_scribe(
     changed = False
     ops = parsed.get("ops")
     known = {str(entry.get("id")) for entry in trackers}
+    # The turn text as the model saw it (same slices) — the quote pool for op evidence.
+    haystack = _squash_ws(player_text[:_MAX_TURN_TEXT] + "\n" + reply_text[:_MAX_TURN_TEXT])
     if isinstance(ops, list):
         for op in ops[:MAX_OPS]:
             if not isinstance(op, dict):
                 continue
             var_id = str(op.get("id", ""))
             if var_id not in known:
+                continue
+            evidence = _squash_ws(str(op.get("evidence") or ""))
+            if len(evidence) < _MIN_EVIDENCE_CHARS or evidence not in haystack:
+                logger.debug("scribe: op on %s dropped (evidence not a verbatim quote)", var_id)
                 continue
             try:
                 if op.get("op") == "set":
