@@ -222,3 +222,65 @@ describe("performance templates (M19)", () => {
     ])
   })
 })
+
+describe("visible_when (protocol 2.1)", () => {
+  test("gates a block on a VALUE, not just a variable's presence", () => {
+    const block = (condition: string): PanelTemplateBlock => ({
+      kind: "text",
+      text: { en: "Survey open" },
+      visible_when: condition,
+    })
+    const vars: ModuleVariable[] = [{ id: "day", label: "Day", kind: "number", value: 46 }]
+
+    expect(resolvePanelBlocks([block("day >= 46")], vars, "en")).toEqual([{ kind: "text", text: "Survey open" }])
+    expect(resolvePanelBlocks([block("day >= 47")], vars, "en")).toEqual([])
+  })
+
+  test("hides fail-closed when the condition cannot be decided", () => {
+    const vars: ModuleVariable[] = [{ id: "day", label: "Day", kind: "number", value: 1 }]
+    for (const condition of ["missing >= 46", "day >=", "day > 'abc'"]) {
+      expect(resolvePanelBlocks([{ kind: "divider", visible_when: condition }], vars, "en")).toEqual([])
+    }
+  })
+
+  test("a hidden variable is invisible to the condition, exactly as it is to $var", () => {
+    // The renderer drops `hidden` rows BEFORE anything resolves, so a condition can
+    // never surface un-exposed module internals by testing them.
+    const vars: ModuleVariable[] = [
+      { id: "mvu.内部.真凶", label: "真凶", kind: "text", value: "顾晚棠", hidden: true },
+    ]
+    expect(
+      resolvePanelBlocks([{ kind: "text", text: "leak", visible_when: "mvu.内部.真凶 === '顾晚棠'" }], vars, "en"),
+    ).toEqual([])
+  })
+
+  test("gates each instance of a repeat independently", () => {
+    const vars: ModuleVariable[] = [
+      { id: "mvu.clues.ash", label: "ash", kind: "number", value: 1 },
+      { id: "mvu.clues.ring", label: "ring", kind: "number", value: 0 },
+    ]
+    const blocks: PanelTemplateBlock[] = [
+      {
+        repeat: {
+          prefix: "mvu.clues.",
+          block: { kind: "badge", label: { $leaf: "label" }, visible_when: "mvu.clues.ash === 1" },
+        },
+      },
+    ]
+    // The condition is the same for every instance here, so both render or neither —
+    // what matters is that a repeat's inner template honours the gate at all.
+    expect(resolvePanelBlocks(blocks, vars, "en")).toEqual([
+      { kind: "badge", label: "ash" },
+      { kind: "badge", label: "ring" },
+    ])
+    const gated: PanelTemplateBlock[] = [
+      {
+        repeat: {
+          prefix: "mvu.clues.",
+          block: { kind: "badge", label: { $leaf: "label" }, visible_when: "mvu.clues.ash === 9" },
+        },
+      },
+    ]
+    expect(resolvePanelBlocks(gated, vars, "en")).toEqual([])
+  })
+})

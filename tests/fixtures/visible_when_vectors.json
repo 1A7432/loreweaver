@@ -1,0 +1,94 @@
+{
+  "_comment": [
+    "GOLDEN VECTORS for the portable `visible_when` condexpr subset (M19 item 7, protocol 2.1).",
+    "",
+    "`visible_when` is evaluated CLIENT-side — values move at runtime, so no server-side",
+    "per-viewer filter could do it — which means every client implementation must agree",
+    "with the reference one, exactly. This table IS that agreement: it is consumed by",
+    "BOTH `uv run pytest tests/core/test_visible_when_vectors.py` (evaluating through",
+    "`core.condexpr`) and `bun test clients/protocol/src/condexpr.test.ts` (evaluating",
+    "through the TypeScript subset evaluator). A change either side that moves a single",
+    "row breaks both suites.",
+    "",
+    "This is the first brick of the LWF conformance suite: a second implementation of the",
+    "format proves itself against files like this one, not against prose.",
+    "",
+    "Each case: `expr` evaluated against `vars` (variable id -> value) must yield `expect`.",
+    "`expect: \"error\"` means the evaluation fails and the CALLER hides the block",
+    "(fail-closed) — never that it renders.",
+    "",
+    "`reject: true` cases are the other half of the contract: expressions the BUILD must",
+    "refuse, because they are outside the portable subset and two evaluators could read",
+    "them differently."
+  ],
+  "cases": [
+    {"expr": "day >= 46", "vars": {"day": 46}, "expect": true, "why": "the antu survey view's real gate"},
+    {"expr": "day >= 46", "vars": {"day": 45}, "expect": false},
+    {"expr": "day > 46", "vars": {"day": 46}, "expect": false},
+    {"expr": "day < 46", "vars": {"day": 45}, "expect": true},
+    {"expr": "day <= 46", "vars": {"day": 46}, "expect": true},
+
+    {"expr": "stage === 2", "vars": {"stage": 2}, "expect": true},
+    {"expr": "stage === 2", "vars": {"stage": "2"}, "expect": false, "why": "strict: a numeric string is not the number"},
+    {"expr": "stage == 2", "vars": {"stage": "2"}, "expect": true, "why": "loose: numeric strings coerce"},
+    {"expr": "stage !== 2", "vars": {"stage": "2"}, "expect": true},
+    {"expr": "stage != 2", "vars": {"stage": "2"}, "expect": false},
+
+    {"expr": "alerted === true", "vars": {"alerted": true}, "expect": true},
+    {"expr": "alerted === 1", "vars": {"alerted": true}, "expect": false, "why": "a bool is not the same TYPE as an int"},
+    {"expr": "alerted == 1", "vars": {"alerted": true}, "expect": true},
+    {"expr": "!alerted", "vars": {"alerted": false}, "expect": true},
+    {"expr": "!alerted", "vars": {"alerted": true}, "expect": false},
+    {"expr": "not alerted", "vars": {"alerted": false}, "expect": true, "why": "word form of !"},
+
+    {"expr": "stage === 2 && !alerted", "vars": {"stage": 2, "alerted": false}, "expect": true},
+    {"expr": "stage === 2 && !alerted", "vars": {"stage": 2, "alerted": true}, "expect": false},
+    {"expr": "stage === 2 || alerted", "vars": {"stage": 9, "alerted": true}, "expect": true},
+    {"expr": "stage === 2 and alerted", "vars": {"stage": 2, "alerted": true}, "expect": true},
+    {"expr": "stage === 2 or alerted", "vars": {"stage": 9, "alerted": false}, "expect": false},
+    {"expr": "(day >= 46 || alerted) && stage < 3", "vars": {"day": 10, "alerted": true, "stage": 2}, "expect": true},
+    {"expr": "(day >= 46 || alerted) && stage < 3", "vars": {"day": 10, "alerted": true, "stage": 3}, "expect": false},
+
+    {"expr": "false && day > 46", "vars": {}, "expect": false, "why": "short-circuit: the dead branch never resolves `day`"},
+    {"expr": "true || day > 46", "vars": {}, "expect": true, "why": "short-circuit on the other side"},
+
+    {"expr": "mvu.潮位 >= 7", "vars": {"mvu.潮位": 8}, "expect": true, "why": "dotted MVU leaf ids are ordinary paths"},
+    {"expr": "祭典日 === 3", "vars": {"祭典日": 3}, "expect": true, "why": "CJK identifiers are first-class"},
+    {"expr": "祭典日 === 3", "vars": {"祭典日": 2}, "expect": false},
+
+    {"expr": "note === 'lit'", "vars": {"note": "lit"}, "expect": true},
+    {"expr": "note === \"lit\"", "vars": {"note": "lit"}, "expect": true, "why": "either quote style"},
+    {"expr": "note > 'a'", "vars": {"note": "b"}, "expect": true, "why": "two strings order lexically"},
+    {"expr": "note > 5", "vars": {"note": "abc"}, "expect": "error", "why": "unorderable: hide, never guess"},
+
+    {"expr": "day", "vars": {"day": 3}, "expect": true, "why": "bare truthiness"},
+    {"expr": "day", "vars": {"day": 0}, "expect": false},
+    {"expr": "note", "vars": {"note": ""}, "expect": false},
+    {"expr": "note", "vars": {"note": "x"}, "expect": true},
+
+    {"expr": "missing === 1", "vars": {}, "expect": false, "why": "an absent variable is null, not an error"},
+    {"expr": "missing == 1", "vars": {}, "expect": false},
+    {"expr": "missing", "vars": {}, "expect": false},
+    {"expr": "!missing", "vars": {}, "expect": true},
+    {"expr": "missing > 5", "vars": {}, "expect": "error", "why": "ordering against null is unorderable -> hide"},
+    {"expr": "missing === null", "vars": {}, "expect": true},
+
+    {"expr": "true", "vars": {}, "expect": true},
+    {"expr": "false", "vars": {}, "expect": false},
+    {"expr": "null", "vars": {}, "expect": false},
+    {"expr": "0", "vars": {}, "expect": false},
+    {"expr": "1", "vars": {}, "expect": true}
+  ],
+  "rejected": [
+    {"expr": "day + 1 > 46", "why": "arithmetic — two evaluators can disagree on coercion"},
+    {"expr": "day - 1 > 46", "why": "arithmetic"},
+    {"expr": "day * 2 > 46", "why": "arithmetic"},
+    {"expr": "day / 2 > 23", "why": "arithmetic (integer vs float division)"},
+    {"expr": "day % 2 === 0", "why": "arithmetic"},
+    {"expr": "getvar('day') > 46", "why": "function calls are outside the subset"},
+    {"expr": "floor(day) > 46", "why": "function calls are outside the subset"},
+    {"expr": "clues[0] === 'ash'", "why": "bracket segments are outside the subset"},
+    {"expr": "clues['ash'] === 1", "why": "bracket segments are outside the subset"},
+    {"expr": "day >= -1", "why": "unary minus is arithmetic; write the comparison the other way round"}
+  ]
+}

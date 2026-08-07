@@ -32,7 +32,7 @@ from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM, ToolCall, assistant_text, assistant_tools, tool_call
 from net.keystore import Keystore
-from net.session import _MAX_INPUT_CHARS
+from net.session import PROTOCOL_VERSION, _MAX_INPUT_CHARS
 from net.state import build_room_state
 from net.tui_server import TuiServer, WsMember, _pack_media_message, _unpack_media_message
 from tests.agent.test_kp_selfplay import FIXTURES, SENTINEL, _tools_called_this_turn, kp_responder
@@ -105,7 +105,9 @@ async def test_join_with_good_key_gets_welcome_and_bad_key_gets_error():
         async with websockets.connect(url) as ws:
             welcome = await _join(ws, key, "Alice")
             assert welcome["type"] == "welcome"
-            assert welcome["protocol"] == "2.0"
+            # Pinned to the constant, not a literal: a minor bump is additive by
+            # definition, so the handshake test should not need editing for one.
+            assert welcome["protocol"] == PROTOCOL_VERSION
             assert "media" in welcome["features"]
             assert "audio" in welcome["features"]
             assert welcome["room"] == "demo"

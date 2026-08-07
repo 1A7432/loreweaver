@@ -1,13 +1,13 @@
 *English · [中文](protocol.zh.md)*
 
-# loreweaver networked TUI — wire protocol 2.0
+# loreweaver networked TUI — wire protocol 2.1
 
 This is the open, versioned wire protocol between a loreweaver server (started via
 `python -m app --serve`) and the OpenTUI terminal client. The engine itself
 (deterministic core + AI Keeper) is unaffected by transport; the transport-neutral
 session logic is `net.session.SessionCore`, and this document is the language-agnostic seam.
 
-Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"2.0"`. The same
+Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"2.1"`. The same
 frames + `join` handshake ride the transport; only the carrier + its framing differ:
 
 - **Iroh** (the transport `--serve` starts) — peer-to-peer QUIC. The server
@@ -22,11 +22,20 @@ frames + `join` handshake ride the transport; only the carrier + its framing dif
 
 Both carriers drive the same `SessionCore`/`RoomHub`.
 
-**Versioning.** `"2.0"` is a BREAKING consolidation of the 1.x line — the major version
-is the compatibility contract: a client and server must agree on the major (`2`), and a
-client should refuse (or clearly warn on) a `welcome.protocol` with a different major.
-Minor versions within a major are additive; a client ignores frame types and fields it
-does not recognize. What 2.0 broke, and the wart each break settles:
+**Versioning.** The major version is the compatibility contract: a client and server
+must agree on the major (`2`), and a client should refuse (or clearly warn on) a
+`welcome.protocol` with a different major. Minor versions within a major are additive;
+a client ignores frame types and fields it does not recognize.
+
+**2.1 (additive, M19)** adds the presentation surface: the `image` block kind and the
+four performance templates (`letter`, `clipping`, `map_pin`, `title_card`) in the `ui`
+vocabulary and in panel templates; `visible_when` on panel template blocks; and
+`state` `Resource.label` resolved to the viewer's own locale. A 2.0 client ignores an
+unknown block kind and an unknown template field, so it degrades to exactly what it
+rendered before.
+
+`"2.0"` was a BREAKING consolidation of the 1.x line. What it broke, and the wart each
+break settles:
 
 - `dice` frames are redesigned around the engine's neutral check-outcome contract: the
   1.x CoC-shaped `rank:int(-2..4)` / `level:string` fields are gone; a graded check
@@ -81,7 +90,7 @@ connections receive `error too_many_connections` before `join` is read.
 ## Server → Client
 
 - `welcome` — sent once, on a successful `join`:
-  `{type:"welcome", protocol:"2.0", features:["media","audio", "imagegen"?, "demo"?, "update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
+  `{type:"welcome", protocol:"2.1", features:["media","audio", "imagegen"?, "demo"?, "update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
   `version` is the server's own release version (compare it to the client's to detect a mismatch). The `"update"` feature appears only for a keeper on a server whose operator configured a self-update command, and gates the `admin_update_server` control.
   `demo` means the server is using its offline sample Keeper, vector support is
   enabled, and this specific Keeper room was empty when the server checked it.
@@ -311,6 +320,28 @@ addressing is decided by the pack build, so a panel can only point at a picture 
 own pack ships. Fetch it over the media byte channel like a tier-2 asset. Every other
 performance template is ordinary localized text; `map_pin`'s `x`/`y` may bind to
 `{$var}` so a marker moves with the story.
+
+**`visible_when` (2.1)** — any template block may carry `visible_when: "<condition>"`,
+evaluated CLIENT-side against that viewer's own `state.variables`. `$var`'s
+absent-means-hide cannot express a VALUE gate ("show once day >= 46"), and values move
+at runtime, so a server-side per-viewer filter is impossible. The grammar is a
+deliberately small, portable subset (the server refuses anything else at pack build, so
+a condition that reaches you is always in it):
+
+- comparisons `=== !== == != >= <= > <`; logic `&& || !` (word forms `and`/`or`/`not`);
+- literals: numbers, `'strings'`, `"strings"`, `true`/`false`/`null`/`undefined`;
+- references: bare dotted paths (CJK included), each looked up as a variable **id** in
+  `state.variables`; an absent one is `null`.
+- NOT in the subset: arithmetic, function calls (including `getvar`), bracket segments.
+
+Semantics follow the reference implementation, not JavaScript's own operators: `==`/`!=`
+coerce numeric strings, `===`/`!==` are strict (a bool is never strictly equal to a
+number), and an unorderable comparison (`"abc" > 5`, `null > 5`) is an ERROR. **A
+condition that errors, or that a client cannot evaluate, HIDES its block** — fail-closed,
+the same rule as an unresolved `$var`. Hidden variables are dropped before evaluation,
+so a condition can never surface what the wire filter withheld.
+`tests/fixtures/visible_when_vectors.json` is the shared conformance table every
+implementation runs.
 
 Localized strings are `{en,zh}` maps; the client picks its locale (fallback `en`).
 Picking a tier-1 `choices` option sends `panel_intent{kind:"choice", value: <option

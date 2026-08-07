@@ -23,11 +23,17 @@ Template additions over the v1.7 block vocabulary (deliberately tiny):
   substitutes. Instances are client-capped (:data:`MAX_REPEAT_INSTANCES`); ``repeat``
   does not nest.
 - localized strings are ``{en,zh}`` maps (or a plain string, treated as ``en``).
-- an ``image`` block names its picture by pack-relative ``src`` path; :func:`wire_panel`
-  resolves it to the ``{hash,size,mime}`` triple clients fetch over the media byte
-  channel. A path (not a hash, and never a ``$var`` binding) is the authored form so
-  the pack build owns the addressing — an author cannot aim a panel at a blob their
-  pack does not ship.
+- an ``image``/``map_pin`` block names its picture by pack-relative ``src`` path;
+  :func:`wire_panel` resolves it to the ``{hash,size,mime}`` triple clients fetch over
+  the media byte channel. A path (not a hash, and never a ``$var`` binding) is the
+  authored form so the pack build owns the addressing — an author cannot aim a panel
+  at a blob their pack does not ship.
+- any block may carry ``visible_when: "<condition>"`` (protocol 2.1) — a
+  `core.condexpr` expression the CLIENT evaluates against its own ``state.variables``.
+  ``$var``'s absent-means-hide cannot express value gating ("show once day >= 46"), and
+  values move at runtime so a server-side per-viewer filter is impossible. The build
+  validates syntax AND portability (`core.condexpr.check_subset`), so an expression a
+  second client implementation could read differently never ships.
 
 The privilege model stays one sentence long: a panel acts as the player viewing it.
 ``audience`` is resolved server-side into per-viewer manifests and never rides the
@@ -43,6 +49,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
 
+from core.condexpr import MAX_EXPR_LEN, CondExprError, check_subset, compile_expression
 from core.hooks import (
     MAX_UI_BODY_CHARS,
     MAX_UI_CAPTION_CHARS,
@@ -202,10 +209,39 @@ def _require_keys(raw: Mapping[str, Any], label: str, *, required: set[str], opt
         raise ValueError(f"{label}: unknown keys {sorted(unknown)}")
 
 
+def _validated_visible_when(raw: Any, label: str) -> str:
+    """One ``visible_when`` condition, checked at BUILD time for both syntax and
+    portability. It is evaluated CLIENT-side (values move at runtime, so no server-side
+    per-viewer filter could do it), which makes every client an implementation of the
+    same grammar — so an expression outside `core.condexpr`'s portable subset is
+    rejected here rather than shipped to diverge in the field."""
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError(f"{label}: must be a non-empty condition string")
+    condition = raw.strip()
+    if len(condition) > MAX_EXPR_LEN:
+        raise ValueError(f"{label}: condition exceeds {MAX_EXPR_LEN} chars")
+    try:
+        # probe="1": a viewer's variables may be text, so the build must not reject
+        # `note > 'a'` for a type mismatch only the runtime can actually have.
+        compile_expression(condition, probe="1")
+        check_subset(condition)
+    except CondExprError as exc:
+        raise ValueError(f"{label}: {exc}") from exc
+    return condition
+
+
 def _validate_block(raw: Any, label: str, *, in_repeat: bool = False) -> dict[str, Any]:
-    """One template block, author-time strict. Returns the normalized block dict."""
+    """One template block, author-time strict. Returns the normalized block dict.
+
+    ``visible_when`` is accepted on ANY block (including a repeat's inner template) and
+    is stripped before the per-kind schema runs, so each kind's key check stays exact."""
     if not isinstance(raw, dict):
         raise ValueError(f"{label}: each block must be a mapping")
+    if "visible_when" in raw:
+        condition = _validated_visible_when(raw["visible_when"], f"{label}.visible_when")
+        block = _validate_block({key: value for key, value in raw.items() if key != "visible_when"}, label, in_repeat=in_repeat)
+        block["visible_when"] = condition
+        return block
     if "repeat" in raw:
         if in_repeat:
             raise ValueError(f"{label}: repeat does not nest")

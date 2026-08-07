@@ -1,7 +1,8 @@
-// Protocol 2.0 — the breaking consolidation of the 1.x line. The MAJOR version is
-// the compatibility contract: refuse (or clearly warn on) a `welcome.protocol`
-// whose major differs; minors within a major stay additive.
-export const PROTOCOL_VERSION = "2.0" as const
+// Protocol 2.1 — the MAJOR version is the compatibility contract: refuse (or clearly
+// warn on) a `welcome.protocol` whose major differs; minors within a major stay
+// additive. 2.1 adds the M19 presentation surface: the `image` and performance block
+// kinds, and `visible_when` on panel template blocks. A 2.0 client ignores all of it.
+export const PROTOCOL_VERSION = "2.1" as const
 
 export const FrameType = {
   Join: "join",
@@ -501,6 +502,13 @@ export interface PanelDividerBlock {
   kind: "divider"
 }
 
+// v2.1 additive: every panel template block may carry `visible_when` — a condexpr
+// condition the CLIENT evaluates against its own `state.variables` (see `condexpr.ts`).
+// Absent means visible; an undecidable condition hides the block (fail-closed).
+export interface PanelVisibility {
+  visible_when?: string
+}
+
 // The panel form of `UiImageBlock`. Authors write a pack-relative `src` path; the
 // server resolves it to this content-addressed triple at manifest build, so a panel
 // can only ever point at a picture its own pack ships. No `$var` binding: the address
@@ -572,7 +580,9 @@ export interface PanelTitleCardBlock {
   act?: PanelTextValue
 }
 
-export type PanelTemplateBlock =
+export type PanelTemplateBlock = PanelTemplateBlockKind & PanelVisibility
+
+type PanelTemplateBlockKind =
   | PanelMeterBlock
   | PanelStatBlock
   | PanelBadgeBlock

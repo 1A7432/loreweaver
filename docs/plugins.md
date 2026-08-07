@@ -401,6 +401,33 @@ effort and risk:
   build folds it into the same content-addressed asset pipeline as tier-2 code, and the
   manifest carries its hash. Authors never write hashes, and a panel can never point at
   a picture from outside its own pack. Text-first clients show the caption line.
+
+  **Value-gating a block: `visible_when`.** `{$var}` hides a block when its variable is
+  absent; `visible_when` hides it based on the VALUE:
+
+  ```yaml
+  - {kind: text, text: {en: The survey is open., zh: 巡视开始了。}, visible_when: "day >= 46"}
+  - {kind: badge, label: {zh: 已警觉}, visible_when: "stage === 2 && !alerted"}
+  ```
+
+  It is evaluated by the CLIENT, against that viewer's own `state.variables` — values
+  move at runtime, so nothing else is possible. That makes every client an
+  implementation of the same grammar, so the grammar is deliberately tiny: comparisons,
+  `&& || !`, literals, and bare variable ids. **Arithmetic, `getvar()`, any function
+  call and `a[0]` are refused at build time** — each is somewhere two clients could
+  quietly disagree, and a silent disagreement about visibility is a spoiler. Need
+  `day >= -1`? Write `day < 0` the other way round.
+
+  Two rules to author by:
+
+  - **A player panel's `visible_when` may only reference PLAYER-VISIBLE variables.** The
+    condition string itself ships with your pack — every viewer's client holds it — so a
+    keeper-only tracker named in a player panel's condition is a leak of that tracker's
+    NAME even though its value never arrives. (The value genuinely does not: hidden
+    variables are dropped before evaluation, so the block simply never shows.)
+  - **Undecidable means hidden.** A condition that errors, or names something absent in
+    a way it cannot compare, hides its block — never shows it. Write conditions that
+    read correctly when the variable is missing.
 - **Tier 2 — sandboxed custom views** (pack format + wire landed; the rich-client host
   ships with the studio): real HTML/JS/CSS in a locked-down iframe for interactive maps
   and bespoke sheets. `entry:` marks a panel tier 2; it must declare every asset it

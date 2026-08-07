@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from core.pack import build_pack, install_pack
+from net.session import PROTOCOL_VERSION
 from gateway.ops import set_enabled_panel_packs
 
 PACK_ID = "stagekit"
@@ -82,7 +83,7 @@ async def install_kit_pack(services, chat_key: str, tmp_path: Path, *, kit: str 
         packs_dir=data_dir / "packs",
         skills_dir=data_dir / "skills",
         rulepacks_dir=data_dir / "rulepacks",
-        current_protocol="2.0",
+        current_protocol=PROTOCOL_VERSION,
         current_server="1.0.0",
     )
     await set_enabled_panel_packs(services.store, chat_key, [PACK_ID])

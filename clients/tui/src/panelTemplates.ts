@@ -8,6 +8,7 @@
 // discipline applies to malformed shapes: resolve to nothing, never to a guess.
 
 import {
+  isVisible,
   MAX_PANEL_REPEAT_INSTANCES,
   type ModuleVariable,
   type PanelTemplateBlock,
@@ -37,6 +38,14 @@ const PERFORMANCE_OPTIONAL: Record<string, readonly string[]> = {
 type Resolved = { ok: true; value: unknown } | { ok: false }
 
 const MISS: Resolved = { ok: false }
+
+/** One condexpr reference: the viewer's own variable of that id, `null` when absent.
+ * Nothing else is addressable — the conformance table (`tests/fixtures/
+ * visible_when_vectors.json`) pins this exact rule for every implementation. */
+function variableValue(variables: ModuleVariable[], path: string): unknown {
+  const match = variables.find((entry) => entry.id === path)
+  return match === undefined ? null : match.value
+}
 
 function isVarBinding(value: unknown): value is { $var: string } {
   return typeof value === "object" && value !== null && "$var" in value
@@ -97,6 +106,11 @@ function resolveOne(
   leaf?: ModuleVariable,
 ): UiBlock | undefined {
   if ("repeat" in block) return undefined // expanded by resolvePanelBlocks; nesting resolves to nothing
+  // `visible_when` (protocol 2.1): the value gate `$var`'s absent-means-hide cannot
+  // express. Evaluated against the SAME visible variable set every binding sees, so a
+  // condition can never widen visibility past the server's wire filter, and an
+  // undecidable condition hides its block (fail-closed, like every other miss here).
+  if (!isVisible(block.visible_when, (path) => variableValue(variables, path))) return undefined
   if (block.kind === "divider") return { kind: "divider" }
   if (block.kind === "meter") {
     const label = resolveText(block.label, variables, locale, leaf)

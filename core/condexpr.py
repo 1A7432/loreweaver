@@ -142,11 +142,15 @@ class _Evaluator:
         tokens: list[tuple[str, Any]],
         resolve: Resolver,
         functions: Mapping[str, Callable[..., Any]] | None = None,
+        probe: Any = 1,
     ) -> None:
         self._tokens = tokens
         self._pos = 0
         self._resolve = resolve
         self._functions = functions or {}
+        # What a SHORT-CIRCUITED reference resolves to while its branch is parsed but
+        # not evaluated (and what a dry run resolves everything to). See `_skip_and_expr`.
+        self._probe = probe
 
     # -- token helpers -----------------------------------------------------
 
@@ -290,19 +294,19 @@ class _Evaluator:
 
     # -- short-circuit skippers (parse without resolving) -------------------
     # The skipped side still walks the normal evaluator over a BENIGN resolver;
-    # every reference resolves to 1 so arithmetic/ordering in the dead branch
+    # every reference resolves to the probe so arithmetic/ordering in the dead branch
     # stays well-typed (a None placeholder used to make `false && x > 5` blow
     # up as "cannot order None and 5" instead of short-circuiting cleanly).
 
     def _skip_and_expr(self) -> None:
-        resolve, self._resolve = self._resolve, lambda _path: 1
+        resolve, self._resolve = self._resolve, lambda _path: self._probe
         try:
             self._and_expr()
         finally:
             self._resolve = resolve
 
     def _skip_not_expr(self) -> None:
-        resolve, self._resolve = self._resolve, lambda _path: 1
+        resolve, self._resolve = self._resolve, lambda _path: self._probe
         try:
             self._not_expr()
         finally:
@@ -413,6 +417,7 @@ def compile_expression(
     expression: str,
     *,
     functions: Mapping[str, Callable[..., Any]] | None = None,
+    probe: Any = 1,
 ) -> Callable[[Resolver], Any]:
     """Tokenize `expression` ONCE and return a reusable evaluator.
 
@@ -423,13 +428,18 @@ def compile_expression(
     tokens = _tokenize(expression)
     if not tokens:
         raise CondExprError("empty expression")
-    # Eager syntax check: evaluate once against a benign all-ones resolver so a
+    # Eager syntax check: evaluate once against a benign all-probe resolver so a
     # malformed expression fails at COMPILE time (pack load), not mid-check.
-    # Every reference resolves to 1, keeping arithmetic/comparisons well-typed.
-    _Evaluator(tokens, lambda _path: 1, functions).evaluate()
+    #
+    # `probe` is what every reference resolves to during that dry run. The default `1`
+    # suits a closed NUMERIC namespace (the resolution DSL). A caller whose variables
+    # may be strings passes `"1"` instead — it coerces as a number AND orders as a
+    # string, so `note > 'a'` is not falsely rejected at build time for a type the
+    # build cannot know yet.
+    _Evaluator(tokens, lambda _path: probe, functions, probe).evaluate()
 
     def run(resolve: Resolver) -> Any:
-        return _Evaluator(tokens, resolve, functions).evaluate()
+        return _Evaluator(tokens, resolve, functions, probe).evaluate()
 
     return run
 
@@ -458,6 +468,46 @@ def referenced_names(
             continue
         names.add(str(value))
     return frozenset(names)
+
+
+# ---------------------------------------------------------------------------
+# The PORTABLE subset (M19 item 7)
+# ---------------------------------------------------------------------------
+
+# `visible_when` is evaluated CLIENT-side — values move at runtime, so no server-side
+# per-viewer filter could do it — which means every client implementation must agree
+# with this one, exactly, forever. The way to keep that promise is to make the grammar
+# small enough to reimplement without ambiguity: comparisons, boolean logic, literals
+# and bare dotted references. Nothing else.
+#
+# Arithmetic, `getvar()`, any function call and bracket segments are OUT, and the
+# omissions are deliberate rather than incidental: each is a place two evaluators could
+# quietly disagree (integer vs float division, string concatenation, coercion inside a
+# call). Growing this set later is additive and safe; shrinking it would break shipped
+# packs, so v1 starts conservative. An author who wants `hp >= -1` writes `hp < 0`
+# the other way round.
+SUBSET_OPERATORS = frozenset({"===", "!==", "==", "!=", ">=", "<=", ">", "<", "&&", "||", "!", "(", ")", "."})
+
+
+class CondExprSubsetError(CondExprError):
+    """`expression` parses, but uses a construct outside the portable subset."""
+
+
+def check_subset(expression: str) -> None:
+    """Raise :class:`CondExprSubsetError` when ``expression`` leaves the portable
+    subset (see :data:`SUBSET_OPERATORS`). Syntax itself is NOT checked here —
+    callers pair this with `compile_expression`, which owns that."""
+    tokens = _tokenize(expression)
+    if not tokens:
+        raise CondExprSubsetError("empty expression")
+    for index, (kind, value) in enumerate(tokens):
+        if kind == "op":
+            if value not in SUBSET_OPERATORS:
+                raise CondExprSubsetError(f"{value!r} is outside the portable subset")  # i18n-exempt: author diagnostic, wrapped by the pack layer
+        elif kind == "ident":
+            follower = tokens[index + 1] if index + 1 < len(tokens) else None
+            if follower == ("op", "("):
+                raise CondExprSubsetError(f"{value}(): function calls are outside the portable subset")  # i18n-exempt: author diagnostic, wrapped by the pack layer
 
 
 def evaluate_bool(expression: str, resolve: Resolver) -> bool:

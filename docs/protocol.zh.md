@@ -1,6 +1,6 @@
 *[English](protocol.md) · 中文*
 
-# loreweaver networked TUI — wire protocol 2.0
+# loreweaver networked TUI — wire protocol 2.1
 
 这是 loreweaver 服务器（通过 `python -m app --serve` 启动）与 OpenTUI 终端客户端之间开放、版本化的 wire protocol。引擎本身（确定性核心 + AI Keeper）不受传输方式影响；传输中立的会话逻辑位于 `net.session.SessionCore`，本文档是与语言无关的接口定义。
 
@@ -39,7 +39,7 @@
 ## Server → Client
 
 - `welcome` — 成功 `join` 时发送一次：
-  `{type:"welcome", protocol:"2.0", features:["media","audio","imagegen"?,"demo"?,"update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
+  `{type:"welcome", protocol:"2.1", features:["media","audio","imagegen"?,"demo"?,"update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
   `version` 是服务端自身的发布版本(与客户端对比可发现版本不一致)。`"update"` 特性仅在守秘人连接且服务端运维配置了自更新命令时出现，用于门控 `admin_update_server`。
   `demo` 表示服务端正在使用离线示例 Keeper、向量功能已启用，且本次检查时这个守秘人房间为空。服务端会在房间回合锁内再次检查，过期 flag 不会覆盖战役状态；客户端收到 `admin_config{using_demo:false}`（例如从模型页保存后）会立即移除入口，否则重连时重新计算，过期操作也会被服务端拒绝。
 - `error` — 本地化的故障通知；`bad_key`、`join_timeout` 和 `too_many_connections` 关闭连接（它们仅在 `join` 握手期间或之前发生），其他不关闭：
@@ -139,6 +139,15 @@
 - `{"repeat": {"prefix": "<id 前缀>", "block": <模板块>}}` 对每个 id 以该前缀开头的可见变量渲染一个实例（≤ 32 个）；块内 `{"$leaf": "id"|"label"|"value"}` 代入匹配变量的对应字段。
 
 `image` 与 `map_pin` 是由服务端**改写**而非原样透传的模板块：作者写包内相对路径 `src`，清单里携带的是解析后的 `{hash, mime, size}` 加该块自己的（本地化）字段——寻址由打包过程决定，因此面板只可能指向**它自己这个包所附带**的图片。拉取方式与 Tier-2 资产一致，走媒体字节通道。其余演出模板都是普通的本地化文本；`map_pin` 的 `x`/`y` 可以绑定 `{$var}`，让标记随剧情移动。
+
+**`visible_when`（2.1）**——任何模板块都可以带 `visible_when: "<条件>"`，由**客户端**针对本观看者自己的 `state.variables` 求值。`$var` 的「不存在即隐藏」表达不了**按值**开关（「day >= 46 之后才显示」），而值在运行时才变，服务端无法按观看者预先过滤。语法是一个刻意很小的**可移植子集**（子集之外的表达式在打包时就被拒绝，所以到达客户端的条件必然在子集内）：
+
+- 比较 `=== !== == != >= <= > <`；逻辑 `&& || !`（也接受 `and`/`or`/`not`）；
+- 字面量：数字、`'字符串'`、`"字符串"`、`true`/`false`/`null`/`undefined`；
+- 引用：裸的点分路径（含中日韩文），按**变量 id** 在 `state.variables` 里查；查不到即 `null`。
+- **不在子集内**：算术、函数调用（含 `getvar`）、方括号取值。
+
+语义以参考实现为准，而非 JavaScript 自己的运算符：`==`/`!=` 会对数字字符串做强制转换，`===`/`!==` 是严格比较（布尔永远不严格等于数字），无法比较大小的组合（`"abc" > 5`、`null > 5`）是**错误**。**求值出错、或客户端无法求值的条件一律隐藏该块**——fail-closed，与 `$var` 落空同一条规则。隐藏变量在求值前就被剔除，因此条件永远无法把线上过滤掉的东西试探出来。`tests/fixtures/visible_when_vectors.json` 是各实现共用的一致性向量表。
 
 本地化文本是 `{en,zh}` 映射；客户端按自己语言选取（回退 `en`）。点选 Tier-1 `choices` 选项发送 `panel_intent{kind:"choice", value: <选项的 input>}`。文本客户端（TUI）用既有块渲染器画 Tier-1，`tray`/`modal` 折进侧栏分区，Tier-2 渲染其 `fallback` 块，对显式 `fallback: null` 显示一行本地化的"请在富客户端查看"。
 
