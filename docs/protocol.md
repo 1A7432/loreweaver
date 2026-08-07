@@ -149,6 +149,17 @@ connections receive `error too_many_connections` before `join` is read.
   `| {kind:"divider"}`
   `| {kind:"choices", prompt?:string, options:[{id:string,label:string,input:string}]}`
   `| {kind:"image", hash:string, mime?:string, size?:int, caption?:string, alt?:string}`
+  `| {kind:"letter", body:string, from?:string, to?:string, date?:string}`
+  `| {kind:"clipping", headline:string, body:string, source?:string, date?:string}`
+  `| {kind:"map_pin", hash:string, mime?:string, size?:int, label:string, x:number, y:number, note?:string}`
+  `| {kind:"title_card", title:string, subtitle?:string, act?:string}`
+  The last four are the M19 PERFORMANCE templates: declarative, not markup. A rich
+  client styles a `letter` as stationery and a `title_card` as a full-bleed act card;
+  a text-first client prints the same fields as lines. `map_pin`'s `x`/`y` are
+  FRACTIONS of the map image's own box (0..1), so a client scales the marker to
+  whatever size it draws the map at. They are emitted by the room's Stage Director
+  (`agent.stage_director`) on story beats and are equally available to hooks and
+  pack panels.
   An `image` block names a picture by CONTENT HASH — the same address the media byte
   channel answers (`{op:"get", hash}`). The server only ever emits a hash reachable
   from THIS room (its own media, or an asset of a pack enabled in it) and stamps the
@@ -293,11 +304,13 @@ modvar ids, `mvu.`-prefixed leaves):
   instance per visible variable whose id starts with the prefix (≤ 32 instances);
   inside, `{"$leaf": "id"|"label"|"value"}` substitutes the matched variable's field.
 
-An `image` block is the one template block the server rewrites rather than passes
-through: the author writes a pack-relative `src` path, and the manifest carries
-`{kind:"image", hash, mime, size, caption?, alt?}` (localized `caption`/`alt`) —
+`image` and `map_pin` are the template blocks the server rewrites rather than passes
+through: the author writes a pack-relative `src` path, and the manifest carries the
+resolved `{hash, mime, size}` alongside the block's own (localized) fields —
 addressing is decided by the pack build, so a panel can only point at a picture its
-own pack ships. Fetch it over the media byte channel like a tier-2 asset.
+own pack ships. Fetch it over the media byte channel like a tier-2 asset. Every other
+performance template is ordinary localized text; `map_pin`'s `x`/`y` may bind to
+`{$var}` so a marker moves with the story.
 
 Localized strings are `{en,zh}` maps; the client picks its locale (fallback `en`).
 Picking a tier-1 `choices` option sends `panel_intent{kind:"choice", value: <option

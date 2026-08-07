@@ -75,7 +75,20 @@ MAX_UI_TEXT_CHARS = 2_000
 MAX_UI_ID_CHARS = 64
 MAX_UI_OPTION_INPUT_CHARS = 200
 MAX_UI_CAPTION_CHARS = 300
-UI_BLOCK_KINDS = frozenset({"meter", "stat", "badge", "text", "divider", "choices", "image"})
+MAX_UI_BODY_CHARS = 4_000
+# The M19 performance-grade templates. They are DECLARATIVE, not markup: a rich client
+# styles a `letter` as stationery and a `title_card` as a full-bleed act card, while a
+# text-first client prints the same fields as lines. The Stage Director's creativity is
+# which template, what content, what moment — directors do not weld the stage.
+UI_BLOCK_KINDS = frozenset(
+    {
+        "meter", "stat", "badge", "text", "divider", "choices",
+        "image", "letter", "clipping", "map_pin", "title_card",
+    }
+)
+# Blocks addressing a blob by content hash — every one passes the room reachability
+# gate (`gateway.ui_media`) before it may reach the wire.
+UI_HASH_BLOCK_KINDS = frozenset({"image", "map_pin"})
 UI_PANELS = frozenset({"inline", "sidebar"})
 UI_BADGE_TONES = frozenset({"info", "warn", "danger"})
 UI_TEXT_STYLES = frozenset({"quote", "warning"})
@@ -157,6 +170,53 @@ def _finite_number(value: Any) -> int | float | None:
     return value if math.isfinite(value) else None
 
 
+# One table drives every performance template: required fields (the block drops without
+# them) then optional ones, each with its cap. Adding a template is a row here plus a
+# renderer per client — deliberately no per-kind branching to keep in sync.
+_PERFORMANCE_FIELDS: dict[str, tuple[tuple[str, int], ...]] = {
+    "letter": (("body", MAX_UI_BODY_CHARS),),
+    "clipping": (("headline", MAX_UI_LABEL_CHARS), ("body", MAX_UI_BODY_CHARS)),
+    "map_pin": (("label", MAX_UI_LABEL_CHARS),),
+    "title_card": (("title", MAX_UI_LABEL_CHARS),),
+}
+_PERFORMANCE_OPTIONAL: dict[str, tuple[tuple[str, int], ...]] = {
+    "letter": (("from", MAX_UI_LABEL_CHARS), ("to", MAX_UI_LABEL_CHARS), ("date", MAX_UI_LABEL_CHARS)),
+    "clipping": (("source", MAX_UI_LABEL_CHARS), ("date", MAX_UI_LABEL_CHARS)),
+    "map_pin": (("note", MAX_UI_CAPTION_CHARS),),
+    "title_card": (("subtitle", MAX_UI_CAPTION_CHARS), ("act", MAX_UI_LABEL_CHARS)),
+}
+
+
+def _sanitize_performance_block(kind: str, raw: dict[str, Any]) -> dict[str, Any] | None:
+    """One M19 performance template (`letter`/`clipping`/`map_pin`/`title_card`).
+
+    Same stance as every other kind: a missing/mistyped REQUIRED field drops the block,
+    an invalid OPTIONAL one is stripped and the block kept."""
+    block: dict[str, Any] = {"kind": kind}
+    for name, cap in _PERFORMANCE_FIELDS[kind]:
+        value = _capped_str(raw.get(name), cap)
+        if not value or not value.strip():
+            return None
+        block[name] = value
+    if kind == "map_pin":
+        # The pin needs a map to sit on and a place to sit: fractional coordinates
+        # (0..1 of the image's own box) so a client scales the marker to any render size.
+        raw_hash = raw.get("hash")
+        if not isinstance(raw_hash, str) or not _SHA256_RE.match(raw_hash.strip().casefold()):
+            return None
+        x, y = _finite_number(raw.get("x")), _finite_number(raw.get("y"))
+        if x is None or y is None:
+            return None
+        block["hash"] = raw_hash.strip().casefold()
+        block["x"] = min(1.0, max(0.0, float(x)))
+        block["y"] = min(1.0, max(0.0, float(y)))
+    for name, cap in _PERFORMANCE_OPTIONAL[kind]:
+        value = _capped_str(raw.get(name), cap)
+        if value and value.strip():
+            block[name] = value
+    return block
+
+
 def _sanitize_ui_block(raw: Any) -> dict[str, Any] | None:
     """One validated, whitelist-rebuilt UI block, or `None` when `raw` fails its kind's
     schema (bad blocks drop). Required fields of the wrong type drop the block; invalid
@@ -217,6 +277,8 @@ def _sanitize_ui_block(raw: Any) -> dict[str, Any] | None:
         if alt:
             block["alt"] = alt
         return block
+    if kind in ("letter", "clipping", "map_pin", "title_card"):
+        return _sanitize_performance_block(kind, raw)
     # kind == "choices": an option missing any of id/label/input is dropped; a choices
     # block with no valid option left renders nothing, so it drops entirely.
     raw_options = raw.get("options")

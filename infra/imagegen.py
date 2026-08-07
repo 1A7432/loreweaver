@@ -64,8 +64,23 @@ class ImageGenError(RuntimeError):
 
 
 class ImageGen(Protocol):
-    async def generate(self, prompt: str, *, size: str = "1024x1024") -> tuple[bytes, str]:
-        """Generate one image. Returns ``(bytes, mime)``."""
+    async def generate(
+        self,
+        prompt: str,
+        *,
+        size: str = "1024x1024",
+        reference: bytes | None = None,
+        reference_mime: str = "",
+    ) -> tuple[bytes, str]:
+        """Generate one image. Returns ``(bytes, mime)``.
+
+        ``reference`` is an optional 定妆 reference image (M19): consistency across a
+        module's art is the hard part, so the Stage Director sends the author's fixed
+        portrait with every request. Providers that expose an image-edit endpoint
+        condition on it; the rest ignore it and fall back to prompt-only generation —
+        the structural half of the discipline (no reference → no portrait) is enforced
+        by the caller regardless.
+        """
 
 
 class OpenAICompatImageGen:
@@ -84,7 +99,14 @@ class OpenAICompatImageGen:
         self._token_provider = token_provider
         self._timeout = timeout
 
-    async def generate(self, prompt: str, *, size: str = "1024x1024") -> tuple[bytes, str]:
+    async def generate(
+        self,
+        prompt: str,
+        *,
+        size: str = "1024x1024",
+        reference: bytes | None = None,
+        reference_mime: str = "",
+    ) -> tuple[bytes, str]:
         prompt = str(prompt or "").strip()
         if not prompt:
             raise ImageGenError("imagegen_bad_prompt")
@@ -115,12 +137,25 @@ class OpenAICompatImageGen:
         else:
             request_body["size"] = requested_size
 
+        base = _base_url(self._settings).rstrip("/")
         try:
-            response = await client.post(
-                f"{_base_url(self._settings).rstrip('/')}/images/generations",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json=request_body,
-            )
+            if reference:
+                # A 定妆 reference means image-to-image, which is a DIFFERENT endpoint
+                # and a multipart body on the OpenAI-compatible surface. `response_format`
+                # is not accepted there; edits answer b64 by default.
+                request_body.pop("response_format", None)
+                response = await client.post(
+                    f"{base}/images/edits",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    data={key: str(value) for key, value in request_body.items()},
+                    files={"image": ("reference.png", reference, reference_mime or "image/png")},
+                )
+            else:
+                response = await client.post(
+                    f"{base}/images/generations",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json=request_body,
+                )
         except httpx.TimeoutException as exc:
             raise ImageGenError("imagegen_timeout") from exc
         except httpx.HTTPError as exc:
@@ -146,15 +181,33 @@ class OpenAICompatImageGen:
 
 
 class FakeImageGen:
-    """Deterministic offline image generator for tests."""
+    """Deterministic offline image generator for tests.
+
+    Records whether a 定妆 reference rode along (`calls[i]["reference"]` is its byte
+    length as a string, `"0"` for a prompt-only request), so the M19 image discipline
+    is testable without a provider."""
 
     def __init__(self, data: bytes = _PNG_1X1, mime: str = "image/png") -> None:
         self.data = data
         self.mime = mime
         self.calls: list[dict[str, str]] = []
 
-    async def generate(self, prompt: str, *, size: str = "1024x1024") -> tuple[bytes, str]:
-        self.calls.append({"prompt": str(prompt), "size": str(size)})
+    async def generate(
+        self,
+        prompt: str,
+        *,
+        size: str = "1024x1024",
+        reference: bytes | None = None,
+        reference_mime: str = "",
+    ) -> tuple[bytes, str]:
+        self.calls.append(
+            {
+                "prompt": str(prompt),
+                "size": str(size),
+                "reference": str(len(reference or b"")),
+                "reference_mime": reference_mime,
+            }
+        )
         return self.data, self.mime
 
 

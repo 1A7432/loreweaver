@@ -49,6 +49,38 @@ class ScribeSettings(BaseModel):
     reasoning_effort: str = ""  # "" = provider default; "low" is plenty for ledger work
 
 
+class DirectorSettings(BaseModel):
+    """The Stage Director (`agent.stage_director`) — 演出导演.
+
+    The player-side presentation actor: on BEATS (not every turn — the Scribe's
+    场记 lane classifies them) it decides what the table SEES and HEARS. Beats are
+    rare, so unlike the Scribe this defaults to the main `TRPG_LLM__*` client:
+    presentation is a taste judgment, and a cheap model shows it. Point the
+    `TRPG_DIRECTOR__*` fields at another model to override.
+
+    Image generation is additionally gated by three things, all of which must
+    agree: `images` here, a configured `TRPG_IMAGEGEN__*` endpoint, and the
+    module's own presentation kit (an author may declare `generation: pack_only`
+    — 宁缺毋滥 — and no config can overrule that veto).
+    """
+
+    enabled: bool = True
+    provider: str = ""  # "" -> reuse the main LLM client
+    api_key: str = ""
+    base_url: str = ""
+    chat_model: str = ""
+    reasoning_effort: str = ""  # "" = provider default
+
+    images: bool = True
+    # Per-ROOM lifetime cap on generated art (a campaign, not a session — rooms are
+    # long-lived). Reached, the Director keeps staging with pack art and pre-generated
+    # subjects; it simply stops spending.
+    max_images: int = 24
+    # Warm at most this many subjects per beat (慢菜先备): latency hides between beats
+    # instead of in front of one.
+    pregen_per_beat: int = 2
+
+
 class CensorSettings(BaseModel):
     """Content-moderation wordlist for `gateway.ops.Censor`.
 
@@ -139,6 +171,7 @@ class Settings(BaseSettings):
     tui: TuiSettings = TuiSettings()
     censor: CensorSettings = CensorSettings()
     scribe: ScribeSettings = ScribeSettings()
+    director: DirectorSettings = DirectorSettings()
 
     def __init__(self, **values: Any) -> None:
         env_file = values.pop("_env_file", os.environ.get("TRPG_ENV_FILE") or ".env")

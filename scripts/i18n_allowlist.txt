@@ -30,3 +30,7 @@ infra/pack_source.py
 # Developer-facing ValueError diagnostics in the panels.yaml schema validator (M15); raised into
 # core/pack.py's PackError wrapping (author-time build/install errors), same convention as above.
 core/panels.py
+
+# Same convention for the presentation.yaml (演出资料包) schema validator (M19): author-time
+# diagnostics, wrapped by core/pack.py into localized PackError text before any human sees them.
+core/presentation.py

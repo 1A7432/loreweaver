@@ -424,6 +424,55 @@ The rules that make this safe are the same iron rules, extended to UI:
 Keeper commands: `.panels` / `.panels list` (anyone), `.panels enable|disable <packId>`
 (keeper). Hooks address panels with `emitPanel("<packId>/<panelId>", payload)` (C.1).
 
+### The presentation kit — giving your module a Stage Director (M19)
+
+Panels are the table's instruments. The **presentation kit** is the creative brief for
+the actor that plays them: the Stage Director (演出导演) wakes on story BEATS — a scene
+changing, an act turning over, a handout appearing, a critical spike — and decides what
+the table SEES and HEARS. It never narrates, never rolls, never touches keeper
+knowledge; it picks a form and fills it from what the players have already read.
+
+Ship `ui/presentation.yaml` and declare it under `contents.presentation` (one per pack):
+
+```yaml
+version: 1
+generation: allow            # or `pack_only` — see 宁缺毋滥 below
+style:
+  keywords: {en: "ink wash, muted indigo, 1925 coastal China", zh: "水墨, 靛青, 一九二五浙东"}
+  banned: [text overlays, modern clothing]
+subjects:                    # what may be pictured, and how
+  - id: gu-wantang
+    kind: npc                # npc | location | item
+    name: {en: Gu Wantang, zh: 顾晚棠}
+    ref: assets/gu-wantang.png          # the 定妆 (fixed-portrait) REFERENCE image
+    prompt: "a woman in her thirties, plain dark coat, wet hair"
+audio:                       # the cues the Director may call for
+  - {id: chao-yong, layer: bgm, asset: assets/chao-yong.mp3, title: 潮涌}
+```
+
+Three rules carry the image discipline, and the first two are structural — not requests
+the model can ignore:
+
+- **Ref-mandatory (定妆).** A subject with no `ref` is never generated. Consistency, not
+  plumbing, is the hard part of AI art in a module: your reference image and style
+  keywords ride *every* request, and a subject you did not license simply cannot be
+  asked for. Declare a subject without a `ref` when you want it nameable in a caption
+  but never drawn.
+- **宁缺毋滥.** `generation: pack_only` is your veto — the Director stages with your own
+  art and nothing else. No operator setting overrides it. In a room running two
+  modules, one `pack_only` silences generation for the room.
+- **慢菜先备.** The Director warms subjects it expects to want soon, so a beat serves
+  art cooked during the quiet turns before it. You do not configure this; naming
+  subjects is what makes it possible.
+
+Everything a kit references rides the same content-addressed asset pipeline as panel
+code, and the trust card discloses both the subject count and whether the module may
+spend the operator's image budget at all. Rooms opt in with the SAME
+`.panels enable <packId>` that admits your panels — presentation is the module dressing
+the table, not a second switch. Operator-side knobs (which model, per-room image caps)
+are `TRPG_DIRECTOR__*`; a room whose enabled modules ship no kit never wakes a Director,
+so this costs nothing until an author asks for it.
+
 ---
 
 ## Discovery, manifest & versioning — the `.lwpack` format (landed)
@@ -479,7 +528,8 @@ Keeper commands: `.panels` / `.panels list` (anyone), `.panels enable|disable <p
 | `contents.rulepacks` | no | rulepack YAML files (`rulepacks/<id>.yaml`) |
 | `contents.cards` | no | SillyTavern cards (PNG or JSON) **or native bundles** (`*.lorecard.json`, dispatched to the native parser by content sniff so their machinery is detected honestly): a plain path, or a `{path, notes: {en, zh}}` mapping to attach install notes. The 拆卡 `kind` is **detected, never declared**: build stamps `character`/`world` into the built manifest from the real payload (hooks/`[InitVar]`/EJS/`secret` lore/typed specs ⇒ `world`, keeper-imported via `.import <file> world`), and install re-checks the stamp against detection |
 | `contents.lorebooks` | no | lorebook JSON (ST `character_book` / `{entries: [...]}` shapes) |
-| `contents.panels` | no | panels YAML files (`ui/panels.yaml`) declaring module UI panels (Layer D) — ≤ 16 panels per pack; a tier-2 panel's `entry`/`assets` files are folded into the pack asset pipeline at build (sha256'd, code payload ≤ 2 MB per panel) |
+| `contents.panels` | no | panels YAML files (`ui/panels.yaml`) declaring module UI panels (Layer D) — ≤ 16 panels per pack; a tier-2 panel's `entry`/`assets` files and every tier-1 `image`/`map_pin` `src` are folded into the pack asset pipeline at build (sha256'd, code payload ≤ 2 MB per panel) |
+| `contents.presentation` | no | the presentation kit (`ui/presentation.yaml`, one per pack) — the Stage Director's creative brief; its 定妆 references and audio cues join the same asset pipeline, and the trust card discloses whether the module may generate images |
 | `assets` | no | media files: `path` + optional `title`/`license`/`tags`/`mime`; `sha256`/`size`/`mime` are FILLED IN at pack time (a hand-declared `sha256` must match the file) |
 | `trust` | forbidden in source | GENERATED at pack time (counts incl. `panels`, `has_hooks`, `has_ejs`, `has_rules_script`, `asset_bytes`); a hand-written block fails the build. Install RE-DERIVES it from the archive with the same detectors and rejects a mismatch — a hand-assembled pack cannot understate what it ships |
 | `files` | forbidden in source | GENERATED at pack time (manifest v2): the complete archive inventory — every member except the manifest itself with its `sha256`/`size`. Install verifies SET EQUALITY plus per-file integrity, so the declaration is exactly the shipped byte set and nothing undeclared can ride along |

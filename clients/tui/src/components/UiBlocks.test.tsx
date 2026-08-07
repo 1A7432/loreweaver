@@ -3,7 +3,17 @@ import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
 import type { UiFrame } from "loreweaver-protocol"
 import { themes } from "../themes"
-import { badgeLine, imageLine, meterLine, statLine, UiBlocksView } from "./UiBlocks"
+import {
+  badgeLine,
+  clippingLines,
+  imageLine,
+  letterLines,
+  mapPinLine,
+  meterLine,
+  statLine,
+  titleCardLines,
+  UiBlocksView,
+} from "./UiBlocks"
 import { UiPanel } from "./UiPanel"
 
 const theme = themes.lamplight
@@ -193,5 +203,47 @@ describe("image blocks (M19 item 6)", () => {
       renderOnce()
     })
     expect(captureCharFrame()).toContain("温府画像组")
+  })
+})
+
+describe("performance templates (M19)", () => {
+  test("letter/clipping/title_card/map_pin degrade to their information as lines", () => {
+    expect(letterLines({ kind: "letter", body: "戌时来。\n带灯。", from: "晚棠", date: "初二" })).toEqual([
+      "│ 戌时来。",
+      "│ 带灯。",
+      "│ — 晚棠 · 初二",
+    ])
+    expect(
+      clippingLines({ kind: "clipping", headline: "石埠溺毙", body: "昨夜潮退。", source: "汐浦日报" }),
+    ).toEqual(["▬ 石埠溺毙", "昨夜潮退。", "— 汐浦日报"])
+    expect(mapPinLine({ kind: "map_pin", hash: "a".repeat(64), label: "第七盏", x: 0.4, y: 0.625, note: "未点" }))
+      .toBe("📍 第七盏 (40%, 63%) — 未点")
+    expect(titleCardLines({ kind: "title_card", title: "曝灯", act: "第二幕", subtitle: "初二" })).toEqual([
+      "─".repeat(24),
+      "第二幕 · 曝灯",
+      "初二",
+      "─".repeat(24),
+    ])
+  })
+
+  test("the real renderer draws a title card and a clipping", async () => {
+    const frame: UiFrame = {
+      type: "ui",
+      panel: "inline",
+      blocks: [
+        { kind: "title_card", title: "曝灯", act: "第二幕" },
+        { kind: "clipping", headline: "石埠溺毙", body: "昨夜潮退。", source: "汐浦日报" },
+      ],
+    }
+    const { renderOnce, captureCharFrame } = await testRender(
+      <UiBlocksView frame={frame} theme={theme} locale="zh" />,
+    )
+    await act(async () => {
+      renderOnce()
+    })
+    const output = captureCharFrame()
+    expect(output).toContain("第二幕 · 曝灯")
+    expect(output).toContain("石埠溺毙")
+    expect(output).toContain("汐浦日报")
   })
 })

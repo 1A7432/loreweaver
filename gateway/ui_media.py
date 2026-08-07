@@ -1,7 +1,8 @@
 """The reachability gate for content-addressed ``ui`` blocks (M19).
 
-``core.hooks`` validates the SHAPE of an ``image`` block — 64 hex chars, capped
-caption — but a shape check cannot know whether this room may fetch that blob.
+``core.hooks`` validates the SHAPE of a hash-bearing block (``image``, ``map_pin``) —
+64 hex chars, capped caption — but a shape check cannot know whether this room may
+fetch that blob.
 The media byte channel already answers ``{op:"get", hash}`` only for the caller's
 own room media plus assets of packs ENABLED in that room; an ``image`` block
 pointing anywhere else would render as a permanent broken picture (and would be
@@ -22,7 +23,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from core.hooks import UI_IMAGE_MIMES
+from core.hooks import UI_HASH_BLOCK_KINDS, UI_IMAGE_MIMES
 from gateway.panels import pack_asset_mime
 from infra.media_store import ALLOWED_MEDIA_MIMES, MediaStore
 
@@ -59,13 +60,13 @@ async def resolve_room_image_mime(services: Services, chat_key: str, sha256: str
 
 
 async def filter_ui_media(services: Services, chat_key: str, frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """``frames`` with every unreachable ``image`` block removed (see the module docstring).
+    """``frames`` with every unreachable hash-bearing block removed (module docstring).
 
     Hashes are resolved once per call, so a turn that shows the same handout in several
-    frames costs one lookup. Frames without image blocks pass through untouched.
+    frames costs one lookup. Frames with no such block pass through untouched.
     """
     if not frames or not any(
-        block.get("kind") == "image" for frame in frames for block in frame.get("blocks") or ()
+        block.get("kind") in UI_HASH_BLOCK_KINDS for frame in frames for block in frame.get("blocks") or ()
     ):
         return frames
     resolved: dict[str, str | None] = {}
@@ -73,7 +74,7 @@ async def filter_ui_media(services: Services, chat_key: str, frames: list[dict[s
     for frame in frames:
         blocks: list[dict[str, Any]] = []
         for block in frame.get("blocks") or ():
-            if block.get("kind") != "image":
+            if block.get("kind") not in UI_HASH_BLOCK_KINDS:
                 blocks.append(block)
                 continue
             digest = str(block.get("hash") or "")
@@ -81,7 +82,9 @@ async def filter_ui_media(services: Services, chat_key: str, frames: list[dict[s
                 resolved[digest] = await resolve_room_image_mime(services, chat_key, digest)
             mime = resolved[digest]
             if mime is None:
-                logger.info("ui_media: dropped image block %s — not reachable from this room", digest[:12])
+                logger.info(
+                    "ui_media: dropped %s block %s — not reachable from this room", block.get("kind"), digest[:12]
+                )
                 continue
             blocks.append({**block, "mime": mime})
         if blocks:

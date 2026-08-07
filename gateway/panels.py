@@ -110,7 +110,7 @@ def installed_panel_count(services: Services, pack_id: str) -> int:
     return manifest.trust.panels
 
 
-async def _enabled_packs(services: Services, chat_key: str) -> list[tuple[str, Path, PackManifest]]:
+async def enabled_packs(services: Services, chat_key: str) -> list[tuple[str, Path, PackManifest]]:
     homes = installed_pack_homes(services.settings.data_dir)
     packs: list[tuple[str, Path, PackManifest]] = []
     for pack_id in await get_enabled_panel_packs(services.store, chat_key):
@@ -133,7 +133,7 @@ async def build_ui_manifest_frame(services: Services, chat_key: str, role: str) 
     and logged (its pack home was hand-edited; fail closed).
     """
     panels: list[dict[str, Any]] = []
-    for pack_id, home, manifest in await _enabled_packs(services, chat_key):
+    for pack_id, home, manifest in await enabled_packs(services, chat_key):
         asset_info = {
             asset.path: {"sha256": asset.sha256, "size": asset.size, "mime": asset.mime}
             for asset in manifest.assets
@@ -152,7 +152,7 @@ async def member_panel_ids(services: Services, chat_key: str, role: str) -> set[
     """The wire panel ids in ``role``'s manifest for this room — the `panel_intent`
     authorization set (an intent naming any other panel is refused)."""
     ids: set[str] = set()
-    for pack_id, home, manifest in await _enabled_packs(services, chat_key):
+    for pack_id, home, manifest in await enabled_packs(services, chat_key):
         for panel in _load_pack_panels(home, manifest):
             if audience_allows(panel.audience, role):
                 ids.add(f"{pack_id}/{panel.id}")
@@ -168,7 +168,7 @@ async def pack_asset_mime(services: Services, chat_key: str, sha256: str) -> str
     wanted = sha256.lower()
     if not wanted:
         return None
-    for _pack_id, _home, manifest in await _enabled_packs(services, chat_key):
+    for _pack_id, _home, manifest in await enabled_packs(services, chat_key):
         for asset in manifest.assets:
             if asset.sha256 == wanted:
                 return asset.mime or None
@@ -184,7 +184,7 @@ async def resolve_pack_asset(services: Services, chat_key: str, sha256: str) -> 
     wanted = sha256.lower()
     if not wanted:
         return None
-    for _pack_id, home, manifest in await _enabled_packs(services, chat_key):
+    for _pack_id, home, manifest in await enabled_packs(services, chat_key):
         for asset in manifest.assets:
             if asset.sha256 != wanted:
                 continue

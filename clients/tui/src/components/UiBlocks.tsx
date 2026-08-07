@@ -4,10 +4,14 @@ import {
   stripControlChars,
   type UiBadgeTone,
   type UiChoicesBlock,
+  type UiClippingBlock,
   type UiFrame,
   type UiImageBlock,
+  type UiLetterBlock,
+  type UiMapPinBlock,
   type UiMeterBlock,
   type UiStatBlock,
+  type UiTitleCardBlock,
 } from "loreweaver-protocol"
 import type { AppClient } from "../client"
 import { tt } from "../i18n"
@@ -48,6 +52,42 @@ export function badgeLine(block: { label: string }): string {
 export function imageLine(block: UiImageBlock, locale?: string): string {
   const text = stripControlChars(block.caption || block.alt || "").trim()
   return tt(locale, "ui.image", { text: text || block.hash.slice(0, 12) })
+}
+
+/** The M19 performance templates as terminal text. A rich client draws stationery
+ * and full-bleed act cards; here each template becomes the same information in lines,
+ * which is the honest degradation — never a blank where a letter should be. Exported
+ * so tests pin the shape without a renderer. */
+export function letterLines(block: UiLetterBlock): string[] {
+  const attribution = [
+    block.to ? `→ ${stripControlChars(block.to)}` : "",
+    block.from ? `— ${stripControlChars(block.from)}` : "",
+    block.date ? stripControlChars(block.date) : "",
+  ].filter(Boolean)
+  return [
+    ...stripControlChars(block.body).split("\n").map((line) => `│ ${line}`),
+    ...(attribution.length ? [`│ ${attribution.join(" · ")}`] : []),
+  ]
+}
+
+export function clippingLines(block: UiClippingBlock): string[] {
+  const credit = [block.source, block.date].filter(Boolean).map((part) => stripControlChars(String(part)))
+  return [
+    `▬ ${stripControlChars(block.headline)}`,
+    ...stripControlChars(block.body).split("\n"),
+    ...(credit.length ? [`— ${credit.join(" · ")}`] : []),
+  ]
+}
+
+export function mapPinLine(block: UiMapPinBlock): string {
+  const at = `${Math.round(block.x * 100)}%, ${Math.round(block.y * 100)}%`
+  const note = block.note ? ` — ${stripControlChars(block.note)}` : ""
+  return `📍 ${stripControlChars(block.label)} (${at})${note}`
+}
+
+export function titleCardLines(block: UiTitleCardBlock): string[] {
+  const heading = [block.act, block.title].filter(Boolean).map((part) => stripControlChars(String(part))).join(" · ")
+  return [DIVIDER_GLYPHS, heading, ...(block.subtitle ? [stripControlChars(block.subtitle)] : []), DIVIDER_GLYPHS]
 }
 
 export function badgeColor(tone: UiBadgeTone | undefined, theme: Palette): string {
@@ -125,6 +165,30 @@ export function UiBlocksView({
         }
         if (block.kind === "image") {
           return <UiImage key={key} block={block} theme={theme} locale={locale} client={client} />
+        }
+        if (block.kind === "letter" || block.kind === "clipping" || block.kind === "title_card") {
+          const lines = block.kind === "letter" ? letterLines(block)
+            : block.kind === "clipping" ? clippingLines(block)
+            : titleCardLines(block)
+          // A title card is the loudest thing the Director can do; letters and
+          // clippings read as authored documents, so they take the quieter tones.
+          const color = block.kind === "title_card" ? theme.accent : theme.fg
+          return (
+            <box key={key} flexDirection="column" width="100%" flexShrink={0}>
+              {lines.map((line, row) => (
+                <text key={`${key}-${row}`} fg={row === 0 && block.kind !== "letter" ? theme.accent : color}>
+                  {line}
+                </text>
+              ))}
+            </box>
+          )
+        }
+        if (block.kind === "map_pin") {
+          return (
+            <text key={key} fg={theme.accent}>
+              {mapPinLine(block)}
+            </text>
+          )
         }
         if (block.kind === "text") {
           const color = block.style === "warning" ? theme.fail : block.style === "quote" ? theme.dim : theme.fg

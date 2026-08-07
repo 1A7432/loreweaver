@@ -48,6 +48,7 @@ from core.panels import (
     PanelSpec,
     parse_panels_text,
 )
+from core.presentation import AUDIO_MIMES, PresentationKit, parse_presentation_text
 from core.rulepacks import load_raw_rulepack_yaml, parse_rulepack_text
 from core.skills import parse_skill_text
 from core.worldbook import MAX_IMPORT_ENTRIES
@@ -81,7 +82,7 @@ _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _SEMVER_RE = re.compile(r"^\d{1,6}\.\d{1,6}\.\d{1,6}(?:[-+][0-9A-Za-z.-]{1,32})?$")
 _ENGINE_VERSION_RE = re.compile(r"^\d{1,6}(?:\.\d{1,6}){0,3}$")
 _LOCALES = ("en", "zh")
-CONTENT_KINDS = ("skills", "rulepacks", "cards", "lorebooks", "panels")
+CONTENT_KINDS = ("skills", "rulepacks", "cards", "lorebooks", "panels", "presentation")
 # The 拆卡 taxonomy at the pack level: a "character" card is a persona + sheet a player may
 # self-import; a "world" card is module machinery (hooks / [InitVar] / EJS) the keeper imports
 # with `.import <file> world`. Labels are enforced against real detection at build AND verify
@@ -157,6 +158,12 @@ class PackTrust:
     has_rules_script: bool = False
     world_cards: int = 0
     panels: int = 0
+    # M19: how many picturable SUBJECTS the presentation kit declares (0 = no kit),
+    # and whether that kit licenses image GENERATION. An author's `generation:
+    # pack_only` veto is disclosed here, so an operator sees before install whether a
+    # module's Stage Director may spend their image-provider budget.
+    presentation: int = 0
+    imagegen: bool = False
 
 
 @dataclass(frozen=True)
@@ -205,6 +212,7 @@ class InstallReport:
     cards: list[str] = field(default_factory=list)
     lorebooks: list[str] = field(default_factory=list)
     panels: list[str] = field(default_factory=list)  # panels.yaml paths landed in the pack home
+    presentation: list[str] = field(default_factory=list)  # presentation.yaml paths landed in the pack home
     assets: int = 0
     asset_bytes: int = 0
     shadowed: list[str] = field(default_factory=list)  # ids a same-named built-in keeps winning over
@@ -458,6 +466,8 @@ def parse_manifest_text(text: str, *, expect_trust: bool) -> PackManifest:
                 has_ejs=bool(trust_raw.get("has_ejs", False)),
                 world_cards=int(trust_raw.get("world_cards", 0)),
                 panels=int(trust_raw.get("panels", 0)),
+                presentation=int(trust_raw.get("presentation", 0)),
+                imagegen=bool(trust_raw.get("imagegen", False)),
             )
         except (TypeError, ValueError) as exc:
             raise PackError(f"invalid trust block: {exc}") from exc
@@ -744,6 +754,51 @@ def _enforce_panel_code_cap(panels: list[PanelSpec], assets_by_path: Mapping[str
             )
 
 
+def _validate_pack_presentation(
+    read_text: Callable[[str], str], manifest: PackManifest
+) -> tuple[list[PresentationKit], list[str]]:
+    """Parse every declared presentation kit (build AND verify side) and collect the
+    pack files it references. At most one kit per pack: a module has one look."""
+    paths = manifest.contents["presentation"]
+    if len(paths) > 1:
+        raise PackError("a pack declares at most one presentation kit")
+    kits: list[PresentationKit] = []
+    asset_paths: list[str] = []
+    for kit_path in paths:
+        if PurePosixPath(kit_path).suffix not in {".yaml", ".yml"}:
+            raise PackError(f"presentation file must be a .yaml file: {kit_path!r}")
+        try:
+            kit = parse_presentation_text(read_text(kit_path))
+        except ValueError as exc:
+            raise PackError(f"presentation {kit_path}: {exc}") from exc
+        kits.append(kit)
+        for path in kit.asset_paths:
+            _validated_entry_path(path)
+            if path not in asset_paths:
+                asset_paths.append(path)
+    return kits, asset_paths
+
+
+def _enforce_kit_assets(kits: list[PresentationKit], assets_by_path: Mapping[str, PackAsset]) -> None:
+    """A 定妆 reference must be a picture and a cue must be audio — caught at build
+    time, because the runtime's only recourse is to silently not stage the beat."""
+    for kit in kits:
+        for subject in kit.subjects:
+            if not subject.ref:
+                continue
+            asset = assets_by_path.get(subject.ref)
+            if asset is None:
+                raise PackError(f"presentation subject {subject.id}: ref {subject.ref!r} is not in the asset block")
+            if asset.mime not in UI_IMAGE_MIMES:
+                raise PackError(f"presentation subject {subject.id}: ref {subject.ref!r} is {asset.mime}, not an image")
+        for cue in kit.audio:
+            asset = assets_by_path.get(cue.asset)
+            if asset is None:
+                raise PackError(f"presentation cue {cue.id}: asset {cue.asset!r} is not in the asset block")
+            if asset.mime not in AUDIO_MIMES:
+                raise PackError(f"presentation cue {cue.id}: asset {cue.asset!r} is {asset.mime}, not audio")
+
+
 def _enforce_panel_images(panels: list[PanelSpec], assets_by_path: Mapping[str, PackAsset]) -> None:
     """Every tier-1 ``image`` src must resolve to a real asset that is actually a
     picture. Caught at build time so an author learns it from the packer, not from a
@@ -816,6 +871,8 @@ def _manifest_to_yaml(manifest: PackManifest) -> str:
             "has_rules_script": manifest.trust.has_rules_script,
             "world_cards": manifest.trust.world_cards,
             "panels": manifest.trust.panels,
+            "presentation": manifest.trust.presentation,
+            "imagegen": manifest.trust.imagegen,
         },
     }
     return yaml.safe_dump(data, sort_keys=True, allow_unicode=True, default_flow_style=False)
@@ -900,10 +957,14 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
     # everything content-addressed, and the trust card's asset numbers stay honest.
     pack_panels, panel_asset_paths = _validate_pack_panels(read_text, manifest)
     archive_files.extend(manifest.contents["panels"])
+    # Presentation kits (M19) ride the same rails: the kit's 定妆 refs and audio cues
+    # are ordinary pack files, so they get the same digest + verification treatment.
+    pack_kits, kit_asset_paths = _validate_pack_presentation(read_text, manifest)
+    archive_files.extend(manifest.contents["presentation"])
     declared_asset_paths = {asset.path for asset in manifest.assets}
     all_assets = list(manifest.assets) + [
         PackAsset(path=path, sha256="", mime="", size=0)
-        for path in panel_asset_paths
+        for path in (*panel_asset_paths, *kit_asset_paths)
         if path not in declared_asset_paths
     ]
 
@@ -935,6 +996,7 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
     assets_by_path = {asset.path: asset for asset in completed_assets}
     _enforce_panel_code_cap(pack_panels, assets_by_path)
     _enforce_panel_images(pack_panels, assets_by_path)
+    _enforce_kit_assets(pack_kits, assets_by_path)
 
     if len(set(archive_files)) != len(archive_files):
         raise PackError("a file is declared under more than one contents kind")
@@ -956,6 +1018,8 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
         has_rules_script=has_rules_script,
         world_cards=sum(1 for card in detected_cards if card.kind == "world"),
         panels=len(pack_panels),
+        presentation=sum(len(kit.subjects) for kit in pack_kits),
+        imagegen=any(kit.generates and any(subject.ref for subject in kit.subjects) for kit in pack_kits),
     )
     # The complete member inventory (manifest v2): every archive file except the
     # manifest itself, with its integrity record. Install verifies set-equality.
@@ -1146,9 +1210,9 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
         with archive.open(lorebook_path) as handle:
             data = handle.read(MAX_LOREBOOK_BYTES + 1)
         has_ejs = _validate_lorebook_bytes(lorebook_path, data) or has_ejs
-    for panels_path in manifest.contents["panels"]:
-        if panels_path not in names:
-            raise PackError(f"declared panels file missing from archive: {panels_path!r}")
+    for declared in (*manifest.contents["panels"], *manifest.contents["presentation"]):
+        if declared not in names:
+            raise PackError(f"declared file missing from archive: {declared!r}")
     # Re-run the pack-level panel validation and re-check the code cap against the BUILT
     # manifest's asset block — a tampered manifest that drops a panel asset's integrity
     # record (or understates sizes) fails here before anything is written.
@@ -1156,6 +1220,8 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
     verify_assets_by_path = {asset.path: asset for asset in manifest.assets}
     _enforce_panel_code_cap(verify_panels, verify_assets_by_path)
     _enforce_panel_images(verify_panels, verify_assets_by_path)
+    verify_kits, _kit_paths = _validate_pack_presentation(read_text, manifest)
+    _enforce_kit_assets(verify_kits, verify_assets_by_path)
     # Asset bytes were already verified via the files inventory (set equality +
     # per-file sha256/size above); the asset block's own records were cross-checked
     # against that inventory, so no second streaming pass is needed here.
@@ -1175,6 +1241,8 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
         has_rules_script=has_rules_script,
         world_cards=sum(1 for card in manifest.card_entries if card.kind == "world"),
         panels=len(verify_panels),
+        presentation=sum(len(kit.subjects) for kit in verify_kits),
+        imagegen=any(kit.generates and any(subject.ref for subject in kit.subjects) for kit in verify_kits),
     )
     if manifest.trust != computed:
         stored = manifest.trust
@@ -1183,6 +1251,7 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
             for name in (
                 "skills", "rulepacks", "cards", "lorebooks", "assets",
                 "asset_bytes", "has_hooks", "has_ejs", "has_rules_script", "world_cards", "panels",
+                "presentation", "imagegen",
             )
             if stored is None or getattr(stored, name) != getattr(computed, name)
         ]
@@ -1256,7 +1325,7 @@ def install_pack(
             staging.mkdir(parents=True)
             manifest_target = _confined_target(staging, MANIFEST_NAME)
             manifest_target.write_text(_archive_read_text(archive, MANIFEST_NAME), encoding="utf-8")
-            for kind in ("cards", "lorebooks", "panels"):
+            for kind in ("cards", "lorebooks", "panels", "presentation"):
                 for name in manifest.contents[kind]:
                     _extract_entry(archive, name, _confined_target(staging, name))
                     getattr(report, kind).append(name)

@@ -54,7 +54,7 @@ async def test_objective_ops_write_through_validation_and_clamp():
 
     changed = await run_scribe(services, _ctx(), "我把指环收进口袋", "你确实拿到了指环——信物已得其一。", ["skill_check"])
 
-    assert changed is True
+    assert changed.changed is True
     from core.documents import KEEPER_VIEWER, MODVARS_ID
 
     view = await services.documents.get_view(CHAT, "modvars", MODVARS_ID, KEEPER_VIEWER)
@@ -81,7 +81,7 @@ async def test_ops_without_verbatim_evidence_are_dropped():
 
     changed = await run_scribe(services, _ctx(), "我收下红纸签", "小满把一张红纸签留在柜台上。", [])
 
-    assert changed is False
+    assert changed.changed is False
     from core.documents import KEEPER_VIEWER, MODVARS_ID
 
     view = await services.documents.get_view(CHAT, "modvars", MODVARS_ID, KEEPER_VIEWER)
@@ -99,7 +99,7 @@ async def test_evidence_survives_whitespace_reflow():
 
     changed = await run_scribe(services, _ctx(), "收好指环", "第一枚信物\n到手了。", [])
 
-    assert changed is True
+    assert changed.changed is True
 
 
 async def test_unknown_tracker_ops_are_dropped_and_whispers_round_trip():
@@ -111,7 +111,7 @@ async def test_unknown_tracker_ops_are_dropped_and_whispers_round_trip():
 
     changed = await run_scribe(services, _ctx(), "睡觉", "夜过去了。", [])
 
-    assert changed is False
+    assert changed.changed is False
     whispers = await pop_whispers(services, CHAT)
     assert whispers == ["一天似乎过去了——考虑推进祭典日"]
     # read-and-clear: a second pop is empty.
@@ -121,7 +121,7 @@ async def test_unknown_tracker_ops_are_dropped_and_whispers_round_trip():
 async def test_malformed_llm_output_is_a_silent_noop():
     services = _services("完全不是 JSON 的闲聊回复")
     await _with_tracker(services)
-    assert await run_scribe(services, _ctx(), "行动", "叙述。", []) is False
+    assert (await run_scribe(services, _ctx(), "行动", "叙述。", [])).changed is False
     assert await pop_whispers(services, CHAT) == []
 
 
@@ -131,4 +131,4 @@ async def test_disabled_scribe_never_calls_the_llm():
 
     services = build_services(Settings(), llm=FakeLLM(responder=_explode), embeddings=FakeEmbeddings(64))
     services.settings.scribe.enabled = False
-    assert await run_scribe(services, _ctx(), "行动", "叙述。", []) is False
+    assert (await run_scribe(services, _ctx(), "行动", "叙述。", [])).changed is False

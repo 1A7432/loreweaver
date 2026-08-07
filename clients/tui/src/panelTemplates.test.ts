@@ -158,3 +158,67 @@ describe("image blocks (M19 item 6)", () => {
     ])
   })
 })
+
+describe("performance templates (M19)", () => {
+  test("localize their text fields and resolve a map pin's bindable coordinates", () => {
+    const blocks: PanelTemplateBlock[] = [
+      { kind: "title_card", title: { en: "Act II", zh: "第二幕" }, subtitle: { zh: "曝灯" } },
+      { kind: "letter", body: { zh: "戌时来。" }, from: { zh: "晚棠" } },
+      {
+        kind: "clipping",
+        headline: { zh: "石埠溺毙" },
+        body: { zh: "昨夜潮退。" },
+        source: { zh: "汐浦日报" },
+      },
+      {
+        kind: "map_pin",
+        hash: "e".repeat(64),
+        mime: "image/svg+xml",
+        size: 12,
+        label: { zh: "第七盏" },
+        x: 0.4,
+        y: { $var: "town_fear" },
+      },
+    ]
+    expect(resolvePanelBlocks(blocks, [{ id: "town_fear", label: "f", kind: "number", value: 0.62 }], "zh")).toEqual([
+      { kind: "title_card", title: "第二幕", subtitle: "曝灯" },
+      { kind: "letter", body: "戌时来。", from: "晚棠" },
+      { kind: "clipping", headline: "石埠溺毙", body: "昨夜潮退。", source: "汐浦日报" },
+      {
+        kind: "map_pin",
+        label: "第七盏",
+        hash: "e".repeat(64),
+        mime: "image/svg+xml",
+        size: 12,
+        x: 0.4,
+        y: 0.62,
+      },
+    ])
+  })
+
+  test("a missing required field drops the whole block, fail-closed", () => {
+    expect(resolvePanelBlocks([{ kind: "letter" } as PanelTemplateBlock], VARS, "en")).toEqual([])
+    expect(
+      resolvePanelBlocks(
+        [{ kind: "title_card", title: { $var: "not_in_my_state" } } as PanelTemplateBlock],
+        VARS,
+        "en",
+      ),
+    ).toEqual([])
+  })
+
+  test("a map pin clamps out-of-range coordinates into the image box", () => {
+    const block: PanelTemplateBlock = {
+      kind: "map_pin",
+      hash: "f".repeat(64),
+      mime: "image/png",
+      size: 1,
+      label: "here",
+      x: 1.9,
+      y: -3,
+    }
+    expect(resolvePanelBlocks([block], VARS, "en")).toEqual([
+      { kind: "map_pin", label: "here", hash: "f".repeat(64), mime: "image/png", size: 1, x: 1, y: 0 },
+    ])
+  })
+})

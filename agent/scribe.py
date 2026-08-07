@@ -23,21 +23,51 @@ The scribe NEVER generates fiction, never rolls dice, never decides outcomes —
 iron rule #1 stays intact. It runs as a fire-and-forget task after the reply has
 already streamed (zero perceived latency), on a configurable SMALL model
 (`TRPG_SCRIBE__*`; blank fields reuse the main client).
+
+M19 adds a third, tiny lane: **场记 (beat classification)**. Having already read the
+whole turn, the scribe is the cheapest place to notice that a MOMENT just landed —
+a scene change, an act turning over, a handout appearing, a critical spike — and cue
+the Stage Director (`agent.stage_director`) to dress it. That cue is an ENUM and
+nothing else: the scribe reads keeper trackers, and the Director's whole guarantee is
+that it never receives keeper material, so a written "summary" crossing from here to
+there would be a covert channel out of the keeper half. 场记 says WHICH KIND of
+moment; the Director works out what happened from the player-visible stream it
+receives directly.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from agent.context import AgentCtx
 from agent.services import Services
+from agent.stage_director import BEATS
 from core.documents import KEEPER_VIEWER
 from core.modvars import MODVARS_DOC_ID, MODVARS_DOC_TYPE, adjust_modvar, set_modvar, wire_entries
 from infra.llm import LLMClient
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ScribePass:
+    """What one reconciliation pass produced for its caller.
+
+    ``changed`` -> republish room state (a tracker actually moved, so panels are stale).
+    ``beat`` -> cue the Stage Director; ``""`` for the ordinary turn that is not a
+    moment. Deliberately just these two: everything the scribe LEARNED stays on the
+    keeper side (trackers written, whispers stored), and only the enum crosses.
+    """
+
+    changed: bool = False
+    beat: str = ""
+
+    def __bool__(self) -> bool:
+        return self.changed or bool(self.beat)
+
 
 WHISPERS_KEY = "scribe_whispers"
 MAX_OPS = 8
@@ -50,13 +80,19 @@ _MIN_EVIDENCE_CHARS = 4
 _PROMPT = """You are the table Scribe for a TTRPG engine — a silent ledger clerk, not a storyteller.
 
 Given ONE game turn (player action + game-master reply) and the room's current trackers, output ONLY a JSON object:
-{{"ops": [{{"op": "set", "id": "<tracker id>", "value": <number>, "evidence": "<verbatim quote>"}} | {{"op": "adjust", "id": "<tracker id>", "delta": <number>, "evidence": "<verbatim quote>"}}], "whispers": ["<short keeper-side note>"]}}
+{{"ops": [{{"op": "set", "id": "<tracker id>", "value": <number>, "evidence": "<verbatim quote>"}} | {{"op": "adjust", "id": "<tracker id>", "delta": <number>, "evidence": "<verbatim quote>"}}], "whispers": ["<short keeper-side note>"], "beat": "<beat>"}}
 
 Rules:
 - "ops" ONLY for tracker changes the narration plainly establishes as fact. "evidence" is REQUIRED: a short verbatim quote copied from the turn text that establishes the tracked quantity ITSELF changed. An op whose evidence is not an exact quote is discarded.
 - You see only each tracker's id/label/range, not what earns a point. Acquiring some item is NOT evidence for an item counter unless the text explicitly identifies it as one of the things that counter counts; time passing counts on a day-tracker only when the text states the story moved to a new day. If the tracker's meaning leaves any doubt, do NOT write — whisper instead.
 - "whispers" (0-{max_whispers}, each <= {max_whisper_chars} chars) for anything needing the keeper's judgment: scene/clock drift vs the fiction, a beat that likely deserved a dice check or sanity roll, players stuck without progress, an earned gain no tracker captures.
 - Write whispers in the language the turn text is written in (Chinese turn -> Chinese whispers).
+- "beat" classifies this turn as a MOMENT worth staging, one of: {beats}, or "none". Use "none" unless the turn clearly is one of them — most turns are "none".
+  - scene_change: the group moved somewhere else, or time visibly moved on.
+  - act_transition: a chapter/day/act of the story turned over.
+  - handout: a document, picture, map or object the players can now LOOK at appeared.
+  - spike: a critical success, a fumble, or a shock the table will remember.
+  It is a single word, not a description — write nothing else about the beat.
 - Never invent trackers not listed. Never narrate. Empty ops and empty whispers is a fine answer.
 
 Trackers (id | label | value | range):
@@ -133,12 +169,11 @@ async def run_scribe(
     player_text: str,
     reply_text: str,
     tool_names: list[str] | None = None,
-) -> bool:
-    """One reconciliation pass. Returns True when any tracker actually changed
-    (the caller then republishes room state so panels move). Never raises."""
+) -> ScribePass:
+    """One reconciliation pass (see :class:`ScribePass`). Never raises."""
     settings = services.settings.scribe
     if not settings.enabled or not reply_text.strip():
-        return False
+        return ScribePass()
     try:
         view = await services.documents.get_view(ctx.chat_key, MODVARS_DOC_TYPE, MODVARS_DOC_ID, KEEPER_VIEWER)
         trackers = wire_entries(view or {}, ctx.locale)
@@ -152,6 +187,7 @@ async def run_scribe(
     prompt = _PROMPT.format(
         max_whispers=MAX_WHISPERS,
         max_whisper_chars=MAX_WHISPER_CHARS,
+        beats=", ".join(BEATS),
         trackers=tracker_lines,
         tools=", ".join(tool_names or []) or "(none)",
         player=player_text[:_MAX_TURN_TEXT],
@@ -161,10 +197,10 @@ async def run_scribe(
         result = await _scribe_llm(services).chat([{"role": "user", "content": prompt}])
     except Exception as exc:  # noqa: BLE001 — bookkeeping must never break the table
         logger.debug("scribe: llm call failed: %s", exc)
-        return False
+        return ScribePass()
     parsed = _extract_json(result.content or "")
     if parsed is None:
-        return False
+        return ScribePass()
 
     changed = False
     ops = parsed.get("ops")
@@ -208,4 +244,9 @@ async def run_scribe(
                     existing = []
             merged = (existing + fresh)[-MAX_STORED_WHISPERS:]
             await services.store.state_set(ctx.chat_key, WHISPERS_KEY, json.dumps(merged, ensure_ascii=False))
-    return changed
+
+    # 场记: a single word from a closed vocabulary, or nothing. Anything else the model
+    # wrote here is discarded rather than forwarded — this field is the ONLY thing that
+    # crosses from the keeper-side scribe to the player-side Director.
+    beat = str(parsed.get("beat") or "").strip()
+    return ScribePass(changed=changed, beat=beat if beat in BEATS else "")

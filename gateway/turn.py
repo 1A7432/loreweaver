@@ -299,7 +299,9 @@ async def run_turn(
     # Post-turn Scribe (agent.scribe): fire-and-forget bookkeeping reconciliation.
     # It runs AFTER the reply has already streamed (zero perceived latency); when
     # it lands tracker writes it republishes room state, so panels move within
-    # seconds of the narration instead of freezing at their defaults.
+    # seconds of the narration instead of freezing at their defaults. Its 场记 lane
+    # additionally classifies the turn as a BEAT, which cues the Stage Director
+    # (M19) — one extra call on beats only, never per turn.
     if result is not None and services.settings.scribe.enabled:
         tool_names = [str(entry.get("name", "")) for entry in result.tool_trace]
 
@@ -307,8 +309,18 @@ async def run_turn(
             try:
                 from agent.scribe import run_scribe
 
-                if await run_scribe(services, ctx, text, turn_result.reply, names):
+                outcome = await run_scribe(services, ctx, text, turn_result.reply, names)
+                if outcome.changed:
                     await publish_state(hub, services, ctx)
+                if outcome.beat and services.settings.director.enabled:
+                    # The Director receives the PLAYER-VISIBLE turn — what was broadcast
+                    # — plus the beat KIND. Nothing keeper-side crosses this call; that
+                    # is the whole isolation contract (tests/architecture).
+                    from agent.stage_director import run_director
+
+                    await run_director(
+                        services, ctx, text, turn_result.reply, beat=outcome.beat, hub=hub
+                    )
             except Exception:  # noqa: BLE001 — bookkeeping must never break the table
                 logging.getLogger(__name__).debug("scribe pass failed", exc_info=True)
 

@@ -44,6 +44,7 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from core.hooks import (
+    MAX_UI_BODY_CHARS,
     MAX_UI_CAPTION_CHARS,
     MAX_UI_ID_CHARS,
     MAX_UI_LABEL_CHARS,
@@ -75,6 +76,29 @@ _LEAF_FIELDS = ("id", "label", "value")
 _LOCALES = ("en", "zh")
 
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+
+# M19 performance templates in their AUTHORED form: kind -> (required, optional) field
+# names. `src` and `x`/`y` are handled specially (path / bindable number); everything
+# else is a localized string capped by `_PERFORMANCE_CAPS`.
+_PERFORMANCE_KINDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "letter": (("body",), ("from", "to", "date")),
+    "clipping": (("headline", "body"), ("source", "date")),
+    "map_pin": (("src", "label", "x", "y"), ("note",)),
+    "title_card": (("title",), ("subtitle", "act")),
+}
+_PERFORMANCE_CAPS: dict[str, int] = {
+    "body": MAX_UI_BODY_CHARS,
+    "headline": MAX_UI_LABEL_CHARS,
+    "label": MAX_UI_LABEL_CHARS,
+    "title": MAX_UI_LABEL_CHARS,
+    "from": MAX_UI_LABEL_CHARS,
+    "to": MAX_UI_LABEL_CHARS,
+    "date": MAX_UI_LABEL_CHARS,
+    "source": MAX_UI_LABEL_CHARS,
+    "act": MAX_UI_LABEL_CHARS,
+    "note": MAX_UI_CAPTION_CHARS,
+    "subtitle": MAX_UI_CAPTION_CHARS,
+}
 
 # Code-bearing mimes counted against MAX_PANEL_CODE_BYTES (entry html + js + css).
 CODE_MIMES = frozenset(
@@ -249,6 +273,29 @@ def _validate_block(raw: Any, label: str, *, in_repeat: bool = False) -> dict[st
                 raise ValueError(f"{label}.style: must be one of {sorted(UI_TEXT_STYLES)}")
             block["style"] = style
         return block
+    if kind in _PERFORMANCE_KINDS:
+        # The M19 performance templates in their AUTHORED form: every text field is
+        # localized, `map_pin` addresses its map by pack-relative `src` exactly like
+        # `image` does, and its coordinates may bind to live variables (a marker that
+        # moves is the whole point of pinning it).
+        required, optional = _PERFORMANCE_KINDS[kind]
+        _require_keys(raw, label, required={"kind", *required}, optional=set(optional))
+        block = {"kind": kind}
+        for name in required:
+            if name == "src":
+                block["src"] = _validated_asset_path(raw["src"], f"{label}.src")
+            elif name in ("x", "y"):
+                block[name] = _scalar(raw[name], f"{label}.{name}", in_repeat=in_repeat, types=(int, float))
+            else:
+                block[name] = _localized(
+                    raw[name], f"{label}.{name}", in_repeat=in_repeat, cap=_PERFORMANCE_CAPS[name]
+                )
+        for name in optional:
+            if name in raw:
+                block[name] = _localized(
+                    raw[name], f"{label}.{name}", in_repeat=in_repeat, cap=_PERFORMANCE_CAPS[name]
+                )
+        return block
     if kind == "image":
         _require_keys(raw, label, required={"kind", "src"}, optional={"caption", "alt"})
         block = {"kind": "image", "src": _validated_asset_path(raw["src"], f"{label}.src")}
@@ -305,7 +352,7 @@ def _collect_image_sources(blocks: Any) -> list[str]:
         if "repeat" in block:
             inner = block["repeat"].get("block") if isinstance(block.get("repeat"), dict) else None
             candidates = _collect_image_sources([inner]) if inner is not None else []
-        elif block.get("kind") == "image":
+        elif "src" in block:
             candidates = [str(block.get("src") or "")]
         else:
             continue
@@ -456,21 +503,16 @@ def _wire_block(block: Mapping[str, Any], ref: str, asset_info: Mapping[str, Map
     if "repeat" in block:
         spec = block["repeat"]
         return {"repeat": {"prefix": spec["prefix"], "block": _wire_block(spec["block"], ref, asset_info)}}
-    if block.get("kind") != "image":
+    if "src" not in block:
         return dict(block)
     source = str(block.get("src") or "")
     info = asset_info.get(source)
     if info is None:
         raise ValueError(f"panel {ref}: no integrity record for image {source!r}")
-    wired: dict[str, Any] = {
-        "kind": "image",
-        "hash": str(info["sha256"]),
-        "size": int(info["size"]),
-        "mime": str(info.get("mime") or "application/octet-stream"),
-    }
-    for key in ("caption", "alt"):
-        if key in block:
-            wired[key] = dict(block[key])
+    wired: dict[str, Any] = {key: value for key, value in block.items() if key != "src"}
+    wired["hash"] = str(info["sha256"])
+    wired["size"] = int(info["size"])
+    wired["mime"] = str(info.get("mime") or "application/octet-stream")
     return wired
 
 

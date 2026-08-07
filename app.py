@@ -311,6 +311,19 @@ def _print_trust_card(i18n: I18n, manifest: core_pack.PackManifest, locale: str)
     )
     if trust.world_cards:
         print(i18n.t("pack.card.world_cards", count=trust.world_cards), file=sys.stderr)
+    if trust.presentation:
+        # Disclosure, not marketing: an operator must see BEFORE install whether a
+        # module's Stage Director may spend their image-provider budget.
+        print(
+            i18n.t(
+                "pack.card.presentation",
+                subjects=trust.presentation,
+                imagegen=i18n.t(
+                    "pack.card.presentation.imagegen" if trust.imagegen else "pack.card.presentation.pack_only"
+                ),
+            ),
+            file=sys.stderr,
+        )
 
 
 def _run_pack(i18n: I18n, args: argparse.Namespace) -> int:

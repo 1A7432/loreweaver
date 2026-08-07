@@ -372,6 +372,47 @@ export interface UiChoicesBlock {
   options: UiChoiceOption[]
 }
 
+// v2.1 additive (M19): the performance-grade templates. Declarative, not markup —
+// a rich client styles a `letter` as stationery and a `title_card` as a full-bleed act
+// card; a text-first client prints the same fields as lines. Emitted by the Stage
+// Director on story beats, and available to pack panels as authored templates.
+
+export interface UiLetterBlock {
+  kind: "letter"
+  body: string
+  from?: string
+  to?: string
+  date?: string
+}
+
+export interface UiClippingBlock {
+  kind: "clipping"
+  headline: string
+  body: string
+  source?: string
+  date?: string
+}
+
+// A marker on a map image. `x`/`y` are FRACTIONS of the image's own box (0..1), so a
+// client scales the pin to whatever size it renders the map at.
+export interface UiMapPinBlock {
+  kind: "map_pin"
+  hash: string
+  mime?: string
+  size?: number
+  label: string
+  x: number
+  y: number
+  note?: string
+}
+
+export interface UiTitleCardBlock {
+  kind: "title_card"
+  title: string
+  subtitle?: string
+  act?: string
+}
+
 export type UiBlock =
   | UiMeterBlock
   | UiStatBlock
@@ -380,6 +421,10 @@ export type UiBlock =
   | UiDividerBlock
   | UiChoicesBlock
   | UiImageBlock
+  | UiLetterBlock
+  | UiClippingBlock
+  | UiMapPinBlock
+  | UiTitleCardBlock
 
 export interface UiFrame {
   type: typeof FrameType.Ui
@@ -491,6 +536,42 @@ export interface PanelRepeatBlock {
   }
 }
 
+// The panel forms of the M19 performance templates: every text field is localized,
+// and `map_pin` resolves its map from an authored `src` path exactly like `image`.
+export interface PanelLetterBlock {
+  kind: "letter"
+  body: PanelTextValue
+  from?: PanelTextValue
+  to?: PanelTextValue
+  date?: PanelTextValue
+}
+
+export interface PanelClippingBlock {
+  kind: "clipping"
+  headline: PanelTextValue
+  body: PanelTextValue
+  source?: PanelTextValue
+  date?: PanelTextValue
+}
+
+export interface PanelMapPinBlock {
+  kind: "map_pin"
+  hash: string
+  mime: string
+  size: number
+  label: PanelTextValue
+  x: PanelBindable<number>
+  y: PanelBindable<number>
+  note?: PanelTextValue
+}
+
+export interface PanelTitleCardBlock {
+  kind: "title_card"
+  title: PanelTextValue
+  subtitle?: PanelTextValue
+  act?: PanelTextValue
+}
+
 export type PanelTemplateBlock =
   | PanelMeterBlock
   | PanelStatBlock
@@ -499,6 +580,10 @@ export type PanelTemplateBlock =
   | PanelDividerBlock
   | PanelChoicesBlock
   | PanelImageBlock
+  | PanelLetterBlock
+  | PanelClippingBlock
+  | PanelMapPinBlock
+  | PanelTitleCardBlock
   | PanelRepeatBlock
 
 // Render-side cap on `repeat` expansion, mirrored from the server-side schema.

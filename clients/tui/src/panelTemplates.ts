@@ -19,6 +19,21 @@ import {
 
 const BADGE_TONES: ReadonlySet<string> = new Set(["info", "warn", "danger"])
 
+// The M19 performance templates' text fields, mirroring `core.panels._PERFORMANCE_KINDS`.
+// `map_pin`'s hash/x/y are handled separately (they are not localized text).
+const PERFORMANCE_REQUIRED: Record<string, readonly string[]> = {
+  letter: ["body"],
+  clipping: ["headline", "body"],
+  map_pin: ["label"],
+  title_card: ["title"],
+}
+const PERFORMANCE_OPTIONAL: Record<string, readonly string[]> = {
+  letter: ["from", "to", "date"],
+  clipping: ["source", "date"],
+  map_pin: ["note"],
+  title_card: ["subtitle", "act"],
+}
+
 type Resolved = { ok: true; value: unknown } | { ok: false }
 
 const MISS: Resolved = { ok: false }
@@ -132,6 +147,33 @@ function resolveOne(
     const alt = resolveText(block.alt, variables, locale, leaf)
     if (alt !== undefined) image.alt = alt
     return image
+  }
+  if (block.kind === "letter" || block.kind === "clipping" || block.kind === "title_card" || block.kind === "map_pin") {
+    // The M19 performance templates: localized text fields, plus `map_pin`'s
+    // content-addressed map and its (bindable) fractional coordinates. Required
+    // fields resolve or the whole block drops, same fail-closed rule as everywhere.
+    const required = PERFORMANCE_REQUIRED[block.kind]
+    const resolved: Record<string, unknown> = { kind: block.kind }
+    for (const name of required) {
+      const text = resolveText((block as Record<string, unknown>)[name], variables, locale, leaf)
+      if (text === undefined) return undefined
+      resolved[name] = text
+    }
+    for (const name of PERFORMANCE_OPTIONAL[block.kind]) {
+      const text = resolveText((block as Record<string, unknown>)[name], variables, locale, leaf)
+      if (text !== undefined) resolved[name] = text
+    }
+    if (block.kind === "map_pin") {
+      const x = finiteNumber(resolveScalar(block.x, variables, leaf))
+      const y = finiteNumber(resolveScalar(block.y, variables, leaf))
+      if (typeof block.hash !== "string" || !block.hash || x === undefined || y === undefined) return undefined
+      resolved.hash = block.hash
+      resolved.mime = block.mime
+      resolved.size = block.size
+      resolved.x = Math.min(1, Math.max(0, x))
+      resolved.y = Math.min(1, Math.max(0, y))
+    }
+    return resolved as UiBlock
   }
   if (block.kind === "choices") {
     const options: UiChoiceOption[] = []

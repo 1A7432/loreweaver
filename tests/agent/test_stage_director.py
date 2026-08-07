@@ -1,0 +1,295 @@
+"""Tests for `agent.stage_director` — the M19 presentation actor.
+
+The isolation guarantee has its own oracle (`tests/architecture/test_director_isolation.py`);
+this file covers the three output lanes and the image discipline: blocks go through the
+engine's own sanitizer, audio cues resolve only against the kit, and generation obeys
+ref-mandatory / 宁缺毋滥 / the room budget / the 慢菜先备 larder.
+
+Offline throughout: `FakeLLM` scripts the Director's JSON and `FakeImageGen` records
+what a provider would have been sent. The suite-wide conftest keeps the scribe (and so
+the Director's only production trigger) OFF; these tests opt in explicitly.
+"""
+
+from __future__ import annotations
+
+import json
+
+from agent.context import AgentCtx
+from agent.services import build_services
+from agent.stage_director import PREGEN_KEY, SPENT_KEY, run_director
+from core.modvars import define_modvar
+from infra.config import Settings
+from infra.embeddings import FakeEmbeddings
+from infra.imagegen import FakeImageGen
+from infra.llm import FakeLLM, assistant_text
+from tests.fixtures.presentation_pack import KIT, install_kit_pack
+
+CHAT = "director-room"
+
+
+class _Hub:
+    """Records every published event in order (the hub surface the Director uses)."""
+
+    def __init__(self) -> None:
+        self.events: list = []
+
+    async def publish(self, chat_key, event):
+        self.events.append(event)
+
+    def members(self, chat_key):
+        return []
+
+
+def _ctx() -> AgentCtx:
+    return AgentCtx(chat_key=CHAT, user_id="tui:player", locale="zh")
+
+
+async def _room(tmp_path, payload, *, kit: str = KIT, imagegen: FakeImageGen | None = None):
+    llm = FakeLLM(responder=lambda messages, tools: assistant_text(json.dumps(payload, ensure_ascii=False)))
+    settings = Settings()
+    settings.data_dir = tmp_path / "data"
+    services = build_services(settings, llm=llm, embeddings=FakeEmbeddings(64))
+    services.settings.director.enabled = True
+    if imagegen is not None:
+        services.imagegen = imagegen
+    await install_kit_pack(services, CHAT, tmp_path, kit=kit)
+    return services, _Hub()
+
+
+def _blocks(hub) -> list[dict]:
+    return [block for event in hub.events if event.kind == "ui" for block in event.data["blocks"]]
+
+
+def _audio(hub) -> list[dict]:
+    return [event.data for event in hub.events if event.kind == "audio"]
+
+
+# --- lane 1: performance blocks ---------------------------------------------
+
+
+async def test_performance_blocks_reach_the_room_through_the_engine_sanitizer(tmp_path):
+    services, hub = await _room(
+        tmp_path,
+        {
+            "blocks": [
+                {"kind": "title_card", "title": "第二幕 · 曝灯", "subtitle": "初二"},
+                {"kind": "clipping", "headline": "石埠溺毙", "body": "昨夜潮退，埠上拾得一人。", "source": "汐浦日报"},
+                {"kind": "letter", "body": "戌时来。", "from": "晚棠"},
+                {"kind": "nonsense", "body": "x"},  # unknown kind: dropped, not fatal
+                {"kind": "letter"},  # required field missing: dropped
+            ],
+            "audio": [],
+            "image": None,
+            "prepare": [],
+        },
+    )
+
+    staged = await run_director(services, _ctx(), "我们上埠头", "潮水退了。", beat="act_transition", hub=hub)
+
+    assert staged is True
+    kinds = [block["kind"] for block in _blocks(hub)]
+    assert kinds == ["title_card", "clipping", "letter"]
+    assert _blocks(hub)[1]["source"] == "汐浦日报"
+
+
+async def test_a_beat_outside_the_vocabulary_never_wakes_the_director(tmp_path):
+    def _explode(messages, tools):
+        raise AssertionError("no beat, no director call")
+
+    settings = Settings()
+    settings.data_dir = tmp_path / "data"
+    services = build_services(settings, llm=FakeLLM(responder=_explode), embeddings=FakeEmbeddings(64))
+    services.settings.director.enabled = True
+    await install_kit_pack(services, CHAT, tmp_path)
+
+    assert await run_director(services, _ctx(), "我看看", "没什么。", beat="none") is False
+    assert await run_director(services, _ctx(), "我看看", "没什么。", beat="") is False
+
+
+async def test_a_room_with_no_presentation_kit_is_never_charged_for_a_beat(tmp_path):
+    """Kit-gated by design: a module opts into having a Director by authoring one.
+    Without that, an upgrade would silently start paying for generic staging."""
+
+    def _explode(messages, tools):
+        raise AssertionError("no kit, no director call")
+
+    settings = Settings()
+    settings.data_dir = tmp_path / "data"
+    services = build_services(settings, llm=FakeLLM(responder=_explode), embeddings=FakeEmbeddings(64))
+    services.settings.director.enabled = True
+
+    assert await run_director(services, _ctx(), "我们上埠头", "潮水退了。", beat="scene_change") is False
+
+
+async def test_disabled_director_never_calls_the_llm(tmp_path):
+    def _explode(messages, tools):
+        raise AssertionError("director disabled")
+
+    settings = Settings()
+    settings.data_dir = tmp_path / "data"
+    services = build_services(settings, llm=FakeLLM(responder=_explode), embeddings=FakeEmbeddings(64))
+    services.settings.director.enabled = False
+    await install_kit_pack(services, CHAT, tmp_path)
+
+    assert await run_director(services, _ctx(), "行动", "叙述。", beat="handout") is False
+
+
+async def test_malformed_output_is_a_silent_noop(tmp_path):
+    llm = FakeLLM(responder=lambda messages, tools: assistant_text("完全不是 JSON 的闲聊"))
+    settings = Settings()
+    settings.data_dir = tmp_path / "data"
+    services = build_services(settings, llm=llm, embeddings=FakeEmbeddings(64))
+    services.settings.director.enabled = True
+    await install_kit_pack(services, CHAT, tmp_path)
+    hub = _Hub()
+
+    assert await run_director(services, _ctx(), "行动", "叙述。", beat="spike", hub=hub) is False
+    assert hub.events == []
+
+
+# --- lane 2: audio cues ------------------------------------------------------
+
+
+async def test_audio_cues_resolve_only_against_the_kit(tmp_path):
+    services, hub = await _room(
+        tmp_path,
+        {
+            "blocks": [],
+            "audio": [{"cue": "tide", "action": "play"}, {"cue": "not-in-the-kit", "action": "play"}],
+            "image": None,
+            "prepare": [],
+        },
+    )
+
+    staged = await run_director(services, _ctx(), "夜里", "雾起了。", beat="scene_change", hub=hub)
+
+    assert staged is True
+    controls = [frame for frame in _audio(hub) if frame.get("type") == "audio_control"]
+    assert len(controls) == 1
+    assert controls[0]["layer"] == "bgm" and controls[0]["action"] == "play"
+    # Pack audio needs no library import: the frame carries the content hash the media
+    # byte channel already resolves for an enabled pack.
+    assert len(controls[0]["hash"]) == 64 and controls[0]["title"] == "潮涌"
+
+
+# --- lane 3: the image discipline -------------------------------------------
+
+
+async def test_generation_carries_the_fixed_portrait_reference_and_style(tmp_path):
+    imagegen = FakeImageGen()
+    services, hub = await _room(
+        tmp_path,
+        {"blocks": [], "audio": [], "image": {"subject": "wantang", "prompt": "她站在灯下"}, "prepare": []},
+        imagegen=imagegen,
+    )
+
+    await run_director(services, _ctx(), "我抬头", "她在灯下。", beat="handout", hub=hub)
+
+    assert len(imagegen.calls) == 1
+    call = imagegen.calls[0]
+    # Ref-mandatory: the 定妆 image itself rides the request, not just its words.
+    assert int(call["reference"]) > 0 and call["reference_mime"] == "image/png"
+    # ...alongside the kit's subject descriptor, style keywords and banned list.
+    assert "plain dark coat" in call["prompt"]
+    assert "她站在灯下" in call["prompt"]
+    # Style keywords ride in the ROOM's language (the kit declared both); an author
+    # writing a Chinese module gets their own words sent to the image provider.
+    assert "水墨" in call["prompt"] and "text overlays" in call["prompt"]
+
+    image_blocks = [block for block in _blocks(hub) if block["kind"] == "image"]
+    assert len(image_blocks) == 1 and image_blocks[0]["caption"] == "顾晚棠"
+    assert await services.store.state_get(CHAT, SPENT_KEY) == "1"
+
+
+async def test_a_subject_without_a_reference_is_never_generated(tmp_path):
+    imagegen = FakeImageGen()
+    services, hub = await _room(
+        tmp_path,
+        {"blocks": [], "audio": [], "image": {"subject": "the-quay", "prompt": "石埠"}, "prepare": []},
+        imagegen=imagegen,
+    )
+
+    await run_director(services, _ctx(), "我看埠头", "石埠空着。", beat="scene_change", hub=hub)
+
+    # "No ref, no portrait" is structural, not a prompt request the model may ignore.
+    assert imagegen.calls == []
+    assert _blocks(hub) == []
+
+
+async def test_pack_only_generation_is_an_author_veto_no_config_overrides(tmp_path):
+    imagegen = FakeImageGen()
+    services, hub = await _room(
+        tmp_path,
+        {"blocks": [], "audio": [], "image": {"subject": "wantang", "prompt": "x"}, "prepare": ["wantang"]},
+        kit=KIT.replace("generation: allow", "generation: pack_only"),
+        imagegen=imagegen,
+    )
+    services.settings.director.images = True  # config says yes; the author still wins
+
+    await run_director(services, _ctx(), "我抬头", "她在灯下。", beat="handout", hub=hub)
+
+    assert imagegen.calls == []
+
+
+async def test_the_room_image_budget_is_a_hard_stop(tmp_path):
+    imagegen = FakeImageGen()
+    services, hub = await _room(
+        tmp_path,
+        {"blocks": [], "audio": [], "image": {"subject": "wantang", "prompt": "x"}, "prepare": []},
+        imagegen=imagegen,
+    )
+    services.settings.director.max_images = 0
+
+    await run_director(services, _ctx(), "我抬头", "她在灯下。", beat="handout", hub=hub)
+
+    assert imagegen.calls == []
+
+
+async def test_a_pregenerated_subject_is_served_from_the_larder_without_spending(tmp_path):
+    """慢菜先备: a warmed subject costs nothing at the beat that finally uses it."""
+    imagegen = FakeImageGen()
+    services, hub = await _room(
+        tmp_path,
+        {"blocks": [], "audio": [], "image": {"subject": "wantang", "prompt": "x"}, "prepare": []},
+        imagegen=imagegen,
+    )
+    await services.store.state_set(CHAT, PREGEN_KEY, json.dumps({"wantang": "a" * 64}))
+    await services.store.state_set(CHAT, SPENT_KEY, "1")
+
+    await run_director(services, _ctx(), "我抬头", "她在灯下。", beat="handout", hub=hub)
+
+    assert imagegen.calls == []
+    assert await services.store.state_get(CHAT, SPENT_KEY) == "1"
+    # The larder hash is not room media, so the reachability gate drops the block —
+    # exactly the behaviour that keeps a stale/foreign hash off the wire.
+    assert _blocks(hub) == []
+
+
+async def test_player_visible_trackers_are_in_context_and_keeper_ones_are_not(tmp_path):
+    captured: list[str] = []
+
+    def responder(messages, tools):
+        captured.append(messages[0]["content"])
+        return assistant_text('{"blocks": [], "audio": [], "image": null, "prepare": []}')
+
+    settings = Settings()
+    settings.data_dir = tmp_path / "data"
+    services = build_services(settings, llm=FakeLLM(responder=responder), embeddings=FakeEmbeddings(64))
+    services.settings.director.enabled = True
+    await install_kit_pack(services, CHAT, tmp_path)
+    await define_modvar(
+        services.documents,
+        CHAT,
+        {"id": "祭典日", "kind": "number", "labels": {"zh": "祭典日"}, "default": 2, "minimum": 1, "maximum": 3},
+    )
+    await define_modvar(
+        services.documents,
+        CHAT,
+        {"id": "hidden", "kind": "text", "labels": {"zh": "沈氏献妻"}, "visibility": "keeper", "default": "yes"},
+    )
+
+    await run_director(services, _ctx(), "我数灯", "九盏。", beat="scene_change")
+
+    prompt = captured[0]
+    assert "祭典日: 2" in prompt
+    assert "沈氏献妻" not in prompt

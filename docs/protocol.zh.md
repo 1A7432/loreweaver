@@ -75,6 +75,11 @@
   `| {kind:"divider"}`
   `| {kind:"choices", prompt?:string, options:[{id:string,label:string,input:string}]}`
   `| {kind:"image", hash:string, mime?:string, size?:int, caption?:string, alt?:string}`
+  `| {kind:"letter", body:string, from?:string, to?:string, date?:string}`
+  `| {kind:"clipping", headline:string, body:string, source?:string, date?:string}`
+  `| {kind:"map_pin", hash:string, mime?:string, size?:int, label:string, x:number, y:number, note?:string}`
+  `| {kind:"title_card", title:string, subtitle?:string, act?:string}`
+  后四种是 M19 的**演出模板**：声明式，不是标记语言。富客户端把 `letter` 画成信笺、把 `title_card` 画成整幅幕卡；文本优先客户端把同样的字段打成几行。`map_pin` 的 `x`/`y` 是地图图片自身画框的**比例**（0..1），客户端按自己渲染的尺寸缩放标记。它们由房间的演出导演（`agent.stage_director`）在剧情节拍上发出，钩子与模组面板同样可用。
   `image` 块用**内容 hash** 指名一张图——正是媒体字节通道已经在应答的地址（`{op:"get", hash}`）。服务端只会发出**本房间**可取的 hash（房间自己的媒体，或本房间已启用包的资产），并盖上权威 `mime`，因此客户端可以像对待任何媒体一样拉取与缓存；取不到的 hash 在组帧前就已在服务端丢弃。文本优先客户端降级为 `caption`/`alt` 一行文字加自己既有的媒体查看方式。
   `panel:"inline"` 渲染进叙事流，`"sidebar"` 渲染进常驻侧栏区域。`id` 命名一个 UI 区域：后到的同 `id` sidebar 帧替换该区域内容；带 `replace:true` 的 inline 帧可以就地更新前一个同 `id` 的 inline 帧（不支持就地更新的客户端顺序追加即可）。玩家点选 `choices` 选项时，客户端把该选项的 `input` 原样作为普通 `input` 帧发回——不新增客户端→服务端帧类型。
 - `ui_manifest`— **这名观看者**的完整模组面板清单：`join` 时紧随首个 `state` 帧下发，守秘人执行 `.panels enable|disable` 后向每个在线成员重新推送。全量替换语义：帧携带整张清单（空表 = 没有面板，重连时也借此清掉旧面板）。包声明的 `audience` 在服务端按观看者的 keystore 角色**先行**解析——仅守秘人可见的面板在结构上就不会出现在玩家清单里，`audience` 字段本身也永不上线。面板/模板形状见下文"模组 UI 面板"：
@@ -133,7 +138,7 @@
 - 任何标量字段可写 `{"$var": "<变量 id>"}`；该变量对本观看者不存在/未公开时**整块省略**（fail-closed——面板永远无法放大可见性；`state` 线上的过滤器仍是唯一 choke point）；
 - `{"repeat": {"prefix": "<id 前缀>", "block": <模板块>}}` 对每个 id 以该前缀开头的可见变量渲染一个实例（≤ 32 个）；块内 `{"$leaf": "id"|"label"|"value"}` 代入匹配变量的对应字段。
 
-`image` 是唯一由服务端**改写**而非原样透传的模板块：作者写包内相对路径 `src`，清单里携带的是 `{kind:"image", hash, mime, size, caption?, alt?}`（`caption`/`alt` 为本地化文本）——寻址由打包过程决定，因此面板只可能指向**它自己这个包所附带**的图片。拉取方式与 Tier-2 资产一致，走媒体字节通道。
+`image` 与 `map_pin` 是由服务端**改写**而非原样透传的模板块：作者写包内相对路径 `src`，清单里携带的是解析后的 `{hash, mime, size}` 加该块自己的（本地化）字段——寻址由打包过程决定，因此面板只可能指向**它自己这个包所附带**的图片。拉取方式与 Tier-2 资产一致，走媒体字节通道。其余演出模板都是普通的本地化文本；`map_pin` 的 `x`/`y` 可以绑定 `{$var}`，让标记随剧情移动。
 
 本地化文本是 `{en,zh}` 映射；客户端按自己语言选取（回退 `en`）。点选 Tier-1 `choices` 选项发送 `panel_intent{kind:"choice", value: <选项的 input>}`。文本客户端（TUI）用既有块渲染器画 Tier-1，`tray`/`modal` 折进侧栏分区，Tier-2 渲染其 `fallback` 块，对显式 `fallback: null` 显示一行本地化的"请在富客户端查看"。
 
