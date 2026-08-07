@@ -66,7 +66,9 @@ _TEMPLATE_PARAMETERS: dict[str, dict[str, Any]] = {
             },
             "failure_loss": {
                 "type": "string",
-                "description": "Loss dice expression applied on a failed check, e.g. \"1d6\", \"1d100\".",  # i18n-exempt: model-facing tool schema text
+                # A failed loss check is the mechanic's entire point; "0" makes the roll
+                # decorative and reads to players as a broken engine (F20).
+                "description": "Loss dice expression applied on a FAILED check, e.g. \"1d6\", \"1d100\". This is what failing costs — \"0\" means the failure costs nothing at all, which is almost never what a scene with stakes wants.",  # i18n-exempt: model-facing tool schema text
             },
             "tag": {
                 "type": "string",
@@ -367,7 +369,12 @@ async def _run_check_with_loss(
         i18n.t(header_key, name=character.name, label=label),
         i18n.t("kp_tools.subsystem.loss.roll_line", label=label, value=stat_value, roll=rolled.total),
         i18n.t("kp_tools.subsystem.loss.result_line", level=level_label),
-        i18n.t(
+        # A FAILED check that costs nothing prints a line identical to a success's,
+        # which is how a 2026-08-07 session read "no deduction" as an engine bug when
+        # the model had simply passed `failure_loss: "0"`. Say which it is.
+        i18n.t("kp_tools.subsystem.loss.no_cost_line", label=label)
+        if not outcome.rank.success and loss == 0
+        else i18n.t(
             "kp_tools.subsystem.loss.loss_line",
             loss=loss,
             expr=loss_expr,

@@ -30,6 +30,17 @@ Iron rule #1 holds: hooks REQUEST effects; real code applies them. A broken hand
 infinite loop, or a missing `ejs` extra degrades to "hooks inert (logged)", never to a broken
 turn. Snapshots are taken once per turn — a hook sees its OWN earlier writes (the bridge updates
 the in-sandbox view) but not mid-turn tool writes; that staleness is documented, not hidden.
+
+**A hook's ``globalThis`` lives for exactly ONE turn.** The interpreter is rebuilt per turn
+(``agent.hook_runtime.load_room_hook_engine``), so a counter kept in a module-level JS variable
+silently resets every turn — it does not raise, it just never advances, which is the worst way
+for a bug to behave. A 2026-08-07 play-test lost a whole session's "tide sense" meter to exactly
+this: ``globalThis.__turns = (globalThis.__turns || 0) + 1`` read ``1/40`` for six hours.
+
+Anything that must survive a turn goes through the variable bridge — ``setvar``/``incvar``,
+whose writes come back out as an effect buffer the engine validates, clamps and PERSISTS. That
+is not a workaround for the sandbox lifetime; it is iron rule #1 working as designed. Durable
+state is the deterministic engine's, and a hook asks for it rather than keeping its own.
 """
 
 from __future__ import annotations

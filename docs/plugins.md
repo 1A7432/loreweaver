@@ -360,6 +360,30 @@ operator's content, the operator's box):
   (memory/time-capped, no host I/O), `variables_changed` fires at most once per turn so hook
   cascades terminate by construction, and any failure — broken script, infinite loop, missing
   `ejs` extra — degrades to "hooks inert (logged)", never to a broken turn.
+- **`globalThis` lives for ONE turn — the mistake worth naming.** "One interpreter per turn"
+  means the interpreter is *rebuilt* every turn, so a counter kept in a JS variable resets
+  every turn. It does not error; it just never advances, which is the worst way for a bug to
+  behave. A 2026-08-07 play-test lost a whole session's meter to exactly this:
+
+  ```js
+  // WRONG — reads 1/40 forever, in silence.
+  on('turn_start', () => {
+    globalThis.__turns = (globalThis.__turns || 0) + 1;
+    emitUI([{kind: 'meter', label: 'Tide sense', value: globalThis.__turns, min: 0, max: 40}])
+  })
+
+  // RIGHT — the engine owns durable state; the hook asks for it.
+  on('turn_start', () => {
+    incvar('tide_sense', 1);                       // validated, clamped, PERSISTED
+    emitUI([{kind: 'meter', label: 'Tide sense', value: Number(getvar('tide_sense')) || 0,
+             min: 0, max: 40}])
+  })
+  ```
+
+  This is not a workaround for the sandbox's lifetime — it IS iron rule #1. Anything that has
+  to survive a turn is real state, and real state belongs to the deterministic engine. (Declare
+  the variable in your module so it gets bounds and a label; an undeclared name still persists,
+  as an MVU leaf.)
   `TRPG_ENABLE_FULL_EJS=false` switches this off along with every other sandboxed-JS surface.
 
 ### C.2 Python entry-point plugins (still deferred)
