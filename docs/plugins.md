@@ -1,26 +1,27 @@
 # Loreweaver extensibility: plugins, skills & content packs
 
-> Status: **contract** (updated 2026-07-30). Layer A (rule-system management) has **landed**
-> (`core/rulepacks.py` is a discovery-based, data-driven loader; coc7/dnd5e migrated
-> behavior-identical). Layer B.1 (KP skills — SKILL.md loader, prompt binding,
-> per-room enable, mature-mode content gate) has **landed**. Layer B.2
-> (`allowed-tools` toolset-gating enforcement + the `romance-relationships`
-> skill + coc7 intimate aliases) has **landed**. Layer B.3a (the skill-generation
-> engine — a gated `generate_skill` tool + the `skill-forge` skill that authors a
-> new SKILL.md from a description and installs it to a user data-dir) has
-> **landed**. Layer B.3b (the rulepack + module generators — gated
-> `generate_rulepack`/`generate_module` tools + the `rule-forge`/`module-forge`
-> skills; a rulepack installs as a flat `<id>.yaml` to a user data-dir the same
-> way skills do, a module installs PER-ROOM through the existing
-> upload/analysis pipeline) has **landed**. B.4 (TUI management pages with a
-> describe→generate button) has **landed** (the KP-skills screen). Layer C.1
-> (sandboxed event hooks) and the `.lwpack` content-pack format have **landed**;
-> C.2 (Python entry-point plugins) is deferred. Layer D (module UI panels, M15) has
-> its **engine half landed** (pack schema, `.panels` room enablement, protocol v1.8,
-> TUI tier-1/fallback rendering); the rich-client tier-2 host ships with the studio.
-> This document is the contract
-> contributors build against; card authors have a friendlier on-ramp in
-> [cards.md](cards.md), hook authors in [hooks.md](hooks.md).
+> Status: **contract** (updated 2026-08-07; wire protocol **2.1**). This document is what
+> contributors build against. Authors have friendlier on-ramps: a start-to-finish tutorial in
+> [authoring.md](authoring.md), card specifics in [cards.md](cards.md), hooks in
+> [hooks.md](hooks.md).
+>
+> **Landed, and what each means:**
+>
+> | Layer | State |
+> |---|---|
+> | **A — data plugins** | rule systems, cards, lorebooks, module variables. `core/rulepacks.py` is a discovery-based data loader; since M16 a rulepack also owns its **resolution ladder, sheet shape, subsystems, command dialect and expertise text**, so coc7/dnd5e/wod are ordinary packs and deleting a file removes the system |
+> | **B.1 — KP skills** | `SKILL.md` loader, prompt-section binding, per-room `.skill enable`, mature-mode content gate |
+> | **B.2 — `allowed-tools`** | additive toolset gating on `@tool(gated=…)`; `romance-relationships` ships on it |
+> | **B.3 — self-extension forges** | gated `generate_skill` / `generate_rulepack` / `generate_module`, each invisible until its forge skill is enabled. The rulepack forge speaks the M16 `resolution:` / `subsystems:` / `expertise:` vocabulary |
+> | **B.4 — TUI management** | describe→generate on the KP-skills screen |
+> | **C.1 — event hooks** | sandboxed `hooks.js` on the turn lifecycle, with declarative UI emission |
+> | **C.2 — Python entry points** | **deferred** — the only layer that would run with server privileges |
+> | **`.lwpack` packaging** | manifest v2: full file inventory, detection-truth card kinds, schema versions with migration slots; `gh:` release distribution |
+> | **D — module UI panels (M15)** | tier 0/1/2 all landed: `ui/panels.yaml`, `.panels enable`, server-resolved `audience`, content-addressed tier-2 assets with a mandatory text-first fallback |
+> | **M16 — rules externalization** | the core is rule-agnostic; `agent/` never names a system or compares a rank id, pinned by an architecture test |
+> | **M17 — document model** | all room content is one `Document` type; every type's `project(doc, viewer)` is THE wire chokepoint for information isolation |
+> | **M18 — campaign chronicle** | `chronicle` / `campaign_summary` / `thread` documents, the deterministic fold policy, `.recap` / `.chronicle` |
+> | **M19 — the Stage Director** | the presentation kit (`ui/presentation.yaml`), the performance block vocabulary (`letter` / `clipping` / `map_pin` / `title_card` / `image`), block-level `visible_when`, per-viewer resource labels — protocol 2.1 |
 
 Loreweaver is a self-hosted, world/story-first AI Keeper — not a persona-chat
 frontend. Its long-term leverage is being a **platform the community extends**,
@@ -118,8 +119,54 @@ an exotic one *may* use code):
   <stat>}`, `{floor_div: {of: <stat>, by: N}}`, `{sum_ranges: {of: [<stats>],
   ranges: [[lo, hi, value], ...], else: <value>}}`.
 
-The two built-ins (`coc7`, `dnd5e`) are migrated to this format with **identical
-behavior** and serve as reference packs.
+The three bundled systems (`coc7`, `dnd5e`, `wod`) are ordinary packs in this format and serve as
+the reference vocabulary. "Rules are data" has a literal acceptance test: remove
+`rulepacks/coc7.yaml` from a deployment and CoC is gone, with no residue in the engine.
+
+**Rule BEHAVIOUR is pack data too (M16).** Since the rules externalization a pack does not just
+declare a sheet; it declares how a check resolves, which subsystems exist, what dot-commands it
+answers to, and what the Keeper is told about running it. `agent/` never names a system and never
+compares a rank id — it reads semantic flags only — so a pack can invent its own vocabulary without
+touching code.
+
+```yaml
+resolution:
+  version: 1
+  roll: 1d100                # any dice expression: 2d20kh1, 4dF, 5d6!, {pool}d10>=8
+  target: skill              # skill | attribute | dc | none | <expression>
+  compare: "<="
+  params:   {deng: {min: 1, max: 9, default: 3}}   # pool parameters, supplied by the check tool
+  modifiers:                 # named, composable roll transforms
+    bonus:   {tens_reroll: keep_lowest}
+    penalty: {tens_reroll: keep_highest}
+  difficulties: {hard: {target: "floor(target / 2)"}, …}
+  ranks:                     # ORDERED ladder; first match wins; the flags are declared BY THE PACK
+    - {id: crit,   when: "roll == 1",      success: true, critical: true, tier: 5}
+    - {id: hard,   when: "roll <= target && roll <= floor(raw_target / 2)", success: true, tier: 3}
+    - {id: fail,   tier: 1}                #  a rank with no `when:` is the fallback
+  margin: successes
+  variants:  {xipu_night: {ranks: [...]}}  # house ladders, selected with `.rule <variant>`
+subsystems:  {sanity: {...}, luck: {...}, growth: {...}, opposed: {}, random_madness: {tables: {...}}}
+commands:    {ra: {action: check}, sc: {tool: sanity}, xipu: {action: make_char}}
+expertise:   {en: "…", zh: "…"}           # what the Keeper is told about running this system
+labels:      {en: {crit: [Critical Success], …}, zh: {crit: [大成功], …}}
+```
+
+Expression names are a closed set — `roll`, `dice` (indexable `dice1`, `dice2`, …), `target`
+(difficulty-adjusted), `raw_target` (before difficulty), `modifier`, `successes`, `ones` — and are
+validated **statically at load**, so a misspelling fails the pack build with a pointable diagnostic
+rather than crashing on someone's first check. Inside a `difficulties.*.target` expression `target`
+is the RAW value; inside a rank's `when:` it is the adjusted one.
+
+**Evolution discipline:** the DSL never grows syntax for one system. A system it cannot express uses
+the script lane (`resolution: {script: resolver.js}`, and `subsystems: {<name>: {script: flow.js}}`
+for flows) — QuickJS, the same trust lane as `hooks.js`: the engine pre-rolls the declared dice and
+passes values in, the script returns a pure verdict or an effect description drawn from a closed
+engine-owned vocabulary, and the engine validates, clamps and applies it. Randomness and state never
+leave the engine. The trust card discloses it as `has_rules_script`, re-verified at install. Only a
+pattern recurring across two or three script-lane systems is promoted into DSL syntax.
+
+A worked, buildable example of all of the above: [authoring.md](authoring.md) §2–§3.
 
 **Rules may couple to worlds** (`extends:`): a module that needs bespoke rules ships a
 rulepack that *patches* a base system instead of rewriting it — `extends: coc7` plus only
@@ -186,7 +233,7 @@ setup instructions) declares named trackers with `define_variable` — kind
 `visibility` of `player` or `keeper` — then updates them with
 `set_variable`/`adjust_variable`. Every write is validated and clamped by real code
 (iron rule #1); the current values are folded into the KP prompt each turn, and the
-player-visible subset ships to clients on the `state` frame (protocol v1.6) for the
+player-visible subset ships to clients on the `state` frame for the
 TUI's tracker panel. Keeper-only variables are filtered inside the engine and never
 reach a transport (iron rule #3, structural). This is state, not code: nothing here
 executes, so it stays firmly in Layer A's risk class.
@@ -345,13 +392,13 @@ operator's content, the operator's box):
   effect emitters `inject(text)` (adds a section to this turn's keeper prompt),
   `narrate(text)` (appends to the player-visible reply), `rewriteReply(text)`, `log(text)`,
   and `emitUI(blocks, opts?)` — declarative UI blocks (meter/stat/badge/text/divider/choices)
-  clients render as protocol-v1.7 `ui` frames, e.g.
+  clients render as `ui` frames, e.g.
   `emitUI([{kind:"meter", label:"Fear", value:3, min:0, max:10}], {panel:"sidebar", id:"hud"})`;
   see `docs/protocol.md` for the block schema. Emitted UI is PLAYER-VISIBLE authorial output
   (the same trust stance as `narrate`) — never emit keeper-only secrets into it.
   With module UI panels (Layer D) there is additionally `emitPanel(panelId, payload)` — an
   opaque JSON payload (≤ 32 KB, ≤ 20 per turn) for one pack-declared panel, delivered as a
-  protocol-v1.8 `panel_event` ONLY to viewers whose manifest contains that panel. The same
+  `panel_event` ONLY to viewers whose manifest contains that panel. The same
   trust stance applies, with one sharpening: a payload for an `audience: all` panel reaches
   players — keeper secrets go, if anywhere, into `audience: keeper` panels only.
 - **Contract (iron rule #1)**: hooks REQUEST effects; deterministic engine code validates,
@@ -400,10 +447,10 @@ isolation. Until C.2 ships, code contributions go through normal in-tree PRs.
 Modules dress the table: a pack ships its own interface — HUDs, case boards, maps —
 rendered by protocol clients. This is the presentation direction that replaced the retired
 chat adapters. The canonical spec is `docs/specs/M15-ui-panels.md`; the wire contract is
-`docs/protocol.md` ("Module UI panels", v1.8). The layer is three tiers, by authoring
+`docs/protocol.md` ("Module UI panels", protocol 2.1). The layer is three tiers, by authoring
 effort and risk:
 
-- **Tier 0 — declarative blocks** (v1.7, Layer C.1's `emitUI`): meter/stat/badge/text/
+- **Tier 0 — declarative blocks** (Layer C.1's `emitUI`): meter/stat/badge/text/
   divider/choices/image, emitted per turn by hooks. Every client renders them natively.
 - **Tier 1 — declarative panels** (landed with M15a): a pack declares NAMED panels in
   `ui/panels.yaml` (`contents.panels` in `pack.yaml`) — layouts of Tier-0 blocks with
@@ -600,7 +647,7 @@ description:
 authors: [ada]
 license: CC-BY-4.0
 engine:
-  protocol: "1.7"   # minimum wire protocol the pack's hooks rely on
+  protocol: "2.1"   # minimum wire protocol this pack's hooks/panels rely on
 contents:
   skills: [skills/omen-engine]      # a dir holding SKILL.md (+ hooks.js)
   rulepacks: [rulepacks/pulp.yaml]  # full systems, or patches (`extends: coc7` + deltas)
@@ -654,9 +701,16 @@ it" summary.
 
 ## Roadmap & status
 
+*(The status table at the top of this document is the summary; this section records what each item
+actually shipped as, for anyone reading the code.)*
+
 1. **Layer A — rule-system management** — **landed** (discovery-based loader +
-   hybrid derived stats; coc7/dnd5e migrated behavior-identical; a new pure-data
-   system is now just a YAML file).
+   hybrid derived stats; a new pure-data system is just a YAML file). **Extended by M16**: a
+   rulepack now also owns `resolution:` (the compiled check ladder + the QuickJS script lane),
+   `sheet:` (pack-declared sheet shapes; derived values are never persisted), `subsystems:`
+   (engine-generic behavior templates, pack-parameterized), `commands:` (the dot-command dialect,
+   which materializes the room's KP toolset — a wod room simply has no `sanity_check`),
+   `expertise:` and `labels:`. `tests/architecture/` pins `agent/` to zero rule-system tokens.
 2. **Layer B.1 — KP skills** — **landed**: `SKILL.md` loader (`core/skills.py`),
    prompt-section binding (`agent/prompt_builder.py`), per-room enable (`.skill`
    command), and the mature/explicit content gate that lifts the output censor;
@@ -693,7 +747,30 @@ it" summary.
    skills, rulepacks and assets into one integrity-verified zip with Git-release
    distribution.
 6. **Layer C.1 — event hooks** — **landed**: sandboxed `hooks.js` on the turn
-   lifecycle with declarative protocol-v1.7 UI emission (see C.1 above; author
+   lifecycle with declarative UI emission (see C.1 above; author
    reference in [hooks.md](hooks.md)).
-7. **Layer C.2 — Python entry-point plugins** — deferred; entry points + trust
-   model.
+7. **Layer D — module UI panels (M15)** — **landed**, all three tiers: `ui/panels.yaml` +
+   `contents.panels`, `.panels enable <packId>` room admission, server-resolved `audience`,
+   `{$var}` bindings and `repeat`, the static `image` block, block-level `visible_when`
+   (client-evaluated, grammar refused at build outside a tiny portable subset —
+   `tests/fixtures/visible_when_vectors.json` is the shared conformance table), and
+   content-addressed tier-2 assets with a mandatory text-first `fallback`.
+8. **M16 — rules externalization** — **landed**: the compiled `RuleSystem` + the neutral
+   `CheckOutcome`/`Rank` contract; ROLL (engine) → INTERPRET (pack, pure) → APPLY (engine); the
+   old per-system modules deleted outright.
+9. **M17 — the document model** — **landed**: one `Document` meta-type for all room content, with
+   a per-type `project(document, viewer)` contract as THE single wire chokepoint for iron rule #3.
+   Every per-store manager and every backup allowlist is gone. A handout-class feature is a type +
+   schema + projection away, with no new store keys and no new wire filter.
+10. **M18 — the campaign chronicle** — **landed**: `chronicle` / `campaign_summary` / `thread`
+    documents, the deterministic fold policy (0.60 trigger → 0.40 floor, 0.85 emergency, a 4-turn
+    no-future lag window), folded records joining the embedding index, and the projection dividend —
+    `.recap` is the player-grade view of the same documents, with keeper annotations structurally
+    absent.
+11. **M19 — the Stage Director** — **landed**: `ui/presentation.yaml` + `contents.presentation`,
+    the performance block vocabulary, ref-mandatory image generation with the author's `pack_only`
+    veto, audio cues, and a room-lifetime image budget. Kit-gated: a room whose modules ship no kit
+    never wakes a Director. `tests/architecture/test_director_isolation.py` is the oracle for its
+    knowledge scoping.
+12. **Layer C.2 — Python entry-point plugins** — **deferred**; entry points + trust
+    model. The only layer that would run with server privileges, so it stays last and opt-in.

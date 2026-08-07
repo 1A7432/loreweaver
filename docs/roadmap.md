@@ -2,17 +2,57 @@
 
 # Loreweaver roadmap
 
-Loreweaver is young and built largely by one person with AI assistance. This is the honest forward plan — where the project is focused now, the bigger arc after, and one open design question worth deciding in the open. For the layer contracts and iron rules, see [CLAUDE.md](../CLAUDE.md).
+Loreweaver is young and built largely by one person with AI assistance. This is the honest forward plan — where the project is focused now, the bigger arc after, and one design question we argued in the open and then closed. For the layer contracts and iron rules, see [AGENTS.md](../AGENTS.md).
 
 ## The ambition
 
-The goal is not "an AI stand-in for a game master" — it is to be **the Claude Code of the RPG domain**. Powerful coding agents are everywhere; competent RPG agents barely exist. Every layer here — real dice and hard rules, a Keeper that acts through tool calls, sub-actors that know only what they should, an extension ecosystem growing along SKILL.md and SillyTavern conventions — points the same way: making "running a world well" a first-class agent capability.
+The goal is not "an AI stand-in for a game master" — it is to be **the engine and the open standard
+for AI-run tabletop RPGs**. Powerful coding agents are everywhere; competent RPG agents barely
+exist, and the formats a world would need to travel in do not exist at all. Every layer here — real
+dice and hard rules, a Keeper that acts through tool calls, sub-actors that know only what they
+should, an extension ecosystem growing along SKILL.md and SillyTavern conventions — points the same
+way: making "running a world well" a first-class agent capability, on formats nobody has to ask
+permission to use.
 
 ## Where things stand
 
-The deterministic engine — dice (on `d20`), CoC/DnD success levels, character math, rule validation, the game clock — is the solid core, covered by a deterministic, offline test suite. The **terminal (OpenTUI) client remains primary**, connecting over **Iroh** p2p. The chat-platform adapters (Discord/QQ/Telegram/Feishu/OneBot) were **removed deliberately** (2026-07-30): the project's UI direction — declarative `ui` frames, live tracker panels, and a deeply customizable client-side extension layer — is something plain-text chat platforms structurally cannot render, so clients speak the open protocol instead.
+The deterministic engine — dice, check ladders, character math, rule validation, the game clock — is
+the solid core, covered by a deterministic, offline test suite. The **terminal (OpenTUI) client
+remains primary**, connecting over **Iroh** p2p. The chat-platform adapters
+(Discord/QQ/Telegram/Feishu/OneBot) were **removed deliberately** (2026-07-30): the project's UI
+direction — declarative `ui` frames, live tracker panels, and a deeply customizable client-side
+extension layer — is something plain-text chat platforms structurally cannot render, so clients
+speak the open protocol instead.
 
-**v1.0.0 is out as the first stable release**, and the module-facing surface has filled in since the hardening pass below: deterministic module variables with a live TUI tracker panel, full SillyTavern compatibility for imported cards (MVU variable trees, the `<UpdateVariable>` text protocol, full EJS in a QuickJS sandbox, ST worldbook trigger semantics), sandboxed event hooks (`hooks.js`) that can draw declarative protocol-v1.7 UI frames, `.lwpack` content packs distributed through Git releases, and the protocol SDK on npm (`loreweaver-protocol`). On top of that sits the **card split**: imports decompose an ST card into its character half (player-importable, machinery structurally stripped) and its world half (keeper-only `.import … world` — hooks, variable schemas, keeper lore), packs label `world` vs `character` cards with the label enforced by real detection, imported variable trees stay off player panels until the keeper exposes them, and a module can ship its rules as a rulepack *patch* (`extends: coc7` + deltas). Details: [plugins.md](plugins.md), [cards.md](cards.md), [hooks.md](hooks.md).
+**v1.0.0 shipped as the first stable release**, and development has continued past it on a
+`1.0.1.dev*` line. Since then, four structural milestones landed:
+
+- **Rules became data (M16).** A rule system is one file that owns its check ladder, sheet shape,
+  subsystems, command dialect and expertise text. The core no longer knows what CoC is: an
+  architecture test pins `agent/` to zero rule-system tokens, and deleting `rulepacks/coc7.yaml`
+  removes CoC with no residue. Systems the DSL can't express drop to a sandboxed pure-function lane.
+- **One document model (M17).** All room content — lore, NPCs, sheets, pregens, trackers, notes,
+  knowledge pools — is one `Document` type, and every type's `project(document, viewer)` is the
+  single wire chokepoint for information isolation. Five parallel secrecy mechanisms became one, and
+  every per-store backup allowlist (a reliable source of drift bugs) is gone.
+- **Long-campaign memory (M18).** Play is recorded as chronicle documents that fold into a rolling
+  summary on a deterministic policy, so a campaign outlives its context window. `.recap` is the
+  player-grade projection of the same documents.
+- **A presentation layer (M19).** A Stage Director — a player-side, knowledge-scoped actor — stages
+  story beats with declarative performance templates, audio cues and ref-constrained generated art,
+  from a creative brief the module's author ships. Wire protocol 2.1.
+
+Alongside those: deterministic module variables with a live tracker panel, full SillyTavern
+compatibility for imported cards (MVU variable trees, the `<UpdateVariable>` text protocol, full EJS
+in a QuickJS sandbox, ST worldbook trigger semantics), sandboxed event hooks that draw declarative
+UI, `.lwpack` content packs distributed through Git releases, and the protocol SDK on npm
+(`loreweaver-protocol`, whose `major.minor` tracks the wire protocol). On top of that sits the **card
+split**: imports decompose an ST card into its character half (player-importable, machinery
+structurally stripped) and its world half (keeper-only `.import … world`), packs label `world` vs
+`character` cards with the label enforced by real detection, imported variable trees stay off player
+panels until the keeper exposes them, and a module can ship its rules as a rulepack *patch*
+(`extends: coc7` + deltas). Details: [plugins.md](plugins.md), [authoring.md](authoring.md),
+[cards.md](cards.md), [hooks.md](hooks.md).
 
 ## Foundations — done
 
@@ -29,7 +69,8 @@ A hardening pass just landed the unglamorous things that have to be right before
 ## Near-term
 
 - **Multiplayer polish.** Now that the permission model is enforced, tighten the remaining networked-play rough edges (a real bot-loop guard, richer late-joiner state) so a room among trusted people is genuinely comfortable.
-- **Companion client & card workbench — going public.** The engine half of native authoring has landed: typed trackers (`core.modvars`) instead of raw MVU trees, and imported SillyTavern cards that actually run (full EJS, trigger semantics — see [plugins.md](plugins.md)). The authoring half — building Loreweaver-native cards and content without hand-editing JSON — is implemented on the creation side in a companion desktop client and card workbench, which are being prepared for public release; opening them up is the near-term work.
+- **Companion client & card workbench.** The authoring half — building Loreweaver-native cards and content without hand-editing JSON — lives in [loreweaver-studio](https://github.com/1A7432/loreweaver-studio), now public: an eleven-stage wizard, SillyTavern export for tavern release, and a preset-import mirror. It is earlier than this repository and is catching up to the 2.x formats.
+- **A flagship module.** The formats are only worth as much as the first serious thing built on them. One is in development, co-designed with the panel/presentation layers so that layer has a real consumer rather than a hypothetical one.
 
 ## The bigger arc — the world engine
 
@@ -41,11 +82,27 @@ The differentiator is a world *beneath* the adventure, not just a chat with dice
 - **D&D Beyond sheet import**, alongside the existing SillyTavern-card path.
 - **Broader prebuilt coverage** beyond the current Windows x64, macOS arm64, and Linux x64/arm64 matrix.
 
-## An open design question — where do the Keeper's secrets live?
+## A question we closed, and how
 
-Today the Keeper's system prompt carries the module's keeper pool in (near) full, and keeper-only tools hand secrets back to the model verbatim; anti-metagaming on the Keeper side is therefore *discipline* (a "don't quote this to players" instruction) plus the deterministic keeper/player pool split — strong for the sub-actors (built only from their own record), softer for the Keeper itself.
+**Where do the Keeper's secrets live?** For a while this was an open fork. The Keeper's system prompt
+carries the module's keeper pool in near-full, and keeper-only tools hand secrets back verbatim, so
+anti-metagaming on the Keeper's own side is *discipline* — an instruction not to quote keeper
+material — rather than a structural guarantee. The alternative was to keep secrets out of the base
+prompt and have the Keeper pull them on demand, so the model only ever holds the one secret it just
+reasoned about.
 
-An alternative is to keep secrets *out* of the base prompt and have the Keeper pull them on demand through tools, so the model only ever holds the specific secret it just reasoned about. That trades some prompt convenience and latency for a smaller leak surface. This is a real architectural fork worth deciding deliberately rather than drifting into — input welcome.
+**We decided not to.** A Keeper that does not hold the whole truth cannot run a mystery: it
+foreshadows nothing, mis-paces reveals, and contradicts itself two sessions later. Scoping the
+Keeper's own knowledge trades the thing the product is for a leak-surface reduction that behavioural
+evaluation can address directly. So the split is permanent and deliberate:
+
+- **Structural, for everyone else.** Players, NPCs, companions and the Stage Director receive
+  projections and nothing else. That is enforced by construction and by sentinel tests.
+- **Behavioural, for the Keeper alone.** It sees the module. It is instructed not to quote it. That
+  instruction is *measured*, nightly, against a real model — never claimed as a guarantee.
+
+The honest statement is the one in the README and in [deploy.md](deploy.md#data-flow-and-trust-boundaries),
+and it stays there: green CI means the engine is correct, not that the Keeper is discreet.
 
 ## Offline tests vs. real-model quality
 
@@ -53,4 +110,4 @@ Worth stating plainly, because green CI is easy to over-read: the offline suite 
 
 ## How to help
 
-Pick anything above, or anything marked 🧪 in the [README](../README.md). Before a PR, `uv run ruff check …`, `uv run python scripts/i18n_lint.py`, and `uv run pytest -q` (plus the relevant `bun test`) must pass, and the iron rules in [CLAUDE.md](../CLAUDE.md) — no hardcoded user-facing strings, the deterministic-vs-generative split, and the information-isolation red lines — must hold.
+Pick anything above, or anything marked 🧪 in the [README](../README.md). Before a PR, `uv run ruff check …`, `uv run python scripts/i18n_lint.py`, and `uv run pytest -q` (plus the relevant `bun test`) must pass, and the iron rules in [AGENTS.md](../AGENTS.md) — no hardcoded user-facing strings, the deterministic-vs-generative split, and the information-isolation red lines — must hold.
