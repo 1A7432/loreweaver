@@ -118,6 +118,14 @@ _LORE_LIST_WORDS = {"", "list", "ls", "列表", "查看"}
 _LORE_QUERY_WORDS = {"query", "search", "find", "查询", "查詢", "搜索"}
 _LORE_IMPORT_WORDS = {"import", "load", "导入", "導入"}
 
+# `.chronicle` subcommand vocabularies (EN + a couple of CN synonyms) -- campaign chronicle (M18).
+_CHRONICLE_LIST_WORDS = {"", "list", "ls", "列表", "记录", "記錄"}
+_CHRONICLE_SUMMARY_WORDS = {"summary", "总述", "總述", "概述"}
+_CHRONICLE_THREADS_WORDS = {"threads", "loops", "线索", "線索"}
+_CHRONICLE_FOLD_WORDS = {"fold", "折叠", "折疊", "折页", "折頁"}
+_CHRONICLE_EDIT_WORDS = {"edit", "set", "编辑", "編輯", "修订", "修訂"}
+_CHRONICLE_NOTE_WORDS = {"note", "margin", "批注", "边注", "邊注"}
+
 # `.room` subcommand vocabularies (EN + a couple of CN synonyms).
 _ROOM_OPEN_WORDS = {"open", "new", "create", "开", "开房", "開", "開房"}
 _ROOM_LINK_WORDS = {"link", "join", "bind", "连", "連", "加入"}
@@ -1926,6 +1934,122 @@ class CommandRouter:
         markdown, saved_note = rendered
         return f"{markdown}\n\n{saved_note}" if saved_note else markdown
 
+    async def cmd_recap(self, ctx: CommandCtx) -> str:
+        """`.recap` — the spoiler-free "previously on…" campaign recap (M18). Player-facing
+        (any member; no keeper privilege): rendered purely from PLAYER projections of the
+        campaign summary + the raw recent tail, so keeper annotations structurally cannot
+        appear — safe to broadcast to the whole room."""
+        from agent.chronicle import render_recap
+
+        rendered = await render_recap(ctx.services, ctx.chat_key, ctx.i18n)
+        if rendered is None:
+            return ctx.i18n.t("commands.recap.empty")
+        return rendered
+
+    async def cmd_chronicle(self, ctx: CommandCtx) -> str:
+        """`.chronicle [list | summary | threads | fold | edit <text> | note <text>]` — the
+        keeper's campaign-chronicle console (M18). Keeper-gated in-handler (same posture as
+        `.lore`, so a CLI/TUI keeper keeps working); replies may carry keeper annotations,
+        which is why the spec marks the family `private_reply`."""
+        from agent.chronicle import maybe_fold_chronicle
+        from core.chronicle import CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID, CHRONICLE_DOC_TYPE, THREAD_DOC_TYPE
+
+        if not _is_keeper(ctx.raw_ctx):
+            return ctx.i18n.t("commands.chronicle.denied")
+        parts = ctx.args.split(maxsplit=1)
+        sub = parts[0].casefold() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        documents = ctx.services.documents
+        chat_key = ctx.chat_key
+
+        if sub in _CHRONICLE_LIST_WORDS:
+            entries = sorted(
+                await documents.list(chat_key, CHRONICLE_DOC_TYPE),
+                key=lambda doc: (int(doc.data.get("turn", 0)), doc.id),
+            )
+            if not entries:
+                return ctx.i18n.t("commands.chronicle.empty")
+            lines = [ctx.i18n.t("commands.chronicle.list_header", count=len(entries))]
+            for doc in entries:
+                folded_mark = ctx.i18n.t("commands.chronicle.folded_mark") if doc.data.get("folded") else ""
+                lines.append(
+                    ctx.i18n.t(
+                        "commands.chronicle.entry_line",
+                        id=doc.id,
+                        turn=int(doc.data.get("turn", 0)),
+                        folded_mark=folded_mark,
+                        text=str(doc.data.get("text", "")).strip(),
+                    )
+                )
+                margin = str(doc.data.get("keeper", "")).strip()
+                if margin:
+                    lines.append(ctx.i18n.t("commands.chronicle.margin_line", text=margin))
+            return "\n".join(lines)
+
+        if sub in _CHRONICLE_SUMMARY_WORDS:
+            summary = await documents.get(chat_key, CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID)
+            if summary is None:
+                return ctx.i18n.t("commands.chronicle.no_summary")
+            lines = [
+                ctx.i18n.t(
+                    "commands.chronicle.summary_header",
+                    turn=int(summary.data.get("through_turn", 0)),
+                    folds=int(summary.data.get("fold_count", 0)),
+                ),
+                str(summary.data.get("text", "")).strip(),
+            ]
+            margin = str(summary.data.get("keeper", "")).strip()
+            if margin:
+                lines.append(ctx.i18n.t("commands.chronicle.margin_label") + " " + margin)
+            return "\n".join(lines)
+
+        if sub in _CHRONICLE_THREADS_WORDS:
+            threads = [
+                doc
+                for doc in await documents.list(chat_key, THREAD_DOC_TYPE)
+                if doc.data.get("status") == "open"
+            ]
+            if not threads:
+                return ctx.i18n.t("commands.chronicle.threads_empty")
+            lines = [ctx.i18n.t("commands.chronicle.threads_header")]
+            for doc in threads:
+                line = f"- {doc.data.get('label', '')}"
+                notes = str(doc.data.get("notes", "")).strip()
+                if notes:
+                    line += f" — {notes}"
+                lines.append(line)
+            return "\n".join(lines)
+
+        if sub in _CHRONICLE_FOLD_WORDS:
+            if not ctx.services.settings.chronicle.enabled:
+                return ctx.i18n.t("commands.chronicle.disabled")
+            # Manual fold (spec: automatic primary, manual available) — folds every
+            # record past the lag window regardless of the meter.
+            outcome = await maybe_fold_chronicle(self._agent_ctx(ctx), ctx.services, force=True)
+            if outcome.entries_folded == 0:
+                return ctx.i18n.t("commands.chronicle.fold_none")
+            return ctx.i18n.t(
+                "commands.chronicle.fold_done", count=outcome.entries_folded, turn=outcome.through_turn
+            )
+
+        if sub in _CHRONICLE_EDIT_WORDS or sub in _CHRONICLE_NOTE_WORDS:
+            if not rest:
+                return ctx.i18n.t("commands.chronicle.usage")
+            summary = await documents.get(chat_key, CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID)
+            if summary is None:
+                return ctx.i18n.t("commands.chronicle.no_summary")
+            data = dict(summary.data)
+            if sub in _CHRONICLE_EDIT_WORDS:
+                data["text"] = rest  # keeper edit round-trips straight into the players' .recap
+                done_key = "commands.chronicle.edit_done"
+            else:
+                data["keeper"] = rest  # the keeper margin — never crosses project()
+                done_key = "commands.chronicle.note_done"
+            await documents.put(chat_key, CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID, data)
+            return ctx.i18n.t(done_key)
+
+        return ctx.i18n.t("commands.chronicle.usage")
+
     async def cmd_model(self, ctx: CommandCtx) -> str:
         """`.model [list | set | login | logout | key | reset]` — inspect or
         switch the Keeper's LLM provider/model at runtime. The provider catalog is public;
@@ -2433,6 +2557,24 @@ class CommandRouter:
                 ["report", "团报", "跑团记录"],
                 {"name": "report"},
                 "commands.help.report",
+            ),
+            CommandSpec(
+                "recap",
+                self.cmd_recap,
+                ["recap"],
+                ["recap", "前情提要", "前情"],
+                {"name": "recap"},
+                "commands.help.recap",
+            ),
+            CommandSpec(
+                "chronicle",
+                self.cmd_chronicle,
+                ["chronicle"],
+                ["chronicle", "编年史", "年史"],
+                {"name": "chronicle"},
+                "commands.help.chronicle",
+                # Replies can carry keeper annotations (list/summary) — unicast only.
+                private_reply=True,
             ),
             CommandSpec(
                 "party",

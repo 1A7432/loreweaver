@@ -72,7 +72,7 @@ RESET_SCOPES = ("story", "chars", "all")
 
 # `.reset` (lightest): a fresh narrative session — characters, module, lore and media
 # are all kept.
-_RESET_STORY_DOC_TYPES = frozenset({"note", "scene", "npc"})
+_RESET_STORY_DOC_TYPES = frozenset({"note", "scene", "npc", "chronicle", "campaign_summary", "thread"})
 _RESET_STORY_STATE_KEYS = frozenset(
     {
         "chat_history",
@@ -82,6 +82,10 @@ _RESET_STORY_STATE_KEYS = frozenset(
         "session_recap",
         "session_recap_debug",
         "session_recap_turns",
+        # M18: the chronicle turn counter and entry sequence — a fresh narrative
+        # session restarts the fold watermark alongside the records themselves.
+        "chronicle_turn",
+        "chronicle_seq",
         "relationships",
         "usage_stats",
         # Worldbook sticky/cooldown/delay windows track the narrative session's turn
