@@ -1,3 +1,5 @@
+*English · [中文](authoring.zh.md)*
+
 # Authoring a Loreweaver module
 
 *From an empty directory to an installable `.lwpack`, with a real module as the worked example.*
@@ -711,7 +713,7 @@ appears:
 And when it is time for a real model, **play it twice and write down what went wrong.** The first
 run of this module found that a strong narrative model never touched the state layer at all — which
 is why the Scribe exists; the second found the opposite failure, plus a handful of channel leaks.
-Neither write-up flattered anyone. That is what made them useful.
+Both were more useful for being written down while they still stung.
 
 ---
 

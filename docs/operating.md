@@ -1,3 +1,5 @@
+*English · [中文](operating.zh.md)*
+
 # Running a table
 
 *For the person hosting: choosing models, keeping the bill sane, and not losing a campaign.*
@@ -30,8 +32,8 @@ TRPG_LLM__REASONING_EFFORT=max
 **Do not cheap out here.** The Keeper does everything through tool calls — rolling, reading sheets,
 writing trackers, advancing the clock. Strong instruction-following models roll real dice and stay on
 the module; budget models narrate "you succeed" without ever calling the check tool and drift off the
-scenario. This is not a theoretical concern: it is the single most reliable difference between a good
-session and a bad one.
+scenario. In our own testing this has been the most reliable difference between a good session and a
+bad one.
 
 A note on `REASONING_EFFORT`: on thinking models, don't set a temperature alongside it. Thinking mode
 ignores temperature and a low value degrades the reasoning trace — omit it and let the provider

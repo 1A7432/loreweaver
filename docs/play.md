@@ -1,3 +1,5 @@
+*English · [中文](play.zh.md)*
+
 # Playing Loreweaver — a five-minute start
 
 *For players. If you are the one hosting, read this first anyway — you play too — then
@@ -93,8 +95,8 @@ specifically. That is why the line prints the tier and not only pass/fail. A dif
 prints a different ladder, in its own vocabulary, because the ladder is data that ships with the
 system.
 
-**Failure is a direction, not a wall.** A missed check is supposed to move the story, not stop it.
-If you are stuck after a failure, say what you try instead — that is the game working.
+**A failed check should move the story, not stop it.** If you are stuck after a failure, say what
+you try instead. Being pushed onto a worse plan is the game working, not the game breaking.
 
 **Your sheet.** `.st` shows it; `.st <skill><value>` edits it, if your Keeper allows edits:
 
@@ -120,13 +122,12 @@ projection that keeps every other secret out of your client — keeper annotatio
 ## 4. The screen
 
 ```
-┌─ ◷ 03:12 · scene · round 2 ────────────────── ● online · ctx 34% · cache 71% ─┐
-│                                                                              │
-│  the story log — narration, NPC lines, dice results, module handouts         │  ← sidebar:
-│                                                                              │    party roster,
-│                                                                              │    your resources,
-│                                                                              │    module panels
-└──────────────────────────────────────────────────────────────────────────────┘
+┌─ ◷ 03:12 · scene · round 2 ────────── ● online · ctx 34% · cache 71% ─┐
+│                                                    │ sidebar          │
+│  the story log — narration, NPC                    │ party roster     │
+│  lines, dice results, handouts                     │ your resources   │
+│                                                    │ module panels    │
+└────────────────────────────────────────────────────┴──────────────────┘
   > type here
 ```
 
@@ -196,7 +197,7 @@ Worth knowing, because it changes how you play:
   [nightly evaluation](https://github.com/1A7432/loreweaver/actions/workflows/redline-eval.yml), not
   a structural guarantee. If a Keeper ever hands you something it obviously should not have, that is
   a bug worth reporting.
-- **The dice do not care about the plot.** You can fail. That is the point.
+- **The dice do not care about the plot.** You can lose, and a lot of the tension comes from that.
 
 ---
 

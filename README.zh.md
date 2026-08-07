@@ -13,7 +13,7 @@
 
 Loreweaver 是一个开源的 **AI RPG 引擎与开放标准**。你和朋友出人，AI 守秘人读模组、记世界、扮演每个 NPC、看住每条线索。它和"和 AI 聊天"最大的区别是**骰子是真的**：检定、伤害、理智，以及卡表上的每一个数，都由代码按规则掷出并结算，模型负责把结果讲成故事。**故事归 AI，账归代码。**
 
-一个世界需要的一切——规则、设定、演员表、界面、演出——都是有文档的可移植文件格式，而不是写死在引擎里的功能。服务器跑在你自己的电脑上。《克苏鲁的呼唤》7 版和 D&D 5e（SRD）随包发；中英双语都是一等公民。
+一个世界的规则、设定、演员表、界面和演出，都是有文档的文件格式，而不是写死在引擎里的功能——所以一个世界可以打包带走，也可以交给别人。服务器跑在你自己的电脑上。《克苏鲁的呼唤》7 版和 D&D 5e（SRD）随包发，中英双语都是一等公民。
 
 [![CI](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml/badge.svg)](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml) ![license](https://img.shields.io/badge/license-MIT-green) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![clients](https://img.shields.io/badge/clients-TypeScript%20%2F%20Bun-black) [![protocol](https://img.shields.io/badge/wire%20protocol-2.1-informational)](docs/protocol.zh.md)
 
@@ -96,7 +96,7 @@ loreweaver
 
 ## 一个回合到底怎么走
 
-一张 Loreweaver 牌桌上有**四个演员**。只有一个负责写故事，而管着所有数字的那个根本不是模型。
+一张 Loreweaver 牌桌上有**四个演员**。只有一个负责写故事，而管数字的那个不是模型。
 
 ```
    你打的字 ───────────────────────────────────────────────────────────────────────────────────────┐
@@ -123,7 +123,7 @@ loreweaver
 
 ### 所有秘密只有一个出口
 
-房间里的一切内容——设定、NPC、卡表、预设角色、追踪器、笔记、知识池——都是同一张表里的 `Document`。每种文档类型注册一个 `project(document, viewer)`，而**所有对外的出口都走它**。反元游戏机制就这一条，没有第二条路。
+房间里的一切内容——设定、NPC、卡表、预设角色、追踪器、笔记、知识池——都是同一张表里的 `Document`。每种文档类型注册一个 `project(document, viewer)`，而**所有对外的出口都走它**。出口只有一个而不是五个，这也是我们敢信它的主要原因。
 
 | 谁在看 | 看到什么 |
 |---|---|
@@ -157,7 +157,7 @@ resolution:
 
 **能撑过上下文窗口的战役记忆。** 跑团过程被记成编年史文档。当拼好的提示超过模型上下文窗口的 60%，最老的记录成批折叠进滚动摘要，直到降回 40% 以下；最近四回合永远不折（正在进行的这场戏还不算历史），折叠过的记录进入向量索引，所以第三场的一个细节到第十二场仍然找得回来。玩家这边是 `.recap`——同一段故事，守秘人的剧透批注由投影契约结构性地拿掉了。
 
-**这是一个演出层，不只是聊天记录。** 模组可以自己布置牌桌。钩子发声明式区块（进度条、徽章、选项、图片）；内容包声明命名面板，绑活变量、用 `visible_when` 按值开关、放进侧栏/托盘/弹窗，受众在服务端解析；二级面板是关在沙箱 iframe 里的真 HTML/JS，且必须带一份纯文本降级。再往上是演出导演的演出模板词汇——`letter`、`clipping`、`map_pin`、`title_card`、`image`——声明式的，富客户端把它渲染成信纸，终端客户端把同样的字段打成几行。没人需要在"好看的客户端"和"能用的客户端"之间做选择。
+**这是一个演出层，不只是聊天记录。** 模组可以自己布置牌桌。钩子发声明式区块（进度条、徽章、选项、图片）；内容包声明命名面板，绑活变量、用 `visible_when` 按值开关、放进侧栏/托盘/弹窗，受众在服务端解析；二级面板是关在沙箱 iframe 里的真 HTML/JS，且必须带一份纯文本降级。再往上是演出导演的演出模板词汇——`letter`、`clipping`、`map_pin`、`title_card`、`image`——声明式的，富客户端把它渲染成信纸，终端客户端把同样的字段打成几行，作者只写一份。
 
 **三层音频。** `bgm`、`ambience`、`sfx` 是三条独立的轨，各有自己的播放/停止/淡入淡出状态，进房间会重放。内容包带自己的音频；守秘人手动放，或者让导演在节拍上放。
 
@@ -172,7 +172,7 @@ uv run python -m app --pack my-campaign/        # -> my-campaign-1.0.0.lwpack �
 uv run python -m app --install gh:owner/repo    # 或者本地路径、https 链接
 ```
 
-安装前先打印信任卡——这个包里有什么、带不带沙箱 JS、素材多少 MB、会不会花你的出图额度——然后在写任何东西之前把每一个声明过的字节校验一遍。Git Release 就是仓库；没有中心化商店，分发链路上没有任何一环握在我们手里。
+安装前先打印信任卡——这个包里有什么、带不带沙箱 JS、素材多少 MB、会不会花你的出图额度——然后在写任何东西之前把每一个声明过的字节校验一遍。Git Release 就是仓库：没有要投递的中心商店，作者和读者之间也没有人（包括我们）挡着。
 
 ---
 
@@ -232,17 +232,17 @@ net/    Iroh p2p + 会话核心     adapters/ CLI          clients/ protocol（n
 
 | 给谁 | 看哪份 |
 |---|---|
-| 玩家 | [docs/play.md](docs/play.md) — 五分钟上手、按键、骰子、面板、前情提要（英文）|
-| 模组作者 | [docs/authoring.md](docs/authoring.md) — 从零做一个 `.lwpack`，全程拿一个真模组当例子（英文）|
-| 守秘人 / 运维 | [docs/operating.md](docs/operating.md) — 模型、配额、缓存、备份、重置、自更新（英文）|
+| 玩家 | [docs/play.zh.md](docs/play.zh.md) — 五分钟上手、按键、骰子、面板、前情提要 |
+| 模组作者 | [docs/authoring.zh.md](docs/authoring.zh.md) — 从零做一个 `.lwpack`，全程拿一个真模组当例子 |
+| 守秘人 / 运维 | [docs/operating.zh.md](docs/operating.zh.md) — 模型、配额、缓存、备份、重置、自更新 |
 | 服务器运维 | [docs/deploy.zh.md](docs/deploy.zh.md) — 常驻部署、密钥、信任边界 |
 | 卡作者 | [docs/cards.zh.md](docs/cards.zh.md) — 什么能导入、什么真的会跑、和酒馆有什么不同 |
 | 钩子作者 | [docs/hooks.zh.md](docs/hooks.zh.md) — 沙箱回合生命周期 API |
-| 扩展契约 | [docs/plugins.md](docs/plugins.md) — 完整分层规格（英文）|
+| 扩展契约 | [docs/plugins.zh.md](docs/plugins.zh.md) — 完整分层规格 |
 | 客户端作者 | [docs/protocol.zh.md](docs/protocol.zh.md) — 带版本的线协议 |
 | 贡献者 | [AGENTS.md](AGENTS.md) — 架构、铁律、工程约定（英文）|
 
-> 教学三部曲（play / authoring / operating）目前只有英文；中文版是待办。
+每份文档顶上都有中英切换链接。除 `AGENTS.md` 之外，用户和作者会看的文档都有中文版。
 
 ## 参与贡献
 

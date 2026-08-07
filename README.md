@@ -13,7 +13,7 @@ Neither of you knows the script — **you create the story together.**
 
 Loreweaver is an open-source **engine and open standard for AI-run tabletop RPGs**. You and your friends bring the characters; an AI Keeper reads the module, remembers the world, plays every NPC and guards every clue. What separates it from "chatting with an AI" is that **the dice are real**: checks, damage, sanity and every number on a sheet are rolled and resolved by code, and the model's job is to tell you what that meant. **The AI tells the story. The code keeps the score.**
 
-Everything a world needs — its rules, its lore, its cast, its interface, its stagecraft — is a documented, portable file format, not a hardcoded feature. The server runs on your own machine. Call of Cthulhu 7e and D&D 5e (SRD) ship with it; English and Chinese are both first-class.
+A world's rules, lore, cast, interface and stagecraft are all documented file formats rather than hardcoded features, so a world can be packaged up and handed to someone else. The server runs on your own machine. Call of Cthulhu 7e and D&D 5e (SRD) ship with it, and English and Chinese are both first-class.
 
 [![CI](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml/badge.svg)](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml) ![license](https://img.shields.io/badge/license-MIT-green) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![clients](https://img.shields.io/badge/clients-TypeScript%20%2F%20Bun-black) [![protocol](https://img.shields.io/badge/wire%20protocol-2.1-informational)](docs/protocol.md)
 
@@ -126,8 +126,8 @@ is **[docs/play.md](docs/play.md)**; the complete command reference is the
 
 ## How a turn actually works
 
-A Loreweaver table has **four actors**. Only one of them writes fiction; the one that owns every
-number isn't a model at all.
+A Loreweaver table has **four actors**. Only one of them writes fiction, and the one that owns the
+numbers is not a model.
 
 ```
    you type ───────────────────────────────────────────────────────────────────────────────────────┐
@@ -163,7 +163,7 @@ module's presentation kit. It cannot leak what it never receives.
 
 All room content — lore, NPCs, sheets, pregens, trackers, notes, knowledge pools — is a `Document`
 in one table. Every document type registers a `project(document, viewer)` hook, and **every outbound
-surface goes through it**. That is the whole anti-metagaming mechanism; there is no second path.
+surface goes through it**. There is one path out, not five, which is the main reason we trust it.
 
 | viewer | sees |
 |---|---|
@@ -223,8 +223,8 @@ declarative blocks (meters, badges, choices, images); packs declare named panels
 variables, gated by value with `visible_when`, in a sidebar/tray/modal slot with a server-resolved
 audience; a tier-2 panel is real HTML/JS in a locked-down iframe with a mandatory text-first
 fallback. On top of that sits the Stage Director's performance vocabulary — `letter`, `clipping`,
-`map_pin`, `title_card`, `image` — declarative templates a rich client styles and a terminal client
-prints as lines. Nobody has to choose between a pretty client and a working one.
+`map_pin`, `title_card`, `image` — declarative templates that a rich client styles and a terminal
+client prints as plain lines, so an author only has to write one version.
 
 **Three audio layers.** `bgm`, `ambience` and `sfx` are separate lanes with their own play/stop/fade
 state, replayed on join. A pack ships its audio; the Keeper cues it by hand, or the Director does it
@@ -248,8 +248,8 @@ uv run python -m app --install gh:owner/repo    # or a local path, or an https U
 
 Installs print a trust card first — what the pack contains, whether it ships sandboxed JS, how many
 megabytes of assets, whether it may spend your image budget — then verify every declared byte before
-writing anything. Git releases are the registry; there is no central store, and nothing about
-distribution is ours to control.
+writing anything. Git releases are the registry: there is no central store to submit to, and nobody
+(us included) sits between an author and their readers.
 
 ---
 
@@ -338,6 +338,8 @@ ship on npm as [`loreweaver-protocol`](https://www.npmjs.com/package/loreweaver-
 | Extension contract | [docs/plugins.md](docs/plugins.md) — the full layered specification |
 | Client authors | [docs/protocol.md](docs/protocol.md) — the versioned wire protocol |
 | Contributors | [AGENTS.md](AGENTS.md) — architecture, iron rules, conventions |
+
+Every page above except `AGENTS.md` has a Chinese version; the link is at the top of each one.
 
 ## Contributing
 

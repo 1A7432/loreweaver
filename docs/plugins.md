@@ -1,3 +1,5 @@
+*English · [中文](plugins.zh.md)*
+
 # Loreweaver extensibility: plugins, skills & content packs
 
 > Status: **contract** (updated 2026-08-07; wire protocol **2.1**). This document is what
