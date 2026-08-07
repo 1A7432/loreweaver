@@ -7,7 +7,9 @@ The tool bodies live in `kp_tools_mechanics` (character / dice / initiative), `k
 B.3, `docs/plugins.md` "Layer B"), `kp_tools_relationships` (the deterministic relationship-
 track gated tools -- `adjust_relationship`/`set_relationship`/`get_relationships`, backed by
 `core.relationships`), and `kp_tools_vars` (the deterministic module-variable tools --
-`define_variable`/`set_variable`/`adjust_variable`/`remove_variable`, backed by `core.modvars`).
+`define_variable`/`set_variable`/`adjust_variable`/`remove_variable`, backed by `core.modvars`),
+and `kp_tools_chronicle` (the M18 campaign-chronicle recorder --
+`record_chronicle`/`update_thread`, backed by `core.chronicle`).
 This module is the single entry point the agent loop and adapters use to
 build the toolset for a `Services` bundle."""
 
@@ -16,6 +18,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from agent.kp_tools_charcard import CharcardTools
+from agent.kp_tools_chronicle import ChronicleTools
 from agent.kp_tools_companion import CompanionTools
 from agent.kp_tools_forge import ForgeTools
 from agent.kp_tools_images import ImageTools
@@ -65,4 +68,5 @@ def build_kp_toolset(
         RelationshipTools(services),
         ModuleVarTools(services),
         MvuStatTools(services),
+        ChronicleTools(services),
     )

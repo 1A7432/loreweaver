@@ -102,39 +102,43 @@ def validate_chronicle_write(doc: Document, services: Any) -> list[str]:
     violations = []
     text = doc.data.get("text")
     if not isinstance(text, str) or not text.strip():
-        violations.append("text must be a non-empty string")
+        violations.append("text must be a non-empty string")  # i18n-exempt: validation diagnostic, not UI text
     turn = doc.data.get("turn")
     if isinstance(turn, bool) or not isinstance(turn, int) or turn < 0:
-        violations.append("turn must be a non-negative integer (the turn the entry was written after)")
+        violations.append(
+            "turn must be a non-negative integer (the turn the entry was written after)"  # i18n-exempt: diagnostic
+        )
     if not isinstance(doc.data.get("keeper", ""), str):
-        violations.append("keeper must be a string")
+        violations.append("keeper must be a string")  # i18n-exempt: validation diagnostic
     pcs = doc.data.get("pcs", [])
     if not isinstance(pcs, list) or any(not isinstance(pc, str) for pc in pcs):
-        violations.append("pcs must be a list of character names")
+        violations.append("pcs must be a list of character names")  # i18n-exempt: validation diagnostic
     return violations
 
 
 def validate_campaign_summary_write(doc: Document, services: Any) -> list[str]:
     violations = []
     if not isinstance(doc.data.get("text"), str) or not doc.data.get("text", "").strip():
-        violations.append("text must be a non-empty string")
+        violations.append("text must be a non-empty string")  # i18n-exempt: validation diagnostic
     for field_name in ("through_turn", "fold_count"):
         value = doc.data.get(field_name)
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            violations.append(f"{field_name} must be a non-negative integer")
+            violations.append(f"{field_name} must be a non-negative integer")  # i18n-exempt: diagnostic
     if not isinstance(doc.data.get("keeper", ""), str):
-        violations.append("keeper must be a string")
+        violations.append("keeper must be a string")  # i18n-exempt: validation diagnostic
     return violations
 
 
 def validate_thread_write(doc: Document, services: Any) -> list[str]:
     violations = []
     if not isinstance(doc.data.get("label"), str) or not doc.data.get("label", "").strip():
-        violations.append("label must be a non-empty string")
+        violations.append("label must be a non-empty string")  # i18n-exempt: validation diagnostic
     if doc.data.get("status") not in THREAD_STATUSES:
-        violations.append(f"status must be one of: {', '.join(sorted(THREAD_STATUSES))}")
+        violations.append(
+            f"status must be one of: {', '.join(sorted(THREAD_STATUSES))}"  # i18n-exempt: diagnostic
+        )
     if not isinstance(doc.data.get("notes", ""), str):
-        violations.append("notes must be a string")
+        violations.append("notes must be a string")  # i18n-exempt: validation diagnostic
     return violations
 
 

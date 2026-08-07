@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from functools import lru_cache
 
+from agent.chronicle import advance_chronicle_turn, maybe_fold_chronicle
 from agent.context import AgentCtx
 from agent.hook_runtime import apply_hook_writes, load_room_hook_engine
 from agent.kp_tools_subsystems import dispatch_subsystem, room_rulepack, subsystem_schemas
@@ -748,6 +749,13 @@ async def run_kp_turn(
         hook_panel_events += outcome.panel_events
         if outcome.injections:
             ctx.extra["hook_injections"] = outcome.injections
+    # M18 campaign chronicle: the context-pressure fold runs BEFORE prompt assembly —
+    # measured from last turn's usage meter, an over-trigger (or over-ceiling) room
+    # folds its oldest chronicle records into the rolling campaign summary before this
+    # turn's model call, so the emergency ceiling always has headroom for the fold
+    # generation itself. Best-effort: never raises; a no-op when disabled, when no
+    # meter exists yet (a room's first turn), or under the trigger.
+    await maybe_fold_chronicle(ctx, services)
     system_prompt = await build_system_prompt_parts(ctx, services)
     # Layer B.2 -- allowed-tools enforcement (docs/plugins.md "Layer B"): the union
     # of `allowed_tools` across every KP skill enabled for this room. With no
@@ -956,6 +964,9 @@ async def run_kp_turn(
     # the KP keeps facts established far earlier in the session even after they
     # scroll out of the ~20-message replay window. Best-effort: never fatal.
     await maybe_refresh_session_recap(ctx, services, history_key=key)
+    # M18: count the completed turn — chronicle entries stamp against this counter
+    # and the fold's no-future watermark derives from it. Best-effort, like the recap.
+    await advance_chronicle_turn(services.store, ctx.chat_key)
 
     return KPTurnResult(
         reply=reply,

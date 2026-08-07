@@ -277,6 +277,19 @@ async def build_system_prompt_parts(ctx: AgentCtx, services: Services) -> System
     if hook_injections:
         volatile.append(i18n.t("prompt.hooks_header") + "\n" + "\n".join(hook_injections))
 
+    # M18 campaign chronicle (agent.chronicle): the rolling campaign summary (+ its
+    # keeper margin), open threads, the raw unfolded tail, and folded records recalled
+    # against this turn's context ride ONE section at the very end of the volatile
+    # tail — emergent history changes every turn, so it can never ride the stable
+    # head, and the per-turn direction keeps recency. A room with no chronicle yet
+    # contributes nothing, so its prompt stays byte-identical to a pre-M18 build.
+    # KP-grade: keeper annotations ride here; player surfaces consume projections only.
+    from agent.chronicle import build_chronicle_section
+
+    chronicle_section = await build_chronicle_section(ctx, services, i18n, recent_context=recent_context)
+    if chronicle_section:
+        volatile.append(chronicle_section)
+
     return SystemPrompt(
         stable="\n\n".join(section for section in stable if section),
         volatile="\n\n".join(section for section in volatile if section),
