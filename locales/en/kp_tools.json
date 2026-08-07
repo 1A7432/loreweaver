@@ -49,7 +49,6 @@
   "kp_tools.dice.hp.status_line": "❤️ {name} HP: {hp}/{hpmax} {status}",
   "kp_tools.dice.hp.unknown_action": "❌ Unknown action: {action}, supported: show/add/sub/set",
   "kp_tools.dice.opposed.active_line": "🎯 Active: {skill}={value} rolled {roll} → {level}",
-  "kp_tools.dice.opposed.failed": "❌ Opposed check failed: {error}",
   "kp_tools.dice.opposed.header": "⚔️ Opposed check: {skill1} vs {skill2}",
   "kp_tools.dice.opposed.passive_line": "🎯 Passive: {skill}={value} rolled {roll} → {level}",
   "kp_tools.dice.opposed.result_line": "🏆 Result: {winner}",

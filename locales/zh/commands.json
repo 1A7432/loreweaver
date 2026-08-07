@@ -21,7 +21,6 @@
   "commands.audio.sfx.usage": "用法：.sfx <音频> [--volume 0.8]",
   "commands.audio.updated": "已更新音频元数据：{item}",
   "commands.audio.usage": "用法：.audio list | .audio import <包ID> | .audio set <音频> title=<标题> license=<许可> source=<来源> tags=a,b",
-  "commands.audio.voice_busy": "此 Discord 服务器正在为另一个房间播放音频。",
   "commands.audio.volume_done": "{layer}：音量 {volume}。",
   "commands.audio.volume_usage": "用法：volume <0-1 或 0-100%>",
   "commands.avatar.cleared": "已清除 {name} 的头像。",

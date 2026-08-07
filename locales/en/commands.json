@@ -21,7 +21,6 @@
   "commands.audio.sfx.usage": "Usage: .sfx <audio> [--volume 0.8]",
   "commands.audio.updated": "Updated audio metadata: {item}",
   "commands.audio.usage": "Usage: .audio list | .audio import <packId> | .audio set <audio> title=<title> license=<license> source=<source> tags=a,b",
-  "commands.audio.voice_busy": "This Discord server is already playing audio for another room.",
   "commands.audio.volume_done": "{layer}: volume {volume}.",
   "commands.audio.volume_usage": "Usage: volume <0-1 or 0-100%>",
   "commands.avatar.cleared": "Avatar cleared for {name}.",

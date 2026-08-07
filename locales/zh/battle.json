@@ -60,7 +60,6 @@
   "battle.report.total_score_line": "   总分: {score}/100 - {rating}",
   "battle.score.not_participated": "未参与",
   "battle.session.default_name": "跑团-{timestamp}",
-  "battle.skill_check.success_keyword": "成功",
   "battle.summary.combat_rounds_line": "战斗轮次: {count}",
   "battle.summary.date_line": "**时间**: {date}",
   "battle.summary.duration_line": "**时长**: {minutes}分钟",

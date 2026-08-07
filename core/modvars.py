@@ -310,14 +310,6 @@ def normalize_state(raw: Any) -> ModvarState:
 # ---------------------------------------------------------------------------
 
 
-def known_var(state: ModvarState, var_id: str) -> bool:
-    return var_id in state["specs"]
-
-
-def get_spec(state: ModvarState, var_id: str) -> dict[str, Any] | None:
-    return state["specs"].get(var_id)
-
-
 def apply_define(state: ModvarState, spec: dict[str, Any]) -> ModvarState:
     """Add (or redefine) `spec` in `state`. Redefinition keeps the variable's position and its
     current value when that value is still valid under the new spec (numbers re-clamp); an

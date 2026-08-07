@@ -60,7 +60,6 @@
   "battle.report.total_score_line": "   Total Score: {score}/100 - {rating}",
   "battle.score.not_participated": "Did not participate",
   "battle.session.default_name": "Session-{timestamp}",
-  "battle.skill_check.success_keyword": "success",
   "battle.summary.combat_rounds_line": "Combat Rounds: {count}",
   "battle.summary.date_line": "**Date**: {date}",
   "battle.summary.duration_line": "**Duration**: {minutes} minutes",

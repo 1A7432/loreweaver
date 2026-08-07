@@ -1274,10 +1274,6 @@ def _event_english_sequence(value: str) -> list[str]:
     return terms
 
 
-def _event_english_terms(value: str) -> set[str]:
-    return set(_event_english_sequence(value))
-
-
 def _event_description_is_semantic_duplicate(left: str, right: str) -> bool:
     """Conservative same-turn near-duplicate check for event tool calls."""
     if bool(_EVENT_NEGATION_RE.search(left or "")) != bool(_EVENT_NEGATION_RE.search(right or "")):

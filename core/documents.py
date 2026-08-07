@@ -137,10 +137,6 @@ def document_type(name: str) -> DocumentType:
         raise KeyError(f"unknown document type {name!r}") from None
 
 
-def document_types() -> dict[str, DocumentType]:
-    return dict(_REGISTRY)
-
-
 def project(doc: Document, viewer: Viewer) -> dict[str, Any] | None:
     """THE chokepoint: the viewer-facing view of `doc`, or None (invisible)."""
     return document_type(doc.type).project(doc, viewer)

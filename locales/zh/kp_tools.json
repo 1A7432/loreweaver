@@ -49,7 +49,6 @@
   "kp_tools.dice.hp.status_line": "❤️ {name} HP: {hp}/{hpmax} {status}",
   "kp_tools.dice.hp.unknown_action": "❌ 未知操作: {action}，支持: show/add/sub/set",
   "kp_tools.dice.opposed.active_line": "🎯 主动方: {skill}={value} 掷出{roll} → {level}",
-  "kp_tools.dice.opposed.failed": "❌ 对抗检定失败: {error}",
   "kp_tools.dice.opposed.header": "⚔️ 对抗检定: {skill1} vs {skill2}",
   "kp_tools.dice.opposed.passive_line": "🎯 被动方: {skill}={value} 掷出{roll} → {level}",
   "kp_tools.dice.opposed.result_line": "🏆 结果: {winner}",

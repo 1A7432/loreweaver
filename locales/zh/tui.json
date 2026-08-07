@@ -56,7 +56,5 @@
   "tui.serve.iroh.failed": "Iroh 传输启动失败（{error}）。",
   "tui.serve.iroh.hint": "  已保存到 {path}。把 ticket + 一个邀请码发给朋友，无需域名/TLS/端口即可连入。",
   "tui.serve.iroh.missing": "未安装 'iroh' 包——请安装：pip install iroh（或 uv sync）。",
-  "tui.serve.iroh.ticket": "  Ticket：{ticket}",
-  "tui.serve.listening": "已在 ws://{host}:{port}/ 提供联网 TUI 服务（密钥文件：{path}）",
-  "tui.serve.none": "未启用任何传输（--no-iroh 且无 --ws）。无可服务。"
+  "tui.serve.iroh.ticket": "  Ticket：{ticket}"
 }
