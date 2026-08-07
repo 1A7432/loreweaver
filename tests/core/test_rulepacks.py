@@ -660,3 +660,25 @@ def test_extends_rejects_cycles_unknown_bases_and_self_reference() -> None:
         rulepacks_module.parse_rulepack_text("c", "extends: nope\n", base_loader=_raw_loader({}))
     with pytest.raises(ValueError, match="cycle"):
         rulepacks_module.parse_rulepack_text("self", "extends: self\n", base_loader=_raw_loader({"self": {}}))
+
+
+def test_loss_ceiling_parses_and_validates():
+    """check_with_loss's conditional loss ceiling: {when, value} is pack data;
+    malformed shapes fail at load time, never mid-session."""
+    from core.rulepacks import load_raw_rulepack_yaml, parse_rulepack_text
+    from core.subsystems import SubsystemError
+
+    good = "extends: coc7\nnames: [t]\nsubsystems:\n  sanity_check:\n    loss_ceiling: {when: 'tag == \"x\"', value: 2}\n"
+    pack = parse_rulepack_text("t", good, base_loader=load_raw_rulepack_yaml)
+    assert pack.subsystems["sanity_check"].loss_ceiling == ('tag == "x"', 2)
+
+    for bad_ceiling in (
+        "'just-a-string'",
+        "{value: 0}",  # missing when
+        "{when: '1 == 1'}",  # missing value
+        "{when: '1 == 1', value: -1}",  # negative cap
+        "{when: '1 == 1', value: 0, extra: true}",  # unknown key
+    ):
+        bad = f"extends: coc7\nnames: [t]\nsubsystems:\n  sanity_check:\n    loss_ceiling: {bad_ceiling}\n"
+        with pytest.raises((SubsystemError, ValueError)):
+            parse_rulepack_text("t", bad, base_loader=load_raw_rulepack_yaml)

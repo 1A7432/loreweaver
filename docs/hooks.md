@@ -44,6 +44,7 @@ on("turn_start",        (event) => { ... });  // event.user_message, event.actor
 on("reply_ready",       (event) => { ... });  // event.reply
 on("dice_rolled",       (event) => { ... });  // event.rolls: [{tool, result}]
 on("variables_changed", (event) => { ... });  // event.writes: [{path, value}]
+on("clock_advanced",    (event) => { ... });  // event.from, event.to, event.delta
 ```
 
 - **`turn_start`** — fires before the Keeper thinks, with the player's input. This
@@ -55,6 +56,10 @@ on("variables_changed", (event) => { ... });  // event.writes: [{path, value}]
 - **`variables_changed`** — variable writes happened this turn. Fires **at most once
   per turn**, so a hook that writes variables in response cannot cascade forever —
   termination is by construction, not by convention.
+- **`clock_advanced`** — the Keeper moved the game clock forward this turn
+  (`game_clock advance`); fires once per advance with the old face, the new face,
+  and the verbatim delta text. The place for module-side calendars: day counters,
+  deadline countdowns, scheduled omens.
 
 Handlers may be `async`; rejections are caught and logged as warnings. A handler
 that throws only loses its own effects — other handlers still run.

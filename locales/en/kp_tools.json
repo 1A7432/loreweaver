@@ -253,6 +253,7 @@
   "kp_tools.subsystem.loss.header_failure": "🤯 {name}'s {label} Check",
   "kp_tools.subsystem.loss.header_success": "😰 {name}'s {label} Check",
   "kp_tools.subsystem.loss.loss_line": "💔 Lost: {loss} (roll: {expr}={detail})",
+  "kp_tools.subsystem.loss.ceiling_line": "🛡️ Loss ceiling applied: capped at {value}",
   "kp_tools.subsystem.loss.remaining_line": "🧠 Remaining {label}: {value}/{maximum}",
   "kp_tools.subsystem.loss.result_line": "📊 Result: {level}",
   "kp_tools.subsystem.loss.roll_line": "🎯 Current {label}: {value}  Rolled: {roll}",

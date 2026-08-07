@@ -18,7 +18,11 @@ script lane, and only a pattern recurring across systems earns a template):
 
 - ``check_with_loss``      — roll the system's check against a governing
   attribute; apply a dice-rolled loss chosen by the outcome (the
-  horror-stress / attribute-erosion family).
+  horror-stress / attribute-erosion family). Optional ``loss_ceiling:
+  {when, value}`` caps the invocation's final loss when the `when` condexpr
+  holds — it reads the call's optional scene ``tag`` and the acting sheet
+  (``stat_data.<key>``), so conditional mercy/immunity rules live in pack
+  data, not in the keeper's memory.
 - ``improvement_check``    — post-session improvement roll against the current
   skill value; on success the skill grows by an improvement roll (the
   experience-tick family).
@@ -41,6 +45,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
+
+from core.condexpr import MAX_EXPR_LEN
 
 TEMPLATES = (
     "check_with_loss",
@@ -80,6 +86,7 @@ class SubsystemSpec:
     stat: str = ""
     stat_max: str = ""
     fumble_loss: str | None = None  # check_with_loss: "all" | "max" | None
+    loss_ceiling: tuple[str, int] | None = None  # check_with_loss: (when-expr, cap) — conditional loss cap
     roll: str = "1d100"  # improvement_check: the improvement-check roll
     improve: str = "1d10"  # improvement_check: the growth amount roll
     cap: int = 100  # improvement_check: skill ceiling
@@ -235,7 +242,7 @@ def parse_subsystems(
 
         allowed = {"template", "display"}
         if template == "check_with_loss":
-            allowed |= {"stat", "stat_max", "fumble_loss"}
+            allowed |= {"stat", "stat_max", "fumble_loss", "loss_ceiling"}
         elif template == "improvement_check":
             allowed |= {"roll", "improve", "cap", "auto_success_above"}
         elif template == "resource_spend_adjust":
@@ -262,6 +269,23 @@ def parse_subsystems(
                 f"rulepack '{pack_id}': subsystems.{tool_name}.fumble_loss must be one of {list(_FUMBLE_LOSS_POLICIES)}"  # i18n-exempt: pack-author diagnostic, raised at load time
             )
 
+        loss_ceiling: tuple[str, int] | None = None
+        ceiling_raw = spec_raw.get("loss_ceiling")
+        if ceiling_raw is not None:
+            where = f"subsystems.{tool_name}.loss_ceiling"
+            if not isinstance(ceiling_raw, Mapping) or set(ceiling_raw) - {"when", "value"}:
+                raise SubsystemError(f"rulepack '{pack_id}': {where} must be a {{when, value}} mapping")  # i18n-exempt: pack-author diagnostic, raised at load time
+            ceiling_when = str(ceiling_raw.get("when") or "").strip()
+            if not ceiling_when or len(ceiling_when) > MAX_EXPR_LEN:
+                raise SubsystemError(f"rulepack '{pack_id}': {where}.when must be a non-empty condition expression")  # i18n-exempt: pack-author diagnostic, raised at load time
+            try:
+                ceiling_value = int(ceiling_raw.get("value"))
+            except (TypeError, ValueError) as exc:
+                raise SubsystemError(f"rulepack '{pack_id}': {where}.value must be an integer") from exc  # i18n-exempt: pack-author diagnostic, raised at load time
+            if ceiling_value < 0:
+                raise SubsystemError(f"rulepack '{pack_id}': {where}.value must be >= 0")  # i18n-exempt: pack-author diagnostic, raised at load time
+            loss_ceiling = (ceiling_when, ceiling_value)
+
         cap_raw = spec_raw.get("cap", 100)
         auto_above_raw = spec_raw.get("auto_success_above")
         try:
@@ -287,6 +311,7 @@ def parse_subsystems(
             stat=stat,
             stat_max=str(spec_raw.get("stat_max") or "").strip(),
             fumble_loss=fumble_loss,
+            loss_ceiling=loss_ceiling,
             roll=str(spec_raw.get("roll") or "1d100").strip(),
             improve=str(spec_raw.get("improve") or "1d10").strip(),
             cap=cap,

@@ -27,12 +27,14 @@ on("turn_start",        (event) => { ... });  // event.user_message、event.acto
 on("reply_ready",       (event) => { ... });  // event.reply
 on("dice_rolled",       (event) => { ... });  // event.rolls: [{tool, result}]
 on("variables_changed", (event) => { ... });  // event.writes: [{path, value}]
+on("clock_advanced",    (event) => { ... });  // event.from、event.to、event.delta
 ```
 
 - **`turn_start`**——守秘人开始思考之前触发，带着玩家输入。这是 `inject()` 唯一有意义的事件：注入的段落会进入**本**回合的守秘人提示词。
 - **`reply_ready`**——守秘人的叙事已经完成，`event.reply` 是全文。`narrate()` / `rewriteReply()` 该在这里用。
 - **`dice_rolled`**——本回合有骰子工具结算了。
 - **`variables_changed`**——本回合发生了变量写入。**每回合最多触发一次**，所以一个「响应变量变化又去写变量」的钩子不可能无限连锁——终止是构造出来的，不是靠自觉。
+- **`clock_advanced`**——守秘人本回合推进了游戏内时钟（`game_clock advance`），每次推进触发一次，带着旧钟面、新钟面和原始增量文本。模组侧历法该写在这里：日期计数、死线倒计时、定时凶兆。
 
 处理器可以是 `async` 的；Promise 被拒绝会被捕获并记为警告。某个处理器抛错只会丢掉它自己的效果，其他处理器照常跑。
 

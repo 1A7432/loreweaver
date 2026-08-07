@@ -10,6 +10,7 @@ and an imported card may carry ``extensions.loreweaver_hooks``; both register ha
     on("reply_ready",        (event) => { ... })   // event.reply
     on("dice_rolled",        (event) => { ... })   // event.rolls: [{tool, result}]
     on("variables_changed",  (event) => { ... })   // event.writes: [{path, value}]
+    on("clock_advanced",     (event) => { ... })   // event.from, event.to, event.delta
 
 Inside a handler the full template bridge is available (``getvar``/``setvar``/``incvar``/
 ``variables``/``stat_data``, lodash as ``_``) plus the effect emitters ``inject(text)``
@@ -51,7 +52,7 @@ from core.ejs_full import (
 
 logger = logging.getLogger(__name__)
 
-EVENTS = ("turn_start", "reply_ready", "dice_rolled", "variables_changed")
+EVENTS = ("turn_start", "reply_ready", "dice_rolled", "variables_changed", "clock_advanced")
 
 MAX_HOOK_SOURCE_CHARS = 40_000
 MAX_SCRIPTS = 16

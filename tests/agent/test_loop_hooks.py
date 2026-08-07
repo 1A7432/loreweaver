@@ -194,3 +194,48 @@ async def test_emit_panel_per_turn_budget_keeps_the_head_and_drops_the_rest():
     assert len(result.panel_events) == MAX_PANEL_EVENTS_PER_TURN
     assert [event["panel"] for event in result.panel_events[:15]] == ["pack/a"] * 15
     assert [event["panel"] for event in result.panel_events[15:]] == ["pack/b"] * 5
+
+
+async def test_clock_advanced_fires_once_per_clock_tool_advance():
+    """The game_clock tool's advance records the move; the turn finalizer fires
+    `clock_advanced` with {from, to, delta} so room hooks can keep their own
+    calendars (day counters, deadlines) in lockstep with the clock."""
+    from agent.kp_tools_knowledge import NoteTools
+
+    llm = FakeLLM(
+        script=[
+            assistant_tools(tool_call("game_clock", action="set", value="D1 09:00")),
+            assistant_tools(tool_call("game_clock", action="advance", value="+1天")),
+            assistant_text("done"),
+        ]
+    )
+    services = _services(llm)
+    ctx = _ctx("chat-hooks-clock")
+    await install_room_hooks(
+        services,
+        ctx.chat_key,
+        "test",
+        ["on('clock_advanced', (e) => narrate('clock:' + e['from'] + '>' + e.to + '/' + e.delta));"],
+    )
+
+    result = await run_kp_turn(ctx, services, Toolset(NoteTools(services)), "rest until morning")
+
+    assert "clock:D1 09:00>D2 09:00/+1天" in result.reply
+
+
+async def test_clock_advanced_stale_records_never_leak_into_the_next_turn():
+    from agent.kp_tools_knowledge import NoteTools
+
+    services = _services(FakeLLM(script=[assistant_text("ok")]))
+    ctx = _ctx("chat-hooks-clock-stale")
+    ctx.extra["clock_advances"] = [{"from": "D9 08:00", "to": "D10 08:00", "delta": "+1天"}]
+    await install_room_hooks(
+        services,
+        ctx.chat_key,
+        "test",
+        ["on('clock_advanced', (e) => narrate('stale:' + e.to));"],
+    )
+
+    result = await run_kp_turn(ctx, services, Toolset(NoteTools(services)), "hello")
+
+    assert "stale:" not in result.reply

@@ -734,6 +734,7 @@ async def run_kp_turn(
     hook_ui_frames: list[dict] = []
     hook_panel_events: list[dict] = []
     ctx.extra.pop("hook_injections", None)  # reused ctx must not leak a prior turn's injections
+    ctx.extra.pop("clock_advances", None)  # same for a prior turn's unconsumed clock records
     # This turn's player message doubles as the worldbook retrieval context —
     # `agent.prompt_builder` reads `extra["user_message"]` for `worldbook.match`. Nothing
     # else ever wrote this key, which left live-play lorebook injection retrieving against
@@ -1673,7 +1674,8 @@ async def _run_reply_hooks(
     hook_writes: list[str],
 ) -> tuple[str, list[str], list[dict], list[dict]]:
     """Fire the post-reply hook phases in order: dice_rolled (when any dice tool resolved this
-    turn), reply_ready (narrate/rewrite), then variables_changed exactly once when anything
+    turn), clock_advanced (once per game-clock advance recorded by the clock tool this turn),
+    reply_ready (narrate/rewrite), then variables_changed exactly once when anything
     wrote variables this turn. One round only — variables_changed's own writes do NOT re-fire
     it, so hook cascades terminate by construction. Best-effort: a failing phase logs and the
     reply passes through unchanged. The third/fourth return values collect every phase's
@@ -1689,6 +1691,24 @@ async def _run_reply_hooks(
         ]
         if rolls:
             outcome = engine.fire("dice_rolled", {"rolls": rolls})
+            hook_writes = hook_writes + await apply_hook_writes(services, ctx.chat_key, outcome.writes)
+            ui_frames += outcome.ui_blocks
+            panel_events += outcome.panel_events
+            if outcome.narrations:
+                reply = reply.rstrip() + "\n\n" + "\n".join(outcome.narrations)
+
+        # Clock advances recorded by the game_clock tool this turn (capped at record time).
+        for advance in list(ctx.extra.get("clock_advances") or []):
+            if not isinstance(advance, dict):
+                continue
+            outcome = engine.fire(
+                "clock_advanced",
+                {
+                    "from": str(advance.get("from", "")),
+                    "to": str(advance.get("to", "")),
+                    "delta": str(advance.get("delta", "")),
+                },
+            )
             hook_writes = hook_writes + await apply_hook_writes(services, ctx.chat_key, outcome.writes)
             ui_frames += outcome.ui_blocks
             panel_events += outcome.panel_events

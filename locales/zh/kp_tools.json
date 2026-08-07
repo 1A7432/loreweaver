@@ -253,6 +253,7 @@
   "kp_tools.subsystem.loss.header_failure": "🤯 {name} 的{label}检定",
   "kp_tools.subsystem.loss.header_success": "😰 {name} 的{label}检定",
   "kp_tools.subsystem.loss.loss_line": "💔 损失: {loss} (骰子: {expr}={detail})",
+  "kp_tools.subsystem.loss.ceiling_line": "🛡️ 损失封顶生效: 封顶至 {value}",
   "kp_tools.subsystem.loss.remaining_line": "🧠 剩余{label}: {value}/{maximum}",
   "kp_tools.subsystem.loss.result_line": "📊 结果: {level}",
   "kp_tools.subsystem.loss.roll_line": "🎯 当前{label}: {value}  掷出: {roll}",

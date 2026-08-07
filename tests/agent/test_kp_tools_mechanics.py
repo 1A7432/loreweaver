@@ -1253,3 +1253,60 @@ async def test_skill_check_refuses_unknown_skill_names():
         "kp_tools.dice.skill_check.unknown_skill", name="呼啦圈精通"
     )
     assert text == expected
+
+
+# ---------------------------------------------------------------------------
+# check_with_loss: conditional loss ceiling (`loss_ceiling: {when, value}`)
+# ---------------------------------------------------------------------------
+
+_CEILING_PACK_YAML = """\
+extends: coc7
+names: [coc7-ceiling-test]
+subsystems:
+  sanity_check:
+    loss_ceiling: {when: 'tag == "fire"', value: 0}
+"""
+
+
+def _ceiling_pack():
+    from core.rulepacks import load_raw_rulepack_yaml, parse_rulepack_text
+
+    return parse_rulepack_text("coc7-ceiling-test", _CEILING_PACK_YAML, base_loader=load_raw_rulepack_yaml)
+
+
+async def test_loss_ceiling_caps_loss_only_when_the_condition_holds(monkeypatch):
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)  # SAN 50/99
+
+    pack = _ceiling_pack()
+    assert pack.subsystems["sanity_check"].loss_ceiling == ('tag == "fire"', 0)
+    monkeypatch.setattr("agent.kp_tools_subsystems.load_rulepack", lambda *a, **k: pack)
+
+    # Tag matches: the ceiling caps even a fumble's all-loss at 0.
+    seed_dice(11)
+    capped = await dispatch_subsystem(
+        services, ctx, pack, "sanity_check", {"success_loss": "0", "failure_loss": "1d6", "tag": "fire"}
+    )
+    assert "Loss ceiling applied: capped at 0" in capped
+    sheet = await char_tools.get_character_sheet(ctx)
+    assert "SAN: 50/99" in sheet
+
+    # No tag: the same seeded roll takes its normal course — no ceiling line.
+    seed_dice(11)
+    uncapped = await dispatch_subsystem(
+        services, ctx, pack, "sanity_check", {"success_loss": "0", "failure_loss": "1d6"}
+    )
+    assert "Loss ceiling applied" not in uncapped
+
+
+async def test_loss_ceiling_absent_in_base_pack_never_caps():
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)
+
+    pack = load_rulepack("coc7")
+    assert pack.subsystems["sanity_check"].loss_ceiling is None
+    seed_dice(11)
+    result = await _run_sub(services, ctx, "sanity_check", success_loss="0", failure_loss="1d6", tag="fire")
+    assert "Loss ceiling applied" not in result

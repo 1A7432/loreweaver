@@ -68,6 +68,10 @@ _TEMPLATE_PARAMETERS: dict[str, dict[str, Any]] = {
                 "type": "string",
                 "description": "Loss dice expression applied on a failed check, e.g. \"1d6\", \"1d100\".",  # i18n-exempt: model-facing tool schema text
             },
+            "tag": {
+                "type": "string",
+                "description": "Optional scene tag classifying the loss source (e.g. \"fire\", \"revelation\"); the rule system may key conditional loss rules on it.",  # i18n-exempt: model-facing tool schema text
+            },
         },
         "required": ["success_loss", "failure_loss"],
     },
@@ -188,6 +192,7 @@ async def dispatch_subsystem(
                 spec,
                 str(arguments.get("success_loss", "0")),
                 str(arguments.get("failure_loss", "0")),
+                str(arguments.get("tag", ""))[:40],
             )
         if spec.template == "improvement_check":
             return await _run_improvement_check(services, ctx, i18n, spec, str(arguments.get("skill_name", "")))
@@ -284,7 +289,7 @@ async def _record_subsystem_check_safe(
 
 
 async def _run_check_with_loss(
-    services: Services, ctx: AgentCtx, i18n: I18n, spec: SubsystemSpec, success_loss: str, failure_loss: str
+    services: Services, ctx: AgentCtx, i18n: I18n, spec: SubsystemSpec, success_loss: str, failure_loss: str, tag: str = ""
 ) -> str:
     character = await _active_character(services, ctx)
     if not _has_character(character):
@@ -311,6 +316,13 @@ async def _run_check_with_loss(
             loss = stat_value
         elif spec.fumble_loss == "max":
             loss = _expression_maximum(dice, loss_expr, fallback=loss)
+
+    # Pack-declared conditional ceiling (`loss_ceiling: {when, value}`) caps the final
+    # loss of THIS invocation — last, so fumble policies stay subject to the pack's law.
+    ceiling = _conditional_loss_ceiling(spec, character, pack, tag)
+    ceiling_applied = ceiling is not None and loss > ceiling
+    if ceiling_applied:
+        loss = ceiling
 
     new_value = max(0, stat_value - loss)
     character.attributes[spec.stat] = new_value
@@ -343,6 +355,7 @@ async def _run_check_with_loss(
                 "loss_expr": loss_expr,
                 "loss": loss,
                 "remaining": new_value,
+                **({"loss_ceiling": ceiling} if ceiling_applied else {}),
                 **({"resource_max": stat_max} if stat_max else {}),
             },
         }
@@ -360,9 +373,35 @@ async def _run_check_with_loss(
             expr=loss_expr,
             detail=loss_result.format_result(i18n=i18n),
         ),
+        *([i18n.t("kp_tools.subsystem.loss.ceiling_line", value=ceiling)] if ceiling_applied else []),
         i18n.t("kp_tools.subsystem.loss.remaining_line", label=label, value=new_value, maximum=stat_max),
     ]
     return "\n".join(lines)
+
+
+def _conditional_loss_ceiling(spec: SubsystemSpec, character: Any, pack: RulePack, tag: str) -> int | None:
+    """Evaluate the pack's conditional loss ceiling (``loss_ceiling: {when, value}``)
+    for this invocation: the ``when`` condexpr reads the optional scene ``tag`` and
+    the acting character's canonical sheet (``stat_data.<key>``); when it holds, the
+    invocation's loss caps at ``value``. Fail-closed: a broken expression never caps."""
+    if spec.loss_ceiling is None:
+        return None
+    when, value = spec.loss_ceiling
+    from core.condexpr import evaluate_safe
+    from core.sheets import canonical_values
+
+    snapshot = canonical_values(character, pack)
+    snapshot.update(pack.compute_derived(snapshot))
+
+    def _resolve(path: str) -> Any:
+        key = path.strip()
+        if key == "tag":
+            return tag
+        if key.startswith("stat_data."):
+            key = key[len("stat_data."):]
+        return snapshot.get(key)
+
+    return value if evaluate_safe(when, _resolve, default=False) else None
 
 
 async def _run_improvement_check(

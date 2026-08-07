@@ -1209,6 +1209,11 @@ class NoteTools(_KnowledgeToolsBase):
                     return i18n.t("kp_tools.know.clock.advance_unparsed", delta=value, time=current)
                 clock["current_time"] = advanced_time
                 await store.state_set(ctx.chat_key, store_key, json.dumps(clock, ensure_ascii=False))
+                # Record the advance for the room's event hooks (Layer C): the turn
+                # finalizer fires `clock_advanced` once per recorded advance, capped.
+                advances = ctx.extra.setdefault("clock_advances", [])
+                if isinstance(advances, list) and len(advances) < 8:
+                    advances.append({"from": str(current), "to": advanced_time, "delta": value})
                 return i18n.t("kp_tools.know.clock.advance_done", delta=value, time=advanced_time)
 
             if action == "add_event":
