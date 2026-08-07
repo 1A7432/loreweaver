@@ -47,6 +47,23 @@ CHATGPT_SUBSCRIPTION_PROXY_PROVIDERS: frozenset[str] = frozenset(CHATGPT_SUBSCRI
 _AUTHLESS_LOCAL_PROVIDERS: frozenset[str] = frozenset({"ollama", "lmstudio", "vllm"})
 
 
+def provider_cost_class(llm: LLMSettings) -> str:
+    """How a call on this provider is BILLED: ``"subscription"``, ``"paid"`` or ``"local"``.
+
+    Not a pricing table — the three classes are the ones an operator can act on. A
+    ``subscription`` provider spends a metered session/weekly allowance, so an
+    avoidable call there can end a game mid-scene (that is the 2026-08-07 incident).
+    A ``paid`` one spends money per token. A ``local`` one spends neither, so advice
+    about "use a cheaper model for this" is noise there.
+    """
+    provider = (llm.provider or "openai").casefold()
+    if provider in _AUTHLESS_LOCAL_PROVIDERS:
+        return "local"
+    if provider == "supergrok" or (provider in CHATGPT_SUBSCRIPTION_PROXY_PROVIDERS and not llm.base_url):
+        return "subscription"
+    return "paid"
+
+
 _GEMINI_SCHEMA_ALLOWED_KEYS = {
     "type",
     "format",

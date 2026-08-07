@@ -28,6 +28,7 @@ from infra.file_permissions import atomic_write_private, ensure_private_director
 from infra.i18n import I18n, get_i18n
 from infra.llm import FakeLLM
 from infra.pack_source import PackRefError, resolve_pack_ref
+from infra.providers import provider_cost_class
 from infra.version import resolve_version
 from net.keystore import Keystore
 from net.session import PROTOCOL_VERSION
@@ -250,6 +251,10 @@ def _run_doctor(settings: Settings, i18n: I18n) -> int:
     )
     print(i18n.t("tui.doctor.data_dir", path=settings.data_dir), file=sys.stderr)
 
+    scribe_warning = _scribe_cost_warning(settings, i18n)
+    if scribe_warning:
+        print(scribe_warning, file=sys.stderr)
+
     missing: list[str] = []
     for locale in ("en", "zh"):
         if locale not in available_locales:
@@ -265,6 +270,30 @@ def _run_doctor(settings: Settings, i18n: I18n) -> int:
         return 1
     print(i18n.t("tui.doctor.ok"), file=sys.stderr)
     return 0
+
+
+def _scribe_cost_warning(settings: Settings, i18n: I18n) -> str:
+    """The P2 advisory: the Scribe is billing ledger work at flagship rates.
+
+    Fires only when all three are true — the Scribe is on, EVERY ``TRPG_SCRIBE__``
+    field is blank (so it falls back to the main client), and the main provider
+    actually costs something. On a local provider the advice would be noise, and a
+    Scribe already pointed at its own model needs no advice at all.
+
+    An advisory, never a failure: ``--doctor`` still exits 0. The point is that the
+    operator learns it from a health check instead of from a spent quota — a
+    2026-08-07 session lost its finale to a rate limit it was partly feeding itself.
+    """
+    scribe = settings.scribe
+    if not scribe.enabled:
+        return ""
+    if scribe.provider or scribe.chat_model or scribe.base_url:
+        return ""
+    cost_class = provider_cost_class(settings.llm)
+    if cost_class == "local":
+        return ""
+    key = "tui.doctor.scribe_subscription" if cost_class == "subscription" else "tui.doctor.scribe_paid"
+    return i18n.t(key, provider=settings.llm.provider or "openai", model=settings.llm.chat_model)
 
 
 def _print_trust_card(i18n: I18n, manifest: core_pack.PackManifest, locale: str) -> None:
