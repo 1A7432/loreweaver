@@ -570,7 +570,10 @@ the model can ignore:
 
 Everything a kit references rides the same content-addressed asset pipeline as panel
 code, and the trust card discloses both the subject count and whether the module may
-spend the operator's image budget at all. Rooms opt in with the SAME
+spend the operator's image budget at all. A `ref` must be an image and a cue must be
+audio, checked at build: refs may be `png` / `jpg` / `jpeg` / `webp` / `gif` / `svg`,
+cues `mp3` / `ogg` / `wav` / `flac` / `m4a` / `aac`. The type comes from the file
+EXTENSION via a table the engine owns, so a pack builds the same way on every machine. Rooms opt in with the SAME
 `.panels enable <packId>` that admits your panels — presentation is the module dressing
 the table, not a second switch. Operator-side knobs (which model, per-room image caps)
 are `TRPG_DIRECTOR__*`; a room whose enabled modules ship no kit never wakes a Director,

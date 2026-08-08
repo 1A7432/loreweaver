@@ -96,6 +96,31 @@ _ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
 _ZIP_FILE_ATTR = 0o100644 << 16
 _STREAM_CHUNK = 1024 * 1024
 
+# Every media type the pack format DOCUMENTS resolves here, not through the build
+# machine's mimetypes database. `mimetypes.guess_type` is platform-data-driven and
+# returns the `x-` names for half of these on a stock CPython (`.wav` → audio/x-wav,
+# `.flac` → audio/x-flac, `.m4a` → audio/mp4a-latm, `.aac` → audio/x-aac), none of
+# which are in `AUDIO_MIMES` — so a kit that built on one machine failed on another,
+# and four of the six documented audio formats were unbuildable anywhere. A build
+# result must not depend on where it was built. Undocumented extensions still fall
+# back to `mimetypes` (they only ever become `application/octet-stream` payloads).
+_ASSET_MIME_BY_SUFFIX = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".svg": "image/svg+xml",
+    ".mp3": "audio/mpeg",
+    ".ogg": "audio/ogg",
+    ".oga": "audio/ogg",
+    ".opus": "audio/ogg",
+    ".wav": "audio/wav",
+    ".flac": "audio/flac",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+}
+
 
 class PackError(ValueError):
     """Any pack build/inspect/install failure. Messages are technical English; the CLI
@@ -779,6 +804,15 @@ def _validate_pack_presentation(
     return kits, asset_paths
 
 
+def _asset_mime(path: str) -> str:
+    """The media type of a pack asset, by extension and platform-independently."""
+    suffix = PurePosixPath(path).suffix.casefold()
+    known = _ASSET_MIME_BY_SUFFIX.get(suffix)
+    if known:
+        return known
+    return mimetypes.guess_type(path)[0] or "application/octet-stream"
+
+
 def _enforce_kit_assets(kits: list[PresentationKit], assets_by_path: Mapping[str, PackAsset]) -> None:
     """A 定妆 reference must be a picture and a cue must be audio — caught at build
     time, because the runtime's only recourse is to silently not stage the beat."""
@@ -978,7 +1012,7 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
         digest = hashlib.sha256(data).hexdigest()
         if asset.sha256 and asset.sha256 != digest:
             raise PackError(f"asset {asset.path}: declared sha256 does not match the file")
-        mime = asset.mime or mimetypes.guess_type(asset.path)[0] or "application/octet-stream"
+        mime = asset.mime or _asset_mime(asset.path)
         completed_assets.append(
             PackAsset(
                 path=asset.path,
