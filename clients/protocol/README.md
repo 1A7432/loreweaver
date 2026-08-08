@@ -24,6 +24,12 @@ npm install loreweaver-protocol   # or: bun add loreweaver-protocol
   the production carrier is Iroh p2p, which shares these exact frame types.
 - **`stripControlChars`** — the terminal-safety sanitizer every Loreweaver
   client runs over server-supplied text (strips C0/C1 escape introducers).
+- **A major-version mismatch warning** — `WsClient` compares the `welcome`
+  frame's `protocol` against `PROTOCOL_VERSION` and warns once (naming both
+  versions) when the majors differ, so every client built on this package gets
+  the check for free. The pure helpers behind it — `protocolMajor`,
+  `protocolMismatch`, `protocolMismatchMessage` — are exported for clients that
+  do their own connecting.
 
 ## Usage
 
@@ -39,8 +45,24 @@ client.on(FrameType.Dice, (frame) => console.log(frame.expr, frame.total, frame.
 client.sendInput(".ra Spot Hidden")
 ```
 
-Versioning is additive: clients should ignore unknown server frame types and
-treat `welcome.protocol` as an opaque `"1.x"` string.
+## Versioning
+
+The **major** version is the compatibility contract; minors within a major are
+additive, so clients should ignore unknown server frame types and unknown fields.
+A different major means the two sides may reject or misread each other's frames,
+so `WsClient` says so — loudly, once, through `console.warn` by default:
+
+```ts
+const client = new WsClient({
+  onProtocolMismatch: (message, { client: mine, server }) => {
+    banner(message)            // or refuse the session yourself: client.close()
+    console.log(mine, server)  // e.g. "2.1", "3.0"
+  },
+})
+```
+
+It is a warning, not a refusal: the `welcome` frame is still delivered and the
+socket stays open. Hanging up (or not) is your call.
 
 ## License
 

@@ -25,7 +25,9 @@ import {
   type PlayerRole,
   type PongFrame,
   type ServerFrame,
+  type WelcomeFrame,
 } from "./types.js"
+import { protocolMismatch, protocolMismatchMessage, type ProtocolMismatchHandler } from "./version.js"
 
 export interface WebSocketLike {
   readonly readyState: number
@@ -60,6 +62,10 @@ export interface WsClientOptions {
   reconnectMaxMs?: number
   setTimeoutFn?: typeof setTimeout
   clearTimeoutFn?: typeof clearTimeout
+  // Where a `welcome` announcing a different protocol MAJOR is reported. Defaults to
+  // `console.warn`; pass a channel to surface it in your own UI (or to close the socket,
+  // which the library deliberately does not do on its own).
+  onProtocolMismatch?: ProtocolMismatchHandler
 }
 
 export interface MediaUpload {
@@ -176,6 +182,10 @@ export class WsClient {
   private readonly reconnectMaxMs: number
   private readonly setTimeoutFn: typeof setTimeout
   private readonly clearTimeoutFn: typeof clearTimeout
+  private readonly onProtocolMismatch: ProtocolMismatchHandler
+  // The banner repeats on every reconnect; the operator is told once per version, not
+  // once per redial. Keyed by the announced string so a genuinely different peer still speaks up.
+  private readonly warnedProtocols = new Set<string>()
   private readonly messageHandlers = new Set<MessageHandler>()
   private readonly typedHandlers = new Map<ServerFrame["type"], Set<MessageHandler>>()
   private readonly statusHandlers = new Set<StatusHandler>()
@@ -199,6 +209,7 @@ export class WsClient {
     this.reconnectMaxMs = options.reconnectMaxMs ?? 5_000
     this.setTimeoutFn = options.setTimeoutFn ?? setTimeout
     this.clearTimeoutFn = options.clearTimeoutFn ?? clearTimeout
+    this.onProtocolMismatch = options.onProtocolMismatch ?? ((message) => console.warn(message))
   }
 
   async connect(url: string): Promise<void> {
@@ -499,6 +510,9 @@ export class WsClient {
       const pending = this.pendingOffers.shift()
       if (pending) pending.resolve(parsed)
     }
+    if (parsed.type === FrameType.Welcome) {
+      this.checkProtocol(parsed)
+    }
     if (parsed.type === FrameType.Error) {
       const error = new Error(parsed.message)
       const pendingOffer = this.pendingOffers.shift()
@@ -511,6 +525,16 @@ export class WsClient {
     const typed = this.typedHandlers.get(parsed.type)
     if (!typed) return
     for (const handler of typed) handler(parsed)
+  }
+
+  // A WARNING, never a refusal: the frame is dispatched to subscribers either way and the
+  // socket stays open. `welcome.protocol` is typed as a string but arrives off an untrusted
+  // wire, so an absent/garbage banner announces no major and is passed over in silence.
+  private checkProtocol(frame: WelcomeFrame): void {
+    const mismatch = protocolMismatch(frame.protocol)
+    if (!mismatch || this.warnedProtocols.has(mismatch.server)) return
+    this.warnedProtocols.add(mismatch.server)
+    this.onProtocolMismatch(protocolMismatchMessage(mismatch), mismatch)
   }
 
   private sendPong(t: number): void {

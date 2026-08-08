@@ -1,4 +1,5 @@
 export * from "./types.js"
+export * from "./version.js"
 export * from "./client.js"
 export * from "./sanitize.js"
 export * from "./condexpr.js"
