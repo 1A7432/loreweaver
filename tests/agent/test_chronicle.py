@@ -116,8 +116,9 @@ async def _seed_entries(services, chat_key: str, turns: list[int], *, tokens: in
 #
 # i.e. EXACTLY 40 prompt tokens per RENDERED record, for any N. Ten rendered
 # records (the `_TAIL_MAX_ENTRIES` cap) are 1599 chars — far under the 6000-char
-# budget, so `_render_lines` truncation never enters the arithmetic. Two-digit
-# turns keep the 12-char prefix uniform.
+# budget, so `_render_newest` truncation never enters the arithmetic (which is why
+# the numbers below survive T2's change of truncation DIRECTION untouched).
+# Two-digit turns keep the 12-char prefix uniform.
 _RECORD_TEXT_CHARS = 147
 _TOKENS_PER_RENDERED_RECORD = 40
 _TAIL_CAP = 10  # agent.chronicle._TAIL_MAX_ENTRIES
@@ -147,6 +148,44 @@ async def _seed_sized_entries(services, chat_key: str, turns: list[int]) -> None
                 "pcs": [],
                 "scene": "",
                 "folded": False,
+                "tokens": 0,
+            },
+        )
+
+
+# --- binding-budget fixtures for the render-DIRECTION oracle -------------------
+# Direction is only observable when the character budget actually binds, so these
+# records are deliberately fat: one rendered line is 12 + 1400 = 1412 chars, so a
+# single line fits the 6000-char budget but ten lines (14120) cannot. Which ones
+# survive is then a statement about which END the renderer spends from.
+_FAT_TEXT_CHARS = 1400
+
+
+def _fat_text(marker: str) -> str:
+    """Record text carrying `marker` at the front, padded to a known fat length."""
+    text = (marker + " " + FILLER * 20)[:_FAT_TEXT_CHARS].ljust(_FAT_TEXT_CHARS, ".")
+    assert marker in text and len(text) == _FAT_TEXT_CHARS
+    return text
+
+
+async def _seed_marked_entries(
+    services, chat_key: str, turns: list[int], *, marker: str, folded: bool = False, fat: bool = True
+) -> None:
+    """Records whose text is findable by marker — fat enough to bind the render
+    budget (`fat=True`) or short enough that it cannot (the positive control)."""
+    for turn in turns:
+        tag = f"{marker}{turn}"
+        await services.documents.put(
+            chat_key,
+            CHRONICLE_DOC_TYPE,
+            f"c{turn:05d}",
+            {
+                "text": _fat_text(tag) if fat else tag,
+                "keeper": "",
+                "turn": turn,
+                "pcs": [],
+                "scene": "",
+                "folded": folded,
                 "tokens": 0,
             },
         )
@@ -554,6 +593,65 @@ async def test_chronicle_section_carries_summary_threads_and_tail_to_the_kp():
 
     prompt = await build_system_prompt(ctx, services)
     assert i18n.t("prompt.chronicle.header") in prompt, "the section joins the single system prompt"
+
+
+async def test_a_binding_budget_keeps_the_newest_tail_and_the_most_relevant_recall():
+    """T2: the section's two record blocks are ordered by DIFFERENT things, so a
+    binding character budget has to drop from OPPOSITE ends.
+
+    - the raw tail is DEFINED as the most recent records: keeping the oldest and
+      silently dropping the newest is exactly backwards. The survivors are the
+      newest that fit, still rendered oldest-first.
+    - topical recall arrives most-relevant-first, so there the front is what is
+      worth keeping. That asymmetry is deliberate; this oracle pins it so nobody
+      "fixes" the two blocks into a symmetry neither of them wants.
+    """
+    import agent.chronicle as chronicle_flow
+
+    services = _services(FakeLLM())
+    i18n = services.i18n.with_locale("en")
+
+    async def _seed(chat_key: str, *, fat: bool) -> list:
+        # Ten unfolded records -> the raw tail (exactly the `_TAIL_MAX_ENTRIES` cap,
+        # so the ENTRY cap can never be what drops a record here — only the budget).
+        await _seed_marked_entries(services, chat_key, list(range(10, 20)), marker="TAIL", fat=fat)
+        # Ten folded records -> the recall pool, handed back in relevance order.
+        await _seed_marked_entries(
+            services, chat_key, list(range(30, 40)), marker="RECALL", folded=True, fat=fat
+        )
+        return [
+            await services.documents.get(chat_key, CHRONICLE_DOC_TYPE, f"c{turn:05d}") for turn in range(30, 40)
+        ]
+
+    async def _section(chat_key: str, *, fat: bool) -> str:
+        by_relevance = await _seed(chat_key, fat=fat)
+
+        async def _fake_recall(_services, _chat_key, _query, *, limit=4):
+            return by_relevance  # most relevant FIRST — the contract of this list
+
+        original = chronicle_flow.recall_folded_entries
+        chronicle_flow.recall_folded_entries = _fake_recall
+        try:
+            return await build_chronicle_section(
+                _ctx(chat_key), services, i18n, recent_context="the drowned archive"
+            )
+        finally:
+            chronicle_flow.recall_folded_entries = original
+
+    # POSITIVE CONTROL: same wiring, short records — nothing binds, so every marker
+    # renders. A later absence assertion therefore means "the budget bound", not
+    # "the section, the recall hook or the markers were broken all along".
+    slack = await _section("chrono-render-slack", fat=False)
+    for marker in ("TAIL10", "TAIL19", "RECALL30", "RECALL39"):
+        assert marker in slack, f"{marker} must render when the budget has slack"
+
+    bound = await _section("chrono-render-bound", fat=True)
+
+    assert "TAIL19" in bound, "the NEWEST raw record is the one the tail exists to carry"
+    assert "TAIL10" not in bound, "a binding budget drops the OLDEST of the tail, not the newest"
+    assert bound.index("TAIL18") < bound.index("TAIL19"), "survivors still read oldest-first"
+    assert "RECALL30" in bound, "recall is ordered by relevance: the front is what fits"
+    assert "RECALL39" not in bound, "the LEAST relevant recall is what a binding budget drops"
 
 
 async def test_chronicle_section_is_absent_for_a_fresh_room():

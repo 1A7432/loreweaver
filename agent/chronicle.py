@@ -501,14 +501,14 @@ def _render_delta(i18n: I18n, entries: list[Document], exclude: frozenset[str] |
     never renders costs the prompt nothing to keep and frees nothing when folded —
     which makes "tokens of the records folded" a unit the section itself falsifies.
     This renders the tail as it stands and again without `exclude`, through the SAME
-    `_tail_docs`/`_render_lines` the prompt section uses, and reports the difference.
+    `_tail_docs`/`_render_newest` the prompt section uses, and reports the difference.
 
     The result steps rather than slopes: while more than `_TAIL_MAX_ENTRIES` records
     remain unfolded, dropping the oldest ones changes nothing the prompt renders and
     the delta is exactly 0.
     """
-    now = _render_lines(i18n, _tail_docs(entries), _TAIL_MAX_CHARS)
-    after = _render_lines(i18n, _tail_docs(entries, exclude=exclude), _TAIL_MAX_CHARS)
+    now = _render_newest(i18n, _tail_docs(entries), _TAIL_MAX_CHARS)
+    after = _render_newest(i18n, _tail_docs(entries, exclude=exclude), _TAIL_MAX_CHARS)
     return max(0, estimate_tokens(now) - estimate_tokens(after))
 
 
@@ -536,9 +536,10 @@ def _fold_prefix(
     Solved by walking the prefix rather than dividing a deficit by a per-record size,
     because there is no per-record size: `_render_delta` steps. The walk is linear in
     the backlog and each step renders at most `_TAIL_MAX_ENTRIES` lines; it is not
-    hoisted past the leading zero-delta stretch on purpose, since `_render_lines`
-    spends its character budget from the oldest side and can therefore change what it
-    renders before the entry count alone would predict.
+    hoisted past the leading zero-delta stretch on purpose, since `_render_newest`
+    spends its character budget from the newest side — under a binding budget the
+    delta stays 0 for LONGER than the entry cap alone would predict, so any shortcut
+    derived from the caps would be wrong exactly when the budget matters.
     """
     if deficit >= reducible:
         return list(foldable)
@@ -689,13 +690,19 @@ async def build_chronicle_section(ctx: AgentCtx, services: Services, i18n: I18n,
         entries = await services.documents.list(ctx.chat_key, CHRONICLE_DOC_TYPE)
         tail = _tail_docs(entries)
         if tail:
-            parts.append(i18n.t("prompt.chronicle.tail_label") + "\n" + _render_lines(i18n, tail, _TAIL_MAX_CHARS))
+            # Chronological block: under a binding budget keep the NEWEST.
+            parts.append(i18n.t("prompt.chronicle.tail_label") + "\n" + _render_newest(i18n, tail, _TAIL_MAX_CHARS))
 
         if recent_context.strip():
             tail_ids = {doc.id for doc in tail}
             recalled = [doc for doc in await recall_folded_entries(services, ctx.chat_key, recent_context) if doc.id not in tail_ids]
             if recalled:
-                parts.append(i18n.t("prompt.chronicle.recalled_label") + "\n" + _render_lines(i18n, recalled, _TAIL_MAX_CHARS))
+                # Relevance-ranked block: under a binding budget keep the STRONGEST hits.
+                parts.append(
+                    i18n.t("prompt.chronicle.recalled_label")
+                    + "\n"
+                    + _render_most_relevant(i18n, recalled, _TAIL_MAX_CHARS)
+                )
 
         if not parts:
             return ""
@@ -705,15 +712,47 @@ async def build_chronicle_section(ctx: AgentCtx, services: Services, i18n: I18n,
         return ""
 
 
-def _render_lines(i18n: I18n, docs: list[Document], budget: int) -> str:
-    """Record lines, keeper-grade (annotations bracketed in), bounded by `budget`."""
+def _record_line(i18n: I18n, doc: Document) -> str:
+    """One record line, keeper-grade (the keeper annotation bracketed in)."""
+    text = str(doc.data.get("text", "")).strip()
+    margin = str(doc.data.get("keeper", "")).strip()
+    if margin:
+        text += f"  [{i18n.t('prompt.chronicle.keeper_label')} {margin}]"
+    return i18n.t("prompt.chronicle.record_line", turn=_entry_turn(doc), text=text)
+
+
+def _render_newest(i18n: I18n, docs: list[Document], budget: int) -> str:
+    """`docs` oldest→newest: the largest SUFFIX that fits `budget` chars, still
+    rendered in chronological order.
+
+    For the raw tail, which is DEFINED as the most recent records — so when the
+    budget binds, the records to give up are the oldest ones. Spending the budget
+    from the newest end and reversing back is what makes "recent" true of the
+    render and not merely of the selection.
+    """
+    lines: list[str] = []
+    for doc in reversed(docs):
+        line = _record_line(i18n, doc)
+        if budget - len(line) < 0:
+            break
+        lines.append(line)
+        budget -= len(line)
+    lines.reverse()
+    return "\n".join(lines)
+
+
+def _render_most_relevant(i18n: I18n, docs: list[Document], budget: int) -> str:
+    """`docs` most-relevant→least: the largest PREFIX that fits `budget` chars.
+
+    The asymmetry with `_render_newest` is DELIBERATE — do not "fix" it into
+    symmetry. These two blocks are ordered by different things (time vs retrieval
+    score), so the part worth keeping sits at opposite ends: dropping the tail of a
+    relevance ranking drops the weakest hits, which is exactly right, while doing
+    the same to a chronological tail would drop the present moment.
+    """
     lines: list[str] = []
     for doc in docs:
-        text = str(doc.data.get("text", "")).strip()
-        margin = str(doc.data.get("keeper", "")).strip()
-        if margin:
-            text += f"  [{i18n.t('prompt.chronicle.keeper_label')} {margin}]"
-        line = i18n.t("prompt.chronicle.record_line", turn=_entry_turn(doc), text=text)
+        line = _record_line(i18n, doc)
         if budget - len(line) < 0:
             break
         lines.append(line)
