@@ -5,6 +5,12 @@
   "description": "一栋只在雨夜出现第五层的公寓。",
   "personality": "",
   "scenario": "调查员受托寻找失踪的房客。",
+  "opening": "雨声里，公寓的门牌忽明忽暗。",
+  "dialogue_examples": "",
+  "alternate_openings": [
+    "你在五层的楼梯间醒来。"
+  ],
+  "author_notes": "roundtrip fixture",
   "tags": [
     "调查",
     "都市怪谈"
@@ -13,26 +19,26 @@
     {
       "id": "理智",
       "kind": "number",
+      "visibility": "player",
       "labels": {
         "en": "Sanity",
         "zh": "理智"
       },
       "default": 80,
       "minimum": 0,
-      "maximum": 100,
-      "visibility": "player"
+      "maximum": 100
     },
     {
       "id": "真相进度",
       "kind": "number",
+      "visibility": "keeper",
       "labels": {
         "en": "Truth",
         "zh": "真相进度"
       },
       "default": 0,
       "minimum": 0,
-      "maximum": 5,
-      "visibility": "keeper"
+      "maximum": 5
     }
   ],
   "worldbook": [
@@ -108,11 +114,5 @@
       "cooldown": 0,
       "delay": 0
     }
-  ],
-  "opening": "雨声里，公寓的门牌忽明忽暗。",
-  "alternate_openings": [
-    "你在五层的楼梯间醒来。"
-  ],
-  "dialogue_examples": "",
-  "author_notes": "roundtrip fixture"
+  ]
 }
