@@ -21,6 +21,7 @@ from core import rulepacks as core_rulepacks
 from core import skills as core_skills
 from core.dice_engine import seed_dice
 from gateway.commands import CommandRouter
+from gateway.panels import installed_pack_homes
 from gateway.runner import GatewayRunner
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings, LocalEmbeddings
@@ -258,6 +259,8 @@ def _run_doctor(settings: Settings, i18n: I18n) -> int:
     scribe_warning = _scribe_cost_warning(settings, i18n)
     if scribe_warning:
         print(scribe_warning, file=sys.stderr)
+    for collision_warning in _rulepack_stem_collision_warnings(settings, i18n):
+        print(collision_warning, file=sys.stderr)
 
     missing: list[str] = []
     for locale in ("en", "zh"):
@@ -298,6 +301,37 @@ def _scribe_cost_warning(settings: Settings, i18n: I18n) -> str:
         return ""
     key = "tui.doctor.scribe_subscription" if cost_class == "subscription" else "tui.doctor.scribe_paid"
     return i18n.t(key, provider=settings.llm.provider or "openai", model=settings.llm.chat_model)
+
+
+def _rulepack_stem_collision_warnings(settings: Settings, i18n: I18n) -> list[str]:
+    """The advisory for two installed packs shipping the same ``rulepacks/<stem>.yaml``.
+
+    Install writes both to the ONE shared discovery dir, so whichever landed last owns the
+    file and its rules grade every room on that system. Flipping the priority would only
+    move the drift (``extends:`` is the sanctioned way to build on another pack's system),
+    so the answer is visibility, and it belongs here rather than at install time: the
+    collision only exists between two packs an operator already chose to install, and a
+    second install has no business judging the first.
+
+    Never a failure — ``--doctor`` still exits 0. Homes that fail to read are skipped;
+    surfacing a broken pack home is the panels loader's job, not this advisory's.
+    """
+    manifests: dict[str, core_pack.PackManifest] = {}
+    for pack_id, home in installed_pack_homes(Path(settings.data_dir)).items():
+        try:
+            manifests[pack_id] = core_pack.parse_manifest_text(
+                (home / core_pack.MANIFEST_NAME).read_text(encoding="utf-8"), expect_trust=True
+            )
+        except (OSError, ValueError):
+            continue
+    return [
+        i18n.t(
+            "tui.doctor.rulepack_stem_collision",
+            stem=collision.stem,
+            packs=", ".join(collision.pack_ids),
+        )
+        for collision in core_pack.rulepack_stem_collisions(manifests)
+    ]
 
 
 def _print_trust_card(i18n: I18n, manifest: core_pack.PackManifest, locale: str) -> None:

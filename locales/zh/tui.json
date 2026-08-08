@@ -18,6 +18,7 @@
   "tui.doctor.mode": "模式：{mode}",
   "tui.doctor.no_skills": "未发现任何技能",
   "tui.doctor.ok": "OK：所有检查通过",
+  "tui.doctor.rulepack_stem_collision": "警告：已安装的扩展包 {packs} 都提供了 rulepacks/{stem}.yaml，内容不同。磁盘上只留下最后安装的那一份，它的规则现在裁定所有使用 {stem} 的房间。请让其中一个包用 `extends:` 在另一个之上扩展，或只保留你实际游玩的那个包。",
   "tui.doctor.rulepacks": "规则包：{rulepacks}",
   "tui.doctor.scribe_paid": "提示:书记官正在用旗舰价做记账工作({provider} / {model})。它在每个 AI-KP 回合后多跑一次调用。请把 TRPG_SCRIBE__* 指向一个便宜的小模型——见 .env.example。",
   "tui.doctor.scribe_subscription": "提示:书记官正在用你的 {provider} 订阅额度记账({model})。每个 AI-KP 回合都会多消耗一次调用,额度耗尽会让游戏在半场中断。请把 TRPG_SCRIBE__* 指向一个小模型——见 .env.example。",

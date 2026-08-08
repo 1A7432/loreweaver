@@ -1442,3 +1442,45 @@ def installed_pack_dir(data_dir: Path | str, pack_id: str) -> Path | None:
     """The newest installed pack dir for ``pack_id``, or ``None`` when absent."""
     dirs = _installed_pack_dirs(data_dir, pack_id)
     return dirs[0] if dirs else None
+
+
+@dataclass(frozen=True)
+class RulepackStemCollision:
+    """One shared ``<rulepacks_dir>/<stem>.yaml`` that two installed packs disagree about."""
+
+    stem: str
+    pack_ids: tuple[str, ...]
+
+
+def rulepack_stem_collisions(manifests: Mapping[str, PackManifest]) -> list[RulepackStemCollision]:
+    """Installed packs whose rulepacks land on the SAME shared file with DIFFERENT bytes.
+
+    :func:`install_pack` writes every bundled rulepack to the discovery dir under its bare
+    stem, so after a collision exactly one file survives — and its rules then grade every
+    room on that system, including rooms running the pack that lost. The shared dir alone
+    cannot show this (only the survivor is there); the reconstruction runs off the manifest
+    v2 ``files:`` inventory each installed home keeps.
+
+    Content-aware by construction, because equal bytes are not a collision: a pack shipping
+    the same rulepack it always shipped, or two packs shipping literally the same rule
+    system, is silent. ``manifests`` is keyed by pack id (one — the newest — home per pack),
+    so a pack colliding with its own older version never appears either. A declared rulepack
+    with no digest in its own inventory is skipped: an advisory guesses nothing.
+
+    ``extends:`` is the sanctioned way to build on another pack's system; this is the
+    diagnostic for the case where two packs claim the same name outright.
+    """
+    by_stem: dict[str, dict[str, str]] = {}
+    for pack_id, manifest in manifests.items():
+        digests = {item.path: item.sha256 for item in manifest.files}
+        for path in manifest.contents.get("rulepacks", ()):
+            digest = digests.get(path)
+            if not digest:
+                continue
+            # First declaration wins per pack: a pack shadowing ITSELF is its own business.
+            by_stem.setdefault(PurePosixPath(path).stem, {}).setdefault(pack_id, digest)
+    return [
+        RulepackStemCollision(stem=stem, pack_ids=tuple(sorted(claims)))
+        for stem, claims in sorted(by_stem.items())
+        if len(claims) > 1 and len(set(claims.values())) > 1
+    ]

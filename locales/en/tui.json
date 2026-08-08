@@ -18,6 +18,7 @@
   "tui.doctor.mode": "Mode: {mode}",
   "tui.doctor.no_skills": "zero KP skills discovered",
   "tui.doctor.ok": "OK: all checks passed",
+  "tui.doctor.rulepack_stem_collision": "WARNING: installed packs {packs} each ship rulepacks/{stem}.yaml with different contents. Only the one installed last is on disk, and its rules now grade every room running {stem}. Have one pack build on the other with `extends:`, or keep only the pack you play.",
   "tui.doctor.rulepacks": "Rulepacks: {rulepacks}",
   "tui.doctor.scribe_paid": "NOTE: the Scribe is paying flagship prices for ledger work ({provider} / {model}). It runs one extra call after every AI-KP turn. Point TRPG_SCRIBE__* at a small, cheap model — see .env.example.",
   "tui.doctor.scribe_subscription": "NOTE: the Scribe is billing bookkeeping to your {provider} SUBSCRIPTION quota ({model}). Every AI-KP turn spends one more call there, and a quota that runs out ends the game mid-scene. Point TRPG_SCRIBE__* at a small model — see .env.example.",
