@@ -29,7 +29,10 @@ jobs:
   redline-eval:
     name: Real-model red-line gate
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Real runtimes measured 21-28 minutes, so a 30-minute cap killed two
+    # nightlies outright before either gate could report. Headroom, not a
+    # budget: the two eval steps stay bounded by their own --budget/--turns.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 

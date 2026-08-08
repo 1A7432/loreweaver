@@ -42,8 +42,9 @@ import subprocess
 import sys
 import tempfile
 import traceback
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -68,7 +69,10 @@ from agent.kp_tools import build_kp_toolset  # noqa: E402
 # against a scripted one). Leading-underscore names are a module-private
 # *convention*, not enforced privacy -- an explicit import is fine.
 from agent.loop import (  # noqa: E402
+    _PLAYER_SKILL_EN_WORDS,
+    _PLAYER_SKILL_ZH_TERMS,
     _dice_rolled,
+    _en_verb_pattern,
     _event_description_is_semantic_duplicate,
     _player_attempts_checkable_action,
     _reply_requests_or_resolves_check,
@@ -77,6 +81,7 @@ from agent.loop import (  # noqa: E402
 from agent.services import build_services  # noqa: E402
 from core.character_manager import get_hit_points  # noqa: E402
 from core.charcard import parse_card_file  # noqa: E402
+from core.rulepacks import all_check_terms  # noqa: E402
 from gateway.commands import CommandRouter  # noqa: E402
 from gateway.hub import RoomHub  # noqa: E402
 from gateway.turn import run_turn  # noqa: E402
@@ -157,6 +162,173 @@ def extract_secret_snippets(keeper_pool_raw: str, min_len: int = 30, max_len: in
     return snippets
 
 
+# =============================================================================
+# Evidence-based "checkable turn" judge.
+#
+# The gate's dice-first denominator used to be a verb lexicon's unsupported
+# opinion. The first nightly after the M18/M19 landing spree failed red on
+# longrun dice-first at 1/2 checkable turns = 50% (secrecy held at 0.0% on both
+# lanes). The flagged turn was a player OATH -- "I swear aloud: I will never
+# enter the cellar alone" -- which has no check to roll; the Keeper answering
+# with an NPC reaction was correct keeping. It was scored checkable because
+# "will" is a POW alias in rulepacks/coc7.yaml, and `agent.loop` unions every
+# pack's check terms into its English detector.
+#
+# So the contract is now the Scribe evidence gate's (5601795): a claim that
+# cannot cite its own evidence does not get to move a number. A turn is
+# checkable only if this judge can NAME the skill that should have been rolled
+# AND quote the text that calls for it. Skill names come from the installed
+# packs (`core.rulepacks.all_check_terms`) -- never a hardcoded system list
+# (iron rule #1 / M16: the engine is rule-agnostic and an eval script must not
+# reintroduce what the rulepacks externalized).
+#
+# The judge is deliberately STRICTER than `agent.loop`'s corrective trigger.
+# There, a false positive costs one extra roll; here it moves a CI gate, so
+# unsupported hits are dropped and the residual denominator is protected by
+# `GateThresholds.min_checkable_turns` below.
+# =============================================================================
+
+# Cap on how much evidence a single run keeps. A failing gate needs the reason
+# WHY each turn was judged checkable, not an unbounded transcript copy.
+_EVIDENCE_LOG_CAP = 200
+_EVIDENCE_QUOTE_MAX = 160
+
+# Clause boundaries used to cut the quoted span out of the surrounding text.
+_EVIDENCE_CLAUSE_SPLIT_RE = re.compile(r"[,.!?;:\n。！？；：，]")
+
+# Generic check-request vocabulary. Only used to license a pack term that is
+# NOT itself action language ("library use", "cthulhu mythos"), so a skill named
+# in an explicit request still counts. Kept deliberately small: this is a
+# detector lexicon, not user-facing copy (same convention as `agent/loop.py`).
+_CHECK_REQUEST_RE = re.compile(r"\b(?:check|checks|roll|rolls|rolling|test|tests)\b|检定|判定|骰", re.IGNORECASE)  # i18n-exempt
+_CHECK_REQUEST_WINDOW = 32
+
+
+@dataclass(frozen=True)
+class CheckEvidence:
+    """Why one turn was judged checkable -- the audit trail behind the number.
+
+    A gate whose verdict cannot be audited is what produced the false positive
+    this class exists to prevent, so every field is required: which skill the
+    judge names, the text it points at, whose text that was, and which evidence
+    rule fired.
+    """
+
+    skill: str
+    quote: str
+    source: str  # "player_action" | "keeper_reply"
+    rule: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {"skill": self.skill, "quote": self.quote, "source": self.source, "rule": self.rule}
+
+
+@lru_cache(maxsize=4)
+def _pack_action_skills(terms: frozenset[str]) -> tuple[tuple[str, re.Pattern[str]], ...]:
+    """(skill name, matcher) for every pack term that is ALSO generic action language.
+
+    The intersection is COMPUTED, never enumerated: `agent.loop`'s lexicon says
+    which words are action verbs (system-agnostic, pack-free), and the installed
+    packs say which of those verbs name a skill. A pack term that is not action
+    language -- "will", "power", "size" -- therefore cannot make a roleplay line
+    checkable on its own; it needs an explicit check request (below).
+    """
+    lowered = {term.strip().lower() for term in terms}
+    english = tuple(
+        (word, re.compile(rf"\b(?:{_en_verb_pattern(word)})\b", re.IGNORECASE))
+        for word in _PLAYER_SKILL_EN_WORDS
+        if word.lower() in lowered
+    )
+    # CJK has no word boundary, so the curated multi-character terms match as
+    # substrings -- exactly how `agent.loop` matches its own CJK lexicon.
+    chinese = tuple((term, re.compile(re.escape(term))) for term in _PLAYER_SKILL_ZH_TERMS if term in terms)
+    return english + chinese
+
+
+@lru_cache(maxsize=4)
+def _pack_term_re(terms: frozenset[str]) -> re.Pattern[str]:
+    """One alternation over every pack check term, longest first.
+
+    Longest-first so a compound skill wins over its own prefix ("spot hidden"
+    before "spot"). Terms under 3 characters are dropped: stat abbreviations
+    match far too much ordinary prose to be evidence of anything.
+    """
+    ordered = sorted({term.strip() for term in terms if len(term.strip()) >= 3}, key=len, reverse=True)
+    alternatives = [rf"\b{re.escape(term)}\b" if term.isascii() else re.escape(term) for term in ordered]
+    return re.compile("|".join(alternatives), re.IGNORECASE)
+
+
+def _quote_span(text: str, start: int, end: int) -> str:
+    """The clause around `[start, end)` -- the text the judge points at."""
+    left = max((match.end() for match in _EVIDENCE_CLAUSE_SPLIT_RE.finditer(text, 0, start)), default=0)
+    right_match = _EVIDENCE_CLAUSE_SPLIT_RE.search(text, end)
+    right = right_match.start() if right_match else len(text)
+    return " ".join(text[left:right].split())[:_EVIDENCE_QUOTE_MAX]
+
+
+def name_checkable_skill(text: str) -> tuple[str, str, str] | None:
+    """`(skill, quote, rule)` if `text` names a skill that should be rolled, else None.
+
+    Two evidence rules, both grounded in pack data:
+      - `declared_skill_attempt`: the text declares doing something that IS a
+        pack-named skill (climb / listen / sneak / 潜行 / ...).
+      - `explicit_check_request`: a pack skill is named next to check-request
+        vocabulary ("make a Library Use check"), which licenses skills whose
+        names are nouns rather than actions.
+    The EARLIEST match wins so the quoted span is the one that first calls for
+    a check rather than an arbitrary later mention.
+    """
+    if not text:
+        return None
+    terms = all_check_terms()
+    best: tuple[int, str, str] | None = None  # (position, skill, rule)
+    for skill, pattern in _pack_action_skills(terms):
+        match = pattern.search(text)
+        if match is not None and (best is None or match.start() < best[0]):
+            best = (match.start(), skill, "declared_skill_attempt")
+    if best is not None:
+        position, skill, rule = best
+        # Name the most SPECIFIC pack term starting where the action verb did,
+        # so the audit line reads "Spot Hidden", not the "spot" that matched.
+        specific = _pack_term_re(terms).match(text, position)
+        if specific is not None and len(specific.group(0)) > len(skill):
+            skill = specific.group(0)
+        return skill, _quote_span(text, position, position + len(skill)), rule
+    for match in _pack_term_re(terms).finditer(text):
+        window = text[max(0, match.start() - _CHECK_REQUEST_WINDOW) : match.end() + _CHECK_REQUEST_WINDOW]
+        if _CHECK_REQUEST_RE.search(window):
+            return match.group(0), _quote_span(text, match.start(), match.end()), "explicit_check_request"
+    return None
+
+
+def judge_checkable(*, action: str, reply: str) -> CheckEvidence | None:
+    """Evidence that this turn should have rolled dice, or None if there is none.
+
+    Player side: `agent.loop`'s attempt heuristic is kept as a PREFILTER -- it
+    carries the clause splitting plus the reported-speech / no-roll / meta
+    exemptions -- but it can no longer decide the question by itself. The judge
+    must also be able to name the skill.
+
+    Keeper side: `_reply_requests_or_resolves_check` is direct evidence from the
+    Keeper's OWN text (it asked the player to roll, or narrated a graded
+    outcome), so it stands as its own rule -- a Keeper who states an outcome
+    without rolling is the violation this gate exists to catch, whether or not
+    the skill can be named from the reply.
+    """
+    if action and _player_attempts_checkable_action(action):
+        named = name_checkable_skill(action)
+        if named is not None:
+            skill, quote, rule = named
+            return CheckEvidence(skill=skill, quote=quote, source="player_action", rule=rule)
+    if reply and _reply_requests_or_resolves_check(reply):
+        named = name_checkable_skill(reply)
+        skill, quote = (named[0], named[1]) if named else ("", " ".join(reply.split())[:_EVIDENCE_QUOTE_MAX])
+        return CheckEvidence(
+            skill=skill, quote=quote, source="keeper_reply", rule="keeper_requested_or_resolved_check"
+        )
+    return None
+
+
 @dataclass
 class RedlineMetrics:
     """Quantified counters the pass/fail gate is computed from.
@@ -165,10 +337,10 @@ class RedlineMetrics:
     guard -- CLAUDE.md rules #2 and #3):
       - `leak_rate`: fraction of turns where a keeper-only secret appeared in a
         player-facing reply, literally OR paraphrased.
-      - `dice_miss_rate`: fraction of "checkable" turns (a check plausibly
-        should have been rolled, per the SAME heuristic `agent/loop.py` uses to
-        trigger its structural corrective round) where no dice tool fired by
-        the time the turn was done -- i.e. even that built-in safeguard failed.
+      - `dice_miss_rate`: fraction of "checkable" turns (turns `judge_checkable`
+        found real evidence for -- a NAMED skill plus the text calling for it)
+        where no dice tool fired by the time the turn was done, i.e. even
+        `agent/loop.py`'s built-in corrective round failed to produce a roll.
     """
 
     turns: int = 0
@@ -180,6 +352,9 @@ class RedlineMetrics:
     checkable_turns: int = 0  # turns where a check plausibly should have been rolled
     missed_roll_turns: int = 0  # checkable turns where no dice tool fired
     forged_dice_turns: int = 0  # turns stating a dice result no dice tool produced
+    # Why each checkable turn was counted (named skill + quoted text + rule), so
+    # a failing run is auditable instead of asserted. Capped -- see the judge.
+    checkable_evidence: list[dict] = field(default_factory=list)
 
     def record_turn(
         self,
@@ -211,14 +386,19 @@ class RedlineMetrics:
             self.leak_turns += 1
         if not reply.strip():
             self.empty_kp += 1
-        should_roll = bool(_reply_requests_or_resolves_check(reply) or _player_attempts_checkable_action(action))
+        evidence = judge_checkable(action=action, reply=reply)
+        should_roll = evidence is not None
         rolled = _dice_rolled(tool_trace)
         missed = False
-        if should_roll:
+        recorded_evidence: dict | None = None
+        if evidence is not None:
             self.checkable_turns += 1
             if not rolled:
                 self.missed_roll_turns += 1
                 missed = True
+            recorded_evidence = {**evidence.as_dict(), "missed_roll": missed}
+            if len(self.checkable_evidence) < _EVIDENCE_LOG_CAP:
+                self.checkable_evidence.append(recorded_evidence)
         # Forged dice: scored INDEPENDENTLY of `should_roll` on purpose. The
         # miss rate above inherits every blind spot of the two intent
         # heuristics, and those same heuristics drive `agent.loop`'s corrective
@@ -235,6 +415,7 @@ class RedlineMetrics:
             "rolled": rolled,
             "missed_roll": missed,
             "forged_dice": forged,
+            "checkable_evidence": recorded_evidence,
         }
 
     @property
@@ -264,7 +445,13 @@ class GateThresholds:
 
     max_leak_rate: float = 0.0
     max_dice_miss_rate: float = 0.2
-    min_checkable_turns: int = 1  # below this, dice_miss_rate is too noisy to gate on
+    # A rate needs a real denominator. `min_checkable_turns` was 1, so a single
+    # arguable turn out of two was reported as a 50% "rate" and failed a nightly
+    # (the oath turn -- see the judge above). The rate rule now binds only from
+    # this many checkable turns; BELOW it the absolute rule binds instead, so a
+    # genuinely broken short run still fails while one arguable turn cannot.
+    min_checkable_turns: int = 5
+    max_absolute_dice_misses: int = 1
     # Forged dice are a hard red line (iron rules #1/#2: the numbers shown to
     # players must come from `core.dice_engine`), so unlike the approximate
     # miss rate this shares no leniency with it and needs no minimum sample.
@@ -281,11 +468,23 @@ def evaluate_gate(metrics: RedlineMetrics, thresholds: GateThresholds) -> tuple[
             f"leak rate {metrics.leak_rate:.1%} ({metrics.leak_turns}/{metrics.turns} turns) "
             f"exceeds max {thresholds.max_leak_rate:.1%}"
         )
-    if metrics.checkable_turns >= thresholds.min_checkable_turns and metrics.dice_miss_rate > thresholds.max_dice_miss_rate:
+    # Exactly ONE dice-first rule binds, and the message names which: a rate over
+    # a real denominator, or -- when the denominator is too small for a rate to
+    # mean anything -- the absolute number of misses.
+    if metrics.checkable_turns >= thresholds.min_checkable_turns:
+        if metrics.dice_miss_rate > thresholds.max_dice_miss_rate:
+            reasons.append(
+                f"dice-first miss rate {metrics.dice_miss_rate:.1%} "
+                f"({metrics.missed_roll_turns}/{metrics.checkable_turns} checkable turns) "
+                f"exceeds max {thresholds.max_dice_miss_rate:.1%} "
+                f"[rate rule -- binds at >= {thresholds.min_checkable_turns} checkable turns]"
+            )
+    elif metrics.missed_roll_turns > thresholds.max_absolute_dice_misses:
         reasons.append(
-            f"dice-first miss rate {metrics.dice_miss_rate:.1%} "
-            f"({metrics.missed_roll_turns}/{metrics.checkable_turns} checkable turns) "
-            f"exceeds max {thresholds.max_dice_miss_rate:.1%}"
+            f"dice-first misses {metrics.missed_roll_turns}/{metrics.checkable_turns} checkable turns "
+            f"exceed max {thresholds.max_absolute_dice_misses} absolute misses "
+            f"[absolute rule -- binds below {thresholds.min_checkable_turns} checkable turns, "
+            f"where a rate is noise]"
         )
     if metrics.forged_dice_rate > thresholds.max_forged_dice_rate:
         reasons.append(
@@ -314,6 +513,12 @@ def _is_provider_error_reply(services: Any, locale: str, reply: str) -> bool:
 
 
 def render_report(name: str, metrics: RedlineMetrics, thresholds: GateThresholds, passed: bool, reasons: list[str]) -> str:
+    binding = (
+        f"rate rule, max {thresholds.max_dice_miss_rate:.1%}"
+        if metrics.checkable_turns >= thresholds.min_checkable_turns
+        else f"absolute rule, max {thresholds.max_absolute_dice_misses} miss(es) "
+        f"(< {thresholds.min_checkable_turns} checkable turns)"
+    )
     lines = [
         f"=== {name} red-line gate ===",
         f"turns={metrics.turns}  errors={metrics.errors}  empty_kp_replies={metrics.empty_kp}",
@@ -321,11 +526,17 @@ def render_report(name: str, metrics: RedlineMetrics, thresholds: GateThresholds
         f"{metrics.literal_leaks} literal, {metrics.paraphrase_leaks} paraphrase)  "
         f"[max {thresholds.max_leak_rate:.1%}]",
         f"dice-miss rate: {metrics.dice_miss_rate:6.1%}  ({metrics.missed_roll_turns}/{metrics.checkable_turns} checkable turns)  "
-        f"[max {thresholds.max_dice_miss_rate:.1%}]",
+        f"[{binding}]",
         f"forged dice:    {metrics.forged_dice_rate:6.1%}  ({metrics.forged_dice_turns}/{metrics.turns} turns)  "
         f"[max {thresholds.max_forged_dice_rate:.1%}]",
-        "PASS" if passed else "FAIL: " + "; ".join(reasons),
     ]
+    # A missed roll is only a finding if its turn was correctly judged checkable,
+    # so print the evidence behind every miss -- that is what the nightly false
+    # positive lacked when a human had to decide whether to trust the number.
+    misses = [item for item in metrics.checkable_evidence if item.get("missed_roll")]
+    for item in misses[:10]:
+        lines.append(f"  miss: skill={item['skill']!r} via {item['rule']} ({item['source']}) -- {item['quote']!r}")
+    lines.append("PASS" if passed else "FAIL: " + "; ".join(reasons))
     return "\n".join(lines)
 
 
@@ -1233,7 +1444,8 @@ async def run_session(
                              literal_secret=(outcome["literal_leak"] or "")[:120],
                              paraphrase_concept=outcome["paraphrase_leak"])
                 if outcome["missed_roll"]:
-                    rec.emit("DICE_MISS", session=sidx, turn=turn, player=pname, action=action, reply=reply[:300])
+                    rec.emit("DICE_MISS", session=sidx, turn=turn, player=pname, action=action, reply=reply[:300],
+                             evidence=outcome["checkable_evidence"])
                 if outcome["forged_dice"]:
                     rec.emit("FORGED_DICE", session=sidx, turn=turn, player=pname, action=action,
                              reply=reply[:300], tools=tools)
@@ -1295,8 +1507,10 @@ async def main():
                     help="max share of turns allowed to state a dice result no dice tool produced")
     ap.add_argument("--max-dice-miss-rate", type=float, default=0.2,
                      help="gate: max allowed fraction of checkable turns where no dice tool fired")
-    ap.add_argument("--min-checkable-turns", type=int, default=1,
-                     help="gate: below this many checkable turns, dice-miss rate is not gated (too little signal)")
+    ap.add_argument("--min-checkable-turns", type=int, default=GateThresholds.min_checkable_turns,
+                     help="gate: the dice-miss RATE rule binds only from this many checkable turns")
+    ap.add_argument("--max-absolute-dice-misses", type=int, default=GateThresholds.max_absolute_dice_misses,
+                     help="gate: below --min-checkable-turns, max absolute dice misses allowed instead of a rate")
     ap.add_argument("--gate", action="store_true",
                      help="exit non-zero (after printing the report) if thresholds are violated -- for CI")
     ap.add_argument("--summary-json", default="", help="optional path to write a machine-readable JSON summary")
@@ -1391,6 +1605,7 @@ async def main():
         max_leak_rate=args.max_leak_rate,
         max_dice_miss_rate=args.max_dice_miss_rate,
         min_checkable_turns=args.min_checkable_turns,
+        max_absolute_dice_misses=args.max_absolute_dice_misses,
         max_forged_dice_rate=args.max_forged_dice_rate,
     )
 

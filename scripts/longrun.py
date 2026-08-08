@@ -86,6 +86,19 @@ ANCHORS = [
     ("vow", "I swear aloud, so all can hear: I will never enter the cellar alone.", "cellar"),
 ]
 
+# Every anchor above is a memory probe by design — a pure speech act with no
+# check to roll — so this lane's dice-first denominator was structurally ~0 and
+# the metric measured nothing (the one nightly turn it did score was the vow,
+# misjudged as checkable; see scripts/playtest.py's judge). These two beats are
+# real skill attempts with genuinely uncertain outcomes, phrased so the judge
+# can NAME the skill (both are declared by the installed rulepacks) and so the
+# attempt presupposes NO scene object — same lesson as the anchors: an action
+# the Keeper must rightly refuse as impossible produces a false miss.
+CHECKABLE_BEATS = [
+    "I stop and listen hard for any sound in the dark around us.",
+    "I sneak a few paces ahead of the others, keeping low and quiet.",
+]
+
 
 async def _chat(services, prompt, temperature=0.9):
     try:
@@ -162,8 +175,10 @@ async def main():
                     help="max share of turns allowed to state a dice result no dice tool produced")
     ap.add_argument("--max-dice-miss-rate", type=float, default=0.2,
                      help="gate: max allowed fraction of checkable turns where no dice tool fired")
-    ap.add_argument("--min-checkable-turns", type=int, default=1,
-                     help="gate: below this many checkable turns, dice-miss rate is not gated (too little signal)")
+    ap.add_argument("--min-checkable-turns", type=int, default=GateThresholds.min_checkable_turns,
+                     help="gate: the dice-miss RATE rule binds only from this many checkable turns")
+    ap.add_argument("--max-absolute-dice-misses", type=int, default=GateThresholds.max_absolute_dice_misses,
+                     help="gate: below --min-checkable-turns, max absolute dice misses allowed instead of a rate")
     ap.add_argument("--gate", action="store_true",
                      help="exit non-zero (after printing the report) if thresholds are violated -- for CI")
     ap.add_argument("--summary-json", default="", help="optional path to write a machine-readable JSON summary")
@@ -174,6 +189,7 @@ async def main():
         max_leak_rate=args.max_leak_rate,
         max_dice_miss_rate=args.max_dice_miss_rate,
         min_checkable_turns=args.min_checkable_turns,
+        max_absolute_dice_misses=args.max_absolute_dice_misses,
         max_forged_dice_rate=args.max_forged_dice_rate,
     )
     metrics = RedlineMetrics()  # scored over THIS invocation's turns only, like the latency stats below
@@ -255,7 +271,8 @@ async def main():
             rec(kind="LEAK", turn=turn_no, reply=reply[:200],
                 literal_secret=(outcome["literal_leak"] or "")[:100], paraphrase_concept=outcome["paraphrase_leak"])
         if outcome["missed_roll"]:
-            rec(kind="DICE_MISS", turn=turn_no, action=action, reply=reply[:200])
+            rec(kind="DICE_MISS", turn=turn_no, action=action, reply=reply[:200],
+                evidence=outcome["checkable_evidence"])
         if is_probe:
             probes_total += 1
             ok = bool(anchor_phrase and anchor_phrase.lower() in reply.lower())
@@ -269,9 +286,9 @@ async def main():
     turn = done
     termination_reason = "target_reached"
     stopped = False
-    # opening: plant anchors (only if this is a fresh campaign)
+    # opening: plant anchors, then play the checkable beats (fresh campaign only)
     if done == 0:
-        for _id, line, _phrase in ANCHORS:
+        for line in [anchor_line for _id, anchor_line, _phrase in ANCHORS] + CHECKABLE_BEATS:
             candidate = turn + 1
             if not await do_turn(candidate, line):
                 termination_reason = "turn_error"
