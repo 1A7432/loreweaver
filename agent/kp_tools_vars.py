@@ -328,9 +328,9 @@ def _parse_stat_value(value: str):
 
 
 def _stat_at(tree, path: str):
-    from core.varspace import _walk_tree
+    from core.varspace import resolve_tree_path
 
-    return _walk_tree(tree, path)
+    return resolve_tree_path(tree, path)
 
 
 def _stat_leaf(tree, path: str):
