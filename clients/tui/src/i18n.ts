@@ -29,6 +29,10 @@ const messages = {
     "connect.help": "Tab fields · Enter connect · edit local folder before hosting · F1-F5 theme · click 中文/EN to switch",
     "connect.language": "Language",
     "app.error.keyRequired": "Invite key is required",
+    // The two versions lead: the connect screen truncates a long line, and the
+    // numbers are the part an operator has to act on.
+    "app.error.protocolMismatch":
+      "Protocol {server} ≠ {client}: the major version is the compatibility contract, so the connection was refused. Update whichever side is behind.",
     "menu.table": "Table \"{room}\"",
     "menu.role.keeper": "Keeper",
     "menu.role.player": "Investigator",
@@ -352,6 +356,8 @@ const messages = {
     "connect.help": "Tab 切换字段 · Enter 连接 · 开服前可改本地目录 · F1-F5 主题 · 点 中文/EN 切换语言",
     "connect.language": "语言",
     "app.error.keyRequired": "需要邀请码",
+    "app.error.protocolMismatch":
+      "协议 {server} ≠ {client}：主版本号即兼容契约，已拒绝连接。请升级落后的一方。",
     "menu.table": "牌桌「{room}」",
     "menu.role.keeper": "守秘人",
     "menu.role.player": "调查员",

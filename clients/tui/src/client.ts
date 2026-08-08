@@ -76,7 +76,13 @@ class TransportClient implements AppClient {
 
   async connect(target: string): Promise<void> {
     const info = clientInfo()
-    const inner = isIrohTicket(target) ? new IrohClient({ clientInfo: info }) : new WsClient({ clientInfo: info })
+    const inner = isIrohTicket(target)
+      ? new IrohClient({ clientInfo: info })
+      : // The shell refuses a major mismatch itself, on the `welcome` frame, for BOTH
+        // transports (App.tsx). The library's default handler writes to `console.warn`,
+        // which in a full-screen TUI paints over the render — swallow it here so the
+        // one report the user gets is the one the shell draws.
+        new WsClient({ clientInfo: info, onProtocolMismatch: () => {} })
     this.inner = inner
     inner.onMessage((frame) => {
       for (const handler of this.handlers) handler(frame)

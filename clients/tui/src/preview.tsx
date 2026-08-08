@@ -2,7 +2,7 @@
 // needed). Run: bun run preview     (from clients/tui)
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
-import { FrameType, type ServerFrame, type WelcomeFrame } from "loreweaver-protocol"
+import { FrameType, PROTOCOL_VERSION, type ServerFrame, type WelcomeFrame } from "loreweaver-protocol"
 import { GameView, type GameClient } from "./GameView"
 import { themes } from "./themes"
 
@@ -20,7 +20,7 @@ class MockClient implements GameClient {
 
 const WELCOME: WelcomeFrame = {
   type: FrameType.Welcome,
-  protocol: "1",
+  protocol: PROTOCOL_VERSION,
   room: "blackmoor",
   you: { id: "p1", name: "Nora", role: "player" },
   locale: "en",

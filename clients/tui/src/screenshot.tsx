@@ -10,6 +10,7 @@ import { createCliRenderer } from "@opentui/core"
 import { createRoot } from "@opentui/react"
 import {
   FrameType,
+  PROTOCOL_VERSION,
   type AdminForgeKind,
   type AdminSkillInfo,
   type ServerFrame,
@@ -71,7 +72,7 @@ const root = createRoot(renderer)
 function welcomeFor(role: "player" | "keeper", room = ROOM): WelcomeFrame {
   return {
     type: FrameType.Welcome,
-    protocol: "1.1",
+    protocol: PROTOCOL_VERSION,
     room,
     you: { id: role === "keeper" ? "k1" : "p1", name: role === "keeper" ? KEEPER_NAME : PLAYER_NAME, role },
     locale: LOCALE,

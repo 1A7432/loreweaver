@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
-import { FrameType, type StateFrame, type WelcomeFrame } from "loreweaver-protocol"
+import { FrameType, PROTOCOL_VERSION, type StateFrame, type WelcomeFrame } from "loreweaver-protocol"
 import { MainMenu, type MainMenuProps } from "./MainMenu"
 import { themes } from "../themes"
 
 const WELCOME: WelcomeFrame = {
   type: FrameType.Welcome,
-  protocol: "1.1",
+  protocol: PROTOCOL_VERSION,
   room: "arkham",
   you: { id: "p1", name: "Ada", role: "player" },
   locale: "en",

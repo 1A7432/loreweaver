@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
-import { FrameType, type ServerFrame, type WelcomeFrame } from "loreweaver-protocol"
+import { FrameType, PROTOCOL_VERSION, type ServerFrame, type WelcomeFrame } from "loreweaver-protocol"
 import App, { type AppClient, type AppPrefill } from "./App"
 import type { SavedServer } from "./connectMemory"
 import type { ClipboardRenderer } from "./copy"
@@ -56,7 +56,7 @@ class MockClient implements AppClient {
 
 const PLAYER_WELCOME: WelcomeFrame = {
   type: FrameType.Welcome,
-  protocol: "1",
+  protocol: PROTOCOL_VERSION,
   room: "shuxue",
   you: { id: "p1", name: "漱雪", role: "player" },
   locale: "zh",
@@ -65,7 +65,7 @@ const PLAYER_WELCOME: WelcomeFrame = {
 
 const KEEPER_WELCOME: WelcomeFrame = {
   type: FrameType.Welcome,
-  protocol: "1.1",
+  protocol: PROTOCOL_VERSION,
   room: "shuxue",
   you: { id: "k1", name: "Keeper", role: "keeper" },
   locale: "zh",
@@ -349,6 +349,40 @@ describe("App shell", () => {
     expect(frame).not.toContain("Enter game")
     // The auto-reconnect/re-join loop was stopped.
     expect(client.closed).toBeGreaterThan(0)
+
+    act(() => renderer.destroy())
+  })
+
+  test("a welcome announcing a different protocol MAJOR is refused, not warned about", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame } = await renderApp(client, { prefill: { locale: "en" } })
+    await flush()
+    await waitForFrame((t) => t.includes("Invite key"))
+
+    // A server two majors ahead: every frame after this one may be misread, so the
+    // shell refuses instead of proceeding to the menu.
+    act(() => client.push({ ...KEEPER_WELCOME, protocol: "4.0" }))
+
+    // Both versions ride at the head of the line, so they survive the connect
+    // screen's truncation — they are what an operator has to act on.
+    const frame = await waitForFrame((t) => t.includes(`Protocol 4.0 ≠ ${PROTOCOL_VERSION}`))
+    expect(frame).toContain("Invite key")
+    expect(frame).not.toContain('Table "shuxue"')
+    expect(client.closed).toBeGreaterThan(0)
+
+    act(() => renderer.destroy())
+  })
+
+  test("a welcome on the same major with a newer minor still connects", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame } = await renderApp(client, { prefill: { locale: "en" } })
+    await flush()
+    // Minors are additive by contract: an older client must not refuse a newer server
+    // it can still understand.
+    act(() => client.push({ ...KEEPER_WELCOME, protocol: `${PROTOCOL_VERSION.split(".")[0]}.99` }))
+
+    const frame = await waitForFrame((text) => text.includes('Table "shuxue"'))
+    expect(frame).not.toContain("compatibility contract")
 
     act(() => renderer.destroy())
   })

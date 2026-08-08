@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { FrameType, type ServerFrame } from "loreweaver-protocol"
+import { FrameType, PROTOCOL_VERSION, type ServerFrame } from "loreweaver-protocol"
 import type { AppClient } from "./client"
 import { clientUpdateCommand, triggerServerUpdate } from "./update"
 
@@ -33,7 +33,7 @@ class FakeClient {
     queueMicrotask(() =>
       this.emit({
         type: FrameType.Welcome,
-        protocol: "1.5",
+        protocol: PROTOCOL_VERSION,
         room: "r",
         you: { id: "i", name: "n", role: "keeper" },
         locale: "en",

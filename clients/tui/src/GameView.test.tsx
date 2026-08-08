@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
-import { FrameType, type MediaFrame, type MediaPayload, type MediaUpload, type ServerFrame, type WelcomeFrame } from "loreweaver-protocol"
+import { FrameType, PROTOCOL_VERSION, type MediaFrame, type MediaPayload, type MediaUpload, type ServerFrame, type WelcomeFrame } from "loreweaver-protocol"
 import { appendFrame, GameView, type GameClient, type GameViewProps } from "./GameView"
 import { SPINNER_FRAMES } from "./components/Spinner"
 import { themes } from "./themes"
@@ -40,7 +40,7 @@ class MockClient implements GameClient {
 
 const WELCOME: WelcomeFrame = {
   type: FrameType.Welcome,
-  protocol: "1",
+  protocol: PROTOCOL_VERSION,
   room: "arkham",
   you: { id: "p1", name: "Ada", role: "player" },
   locale: "en",

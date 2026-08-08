@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
-import { FrameType, type PlayerRole, type ServerFrame, type WelcomeFrame } from "loreweaver-protocol"
+import { FrameType, PROTOCOL_VERSION, type PlayerRole, type ServerFrame, type WelcomeFrame } from "loreweaver-protocol"
 import App, { type AppClient } from "../App"
 import { SPINNER_FRAMES } from "../components/Spinner"
 
@@ -63,7 +63,7 @@ class MockClient implements AppClient {
 
 const KEEPER_WELCOME: WelcomeFrame = {
   type: FrameType.Welcome,
-  protocol: "1.1",
+  protocol: PROTOCOL_VERSION,
   room: "shuxue",
   you: { id: "k1", name: "Keeper", role: "keeper" },
   locale: "zh",

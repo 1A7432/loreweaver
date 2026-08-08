@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
-import { FrameType, type ServerFrame, type WelcomeFrame } from "loreweaver-protocol"
+import { FrameType, PROTOCOL_VERSION, type ServerFrame, type WelcomeFrame } from "loreweaver-protocol"
 import App, { type AppClient } from "../App"
 
 // Same MockClient shape as App.test.tsx: connect/join are recorded, sent input is
@@ -54,7 +54,7 @@ class MockClient implements AppClient {
 
 const PLAYER_WELCOME: WelcomeFrame = {
   type: FrameType.Welcome,
-  protocol: "1",
+  protocol: PROTOCOL_VERSION,
   room: "shuxue",
   you: { id: "p1", name: "漱雪", role: "player" },
   locale: "zh",

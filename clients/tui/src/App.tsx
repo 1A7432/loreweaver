@@ -3,6 +3,7 @@ import { useKeyboard } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
 import {
   FrameType,
+  protocolMismatch,
   type ConnectionStatus,
   type PresenceFrame,
   type ServerFrame,
@@ -180,8 +181,44 @@ export function App({
   })
 
   useEffect(() => {
+    // Drop the connection and every room-scoped piece of state, then say why on the
+    // connect screen. Used for the two refusals the shell makes on its own: a
+    // credential the server will not accept, and a server we cannot safely talk to.
+    const refuse = (message: string): void => {
+      setConnecting(false)
+      pendingConnect.current = undefined
+      welcomeIdentity.current = undefined
+      setError(message)
+      setWelcome(undefined)
+      setStateFrame(EMPTY_STATE)
+      setPresence(undefined)
+      setTurnStatus(undefined)
+      setFrames([])
+      setConnectionStatus(undefined)
+      audioController.stopAll()
+      client.close?.()
+      setScreen("connect")
+    }
+
     return client.onMessage((frame: ServerFrame) => {
       if (frame.type === FrameType.Welcome) {
+        // The MAJOR version is the compatibility contract (docs/protocol.md): a client
+        // that keeps talking to a different-major server misreads frames rather than
+        // failing, which is far harder to diagnose than a refusal — and with no
+        // backward compatibility promised before adoption, a stale client WILL meet a
+        // moved server. The library only warns; refusing is the app's call, and it is
+        // made HERE, above the transports, so the Iroh carrier and the WS one are
+        // covered by one decision instead of two.
+        const mismatch = protocolMismatch(frame.protocol)
+        if (mismatch) {
+          refuse(
+            tt(locale, "app.error.protocolMismatch", {
+              server: mismatch.server,
+              client: mismatch.client,
+            }),
+          )
+          return
+        }
         if (pendingConnect.current) {
           onRememberConnect?.(pendingConnect.current)
           pendingConnect.current = undefined
@@ -288,19 +325,7 @@ export function App({
         // `bad_key` rejects the join; a top-level `forbidden` means the active key no longer
         // authorizes this connection (admin permission failures use `admin_error` instead).
         // Both require a fresh credential and must drop all room-scoped state.
-        setConnecting(false)
-        pendingConnect.current = undefined
-        welcomeIdentity.current = undefined
-        setError(frame.message)
-        setWelcome(undefined)
-        setStateFrame(EMPTY_STATE)
-        setPresence(undefined)
-        setTurnStatus(undefined)
-        setFrames([])
-        setConnectionStatus(undefined)
-        audioController.stopAll()
-        client.close?.()
-        setScreen("connect")
+        refuse(frame.message)
         return
       }
     })

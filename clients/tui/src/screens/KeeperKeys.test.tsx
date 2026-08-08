@@ -3,6 +3,7 @@ import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
 import {
   FrameType,
+  PROTOCOL_VERSION,
   type AdminKeyPurpose,
   type PlayerRole,
   type ServerFrame,
@@ -104,7 +105,7 @@ class MockClient implements AppClient {
 
 const KEEPER_WELCOME: WelcomeFrame = {
   type: FrameType.Welcome,
-  protocol: "1.1",
+  protocol: PROTOCOL_VERSION,
   room: "shuxue",
   you: { id: "k1", name: "Keeper", role: "keeper" },
   locale: "zh",
@@ -113,7 +114,7 @@ const KEEPER_WELCOME: WelcomeFrame = {
 
 const PLAYER_WELCOME: WelcomeFrame = {
   type: FrameType.Welcome,
-  protocol: "1",
+  protocol: PROTOCOL_VERSION,
   room: "shuxue",
   you: { id: "p1", name: "漱雪", role: "player" },
   locale: "zh",

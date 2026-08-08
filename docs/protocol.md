@@ -24,7 +24,13 @@ Both carriers drive the same `SessionCore`/`RoomHub`.
 
 **Versioning.** The major version is the compatibility contract: a client and server
 must agree on the major (`2`), and a client should refuse (or clearly warn on) a
-`welcome.protocol` with a different major. Minor versions within a major are additive;
+`welcome.protocol` with a different major. `loreweaver-protocol` ships the predicate
+(`protocolMismatch`) so no client has to write it, and both reference clients — the TUI
+and Loreweaver Studio — take the stronger option: they REFUSE, drop the connection, and
+name both versions. A client that keeps talking to a different-major server misreads
+frames instead of failing, which is far harder to diagnose. A version banner that cannot
+be parsed is not evidence of disagreement and must not be treated as one. Minor versions
+within a major are additive;
 a client ignores frame types and fields it does not recognize — with one NORMATIVE
 exception: **a field that GATES rendering is never ignorable.** A client that encounters
 a panel template block carrying `visible_when` and cannot evaluate that condition — because
