@@ -8,10 +8,10 @@
 >
 > | 层 | 状态 |
 > |---|---|
-> | **A——数据插件** | 规则系统、卡、世界书、模组变量。`core/rulepacks.py` 是基于发现的数据加载器；M16 之后，一个规则包还拥有自己的**检定梯子、卡表形状、子系统、命令方言和守秘人须知**，所以 coc7/dnd5e/wod 就是普通的包，删掉文件就删掉了系统 |
-> | **B.1——KP 技能** | `SKILL.md` 加载器、提示段绑定、按房间 `.skill enable`、成人内容闸门 |
-> | **B.2——`allowed-tools`** | `@tool(gated=…)` 上的增量工具门控；`romance-relationships` 跑在这套上 |
-> | **B.3——自扩展 forge** | 受门控的 `generate_skill` / `generate_rulepack` / `generate_module`，各自在对应的 forge 技能启用前完全不可见。规则包 forge 说的是 M16 的 `resolution:` / `subsystems:` / `expertise:` 词汇 |
+> | **A——数据插件** | 规则系统、卡、世界书、模组变量。`core/rulepacks.py` 是基于发现的数据加载器；M16 之后，一个规则包还拥有自己的**检定档位、卡表形状、子系统、命令写法和守秘人须知**，所以 coc7/dnd5e/wod 就是普通的包，删掉文件就删掉了系统 |
+> | **B.1——KP 技能** | `SKILL.md` 加载器、提示段绑定、按房间 `.skill enable`、成人内容开关 |
+> | **B.2——`allowed-tools`** | `@tool(gated=…)` 上的按需开放工具；`romance-relationships` 跑在这套上 |
+> | **B.3——自扩展 forge** | `generate_skill` / `generate_rulepack` / `generate_module` 三个工具，各自在对应的 forge 技能启用之前完全不可见。规则包 forge 说的是 M16 的 `resolution:` / `subsystems:` / `expertise:` 词汇 |
 > | **B.4——TUI 管理页** | KP 技能页支持“描述一句话→生成” |
 > | **C.1——事件钩子** | 沙箱 `hooks.js` 挂在回合生命周期上，带声明式 UI 输出 |
 > | **C.2——Python 入口点插件** | **推迟**——唯一会以服务端权限运行的一层 |
@@ -104,12 +104,12 @@ resolution:
     bonus:   {tens_reroll: keep_lowest}
     penalty: {tens_reroll: keep_highest}
   difficulties: {hard: {target: "floor(target / 2)"}, …}
-  ranks:                     # 有序梯子；第一个命中的赢；标志由包自己声明
+  ranks:                     # 有序的档位；第一个命中的赢；标志由包自己声明
     - {id: crit,   when: "roll == 1",      success: true, critical: true, tier: 5}
     - {id: hard,   when: "roll <= target && roll <= floor(raw_target / 2)", success: true, tier: 3}
     - {id: fail,   tier: 1}                #  没有 when: 的那条是兜底
   margin: successes
-  variants:  {xipu_night: {ranks: [...]}}  # 房规梯子，用 `.rule <variant>` 选
+  variants:  {xipu_night: {ranks: [...]}}  # 房规档位，用 `.rule <variant>` 选
 subsystems:  {sanity: {...}, luck: {...}, growth: {...}, opposed: {}, random_madness: {tables: {...}}}
 commands:    {ra: {action: check}, sc: {tool: sanity}, xipu: {action: make_char}}
 expertise:   {en: "…", zh: "…"}
@@ -118,7 +118,7 @@ labels:      {en: {crit: [Critical Success], …}, zh: {crit: [大成功], …}}
 
 表达式里可用的名字是一个闭合集合——`roll`、`dice`（可按 `dice1`、`dice2` 取）、`target`（难度调整后）、`raw_target`（调整前）、`modifier`、`successes`、`ones`——并且在**加载时静态校验**，所以一个拼写错误会让包在构建时带着可定位的诊断失败，而不是在某人第一次检定时崩掉。在 `difficulties.*.target` 表达式里 `target` 是原始值，在 rank 的 `when:` 里是调整后的值。
 
-**演进纪律：** DSL 绝不为了一个系统长语法。DSL 表达不了的系统走脚本通道（`resolution: {script: resolver.js}`，子系统流程则是 `subsystems: {<name>: {script: flow.js}}`）——QuickJS，和 `hooks.js` 同一条信任通道：引擎先掷好声明的骰子把点数递进去，脚本返回一个纯粹的判定，或者一份取自引擎自有闭合词汇的效果描述，再由引擎校验、夹紧、施加。随机性和状态永远不出引擎。信任卡以 `has_rules_script` 披露它，安装时重新校验。只有一个模式在两三个走脚本通道的系统里反复出现，才会被提升为 DSL 语法。
+**演进纪律：** DSL 绝不为了一个系统长语法。DSL 表达不了的系统走脚本通道（`resolution: {script: resolver.js}`，子系统流程则是 `subsystems: {<name>: {script: flow.js}}`）——QuickJS，和 `hooks.js` 同一条信任通道：引擎先掷好声明的骰子把点数递进去，脚本返回一个纯粹的判定，或者一份取自引擎自有闭合词汇的效果描述，再由引擎核对、把超界的值拉回范围内、然后施加。随机性和状态永远不出引擎。信任卡以 `has_rules_script` 披露它，安装时重新校验。只有一个模式在两三个走脚本通道的系统里反复出现，才会被提升为 DSL 语法。
 
 上面这一切的可构建实例见 [authoring.zh.md](authoring.zh.md) 第 2–3 节。
 
@@ -141,7 +141,7 @@ Loreweaver 本来就导入酒馆卡（`core/charcard.py` → `char_from_persona.
 
 ### A.4 模组变量（确定性追踪器）
 
-引擎暴露一个声明式变量面（`core.modvars`，灵感来自社区的 MVU 变量框架——同一个想法，但用函数调用 + schema 校验取代了解析文本协议）：守秘人（或者模组通过它的设置说明）用 `define_variable` 声明具名追踪器——类型（`number`/`bool`/`text`/`enum`）、可选边界、按语言的显示标签，以及 `player` 或 `keeper` 的可见性——然后用 `set_variable`/`adjust_variable` 更新。每一次写入都由真代码校验并夹紧（铁律 #1）；当前值每回合折进守秘人提示，玩家可见的那部分随 `state` 帧发给客户端。守秘人专属变量在引擎内部就被过滤，永远不到达任何传输（铁律 #3，结构性的）。这是状态不是代码：这里什么都不执行，所以它牢牢待在 A 层的风险等级里。
+引擎暴露一个声明式变量面（`core.modvars`，灵感来自社区的 MVU 变量框架——同一个想法，但用函数调用 + schema 校验取代了解析文本协议）：守秘人（或者模组通过它的设置说明）用 `define_variable` 声明具名追踪器——类型（`number`/`bool`/`text`/`enum`）、可选边界、按语言的显示标签，以及 `player` 或 `keeper` 的可见性——然后用 `set_variable`/`adjust_variable` 更新。每一次写入都由真代码核对、超界就拉回范围内（铁律 #1）；当前值每回合拼进守秘人提示，玩家可见的那部分随 `state` 帧发给客户端。守秘人专属变量在引擎内部就被过滤，永远不到达任何传输（铁律 #3，结构性的）。这是状态不是代码：这里什么都不执行，所以它牢牢待在 A 层的风险等级里。
 
 **导入卡的 MVU 树**从另一个方向得到同样的纪律：它是不透明的模组状态（重卡经常在里面藏剧情标志），所以它的叶子默认**不到任何玩家面板**。守秘人用 `.var expose <前缀|*>` / `.var hide <前缀>` / `.var list` 来策展；守秘人连接会在自己的帧上看到未公开的剩余部分并标记 `hidden: true`，玩家则完全看不到。
 
@@ -157,7 +157,7 @@ Loreweaver 本来就导入酒馆卡（`core/charcard.py` → `char_from_persona.
 - **宏**：`{{getvar::}}`/`{{var:}}`、`{{user}}`（当前 PC，渲染时解析）、`{{char}}`（卡导入时静态绑定）、`{{time}}`/`{{date}}`（**游戏**时钟）、`{{random}}`/`{{pick}}`、`{{newline}}`、`{{// 注释}}`，以及 `{{roll:XdY}}`——由真骰子引擎掷，绝不叙述出一个点数（铁律 #2）。
 - **即便在完整模式下仍然是桩／惰性的**：`faker`（返回空串的桩，带警告）、`@INJECT` 按消息下标定位，以及渲染期 UI（`[RENDER:*]`、`@@render_*`、`@@iframe` 状态栏——服务端没有意义的前端特性；这些条目导入时就禁用，不会污染提示，TUI 的追踪面板显示变量树代替）。
 
-导入的信任边界（作用域固定、constant 剥离、secret 受守秘人门控、id 重新生成）在两种模式下都不变——而且这一节描述的全部是**守秘人世界导入之后**运行的东西（见 A.2 的拆卡）：玩家的人物导入压根不带这些机制。
+导入的信任边界（作用域固定、constant 一律关掉、secret 只有守秘人导入才作数、条目 id 重新生成）在两种模式下都不变——而且这一节描述的全部是**守秘人世界导入之后**运行的东西（见 A.2 的拆卡）：玩家的人物导入压根不带这些机制。
 
 ### A.6 其它数据包
 
@@ -188,7 +188,7 @@ description-zh: >
 metadata:
   scope: room                 # 按房间开关（守秘人启用）
   systems: [coc7]             # 适用的规则系统（可选）
-  content-rating: mature      # 参与成人模式闸门
+  content-rating: mature      # 参与成人模式开关
 ---
 
 # 恋爱与关系
@@ -196,7 +196,7 @@ metadata:
 <这段 Markdown 会作为 KP 提示段注入>
 ```
 
-映射到已有架构上（不引入新运行时原语）：`description` 是给守秘人的启用提示；Markdown 正文是折进系统提示的一段；`allowed-tools` 限制该房间的 `agent.tools.Toolset`；`references/*` 是按需取的渐进披露数据；`metadata.scope: room` 是按房间的开关；`metadata.content-rating` 接进成人模式闸门。
+映射到已有架构上（不引入新运行时原语）：`description` 是给守秘人的启用提示；Markdown 正文是拼进系统提示的一段；`allowed-tools` 限制该房间的 `agent.tools.Toolset`；`references/*` 是按需取的渐进披露数据；`metadata.scope: room` 是按房间的开关；`metadata.content-rating` 接进成人模式开关。
 
 渐进披露的意思是：顶层 `SKILL.md` 展示成本很低，沉重的参考材料只在技能真正触发时才加载。
 
@@ -212,7 +212,7 @@ metadata:
 
 - **住在哪**：技能 `SKILL.md` 旁边的 `hooks.js`（在该技能对这个房间启用期间生效——已有的 `.skill enable` 就是开关），或者一张卡的钩子脚本——原生包的顶层 `hooks: [...]` 列表（format v1），或者一张酒馆形状的卡的 `extensions.loreweaver_hooks`（由**守秘人**的 `.import <文件> world` 安装；带钩子的卡就是世界卡，见 A.2 的拆卡；重复导入会替换它的脚本而不是叠加）。
 - **API**：`on("turn_start"|"reply_ready"|"dice_rolled"|"variables_changed", handler)`，完整的变量桥（`getvar`/`setvar`/`variables`/`stat_data`，lodash 作为 `_`），以及效果发射器 `inject(text)`（给这一回合的守秘人提示加一段）、`narrate(text)`（追加到玩家可见回复）、`rewriteReply(text)`、`log(text)`、`emitUI(blocks, opts?)`——客户端渲染成 `ui` 帧的声明式区块（meter/stat/badge/text/divider/choices/image 等），比如 `emitUI([{kind:"meter", label:"Fear", value:3, min:0, max:10}], {panel:"sidebar", id:"hud"})`；区块 schema 见 [protocol.zh.md](protocol.zh.md)。发出的 UI 是**玩家可见的作者输出**（和 `narrate` 同一个信任立场）——永远不要往里面发守秘人秘密。配合模组 UI 面板（D 层）还有 `emitPanel(panelId, payload)`——给某一个包声明的面板的不透明 JSON 载荷（≤ 32 KB，每回合 ≤ 20 条），只投递给清单里含有那个面板的观看者。同样的信任立场，外加一条收紧：`audience: all` 面板的载荷会到达玩家——守秘人的秘密要放，也只能放进 `audience: keeper` 的面板。
-- **契约（铁律 #1）**：钩子**请求**效果；确定性的引擎代码校验、夹紧并施加它们——对已声明模组变量的 `setvar` 会走类型／边界校验，其余落进 MVU 树。每回合一个沙箱解释器（内存／时间受限、无宿主 I/O），`variables_changed` 每回合最多触发一次，所以钩子级联按构造会终止；任何失败——脚本坏了、死循环、缺 `ejs` extra——都降级成“钩子失效（已记录）”，绝不会变成一个坏掉的回合。
+- **契约（铁律 #1）**：钩子**请求**效果；确定性的引擎代码核对它们、把超界的值拉回范围内，然后施加——对已声明模组变量的 `setvar` 会走类型／边界校验，其余落进 MVU 树。每回合一个沙箱解释器（内存／时间受限、无宿主 I/O），`variables_changed` 每回合最多触发一次，所以钩子级联按构造会终止；任何失败——脚本坏了、死循环、缺 `ejs` extra——都降级成“钩子失效（已记录）”，绝不会变成一个坏掉的回合。
 - **`globalThis` 只活一个回合——这个坑值得点名。** “每回合一个解释器”意味着解释器每回合都被*重建*，所以一个存在 JS 变量里的计数器每回合都会归零。它不报错，只是永远不往前走，而这是 bug 最糟糕的一种表现方式。一次 2026-08-07 的实测为它丢了一整场的计量条：
 
   ```js
@@ -224,7 +224,7 @@ metadata:
 
   // 对的——持久状态归引擎，钩子只是去要。
   on('turn_start', () => {
-    incvar('tide_sense', 1);                       // 校验、夹紧、持久化
+    incvar('tide_sense', 1);                       // 核对、限幅、存下来
     emitUI([{kind: 'meter', label: 'Tide sense', value: Number(getvar('tide_sense')) || 0,
              min: 0, max: 40}])
   })
@@ -251,7 +251,7 @@ metadata:
      alt: {en: Three hanging scrolls}}
   ```
 
-  `src` 是包内相对路径（PNG/JPEG/WebP/GIF/SVG），构建会把它折进和二级代码同一条内容寻址素材流水线，清单里带哈希。作者不写哈希，而一个面板也没法指向自己包外的图。纯文本客户端显示那行 caption。
+  `src` 是包内相对路径（PNG/JPEG/WebP/GIF/SVG），构建时它会和二级面板的代码走同一条路：按内容哈希收进包里，清单里记着哈希。作者不写哈希，而一个面板也没法指向自己包外的图。纯文本客户端显示那行 caption。
 
   **按值开关：`visible_when`。** `{$var}` 在变量缺失时隐藏区块，`visible_when` 按**值**隐藏：
 
@@ -266,12 +266,12 @@ metadata:
 
   - **玩家面板的 `visible_when` 只能引用玩家可见的变量。** 条件字符串是跟包一起发的，每个观看者的客户端里都有——所以在玩家面板的条件里点名一个守秘人专属追踪器，等于泄漏了它的**名字**，哪怕它的值永远不会送到。（值确实不会：隐藏变量在求值前就被丢弃，所以那个区块只是永远不显示。）而且它是**整条**发出去的，被比较的那个字面量同样会漏：`visible_when: "mvu.内部.真凶 === '顾晚棠'"` 等于把答案递到每个玩家手里，变量名读起来再无辜也没用。要开关就拿一个玩家看得见的后果来开关，绝不要拿那个秘密本身。
   - **判不出来就藏。** 条件报错，或者点名了一个无法比较的缺失项，都会隐藏那个区块，绝不显示。写条件时让它在变量缺失的情况下也读得通。
-- **Tier 2——沙箱定制视图**：锁死的 iframe 里的真 HTML/JS/CSS，用于可交互地图和定制卡表。`entry:` 把一个面板标成 tier 2；它必须声明自己带的每一个素材（构建时折进包的内容寻址素材流水线），以及一个显式的 tier-1 `fallback`（或者 `fallback: null`）给纯文本客户端。
+- **Tier 2——沙箱定制视图**：锁死的 iframe 里的真 HTML/JS/CSS，用于可交互地图和定制卡表。`entry:` 把一个面板标成 tier 2；它必须声明自己带的每一个素材（构建时按内容哈希收进包里），以及一个显式的 tier-1 `fallback`（或者 `fallback: null`）给纯文本客户端。
 
 让这一层安全的是同一批铁律，延伸到 UI 上：
 
 - **拆卡的延伸**：面板进房间只能经由守秘人对一个已安装包执行 `.panels enable <packId>`（装上不等于启用）。玩家不能上传面板。
-- **一个面板的身份就是在看它的那个玩家**：进来它只看到那个观看者过滤后的变量（未解析的 `$var` 会略掉整个区块，fail-closed）；出去（`panel_intent`）它只能发那个玩家自己也能打出来的东西——`roll` 意图会以那个玩家的身份走真的骰子引擎。
+- **一个面板的身份就是在看它的那个玩家**：进来它只看到那个观看者过滤后的变量（`$var` 解析不出来就整块不画——拿不准就不显示）；出去（`panel_intent`）它只能发那个玩家自己也能打出来的东西——`roll` 意图会以那个玩家的身份走真的骰子引擎。
 - **守秘人面板不会到玩家那里**：`audience` 在上线前就被解析成每个人自己的清单，一个守秘人专属面板结构上不会出现在玩家的清单里。
 - **不新增权限面**：面板只负责渲染和收集意图；所有判断留在服务端，守秘人专属操作留在命令面。
 
@@ -333,7 +333,7 @@ audio:                       # 导演可以调用的音频提示
 | `contents.rulepacks` | 否 | 规则包 YAML 文件（`rulepacks/<id>.yaml`） |
 | `contents.cards` | 否 | 酒馆卡（PNG 或 JSON）**或者原生包**（`*.lorecard.json`，按内容嗅探分派给原生解析器，好让它们的机制被如实检测）：可以是一个路径，也可以是 `{path, notes: {en, zh}}` 映射来附上安装说明。拆卡的 `kind` 是**检测出来的，不是声明的**：构建会从真实载荷把 `character`/`world` 盖进构建后的清单（hooks/`[InitVar]`/EJS/`secret` 设定/类型化规格 ⇒ `world`，需由守秘人 `.import <文件> world`），安装时再拿检测结果核对这个戳 |
 | `contents.lorebooks` | 否 | 世界书 JSON（ST `character_book` / `{entries: [...]}` 形状） |
-| `contents.panels` | 否 | 面板 YAML（`ui/panels.yaml`），声明模组 UI 面板（D 层）——每包 ≤ 16 个面板；二级面板的 `entry`/`assets` 文件，以及每个一级 `image`/`map_pin` 的 `src`，都在构建时折进包素材流水线（算 sha256，每面板代码载荷 ≤ 2 MB） |
+| `contents.panels` | 否 | 面板 YAML（`ui/panels.yaml`），声明模组 UI 面板（D 层）——每包 ≤ 16 个面板；二级面板的 `entry`/`assets` 文件，以及每个一级 `image`/`map_pin` 的 `src`，都在构建时按内容哈希收进包里（算 sha256，每个面板的代码不超过 2 MB） |
 | `contents.presentation` | 否 | 演出资料包（`ui/presentation.yaml`，一包一份）——演出导演的创作简报；它的定妆参考图和音频提示加入同一条素材流水线，信任卡会披露这个模组会不会生成图片 |
 | `assets` | 否 | 媒体文件：`path` + 可选 `title`/`license`/`tags`/`mime`；`sha256`/`size`/`mime` 在打包时**填入**（手写的 `sha256` 必须与文件一致） |
 | `trust` | 源码中禁止 | 打包时**生成**（含 `panels` 在内的计数、`has_hooks`、`has_ejs`、`has_rules_script`、`asset_bytes`）；手写这一块会让构建失败。安装时用同一批检测器从压缩包**重新推导**并拒绝不一致——一个手工拼装的包没法少报它带了什么 |

@@ -159,7 +159,7 @@ The **Director** is the newest actor and the most carefully fenced one. Everythi
 player-visible, so it is built like an NPC: its entire input is the projected player stream plus the
 module's presentation kit. It cannot leak what it never receives.
 
-### One chokepoint for every secret
+### Every secret leaves by one door
 
 All room content — lore, NPCs, sheets, pregens, trackers, notes, knowledge pools — is a `Document`
 in one table. Every document type registers a `project(document, viewer)` hook, and **every outbound

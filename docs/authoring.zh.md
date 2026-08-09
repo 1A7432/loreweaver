@@ -21,13 +21,13 @@ xipu-songdeng/
     shipu.lorecard.json         模组本体：设定、演员表、追踪器、钩子
     chaomai-st.json             一张酒馆卡，原样导入
   rulepacks/
-    coc7-xipu.yaml              CoC 7 版的补丁：一个新技能、一条夜间梯子、一张疯狂表
+    coc7-xipu.yaml              CoC 7 版的补丁：一个新技能、一套夜间档位、一张疯狂表
     chaozhan.yaml               一个独立的迷你系统，纯数据
   lorebooks/
     yuyan.json                  一份独立世界书
   skills/
     yingchao-zhuchi/
-      SKILL.md                  守秘人该怎么"跑"这个模组（程序，不是故事）
+      SKILL.md                  守秘人该怎么「跑」这个模组（程序，不是故事）
       hooks.js                  沙箱里的回合生命周期行为
   ui/
     panels.yaml                 牌桌上的仪表
@@ -153,13 +153,13 @@ Contains 1 WORLD card(s) — module machinery (hooks/variables/EJS); the keeper 
 
 `kind` 可以是 `number` / `bool` / `text` / `enum`。`visibility: player` 会把它放上队伍面板；`visibility: keeper` 的意思是它**根本不会到达任何玩家传输**——在引擎内部就被过滤掉了，不是靠客户端藏。每一次写入都会检查边界，包括模型要求的写入。id 可以是中文。
 
-这就是“追踪器”和“笔记”的区别：追踪器是引擎会校验、夹紧、持久化并投影的状态。把你结局要卡的东西声明成追踪器。
+这就是“追踪器”和“笔记”的区别：追踪器是引擎会核对、限制在范围内、存下来并按人过滤的状态。把你结局要卡的东西声明成追踪器。
 
 ### `pregens[]`——玩家可以认领的演员表
 
 ```json
-{"name": "顾晚棠", "concept": "沪上小报记者，为'渔镇民俗'专栏而来",
- "notes": "侦查/图书馆见长,嘴快,潮汐学5"}
+{"name": "顾晚棠", "concept": "沪上小报记者，为「渔镇民俗」专栏而来",
+ "notes": "侦查、图书馆见长；嘴快；潮汐学 5"}
 ```
 
 可以再加 `skills: {"侦查": 70}` 覆盖系统默认值。卡表是下游用目标系统的默认值加上这些覆盖确定性地生成的，不经过模型。玩家用 `.pc claim 顾晚棠` 认领；认领是排他的，释放会把卡表恢复成原样。
@@ -234,7 +234,7 @@ display:
     潮汐学: Tidology              # 只影响显示，永远不参与结算
 resolution:
   variants:
-    xipu_night:                   # 节庆夜的房规梯子
+    xipu_night:                   # 节庆夜的房规档位
       ranks:
         - {id: crit,    when: "roll == 1", success: true, critical: true, tier: 5}
         - {id: fumble,  when: "roll == 100", fumble: true, tier: 0}
@@ -278,7 +278,7 @@ Check Tidology: target 5 (effective 5), roll 13 -> Failure
 
 注意最后一行：技能在数据里是中文，在屏幕上是英文，因为 `display` 只管呈现，规范名才是身份。一个包不需要在语言之间做选择。
 
-> **一个命名空间上的细节。** 在 `difficulties.*.target` 表达式里，`target` 是**原始**值；在 rank 的 `when:` 表达式里，`target` 是难度调整之后的值——上面那些梯子同时用 `target` 和 `raw_target`，原因就在这儿。
+> **一个命名空间上的细节。** 在 `difficulties.*.target` 表达式里，`target` 是**原始**值；在 rank 的 `when:` 表达式里，`target` 是难度调整之后的值——上面那些档位同时用了 `target` 和 `raw_target`，原因就在这儿。
 
 **补丁必须有自己的 id。** 发现机制不允许用户文件盖住内置的 id，所以你没法“重定义 coc7”；你定义的是 `coc7-xipu`，你的模组跑那个。
 
@@ -343,7 +343,7 @@ deleted   : ['dnd5e', 'wod']
 load coc7 : ValueError unknown rulepack: coc7
 ```
 
-如果 DSL 确实表达不了你的系统，`resolution: {script: resolver.js}` 会落到 QuickJS 沙箱：引擎把声明好的骰子先掷了，把点数递进去，你的脚本返回一个判定，引擎校验并夹紧它。随机性和状态永远不出引擎，而信任卡会披露你这个包带了脚本。
+如果 DSL 确实表达不了你的系统，`resolution: {script: resolver.js}` 会落到 QuickJS 沙箱：引擎把声明好的骰子先掷了，把点数递进去，你的脚本返回一个判定，引擎再核对一遍、把超界的值拉回范围内。随机性和状态永远不出引擎，而信任卡会披露你这个包带了脚本。
 
 ---
 
@@ -391,9 +391,9 @@ panels:
 
 **区块种类**：`meter`、`stat`、`badge`、`text`、`divider`、`choices`、`image`，再加上演出模板 `letter`、`clipping`、`map_pin`、`title_card`。全是声明式的。富客户端会把 `letter` 渲染成信纸，终端客户端把同样的字段打成几行。你不用写标记，也不用写两套。
 
-**活的数值**：任何标量字段都可以写成 `{$var: <id>}`，对着看的人自己那份 `state.variables` 解析。这里是 fail-closed 的：如果那个变量对**这个人**不存在或被隐藏，**整个区块**都不显示。面板永远没法扩大可见范围。
+**活的数值**：任何标量字段都可以写成 `{$var: <id>}`，对着看的人自己那份 `state.variables` 解析。这里的规矩是拿不准就不显示：如果那个变量对**这个人**不存在或者被藏着，**整个区块**都不画出来。面板永远没法扩大可见范围。
 
-**一张手作物就是一个 `image` 区块**，不用为它手写一个页面。`src` 是包内相对路径，构建会把它折进内容寻址的素材流水线，清单里带哈希。你不用写哈希，而一个面板也只能指向它自己包里的图。
+**一张手作物就是一个 `image` 区块**，不用为它手写一个页面。`src` 是包内的相对路径，构建时它会和其它素材一起按内容哈希收进包里，清单里记着哈希。你不用写哈希，而一个面板也只能指向它自己包里的图。
 
 **`visible_when`——按值开关。** `{$var}` 只能表达“不存在就藏”，`visible_when` 能表达“到第三天才显示”。它在**客户端**求值，因为数值是运行时会动的，服务端做不到按人预过滤。这意味着每个客户端都得是同一套语法的实现，所以语法被刻意做得很小：
 
@@ -463,7 +463,7 @@ audio:
 
 ## 6. 一个技能：怎么“跑”这个模组
 
-故事写在卡里，程序写在 `SKILL.md` 里——Claude Code 那个形状的技能，YAML frontmatter 加 Markdown，在房间启用它期间折进守秘人的提示。
+故事写在卡里，程序写在 `SKILL.md` 里——Claude Code 那个形状的技能，YAML frontmatter 加 Markdown，在房间启用它期间会拼进守秘人的提示。
 
 ```markdown
 ---

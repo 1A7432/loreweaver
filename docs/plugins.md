@@ -778,7 +778,7 @@ actually shipped as, for anyone reading the code.)*
 11. **M19 — the Stage Director** — **landed**: `ui/presentation.yaml` + `contents.presentation`,
     the performance block vocabulary, ref-mandatory image generation with the author's `pack_only`
     veto, audio cues, and a room-lifetime image budget. Kit-gated: a room whose modules ship no kit
-    never wakes a Director. `tests/architecture/test_director_isolation.py` is the oracle for its
+    never wakes a Director. `tests/architecture/test_director_isolation.py` is what pins its
     knowledge scoping.
 12. **Layer C.2 — Python entry-point plugins** — **deferred**; entry points + trust
     model. The only layer that would run with server privileges, so it stays last and opt-in.
