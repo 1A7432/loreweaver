@@ -4,12 +4,12 @@
 
 这是 loreweaver 服务器（通过 `python -m app --serve` 启动）与 OpenTUI 终端客户端之间开放、带版本的协议。引擎本身（确定性内核加 AI 守秘人）和用什么传输无关；与传输无关的会话逻辑在 `net.session.SessionCore` 里，这份文档描述的是接口，不绑定任何编程语言。
 
-控制流使用 `{"type": ...}` 形状的 JSON 帧，协议版本为 `"2.1"`。同一套帧与 `join` 握手可搭载于两种 carrier：
+控制流使用 `{"type": ...}` 形状的 JSON 帧，协议版本为 `"2.1"`。同一套帧和 `join` 握手可以跑在两种传输上：
 
 - **Iroh** 是 `--serve` 实际启动的默认传输：点对点 QUIC，服务端打印可分享 ticket，不需要域名、证书或端口转发。控制帧是在长连接双向流上的 newline-delimited JSON；媒体字节使用同一连接上的额外双向流。
-- **WebSocket**（`net.tui_server`）只保留作离线测试/loopback carrier，不是 `--serve` 选项。控制帧是文本消息，媒体字节是二进制消息。
+- **WebSocket**（`net.tui_server`）只留作离线测试和本机回环，不是 `--serve` 的一个选项。控制帧是文本消息，媒体字节是二进制消息。
 
-两种 carrier 都驱动同一个 `SessionCore` / `RoomHub`。
+两种传输驱动的是同一个 `SessionCore` / `RoomHub`。
 
 **版本控制。**`"2.0"` 是对 1.x 的一次性破坏性整合——主版本号即兼容契约：客户端与服务端必须在主版本（`2`）上一致，`welcome.protocol` 主版本不同的客户端应拒绝连接（或明确警告）。`loreweaver-protocol` 自带这个判定（`protocolMismatch`），任何客户端都不必自己写；两个参考客户端——TUI 与 Loreweaver Studio——都取更强的那一档：**拒绝连接**、断开、并把两边的版本号都说出来。继续与主版本不同的服务端对话，结果是误读帧而不是失败，比拒绝难排查得多。版本号解析不出来时不算证据，不能当成版本不一致来处理。同一个主版本里，小版本只做增量；客户端忽略无法识别的帧类型与字段——但有**一条规范性例外：能拦下渲染的字段永远不可忽略**。客户端遇到带 `visible_when` 的面板模板块而无法对该条件求值（不实现这个字段、不实现语法的某个角落、或求值本身出错）时，**必须不渲染该块**：无视这个条件，等于把作者藏起来的内容画到屏幕上，所以判不出来的一律不画，和 `$var` 取不到值是同一条规矩。线上没有任何东西能让服务端核对这一点（`welcome.protocol` 报的是**服务端**版本，`join` 不携带客户端版本），因此这是一条客户端一致性要求，用到 `visible_when` 的包即以 2.1 为最低版本。同时也要看清它**不是**什么：带条件的块，内容无论条件成不成立都随清单下发——`visible_when` 决定的是块**何时**画出来，不是其内容是否到达客户端；保密靠 `audience`（服务端解析）与 `state` 变量过滤器。2.0 打破了哪些东西，各自了结了哪个老毛病：
 
@@ -18,7 +18,7 @@
 - `state.character` / `state.party[]` 的生命体征改为一个通用 `resources:[{id,label,value,max}]` 列表；1.x 的按系统字段名（`hp`、`hpmax`、`san`……）与 `hpmax`/`hpMax` 大小写不一致一并删除。
 - `dice` 帧只来源于工具绑定的结构化 payload；1.x 服务端“从工具的本地化文本反解析猜 rank”的回退路径不复存在。
 
-客户端发的第一帧**必须**是 `join`。服务器回复 `welcome` 或 `error`，错误时关闭连接。如果在 join 握手超时内未到达（`TRPG_TUI__JOIN_TIMEOUT`，默认 10 秒），服务器将用 `error join_timeout` 关闭连接，而不是无限等待。离线 WebSocket 测试 carrier 另外支持 `TRPG_TUI__MAX_CONNECTIONS` 并发上限；超额测试连接会在读取 `join` 前收到 `error too_many_connections`。
+客户端发的第一帧**必须**是 `join`。服务端回一个 `welcome` 或 `error`，出错就关连接。握手超时之内没等到 `join`（`TRPG_TUI__JOIN_TIMEOUT`，默认 10 秒），服务端会用 `error join_timeout` 把连接关掉，而不是一直等下去。离线的 WebSocket 传输还额外支持 `TRPG_TUI__MAX_CONNECTIONS` 并发上限；超出的连接在读 `join` 之前就会收到 `error too_many_connections`。
 
 ## 客户端 → 服务端
 
