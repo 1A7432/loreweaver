@@ -11,7 +11,7 @@
 
 两种 carrier 都驱动同一个 `SessionCore` / `RoomHub`。
 
-**版本控制。**`"2.0"` 是对 1.x 的一次性破坏性整并——主版本号即兼容契约：客户端与服务端必须在主版本（`2`）上一致，`welcome.protocol` 主版本不同的客户端应拒绝连接（或明确警告）。`loreweaver-protocol` 自带这个判定（`protocolMismatch`），任何客户端都不必自己写；两个参考客户端——TUI 与 Loreweaver Studio——都取更强的那一档：**拒绝连接**、断开、并把两边的版本号都说出来。继续与主版本不同的服务端对话，结果是误读帧而不是失败，比拒绝难排查得多。无法解析的版本号不构成分歧证据，不得当作分歧处理。同一主版本内的小版本是递增式的；客户端忽略无法识别的帧类型与字段——但有**一条规范性例外：能拦下渲染的字段永远不可忽略**。客户端遇到带 `visible_when` 的面板模板块而无法对该条件求值（不实现这个字段、不实现语法的某个角落、或求值本身出错）时，**必须不渲染该块**：无视这个条件，等于把作者藏起来的内容画到屏幕上，所以判不出来的一律不画，和 `$var` 取不到值是同一条规矩。线上没有任何东西能让服务端核对这一点（`welcome.protocol` 报的是**服务端**版本，`join` 不携带客户端版本），因此这是一条客户端一致性要求，用到 `visible_when` 的包即以 2.1 为最低版本。同时也要看清它**不是**什么：带条件的块，内容无论条件成不成立都随清单下发——`visible_when` 决定的是块**何时**画出来，不是其内容是否到达客户端；保密靠 `audience`（服务端解析）与 `state` 变量过滤器。2.0 打破了什么、各自清算了哪个疣：
+**版本控制。**`"2.0"` 是对 1.x 的一次性破坏性整合——主版本号即兼容契约：客户端与服务端必须在主版本（`2`）上一致，`welcome.protocol` 主版本不同的客户端应拒绝连接（或明确警告）。`loreweaver-protocol` 自带这个判定（`protocolMismatch`），任何客户端都不必自己写；两个参考客户端——TUI 与 Loreweaver Studio——都取更强的那一档：**拒绝连接**、断开、并把两边的版本号都说出来。继续与主版本不同的服务端对话，结果是误读帧而不是失败，比拒绝难排查得多。版本号解析不出来时不算证据，不能当成版本不一致来处理。同一个主版本里，小版本只做增量；客户端忽略无法识别的帧类型与字段——但有**一条规范性例外：能拦下渲染的字段永远不可忽略**。客户端遇到带 `visible_when` 的面板模板块而无法对该条件求值（不实现这个字段、不实现语法的某个角落、或求值本身出错）时，**必须不渲染该块**：无视这个条件，等于把作者藏起来的内容画到屏幕上，所以判不出来的一律不画，和 `$var` 取不到值是同一条规矩。线上没有任何东西能让服务端核对这一点（`welcome.protocol` 报的是**服务端**版本，`join` 不携带客户端版本），因此这是一条客户端一致性要求，用到 `visible_when` 的包即以 2.1 为最低版本。同时也要看清它**不是**什么：带条件的块，内容无论条件成不成立都随清单下发——`visible_when` 决定的是块**何时**画出来，不是其内容是否到达客户端；保密靠 `audience`（服务端解析）与 `state` 变量过滤器。2.0 打破了哪些东西，各自了结了哪个老毛病：
 
 - `dice` 帧围绕引擎的中立检定结果契约重新设计：1.x 的 CoC 形状 `rank:int(-2..4)` / `level:string` 字段删除；分级检定携带 `outcome:{id,label,success,critical,fumble,tier,margin?}`，客户端按语义标志上色，而不是内嵌某个规则系统的成功阶梯。1.x 的 `kind:"sanity"` 变为通用的 `kind:"subsystem"` + `subsystem` id；系统形状的附加数据（奖励/惩罚骰、SAN 损失、幸运消耗、优势候选骰）放入不透明的 `detail` 对象。
 - 流式传输收敛为两种帧、一条规则：`narrative_delta` 帧携带草稿气泡的文本增量；同 `id` 的那一条收尾 `narrative` 帧携带**完整**最终文本并**替换**草稿。1.x 的尾缀式 `done` 帧、`stream`/`done` 布尔组合、以及“普通 narrative 顶替未完成草稿”的规则全部删除——生成后修正直接落在最终文本里。
@@ -66,7 +66,7 @@
   `{type:"dice", actor:string, kind:"roll"|"check"|"subsystem"|"opposed"|"init", expr:string, rolls:number[], total:number, target?:number, effective_target?:number, subsystem?:string, outcome?:Outcome, detail?:object}`
   `Outcome = {id:string, label:string, success:boolean, critical:boolean, fumble:boolean, tier:number, margin?:number}`
   分级检定携带 `outcome`：`id` 是规则系统自己的等级词汇（仅用于展示——客户端绝不据此分支），`label` 是已本地化的显示标签，客户端按语义标志（`critical`/`fumble`/`success`）上色，可按 `tier`（阶梯序数，越高越好）做深浅。`kind:"subsystem"` 标记规则子系统检定（`subsystem` 命名之，如理智检定）；`kind:"opposed"` 在 `detail.left`/`detail.right`（`{name,total,target?,outcome?}`）与 `detail.winner:"left"|"right"|"tie"` 里携带双方。`detail` 的其余内容是系统声明的掷骰数据（奖励/惩罚骰、损失/剩余、优势候选……），客户端可原样展示、永远无需理解。
-- `ui`— 房间事件钩子发出的声明式模组 UI（技能/卡片 `hooks.js` 里的 `emitUI(blocks, opts?)`，见 `docs/plugins.md`），在其注解的 KP `narrative` 之后、`state` 快照之前广播。块在服务端（`core.hooks`）经过白名单、校验与大小封顶，客户端可直接渲染。内容是玩家可见的作者产出，信任层级与叙事相同：钩子绝不能把仅守秘人可见的秘密 emit 进来，引擎也从不把守秘人工具结果写入此帧。不参与加入时的历史回放——想要常驻面板的钩子每回合重新发射即可：
+- `ui`— 房间事件钩子发出的声明式模组 UI（技能/卡片 `hooks.js` 里的 `emitUI(blocks, opts?)`，见 `docs/plugins.md`），在它所附着的那条守秘人 `narrative` 之后、`state` 快照之前广播。这些块在服务端（`core.hooks`）过白名单、做校验、按大小截断，客户端拿到就能直接画。内容是玩家可见的作者产出，信任层级与叙事相同：钩子绝不能把仅守秘人可见的秘密发进来，引擎也从不把守秘人工具结果写入此帧。不参与加入时的历史回放——想要常驻面板的钩子每回合重新发射即可：
   `{type:"ui", blocks:[UiBlock], panel:"inline"|"sidebar", id?:string, replace?:boolean}`
   `UiBlock = {kind:"meter", label:string, value:number, min:number, max:number}`
   `| {kind:"stat", label:string, value:number|string|boolean}`
@@ -89,7 +89,7 @@
 - `state` — 一个面板快照，在 `join` 时和每回合后发送：
   `{type:"state", character?:{name,system,resources:[Resource],attributes:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,resources?:[Resource],ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, variables?:[{id:string,label:string,kind:"number"|"bool"|"text"|"enum",value:number|boolean|string,min?:int,max?:int,hidden?:boolean}], pregens?:[{name:string,claimed_by:string}], reset?:boolean}`
   `Resource = {id:string, label:string, value:number, max?:number}` — 规则系统的生命体征条（HP、理智、魔法值……）作为通用数据：客户端按列表渲染条形量表，无需知道任何系统的字段名。条目按渲染顺序到达。`label` 已按**本观看者**的语言解析：规则包的 `sheet.resources[].label` 可写成语言映射，于是同一个房间的 `en` 与 `zh` 连接各自读到自己那一版。
-  `variables`（v1.6，递增式/可选——房间没有时整个字段省略）是房间的确定性模块变量，且只含玩家可见子集：仅守秘人可见的变量在引擎内部（`core.modvars.player_entries`）就被过滤，永远不会到达任何传输层。条目按定义顺序到达（按原样渲染，不要排序）；`label` 已按房间语言本地化；`min`/`max` 只出现在有界的 `number` 变量上（客户端可将其渲染为进度条）。导入的 SillyTavern MVU 卡片变量共用同一列表：`id` 带 `mvu.` 前缀、点分路径作为 `label`（仅标量叶子，服务端封顶）——不新增帧类型，客户端无需改动。MVU 的叶子由**守秘人挑着放出来**（默认全部隐藏，没公开的一律不发）：玩家帧只携带守秘人公开过的路径（`.var expose`）；守秘人自己连接的帧额外携带未公开的其余叶子，每条带 `hidden:true` 标记（递增式/可选——不认识该字段的客户端照常渲染，认识的可以做置灰或加锁标记）。
+  `variables`（v1.6，增量字段，可有可无——房间没有就整个省略）是房间的确定性模块变量，且只含玩家可见子集：仅守秘人可见的变量在引擎内部（`core.modvars.player_entries`）就被过滤，永远不会到达任何传输层。条目按定义顺序到达（按原样渲染，不要排序）；`label` 已按房间语言本地化；`min`/`max` 只出现在有界的 `number` 变量上（客户端可将其渲染为进度条）。导入的 SillyTavern MVU 卡片变量共用同一列表：`id` 带 `mvu.` 前缀、点分路径作为 `label`（只有标量叶子，数量由服务端封顶）——不新增帧类型，客户端无需改动。MVU 的叶子由**守秘人挑着放出来**（默认全部隐藏，没公开的一律不发）：玩家帧只携带守秘人公开过的路径（`.var expose`）；守秘人自己连接的帧额外携带未公开的其余叶子，每条带 `hidden:true` 标记（增量字段，可有可无——不认识它的客户端照常渲染，认识的可以画成置灰或者加把锁）。
   `reset:true` 标记的是战役被清空（`.reset` / `admin_reset_room`）之后服务端推的那份快照：面板数据已经是最新的（空的），客户端还应该把本地攒下的聊天记录也清掉。
 - `presence` — 连接的玩家名单，在加入/离开时发送：
   `{type:"presence", players:[{id,name,online}], online:int}`
@@ -110,7 +110,7 @@
 5. 对于每个 `tool_trace` 条目，如果是掷骰子/检定工具（`roll_dice`、`skill_check`、`sanity_check`、`opposed_check`、`initiative_tracker`），按工具在分发时绑定的结构化 payload 逐一广播 `dice` 帧（未发射 payload 的工具没有 dice 帧——帧永不从工具文本反解析重建）。
 6. 对于每个名为 `speak_as_npc` 的 `tool_trace` 条目，在最终 KP 回复之前广播 `narrative{speaker:"npc", name, text, format:"markdown"}`。`name` 是工具调用的 `npc` 参数，`text` 是玩家安全的工具结果。
 7. 将回复广播为 `narrative{text: reply}`——命令回复为 `speaker:"system"`，AI 守秘人的回复是 `speaker:"kp", format:"markdown"`。回复已经过配置好的输出词表；守秘人专用工具的原始结果不会被代码直接抄进这一帧，但主守秘人模型看过那些结果，仍有可能自己复述出来，所以这部分风险由真模型红线评测另行实测。
-8. 对回合内事件钩子经 `emitUI` 缓冲的每条发射，各广播一个 `ui` 帧——服务端已完成校验与封顶；没有钩子的房间完全不会出现此帧。
+8. 对回合内事件钩子经 `emitUI` 缓冲的每条发射，各广播一个 `ui` 帧——服务端已经校验并截断过；没有钩子的房间完全不会出现此帧。
 9. 对钩子经 `emitPanel` 缓冲的每条发射，各送达一个 `panel_event` 帧——**不是**广播：每条只送达自己清单里含目标面板的成员。
 10. AI-KP 分支结束时（包括错误清理）广播 `turn_status{status:"idle"}`；命令回复不发送回合状态。
 11. 重新构建并广播一个 `state` 帧（`net.state.build_room_state`）。
@@ -224,7 +224,7 @@ role = "player"  # 或 "keeper"；默认为 "player"
   `{type:"admin_export_room", room:string, path?:string}`
 - `admin_import_room` — 恢复服务器端备份 JSON。如果提供了 `room`，快照在恢复前被重映射到该房间：
   `{type:"admin_import_room", path:string, room?:string}`
-- `admin_delete_room_data` — 删除房间的访问密钥、房间作用域 KV 状态、文档向量和世界书向量。`backup` 默认为 `true`；启用备份时，删除仅在备份写入成功后进行：
+- `admin_delete_room_data` — 删除这个房间的访问密钥、按房间存的 KV 状态、文档向量和世界书向量。`backup` 默认为 `true`；启用备份时，删除仅在备份写入成功后进行：
   `{type:"admin_delete_room_data", room:string, backup?:boolean, path?:string}`
 - `admin_reset_room` — 原地重开战役，保留密钥、绑定、在线连接和房间设置（语言、房规、已启用的技能），所以这一桌不用重新配置就能重开。不做备份，也不踢任何人（这点和 `admin_delete_room_data` 相反）。`scope` 决定清到哪一步：`"story"`（默认）只清剧情和进度（角色、模组、设定、媒体都留着）；`"chars"` 连角色一起换（模组留着）；`"all"` 全部清空（角色、模组、设定、媒体）。仅守秘人可用，且限于调用者自己的房间：
   `{type:"admin_reset_room", room:string, scope?:"story"|"chars"|"all"}`

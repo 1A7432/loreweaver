@@ -46,7 +46,7 @@ Loreweaver 跑在运营者自己的机器上，握有完整权限：文件系统
 - **声明式技能（安全）：** 提示文本 + 一份对已有内置工具的*白名单* + 可选数据。没有新代码运行。
 - **代码插件（危险）：** 任意 Python。最后发布，只能显式开启，需要能力声明和明确的“来源可信”警告。
 
-由此有一条推论，塑造了 A 层：任何声明式“公式”设施（比如衍生属性）都使用**固定的原语词汇，绝不 `eval` 任意字符串**——所以一个数据插件永远没法夹带代码。
+由此有一条推论，塑造了 A 层：任何声明式的“公式”能力（比如衍生属性）都只认**一套固定的写法，绝不 `eval` 任意字符串**——所以一个数据插件永远没法夹带代码。
 
 第二条推论：**一个坏包绝不能让启动挂掉。** 发现机制会捕获并跳过一个畸形插件。
 
@@ -69,7 +69,7 @@ st_show:    { top: [...], itemsPerLine: 4 }  # 卡表显示布局
 creation_constraints: { ... }            # 掷骰公式／点数购买／取值范围
 derived:                                 # 混合式衍生属性——见下
   DB:   { computer: coc_db }             #  (a) 具名代码计算器（内置／过于奇怪的）
-  闪避: { half_of: 敏捷 }                #  (b) 声明式原语（纯数据）
+  闪避: { half_of: 敏捷 }                #  (b) 声明式写法（纯数据）
 display:                                 # 可选，仅呈现用的本地化名字
   en: { 侦查: Spot Hidden, ... }
 sheet:                                   # 卡表形状（属性／生命／资源条…）
@@ -87,7 +87,7 @@ sheet:                                   # 卡表形状（属性／生命／资�
 
 - `{computer: <name>}`——注册过的 Python 计算器，用于内置（CoC 的伤害加值表）或者 DSL 搞不定的系统。
 - `{computer_group: <system_id>}`——直接复用另一个系统整套生成结果。
-- 声明式原语（安全，不 eval）：`{copy_of: <stat>}`、`{half_of: <stat>}`、`{floor_div: {of: <stat>, by: N}}`、`{sum_ranges: {of: [<stats>], ranges: [[lo, hi, value], ...], else: <value>}}`。
+- 声明式写法（安全，不 eval）：`{copy_of: <stat>}`、`{half_of: <stat>}`、`{floor_div: {of: <stat>, by: N}}`、`{sum_ranges: {of: [<stats>], ranges: [[lo, hi, value], ...], else: <value>}}`。
 
 随包发的三个系统（`coc7`、`dnd5e`、`wod`）就是这个格式的普通包，也是参考词汇。“规则即数据”有一条字面意义上的验收标准：把 `rulepacks/coc7.yaml` 从一个部署里删掉，CoC 就没了，引擎里不留残渣。
 
@@ -143,7 +143,7 @@ Loreweaver 本来就导入酒馆卡（`core/charcard.py` → `char_from_persona.
 
 引擎暴露一个声明式变量面（`core.modvars`，灵感来自社区的 MVU 变量框架——同一个想法，但用函数调用 + schema 校验取代了解析文本协议）：守秘人（或者模组通过它的设置说明）用 `define_variable` 声明具名追踪器——类型（`number`/`bool`/`text`/`enum`）、可选边界、按语言的显示标签，以及 `player` 或 `keeper` 的可见性——然后用 `set_variable`/`adjust_variable` 更新。每一次写入都由真代码核对、超界就拉回范围内（铁律 #1）；当前值每回合拼进守秘人提示，玩家可见的那部分随 `state` 帧发给客户端。守秘人专属变量在引擎内部就被过滤，永远不到达任何传输（铁律 #3，结构性的）。这是状态不是代码：这里什么都不执行，所以它牢牢待在 A 层的风险等级里。
 
-**导入卡的 MVU 树**从另一个方向得到同样的纪律：它是不透明的模组状态（重卡经常在里面藏剧情标志），所以它的叶子默认**不到任何玩家面板**。守秘人用 `.var expose <前缀|*>` / `.var hide <前缀>` / `.var list` 来策展；守秘人连接会在自己的帧上看到未公开的剩余部分并标记 `hidden: true`，玩家则完全看不到。
+**导入卡的 MVU 树**从另一个方向得到同样的纪律：它是不透明的模组状态（重卡经常在里面藏剧情标志），所以它的叶子默认**不到任何玩家面板**。守秘人用 `.var expose <前缀|*>` / `.var hide <前缀>` / `.var list` 自己挑着放；守秘人连接会在自己的帧上看到未公开的剩余部分并标记 `hidden: true`，玩家则完全看不到。
 
 ### A.5 酒馆 MVU 与 EJS 兼容（导入的卡）
 
@@ -196,7 +196,7 @@ metadata:
 <这段 Markdown 会作为 KP 提示段注入>
 ```
 
-映射到已有架构上（不引入新运行时原语）：`description` 是给守秘人的启用提示；Markdown 正文是拼进系统提示的一段；`allowed-tools` 限制该房间的 `agent.tools.Toolset`；`references/*` 是按需取的渐进披露数据；`metadata.scope: room` 是按房间的开关；`metadata.content-rating` 接进成人模式开关。
+映射到已有的架构上（不引入任何新的运行时机制）：`description` 是给守秘人的启用提示；Markdown 正文是拼进系统提示的一段；`allowed-tools` 限制该房间的 `agent.tools.Toolset`；`references/*` 是按需取的渐进披露数据；`metadata.scope: room` 是按房间的开关；`metadata.content-rating` 接进成人模式开关。
 
 渐进披露的意思是：顶层 `SKILL.md` 展示成本很低，沉重的参考材料只在技能真正触发时才加载。
 
