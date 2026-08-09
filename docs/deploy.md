@@ -145,7 +145,7 @@ intentionally choose another registry.
 
 ## Encryption
 
-Iroh player connections are **end-to-end encrypted by construction** (QUIC/TLS, each peer
+Iroh player connections are **end-to-end encrypted, with nothing to configure** (QUIC/TLS, each peer
 authenticated by its public key), with no certificate to manage. This protects traffic between
 an OpenTUI player and the Loreweaver server; it does not say what the server sends to a configured
 model provider.
@@ -161,7 +161,7 @@ model provider.
   embedder; if an embedding backend is explicitly replaced with a remote implementation, document
   chunks also go to that endpoint. Select a local endpoint such as Ollama or LM Studio when this
   material must remain on infrastructure you control.
-- The player knowledge pool and each NPC/companion actor are structurally scoped: a sub-actor is
+- The player knowledge pool and every NPC or companion are kept apart by the code itself: a sub-actor is
   built only from its own record and sheet. The main Keeper is intentionally different — it sees
   secrets in order to run the mystery. Prompt instructions and the nightly live-model red-line
   eval reduce and measure its leak risk; they are not a proof that every model will behave.

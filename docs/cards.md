@@ -5,7 +5,7 @@
 You have a folder of character cards and lorebooks. This page tells you what happens
 when you drop them into Loreweaver: what imports, what actually runs, and where a
 card behaves differently because it now lives inside a game with real dice. It is
-written for card authors and card users; the contributor-facing contract behind it
+written for card authors and card users; the full specification behind it
 is [plugins.md](plugins.md).
 
 The one-sentence summary: **cards and lorebooks import as-is — no conversion step —
@@ -155,5 +155,5 @@ An imported file doesn't get to pick its own privileges:
 With full EJS enabled, world content runs code in the sandbox described above — that
 is the point, and it is the operator's informed call: "your box, your cards" is the
 **Keeper's** stance about the Keeper's own table, which is exactly why the world half
-goes through the Keeper's hands. An operator who wants the data-only posture sets
+goes through the Keeper's hands. If you would rather nothing executed at all, set
 `TRPG_ENABLE_FULL_EJS=false` or skips the `ejs` extra.

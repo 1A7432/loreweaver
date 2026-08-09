@@ -13,17 +13,17 @@
 > |---|---|
 > | **A — data plugins** | rule systems, cards, lorebooks, module variables. `core/rulepacks.py` is a discovery-based data loader; since M16 a rulepack also owns its **resolution ladder, sheet shape, subsystems, command dialect and expertise text**, so coc7/dnd5e/wod are ordinary packs and deleting a file removes the system |
 > | **B.1 — KP skills** | `SKILL.md` loader, prompt-section binding, per-room `.skill enable`, mature-mode content gate |
-> | **B.2 — `allowed-tools`** | additive toolset gating on `@tool(gated=…)`; `romance-relationships` ships on it |
-> | **B.3 — self-extension forges** | gated `generate_skill` / `generate_rulepack` / `generate_module`, each invisible until its forge skill is enabled. The rulepack forge speaks the M16 `resolution:` / `subsystems:` / `expertise:` vocabulary |
+> | **B.2 — `allowed-tools`** | extra tools that stay hidden until a skill asks for them (`@tool(gated=…)`); `romance-relationships` ships on it |
+> | **B.3 — self-extension forges** | `generate_skill` / `generate_rulepack` / `generate_module`, each invisible until its forge skill is enabled. The rulepack forge writes the M16 `resolution:` / `subsystems:` / `expertise:` fields |
 > | **B.4 — TUI management** | describe→generate on the KP-skills screen |
 > | **C.1 — event hooks** | sandboxed `hooks.js` on the turn lifecycle, with declarative UI emission |
 > | **C.2 — Python entry points** | **deferred** — the only layer that would run with server privileges |
 > | **`.lwpack` packaging** | manifest v2: full file inventory, detection-truth card kinds, schema versions with migration slots; `gh:` release distribution |
 > | **D — module UI panels (M15)** | tier 0/1/2 all landed: `ui/panels.yaml`, `.panels enable`, server-resolved `audience`, content-addressed tier-2 assets with a mandatory text-first fallback |
 > | **M16 — rules externalization** | the core is rule-agnostic; `agent/` never names a system or compares a rank id, pinned by an architecture test |
-> | **M17 — document model** | all room content is one `Document` type; every type's `project(doc, viewer)` is THE wire chokepoint for information isolation |
+> | **M17 — document model** | all room content is one `Document` type; every type's `project(doc, viewer)` is the one place everything passes through on its way out |
 > | **M18 — campaign chronicle** | `chronicle` / `campaign_summary` / `thread` documents, the deterministic fold policy, `.recap` / `.chronicle` |
-> | **M19 — the Stage Director** | the presentation kit (`ui/presentation.yaml`), the performance block vocabulary (`letter` / `clipping` / `map_pin` / `title_card` / `image`), block-level `visible_when`, per-viewer resource labels — protocol 2.1 |
+> | **M19 — the Stage Director** | the presentation kit (`ui/presentation.yaml`), the performance blocks (`letter` / `clipping` / `map_pin` / `title_card` / `image`), `visible_when` on any block, resource labels resolved per viewer — protocol 2.1 |
 
 Loreweaver is a self-hosted, world/story-first AI Keeper — not a persona-chat
 frontend. Its long-term leverage is being a **platform the community extends**,
@@ -61,7 +61,7 @@ power. So the taxonomy is organized by **risk**, and we ship it in that order:
   with a capability declaration and an explicit "trusted-source" warning.
 
 A corollary that shapes Layer A: any declarative "formula" facility (e.g.
-derived character stats) uses a **fixed primitive vocabulary — never `eval` of
+derived character stats) uses a **fixed set of building blocks — never `eval` of
 an arbitrary string** — so a data plugin can never smuggle in code.
 
 A second corollary: **one bad pack must never brick startup.** Discovery catches
@@ -102,7 +102,7 @@ sheet:                                   # the sheet shape (attributes/vitals/re
        value: CHAO, max: CHAOMAX}
 ```
 
-`sheet.resources[].label` is resolved per VIEWER at the wire, so a room with an `en`
+`sheet.resources[].label` is resolved for each viewer as it is sent, so a room with an `en`
 and a `zh` player shows each of them their own reading of the same bar. A bare string
 is not a mistake — abbreviations like HP/SAN/MP read the same everywhere — but any
 label that is a real WORD should ship a locale map.
@@ -122,13 +122,13 @@ an exotic one *may* use code):
   ranges: [[lo, hi, value], ...], else: <value>}}`.
 
 The three bundled systems (`coc7`, `dnd5e`, `wod`) are ordinary packs in this format and serve as
-the reference vocabulary. "Rules are data" has a literal acceptance test: remove
+the reference for what the format can express. "Rules are data" has a literal acceptance test: remove
 `rulepacks/coc7.yaml` from a deployment and CoC is gone, with no residue in the engine.
 
 **Rule BEHAVIOUR is pack data too (M16).** Since the rules externalization a pack does not just
 declare a sheet; it declares how a check resolves, which subsystems exist, what dot-commands it
 answers to, and what the Keeper is told about running it. `agent/` never names a system and never
-compares a rank id — it reads semantic flags only — so a pack can invent its own vocabulary without
+compares a rank id — it reads the flags only — so a pack can invent its own names for things without
 touching code.
 
 ```yaml
@@ -163,9 +163,9 @@ is the RAW value; inside a rank's `when:` it is the adjusted one.
 **Evolution discipline:** the DSL never grows syntax for one system. A system it cannot express uses
 the script lane (`resolution: {script: resolver.js}`, and `subsystems: {<name>: {script: flow.js}}`
 for flows) — QuickJS, the same trust lane as `hooks.js`: the engine pre-rolls the declared dice and
-passes values in, the script returns a pure verdict or an effect description drawn from a closed
-engine-owned vocabulary, and the engine validates, clamps and applies it. Randomness and state never
-leave the engine. The trust card discloses it as `has_rules_script`, re-verified at install. Only a
+passes values in, and the script returns nothing but a verdict, or an effect described in a fixed
+set of terms the engine owns. The engine then checks that, holds it inside the allowed range, and
+applies it. Randomness and state never leave the engine. The trust card discloses it as `has_rules_script`, re-verified at install. Only a
 pattern recurring across two or three script-lane systems is promoted into DSL syntax.
 
 A worked, buildable example of all of the above: [authoring.md](authoring.md) §2–§3.
@@ -197,7 +197,7 @@ That fusion is upstream's single-player architecture, not a design to preserve, 
 decomposes every card deterministically (`core.card_split`):
 
 - **Character import** (`.import <file> [pc|companion]`) takes only the character half.
-  World machinery is *structurally stripped* — hooks are not installed, declaration entries
+  World machinery is *removed by the importer itself* — hooks are not installed, declaration entries
   are neither stored nor consumed, EJS spans are removed from prose and lore — and the
   result message itemizes exactly what was stripped. This is what a player may self-import
   into a shared room.
@@ -214,7 +214,7 @@ The boundary is the room's trust boundary, not a capability cut: "author freedom
 gatekeeping" is the *operator's* stance about the operator's own box, and the keeper is the
 operator of the room. Everything that reprograms shared play — skills (`.skill enable`),
 hooks, variable schemas, rules — goes through the keeper's hands; nothing a player uploads
-can execute or mutate shared state by construction.
+has no way to execute anything or change shared state.
 
 ### A.3 World info / lore — SillyTavern lorebook
 
@@ -242,7 +242,7 @@ executes, so it stays firmly in Layer A's risk class.
 
 An **imported card's MVU tree** gets the same discipline from the other direction: it is
 opaque module state (heavy cards routinely keep hidden plot flags in it), so its leaves
-reach NO player panel by default. The keeper curates exposure with `.var expose
+reach NO player panel by default. The keeper chooses what to show, with `.var expose
 <prefix|*>` / `.var hide <prefix>` / `.var list`; keeper connections see the unexposed
 remainder flagged `hidden: true` on their own frames, players never see it at all.
 
@@ -407,7 +407,7 @@ operator's content, the operator's box):
   caps, and applies them — `setvar` on a declared module variable goes through kind/bounds
   validation, everything else lands in the MVU tree. One sandboxed interpreter per turn
   (memory/time-capped, no host I/O), `variables_changed` fires at most once per turn so hook
-  cascades terminate by construction, and any failure — broken script, infinite loop, missing
+  a cascade cannot keep going, and any failure — broken script, infinite loop, missing
   `ejs` extra — degrades to "hooks inert (logged)", never to a broken turn.
 - **`globalThis` lives for ONE turn — the mistake worth naming.** "One interpreter per turn"
   means the interpreter is *rebuilt* every turn, so a counter kept in a JS variable resets
@@ -448,7 +448,7 @@ isolation. Until C.2 ships, code contributions go through normal in-tree PRs.
 
 Modules dress the table: a pack ships its own interface — HUDs, case boards, maps —
 rendered by protocol clients. This is the presentation direction that replaced the retired
-chat adapters. The canonical spec is `docs/specs/M15-ui-panels.md`; the wire contract is
+chat adapters. The canonical spec is `docs/specs/M15-ui-panels.md`; the protocol side is
 `docs/protocol.md` ("Module UI panels", protocol 2.1). The layer is three tiers, by authoring
 effort and risk:
 
@@ -515,11 +515,11 @@ The rules that make this safe are the same iron rules, extended to UI:
 - **拆卡, extended:** panels enter a room only via a keeper's `.panels enable <packId>`
   of an installed pack (install ≠ enable). Players cannot upload panels.
 - **A panel acts as the player viewing it:** inbound it sees only that viewer's
-  filtered variables (an unresolved `$var` omits the whole block, fail-closed);
-  outbound (`panel_intent`) it can send only what that player could type — `roll`
+  filtered variables (a `$var` that does not resolve drops the whole block — when in doubt it shows
+  nothing); outbound (`panel_intent`) it can send only what that player could type — `roll`
   intents go through the real dice engine as that player.
 - **Keeper panels never reach players:** `audience` is resolved into per-viewer
-  manifests before the wire; a keeper-only panel structurally never appears in a
+  manifests before anything is sent, so a keeper-only panel simply never appears in a
   player's manifest.
 - **No new privilege surface:** panels render and collect intent; every judgment stays
   server-side, and keeper-only actions stay on the command surface.
@@ -724,7 +724,7 @@ actually shipped as, for anyone reading the code.)*
    command), and the mature/explicit content gate that lifts the output censor;
    `mature-mode` shipped as the first built-in skill.
 3. **Layer B.2 — `allowed-tools` enforcement** — **landed**: a `gated: bool`
-   marker on `@tool` (independent of `keeper_only`), additive gating in
+   marker on `@tool` (independent of `keeper_only`), extra tools added in
    `agent.tools.Toolset` (`schemas(unlocked)`/`dispatch(..., unlocked)` expose
    and allow a gated tool only when its name is in the room's unlocked set),
    and `core.skills.unlocked_tools_for` unioning enabled skills' `allowed-tools`
@@ -767,18 +767,17 @@ actually shipped as, for anyone reading the code.)*
    `CheckOutcome`/`Rank` contract; ROLL (engine) → INTERPRET (pack, pure) → APPLY (engine); the
    old per-system modules deleted outright.
 9. **M17 — the document model** — **landed**: one `Document` meta-type for all room content, with
-   a per-type `project(document, viewer)` contract as THE single wire chokepoint for iron rule #3.
+   a per-type `project(document, viewer)` as the single place everything passes through, for iron rule #3.
    Every per-store manager and every backup allowlist is gone. A handout-class feature is a type +
    schema + projection away, with no new store keys and no new wire filter.
 10. **M18 — the campaign chronicle** — **landed**: `chronicle` / `campaign_summary` / `thread`
     documents, the deterministic fold policy (0.60 trigger → 0.40 floor, 0.85 emergency, a 4-turn
     no-future lag window), folded records joining the embedding index, and the projection dividend —
-    `.recap` is the player-grade view of the same documents, with keeper annotations structurally
-    absent.
+    `.recap` is the player-grade view of the same documents, with the keeper's annotations gone.
 11. **M19 — the Stage Director** — **landed**: `ui/presentation.yaml` + `contents.presentation`,
-    the performance block vocabulary, ref-mandatory image generation with the author's `pack_only`
-    veto, audio cues, and a room-lifetime image budget. Kit-gated: a room whose modules ship no kit
-    never wakes a Director. `tests/architecture/test_director_isolation.py` is what pins its
+    the performance blocks, image generation that refuses to run without a reference image, the
+    author's `pack_only` veto, audio cues, and a room-lifetime image budget. It only wakes for a
+    module that asks for it: a room whose modules ship no kit never starts a Director. `tests/architecture/test_director_isolation.py` is what pins its
     knowledge scoping.
 12. **Layer C.2 — Python entry-point plugins** — **deferred**; entry points + trust
     model. The only layer that would run with server privileges, so it stays last and opt-in.

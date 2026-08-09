@@ -13,13 +13,13 @@ Neither of you knows the script — **you create the story together.**
 
 Loreweaver is an open-source **engine and open standard for AI-run tabletop RPGs**. You and your friends bring the characters; an AI Keeper reads the module, remembers the world, plays every NPC and guards every clue. What separates it from "chatting with an AI" is that **the dice are real**: checks, damage, sanity and every number on a sheet are rolled and resolved by code, and the model's job is to tell you what that meant. **The AI tells the story. The code keeps the score.**
 
-A world's rules, lore, cast, interface and stagecraft are all documented file formats rather than hardcoded features, so a world can be packaged up and handed to someone else. The server runs on your own machine. Call of Cthulhu 7e and D&D 5e (SRD) ship with it, and English and Chinese are both first-class.
+A world's rules, lore, cast, interface and staging are all plain files in documented formats rather than features baked into the engine, so a world can be packed up and handed to someone else. The server runs on your own machine. Call of Cthulhu 7e and D&D 5e (SRD) ship with it, and English and Chinese are both first-class.
 
-[![CI](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml/badge.svg)](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml) ![license](https://img.shields.io/badge/license-MIT-green) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![clients](https://img.shields.io/badge/clients-TypeScript%20%2F%20Bun-black) [![protocol](https://img.shields.io/badge/wire%20protocol-2.1-informational)](docs/protocol.md)
+[![CI](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml/badge.svg)](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml) ![license](https://img.shields.io/badge/license-MIT-green) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![clients](https://img.shields.io/badge/clients-TypeScript%20%2F%20Bun-black) [![protocol](https://img.shields.io/badge/protocol-2.1-informational)](docs/protocol.md)
 
 **Links:** [Homepage](https://1a7432.site) · [Command manual](https://1a7432.site/commands-en.html) · [Play](docs/play.md) · [Author a pack](docs/authoring.md) · [Run a table](docs/operating.md)
 
-> **Honestly:** this is a young project, built mostly by one person working with AI. The deterministic half — dice, rules, sheets, projections — is the solid part, held by more than 2,200 offline tests. The AI Keeper's *behaviour* is a separate question, measured rather than claimed; the [status section](#where-this-actually-stands) below says exactly what is proven and what is not.
+> **Honestly:** this is a young project, built mostly by one person working with AI. The deterministic half — dice, rules, sheets, projections — is the solid part, held by more than 2,200 offline tests. How the AI Keeper *behaves* is a separate question: we publish what we measured and promise nothing beyond it. The [status section](#where-this-actually-stands) below says exactly what is proven and what is not.
 
 ![Loreweaver demo — a real session in the terminal: p2p connect with an invite key, the module opening replays, the AI Keeper narrates, a Spot Hidden check resolves with real dice](assets/demo-en.gif)
 
@@ -149,15 +149,17 @@ numbers is not a model.
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The **Scribe** exists because of a measured failure. In a live playtest a strong narrative model ran
-an entire module without ever touching the state layer: trackers frozen at their defaults while the
-fiction sprinted three days ahead. Bookkeeping cannot live on model discipline, so it got its own
-quiet actor. It proposes; the engine validates and clamps. In the follow-up run of the same module
-the trackers moved with the story, and dice usage rose several-fold.
+The **Scribe** exists because of something that went wrong in a real playtest. A strong storytelling
+model ran an entire module without once updating the game's state: every tracker sat at its starting
+value while the story raced three days ahead. You cannot leave the bookkeeping to a model's good
+intentions, so it got a quiet helper of its own. The Scribe only proposes; the engine checks the
+numbers and pulls anything out of range back in. Re-running the same module with it, the trackers
+kept up with the story and the table rolled several times as many dice.
 
-The **Director** is the newest actor and the most carefully fenced one. Everything it emits is
-player-visible, so it is built like an NPC: its entire input is the projected player stream plus the
-module's presentation kit. It cannot leak what it never receives.
+The **Director** is the newest of the four and the one kept on the shortest leash. Everything it
+produces is seen by players, so it is built the way an NPC is built: all it is given is the same
+player's-eye view of the story that the players get, plus the module's presentation kit. It cannot
+leak what it was never told.
 
 ### Every secret leaves by one door
 
@@ -171,17 +173,19 @@ surface goes through it**. There is one path out, not five, which is the main re
 | a player | the projection: no secret lore, no NPC agendas, no keeper-only trackers, no unexposed variable leaves |
 | an NPC / companion / the Director | only its own record and sheet, assembled from nothing else |
 
-Sentinel tests assert that specific secrets never cross `project()`, and an architecture test forbids
-`agent/`, `gateway/` and `net/` from reading a secrecy field directly. What this does **not** prove:
-that the main Keeper model, having been shown a secret so it can run the mystery, never restates it.
-That is behaviour, and it is [measured separately](#where-this-actually-stands).
+One set of tests exists purely to catch leaks: each one names a particular secret and fails if it
+ever comes back out of `project()`. Another forbids `agent/`, `gateway/` and `net/` from reading a
+secrecy field directly. What none of this proves: that the main Keeper, having been shown a secret so
+it can run the mystery, never says it out loud. That is behaviour, and it is
+[measured separately](#where-this-actually-stands).
 
 ---
 
 ## What's in the box
 
-**Rule systems are data, not code.** A rule system is one YAML file: its sheet shape, its derived
-stats, its check ladder, its subsystems, its dot-command dialect, its localized labels. The bundled
+**Rule systems are data, not code.** A rule system is one YAML file: what a character sheet looks
+like, how derived stats are computed, which tiers a check can land on, what subsystems exist, which
+dot-commands it answers to, and what all of it is called in each language. The bundled
 CoC 7e / D&D 5e / WoD packs are ordinary packs — delete `rulepacks/coc7.yaml` from a deployment and
 CoC is simply gone, with no residue. Check resolution is a small declarative DSL over the dice
 engine:
@@ -198,33 +202,34 @@ resolution:
     - {id: fail}
 ```
 
-Dice pools (`7d10>=8`), fudge dice (`4dF`) and exploding dice (`5d6!`) are engine primitives, so a
-success-counting system is data too. Anything the DSL genuinely can't express drops to a sandboxed
-QuickJS resolver that receives pre-rolled values and returns a pure verdict — randomness and state
-never leave the engine. A module that needs house rules ships a *patch*: `extends: coc7` plus only
-the deltas.
+Dice pools (`7d10>=8`), fudge dice (`4dF`) and exploding dice (`5d6!`) are built into the dice
+engine, so a system that counts successes is data too. Anything the DSL genuinely can't express hands
+off to a script in a QuickJS sandbox: the engine rolls the dice first, passes the numbers in, and the
+script returns nothing but a verdict — randomness and state never leave the engine. A module that
+needs house rules ships a *patch*: `extends: coc7` and only the lines it changes.
 
 **The card split (拆卡).** A SillyTavern "heavy card" fuses two things Loreweaver keeps apart: the
 *character* (persona, sheet, memories) and the *world* (hook scripts, variable schemas, executable
-templates). A player imports the character half and the world machinery is **structurally stripped**
-— the import summary itemizes exactly what was left out. World machinery reaches a room only through
+templates). When a player imports the character half, the world machinery is **taken out by the importer
+itself** — and the summary you get back lists exactly what was left behind. World machinery reaches a room only through
 the Keeper's own `.import <file> world`, because it reprograms the whole table. Imported variable
 trees stay off player panels until the Keeper exposes them (`.var expose`).
 
-**Campaign memory that survives the context window.** Play is recorded as chronicle documents. When
-the assembled prompt crosses 60% of the model's context window, the oldest records fold in batches
-into a rolling campaign summary until the projection is back under 40%; the last four turns are never
-folded (an in-flight scene is not history yet), and folded records join the embedding index so a
-session-3 detail is still retrievable at session 12. Players get `.recap` — the same story, with
+**Campaign memory that survives the context window.** Play is recorded as chronicle documents. Once the
+assembled prompt passes 60% of the model's context window, the oldest records are folded in batches
+into a running summary of the campaign until it is back under 40%. The last four turns are never
+folded — a scene still being played isn't history yet — and folded records go into the search index,
+so a detail from session 3 can still be found in session 12. Players get `.recap` — the same story, with
 keeper spoiler annotations structurally removed by the projection contract.
 
 **A presentation layer, not just a chat log.** Modules can draw their own table. Hooks emit
-declarative blocks (meters, badges, choices, images); packs declare named panels bound to live
-variables, gated by value with `visible_when`, in a sidebar/tray/modal slot with a server-resolved
-audience; a tier-2 panel is real HTML/JS in a locked-down iframe with a mandatory text-first
-fallback. On top of that sits the Stage Director's performance vocabulary — `letter`, `clipping`,
-`map_pin`, `title_card`, `image` — declarative templates that a rich client styles and a terminal
-client prints as plain lines, so an author only has to write one version.
+ready-made blocks (meters, badges, choices, images). A pack can declare named panels wired to live
+variables, shown or hidden by value with `visible_when`, docked in a sidebar, tray or modal — and the
+server, not the client, decides who is allowed to see each one. A tier-2 panel is real HTML/JS in a
+locked-down iframe, and it must ship a plain-text version alongside. Above all of that sit the Stage
+Director's performance templates — `letter`, `clipping`, `map_pin`, `title_card`, `image` — which a
+rich client draws as a letter or a title card and a terminal client prints as a few lines. The author
+writes one version either way.
 
 **Three audio layers.** `bgm`, `ambience` and `sfx` are separate lanes with their own play/stop/fade
 state, replayed on join. A pack ships its audio; the Keeper cues it by hand, or the Director does it
@@ -255,9 +260,9 @@ writing anything. Git releases are the registry: there is no central store to su
 
 ## Where this actually stands
 
-**Solid.** The deterministic engine: dice, check ladders, sheets and derived stats, character-rule
-validation on every write path, the clock, permissions, the document projection contract, packs and
-their integrity checks, the wire protocol. More than 2,200 Python tests plus ~370 client tests run fully
+**Solid.** The deterministic engine: dice, check tiers, sheets and derived stats, rule validation on
+every path that writes a number, the clock, permissions, the one place documents are filtered before
+they go out, packs and their integrity checks, the protocol. More than 2,200 Python tests plus ~370 client tests run fully
 offline, with a scripted Keeper and seeded dice — no network, no keys. A self-play test drives the
 entire pipeline end to end.
 
@@ -317,7 +322,7 @@ net/    Iroh p2p + session core     adapters/ CLI          clients/ protocol (np
 Layer contracts, the iron rules, and how to add a rulepack / provider / tool / client:
 **[AGENTS.md](AGENTS.md)**.
 
-**Building a client or a bot?** The wire format is open and versioned:
+**Building a client or a bot?** The protocol is open and versioned:
 **[docs/protocol.md](docs/protocol.md)** (2.1). Typed frames and a reconnecting WebSocket client
 ship on npm as [`loreweaver-protocol`](https://www.npmjs.com/package/loreweaver-protocol), whose
 `major.minor` tracks the protocol version.

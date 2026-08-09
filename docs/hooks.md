@@ -6,7 +6,7 @@ Event hooks let a skill or a card ship **behavior**: JavaScript handlers on the 
 lifecycle, run in the same QuickJS sandbox as full EJS. A hook can read the room's
 variables, add a section to this turn's Keeper prompt, append or rewrite narration,
 and draw declarative UI in the connected clients. This page is the author reference —
-events, API, caps, failure semantics; the architectural contract lives in
+events, the API, the limits, and what happens when something fails. The architectural side lives in
 [plugins.md](plugins.md) (Layer C.1).
 
 Two facts frame everything else:
@@ -55,7 +55,7 @@ on("clock_advanced",    (event) => { ... });  // event.from, event.to, event.del
 - **`dice_rolled`** — one or more dice tools resolved this turn.
 - **`variables_changed`** — variable writes happened this turn. Fires **at most once
   per turn**, so a hook that writes variables in response cannot cascade forever —
-  termination is by construction, not by convention.
+  it stops because it cannot do otherwise, not because everyone agreed to be careful.
 - **`clock_advanced`** — the Keeper moved the game clock forward this turn
   (`game_clock advance`); fires once per advance with the old face, the new face,
   and the verbatim delta text. The place for module-side calendars: day counters,
@@ -95,7 +95,7 @@ Effect emitters:
 ## `emitUI` — declarative module UI
 
 `emitUI(blocks, opts?)` sends validated UI blocks to clients as protocol-v1.7 `ui`
-frames ([protocol.md](protocol.md) has the wire schema). Block kinds:
+frames ([protocol.md](protocol.md) has the exact schema). Block kinds:
 
 ```js
 {kind: "meter",   label, value, min, max}          // a bounded gauge
@@ -157,6 +157,6 @@ on("turn_start", () => {
 });
 ```
 
-Everything in it goes through the contract: the `incvar` is clamped to 0–10 by the
+Every step here goes through the engine: `incvar` is held to 0–10 by the
 tracker's bounds, the meter is schema-validated before any client sees it, and if
 the script ever breaks, the module keeps running — just without its fear meter.

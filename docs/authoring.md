@@ -4,7 +4,7 @@
 
 *From an empty directory to an installable `.lwpack`, with a real module as the worked example.*
 
-This is the practical tutorial. The normative contract — every field, every cap, every trust rule —
+This is the hands-on tutorial. The specification — every field, every limit, every trust rule —
 is [plugins.md](plugins.md); when the two disagree, that one is right. What you get here is the
 order to do things in, and real files rather than invented ones.
 
@@ -147,7 +147,7 @@ skipped and reported as a warning, so one bad row never costs you the whole impo
 | `title` | shown to the Keeper; defaults to `Untitled Lore` |
 | `content` | the entry text. Required — an empty one is skipped with a warning |
 | `keys` / `secondary_keys` | activation keywords. Secondary keys gate the entry: `selective_logic` picks `and_any` (default) / `and_all` / `not_any` / `not_all` |
-| `secret` | **keeper-only.** Honored only on a keeper import; a player-path import drops it structurally, so marking an entry secret can never widen anyone's visibility |
+| `secret` | **keeper-only.** Honored only on a keeper import; a player import drops it outright, so marking an entry secret can never widen anyone's visibility |
 | `constant` | always-on. Forced off for uploaded files — an always-on entry would inject itself into every prompt regardless of keywords |
 | `condition` | an expression; rides in as an `@@if` decorator. Longer than 500 characters and it will never fire, and you get a warning saying so |
 | `priority`, `enabled`, `probability` (0–100, rolled by real code), `case_sensitive`, `match_whole_words`, `scan_depth`, `position` (`before`/`after`), `sticky`, `cooldown`, `delay` | SillyTavern World Info trigger semantics, imported and honored |
@@ -213,7 +213,7 @@ The consequence is the **card split (拆卡)**, and it is the one design rule th
 if you come from SillyTavern:
 
 - **`.import <file> pc|companion`** — anyone may do this. It takes the character half only. World
-  machinery is *structurally stripped*, and the reply itemizes what was removed:
+  machinery is *removed by the importer itself*, and the reply lists what went:
 
   ```console
   Imported "潮脉盘" as your player character (coc7-xipu). Key stats: STR 50, CON 45, …
@@ -358,11 +358,11 @@ expertise:
 dice, indexable as `dice1`, `dice2`, …), `target` (difficulty-adjusted), `raw_target` (before
 difficulty), `modifier`, and `successes` / `ones` for pools. The flags `success` / `critical` / `fumble` are
 declared *by you*: the engine and the AI only ever read those flags and the `tier` ordinal, never
-your rank id, which is why a system can invent its own vocabulary without breaking anything
+your rank id, which is why a system can invent its own names for things without breaking anything
 downstream. `expertise` is what the Keeper is told about how to run it.
 
 **Pool params** (`deng` here) are supplied by the Keeper's check tool, which is how ritual scenes
-call for a five-lantern casting. The player-facing dot-command lane treats its argument as a skill
+call for a five-lantern casting. The player-facing dot-command reads its argument as a skill
 name, so a pool system's parameters are the Keeper's to set, not a player's.
 
 **Typos fail at build, not at the table.** Referenced names are extracted statically, so a
@@ -721,8 +721,8 @@ Both were more useful for being written down while they still stung.
 
 | Topic | Document |
 |---|---|
-| The full extension contract — every field, cap and trust rule | [plugins.md](plugins.md) |
+| The full extension spec — every field, limit and trust rule | [plugins.md](plugins.md) |
 | Importing from SillyTavern: what runs, what differs | [cards.md](cards.md) |
 | The hooks API, events, effect buffer, failure semantics | [hooks.md](hooks.md) |
-| Panel and block shapes on the wire | [protocol.md](protocol.md) |
+| What panels and blocks look like on the protocol | [protocol.md](protocol.md) |
 | Operating a table with your module on it | [operating.md](operating.md) |

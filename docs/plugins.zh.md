@@ -10,7 +10,7 @@
 > |---|---|
 > | **A——数据插件** | 规则系统、卡、世界书、模组变量。`core/rulepacks.py` 是基于发现的数据加载器；M16 之后，一个规则包还拥有自己的**检定档位、卡表形状、子系统、命令写法和守秘人须知**，所以 coc7/dnd5e/wod 就是普通的包，删掉文件就删掉了系统 |
 > | **B.1——KP 技能** | `SKILL.md` 加载器、提示段绑定、按房间 `.skill enable`、成人内容开关 |
-> | **B.2——`allowed-tools`** | `@tool(gated=…)` 上的按需开放工具；`romance-relationships` 跑在这套上 |
+> | **B.2——`allowed-tools`** | `@tool(gated=…)`：技能没要就看不见的额外工具；`romance-relationships` 跑在这套上 |
 > | **B.3——自扩展 forge** | `generate_skill` / `generate_rulepack` / `generate_module` 三个工具，各自在对应的 forge 技能启用之前完全不可见。规则包 forge 说的是 M16 的 `resolution:` / `subsystems:` / `expertise:` 词汇 |
 > | **B.4——TUI 管理页** | KP 技能页支持“描述一句话→生成” |
 > | **C.1——事件钩子** | 沙箱 `hooks.js` 挂在回合生命周期上，带声明式 UI 输出 |
@@ -20,7 +20,7 @@
 > | **M16——规则外化** | 引擎与规则系统解耦；`agent/` 从不点名系统、也从不比较 rank id，由架构测试钉住 |
 > | **M17——文档模型** | 房间里所有内容都是同一个 `Document` 类型；每种类型的 `project(doc, viewer)` 是信息隔离唯一的出线口 |
 > | **M18——战役编年史** | `chronicle` / `campaign_summary` / `thread` 文档、确定性折叠策略、`.recap` / `.chronicle` |
-> | **M19——演出导演** | 演出资料包（`ui/presentation.yaml`）、演出区块词汇（`letter` / `clipping` / `map_pin` / `title_card` / `image`）、区块级 `visible_when`、按人解析的资源条标签——协议 2.1 |
+> | **M19——演出导演** | 演出资料包（`ui/presentation.yaml`）、几种演出区块（`letter` / `clipping` / `map_pin` / `title_card` / `image`）、任何区块都能带 `visible_when`、资源条标签按人解析——协议 2.1 |
 
 Loreweaver 是一个自托管的、世界与故事优先的 AI 守秘人，不是一个角色扮演聊天前端。它长期的杠杆是**成为一个被社区扩展的平台**，而不是一份人人 fork 的代码。这份文档定义“怎么扩展”。
 

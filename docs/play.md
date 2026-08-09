@@ -92,7 +92,7 @@ a hardcoded table. Under CoC 7e a d100 check grades like this:
 
 Higher tiers are not just "more successful" — a module can gate a clue behind a *hard* success
 specifically. That is why the line prints the tier and not only pass/fail. A different rule system
-prints a different ladder, in its own vocabulary, because the ladder is data that ships with the
+prints a different set of tiers, with its own names for them, because that table is data shipped with the
 system.
 
 **A failed check should move the story, not stop it.** If you are stuck after a failure, say what
@@ -117,7 +117,7 @@ system does not permit, whoever asked for it.
 
 The recap is a real document the Keeper can edit, and its player view is produced by the same
 projection that keeps every other secret out of your client — keeper annotations about what you
-*missed* are structurally not in it. Late joiner? This is your on-ramp.
+*missed* are not in there at all. Just joined a campaign in progress? Start here.
 
 ## 4. The screen
 

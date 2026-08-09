@@ -108,20 +108,20 @@ the same module's trackers moved with the story. Bookkeeping does not survive on
 > resolved data dir. Packs installed into the data dir are not listed there; check those in-room with
 > `.panels` and `.skill`.
 
-### The Director — optional, and gated three ways
+### The Director — optional, and three things have to agree
 
 The Stage Director stages story beats: act cards, letters, newspaper clippings, map pins, audio cues,
 and generated art. It defaults to the **main** model, which is the opposite of the Scribe's advice —
 beats are rare and the job is taste.
 
-It is **kit-gated**: it runs only for a room whose enabled module ships a
+**It only wakes up if a module asks for it**: it runs only in a room whose enabled module ships a
 `ui/presentation.yaml`. A table with no such module never wakes one and is never charged for it.
 Image generation additionally needs all three of these to agree:
 
 1. `TRPG_DIRECTOR__IMAGES=1`,
 2. a configured `TRPG_IMAGEGEN__*` endpoint,
-3. the module's own kit — and if its author wrote `generation: pack_only`, that veto is theirs and
-   nothing on your side overrides it.
+3. the module's own kit — and if its author wrote `generation: pack_only`, that is the author's
+   call, and nothing you set on your side overrides it.
 
 ```dotenv
 # TRPG_DIRECTOR__ENABLED=1
@@ -183,7 +183,7 @@ sharing the Keeper's.
 
 Long campaigns outlive any context window. Play is recorded as chronicle documents, and when the
 assembled prompt crosses **60%** of the model's context window, the oldest records fold in batches
-into a rolling campaign summary until the projection is back under **40%**. An emergency ceiling at
+into a running summary of the campaign until it is back under **40%**. An emergency ceiling at
 **85%** forces a fold before the next call — the ceiling exists so the fold call itself always has
 headroom. The last **4** turns are never folded: an in-flight scene is not summarizable history yet.
 
