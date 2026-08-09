@@ -71,8 +71,8 @@ The full template bridge is available:
 - **Variables:** `getvar(name)`, `setvar(name, value)`, `incvar(name, delta)`, plus
   the `variables` / `stat_data` tree views and lodash as `_`.
 - **Write routing is validated:** a name that matches a module variable declared
-  with `define_variable` goes through its kind/bounds validation (a clamped number
-  stays clamped); any other name lands in the imported-card (MVU) variable tree. A
+  with `define_variable` goes through its kind/bounds check (a number with bounds
+  stays inside them); any other name lands in the imported-card (MVU) variable tree. A
   failing write is skipped and reported, never fatal. At most **64 writes** apply
   per turn.
 - **Snapshot semantics:** variables are snapshotted once per turn. A handler sees
@@ -139,7 +139,7 @@ schema is dropped; the rest of the emission survives.
 A fear meter for a horror module: it rises on every roll, shows in the sidebar, and
 past a threshold it starts leaning on the Keeper. Declare the tracker in the module
 setup (`define_variable`: kind `number`, 0–10, player-visible) so writes are
-clamped by the engine; the hook is then:
+kept in range by the engine; the hook is then:
 
 ```js
 on("dice_rolled", (event) => {

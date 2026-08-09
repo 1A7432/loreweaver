@@ -108,7 +108,7 @@ a check and the engine rolls it. Three things are worth knowing on turn one:
 ?                 open the help overlay  (keys, dice, how success tiers read)
 ```
 
-Both command dialects work: the Chinese SealDice style (`.ra 侦查`, `.st 力量50`) and the English
+Both command styles work: the Chinese SealDice one (`.ra 侦查`, `.st 力量50`) and the English
 Avrae style (`/roll 4d6kh3`). The full player walkthrough — keys, panels, success tiers, `.recap` —
 is **[docs/play.md](docs/play.md)**; the complete command reference is the
 [player command manual](https://1a7432.site/commands-en.html).
@@ -382,7 +382,7 @@ Found a vulnerability? Open a private security advisory on GitHub, not a public 
 MIT — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE). Includes **D&D 5e SRD 5.1** (CC-BY-4.0)
 material; Cthulhu content only within open / Miskatonic Repository licensing. The gateway layer
 derives from **hermes-agent** (MIT, © 2025 Nous Research); the dice engine is **avrae/d20** (MIT);
-the Chinese command dialect, CoC success function and skill alias table are rewritten with reference
+the Chinese command style, CoC success function and skill alias table are rewritten with reference
 to **SealDice** (MIT); the terminal client is built on **OpenTUI**. No copyrighted adventure text
 ships in this repository.
 

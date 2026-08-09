@@ -11,7 +11,7 @@
 >
 > | Layer | State |
 > |---|---|
-> | **A — data plugins** | rule systems, cards, lorebooks, module variables. `core/rulepacks.py` is a discovery-based data loader; since M16 a rulepack also owns its **resolution ladder, sheet shape, subsystems, command dialect and expertise text**, so coc7/dnd5e/wod are ordinary packs and deleting a file removes the system |
+> | **A — data plugins** | rule systems, cards, lorebooks, module variables. `core/rulepacks.py` is a discovery-based data loader; since M16 a rulepack also owns **the tiers a check lands on, the sheet shape, the subsystems, the dot-commands it answers to and what to tell the Keeper**, so coc7/dnd5e/wod are ordinary packs and deleting a file removes the system |
 > | **B.1 — KP skills** | `SKILL.md` loader, prompt-section binding, per-room `.skill enable`, mature-mode content gate |
 > | **B.2 — `allowed-tools`** | extra tools that stay hidden until a skill asks for them (`@tool(gated=…)`); `romance-relationships` ships on it |
 > | **B.3 — self-extension forges** | `generate_skill` / `generate_rulepack` / `generate_module`, each invisible until its forge skill is enabled. The rulepack forge writes the M16 `resolution:` / `subsystems:` / `expertise:` fields |
@@ -233,7 +233,7 @@ schema validation instead of a parsed text protocol): the Keeper (or a module, v
 setup instructions) declares named trackers with `define_variable` — kind
 (`number`/`bool`/`text`/`enum`), optional bounds, a per-locale display label, and a
 `visibility` of `player` or `keeper` — then updates them with
-`set_variable`/`adjust_variable`. Every write is validated and clamped by real code
+`set_variable`/`adjust_variable`. Every write is checked by real code and held inside its declared range
 (iron rule #1); the current values are folded into the KP prompt each turn, and the
 player-visible subset ships to clients on the `state` frame for the
 TUI's tracker panel. Keeper-only variables are filtered inside the engine and never
@@ -423,7 +423,7 @@ operator's content, the operator's box):
 
   // RIGHT — the engine owns durable state; the hook asks for it.
   on('turn_start', () => {
-    incvar('tide_sense', 1);                       // validated, clamped, PERSISTED
+    incvar('tide_sense', 1);                       // checked, kept in range, PERSISTED
     emitUI([{kind: 'meter', label: 'Tide sense', value: Number(getvar('tide_sense')) || 0,
              min: 0, max: 40}])
   })
@@ -714,9 +714,9 @@ actually shipped as, for anyone reading the code.)*
 
 1. **Layer A — rule-system management** — **landed** (discovery-based loader +
    hybrid derived stats; a new pure-data system is just a YAML file). **Extended by M16**: a
-   rulepack now also owns `resolution:` (the compiled check ladder + the QuickJS script lane),
+   rulepack now also owns `resolution:` (the compiled check tiers + the QuickJS script lane),
    `sheet:` (pack-declared sheet shapes; derived values are never persisted), `subsystems:`
-   (engine-generic behavior templates, pack-parameterized), `commands:` (the dot-command dialect,
+   (engine-generic behavior templates, pack-parameterized), `commands:` (the dot-commands it answers to,
    which materializes the room's KP toolset — a wod room simply has no `sanity_check`),
    `expertise:` and `labels:`. `tests/architecture/` pins `agent/` to zero rule-system tokens.
 2. **Layer B.1 — KP skills** — **landed**: `SKILL.md` loader (`core/skills.py`),
@@ -734,7 +734,7 @@ actually shipped as, for anyone reading the code.)*
    心理学) and, since the deterministic relationship-tracks feature landed, its
    own `allowed-tools: [adjust_relationship, set_relationship,
    get_relationships]` gating the `agent.kp_tools_relationships` tool trio
-   (backed by `core.relationships`: clamped, persisted 好感/情欲 tracks folded
+   (backed by `core.relationships`: bounded, persisted 好感/情欲 tracks folded
    into the main KP prompt by `agent.prompt_builder`).
 4. **Layer B.3 — self-extension generators** — **landed**: three gated
    `generate_*` tools in `agent.forge`/`agent.kp_tools_forge`, each invisible

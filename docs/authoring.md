@@ -170,7 +170,7 @@ engine, not hidden by the client. Bounds are enforced on every write, including 
 asks for. Ids can be CJK.
 
 This is the difference between a tracker and a note: a tracker is state the engine validates,
-clamps, persists and projects. Declare the things your ending gates on.
+keeps in range, stores and filters. Declare the things your ending depends on.
 
 ### `pregens[]` — a cast players can claim
 
@@ -384,7 +384,7 @@ load coc7 : ValueError unknown rulepack: coc7
 
 If the DSL genuinely cannot express your system, `resolution: {script: resolver.js}` drops to a
 QuickJS sandbox: the engine pre-rolls the declared dice and hands values in, your script returns a
-verdict, the engine validates and clamps it. Randomness and state never leave the engine, and the
+verdict, the engine checks it and holds it in range. Randomness and state never leave the engine, and the
 trust card discloses that your pack ships a script.
 
 ---

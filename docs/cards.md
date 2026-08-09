@@ -107,7 +107,7 @@ that:
   through rules code. A card cannot pre-write an outcome ("the attack hits") into
   being — the engine rolls first, the model narrates the result.
 - **Character numbers validate.** An imported card becomes a real sheet in the
-  active rule system (CoC 7e or D&D 5e SRD), clamped and checked by the rulepack.
+  active rule system (CoC 7e or D&D 5e SRD), checked against the rulepack and held to its limits.
 - **`{{char}}` is bound at import** — a card's character identity doesn't drift.
   `{{user}}` stays dynamic (whoever the active PC is at render time).
 - **`{{time}}` / `{{date}}` are the game clock**, not the wall clock. Your
