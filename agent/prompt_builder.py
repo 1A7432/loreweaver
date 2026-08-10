@@ -91,6 +91,7 @@ from core.prompt_sections import (
 )
 from core.relationships import RelationshipManager
 from core.skills import load_skill
+from core.table_habits import HABITS_DOC_TYPE, HABITS_ID, index_lines
 from core.varspace import build_resolver
 from core.worldbook import inject_world_lore_prompt
 
@@ -120,6 +121,15 @@ class SystemPrompt:
 async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:
     """The assembled system prompt as one string — see :func:`build_system_prompt_parts`."""
     return (await build_system_prompt_parts(ctx, services)).text
+
+
+async def habit_index(services, chat_key: str) -> list[str]:
+    """The resident one-line summaries of this table's learned habits (`[]` when none)."""
+    try:
+        document = await services.documents.get(chat_key, HABITS_DOC_TYPE, HABITS_ID)
+    except Exception:  # noqa: BLE001 — a missing/broken habits doc simply contributes nothing
+        return []
+    return index_lines(document.data) if document is not None else []
 
 
 async def build_system_prompt_parts(ctx: AgentCtx, services: Services) -> SystemPrompt:
@@ -241,6 +251,15 @@ async def build_system_prompt_parts(ctx: AgentCtx, services: Services) -> System
     relationship_lines = await RelationshipManager(services.store).describe(ctx.chat_key, i18n)
     if relationship_lines:
         volatile.append(i18n.t("prompt.relationships_header") + "\n" + "\n".join(relationship_lines))
+
+    # M20 E procedural memory: how THIS table plays. INDEX ONLY — the one-line summaries
+    # ride every turn, the details do not. A habits document allowed to grow into the
+    # prompt would become a fifth memory mechanism competing with the four that work; the
+    # keeper reads the bodies on demand with `.habits`. Volatile because it is learned as
+    # the campaign runs, and keeper-side because every line describes the players.
+    habit_lines = await habit_index(services, ctx.chat_key)
+    if habit_lines:
+        volatile.append(i18n.t("prompt.table_habits") + "\n" + "\n".join(f"- {line}" for line in habit_lines))
 
     modvar_lines = await describe_modvars(services.documents, ctx.chat_key, i18n, ctx.locale)
     if modvar_lines:

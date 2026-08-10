@@ -34,6 +34,7 @@ from core.rulepacks import RulePack, all_command_words, load_rulepack
 from core.sheets import canonical_values as sheet_canonical_values
 from core.sheets import check_value, set_sheet_value, sheet_value
 from core.skills import available_skills
+from core.table_habits import HABITS_DOC_TYPE, HABITS_ID, normalize
 from gateway.audio import add_audio_item, build_audio_control, list_audio_items, resolve_audio_item, update_audio_item
 from gateway.avatar import AvatarError, set_target_avatar, set_user_avatar
 from gateway.hub import Event
@@ -196,6 +197,7 @@ _BOTLIST_LIST_WORDS = {"", "list", "ls", "show", "列表", "查看"}
 # KP-skills layer (Layer B.1, `core.skills` + `gateway.ops.get/set_enabled_skills`).
 _PHASE_AUTO_WORDS = {"auto", "自动", "自動"}
 _SAVE_LOAD_WORDS = {"load", "restore", "读档", "讀檔", "载入", "載入"}
+_HABIT_FORGET_WORDS = {"forget", "drop", "忘掉", "删除", "刪除"}
 _SKILL_STATUS_WORDS = {"status", "状态", "狀態"}
 _SKILL_ENABLE_WORDS = {"enable", "on", "启用", "啟用"}
 _SKILL_DISABLE_WORDS = {"disable", "off", "禁用", "关闭", "關閉"}
@@ -1137,6 +1139,43 @@ class CommandRouter:
         except Exception as exc:  # noqa: BLE001 — a save must report, never crash the room
             logger.warning("room save/load failed for %s", ctx.chat_key, exc_info=True)
             return ctx.i18n.t("commands.save.failed", error=str(exc))
+
+    async def cmd_habits(self, ctx: CommandCtx) -> str:
+        """`.habits [forget <text>]` — what the Scribe has learned about how this table plays.
+
+        Keeper-only, like the document itself: every line describes the players, so handing
+        it back to them would be both a metagaming leak and simply rude. Only the one-line
+        summaries stay resident in the Keeper's prompt; this is where the detail behind
+        each one lives, and where a wrong one gets deleted.
+        """
+        if not _is_keeper(ctx.raw_ctx):
+            return ctx.fail(ctx.i18n.t("commands.habits.denied"))
+        document = await ctx.services.documents.get(ctx.chat_key, HABITS_DOC_TYPE, HABITS_ID)
+        data = normalize(document.data if document else {})
+        parts = ctx.args.split(maxsplit=1)
+        if parts and parts[0].casefold() in _HABIT_FORGET_WORDS:
+            needle = (parts[1] if len(parts) > 1 else "").strip().casefold()
+            if not needle:
+                return ctx.i18n.t("commands.habits.usage")
+            kept = [entry for entry in data["habits"] if needle not in entry["summary"].casefold()]
+            dropped = [entry for entry in data["pending"] if needle not in entry["summary"].casefold()]
+            if len(kept) == len(data["habits"]) and len(dropped) == len(data["pending"]):
+                return ctx.i18n.t("commands.habits.forget_missing")
+            await ctx.services.documents.put(
+                ctx.chat_key, HABITS_DOC_TYPE, HABITS_ID, {"habits": kept, "pending": dropped}
+            )
+            return ctx.i18n.t("commands.habits.forget_done")
+        if not data["habits"] and not data["pending"]:
+            return ctx.i18n.t("commands.habits.empty")
+        lines = [
+            f"- {entry['summary']}" + (f"\n  {entry['detail']}" if entry["detail"] else "")
+            for entry in data["habits"]
+        ]
+        reply = ctx.i18n.t("commands.habits.show", items="\n".join(lines) or ctx.i18n.t("common.none"))
+        if data["pending"]:
+            watching = "\n".join(f"- {entry['summary']} ({entry['seen']}x)" for entry in data["pending"])
+            reply += ctx.i18n.t("commands.habits.pending", items=watching)
+        return reply
 
     async def cmd_preset(self, ctx: CommandCtx) -> str:
         """`.preset [list | import <path> | enable <id> | disable | show <id>]` — imported
@@ -2693,6 +2732,7 @@ class CommandRouter:
             CommandSpec("phase", self.cmd_phase, ["phase"], ["phase", "阶段", "階段"], None, "commands.help.phase"),
             CommandSpec("undo", self.cmd_undo, ["undo"], ["undo", "撤销", "撤銷"], None, "commands.help.undo"),
             CommandSpec("save", self.cmd_save, ["save"], ["save", "存档", "存檔"], None, "commands.help.save"),
+            CommandSpec("habits", self.cmd_habits, ["habits"], ["habits", "习惯", "習慣"], None, "commands.help.habits"),
             CommandSpec("panels", self.cmd_panels, ["panels"], ["panels", "模组面板"], None, "commands.help.panels"),
             CommandSpec("avatar", self.cmd_avatar, ["avatar"], ["avatar", "头像"], None, "commands.help.avatar"),
             CommandSpec(

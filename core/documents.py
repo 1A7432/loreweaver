@@ -269,6 +269,7 @@ for _name, _project_fn, _singleton in (
 # one only under TYPE_CHECKING, so there is no import cycle); registering them
 # in the same built-in table keeps `project()` the single chokepoint.
 from core import chronicle as _chronicle  # noqa: E402
+from core import table_habits as _table_habits  # noqa: E402
 
 for _name, _project_fn, _validate_fn, _singleton in (
     (_chronicle.CHRONICLE_DOC_TYPE, _chronicle.project_chronicle, _chronicle.validate_chronicle_write, None),
@@ -279,6 +280,14 @@ for _name, _project_fn, _validate_fn, _singleton in (
         _chronicle.CAMPAIGN_SUMMARY_ID,
     ),
     (_chronicle.THREAD_DOC_TYPE, _chronicle.project_thread, _chronicle.validate_thread_write, None),
+    # M20 E procedural memory: how THIS table plays. Keeper-side only — its
+    # player-grade projection is None, because every field describes the players.
+    (
+        _table_habits.HABITS_DOC_TYPE,
+        _table_habits.project_habits,
+        _table_habits.validate_habits_write,
+        _table_habits.HABITS_ID,
+    ),
 ):
     register_document_type(
         DocumentType(
