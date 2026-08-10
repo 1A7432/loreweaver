@@ -47,6 +47,7 @@ from agent.services import Services
 from agent.stage_director import BEATS
 from core.documents import KEEPER_VIEWER
 from core.modvars import MODVARS_DOC_ID, MODVARS_DOC_TYPE, adjust_modvar, set_modvar, wire_entries
+from core.table_habits import HABITS_DOC_TYPE, HABITS_ID, observe
 from infra.llm import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -80,12 +81,13 @@ _MIN_EVIDENCE_CHARS = 4
 _PROMPT = """You are the table Scribe for a TTRPG engine — a silent ledger clerk, not a storyteller.
 
 Given ONE game turn (player action + game-master reply) and the room's current trackers, output ONLY a JSON object:
-{{"ops": [{{"op": "set", "id": "<tracker id>", "value": <number>, "evidence": "<verbatim quote>"}} | {{"op": "adjust", "id": "<tracker id>", "delta": <number>, "evidence": "<verbatim quote>"}}], "whispers": ["<short keeper-side note>"], "unrolled_check": {{"skill": "<skill>", "evidence": "<verbatim quote>"}} or null, "beat": "<beat>"}}
+{{"ops": [{{"op": "set", "id": "<tracker id>", "value": <number>, "evidence": "<verbatim quote>"}} | {{"op": "adjust", "id": "<tracker id>", "delta": <number>, "evidence": "<verbatim quote>"}}], "whispers": ["<short keeper-side note>"], "unrolled_check": {{"skill": "<skill>", "evidence": "<verbatim quote>"}} or null, "habit": {{"summary": "<one line>", "detail": "<a sentence or two>"}} or null, "beat": "<beat>"}}
 
 Rules:
 - "ops" ONLY for tracker changes the narration plainly establishes as fact. "evidence" is REQUIRED: a short verbatim quote copied from the GAME-MASTER reply that establishes the tracked quantity ITSELF changed. The player's message states what they ATTEMPT, never what happened — it can never be evidence, and an op whose evidence is not an exact quote of the game-master reply is discarded.
 - You see only each tracker's id/label/range, not what earns a point. Acquiring some item is NOT evidence for an item counter unless the text explicitly identifies it as one of the things that counter counts; time passing counts on a day-tracker only when the text states the story moved to a new day. If the tracker's meaning leaves any doubt, do NOT write — whisper instead.
 - "unrolled_check": set it when this turn resolved something whose outcome was genuinely uncertain and no dice were rolled for it — name the skill it called for and quote the exact text that shows the resolution. Tools the game-master called this turn are listed below; if a dice tool is among them, this is null. A declared intention with no outcome yet, a foregone conclusion, and pure conversation are all null. You are reporting an observation for the keeper to judge, not issuing an instruction — say nothing when unsure.
+- "habit": how THIS TABLE plays, when the turn shows it — pacing they prefer, how much combat they have patience for, what kind of scene they lean into, a keeper technique that landed or fell flat. Write about the group's behaviour, not about the story: "they cut short investigation scenes to get to confrontation" is a habit, "they found the key" is not. Only when the turn actually shows it; null is the right answer most turns. Repeated observations are what make it stick, so write the same habit the same way each time you see it.
 - "whispers" (0-{max_whispers}, each <= {max_whisper_chars} chars) for anything needing the keeper's judgment: scene/clock drift vs the fiction, players stuck without progress, an earned gain no tracker captures.
 - Write whispers in the language the turn text is written in (Chinese turn -> Chinese whispers).
 - "beat" classifies this turn as a MOMENT worth staging, one of: {beats}, or "none". Use "none" unless the turn clearly is one of them — most turns are "none".
@@ -188,6 +190,23 @@ async def pop_whispers(services: Services, chat_key: str) -> list[str]:
     return [str(item)[:MAX_WHISPER_CHARS] for item in parsed if str(item).strip()][:MAX_STORED_WHISPERS]
 
 
+async def _record_habit(services: Services, ctx: AgentCtx, raw: Any) -> None:
+    """Fold one observed habit into the room's table-habits document. Never raises."""
+    if not isinstance(raw, dict):
+        return
+    summary = str(raw.get("summary") or "").strip()
+    if not summary:
+        return
+    try:
+        existing = await services.documents.get(ctx.chat_key, HABITS_DOC_TYPE, HABITS_ID)
+        data, promoted = observe(existing.data if existing else {}, summary, str(raw.get("detail") or ""))
+        await services.documents.put(ctx.chat_key, HABITS_DOC_TYPE, HABITS_ID, data)
+        if promoted:
+            logger.debug("scribe: table habit promoted for %s: %s", ctx.chat_key, summary)
+    except Exception as exc:  # noqa: BLE001 — bookkeeping must never break the table
+        logger.debug("scribe: habit note dropped: %s", exc)
+
+
 async def run_scribe(
     services: Services,
     ctx: AgentCtx,
@@ -286,6 +305,12 @@ async def run_scribe(
                 existing = []
         merged = (existing + fresh_whispers)[-MAX_STORED_WHISPERS:]
         await services.store.state_set(ctx.chat_key, WHISPERS_KEY, json.dumps(merged, ensure_ascii=False))
+
+    # M20 E procedural memory: a habit is only a habit once it recurs, and the Scribe has
+    # no cross-turn memory to count with — so the tally lives in the document's own
+    # `pending` section, and a candidate promotes at the threshold. Zero additional model
+    # calls: the Scribe already read the whole turn to do everything above.
+    await _record_habit(services, ctx, parsed.get("habit"))
 
     # 场记: a single word from a closed vocabulary, or nothing. Anything else the model
     # wrote here is discarded rather than forwarded — this field is the ONLY thing that
