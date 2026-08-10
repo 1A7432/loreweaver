@@ -1,0 +1,42 @@
+panels:
+  - id: baying-ledger
+    title: {en: The Ledger, zh: 拔营账}
+    slot: sidebar
+    audience: all
+    blocks:
+      - {kind: stat, label: {en: Day, zh: 戏内日}, value: {$var: day}}
+      - {kind: meter, label: {en: Dormancy Window, zh: 休环月窗口}, value: {$var: window_days}, min: 0, max: 150}
+      - {kind: meter, label: {en: Mobile Souls, zh: 可行者}, value: {$var: mobile_count}, min: 0, max: 800}
+      - {kind: meter, label: {en: Timber, zh: 薪材}, value: {$var: timber_stock}, min: 0, max: 24}
+      - {kind: divider}
+      - {kind: text, text: {en: "Window, souls, and timber — the whole account is here.", zh: "窗口、人心与薪材——账都在这儿。"}}
+  - id: keeper-gauges
+    title: {en: Keeper Gauges, zh: 守密人仪表}
+    slot: sidebar
+    audience: keeper
+    blocks:
+      - {kind: stat, label: {en: Truth, zh: 真相投放}, value: {$var: truth_staging}}
+      - {kind: meter, label: {en: Belt Load, zh: 环带负荷}, value: {$var: belt_load}, min: 0, max: 16}
+      - {kind: stat, label: {en: Wen, zh: 温循}, value: {$var: coalition_wen}}
+      - {kind: stat, label: {en: Jiao, zh: 焦九鲤}, value: {$var: coalition_jiao}}
+      - {kind: stat, label: {en: Zhu, zh: 竺澄}, value: {$var: coalition_zhu}}
+      - {kind: stat, label: {en: Pei, zh: 裴照}, value: {$var: coalition_pei}}
+      - {kind: divider}
+      - {kind: meter, label: {en: Stay Faction, zh: 深居派势}, value: {$var: therm_shenju}, min: 0, max: 10}
+      - {kind: meter, label: {en: Leave Faction, zh: 离城派势}, value: {$var: therm_licheng}, min: 0, max: 10}
+      - {kind: meter, label: {en: Root-Denial, zh: 否根信度}, value: {$var: therm_fougen}, min: 0, max: 10}
+      - {kind: meter, label: {en: Plan Faith, zh: 迁经信心}, value: {$var: therm_qianjing}, min: 0, max: 10}
+      - {kind: meter, label: {en: Rain Price, zh: 雨市价}, value: {$var: therm_yujia}, min: 0, max: 10}
+      - {kind: meter, label: {en: Public Heat, zh: 民情烈度}, value: {$var: therm_minqing}, min: 0, max: 10}
+      - {kind: stat, label: {en: Crossed, zh: 过环者}, value: {$var: crossed_count}}
+      - {kind: stat, label: {en: Taken, zh: 环带所收}, value: {$var: taken_count}}
+      - {kind: stat, label: {en: Stayed, zh: 留城者}, value: {$var: stayed_count}}
+  - id: rootmap
+    title: {en: Rootline Chart, zh: 根线图}
+    slot: modal
+    audience: all
+    entry: ui/rootmap/index.html
+    assets: [ui/rootmap/index.html, ui/rootmap/app.js]
+    fallback:
+      - {kind: text, text: {en: "The rootline chart is best viewed in a rich client; the keeper will read the numbers aloud.", zh: "根线图请在富客户端查看；终端下由守密人宣读读数。"}}
+      - {kind: badge, label: {en: "Six wards", zh: "六坊根线"}, tone: info}

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>根线图</title>
+<style>
+  body { margin: 0; background: #efe6d0; color: #4a3b26; font-family: serif; }
+  .wrap { padding: 12px; max-width: 560px; margin: 0 auto; }
+  h1 { font-size: 16px; margin: 0 0 8px; letter-spacing: 6px; color: #4a7a6f; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+  .tabs button { font-family: serif; font-size: 13px; letter-spacing: 2px; padding: 4px 12px;
+    border: 1px solid #6b4f2a; background: transparent; color: #4a3b26; cursor: pointer; border-radius: 3px; }
+  .tabs button.on { background: #4a7a6f; color: #efe6d0; border-color: #4a7a6f; }
+  .view { display: none; }
+  .view.on { display: block; }
+  .ward { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+  .ward .nm { width: 72px; font-size: 13px; letter-spacing: 2px; }
+  .ward .bar { height: 14px; background: #4a7a6f55; border: 1px solid #6b4f2a; flex: 1; position: relative; }
+  .ward .fill { position: absolute; left: 0; top: 0; bottom: 0; background: #4a7a6f; }
+  .ward.full .fill { background: #6b4f2a; }
+  .ward .val { width: 30px; font-size: 12px; text-align: right; }
+  .note { font-size: 12px; opacity: .65; margin-top: 10px; line-height: 1.7; }
+  svg { display: block; max-width: 100%; }
+  .accent { color: #c94f74; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>根线图</h1>
+  <div class="tabs">
+    <button data-v="wards" class="on">根线</button>
+    <button data-v="overlay">叠映</button>
+    <button data-v="survey">测绘</button>
+  </div>
+  <div id="wards" class="view on"></div>
+  <div id="overlay" class="view">
+    <svg id="oversvg" viewBox="0 0 520 260" role="img" aria-label="三年根线叠映"></svg>
+    <div class="note">丈量司三年读数叠映。六坊各一线：二百九十八年墨淡，今年墨深。</div>
+  </div>
+  <div id="survey" class="view">
+    <svg id="surveysvg" viewBox="0 0 520 260" role="img" aria-label="环林测绘"></svg>
+    <div class="note">环林测绘：历代旧驻各一圈，圈上独走者数十；二百一十八年八百人出走的那道弧，弧上八百。</div>
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+# 汐浦规则 — the module's CoC7 patch: one new skill (潮汐学), the festival-night
+# house ladder (xipu_night, selected via `.rule` after dusk on nights 2-3), and
+# the town's own madness table riding the generic table_draw subsystem.
+extends: coc7
+names: [coc7-xipu, 汐浦规则]
+set_keys: [xipu]
+defaults:
+  潮汐学: 5
+alias:
+  潮汐学: [tidology, tide lore, 观潮, 潮学]
+display:
+  en:
+    潮汐学: Tidology
+resolution:
+  variants:
+    # 节庆夜老规矩: after dusk the sea listens — the fumble band widens to 93+
+    # for the unskilled, and even masters can slip at 98-100.
+    xipu_night:
+      ranks:
+        - {id: crit, when: "roll == 1", success: true, critical: true, tier: 5}
+        - {id: fumble, when: "roll == 100", fumble: true, tier: 0}
+        - {id: extreme, when: "roll <= target && roll <= floor(raw_target / 5)", success: true, tier: 4}
+        - {id: hard, when: "roll <= target && roll <= floor(raw_target / 2)", success: true, tier: 3}
+        - {id: regular, when: "roll <= target", success: true, tier: 2}
+        - {id: fumble, when: "roll >= 93 && target < 50", fumble: true, tier: 0}
+        - {id: fumble, when: "roll >= 98", fumble: true, tier: 0}
+        - {id: fail, tier: 1}
+subsystems:
+  random_madness:
+    tables:
+      xipu:
+        display: {en: Xipu festival madness, zh: 汐浦狂乱}
+        aliases: [汐浦, xipu]
+        entries:
+          - 潮声入耳：调查员耳中潮声不退，旁人说话都像隔着一层水。
+          - 灯影追随：调查员坚信有一盏无人提的灯在身后跟着自己。
+          - 盐泪不止：调查员无端流泪，泪水尝起来是海水的咸味。
+          - 跪拜潮头：调查员不由自主面向海的方向跪下叩首。
+          - 口诵渔谚：调查员反复念诵渔谚，无法说出别的完整句子。
+          - 惧灯症：调查员无法直视任何点燃的灯火，见灯即避。
+          - 湿衣错觉：调查员坚信自己浑身湿透，不断拧干干燥的衣角。
+          - 自缚灯绳：调查员用手边的绳线缠绕自己的手腕，说是"灯官教的"。
+commands:
+  xipu: {action: make_char}
+  chaokuang: {tool: random_madness, args: {table: xipu}}

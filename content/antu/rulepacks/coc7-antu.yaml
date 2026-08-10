@@ -1,0 +1,91 @@
+# 安土规则 — the flagship module's CoC7 patch: one new tracked attribute
+# 根值 (Root, 0-100, the city's dosage ledger written on the investigator's
+# own legs) with its derived band 根值段, the rooting-madness table, and the
+# 缠夺 table for the endgame crossing. Root dosing is a keeper ledger
+# procedure (see skills/antu-keeper): the engine has no day-tick event, so
+# the SKILL.md dosing table + Scribe reconciliation carry it.
+extends: coc7
+names: [coc7-antu, 安土规则]
+set_keys: [antu]
+defaults:
+  根值: 0
+alias:
+  根值: [root, 根, 扎根值, root value]
+display:
+  en:
+    根值: Root
+    根值段: Root Band
+derived:
+  # Band ladder (《安土》全纲 §4): 清 0-14 / 闻 15-39 / 识 40-69 / 缠 70-89 / 定 90+.
+  根值段:
+    sum_ranges:
+      of: [根值]
+      ranges: [[0, 14, 清], [15, 39, 闻], [40, 69, 识], [70, 89, 缠], [90, 9999, 定]]
+      else: 定
+  根值上限: {expr: "100"}
+st_show:
+  # List-valued key: extends replaces lists wholesale, so the base top row is
+  # re-declared in full with 根值/根值段 appended.
+  top: [力量, 敏捷, 体质, 体型, 外貌, 智力, 意志, 教育, 幸运, DB, 体格, 移动力, 理智, 生命值, 魔法值, 护甲, 根值, 根值段]
+subsystems:
+  sanity_check:
+    # SAN 倒置的机制化（模组侧声明，引擎零特化）：植物性恐怖（keeper 传 tag
+    # "plant"）且根值达【识】（≥40）者，本次损失封顶为 0——安适落账由引擎执行。
+    loss_ceiling: {when: 'tag == "plant" && stat_data.根值 >= 40', value: 0}
+  random_madness:
+    tables:
+      antu:
+        display: {en: Antu rooting madness, zh: 安土狂乱}
+        aliases: [安土, antu, 扎根]
+        entries:
+          - 向光性：调查员不自觉地追随光源与日照移动脚步，被人拉住才惊觉。
+          - 年轮计数：调查员不停地数自己的脉搏，声称在数"今年第几圈"。
+          - 扎根错觉：调查员坚信脚底生根，拒绝离开所站之处，脱鞋查看后仍不肯走。
+          - 花信风：调查员反复嗅自己的手腕，说闻到花粉的甜味，要求别人也闻。
+          - 节令失序：调查员坚称现在是春天，开始收拾过冬的衣物准备"播种"。
+          - 木僵：调查员保持一个姿势长时间不动，目光安详，问话以月相作答。
+          - 藤缠妄想：调查员不断拍打小腿与脚踝，说有东西在夜里碰过那里。
+          - 颂词倒诵：调查员把《安土颂》从末字向前倒着念，念到首节就停住不肯继续。
+  chanto:
+    template: table_draw
+    default: chanduo
+    display: {en: The Belt Takes, zh: 缠夺}
+    tables:
+      chanduo:
+        display: {en: Entanglement naming, zh: 缠夺点名}
+        aliases: [缠夺, chanduo]
+        entries:
+          - 环带卷住队尾：落在最后的一队脚下一沉——根值最高者先被点名，须旁人当机立断。
+          - 旧账认人：一株人面树微微侧转，队中有人被唤了乳名。答话者险被留步。
+          - 铃哑：火巷一侧的界铃同时哑了三息；这三息里板道尽头的火把矮了半尺。
+          - 夜根上板：根须沿板缝追上板道，前锋不得不烧掉一段刚铺下的板。
+          - 驮畜惊散：牲口不肯踏过某段板道，宁可绕进沙里——驮架须改人背。
+          - 花信：一阵逆风把花粉送进纵队，全队列同时眼眶发酸，脚步慢了半拍。
+          - 认亲：环林中一株新树与队中某户眉眼相像，那户人家当场面如死灰。
+          - 板下空响：一段板道下传来空洞的水声，像是根网在板底让出了一条路——又像在引路。
+          - 回头客：有人看见环林里走出"先走一步的熟人"招手，须有人喝破才没有离队。
+          - 静：所有声音同时抽干了一瞬。这一瞬里没人敢回头点数。
+commands:
+  antu: {action: make_char}
+  antukuang: {tool: random_madness, args: {table: antu}}
+  chan: {tool: chanto}
+  chanduo: {tool: chanto}
+expertise:
+  en: "# Antu rules (CoC7 patch) — Keeper\nEvery investigator carries 根值 (Root, 0-100): the city's dosage ledger. Bands: 清 0-14 / 闻 15-39 (tug at the boundary stones) / 识 40-69 (solo walkers are always taken) / 缠 70-89 (wooden shins, night-roots) / 定 90+ (rooting begins). Dosing is a daily ledger procedure in the antu-keeper skill — apply it every dawn, no exceptions. SAN inversion: against PLANT horror, pass tag \"plant\" — characters at 识 or above have the loss capped at 0 by the engine; you simply narrate the calm. Comfort IS the damage. Non-plant horror: no tag, check as normal. Rooting madness: use the antu table (.antukuang). Endgame: the crossing runs on the baying ladder and the chanto table (.chan) — see the skill."
+  zh: "# 安土规则（CoC7 补丁）——守秘人\n每名调查员携带【根值】（0-100）：这座城把剂量记在当事人自己腿上。分段：清 0-14／闻 15-39（过界石有拽感）／识 40-69（独走必被缠）／缠 70-89（木胫、夜根）／定 90+（立定进程）。日课剂量按 antu-keeper 技能的落账表执行，每日黎明落账，无例外。SAN 倒置：面对植物性恐怖时传 tag \"plant\"——根值达【识】的角色由引擎把损失封顶为 0，你只管把那份平静如实叙述出来；舒适即伤害。非植物性恐怖不传 tag，照常掷。疯狂用安土狂乱表（.antukuang）。终幕过带用拔营梯子与缠夺点名表（.chan），程序见技能。"
+sheet:
+  attr_keys:
+    根值: ROOT
+    根值段: ROOTBAND
+    根值上限: ROOTMAX
+  attributes:
+    ROOT: 0
+  derived_attrs:
+    ROOTBAND: 根值段
+    ROOTMAX: 根值上限
+  resources:
+    # List-valued key: wholesale replace — base bars re-declared + the root bar.
+    - {id: hp, label: HP, value: HP, max: HPMAX}
+    - {id: san, label: SAN, value: SAN, max: SANMAX}
+    - {id: mp, label: MP, value: MP, max: MPMAX}
+    - {id: root, label: 根值, value: ROOT, max: ROOTMAX}

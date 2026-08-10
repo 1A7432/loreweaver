@@ -1,0 +1,44 @@
+id: xipu-songdeng
+version: 1.0.0
+name:
+  en: "Xipu: The Lantern Sending"
+  zh: 汐浦送灯
+description:
+  en: A 1925 coastal-town mystery for the Tide-Greeting Festival — three days, nine lanterns, one chosen guest.
+  zh: 一九二五年浙东渔镇迎潮节疑案——三日祭，九盏灯，一位中选的客人。
+authors: [loreweaver-playtest]
+license: MIT
+engine:
+  protocol: "2.0"
+contents:
+  rulepacks: [rulepacks/chaozhan.yaml, rulepacks/coc7-xipu.yaml]
+  cards: [cards/shipu.lorecard.json, cards/chaomai-st.json]
+  lorebooks: [lorebooks/yuyan.json]
+  skills: [skills/yingchao-zhuchi]
+  panels: [ui/panels.yaml]
+  presentation: [ui/presentation.yaml]
+assets:
+  - path: assets/chao-yong.mp3
+    title: 潮涌 (festival theme)
+    tags: [bgm]
+  - path: assets/ye-wu.mp3
+    title: 夜雾港湾 (night ambience)
+    tags: [ambience]
+  - path: assets/jing-xian.mp3
+    title: 惊弦 (sanity sting)
+    tags: [sfx]
+  - path: assets/gu-wantang.png
+    title: 顾晚棠 avatar
+    tags: [avatar]
+  - path: assets/bai-yusheng.png
+    title: 白榆生 avatar
+    tags: [avatar]
+  - path: assets/chen-jiuli.png
+    title: 陈九鲤 avatar
+    tags: [avatar]
+  - path: ui/dengzhen/index.html
+    title: 灯阵图 panel entry
+  - path: ui/dengzhen/app.js
+    title: 灯阵图 panel logic
+  - path: ui/dengzhen/canlye.png
+    title: 灯谱残页 (handout)

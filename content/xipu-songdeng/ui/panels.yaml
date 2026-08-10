@@ -1,0 +1,40 @@
+panels:
+  - id: jieqing-richeng
+    title: {en: Festival Schedule, zh: 节庆日程}
+    slot: sidebar
+    audience: all
+    blocks:
+      - {kind: stat, label: {en: Festival Day, zh: 祭典日}, value: {$var: 祭典日}}
+      - {kind: meter, label: {en: Tokens, zh: 信物}, value: {$var: 信物}, min: 0, max: 3}
+      - {kind: divider}
+      - {kind: text, text: {en: "Day 1 greet · Day 2 air · Day 3 send", zh: "初一迎灯 · 初二曝灯 · 初三送灯"}}
+      # M19 item 7: a VALUE gate, not just "the variable exists". The送灯 warning is a
+      # third-day thing; before that it is noise, and worse, a hint too early.
+      - {kind: text, style: warning, visible_when: "祭典日 >= 3",
+         text: {en: "Tonight the lanterns go out on the tide. What you have counted is what you have.",
+                zh: "今夜送灯。数到的就是数到的。"}}
+  - id: chaowei
+    title: {en: Tide Mark, zh: 潮位}
+    slot: sidebar
+    audience: all
+    blocks:
+      - {kind: meter, label: {en: Tide, zh: 潮位}, value: {$var: mvu.潮位}, min: 0, max: 9}
+  - id: shouzhong-wu
+    title: {en: In Hand, zh: 手边物}
+    slot: tray
+    audience: all
+    blocks:
+      # M19 item 6: a handout is one `image` block, not a hand-written tier-2 page.
+      - {kind: image, src: ui/dengzhen/canlye.png,
+         caption: {en: "Lantern manual, torn page", zh: 灯谱残页},
+         alt: {en: "A brush-drawn array of nine lanterns, one of them unlit"}}
+      - {kind: text, style: quote, text: {en: "Count them yourself.", zh: 自己数一数。}}
+  - id: dengzhen
+    title: {en: Lantern Array, zh: 灯阵图}
+    slot: modal
+    audience: all
+    entry: ui/dengzhen/index.html
+    assets: [ui/dengzhen/index.html, ui/dengzhen/app.js, ui/dengzhen/canlye.png]
+    fallback:
+      - {kind: text, text: {en: "The lantern array chart is best viewed in a rich client; the keeper will describe it.", zh: "灯阵图请在富客户端查看；终端下由守密人描述。"}}
+      - {kind: badge, label: {en: "Nine lanterns", zh: "九灯之阵"}, tone: info}

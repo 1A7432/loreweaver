@@ -1,0 +1,45 @@
+# 潮占 — the lantern-diviner's tide oracle: a standalone success-counting d10
+# pool system, pure pack data end to end (the module's ritual scenes run on it).
+# Deleting this file removes the system.
+names: [chaozhan, 潮占]
+set_keys: [chaozhan]
+defaults: {}
+resolution:
+  version: 1
+  roll: "{deng}d10>=7"
+  target: none
+  compare: ">="
+  params:
+    deng: {min: 1, max: 9, default: 3}
+  ranks:
+    - {id: nichao, when: "successes == 0 && ones >= 2", fumble: true, tier: 0}
+    - {id: gongming, when: "successes >= 3 && ones == 0", success: true, critical: true, tier: 3}
+    - {id: yingchao, when: "successes >= 1", success: true, tier: 2}
+    - {id: mochao, tier: 1}
+  margin: successes
+  variants:
+    # 密祭 — the inner-rite grading used on the third night: every lit "one"
+    # poisons the reading, and true resonance needs a clean four.
+    miji:
+      ranks:
+        - {id: nichao, when: "ones >= 1 && ones >= successes", fumble: true, tier: 0}
+        - {id: gongming, when: "successes >= 4 && ones == 0", success: true, critical: true, tier: 3}
+        - {id: yingchao, when: "successes >= 2", success: true, tier: 2}
+        - {id: mochao, tier: 1}
+labels:
+  en:
+    nichao: [Adverse Tide]
+    gongming: [Resonance]
+    yingchao: {display: Favorable Tide, markers: []}
+    mochao: {display: Silent Tide, markers: []}
+  zh:
+    nichao: [逆潮]
+    gongming: [共鸣]
+    yingchao: {display: 应潮, markers: []}
+    mochao: {display: 默潮, markers: []}
+commands:
+  zhan: {action: check}
+  chaozhan: {action: check}
+expertise:
+  en: "# Tide Divination (潮占)\nThe lantern-diviner reads the festival tide: light `deng` lanterns (1-9), cast, and count the waters that answer. Resonance is rare and holy; an adverse tide is an omen the town takes seriously. Narrate readings as ritual, not dice."
+  zh: "# 潮占\n灯官问潮：点起一至九盏灯掷占，数应答之水。共鸣稀有而神圣；逆潮是全镇当真的凶兆。把占算当仪式叙述，而不是当骰子。"

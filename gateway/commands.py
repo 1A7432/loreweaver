@@ -14,6 +14,7 @@ from typing import Any
 from agent.context import AgentCtx
 from agent.kp_tools_mechanics import InitiativeTools, roll_initiative
 from agent.services import Services, room_rule_variant, set_room_rule_variant
+from agent.tool_phase import PHASES, is_pinned, room_phase, set_room_phase
 from core.battle_recording import record_check, record_dice_roll
 from core.char_from_persona import build_sheet_from_description
 from core.character_manager import (
@@ -189,6 +190,7 @@ _BOTLIST_LIST_WORDS = {"", "list", "ls", "show", "列表", "查看"}
 
 # `.skill` subcommand vocabularies (EN + a couple of CN synonyms) -- the per-room
 # KP-skills layer (Layer B.1, `core.skills` + `gateway.ops.get/set_enabled_skills`).
+_PHASE_AUTO_WORDS = {"auto", "自动", "自動"}
 _SKILL_STATUS_WORDS = {"status", "状态", "狀態"}
 _SKILL_ENABLE_WORDS = {"enable", "on", "启用", "啟用"}
 _SKILL_DISABLE_WORDS = {"disable", "off", "禁用", "关闭", "關閉"}
@@ -991,6 +993,36 @@ class CommandRouter:
         if enable:
             return ctx.i18n.t("commands.skill.enable_done", id=skill_id)
         return ctx.i18n.t("commands.skill.disable_done", id=skill_id)
+
+    async def cmd_phase(self, ctx: CommandCtx) -> str:
+        """`.phase [prep | play | auto]` — which half of the Keeper's toolset this room carries.
+
+        `play` drops the bulk/low-frequency tools (module-grade NPC authoring, imports,
+        exports, variable definition) so the model's attention stays on the per-turn set;
+        `prep` carries everything. Improvisation never needs the switch — `sketch_npc` and
+        the rest of the improvisational set live in both. Bare `.phase` reports; `auto`
+        clears the pin and lets the room's own lifecycle decide again. Reporting is open;
+        pinning reshapes what the Keeper can do, so it is keeper-only.
+        """
+        wanted = ctx.args.strip().casefold()
+        if not wanted:
+            phase = await room_phase(ctx.services.store, ctx.chat_key)
+            pinned = await is_pinned(ctx.services.store, ctx.chat_key)
+            return ctx.i18n.t(
+                "commands.phase.status",
+                phase=ctx.i18n.t(f"commands.phase.name.{phase}"),
+                source=ctx.i18n.t("commands.phase.pinned" if pinned else "commands.phase.automatic"),
+            )
+        if not _is_keeper(ctx.raw_ctx):
+            return ctx.fail(ctx.i18n.t("commands.phase.denied"))
+        if wanted in _PHASE_AUTO_WORDS:
+            await set_room_phase(ctx.services.store, ctx.chat_key, None)
+            phase = await room_phase(ctx.services.store, ctx.chat_key)
+            return ctx.i18n.t("commands.phase.auto_done", phase=ctx.i18n.t(f"commands.phase.name.{phase}"))
+        if wanted not in PHASES:
+            return ctx.i18n.t("commands.phase.usage")
+        await set_room_phase(ctx.services.store, ctx.chat_key, wanted)
+        return ctx.i18n.t("commands.phase.set_done", phase=ctx.i18n.t(f"commands.phase.name.{wanted}"))
 
     async def cmd_preset(self, ctx: CommandCtx) -> str:
         """`.preset [list | import <path> | enable <id> | disable | show <id>]` — imported
@@ -2544,6 +2576,7 @@ class CommandRouter:
             CommandSpec("draw", self.cmd_draw, ["draw"], ["draw", "抽牌"], None, "commands.help.draw"),
             CommandSpec("bot", self.cmd_bot_toggle, ["bot"], ["bot"], None, "commands.help.bot"),
             CommandSpec("skill", self.cmd_skill, ["skill"], ["skill"], None, "commands.help.skill"),
+            CommandSpec("phase", self.cmd_phase, ["phase"], ["phase", "阶段", "階段"], None, "commands.help.phase"),
             CommandSpec("panels", self.cmd_panels, ["panels"], ["panels", "模组面板"], None, "commands.help.panels"),
             CommandSpec("avatar", self.cmd_avatar, ["avatar"], ["avatar", "头像"], None, "commands.help.avatar"),
             CommandSpec(

@@ -114,7 +114,7 @@ class NpcTools:
     def _i18n(self, ctx: AgentCtx) -> I18n:
         return self._services.i18n.with_locale(ctx.locale)
 
-    @tool
+    @tool(prep_only=True)
     async def create_npc(
         self,
         ctx: AgentCtx,
@@ -166,6 +166,32 @@ class NpcTools:
             return i18n.t("npc.tools.create.failed", error=str(exc))
 
     @tool
+    async def sketch_npc(self, ctx: AgentCtx, name: str, one_line: str) -> str:
+        """Improvise an NPC on the spot in one line, so you can immediately speak_as_npc them.
+        For the shopkeeper the players just walked up to. Use create_npc instead when you are
+        writing a module-grade character with secrets and knowledge.
+
+        Args:
+            name: The NPC's name.
+            one_line: Who they are in one line -- voice, manner, what they want.
+
+        Returns:
+            Confirmation naming the sketched NPC and its resolved id.
+        """
+        # The light counterpart to `create_npc` (M20 B). It is not a convenience: without a
+        # record `speak_as_npc` returns not_found, and no record means no knowledge-scoped
+        # actor -- so an improvised NPC's private knowledge would have no structural home
+        # at all (iron rule #3). Facts they learn later arrive through `npc_learns`.
+        i18n = self._i18n(ctx)
+        try:
+            npc = await npc_records.create_npc(
+                self._services.documents, ctx.chat_key, name, persona=one_line, major=True
+            )
+            return i18n.t("npc.tools.create.done", name=npc.name, id=npc.id)
+        except Exception as exc:
+            return i18n.t("npc.tools.create.failed", error=str(exc))
+
+    @tool(prep_only=True)
     async def import_module_npcs(self, ctx: AgentCtx) -> str:
         """Seed NPC sub-actors from the module's already-analyzed keeper pool (one per npcs[] entry).
         NPCs whose name already exists in this room are left untouched.
@@ -218,7 +244,7 @@ class NpcTools:
         except Exception as exc:
             return i18n.t("npc.tools.import.failed", error=str(exc))
 
-    @tool
+    @tool(prep_only=True)
     async def set_npc_knowledge(self, ctx: AgentCtx, npc: str, facts: str, mode: str = "add") -> str:
         """Set or append what an NPC currently knows -- their whole epistemic world; they cannot
         reveal or act on anything outside this list.
@@ -300,7 +326,7 @@ class NpcTools:
         except Exception as exc:
             return i18n.t("npc.tools.move.failed", error=str(exc))
 
-    @tool
+    @tool(prep_only=True)
     async def update_npc(self, ctx: AgentCtx, npc: str, field: str, value: str) -> str:
         """Update a single field on an NPC record: persona/style/public_description/secret_agenda/
         disposition/location/status/stat_char/major. For knowledge, use set_npc_knowledge/npc_learns

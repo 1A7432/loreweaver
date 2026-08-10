@@ -1,0 +1,53 @@
+id: antu
+version: 0.1.0
+name:
+  en: "Antu: The City That Stayed"
+  zh: 安土
+description:
+  en: An oasis city-state founded on a seventy-year migration vow has not moved in three hundred years. A team of outside credit assessors arrives to underwrite a flawless resettlement plan — and finds its own legs entered in the ledger.
+  zh: 一座靠"每七十年整城迁徙"立国的绿洲城邦，三百年没有迁过一次。一队外埠信用稽查人进城评估一份完美的《大迁经》，一层层挖进旧账，最后发现自己的双腿也开始算在账上。
+authors: [loreweaver-flagship]
+license: MIT
+engine:
+  protocol: "2.0"
+contents:
+  rulepacks: [rulepacks/coc7-antu.yaml, rulepacks/baying.yaml]
+  cards: [cards/antu.lorecard.json]
+  lorebooks: [lorebooks/cihui.json, lorebooks/minyao.json]
+  skills: [skills/antu-keeper]
+  panels: [ui/panels.yaml]
+assets:
+  - path: ui/rootmap/index.html
+    title: 根线图 panel entry
+  - path: ui/rootmap/app.js
+    title: 根线图 panel logic
+# M19 presentation reservation (《安土》全纲 §10) — INERT today: the loader
+# ignores unknown top-level keys, and M19's Director/slot formats co-develop
+# with this pack as their first consumer. Until then these slots are a build
+# manifest only; runtime beats ride tier-1 ui blocks + the rootmap panel.
+presentation:
+  style:
+    palette: [沙白, 铜绿, 木褐]
+    accent: 花粉红  # the only saturated color in the module = the fear color
+    texture: 矿彩长卷
+    bans: [写实血污, 任何近代物]
+  portrait_slots:  # ◇ in the outline; ref-mandatory, 宁缺毋滥
+    - peizhao        # 裴照
+    - wenxun         # 温循
+    - wen-laofuren   # 温老夫人（院中林）
+    - laokuai        # 老蒯
+    - jiao-jiuli     # 焦九鲤
+    - zhucheng       # 竺澄
+    - atong          # 阿橦
+    - ganchi-print   # 甘迟（公审版画体）
+    - shengjie       # 圣街
+    - huanlin-pano   # 环林全景
+    - yangban-jiugong # 样板九宫
+    - jieshi-bell    # 界石与铃
+    - wall-overlook  # 城墙远眺
+    - port-bookhall  # 港口书场
+  audio_layers:
+    city: 市声与诵词
+    belt: 风与界铃
+    rootline: 减法静默  # 根线过处，声轨抽干——"安静"作为音效
+  beat_slots: [title_card×3, 丈量日 clipping, 画像组 image_card, 丈量图 map_pin 叠映, 终幕纵队 letter]

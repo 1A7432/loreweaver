@@ -1,0 +1,50 @@
+# 《汐浦送灯》演出资料包 (M19 presentation kit)
+#
+# The creative brief the Stage Director works from. It never sees keeper material —
+# only this file, the player-visible stream, and the room's exposed trackers — so
+# everything written here is safe to be inferred from on a player's screen.
+version: 1
+
+# 允许生成：本模组的人物已备定妆图，导演可在节拍上补画。
+# （改成 pack_only 即为「宁缺毋滥」的作者否决——只用包内美术。）
+generation: allow
+
+style:
+  keywords:
+    zh: "水墨淡彩, 靛青与赭石, 一九二五年浙东渔镇, 湿冷海雾, 纸本质感"
+    en: "ink wash with muted color, indigo and ochre, 1925 coastal Zhejiang fishing town, damp sea fog, paper grain"
+  banned:
+    - text overlays
+    - modern clothing
+    - photographic realism
+    - visible light sources beyond lanterns
+
+subjects:
+  # 定妆图已随包发布（assets/*.png），因此这三位可以出图。
+  - id: gu-wantang
+    kind: npc
+    name: {zh: 顾晚棠, en: Gu Wantang}
+    ref: assets/gu-wantang.png
+    prompt: "a woman in her thirties, dark plain jacket over a pale collar, hair damp, standing very still"
+  - id: bai-yusheng
+    kind: npc
+    name: {zh: 白榆生, en: Bai Yusheng}
+    ref: assets/bai-yusheng.png
+    prompt: "a slight young scholar in a worn long gown, ink-stained fingers, glasses fogged by sea air"
+  - id: chen-jiuli
+    kind: npc
+    name: {zh: 陈九鲤, en: Chen Jiuli}
+    ref: assets/chen-jiuli.png
+    prompt: "a weathered boatman past fifty, oilskin cape, one hand always on a mooring rope"
+  # 场景与器物尚无定妆图：可以在字幕里点名，但导演永远不会给它们出图。
+  - id: shipu
+    kind: location
+    name: {zh: 石埠, en: The stone quay}
+  - id: zhu-deng
+    kind: item
+    name: {zh: 主灯, en: The head lantern}
+
+audio:
+  - {id: chao-yong, layer: bgm, asset: assets/chao-yong.mp3, title: 潮涌}
+  - {id: ye-wu, layer: ambience, asset: assets/ye-wu.mp3, title: 夜雾港湾}
+  - {id: jing-xian, layer: sfx, asset: assets/jing-xian.mp3, title: 惊弦}

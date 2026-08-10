@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>灯阵图</title>
+<style>
+  body { margin: 0; background: #0c1420; color: #e8dcc0; font-family: serif; }
+  .wrap { padding: 12px; }
+  h1 { font-size: 16px; margin: 0 0 8px; letter-spacing: 4px; }
+  #array { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; max-width: 360px; }
+  .lantern { border: 1px solid #5a4a2a; border-radius: 8px; padding: 10px; text-align: center; opacity: .45; }
+  .lantern.lit { opacity: 1; background: #2a1f0c; box-shadow: 0 0 12px #c9963c66; }
+  .lantern .num { font-size: 20px; }
+  img.canlye { max-width: 100%; margin-top: 10px; border: 1px solid #5a4a2a; }
+  .note { font-size: 12px; opacity: .7; margin-top: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>灯阵图</h1>
+  <div id="array"></div>
+  <img class="canlye" src="canlye.png" alt="灯谱残页">
+  <div class="note">潮纹逆旋者，主灯所指。</div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

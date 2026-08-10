@@ -151,7 +151,7 @@ class CharcardTools:
     def _i18n(self, ctx: AgentCtx) -> I18n:
         return self._services.i18n.with_locale(ctx.locale)
 
-    @tool
+    @tool(prep_only=True)
     async def import_character(self, ctx: AgentCtx, file_path: str, system: str = "", as_: str = "pc", name: str = "") -> str:
         """Import a SillyTavern character card and drop it into the adventure with an auto-generated,
         rule-legal sheet -- as the acting player's PC, or as an AI player companion. Any lore in the
@@ -227,7 +227,7 @@ class CharcardTools:
         except Exception as exc:
             return i18n.t("charcard.tools.import.failed", error=str(exc))
 
-    @tool
+    @tool(prep_only=True)
     async def preview_card(self, ctx: AgentCtx, file_path: str) -> str:
         """Preview a SillyTavern character card WITHOUT importing it: show its fields and how many
         lore entries it carries, so you can confirm before creating a sheet.

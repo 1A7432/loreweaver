@@ -1,0 +1,48 @@
+# 拔营 — the endgame crossing: a standalone success-counting d10 pool for the
+# column's march through the root belt, pure pack data end to end. One roll per
+# march hour: `duan` = column segments committed this hour (one per hundred
+# souls, cap 8, minus one per un-planked li). Successes accumulate into
+# crossed_count; every natural 1 is a 缠夺 naming (.chan) and +1 belt_load.
+# Deleting this file removes the system.
+names: [baying, 拔营]
+set_keys: [baying]
+defaults: {}
+resolution:
+  version: 1
+  roll: "{duan}d10>=6"
+  target: none
+  compare: ">="
+  params:
+    duan: {min: 1, max: 8, default: 3}
+  ranks:
+    - {id: juekou, when: "successes == 0 && ones >= 2", fumble: true, tier: 0}
+    - {id: qisu, when: "successes >= 4 && ones == 0", success: true, critical: true, tier: 3}
+    - {id: puxing, when: "successes >= 1 && ones <= 1", success: true, tier: 2}
+    - {id: chanwo, tier: 1}
+  margin: successes
+  variants:
+    # 火巷 — the night half of the crossing, torches relayed down the planked
+    # lane: every lit "one" poisons the hour, and clean passage needs two.
+    huoxiang:
+      ranks:
+        - {id: juekou, when: "ones >= 1 && ones >= successes", fumble: true, tier: 0}
+        - {id: qisu, when: "successes >= 4 && ones == 0", success: true, critical: true, tier: 3}
+        - {id: puxing, when: "successes >= 2 && ones == 0", success: true, tier: 2}
+        - {id: chanwo, tier: 1}
+labels:
+  en:
+    juekou: [Breach]
+    qisu: [Clean March]
+    puxing: {display: Planked Passage, markers: []}
+    chanwo: {display: Snagged, markers: []}
+  zh:
+    juekou: [决口]
+    qisu: [齐速]
+    puxing: {display: 铺行, markers: []}
+    chanwo: {display: 缠窝, markers: []}
+commands:
+  baying: {action: check}
+  ba: {action: check}
+expertise:
+  en: "# The Crossing (拔营)\nOne roll per march hour: `duan` segments (mobile souls / 100, cap 8, -1 per un-planked li) cast d10s, 6+ answers. Breach = the column tears; Clean March = a full hour at stride; Planked Passage = forward with a cost; Snagged = the belt held more than it gave. Read each hour as logistics, not heroics — loading order arguments, torch relays, the count nobody dares to take."
+  zh: "# 拔营\n每个行军时辰一掷：段数（可行者每百人为一段，上限八，每缺铺一里程减一）掷 d10，6 及以上为应答。决口＝队列被撕开；齐速＝整整一个时辰无人掉队；铺行＝前进但有代价；缠窝＝环带留下的比放行的多。把每个时辰当后勤叙述，不当武戏——装车顺序的争执、火把的接力、没人敢点的那次数。"
