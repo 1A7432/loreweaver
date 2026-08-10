@@ -110,7 +110,7 @@ class RelationshipTools:
         except Exception as exc:
             return i18n.t("relationships.tools.failed", error=str(exc))
 
-    @tool(gated=True)
+    @tool(gated=True, read_only=True)
     async def get_relationships(self, ctx: AgentCtx, entity: str = "") -> str:
         """Read back current deterministic relationship tracks, optionally filtered to one entity.
         This is the read-on-demand path (the KP's system prompt already shows the current state

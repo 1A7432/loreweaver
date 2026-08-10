@@ -392,6 +392,7 @@ async def run_kp_turn(
                     unlocked,
                     phase=phase,
                     room_pack=room_pack,
+                    hook_engine=hook_engine,
                 )
             except (asyncio.CancelledError, Exception):
                 _clear_llm_continuation(services, messages)
@@ -422,6 +423,7 @@ async def run_kp_turn(
             phase=phase,
             room_pack=room_pack,
             subsystem_tools=subsystem_tools,
+            hook_engine=hook_engine,
             temperature=services.settings.llm.temperature,
         )
 
@@ -916,6 +918,7 @@ async def _dispatch_and_record(
     *,
     phase: str | None = None,
     room_pack: RulePack | None = None,
+    hook_engine=None,
 ) -> None:
     """Dispatch one assistant round's tool calls, feeding results back into `conversation` + `tool_trace`.
 
@@ -923,10 +926,27 @@ async def _dispatch_and_record(
     identically. Mutates `conversation` and `tool_trace` in place. `unlocked` (Layer B.2 --
     see `Toolset.dispatch`) is the room's set of unlocked gated-tool names; `None`/empty
     means no gated tool is callable.
+
+    Calls in one round run CONCURRENTLY when every one of them is flagged read-only, and
+    strictly serially otherwise. The flag has to be explicit (`@tool(read_only=True)`): a
+    tool's signature says nothing about whether it writes, and two writers racing on the
+    same document is a lost update, not a speedup. `speak_as_npc`/`companion_act` contain
+    nested model calls and are never read-only, so they stay serial by construction.
     """
     for call in result.tool_calls:
         call.arguments = _normalize_tool_arguments(call.name, call.arguments)
     conversation.append(_assistant_tool_call_message(result))
+    if len(result.tool_calls) > 1 and all(toolset.is_read_only(call.name) for call in result.tool_calls):
+        results = await asyncio.gather(
+            *(
+                _dispatch_one(toolset, ctx, services, call, tool_trace, unlocked, phase, room_pack, hook_engine)
+                for call in result.tool_calls
+            )
+        )
+        for call, (tool_result, suppressed) in zip(result.tool_calls, results, strict=True):
+            _record_call(toolset, ctx, call, tool_result, suppressed, conversation, tool_trace)
+        _move_in_turn_breakpoint(conversation)
+        return
     for call in result.tool_calls:
         duplicate_initiative_next = (
             call.name == "initiative_tracker"
@@ -963,27 +983,99 @@ async def _dispatch_and_record(
             tool_result = t("kp_tools.know.session.event_duplicate", locale=ctx.locale)
             suppressed = True
         else:
-            tool_result = (
-                await dispatch_subsystem(services, ctx, room_pack, call.name, call.arguments)
-                if room_pack is not None
-                else None
+            tool_result, suppressed = await _dispatch_one(
+                toolset, ctx, services, call, tool_trace, unlocked, phase, room_pack, hook_engine
             )
-            if tool_result is None:
-                tool_result = await toolset.dispatch(call.name, ctx, call.arguments, unlocked, phase=phase)
-        trace_entry = {
-            "name": call.name,
-            "arguments": call.arguments,
-            "keeper_only": toolset.is_keeper_only(call.name),
-            "result": tool_result,
-        }
-        if suppressed:
-            trace_entry["suppressed"] = True
-        dice_payloads = ctx.consume_dice()
-        if dice_payloads:
-            trace_entry["dice_payloads"] = dice_payloads
-        tool_trace.append(trace_entry)
-        conversation.append({"role": "tool", "tool_call_id": call.id, "content": tool_result})
+        _record_call(toolset, ctx, call, tool_result, suppressed, conversation, tool_trace)
     _move_in_turn_breakpoint(conversation)
+
+
+async def _dispatch_one(
+    toolset: Toolset,
+    ctx: AgentCtx,
+    services: Services,
+    call,
+    tool_trace: list[dict],
+    unlocked: set[str] | None,
+    phase: str | None,
+    room_pack: RulePack | None,
+    hook_engine,
+) -> tuple[str, bool]:
+    """Run one tool call through the hook veto, then the pack subsystems, then the toolset."""
+    denial = _hook_tool_veto(hook_engine, ctx, call)
+    if denial is not None:
+        return denial, True
+    tool_result = (
+        await dispatch_subsystem(services, ctx, room_pack, call.name, call.arguments)
+        if room_pack is not None
+        else None
+    )
+    if tool_result is None:
+        tool_result = await toolset.dispatch(call.name, ctx, call.arguments, unlocked, phase=phase)
+    return tool_result, False
+
+
+def _hook_tool_veto(hook_engine, ctx: AgentCtx, call) -> str | None:
+    """A hook's reason for refusing this call, or None to allow it.
+
+    FAIL OPEN in every direction: no engine, no handler, a thrown handler, a QuickJS time
+    limit — all of them allow. Every hook failure is internally harmless today (a broken
+    handler loses its effects and the turn continues), and that property has to survive
+    contact with the critical path: a hook that cannot run does not get to stop the game.
+    The refusal itself reuses the same block-with-reason shape the end-of-turn checks use,
+    so there is one mechanism for "the engine said no, here is why", not two.
+    """
+    if hook_engine is None:
+        return None
+    try:
+        outcome = hook_engine.fire("tool_use", {"tool": call.name, "arguments": call.arguments or {}})
+    except Exception:  # noqa: BLE001 — see docstring
+        logger.debug("tool_use hook dispatch failed; allowing the call", exc_info=True)
+        return None
+    if not outcome.deny:
+        return None
+    logger.info("hook denied tool %s: %s", call.name, outcome.deny)
+    return t("loop.tool_denied_by_hook", locale=ctx.locale, name=call.name, reason=outcome.deny)
+
+
+def _record_call(
+    toolset: Toolset,
+    ctx: AgentCtx,
+    call,
+    tool_result: str,
+    suppressed: bool,
+    conversation: list[dict],
+    tool_trace: list[dict],
+) -> None:
+    """Append one dispatched call to the trace and the conversation."""
+    tool_result = _capped_tool_result(tool_result, ctx.locale)
+    trace_entry = {
+        "name": call.name,
+        "arguments": call.arguments,
+        "keeper_only": toolset.is_keeper_only(call.name),
+        "result": tool_result,
+    }
+    if suppressed:
+        trace_entry["suppressed"] = True
+    dice_payloads = ctx.consume_dice()
+    if dice_payloads:
+        trace_entry["dice_payloads"] = dice_payloads
+    tool_trace.append(trace_entry)
+    conversation.append({"role": "tool", "tool_call_id": call.id, "content": tool_result})
+
+
+# One tool result may not dominate the context. A knowledge/worldbook return can be
+# arbitrarily large, and it is fed back verbatim into a conversation that is then replayed
+# for every remaining round of the turn. The cut is announced rather than silent: a model
+# that cannot tell it was truncated will happily answer from half a document.
+MAX_TOOL_RESULT_CHARS = 8_000
+
+
+def _capped_tool_result(result: str, locale: str) -> str:
+    text = result if isinstance(result, str) else str(result)
+    if len(text) <= MAX_TOOL_RESULT_CHARS:
+        return text
+    return text[:MAX_TOOL_RESULT_CHARS] + "\n\n" + t("loop.tool_result_truncated", locale=locale, kept=MAX_TOOL_RESULT_CHARS)
 
 
 async def _run_turn_checks(
@@ -999,6 +1091,7 @@ async def _run_turn_checks(
     phase: str | None = None,
     room_pack: RulePack | None = None,
     subsystem_tools: list[dict] | None = None,
+    hook_engine=None,
     temperature: float | None,
 ) -> str:
     """Run this room's end-of-turn check table in pure Stop form; return the final reply.
@@ -1056,7 +1149,16 @@ async def _run_turn_checks(
             if result.tool_calls:
                 try:
                     await _dispatch_and_record(
-                        toolset, ctx, services, result, convo, tool_trace, unlocked, phase=phase, room_pack=room_pack
+                        toolset,
+                        ctx,
+                        services,
+                        result,
+                        convo,
+                        tool_trace,
+                        unlocked,
+                        phase=phase,
+                        room_pack=room_pack,
+                        hook_engine=hook_engine,
                     )
                 except (asyncio.CancelledError, Exception):
                     _clear_llm_continuation(services, convo)

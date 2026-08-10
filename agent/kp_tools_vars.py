@@ -230,7 +230,7 @@ class MvuStatTools:
     def _i18n(self, ctx: AgentCtx) -> I18n:
         return self._services.i18n.with_locale(ctx.locale)
 
-    @tool
+    @tool(read_only=True)
     async def get_stat(self, ctx: AgentCtx, path: str = "") -> str:
         """Read the imported card's variable tree (MVU stat data), either one value or the
         whole flattened tree. Prefer the always-on state in your context; this is the

@@ -11,5 +11,7 @@
   "loop.provider_content": "供应商无法处理本次输入，请缩短内容后重试。",
   "loop.provider_quota": "AI 供应商额度已耗尽，请房主检查套餐或账单。",
   "loop.provider_transient": "AI 供应商在自动重试一次后仍暂时不可用，请稍后重试。",
+  "loop.tool_denied_by_hook": "工具 {name} 被房间的 hook 拒绝了：{reason}。换个做法，或者向玩家说明为什么这件事做不到。",
+  "loop.tool_result_truncated": "[……已截断：这条结果只显示了前 {kept} 个字符。需要更多就缩小查询范围，或者指名要哪一部分。]",
   "loop.unavailable": "守秘人暂时无法应答，请稍后再试一次。"
 }

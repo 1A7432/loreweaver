@@ -70,6 +70,7 @@ class ToolMeta:
     keeper_only: bool
     gated: bool
     prep_only: bool
+    read_only: bool
     param_descriptions: dict[str, str]
     _schema: dict[str, Any] | None = field(default=None, init=False, repr=False, compare=False)
 
@@ -88,6 +89,7 @@ def tool(
     keeper_only: bool = False,
     gated: bool = False,
     prep_only: bool = False,
+    read_only: bool = False,
     params: dict[str, str] | None = None,
 ):
     """Mark an async method as an AI-KP tool. Schema is generated from type hints + docstring.
@@ -113,6 +115,13 @@ def tool(
     play-phase budget test is what notices it -- the reverse default would make
     a new tool silently unreachable in play.
 
+    `read_only` (M20) declares that the tool WRITES NOTHING, which lets the loop
+    dispatch a round of such calls concurrently. It cannot be inferred — a
+    signature says nothing about whether a body mutates a document — and getting
+    it wrong is a lost update, not a slow turn, so the default is False and only
+    a genuine reader opts in. `speak_as_npc`/`companion_act` contain nested model
+    calls and must never carry it.
+
     Attaches the metadata to the function as `__tool_meta__`; the function's
     behavior is otherwise unchanged.
     """
@@ -125,6 +134,7 @@ def tool(
             keeper_only=keeper_only,
             gated=gated,
             prep_only=prep_only,
+            read_only=read_only,
             param_descriptions=dict(params or {}),
         )
         return func
@@ -187,6 +197,13 @@ class Toolset:
     def is_prep_only(self, name: str) -> bool:
         entry = self._entries.get(name)
         return entry.meta.prep_only if entry is not None else False
+
+    def is_read_only(self, name: str) -> bool:
+        """Whether `name` is declared to write nothing. Unknown names are NOT read-only:
+        a tool the toolset has never heard of is dispatched serially, like everything
+        else that has not opted in."""
+        entry = self._entries.get(name)
+        return entry.meta.read_only if entry is not None else False
 
     async def dispatch(
         self,

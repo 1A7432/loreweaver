@@ -190,7 +190,7 @@ class CompanionTools:
         except Exception as exc:
             return i18n.t("companion.tools.auto.failed", error=str(exc))
 
-    @tool
+    @tool(read_only=True)
     async def list_companions(self, ctx: AgentCtx) -> str:
         """List this room's AI player companions (name, id, playstyle).
 
