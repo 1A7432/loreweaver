@@ -33,6 +33,7 @@ from copy import deepcopy
 
 from agent.chronicle import CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID
 from agent.context import AgentCtx
+from agent.history import load_chain
 from agent.loop import run_kp_turn
 from agent.prompt_builder import build_system_prompt_parts
 from agent.services import build_services
@@ -265,7 +266,7 @@ async def test_history_grows_without_a_cap_and_is_stamped_with_its_turn():
     for index in range(30):
         await run_kp_turn(_ctx(), services, Toolset(), f"turn {index}")
 
-    stored = json.loads(await services.store.state_get(CHAT, "chat_history"))
+    stored = await load_chain(services, CHAT, "chat_history")
     assert len(stored) == 60, f"history was truncated somewhere other than a fold: {len(stored)} messages"
     assert [message[HISTORY_TURN_KEY] for message in stored[:4]] == [1, 1, 2, 2]
     assert stored[-1][HISTORY_TURN_KEY] == 30
@@ -273,7 +274,12 @@ async def test_history_grows_without_a_cap_and_is_stamped_with_its_turn():
 
 async def test_a_fold_trims_history_to_what_the_summary_does_not_cover():
     """The one truncation point. Everything the rolling summary absorbed stops being
-    replayed; everything past its watermark still is."""
+    REPLAYED; everything past its watermark still is.
+
+    "Stops being replayed" is now the whole of it: since M20 D the tree is append-only, so
+    a fold deletes nothing — it moves a watermark, and the folded records simply are not
+    on the replayed slice. That is also what makes them still reachable by an undo whose
+    depth is capped inside the lag window."""
     services = _services(FakeLLM(responder=lambda messages, tools: ChatResult(content="Noted.", tool_calls=[])))
     await _furnished_room(services)
 
@@ -293,11 +299,11 @@ async def test_a_fold_trims_history_to_what_the_summary_does_not_cover():
     services.llm = FakeLLM(responder=responder)
     await run_kp_turn(_ctx(), services, Toolset(), "turn 6")
 
-    stored = json.loads(await services.store.state_get(CHAT, "chat_history"))
-    assert min(message[HISTORY_TURN_KEY] for message in stored) == 4, "folded turns must stop being replayed"
-    assert max(message[HISTORY_TURN_KEY] for message in stored) == 7
     replayed = [message for message in sent[0] if message.get(HISTORY_TURN_KEY)]
     assert {message[HISTORY_TURN_KEY] for message in replayed} == {4, 5, 6}
+    kept = await load_chain(services, CHAT, "chat_history")
+    assert min(message[HISTORY_TURN_KEY] for message in kept) == 1, "append-only: the folded turns are still there"
+    assert max(message[HISTORY_TURN_KEY] for message in kept) == 7
 
 
 async def test_the_trim_is_idempotent_so_a_manual_fold_is_honoured_too():
@@ -309,13 +315,21 @@ async def test_the_trim_is_idempotent_so_a_manual_fold_is_honoured_too():
         await run_kp_turn(_ctx(), services, Toolset(), f"turn {index}")
 
     await services.documents.put(CHAT, CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID, {"text": "So far…", "through_turn": 2, "fold_count": 1})
-    await run_kp_turn(_ctx(), services, Toolset(), "turn 4")
-    first = json.loads(await services.store.state_get(CHAT, "chat_history"))
-    await run_kp_turn(_ctx(), services, Toolset(), "turn 5")
-    second = json.loads(await services.store.state_get(CHAT, "chat_history"))
+    sent: list[list[dict]] = []
 
-    assert min(message[HISTORY_TURN_KEY] for message in first) == 3
-    assert min(message[HISTORY_TURN_KEY] for message in second) == 3, "a settled watermark must not keep cutting"
+    def responder(messages, tools):
+        sent.append(deepcopy(messages))
+        return ChatResult(content="Noted.", tool_calls=[])
+
+    services.llm = FakeLLM(responder=responder)
+    await run_kp_turn(_ctx(), services, Toolset(), "turn 4")
+    await run_kp_turn(_ctx(), services, Toolset(), "turn 5")
+
+    def oldest_replayed(messages: list[dict]) -> int:
+        return min(message[HISTORY_TURN_KEY] for message in messages if message.get(HISTORY_TURN_KEY))
+
+    assert oldest_replayed(sent[0]) == 3
+    assert oldest_replayed(sent[1]) == 3, "a settled watermark must not keep cutting"
 
 
 # ---------------------------------------------------------------------------

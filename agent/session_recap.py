@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 
 from agent.context import AgentCtx
+from agent.history import load_chain
 from agent.services import Services
 from infra.i18n import I18n
 
@@ -190,15 +191,14 @@ async def _load_counter(services: Services, chat_key: str) -> int:
 
 
 async def _recent_transcript(services: Services, chat_key: str, history_key: str, i18n: I18n) -> str:
-    """Render the last ``_RECENT_MESSAGES`` persisted history messages as a labelled transcript."""
-    raw = await services.store.state_get(chat_key, history_key)
-    if not raw:
-        return ""
-    try:
-        history = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return ""
-    if not isinstance(history, list):
+    """Render the last ``_RECENT_MESSAGES`` messages on the current history path.
+
+    The current PATH, not the whole table: since M20 D the history is an append-only tree,
+    so a room that was rewound has abandoned turns still on disk. A recap built from them
+    would summarise a story the table decided did not happen.
+    """
+    history = await load_chain(services, chat_key, history_key)
+    if not history:
         return ""
 
     lines: list[str] = []

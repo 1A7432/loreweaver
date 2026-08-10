@@ -8,13 +8,17 @@ import re
 import shlex
 import time
 from collections.abc import Awaitable, Callable
+from contextlib import nullcontext as _nullcontext
 from dataclasses import dataclass, field
 from typing import Any
 
+from agent.chronicle import CHRONICLE_TURN_KEY, chronicle_turn
 from agent.context import AgentCtx
 from agent.kp_tools_mechanics import InitiativeTools, roll_initiative
 from agent.services import Services, room_rule_variant, set_room_rule_variant
 from agent.tool_phase import PHASES, is_pinned, room_phase, set_room_phase
+from agent.undo import available_turns, undo_depth
+from agent.undo import restore as restore_room
 from core.battle_recording import record_check, record_dice_roll
 from core.char_from_persona import build_sheet_from_description
 from core.character_manager import (
@@ -191,6 +195,7 @@ _BOTLIST_LIST_WORDS = {"", "list", "ls", "show", "列表", "查看"}
 # `.skill` subcommand vocabularies (EN + a couple of CN synonyms) -- the per-room
 # KP-skills layer (Layer B.1, `core.skills` + `gateway.ops.get/set_enabled_skills`).
 _PHASE_AUTO_WORDS = {"auto", "自动", "自動"}
+_SAVE_LOAD_WORDS = {"load", "restore", "读档", "讀檔", "载入", "載入"}
 _SKILL_STATUS_WORDS = {"status", "状态", "狀態"}
 _SKILL_ENABLE_WORDS = {"enable", "on", "启用", "啟用"}
 _SKILL_DISABLE_WORDS = {"disable", "off", "禁用", "关闭", "關閉"}
@@ -1023,6 +1028,115 @@ class CommandRouter:
             return ctx.i18n.t("commands.phase.usage")
         await set_room_phase(ctx.services.store, ctx.chat_key, wanted)
         return ctx.i18n.t("commands.phase.set_done", phase=ctx.i18n.t(f"commands.phase.name.{wanted}"))
+
+    async def cmd_undo(self, ctx: CommandCtx) -> str:
+        """`.undo [n]` — rewind the room by `n` turns (default 1). Keeper only.
+
+        Shallow by design and capped at the chronicle's no-future lag window: a real table
+        rewinds the last thing that happened, and capping inside that window makes a
+        conflict with the rolling summary structurally impossible — those turns have not
+        been folded yet. Both halves of the room move together (documents + room_state +
+        the history leaf), so the conversation the Keeper replays and the state its tools
+        read are the same moment.
+        """
+        if not _is_keeper(ctx.raw_ctx):
+            return ctx.fail(ctx.i18n.t("commands.undo.denied"))
+        raw = ctx.args.strip()
+        try:
+            steps = int(raw) if raw else 1
+        except ValueError:
+            return ctx.i18n.t("commands.undo.usage")
+        depth = undo_depth(ctx.services)
+        if steps < 1 or steps > depth:
+            return ctx.i18n.t("commands.undo.too_deep", depth=depth)
+
+        current = await chronicle_turn(ctx.services.store, ctx.chat_key)
+        target = current - steps
+        available = await available_turns(ctx.services, ctx.chat_key)
+        if target < 0 or (target > 0 and target not in available):
+            return ctx.i18n.t("commands.undo.unavailable", turns=", ".join(str(t) for t in sorted(available)) or "-")
+
+        # A rewind rewrites what every other member is looking at, so it takes the room's
+        # turn lock rather than racing a Keeper turn that is still writing state.
+        async with self._turn_lock(ctx.chat_key):
+            if target == 0:
+                from net.room_backup import reset_room_state
+
+                await reset_room_state(ctx.services, ctx.chat_key, scope="story")
+            elif not await restore_room(ctx.services, ctx.chat_key, target):
+                return ctx.i18n.t("commands.undo.unavailable", turns="-")
+            await ctx.services.store.state_set(ctx.chat_key, CHRONICLE_TURN_KEY, str(target))
+        # A restore rewinds EVERYONE, so a fresh state frame flagged reset=True goes out:
+        # every connected client refreshes its panel AND drops its now-wrong local
+        # scrollback at once, exactly as `.reset` does.
+        await self._publish_reset(ctx)
+        return ctx.i18n.t("commands.undo.done", turns=steps, turn=target)
+
+    async def _publish_reset(self, ctx: CommandCtx) -> None:
+        """Broadcast a reset-flagged state frame, the way `.reset` does. No hub, no-op."""
+        if self.hub is None:
+            return
+        await publish_state(
+            self.hub,
+            ctx.services,
+            AgentCtx(
+                chat_key=ctx.chat_key,
+                user_id=ctx.user_id,
+                platform=str(getattr(ctx.raw_ctx, "platform", "cli") or "cli"),
+                locale=ctx.locale,
+            ),
+            reset=True,
+        )
+
+    def _turn_lock(self, chat_key: str):
+        """The room's whole-turn lock when a hub is wired, else an inert context.
+
+        A standalone router (CLI, tests) has no hub and no concurrent turns to race, so
+        degrading to a no-op is the honest behaviour rather than inventing a second lock
+        nothing else honours."""
+        hub = self.hub
+        return hub.turn_lock(chat_key) if hub is not None else _nullcontext()
+
+    async def cmd_save(self, ctx: CommandCtx) -> str:
+        """`.save [name]` / `.save load <name>` — named full-room checkpoints. Keeper only.
+
+        Deliberately the SAME operation `net.room_backup` already performs for the admin
+        export/import frames, reached from a nicer place. Its snapshot carries documents,
+        room_state, the history tree, store rows, vectors, media AND the room's bearer
+        keys, which is what makes it a whole-room checkpoint that cannot produce the
+        "state at turn 30, summary at turn 190" tear — and is also why the keeper gate and
+        the backups-directory confinement carry over unchanged. This command is a nicer
+        trigger for an existing operation and nothing more: it must not widen who can
+        reach a snapshot file.
+
+        `keystore` is the room's bearer-key registry, injected by the transport that owns
+        one. Without it there is no whole-room checkpoint to take, so the command says so
+        rather than writing a snapshot with the keys silently missing.
+        """
+        if not _is_keeper(ctx.raw_ctx):
+            return ctx.fail(ctx.i18n.t("commands.save.denied"))
+        keystore = self.keystore
+        if keystore is None:
+            return ctx.fail(ctx.i18n.t("commands.save.unavailable"))
+        from net.room_backup import export_room, import_room, room_for_chat_key
+
+        parts = ctx.args.split(maxsplit=1)
+        sub = parts[0].casefold() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        room = room_for_chat_key(ctx.chat_key)
+        try:
+            if sub in _SAVE_LOAD_WORDS:
+                if not rest:
+                    return ctx.i18n.t("commands.save.usage")
+                async with self._turn_lock(ctx.chat_key):
+                    result = await import_room(ctx.services, keystore, rest, expected_room=room)
+                await self._publish_reset(ctx)
+                return ctx.i18n.t("commands.save.loaded", name=rest, documents=result.get("documents", 0))
+            result = await export_room(ctx.services, keystore, room, ctx.args.strip())
+            return ctx.i18n.t("commands.save.done", path=str(result.get("path", "")))
+        except Exception as exc:  # noqa: BLE001 — a save must report, never crash the room
+            logger.warning("room save/load failed for %s", ctx.chat_key, exc_info=True)
+            return ctx.i18n.t("commands.save.failed", error=str(exc))
 
     async def cmd_preset(self, ctx: CommandCtx) -> str:
         """`.preset [list | import <path> | enable <id> | disable | show <id>]` — imported
@@ -2577,6 +2691,8 @@ class CommandRouter:
             CommandSpec("bot", self.cmd_bot_toggle, ["bot"], ["bot"], None, "commands.help.bot"),
             CommandSpec("skill", self.cmd_skill, ["skill"], ["skill"], None, "commands.help.skill"),
             CommandSpec("phase", self.cmd_phase, ["phase"], ["phase", "阶段", "階段"], None, "commands.help.phase"),
+            CommandSpec("undo", self.cmd_undo, ["undo"], ["undo", "撤销", "撤銷"], None, "commands.help.undo"),
+            CommandSpec("save", self.cmd_save, ["save"], ["save", "存档", "存檔"], None, "commands.help.save"),
             CommandSpec("panels", self.cmd_panels, ["panels"], ["panels", "模组面板"], None, "commands.help.panels"),
             CommandSpec("avatar", self.cmd_avatar, ["avatar"], ["avatar", "头像"], None, "commands.help.avatar"),
             CommandSpec(

@@ -13,6 +13,7 @@ from copy import deepcopy
 import pytest
 
 from agent.context import AgentCtx
+from agent.history import load_chain
 from agent.kp_tools_mechanics import InitiativeTools
 from agent.loop import KPTurnResult, _event_description_is_semantic_duplicate, run_kp_turn
 from agent.services import build_services
@@ -492,10 +493,9 @@ async def test_history_persists_only_the_user_message_and_final_reply():
 
     await run_kp_turn(_ctx("chat-7"), services, _toolset(), "What time is it?")
 
-    raw = await services.store.state_get("chat-7", "chat_history")
-    history = json.loads(raw)
     # `_lw_turn` is the room turn that wrote the pair — the handle the chronicle fold
     # cuts history on (M20 A2). It is stripped before any vendor wire.
+    history = await load_chain(services, "chat-7", "chat_history")
     assert history == [
         {"role": "user", "content": "What time is it?", "_lw_turn": 1},
         {"role": "assistant", "content": "It is midnight.", "_lw_turn": 1},
@@ -517,9 +517,8 @@ async def test_history_reloads_across_turns_and_honors_a_custom_history_key():
     assert ("assistant", "first reply") in roles_and_content
     assert ("user", "second message") in roles_and_content
 
-    # A default-keyed history (`chat_history.{chat_key}`) was never touched.
-    default_raw = await services.store.state_get("chat-8", "chat_history")
-    assert default_raw is None
+    # The default-keyed history was never touched.
+    assert await load_chain(services, "chat-8", "chat_history") == []
 
 
 async def test_history_is_not_capped_and_replays_whole():
@@ -534,7 +533,8 @@ async def test_history_is_not_capped_and_replays_whole():
     services = _services(llm)
     chat_key = "chat-9"
 
-    # Seed 30 already-persisted messages (well past the old cap).
+    # Seed 30 already-persisted messages (well past the old cap), as the pre-M20 blob —
+    # which also exercises the one-way adoption into the append-only tree.
     seeded = [{"role": "user", "content": f"msg-{i}"} for i in range(30)]
     await services.store.state_set(chat_key, "chat_history", json.dumps(seeded))
 
@@ -544,8 +544,7 @@ async def test_history_is_not_capped_and_replays_whole():
     assert any(message.get("content") == "msg-0" for message in outgoing_messages), "nothing is dropped"
     assert sum(1 for message in outgoing_messages if str(message.get("content", "")).startswith("msg-")) == 30
 
-    raw = await services.store.state_get(chat_key, "chat_history")
-    persisted = json.loads(raw)
+    persisted = await load_chain(services, chat_key, "chat_history")
     assert len(persisted) == 32
     assert persisted[-1] == {"role": "assistant", "content": "newest reply", "_lw_turn": 1}
 
@@ -567,7 +566,7 @@ async def test_run_kp_turn_survives_a_provider_error_with_a_localized_reply():
     assert result.reply == services.i18n.with_locale("en").t("loop.unavailable")
     assert result.tool_trace == []
     # A failed turn persists nothing (nothing useful happened this turn).
-    assert await services.store.state_get("chat-boom", "chat_history") is None
+    assert await load_chain(services, "chat-boom", "chat_history") == []
 
 
 async def test_provider_error_fallback_is_localized_and_goes_through_output_review():
@@ -612,7 +611,7 @@ async def test_run_kp_turn_maps_provider_error_categories_to_distinct_localized_
     result = await run_kp_turn(_ctx(chat_key, locale=locale), services, _toolset(), "What happens?")
 
     assert result.reply == services.i18n.with_locale(locale).t(message_key)
-    assert await services.store.state_get(chat_key, "chat_history") is None
+    assert await load_chain(services, chat_key, "chat_history") == []
 
 
 async def test_run_kp_turn_maps_subscription_relogin_required_to_auth_reply():
