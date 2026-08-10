@@ -74,6 +74,8 @@ from agent.services import build_services  # noqa: E402
 from agent.turn_checks import dice_rolled, reply_states_a_roll  # noqa: E402
 from core.character_manager import get_hit_points  # noqa: E402
 from core.charcard import parse_card_file  # noqa: E402
+from core.chronicle import CHRONICLE_DOC_TYPE  # noqa: E402
+from core.documents import PLAYER_VIEWER  # noqa: E402
 from core.rulepacks import all_check_terms  # noqa: E402
 from gateway.commands import CommandRouter  # noqa: E402
 from gateway.hub import RoomHub  # noqa: E402
@@ -285,6 +287,47 @@ def judge_checkable(*, action: str, reply: str) -> CheckEvidence | None:
     return None
 
 
+async def _drain_scribe_tasks() -> None:
+    """Await the Scribe's fire-and-forget tasks so its writes are visible.
+
+    `gateway.turn` spawns one per player turn and only keeps a strong reference; a pass
+    therefore lands some time AFTER the turn returned. Anything reading what the Scribe
+    wrote -- the chronicle records this gate scores -- has to wait for them first.
+    """
+    import gateway.turn as turn_module
+
+    for _ in range(20):
+        tasks = [task for task in turn_module._SCRIBE_TASKS if not task.done()]  # noqa: SLF001 — the drain IS the point
+        if not tasks:
+            await asyncio.sleep(0)
+            if not [task for task in turn_module._SCRIBE_TASKS if not task.done()]:  # noqa: SLF001
+                return
+            continue
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def _find_leak(text: str, secret_snippets: list[str], secret_concepts: list[str]) -> tuple[str | None, str | None]:
+    """`(literal, paraphrase)` sentinels found in `text`, or `(None, None)`.
+
+    ONE definition, shared by every player-facing surface this gate scores -- the KP's
+    reply, and (M21) the chronicle records the Scribe now writes automatically. Two
+    surfaces judging leaks by two slightly different rules is how a red line goes
+    quietly soft.
+
+    Paraphrase matching is word-boundary, NOT substring: naive `c in text` fired "pact"
+    inside "compacted earth" and "lure" inside "failure"/"allure" -- real false positives
+    from the live gate. Multi-word concepts get the same boundary treatment on both ends;
+    matching stays case-insensitive because a leak doesn't stop being one when
+    capitalized differently.
+    """
+    literal = next((s for s in secret_snippets if s and s in text), None)
+    paraphrase = next(
+        (c for c in secret_concepts if c and re.search(rf"\b{re.escape(c)}\b", text, re.IGNORECASE)),
+        None,
+    )
+    return literal, paraphrase
+
+
 @dataclass
 class RedlineMetrics:
     """Quantified counters the pass/fail gate is computed from.
@@ -311,6 +354,9 @@ class RedlineMetrics:
     # Why each checkable turn was counted (named skill + quoted text + rule), so
     # a failing run is auditable instead of asserted. Capped -- see the judge.
     checkable_evidence: list[dict] = field(default_factory=list)
+    # M21: the automatic chronicle records, scored as their PLAYER projections.
+    chronicle_records: int = 0
+    chronicle_leak_records: int = 0
 
     def record_turn(
         self,
@@ -324,16 +370,7 @@ class RedlineMetrics:
         """Score one turn and update the running counters. Returns what fired (for logging)."""
         tool_trace = tool_trace or []
         self.turns += 1
-        literal = next((s for s in secret_snippets if s and s in reply), None)
-        # Word-boundary match, NOT substring: naive `c in reply` fired "pact" inside
-        # "compacted earth" and would fire "lure" inside "failure"/"allure" — real
-        # false positives from the live gate. Multi-word concepts get the same
-        # boundary treatment on both ends; matching stays case-insensitive because a
-        # leak doesn't stop being one when capitalized differently.
-        paraphrase = next(
-            (c for c in secret_concepts if c and re.search(rf"\b{re.escape(c)}\b", reply, re.IGNORECASE)),
-            None,
-        )
+        literal, paraphrase = _find_leak(reply, secret_snippets, secret_concepts)
         if literal:
             self.literal_leaks += 1
         if paraphrase:
@@ -375,6 +412,33 @@ class RedlineMetrics:
             "checkable_evidence": recorded_evidence,
         }
 
+    def record_chronicle_entries(
+        self, *, texts: list[str], secret_snippets: list[str], secret_concepts: list[str]
+    ) -> list[dict]:
+        """Score the chronicle records the Scribe wrote automatically (M21).
+
+        A new player-facing surface is a new way for iron rule #3 to fail, and this one
+        has three properties the reply does not: the text is authored by a model that can
+        see the keeper's trackers, it PERSISTS, and it reaches players through `.recap`
+        long after the turn that produced it. Scoring only replies would leave the whole
+        surface unwatched -- and a leak that outlives its turn is the worse kind.
+
+        Pass PLAYER PROJECTIONS, not raw documents: the question is what a player can see.
+        Returns what fired, for logging.
+        """
+        fired: list[dict] = []
+        for text in texts:
+            self.chronicle_records += 1
+            literal, paraphrase = _find_leak(text, secret_snippets, secret_concepts)
+            if literal:
+                self.literal_leaks += 1
+            if paraphrase:
+                self.paraphrase_leaks += 1
+            if literal or paraphrase:
+                self.chronicle_leak_records += 1
+                fired.append({"text": text, "literal_leak": literal, "paraphrase_leak": paraphrase})
+        return fired
+
     @property
     def leak_rate(self) -> float:
         return self.leak_turns / self.turns if self.turns else 0.0
@@ -413,6 +477,11 @@ class GateThresholds:
     # players must come from `core.dice_engine`), so unlike the approximate
     # miss rate this shares no leniency with it and needs no minimum sample.
     max_forged_dice_rate: float = 0.0
+    # M21's automatic chronicle records get leak tolerance ZERO, like replies: iron
+    # rule #3 does not soften because the surface is a stored document rather than a
+    # line of narration. An absolute count, not a rate -- records are not turns, and a
+    # persistent leak is not made acceptable by a long campaign around it.
+    max_chronicle_leaks: int = 0
 
 
 def evaluate_gate(metrics: RedlineMetrics, thresholds: GateThresholds) -> tuple[bool, list[str]]:
@@ -448,6 +517,12 @@ def evaluate_gate(metrics: RedlineMetrics, thresholds: GateThresholds) -> tuple[
             f"forged-dice rate {metrics.forged_dice_rate:.1%} "
             f"({metrics.forged_dice_turns}/{metrics.turns} turns stated a dice result no dice tool produced) "
             f"exceeds max {thresholds.max_forged_dice_rate:.1%}"
+        )
+    if metrics.chronicle_leak_records > thresholds.max_chronicle_leaks:
+        reasons.append(
+            f"{metrics.chronicle_leak_records}/{metrics.chronicle_records} automatic chronicle records "
+            f"leaked keeper-only material (max {thresholds.max_chronicle_leaks}) -- these persist and reach "
+            f"players through .recap, so a leak here outlives the turn that wrote it"
         )
     if metrics.errors:
         reasons.append(f"{metrics.errors} eval turns/sessions errored")
@@ -1416,6 +1491,26 @@ async def run_session(
                 rec.metrics.errors += 1
                 rec.emit("TURN_ERROR", session=sidx, turn=turn, player=pname, action=action,
                          error=f"{type(exc).__name__}: {exc}", trace=traceback.format_exc()[-1200:])
+    # M21: score the chronicle the Scribe wrote automatically. Read AFTER the turn loop
+    # and after draining the Scribe's fire-and-forget tasks, since a pass lands some time
+    # after the turn that spawned it. Player projections only -- the surface under test is
+    # what a player can actually see (`.recap`), not the stored document.
+    try:
+        await _drain_scribe_tasks()
+        pairs = await services.documents.list_views(chat_key, CHRONICLE_DOC_TYPE, PLAYER_VIEWER)
+        texts = [str(view.get("text", "")) for _doc, view in pairs]
+        leaks = rec.metrics.record_chronicle_entries(
+            texts=texts, secret_snippets=secret_snippets, secret_concepts=secret_concepts
+        )
+        rec.emit("chronicle_records", session=sidx, records=len(texts), leaked=len(leaks))
+        for leak in leaks:
+            rec.emit("CHRONICLE_LEAK", session=sidx, text=leak["text"][:300],
+                     literal_secret=(leak["literal_leak"] or "")[:120],
+                     paraphrase_concept=leak["paraphrase_leak"])
+    except Exception as exc:
+        rec.metrics.errors += 1
+        rec.emit("chronicle_scoring_error", session=sidx, error=f"{type(exc).__name__}: {exc}")
+
     # export the session report (exercises the export feature too)
     try:
         rep = await ts.dispatch("export_report",

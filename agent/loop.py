@@ -196,6 +196,17 @@ class KPTurnResult:
     reply: str  # final player-visible text (already `output_review`-ed)
     tool_trace: list[dict]  # [{name, arguments, keeper_only, result}, ...] in call order
     rounds: int  # how many function-calling rounds this turn took
+    # The room turn index this result belongs to — the SAME index `append_turn`
+    # stamped on this turn's history messages and `record_entry` stamps on a
+    # chronicle record. 0 means no turn was committed (the provider-error early
+    # return, which writes no history and never advances the counter).
+    #
+    # Anything recording against this turn AFTER `run_kp_turn` has returned must
+    # take the index from here rather than re-reading the counter: by then the
+    # counter has already advanced past this turn, and companion sub-turns advance
+    # it further still. A record stamped ahead of the turn it summarises would let
+    # `trim_folded` cut history no summary covers (M21).
+    turn: int = 0
     # Token/cache usage accumulated across this turn's main loop and, when
     # max_rounds is exhausted, its one tools-disabled finalizer. Provider-error
     # early returns stay all-zero; FakeLLM results without usage stay all-zero.
@@ -485,6 +496,7 @@ async def run_kp_turn(
         reply=reply,
         tool_trace=tool_trace,
         rounds=rounds,
+        turn=turn_index,
         usage=turn_usage,
         ui_frames=hook_ui_frames,
         panel_events=_capped_panel_events(hook_panel_events, ctx.chat_key),

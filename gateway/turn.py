@@ -326,7 +326,10 @@ async def run_turn(
             try:
                 from agent.scribe import run_scribe
 
-                outcome = await run_scribe(services, ctx, text, turn_result.reply, names)
+                # `turn_result.turn`, never the room's counter: this runs after the turn
+                # returned (and after any companion sub-turns), so the counter has moved
+                # on. See `KPTurnResult.turn` / `agent.chronicle.record_entry`.
+                outcome = await run_scribe(services, ctx, text, turn_result.reply, names, turn_result.turn)
                 if outcome.changed:
                     await publish_state(hub, services, ctx)
                 if outcome.beat and services.settings.director.enabled:

@@ -192,12 +192,21 @@ async def record_entry(
     keeper: str = "",
     pcs: tuple[str, ...] | list[str] = (),
     scene: str = "",
+    turn: int | None = None,
 ) -> Document:
-    """Append one chronicle entry, stamped with the in-progress turn index.
+    """Append one chronicle entry, stamped with the turn it records.
 
-    Past-only by construction: the stamp comes from the room's turn counter
-    (completed turns + 1 = the turn now in flight), never from a caller-supplied
-    value, so an entry can never be written ahead of the fiction.
+    Past-only for the MODEL by construction: `record_chronicle` exposes no turn
+    parameter, so the stamp it gets is the room's own counter (completed turns + 1 =
+    the turn now in flight) and nothing can be recorded ahead of the fiction.
+
+    `turn` is for ENGINE callers that already know which turn they are recording and
+    run OUTSIDE that turn — the M21 auto-feeder is one: the Scribe runs after
+    `run_kp_turn` returned, by which point the counter has advanced past the turn it
+    read (and companion sub-turns may have advanced it further). Deriving there would
+    stamp the record AHEAD of the turn it summarises, and since `trim_folded` drops
+    history by turn index, a folded record carrying too high a stamp would cut history
+    no summary covers. The value is the engine's own index, never the model's.
     """
     raw = await services.store.state_get(chat_key, CHRONICLE_SEQ_KEY)
     try:
@@ -205,11 +214,11 @@ async def record_entry(
     except ValueError:
         seq = 1
     await services.store.state_set(chat_key, CHRONICLE_SEQ_KEY, str(seq))
-    turn = await chronicle_turn(services.store, chat_key) + 1
+    stamp = turn if turn is not None and turn > 0 else await chronicle_turn(services.store, chat_key) + 1
     data = {
         "text": text.strip(),
         "keeper": keeper.strip(),
-        "turn": turn,
+        "turn": stamp,
         "pcs": [str(pc).strip() for pc in pcs if str(pc).strip()],
         "scene": scene.strip(),
         "folded": False,

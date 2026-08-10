@@ -318,3 +318,61 @@ def test_the_longrun_lane_measures_dice_discipline_instead_of_nothing() -> None:
     passed, reasons = evaluate_gate(metrics, GateThresholds())
     assert passed is False, "the longrun lane must still catch a Keeper that skips its dice"
     assert any("absolute" in reason for reason in reasons), reasons
+
+
+# ---------------------------------------------------------------------------
+# The automatic chronicle records (M21).
+#
+# The Scribe now writes a chronicle record every material turn, so durable memory
+# no longer waits on the Keeper calling a tool. That makes the records a NEW
+# player-facing surface — persistent, reached through `.recap` long after the turn
+# — authored by a model that can see the keeper's trackers. Scoring only replies
+# would leave it unwatched, and a leak that outlives its turn is the worse kind.
+# ---------------------------------------------------------------------------
+
+
+def _score_chronicle(texts: list[str], concepts: list[str], snippets: list[str] | None = None) -> RedlineMetrics:
+    metrics = RedlineMetrics()
+    metrics.record_chronicle_entries(
+        texts=texts, secret_snippets=snippets or [], secret_concepts=concepts
+    )
+    return metrics
+
+
+def test_a_clean_chronicle_record_passes() -> None:
+    metrics = _score_chronicle(["The party rang the chapel bell and left before dawn."], ["Deep One", "pact"])
+
+    assert metrics.chronicle_records == 1
+    assert metrics.chronicle_leak_records == 0
+
+
+def test_one_leaking_chronicle_record_fails_the_gate() -> None:
+    """Zero tolerance, like a reply: iron rule #3 does not soften because the surface
+    is a stored document rather than a line of narration."""
+    metrics = _score_chronicle(["The keeper's own notes name the innkeeper a Deep One."], ["Deep One"])
+    metrics.record_turn(reply="You press on.", action="", tool_trace=[], secret_snippets=[], secret_concepts=[])
+
+    assert metrics.chronicle_leak_records == 1
+    passed, reasons = evaluate_gate(metrics, GateThresholds())
+    assert passed is False
+    assert any("chronicle" in reason for reason in reasons), reasons
+
+
+def test_chronicle_records_are_scored_by_the_same_boundary_rule_as_replies() -> None:
+    """One leak definition for every player-facing surface — two surfaces judging by
+    two slightly different rules is how a red line goes quietly soft."""
+    clean = _score_chronicle(["They measured the compacted earth of the wheel ruts."], ["pact"])
+    leaked = _score_chronicle(["They sealed a PACT with the sea generations ago."], ["pact"])
+
+    assert clean.chronicle_leak_records == 0
+    assert leaked.chronicle_leak_records == 1
+
+
+def test_a_chronicle_leak_does_not_hide_inside_the_reply_leak_rate() -> None:
+    """Records are not turns. Counting them in `leak_turns` would let a long clean
+    campaign dilute a persistent leak below the rate threshold."""
+    metrics = _score_chronicle(["The innkeeper is a Deep One."], ["Deep One"])
+
+    assert metrics.leak_turns == 0 and metrics.turns == 0
+    assert metrics.chronicle_leak_records == 1
+    assert metrics.paraphrase_leaks == 1, "it still counts as a leak that was found"

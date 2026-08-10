@@ -97,6 +97,12 @@ class ChronicleSettings(BaseModel):
     """
 
     enabled: bool = True
+    # M21: the Scribe writes one player-grade record per material turn, so durable
+    # campaign memory (and the fold, which is also the ONLY history trim there is —
+    # M20 A2's `trim_folded`) no longer depends on the Keeper remembering to call
+    # `record_chronicle`. Costs no extra model call: it is one more field on the
+    # Scribe's existing per-turn pass. Off restores M18's voluntary-only behaviour.
+    auto_record: bool = True
     fold_trigger: float = 0.60
     fold_floor: float = 0.40
     fold_emergency: float = 0.85
