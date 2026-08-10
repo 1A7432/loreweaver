@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 
 from agent.context import AgentCtx
+from agent.history import leaf_key
 from agent.loop import run_kp_turn
 from agent.prompt_builder import build_system_prompt
 from agent.services import build_services
@@ -55,10 +56,21 @@ def _ctx(chat_key: str, locale: str = "en") -> AgentCtx:
 
 
 async def _seed_history(services, chat_key: str, *messages: tuple[str, str]) -> str:
-    """Persist `(role, content)` messages under the default history key; return that key."""
+    """Persist `(role, content)` messages onto the default history path; return its key.
+
+    Through the append-only tree (M20 D), so the seeded turns are on the CURRENT path —
+    which is what the recap reads. Seeding the store directly would build a tree with no
+    leaf pointing at it, i.e. a branch the room already abandoned."""
     key = "chat_history"
-    payload = [{"role": role, "content": content} for role, content in messages]
-    await services.store.state_set(chat_key, key, json.dumps(payload, ensure_ascii=False))
+    for index, (role, content) in enumerate(messages):
+        record_id = f"seed-{index}"
+        parent = await services.store.state_get(chat_key, leaf_key(key))
+        await services.store.history_append(
+            chat_key,
+            key,
+            [{"id": record_id, "parent_id": parent, "turn": index // 2 + 1, "role": role, "content": content}],
+        )
+        await services.store.state_set(chat_key, leaf_key(key), record_id)
     return key
 
 

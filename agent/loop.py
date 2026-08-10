@@ -33,6 +33,7 @@ from difflib import SequenceMatcher
 
 from agent.chronicle import advance_chronicle_turn, chronicle_turn, maybe_fold_chronicle, summary_through_turn
 from agent.context import AgentCtx
+from agent.history import append_turn, load_chain, migrate_legacy_blob, trim_folded
 from agent.hook_runtime import apply_hook_writes, load_room_hook_engine
 from agent.kp_tools_subsystems import dispatch_subsystem, room_rulepack, subsystem_schemas
 from agent.prompt_builder import build_system_prompt_parts
@@ -48,12 +49,13 @@ from agent.turn_checks import (
     scene_title_lines,
     turn_checks_for,
 )
+from agent.undo import capture as capture_snapshot
 from core.hooks import MAX_PANEL_EVENTS_PER_TURN
 from core.mvu_compat import mvu_apply_text
 from core.rulepacks import RulePack
 from core.skills import unlocked_tools_for
 from infra.i18n import t
-from infra.llm import CACHE_BREAKPOINT_KEY, HISTORY_TURN_KEY, ChatResult, Usage
+from infra.llm import CACHE_BREAKPOINT_KEY, ChatResult, Usage
 
 logger = logging.getLogger(__name__)
 
@@ -291,8 +293,9 @@ async def run_kp_turn(
     # truncation point is the chronicle fold: what the rolling summary has absorbed
     # (`through_turn`) is exactly what history no longer needs to replay, and the fold's
     # own no-future watermark (M18's 4-turn lag) guarantees recent turns are never cut.
-    history = await _load_history(services, ctx.chat_key, key)
-    history = await _trim_folded_history(services, ctx.chat_key, key, history)
+    await migrate_legacy_blob(services, ctx.chat_key, key)
+    history = await load_chain(services, ctx.chat_key, key)
+    history = await trim_folded(services, ctx.chat_key, key, history, await summary_through_turn(services, ctx.chat_key))
     # The turn now in flight — completed turns + 1, the same stamp `record_entry` uses,
     # so a history message and a chronicle record made this turn carry the same index.
     turn_index = await chronicle_turn(services.store, ctx.chat_key) + 1
@@ -463,7 +466,7 @@ async def run_kp_turn(
 
     if gate is not None:
         await gate.drain()
-    await _persist_history(services, ctx.chat_key, key, history, user_message, reply, turn=turn_index)
+    await append_turn(services, ctx.chat_key, key, user_message=user_message, reply=reply, turn=turn_index)
     # Fold this turn into the rolling "story so far" recap when one is due, so
     # the KP keeps facts established far earlier in the session even after the
     # chronicle fold stops replaying those turns verbatim. Best-effort: never fatal.
@@ -471,6 +474,10 @@ async def run_kp_turn(
     # M18: count the completed turn — chronicle entries stamp against this counter
     # and the fold's no-future watermark derives from it. Best-effort, like the recap.
     await advance_chronicle_turn(services.store, ctx.chat_key)
+    # M20 D: the turn boundary is where a rewind can land, so it is where the room's
+    # non-append-only half is photographed. AFTER the counter advances, so the snapshot
+    # named `turn_index` is the state as of the END of that turn. Best-effort.
+    await capture_snapshot(services, ctx.chat_key, turn_index)
 
     return KPTurnResult(
         reply=reply,
@@ -1075,83 +1082,6 @@ def _check_fields(check_id: str, reply: str, tool_trace: list[dict], i18n) -> di
         titles = scene_title_lines(reply)
         return {"title": titles[0] if titles else reply[:160]}
     return {}
-
-
-async def _load_history(services: Services, chat_key: str, key: str) -> list[dict]:
-    """Every persisted history message for `key` (`[]` if unset/invalid).
-
-    Uncapped by design (M20 A2): between folds this list only grows, which is what makes
-    the replayed prefix byte-stable turn over turn. `_trim_folded_history` is the sole
-    place it shrinks.
-    """
-    raw = await services.store.state_get(chat_key, key)
-    if not raw:
-        return []
-    try:
-        history = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return []
-    if not isinstance(history, list):
-        return []
-    return history
-
-
-def _message_turn(message: dict) -> int:
-    """The room turn a persisted history message belongs to (0 when unstamped).
-
-    0 reads as "older than any fold", so history written before this stamp existed is
-    dropped by the first fold that lands — the rolling summary covers it by then.
-    """
-    try:
-        turn = message.get(HISTORY_TURN_KEY, 0)
-        return int(turn) if isinstance(turn, int) and not isinstance(turn, bool) else 0
-    except (TypeError, ValueError):
-        return 0
-
-
-async def _trim_folded_history(services: Services, chat_key: str, key: str, history: list[dict]) -> list[dict]:
-    """Drop the history turns the chronicle has already folded into its rolling summary.
-
-    THE truncation point (M20 A2), and idempotent: it keys off the summary's cumulative
-    `through_turn` rather than what this turn's fold happened to consume, so a manual
-    `.chronicle fold` is honoured on the next turn just as a routine one is. Turns past
-    the watermark are still replayed verbatim; turns behind it survive as summary. A room
-    that never folds (chronicle disabled, or a Keeper that records nothing) keeps its full
-    history — the growth then shows up in the usage meter, which is what arms the fold.
-    """
-    if not history:
-        return history
-    folded_through = await summary_through_turn(services, chat_key)
-    if folded_through <= 0:
-        return history
-    kept = [message for message in history if _message_turn(message) > folded_through]
-    if len(kept) == len(history):
-        return history
-    await services.store.state_set(chat_key, key, json.dumps(kept, ensure_ascii=False))
-    return kept
-
-
-async def _persist_history(
-    services: Services,
-    chat_key: str,
-    key: str,
-    prior: list[dict],
-    user_message: str,
-    reply: str,
-    *,
-    turn: int,
-) -> None:
-    """Append this turn's user message + final reply (NOT tool chatter) to history.
-
-    Uncapped — see `_load_history`. Both messages carry the in-flight turn stamp, which
-    is what lets a later fold cut history at exactly the watermark it summarized.
-    """
-    updated = [
-        *prior,
-        {"role": "user", "content": user_message, HISTORY_TURN_KEY: turn},
-        {"role": "assistant", "content": reply, HISTORY_TURN_KEY: turn},
-    ]
-    await services.store.state_set(chat_key, key, json.dumps(updated, ensure_ascii=False))
 
 
 async def _run_reply_hooks(

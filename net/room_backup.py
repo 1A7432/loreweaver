@@ -31,12 +31,16 @@ from infra.media_store import (
 from infra.svg import SVG_MIME, SvgSafetyError, validate_svg_bytes
 from net.keystore import Keystore
 
+# Snapshot format 3 (M20 D): the `chat_history` section carries the append-only history
+# tree, so a named save is still a WHOLE-room checkpoint after the conversation stopped
+# living in a room_state blob. Restoring one cannot produce the "state at turn 30, summary
+# at turn 190" tear, because every half moves together.
 # Snapshot format 2 (M17): content rides `documents` + `room_state` sections; the
 # KV `store_rows` section carries only cross-transport bindings. Per the M16
 # addendum every 2.0-era format carries a version and a designed migration slot —
 # empty until a future version needs one (v1 KV-era snapshots are pre-adoption and
 # deliberately unmigratable, zero-compat for the past).
-SNAPSHOT_VERSION = 2
+SNAPSHOT_VERSION = 3
 SNAPSHOT_MIGRATIONS: dict[int, object] = {}
 
 # A snapshot is deliberately much smaller than the live media quota (which may be 2 GiB
@@ -76,6 +80,9 @@ _RESET_STORY_DOC_TYPES = frozenset({"note", "scene", "npc", "chronicle", "campai
 _RESET_STORY_STATE_KEYS = frozenset(
     {
         "chat_history",
+        # M20 D: the append-only history tree's leaf pointer. The tree itself lives in
+        # its own table and is wiped alongside it in `reset_room_state`.
+        "chat_history_leaf",
         "initiative",
         "initiative_meta",
         "game_clock",
@@ -137,6 +144,15 @@ def _reset_targets(scope: str) -> tuple[set[str], set[str], set[str]]:
 
 def chat_key_for_room(room: str) -> str:
     return SessionSource(platform="tui", chat_type="group", chat_id=room).chat_key()
+
+
+def room_for_chat_key(chat_key: str) -> str:
+    """The room name a TUI chat key was built from — the inverse of `chat_key_for_room`.
+
+    A room-scoped command knows its chat key; every backup entry point is named by ROOM,
+    because that is also what the keystore scopes bearer keys by.
+    """
+    return chat_key.rsplit(":", 1)[-1]
 
 
 def _safe_room(room: str) -> str:
@@ -463,6 +479,24 @@ async def room_state_rows(
     return rows
 
 
+async def room_history_rows(
+    services: Services,
+    chat_key: str,
+    *,
+    enforce_limits: bool = False,
+) -> list[dict[str, Any]]:
+    """Every append-only history row of the room (M20 D)."""
+    rows = await services.store.history_rows(chat_key)
+    if enforce_limits:
+        _bounded_section(
+            rows,
+            count_limit=MAX_BACKUP_STORE_ROWS,
+            byte_limit=MAX_BACKUP_STORE_BYTES,
+            name="chat history rows",
+        )
+    return rows
+
+
 async def room_vector_points(
     services: Services,
     chat_key: str,
@@ -589,6 +623,7 @@ async def export_room(services: Services, keystore: Keystore, room: str, path: s
     rows = await room_rows(services, chat_key, enforce_limits=True)
     documents = await room_documents(services, chat_key, enforce_limits=True)
     state_rows = await room_state_rows(services, chat_key, enforce_limits=True)
+    history_rows = await room_history_rows(services, chat_key, enforce_limits=True)
     vectors = await room_vector_points(services, chat_key, enforce_limits=True)
     media = await room_media_entries(services, chat_key)
     # A file-backed keystore may have been changed by a simultaneous operations CLI.
@@ -607,6 +642,7 @@ async def export_room(services: Services, keystore: Keystore, room: str, path: s
         "keys": keys,
         "documents": documents,
         "room_state": state_rows,
+        "chat_history": history_rows,
         "store_rows": rows,
         "vector_points": vectors,
         "media": media,
@@ -622,6 +658,7 @@ async def export_room(services: Services, keystore: Keystore, room: str, path: s
         "keys": len(keys),
         "documents": len(documents),
         "room_state_rows": len(state_rows),
+        "chat_history_rows": len(history_rows),
         "store_rows": len(rows),
         "vector_points": len(vectors),
         "media_files": len(media),
@@ -1090,6 +1127,11 @@ async def reset_room_state(
     deleted_state = await services.store.state_delete_keys(
         chat_key, keys=sorted(state_keys), prefixes=sorted(state_prefixes)
     )
+    # M20 D: the append-only history tree and the undo ring are part of the narrative
+    # session at every scope — a "fresh session" that could still be rewound into the old
+    # one, or whose recap could still read it, would not be fresh.
+    deleted_state += await services.store.history_delete_room(chat_key)
+    deleted_state += await services.store.snapshot_delete_room(chat_key)
     deleted_vectors = 0
     deleted_media = 0
     if scope == "all":
@@ -1124,6 +1166,8 @@ async def delete_room_data(services: Services, keystore: Keystore, room: str) ->
             delete_state_room=chat_key,
         )
         deleted_rows += len(state.documents) + len(state.state_rows)
+        deleted_rows += await services.store.history_delete_room(chat_key)
+        deleted_rows += await services.store.snapshot_delete_room(chat_key)
         deleted_vectors = await _delete_room_vectors(services, chat_key)
         with keystore.persisted_mutation():
             # ``persisted_mutation`` refreshes a file-backed keystore under its cross-process
@@ -1314,6 +1358,32 @@ async def import_room(
             value = value.replace(old_chat_key, new_chat_key)
         validated_state.append({"key": key, "value": value})
 
+    raw_history = _list_field(raw, "chat_history")
+    _bounded_section(
+        raw_history,
+        count_limit=MAX_BACKUP_STORE_ROWS,
+        byte_limit=MAX_BACKUP_STORE_BYTES,
+        name="chat history rows",
+    )
+    validated_history: list[dict[str, Any]] = []
+    for row in raw_history:
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"]:
+            raise ValueError("invalid chat history row")
+        parent = row.get("parent_id")
+        if parent is not None and not isinstance(parent, str):
+            raise ValueError("invalid chat history row")
+        validated_history.append(
+            {
+                "key": str(row.get("key") or "chat_history"),
+                "id": row["id"],
+                "parent_id": parent or None,
+                "turn": int(row.get("turn") or 0),
+                "role": str(row.get("role") or ""),
+                "content": str(row.get("content") or ""),
+                "seq": int(row.get("seq") or 0),
+            }
+        )
+
     raw_vectors = _list_field(raw, "vector_points")
     _bounded_section(
         raw_vectors,
@@ -1465,6 +1535,14 @@ async def import_room(
             upsert_documents=validated_documents,
             upsert_state=(new_chat_key, validated_state),
         )
+        # The history tree rides outside that transaction because it is append-only:
+        # re-inserting a row that already exists is a no-op by construction, so a retry
+        # after a partial import converges rather than duplicating the conversation.
+        await services.store.history_delete_room(new_chat_key)
+        for key in {row["key"] for row in validated_history}:
+            await services.store.history_append(
+                new_chat_key, key, [row for row in validated_history if row["key"] == key]
+            )
         if validated_vectors:
             await vector_store.upsert(validated_vectors)
         if stale_vector_ids:
@@ -1521,6 +1599,7 @@ async def import_room(
         "keys": imported_keys,
         "documents": len(validated_documents),
         "room_state_rows": len(validated_state),
+        "chat_history_rows": len(validated_history),
         "store_rows": len(validated_rows),
         "vector_points": len(validated_vectors),
         "media_files": len(validated_media),

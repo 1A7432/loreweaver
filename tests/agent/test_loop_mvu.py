@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 
 from agent.context import AgentCtx
+from agent.history import load_chain
 from agent.loop import run_kp_turn
 from agent.services import build_services
 from agent.tools import Toolset
@@ -53,8 +54,8 @@ async def test_persisted_history_stores_the_cleaned_reply():
 
     await run_kp_turn(ctx, services, Toolset(), "I compliment her.")
 
-    raw = await services.store.state_get(ctx.chat_key, "chat_history")
-    history = json.loads(raw)
+    history = await load_chain(services, ctx.chat_key, "chat_history")
+    assert history, "the turn really persisted something"
     assert all("UpdateVariable" not in message.get("content", "") for message in history)
 
 

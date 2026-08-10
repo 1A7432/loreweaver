@@ -491,6 +491,11 @@ export function GameView({
     if (name === "down") recallHistory(1)
     if (hasCtrl(event) && name === "l") setFrames([])
     if (hasCtrl(event) && name === "s") void exportTranscript()
+    // Ctrl-Shift-S: ask the server for a full-room checkpoint (M20 D). This is a
+    // TRIGGER, not a new capability — the server's `.save` runs the same keeper-gated,
+    // backups-directory-confined export the admin frame already performs, and the reply
+    // (or the refusal, for a player) comes back through the ordinary chat channel.
+    if (hasCtrl(event) && (name === "S" || (name === "s" && event.shift))) submit(".save")
     if (name === "f6") setNarrowSidebarOpen((value) => !value)
     if (selectedMedia && (name === "o" || name === "O")) void openSelectedMedia(true)
     if (viewerLines && (name === "escape" || name === "q" || name === "return" || name === "enter")) setViewerLines(undefined)

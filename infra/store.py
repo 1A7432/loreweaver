@@ -16,6 +16,7 @@ import sqlite3
 from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from infra.file_permissions import restrict_sqlite_files
 
@@ -96,6 +97,44 @@ class Store:
                 key TEXT NOT NULL,
                 value TEXT,
                 PRIMARY KEY (room, key)
+            )
+            """
+        )
+        # M20 D: replayed conversation history, APPEND-ONLY. Each record names its
+        # parent, so the history is a tree and a rewind is a pointer move rather than a
+        # rewrite (the leaf pointer itself lives in `room_state`). Its own table for two
+        # reasons: append-only rows want row storage, and the turn-boundary snapshot ring
+        # deliberately does NOT copy it — a table that only ever grows needs no snapshot,
+        # and copying the largest table in the schema once per turn per room would buy
+        # nothing.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_history (
+                room TEXT NOT NULL,
+                key TEXT NOT NULL,
+                id TEXT NOT NULL,
+                parent_id TEXT,
+                turn INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                PRIMARY KEY (room, key, id)
+            )
+            """
+        )
+        # M20 D: turn-boundary snapshots of the half of a room that is NOT append-only —
+        # `room_state` (including the history leaf pointer) and `documents`. A ring, sized
+        # by the chronicle's no-future lag window, because undo is capped there too: past
+        # the fold watermark the rolling summary has already absorbed those turns, and a
+        # rewind across it would tear state from summary.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS room_snapshots (
+                room TEXT NOT NULL,
+                turn INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                PRIMARY KEY (room, turn)
             )
             """
         )
@@ -409,6 +448,134 @@ class Store:
         async with self._lock:
             conn = self._ensure_conn()
             cursor = conn.execute("DELETE FROM room_state WHERE room = ?", (room,))
+            self._commit(conn)
+            return cursor.rowcount if cursor.rowcount != -1 else 0
+
+    # ------------------------------------------------------------------
+    # Chat-history tree (M20 D) — append-only records, rewound by pointer.
+    # ------------------------------------------------------------------
+
+    async def history_append(self, room: str, key: str, records: Iterable[dict[str, Any]]) -> None:
+        """Append `records` (each `{id, parent_id, turn, role, content}`) in order.
+
+        Append-only in fact, not just in name: an id that already exists is left exactly
+        as it was. A branch created by an undo re-uses the same parent, so two children of
+        one record is the normal case, not a conflict.
+        """
+        rows = list(records)
+        if not rows:
+            return
+        async with self._lock:
+            conn = self._ensure_conn()
+            seq = conn.execute(
+                "SELECT COALESCE(MAX(seq), 0) FROM chat_history WHERE room = ? AND key = ?", (room, key)
+            ).fetchone()[0]
+            conn.executemany(
+                "INSERT OR IGNORE INTO chat_history (room, key, id, parent_id, turn, role, content, seq)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        room,
+                        key,
+                        str(record["id"]),
+                        record.get("parent_id") or None,
+                        int(record.get("turn", 0) or 0),
+                        str(record.get("role", "")),
+                        str(record.get("content", "")),
+                        seq + offset,
+                    )
+                    for offset, record in enumerate(rows, start=1)
+                ],
+            )
+            self._commit(conn)
+
+    async def history_chain(self, room: str, key: str, leaf_id: str | None) -> list[dict[str, Any]]:
+        """The records from the root down to `leaf_id`, oldest first (`[]` if unknown).
+
+        Walking parent links rather than reading the whole table is what makes a branch
+        free: the abandoned turns stay on disk, and simply are not on this path.
+        """
+        if not leaf_id:
+            return []
+        async with self._lock:
+            conn = self._ensure_conn()
+            rows = conn.execute(
+                "SELECT id, parent_id, turn, role, content FROM chat_history WHERE room = ? AND key = ?",
+                (room, key),
+            ).fetchall()
+        by_id = {row[0]: row for row in rows}
+        chain: list[dict[str, Any]] = []
+        cursor: str | None = leaf_id
+        seen: set[str] = set()
+        while cursor and cursor in by_id and cursor not in seen:
+            seen.add(cursor)
+            record_id, parent_id, turn, role, content = by_id[cursor]
+            chain.append({"id": record_id, "parent_id": parent_id, "turn": turn, "role": role, "content": content})
+            cursor = parent_id
+        chain.reverse()
+        return chain
+
+    async def history_delete_room(self, room: str) -> int:
+        async with self._lock:
+            conn = self._ensure_conn()
+            cursor = conn.execute("DELETE FROM chat_history WHERE room = ?", (room,))
+            self._commit(conn)
+            return cursor.rowcount if cursor.rowcount != -1 else 0
+
+    async def history_rows(self, room: str) -> list[dict[str, Any]]:
+        """Every history row of the room, for a full-room export."""
+        async with self._lock:
+            conn = self._ensure_conn()
+            rows = conn.execute(
+                "SELECT key, id, parent_id, turn, role, content, seq FROM chat_history WHERE room = ? ORDER BY seq",
+                (room,),
+            ).fetchall()
+        return [
+            {"key": r[0], "id": r[1], "parent_id": r[2], "turn": r[3], "role": r[4], "content": r[5], "seq": r[6]}
+            for r in rows
+        ]
+
+    # ------------------------------------------------------------------
+    # Turn-boundary snapshots (M20 D) — the undo ring.
+    # ------------------------------------------------------------------
+
+    async def snapshot_put(self, room: str, turn: int, payload: str, *, keep: int) -> None:
+        """Store one turn-boundary snapshot and trim the ring to the newest `keep`."""
+        async with self._lock:
+            conn = self._ensure_conn()
+            conn.execute(
+                "INSERT OR REPLACE INTO room_snapshots (room, turn, created_at, payload) VALUES (?, ?, ?, ?)",
+                (room, int(turn), datetime.utcnow().isoformat(), payload),
+            )
+            if keep > 0:
+                conn.execute(
+                    "DELETE FROM room_snapshots WHERE room = ? AND turn NOT IN ("
+                    "SELECT turn FROM room_snapshots WHERE room = ? ORDER BY turn DESC LIMIT ?)",
+                    (room, room, keep),
+                )
+            self._commit(conn)
+
+    async def snapshot_get(self, room: str, turn: int) -> str | None:
+        async with self._lock:
+            conn = self._ensure_conn()
+            row = conn.execute(
+                "SELECT payload FROM room_snapshots WHERE room = ? AND turn = ?", (room, int(turn))
+            ).fetchone()
+            return row[0] if row is not None else None
+
+    async def snapshot_turns(self, room: str) -> list[int]:
+        """The turns this room has snapshots for, newest first."""
+        async with self._lock:
+            conn = self._ensure_conn()
+            rows = conn.execute(
+                "SELECT turn FROM room_snapshots WHERE room = ? ORDER BY turn DESC", (room,)
+            ).fetchall()
+            return [int(row[0]) for row in rows]
+
+    async def snapshot_delete_room(self, room: str) -> int:
+        async with self._lock:
+            conn = self._ensure_conn()
+            cursor = conn.execute("DELETE FROM room_snapshots WHERE room = ?", (room,))
             self._commit(conn)
             return cursor.rowcount if cursor.rowcount != -1 else 0
 
