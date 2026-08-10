@@ -1,0 +1,11 @@
+{
+  "prep_script.applied": "{index}. {tool} -> {result}",
+  "prep_script.done": "Applied {count} operation(s):\n{results}",
+  "prep_script.empty": "The script planned nothing. Only plan(tool, args) has any effect.",
+  "prep_script.failed": "{index}. {tool} FAILED: {error} — stopped here; earlier operations stand.",
+  "prep_script.invalid": "The script could not produce a plan: {error}",
+  "prep_script.operation": "{index}. {tool} {args}",
+  "prep_script.preview": "Planned {count} operation(s) — nothing has run yet. Call again with apply=true to carry them out.\n{operations}",
+  "prep_script.unavailable": "The plan cannot be applied here: this room has no toolset bound.",
+  "prep_script.unreachable": "This plan names tools that cannot be reached here: {tools}. Nothing was applied — a plan is validated whole, so it never runs half of itself."
+}

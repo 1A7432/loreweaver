@@ -26,6 +26,7 @@ from agent.kp_tools_knowledge import DocumentTools, ModuleTools, NoteTools, Sess
 from agent.kp_tools_maps import SvgMapTools
 from agent.kp_tools_mechanics import CharacterTools, DiceTools, InitiativeTools
 from agent.kp_tools_npc import NpcTools
+from agent.kp_tools_prep import PrepScriptTools
 from agent.kp_tools_relationships import RelationshipTools
 from agent.kp_tools_vars import ModuleVarTools, MvuStatTools
 from agent.kp_tools_worldbook import WorldbookTools
@@ -50,7 +51,11 @@ def build_kp_toolset(
     everywhere else (standalone/tests, and every companion turn's own toolset), where `companion_act`
     degrades gracefully -- which is also what keeps companion turns from recursively spawning others.
     """
-    return Toolset(
+    # The prep-phase script hatch (M20 F) applies its plan through THIS toolset, which is
+    # still being constructed — hence the lazy back-reference rather than an argument.
+    prep_scripts = PrepScriptTools(services)
+    toolset = Toolset(
+        prep_scripts,
         CharacterTools(services),
         DiceTools(services),
         InitiativeTools(services),
@@ -70,3 +75,5 @@ def build_kp_toolset(
         MvuStatTools(services),
         ChronicleTools(services),
     )
+    prep_scripts._toolset_factory = lambda: toolset  # noqa: SLF001 — our own provider, closing the cycle
+    return toolset
