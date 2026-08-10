@@ -94,9 +94,12 @@ ANCHORS = [
 # can NAME the skill (both are declared by the installed rulepacks) and so the
 # attempt presupposes NO scene object — same lesson as the anchors: an action
 # the Keeper must rightly refuse as impossible produces a false miss.
+# Beats written to be unambiguously checkable: each NAMES a skill the installed packs
+# declare AND asks for the check outright, which is the only evidence rule the eval's
+# judge accepts since it stopped borrowing the engine's (now deleted) verb lexicon.
 CHECKABLE_BEATS = [
-    "I stop and listen hard for any sound in the dark around us.",
-    "I sneak a few paces ahead of the others, keeping low and quiet.",
+    "I stop and listen hard in the dark — can I roll Listen for anything moving?",
+    "I sneak a few paces ahead, keeping low. Give me a Stealth check.",
 ]
 
 

@@ -4,7 +4,6 @@ The paraphrase sentinels are matched on WORD BOUNDARIES, not substrings — both
 false-positive shapes below were observed live in the nightly gate before the fix.
 """
 
-from agent.loop import _player_attempts_checkable_action
 from core.rulepacks import all_check_terms
 from scripts.longrun import ANCHORS, CHECKABLE_BEATS
 from scripts.playtest import GateThresholds, RedlineMetrics, evaluate_gate, judge_checkable
@@ -35,11 +34,14 @@ def test_multi_word_concept_matches_on_boundaries() -> None:
 # ---------------------------------------------------------------------------
 # Forged dice: a dice result stated in prose that no dice tool produced.
 #
-# Scored independently of the two intent heuristics on purpose. Runs 29895731807
-# and 30071276276 (2026-07-22/24) each contained two such turns, and the gate
-# reported only ONE of them -- because the miss rate is denominated in "checkable
-# turns", decided by the very heuristics that `agent.loop`'s corrective round
-# uses, so a turn they both miss is invisible to the gate as well.
+# The hard gate, and the one with no judgement in it. Runs 29895731807 and
+# 30071276276 (2026-07-22/24) each contained two such turns and the gate reported
+# only ONE, because the miss rate was denominated in "checkable turns" decided by
+# the very heuristics the executor used -- so a turn they both missed was
+# invisible here too. Since M20 C the executor has no heuristic to share: this
+# predicate is `agent.turn_checks.reply_states_a_roll`, the same one the Stop-form
+# runner gates the turn on, so a forgery that reaches this counter is one the
+# runner could not talk the model out of inside its round cap.
 # ---------------------------------------------------------------------------
 
 FORGED = "🎲 **Spot Hidden — 22 vs 25 (Success!)**\n\nLeaning in beside Reckless, you scan the map."
@@ -80,7 +82,10 @@ def test_forged_dice_does_not_share_the_miss_rates_denominator() -> None:
     assert metrics.turns == 20
     assert metrics.forged_dice_turns == 1
     assert metrics.forged_dice_rate == 0.05  # 1/20 turns, NOT 1/checkable_turns
-    assert metrics.checkable_turns == 1
+    # And it is not merely a different denominator over the same turns: nobody asked for a
+    # check in words here, so the judge scores nothing at all while the structural counter
+    # catches it. That is the independence — two questions, not one question twice.
+    assert metrics.checkable_turns == 0
 
 
 def test_a_real_roll_is_never_counted_as_forged() -> None:
@@ -144,7 +149,10 @@ def test_a_clean_run_still_passes() -> None:
 # that false positive, and both are pinned below:
 #   1. the "checkable" verdict came from a verb lexicon that cannot cite its
 #      own evidence (`will` in "I will never enter the cellar alone" is a POW
-#      alias in rulepacks/coc7.yaml, unioned into the loop's English pattern);
+#      alias in rulepacks/coc7.yaml, unioned into the loop's English pattern).
+#      M20 C4 finished the job: that lexicon no longer exists in the engine, and
+#      the judge does not reproduce it here -- it wants a named skill next to an
+#      explicit request to check it, and nothing else;
 #   2. a 2-turn denominator was allowed to produce a "50% rate".
 # ---------------------------------------------------------------------------
 
@@ -154,14 +162,14 @@ OATH_REPLY = "The old fisherman nods, uneasy, and looks away toward the water."
 # Real attempts at uncertain outcomes, each naming a skill the INSTALLED packs
 # declare (climb / listen / sneak / spot / persuade / swim / jump / track).
 CHECKABLE_ATTEMPTS = (
-    "I climb the rain-slick wall toward the second-floor window.",
-    "I listen at the study door before we go in.",
-    "I sneak along the hedge toward the side entrance.",
-    "I try to spot anything out of place in the parlour.",
-    "I persuade the harbourmaster to open the ledger room.",
-    "I swim out to the mooring buoy.",
-    "I jump the gap between the two rooftops.",
-    "I track the muddy prints back toward the treeline.",
+    "I go up the rain-slick wall to the second-floor window — Climb check?",
+    "I put my ear to the study door. Roll Listen for me.",
+    "I move along the hedge to the side entrance; give me a Stealth check.",
+    "Can I make a Spot Hidden check on the parlour?",
+    "I lean on the harbourmaster to open the ledger room — Persuade check.",
+    "I head out to the mooring buoy. Swim check?",
+    "I take the gap between the rooftops. Roll Jump.",
+    "I follow the muddy prints toward the treeline — Track check.",
 )
 
 
@@ -186,13 +194,14 @@ def _dice_run(*, rolled: int, missed: int) -> RedlineMetrics:
     return metrics
 
 
-def test_the_verb_lexicon_alone_would_still_flag_the_oath() -> None:
-    """The premise, pinned: the loop's corrective trigger fires on the oath.
+def test_nothing_in_the_engine_still_reads_the_player_s_words() -> None:
+    """The premise, inverted by M20 C4. The oath was flagged because the engine had a
+    verb lexicon and the eval borrowed it. Neither half exists now: the engine's
+    end-of-turn conditions read the tool trace and the reply, never the player."""
+    from agent.turn_checks import CONDITIONS, TurnState
 
-    That is fine for the loop (a false positive there costs one extra roll),
-    but the EVAL must be stricter -- it moves a gate number.
-    """
-    assert _player_attempts_checkable_action(OATH) is True
+    state = TurnState(reply=OATH_REPLY, tool_trace=[])
+    assert not any(predicate(state) for predicate in CONDITIONS.values())
 
 
 def test_a_pure_roleplay_oath_is_not_a_checkable_turn() -> None:

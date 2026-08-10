@@ -61,24 +61,17 @@ except Exception:  # pragma: no cover - dotenv always present in this project
 from agent.context import AgentCtx, LocalFs  # noqa: E402
 from agent.kp_tools import build_kp_toolset  # noqa: E402
 
-# Reuse the SAME structural dice-first detectors the real turn pipeline enforces
-# with (agent/loop.py's bounded corrective round -- see the module docstring
-# there). Importing them here means "should this turn have rolled?" is defined
-# in exactly one place; this eval measures how often even that structural
-# safeguard still fails against a REAL model (the offline suite only proves it
-# against a scripted one). Leading-underscore names are a module-private
-# *convention*, not enforced privacy -- an explicit import is fine.
-from agent.loop import (  # noqa: E402
-    _PLAYER_SKILL_EN_WORDS,
-    _PLAYER_SKILL_ZH_TERMS,
-    _dice_rolled,
-    _en_verb_pattern,
-    _event_description_is_semantic_duplicate,
-    _player_attempts_checkable_action,
-    _reply_requests_or_resolves_check,
-    _reply_states_a_dice_outcome,
-)
+# The STRUCTURAL half of dice-first is shared with the real turn pipeline on
+# purpose: `agent.turn_checks` defines "did the prose state a roll" and "did any
+# dice tool fire" in exactly one place, and this eval measures how often the
+# Stop-form runner built on them still fails against a REAL model (the offline
+# suite only proves it against a scripted one). What is NOT shared any more is
+# any judgement about what a player was attempting -- see `judge_checkable`.
+# Leading-underscore names are a module-private *convention*, not enforced
+# privacy -- an explicit import is fine.
+from agent.loop import _event_description_is_semantic_duplicate  # noqa: E402
 from agent.services import build_services  # noqa: E402
+from agent.turn_checks import dice_rolled, reply_states_a_roll  # noqa: E402
 from core.character_manager import get_hit_points  # noqa: E402
 from core.charcard import parse_card_file  # noqa: E402
 from core.rulepacks import all_check_terms  # noqa: E402
@@ -224,28 +217,6 @@ class CheckEvidence:
 
 
 @lru_cache(maxsize=4)
-def _pack_action_skills(terms: frozenset[str]) -> tuple[tuple[str, re.Pattern[str]], ...]:
-    """(skill name, matcher) for every pack term that is ALSO generic action language.
-
-    The intersection is COMPUTED, never enumerated: `agent.loop`'s lexicon says
-    which words are action verbs (system-agnostic, pack-free), and the installed
-    packs say which of those verbs name a skill. A pack term that is not action
-    language -- "will", "power", "size" -- therefore cannot make a roleplay line
-    checkable on its own; it needs an explicit check request (below).
-    """
-    lowered = {term.strip().lower() for term in terms}
-    english = tuple(
-        (word, re.compile(rf"\b(?:{_en_verb_pattern(word)})\b", re.IGNORECASE))
-        for word in _PLAYER_SKILL_EN_WORDS
-        if word.lower() in lowered
-    )
-    # CJK has no word boundary, so the curated multi-character terms match as
-    # substrings -- exactly how `agent.loop` matches its own CJK lexicon.
-    chinese = tuple((term, re.compile(re.escape(term))) for term in _PLAYER_SKILL_ZH_TERMS if term in terms)
-    return english + chinese
-
-
-@lru_cache(maxsize=4)
 def _pack_term_re(terms: frozenset[str]) -> re.Pattern[str]:
     """One alternation over every pack check term, longest first.
 
@@ -267,33 +238,25 @@ def _quote_span(text: str, start: int, end: int) -> str:
 
 
 def name_checkable_skill(text: str) -> tuple[str, str, str] | None:
-    """`(skill, quote, rule)` if `text` names a skill that should be rolled, else None.
+    """`(skill, quote, rule)` if `text` explicitly calls for a roll, else None.
 
-    Two evidence rules, both grounded in pack data:
-      - `declared_skill_attempt`: the text declares doing something that IS a
-        pack-named skill (climb / listen / sneak / 潜行 / ...).
-      - `explicit_check_request`: a pack skill is named next to check-request
-        vocabulary ("make a Library Use check"), which licenses skills whose
-        names are nouns rather than actions.
-    The EARLIEST match wins so the quoted span is the one that first calls for
-    a check rather than an arbitrary later mention.
+    ONE evidence rule, grounded entirely in pack data plus this file's own small
+    request vocabulary: a pack-declared skill name appears next to check-request
+    words ("make a Library Use check", "掷一次侦查"). The narrower rule replaced a
+    `declared_skill_attempt` half that reached into `agent.loop`'s action-verb
+    lexicon -- the very lexicon whose blind spots this gate measured (M20 C4).
+    That lexicon no longer exists in the engine, and reproducing it here would
+    reproduce the circularity along with it.
+
+    What this deliberately gives up is the turn where a player declares a
+    checkable action in plain words and nobody says "check". That question needs
+    the fiction read, and it is now the Scribe's `unrolled_check` observation --
+    a live-model lane, not something an offline judge should imitate. What it
+    keeps is a rule that can be audited from pack data alone.
     """
     if not text:
         return None
     terms = all_check_terms()
-    best: tuple[int, str, str] | None = None  # (position, skill, rule)
-    for skill, pattern in _pack_action_skills(terms):
-        match = pattern.search(text)
-        if match is not None and (best is None or match.start() < best[0]):
-            best = (match.start(), skill, "declared_skill_attempt")
-    if best is not None:
-        position, skill, rule = best
-        # Name the most SPECIFIC pack term starting where the action verb did,
-        # so the audit line reads "Spot Hidden", not the "spot" that matched.
-        specific = _pack_term_re(terms).match(text, position)
-        if specific is not None and len(specific.group(0)) > len(skill):
-            skill = specific.group(0)
-        return skill, _quote_span(text, position, position + len(skill)), rule
     for match in _pack_term_re(terms).finditer(text):
         window = text[max(0, match.start() - _CHECK_REQUEST_WINDOW) : match.end() + _CHECK_REQUEST_WINDOW]
         if _CHECK_REQUEST_RE.search(window):
@@ -304,28 +267,21 @@ def name_checkable_skill(text: str) -> tuple[str, str, str] | None:
 def judge_checkable(*, action: str, reply: str) -> CheckEvidence | None:
     """Evidence that this turn should have rolled dice, or None if there is none.
 
-    Player side: `agent.loop`'s attempt heuristic is kept as a PREFILTER -- it
-    carries the clause splitting plus the reported-speech / no-roll / meta
-    exemptions -- but it can no longer decide the question by itself. The judge
-    must also be able to name the skill.
+    Both sides now run the SAME pack-data rule: someone -- player or Keeper --
+    named a skill next to an explicit request to check it, and the dice never
+    came. Nothing here shares a heuristic with the executor, because the
+    executor no longer carries one: `agent.loop`'s 21 intent regexes are gone,
+    the structural half of dice-first moved to `agent.turn_checks`, and the
+    fiction-reading half moved to the Scribe.
 
-    Keeper side: `_reply_requests_or_resolves_check` is direct evidence from the
-    Keeper's OWN text (it asked the player to roll, or narrated a graded
-    outcome), so it stands as its own rule -- a Keeper who states an outcome
-    without rolling is the violation this gate exists to catch, whether or not
-    the skill can be named from the reply.
+    The player's side is checked first so the audit line quotes the request as
+    it was made rather than the Keeper's echo of it.
     """
-    if action and _player_attempts_checkable_action(action):
-        named = name_checkable_skill(action)
+    for text, source in ((action, "player_action"), (reply, "keeper_reply")):
+        named = name_checkable_skill(text) if text else None
         if named is not None:
             skill, quote, rule = named
-            return CheckEvidence(skill=skill, quote=quote, source="player_action", rule=rule)
-    if reply and _reply_requests_or_resolves_check(reply):
-        named = name_checkable_skill(reply)
-        skill, quote = (named[0], named[1]) if named else ("", " ".join(reply.split())[:_EVIDENCE_QUOTE_MAX])
-        return CheckEvidence(
-            skill=skill, quote=quote, source="keeper_reply", rule="keeper_requested_or_resolved_check"
-        )
+            return CheckEvidence(skill=skill, quote=quote, source=source, rule=rule)
     return None
 
 
@@ -388,7 +344,7 @@ class RedlineMetrics:
             self.empty_kp += 1
         evidence = judge_checkable(action=action, reply=reply)
         should_roll = evidence is not None
-        rolled = _dice_rolled(tool_trace)
+        rolled = dice_rolled(tool_trace)
         missed = False
         recorded_evidence: dict | None = None
         if evidence is not None:
@@ -399,13 +355,14 @@ class RedlineMetrics:
             recorded_evidence = {**evidence.as_dict(), "missed_roll": missed}
             if len(self.checkable_evidence) < _EVIDENCE_LOG_CAP:
                 self.checkable_evidence.append(recorded_evidence)
-        # Forged dice: scored INDEPENDENTLY of `should_roll` on purpose. The
-        # miss rate above inherits every blind spot of the two intent
-        # heuristics, and those same heuristics drive `agent.loop`'s corrective
-        # round -- so a turn they both miss is a turn this gate could not
-        # report either. This counter asks a question with no heuristic in it:
-        # the reply states a dice result, did a dice tool produce it?
-        forged = bool(_reply_states_a_dice_outcome(reply) and not rolled)
+        # Forged dice: the hard gate, and the one with no judgement in it at
+        # all -- the reply states a dice result in a shape the engine's own
+        # frames render; did a dice tool produce it? Scored over ALL turns, so
+        # it shares neither numerator nor denominator with the judge above.
+        # This is the same predicate `agent.turn_checks` gates the turn on, so
+        # a forged roll that reaches this counter is one the Stop-form runner
+        # could not talk the model out of within its round cap.
+        forged = bool(reply_states_a_roll(reply) and not rolled)
         if forged:
             self.forged_dice_turns += 1
         return {
@@ -1086,7 +1043,7 @@ async def run_behavior_suite(
                 after = await _behavior_snapshot(services, ctx)
                 session = await services.battles.generator.get_current_session(ctx.chat_key)
                 after["checks"] = list(session.skill_checks if session else [])
-                rolled = _dice_rolled(trace)
+                rolled = dice_rolled(trace)
                 finding: dict[str, Any] = {}
                 if "expect_roll" in turn:
                     if turn["expect_roll"]:

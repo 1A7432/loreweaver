@@ -179,7 +179,8 @@ async def test_a_companion_sub_turn_alone_never_runs_the_scribe():
 # ---------------------------------------------------------------------------
 
 # AGENTS.md ("Per-turn model-call budget") states the worst case for ONE player
-# turn: 3 fold + 12 rounds + 5 corrective + 1 recap = 21 per KP turn, plus 1
+# turn: 3 fold + 12 rounds + 5 end-of-turn check rounds + 1 recap = 21 per KP
+# turn, plus 1
 # Scribe + 1 Director beat, plus 6 companion sub-turns of (1 actor + 21). This
 # pins the SHAPE of that bound as well as the ceiling itself: a turn costs a
 # fixed keeper cost plus a per-companion cost, and never more than the ceiling.
