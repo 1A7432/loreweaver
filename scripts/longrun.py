@@ -1,10 +1,10 @@
 """Long-run / context-edge play-test AND real-model red-line eval (long-session).
 
 Drives ONE persistent campaign for many turns to surface long-session degradation the
-short runs can't: the Keeper only ever sees the last ~20 replayed messages (agent.loop
-_HISTORY_CAP) plus fixed module pools and a summary of *prior archived* sessions -- there
-is no running summary of the CURRENT session. So the real failure mode over hundreds of
-turns is amnesia / contradiction, not a context-overflow crash (context is bounded).
+short runs can't: the Keeper replays only the turns since the last chronicle fold, plus
+fixed module pools, the rolling session recap and the campaign summary -- everything
+older survives as summary, not verbatim. So the real failure mode over hundreds of turns
+is amnesia / contradiction, not a context-overflow crash (context is bounded).
 
 This harness plants memorable ANCHOR facts in the opening turns, then PROBES them at
 growing distances and checks whether the Keeper still remembers -- coherence-over-distance

@@ -8,7 +8,7 @@ from inspect import Parameter, signature
 from typing import TYPE_CHECKING, Any
 
 from infra.config import LLMSettings, Settings
-from infra.llm import CACHE_PREFIX_KEY, ChatResult, LLMClient, OpenAILLM, ToolCall, parse_usage
+from infra.llm import CACHE_BREAKPOINT_KEY, ChatResult, LLMClient, OpenAILLM, ToolCall, parse_usage
 from infra.llm_retry import RetryingLLM
 from infra.oauth_flows import (
     XAI_API_BASE,
@@ -600,28 +600,29 @@ def to_anthropic_messages(
 ) -> tuple[str | list[dict[str, Any]] | None, list[dict[str, Any]]]:
     """Translate OpenAI-style messages to Anthropic Messages API turns.
 
-    The system value comes back as a plain string normally, or — when the agent layer
-    marked a cache boundary (`infra.llm.CACHE_PREFIX_KEY`, P1) — as TWO text blocks with
-    an explicit `cache_control` breakpoint after the stable prefix. Anthropic caches only
-    at declared breakpoints, so without this the reordering would help the
-    OpenAI-compatible endpoints (automatic prefix caching) and do nothing here.
+    Cache breakpoints (`infra.llm.CACHE_BREAKPOINT_KEY`, M20 A1) are message-level: a
+    marked message means "cache everything through the end of this message". The system
+    value comes back as a plain string normally, or as ONE text block carrying
+    `cache_control` when the system message is marked; a marked conversation message gets
+    `cache_control` on its LAST content block. Anthropic caches only at declared
+    breakpoints, so without this the layout would help the OpenAI-compatible endpoints
+    (automatic prefix caching) and do nothing here. The API allows 4 breakpoints; the
+    agent loop sets at most 2.
     """
 
     system_parts: list[str] = []
-    cache_prefix = 0
+    cache_system = False
     out: list[dict[str, Any]] = []
     for message in messages:
         role = message.get("role")
+        marked = bool(message.get(CACHE_BREAKPOINT_KEY))
         if role == "system" and not out:
             text = _content_to_text(message.get("content"))
             if text:
-                # Only the FIRST system message can carry the boundary: a second one
-                # would sit past the prefix it claims to describe.
-                if not system_parts:
-                    marked = message.get(CACHE_PREFIX_KEY)
-                    if isinstance(marked, int) and 0 < marked < len(text):
-                        cache_prefix = marked
                 system_parts.append(text)
+                # Only the LAST leading system message can carry the boundary — it is
+                # what the joined system value actually ends with.
+                cache_system = marked
             continue
         if role == "assistant":
             raw_blocks = message.get("provider_blocks")
@@ -629,7 +630,7 @@ def to_anthropic_messages(
                 # Faithful same-turn replay: an Anthropic assistant turn produced under
                 # extended thinking must ride back with its SIGNED thinking blocks intact,
                 # or the API rejects the following tool_result exchange.
-                out.append({"role": "assistant", "content": raw_blocks})
+                out.append(_anthropic_breakpoint({"role": "assistant", "content": raw_blocks}, marked))
                 continue
             blocks = _anthropic_text_blocks(message.get("content"))
             for call in message.get("tool_calls") or []:
@@ -642,35 +643,58 @@ def to_anthropic_messages(
                         "input": _ensure_dict(_get_value(function, "arguments", {})),
                     }
                 )
-            out.append({"role": "assistant", "content": blocks or ""})
+            out.append(_anthropic_breakpoint({"role": "assistant", "content": blocks or ""}, marked))
             continue
         if role == "tool":
             out.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": message.get("tool_call_id") or message.get("id") or "",
-                            "content": _content_to_text(message.get("content")),
-                        }
-                    ],
-                }
+                _anthropic_breakpoint(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": message.get("tool_call_id") or message.get("id") or "",
+                                "content": _content_to_text(message.get("content")),
+                            }
+                        ],
+                    },
+                    marked,
+                )
             )
             continue
-        out.append({"role": "user", "content": _content_to_text(message.get("content"))})
+        out.append(
+            _anthropic_breakpoint({"role": "user", "content": _content_to_text(message.get("content"))}, marked)
+        )
     if not system_parts:
         return None, out
     system_text = "\n\n".join(system_parts)
-    if not cache_prefix:
+    if not cache_system:
         return system_text, out
-    return (
-        [
-            {"type": "text", "text": system_text[:cache_prefix], "cache_control": {"type": "ephemeral"}},
-            {"type": "text", "text": system_text[cache_prefix:]},
-        ],
-        out,
-    )
+    return ([{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}], out)
+
+
+def _anthropic_breakpoint(turn: dict[str, Any], marked: bool) -> dict[str, Any]:
+    """`turn` with a `cache_control` breakpoint on its LAST content block, when marked.
+
+    A turn whose content is a plain string is promoted to a one-element block list —
+    `cache_control` lives on blocks, not on turns. Empty content is left alone: a
+    breakpoint on an empty text block is rejected by the API, and there is nothing
+    worth caching there anyway.
+    """
+    if not marked:
+        return turn
+    content = turn.get("content")
+    if isinstance(content, str):
+        if not content:
+            return turn
+        content = [{"type": "text", "text": content}]
+        turn = {**turn, "content": content}
+    if not isinstance(content, list) or not content:
+        return turn
+    last = content[-1]
+    if not isinstance(last, dict):
+        return turn
+    return {**turn, "content": [*content[:-1], {**last, "cache_control": {"type": "ephemeral"}}]}
 
 
 def to_anthropic_tools(tools: list[dict] | None) -> list[dict[str, Any]]:

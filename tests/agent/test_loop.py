@@ -520,9 +520,11 @@ async def test_history_persists_only_the_user_message_and_final_reply():
 
     raw = await services.store.state_get("chat-7", "chat_history")
     history = json.loads(raw)
+    # `_lw_turn` is the room turn that wrote the pair — the handle the chronicle fold
+    # cuts history on (M20 A2). It is stripped before any vendor wire.
     assert history == [
-        {"role": "user", "content": "What time is it?"},
-        {"role": "assistant", "content": "It is midnight."},
+        {"role": "user", "content": "What time is it?", "_lw_turn": 1},
+        {"role": "assistant", "content": "It is midnight.", "_lw_turn": 1},
     ]
 
 
@@ -546,26 +548,32 @@ async def test_history_reloads_across_turns_and_honors_a_custom_history_key():
     assert default_raw is None
 
 
-async def test_history_is_capped_to_the_last_twenty_messages():
+async def test_history_is_not_capped_and_replays_whole():
+    """M20 A2 DELETED the 20-message sliding window rather than raising it.
+
+    The window dropped its front message every turn once at the cap, so no downstream
+    cache prefix could ever be stable — the exact cost the milestone set out to remove.
+    Truncation now happens at ONE place, the chronicle fold; the oracle for that lives in
+    `tests/agent/test_prompt_cache_layout.py`.
+    """
     llm = FakeLLM(script=[assistant_text("newest reply")])
     services = _services(llm)
     chat_key = "chat-9"
 
-    # Seed 30 already-persisted messages (well past the cap).
+    # Seed 30 already-persisted messages (well past the old cap).
     seeded = [{"role": "user", "content": f"msg-{i}"} for i in range(30)]
     await services.store.state_set(chat_key, "chat_history", json.dumps(seeded))
 
     await run_kp_turn(_ctx(chat_key), services, _toolset(), "newest message")
 
     outgoing_messages, _ = llm.calls[0]
-    # system + <=20 history + the new user message.
-    assert len(outgoing_messages) <= 1 + 20 + 1
-    assert {"role": "user", "content": "msg-0"} not in outgoing_messages  # oldest entries dropped
+    assert any(message.get("content") == "msg-0" for message in outgoing_messages), "nothing is dropped"
+    assert sum(1 for message in outgoing_messages if str(message.get("content", "")).startswith("msg-")) == 30
 
     raw = await services.store.state_get(chat_key, "chat_history")
     persisted = json.loads(raw)
-    assert len(persisted) <= 20
-    assert persisted[-1] == {"role": "assistant", "content": "newest reply"}
+    assert len(persisted) == 32
+    assert persisted[-1] == {"role": "assistant", "content": "newest reply", "_lw_turn": 1}
 
 
 # ---------------------------------------------------------------------------

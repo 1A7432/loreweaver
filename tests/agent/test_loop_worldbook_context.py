@@ -19,11 +19,22 @@ def _services(llm):
     return build_services(Settings(locale="en"), llm=llm, embeddings=FakeEmbeddings(64))
 
 
+def _assembled_prompt(messages: list[dict]) -> str:
+    """Everything the loop assembled AROUND the player's words.
+
+    M20 A1 split the one assembled prompt across two wire slots — the stable head in the
+    system message, the volatile tail (world lore, game state, the chronicle) in a state
+    message just before the player's — so a test that reads only `messages[0]` now sees
+    half of it. These are single-turn rooms, so nothing but the prompt sits in between.
+    """
+    return "\n\n".join(str(message.get("content") or "") for message in messages[:-1])
+
+
 async def test_player_message_reaches_worldbook_injection(tmp_path):
     captured_prompts: list[str] = []
 
     def responder(messages, tools):
-        captured_prompts.append(messages[0]["content"])
+        captured_prompts.append(_assembled_prompt(messages))
         return assistant_text("The lighthouse looms.")
 
     services = _services(FakeLLM(responder=responder))
@@ -43,7 +54,7 @@ async def test_unrelated_message_does_not_fire_keyword_lore(tmp_path):
     captured_prompts: list[str] = []
 
     def responder(messages, tools):
-        captured_prompts.append(messages[0]["content"])
+        captured_prompts.append(_assembled_prompt(messages))
         return assistant_text("A quiet evening.")
 
     services = _services(FakeLLM(responder=responder))
@@ -69,7 +80,7 @@ async def test_discipline_and_fidelity_blocks_ride_world_lore_in_module_rooms(tm
     captured_prompts: list[str] = []
 
     def responder(messages, tools):
-        captured_prompts.append(messages[0]["content"])
+        captured_prompts.append(_assembled_prompt(messages))
         return assistant_text("The rain thickens.")
 
     services = _services(FakeLLM(responder=responder))
@@ -100,7 +111,7 @@ async def test_sandbox_lore_never_pulls_in_module_directives(tmp_path):
     captured_prompts: list[str] = []
 
     def responder(messages, tools):
-        captured_prompts.append(messages[0]["content"])
+        captured_prompts.append(_assembled_prompt(messages))
         return assistant_text("The tavern hums.")
 
     services = _services(FakeLLM(responder=responder))
@@ -123,7 +134,7 @@ async def test_no_world_lore_means_no_discipline_fold(tmp_path):
     captured_prompts: list[str] = []
 
     def responder(messages, tools):
-        captured_prompts.append(messages[0]["content"])
+        captured_prompts.append(_assembled_prompt(messages))
         return assistant_text("A calm night.")
 
     services = _services(FakeLLM(responder=responder))

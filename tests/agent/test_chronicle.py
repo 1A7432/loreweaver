@@ -362,7 +362,9 @@ async def test_emergency_level_folds_before_the_model_call():
         if _is_fold_call(messages, tools):
             return assistant_text("folded summary: the bell tolls no more")
         if tools is not None:
-            captured["system"] = str(messages[0].get("content", ""))
+            # The chronicle section rides the volatile tail, which M20 A1 moved out of the
+            # system message into the state message just before the player's.
+            captured["prompt"] = "\n\n".join(str(m.get("content") or "") for m in messages[:-1])
         return assistant_text("The road winds on.")
 
     services = _services(FakeLLM(responder=responder))
@@ -376,7 +378,7 @@ async def test_emergency_level_folds_before_the_model_call():
     assert result.reply == "The road winds on."
     summary = await services.documents.get(ctx.chat_key, CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID)
     assert summary is not None, "an over-ceiling meter folds before the next model call"
-    assert "the bell tolls no more" in captured["system"], "the KP call of THIS turn already sees the new summary"
+    assert "the bell tolls no more" in captured["prompt"], "the KP call of THIS turn already sees the new summary"
 
 
 # ---------------------------------------------------------------------------

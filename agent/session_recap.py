@@ -1,10 +1,10 @@
 """Rolling "story so far" memory for the CURRENT session.
 
-The AI-KP loop (``agent.loop.run_kp_turn``) only ever replays the last
-``_HISTORY_CAP`` (~20) messages, and
+The AI-KP loop (``agent.loop.run_kp_turn``) replays only the turns since the
+last chronicle fold, and
 ``core.prompt_sections.inject_session_history_prompt`` recaps only a PRIOR,
 already-archived session -- so over a long campaign the Keeper forgets
-everything a player established more than ~10 exchanges ago (the brass key
+everything a player established before the current fold interval (the brass key
 under the floorboard, the dog named Boomer, the vow about the cellar). This
 module maintains a compact, BOUNDED running recap of the *in-progress*
 session: it is refreshed by the LLM every ``_RECAP_REFRESH_EVERY`` completed

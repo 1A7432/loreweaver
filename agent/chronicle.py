@@ -88,6 +88,7 @@ __all__ = [
     "recall_folded_entries",
     "record_entry",
     "render_recap",
+    "summary_through_turn",
 ]
 
 CHRONICLE_TURN_KEY = "chronicle_turn"
@@ -146,6 +147,26 @@ async def chronicle_turn(store: Any, chat_key: str) -> int:
     try:
         return int(raw) if raw else 0
     except (TypeError, ValueError):
+        return 0
+
+
+async def summary_through_turn(services: Services, chat_key: str) -> int:
+    """The newest room turn the rolling summary has absorbed (0 when nothing has folded).
+
+    Batches fold oldest-first and each one rewrites this field with its own newest turn,
+    so it only ever moves forward — which makes it a stable watermark for anything that
+    wants to know "what is now covered by the summary rather than by raw records". The
+    loop's history trim (M20 A2) is the first such caller. Never raises: an unreadable
+    summary reads as "nothing folded", so the caller keeps everything.
+    """
+    try:
+        summary = await services.documents.get(chat_key, CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID)
+        if summary is None:
+            return 0
+        through = summary.data.get("through_turn", 0)
+        return through if isinstance(through, int) and not isinstance(through, bool) and through > 0 else 0
+    except Exception:  # noqa: BLE001 — a watermark read must never break a turn
+        logger.debug("chronicle summary watermark read failed", exc_info=True)
         return 0
 
 

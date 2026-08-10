@@ -97,13 +97,16 @@ from core.worldbook import inject_world_lore_prompt
 
 @dataclass(frozen=True)
 class SystemPrompt:
-    """One system prompt, split at its cache boundary (P1 — module docstring).
+    """ONE assembled prompt, split at its cache boundary (P1/M20 — module docstring).
 
-    ``text`` is what actually reaches the model: still a single string, still one
-    injection. The split exists so the provider layer can mark where the reusable
-    prefix ends — on the Anthropic path that becomes an explicit ``cache_control``
-    breakpoint; OpenAI-compatible endpoints cache by prefix automatically and need
-    no marker, but they benefit from the same ORDER regardless.
+    Iron rule #5's invariant is the single ASSEMBLER, not the message count: this is
+    one object built in one place, and ``agent.loop`` decides where each half lands on
+    the wire (M20 A1 puts the stable head in the system message and the volatile tail
+    in a state message just before the player's, so the whole cacheable prefix —
+    system + replayed history — stays byte-stable between folds).
+
+    ``text`` is the two halves joined, for every caller that wants the prompt as one
+    string (``build_system_prompt``, the doctor, tests).
     """
 
     stable: str
@@ -112,16 +115,6 @@ class SystemPrompt:
     @property
     def text(self) -> str:
         return "\n\n".join(part for part in (self.stable, self.volatile) if part)
-
-    @property
-    def cache_prefix_chars(self) -> int:
-        """Length of the cacheable prefix within ``text`` (0 when there is none).
-
-        Counts the joining blank line, so ``text[:cache_prefix_chars]`` is exactly the
-        stable half plus its separator — the boundary a provider marks."""
-        if not self.stable or not self.volatile:
-            return len(self.text)
-        return len(self.stable) + 2
 
 
 async def build_system_prompt(ctx: AgentCtx, services: Services) -> str:

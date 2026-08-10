@@ -24,14 +24,26 @@ from infra.i18n import t
 
 TokenProvider = Callable[[], Awaitable[str]]
 
-# Private message keys (P1): metadata the AGENT layer attaches to a message for the
-# provider adapters, which must never reach a vendor's wire. `_lw_cache_prefix` marks
-# how many characters of a system message are the stable, cacheable prefix; the
-# Anthropic adapter turns it into an explicit `cache_control` breakpoint, and
-# OpenAI-compatible endpoints (which cache by prefix automatically) simply have it
-# stripped. `provider_blocks` predates this and follows the same rule.
-CACHE_PREFIX_KEY = "_lw_cache_prefix"
-PRIVATE_MESSAGE_KEYS = frozenset({CACHE_PREFIX_KEY, "provider_blocks"})
+# Private message keys: metadata the AGENT layer attaches to a message, which must
+# never reach a vendor's wire.
+#
+# `_lw_cache_breakpoint` (M20 A1) marks a message as the END of a cacheable prefix.
+# It is MESSAGE-level, not a character offset into one message: the layout is
+# `[system: stable] [history] [state: volatile] [user]`, so the two boundaries worth
+# caching fall between whole messages (end of the system message, end of history).
+# The Anthropic adapter turns each mark into an explicit `cache_control` breakpoint
+# (the API allows up to 4; the loop sets 2); OpenAI-compatible endpoints cache by
+# prefix automatically and simply have the key stripped.
+#
+# `_lw_turn` stamps a persisted history message with the room turn that produced it,
+# so the chronicle fold can drop exactly the turns it has folded into the rolling
+# summary. Unlike the other two it IS persisted (into the room's history blob) — the
+# shared rule it obeys is only "strip before the wire".
+#
+# `provider_blocks` predates both and follows the same rule.
+CACHE_BREAKPOINT_KEY = "_lw_cache_breakpoint"
+HISTORY_TURN_KEY = "_lw_turn"
+PRIVATE_MESSAGE_KEYS = frozenset({CACHE_BREAKPOINT_KEY, HISTORY_TURN_KEY, "provider_blocks"})
 
 
 def wire_messages(messages: list[dict]) -> list[dict]:
