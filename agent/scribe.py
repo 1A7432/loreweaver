@@ -80,12 +80,13 @@ _MIN_EVIDENCE_CHARS = 4
 _PROMPT = """You are the table Scribe for a TTRPG engine — a silent ledger clerk, not a storyteller.
 
 Given ONE game turn (player action + game-master reply) and the room's current trackers, output ONLY a JSON object:
-{{"ops": [{{"op": "set", "id": "<tracker id>", "value": <number>, "evidence": "<verbatim quote>"}} | {{"op": "adjust", "id": "<tracker id>", "delta": <number>, "evidence": "<verbatim quote>"}}], "whispers": ["<short keeper-side note>"], "beat": "<beat>"}}
+{{"ops": [{{"op": "set", "id": "<tracker id>", "value": <number>, "evidence": "<verbatim quote>"}} | {{"op": "adjust", "id": "<tracker id>", "delta": <number>, "evidence": "<verbatim quote>"}}], "whispers": ["<short keeper-side note>"], "unrolled_check": {{"skill": "<skill>", "evidence": "<verbatim quote>"}} or null, "beat": "<beat>"}}
 
 Rules:
 - "ops" ONLY for tracker changes the narration plainly establishes as fact. "evidence" is REQUIRED: a short verbatim quote copied from the GAME-MASTER reply that establishes the tracked quantity ITSELF changed. The player's message states what they ATTEMPT, never what happened — it can never be evidence, and an op whose evidence is not an exact quote of the game-master reply is discarded.
 - You see only each tracker's id/label/range, not what earns a point. Acquiring some item is NOT evidence for an item counter unless the text explicitly identifies it as one of the things that counter counts; time passing counts on a day-tracker only when the text states the story moved to a new day. If the tracker's meaning leaves any doubt, do NOT write — whisper instead.
-- "whispers" (0-{max_whispers}, each <= {max_whisper_chars} chars) for anything needing the keeper's judgment: scene/clock drift vs the fiction, a beat that likely deserved a dice check or sanity roll, players stuck without progress, an earned gain no tracker captures.
+- "unrolled_check": set it when this turn resolved something whose outcome was genuinely uncertain and no dice were rolled for it — name the skill it called for and quote the exact text that shows the resolution. Tools the game-master called this turn are listed below; if a dice tool is among them, this is null. A declared intention with no outcome yet, a foregone conclusion, and pure conversation are all null. You are reporting an observation for the keeper to judge, not issuing an instruction — say nothing when unsure.
+- "whispers" (0-{max_whispers}, each <= {max_whisper_chars} chars) for anything needing the keeper's judgment: scene/clock drift vs the fiction, players stuck without progress, an earned gain no tracker captures.
 - Write whispers in the language the turn text is written in (Chinese turn -> Chinese whispers).
 - "beat" classifies this turn as a MOMENT worth staging, one of: {beats}, or "none". Use "none" unless the turn clearly is one of them — most turns are "none".
   - scene_change: the group moved somewhere else, or time visibly moved on.
@@ -148,6 +149,30 @@ def _extract_json(text: str) -> dict[str, Any] | None:
     except ValueError:
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def _unrolled_check_note(raw: Any, haystack: str, services: Services, locale: str) -> str:
+    """A whisper naming a check the turn resolved without dice, or `""`.
+
+    Held to the SAME evidence gate as a tracker write (5601795): a claim that cannot quote
+    the game-master's own text does not get to reach the Keeper. The reasoning is the same
+    one iron rule #2 rests on — the player's message says what they attempted, the reply
+    says what happened, and only the second can evidence an unrolled resolution.
+
+    Phrasing matters here. The note observes; it does not instruct. The engine gates on
+    nothing and prescribes nothing, so the Keeper reads it and decides — including
+    deciding that no check was warranted.
+    """
+    if not isinstance(raw, dict):
+        return ""
+    skill = str(raw.get("skill") or "").strip()[:60]
+    evidence = _squash_ws(str(raw.get("evidence") or ""))
+    if not skill or len(evidence) < _MIN_EVIDENCE_CHARS or evidence not in haystack:
+        logger.debug("scribe: unrolled_check dropped (evidence not a verbatim quote)")
+        return ""
+    return services.i18n.with_locale(locale).t(
+        "scribe.whisper.unrolled_check", skill=skill, quote=evidence[:MAX_WHISPER_CHARS // 2]
+    )[:MAX_WHISPER_CHARS]
 
 
 async def pop_whispers(services: Services, chat_key: str) -> list[str]:
@@ -235,18 +260,32 @@ async def run_scribe(
                 changed = True
 
     whispers_raw = parsed.get("whispers")
-    if isinstance(whispers_raw, list):
-        fresh = [str(item).strip()[:MAX_WHISPER_CHARS] for item in whispers_raw if str(item).strip()][:MAX_WHISPERS]
-        if fresh:
-            existing = []
-            raw = await services.store.state_get(ctx.chat_key, WHISPERS_KEY)
-            if raw:
-                try:
-                    existing = [str(item) for item in json.loads(raw)]
-                except ValueError:
-                    existing = []
-            merged = (existing + fresh)[-MAX_STORED_WHISPERS:]
-            await services.store.state_set(ctx.chat_key, WHISPERS_KEY, json.dumps(merged, ensure_ascii=False))
+    fresh_whispers = (
+        [str(item).strip()[:MAX_WHISPER_CHARS] for item in whispers_raw if str(item).strip()][:MAX_WHISPERS]
+        if isinstance(whispers_raw, list)
+        else []
+    )
+    # M20 C3: "should this have been checked?" is a judgement that needs the fiction read,
+    # so it lives here rather than in a lexicon inside the loop. It rides the ordinary
+    # whisper channel into the Keeper's next turn — the engine prescribes NO action and
+    # gates on nothing. That is the watcher-actor line: the Scribe observes, the Keeper
+    # judges. It stops being enforcement and becomes observability, which costs nothing
+    # measurable: the deleted lexicon's enforcement value was never established, because
+    # the metric that watched it shared its blind spots.
+    unrolled = _unrolled_check_note(parsed.get("unrolled_check"), haystack, services, ctx.locale)
+    if unrolled:
+        fresh_whispers = [*fresh_whispers, unrolled][:MAX_WHISPERS]
+
+    if fresh_whispers:
+        existing = []
+        raw = await services.store.state_get(ctx.chat_key, WHISPERS_KEY)
+        if raw:
+            try:
+                existing = [str(item) for item in json.loads(raw)]
+            except ValueError:
+                existing = []
+        merged = (existing + fresh_whispers)[-MAX_STORED_WHISPERS:]
+        await services.store.state_set(ctx.chat_key, WHISPERS_KEY, json.dumps(merged, ensure_ascii=False))
 
     # 场记: a single word from a closed vocabulary, or nothing. Anything else the model
     # wrote here is discarded rather than forwarded — this field is the ONLY thing that

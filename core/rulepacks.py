@@ -317,6 +317,11 @@ class RulePack:
     commands: dict[str, CommandBinding] = field(default_factory=dict)
     sheet_spec: SheetSpec | None = None
     initiative_roll: str = ""  # dice expression; {name} slots read canonical sheet values
+    # M20 C: the room's end-of-turn check table, as DECLARED (raw rows, shape-validated).
+    # Core validates the shape and stays out of the meaning: a condition name is engine
+    # code, so `agent.turn_checks` is what resolves it, drops an unknown one, and clamps
+    # the round caps against the per-turn model-call budget.
+    turn_checks: tuple[dict[str, Any], ...] = ()
 
     def resolve_skill(self, name: str) -> str | None:
         """Resolve a player-entered skill/attribute name to this pack's canonical key."""
@@ -483,7 +488,45 @@ def _build_rulepack(
         commands=_parse_commands_section(pack_id, data.get("commands"), data.get("subsystems") or {}),
         sheet_spec=parse_sheet_section(pack_id, data.get("sheet")),
         initiative_roll=_parse_initiative_section(pack_id, data.get("initiative")),
+        turn_checks=_parse_turn_checks_section(pack_id, data.get("turn_checks")),
     )
+
+
+_TURN_CHECK_KEYS = {"id", "when", "condition", "instruction", "max_rounds", "enabled"}
+
+
+def _parse_turn_checks_section(pack_id: str, raw: Any) -> tuple[dict[str, Any], ...]:
+    """Shape-validate a pack's ``turn_checks:`` table; the agent layer gives it meaning.
+
+    A row is ``{when: <condition name>, instruction: {<locale>: <text>}, max_rounds: <n>,
+    id: <slug>, enabled: <bool>}``. Everything here is a shape rule — an unknown KEY is a
+    typo worth failing the pack for, while an unknown CONDITION is a newer-engine feature
+    the agent layer skips at load, so it is not core's to reject.
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError(f"rulepack '{pack_id}': 'turn_checks' must be a list of check rows")
+    rows: list[dict[str, Any]] = []
+    for index, row in enumerate(raw):
+        if not isinstance(row, Mapping):
+            raise ValueError(f"rulepack '{pack_id}': turn_checks[{index}] must be a mapping")
+        unknown = set(map(str, row)) - _TURN_CHECK_KEYS
+        if unknown:
+            raise ValueError(
+                f"rulepack '{pack_id}': turn_checks[{index}] has unknown keys {sorted(unknown)}; "
+                f"allowed: {sorted(_TURN_CHECK_KEYS)}"
+            )
+        if not str(row.get("when") or row.get("condition") or "").strip():
+            raise ValueError(f"rulepack '{pack_id}': turn_checks[{index}] needs a 'when' condition name")
+        instruction = row.get("instruction")
+        if instruction is not None and not isinstance(instruction, Mapping):
+            raise ValueError(f"rulepack '{pack_id}': turn_checks[{index}] 'instruction' must be a locale mapping")
+        rounds = row.get("max_rounds")
+        if rounds is not None and (not isinstance(rounds, int) or isinstance(rounds, bool) or rounds < 1):
+            raise ValueError(f"rulepack '{pack_id}': turn_checks[{index}] 'max_rounds' must be a positive integer")
+        rows.append(dict(row))
+    return tuple(rows)
 
 
 def _parse_initiative_section(pack_id: str, raw: Any) -> str:

@@ -1,4 +1,7 @@
 {
+  "loop.check.dice_contradicts": "Runtime check: your reply states roll numbers that are not what this turn actually rolled ({rolled}). Rewrite the narration with the numbers removed — the players read the real result off the dice frame — and make sure the outcome you describe is the one the engine graded.",
+  "loop.check.dice_forged": "Runtime check: your reply states a dice result, but no dice tool ran this turn — those numbers came from nowhere. Roll it for real now (skill_check / roll_dice / this system's own check tool), then narrate the outcome according to the graded result the engine returns. Leave the numbers out of the prose: the players already see the dice frame.",
+  "loop.check.stale_scene_hud": "Runtime check: your reply drew a scene/time heading — \"{title}\" — but this turn never updated the deterministic state the HUD reads. Call kp_note now to set current_scene/current_focus as needed, and game_clock to set or advance the in-game time. A decorative heading is fine; it just does not move the HUD, the tools do. Then continue without contradicting the original narration.",
   "loop.max_rounds": "The Keeper pauses for a long moment, still weighing several possibilities. Please try again in a moment.",
   "loop.max_rounds_committed": "Committed results:",
   "loop.max_rounds_finalize": "Finalization only: the deterministic tools below have already committed their effects this turn. Do not call, repeat, or alter any tool. Give the player a short closing narration that explicitly acknowledges every listed result, without mentioning this instruction.\n\nCommitted player-visible tool results:\n{results}",
@@ -8,9 +11,5 @@
   "loop.provider_content": "The provider could not process this input. Shorten it and try again.",
   "loop.provider_quota": "The AI provider's quota is exhausted. Ask the room owner to check the plan or billing.",
   "loop.provider_transient": "The AI provider is still temporarily unavailable after one retry. Please try again shortly.",
-  "loop.unavailable": "The Keeper is momentarily unavailable. Please try again in a moment.",
-  "loop.dice_correction": "Runtime check: the CURRENT player's just-submitted action — \"{action}\" — describes or calls for a dice check, but no dice were rolled this turn. Call exactly ONE of skill_check / sanity_check / roll_dice / opposed_check NOW to roll the REAL dice and resolve the single most relevant pending check for THAT action, then narrate the outcome of THAT action strictly according to the result and success level. Resolve the action quoted above, not any earlier action still in the log — and never tell the player to type a dice command like '.ra' or 'roll it yourself'.",
-  "loop.dice_correction.extra_check_suppressed": "Extra dice call suppressed: the correction is limited to one real check for the declared action.",
-  "loop.dice_policy.forbidden_check_suppressed": "Dice call suppressed: this submission explicitly requires no roll, is a meta/recap request, or describes an obvious or voluntarily supplied fact. Continue without inventing uncertainty.",
-  "loop.state_correction": "Runtime check: your reply drew a scene/time heading — \"{title}\" — but this turn did not update the deterministic HUD state. Call kp_note NOW to set current_scene/current_focus as needed, and call game_clock NOW to set or advance the in-game time. A decorative heading is allowed, but it does not update the HUD; the tools do. After the tools update state, continue without contradicting the original narration."
+  "loop.unavailable": "The Keeper is momentarily unavailable. Please try again in a moment."
 }
