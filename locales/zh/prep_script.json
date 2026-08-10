@@ -1,0 +1,11 @@
+{
+  "prep_script.applied": "{index}. {tool} -> {result}",
+  "prep_script.done": "已执行 {count} 步：\n{results}",
+  "prep_script.empty": "脚本什么也没计划。只有 plan(tool, args) 会产生效果。",
+  "prep_script.failed": "{index}. {tool} 失败：{error}——就此停下；前面已经执行的仍然算数。",
+  "prep_script.invalid": "脚本没能给出一份计划：{error}",
+  "prep_script.operation": "{index}. {tool} {args}",
+  "prep_script.preview": "计划了 {count} 步——目前一步都还没执行。想真的做，再调用一次并把 apply 设为 true。\n{operations}",
+  "prep_script.unavailable": "这里没法执行计划：本房间没有绑定工具集。",
+  "prep_script.unreachable": "这份计划里点了这里够不着的工具：{tools}。一步都没执行——计划是整份校验的，不会只跑一半。"
+}
