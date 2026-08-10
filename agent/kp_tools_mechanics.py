@@ -161,7 +161,7 @@ class CharacterTools:
         except Exception as exc:
             return i18n.t("kp_tools.character.create.failed", error=str(exc))
 
-    @tool
+    @tool(read_only=True)
     async def get_character_sheet(self, ctx: AgentCtx) -> str:
         """Get the current user's character sheet details."""
         i18n = self.services.i18n.with_locale(ctx.locale)
@@ -341,7 +341,7 @@ class CharacterTools:
         except Exception as exc:
             return i18n.t("kp_tools.character.attribute.failed", error=str(exc))
 
-    @tool
+    @tool(read_only=True)
     async def list_characters(self, ctx: AgentCtx) -> str:
         """List all of the user's character sheets."""
         i18n = self.services.i18n.with_locale(ctx.locale)

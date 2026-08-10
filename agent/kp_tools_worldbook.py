@@ -124,7 +124,7 @@ class WorldbookTools:
         except Exception as exc:
             return i18n.t("worldbook.tools.add.failed", error=str(exc))
 
-    @tool(keeper_only=True)
+    @tool(keeper_only=True, read_only=True)
     async def query_lore(self, ctx: AgentCtx, query: str) -> str:
         """Retrieve world lore relevant to `query` (KEEPER view -- may include secret entries; for
         your own reasoning, never quote secret lore to players). Matches by keyword + meaning.
@@ -158,7 +158,7 @@ class WorldbookTools:
         except Exception as exc:
             return i18n.t("worldbook.tools.query.failed", error=str(exc))
 
-    @tool(prep_only=True)
+    @tool(prep_only=True, read_only=True)
     async def list_lore(self, ctx: AgentCtx, scope: str = "", *, _keeper: bool = True) -> str:
         """List world-lore entries (titles + scope/category only -- no secret content is revealed).
 

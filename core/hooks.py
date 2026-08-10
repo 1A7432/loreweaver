@@ -64,7 +64,7 @@ from core.ejs_full import (
 
 logger = logging.getLogger(__name__)
 
-EVENTS = ("turn_start", "reply_ready", "dice_rolled", "variables_changed", "clock_advanced")
+EVENTS = ("turn_start", "reply_ready", "dice_rolled", "variables_changed", "clock_advanced", "tool_use")
 
 MAX_HOOK_SOURCE_CHARS = 40_000
 MAX_SCRIPTS = 16
@@ -126,6 +126,7 @@ globalThis.__narrations = [];
 globalThis.__ui = [];
 globalThis.__panel_events = [];
 globalThis.__rewrite = null;
+globalThis.__deny = null;
 
 function on(eventType, handler) {
     if (typeof handler !== "function") return;
@@ -146,6 +147,10 @@ function emitUI(blocks, opts) {
 function emitPanel(panelId, payload) {
     globalThis.__panel_events.push({ panel: String(panelId), payload: payload });
 }
+// M20: a `tool_use` handler may refuse the call by returning a reason. Refusals go
+// through the SAME block-with-reason path as the engine's own end-of-turn checks — the
+// reason is fed back to the model, which corrects itself — rather than a second mechanism.
+function denyTool(reason) { globalThis.__deny = String(reason); }
 function log(text) { globalThis.__warnings.push("log: " + String(text)); }
 
 function __dispatch(eventType, payload) {
@@ -397,6 +402,9 @@ class HookOutcome:
     injections: list[str] = field(default_factory=list)
     narrations: list[str] = field(default_factory=list)
     rewrite: str | None = None
+    # `tool_use` only: the reason a hook refused this tool call, or None to allow it.
+    # A hook that fails, times out, or says nothing ALLOWS — see `HookEngine.fire`.
+    deny: str | None = None
     # Validated emitUI() emissions (see `sanitize_ui_emissions`) — each dict is one
     # protocol-v1.7 `ui` wire-frame payload the caller broadcasts as-is.
     ui_blocks: list[dict[str, Any]] = field(default_factory=list)
@@ -445,7 +453,7 @@ class HookEngine:
         try:
             self._context.eval(
                 "globalThis.__writes = []; globalThis.__injections = [];"  # i18n-exempt: JavaScript source, not UI text
-                " globalThis.__narrations = []; globalThis.__rewrite = null;"
+                " globalThis.__narrations = []; globalThis.__rewrite = null; globalThis.__deny = null;"
                 " globalThis.__ui = []; globalThis.__panel_events = [];"
             )
             outcome.handlers = int(
@@ -461,6 +469,8 @@ class HookEngine:
             outcome.narrations = self._read_texts("__narrations", MAX_NARRATIONS, MAX_NARRATION_CHARS)
             rewrite = self._read_json("globalThis.__rewrite")
             outcome.rewrite = rewrite[:MAX_INJECT_CHARS] if isinstance(rewrite, str) else None
+            deny = self._read_json("globalThis.__deny")
+            outcome.deny = deny[:MAX_INJECT_CHARS] if isinstance(deny, str) and deny.strip() else None
             outcome.ui_blocks = sanitize_ui_emissions(self._read_json("globalThis.__ui"))
             outcome.panel_events = sanitize_panel_events(self._read_json("globalThis.__panel_events"))
             warnings = self._read_json("globalThis.__warnings") or []
@@ -468,6 +478,13 @@ class HookEngine:
             outcome.warnings = [str(warning) for warning in warnings]
         except Exception as exc:  # time/memory limit, JS engine error — hooks never break a turn
             outcome.warnings.append(f"dispatch failed: {exc}")
+            # FAIL OPEN, and specifically here. Every hook failure is harmless today: a
+            # broken handler loses its effects and the turn continues. The moment hooks can
+            # VETO a tool call, the same failure could instead deny it — so a failed or
+            # timed-out dispatch leaves `deny` at None. A hook that cannot run does not get
+            # to stop the game. (`quickjs`'s own time limit is what bounds the execution,
+            # which is why there is no second timeout wrapped around this.)
+            outcome.deny = None
         return outcome
 
     def _read_writes(self) -> list[tuple[str, Any]]:

@@ -472,7 +472,7 @@ class NpcTools:
         except Exception as exc:
             return i18n.t("npc.tools.speak.failed", error=str(exc))
 
-    @tool(keeper_only=True)
+    @tool(keeper_only=True, read_only=True)
     async def get_npc(self, ctx: AgentCtx, npc: str) -> str:
         """Get an NPC's full record, INCLUDING secret_agenda and knowledge (KEEPER-ONLY -- for your
         own reasoning, never quote raw to players).
@@ -492,7 +492,7 @@ class NpcTools:
         except Exception as exc:
             return i18n.t("npc.tools.get.failed", error=str(exc))
 
-    @tool(keeper_only=True)
+    @tool(keeper_only=True, read_only=True)
     async def list_npcs(self, ctx: AgentCtx) -> str:
         """List every NPC in this room, INCLUDING secrets (KEEPER-ONLY -- for your own reasoning,
         never quote raw to players).

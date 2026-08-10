@@ -389,7 +389,7 @@ operator's content, the operator's box):
   ST-shaped card's `extensions.loreweaver_hooks` (installed by the KEEPER's
   `.import <file> world` — a card with hooks is a world card, see the split in A.2;
   re-importing replaces its scripts rather than stacking).
-- **API**: `on("turn_start"|"reply_ready"|"dice_rolled"|"variables_changed", handler)`, the
+- **API**: `on("turn_start"|"reply_ready"|"dice_rolled"|"variables_changed"|"clock_advanced"|"tool_use", handler)`, the
   full variable bridge (`getvar`/`setvar`/`variables`/`stat_data`, lodash as `_`), and the
   effect emitters `inject(text)` (adds a section to this turn's keeper prompt),
   `narrate(text)` (appends to the player-visible reply), `rewriteReply(text)`, `log(text)`,
@@ -398,6 +398,15 @@ operator's content, the operator's box):
   `emitUI([{kind:"meter", label:"Fear", value:3, min:0, max:10}], {panel:"sidebar", id:"hud"})`;
   see `docs/protocol.md` for the block schema. Emitted UI is PLAYER-VISIBLE authorial output
   (the same trust stance as `narrate`) — never emit keeper-only secrets into it.
+- **`tool_use` + `denyTool(reason)` (M20)**: a handler receives `{tool, arguments}` BEFORE a
+  Keeper tool call runs and may refuse it — `on('tool_use', c => { if (c.tool === 'game_clock')
+  denyTool('time is frozen in this scene'); })`. The reason is fed back to the model through
+  the same block-with-reason path the engine's own end-of-turn checks use, so there is one
+  mechanism for "refused, here is why" rather than two. **Refusal FAILS OPEN**: a handler that
+  throws, or a script that hits the QuickJS time limit, allows the call. Every hook failure is
+  internally harmless today (a broken handler loses its effects and the turn continues), and
+  that property had to survive contact with the critical path — a hook that cannot run does
+  not get to stop the game.
   With module UI panels (Layer D) there is additionally `emitPanel(panelId, payload)` — an
   opaque JSON payload (≤ 32 KB, ≤ 20 per turn) for one pack-declared panel, delivered as a
   `panel_event` ONLY to viewers whose manifest contains that panel. The same
