@@ -36,16 +36,25 @@ from agent.context import AgentCtx
 from agent.loop import run_kp_turn
 from agent.prompt_builder import build_system_prompt_parts
 from agent.services import build_services
-from agent.tools import Toolset
+from agent.tools import Toolset, tool
 from core.modvars import define_modvar, set_modvar
 from core.relationships import RelationshipManager
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
-from infra.llm import CACHE_BREAKPOINT_KEY, HISTORY_TURN_KEY, ChatResult, FakeLLM, wire_messages
+from infra.llm import CACHE_BREAKPOINT_KEY, HISTORY_TURN_KEY, ChatResult, FakeLLM, tool_call, wire_messages
 from infra.providers import to_anthropic_messages
 
 CHAT = "cache-layout-room"
 SECRET = "SENTINEL_THE_LIGHTHOUSE_KEEPER"
+
+
+class _ClockProvider:
+    """One inert tool, so a turn can run several tool rounds deterministically."""
+
+    @tool
+    async def lookup_time(self, ctx: AgentCtx) -> str:
+        """Look up the current in-game time."""
+        return "1926-03-15 16:40"
 
 
 def _services(llm=None):
@@ -168,6 +177,61 @@ async def test_the_wire_layout_is_stable_head_history_state_player():
     assert [message["role"] for message in history] == ["user", "assistant"], "one prior exchange replayed"
     assert history[-1][CACHE_BREAKPOINT_KEY] is True, "breakpoint 2 sits at the end of history"
     assert sum(1 for message in messages if message.get(CACHE_BREAKPOINT_KEY)) == 2, "two breakpoints, no more"
+
+
+async def test_the_in_turn_breakpoint_follows_the_tool_loop():
+    """A(3): the third breakpoint rides the newest tool result.
+
+    Within one turn the tail is rebuilt on every round, so without this each of up to 12
+    rounds recomputes the whole accumulating tool transcript. The mark MOVES rather than
+    accumulating: four breakpoints is the ceiling and the head and history already hold
+    two, and a stale in-turn mark would be a write nothing reads.
+    """
+    sent: list[list[dict]] = []
+
+    def responder(messages, tools):
+        sent.append(deepcopy(messages))
+        return (
+            ChatResult(content=None, tool_calls=[tool_call("lookup_time")])
+            if len(sent) < 3
+            else ChatResult(content="It is late afternoon.", tool_calls=[])
+        )
+
+    services = _services(FakeLLM(responder=responder))
+    await _furnished_room(services)
+
+    await run_kp_turn(_ctx(), services, Toolset(_ClockProvider()), "What time is it?")
+
+    def marks(messages: list[dict]) -> list[int]:
+        return [index for index, message in enumerate(messages) if message.get(CACHE_BREAKPOINT_KEY)]
+
+    assert marks(sent[0]) == [0], "round 1 has no tool results yet — head only, this room's first turn"
+    round_two, round_three = sent[1], sent[2]
+    assert len(marks(round_two)) == 2 and round_two[marks(round_two)[-1]]["role"] == "tool"
+    assert len(marks(round_three)) == 2, "at most one in-turn mark survives; the old one is cleared"
+    assert round_three[marks(round_three)[-1]]["role"] == "tool"
+    assert marks(round_three)[-1] > marks(round_two)[-1], "the mark moved forward with the loop"
+    assert len(marks(round_three)) <= 4, "the API allows four breakpoints, no more"
+
+
+async def test_a_deviating_one_shot_call_carries_no_breakpoints():
+    """The max-rounds finalizer sends `tools=[]`. On Anthropic the tool list sits ahead
+    of system and messages, so nothing below it can hit — a mark there buys a 1.25x write
+    that is never read back, and it runs at the moment the prefix is largest."""
+    sent: list[tuple[list[dict], list[dict] | None]] = []
+
+    def responder(messages, tools):
+        sent.append((deepcopy(messages), tools))
+        return ChatResult(content=None, tool_calls=[tool_call("lookup_time")])
+
+    services = _services(FakeLLM(responder=responder))
+    await _furnished_room(services)
+
+    await run_kp_turn(_ctx(), services, Toolset(_ClockProvider()), "What time is it?", max_rounds=2)
+
+    finalizer_messages, finalizer_tools = sent[-1]
+    assert finalizer_tools == [], "this is the tools-disabled finalizer"
+    assert not any(message.get(CACHE_BREAKPOINT_KEY) for message in finalizer_messages)
 
 
 async def test_a_first_turn_marks_only_the_system_breakpoint():
@@ -364,7 +428,11 @@ def test_the_private_keys_never_reach_a_vendor_wire():
 
 def test_the_anthropic_path_turns_the_marks_into_cache_breakpoints():
     """Message-level now: breakpoint 1 is the whole system value, breakpoint 2 lands on
-    the last content block of the last replayed history message."""
+    the last content block of the last replayed history message.
+
+    Lifetimes differ by ROLE, not by position: the stable head survives the gap between
+    two turns at a live table (1 hour), the end of history does not need to (5-minute
+    default), and "longer TTL first" holds automatically because system always leads."""
     system, turns = to_anthropic_messages(
         [
             {"role": "system", "content": "STABLE HEAD", CACHE_BREAKPOINT_KEY: True},
@@ -375,13 +443,25 @@ def test_the_anthropic_path_turns_the_marks_into_cache_breakpoints():
         ]
     )
 
-    assert system == [{"type": "text", "text": "STABLE HEAD", "cache_control": {"type": "ephemeral"}}]
+    assert system == [{"type": "text", "text": "STABLE HEAD", "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
     assert turns == [
         {"role": "user", "content": "I knock"},
         {"role": "assistant", "content": [{"type": "text", "text": "Nobody answers.", "cache_control": {"type": "ephemeral"}}]},
         {"role": "user", "content": "STATE\n\nDoom: 7"},
         {"role": "user", "content": "I wait"},
     ]
+
+
+def test_the_marker_itself_never_learns_about_ttl():
+    """TTL is one vendor's pricing model, so it lives inside that vendor's adapter. The
+    agent->adapter marker stays a boolean: every other provider path merely strips it,
+    and "TTL" does not even name the same quantity elsewhere (a write multiplier here,
+    rented idle minutes at Moonshot, nothing at all at DeepSeek)."""
+    marked = {"role": "system", "content": "HEAD", CACHE_BREAKPOINT_KEY: True}
+
+    assert marked[CACHE_BREAKPOINT_KEY] is True
+    assert not any("ttl" in str(key).lower() for key in marked)
+    assert all(CACHE_BREAKPOINT_KEY not in message for message in wire_messages([marked]))
 
     # Unmarked stays plain — an unmarked prompt must not silently acquire a breakpoint.
     plain, plain_turns = to_anthropic_messages(

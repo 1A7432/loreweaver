@@ -595,6 +595,31 @@ class GeminiLLM:
         )
 
 
+# Cache-entry lifetimes, Anthropic-only and hardcoded (M20 A). Anthropic reverted the
+# default from 1 hour to 5 minutes on 2026-03-06, so the long tier must now be asked for
+# by name — and it bills writes at 2x instead of 1.25x, which is why it is not applied
+# everywhere. The rule the adapter follows is SEMANTIC, not positional:
+#
+#   * the SYSTEM message's breakpoint ends the stable head — identity, expertise, style,
+#     module pool, preset, skill bodies. It is byte-identical for a whole session and is
+#     the single largest block, while a real table's gap between turns routinely exceeds
+#     five minutes. It takes the 1-hour tier, and the 1x write is paid ONCE: a cache
+#     entry's lifetime refreshes for free on every read.
+#   * a CONVERSATION message's breakpoint (end of replayed history, and the moving
+#     in-turn one) changes every turn by construction, so reserving an hour for it would
+#     pay the 2x premium on a block that is discarded anyway. Default 5 minutes.
+#
+# Mixed TTLs are allowed in one request under one constraint — longer-lived entries must
+# appear BEFORE shorter-lived ones — which a semantic rule satisfies automatically, since
+# the system value always precedes every conversation turn no matter how many
+# conversation breakpoints are later added. TTL lives here and nowhere else:
+# `CACHE_BREAKPOINT_KEY` stays a provider-agnostic boolean, because "TTL" names a
+# different quantity at every vendor (a write multiplier here, rented idle minutes at
+# Moonshot, nothing at all at DeepSeek).
+_CACHE_TTL_LONG = {"type": "ephemeral", "ttl": "1h"}
+_CACHE_TTL_DEFAULT = {"type": "ephemeral"}
+
+
 def to_anthropic_messages(
     messages: list[dict],
 ) -> tuple[str | list[dict[str, Any]] | None, list[dict[str, Any]]]:
@@ -607,7 +632,8 @@ def to_anthropic_messages(
     `cache_control` on its LAST content block. Anthropic caches only at declared
     breakpoints, so without this the layout would help the OpenAI-compatible endpoints
     (automatic prefix caching) and do nothing here. The API allows 4 breakpoints; the
-    agent loop sets at most 2.
+    agent loop sets at most 3 (stable head, end of history, newest tool result).
+    Lifetimes differ by role — see `_CACHE_TTL_LONG`.
     """
 
     system_parts: list[str] = []
@@ -670,7 +696,7 @@ def to_anthropic_messages(
     system_text = "\n\n".join(system_parts)
     if not cache_system:
         return system_text, out
-    return ([{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}], out)
+    return ([{"type": "text", "text": system_text, "cache_control": dict(_CACHE_TTL_LONG)}], out)
 
 
 def _anthropic_breakpoint(turn: dict[str, Any], marked: bool) -> dict[str, Any]:
@@ -679,7 +705,8 @@ def _anthropic_breakpoint(turn: dict[str, Any], marked: bool) -> dict[str, Any]:
     A turn whose content is a plain string is promoted to a one-element block list —
     `cache_control` lives on blocks, not on turns. Empty content is left alone: a
     breakpoint on an empty text block is rejected by the API, and there is nothing
-    worth caching there anyway.
+    worth caching there anyway. Conversation breakpoints take the default lifetime
+    (see `_CACHE_TTL_LONG` for why only the system one is promoted).
     """
     if not marked:
         return turn
@@ -694,7 +721,7 @@ def _anthropic_breakpoint(turn: dict[str, Any], marked: bool) -> dict[str, Any]:
     last = content[-1]
     if not isinstance(last, dict):
         return turn
-    return {**turn, "content": [*content[:-1], {**last, "cache_control": {"type": "ephemeral"}}]}
+    return {**turn, "content": [*content[:-1], {**last, "cache_control": dict(_CACHE_TTL_DEFAULT)}]}
 
 
 def to_anthropic_tools(tools: list[dict] | None) -> list[dict[str, Any]]:

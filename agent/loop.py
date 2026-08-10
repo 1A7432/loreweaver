@@ -1057,6 +1057,46 @@ def _correction_base_messages(messages: list[dict]) -> list[dict]:
     ]
 
 
+def _without_cache_marks(messages: list[dict]) -> list[dict]:
+    """Copies with every cache breakpoint stripped — for a call that leaves the main prefix.
+
+    A breakpoint only pays for itself when the same prefix comes back. A one-shot call that
+    differs from the turn's other calls in a way that invalidates caching anyway — the
+    max-rounds finalizer sends `tools=[]`, and on Anthropic the tool list sits ahead of
+    everything, so nothing downstream of it can hit — would otherwise buy a 1.25x cache
+    WRITE it never reads.
+    """
+    return [
+        {key: value for key, value in message.items() if key != CACHE_BREAKPOINT_KEY}
+        if CACHE_BREAKPOINT_KEY in message
+        else message
+        for message in messages
+    ]
+
+
+def _move_in_turn_breakpoint(conversation: list[dict]) -> None:
+    """Keep exactly one cache breakpoint on the NEWEST tool result (M20 A, breakpoint 3 of 4).
+
+    Everything after the end-of-history breakpoint — the state message, the player's line,
+    and every tool round accumulated so far — is recomputed on each of up to `max_rounds`
+    calls. A breakpoint that moves forward with the tool loop makes round N+1 read what
+    round N wrote, and keeps the distance back to the previous entry short: a breakpoint
+    searches only a bounded window of preceding content blocks for one, and a long tool
+    loop pushes the end-of-history mark out of that window.
+
+    Older in-turn marks are cleared as it moves, so the request carries at most three
+    breakpoints (stable head, end of history, newest tool result) against a limit of four.
+    """
+    newest: dict | None = None
+    for message in conversation:
+        if message.get("role") != "tool":
+            continue
+        message.pop(CACHE_BREAKPOINT_KEY, None)
+        newest = message
+    if newest is not None:
+        newest[CACHE_BREAKPOINT_KEY] = True
+
+
 def _public_committed_results(tool_trace: list[dict], i18n) -> str:
     """Render public tool results while structurally excluding keeper-only data."""
     lines = [
@@ -1098,7 +1138,9 @@ async def _run_max_rounds_finalizer(
     closing call or its deterministic fallback.
     """
     convo = [
-        *_correction_base_messages(messages),
+        # Tools are disabled for this one call, which on Anthropic invalidates every
+        # cache layer beneath them — so the marks would buy writes nothing reads.
+        *_without_cache_marks(_correction_base_messages(messages)),
         {
             "role": "user",
             "content": i18n.t(
@@ -1460,6 +1502,7 @@ async def _dispatch_and_record(
             trace_entry["dice_payloads"] = dice_payloads
         tool_trace.append(trace_entry)
         conversation.append({"role": "tool", "tool_call_id": call.id, "content": tool_result})
+    _move_in_turn_breakpoint(conversation)
 
 
 async def _run_dice_correction(

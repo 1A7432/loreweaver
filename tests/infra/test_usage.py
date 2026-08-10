@@ -164,6 +164,42 @@ def test_parse_usage_anthropic_shape_prompt_includes_cache_fields():
     assert usage.total_tokens == 1800
 
 
+def test_anthropic_cache_reads_still_count_toward_the_context_meter():
+    """REGRESSION GUARD (M20 A). Anthropic's `input_tokens` EXCLUDES cached tokens, so
+    `prompt_tokens` must add `cache_read` + `cache_creation` back in.
+
+    This is not cosmetic accounting. `prompt_tokens` is what `infra.usage_stats` persists
+    as the room's meter, and what `agent.chronicle`'s fold trigger reads to decide whether
+    the context is full. Drop the cache fields and the meter would SHRINK as caching got
+    better — a well-cached long campaign would report a tiny context, never fold, and
+    silently run the window off the end. The failure is invisible until the provider
+    rejects the request.
+
+    Same two turns, same real context, different cache luck: the meter must not move.
+    """
+    cold = parse_usage(
+        SimpleNamespace(
+            usage=SimpleNamespace(
+                input_tokens=12_000, output_tokens=300, cache_read_input_tokens=0, cache_creation_input_tokens=8_000
+            )
+        )
+    )
+    warm = parse_usage(
+        SimpleNamespace(
+            usage=SimpleNamespace(
+                input_tokens=4_000, output_tokens=300, cache_read_input_tokens=16_000, cache_creation_input_tokens=0
+            )
+        )
+    )
+
+    assert cold is not None and warm is not None
+    assert cold.prompt_tokens == warm.prompt_tokens == 20_000, (
+        "the fold trigger reads prompt_tokens; if a cache hit makes it smaller, long "
+        "campaigns stop folding and blow the context window"
+    )
+    assert warm.cache_hit_tokens == 16_000
+
+
 def test_parse_usage_anthropic_shape_no_caching():
     raw = SimpleNamespace(
         usage=SimpleNamespace(input_tokens=300, output_tokens=40, cache_read_input_tokens=0, cache_creation_input_tokens=0)
