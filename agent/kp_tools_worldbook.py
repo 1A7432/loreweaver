@@ -64,7 +64,7 @@ class WorldbookTools:
     def _i18n(self, ctx: AgentCtx) -> I18n:
         return self._services.i18n.with_locale(ctx.locale)
 
-    @tool
+    @tool(prep_only=True)
     async def add_lore(
         self,
         ctx: AgentCtx,
@@ -158,7 +158,7 @@ class WorldbookTools:
         except Exception as exc:
             return i18n.t("worldbook.tools.query.failed", error=str(exc))
 
-    @tool
+    @tool(prep_only=True)
     async def list_lore(self, ctx: AgentCtx, scope: str = "", *, _keeper: bool = True) -> str:
         """List world-lore entries (titles + scope/category only -- no secret content is revealed).
 
@@ -187,7 +187,7 @@ class WorldbookTools:
         except Exception as exc:
             return i18n.t("worldbook.tools.list.failed", error=str(exc))
 
-    @tool
+    @tool(prep_only=True)
     async def update_lore(self, ctx: AgentCtx, title: str, field: str, value: str) -> str:
         """Update a single field on a lore entry: title/content/keys/category/scope/secret/constant/
         priority/enabled.
@@ -211,7 +211,7 @@ class WorldbookTools:
         except Exception as exc:
             return i18n.t("worldbook.tools.update.failed", error=str(exc))
 
-    @tool
+    @tool(prep_only=True)
     async def remove_lore(self, ctx: AgentCtx, title: str) -> str:
         """Remove a lore entry from the world.
 
@@ -230,7 +230,7 @@ class WorldbookTools:
         except Exception as exc:
             return i18n.t("worldbook.tools.remove.failed", error=str(exc))
 
-    @tool
+    @tool(prep_only=True)
     async def import_lorebook(self, ctx: AgentCtx, file_path: str, *, _keeper: bool = False) -> str:
         """Import a lorebook file into the world: a SillyTavern `character_book` JSON, a bare
         `{"entries": [...]}` object, or a plain list of entries. Imported entries are untrusted

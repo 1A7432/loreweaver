@@ -67,7 +67,7 @@ class CompanionTools:
     def _i18n(self, ctx: AgentCtx) -> I18n:
         return self._services.i18n.with_locale(ctx.locale)
 
-    @tool
+    @tool(prep_only=True)
     async def add_companion(
         self,
         ctx: AgentCtx,
@@ -166,7 +166,7 @@ class CompanionTools:
         except Exception as exc:
             return i18n.t("companion.tools.act.failed", error=str(exc))
 
-    @tool
+    @tool(prep_only=True)
     async def party_auto(self, ctx: AgentCtx, action: str = "") -> str:
         """Turn on/off automatic companion turns during combat (each companion acts on its initiative).
 
@@ -219,7 +219,7 @@ class CompanionTools:
         except Exception as exc:
             return i18n.t("companion.tools.list.failed", error=str(exc))
 
-    @tool
+    @tool(prep_only=True)
     async def remove_companion(self, ctx: AgentCtx, name: str) -> str:
         """Remove an AI companion from the party (deletes its record; its sheet is left in place).
 
@@ -239,7 +239,7 @@ class CompanionTools:
         except Exception as exc:
             return i18n.t("companion.tools.remove.failed", error=str(exc))
 
-    @tool
+    @tool(prep_only=True)
     async def set_companion_playstyle(self, ctx: AgentCtx, name: str, playstyle: str) -> str:
         """Set a companion's tactical/roleplay leaning (how it approaches encounters).
 

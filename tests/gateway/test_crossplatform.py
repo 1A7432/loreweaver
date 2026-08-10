@@ -1234,12 +1234,13 @@ async def test_attachment_fetch_errors_never_log_secret_urls(caplog) -> None:
 class _BoomToolset:
     """A toolset whose only tool always raises — stands in for an adversarial turn.
 
-    Mirrors `agent.tools.Toolset`'s duck-typed interface, including the Layer
-    B.2 `unlocked` parameter `agent.loop.run_kp_turn` now passes to both
-    `schemas()` and `dispatch()` (unused here — this fixture has no gated tools).
+    Mirrors `agent.tools.Toolset`'s duck-typed interface, including the two filter
+    parameters `agent.loop.run_kp_turn` passes to both `schemas()` and `dispatch()` —
+    Layer B.2's `unlocked` and M20 B's `phase` (unused here: this fixture has no gated
+    or prep-only tools).
     """
 
-    def schemas(self, unlocked: set[str] | None = None) -> list[dict]:
+    def schemas(self, unlocked: set[str] | None = None, *, phase: str | None = None) -> list[dict]:
         return [
             {
                 "type": "function",
@@ -1250,7 +1251,7 @@ class _BoomToolset:
     def is_keeper_only(self, name: str) -> bool:
         return False
 
-    async def dispatch(self, name, ctx, args, unlocked: set[str] | None = None) -> str:
+    async def dispatch(self, name, ctx, args, unlocked: set[str] | None = None, *, phase: str | None = None) -> str:
         raise RuntimeError("tool blew up on adversarial args")
 
 

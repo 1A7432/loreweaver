@@ -40,6 +40,7 @@ from agent.kp_tools_subsystems import dispatch_subsystem, room_rulepack, subsyst
 from agent.prompt_builder import build_system_prompt_parts
 from agent.services import Services
 from agent.session_recap import maybe_refresh_session_recap
+from agent.tool_phase import room_phase
 from agent.tools import Toolset
 from core.hooks import MAX_PANEL_EVENTS_PER_TURN
 from core.mvu_compat import mvu_apply_text
@@ -758,6 +759,11 @@ async def run_kp_turn(
     # `toolset.schemas()`/`toolset.dispatch()` behave exactly as before gating
     # existed -- see `Toolset.schemas`'s docstring.
     unlocked = await unlocked_tools_for(services.store, ctx.chat_key)
+    # M20 B tool phasing: a room in PLAY drops the bulk/low-frequency half of the toolset
+    # (module-grade authoring, imports, exports). Same filter family as gating, applied
+    # once here and threaded through every schema build and dispatch this turn so the two
+    # can never disagree. See `agent.tool_phase` for where the phase comes from.
+    phase = await room_phase(services.store, ctx.chat_key)
     # Stage D tool materialization: the room's rulepack declares which subsystem
     # tools exist here (a system that declares none materializes none), and their
     # schemas ride alongside the static toolset for this turn.
@@ -821,7 +827,7 @@ async def run_kp_turn(
             result = await _chat_with_continuation_cleanup(
                 services,
                 messages,
-                tools=[*toolset.schemas(unlocked), *subsystem_tools],
+                tools=[*toolset.schemas(unlocked, phase=phase), *subsystem_tools],
                 tool_choice="auto",
                 temperature=services.settings.llm.temperature,
                 on_text_delta=gate.feed if gate is not None else None,
@@ -869,6 +875,7 @@ async def run_kp_turn(
                     messages,
                     tool_trace,
                     unlocked,
+                    phase=phase,
                     room_pack=room_pack,
                     max_dice_calls=0 if dice_forbidden else None,
                     dice_policy_suppressed=dice_forbidden,
@@ -908,6 +915,7 @@ async def run_kp_turn(
             user_message,
             i18n,
             unlocked,
+            phase=phase,
             room_pack=room_pack,
             subsystem_tools=subsystem_tools,
             temperature=services.settings.llm.temperature,
@@ -929,6 +937,7 @@ async def run_kp_turn(
             pre_correction_reply,
             i18n,
             unlocked,
+            phase=phase,
             room_pack=room_pack,
             temperature=services.settings.llm.temperature,
         )
@@ -1191,10 +1200,12 @@ def _assistant_tool_call_message(result: ChatResult) -> dict:
     return message
 
 
-def _schemas_for_tool_names(toolset: Toolset, unlocked: set[str] | None, names: frozenset[str]) -> list[dict]:
+def _schemas_for_tool_names(
+    toolset: Toolset, unlocked: set[str] | None, names: frozenset[str], *, phase: str | None = None
+) -> list[dict]:
     """Return schemas for the named tools that are available in this turn."""
     schemas = []
-    for schema in toolset.schemas(unlocked):
+    for schema in toolset.schemas(unlocked, phase=phase):
         try:
             name = schema["function"]["name"]
         except (KeyError, TypeError):
@@ -1416,6 +1427,7 @@ async def _dispatch_and_record(
     tool_trace: list[dict],
     unlocked: set[str] | None = None,
     *,
+    phase: str | None = None,
     room_pack: RulePack | None = None,
     max_dice_calls: int | None = None,
     dice_policy_suppressed: bool = False,
@@ -1486,7 +1498,7 @@ async def _dispatch_and_record(
                 else None
             )
             if tool_result is None:
-                tool_result = await toolset.dispatch(call.name, ctx, call.arguments, unlocked)
+                tool_result = await toolset.dispatch(call.name, ctx, call.arguments, unlocked, phase=phase)
             if call.name in _dice_tool_names():
                 dice_calls_dispatched += 1
         trace_entry = {
@@ -1516,6 +1528,7 @@ async def _run_dice_correction(
     i18n,
     unlocked: set[str] | None = None,
     *,
+    phase: str | None = None,
     room_pack: RulePack | None = None,
     subsystem_tools: list[dict] | None = None,
     temperature: float | None,
@@ -1566,7 +1579,7 @@ async def _run_dice_correction(
             result = await _chat_with_continuation_cleanup(
                 services,
                 convo,
-                tools=[*toolset.schemas(unlocked), *(subsystem_tools or [])],
+                tools=[*toolset.schemas(unlocked, phase=phase), *(subsystem_tools or [])],
                 tool_choice="required" if forced else "auto",
                 temperature=temperature,
             )
@@ -1589,7 +1602,7 @@ async def _run_dice_correction(
                 result = await _chat_with_continuation_cleanup(
                     services,
                     convo,
-                    tools=[*toolset.schemas(unlocked), *(subsystem_tools or [])],
+                    tools=[*toolset.schemas(unlocked, phase=phase), *(subsystem_tools or [])],
                     tool_choice="auto",
                     temperature=temperature,
                 )
@@ -1611,6 +1624,7 @@ async def _run_dice_correction(
                     convo,
                     tool_trace,
                     unlocked,
+                    phase=phase,
                     room_pack=room_pack,
                     max_dice_calls=max(0, 1 - real_correction_dice),
                 )
@@ -1646,6 +1660,7 @@ async def _run_state_correction(
     i18n,
     unlocked: set[str] | None = None,
     *,
+    phase: str | None = None,
     room_pack: RulePack | None = None,
     temperature: float | None,
 ) -> str:
@@ -1660,7 +1675,7 @@ async def _run_state_correction(
     """
     title_lines = _scene_title_lines(observed_reply)
     title = title_lines[0] if title_lines else observed_reply[:160]
-    state_tools = _schemas_for_tool_names(toolset, unlocked, _STATE_BOOKKEEPING_TOOL_NAMES)
+    state_tools = _schemas_for_tool_names(toolset, unlocked, _STATE_BOOKKEEPING_TOOL_NAMES, phase=phase)
     if not state_tools:
         return prior_reply
     convo = [
@@ -1699,7 +1714,9 @@ async def _run_state_correction(
                 return prior_reply
         if result.tool_calls:
             try:
-                await _dispatch_and_record(toolset, ctx, services, result, convo, tool_trace, unlocked, room_pack=room_pack)
+                await _dispatch_and_record(
+                    toolset, ctx, services, result, convo, tool_trace, unlocked, phase=phase, room_pack=room_pack
+                )
             except (asyncio.CancelledError, Exception):
                 _clear_llm_continuation(services, convo)
                 raise

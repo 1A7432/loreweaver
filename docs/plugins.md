@@ -728,7 +728,16 @@ actually shipped as, for anyone reading the code.)*
    `agent.tools.Toolset` (`schemas(unlocked)`/`dispatch(..., unlocked)` expose
    and allow a gated tool only when its name is in the room's unlocked set),
    and `core.skills.unlocked_tools_for` unioning enabled skills' `allowed-tools`
-   for `agent.loop.run_kp_turn` to pass in. `romance-relationships` shipped as
+   for `agent.loop.run_kp_turn` to pass in. A second filter of the same family
+   rides alongside it (M20 B): `prep_only: bool` marks a bulk / low-frequency
+   tool — module-grade NPC authoring, imports, exports, defining a variable —
+   which a room's `play` phase drops and its `prep` phase carries. The axis is
+   bulk vs improvisational, not "prep-type work": improvising an NPC mid-scene
+   is ordinary play, so the light `sketch_npc` counterpart is available in both.
+   `agent/tool_phase.py` decides a room's phase (a keeper's `.phase` pin first,
+   otherwise the room's own module-init state), and unmarked tools are visible
+   in both phases so a new tool is never silently unreachable.
+   `romance-relationships` shipped as
    the second built-in skill, backed by coc7 intimate-vocabulary aliases
    (魅惑/媚惑/勾引/风情 → 取悦, 调情/撩拨 → 话术, 洞察情感/察言观色/共情/同理心 →
    心理学) and, since the deterministic relationship-tracks feature landed, its

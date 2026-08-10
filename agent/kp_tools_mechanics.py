@@ -108,7 +108,7 @@ class CharacterTools:
     def __init__(self, services: Services) -> None:
         self.services = services
 
-    @tool
+    @tool(prep_only=True)
     async def create_character(
         self, ctx: AgentCtx, name: str, system: str = "", auto_generate: bool = True
     ) -> str:
@@ -247,7 +247,7 @@ class CharacterTools:
 
         return "\n".join(lines)
 
-    @tool
+    @tool(prep_only=True)
     async def update_character_skill(self, ctx: AgentCtx, skill_name: str, value: int) -> str:
         """Update a character's skill value.
 
@@ -284,7 +284,7 @@ class CharacterTools:
         except Exception as exc:
             return i18n.t("kp_tools.character.skill.failed", error=str(exc))
 
-    @tool
+    @tool(prep_only=True)
     async def update_character_attribute(self, ctx: AgentCtx, attribute: str, value: int) -> str:
         """Update a character's attribute value.
 
@@ -359,7 +359,7 @@ class CharacterTools:
         except Exception as exc:
             return i18n.t("kp_tools.character.list.failed", error=str(exc))
 
-    @tool
+    @tool(prep_only=True)
     async def switch_character(self, ctx: AgentCtx, name: str) -> str:
         """Switch to a different character sheet.
 
@@ -386,7 +386,7 @@ class CharacterTools:
         except Exception as exc:
             return i18n.t("kp_tools.character.switch.failed", error=str(exc))
 
-    @tool
+    @tool(prep_only=True)
     async def delete_character(self, ctx: AgentCtx, name: str) -> str:
         """Delete the named character sheet.
 

@@ -27,7 +27,7 @@ class ForgeTools:
     def _i18n(self, ctx: AgentCtx) -> I18n:
         return self._services.i18n.with_locale(ctx.locale)
 
-    @tool(gated=True)
+    @tool(gated=True, prep_only=True)
     async def generate_skill(self, ctx: AgentCtx, description: str) -> str:
         """Author and install a brand-new KP skill (a SKILL.md play-style bundle) from a
         natural-language description of the desired play-style. Only available once the
@@ -52,7 +52,7 @@ class ForgeTools:
             return i18n.t("agent.forge.bad_id", error=result.error.removeprefix("bad_id: "))
         return i18n.t("agent.forge.invalid", error=result.error)
 
-    @tool(gated=True)
+    @tool(gated=True, prep_only=True)
     async def generate_rulepack(self, ctx: AgentCtx, description: str) -> str:
         """Author and install a brand-new TTRPG rule system (a rulepacks/<id>.yaml data pack) from a
         natural-language description of the system's sheet and how its checks resolve. Only
@@ -77,7 +77,7 @@ class ForgeTools:
             return i18n.t("agent.forge.rulepack_bad_id", error=result.error.removeprefix("bad_id: "))
         return i18n.t("agent.forge.rulepack_invalid", error=result.error)
 
-    @tool(gated=True)
+    @tool(gated=True, prep_only=True)
     async def generate_module(self, ctx: AgentCtx, description: str) -> str:
         """Author and install a brand-new module/scenario document from a natural-language
         description (or a keeper-provided premise), landing it directly in THIS room's module

@@ -298,7 +298,7 @@ class ModuleTools(_KnowledgeToolsBase):
         keeper = (await _load_pools(self._services, chat_key)).get("keeper")
         return keeper if isinstance(keeper, dict) and keeper else None
 
-    @tool(keeper_only=True)
+    @tool(keeper_only=True, prep_only=True)
     async def get_module_catalog(self, ctx: AgentCtx) -> str:
         """Get this chat's module catalog: a directory of every analyzed scene/NPC/clue/timeline/threat/
         truth (KEEPER-ONLY -- for the AI's own reasoning, never quote to players).
@@ -412,7 +412,7 @@ class ModuleTools(_KnowledgeToolsBase):
             body = i18n.t("kp_tools.know.pool.query_failed", error=str(exc))
         return self._keeper_wrap(i18n, body)
 
-    @tool(keeper_only=True)
+    @tool(keeper_only=True, prep_only=True)
     async def inspect_knowledge_pool(self, ctx: AgentCtx, pool_type: str = "keeper") -> str:
         """Dump a knowledge pool's raw contents (KEEPER-ONLY) -- use when query_knowledge_pool finds
         nothing, to see what the pool actually holds.
@@ -628,7 +628,7 @@ class ModuleTools(_KnowledgeToolsBase):
             body = i18n.t("kp_tools.know.summary.failed", error=str(exc))
         return self._keeper_wrap(i18n, body)
 
-    @tool(keeper_only=True)
+    @tool(keeper_only=True, prep_only=True)
     async def search_documents(self, ctx: AgentCtx, query: str, doc_type: str | None = None, limit: int = 15) -> str:
         """KP document search: retrieves KP prep material (module text, behind-the-scenes setting, NPC
         secrets, untriggered clues) from uploaded documents (KEEPER-ONLY -- never paraphrase raw hits to
@@ -691,7 +691,7 @@ class ModuleTools(_KnowledgeToolsBase):
             body = i18n.t("kp_tools.know.search.failed", error=str(exc))
         return self._keeper_wrap(i18n, body)
 
-    @tool
+    @tool(prep_only=True)
     async def update_knowledge_pool(self, ctx: AgentCtx, player_visible_patch: str = "", keeper_only_patch: str = "") -> str:
         """Incrementally patch the module knowledge pool(s). The given JSON is deep-merged into the
         existing pool rather than overwriting it -- use this to append improvised scenes, world-state
@@ -817,7 +817,7 @@ class ModuleTools(_KnowledgeToolsBase):
         except Exception as exc:
             return i18n.t("kp_tools.know.unlock.failed", error=str(exc))
 
-    @tool
+    @tool(prep_only=True)
     async def start_module_initialization(self, ctx: AgentCtx) -> str:
         """Manually (re-)trigger module knowledge-pool initialization. upload_document already
         auto-triggers this for module/story uploads; call this directly to force a re-analysis.
@@ -852,7 +852,7 @@ class ModuleTools(_KnowledgeToolsBase):
         except Exception as exc:
             return i18n.t("kp_tools.know.init.start_failed", error=str(exc))
 
-    @tool
+    @tool(prep_only=True)
     async def get_module_init_status(self, ctx: AgentCtx) -> str:
         """Check this chat's module knowledge-pool initialization status.
 
@@ -895,7 +895,7 @@ class DocumentTools(_KnowledgeToolsBase):
     ad-hoc `search_documents` retrieval and (for module/story uploads) module-analysis initialization.
     """
 
-    @tool
+    @tool(prep_only=True)
     async def upload_document(self, ctx: AgentCtx, file_path: str, doc_type: str = "module", custom_filename: str | None = None, progress: ProgressCb = None) -> str:
         """Process an uploaded document file: extract its text, chunk + embed it into the vector store, and
         (for module/story documents) auto-trigger module knowledge-pool initialization.
@@ -975,7 +975,7 @@ class DocumentTools(_KnowledgeToolsBase):
         except Exception as exc:
             return i18n.t("kp_tools.know.upload.failed", error=str(exc))
 
-    @tool
+    @tool(prep_only=True)
     async def delete_document(self, ctx: AgentCtx, filename: str) -> str:
         """Delete a previously uploaded document by filename. Deleting a module/story document also clears
         its knowledge pools/catalog/init-status/full-text, so the AI is never left with stale content.
@@ -1016,7 +1016,7 @@ class DocumentTools(_KnowledgeToolsBase):
         except Exception as exc:
             return i18n.t("kp_tools.know.delete.failed", filename=filename, error=str(exc))
 
-    @tool
+    @tool(prep_only=True)
     async def list_my_documents(self, ctx: AgentCtx, doc_type: str | None = None) -> str:
         """List every document uploaded to this chat, optionally filtered by type.
 
@@ -1044,7 +1044,7 @@ class DocumentTools(_KnowledgeToolsBase):
         except Exception as exc:
             return i18n.t("kp_tools.know.list_docs.failed", error=str(exc))
 
-    @tool
+    @tool(prep_only=True)
     async def get_supported_file_types(self, ctx: AgentCtx) -> str:
         """Get the list of supported upload file types and document categories.
 
@@ -1241,7 +1241,7 @@ class SessionTools(_KnowledgeToolsBase):
     render its battle report).
     """
 
-    @tool
+    @tool(prep_only=True)
     async def start_session_recording(
         self, ctx: AgentCtx, session_name: str | None = None, force_new: bool = False
     ) -> str:
@@ -1302,7 +1302,7 @@ class SessionTools(_KnowledgeToolsBase):
         except Exception as exc:
             return i18n.t("kp_tools.know.session.event_failed", error=str(exc))
 
-    @tool
+    @tool(prep_only=True)
     async def generate_session_report(self, ctx: AgentCtx) -> str:
         """End the current session and generate its battle report (text, plus a Markdown file written to
         the shared filesystem on a best-effort basis).
@@ -1336,7 +1336,7 @@ class SessionTools(_KnowledgeToolsBase):
         except Exception as exc:
             return i18n.t("kp_tools.know.session.report_failed", error=str(exc))
 
-    @tool
+    @tool(prep_only=True)
     async def get_battle_report_markdown(self, ctx: AgentCtx, timestamp: str) -> str:
         """Fetch a previously generated Markdown battle report by its timestamp.
 
@@ -1355,7 +1355,7 @@ class SessionTools(_KnowledgeToolsBase):
         except Exception as exc:
             return i18n.t("kp_tools.know.session.report_fetch_failed", error=str(exc))
 
-    @tool
+    @tool(prep_only=True)
     async def export_report(self, ctx: AgentCtx, detailed: bool = False, session_name: str = "") -> str:
         """Export the session report ("团报") for the players to keep and review -- a concise summary by
         default, or the full chronological log with detailed=True. Unlike generate_session_report this does

@@ -34,6 +34,13 @@ from infra.i18n import t
 # model can never set it and the method's own default applies on a tool call.
 _SKIPPED_PARAMS = {"self", "ctx", "_ctx"}
 
+# The two tool phases (M20 B). These strings are persisted room_state values and
+# arguments of the `.phase` command, so they are stable identifiers, never display
+# text. Which phase a given room is in lives in `agent.tool_phase`; this module only
+# needs to know the name of the one that hides `prep_only` tools.
+PREP_PHASE = "prep"
+PLAY_PHASE = "play"
+
 _JSON_TYPE_MAP: dict[type, str] = {
     str: "string",
     int: "integer",
@@ -62,6 +69,7 @@ class ToolMeta:
     description: str
     keeper_only: bool
     gated: bool
+    prep_only: bool
     param_descriptions: dict[str, str]
     _schema: dict[str, Any] | None = field(default=None, init=False, repr=False, compare=False)
 
@@ -79,6 +87,7 @@ def tool(
     description: str | None = None,
     keeper_only: bool = False,
     gated: bool = False,
+    prep_only: bool = False,
     params: dict[str, str] | None = None,
 ):
     """Mark an async method as an AI-KP tool. Schema is generated from type hints + docstring.
@@ -93,6 +102,17 @@ def tool(
     in the caller-supplied `unlocked` set (typically the union of enabled KP
     skills' `allowed-tools` for the room). The base toolset is never gated by
     default, so a tool with no `gated=True` behaves exactly as before.
+
+    `prep_only` (M20 B) marks a BULK / LOW-FREQUENCY tool -- authoring a
+    module-grade NPC, importing a lorebook, defining a variable, exporting a
+    report -- which the room's `prep` phase carries and its `play` phase does
+    not. The axis is bulk vs improvisational, NOT "prep-type work": improvising
+    a shopkeeper mid-scene is ordinary play, which is why the light
+    `sketch_npc` counterpart stays available in both. Unmarked means available
+    in every phase, so a newly added tool is visible by default and the
+    play-phase budget test is what notices it -- the reverse default would make
+    a new tool silently unreachable in play.
+
     Attaches the metadata to the function as `__tool_meta__`; the function's
     behavior is otherwise unchanged.
     """
@@ -104,6 +124,7 @@ def tool(
             description=description or _first_doc_line(func.__doc__),
             keeper_only=keeper_only,
             gated=gated,
+            prep_only=prep_only,
             param_descriptions=dict(params or {}),
         )
         return func
@@ -131,7 +152,7 @@ class Toolset:
                 meta: ToolMeta = bound_method.__tool_meta__
                 self._entries[meta.name] = _ToolEntry(meta=meta, bound=bound_method)
 
-    def schemas(self, unlocked: set[str] | None = None) -> list[dict[str, Any]]:
+    def schemas(self, unlocked: set[str] | None = None, *, phase: str | None = None) -> list[dict[str, Any]]:
         """OpenAI function-calling schema list: every non-gated tool, ALWAYS,
         plus any gated tool whose name is in `unlocked`.
 
@@ -139,12 +160,17 @@ class Toolset:
         base toolset is unaffected by gating. With `unlocked=None` (or empty)
         and no gated tools defined, this is identical to a plain schema dump --
         the observable behavior before gating existed.
+
+        `phase` (M20 B) is the room's tool phase. Pass ``"play"`` to drop the
+        `prep_only` bulk tools; ``None`` (the default) filters nothing, so every
+        caller that does not know about phases is unaffected.
         """
         allowed = unlocked or set()
         return [
             entry.meta.schema()
             for entry in self._entries.values()
-            if not entry.meta.gated or entry.meta.name in allowed
+            if (not entry.meta.gated or entry.meta.name in allowed)
+            and not (entry.meta.prep_only and phase == PLAY_PHASE)
         ]
 
     def names(self) -> list[str]:
@@ -158,8 +184,18 @@ class Toolset:
         entry = self._entries.get(name)
         return entry.meta.gated if entry is not None else False
 
+    def is_prep_only(self, name: str) -> bool:
+        entry = self._entries.get(name)
+        return entry.meta.prep_only if entry is not None else False
+
     async def dispatch(
-        self, name: str, ctx: AgentCtx, arguments: dict[str, Any], unlocked: set[str] | None = None
+        self,
+        name: str,
+        ctx: AgentCtx,
+        arguments: dict[str, Any],
+        unlocked: set[str] | None = None,
+        *,
+        phase: str | None = None,
     ) -> str:
         """Look up `name`, coerce `arguments` to its parameter types, call it, and
         guarantee a `str` result.
@@ -170,12 +206,16 @@ class Toolset:
         is not in `unlocked` is refused here too, even if it was never exposed
         via `schemas()` in the first place (e.g. a model hallucinating a call
         to a gated-but-not-unlocked tool name it saw in a prior turn/session).
+        The same holds for a `prep_only` tool called during play -- and that
+        refusal names the switch, because the keeper is the one who can flip it.
         """
         entry = self._entries.get(name)
         if entry is None:
             return t("agent.tools.unknown_tool", locale=ctx.locale, name=name)
         if entry.meta.gated and name not in (unlocked or set()):
             return t("agent.tools.tool_not_available", locale=ctx.locale, name=name)
+        if entry.meta.prep_only and phase == PLAY_PHASE:
+            return t("agent.tools.prep_phase_only", locale=ctx.locale, name=name)
 
         try:
             coerced = _coerce_arguments(entry.meta.fn, arguments or {})

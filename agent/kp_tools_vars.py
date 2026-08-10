@@ -65,7 +65,7 @@ class ModuleVarTools:
             )
         }
 
-    @tool
+    @tool(prep_only=True)
     async def define_variable(
         self,
         ctx: AgentCtx,
@@ -191,7 +191,7 @@ class ModuleVarTools:
         except Exception as exc:
             return i18n.t("modvars.tools.failed", error=str(exc))
 
-    @tool
+    @tool(prep_only=True)
     async def remove_variable(self, ctx: AgentCtx, var_id: str) -> str:
         """Remove a module variable entirely (its spec and value). Only do this when the tracker
         is truly finished mattering — for a value that merely stops changing, just leave it.
