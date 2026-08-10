@@ -156,7 +156,7 @@ model provider.
   the server you operate. The Iroh relay, when one is needed, carries encrypted traffic and does
   not terminate the application session.
 - A **remote** LLM endpoint is a separate data processor. It receives module text for analysis,
-  the Keeper system prompt (which currently contains near-full Keeper-only lore), relevant
+  the Keeper system prompt (which by design carries the module's Keeper-only lore), relevant
   conversation history, and the current player input. The standard app uses a local hash
   embedder; if an embedding backend is explicitly replaced with a remote implementation, document
   chunks also go to that endpoint. Select a local endpoint such as Ollama or LM Studio when this
