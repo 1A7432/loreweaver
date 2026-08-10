@@ -63,6 +63,9 @@ cards/
 #  rewritten to purge them. The rule below is what stops it happening again.)
 content/
 
+# Built packs land in the CWD by default — never commit a build artifact.
+*.lwpack
+
 # --- Misc ---
 .DS_Store
 *.log
