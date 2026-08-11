@@ -3,11 +3,12 @@ section builders.
 
 **Section order is STABLE HEAD → VOLATILE TAIL (P1, 2026-08-07).** Every section
 still lands in ONE system prompt (iron rule #5 is untouched); only their order
-changed, and it changed for a measurable reason. The 1.x order opened with session
-history and game state — the two things that change every single turn — so each turn
-invalidated the whole downstream prefix: the module pool, the rulepack expertise, the
-style layer and the skill bodies were re-read from scratch every time, at full price.
-A 2026-08-07 long session burned 40% of a weekly quota partly this way.
+changed, and it changed for a measurable reason. The 1.x order opened with the
+archived-session recap and game state — the two things that change every single
+turn — so each turn invalidated the whole downstream prefix: the module pool, the
+rulepack expertise, the style layer and the skill bodies were re-read from scratch
+every time, at full price. A 2026-08-07 long session burned 40% of a weekly quota
+partly this way.
 
 So the assembly is now two explicit halves (see :class:`SystemPrompt`):
 
@@ -16,10 +17,10 @@ So the assembly is now two explicit halves (see :class:`SystemPrompt`):
   campaign summary (+ its keeper margin). These change when the ROOM's configuration
   changes (a module loads, a keeper enables a skill), or — for the summary — when a
   chronicle fold runs. This is the cacheable prefix.
-- **volatile tail** — world lore (retrieval-dependent), the archived-session recap,
-  live game state, relationship tracks, module variables, MVU leaves, scribe
-  whispers, hook injections, and the rest of the M18 chronicle section (open threads
-  + records recalled against this turn), which closes the tail.
+- **volatile tail** — world lore (retrieval-dependent), live game state, relationship
+  tracks, module variables, MVU leaves, scribe whispers, hook injections, and the rest
+  of the M18 chronicle section (open threads + records recalled against this turn),
+  which closes the tail.
 
 Two properties were deliberately preserved through the move:
 
@@ -86,6 +87,7 @@ import random
 from dataclasses import dataclass
 
 from agent.context import AgentCtx
+from agent.history import DEFAULT_HISTORY_KEY, load_chain
 from agent.services import Services
 from core.dice_engine import DiceRoller
 from core.ejs_full import create_full_engine
@@ -98,7 +100,6 @@ from core.prompt_sections import (
     inject_document_context_prompt,
     inject_game_state_prompt,
     inject_interaction_style_prompt,
-    inject_session_history_prompt,
     inject_system_expertise_prompt,
     inject_trpg_system_prompt,
 )
@@ -107,6 +108,10 @@ from core.skills import load_skill
 from core.table_habits import HABITS_DOC_TYPE, HABITS_ID, index_lines
 from core.varspace import build_resolver
 from core.worldbook import inject_world_lore_prompt
+
+# How much of the room's conversation seeds the retrieval context (`_recent_transcript`).
+_RECENT_CONTEXT_MESSAGES = 6
+_RECENT_CONTEXT_MAX_CHARS = 2000
 
 
 @dataclass(frozen=True)
@@ -156,14 +161,18 @@ async def build_system_prompt_parts(ctx: AgentCtx, services: Services) -> System
     """
     i18n = services.i18n.with_locale(ctx.locale)
 
-    session_history = await inject_session_history_prompt(ctx, services.battles, i18n)
     document_context = await inject_document_context_prompt(
         ctx, services.vector_db, services.store, i18n, services.settings.enable_vector_db
     )
-    # World lore grounds the KP in the reusable world beneath this adventure; the recent
-    # narrative + this turn's user message (when threaded via ctx.extra) is the retrieval context.
+    # World lore grounds the KP in the reusable world beneath this adventure; the tail of the
+    # room's real conversation + this turn's user message (when threaded via ctx.extra) is the
+    # retrieval context — see `_recent_transcript`.
     extra = getattr(ctx, "extra", {}) or {}
-    recent_context = "\n".join(part for part in (session_history, str(extra.get("user_message", "") or "")) if part)
+    recent_context = "\n".join(
+        part
+        for part in (await _recent_transcript(services, ctx), str(extra.get("user_message", "") or ""))
+        if part
+    )
     # One state load serves every conditioned/templated worldbook entry this turn: the closed
     # expression grammar resolves through `core.varspace`, and (when the `ejs` extra is
     # installed and enabled) one per-turn QuickJS sandbox runs full-EJS content against the
@@ -268,7 +277,6 @@ async def build_system_prompt_parts(ctx: AgentCtx, services: Services) -> System
     volatile.extend(
         [
             world_lore,
-            session_history,
             await inject_game_state_prompt(ctx, services.characters, services.store, i18n),
         ]
     )
@@ -325,6 +333,30 @@ async def build_system_prompt_parts(ctx: AgentCtx, services: Services) -> System
         stable="\n\n".join(section for section in stable if section),
         volatile="\n\n".join(section for section in volatile if section),
     )
+
+
+async def _recent_transcript(services: Services, ctx: AgentCtx) -> str:
+    """The tail of this room's real conversation — half of the retrieval context.
+
+    `recent_context` feeds two retrievals: worldbook lore matching and the M18
+    chronicle's topical recall. Its other half is this turn's user message; this
+    half is what the table was just talking about, which is what makes a lore
+    entry keyed on a place or a person fire while the scene is still in it.
+
+    Read straight off the append-only history tree (`agent.history.load_chain`),
+    NOT `trim_folded`: a folded turn stopped being replayed, it did not stop
+    being what just happened. Bounded twice — the last few messages, then the
+    last characters of those — because a retrieval query is a query, not a
+    context: a whole scene of prose buries the terms an entry is keyed on and
+    costs an embedding call proportional to its length. Best-effort; a room with
+    no history yet contributes nothing.
+    """
+    try:
+        chain = await load_chain(services, ctx.chat_key, DEFAULT_HISTORY_KEY)
+    except Exception:  # noqa: BLE001 — retrieval context is best-effort, never a turn's problem
+        return ""
+    tail = [str(message.get("content", "")).strip() for message in chain[-_RECENT_CONTEXT_MESSAGES:]]
+    return "\n".join(part for part in tail if part)[-_RECENT_CONTEXT_MAX_CHARS:]
 
 
 async def _module_pool_ready(services: Services, chat_key: str) -> bool:

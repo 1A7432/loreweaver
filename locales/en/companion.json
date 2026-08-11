@@ -20,7 +20,6 @@
   "companion.tools.act.done": "✅ {name} takes a turn.",
   "companion.tools.act.failed": "❌ Failed to have the companion act: {error}",
   "companion.tools.act.line": "{name}: \"{dialogue}\" — {action}",
-  "companion.tools.act.log_event": "{name} (companion) acts: {action}",
   "companion.tools.act.nested": "⚠️ A companion turn cannot trigger another companion to act.",
   "companion.tools.act.no_action": "(holds this turn)",
   "companion.tools.act.no_dialogue": "…",

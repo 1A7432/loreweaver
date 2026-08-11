@@ -26,10 +26,8 @@ import asyncio
 import json
 import logging
 import re
-import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from difflib import SequenceMatcher
 
 from agent.chronicle import advance_chronicle_turn, chronicle_turn, maybe_fold_chronicle, summary_through_turn
 from agent.context import AgentCtx
@@ -728,193 +726,6 @@ def _normalize_tool_arguments(call_name: str, arguments: dict | None) -> dict:
     return normalized
 
 
-_EVENT_NEGATION_RE = re.compile(
-    r"\b(?:no|not|never|without|failed?|unable|cannot|can't|didn't|didnt)\b|(?:没有|没能|未能|并未|不是|无法|不能)",  # i18n-exempt
-    re.IGNORECASE,
-)
-_EVENT_EN_STOP_WORDS = frozenset(
-    {
-        "a",
-        "an",
-        "and",
-        "at",
-        "from",
-        "he",
-        "her",
-        "hers",
-        "him",
-        "his",
-        "in",
-        "is",
-        "it",
-        "its",
-        "now",
-        "of",
-        "our",
-        "she",
-        "the",
-        "their",
-        "them",
-        "they",
-        "to",
-        "us",
-        "up",
-        "was",
-        "we",
-        "were",
-        "with",
-    }
-)
-_EVENT_EN_SYNONYMS = {
-    "acquired": "possess",
-    "carried": "possess",
-    "carries": "possess",
-    "carrying": "possess",
-    "carry": "possess",
-    "claim": "possess",
-    "claimed": "possess",
-    "claims": "possess",
-    "had": "possess",
-    "has": "possess",
-    "have": "possess",
-    "held": "possess",
-    "hold": "possess",
-    "holds": "possess",
-    "inventory": "possess",
-    "keep": "possess",
-    "keeps": "possess",
-    "kept": "possess",
-    "obtained": "possess",
-    "own": "possess",
-    "owned": "possess",
-    "owns": "possess",
-    "picked": "possess",
-    "pocketed": "possess",
-    "possessed": "possess",
-    "possesses": "possess",
-    "possession": "possess",
-    "possessing": "possess",
-    "recovered": "possess",
-    "retrieved": "possess",
-    "secure": "possess",
-    "secured": "possess",
-    "secures": "possess",
-    "take": "possess",
-    "taken": "possess",
-    "takes": "possess",
-    "took": "possess",
-}
-_EVENT_EN_GENERIC_ACTOR_RE = re.compile(
-    r"^\s*(?:the\s+)?(?:investigators?|party|group|team)\b",  # i18n-exempt - semantic event guard
-    re.IGNORECASE,
-)
-_EVENT_EN_GENERIC_ACTOR_TERMS = frozenset({"group", "investigator", "investigators", "party", "team"})
-
-
-def _event_english_sequence(value: str) -> list[str]:
-    terms: list[str] = []
-    seen: set[str] = set()
-    suppress_generic_holder = False
-    for term in re.findall(r"[a-z0-9]+", value.casefold()):
-        if term in _EVENT_EN_STOP_WORDS:
-            continue
-        normalized = _EVENT_EN_SYNONYMS.get(term, term)
-        if normalized in seen:
-            # “...recovered the key; it is now in the investigators'
-            # possession” restates the same acquisition and appends only a
-            # generic shared-party holder. Drop that holder when the repeated
-            # possession marker proves it is boilerplate, while retaining
-            # generic actors elsewhere in the event sentence.
-            if normalized == "possess" and terms and terms[-1] in _EVENT_EN_GENERIC_ACTOR_TERMS:
-                seen.discard(terms.pop())
-            if normalized == "possess":
-                suppress_generic_holder = True
-            continue
-        if suppress_generic_holder and normalized in _EVENT_EN_GENERIC_ACTOR_TERMS:
-            suppress_generic_holder = False
-            continue
-        suppress_generic_holder = False
-        seen.add(normalized)
-        terms.append(normalized)
-    return terms
-
-
-def _event_description_is_semantic_duplicate(left: str, right: str) -> bool:
-    """Conservative same-turn near-duplicate check for event tool calls."""
-    if bool(_EVENT_NEGATION_RE.search(left or "")) != bool(_EVENT_NEGATION_RE.search(right or "")):
-        return False
-    generic_english_actor = bool(
-        _EVENT_EN_GENERIC_ACTOR_RE.search(left or "")
-        or _EVENT_EN_GENERIC_ACTOR_RE.search(right or "")
-    )
-    left_value = re.sub(
-        r"^(?:调查员(?:一行|们)?|众人|队伍|一行人)", "", (left or "").strip()  # i18n-exempt
-    )
-    right_value = re.sub(
-        r"^(?:调查员(?:一行|们)?|众人|队伍|一行人)", "", (right or "").strip()  # i18n-exempt
-    )
-    left_norm = re.sub(r"[^\w\u3400-\u9fff]+", "", left_value.casefold())
-    right_norm = re.sub(r"[^\w\u3400-\u9fff]+", "", right_value.casefold())
-    if not left_norm or not right_norm:
-        return False
-    if left_norm == right_norm:
-        return True
-    sequence_ratio = SequenceMatcher(None, left_norm, right_norm).ratio()
-    left_en_sequence = _event_english_sequence(left)
-    right_en_sequence = _event_english_sequence(right)
-    left_en = set(left_en_sequence)
-    right_en = set(right_en_sequence)
-    if left_en and right_en:
-        union = left_en | right_en
-        overlap = len(left_en & right_en) / len(union) if union else 0.0
-        order_ratio = SequenceMatcher(None, left_en_sequence, right_en_sequence).ratio()
-        if order_ratio >= 0.72 and overlap >= 0.90:
-            return True
-        # A shared-party milestone may name the acting PC in one wording and
-        # use “the investigators/party” in the other. Only ignore that subject
-        # when one side is explicitly generic and both descriptions contain the
-        # same possession/acquisition action family; other verbs and two named
-        # actors retain full subject/object order above.
-        if generic_english_actor and "possess" in left_en_sequence and "possess" in right_en_sequence:
-            left_core = left_en_sequence[left_en_sequence.index("possess") :]
-            right_core = right_en_sequence[right_en_sequence.index("possess") :]
-            core_union = set(left_core) | set(right_core)
-            core_overlap = len(set(left_core) & set(right_core)) / len(core_union) if core_union else 0.0
-            core_order = SequenceMatcher(None, left_core, right_core).ratio()
-            return core_order >= 0.90 and core_overlap >= 0.90
-        return False
-    # CJK single-character set overlap erases subject/object order. Sequence
-    # similarity preserves it while still accepting tiny particles such as
-    # “已/一行” in a restatement of the same milestone.
-    return sequence_ratio >= 0.88
-
-
-async def _recent_session_event_is_semantic_duplicate(
-    services: Services,
-    ctx: AgentCtx,
-    description: str,
-) -> bool:
-    """Check recent persisted events so paraphrases across adjacent turns dedupe."""
-    try:
-        session = await services.battles.generator.get_current_session(ctx.chat_key)
-    except Exception:
-        logger.warning("semantic event guard could not read the current session", exc_info=True)
-        return False
-    if session is None:
-        return False
-    now = time.time()
-    for event in reversed(session.key_events):
-        timestamp = event.get("timestamp")
-        if not isinstance(timestamp, (int, float)) or now - timestamp > 5 * 60:
-            continue
-        if _event_description_is_semantic_duplicate(
-            str(event.get("description", "")),
-            description,
-        ):
-            return True
-    return False
-
-
 async def _dispatch_and_record(
     toolset: Toolset,
     ctx: AgentCtx,
@@ -965,30 +776,9 @@ async def _dispatch_and_record(
                 for entry in tool_trace
             )
         )
-        duplicate_session_event = False
-        if call.name == "add_session_event":
-            description = str((call.arguments or {}).get("description", ""))
-            duplicate_session_event = any(
-                entry.get("name") == "add_session_event"
-                and not entry.get("suppressed")
-                and _event_description_is_semantic_duplicate(
-                    str((entry.get("arguments") or {}).get("description", "")),
-                    description,
-                )
-                for entry in tool_trace
-            )
-            if not duplicate_session_event:
-                duplicate_session_event = await _recent_session_event_is_semantic_duplicate(
-                    services,
-                    ctx,
-                    description,
-                )
         suppressed = False
         if duplicate_initiative_next:
             tool_result = t("kp_tools.initiative.next_already_committed", locale=ctx.locale)
-            suppressed = True
-        elif duplicate_session_event:
-            tool_result = t("kp_tools.know.session.event_duplicate", locale=ctx.locale)
             suppressed = True
         else:
             tool_result, suppressed = await _dispatch_one(

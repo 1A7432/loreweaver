@@ -459,15 +459,6 @@ class NpcTools:
             if action_intent:
                 await self._park_action_intent(i18n, ctx.chat_key, record.name, action_intent)
 
-            try:
-                await self._services.battles.add_key_event(
-                    ctx.chat_key,
-                    i18n.t("npc.tools.speak.log_event", name=record.name, dialogue=dialogue),
-                    "npc_interaction",
-                )
-            except Exception:
-                pass  # best-effort session logging only -- speak_as_npc itself already succeeded above
-
             return line
         except Exception as exc:
             return i18n.t("npc.tools.speak.failed", error=str(exc))

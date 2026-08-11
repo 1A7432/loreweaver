@@ -335,7 +335,8 @@ During:
 
 After:
 
-- `.report` exports a session report.
+- `.report` exports a session report — the scoreboard on its own, or `.report full` for the keepsake:
+  every dice roll with its result, and the table's whole conversation.
 - `.chronicle` / `.recap` — check the ledger actually matches what happened. If a tracker is stale or
   running *ahead* of the fiction, that's the exact failure class both playtests were built to find,
   and it is worth an issue.

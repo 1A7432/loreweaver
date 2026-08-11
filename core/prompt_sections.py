@@ -2,16 +2,15 @@
 
 Ported from ``nekro_trpg_dice_plugin``'s ``core/prompt_injection.py`` per the
 M0 spec (``docs/specs/M0.md`` §5) and the M1 spec (``docs/specs/M1.md``
-§6.4). The 6 ``inject_*`` functions are ``@mount_prompt_inject_method``
+§6.4). The ``inject_*`` functions are ``@mount_prompt_inject_method``
 NekroPlugin callbacks in the source; here they are **plain async
 functions** with no decorators, so ``agent/prompt_builder.py`` (M1) can call
 them directly and in a fixed order.
 
-Decoupling: these functions never import ``core.character_manager`` or
-``core.battle_report``. ``character_manager``, ``store``, ``vector_db`` and
-``battle_report_manager`` are received as injected, duck-typed parameters
-(tests pass minimal inline fakes) — this module only depends on the async
-method *shapes* documented alongside each function below.
+Decoupling: these functions never import ``core.character_manager``.
+``character_manager``, ``store`` and ``vector_db`` are received as injected,
+duck-typed parameters (tests pass minimal inline fakes) — this module only
+depends on the async method *shapes* documented alongside each function below.
 
 i18n: every fixed piece of framing text (section headers, tool-usage
 rules, narrative-style guidance, the keeper-secrecy discipline block) is
@@ -521,15 +520,6 @@ async def inject_document_context_prompt(
         pass
 
     return ""
-
-
-async def inject_session_history_prompt(ctx: Any, battle_report_manager: Any, i18n: I18n) -> str:
-    """Recap of the most recently archived session, so the KP can pick up continuity."""
-    try:
-        summary = await battle_report_manager.get_last_session_summary(ctx.chat_key, i18n)
-        return summary or ""
-    except Exception:
-        return ""
 
 
 async def inject_interaction_style_prompt(ctx: Any, i18n: I18n) -> str:

@@ -1153,25 +1153,23 @@ async def test_initiative_tracker_add_list_and_next():
     assert empty == services.i18n.with_locale(ctx.locale).t("kp_tools.initiative.empty")
 
 
-async def test_initiative_round_counter_wraps_and_records_each_round_transition():
+async def test_initiative_round_counter_wraps_on_the_one_authority_it_has():
+    """`initiative_meta` is the only place the round lives — `net.state` reads it,
+    and both `next` paths advance it under one compare-and-swap."""
     services, ctx = _build()
     initiative_tools = InitiativeTools(services)
 
     await initiative_tools.initiative_tracker(ctx, action="add", name="Alice", initiative=15)
     await initiative_tools.initiative_tracker(ctx, action="add", name="Bob", initiative=20)
 
-    first = await services.battles.generator.get_current_session(ctx.chat_key)
-    assert first is not None
-    assert [entry["round"] for entry in first.combat_rounds] == [1]
+    assert json.loads(await services.store.state_get(ctx.chat_key, "initiative_meta"))["round"] == 1
 
     await initiative_tools.initiative_tracker(ctx, action="next")
     await initiative_tools.initiative_tracker(ctx, action="next")
 
-    raw_meta = await services.store.state_get(ctx.chat_key, "initiative_meta")
-    assert json.loads(raw_meta or "{}")["round"] == 2
-    second = await services.battles.generator.get_current_session(ctx.chat_key)
-    assert second is not None
-    assert [entry["round"] for entry in second.combat_rounds] == [1, 2]
+    meta = json.loads(await services.store.state_get(ctx.chat_key, "initiative_meta"))
+    assert meta["round"] == 2
+    assert meta["turns"] == 0
 
 
 async def test_initiative_tracker_add_uses_active_character_and_rolls_dice_when_omitted():

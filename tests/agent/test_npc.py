@@ -403,7 +403,7 @@ async def test_voice_npc_falls_back_to_chat_model_when_npc_model_unset():
 # ---------------------------------------------------------------------------
 
 
-async def test_speak_as_npc_weaves_dialogue_logs_event_and_excludes_keeper_secret():
+async def test_speak_as_npc_weaves_dialogue_and_excludes_keeper_secret():
     chat_key = "speak-room"
     keeper_secret = "The mayor is secretly funding the cult."
     llm = FakeLLM(
@@ -426,15 +426,10 @@ async def test_speak_as_npc_weaves_dialogue_logs_event_and_excludes_keeper_secre
     assert "I've heard nothing of the sort." in line
     assert "evasive" in line
     # The NPC's private action_intent is keeper-side staging, not part of the line the
-    # Keeper relays to the table — it rides the session key event instead (see
+    # Keeper relays to the table — it goes to the keeper-only note surface instead (see
     # tests/agent/test_npc_intent_channel.py).
     assert "shrug and turn away" not in line
     assert keeper_secret not in line
-
-    current = await services.battles.generator.get_current_session(chat_key)
-    assert current is not None
-    assert any("Old Tomas" in event["description"] for event in current.key_events)
-    assert all(keeper_secret not in event["description"] for event in current.key_events)
 
 
 async def test_speak_as_npc_threads_the_rooms_locale_into_the_sub_actor():

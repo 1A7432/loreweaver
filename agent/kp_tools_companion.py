@@ -161,7 +161,6 @@ class CompanionTools:
                 dialogue=dialogue or i18n.t("companion.tools.act.no_dialogue"),
                 action=action or i18n.t("companion.tools.act.no_action"),
             )
-            await self._log_event(ctx.chat_key, i18n.t("companion.tools.act.log_event", name=companion.name, action=action))
             return line
         except Exception as exc:
             return i18n.t("companion.tools.act.failed", error=str(exc))
@@ -281,13 +280,6 @@ class CompanionTools:
             return i18n.t("companion.tools.learns.done", name=record.name, fact=fact)
         except Exception as exc:
             return i18n.t("companion.tools.learns.failed", error=str(exc))
-
-    async def _log_event(self, chat_key: str, description: str) -> None:
-        """Best-effort session-log entry; never lets a logging failure break the tool."""
-        try:
-            await self._services.battles.add_key_event(chat_key, description, "companion_action")
-        except Exception:
-            pass
 
 
 async def witness(services: Services, chat_key: str, fact: str) -> None:

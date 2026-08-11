@@ -15,7 +15,7 @@ import pytest
 from agent.context import AgentCtx
 from agent.history import load_chain
 from agent.kp_tools_mechanics import InitiativeTools
-from agent.loop import KPTurnResult, _event_description_is_semantic_duplicate, run_kp_turn
+from agent.loop import KPTurnResult, run_kp_turn
 from agent.services import build_services
 from agent.tools import Toolset, tool
 from infra.config import Settings
@@ -75,30 +75,6 @@ class _AttributionDiceProvider:
         """Roll one attributed skill check."""
         self.calls.append({"skill_name": skill_name, "actor": actor, "npc_target": npc_target})
         return f"{skill_name}: rolled"
-
-
-class _EventProvider:
-    def __init__(self) -> None:
-        self.descriptions: list[str] = []
-
-    @tool
-    async def add_session_event(self, ctx: AgentCtx, description: str, event_type: str = "general") -> str:
-        """Record one session event."""
-        self.descriptions.append(description)
-        return f"recorded:{event_type}:{description}"
-
-
-class _PersistingEventProvider:
-    def __init__(self, services) -> None:
-        self.services = services
-        self.descriptions: list[str] = []
-
-    @tool
-    async def add_session_event(self, ctx: AgentCtx, description: str, event_type: str = "general") -> str:
-        """Record one session event in the real report store."""
-        self.descriptions.append(description)
-        await self.services.battles.add_key_event(ctx.chat_key, description, event_type)
-        return f"recorded:{event_type}:{description}"
 
 
 class _ExplodingProvider:
@@ -686,96 +662,6 @@ async def test_malformed_player_npc_target_reaches_tool_validation_without_crash
     assert provider.calls == []
     assert result.tool_trace[0]["arguments"] == {"skill_name": "Spot Hidden", "npc_target": [65]}
     assert "Invalid arguments" in result.tool_trace[0]["result"]
-
-
-async def test_same_turn_semantic_event_duplicate_is_suppressed():
-    provider = _EventProvider()
-    first = "调查员已从码头储物柜取得黄铜钥匙。"
-    second = "调查员一行从码头储物柜取得黄铜钥匙。"
-    llm = FakeLLM(
-        script=[
-            assistant_tools(
-                tool_call("add_session_event", description=first, event_type="discovery"),
-                tool_call("add_session_event", description=second, event_type="discovery"),
-            ),
-            assistant_text("The milestone is recorded once."),
-        ]
-    )
-    services = _services(llm)
-
-    result = await run_kp_turn(
-        _ctx("chat-semantic-event"),
-        services,
-        Toolset(provider),
-        "Record this milestone once.",
-    )
-
-    assert provider.descriptions == [first]
-    assert result.tool_trace[1]["suppressed"] is True
-    assert _event_description_is_semantic_duplicate(first, second)
-    assert not _event_description_is_semantic_duplicate(first, "调查员在码头发现一处新鲜血迹。")
-    assert not _event_description_is_semantic_duplicate("警察射杀邪教徒", "邪教徒射杀警察")
-    assert not _event_description_is_semantic_duplicate("张三帮助李四逃离仓库", "李四帮助张三逃离仓库")
-    assert not _event_description_is_semantic_duplicate("警察射杀邪教徒", "警察没有射杀邪教徒")
-    assert not _event_description_is_semantic_duplicate(
-        "Police arrested the cultist at the dock.",
-        "Police killed the cultist at the dock.",
-    )
-    assert _event_description_is_semantic_duplicate(
-        "The investigators pocketed the brass key recovered from the dock locker.",
-        "The investigators recovered the brass key from the dock locker and now have it in their possession.",
-    )
-    assert _event_description_is_semantic_duplicate(
-        "The investigators took possession of the brass key from the dock locker.",
-        "The investigators recovered the brass key from the dock locker and now have it in their possession.",
-    )
-    assert _event_description_is_semantic_duplicate(
-        "Mara Vale pocketed the brass key recovered from the dock locker.",
-        "The investigators recovered the brass key from the dock locker and now have it in their possession.",
-    )
-    assert _event_description_is_semantic_duplicate(
-        "Mara Vale retrieved and pocketed the brass key from the dock locker.",
-        "Mara Vale recovered the brass key from the dock locker; it is now in the investigators’ possession.",
-    )
-    assert _event_description_is_semantic_duplicate(
-        "Mara Vale took possession of the brass key recovered from the dock locker.",
-        "Mara Vale recovered the brass key from the dock locker and now carries it in her possession.",
-    )
-    assert not _event_description_is_semantic_duplicate(
-        "Mara Vale pocketed the brass key from Elena's locker.",
-        "The investigators pocketed the brass key from Mara's locker.",
-    )
-    assert not _event_description_is_semantic_duplicate(
-        "The police shot the cultist at the dock.",
-        "The cultist shot the police at the dock.",
-    )
-
-
-async def test_recent_cross_turn_semantic_event_duplicate_is_suppressed():
-    first = "Mara Vale retrieved and pocketed the brass key from the dock locker."
-    second = "Mara Vale pocketed the brass key recovered from the dock locker."
-    llm = FakeLLM(
-        script=[
-            assistant_tools(tool_call("add_session_event", description=first, event_type="discovery")),
-            assistant_text("The milestone is recorded."),
-            assistant_tools(tool_call("add_session_event", description=second, event_type="discovery")),
-            assistant_text("The recap is unchanged."),
-        ]
-    )
-    services = _services(llm)
-    ctx = _ctx("chat-semantic-event-cross-turn")
-    await services.battles.start_session(ctx.chat_key)
-    provider = _PersistingEventProvider(services)
-    toolset = Toolset(provider)
-
-    await run_kp_turn(ctx, services, toolset, "Record the dock key milestone.")
-    second_result = await run_kp_turn(ctx, services, toolset, "Restate the dock key milestone for recap.")
-
-    assert provider.descriptions == [first]
-    assert second_result.tool_trace[0]["suppressed"] is True
-    session = await services.battles.generator.get_current_session(ctx.chat_key)
-    assert session is not None
-    assert [event["description"] for event in session.key_events] == [first]
 
 
 async def test_usage_accumulates_completion_sums_and_prompt_last_wins_across_rounds():

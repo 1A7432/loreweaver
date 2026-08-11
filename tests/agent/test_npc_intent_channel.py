@@ -6,9 +6,9 @@ player-grade surface, not a keeper-side one. The sub-actor's `action_intent` (wh
 NPC privately means to DO next, e.g. slip out the back door to warn the cult) must never
 ride it, in any locale.
 
-The session key-event log is NOT a keeper-side surface either: `.report` is a
-`required_level=0`, room-broadcast command (`gateway.commands.cmd_report`) that renders
-every key event, so parking the intent there would only delay the same leak.
+The session report is NOT a keeper-side surface either: `.report` is a
+`required_level=0`, room-broadcast command (`gateway.commands.cmd_report`), so parking
+the intent anywhere it renders would only delay the same leak.
 
 Sentinel shape: the intent text is the secret that must not cross the boundary, and every
 assertion is paired with a POSITIVE CONTROL (the dialogue/mood that SHOULD cross, and the
@@ -88,8 +88,8 @@ async def test_speak_as_npc_return_value_carries_no_intent_in_zh_either():
     assert "沈茉" in line
 
 
-async def test_speak_as_npc_intent_never_enters_the_player_facing_session_log():
-    """`.report` broadcasts every key event to the room, so the intent cannot go there."""
+async def test_speak_as_npc_intent_never_enters_the_player_facing_report():
+    """`.report` is broadcast to the whole room, so the intent cannot reach it."""
     chat_key = "intent-log"
     services = await _room(chat_key, _voiced("I saw nothing that night.", "evasive", INTENT_EN))
     tools = NpcTools(services)
@@ -98,13 +98,16 @@ async def test_speak_as_npc_intent_never_enters_the_player_facing_session_log():
 
     await tools.speak_as_npc(ctx, npc="Mo Shen", situation="A stranger asks what she saw.")
 
-    current = await services.battles.generator.get_current_session(chat_key)
-    assert current is not None
-    descriptions = [event["description"] for event in current.key_events]
-    # SENTINEL: no key event carries the private intent.
-    assert all(INTENT_EN not in description for description in descriptions)
-    # POSITIVE CONTROL: the public half of the exchange IS still logged.
-    assert any("Mo Shen" in description and "I saw nothing that night." in description for description in descriptions)
+    record = await services.battles.generator.get_current_session(chat_key)
+    assert record is not None
+    report = services.battles.generator.generate_markdown_report(
+        record, "Intent", i18n=services.i18n.with_locale("en"), transcript=[]
+    )
+    # SENTINEL: nothing the report renders carries the private intent.
+    assert INTENT_EN not in report
+    assert "back door" not in report
+    # POSITIVE CONTROL: the report itself really did render.
+    assert "Intent" in report
 
 
 async def test_speak_as_npc_parks_the_intent_on_the_keeper_only_note_surface():

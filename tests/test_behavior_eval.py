@@ -12,7 +12,6 @@ from scripts.playtest import (
     RedlineMetrics,
     _build_behavior_services,
     _contains_eval_sentinel,
-    _event_matches_expectation,
     _fixture_turns,
     _score_state,
     evaluate_behavior_gate,
@@ -29,8 +28,8 @@ def test_behavior_fixture_has_fixed_ground_truth_denominators() -> None:
     fixture = load_behavior_fixture(FIXTURE)
     turns = _fixture_turns(fixture)
 
-    assert len(turns) == 40
-    assert sum(turn.get("expect_roll") is False for turn in turns) == 18
+    assert len(turns) == 36
+    assert sum(turn.get("expect_roll") is False for turn in turns) == 14
     assert sum(turn.get("expect_roll") is True for turn in turns) == 20
     assert sum("actor_expectation" in turn for turn in turns) == 20
     assert sum("state_expectation" in turn for turn in turns) == 4
@@ -65,8 +64,6 @@ def test_behavior_gate_fails_closed_on_empty_or_bad_metrics() -> None:
         state_cases=1,
         state_divergences=1,
         actor_cases=1,
-        event_groups=1,
-        recorded_event_groups=0,
     )
     passed, reasons = evaluate_behavior_gate(bad, BehaviorThresholds(max_state_divergence_rate=0.0))
     assert not passed
@@ -74,7 +71,6 @@ def test_behavior_gate_fails_closed_on_empty_or_bad_metrics() -> None:
     assert any("dice-first" in reason for reason in reasons)
     assert any("state divergence" in reason for reason in reasons)
     assert any("actor compliance" in reason for reason in reasons)
-    assert any("event recording" in reason for reason in reasons)
 
     redline_passed, redline_reasons = evaluate_gate(
         RedlineMetrics(turns=1, errors=1),
@@ -113,16 +109,6 @@ def test_state_scorer_rejects_negated_expected_values_and_wrong_hud_claims() -> 
     assert any("8/8" in failure for failure in failures)
 
 
-def test_event_expectation_accepts_fixture_declared_synonyms() -> None:
-    expectation = {
-        "aliases": [["brass key"], ["dock locker", "harbor storage cabinet"]],
-    }
-    assert _event_matches_expectation(
-        "Recovered the small brass key from the harbor storage cabinet.",
-        expectation,
-    )
-
-
 @pytest.mark.asyncio
 async def test_behavior_fake_llm_smoke_runs_real_turn_and_tool_pipeline(tmp_path: Path) -> None:
     fixture = load_behavior_fixture(FIXTURE)
@@ -145,12 +131,10 @@ async def test_behavior_fake_llm_smoke_runs_real_turn_and_tool_pipeline(tmp_path
 
     passed, reasons = evaluate_behavior_gate(metrics, BehaviorThresholds(max_state_divergence_rate=0.0))
     assert passed, reasons
-    assert len(records) == 40
+    assert len(records) == 36
     assert metrics.actor_compliant == metrics.actor_cases == 20
-    assert metrics.state_cases == metrics.turns == 40
+    assert metrics.state_cases == metrics.turns == 36
     assert metrics.state_divergences == 0
-    assert metrics.recorded_event_groups == metrics.event_groups == 2
-    assert metrics.duplicated_event_groups == 0
     assert len(metrics.initiative_suppression_observations or []) == 2
     legitimate = next(
         item for item in metrics.initiative_suppression_observations or [] if item["legitimate_multi_advance"]

@@ -1,7 +1,7 @@
 """Tests for core.prompt_sections.
 
 Covers `summarize_knowledge_item`'s exact data-formatting shapes (ported
-byte-for-byte from `nekro_trpg_dice_plugin`'s test_core_fixes.py) and the 6
+byte-for-byte from `nekro_trpg_dice_plugin`'s test_core_fixes.py) and the 5
 `inject_*` section builders: each must return a localized, non-empty string
 given seeded inline fakes, and must not crash given empty state. The
 document-context section must carry the localized keeper-secrecy discipline
@@ -9,8 +9,8 @@ block whenever a keeper knowledge pool is present.
 
 Managers/store/vector_db are minimal inline fakes per the M0 spec (§5):
 `core.prompt_sections` is intentionally decoupled from
-`core.character_manager`/`core.battle_report`, so these fakes only need to
-satisfy the async method *shapes* the section builders call.
+`core.character_manager`, so these fakes only need to satisfy the async
+method *shapes* the section builders call.
 """
 
 import json
@@ -22,7 +22,6 @@ from core.prompt_sections import (
     inject_document_context_prompt,
     inject_game_state_prompt,
     inject_interaction_style_prompt,
-    inject_session_history_prompt,
     inject_system_expertise_prompt,
     inject_trpg_system_prompt,
     summarize_knowledge_item,
@@ -68,19 +67,6 @@ class _RaisingCharacterManager:
         raise RuntimeError("boom")
 
     async def get_character(self, user_id: str, chat_key: str, char_name: str = ""):
-        raise RuntimeError("boom")
-
-
-class _FakeBattleReportManager:
-    def __init__(self, summary: str | None = None):
-        self._summary = summary
-
-    async def get_last_session_summary(self, chat_key: str, i18n: Any = None) -> str | None:
-        return self._summary
-
-
-class _RaisingBattleReportManager:
-    async def get_last_session_summary(self, chat_key: str, i18n: Any = None):
         raise RuntimeError("boom")
 
 
@@ -551,40 +537,14 @@ async def test_inject_document_context_prompt_empty_state_returns_empty_without_
 
 
 # ---------------------------------------------------------------------------
-# inject_session_history_prompt
-# ---------------------------------------------------------------------------
-
-
-async def test_inject_session_history_prompt_seeded_state_is_nonempty():
-    ctx = _Ctx(chat_key="chat1")
-    manager = _FakeBattleReportManager(summary="Last time: the party found a strange brass key.")
-    result = await inject_session_history_prompt(ctx, manager, EN)
-    assert result == "Last time: the party found a strange brass key."
-
-
-async def test_inject_session_history_prompt_empty_state_returns_empty_without_crash():
-    ctx = _Ctx(chat_key="chat1")
-    manager = _FakeBattleReportManager(summary=None)
-    result = await inject_session_history_prompt(ctx, manager, EN)
-    assert result == ""
-
-
-async def test_inject_session_history_prompt_swallows_manager_errors():
-    ctx = _Ctx(chat_key="chat1")
-    result = await inject_session_history_prompt(ctx, _RaisingBattleReportManager(), EN)
-    assert result == ""
-
-
-# ---------------------------------------------------------------------------
 # Full-set smoke test: every section survives a completely empty world.
 # ---------------------------------------------------------------------------
 
 
-async def test_all_six_sections_survive_fully_empty_state():
+async def test_all_sections_survive_fully_empty_state():
     store = Store(":memory:")
     ctx = _Ctx(chat_key="brand-new-chat", user_id="u1")
     character_manager = _FakeCharacterManager()
-    battle_report_manager = _FakeBattleReportManager()
     vector_db = _FakeVectorDB()
 
     results = [
@@ -592,15 +552,13 @@ async def test_all_six_sections_survive_fully_empty_state():
         await inject_game_state_prompt(ctx, character_manager, store, EN),
         await inject_system_expertise_prompt(ctx, character_manager, EN),
         await inject_document_context_prompt(ctx, vector_db, store, EN),
-        await inject_session_history_prompt(ctx, battle_report_manager, EN),
         await inject_interaction_style_prompt(ctx, EN),
     ]
 
-    # None of the six may raise (already implied by reaching this point);
+    # None of them may raise (already implied by reaching this point);
     # the pure-framing + always-on sections must still be non-empty.
     assert all(isinstance(r, str) for r in results)
     assert results[0]  # trpg_system
     assert results[1]  # game_state (always renders the fixed header)
     assert results[2]  # system_expertise (defaults to CoC guidance)
-    assert results[4] == ""  # session_history: legitimately empty, no prior session
-    assert results[5]  # interaction_style
+    assert results[4]  # interaction_style

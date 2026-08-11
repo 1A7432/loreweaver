@@ -285,20 +285,7 @@ async def _run_script_flow(services: Services, ctx: AgentCtx, i18n: I18n, spec: 
         lines.append(i18n.t("kp_tools.subsystem.script_changes_line", changes=", ".join(changed)))
     if effect["narration"]:
         lines.append(effect["narration"])
-    await _record_subsystem_check_safe(services, ctx, character.name, spec.id, effect["mark"])
     return "\n".join(line for line in lines if line)
-
-
-async def _record_subsystem_check_safe(
-    services: Services, ctx: AgentCtx, char_name: str, subsystem_id: str, mark: str
-) -> None:
-    """Best-effort battle-report note for a script flow (never breaks the turn)."""
-    if not mark:
-        return
-    try:
-        await services.battles.add_key_event(ctx.chat_key, f"{subsystem_id}: {mark}")
-    except Exception:
-        pass
 
 
 async def _run_check_with_loss(

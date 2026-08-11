@@ -22,6 +22,7 @@ import json
 from agent import npc as npc_records
 from agent.companion_actor import companion_action
 from agent.context import AgentCtx
+from agent.history import DEFAULT_HISTORY_KEY, append_turn
 from agent.kp_tools import build_kp_toolset
 from agent.kp_tools_companion import CompanionTools, witness
 from agent.services import build_services
@@ -430,14 +431,14 @@ async def test_build_room_state_tags_ai_companions_in_the_party():
 
 
 # ---------------------------------------------------------------------------
-# (a') info-isolation red line, F11: the director must never feed room-wide
-#      session key-events into the isolated companion actor's prompt.
+# (a') info-isolation red line, F11: the director must never feed the room-wide
+#      conversation into the isolated companion actor's prompt.
 # ---------------------------------------------------------------------------
 
 ROOM_EVENT_SENTINEL = "THE ALTAR ROOM CONCEALS A HIDDEN LEVER"
 
 
-async def test_companion_turn_never_feeds_room_wide_session_events_to_the_actor():
+async def test_companion_turn_never_feeds_the_room_wide_transcript_to_the_actor():
     chat_key = "iso-events-room"
     store = Store(":memory:")
 
@@ -454,9 +455,12 @@ async def test_companion_turn_never_feeds_room_wide_session_events_to_the_actor(
     )
     companion = await npc_records.create_companion(DocumentStore(store), chat_key, "Silas")
 
-    # A room-wide session key-event the companion has NOT personally witnessed.
+    # A room-wide exchange the companion has NOT personally witnessed.
     await services.battles.start_session(chat_key)
-    await services.battles.add_key_event(chat_key, ROOM_EVENT_SENTINEL)
+    await append_turn(
+        services, chat_key, DEFAULT_HISTORY_KEY,
+        user_message="We search the altar room.", reply=ROOM_EVENT_SENTINEL, turn=1,
+    )
 
     hub = RoomHub()
     await hub.subscribe(chat_key, FakeMember("m"))
@@ -472,5 +476,5 @@ async def test_companion_turn_never_feeds_room_wide_session_events_to_the_actor(
 
     assert actor_calls, "the companion actor must have been consulted"
     blob = "\n".join(message["content"] for message in actor_calls[0])
-    # RED LINE: room-wide state (the shared session log) never reaches the isolated actor.
+    # RED LINE: room-wide state (the shared conversation) never reaches the isolated actor.
     assert ROOM_EVENT_SENTINEL not in blob

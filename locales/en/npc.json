@@ -44,7 +44,6 @@
   "npc.tools.speak.failed": "❌ Failed to voice NPC: {error}",
   "npc.tools.speak.intent_note": "{name} intends: {action_intent}",
   "npc.tools.speak.line": "{name} ({mood}): \"{dialogue}\"",
-  "npc.tools.speak.log_event": "{name} says: {dialogue}",
   "npc.tools.speak.mood_unset": "neutral",
   "npc.tools.update.bad_field": "❌ Unsupported field \"{field}\"; allowed: {allowed}",
   "npc.tools.update.done": "✅ Updated {name}'s {field} to: {value}",

@@ -39,7 +39,7 @@ from agent.context import AgentCtx
 from agent.services import Services, room_rule_variant
 from agent.tools import tool
 from core.battle_recording import record_check, record_dice_roll
-from core.battle_report import NPC_USER_ID, SessionRecord
+from core.battle_report import NPC_USER_ID
 from core.character_manager import (
     CharacterDataError,
     CharacterSheet,
@@ -904,12 +904,6 @@ class InitiativeTools:
                 await self.services.store.state_set(
                     chat_key, meta_key, json.dumps({"round": round_number, "turns": turns_in_round})
                 )
-                await self.services.battles.set_combat_state(
-                    chat_key,
-                    round_number,
-                    str(init_list[0]["name"]),
-                    turns_in_round,
-                )
                 return i18n.t("kp_tools.initiative.added", name=name, initiative=initiative)
 
             if action in {"list", "show"}:
@@ -940,15 +934,17 @@ class InitiativeTools:
                 return i18n.t("kp_tools.initiative.cleared")
 
             if action == "next":
-                await self.services.battles.ensure_session_started(chat_key, i18n=i18n)
-                session_key = "session_record.current"
+                # The pointer lives in exactly two rows — the order and its meta — and
+                # they advance together or not at all. (They used to CAS against the
+                # session record too, purely to mirror the round into the battle report;
+                # the report no longer holds combat state, and `initiative_meta` was
+                # always the authority `net.state` reads.)
                 for _attempt in range(3):
                     current_init_data = await self.services.store.state_get(chat_key, store_key)
                     current_meta_data = await self.services.store.state_get(chat_key, meta_key)
-                    current_session_data = await self.services.store.state_get(chat_key, session_key)
                     current_list = json.loads(current_init_data) if current_init_data else []
                     current_meta = json.loads(current_meta_data) if current_meta_data else {}
-                    if not current_list or not current_session_data:
+                    if not current_list:
                         return i18n.t("kp_tools.initiative.empty")
 
                     next_round = max(1, int(current_meta.get("round", 1)))
@@ -964,20 +960,15 @@ class InitiativeTools:
                         {"round": next_round, "turns": next_turn, "current": next_name},
                         ensure_ascii=False,
                     )
-                    session = SessionRecord.from_dict(json.loads(current_session_data))
-                    session.set_combat_state(next_round, next_name, next_turn)
-                    next_session_data = json.dumps(session.to_dict(), ensure_ascii=False)
                     committed = await self.services.store.state_set_if_values(
                         chat_key,
                         expected=[
                             (store_key, current_init_data),
                             (meta_key, current_meta_data),
-                            (session_key, current_session_data),
                         ],
                         updates=[
                             (store_key, next_list_data),
                             (meta_key, next_meta_data),
-                            (session_key, next_session_data),
                         ],
                     )
                     if not committed:

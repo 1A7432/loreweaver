@@ -67,9 +67,6 @@ from agent.kp_tools import build_kp_toolset  # noqa: E402
 # Stop-form runner built on them still fails against a REAL model (the offline
 # suite only proves it against a scripted one). What is NOT shared any more is
 # any judgement about what a player was attempting -- see `judge_checkable`.
-# Leading-underscore names are a module-private *convention*, not enforced
-# privacy -- an explicit import is fine.
-from agent.loop import _event_description_is_semantic_duplicate  # noqa: E402
 from agent.services import build_services  # noqa: E402
 from agent.turn_checks import dice_rolled, reply_states_a_roll  # noqa: E402
 from core.character_manager import get_hit_points  # noqa: E402
@@ -693,9 +690,6 @@ class BehaviorMetrics:
     state_present_claims: int = 0
     actor_cases: int = 0
     actor_compliant: int = 0
-    event_groups: int = 0
-    duplicated_event_groups: int = 0
-    recorded_event_groups: int = 0
     initiative_suppression_observations: list[dict[str, Any]] | None = None
 
     def __post_init__(self) -> None:
@@ -726,14 +720,6 @@ class BehaviorMetrics:
     def actor_compliance_rate(self) -> float:
         return self._rate(self.actor_compliant, self.actor_cases)
 
-    @property
-    def event_dup_rate(self) -> float:
-        return self._rate(self.duplicated_event_groups, self.event_groups)
-
-    @property
-    def event_recording_coverage(self) -> float:
-        return self._rate(self.recorded_event_groups, self.event_groups)
-
     def rates(self) -> dict[str, float]:
         return {
             "over_roll_fp_rate": self.over_roll_fp_rate,
@@ -741,8 +727,6 @@ class BehaviorMetrics:
             "state_divergence_rate": self.state_divergence_rate,
             "state_claim_coverage": self.state_claim_coverage,
             "actor_compliance_rate": self.actor_compliance_rate,
-            "event_dup_rate": self.event_dup_rate,
-            "event_recording_coverage": self.event_recording_coverage,
         }
 
 
@@ -752,8 +736,6 @@ class BehaviorThresholds:
     max_dice_first_miss_rate: float = 0.0
     max_state_divergence_rate: float = 1.0
     min_actor_compliance_rate: float = 0.95
-    max_event_dup_rate: float = 0.0
-    min_event_recording_coverage: float = 1.0
 
 
 def evaluate_behavior_gate(
@@ -765,7 +747,6 @@ def evaluate_behavior_gate(
         "roll-required": metrics.roll_required_cases,
         "state": metrics.state_cases,
         "actor": metrics.actor_cases,
-        "event": metrics.event_groups,
     }
     for name, count in required_denominators.items():
         if count == 0:
@@ -775,8 +756,6 @@ def evaluate_behavior_gate(
         (metrics.dice_first_miss_rate, thresholds.max_dice_first_miss_rate, "dice-first miss", ">"),
         (metrics.state_divergence_rate, thresholds.max_state_divergence_rate, "state divergence", ">"),
         (metrics.actor_compliance_rate, thresholds.min_actor_compliance_rate, "actor compliance", "<"),
-        (metrics.event_dup_rate, thresholds.max_event_dup_rate, "event duplicate", ">"),
-        (metrics.event_recording_coverage, thresholds.min_event_recording_coverage, "event recording", "<"),
     )
     for actual, limit, label, operator in comparisons:
         violated = actual > limit if operator == ">" else actual < limit
@@ -809,9 +788,6 @@ def render_behavior_report(
             f"actor compliance:{metrics.actor_compliance_rate:5.1%}  "
             f"({metrics.actor_compliant}/{metrics.actor_cases})  "
             f"[min {thresholds.min_actor_compliance_rate:.1%}]",
-            f"event duplicate: {metrics.event_dup_rate:5.1%}  "
-            f"({metrics.duplicated_event_groups}/{metrics.event_groups}); "
-            f"recording coverage={metrics.event_recording_coverage:.1%}",
             f"initiative suppression observations={len(metrics.initiative_suppression_observations or [])}",
             "PASS" if passed else "FAIL: " + "; ".join(reasons),
         ]
@@ -914,7 +890,6 @@ async def _behavior_snapshot(services: Any, ctx: AgentCtx) -> dict[str, Any]:
     hp = get_hit_points(sheet) if sheet.name != "default" else (None, None)
     roster = await services.characters.get_party_roster(ctx.chat_key)
     member = next((item for item in roster if item.get("name") == sheet.name), {})
-    session = await services.battles.generator.get_current_session(ctx.chat_key)
     initiative = _loads(await services.store.state_get(ctx.chat_key, "initiative"), [])
     initiative_meta = _loads(await services.store.state_get(ctx.chat_key, "initiative_meta"), {})
     return {
@@ -923,7 +898,6 @@ async def _behavior_snapshot(services: Any, ctx: AgentCtx) -> dict[str, Any]:
         "clock": clock.get("current_time"),
         "hp": list(hp),
         "status": list(member.get("status_effects") or []),
-        "events": [event.get("description", "") for event in (session.key_events if session else [])],
         "initiative": initiative,
         "initiative_meta": initiative_meta,
     }
@@ -935,7 +909,6 @@ def _score_actor(turn: dict[str, Any], trace: list[dict], snapshot: dict[str, An
     if len(checks) != 1:
         return False, f"expected exactly one skill_check, got {len(checks)}"
     args = checks[0].get("arguments") or {}
-    events = snapshot.get("events") or []
     if expected["kind"] == "npc":
         target = args.get("npc_target")
         compliant = (
@@ -946,7 +919,7 @@ def _score_actor(turn: dict[str, Any], trace: list[dict], snapshot: dict[str, An
         )
         return compliant, "NPC requires exact actor, integer npc_target, and __npc__ recording"
     compliant = "actor" not in args and not any(check.get("user_id") == "__npc__" for check in _session_checks(snapshot))
-    return compliant, "player checks must omit actor and remain player-owned" + (f"; events={len(events)}" if events else "")
+    return compliant, "player checks must omit actor and remain player-owned"
 
 
 def _session_checks(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
@@ -969,17 +942,6 @@ def _reply_asserts_claim(reply: str, claim: str) -> bool:
         if _contains_eval_sentinel(clause, claim) and not _STATE_NEGATED_CLAIM_RE.search(clause):
             return True
     return False
-
-
-def _event_matches_expectation(description: str, expectation: dict[str, Any]) -> bool:
-    """Match one alias from every semantic concept in an event fixture."""
-    aliases = expectation.get("aliases")
-    if not aliases:
-        aliases = [[sentinel] for sentinel in expectation.get("sentinels", [])]
-    return bool(aliases) and all(
-        any(_contains_eval_sentinel(description, str(alias)) for alias in concept)
-        for concept in aliases
-    )
 
 
 def _score_explicit_state_claims(reply: str, snapshot: dict[str, Any]) -> list[str]:
@@ -1092,7 +1054,6 @@ async def run_behavior_suite(
     records: list[dict[str, Any]] = []
     for episode in fixture["episodes"]:
         ctx = await _setup_behavior_episode(services, toolset, episode)
-        event_groups: dict[str, dict[str, Any]] = {}
         for index, turn in enumerate(episode.get("turns", []), 1):
             turn_id = f"{episode['id']}:{index}"
             metrics.turns += 1
@@ -1133,10 +1094,7 @@ async def run_behavior_suite(
                             finding["over_roll_false_positive"] = True
                 if "actor_expectation" in turn:
                     metrics.actor_cases += 1
-                    actor_snapshot = {
-                        "checks": after["checks"][len(before["checks"]) :],
-                        "events": after["events"],
-                    }
+                    actor_snapshot = {"checks": after["checks"][len(before["checks"]) :]}
                     compliant, actor_reason = _score_actor(turn, trace, actor_snapshot)
                     if compliant:
                         metrics.actor_compliant += 1
@@ -1155,9 +1113,6 @@ async def run_behavior_suite(
                 if not consistent:
                     metrics.state_divergences += 1
                     finding["state_divergence"] = failures
-                event_expectation = turn.get("event_expectation")
-                if event_expectation:
-                    event_groups[str(event_expectation["group"])] = dict(event_expectation)
                 initiative_expectation = turn.get("initiative_expectation")
                 if initiative_expectation:
                     next_entries = [
@@ -1210,37 +1165,6 @@ async def run_behavior_suite(
                 }
                 records.append(error_record)
                 recorder.emit("BEHAVIOR_TURN_ERROR", **error_record)
-        final_snapshot = await _behavior_snapshot(services, ctx)
-        for group, expectation in event_groups.items():
-            metrics.event_groups += 1
-            direct = [
-                description
-                for description in final_snapshot["events"]
-                if _event_matches_expectation(description, expectation)
-            ]
-            # Once a fixture-grounded direct match anchors the milestone, include
-            # conservative semantic paraphrases too. This prevents a duplicate
-            # from disappearing merely because it used an allowed synonym.
-            matching = list(direct)
-            for description in final_snapshot["events"]:
-                if description in matching:
-                    continue
-                if any(
-                    _event_description_is_semantic_duplicate(description, anchor)
-                    for anchor in direct
-                ):
-                    matching.append(description)
-            if matching:
-                metrics.recorded_event_groups += 1
-            if len(matching) > int(expectation.get("max_records", 1)):
-                metrics.duplicated_event_groups += 1
-            recorder.emit(
-                "behavior_event_group",
-                episode=episode["id"],
-                group=group,
-                matching_events=matching,
-                max_records=int(expectation.get("max_records", 1)),
-            )
     return metrics, records
 
 

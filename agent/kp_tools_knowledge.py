@@ -12,7 +12,7 @@ as a ``role: tool`` message, never echoed straight back to a player).
 
 Four provider classes, one per M1.md's tool grouping:
 ``ModuleTools`` (11, 7 keeper_only), ``DocumentTools`` (4), ``NoteTools``
-(2), ``SessionTools`` (4). Every keeper_only tool's return value is prefixed
+(2), ``SessionTools`` (4, all prep-phase). Every keeper_only tool's return value is prefixed
 with a localized ``kp_tools.know.keeper_banner`` reminder (in addition to
 the system-prompt-level ``prompt.keeper_discipline`` block another module
 installs) so the model is nudged at the exact point it reads secret
@@ -88,6 +88,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.context import AgentCtx
+from agent.history import DEFAULT_HISTORY_KEY, load_chain
 from agent.services import Services
 from agent.tools import tool
 from core.battle_report import _default_session_name
@@ -228,9 +229,14 @@ async def render_session_report(
     """Render the in-progress (or, failing that, the latest archived) session as a Markdown report and
     persist it, WITHOUT ending the session -- the players' keepsake / review export ("团报").
 
-    Reuses ``services.battles.generator.generate_markdown_report`` (summary when ``detailed=False``, the
-    full chronological transcript when ``detailed=True``); it does not duplicate any rendering. The
-    rendered Markdown is stored under the same ``battle_report.{chat_key}.{timestamp}`` key
+    Reuses ``services.battles.generator.generate_markdown_report``; it does not duplicate any rendering.
+    ``detailed`` is what loads the room's real conversation (`agent.history.load_chain`) and hands it to
+    the renderer, which is what makes the full report a TRANSCRIPT rather than a scoreboard. The current
+    path only: a rewound room (M20 D) keeps its abandoned branches on disk, and a keepsake that showed
+    the table a story it decided did not happen would be worse than no keepsake. `trim_folded` is
+    deliberately NOT applied -- what a turn replays and what happened are different questions.
+
+    The rendered Markdown is stored under the same ``battle_report.{chat_key}.{timestamp}`` key
     ``get_battle_report_markdown`` reads, and written best-effort to ``ctx.fs.shared_path`` (the exact
     shared-reports save path ``generate_session_report`` already uses).
 
@@ -254,7 +260,8 @@ async def render_session_report(
     if not name:
         name = _default_session_name(datetime.fromtimestamp(record.start_time), i18n)
 
-    markdown = generator.generate_markdown_report(record, name, i18n=i18n, detailed=detailed)
+    transcript = await load_chain(services, ctx.chat_key, DEFAULT_HISTORY_KEY) if detailed else None
+    markdown = generator.generate_markdown_report(record, name, i18n=i18n, transcript=transcript)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     await services.store.state_set(ctx.chat_key, _battle_report_key(ctx.chat_key, timestamp), markdown)
@@ -1237,8 +1244,9 @@ class NoteTools(_KnowledgeToolsBase):
 
 
 class SessionTools(_KnowledgeToolsBase):
-    """Session-recording tools: thin wrappers over `services.battles` (start/log/end a recorded session and
-    render its battle report).
+    """Session-recording tools: thin wrappers over `services.battles` (start/end a recorded session and
+    render its report). Nothing here logs the STORY — the room's conversation is already the record,
+    and the report is rendered from it.
     """
 
     @tool(prep_only=True)
@@ -1278,30 +1286,6 @@ class SessionTools(_KnowledgeToolsBase):
         except Exception as exc:
             return i18n.t("kp_tools.know.session.start_failed", error=str(exc))
 
-    @tool
-    async def add_session_event(self, ctx: AgentCtx, description: str, event_type: str = "general") -> str:
-        """Log a key (plot-relevant) event during the session.
-
-        Args:
-            description: The event's description.
-            event_type: general/combat/story/discovery.
-
-        Returns:
-            Confirmation that the event was logged.
-        """
-        i18n = self._i18n(ctx)
-        try:
-            recorded = await self._services.battles.add_key_event(
-                ctx.chat_key,
-                description,
-                event_type,
-            )
-            if not recorded:
-                return i18n.t("kp_tools.know.session.event_duplicate")
-            return i18n.t("kp_tools.know.session.event_logged", description=description)
-        except Exception as exc:
-            return i18n.t("kp_tools.know.session.event_failed", error=str(exc))
-
     @tool(prep_only=True)
     async def generate_session_report(self, ctx: AgentCtx) -> str:
         """End the current session and generate its battle report (text, plus a Markdown file written to
@@ -1312,8 +1296,11 @@ class SessionTools(_KnowledgeToolsBase):
         """
         i18n = self._i18n(ctx)
         try:
+            # The Markdown file is the players' keepsake, so it carries the room's whole
+            # conversation; the text report returned below stays a compact scoreboard.
+            transcript = await load_chain(self._services, ctx.chat_key, DEFAULT_HISTORY_KEY)
             text_report, markdown_report, _session_name = await self._services.battles.generate_battle_report(
-                ctx.chat_key, i18n=i18n
+                ctx.chat_key, i18n=i18n, transcript=transcript
             )
             if not text_report:
                 return i18n.t("kp_tools.know.session.no_active_session")
@@ -1358,14 +1345,13 @@ class SessionTools(_KnowledgeToolsBase):
     @tool(prep_only=True)
     async def export_report(self, ctx: AgentCtx, detailed: bool = False, session_name: str = "") -> str:
         """Export the session report ("团报") for the players to keep and review -- a concise summary by
-        default, or the full chronological log with detailed=True. Unlike generate_session_report this does
-        NOT end the session, so players can save a keepsake at any point (mid-session or after). This is the
+        default, or the whole session with detailed=True. Unlike generate_session_report this does NOT end
+        the session, so players can save a keepsake at any point (mid-session or after). This is the
         players' own record, not keeper-only material.
 
         Args:
-            detailed: False exports the summary report; True adds the full chronological transcript
-                (player actions, dice rolls, skill checks with their success levels, NPC interactions,
-                combat rounds, key events) on top of the summary.
+            detailed: False exports the summary alone; True adds the full dice log and the room's entire
+                conversation -- every player message and every reply -- on top of it.
             session_name: Optional title override for the exported report.
 
         Returns:

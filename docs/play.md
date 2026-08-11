@@ -174,7 +174,7 @@ projection that keeps every other secret out of your client — keeper annotatio
 | `.ri` | roll into the initiative order, or show it |
 | `.pc` | the module's pre-generated cast |
 | `.recap` | the spoiler-free story so far |
-| `.report` | export a session report, once the session has something to export |
+| `.report` | export a session report — the scoreboard; `.report full` adds every dice roll and the whole conversation |
 | `.jrrp` | today's luck, for no mechanical reason whatsoever |
 
 Both dialects work at once: the Chinese SealDice style (`.ra 侦查`, `.st 力量50`, `.sc 1/1d6`) and

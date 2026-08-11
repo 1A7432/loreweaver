@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from agent.context import AgentCtx
 from agent.kp_tools_mechanics import InitiativeTools
 from agent.services import build_services
@@ -25,6 +27,11 @@ async def test_room_state_clock_carries_the_active_combat_round_without_a_game_c
     assert state["clock"]["round"] == 2
 
 
+async def _pointer(services, ctx) -> dict:
+    """`initiative_meta` — the ONE authority on where combat stands."""
+    return json.loads(await services.store.state_get(ctx.chat_key, "initiative_meta"))
+
+
 async def test_tool_and_command_next_each_commit_one_pointer_step_with_agreement():
     services = build_services(Settings(), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64))
     ctx = AgentCtx(chat_key="cli:dm:pointer-agreement", user_id="u1", locale="en")
@@ -40,10 +47,7 @@ async def test_tool_and_command_next_each_commit_one_pointer_step_with_agreement
     state_after_tool = await build_room_state(services, ctx)
     assert [entry["name"] for entry in state_after_tool["initiative"]] == ["Bob", "Cora", "Alice"]
     assert [entry["current"] for entry in state_after_tool["initiative"]] == [True, False, False]
-    session_after_tool = await services.battles.generator.get_current_session(ctx.chat_key)
-    assert session_after_tool is not None
-    assert session_after_tool.combat_rounds[-1]["current"] == "Bob"
-    assert session_after_tool.combat_rounds[-1]["turn"] == 1
+    assert await _pointer(services, ctx) == {"round": 1, "turns": 1, "current": "Bob"}
 
     command_reply = await router.dispatch_reply(ctx, ".init next")
     assert command_reply is not None
@@ -51,7 +55,4 @@ async def test_tool_and_command_next_each_commit_one_pointer_step_with_agreement
     assert "Cora" in command_reply.text
     state_after_command = await build_room_state(services, ctx)
     assert [entry["name"] for entry in state_after_command["initiative"]] == ["Cora", "Alice", "Bob"]
-    session_after_command = await services.battles.generator.get_current_session(ctx.chat_key)
-    assert session_after_command is not None
-    assert session_after_command.combat_rounds[-1]["current"] == "Cora"
-    assert session_after_command.combat_rounds[-1]["turn"] == 2
+    assert await _pointer(services, ctx) == {"round": 1, "turns": 2, "current": "Cora"}

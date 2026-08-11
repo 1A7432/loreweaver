@@ -22,7 +22,7 @@ from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM
 
-# Measured 2026-08-10: the play phase is 33 tools / ~16.9k characters, cut from 35.7k
+# Measured 2026-08-11: the play phase is 32 tools / ~16.6k characters, cut from 35.7k
 # ungated. The ceiling leaves room for a couple of genuinely per-turn additions and no
 # more; a bulk tool cannot slip in under it.
 PLAY_PHASE_SCHEMA_BUDGET = 20_000

@@ -44,7 +44,6 @@
   "npc.tools.speak.failed": "❌ 让 NPC 发言失败：{error}",
   "npc.tools.speak.intent_note": "{name} 打算：{action_intent}",
   "npc.tools.speak.line": "{name}（{mood}）：“{dialogue}”",
-  "npc.tools.speak.log_event": "{name} 说：{dialogue}",
   "npc.tools.speak.mood_unset": "平静",
   "npc.tools.update.bad_field": "❌ 不支持的字段“{field}”；允许的字段：{allowed}",
   "npc.tools.update.done": "✅ 已将 {name} 的 {field} 更新为：{value}",

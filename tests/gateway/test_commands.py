@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from agent.context import AgentCtx
+from agent.history import DEFAULT_HISTORY_KEY, append_turn
 from agent.services import build_services
 from core.character_manager import CharacterSheet
 from core.dice_engine import seed_dice
@@ -234,35 +235,44 @@ async def test_report_command_exports_summary_without_keeper_permission():
     ctx = AgentCtx(chat_key="cli:dm:report", user_id="player", locale="en")
 
     await services.battles.start_session(ctx.chat_key, "Report Command")
-    await services.battles.add_player_action(ctx.chat_key, "player", "Nora", "checks the locked desk")
-    await services.battles.add_key_event(ctx.chat_key, "A silver key was recovered")
+    await append_turn(
+        services, ctx.chat_key, DEFAULT_HISTORY_KEY,
+        user_message="I check the locked desk.", reply="The lock gives.", turn=1,
+    )
 
     report = await router.dispatch(ctx, ".report")
 
     assert report is not None
     assert "Report Command" in report
     assert "Player Scores" in report
-    assert "Full Session Log" not in report
-    assert "checks the locked desk" not in report
+    # Bare `.report` is the scoreboard; the conversation rides `.report detailed`.
+    assert "The Whole Session" not in report
+    assert "I check the locked desk." not in report
 
 
-async def test_report_detailed_command_exports_full_transcript():
+async def test_report_detailed_command_exports_the_whole_conversation():
     services = _services()
     router = CommandRouter(services)
     ctx = AgentCtx(chat_key="cli:dm:report-detailed", user_id="player", locale="en")
 
     await services.battles.start_session(ctx.chat_key, "Detailed Command")
-    await services.battles.add_player_action(ctx.chat_key, "player", "Nora", "checks the locked desk")
     await services.battles.add_skill_check(
         ctx.chat_key, "player", "Nora", "Locksmith", 50, 21, success=True, rank_id="regular", tier=2, label="success"
+    )
+    await append_turn(
+        services, ctx.chat_key, DEFAULT_HISTORY_KEY,
+        user_message="I check the locked desk.", reply="The lock gives with a dry click.", turn=1,
     )
 
     report = await router.dispatch(ctx, ".report detailed")
 
     assert report is not None
     assert "Detailed Command" in report
-    assert "Full Session Log" in report
-    assert "checks the locked desk" in report
+    assert "The Whole Session" in report
+    # Both halves of the real exchange, verbatim...
+    assert "I check the locked desk." in report
+    assert "The lock gives with a dry click." in report
+    # ...plus the dice values the prose does not carry.
     assert "Locksmith (target 50): rolled 21" in report
 
 

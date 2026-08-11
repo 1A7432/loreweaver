@@ -20,7 +20,6 @@
   "companion.tools.act.done": "✅ {name} 行动了一回合。",
   "companion.tools.act.failed": "❌ 让同伴行动失败：{error}",
   "companion.tools.act.line": "{name}：“{dialogue}”——{action}",
-  "companion.tools.act.log_event": "{name}（同伴）行动：{action}",
   "companion.tools.act.nested": "⚠️ 同伴的回合不能再触发另一名同伴行动。",
   "companion.tools.act.no_action": "（这一轮按兵不动）",
   "companion.tools.act.no_dialogue": "……",

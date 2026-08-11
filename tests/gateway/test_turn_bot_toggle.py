@@ -8,6 +8,7 @@ behavior. (The chat adapters gate earlier, in `GatewayRunner.on_inbound`.)
 from __future__ import annotations
 
 from agent.context import AgentCtx
+from agent.history import DEFAULT_HISTORY_KEY, load_chain
 from agent.kp_tools import build_kp_toolset
 from agent.kp_tools_mechanics import CharacterTools
 from agent.services import build_services
@@ -100,7 +101,10 @@ async def test_bot_unset_and_bot_on_run_the_kp_turn():
     assert any(getattr(event, "speaker", "") == "kp" for event in member.events)
 
 
-async def test_real_kp_turn_records_the_truncated_player_action_and_auto_starts_session():
+async def test_a_real_kp_turn_opens_the_session_and_stores_the_exchange_whole():
+    """The turn writes NOTHING to the report: it opens the session (the report's
+    boundary) and the exchange itself lands in the history tree, untruncated —
+    which is what the report is rendered from."""
     services = _services()
     hub, _member, router, toolset, ctx = await _room(services)
     await CharacterTools(services).create_character(ctx, name="Vera", system="coc7", auto_generate=False)
@@ -108,9 +112,6 @@ async def test_real_kp_turn_records_the_truncated_player_action_and_auto_starts_
 
     await run_turn(hub, services, ctx, action, command_router=router, toolset=toolset)
 
-    record = await services.battles.generator.get_current_session(ctx.chat_key)
-    assert record is not None
-    saved = record.player_actions[ctx.uid()][0]
-    assert saved["char_name"] == "Vera"
-    assert len(saved["action"]) == 1000
-    assert action.startswith(saved["action"])
+    assert await services.battles.generator.get_current_session(ctx.chat_key) is not None
+    chain = await load_chain(services, ctx.chat_key, DEFAULT_HISTORY_KEY)
+    assert [message["content"] for message in chain if message["role"] == "user"] == [action]

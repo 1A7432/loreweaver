@@ -1,4 +1,4 @@
-"""Tests for agent.prompt_builder.build_system_prompt: assembling the 6
+"""Tests for agent.prompt_builder.build_system_prompt: assembling the
 core.prompt_sections builders (per docs/specs/M1.md §6.4) into the full
 AI-KP system prompt for one turn, through the real `build_services` wiring
 (FakeLLM/FakeEmbeddings keep everything offline and deterministic).
@@ -16,7 +16,6 @@ from core.prompt_sections import (
     inject_document_context_prompt,
     inject_game_state_prompt,
     inject_interaction_style_prompt,
-    inject_session_history_prompt,
     inject_system_expertise_prompt,
     inject_trpg_system_prompt,
 )
@@ -50,19 +49,12 @@ async def _seed_ready_keeper_pool(services, chat_key: str) -> None:
     )
 
 
-async def _seed_last_session(services, chat_key: str) -> None:
-    await services.battles.start_session(chat_key, session_name="Session Zero")
-    await services.battles.add_key_event(chat_key, "The party arrived in town.")
-    await services.battles.generate_battle_report(chat_key)
-
-
-async def test_build_system_prompt_includes_keeper_discipline_and_joins_all_six_sections_in_order():
+async def test_build_system_prompt_includes_keeper_discipline_and_joins_all_sections_in_order():
     services = _services("en")
     chat_key = "chat-prompt-builder"
     ctx = AgentCtx(chat_key=chat_key, user_id="u1", locale="en")
 
     await _seed_ready_keeper_pool(services, chat_key)
-    await _seed_last_session(services, chat_key)
 
     prompt = await build_system_prompt(ctx, services)
     i18n = services.i18n.with_locale("en")
@@ -75,17 +67,16 @@ async def test_build_system_prompt_includes_keeper_discipline_and_joins_all_six_
     assert i18n.t("prompt.keeper_discipline") in prompt
     assert SENTINEL_SECRET in prompt
 
-    # All 6 sections contributed non-empty content, in the STABLE HEAD -> VOLATILE
+    # Every section contributed non-empty content, in the STABLE HEAD -> VOLATILE
     # TAIL order (P1, M1 §6.4 revision): identity, expertise, style and the module
-    # pool are the room's configuration and lead; the session's own history and live
-    # game state follow, because they are what changes every turn.
+    # pool are the room's configuration and lead; live game state follows, because
+    # it is what changes every turn.
     markers = [
         i18n.t("prompt.system.intro"),  # trpg_system        \
         load_rulepack("coc7").expertise_text("en"),  # system_expertise  > stable head
         i18n.t("prompt.style.narrative"),  # interaction_style       |
         i18n.t("prompt.document.pool_title"),  # document_context    /
-        i18n.t("battle.summary.title"),  # session_history      \ volatile tail
-        i18n.t("prompt.game_state.title"),  # game_state       /
+        i18n.t("prompt.game_state.title"),  # game_state         > volatile tail
     ]
     positions = [prompt.index(marker) for marker in markers]
     assert positions == sorted(positions), "sections must appear in the fixed §6.4 order"
@@ -157,18 +148,15 @@ async def test_build_system_prompt_with_no_relationship_state_is_byte_identical_
     ctx = AgentCtx(chat_key=chat_key, user_id="u1", locale="en")
 
     await _seed_ready_keeper_pool(services, chat_key)
-    await _seed_last_session(services, chat_key)
 
     i18n = services.i18n.with_locale("en")
-    session_history = await inject_session_history_prompt(ctx, services.battles, i18n)
     document_context = await inject_document_context_prompt(
         ctx, services.vector_db, services.store, i18n, services.settings.enable_vector_db
     )
-    extra = getattr(ctx, "extra", {}) or {}
-    recent_context = "\n".join(part for part in (session_history, str(extra.get("user_message", "") or "")) if part)
-    world_lore = await inject_world_lore_prompt(ctx, services.worldbook, i18n, role="keeper", recent_context=recent_context)
+    # This room has no conversation yet, so the retrieval context is empty too.
+    world_lore = await inject_world_lore_prompt(ctx, services.worldbook, i18n, role="keeper", recent_context="")
     # The P1 layout, hand-assembled: stable head (identity, expertise, style, the
-    # module pool) then volatile tail (lore, history, live state).
+    # module pool) then volatile tail (lore, live state).
     plain_sections = [
         await inject_trpg_system_prompt(ctx, i18n),
         await inject_system_expertise_prompt(
@@ -177,7 +165,6 @@ async def test_build_system_prompt_with_no_relationship_state_is_byte_identical_
         await inject_interaction_style_prompt(ctx, i18n),
         document_context,
         world_lore,
-        session_history,
         await inject_game_state_prompt(ctx, services.characters, services.store, i18n),
     ]
     expected = "\n\n".join(section for section in plain_sections if section)  # no skills enabled here

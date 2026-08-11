@@ -1,10 +1,11 @@
 """Regression tests for the hidden-roll (`.rh`) leak fix in `core.battle_report`.
 
 A hidden roll is recorded for the keeper's own bookkeeping, but MUST never
-surface in any player-facing report: not in the detailed transcript, not in the
-statistics/aggregate counts, and not in the critical-moment highlights. Before
-the fix, `.report detailed` replayed every recorded roll (including hidden ones)
-and counted them in the stats. These assertions fail on that old behavior.
+surface in any player-facing report: not in the full report's dice log, not in
+the statistics/aggregate counts, and not in the critical-moment highlights.
+Before the fix, `.report detailed` replayed every recorded roll (including
+hidden ones) and counted them in the stats. These assertions fail on that old
+behavior.
 """
 
 from core.battle_report import BattleReportGenerator, BattleReportManager, SessionRecord
@@ -38,12 +39,12 @@ def test_hidden_roll_survives_rebuild_but_stays_out_of_aggregates():
     assert round_trip.player_stats["u1"].get("critical_success", 0) == 0
 
 
-def test_detailed_report_omits_hidden_roll_transcript_stats_and_highlights():
+def test_full_report_omits_hidden_roll_from_dice_log_stats_and_highlights():
     record = _record_with_hidden()
     generator = BattleReportGenerator(Store())
     i18n = I18n(locale="en")
 
-    detailed = generator.generate_markdown_report(record, "Hidden", i18n=i18n, detailed=True)
+    detailed = generator.generate_markdown_report(record, "Hidden", i18n=i18n, transcript=[])
     plain = generator.generate_report_text(record, "Hidden", i18n=i18n)
 
     # The hidden roll's expression never appears; the public one does.
@@ -79,6 +80,8 @@ async def test_manager_hidden_roll_persists_flag_and_stays_out_of_report():
     assert any(roll.get("hidden") for roll in record.dice_rolls)
     assert record.player_stats["u1"]["total_rolls"] == 1
 
-    md = manager.generator.generate_markdown_report(record, "Manager Hidden", i18n=I18n(locale="en"), detailed=True)
+    md = manager.generator.generate_markdown_report(
+        record, "Manager Hidden", i18n=I18n(locale="en"), transcript=[]
+    )
     assert "1d100" not in md
     assert "1d20" in md

@@ -44,7 +44,6 @@ if TYPE_CHECKING:
     from gateway.hub import Member, RoomHub
     from gateway.ops import Censor
 
-_SESSION_ACTION_MAX_CHARS = 1000
 # Strong refs to in-flight post-turn scribe tasks (fire-and-forget asyncio tasks
 # are garbage-collected mid-run without one).
 _SCRIBE_TASKS: set[asyncio.Task] = set()
@@ -213,16 +212,14 @@ async def run_turn(
         if not await _kp_enabled(services, ctx.chat_key):
             await publish_state(hub, services, ctx)
             return None
+        # The session is the report's BOUNDARY — its start, its duration, and the dice
+        # ledgers scoped to it — so a player's turn opens one rather than leaving the
+        # room reportless until someone happens to roll. Nothing about the turn is
+        # recorded here: the exchange itself lands in `chat_history` (agent.loop), and
+        # that is what the report renders.
         role = extra.get("role") if isinstance(extra, dict) else None
         if ctx.platform != "companion" and role != "keeper":
-            character = await resolve_active_character(services, ctx)
-            char_name = character.name if character is not None else name
-            await services.battles.add_player_action(
-                ctx.chat_key,
-                ctx.uid(),
-                char_name,
-                text[:_SESSION_ACTION_MAX_CHARS],
-            )
+            await services.battles.ensure_session_started(ctx.chat_key, i18n=i18n)
         # A room with a mature/explicit KP skill enabled (Layer B.1's mature-mode
         # gate — see `gateway.ops.room_content_unfiltered`) opts the output censor
         # OUT entirely for that room, regardless of the configured `Censor`; every

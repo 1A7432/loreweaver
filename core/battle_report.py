@@ -1,12 +1,36 @@
-"""Battle report generation for TRPG sessions.
+"""The session report ("团报") — the players' keepsake of a session.
 
-Ported from ``nekro_trpg_dice_plugin``'s ``core/battle_report.py``:
-``SessionRecord`` bookkeeping, the ``session_record.*`` / ``session_name.*`` /
-``session_history.*`` store-key layout, and the score/rating formulas are all
-unchanged. Only two things differ from the source: the injected store is
-``infra.store.Store`` (drop-in — same async ``get``/``set``/``delete``
-signature) and every human-readable line of the rendered reports goes
-through ``infra.i18n`` instead of being a hardcoded Chinese literal.
+The report has ONE narrative source: the room's real conversation, the
+append-only `chat_history` tree that `agent.history.load_chain` reads. Nothing
+here re-records the story a second time.
+
+What this module still keeps is the layer the transcript genuinely cannot
+carry: **dice**. A roll's expression, its total, a check's target, the graded
+success label and the critical/fumble flags are engine values (iron rule #1) —
+the narration around them is prose, and prose is not a record of what the dice
+did. So a `SessionRecord` is exactly two ledgers, `dice_rolls` and
+`skill_checks`, plus the per-player aggregates derived from them.
+
+Everything else that used to live here was a hand-maintained index of a
+transcript that was already complete — player actions truncated at write time,
+key events that only existed when the model remembered to log one, combat
+rounds duplicating `initiative_meta`, NPC interactions with no writer at all —
+and it is gone.
+
+Rendering splits by audience:
+
+- `generate_report_text` — the compact scoreboard. It is what the
+  `generate_session_report` tool hands back to the model and what a console
+  prints, so it must stay small; it never carries the transcript.
+- `generate_markdown_report` — the players' file. Pass `transcript=` (the wire
+  shape `load_chain` returns) and the whole exchange is rendered below the
+  scoreboard, capped by `TRANSCRIPT_MAX_CHARS` with the truncation stated in
+  the report itself.
+
+Secrecy (iron rule #3): the report is player-facing. `chat_history` holds only
+what the room saw — the player's own message and the final, post-censor reply
+that was broadcast — and hidden (`.rh`) rolls are filtered by `_visible_rolls`
+before any rendering or aggregate.
 """
 
 from __future__ import annotations
@@ -16,12 +40,19 @@ import time
 from datetime import datetime
 
 from infra.i18n import I18n, get_i18n
+from infra.llm import HISTORY_TURN_KEY
 from infra.store import Store
 
 NPC_USER_ID = "__npc__"
-_KEY_EVENT_DEDUPE_SECONDS = 5 * 60
-_REPORT_RECAP_LIMIT = 10
-_REPORT_RECAP_TEXT_LIMIT = 200
+
+# How much rendered transcript one report may carry. A turn costs roughly 1.5-2.5k
+# characters (a keeper reply runs ~1.5k, a player's a few hundred, and `net.session`
+# caps player input at 4k), so 200k is on the order of a hundred turns — a whole
+# real campaign fits, and a room that somehow does not is still bounded to a file a
+# client can render. Past the cap the report keeps the MOST RECENT messages (a
+# session's ending is what a keepsake is for) and says how many it left out. Nothing
+# is lost from disk: the history tree is append-only and still holds every message.
+TRANSCRIPT_MAX_CHARS = 200_000
 
 
 def _check_succeeded(check: dict) -> bool:
@@ -37,17 +68,11 @@ def _check_level_label(check: dict, i18n: I18n) -> str:
     return str(check.get("rank_id", ""))
 
 
-def _select_recap_events(events: list[dict], limit: int = _REPORT_RECAP_LIMIT) -> list[dict]:
-    if len(events) <= limit:
-        return list(events)
-    return [events[index * (len(events) - 1) // (limit - 1)] for index in range(limit)]
-
-
-def _render_recap_text(description: object, limit: int = _REPORT_RECAP_TEXT_LIMIT) -> str:
-    text = " ".join(str(description).split())
-    if len(text) <= limit:
-        return text
-    return f"{text[: limit - 1].rstrip()}…"
+def _clock_time(timestamp: float, i18n: I18n) -> str:
+    """``HH:MM:SS`` for a recorded moment, or the placeholder for an unstamped one."""
+    if not timestamp:
+        return i18n.t("battle.report.md.dice_log.no_time")
+    return datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
 
 
 def _default_session_name(moment: datetime, i18n: I18n) -> str:
@@ -61,7 +86,7 @@ def _visible_rolls(rolls: list[dict]) -> list[dict]:
 
 
 class SessionRecord:
-    """A single TRPG session's recorded events and per-player stats."""
+    """One session's dice ledgers and the per-player aggregates over them."""
 
     def __init__(self, session_id: str) -> None:
         self.session_id = session_id
@@ -70,10 +95,6 @@ class SessionRecord:
 
         self.dice_rolls: list[dict] = []
         self.skill_checks: list[dict] = []
-        self.combat_rounds: list[dict] = []
-        self.key_events: list[dict] = []
-        self.npc_interactions: list[dict] = []
-        self.player_actions: dict[str, list[dict]] = {}  # {user_id: [action, ...]}
 
         # {user_id: {char_name, total_rolls, success_count, critical_success, ...}}
         self.player_stats: dict[str, dict] = {}
@@ -97,9 +118,9 @@ class SessionRecord:
         ``hidden`` marks a keeper/private roll (e.g. `.rh`): it is retained on
         the record for the keeper's own bookkeeping, but MUST never surface in
         any player-facing report -- it is excluded from every rendered
-        transcript, statistic, aggregate and highlight (see ``_visible_rolls``
-        and ``rebuild_player_stats``), so the roller's secret result cannot be
-        replayed via `.report detailed`.
+        statistic, aggregate and highlight (see ``_visible_rolls`` and
+        ``rebuild_player_stats``), so the roller's secret result cannot be
+        replayed via `.report`.
         """
         entry = {
             "user_id": user_id,
@@ -183,50 +204,6 @@ class SessionRecord:
         elif check.get("fumble"):
             stats["critical_failure"] = stats.get("critical_failure", 0) + 1
 
-    def add_key_event(self, description: str, event_type: str = "general") -> bool:
-        """Record a key event unless identical text was added in the last five minutes."""
-        now = time.time()
-        for event in reversed(self.key_events):
-            if now - float(event.get("timestamp", 0) or 0) > _KEY_EVENT_DEDUPE_SECONDS:
-                break
-            if event.get("description") == description:
-                return False
-        self.key_events.append({"description": description, "event_type": event_type, "timestamp": now})
-        return True
-
-    def add_player_action(self, user_id: str, char_name: str, action: str) -> None:
-        """Record a free-text player action."""
-        if user_id not in self.player_actions:
-            self.player_actions[user_id] = []
-
-        self.player_actions[user_id].append({"char_name": char_name, "action": action, "timestamp": time.time()})
-
-        if user_id not in self.player_stats:
-            self.player_stats[user_id] = {"char_name": char_name}
-
-        self.player_stats[user_id]["action_count"] = len(self.player_actions[user_id])
-
-    def add_combat_round(self, round_number: int, notes: str = "") -> bool:
-        """Record one transition into a combat round, ignoring duplicates."""
-        if self.combat_rounds and self.combat_rounds[-1].get("round") == round_number:
-            return False
-        self.combat_rounds.append(
-            {
-                "round": max(1, int(round_number)),
-                "notes": notes,
-                "timestamp": time.time(),
-            }
-        )
-        return True
-
-    def set_combat_state(self, round_number: int, current: str, turn: int) -> None:
-        """Persist the committed initiative pointer on the current combat round."""
-        normalized_round = max(1, int(round_number))
-        if not self.combat_rounds or self.combat_rounds[-1].get("round") != normalized_round:
-            self.add_combat_round(normalized_round)
-        self.combat_rounds[-1]["current"] = current
-        self.combat_rounds[-1]["turn"] = max(0, int(turn))
-
     def end_session(self) -> None:
         """Mark the session as ended (stamps ``end_time``)."""
         self.end_time = time.time()
@@ -267,14 +244,6 @@ class SessionRecord:
             elif check.get("fumble"):
                 stats["critical_failure"] = stats.get("critical_failure", 0) + 1
 
-        for user_id, actions in self.player_actions.items():
-            if not actions:
-                continue
-            latest = actions[-1]
-            stats = player(str(user_id), str(latest.get("char_name", "")))
-            if stats is not None:
-                stats["action_count"] = len(actions)
-
         self.player_stats = stats_by_user
 
     def get_duration_minutes(self) -> int:
@@ -290,10 +259,6 @@ class SessionRecord:
             "end_time": self.end_time,
             "dice_rolls": self.dice_rolls,
             "skill_checks": self.skill_checks,
-            "combat_rounds": self.combat_rounds,
-            "key_events": self.key_events,
-            "npc_interactions": self.npc_interactions,
-            "player_actions": self.player_actions,
             "player_stats": self.player_stats,
         }
 
@@ -305,12 +270,8 @@ class SessionRecord:
         record.end_time = data.get("end_time")
         record.dice_rolls = data.get("dice_rolls", [])
         record.skill_checks = data.get("skill_checks", [])
-        record.combat_rounds = data.get("combat_rounds", [])
-        record.key_events = data.get("key_events", [])
-        record.npc_interactions = data.get("npc_interactions", [])
-        record.player_actions = data.get("player_actions", {})
         record.player_stats = data.get("player_stats", {})
-        if record.dice_rolls or record.skill_checks or record.player_actions:
+        if record.dice_rolls or record.skill_checks:
             record.rebuild_player_stats()
         else:
             record.player_stats.pop(NPC_USER_ID, None)
@@ -318,7 +279,7 @@ class SessionRecord:
 
 
 class BattleReportGenerator:
-    """Builds battle-report renderings (text / Markdown / prompt summary) from a `SessionRecord`."""
+    """Builds the session report's renderings (text / Markdown) from a `SessionRecord`."""
 
     def __init__(self, store: Store) -> None:
         self.store = store
@@ -442,7 +403,13 @@ class BattleReportGenerator:
         return score, rating
 
     def calculate_player_score_breakdown(self, user_id: str, record: SessionRecord) -> dict[str, int]:
-        """Return the deterministic components used by ``calculate_player_score``."""
+        """Return the deterministic components used by ``calculate_player_score``.
+
+        Every component is computed from the dice ledgers — the only thing this
+        module records. Roleplay is deliberately unscored: the transcript is
+        the record of it, and `chat_history` carries no speaker identity to
+        attribute a line to a player with.
+        """
         stats = record.player_stats.get(user_id, {})
         base = 60
 
@@ -450,31 +417,26 @@ class BattleReportGenerator:
         total_rolls = stats.get("total_rolls", 0)
         total_checks = stats.get("total_checks", 0)
         participation_count = total_rolls + total_checks
-        participation = min(participation_count * 2, 15) if participation_count > 0 else 0
+        participation = min(participation_count * 2, 20) if participation_count > 0 else 0
 
         # skill-check success rate
         successful_checks = stats.get("successful_checks", 0)
-        success = int((successful_checks / total_checks) * 15) if total_checks > 0 else 0
-
-        # roleplay, via action count
-        action_count = stats.get("action_count", 0)
-        actions = min(action_count, 10)
+        success = int((successful_checks / total_checks) * 20) if total_checks > 0 else 0
 
         # bonus for critical successes
         critical_success = stats.get("critical_success", 0)
         critical = critical_success * 2
-        total = max(0, min(100, base + participation + success + actions + critical))
+        total = max(0, min(100, base + participation + success + critical))
         return {
             "base": base,
             "participation": participation,
             "success": success,
-            "actions": actions,
             "critical": critical,
             "total": total,
         }
 
     def generate_report_text(self, record: SessionRecord, session_name: str, i18n: I18n | None = None) -> str:
-        """Render the plain-text battle report."""
+        """Render the plain-text scoreboard (no transcript — see the module docstring)."""
         i18n = i18n or get_i18n()
         lines: list[str] = []
         visible_rolls = _visible_rolls(record.dice_rolls)
@@ -521,7 +483,6 @@ class BattleReportGenerator:
                     total=stats.get("total_checks", 0),
                 )
             )
-            lines.append(i18n.t("battle.report.action_count_line", count=stats.get("action_count", 0)))
             lines.append(i18n.t("battle.report.critical_success_line", count=stats.get("critical_success", 0)))
             lines.append(i18n.t("battle.report.critical_failure_line", count=stats.get("critical_failure", 0)))
             lines.append("")
@@ -544,39 +505,7 @@ class BattleReportGenerator:
                 count=len(record.skill_checks),
             )
         )
-        lines.append(
-            i18n.t(
-                "battle.report.stat_line",
-                label=i18n.t("battle.report.label.combat_rounds"),
-                count=len(record.combat_rounds),
-            )
-        )
-        lines.append(
-            i18n.t(
-                "battle.report.stat_line",
-                label=i18n.t("battle.report.label.key_events_count"),
-                count=len(record.key_events),
-            )
-        )
         lines.append("")
-
-        if record.key_events:
-            lines.append("=" * 50)
-            lines.append(i18n.t("battle.report.key_events_heading"))
-            lines.append("=" * 50)
-            lines.append("")
-
-            for i, event in enumerate(_select_recap_events(record.key_events), 1):
-                timestamp = datetime.fromtimestamp(event["timestamp"]).strftime("%H:%M:%S")
-                lines.append(
-                    i18n.t(
-                        "battle.report.key_event_item",
-                        index=i,
-                        time=timestamp,
-                        description=_render_recap_text(event["description"]),
-                    )
-                )
-            lines.append("")
 
         # highlights (critical successes/failures)
         critical_moments = [roll for roll in visible_rolls if roll.get("is_critical")]
@@ -605,16 +534,19 @@ class BattleReportGenerator:
         return "\n".join(lines)
 
     def generate_markdown_report(
-        self, record: SessionRecord, session_name: str, i18n: I18n | None = None, detailed: bool = False
+        self,
+        record: SessionRecord,
+        session_name: str,
+        i18n: I18n | None = None,
+        transcript: list[dict] | None = None,
     ) -> str:
-        """Render the Markdown battle report.
+        """Render the Markdown session report.
 
-        With ``detailed=True`` the summary output is followed by a full
-        chronological transcript (player actions, dice rolls, skill checks WITH
-        their success levels, NPC interactions, combat rounds, key events) --
-        the players' full keepsake / review log. ``detailed=False`` (the
-        default) is byte-for-byte the historical summary-only rendering, so
-        existing callers/tests are unaffected.
+        With ``transcript`` supplied — the wire-shape message list
+        `agent.history.load_chain` returns — the room's whole conversation is
+        rendered below the scoreboard, capped at ``TRANSCRIPT_MAX_CHARS``.
+        ``None`` (the default) renders the scoreboard alone; an empty list
+        still renders the section, saying the room has no exchange yet.
         """
         i18n = i18n or get_i18n()
         lines: list[str] = []
@@ -664,7 +596,6 @@ class BattleReportGenerator:
                     total=stats.get("total_checks", 0),
                 )
             )
-            lines.append(i18n.t("battle.report.md.action_count_row", count=stats.get("action_count", 0)))
             lines.append(i18n.t("battle.report.md.critical_success_row", count=stats.get("critical_success", 0)))
             lines.append(i18n.t("battle.report.md.critical_failure_row", count=stats.get("critical_failure", 0)))
             lines.append("")
@@ -687,37 +618,7 @@ class BattleReportGenerator:
                 count=len(record.skill_checks),
             )
         )
-        lines.append(
-            i18n.t(
-                "battle.report.md.stat_row",
-                label=i18n.t("battle.report.label.combat_rounds"),
-                count=len(record.combat_rounds),
-            )
-        )
-        lines.append(
-            i18n.t(
-                "battle.report.md.stat_row",
-                label=i18n.t("battle.report.label.key_events_count"),
-                count=len(record.key_events),
-            )
-        )
         lines.append("")
-
-        if record.key_events:
-            lines.append(f"## {i18n.t('battle.report.key_events_heading')}")
-            lines.append("")
-
-            for i, event in enumerate(_select_recap_events(record.key_events), 1):
-                timestamp = datetime.fromtimestamp(event["timestamp"]).strftime("%H:%M:%S")
-                lines.append(
-                    i18n.t(
-                        "battle.report.md.key_event_item",
-                        index=i,
-                        time=timestamp,
-                        description=_render_recap_text(event["description"]),
-                    )
-                )
-            lines.append("")
 
         critical_moments = [roll for roll in visible_rolls if roll.get("is_critical")]
 
@@ -738,11 +639,16 @@ class BattleReportGenerator:
                 )
             lines.append("")
 
-        if detailed:
-            lines.append(f"## {i18n.t('battle.report.md.detailed.heading')}")
+        if transcript is not None:
+            dice_log = self._dice_log_lines(record, i18n)
+            if dice_log:
+                lines.append(f"## {i18n.t('battle.report.md.dice_log.heading')}")
+                lines.append("")
+                lines.extend(dice_log)
+                lines.append("")
+            lines.append(f"## {i18n.t('battle.report.md.transcript.heading')}")
             lines.append("")
-            transcript = self._detailed_transcript_lines(record, i18n)
-            lines.extend(transcript or [i18n.t("battle.report.md.detailed.empty")])
+            lines.extend(self._transcript_lines(transcript, i18n))
             lines.append("")
 
         lines.append("---")
@@ -752,46 +658,27 @@ class BattleReportGenerator:
 
         return "\n".join(lines)
 
-    def _detailed_transcript_lines(self, record: SessionRecord, i18n: I18n) -> list[str]:
-        """Build the chronological event transcript for `generate_markdown_report(detailed=True)`.
+    def _dice_log_lines(self, record: SessionRecord, i18n: I18n) -> list[str]:
+        """Every visible roll and graded check, chronologically — the values the
+        transcript cannot carry.
 
-        Every recorded event (player action, dice roll, skill check WITH its success level, key event,
-        NPC interaction, combat round) becomes one localized line tagged with its `HH:MM:SS` timestamp,
-        then all are merged into a single timeline. Events with no timestamp (e.g. hand-appended combat
-        rounds / NPC interactions) sort first and render with a placeholder time; the sort is stable, so
-        same-timestamp events keep their insertion order.
+        The prose above a roll says "the lock gives"; it does not say `1d100` = 07
+        against a target of 45 for a hard success. That is why these two ledgers
+        survived the rebuild, and this is where they are read. They are a SEPARATE
+        section rather than interleaved into the conversation because a history
+        record carries a turn index but no timestamp, so there is no honest way to
+        order a roll against a message.
         """
         unknown = i18n.t("battle.player.unknown_character")
-
-        def _fmt_time(timestamp: float) -> str:
-            if not timestamp:
-                return i18n.t("battle.report.md.detailed.no_time")
-            return datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
-
         entries: list[tuple[float, str]] = []
 
-        for actions in record.player_actions.values():
-            for action in actions:
-                timestamp = action.get("timestamp", 0)
-                entries.append(
-                    (
-                        timestamp,
-                        i18n.t(
-                            "battle.report.md.detailed.player_action",
-                            time=_fmt_time(timestamp),
-                            name=action.get("char_name", unknown),
-                            action=action.get("action", ""),
-                        ),
-                    )
-                )
-
         for roll in _visible_rolls(record.dice_rolls):
-            timestamp = roll.get("timestamp", 0)
+            timestamp = float(roll.get("timestamp", 0) or 0)
             if roll.get("is_critical"):
                 marker = i18n.t(
-                    "battle.report.md.detailed.crit_failure_marker"
+                    "battle.report.md.dice_log.crit_failure_marker"
                     if roll.get("critical_type") == "failure"
-                    else "battle.report.md.detailed.crit_success_marker"
+                    else "battle.report.md.dice_log.crit_success_marker"
                 )
             else:
                 marker = ""
@@ -799,8 +686,8 @@ class BattleReportGenerator:
                 (
                     timestamp,
                     i18n.t(
-                        "battle.report.md.detailed.dice_roll",
-                        time=_fmt_time(timestamp),
+                        "battle.report.md.dice_log.roll",
+                        time=_clock_time(timestamp, i18n),
                         name=roll.get("char_name", unknown),
                         expression=roll.get("expression", ""),
                         result=roll.get("result", ""),
@@ -810,13 +697,13 @@ class BattleReportGenerator:
             )
 
         for check in record.skill_checks:
-            timestamp = check.get("timestamp", 0)
+            timestamp = float(check.get("timestamp", 0) or 0)
             entries.append(
                 (
                     timestamp,
                     i18n.t(
-                        "battle.report.md.detailed.skill_check",
-                        time=_fmt_time(timestamp),
+                        "battle.report.md.dice_log.check",
+                        time=_clock_time(timestamp, i18n),
                         name=check.get("char_name", unknown),
                         skill=check.get("skill", ""),
                         target=check.get("target", ""),
@@ -826,96 +713,59 @@ class BattleReportGenerator:
                 )
             )
 
-        for event in record.key_events:
-            timestamp = event.get("timestamp", 0)
-            entries.append(
-                (
-                    timestamp,
-                    i18n.t(
-                        "battle.report.md.detailed.key_event",
-                        time=_fmt_time(timestamp),
-                        description=event.get("description", ""),
-                    ),
-                )
-            )
-
-        for interaction in record.npc_interactions:
-            timestamp = interaction.get("timestamp", 0)
-            entries.append(
-                (
-                    timestamp,
-                    i18n.t(
-                        "battle.report.md.detailed.npc_interaction",
-                        time=_fmt_time(timestamp),
-                        npc=interaction.get("npc", interaction.get("name", "?")),
-                        note=interaction.get("note", interaction.get("description", interaction.get("action", ""))),
-                    ),
-                )
-            )
-
-        for index, combat_round in enumerate(record.combat_rounds, 1):
-            timestamp = combat_round.get("timestamp", 0)
-            entries.append(
-                (
-                    timestamp,
-                    i18n.t(
-                        "battle.report.md.detailed.combat_round",
-                        time=_fmt_time(timestamp),
-                        round=combat_round.get("round", index),
-                        notes=combat_round.get("notes", combat_round.get("description", "")),
-                    ),
-                )
-            )
-
         entries.sort(key=lambda item: item[0])
         return [line for _timestamp, line in entries]
 
-    def generate_summary_for_prompt(self, record: SessionRecord, session_name: str, i18n: I18n | None = None) -> str:
-        """Render a compact recap of `record`, meant for injection into an LLM prompt."""
-        i18n = i18n or get_i18n()
-        lines: list[str] = []
+    def _transcript_lines(self, transcript: list[dict], i18n: I18n) -> list[str]:
+        """Render the room's conversation, newest-biased under ``TRANSCRIPT_MAX_CHARS``.
 
-        lines.append(i18n.t("battle.summary.title"))
-        lines.append("")
-        lines.append(i18n.t("battle.summary.session_name_line", name=session_name))
-        lines.append(
-            i18n.t("battle.summary.date_line", date=datetime.fromtimestamp(record.start_time).strftime("%Y-%m-%d"))
-        )
-
-        if record.end_time:
-            lines.append(i18n.t("battle.summary.duration_line", minutes=record.get_duration_minutes()))
-        lines.append("")
-
-        if record.player_stats:
-            lines.append(i18n.t("battle.summary.players_heading"))
-            for user_id, stats in record.player_stats.items():
-                char_name = stats.get("char_name", i18n.t("battle.player.unknown_character"))
-                score, rating = self.calculate_player_score(user_id, record, i18n=i18n)
-                lines.append(i18n.t("battle.summary.player_line", name=char_name, score=score, rating=rating))
-            lines.append("")
-
-        if record.key_events:
-            lines.append(i18n.t("battle.summary.events_heading"))
-            for event in record.key_events[-5:]:  # last 5 only
-                lines.append(i18n.t("battle.summary.event_item", description=event["description"]))
-            lines.append("")
-
-        lines.append(i18n.t("battle.summary.progress_heading"))
-        lines.append(
-            i18n.t(
-                "battle.summary.progress_line",
-                dice_rolls=len(_visible_rolls(record.dice_rolls)),
-                skill_checks=len(record.skill_checks),
+        One block per message, labelled by role (`user` = the player's own words,
+        `assistant` = the Keeper's reply) and stamped with the turn it belongs to,
+        so a reader can line the story up with `.undo` and the chronicle. When the
+        budget cuts, the KEPT part is the tail and the report says so — a silent
+        truncation would make a keepsake lie about where the session ended.
+        """
+        rendered: list[str] = []
+        used = 0
+        omitted = 0
+        for message in reversed(transcript):
+            text = str(message.get("content", "")).strip()
+            if not text:
+                continue
+            if omitted:  # the budget is spent; from here on we only count what we lost
+                omitted += 1
+                continue
+            speaker = i18n.t(
+                "battle.report.md.transcript.keeper"
+                if message.get("role") == "assistant"
+                else "battle.report.md.transcript.player"
             )
-        )
-
-        if record.combat_rounds:
-            lines.append(i18n.t("battle.summary.combat_rounds_line", count=len(record.combat_rounds)))
-
-        lines.append("")
-        lines.append(i18n.t("battle.summary.footer"))
-
-        return "\n".join(lines)
+            block = i18n.t(
+                "battle.report.md.transcript.message",
+                turn=int(message.get(HISTORY_TURN_KEY, 0) or 0),
+                speaker=speaker,
+                text=text,
+            )
+            # `rendered` guards the floor: the newest message is always shown, even
+            # if it alone is over budget, so the report can never come back empty.
+            if used + len(block) > TRANSCRIPT_MAX_CHARS and rendered:
+                omitted += 1
+                continue
+            used += len(block)
+            rendered.append(block)
+        rendered.reverse()
+        if not rendered:
+            return [i18n.t("battle.report.md.transcript.empty")]
+        if omitted:
+            rendered.insert(
+                0,
+                i18n.t(
+                    "battle.report.md.transcript.truncated",
+                    omitted=omitted,
+                    kept=len(rendered),
+                ),
+            )
+        return rendered
 
 
 class BattleReportManager:
@@ -987,42 +837,18 @@ class BattleReportManager:
         record.add_skill_check(user_id, char_name, skill, target, roll, **details)
         await self.generator.save_session(chat_key, record)
 
-    async def add_key_event(self, chat_key: str, description: str, event_type: str = "general") -> bool:
-        """Record a key event, returning whether deduplication accepted it."""
-        record = await self._session_for_write(chat_key)
-        recorded = record.add_key_event(description, event_type)
-        if recorded:
-            await self.generator.save_session(chat_key, record)
-        return recorded
-
-    async def add_player_action(self, chat_key: str, user_id: str, char_name: str, action: str) -> None:
-        """Record a player action, lazily starting the session when needed."""
-        record = await self._session_for_write(chat_key)
-        record.add_player_action(user_id, char_name, action)
-        await self.generator.save_session(chat_key, record)
-
-    async def add_combat_round(self, chat_key: str, round_number: int, notes: str = "") -> None:
-        """Record a combat-round transition, lazily starting the session."""
-        record = await self._session_for_write(chat_key)
-        if record.add_combat_round(round_number, notes):
-            await self.generator.save_session(chat_key, record)
-
-    async def set_combat_state(self, chat_key: str, round_number: int, current: str, turn: int) -> None:
-        """Record the round and initiative pointer from one committed tracker state."""
-        record = await self._session_for_write(chat_key)
-        record.set_combat_state(round_number, current, turn)
-        await self.generator.save_session(chat_key, record)
-
     async def generate_battle_report(
-        self, chat_key: str, i18n: I18n | None = None
+        self, chat_key: str, i18n: I18n | None = None, transcript: list[dict] | None = None
     ) -> tuple[str, str, str] | tuple[None, None, None]:
         """End the in-progress session and render its report.
 
         Returns `(text_report, markdown_report, session_name)`; all three are
-        `None` if no session was in progress. A custom session name set via
-        `start_session` is preserved in the return value even though
-        `end_session` clears `session_name.{chat_key}.current` as part of
-        archiving the session.
+        `None` if no session was in progress. `transcript` (the room's
+        conversation, as `agent.history.load_chain` returns it) rides into the
+        Markdown keepsake only — the text report stays a compact scoreboard. A
+        custom session name set via `start_session` is preserved in the return
+        value even though `end_session` clears `session_name.{chat_key}.current`
+        as part of archiving the session.
         """
         i18n = i18n or get_i18n()
         name_key = "session_name.current"
@@ -1033,17 +859,7 @@ class BattleReportManager:
         if not session_name:
             session_name = _default_session_name(datetime.fromtimestamp(record.start_time), i18n)
         text_report = self.generator.generate_report_text(record, session_name, i18n=i18n)
-        markdown_report = self.generator.generate_markdown_report(record, session_name, i18n=i18n)
+        markdown_report = self.generator.generate_markdown_report(
+            record, session_name, i18n=i18n, transcript=transcript
+        )
         return text_report, markdown_report, session_name
-
-    async def get_last_session_summary(self, chat_key: str, i18n: I18n | None = None) -> str | None:
-        """Return a compact recap of the most recently archived session, for prompt injection."""
-        i18n = i18n or get_i18n()
-        latest_record = await self.generator.get_latest_history(chat_key)
-        if not latest_record:
-            return None
-        name_key = "session_name.latest"
-        session_name = await self.store.state_get(chat_key, name_key)
-        if not session_name:
-            session_name = _default_session_name(datetime.fromtimestamp(latest_record.start_time), i18n)
-        return self.generator.generate_summary_for_prompt(latest_record, session_name, i18n=i18n)

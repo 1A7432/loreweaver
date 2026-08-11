@@ -297,7 +297,7 @@ async def test_initialize_archives_the_running_session_before_switching_module()
     battles = BattleReportManager(store)
     chat_key = "chat-module-switch"
     session_id = await battles.start_session(chat_key, "Old Module")
-    await battles.add_key_event(chat_key, "Event from the old module")
+    await battles.add_dice_roll(chat_key, "u1", "Alice", "1d20", 17)
     await store.state_set(chat_key, "module_fulltext", MODULE_EN_TEXT)
     initializer = _make_initializer(
         llm=FakeLLM(script=[assistant_text(_scripted_analysis_json())]),
@@ -310,7 +310,7 @@ async def test_initialize_archives_the_running_session_before_switching_module()
     assert await battles.generator.get_current_session(chat_key) is None
     archived_raw = await store.state_get(chat_key, f"session_history.{session_id}")
     assert archived_raw is not None
-    assert json.loads(archived_raw)["key_events"][0]["description"] == "Event from the old module"
+    assert json.loads(archived_raw)["dice_rolls"][0]["expression"] == "1d20"
 
 
 # ---------------------------------------------------------------------------

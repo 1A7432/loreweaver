@@ -79,8 +79,6 @@ async def _furnished_room(services):
         },
     )
     await services.battles.start_session(CHAT, session_name="Session Zero")
-    await services.battles.add_key_event(CHAT, "The party arrived in town.")
-    await services.battles.generate_battle_report(CHAT)
     sheet = services.characters.generate_character("coc7", "Nora Vance")
     await services.characters.save_character("u1", CHAT, sheet)
     await define_modvar(
@@ -137,7 +135,6 @@ async def test_the_cached_prefix_survives_the_next_turn():
     sent.clear()
     # Move exactly what a turn moves. None of it may disturb the cached prefix.
     await set_modvar(services.documents, CHAT, "doom", 7)
-    await services.battles.add_key_event(CHAT, "They found the cellar door.")
     await run_kp_turn(_ctx(), services, Toolset(), "I keep waiting.")
     second = _cached_prefix(sent[0])
 
@@ -351,7 +348,6 @@ async def test_the_stable_head_is_stable_in_fact():
     await set_modvar(services.documents, CHAT, "doom", 7)
     await RelationshipManager(services.store).adjust(CHAT, "Nora", "Elias", "affection", 15)
     await services.store.state_set(CHAT, "game_clock", json.dumps({"current_time": "Night 2, 03:00"}))
-    await services.battles.add_key_event(CHAT, "They found the cellar door.")
 
     after = await build_system_prompt_parts(_ctx(), services)
 
@@ -381,7 +377,6 @@ async def test_the_stable_head_carries_the_room_configuration_and_the_tail_the_s
     assert SECRET in prompt.stable, "the module's own content is stable, and stays keeper-visible"
 
     for marker in (
-        i18n.t("battle.summary.title"),  # what happened
         i18n.t("prompt.game_state.title"),  # where things stand
         i18n.t("prompt.modvars_header"),  # the trackers
         i18n.t("prompt.relationships_header"),  # the tracks

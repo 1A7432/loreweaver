@@ -19,13 +19,15 @@ import re
 from pathlib import Path
 
 from agent.context import AgentCtx, LocalFs
+from agent.history import DEFAULT_HISTORY_KEY, append_turn
 from agent.kp_tools_knowledge import DocumentTools, ModuleTools, NoteTools, SessionTools
+from agent.loop import run_kp_turn
 from agent.services import Services, build_services
-from agent.tools import Toolset
+from agent.tools import Toolset, tool
 from core.documents import KEEPER_VIEWER, MODULE_POOL_ID, PLAYER_VIEWER
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
-from infra.llm import FakeLLM, assistant_text
+from infra.llm import FakeLLM, assistant_text, assistant_tools, tool_call
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
 CHAT_KEY = "lighthouse-chat"
@@ -186,9 +188,12 @@ async def test_export_report_tool_saves_player_report_without_ending_session(tmp
     ctx = _ctx(fs=LocalFs(base_dir=tmp_path), locale="en")
 
     await services.battles.start_session(CHAT_KEY, "Export Tool Report")
-    await services.battles.add_player_action(CHAT_KEY, "u1", "Nora", "studies the mural")
     await services.battles.add_skill_check(
         CHAT_KEY, "u1", "Nora", "Occult", 60, 18, success=True, rank_id="regular", tier=2
+    )
+    await append_turn(
+        services, CHAT_KEY, DEFAULT_HISTORY_KEY,
+        user_message="I study the mural.", reply="The figures are counting something.", turn=1,
     )
 
     result = await session_tools.export_report(ctx, detailed=True)
@@ -196,12 +201,48 @@ async def test_export_report_tool_saves_player_report_without_ending_session(tmp
     assert "Session report exported" in result
     assert "detailed log" in result
     assert "Saved to:" in result
-    assert "Full Session Log" in result
-    assert "studies the mural" in result
+    assert "The Whole Session" in result
+    assert "I study the mural." in result
     assert await services.battles.generator.get_current_session(CHAT_KEY) is not None
     written = list((tmp_path / "shared").glob("session_report_*.md"))
     assert len(written) == 1
-    assert "studies the mural" in written[0].read_text(encoding="utf-8")
+    saved = written[0].read_text(encoding="utf-8")
+    assert "I study the mural." in saved
+    assert "The figures are counting something." in saved
+
+
+async def test_the_exported_report_carries_only_what_the_room_saw(tmp_path):
+    """SENTINEL (iron rule #3). The report is a PLAYER-facing keepsake, and it is now
+    rendered from `chat_history` — so what that tree holds decides whether the report
+    is player-grade. A turn's keeper-only tool result is `role: tool` chatter the loop
+    never persists; only the player's message and the broadcast reply are."""
+    secret = "SENTINEL_THE_HARBORMASTER_POISONED_THE_WELL"
+
+    class _KeeperLookup:
+        @tool(keeper_only=True)
+        async def read_the_truth(self, ctx: AgentCtx) -> str:
+            """Read the module's keeper-only truth."""
+            return secret
+
+    llm = FakeLLM(
+        script=[
+            assistant_tools(tool_call("read_the_truth")),
+            assistant_text("The well water tastes faintly of iron."),
+        ]
+    )
+    services = build_services(Settings(), llm=llm, embeddings=FakeEmbeddings(8))
+    ctx = _ctx(fs=LocalFs(base_dir=tmp_path), locale="en")
+    await services.battles.start_session(CHAT_KEY, "Secrecy")
+
+    result = await run_kp_turn(ctx, services, Toolset(_KeeperLookup()), "I taste the well water.")
+    assert secret in "".join(entry["result"] for entry in result.tool_trace), "positive control: the tool did read it"
+
+    report = await SessionTools(services).export_report(ctx, detailed=True)
+
+    assert secret not in report
+    # POSITIVE CONTROLS: the exchange that WAS broadcast is all there.
+    assert "I taste the well water." in report
+    assert "The well water tastes faintly of iron." in report
 
 
 async def test_start_session_recording_is_idempotent_and_force_new_archives(tmp_path):
@@ -212,13 +253,13 @@ async def test_start_session_recording_is_idempotent_and_force_new_archives(tmp_
     await session_tools.start_session_recording(ctx, session_name="First")
     first = await services.battles.generator.get_current_session(CHAT_KEY)
     assert first is not None
-    await services.battles.add_key_event(CHAT_KEY, "kept")
+    await services.battles.add_dice_roll(CHAT_KEY, "u1", "Nora", "1d6", 4)
     second_result = await session_tools.start_session_recording(ctx, session_name="Ignored")
     second = await services.battles.generator.get_current_session(CHAT_KEY)
 
     assert second is not None
     assert second.session_id == first.session_id
-    assert second.key_events[0]["description"] == "kept"
+    assert second.dice_rolls[0]["expression"] == "1d6"
     assert "already active" in second_result
 
     await session_tools.start_session_recording(ctx, session_name="Fresh", force_new=True)
@@ -226,25 +267,6 @@ async def test_start_session_recording_is_idempotent_and_force_new_archives(tmp_
     assert fresh is not None
     assert fresh.session_id != first.session_id
     assert await services.store.state_get(CHAT_KEY, f"session_history.{first.session_id}") is not None
-
-
-async def test_add_session_event_reports_when_a_duplicate_is_suppressed(tmp_path):
-    services = build_services(Settings(), llm=FakeLLM(), embeddings=FakeEmbeddings(8))
-    session_tools = SessionTools(services)
-    ctx = _ctx(fs=LocalFs(base_dir=tmp_path), locale="en")
-    await session_tools.start_session_recording(ctx, session_name="Dedupe")
-
-    first = await session_tools.add_session_event(ctx, description="The seal breaks.")
-    duplicate = await session_tools.add_session_event(ctx, description="The seal breaks.")
-
-    assert first == services.i18n.t(
-        "kp_tools.know.session.event_logged",
-        description="The seal breaks.",
-    )
-    assert duplicate == services.i18n.t("kp_tools.know.session.event_duplicate")
-    record = await services.battles.generator.get_current_session(CHAT_KEY)
-    assert record is not None
-    assert [event["description"] for event in record.key_events] == ["The seal breaks."]
 
 
 # ---------------------------------------------------------------------------
@@ -335,18 +357,26 @@ async def test_knowledge_tools_end_to_end(tmp_path):
     clock_raw = json.loads(await services.store.state_get(CHAT_KEY, "game_clock"))
     assert clock_raw["current_time"] == "1926-03-15 11:00"
 
-    # -- 6. start_session_recording + add_session_event + generate_session_report produce a report ------
+    # -- 6. start_session_recording + generate_session_report produce a report ------------------------
     await session_tools.start_session_recording(ctx, session_name="Blackmoor One-Shot")
-    await session_tools.add_session_event(ctx, description="Investigators found the scratched tide table.", event_type="discovery")
+    await services.battles.add_dice_roll(CHAT_KEY, "u1", "Nora", "1d100", 7, True, "success")
+    await append_turn(
+        services, CHAT_KEY, DEFAULT_HISTORY_KEY,
+        user_message="I read the scratched tide table.",
+        reply="The tide table has been altered by a careful hand.",
+        turn=1,
+    )
     report = await session_tools.generate_session_report(ctx)
 
     assert "❌" not in report
     assert "Blackmoor One-Shot" in report
-    assert "Investigators found the scratched tide table." in report
+    # The TEXT report is the scoreboard the model reads back; the conversation stays
+    # in the Markdown keepsake below.
+    assert "I read the scratched tide table." not in report
 
     latest = await services.battles.generator.get_latest_history(CHAT_KEY)
     assert latest is not None
-    assert latest.key_events[0]["description"] == "Investigators found the scratched tide table."
+    assert latest.dice_rolls[0]["expression"] == "1d100"
 
     # the markdown report is written best-effort to ctx.fs.shared_path, and its content is
     # retrievable via get_battle_report_markdown using the timestamp embedded in the reply
@@ -357,6 +387,7 @@ async def test_knowledge_tools_end_to_end(tmp_path):
     assert match is not None
     markdown = await session_tools.get_battle_report_markdown(ctx, timestamp=match.group(1))
     assert "Blackmoor One-Shot" in markdown
+    assert "The tide table has been altered by a careful hand." in markdown
 
     # -- 7. delete_document clears the module pools/catalog/status/fulltext together -------------------
     await services.store.state_set(CHAT_KEY, "module_init_error", "old fallback")
