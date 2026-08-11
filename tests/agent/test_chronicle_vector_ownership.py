@@ -25,6 +25,7 @@ import pytest
 
 from agent.chronicle import CHRONICLE_COLLECTION, CHRONICLE_DOC_TYPE, maybe_fold_chronicle
 from agent.context import AgentCtx
+from agent.history import DEFAULT_HISTORY_KEY, append_turn
 from agent.services import build_services
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
@@ -73,6 +74,16 @@ async def _seed_and_fold(services, chat_key: str) -> list[dict]:
                 "folded": False,
                 "tokens": 100,
             },
+        )
+        # A fold is priced in the replayed transcript its watermark retires, so these
+        # turns have to actually be on the room's history path for one to run.
+        await append_turn(
+            services,
+            chat_key,
+            DEFAULT_HISTORY_KEY,
+            user_message=f"turn{turn}: " + FILLER,
+            reply=FILLER,
+            turn=turn,
         )
     meter = {
         "last": {"prompt": 1200, "completion": 0, "cache_hit": 0, "cache_miss": 0, "context_window": WINDOW},

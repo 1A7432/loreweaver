@@ -25,12 +25,14 @@ from agent.chronicle import (
     CAMPAIGN_SUMMARY_ID,
     CHRONICLE_DOC_TYPE,
     THREAD_DOC_TYPE,
-    build_chronicle_section,
+    build_chronicle_sections,
     maybe_fold_chronicle,
     recall_folded_entries,
     render_recap,
+    summary_through_turn,
 )
 from agent.context import AgentCtx
+from agent.history import DEFAULT_HISTORY_KEY, append_turn, load_chain, trim_folded
 from agent.kp_tools_chronicle import ChronicleTools
 from agent.loop import run_kp_turn
 from agent.prompt_builder import build_system_prompt
@@ -106,54 +108,38 @@ async def _seed_entries(services, chat_key: str, turns: list[int], *, tokens: in
         )
 
 
-# --- render-unit fixtures for the fold-SIZING oracles --------------------------
-# How many records a fold consumes is solved against what the prompt's chronicle
-# SECTION renders, so these fixtures make that render hand-checkable:
+# --- replayed-history fixtures for the fold-SIZING oracles ---------------------
+# What a fold FREES is the replayed history its new watermark lets `trim_folded`
+# drop, so the fixtures that make the sizing hand-checkable are transcript-sized,
+# not record-sized:
 #
-#   record line  = "- [turn NN] " + text = 12 + 147            = 159 ASCII chars
-#   N lines joined by "\n"                                     = 160N - 1 chars
-#   estimate_tokens(pure ASCII) = (chars + 3) // 4             = 40N
+#   estimate_tokens(pure ASCII) = (chars + 3) // 4
+#   a 4N-char message           = EXACTLY N tokens
+#   one turn = 2 messages       = 2N replayed tokens
 #
-# i.e. EXACTLY 40 prompt tokens per RENDERED record, for any N. Ten rendered
-# records (the `_TAIL_MAX_ENTRIES` cap) are 1599 chars — far under the 6000-char
-# budget, so `_render_newest` truncation never enters the arithmetic (which is why
-# the numbers below survive T2's change of truncation DIRECTION untouched).
-# Two-digit turns keep the 12-char prefix uniform.
-_RECORD_TEXT_CHARS = 147
-_TOKENS_PER_RENDERED_RECORD = 40
-_TAIL_CAP = 10  # agent.chronicle._TAIL_MAX_ENTRIES
+# So folding through turn T frees `2N` tokens for every seeded turn at or below T,
+# and nothing at all for a turn whose messages are not on the replayed path. The
+# records' own `tokens` stamps are left deliberately meaningless: nothing sizes a
+# fold by them.
 
 
-def _sized_text(turn: int) -> str:
-    """Record text of an EXACT ASCII length (see the block above)."""
-    assert 10 <= turn <= 99, "two-digit turns keep the rendered prefix 12 chars wide"
-    seed = f"turn{turn} " + FILLER * 2
-    text = seed[:_RECORD_TEXT_CHARS].rstrip().ljust(_RECORD_TEXT_CHARS, ".")
-    assert len(text) == _RECORD_TEXT_CHARS and text == text.strip()
-    return text
-
-
-async def _seed_sized_entries(services, chat_key: str, turns: list[int]) -> None:
-    """Seed records whose RENDER is a known size — the `tokens` stamp is left at 0
-    deliberately: nothing sizes a fold by it any more."""
+async def _seed_history(services, chat_key: str, turns: list[int], *, tokens_per_message: int = 20) -> None:
+    """Two replayed messages per turn, each of an EXACT token size (see above)."""
+    text = "x" * (4 * tokens_per_message)
     for turn in turns:
-        await services.documents.put(
-            chat_key,
-            CHRONICLE_DOC_TYPE,
-            f"c{turn:05d}",
-            {
-                "text": _sized_text(turn),
-                "keeper": "",
-                "turn": turn,
-                "pcs": [],
-                "scene": "",
-                "folded": False,
-                "tokens": 0,
-            },
-        )
+        await append_turn(services, chat_key, DEFAULT_HISTORY_KEY, user_message=text, reply=text, turn=turn)
 
 
-# --- binding-budget fixtures for the render-DIRECTION oracle -------------------
+async def _replayed_turns(services, chat_key: str) -> list[int]:
+    """The turn indices still replayed on the current path, after the fold watermark."""
+    chain = await load_chain(services, chat_key, DEFAULT_HISTORY_KEY)
+    kept = await trim_folded(
+        services, chat_key, DEFAULT_HISTORY_KEY, chain, await summary_through_turn(services, chat_key)
+    )
+    return sorted({int(message["_lw_turn"]) for message in kept})
+
+
+# --- binding-budget fixtures for the recall-render oracle ----------------------
 # Direction is only observable when the character budget actually binds, so these
 # records are deliberately fat: one rendered line is 12 + 1400 = 1412 chars, so a
 # single line fits the 6000-char budget but ten lines (14120) cannot. Which ones
@@ -244,36 +230,30 @@ async def test_trigger_at_060_folds_one_batch_down_to_the_040_floor():
     services = _services(FakeLLM(responder=responder))
     await _set_turn(services, CHAT, 40)
     # 14 records, turns 10..23; counter 40 - lag 4 = watermark 36, so all 14 foldable.
-    await _seed_sized_entries(services, CHAT, list(range(10, 24)))
+    await _seed_entries(services, CHAT, list(range(10, 24)))
+    await _seed_history(services, CHAT, list(range(10, 24)))  # 40 replayed tokens per turn
     await _set_meter(services, CHAT, 600, window=1000)
 
     outcome = await maybe_fold_chronicle(_ctx(), services)
 
     assert outcome.ran and outcome.level == "fold", "600/1000 is exactly the 0.60 trigger"
-    # HAND-DERIVED. deficit = 600 - 0.40*1000 = 200 prompt tokens.
-    # The tail renders the NEWEST 10 (turns 14..23) = 10*40 = 400 tokens, so a full
-    # fold could free 400 > 200: the section CAN cover the deficit, and the answer is
-    # the smallest oldest-first prefix that does. Folding the oldest k leaves 14-k
-    # unfolded, of which the tail renders min(10, 14-k):
-    #   k<=4 -> 10 lines, 400 tokens, delta   0   (dropping records the tail never showed)
-    #   k=5  ->  9 lines, 360 tokens, delta  40
-    #   k=6  ->  8 lines, 320 tokens, delta  80
-    #   k=7  ->  7 lines, 280 tokens, delta 120
-    #   k=8  ->  6 lines, 240 tokens, delta 160
-    #   k=9  ->  5 lines, 200 tokens, delta 200  >= 200  <- the answer
-    # 9 records is one batch (cap 12) and therefore one fold call. Note the step:
-    # the first four records are free to fold and free nothing, which is precisely
-    # what a "tokens of the records folded" sum cannot express.
-    assert outcome.entries_folded == 9 and outcome.batches == 1 and folds["n"] == 1
-    # after = (600 - 200) / 1000 — the floor, reached in the renderer's own unit.
+    # HAND-DERIVED. deficit = 600 - 0.40*1000 = 200 prompt tokens. Folding through
+    # turn t stops turns 10..t being replayed, i.e. frees 40*(t-9):
+    #   t=10 ->  40      t=12 -> 120      t=14 -> 200  >= 200  <- the answer
+    #   t=11 ->  80      t=13 -> 160
+    # so the answer is the smallest oldest-first prefix reaching it: 5 records
+    # (turns 10..14), one batch (cap 12) and therefore one fold call.
+    assert outcome.entries_folded == 5 and outcome.batches == 1 and folds["n"] == 1
+    # after = (600 - 200) / 1000 — the floor, reached in replayed-history tokens.
     assert outcome.after == 0.40
 
     summary = await services.documents.get(CHAT, CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID)
     assert summary is not None
-    assert summary.data["through_turn"] == 18, "turns 10..18 folded, oldest first"
+    assert summary.data["through_turn"] == 14, "turns 10..14 folded, oldest first"
     assert summary.data["fold_count"] == 1
     entries = await services.documents.list(CHAT, CHRONICLE_DOC_TYPE)
-    assert [entry.id for entry in entries if entry.data["folded"]] == [f"c{turn:05d}" for turn in range(10, 19)]
+    assert [entry.id for entry in entries if entry.data["folded"]] == [f"c{turn:05d}" for turn in range(10, 15)]
+    assert await _replayed_turns(services, CHAT) == list(range(15, 24)), "and the freed turns really stop replaying"
 
 
 async def test_batch_folding_iterates_until_the_floor_is_reached():
@@ -286,24 +266,27 @@ async def test_batch_folding_iterates_until_the_floor_is_reached():
     services = _services(FakeLLM(responder=responder))
     await _set_turn(services, CHAT, 60)
     # 30 records, turns 10..39; counter 60 - lag 4 = watermark 56, so all 30 foldable.
-    await _seed_sized_entries(services, CHAT, list(range(10, 40)))
+    await _seed_entries(services, CHAT, list(range(10, 40)))
+    # ...but terse turns: 10 replayed tokens each, so the whole transcript is 300.
+    await _seed_history(services, CHAT, list(range(10, 40)), tokens_per_message=5)
     await _set_meter(services, CHAT, 2000, window=2000)
 
     outcome = await maybe_fold_chronicle(_ctx(), services)
 
-    # HAND-DERIVED. deficit = 2000 - 0.40*2000 = 1200 prompt tokens, but the tail
-    # renders only the NEWEST 10 (turns 30..39) = 400 tokens, so a COMPLETE fold
-    # frees 400 < 1200: the section cannot cover the deficit at any size. That is
-    # the spec's small-window edge — the answer is every foldable record, not a
-    # number derived from a deficit the chronicle was never going to close.
-    # 30 records at 12 per batch = 12 + 12 + 6 = 3 batches, exactly the per-turn
-    # budget, so the whole backlog drains this turn.
+    # HAND-DERIVED. deficit = 2000 - 0.40*2000 = 1200 prompt tokens, but the whole
+    # replayed transcript is 30*10 = 300 tokens, so a COMPLETE fold frees 300 < 1200:
+    # the chronicle cannot cover the deficit at any size. That is the spec's
+    # small-window edge — the answer is every foldable record, not a number derived
+    # from a deficit the chronicle was never going to close. 30 records at 12 per
+    # batch = 12 + 12 + 6 = 3 batches, exactly the per-turn budget, so the whole
+    # backlog drains this turn.
     assert outcome.batches == 3 and folds["n"] == 3, "batch folding: iterate, never one-entry-per-turn churn"
     assert outcome.entries_folded == 30
-    # after = (2000 - 400) / 2000. NOT at the floor, and honestly so: the fold gave
+    # after = (2000 - 300) / 2000. NOT at the floor, and honestly so: the fold gave
     # everything it had. The old ledger reported reaching 0.40 on savings that only
     # existed in its own arithmetic.
-    assert outcome.after == 0.80
+    assert outcome.after == 0.85
+    assert await _replayed_turns(services, CHAT) == [], "everything it folded really stopped replaying"
 
 
 async def test_pressure_elsewhere_drains_the_backlog_once_and_then_stops():
@@ -325,28 +308,29 @@ async def test_pressure_elsewhere_drains_the_backlog_once_and_then_stops():
     services = _services(FakeLLM(responder=responder))
     await _set_turn(services, CHAT, 60)
     # 24 records, turns 10..33; counter 60 - lag 4 = watermark 56, so all 24 foldable.
-    await _seed_sized_entries(services, CHAT, list(range(10, 34)))
+    await _seed_entries(services, CHAT, list(range(10, 34)))
+    await _seed_history(services, CHAT, list(range(10, 34)), tokens_per_message=5)
     await _set_meter(services, CHAT, 1900, window=2000)
 
     outcome = await maybe_fold_chronicle(_ctx(), services)
 
-    # HAND-DERIVED. deficit = 1900 - 0.40*2000 = 1100; the tail renders the newest
-    # 10 (turns 24..33) = 10*40 = 400, so a complete fold frees 400 < 1100 -> fold
-    # does its best: all 24 records, at 12 per batch = 2 batches.
+    # HAND-DERIVED. deficit = 1900 - 0.40*2000 = 1100; the replayed transcript is
+    # 24*10 = 240 tokens, so a complete fold frees 240 < 1100 -> fold does its best:
+    # all 24 records, at 12 per batch = 2 batches.
     assert outcome.entries_folded == 24, "the whole backlog drains, not a fictional floor's worth"
     assert outcome.batches == 2 and folds["n"] == 2
-    assert _TAIL_CAP * _TOKENS_PER_RENDERED_RECORD == 400  # the render the derivation rests on
-    # after = (1900 - 400) / 2000: what the section actually gave up, not what the
+    # after = (1900 - 240) / 2000: what the prompt actually gave up, not what the
     # records weighed.
-    assert outcome.after == 0.75
+    assert outcome.after == 0.83
 
-    # Turn 2. New records arrive (so there IS something foldable and the section
-    # floor gate would pass), but the meter has not moved: the fold demonstrably
-    # freed nothing the prompt noticed, so it must not buy another call. This is the
-    # re-arm guard, still load-bearing now that the arithmetic is honest — the
-    # remaining approximation is the tokenizer gap and recall reflow, and only the
+    # Turn 2. New records AND new turns arrive (so there IS something foldable and
+    # the replay-floor gate would pass), but the meter has not moved: the fold
+    # demonstrably freed nothing the prompt noticed, so it must not buy another call.
+    # This is the re-arm guard, still load-bearing now that the arithmetic is honest —
+    # the remaining approximation is the tokenizer gap and recall reflow, and only the
     # meter can see those.
-    await _seed_sized_entries(services, CHAT, list(range(34, 44)))
+    await _seed_entries(services, CHAT, list(range(34, 44)))
+    await _seed_history(services, CHAT, list(range(34, 44)), tokens_per_message=5)
     await _set_meter(services, CHAT, 1900, window=2000)
 
     again = await maybe_fold_chronicle(_ctx(), services)
@@ -371,6 +355,7 @@ async def test_emergency_level_folds_before_the_model_call():
     ctx = _ctx("chrono-emergency")
     await _set_turn(services, ctx.chat_key, 20)
     await _seed_entries(services, ctx.chat_key, list(range(1, 11)), tokens=100)
+    await _seed_history(services, ctx.chat_key, list(range(1, 11)))
     await _set_meter(services, ctx.chat_key, int(0.90 * 2000), window=2000)  # >= 0.85 emergency
 
     result = await run_kp_turn(ctx, services, _toolset(), "turn 1")
@@ -379,6 +364,96 @@ async def test_emergency_level_folds_before_the_model_call():
     summary = await services.documents.get(ctx.chat_key, CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID)
     assert summary is not None, "an over-ceiling meter folds before the next model call"
     assert "the bell tolls no more" in captured["prompt"], "the KP call of THIS turn already sees the new summary"
+
+
+# ---------------------------------------------------------------------------
+# The cost model: a fold is priced in the REPLAYED HISTORY it lets go
+# ---------------------------------------------------------------------------
+
+
+async def test_an_emergency_fold_still_runs_with_no_raw_records_in_the_prompt():
+    """The regression the two halves of this change exist to prevent, in one room.
+
+    Dropping the raw-record block from the prompt (it duplicated history the room was
+    replaying anyway) removes the quantity the old fold measured. Had the cost model
+    stayed "how much smaller does the chronicle SECTION render", it would now read 0
+    on every room forever — and since the 0.85 emergency level is NOT an override
+    (only the manual `.chronicle fold` bypasses the guards), a campaign at the ceiling
+    could never trim itself again. It must still fold, and for the right reason.
+    """
+    folds = {"n": 0}
+
+    def responder(messages, tools):
+        assert _is_fold_call(messages, tools), "the only LLM call here is the fold"
+        folds["n"] += 1
+        return assistant_text("Previously: the drowned archive gave up its dead.")
+
+    services = _services(FakeLLM(responder=responder))
+    ctx = _ctx("chrono-emergency-floor")
+    i18n = services.i18n.with_locale("en")
+    await _set_turn(services, ctx.chat_key, 40)
+    await _seed_entries(services, ctx.chat_key, list(range(10, 30)))
+    await _seed_history(services, ctx.chat_key, list(range(10, 30)))
+    await _set_meter(services, ctx.chat_key, 1800, window=2000)  # 0.90 — over the emergency level
+
+    # The prompt really does carry no raw record (the premise of the regression).
+    before = await build_chronicle_sections(ctx, services, i18n)
+    assert "turn29" not in before.stable + before.volatile
+
+    outcome = await maybe_fold_chronicle(_ctx(ctx.chat_key), services)
+
+    assert outcome.ran and outcome.level == "emergency"
+    assert outcome.entries_folded > 0 and folds["n"] > 0, "the emergency valve is not welded shut"
+    assert outcome.after < outcome.before, "and it freed something the meter will see"
+
+
+async def test_fold_sizing_tracks_replayed_history_not_record_count():
+    """Two rooms, identical records and identical meters — only the transcript weight
+    differs. A talkative table frees its deficit in fewer records than a terse one, and
+    nothing about a chronicle record can express that."""
+    def _fold(messages, tools):
+        return assistant_text("Previously: the party pressed on.")
+
+    async def _folded_count(chat_key: str, *, tokens_per_message: int) -> int:
+        services = _services(FakeLLM(responder=_fold))
+        await _set_turn(services, chat_key, 60)
+        await _seed_entries(services, chat_key, list(range(10, 30)))
+        await _seed_history(services, chat_key, list(range(10, 30)), tokens_per_message=tokens_per_message)
+        await _set_meter(services, chat_key, 600, window=1000)  # deficit = 600 - 400 = 200
+        return (await maybe_fold_chronicle(_ctx(chat_key), services)).entries_folded
+
+    # 40 replayed tokens per turn: folding through turn t frees 40*(t-9) >= 200 at t=14.
+    assert await _folded_count("chrono-cost-talkative", tokens_per_message=20) == 5
+    # 20 per turn: the same 200 tokens now take twice as many turns — t=19, 10 records.
+    assert await _folded_count("chrono-cost-terse", tokens_per_message=10) == 10
+
+
+async def test_folding_through_a_turn_frees_exactly_the_turns_trim_folded_drops():
+    """The identity the whole cost model rests on: what the fold CLAIMS it freed is
+    what `trim_folded` then really stops replaying, message for message."""
+    def _fold(messages, tools):
+        return assistant_text("Previously: the bell was silenced.")
+
+    services = _services(FakeLLM(responder=_fold))
+    chat_key = "chrono-trim-identity"
+    await _set_turn(services, chat_key, 60)
+    await _seed_entries(services, chat_key, list(range(10, 30)))
+    await _seed_history(services, chat_key, list(range(10, 30)))
+    await _set_meter(services, chat_key, 600, window=1000)
+    before_chain = await load_chain(services, chat_key, DEFAULT_HISTORY_KEY)
+
+    outcome = await maybe_fold_chronicle(_ctx(chat_key), services)
+
+    through = await summary_through_turn(services, chat_key)
+    assert outcome.through_turn == through > 0, "the fold's watermark is what the summary now carries"
+    dropped = [m for m in before_chain if int(m["_lw_turn"]) <= through]
+    kept = await trim_folded(services, chat_key, DEFAULT_HISTORY_KEY, before_chain, through)
+
+    assert [int(m["_lw_turn"]) for m in kept] == sorted(turn for turn in range(10, 30) for _ in (0, 1) if turn > through)
+    assert dropped, "positive control: something was actually dropped"
+    # ...and the fold's own ledger is that same quantity, in the same unit.
+    freed = sum(estimate_tokens(str(message["content"])) for message in dropped)
+    assert outcome.after == (600 - freed) / 1000
 
 
 # ---------------------------------------------------------------------------
@@ -393,6 +468,9 @@ async def test_the_lag_window_is_never_folded_even_under_emergency_pressure():
     services = _services(FakeLLM(responder=_explode))
     await _set_turn(services, CHAT, 10)
     await _seed_entries(services, CHAT, [7, 8, 9, 10])  # all inside the last-4-turns window
+    # Their turns ARE on the replayed path, so the fold has something to free and the
+    # watermark is the only thing standing between this room and a fold call.
+    await _seed_history(services, CHAT, [7, 8, 9, 10])
     await _set_meter(services, CHAT, 2000, window=2000)
 
     outcome = await maybe_fold_chronicle(_ctx(), services)
@@ -413,6 +491,7 @@ async def test_a_fold_input_referencing_the_future_is_rejected_engine_side():
     services = _services(FakeLLM(responder=_explode))
     await _set_turn(services, CHAT, 10)  # watermark = 6
     await _seed_entries(services, CHAT, [1, 2, 8])
+    await _seed_history(services, CHAT, [1, 2, 8])
     await _set_meter(services, CHAT, 2000, window=2000)
 
     forged = [FoldCandidate(id="c00008", turn=8, tokens=100)]  # beyond the watermark
@@ -441,6 +520,7 @@ async def test_fold_preserves_the_keeper_margin_and_marks_entries_folded():
     services = _services(FakeLLM(responder=responder))
     await _set_turn(services, CHAT, 20)
     await _seed_entries(services, CHAT, [1, 2, 3], tokens=100)
+    await _seed_history(services, CHAT, [1, 2, 3])
     await services.documents.put(
         CHAT,
         CAMPAIGN_SUMMARY_DOC_TYPE,
@@ -471,6 +551,7 @@ async def test_folded_entries_join_the_embedding_index_for_topical_recall():
         {"text": PROBE, "keeper": SENTINEL, "turn": 1, "pcs": ["顾晚棠"], "scene": "", "folded": False, "tokens": 100},
     )
     await _seed_entries(services, CHAT, [2, 3], tokens=100)
+    await _seed_history(services, CHAT, [1, 2, 3])
     await _set_meter(services, CHAT, 1200, window=2000)
 
     await maybe_fold_chronicle(_ctx(), services)
@@ -486,6 +567,7 @@ async def test_a_failed_fold_llm_call_never_raises_or_clobbers_the_summary():
     services = _services(FakeLLM(responder=boom))
     await _set_turn(services, CHAT, 20)
     await _seed_entries(services, CHAT, [1, 2, 3], tokens=100)
+    await _seed_history(services, CHAT, [1, 2, 3])
     await services.documents.put(
         CHAT,
         CAMPAIGN_SUMMARY_DOC_TYPE,
@@ -564,7 +646,10 @@ async def test_update_thread_tool_lifecycle_and_validation():
 # ---------------------------------------------------------------------------
 
 
-async def test_chronicle_section_carries_summary_threads_and_tail_to_the_kp():
+async def test_chronicle_sections_split_the_summary_from_the_threads():
+    """The summary is FOLD-synchronous, so it rides the cacheable head; threads move on
+    their own schedule, so they ride the tail. And no raw record rides either half: an
+    unfolded record's own turn is still replayed verbatim a few messages later."""
     services = _services(FakeLLM())
     ctx = _ctx("chrono-section")
     i18n = services.i18n.with_locale("en")
@@ -585,38 +670,50 @@ async def test_chronicle_section_carries_summary_threads_and_tail_to_the_kp():
     )
     await _seed_entries(services, ctx.chat_key, [41], tokens=100)
 
-    section = await build_chronicle_section(ctx, services, i18n)
+    sections = await build_chronicle_sections(ctx, services, i18n)
 
-    assert i18n.t("prompt.chronicle.header") in section
-    assert "freed the bell ringer" in section, "the rolling summary rides the section"
-    assert SENTINEL in section, "KP-grade: the keeper margin is for the KP's eyes"
-    assert "The armed bell" in section and "A closed lead" not in section, "only OPEN threads nag"
-    assert "turn41" in section, "the raw tail rides along"
+    assert i18n.t("prompt.chronicle.header") in sections.stable, "the header leads the half that opens"
+    assert "freed the bell ringer" in sections.stable, "the rolling summary rides the STABLE head"
+    assert SENTINEL in sections.stable, "KP-grade: the keeper margin is for the KP's eyes"
+    assert "The armed bell" in sections.volatile, "open threads ride the volatile tail"
+    assert "A closed lead" not in sections.volatile, "only OPEN threads nag"
+    assert "turn41" not in sections.stable + sections.volatile, (
+        "the unfolded record's own turn is still being replayed verbatim — rendering it "
+        "here would carry the same events twice"
+    )
 
     prompt = await build_system_prompt(ctx, services)
-    assert i18n.t("prompt.chronicle.header") in prompt, "the section joins the single system prompt"
+    assert i18n.t("prompt.chronicle.header") in prompt, "and both halves join the single system prompt"
+    assert "freed the bell ringer" in prompt and "The armed bell" in prompt
 
 
-async def test_a_binding_budget_keeps_the_newest_tail_and_the_most_relevant_recall():
-    """T2: the section's two record blocks are ordered by DIFFERENT things, so a
-    binding character budget has to drop from OPPOSITE ends.
+async def test_the_threads_carry_the_header_when_nothing_has_folded_yet():
+    """The header frames the whole chronicle, so it leads whichever half opens it —
+    a room with threads but no summary still gets the framing."""
+    services = _services(FakeLLM())
+    ctx = _ctx("chrono-section-threads-only")
+    i18n = services.i18n.with_locale("en")
+    await services.documents.put(
+        ctx.chat_key, THREAD_DOC_TYPE, "t-1", {"label": "The armed bell", "status": "open", "notes": ""}
+    )
 
-    - the raw tail is DEFINED as the most recent records: keeping the oldest and
-      silently dropping the newest is exactly backwards. The survivors are the
-      newest that fit, still rendered oldest-first.
-    - topical recall arrives most-relevant-first, so there the front is what is
-      worth keeping. That asymmetry is deliberate; this oracle pins it so nobody
-      "fixes" the two blocks into a symmetry neither of them wants.
-    """
+    sections = await build_chronicle_sections(ctx, services, i18n)
+
+    assert sections.stable == "", "nothing has folded yet"
+    assert sections.volatile.startswith(i18n.t("prompt.chronicle.header"))
+    assert "The armed bell" in sections.volatile
+
+
+async def test_a_binding_budget_keeps_the_most_relevant_recall():
+    """Recall arrives most-relevant-first, so the FRONT is what a binding character
+    budget must keep. Pinned so nobody "generalizes" this renderer into one that
+    spends its budget from the other end (which a chronological block would want)."""
     import agent.chronicle as chronicle_flow
 
     services = _services(FakeLLM())
     i18n = services.i18n.with_locale("en")
 
     async def _seed(chat_key: str, *, fat: bool) -> list:
-        # Ten unfolded records -> the raw tail (exactly the `_TAIL_MAX_ENTRIES` cap,
-        # so the ENTRY cap can never be what drops a record here — only the budget).
-        await _seed_marked_entries(services, chat_key, list(range(10, 20)), marker="TAIL", fat=fat)
         # Ten folded records -> the recall pool, handed back in relevance order.
         await _seed_marked_entries(
             services, chat_key, list(range(30, 40)), marker="RECALL", folded=True, fat=fat
@@ -634,34 +731,33 @@ async def test_a_binding_budget_keeps_the_newest_tail_and_the_most_relevant_reca
         original = chronicle_flow.recall_folded_entries
         chronicle_flow.recall_folded_entries = _fake_recall
         try:
-            return await build_chronicle_section(
+            sections = await build_chronicle_sections(
                 _ctx(chat_key), services, i18n, recent_context="the drowned archive"
             )
         finally:
             chronicle_flow.recall_folded_entries = original
+        return sections.volatile
 
     # POSITIVE CONTROL: same wiring, short records — nothing binds, so every marker
     # renders. A later absence assertion therefore means "the budget bound", not
     # "the section, the recall hook or the markers were broken all along".
     slack = await _section("chrono-render-slack", fat=False)
-    for marker in ("TAIL10", "TAIL19", "RECALL30", "RECALL39"):
+    for marker in ("RECALL30", "RECALL39"):
         assert marker in slack, f"{marker} must render when the budget has slack"
 
     bound = await _section("chrono-render-bound", fat=True)
 
-    assert "TAIL19" in bound, "the NEWEST raw record is the one the tail exists to carry"
-    assert "TAIL10" not in bound, "a binding budget drops the OLDEST of the tail, not the newest"
-    assert bound.index("TAIL18") < bound.index("TAIL19"), "survivors still read oldest-first"
     assert "RECALL30" in bound, "recall is ordered by relevance: the front is what fits"
     assert "RECALL39" not in bound, "the LEAST relevant recall is what a binding budget drops"
 
 
-async def test_chronicle_section_is_absent_for_a_fresh_room():
+async def test_chronicle_sections_are_absent_for_a_fresh_room():
     services = _services(FakeLLM())
     ctx = _ctx("chrono-empty")
     i18n = services.i18n.with_locale("en")
 
-    assert await build_chronicle_section(ctx, services, i18n) == ""
+    sections = await build_chronicle_sections(ctx, services, i18n)
+    assert (sections.stable, sections.volatile) == ("", "")
     prompt = await build_system_prompt(ctx, services)
     assert i18n.t("prompt.chronicle.header") not in prompt
 
@@ -719,17 +815,22 @@ async def test_session_3_pivotal_choice_answerable_at_session_12():
     and the session-3 pivotal choice must survive to session 12 — via retrieval
     of the folded record or via the rolling summary (the M18 motivation)."""
     state = {"records": 0}
+    # The turns themselves are what fills the window — a played turn is a paragraph of
+    # player intent and a paragraph of narration, and both are replayed verbatim until
+    # a fold's watermark retires them. ~110 tokens per exchange against a 4000-token
+    # window puts this campaign over the trigger every seven turns or so.
+    player_line = "I press deeper into the flooded gallery, checking every alcove. " + FILLER * 2
+    narration = "The road winds on. " + FILLER * 2
 
     def responder(messages, tools):
         if tools is None:
-            if _is_fold_call(messages, tools):
-                user = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
-                return assistant_text(_accumulating_summary(user))
-            return assistant_text("recap notes")  # the session-recap refresh
+            assert _is_fold_call(messages, tools), "the fold is the only tool-less lane in a KP turn"
+            user = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+            return assistant_text(_accumulating_summary(user))
         if state["records"] >= 108:
-            return assistant_text("The road winds on.")  # the settling turn records nothing
+            return assistant_text(narration)  # the settling turns record nothing
         if messages and messages[-1].get("role") == "tool":
-            return assistant_text("The road winds on.")
+            return assistant_text(narration)
         state["records"] += 1
         turn = state["records"]
         text = PROBE if turn == 22 else f"turn{turn} " + FILLER * 3
@@ -740,18 +841,30 @@ async def test_session_3_pivotal_choice_answerable_at_session_12():
     ctx = _ctx("chrono-campaign")
     toolset = Toolset(ChronicleTools(services))
 
-    async def honest_meter() -> None:
-        """The meter a real provider would report: fixed sections + summary + raw tail."""
+    async def _honest_prompt_tokens() -> int:
+        """What a real provider would report: fixed sections + summary + replayed turns."""
         summary = await services.documents.get(ctx.chat_key, CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID)
         summary_tokens = estimate_tokens(str(summary.data.get("text", ""))) if summary else 0
-        entries = await services.documents.list(ctx.chat_key, CHRONICLE_DOC_TYPE)
-        raw_tokens = sum(int(entry.data.get("tokens", 0)) for entry in entries if not entry.data.get("folded"))
-        await _set_meter(services, ctx.chat_key, 400 + summary_tokens + raw_tokens)
+        chain = await load_chain(services, ctx.chat_key, DEFAULT_HISTORY_KEY)
+        kept = await trim_folded(
+            services,
+            ctx.chat_key,
+            DEFAULT_HISTORY_KEY,
+            chain,
+            await summary_through_turn(services, ctx.chat_key),
+        )
+        replayed = sum(estimate_tokens(str(message.get("content") or "")) for message in kept)
+        return 400 + summary_tokens + replayed
 
-    # 108 recorded turns (12 sessions x 9), then one settling turn so a fold
-    # whose trigger was crossed by turn 108's meter still fires before we assert.
-    for _ in range(109):
-        await run_kp_turn(ctx, services, toolset, "turn 1")
+    async def honest_meter() -> None:
+        await _set_meter(services, ctx.chat_key, await _honest_prompt_tokens())
+
+    # 108 recorded turns (12 sessions x 9), then TWO settling turns: a fold acts on the
+    # PREVIOUS turn's meter, so one settling turn only guarantees a fold when turn 108
+    # already crossed the trigger. Two guarantee it either way.
+    turns = 110
+    for _ in range(turns):
+        await run_kp_turn(ctx, services, toolset, player_line)
         await honest_meter()
 
     assert state["records"] == 108
@@ -760,16 +873,14 @@ async def test_session_3_pivotal_choice_answerable_at_session_12():
 
     entries = await services.documents.list(ctx.chat_key, CHRONICLE_DOC_TYPE)
     assert len(entries) == 108
-    lag = [entry for entry in entries if entry.data["turn"] > 109 - 4]
+    lag = [entry for entry in entries if entry.data["turn"] > turns - 4]
     assert lag and all(not entry.data["folded"] for entry in lag), "the trailing lag window stays raw"
-    old = [entry for entry in entries if entry.data["turn"] <= 109 - 4]
+    old = [entry for entry in entries if entry.data["turn"] <= turns - 4]
     assert any(entry.data["folded"] for entry in old), "old history folded into the summary"
 
     # Steady state: with every due fold settled, the honest meter sits under the
     # 0.60 trigger — the hysteresis band keeps a long campaign from re-topping.
-    summary_tokens = estimate_tokens(str(summary.data.get("text", "")))
-    raw_tokens = sum(int(entry.data.get("tokens", 0)) for entry in entries if not entry.data.get("folded"))
-    assert (400 + summary_tokens + raw_tokens) / WINDOW < 0.60
+    assert await _honest_prompt_tokens() / WINDOW < 0.60
 
     # The regression that motivated M18: the session-3 pivotal choice is still
     # answerable at session 12 — via topical retrieval or via the summary.

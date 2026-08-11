@@ -162,10 +162,14 @@ The top bar of every client carries two numbers that tell you almost everything:
 ### Why the prompt is laid out the way it is
 
 The system prompt is deliberately split into a **stable head** and a **volatile tail**. Identity,
-system expertise, interaction style, the module knowledge pool and enabled skills go first and change
-rarely; retrieved world lore, the session recap, live trackers and anything else that moves goes
-last. On providers with explicit prompt caching, the boundary between them becomes a cache
-breakpoint.
+system expertise, interaction style, the module knowledge pool, enabled skills and the rolling
+campaign summary go first and change rarely; retrieved world lore, open threads, live trackers and
+anything else that moves goes last. On providers with explicit prompt caching, the boundary between
+them becomes a cache breakpoint.
+
+The campaign summary sits up front even though it does change, because it only ever changes when a
+fold runs — and a fold also stops replaying the turns it absorbed, which costs that turn's cache
+anyway. Every other turn it is read straight from the cache.
 
 The practical consequence for you: **anything that changes the head invalidates the whole cache**.
 Switching models, enabling or disabling a skill, or importing a module mid-session all legitimately

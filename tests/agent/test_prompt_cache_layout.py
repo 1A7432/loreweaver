@@ -389,6 +389,63 @@ async def test_the_stable_head_carries_the_room_configuration_and_the_tail_the_s
         assert marker in prompt.volatile, f"{marker!r} moves with the story; it belongs in the tail"
 
 
+async def test_the_campaign_summary_rides_the_head_and_the_threads_the_tail():
+    """The chronicle is split at THIS boundary, and the rule that splits it is not
+    "never changes" — it is "does not change independently of an invalidation that is
+    already happening".
+
+    The rolling summary is written by a fold, and the same fold moves
+    `campaign_summary.through_turn`, which makes `trim_folded` cut the FRONT of the
+    replayed history on that very turn. The prefix is lost either way, so the summary
+    costs nothing to keep in the head and is a cache read on every other turn. Open
+    threads have no such coupling — `update_thread` can fire on any turn — so putting
+    them in the head would blow the whole prefix at random.
+    """
+    services = _services()
+    await _furnished_room(services)
+    i18n = services.i18n.with_locale("en")
+    await services.documents.put(
+        CHAT,
+        CAMPAIGN_SUMMARY_DOC_TYPE,
+        CAMPAIGN_SUMMARY_ID,
+        {"text": "Previously: the party freed the bell ringer.", "keeper": SECRET, "through_turn": 3, "fold_count": 1},
+    )
+    await services.documents.put(
+        CHAT, "thread", "t-1", {"label": "The armed bell", "status": "open", "notes": ""}
+    )
+
+    prompt = await build_system_prompt_parts(_ctx(), services)
+
+    assert "freed the bell ringer" in prompt.stable, "the rolling summary is fold-synchronous: head"
+    assert SECRET in prompt.stable, "its keeper margin rides with it (KP-grade, never projected)"
+    assert i18n.t("prompt.chronicle.threads_label") in prompt.volatile, "open threads move on their own: tail"
+    assert "freed the bell ringer" not in prompt.volatile, "and the summary is not carried twice"
+
+
+async def test_a_new_open_thread_moves_the_tail_and_leaves_the_head_alone():
+    """The asynchrony argument, measured. `update_thread` fires whenever the KP notices
+    a loop, entirely unrelated to a fold — so if it reached the head, a routine turn
+    would invalidate the cached prefix for free."""
+    services = _services()
+    await _furnished_room(services)
+    await services.documents.put(
+        CHAT,
+        CAMPAIGN_SUMMARY_DOC_TYPE,
+        CAMPAIGN_SUMMARY_ID,
+        {"text": "Previously: the party freed the bell ringer.", "keeper": "", "through_turn": 3, "fold_count": 1},
+    )
+
+    before = await build_system_prompt_parts(_ctx(), services)
+    await services.documents.put(
+        CHAT, "thread", "t-2", {"label": "The unopened letter", "status": "open", "notes": ""}
+    )
+    after = await build_system_prompt_parts(_ctx(), services)
+
+    assert "The unopened letter" in after.volatile, "positive control: the thread reached the prompt"
+    assert after.volatile != before.volatile
+    assert after.stable == before.stable, "a thread write must not cost the cached prefix"
+
+
 async def test_a_room_without_a_module_pool_keeps_its_retrieval_out_of_the_head():
     """A room with no initialized module falls back to per-turn vector search. Routing
     that to the tail is what keeps the head honestly stable rather than nominally so."""

@@ -12,14 +12,14 @@ A 2026-08-07 long session burned 40% of a weekly quota partly this way.
 So the assembly is now two explicit halves (see :class:`SystemPrompt`):
 
 - **stable head** — TRPG identity, system expertise, interaction style, the module
-  knowledge pool, the preset layer, the enabled skill bodies. These change when the
-  ROOM's configuration changes (a module loads, a keeper enables a skill), not when
-  the story moves. This is the cacheable prefix.
-- **volatile tail** — world lore (retrieval-dependent), the session recap and
-  history, live game state, relationship tracks, module variables, MVU leaves,
-  scribe whispers, hook injections, and the M18 campaign-chronicle section
-  (rolling summary + open threads + raw tail + recalled records), which closes
-  the tail: emergent history changes every turn, so it can never ride the head.
+  knowledge pool, the preset layer, the enabled skill bodies, and the M18 rolling
+  campaign summary (+ its keeper margin). These change when the ROOM's configuration
+  changes (a module loads, a keeper enables a skill), or — for the summary — when a
+  chronicle fold runs. This is the cacheable prefix.
+- **volatile tail** — world lore (retrieval-dependent), the archived-session recap,
+  live game state, relationship tracks, module variables, MVU leaves, scribe
+  whispers, hook injections, and the rest of the M18 chronicle section (open threads
+  + records recalled against this turn), which closes the tail.
 
 Two properties were deliberately preserved through the move:
 
@@ -30,10 +30,24 @@ Two properties were deliberately preserved through the move:
   head, directly adjacent to the world lore it governs — the keeper-discipline and
   module-fidelity blocks it carries still read as framing for the lore below them.
 
-The one nuance worth knowing: a room with NO initialized module pool falls back to
-vector search over raw uploads, and that text varies per turn. Such a section is
-routed to the volatile tail instead, so the stable head stays honestly stable rather
-than nominally stable. ``tests/agent/test_prompt_cache_layout.py`` is the oracle.
+Two nuances are worth knowing, and they are the same nuance twice: the rule for the
+head is not "never changes", it is **does not change independently of an
+invalidation that is already happening**.
+
+- a room with NO initialized module pool falls back to vector search over raw
+  uploads, and that text varies per turn, on nothing. Such a section is routed to
+  the volatile tail instead, so the stable head stays honestly stable rather than
+  nominally stable.
+- the campaign summary DOES change — but only when a fold writes it, and a fold also
+  moves ``campaign_summary.through_turn``, which makes ``agent.history.trim_folded``
+  drop the front of the replayed history that very turn. The prefix was lost
+  regardless; the summary merely rides an invalidation that has already happened,
+  and is a cache read on every other turn. Open threads (``update_thread`` may fire
+  any turn), the recalled records (re-retrieved every turn) and live state change
+  ASYNCHRONOUSLY of any such event, so they stay in the tail: moving one of them up
+  would blow the whole prefix at random.
+
+``tests/agent/test_prompt_cache_layout.py`` is the oracle.
 
 ``i18n`` is rebound to ``ctx.locale`` so the whole prompt renders in the
 caller's locale for this turn, independent of the process-wide default locale.
@@ -85,7 +99,6 @@ from core.prompt_sections import (
     inject_game_state_prompt,
     inject_interaction_style_prompt,
     inject_session_history_prompt,
-    inject_session_recap_prompt,
     inject_system_expertise_prompt,
     inject_trpg_system_prompt,
 )
@@ -144,9 +157,6 @@ async def build_system_prompt_parts(ctx: AgentCtx, services: Services) -> System
     i18n = services.i18n.with_locale(ctx.locale)
 
     session_history = await inject_session_history_prompt(ctx, services.battles, i18n)
-    # Rolling "story so far" memory of THIS session — keeps the KP coherent over
-    # hundreds of turns, past the loop's ~20-message replay window.
-    session_recap = await inject_session_recap_prompt(ctx, services.store, i18n)
     document_context = await inject_document_context_prompt(
         ctx, services.vector_db, services.store, i18n, services.settings.enable_vector_db
     )
@@ -209,6 +219,16 @@ async def build_system_prompt_parts(ctx: AgentCtx, services: Services) -> System
             if discipline not in document_context:
                 world_lore = "\n\n".join([discipline, i18n.t("prompt.module_fidelity"), world_lore])
 
+    # M18 campaign chronicle (agent.chronicle), split at the SAME cache boundary this
+    # assembly is: the rolling campaign summary rides the stable head, open threads and
+    # the topical recall ride the tail. See the module docstring for why a section that
+    # changes may still sit in the head. A room with no chronicle yet contributes
+    # neither half, so its prompt stays byte-identical to a pre-M18 build. KP-grade
+    # throughout: keeper annotations ride here; player surfaces consume projections only.
+    from agent.chronicle import build_chronicle_sections
+
+    chronicle = await build_chronicle_sections(ctx, services, i18n, recent_context=recent_context)
+
     # --- STABLE HEAD: changes when the ROOM's configuration changes, not per turn ---
     stable: list[str] = [
         await inject_trpg_system_prompt(ctx, i18n),
@@ -235,6 +255,12 @@ async def build_system_prompt_parts(ctx: AgentCtx, services: Services) -> System
     if skill_bodies:
         stable.append(i18n.t("prompt.skills_header") + "\n\n" + "\n\n".join(skill_bodies))
 
+    # The campaign summary closes the head — the last thing before the replayed turns
+    # it summarises, which is where narrative continuity reads best, and the position
+    # that costs the least on a prefix-caching provider when the one non-fold writer of
+    # this text (`.chronicle note`/`edit`) fires.
+    stable.append(chronicle.stable)
+
     # --- VOLATILE TAIL: rebuilt most turns -------------------------------------
     volatile: list[str] = []
     if not document_context_is_stable:
@@ -242,7 +268,6 @@ async def build_system_prompt_parts(ctx: AgentCtx, services: Services) -> System
     volatile.extend(
         [
             world_lore,
-            session_recap,
             session_history,
             await inject_game_state_prompt(ctx, services.characters, services.store, i18n),
         ]
@@ -291,18 +316,10 @@ async def build_system_prompt_parts(ctx: AgentCtx, services: Services) -> System
     if hook_injections:
         volatile.append(i18n.t("prompt.hooks_header") + "\n" + "\n".join(hook_injections))
 
-    # M18 campaign chronicle (agent.chronicle): the rolling campaign summary (+ its
-    # keeper margin), open threads, the raw unfolded tail, and folded records recalled
-    # against this turn's context ride ONE section at the very end of the volatile
-    # tail — emergent history changes every turn, so it can never ride the stable
-    # head, and the per-turn direction keeps recency. A room with no chronicle yet
-    # contributes nothing, so its prompt stays byte-identical to a pre-M18 build.
-    # KP-grade: keeper annotations ride here; player surfaces consume projections only.
-    from agent.chronicle import build_chronicle_section
-
-    chronicle_section = await build_chronicle_section(ctx, services, i18n, recent_context=recent_context)
-    if chronicle_section:
-        volatile.append(chronicle_section)
+    # The chronicle's volatile half (built above, with the head's): open threads and
+    # the records recalled against this turn. Both move on their own schedule, so they
+    # close the tail where the per-turn direction keeps recency.
+    volatile.append(chronicle.volatile)
 
     return SystemPrompt(
         stable="\n\n".join(section for section in stable if section),

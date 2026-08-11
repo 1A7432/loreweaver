@@ -86,9 +86,6 @@ _RESET_STORY_STATE_KEYS = frozenset(
         "initiative",
         "initiative_meta",
         "game_clock",
-        "session_recap",
-        "session_recap_debug",
-        "session_recap_turns",
         # M18: the chronicle turn counter and entry sequence — a fresh narrative
         # session restarts the fold watermark alongside the records themselves.
         "chronicle_turn",

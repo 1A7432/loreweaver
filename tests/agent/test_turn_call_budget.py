@@ -9,11 +9,12 @@ allowed to spend:
   companion-director call ten lines above it. One player turn with N companions
   spent 1+N Scribe calls and reconciled the same trackers 1+N times.
 - **F13** — the chronicle fold's accounting compared the WHOLE assembled prompt's
-  meter against the token size of the RECORDS it folded, two different things. The
-  chronicle prompt section is capped (`_TAIL_MAX_ENTRIES`/`_TAIL_MAX_CHARS`), so a
-  fold can not measurably shrink the prompt once the section is at its own floor —
-  yet the meter stayed over the trigger and re-armed the fold on the very next turn,
-  forever, for any room whose pressure comes from somewhere else (a big module).
+  meter against the token size of the RECORDS it folded, two different things. What
+  a fold actually frees is the replayed HISTORY its new watermark lets
+  `agent.history.trim_folded` drop, so a room with nothing left to trim can not
+  measurably shrink its prompt by folding — yet the meter stayed over the trigger and
+  re-armed the fold on the very next turn, forever, for any room whose pressure comes
+  from somewhere else (a big module).
 - **item 11** — the resulting bound was written down nowhere. One turn is driven
   through a counting fake client and pinned against the ceiling AGENTS.md documents.
 
@@ -27,6 +28,7 @@ import json
 
 from agent.chronicle import maybe_fold_chronicle
 from agent.context import AgentCtx
+from agent.history import DEFAULT_HISTORY_KEY, append_turn
 from agent.kp_tools import build_kp_toolset
 from agent.kp_tools_companion import CompanionTools
 from agent.services import build_services
@@ -179,12 +181,11 @@ async def test_a_companion_sub_turn_alone_never_runs_the_scribe():
 # ---------------------------------------------------------------------------
 
 # AGENTS.md ("Per-turn model-call budget") states the worst case for ONE player
-# turn: 3 fold + 12 rounds + 5 end-of-turn check rounds + 1 recap = 21 per KP
-# turn, plus 1
-# Scribe + 1 Director beat, plus 6 companion sub-turns of (1 actor + 21). This
+# turn: 3 fold + 12 rounds + 5 end-of-turn check rounds = 20 per KP turn, plus 1
+# Scribe + 1 Director beat, plus 6 companion sub-turns of (1 actor + 20). This
 # pins the SHAPE of that bound as well as the ceiling itself: a turn costs a
 # fixed keeper cost plus a per-companion cost, and never more than the ceiling.
-DOCUMENTED_CEILING = 155
+DOCUMENTED_CEILING = 148
 
 
 async def test_per_turn_call_count_tracks_the_companion_count_and_stays_under_the_ceiling():
@@ -247,6 +248,17 @@ async def _seed_entries(services, chat_key: str, turns: list[int], *, tokens: in
         )
 
 
+async def _seed_history(services, chat_key: str, turns: list[int], *, tokens_per_message: int = 20) -> None:
+    """The replayed transcript a fold would trim — what its saving is measured in.
+
+    `estimate_tokens` is `(chars + 3) // 4` for pure ASCII, so a 4N-char message is
+    exactly N tokens and one turn (two messages) costs `2 * tokens_per_message`.
+    """
+    text = "x" * (4 * tokens_per_message)
+    for turn in turns:
+        await append_turn(services, chat_key, DEFAULT_HISTORY_KEY, user_message=text, reply=text, turn=turn)
+
+
 def _fold_counter():
     counts = {"folds": 0}
 
@@ -274,6 +286,7 @@ async def test_a_fold_that_did_not_move_the_meter_does_not_re_arm_next_turn():
     chat_key = "fold-churn-room"
     await services.store.state_set(chat_key, "chronicle_turn", "40")
     await _seed_entries(services, chat_key, list(range(1, 31)), tokens=50)
+    await _seed_history(services, chat_key, list(range(1, 31)))
     await _set_meter(services, chat_key, WINDOW)  # pinned full by the module, not the chronicle
 
     first = await maybe_fold_chronicle(_ctx(chat_key), services)
@@ -296,6 +309,7 @@ async def test_a_meter_that_really_grows_re_arms_the_fold():
     chat_key = "fold-rearm-room"
     await services.store.state_set(chat_key, "chronicle_turn", "40")
     await _seed_entries(services, chat_key, list(range(1, 31)), tokens=50)
+    await _seed_history(services, chat_key, list(range(1, 31)))
     await _set_meter(services, chat_key, int(0.62 * WINDOW))
 
     await maybe_fold_chronicle(_ctx(chat_key), services)
@@ -310,24 +324,42 @@ async def test_a_meter_that_really_grows_re_arms_the_fold():
     assert again.entries_folded > 0
 
 
-async def test_a_chronicle_at_its_own_floor_makes_no_fold_call():
-    """"The section is already at its own floor" resolves to "no fold", not "fold
-    again": nothing foldable can leave the assembled prompt, so no call is spent."""
+async def test_a_fold_that_would_free_no_replayed_history_makes_no_call():
+    """"Nothing left to trim" resolves to "no fold", not "fold again": the records are
+    foldable, the meter is pinned full, and folding them would still take nothing out
+    of the assembled prompt — so no generation call is spent."""
 
     def _explode(messages, tools):
-        raise AssertionError("a chronicle at its own floor must spend no fold call")
+        raise AssertionError("a fold that can free no replayed history must spend no call")
 
     services = _chronicle_services(_explode)
     chat_key = "fold-floor-room"
-    await services.store.state_set(chat_key, "chronicle_turn", "10")
-    # Everything is inside the 4-turn lag window: nothing a fold could remove.
-    await _seed_entries(services, chat_key, [7, 8, 9, 10])
+    await services.store.state_set(chat_key, "chronicle_turn", "40")
+    # Records the watermark would happily fold — but this room replays no transcript
+    # for their turns (an imported campaign log, a rewound room), so folding them frees
+    # nothing and the pressure is demonstrably somewhere else.
+    await _seed_entries(services, chat_key, list(range(1, 11)))
     await _set_meter(services, chat_key, WINDOW)
 
     outcome = await maybe_fold_chronicle(_ctx(chat_key), services)
 
     assert outcome.entries_folded == 0 and outcome.batches == 0
     assert await services.documents.get(chat_key, CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID) is None
+
+    # POSITIVE CONTROL: the same room, once those turns are actually being replayed,
+    # folds — so the assertion above is about the measurement, not about a room that
+    # could never fold for some other reason.
+    folds = {"n": 0}
+
+    def _fold(messages, tools):
+        folds["n"] += 1
+        return assistant_text("Previously: the party pressed on.")
+
+    services.llm = FakeLLM(responder=_fold)
+    await _seed_history(services, chat_key, list(range(1, 11)))
+
+    assert (await maybe_fold_chronicle(_ctx(chat_key), services)).entries_folded > 0
+    assert folds["n"] > 0
 
 
 async def test_one_turn_never_spends_more_than_the_per_turn_fold_batch_budget():
@@ -337,9 +369,11 @@ async def test_one_turn_never_spends_more_than_the_per_turn_fold_batch_budget():
     services = _chronicle_services(responder)
     chat_key = "fold-backlog-room"
     await services.store.state_set(chat_key, "chronicle_turn", "400")
-    # Tiny records: the projected floor is unreachable by folding them, which is
-    # exactly the case that used to drain all 300 in one turn (25 sequential calls).
+    # Terse turns: the floor stays out of reach even after folding every last record,
+    # which is exactly the case that used to drain all 300 in one turn (25 sequential
+    # calls). 300 turns at 2 replayed tokens each is 600 against a 1200 deficit.
     await _seed_entries(services, chat_key, list(range(1, 301)), tokens=1)
+    await _seed_history(services, chat_key, list(range(1, 301)), tokens_per_message=1)
     await _set_meter(services, chat_key, WINDOW)
 
     outcome = await maybe_fold_chronicle(_ctx(chat_key), services)

@@ -9,31 +9,39 @@ on top of it:
   land before the next model call). Measured from the room's `usage_stats`
   meter (last turn's provider-reported prompt tokens — a reactive meter, the
   only honest source). Batch-folds the oldest chronicle records into the
-  rolling `campaign_summary` until the prompt's chronicle SECTION has given up
-  as many tokens as the floor needs, bounded by a per-turn batch budget.
-  How many records that is, is solved against the section's own render
-  (`_render_delta`) rather than by summing the records' sizes: the section is
-  capped (`_TAIL_MAX_ENTRIES`/`_TAIL_MAX_CHARS`), so folding a record it never
-  renders frees nothing, and there is no per-record token price to divide by.
-  When the section cannot cover the deficit at all, the fold takes everything it
+  rolling `campaign_summary` until as many tokens as the floor needs have left
+  the prompt, bounded by a per-turn batch budget.
+  What a fold actually FREES is replayed HISTORY: writing
+  `campaign_summary.through_turn` is what lets `agent.history.trim_folded` stop
+  replaying every turn at or below it, and that is the whole of a fold's effect
+  on the prompt (the summary itself is bounded and the section renders no raw
+  records). So both the gate and the batch sizing are solved in that unit —
+  `_history_tokens_through`, the `estimate_tokens` sum over the messages a fold
+  through a given turn would drop — rather than by summing the folded records'
+  own sizes, which measure text that was never in the prompt twice.
+  When history cannot cover the deficit at all, the fold takes everything it
   has — the spec's small-window edge, "fold does its best".
   What remains approximate is only the UNIT: the meter is the provider's
-  tokenizer over the whole prompt, `_render_delta` is `estimate_tokens` over the
-  section, and folded records can flow back in through topical recall. So both
-  guards stay — a routine fold does not run when the section is already at its
-  own floor, and does not re-arm until the measured meter actually grows past
-  the reading the previous fold acted on. Neither is redundant now that the
-  arithmetic is honest: they answer "did this fold pay for itself" from the
-  meter, which is the only authority on that. Synchronous by design: a fire-and-forget
-  fold could race the NEXT turn's prompt assembly, and folds are rare by
-  hysteresis. Best-effort throughout — a fold failure never breaks a turn (the
-  session-recap posture).
+  tokenizer over the whole prompt, `_history_tokens_through` is
+  `estimate_tokens` over the replayed messages, and folded records can flow back
+  in through topical recall. So both guards stay — a routine fold does not run
+  when there is no replayed history left for it to free, and does not re-arm
+  until the measured meter actually grows past the reading the previous fold
+  acted on. Neither is redundant now that the arithmetic is honest: they answer
+  "did this fold pay for itself" from the meter, which is the only authority on
+  that. Synchronous by design: a fire-and-forget fold could race the NEXT turn's
+  prompt assembly, and folds are rare by hysteresis. Best-effort throughout — a
+  fold failure never breaks a turn.
 - `record_entry` — the append path behind the `record_chronicle` tool. Entries
   are stamped with the in-progress turn index (counter + 1); the tool accepts
   no turn parameter, so nothing can be recorded speculatively (past-only).
-- `build_chronicle_section` — the ONE prompt section: campaign summary (+ its
-  keeper margin) + open threads + the raw unfolded tail + topically recalled
-  folded records. KP-grade: this is the Keeper's own system prompt, so keeper
+- `build_chronicle_sections` — the prompt injection, split at the same cache
+  boundary `agent.prompt_builder` is: the campaign summary (+ its keeper margin)
+  rides the STABLE head, open threads and the topically recalled folded records
+  ride the volatile tail. No raw unfolded tail is rendered at all: an unfolded
+  record's turn is above `through_turn` by construction, so its turn's verbatim
+  history is still being replayed and rendering it would put the same events in
+  the prompt twice. KP-grade: this is the Keeper's own system prompt, so keeper
   annotations ride along (they never cross `project()` on player surfaces).
 - `render_recap` — the player-facing "previously on…", rendered ONLY from
   player projections, so it is spoiler-free by construction.
@@ -57,6 +65,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from agent.context import AgentCtx
+from agent.history import DEFAULT_HISTORY_KEY, load_chain, trim_folded
 from agent.services import Services
 from core.chronicle import (
     CAMPAIGN_SUMMARY_DOC_TYPE,
@@ -72,6 +81,7 @@ from core.chronicle import (
 )
 from core.documents import KEEPER_VIEWER, PLAYER_VIEWER, Document
 from infra.i18n import I18n
+from infra.llm import HISTORY_TURN_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -80,9 +90,10 @@ __all__ = [
     "CAMPAIGN_SUMMARY_ID",
     "CHRONICLE_DOC_TYPE",
     "THREAD_DOC_TYPE",
+    "ChronicleSections",
     "FoldOutcome",
     "advance_chronicle_turn",
-    "build_chronicle_section",
+    "build_chronicle_sections",
     "chronicle_turn",
     "maybe_fold_chronicle",
     "recall_folded_entries",
@@ -112,12 +123,9 @@ _FOLD_REARM_GROWTH = 0.05
 # runtime key to keep in sync. Keeper-side by construction (the player projection
 # is a field allowlist).
 _FOLD_METER_FIELD = "fold_meter"
-# Prompt-section caps: the raw tail is small by design (the lag window plus one
-# fold cycle); the caps bound the pathological "fold did its best" case.
-_TAIL_MAX_ENTRIES = 10
-_TAIL_MAX_CHARS = 6000
 _THREADS_MAX = 12
 _RECALL_LIMIT = 4
+_RECALL_MAX_CHARS = 6000
 _RECAP_TAIL_MAX = 8
 
 
@@ -171,8 +179,8 @@ async def summary_through_turn(services: Services, chat_key: str) -> int:
 
 
 async def advance_chronicle_turn(store: Any, chat_key: str) -> None:
-    """Increment the completed-turn counter. Wired into `run_kp_turn` right after
-    the session-recap refresh; best-effort like its neighbour — never raises."""
+    """Increment the completed-turn counter. Wired into `run_kp_turn` right after the
+    turn's history is persisted; best-effort bookkeeping — never raises."""
     try:
         await store.state_set(chat_key, CHRONICLE_TURN_KEY, str(await chronicle_turn(store, chat_key) + 1))
     except Exception:  # noqa: BLE001 — bookkeeping must never break the table
@@ -232,23 +240,27 @@ async def record_entry(
 # ---------------------------------------------------------------------------
 
 
-async def maybe_fold_chronicle(ctx: AgentCtx, services: Services, *, force: bool = False) -> FoldOutcome:
+async def maybe_fold_chronicle(
+    ctx: AgentCtx, services: Services, *, force: bool = False, history_key: str = DEFAULT_HISTORY_KEY
+) -> FoldOutcome:
     """Fold old chronicle records into the rolling summary when the meter says so.
 
+    `history_key` names the replayed conversation this room's fold would trim — the
+    thing a fold actually frees, and therefore what both guards below are measured in.
+
     With `force` (the manual `.chronicle fold`) every record past the lag window
-    folds regardless of the meter, of the section floor and of the per-turn batch
+    folds regardless of the meter, of the replay floor and of the per-turn batch
     budget. Never raises — a broken fold must never break a turn; the previously
     stored summary simply stays in use.
 
     Two guards keep a ROUTINE fold from spending a generation call it cannot earn
-    back (the meter measures the whole assembled prompt; a fold can only ever
-    remove chronicle records from it):
+    back (the meter measures the whole assembled prompt; a fold can only ever remove
+    the replayed history its new watermark covers):
 
-    - **the section floor** — `_render_delta` renders the chronicle tail as it
-      stands and as it would stand with every foldable record gone, through the
-      same renderer the prompt uses. Zero difference means the section is already
-      at its own floor: the pressure is somewhere else (a big module), and folding
-      would free nothing, so no call is spent.
+    - **the replay floor** — `_history_tokens_through` sums the messages that folding
+      every foldable record would let `agent.history.trim_folded` drop. Zero means
+      there is nothing left to free: the pressure is somewhere else (a big module),
+      and folding would change nothing, so no call is spent.
     - **the observed-effect re-arm** — a fold stamps the meter reading it acted on;
       the next turn compares against it. A meter that came DOWN retires the stamp
       (the prediction held). A meter that did NOT disarms the fold until the room
@@ -260,13 +272,13 @@ async def maybe_fold_chronicle(ctx: AgentCtx, services: Services, *, force: bool
     if not settings.enabled:
         return FoldOutcome()
     try:
-        return await _fold_flow(ctx, services, force=force)
+        return await _fold_flow(ctx, services, force=force, history_key=history_key)
     except Exception:  # noqa: BLE001 — the fold is additive continuity, never fatal
         logger.debug("chronicle fold failed", exc_info=True)
         return FoldOutcome()
 
 
-async def _fold_flow(ctx: AgentCtx, services: Services, *, force: bool) -> FoldOutcome:
+async def _fold_flow(ctx: AgentCtx, services: Services, *, force: bool, history_key: str) -> FoldOutcome:
     settings = services.settings.chronicle
     chat_key = ctx.chat_key
     measured, window = await _read_meter(services, chat_key)
@@ -289,24 +301,36 @@ async def _fold_flow(ctx: AgentCtx, services: Services, *, force: bool) -> FoldO
     entries = await services.documents.list(chat_key, CHRONICLE_DOC_TYPE)
     docs_by_id = {doc.id: doc for doc in entries}
     i18n = services.i18n.with_locale(ctx.locale)
+    # What this room is REPLAYING right now: the current path, already stripped of
+    # what earlier folds cover, so a fold is never credited with freeing a message
+    # that stopped being sent turns ago.
+    replayed = _replayed_turn_costs(
+        await trim_folded(
+            services,
+            chat_key,
+            history_key,
+            await load_chain(services, chat_key, history_key),
+            await summary_through_turn(services, chat_key),
+        )
+    )
 
     foldable = _foldable_ids(entries, watermark)
-    reducible = _render_delta(i18n, entries, set(foldable))
+    reducible = _history_tokens_through(replayed, _newest_turn(foldable, docs_by_id))
     if not force and reducible <= 0:
-        logger.debug("chronicle fold skipped: the section is already at its own floor")
+        logger.debug("chronicle fold skipped: no replayed history left for it to free")
         return FoldOutcome(before=before, after=before)
 
-    # HOW MANY records this pass intends to fold, solved in the renderer's unit —
-    # the same `_render_delta` the gate above just used. `deficit` is in METER
-    # tokens (what the provider reported for the whole prompt) and the delta is in
-    # `estimate_tokens` (CJK-aware, computed over the section's own render), so the
-    # two units are close but not identical. That residual approximation — tokenizer
-    # differences, plus folded records flowing back in through topical recall
-    # (`_RECALL_LIMIT`) — is exactly why BOTH guards above stay: the meter remains
-    # the only authority on whether a fold actually paid for itself.
+    # HOW MANY records this pass intends to fold, solved in the unit the gate above
+    # just used. `deficit` is in METER tokens (what the provider reported for the
+    # whole prompt) while the measurement is `estimate_tokens` (CJK-aware, computed
+    # over the replayed messages), so the two units are close but not identical.
+    # That residual approximation — tokenizer differences, plus folded records
+    # flowing back in through topical recall (`_RECALL_LIMIT`) — is exactly why BOTH
+    # guards above stay: the meter remains the only authority on whether a fold
+    # actually paid for itself.
     deficit = 0 if force else max(0, int(measured - settings.fold_floor * window))
     pending = list(foldable) if force else _fold_prefix(
-        i18n, entries, foldable, deficit=deficit, reducible=reducible
+        replayed, docs_by_id, foldable, deficit=deficit, reducible=reducible
     )
 
     outcome = FoldOutcome(ran=True, level=level, before=before, after=before)
@@ -333,9 +357,9 @@ async def _fold_flow(ctx: AgentCtx, services: Services, *, force: bool) -> FoldO
         outcome.entries_folded += len(batch)
         outcome.folded_ids.extend(candidate.id for candidate in batch)
         pending = pending[len(batch) :]
-        # No floor re-check here: the target set was solved against the section's own
-        # render before the first call, so reaching the end of it IS reaching the floor
-        # (or the small-window edge, where there was no floor to reach).
+        # No floor re-check here: the target set was solved against the replayed history
+        # before the first call, so reaching the end of it IS reaching the floor (or the
+        # small-window edge, where there was no floor to reach).
         if not force and outcome.batches >= _FOLD_MAX_BATCHES_PER_TURN:
             break  # this turn's fold budget is spent; the rest drains on later turns
     if not force and attempted:
@@ -345,11 +369,12 @@ async def _fold_flow(ctx: AgentCtx, services: Services, *, force: bool) -> FoldO
     if outcome.folded_ids:
         outcome.through_turn = max(_entry_turn(docs_by_id[doc_id]) for doc_id in outcome.folded_ids)
     if window > 0:
-        # What the fold actually removed from the prompt, in the renderer's unit —
-        # not the size of the records it consumed. A partial drain (a backlog larger
-        # than this turn's batch budget) can legitimately report `after == before`:
-        # the records folded so far were all outside what the tail renders.
-        outcome.after = (measured - _render_delta(i18n, entries, set(outcome.folded_ids))) / window
+        # What the fold actually removed from the prompt — the history its new
+        # watermark stops replaying, not the size of the records it consumed. A
+        # partial drain (a backlog larger than this turn's batch budget) can
+        # legitimately report `after == before`: the records folded so far all
+        # belong to turns whose messages had already stopped being replayed.
+        outcome.after = (measured - _history_tokens_through(replayed, outcome.through_turn)) / window
     return outcome
 
 
@@ -522,41 +547,65 @@ async def _write_summary_fields(
         logger.debug("chronicle fold meter bookkeeping failed", exc_info=True)
 
 
-def _render_delta(i18n: I18n, entries: list[Document], exclude: frozenset[str] | set[str]) -> int:
-    """How many ASSEMBLED-PROMPT tokens dropping `exclude` from the tail removes.
+def _replayed_turn_costs(history: list[dict]) -> list[tuple[int, int]]:
+    """Each replayed message as `(turn, tokens)` — priced once, read many times.
+
+    `_fold_prefix` walks the backlog asking the same question at a moving watermark,
+    so the per-message `estimate_tokens` is paid here rather than inside that loop.
+    """
+    return [
+        (int(message.get(HISTORY_TURN_KEY, 0) or 0), estimate_tokens(str(message.get("content") or "")))
+        for message in history
+    ]
+
+
+def _history_tokens_through(replayed: list[tuple[int, int]], through_turn: int) -> int:
+    """How many REPLAYED-HISTORY tokens a fold through `through_turn` frees.
 
     THE one measurement both the fold's gate and its batch sizing speak, so the two
-    can never drift into different units. The chronicle's prompt footprint is capped
-    by construction (`_TAIL_MAX_ENTRIES`/`_TAIL_MAX_CHARS`), so a record the section
-    never renders costs the prompt nothing to keep and frees nothing when folded —
-    which makes "tokens of the records folded" a unit the section itself falsifies.
-    This renders the tail as it stands and again without `exclude`, through the SAME
-    `_tail_docs`/`_render_newest` the prompt section uses, and reports the difference.
+    can never drift into different units. A fold's only effect on the prompt is the
+    watermark it writes: `agent.history.trim_folded` then stops replaying every
+    message at or below it — which is why the condition here is the exact complement
+    of that filter, turn-0/unstamped messages included.
 
-    The result steps rather than slopes: while more than `_TAIL_MAX_ENTRIES` records
-    remain unfolded, dropping the oldest ones changes nothing the prompt renders and
-    the delta is exactly 0.
+    Not "the tokens of the records folded": a chronicle record is a one-line digest of
+    a turn whose verbatim exchange is what the prompt actually carries, so the record's
+    own size describes neither what the prompt pays nor what folding it recovers.
+
+    The result steps rather than slopes: several records can share a turn, and a turn
+    that produced no chronicle record still costs history — so folding one more record
+    can free a whole turn's messages, or none at all.
     """
-    now = _render_newest(i18n, _tail_docs(entries), _TAIL_MAX_CHARS)
-    after = _render_newest(i18n, _tail_docs(entries, exclude=exclude), _TAIL_MAX_CHARS)
-    return max(0, estimate_tokens(now) - estimate_tokens(after))
+    if through_turn <= 0:
+        return 0
+    return sum(tokens for turn, tokens in replayed if turn <= through_turn)
+
+
+def _newest_turn(doc_ids: list[str], docs_by_id: dict[str, Document]) -> int:
+    """The highest turn among `doc_ids` — the watermark folding all of them would write."""
+    return max((_entry_turn(docs_by_id[doc_id]) for doc_id in doc_ids), default=0)
 
 
 def _foldable_ids(entries: list[Document], watermark: int) -> list[str]:
     """Every unfolded record at or below the watermark, OLDEST FIRST.
 
-    Order is load-bearing twice over: the tail renders the newest records, so only
-    folding from the oldest end can shrink it, and the no-future guard requires the
-    lag window to stay raw."""
+    Order is load-bearing twice over: the watermark a fold writes only ever moves
+    forward, so only folding from the oldest end frees history a turn at a time, and
+    the no-future guard requires the lag window to stay raw."""
     foldable = [doc for doc in entries if not doc.data.get("folded") and _entry_turn(doc) <= watermark]
     return [doc.id for doc in sorted(foldable, key=lambda doc: (_entry_turn(doc), doc.id))]
 
 
 def _fold_prefix(
-    i18n: I18n, entries: list[Document], foldable: list[str], *, deficit: int, reducible: int
+    replayed: list[tuple[int, int]],
+    docs_by_id: dict[str, Document],
+    foldable: list[str],
+    *,
+    deficit: int,
+    reducible: int,
 ) -> list[str]:
     """The oldest-first prefix of `foldable` whose removal covers `deficit` prompt
-    tokens — or all of `foldable` when the section cannot cover it.
+    tokens — or all of `foldable` when the replayed history cannot cover it.
 
     That second case is the spec's small-window edge (M18, "only the foldable portion
     shrinks … fold does its best"): the pressure is somewhere the chronicle cannot
@@ -564,31 +613,16 @@ def _fold_prefix(
     deficit it was never going to close.
 
     Solved by walking the prefix rather than dividing a deficit by a per-record size,
-    because there is no per-record size: `_render_delta` steps. The walk is linear in
-    the backlog and each step renders at most `_TAIL_MAX_ENTRIES` lines; it is not
-    hoisted past the leading zero-delta stretch on purpose, since `_render_newest`
-    spends its character budget from the newest side — under a binding budget the
-    delta stays 0 for LONGER than the entry cap alone would predict, so any shortcut
-    derived from the caps would be wrong exactly when the budget matters.
+    because there is no per-record size: `_history_tokens_through` steps, and the step
+    a record sits on depends on how much was said that turn, which nothing about the
+    record itself records.
     """
     if deficit >= reducible:
         return list(foldable)
-    for count in range(1, len(foldable) + 1):
-        if _render_delta(i18n, entries, set(foldable[:count])) >= deficit:
+    for count, doc_id in enumerate(foldable, start=1):
+        if _history_tokens_through(replayed, _entry_turn(docs_by_id[doc_id])) >= deficit:
             return foldable[:count]
     return list(foldable)
-
-
-def _tail_docs(entries: list[Document], *, exclude: frozenset[str] | set[str] = frozenset()) -> list[Document]:
-    """The unfolded records the prompt section renders, oldest to newest.
-
-    One definition, shared by `build_chronicle_section` (what the prompt costs) and
-    `_reducible_tail_tokens` (what a fold could remove), so the two can never drift.
-    """
-    return sorted(
-        (doc for doc in entries if not doc.data.get("folded") and doc.id not in exclude),
-        key=lambda doc: (_entry_turn(doc), doc.id),
-    )[-_TAIL_MAX_ENTRIES:]
 
 
 def _entry_turn(doc: Document) -> int:
@@ -684,27 +718,57 @@ async def recall_folded_entries(
 # ---------------------------------------------------------------------------
 
 
-async def build_chronicle_section(ctx: AgentCtx, services: Services, i18n: I18n, *, recent_context: str = "") -> str:
-    """The KP's chronicle section: rolling summary (+ keeper margin) + open
-    threads + the raw unfolded tail + folded records recalled against this turn.
+@dataclass(frozen=True)
+class ChronicleSections:
+    """The chronicle's contribution to one prompt, split at its cache boundary.
 
-    "" for a room with no chronicle yet, so a fresh room's prompt stays
-    byte-identical to a build from before M18. KP-grade by construction — this
+    Mirrors `agent.prompt_builder.SystemPrompt`'s own halves so the assembler can
+    route each without re-deciding what belongs where — the reasoning for the split
+    lives with the data it describes (`build_chronicle_sections`).
+    """
+
+    stable: str = ""
+    volatile: str = ""
+
+
+async def build_chronicle_sections(
+    ctx: AgentCtx, services: Services, i18n: I18n, *, recent_context: str = ""
+) -> ChronicleSections:
+    """The KP's chronicle injection, split at the prompt's own cache boundary.
+
+    - `stable` — the rolling campaign summary and its keeper margin. It changes only
+      when a fold writes it, and that same fold moves `through_turn`, which makes
+      `agent.history.trim_folded` cut the FRONT of the replayed history on this very
+      turn. The cached prefix is gone either way; the summary rides an invalidation
+      that has already happened, and is a cache read on every other turn.
+      ONE accepted cost: `.chronicle edit` / `.chronicle note` rewrite this text
+      outside a fold, so the next turn pays for the whole prefix once. A deliberate,
+      rare keeper action, and cheaper than moving the summary back into the tail
+      where every turn would pay for it.
+    - `volatile` — open threads (`update_thread` may fire on any turn) and the folded
+      records recalled against this turn's context (re-retrieved every turn). Both
+      change asynchronously of anything else, so neither may ride the head.
+
+    No raw unfolded tail: an unfolded record's turn is above `through_turn`, so that
+    turn's verbatim exchange is still being replayed a few messages later — rendering
+    the record too would carry the same events twice.
+
+    Both halves are "" for a room with no chronicle yet, so a fresh room's prompt
+    stays byte-identical to a build from before M18. KP-grade by construction — this
     is the Keeper's own system prompt; player surfaces consume projections.
     """
     try:
-        parts: list[str] = []
-
+        stable = ""
         summary = await services.documents.get_view(
             ctx.chat_key, CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID, KEEPER_VIEWER
         )
         if summary and str(summary.get("text", "")).strip():
-            block = i18n.t("prompt.chronicle.summary_label") + "\n" + str(summary["text"]).strip()
+            stable = i18n.t("prompt.chronicle.summary_label") + "\n" + str(summary["text"]).strip()
             margin = str(summary.get("keeper", "")).strip()
             if margin:
-                block += "\n" + i18n.t("prompt.chronicle.keeper_label") + " " + margin
-            parts.append(block)
+                stable += "\n" + i18n.t("prompt.chronicle.keeper_label") + " " + margin
 
+        parts: list[str] = []
         threads = await services.documents.list(ctx.chat_key, THREAD_DOC_TYPE)
         open_threads = [doc for doc in threads if doc.data.get("status") == "open"][:_THREADS_MAX]
         if open_threads:
@@ -717,29 +781,30 @@ async def build_chronicle_section(ctx: AgentCtx, services: Services, i18n: I18n,
                 lines.append(line)
             parts.append(i18n.t("prompt.chronicle.threads_label") + "\n" + "\n".join(lines))
 
-        entries = await services.documents.list(ctx.chat_key, CHRONICLE_DOC_TYPE)
-        tail = _tail_docs(entries)
-        if tail:
-            # Chronological block: under a binding budget keep the NEWEST.
-            parts.append(i18n.t("prompt.chronicle.tail_label") + "\n" + _render_newest(i18n, tail, _TAIL_MAX_CHARS))
-
         if recent_context.strip():
-            tail_ids = {doc.id for doc in tail}
-            recalled = [doc for doc in await recall_folded_entries(services, ctx.chat_key, recent_context) if doc.id not in tail_ids]
+            recalled = await recall_folded_entries(services, ctx.chat_key, recent_context)
             if recalled:
                 # Relevance-ranked block: under a binding budget keep the STRONGEST hits.
                 parts.append(
                     i18n.t("prompt.chronicle.recalled_label")
                     + "\n"
-                    + _render_most_relevant(i18n, recalled, _TAIL_MAX_CHARS)
+                    + _render_most_relevant(i18n, recalled, _RECALL_MAX_CHARS)
                 )
 
-        if not parts:
-            return ""
-        return i18n.t("prompt.chronicle.header") + "\n\n" + "\n\n".join(parts)
+        # The header frames the whole chronicle (what it is, and that its keeper
+        # annotations are never quoted to players), so it leads whichever half opens
+        # it — the head when there is a summary, the tail otherwise. It is a constant
+        # string, so carrying it in the head costs nothing to keep there.
+        header = i18n.t("prompt.chronicle.header")
+        if stable:
+            return ChronicleSections(
+                stable=header + "\n\n" + stable,
+                volatile="\n\n".join(parts),
+            )
+        return ChronicleSections(stable="", volatile=header + "\n\n" + "\n\n".join(parts) if parts else "")
     except Exception:  # noqa: BLE001 — a missing section never breaks a turn
         logger.debug("chronicle section build failed", exc_info=True)
-        return ""
+        return ChronicleSections()
 
 
 def _record_line(i18n: I18n, doc: Document) -> str:
@@ -751,34 +816,12 @@ def _record_line(i18n: I18n, doc: Document) -> str:
     return i18n.t("prompt.chronicle.record_line", turn=_entry_turn(doc), text=text)
 
 
-def _render_newest(i18n: I18n, docs: list[Document], budget: int) -> str:
-    """`docs` oldest→newest: the largest SUFFIX that fits `budget` chars, still
-    rendered in chronological order.
-
-    For the raw tail, which is DEFINED as the most recent records — so when the
-    budget binds, the records to give up are the oldest ones. Spending the budget
-    from the newest end and reversing back is what makes "recent" true of the
-    render and not merely of the selection.
-    """
-    lines: list[str] = []
-    for doc in reversed(docs):
-        line = _record_line(i18n, doc)
-        if budget - len(line) < 0:
-            break
-        lines.append(line)
-        budget -= len(line)
-    lines.reverse()
-    return "\n".join(lines)
-
-
 def _render_most_relevant(i18n: I18n, docs: list[Document], budget: int) -> str:
     """`docs` most-relevant→least: the largest PREFIX that fits `budget` chars.
 
-    The asymmetry with `_render_newest` is DELIBERATE — do not "fix" it into
-    symmetry. These two blocks are ordered by different things (time vs retrieval
-    score), so the part worth keeping sits at opposite ends: dropping the tail of a
-    relevance ranking drops the weakest hits, which is exactly right, while doing
-    the same to a chronological tail would drop the present moment.
+    Dropping from the BACK is what a relevance ranking wants — it gives up the
+    weakest hits. Do not "generalize" this into a chronological renderer that keeps
+    its head: this list is ordered by retrieval score, not by time.
     """
     lines: list[str] = []
     for doc in docs:

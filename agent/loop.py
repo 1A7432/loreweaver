@@ -33,12 +33,11 @@ from difflib import SequenceMatcher
 
 from agent.chronicle import advance_chronicle_turn, chronicle_turn, maybe_fold_chronicle, summary_through_turn
 from agent.context import AgentCtx
-from agent.history import append_turn, load_chain, migrate_legacy_blob, trim_folded
+from agent.history import DEFAULT_HISTORY_KEY, append_turn, load_chain, migrate_legacy_blob, trim_folded
 from agent.hook_runtime import apply_hook_writes, load_room_hook_engine
 from agent.kp_tools_subsystems import dispatch_subsystem, room_rulepack, subsystem_schemas
 from agent.prompt_builder import build_system_prompt_parts
 from agent.services import Services
-from agent.session_recap import maybe_refresh_session_recap
 from agent.tool_phase import room_phase
 from agent.tools import Toolset
 from agent.turn_checks import (
@@ -273,13 +272,17 @@ async def run_kp_turn(
         hook_panel_events += outcome.panel_events
         if outcome.injections:
             ctx.extra["hook_injections"] = outcome.injections
+    key = history_key or DEFAULT_HISTORY_KEY
+    await migrate_legacy_blob(services, ctx.chat_key, key)
     # M18 campaign chronicle: the context-pressure fold runs BEFORE prompt assembly —
     # measured from last turn's usage meter, an over-trigger (or over-ceiling) room
     # folds its oldest chronicle records into the rolling campaign summary before this
     # turn's model call, so the emergency ceiling always has headroom for the fold
-    # generation itself. Best-effort: never raises; a no-op when disabled, when no
-    # meter exists yet (a room's first turn), or under the trigger.
-    await maybe_fold_chronicle(ctx, services)
+    # generation itself. It needs `key` because what a fold FREES is the replayed
+    # history `trim_folded` then drops — hence the key's computation (and the legacy
+    # adoption that fills the tree) sits above it. Best-effort: never raises; a no-op
+    # when disabled, when no meter exists yet (a room's first turn), or under the trigger.
+    await maybe_fold_chronicle(ctx, services, history_key=key)
     system_prompt = await build_system_prompt_parts(ctx, services)
     # Layer B.2 -- allowed-tools enforcement (docs/plugins.md "Layer B"): the union
     # of `allowed_tools` across every KP skill enabled for this room. With no
@@ -298,13 +301,11 @@ async def run_kp_turn(
     room_pack = await room_rulepack(services, ctx)
     subsystem_tools = subsystem_schemas(room_pack)
 
-    key = history_key or "chat_history"
     # M20 A2: history is APPEND-ONLY between folds — the sliding window is gone, because
     # dropping its front every turn invalidated every downstream cache prefix. The one
     # truncation point is the chronicle fold: what the rolling summary has absorbed
     # (`through_turn`) is exactly what history no longer needs to replay, and the fold's
     # own no-future watermark (M18's 4-turn lag) guarantees recent turns are never cut.
-    await migrate_legacy_blob(services, ctx.chat_key, key)
     history = await load_chain(services, ctx.chat_key, key)
     history = await trim_folded(services, ctx.chat_key, key, history, await summary_through_turn(services, ctx.chat_key))
     # The turn now in flight — completed turns + 1, the same stamp `record_entry` uses,
@@ -361,9 +362,8 @@ async def run_kp_turn(
         except Exception as exc:
             # A real provider error (network/rate-limit/auth/SDK) must degrade to a friendly,
             # localized diagnosis (or the generic unavailable fallback), never crash the turn.
-            # We return early WITHOUT persisting history or refreshing the recap (nothing useful
-            # happened this turn, and the summarizer LLM would just fail again). `usage` stays
-            # the default all-zero `Usage()` -- nothing usable came back.
+            # We return early WITHOUT persisting history (nothing useful happened this turn).
+            # `usage` stays the default all-zero `Usage()` -- nothing usable came back.
             logger.warning("KP turn aborted: LLM chat failed", exc_info=True)
             category = getattr(exc, "category", "")
             code = getattr(exc, "code", "")
@@ -480,12 +480,8 @@ async def run_kp_turn(
     if gate is not None:
         await gate.drain()
     await append_turn(services, ctx.chat_key, key, user_message=user_message, reply=reply, turn=turn_index)
-    # Fold this turn into the rolling "story so far" recap when one is due, so
-    # the KP keeps facts established far earlier in the session even after the
-    # chronicle fold stops replaying those turns verbatim. Best-effort: never fatal.
-    await maybe_refresh_session_recap(ctx, services, history_key=key)
     # M18: count the completed turn — chronicle entries stamp against this counter
-    # and the fold's no-future watermark derives from it. Best-effort, like the recap.
+    # and the fold's no-future watermark derives from it. Best-effort bookkeeping.
     await advance_chronicle_turn(services.store, ctx.chat_key)
     # M20 D: the turn boundary is where a rewind can land, so it is where the room's
     # non-append-only half is photographed. AFTER the counter advances, so the snapshot

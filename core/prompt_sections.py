@@ -532,28 +532,6 @@ async def inject_session_history_prompt(ctx: Any, battle_report_manager: Any, i1
         return ""
 
 
-async def inject_session_recap_prompt(ctx: Any, store: Store, i18n: I18n) -> str:
-    """Rolling "story so far" recap of the CURRENT (in-progress) session.
-
-    Reads the bounded recap persisted under ``session_recap.{chat_key}`` by
-    ``agent.session_recap`` and frames it with a localized header, so the KP
-    stays consistent with concrete facts established far earlier this session
-    (names, places, promises, clues, open threads) even once they scroll out of
-    the loop's ~20-message replay window. Empty ("") until the first refresh.
-
-    The recap is distilled only from in-session play, so — unlike the module
-    knowledge pool — it carries no keeper-secret material and needs no secrecy
-    discipline block.
-    """
-    try:
-        recap = await store.state_get(ctx.chat_key, "session_recap")
-        if not recap or not recap.strip():
-            return ""
-        return "\n".join([i18n.t("prompt.session_recap.header"), "", recap.strip()])
-    except Exception:
-        return ""
-
-
 async def inject_interaction_style_prompt(ctx: Any, i18n: I18n) -> str:
     """Narrative voice, the dice contract, companion cueing, and freshness.
 

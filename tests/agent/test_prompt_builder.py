@@ -17,7 +17,6 @@ from core.prompt_sections import (
     inject_game_state_prompt,
     inject_interaction_style_prompt,
     inject_session_history_prompt,
-    inject_session_recap_prompt,
     inject_system_expertise_prompt,
     inject_trpg_system_prompt,
 )
@@ -162,7 +161,6 @@ async def test_build_system_prompt_with_no_relationship_state_is_byte_identical_
 
     i18n = services.i18n.with_locale("en")
     session_history = await inject_session_history_prompt(ctx, services.battles, i18n)
-    session_recap = await inject_session_recap_prompt(ctx, services.store, i18n)
     document_context = await inject_document_context_prompt(
         ctx, services.vector_db, services.store, i18n, services.settings.enable_vector_db
     )
@@ -170,7 +168,7 @@ async def test_build_system_prompt_with_no_relationship_state_is_byte_identical_
     recent_context = "\n".join(part for part in (session_history, str(extra.get("user_message", "") or "")) if part)
     world_lore = await inject_world_lore_prompt(ctx, services.worldbook, i18n, role="keeper", recent_context=recent_context)
     # The P1 layout, hand-assembled: stable head (identity, expertise, style, the
-    # module pool) then volatile tail (lore, recap, history, live state).
+    # module pool) then volatile tail (lore, history, live state).
     plain_sections = [
         await inject_trpg_system_prompt(ctx, i18n),
         await inject_system_expertise_prompt(
@@ -179,7 +177,6 @@ async def test_build_system_prompt_with_no_relationship_state_is_byte_identical_
         await inject_interaction_style_prompt(ctx, i18n),
         document_context,
         world_lore,
-        session_recap,
         session_history,
         await inject_game_state_prompt(ctx, services.characters, services.store, i18n),
     ]
