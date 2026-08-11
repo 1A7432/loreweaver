@@ -24,6 +24,13 @@ class LLMSettings(BaseModel):
     embedding_dim: int = 1536
     analysis_model: str = ""  # large-context model for full-module analysis; falls back to chat_model
     npc_model: str = ""  # model for AI-played NPC sub-actors (agent.npc_actor.voice_npc); falls back to chat_model
+    # Context window in tokens; 0 = detect from the model name (`infra.llm.context_window_for`).
+    # Set it for any model that table cannot name — it is the denominator of the chronicle
+    # fold policy, not just a status-bar meter, so an under-reported window makes a room
+    # summarise and trim its raw history far earlier than it needs to. Deliberately NOT a
+    # runtime override: auto-detection already follows a model switch, and the override
+    # path stores every value as a string with `""` meaning "clear", which an int cannot use.
+    context_window: int = 0
     # Left unset by default: don't hand-tune temperature — send nothing and let the provider
     # use its own default (DeepSeek = 1.0, which is also what it recommends for thinking mode;
     # a low temperature can collapse a reasoning model's trace). Callers may still pass one.

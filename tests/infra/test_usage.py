@@ -248,21 +248,65 @@ def test_parse_usage_gemini_zero_usage_returns_none():
 
 
 def test_context_window_for_known_models():
-    assert context_window_for("deepseek-chat") == 65536
-    assert context_window_for("gpt-4o-mini") == 128000
-    assert context_window_for("gpt-4.1") == 128000
-    assert context_window_for("o1-preview") == 128000
-    assert context_window_for("o3-mini") == 128000
-    assert context_window_for("gpt-5") == 256000
-    assert context_window_for("claude-opus-4-5") == 200000
-    assert context_window_for("gemini-2.5-pro") == 1000000
+    """Each figure is the vendor's own published maximum (checked 2026-08-11).
+
+    This is not a cosmetic table: M18 made it the denominator of the chronicle fold, so
+    an under-reported window makes a room summarise and trim its raw history early.
+    """
+    assert context_window_for("deepseek-v4-pro") == 1_000_000
+    assert context_window_for("deepseek-v4-flash") == 1_000_000
+    assert context_window_for("kimi-k3") == 1_000_000
+    assert context_window_for("gpt-5.6-sol") == 1_050_000
+    assert context_window_for("gpt-4o-mini") == 128_000
+    assert context_window_for("o3-mini") == 128_000
+    assert context_window_for("claude-opus-5") == 1_000_000
+    assert context_window_for("gemini-2.5-pro") == 1_000_000
+
+
+def test_a_family_needle_never_swallows_a_sibling_with_a_different_window():
+    """The reason matching is longest-needle-first rather than tuple order.
+
+    Three vendors ship sibling models whose names share a prefix but whose windows do
+    not, so a shorter needle placed earlier would quietly answer for the longer one.
+    """
+    assert context_window_for("kimi-k2.7-code") == 256_000, "k2.x is 256K; only k3 is 1M"
+    assert context_window_for("grok-4.5") == 500_000, "4.5 is 500K while 4.3/4.20 are 1M"
+    assert context_window_for("grok-4.3") == 1_000_000
+    assert context_window_for("claude-haiku-4-5") == 200_000, "Haiku stayed at 200K"
+
+
+def test_line_order_in_the_table_is_not_load_bearing():
+    """The guard behind the guard: reordering the table must not change any answer."""
+    import infra.llm as llm_module
+
+    original = llm_module._CONTEXT_WINDOWS
+    probes = ("kimi-k2.7-code", "kimi-k3", "grok-4.5", "claude-haiku-4-5", "claude-opus-5")
+    expected = {probe: context_window_for(probe) for probe in probes}
+    try:
+        llm_module._CONTEXT_WINDOWS = tuple(reversed(original))
+        assert {probe: context_window_for(probe) for probe in probes} == expected
+    finally:
+        llm_module._CONTEXT_WINDOWS = original
 
 
 def test_context_window_for_is_case_insensitive():
-    assert context_window_for("DeepSeek-Chat") == 65536
-    assert context_window_for("Claude-3-Opus") == 200000
+    assert context_window_for("DeepSeek-V4-Pro") == 1_000_000
+    assert context_window_for("Claude-Opus-5") == 1_000_000
 
 
 def test_context_window_for_unknown_model_defaults():
-    assert context_window_for("some-custom-local-model") == 128000
-    assert context_window_for("") == 128000
+    """Unverified names fall to the conservative default rather than a flattering guess.
+
+    Guessing high would let a prompt outgrow the real window and kill the turn on a
+    provider error; guessing low only folds sooner than needed. The operator knob is the
+    fix for anything the table cannot name.
+    """
+    assert context_window_for("some-custom-local-model") == 128_000
+    assert context_window_for("") == 128_000
+
+
+def test_the_operator_override_outranks_the_table():
+    """No lookup table survives a vendor's release schedule — the operator gets the last word."""
+    assert context_window_for("deepseek-v4-pro", 250_000) == 250_000
+    assert context_window_for("some-custom-local-model", 2_000_000) == 2_000_000
+    assert context_window_for("deepseek-v4-pro", 0) == 1_000_000, "0 means auto-detect"

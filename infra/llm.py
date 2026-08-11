@@ -355,31 +355,70 @@ def parse_usage(raw: Any) -> Usage | None:
     )
 
 
-# Case-insensitive substring -> context-window (tokens) lookup for the status-bar
-# context% meter. Small and deliberately coarse (a family's exact window varies by
-# minor version) -- good enough for a "how full is context" indicator, not billing.
+# Case-insensitive substring -> context-window (tokens), verified against each vendor's
+# OWN documentation (checked 2026-08-11; source noted per row). This started life as a
+# status-bar indicator where a coarse guess was harmless, and M18 then made it the
+# DENOMINATOR of the chronicle fold policy — at which point a stale row stopped being
+# cosmetic. The 65536 this table used to carry for DeepSeek was ~16x under the real
+# window, so a v4 room folded and trimmed its raw history at ~4% of actual capacity;
+# M21's auto-fed records are what turned that latent error into daily damage. Re-verify
+# these against the vendor docs whenever a model family is added.
 _CONTEXT_WINDOWS: tuple[tuple[str, int], ...] = (
-    ("deepseek", 65536),
-    ("gpt-5", 256000),
-    ("gpt-4o", 128000),
-    ("gpt-4.1", 128000),
-    ("o1", 128000),
-    ("o3", 128000),
-    ("claude", 200000),
-    ("gemini", 1000000),
+    # DeepSeek — api-docs.deepseek.com: v4-pro/v4-flash 1M context, 384K max output.
+    ("deepseek-v4", 1_000_000),
+    # Moonshot — platform.kimi.ai: k3 is 1M, but every k2.x is 256K. One "kimi" needle
+    # would misjudge whichever it did not name, which is why matching is longest-first.
+    ("kimi-k3", 1_000_000),
+    ("kimi-k2", 256_000),
+    # OpenAI — developers.openai.com: the gpt-5.6 family documents "1.05M tokens".
+    ("gpt-5.6", 1_050_000),
+    ("gpt-5", 256_000),
+    ("gpt-4o", 128_000),
+    ("gpt-4.1", 128_000),
+    ("o1", 128_000),
+    ("o3", 128_000),
+    # xAI — docs.x.ai: 4.5 is 500K while 4.3 and 4.20 are 1M; not one family window.
+    ("grok-4.5", 500_000),
+    ("grok-4.3", 1_000_000),
+    ("grok-4.20", 1_000_000),
+    ("grok-build", 256_000),
+    # Anthropic — Opus 5 / Opus 4.8 / Sonnet 5 / Fable 5 / Mythos 5 are 1M; Haiku 4.5
+    # stayed at 200K, so the specific needle has to outrank the family one.
+    ("claude-haiku", 200_000),
+    ("claude", 1_000_000),
+    # Google — ai.google.dev states "1 million or more tokens" without publishing a
+    # per-model figure on a fetchable page, so this is a documented FLOOR, not an exact
+    # window. Set the knob below if a room runs a larger Gemini.
+    ("gemini", 1_000_000),
 )
-_DEFAULT_CONTEXT_WINDOW = 128000
+# Deliberately conservative, and deliberately NOT raised to match the modern families
+# above: an unknown model is unknown in both directions. Guessing too HIGH lets a prompt
+# grow past the real limit and the turn dies on a provider error; guessing too LOW only
+# folds earlier than needed, which degrades rather than breaks. `context_window` in
+# `TRPG_LLM__*` is the answer for anything this table cannot name.
+_DEFAULT_CONTEXT_WINDOW = 128_000
 
 
-def context_window_for(model: str) -> int:
-    """Best-effort context-window size (tokens) for `model`.
+def context_window_for(model: str, override: int = 0) -> int:
+    """Context-window size (tokens) for `model`, or the operator's `override`.
 
-    Case-insensitive substring match against `_CONTEXT_WINDOWS`; falls back to
-    `_DEFAULT_CONTEXT_WINDOW` for anything unrecognized (a custom/local model,
-    an unfamiliar provider's naming).
+    `override` (config `TRPG_LLM__CONTEXT_WINDOW`, 0 = auto) wins outright: no lookup
+    table survives contact with a vendor's release schedule, so the operator gets the
+    last word rather than waiting on a table edit. Auto-detection is the default because
+    it follows a RUNTIME model switch correctly — the model screen changes the model
+    name, and the window follows it — where a pinned number would silently describe the
+    model the room used to run.
+
+    Matching is case-insensitive substring, LONGEST NEEDLE FIRST. Longest-first is not a
+    tidiness preference: `kimi-k3` (1M) and `kimi-k2` (256K), `grok-4.5` (500K) and
+    `grok-4.3` (1M), `claude-haiku` (200K) and `claude` (1M) all share a prefix with a
+    sibling that has a different window, and a first-match-in-tuple-order rule would make
+    the file's line order load-bearing for correctness.
     """
+    if override > 0:
+        return override
     lowered = (model or "").lower()
-    for needle, window in _CONTEXT_WINDOWS:
+    for needle, window in sorted(_CONTEXT_WINDOWS, key=lambda row: -len(row[0])):
         if needle in lowered:
             return window
     return _DEFAULT_CONTEXT_WINDOW

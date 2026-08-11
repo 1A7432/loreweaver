@@ -337,7 +337,13 @@ class ModuleInitializer:
                 )
                 # A response consumed provider tokens even when its JSON is
                 # malformed, so account for usage before parsing it.
-                await record_usage_stats(self.store, chat_key, result.usage, model=model)
+                await record_usage_stats(
+                    self.store,
+                    chat_key,
+                    result.usage,
+                    model=model,
+                    context_window=self.settings.llm.context_window,
+                )
                 analysis = _extract_json_object(result.content or "", self.i18n)
                 for field in _LIST_FIELDS:
                     analysis.setdefault(field, [])

@@ -298,6 +298,7 @@ async def run_turn(
                 ctx.chat_key,
                 result.usage,
                 model=services.settings.llm.chat_model,
+                context_window=services.settings.llm.context_window,
             )
 
             if ctx.platform != "companion":

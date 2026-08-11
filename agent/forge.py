@@ -144,6 +144,7 @@ async def _llm_authored(
             chat_key,
             result.usage,
             model=services.settings.llm.chat_model,
+            context_window=services.settings.llm.context_window,
         )
     content = (result.content or "").strip()
     if not content:

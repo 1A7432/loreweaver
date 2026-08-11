@@ -28,6 +28,7 @@ async def record_usage_stats(
     usage: Usage | None,
     *,
     model: str,
+    context_window: int = 0,
 ) -> None:
     """Persist one LLM call's usage in the room's rolling aggregate.
 
@@ -73,7 +74,7 @@ async def record_usage_stats(
             "completion": usage.completion_tokens,
             "cache_hit": usage.cache_hit_tokens,
             "cache_miss": usage.cache_miss_tokens,
-            "context_window": context_window_for(model),
+            "context_window": context_window_for(model, context_window),
         },
         "session": session,
     }
