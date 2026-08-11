@@ -31,7 +31,9 @@ summarizes far more gracefully than code, and a game re-sends context every
 turn):
 
 - **trigger**: assembled-prompt fullness ≥ 0.60 of the room model's window → fold
-  (measured from the per-turn `usage_stats` accounting — a reactive meter);
+  (read from the per-turn `usage_stats` accounting — a reactive meter, the
+  provider's own count where the endpoint reports one and `agent.loop`'s
+  flagged estimate of the same prompt where it does not);
 - **floor**: fold oldest-first in batches until the projection ≤ 0.40 — batch
   folding, never one-entry-per-turn churn;
 - **emergency**: ≥ 0.85 → fold before the next model call, so the

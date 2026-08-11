@@ -277,3 +277,157 @@ async def test_openaillm_omits_tools_and_tool_choice_when_not_supplied(fake_asyn
     kwargs = llm._client.create.call_args.kwargs
     assert "tools" not in kwargs
     assert "tool_choice" not in kwargs
+
+
+# ---------------------------------------------------------------------------
+# OpenAILLM — the STREAMING path and its token accounting
+#
+# A streamed turn is what a real table always runs (`agent.loop` passes an
+# `on_text_delta` on the KP's reply call), so whatever this path reports IS the
+# room's usage meter — and that meter is the chronicle fold's trigger, not a
+# status-bar ornament. It used to report nothing at all.
+# ---------------------------------------------------------------------------
+
+
+class _FakeStream:
+    """An `AsyncStream` stand-in: yields the chunks a vendor would send, in order."""
+
+    def __init__(self, chunks: list) -> None:
+        self._chunks = chunks
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
+def _delta_chunk(text: str):
+    """One ordinary streamed chunk. `usage` is absent, as it is on every chunk but
+    the last (DeepSeek documents sending it as an explicit null)."""
+    return SimpleNamespace(
+        choices=[SimpleNamespace(delta=SimpleNamespace(content=text, tool_calls=None))],
+        usage=None,
+    )
+
+
+def _usage_chunk(prompt: int, completion: int):
+    """The extra final chunk `stream_options.include_usage` buys: no choices at all,
+    and the whole request's usage."""
+    return SimpleNamespace(
+        choices=[],
+        usage=SimpleNamespace(prompt_tokens=prompt, completion_tokens=completion, total_tokens=prompt + completion),
+    )
+
+
+async def test_a_streamed_turn_asks_for_usage_and_reads_the_final_chunk(fake_async_openai):
+    """The fix, end to end at the client: ask, then read the answer.
+
+    The usage-bearing chunk is precisely the one with an EMPTY `choices` list, which
+    the delta loop skips — so parsing it has to happen before that guard, or the
+    parameter is requested and its answer discarded.
+    """
+    llm = OpenAILLM(LLMSettings(api_key="sk-test"))
+    llm._client.create.return_value = _FakeStream(
+        [_delta_chunk("The door "), _delta_chunk("creaks open."), _usage_chunk(1200, 80)]
+    )
+    seen: list[str] = []
+
+    result = await llm.chat([{"role": "user", "content": "hi"}], on_text_delta=seen.append)
+
+    assert llm._client.create.call_args.kwargs["stream_options"] == {"include_usage": True}
+    assert seen == ["The door ", "creaks open."]
+    assert result.content == "The door creaks open."
+    assert result.usage is not None
+    assert (result.usage.prompt_tokens, result.usage.completion_tokens) == (1200, 80)
+    assert result.usage.estimated is False, "a provider-reported count is measured, never estimated"
+
+
+async def test_a_vendor_that_repeats_a_cumulative_usage_reports_its_final_figure(fake_async_openai):
+    """Some endpoints put a running usage on every chunk instead of one final chunk.
+    Last non-empty parse wins, so the figure that lands is the complete one."""
+    llm = OpenAILLM(LLMSettings(api_key="sk-test"))
+    partial = SimpleNamespace(
+        choices=[SimpleNamespace(delta=SimpleNamespace(content="hi", tool_calls=None))],
+        usage=SimpleNamespace(prompt_tokens=1200, completion_tokens=5, total_tokens=1205),
+    )
+    llm._client.create.return_value = _FakeStream([partial, _usage_chunk(1200, 80)])
+
+    result = await llm.chat([{"role": "user", "content": "hi"}], on_text_delta=lambda _text: None)
+
+    assert result.usage.completion_tokens == 80
+
+
+async def test_an_endpoint_that_never_reports_usage_still_completes_the_turn(fake_async_openai):
+    """The graceful degradation. A vendor that ignores the parameter simply sends no
+    usage chunk: the reply and its tool calls are unaffected, `usage` stays None, and
+    `agent.loop` meters the turn with an estimate instead (tests/agent/test_loop.py)."""
+    llm = OpenAILLM(LLMSettings(api_key="sk-test"))
+    llm._client.create.return_value = _FakeStream([_delta_chunk("The door creaks open.")])
+
+    result = await llm.chat([{"role": "user", "content": "hi"}], on_text_delta=lambda _text: None)
+
+    assert result.content == "The door creaks open."
+    assert result.usage is None
+
+
+async def test_the_operator_can_stop_asking_for_usage(fake_async_openai):
+    """The escape hatch for an endpoint that rejects unknown request parameters, in
+    the shape `TRPG_LLM__CONTEXT_WINDOW` already uses: static operator config, because
+    which parameters an endpoint accepts is a property of the endpoint, not something
+    to rediscover at runtime on every room's turn."""
+    llm = OpenAILLM(LLMSettings(api_key="sk-test", stream_usage=False))
+    llm._client.create.return_value = _FakeStream([_delta_chunk("ok")])
+
+    result = await llm.chat([{"role": "user", "content": "hi"}], on_text_delta=lambda _text: None)
+
+    assert "stream_options" not in llm._client.create.call_args.kwargs
+    assert result.content == "ok"
+
+
+async def test_a_non_streaming_call_never_sends_stream_options(fake_async_openai):
+    llm = OpenAILLM(LLMSettings(api_key="sk-test"))
+    llm._client.create.return_value = _fake_response(content="ok")
+
+    await llm.chat([{"role": "user", "content": "hi"}])
+
+    kwargs = llm._client.create.call_args.kwargs
+    assert "stream_options" not in kwargs and "stream" not in kwargs
+
+
+async def test_streamed_tool_calls_are_still_reassembled_alongside_the_usage(fake_async_openai):
+    """Guard on the ordering change: usage parsing sits in front of the delta loop, so
+    the indexed tool-call fragments must still reassemble exactly as before."""
+    llm = OpenAILLM(LLMSettings(api_key="sk-test"))
+    first = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                delta=SimpleNamespace(
+                    content=None,
+                    tool_calls=[
+                        SimpleNamespace(
+                            index=0, id="call_1", function=SimpleNamespace(name="roll_dice", arguments='{"expr')
+                        )
+                    ],
+                )
+            )
+        ],
+        usage=None,
+    )
+    second = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                delta=SimpleNamespace(
+                    content=None,
+                    tool_calls=[
+                        SimpleNamespace(index=0, id=None, function=SimpleNamespace(name=None, arguments='ession":"1d20"}'))
+                    ],
+                )
+            )
+        ],
+        usage=None,
+    )
+    llm._client.create.return_value = _FakeStream([first, second, _usage_chunk(300, 10)])
+
+    result = await llm.chat([{"role": "user", "content": "roll"}], on_text_delta=lambda _text: None)
+
+    assert result.tool_calls == [ToolCall(id="call_1", name="roll_dice", arguments={"expression": "1d20"})]
+    assert result.usage.prompt_tokens == 300

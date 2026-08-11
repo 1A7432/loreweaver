@@ -6,11 +6,14 @@ on top of it:
 
 - `maybe_fold_chronicle` — the per-turn hook (wired into `agent.loop.run_kp_turn`
   BEFORE prompt assembly, so both the 0.60 trigger and the 0.85 emergency fold
-  land before the next model call). Measured from the room's `usage_stats`
-  meter (last turn's provider-reported prompt tokens — a reactive meter, the
-  only honest source). Batch-folds the oldest chronicle records into the
-  rolling `campaign_summary` until as many tokens as the floor needs have left
-  the prompt, bounded by a per-turn batch budget.
+  land before the next model call). Read from the room's `usage_stats` meter —
+  last turn's prompt size, a reactive measurement rather than a prediction.
+  Normally that is the provider's own count; for an endpoint that reports none
+  it is `agent.loop`'s estimate of the same prompt, flagged as such, because a
+  meter that is merely ABSENT reads as "no pressure" and would leave the fold —
+  emergency level included — permanently inert. Batch-folds the oldest chronicle
+  records into the rolling `campaign_summary` until as many tokens as the floor
+  needs have left the prompt, bounded by a per-turn batch budget.
   What a fold actually FREES is replayed HISTORY: writing
   `campaign_summary.through_turn` is what lets `agent.history.trim_folded` stop
   replaying every turn at or below it, and that is the whole of a fold's effect
@@ -121,12 +124,36 @@ _FOLD_REARM_GROWTH = 0.05
 # Where that observation is parked: a field on the summary singleton, so it is
 # room-scoped, exported, and reset alongside the records it describes — no second
 # runtime key to keep in sync. Keeper-side by construction (the player projection
-# is a field allowlist).
+# is a field allowlist). Its value is a `{tokens, estimated}` object, not a bare
+# count: the two sources are not on one scale, and a stamp that could not say which
+# one it came from would silently invite the comparison in `_rearm_check`.
 _FOLD_METER_FIELD = "fold_meter"
 _THREADS_MAX = 12
 _RECALL_LIMIT = 4
 _RECALL_MAX_CHARS = 6000
 _RECAP_TAIL_MAX = 8
+
+
+@dataclass(frozen=True)
+class _Meter:
+    """One reading of the room's context-fullness meter, WITH its provenance.
+
+    `tokens` is the last completed turn's assembled-prompt size and `window` the
+    room model's context window, exactly as `infra.usage_stats` persisted them.
+    `estimated` says nobody measured it: the endpoint reported no usage for a
+    streamed turn, so `agent.loop` sized the prompt itself.
+
+    The flag travels with the number because the two sources do not share a scale
+    — a provider's tokenizer counts framing, tool schemas and its own preamble
+    that `estimate_tokens` can only approximate — so a difference between a
+    measured and an estimated reading describes the SOURCE, not the room. Only
+    `_rearm_check` compares two readings, and it is where that distinction is
+    enforced.
+    """
+
+    tokens: int = 0
+    window: int = 0
+    estimated: bool = False
 
 
 @dataclass
@@ -281,7 +308,8 @@ async def maybe_fold_chronicle(
 async def _fold_flow(ctx: AgentCtx, services: Services, *, force: bool, history_key: str) -> FoldOutcome:
     settings = services.settings.chronicle
     chat_key = ctx.chat_key
-    measured, window = await _read_meter(services, chat_key)
+    meter = await _read_meter(services, chat_key)
+    measured, window = meter.tokens, meter.window
     before = measured / window if window > 0 else 0.0
     if force:
         level = "manual"
@@ -292,7 +320,7 @@ async def _fold_flow(ctx: AgentCtx, services: Services, *, force: bool, history_
         # Runs on EVERY routine turn, including below the trigger: that is where a
         # fold's effect becomes observable, and where a stamp that has done its job
         # is retired (see `_rearm_check`).
-        armed = await _rearm_check(services, chat_key, measured, window)
+        armed = await _rearm_check(services, chat_key, meter)
         if level == "none" or not armed:
             return FoldOutcome(before=before, after=before)
 
@@ -365,7 +393,7 @@ async def _fold_flow(ctx: AgentCtx, services: Services, *, force: bool, history_
     if not force and attempted:
         # Stamp what the meter read when we acted, successful batch or not: the next
         # turn compares against it instead of trusting this turn's prediction.
-        await _stamp_fold_meter(services, chat_key, measured)
+        await _stamp_fold_meter(services, chat_key, meter)
     if outcome.folded_ids:
         outcome.through_turn = max(_entry_turn(docs_by_id[doc_id]) for doc_id in outcome.folded_ids)
     if window > 0:
@@ -460,44 +488,60 @@ def _bound_summary(text: str, max_chars: int) -> str:
     return text[:cut].rstrip() + "…"
 
 
-async def _read_meter(services: Services, chat_key: str) -> tuple[int, int]:
-    """(last assembled-prompt tokens, room model's context window), as persisted
-    by `infra.usage_stats` after the previous completed turn."""
+async def _read_meter(services: Services, chat_key: str) -> _Meter:
+    """The room's context-fullness reading, as persisted by `infra.usage_stats`
+    after the previous completed turn (see `_Meter` for the provenance flag)."""
     try:
         raw = await services.store.state_get(chat_key, "usage_stats")
         payload = json.loads(raw) if raw else {}
         last = payload.get("last") if isinstance(payload, dict) else None
         if not isinstance(last, dict):
-            return (0, 0)
-        return (int(last.get("prompt", 0) or 0), int(last.get("context_window", 0) or 0))
+            return _Meter()
+        return _Meter(
+            tokens=int(last.get("prompt", 0) or 0),
+            window=int(last.get("context_window", 0) or 0),
+            estimated=bool(last.get("estimated", False)),
+        )
     except Exception:  # noqa: BLE001 — a corrupt meter reads as "no pressure"
-        return (0, 0)
+        return _Meter()
 
 
-async def _last_fold_meter(services: Services, chat_key: str) -> int | None:
+async def _last_fold_meter(services: Services, chat_key: str) -> _Meter | None:
     """The meter reading the previous fold acted on, or `None` if none ever did.
 
     The fold's own arithmetic can only ever PREDICT a saving: it sizes the records
     it consumes, while the meter sizes the whole assembled prompt. The prompt is the
     authority on whether that prediction came true, and this is where the comparison
-    starts from.
+    starts from. `window` is not stamped — only the growth margin needs one, and that
+    comes from the CURRENT reading.
     """
     try:
         summary = await services.documents.get(chat_key, CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID)
         if summary is None:
             return None
         raw = summary.data.get(_FOLD_METER_FIELD)
-        return int(raw) if isinstance(raw, int) and not isinstance(raw, bool) else None
+        if not isinstance(raw, dict):
+            return None
+        tokens = raw.get("tokens")
+        if not isinstance(tokens, int) or isinstance(tokens, bool):
+            return None
+        return _Meter(tokens=tokens, estimated=bool(raw.get("estimated", False)))
     except Exception:  # noqa: BLE001 — an unreadable stamp simply means "armed"
         return None
 
 
-async def _rearm_check(services: Services, chat_key: str, measured: int, window: int) -> bool:
+async def _rearm_check(services: Services, chat_key: str, meter: _Meter) -> bool:
     """Is a ROUTINE fold armed, judged by what the LAST one actually achieved?
 
-    Three states, and the middle one is the whole point:
+    Four states, and the middle two are the whole point:
 
     - no stamp — nothing to prove: armed.
+    - the stamp came from the OTHER source (measured vs estimated) — the two do not
+      share a scale, so the difference between them says nothing about the room. A
+      stamp that cannot be compared is retired rather than believed: the alternative
+      is a room that switched providers (or lost its usage reporting) sitting
+      disarmed forever on the strength of an arithmetic that never applied to it.
+      Arming costs at most one fold call per switch; disarming costs the fold.
     - the meter came DOWN since the fold that stamped it — the prediction held, so
       the stamp is retired and the plain trigger governs again. (Without this the
       guard would ratchet: every fold would raise the bar for the next one by the
@@ -509,28 +553,33 @@ async def _rearm_check(services: Services, chat_key: str, measured: int, window:
     last = await _last_fold_meter(services, chat_key)
     if last is None:
         return True
-    if measured < last:
+    if last.estimated != meter.estimated:
         await _clear_fold_meter(services, chat_key)
         return True
-    return measured >= last + _FOLD_REARM_GROWTH * window
+    if meter.tokens < last.tokens:
+        await _clear_fold_meter(services, chat_key)
+        return True
+    return meter.tokens >= last.tokens + _FOLD_REARM_GROWTH * meter.window
 
 
 async def _clear_fold_meter(services: Services, chat_key: str) -> None:
-    """Retire the stamp (its fold demonstrably worked)."""
+    """Retire the stamp (its fold demonstrably worked, or it is not comparable)."""
     await _write_summary_fields(services, chat_key, drop=_FOLD_METER_FIELD)
 
 
-async def _stamp_fold_meter(services: Services, chat_key: str, measured: int) -> None:
+async def _stamp_fold_meter(services: Services, chat_key: str, meter: _Meter) -> None:
     """Record the meter this fold acted on, on the summary singleton it just wrote.
 
     Only ever UPDATES an existing summary: a fold that produced no summary (the
     no-future refusal) must not conjure one, and an empty chronicle must stay empty.
     """
-    await _write_summary_fields(services, chat_key, set_meter=int(measured))
+    await _write_summary_fields(
+        services, chat_key, set_meter={"tokens": int(meter.tokens), "estimated": bool(meter.estimated)}
+    )
 
 
 async def _write_summary_fields(
-    services: Services, chat_key: str, *, set_meter: int | None = None, drop: str = ""
+    services: Services, chat_key: str, *, set_meter: dict[str, Any] | None = None, drop: str = ""
 ) -> None:
     """Patch the summary singleton's bookkeeping fields, if it exists at all."""
     try:

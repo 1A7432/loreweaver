@@ -8,7 +8,7 @@ from inspect import Parameter, signature
 from typing import TYPE_CHECKING, Any
 
 from infra.config import LLMSettings, Settings
-from infra.llm import CACHE_BREAKPOINT_KEY, ChatResult, LLMClient, OpenAILLM, ToolCall, parse_usage
+from infra.llm import CACHE_BREAKPOINT_KEY, ChatResult, LLMClient, OpenAILLM, ToolCall, Usage, parse_usage
 from infra.llm_retry import RetryingLLM
 from infra.oauth_flows import (
     XAI_API_BASE,
@@ -573,15 +573,26 @@ class GeminiLLM:
         # Streaming: every chunk is itself a GenerateContentResponse, so the normal
         # parser walks each one — text parts become live deltas, function calls and
         # usage accumulate into the same ChatResult contract.
+        #
+        # Usage is kept from the LAST chunk that actually carried a `usage_metadata`,
+        # not from the last chunk full stop. Gemini needs no OpenAI-style opt-in — it
+        # reports usage on the stream by itself — but nothing in the SDK promises the
+        # terminal chunk is the one carrying it, and reading only that chunk would throw
+        # away a figure already received. The room's meter is the chronicle fold's
+        # trigger, so losing it disables the fold rather than dimming a status bar.
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
         last_chunk: Any = None
+        usage: Usage | None = None
         async for chunk in await self._client.aio.models.generate_content_stream(
             model=model or self._settings.chat_model,
             contents=contents,
             config=config,
         ):
             last_chunk = chunk
+            chunk_usage = parse_usage(chunk)
+            if chunk_usage is not None:
+                usage = chunk_usage
             partial = from_gemini_response(chunk)
             if partial.content:
                 text_parts.append(partial.content)
@@ -591,7 +602,7 @@ class GeminiLLM:
             content="".join(text_parts) or None,
             tool_calls=tool_calls,
             raw=last_chunk,
-            usage=parse_usage(last_chunk) if last_chunk is not None else None,
+            usage=usage,
         )
 
 

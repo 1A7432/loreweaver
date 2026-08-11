@@ -245,6 +245,10 @@ async def test_chatgpt_llm_creates_responses_and_parses():
     result = await llm.chat([{"role": "user", "content": "hi"}])
 
     assert result.content == "Hello"
+    # This backend is streaming-ONLY, and its `response.completed` event carries the
+    # usage — so the room's meter (the chronicle fold's trigger) is fed here without
+    # any OpenAI-chat-style opt-in parameter.
+    assert result.usage is not None and result.usage.prompt_tokens == 1
     kwargs = client.calls[0]
     assert client.api_keys == ["access-token"]  # bearer lands on the SDK client per call
     assert kwargs["stream"] is True

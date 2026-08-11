@@ -266,6 +266,7 @@ async def test_initialize_records_analysis_usage_for_room():
         "cache_hit": 20,
         "cache_miss": 100,
         "context_window": context_window_for("gemini-2.5-pro"),
+        "estimated": False,  # module analysis is a non-streaming call; the provider counted it
     }
     assert stats["session"] == {
         "prompt": 120,

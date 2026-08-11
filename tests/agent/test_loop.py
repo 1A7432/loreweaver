@@ -694,15 +694,57 @@ async def test_usage_accumulates_completion_sums_and_prompt_last_wins_across_rou
     assert result.usage.cache_miss_tokens == 40  # last-wins
 
 
-async def test_usage_stays_all_zero_when_the_llm_reports_no_usage():
-    # FakeLLM's default ChatResult carries usage=None -- the ordinary path every
-    # other test in this file (and every test in the whole suite) exercises.
+async def test_a_turn_the_provider_never_metered_falls_back_to_an_estimate():
+    """No provider usage is not "no usage" — it is an unmeasured turn.
+
+    FakeLLM's default `ChatResult` carries `usage=None`, the same thing a streamed
+    turn gets from an endpoint that ignores `stream_options`. Reporting all-zero
+    there is what disabled the chronicle fold on every streaming provider: a zero
+    meter is indistinguishable from an empty room, and the fold's very first check
+    is a zero window. So the loop sizes the prompt it just sent — and says so.
+    """
     llm = FakeLLM(script=[assistant_text("Ready.")])
     services = _services(llm)
 
     result = await run_kp_turn(_ctx("chat-usage-2"), services, _toolset(), "hi")
 
-    assert result.usage == Usage()
+    assert result.usage.estimated is True
+    assert result.usage.prompt_tokens > 0
+    assert result.usage.total_tokens == result.usage.prompt_tokens
+    # Nothing is invented about the half the loop cannot see.
+    assert result.usage.completion_tokens == 0
+    assert (result.usage.cache_hit_tokens, result.usage.cache_miss_tokens) == (0, 0)
+
+
+async def test_a_measured_turn_is_never_relabelled_as_an_estimate():
+    llm = FakeLLM(
+        script=[
+            ChatResult(
+                content="Ready.",
+                tool_calls=[],
+                usage=Usage(prompt_tokens=140, completion_tokens=10, total_tokens=150),
+            )
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx("chat-usage-measured"), services, _toolset(), "hi")
+
+    assert result.usage.estimated is False
+    assert result.usage.prompt_tokens == 140
+
+
+async def test_the_estimate_prices_the_tool_catalog_as_well_as_the_messages():
+    """The schemas are a large fixed share of every KP prompt, and the provider counts
+    them. An estimate that only weighed the conversation would under-report the room's
+    fullness by that whole block, and under-reporting is what makes a fold run late."""
+    llm = FakeLLM(script=[assistant_text("Ready."), assistant_text("Ready.")])
+    services = _services(llm)
+
+    with_tools = await run_kp_turn(_ctx("chat-usage-tools"), services, _toolset(), "hi")
+    without_tools = await run_kp_turn(_ctx("chat-usage-no-tools"), services, Toolset(), "hi")
+
+    assert with_tools.usage.prompt_tokens > without_tools.usage.prompt_tokens
 
 
 async def test_usage_merges_main_rounds_and_max_rounds_finalizer():

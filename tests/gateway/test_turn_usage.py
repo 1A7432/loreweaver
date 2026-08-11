@@ -69,7 +69,14 @@ async def test_run_turn_records_usage_stats_after_a_real_kp_turn():
     assert raw is not None
     stats = json.loads(raw)
     # Window is computed from the pinned model (see `_WINDOW`) so it can't drift from the fixture.
-    assert stats["last"] == {"prompt": 120, "completion": 30, "cache_hit": 50, "cache_miss": 70, "context_window": _WINDOW}
+    assert stats["last"] == {
+        "prompt": 120,
+        "completion": 30,
+        "cache_hit": 50,
+        "cache_miss": 70,
+        "context_window": _WINDOW,
+        "estimated": False,  # the provider reported these — a MEASURED reading
+    }
     assert stats["session"] == {"prompt": 120, "completion": 30, "cache_hit": 50, "cache_miss": 70, "turns": 1}
 
 
@@ -93,14 +100,52 @@ async def test_run_turn_accumulates_session_usage_across_multiple_turns():
     assert stats["last"]["prompt"] == 100
 
 
-async def test_run_turn_never_writes_usage_stats_for_a_zero_usage_turn():
+async def test_a_turn_the_provider_never_metered_still_records_an_estimate():
+    """The regression this file used to enshrine the other way around.
+
+    A streamed turn on an endpoint that reports no usage produced NO row at all,
+    and an absent row is what `agent.chronicle` reads as `(0, 0)` — a zero window,
+    which short-circuits the fold before any level, emergency included. So a
+    turn nobody metered must still leave an honest number behind, and must say
+    plainly that nobody metered it.
+    """
     def responder(messages, tools):
-        return ChatResult(content="ok", tool_calls=[])  # default usage=None -> KPTurnResult.usage stays all-zero
+        return ChatResult(content="ok", tool_calls=[])  # usage=None: the provider reported nothing
 
     services = _services(responder)
-    ctx = _ctx("usage-turn-room-zero")
+    ctx = _ctx("usage-turn-room-unmetered")
     hub = RoomHub()
 
     await run_turn(hub, services, ctx, "hi", command_router=_NullRouter(), toolset=build_kp_toolset(services))
 
-    assert await services.store.state_get(ctx.chat_key, "usage_stats") is None
+    stats = json.loads(await services.store.state_get(ctx.chat_key, "usage_stats"))
+    assert stats["last"]["prompt"] > 0, "an estimated meter, not an absent one"
+    assert stats["last"]["estimated"] is True
+    assert stats["last"]["context_window"] == _WINDOW
+    # The cumulative counters are what an operator checks against a vendor's bill:
+    # they stay MEASURED-only, so an estimated turn moves none of them.
+    assert stats["session"] == {"prompt": 0, "completion": 0, "cache_hit": 0, "cache_miss": 0, "turns": 0}
+
+
+async def test_an_estimated_turn_never_disturbs_the_measured_session_totals():
+    """Mixed sources in one room: the meter follows the latest turn, the bill does not."""
+    metered = {"on": True}
+
+    def responder(messages, tools):
+        if metered["on"]:
+            return ChatResult(
+                content="ok", tool_calls=[], usage=Usage(prompt_tokens=900, completion_tokens=40, total_tokens=940)
+            )
+        return ChatResult(content="ok", tool_calls=[])
+
+    services = _services(responder)
+    ctx = _ctx("usage-turn-room-mixed")
+    hub = RoomHub()
+
+    await run_turn(hub, services, ctx, "one", command_router=_NullRouter(), toolset=build_kp_toolset(services))
+    metered["on"] = False
+    await run_turn(hub, services, ctx, "two", command_router=_NullRouter(), toolset=build_kp_toolset(services))
+
+    stats = json.loads(await services.store.state_get(ctx.chat_key, "usage_stats"))
+    assert stats["last"]["estimated"] is True
+    assert stats["session"] == {"prompt": 900, "completion": 40, "cache_hit": 0, "cache_miss": 0, "turns": 1}

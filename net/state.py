@@ -390,6 +390,19 @@ async def _usage(services: Services, chat_key: str) -> dict[str, Any] | None:
     writes it), translated to the wire's snake_case shape -- `None` when unset (a
     brand-new room, or one that has never completed a real AI-KP turn), so
     `build_room_state` leaves `state.usage` out entirely rather than sending zeros.
+
+    The stored `last` block also records whether its `prompt` figure was MEASURED by
+    the provider or ESTIMATED by `agent.loop` (an endpoint that reports no usage on a
+    streamed turn). That flag deliberately does NOT cross the wire: describing it
+    would be an additive protocol field, and the version bump that entitles one is a
+    heavier, owner-facing change than the meter warrants. Nothing is lost by keeping
+    it server-side — the only consumer that ACTS on the number is the chronicle fold,
+    which reads the stored payload directly. What the HUD renders is a fullness
+    percentage, and it was already an approximation in both sources: the meter is the
+    previous turn's prompt, and the denominator is a table lookup. Before this, a
+    streaming room had NO usage block at all; an approximate meter is what it gains.
+    The `session` totals stay measured-only, so a room whose provider never reports
+    honestly shows a context figure with zero cumulative tokens beside it.
     """
     try:
         raw = await services.store.state_get(chat_key, "usage_stats")

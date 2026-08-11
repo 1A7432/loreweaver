@@ -31,6 +31,18 @@ class LLMSettings(BaseModel):
     # runtime override: auto-detection already follows a model switch, and the override
     # path stores every value as a string with `""` meaning "clear", which an int cannot use.
     context_window: int = 0
+    # Ask an OpenAI-compatible endpoint to report token usage on STREAMING calls
+    # (`stream_options={"include_usage": true}` — the vendor then emits one extra,
+    # choices-less final chunk carrying the whole request's usage). ON by default
+    # because the parameter is part of the OpenAI Chat Completions API and the
+    # providers this project runs on document it verbatim (DeepSeek, Moonshot);
+    # without it a streaming room reports NO usage at all, which leaves the
+    # chronicle fold — whose trigger IS that meter — permanently disabled.
+    # Turn it off (`TRPG_LLM__STREAM_USAGE=false`) for an endpoint that rejects
+    # unknown request parameters; the room then falls back to an ESTIMATED meter.
+    # Same posture as `context_window`: env-only, no runtime override — it
+    # describes the endpoint, not a per-room preference.
+    stream_usage: bool = True
     # Left unset by default: don't hand-tune temperature — send nothing and let the provider
     # use its own default (DeepSeek = 1.0, which is also what it recommends for thinking mode;
     # a low temperature can collapse a reasoning model's trace). Callers may still pass one.

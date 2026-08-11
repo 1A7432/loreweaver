@@ -47,6 +47,7 @@ from agent.turn_checks import (
     turn_checks_for,
 )
 from agent.undo import capture as capture_snapshot
+from core.chronicle import estimate_tokens
 from core.hooks import MAX_PANEL_EVENTS_PER_TURN
 from core.mvu_compat import mvu_apply_text
 from core.rulepacks import RulePack
@@ -343,6 +344,10 @@ async def run_kp_turn(
     # not part of what a context% meter should describe as "this turn's usage".
     turn_usage = Usage()
     gate = _ReplyStreamGate(on_reply_delta) if on_reply_delta is not None else None
+    # Built once: `unlocked` and `phase` are fixed for the turn, so every round sends
+    # the same catalog — and the meter's estimate fallback below has to size the same
+    # bytes the rounds actually sent.
+    round_tools = [*toolset.schemas(unlocked, phase=phase), *subsystem_tools]
 
     for round_index in range(1, max_rounds + 1):
         rounds = round_index
@@ -352,7 +357,7 @@ async def run_kp_turn(
             result = await _chat_with_continuation_cleanup(
                 services,
                 messages,
-                tools=[*toolset.schemas(unlocked, phase=phase), *subsystem_tools],
+                tools=round_tools,
                 tool_choice="auto",
                 temperature=services.settings.llm.temperature,
                 on_text_delta=gate.feed if gate is not None else None,
@@ -485,6 +490,7 @@ async def run_kp_turn(
     # non-append-only half is photographed. AFTER the counter advances, so the snapshot
     # named `turn_index` is the state as of the END of that turn. Best-effort.
     await capture_snapshot(services, ctx.chat_key, turn_index)
+    _fill_estimated_prompt_tokens(turn_usage, messages, round_tools)
 
     return KPTurnResult(
         reply=reply,
@@ -495,6 +501,39 @@ async def run_kp_turn(
         ui_frames=hook_ui_frames,
         panel_events=_capped_panel_events(hook_panel_events, ctx.chat_key),
     )
+
+
+def _fill_estimated_prompt_tokens(turn_usage: Usage, messages: list[dict], tools: list[dict]) -> None:
+    """Size this turn's prompt ourselves when the provider reported nothing, in place.
+
+    Some endpoints simply never report usage on a streamed call — they ignore
+    `stream_options`, or the operator turned it off. The tempting answer is to leave
+    the meter empty, and that is exactly what made this a bug: an absent meter reads
+    as `(0, 0)` to `agent.chronicle._read_meter`, a zero window short-circuits the
+    fold, and the room's history never trims — including at the 0.85 emergency level.
+    "No number" is the one answer the fold cannot act on, so a rough number beats it.
+
+    Sized in `core.chronicle.estimate_tokens`, which is CJK-aware and is the unit the
+    fold's own cost model already speaks, over BOTH halves of what was actually sent:
+    the final round's messages (the same last-wins semantics `_accumulate_usage` gives
+    a measured reading) and the JSON tool catalog, which is a large fixed share of
+    every KP prompt and would otherwise be invisible. It is still only a rough count,
+    and rough in both directions — it sees no per-message framing or vendor preamble,
+    while a heuristic tuned to be safe on CJK can outrun a vendor's own tokenizer. So
+    it is never quietly passed off as a measurement: `Usage.estimated` rides with it
+    into the store, and the fold refuses to compare it against a measured reading.
+
+    A no-op the moment any round reported a real prompt count, so a provider that
+    reports usage never sees this path at all.
+    """
+    if turn_usage.prompt_tokens > 0:
+        return
+    total = sum(estimate_tokens(str(message.get("content") or "")) for message in messages)
+    if tools:
+        total += estimate_tokens(json.dumps(tools, ensure_ascii=False))
+    turn_usage.prompt_tokens = total
+    turn_usage.total_tokens = total + turn_usage.completion_tokens
+    turn_usage.estimated = True
 
 
 def _accumulate_usage(turn_usage: Usage, result: ChatResult) -> None:

@@ -7,9 +7,12 @@ net.state.build_room_state). Every raw shape is stubbed with
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
-from infra.llm import context_window_for, parse_usage
+from infra.llm import Usage, context_window_for, parse_usage
+from infra.store import Store
+from infra.usage_stats import record_usage_stats
 
 # ---------------------------------------------------------------------------
 # parse_usage -- no usage-like object present
@@ -310,3 +313,34 @@ def test_the_operator_override_outranks_the_table():
     assert context_window_for("deepseek-v4-pro", 250_000) == 250_000
     assert context_window_for("some-custom-local-model", 2_000_000) == 2_000_000
     assert context_window_for("deepseek-v4-pro", 0) == 1_000_000, "0 means auto-detect"
+
+
+# ---------------------------------------------------------------------------
+# record_usage_stats -- measured vs estimated
+# ---------------------------------------------------------------------------
+
+
+async def test_no_usage_object_at_all_still_writes_nothing():
+    """"Nothing to record" and "nobody measured it" are different states.
+
+    A caller with no usage object made no measurable call (or could not parse one);
+    only a caller that HAS a number — measured or estimated — has something to say.
+    """
+    store = Store()
+
+    await record_usage_stats(store, "room", None, model="deepseek-chat")
+    await record_usage_stats(store, "room", Usage(), model="deepseek-chat")
+
+    assert await store.state_get("room", "usage_stats") is None
+
+
+async def test_an_estimated_reading_is_stored_labelled_and_kept_out_of_the_totals():
+    store = Store()
+
+    await record_usage_stats(
+        store, "room", Usage(prompt_tokens=4_000, total_tokens=4_000, estimated=True), model="deepseek-chat"
+    )
+
+    stats = json.loads(await store.state_get("room", "usage_stats"))
+    assert stats["last"]["prompt"] == 4_000 and stats["last"]["estimated"] is True
+    assert stats["session"]["turns"] == 0 and stats["session"]["prompt"] == 0

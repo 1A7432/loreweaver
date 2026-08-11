@@ -40,7 +40,7 @@ from agent.services import build_services
 from agent.tools import Toolset, tool
 from core.chronicle import estimate_tokens
 from core.documents import KEEPER_VIEWER, PLAYER_VIEWER, project
-from infra.config import Settings
+from infra.config import LLMSettings, Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM, assistant_text, assistant_tools, tool_call
 
@@ -77,10 +77,22 @@ def _ctx(chat_key: str = CHAT, locale: str = "en") -> AgentCtx:
     return AgentCtx(chat_key=chat_key, user_id="kp", locale=locale)
 
 
-async def _set_meter(services, chat_key: str, prompt_tokens: int, window: int = WINDOW) -> None:
-    """Write the per-turn usage meter exactly as `infra.usage_stats` persists it."""
+async def _set_meter(
+    services, chat_key: str, prompt_tokens: int, window: int = WINDOW, *, estimated: bool = False
+) -> None:
+    """Write the per-turn usage meter exactly as `infra.usage_stats` persists it.
+
+    `estimated` is the provenance flag: false = the provider counted these tokens,
+    true = no usage came back and `agent.loop` sized the prompt itself."""
     payload = {
-        "last": {"prompt": prompt_tokens, "completion": 0, "cache_hit": 0, "cache_miss": 0, "context_window": window},
+        "last": {
+            "prompt": prompt_tokens,
+            "completion": 0,
+            "cache_hit": 0,
+            "cache_miss": 0,
+            "context_window": window,
+            "estimated": estimated,
+        },
         "session": {"prompt": prompt_tokens, "completion": 0, "cache_hit": 0, "cache_miss": 0, "turns": 1},
     }
     await services.store.state_set(chat_key, "usage_stats", json.dumps(payload))
@@ -364,6 +376,114 @@ async def test_emergency_level_folds_before_the_model_call():
     summary = await services.documents.get(ctx.chat_key, CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID)
     assert summary is not None, "an over-ceiling meter folds before the next model call"
     assert "the bell tolls no more" in captured["prompt"], "the KP call of THIS turn already sees the new summary"
+
+
+# ---------------------------------------------------------------------------
+# Where the meter comes from: a streamed room must be able to reach the fold
+# ---------------------------------------------------------------------------
+
+
+async def test_a_streamed_room_that_never_gets_provider_usage_still_folds():
+    """THE regression. Every real turn streams, and a streamed turn used to report no
+    usage at all: `usage_stats` was never written, so `_read_meter` answered `(0, 0)`,
+    the zero window returned before any level was even computed, and the fold — 0.85
+    emergency included — was inert on every streaming provider. Confirmed live: 39
+    turns on a streaming endpoint produced 38 chronicle records and zero meter rows.
+
+    Driven through `gateway.turn.run_turn` because the two halves meet there: the turn
+    writes the meter, the NEXT turn's fold reads it. The room's model reports nothing
+    (FakeLLM never sets usage), so the meter it leaves behind is the estimate.
+    """
+    from gateway.hub import RoomHub
+    from gateway.turn import run_turn
+
+    class _NullRouter:
+        def resolve(self, text: str, locale: str):
+            return None
+
+        async def dispatch_reply(self, ctx: AgentCtx, text: str):
+            return None
+
+    folds = {"n": 0}
+
+    def responder(messages, tools):
+        if _is_fold_call(messages, tools):
+            folds["n"] += 1
+            return assistant_text("Previously: the archive drowned by degrees.")
+        return assistant_text("The road winds on.")
+
+    # A deliberately tiny window, so any real prompt is over the 0.85 emergency level.
+    services = build_services(
+        Settings(locale="en", llm=LLMSettings(chat_model="deepseek-chat", context_window=500)),
+        llm=FakeLLM(responder=responder),
+        embeddings=FakeEmbeddings(64),
+    )
+    services.settings.chronicle.enabled = True
+    ctx = AgentCtx(chat_key="chrono-streaming", user_id="p1", platform="tui", locale="en")
+    hub = RoomHub()
+    await _set_turn(services, ctx.chat_key, 20)
+    await _seed_entries(services, ctx.chat_key, list(range(1, 11)))
+    await _seed_history(services, ctx.chat_key, list(range(1, 11)))
+
+    # Turn 1 — no meter exists yet, so nothing folds; the turn leaves one behind.
+    await run_turn(hub, services, ctx, "we press on", command_router=_NullRouter(), toolset=_toolset())
+    assert folds["n"] == 0, "a room with no meter yet folds nothing (there is no pressure to read)"
+
+    meter = json.loads(await services.store.state_get(ctx.chat_key, "usage_stats"))["last"]
+    assert meter["estimated"] is True, "nobody measured this turn — the row must say so"
+    assert meter["prompt"] / meter["context_window"] >= 0.85, "the room really is over the emergency level"
+
+    # Turn 2 — the meter is now readable, so the emergency valve opens.
+    await run_turn(hub, services, ctx, "and on", command_router=_NullRouter(), toolset=_toolset())
+
+    assert folds["n"] > 0, "the fold must be reachable on a streaming provider"
+    summary = await services.documents.get(ctx.chat_key, CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID)
+    assert summary is not None and "drowned by degrees" in summary.data["text"]
+    assert await summary_through_turn(services, ctx.chat_key) > 0, "and history is trimmed from here on"
+
+
+async def test_a_stamp_from_the_other_meter_source_is_retired_rather_than_believed():
+    """The re-arm guard compares this turn's meter with the reading the last fold acted
+    on. That subtraction is only meaningful within ONE source: a provider's tokenizer
+    counts framing and tool schemas an estimate can only approximate, so a room that
+    switches sources sees a step in the number that says nothing about the room.
+
+    Believing it would go wrong in both directions — a jump up buys a fold nothing grew
+    to need, a drop retires a stamp that was still doing its job. Refusing the
+    comparison costs at most one fold call per switch; the alternative is a room stuck
+    disarmed on arithmetic that never applied to it.
+    """
+    folds = {"n": 0}
+
+    def responder(messages, tools):
+        assert _is_fold_call(messages, tools), "the only LLM call here is the fold"
+        folds["n"] += 1
+        return assistant_text("Previously: the archive district drowned by degrees.")
+
+    services = _services(FakeLLM(responder=responder))
+    chat_key = "chrono-meter-source"
+    await _set_turn(services, chat_key, 60)
+    await _seed_entries(services, chat_key, list(range(10, 34)))
+    await _seed_history(services, chat_key, list(range(10, 34)), tokens_per_message=5)
+    await _set_meter(services, chat_key, 1900, window=2000)  # MEASURED
+
+    assert (await maybe_fold_chronicle(_ctx(chat_key), services)).ran
+    stamped = (await services.documents.get(chat_key, CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID)).data
+    assert stamped["fold_meter"] == {"tokens": 1900, "estimated": False}
+    spent = folds["n"]
+
+    # The endpoint stops reporting usage. Same room, same pressure, same NUMBER — only
+    # the source changed. Same-source, this identical reading would (correctly) stay
+    # disarmed; see `test_pressure_elsewhere_drains_the_backlog_once_and_then_stops`.
+    await _seed_entries(services, chat_key, list(range(34, 44)))
+    await _seed_history(services, chat_key, list(range(34, 44)), tokens_per_message=5)
+    await _set_meter(services, chat_key, 1900, window=2000, estimated=True)
+
+    again = await maybe_fold_chronicle(_ctx(chat_key), services)
+
+    assert again.ran and folds["n"] > spent, "an incomparable stamp must not disarm the fold"
+    restamped = (await services.documents.get(chat_key, CAMPAIGN_SUMMARY_DOC_TYPE, CAMPAIGN_SUMMARY_ID)).data
+    assert restamped["fold_meter"] == {"tokens": 1900, "estimated": True}, "the stamp follows the new source"
 
 
 # ---------------------------------------------------------------------------

@@ -69,6 +69,14 @@ class Usage:
     All fields default to `0` so an unpopulated `Usage()` (e.g. every existing
     `FakeLLM` script/responder result, which never sets `ChatResult.usage`) reads
     as "no real usage" rather than `None`-checks scattered everywhere.
+
+    `estimated` marks a reading nobody measured: `parse_usage` NEVER sets it (a
+    provider-reported number is measured by definition), and the agent loop sets
+    it when it had to size the assembled prompt itself because the endpoint
+    reported nothing. It rides with the numbers rather than beside them so no
+    consumer can read the tokens without also being able to see where they came
+    from — `infra.usage_stats` persists the flag, and the chronicle fold's re-arm
+    check refuses to compare a measured reading against an estimated one.
     """
 
     prompt_tokens: int = 0
@@ -76,6 +84,7 @@ class Usage:
     total_tokens: int = 0
     cache_hit_tokens: int = 0
     cache_miss_tokens: int = 0
+    estimated: bool = False
 
 
 @dataclass
@@ -181,14 +190,34 @@ class OpenAILLM:
             return ChatResult(content=message.content, tool_calls=tool_calls, raw=response, usage=parse_usage(response))
 
         # Streaming path: text deltas reach the caller as they generate; tool calls are
-        # reassembled from their indexed argument fragments. Token usage is best-effort
-        # absent here (`stream_options` support varies across OpenAI-compatible vendors,
-        # and a zero-usage turn is already tolerated everywhere).
+        # reassembled from their indexed argument fragments.
+        #
+        # `stream_options={"include_usage": True}` is what makes a streamed turn report
+        # its tokens at all: the vendor then sends ONE extra final chunk whose `choices`
+        # is empty and whose `usage` covers the whole request. It is part of the OpenAI
+        # Chat Completions API and documented verbatim by the providers this project runs
+        # on (DeepSeek, Moonshot), so it is sent unconditionally rather than probed for.
+        # It is not optional garnish: the room's usage meter is the chronicle fold's
+        # trigger, so a streaming room that reports nothing never trims its history and
+        # eventually walks into the provider's real context ceiling. An endpoint that
+        # rejects unknown parameters is the operator's `TRPG_LLM__STREAM_USAGE=false`,
+        # after which `agent.loop` meters the turn with an ESTIMATE instead.
         kwargs["stream"] = True
+        if self._settings.stream_usage:
+            kwargs["stream_options"] = {"include_usage": True}
         content_parts: list[str] = []
         slots: dict[int, dict[str, str]] = {}
+        usage: Usage | None = None
         stream = await self._client.chat.completions.create(**kwargs)
         async for chunk in stream:
+            # Before the choices guard, never after: the usage-bearing chunk is exactly
+            # the one with no choices. Last non-empty parse wins — a vendor that repeats
+            # a cumulative usage on every chunk then reports its final figure, and one
+            # that sends `usage: null` on the others (DeepSeek's documented shape) is
+            # unaffected because `parse_usage` reads those as "nothing here".
+            chunk_usage = parse_usage(chunk)
+            if chunk_usage is not None:
+                usage = chunk_usage
             if not getattr(chunk, "choices", None):
                 continue
             delta = chunk.choices[0].delta
@@ -209,7 +238,7 @@ class OpenAILLM:
             ToolCall(id=slot["id"], name=slot["name"], arguments=_parse_tool_arguments(slot["arguments"]))
             for _, slot in sorted(slots.items())
         ]
-        return ChatResult(content="".join(content_parts) or None, tool_calls=tool_calls, raw=None, usage=None)
+        return ChatResult(content="".join(content_parts) or None, tool_calls=tool_calls, raw=None, usage=usage)
 
 
 def _parse_tool_arguments(raw: str | None) -> dict:
