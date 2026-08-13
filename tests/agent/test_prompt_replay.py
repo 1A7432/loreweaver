@@ -13,8 +13,10 @@ a hook injection (a segment handed over on `ctx.extra` and nowhere else).
 
 from __future__ import annotations
 
+import json
+
 from agent.context import AgentCtx
-from agent.hook_runtime import record_hook_injections, replay_hook_injections
+from agent.hook_runtime import INJECTION_RING_KEY, record_hook_injections
 from agent.prompt_builder import build_system_prompt_parts, turn_rng
 from agent.services import build_services
 from core.worldbook import LoreEntry
@@ -31,6 +33,20 @@ def _services(store: Store):
     return build_services(
         Settings(locale="en"), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(8), store=store
     )
+
+
+async def _ring_texts(services, turn: int) -> list[str]:
+    """Read the side record the way a forensic tool would — the row IS the contract.
+
+    `record_hook_injections` is write-only by design (nothing in the engine reads it
+    back), so the reading side lives with whoever needs it. Here, that is this test.
+    """
+    raw = await services.store.state_get(CHAT_KEY, INJECTION_RING_KEY)
+    ring = json.loads(raw) if raw else []
+    for item in ring:
+        if item.get("turn") == turn:
+            return list(item.get("texts", []))
+    return []
 
 
 def _ctx(extra: dict) -> AgentCtx:
@@ -96,7 +112,7 @@ async def test_a_second_process_rebuilds_the_same_prompt_from_the_store_alone():
     # the ring rather than from memory, and a replay is the same turn seen again, so the
     # worldbook's sticky/cooldown counter must not tick a second time.
     replayed_services = _services(store)
-    replayed_injections = await replay_hook_injections(replayed_services, CHAT_KEY, TURN)
+    replayed_injections = await _ring_texts(replayed_services, TURN)
     assert replayed_injections == injections
     replayed = await build_system_prompt_parts(
         _ctx({"user_message": "I listen for the bell.", "hook_injections": replayed_injections}),
@@ -128,7 +144,7 @@ async def test_the_hook_injections_reach_the_prompt_and_come_from_the_ring():
     assert "A shutter bangs in the wind." in with_hooks.text
     assert "A shutter bangs in the wind." not in without_hooks.text
     # ...and the ring is what closes that gap for a process that was not there.
-    assert await replay_hook_injections(_services(store), CHAT_KEY, TURN) == injections
+    assert await _ring_texts(_services(store), TURN) == injections
 
 
 async def test_the_ring_keeps_one_entry_per_turn_and_a_bounded_window():
@@ -136,12 +152,12 @@ async def test_the_ring_keeps_one_entry_per_turn_and_a_bounded_window():
     services = _services(store)
     await record_hook_injections(services, CHAT_KEY, 1, ["first"])
     await record_hook_injections(services, CHAT_KEY, 1, ["first, corrected"])
-    assert await replay_hook_injections(services, CHAT_KEY, 1) == ["first, corrected"]
+    assert await _ring_texts(services, 1) == ["first, corrected"]
 
     for turn in range(2, 40):
         await record_hook_injections(services, CHAT_KEY, turn, [f"turn {turn}"])
-    assert await replay_hook_injections(services, CHAT_KEY, 39) == ["turn 39"]
-    assert await replay_hook_injections(services, CHAT_KEY, 1) == [], "the window is bounded"
+    assert await _ring_texts(services, 39) == ["turn 39"]
+    assert await _ring_texts(services, 1) == [], "the window is bounded"
 
 
 async def test_a_turn_with_no_injections_writes_nothing():

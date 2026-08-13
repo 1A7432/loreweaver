@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import cache, lru_cache
 from pathlib import Path
 
 import pytest
@@ -37,7 +37,7 @@ from infra.room_facets import (
     FacetRegistry,
     RoomStateFacet,
 )
-from net.room_backup import EXPORT_SECTIONS, _IMPORT_CLEAR_SQL
+from net.room_backup import _IMPORT_CLEAR_SQL, EXPORT_SECTIONS
 from net.room_lifecycle import FACET_MODULES, room_registry
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -106,7 +106,7 @@ def _python_files() -> list[Path]:
     return files
 
 
-@lru_cache(maxsize=None)
+@cache
 def _module_constants(module_path: str) -> dict[str, str]:
     """Module-level ``NAME = "literal"`` bindings, for cross-module import resolution."""
     path = REPO_ROOT / module_path

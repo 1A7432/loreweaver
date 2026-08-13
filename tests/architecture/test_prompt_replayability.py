@@ -31,7 +31,8 @@ PROMPT_BUILDER = Path(__file__).resolve().parents[2] / "agent" / "prompt_builder
 EXTRA_KEY_SOURCES: dict[str, str] = {
     "hook_injections": (
         "persisted per turn by `agent.hook_runtime.record_hook_injections` into the "
-        "`hook_injections` ring, full text; `replay_hook_injections` reads it back"
+        "`hook_injections` ring, in full text; the row is the record, and whoever needs "
+        "to read it back reads it from there"
     ),
 }
 
@@ -128,9 +129,10 @@ def test_every_recorded_exemption_carries_a_written_reason():
         assert len(reason.split()) >= 8, f"{name}: an exemption has to say why"
 
 
-def test_the_hook_injection_ring_is_what_the_replay_side_reads():
-    """The two halves of the contract are one module, so they cannot drift apart."""
-    from agent.hook_runtime import INJECTION_RING_KEY, record_hook_injections, replay_hook_injections
+def test_the_row_the_manifest_names_is_the_row_the_writer_writes():
+    """The manifest above says `hook_injections`; the writer must agree, or the contract
+    documents a row nobody fills."""
+    from agent.hook_runtime import INJECTION_RING_KEY, record_hook_injections
 
-    assert INJECTION_RING_KEY == "hook_injections"
-    assert callable(record_hook_injections) and callable(replay_hook_injections)
+    assert INJECTION_RING_KEY in EXTRA_KEY_SOURCES["hook_injections"]
+    assert callable(record_hook_injections)

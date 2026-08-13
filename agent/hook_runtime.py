@@ -140,6 +140,11 @@ async def record_hook_injections(
     prompt these texts already ride in, and a hash tells a forensic reader that something
     was injected without telling them what. Best-effort — a side record that raised would
     cost the turn it exists to document.
+
+    Write-only on purpose. Nothing in the engine reads it back: the prompt still consumes
+    the injections from `ctx.extra` exactly as before, and this row exists so that a turn
+    can be reconstructed AFTERWARDS — by a person, an eval or a forensic tool. A reader
+    lands here the day some code path needs one, not before.
     """
     texts = [text for text in injections if isinstance(text, str) and text.strip()]
     if not texts:
@@ -158,21 +163,6 @@ async def record_hook_injections(
         await services.store.state_set(chat_key, INJECTION_RING_KEY, json.dumps(ring, ensure_ascii=False))
     except Exception:  # noqa: BLE001 — see docstring
         logger.warning("hook injection side record failed for %s turn %s", chat_key, turn, exc_info=True)
-
-
-async def replay_hook_injections(services: Services, chat_key: str, turn: int) -> list[str]:
-    """What hooks injected on `turn`, from the persisted ring — the replay side."""
-    try:
-        raw = await services.store.state_get(chat_key, INJECTION_RING_KEY)
-        ring = json.loads(raw) if raw else []
-    except (json.JSONDecodeError, TypeError):
-        return []
-    if not isinstance(ring, list):
-        return []
-    for item in ring:
-        if isinstance(item, dict) and item.get("turn") == turn:
-            return [str(text) for text in item.get("texts", []) if isinstance(text, str)]
-    return []
 
 
 # --- Room lifecycle (M23 WS1) -----------------------------------------------
