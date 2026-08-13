@@ -1,3 +1,4 @@
 {
+  "scribe.whisper.npc_overreach": "观察：{npc} 这句台词可能越出了其知识记录——「{quote}」（{fact}）。要不要圆场，你自己判断。",
   "scribe.whisper.unrolled_check": "观察：这一回合似乎没掷骰就定下了一件与{skill}有关的事——「{quote}」。你自己判断。"
 }

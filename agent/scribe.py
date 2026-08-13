@@ -44,6 +44,17 @@ absorbed), so a Keeper who never recorded got no long-term memory AND an unbound
 replayed history. Having already read the whole turn, the Scribe writes that record at
 zero extra model calls — the PLAYER-GRADE text only, since the keeper spoiler margin
 stays exclusively on the voluntary tool (see `_record_auto_chronicle`).
+
+The fifth lane (born from k3 run 2, 2026-08-13) is the **NPC boundary watch**. That run's
+KP voiced every NPC directly — the sub-actor channel went uncalled for 74 turns — and kept
+every knowledge boundary on discipline alone, which broke exactly once: an NPC spoke a
+secret name her record does not contain. A guard nobody walks past guards nothing, so the
+boundary moved to where the Scribe already sits: when a room HAS NPC knowledge records,
+the pass sees them and may flag one line of dialogue that crossed its speaker's recorded
+boundary. FUZZY BY DESIGN (owner call): a knowledge list marks secret boundaries, not a
+complete mind, so the crossing is the Scribe's judgment — the engine only frames it (the
+watch arms only where records exist, the note passes the same verbatim-evidence gate as
+every other claim, and it rides the ordinary whisper channel: observe, never enforce).
 """
 
 from __future__ import annotations
@@ -55,6 +66,7 @@ from typing import Any
 
 from agent.chronicle import record_entry
 from agent.context import AgentCtx
+from agent.npc import list_npcs
 from agent.services import Services
 from agent.stage_director import BEATS
 from core.documents import KEEPER_VIEWER
@@ -93,6 +105,19 @@ _MIN_EVIDENCE_CHARS = 4
 # fold consumes and the prompt tail renders, both of which are already capped — a
 # record is a LINE of campaign history, not a retelling of the turn.
 _MAX_CHRONICLE_CHARS = 400
+# The boundary watch's input budget: how many scoped NPCs one pass shows, and how many
+# characters of each one's fact list. Rooms with no knowledge records pay nothing —
+# the prompt stays byte-identical (see `_npc_watch_section`).
+_NPC_WATCH_MAX = 8
+_NPC_WATCH_FACTS_CHARS = 300
+
+# Appended to the prompt ONLY when the room has scoped NPCs (double braces survive the
+# outer `.format`). The instruction mirrors the fuzzy semantics deliberately: the list
+# is a secrets boundary, not a complete mind, and "unsure" means stay silent.
+_NPC_WATCH_BLOCK = """
+NPC knowledge boundaries (name | the facts this NPC knows). These lists mark SECRET boundaries, not complete minds — everyday knowledge (weather, town routine, their own trade) never crosses one. If dialogue the game-master reply attributes to one of these NPCs reveals something clearly beyond both its listed facts and everyday knowledge, add one extra key to the JSON: "npc_overreach": {{"npc": "<name>", "quote": "<verbatim dialogue quote from the reply>", "fact": "<what it revealed beyond its boundary>"}} — at most one, the clearest crossing. Omit the key when nothing crossed or you are unsure.
+{npc_lines}
+"""
 
 _PROMPT = """You are the table Scribe for a TTRPG engine — a silent ledger clerk, not a storyteller.
 
@@ -117,7 +142,7 @@ Rules:
 
 Trackers (id | label | value | range):
 {trackers}
-
+{npc_watch}
 Tools the game-master called this turn: {tools}
 
 --- TURN ---
@@ -191,6 +216,55 @@ def _unrolled_check_note(raw: Any, haystack: str, services: Services, locale: st
         return ""
     return services.i18n.with_locale(locale).t(
         "scribe.whisper.unrolled_check", skill=skill, quote=evidence[:MAX_WHISPER_CHARS // 2]
+    )[:MAX_WHISPER_CHARS]
+
+
+async def _npc_watch_section(services: Services, chat_key: str) -> tuple[str, frozenset[str]]:
+    """The boundary watch's prompt block and the names it covers, or `("", ∅)`.
+
+    Only scoped NPCs are watched — a boundary can only be crossed where someone drew
+    one — so a room where nobody ever called `set_npc_knowledge` keeps a byte-identical
+    Scribe prompt and this lane costs nothing. Knowledge records are keeper-side
+    material feeding a keeper-side actor: nothing here reaches a player surface.
+    """
+    try:
+        records = await list_npcs(services.documents, chat_key)
+    except Exception:  # noqa: BLE001 — a room whose NPC docs won't load still gets everything else
+        return "", frozenset()
+    scoped = [record for record in records if record.name.strip() and record.knowledge][:_NPC_WATCH_MAX]
+    if not scoped:
+        return "", frozenset()
+    lines = "\n".join(
+        f"- {record.name} | {'; '.join(record.knowledge)[:_NPC_WATCH_FACTS_CHARS]}" for record in scoped
+    )
+    return _NPC_WATCH_BLOCK.format(npc_lines=lines), frozenset(record.name for record in scoped)
+
+
+def _npc_overreach_note(
+    raw: Any, haystack: str, watched: frozenset[str], services: Services, locale: str
+) -> str:
+    """A whisper naming an NPC line that crossed its recorded knowledge, or `""`.
+
+    Held to the same evidence gate as every other Scribe claim (5601795): the quote must
+    be the game-master reply verbatim, and the speaker must be an NPC the pass actually
+    showed a boundary for — a name the model invented cannot smuggle a note in. What the
+    gate deliberately does NOT judge is the crossing itself: that is the fuzzy half, and
+    it belongs to the model. Like the unrolled-check note, this observes and never
+    instructs — the Keeper decides whether the line needs smoothing over, and nothing
+    here touches the fiction that already streamed.
+    """
+    if not isinstance(raw, dict):
+        return ""
+    npc = str(raw.get("npc") or "").strip()[:60]
+    fact = str(raw.get("fact") or "").strip()[:120]
+    quote = _squash_ws(str(raw.get("quote") or ""))
+    if not npc or npc not in watched or not fact:
+        return ""
+    if len(quote) < _MIN_EVIDENCE_CHARS or quote not in haystack:
+        logger.debug("scribe: npc_overreach dropped (quote not verbatim from the reply)")
+        return ""
+    return services.i18n.with_locale(locale).t(
+        "scribe.whisper.npc_overreach", npc=npc, fact=fact, quote=quote[: MAX_WHISPER_CHARS // 3]
     )[:MAX_WHISPER_CHARS]
 
 
@@ -280,11 +354,13 @@ async def run_scribe(
         + (f" | {entry.get('min')}..{entry.get('max')}" if entry.get("min") is not None else "")
         for entry in trackers
     ) or "(none)"
+    npc_watch, watched_npcs = await _npc_watch_section(services, ctx.chat_key)
     prompt = _PROMPT.format(
         max_whispers=MAX_WHISPERS,
         max_whisper_chars=MAX_WHISPER_CHARS,
         beats=", ".join(BEATS),
         trackers=tracker_lines,
+        npc_watch=npc_watch,
         tools=", ".join(tool_names or []) or "(none)",
         player=player_text[:_MAX_TURN_TEXT],
         reply=reply_text[:_MAX_TURN_TEXT],
@@ -346,6 +422,14 @@ async def run_scribe(
     unrolled = _unrolled_check_note(parsed.get("unrolled_check"), haystack, services, ctx.locale)
     if unrolled:
         fresh_whispers = [*fresh_whispers, unrolled][:MAX_WHISPERS]
+
+    # The NPC boundary watch (see module docstring). Consulted ONLY when the watch was
+    # armed this pass — a field the model volunteers for a room with no records is a
+    # hallucination and is ignored, never gated on.
+    if watched_npcs:
+        overreach = _npc_overreach_note(parsed.get("npc_overreach"), haystack, watched_npcs, services, ctx.locale)
+        if overreach:
+            fresh_whispers = [*fresh_whispers, overreach][:MAX_WHISPERS]
 
     if fresh_whispers:
         existing = []

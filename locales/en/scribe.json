@@ -1,3 +1,4 @@
 {
+  "scribe.whisper.npc_overreach": "Observation: {npc} may have spoken past their recorded knowledge — \"{quote}\" ({fact}). Your call whether it needs smoothing over.",
   "scribe.whisper.unrolled_check": "Observation: this turn seems to have settled a {skill} question without a roll — \"{quote}\". Your call."
 }
