@@ -45,4 +45,6 @@ Tests are deterministic and offline. To run a real Keeper, set `TRPG_LLM__*` in 
 - **Parallelize leaves, serialize the merge.** Independent new modules can be built + tested in isolation concurrently; the wiring into shared files (`build_kp_toolset`, `services`, `commands`, `prompt_builder`) is one careful sequential pass.
 - **Scope your test runs.** When others may be editing concurrently, run only your module's tests, not the whole suite.
 - **NEVER foreground a blocking server** (`python -m app --serve`, a dev server) — it hangs. Verify via tests (they spin up ephemeral in-process servers); background + `timeout` + `kill` if you truly must.
+- **Decision records:** check `docs/notes/rejected/` BEFORE proposing a mechanism in its territory — rejections are binding; a non-trivial change adds or updates a note in `docs/notes/` in the same PR.
+- **Before lifecycle/locking/provider/replay work,** read `docs/defensive-patterns.md` — the paid-for rules live there.
 - **After any change:** `uv run ruff check` + `uv run python scripts/i18n_lint.py` + `uv run pytest -q` (and the relevant `bun test`) must all pass.

@@ -50,7 +50,13 @@ coverage/
 .bun/
 
 # --- Internal (not published: design specs + build blueprint) ---
-docs/specs/
+# `/*` instead of `/` so single specs can be re-included below (git cannot
+# negate a path inside an excluded DIRECTORY, only inside an excluded glob).
+docs/specs/*
+# Deliberately public (owner 2026-08-13): the first spec published under the
+# docs/notes decision-record discipline it institutes. Everything else in
+# docs/specs/ stays internal — flagship/playtest material must never ship.
+!docs/specs/M23-harness-resilience.md
 PROMPT.md
 
 # --- Local play-test material (user-supplied modules / cards; may be copyrighted) ---
