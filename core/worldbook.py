@@ -34,6 +34,7 @@ from core.documents import DocumentStore
 from core.ejs_lite import render as render_template
 from core.ejs_lite import split_decorators, substitute_macros
 from core.mvu_compat import parse_initvar
+from infra.room_facets import STORAGE_DOCUMENTS, STORAGE_ROOM_STATE, STORAGE_VECTORS, RoomStateFacet
 
 WORLD_SCOPE = "world"
 LORE_DOC_TYPE = "lore"
@@ -805,3 +806,25 @@ def _normalize_import_entry(raw: dict[str, Any], *, source: str, index: int, is_
             "position": position,
         }
     )
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="worldbook_timers",
+        owner="core.worldbook",
+        reset_scope="story",
+        # Sticky/cooldown/delay windows count the narrative session's turns, so they
+        # restart with it — unlike the entries they gate, which are module content.
+        state_keys=frozenset({_TIMERS_STATE_KEY}),
+        storages=frozenset({STORAGE_ROOM_STATE}),
+    ),
+    RoomStateFacet(
+        name="world_lore",
+        owner="core.worldbook",
+        reset_scope="all",
+        doc_types=frozenset({LORE_DOC_TYPE}),
+        vector_collections=frozenset({WORLDBOOK_COLLECTION}),
+        storages=frozenset({STORAGE_DOCUMENTS, STORAGE_VECTORS}),
+    ),
+)

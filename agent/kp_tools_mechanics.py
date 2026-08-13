@@ -52,6 +52,7 @@ from core.check_outcome import CheckOutcome, outcome_wire
 from core.dice_engine import DiceResult
 from core.rulepacks import RulePack, load_rulepack
 from core.sheets import check_value, has_check_value, set_sheet_value, sheet_value
+from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
 
 
 async def _get_active_character(services: Services, ctx: AgentCtx) -> CharacterSheet:
@@ -979,3 +980,15 @@ class InitiativeTools:
             return i18n.t("kp_tools.initiative.unknown_action", action=action)
         except Exception as exc:
             return i18n.t("kp_tools.initiative.failed", error=str(exc))
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="initiative",
+        owner="agent.kp_tools_mechanics",
+        reset_scope="story",
+        state_keys=frozenset({"initiative", "initiative_meta"}),
+        storages=frozenset({STORAGE_ROOM_STATE}),
+    ),
+)

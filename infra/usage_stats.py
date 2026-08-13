@@ -7,11 +7,16 @@ import logging
 from typing import TYPE_CHECKING
 
 from infra.llm import Usage, context_window_for
+from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
 
 if TYPE_CHECKING:
     from infra.store import Store
 
 logger = logging.getLogger(__name__)
+
+# The room_state row this module owns. Readers name it too (`agent.chronicle`'s pressure
+# trigger, `net.state`'s HUD), so it is a constant rather than a literal per call site.
+USAGE_STATS_KEY = "usage_stats"
 
 _EMPTY_SESSION = {
     "prompt": 0,
@@ -61,7 +66,7 @@ async def record_usage_stats(
     ):
         return
 
-    key = "usage_stats"
+    key = USAGE_STATS_KEY
     session = dict(_EMPTY_SESSION)
     try:
         raw = await store.state_get(chat_key, key)
@@ -105,3 +110,18 @@ async def record_usage_stats(
             chat_key,
             exc_info=True,
         )
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="usage_meter",
+        owner="infra.usage_stats",
+        reset_scope="story",
+        # The context-pressure meter the chronicle fold reads. A fresh session starts from
+        # an empty prompt, so a carried-over meter would trigger folds against a history
+        # that no longer exists.
+        state_keys=frozenset({USAGE_STATS_KEY}),
+        storages=frozenset({STORAGE_ROOM_STATE}),
+    ),
+)

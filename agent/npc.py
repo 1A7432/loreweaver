@@ -26,6 +26,8 @@ import time
 from dataclasses import dataclass, field, fields
 from typing import Any
 
+from infra.room_facets import STORAGE_DOCUMENTS, RoomStateFacet
+
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
@@ -332,3 +334,17 @@ async def add_knowledge(
 async def npc_learns(documents: Any, chat_key: str, name_or_id: str, fact: str) -> NpcRecord | None:
     """Append a single newly-learned fact -- a thin convenience over `add_knowledge`."""
     return await add_knowledge(documents, chat_key, name_or_id, [fact], mode="add")
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="npc_records",
+        owner="agent.npc",
+        reset_scope="story",
+        # In-play NPCs are session state: the module's cast is re-created from the module
+        # on the next playthrough, and a survivor would arrive already knowing the party.
+        doc_types=frozenset({NPC_DOC_TYPE}),
+        storages=frozenset({STORAGE_DOCUMENTS}),
+    ),
+)

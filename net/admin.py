@@ -150,6 +150,7 @@ class AdminService:
             i18n,
             fs=self.fs,
             reauthorize=reauthorize,
+            hub=self.hub,
         )
         if reply.get("type") != "admin_error" and frame.get("type") in {
             "admin_delete_room",
@@ -234,6 +235,7 @@ async def _dispatch_admin_frame(
     *,
     fs: FsAdapter | None = None,
     reauthorize: Any = None,
+    hub: Any = None,
 ) -> dict[str, Any]:
     """Handle one admin request `frame`, returning the reply frame to send.
 
@@ -284,7 +286,7 @@ async def _dispatch_admin_frame(
     if kind == "admin_import_room":
         return await _import_room(services, keystore, caller_room, frame, i18n)
     if kind == "admin_delete_room_data":
-        return await _delete_room_data(services, keystore, caller_room, frame, i18n)
+        return await _delete_room_data(services, keystore, caller_room, frame, i18n, hub=hub)
     if kind == "admin_reset_room":
         return await _reset_room(services, keystore, caller_room, frame, i18n)
     if kind == "admin_update_server":
@@ -892,6 +894,8 @@ async def _delete_room_data(
     caller_room: str,
     frame: dict[str, Any],
     i18n: I18n,
+    *,
+    hub: Any = None,
 ) -> dict[str, Any]:
     room = str(frame.get("room") or "").strip()
     if not room:
@@ -906,7 +910,9 @@ async def _delete_room_data(
         if backup:
             backup_result = await export_room(services, keystore, room, path)
             backup_path = str(backup_result.get("path") or "")
-        result = await delete_room_data(services, keystore, room)
+        # The hub rides along so the room's in-process turn lock leaves with the room
+        # (M23 WS1): the facet that owns the lock is the one that disposes of it.
+        result = await delete_room_data(services, keystore, room, hub=hub)
         await clear_keeper_bindings_for_room(services.store, room)
         await clear_bindings_for_session(services.store, session_key_for_room(room))
     except Exception:

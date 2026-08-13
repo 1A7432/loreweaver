@@ -47,6 +47,7 @@ from typing import Any
 import yaml
 
 from core.yaml_safety import safe_load_no_aliases
+from infra.room_facets import STORAGE_DOCUMENTS, RoomStateFacet
 
 # ---------------------------------------------------------------------------
 # Limits and shapes
@@ -1076,3 +1077,17 @@ async def mvu_hide(documents: Any, chat_key: str, prefix: str) -> bool:
     prefixes = [item for item in prefixes if item != cleaned]
     await _save_doc(documents, chat_key, tree, prefixes)
     return True
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="mvu_tree",
+        owner="core.mvu_compat",
+        reset_scope="all",
+        # The imported card's variable tree, including which leaves the keeper exposed:
+        # module machinery, so it leaves with the module rather than with the session.
+        doc_types=frozenset({MVU_DOC_TYPE}),
+        storages=frozenset({STORAGE_DOCUMENTS}),
+    ),
+)

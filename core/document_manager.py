@@ -38,6 +38,7 @@ from typing import Any
 from infra.embeddings import Embeddings
 from infra.i18n import I18n, t
 from infra.llm import LLMClient
+from infra.room_facets import DOCUMENT_VECTOR_LANE, STORAGE_VECTORS, RoomStateFacet
 from infra.vector import VectorStore
 
 try:
@@ -415,3 +416,17 @@ class VectorDatabaseManager:
         prompt = self.i18n.t("document.answer.prompt", question=question, context=context)
         result = await self.llm.chat([{"role": "user", "content": prompt}])
         return result.content or ""
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="document_chunks",
+        owner="core.document_manager",
+        reset_scope="all",
+        # The embedding lane with no `collection` payload field: chunks of an uploaded
+        # document, addressed by `chat_key`. They index the module, so they die with it.
+        vector_collections=frozenset({DOCUMENT_VECTOR_LANE}),
+        storages=frozenset({STORAGE_VECTORS}),
+    ),
+)

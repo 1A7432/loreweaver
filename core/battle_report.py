@@ -41,6 +41,7 @@ from datetime import datetime
 
 from infra.i18n import I18n, get_i18n
 from infra.llm import HISTORY_TURN_KEY
+from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
 from infra.store import Store
 
 NPC_USER_ID = "__npc__"
@@ -863,3 +864,19 @@ class BattleReportManager:
             record, session_name, i18n=i18n, transcript=transcript
         )
         return text_report, markdown_report, session_name
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="battle_reports",
+        owner="core.battle_report",
+        reset_scope="story",
+        # Rendered records plus the per-session pointers that index them; every key in the
+        # family is written under one of these prefixes, never bare.
+        state_prefixes=frozenset(
+            {"battle_report.", "session_history.", "session_name.", "session_record."}
+        ),
+        storages=frozenset({STORAGE_ROOM_STATE}),
+    ),
+)

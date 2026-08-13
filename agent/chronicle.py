@@ -85,6 +85,7 @@ from core.chronicle import (
 from core.documents import KEEPER_VIEWER, PLAYER_VIEWER, Document
 from infra.i18n import I18n
 from infra.llm import HISTORY_TURN_KEY
+from infra.room_facets import STORAGE_DOCUMENTS, STORAGE_ROOM_STATE, STORAGE_VECTORS, RoomStateFacet
 
 logger = logging.getLogger(__name__)
 
@@ -923,3 +924,20 @@ async def render_recap(services: Services, chat_key: str, i18n: I18n) -> str | N
     except Exception:  # noqa: BLE001
         logger.debug("chronicle recap render failed", exc_info=True)
         return None
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="chronicle",
+        owner="agent.chronicle",
+        reset_scope="story",
+        doc_types=frozenset({CHRONICLE_DOC_TYPE, CAMPAIGN_SUMMARY_DOC_TYPE, THREAD_DOC_TYPE}),
+        state_keys=frozenset({CHRONICLE_TURN_KEY, CHRONICLE_SEQ_KEY}),
+        # Only FOLDED records carry an embedding, and they leave with the records they
+        # index: orphaned points would keep winning topical-recall slots for a campaign
+        # that no longer exists (b23c450).
+        vector_collections=frozenset({CHRONICLE_COLLECTION}),
+        storages=frozenset({STORAGE_DOCUMENTS, STORAGE_ROOM_STATE, STORAGE_VECTORS}),
+    ),
+)

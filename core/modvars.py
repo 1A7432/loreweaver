@@ -30,6 +30,8 @@ import re
 import unicodedata
 from typing import Any, Protocol
 
+from infra.room_facets import STORAGE_DOCUMENTS, RoomStateFacet
+
 # ---------------------------------------------------------------------------
 # Limits and shapes
 # ---------------------------------------------------------------------------
@@ -502,3 +504,15 @@ async def describe_modvars(documents: Any, chat_key: str, i18n: _I18nProtocol, l
     """Load this room's state and render it via `describe`."""
     state = await load_modvars(documents, chat_key)
     return describe(state, i18n, locale)
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="modvars",
+        owner="core.modvars",
+        reset_scope="all",
+        doc_types=frozenset({MODVARS_DOC_TYPE}),
+        storages=frozenset({STORAGE_DOCUMENTS}),
+    ),
+)

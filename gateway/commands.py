@@ -81,6 +81,7 @@ from infra.providers import (
     is_known_provider,
     mask_secret,
 )
+from infra.room_facets import RESET_SCOPES, STORAGE_ROOM_STATE, RoomStateFacet
 
 Handler = Callable[["CommandCtx"], Awaitable[str]]
 logger = logging.getLogger(__name__)
@@ -158,7 +159,9 @@ _RESET_SCOPE_WORDS = {
     "全部": "all",
     "全清": "all",
 }
-_RESET_SCOPES = ("story", "chars", "all")
+# The ladder itself is single-sourced (M23 WS1): this file maps WORDS onto it, and the
+# scopes those words name are the engine's, not a second copy that can drift.
+_RESET_SCOPES = RESET_SCOPES
 
 
 def _parse_reset_pending(raw: str | None) -> tuple[float, str | None]:
@@ -3747,3 +3750,21 @@ def _refresh_supergrok_imagegen(services: Services) -> None:
 
 def _member_label(member: Any) -> str:
     return str(getattr(member, "name", "") or getattr(member, "id", "") or "")
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="reset_confirmation",
+        owner="gateway.commands",
+        reset_scope=None,
+        survives_because=(
+            "a two-minute confirmation marker armed by `.reset` and consumed by the "
+            "`confirm` that follows; it expires by timestamp, so surviving the very reset "
+            "it authorised costs nothing and clearing it mid-operation would be surgery "
+            "on the operation's own trigger"
+        ),
+        state_keys=frozenset({"reset_pending"}),
+        storages=frozenset({STORAGE_ROOM_STATE}),
+    ),
+)

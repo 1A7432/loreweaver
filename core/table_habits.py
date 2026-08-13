@@ -37,6 +37,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from infra.room_facets import STORAGE_DOCUMENTS, RoomStateFacet
+
 if TYPE_CHECKING:  # pragma: no cover
     from core.documents import Document, Viewer
 
@@ -151,3 +153,20 @@ def index_lines(data: dict[str, Any]) -> list[str]:
 
 def _match_key(summary: str) -> str:
     return "".join(character for character in (summary or "").casefold() if character.isalnum())
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="table_habits",
+        owner="core.table_habits",
+        reset_scope=None,
+        survives_because=(
+            "procedural memory about how THIS TABLE plays — its people, not its campaign. "
+            "The players who start a fresh session are the same players, so the habits "
+            "learned about them are still true (M20 E)"
+        ),
+        doc_types=frozenset({HABITS_DOC_TYPE}),
+        storages=frozenset({STORAGE_DOCUMENTS}),
+    ),
+)

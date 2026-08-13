@@ -24,6 +24,7 @@ from core.hooks import HookEngine, HookScript, create_hook_engine
 from core.modvars import load_modvars, set_modvar
 from core.mvu_compat import apply_set, load_mvu, save_mvu
 from core.skills import load_skill
+from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
 
 logger = logging.getLogger(__name__)
 
@@ -116,3 +117,17 @@ async def apply_hook_writes(services: Services, chat_key: str, writes: list[tupl
     if tree_dirty:
         await save_mvu(services.documents, chat_key, tree)
     return applied
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="room_hooks",
+        owner="agent.hook_runtime",
+        reset_scope="all",
+        # Card-installed turn-lifecycle handlers arrive with a world import and leave with
+        # it; a hook outliving its module would inject into a room that never loaded it.
+        state_keys=frozenset({"room_hooks"}),
+        storages=frozenset({STORAGE_ROOM_STATE}),
+    ),
+)

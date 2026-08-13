@@ -73,6 +73,7 @@ from core.documents import KEEPER_VIEWER
 from core.modvars import MODVARS_DOC_ID, MODVARS_DOC_TYPE, adjust_modvar, set_modvar, wire_entries
 from core.table_habits import HABITS_DOC_TYPE, HABITS_ID, observe
 from infra.llm import LLMClient
+from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
 
 logger = logging.getLogger(__name__)
 
@@ -458,3 +459,23 @@ async def run_scribe(
     # crosses from the keeper-side scribe to the player-side Director.
     beat = str(parsed.get("beat") or "").strip()
     return ScribePass(changed=changed, beat=beat if beat in BEATS else "")
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="scribe_whispers",
+        owner="agent.scribe",
+        reset_scope=None,
+        survives_because=(
+            "UNREVIEWED — this is what the code does today, not a verdict. The queue is "
+            "read-and-cleared by the next prompt build, so at most a handful of lines can "
+            "survive; but they ARE session state, and a fresh session opening with the old "
+            "session's last whispers is a small wrongness M23 WS1 recorded rather than "
+            "silently changed. Owner verdict pending — see "
+            "docs/notes/implemented/room-lifecycle-facets.md"
+        ),
+        state_keys=frozenset({WHISPERS_KEY}),
+        storages=frozenset({STORAGE_ROOM_STATE}),
+    ),
+)

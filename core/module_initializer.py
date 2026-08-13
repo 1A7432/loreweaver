@@ -44,6 +44,7 @@ from core.documents import DocumentStore
 from infra.config import Settings
 from infra.i18n import I18n
 from infra.llm import LLMClient
+from infra.room_facets import STORAGE_DOCUMENTS, STORAGE_ROOM_STATE, RoomStateFacet
 from infra.store import Store
 from infra.usage_stats import record_usage_stats
 
@@ -482,3 +483,19 @@ class ModuleInitializer:
         keeper_pool["truths"] = analysis.get("truths", [])
 
         return keeper_pool, player_pool
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="module_text",
+        owner="core.module_initializer",
+        reset_scope="all",
+        # The loaded module: its text, the ingestion status/error pair, and the keeper and
+        # player knowledge pools built from it. They install together and they leave
+        # together — a status without its text is what a half-cleaned room looks like.
+        doc_types=frozenset({"module_pool"}),
+        state_keys=frozenset({"module_fulltext", "module_init_status", "module_init_error"}),
+        storages=frozenset({STORAGE_DOCUMENTS, STORAGE_ROOM_STATE}),
+    ),
+)

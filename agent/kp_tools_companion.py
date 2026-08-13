@@ -34,6 +34,7 @@ from agent.tools import tool
 from core.character_manager import CharacterSheet
 from core.rulepacks import load_rulepack
 from infra.i18n import I18n
+from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
 
 if TYPE_CHECKING:
     from gateway.commands import CommandRouter
@@ -294,3 +295,16 @@ async def witness(services: Services, chat_key: str, fact: str) -> None:
             await npc_records.npc_learns(services.documents, chat_key, companion.id, fact)
     except Exception:
         pass
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="party_autopilot",
+        owner="agent.kp_tools_companion",
+        reset_scope="chars",
+        # `.party auto` is a property of THIS party: it leaves when the party does.
+        state_keys=frozenset({"party_auto"}),
+        storages=frozenset({STORAGE_ROOM_STATE}),
+    ),
+)

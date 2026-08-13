@@ -25,6 +25,7 @@ import re
 from typing import Any
 
 from core.character_manager import CharacterManager, CharacterNameTakenError, CharacterSheet
+from infra.room_facets import STORAGE_DOCUMENTS, RoomStateFacet
 
 MAX_ROSTER_ENTRIES = 32
 _MAX_SLUG_CHARS = 64
@@ -172,3 +173,15 @@ async def pregen_release(
     await characters.delete_character(claimer, chat_key, entry["name"])
     await _set_claimed(documents, chat_key, entry["id"], "")
     return "ok"
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="pregens",
+        owner="core.pregen_roster",
+        reset_scope="all",
+        doc_types=frozenset({PREGEN_DOC_TYPE}),
+        storages=frozenset({STORAGE_DOCUMENTS}),
+    ),
+)

@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 
 from agent.tools import PLAY_PHASE, PREP_PHASE
+from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
 from infra.store import Store
 
 logger = logging.getLogger(__name__)
@@ -68,3 +69,19 @@ async def is_pinned(store: Store, chat_key: str) -> bool:
         return await store.state_get(chat_key, PHASE_KEY) in PHASES
     except Exception:  # noqa: BLE001 — same stance as `room_phase`
         return False
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="tool_phase",
+        owner="agent.tool_phase",
+        reset_scope=None,
+        survives_because=(
+            "an empty value means `follow the room's lifecycle`, so the key is inert "
+            "unless a keeper pinned the phase with `.phase` — and a pin is a room setting"
+        ),
+        state_keys=frozenset({PHASE_KEY}),
+        storages=frozenset({STORAGE_ROOM_STATE}),
+    ),
+)

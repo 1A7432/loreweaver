@@ -16,7 +16,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from agent.chronicle import CHRONICLE_COLLECTION
 from agent.services import Services
 from core.document_manager import document_point_id
 from gateway.session import SessionSource
@@ -29,8 +28,19 @@ from infra.media_store import (
     MediaStore,
     PendingUpload,
 )
+from infra.room_facets import (
+    RESET_SCOPES,
+    STORAGE_DOCUMENTS,
+    STORAGE_HISTORY,
+    STORAGE_MEDIA,
+    STORAGE_ROOM_STATE,
+    STORAGE_SNAPSHOTS,
+    STORAGE_VECTORS,
+    FacetContext,
+)
 from infra.svg import SVG_MIME, SvgSafetyError, validate_svg_bytes
 from net.keystore import Keystore
+from net.room_lifecycle import room_registry
 
 # Snapshot format 3 (M20 D): the `chat_history` section carries the append-only history
 # tree, so a named save is still a WHOLE-room checkpoint after the conversation stopped
@@ -68,76 +78,40 @@ _VECTOR_OWNERSHIP_FIELDS = frozenset({"chat_key", "namespace"})
 # M17: room CONTENT lives in the documents table and room-scoped RUNTIME state in
 # the room_state table — both room-scoped by COLUMN, so backup/export/delete simply
 # dump whole rooms and need NO per-store key allowlist (the drift bug class died
-# with the KV era). What remains named here is the SEMANTIC partition `.reset`
-# scopes need: which document types and which runtime keys each scope wipes. Room
-# SETTINGS (language, house rules, enabled skills/presets/panels, media/bot
-# toggles) are configuration, not campaign content, so they appear in no group and
-# survive every reset level.
-RESET_SCOPES = ("story", "chars", "all")
+# with the KV era). What remains is the SEMANTIC partition `.reset` scopes need:
+# which document types and which runtime keys each scope wipes.
+#
+# M23 WS1 moved that partition OUT of this file. It used to be four hand-maintained
+# frozensets here, and they drifted from the code that wrote the state three times in
+# one month. Now each family is declared as a `RoomStateFacet` BY the module that owns
+# it (`infra/room_facets.py`, collected in `net/room_lifecycle.py`), an architecture
+# test fails the build on state no facet claims, and this file asks the registry.
+# Room SETTINGS (language, house rules, enabled skills/presets/panels, media/bot
+# toggles) are configuration rather than campaign content, so their facets declare
+# `reset_scope=None` and survive every level.
+#
+# What did NOT move: the order the legs run in and what happens when one fails. Those
+# stay here, with the operations.
 
-# `.reset` (lightest): a fresh narrative session — characters, module, lore and media
-# are all kept.
-_RESET_STORY_DOC_TYPES = frozenset({"note", "scene", "npc", "chronicle", "campaign_summary", "thread"})
-_RESET_STORY_STATE_KEYS = frozenset(
-    {
-        "chat_history",
-        # M20 D: the append-only history tree's leaf pointer. The tree itself lives in
-        # its own table and is wiped alongside it in `reset_room_state`.
-        "chat_history_leaf",
-        "initiative",
-        "initiative_meta",
-        "game_clock",
-        # M18: the chronicle turn counter and entry sequence — a fresh narrative
-        # session restarts the fold watermark alongside the records themselves.
-        "chronicle_turn",
-        "chronicle_seq",
-        "relationships",
-        "usage_stats",
-        # Worldbook sticky/cooldown/delay windows track the narrative session's turn
-        # counter — a clean-slate replay restarts them just like the clock and initiative.
-        "worldbook_timers",
-    }
-)
-_RESET_STORY_STATE_PREFIXES = frozenset({"battle_report.", "session_history.", "session_name.", "session_record."})
-# `.reset chars`: also drop the party's characters, so fresh investigators face the SAME module.
-_RESET_CHARS_DOC_TYPES = frozenset({"sheet"})
-_RESET_CHARS_STATE_KEYS = frozenset({"party_roster", "party_auto"})
-_RESET_CHARS_STATE_PREFIXES = frozenset({"active_character."})
-# `.reset all`: also drop the module, world lore and media (documents here; vectors + blobs below).
-_RESET_ALL_DOC_TYPES = frozenset({"lore", "mvu_tree", "modvars", "module_pool", "pregen"})
-_RESET_ALL_STATE_KEYS = frozenset(
-    {
-        "module_fulltext",
-        "module_init_error",
-        "module_init_status",
-        # Module machinery a keeper world-card import installs lives exactly as long as
-        # the module: the import marker, room hooks, media/audio history and the forge
-        # ownership records all go with it.
-        "world_import",
-        "room_hooks",
-        "media_history",
-        "audio_library",
-        "audio_state",
-        "forge_module_last",
-    }
-)
-_RESET_ALL_STATE_PREFIXES = frozenset({"forge_module_owner."})
+# Which snapshot section carries each room-scoped storage. The export manifest is built
+# from this map, so a storage a facet lives in cannot quietly go uncarried — the
+# architecture test requires every facet storage to appear here or to be export-exempt,
+# and an export-exempt storage must be CLEARED on import (below) instead.
+EXPORT_SECTIONS: dict[str, str] = {
+    STORAGE_DOCUMENTS: "documents",
+    STORAGE_ROOM_STATE: "room_state",
+    STORAGE_HISTORY: "chat_history",
+    STORAGE_VECTORS: "vector_points",
+    STORAGE_MEDIA: "media",
+}
 
-
-def _reset_targets(scope: str) -> tuple[set[str], set[str], set[str]]:
-    """Return the (document types, state keys, state key prefixes) wiped at ``scope``."""
-    doc_types = set(_RESET_STORY_DOC_TYPES)
-    keys = set(_RESET_STORY_STATE_KEYS)
-    prefixes = set(_RESET_STORY_STATE_PREFIXES)
-    if scope in ("chars", "all"):
-        doc_types |= _RESET_CHARS_DOC_TYPES
-        keys |= _RESET_CHARS_STATE_KEYS
-        prefixes |= _RESET_CHARS_STATE_PREFIXES
-    if scope == "all":
-        doc_types |= _RESET_ALL_DOC_TYPES
-        keys |= _RESET_ALL_STATE_KEYS
-        prefixes |= _RESET_ALL_STATE_PREFIXES
-    return doc_types, keys, prefixes
+# How the import transaction clears a storage no snapshot carries. State a backup cannot
+# restore must not survive that backup being loaded over the room: the undo ring is the
+# case that motivated the rule — before M23 WS1 `.save load` left the ring intact, so
+# `.undo` could rewind THROUGH the import back into the room's pre-import life.
+_IMPORT_CLEAR_SQL: dict[str, str] = {
+    STORAGE_SNAPSHOTS: "DELETE FROM room_snapshots WHERE room = ?",
+}
 
 
 def chat_key_for_room(room: str) -> str:
@@ -637,13 +611,18 @@ async def export_room(services: Services, keystore: Keystore, room: str, path: s
         "exported_at": datetime.now().isoformat(),
         "room": room,
         "chat_key": chat_key,
+        # Bearer keys and the KV bindings are not facet storages: they are the room's
+        # identity and its cross-transport wiring, carried whatever the content is.
         "keys": keys,
-        "documents": documents,
-        "room_state": state_rows,
-        "chat_history": history_rows,
         "store_rows": rows,
-        "vector_points": vectors,
-        "media": media,
+        # One section per room-scoped storage a facet can live in. Naming them through
+        # `EXPORT_SECTIONS` is what lets the architecture test prove no facet's storage
+        # was left uncarried without also being export-exempt.
+        EXPORT_SECTIONS[STORAGE_DOCUMENTS]: documents,
+        EXPORT_SECTIONS[STORAGE_ROOM_STATE]: state_rows,
+        EXPORT_SECTIONS[STORAGE_HISTORY]: history_rows,
+        EXPORT_SECTIONS[STORAGE_VECTORS]: vectors,
+        EXPORT_SECTIONS[STORAGE_MEDIA]: media,
     }
     encoded = json.dumps(snapshot, ensure_ascii=False, indent=2)
     if len(encoded.encode("utf-8")) > MAX_BACKUP_FILE_BYTES:
@@ -702,6 +681,30 @@ async def _capture_room_state(
     )
 
 
+async def _capture_room_snapshots(services: Services, chat_key: str) -> list[tuple[int, str]]:
+    """The room's undo ring as (turn, payload) pairs, so a failed import can put it back."""
+    captured: list[tuple[int, str]] = []
+    for turn in await services.store.snapshot_turns(chat_key):
+        payload = await services.store.snapshot_get(chat_key, turn)
+        if payload is not None:
+            captured.append((turn, payload))
+    return captured
+
+
+async def _restore_room_snapshots(
+    services: Services,
+    chat_key: str,
+    captured: list[tuple[int, str]],
+) -> None:
+    """Put a captured undo ring back verbatim.
+
+    ``keep=0`` skips the trim: this is the restore of a ring that was already the right
+    size, not a new turn boundary competing for room in it.
+    """
+    for turn, payload in captured:
+        await services.store.snapshot_put(chat_key, turn, payload, keep=0)
+
+
 async def _atomic_store_update(
     services: Services,
     *,
@@ -711,6 +714,7 @@ async def _atomic_store_update(
     upsert_documents: list[dict[str, Any]] | None = None,
     delete_state_room: str | None = None,
     upsert_state: tuple[str, list[dict[str, Any]]] | None = None,
+    clear_storages: tuple[str, list[str]] | None = None,
     preserve_foreign_bindings: bool = False,
 ) -> int:
     """Apply the room's store portion (KV bindings + documents + room_state) in ONE
@@ -718,6 +722,10 @@ async def _atomic_store_update(
 
     ``Store.set`` intentionally commits every call for ordinary use; backup restore needs a
     batch boundary, so this small internal operation uses the same guarded connection directly.
+
+    ``clear_storages`` is ``(room, [storage, ...])`` for storages a snapshot does not carry
+    and import must therefore empty; each rides the SAME transaction as the row replacement
+    it accompanies, so a room can never come back from an import with half of it replaced.
     """
     delete_rows = delete_rows or []
     upsert_rows = upsert_rows or []
@@ -816,6 +824,19 @@ async def _atomic_store_update(
                             for row in state_rows
                         ],
                     )
+            if clear_storages is not None:
+                clear_room, storages = clear_storages
+                for storage in storages:
+                    statement = _IMPORT_CLEAR_SQL.get(storage)
+                    if statement is None:
+                        # A facet declared a persisted storage no snapshot carries, and
+                        # nothing here knows how to empty it. Failing the import is the
+                        # only honest option: the alternative is the room silently keeping
+                        # state the backup it just loaded knows nothing about.
+                        raise RuntimeError(
+                            f"no import-clear statement for storage {storage!r}"  # i18n-exempt: invariant
+                        )
+                    conn.execute(statement, (clear_room,))
             services.store._commit(conn)
         except BaseException:
             conn.rollback()
@@ -858,18 +879,23 @@ async def _delete_room_vectors(services: Services, chat_key: str) -> int:
     return len(point_ids)
 
 
-async def _delete_room_chronicle_vectors(services: Services, chat_key: str) -> int:
-    """Delete only the room's folded-chronicle embedding points.
+async def _delete_room_collection_vectors(
+    services: Services,
+    chat_key: str,
+    collections: frozenset[str],
+) -> int:
+    """Delete only the room's points in `collections` — the lanes a partial reset wipes.
 
-    The story/chars reset scopes wipe the chronicle documents but KEEP the module and
-    its lore vectors, so the room-wide deletion above is too much — and no deletion is
-    too little: the orphaned points would keep matching the new playthrough's topical
-    recall (each hit resolving to a document that no longer exists and being dropped,
-    silently wasting recall slots) and pile up across repeated resets of the same room.
-    Same posture as `_delete_room_vectors`: ownership-validated exact ids only.
+    A story/chars reset wipes the chronicle documents but KEEPS the module and its lore
+    vectors, so the room-wide deletion above is too much — and no deletion is too little:
+    the orphaned points would keep matching the new playthrough's topical recall (each hit
+    resolving to a document that no longer exists and being dropped, silently wasting
+    recall slots) and pile up across repeated resets of the same room. Which lanes those
+    are is the facets' answer, not this function's. Same posture as `_delete_room_vectors`:
+    ownership-validated exact ids only.
     """
     vector_store = getattr(services.vector_db, "vector_store", None)
-    if vector_store is None:
+    if vector_store is None or not collections:
         return 0
     if not hasattr(vector_store, "delete"):
         raise RuntimeError("vector store cannot safely delete room points")  # i18n-exempt
@@ -878,7 +904,7 @@ async def _delete_room_chronicle_vectors(services: Services, chat_key: str) -> i
         str(point["id"])
         for point in points
         if isinstance(point.get("payload"), dict)
-        and point["payload"].get("collection") == CHRONICLE_COLLECTION
+        and point["payload"].get("collection") in collections
     ]
     if point_ids:
         await vector_store.delete(point_ids)
@@ -1145,7 +1171,9 @@ async def reset_room_state(
     # M17: content lives in the documents table and runtime state in room_state, both
     # room-scoped by an exact COLUMN — a dotted-neighbor room can no longer alias this
     # room's rows, so the pre-M17 prefix-ambiguity guard is structurally unnecessary here.
-    doc_types, state_keys, state_prefixes = _reset_targets(scope)
+    registry = room_registry()
+    doc_types, state_keys, state_prefixes = registry.reset_targets(scope)
+    storages = registry.storages_at(scope)
     deleted_docs = 0
     for doc_type in sorted(doc_types):
         deleted_docs += await services.store.doc_delete_type(chat_key, doc_type)
@@ -1154,20 +1182,29 @@ async def reset_room_state(
     )
     # M20 D: the append-only history tree and the undo ring are part of the narrative
     # session at every scope — a "fresh session" that could still be rewound into the old
-    # one, or whose recap could still read it, would not be fresh.
-    deleted_state += await services.store.history_delete_room(chat_key)
-    deleted_state += await services.store.snapshot_delete_room(chat_key)
+    # one, or whose recap could still read it, would not be fresh. Both are whole-table
+    # storages rather than key lists, which is why the facets that live in them name the
+    # storage and the wipe is driven from that.
+    if STORAGE_HISTORY in storages:
+        deleted_state += await services.store.history_delete_room(chat_key)
+    if STORAGE_SNAPSHOTS in storages:
+        deleted_state += await services.store.snapshot_delete_room(chat_key)
     deleted_vectors = 0
     deleted_media = 0
     if scope == "all":
-        # Module document chunks and uploaded media blobs only a full reset clears.
+        # Every point the room owns, not just the claimed lanes: a full reset must also
+        # take a collection left behind by an older build, which no live facet claims.
         deleted_vectors = await _delete_room_vectors(services, chat_key)
-        deleted_media = await _media_store(services).delete_room(chat_key)
-    else:
+    elif STORAGE_VECTORS in storages:
         # The chronicle documents are wiped at EVERY scope (they ARE the narrative
         # session), so their embedding points must leave with them — the module's own
         # lore vectors survive, exactly like the module they index.
-        deleted_vectors = await _delete_room_chronicle_vectors(services, chat_key)
+        deleted_vectors = await _delete_room_collection_vectors(
+            services, chat_key, registry.vector_collections_at(scope)
+        )
+    if STORAGE_MEDIA in storages:
+        # Uploaded blobs only a full reset clears.
+        deleted_media = await _media_store(services).delete_room(chat_key)
     return {
         "chat_key": chat_key,
         "scope": scope,
@@ -1178,7 +1215,15 @@ async def reset_room_state(
     }
 
 
-async def delete_room_data(services: Services, keystore: Keystore, room: str) -> dict[str, Any]:
+async def delete_room_data(
+    services: Services,
+    keystore: Keystore,
+    room: str,
+    *,
+    hub: Any | None = None,
+) -> dict[str, Any]:
+    """Delete one room entirely. ``hub`` lets facets that own in-process state dispose of
+    it too; a caller without a bus (the CLI) passes none and leaks nothing."""
     room = room.strip()
     if not room:
         raise ValueError("snapshot room is empty")
@@ -1209,6 +1254,14 @@ async def delete_room_data(services: Services, keystore: Keystore, room: str) ->
         # Media is last because it is the only leg that moves blob files.  The hard-link/copy
         # stage above remains available until every logical mutation has succeeded.
         deleted_media = await _media_store(services).delete_room(chat_key)
+        # Facet-owned disposal that no target list can express — today only in-process
+        # state, which is why it runs after every persisted leg: there is nothing to
+        # compensate if it fails, and nothing that fails if the room is already gone.
+        facet_ctx = FacetContext(services=services, room=room, chat_key=chat_key, hub=hub)
+        for facet in room_registry().delete_hooks():
+            hook = facet.on_delete
+            if hook is not None:
+                await hook(facet_ctx)
     except BaseException:
         rollback_state = _RoomState(
             rows=state.rows,
@@ -1557,6 +1610,12 @@ async def import_room(
         validated_keys.append({"key": key, "room": room, "name": name, "role": role})
 
     state = await _capture_room_state(services, keystore, room, new_chat_key)
+    # The undo ring is the one persisted storage no snapshot carries, so the import
+    # transaction below CLEARS it — otherwise `.undo` could rewind through the load into
+    # the room's pre-import life. Capture it first: this operation compensates every
+    # mutation it makes, and a ring only this code erased must come back with the rest.
+    snapshots_before = await _capture_room_snapshots(services, new_chat_key)
+    cleared_storages = sorted(room_registry().storages_not_exported())
     created_media_hashes: set[str] = set()
     try:
         await _atomic_store_update(
@@ -1564,6 +1623,7 @@ async def import_room(
             upsert_rows=validated_rows,
             upsert_documents=validated_documents,
             upsert_state=(new_chat_key, validated_state),
+            clear_storages=(new_chat_key, cleared_storages),
         )
         # The history tree rides outside that transaction because it is append-only:
         # re-inserting a row that already exists is a no-op by construction, so a retry
@@ -1618,6 +1678,7 @@ async def import_room(
                 state,
                 imported_media=created_media_hashes,
             )
+            await _restore_room_snapshots(services, new_chat_key, snapshots_before)
         except BaseException as rollback_exc:
             raise RuntimeError("room import failed and rollback was incomplete") from rollback_exc  # i18n-exempt
         raise

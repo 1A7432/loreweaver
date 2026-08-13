@@ -24,6 +24,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+from infra.room_facets import STORAGE_MEMORY, FacetContext, RoomStateFacet
+
 logger = logging.getLogger(__name__)
 
 
@@ -200,6 +202,23 @@ class RoomHub:
             lock = asyncio.Lock()
             self._turn_locks[session_key] = lock
         return lock
+
+    def dispose_room(self, session_key: str) -> bool:
+        """Forget a deleted room's in-process turn bookkeeping. True if anything was dropped.
+
+        `turn_lock` mints a lock on first use and, until M23 WS1, nothing ever removed one:
+        a long-lived server kept one lock (and one nesting counter) per room it had EVER
+        served, including rooms deleted long ago. A HELD lock is left in place on purpose —
+        replacing it while a turn is inside would hand the next caller a different object
+        and dissolve the serialization the lock exists for. An unheld `asyncio.Lock` cannot
+        have waiters (a waiter only exists because someone holds it), so dropping one is
+        safe by construction, and the room being deleted will not mint another.
+        """
+        lock = self._turn_locks.get(session_key)
+        if lock is not None and lock.locked():
+            return False
+        dropped = self._turn_locks.pop(session_key, None) is not None
+        return self._active_turns.pop(session_key, None) is not None or dropped
 
     async def begin_turn(self, session_key: str, actor: str) -> None:
         """Enter an AI-KP turn, publishing ``busy`` only at nesting depth zero."""
@@ -388,3 +407,36 @@ class RoomHub:
             for member in members
         ]
         await self.publish(session_key, Event.presence(players, len(players)))
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+
+
+async def _dispose_turn_state(ctx: FacetContext) -> None:
+    """Drop a deleted room's turn lock and nesting counter, when a hub is in reach.
+
+    Only the operations that carry a hub (the admin/keeper delete path) can do this; a
+    CLI delete has no bus to clean, and leaving the hook a no-op there is correct rather
+    than a gap — an unreachable hub holds no locks for that process to leak.
+    """
+    hub = ctx.hub
+    if hub is None:
+        return
+    hub.dispose_room(ctx.chat_key)
+
+
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="turn_locks",
+        owner="gateway.hub",
+        reset_scope=None,
+        survives_because=(
+            "in-process bookkeeping, not room content: a reset keeps the room and its live "
+            "connections, and dropping the lock mid-session would let two turns run at once "
+            "on the very room a keeper is repairing"
+        ),
+        export_exempt_because="process state — there are no rows to carry",
+        storages=frozenset({STORAGE_MEMORY}),
+        on_delete=_dispose_turn_state,
+    ),
+)

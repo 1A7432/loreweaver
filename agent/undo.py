@@ -35,6 +35,7 @@ import logging
 
 from agent.history import DEFAULT_HISTORY_KEY, leaf_at_or_before, leaf_key
 from agent.services import Services
+from infra.room_facets import STORAGE_SNAPSHOTS, RoomStateFacet
 
 logger = logging.getLogger(__name__)
 
@@ -106,3 +107,19 @@ async def restore(services: Services, chat_key: str, turn: int, *, history_key: 
         restored_leaf = await leaf_at_or_before(services, chat_key, history_key, turn)
         await services.store.state_set(chat_key, leaf_key(history_key), restored_leaf or "")
     return True
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="undo_ring",
+        owner="agent.undo",
+        reset_scope="story",
+        export_exempt_because=(
+            "the ring is a within-session rewind buffer, not room content; a loaded save "
+            "starts a fresh rewind horizon, and a ring that crossed that boundary would "
+            "let `.undo` resurrect pre-import state"
+        ),
+        storages=frozenset({STORAGE_SNAPSHOTS}),
+    ),
+)

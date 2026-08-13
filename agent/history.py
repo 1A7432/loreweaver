@@ -24,6 +24,7 @@ import logging
 import uuid
 
 from agent.services import Services
+from infra.room_facets import STORAGE_HISTORY, STORAGE_ROOM_STATE, RoomStateFacet
 
 logger = logging.getLogger(__name__)
 
@@ -142,3 +143,18 @@ async def migrate_legacy_blob(services: Services, chat_key: str, key: str) -> bo
     await services.store.state_set(chat_key, leaf_key(key), parent)
     logger.info("adopted %d legacy history messages for %s into the append-only tree", len(records), chat_key)
     return True
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="conversation",
+        owner="agent.history",
+        reset_scope="story",
+        state_keys=frozenset({DEFAULT_HISTORY_KEY, leaf_key(DEFAULT_HISTORY_KEY)}),
+        # The tree lives in its own table, the leaf pointer rides room_state, and a fresh
+        # narrative session drops both: a reset that kept the tree would leave the next
+        # turn replaying the campaign it had just erased.
+        storages=frozenset({STORAGE_ROOM_STATE, STORAGE_HISTORY}),
+    ),
+)

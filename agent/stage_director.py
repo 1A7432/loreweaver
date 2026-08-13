@@ -58,6 +58,7 @@ from core.documents import PLAYER_VIEWER, SCENE_ID
 from core.hooks import sanitize_ui_emissions
 from core.modvars import MODVARS_DOC_ID, MODVARS_DOC_TYPE, wire_entries
 from infra.llm import LLMClient
+from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
 
 if TYPE_CHECKING:
     from gateway.hub import RoomHub
@@ -405,3 +406,23 @@ def _spawn_pregen(services: Services, ctx: AgentCtx, kit: RoomKit, subject_id: s
     task = asyncio.create_task(_warm())
     _PREGEN_TASKS.add(task)
     task.add_done_callback(_PREGEN_TASKS.discard)
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="director_images",
+        owner="agent.stage_director",
+        reset_scope=None,
+        survives_because=(
+            "UNREVIEWED — this is what the code does today, not a verdict. No cleanup list "
+            "ever named these keys, and M23 WS1 inverted the ownership of `what to clean` "
+            "without changing behaviour. The spend counter is arguably a room budget, but "
+            "the pre-generation larder is session state that a `.reset story` should "
+            "plausibly drop. Owner verdict pending — see "
+            "docs/notes/implemented/room-lifecycle-facets.md"
+        ),
+        state_keys=frozenset({SPENT_KEY, PREGEN_KEY}),
+        storages=frozenset({STORAGE_ROOM_STATE}),
+    ),
+)

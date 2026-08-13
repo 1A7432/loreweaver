@@ -25,6 +25,7 @@ from infra.i18n import I18n, get_i18n
 from infra.imagegen import ImageGen, apply_imagegen_overrides, build_imagegen
 from infra.llm import LLMClient
 from infra.providers import MutableLLM
+from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
 from infra.runtime_config import CredentialBook, ImageGenCredentialBook, ImageGenRuntimeConfig, RuntimeConfig
 from infra.store import Store
 from infra.vector import VectorStore
@@ -179,3 +180,19 @@ async def room_rule_variant(store, chat_key: str) -> str | None:
 async def set_room_rule_variant(store, chat_key: str, variant: str | None) -> None:
     """Persist the room's house-rule ladder selection ("" clears to the default)."""
     await store.state_set(chat_key, _RULE_VARIANT_KEY, variant or "")
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="rule_variant",
+        owner="agent.services",
+        reset_scope=None,
+        survives_because=(
+            "`.setcoc` picks the table's house-rule ladder — a room setting, and one a "
+            "fresh session at the same table wants to keep"
+        ),
+        state_keys=frozenset({_RULE_VARIANT_KEY}),
+        storages=frozenset({STORAGE_ROOM_STATE}),
+    ),
+)

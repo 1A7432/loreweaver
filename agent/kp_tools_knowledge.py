@@ -96,6 +96,7 @@ from core.documents import KEEPER_VIEWER, MODULE_POOL_ID
 from core.game_clock import advance_game_time
 from core.module_initializer import ProgressCb, _emit
 from infra.i18n import I18n
+from infra.room_facets import STORAGE_DOCUMENTS, RoomStateFacet
 
 # Document-type -> emoji, purely a decorative icon lookup keyed by an
 # internal (English) data tag -- same sanctioned exemption as
@@ -1382,3 +1383,17 @@ class SessionTools(_KnowledgeToolsBase):
             return "\n\n".join(parts)
         except Exception as exc:
             return i18n.t("kp_tools.know.session.export.failed", error=str(exc))
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="keeper_notes",
+        owner="agent.kp_tools_knowledge",
+        reset_scope="story",
+        # The keeper's private working memory and the current-scene singleton: both
+        # describe the session in progress, so both end with it.
+        doc_types=frozenset({"note", "scene"}),
+        storages=frozenset({STORAGE_DOCUMENTS}),
+    ),
+)

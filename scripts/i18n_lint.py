@@ -24,6 +24,11 @@ _SQL_RE = re.compile(
     re.IGNORECASE,
 )
 _LOGGER_METHODS = {"debug", "info", "warning", "warn", "error", "exception", "critical", "log"}
+# Room-lifecycle facets (M23 WS1) carry their rationale as DATA: `survives_because` says
+# why a facet outlives every reset, `export_exempt_because` why no snapshot carries it.
+# Both are prose by design and neither ever reaches a player, so they are exempt at the
+# keyword rather than through a comment on every declaration.
+_DECLARED_RATIONALE_KWARGS = {"survives_because", "export_exempt_because"}
 _REGEX_META = frozenset("^$.*+?[]()|\\")
 
 
@@ -91,6 +96,8 @@ def scan_tree(paths: list[str]) -> list[Finding]:
             if allowlist.permits(rel_path, literal.value):
                 continue
             if _is_logging_template(literal.node, parents):
+                continue
+            if _is_declared_rationale(literal.node, parents):
                 continue
             if not is_hardcoded_ui_literal(literal.value):
                 continue
@@ -247,6 +254,12 @@ def _string_literals(tree: ast.AST, source: str) -> list[_Literal]:
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             literals.append(_Literal(node.value, node, node.lineno, ast.get_source_segment(source, node) or node.value))
     return literals
+
+
+def _is_declared_rationale(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
+    """True for a literal passed as one of the facet-rationale keyword arguments."""
+    parent = parents.get(node)
+    return isinstance(parent, ast.keyword) and parent.arg in _DECLARED_RATIONALE_KWARGS
 
 
 def _is_logging_template(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:

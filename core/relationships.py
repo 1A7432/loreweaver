@@ -23,6 +23,8 @@ import json
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
+
 # ---------------------------------------------------------------------------
 # Track registry
 # ---------------------------------------------------------------------------
@@ -254,3 +256,15 @@ class RelationshipManager:
         """Load this chat's state and render it via `describe`."""
         state = await self.load(chat_key)
         return describe(state, i18n)
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="relationships",
+        owner="core.relationships",
+        reset_scope="story",
+        state_keys=frozenset({_STATE_KEY}),
+        storages=frozenset({STORAGE_ROOM_STATE}),
+    ),
+)

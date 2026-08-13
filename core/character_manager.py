@@ -20,6 +20,7 @@ from datetime import datetime
 from typing import Any
 
 from infra.i18n import t
+from infra.room_facets import STORAGE_DOCUMENTS, STORAGE_ROOM_STATE, RoomStateFacet
 from infra.store import Store
 
 
@@ -585,3 +586,19 @@ class CharacterManager:
 
         canonical = pack.resolve_skill(attr_name)
         return sheet_value(character, pack, canonical) if canonical else 0
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="characters",
+        owner="core.character_manager",
+        reset_scope="chars",
+        # Kept by `.reset story` on purpose: the same investigators replaying the same
+        # module is the lightest reset's whole point.
+        doc_types=frozenset({"sheet"}),
+        state_keys=frozenset({"party_roster"}),
+        state_prefixes=frozenset({"active_character."}),
+        storages=frozenset({STORAGE_DOCUMENTS, STORAGE_ROOM_STATE}),
+    ),
+)

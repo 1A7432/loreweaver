@@ -8,6 +8,7 @@ from typing import Any
 
 from gateway.hub import Event, RoomHub
 from infra.media_store import MediaRecord
+from infra.room_facets import STORAGE_DOCUMENTS, STORAGE_MEDIA, STORAGE_ROOM_STATE, RoomStateFacet
 from infra.store import Store
 
 MEDIA_HISTORY_REPLAY_CAP = 30
@@ -49,3 +50,19 @@ async def publish_media(
     await record_media_history(store, chat_key, frame)
     if hub is not None:
         await hub.publish(chat_key, Event.media(frame))
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="room_media",
+        owner="gateway.media",
+        reset_scope="all",
+        # The `media` document type is registered for the frame contract and no document
+        # of it is written today; it is claimed here so the type cannot become an orphan
+        # the day something does write one.
+        doc_types=frozenset({"media"}),
+        state_keys=frozenset({"media_history"}),
+        storages=frozenset({STORAGE_DOCUMENTS, STORAGE_ROOM_STATE, STORAGE_MEDIA}),
+    ),
+)

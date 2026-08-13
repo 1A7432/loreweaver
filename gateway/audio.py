@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from infra.media_store import MediaRecord
+from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
 from infra.store import Store
 
 AudioLayer = str
@@ -289,3 +290,15 @@ def _clamp_volume(value: Any) -> float:
     except (TypeError, ValueError):
         volume = 1.0
     return max(0.0, min(1.0, volume))
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="room_audio",
+        owner="gateway.audio",
+        reset_scope="all",
+        state_keys=frozenset({_LIBRARY_KEY, _STATE_KEY}),
+        storages=frozenset({STORAGE_ROOM_STATE}),
+    ),
+)

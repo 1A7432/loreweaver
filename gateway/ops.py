@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from infra.i18n import t
+from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
 
 if TYPE_CHECKING:
     from infra.config import CensorSettings
@@ -533,3 +534,30 @@ __all__ = [
     "set_enabled_skills",
     "toggle_enabled_skill",
 ]
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="room_settings",
+        owner="gateway.ops",
+        reset_scope=None,
+        survives_because=(
+            "configuration, not campaign content: language, the bot/media/panel toggles "
+            "and the enabled skill/preset sets are properties of the ROOM, in the same "
+            "family as its bearer keys and channel bindings. `skills_enabled` surviving "
+            "every scope is an explicit owner verdict (2026-08-13), not an oversight"
+        ),
+        state_keys=frozenset(
+            {
+                "chat_locale",
+                "bot_enabled",
+                "media_enabled",
+                "panels_enabled",
+                "preset_enabled",
+                "skills_enabled",
+            }
+        ),
+        storages=frozenset({STORAGE_ROOM_STATE}),
+    ),
+)

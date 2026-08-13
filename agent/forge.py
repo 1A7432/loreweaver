@@ -51,6 +51,7 @@ from agent.services import Services
 from core.documents import KEEPER_VIEWER, MODULE_POOL_ID
 from core.yaml_safety import safe_load_no_aliases
 from infra.file_permissions import atomic_write_private
+from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
 from infra.usage_stats import record_usage_stats
 
 # A placeholder id used only to probe generated content for a name/title before the real id is
@@ -768,3 +769,17 @@ async def generate_and_install_module(services: Services, ctx: AgentCtx, descrip
     await services.store.state_set(ctx.chat_key, _module_forge_owner_key(ctx.chat_key, requested_id), owner)
 
     return ForgeResult(True, module_id, title, str(target), "", detail=install_note)
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="forge_modules",
+        owner="agent.forge",
+        reset_scope="all",
+        # Which generated module this room installed, and who owns each generated id.
+        state_keys=frozenset({"forge_module_last"}),
+        state_prefixes=frozenset({"forge_module_owner."}),
+        storages=frozenset({STORAGE_ROOM_STATE}),
+    ),
+)

@@ -41,6 +41,7 @@ from core.pregen_roster import pregen_add
 from core.rulepacks import load_rulepack
 from infra.i18n import I18n
 from infra.media_store import MediaStore
+from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
 
 _PREVIEW_CHARS = 200
 _KEY_STAT_COUNT = 6
@@ -428,3 +429,17 @@ class CharcardTools:
         sheet, _violations = validate_sheet(sheet, system)
         await _register_png_avatar(self._services, ctx, host_path, sheet)
         return sheet
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="world_import",
+        owner="agent.kp_tools_charcard",
+        reset_scope="all",
+        # The marker recording which world card a keeper imported (拆卡): module
+        # provenance, kept exactly as long as the module it describes.
+        state_keys=frozenset({"world_import"}),
+        storages=frozenset({STORAGE_ROOM_STATE}),
+    ),
+)

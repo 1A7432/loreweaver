@@ -3,6 +3,8 @@
 import re
 from datetime import datetime, timedelta
 
+from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
+
 # Accepted input format -> the same-family output format used after advancing.
 # Advancing preserves the style the table already uses (a zh 年月日 clock stays
 # zh, an ISO clock stays ISO) instead of forcing one culture's format on every
@@ -114,3 +116,15 @@ def advance_game_time(current_time: str, delta_text: str) -> tuple[str, bool]:
         advanced = current_dt + delta
         return advanced.strftime(_TIME_FORMATS[fmt]), True
     return current_time, False
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="game_clock",
+        owner="core.game_clock",
+        reset_scope="story",
+        state_keys=frozenset({"game_clock"}),
+        storages=frozenset({STORAGE_ROOM_STATE}),
+    ),
+)
