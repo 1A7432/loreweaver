@@ -119,6 +119,62 @@ async def apply_hook_writes(services: Services, chat_key: str, writes: list[tupl
     return applied
 
 
+# The turn-indexed ring of what hooks actually injected (M23 WS3). Kept small: it exists
+# so a turn's prompt can be RECONSTRUCTED, and the reconstructable window is the one undo,
+# join replay and playtest forensics work in.
+INJECTION_RING_KEY = "hook_injections"
+INJECTION_RING_TURNS = 20
+
+
+async def record_hook_injections(
+    services: Services, chat_key: str, turn: int, injections: list[str]
+) -> None:
+    """Persist, in FULL, what this turn's hooks injected into the prompt. Never raises.
+
+    `hooks.js` inject() texts used to reach the model from process memory alone: the loop
+    stashed them on `ctx.extra` and the prompt builder read them there, so nothing about
+    the prompt the model actually saw survived the turn. Undo replay, join replay,
+    playtest forensics and the behavioural evals were all silently missing a segment.
+
+    Full text rather than a digest (owner 2026-08-13): the volume is trivial next to the
+    prompt these texts already ride in, and a hash tells a forensic reader that something
+    was injected without telling them what. Best-effort — a side record that raised would
+    cost the turn it exists to document.
+    """
+    texts = [text for text in injections if isinstance(text, str) and text.strip()]
+    if not texts:
+        return
+    try:
+        raw = await services.store.state_get(chat_key, INJECTION_RING_KEY)
+        ring = json.loads(raw) if raw else []
+        if not isinstance(ring, list):
+            ring = []
+    except (json.JSONDecodeError, TypeError):
+        ring = []
+    ring = [item for item in ring if isinstance(item, dict) and item.get("turn") != turn]
+    ring.append({"turn": int(turn), "texts": texts})
+    ring = ring[-INJECTION_RING_TURNS:]
+    try:
+        await services.store.state_set(chat_key, INJECTION_RING_KEY, json.dumps(ring, ensure_ascii=False))
+    except Exception:  # noqa: BLE001 — see docstring
+        logger.warning("hook injection side record failed for %s turn %s", chat_key, turn, exc_info=True)
+
+
+async def replay_hook_injections(services: Services, chat_key: str, turn: int) -> list[str]:
+    """What hooks injected on `turn`, from the persisted ring — the replay side."""
+    try:
+        raw = await services.store.state_get(chat_key, INJECTION_RING_KEY)
+        ring = json.loads(raw) if raw else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(ring, list):
+        return []
+    for item in ring:
+        if isinstance(item, dict) and item.get("turn") == turn:
+            return [str(text) for text in item.get("texts", []) if isinstance(text, str)]
+    return []
+
+
 # --- Room lifecycle (M23 WS1) -----------------------------------------------
 ROOM_FACETS = (
     RoomStateFacet(
@@ -128,6 +184,16 @@ ROOM_FACETS = (
         # Card-installed turn-lifecycle handlers arrive with a world import and leave with
         # it; a hook outliving its module would inject into a room that never loaded it.
         state_keys=frozenset({"room_hooks"}),
+        storages=frozenset({STORAGE_ROOM_STATE}),
+    ),
+    RoomStateFacet(
+        name="hook_injection_ring",
+        owner="agent.hook_runtime",
+        reset_scope="story",
+        # A forensic record of what the MODEL saw, turn by turn: session state, and it goes
+        # when the session does. It is not the hooks themselves (those are module state,
+        # above) — a fresh session re-runs the same hooks and writes its own ring.
+        state_keys=frozenset({INJECTION_RING_KEY}),
         storages=frozenset({STORAGE_ROOM_STATE}),
     ),
 )

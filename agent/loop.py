@@ -38,7 +38,7 @@ from agent.chronicle import (
 )
 from agent.context import AgentCtx
 from agent.history import DEFAULT_HISTORY_KEY, append_turn, load_chain, migrate_legacy_blob, trim_folded
-from agent.hook_runtime import apply_hook_writes, load_room_hook_engine
+from agent.hook_runtime import apply_hook_writes, load_room_hook_engine, record_hook_injections
 from agent.kp_tools_subsystems import dispatch_subsystem, room_rulepack, subsystem_schemas
 from agent.prompt_builder import build_system_prompt_parts
 from agent.services import Services
@@ -312,7 +312,7 @@ async def run_kp_turn(
     # truncation point is the chronicle fold: what the rolling summary has absorbed
     # (`through_turn`) is exactly what history no longer needs to replay, and the fold's
     # own no-future watermark (M18's 4-turn lag) guarantees recent turns are never cut.
-    async def _assemble_base() -> list[dict]:
+    async def _assemble_base(*, advance_timers: bool) -> list[dict]:
         """This turn's prompt prefix: stable head, replayed history, state, player line.
 
         ONE assembler, ONE object (iron rule #5) — but two wire slots (M20 A1). The stable
@@ -329,7 +329,7 @@ async def run_kp_turn(
         the history its new watermark stops replaying — so a retry reusing the old prefix
         would resend the same oversized prompt minus nothing.
         """
-        parts = await build_system_prompt_parts(ctx, services)
+        parts = await build_system_prompt_parts(ctx, services, advance_timers=advance_timers)
         chain = await load_chain(services, ctx.chat_key, key)
         chain = await trim_folded(
             services, ctx.chat_key, key, chain, await summary_through_turn(services, ctx.chat_key)
@@ -358,7 +358,13 @@ async def run_kp_turn(
 
     # Mutated in place for the whole turn — `clear_continuation` owns provider state keyed
     # by this list's identity, so the recovery rebuild splices rather than rebinds.
-    messages: list[dict] = await _assemble_base()
+    # M23 WS3: what the hooks injected reaches the model from process memory, so it is
+    # written down BEFORE assembly — otherwise the one segment of this prompt that no
+    # persisted row explains disappears with the process.
+    await record_hook_injections(
+        services, ctx.chat_key, turn_index, list(ctx.extra.get("hook_injections") or [])
+    )
+    messages: list[dict] = await _assemble_base(advance_timers=True)
     # Where the prefix ends and this turn's tool chatter begins.
     base_len = len(messages)
     # The recovery retry is once per KP turn, full stop: a second overflow after a fold
@@ -427,7 +433,9 @@ async def run_kp_turn(
                     # continuation state, so retire it before re-sending.
                     _clear_llm_continuation(services, messages)
                     tail = messages[base_len:]
-                    rebuilt = await _assemble_base()
+                    # Not a new turn: the worldbook's sticky/cooldown windows already
+                    # ticked for it when the prompt was first assembled.
+                    rebuilt = await _assemble_base(advance_timers=False)
                     messages[:] = [*rebuilt, *tail]
                     base_len = len(rebuilt)
                     try:

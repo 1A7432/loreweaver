@@ -82,6 +82,7 @@ not even an empty header.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 from dataclasses import dataclass
@@ -150,7 +151,9 @@ async def habit_index(services, chat_key: str) -> list[str]:
     return index_lines(document.data) if document is not None else []
 
 
-async def build_system_prompt_parts(ctx: AgentCtx, services: Services) -> SystemPrompt:
+async def build_system_prompt_parts(
+    ctx: AgentCtx, services: Services, *, advance_timers: bool = True
+) -> SystemPrompt:
     """Build the full AI-KP system prompt for `ctx`'s current turn, split at its
     cache boundary.
 
@@ -158,6 +161,12 @@ async def build_system_prompt_parts(ctx: AgentCtx, services: Services) -> System
     (retrieved against the recent narrative/history, `role="keeper"` so the KP — and
     only the KP — also sees secret lore), and joins every non-empty result with
     `"\\n\\n"`, stable half first (module docstring).
+
+    `advance_timers` drives the worldbook's sticky/cooldown/delay counter, which ticks
+    once per injection pass. It is a parameter rather than a constant because M23 WS2
+    re-assembles this prompt a second time within ONE turn after a context-overflow
+    recovery fold: a rebuild is the same turn seen again, not a new one, and letting it
+    tick would age every sticky window twice.
     """
     i18n = services.i18n.with_locale(ctx.locale)
 
@@ -190,7 +199,11 @@ async def build_system_prompt_parts(ctx: AgentCtx, services: Services) -> System
             tree=mvu_tree,
             worldinfo={entry.title: entry.content for entry in room_entries},
         )
-    macros = await _build_macro_context(services, ctx)
+    # M23 WS3: everything random that reaches the model is seeded from persisted state.
+    from agent.chronicle import chronicle_turn
+
+    replay_turn = await chronicle_turn(services.store, ctx.chat_key) + 1
+    macros = await _build_macro_context(services, ctx, turn_rng(ctx.chat_key, replay_turn, "macros"))
     world_lore = await inject_world_lore_prompt(
         ctx,
         services.worldbook,
@@ -200,7 +213,8 @@ async def build_system_prompt_parts(ctx: AgentCtx, services: Services) -> System
         resolve=variable_resolver,
         engine=engine,
         macros=macros,
-        advance_timers=True,  # the once-per-turn injection path drives sticky/cooldown/delay
+        rng=turn_rng(ctx.chat_key, replay_turn, "worldbook"),
+        advance_timers=advance_timers,  # the once-per-turn injection path drives sticky/cooldown/delay
         # Keeper-turn injection budget, tuned for imported module cards: their rule/timeline
         # entries are constant (a keeper world import preserves the flag) and a handful run
         # 2-5KB each, so the browse-path default (8 entries / 4000 chars) starves the module.
@@ -373,7 +387,26 @@ async def _module_pool_ready(services: Services, chat_key: str) -> bool:
         return False
 
 
-async def _build_macro_context(services: Services, ctx: AgentCtx) -> MacroContext:
+def turn_rng(chat_key: str, turn: int, stream: str) -> random.Random:
+    """A per-turn RNG seeded from PERSISTED state only (M23 WS3).
+
+    `{{random}}`/`{{pick}}` macro expansion and the worldbook's `probability` /
+    inclusion-group rolls both reach the model, and both used to draw from an unseeded
+    `random.Random()`. That made two model-visible inputs unreconstructable: an undo
+    replay, a join replay, playtest forensics and the behavioural evals all silently
+    lacked what the model actually saw. The seed is derived from the room's chat key and
+    the turn now in flight — both already persisted, so nothing new has to be stored and
+    the same room state always replays the same expansion.
+
+    `stream` separates the consumers. One shared generator would work for replay too, but
+    it would mean that adding a `{{random}}` macro anywhere shifts every worldbook
+    probability roll after it; separate streams keep each lane's sequence its own.
+    """
+    digest = hashlib.sha256(f"{chat_key}\x00{turn}\x00{stream}".encode()).digest()
+    return random.Random(int.from_bytes(digest[:8], "big"))
+
+
+async def _build_macro_context(services: Services, ctx: AgentCtx, rng: random.Random) -> MacroContext:
     """The per-turn ST-native macro context: `{{user}}` = the caller's active PC name (the
     `"default"` sentinel means unset — mirrors `net.state.resolve_active_character` without
     importing `net`), `{{time}}`/`{{date}}` = the GAME clock, `{{roll:...}}` = the real dice
@@ -399,7 +432,7 @@ async def _build_macro_context(services: Services, ctx: AgentCtx) -> MacroContex
     def _roll(expression: str) -> str:
         return str(roller.roll_expression(expression).total)
 
-    return MacroContext(names=names, clock_time=clock_time, rng=random.Random(), roll=_roll)
+    return MacroContext(names=names, clock_time=clock_time, rng=rng, roll=_roll)
 
 
 async def _flush_template_writes(services: Services, chat_key: str, engine, mvu_tree: dict) -> dict:
