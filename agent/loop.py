@@ -356,14 +356,14 @@ async def run_kp_turn(
     # A recovery fold does NOT move it: it changes what is replayed, not what turn this is.
     turn_index = await chronicle_turn(services.store, ctx.chat_key) + 1
 
-    # Mutated in place for the whole turn — `clear_continuation` owns provider state keyed
-    # by this list's identity, so the recovery rebuild splices rather than rebinds.
     # M23 WS3: what the hooks injected reaches the model from process memory, so it is
     # written down BEFORE assembly — otherwise the one segment of this prompt that no
     # persisted row explains disappears with the process.
     await record_hook_injections(
         services, ctx.chat_key, turn_index, list(ctx.extra.get("hook_injections") or [])
     )
+    # Mutated in place for the whole turn — `clear_continuation` owns provider state keyed
+    # by this list's identity, so the recovery rebuild splices rather than rebinds.
     messages: list[dict] = await _assemble_base(advance_timers=True)
     # Where the prefix ends and this turn's tool chatter begins.
     base_len = len(messages)

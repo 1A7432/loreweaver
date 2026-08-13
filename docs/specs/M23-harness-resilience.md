@@ -1,6 +1,31 @@
 # M23 — Harness resilience: overflow self-healing, replayable prompts, lifecycle facets (APPROVED FOR EXECUTION)
 
-Status: **approved by the owner 2026-08-13 — all four open questions resolved same day.**
+Status: **approved by the owner 2026-08-13 — all four open questions resolved same day.
+WS1–WS4 landed 2026-08-13/14** (WS4 86c5f2a, WS1 ea23cc2, WS2 696e58f, WS3 7631a64);
+each carries a note in `docs/notes/implemented/`. Three things came out different from
+the plan and are recorded where they landed rather than edited into the text below:
+
+1. **WS3's seed** is derived from `(chat_key, turn)`, not from a stored `room_seed`.
+   Both are already persisted, so replay-ability costs no new state.
+2. **WS2 covers two lanes, not five.** Anthropic and the OpenAI-compatible wire are
+   matched from their own current documentation; Gemini documents no context-overflow
+   error at all and is deliberately left unclassified, and the OpenAI platform's
+   documented body carries `code: None` — the widely-repeated `context_length_exceeded`
+   is not what it returns. The ChatGPT-subscription lane, the one path that already
+   RECOGNISED the error before M23, is also unclassified: its backend has no public
+   error documentation, and the spec's own rule is to keep today's behaviour when
+   unsure. Closing it means accepting `infra/llm_chatgpt.py`'s existing
+   `context_length_exceeded` / `input_too_long` signals as the authority — an owner
+   call, not an implementation detail.
+3. **A generation-time overflow is not covered.** On Claude 4.5 and later, an input
+   that fits but whose generation runs into the window returns 200 with
+   `stop_reason: "model_context_window_exceeded"`. That is a truncated reply on the
+   success path, and it needs handling where replies are read.
+
+Two families the WS1 write-surface scan surfaced survive every reset today only
+because no cleanup list ever named them — `scribe_whispers` and the two
+`director_images`/`director_pregen` keys. Their facets say so verbatim; the verdict is
+the owner's.
 Provenance: patterns adapted from the DeepSeek Harness (dsh) architecture study
 (2026-08-13); each workstream names the dsh mechanism it adapts and the local
 evidence that motivates it. Facts below (file:line) were verified against HEAD
