@@ -241,8 +241,9 @@ net/    Iroh p2p + 会话核心     adapters/ CLI          clients/ protocol（n
 | 扩展契约 | [docs/plugins.zh.md](docs/plugins.zh.md) — 完整分层规格 |
 | 客户端作者 | [docs/protocol.zh.md](docs/protocol.zh.md) — 带版本的协议 |
 | 贡献者 | [AGENTS.md](AGENTS.md) — 架构、铁律、工程约定（英文）|
+| 设计沿革 | [docs/notes/](docs/notes/) — 定下的决策与否掉的提案，每条五行；[docs/defensive-patterns.md](docs/defensive-patterns.md) — 用 bug 换来的实现规矩；设计 spec 默认不公开，公开的进 [docs/specs/](docs/specs/)（英文）|
 
-每份文档顶上都有中英切换链接。除 `AGENTS.md` 之外，用户和作者会看的文档都有中文版。
+每份文档顶上都有中英切换链接。除 `AGENTS.md` 和设计沿革类文档之外，用户和作者会看的文档都有中文版。
 
 ## 参与贡献
 

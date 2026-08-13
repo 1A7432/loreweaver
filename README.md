@@ -343,8 +343,9 @@ ship on npm as [`loreweaver-protocol`](https://www.npmjs.com/package/loreweaver-
 | Extension contract | [docs/plugins.md](docs/plugins.md) — the full layered specification |
 | Client authors | [docs/protocol.md](docs/protocol.md) — the versioned wire protocol |
 | Contributors | [AGENTS.md](AGENTS.md) — architecture, iron rules, conventions |
+| Design history | [docs/notes/](docs/notes/) — decisions taken and proposals rejected, five lines each; [docs/defensive-patterns.md](docs/defensive-patterns.md) — implementation rules paid for in bugs; specs stay internal until published into [docs/specs/](docs/specs/) |
 
-Every page above except `AGENTS.md` has a Chinese version; the link is at the top of each one.
+Every page above except `AGENTS.md` and the design-history records has a Chinese version; the link is at the top of each one.
 
 ## Contributing
 
