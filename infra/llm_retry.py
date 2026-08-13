@@ -65,8 +65,12 @@ _RETRYABLE_TEXT = re.compile(
 )
 
 
-def _status_of(error: BaseException) -> int | None:
-    """The HTTP status an exception carries, across five SDKs' conventions."""
+def status_of(error: BaseException) -> int | None:
+    """The HTTP status an exception carries, across five SDKs' conventions.
+
+    Public because it is the one place that knows how five SDKs spell the same thing;
+    `infra.llm_errors` gates on it too rather than growing a second copy.
+    """
     for attribute in ("status_code", "status", "http_status", "code"):
         value = getattr(error, attribute, None)
         if isinstance(value, int) and 100 <= value <= 599:
@@ -86,7 +90,7 @@ def is_retryable(error: BaseException) -> bool:
     dying at the climax because the wrapper insisted on a structured status would be
     the exact failure this module exists to prevent.
     """
-    status = _status_of(error)
+    status = status_of(error)
     if status is not None:
         return status in RETRYABLE_STATUSES
     return bool(_RETRYABLE_TEXT.search(str(error)))

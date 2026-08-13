@@ -20,7 +20,13 @@ names where it bit us; the fix commit is the proof it was paid for.
    table was 16x wrong because a number traveled from a stale table into a
    recommendation unchecked. A vendor constant (window size, error code,
    limit) enters code only with a same-day check against the vendor's own
-   docs and a test pinning the shape it arrives in.
+   docs and a test pinning the shape it arrives in. M23 WS2 is the worked
+   example: the "well-known" OpenAI error code `context_length_exceeded` is
+   NOT what the platform returns (its documented body carries `code: None`),
+   and Gemini documents no context-overflow error at all — so that lane is
+   left unclassified rather than guessed. When the docs do not say it, the
+   entry does not exist; `infra/llm_errors.py` cites a page and a date per
+   entry, and names the lanes it deliberately does not cover.
 4. **Streaming usage is opt-in and silently absent.** Streaming providers
    only report usage when explicitly asked
    (`stream_options={"include_usage": True}`); the chronicle fold was inert on

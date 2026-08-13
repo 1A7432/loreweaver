@@ -112,6 +112,63 @@ async def record_usage_stats(
         )
 
 
+async def record_context_overflow(
+    store: Store,
+    chat_key: str,
+    *,
+    model: str,
+    context_window: int = 0,
+) -> None:
+    """Record that the PROVIDER refused this turn's prompt as too long (M23 WS2).
+
+    A refused call reports no usage at all, so `record_usage_stats` early-returns and the
+    meter does not move — which is how a room gets stuck hitting the same wall every
+    turn: the pressure trigger keeps reading whatever the last SUCCESSFUL turn reported,
+    a number the provider has just contradicted. This writes the contradiction down.
+
+    `last.prompt` is set to the whole window: the provider's refusal says the prompt did
+    not fit, which is a fullness of at least 100%, and that is what the next turn's
+    routine fold and the HUD should both see. It is flagged `estimated` (nothing measured
+    it) and `overflow`, and the `session` totals are left alone — they stay measured-only
+    so they remain checkable against a vendor's bill.
+    """
+    window = context_window_for(model, context_window)
+    if window <= 0:
+        # Without a window there is no fullness to record and nothing the fold could read.
+        return
+    session = dict(_EMPTY_SESSION)
+    try:
+        raw = await store.state_get(chat_key, USAGE_STATS_KEY)
+        prior = json.loads(raw) if raw else {}
+        prior_session = prior.get("session") if isinstance(prior, dict) else None
+        if isinstance(prior_session, dict):
+            for field_name in session:
+                session[field_name] = int(prior_session.get(field_name, 0) or 0)
+    except Exception:
+        session = dict(_EMPTY_SESSION)
+
+    payload = {
+        "last": {
+            "prompt": window,
+            "completion": 0,
+            "cache_hit": 0,
+            "cache_miss": 0,
+            "context_window": window,
+            "estimated": True,
+            "overflow": True,
+        },
+        "session": session,
+    }
+    try:
+        await store.state_set(chat_key, USAGE_STATS_KEY, json.dumps(payload, ensure_ascii=False))
+    except Exception:
+        logger.warning(
+            "usage_stats: failed to persist context overflow for chat_key=%s",
+            chat_key,
+            exc_info=True,
+        )
+
+
 # --- Room lifecycle (M23 WS1) -----------------------------------------------
 ROOM_FACETS = (
     RoomStateFacet(

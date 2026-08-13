@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 from agent.chronicle import maybe_fold_chronicle
 from agent.context import AgentCtx
@@ -181,11 +182,27 @@ async def test_a_companion_sub_turn_alone_never_runs_the_scribe():
 # ---------------------------------------------------------------------------
 
 # AGENTS.md ("Per-turn model-call budget") states the worst case for ONE player
-# turn: 3 fold + 12 rounds + 5 end-of-turn check rounds = 20 per KP turn, plus 1
-# Scribe + 1 Director beat, plus 6 companion sub-turns of (1 actor + 20). This
-# pins the SHAPE of that bound as well as the ceiling itself: a turn costs a
-# fixed keeper cost plus a per-companion cost, and never more than the ceiling.
-DOCUMENTED_CEILING = 148
+# turn: 3 fold + 12 rounds + 5 end-of-turn check rounds + 1 context-overflow retry
+# = 21 per KP turn, plus 1 Scribe + 1 Director beat, plus 6 companion sub-turns of
+# (1 actor + 21). This pins the SHAPE of that bound as well as the ceiling itself: a
+# turn costs a fixed keeper cost plus a per-companion cost, and never more than the
+# ceiling.
+#
+# M23 WS2 moved it from 148 to 155. The added term is the RETRY, once per KP turn, on
+# the disaster path where the provider refuses the prompt as too long: 7 KP-turn
+# instances (1 main + 6 companion-nested) × 1. The recovery FOLD is not a new term —
+# it shares the same ≤3 batches the routine fold has (`fold_for_overflow`'s
+# `batches_spent`), which is why the fold half of the sum is unchanged.
+# The arithmetic, executable rather than asserted, so a future change has to edit the
+# terms and not just the total.
+KP_TURN_WORST_CASE = 3 + 12 + 5 + 1  # fold batches + tool rounds + check rounds + overflow retry
+COMPANION_SUB_TURNS = 6  # gateway.director.MAX_COMPANION_TURNS
+DOCUMENTED_CEILING = (
+    1  # the Scribe pass
+    + 1  # the Director call, on a beat
+    + KP_TURN_WORST_CASE  # the main KP turn
+    + COMPANION_SUB_TURNS * (1 + KP_TURN_WORST_CASE)  # each companion: 1 actor call + a nested KP turn
+)
 
 
 async def test_per_turn_call_count_tracks_the_companion_count_and_stays_under_the_ceiling():
@@ -381,3 +398,17 @@ async def test_one_turn_never_spends_more_than_the_per_turn_fold_batch_budget():
     assert counts["folds"] > 0, "positive control: a real backlog does fold"
     assert counts["folds"] <= 3, "a single turn's fold budget is bounded"
     assert outcome.batches == counts["folds"]
+
+
+def test_the_documented_ceiling_matches_the_number_AGENTS_md_publishes():
+    """The budget paragraph and this file are one number, or the budget means nothing.
+
+    AGENTS.md is where a contributor reads the bound before adding a model-driven lane;
+    this constant is what CI enforces. They drift the moment nobody checks.
+    """
+    assert DOCUMENTED_CEILING == 155
+    assert KP_TURN_WORST_CASE == 21
+    agents_md = (Path(__file__).resolve().parents[2] / "AGENTS.md").read_text(encoding="utf-8")
+    budget_paragraph = agents_md.split("## Per-turn model-call budget", 1)[1].split("\n## ", 1)[0]
+    assert "~155 model calls" in budget_paragraph
+    assert f"= **{KP_TURN_WORST_CASE}**" in budget_paragraph

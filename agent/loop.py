@@ -29,7 +29,13 @@ import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
-from agent.chronicle import advance_chronicle_turn, chronicle_turn, maybe_fold_chronicle, summary_through_turn
+from agent.chronicle import (
+    advance_chronicle_turn,
+    chronicle_turn,
+    fold_for_overflow,
+    maybe_fold_chronicle,
+    summary_through_turn,
+)
 from agent.context import AgentCtx
 from agent.history import DEFAULT_HISTORY_KEY, append_turn, load_chain, migrate_legacy_blob, trim_folded
 from agent.hook_runtime import apply_hook_writes, load_room_hook_engine
@@ -54,6 +60,8 @@ from core.rulepacks import RulePack
 from core.skills import unlocked_tools_for
 from infra.i18n import t
 from infra.llm import CACHE_BREAKPOINT_KEY, ChatResult, Usage
+from infra.llm_errors import is_context_overflow
+from infra.usage_stats import record_context_overflow
 
 logger = logging.getLogger(__name__)
 
@@ -281,8 +289,7 @@ async def run_kp_turn(
     # history `trim_folded` then drops — hence the key's computation (and the legacy
     # adoption that fills the tree) sits above it. Best-effort: never raises; a no-op
     # when disabled, when no meter exists yet (a room's first turn), or under the trigger.
-    await maybe_fold_chronicle(ctx, services, history_key=key)
-    system_prompt = await build_system_prompt_parts(ctx, services)
+    routine_fold = await maybe_fold_chronicle(ctx, services, history_key=key)
     # Layer B.2 -- allowed-tools enforcement (docs/plugins.md "Layer B"): the union
     # of `allowed_tools` across every KP skill enabled for this room. With no
     # skills enabled (or none of them declaring gated tools) this is `set()`, so
@@ -305,35 +312,59 @@ async def run_kp_turn(
     # truncation point is the chronicle fold: what the rolling summary has absorbed
     # (`through_turn`) is exactly what history no longer needs to replay, and the fold's
     # own no-future watermark (M18's 4-turn lag) guarantees recent turns are never cut.
-    history = await load_chain(services, ctx.chat_key, key)
-    history = await trim_folded(services, ctx.chat_key, key, history, await summary_through_turn(services, ctx.chat_key))
+    async def _assemble_base() -> list[dict]:
+        """This turn's prompt prefix: stable head, replayed history, state, player line.
+
+        ONE assembler, ONE object (iron rule #5) — but two wire slots (M20 A1). The stable
+        head rides the system message; the volatile tail becomes a `state` message directly
+        before the player's, so the prefix through the end of history stays byte-identical
+        between folds instead of being invalidated every turn by the tail.
+        `_lw_cache_breakpoint` is agent->adapter metadata marking each boundary: the
+        Anthropic path turns it into a `cache_control` breakpoint, the OpenAI-compatible
+        path strips it and caches by prefix on its own. It never reaches a vendor's wire
+        (`infra.llm.wire_messages`).
+
+        A closure because M23 WS2 rebuilds it once more mid-turn, after a context-overflow
+        recovery fold: that fold moves BOTH halves — the summary inside the stable head and
+        the history its new watermark stops replaying — so a retry reusing the old prefix
+        would resend the same oversized prompt minus nothing.
+        """
+        parts = await build_system_prompt_parts(ctx, services)
+        chain = await load_chain(services, ctx.chat_key, key)
+        chain = await trim_folded(
+            services, ctx.chat_key, key, chain, await summary_through_turn(services, ctx.chat_key)
+        )
+        base: list[dict] = []
+        if parts.stable:
+            base.append({"role": "system", "content": parts.stable, CACHE_BREAKPOINT_KEY: True})
+        # Marked on a COPY: `chain` itself is what gets persisted back, and a wire-only
+        # breakpoint mark has no business in the store.
+        base.extend([*chain[:-1], {**chain[-1], CACHE_BREAKPOINT_KEY: True}] if chain else [])
+        if parts.volatile:
+            # A user-role message, not a second system one: mid-conversation system messages
+            # are model- and vendor-specific, while every provider path here takes a user
+            # turn unchanged. The header names it as engine state so the Keeper never reads
+            # the state dump as something a player said.
+            base.append(
+                {"role": "user", "content": i18n.t("prompt.state_header") + "\n\n" + parts.volatile}
+            )
+        base.append({"role": "user", "content": user_message})
+        return base
+
     # The turn now in flight — completed turns + 1, the same stamp `record_entry` uses,
     # so a history message and a chronicle record made this turn carry the same index.
+    # A recovery fold does NOT move it: it changes what is replayed, not what turn this is.
     turn_index = await chronicle_turn(services.store, ctx.chat_key) + 1
 
-    # ONE assembler, ONE object (iron rule #5) — but two wire slots (M20 A1). The stable
-    # head rides the system message; the volatile tail becomes a `state` message directly
-    # before the player's, so the prefix through the end of history stays byte-identical
-    # between folds instead of being invalidated every turn by the tail.
-    # `_lw_cache_breakpoint` is agent->adapter metadata marking each boundary: the
-    # Anthropic path turns it into a `cache_control` breakpoint, the OpenAI-compatible
-    # path strips it and caches by prefix on its own. It never reaches a vendor's wire
-    # (`infra.llm.wire_messages`).
-    messages: list[dict] = []
-    if system_prompt.stable:
-        messages.append({"role": "system", "content": system_prompt.stable, CACHE_BREAKPOINT_KEY: True})
-    # Marked on a COPY: `history` itself is what gets persisted back, and a wire-only
-    # breakpoint mark has no business in the store.
-    messages.extend([*history[:-1], {**history[-1], CACHE_BREAKPOINT_KEY: True}] if history else [])
-    if system_prompt.volatile:
-        # A user-role message, not a second system one: mid-conversation system messages
-        # are model- and vendor-specific, while every provider path here takes a user
-        # turn unchanged. The header names it as engine state so the Keeper never reads
-        # the state dump as something a player said.
-        messages.append(
-            {"role": "user", "content": i18n.t("prompt.state_header") + "\n\n" + system_prompt.volatile}
-        )
-    messages.append({"role": "user", "content": user_message})
+    # Mutated in place for the whole turn — `clear_continuation` owns provider state keyed
+    # by this list's identity, so the recovery rebuild splices rather than rebinds.
+    messages: list[dict] = await _assemble_base()
+    # Where the prefix ends and this turn's tool chatter begins.
+    base_len = len(messages)
+    # The recovery retry is once per KP turn, full stop: a second overflow after a fold
+    # that did fold something is not a fold problem, and re-folding on it would be the
+    # ping-pong this guard exists to make structurally impossible.
+    overflow_retried = False
 
     tool_trace: list[dict] = []
     reply: str | None = None
@@ -363,6 +394,79 @@ async def run_kp_turn(
                 on_text_delta=gate.feed if gate is not None else None,
             )
         except Exception as exc:
+            # M23 WS2 — the provider's refusal is the one meter that cannot lie. When it
+            # says the prompt is too long (`infra.llm_errors`, strict by construction),
+            # fold and try ONCE more. The retry is conditional on the fold having actually
+            # folded records: no progress, no retry, so a room with nothing left to fold
+            # reports the error immediately instead of ping-ponging with the provider.
+            if not overflow_retried and is_context_overflow(exc):
+                overflow_retried = True
+                # Record it even though the call reported no usage at all. Otherwise the
+                # meter keeps showing the last SUCCESSFUL turn's reading — a number this
+                # error just contradicted — and the next turn walks into the same wall.
+                await record_context_overflow(
+                    services.store,
+                    ctx.chat_key,
+                    model=services.settings.llm.chat_model,
+                    context_window=services.settings.llm.context_window,
+                )
+                fold = await fold_for_overflow(
+                    ctx, services, history_key=key, batches_spent=routine_fold.batches
+                )
+                if fold.entries_folded:
+                    logger.warning(
+                        "context overflow: folded %d chronicle record(s) and retrying the call once",
+                        fold.entries_folded,
+                    )
+                    if gate is not None:
+                        # The failed call may already have streamed a partial draft; clients
+                        # clear on the next epoch, so discard this one and open a fresh round.
+                        gate.finish_round(discard=True)
+                        gate.begin_round()
+                    # The conversation genuinely changed underneath any provider-side
+                    # continuation state, so retire it before re-sending.
+                    _clear_llm_continuation(services, messages)
+                    tail = messages[base_len:]
+                    rebuilt = await _assemble_base()
+                    messages[:] = [*rebuilt, *tail]
+                    base_len = len(rebuilt)
+                    try:
+                        result = await _chat_with_continuation_cleanup(
+                            services,
+                            messages,
+                            tools=round_tools,
+                            tool_choice="auto",
+                            temperature=services.settings.llm.temperature,
+                            on_text_delta=gate.feed if gate is not None else None,
+                        )
+                    except Exception as retry_exc:  # noqa: BLE001 — falls through to the report below
+                        exc = retry_exc
+                    else:
+                        _accumulate_usage(turn_usage, result)
+                        if result.tool_calls:
+                            if gate is not None:
+                                gate.finish_round(discard=True)
+                            try:
+                                await _dispatch_and_record(
+                                    toolset,
+                                    ctx,
+                                    services,
+                                    result,
+                                    messages,
+                                    tool_trace,
+                                    unlocked,
+                                    phase=phase,
+                                    room_pack=room_pack,
+                                    hook_engine=hook_engine,
+                                )
+                            except (asyncio.CancelledError, Exception):
+                                _clear_llm_continuation(services, messages)
+                                raise
+                            continue
+                        if gate is not None:
+                            gate.finish_round(discard=False)
+                        reply = result.content or ""
+                        break
             # A real provider error (network/rate-limit/auth/SDK) must degrade to a friendly,
             # localized diagnosis (or the generic unavailable fallback), never crash the turn.
             # We return early WITHOUT persisting history (nothing useful happened this turn).

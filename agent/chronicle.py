@@ -162,7 +162,7 @@ class FoldOutcome:
     """What one fold pass did (observability for the manual command + tests)."""
 
     ran: bool = False
-    level: str = "none"  # none | fold | emergency | manual
+    level: str = "none"  # none | fold | emergency | manual | recovery
     batches: int = 0
     entries_folded: int = 0
     rejected: int = 0  # fold inputs refused by the no-future guard
@@ -268,6 +268,51 @@ async def record_entry(
 # ---------------------------------------------------------------------------
 
 
+async def fold_for_overflow(
+    ctx: AgentCtx,
+    services: Services,
+    *,
+    history_key: str = DEFAULT_HISTORY_KEY,
+    batches_spent: int = 0,
+) -> FoldOutcome:
+    """Fold because the PROVIDER said the prompt is too big (M23 WS2).
+
+    The routine fold is driven by the usage meter. This entry point exists for the case
+    where the meter was wrong: a provider refused the call with a context-overflow error
+    (`infra.llm_errors`), which is the one reading that cannot be stale, missing or
+    measured in the wrong unit. So it takes no meter reading at all — no trigger, no
+    re-arm stamp, no deficit arithmetic, nothing sized against a number that has just
+    been proven unreliable. It folds by BATCH, oldest first, and stops at the same
+    per-turn budget a routine fold has.
+
+    What it keeps from the routine path is the part that is not about the meter: the
+    no-future watermark (a fold may never consume a record from the in-flight scene) and
+    the replay-floor guard (if folding would free no replayed history, it frees nothing,
+    and the caller must not retry). `entries_folded == 0` therefore means "no progress",
+    which is exactly the condition on which `agent/loop.py` declines to retry.
+
+    `batches_spent` is what this turn's ROUTINE fold already used. The two share ONE
+    per-turn budget rather than getting one each: a turn that had already folded three
+    batches and still overflowed does not get to fold three more, so the per-KP-turn
+    generation count stays exactly where the AGENTS.md budget paragraph says it is.
+    A remainder of zero means no fold, which means no progress, which means no retry.
+    """
+    settings = services.settings.chronicle
+    if not settings.enabled:
+        return FoldOutcome()
+    remaining = _FOLD_MAX_BATCHES_PER_TURN - max(0, batches_spent)
+    if remaining <= 0:
+        logger.debug("chronicle recovery fold skipped: this turn's fold budget is already spent")
+        return FoldOutcome()
+    try:
+        return await _fold_flow(
+            ctx, services, force=False, recovery=True, history_key=history_key, max_batches=remaining
+        )
+    except Exception:  # noqa: BLE001 — same stance as the routine fold: never fatal
+        logger.debug("chronicle recovery fold failed", exc_info=True)
+        return FoldOutcome()
+
+
 async def maybe_fold_chronicle(
     ctx: AgentCtx, services: Services, *, force: bool = False, history_key: str = DEFAULT_HISTORY_KEY
 ) -> FoldOutcome:
@@ -300,13 +345,28 @@ async def maybe_fold_chronicle(
     if not settings.enabled:
         return FoldOutcome()
     try:
-        return await _fold_flow(ctx, services, force=force, history_key=history_key)
+        return await _fold_flow(
+            ctx,
+            services,
+            force=force,
+            recovery=False,
+            history_key=history_key,
+            max_batches=_FOLD_MAX_BATCHES_PER_TURN,
+        )
     except Exception:  # noqa: BLE001 — the fold is additive continuity, never fatal
         logger.debug("chronicle fold failed", exc_info=True)
         return FoldOutcome()
 
 
-async def _fold_flow(ctx: AgentCtx, services: Services, *, force: bool, history_key: str) -> FoldOutcome:
+async def _fold_flow(
+    ctx: AgentCtx,
+    services: Services,
+    *,
+    force: bool,
+    recovery: bool,
+    history_key: str,
+    max_batches: int,
+) -> FoldOutcome:
     settings = services.settings.chronicle
     chat_key = ctx.chat_key
     meter = await _read_meter(services, chat_key)
@@ -314,6 +374,10 @@ async def _fold_flow(ctx: AgentCtx, services: Services, *, force: bool, history_
     before = measured / window if window > 0 else 0.0
     if force:
         level = "manual"
+    elif recovery:
+        # Every gate below this line reads the meter, and the provider has just told us
+        # the meter is wrong. A recovery fold skips all of them and folds what it can.
+        level = "recovery"
     else:
         if window <= 0:
             return FoldOutcome()  # no meter yet (a fresh room's first turn)
@@ -357,8 +421,11 @@ async def _fold_flow(ctx: AgentCtx, services: Services, *, force: bool, history_
     # flowing back in through topical recall (`_RECALL_LIMIT`) — is exactly why BOTH
     # guards above stay: the meter remains the only authority on whether a fold
     # actually paid for itself.
+    # A recovery fold has no deficit to solve for: the meter it would be solved against
+    # is the one that failed. It takes the whole foldable backlog as its target and lets
+    # the per-turn batch budget below decide how much of it this turn pays for.
     deficit = 0 if force else max(0, int(measured - settings.fold_floor * window))
-    pending = list(foldable) if force else _fold_prefix(
+    pending = list(foldable) if (force or recovery) else _fold_prefix(
         replayed, docs_by_id, foldable, deficit=deficit, reducible=reducible
     )
 
@@ -389,11 +456,13 @@ async def _fold_flow(ctx: AgentCtx, services: Services, *, force: bool, history_
         # No floor re-check here: the target set was solved against the replayed history
         # before the first call, so reaching the end of it IS reaching the floor (or the
         # small-window edge, where there was no floor to reach).
-        if not force and outcome.batches >= _FOLD_MAX_BATCHES_PER_TURN:
+        if not force and outcome.batches >= max_batches:
             break  # this turn's fold budget is spent; the rest drains on later turns
-    if not force and attempted:
+    if not force and not recovery and attempted:
         # Stamp what the meter read when we acted, successful batch or not: the next
-        # turn compares against it instead of trusting this turn's prediction.
+        # turn compares against it instead of trusting this turn's prediction. A recovery
+        # fold stamps nothing: it acted on the provider's refusal, and writing the failed
+        # meter's reading into the re-arm record would disarm the routine fold with it.
         await _stamp_fold_meter(services, chat_key, meter)
     if outcome.folded_ids:
         outcome.through_turn = max(_entry_turn(docs_by_id[doc_id]) for doc_id in outcome.folded_ids)
