@@ -15,6 +15,10 @@ from the setting, and the test that matters most here is the one that moves the 
 
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from agent.chronicle import CHRONICLE_TURN_KEY, chronicle_turn
 from agent.context import AgentCtx
 from agent.history import append_turn, leaf_key, load_chain
@@ -219,3 +223,40 @@ async def test_the_command_refuses_to_reach_past_the_lag_window():
     reply = await router.dispatch(_keeper(), ".undo 5")
 
     assert "2" in reply, "the refusal names the window it is bounded by"
+
+
+async def test_restore_rolls_back_whole_when_a_snapshot_row_is_poison():
+    """Atomicity: a restore that cannot complete leaves the room EXACTLY as it was.
+
+    `restore` used to run delete-room + per-row re-inserts as independently committed
+    store calls, so a failure landing after the delete left documents gone and state
+    half old — a torn room, strictly worse than no rewind. The poison row here only
+    fails once the transaction is already past the document delete, so this test
+    cannot pass vacuously on an early exit."""
+    services = _services()
+    await services.documents.put(CHAT, "note", "log", {"category": "log", "content": "before"})
+    await services.store.state_set(CHAT, "scene", "the docks")
+    payload = json.dumps(
+        {
+            "room_state": [{"key": "scene", "value": "restored"}],
+            "documents": [
+                {
+                    "type": "note",
+                    "id": "log",
+                    "schema_version": "poison",  # int() raises INSIDE the transaction
+                    "data": "{}",
+                    "meta": "{}",
+                    "grants": "{}",
+                }
+            ],
+        }
+    )
+    await services.store.snapshot_put(CHAT, 3, payload, keep=4)
+
+    with pytest.raises(ValueError):
+        await restore(services, CHAT, 3)
+
+    # Nothing moved: both halves are exactly the pre-restore room.
+    doc = await services.documents.get(CHAT, "note", "log")
+    assert doc is not None and doc.data["content"] == "before"
+    assert await services.store.state_get(CHAT, "scene") == "the docks"

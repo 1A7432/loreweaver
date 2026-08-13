@@ -94,20 +94,10 @@ async def restore(services: Services, chat_key: str, turn: int, *, history_key: 
     # The RAW rows go back verbatim, bypassing `DocumentStore.put`'s validate/stamp path:
     # this is a restore of bytes that were already validated on the way in, and re-running
     # `validate_write` here would rewrite `meta.modified` on every document in the room.
-    await services.store.doc_delete_room(chat_key)
-    for row in documents:
-        await services.store.doc_put(
-            chat_key,
-            str(row.get("type")),
-            str(row.get("id")),
-            schema_version=int(row.get("schema_version", 1) or 1),
-            data=str(row.get("data", "{}")),
-            meta=str(row.get("meta", "{}")),
-            grants=str(row.get("grants", "{}")),
-        )
-    await services.store.state_delete_room(chat_key)
-    for row in state_rows:
-        await services.store.state_set(chat_key, str(row.get("key")), row.get("value"))
+    # One transaction for both halves — per-row `doc_put`/`state_set` each commit on
+    # their own, so a failure mid-restore used to leave documents deleted but only
+    # partially re-inserted: the docstring's "or neither does", made real by the store.
+    await services.store.replace_room_content(chat_key, documents=documents, state=state_rows)
 
     # Belt and braces on the one pointer the whole rewind hangs on: a snapshot taken before
     # the leaf key existed (or a room whose history was adopted later) must still land on

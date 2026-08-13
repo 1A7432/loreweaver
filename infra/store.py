@@ -451,6 +451,54 @@ class Store:
             self._commit(conn)
             return cursor.rowcount if cursor.rowcount != -1 else 0
 
+    async def replace_room_content(
+        self, room: str, *, documents: list[dict], state: list[dict]
+    ) -> None:
+        """Replace ALL of `room`'s document and room_state rows in ONE transaction.
+
+        The undo restore's batch boundary: `doc_put`/`state_set` deliberately commit
+        per call for ordinary use, but a rewind that dies between its delete and the
+        end of its re-inserts would leave the room torn — documents gone, state half
+        old — which is worse than no rewind at all. Rows go back verbatim, `seq`
+        included, so the snapshot's insertion order survives the round-trip. Any
+        failure (a poison row, a crash surfacing as an exception, cancellation)
+        rolls the whole thing back and the room stays exactly as it was.
+        """
+        async with self._lock:
+            conn = self._ensure_conn()
+            # BEGIN outside the try, like `set_rows_if_values`/`state_set_if_values`:
+            # if opening the transaction itself fails there is nothing to roll back,
+            # and attempting one would mask the real error with a second one.
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conn.execute("DELETE FROM documents WHERE room = ?", (room,))
+                for row in documents:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO documents"
+                        " (room, type, id, schema_version, data, meta, grants, seq)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            room,
+                            str(row.get("type")),
+                            str(row.get("id")),
+                            int(row.get("schema_version", 1) or 1),
+                            str(row.get("data", "{}")),
+                            str(row.get("meta", "{}")),
+                            str(row.get("grants", "{}")),
+                            int(row.get("seq", 0) or 0),
+                        ),
+                    )
+                conn.execute("DELETE FROM room_state WHERE room = ?", (room,))
+                for row in state:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO room_state (room, key, value) VALUES (?, ?, ?)",
+                        (room, str(row.get("key")), row.get("value")),
+                    )
+                self._commit(conn)
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+
     # ------------------------------------------------------------------
     # Chat-history tree (M20 D) — append-only records, rewound by pointer.
     # ------------------------------------------------------------------
