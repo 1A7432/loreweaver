@@ -20,6 +20,7 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 
 from agent.context import AgentCtx, LocalFs
+from agent.history import DEFAULT_HISTORY_KEY, append_turn
 from agent.kp_tools import build_kp_toolset
 from agent.kp_tools_companion import CompanionTools
 from agent.services import build_services
@@ -1014,11 +1015,18 @@ async def test_join_replays_recent_chat_history_to_the_joiner_only():
     url = await _start(server)
     try:
         chat_key = _room_ctx("replay-room").chat_key
-        history = [
-            {"role": "user", "content": "I open the door"},
-            {"role": "assistant", "content": "The door creaks open onto a dark hallway."},
-        ]
-        await services.store.state_set(chat_key, "chat_history", json.dumps(history))
+        # Seeded through the REAL write path — the M20 D append-only tree that every
+        # `run_kp_turn` uses. Seeding the retired `room_state["chat_history"]` blob here
+        # once let this test stay green while every real room's join replay read that
+        # forever-empty key and delivered nothing.
+        await append_turn(
+            services,
+            chat_key,
+            DEFAULT_HISTORY_KEY,
+            user_message="I open the door",
+            reply="The door creaks open onto a dark hallway.",
+            turn=1,
+        )
 
         ws_ann = await websockets.connect(url)
         await _join(ws_ann, key_ann, "Ann")
@@ -1058,6 +1066,37 @@ async def test_join_replays_recent_chat_history_to_the_joiner_only():
         await server.close()
 
 
+async def test_join_replay_falls_back_to_the_pre_migration_history_blob():
+    """A room that upgraded across M20 D but has not taken a turn yet still holds its
+    conversation only in the old `room_state` blob (the first turn adopts the blob into
+    the tree and clears it). Until that turn, a joiner must still see the story."""
+    services = _services()
+    keystore = Keystore()
+    key_ann = keystore.add(room="legacy-replay-room", name="Ann")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        chat_key = _room_ctx("legacy-replay-room").chat_key
+        history = [
+            {"role": "user", "content": "I open the door"},
+            {"role": "assistant", "content": "The door creaks open onto a dark hallway."},
+        ]
+        await services.store.state_set(chat_key, "chat_history", json.dumps(history))
+
+        ws_ann = await websockets.connect(url)
+        await _join(ws_ann, key_ann, "Ann")
+        await _recv(ws_ann)  # join presence
+        replay1 = await _recv(ws_ann)
+        replay2 = await _recv(ws_ann)
+
+        assert replay1["type"] == "narrative"
+        assert replay1["text"] == "I open the door"
+        assert replay2["text"] == "The door creaks open onto a dark hallway."
+        await ws_ann.close()
+    finally:
+        await server.close()
+
+
 async def test_join_replay_is_capped_and_skips_a_brand_new_room():
     services = _services()
     keystore = Keystore()
@@ -1066,8 +1105,17 @@ async def test_join_replay_is_capped_and_skips_a_brand_new_room():
     url = await _start(server)
     try:
         chat_key = _room_ctx("cap-room").chat_key
-        history = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"line {i}"} for i in range(40)]
-        await services.store.state_set(chat_key, "chat_history", json.dumps(history))
+        # 20 real turns = 40 tree records ("line 0"…"line 39"), via the same write path
+        # the loop uses, so the cap is pinned on the lane joins actually read.
+        for turn in range(20):
+            await append_turn(
+                services,
+                chat_key,
+                DEFAULT_HISTORY_KEY,
+                user_message=f"line {2 * turn}",
+                reply=f"line {2 * turn + 1}",
+                turn=turn + 1,
+            )
 
         ws = await websockets.connect(url)
         await _join(ws, key, "Nora")

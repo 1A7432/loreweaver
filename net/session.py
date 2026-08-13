@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.context import AgentCtx, FsAdapter, LocalFs
+from agent.history import DEFAULT_HISTORY_KEY, load_chain
 from agent.kp_tools import build_kp_toolset
 from agent.loop import KPTurnResult
 from agent.services import Services
@@ -328,27 +329,34 @@ class SessionCore:
         """
         chat_key = self._ctx_for(member).chat_key
         try:
-            raw = await self.services.store.state_get(chat_key, "chat_history")
-            history = json.loads(raw) if raw else []
-            if isinstance(history, list):
-                for entry in history[-_HISTORY_REPLAY_CAP:]:
-                    if not isinstance(entry, dict):
-                        continue
-                    text = str(entry.get("content") or "").strip()
-                    if not text:
-                        continue
-                    role = entry.get("role")
-                    # Replay is STORY continuity, not an ops log: dot-command echoes and
-                    # their system responses (setup acks, ".panels enable" …) read as
-                    # backstage noise to a joining player, so only the narrative lanes
-                    # (player utterances + KP prose) replay.
-                    if role == "user" and text.startswith((".", "/")):
-                        continue
-                    if role not in ("user", "assistant"):
-                        continue
-                    speaker = "player" if role == "user" else "kp"
-                    fmt = "plain" if speaker == "player" else "markdown"
-                    await member.deliver(Event.narrative(speaker=speaker, text=text, fmt=fmt))
+            # M20 D moved the conversation into the append-only history tree; the
+            # `room_state` blob of the same name survives only in rooms that upgraded
+            # and have not taken a turn yet (the first turn adopts and clears it). So
+            # the tree is the source and the blob the fallback — reading only the blob
+            # replayed NOTHING for every post-migration room.
+            history: list = await load_chain(self.services, chat_key, DEFAULT_HISTORY_KEY)
+            if not history:
+                raw = await self.services.store.state_get(chat_key, "chat_history")
+                legacy = json.loads(raw) if raw else []
+                history = legacy if isinstance(legacy, list) else []
+            for entry in history[-_HISTORY_REPLAY_CAP:]:
+                if not isinstance(entry, dict):
+                    continue
+                text = str(entry.get("content") or "").strip()
+                if not text:
+                    continue
+                role = entry.get("role")
+                # Replay is STORY continuity, not an ops log: dot-command echoes and
+                # their system responses (setup acks, ".panels enable" …) read as
+                # backstage noise to a joining player, so only the narrative lanes
+                # (player utterances + KP prose) replay.
+                if role == "user" and text.startswith((".", "/")):
+                    continue
+                if role not in ("user", "assistant"):
+                    continue
+                speaker = "player" if role == "user" else "kp"
+                fmt = "plain" if speaker == "player" else "markdown"
+                await member.deliver(Event.narrative(speaker=speaker, text=text, fmt=fmt))
             media_raw = await self.services.store.state_get(chat_key, "media_history")
             media_history = json.loads(media_raw) if media_raw else []
             if isinstance(media_history, list):
@@ -422,6 +430,10 @@ class SessionCore:
                     "admin_export_room",
                     "admin_import_room",
                     "admin_delete_room_data",
+                    # A reset mutates the same documents/room_state a mid-flight turn's
+                    # tool calls are writing — it belongs behind the room lock with the
+                    # other destructive ops (it was the one omission from this set).
+                    "admin_reset_room",
                     "admin_generate",
                 }:
                     async with self.hub.turn_lock(member.session_key):
