@@ -24,7 +24,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from core.character_manager import CharacterManager, CharacterSheet
+from core.character_manager import CharacterManager, CharacterNameTakenError, CharacterSheet
 
 MAX_ROSTER_ENTRIES = 32
 _MAX_SLUG_CHARS = 64
@@ -122,7 +122,8 @@ async def pregen_claim(
     """Claim a pregen for `user_id`. Returns ``(status, sheet)`` with status one of
     ``ok`` (fresh claim — pristine copy saved under the player's uid, made active),
     ``yours`` (already theirs — re-activated, progress untouched),
-    ``taken`` (someone else's), ``unknown``, ``corrupt`` (pristine sheet unreadable)."""
+    ``taken`` (someone else's), ``unknown``, ``corrupt`` (pristine sheet unreadable),
+    ``name_conflict`` (the name is already another player's own, non-pregen sheet)."""
     entry = await pregen_find(documents, chat_key, ref)
     if entry is None:
         return "unknown", None
@@ -135,7 +136,14 @@ async def pregen_claim(
     sheet = await pregen_pristine_sheet(documents, chat_key, entry["id"])
     if sheet is None:
         return "corrupt", None
-    await characters.save_character(user_id, chat_key, sheet)
+    try:
+        await characters.save_character(user_id, chat_key, sheet)
+    except CharacterNameTakenError:
+        # The pregen's name is already an independently-created sheet owned by another
+        # player (the F01 ownership check refusing an overwrite — the safe branch).
+        # Force-saving would destroy that player's progress, so the claim reports
+        # instead; the status routes to a localized notice like every other outcome.
+        return "name_conflict", None
     await _set_claimed(documents, chat_key, entry["id"], user_id)
     return "ok", sheet
 

@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 
+from agent.chronicle import CHRONICLE_TURN_KEY
 from agent.context import AgentCtx
 from agent.kp_tools import build_kp_toolset
 from agent.kp_tools_companion import CompanionTools
@@ -354,3 +355,58 @@ async def test_runner_hub_path_serializes_same_session_no_lost_update() -> None:
     roster = json.loads(raw)
     assert set(roster) == {"Ann", "Bob"}  # neither turn's write was lost
     assert [op for op, _ in order] == ["enter", "exit", "enter", "exit"]  # serialized, not interleaved
+
+
+# ---------------------------------------------------------------------------
+# (6) M20 D regression: a command handler must NEVER re-take the room's own lock
+# ---------------------------------------------------------------------------
+
+
+async def test_undo_completes_through_the_real_choke_point() -> None:
+    """`.undo` used to re-acquire `hub.turn_lock` INSIDE the command handler while
+    `dispatch_input` already held it for the whole turn. The lock is not reentrant and
+    its holder was this very task, so the second acquire waited on itself forever: the
+    keeper never got a reply and every later turn queued behind the dead holder — the
+    room was bricked until a process restart. `RoomHub.turn_lock`'s own contract
+    ("never nest the same room's lock") is pinned here through the REAL choke point
+    with the REAL `CommandRouter`, so a third unsafe call site cannot come back."""
+    hub = RoomHub()
+    services = _services()
+    keeper = _ws_member("undo-lock-room", "conn", "Keeper")
+    keeper.role = "keeper"
+    keystore = Keystore()
+    _authorize(keystore, keeper)
+    server = TuiServer(services, keystore, hub=hub)
+    # One committed turn, so `.undo 1` targets turn 0 — the reset leg, which needs no
+    # snapshot to exist.
+    await services.store.state_set(keeper.session_key, CHRONICLE_TURN_KEY, "1")
+
+    await asyncio.wait_for(server.dispatch_input(keeper, ".undo 1"), timeout=15)
+
+    assert not hub.turn_lock(keeper.session_key).locked()  # released, not wedged
+    # The command genuinely ran end to end: the rewind left the room at turn 0.
+    assert await services.store.state_get(keeper.session_key, CHRONICLE_TURN_KEY) == "0"
+
+
+async def test_save_load_completes_through_the_real_choke_point(tmp_path) -> None:
+    """`.save load` carried the identical self-deadlock (its load branch wrapped
+    `import_room` in the room's own lock). Round-trip a checkpoint through
+    `dispatch_input` and require both legs to finish with the lock free."""
+    hub = RoomHub()
+    services = build_services(
+        Settings(locale="en", data_dir=str(tmp_path)), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(8)
+    )
+    keeper = _ws_member("save-lock-room", "conn", "Keeper")
+    keeper.role = "keeper"
+    keystore = Keystore()
+    _authorize(keystore, keeper)
+    server = TuiServer(services, keystore, hub=hub)
+    await services.store.state_set(keeper.session_key, "scene", "the docks")
+
+    await asyncio.wait_for(server.dispatch_input(keeper, ".save checkpoint"), timeout=15)
+    await services.store.state_set(keeper.session_key, "scene", "OVERWRITTEN")
+    await asyncio.wait_for(server.dispatch_input(keeper, ".save load checkpoint"), timeout=15)
+
+    assert not hub.turn_lock(keeper.session_key).locked()
+    # The load genuinely ran: the checkpointed scene is back.
+    assert await services.store.state_get(keeper.session_key, "scene") == "the docks"

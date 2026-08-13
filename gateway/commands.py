@@ -8,7 +8,6 @@ import re
 import shlex
 import time
 from collections.abc import Awaitable, Callable
-from contextlib import nullcontext as _nullcontext
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -1058,16 +1057,19 @@ class CommandRouter:
         if target < 0 or (target > 0 and target not in available):
             return ctx.i18n.t("commands.undo.unavailable", turns=", ".join(str(t) for t in sorted(available)) or "-")
 
-        # A rewind rewrites what every other member is looking at, so it takes the room's
-        # turn lock rather than racing a Keeper turn that is still writing state.
-        async with self._turn_lock(ctx.chat_key):
-            if target == 0:
-                from net.room_backup import reset_room_state
+        # A rewind rewrites what every other member is looking at. Serialization against
+        # an in-flight turn comes from the transport choke point (net/session.py,
+        # gateway/runner.py), which holds the room's turn lock around this whole command
+        # dispatch already — re-acquiring `hub.turn_lock` HERE wedged the room forever:
+        # the lock is not reentrant and its holder was this very task, so the second
+        # acquire waited on itself and every later turn queued behind it.
+        if target == 0:
+            from net.room_backup import reset_room_state
 
-                await reset_room_state(ctx.services, ctx.chat_key, scope="story")
-            elif not await restore_room(ctx.services, ctx.chat_key, target):
-                return ctx.i18n.t("commands.undo.unavailable", turns="-")
-            await ctx.services.store.state_set(ctx.chat_key, CHRONICLE_TURN_KEY, str(target))
+            await reset_room_state(ctx.services, ctx.chat_key, scope="story")
+        elif not await restore_room(ctx.services, ctx.chat_key, target):
+            return ctx.i18n.t("commands.undo.unavailable", turns="-")
+        await ctx.services.store.state_set(ctx.chat_key, CHRONICLE_TURN_KEY, str(target))
         # A restore rewinds EVERYONE, so a fresh state frame flagged reset=True goes out:
         # every connected client refreshes its panel AND drops its now-wrong local
         # scrollback at once, exactly as `.reset` does.
@@ -1089,15 +1091,6 @@ class CommandRouter:
             ),
             reset=True,
         )
-
-    def _turn_lock(self, chat_key: str):
-        """The room's whole-turn lock when a hub is wired, else an inert context.
-
-        A standalone router (CLI, tests) has no hub and no concurrent turns to race, so
-        degrading to a no-op is the honest behaviour rather than inventing a second lock
-        nothing else honours."""
-        hub = self.hub
-        return hub.turn_lock(chat_key) if hub is not None else _nullcontext()
 
     async def cmd_save(self, ctx: CommandCtx) -> str:
         """`.save [name]` / `.save load <name>` — named full-room checkpoints. Keeper only.
@@ -1130,8 +1123,10 @@ class CommandRouter:
             if sub in _SAVE_LOAD_WORDS:
                 if not rest:
                     return ctx.i18n.t("commands.save.usage")
-                async with self._turn_lock(ctx.chat_key):
-                    result = await import_room(ctx.services, keystore, rest, expected_room=room)
+                # Serialized by the transport choke point's turn lock, exactly like
+                # `.undo` above — a command handler must never re-take the room's own
+                # lock (not reentrant; the holder is this task).
+                result = await import_room(ctx.services, keystore, rest, expected_room=room)
                 await self._publish_reset(ctx)
                 return ctx.i18n.t("commands.save.loaded", name=rest, documents=result.get("documents", 0))
             result = await export_room(ctx.services, keystore, room, ctx.args.strip())
@@ -2732,7 +2727,17 @@ class CommandRouter:
             CommandSpec("phase", self.cmd_phase, ["phase"], ["phase", "阶段", "階段"], None, "commands.help.phase"),
             CommandSpec("undo", self.cmd_undo, ["undo"], ["undo", "撤销", "撤銷"], None, "commands.help.undo"),
             CommandSpec("save", self.cmd_save, ["save"], ["save", "存档", "存檔"], None, "commands.help.save"),
-            CommandSpec("habits", self.cmd_habits, ["habits"], ["habits", "习惯", "習慣"], None, "commands.help.habits"),
+            CommandSpec(
+                "habits",
+                self.cmd_habits,
+                ["habits"],
+                ["habits", "习惯", "習慣"],
+                None,
+                "commands.help.habits",
+                # Every line judges the PLAYERS ("they lose patience with long combats") —
+                # broadcast would hand the table the notes written about it. Unicast only.
+                private_reply=True,
+            ),
             CommandSpec("panels", self.cmd_panels, ["panels"], ["panels", "模组面板"], None, "commands.help.panels"),
             CommandSpec("avatar", self.cmd_avatar, ["avatar"], ["avatar", "头像"], None, "commands.help.avatar"),
             CommandSpec(

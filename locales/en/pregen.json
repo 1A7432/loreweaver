@@ -1,6 +1,7 @@
 {
   "pregen.commands.blurb_suffix": " · {blurb}",
   "pregen.commands.claim_corrupt": "The stored sheet for “{name}” is unreadable — ask the Keeper to re-import the module card.",
+  "pregen.commands.claim_name_conflict": "The name “{name}” already belongs to a character another player created — ask the Keeper to rename or remove that sheet first.",
   "pregen.commands.claim_taken": "“{name}” is already claimed by another player.",
   "pregen.commands.claim_unknown": "No pre-generated character named “{name}” (see .pc list).",
   "pregen.commands.claim_usage": "Usage: .pc claim <name>",

@@ -204,3 +204,40 @@ async def test_pregen_claim_and_release_still_work_across_players():
 
     assert (await pregen_claim(documents, chat, "Carol", "p2", characters))[0] == "ok"
     assert [entry["name"] for entry in await characters.list_characters("p2", chat)] == ["Carol"]
+
+
+async def test_pregen_claim_colliding_with_another_players_own_sheet_reports_cleanly():
+    """A module's cast member may share a name with a sheet some player created
+    independently. The ownership check rightly refuses the overwrite (the claim
+    materializes a copy under the claimer, but the room-wide NAME is the identity and
+    it is taken) — and the refusal must come back as a status like every other claim
+    outcome, not as an exception the command lane degrades into a bare server error."""
+    store = Store(":memory:")
+    characters = CharacterManager(store)
+    documents = DocumentStore(store)
+    chat = "room-name-clash"
+
+    await characters.save_character("p1", chat, CharacterSheet("Carol", "CoC"))
+    await pregen_add(documents, chat, CharacterSheet("Carol", "CoC"), source="card:module")
+
+    status, sheet = await pregen_claim(documents, chat, "Carol", "p2", characters)
+
+    assert (status, sheet) == ("name_conflict", None)
+    # The victim's own sheet is untouched, and nothing was claimed on the roster.
+    assert (await characters.get_character("p1", chat)).name == "Carol"
+
+
+async def test_pc_claim_name_conflict_returns_the_localized_notice():
+    """End to end through the command lane: the player who typed `.pc claim` gets the
+    actionable localized message, not the generic server-error every transport falls
+    back to for an uncaught exception."""
+    services = build_services(Settings(locale="en"), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(8))
+    chat = "room-name-clash-cmd"
+    await services.characters.save_character("p1", chat, CharacterSheet("Carol", "CoC"))
+    await pregen_add(services.documents, chat, CharacterSheet("Carol", "CoC"), source="card:module")
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key=chat, user_id="p2", platform="cli", locale="en")
+
+    reply = await router.dispatch_reply(ctx, ".pc claim Carol")
+
+    assert reply.text == get_i18n("en").t("pregen.commands.claim_name_conflict", name="Carol")

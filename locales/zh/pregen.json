@@ -1,6 +1,7 @@
 {
   "pregen.commands.blurb_suffix": " · {blurb}",
   "pregen.commands.claim_corrupt": "「{name}」的存档不可读——请守秘人重新导入模组卡。",
+  "pregen.commands.claim_name_conflict": "「{name}」这个名字已被其他玩家自建的角色占用——请守秘人先为那张卡改名或移除。",
   "pregen.commands.claim_taken": "「{name}」已被其他玩家认领。",
   "pregen.commands.claim_unknown": "没有叫「{name}」的预设角色（用 .pc list 查看）。",
   "pregen.commands.claim_usage": "用法：.pc claim <名字>",
