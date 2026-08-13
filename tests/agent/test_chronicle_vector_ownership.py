@@ -164,6 +164,31 @@ async def test_reset_all_clears_the_folded_chronicle_points(tmp_path):
     assert await services.documents.list(chat_key, CHRONICLE_DOC_TYPE) == []
 
 
+async def test_reset_story_scope_clears_chronicle_points_and_keeps_module_vectors(tmp_path):
+    """The story/chars scopes wipe the chronicle documents at every level, so their
+    embedding points must leave with them — while the module's own lore vectors
+    survive, exactly like the module they index. Before the fix only `scope="all"`
+    touched vectors at all: every lighter reset stranded the old playthrough's points
+    in the recall lane (each later hit resolving to a deleted document and being
+    silently dropped — wasted recall slots) and piled them up across repeated resets."""
+    services = _services(tmp_path)
+    keystore = Keystore()
+    keystore.add(room=ROOM, name="Keeper", role="keeper")
+    chat_key = chat_key_for_room(ROOM)
+    indexed = await _seed_and_fold(services, chat_key)
+    # A module/lore point the story reset must KEEP (the module survives the reset).
+    await services.vector_db.vector_store.upsert(
+        [("module:0", [0.2] * 64, {"collection": "worldbook", "namespace": chat_key})]
+    )
+
+    result = await reset_room_state(services, chat_key, scope="story", keystore=keystore)
+
+    assert result["vector_points"] == len(indexed)
+    assert await services.vector_db.vector_store.count(filter={"collection": CHRONICLE_COLLECTION}) == 0
+    assert await services.vector_db.vector_store.count(filter={"collection": "worldbook"}) == 1
+    assert await services.documents.list(chat_key, CHRONICLE_DOC_TYPE) == []
+
+
 async def test_a_point_naming_two_rooms_still_fails_closed(tmp_path):
     """Positive control: the fix must widen the lane, not disable the guard."""
     services = _services(tmp_path)

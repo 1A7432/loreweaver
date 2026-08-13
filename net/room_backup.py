@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from agent.chronicle import CHRONICLE_COLLECTION
 from agent.services import Services
 from core.document_manager import document_point_id
 from gateway.session import SessionSource
@@ -857,6 +858,33 @@ async def _delete_room_vectors(services: Services, chat_key: str) -> int:
     return len(point_ids)
 
 
+async def _delete_room_chronicle_vectors(services: Services, chat_key: str) -> int:
+    """Delete only the room's folded-chronicle embedding points.
+
+    The story/chars reset scopes wipe the chronicle documents but KEEP the module and
+    its lore vectors, so the room-wide deletion above is too much — and no deletion is
+    too little: the orphaned points would keep matching the new playthrough's topical
+    recall (each hit resolving to a document that no longer exists and being dropped,
+    silently wasting recall slots) and pile up across repeated resets of the same room.
+    Same posture as `_delete_room_vectors`: ownership-validated exact ids only.
+    """
+    vector_store = getattr(services.vector_db, "vector_store", None)
+    if vector_store is None:
+        return 0
+    if not hasattr(vector_store, "delete"):
+        raise RuntimeError("vector store cannot safely delete room points")  # i18n-exempt
+    points = await room_vector_points(services, chat_key, enforce_limits=False)
+    point_ids = [
+        str(point["id"])
+        for point in points
+        if isinstance(point.get("payload"), dict)
+        and point["payload"].get("collection") == CHRONICLE_COLLECTION
+    ]
+    if point_ids:
+        await vector_store.delete(point_ids)
+    return len(point_ids)
+
+
 async def _replace_room_vectors(
     services: Services,
     chat_key: str,
@@ -1135,6 +1163,11 @@ async def reset_room_state(
         # Module document chunks and uploaded media blobs only a full reset clears.
         deleted_vectors = await _delete_room_vectors(services, chat_key)
         deleted_media = await _media_store(services).delete_room(chat_key)
+    else:
+        # The chronicle documents are wiped at EVERY scope (they ARE the narrative
+        # session), so their embedding points must leave with them — the module's own
+        # lore vectors survive, exactly like the module they index.
+        deleted_vectors = await _delete_room_chronicle_vectors(services, chat_key)
     return {
         "chat_key": chat_key,
         "scope": scope,
