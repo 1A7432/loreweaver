@@ -353,8 +353,9 @@ def parse_usage(raw: Any) -> Usage | None:
         cache_read_raw = _g(usage, "cache_read_input_tokens")
         cache_creation = _coerce_int(_g(usage, "cache_creation_input_tokens"))
         prompt = input_tokens + _coerce_int(cache_read_raw) + cache_creation
-        # Anthropic ALWAYS reports cache_read_input_tokens (0 unless a cache_control breakpoint
-        # was sent -- which this codebase never does). Reporting hit=0 / miss=prompt every turn
+        # Anthropic ALWAYS reports cache_read_input_tokens (0 when nothing was cached yet --
+        # e.g. a cold first turn, before the M20 A breakpoints that every KP turn now sends
+        # have written anything). Reporting hit=0 / miss=prompt on such a turn
         # would render as a misleading, permanent "0%" cache rate; when there is NO cache activity
         # at all, pass the hit as absent so `_build_usage` leaves both hit and miss at 0 and the
         # HUD shows the honest "—" (not-applicable) instead. A real cache hit (read/creation > 0)

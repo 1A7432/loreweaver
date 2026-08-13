@@ -22,7 +22,7 @@ from agent.turn_checks import (
 )
 from core.rulepacks import RulePack
 
-# What the old pair of hand-written correctives could spend. AGENTS.md's ~155 model calls
+# What the old pair of hand-written correctives could spend. AGENTS.md's ~148 model calls
 # per player turn is computed from it — moving this means moving that note and
 # `tests/agent/test_turn_call_budget.py` in the same commit.
 LEGACY_CORRECTIVE_ROUNDS = 5

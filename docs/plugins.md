@@ -457,8 +457,8 @@ isolation. Until C.2 ships, code contributions go through normal in-tree PRs.
 
 Modules dress the table: a pack ships its own interface — HUDs, case boards, maps —
 rendered by protocol clients. This is the presentation direction that replaced the retired
-chat adapters. The canonical spec is `docs/specs/M15-ui-panels.md`; the protocol side is
-`docs/protocol.md` ("Module UI panels", protocol 2.1). The layer is three tiers, by authoring
+chat adapters. The wire contract lives in `docs/protocol.md` ("Module UI panels", protocol
+2.1); the authoring walkthrough is `docs/authoring.md`. The layer is three tiers, by authoring
 effort and risk:
 
 - **Tier 0 — declarative blocks** (Layer C.1's `emitUI`): meter/stat/badge/text/

@@ -1,4 +1,4 @@
-"""Assembles the AI-KP system prompt for one turn from the 6 ``core.prompt_sections``
+"""Assembles the AI-KP system prompt for one turn from the ``core.prompt_sections``
 section builders.
 
 **Section order is STABLE HEAD → VOLATILE TAIL (P1, 2026-08-07).** Every section

@@ -212,7 +212,8 @@ def test_parse_usage_anthropic_shape_no_caching():
 
     assert usage.prompt_tokens == 300
     assert usage.cache_hit_tokens == 0
-    # No cache activity at all (read==creation==0, and this codebase never sends cache_control):
+    # No cache activity at all (read==creation==0 — a cold call, before the M20 A
+    # breakpoints every KP turn now sends have written a cache):
     # miss stays 0 too, so hit+miss==0 -> the HUD renders "—" (not-applicable), NOT a misleading
     # permanent "0%". (Were miss derived to `prompt`, the rate would read a fake 0% every turn.)
     assert usage.cache_miss_tokens == 0

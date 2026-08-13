@@ -438,8 +438,8 @@ styles a `letter` as stationery; a terminal client prints the same fields as lin
 markup, and you never have to write two versions.
 
 **Live values:** any scalar field may be `{$var: <id>}` against the viewer's own `state.variables`.
-Fail-closed: if the variable is absent or hidden *for that viewer*, the **whole block** is omitted. A
-panel can never widen visibility.
+When in doubt it shows nothing: if the variable is absent or hidden *for that viewer*, the **whole
+block** is omitted. A panel can never widen visibility.
 
 **A handout is one `image` block**, not a hand-written page. `src` is a pack-relative path; the build
 folds it into the content-addressed asset pipeline and the manifest carries the hash. You never write
