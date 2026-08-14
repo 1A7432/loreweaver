@@ -33,7 +33,12 @@ from infra.room_facets import (
     DOCUMENT_VECTOR_LANE,
     PERSISTED_STORAGES,
     RESET_SCOPES,
+    STORAGE_HISTORY,
+    STORAGE_MEDIA,
     STORAGE_MEMORY,
+    STORAGE_SNAPSHOTS,
+    WHOLE_STORAGE_WIPES,
+    FacetError,
     FacetRegistry,
     RoomStateFacet,
 )
@@ -377,5 +382,42 @@ def test_a_key_under_another_facets_prefix_is_rejected():
                                state_prefixes=frozenset({"battle."}), storages=frozenset({"room_state"})),
                 RoomStateFacet(name="b", owner="core.b", reset_scope="all",
                                state_keys=frozenset({"battle.latest"}), storages=frozenset({"room_state"})),
+            )
+        )
+
+
+# A whole-table wipe empties the storage wholesale, so a second claimant would make the
+# wipe depend on facet iteration order. These are the current owners; re-homing one is a
+# deliberate owner decision — update the pairs here in the same commit.
+WHOLE_STORAGE_OWNERS: dict[str, tuple[str, str]] = {
+    STORAGE_HISTORY: ("conversation", "agent.history"),
+    STORAGE_SNAPSHOTS: ("undo_ring", "agent.undo"),
+    STORAGE_MEDIA: ("room_media", "gateway.media"),
+}
+
+
+def test_each_whole_storage_wipe_has_exactly_one_claimant():
+    """Every whole-table storage is wiped by exactly one facet — and it is the current one."""
+    registry = room_registry()
+    assert set(WHOLE_STORAGE_OWNERS) == WHOLE_STORAGE_WIPES, "a whole-table storage lost its pinned owner"
+    for storage, (expected_name, expected_owner) in WHOLE_STORAGE_OWNERS.items():
+        claimants = [facet for facet in registry.facets if storage in facet.storages]
+        assert len(claimants) == 1, f"{storage!r} must be wiped by exactly one facet"
+        facet = claimants[0]
+        assert (facet.name, facet.owner) == (expected_name, expected_owner), (
+            f"{storage!r} is wiped by {facet.name} ({facet.owner}); the pinned owner is "
+            f"{expected_name} ({expected_owner})"
+        )
+
+
+def test_two_facets_cannot_claim_the_same_whole_storage_wipe():
+    """Registration rejects a second claimant of a whole-table storage."""
+    with pytest.raises(FacetError):
+        FacetRegistry(
+            (
+                RoomStateFacet(name="a", owner="core.a", reset_scope="story",
+                               storages=frozenset({STORAGE_HISTORY})),
+                RoomStateFacet(name="b", owner="core.b", reset_scope="all",
+                               storages=frozenset({STORAGE_HISTORY})),
             )
         )

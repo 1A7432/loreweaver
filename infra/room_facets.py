@@ -73,6 +73,16 @@ STORAGES: frozenset[str] = frozenset(
 # state — the room stays live and connected across a `.save load`.
 PERSISTED_STORAGES: frozenset[str] = STORAGES - {STORAGE_MEMORY}
 
+# Storages a facet claims as a WHOLE-TABLE wipe, not as a residency annotation: a reset
+# that reaches them empties the entire table, so two facets claiming one would make the
+# wipe depend on iteration order. Exactly one facet may claim each (enforced in
+# `_reject_collisions`; `tests/architecture/test_room_facets.py` pins the current owner).
+# `memory` is neither kind — it is process state, disposed by the claiming facet's
+# `on_delete` hook.
+WHOLE_STORAGE_WIPES: frozenset[str] = frozenset(
+    {STORAGE_HISTORY, STORAGE_SNAPSHOTS, STORAGE_MEDIA}
+)
+
 # The vector lane that carries no `collection` payload field: chunks of an uploaded
 # document, addressed by `chat_key`. Named so a facet can claim it like any collection.
 DOCUMENT_VECTOR_LANE = "*documents"
@@ -109,6 +119,16 @@ class RoomStateFacet:
     state_keys: frozenset[str] = frozenset()
     state_prefixes: frozenset[str] = frozenset()
     vector_collections: frozenset[str] = frozenset()
+    #: One field, two distinct meanings by storage (see `WHOLE_STORAGE_WIPES`):
+    #:
+    #: - `history` / `snapshots` / `media` claim a WHOLE-TABLE wipe: the table is
+    #:   emptied wholesale when a reset reaches the facet, so exactly one facet may
+    #:   claim each (enforced at registration).
+    #: - `documents` / `room_state` / `vectors` are RESIDENCY annotations: cleanup
+    #:   there is per target list (doc types, keys and prefixes, vector lanes), and
+    #:   many facets share one storage.
+    #: - `memory` is process state — neither a table nor a row family — and its owning
+    #:   facet disposes it through `on_delete`.
     storages: frozenset[str] = frozenset()
     # Disposal a target list cannot express — currently only in-process state. Runs inside
     # the segment `delete_room_data` assigns it, never on a schedule of its own.
@@ -242,6 +262,12 @@ def _reject_collisions(facets: tuple[RoomStateFacet, ...]) -> None:
             if other is not None:
                 raise FacetError(f"{claim[0]} {claim[1]!r} is claimed by both {other} and {facet.name}")
             owners[claim] = facet.name
+    for storage in WHOLE_STORAGE_WIPES:
+        claimants = [facet.name for facet in facets if storage in facet.storages]
+        if len(claimants) > 1:
+            raise FacetError(
+                f"whole-storage wipe {storage!r} is claimed by {sorted(claimants)}; exactly one facet may empty it"  # i18n-exempt: internal invariant
+            )
     prefixes = sorted({(facet.name, prefix) for facet in facets for prefix in facet.state_prefixes})
     for name, prefix in prefixes:
         for other_name, other_prefix in prefixes:
