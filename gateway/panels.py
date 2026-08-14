@@ -22,6 +22,7 @@ re-reading keeps enable/install/upgrade coherent without a cache to invalidate.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -49,28 +50,90 @@ def _version_key(version: str) -> tuple[Any, ...]:
     return (tuple(parts), version)
 
 
+# Dev-room virtual homes (`gateway.dev_room`): a mounted pack SOURCE dir served as if
+# it were an installed home. A dev home WINS over an installed pack of the same id —
+# the author mounted it precisely to test the source of that pack. Everything below
+# (enabled_packs, `.panels list`, asset resolution) inherits it through
+# `installed_pack_homes`, the one aggregation point.
+_DEV_HOMES: dict[str, Path] = {}
+
+
+def set_dev_pack_homes(homes: Mapping[str, Path]) -> None:
+    """Replace the dev-room virtual homes (called only by `gateway.dev_room`)."""
+    _DEV_HOMES.clear()
+    _DEV_HOMES.update({pack_id: Path(home) for pack_id, home in homes.items()})
+
+
 def installed_pack_homes(data_dir: Path) -> dict[str, Path]:
-    """Newest installed home per pack id (``packs/<id>@<version>`` dirs, best version wins)."""
+    """Newest installed home per pack id (``packs/<id>@<version>`` dirs, best version wins),
+    plus any dev-room mounts (which win on an id clash — see `set_dev_pack_homes`)."""
     packs_dir = Path(data_dir) / _PACKS_DIRNAME
     homes: dict[str, tuple[tuple[Any, ...], Path]] = {}
-    if not packs_dir.is_dir():
-        return {}
-    for entry in packs_dir.iterdir():
-        if not entry.is_dir() or "@" not in entry.name or entry.name.startswith("."):
+    if packs_dir.is_dir():
+        for entry in packs_dir.iterdir():
+            if not entry.is_dir() or "@" not in entry.name or entry.name.startswith("."):
+                continue
+            pack_id, _, version = entry.name.partition("@")
+            key = _version_key(version)
+            current = homes.get(pack_id)
+            if current is None or key > current[0]:
+                homes[pack_id] = (key, entry)
+    result = {pack_id: path for pack_id, (_key, path) in homes.items()}
+    result.update(_DEV_HOMES)
+    return result
+
+
+def _digest_source_assets(home: Path, manifest: PackManifest) -> PackManifest:
+    """Complete a SOURCE manifest the way `build_pack` would: fold panel/kit asset paths
+    into the asset block and stamp sha256/mime/size from the live files, so panels'
+    integrity checks hold against a dev mount exactly as against an installed home.
+    Build-only caps (panel code size) are deliberately not enforced here — a dev room
+    is the author's own box; `--pack` remains the authority that gates release."""
+    import hashlib
+    from dataclasses import replace as dc_replace
+
+    from core.pack import PackAsset, _asset_mime, _validate_pack_panels, _validate_pack_presentation
+
+    def read_text(relative: str) -> str:
+        return (home / relative).read_text(encoding="utf-8")
+
+    referenced: list[str] = []
+    for validator in (_validate_pack_panels, _validate_pack_presentation):
+        try:
+            _parsed, paths = validator(read_text, manifest)
+            referenced.extend(path for path in paths if path not in referenced)
+        except Exception:
+            logger.warning("panels: dev manifest %s fails %s", home, validator.__name__, exc_info=True)
+    declared = {asset.path for asset in manifest.assets}
+    assets = list(manifest.assets) + [
+        PackAsset(path=path, sha256="", mime="", size=0) for path in referenced if path not in declared
+    ]
+    stamped: list[PackAsset] = []
+    for asset in assets:
+        file = home / asset.path
+        if not file.is_file():
             continue
-        pack_id, _, version = entry.name.partition("@")
-        key = _version_key(version)
-        current = homes.get(pack_id)
-        if current is None or key > current[0]:
-            homes[pack_id] = (key, entry)
-    return {pack_id: path for pack_id, (_key, path) in homes.items()}
+        data = file.read_bytes()
+        stamped.append(
+            dc_replace(
+                asset,
+                sha256=hashlib.sha256(data).hexdigest(),
+                mime=asset.mime or _asset_mime(asset.path),
+                size=len(data),
+            )
+        )
+    return dc_replace(manifest, assets=tuple(stamped))
 
 
 def _load_manifest(home: Path) -> PackManifest | None:
+    is_dev = home in _DEV_HOMES.values()
     try:
-        return parse_manifest_text(
-            (home / MANIFEST_NAME).read_text(encoding="utf-8"), expect_trust=True
+        manifest = parse_manifest_text(
+            (home / MANIFEST_NAME).read_text(encoding="utf-8"),
+            # A dev mount is a SOURCE tree: no generated trust/files blocks yet.
+            expect_trust=not is_dev,
         )
+        return _digest_source_assets(home, manifest) if is_dev else manifest
     except Exception:
         logger.warning("panels: unreadable pack manifest under %s", home, exc_info=True)
         return None
@@ -93,7 +156,8 @@ def list_installed_panel_packs(services: Services) -> list[tuple[str, int]]:
         manifest = _load_manifest(home)
         if manifest is None:
             continue
-        count = manifest.trust.panels if manifest.trust is not None else 0
+        # A dev mount's source manifest has no trust block; count its real panels.
+        count = manifest.trust.panels if manifest.trust is not None else len(_load_pack_panels(home, manifest))
         if count:
             result.append((pack_id, count))
     return result
@@ -105,8 +169,10 @@ def installed_panel_count(services: Services, pack_id: str) -> int:
     if home is None:
         return 0
     manifest = _load_manifest(home)
-    if manifest is None or manifest.trust is None:
+    if manifest is None:
         return 0
+    if manifest.trust is None:  # a dev mount's source manifest — count its real panels
+        return len(_load_pack_panels(home, manifest))
     return manifest.trust.panels
 
 

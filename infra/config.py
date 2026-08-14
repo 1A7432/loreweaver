@@ -68,6 +68,16 @@ class ScribeSettings(BaseModel):
     reasoning_effort: str = ""  # "" = provider default; "low" is plenty for ledger work
 
 
+class DevSettings(BaseModel):
+    """Author dev rooms (`.dev mount` — `gateway.dev_room`): live-reload a pack SOURCE
+    directory into a sandbox room. OFF unless a source root is configured: `.dev mount`
+    reads server-side files, so every mount is confined under `source_root` — the safe
+    default for any networked server is the empty string, which disables the whole
+    surface (`TRPG_DEV__SOURCE_ROOT=/path/to/my/packs` turns it on)."""
+
+    source_root: str = ""
+
+
 class DirectorSettings(BaseModel):
     """The Stage Director (`agent.stage_director`) — 演出导演.
 
@@ -223,6 +233,7 @@ class Settings(BaseSettings):
     scribe: ScribeSettings = ScribeSettings()
     director: DirectorSettings = DirectorSettings()
     chronicle: ChronicleSettings = ChronicleSettings()
+    dev: DevSettings = DevSettings()
 
     def __init__(self, **values: Any) -> None:
         env_file = values.pop("_env_file", os.environ.get("TRPG_ENV_FILE") or ".env")

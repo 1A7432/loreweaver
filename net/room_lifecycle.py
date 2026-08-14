@@ -50,6 +50,7 @@ FACET_MODULES: tuple[str, ...] = (
     "core.worldbook",
     "gateway.audio",
     "gateway.commands",
+    "gateway.dev_room",
     "gateway.hub",
     "gateway.media",
     "gateway.ops",

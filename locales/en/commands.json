@@ -110,6 +110,7 @@
   "commands.help.pack_word": "A rule-system dice command declared by this room's system",
   "commands.help.panel": "Show the table panel.",
   "commands.help.phase": "Show or pin which half of the Keeper's toolset this room carries.",
+  "commands.help.dev": "Keeper: dev rooms — live-reload a pack source dir into this room (.dev mount <path> / reload / status / unmount)",
   "commands.help.recap": "Show the spoiler-free campaign recap (previously on…)",
   "commands.help.rename": "Rename the active character.",
   "commands.help.report": "Export the session report to keep and review.",

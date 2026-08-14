@@ -721,7 +721,23 @@ def _discover_registry() -> dict[str, RulePack]:
     _scan_rulepack_dir(_RULEPACK_DIR, registry, allow_override=True)
     if _USER_RULEPACK_DIR is not None:
         _scan_rulepack_dir(_USER_RULEPACK_DIR, registry, allow_override=False)
+    for extra in _EXTRA_RULEPACK_DIRS:
+        _scan_rulepack_dir(extra, registry, allow_override=False)
     return registry
+
+
+# Extra discovery dirs beyond the built-in and user dirs: dev-room mounts
+# (`gateway.dev_room`) point these at a pack SOURCE tree's `rulepacks/` so an
+# author's edit is one cache-clear away from live. Same precedence rule as the
+# user dir — a built-in id always wins.
+_EXTRA_RULEPACK_DIRS: tuple[Path, ...] = ()
+
+
+def set_extra_rulepack_dirs(dirs: Iterable[Path | str]) -> None:
+    """Replace the extra discovery dirs and drop BOTH caches (dev-room mounts)."""
+    global _EXTRA_RULEPACK_DIRS
+    _EXTRA_RULEPACK_DIRS = tuple(Path(entry) for entry in dirs)
+    reload_rulepacks()
 
 
 @cache

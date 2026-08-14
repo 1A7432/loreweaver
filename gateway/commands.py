@@ -2126,6 +2126,37 @@ class CommandRouter:
             lines.append(ctx.i18n.t("vars.commands.more", count=len(leaves) - max_lines))
         return "\n".join(lines)
 
+    async def cmd_dev(self, ctx: CommandCtx) -> str:
+        """`.dev [status|mount <path>|unmount|reload]` — author dev rooms (`gateway.dev_room`):
+        live-reload a pack SOURCE dir into this room. Keeper-only, and the whole surface is
+        off unless `TRPG_DEV__SOURCE_ROOT` confines where mounts may point (a server path
+        read, so it gets the networked-admin posture, not just a keeper check)."""
+        from gateway import dev_room
+
+        if not _is_keeper(ctx.raw_ctx):
+            return ctx.fail(ctx.i18n.t("dev.commands.denied"))
+        tokens = ctx.args.split(maxsplit=1)
+        sub = tokens[0].casefold() if tokens else "status"
+        rest = tokens[1].strip() if len(tokens) > 1 else ""
+        hub = self.hub
+        if sub in {"mount", "挂载", "掛載"}:
+            if not rest:
+                return ctx.i18n.t("dev.commands.usage")
+            return await dev_room.mount(ctx.services, hub, ctx.chat_key, rest, ctx.locale)
+        if sub in {"unmount", "卸载", "卸載"}:
+            had = await dev_room.unmount(ctx.services, ctx.chat_key)
+            return ctx.i18n.t("dev.commands.unmounted" if had else "dev.commands.not_mounted")
+        if sub in {"reload", "重载", "重載"}:
+            if await dev_room.rearm(ctx.services, hub, ctx.chat_key) is None:
+                return ctx.i18n.t("dev.commands.not_mounted")
+            return await dev_room.reload(ctx.services, hub, ctx.chat_key, ctx.locale)
+        if sub in {"status", "状态", "狀態"}:
+            state = await dev_room.rearm(ctx.services, hub, ctx.chat_key)
+            if state is None:
+                return ctx.i18n.t("dev.commands.not_mounted")
+            return ctx.i18n.t("dev.commands.status", pack=state.pack_id, path=str(state.path))
+        return ctx.i18n.t("dev.commands.usage")
+
     async def cmd_module(self, ctx: CommandCtx) -> str:
         """`.module <module file>` — import a module document and run module analysis."""
         from agent.kp_tools_knowledge import DocumentTools
@@ -2770,6 +2801,7 @@ class CommandRouter:
             CommandSpec("bot", self.cmd_bot_toggle, ["bot"], ["bot"], None, "commands.help.bot"),
             CommandSpec("skill", self.cmd_skill, ["skill"], ["skill"], None, "commands.help.skill"),
             CommandSpec("phase", self.cmd_phase, ["phase"], ["phase", "阶段", "階段"], None, "commands.help.phase"),
+            CommandSpec("dev", self.cmd_dev, ["dev"], ["dev"], None, "commands.help.dev"),
             CommandSpec("undo", self.cmd_undo, ["undo"], ["undo", "撤销", "撤銷"], None, "commands.help.undo"),
             CommandSpec("save", self.cmd_save, ["save"], ["save", "存档", "存檔"], None, "commands.help.save"),
             CommandSpec(

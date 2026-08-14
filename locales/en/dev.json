@@ -1,0 +1,15 @@
+{
+  "dev.commands.help": "Keeper: live-reload a pack source dir into this room: .dev mount <path> | reload | status | unmount (needs TRPG_DEV__SOURCE_ROOT)",
+  "dev.commands.usage": "Usage: .dev [status | mount <path> | unmount | reload]",
+  "dev.commands.denied": "Only an authenticated Keeper can manage a dev mount.",
+  "dev.commands.disabled": "Dev rooms are off on this server — set TRPG_DEV__SOURCE_ROOT to the directory your pack sources live under, then mount a path inside it.",
+  "dev.commands.outside_root": "That path is not a directory under the configured dev source root ({root}) — mounts are confined there.",
+  "dev.commands.no_manifest": "That directory has no pack.yaml — point .dev mount at a pack SOURCE tree.",
+  "dev.commands.bad_source": "The source tree does not parse: {error}",
+  "dev.commands.mounted": "Dev mount live: {pack} ← {path}. Saves reload this room automatically; .dev unmount stops the sync.",
+  "dev.commands.unmounted": "Dev mount removed. Imported content stays; the room just stops following the source.",
+  "dev.commands.not_mounted": "No dev mount in this room — .dev mount <path> starts one.",
+  "dev.commands.status": "Dev mount: {pack} ← {path} (watching; saves reload this room).",
+  "dev.commands.reload_failed": "Reload skipped — the source does not parse, nothing was changed: {error}",
+  "dev.commands.reload_done": "Dev reload: {cards} world card(s), {lorebooks} lorebook(s) → {lore} live lore entries ({removed} stale removed); skills/rulepacks re-scanned, panels pushed. Variable values survive by design."
+}

@@ -671,6 +671,26 @@ one that should follow the pack.
 
 ## 8. Testing your module before anyone else plays it
 
+**The dev room — edit the source, the room follows.** The fastest loop skips packing
+entirely: point the server at your source directory and mount it into a sandbox room.
+
+```bash
+TRPG_DEV__SOURCE_ROOT=~/my-packs uv run python -m app --serve --keys /tmp/lw-keys
+# then, as the room's keeper:
+#   .dev mount ~/my-packs/my-module     — imports the module and starts watching
+#   (edit any file and save — lore, skills, rulepacks and panels reload live;
+#    edited entries replace their old text, deleted ones leave, and your room's
+#    variable values survive every reload)
+#   .dev reload / .dev status / .dev unmount
+```
+
+Mounts are confined under `TRPG_DEV__SOURCE_ROOT`, and with it unset the surface is
+off — set it only on your own dev box. A dev mount serves panels and the presentation
+kit straight from source (skipping the build-time caps), so `--pack` remains the
+gate a release must pass.
+
+**The scripted pipeline** — no key, no network, real dice:
+
 ```bash
 uv run python -m app --pack my-module/                 # does it even build?
 TRPG_DATA_DIR=/tmp/lw-test uv run python -m app --install ./my-module-0.1.0.lwpack --yes

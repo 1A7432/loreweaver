@@ -569,6 +569,21 @@ Could not resolve the pack ref: release for 'gh:1A7432/loreweaver@v1.0.0' has no
 
 ## 8. 在别人玩到之前先自己测
 
+**开发房间——改源码，房间跟着走。**最快的循环根本不用打包：让服务器指向你的源码目录，把它挂载进一个沙盒房间。
+
+```bash
+TRPG_DEV__SOURCE_ROOT=~/my-packs uv run python -m app --serve --keys /tmp/lw-keys
+# 然后以房间守秘人的身份：
+#   .dev mount ~/my-packs/my-module     ——导入模组并开始监视
+#   （随便改哪个文件、保存——lore、技能、规则包、面板都会热重载；
+#     改过的条目替换旧文本，删掉的条目跟着离开，房间里的变量值每次重载都保留）
+#   .dev reload / .dev status / .dev unmount
+```
+
+挂载被限制在 `TRPG_DEV__SOURCE_ROOT` 之下，不设置它整个功能就是关的——只在你自己的开发机上开。开发挂载直接从源码提供面板和演出资料包（跳过构建期的上限检查），所以 `--pack` 仍然是发布前必须过的那道门。
+
+**脚本化链路**——不用 key、不联网、真骰子：
+
 ```bash
 uv run python -m app --pack my-module/                 # 它至少能构建吗？
 TRPG_DATA_DIR=/tmp/lw-test uv run python -m app --install ./my-module-0.1.0.lwpack --yes

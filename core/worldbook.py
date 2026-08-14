@@ -286,7 +286,12 @@ class Worldbook:
                     skipped_titles.append(entry.title)
                 continue
             if entry.content:
-                await self.add(chat_key, entry)
+                # Provenance rides the document (`meta.source`): it is what lets a
+                # re-import surface (the dev room's reload) find and replace exactly
+                # the entries this file wrote last time, instead of stacking stale
+                # twins beside them (`add` dedupes by id, so an edited entry would
+                # otherwise keep its old text forever).
+                await self.add(chat_key, entry, source=source)
                 count += 1
         return count
 

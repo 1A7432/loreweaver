@@ -110,6 +110,7 @@
   "commands.help.pack_word": "由本房间规则系统声明的骰子命令",
   "commands.help.panel": "显示跑团面板。",
   "commands.help.phase": "查看或固定本房间当前带哪半套守秘人工具。",
+  "commands.help.dev": "守秘人：开发房间——把包源码目录热载进本房间（.dev mount <路径> / reload / status / unmount）",
   "commands.help.recap": "查看无剧透的战役前情提要",
   "commands.help.rename": "重命名当前角色。",
   "commands.help.report": "导出团报以便保存和回顾。",
