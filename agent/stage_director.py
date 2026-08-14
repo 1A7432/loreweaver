@@ -84,10 +84,7 @@ A beat just landed: {beat}. Dress it. Output ONLY a JSON object:
 {{"blocks": [<block>...], "audio": [{{"cue": "<cue id>", "action": "play"|"stop"}}], "image": {{"subject": "<subject id>", "prompt": "<what this picture shows>"}} | null, "prepare": ["<subject id>"...]}}
 
 Block templates (pick what the moment deserves; 0-{max_blocks} blocks, often 1):
-- {{"kind": "title_card", "title": "...", "subtitle": "...", "act": "..."}} — an act/day/chapter turning over.
-- {{"kind": "letter", "body": "...", "from": "...", "to": "...", "date": "..."}} — a letter, note or diary page the players now hold.
-- {{"kind": "clipping", "headline": "...", "body": "...", "source": "...", "date": "..."}} — a newspaper or official document.
-- {{"kind": "text", "text": "...", "style": "quote"}} — a caption line when nothing heavier fits.
+{templates}
 
 Rules:
 - You never narrate, never roll, never decide outcomes, never speak as a character. You choose a FORM and fill it from what the table has already seen.
@@ -97,6 +94,7 @@ Rules:
 - "prepare": subject ids you expect to want a picture of within the next scene or two (0-{pregen} of them). They are generated quietly in advance; naming one costs nothing now.
 {image_rule}
 Style guide (every generated image inherits it): {style}
+Palette (the colors this module dresses in): {palette}
 Never depict: {banned}
 
 Picturable subjects (id | kind | name):
@@ -119,6 +117,16 @@ JSON only."""
 # The remaining model-facing prompt fragments, kept beside `_PROMPT` rather than inline:
 # every word the Director is addressed with lives in one place (and the i18n lint's
 # convention for prompt text is a module-level constant, same as `agent.scribe`).
+# One bullet per stageable block shape; a kit's `templates:` allowlist (presentation v2)
+# decides which bullets the Director is even offered. Values are inserted AFTER
+# `.format`, so their braces are literal.
+_BLOCK_TEMPLATES = {  # i18n-exempt: model-facing prompt text, like _PROMPT above
+    "title_card": '- {"kind": "title_card", "title": "...", "subtitle": "...", "act": "..."} — an act/day/chapter turning over.',
+    "letter": '- {"kind": "letter", "body": "...", "from": "...", "to": "...", "date": "..."} — a letter, note or diary page the players now hold.',
+    "clipping": '- {"kind": "clipping", "headline": "...", "body": "...", "source": "...", "date": "..."} — a newspaper or official document.',
+    "text": '- {"kind": "text", "text": "...", "style": "quote"} — a caption line when nothing heavier fits.',
+}
+_NO_TEMPLATES_NOTE = "(none — this module stages with audio and pictures only; leave blocks empty)"  # i18n-exempt: model-facing prompt text
 _NO_REF_NOTE = " (no reference image — may be named, never generated)"  # i18n-exempt: model-facing prompt text, like _PROMPT above
 _RULE_NO_GENERATION = '- This module allows NO image generation (the author\'s choice): leave "image" null and "prepare" empty.'  # i18n-exempt: model-facing prompt text
 _RULE_GENERATION = "- Ask for an image only when a picture genuinely says more than the words did. Most beats do not need one."  # i18n-exempt: model-facing prompt text
@@ -189,13 +197,19 @@ def _build_prompt(kit: RoomKit, beat: str, player_text: str, reply_text: str, tr
         for item in kit.subjects
     ) or "(none)"
     cues = "\n".join(f"- {item.cue.id} | {item.cue.layer} | {item.cue.title or item.cue.id}" for item in kit.cues) or "(none)"
-    image_rule = _RULE_GENERATION if kit.generates else _RULE_NO_GENERATION
+    templates = "\n".join(
+        _BLOCK_TEMPLATES[kind] for kind in _BLOCK_TEMPLATES if kit.allows_template(kind)
+    ) or _NO_TEMPLATES_NOTE
+    images_allowed = kit.generates and kit.allows_template("image")
+    image_rule = _RULE_GENERATION if images_allowed else _RULE_NO_GENERATION
     return _PROMPT.format(
         beat=beat,
         max_blocks=MAX_BLOCKS,
-        pregen=0 if not kit.generates else MAX_AUDIO_CUES,
+        pregen=0 if not images_allowed else MAX_AUDIO_CUES,
         image_rule=image_rule,
+        templates=templates,
         style=" / ".join(kit.style) or "(none declared)",
+        palette=", ".join(kit.palette) or "(none declared)",
         banned=", ".join(kit.banned) or "(nothing declared)",
         subjects=subjects,
         cues=cues,
@@ -227,7 +241,7 @@ async def _generate_subject(services: Services, ctx: AgentCtx, kit: RoomKit, sub
     larder = await _json_state(services, ctx.chat_key, PREGEN_KEY, {})
     if isinstance(larder, dict) and isinstance(larder.get(subject_id), str):
         return larder[subject_id]
-    if not settings.images or not kit.generates or services.imagegen is None:
+    if not settings.images or not kit.generates or not kit.allows_template("image") or services.imagegen is None:
         return None
     entry = kit.subject(subject_id)
     if entry is None or not entry.generatable:
@@ -245,6 +259,7 @@ async def _generate_subject(services: Services, ctx: AgentCtx, kit: RoomKit, sub
             entry.subject.prompt,
             str(prompt or "")[:_MAX_PROMPT_CHARS],
             " / ".join(kit.style),
+            ("palette: " + ", ".join(kit.palette)) if kit.palette else "",
             ("avoid: " + ", ".join(kit.banned)) if kit.banned else "",
         )
         if part
@@ -357,10 +372,16 @@ async def run_director(
         return False
 
     raw_blocks = parsed.get("blocks")
-    blocks = [block for block in (raw_blocks if isinstance(raw_blocks, list) else [])[:MAX_BLOCKS] if isinstance(block, dict)]
+    blocks = [
+        block
+        for block in (raw_blocks if isinstance(raw_blocks, list) else [])[:MAX_BLOCKS]
+        # The kit's `templates:` allowlist binds the OUTPUT too, not just the offer —
+        # a model that stages a shape the author excluded gets that block dropped here.
+        if isinstance(block, dict) and kit.allows_template(str(block.get("kind") or ""))
+    ]
 
     image = parsed.get("image")
-    if isinstance(image, dict) and image.get("subject"):
+    if isinstance(image, dict) and image.get("subject") and kit.allows_template("image"):
         digest = await _generate_subject(
             services, ctx, kit, str(image["subject"]), str(image.get("prompt") or "")
         )
@@ -384,7 +405,7 @@ async def run_director(
     # 慢菜先备: warm likely-next subjects AFTER this beat is on screen, so the latency
     # lands in the quiet turns instead of in front of a player.
     prepare = parsed.get("prepare")
-    if isinstance(prepare, list) and kit.generates:
+    if isinstance(prepare, list) and kit.generates and kit.allows_template("image"):
         for subject_id in prepare[: max(0, settings.pregen_per_beat)]:
             _spawn_pregen(services, ctx, kit, str(subject_id))
 

@@ -40,7 +40,7 @@ assets:
 """
 
 KIT = """\
-version: 1
+version: 2
 generation: allow
 subjects:
   - id: wantang

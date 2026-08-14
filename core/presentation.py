@@ -8,11 +8,14 @@ silent drop), and it never touches the runtime — `gateway.presentation` owns t
 view of an installed kit.
 
 ```yaml
-version: 1
+version: 2
 generation: allow            # or `pack_only` — the 宁缺毋滥 veto (see below)
+templates: [title_card, letter]   # optional: which performance shapes the Director may stage
+                                  # (omitted = all of image/title_card/letter/clipping/text)
 style:
   keywords: {en: "ink wash, muted indigo, 1925 coastal China", zh: "水墨, 靛青, 一九二五浙东"}
   banned: [text overlays, modern clothing]
+  palette: ["#16232e", "wet slate blue", "lantern amber"]   # optional: hex or color words
 subjects:                    # the 定妆 convention: what may be pictured, and how
   - id: gu-wantang
     kind: npc                # npc | location | item
@@ -53,10 +56,17 @@ MAX_BANNED = 24
 MAX_TEXT_CHARS = 400
 MAX_PROMPT_CHARS = 1_000
 
-KIT_VERSION = 1
+KIT_VERSION = 2  # v2 (M19 completion): + `templates` allowlist and `style.palette`. v1 files are
+# rejected — one clean break per the standing no-backcompat sanction, no dual-schema reader.
 GENERATION_MODES = ("allow", "pack_only")
 SUBJECT_KINDS = ("npc", "location", "item")
 AUDIO_LAYERS = ("bgm", "ambience", "sfx")
+# The performance shapes the Stage Director can stage (a subset of the tier-1 block
+# vocabulary in `core.hooks.UI_BLOCK_KINDS`, stated here for the same layering reason as
+# AUDIO_MIMES below). An empty/omitted `templates:` list means all of them are allowed.
+TEMPLATE_KINDS = ("image", "title_card", "letter", "clipping", "text")
+MAX_PALETTE = 8
+MAX_PALETTE_CHARS = 80
 # What a cue's asset may be, stated here rather than imported from `infra.media_store`:
 # `core/` does not depend upward on `infra/`, and `core.hooks.UI_IMAGE_MIMES` set the
 # same precedent. Keep in step with the upload MIME list in `docs/protocol.md`.
@@ -101,8 +111,10 @@ class PresentationKit:
 
     version: int = KIT_VERSION
     generation: str = "allow"
+    templates: tuple[str, ...] = ()  # empty = every TEMPLATE_KINDS shape allowed
     style_keywords: dict[str, str] = field(default_factory=dict)
     banned: tuple[str, ...] = ()
+    palette: tuple[str, ...] = ()
     subjects: tuple[Subject, ...] = ()
     audio: tuple[AudioCue, ...] = ()
 
@@ -110,6 +122,10 @@ class PresentationKit:
     def generates(self) -> bool:
         """Whether this module licenses image generation at all (宁缺毋滥)."""
         return self.generation == "allow"
+
+    def allows_template(self, kind: str) -> bool:
+        """Whether the author licenses this performance shape (empty list = all)."""
+        return not self.templates or kind in self.templates
 
     def subject(self, subject_id: str) -> Subject | None:
         return next((item for item in self.subjects if item.id == subject_id), None)
@@ -242,7 +258,7 @@ def parse_presentation_text(text: str) -> PresentationKit:
         raw,
         "presentation.yaml",
         required={"version"},
-        optional={"generation", "style", "subjects", "audio"},
+        optional={"generation", "templates", "style", "subjects", "audio"},
     )
     if raw["version"] != KIT_VERSION:
         raise ValueError(f"presentation.yaml version must be {KIT_VERSION}")
@@ -251,11 +267,32 @@ def parse_presentation_text(text: str) -> PresentationKit:
     if generation not in GENERATION_MODES:
         raise ValueError(f"generation: must be one of {list(GENERATION_MODES)}")
 
+    templates_raw = raw.get("templates") or []
+    if not isinstance(templates_raw, list) or len(templates_raw) > len(TEMPLATE_KINDS):
+        raise ValueError(f"templates: must be a list of at most {len(TEMPLATE_KINDS)} entries")
+    templates: list[str] = []
+    for index, entry in enumerate(templates_raw):
+        if entry not in TEMPLATE_KINDS:
+            raise ValueError(f"templates[{index}]: must be one of {list(TEMPLATE_KINDS)}")
+        if entry in templates:
+            raise ValueError(f"templates[{index}]: {entry!r} listed twice")
+        templates.append(entry)
+
     style_raw = raw.get("style") or {}
     if not isinstance(style_raw, Mapping):
         raise ValueError("style: must be a mapping")
-    _require_keys(style_raw, "style", required=set(), optional={"keywords", "banned"})
+    _require_keys(style_raw, "style", required=set(), optional={"keywords", "banned", "palette"})
     keywords = _localized(style_raw["keywords"], "style.keywords") if style_raw.get("keywords") else {}
+    palette_raw = style_raw.get("palette") or []
+    if not isinstance(palette_raw, list) or len(palette_raw) > MAX_PALETTE:
+        raise ValueError(f"style.palette: must be a list of at most {MAX_PALETTE} entries")
+    palette = []
+    for index, entry in enumerate(palette_raw):
+        if not isinstance(entry, str) or not entry.strip() or len(entry) > MAX_PALETTE_CHARS:
+            raise ValueError(
+                f"style.palette[{index}]: must be a non-empty string of at most {MAX_PALETTE_CHARS} chars"
+            )
+        palette.append(entry.strip())
     banned_raw = style_raw.get("banned") or []
     if not isinstance(banned_raw, list) or len(banned_raw) > MAX_BANNED:
         raise ValueError(f"style.banned: must be a list of at most {MAX_BANNED} entries")
@@ -282,8 +319,10 @@ def parse_presentation_text(text: str) -> PresentationKit:
     return PresentationKit(
         version=KIT_VERSION,
         generation=generation,
+        templates=tuple(templates),
         style_keywords=keywords,
         banned=tuple(banned),
+        palette=tuple(palette),
         subjects=subjects,
         audio=cues,
     )

@@ -75,6 +75,11 @@ class RoomKit:
     cues: tuple[KitCue, ...] = ()
     style: tuple[str, ...] = ()  # one style line per contributing pack, viewer-localized
     banned: tuple[str, ...] = ()
+    palette: tuple[str, ...] = ()  # union across packs, declaration order (like `style`)
+    # None = no pack restricts (every TEMPLATE_KINDS shape allowed); a tuple = the
+    # INTERSECTION of every declaring pack's allowlist — most-restrictive-wins, the
+    # same direction as the `generates` AND, and it may honestly be empty.
+    templates: tuple[str, ...] | None = None
     generates: bool = True
 
     def __bool__(self) -> bool:
@@ -85,6 +90,9 @@ class RoomKit:
 
     def cue(self, cue_id: str) -> KitCue | None:
         return next((item for item in self.cues if item.cue.id == cue_id), None)
+
+    def allows_template(self, kind: str) -> bool:
+        return self.templates is None or kind in self.templates
 
 
 def _load_pack_kit(home: Path, manifest: PackManifest) -> PresentationKit | None:
@@ -108,16 +116,23 @@ async def load_room_kit(services: Services, chat_key: str, locale: str | None = 
     cues: list[KitCue] = []
     style: list[str] = []
     banned: list[str] = []
+    palette: list[str] = []
+    templates: tuple[str, ...] | None = None
     generates = True
     for pack_id, home, manifest in await enabled_packs(services, chat_key):
         kit = _load_pack_kit(home, manifest)
         if kit is None:
             continue
         generates = generates and kit.generates
+        if kit.templates:
+            # Most-restrictive-wins, like `generates`: a second pack's allowlist can only
+            # narrow the room's set, never widen a stricter author's choice back open.
+            templates = kit.templates if templates is None else tuple(k for k in templates if k in kit.templates)
         line = kit.style_for(locale)
         if line:
             style.append(line)
         banned.extend(entry for entry in kit.banned if entry not in banned)
+        palette.extend(entry for entry in kit.palette if entry not in palette)
         assets = {asset.path: asset for asset in manifest.assets}
         for subject in kit.subjects:
             asset = assets.get(subject.ref) if subject.ref else None
@@ -140,5 +155,7 @@ async def load_room_kit(services: Services, chat_key: str, locale: str | None = 
         cues=tuple(cues),
         style=tuple(style),
         banned=tuple(banned),
+        palette=tuple(palette),
+        templates=templates,
         generates=generates,
     )

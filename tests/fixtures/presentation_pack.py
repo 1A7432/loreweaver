@@ -42,7 +42,7 @@ assets:
 """
 
 KIT = """\
-version: 1
+version: 2
 generation: allow
 style:
   keywords: {en: "ink wash, muted indigo", zh: "水墨, 靛青"}

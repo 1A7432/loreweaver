@@ -559,11 +559,16 @@ knowledge; it picks a form and fills it from what the players have already read.
 Ship `ui/presentation.yaml` and declare it under `contents.presentation` (one per pack):
 
 ```yaml
-version: 1
+version: 2
 generation: allow            # or `pack_only` — see 宁缺毋滥 below
+templates: [title_card, letter]      # optional: the performance shapes the Director may
+                                     # stage, from image/title_card/letter/clipping/text
+                                     # (omitted = all; two packs in one room intersect)
 style:
   keywords: {en: "ink wash, muted indigo, 1925 coastal China", zh: "水墨, 靛青, 一九二五浙东"}
   banned: [text overlays, modern clothing]
+  palette: ["#16232e", wet slate blue, lantern amber]   # optional: hex or color words,
+                                     # ride every generated image and the Director's brief
 subjects:                    # what may be pictured, and how
   - id: gu-wantang
     kind: npc                # npc | location | item

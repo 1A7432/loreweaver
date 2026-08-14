@@ -286,11 +286,16 @@ metadata:
 发一份 `ui/presentation.yaml` 并在 `contents.presentation` 里声明（一个包一份）：
 
 ```yaml
-version: 1
+version: 2
 generation: allow            # 或者 pack_only——见下面的宁缺毋滥
+templates: [title_card, letter]      # 可选：导演可以上演的演出形态，取值
+                                     # image/title_card/letter/clipping/text
+                                     # （省略 = 全部允许；一屋两包时取交集）
 style:
   keywords: {en: "ink wash, muted indigo, 1925 coastal China", zh: "水墨, 靛青, 一九二五浙东"}
   banned: [text overlays, modern clothing]
+  palette: ["#16232e", wet slate blue, lantern amber]   # 可选：十六进制或颜色词，
+                                     # 随每次生图和导演的简报一起下发
 subjects:                    # 什么可以被画，以及怎么画
   - id: gu-wantang
     kind: npc                # npc | location | item

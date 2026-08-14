@@ -12,7 +12,7 @@ import pytest
 from core.presentation import parse_presentation_text
 
 KIT = """\
-version: 1
+version: 2
 generation: allow
 style:
   keywords: {en: "ink wash, muted indigo", zh: "水墨, 靛青"}
@@ -67,16 +67,16 @@ def test_pack_only_is_the_author_veto():
 
 def test_schema_rejections_are_author_actionable():
     cases = [
-        ("version: 2\n", "version must be 1"),
-        ("version: 1\ngeneration: sometimes\n", "generation"),
-        ("version: 1\nmood: dark\n", "unknown keys"),
-        ("version: 1\nsubjects: [{id: A, kind: npc, name: x}]\n", "lowercase slug"),
-        ("version: 1\nsubjects: [{id: a, kind: monster, name: x}]\n", "kind"),
-        ("version: 1\nsubjects: [{id: a, kind: npc, name: x, ref: /etc/passwd}]\n", "relative path"),
-        ("version: 1\nsubjects: [{id: a, kind: npc, name: x, ref: ../x.png}]\n", ".. segments"),
-        ("version: 1\naudio: [{id: a, layer: voice, asset: x.mp3}]\n", "layer"),
-        ("version: 1\nsubjects: [{id: a, kind: npc, name: x}, {id: a, kind: npc, name: y}]\n", "duplicate"),
-        ("version: 1\nstyle: {keywords: {fr: bleu}}\n", "unknown locale"),
+        ("version: 1\n", "version must be 2"),
+        ("version: 2\ngeneration: sometimes\n", "generation"),
+        ("version: 2\nmood: dark\n", "unknown keys"),
+        ("version: 2\nsubjects: [{id: A, kind: npc, name: x}]\n", "lowercase slug"),
+        ("version: 2\nsubjects: [{id: a, kind: monster, name: x}]\n", "kind"),
+        ("version: 2\nsubjects: [{id: a, kind: npc, name: x, ref: /etc/passwd}]\n", "relative path"),
+        ("version: 2\nsubjects: [{id: a, kind: npc, name: x, ref: ../x.png}]\n", ".. segments"),
+        ("version: 2\naudio: [{id: a, layer: voice, asset: x.mp3}]\n", "layer"),
+        ("version: 2\nsubjects: [{id: a, kind: npc, name: x}, {id: a, kind: npc, name: y}]\n", "duplicate"),
+        ("version: 2\nstyle: {keywords: {fr: bleu}}\n", "unknown locale"),
     ]
     for text, expected in cases:
         with pytest.raises(ValueError, match=expected):
@@ -84,7 +84,7 @@ def test_schema_rejections_are_author_actionable():
 
 
 def test_an_empty_kit_is_valid_but_stages_nothing():
-    kit = parse_presentation_text("version: 1\n")
+    kit = parse_presentation_text("version: 2\n")
     assert kit.subjects == () and kit.audio == () and kit.asset_paths == ()
     assert kit.style_for("en") == ""
 
@@ -147,3 +147,89 @@ async def test_a_ref_that_is_not_an_image_fails_the_build(tmp_path):
     source = write_pack_source(tmp_path, kit=broken)
     with pytest.raises(PackError, match="not an image"):
         build_pack(source, tmp_path / "broken.lwpack")
+
+
+# --- v2: the templates allowlist and the palette ------------------------------
+
+
+def test_v2_templates_and_palette_parse_and_gate():
+    kit = parse_presentation_text(
+        "version: 2\n"
+        "templates: [title_card, letter]\n"
+        "style:\n"
+        '  palette: ["#16232e", wet slate blue]\n'
+    )
+    assert kit.templates == ("title_card", "letter")
+    assert kit.palette == ("#16232e", "wet slate blue")
+    assert kit.allows_template("title_card") and kit.allows_template("letter")
+    assert not kit.allows_template("image") and not kit.allows_template("clipping")
+
+    # Omitted templates = every shape allowed (the permissive default keeps v1 behavior).
+    open_kit = parse_presentation_text("version: 2\n")
+    assert open_kit.templates == () and open_kit.palette == ()
+    for kind in ("image", "title_card", "letter", "clipping", "text"):
+        assert open_kit.allows_template(kind)
+
+
+def test_v2_rejections_are_author_actionable():
+    cases = [
+        ("version: 2\ntemplates: [poster]\n", "templates"),
+        ("version: 2\ntemplates: [letter, letter]\n", "listed twice"),
+        ("version: 2\nstyle: {palette: [{}]}\n", "palette"),
+        ("version: 2\nstyle: {palette: [" + ", ".join(["a"] * 9) + "]}\n", "at most 8"),
+    ]
+    for text, expected in cases:
+        with pytest.raises(ValueError, match=expected):
+            parse_presentation_text(text)
+
+
+async def test_room_kit_intersects_templates_and_unions_palette(tmp_path):
+    """Two enabled packs: the room's template set is the INTERSECTION of the declaring
+    kits (most-restrictive-wins, like the `generates` AND), the palette the union."""
+    from pathlib import Path
+
+    from agent.services import build_services
+    from core.pack import build_pack, install_pack
+    from gateway.ops import set_enabled_panel_packs
+    from gateway.presentation import load_room_kit
+    from infra.config import Settings
+    from infra.embeddings import FakeEmbeddings
+    from infra.llm import FakeLLM
+    from net.session import PROTOCOL_VERSION
+
+    settings = Settings()
+    settings.data_dir = tmp_path / "data"
+    services = build_services(settings, llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64))
+    data_dir = Path(settings.data_dir)
+
+    def _kit_pack(pack_id: str, templates: str, palette: str) -> None:
+        src = tmp_path / f"src-{pack_id}"
+        (src / "ui").mkdir(parents=True)
+        (src / "ui/presentation.yaml").write_text(
+            f"version: 2\ntemplates: [{templates}]\nstyle:\n  palette: [{palette}]\n",
+            encoding="utf-8",
+        )
+        (src / "pack.yaml").write_text(
+            f"id: {pack_id}\nversion: 1.0.0\nname: {pack_id}\ndescription: kit\nauthors: [ada]\n"
+            "license: MIT\nengine: {}\ncontents:\n  presentation: [ui/presentation.yaml]\n",
+            encoding="utf-8",
+        )
+        built = build_pack(src, tmp_path / f"{pack_id}.lwpack")
+        install_pack(
+            built.path,
+            packs_dir=data_dir / "packs",
+            skills_dir=data_dir / "skills",
+            rulepacks_dir=data_dir / "rulepacks",
+            presets_dir=data_dir / "presets",
+            current_protocol=PROTOCOL_VERSION,
+            current_server="1.0.0",
+        )
+
+    _kit_pack("moody", "title_card, letter, text", "midnight blue")
+    _kit_pack("austere", "letter, text", "bone white")
+    await set_enabled_panel_packs(services.store, "room", ["moody", "austere"])
+
+    room_kit = await load_room_kit(services, "room", "en")
+    assert room_kit.templates == ("letter", "text")
+    assert room_kit.palette == ("midnight blue", "bone white")
+    assert room_kit.allows_template("letter") and not room_kit.allows_template("title_card")
