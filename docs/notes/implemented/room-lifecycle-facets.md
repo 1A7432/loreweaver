@@ -56,3 +56,23 @@
   pairs.
 - `import_room`'s undo-ring restore joined the attempt-every-leg rollback discipline
   instead of riding behind the other legs in one `try`.
+
+## M23 tail cleanups (2026-08-14, same batch)
+
+Three small closure items from the post-M23 review, landed together on `m23-tail`:
+
+- **usage_stats read sites use the shared constant.** The writer already named the
+  `room_state` key `USAGE_STATS_KEY`; the two readers (`agent.chronicle`'s fold trigger,
+  `net.state`'s HUD payload) still used the bare literal. Both now import the constant —
+  no behaviour change.
+- **the `media` document type in `.reset all` is a pinned post-M23 increment.** The
+  golden tables in `tests/net/test_room_lifecycle.py` stay an honest copy of pre-M23
+  behaviour, which never wiped the registered `media` type. The media facet claims it at
+  `reset_scope="all"`, so the new behaviour is pinned as `POST_M23_ALL_DOC_TYPES`
+  beside `POST_M23_STORY_KEYS`, not folded into the golden tables.
+- **whole-table storages admit exactly one claimant.** The `storages` field means two
+  things — a whole-table wipe for `history`/`snapshots`/`media`, a residency annotation
+  for `documents`/`room_state`/`vectors` — and the field note now says so. The registry
+  rejects a second claimant of a whole-table storage at construction, and
+  `tests/architecture/test_room_facets.py` pins each wipe's single current owner
+  (`conversation`, `undo_ring`, `room_media`).
