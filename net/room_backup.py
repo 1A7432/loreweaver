@@ -1669,6 +1669,7 @@ async def import_room(
                     raise RuntimeError("failed to restore room key")
                 imported_keys += 1
     except BaseException:
+        rollback_errors: list[BaseException] = []
         try:
             await _rollback_room_state(
                 services,
@@ -1678,9 +1679,17 @@ async def import_room(
                 state,
                 imported_media=created_media_hashes,
             )
-            await _restore_room_snapshots(services, new_chat_key, snapshots_before)
         except BaseException as rollback_exc:
-            raise RuntimeError("room import failed and rollback was incomplete") from rollback_exc  # i18n-exempt
+            rollback_errors.append(rollback_exc)
+        # Its own independent leg, not a tail call behind the others: a failed media or
+        # vector leg above must not ALSO cost the room its undo ring (M23 review — the
+        # new leg has to join the attempt-everything discipline the others follow).
+        try:
+            await _restore_room_snapshots(services, new_chat_key, snapshots_before)
+        except BaseException as ring_exc:
+            rollback_errors.append(ring_exc)
+        if rollback_errors:
+            raise RuntimeError("room import failed and rollback was incomplete") from rollback_errors[0]  # i18n-exempt
         raise
 
     return {

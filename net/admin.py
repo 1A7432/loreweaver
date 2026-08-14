@@ -910,8 +910,10 @@ async def _delete_room_data(
         if backup:
             backup_result = await export_room(services, keystore, room, path)
             backup_path = str(backup_result.get("path") or "")
-        # The hub rides along so the room's in-process turn lock leaves with the room
-        # (M23 WS1): the facet that owns the lock is the one that disposes of it.
+        # The hub rides along so a DIRECT caller drops the room's in-process turn lock
+        # with the room (M23 WS1). This path is not one: the session layer serializes
+        # destructive admin frames under that very lock, the in-op disposal declines on
+        # a held lock, and net/session disposes right after the lock releases.
         result = await delete_room_data(services, keystore, room, hub=hub)
         await clear_keeper_bindings_for_room(services.store, room)
         await clear_bindings_for_session(services.store, session_key_for_room(room))

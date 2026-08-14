@@ -55,3 +55,11 @@
   `docs/defensive-patterns.md` entries 3 and 6 (why constants get re-verified, and why
   "truncated" is not one condition).
 - **Date:** 2026-08-13 (spec approved) / 2026-08-14 (landed).
+
+## Review follow-up (2026-08-14, adversarial pass)
+
+The 280d0aa refactor made the retry consume one of the `max_rounds` slots, which broke
+the "+ 1" arithmetic and silently skipped the promised retry when the overflow landed on
+the last round. A successful recovery now raises the round bound by exactly one, so the
+retry is its own budgeted call again on every round including the last (regression test:
+`test_an_overflow_on_the_last_round_still_gets_its_promised_retry`).

@@ -210,14 +210,37 @@ def _scan_writes() -> list[_Write]:
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
                 continue
-            if node.func.attr not in _WRITE_METHODS or len(node.args) < 2:
+            if node.func.attr not in _WRITE_METHODS:
                 continue
-            resolved = resolver.resolve(node.args[1])
             function = enclosing.get(node, "<module>")
-            if resolved is None:
-                writes.append(_Write(relative, function, node.lineno, "unresolved", ""))
+            if node.func.attr == "state_set":
+                if len(node.args) < 2:
+                    continue
+                key_exprs: list[ast.expr] = [node.args[1]]
             else:
-                writes.append(_Write(relative, function, node.lineno, resolved[0], resolved[1]))
+                # `state_set_if_values(room, *, expected=[(key, value), ...], updates=[...])`
+                # is keyword-only, so a positional-argument filter never sees its keys and
+                # the whole CAS write path goes unscanned (M23 review finding). The keys are
+                # the first element of each pair in BOTH lists; anything the pair-walk can't
+                # take apart is recorded as unresolved rather than skipped.
+                key_exprs = []
+                for keyword in node.keywords:
+                    if keyword.arg not in ("expected", "updates"):
+                        continue
+                    if isinstance(keyword.value, ast.List | ast.Tuple):
+                        for pair in keyword.value.elts:
+                            if isinstance(pair, ast.Tuple) and pair.elts:
+                                key_exprs.append(pair.elts[0])
+                            else:
+                                key_exprs.append(pair)
+                    else:
+                        key_exprs.append(keyword.value)
+            for key_expr in key_exprs:
+                resolved = resolver.resolve(key_expr)
+                if resolved is None:
+                    writes.append(_Write(relative, function, node.lineno, "unresolved", ""))
+                else:
+                    writes.append(_Write(relative, function, node.lineno, resolved[0], resolved[1]))
     return writes
 
 

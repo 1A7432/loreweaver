@@ -2240,3 +2240,33 @@ async def test_admin_generate_authors_and_installs_skill_rule_and_module(tmp_pat
         forge_module._USER_MODULE_DIR = original_module_dir
         skills_module.reload_skills()
         rulepacks_module.reload_rulepacks()
+
+
+async def test_deleting_a_room_over_the_wire_drops_its_turn_lock_after_the_frame(tmp_path):
+    """M23 review regression: the destructive admin frames run INSIDE the room's turn
+    lock, so `delete_room_data`'s in-op disposal necessarily declines — the session layer
+    must drop the bookkeeping right after the lock releases, or every room ever deleted
+    over the wire leaks its lock (the exact leak the hub parameter was added to close)."""
+    services = _services(str(tmp_path))
+    keystore = Keystore()
+    keeper_key = keystore.add(room="arkham", name="Keeper", role="keeper")
+    chat_key = chat_key_for_room("arkham")
+    await services.store.state_set(chat_key, "chat_history", "[]")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        ws, *_ = await _connect_and_join(url, keeper_key, "Keeper")
+        reply = await _send(
+            ws, {"type": "admin_delete_room_data", "room": "arkham", "backup": False}
+        )
+        assert reply["type"] not in {"error", "admin_error"}, reply
+        # The reply frame races the server-side disposal by one statement; give it a beat.
+        for _ in range(100):
+            if chat_key not in server.hub._turn_locks:
+                break
+            await asyncio.sleep(0.01)
+        assert chat_key not in server.hub._turn_locks
+        assert chat_key not in server.hub._active_turns
+        await ws.close()
+    finally:
+        await server.close()

@@ -461,6 +461,16 @@ class SessionCore:
                         reauthorize=lambda: self._refresh_member_authorization(member),
                     )
                 await member.send_frame(reply)
+                if kind in {"admin_delete_room", "admin_delete_room_data"} and reply.get(
+                    "type"
+                ) not in {"error", "admin_error"}:
+                    # The dispatch above retired the room while HOLDING its turn lock, so
+                    # `delete_room_data`'s in-op disposal necessarily declined (a held lock
+                    # must never be swapped out from under its holder). The `async with`
+                    # released it just above and the retired room cannot mint another —
+                    # this is the one place that knows both facts, so it drops the
+                    # bookkeeping (M23 review: the in-op path alone was dead code here).
+                    self.hub.dispose_room(member.session_key)
                 if kind == "admin_set_model" and reply.get("type") == "admin_config":
                     await self._broadcast_admin_config(reply, exclude=member)
                 return

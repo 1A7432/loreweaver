@@ -395,7 +395,7 @@ async def run_kp_turn(
         answer. Marks the turn either way, so the retry happens at most once whichever of
         the two triggers fired (a refusal, or a reply truncated at the window).
         """
-        nonlocal overflow_retried, base_len
+        nonlocal overflow_retried, base_len, allowed_rounds
         overflow_retried = True
         # Record it even though the call reported no usage at all. Otherwise the meter
         # keeps showing the last SUCCESSFUL turn's reading — a number the provider has
@@ -411,6 +411,11 @@ async def run_kp_turn(
         )
         if not fold.entries_folded:
             return False
+        # The retry is budgeted as its own call (AGENTS.md: "+ 1 overflow retry"), not as
+        # one of the tool rounds. Raising the bound by exactly one keeps that arithmetic
+        # true in code — and keeps the promise when the overflow lands on the LAST round,
+        # which would otherwise fall through to the tools-disabled finalizer.
+        allowed_rounds = max_rounds + 1
         logger.warning(
             "context overflow: folded %d chronicle record(s) and retrying the call once",
             fold.entries_folded,
@@ -431,7 +436,10 @@ async def run_kp_turn(
         base_len = len(rebuilt)
         return True
 
-    for round_index in range(1, max_rounds + 1):
+    allowed_rounds = max_rounds
+    round_index = 0
+    while round_index < allowed_rounds:
+        round_index += 1
         rounds = round_index
         if gate is not None:
             gate.begin_round()

@@ -32,3 +32,8 @@
   `agent/hook_runtime.record_hook_injections` docstring (the ring);
   `tests/architecture/test_prompt_replayability.py` (the enforced contract).
 - **Date:** 2026-08-13 (spec approved) / 2026-08-14 (landed).
+
+## Review follow-up (2026-08-14, adversarial pass)
+
+The `ctx.extra` scan matched only the local alias `extra`, so `ctx.extra.get("key")`
+would have bypassed the guard; it now matches any `.extra` attribute chain as well.

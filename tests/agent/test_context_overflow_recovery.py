@@ -370,3 +370,40 @@ async def test_an_ordinary_reply_never_folds():
     await run_kp_turn(_ctx(chat_key), services, toolset, "I follow her gaze.")
 
     assert log == ["keeper:ok"]
+
+
+async def test_an_overflow_on_the_last_round_still_gets_its_promised_retry():
+    """The retry is budgeted as its own call (AGENTS.md's "+ 1 overflow retry"), not as
+    one of the tool rounds — an overflow on the FINAL round must still re-issue the
+    request with tools in hand instead of falling through to the tools-disabled
+    finalizer (M23 review regression)."""
+    log: list[str] = []
+    state = {"keeper_calls": 0}
+
+    def responder(messages, tools):
+        if _is_fold(messages):
+            log.append("fold")
+            return assistant_text("Previously: the party pressed on.")
+        state["keeper_calls"] += 1
+        if state["keeper_calls"] == 1:
+            log.append("keeper:overflow")
+            raise _Overflow()
+        log.append("keeper:ok" if tools else "keeper:no-tools")
+        return assistant_text("The water recedes, and the archive exhales its dust.")
+
+    services = _services(responder)
+    chat_key = "overflow-last-round"
+    toolset = await _room(services, chat_key, backlog=True)
+
+    result = await run_kp_turn(
+        _ctx(chat_key), services, toolset, "I open the sealed door.", max_rounds=1
+    )
+
+    assert "archive exhales" in result.reply
+    assert log[0] == "keeper:overflow"
+    assert "fold" in log
+    assert log.count("keeper:overflow") == 1, "the retry is still once per turn"
+    assert "keeper:ok" in log and "keeper:no-tools" not in log, (
+        "a fold that made progress grants the retry its own round even on the last one; "
+        "keeper:no-tools means the turn fell through to the finalizer instead"
+    )

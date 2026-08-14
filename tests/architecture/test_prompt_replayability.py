@@ -104,14 +104,23 @@ def test_the_assembler_never_reads_the_wall_clock():
     assert not clock_reads, "the assembler reads the wall clock:\n  " + "\n  ".join(clock_reads)
 
 
+def _reads_extra(node: ast.expr) -> bool:
+    """`extra` the local alias, or any `<obj>.extra` attribute chain. `ctx.extra.get("k")`
+    must be exactly as visible to this scan as `extra.get("k")` — matching only the local
+    alias made the guard a naming convention, not a contract (M23 review finding)."""
+    return (isinstance(node, ast.Name) and node.id == "extra") or (
+        isinstance(node, ast.Attribute) and node.attr == "extra"
+    )
+
+
 def test_every_ctx_extra_key_the_assembler_reads_names_its_persisted_source():
     keys: set[str] = set()
     for node in ast.walk(_tree()):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get":
-            if isinstance(node.func.value, ast.Name) and node.func.value.id == "extra" and node.args:
+            if _reads_extra(node.func.value) and node.args:
                 if isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
                     keys.add(node.args[0].value)
-        elif isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and node.value.id == "extra":
+        elif isinstance(node, ast.Subscript) and _reads_extra(node.value):
             if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
                 keys.add(node.slice.value)
 

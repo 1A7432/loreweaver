@@ -43,3 +43,16 @@
   AGENTS.md "How to extend" (new room-scoped state declares a facet);
   `docs/defensive-patterns.md` entry 5 (why).
 - **Date:** 2026-08-13 (spec approved) / 2026-08-14 (landed).
+
+## Review follow-up (2026-08-14, adversarial pass)
+
+- The turn-lock disposal was dead on its only production path: the destructive admin
+  frames run INSIDE the room's turn lock, so `delete_room_data`'s in-op disposal always
+  declined. `net/session.py` now disposes right after the lock releases (wire-level
+  regression test in `tests/net/test_admin.py`); the in-op path still serves direct
+  callers.
+- The write-surface scan skipped every `state_set_if_values` call site (keyword-only
+  signature vs a positional-argument filter); it now walks the `expected`/`updates`
+  pairs.
+- `import_room`'s undo-ring restore joined the attempt-every-leg rollback discipline
+  instead of riding behind the other legs in one `try`.
