@@ -398,6 +398,10 @@ def _print_trust_card(i18n: I18n, manifest: core_pack.PackManifest, locale: str)
         )
     if trust.presets:
         print(i18n.t("pack.card.presets", count=trust.presets), file=sys.stderr)
+    if trust.prep_scripts:
+        # Code, so it gets a loud line like hooks — but unlike hooks it never
+        # auto-runs: the keeper invokes it by reference and previews the whole plan.
+        print(i18n.t("pack.card.prep", count=trust.prep_scripts), file=sys.stderr)
 
 
 def _run_pack(i18n: I18n, args: argparse.Namespace) -> int:
@@ -499,6 +503,8 @@ def _run_install(settings: Settings, i18n: I18n, args: argparse.Namespace) -> in
         print(i18n.t("pack.install.rulepacks", ids=", ".join(report.rulepacks)), file=sys.stderr)
     if report.presets:
         print(i18n.t("pack.install.presets", ids=", ".join(report.presets)), file=sys.stderr)
+    if report.prep:
+        print(i18n.t("pack.install.prep", names=", ".join(report.prep)), file=sys.stderr)
     if report.cards or report.lorebooks or report.assets:
         print(
             i18n.t(

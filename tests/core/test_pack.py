@@ -862,3 +862,47 @@ def test_pack_presets_garbage_and_id_collisions_fail_the_build(tmp_path):
     )
     with pytest.raises(PackError, match="collides"):
         build_pack(src2, tmp_path / "bad2.lwpack")
+
+
+# ---------------------------------------------------------------------------
+# Prep-plan scripts as pack content (M20 F convention)
+# ---------------------------------------------------------------------------
+
+
+def _write_prep_source(root: Path, *, script: str = "plan('make_thing', {name: 'x'});") -> Path:
+    src = root / "prep-pack-src"
+    (src / "prep").mkdir(parents=True)
+    (src / "prep/setup.js").write_text(script, encoding="utf-8")
+    (src / MANIFEST_NAME).write_text(
+        "id: preppack\nversion: 1.0.0\nname: Preppack\ndescription: bulk setup\n"
+        "authors: [ada]\nlicense: MIT\nengine: {}\ncontents:\n  prep: [prep/setup.js]\n",
+        encoding="utf-8",
+    )
+    return src
+
+
+def test_pack_prep_scripts_build_disclose_and_land_in_the_home(tmp_path):
+    src = _write_prep_source(tmp_path)
+    built = build_pack(src, tmp_path / "preppack.lwpack")
+    assert built.manifest.trust is not None and built.manifest.trust.prep_scripts == 1
+
+    report = _install(built.path, tmp_path)
+    assert report.prep == ["prep/setup.js"]
+    assert report.pack_dir is not None and (report.pack_dir / "prep/setup.js").is_file()
+
+
+def test_pack_prep_scripts_respect_the_sandbox_size_cap_and_extension(tmp_path):
+    from core.prep_script import MAX_SCRIPT_CHARS
+
+    src = _write_prep_source(tmp_path / "big", script="x" * (MAX_SCRIPT_CHARS + 1))
+    with pytest.raises(PackError, match="exceeds"):
+        build_pack(src, tmp_path / "big.lwpack")
+
+    src2 = _write_prep_source(tmp_path / "ext")
+    manifest_text = (src2 / MANIFEST_NAME).read_text(encoding="utf-8")
+    (src2 / "prep/setup.txt").write_text("nope", encoding="utf-8")
+    (src2 / MANIFEST_NAME).write_text(
+        manifest_text.replace("prep: [prep/setup.js]", "prep: [prep/setup.txt]"), encoding="utf-8"
+    )
+    with pytest.raises(PackError, match=".js"):
+        build_pack(src2, tmp_path / "ext.lwpack")

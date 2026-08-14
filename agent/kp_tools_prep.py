@@ -42,7 +42,7 @@ class PrepScriptTools:
         return self._services.i18n.with_locale(ctx.locale)
 
     @tool(prep_only=True)
-    async def run_prep_plan(self, ctx: AgentCtx, script: str, apply: bool = False) -> str:
+    async def run_prep_plan(self, ctx: AgentCtx, script: str = "", apply: bool = False, script_ref: str = "") -> str:
         """Run a small JavaScript script that PLANS bulk prep work, then optionally apply it.
 
         For work that is forty near-identical tool calls: seeding a cast from a list,
@@ -56,11 +56,27 @@ class PrepScriptTools:
                 state to read, so compute what you need from literals in the script.
             apply: False previews the plan; True applies it, in order, stopping at the
                 first failure.
+            script_ref: Instead of inline script text, a pack-relative reference to a
+                script an installed pack ships (e.g. "blackmoor/prep/setup.js"). Exactly
+                one of script/script_ref must be given.
 
         Returns:
             The planned operations, and — when applied — what each one returned.
         """
         i18n = self._i18n(ctx)
+        if bool(script.strip()) == bool(script_ref.strip()):
+            return i18n.t("prep_script.source_usage")
+        if script_ref.strip():
+            from core.pack import resolve_installed_path
+            from core.prep_script import MAX_SCRIPT_CHARS
+
+            resolved = resolve_installed_path(self._services.settings.data_dir, script_ref.strip())
+            if resolved is None:
+                return i18n.t("prep_script.ref_not_found", ref=script_ref.strip())
+            try:
+                script = resolved.read_text(encoding="utf-8")[: MAX_SCRIPT_CHARS + 1]
+            except (OSError, UnicodeDecodeError) as exc:
+                return i18n.t("prep_script.ref_not_found", ref=f"{script_ref.strip()} ({exc})")
         plan = build_plan(script)
         if not plan:
             return i18n.t("prep_script.invalid", error=plan.error)

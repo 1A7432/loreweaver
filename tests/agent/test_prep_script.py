@@ -209,3 +209,46 @@ def test_the_card_split_commands_are_outside_the_reachable_surface():
     names = set(toolset.names())
     assert not any("expose" in name for name in names)
     assert not any(name.startswith("import_world") or name == "import" for name in names)
+
+
+# ---------------------------------------------------------------------------
+# Pack-shipped scripts (script_ref)
+# ---------------------------------------------------------------------------
+
+
+async def test_script_ref_reads_an_installed_packs_script(tmp_path):
+    from agent.kp_tools_prep import PrepScriptTools
+
+    services = build_services(
+        Settings(locale="en", data_dir=str(tmp_path / "data")), llm=FakeLLM(), embeddings=FakeEmbeddings(64)
+    )
+    prep_dir = tmp_path / "data/packs/blackmoor@1.0.0/prep"
+    prep_dir.mkdir(parents=True)
+    (prep_dir / "setup.js").write_text("plan('make_thing', {name: 'from the pack'});", encoding="utf-8")
+
+    provider = _Recorder()
+    hatch = PrepScriptTools(services)
+    toolset = Toolset(hatch, provider)
+    hatch._toolset_factory = lambda: toolset  # noqa: SLF001 — the same closure build_kp_toolset uses
+
+    reply = await toolset.dispatch(
+        "run_prep_plan", _ctx(), {"script_ref": "blackmoor/prep/setup.js", "apply": True}, set(), phase=PREP_PHASE
+    )
+    assert "from the pack" in reply
+    assert provider.calls == [("make_thing", {"name": "from the pack"})]
+
+    en = services.i18n.with_locale("en")
+    both = await toolset.dispatch(
+        "run_prep_plan",
+        _ctx(),
+        {"script": "plan('make_thing', {name: 'x'});", "script_ref": "blackmoor/prep/setup.js"},
+        set(),
+        phase=PREP_PHASE,
+    )
+    assert both == en.t("prep_script.source_usage")
+    neither = await toolset.dispatch("run_prep_plan", _ctx(), {}, set(), phase=PREP_PHASE)
+    assert neither == en.t("prep_script.source_usage")
+    missing = await toolset.dispatch(
+        "run_prep_plan", _ctx(), {"script_ref": "blackmoor/prep/nope.js"}, set(), phase=PREP_PHASE
+    )
+    assert "nope.js" in missing and provider.calls == [("make_thing", {"name": "from the pack"})]

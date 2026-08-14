@@ -4,6 +4,8 @@
   "prep_script.empty": "脚本什么也没计划。只有 plan(tool, args) 会产生效果。",
   "prep_script.failed": "{index}. {tool} 失败：{error}——就此停下；前面已经执行的仍然算数。",
   "prep_script.invalid": "脚本没能给出一份计划：{error}",
+  "prep_script.source_usage": "script（内联 JavaScript）和 script_ref（已安装包内的脚本，如 \"packid/prep/setup.js\"）只能给其中一个。",
+  "prep_script.ref_not_found": "没有找到已安装包脚本 \"{ref}\"——检查包 id 和路径（与 .import 相同的包相对引用）。",
   "prep_script.operation": "{index}. {tool} {args}",
   "prep_script.preview": "计划了 {count} 步——目前一步都还没执行。想真的做，再调用一次并把 apply 设为 true。\n{operations}",
   "prep_script.unavailable": "这里没法执行计划：本房间没有绑定工具集。",

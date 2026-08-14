@@ -82,7 +82,7 @@ _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _SEMVER_RE = re.compile(r"^\d{1,6}\.\d{1,6}\.\d{1,6}(?:[-+][0-9A-Za-z.-]{1,32})?$")
 _ENGINE_VERSION_RE = re.compile(r"^\d{1,6}(?:\.\d{1,6}){0,3}$")
 _LOCALES = ("en", "zh")
-CONTENT_KINDS = ("skills", "rulepacks", "cards", "lorebooks", "panels", "presentation", "presets")
+CONTENT_KINDS = ("skills", "rulepacks", "cards", "lorebooks", "panels", "presentation", "presets", "prep")
 # The 拆卡 taxonomy at the pack level: a "character" card is a persona + sheet a player may
 # self-import; a "world" card is module machinery (hooks / [InitVar] / EJS) the keeper imports
 # with `.import <file> world`. Labels are enforced against real detection at build AND verify
@@ -193,6 +193,10 @@ class PackTrust:
     # JSON). They are prompt TEXT the keeper may fold into the room's style layer —
     # disclosed like every other shipped influence, enabled per room, never auto-on.
     presets: int = 0
+    # M20 F prep-plan scripts (`prep/*.js`). They are CODE, so they are counted here
+    # like hooks — but they NEVER auto-run: a keeper invokes one by reference through
+    # `run_prep_plan`, which previews the whole plan before anything applies.
+    prep_scripts: int = 0
 
 
 @dataclass(frozen=True)
@@ -243,6 +247,7 @@ class InstallReport:
     panels: list[str] = field(default_factory=list)  # panels.yaml paths landed in the pack home
     presentation: list[str] = field(default_factory=list)  # presentation.yaml paths landed in the pack home
     presets: list[str] = field(default_factory=list)  # preset ids landed in the shared preset store
+    prep: list[str] = field(default_factory=list)  # prep-plan script paths landed in the pack home
     assets: int = 0
     asset_bytes: int = 0
     shadowed: list[str] = field(default_factory=list)  # ids a same-named built-in keeps winning over
@@ -499,6 +504,7 @@ def parse_manifest_text(text: str, *, expect_trust: bool) -> PackManifest:
                 presentation=int(trust_raw.get("presentation", 0)),
                 imagegen=bool(trust_raw.get("imagegen", False)),
                 presets=int(trust_raw.get("presets", 0)),
+                prep_scripts=int(trust_raw.get("prep_scripts", 0)),
             )
         except (TypeError, ValueError) as exc:
             raise PackError(f"invalid trust block: {exc}") from exc
@@ -835,6 +841,24 @@ def _validate_pack_presets(read_text: Callable[[str], str], manifest: PackManife
     return ids
 
 
+def _validate_pack_prep_scripts(read_text: Callable[[str], str], manifest: PackManifest) -> None:
+    """Static checks for prep-plan scripts (build AND verify side): extension, the
+    sandbox's own size cap, and UTF-8 decodability. Deliberately NO sandbox execution
+    here — build must be deterministic on machines without the optional quickjs extra;
+    a script's syntax surfaces at `run_prep_plan`'s preview, before anything applies."""
+    from core.prep_script import MAX_SCRIPT_CHARS
+
+    for script_path in manifest.contents["prep"]:
+        if PurePosixPath(script_path).suffix != ".js":
+            raise PackError(f"prep script must be a .js file: {script_path!r}")
+        try:
+            text = read_text(script_path)
+        except UnicodeDecodeError as exc:
+            raise PackError(f"prep script {script_path}: not valid UTF-8") from exc
+        if len(text) > MAX_SCRIPT_CHARS:
+            raise PackError(f"prep script {script_path}: exceeds {MAX_SCRIPT_CHARS} characters")
+
+
 def _asset_mime(path: str) -> str:
     """The media type of a pack asset, by extension and platform-independently."""
     suffix = PurePosixPath(path).suffix.casefold()
@@ -939,6 +963,7 @@ def _manifest_to_yaml(manifest: PackManifest) -> str:
             "presentation": manifest.trust.presentation,
             "imagegen": manifest.trust.imagegen,
             "presets": manifest.trust.presets,
+            "prep_scripts": manifest.trust.prep_scripts,
         },
     }
     return yaml.safe_dump(data, sort_keys=True, allow_unicode=True, default_flow_style=False)
@@ -1031,6 +1056,9 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
     # cannot ship a preset file `.preset import` would then refuse.
     preset_ids = _validate_pack_presets(read_text, manifest)
     archive_files.extend(manifest.contents["presets"])
+    # Prep-plan scripts (M20 F): statically checked; the sandbox judges syntax later.
+    _validate_pack_prep_scripts(read_text, manifest)
+    archive_files.extend(manifest.contents["prep"])
     declared_asset_paths = {asset.path for asset in manifest.assets}
     all_assets = list(manifest.assets) + [
         PackAsset(path=path, sha256="", mime="", size=0)
@@ -1091,6 +1119,7 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
         presentation=sum(len(kit.subjects) for kit in pack_kits),
         imagegen=any(kit.generates and any(subject.ref for subject in kit.subjects) for kit in pack_kits),
         presets=len(preset_ids),
+        prep_scripts=len(manifest.contents["prep"]),
     )
     # The complete member inventory (manifest v2): every archive file except the
     # manifest itself, with its integrity record. Install verifies set-equality.
@@ -1281,7 +1310,12 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
         with archive.open(lorebook_path) as handle:
             data = handle.read(MAX_LOREBOOK_BYTES + 1)
         has_ejs = _validate_lorebook_bytes(lorebook_path, data) or has_ejs
-    for declared in (*manifest.contents["panels"], *manifest.contents["presentation"], *manifest.contents["presets"]):
+    for declared in (
+        *manifest.contents["panels"],
+        *manifest.contents["presentation"],
+        *manifest.contents["presets"],
+        *manifest.contents["prep"],
+    ):
         if declared not in names:
             raise PackError(f"declared file missing from archive: {declared!r}")
     # Re-run the pack-level panel validation and re-check the code cap against the BUILT
@@ -1294,6 +1328,7 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
     verify_kits, _kit_paths = _validate_pack_presentation(read_text, manifest)
     _enforce_kit_assets(verify_kits, verify_assets_by_path)
     verify_preset_ids = _validate_pack_presets(read_text, manifest)
+    _validate_pack_prep_scripts(read_text, manifest)
     # Asset bytes were already verified via the files inventory (set equality +
     # per-file sha256/size above); the asset block's own records were cross-checked
     # against that inventory, so no second streaming pass is needed here.
@@ -1316,6 +1351,7 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
         presentation=sum(len(kit.subjects) for kit in verify_kits),
         imagegen=any(kit.generates and any(subject.ref for subject in kit.subjects) for kit in verify_kits),
         presets=len(verify_preset_ids),
+        prep_scripts=len(manifest.contents["prep"]),
     )
     if manifest.trust != computed:
         stored = manifest.trust
@@ -1324,7 +1360,7 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
             for name in (
                 "skills", "rulepacks", "cards", "lorebooks", "assets",
                 "asset_bytes", "has_hooks", "has_ejs", "has_rules_script", "world_cards", "panels",
-                "presentation", "imagegen", "presets",
+                "presentation", "imagegen", "presets", "prep_scripts",
             )
             if stored is None or getattr(stored, name) != getattr(computed, name)
         ]
@@ -1399,7 +1435,7 @@ def install_pack(
             staging.mkdir(parents=True)
             manifest_target = _confined_target(staging, MANIFEST_NAME)
             manifest_target.write_text(_archive_read_text(archive, MANIFEST_NAME), encoding="utf-8")
-            for kind in ("cards", "lorebooks", "panels", "presentation"):
+            for kind in ("cards", "lorebooks", "panels", "presentation", "prep"):
                 for name in manifest.contents[kind]:
                     _extract_entry(archive, name, _confined_target(staging, name))
                     getattr(report, kind).append(name)

@@ -465,6 +465,46 @@ opt-in and last, and requires: a capability declaration, explicit operator enabl
 default), a prominent "runs untrusted code with server privileges" warning, and failure
 isolation. Until C.2 ships, code contributions go through normal in-tree PRs.
 
+### C.3 Prep-phase scripts — plan-then-apply bulk setup (M20 F)
+
+Setting a module up can be forty near-identical tool calls: seeding a cast from a
+list, defining a family of variables, importing lore in bulk. A **prep script** is a
+small JavaScript file that PLANS that work instead of performing it:
+
+```js
+// prep/setup.js — runs in the QuickJS sandbox; `plan` is the ONLY callable.
+const guards = ["门房老周", "巡夜的李七", "更夫赵三"];
+for (const name of guards) {
+  plan("add_npc", { name: name, concept: "夜里见过五层的人" });
+}
+plan("define_variable", { var_id: "floor_seen", kind: "number", minimum: 0, maximum: 3 });
+```
+
+The contract, and why it is safe to hand a keeper:
+
+- **A script can only `plan(tool, argsObject)`.** The sandbox exposes no other
+  callable and no engine state — it cannot call a tool, read the room, or reach the
+  network; it emits an operation list and stops. Limits: 20 000 chars of script,
+  200 operations, 8 KB of arguments per operation, 1 s of CPU.
+- **The engine applies each planned call through the ordinary tool path** — the same
+  argument validation, `keeper_only` marking, gated-skill unlock check and prep-phase
+  check a model-issued call gets, because it IS that code.
+- **Validated whole, applied in order.** A plan naming a tool the room cannot reach
+  applies NOTHING (never half of itself); an operation failing at apply time stops
+  the run there, and earlier operations stand.
+- **Preview is free.** `run_prep_plan` with `apply: false` shows the full operation
+  list and touches nothing. Prep phase only (`.phase prep`); keeper commands like
+  `.import … world` and `.var expose` are structurally unreachable — they are
+  commands, not tools, so a plan cannot name them.
+
+**Shipping one with a pack**: declare it under `contents.prep` (`.js`, conventionally
+in `prep/`). It installs into the pack home and the keeper invokes it by reference —
+`run_prep_plan(script_ref="<packId>/prep/setup.js")` — previewing first, exactly like
+inline script text. The trust card counts shipped scripts (`prep scripts: N`); they
+NEVER run automatically, at install or any other time. Build checks are static
+(extension, size cap, UTF-8) so packs build identically on machines without the
+optional QuickJS extra; syntax errors surface at preview.
+
 ## Layer D — Module UI panels (M15; engine half landed)
 
 Modules dress the table: a pack ships its own interface — HUDs, case boards, maps —
@@ -663,6 +703,7 @@ so this costs nothing until an author asks for it.
 | `contents.panels` | no | panels YAML files (`ui/panels.yaml`) declaring module UI panels (Layer D) — ≤ 16 panels per pack; a tier-2 panel's `entry`/`assets` files and every tier-1 `image`/`map_pin` `src` are folded into the pack asset pipeline at build (sha256'd, code payload ≤ 2 MB per panel) |
 | `contents.presentation` | no | the presentation kit (`ui/presentation.yaml`, one per pack) — the Stage Director's creative brief; its 定妆 references and audio cues join the same asset pipeline, and the trust card discloses whether the module may generate images |
 | `contents.presets` | no | keeper-style prompt presets (ST completion-preset `.json`), validated at build with the real preset parser; install lands them in the shared `data_dir/presets/` store under their sanitized filename stem (two files sanitizing to one id fail the build). Disclosed on the trust card; per-room opt-in via `.preset enable <id>` |
+| `contents.prep` | no | prep-phase plan scripts (`.js`, Layer C.3): bulk setup a keeper runs by reference through `run_prep_plan(script_ref="<packId>/<path>")` — previewed whole before anything applies, never run automatically. Statically checked at build (extension, the sandbox's 20 000-char cap, UTF-8); counted on the trust card |
 | `assets` | no | media files: `path` + optional `title`/`license`/`tags`/`mime`; `sha256`/`size`/`mime` are FILLED IN at pack time (a hand-declared `sha256` must match the file) |
 | `trust` | forbidden in source | GENERATED at pack time (counts incl. `panels`, `has_hooks`, `has_ejs`, `has_rules_script`, `asset_bytes`); a hand-written block fails the build. Install RE-DERIVES it from the archive with the same detectors and rejects a mismatch — a hand-assembled pack cannot understate what it ships |
 | `files` | forbidden in source | GENERATED at pack time (manifest v2): the complete archive inventory — every member except the manifest itself with its `sha256`/`size`. Install verifies SET EQUALITY plus per-file integrity, so the declaration is exactly the shipped byte set and nothing undeclared can ride along |
