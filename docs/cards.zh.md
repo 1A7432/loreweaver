@@ -31,7 +31,7 @@
 - **世界书触发语义。** 主 `keys`；`secondary_keys` 的全部四种选择逻辑（AND ANY / AND ALL / NOT ANY / NOT ALL）；`probability`——由真代码掷出来，不是嘴上说说；大小写敏感与整词匹配；`scan_depth` 窗口；`position` 排序桶；计时效果——`sticky`、`cooldown`、`delay`——挂在按房间的回合计数器上；分组抽选（按权重，每组每回合只出一个）；带预算的插入。
 - **MVU 协议端到端。** 卡自带的脚手架条目按普通 lore 导入，模型输出 `<UpdateVariable>` 块，引擎用真代码解析——五种操作（`set` / `insert` / `delete` / `add` / `move`）全支持——应用到变量树，并把这些块从玩家可见的叙事里剥掉。带 schema 校验的工具调用（`set_stat` / `adjust_stat` / `get_stat`）是通往同一棵树的首选通道。
 - **完整 EJS——真 JavaScript。** 装了 `ejs` extra（默认开启）后，世界书和卡内容经官方 EJS 库 + lodash 在内嵌 QuickJS 沙箱里渲染：循环、函数、`await`、lodash 链、任意 JS 的 `@@if` 条件、`setvar`/`incvar`（先缓冲，渲染后由引擎代码统一应用）、`getwi`/`activewi`、`injectPrompt`、`execvar`。信任模型和酒馆本身一致：你的机器，你的卡。
-- **宏。** `{{user}}`（当前 PC，渲染时解析）、`{{char}}`、`{{time}}` / `{{date}}`、`{{roll:XdY}}`、`{{random}}`、`{{pick}}`、`{{newline}}`、`{{// 注释}}`、`{{getvar::}}` / `{{var:}}`。
+- **宏。** `{{user}}`（当前 PC，渲染时解析）、`{{char}}`、`{{time}}` / `{{date}}`、`{{roll:XdY}}`、`{{random}}`、`{{pick}}`、`{{newline}}`、`{{// 注释}}`、`{{getvar::}}` / `{{var:}}`。写给作者的注记：`{{random}}`/`{{pick}}`（以及 lore 的 `probability` 掷点）用真代码随机数，但按**（房间，回合）**播种——不同回合各自随机，重放同一回合（重试、撤销回放）会得到相同的选取，模型看到过什么永远可以复原。两类掷点用互不相干的流：多加一个 `{{random}}` 宏不会改变哪些概率条目触发。
 - **状态量面板由守秘人自己挑。** 你卡里的变量树是模组状态，重卡在树里藏剧情暗标是常规操作——所以叶子默认不进任何玩家面板，直到守秘人公开它们：`.var expose <前缀|*>` 把一条路径（连同子树）放上队伍面板，`.var hide` 收回，`.var list` 看整棵树和可见性标记。守秘人自己的面板永远显示全部（隐藏叶子带标记）。记得告诉用户该公开哪些前缀——或者直接写进内容包里该卡的 `notes`。
 
 ## 这里有什么不一样（排查问题前先读这段）

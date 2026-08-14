@@ -92,7 +92,12 @@ a Keeper's `.import <file> world`; a character import carries none of it.)
   SillyTavern itself: your box, your cards.
 - **Macros.** `{{user}}` (the active PC, resolved at render time), `{{char}}`,
   `{{time}}` / `{{date}}`, `{{roll:XdY}}`, `{{random}}`, `{{pick}}`, `{{newline}}`,
-  `{{// comments}}`, `{{getvar::}}` / `{{var:}}`.
+  `{{// comments}}`, `{{getvar::}}` / `{{var:}}`. Note for authors:
+  `{{random}}`/`{{pick}}` (and lore `probability` rolls) draw from real code
+  randomness seeded per **(room, turn)** — different turns vary freely, but re-running
+  the SAME turn (a retry, an undo replay) reproduces the same picks, so what the
+  model saw is always reconstructable. The two draws use separate streams: adding a
+  `{{random}}` macro never shifts which probabilistic lore entries fire.
 - **The tracker panel is Keeper-curated.** Your card's tree is module state, and heavy
   cards routinely keep hidden plot flags in it — so leaves reach NO player panel until
   the Keeper exposes them: `.var expose <prefix|*>` puts a path (and its subtree) on
