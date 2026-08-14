@@ -89,6 +89,12 @@ GOLDEN_SURVIVING_KEYS = frozenset(
 # scan surfaced them, and the owner ruled on 2026-08-14 that all three go with the story.
 # Kept as their own set so the golden tables above stay an honest record of what was.
 POST_M23_STORY_KEYS = frozenset({"scribe_whispers", "director_images", "director_pregen"})
+
+# Same honest-record split on the document-type side: no pre-M23 cleanup list named the
+# registered `media` document type, so `.reset all` spared it. The M23 media facet claims
+# the type at reset_scope="all", so a full reset now wipes it — a post-M23 behaviour
+# increment, pinned explicitly rather than folded into the golden tables.
+POST_M23_ALL_DOC_TYPES = frozenset({"media"})
 GOLDEN_SURVIVING_DOC_TYPES = frozenset({"table_habits"})
 
 
@@ -101,7 +107,7 @@ def _golden_targets(scope: str) -> tuple[frozenset[str], frozenset[str], frozens
         keys |= GOLDEN_CHARS_KEYS
         prefixes |= GOLDEN_CHARS_PREFIXES
     if scope == "all":
-        doc_types |= GOLDEN_ALL_DOC_TYPES
+        doc_types |= GOLDEN_ALL_DOC_TYPES | POST_M23_ALL_DOC_TYPES
         keys |= GOLDEN_ALL_KEYS
         prefixes |= GOLDEN_ALL_PREFIXES
     return frozenset(doc_types), frozenset(keys), frozenset(prefixes)
@@ -120,6 +126,7 @@ async def _populate(services, chat_key: str) -> None:
         GOLDEN_STORY_DOC_TYPES
         | GOLDEN_CHARS_DOC_TYPES
         | GOLDEN_ALL_DOC_TYPES
+        | POST_M23_ALL_DOC_TYPES
         | GOLDEN_SURVIVING_DOC_TYPES
     )
     for doc_type in sorted(every_doc_type):
@@ -185,6 +192,7 @@ async def test_reset_wipes_exactly_what_the_pre_registry_tables_wiped(tmp_path, 
         GOLDEN_STORY_DOC_TYPES
         | GOLDEN_CHARS_DOC_TYPES
         | GOLDEN_ALL_DOC_TYPES
+        | POST_M23_ALL_DOC_TYPES
         | GOLDEN_SURVIVING_DOC_TYPES
     )
     for doc_type in sorted(all_types - wiped_types):
