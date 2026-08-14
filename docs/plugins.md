@@ -321,6 +321,15 @@ text into its prompt only when its keeper runs `.preset enable <id>`
 (`.preset import <packId>/presets/x.json`) for cherry-picking a preset a pack ships
 only as a plain asset.
 
+The fold honors the preset's GEOMETRY, not just its text: segments split into four
+bands at the three anchors that have an honest engine counterpart — text before any
+marker joins the stable style layer, text around `worldInfoBefore`/`worldInfoAfter`
+brackets the world-lore section, and text after `chatHistory` (ST's
+position-critical slot) lands late in the per-turn state message, the closest
+standing text to generation. A preset with no markers folds exactly as before. The
+other five ST anchors only advance the split; they map to nothing, deliberately —
+play experience outranks 1:1 SillyTavern reproduction.
+
 Provider presets (`infra/providers.py:PRESETS`) and locale packs
 (`locales/{lang}/*.json`) are already data; they join the same discovery/manifest
 pattern.

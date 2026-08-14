@@ -163,6 +163,8 @@ Loreweaver 本来就导入酒馆卡（`core/charcard.py` → `char_from_persona.
 
 **守秘人风格的提示词预设是一等的包内容。**预设就是 SillyTavern 补全预设 JSON 文件（ST 用户已经在互相传的那种「预设」格式）；在 `contents.presets` 里声明后，构建时会用 `.preset import` 同一个解析器做校验。安装时每个文件落进共享预设库（`data_dir/presets/<id>.json`，id 取净化后的文件名主干），所以 `.preset list` 立刻能看到——但什么都不会自己生效：只有房间的守秘人执行 `.preset enable <id>`，这段风格文本才会折入该房间的提示词（和其它内容一样，安装 ≠ 启用）。信任卡会披露预设数量（`presets: N`）。`.preset import` 也认识包相对引用（`.preset import <packId>/presets/x.json`），可以单独挑选一个只以普通素材形式随包发的预设。
 
+折叠尊重预设的**几何**，不只是文本：按三个在引擎里有真实对应物的锚点切成四段——所有标记之前的文本进稳定风格层；`worldInfoBefore`/`worldInfoAfter` 周围的文本包夹世界书注入段；`chatHistory` 之后的文本（酒馆里位置最关键的槽位）落在每回合状态消息的后段，是离生成最近的常驻文本。没有标记的预设折叠方式与从前完全一致。其余五个酒馆锚点只推进切分、不映射到任何位置——这是有意的：游玩体验优先于对酒馆的 1:1 复刻。
+
 provider 预设（`infra/providers.py:PRESETS`）和本地化包（`locales/{lang}/*.json`）本来就是数据，加入同一套发现／清单模式。
 
 ---

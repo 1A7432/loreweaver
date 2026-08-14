@@ -92,3 +92,57 @@ async def test_broken_or_missing_preset_never_breaks_the_turn(tmp_path):
     await services.store.state_set("broken-room", "preset_enabled", "bad")
     prompt = await build_system_prompt(_ctx("broken-room"), services)
     assert "Imported style preset" not in prompt
+
+
+_BANDED_PRESET_TEXT = json.dumps(
+    {
+        "prompts": [
+            {"identifier": "opener", "content": "HEAD STYLE DIRECTIVE.", "enabled": True},
+            {"identifier": "worldInfoBefore", "content": "", "marker": True},
+            {"identifier": "worldInfoAfter", "content": "", "marker": True},
+            {"identifier": "afterworld", "content": "POST LORE FRAMING NOTE.", "enabled": True},
+            {"identifier": "chatHistory", "content": "", "marker": True},
+            {"identifier": "closer", "content": "POST HISTORY STANDING COMMAND.", "enabled": True},
+        ],
+        "prompt_order": [
+            {
+                "character_id": 100001,
+                "order": [
+                    {"identifier": "opener", "enabled": True},
+                    {"identifier": "worldInfoBefore", "enabled": True},
+                    {"identifier": "worldInfoAfter", "enabled": True},
+                    {"identifier": "afterworld", "enabled": True},
+                    {"identifier": "chatHistory", "enabled": True},
+                    {"identifier": "closer", "enabled": True},
+                ],
+            }
+        ],
+    },
+    ensure_ascii=False,
+)
+
+
+async def test_marker_bands_land_in_their_wire_positions(tmp_path):
+    """The v1 marker→section contract: head stays in the stable head (the v0 spot);
+    post-lore and post-history text ride the volatile tail in preset order, with the
+    post-history band the LAST preset text — closest standing text to generation,
+    still ahead of nothing the engine reserves for per-turn direction."""
+    from agent.prompt_builder import build_system_prompt_parts
+
+    services = _services(tmp_path)
+    save_preset_text(tmp_path, "banded", _BANDED_PRESET_TEXT)
+    await services.store.state_set("band-room", "preset_enabled", "banded")
+
+    parts = await build_system_prompt_parts(_ctx("band-room"), services)
+
+    assert "HEAD STYLE DIRECTIVE." in parts.stable
+    assert "HEAD STYLE DIRECTIVE." not in parts.volatile
+    assert "POST LORE FRAMING NOTE." in parts.volatile
+    assert "POST HISTORY STANDING COMMAND." in parts.volatile
+    assert parts.volatile.index("POST LORE FRAMING NOTE.") < parts.volatile.index(
+        "POST HISTORY STANDING COMMAND."
+    )
+    assert "POST LORE" not in parts.stable and "POST HISTORY" not in parts.stable
+    # Each displaced band carries the provenance header, not bare imported text.
+    header = "Imported style preset"
+    assert parts.volatile.count(header) == 2

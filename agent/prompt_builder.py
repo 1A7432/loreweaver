@@ -95,7 +95,7 @@ from core.ejs_full import create_full_engine
 from core.ejs_lite import MacroContext
 from core.modvars import describe_modvars, load_modvars
 from core.mvu_compat import apply_set, flatten_leaves, load_mvu, save_mvu
-from core.preset import style_segments
+from core.preset import style_bands
 from core.preset_store import load_preset
 from core.prompt_sections import (
     inject_document_context_prompt,
@@ -269,10 +269,12 @@ async def build_system_prompt_parts(
     if document_context_is_stable:
         stable.append(document_context)
 
-    # Imported-preset style layer (`.preset enable <id>`): folded before the skill
-    # bodies so keeper-enabled skills still read as the stronger STANDING directive.
-    # One bounded section — iron rule #5 (single prompt injection) stays intact.
-    stable.append(await _enabled_preset_section(ctx, services, i18n))
+    # Imported-preset style layer (`.preset enable <id>`), four placement bands (see
+    # `_enabled_preset_bands`). The head band folds before the skill bodies so
+    # keeper-enabled skills still read as the stronger STANDING directive; the other
+    # three ride the volatile tail below. One assembler — iron rule #5 stays intact.
+    preset_bands = await _enabled_preset_bands(ctx, services, i18n)
+    stable.append(preset_bands.get("head", ""))
 
     skill_bodies = await _enabled_skill_bodies(ctx, services)
     if skill_bodies:
@@ -290,7 +292,10 @@ async def build_system_prompt_parts(
         volatile.append(document_context)
     volatile.extend(
         [
+            # The preset's world-info framing brackets the lore it was authored around.
+            preset_bands.get("pre_lore", ""),
             world_lore,
+            preset_bands.get("post_lore", ""),
             await inject_game_state_prompt(ctx, services.characters, services.store, i18n),
         ]
     )
@@ -320,6 +325,13 @@ async def build_system_prompt_parts(
     if mvu_leaves:
         leaf_lines = "\n".join(f"- {leaf['path']} = {leaf['value']}" for leaf in mvu_leaves)
         volatile.append(i18n.t("prompt.mvu_header") + "\n" + leaf_lines)
+
+    # The preset's post-history band — ST's position-critical slot, honored
+    # faithfully (owner verdict 2026-08-15): the closest STANDING text to generation.
+    # It still yields the very end to the engine's own per-turn direction below
+    # (whispers, hook injections, the chronicle's recalled records) — standing
+    # directives before per-turn ones is the recency order everything here follows.
+    volatile.append(preset_bands.get("post_history", ""))
 
     # This turn's own direction goes LAST, keeping recency where it matters most.
     # Scribe whispers (agent.scribe): keeper-side bookkeeping reminders from the
@@ -451,30 +463,35 @@ async def _flush_template_writes(services: Services, chat_key: str, engine, mvu_
     return mvu_tree
 
 
-async def _enabled_preset_section(ctx: AgentCtx, services: Services, i18n) -> str:
-    """The imported-preset style layer for this room, or ``""``.
+async def _enabled_preset_bands(ctx: AgentCtx, services: Services, i18n) -> dict[str, str]:
+    """The imported-preset style layer for this room, folded into the four placement
+    bands of `core.preset.style_bands` (the marker→section contract, v1) — each
+    non-empty band rendered with the provenance header, empty dict when no preset.
 
     Reads the ``preset_enabled`` room_state flag inline off the store (the same
-    layering rule as the skills block below: never import ``gateway.ops``), loads the
-    preset via `core.preset_store.load_preset`, and joins the non-marker text runs of
-    `core.preset.style_segments` (v0 marker policy: markers are boundaries only — the
-    finer marker→section mapping can land once real presets demand it; the fold is
-    already size-capped inside ``style_segments``). Contributes nothing when no preset
-    is enabled or the file is missing/broken — a bad preset never breaks a turn."""
+    layering rule as the skills block below: never import ``gateway.ops``). Where the
+    bands land is this module's decision (iron rule #5 — one assembler): ``head``
+    stays in the stable head before the skill bodies (the v0 position, so a
+    marker-less preset builds byte-identically), ``pre_lore``/``post_lore`` bracket
+    the world-lore section, and ``post_history`` closes in on generation late in the
+    volatile tail — real geometry, because the tail rides the wire after the
+    replayed history. Contributes nothing when no preset is enabled or the file is
+    missing/broken — a bad preset never breaks a turn."""
     try:
         raw = await services.store.state_get(ctx.chat_key, "preset_enabled")
     except Exception:
-        return ""
+        return {}
     preset_id = str(raw or "").strip()
     if not preset_id:
-        return ""
+        return {}
     preset = load_preset(services.settings.data_dir, preset_id)
     if preset is None:
-        return ""
-    texts = [text for slot, text in style_segments(preset) if slot is None and text]
-    if not texts:
-        return ""
-    return i18n.t("prompt.preset_header") + "\n\n" + "\n\n".join(texts)
+        return {}
+    header = i18n.t("prompt.preset_header")
+    return {
+        band: header + "\n\n" + text if text else ""
+        for band, text in style_bands(preset).items()
+    }
 
 
 async def _enabled_skill_bodies(ctx: AgentCtx, services: Services) -> list[str]:

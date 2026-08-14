@@ -505,3 +505,63 @@ def test_a_full_size_pool_imports_and_folds():
     assert macro_report(preset) == {"getvar": 81}
     # Eight marker boundaries, and text runs collapsed between them.
     assert [slot for slot, _ in style_segments(preset) if slot is not None] == list(MARKER_SLOTS)
+
+
+# ---------------------------------------------------------------------------
+# style_bands — the four-band marker→section contract (v1)
+# ---------------------------------------------------------------------------
+
+
+def _banded_preset() -> dict:
+    prompts = [
+        {"identifier": "opener", "content": "HEAD STYLE.", "enabled": True},
+        {"identifier": "charDescription", "content": "", "marker": True},
+        {"identifier": "framing", "content": "PRE LORE FRAMING.", "enabled": True},
+        {"identifier": "worldInfoBefore", "content": "", "marker": True},
+        {"identifier": "worldInfoAfter", "content": "", "marker": True},
+        {"identifier": "afterworld", "content": "POST LORE NOTE.", "enabled": True},
+        {"identifier": "chatHistory", "content": "", "marker": True},
+        {"identifier": "jail", "content": "POST HISTORY COMMAND.", "enabled": True},
+    ]
+    order = [{"identifier": p["identifier"], "enabled": True} for p in prompts]
+    return {"prompts": prompts, "prompt_order": [{"character_id": 100001, "order": order}]}
+
+
+def test_style_bands_split_at_the_three_honest_anchors():
+    from core.preset import style_bands
+
+    bands = style_bands(parse_st_preset(json.dumps(_banded_preset()), "banded"))
+    assert bands["head"] == "HEAD STYLE."
+    assert bands["pre_lore"] == "PRE LORE FRAMING."
+    assert bands["post_lore"] == "POST LORE NOTE."
+    assert bands["post_history"] == "POST HISTORY COMMAND."
+
+
+def test_style_bands_walk_is_monotonic_on_odd_marker_orders():
+    from core.preset import style_bands
+
+    raw = _banded_preset()
+    # An author who puts worldInfoBefore AFTER chatHistory cannot pull text backwards:
+    # the walk only moves forward, so late text stays post_history.
+    raw["prompt_order"][0]["order"].append({"identifier": "worldInfoBefore", "enabled": True})
+    raw["prompts"].append({"identifier": "tail", "content": "STILL LATE.", "enabled": True})
+    raw["prompt_order"][0]["order"].append({"identifier": "tail", "enabled": True})
+    bands = style_bands(parse_st_preset(json.dumps(raw), "odd"))
+    assert "STILL LATE." in bands["post_history"]
+
+
+def test_style_bands_without_markers_match_the_v0_single_fold():
+    from core.preset import style_bands
+
+    raw = {
+        "prompts": [
+            {"identifier": "a", "content": "One.", "enabled": True},
+            {"identifier": "b", "content": "Two.", "enabled": True},
+        ],
+        "prompt_order": [
+            {"character_id": 100001, "order": [{"identifier": "a", "enabled": True}, {"identifier": "b", "enabled": True}]}
+        ],
+    }
+    bands = style_bands(parse_st_preset(json.dumps(raw), "plain"))
+    assert bands["head"] == "One.\n\nTwo."
+    assert bands["pre_lore"] == "" and bands["post_lore"] == "" and bands["post_history"] == ""

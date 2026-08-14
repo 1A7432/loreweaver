@@ -596,6 +596,57 @@ def _fold_segments(
     return tuple(segments), truncated
 
 
+STYLE_BANDS: tuple[str, ...] = ("head", "pre_lore", "post_lore", "post_history")
+
+# Which band a marker moves the walk into. The walk is MONOTONIC — bands only move
+# forward — so a preset with markers in an odd order (worldInfoAfter before
+# worldInfoBefore, repeated markers) still folds deterministically instead of
+# bouncing text backwards. Only three ST anchors have an honest Loreweaver
+# counterpart (owner verdict 2026-08-15: four bands, no fake 8-way mapping; play
+# experience outranks ST-compat fidelity): everything up to the world-info block,
+# the text after it, and the post-history slot. The other five markers merely mean
+# "the author's context section has started" and advance the walk to `pre_lore`.
+_MARKER_BAND: dict[str, int] = {
+    "personaDescription": 1,
+    "charDescription": 1,
+    "charPersonality": 1,
+    "scenario": 1,
+    "dialogueExamples": 1,
+    "worldInfoBefore": 1,
+    "worldInfoAfter": 2,
+    "chatHistory": 3,
+}
+
+
+def style_bands(preset: StPreset, character_id: int | None = None) -> dict[str, str]:
+    """The four-band fold for ``agent.prompt_builder`` (the finer marker→section
+    contract, v1 of the single-fold policy):
+
+    - ``head`` — text before any marker: global style/identity directives. The prompt
+      builder keeps these in the stable head, exactly where the v0 fold put everything.
+    - ``pre_lore`` — text between the first marker and ``worldInfoAfter``: the framing
+      an author wrote around their context/world-info block; lands directly before the
+      world-lore section.
+    - ``post_lore`` — text after ``worldInfoAfter`` but before ``chatHistory``; lands
+      directly after the world-lore section.
+    - ``post_history`` — text after the ``chatHistory`` marker, ST's position-critical
+      slot; lands late in the volatile tail, the closest standing text to generation
+      (the tail rides the wire AFTER the replayed history, so the geometry is real).
+
+    A preset with no markers folds entirely into ``head`` — byte-identical to the v0
+    behavior. Size is already capped upstream by :func:`style_segments`.
+    """
+    texts: dict[str, list[str]] = {band: [] for band in STYLE_BANDS}
+    band_index = 0
+    for slot, text in style_segments(preset, character_id):
+        if slot is not None:
+            band_index = max(band_index, _MARKER_BAND.get(slot, 1))
+            continue
+        if text:
+            texts[STYLE_BANDS[band_index]].append(text)
+    return {band: "\n\n".join(parts) for band, parts in texts.items()}
+
+
 def style_segments(preset: StPreset, character_id: int | None = None) -> tuple[tuple[str | None, str], ...]:
     """The folding input for ``agent.prompt_builder``: the effective sequence collapsed into
     ``(marker_slot_or_None, text)`` segments.
