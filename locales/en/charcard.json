@@ -28,5 +28,16 @@
   "charcard.tools.world.failed": "Failed to import world card: {error}",
   "charcard.tools.world.pregen_line": "Cast: “{name}” is on the room's pre-generated roster — players take it with `.pc claim {name}` (for an AI-played version use `.import <card file> companion`).",
   "charcard.tools.world.skipped_line": "Oversized entries left out: {count} (first: {titles}) — they exceed the per-entry import cap; trim or split them in the card.",
+  "charcard.tools.world.brief_line": "Module brief seeded from the card's prose — read it with the module_brief tool (keeper-only).",
+  "charcard.tools.brief.none": "No module brief here — importing a world card with prose seeds one.",
+  "charcard.tools.brief.list": "Imported briefs: {names}. Ask again with a name.",
+  "charcard.tools.brief.header": "Module brief — {name} (keeper-only; never paste to players):",
+  "charcard.tools.brief.label.description": "Description",
+  "charcard.tools.brief.label.personality": "Personality",
+  "charcard.tools.brief.label.scenario": "Scenario",
+  "charcard.tools.brief.label.examples": "Example dialogue",
+  "charcard.tools.brief.label.notes": "Author notes",
+  "charcard.tools.brief.label.opening": "Authored opening",
+  "charcard.tools.brief.label.alt_opening": "Alternate opening {index}",
   "charcard.tools.world.specs_line": "Typed variables: {count} tracker(s) defined from the native bundle."
 }

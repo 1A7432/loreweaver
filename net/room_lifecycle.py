@@ -40,6 +40,7 @@ FACET_MODULES: tuple[str, ...] = (
     "core.character_manager",
     "core.document_manager",
     "core.game_clock",
+    "core.module_brief",
     "core.module_initializer",
     "core.modvars",
     "core.mvu_compat",

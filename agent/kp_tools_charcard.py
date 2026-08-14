@@ -36,6 +36,7 @@ from core.character_rules import render_validation_notice, validate_sheet
 from core.charcard import PNG_SIGNATURE, CharacterCard, parse_card_bytes
 from core.documents import MODULE_POOL_ID, PLAYER_VIEWER
 from core.lorecard import Lorecard, looks_like_lorecard, parse_lorecard_bytes
+from core.module_brief import BRIEF_DOC_TYPE, brief_id, build_brief
 from core.modvars import define_modvar
 from core.pregen_roster import pregen_add
 from core.rulepacks import load_rulepack
@@ -339,6 +340,30 @@ class CharcardTools:
             # `.lore add`ed some setting notes must never receive run-the-module directives.
             await self._services.store.state_set(ctx.chat_key, "world_import", card.name or "card")
 
+            # The card's PROSE gets a home (UPSTREAM item 10): a keeper-only brief
+            # document, copied deterministically — before this, description/scenario
+            # and the authored opening(s) seeded nothing and the Keeper could not even
+            # quote the module's own opening. Same-card re-import replaces it.
+            openings: tuple[str, ...] = ()
+            if lorecard is not None and lorecard.alternate_greetings:
+                openings = tuple(lorecard.alternate_greetings)
+            else:
+                raw_data = card.raw.get("data") if isinstance(card.raw, dict) else None
+                alt = raw_data.get("alternate_greetings") if isinstance(raw_data, dict) else None
+                if isinstance(alt, list):
+                    openings = tuple(str(entry) for entry in alt if isinstance(entry, str))
+            brief = build_brief(card, openings)
+            brief_line = ""
+            if brief is not None:
+                await self._services.documents.put(
+                    ctx.chat_key,
+                    BRIEF_DOC_TYPE,
+                    brief_id(card.name),
+                    brief,
+                    source=f"card:{card.name}",
+                )
+                brief_line = i18n.t("charcard.tools.world.brief_line")
+
             # A native bundle (M14) additionally carries TYPED variable specs — the lossless
             # flavor of what an ST card can only ship as an [InitVar] tree. Keeper trust:
             # they land as real `core.modvars` trackers (validated/clamped from here on).
@@ -413,10 +438,64 @@ class CharcardTools:
                     count=len(skipped_titles),
                     titles=i18n.t("common.list_separator").join(skipped_titles[:5]),
                 )
-            extra_lines = [line for line in (specs_line, pregen_line, cast_line, skipped_line) if line]
+            extra_lines = [line for line in (specs_line, brief_line, pregen_line, cast_line, skipped_line) if line]
             return "\n".join([result, *extra_lines])
         except Exception as exc:
             return i18n.t("charcard.tools.world.failed", error=str(exc))
+
+    @tool(keeper_only=True, read_only=True)
+    async def module_brief(self, ctx: AgentCtx, name: str = "") -> str:
+        """Read the imported module's brief -- the world card's own prose (pitch, scenario,
+        authored opening and its alternates), kept verbatim from `.import ... world`. Open play by
+        quoting or adapting the module's own opening; foreshadow from its scenario. Keeper eyes
+        only: never paste it to players.
+
+        Args:
+            name: Which card's brief when several are imported; omit to get the only one (or a
+                list of names when there are more).
+
+        Returns:
+            The brief's prose sections, or the list of available briefs.
+        """
+        i18n = self._i18n(ctx)
+        from core.documents import KEEPER_VIEWER
+
+        pairs = await self._services.documents.list_views(ctx.chat_key, BRIEF_DOC_TYPE, KEEPER_VIEWER)
+        briefs = [view for _doc, view in pairs if view]
+        if not briefs:
+            return i18n.t("charcard.tools.brief.none")
+        chosen = None
+        if name.strip():
+            wanted = brief_id(name)
+            chosen = next(
+                (view for view in briefs if brief_id(str(view.get("name", ""))) == wanted),
+                None,
+            )
+            if chosen is None:
+                return i18n.t(
+                    "charcard.tools.brief.list",
+                    names=i18n.t("common.list_separator").join(str(view.get("name", "")) for view in briefs),
+                )
+        elif len(briefs) == 1:
+            chosen = briefs[0]
+        else:
+            return i18n.t(
+                "charcard.tools.brief.list",
+                names=i18n.t("common.list_separator").join(str(view.get("name", "")) for view in briefs),
+            )
+        lines = [i18n.t("charcard.tools.brief.header", name=str(chosen.get("name", "")))]
+        for field in ("description", "personality", "scenario", "examples", "notes"):
+            value = str(chosen.get(field, "")).strip()
+            if value:
+                lines.append(f"{i18n.t('charcard.tools.brief.label.' + field)}:\n{value}")
+        opening = str(chosen.get("opening", "")).strip()
+        if opening:
+            lines.append(f"{i18n.t('charcard.tools.brief.label.opening')}:\n{opening}")
+        for index, alt in enumerate(chosen.get("openings", []) or [], start=1):
+            text = str(alt).strip()
+            if text:
+                lines.append(f"{i18n.t('charcard.tools.brief.label.alt_opening', index=index)}:\n{text}")
+        return "\n\n".join(lines)
 
     async def _build_pregen_sheet(
         self, ctx: AgentCtx, character: CharacterCard, system: str, host_path: Path

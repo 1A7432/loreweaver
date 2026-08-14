@@ -53,7 +53,10 @@ isn't rejected either way — it's decomposed.
   - `world` (**Keeper-only**) imports the whole module in one step: the machinery
     half — full lorebook with Keeper trust, `[InitVar]` seeded, hooks installed —
     AND the character half, which lands on the room's **pre-generated roster** as a
-    claimable, rule-validated PC. Players pick their character with `.pc list` /
+    claimable, rule-validated PC. The card's PROSE (description, scenario, the
+    authored opening and its alternates) is copied into a Keeper-only **module
+    brief** the Keeper reads back with the `module_brief` tool — so the module's own
+    opening can be quoted at the table instead of vanishing at import. Players pick their character with `.pc list` /
     `.pc claim <name>` (claims are exclusive; `.pc release` frees the slot and the
     next claimant starts from the pristine sheet). For an AI-played version of the
     same character, `.import <file> companion` still works.

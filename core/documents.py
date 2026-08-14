@@ -269,6 +269,7 @@ for _name, _project_fn, _singleton in (
 # one only under TYPE_CHECKING, so there is no import cycle); registering them
 # in the same built-in table keeps `project()` the single chokepoint.
 from core import chronicle as _chronicle  # noqa: E402
+from core import module_brief as _module_brief  # noqa: E402
 from core import table_habits as _table_habits  # noqa: E402
 
 for _name, _project_fn, _validate_fn, _singleton in (
@@ -287,6 +288,14 @@ for _name, _project_fn, _validate_fn, _singleton in (
         _table_habits.project_habits,
         _table_habits.validate_habits_write,
         _table_habits.HABITS_ID,
+    ),
+    # A world card's prose, seeded at `.import … world` (UPSTREAM item 10). Keeper-side
+    # only — scenario text and openings carry setup players must discover in play.
+    (
+        _module_brief.BRIEF_DOC_TYPE,
+        _module_brief.project_brief,
+        _module_brief.validate_brief_write,
+        None,
     ),
 ):
     register_document_type(

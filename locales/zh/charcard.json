@@ -28,5 +28,16 @@
   "charcard.tools.world.failed": "导入世界卡失败：{error}",
   "charcard.tools.world.pregen_line": "角色入池：「{name}」已进入本房间的预设角色池，玩家用 `.pc claim {name}` 认领（想要 AI 扮演请另行 `.import <角色卡文件> companion`）。",
   "charcard.tools.world.skipped_line": "超长条目未导入：{count} 条（前几条：{titles}）——超出单条导入上限，请在卡内精简或拆分。",
+  "charcard.tools.world.brief_line": "已从卡片散文生成模组简报——用 module_brief 工具阅读（仅守秘人可见）。",
+  "charcard.tools.brief.none": "这里还没有模组简报——导入带散文的世界卡时会自动生成。",
+  "charcard.tools.brief.list": "已导入的简报：{names}。请带名字再问一次。",
+  "charcard.tools.brief.header": "模组简报——{name}（仅守秘人可见；绝不能原样贴给玩家）：",
+  "charcard.tools.brief.label.description": "简介",
+  "charcard.tools.brief.label.personality": "性格设定",
+  "charcard.tools.brief.label.scenario": "情境设定",
+  "charcard.tools.brief.label.examples": "示例对话",
+  "charcard.tools.brief.label.notes": "作者注记",
+  "charcard.tools.brief.label.opening": "原作开场",
+  "charcard.tools.brief.label.alt_opening": "替代开场 {index}",
   "charcard.tools.world.specs_line": "类型化变量：已从原生卡包定义 {count} 个追踪器。"
 }

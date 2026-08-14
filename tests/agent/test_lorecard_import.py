@@ -135,6 +135,35 @@ async def test_world_import_lands_specs_secret_lore_and_cast(tmp_path):
     assert roster[0]["blurb"] == "记者"
 
 
+async def test_world_import_seeds_a_keeper_only_brief(tmp_path):
+    from core.documents import KEEPER_VIEWER, PLAYER_VIEWER
+    from core.module_brief import BRIEF_DOC_TYPE, brief_id
+
+    services = _services()
+    ctx = AgentCtx(chat_key="lorecard-brief", user_id="keeper-1", locale="en", fs=_write_bundle(tmp_path))
+    tools = CharcardTools(services)
+    result = await tools.import_world_card(ctx, file_path="corridor.lorecard.json")
+    assert "module_brief" in result  # the report tells the keeper where the prose went
+
+    doc_id = brief_id("回廊公寓")
+    keeper_view = await services.documents.get_view("lorecard-brief", BRIEF_DOC_TYPE, doc_id, KEEPER_VIEWER)
+    assert keeper_view is not None
+    assert keeper_view["scenario"] == "Find the missing tenant."
+    assert keeper_view["opening"] == "Rain again."
+    # Iron rule #3: the prose is module truth — the player projection is None.
+    assert await services.documents.get_view("lorecard-brief", BRIEF_DOC_TYPE, doc_id, PLAYER_VIEWER) is None
+
+    # The keeper-only tool reads it back, openings included.
+    text = await tools.module_brief(ctx)
+    assert "Find the missing tenant." in text and "Rain again." in text
+
+    # Re-importing the same card replaces the brief instead of stacking a second one.
+    ctx2 = AgentCtx(chat_key="lorecard-brief", user_id="keeper-1", locale="en", fs=_write_bundle(tmp_path))
+    await tools.import_world_card(ctx2, file_path="corridor.lorecard.json")
+    briefs = await services.documents.list("lorecard-brief", BRIEF_DOC_TYPE)
+    assert len(briefs) == 1
+
+
 async def test_player_import_strips_native_bundle_machinery(tmp_path):
     services = _services()
     ctx = AgentCtx(chat_key="lorecard-pc", user_id="player-1", locale="en", fs=_write_bundle(tmp_path))
