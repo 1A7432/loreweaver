@@ -2025,15 +2025,19 @@ class CommandRouter:
         return "\n".join(lines)
 
     async def cmd_var(self, ctx: CommandCtx) -> str:
-        """`.var [list|expose <prefix|*>|hide <prefix>]` — keeper curation of which imported-card
-        variables (the MVU tree) appear on the party's state panel.
+        """`.var [list|expose <prefix|*>|hide <prefix>|set <id> <value>|add <id> <delta>]` —
+        the keeper's variable lever, both halves of the variable surface.
 
-        Engine-native module variables declare `visibility` at definition time (`core.modvars`);
-        an imported tree is opaque module state, so it starts fully hidden (iron rule #3,
-        fail-closed) and this command is the deterministic lever that puts chosen paths on the
-        players' panel. Keeper-only on every subcommand — even `list`, since the listing shows
-        the hidden remainder."""
+        expose/hide curate which imported-card variables (the MVU tree) appear on the party's
+        state panel: an imported tree is opaque module state, so it starts fully hidden (iron
+        rule #3, fail-closed) and this command is the deterministic lever that puts chosen paths
+        on the players' panel. set/add write ENGINE-NATIVE module variables through
+        `core.modvars` validation (kind check, bounds clamp, enum match) — the keeper's direct
+        hand on a tracker without spending a model turn; the variable must already be defined
+        (definition stays a prep-phase Keeper tool). Keeper-only on every subcommand — even
+        `list`, since the listing shows the hidden remainder."""
         from core.documents import KEEPER_VIEWER, MVU_ID
+        from core.modvars import adjust_modvar, coerce_int, label_for, load_modvars, normalize_id, set_modvar
         from core.mvu_compat import mvu_expose, mvu_hide
 
         if not _is_keeper(ctx.raw_ctx):
@@ -2042,6 +2046,38 @@ class CommandRouter:
         sub = tokens[0].casefold() if tokens else "list"
         rest = " ".join(tokens[1:]).strip()
         documents = ctx.services.documents
+        set_words = {"set", "设置", "設置"}
+        add_words = {"add", "调整", "調整"}
+        if sub in set_words or sub in add_words:
+            parts = rest.split(None, 1)
+            if len(parts) < 2:
+                return ctx.i18n.t("vars.commands.usage")
+            raw_id, payload = parts[0], parts[1].strip()
+            slug = normalize_id(raw_id)
+            state = await load_modvars(documents, ctx.chat_key)
+            if slug is None or slug not in state["specs"]:
+                if not state["specs"]:
+                    return ctx.i18n.t("vars.commands.none_defined")
+                return ctx.i18n.t("vars.commands.unknown_var", id=raw_id, known=", ".join(state["specs"]))
+            label = label_for(state["specs"][slug], ctx.locale)
+            try:
+                if sub in set_words:
+                    old, new = await set_modvar(documents, ctx.chat_key, slug, payload)
+                else:
+                    delta_value = coerce_int(payload)
+                    if delta_value is None:
+                        return ctx.i18n.t("vars.commands.bad_delta", delta=payload)
+                    old, new = await adjust_modvar(documents, ctx.chat_key, slug, delta_value)
+            except ValueError as exc:
+                return ctx.i18n.t("vars.commands.write_failed", id=slug, error=str(exc))
+            # A changed player-visible value belongs on the party panel right away; the
+            # projection decides what players see, this only refreshes it (same pattern
+            # as expose/hide below).
+            if old != new and ctx.router.hub is not None:
+                await publish_state(ctx.router.hub, ctx.services, ctx.raw_ctx)
+            if sub in set_words:
+                return ctx.i18n.t("vars.commands.set_done", label=label, id=slug, old=old, new=new)
+            return ctx.i18n.t("vars.commands.add_done", label=label, id=slug, old=old, new=new, delta=payload)
         if sub in {"expose", "show", "公开", "公開"}:
             if not rest:
                 return ctx.i18n.t("vars.commands.usage")

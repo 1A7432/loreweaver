@@ -418,6 +418,50 @@ async def test_var_command_is_keeper_gated_and_curates_exposure():
     assert await mvu_exposed_prefixes(services.documents, chat_key) == []
 
 
+async def test_var_set_and_add_write_native_modvars_with_validation():
+    from core.modvars import build_spec, define_modvar, load_modvars
+
+    services = _services()
+    router = CommandRouter(services)
+    chat_key = "tui:group:varwrite"
+    await define_modvar(
+        services.documents, chat_key, build_spec("suspicion", "number", minimum=0, maximum=10, default=3)
+    )
+    await define_modvar(
+        services.documents, chat_key, build_spec("mood", "enum", options=["calm", "uneasy"], default="calm")
+    )
+    en = services.i18n.with_locale("en")
+
+    player = _player_ctx(chat_key)
+    for line in (".var set suspicion 5", ".var add suspicion 1"):
+        assert await router.dispatch(player, line) == en.t("vars.commands.denied")
+
+    keeper = AgentCtx(chat_key=chat_key, user_id="k1", platform="tui", locale="en", extra={"role": "keeper"})
+
+    reply = await router.dispatch(keeper, ".var set suspicion 7")
+    assert reply == en.t("vars.commands.set_done", label="suspicion", id="suspicion", old=3, new=7)
+
+    # add clamps into the declared bounds — core.modvars validation, not the command's
+    reply = await router.dispatch(keeper, ".var add suspicion 9")
+    assert reply == en.t("vars.commands.add_done", label="suspicion", id="suspicion", old=7, new=10, delta="9")
+    assert (await load_modvars(services.documents, chat_key))["values"]["suspicion"] == 10
+
+    # a bad enum value fails through core.modvars and writes nothing
+    bad = await router.dispatch(keeper, ".var set mood furious")
+    assert bad is not None and "mood" in bad
+    assert (await load_modvars(services.documents, chat_key))["values"]["mood"] == "calm"
+
+    # add on a non-number refuses; a garbage delta gets the friendly error
+    assert (bad := await router.dispatch(keeper, ".var add mood 1")) is not None and "mood" in bad
+    assert await router.dispatch(keeper, ".var add suspicion abc") == en.t("vars.commands.bad_delta", delta="abc")
+
+    # unknown id lists the defined ones; a missing value is a usage error
+    assert await router.dispatch(keeper, ".var set nosuch 1") == en.t(
+        "vars.commands.unknown_var", id="nosuch", known="suspicion, mood"
+    )
+    assert await router.dispatch(keeper, ".var set suspicion") == en.t("vars.commands.usage")
+
+
 async def test_pc_roster_claim_is_player_open_but_foreign_release_is_keeper_only():
     from core.character_manager import CharacterSheet
     from core.pregen_roster import pregen_add
