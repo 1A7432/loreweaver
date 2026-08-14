@@ -82,7 +82,7 @@ _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _SEMVER_RE = re.compile(r"^\d{1,6}\.\d{1,6}\.\d{1,6}(?:[-+][0-9A-Za-z.-]{1,32})?$")
 _ENGINE_VERSION_RE = re.compile(r"^\d{1,6}(?:\.\d{1,6}){0,3}$")
 _LOCALES = ("en", "zh")
-CONTENT_KINDS = ("skills", "rulepacks", "cards", "lorebooks", "panels", "presentation")
+CONTENT_KINDS = ("skills", "rulepacks", "cards", "lorebooks", "panels", "presentation", "presets")
 # The 拆卡 taxonomy at the pack level: a "character" card is a persona + sheet a player may
 # self-import; a "world" card is module machinery (hooks / [InitVar] / EJS) the keeper imports
 # with `.import <file> world`. Labels are enforced against real detection at build AND verify
@@ -189,6 +189,10 @@ class PackTrust:
     # module's Stage Director may spend their image-provider budget.
     presentation: int = 0
     imagegen: bool = False
+    # Keeper-style prompt presets shipped with the pack (SillyTavern completion-preset
+    # JSON). They are prompt TEXT the keeper may fold into the room's style layer —
+    # disclosed like every other shipped influence, enabled per room, never auto-on.
+    presets: int = 0
 
 
 @dataclass(frozen=True)
@@ -238,6 +242,7 @@ class InstallReport:
     lorebooks: list[str] = field(default_factory=list)
     panels: list[str] = field(default_factory=list)  # panels.yaml paths landed in the pack home
     presentation: list[str] = field(default_factory=list)  # presentation.yaml paths landed in the pack home
+    presets: list[str] = field(default_factory=list)  # preset ids landed in the shared preset store
     assets: int = 0
     asset_bytes: int = 0
     shadowed: list[str] = field(default_factory=list)  # ids a same-named built-in keeps winning over
@@ -493,6 +498,7 @@ def parse_manifest_text(text: str, *, expect_trust: bool) -> PackManifest:
                 panels=int(trust_raw.get("panels", 0)),
                 presentation=int(trust_raw.get("presentation", 0)),
                 imagegen=bool(trust_raw.get("imagegen", False)),
+                presets=int(trust_raw.get("presets", 0)),
             )
         except (TypeError, ValueError) as exc:
             raise PackError(f"invalid trust block: {exc}") from exc
@@ -804,6 +810,31 @@ def _validate_pack_presentation(
     return kits, asset_paths
 
 
+def _validate_pack_presets(read_text: Callable[[str], str], manifest: PackManifest) -> list[str]:
+    """Parse every declared prompt preset (build AND verify side) with the same parser
+    `.preset import` uses, and return the store ids they will install under. Two files
+    that sanitize to the same id would silently overwrite each other in the shared
+    preset store, so that collision is a build error, not an install surprise."""
+    from core.preset import parse_st_preset
+    from core.preset_store import sanitize_preset_id
+
+    ids: list[str] = []
+    for preset_path in manifest.contents["presets"]:
+        if PurePosixPath(preset_path).suffix != ".json":
+            raise PackError(f"preset file must be a .json file: {preset_path!r}")
+        preset_id = sanitize_preset_id(PurePosixPath(preset_path).name)
+        if not preset_id:
+            raise PackError(f"preset {preset_path}: filename yields no usable preset id")
+        if preset_id in ids:
+            raise PackError(f"preset {preset_path}: id {preset_id!r} collides with another declared preset")
+        try:
+            parse_st_preset(read_text(preset_path), preset_id)
+        except ValueError as exc:
+            raise PackError(f"preset {preset_path}: {exc}") from exc
+        ids.append(preset_id)
+    return ids
+
+
 def _asset_mime(path: str) -> str:
     """The media type of a pack asset, by extension and platform-independently."""
     suffix = PurePosixPath(path).suffix.casefold()
@@ -907,6 +938,7 @@ def _manifest_to_yaml(manifest: PackManifest) -> str:
             "panels": manifest.trust.panels,
             "presentation": manifest.trust.presentation,
             "imagegen": manifest.trust.imagegen,
+            "presets": manifest.trust.presets,
         },
     }
     return yaml.safe_dump(data, sort_keys=True, allow_unicode=True, default_flow_style=False)
@@ -995,6 +1027,10 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
     # are ordinary pack files, so they get the same digest + verification treatment.
     pack_kits, kit_asset_paths = _validate_pack_presentation(read_text, manifest)
     archive_files.extend(manifest.contents["presentation"])
+    # Prompt presets (UPSTREAM item 9): parsed with the real preset parser, so a pack
+    # cannot ship a preset file `.preset import` would then refuse.
+    preset_ids = _validate_pack_presets(read_text, manifest)
+    archive_files.extend(manifest.contents["presets"])
     declared_asset_paths = {asset.path for asset in manifest.assets}
     all_assets = list(manifest.assets) + [
         PackAsset(path=path, sha256="", mime="", size=0)
@@ -1054,6 +1090,7 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
         panels=len(pack_panels),
         presentation=sum(len(kit.subjects) for kit in pack_kits),
         imagegen=any(kit.generates and any(subject.ref for subject in kit.subjects) for kit in pack_kits),
+        presets=len(preset_ids),
     )
     # The complete member inventory (manifest v2): every archive file except the
     # manifest itself, with its integrity record. Install verifies set-equality.
@@ -1244,7 +1281,7 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
         with archive.open(lorebook_path) as handle:
             data = handle.read(MAX_LOREBOOK_BYTES + 1)
         has_ejs = _validate_lorebook_bytes(lorebook_path, data) or has_ejs
-    for declared in (*manifest.contents["panels"], *manifest.contents["presentation"]):
+    for declared in (*manifest.contents["panels"], *manifest.contents["presentation"], *manifest.contents["presets"]):
         if declared not in names:
             raise PackError(f"declared file missing from archive: {declared!r}")
     # Re-run the pack-level panel validation and re-check the code cap against the BUILT
@@ -1256,6 +1293,7 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
     _enforce_panel_images(verify_panels, verify_assets_by_path)
     verify_kits, _kit_paths = _validate_pack_presentation(read_text, manifest)
     _enforce_kit_assets(verify_kits, verify_assets_by_path)
+    verify_preset_ids = _validate_pack_presets(read_text, manifest)
     # Asset bytes were already verified via the files inventory (set equality +
     # per-file sha256/size above); the asset block's own records were cross-checked
     # against that inventory, so no second streaming pass is needed here.
@@ -1277,6 +1315,7 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
         panels=len(verify_panels),
         presentation=sum(len(kit.subjects) for kit in verify_kits),
         imagegen=any(kit.generates and any(subject.ref for subject in kit.subjects) for kit in verify_kits),
+        presets=len(verify_preset_ids),
     )
     if manifest.trust != computed:
         stored = manifest.trust
@@ -1285,7 +1324,7 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
             for name in (
                 "skills", "rulepacks", "cards", "lorebooks", "assets",
                 "asset_bytes", "has_hooks", "has_ejs", "has_rules_script", "world_cards", "panels",
-                "presentation", "imagegen",
+                "presentation", "imagegen", "presets",
             )
             if stored is None or getattr(stored, name) != getattr(computed, name)
         ]
@@ -1313,13 +1352,14 @@ def install_pack(
     packs_dir: Path,
     skills_dir: Path,
     rulepacks_dir: Path,
+    presets_dir: Path,
     current_protocol: str,
     current_server: str,
     builtin_skill_ids: Iterable[str] = (),
     builtin_rulepack_ids: Iterable[str] = (),
 ) -> InstallReport:
-    """Install a verified pack: skills/rulepacks into their discovery dirs, everything
-    else (cards/lorebooks/assets + the manifest) under ``packs_dir/<id>@<version>/``.
+    """Install a verified pack: skills/rulepacks/presets into their discovery dirs,
+    everything else (cards/lorebooks/assets + the manifest) under ``packs_dir/<id>@<version>/``.
 
     Two passes: a full no-write verification (parsers + per-asset sha256) first, then
     extraction — so a bad archive can never leave a half-installed pack behind. The
@@ -1401,6 +1441,17 @@ def install_pack(
                 report.rulepacks.append(stem)
                 if stem in builtin_rulepacks:
                     report.shadowed.append(stem)
+            # Prompt presets join the shared store (`data_dir/presets/`) under their
+            # sanitized id, so `.preset list`/`enable` sees them with no import step —
+            # install ≠ enable still holds: a room folds a preset in only when its
+            # keeper runs `.preset enable <id>`.
+            from core.preset_store import sanitize_preset_id
+
+            presets_dir = Path(presets_dir)
+            for preset_path in manifest.contents["presets"]:
+                preset_id = sanitize_preset_id(PurePosixPath(preset_path).name)
+                _extract_entry(archive, preset_path, _confined_target(presets_dir, f"{preset_id}.json"))
+                report.presets.append(preset_id)
 
             final_dir = _confined_target(packs_dir, version_dir_name)
             if final_dir.exists():

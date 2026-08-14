@@ -80,6 +80,7 @@ def _install(pack_path: Path, root: Path, **overrides):
         packs_dir=root / "data/packs",
         skills_dir=root / "data/skills",
         rulepacks_dir=root / "data/rulepacks",
+        presets_dir=root / "data/presets",
         current_protocol="1.7",
         current_server="1.0.0",
     )
@@ -794,3 +795,70 @@ def test_rules_script_filename_with_path_separator_fails_the_build(tmp_path):
     (src / MANIFEST_NAME).write_text(manifest_text, encoding="utf-8")
     with pytest.raises(PackError, match="bare name"):
         build_pack(src, tmp_path / "bad.lwpack")
+
+
+# ---------------------------------------------------------------------------
+# Prompt presets as pack content (UPSTREAM item 9)
+# ---------------------------------------------------------------------------
+
+PRESET_JSON = json.dumps(
+    {
+        "temperature": 0.9,
+        "prompts": [
+            {"identifier": "main", "name": "Main", "content": "Write plainly.", "role": "system", "enabled": True},
+            {"identifier": "chatHistory", "name": "History", "content": "", "marker": True},
+        ],
+        "prompt_order": [
+            {"character_id": 100001, "order": [{"identifier": "main", "enabled": True}]}
+        ],
+    },
+    ensure_ascii=False,
+)
+
+
+def _write_preset_source(root: Path, *, preset_text: str = PRESET_JSON) -> Path:
+    src = root / "preset-pack-src"
+    (src / "presets").mkdir(parents=True)
+    (src / "presets/noir.json").write_text(preset_text, encoding="utf-8")
+    (src / MANIFEST_NAME).write_text(
+        "id: stylekit\nversion: 1.0.0\nname: Stylekit\ndescription: prose styles\n"
+        "authors: [ada]\nlicense: MIT\nengine: {}\ncontents:\n  presets: [presets/noir.json]\n",
+        encoding="utf-8",
+    )
+    return src
+
+
+def test_pack_presets_build_disclose_and_land_in_the_store(tmp_path):
+    from core.preset_store import list_preset_ids, load_preset
+
+    src = _write_preset_source(tmp_path)
+    built = build_pack(src, tmp_path / "stylekit.lwpack")
+    assert built.manifest.trust is not None and built.manifest.trust.presets == 1
+
+    data_dir = tmp_path / "data"
+    report = _install(built.path, tmp_path)
+    assert report.presets == ["noir"]
+    # Landed in the shared store under the sanitized id: discoverable with no import step
+    # (install ≠ enable — a room still opts in via `.preset enable`).
+    assert list_preset_ids(data_dir) == ["noir"]
+    assert load_preset(data_dir, "noir") is not None
+
+
+def test_pack_presets_garbage_and_id_collisions_fail_the_build(tmp_path):
+    src = _write_preset_source(tmp_path / "a", preset_text="not json at all")
+    with pytest.raises(PackError, match="presets/noir.json"):
+        build_pack(src, tmp_path / "bad.lwpack")
+
+    src2 = _write_preset_source(tmp_path / "b")
+    (src2 / "presets/more").mkdir()
+    (src2 / "presets/more/noir.json").write_text(PRESET_JSON, encoding="utf-8")
+    manifest_text = (src2 / MANIFEST_NAME).read_text(encoding="utf-8")
+    (src2 / MANIFEST_NAME).write_text(
+        manifest_text.replace(
+            "presets: [presets/noir.json]",
+            "presets: [presets/noir.json, presets/more/noir.json]",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(PackError, match="collides"):
+        build_pack(src2, tmp_path / "bad2.lwpack")

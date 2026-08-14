@@ -396,6 +396,8 @@ def _print_trust_card(i18n: I18n, manifest: core_pack.PackManifest, locale: str)
             ),
             file=sys.stderr,
         )
+    if trust.presets:
+        print(i18n.t("pack.card.presets", count=trust.presets), file=sys.stderr)
 
 
 def _run_pack(i18n: I18n, args: argparse.Namespace) -> int:
@@ -477,6 +479,7 @@ def _run_install(settings: Settings, i18n: I18n, args: argparse.Namespace) -> in
             packs_dir=packs_dir,
             skills_dir=Path(settings.data_dir) / "skills",
             rulepacks_dir=Path(settings.data_dir) / "rulepacks",
+            presets_dir=Path(settings.data_dir) / "presets",
             current_protocol=PROTOCOL_VERSION,
             current_server=resolve_version(),
             builtin_skill_ids=builtin_skill_ids,
@@ -494,6 +497,8 @@ def _run_install(settings: Settings, i18n: I18n, args: argparse.Namespace) -> in
         print(i18n.t("pack.install.skills", ids=", ".join(report.skills)), file=sys.stderr)
     if report.rulepacks:
         print(i18n.t("pack.install.rulepacks", ids=", ".join(report.rulepacks)), file=sys.stderr)
+    if report.presets:
+        print(i18n.t("pack.install.presets", ids=", ".join(report.presets)), file=sys.stderr)
     if report.cards or report.lorebooks or report.assets:
         print(
             i18n.t(

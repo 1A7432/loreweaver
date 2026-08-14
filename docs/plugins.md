@@ -307,7 +307,19 @@ enabled, world content runs code in the sandbox described above — that is the 
 operators who want the data-only Layer A posture set `TRPG_ENABLE_FULL_EJS=false` or
 skip the `ejs` extra.
 
-### A.6 Other data packs
+### A.6 Prompt presets and other data packs
+
+**Keeper-style prompt presets ride packs as first-class content.** A preset is a
+SillyTavern completion-preset JSON file (the 预设 format ST users already trade);
+declare it under `contents.presets` and the build validates it with the same parser
+`.preset import` uses. Install lands each file in the shared preset store
+(`data_dir/presets/<id>.json`, id = the sanitized filename stem), so `.preset list`
+sees it immediately — but nothing turns on by itself: a room folds a preset's style
+text into its prompt only when its keeper runs `.preset enable <id>`
+(install ≠ enable, as everywhere else). The trust card discloses the shipped count
+(`presets: N`). `.preset import` also understands pack-relative references
+(`.preset import <packId>/presets/x.json`) for cherry-picking a preset a pack ships
+only as a plain asset.
 
 Provider presets (`infra/providers.py:PRESETS`) and locale packs
 (`locales/{lang}/*.json`) are already data; they join the same discovery/manifest
@@ -645,6 +657,7 @@ so this costs nothing until an author asks for it.
 | `contents.lorebooks` | no | lorebook JSON (ST `character_book` / `{entries: [...]}` shapes) |
 | `contents.panels` | no | panels YAML files (`ui/panels.yaml`) declaring module UI panels (Layer D) — ≤ 16 panels per pack; a tier-2 panel's `entry`/`assets` files and every tier-1 `image`/`map_pin` `src` are folded into the pack asset pipeline at build (sha256'd, code payload ≤ 2 MB per panel) |
 | `contents.presentation` | no | the presentation kit (`ui/presentation.yaml`, one per pack) — the Stage Director's creative brief; its 定妆 references and audio cues join the same asset pipeline, and the trust card discloses whether the module may generate images |
+| `contents.presets` | no | keeper-style prompt presets (ST completion-preset `.json`), validated at build with the real preset parser; install lands them in the shared `data_dir/presets/` store under their sanitized filename stem (two files sanitizing to one id fail the build). Disclosed on the trust card; per-room opt-in via `.preset enable <id>` |
 | `assets` | no | media files: `path` + optional `title`/`license`/`tags`/`mime`; `sha256`/`size`/`mime` are FILLED IN at pack time (a hand-declared `sha256` must match the file) |
 | `trust` | forbidden in source | GENERATED at pack time (counts incl. `panels`, `has_hooks`, `has_ejs`, `has_rules_script`, `asset_bytes`); a hand-written block fails the build. Install RE-DERIVES it from the archive with the same detectors and rejects a mismatch — a hand-assembled pack cannot understate what it ships |
 | `files` | forbidden in source | GENERATED at pack time (manifest v2): the complete archive inventory — every member except the manifest itself with its `sha256`/`size`. Install verifies SET EQUALITY plus per-file integrity, so the declaration is exactly the shipped byte set and nothing undeclared can ride along |

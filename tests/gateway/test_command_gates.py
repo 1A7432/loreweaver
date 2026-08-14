@@ -418,6 +418,35 @@ async def test_var_command_is_keeper_gated_and_curates_exposure():
     assert await mvu_exposed_prefixes(services.documents, chat_key) == []
 
 
+async def test_preset_import_resolves_pack_relative_refs(tmp_path):
+    import json
+
+    from core.preset_store import load_preset
+
+    services = build_services(
+        Settings(data_dir=str(tmp_path / "data")), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64)
+    )
+    router = CommandRouter(services)
+    pack_presets = tmp_path / "data/packs/stylekit@1.0.0/presets"
+    pack_presets.mkdir(parents=True)
+    (pack_presets / "noir.json").write_text(
+        json.dumps(
+            {
+                "prompts": [
+                    {"identifier": "main", "name": "Main", "content": "Write plainly.", "role": "system"}
+                ],
+                "prompt_order": [{"character_id": 100001, "order": [{"identifier": "main", "enabled": True}]}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    keeper = AgentCtx(chat_key="tui:group:presetpack", user_id="k1", platform="cli", locale="en")
+    reply = await router.dispatch(keeper, ".preset import stylekit/presets/noir.json")
+    assert reply is not None and "noir" in reply
+    assert load_preset(tmp_path / "data", "noir") is not None
+
+
 async def test_var_set_and_add_write_native_modvars_with_validation():
     from core.modvars import build_spec, define_modvar, load_modvars
 

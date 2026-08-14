@@ -107,6 +107,7 @@ def _install(pack_path: Path, data_dir: Path):
         packs_dir=data_dir / "packs",
         skills_dir=data_dir / "skills",
         rulepacks_dir=data_dir / "rulepacks",
+        presets_dir=data_dir / "presets",
         current_protocol="2.1",
         current_server="1.0.0",
     )

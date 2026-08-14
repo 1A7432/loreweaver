@@ -73,6 +73,7 @@ def _install_panel_pack(tmp_path: Path):
         packs_dir=tmp_path / "data/packs",
         skills_dir=tmp_path / "data/skills",
         rulepacks_dir=tmp_path / "data/rulepacks",
+        presets_dir=tmp_path / "data/presets",
         current_protocol=PROTOCOL_VERSION,
         current_server="1.0.0",
     )

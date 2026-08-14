@@ -159,7 +159,9 @@ Loreweaver 本来就导入酒馆卡（`core/charcard.py` → `char_from_persona.
 
 导入的信任边界（作用域固定、constant 一律关掉、secret 只有守秘人导入才作数、条目 id 重新生成）在两种模式下都不变——而且这一节描述的全部是**守秘人世界导入之后**运行的东西（见 A.2 的拆卡）：玩家的人物导入压根不带这些机制。
 
-### A.6 其它数据包
+### A.6 提示词预设与其它数据包
+
+**守秘人风格的提示词预设是一等的包内容。**预设就是 SillyTavern 补全预设 JSON 文件（ST 用户已经在互相传的那种「预设」格式）；在 `contents.presets` 里声明后，构建时会用 `.preset import` 同一个解析器做校验。安装时每个文件落进共享预设库（`data_dir/presets/<id>.json`，id 取净化后的文件名主干），所以 `.preset list` 立刻能看到——但什么都不会自己生效：只有房间的守秘人执行 `.preset enable <id>`，这段风格文本才会折入该房间的提示词（和其它内容一样，安装 ≠ 启用）。信任卡会披露预设数量（`presets: N`）。`.preset import` 也认识包相对引用（`.preset import <packId>/presets/x.json`），可以单独挑选一个只以普通素材形式随包发的预设。
 
 provider 预设（`infra/providers.py:PRESETS`）和本地化包（`locales/{lang}/*.json`）本来就是数据，加入同一套发现／清单模式。
 
@@ -335,6 +337,7 @@ audio:                       # 导演可以调用的音频提示
 | `contents.lorebooks` | 否 | 世界书 JSON（ST `character_book` / `{entries: [...]}` 形状） |
 | `contents.panels` | 否 | 面板 YAML（`ui/panels.yaml`），声明模组 UI 面板（D 层）——每包 ≤ 16 个面板；二级面板的 `entry`/`assets` 文件，以及每个一级 `image`/`map_pin` 的 `src`，都在构建时按内容哈希收进包里（算 sha256，每个面板的代码不超过 2 MB） |
 | `contents.presentation` | 否 | 演出资料包（`ui/presentation.yaml`，一包一份）——演出导演的创作简报；它的定妆参考图和音频提示加入同一条素材流水线，信任卡会披露这个模组会不会生成图片 |
+| `contents.presets` | 否 | 守秘人风格提示词预设（ST 补全预设 `.json`），构建时用真解析器校验；安装落进共享 `data_dir/presets/` 库，id 取净化后的文件名主干（两个文件净化成同一个 id 会让构建失败）。信任卡披露数量；按房间用 `.preset enable <id>` 启用 |
 | `assets` | 否 | 媒体文件：`path` + 可选 `title`/`license`/`tags`/`mime`；`sha256`/`size`/`mime` 在打包时**填入**（手写的 `sha256` 必须与文件一致） |
 | `trust` | 源码中禁止 | 打包时**生成**（含 `panels` 在内的计数、`has_hooks`、`has_ejs`、`has_rules_script`、`asset_bytes`）；手写这一块会让构建失败。安装时用同一批检测器从压缩包**重新推导**并拒绝不一致——一个手工拼装的包没法少报它带了什么 |
 | `files` | 源码中禁止 | 打包时**生成**（清单 v2）：完整的压缩包清册——除清单自身外的每一个成员，带 `sha256`/`size`。安装会校验**集合相等**外加逐文件完整性，所以这份声明恰好就是发出去的那组字节，任何未声明的东西都搭不了车 |

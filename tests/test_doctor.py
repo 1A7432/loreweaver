@@ -180,6 +180,7 @@ def _install_rulepack_pack(root, data_dir, *, pack_id: str, version: str, stem: 
         packs_dir=data_dir / "packs",
         skills_dir=data_dir / "skills",
         rulepacks_dir=data_dir / "rulepacks",
+        presets_dir=data_dir / "presets",
         current_protocol="9.9",
         current_server="9.9.9",
     )

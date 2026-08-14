@@ -83,6 +83,7 @@ async def install_kit_pack(services, chat_key: str, tmp_path: Path, *, kit: str 
         packs_dir=data_dir / "packs",
         skills_dir=data_dir / "skills",
         rulepacks_dir=data_dir / "rulepacks",
+        presets_dir=data_dir / "presets",
         current_protocol=PROTOCOL_VERSION,
         current_server="1.0.0",
     )

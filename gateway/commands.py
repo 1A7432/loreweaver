@@ -1207,7 +1207,13 @@ class CommandRouter:
                 return ctx.fail(ctx.i18n.t("preset.commands.denied"))
             if not rest:
                 return ctx.i18n.t("preset.commands.usage")
-            path = Path(rest).expanduser()
+            # Pack-relative convenience, same as `.import`: `.preset import <packId>/presets/x.json`
+            # resolves against the newest installed pack (confined; falls through to the literal
+            # server path when it isn't pack-shaped or nothing is installed).
+            from core.pack import resolve_installed_path
+
+            resolved = resolve_installed_path(data_dir, rest)
+            path = resolved if resolved is not None else Path(rest).expanduser()
             try:
                 text = path.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError, ValueError):
