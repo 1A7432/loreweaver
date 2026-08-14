@@ -120,11 +120,11 @@ JSON only."""
 # One bullet per stageable block shape; a kit's `templates:` allowlist (presentation v2)
 # decides which bullets the Director is even offered. Values are inserted AFTER
 # `.format`, so their braces are literal.
-_BLOCK_TEMPLATES = {  # i18n-exempt: model-facing prompt text, like _PROMPT above
-    "title_card": '- {"kind": "title_card", "title": "...", "subtitle": "...", "act": "..."} — an act/day/chapter turning over.',
-    "letter": '- {"kind": "letter", "body": "...", "from": "...", "to": "...", "date": "..."} — a letter, note or diary page the players now hold.',
-    "clipping": '- {"kind": "clipping", "headline": "...", "body": "...", "source": "...", "date": "..."} — a newspaper or official document.',
-    "text": '- {"kind": "text", "text": "...", "style": "quote"} — a caption line when nothing heavier fits.',
+_BLOCK_TEMPLATES = {
+    "title_card": '- {"kind": "title_card", "title": "...", "subtitle": "...", "act": "..."} — an act/day/chapter turning over.',  # i18n-exempt: model-facing prompt text, like _PROMPT above
+    "letter": '- {"kind": "letter", "body": "...", "from": "...", "to": "...", "date": "..."} — a letter, note or diary page the players now hold.',  # i18n-exempt: model-facing prompt text
+    "clipping": '- {"kind": "clipping", "headline": "...", "body": "...", "source": "...", "date": "..."} — a newspaper or official document.',  # i18n-exempt: model-facing prompt text
+    "text": '- {"kind": "text", "text": "...", "style": "quote"} — a caption line when nothing heavier fits.',  # i18n-exempt: model-facing prompt text
 }
 _NO_TEMPLATES_NOTE = "(none — this module stages with audio and pictures only; leave blocks empty)"  # i18n-exempt: model-facing prompt text
 _NO_REF_NOTE = " (no reference image — may be named, never generated)"  # i18n-exempt: model-facing prompt text, like _PROMPT above
