@@ -86,6 +86,7 @@ from core.documents import KEEPER_VIEWER, PLAYER_VIEWER, Document
 from infra.i18n import I18n
 from infra.llm import HISTORY_TURN_KEY
 from infra.room_facets import STORAGE_DOCUMENTS, STORAGE_ROOM_STATE, STORAGE_VECTORS, RoomStateFacet
+from infra.usage_stats import USAGE_STATS_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -562,7 +563,7 @@ async def _read_meter(services: Services, chat_key: str) -> _Meter:
     """The room's context-fullness reading, as persisted by `infra.usage_stats`
     after the previous completed turn (see `_Meter` for the provenance flag)."""
     try:
-        raw = await services.store.state_get(chat_key, "usage_stats")
+        raw = await services.store.state_get(chat_key, USAGE_STATS_KEY)
         payload = json.loads(raw) if raw else {}
         last = payload.get("last") if isinstance(payload, dict) else None
         if not isinstance(last, dict):

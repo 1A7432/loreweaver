@@ -30,6 +30,7 @@ from agent.services import Services
 from core.character_manager import CharacterSheet, character_resources, resource_label_map
 from core.documents import KEEPER_VIEWER, MODULE_POOL_ID, MVU_ID, PLAYER_VIEWER, SCENE_ID
 from core.modvars import MODVARS_DOC_ID, MODVARS_DOC_TYPE, wire_entries
+from infra.usage_stats import USAGE_STATS_KEY
 
 _UNSET_CHARACTER_NAME = "default"
 
@@ -405,7 +406,7 @@ async def _usage(services: Services, chat_key: str) -> dict[str, Any] | None:
     honestly shows a context figure with zero cumulative tokens beside it.
     """
     try:
-        raw = await services.store.state_get(chat_key, "usage_stats")
+        raw = await services.store.state_get(chat_key, USAGE_STATS_KEY)
         stats = json.loads(raw) if raw else {}
     except Exception:
         stats = {}
