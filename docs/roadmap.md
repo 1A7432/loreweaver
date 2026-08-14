@@ -25,7 +25,7 @@ extension layer — is something plain-text chat platforms structurally cannot r
 speak the open protocol instead.
 
 **v1.0.0 shipped as the first stable release**, and development has continued past it on a
-`1.0.1.dev*` line. Since then, six structural milestones landed:
+`1.0.1.dev*` line. Since then, seven structural milestones landed:
 
 - **Rules became data (M16).** A rule system is one file, and it owns everything about itself: the
   tiers a check can land on, what a sheet looks like, which subsystems exist, which dot-commands it
@@ -51,6 +51,15 @@ speak the open protocol instead.
   depends on the Keeper remembering to write it. Underneath, the context-window arithmetic the fold
   relies on was re-verified against every vendor's own documentation, after a stale table was
   caught inflating one window sixteenfold.
+- **A harness that recovers (M23 — [spec published](specs/M23-harness-resilience.md)).** A campaign
+  that outgrows the context window no longer loses the player's turn: the provider's own refusal is
+  the signal, and the engine folds and re-sends once, only if the fold actually freed something. A
+  reply the model cut off at the limit stops counting as a finished turn. Whatever reaches the model
+  can be rebuilt from what is saved, so an undo, a late joiner's replay and a post-mortem all see
+  what the model saw. And every kind of room state declares what a reset, delete, import and export
+  should do with it — the build fails if any state has nobody answering for it, which is what three
+  "the reset forgot something" fixes in one month were asking for. Decisions taken and rejected live
+  in [docs/notes/](notes/).
 
 Alongside those: deterministic module variables with a live tracker panel, full SillyTavern
 compatibility for imported cards (MVU variable trees, the `<UpdateVariable>` text protocol, full EJS
@@ -78,11 +87,6 @@ A round of unglamorous work just landed — the things that have to be right bef
 
 ## Near-term
 
-- **Harness resilience (M23 — [spec published](specs/M23-harness-resilience.md)).** A room that hits
-  the context wall folds and retries instead of erroring the player's turn; whatever reaches the
-  model must be rebuildable from saved state; every kind of room state declares its own cleanup
-  instead of each reset keeping a private list; and design verdicts — taken and rejected — now live
-  in [docs/notes/](notes/) rather than in one assistant's memory.
 - **Multiplayer polish.** With permissions now enforced, smooth off the remaining rough edges of networked play — a real guard against bot loops, more of the state a late joiner needs — so a room among people who trust each other is genuinely comfortable.
 - **Companion client & card workbench.** The authoring half — building Loreweaver-native cards and content without hand-editing JSON — lives in [loreweaver-studio](https://github.com/1A7432/loreweaver-studio), now public: an eleven-stage wizard, SillyTavern export for tavern release, and a preset-import mirror. It is earlier than this repository and is catching up to the 2.x formats.
 - **A flagship module.** The formats are only worth as much as the first serious thing built on them. One is in development, co-designed with the panel/presentation layers so that layer has a real consumer rather than a hypothetical one.
