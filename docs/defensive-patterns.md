@@ -20,13 +20,16 @@ names where it bit us; the fix commit is the proof it was paid for.
    table was 16x wrong because a number traveled from a stale table into a
    recommendation unchecked. A vendor constant (window size, error code,
    limit) enters code only with a same-day check against the vendor's own
-   docs and a test pinning the shape it arrives in. M23 WS2 is the worked
-   example: the "well-known" OpenAI error code `context_length_exceeded` is
-   NOT what the platform returns (its documented body carries `code: None`),
-   and Gemini documents no context-overflow error at all — so that lane is
-   left unclassified rather than guessed. When the docs do not say it, the
-   entry does not exist; `infra/llm_errors.py` cites a page and a date per
-   entry, and names the lanes it deliberately does not cover.
+   docs and a test pinning the shape it arrives in, **and the check is
+   per-endpoint, not per-vendor**. M23 WS2 is the worked example, including
+   its own correction: OpenAI's documented context-overflow body carries
+   `code: None` on the EMBEDDINGS endpoint and `code:
+   "context_length_exceeded"` on chat completions, and the first reading
+   generalised the wrong one for a day. Gemini documents no context-overflow
+   error at all, so that lane is left unclassified rather than guessed. When
+   the docs do not say it, the entry does not exist; `infra/llm_errors.py`
+   cites a page and a date per entry, and names the lanes it deliberately does
+   not cover.
 4. **Streaming usage is opt-in and silently absent.** Streaming providers
    only report usage when explicitly asked
    (`stream_options={"include_usage": True}`); the chronicle fold was inert on
@@ -38,3 +41,13 @@ names where it bit us; the fix commit is the proof it was paid for.
    ring `import_room` left behind (M23 WS1). New room-scoped state is not
    done until its lifecycle facet says how it resets, restores, deletes, and
    exports.
+6. **"Truncated" is not one condition.** Every vendor has a way to end a
+   response early, and they mean different things: Anthropic's
+   `stop_reason: "model_context_window_exceeded"` is the window, while
+   OpenAI's `finish_reason: "length"`, Gemini's `finishReason: MAX_TOKENS`
+   and the Responses API's `incomplete_details.reason: "max_output_tokens"`
+   all document the CONFIGURED cap (the last one covers both causes under one
+   code, so it cannot distinguish them). Folding helps the first and nothing
+   else. Read the vendor's own definition before treating any of them as a
+   size signal — and remember that a truncated reply arrives as a SUCCESS, so
+   nothing downstream will flag it for you.

@@ -68,9 +68,8 @@ GOLDEN_ALL_KEYS = frozenset(
 )
 GOLDEN_ALL_PREFIXES = frozenset({"forge_module_owner."})
 
-# Room state that survived every scope before M23 WS1 and must still survive it. The
-# settings family plus the three the audit surfaced and the owner has not ruled on
-# (`scribe_whispers`, the two director keys) — recorded, deliberately not changed.
+# Room state that survived every scope before M23 WS1 and must still survive it: the
+# settings family. Configuration, not campaign content.
 GOLDEN_SURVIVING_KEYS = frozenset(
     {
         "chat_locale",
@@ -82,17 +81,20 @@ GOLDEN_SURVIVING_KEYS = frozenset(
         "rule_variant",
         "tool_phase",
         "reset_pending",
-        "scribe_whispers",
-        "director_images",
-        "director_pregen",
     }
 )
+
+# The one place this file is NOT a copy of the pre-M23 tables. These three survived every
+# reset before M23 only because no cleanup list had ever named them; the WS1 write-surface
+# scan surfaced them, and the owner ruled on 2026-08-14 that all three go with the story.
+# Kept as their own set so the golden tables above stay an honest record of what was.
+POST_M23_STORY_KEYS = frozenset({"scribe_whispers", "director_images", "director_pregen"})
 GOLDEN_SURVIVING_DOC_TYPES = frozenset({"table_habits"})
 
 
 def _golden_targets(scope: str) -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
     doc_types = set(GOLDEN_STORY_DOC_TYPES)
-    keys = set(GOLDEN_STORY_KEYS)
+    keys = set(GOLDEN_STORY_KEYS) | set(POST_M23_STORY_KEYS)
     prefixes = set(GOLDEN_STORY_PREFIXES)
     if scope in ("chars", "all"):
         doc_types |= GOLDEN_CHARS_DOC_TYPES
@@ -133,7 +135,11 @@ async def _populate(services, chat_key: str) -> None:
             grants="[]",
         )
     every_key = (
-        GOLDEN_STORY_KEYS | GOLDEN_CHARS_KEYS | GOLDEN_ALL_KEYS | GOLDEN_SURVIVING_KEYS
+        GOLDEN_STORY_KEYS
+        | POST_M23_STORY_KEYS
+        | GOLDEN_CHARS_KEYS
+        | GOLDEN_ALL_KEYS
+        | GOLDEN_SURVIVING_KEYS
     )
     for key in sorted(every_key):
         await services.store.state_set(chat_key, key, "x")
@@ -163,7 +169,13 @@ async def test_reset_wipes_exactly_what_the_pre_registry_tables_wiped(tmp_path, 
     for doc_type in sorted(wiped_types):
         assert doc_type not in surviving_types, f"`.reset {scope}` should have wiped {doc_type} documents"
 
-    all_keys = GOLDEN_STORY_KEYS | GOLDEN_CHARS_KEYS | GOLDEN_ALL_KEYS | GOLDEN_SURVIVING_KEYS
+    all_keys = (
+        GOLDEN_STORY_KEYS
+        | POST_M23_STORY_KEYS
+        | GOLDEN_CHARS_KEYS
+        | GOLDEN_ALL_KEYS
+        | GOLDEN_SURVIVING_KEYS
+    )
     for key in sorted(all_keys - wiped_keys):
         assert key in surviving_rows, f"`.reset {scope}` wiped {key!r}, which used to survive"
     all_prefixes = GOLDEN_STORY_PREFIXES | GOLDEN_CHARS_PREFIXES | GOLDEN_ALL_PREFIXES

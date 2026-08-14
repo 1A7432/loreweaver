@@ -7,25 +7,26 @@ the plan and are recorded where they landed rather than edited into the text bel
 
 1. **WS3's seed** is derived from `(chat_key, turn)`, not from a stored `room_seed`.
    Both are already persisted, so replay-ability costs no new state.
-2. **WS2 covers two lanes, not five.** Anthropic and the OpenAI-compatible wire are
-   matched from their own current documentation; Gemini documents no context-overflow
-   error at all and is deliberately left unclassified, and the OpenAI platform's
-   documented body carries `code: None` — the widely-repeated `context_length_exceeded`
-   is not what it returns. The ChatGPT-subscription lane, the one path that already
-   RECOGNISED the error before M23, is also unclassified: its backend has no public
-   error documentation, and the spec's own rule is to keep today's behaviour when
-   unsure. Closing it means accepting `infra/llm_chatgpt.py`'s existing
-   `context_length_exceeded` / `input_too_long` signals as the authority — an owner
-   call, not an implementation detail.
-3. **A generation-time overflow is not covered.** On Claude 4.5 and later, an input
-   that fits but whose generation runs into the window returns 200 with
-   `stop_reason: "model_context_window_exceeded"`. That is a truncated reply on the
-   success path, and it needs handling where replies are read.
+2. **WS2's vendor table is per-ENDPOINT, not per-vendor.** Anthropic and the
+   OpenAI-compatible wire are matched from current documentation. Gemini documents no
+   context-overflow error at all and is deliberately left unclassified. OpenAI's
+   documented body carries `code: None` on the EMBEDDINGS endpoint but
+   `code: "context_length_exceeded"` on chat completions — the first reading of that
+   generalised the wrong endpoint, and the correction (owner, 2026-08-14) is what lets
+   the ChatGPT-subscription lane be matched at all: its errors carry no HTTP status, so
+   only a code signal reaches them.
+3. **The generation-time overflow is covered too** (owner, 2026-08-14). Claude 4.5 and
+   later return 200 with `stop_reason: "model_context_window_exceeded"` instead of
+   failing — a narration that stops mid-sentence on a call that "succeeded". It routes
+   through the same recovery and the same once-per-turn guard, so the budget is
+   unchanged. The vendors that fold "you hit the window" and "you hit the cap you set"
+   into one reason code (OpenAI's `length`, Gemini's `MAX_TOKENS`, the Responses API's
+   `max_output_tokens`) are deliberately not matched.
 
-Two families the WS1 write-surface scan surfaced survive every reset today only
-because no cleanup list ever named them — `scribe_whispers` and the two
-`director_images`/`director_pregen` keys. Their facets say so verbatim; the verdict is
-the owner's.
+The three families the WS1 write-surface scan surfaced — `scribe_whispers` and the two
+`director_images`/`director_pregen` keys — survived every reset only because no cleanup
+list had ever named them. WS1 landed them unchanged and said so in their facets; the
+owner ruled on 2026-08-14 that all three go with the story.
 Provenance: patterns adapted from the DeepSeek Harness (dsh) architecture study
 (2026-08-13); each workstream names the dsh mechanism it adapts and the local
 evidence that motivates it. Facts below (file:line) were verified against HEAD

@@ -413,15 +413,11 @@ ROOM_FACETS = (
     RoomStateFacet(
         name="director_images",
         owner="agent.stage_director",
-        reset_scope=None,
-        survives_because=(
-            "UNREVIEWED — this is what the code does today, not a verdict. No cleanup list "
-            "ever named these keys, and M23 WS1 inverted the ownership of `what to clean` "
-            "without changing behaviour. The spend counter is arguably a room budget, but "
-            "the pre-generation larder is session state that a `.reset story` should "
-            "plausibly drop. Owner verdict pending — see "
-            "docs/notes/implemented/room-lifecycle-facets.md"
-        ),
+        reset_scope="story",
+        # Owner verdict 2026-08-14: both go with the session. The pre-generation larder is
+        # keyed by subject id, so a new story reusing a name would have inherited the old
+        # story's portrait of it; the spend counter goes too, so "how many images did this
+        # story cost" is a question about THIS story.
         state_keys=frozenset({SPENT_KEY, PREGEN_KEY}),
         storages=frozenset({STORAGE_ROOM_STATE}),
     ),

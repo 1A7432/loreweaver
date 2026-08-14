@@ -25,14 +25,15 @@
   one addition is that the newly-added ring clear is compensated like every
   other leg. A golden table in `tests/net/test_room_lifecycle.py` pins the three
   reset scopes against the four frozensets the registry replaced, key for key.
-- **Open verdicts (recorded, not changed):** three families surfaced by the scan
-  survive every reset today only because no cleanup list ever named them, and
-  their facets say so in `survives_because` rather than pretending it was a
-  decision: `scribe_whispers` (agent/scribe.py) and `director_images` /
-  `director_pregen` (agent/stage_director.py). The whisper queue is read-and-
-  cleared each prompt build, so at most a few lines can cross a reset; the
-  director's pre-generation larder is session state, while its spend counter is
-  arguably a room budget. Owner's call.
+- **What the scan caught, and what the owner did with it:** three families
+  survived every reset only because no cleanup list had ever named them —
+  `scribe_whispers` (agent/scribe.py) and `director_images` / `director_pregen`
+  (agent/stage_director.py). WS1 landed them unchanged, with their facets saying
+  so verbatim rather than pretending it had been a decision; the owner then ruled
+  on 2026-08-14 that **all three go with the story**. A fresh session no longer
+  opens with the last session's scribe notes, reuses its portraits, or inherits
+  its image bill. `tests/net/test_room_lifecycle.py` keeps them in a set of their
+  own, so the golden tables stay an honest record of what the code used to do.
 - **Also recorded:** `skills_enabled` surviving every scope is an explicit owner
   verdict (2026-08-13), not drift; `table_habits` survives because it describes
   the TABLE (the same people play the next session), not the campaign; the

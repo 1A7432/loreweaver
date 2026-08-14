@@ -274,3 +274,99 @@ async def test_the_recovery_fold_spends_what_is_left_of_the_turns_fold_budget():
 
     assert log.count("fold") == 3, "the routine fold spends the budget; the recovery fold finds none left"
     assert log.count("keeper:overflow") == 1, "no fold progress means no retry"
+
+
+# ---------------------------------------------------------------------------
+# The quiet half: a reply truncated at the window, on a call that "succeeded"
+# ---------------------------------------------------------------------------
+
+
+class _TruncatedMessage:
+    """The raw response shape Claude 4.5+ returns when generation runs into the window."""
+
+    stop_reason = "model_context_window_exceeded"
+
+
+def _truncated_once_responder(log: list[str]):
+    """The keeper's first reply stops mid-sentence; the one after the fold is whole."""
+    state = {"keeper_calls": 0}
+
+    def responder(messages, tools):
+        if _is_fold(messages):
+            log.append("fold")
+            return assistant_text("Previously: the party pressed on.")
+        state["keeper_calls"] += 1
+        if state["keeper_calls"] == 1:
+            log.append("keeper:truncated")
+            result = assistant_text("The archivist turns, and behind her the water")
+            result.raw = _TruncatedMessage()
+            return result
+        log.append("keeper:ok")
+        return assistant_text("The archivist turns, and behind her the water is already rising.")
+
+    return responder
+
+
+async def test_a_reply_truncated_at_the_window_folds_and_regenerates():
+    """This one is quieter than an error: HTTP 200, a narration that stops mid-sentence,
+    and a turn that would otherwise be persisted and narrated onward from as if whole."""
+    log: list[str] = []
+    services = _services(_truncated_once_responder(log))
+    chat_key = "truncated-recovers"
+    toolset = await _room(services, chat_key, backlog=True)
+
+    result = await run_kp_turn(_ctx(chat_key), services, toolset, "I follow her gaze.")
+
+    assert result.reply.endswith("already rising."), "the player must not receive the severed line"
+    assert log[0] == "keeper:truncated"
+    assert "fold" in log
+    assert log[-1] == "keeper:ok"
+    # The severed draft is not what gets persisted.
+    chain = await load_chain(services, chat_key, DEFAULT_HISTORY_KEY)
+    assert chain[-1]["content"].endswith("already rising.")
+
+
+async def test_a_truncated_reply_with_nothing_left_to_fold_is_kept_as_is():
+    """No progress, no retry — the same guard as the error path. The turn still ships:
+    a severed narration beats no narration, and the meter now records the wall."""
+    log: list[str] = []
+
+    def responder(messages, tools):
+        if _is_fold(messages):
+            log.append("fold")
+            return assistant_text("Previously: nothing.")
+        log.append("keeper:truncated")
+        result = assistant_text("The archivist turns, and behind her the water")
+        result.raw = _TruncatedMessage()
+        return result
+
+    services = _services(responder)
+    chat_key = "truncated-at-the-floor"
+    toolset = await _room(services, chat_key, backlog=False)
+
+    result = await run_kp_turn(_ctx(chat_key), services, toolset, "I follow her gaze.")
+
+    assert log == ["keeper:truncated"], "nothing to fold means no retry"
+    assert "behind her the water" in result.reply
+    meter = json.loads(await services.store.state_get(chat_key, "usage_stats"))
+    assert meter["last"]["overflow"] is True, "the next turn must know this room hit the wall"
+
+
+async def test_an_ordinary_reply_never_folds():
+    """The success path's strictness control: a normal stop reason is left alone."""
+    log: list[str] = []
+
+    def responder(messages, tools):
+        if _is_fold(messages):
+            log.append("fold")
+            return assistant_text("Previously: nothing.")
+        log.append("keeper:ok")
+        return assistant_text("The archivist says nothing at all.")
+
+    services = _services(responder)
+    chat_key = "ordinary-room"
+    toolset = await _room(services, chat_key, backlog=True)
+
+    await run_kp_turn(_ctx(chat_key), services, toolset, "I follow her gaze.")
+
+    assert log == ["keeper:ok"]

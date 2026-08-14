@@ -466,15 +466,12 @@ ROOM_FACETS = (
     RoomStateFacet(
         name="scribe_whispers",
         owner="agent.scribe",
-        reset_scope=None,
-        survives_because=(
-            "UNREVIEWED — this is what the code does today, not a verdict. The queue is "
-            "read-and-cleared by the next prompt build, so at most a handful of lines can "
-            "survive; but they ARE session state, and a fresh session opening with the old "
-            "session's last whispers is a small wrongness M23 WS1 recorded rather than "
-            "silently changed. Owner verdict pending — see "
-            "docs/notes/implemented/room-lifecycle-facets.md"
-        ),
+        reset_scope="story",
+        # Owner verdict 2026-08-14: the whisper queue belongs to the session that produced
+        # it. A fresh session's first Keeper prompt used to open with the LAST session's
+        # scribe notes — "that check went unrolled", about a check nobody in this story ever
+        # made. At most a handful of lines could cross (the queue is read-and-cleared each
+        # prompt build), which is exactly why nobody noticed.
         state_keys=frozenset({WHISPERS_KEY}),
         storages=frozenset({STORAGE_ROOM_STATE}),
     ),

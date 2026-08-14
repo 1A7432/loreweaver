@@ -22,10 +22,13 @@
 - **Vendor verification (the part that cannot be delegated to memory):** every entry
   in the classifier was checked against the vendor's own current documentation on
   2026-08-14, and the check changed the design twice.
-  - **OpenAI**: the documented body carries `'code': None`. The widely-repeated
-    `context_length_exceeded` is NOT what the platform returns, so this lane is matched
-    on the documented message clause ("maximum context length is N tokens") and on
-    nothing else.
+  - **OpenAI**: the documented body carries `'code': None` — on the EMBEDDINGS
+    endpoint. Chat completions returns `code: "context_length_exceeded"` with
+    `param: "messages"`; OpenAI's error-codes guide enumerates neither, so the evidence
+    there is captured bodies (Azure's own SDK issue tracker, corroborated on Microsoft
+    Q&A and the OpenAI forum) plus the code `infra/llm_chatgpt.py` has classified this
+    condition under since that path was built. Both signals are matched: the code, and
+    the message clause every variant shares.
   - **Anthropic**: documented outright — 400 `invalid_request_error`, "prompt is too
     long", on every model.
   - **Gemini**: its error reference documents no context-overflow error at all, so
@@ -33,12 +36,22 @@
     constant that travels from memory into code and turns out to be wrong.
   - **DeepSeek** (and the other OpenAI-compatible vendors): seven documented codes,
     none about context length. Matched only if they emit the OpenAI message.
-- **Known gap, deliberately not closed here:** on Claude 4.5 and later, an input that
-  fits but whose GENERATION runs into the window returns 200 with
-  `stop_reason: "model_context_window_exceeded"`. That is a truncated reply on the
-  success path, not an error, and it needs handling where replies are read rather than
-  an entry in an error classifier.
+- **The quiet half, closed 2026-08-14:** on Claude 4.5 and later, an input that fits
+  but whose GENERATION runs into the window returns 200 with
+  `stop_reason: "model_context_window_exceeded"` — a truncated reply on the SUCCESS
+  path. Left alone, the player gets a narration that stops mid-sentence and the engine
+  records a normal turn, then narrates onward from the severed line. It now routes
+  through the same recovery and the same once-per-turn guard, so the budget is
+  unchanged. Only Anthropic's reason is matched: OpenAI's `finish_reason: "length"`,
+  Gemini's `MAX_TOKENS` and the Responses API's `max_output_tokens` all document the
+  CONFIGURED cap, and the last one covers both causes under one code — none of them can
+  say "the window ran out", so none of them triggers a fold.
+- **The ChatGPT-subscription lane is covered after all.** Its errors carry no HTTP
+  status, so it is reached by the code signal rather than the status-gated message
+  match — which is what the owner's "the subscription error codes are basically the
+  same as the API's" turned out to mean in practice.
 - **Rule home:** `infra/llm_errors.py` module docstring (the table and its citations);
   AGENTS.md per-turn budget paragraph (the ceiling);
-  `docs/defensive-patterns.md` entry 3 (why constants get re-verified).
+  `docs/defensive-patterns.md` entries 3 and 6 (why constants get re-verified, and why
+  "truncated" is not one condition).
 - **Date:** 2026-08-13 (spec approved) / 2026-08-14 (landed).

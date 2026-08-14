@@ -60,7 +60,7 @@ from core.rulepacks import RulePack
 from core.skills import unlocked_tools_for
 from infra.i18n import t
 from infra.llm import CACHE_BREAKPOINT_KEY, ChatResult, Usage
-from infra.llm_errors import is_context_overflow
+from infra.llm_errors import is_context_overflow, is_context_overflow_stop
 from infra.usage_stats import record_context_overflow
 
 logger = logging.getLogger(__name__)
@@ -386,6 +386,51 @@ async def run_kp_turn(
     # bytes the rounds actually sent.
     round_tools = [*toolset.schemas(unlocked, phase=phase), *subsystem_tools]
 
+    async def _recover_from_overflow() -> bool:
+        """Fold once because the provider says this prompt is at the window; retry?
+
+        True means the caller should re-issue the SAME round: records were folded, so the
+        rebuilt prompt is genuinely smaller. False means nothing folded — the caller must
+        report the failure rather than send an identical request and get an identical
+        answer. Marks the turn either way, so the retry happens at most once whichever of
+        the two triggers fired (a refusal, or a reply truncated at the window).
+        """
+        nonlocal overflow_retried, base_len
+        overflow_retried = True
+        # Record it even though the call reported no usage at all. Otherwise the meter
+        # keeps showing the last SUCCESSFUL turn's reading — a number the provider has
+        # just contradicted — and the next turn walks into the same wall.
+        await record_context_overflow(
+            services.store,
+            ctx.chat_key,
+            model=services.settings.llm.chat_model,
+            context_window=services.settings.llm.context_window,
+        )
+        fold = await fold_for_overflow(
+            ctx, services, history_key=key, batches_spent=routine_fold.batches
+        )
+        if not fold.entries_folded:
+            return False
+        logger.warning(
+            "context overflow: folded %d chronicle record(s) and retrying the call once",
+            fold.entries_folded,
+        )
+        if gate is not None:
+            # The failed (or truncated) call may already have streamed a partial draft;
+            # clients clear on the next epoch, so discard this one. The next loop iteration
+            # opens a fresh round.
+            gate.finish_round(discard=True)
+        # The conversation genuinely changed underneath any provider-side continuation
+        # state, so retire it before re-sending.
+        _clear_llm_continuation(services, messages)
+        tail = messages[base_len:]
+        # Not a new turn: the worldbook's sticky/cooldown windows already ticked for it
+        # when the prompt was first assembled.
+        rebuilt = await _assemble_base(advance_timers=False)
+        messages[:] = [*rebuilt, *tail]
+        base_len = len(rebuilt)
+        return True
+
     for round_index in range(1, max_rounds + 1):
         rounds = round_index
         if gate is not None:
@@ -402,79 +447,12 @@ async def run_kp_turn(
         except Exception as exc:
             # M23 WS2 — the provider's refusal is the one meter that cannot lie. When it
             # says the prompt is too long (`infra.llm_errors`, strict by construction),
-            # fold and try ONCE more. The retry is conditional on the fold having actually
-            # folded records: no progress, no retry, so a room with nothing left to fold
-            # reports the error immediately instead of ping-ponging with the provider.
-            if not overflow_retried and is_context_overflow(exc):
-                overflow_retried = True
-                # Record it even though the call reported no usage at all. Otherwise the
-                # meter keeps showing the last SUCCESSFUL turn's reading — a number this
-                # error just contradicted — and the next turn walks into the same wall.
-                await record_context_overflow(
-                    services.store,
-                    ctx.chat_key,
-                    model=services.settings.llm.chat_model,
-                    context_window=services.settings.llm.context_window,
-                )
-                fold = await fold_for_overflow(
-                    ctx, services, history_key=key, batches_spent=routine_fold.batches
-                )
-                if fold.entries_folded:
-                    logger.warning(
-                        "context overflow: folded %d chronicle record(s) and retrying the call once",
-                        fold.entries_folded,
-                    )
-                    if gate is not None:
-                        # The failed call may already have streamed a partial draft; clients
-                        # clear on the next epoch, so discard this one and open a fresh round.
-                        gate.finish_round(discard=True)
-                        gate.begin_round()
-                    # The conversation genuinely changed underneath any provider-side
-                    # continuation state, so retire it before re-sending.
-                    _clear_llm_continuation(services, messages)
-                    tail = messages[base_len:]
-                    # Not a new turn: the worldbook's sticky/cooldown windows already
-                    # ticked for it when the prompt was first assembled.
-                    rebuilt = await _assemble_base(advance_timers=False)
-                    messages[:] = [*rebuilt, *tail]
-                    base_len = len(rebuilt)
-                    try:
-                        result = await _chat_with_continuation_cleanup(
-                            services,
-                            messages,
-                            tools=round_tools,
-                            tool_choice="auto",
-                            temperature=services.settings.llm.temperature,
-                            on_text_delta=gate.feed if gate is not None else None,
-                        )
-                    except Exception as retry_exc:  # noqa: BLE001 — falls through to the report below
-                        exc = retry_exc
-                    else:
-                        _accumulate_usage(turn_usage, result)
-                        if result.tool_calls:
-                            if gate is not None:
-                                gate.finish_round(discard=True)
-                            try:
-                                await _dispatch_and_record(
-                                    toolset,
-                                    ctx,
-                                    services,
-                                    result,
-                                    messages,
-                                    tool_trace,
-                                    unlocked,
-                                    phase=phase,
-                                    room_pack=room_pack,
-                                    hook_engine=hook_engine,
-                                )
-                            except (asyncio.CancelledError, Exception):
-                                _clear_llm_continuation(services, messages)
-                                raise
-                            continue
-                        if gate is not None:
-                            gate.finish_round(discard=False)
-                        reply = result.content or ""
-                        break
+            # fold and try ONCE more. Both this and the truncation above route through
+            # `_recover_from_overflow`, which retries only if the fold actually folded
+            # records: no progress, no retry, so a room with nothing left to fold reports
+            # the error immediately instead of ping-ponging with the provider.
+            if not overflow_retried and is_context_overflow(exc) and await _recover_from_overflow():
+                continue
             # A real provider error (network/rate-limit/auth/SDK) must degrade to a friendly,
             # localized diagnosis (or the generic unavailable fallback), never crash the turn.
             # We return early WITHOUT persisting history (nothing useful happened this turn).
@@ -501,6 +479,14 @@ async def run_kp_turn(
                 ui_frames=hook_ui_frames,
                 panel_events=_capped_panel_events(hook_panel_events, ctx.chat_key),
             )
+
+        # M23 WS2 — the quiet half of the same failure. Claude 4.5 and later stop
+        # GENERATING at the window instead of refusing the call: HTTP 200, a narration that
+        # ends mid-sentence, and a turn that would otherwise be persisted and narrated
+        # onward from as if it were whole. Outside the `try` on purpose: a failure inside
+        # the recovery is not a provider error and must not be reported as one.
+        if not overflow_retried and is_context_overflow_stop(result) and await _recover_from_overflow():
+            continue
 
         _accumulate_usage(turn_usage, result)
 
