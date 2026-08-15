@@ -1276,3 +1276,49 @@ async def test_kp_toolset_is_hub_wired_so_companion_act_drives_a_live_turn():
     assert "Silas" in result
     assert "takes a turn" in result
     assert "Who's there?" not in result
+
+
+async def test_upload_policy_is_broadcast_and_greets_late_joiners():
+    """UPSTREAM item 14 (from the studio): the upload-policy toggle used to be a
+    unicast ack, so every OTHER member's client could only learn "uploads are off"
+    from its first refused offer. Now the toggle broadcasts, and a joining member is
+    greeted with the policy — but only in its non-default state, so the ordinary
+    join sequence stays frame-identical."""
+    services = _services()
+    keystore = Keystore()
+    keeper_key = keystore.add(room="policy", name="KP", role="keeper")
+    player_key = keystore.add(room="policy", name="Ada", role="player")
+    late_key = keystore.add(room="policy", name="Late", role="player")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        kp, _, _, _ = await _connect_and_join(url, keeper_key)
+        player, _, _, _ = await _connect_and_join(url, player_key)
+
+        await kp.send(json.dumps({"type": "media_set_enabled", "enabled": False}))
+        assert (await _recv_until(kp, "media_enabled"))["enabled"] is False
+        # The broadcast is the point: the player who never asked hears the policy too.
+        assert (await _recv_until(player, "media_enabled"))["enabled"] is False
+
+        # A member joining AFTER the toggle is greeted with the off-state (the frame
+        # rides the join replay, so drain by type rather than by fixed position).
+        late = await websockets.connect(url)
+        assert (await _join(late, late_key))["type"] == "welcome"
+        assert (await _recv_until(late, "media_enabled"))["enabled"] is False
+
+        # Re-enabling broadcasts too, and restores the default...
+        await kp.send(json.dumps({"type": "media_set_enabled", "enabled": True}))
+        assert (await _recv_until(player, "media_enabled"))["enabled"] is True
+        await late.close()
+
+        # ...so a fresh join gets NO media_enabled frame: the next thing after the
+        # join drain is this ping's pong, proving the default join sequence is back.
+        fresh, _, _, _ = await _connect_and_join(url, late_key)
+        await fresh.send(json.dumps({"type": "ping", "t": 7}))
+        frame = await _recv(fresh)
+        assert frame["type"] == "pong" and frame["t"] == 7
+        await fresh.close()
+        await kp.close()
+        await player.close()
+    finally:
+        await server.close()

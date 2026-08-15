@@ -123,7 +123,10 @@ connections receive `error too_many_connections` before `join` is read.
   `{type:"media_accept", upload_id:string, existing?:boolean, media?:MediaFrame, audio?:AudioLibraryItem}`
 - `media` — media metadata broadcast and history replay entry; bytes are fetched on demand:
   `{type:"media", id:string, hash:string, mime:string, size:int, name:string, from:string, ts:number}`
-- `media_enabled` — reply to a keeper upload-switch request:
+- `media_enabled` — the room's player-upload policy. Broadcast to every member when a
+  keeper toggles it, and sent to a joining member during replay when uploads are OFF
+  (the non-default state; no frame on join means the default: enabled). Clients may
+  gate their upload surface on it:
   `{type:"media_enabled", enabled:boolean}`
 - `audio_library_item` — a room audio-library entry created from an uploaded audio blob:
   `{type:"audio_library_item", id:string, hash:string, mime:string, size:int, name:string, from:string, ts:number, title?:string, license?:string, source?:string, tags?:string[]}`

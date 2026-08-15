@@ -48,7 +48,7 @@
   `{type:"media_accept", upload_id:string, existing?:boolean, media?:MediaFrame, audio?:AudioLibraryItem}`
 - `media` — 媒体元数据广播和历史回放条目；字节按需拉取：
   `{type:"media", id:string, hash:string, mime:string, size:int, name:string, from:string, ts:number}`
-- `media_enabled` — 守秘人切换上传开关之后的回复：
+- `media_enabled` — 房间的玩家上传政策。守秘人切换时向全房间广播；成员加入时若上传处于关闭态（非默认态）会在回放阶段补发一帧（加入时没有此帧即默认：允许上传）。客户端可以据此显示或禁用自己的上传入口：
   `{type:"media_enabled", enabled:boolean}`
 - `audio_library_item` — 由上传音频 blob 生成的房间音频库条目：
   `{type:"audio_library_item", id:string, hash:string, mime:string, size:int, name:string, from:string, ts:number, title?:string, license?:string, source?:string, tags?:string[]}`

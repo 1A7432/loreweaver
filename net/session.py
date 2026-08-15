@@ -368,6 +368,14 @@ class SessionCore:
                 await member.deliver(Event.audio(frame))
             if audio_items or await has_audio_state(self.services.store, chat_key):
                 await member.deliver(Event.audio(await audio_state_frame(self.services.store, chat_key)))
+            # The room's upload policy greets a joining member (UPSTREAM item 14, from
+            # the studio): the toggle reply used to be unicast to the issuing keeper, so
+            # everyone else could only learn "uploads are off" from their first refused
+            # offer. Only the NON-default state is announced — enabled is the default
+            # assumption, and an unconditional extra frame would reshape every join
+            # sequence for nothing.
+            if not await is_media_enabled(self.services.store, chat_key):
+                await member.deliver(Event.media({"type": "media_enabled", "enabled": False}))
         except Exception:
             return
 
@@ -658,7 +666,10 @@ class SessionCore:
             return
         enabled = bool(frame.get("enabled"))
         await set_media_enabled(self.services.store, member.session_key, enabled)
-        await member.send_frame({"type": "media_enabled", "enabled": enabled})
+        # Broadcast, not a unicast ack (UPSTREAM item 14): every member's client may
+        # gate its upload surface on the policy, not only the keeper who flipped it.
+        # The issuer is a room member too, so the old ack arrives as part of this.
+        await self.hub.publish(member.session_key, Event.media({"type": "media_enabled", "enabled": enabled}))
 
     async def _handle_avatar_set(self, member: Any, frame: dict[str, Any]) -> None:
         i18n = get_i18n(member.locale)
