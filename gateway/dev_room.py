@@ -212,15 +212,14 @@ async def reload(services: Services, hub: RoomHub | None, chat_key: str, locale:
     except Exception as exc:  # noqa: BLE001 — every parse failure is the author's next fix
         return i18n.t("dev.commands.reload_failed", error=str(exc))
 
-    # Remove the lore this mount wrote last time: `worldbook.add` dedupes by entry id,
-    # so a re-import over live entries would silently keep every stale text.
+    # Remove the lore this mount wrote last time (vectors included —
+    # `worldbook.remove_by_source` is the same primitive keeper re-imports now use).
+    # Still needed here despite import_entries clearing its own source: a mount's
+    # RECORDED source set also covers files renamed or deleted since the last reload,
+    # which the fresh import never mentions again.
     removed = 0
-    if current.sources:
-        owned = set(current.sources)
-        for doc in await services.documents.list(chat_key, LORE_DOC_TYPE):
-            if doc.source in owned:
-                await services.documents.delete(chat_key, LORE_DOC_TYPE, doc.id)
-                removed += 1
+    for old_source in current.sources:
+        removed += await services.worldbook.remove_by_source(chat_key, old_source)
 
     ctx = _dev_ctx(services, chat_key, current.path)
     sources: list[str] = []

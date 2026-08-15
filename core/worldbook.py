@@ -225,6 +225,29 @@ class Worldbook:
             await self.vector_db.delete([_vector_id(_namespace(chat_key, entry.scope), entry.id)])
         return True
 
+    async def remove_by_source(self, chat_key: str, source: str) -> int:
+        """Delete every lore entry a given import source wrote (document provenance,
+        ``meta.source``), vectors included. The primitive behind replace-on-reimport:
+        `add` deliberately re-ids on collision rather than overwriting, so without a
+        removal first a re-import always stacks. Entries imported before provenance
+        was recorded carry no source and are never matched — a room upgraded across
+        that boundary stacks once more, then replaces forever after."""
+        if not source:
+            return 0
+        removed = 0
+        for doc in await self.documents.list(chat_key, LORE_DOC_TYPE):
+            if doc.source != source:
+                continue
+            try:
+                scope = LoreEntry.from_dict(dict(doc.data, id=doc.id)).scope
+            except (TypeError, ValueError):
+                scope = WORLD_SCOPE
+            await self.documents.delete(chat_key, LORE_DOC_TYPE, doc.id)
+            if self.vector_db is not None:
+                await self.vector_db.delete([_vector_id(_namespace(chat_key, scope), doc.id)])
+            removed += 1
+        return removed
+
     async def import_entries(
         self,
         chat_key: str,
@@ -254,6 +277,13 @@ class Worldbook:
             return 0
         if len(raw_entries) > MAX_IMPORT_ENTRIES:
             raise ValueError("worldbook import exceeds the maximum entry count")  # i18n-exempt: surfaced via localized import failure
+        # Replace, don't stack (the serialized-module contract cards.md promises): a
+        # KEEPER re-import first clears what this same source wrote last time. Keeper-only
+        # by design, not oversight — a player import that could remove by source would let
+        # a crafted card named after the module wipe the keeper's lore and substitute its
+        # own. Player re-imports stay additive, exactly as before.
+        if is_keeper and source:
+            await self.remove_by_source(chat_key, source)
         count = 0
         for index, raw in enumerate(raw_entries, start=1):
             if not isinstance(raw, dict):

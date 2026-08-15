@@ -296,3 +296,42 @@ async def test_world_import_puts_the_character_half_on_the_claimable_roster(tmp_
     active = await services.characters.get_character("player-1", "chat-cast")
     assert active.name == "理"
     assert active.system == "coc7"  # rule-validated sheet, not a raw persona blob
+
+
+async def test_keeper_reimport_replaces_by_source_and_spares_everyone_else():
+    """The serialized-module contract (cards.md): a keeper re-import REPLACES what the
+    same source wrote — edits land, deletions leave, nothing stacks — while manual
+    keeper lore and other sources survive. Player imports stay additive by design:
+    replace-by-source in player hands would let a crafted card named after the module
+    wipe the keeper's lore."""
+    services = _services()
+    chat = "reimport-room"
+    book_v1 = [
+        {"comment": "Lighthouse", "key": ["lighthouse"], "content": "It burns green."},
+        {"comment": "Cellar", "key": ["cellar"], "content": "Sealed."},
+    ]
+    await services.worldbook.import_entries(chat, book_v1, source="card:Manor", is_keeper=True)
+    await services.worldbook.add(chat, LoreEntry(id="", title="Keeper note", content="mine", keys=["note"]))
+    await services.worldbook.import_entries(
+        chat, [{"comment": "Other", "key": ["other"], "content": "elsewhere"}], source="card:Other", is_keeper=True
+    )
+
+    # v2: Lighthouse edited, Cellar deleted, one new entry.
+    book_v2 = [
+        {"comment": "Lighthouse", "key": ["lighthouse"], "content": "It burns RED now."},
+        {"comment": "Attic", "key": ["attic"], "content": "Open."},
+    ]
+    await services.worldbook.import_entries(chat, book_v2, source="card:Manor", is_keeper=True)
+
+    titles = {entry.title: entry for entry in await services.worldbook.list(chat)}
+    assert titles["Lighthouse"].content == "It burns RED now."
+    assert "Cellar" not in titles and "Attic" in titles
+    assert "Keeper note" in titles and "Other" in titles
+    assert len(titles) == 4  # 2 (Manor v2) + manual + other source — nothing stacked
+
+    # A PLAYER import with a colliding source must not clear the keeper's lore.
+    await services.worldbook.import_entries(
+        chat, [{"comment": "Fake", "key": ["fake"], "content": "player text"}], source="card:Manor", is_keeper=False
+    )
+    titles = {entry.title for entry in await services.worldbook.list(chat)}
+    assert "Lighthouse" in titles and "Attic" in titles and "Fake" in titles
