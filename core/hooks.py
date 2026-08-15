@@ -11,6 +11,7 @@ and an imported card may carry ``extensions.loreweaver_hooks``; both register ha
     on("dice_rolled",        (event) => { ... })   // event.rolls: [{tool, result}]
     on("variables_changed",  (event) => { ... })   // event.writes: [{path, op}]
     on("clock_advanced",     (event) => { ... })   // event.from, event.to, event.delta
+    on("tool_use",           (event) => { ... })   // event.tool, event.arguments — may denyTool(reason)
 
 Inside a handler the full template bridge is available (``getvar``/``setvar``/``incvar``/
 ``variables``/``stat_data``, lodash as ``_``) plus the effect emitters ``inject(text)``

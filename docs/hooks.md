@@ -45,6 +45,7 @@ on("reply_ready",       (event) => { ... });  // event.reply
 on("dice_rolled",       (event) => { ... });  // event.rolls: [{tool, result}]
 on("variables_changed", (event) => { ... });  // event.writes: [{path, op: "set"|"insert"|"delete"|"add"|"move"}]
 on("clock_advanced",    (event) => { ... });  // event.from, event.to, event.delta
+on("tool_use",          (event) => { ... });  // event.tool, event.arguments — may denyTool(reason)
 ```
 
 - **`turn_start`** — fires before the Keeper thinks, with the player's input. This
@@ -60,6 +61,12 @@ on("clock_advanced",    (event) => { ... });  // event.from, event.to, event.del
   (`game_clock advance`); fires once per advance with the old face, the new face,
   and the verbatim delta text. The place for module-side calendars: day counters,
   deadline countdowns, scheduled omens.
+- **`tool_use`** — fires BEFORE each Keeper tool call, with the tool's name and
+  arguments. The one event whose handler can refuse: `denyTool(reason)` blocks the
+  call and the reason is fed back to the model (e.g.
+  `on("tool_use", (e) => { if (e.tool === "game_clock") denyTool("time is frozen in this scene"); })`).
+  Read the field names exactly — a guard reading a field this event does not carry
+  never fires, silently, and the door it was supposed to hold stands open.
 
 Handlers may be `async`; rejections are caught and logged as warnings. A handler
 that throws only loses its own effects — other handlers still run.

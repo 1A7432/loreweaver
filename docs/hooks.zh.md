@@ -28,6 +28,7 @@ on("reply_ready",       (event) => { ... });  // event.reply
 on("dice_rolled",       (event) => { ... });  // event.rolls: [{tool, result}]
 on("variables_changed", (event) => { ... });  // event.writes: [{path, op: "set"|"insert"|"delete"|"add"|"move"}]
 on("clock_advanced",    (event) => { ... });  // event.from、event.to、event.delta
+on("tool_use",          (event) => { ... });  // event.tool、event.arguments——可 denyTool(理由)
 ```
 
 - **`turn_start`**——守秘人开始思考之前触发，带着玩家输入。这是 `inject()` 唯一有意义的事件：注入的段落会进入**本**回合的守秘人提示词。
@@ -35,6 +36,7 @@ on("clock_advanced",    (event) => { ... });  // event.from、event.to、event.d
 - **`dice_rolled`**——本回合有骰子工具结算了。
 - **`variables_changed`**——本回合发生了变量写入。**每回合最多触发一次**，所以一个「响应变量变化又去写变量」的钩子不可能无限连锁——终止是构造出来的，不是靠自觉。
 - **`clock_advanced`**——守秘人本回合推进了游戏内时钟（`game_clock advance`），每次推进触发一次，带着旧钟面、新钟面和原始增量文本。模组侧历法该写在这里：日期计数、死线倒计时、定时凶兆。
+- **`tool_use`**——每次守秘人工具调用**之前**触发，带着工具名和参数。唯一能拒绝的事件：`denyTool(理由)` 拦下这次调用，理由会回喂给模型（例如 `on("tool_use", (e) => { if (e.tool === "game_clock") denyTool("此景时间冻结"); })`）。字段名必须读准——守卫读了本事件不携带的字段就永远不会触发，无声无息，它本该守住的门一直敞着。
 
 处理器可以是 `async` 的；Promise 被拒绝会被捕获并记为警告。某个处理器抛错只会丢掉它自己的效果，其他处理器照常跑。
 
