@@ -317,37 +317,61 @@ async def run_turn(
     # times off the same narrated fact, and drained the keeper whisper channel
     # into its own sub-turns. The PLAYER turn's pass already sees the whole
     # exchange — the companions' beats are part of what it reads.
-    if result is not None and ctx.platform != "companion" and services.settings.scribe.enabled:
-        tool_names = [str(entry.get("name", "")) for entry in result.tool_trace]
-
-        async def _scribe_pass(turn_result: KPTurnResult = result, names: list[str] = tool_names) -> None:
-            try:
-                from agent.scribe import run_scribe
-
-                # `turn_result.turn`, never the room's counter: this runs after the turn
-                # returned (and after any companion sub-turns), so the counter has moved
-                # on. See `KPTurnResult.turn` / `agent.chronicle.record_entry`.
-                outcome = await run_scribe(services, ctx, text, turn_result.reply, names, turn_result.turn)
-                if outcome.changed:
-                    await publish_state(hub, services, ctx)
-                if outcome.beat and services.settings.director.enabled:
-                    # The Director receives the PLAYER-VISIBLE turn — what was broadcast
-                    # — plus the beat KIND. Nothing keeper-side crosses this call; that
-                    # is the whole isolation contract (tests/architecture).
-                    from agent.stage_director import run_director
-
-                    await run_director(
-                        services, ctx, text, turn_result.reply, beat=outcome.beat, hub=hub
-                    )
-            except Exception:  # noqa: BLE001 — bookkeeping must never break the table
-                logging.getLogger(__name__).debug("scribe pass failed", exc_info=True)
-
-        task = asyncio.create_task(_scribe_pass())
+    if result is not None:
+        task = asyncio.create_task(run_scribe_pass(hub, services, ctx, text, result))
         _SCRIBE_TASKS.add(task)
         task.add_done_callback(_SCRIBE_TASKS.discard)
 
     await publish_state(hub, services, ctx)
     return result
+
+
+async def run_scribe_pass(
+    hub: RoomHub | None, services: Services, ctx: AgentCtx, text: str, result: KPTurnResult
+) -> None:
+    """One post-turn Scribe pass — the SAME pass on every channel that runs real turns.
+
+    The hub path wraps this in a fire-and-forget task (the reply has already streamed,
+    so the latency is invisible); the standalone CLI path (`gateway.runner`) AWAITS it
+    inline — a one-shot ``--exec`` process has no later moment to hide the latency in,
+    and a task killed by process exit would silently lose the bookkeeping. That
+    hubless channel was exactly how the CLI ran 12+ turns with zero chronicle records
+    (k3 pipeline playtest, D2): the pass was never scheduled there at all.
+
+    With ``hub=None`` the pass keeps everything durable (chronicle records, tracker
+    reconciliation, whispers, habits) and skips only what speaks in wire frames: the
+    state republish and the Stage Director, which stages `ui`/`audio` frames a
+    hubless channel has nowhere to deliver (documented in docs/operating.md).
+
+    Gated on ``ctx.platform != "companion"`` for the structural reason
+    `gateway.director` describes: a companion's own turn re-enters the turn flow, and
+    without the gate one player turn with N companions spent 1+N Scribe calls and
+    drained the whisper channel into its own sub-turns. The PLAYER turn's pass
+    already sees the whole exchange.
+    """
+    if ctx.platform == "companion" or not services.settings.scribe.enabled:
+        return
+    names = [str(entry.get("name", "")) for entry in result.tool_trace]
+    try:
+        from agent.scribe import run_scribe
+
+        # `result.turn`, never the room's counter: this runs after the turn returned
+        # (and after any companion sub-turns), so the counter has moved on. See
+        # `KPTurnResult.turn` / `agent.chronicle.record_entry`.
+        outcome = await run_scribe(services, ctx, text, result.reply, names, result.turn)
+        if hub is None:
+            return
+        if outcome.changed:
+            await publish_state(hub, services, ctx)
+        if outcome.beat and services.settings.director.enabled:
+            # The Director receives the PLAYER-VISIBLE turn — what was broadcast —
+            # plus the beat KIND. Nothing keeper-side crosses this call; that is the
+            # whole isolation contract (tests/architecture).
+            from agent.stage_director import run_director
+
+            await run_director(services, ctx, text, result.reply, beat=outcome.beat, hub=hub)
+    except Exception:  # noqa: BLE001 — bookkeeping must never break the table
+        logging.getLogger(__name__).debug("scribe pass failed", exc_info=True)
 
 
 async def _kp_enabled(services: Services, chat_key: str) -> bool:

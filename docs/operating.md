@@ -66,7 +66,10 @@ endpoint gets an empty one. Keeper clients can do all of this from the model scr
 
 ### The Scribe — small model, real job
 
-The Scribe is on by default and runs one extra call after every Keeper turn. It reconciles the
+The Scribe is on by default and runs one extra call after every Keeper turn — on every channel,
+the offline `--cli` loop included (there it runs inline before the prompt returns; only the
+Director stays hub-only, since everything it stages is wire frames a hubless channel cannot
+deliver). It reconciles the
 module's trackers against what was actually narrated (evidence-quoted; it cannot write a tracker it
 cannot cite), whispers judgment calls into the Keeper's *next* turn ("a day seems to have passed",
 "that horror beat may have warranted a sanity check"), and classifies the turn's story beat for the

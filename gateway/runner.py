@@ -27,7 +27,7 @@ from gateway.rooms import (
     session_key_for_room,
 )
 from gateway.session import SessionSource
-from gateway.turn import run_turn
+from gateway.turn import run_scribe_pass, run_turn
 from infra.i18n import get_i18n
 from infra.media_store import (
     ALLOWED_AUDIO_MIMES,
@@ -203,6 +203,11 @@ class GatewayRunner:
             text,
             output_review=lambda value: self.censor.review(value).cleaned,
         )
+        # The same post-turn Scribe pass the hub path runs, awaited inline: durable
+        # memory (auto-chronicle, tracker reconciliation, habits) must not depend on
+        # which channel the turn ran through, and a fire-and-forget task would die
+        # with a one-shot `--exec` process. See `run_scribe_pass` (k3 playtest D2).
+        await run_scribe_pass(None, self.services, ctx, text, result)
         return ChatMessage(text=result.reply, markdown=True)
 
     async def _answer_on_hub(
