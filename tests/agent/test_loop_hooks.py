@@ -239,3 +239,48 @@ async def test_clock_advanced_stale_records_never_leak_into_the_next_turn():
     result = await run_kp_turn(ctx, services, Toolset(NoteTools(services)), "hello")
 
     assert "stale:" not in result.reply
+
+
+async def test_snapshot_semantics_are_what_the_docs_promise():
+    """Pins the two getvar timing facts hooks.md states (found by the studio's
+    fix-verification probes): a handler reads its OWN setvar back as requested —
+    unclamped — while the store keeps the validated value, and engine-applied
+    writes (the reply's <UpdateVariable> protocol) are invisible to the
+    variables_changed handler's getvar: the event carries {path, op}, never a value."""
+    services = _services(FakeLLM(script=[assistant_text("ok")]))
+    ctx = _ctx("chat-hooks-snapshot-1")
+    await define_modvar(services.documents, ctx.chat_key, build_spec("fear", "number", minimum=0, maximum=10))
+    await install_room_hooks(
+        services,
+        ctx.chat_key,
+        "test",
+        [
+            "on('turn_start', () => { setvar('fear', 99); });"
+            "on('variables_changed', (e) => narrate('getvar=' + getvar(e.writes[0].path)));"
+        ],
+    )
+    result = await run_kp_turn(ctx, services, Toolset(), "go")
+    assert "getvar=99" in result.reply  # the sandbox shows the REQUESTED value...
+    state = await load_modvars(services.documents, ctx.chat_key)
+    assert state["values"]["fear"] == 10  # ...while the store keeps the clamped one
+
+
+async def test_variables_changed_getvar_does_not_see_mvu_writes():
+    from core.mvu_compat import load_mvu
+
+    reply = "The bond deepens.\n<UpdateVariable>\n_.set('bond', 7);\n</UpdateVariable>"
+    services = _services(FakeLLM(script=[assistant_text(reply)]))
+    ctx = _ctx("chat-hooks-snapshot-2")
+    await install_room_hooks(
+        services,
+        ctx.chat_key,
+        "test",
+        [
+            "on('variables_changed', (e) => narrate("
+            "'op=' + e.writes[0].op + ' seen=' + JSON.stringify(getvar(e.writes[0].path))));"
+        ],
+    )
+    result = await run_kp_turn(ctx, services, Toolset(), "go")
+    assert "op=set" in result.reply
+    assert "seen=undefined" in result.reply  # the event says WHAT changed, never the value
+    assert (await load_mvu(services.documents, ctx.chat_key))["bond"] == 7  # the write itself landed

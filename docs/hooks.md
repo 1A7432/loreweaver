@@ -76,8 +76,13 @@ The full template bridge is available:
   failing write is skipped and reported, never fatal. At most **64 writes** apply
   per turn.
 - **Snapshot semantics:** variables are snapshotted once per turn. A handler sees
-  its **own** earlier writes, but not writes made mid-turn by Keeper tools — by the
-  next turn everything is consistent again.
+  its **own** earlier writes — as REQUESTED, before validation (a `setvar` beyond a
+  variable's bounds reads back unclamped in the sandbox; the store keeps the clamped
+  value) — but not writes made mid-turn by Keeper tools or by the reply's own
+  `<UpdateVariable>` protocol. In particular, inside a `variables_changed` handler
+  `getvar(path)` does NOT return the new value for engine-applied writes; the event
+  tells you WHAT changed and HOW (`{path, op}`), never the value. By the next turn
+  everything is consistent again.
 - **Trust tier:** hooks are module logic and see the **Keeper view** of the
   variables, including keeper-only trackers. What you choose to emit to players is
   authorial output — never put keeper-only material into `narrate` / `emitUI`.
