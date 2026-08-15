@@ -26,7 +26,7 @@
 on("turn_start",        (event) => { ... });  // event.user_message、event.actor
 on("reply_ready",       (event) => { ... });  // event.reply
 on("dice_rolled",       (event) => { ... });  // event.rolls: [{tool, result}]
-on("variables_changed", (event) => { ... });  // event.writes: [{path, value}]
+on("variables_changed", (event) => { ... });  // event.writes: [{path, op: "set"|"insert"|"delete"|"add"|"move"}]
 on("clock_advanced",    (event) => { ... });  // event.from、event.to、event.delta
 ```
 

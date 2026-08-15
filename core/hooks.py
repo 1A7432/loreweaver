@@ -9,7 +9,7 @@ and an imported card may carry ``extensions.loreweaver_hooks``; both register ha
     on("turn_start",         (event) => { ... })   // event.user_message, event.actor
     on("reply_ready",        (event) => { ... })   // event.reply
     on("dice_rolled",        (event) => { ... })   // event.rolls: [{tool, result}]
-    on("variables_changed",  (event) => { ... })   // event.writes: [{path, value}]
+    on("variables_changed",  (event) => { ... })   // event.writes: [{path, op}]
     on("clock_advanced",     (event) => { ... })   // event.from, event.to, event.delta
 
 Inside a handler the full template bridge is available (``getvar``/``setvar``/``incvar``/
