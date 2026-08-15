@@ -163,6 +163,23 @@ def list_installed_panel_packs(services: Services) -> list[tuple[str, int]]:
     return result
 
 
+def installed_presentation_count(services: Services, pack_id: str) -> int:
+    """How many presentation kits ``pack_id``'s newest installed home declares (0/1).
+
+    `.panels enable` is the ONE switch that admits a pack's table dressing — panels
+    AND the Stage Director's kit ride it together (`gateway.presentation`) — so a
+    module that ships only a kit must pass the same door. Declared-in-manifest is
+    the right test (not subject count): an audio-only kit stages cues with zero
+    picturable subjects and is still a kit."""
+    home = installed_pack_homes(services.settings.data_dir).get(pack_id)
+    if home is None:
+        return 0
+    manifest = _load_manifest(home)
+    if manifest is None:
+        return 0
+    return len(manifest.contents.get("presentation", ()))
+
+
 def installed_panel_count(services: Services, pack_id: str) -> int:
     """How many panels ``pack_id``'s newest installed home ships (0 = none/not installed)."""
     home = installed_pack_homes(services.settings.data_dir).get(pack_id)

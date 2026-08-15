@@ -1304,12 +1304,19 @@ class CommandRouter:
         return ctx.i18n.t("commands.panels.list", items="\n".join(lines))
 
     async def _panels_set(self, ctx: CommandCtx, pack_id: str, *, enable: bool) -> str:
-        from gateway.panels import installed_panel_count, publish_ui_manifests
+        from gateway.panels import installed_panel_count, installed_presentation_count, publish_ui_manifests
 
         if not _is_keeper(ctx.raw_ctx):
             return ctx.fail(ctx.i18n.t("commands.panels.denied"))
         pack_id = pack_id.strip()
-        if not pack_id or (enable and installed_panel_count(ctx.services, pack_id) <= 0):
+        # Panels OR a presentation kit both count: `.panels enable` is the one switch
+        # admitting a pack's table dressing, and a kit-only module (the Stage Director's
+        # brief, no panels) could otherwise never wake its Director (k3 playtest D4).
+        if not pack_id or (
+            enable
+            and installed_panel_count(ctx.services, pack_id) <= 0
+            and installed_presentation_count(ctx.services, pack_id) <= 0
+        ):
             return ctx.i18n.t("commands.panels.unknown", id=pack_id)
 
         await toggle_enabled_panel_pack(ctx.services.store, ctx.chat_key, pack_id, on=enable)

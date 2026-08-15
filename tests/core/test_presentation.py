@@ -233,3 +233,30 @@ async def test_room_kit_intersects_templates_and_unions_palette(tmp_path):
     assert room_kit.templates == ("letter", "text")
     assert room_kit.palette == ("midnight blue", "bone white")
     assert room_kit.allows_template("letter") and not room_kit.allows_template("title_card")
+
+
+async def test_panels_enable_admits_a_kit_only_pack(tmp_path):
+    """k3 playtest D4: a module shipping ONLY a presentation kit (no panels) failed
+    `.panels enable`, so its Stage Director could never wake. Kits pass the door now."""
+    from agent.context import AgentCtx
+    from agent.services import build_services
+    from gateway.commands import CommandRouter
+    from gateway.ops import set_enabled_panel_packs
+    from gateway.presentation import load_room_kit
+    from infra.config import Settings
+    from infra.embeddings import FakeEmbeddings
+    from infra.llm import FakeLLM
+    from tests.fixtures.presentation_pack import install_kit_pack
+
+    settings = Settings()
+    settings.data_dir = tmp_path / "data"
+    services = build_services(settings, llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64))
+    await install_kit_pack(services, "room", tmp_path)
+    await set_enabled_panel_packs(services.store, "room", [])  # undo the fixture's enable
+
+    router = CommandRouter(services)
+    keeper = AgentCtx(chat_key="room", user_id="k1", platform="cli", locale="en")
+    reply = await router.dispatch(keeper, ".panels enable stagekit")
+    assert reply is not None
+    assert reply != services.i18n.with_locale("en").t("commands.panels.unknown", id="stagekit")
+    assert bool(await load_room_kit(services, "room", "zh")) is True
