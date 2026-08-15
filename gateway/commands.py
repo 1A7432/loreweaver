@@ -2113,9 +2113,27 @@ class CommandRouter:
         view = await documents.get_view(ctx.chat_key, "mvu_tree", MVU_ID, KEEPER_VIEWER)
         leaves = (view or {}).get("leaves", [])
         exposed = (view or {}).get("exposed", [])
+        # Typed module variables list here too (k3 playtest D9a): with no command
+        # showing them, a keeper's only way to "see the trackers" was asking the
+        # MODEL for a status report — which is how a keeper-only value ended up
+        # recited into room-visible narration. Bookkeeping belongs to real code.
+        state = await load_modvars(documents, ctx.chat_key)
+        modvar_lines: list[str] = []
+        if state["specs"]:
+            modvar_lines.append(ctx.i18n.t("vars.commands.modvars_header", count=len(state["specs"])))
+            for var_id, spec in state["specs"].items():
+                tag = (
+                    ctx.i18n.t("vars.commands.keeper_tag")
+                    if spec.get("visibility") == "keeper"
+                    else ctx.i18n.t("vars.commands.player_tag")
+                )
+                modvar_lines.append(f"· {label_for(spec, ctx.locale)} [{var_id}] = {state['values'].get(var_id)} {tag}")
         if not leaves and not exposed:
+            if modvar_lines:
+                return "\n".join(modvar_lines)
             return ctx.i18n.t("vars.commands.empty")
-        lines = [ctx.i18n.t("vars.commands.list_header", count=len(leaves))]
+        lines = modvar_lines + ([""] if modvar_lines else [])
+        lines += [ctx.i18n.t("vars.commands.list_header", count=len(leaves))]
         if exposed:
             lines.append(ctx.i18n.t("vars.commands.exposed_line", prefixes=", ".join(exposed)))
         max_lines = 40

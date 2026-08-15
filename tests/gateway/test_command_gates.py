@@ -490,6 +490,17 @@ async def test_var_set_and_add_write_native_modvars_with_validation():
     )
     assert await router.dispatch(keeper, ".var set suspicion") == en.t("vars.commands.usage")
 
+    # .var list shows the typed trackers too (k3 playtest D9a) — with no listing, a
+    # keeper's only route to "see the trackers" was asking the model, the leak path.
+    await define_modvar(
+        services.documents, chat_key, build_spec("dread", "number", visibility="keeper", default=2)
+    )
+    listing = await router.dispatch(keeper, ".var list")
+    assert listing is not None
+    assert "suspicion" in listing and "10" in listing
+    assert "dread" in listing and en.t("vars.commands.keeper_tag") in listing
+    assert en.t("vars.commands.player_tag") in listing
+
 
 async def test_pc_roster_claim_is_player_open_but_foreign_release_is_keeper_only():
     from core.character_manager import CharacterSheet
