@@ -140,7 +140,10 @@ connections receive `error too_many_connections` before `join` is read.
   carries the full, final text. When its `id` matches a draft bubble the client
   accumulated from `narrative_delta` frames, the final text REPLACES that
   draft (post-generation corrections are already folded in); otherwise it is a
-  plain one-shot line.
+  plain one-shot line. An EMPTY final text is a discard, not a message: the
+  server closes an abandoned draft that way (a tool round the Keeper superseded,
+  a turn that died mid-stream), and a client must remove — never render — a
+  bubble whose final text is empty.
 - `narrative_delta` — one streaming text delta for a draft bubble:
   `{type:"narrative_delta", id:string, speaker:"kp", name?:string, text:string}`
   Clients concatenate deltas sharing an `id` into a draft bubble (render as

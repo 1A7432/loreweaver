@@ -58,7 +58,7 @@
   `{type:"audio_state", layers:[{layer:"bgm"|"ambience"|"sfx", hash?:string, mime?:string, name?:string, title?:string, playing:boolean, volume?:number, loop?:boolean, started_at?:number}]}`
 - `narrative` — 一行**完整的**故事/聊天文本：
   `{type:"narrative", id:string, speaker:"kp"|"player"|"system"|"npc", name?:string, text:string, format:"markdown"|"plain"}`
-  对于 `speaker:"npc"`，`name` 携带 NPC 名称。`narrative` 帧永远携带完整的最终文本：当其 `id` 与客户端由 `narrative_delta` 累积出的草稿气泡匹配时，最终文本**替换**该草稿（生成后修正已折入）；否则就是一条普通的单发文本。
+  对于 `speaker:"npc"`，`name` 携带 NPC 名称。`narrative` 帧永远携带完整的最终文本：当其 `id` 与客户端由 `narrative_delta` 累积出的草稿气泡匹配时，最终文本**替换**该草稿（生成后修正已折入）；否则就是一条普通的单发文本。**空的最终文本是撤销，不是消息**：服务器用它收掉被放弃的草稿（守秘人换了下一轮工具草稿、或回合中途夭折），客户端必须**移除**——绝不渲染——最终文本为空的气泡。
 - `narrative_delta` — 草稿气泡的一段流式文本增量：
   `{type:"narrative_delta", id:string, speaker:"kp", name?:string, text:string}`
   客户端把共享同一 `id` 的增量拼接进草稿气泡（按 markdown 渲染）。流在**同 `id`** 的 `narrative` 帧到达时结束；服务端保证这条收尾帧一定会来（回合失败也会以已流出的文本收口）。服务端在 AI 守秘人生成的同时就往外发，并且边发边清理：拿不准的一律不发，机关和 MVU 块永远不会流出去。
