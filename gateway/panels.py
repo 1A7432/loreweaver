@@ -83,6 +83,24 @@ def installed_pack_homes(data_dir: Path) -> dict[str, Path]:
     return result
 
 
+def installed_card_entries(data_dir: Path) -> list[dict[str, str]]:
+    """Every installed pack's card files as `{ref, pack, name}` entries (v2.2
+    `pack_cards` frame + `.import list`): `ref` is exactly what `.import <ref>`
+    accepts, `name` is the filename stem for display. Filenames only — the trust
+    card already printed them to the operator; card CONTENT never rides this."""
+    entries: list[dict[str, str]] = []
+    for pack_id, home in sorted(installed_pack_homes(data_dir).items()):
+        cards_dir = home / "cards"
+        if not cards_dir.is_dir():
+            continue
+        for entry in sorted(cards_dir.iterdir()):
+            if entry.is_file() and entry.suffix.casefold() in {".json", ".png"}:
+                entries.append(
+                    {"ref": f"{pack_id}/cards/{entry.name}", "pack": pack_id, "name": entry.stem}
+                )
+    return entries
+
+
 def _digest_source_assets(home: Path, manifest: PackManifest) -> PackManifest:
     """Complete a SOURCE manifest the way `build_pack` would: fold panel/kit asset paths
     into the asset block and stamp sha256/mime/size from the live files, so panels'

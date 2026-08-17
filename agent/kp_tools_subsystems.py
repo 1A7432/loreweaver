@@ -38,8 +38,10 @@ def _has_character(character: CharacterSheet | None) -> bool:
 
 
 async def room_rulepack(services: Services, ctx: AgentCtx) -> RulePack:
-    """The rule system THIS room plays: the active character's system, falling
-    back to the deployment's configured default pack."""
+    """The rule system THIS room plays: the active character's system, then the
+    room's world-import system pin (`room_system`, written by `.import … world`
+    when the module's pack ships exactly one rulepack), then the deployment's
+    configured default pack."""
     system = ""
     try:
         character = await _active_character(services, ctx)
@@ -47,6 +49,11 @@ async def room_rulepack(services: Services, ctx: AgentCtx) -> RulePack:
             system = character.system
     except Exception:
         system = ""
+    if not system:
+        try:
+            system = await services.store.state_get(ctx.chat_key, "room_system") or ""
+        except Exception:
+            system = ""
     try:
         return load_rulepack(system or services.settings.default_rulepack)
     except Exception:

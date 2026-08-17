@@ -1565,6 +1565,40 @@ def installed_pack_dir(data_dir: Path | str, pack_id: str) -> Path | None:
     return dirs[0] if dirs else None
 
 
+def installed_pack_sole_rulepack(data_dir: Path | str, path: Path | str) -> str | None:
+    """When ``path`` sits inside an installed ``data_dir/packs/<id>@<version>/`` whose
+    manifest declares exactly ONE rulepack, return that rulepack's system id (the YAML
+    stem — the id discovery installs it under).
+
+    The world-import system pin (owner verdict, 2026-08-17): a module that ships one
+    rule system means its cast to be built on that system. Two or more rulepacks is an
+    ambiguity this refuses to guess about; zero means nothing to pin. Never raises —
+    a missing/unreadable manifest is just "no pin"."""
+    try:
+        resolved = Path(path).resolve()
+        packs_root = (Path(data_dir) / "packs").resolve()
+        pack_home = None
+        for parent in resolved.parents:
+            if parent.parent == packs_root:
+                pack_home = parent
+                break
+        if pack_home is None:
+            return None
+        manifest_path = pack_home / MANIFEST_NAME
+        if not manifest_path.is_file() or manifest_path.stat().st_size > MAX_MANIFEST_BYTES:
+            return None
+        # One field only, read leniently: the manifest was fully validated at install
+        # time, and `parse_manifest_text`'s two modes disagree about `trust` presence.
+        raw = safe_load_no_aliases(manifest_path.read_text(encoding="utf-8"))
+        contents = raw.get("contents") if isinstance(raw, dict) else None
+        rulepacks = contents.get("rulepacks") if isinstance(contents, dict) else None
+        if not isinstance(rulepacks, list) or len(rulepacks) != 1:
+            return None
+        return Path(str(rulepacks[0])).stem or None
+    except Exception:
+        return None
+
+
 @dataclass(frozen=True)
 class RulepackStemCollision:
     """One shared ``<rulepacks_dir>/<stem>.yaml`` that two installed packs disagree about."""

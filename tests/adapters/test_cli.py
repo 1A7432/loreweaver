@@ -37,3 +37,16 @@ async def test_run_script_help_and_bot_commands_work():
     assert "Commands:" in replies[0]
     assert "Keeper:" in replies[0]
     assert replies[1] == "Bot disabled."
+
+
+async def test_run_script_batch_is_exempt_from_the_rate_limiter():
+    """A wiring script longer than the limiter's burst capacity (5) must run to the
+    end: the operator handing the process a file is not a flood (owner verdict on
+    docs/notes/implemented/cli-script-rate-limit.md)."""
+    lines = [f"r 1d1+{index}" for index in range(1, 13)]
+
+    replies = await run_script(lines, _services())
+
+    assert len(replies) == len(lines)
+    throttled = _services().i18n.with_locale("en").t("runner.throttled")
+    assert all(throttled not in reply for reply in replies)

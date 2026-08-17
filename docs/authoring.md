@@ -720,7 +720,8 @@ Adventurer: 力量 45, 敏捷 60, 体质 60, 体型 65, 外貌 45, 智力 55, �
 Check Tidology: target 5 (effective 5), roll 13 -> Failure
 ```
 
-(The CLI rate-limits itself like any other player, so keep run files short or split them.)
+(`--script` / `--exec` batches are exempt from the message rate limiter — a file you handed the
+process is not a flood. Interactive CLI input still rate-limits like a table.)
 
 Then check the room-level wiring — panels register, skills enable, the world card lands, the cast
 appears:

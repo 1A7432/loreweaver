@@ -9,6 +9,7 @@ from agent.kp_tools import build_kp_toolset
 from agent.services import Services
 from core.dice_engine import seed_dice
 from gateway.commands import CommandRouter
+from gateway.ops import UnlimitedRateLimiter
 from gateway.runner import GatewayRunner
 
 
@@ -21,6 +22,9 @@ async def run_script(lines: list[str], services: Services, *, seed: int = 0) -> 
         command_router=CommandRouter(services),
         toolset=build_kp_toolset(services),
     )
+    # Same stance as `--script` / `--exec` (app.py `_run_cli`): a scripted batch from
+    # the operator is not a flood; the rate limiter's job is the network.
+    runner.rate_limiter = UnlimitedRateLimiter()
     await runner.start()
     try:
         for index, line in enumerate(lines, 1):

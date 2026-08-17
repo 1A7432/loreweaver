@@ -4,7 +4,9 @@
   "charcard.commands.genchar.usage": "Usage: .genchar [coc7|dnd5e] [name] | <description>",
   "charcard.commands.import.companion_denied": "Only an authenticated Keeper can import an AI companion.",
   "charcard.commands.import.help": "Import a SillyTavern card: .import <file> [coc7|dnd5e] [pc|companion|world] — pc/companion take the character half (world machinery stripped); world (keeper-only) imports the module: hooks, variables, keeper lore, and the card's character joins the claimable roster (.pc claim).",
-  "charcard.commands.import.usage": "Usage: .import <card file> [coc7|dnd5e] [pc|companion|world]",
+  "charcard.commands.import.list": "Importable cards from installed packs (use `.import <ref> pc`):\n{refs}",
+  "charcard.commands.import.list_empty": "No installed pack ships card files. Install one with `--install`, or import your own card as an attachment.",
+  "charcard.commands.import.usage": "Usage: .import <card file|pack ref> [coc7|dnd5e] [pc|companion|world] — `.import list` shows the refs installed packs ship.",
   "charcard.commands.import.world_denied": "Only an authenticated Keeper can import a world card (it installs room hooks and seeds shared variables).",
   "charcard.concept_prompt": "You convert a SillyTavern persona into a TRPG character concept for {system}. Use the persona and module context only as inspiration; do not invent numeric stats. Return JSON only with keys: occupation/class, attribute_emphasis as a ranked list of attribute codes, signature_skills as a short list, and backstory as 1-2 lines. Module context: {module_context}\nPersona:\n{persona}",
   "charcard.tools.import.done_companion": "Imported \"{name}\" as an AI companion (id {id}, {system}). Key stats: {stats}. Lore entries added: {lore}.",
@@ -39,5 +41,6 @@
   "charcard.tools.brief.label.notes": "Author notes",
   "charcard.tools.brief.label.opening": "Authored opening",
   "charcard.tools.brief.label.alt_opening": "Alternate opening {index}",
-  "charcard.tools.world.specs_line": "Typed variables: {count} tracker(s) defined from the native bundle."
+  "charcard.tools.world.specs_line": "Typed variables: {count} tracker(s) defined from the native bundle.",
+  "charcard.tools.world.system_pinned": "Room system pinned to {system} — the module's pack ships it, so the cast and new characters are built on it (name a system on import to override)."
 }

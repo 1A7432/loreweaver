@@ -306,15 +306,36 @@ class CharcardTools:
         deterministic (`gateway.commands`).
         """
         i18n = self._i18n(ctx)
-        if not system.strip():
-            pack = await room_rulepack(self._services, ctx)
-            system = pack.system
         if ctx.fs is None:
             return i18n.t("charcard.tools.import.no_fs")
         try:
             host_path = Path(ctx.fs.get_file(file_path))
             if not host_path.exists():
                 return i18n.t("charcard.tools.import.no_file", path=file_path)
+
+            # System pin (owner verdict 2026-08-17): an explicit `system` argument wins
+            # outright. Otherwise, a card imported FROM an installed pack that ships
+            # exactly one rulepack pins that system for the room — the module's cast is
+            # built on the system its author shipped, and later `.genchar`/make_char
+            # follow it via `room_rulepack`. Anything else keeps today's fallback.
+            pinned_line = ""
+            if not system.strip():
+                from core.pack import installed_pack_sole_rulepack
+                from core.rulepacks import load_rulepack as _load_rulepack
+
+                sole = installed_pack_sole_rulepack(self._services.settings.data_dir, host_path)
+                if sole:
+                    try:
+                        _load_rulepack(sole)
+                    except Exception:
+                        sole = None  # shipped but not discoverable — never pin a dead id
+                if sole:
+                    system = sole
+                    await self._services.store.state_set(ctx.chat_key, "room_system", sole)
+                    pinned_line = i18n.t("charcard.tools.world.system_pinned", system=sole)
+                else:
+                    pack = await room_rulepack(self._services, ctx)
+                    system = pack.system
 
             card, lorecard = _parse_any_card_file(host_path)
             character, world = split_card(card)
@@ -438,7 +459,9 @@ class CharcardTools:
                     count=len(skipped_titles),
                     titles=i18n.t("common.list_separator").join(skipped_titles[:5]),
                 )
-            extra_lines = [line for line in (specs_line, brief_line, pregen_line, cast_line, skipped_line) if line]
+            extra_lines = [
+                line for line in (pinned_line, specs_line, brief_line, pregen_line, cast_line, skipped_line) if line
+            ]
             return "\n".join([result, *extra_lines])
         except Exception as exc:
             return i18n.t("charcard.tools.world.failed", error=str(exc))
@@ -517,8 +540,10 @@ ROOM_FACETS = (
         owner="agent.kp_tools_charcard",
         reset_scope="all",
         # The marker recording which world card a keeper imported (拆卡): module
-        # provenance, kept exactly as long as the module it describes.
-        state_keys=frozenset({"world_import"}),
+        # provenance, kept exactly as long as the module it describes. `room_system`
+        # is the world-import system pin — module-derived, so it lives and dies with
+        # the same provenance.
+        state_keys=frozenset({"world_import", "room_system"}),
         storages=frozenset({STORAGE_ROOM_STATE}),
     ),
 )

@@ -70,6 +70,18 @@ class RateLimiter:
         return True
 
 
+class UnlimitedRateLimiter(RateLimiter):
+    """A `RateLimiter` that always allows.
+
+    For the local operator's BATCH lanes only (`--script` / `--exec`): a file the
+    operator handed the process is not a flood, and the limiter's job is the
+    network. Interactive CLI and every networked transport keep the real limiter.
+    """
+
+    def allow(self, key: str) -> bool:  # noqa: ARG002 - signature parity
+        return True
+
+
 class CensorLevel(IntEnum):
     NONE = 0
     NOTICE = 1

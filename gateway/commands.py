@@ -1957,6 +1957,12 @@ class CommandRouter:
             return word in {"pc", "companion", "world", "世界"} or _resolve_system_token(word) is not None
 
         tokens = ctx.args.split()
+        if tokens and tokens[0].casefold() in {"list", "列表"}:
+            # Discovery without path-typing: every installed pack's card files as the
+            # pack-relative refs `.import` accepts. Filenames only (the install banner
+            # already printed them to the operator) — player-open on purpose, so "the
+            # module shipped a PC card" is claimable knowledge, not keeper folklore.
+            return _installed_card_refs(ctx)
         attachment = _first_attachment_name(ctx.raw_ctx)
         if attachment and (not tokens or _is_option(tokens[0].casefold())):
             file_path = attachment
@@ -1968,20 +1974,6 @@ class CommandRouter:
             from_attachment = False
         else:
             return ctx.i18n.t("charcard.commands.import.usage")
-        # A raw host PATH argument (not a room attachment) reads an arbitrary file
-        # off the server, so it requires a keeper. An attachment-based import stays
-        # open so a player can still self-import their own uploaded card.
-        if not from_attachment and not _is_keeper(ctx.raw_ctx):
-            return ctx.fail(ctx.i18n.t("rooms.denied"))
-        if not from_attachment:
-            # Pack-relative convenience: `.import <packId>/cards/x.png` resolves against the
-            # newest installed `data_dir/packs/<id>@<version>/` (confined; falls through to
-            # the literal path when it isn't pack-shaped or nothing is installed).
-            from core.pack import resolve_installed_path
-
-            resolved = resolve_installed_path(ctx.services.settings.data_dir, file_path)
-            if resolved is not None:
-                file_path = str(resolved)
         system = ""
         as_ = "pc"
         for token in options:
@@ -1991,9 +1983,25 @@ class CommandRouter:
             elif low in {"world", "世界"}:
                 as_ = "world"
             else:
-                resolved = _resolve_system_token(low)
-                if resolved:
-                    system = resolved
+                resolved_system = _resolve_system_token(low)
+                if resolved_system:
+                    system = resolved_system
+        if not from_attachment:
+            # Pack-relative refs (`.import <packId>/cards/x.png`) resolve against the
+            # newest installed `data_dir/packs/<id>@<version>/` — CONFINED by
+            # `resolve_installed_path`, never an arbitrary server read. A confined ref
+            # stays open to players for the character half ("the module shipped a PC
+            # card" must not be a keeper-only ceremony — card split still strips world
+            # machinery structurally); `world`/`companion` keep their keeper gates below.
+            # A RAW host path (not pack-shaped, or nothing installed) reads an arbitrary
+            # file off the server, so it stays keeper-only.
+            from core.pack import resolve_installed_path
+
+            resolved = resolve_installed_path(ctx.services.settings.data_dir, file_path)
+            if resolved is not None:
+                file_path = str(resolved)
+            elif not _is_keeper(ctx.raw_ctx):
+                return ctx.fail(ctx.i18n.t("rooms.denied"))
         tools = CharcardTools(ctx.services)
         if as_ == "world":
             # The ONLY entrance to the world-import path (deliberately not a model tool):
@@ -3703,6 +3711,18 @@ def _first_attachment_name(ctx: Any) -> str:
     extra = getattr(ctx, "extra", None)
     names = extra.get("attachment_names") if isinstance(extra, dict) else None
     return str(names[0]) if isinstance(names, list) and names else ""
+
+
+def _installed_card_refs(ctx: CommandCtx) -> str:
+    """`.import list` — every installed pack's card files as pack-relative refs."""
+    from pathlib import Path
+
+    from gateway.panels import installed_card_entries
+
+    refs = [entry["ref"] for entry in installed_card_entries(Path(ctx.services.settings.data_dir))]
+    if not refs:
+        return ctx.i18n.t("charcard.commands.import.list_empty")
+    return ctx.i18n.t("charcard.commands.import.list", refs="\n".join(refs))
 
 
 def _is_direct_chat(source: Any) -> bool:

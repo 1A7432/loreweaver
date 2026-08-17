@@ -166,6 +166,12 @@ def main(argv: list[str] | None = None) -> int:
 
 async def _run_cli(runner: GatewayRunner, *, exec_cmd: str | None, script: str | None) -> int:
     adapter = _cli_adapter(runner)
+    if exec_cmd is not None or script is not None:
+        # Batch lanes (`--exec` / `--script`) are the operator handing the process a
+        # file — not a flood. Interactive stdin below keeps the real limiter.
+        from gateway.ops import UnlimitedRateLimiter
+
+        runner.rate_limiter = UnlimitedRateLimiter()
     await runner.start()
     try:
         if exec_cmd is not None:

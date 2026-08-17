@@ -251,6 +251,104 @@ async def test_import_attachment_open_to_player():
     assert reply != _denied(services)
 
 
+def _install_pack_card(data_dir, card: dict) -> str:
+    """Drop a card file where `resolve_installed_path` finds it; return its pack ref."""
+    import json as _json
+    from pathlib import Path
+
+    card_path = Path(data_dir) / "packs" / "harbour@1.0.0" / "cards" / "pregen.json"
+    card_path.parent.mkdir(parents=True, exist_ok=True)
+    card_path.write_text(_json.dumps(card, ensure_ascii=False), encoding="utf-8")
+    return "harbour/cards/pregen.json"
+
+
+async def test_import_pack_relative_pc_open_to_player(tmp_path):
+    """Owner verdict (2026-08-17): a CONFINED pack-relative character import is not a
+    server-filesystem read — a module that ships a PC card must be claimable without
+    keeper ceremony. The card split still strips world machinery structurally."""
+    from agent.context import LocalFs
+
+    services = build_services(
+        Settings(data_dir=str(tmp_path / "data")), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64)
+    )
+    router = CommandRouter(services)
+    chat_key = "tui:group:packpc"
+    ref = _install_pack_card(
+        tmp_path / "data",
+        {
+            "name": "Harbour Pilot",
+            "description": "A weathered pilot who knows every shoal.",
+            "extensions": {"loreweaver_hooks": ["on('turn_start', () => {});"]},
+        },
+    )
+
+    reply = await router.dispatch(
+        AgentCtx(
+            chat_key=chat_key,
+            user_id="p1",
+            platform="tui",
+            locale="en",
+            # Production parity: SessionCore hands every networked member a confined
+            # LocalFs whose extra base is the data_dir (net/session.py `_ctx_for`).
+            fs=LocalFs(str(tmp_path), extra_bases=(str(tmp_path / "data"),)),
+            extra={"role": "player"},
+        ),
+        f".import {ref} pc",
+    )
+
+    assert reply is not None
+    assert reply != _denied(services)
+    assert "Harbour Pilot" in reply
+    # The character half landed; the world machinery did not (card split).
+    assert await services.store.state_get(chat_key, "room_hooks") is None
+
+
+async def test_import_pack_relative_world_still_keeper_only(tmp_path):
+    services = build_services(
+        Settings(data_dir=str(tmp_path / "data")), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64)
+    )
+    router = CommandRouter(services)
+    ref = _install_pack_card(tmp_path / "data", {"name": "W"})
+
+    reply = await router.dispatch(
+        AgentCtx(chat_key="tui:group:packworld", user_id="p1", platform="tui", locale="en", extra={"role": "player"}),
+        f".import {ref} world",
+    )
+
+    assert reply == services.i18n.with_locale("en").t("charcard.commands.import.world_denied")
+
+
+async def test_import_list_shows_installed_pack_refs_to_players(tmp_path):
+    services = build_services(
+        Settings(data_dir=str(tmp_path / "data")), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64)
+    )
+    router = CommandRouter(services)
+    ref = _install_pack_card(tmp_path / "data", {"name": "Harbour Pilot"})
+
+    reply = await router.dispatch(
+        AgentCtx(chat_key="tui:group:packlist", user_id="p1", platform="tui", locale="en", extra={"role": "player"}),
+        ".import list",
+    )
+
+    assert reply is not None and ref in reply
+
+
+async def test_import_unresolvable_pack_ref_still_denied_for_player(tmp_path):
+    """A pack-shaped ref that resolves to nothing falls back to being a host path —
+    and a host path stays keeper-only."""
+    services = build_services(
+        Settings(data_dir=str(tmp_path / "data")), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64)
+    )
+    router = CommandRouter(services)
+
+    reply = await router.dispatch(
+        AgentCtx(chat_key="tui:group:packmiss", user_id="p1", platform="tui", locale="en", extra={"role": "player"}),
+        ".import ghost-pack/cards/nope.json pc",
+    )
+
+    assert reply == _denied(services)
+
+
 # ---------------------------------------------------------------------------
 # Fix 4 — imagegen quota is not consumed before the keeper check
 # ---------------------------------------------------------------------------

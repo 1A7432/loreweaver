@@ -4,7 +4,9 @@
   "charcard.commands.genchar.usage": "用法：.genchar [coc7|dnd5e] [名称] | <描述>",
   "charcard.commands.import.companion_denied": "只有已认证的守秘人可以导入 AI 同伴。",
   "charcard.commands.import.help": "导入 SillyTavern 角色卡：.import <文件> [coc7|dnd5e] [pc|companion|world]——pc/companion 只取人物半（世界机制自动剥离）；world（仅守秘人）导入模组：钩子、变量、守秘人设定，且卡上角色进入待认领角色池（.pc claim）。",
-  "charcard.commands.import.usage": "用法：.import <角色卡文件> [coc7|dnd5e] [pc|companion|world]",
+  "charcard.commands.import.list": "已安装扩展包携带的可导入卡（用 `.import <引用> pc` 导入）：\n{refs}",
+  "charcard.commands.import.list_empty": "已安装的扩展包里没有卡文件。用 `--install` 装一个，或把你自己的卡作为附件导入。",
+  "charcard.commands.import.usage": "用法：.import <角色卡文件|包内引用> [coc7|dnd5e] [pc|companion|world]——`.import list` 列出已安装包携带的引用。",
   "charcard.commands.import.world_denied": "只有已认证的守秘人可以导入世界卡（它会安装全房间钩子并注入共享变量）。",
   "charcard.concept_prompt": "你要把 SillyTavern 人设转换为 {system} 的 TRPG 角色概念。只根据人设和模组上下文提出职业/职业类别、属性倾向、标志技能和 1-2 行背景，不要编造具体数值。只返回 JSON，键包括：occupation/class、attribute_emphasis（按优先级排列的属性代码列表）、signature_skills（简短列表）、backstory。模组上下文：{module_context}\n人设：\n{persona}",
   "charcard.tools.import.done_companion": "已将「{name}」导入为 AI 同伴（id {id}，{system}）。关键属性：{stats}。导入设定条目：{lore}。",
@@ -39,5 +41,6 @@
   "charcard.tools.brief.label.notes": "作者注记",
   "charcard.tools.brief.label.opening": "原作开场",
   "charcard.tools.brief.label.alt_opening": "替代开场 {index}",
-  "charcard.tools.world.specs_line": "类型化变量：已从原生卡包定义 {count} 个追踪器。"
+  "charcard.tools.world.specs_line": "类型化变量：已从原生卡包定义 {count} 个追踪器。",
+  "charcard.tools.world.system_pinned": "房间系统已钉为 {system}——模组的扩展包自带该系统，预设角色和新建角色都按它生成（导入时指明系统可覆盖）。"
 }
