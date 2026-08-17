@@ -318,7 +318,11 @@ class CharcardTools:
             # exactly one rulepack pins that system for the room — the module's cast is
             # built on the system its author shipped, and later `.genchar`/make_char
             # follow it via `room_rulepack`. Anything else keeps today's fallback.
+            # `pin_system` is only DECIDED here; the room_state write happens at the
+            # END of the import, so a corrupt card that fails to parse cannot leave
+            # the room retargeted onto a module that never landed.
             pinned_line = ""
+            pin_system = ""
             if not system.strip():
                 from core.pack import installed_pack_sole_rulepack
                 from core.rulepacks import load_rulepack as _load_rulepack
@@ -331,7 +335,7 @@ class CharcardTools:
                         sole = None  # shipped but not discoverable — never pin a dead id
                 if sole:
                     system = sole
-                    await self._services.store.state_set(ctx.chat_key, "room_system", sole)
+                    pin_system = sole
                     pinned_line = i18n.t("charcard.tools.world.system_pinned", system=sole)
                 else:
                     pack = await room_rulepack(self._services, ctx)
@@ -444,6 +448,10 @@ class CharcardTools:
                         count=len(cast_names),
                         names=i18n.t("common.list_separator").join(cast_names),
                     )
+
+            # The import made it through every step — only now does the pin land.
+            if pin_system:
+                await self._services.store.state_set(ctx.chat_key, "room_system", pin_system)
 
             result = i18n.t(
                 "charcard.tools.world.done",

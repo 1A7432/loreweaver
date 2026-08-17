@@ -124,6 +124,21 @@ async def test_explicit_system_argument_wins_and_does_not_pin(tmp_path, user_rul
     assert roster and roster[0]["system"] == "coc7"
 
 
+async def test_a_failed_import_never_pins(tmp_path, user_rulepack_dir):
+    """The pin lands only AFTER the import succeeds: a corrupt card must not leave
+    the room retargeted onto a module that never landed (`.genchar` would follow
+    a ghost)."""
+    services = _services(tmp_path)
+    card_path = _install_world_card(tmp_path / "data", rulepacks=["rulepacks/harbour-tides.yaml"])
+    Path(card_path).write_text("{not json", encoding="utf-8")
+    ctx = _keeper_ctx(tmp_path, "corrupt-room")
+
+    reply = await CharcardTools(services).import_world_card(ctx, file_path=card_path)
+
+    assert "harbour-tides" not in reply  # no pinned notice on a failed import
+    assert await services.store.state_get("corrupt-room", "room_system") is None
+
+
 async def test_undiscoverable_sole_rulepack_never_pins_a_dead_id(tmp_path):
     """The pack declares one rulepack but discovery cannot load it (not installed):
     pinning would strand the room on a system nothing can build."""
