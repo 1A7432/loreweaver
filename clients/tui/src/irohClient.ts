@@ -271,6 +271,11 @@ export class IrohClient implements AppClient {
     this.sendFrame({ type: FrameType.Input, text })
   }
 
+  // v2.2: the installed-pack card listing request, identical wire to WsClient.
+  listPackCards(): void {
+    this.sendFrame({ type: FrameType.ListPackCards })
+  }
+
   async uploadMedia(upload: MediaUpload): Promise<MediaFrame | undefined> {
     const accept = await this.offerMedia({
       type: FrameType.MediaOffer,

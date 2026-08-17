@@ -1,7 +1,7 @@
 {
   "name": "loreweaver-protocol",
-  "version": "2.1.1",
-  "description": "Typed wire-protocol frames and a reconnecting WebSocket client for Loreweaver, the self-hosted AI Game Master / Keeper (protocol v2.1).",
+  "version": "2.2.0",
+  "description": "Typed wire-protocol frames and a reconnecting WebSocket client for Loreweaver, the self-hosted AI Game Master / Keeper (protocol v2.2).",
   "type": "module",
   "license": "MIT",
   "repository": {

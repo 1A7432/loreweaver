@@ -111,6 +111,8 @@ const serverFrameValidators: Record<string, (f: Record<string, unknown>) => bool
   [FrameType.AudioControl]: (f) => isStr(f.id) && isStr(f.action) && isStr(f.layer),
   [FrameType.AudioState]: (f) => isArr(f.layers),
   [FrameType.Narrative]: (f) => isStr(f.id) && isStr(f.speaker) && isStr(f.text),
+  [FrameType.NarrativeDelta]: (f) => isStr(f.id) && isStr(f.speaker) && isStr(f.text),
+  [FrameType.PackCards]: (f) => isArr(f.cards),
   [FrameType.Dice]: (f) => isStr(f.actor) && isStr(f.expr) && isNum(f.total),
   [FrameType.Ui]: (f) => isArr(f.blocks) && isStr(f.panel),
   // v1.8 module panels: a manifest is a full-replace panel list; a panel event names
@@ -274,6 +276,12 @@ export class WsClient {
 
   sendInput(text: string): void {
     this.send({ type: FrameType.Input, text })
+  }
+
+  // v2.2: ask for the card files installed packs ship; the server answers with one
+  // unicast `pack_cards` frame (empty `cards` when nothing is installed).
+  listPackCards(): void {
+    this.send({ type: FrameType.ListPackCards })
   }
 
   // v1.8: a module-panel interaction, routed server-side as if this player typed it.

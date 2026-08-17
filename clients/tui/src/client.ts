@@ -27,6 +27,9 @@ export interface AppClient {
   connect(url: string): Promise<void>
   join(key: string, name?: string): void
   sendInput(text: string): void
+  // v2.2: ask which card files installed packs ship; the server answers with one
+  // unicast `pack_cards` frame (empty `cards` when nothing is installed).
+  listPackCards(): void
   uploadMedia(upload: MediaUpload): Promise<MediaFrame | undefined>
   getMedia(hash: string): Promise<MediaPayload>
   setMediaEnabled(enabled: boolean): void
@@ -98,6 +101,9 @@ class TransportClient implements AppClient {
   }
   sendInput(text: string): void {
     this.inner?.sendInput(text)
+  }
+  listPackCards(): void {
+    this.inner?.listPackCards()
   }
   uploadMedia(upload: MediaUpload): Promise<MediaFrame | undefined> {
     return this.inner?.uploadMedia(upload) ?? Promise.reject(new Error("not connected"))

@@ -60,7 +60,8 @@ describe("PanelsPanel", () => {
     expect(text).toContain("Ask the keeper for the map.")
     // Explicit `fallback: null` renders the localized rich-client-only line.
     expect(text).toContain("星仪")
-    expect(text).toContain("此面板请在富客户端查看。")
+    // The full line mid-truncates at this width; the head identifies the copy.
+    expect(text).toContain("此面板需在图形客户")
     act(() => renderer.destroy())
   })
 

@@ -143,6 +143,40 @@ describe("WsClient", () => {
     expect(allFrames).toEqual([FrameType.Narrative, FrameType.State, FrameType.AudioControl, `${FrameType.AudioControl}:bgm`])
   })
 
+  test("listPackCards sends the request and pack_cards frames reach handlers (v2.2)", async () => {
+    const { client, sockets } = createClient()
+    const cards: string[] = []
+    client.on(FrameType.PackCards, (frame) => {
+      for (const card of frame.cards) cards.push(card.ref)
+    })
+
+    await client.connect("ws://example.test")
+    client.listPackCards()
+    expect(JSON.parse(sockets[0].sent.at(-1)!)).toEqual({ type: FrameType.ListPackCards })
+
+    sockets[0].serverSend({
+      type: FrameType.PackCards,
+      cards: [{ ref: "harbour/cards/pilot.json", pack: "harbour", name: "pilot" }],
+    })
+    expect(cards).toEqual(["harbour/cards/pilot.json"])
+  })
+
+  test("narrative_delta frames pass validation and reach handlers", async () => {
+    // Regression: the validator table shipped without a narrative_delta entry, so
+    // every streaming delta was silently dropped by isServerFrame — both clients
+    // rendered nothing until the closing narrative arrived, on every live table.
+    const { client, sockets } = createClient()
+    const deltas: string[] = []
+    client.on(FrameType.NarrativeDelta, (frame) => deltas.push(`${frame.id}:${frame.text}`))
+
+    await client.connect("ws://example.test")
+    sockets[0].serverSend({ type: FrameType.NarrativeDelta, id: "d1", speaker: "kp", text: "The fog " })
+    sockets[0].serverSend({ type: FrameType.NarrativeDelta, id: "d1", speaker: "kp", text: "thickens." })
+    sockets[0].serverSend({ type: FrameType.NarrativeDelta, id: "bad", speaker: "kp" }) // no text — rejected
+
+    expect(deltas).toEqual(["d1:The fog ", "d1:thickens."])
+  })
+
   test("media upload offer sends binary put after accept", async () => {
     const { client, sockets } = createClient()
     await client.connect("ws://example.test")

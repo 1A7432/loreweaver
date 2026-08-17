@@ -13,6 +13,7 @@ import { themes } from "./themes"
 class MockClient implements GameClient {
   sent: string[] = []
   uploads: MediaUpload[] = []
+  packCardRequests = 0
   private listeners = new Set<(frame: ServerFrame) => void>()
 
   onMessage(cb: (frame: ServerFrame) => void): () => void {
@@ -31,6 +32,10 @@ class MockClient implements GameClient {
 
   getMedia(hash: string): Promise<MediaPayload> {
     return Promise.resolve({ hash, mime: "image/png", name: "cached.png", bytes: new Uint8Array([1, 2, 3]) })
+  }
+
+  listPackCards(): void {
+    this.packCardRequests += 1
   }
 
   push(frame: ServerFrame): void {
@@ -766,6 +771,48 @@ describe("GameView", () => {
       act(() => renderer.destroy())
     })
 
+    test("a characterless player Tab-focuses the roster and Enter claims the first unclaimed pregen", async () => {
+      const client = new MockClient()
+      const { renderer, flush, waitForFrame, mockInput } = await renderGame(client)
+      await flush()
+
+      act(() =>
+        client.push({
+          type: FrameType.State,
+          party: [],
+          initiative: [],
+          online: 1,
+          pregens: [
+            { name: "Mary", claimed_by: "p9" },
+            { name: "Harvey", claimed_by: "" },
+          ],
+        }),
+      )
+      await flush()
+
+      const frame = await waitForFrame((t) => t.includes("PREGENS"))
+      expect(frame).toContain("▸ Harvey")
+      expect(frame).toContain("✓ Mary")
+      expect(frame).toContain("claimed by p9")
+
+      // Without an own character the roster used to be skipped by Tab entirely;
+      // an unclaimed pregen makes it a stop, and Enter claims rather than
+      // submitting the (empty) chat input.
+      await act(async () => {
+        mockInput.pressTab()
+      })
+      await flush()
+      await act(async () => {
+        mockInput.pressEnter()
+      })
+      await flush()
+      expect(client.sent).toEqual([".pc claim Harvey"])
+
+      act(() => client.push(settleSpinner))
+      await flush()
+      act(() => renderer.destroy())
+    })
+
     test("own character expands to full CharacterPanel detail via a mouse click, and collapses again", async () => {
       const client = new MockClient()
       const { renderer, flush, waitForFrame, mockMouse } = await renderGame(client)
@@ -1247,6 +1294,53 @@ describe("declarative ui frames (v1.7)", () => {
     await flush()
 
     expect(client.sent).toEqual(["I open the door"])
+    act(() => renderer.destroy())
+  })
+})
+
+describe("pack-card import picker (v2.2)", () => {
+  test("requests the installed-pack card list exactly once on mount", async () => {
+    const client = new MockClient()
+    const { renderer, flush } = await renderGame(client)
+    await flush()
+
+    // Let the boot-sequence timers settle too: the request must not repeat.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400))
+    })
+    await flush()
+    expect(client.packCardRequests).toBe(1)
+
+    act(() => renderer.destroy())
+  })
+
+  test("a pack_cards frame renders the sidebar section; an empty one renders nothing", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame, captureCharFrame } = await renderGame(client)
+    await flush()
+
+    expect(captureCharFrame()).not.toContain("PACK CARDS")
+
+    act(() => {
+      client.push({
+        type: FrameType.PackCards,
+        cards: [
+          { ref: "harbour/cards/pilot.json", pack: "harbour", name: "pilot" },
+          { ref: "harbour/cards/medic.png", pack: "harbour", name: "medic" },
+        ],
+      })
+    })
+    const frame = await waitForFrame((text) => text.includes("PACK CARDS"))
+    expect(frame).toContain("▸ pilot · harbour")
+    expect(frame).toContain("▸ medic · harbour")
+
+    // A later empty listing (packs uninstalled) removes the whole section again.
+    act(() => {
+      client.push({ type: FrameType.PackCards, cards: [] })
+    })
+    const gone = await waitForFrame((text) => !text.includes("PACK CARDS"))
+    expect(gone).not.toContain("pilot")
+
     act(() => renderer.destroy())
   })
 })

@@ -1,13 +1,19 @@
 // Protocol 2.1 — the MAJOR version is the compatibility contract: refuse (or clearly
 // warn on) a `welcome.protocol` whose major differs; minors within a major stay
 // additive. 2.1 adds the M19 presentation surface: the `image` and performance block
-// kinds, and `visible_when` on panel template blocks. A 2.0 client ignores all of it.
-export const PROTOCOL_VERSION = "2.1" as const
+// kinds, and `visible_when` on panel template blocks. 2.2 adds the installed-pack
+// card listing (`list_pack_cards` → `pack_cards`), the structured lane behind every
+// "import from installed pack" picker. A 2.0/2.1 client ignores all of it.
+export const PROTOCOL_VERSION = "2.2" as const
 
 export const FrameType = {
   Join: "join",
   Input: "input",
   Ping: "ping",
+  // v2.2 additive: installed-pack card discovery (player-open) — the structured
+  // lane behind "import from installed pack" pickers.
+  ListPackCards: "list_pack_cards",
+  PackCards: "pack_cards",
   MediaOffer: "media_offer",
   MediaAccept: "media_accept",
   Media: "media",
@@ -164,6 +170,27 @@ export interface MediaAcceptFrame {
 export interface MediaSetEnabledFrame {
   type: typeof FrameType.MediaSetEnabled
   enabled: boolean
+}
+
+// v2.2: ask the server for the card files installed packs ship. Player-open —
+// filenames are claimable knowledge (the install banner prints them), never content.
+export interface ListPackCardsFrame {
+  type: typeof FrameType.ListPackCards
+}
+
+// One importable card from an installed pack: `ref` is exactly what
+// `.import <ref> pc` accepts; `pack` and `name` (the filename stem) are for display.
+export interface PackCardEntry {
+  ref: string
+  pack: string
+  name: string
+}
+
+// v2.2: the unicast answer to `list_pack_cards`. `cards` is empty (not absent)
+// when no installed pack ships card files.
+export interface PackCardsFrame {
+  type: typeof FrameType.PackCards
+  cards: PackCardEntry[]
 }
 
 export interface MediaEnabledFrame {
@@ -1071,6 +1098,7 @@ export type ClientFrame =
   | JoinFrame
   | InputFrame
   | PingFrame
+  | ListPackCardsFrame
   | PanelIntentFrame
   | MediaOfferFrame
   | MediaSetEnabledFrame
@@ -1105,6 +1133,7 @@ export type ServerFrame =
   | AudioStateFrame
   | NarrativeFrame
   | NarrativeDeltaFrame
+  | PackCardsFrame
   | DiceFrame
   | UiFrame
   | UiManifestFrame

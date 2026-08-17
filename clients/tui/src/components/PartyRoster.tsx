@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { useKeyboard } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
-import { stripControlChars, type CharacterState, type InitiativeEntry, type MediaRef, type PartyMember } from "loreweaver-protocol"
+import { stripControlChars, type CharacterState, type InitiativeEntry, type MediaRef, type PackCardEntry, type PartyMember, type PregenEntry } from "loreweaver-protocol"
 import type { AppClient } from "../client"
 import { tt } from "../i18n"
 import { getCachedMedia, renderHalfBlockPreview, type HalfBlockLine } from "../media"
@@ -24,6 +24,13 @@ export interface PartyRosterProps {
   focused: boolean
   onFocus: () => void
   initiativeFirst?: boolean
+  // v1.9: the module's claimable pregen cast (StateFrame.pregens). Absent/empty
+  // renders no section at all.
+  pregens?: PregenEntry[]
+  // v2.2: the card files installed packs ship (the `pack_cards` frame). Absent/empty
+  // renders no section at all. Click-only ON PURPOSE — Enter stays with the pregen
+  // claim above so a stray keypress can never fire an accidental `.import`.
+  packCards?: PackCardEntry[]
 }
 
 function keyName(event: KeyEvent): string {
@@ -77,9 +84,24 @@ export function PartyRoster({
   focused,
   onFocus,
   initiativeFirst = false,
+  pregens,
+  packCards,
 }: PartyRosterProps) {
   const [expanded, setExpanded] = useState(false)
   const [expandedMembers, setExpandedMembers] = useState<Set<string>>(() => new Set())
+
+  const unclaimedPregens = (pregens ?? []).filter((entry) => !entry.claimed_by)
+  const claimPregen = (name: string) => {
+    // Same wire path as typing `.pc claim <name>` by hand — the server owns all
+    // validation (already claimed, no such pregen) and replies in the chat log.
+    client?.sendInput(`.pc claim ${name}`)
+  }
+
+  const importPackCard = (ref: string) => {
+    // Same wire path as typing `.import <ref> pc` by hand — the server owns all
+    // validation (bad ref, duplicate character) and replies in the chat log.
+    client?.sendInput(`.import ${ref} pc`)
+  }
 
   const toggle = () => {
     if (!character) return
@@ -102,6 +124,13 @@ export function PartyRoster({
     if (keyName(event) !== "return") return
     if (character) {
       setExpanded((value) => !value)
+      return
+    }
+    // No own character yet: claiming a pregen IS this player's next action, so an
+    // unclaimed entry takes Enter before a party-member detail toggle.
+    const firstUnclaimed = unclaimedPregens[0]
+    if (firstUnclaimed) {
+      claimPregen(firstUnclaimed.name)
       return
     }
     const expandableMember = party.find((member) => partyVitals(member, theme).length > 0)
@@ -191,6 +220,38 @@ export function PartyRoster({
           </box>
         )
       })}
+
+      {pregens && pregens.length > 0 ? (
+        <box flexDirection="column">
+          <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "party.pregens")}</text>
+          {pregens.map((entry) =>
+            entry.claimed_by ? (
+              <text key={entry.name} fg={theme.dim} wrapMode="none" truncate>
+                {"✓ "}{stripControlChars(entry.name)} · {tt(locale, "party.pregenClaimed", { who: stripControlChars(entry.claimed_by) })}
+              </text>
+            ) : (
+              <box key={entry.name} flexDirection="row" onMouseDown={() => claimPregen(entry.name)}>
+                <text fg={theme.player} wrapMode="none" truncate>
+                  {"▸ "}{stripControlChars(entry.name)}
+                </text>
+              </box>
+            ),
+          )}
+        </box>
+      ) : null}
+
+      {packCards && packCards.length > 0 ? (
+        <box flexDirection="column">
+          <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "party.packCards")}</text>
+          {packCards.map((entry) => (
+            <box key={entry.ref} flexDirection="row" onMouseDown={() => importPackCard(entry.ref)}>
+              <text fg={theme.player} wrapMode="none" truncate>
+                {"▸ "}{stripControlChars(entry.name)} · {stripControlChars(entry.pack)}
+              </text>
+            </box>
+          ))}
+        </box>
+      ) : null}
 
       {initiativeFirst ? null : initiativeRows}
     </box>

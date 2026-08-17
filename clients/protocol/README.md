@@ -3,7 +3,7 @@
 Typed frames and a reconnecting WebSocket client for the open, versioned wire
 protocol of [Loreweaver](https://github.com/1A7432/loreweaver) — a self-hosted
 AI Game Master / Keeper for tabletop RPGs. The package version tracks the
-protocol version (currently **v2.1**); the protocol document itself lives at
+protocol version (currently **v2.2**); the protocol document itself lives at
 [`docs/protocol.md`](https://github.com/1A7432/loreweaver/blob/main/docs/protocol.md).
 
 ## Install

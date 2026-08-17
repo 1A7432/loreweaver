@@ -96,6 +96,32 @@ def _total(text: str) -> int:
     return int(re.findall(r"-?\d+", text)[-1])
 
 
+async def test_list_pack_cards_answers_a_player_with_installed_refs(tmp_path):
+    """v2.2: the structured lane behind "import from installed pack" pickers —
+    player-open, filenames only."""
+    data_dir = tmp_path / "data"
+    cards_dir = data_dir / "packs" / "harbour@1.0.0" / "cards"
+    cards_dir.mkdir(parents=True)
+    (cards_dir / "pilot.json").write_text(json.dumps({"name": "Pilot"}), encoding="utf-8")
+
+    services = build_services(
+        Settings(locale="en", data_dir=str(data_dir)), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64)
+    )
+    keystore = Keystore()
+    key = keystore.add(room="packs", name="Momo", role="player")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        ws, *_ = await _connect_and_join(url, key, "Momo")
+        await ws.send(json.dumps({"type": "list_pack_cards"}))
+        frame = await _recv_until(ws, "pack_cards")
+        assert frame["cards"] == [
+            {"ref": "harbour/cards/pilot.json", "pack": "harbour", "name": "pilot"}
+        ]
+    finally:
+        await server.close()
+
+
 async def test_join_with_good_key_gets_welcome_and_bad_key_gets_error():
     services = _services()
     keystore = Keystore()

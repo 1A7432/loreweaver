@@ -1,6 +1,6 @@
 *English · [中文](protocol.zh.md)*
 
-# loreweaver networked TUI — wire protocol 2.1
+# loreweaver networked TUI — wire protocol 2.2
 
 This is the open, versioned wire protocol between a loreweaver server (started via
 `python -m app --serve`) and the OpenTUI terminal client. The engine itself
@@ -102,12 +102,18 @@ connections receive `error too_many_connections` before `join` is read.
   `.r <value>` as that player, so the real dice engine validates the expression.
   `value` is capped at 2000 chars (`error input_too_long`):
   `{type:"panel_intent", panel:string, kind:"choice"|"input"|"roll", value:string}`
+- `list_pack_cards` (v2.2) — ask for the card files installed packs ship, the
+  structured lane behind an "import from installed pack" picker. Player-open:
+  the reply carries FILENAMES only (the operator's install banner already
+  printed them), never card content; the world/companion import verbs keep
+  their keeper gates regardless of how a ref was discovered:
+  `{type:"list_pack_cards"}`
 - `ping`: `{type:"ping", t:number}`
 
 ## Server → Client
 
 - `welcome` — sent once, on a successful `join`:
-  `{type:"welcome", protocol:"2.1", features:["media","audio", "imagegen"?, "demo"?, "update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
+  `{type:"welcome", protocol:"2.2", features:["media","audio", "imagegen"?, "demo"?, "update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
   `version` is the server's own release version (compare it to the client's to detect a mismatch). The `"update"` feature appears only for a keeper on a server whose operator configured a self-update command, and gates the `admin_update_server` control.
   `demo` means the server is using its offline sample Keeper, vector support is
   enabled, and this specific Keeper room was empty when the server checked it.
@@ -248,6 +254,11 @@ connections receive `error too_many_connections` before `join` is read.
   `context_tokens`/`context_window` describe the MOST RECENT turn's context fullness;
   `input_tokens`/`output_tokens`/`cache_hit_tokens`/`cache_miss_tokens` are summed across
   every turn in the room's session so far.
+- `pack_cards` (v2.2) — the unicast answer to `list_pack_cards`: every installed
+  pack's card files. `ref` is exactly what `.import <ref> pc` accepts; `pack` and
+  `name` (the filename stem) are for display. `cards` is empty — not absent — when
+  no installed pack ships card files:
+  `{type:"pack_cards", cards:[{ref:string, pack:string, name:string}]}`
 - `presence` — the connected-player roster, sent on join/leave:
   `{type:"presence", players:[{id,name,online}], online:int}`
 - `system` — an out-of-band notice: `{type:"system", level:"info"|"warn", text:string, spinner?:boolean}`

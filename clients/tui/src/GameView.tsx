@@ -9,6 +9,7 @@ import {
   type MediaFrame,
   type MediaPayload,
   type MediaUpload,
+  type PackCardEntry,
   type PresenceFrame,
   type ServerFrame,
   type StateFrame,
@@ -44,6 +45,9 @@ export interface GameClient {
   getMedia(hash: string): Promise<MediaPayload>
   setAvatar(hash: string): void
   close?(code?: number, reason?: string): void
+  // v2.2, optional so a minimal mock still mounts: asks which card files installed
+  // packs ship; the unicast `pack_cards` reply feeds the sidebar import picker.
+  listPackCards?(): void
 }
 
 export interface GameViewProps {
@@ -181,6 +185,9 @@ export function GameView({
   // v1.8 module-panel manifest: this viewer's complete panel list, full-replace
   // semantics (an empty frame legitimately clears every panel).
   const [panelManifest, setPanelManifest] = useState<UiManifestPanel[]>([])
+  // v2.2: the card files installed packs ship (the unicast `pack_cards` reply);
+  // empty hides the sidebar import picker entirely.
+  const [packCards, setPackCards] = useState<PackCardEntry[]>([])
   const [command, setCommand] = useState("")
   const [inputError, setInputError] = useState<string>()
   const [history, setHistory] = useState<string[]>([])
@@ -210,6 +217,9 @@ export function GameView({
   const showSidebar = !narrow || narrowSidebarOpen
   const inputState = inputLimitState(command)
   const hasChoices = lastChoicesFrameIndex(frames) !== -1
+  // The roster is a Tab stop when it has something Enter can act on: an own
+  // character to expand/collapse, or (v1.9) an unclaimed pregen to claim.
+  const rosterFocusable = Boolean(stateFrame.character) || (stateFrame.pregens ?? []).some((entry) => !entry.claimed_by)
   const roomBusy = turnStatus?.status === "busy"
   const workingLabel = roomBusy
     ? tt(locale, "log.workingFor", { actor: stripControlChars(turnStatus.actor) })
@@ -275,6 +285,11 @@ export function GameView({
         setPanelManifest(frame.panels)
         return
       }
+      if (frame.type === FrameType.PackCards) {
+        // v2.2: the unicast answer to the mount-time `listPackCards()` request below.
+        setPackCards(frame.cards)
+        return
+      }
       if (
         frame.type === FrameType.Narrative ||
         frame.type === FrameType.Dice ||
@@ -319,6 +334,12 @@ export function GameView({
       }
     })
   }, [client, diceTimeline])
+
+  // v2.2: ask once, after mount, which card files installed packs ship — the
+  // `pack_cards` reply lands through the `onMessage` subscription above.
+  useEffect(() => {
+    client.listPackCards?.()
+  }, [client])
 
   const submit = (value?: string) => {
     const raw = String(value ?? command)
@@ -500,18 +521,18 @@ export function GameView({
     if (selectedMedia && (name === "o" || name === "O")) void openSelectedMedia(true)
     if (viewerLines && (name === "escape" || name === "q" || name === "return" || name === "enter")) setViewerLines(undefined)
     // Tab cycles focus: chat input -> the latest inline choices select (when a
-    // v1.7 ui choices block is live) -> the roster (only when the sidebar shows
-    // an own character to expand/collapse) -> back to the input, so focus can
-    // never get stranded off the input if a stop disappears mid-session.
+    // v1.7 ui choices block is live) -> the roster (only when it is actionable —
+    // see `rosterFocusable`) -> back to the input, so focus can never get
+    // stranded off the input if a stop disappears mid-session.
     if (name === "tab") {
       if (choicesFocused) {
         setChoicesFocused(false)
-        if (showSidebar && stateFrame.character) setRosterFocused(true)
+        if (showSidebar && rosterFocusable) setRosterFocused(true)
       } else if (rosterFocused) {
         setRosterFocused(false)
       } else if (hasChoices) {
         setChoicesFocused(true)
-      } else if (showSidebar && stateFrame.character) {
+      } else if (showSidebar && rosterFocusable) {
         setRosterFocused(true)
       }
     }
@@ -572,6 +593,8 @@ export function GameView({
                 character={stateFrame.character}
                 party={stateFrame.party}
                 initiative={stateFrame.initiative}
+                pregens={stateFrame.pregens}
+                packCards={packCards}
                 theme={theme}
                 locale={locale}
                 client={client}
