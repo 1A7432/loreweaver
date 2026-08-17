@@ -274,6 +274,7 @@ def test_a_family_needle_never_swallows_a_sibling_with_a_different_window():
     not, so a shorter needle placed earlier would quietly answer for the longer one.
     """
     assert context_window_for("kimi-k2.7-code") == 256_000, "k2.x is 256K; only k3 is 1M"
+    assert context_window_for("grok-4.6") == 500_000, "4.6/4.5 are 500K while 4.3/4.20 are 1M"
     assert context_window_for("grok-4.5") == 500_000, "4.5 is 500K while 4.3/4.20 are 1M"
     assert context_window_for("grok-4.3") == 1_000_000
     assert context_window_for("claude-haiku-4-5") == 200_000, "Haiku stayed at 200K"

@@ -642,7 +642,7 @@ async def test_admin_set_model_replaces_provider_scoped_credentials():
     assert switched["provider"] == "supergrok"
     assert await services.runtime_config.get() == {
         "provider": "supergrok",
-        "chat_model": "grok-4.3",
+        "chat_model": "grok-4.6",
         "api_key": "",
         "base_url": "",
     }

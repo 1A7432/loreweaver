@@ -407,7 +407,8 @@ _CONTEXT_WINDOWS: tuple[tuple[str, int], ...] = (
     ("gpt-4.1", 128_000),
     ("o1", 128_000),
     ("o3", 128_000),
-    # xAI — docs.x.ai: 4.5 is 500K while 4.3 and 4.20 are 1M; not one family window.
+    # xAI — docs.x.ai: 4.6 and 4.5 are 500K while 4.3 and 4.20 are 1M; not one family window.
+    ("grok-4.6", 500_000),
     ("grok-4.5", 500_000),
     ("grok-4.3", 1_000_000),
     ("grok-4.20", 1_000_000),
@@ -440,10 +441,10 @@ def context_window_for(model: str, override: int = 0) -> int:
     model the room used to run.
 
     Matching is case-insensitive substring, LONGEST NEEDLE FIRST. Longest-first is not a
-    tidiness preference: `kimi-k3` (1M) and `kimi-k2` (256K), `grok-4.5` (500K) and
-    `grok-4.3` (1M), `claude-haiku` (200K) and `claude` (1M) all share a prefix with a
-    sibling that has a different window, and a first-match-in-tuple-order rule would make
-    the file's line order load-bearing for correctness.
+    tidiness preference: `kimi-k3` (1M) and `kimi-k2` (256K), `grok-4.6`/`grok-4.5`
+    (500K) and `grok-4.3` (1M), `claude-haiku` (200K) and `claude` (1M) all share a
+    prefix with a sibling that has a different window, and a first-match-in-tuple-order
+    rule would make the file's line order load-bearing for correctness.
     """
     if override > 0:
         return override

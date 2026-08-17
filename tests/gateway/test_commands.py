@@ -389,7 +389,7 @@ async def test_model_set_supergrok_clears_previous_provider_credentials():
     assert reply is not None and "supergrok" in reply
     assert await services.runtime_config.get() == {
         "provider": "supergrok",
-        "chat_model": "grok-4.3",
+        "chat_model": "grok-4.6",
         "api_key": "",
         "base_url": "",
     }
