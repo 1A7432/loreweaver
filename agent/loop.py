@@ -556,6 +556,7 @@ async def run_kp_turn(
                 i18n,
                 turn_usage,
                 temperature=services.settings.llm.temperature,
+                gate=gate,
             )
         except asyncio.CancelledError:
             _clear_llm_continuation(services, messages)
@@ -778,6 +779,7 @@ async def _run_max_rounds_finalizer(
     turn_usage: Usage,
     *,
     temperature: float | None,
+    gate: _ReplyStreamGate | None = None,
 ) -> str | None:
     """Narrate committed public results once, with tools disabled.
 
@@ -785,6 +787,11 @@ async def _run_max_rounds_finalizer(
     role=tool messages removed. Its only result block is rebuilt from
     non-keeper-only trace entries, so hidden tool output cannot enter this
     closing call or its deterministic fallback.
+
+    This call PRODUCES the player-visible reply on every tool-heavy turn, so it
+    streams through the same `gate` as an ordinary final round — without it, the
+    turns that take the longest are exactly the ones the player watches arrive
+    as one late block.
     """
     convo = [
         # Tools are disabled for this one call, which on Anthropic invalidates every
@@ -798,6 +805,8 @@ async def _run_max_rounds_finalizer(
             ),
         },
     ]
+    if gate is not None:
+        gate.begin_round()
     try:
         result = await _chat_with_continuation_cleanup(
             services,
@@ -805,6 +814,7 @@ async def _run_max_rounds_finalizer(
             tools=[],
             tool_choice="none",
             temperature=temperature,
+            on_text_delta=gate.feed if gate is not None else None,
         )
     except asyncio.CancelledError:
         # `_chat_with_continuation_cleanup` already retired `convo`.
@@ -812,10 +822,14 @@ async def _run_max_rounds_finalizer(
     except Exception:
         logger.warning("max-rounds finalizer failed", exc_info=True)
         _clear_llm_continuation(services, convo)
+        if gate is not None:
+            gate.finish_round(discard=True)
         return None
 
     _clear_llm_continuation(services, convo)
     _accumulate_usage(turn_usage, result)
+    if gate is not None:
+        gate.finish_round(discard=False)
     return result.content.strip() if result.content and result.content.strip() else None
 
 

@@ -279,6 +279,20 @@ async def test_openaillm_omits_tools_and_tool_choice_when_not_supplied(fake_asyn
     assert "tool_choice" not in kwargs
 
 
+async def test_openaillm_drops_tool_choice_when_tools_are_empty(fake_async_openai):
+    """Regression: xAI 400s on a request carrying tool_choice with no tools — the exact
+    shape the max-rounds finalizer sends (`tools=[]`, `tool_choice="none"`), which made
+    every finalizer call on that provider fail into the deterministic fallback."""
+    llm = OpenAILLM(LLMSettings(api_key="sk-test"))
+    llm._client.create.return_value = _fake_response(content="ok")
+
+    await llm.chat([{"role": "user", "content": "hi"}], tools=[], tool_choice="none")
+
+    kwargs = llm._client.create.call_args.kwargs
+    assert "tools" not in kwargs
+    assert "tool_choice" not in kwargs
+
+
 # ---------------------------------------------------------------------------
 # OpenAILLM — the STREAMING path and its token accounting
 #

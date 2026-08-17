@@ -51,6 +51,31 @@ async def test_gate_holds_an_unclosed_suspicious_tail_at_round_end():
     assert streamed == "正文安全部分。"
 
 
+async def test_max_rounds_finalizer_streams_its_reply(tmp_path):
+    """The finalizer produces the player-visible reply on every tool-heavy turn, so it
+    must stream through the gate like an ordinary final round — those are exactly the
+    turns a player otherwise watches arrive minutes later as one block."""
+    final_text = "线索汇拢：刮痕来自船底，而钟声在涨潮时最响。今晚的港口不会安静。"
+    script = [
+        *[assistant_tools(tool_call("roll_dice", expression="1d100")) for _ in range(12)],
+        assistant_text(final_text),  # consumed by the finalizer, not a loop round
+    ]
+    services = build_services(Settings(locale="zh"), llm=FakeLLM(script=script), embeddings=FakeEmbeddings(16))
+    ctx = AgentCtx(chat_key="finalizer-stream-room", user_id="p1", locale="zh")
+    frames: list[dict] = []
+
+    async def emit(frame: dict) -> None:
+        frames.append(frame)
+
+    result = await run_kp_turn(ctx, services, build_kp_toolset(services), "我调查港口。", on_reply_delta=emit)
+
+    assert result.reply == final_text
+    assert frames, "the finalizer reply must stream deltas"
+    final_epoch = max(frame["epoch"] for frame in frames)
+    reconstructed = "".join(frame["text"] for frame in frames if frame["epoch"] == final_epoch)
+    assert reconstructed == final_text
+
+
 async def test_run_kp_turn_streams_final_round_and_discards_tool_round_draft(tmp_path):
     script = [
         assistant_tools(tool_call("roll_dice", expression="1d100")),

@@ -164,7 +164,10 @@ class OpenAILLM:
         }
         if tools:
             kwargs["tools"] = tools
-        if tool_choice is not None:
+        # Only meaningful alongside tools. Sent without them, xAI (and other strict
+        # OpenAI-compatible endpoints) reject the whole request with a 400 — which
+        # silently broke every tools-disabled call (the max-rounds finalizer) there.
+        if tool_choice is not None and tools:
             kwargs["tool_choice"] = tool_choice
         if self._settings.reasoning_effort:
             # Reasoning models (deepseek-v4-pro, o-series) take a thinking budget and
