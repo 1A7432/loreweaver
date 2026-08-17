@@ -429,7 +429,7 @@ Enabled UI panels from pack: xipu-songdeng
 `ui/presentation.yaml`，在 `contents.presentation` 里声明，一个包一份：
 
 ```yaml
-version: 1
+version: 2
 generation: allow            # 或者 pack_only——你的否决权，见下
 style:
   keywords:
@@ -531,14 +531,14 @@ $ uv run python -m app --install ./xipu-songdeng-1.0.0.lwpack --yes
    …
 Installed xipu-songdeng@1.0.0.
    skills: yingchao-zhuchi — a keeper enables one in-room with .skill enable <id>
-   rulepacks: chaozhan, coc7-xipu — discoverable right away (switch systems with the usual rule commands)
+   rulepacks: chaozhan, coc7-xipu — discoverable. They do not become the room's system by themselves: create a character on that system (the pack must declare a make_char word) or name the system on import.
    cards/lorebooks/assets: 2/1/9 file(s) under <data_dir>/packs/xipu-songdeng@1.0.0 — import in-room with .import <file> / .module
 World cards (keeper-imported via `.import <file> world`): cards/shipu.lorecard.json, cards/chaomai-st.json
 ```
 
 不加 `--yes` 就会打印信任卡并要求确认，非交互运行必须显式给这个参数。安装是在写任何东西**之前**校验的：每个内容文件用真解析器重新解析一遍，每个素材的字节要和清单里的 sha256 对上，压缩包里不许有未声明的成员，条目名会检查路径穿越，符号链接直接拒绝，数量和大小都有硬上限。信任块会用同一套检测器从压缩包里重新推导，对不上就拒绝。
 
-**装上不等于启用。** 技能和规则包会变成可发现的，但房间还要自己点头（`.skill enable`、`.panels enable`、`.import … world`）。这层分离就是整个信任模型：一个包带的东西，不会因为它落到了磁盘上就开始跑。
+**装上不等于启用。** 技能和规则包会变成可发现的，但房间还要自己点头（`.skill enable`、`.panels enable`、`.import … world`）。规则包不会因为装上就变成本房间的规则系统——要在该系统上建卡（包需声明 `make_char` 命令），或在导入时指定系统。这层分离就是整个信任模型：一个包带的东西，不会因为它落到了磁盘上就开始跑。
 
 ### 发布
 

@@ -672,7 +672,9 @@ so this costs nothing until an author asks for it.
   by `infra/pack_source.py`. There is deliberately no central package registry.
 - **Install ≠ enable** (the existing layering): skills land in the user skill
   dir and rulepacks in the user rulepack dir — discoverable immediately, but a
-  room still opts in via `.skill enable <id>` / the usual rule commands. Cards,
+  room still opts in via `.skill enable <id>`. A rulepack is discoverable but
+  does not become the room's system; create a character on that system (the
+  pack must declare a `make_char` word) or name the system on import. Cards,
   lorebooks and assets land under `data_dir/packs/<id>@<version>/` for the
   existing in-room import flows (`.import`, `.module`) to consume; re-installing
   the same `id@version` replaces that pack dir wholesale, never merges.

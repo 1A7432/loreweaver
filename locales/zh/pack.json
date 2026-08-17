@@ -21,7 +21,7 @@
   "pack.install.failed": "安装失败(未做任何更改):{error}",
   "pack.install.need_yes": "当前不是交互终端:请改用 --yes 重新运行以确认安装。",
   "pack.install.packdir": "   角色卡/世界书/素材:{cards}/{lorebooks}/{assets} 个文件,位于 {path} —— 房间内用 .import <文件> / .module 导入",
-  "pack.install.rulepacks": "   规则包:{ids} —— 已可被发现使用(用常规规则命令切换系统)",
+  "pack.install.rulepacks": "   规则包:{ids} —— 已可被发现。不会自动成为本房间的规则系统：要在该系统上建卡（包需声明 make_char 命令），或在导入时指定系统。",
   "pack.install.presets": "   预设：{ids}——已可见（.preset list）；守秘人用 .preset enable <id> 在房间内启用",
   "pack.install.prep": "   准备脚本：{names}——准备阶段在房间内用 run_prep_plan(script_ref=\"<包id>/<路径>\") 运行",
   "pack.install.shadowed": "   注意:「{id}」与内置同名;内置版本始终优先(想用包内版本请改名)。",

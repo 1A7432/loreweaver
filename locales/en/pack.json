@@ -21,7 +21,7 @@
   "pack.install.failed": "Install failed (nothing was changed): {error}",
   "pack.install.need_yes": "Not an interactive terminal: re-run with --yes to confirm installing this pack.",
   "pack.install.packdir": "   cards/lorebooks/assets: {cards}/{lorebooks}/{assets} file(s) under {path} — import in-room with .import <file> / .module",
-  "pack.install.rulepacks": "   rulepacks: {ids} — discoverable right away (switch systems with the usual rule commands)",
+  "pack.install.rulepacks": "   rulepacks: {ids} — discoverable. They do not become the room's system by themselves: create a character on that system (the pack must declare a make_char word) or name the system on import.",
   "pack.install.presets": "   presets: {ids} — listed right away (.preset list); a keeper folds one in with .preset enable <id>",
   "pack.install.prep": "   prep scripts: {names} — run in-room with run_prep_plan(script_ref=\"<packId>/<path>\") during prep",
   "pack.install.shadowed": "   note: '{id}' shares a built-in id; the built-in keeps winning (rename the packed one to use it).",

@@ -496,7 +496,7 @@ this file. It cannot leak what it never receives.
 `ui/presentation.yaml`, declared as `contents.presentation`, one per pack:
 
 ```yaml
-version: 1
+version: 2
 generation: allow            # or `pack_only` — your veto, see below
 style:
   keywords:
@@ -618,7 +618,7 @@ $ uv run python -m app --install ./xipu-songdeng-1.0.0.lwpack --yes
    contains: 1 skill(s), 2 rulepack(s), 2 card(s), 1 lorebook(s), 4 UI panel(s), 9 asset(s) (0.3 MB) · hooks code: yes · EJS templates: no
 Installed xipu-songdeng@1.0.0.
    skills: yingchao-zhuchi — a keeper enables one in-room with .skill enable <id>
-   rulepacks: chaozhan, coc7-xipu — discoverable right away (switch systems with the usual rule commands)
+   rulepacks: chaozhan, coc7-xipu — discoverable. They do not become the room's system by themselves: create a character on that system (the pack must declare a make_char word) or name the system on import.
    cards/lorebooks/assets: 2/1/9 file(s) under <data_dir>/packs/xipu-songdeng@1.0.0 — import in-room with .import <file> / .module
 World cards (keeper-imported via `.import <file> world`): cards/shipu.lorecard.json, cards/chaomai-st.json
 ```
@@ -631,7 +631,9 @@ sizes are hard-capped. The trust block is re-derived from the archive with the s
 mismatch is refused.
 
 **Install is not enable.** Skills and rulepacks become discoverable; a room still opts in
-(`.skill enable`, `.panels enable`, `.import … world`). That layering is the whole trust model:
+(`.skill enable`, `.panels enable`, `.import … world`). A rulepack does not become the
+room's system on install — create a character on that system (the pack must declare a
+`make_char` word) or name the system on import. That layering is the whole trust model:
 nothing a pack ships starts running because it arrived on disk.
 
 ### Publish
