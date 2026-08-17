@@ -116,6 +116,8 @@
   "commands.help.report": "导出团报以便保存和回顾。",
   "commands.help.reset": "原地重开战役。`.reset` 只清剧情；`.reset chars` 连角色一起换；`.reset all` 全部清空。之后 `.reset confirm`。",
   "commands.help.result": "命令：{commands}",
+  "commands.help.keeper_section": "守秘人：{commands}",
+  "commands.help.player_hint": "主持桌子的命令在守秘人那边。",
   "commands.help.roll": "掷骰表达式。",
   "commands.help.room": "开启、连接或离开跨平台共享房间。",
   "commands.help.rule": ".rule [<变体>|0] — 查看或设置本房间的房规阶梯",

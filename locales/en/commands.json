@@ -116,6 +116,8 @@
   "commands.help.report": "Export the session report to keep and review.",
   "commands.help.reset": "Restart the campaign in place. `.reset` clears the story only; `.reset chars` also rolls new characters; `.reset all` erases everything. Then `.reset confirm`.",
   "commands.help.result": "Commands: {commands}",
+  "commands.help.keeper_section": "Keeper: {commands}",
+  "commands.help.player_hint": "The keeper has more commands for running the table.",
   "commands.help.roll": "Roll a dice expression.",
   "commands.help.room": "Open, link, or leave a shared cross-platform room.",
   "commands.help.rule": ".rule [<variant>|0] — view or set the room's house-rule ladder",

@@ -257,6 +257,11 @@ class CommandSpec:
     # `Member.deliver`), falling back to the normal broadcast only when there is no
     # `origin` member (e.g. a non-hub transport).
     private_reply: bool = False
+    # Operator surfaces that `.help` hides from players (dev rooms, model, reset,
+    # variable curation, …). `required_level > 0` is treated the same way. A
+    # player still sees verbs they can usefully type (rolls, claim, recap);
+    # a keeper sees that list plus a second "Keeper:" line.
+    keeper_help: bool = False
 
 
 @dataclass
@@ -1593,11 +1598,23 @@ class CommandRouter:
             await ctx.router.hub.publish(ctx.chat_key, Event.audio(frame))
 
     async def cmd_help(self, ctx: CommandCtx) -> str:
-        names = []
+        prefix = ctx.router.prefixes[0]
+        player_names: list[str] = []
+        keeper_names: list[str] = []
         for spec in self._specs:
             aliases = spec.aliases_zh if _is_zh(ctx.locale) else spec.aliases_en
-            names.append(f"{ctx.router.prefixes[0]}{aliases[0]}")
-        return ctx.i18n.t("commands.help.result", commands=", ".join(names))
+            name = f"{prefix}{aliases[0]}"
+            if spec.keeper_help or spec.required_level:
+                keeper_names.append(name)
+            else:
+                player_names.append(name)
+        lines = [ctx.i18n.t("commands.help.result", commands=", ".join(player_names))]
+        if _is_keeper(ctx.raw_ctx):
+            if keeper_names:
+                lines.append(ctx.i18n.t("commands.help.keeper_section", commands=", ".join(keeper_names)))
+        else:
+            lines.append(ctx.i18n.t("commands.help.player_hint"))
+        return "\n".join(lines)
 
     async def cmd_bind(self, ctx: CommandCtx) -> str:
         """Consume a one-time keeper token in a bot private chat."""
@@ -2791,6 +2808,7 @@ class CommandRouter:
                 ["language"],
                 {"name": "language"},
                 "commands.help.language",
+                keeper_help=True,
             ),
             CommandSpec(
                 "bind",
@@ -2800,6 +2818,7 @@ class CommandRouter:
                 None,
                 "commands.help.bind",
                 private_reply=True,
+                keeper_help=True,
             ),
             CommandSpec(
                 "unbind",
@@ -2809,6 +2828,7 @@ class CommandRouter:
                 None,
                 "commands.help.unbind",
                 private_reply=True,
+                keeper_help=True,
             ),
             CommandSpec("init", self.cmd_initiative, ["init", "initiative", "ri"], ["ri", "init"], {"name": "init"}, "commands.help.init"),
             CommandSpec(
@@ -2819,16 +2839,16 @@ class CommandRouter:
                 None,
                 "charcard.commands.genchar.help",
             ),
-            CommandSpec("rule", self.cmd_rule, ["rule"], ["rule", "规则"], {"name": "rule"}, "commands.help.rule"),
+            CommandSpec("rule", self.cmd_rule, ["rule"], ["rule", "规则"], {"name": "rule"}, "commands.help.rule", keeper_help=True),
             CommandSpec("rename", self.cmd_rename, ["rename", "nn"], ["nn"], None, "commands.help.rename"),
             CommandSpec("jrrp", self.cmd_jrrp, ["jrrp", "luck"], ["jrrp"], None, "commands.help.jrrp"),
             CommandSpec("draw", self.cmd_draw, ["draw"], ["draw", "抽牌"], None, "commands.help.draw"),
-            CommandSpec("bot", self.cmd_bot_toggle, ["bot"], ["bot"], None, "commands.help.bot"),
+            CommandSpec("bot", self.cmd_bot_toggle, ["bot"], ["bot"], None, "commands.help.bot", keeper_help=True),
             CommandSpec("skill", self.cmd_skill, ["skill"], ["skill"], None, "commands.help.skill"),
             CommandSpec("phase", self.cmd_phase, ["phase"], ["phase", "阶段", "階段"], None, "commands.help.phase"),
-            CommandSpec("dev", self.cmd_dev, ["dev"], ["dev"], None, "commands.help.dev"),
-            CommandSpec("undo", self.cmd_undo, ["undo"], ["undo", "撤销", "撤銷"], None, "commands.help.undo"),
-            CommandSpec("save", self.cmd_save, ["save"], ["save", "存档", "存檔"], None, "commands.help.save"),
+            CommandSpec("dev", self.cmd_dev, ["dev"], ["dev"], None, "commands.help.dev", keeper_help=True),
+            CommandSpec("undo", self.cmd_undo, ["undo"], ["undo", "撤销", "撤銷"], None, "commands.help.undo", keeper_help=True),
+            CommandSpec("save", self.cmd_save, ["save"], ["save", "存档", "存檔"], None, "commands.help.save", keeper_help=True),
             CommandSpec(
                 "habits",
                 self.cmd_habits,
@@ -2839,6 +2859,7 @@ class CommandRouter:
                 # Every line judges the PLAYERS ("they lose patience with long combats") —
                 # broadcast would hand the table the notes written about it. Unicast only.
                 private_reply=True,
+                keeper_help=True,
             ),
             CommandSpec("panels", self.cmd_panels, ["panels"], ["panels", "模组面板"], None, "commands.help.panels"),
             CommandSpec("avatar", self.cmd_avatar, ["avatar"], ["avatar", "头像"], None, "commands.help.avatar"),
@@ -2914,6 +2935,7 @@ class CommandRouter:
                 "commands.help.chronicle",
                 # Replies can carry keeper annotations (list/summary) — unicast only.
                 private_reply=True,
+                keeper_help=True,
             ),
             CommandSpec(
                 "party",
@@ -2934,6 +2956,7 @@ class CommandRouter:
                 # lore (see `cmd_lore`'s `_keeper` gate); a keeper's reply must not be
                 # broadcast to the whole room.
                 private_reply=True,
+                keeper_help=True,
             ),
             CommandSpec(
                 "import",
@@ -2953,6 +2976,7 @@ class CommandRouter:
                 # Keeper-only curation of the imported variable tree's player visibility;
                 # `list` prints the hidden remainder, so replies stay on the caller.
                 private_reply=True,
+                keeper_help=True,
             ),
             CommandSpec(
                 "pc",
@@ -2972,6 +2996,7 @@ class CommandRouter:
                 # `import` echoes server-side paths and parse errors; keep replies off
                 # the room bus.
                 private_reply=True,
+                keeper_help=True,
             ),
             CommandSpec(
                 "module",
@@ -2993,6 +3018,7 @@ class CommandRouter:
                 ["room", "房间", "房間"],
                 None,
                 "commands.help.room",
+                keeper_help=True,
             ),
             CommandSpec(
                 "reset",
@@ -3001,6 +3027,7 @@ class CommandRouter:
                 ["reset", "重置", "重开", "重開"],
                 None,
                 "commands.help.reset",
+                keeper_help=True,
             ),
             CommandSpec(
                 "model",
@@ -3012,8 +3039,19 @@ class CommandRouter:
                 # `.model key` echoes a masked API key; `.model show`/`set`/`reset` also
                 # surface provider/base_url/key config. None of that belongs on the room bus.
                 private_reply=True,
+                keeper_help=True,
             ),
-            CommandSpec("help", self.cmd_help, ["help", "h"], ["help", "帮助"], {"name": "help"}, "commands.help.help"),
+            CommandSpec(
+                "help",
+                self.cmd_help,
+                ["help", "h"],
+                ["help", "帮助"],
+                {"name": "help"},
+                "commands.help.help",
+                # Player and keeper lists differ; broadcasting a keeper's list
+                # would undo the split.
+                private_reply=True,
+            ),
         ]
 
     def _build_alias_map(self, locale: str) -> dict[str, CommandSpec]:
