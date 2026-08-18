@@ -1574,15 +1574,23 @@ def installed_pack_dir(data_dir: Path | str, pack_id: str) -> Path | None:
     return dirs[0] if dirs else None
 
 
-def installed_pack_sole_rulepack(data_dir: Path | str, path: Path | str) -> str | None:
-    """When ``path`` sits inside an installed ``data_dir/packs/<id>@<version>/`` whose
-    manifest declares exactly ONE rulepack, return that rulepack's system id (the YAML
-    stem — the id discovery installs it under).
+def installed_pack_character_system(data_dir: Path | str, path: Path | str) -> str | None:
+    """The rule system a card that sits inside an installed ``data_dir/packs/<id>@<ver>/``
+    means its characters to be built on — or None when the pack does not say.
 
-    The world-import system pin (owner verdict, 2026-08-17): a module that ships one
-    rule system means its cast to be built on that system. Two or more rulepacks is an
-    ambiguity this refuses to guess about; zero means nothing to pin. Never raises —
-    a missing/unreadable manifest is just "no pin"."""
+    The world-import system pin (owner verdict, 2026-08-17): a module that ships ONE
+    rulepack means its cast to be built on that system. Extended 2026-08-18 for a pack
+    that ships several: the ones that declare a make-character word OF THEIR OWN
+    (`core.rulepacks.own_make_char_word`) are the character systems, and when exactly
+    one does, that is the pack's character system — a bundled subsystem-only patch (a
+    hazard table, a wager mechanic) beside the module's real system is not an ambiguity,
+    it is the common shape. Zero or several such candidates is an ambiguity this still
+    refuses to guess about; zero rulepacks means nothing to pin; a shipped rulepack that
+    discovery cannot load makes the whole pack undecidable (a dead id is never handed
+    back, and the rest cannot be judged without it). Never raises — a missing/unreadable
+    manifest is just "no pin"."""
+    from core.rulepacks import load_rulepack, own_make_char_word
+
     try:
         resolved = Path(path).resolve()
         packs_root = (Path(data_dir) / "packs").resolve()
@@ -1601,9 +1609,24 @@ def installed_pack_sole_rulepack(data_dir: Path | str, path: Path | str) -> str 
         raw = safe_load_no_aliases(manifest_path.read_text(encoding="utf-8"))
         contents = raw.get("contents") if isinstance(raw, dict) else None
         rulepacks = contents.get("rulepacks") if isinstance(contents, dict) else None
-        if not isinstance(rulepacks, list) or len(rulepacks) != 1:
+        if not isinstance(rulepacks, list) or not rulepacks:
             return None
-        return Path(str(rulepacks[0])).stem or None
+        stems = [Path(str(entry)).stem for entry in rulepacks if Path(str(entry)).stem]
+        packs: list[Any] = []
+        for stem in stems:
+            try:
+                packs.append(load_rulepack(stem))
+            except Exception:
+                # Shipped but not discoverable. A sole rulepack that is dead pins nothing;
+                # among several, one that cannot be read cannot be judged — and guessing
+                # from the rest is exactly the ambiguity this refuses.
+                return None
+        if len(packs) == 1:
+            return str(packs[0].system)
+        creators = [pack for pack in packs if own_make_char_word(pack) is not None]
+        if len(creators) == 1:
+            return str(creators[0].system)
+        return None
     except Exception:
         return None
 

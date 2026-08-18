@@ -161,8 +161,9 @@ class CharcardTools:
 
         Args:
             file_path: The sandbox/logical path to the card (PNG or JSON), resolved via ctx.fs.
-            system: Target rules system for the generated sheet; the room's active rule system is
-                used when omitted.
+            system: Target rules system for the generated sheet; when omitted, the character
+                system of the installed pack the card ships in (if it has one), else the room's
+                active rule system.
             as_: "pc" to make it the acting player's character, or "companion" for an AI party member.
             name: Optional name override (defaults to the card's name).
 
@@ -170,9 +171,23 @@ class CharcardTools:
             A localized summary: name, system, key stats, and how many lore entries were imported.
         """
         i18n = self._i18n(ctx)
+        # No system named: a card that lives in an installed pack with a character
+        # system of its own is built on THAT (the author shipped the card for it — a
+        # module's pregen imported before the keeper's world import must not land as
+        # the room's default), else the room's active system.
+        pack_system = ""
         if not system.strip():
-            pack = await room_rulepack(self._services, ctx)
-            system = pack.system
+            try:
+                from core.pack import installed_pack_character_system
+
+                pack_system = (
+                    installed_pack_character_system(self._services.settings.data_dir, Path(ctx.fs.get_file(file_path)))
+                    if ctx.fs is not None
+                    else ""
+                ) or ""
+            except Exception:
+                pack_system = ""
+            system = pack_system or (await room_rulepack(self._services, ctx)).system
         if ctx.fs is None:
             return i18n.t("charcard.tools.import.no_fs")
         try:
@@ -313,30 +328,27 @@ class CharcardTools:
             if not host_path.exists():
                 return i18n.t("charcard.tools.import.no_file", path=file_path)
 
-            # System pin (owner verdict 2026-08-17): an explicit `system` argument wins
-            # outright. Otherwise, a card imported FROM an installed pack that ships
-            # exactly one rulepack pins that system for the room — the module's cast is
-            # built on the system its author shipped, and later `.genchar`/make_char
-            # follow it via `room_rulepack`. Anything else keeps today's fallback.
-            # `pin_system` is only DECIDED here; the room_state write happens at the
-            # END of the import, so a corrupt card that fails to parse cannot leave
-            # the room retargeted onto a module that never landed.
+            # System pin (owner verdict 2026-08-17, widened 2026-08-18): an explicit
+            # `system` argument wins outright. Otherwise, a card imported FROM an
+            # installed pack that has a CHARACTER system — its sole rulepack, or among
+            # several the one that declares a make-character word of its own
+            # (`core.pack.installed_pack_character_system`) — pins that system for the
+            # room: the module's cast is built on the system its author shipped, and
+            # later `.genchar`/make_char/click-imports follow it via `room_rulepack`.
+            # Anything else keeps today's fallback. `pin_system` is only DECIDED here;
+            # the room_state write happens at the END of the import, so a corrupt card
+            # that fails to parse cannot leave the room retargeted onto a module that
+            # never landed.
             pinned_line = ""
             pin_system = ""
             if not system.strip():
-                from core.pack import installed_pack_sole_rulepack
-                from core.rulepacks import load_rulepack as _load_rulepack
+                from core.pack import installed_pack_character_system
 
-                sole = installed_pack_sole_rulepack(self._services.settings.data_dir, host_path)
-                if sole:
-                    try:
-                        _load_rulepack(sole)
-                    except Exception:
-                        sole = None  # shipped but not discoverable — never pin a dead id
-                if sole:
-                    system = sole
-                    pin_system = sole
-                    pinned_line = i18n.t("charcard.tools.world.system_pinned", system=sole)
+                pack_system = installed_pack_character_system(self._services.settings.data_dir, host_path)
+                if pack_system:
+                    system = pack_system
+                    pin_system = pack_system
+                    pinned_line = i18n.t("charcard.tools.world.system_pinned", system=pack_system)
                 else:
                     pack = await room_rulepack(self._services, ctx)
                     system = pack.system

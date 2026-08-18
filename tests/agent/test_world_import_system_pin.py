@@ -25,6 +25,9 @@ from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM
 
 RULEPACK_YAML = "names: [harbour-tides]\ndefaults:\n  力量: 40\n  潮汐学: 25\n"
+# A second bundled system: the module's REAL character system, the one that declares a
+# make-character word of its own — beside it `harbour-tides` reads as a subsystem patch.
+CREATOR_YAML = "names: [harbour-crew]\ndefaults:\n  力量: 40\ncommands:\n  crew: {action: make_char}\n"
 
 CARD = {
     "name": "Harbour Pilot",
@@ -39,6 +42,10 @@ def user_rulepack_dir(tmp_path):
     directory = tmp_path / "user-rulepacks"
     directory.mkdir()
     (directory / "harbour-tides.yaml").write_text(RULEPACK_YAML, encoding="utf-8")
+    (directory / "harbour-crew.yaml").write_text(CREATOR_YAML, encoding="utf-8")
+    (directory / "harbour-crew-too.yaml").write_text(
+        CREATOR_YAML.replace("harbour-crew", "harbour-crew-too").replace("crew:", "crewtoo:"), encoding="utf-8"
+    )
     rulepacks_module._USER_RULEPACK_DIR = directory
     rulepacks_module._discover_registry.cache_clear()
     rulepacks_module._alias_resolver.cache_clear()
@@ -101,6 +108,7 @@ async def test_sole_rulepack_pack_pins_the_room_system(tmp_path, user_rulepack_d
 
 
 async def test_two_bundled_rulepacks_do_not_pin(tmp_path, user_rulepack_dir):
+    """Two declared, one of them not discoverable: undecidable — no pin."""
     services = _services(tmp_path)
     card_path = _install_world_card(
         tmp_path / "data", rulepacks=["rulepacks/harbour-tides.yaml", "rulepacks/other.yaml"]
@@ -110,6 +118,54 @@ async def test_two_bundled_rulepacks_do_not_pin(tmp_path, user_rulepack_dir):
     await CharcardTools(services).import_world_card(ctx, file_path=card_path)
 
     assert await services.store.state_get("ambiguous-room", "room_system") is None
+
+
+async def test_among_several_rulepacks_the_one_that_creates_characters_is_the_pin(tmp_path, user_rulepack_dir):
+    """Owner suggestion 2026-08-18: a module commonly ships its real system beside a
+    subsystem-only patch (a hazard table, a wager mechanic). When exactly one bundled
+    rulepack declares a make-character word of its own, that is the pack's character
+    system — pinned on world import, so `.genchar` and every click-import land on it."""
+    services = _services(tmp_path)
+    card_path = _install_world_card(
+        tmp_path / "data", rulepacks=["rulepacks/harbour-tides.yaml", "rulepacks/harbour-crew.yaml"]
+    )
+    ctx = _keeper_ctx(tmp_path, "crew-room")
+
+    reply = await CharcardTools(services).import_world_card(ctx, file_path=card_path)
+
+    assert "harbour-crew" in reply
+    assert await services.store.state_get("crew-room", "room_system") == "harbour-crew"
+    assert (await room_rulepack(services, ctx)).system == "harbour-crew"
+
+
+async def test_two_character_systems_in_one_pack_stay_ambiguous(tmp_path, user_rulepack_dir):
+    services = _services(tmp_path)
+    card_path = _install_world_card(
+        tmp_path / "data", rulepacks=["rulepacks/harbour-crew.yaml", "rulepacks/harbour-crew-too.yaml"]
+    )
+    ctx = _keeper_ctx(tmp_path, "two-crews-room")
+
+    await CharcardTools(services).import_world_card(ctx, file_path=card_path)
+
+    assert await services.store.state_get("two-crews-room", "room_system") is None
+
+
+async def test_a_pack_s_character_card_imports_into_the_pack_s_character_system(tmp_path, user_rulepack_dir):
+    """The click path (`.import <ref> pc`, no system named): a card that ships in a pack
+    with a character system is built on THAT — even before any world import pinned the
+    room — rather than on whatever the room happened to be running."""
+    services = _services(tmp_path)
+    card_path = _install_world_card(
+        tmp_path / "data", rulepacks=["rulepacks/harbour-tides.yaml", "rulepacks/harbour-crew.yaml"]
+    )
+    ctx = _keeper_ctx(tmp_path, "click-room")
+
+    await CharcardTools(services).import_character(ctx, file_path=card_path, as_="pc")
+
+    sheet = await services.characters.get_character(ctx.user_id, ctx.chat_key)
+    assert sheet.system == "harbour-crew"
+    # …and it did NOT pin the room: that stays the keeper's world import's job.
+    assert await services.store.state_get("click-room", "room_system") is None
 
 
 async def test_explicit_system_argument_wins_and_does_not_pin(tmp_path, user_rulepack_dir):

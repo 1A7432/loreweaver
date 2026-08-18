@@ -848,6 +848,25 @@ def all_command_words() -> frozenset[str]:
     return frozenset(words)
 
 
+def own_make_char_word(pack: RulePack) -> str | None:
+    """The word that creates a character IN `pack` — one that dispatch routes back to it.
+
+    An `extends:` pack inherits its base's whole `commands:` table, base words first
+    (`_merge_extends`), and `pack_declaring_command` gives an inherited word to the BASE
+    pack — so `.coc` on a `coc7-antu` row would create a plain CoC7 sheet. Only a word of
+    the pack's own is its entry point; a patch that declares none has no way to create
+    in it, and this says so with None rather than the base's word. Declaration order,
+    so a pack that declares several words picks its own primary.
+    """
+    for word, binding in pack.commands.items():
+        if binding.action != "make_char":
+            continue
+        maker = pack_declaring_command(word, "make_char")
+        if maker is not None and maker.system == pack.system:
+            return word
+    return None
+
+
 def pack_declaring_command(word: str, action: str) -> RulePack | None:
     """The discovered pack whose ``commands:`` table binds `word` to `action`.
 

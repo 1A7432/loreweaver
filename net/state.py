@@ -97,14 +97,12 @@ def _rule_systems() -> list[dict[str, str]]:
     carries no word to create with. Both lookups are cached in `core.rulepacks`, so
     rebuilding this on every state snapshot costs a dict walk.
 
-    The word advertised is one that ROUTES BACK to this pack. An `extends:` pack inherits
-    its base's whole `commands:` table (base first, then its own — `_merge_extends`), and
-    dispatch (`pack_declaring_command`) gives an inherited word to the base pack, so
-    `.coc` on a `coc7-antu` row would create a plain CoC7 sheet. Only the pack's own word
-    (`antu`) is its entry point; a patch that declares none has no way to create in it,
-    and says so by carrying no `make_char` rather than the base's.
+    The word advertised is one that ROUTES BACK to this pack (`own_make_char_word`): an
+    `extends:` pack inherits its base's words and dispatch gives those to the base, so
+    only the pack's own word (`antu` for `coc7-antu`) is its entry point; a patch that
+    declares none carries no `make_char` rather than the base's.
     """
-    from core.rulepacks import available_systems, load_rulepack, pack_declaring_command
+    from core.rulepacks import available_systems, load_rulepack, own_make_char_word
 
     entries: list[dict[str, str]] = []
     for system in available_systems():
@@ -113,14 +111,9 @@ def _rule_systems() -> list[dict[str, str]]:
         except Exception:
             continue  # a pack that will not load cannot be offered; the doctor reports it
         entry = {"id": pack.system}
-        # Declaration order, so a pack that declares several words picks its own primary.
-        for word, binding in pack.commands.items():
-            if binding.action != "make_char":
-                continue
-            maker = pack_declaring_command(word, "make_char")
-            if maker is not None and maker.system == pack.system:
-                entry["make_char"] = word
-                break
+        word = own_make_char_word(pack)
+        if word is not None:
+            entry["make_char"] = word
         entries.append(entry)
     return entries
 
