@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import errno
 import json
 import os
 import signal
@@ -204,6 +205,35 @@ async def _run_cli(runner: GatewayRunner, *, exec_cmd: str | None, script: str |
         await runner.stop()
 
 
+class _StdinFailure:
+    """A stdin read that failed for a reason that is NOT the end of input.
+
+    The reader runs off the event loop, so an exception there has no way back to
+    `--cli`'s exit code on its own. Swallowing it made a mid-stream decode error
+    (a piped transcript with one bad byte) look exactly like EOF: the remaining
+    lines silently never ran and the process exited 0. The failure travels the same
+    queue as the lines so it surfaces in ORDER — after everything read before it —
+    and is re-raised on the loop side, where the traceback and the non-zero exit
+    are what they were before the reader moved into a thread.
+    """
+
+    __slots__ = ("error",)
+
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+
+
+# Errno values that mean "the other end of stdin went away", i.e. a clean end of
+# input. `BrokenPipeError` is already one of these; a bare `OSError` arrives with
+# these numbers when the descriptor is closed under the reader.
+_STDIN_CLEAN_END_ERRNOS = frozenset({errno.EBADF, errno.EPIPE, errno.ESHUTDOWN})
+
+# How many unconsumed stdin lines may sit in front of the turn loop. Small on
+# purpose: the bound IS the backpressure that keeps a 200k-line piped transcript
+# from being read into memory ahead of the per-line consumer.
+_STDIN_QUEUE_MAX = 64
+
+
 async def _stdin_lines() -> AsyncIterator[str]:
     """Yield interactive stdin lines WITHOUT blocking the event loop.
 
@@ -218,24 +248,39 @@ async def _stdin_lines() -> AsyncIterator[str]:
     The reader is a DAEMON thread rather than `asyncio.to_thread`: a worker blocked
     in `readline` when the operator hits Ctrl-C would be joined at interpreter exit,
     hanging the process until the next Enter. A daemon thread is simply abandoned.
+
+    Moving the read off the loop must not change what the CLI does with input,
+    so two properties are held explicitly. Only a genuine end of input — a closed
+    pipe — ends the stream quietly; every other read error is re-raised here
+    (`_StdinFailure`) instead of being mistaken for EOF. And the hand-off queue is
+    BOUNDED, with the reader blocking on a full queue, so a piped file is read at
+    the speed the turn loop consumes it rather than all at once.
     """
     loop = asyncio.get_running_loop()
-    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    queue: asyncio.Queue[str | _StdinFailure | None] = asyncio.Queue(maxsize=_STDIN_QUEUE_MAX)
 
-    def _post(item: str | None) -> bool:
+    def _post(item: str | _StdinFailure | None) -> bool:
+        """Hand one item to the loop, BLOCKING this thread while the queue is full."""
         try:
-            loop.call_soon_threadsafe(queue.put_nowait, item)
-        except RuntimeError:
-            return False  # loop already closed — the CLI is shutting down
+            asyncio.run_coroutine_threadsafe(queue.put(item), loop).result()
+        except (RuntimeError, asyncio.CancelledError):
+            return False  # loop closed or shutting down — the CLI is going away
         return True
+
+    def _clean_end(error: BaseException) -> bool:
+        if isinstance(error, BrokenPipeError | EOFError):
+            return True
+        return isinstance(error, OSError) and error.errno in _STDIN_CLEAN_END_ERRNOS
 
     def _pump() -> None:
         try:
             for raw in sys.stdin:
                 if not _post(raw):
                     return
-        except Exception:  # noqa: BLE001 — a broken pipe ends input, it does not crash the CLI
-            pass
+        except BaseException as error:  # noqa: BLE001 — classified below, never swallowed
+            if not _clean_end(error):
+                _post(_StdinFailure(error))
+                return
         _post(None)
 
     threading.Thread(target=_pump, name="cli-stdin", daemon=True).start()
@@ -243,6 +288,8 @@ async def _stdin_lines() -> AsyncIterator[str]:
         item = await queue.get()
         if item is None:
             return
+        if isinstance(item, _StdinFailure):
+            raise item.error
         yield item
 
 
