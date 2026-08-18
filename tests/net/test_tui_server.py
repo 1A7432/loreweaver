@@ -1012,7 +1012,12 @@ async def test_build_room_state_reports_character_party_and_clock():
     assert state["clock"]["time"] == "Night 1, 22:00"
 
 
-async def test_build_room_state_filters_party_to_active_character_system():
+async def test_a_party_member_on_another_system_keeps_their_seat_and_loses_their_meters():
+    """Mixed-system rooms are real: a pack rulepack that declares its own `system:`
+    resolves to a different canonical id than the base it extends, so one PC built on
+    the module's system and one on the base landed in the same room and could not see
+    each other. Vitals are pack-shaped and genuinely cannot render across systems —
+    that is what gets dropped, not the person."""
     services = _services()
     ctx = _room_ctx("mixed-system-state", user_id="dnd-player")
     coc = services.characters.generate_character("coc7", "Nora Vance")
@@ -1023,7 +1028,10 @@ async def test_build_room_state_filters_party_to_active_character_system():
     state = await build_room_state(services, ctx)
 
     assert state["character"]["system"] == "dnd5e"
-    assert [member["name"] for member in state["party"]] == ["Kael Thorn"]
+    party = {member["name"]: member for member in state["party"]}
+    assert set(party) == {"Nora Vance", "Kael Thorn"}
+    assert party["Kael Thorn"].get("resources"), "the viewer's own system still renders meters"
+    assert "resources" not in party["Nora Vance"], "a foreign system's meters never render"
     roster = await services.characters.get_party_roster(ctx.chat_key)
     assert {member["name"] for member in roster} == {"Nora Vance", "Kael Thorn"}
 

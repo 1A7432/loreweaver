@@ -148,8 +148,15 @@ async def _party(
     label_maps: dict[str, dict[str, str]] = {}
     members: list[dict[str, Any]] = []
     for member in roster:
-        if canonical_active is not None and _canonical_system(member.get("system", "")) != canonical_active:
-            continue
+        # A roster entry built on a DIFFERENT rule system keeps its seat and loses its
+        # meters. The vitals are pack-shaped, so rendering a d20 character's bars beside
+        # a CoC sheet's would be nonsense — but dropping the whole person answered that
+        # by breaking what the roster is FOR. A keeper on the module's own system and a
+        # player on the base system could not see each other at the same table.
+        foreign_system = (
+            canonical_active is not None
+            and _canonical_system(member.get("system", "")) != canonical_active
+        )
         payload = {
             "name": member.get("name", ""),
             "online": True,
@@ -160,12 +167,13 @@ async def _party(
         avatar = member.get("avatar")
         if isinstance(avatar, dict):
             payload["avatar"] = avatar
-        system = str(member.get("system", "") or "")
-        if system not in label_maps:
-            label_maps[system] = resource_label_map(system, locale)
-        resources = _party_member_resources(member, label_maps[system])
-        if resources:
-            payload["resources"] = resources
+        if not foreign_system:
+            system = str(member.get("system", "") or "")
+            if system not in label_maps:
+                label_maps[system] = resource_label_map(system, locale)
+            resources = _party_member_resources(member, label_maps[system])
+            if resources:
+                payload["resources"] = resources
         members.append(payload)
     return members
 
