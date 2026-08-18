@@ -21,10 +21,10 @@ from gateway.rooms import (
     set_keeper_binding,
 )
 from gateway.session import SessionSource
-from infra.config import LLMSettings, Settings
+from infra.config import ImageGenSettings, LLMSettings, Settings
 from infra.embeddings import FakeEmbeddings
-from infra.llm_retry import unwrap_llm
 from infra.llm import FakeLLM, assistant_text
+from infra.llm_retry import unwrap_llm
 from infra.providers import MutableLLM
 from infra.runtime_config import CREDENTIALS_KEY, DEFAULT_KEY
 
@@ -35,8 +35,9 @@ def _services():
 
 def _baseline_settings() -> Settings:
     """A hermetic baseline (explicit init wins over any local `.env`) so the
-    `.model` tests assert against known provider/model values."""
-    return Settings(llm=LLMSettings(provider="openai", chat_model="gpt-4o"))
+    `.model` tests assert against known provider/model values — the imagegen block
+    included, or a developer's TRPG_IMAGEGEN__* leaks into "not enabled" assertions."""
+    return Settings(llm=LLMSettings(provider="openai", chat_model="gpt-4o"), imagegen=ImageGenSettings())
 
 
 def _baseline_services():
