@@ -96,6 +96,14 @@ _TRAILING_NUMBER_RE = re.compile(r"^(.+?)(\d{1,3})$")
 # lazy prefix) makes parsing strictly linear, so no argument can trigger the
 # quadratic backtracking the old `(.+?)(value)` pattern suffered.
 _SHEET_VALUE_RE = re.compile(r"[+-]?(?:\d+d\d+(?:[+\-*/]\d+)?|\d+)", re.I)
+# The EXPLICIT `.st NAME=VALUE` / `NAME+=VALUE` / `NAME-=VALUE` form. The operator is
+# glued to the value half, so this scan is anchored the same way `_SHEET_VALUE_RE` is
+# (no unbounded lazy name prefix) and stays strictly linear. The attribute NAME is
+# whatever precedes the operator, so it may hold digits, spaces or CJK.
+_SHEET_ASSIGN_RE = re.compile(rf"(\+=|-=|=)\s*({_SHEET_VALUE_RE.pattern})", re.I)
+# Assignment operators -> how `_apply_value_expr` folds the value into the current one.
+_SHEET_OPS = {"=": "set", "+=": "add", "-=": "sub"}
+_SHEET_SIGN_OPS = {"+": "add", "-": "sub"}
 _EXPLODE_BANG_RE = re.compile(r"(\d*d(\d+))!", re.I)
 
 _SLASH_NAME_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
@@ -672,13 +680,13 @@ class CommandRouter:
         changed = []
         changed_names = []
         explicit_values: list[tuple[str, int]] = []
-        for raw_name, raw_value in assignments:
+        for raw_name, op, raw_value in assignments:
             canonical = pack.resolve_skill(raw_name) or raw_name.strip()
             current = sheet_value(character, pack, canonical)
             # A malformed value expression (bad int, or an over-large dice term like
             # `力量+9999d6` that trips d20's roll cap) must not crash the turn.
             try:
-                value = _apply_value_expr(ctx.services, current, raw_value)
+                value = _apply_value_expr(ctx.services, current, op, raw_value)
             except ValueError:
                 return ctx.i18n.t("commands.roll.invalid", expr=raw_value)
             set_sheet_value(character, pack, canonical, value)
@@ -3529,37 +3537,78 @@ def _migrate_legacy_luck(character: CharacterSheet, pack: RulePack) -> None:
         character.skills.pop(key, None)
 
 
-def _parse_sheet_assignments(text: str) -> list[tuple[str, str]]:
-    """Parse ``.st`` NAME+VALUE assignments (e.g. ``STR16 DEX14`` / ``力量50，敏捷60``).
+def _clean_assignment_name(raw: str) -> str:
+    """Trim the whitespace and `,`/`，` separators around a parsed attribute name."""
+    return raw.strip().strip(",，").strip()
 
-    Scanning for the VALUE half (`_SHEET_VALUE_RE`) and taking the text that precedes
-    each value as the attribute name is strictly LINEAR: the previous ``(.+?)(value)``
-    pattern backtracked quadratically, so a ~20k-char argument stalled the event loop
-    for seconds. The name is everything since the prior value, so both glued
-    (``STR16``) and space-separated (``STR 16``) forms still parse.
+
+def _parse_sheet_assignments(text: str) -> list[tuple[str, str, str]]:
+    """Parse ``.st`` assignments into ``(name, op, value)`` triples, ``op`` in set/add/sub.
+
+    Two forms; one command uses one form, never a mix:
+
+    * EXPLICIT — ``STR=16``, ``HP+=1d6``, ``HP-=4``. ``=`` assigns ABSOLUTELY, so the
+      sign belongs to the number (``mod=-3`` stores minus three) and ``+=``/``-=`` are
+      the spelled-out relative forms. The name is everything left of the operator, so
+      it may hold digits, spaces or CJK (``skill2=30``, ``spot hidden=70``).
+    * LEGACY — ``STR16 DEX14``, ``力量50，敏捷60``, ``HP-4``. A bare leading ``+``/``-``
+      on the value reads as relative, which leaves no spelling for an absolute negative
+      and mis-splits a digit-bearing name (``skill2 30`` -> ``skill``/``2``). That is
+      why the explicit form exists: clients build ``.st <wire-key> <n>`` out of whatever
+      storage keys a pack declares.
+
+    The explicit form wins whenever the argument holds one valid ``NAME<op>VALUE``;
+    otherwise the legacy scan runs, unchanged.
+
+    Both scans anchor on the VALUE half (`_SHEET_VALUE_RE`, with the operator glued in
+    front for the explicit form) and take the text that precedes it as the name, which
+    is strictly LINEAR: the original ``(.+?)(value)`` pattern backtracked quadratically,
+    so a ~20k-char argument stalled the event loop for seconds. The name is everything
+    since the prior value, so glued (``STR16``), spaced (``STR 16``) and multi-word
+    (``spot hidden=70``) forms all parse without splitting a name.
     """
-    assignments = []
+    explicit = _SHEET_ASSIGN_RE.search(text) is not None
+    assignments: list[tuple[str, str, str]] = []
     last = 0
-    for match in _SHEET_VALUE_RE.finditer(text):
-        name = text[last : match.start()].strip(" ,，")
-        value = match.group(0).strip()
-        if name and value:
-            assignments.append((name, value))
+    for match in (_SHEET_ASSIGN_RE if explicit else _SHEET_VALUE_RE).finditer(text):
+        name = _clean_assignment_name(text[last : match.start()])
         last = match.end()
+        if explicit:
+            op = _SHEET_OPS[match.group(1)]
+            value = match.group(2).strip()
+            # `x==5` / `a=b=5`: a name holding an operator is a garbled command, not a
+            # skill called `x=`. Refuse the whole thing (the caller answers bad_args).
+            if "=" in name:
+                return []
+        else:
+            raw = match.group(0).strip()
+            sign = raw[0] if raw[:1] in _SHEET_SIGN_OPS else ""
+            op = _SHEET_SIGN_OPS.get(sign, "set")
+            value = raw[len(sign) :]
+        if name and value:
+            assignments.append((name, op, value))
+    # A mix of the two forms (`STR=16 DEX14`) used to apply the explicit half and drop
+    # the glued one without a word. Anything left after the last explicit assignment is
+    # exactly that dropped half — refuse the whole command instead of half-doing it.
+    if explicit and _clean_assignment_name(text[last:]):
+        return []
     return assignments
 
 
-def _apply_value_expr(services: Services, current: int, raw_value: str) -> int:
-    text = raw_value.strip()
-    sign = text[0] if text[:1] in {"+", "-"} else ""
-    expression = text[1:] if sign else text
+def _apply_value_expr(services: Services, current: int, op: str, raw_value: str) -> int:
+    """Fold a parsed assignment value into the current one: set / add / sub."""
+    expression = raw_value.strip()
+    sign = expression[0] if expression[:1] in {"+", "-"} else ""
+    expression = expression[len(sign) :]
     if "d" in expression.casefold():
         rolled = services.dice.roll_expression(expression).total
     else:
         rolled = int(expression)
-    if sign == "+":
-        return current + rolled
     if sign == "-":
+        rolled = -rolled
+    if op == "add":
+        return current + rolled
+    if op == "sub":
         return current - rolled
     return rolled
 

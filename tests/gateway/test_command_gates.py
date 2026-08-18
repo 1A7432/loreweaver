@@ -21,7 +21,10 @@ import pytest
 
 from agent.context import AgentCtx
 from agent.services import build_services
+from core.character_manager import CharacterSheet
 from core.dice_engine import seed_dice
+from core.rulepacks import load_rulepack
+from core.sheets import sheet_value
 from gateway.commands import CommandRouter, _parse_sheet_assignments
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
@@ -420,9 +423,77 @@ def test_parse_sheet_assignments_is_linear_on_pathological_input():
 
 
 def test_parse_sheet_assignments_still_parses_valid_glued_pairs():
-    assert _parse_sheet_assignments("STR16 DEX14") == [("STR", "16"), ("DEX", "14")]
-    assert _parse_sheet_assignments("力量50，敏捷60") == [("力量", "50"), ("敏捷", "60")]
-    assert _parse_sheet_assignments("HP-4") == [("HP", "-4")]
+    assert _parse_sheet_assignments("STR16 DEX14") == [("STR", "set", "16"), ("DEX", "set", "14")]
+    assert _parse_sheet_assignments("力量50，敏捷60") == [("力量", "set", "50"), ("敏捷", "set", "60")]
+    assert _parse_sheet_assignments("HP-4") == [("HP", "sub", "4")]
+
+
+# ---------------------------------------------------------------------------
+# The explicit `.st NAME=VALUE` assignment form — the legacy scan has no syntax
+# for an absolute negative and mis-splits a digit-bearing attribute name, both
+# of which clients now reach by building `.st <wire-key> <n>` from pack keys.
+# ---------------------------------------------------------------------------
+
+
+def test_parse_sheet_assignments_explicit_form():
+    assert _parse_sheet_assignments("STR=16 DEX=14") == [("STR", "set", "16"), ("DEX", "set", "14")]
+    # A digit-bearing name survives: the legacy scan reads `skill2 30` as `skill`/`2`.
+    assert _parse_sheet_assignments("skill2=30") == [("skill2", "set", "30")]
+    # An ABSOLUTE negative — the whole point of the explicit form.
+    assert _parse_sheet_assignments("mod=-3") == [("mod", "set", "-3")]
+    assert _parse_sheet_assignments("HP-=4") == [("HP", "sub", "4")]
+    assert _parse_sheet_assignments("HP+=1d6") == [("HP", "add", "1d6")]
+    # A name may contain spaces: separators only split at a new `name<op>value` group.
+    assert _parse_sheet_assignments("spot hidden=70") == [("spot hidden", "set", "70")]
+    assert _parse_sheet_assignments("力量=60，敏捷=55") == [("力量", "set", "60"), ("敏捷", "set", "55")]
+
+
+def test_parse_sheet_assignments_explicit_form_is_linear_on_pathological_input():
+    # An `=` in the argument switches the scan to the explicit form; it must stay
+    # as linear as the legacy one on a long run of non-matching characters.
+    payload = "力" * 4000 + "=" + "力" * 4000
+    start = time.monotonic()
+    result = _parse_sheet_assignments(payload)
+    elapsed = time.monotonic() - start
+    assert result == []
+    assert elapsed < 1.0
+
+
+async def test_sheet_explicit_assignment_sets_absolutely_and_relatively(tmp_path):
+    settings = Settings(locale="en", data_dir=str(tmp_path))
+    services = build_services(settings, llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64))
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:st-explicit", user_id="u1", locale="en")
+    await router.dispatch(ctx, ".coc Investigator")
+
+    assert await router.dispatch(ctx, ".st 力量=60") is not None
+    character = await services.characters.get_character(ctx.user_id, ctx.chat_key)
+    assert character.attributes["STR"] == 60
+
+    assert await router.dispatch(ctx, ".st 力量-=5") is not None
+    character = await services.characters.get_character(ctx.user_id, ctx.chat_key)
+    assert character.attributes["STR"] == 55
+
+    assert await router.dispatch(ctx, ".st 力量+=5") is not None
+    character = await services.characters.get_character(ctx.user_id, ctx.chat_key)
+    assert character.attributes["STR"] == 60
+
+
+async def test_sheet_explicit_assignment_stores_an_absolute_negative(tmp_path):
+    settings = Settings(locale="en", data_dir=str(tmp_path))
+    services = build_services(settings, llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64))
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:st-negative", user_id="u1", locale="en")
+    await services.characters.save_character(ctx.user_id, ctx.chat_key, CharacterSheet("Fighter", "DnD5e"))
+
+    # A d20 ability modifier is legitimately negative; the legacy form could only
+    # ever subtract from the current value, never assign minus three.
+    reply = await router.dispatch(ctx, ".st 力量调整值=-3")
+
+    assert reply is not None
+    character = await services.characters.get_character(ctx.user_id, ctx.chat_key)
+    pack = load_rulepack("dnd5e")
+    assert sheet_value(character, pack, "力量调整值") == -3
 
 
 # ---------------------------------------------------------------------------
@@ -631,3 +702,14 @@ async def test_pc_roster_claim_is_player_open_but_foreign_release_is_keeper_only
     assert released == services.i18n.with_locale("en").t("pregen.commands.released", name="理")
     reclaim = await router.dispatch(p2, ".pc claim 理")
     assert reclaim == services.i18n.with_locale("en").t("pregen.commands.claimed", name="理", system="CoC")
+
+
+def test_parse_sheet_assignments_refuses_a_mix_of_forms_and_operator_names():
+    """`.st STR=16 DEX14` used to set STR and silently drop DEX. Half-doing a command is
+    worse than refusing it: the whole thing is refused (the caller answers bad_args)."""
+    assert _parse_sheet_assignments("STR=16 DEX14") == []
+    assert _parse_sheet_assignments("HP+=2 STR18") == []
+    assert _parse_sheet_assignments("x==5") == []
+    assert _parse_sheet_assignments("a=b=5") == []
+    # …while a trailing separator or whitespace is not a dropped half.
+    assert _parse_sheet_assignments("STR=16, ") == [("STR", "set", "16")]

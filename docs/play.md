@@ -98,13 +98,20 @@ system.
 **A failed check should move the story, not stop it.** If you are stuck after a failure, say what
 you try instead. Being pushed onto a worse plan is the game working, not the game breaking.
 
-**Your sheet.** `.st` shows it; `.st <skill><value>` edits it, if your Keeper allows edits:
+**Your sheet.** `.st` shows it; `.st <skill>=<value>` edits it, if your Keeper allows edits:
 
 ```
-.st STR60              attribute abbreviations work
+.st 力量=60             = assigns exactly that number
+.st HP-=4              -= subtracts, += adds
+.st mod=-3             = is the only way to write a negative value
+.st STR60              the older glued form still works
 .st spot hidden 70     so do spelled-out skill aliases
 .st 侦查70              and canonical names
 ```
+
+In the older form a leading `+`/`-` on the number means relative (`HP-4` takes four off), which is
+why an absolute negative needs the `=` form. One `.st` uses one form — don't mix `=` assignments and
+glued ones in the same command.
 
 Everything you write is validated against the rule system — the engine will refuse a number the
 system does not permit, whoever asked for it.
@@ -169,7 +176,7 @@ projection that keeps every other secret out of your client — keeper annotatio
 | `.ra hard <skill>` | a check at a raised difficulty |
 | `.rav <mine> <theirs>` | an opposed check — `.rav 侦查 隐匿` → `Opposed Spot Hidden roll 13 Success vs Stealth roll 94 Failure: left` |
 | `.st` | show your sheet |
-| `.st <skill><value>` | edit a stat (validated) |
+| `.st <skill>=<value>` | edit a stat (validated); the glued `.st <skill><value>` still works |
 | `.sc <success>/<failure>` | a sanity check, in systems that have one — `.sc 1/1d6` |
 | `.ri` | roll into the initiative order, or show it |
 | `.pc` | the module's pre-generated cast |

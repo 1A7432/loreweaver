@@ -123,7 +123,7 @@
   "commands.help.rule": ".rule [<变体>|0] — 查看或设置本房间的房规阶梯",
   "commands.help.save": "保存或读取整个房间的存档（守秘人）。",
   "commands.help.sfx": "播放一次性音效。",
-  "commands.help.sheet": "显示或编辑当前角色卡。",
+  "commands.help.sheet": "显示或编辑当前角色卡；.st <名称>=<数值> 改一项（也支持 += / -=）。",
   "commands.help.skill": "列出、启用或禁用本房间的 KP 技能。",
   "commands.help.unbind": "解除当前聊天身份的守秘人绑定。",
   "commands.help.undo": "把房间往回退一两个回合（守秘人）。",

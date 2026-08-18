@@ -123,7 +123,7 @@
   "commands.help.rule": ".rule [<variant>|0] — view or set the room's house-rule ladder",
   "commands.help.save": "Save or load a full-room checkpoint (keeper).",
   "commands.help.sfx": "Play a one-shot sound effect.",
-  "commands.help.sheet": "Show or edit the active sheet.",
+  "commands.help.sheet": "Show or edit the active sheet; .st <name>=<value> assigns one stat (also += / -=).",
   "commands.help.skill": "List, enable, or disable per-room KP skills.",
   "commands.help.unbind": "Remove this chat identity's keeper binding.",
   "commands.help.undo": "Rewind the room by a turn or two (keeper).",
