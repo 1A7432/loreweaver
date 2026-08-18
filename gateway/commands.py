@@ -60,7 +60,7 @@ from gateway.rooms import (
     set_binding,
     set_keeper_binding,
 )
-from gateway.turn import publish_state, undo_state_rewrite
+from gateway.turn import publish_state
 from infra.i18n import I18n, get_i18n
 from infra.imagegen import ImageGenError
 from infra.media_store import ALLOWED_AUDIO_MIMES, ALLOWED_IMAGE_MIMES, MediaError, MediaStore
@@ -1083,12 +1083,7 @@ class CommandRouter:
             from net.room_backup import reset_room_state
 
             await reset_room_state(ctx.services, ctx.chat_key, scope="story")
-        elif not await restore_room(
-            ctx.services,
-            ctx.chat_key,
-            target,
-            state_rewrite=undo_state_rewrite(ctx.services.store, ctx.chat_key, target),
-        ):
+        elif not await restore_room(ctx.services, ctx.chat_key, target):
             return ctx.i18n.t("commands.undo.unavailable", turns="-")
         await ctx.services.store.state_set(ctx.chat_key, CHRONICLE_TURN_KEY, str(target))
         # A restore rewinds EVERYONE, so a fresh state frame flagged reset=True goes out:

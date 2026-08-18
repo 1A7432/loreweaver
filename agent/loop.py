@@ -37,7 +37,15 @@ from agent.chronicle import (
     summary_through_turn,
 )
 from agent.context import AgentCtx
-from agent.history import DEFAULT_HISTORY_KEY, append_turn, load_chain, migrate_legacy_blob, trim_folded
+from agent.history import (
+    DEFAULT_HISTORY_KEY,
+    abandon_message,
+    append_message,
+    heal_dangling_leaf,
+    load_chain,
+    migrate_legacy_blob,
+    trim_folded,
+)
 from agent.hook_runtime import apply_hook_writes, load_room_hook_engine, record_hook_injections
 from agent.kp_tools_subsystems import dispatch_subsystem, room_rulepack, subsystem_schemas
 from agent.prompt_builder import build_system_prompt_parts
@@ -213,6 +221,10 @@ class KPTurnResult:
     # it further still. A record stamped ahead of the turn it summarises would let
     # `trim_folded` cut history no summary covers (M21).
     turn: int = 0
+    # The persisted history record of `reply` ("" when no turn was committed). The gateway
+    # stamps it on the live `narrative` it publishes (`Event.origin_id`), so a member's
+    # join replay can tell that live frame from the persisted line it just replayed.
+    reply_record_id: str = ""
     # Token/cache usage accumulated across this turn's main loop and, when
     # max_rounds is exhausted, its one tools-disabled finalizer. Provider-error
     # early returns stay all-zero; FakeLLM results without usage stay all-zero.
@@ -235,6 +247,7 @@ async def run_kp_turn(
     user_message: str,
     *,
     history_key: str | None = None,
+    user_record_id: str | None = None,
     max_rounds: int = 12,
     output_review: Callable[[str], str] | None = None,
     on_reply_delta: Callable[[dict], Awaitable[None]] | None = None,
@@ -323,6 +336,9 @@ async def run_kp_turn(
     # truncation point is the chronicle fold: what the rolling summary has absorbed
     # (`through_turn`) is exactly what history no longer needs to replay, and the fold's
     # own no-future watermark (M18's 4-turn lag) guarantees recent turns are never cut.
+    # Set right after the first assembly (below); read by every later rebuild.
+    own_user_record_id = ""
+
     async def _assemble_base(*, advance_timers: bool) -> list[dict]:
         """This turn's prompt prefix: stable head, replayed history, state, player line.
 
@@ -342,6 +358,16 @@ async def run_kp_turn(
         """
         parts = await build_system_prompt_parts(ctx, services, advance_timers=advance_timers)
         chain = await load_chain(services, ctx.chat_key, key)
+        # This turn's own player message is persisted the moment the first assembly is
+        # done (see below), so a REBUILD (the context-overflow recovery) reads it back
+        # off the chain — and appends `user_message` itself, as the first pass did. Cut
+        # the chain at the persisted copy: the rebuilt prefix is then the one the first
+        # pass built (nothing this turn appended after it — a companion's exchange —
+        # belongs in the prefix; those rounds ride behind `base_len`, where they were).
+        if own_user_record_id:
+            ids = [message.get("_lw_id") for message in chain]
+            if own_user_record_id in ids:
+                chain = chain[: ids.index(own_user_record_id)]
         chain = await trim_folded(
             services, ctx.chat_key, key, chain, await summary_through_turn(services, ctx.chat_key)
         )
@@ -366,6 +392,14 @@ async def run_kp_turn(
     # so a history message and a chronicle record made this turn carry the same index.
     # A recovery fold does NOT move it: it changes what is replayed, not what turn this is.
     turn_index = await chronicle_turn(services.store, ctx.chat_key) + 1
+    # A previous attempt at this very turn that crashed after persisting its player
+    # message (stamped this same index — the counter never advanced) left the path
+    # ending on it: abandon it now, so this turn chains after the last COMPLETED one.
+    # NOT from inside a companion sub-turn: that runs while the OUTER turn is in flight,
+    # whose player message is legitimately the leaf and carries this same stamp — a
+    # nested heal would throw the player's own line off the path.
+    if ctx.platform != "companion":
+        await heal_dangling_leaf(services, ctx.chat_key, key, turn=turn_index)
 
     # M23 WS3: what the hooks injected reaches the model from process memory, so it is
     # written down BEFORE assembly — otherwise the one segment of this prompt that no
@@ -376,6 +410,14 @@ async def run_kp_turn(
     # Mutated in place for the whole turn — `clear_continuation` owns provider state keyed
     # by this list's identity, so the recovery rebuild splices rather than rebinds.
     messages: list[dict] = await _assemble_base(advance_timers=True)
+    # The player's message is persisted NOW, the reply at the end: a nested turn run
+    # from inside this one (a companion's, via `gateway.director`) then appends its own
+    # exchange BETWEEN them on the path — the order the table saw. Written at the end
+    # together, the companion's line preceded the action that prompted it for anyone
+    # replaying, and every roll of this turn had no record to sit after until it closed.
+    own_user_record_id = await append_message(
+        services, ctx.chat_key, key, role="user", content=user_message, turn=turn_index, record_id=user_record_id
+    )
     # Where the prefix ends and this turn's tool chatter begins.
     base_len = len(messages)
     # The recovery retry is once per KP turn, full stop: a second overflow after a fold
@@ -491,6 +533,13 @@ async def run_kp_turn(
             _clear_llm_continuation(services, messages)
             if output_review is not None:
                 reply = output_review(reply)
+            # A failed turn commits nothing: the player message persisted at the start
+            # goes off the path again (it stays in the tree), as it did before it was
+            # ever written early. Whoever rejoins sees the last COMPLETED turn. (When a
+            # companion already spoke inside this turn the leaf has moved past the
+            # message — that exchange DID happen and stays; only then does the line stay
+            # with it, as its parent.)
+            await abandon_message(services, ctx.chat_key, key, own_user_record_id)
             return KPTurnResult(
                 reply=reply,
                 tool_trace=tool_trace,
@@ -608,7 +657,9 @@ async def run_kp_turn(
 
     if gate is not None:
         await gate.drain()
-    await append_turn(services, ctx.chat_key, key, user_message=user_message, reply=reply, turn=turn_index)
+    reply_record_id = await append_message(
+        services, ctx.chat_key, key, role="assistant", content=reply, turn=turn_index
+    )
     # M18: count the completed turn — chronicle entries stamp against this counter
     # and the fold's no-future watermark derives from it. Best-effort bookkeeping.
     await advance_chronicle_turn(services.store, ctx.chat_key)
@@ -623,6 +674,7 @@ async def run_kp_turn(
         tool_trace=tool_trace,
         rounds=rounds,
         turn=turn_index,
+        reply_record_id=reply_record_id,
         usage=turn_usage,
         ui_frames=hook_ui_frames,
         panel_events=_capped_panel_events(hook_panel_events, ctx.chat_key),

@@ -563,6 +563,21 @@ class Store:
         chain.reverse()
         return chain
 
+    async def history_record(self, room: str, key: str, record_id: str | None) -> dict[str, Any] | None:
+        """One history record by id (`None` if unknown) — a leaf's role and parent, cheaply."""
+        if not record_id:
+            return None
+        async with self._lock:
+            conn = self._ensure_conn()
+            row = conn.execute(
+                "SELECT id, parent_id, turn, role, content FROM chat_history WHERE room = ? AND key = ? AND id = ?",
+                (room, key, record_id),
+            ).fetchone()
+        if row is None:
+            return None
+        found_id, parent_id, turn, role, content = row
+        return {"id": found_id, "parent_id": parent_id, "turn": turn, "role": role, "content": content}
+
     async def history_delete_room(self, room: str) -> int:
         async with self._lock:
             conn = self._ensure_conn()

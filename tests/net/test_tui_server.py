@@ -20,7 +20,7 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 
 from agent.context import AgentCtx, LocalFs
-from agent.history import DEFAULT_HISTORY_KEY, append_turn
+from agent.history import DEFAULT_HISTORY_KEY, append_message, append_turn
 from agent.kp_tools import build_kp_toolset
 from agent.kp_tools_companion import CompanionTools
 from agent.services import build_services
@@ -1134,22 +1134,27 @@ async def test_join_replays_this_turn_s_rolls_and_npc_lines_in_order():
     url = await _start(server)
     try:
         chat_key = _room_ctx("event-replay-room").chat_key
-        await append_turn(
-            services,
-            chat_key,
-            DEFAULT_HISTORY_KEY,
-            user_message="I ask Martha what she heard",
-            reply="Martha's warning leaves the room quiet.",
-            turn=1,
+        # The write order of a live turn: the player line lands when the turn starts,
+        # each roll / NPC line is recorded the moment it happens (anchored to whatever
+        # message the transcript ends on), the reply lands when the turn closes.
+        await append_message(
+            services, chat_key, DEFAULT_HISTORY_KEY, role="user", content="I ask Martha what she heard", turn=1
         )
         await record_turn_events(
-            services.store,
+            services,
             chat_key,
-            1,
             [
                 Event.dice(actor="Ann", kind="check", expr="1d100", total=37),
                 Event.narrative(speaker="npc", name="Martha", text="I heard the gate.", fmt="markdown"),
             ],
+        )
+        await append_message(
+            services,
+            chat_key,
+            DEFAULT_HISTORY_KEY,
+            role="assistant",
+            content="Martha's warning leaves the room quiet.",
+            turn=1,
         )
 
         ws = await websockets.connect(url)
@@ -1172,12 +1177,12 @@ async def test_join_replays_this_turn_s_rolls_and_npc_lines_in_order():
         await server.close()
 
 
-async def test_join_replays_typed_rolls_after_the_turn_they_followed_and_before_the_next():
+async def test_join_replays_typed_rolls_where_they_happened_between_the_narrations():
     """The command branch's dice (`.ra`, `r 3d6`, `.sc`) — the most common rolls at a
     table — never entered the replay lane: only the AI-Keeper branch recorded, so a
-    rejoin kept the prose and lost every typed roll. They are recorded `after` the
-    last completed turn and replay right after that turn's reply, before the next.
-    Rolls typed before any turn at all sit at the very top."""
+    rejoin kept the prose and lost every typed roll. Every public event is anchored to
+    the message the transcript ended on when it happened, so a typed roll replays right
+    after the reply it followed — and one made before the first turn sits at the top."""
     from gateway.hub import Event
     from gateway.turn import record_turn_events
 
@@ -1188,23 +1193,17 @@ async def test_join_replays_typed_rolls_after_the_turn_they_followed_and_before_
     url = await _start(server)
     try:
         chat_key = _room_ctx("after-replay-room").chat_key
-        # A roll before the first AI turn (turn 0, after).
-        await record_turn_events(
-            services.store, chat_key, 0, [Event.dice(actor="Ann", kind="roll", expr="1d20", total=3)], after=True
-        )
-        await append_turn(services, chat_key, DEFAULT_HISTORY_KEY, user_message="I look", reply="Fog.", turn=1)
-        await record_turn_events(
-            services.store, chat_key, 1, [Event.dice(actor="Ann", kind="check", expr="1d100", total=37)]
-        )
+        # A roll before the first AI turn: anchored to the root.
+        await record_turn_events(services, chat_key, [Event.dice(actor="Ann", kind="roll", expr="1d20", total=3)])
+        await append_message(services, chat_key, DEFAULT_HISTORY_KEY, role="user", content="I look", turn=1)
+        await record_turn_events(services, chat_key, [Event.dice(actor="Ann", kind="check", expr="1d100", total=37)])
+        await append_message(services, chat_key, DEFAULT_HISTORY_KEY, role="assistant", content="Fog.", turn=1)
         # A typed roll after turn 1's reply …
-        await record_turn_events(
-            services.store, chat_key, 1, [Event.dice(actor="Ann", kind="roll", expr="3d6", total=11)], after=True
-        )
+        await record_turn_events(services, chat_key, [Event.dice(actor="Ann", kind="roll", expr="3d6", total=11)])
         # … and turn 2 whose reply is EMPTY (all stripped machinery) but which rolled.
-        await append_turn(services, chat_key, DEFAULT_HISTORY_KEY, user_message="I search", reply="", turn=2)
-        await record_turn_events(
-            services.store, chat_key, 2, [Event.dice(actor="Ann", kind="check", expr="1d100", total=88)]
-        )
+        await append_message(services, chat_key, DEFAULT_HISTORY_KEY, role="user", content="I search", turn=2)
+        await record_turn_events(services, chat_key, [Event.dice(actor="Ann", kind="check", expr="1d100", total=88)])
+        await append_message(services, chat_key, DEFAULT_HISTORY_KEY, role="assistant", content="", turn=2)
 
         ws = await websockets.connect(url)
         await _join(ws, key, "Ann")
@@ -1226,30 +1225,55 @@ async def test_join_replays_typed_rolls_after_the_turn_they_followed_and_before_
         await server.close()
 
 
-async def test_typed_rolls_keyed_past_a_companion_sub_turn_still_replay_in_place():
-    """A companion sub-turn advances the turn counter MID-turn, so two assistant entries
-    can share a stamp and the counter can end one past any entry (…6, 6, then 8, with
-    the counter at 7 between). A typed roll keyed 7 has no entry stamped 7: it attaches
-    after the LAST entry stamped <= 7 and before the first stamped above — where it
-    happened — rather than to a stamp by equality (which orphaned it forever)."""
+async def test_typed_rolls_replay_even_when_no_ai_turn_has_ever_run():
+    """A table that has only rolled so far — no KP turn, an empty transcript: the rolls
+    are anchored to the root and a joiner sees them (they used to need an assistant
+    message in the window to hang off)."""
     from gateway.hub import Event
     from gateway.turn import record_turn_events
 
     services = _services()
     keystore = Keystore()
-    key = keystore.add(room="companion-stamp-room", name="Ann")
+    key = keystore.add(room="rolls-only-room", name="Ann")
     server = TuiServer(services, keystore, port=0)
     url = await _start(server)
     try:
-        chat_key = _room_ctx("companion-stamp-room").chat_key
-        # The nested companion turn and the outer turn both stamped 6 (the outer's index
-        # was fixed at its start), then the counter sat at 7, then a normal turn 8.
-        await append_turn(services, chat_key, DEFAULT_HISTORY_KEY, user_message="(companion)", reply="Rook nods.", turn=6)
-        await append_turn(services, chat_key, DEFAULT_HISTORY_KEY, user_message="I look", reply="Fog.", turn=6)
-        await record_turn_events(
-            services.store, chat_key, 7, [Event.dice(actor="Ann", kind="roll", expr="3d6", total=11)], after=True
-        )
-        await append_turn(services, chat_key, DEFAULT_HISTORY_KEY, user_message="I go on", reply="Rain.", turn=8)
+        chat_key = _room_ctx("rolls-only-room").chat_key
+        await record_turn_events(services, chat_key, [Event.dice(actor="Ann", kind="roll", expr="1d20", total=3)])
+        await record_turn_events(services, chat_key, [Event.dice(actor="Ann", kind="roll", expr="1d6", total=5)])
+        ws = await websockets.connect(url)
+        await _join(ws, key, "Ann")
+        await _recv(ws)  # presence
+        frames = [await _recv(ws) for _ in range(2)]
+        assert [(f["type"], f.get("total")) for f in frames] == [("dice", 3), ("dice", 5)]
+        await ws.close()
+    finally:
+        await server.close()
+
+
+async def test_a_companion_s_exchange_and_the_rolls_around_it_replay_in_the_live_order():
+    """A companion sub-turn runs INSIDE the player's turn: the player line is already on
+    the path (persisted at turn start), the KP's first roll follows it, the companion's
+    exchange follows that, a second roll follows the companion, and the KP's reply
+    closes. Both turns carry the same turn stamp (the counter advances mid-turn), which
+    is why the lane anchors to message ids, never to stamps."""
+    from gateway.hub import Event
+    from gateway.turn import record_turn_events
+
+    services = _services()
+    keystore = Keystore()
+    key = keystore.add(room="companion-order-room", name="Ann")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        chat_key = _room_ctx("companion-order-room").chat_key
+        await append_message(services, chat_key, DEFAULT_HISTORY_KEY, role="user", content="I look", turn=6)
+        await record_turn_events(services, chat_key, [Event.dice(actor="Ann", kind="check", expr="1d100", total=37)])
+        await append_message(services, chat_key, DEFAULT_HISTORY_KEY, role="user", content="(Rook acts)", turn=6)
+        await append_message(services, chat_key, DEFAULT_HISTORY_KEY, role="assistant", content="Rook nods.", turn=6)
+        await record_turn_events(services, chat_key, [Event.dice(actor="Ann", kind="check", expr="1d100", total=64)])
+        await append_message(services, chat_key, DEFAULT_HISTORY_KEY, role="assistant", content="Fog.", turn=6)
+        await record_turn_events(services, chat_key, [Event.dice(actor="Ann", kind="roll", expr="3d6", total=11)])
 
         ws = await websockets.connect(url)
         await _join(ws, key, "Ann")
@@ -1257,13 +1281,13 @@ async def test_typed_rolls_keyed_past_a_companion_sub_turn_still_replay_in_place
         frames = [await _recv(ws) for _ in range(7)]
         seen = [(f["type"], f.get("text") or f.get("total")) for f in frames]
         assert seen == [
-            ("narrative", "(companion)"),
-            ("narrative", "Rook nods."),
             ("narrative", "I look"),
+            ("dice", 37),  # after the player's line, before the companion spoke
+            ("narrative", "(Rook acts)"),
+            ("narrative", "Rook nods."),
+            ("dice", 64),  # after the companion, before the KP's reply
             ("narrative", "Fog."),
-            ("dice", 11),  # after the LAST entry stamped 6, before turn 8
-            ("narrative", "I go on"),
-            ("narrative", "Rain."),
+            ("dice", 11),  # typed after the reply
         ], seen
         await ws.close()
     finally:
@@ -1284,13 +1308,12 @@ async def test_a_malformed_turn_event_record_costs_that_record_not_the_join_repl
     url = await _start(server)
     try:
         chat_key = _room_ctx("malformed-lane-room").chat_key
-        await append_turn(services, chat_key, DEFAULT_HISTORY_KEY, user_message="I look", reply="Fog.", turn=1)
-        await record_turn_events(
-            services.store, chat_key, 1, [Event.dice(actor="Ann", kind="check", expr="1d100", total=37)]
-        )
+        await append_message(services, chat_key, DEFAULT_HISTORY_KEY, role="user", content="I look", turn=1)
+        await record_turn_events(services, chat_key, [Event.dice(actor="Ann", kind="check", expr="1d100", total=37)])
+        await append_message(services, chat_key, DEFAULT_HISTORY_KEY, role="assistant", content="Fog.", turn=1)
         raw = await services.store.state_get(chat_key, TURN_EVENT_HISTORY_KEY)
         lane = json.loads(raw)
-        lane.insert(0, {"turn": "abc", "event": {"kind": "dice", "data": {"total": 1}}})
+        lane.insert(0, {"turn": "abc", "after_id": 7, "event": {"kind": "dice", "data": {"total": 1}}})
         lane.append("not even a record")
         await services.store.state_set(chat_key, TURN_EVENT_HISTORY_KEY, json.dumps(lane))
 
@@ -1318,9 +1341,9 @@ async def test_live_frames_published_during_a_join_replay_arrive_after_it():
     # Publish a LIVE event the moment replay starts, before its first line goes out.
     original = server._replay_history_body
 
-    async def slow_replay(member, chat_key):
+    async def slow_replay(member, chat_key, replayed):
         await server.hub.publish(member.session_key, Event.dice(actor="Bob", kind="roll", expr="1d6", total=6))
-        await original(member, chat_key)
+        await original(member, chat_key, replayed)
 
     server._replay_history_body = slow_replay  # type: ignore[method-assign]
     url = await _start(server)
@@ -1335,6 +1358,68 @@ async def test_live_frames_published_during_a_join_replay_arrive_after_it():
             ("narrative", None),
             ("narrative", None),
             ("dice", 6),  # the live roll, AFTER the replayed past — not between its lines
+        ]
+        await ws.close()
+    finally:
+        await server.close()
+
+
+async def test_a_roll_typed_during_the_join_replay_is_delivered_once():
+    """A `.ra` typed while a member's replay runs is published live (held) AND recorded
+    into the lane the replay reads; if the read caught it, the replay emitted it too.
+    Same content, once — and a KP final that settled in the window is deduped WITH its
+    held deltas, so the joiner is not left holding an open draft."""
+    from gateway.hub import Event
+    from gateway.turn import record_turn_events
+
+    services = _services()
+    keystore = Keystore()
+    key = keystore.add(room="dedupe-room", name="Ann")
+    server = TuiServer(services, keystore, port=0)
+    original = server._replay_history_body
+
+    async def racing_replay(member, chat_key, replayed):
+        # Publish live (held) AND record into the lane, before the replay reads it —
+        # the order the command branch does it in. `record_turn_events` stamps the
+        # published object with its lane record id.
+        roll = Event.dice(actor="Bob", kind="roll", expr="1d6", total=6)
+        await server.hub.publish(member.session_key, roll)
+        await record_turn_events(services, chat_key, [roll])
+        # A SECOND, genuinely distinct roll with identical content, published live but
+        # NOT yet recorded when the replay reads: it must still be delivered.
+        await server.hub.publish(member.session_key, Event.dice(actor="Bob", kind="roll", expr="1d6", total=6))
+        # A KP reply that settled meanwhile: history has it, and its stream was held.
+        # The gateway stamps the live final with the persisted reply's record id.
+        await server.hub.publish(member.session_key, Event.narrative_delta(speaker="kp", text="Rai", frame_id="fx"))
+        await server.hub.publish(member.session_key, Event.narrative_delta(speaker="kp", text="n.", frame_id="fx"))
+        await append_message(services, chat_key, DEFAULT_HISTORY_KEY, role="user", content="I go on", turn=2)
+        reply_id = await append_message(services, chat_key, DEFAULT_HISTORY_KEY, role="assistant", content="Rain.", turn=2)
+        final = Event.narrative(speaker="kp", text="Rain.", fmt="markdown", frame_id="fx")
+        final.origin_id = reply_id
+        await server.hub.publish(member.session_key, final)
+        await original(member, chat_key, replayed)
+
+    server._replay_history_body = racing_replay  # type: ignore[method-assign]
+    url = await _start(server)
+    try:
+        chat_key = _room_ctx("dedupe-room").chat_key
+        await append_turn(services, chat_key, DEFAULT_HISTORY_KEY, user_message="I look", reply="Fog.", turn=1)
+        ws = await websockets.connect(url)
+        await _join(ws, key, "Ann")
+        await _recv(ws)  # presence
+        # Replay: I look, Fog., [dice 6 anchored after Fog.], I go on, Rain. — then the
+        # hold flushes: the recorded roll and the final are the replayed records
+        # (dropped, the deltas of the dropped final with them), the SECOND identical
+        # roll is not (delivered). The next frame is the join-time state snapshot.
+        frames = [await _recv(ws) for _ in range(7)]
+        assert [(f["type"], f.get("text") or f.get("total")) for f in frames] == [
+            ("narrative", "I look"),
+            ("narrative", "Fog."),
+            ("dice", 6),
+            ("narrative", "I go on"),
+            ("narrative", "Rain."),
+            ("dice", 6),  # the second, distinct roll — identity, not content, decides
+            ("state", None),
         ]
         await ws.close()
     finally:

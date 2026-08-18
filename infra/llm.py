@@ -43,7 +43,10 @@ TokenProvider = Callable[[], Awaitable[str]]
 # `provider_blocks` predates both and follows the same rule.
 CACHE_BREAKPOINT_KEY = "_lw_cache_breakpoint"
 HISTORY_TURN_KEY = "_lw_turn"
-PRIVATE_MESSAGE_KEYS = frozenset({CACHE_BREAKPOINT_KEY, HISTORY_TURN_KEY, "provider_blocks"})
+# `_lw_id` is the persisted history record's id — what the join-replay event lane anchors
+# a roll or an NPC line to (`gateway.turn.record_turn_events`). Persisted like `_lw_turn`.
+HISTORY_ID_KEY = "_lw_id"
+PRIVATE_MESSAGE_KEYS = frozenset({CACHE_BREAKPOINT_KEY, HISTORY_TURN_KEY, HISTORY_ID_KEY, "provider_blocks"})
 
 
 def wire_messages(messages: list[dict]) -> list[dict]:

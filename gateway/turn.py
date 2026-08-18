@@ -15,8 +15,9 @@ event per hook-emitted UI frame (protocol v1.7) -> the room ``state`` snapshot. 
 tool events were once read off the FINISHED trace, which put them after the reply's
 streaming draft had already opened — so a streaming turn showed the narration above the
 roll it narrated and a non-streaming turn showed it below, same room, order decided by
-the provider. They are also recorded (``record_turn_events``) so a member who joins or
-reconnects replays the same scene rather than one with every roll missing. On a real
+the provider. They are also recorded as they happen (``record_turn_events``, anchored to
+the transcript line they followed) so a member who joins or reconnects replays the same
+scene — the same interleaving — rather than one with every roll missing. On a real
 (non-command) AI-KP turn, the KP narrative is also followed by a best-effort
 call into ``gateway.director.run_director`` (M10), which lets the party's AI
 companions take an auto-paced turn (their own sub-turns fan out through this
@@ -28,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from typing import TYPE_CHECKING, Any
 
 from agent.context import AgentCtx
@@ -125,7 +127,12 @@ async def run_turn(
     )
 
     result: KPTurnResult | None = None
+    # The id the player line will be persisted under IF this becomes an AI-KP turn
+    # (`run_kp_turn` writes it when the turn starts). Stamped on the live echo now, so a
+    # member whose join replay reads that line back can tell the held echo from it.
+    user_record_id = uuid.uuid4().hex
     action_event = Event.player_action(name=name, text=text)
+    action_event.origin_id = user_record_id
     if model_authored:
         # This is the ONLY place non-human-authored text reaches run_turn: a
         # model-authored companion/director turn (see gateway.director.run_companion_turn),
@@ -184,16 +191,9 @@ async def run_turn(
                 public_events.append(event)
         if public_events:
             # A typed roll is table content like any other: it joins the replay lane,
-            # anchored AFTER the last completed AI-Keeper turn (see `record_turn_events`).
-            from agent.chronicle import chronicle_turn
-
-            await record_turn_events(
-                services.store,
-                ctx.chat_key,
-                await chronicle_turn(services.store, ctx.chat_key),
-                public_events,
-                after=True,
-            )
+            # anchored to the message the transcript currently ends on (see
+            # `record_turn_events`) — after the last narration, before the next.
+            await record_turn_events(services, ctx.chat_key, public_events)
         # F16: a reply that says the command did NOT happen is feedback for whoever
         # typed it, never table content — and broadcasting one advertises the command's
         # existence, arguments and privilege gate to everyone. A 2026-08-07 session had
@@ -303,6 +303,12 @@ async def run_turn(
                     stream_state["id"] = ""
                 for event in events:
                     await hub.publish(ctx.chat_key, event)
+                # …and into the replay lane at the same moment, anchored to the message
+                # the transcript currently ends on: this turn's own player line (persisted
+                # when the turn started), or a companion's reply if one just spoke.
+                # Recording as it happens is what lets a rejoin reproduce the interleaving
+                # of rolls, NPC lines and companion turns exactly as the table saw it.
+                await record_turn_events(services, ctx.chat_key, events)
 
             final_published = False
             try:
@@ -314,16 +320,16 @@ async def run_turn(
                     output_review=review,
                     on_reply_delta=_emit_reply_delta,
                     on_tool_event=_emit_tool_event,
+                    user_record_id=user_record_id,
                 )
                 # `frame_id` is the open draft's id (the final REPLACES the draft) or a
                 # fresh one when no draft is open — the check lane closed it, or nothing
-                # ever streamed.
-                await hub.publish(
-                    ctx.chat_key,
-                    Event.narrative(
-                        speaker="kp", text=result.reply, fmt="markdown", frame_id=stream_state["id"] or new_id()
-                    ),
+                # ever streamed. `origin_id` is the persisted reply's record (join replay).
+                final = Event.narrative(
+                    speaker="kp", text=result.reply, fmt="markdown", frame_id=stream_state["id"] or new_id()
                 )
+                final.origin_id = result.reply_record_id
+                await hub.publish(ctx.chat_key, final)
                 final_published = True
             finally:
                 if stream_state["id"] and not final_published:
@@ -333,18 +339,6 @@ async def run_turn(
                         ctx.chat_key,
                         Event.narrative(speaker="kp", text="", fmt="markdown", frame_id=stream_state["id"]),
                     )
-            # Replay (net.session._replay_history) reconstructs a joining member's log
-            # from stored history, which held ONLY the player/KP prose: every dice roll
-            # and every NPC line vanished for anyone who reconnected, so two people at
-            # one table ended up with different transcripts of the same scene. Recorded
-            # HERE rather than in `_emit_tool_event` because the turn index is only
-            # settled once the turn is (see `KPTurnResult.turn`).
-            await record_turn_events(
-                services.store,
-                ctx.chat_key,
-                result.turn,
-                [event for entry in result.tool_trace for event in _public_tool_events(entry, name, i18n)],
-            )
             # Hook-emitted declarative UI (protocol v1.7) rides right behind the
             # narrative it annotates, before the closing `state` snapshot. Image
             # blocks pass the reachability gate first: a hash this room cannot fetch
@@ -687,88 +681,66 @@ def prune_turn_events(records: list[Any]) -> list[Any]:
     return kept[-TURN_EVENT_HISTORY_CAP:]
 
 
-def undo_state_rewrite(store: Any, chat_key: str, turn: int):
-    """The `agent.undo.restore` `state_rewrite` for this lane: cut it to `turn` from the
-    LIVE room instead of restoring the snapshot's copy.
-
-    The turn-boundary snapshot is taken at the end of `run_kp_turn` — before this module
-    records that turn's public tool events (their turn index is only settled once the
-    turn is). So the snapshot named N never holds turn N's own rolls, and restoring its
-    copy of the lane deleted them from replay while the restored transcript still ended
-    on turn N's narration. A rewind to the end of turn N means, for this lane: keep
-    everything up to and including turn N's own events, drop the abandoned future — the
-    rolls typed after N (`after`) included. Best-effort: an unreadable lane is left as the
-    snapshot had it.
-    """
-
-    async def rewrite(state_rows: list[dict]) -> list[dict]:
-        try:
-            raw = await store.state_get(chat_key, TURN_EVENT_HISTORY_KEY)
-            live = json.loads(raw) if raw else []
-        except Exception:  # noqa: BLE001 — see docstring
-            return state_rows
-        if not isinstance(live, list):
-            return state_rows
-        kept = [
-            record
-            for record in prune_turn_events(live)
-            if int(record.get("turn", 0) or 0) < turn
-            or (int(record.get("turn", 0) or 0) == turn and not record.get("after"))
-        ]
-        rows = [row for row in state_rows if not (isinstance(row, dict) and row.get("key") == TURN_EVENT_HISTORY_KEY)]
-        if kept:
-            rows.append({"key": TURN_EVENT_HISTORY_KEY, "value": json.dumps(kept, ensure_ascii=False)})
-        return rows
-
-    return rewrite
-
-
-async def record_turn_events(
-    store: Any, chat_key: str, turn: int, events: list[Event], *, after: bool = False
-) -> None:
-    """Store public tool events so a joining member's replay can include them.
+async def record_turn_events(services: Any, chat_key: str, events: list[Event]) -> None:
+    """Store public events so a joining member's replay can include them — anchored to
+    the history message the transcript currently ends on (`agent.history.current_leaf`).
 
     Best-effort, and PUBLIC only: a private event is a unicast to one connection and has
     no place in a lane that is re-broadcast to whoever joins next.
 
-    `after=False` (the AI-Keeper branch): the events that happened DURING `turn`, before
-    its narration closed; replay puts them right before that turn's reply. `turn <= 0`
-    then records nothing — that is the provider-error early return, which committed no
-    turn at all, so there is no history record for these events to sit beside.
-
-    `after=True` (the command branch — `.ra`, `r 3d6`, `.sc`, every dot-command that
-    rolls): the events happened AFTER the last completed turn `turn` (0 before any), and
-    replay puts them right after that turn's reply — where they happened, between two
-    narrations. Without this lane the most common rolls at a table, the typed ones,
-    vanished on every rejoin while the AI-Keeper's survived.
+    The anchor is a message ID, not a turn number: replay walks the persisted transcript
+    and emits each anchored event right after its message, so a KP roll made before a
+    companion spoke lands before the companion's line and one made after lands after it;
+    a typed roll (`.ra`, `r 3d6`) anchors to the last reply; anything before the first
+    turn anchors to the root (""). Turn numbers cannot carry that — a companion sub-turn
+    advances the counter mid-turn, so two messages can share a stamp and a stamp can
+    have no message. The turn IS kept on the record, for the lane's window.
     """
-    if (turn <= 0 and not after) or turn < 0 or not events:
-        return
-    payload = [
-        {
-            "turn": turn,
-            **({"after": True} if after else {}),
-            "event": {
-                "kind": event.kind,
-                "speaker": event.speaker,
-                "name": event.name,
-                "text": event.text,
-                "fmt": event.fmt,
-                "data": event.data,
-            },
-        }
-        for event in events
-        if not event.private
-    ]
-    if not payload:
+    public = [event for event in events if not event.private]
+    if not public:
         return
     try:
-        raw = await store.state_get(chat_key, TURN_EVENT_HISTORY_KEY)
+        from agent.chronicle import chronicle_turn
+        from agent.history import DEFAULT_HISTORY_KEY, current_leaf
+
+        anchor = await current_leaf(services, chat_key)
+        # The turn stamp (for the lane's window only): the anchor message's own — exact
+        # both during a turn (its player line) and after it (its reply) — else the
+        # completed-turn counter, before any message.
+        anchor_record = await services.store.history_record(chat_key, DEFAULT_HISTORY_KEY, anchor)
+        turn = (
+            int(anchor_record.get("turn", 0) or 0)
+            if anchor_record is not None
+            else await chronicle_turn(services.store, chat_key)
+        )
+        payload = []
+        for event in public:
+            record_id = uuid.uuid4().hex
+            # The published Event object is the one a joining member may be HOLDING right
+            # now (`net.session`): stamping the record id on it is what lets that member
+            # drop the held copy when its replay already emitted this very record.
+            event.origin_id = record_id
+            payload.append(
+                {
+                    "id": record_id,
+                    "turn": turn,
+                    "after_id": anchor,
+                    "event": {
+                        "kind": event.kind,
+                        "speaker": event.speaker,
+                        "name": event.name,
+                        "text": event.text,
+                        "fmt": event.fmt,
+                        "data": event.data,
+                    },
+                }
+            )
+        raw = await services.store.state_get(chat_key, TURN_EVENT_HISTORY_KEY)
         history = json.loads(raw) if raw else []
         if not isinstance(history, list):
             history = []
         history.extend(payload)
-        await store.state_set(
+        await services.store.state_set(
             chat_key,
             TURN_EVENT_HISTORY_KEY,
             json.dumps(prune_turn_events(history), ensure_ascii=False),

@@ -205,3 +205,29 @@ async def test_undiscoverable_sole_rulepack_never_pins_a_dead_id(tmp_path):
     await CharcardTools(services).import_world_card(ctx, file_path=card_path)
 
     assert await services.store.state_get("ghost-room", "room_system") is None
+
+
+async def test_a_dev_mounted_pack_s_card_also_finds_its_character_system(tmp_path, user_rulepack_dir):
+    """`.dev mount` serves a pack SOURCE tree as if installed: the picker lists its cards
+    and `.import` resolves them by ref — but the character-system lookup knew only
+    `data_dir/packs/`, so an author's click-imported pregen landed on the room's default.
+    The registry now lives in `core.pack` and the lookup reads it."""
+    from core.pack import DEV_PACK_HOMES
+
+    services = _services(tmp_path)
+    src = tmp_path / "src"
+    (src / "cards").mkdir(parents=True)
+    (src / "cards" / "world.json").write_text(json.dumps(CARD, ensure_ascii=False), encoding="utf-8")
+    (src / "pack.yaml").write_text(
+        "manifest: 2\nid: draft\nname: Draft\nversion: \"0.1.0\"\ncontents:\n  cards: [cards/world.json]\n"
+        "  rulepacks: [rulepacks/harbour-tides.yaml, rulepacks/harbour-crew.yaml]\n",
+        encoding="utf-8",
+    )
+    DEV_PACK_HOMES["draft"] = src
+    try:
+        ctx = _keeper_ctx(tmp_path, "dev-click-room")
+        await CharcardTools(services).import_character(ctx, file_path=str(src / "cards" / "world.json"), as_="pc")
+        sheet = await services.characters.get_character(ctx.user_id, ctx.chat_key)
+        assert sheet.system == "harbour-crew"
+    finally:
+        DEV_PACK_HOMES.pop("draft", None)

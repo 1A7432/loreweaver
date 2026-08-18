@@ -1574,9 +1574,46 @@ def installed_pack_dir(data_dir: Path | str, pack_id: str) -> Path | None:
     return dirs[0] if dirs else None
 
 
+# `.dev mount` homes (`gateway.dev_room`): a pack SOURCE tree served as if installed,
+# `pack id -> home dir`. Owned here as plain data because the pack helpers that answer
+# "which pack does this file belong to?" (`installed_pack_character_system` and the
+# gateway's listing/ref resolution) must all see the same registry — a lookup that knew
+# only `data_dir/packs/` sent an author's click-imported pregen to the room's default
+# system. Mutated in place by `set_dev_pack_homes`; hold the dict, not a copy.
+DEV_PACK_HOMES: dict[str, Path] = {}
+
+
+def set_dev_pack_homes(homes: Mapping[str, Path]) -> None:
+    """Replace the dev-room virtual homes (called only by `gateway.dev_room`)."""
+    DEV_PACK_HOMES.clear()
+    DEV_PACK_HOMES.update({pack_id: Path(home) for pack_id, home in homes.items()})
+
+
+def pack_home_of(data_dir: Path | str, path: Path | str) -> Path | None:
+    """The pack home `path` sits in — an installed ``data_dir/packs/<id>@<ver>/`` or a
+    `.dev mount` source tree — else None. Resolved before comparison, so a symlink out of
+    a home is not "in" it."""
+    try:
+        resolved = Path(path).resolve()
+    except OSError:
+        return None
+    for home in DEV_PACK_HOMES.values():
+        try:
+            resolved.relative_to(home.resolve())
+        except (OSError, ValueError):
+            continue
+        return home
+    packs_root = (Path(data_dir) / "packs").resolve()
+    for parent in resolved.parents:
+        if parent.parent == packs_root:
+            return parent
+    return None
+
+
 def installed_pack_character_system(data_dir: Path | str, path: Path | str) -> str | None:
-    """The rule system a card that sits inside an installed ``data_dir/packs/<id>@<ver>/``
-    means its characters to be built on — or None when the pack does not say.
+    """The rule system a card that sits inside a pack home — an installed
+    ``data_dir/packs/<id>@<ver>/`` or a `.dev mount` source tree — means its characters
+    to be built on; None when the pack does not say.
 
     The world-import system pin (owner verdict, 2026-08-17): a module that ships ONE
     rulepack means its cast to be built on that system. Extended 2026-08-18 for a pack
@@ -1592,13 +1629,7 @@ def installed_pack_character_system(data_dir: Path | str, path: Path | str) -> s
     from core.rulepacks import load_rulepack, own_make_char_word
 
     try:
-        resolved = Path(path).resolve()
-        packs_root = (Path(data_dir) / "packs").resolve()
-        pack_home = None
-        for parent in resolved.parents:
-            if parent.parent == packs_root:
-                pack_home = parent
-                break
+        pack_home = pack_home_of(data_dir, path)
         if pack_home is None:
             return None
         manifest_path = pack_home / MANIFEST_NAME

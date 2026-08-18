@@ -152,11 +152,14 @@ connections receive `error too_many_connections` before `join` is read.
   bubble whose final text is empty.
   **Join replay.** On every join the server replays the room's recent transcript
   (the last 30 chat-history entries) as ordinary `narrative` frames — story lanes
-  only, never dot-command echoes — and, since v2.3, each replayed AI-Keeper
-  reply is PRECEDED by the `dice` and npc `narrative` frames its turn produced
-  live (see Turn flow, steps 5–6). Replayed frames are indistinguishable from
-  live ones by design: a client renders them in arrival order and dedupes a
-  `narrative` by `id`.
+  only, never dot-command echoes — and, since v2.3, every `dice` and npc
+  `narrative` frame the table saw live (an AI-Keeper roll, a companion's turn, a
+  typed `.ra`) is replayed right after the transcript line it followed live, so
+  the interleaving is the one everyone watched (see Turn flow, steps 5–6). Live
+  frames published while a member's replay is running are delivered after it,
+  in order, once. Replayed frames are indistinguishable from live ones by
+  design: a client renders them in arrival order and dedupes a `narrative` by
+  `id`.
 - `narrative_delta` — one streaming text delta for a draft bubble:
   `{type:"narrative_delta", id:string, speaker:"kp", name?:string, text:string}`
   Clients concatenate deltas sharing an `id` into a draft bubble (render as
@@ -316,10 +319,10 @@ On an `input` frame from a client in room `R`, the server:
    tool call's `npc` argument and `text` the player-safe tool result. On a
    streaming provider these frames therefore arrive BETWEEN `narrative_delta`
    chunks; a client must not assume the delta stream is contiguous.
-6. The same dice / npc frames are RECORDED per turn (`turn_event_history`) and
-   replayed on join, each set right before the `narrative` of the turn it
-   belongs to — see the join replay note under `narrative` above. A joining
-   member's transcript keeps the live order.
+6. The same dice / npc frames are RECORDED as they happen (`turn_event_history`),
+   each anchored to the transcript line it followed, and replayed on join in
+   that place — see the join replay note under `narrative` above. A joining
+   member's transcript keeps the live order, companion sub-turns included.
 7. Broadcasts the reply as `narrative{text: reply}` — `speaker:"system"` for
    a command reply, `speaker:"kp", format:"markdown"` for an AI Keeper
    reply. The reply is already passed through the configured output wordlist.

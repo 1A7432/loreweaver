@@ -18,6 +18,7 @@ from agent.undo import capture, restore
 from core.dice_engine import seed_dice
 from gateway.commands import CommandRouter
 from gateway.hub import Event, RoomHub
+from agent.history import DEFAULT_HISTORY_KEY, append_message
 from gateway.turn import (
     TURN_EVENT_HISTORY_CAP,
     TURN_EVENT_HISTORY_KEY,
@@ -27,7 +28,6 @@ from gateway.turn import (
     prune_turn_events,
     record_turn_events,
     run_turn,
-    undo_state_rewrite,
 )
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
@@ -78,8 +78,8 @@ async def test_a_typed_roll_joins_the_replay_lane_after_the_last_turn() -> None:
     lane = await _lane(services, room)
     assert len(lane) == 1
     record = lane[0]
-    # No AI-Keeper turn has run: the roll sits AFTER turn 0 — the very top of a replay.
-    assert record["turn"] == 0 and record["after"] is True
+    # No AI-Keeper turn has run: the roll is anchored to the ROOT — the top of a replay.
+    assert record["turn"] == 0 and record["after_id"] == ""
     assert record["event"]["kind"] == "dice"
     assert record["event"]["data"]["actor"] == "Investigator (Nora)"
     published = next(event for event in origin.events if event.kind == "dice")
@@ -140,40 +140,24 @@ def test_the_lane_keeps_whole_turns_never_half_of_one() -> None:
 
 
 async def test_undo_keeps_the_restored_turn_s_rolls_and_drops_what_came_after() -> None:
-    """The turn-boundary snapshot is taken BEFORE that turn's events are recorded, so a
-    restore from the snapshot's copy of the lane deleted the restored turn's own rolls
-    while the transcript still ended on its narration."""
+    """Every roll is recorded the moment it happens, so the turn-boundary snapshot of turn
+    N (taken as the turn closes) already holds turn N's own rolls and none of the
+    abandoned future's: restoring the snapshot's copy of the lane is exactly right —
+    which is why the lane needs no special handling on rewind."""
     services = _services()
     room = "tui:group:undo-lane"
     for turn in (11, 12, 13):
-        # Snapshot first (as `run_kp_turn` does), THEN this turn's events, then a typed
-        # roll after it — the real write order.
-        await capture(services, room, turn)
-        await record_turn_events(services.store, room, turn, [Event.dice(actor="A", kind="check", expr="d", total=turn)])
-        await record_turn_events(
-            services.store, room, turn, [Event.dice(actor="A", kind="roll", expr="d", total=turn * 100)], after=True
-        )
+        await append_message(services, room, DEFAULT_HISTORY_KEY, role="user", content=f"do {turn}", turn=turn)
+        await record_turn_events(services, room, [Event.dice(actor="A", kind="check", expr="d", total=turn)])
+        await append_message(services, room, DEFAULT_HISTORY_KEY, role="assistant", content=f"ok {turn}", turn=turn)
+        await capture(services, room, turn)  # as `run_kp_turn` does, at the turn's close
+        # A typed roll after the turn closed — the next snapshot's, not this one's.
+        await record_turn_events(services, room, [Event.dice(actor="A", kind="roll", expr="d", total=turn * 100)])
 
-    assert await restore(services, room, 12, state_rewrite=undo_state_rewrite(services.store, room, 12))
-
-    totals = [(record["turn"], bool(record.get("after")), record["event"]["data"]["total"]) for record in await _lane(services, room)]
-    assert totals == [
-        (11, False, 11),
-        (11, True, 1100),
-        (12, False, 12),  # turn 12's OWN roll survives the rewind to the end of turn 12
-        # (12, True): the roll typed after turn 12 is the abandoned future — gone
-        # (13, …): gone
-    ]
-
-
-async def test_undo_without_the_rewrite_would_lose_the_restored_turn_s_rolls() -> None:
-    """The control for the test above: the seam is what carries the fix."""
-    services = _services()
-    room = "tui:group:undo-lane-control"
-    await capture(services, room, 12)
-    await record_turn_events(services.store, room, 12, [Event.dice(actor="A", kind="check", expr="d", total=12)])
     assert await restore(services, room, 12)
-    assert await _lane(services, room) == []
+
+    totals = [record["event"]["data"]["total"] for record in await _lane(services, room)]
+    assert totals == [11, 1100, 12]  # turn 12's OWN roll survives; the roll typed after it, and turn 13, do not
 
 
 # --- NPC lines come from the structural channel, never from a tool's return string ---

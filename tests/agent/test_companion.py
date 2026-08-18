@@ -22,7 +22,7 @@ import json
 from agent import npc as npc_records
 from agent.companion_actor import companion_action
 from agent.context import AgentCtx
-from agent.history import DEFAULT_HISTORY_KEY, append_turn
+from agent.history import DEFAULT_HISTORY_KEY, append_turn, load_chain
 from agent.kp_tools import build_kp_toolset
 from agent.kp_tools_companion import CompanionTools, witness
 from agent.services import build_services
@@ -34,7 +34,7 @@ from gateway.director import MAX_COMPANION_TURNS, request_companion, run_combat_
 from gateway.hub import Event, RoomHub
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
-from infra.llm import FakeLLM, assistant_text, assistant_tools, tool_call
+from infra.llm import FakeLLM, ToolCall, assistant_text, assistant_tools, tool_call
 from infra.store import Store
 from net.state import build_room_state
 
@@ -478,3 +478,60 @@ async def test_companion_turn_never_feeds_the_room_wide_transcript_to_the_actor(
     blob = "\n".join(message["content"] for message in actor_calls[0])
     # RED LINE: room-wide state (the shared conversation) never reaches the isolated actor.
     assert ROOM_EVENT_SENTINEL not in blob
+
+
+async def test_companion_act_inside_a_turn_keeps_the_player_s_line_and_the_live_order_on_the_path():
+    """The player's message is persisted when the turn STARTS; a `companion_act` run from
+    inside the turn appends the companion's exchange after it and the KP's reply closes.
+    The nested sub-turn computes the SAME turn index as the outer one (the counter has
+    not advanced yet), so its dangling-leaf heal must NOT touch the outer's player line
+    — a review probe caught it throwing that line off the path for good."""
+    chat_key = "act-order-room"
+    kp_calls: list[list[dict]] = []
+
+    def responder(messages, tools):
+        if tools is None:  # the companion actor
+            return assistant_text(json.dumps({"action": "I kick the door in.", "dialogue": "Move!"}))
+        kp_calls.append(messages)
+        called = _tools_called(messages)
+        # The OUTER turn: ask Ada to act, then narrate. The NESTED turn (resolving Ada's
+        # action) narrates straight away. Which one this is: the CURRENT input — the last
+        # user-role message (the nested turn sees the outer's line as HISTORY now).
+        current = next((str(m.get("content", "")) for m in reversed(messages) if m.get("role") == "user"), "")
+        if "take point" in current:
+            if "companion_act" not in called:
+                return assistant_tools(
+                    ToolCall(id="call_act", name="companion_act", arguments={"name": "Ada", "situation": "the cellar door"})
+                )
+            return assistant_text("Ada's boot splinters the frame; the cellar breathes out.")
+        return assistant_text("The door gives.")
+
+    services = build_services(Settings(locale="en"), llm=FakeLLM(responder=responder), embeddings=FakeEmbeddings(8))
+    hub = RoomHub()
+    router = CommandRouter(services)
+    toolset = build_kp_toolset(services, hub=hub, command_router=router)
+    await CompanionTools(services).add_companion(_ctx(chat_key), name="Ada", persona="A brawler.", playstyle="direct")
+    member = FakeMember("m1")
+    await hub.subscribe(chat_key, member)
+
+    from gateway.turn import run_turn
+
+    ctx = AgentCtx(chat_key=chat_key, user_id="p1", platform="tui", locale="en")
+    await run_turn(hub, services, ctx, "I ask Ada to take point.", command_router=router, toolset=toolset)
+
+    chain = await load_chain(services, chat_key, DEFAULT_HISTORY_KEY)
+    lines = [(m["role"], m["content"]) for m in chain]
+    assert lines[0] == ("user", "I ask Ada to take point."), lines  # STILL on the path, and first
+    assert ("assistant", "Ada's boot splinters the frame; the cellar breathes out.") == lines[-1]
+    # …with the companion's exchange BETWEEN the player's line and the KP's reply.
+    middle = lines[1:-1]
+    assert any(role == "user" and "kick the door" in text for role, text in middle), lines
+    assert any(role == "assistant" and text == "The door gives." for role, text in middle), lines
+    # And the nested turn's own prompt saw the player's action as history — the outer
+    # line was on the path when it assembled.
+    nested = next(
+        call
+        for call in kp_calls
+        if "kick the door" in next((str(m.get("content", "")) for m in reversed(call) if m.get("role") == "user"), "")
+    )
+    assert any("take point" in str(m.get("content", "")) for m in nested), "the companion's KP turn lost the player's line"

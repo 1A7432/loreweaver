@@ -27,7 +27,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from core.pack import MANIFEST_NAME, PackManifest, parse_manifest_text
+from core.pack import DEV_PACK_HOMES, MANIFEST_NAME, PackManifest, parse_manifest_text
+from core.pack import set_dev_pack_homes as _set_dev_pack_homes
 from core.panels import PanelSpec, audience_allows, parse_panels_text, wire_panel
 from gateway.hub import Event, RoomHub
 from gateway.ops import get_enabled_panel_packs
@@ -56,13 +57,10 @@ def _version_key(version: str) -> tuple[Any, ...]:
 # the author mounted it precisely to test the source of that pack. Everything below
 # (enabled_packs, `.panels list`, asset resolution) inherits it through
 # `installed_pack_homes`, the one aggregation point.
-_DEV_HOMES: dict[str, Path] = {}
-
-
-def set_dev_pack_homes(homes: Mapping[str, Path]) -> None:
-    """Replace the dev-room virtual homes (called only by `gateway.dev_room`)."""
-    _DEV_HOMES.clear()
-    _DEV_HOMES.update({pack_id: Path(home) for pack_id, home in homes.items()})
+# The `.dev mount` registry lives in `core.pack` (the pack helpers there must see it
+# too); this module reads THE SAME dict and re-exports the setter for `gateway.dev_room`.
+_DEV_HOMES: dict[str, Path] = DEV_PACK_HOMES
+set_dev_pack_homes = _set_dev_pack_homes
 
 
 def installed_pack_homes(data_dir: Path) -> dict[str, Path]:

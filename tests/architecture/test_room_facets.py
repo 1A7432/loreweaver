@@ -60,8 +60,11 @@ WRITE_SURFACE_EXEMPTIONS: dict[tuple[str, str], str] = {
     ("agent/history.py", "rewind_to_parent"): (
         "moves the caller's history leaf pointer — same key family as above"
     ),
-    ("agent/history.py", "append_turn"): (
+    ("agent/history.py", "append_message"): (
         "moves the caller's history leaf pointer — same key family as above"
+    ),
+    ("agent/history.py", "abandon_message"): (
+        "moves the caller's history leaf pointer back over a message — same key family"
     ),
     ("agent/undo.py", "restore"): (
         "restores the history leaf pointer for the caller's history key, claimed by the "

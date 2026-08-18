@@ -46,6 +46,11 @@ class Event:
     fmt: str = "plain"  # "markdown" | "plain"
     data: dict[str, Any] = field(default_factory=dict)  # dice fields / state snapshot / presence list / {level}
     private: bool = False
+    # The persisted record this LIVE event corresponds to — a history message id for a
+    # player echo / KP reply, a replay-lane record id for a roll or an NPC line. Never
+    # rendered. It is how a member's join replay tells "this held live event is the one I
+    # just replayed from storage" from "a second, identical roll" (`net.session`).
+    origin_id: str = ""
 
     @classmethod
     def player_action(cls, name: str, text: str) -> Event:

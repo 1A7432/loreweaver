@@ -463,6 +463,29 @@ async def test_unexpected_tool_dispatch_failure_clears_continuation():
 # ---------------------------------------------------------------------------
 
 
+async def test_a_crashed_attempt_s_dangling_player_message_is_abandoned_by_the_next_turn():
+    """The player message is persisted when a turn STARTS (so a companion's nested
+    exchange lands after it, in the order the table saw). A turn that dies after that
+    write and before its reply leaves the path ending on a lone player line stamped
+    with a turn the counter never advanced past; the next attempt abandons it (the
+    record stays in the tree, off the path) and chains after the last COMPLETED turn.
+    A legitimately trailing player line with an EARLIER stamp is left alone."""
+    from agent.history import append_message, load_chain
+
+    services = _services(FakeLLM(script=[assistant_text("Second time lucky.")]))
+    chat_key = "chat-heal"
+    # A completed turn 1, then an attempt at turn 2 that crashed after its user write.
+    await append_message(services, chat_key, "chat_history", role="user", content="hello", turn=1)
+    await append_message(services, chat_key, "chat_history", role="assistant", content="hi", turn=1)
+    await services.store.state_set(chat_key, "chronicle_turn", "1")
+    await append_message(services, chat_key, "chat_history", role="user", content="crashed attempt", turn=2)
+
+    await run_kp_turn(_ctx(chat_key), services, _toolset(), "retry")
+
+    contents = [message["content"] for message in await load_chain(services, chat_key, "chat_history")]
+    assert contents == ["hello", "hi", "retry", "Second time lucky."]
+
+
 async def test_history_persists_only_the_user_message_and_final_reply():
     llm = FakeLLM(script=[assistant_tools(tool_call("lookup_time")), assistant_text("It is midnight.")])
     services = _services(llm)
@@ -472,6 +495,9 @@ async def test_history_persists_only_the_user_message_and_final_reply():
     # `_lw_turn` is the room turn that wrote the pair — the handle the chronicle fold
     # cuts history on (M20 A2). It is stripped before any vendor wire.
     history = await load_chain(services, "chat-7", "chat_history")
+    # `_lw_id` is the record's own id (what the replay event lane anchors to) — present,
+    # opaque, and not what this test is about.
+    assert all(message.pop("_lw_id") for message in history)
     assert history == [
         {"role": "user", "content": "What time is it?", "_lw_turn": 1},
         {"role": "assistant", "content": "It is midnight.", "_lw_turn": 1},
@@ -522,6 +548,7 @@ async def test_history_is_not_capped_and_replays_whole():
 
     persisted = await load_chain(services, chat_key, "chat_history")
     assert len(persisted) == 32
+    assert persisted[-1].pop("_lw_id")
     assert persisted[-1] == {"role": "assistant", "content": "newest reply", "_lw_turn": 1}
 
 

@@ -49,30 +49,96 @@ async def load_chain(services: Services, chat_key: str, key: str) -> list[dict]:
     """
     leaf = await services.store.state_get(chat_key, leaf_key(key))
     records = await services.store.history_chain(chat_key, key, leaf)
-    return [{"role": record["role"], "content": record["content"], "_lw_turn": record["turn"]} for record in records]
+    return [
+        {"role": record["role"], "content": record["content"], "_lw_turn": record["turn"], "_lw_id": record["id"]}
+        for record in records
+    ]
+
+
+async def append_message(
+    services: Services,
+    chat_key: str,
+    key: str,
+    *,
+    role: str,
+    content: str,
+    turn: int,
+    record_id: str | None = None,
+) -> str:
+    """Append ONE message (`user` or `assistant`) after the current leaf; return its id.
+
+    The turn writes its two persisted messages at two different moments — the player's
+    message when the turn STARTS, the final reply when it ENDS — so anything a nested
+    turn appends in between (a companion's exchange run from inside the turn by the
+    `companion_act` tool, via `gateway.director`) lands between them on the path, in the
+    order the table saw it. Writing both at the end put the companion's line before the
+    player's action that prompted it, for anyone replaying. `record_id` lets the caller
+    pre-assign the id (the gateway stamps it on the live echo it published first, so a
+    join replay can tell that echo from the persisted line).
+    """
+    parent = await services.store.state_get(chat_key, leaf_key(key))
+    record_id = record_id or uuid.uuid4().hex
+    await services.store.history_append(
+        chat_key,
+        key,
+        [{"id": record_id, "parent_id": parent, "turn": turn, "role": role, "content": content}],
+    )
+    await services.store.state_set(chat_key, leaf_key(key), record_id)
+    return record_id
 
 
 async def append_turn(
     services: Services, chat_key: str, key: str, *, user_message: str, reply: str, turn: int
 ) -> str:
-    """Append this turn's player message and final reply; return the new leaf id.
+    """Append a whole turn — player message then final reply — and return the new leaf id.
 
-    Only these two are persisted — never the intermediate tool chatter — so replayed
-    history stays lean across turns.
+    Only these two are ever persisted — never the intermediate tool chatter — so replayed
+    history stays lean across turns. The live loop appends them separately
+    (`append_message`, see there); this is the one-shot form for callers that hold a
+    finished exchange (tests, imports).
     """
-    parent = await services.store.state_get(chat_key, leaf_key(key))
-    first = uuid.uuid4().hex
-    second = uuid.uuid4().hex
-    await services.store.history_append(
-        chat_key,
-        key,
-        [
-            {"id": first, "parent_id": parent, "turn": turn, "role": "user", "content": user_message},
-            {"id": second, "parent_id": first, "turn": turn, "role": "assistant", "content": reply},
-        ],
-    )
-    await services.store.state_set(chat_key, leaf_key(key), second)
-    return second
+    await append_message(services, chat_key, key, role="user", content=user_message, turn=turn)
+    return await append_message(services, chat_key, key, role="assistant", content=reply, turn=turn)
+
+
+async def abandon_message(services: Services, chat_key: str, key: str, record_id: str) -> bool:
+    """Move the leaf back over `record_id` if the path currently ends on it — the record
+    stays in the tree, simply off the path (exactly what an undo does). True if it moved.
+
+    The player's message is persisted when the turn starts, so a turn that never commits
+    a reply — a provider error, a crash — would otherwise leave the path ending on a
+    lone player line, and the next turn's prompt would open with the failed action
+    beside the retry. A failed turn commits nothing, as before; this is how.
+    """
+    leaf = await services.store.state_get(chat_key, leaf_key(key))
+    if not leaf or leaf != record_id:
+        return False
+    record = await services.store.history_record(chat_key, key, record_id)
+    await services.store.state_set(chat_key, leaf_key(key), (record or {}).get("parent_id") or "")
+    return True
+
+
+async def heal_dangling_leaf(services: Services, chat_key: str, key: str, *, turn: int) -> bool:
+    """If the path ends on a player message stamped `turn` or later that never got its
+    reply — a turn that crashed after persisting it, and so never advanced the counter
+    this `turn` was computed from — abandon that message. True if it did.
+
+    The turn stamp is the discriminator: a history whose last message is legitimately a
+    player line (an adopted pre-M20 blob, an imported transcript) carries EARLIER stamps
+    and is left exactly as it is.
+    """
+    leaf = await services.store.state_get(chat_key, leaf_key(key))
+    record = await services.store.history_record(chat_key, key, leaf)
+    if record is None or record.get("role") != "user":
+        return False
+    if int(record.get("turn", 0) or 0) < turn:
+        return False
+    return await abandon_message(services, chat_key, key, str(leaf))
+
+
+async def current_leaf(services: Services, chat_key: str, key: str = DEFAULT_HISTORY_KEY) -> str:
+    """The id of the message the path currently ends on ("" before any)."""
+    return str(await services.store.state_get(chat_key, leaf_key(key)) or "")
 
 
 async def leaf_at_or_before(services: Services, chat_key: str, key: str, turn: int) -> str | None:
