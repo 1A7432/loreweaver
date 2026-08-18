@@ -39,4 +39,4 @@ core/presentation.py
 # text, the same nature as the module's main _PROMPT (which the regex-shape heuristic happens
 # to exempt on its own); it is never shown to a user. The whisper the lane produces IS
 # user-facing and goes through locales/*/scribe.json like every other whisper.
-agent/scribe.py::NPC knowledge boundaries (name | the facts this NPC knows)
+agent/scribe.py::These lists mark SECRET boundaries, not complete minds

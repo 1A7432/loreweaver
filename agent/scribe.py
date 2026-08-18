@@ -116,7 +116,7 @@ _NPC_WATCH_FACTS_CHARS = 300
 # outer `.format`). The instruction mirrors the fuzzy semantics deliberately: the list
 # is a secrets boundary, not a complete mind, and "unsure" means stay silent.
 _NPC_WATCH_BLOCK = """
-NPC knowledge boundaries (name | the facts this NPC knows). These lists mark SECRET boundaries, not complete minds — everyday knowledge (weather, town routine, their own trade) never crosses one. If dialogue the game-master reply attributes to one of these NPCs reveals something clearly beyond both its listed facts and everyday knowledge, add one extra key to the JSON: "npc_overreach": {{"npc": "<name>", "quote": "<verbatim dialogue quote from the reply>", "fact": "<what it revealed beyond its boundary>"}} — at most one, the clearest crossing. Omit the key when nothing crossed or you are unsure.
+NPC knowledge boundaries — KEEPER-ONLY, never to be repeated outward (name | the facts this NPC knows). These lists mark SECRET boundaries, not complete minds — everyday knowledge (weather, town routine, their own trade) never crosses one. If dialogue the game-master reply attributes to one of these NPCs reveals something clearly beyond both its listed facts and everyday knowledge, add one extra key to the JSON: "npc_overreach": {{"npc": "<name>", "quote": "<verbatim dialogue quote from the reply>", "fact": "<what it revealed beyond its boundary>"}} — at most one, the clearest crossing. Omit the key when nothing crossed or you are unsure.
 {npc_lines}
 """
 
@@ -132,7 +132,7 @@ Rules:
 - "habit": how THIS TABLE plays, when the turn shows it — pacing they prefer, how much combat they have patience for, what kind of scene they lean into, a keeper technique that landed or fell flat. Write about the group's behaviour, not about the story: "they cut short investigation scenes to get to confrontation" is a habit, "they found the key" is not. Only when the turn actually shows it; null is the right answer most turns. Repeated observations are what make it stick, so write the same habit the same way each time you see it.
 - "whispers" (0-{max_whispers}, each <= {max_whisper_chars} chars) for anything needing the keeper's judgment: scene/clock drift vs the fiction, players stuck without progress, an earned gain no tracker captures.
 - Write whispers in the language the turn text is written in (Chinese turn -> Chinese whispers).
-- "chronicle": ONE short past-tense line recording what this turn established for the campaign's history — what the table would want to remember months from now. This record is shown to PLAYERS: write only what the game-master reply told them out loud, never a tracker's value, never a motive or consequence the reply left unsaid. Empty string when the turn established nothing that outlasts it (talk, out-of-character chatter, an intention with no outcome yet). Write it in the language of the turn text.
+- "chronicle": ONE short past-tense line recording what this turn established for the campaign's history — what the table would want to remember months from now. This record is shown to PLAYERS, and the game-master reply is the ONLY thing you may build it from: write what that reply said out loud, never a motive or consequence it left unsaid. Everything else in this prompt — tracker labels and values, NPC knowledge lists — is keeper-only material the players have not learned; a name, object or explanation that appears there but not in the reply must stay out of this line, however true it is. Empty string when the turn established nothing that outlasts it (talk, out-of-character chatter, an intention with no outcome yet). Write it in the language of the turn text.
 - "beat" classifies this turn as a MOMENT worth staging, one of: {beats}, or "none". Use "none" unless the turn clearly is one of them — most turns are "none".
   - scene_change: the group moved somewhere else, or time visibly moved on.
   - act_transition: a chapter/day/act of the story turned over.
@@ -225,8 +225,12 @@ async def _npc_watch_section(services: Services, chat_key: str) -> tuple[str, fr
 
     Only scoped NPCs are watched — a boundary can only be crossed where someone drew
     one — so a room where nobody ever called `set_npc_knowledge` keeps a byte-identical
-    Scribe prompt and this lane costs nothing. Knowledge records are keeper-side
-    material feeding a keeper-side actor: nothing here reaches a player surface.
+    Scribe prompt and this lane costs nothing. These records are keeper-side material,
+    and this pass has ONE player-facing output — the `chronicle` line (M21, added after
+    this lane's first draft). So the block is labelled keeper-only where it enters and
+    the chronicle rule names it where it could leave; keeping the record inside what the
+    reply said aloud is a prompt constraint the secrecy evals check, like every other
+    Scribe claim about the fiction.
     """
     try:
         records = await list_npcs(services.documents, chat_key)
