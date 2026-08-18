@@ -73,7 +73,13 @@ async def test_generate_image_fake_end_to_end_records_media_history_and_event(tm
 
 
 async def test_generate_image_unconfigured_returns_i18n_text(tmp_path):
-    services = build_services(Settings(locale="en", data_dir=str(tmp_path)), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(8))
+    # An explicit empty imagegen block: the test must not inherit a developer's
+    # TRPG_IMAGEGEN__* from .env, or "unconfigured" quietly spends a real image call.
+    services = build_services(
+        Settings(locale="en", data_dir=str(tmp_path), imagegen=ImageGenSettings()),
+        llm=FakeLLM(script=[]),
+        embeddings=FakeEmbeddings(8),
+    )
     toolset = build_kp_toolset(services)
     ctx = AgentCtx(chat_key="chat-image", user_id="kp", locale="en")
 

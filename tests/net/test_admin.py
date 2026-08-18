@@ -34,7 +34,7 @@ from gateway.rooms import (
     set_keeper_binding,
 )
 from gateway.session import SessionSource
-from infra.config import LLMSettings, Settings, TuiSettings
+from infra.config import ImageGenSettings, LLMSettings, Settings, TuiSettings
 from infra.embeddings import FakeEmbeddings
 from infra.i18n import get_i18n
 from infra.imagegen import IMAGEGEN_PRESETS
@@ -120,7 +120,14 @@ def _scripted_module_analysis_json() -> str:
 def _services(data_dir: str = "./data"):
     """Baseline services with a real `MutableLLM` (offline stub inner client) so
     the admin set-model path reconfigures live, exactly like `.model set`."""
-    settings = Settings(locale="en", data_dir=data_dir, llm=LLMSettings(provider="openai", chat_model="gpt-4o"))
+    # Explicit llm AND imagegen blocks: the admin tests describe an unconfigured image
+    # provider, so a developer's TRPG_IMAGEGEN__* in .env must not leak into them.
+    settings = Settings(
+        locale="en",
+        data_dir=data_dir,
+        llm=LLMSettings(provider="openai", chat_model="gpt-4o"),
+        imagegen=ImageGenSettings(),
+    )
     llm = MutableLLM(settings, builder=lambda s: FakeLLM(script=[]))
     return build_services(settings, llm=llm, embeddings=FakeEmbeddings(64))
 

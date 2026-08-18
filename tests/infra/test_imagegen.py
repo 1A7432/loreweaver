@@ -176,5 +176,6 @@ async def test_openai_compat_imagegen_maps_http_failure_to_error_code():
 
 
 def test_build_imagegen_returns_none_when_incomplete():
-    assert build_imagegen(Settings()) is None
+    # An explicit empty block, not the developer's .env: "incomplete" is what is under test.
+    assert build_imagegen(Settings(imagegen=ImageGenSettings())) is None
     assert build_imagegen(Settings(imagegen=ImageGenSettings(provider="openai", model="img"))) is None
