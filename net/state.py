@@ -151,7 +151,7 @@ async def _character_payload(
     any rule system. The sheet layer declares its own resources (M16 stage B:
     `core.character_manager.character_resources`, pack-driven); the WIRE shape
     is final. Labels resolve to ``locale`` here, at the per-viewer boundary (M19)."""
-    attrs = sheet.attributes
+    attrs = _wire_attributes(sheet)
     resources = character_resources(sheet, locale)
 
     status_effects: list[Any] = []
@@ -167,13 +167,39 @@ async def _character_payload(
         "name": sheet.name,
         "system": sheet.system,
         "resources": resources,
-        "attributes": dict(attrs),
+        "attributes": attrs,
         "status_effects": status_effects,
     }
     avatar = getattr(sheet, "avatar", None)
     if isinstance(avatar, dict):
         payload["avatar"] = avatar
     return payload
+
+
+def _wire_attributes(sheet: CharacterSheet) -> dict[str, Any]:
+    """`state.character.attributes`: the sheet's CHARACTERISTICS, in the pack's order.
+
+    The stored attributes dict also carries what the sheet layer writes beside them —
+    the vitals (`HP`/`SAN`/`MP` and their maxima) and derived values (`IDEA`, `KNOW`,
+    …). Those are not attributes to a table: the vitals ride `resources` as meters, and
+    a derived value is computed, not owned. Sending them here forced every client to
+    know, per system, which keys to hide and how to order the rest — the TUI kept a
+    CoC table and a D&D table for exactly that. So the wire carries the keys the pack's
+    `sheet.attributes` declares, in declaration order; a pack that declares none (a
+    system with no sheet spec) sends the dict as stored, since nothing else can say
+    what it means.
+    """
+    from core.rulepacks import load_rulepack
+
+    stored = dict(sheet.attributes)
+    try:
+        spec = load_rulepack(sheet.system).sheet_spec
+        declared = list(spec.attributes.keys()) if spec is not None else []
+    except Exception:
+        declared = []
+    if not declared:
+        return stored
+    return {key: stored[key] for key in declared if key in stored}
 
 
 async def _party(

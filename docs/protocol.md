@@ -242,6 +242,13 @@ connections receive `error too_many_connections` before `join` is read.
   render order. `label` is already resolved to THIS viewer's locale: a rulepack may
   declare `sheet.resources[].label` as a locale map, so one pack's bars read
   correctly at an `en` and a `zh` connection of the SAME room.
+  `character.attributes` (v2.3) is the sheet's CHARACTERISTICS only — the keys the
+  rule system's `sheet.attributes` declares, in the pack's own order (`STR CON SIZ …`
+  for CoC 7e, `STR DEX CON …` for D&D 5e, a community pack's own for its system);
+  the vitals are NOT repeated here (they are `resources`) and derived values are
+  never sent — so a client renders the dict as-is, in wire order, and each key is a
+  name `.st <key>=<n>` accepts. A system that declares no sheet spec sends its
+  stored dict unfiltered.
   `variables[].hidden` marks a keeper-connection-only row the keeper has not `.var expose`d yet — players never receive hidden rows at all. `pregens` is the module's claimable cast (`.pc list`/`.pc claim`); `claimed_by` is the claiming member id, `""` while unclaimed; omitted when no roster exists. `systems` (v2.3) is every rule system this server discovered, each with the dialect word that makes a character in it (`make_char`, absent when the pack declares none) — what a client needs to offer character creation without knowing any rule system, so a pack that ships its own appears in every client's picker with no client release.
   `variables` (optional — omitted when the room has none) is the room's
   deterministic module variables, PLAYER-VISIBLE subset only: keeper-only variables are

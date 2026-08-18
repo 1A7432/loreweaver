@@ -250,3 +250,21 @@ async def test_keeper_viewer_sees_unexposed_leaves_flagged_hidden():
     cli_ctx = AgentCtx(chat_key=ctx_key, user_id="op", platform="cli", locale="en")
     cli_state = await build_room_state(services, cli_ctx)
     assert "mvu.真凶" in {entry["id"] for entry in cli_state["variables"]}
+
+
+async def test_state_character_attributes_are_the_declared_characteristics_in_pack_order():
+    """The stored dict also holds the vitals and derived values the sheet layer writes
+    beside the characteristics (`HP`, `SANMAX`, `IDEA`, …). Sending those made every
+    client keep a per-system table of what to hide and how to order the rest. The wire
+    carries the pack's `sheet.attributes` keys, in declaration order, and nothing else —
+    the vitals ride `resources`."""
+    services = _services()
+    ctx = _room_ctx("attrs-room", user_id="p1")
+    sheet = services.characters.generate_character("coc7", "Nora")
+    await services.characters.save_character(ctx.user_id, ctx.chat_key, sheet)
+
+    state = await build_room_state(services, ctx)
+
+    assert list(state["character"]["attributes"]) == ["STR", "CON", "SIZ", "DEX", "APP", "INT", "POW", "EDU", "LUC"]
+    assert {"HP", "HPMAX", "SAN", "SANMAX", "MP", "IDEA", "KNOW"}.isdisjoint(state["character"]["attributes"])
+    assert {entry["id"] for entry in state["character"]["resources"]} >= {"hp", "san", "mp"}

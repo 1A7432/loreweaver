@@ -98,14 +98,6 @@ const SHEET: CharacterState = {
     POW: 65,
     EDU: 80,
     LUC: 45,
-    HPMAX: 12,
-    MPMAX: 13,
-    SANMAX: 99,
-    IDEA: 75,
-    KNOW: 80,
-    HP: 12,
-    MP: 13,
-    SAN: 65,
   },
   status_effects: [],
 }
@@ -488,7 +480,10 @@ describe("CharacterScreen view actions", () => {
     act(() => renderer.destroy())
   })
 
-  test("the sheet view renders the wire's own attribute keys and hides the internal ones", async () => {
+  test("the sheet view renders the wire's own attribute keys, in wire order, knowing no system", async () => {
+    // Protocol 2.3: the server sends the pack's declared characteristics only, in the
+    // pack's order — so a community pack's own keys render exactly like CoC's, and this
+    // client keeps no table of what to hide or how to sort.
     const client = new MockClient()
     const { renderer, waitForFrame } = await openCharacterScreen(
       client,
@@ -497,20 +492,18 @@ describe("CharacterScreen view actions", () => {
       stateFrame({
         character: {
           ...SHEET,
-          attributes: { ...SHEET.attributes, SANMAXADD: 0, HPMAXADD: 0, MPMAXADD: 0 },
+          system: "homebrew",
+          attributes: { 根值: 12, Grit: 3, STR: 55 },
         },
       }),
     )
 
     const frame = await waitForFrame((t) => t.includes("属性 / ATTRIBUTES"))
-    expect(frame).toContain("STR 55")
-    expect(frame).toContain("DEX 70")
-    expect(frame).toContain("LUC 45")
-    expect(frame).not.toContain("SANMAXADD")
-    expect(frame).not.toContain("HPMAXADD")
-    expect(frame).not.toContain("MPMAXADD")
-    expect(frame).not.toContain("IDEA")
-    expect(frame).not.toContain("KNOW")
+    expect(frame).toContain("根值")
+    expect(frame).toContain("Grit")
+    expect(frame.indexOf("根值")).toBeLessThan(frame.indexOf("Grit"))
+    expect(frame.indexOf("Grit")).toBeLessThan(frame.indexOf("STR"))
+    expect(frame).toMatch(/STR\s+55/)
 
     act(() => renderer.destroy())
   })

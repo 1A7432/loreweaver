@@ -1,44 +1,22 @@
 import { stripControlChars, type CharacterState } from "loreweaver-protocol"
 
-const VITAL_KEYS = new Set(["HP", "HPMAX", "MP", "MPMAX", "SAN", "SANMAX"])
-const COC_CHARACTERISTICS = ["STR", "CON", "SIZ", "DEX", "APP", "INT", "POW", "EDU", "LUC"]
-const DND_ABILITIES = ["STR", "DEX", "CON", "INT", "WIS", "CHA"]
-const DERIVED_NOISE_KEYS = new Set(["IDEA", "KNOW"])
-
 export interface AttributeLine {
   key: string
   value: unknown
   line: string
 }
 
-function normalizedSystem(system: string): "coc" | "dnd" | "other" {
-  const value = system.toLowerCase()
-  if (value === "coc" || value === "coc7") return "coc"
-  if (value === "dnd" || value === "dnd5e") return "dnd"
-  return "other"
-}
-
-function isInternalAttribute(key: string): boolean {
-  const normalized = key.toUpperCase()
-  return VITAL_KEYS.has(normalized) || normalized.endsWith("MAXADD") || DERIVED_NOISE_KEYS.has(normalized)
-}
-
-function orderedCoreAttributes(
-  attributes: Record<string, unknown>,
-  order: string[],
-): Array<[string, unknown]> {
-  const byUpper = new Map(Object.entries(attributes).map(([key, value]) => [key.toUpperCase(), value] as const))
-  return order.flatMap((key) => (byUpper.has(key) ? ([[key, byUpper.get(key)] as [string, unknown]] as const) : []))
-}
-
+/** The sheet's attributes exactly as the wire sent them, in wire order.
+ *
+ * Protocol 2.3: `state.character.attributes` is the rule system's own declared
+ * characteristics, in the pack's order — the vitals ride `resources` and derived
+ * values are never sent. So there is nothing here to hide or reorder, and no per-system
+ * table to do it with: this client used to keep a CoC list and a D&D list for exactly
+ * that, which is per-system knowledge M16 took out of the engine and which locked a
+ * community pack's own system out of the view. */
 export function trueRuleAttributes(character?: CharacterState): Array<[string, unknown]> {
   if (!character) return []
-  const system = normalizedSystem(character.system)
-  if (system === "coc") return orderedCoreAttributes(character.attributes, COC_CHARACTERISTICS)
-  if (system === "dnd") return orderedCoreAttributes(character.attributes, DND_ABILITIES)
   return Object.entries(character.attributes)
-    .filter(([key]) => !isInternalAttribute(key))
-    .map(([key, value]) => [key.toUpperCase(), value])
 }
 
 export function attributeLines(character?: CharacterState): AttributeLine[] {
