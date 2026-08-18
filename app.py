@@ -8,6 +8,8 @@ import json
 import os
 import signal
 import sys
+import threading
+from collections.abc import AsyncIterator
 from dataclasses import asdict
 from pathlib import Path
 
@@ -190,7 +192,9 @@ async def _run_cli(runner: GatewayRunner, *, exec_cmd: str | None, script: str |
                 await adapter.handle_inbound(adapter.inbound(line, message_id=f"cli-script-{index}"))
             return 0
 
-        for index, raw in enumerate(sys.stdin, 1):
+        index = 0
+        async for raw in _stdin_lines():
+            index += 1
             line = raw.rstrip("\n")
             if not line.strip():
                 continue
@@ -198,6 +202,48 @@ async def _run_cli(runner: GatewayRunner, *, exec_cmd: str | None, script: str |
         return 0
     finally:
         await runner.stop()
+
+
+async def _stdin_lines() -> AsyncIterator[str]:
+    """Yield interactive stdin lines WITHOUT blocking the event loop.
+
+    `for raw in sys.stdin` blocks the single thread the loop runs on, so between
+    two keystrokes nothing else in the process moves. That is how a keeper lost a
+    subscription login: `.model login` starts an asyncio task polling a device-code
+    grant against a wall-clock deadline (`gateway.commands._model_login`), and the
+    poll only got a turn each time a line was typed — by which point it had almost
+    always timed out. Every other background lane (retries, timers, an Iroh
+    keep-alive on a mixed process) paid the same tax silently.
+
+    The reader is a DAEMON thread rather than `asyncio.to_thread`: a worker blocked
+    in `readline` when the operator hits Ctrl-C would be joined at interpreter exit,
+    hanging the process until the next Enter. A daemon thread is simply abandoned.
+    """
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+    def _post(item: str | None) -> bool:
+        try:
+            loop.call_soon_threadsafe(queue.put_nowait, item)
+        except RuntimeError:
+            return False  # loop already closed — the CLI is shutting down
+        return True
+
+    def _pump() -> None:
+        try:
+            for raw in sys.stdin:
+                if not _post(raw):
+                    return
+        except Exception:  # noqa: BLE001 — a broken pipe ends input, it does not crash the CLI
+            pass
+        _post(None)
+
+    threading.Thread(target=_pump, name="cli-stdin", daemon=True).start()
+    while True:
+        item = await queue.get()
+        if item is None:
+            return
+        yield item
 
 
 def _cli_adapter(runner: GatewayRunner) -> CliAdapter:
