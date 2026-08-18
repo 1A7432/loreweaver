@@ -357,6 +357,21 @@ async def test_knowledge_tools_end_to_end(tmp_path):
     clock_raw = json.loads(await services.store.state_get(CHAT_KEY, "game_clock"))
     assert clock_raw["current_time"] == "1926-03-15 11:00"
 
+    # A module's OWN calendar: the face cannot be moved by the engine, but a parseable
+    # delta is still an advance — the room hooks (a module's day counter) consume the
+    # delta, never the face. Before this the advance was dropped whole, and every
+    # custom-calendar module's calendar hooks silently never fired.
+    ctx.extra.pop("clock_advances", None)
+    await note_tools.game_clock(ctx, action="set", value="澹洲三百年六月初二 午时")
+    kept = await note_tools.game_clock(ctx, action="advance", value="+3天")
+    assert "✅" in kept and "澹洲三百年六月初二 午时" in kept
+    clock_raw = json.loads(await services.store.state_get(CHAT_KEY, "game_clock"))
+    assert clock_raw["current_time"] == "澹洲三百年六月初二 午时"  # face untouched
+    assert ctx.extra["clock_advances"] == [
+        {"from": "澹洲三百年六月初二 午时", "to": "澹洲三百年六月初二 午时", "delta": "+3天"}
+    ]
+    ctx.extra.pop("clock_advances", None)
+
     # -- 6. start_session_recording + generate_session_report produce a report ------------------------
     await session_tools.start_session_recording(ctx, session_name="Blackmoor One-Shot")
     await services.battles.add_dice_roll(CHAT_KEY, "u1", "Nora", "1d100", 7, True, "success")

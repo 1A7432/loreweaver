@@ -223,6 +223,40 @@ async def test_clock_advanced_fires_once_per_clock_tool_advance():
     assert "clock:D1 09:00>D2 09:00/+1天" in result.reply
 
 
+async def test_clock_advanced_fires_for_a_module_calendar_the_engine_cannot_move():
+    """A module running its own calendar sets a face the engine cannot parse; an
+    `advance` with a parseable delta must still reach the room hooks — that is the only
+    thing a module day-counter consumes. (2026-08-18 《安土》 run 1: the advance was dropped
+    whole and the module's calendar froze for 25 in-game days.)"""
+    from agent.kp_tools_knowledge import NoteTools
+
+    llm = FakeLLM(
+        script=[
+            assistant_tools(tool_call("game_clock", action="set", value="澹洲三百年六月初二 午时")),
+            assistant_tools(tool_call("game_clock", action="advance", value="+3天")),
+            assistant_text("done"),
+        ]
+    )
+    services = _services(llm)
+    ctx = _ctx("chat-hooks-clock-custom")
+    await define_modvar(services.documents, ctx.chat_key, build_spec("day", "number", minimum=0, maximum=200))
+    await install_room_hooks(
+        services,
+        ctx.chat_key,
+        "test",
+        [
+            "on('clock_advanced', (e) => { const m = /(\\d+)\\s*天/.exec(e.delta); if (m) incvar('day', parseInt(m[1], 10));"
+            " narrate('advance:' + e.delta + '@' + e.to); });"
+        ],
+    )
+
+    result = await run_kp_turn(ctx, services, Toolset(NoteTools(services)), "三日后")
+
+    assert "advance:+3天@澹洲三百年六月初二 午时" in result.reply  # face kept, delta delivered
+    state = await load_modvars(services.documents, ctx.chat_key)
+    assert state["values"]["day"] == 3
+
+
 async def test_clock_advanced_stale_records_never_leak_into_the_next_turn():
     from agent.kp_tools_knowledge import NoteTools
 

@@ -108,6 +108,7 @@
   "kp_tools.know.catalog.summary_line": "📝 概要：{summary}",
   "kp_tools.know.clock.advance_done": "✅ 游戏时间已推进 {delta}，当前：{time}",
   "kp_tools.know.clock.advance_unparsed": "⚠️ 无法解析“{delta}”（或当前钟面“{time}”）——时钟未变动。请用“+30分钟”/“+2小时”/“+1天”推进，或用 set 直接设定如“1926-03-15 14:00”。",
+  "kp_tools.know.clock.advance_face_kept": "✅ 已记录推进 {delta}（房间的日历钩子会收到）。钟面“{time}”不是引擎能自动推进的格式，未改动——请用 set 写新的钟面文字（自造历法：advance 记增量，set 写钟面）。",
   "kp_tools.know.clock.all_events_heading": "📅 全部日程记录：",
   "kp_tools.know.clock.bad_action": "❌ 不支持的 action：{action}",
   "kp_tools.know.clock.current": "🕐 当前游戏时间：{time}",
