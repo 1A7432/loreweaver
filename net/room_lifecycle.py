@@ -54,6 +54,7 @@ FACET_MODULES: tuple[str, ...] = (
     "gateway.hub",
     "gateway.media",
     "gateway.ops",
+    "gateway.turn",
     "infra.usage_stats",
 )
 

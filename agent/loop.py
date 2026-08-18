@@ -238,6 +238,7 @@ async def run_kp_turn(
     max_rounds: int = 12,
     output_review: Callable[[str], str] | None = None,
     on_reply_delta: Callable[[dict], Awaitable[None]] | None = None,
+    on_tool_event: Callable[[dict], Awaitable[None]] | None = None,
 ) -> KPTurnResult:
     """Drive one AI-KP turn to completion and return its `KPTurnResult`.
 
@@ -246,6 +247,14 @@ async def run_kp_turn(
     `_ReplyStreamGate` (machinery/MVU blocks can never stream). A tool round's draft
     is discarded (clients clear on the next epoch); the final `reply` remains the
     authoritative text clients reconcile to.
+
+    `on_tool_event`, if given, receives each `tool_trace` entry the moment it is
+    recorded, so a transport can publish that tool's public consequences (a dice
+    frame, an NPC's line) WHEN THEY HAPPEN. Reading them off the finished trace
+    instead put them after the reply's streaming draft had already opened, so the
+    table saw the Keeper's narration above the roll it was narrating — and below it
+    on a turn that did not stream. Entries arrive in call order and the callback's
+    failures are the caller's to swallow: nothing here waits on a transport.
 
     `history_key` defaults to the room_state key ``"chat_history"`` (room-scoped
     by the room_state table's room column). `output_review`, if given, post-processes the final reply (e.g.
@@ -514,6 +523,7 @@ async def run_kp_turn(
                     phase=phase,
                     room_pack=room_pack,
                     hook_engine=hook_engine,
+                    on_tool_event=on_tool_event,
                 )
             except (asyncio.CancelledError, Exception):
                 _clear_llm_continuation(services, messages)
@@ -546,6 +556,7 @@ async def run_kp_turn(
             subsystem_tools=subsystem_tools,
             hook_engine=hook_engine,
             temperature=services.settings.llm.temperature,
+            on_tool_event=on_tool_event,
         )
 
     if reply is None:  # max_rounds exhausted without ever reaching a plain-text reply
@@ -898,6 +909,7 @@ async def _dispatch_and_record(
     phase: str | None = None,
     room_pack: RulePack | None = None,
     hook_engine=None,
+    on_tool_event: Callable[[dict], Awaitable[None]] | None = None,
 ) -> None:
     """Dispatch one assistant round's tool calls, feeding results back into `conversation` + `tool_trace`.
 
@@ -923,7 +935,8 @@ async def _dispatch_and_record(
             )
         )
         for call, (tool_result, suppressed) in zip(result.tool_calls, results, strict=True):
-            _record_call(toolset, ctx, call, tool_result, suppressed, conversation, tool_trace)
+            entry = _record_call(toolset, ctx, call, tool_result, suppressed, conversation, tool_trace)
+            await _announce_tool_event(on_tool_event, entry)
         _move_in_turn_breakpoint(conversation)
         return
     for call in result.tool_calls:
@@ -944,7 +957,8 @@ async def _dispatch_and_record(
             tool_result, suppressed = await _dispatch_one(
                 toolset, ctx, services, call, tool_trace, unlocked, phase, room_pack, hook_engine
             )
-        _record_call(toolset, ctx, call, tool_result, suppressed, conversation, tool_trace)
+        entry = _record_call(toolset, ctx, call, tool_result, suppressed, conversation, tool_trace)
+        await _announce_tool_event(on_tool_event, entry)
     _move_in_turn_breakpoint(conversation)
 
 
@@ -1004,8 +1018,8 @@ def _record_call(
     suppressed: bool,
     conversation: list[dict],
     tool_trace: list[dict],
-) -> None:
-    """Append one dispatched call to the trace and the conversation."""
+) -> dict:
+    """Append one dispatched call to the trace and the conversation; return the entry."""
     tool_result = _capped_tool_result(tool_result, ctx.locale)
     trace_entry = {
         "name": call.name,
@@ -1020,6 +1034,25 @@ def _record_call(
         trace_entry["dice_payloads"] = dice_payloads
     tool_trace.append(trace_entry)
     conversation.append({"role": "tool", "tool_call_id": call.id, "content": tool_result})
+    return trace_entry
+
+
+async def _announce_tool_event(
+    on_tool_event: Callable[[dict], Awaitable[None]] | None, entry: dict
+) -> None:
+    """Hand one recorded trace entry to the transport, if it asked for them.
+
+    Swallows everything short of cancellation: a transport that cannot publish a dice
+    frame must not abort a turn whose engine state has already changed.
+    """
+    if on_tool_event is None:
+        return
+    try:
+        await on_tool_event(entry)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — publishing is not part of resolving the turn
+        logger.warning("tool event publish failed for %s", entry.get("name"), exc_info=True)
 
 
 # One tool result may not dominate the context. A knowledge/worldbook return can be
@@ -1051,6 +1084,7 @@ async def _run_turn_checks(
     subsystem_tools: list[dict] | None = None,
     hook_engine=None,
     temperature: float | None,
+    on_tool_event: Callable[[dict], Awaitable[None]] | None = None,
 ) -> str:
     """Run this room's end-of-turn check table in pure Stop form; return the final reply.
 
@@ -1117,6 +1151,7 @@ async def _run_turn_checks(
                         phase=phase,
                         room_pack=room_pack,
                         hook_engine=hook_engine,
+                        on_tool_event=on_tool_event,
                     )
                 except (asyncio.CancelledError, Exception):
                     _clear_llm_continuation(services, convo)

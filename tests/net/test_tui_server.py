@@ -924,14 +924,24 @@ async def test_kp_turn_broadcasts_ai_npc_dialogue_before_kp_narrative_without_le
 
         echo = await _recv(ws)
         busy = await _recv(ws)
-        streamed = []
-        npc_frame = await _recv(ws)
-        while npc_frame["type"] == "narrative_delta":
-            streamed.append(npc_frame)  # the KP reply streams before the npc/kp order pair
-            npc_frame = await _recv(ws)
-        kp_frame = await _recv(ws)
-        idle = await _recv(ws)
+        # The NPC speaks when the tool runs — BEFORE the reply that weaves her line
+        # starts streaming. Reading the events off the finished trace instead made the
+        # order depend on whether the provider streamed at all: the draft bubble opened
+        # first, so a streaming turn showed the narration above the line it quoted.
+        frames = []
+        while True:
+            frame = await _recv(ws)
+            frames.append(frame)
+            if frame["type"] == "turn_status" and frame["status"] == "idle":
+                break
         state = await _recv(ws)
+        idle = frames[-1]
+        streamed = [frame for frame in frames if frame["type"] == "narrative_delta"]
+        npc_frame = next(f for f in frames if f["type"] == "narrative" and f["speaker"] == "npc")
+        kp_frame = next(f for f in frames if f["type"] == "narrative" and f["speaker"] == "kp")
+        assert frames.index(npc_frame) < frames.index(kp_frame)
+        if streamed:
+            assert frames.index(npc_frame) < frames.index(streamed[0])
 
         assert echo["type"] == "narrative" and echo["speaker"] == "player"
         assert busy == {"type": "turn_status", "status": "busy", "actor": "Nora"}
@@ -1040,6 +1050,61 @@ async def test_a_party_member_on_another_system_keeps_their_seat_and_loses_their
 # BUG B: history replay on join -- a joining/reconnecting player sees the
 # room's recent narrative instead of an empty log.
 # ---------------------------------------------------------------------------
+
+
+async def test_join_replays_this_turn_s_rolls_and_npc_lines_in_order():
+    """A reconnecting member used to get a transcript with every roll missing.
+
+    Only prose was ever stored, so replay could only render prose: the same scene read
+    one way for whoever stayed connected and another for whoever rejoined — which is
+    exactly what a keeper rebuilding a client all evening sees.
+    """
+    from gateway.hub import Event
+    from gateway.turn import record_turn_events
+
+    services = _services()
+    keystore = Keystore()
+    key = keystore.add(room="event-replay-room", name="Ann")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        chat_key = _room_ctx("event-replay-room").chat_key
+        await append_turn(
+            services,
+            chat_key,
+            DEFAULT_HISTORY_KEY,
+            user_message="I ask Martha what she heard",
+            reply="Martha's warning leaves the room quiet.",
+            turn=1,
+        )
+        await record_turn_events(
+            services.store,
+            chat_key,
+            1,
+            [
+                Event.dice(actor="Ann", kind="check", expr="1d100", total=37),
+                Event.narrative(speaker="npc", name="Martha", text="I heard the gate.", fmt="markdown"),
+            ],
+        )
+
+        ws = await websockets.connect(url)
+        await _join(ws, key, "Ann")
+        await _recv(ws)  # own join presence
+
+        frames = [await _recv(ws) for _ in range(4)]
+        kinds = [(frame["type"], frame.get("speaker")) for frame in frames]
+        assert kinds == [
+            ("narrative", "player"),
+            ("dice", None),
+            ("narrative", "npc"),
+            ("narrative", "kp"),
+        ], kinds
+        assert frames[1]["total"] == 37
+        assert frames[2]["name"] == "Martha"
+
+        await ws.close()
+    finally:
+        await server.close()
 
 
 async def test_join_replays_recent_chat_history_to_the_joiner_only():

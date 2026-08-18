@@ -8,11 +8,15 @@ turn machinery — ``gateway.commands.CommandRouter`` for slash/dot commands,
 ``agent.loop.run_kp_turn`` for the AI-KP — and every member of the room, on
 whatever transport, receives the same fan-out via ``hub.publish``.
 
-The published order is fixed and matches what the M4 WS server produced:
-``player_action`` echo -> one ``dice`` event per dice/check tool-trace entry ->
-one ``narrative`` (speaker ``npc``) per ``speak_as_npc`` entry -> the
-``narrative`` (speaker ``kp``) reply -> one ``ui`` event per hook-emitted UI frame
-(protocol v1.7) -> the room ``state`` snapshot. On a real
+The published order follows the fiction's own: ``player_action`` echo -> each tool's
+public consequences AS IT RUNS (a ``dice`` event per roll, a ``narrative`` with speaker
+``npc`` per ``speak_as_npc``) -> the ``narrative`` (speaker ``kp``) reply -> one ``ui``
+event per hook-emitted UI frame (protocol v1.7) -> the room ``state`` snapshot. Those
+tool events were once read off the FINISHED trace, which put them after the reply's
+streaming draft had already opened — so a streaming turn showed the narration above the
+roll it narrated and a non-streaming turn showed it below, same room, order decided by
+the provider. They are also recorded (``record_turn_events``) so a member who joins or
+reconnects replays the same scene rather than one with every roll missing. On a real
 (non-command) AI-KP turn, the KP narrative is also followed by a best-effort
 call into ``gateway.director.run_director`` (M10), which lets the party's AI
 companions take an auto-paced turn (their own sub-turns fan out through this
@@ -22,6 +26,7 @@ same function) before the room ``state`` snapshot is published.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -32,6 +37,7 @@ from gateway.ops import room_content_unfiltered
 from gateway.panels import deliver_panel_events
 from gateway.ui_media import filter_ui_media
 from infra.i18n import I18n, get_i18n
+from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
 from infra.usage_stats import record_usage_stats
 from net.state import build_room_state, resolve_active_character
 
@@ -254,18 +260,31 @@ async def run_turn(
                     Event.narrative_delta(speaker="kp", text=frame["text"], frame_id=stream_state["id"]),
                 )
 
+            async def _emit_tool_event(entry: dict) -> None:
+                """Publish one tool's public consequences AS IT HAPPENS.
+
+                These used to be read off the finished trace after `run_kp_turn`
+                returned — which put them after the streaming draft bubble had already
+                opened, so a streaming turn showed the Keeper's narration ABOVE the roll
+                it was narrating, and a non-streaming turn showed it below. Same frames,
+                same room, order decided by whether the provider happened to stream.
+                Publishing at the call site makes the log match the fiction's own order
+                on every turn: the dice land, the NPC speaks, the narration closes.
+                """
+                for event in _public_tool_events(entry, name, i18n):
+                    await hub.publish(ctx.chat_key, event)
+
             final_published = False
             try:
                 result = await run_kp_turn(
-                    ctx, services, toolset, text, output_review=review, on_reply_delta=_emit_reply_delta
+                    ctx,
+                    services,
+                    toolset,
+                    text,
+                    output_review=review,
+                    on_reply_delta=_emit_reply_delta,
+                    on_tool_event=_emit_tool_event,
                 )
-                for entry in result.tool_trace:
-                    for dice_event in _dice_events(entry, name):
-                        await hub.publish(ctx.chat_key, dice_event)
-                for entry in result.tool_trace:
-                    npc_event = _npc_event(entry, i18n)
-                    if npc_event is not None:
-                        await hub.publish(ctx.chat_key, npc_event)
                 await hub.publish(
                     ctx.chat_key,
                     Event.narrative(speaker="kp", text=result.reply, fmt="markdown", frame_id=stream_state["id"]),
@@ -279,6 +298,18 @@ async def run_turn(
                         ctx.chat_key,
                         Event.narrative(speaker="kp", text="", fmt="markdown", frame_id=stream_state["id"]),
                     )
+            # Replay (net.session._replay_history) reconstructs a joining member's log
+            # from stored history, which held ONLY the player/KP prose: every dice roll
+            # and every NPC line vanished for anyone who reconnected, so two people at
+            # one table ended up with different transcripts of the same scene. Recorded
+            # HERE rather than in `_emit_tool_event` because the turn index is only
+            # settled once the turn is (see `KPTurnResult.turn`).
+            await record_turn_events(
+                services.store,
+                ctx.chat_key,
+                result.turn,
+                [event for entry in result.tool_trace for event in _public_tool_events(entry, name, i18n)],
+            )
             # Hook-emitted declarative UI (protocol v1.7) rides right behind the
             # narrative it annotates, before the closing `state` snapshot. Image
             # blocks pass the reachability gate first: a hash this room cannot fetch
@@ -555,6 +586,68 @@ def _npc_event(entry: dict[str, Any], i18n: I18n) -> Event | None:
     )
 
 
+def _public_tool_events(entry: dict[str, Any], actor: str, i18n: I18n) -> list[Event]:
+    """Everything ONE tool call puts in front of the whole table, in table order.
+
+    The single definition of that, shared by the live publish and the replay record —
+    two lists that drifted apart would show a reconnecting player a different scene
+    than the one everyone else watched.
+    """
+    events = list(_dice_events(entry, actor))
+    npc_event = _npc_event(entry, i18n)
+    if npc_event is not None:
+        events.append(npc_event)
+    return events
+
+
+# The public tool events of recent turns, kept for join replay. Capped like every other
+# replay lane: a room that has run for months replays a scene, not a campaign.
+TURN_EVENT_HISTORY_KEY = "turn_event_history"
+TURN_EVENT_HISTORY_CAP = 200
+
+
+async def record_turn_events(store: Any, chat_key: str, turn: int, events: list[Event]) -> None:
+    """Store `turn`'s public tool events so a joining member's replay can include them.
+
+    Best-effort, and PUBLIC only: a private event is a unicast to one connection and has
+    no place in a lane that is re-broadcast to whoever joins next. `turn <= 0` records
+    nothing — that is the provider-error early return, which committed no turn at all,
+    so there is no history record for these events to sit beside.
+    """
+    if turn <= 0 or not events:
+        return
+    payload = [
+        {
+            "turn": turn,
+            "event": {
+                "kind": event.kind,
+                "speaker": event.speaker,
+                "name": event.name,
+                "text": event.text,
+                "fmt": event.fmt,
+                "data": event.data,
+            },
+        }
+        for event in events
+        if not event.private
+    ]
+    if not payload:
+        return
+    try:
+        raw = await store.state_get(chat_key, TURN_EVENT_HISTORY_KEY)
+        history = json.loads(raw) if raw else []
+        if not isinstance(history, list):
+            history = []
+        history.extend(payload)
+        await store.state_set(
+            chat_key,
+            TURN_EVENT_HISTORY_KEY,
+            json.dumps(history[-TURN_EVENT_HISTORY_CAP:], ensure_ascii=False),
+        )
+    except Exception:  # noqa: BLE001 — a replay convenience must never break a turn
+        logger.warning("turn: could not record public tool events for %s", chat_key, exc_info=True)
+
+
 def _dice_events(entry: dict[str, Any], actor: str) -> list[Event]:
     """Build public dice events from the payloads bound during tool dispatch.
 
@@ -591,3 +684,18 @@ def _dice_events(entry: dict[str, Any], actor: str) -> list[Event]:
             )
         )
     return events
+
+
+# --- Room lifecycle (M23 WS1) -----------------------------------------------
+ROOM_FACETS = (
+    RoomStateFacet(
+        name="turn_events",
+        owner="gateway.turn",
+        # The public dice/NPC frames of recent turns: the same narrative session
+        # `agent.history`'s conversation facet holds, in its wire form. A story reset
+        # that kept them would replay rolls from a campaign the room just erased.
+        reset_scope="story",
+        state_keys=frozenset({TURN_EVENT_HISTORY_KEY}),
+        storages=frozenset({STORAGE_ROOM_STATE}),
+    ),
+)

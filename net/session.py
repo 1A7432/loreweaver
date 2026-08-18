@@ -33,7 +33,7 @@ from gateway.hub import Event, RoomHub
 from gateway.media import MEDIA_HISTORY_REPLAY_CAP, media_frame, record_media_history
 from gateway.ops import Censor, RateLimiter, censor_from_settings, is_media_enabled, set_media_enabled
 from gateway.session import SessionSource
-from gateway.turn import publish_state, run_turn
+from gateway.turn import TURN_EVENT_HISTORY_KEY, publish_state, run_turn
 from infra.i18n import I18n, get_i18n
 from infra.media_store import (
     ALLOWED_AUDIO_MIMES,
@@ -325,12 +325,47 @@ class SessionCore:
         self.turns: deque[KPTurnResult] = deque(maxlen=50)
         self.join_timeout = tui_settings.join_timeout if join_timeout is None else join_timeout
 
+    async def _recorded_turn_events(self, chat_key: str) -> dict[int, list[Event]]:
+        """`turn -> public tool events`, rebuilt from `gateway.turn`'s replay lane.
+
+        Best-effort like the rest of replay: an unreadable lane costs the rolls, not
+        the transcript.
+        """
+        events: dict[int, list[Event]] = {}
+        try:
+            raw = await self.services.store.state_get(chat_key, TURN_EVENT_HISTORY_KEY)
+            records = json.loads(raw) if raw else []
+        except Exception:
+            logger.debug("replay: turn event history unreadable for %s", chat_key, exc_info=True)
+            return events
+        if not isinstance(records, list):
+            return events
+        for record in records:
+            if not isinstance(record, dict) or not isinstance(record.get("event"), dict):
+                continue
+            payload = record["event"]
+            events.setdefault(int(record.get("turn", 0) or 0), []).append(
+                Event(
+                    kind=str(payload.get("kind") or ""),
+                    speaker=str(payload.get("speaker") or ""),
+                    name=str(payload.get("name") or ""),
+                    text=str(payload.get("text") or ""),
+                    fmt=str(payload.get("fmt") or "plain"),
+                    data=payload.get("data") if isinstance(payload.get("data"), dict) else {},
+                )
+            )
+        return events
+
     async def _replay_history(self, member: Any) -> None:
         """Replay this room's recent narrative to `member` ONLY (never broadcast to the room).
 
         A joining/reconnecting player would otherwise see an empty log while the KP session keeps
         continuing from server-side history. Renders the last `_HISTORY_REPLAY_CAP` `chat_history`
-        entries as `narrative` frames. Best-effort: any failure silently no-ops.
+        entries as `narrative` frames, each KP reply preceded by that turn's public tool events —
+        the dice and the NPC lines. Those used to be dropped, because only prose was ever stored:
+        a member who reconnected got a transcript with every roll missing while everyone who
+        stayed connected kept theirs, so the same scene read differently at one table.
+        Best-effort: any failure silently no-ops.
         """
         chat_key = self._ctx_for(member).chat_key
         try:
@@ -344,6 +379,7 @@ class SessionCore:
                 raw = await self.services.store.state_get(chat_key, "chat_history")
                 legacy = json.loads(raw) if raw else []
                 history = legacy if isinstance(legacy, list) else []
+            events_by_turn = await self._recorded_turn_events(chat_key)
             for entry in history[-_HISTORY_REPLAY_CAP:]:
                 if not isinstance(entry, dict):
                     continue
@@ -351,6 +387,14 @@ class SessionCore:
                 if not text:
                     continue
                 role = entry.get("role")
+                if role == "assistant":
+                    # The rolls and NPC lines that happened DURING this turn, before its
+                    # narration closed — the live order (gateway.turn), reproduced.
+                    # `load_chain` renames the stored `turn` to `_lw_turn`; the legacy
+                    # room_state blob has neither, and 0 matches no recorded turn.
+                    turn_index = int(entry.get("_lw_turn", entry.get("turn", 0)) or 0)
+                    for event in events_by_turn.pop(turn_index, []):
+                        await member.deliver(event)
                 # Replay is STORY continuity, not an ops log: dot-command echoes and
                 # their system responses (setup acks, ".panels enable" …) read as
                 # backstage noise to a joining player, so only the narrative lanes
