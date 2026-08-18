@@ -138,8 +138,12 @@ class WorldbookTools:
         i18n = self._i18n(ctx)
         try:
             # Explicit keeper browse: conditions must not hide entries here (`query_lore` is the
-            # "show me what exists" path; injection-time gating happens in the prompt builder).
-            entries = await self._services.worldbook.match(ctx.chat_key, query, role="keeper", ignore_conditions=True)
+            # "show me what exists" path; injection-time gating happens in the prompt builder),
+            # and always-on entries do not select themselves — they are already in every prompt,
+            # and a module with a few dense constants would otherwise return nothing but them.
+            entries = await self._services.worldbook.match(
+                ctx.chat_key, query, role="keeper", ignore_conditions=True, include_constant=False
+            )
             if not entries:
                 return i18n.t("worldbook.tools.query.empty", query=query)
             secret_tag = i18n.t("worldbook.tools.query.secret_tag")

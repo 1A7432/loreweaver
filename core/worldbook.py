@@ -338,8 +338,14 @@ class Worldbook:
         ignore_conditions: bool = False,
         rng: random.Random | None = None,
         advance_timers: bool = False,
+        include_constant: bool = True,
     ) -> list[LoreEntry]:
         """Select the entries to inject for `context_text`.
+
+        `include_constant=False` is the BROWSE posture (`query_lore`): an always-on entry is
+        already in every keeper prompt, and on the browse path's small `limit`/`budget_chars`
+        a handful of them crowds out the very hits the query asked for. A constant entry can
+        still be selected there when its keywords match; it just no longer selects itself.
 
         `resolve` is a `core.condexpr` resolver over the room's variables; a conditioned entry
         fires only when its condition evaluates true, and FAILS CLOSED (broken expression, or no
@@ -384,7 +390,7 @@ class Worldbook:
                 continue
             if not _timer_eligible(entry):
                 continue
-            if entry.constant or _keyword_hit(entry, context):
+            if (entry.constant and include_constant) or _keyword_hit(entry, context):
                 selected[entry.id] = entry
 
         for entry in await self._semantic_hits(chat_key, context, limit=limit):

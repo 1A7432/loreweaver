@@ -217,3 +217,31 @@ async def test_import_binds_char_macro_statically():
     assert entry.title == "about 络络"
     assert entry.content == "络络 fears 络络's past. {{user}} may ask."  # {{user}} stays dynamic
     assert entry.keys == ["络络"]
+
+
+# ---------------------------------------------------------------------------
+# Browse posture: constants must not crowd the query out of its own answer
+# ---------------------------------------------------------------------------
+
+
+async def test_browse_match_lets_keyword_hits_through_a_wall_of_constants():
+    constants = [
+        _entry(id=f"const-{i}", title=f"c{i}", keys=["nothing-matches-this"], constant=True, priority=10,
+               content="x" * 700)
+        for i in range(9)
+    ]
+    keyed = _entry(id="scene", title="the well scene", keys=["well"], priority=8, content="the well is dry")
+    manager = await _manager_with([*constants, keyed])
+
+    # Injection posture (the prompt builder): constants select themselves and, at the browse
+    # defaults (8 entries / 4000 chars), leave no room for the hit.
+    injected = await manager.match("room1", "we go to the well", role="keeper")
+    assert "scene" not in {entry.id for entry in injected}
+    # Browse posture (`query_lore`): the constants no longer select themselves.
+    browsed = await manager.match("room1", "we go to the well", role="keeper", include_constant=False)
+    assert [entry.id for entry in browsed] == ["scene"]
+    # A constant that keyword-matches is still a legitimate browse hit.
+    matching = _entry(id="const-hit", title="wells", keys=["well"], constant=True, priority=10, content="all wells")
+    await manager.add("room1", matching)
+    browsed = await manager.match("room1", "we go to the well", role="keeper", include_constant=False)
+    assert {entry.id for entry in browsed} == {"scene", "const-hit"}
