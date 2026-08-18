@@ -69,6 +69,9 @@ from agent.kp_tools import build_kp_toolset  # noqa: E402
 # any judgement about what a player was attempting -- see `judge_checkable`.
 from agent.services import build_services  # noqa: E402
 from agent.turn_checks import dice_rolled, reply_states_a_roll  # noqa: E402
+from core import pack as core_pack  # noqa: E402
+from core import rulepacks as core_rulepacks  # noqa: E402
+from core import skills as core_skills  # noqa: E402
 from core.character_manager import get_hit_points  # noqa: E402
 from core.charcard import parse_card_file  # noqa: E402
 from core.chronicle import CHRONICLE_DOC_TYPE  # noqa: E402
@@ -105,7 +108,10 @@ ARCHETYPES = [
 
 # Sentence/clause boundary for splitting a long secret string into medium-length
 # candidate snippets (EN + CJK terminal punctuation, or a newline).
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?。！？])\s+|\n+")
+# CJK sentences carry no whitespace after their terminal punctuation, so a Latin-only
+# `(?<=[。])\s+` never split a Chinese secret — the whole entry became one over-long
+# snippet and literal-leak detection silently saw nothing for CJK modules.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|(?<=[。！？；])\s*|\n+")
 
 
 def extract_secret_snippets(keeper_pool_raw: str, min_len: int = 30, max_len: int = 220, cap: int = 80) -> list[str]:
@@ -1313,6 +1319,77 @@ class Recorder:
         self.fh.close()
 
 
+
+
+# =============================================================================
+# Pack-module support: play a real .lwpack / pack source tree instead of a module text
+# =============================================================================
+
+
+def install_pack_for_playtest(settings, pack_arg: str) -> tuple[str, Path, list[str]]:
+    """Build (if a source dir) + install `pack_arg` under `settings.data_dir` exactly the way
+    `app.py --install` does, then return ``(pack_id, pack_home, skill_ids)``. Reloads skill and
+    rulepack discovery so the room can `.skill enable` / build characters on the pack's system."""
+    from lw_versioning import resolve_version
+    from net.session import PROTOCOL_VERSION
+
+    source = (ROOT / pack_arg).resolve()
+    if source.is_dir():
+        with tempfile.TemporaryDirectory() as tmp:
+            built = core_pack.build_pack(source, Path(tmp) / f"{source.name}.lwpack")
+            pack_path = built.path
+            return _install_built(settings, pack_path, PROTOCOL_VERSION, resolve_version())
+    return _install_built(settings, source, PROTOCOL_VERSION, resolve_version())
+
+
+def _install_built(settings, pack_path: Path, protocol: str, server: str) -> tuple[str, Path, list[str]]:
+    data_dir = Path(settings.data_dir)
+    report = core_pack.install_pack(
+        pack_path,
+        packs_dir=data_dir / "packs",
+        skills_dir=data_dir / "skills",
+        rulepacks_dir=data_dir / "rulepacks",
+        presets_dir=data_dir / "presets",
+        current_protocol=protocol,
+        current_server=server,
+        builtin_skill_ids=[entry.parent.name for entry in core_skills._SKILL_DIR.glob("*/SKILL.md")],
+        builtin_rulepack_ids=[entry.stem for entry in core_rulepacks._RULEPACK_DIR.glob("*.yaml")],
+    )
+    core_skills.reload_skills()
+    core_rulepacks.reload_rulepacks()
+    return report.manifest.id, Path(report.pack_dir), list(report.skills)
+
+
+def secret_blob_from_lorecard(card_path: Path) -> str:
+    """The keeper-only half of a native card, in the JSON shape `extract_secret_snippets`
+    walks — every secret entry's title + content."""
+    from core.lorecard import parse_lorecard_bytes
+
+    card = parse_lorecard_bytes(card_path.read_bytes(), card_path.name)
+    secrets = [
+        {"title": entry.get("comment", entry.get("title", "")), "content": entry.get("content", "")}
+        for entry in card.card.character_book
+        if entry.get("secret")
+    ]
+    return json.dumps(secrets, ensure_ascii=False)
+
+
+async def _setup_world_card(services, router, chat_key: str, world_card: Path, pack_id: str, skill_ids: list[str], rec: Recorder,
+                            pc_system: str = "") -> str:
+    """Land a pack module the way a keeper does at the table — the real command surface:
+    `.import <card> world`, `.panels enable <pack>`, `.skill enable <skill>`. Returns the
+    keeper-only text blob for leak scoring."""
+    fs = LocalFs(str(ROOT))
+    kctx = AgentCtx(chat_key=chat_key, user_id="playtest:keeper", platform="cli", locale="zh", fs=fs)
+    replies = []
+    system_word = f" {pc_system}" if pc_system else ""
+    for command in (f".import {world_card}{system_word} world", f".panels enable {pack_id}", *(f".skill enable {sid}" for sid in skill_ids)):
+        reply = await router.dispatch(kctx, command)
+        replies.append(f"{command} -> {str(reply)[:160]}")
+    rec.emit("world_card_setup", chat_key=chat_key, card=str(world_card), replies=replies)
+    return secret_blob_from_lorecard(world_card)
+
+
 async def _gen_player_action(services, archetype_desc: str, name: str, recent: str) -> str:
     prompt = (
         f"You are {name}, {archetype_desc}, a PLAYER (not the Keeper) at a Call of Cthulhu table. "
@@ -1360,10 +1437,17 @@ async def _setup(services, ts, module_path: Path, companion_path: Path | None, c
 
 
 async def run_session(
-    services, ts, router, hub, module_path, companion_path, players, turns, sidx, rec: Recorder, secret_concepts: list[str]
+    services, ts, router, hub, module_path, companion_path, players, turns, sidx, rec: Recorder, secret_concepts: list[str],
+    world_card: Path | None = None, pack_id: str = "", skill_ids: list[str] | None = None, pc_system: str = "coc7",
 ):
     chat_key = f"playtest:s{sidx}"
-    keeper_pool, companion_name = await _setup(services, ts, module_path, companion_path, chat_key, rec)
+    if world_card is not None:
+        # A pack module: no knowledge pool, the card IS the module. Land it through the real
+        # keeper command surface and score leaks against the card's secret entries.
+        keeper_pool = await _setup_world_card(services, router, chat_key, world_card, pack_id, skill_ids or [], rec, pc_system=pc_system)
+        companion_name = None
+    else:
+        keeper_pool, companion_name = await _setup(services, ts, module_path, companion_path, chat_key, rec)
     secret_snippets = extract_secret_snippets(keeper_pool)
 
     fs = LocalFs(str(ROOT))
@@ -1372,7 +1456,7 @@ async def run_session(
         try:
             await ts.dispatch("create_character",
                               AgentCtx(chat_key=chat_key, user_id=f"pc:{pname}", platform="cli", locale="en", fs=fs),
-                              {"name": pname, "system": "coc7"})
+                              {"name": pname, "system": pc_system})
         except Exception as exc:
             rec.metrics.errors += 1
             rec.emit("create_char_error", player=pname, error=str(exc))
@@ -1468,6 +1552,12 @@ async def main():
     ap.add_argument("--baseline-summary", default="",
                     help="optional behavioral baseline; requires final state divergence to improve by >=1 case")
     ap.add_argument("--module", default="tests/fixtures/module_en.txt")
+    ap.add_argument("--pack", default="",
+                    help="a pack source dir or .lwpack to build/install into the run's data dir (pack modules)")
+    ap.add_argument("--world-card", default="",
+                    help="with --pack: the card path RELATIVE to the pack (e.g. cards/antu.lorecard.json), "
+                         "keeper-imported as the module (`.import … world`) instead of --module")
+    ap.add_argument("--pc-system", default="coc7", help="rule system the simulated players' sheets are built on")
     ap.add_argument("--companion", default="cards/companion_shenmo.json")
     ap.add_argument("--players", type=int, default=2)
     ap.add_argument("--turns", type=int, default=6)
@@ -1610,10 +1700,20 @@ async def main():
              secret_concepts=secret_concepts, thresholds=asdict(thresholds))
     module_path = (ROOT / args.module)
     companion_path = (ROOT / args.companion) if args.companion else None
+    world_card = None
+    pack_id, skill_ids = "", []
+    if args.pack:
+        pack_id, pack_home, skill_ids = install_pack_for_playtest(settings, args.pack)
+        rec.emit("pack_installed", pack=args.pack, pack_id=pack_id, home=str(pack_home), skills=skill_ids)
+        if args.world_card:
+            world_card = pack_home / args.world_card
+            if not world_card.is_file():
+                raise SystemExit(f"--world-card {args.world_card!r} is not in the installed pack {pack_home}")
     for sidx in range(1, args.sessions + 1):
         try:
             await run_session(services, ts, router, hub, module_path, companion_path, args.players, args.turns,
-                              sidx, rec, secret_concepts)
+                              sidx, rec, secret_concepts, world_card=world_card, pack_id=pack_id,
+                              skill_ids=skill_ids, pc_system=args.pc_system)
         except Exception as exc:
             rec.metrics.errors += 1
             rec.emit("SESSION_ERROR", session=sidx, error=f"{type(exc).__name__}: {exc}",

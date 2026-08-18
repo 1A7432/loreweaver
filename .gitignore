@@ -94,3 +94,6 @@ eval-logs/
 .keys.toml.lock
 iroh-secret.key
 iroh-ticket.txt
+
+# --- 《安土》 marketing footage (generated video/stills for the trailer; never publish from here)
+marketing/
