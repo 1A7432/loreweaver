@@ -119,6 +119,57 @@ async def test_the_wait_is_visible_to_the_operator_and_to_the_caller(caplog):
     assert any("throttled" in record.message or "throttled" in record.getMessage() for record in caplog.records)
 
 
+class _Cooldown(Exception):
+    """A proxy-shaped 429: status + a decoded body naming the cooldown, like xAI's
+    `429 model_cooldown … "reset_seconds": 8` behind the owner's proxy."""
+
+    def __init__(self, status_code: int, body: dict | None = None, message: str = "", headers: dict | None = None) -> None:
+        super().__init__(message or f"HTTP {status_code}")
+        self.status_code = status_code
+        self.body = body
+        if headers is not None:
+            self.response = type("_Resp", (), {"headers": headers, "status_code": status_code})()
+
+
+async def test_a_provider_cooldown_hint_stretches_the_wait_past_the_cooldown():
+    """`reset_seconds: 8` used to be retried after 1.9s and 1.4s — both inside the
+    cooldown, so the whole turn died. The hint is believed (bounded)."""
+    inner = _Flaky(_Cooldown(429, body={"error": {"code": "model_cooldown", "reset_seconds": 8}}))
+    client = _retrying(inner)
+
+    await client.chat([{"role": "user", "content": "x"}])
+
+    assert inner.calls == 2
+    assert client.waits == [8.5]  # hint + margin, above the 2.0 jittered backoff
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (_Cooldown(429, headers={"retry-after": "12"}), 12.0),
+        (_Cooldown(429, body={"retry_after_ms": 2500}), 2.5),
+        (_Cooldown(429, message="rate limited, please try again in 30 seconds"), 30.0),
+        (_Cooldown(429, message="Too many requests"), None),
+        (_Cooldown(429, body={"reset_seconds": 900}), 900.0),  # read as-is; the wait itself is capped
+    ],
+)
+def test_retry_after_hint_reads_headers_bodies_and_text(error, expected):
+    from infra.llm_retry import retry_after_hint
+
+    assert retry_after_hint(error) == expected
+
+
+async def test_a_huge_hint_is_capped_so_the_total_wait_stays_bounded():
+    from infra.llm_retry import MAX_HINT_DELAY
+
+    inner = _Flaky(_Cooldown(429, body={"reset_seconds": 900}))
+    client = _retrying(inner)
+
+    await client.chat([{"role": "user", "content": "x"}])
+
+    assert client.waits == [MAX_HINT_DELAY]
+
+
 @pytest.mark.parametrize(
     ("error", "retryable"),
     [

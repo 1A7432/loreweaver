@@ -52,6 +52,18 @@ logger = logging.getLogger(__name__)
 MAX_ATTEMPTS = 3
 BASE_DELAY = 2.0
 MAX_DELAY = 20.0
+# A provider that SAYS how long to wait (`Retry-After`, `reset_seconds`, "try again in
+# 8s") is believed up to this much — a hint the backoff would undershoot means every
+# retry lands inside the cooldown and the whole turn dies for nothing (2026-08-18: a
+# `429 model_cooldown … reset_seconds: 8` was retried after 1.9s and 1.4s). Beyond the
+# cap the bounded-total-wait promise wins over the hint.
+MAX_HINT_DELAY = 60.0
+_HINT_MARGIN = 0.5
+
+_HINT_TEXT = re.compile(
+    r"(?i)(?:retry|try again|reset|wait|cool ?down)[^0-9]{0,40}?(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?)\b"
+)
+_HINT_KEYS = ("retry_after", "retry-after", "retry_after_ms", "reset_seconds", "reset_ms", "cooldown_seconds")
 
 # Status codes worth asking again about. 429 is the reason this exists; 5xx covers the
 # "overloaded"/"try again" family every vendor returns under load. 408/409 are transient
@@ -94,6 +106,74 @@ def is_retryable(error: BaseException) -> bool:
     if status is not None:
         return status in RETRYABLE_STATUSES
     return bool(_RETRYABLE_TEXT.search(str(error)))
+
+
+def _hint_from_mapping(payload: Any, depth: int = 0) -> float | None:
+    """A cooldown hint from a decoded error body: `reset_seconds`, `retry_after(_ms)` …
+    at the top level or one nesting down (`{"error": {...}}`), milliseconds normalized."""
+    if not isinstance(payload, dict) or depth > 2:
+        return None
+    for key in _HINT_KEYS:
+        value = payload.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            continue
+        try:
+            seconds = float(value)
+        except (TypeError, ValueError):
+            continue
+        if seconds < 0:
+            continue
+        return seconds / 1000.0 if key.endswith("_ms") else seconds
+    for nested in payload.values():
+        found = _hint_from_mapping(nested, depth + 1)
+        if found is not None:
+            return found
+    return None
+
+
+def retry_after_hint(error: BaseException) -> float | None:
+    """Seconds the PROVIDER asked us to wait, if it said — else None.
+
+    Looked for in the same shape-first way `status_of` reads the status: a
+    `Retry-After` header on the error's response (seconds, or an HTTP date), a decoded
+    body / `body` attribute carrying `reset_seconds` / `retry_after(_ms)`, and finally
+    the message text ("try again in 8s"). Public for the same reason `status_of` is.
+    """
+    response = getattr(error, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is not None:
+        try:
+            raw = headers.get("retry-after") or headers.get("Retry-After")
+        except Exception:
+            raw = None
+        if raw:
+            text = str(raw).strip()
+            if re.fullmatch(r"\d+(?:\.\d+)?", text):
+                return float(text)
+            try:
+                from email.utils import parsedate_to_datetime
+
+                when = parsedate_to_datetime(text)
+                delta = (when - when.now(when.tzinfo)).total_seconds()
+                return max(0.0, delta)
+            except Exception:
+                pass
+    for candidate in (getattr(error, "body", None), getattr(response, "json", None)):
+        payload = candidate
+        if callable(candidate):
+            try:
+                payload = candidate()
+            except Exception:
+                payload = None
+        found = _hint_from_mapping(payload)
+        if found is not None:
+            return found
+    match = _HINT_TEXT.search(str(error))
+    if match:
+        amount = float(match.group(1))
+        unit = match.group(2).lower()
+        return amount / 1000.0 if unit.startswith("m") else amount
+    return None
 
 
 def backoff_delay(attempt: int, *, rand: Callable[[], float] = random.random) -> float:
@@ -168,6 +248,11 @@ class RetryingLLM:
                 if attempt >= self._max_attempts or not is_retryable(error):
                     raise
                 delay = backoff_delay(attempt, rand=self._rand)
+                hint = retry_after_hint(error)
+                if hint is not None:
+                    # Believe the provider (bounded): a wait shorter than its cooldown
+                    # is a wasted attempt, and every attempt here is precious.
+                    delay = max(delay, min(hint + _HINT_MARGIN, MAX_HINT_DELAY))
                 logger.warning(
                     "LLM throttled (%s); retrying in %.1fs (attempt %d/%d)",
                     error,
