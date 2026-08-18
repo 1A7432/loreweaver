@@ -773,6 +773,14 @@ export interface PregenEntry {
   claimed_by: string
 }
 
+/** v2.3: one discoverable rule system. `make_char` is the dot-command word that
+ * creates a sheet in it (`.coc`, `.dnd`, a pack's own) — absent when the pack
+ * declares none, which means the system can be imported into but not created in. */
+export interface RuleSystemEntry {
+  id: string
+  make_char?: string
+}
+
 export interface StateFrame {
   type: typeof FrameType.State
   character?: CharacterState
@@ -789,6 +797,10 @@ export interface StateFrame {
   // v1.9 additive: the module's claimable pregen cast, insertion-ordered. Absent —
   // never an empty array — when the room has no roster (no world import landed one).
   pregens?: PregenEntry[]
+  // v2.3 additive: every rule system this server discovered. All a client needs to
+  // offer character creation without knowing any rule system — so a pack that ships
+  // its own system reaches every client's picker with no client release.
+  systems?: RuleSystemEntry[]
   // Set once, on the state frame the server pushes right after a campaign reset
   // (`.reset` / `admin_reset_room`): besides the already-fresh (empty) panel data,
   // the client should also clear its locally-accumulated chat scrollback.

@@ -307,8 +307,12 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
     // ones -- but `.st` validates as an in-play EDIT (preserve current vitals, never
     // auto-heal), so without this the finished character keeps the DEFAULT-derived
     // vitals instead of full HP/MP and starting SAN for the CHOSEN characteristics.
-    // `.st 定稿` re-derives current HP/MP/SAN to their maxima for the final sheet.
-    client.sendInput(`.st 定稿`)
+    // `.st finalize` re-derives current HP/MP/SAN to their maxima for the final sheet.
+    // The CANONICAL word, not a locale dialect one: `_SHEET_FINALIZE_WORDS` accepts
+    // `finalize` / `定稿` / `初始化` because a HUMAN may type any of them, but a client
+    // issuing the command programmatically has no locale to speak — it was sending
+    // Chinese into English rooms for no reason.
+    client.sendInput(`.st finalize`)
     setPendingName(trimmed)
     setCreateNote(tt(locale, "character.note.manualSent"))
     beginRoll("manual")

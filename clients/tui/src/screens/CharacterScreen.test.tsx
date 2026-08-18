@@ -390,7 +390,7 @@ describe("CharacterScreen", () => {
     // trailing finalize word re-derives current HP/MP/SAN to their maxima for the
     // manually-chosen characteristics, so the finished character isn't left with
     // default-derived vitals. Order matters: create, then set attrs, then finalize.
-    expect(client.sent).toEqual([".dnd 米拉", ".st 力量8 敏捷8 体质8 智力8 感知8 魅力8", ".st 定稿"])
+    expect(client.sent).toEqual([".dnd 米拉", ".st 力量8 敏捷8 体质8 智力8 感知8 魅力8", ".st finalize"])
 
     await act(async () => {
       mockInput.pressEscape()

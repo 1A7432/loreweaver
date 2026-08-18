@@ -42,6 +42,28 @@ async def test_build_room_state_omits_variables_when_none_defined():
     assert "pregens" not in state
 
 
+async def test_build_room_state_lists_the_rule_systems_and_how_to_create_in_them():
+    """v2.3: what a client needs to offer character creation WITHOUT knowing a system.
+
+    Studio's character screen was read-only and the TUI's was not — because the TUI
+    hard-codes CoC's and D&D's attribute tables, point-buy budgets and command words,
+    which is precisely the per-system knowledge M16 deleted from the engine. A client
+    that reads this list offers a pack's own system without a client release.
+    """
+    services = _services()
+    ctx = _room_ctx("systems-room")
+
+    state = await build_room_state(services, ctx)
+
+    by_id = {entry["id"]: entry for entry in state["systems"]}
+    assert {"coc7", "dnd5e"} <= set(by_id)
+    # The word to SEND, read off the pack's own `commands:` declaration.
+    assert by_id["coc7"]["make_char"] == "coc"
+    assert by_id["dnd5e"]["make_char"] == "dnd"
+    # Nothing but the id and the word: a rule system's contents are not room state.
+    assert set(by_id["coc7"]) <= {"id", "make_char"}
+
+
 async def test_build_room_state_surfaces_pregen_roster_to_every_viewer():
     from core.character_manager import CharacterSheet
     from core.pregen_roster import pregen_add, pregen_claim

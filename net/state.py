@@ -78,7 +78,42 @@ async def build_room_state(services: Services, ctx: AgentCtx) -> dict[str, Any]:
     if pregens:
         state["pregens"] = pregens
 
+    systems = _rule_systems()
+    if systems:
+        state["systems"] = systems
+
     return state
+
+
+def _rule_systems() -> list[dict[str, str]]:
+    """Every discoverable rule system, with the command word that makes a character in it.
+
+    What a client needs to offer "create a character" WITHOUT knowing any rule system:
+    the id to name and the dialect word to send. A pack that ships its own system
+    therefore appears in every client's picker with no client release — the same reason
+    resolution, sheets and commands are pack data (iron rule #1). Nothing secret rides
+    here: the install banner prints the packs and `.help` prints their command words.
+
+    A system with no `make_char` binding still lists (it can be imported into); it simply
+    carries no word to create with. Both lookups are cached in `core.rulepacks`, so
+    rebuilding this on every state snapshot costs a dict walk.
+    """
+    from core.rulepacks import available_systems, load_rulepack
+
+    entries: list[dict[str, str]] = []
+    for system in available_systems():
+        try:
+            pack = load_rulepack(system)
+        except Exception:
+            continue  # a pack that will not load cannot be offered; the doctor reports it
+        entry = {"id": pack.system}
+        # Declaration order, so a pack that declares several words picks its own primary.
+        for word, binding in pack.commands.items():
+            if binding.action == "make_char":
+                entry["make_char"] = word
+                break
+        entries.append(entry)
+    return entries
 
 
 async def resolve_active_character(services: Services, ctx: AgentCtx) -> CharacterSheet | None:
