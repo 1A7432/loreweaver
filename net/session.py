@@ -78,6 +78,8 @@ _PANEL_INTENT_KINDS = frozenset({"choice", "input", "roll"})
 
 # How many trailing chat-history messages a join/reconnect replays to the joining connection.
 _HISTORY_REPLAY_CAP = 30
+# Live events a member may hold while its own join replay runs (see `_replay_history`).
+_HELD_EVENTS_CAP = 1000
 
 
 def resolve_session_fields(keystore: Keystore, key: str, locale: str) -> dict[str, str] | None:
@@ -325,13 +327,17 @@ class SessionCore:
         self.turns: deque[KPTurnResult] = deque(maxlen=50)
         self.join_timeout = tui_settings.join_timeout if join_timeout is None else join_timeout
 
-    async def _recorded_turn_events(self, chat_key: str) -> dict[int, list[Event]]:
-        """`turn -> public tool events`, rebuilt from `gateway.turn`'s replay lane.
+    async def _recorded_turn_events(self, chat_key: str) -> dict[tuple[int, bool], list[Event]]:
+        """`(turn, after) -> public tool events`, rebuilt from `gateway.turn`'s replay lane.
 
-        Best-effort like the rest of replay: an unreadable lane costs the rolls, not
-        the transcript.
+        `after=False` are the events that happened DURING that turn (replayed before its
+        reply); `after=True` the ones typed after it closed and before the next (replayed
+        after its reply). Best-effort like the rest of replay, per RECORD: one malformed
+        entry costs that roll, not the lane — and never the transcript around it (a
+        record that raised here used to escape into `_replay_history`'s blanket except
+        and abort the whole join replay silently).
         """
-        events: dict[int, list[Event]] = {}
+        events: dict[tuple[int, bool], list[Event]] = {}
         try:
             raw = await self.services.store.state_get(chat_key, TURN_EVENT_HISTORY_KEY)
             records = json.loads(raw) if raw else []
@@ -341,19 +347,23 @@ class SessionCore:
         if not isinstance(records, list):
             return events
         for record in records:
-            if not isinstance(record, dict) or not isinstance(record.get("event"), dict):
-                continue
-            payload = record["event"]
-            events.setdefault(int(record.get("turn", 0) or 0), []).append(
-                Event(
-                    kind=str(payload.get("kind") or ""),
-                    speaker=str(payload.get("speaker") or ""),
-                    name=str(payload.get("name") or ""),
-                    text=str(payload.get("text") or ""),
-                    fmt=str(payload.get("fmt") or "plain"),
-                    data=payload.get("data") if isinstance(payload.get("data"), dict) else {},
+            try:
+                if not isinstance(record, dict) or not isinstance(record.get("event"), dict):
+                    continue
+                payload = record["event"]
+                key = (int(record.get("turn", 0) or 0), bool(record.get("after")))
+                events.setdefault(key, []).append(
+                    Event(
+                        kind=str(payload.get("kind") or ""),
+                        speaker=str(payload.get("speaker") or ""),
+                        name=str(payload.get("name") or ""),
+                        text=str(payload.get("text") or ""),
+                        fmt=str(payload.get("fmt") or "plain"),
+                        data=payload.get("data") if isinstance(payload.get("data"), dict) else {},
+                    )
                 )
-            )
+            except Exception:
+                logger.debug("replay: skipping a malformed turn event record for %s", chat_key, exc_info=True)
         return events
 
     async def _replay_history(self, member: Any) -> None:
@@ -368,6 +378,43 @@ class SessionCore:
         Best-effort: any failure silently no-ops.
         """
         chat_key = self._ctx_for(member).chat_key
+        # Both carriers subscribe the member to the hub BEFORE replaying (subscribing
+        # after would lose every frame published in between). So an in-flight turn's
+        # live frames — since 2.3 including its dice and NPC lines as they happen —
+        # could land between two REPLAYED lines. The member holds live events for the
+        # duration and they are flushed, in order, right after the replay: the joiner
+        # reads the past first, then the present, and misses nothing.
+        hold: list[Event] = []
+        member.held_events = hold
+        try:
+            await self._replay_history_body(member, chat_key)
+        finally:
+            member.held_events = None
+            # Bounded like every other replay lane: a joiner whose socket stalls
+            # mid-replay must not accumulate an in-flight streaming turn without limit.
+            # Dropping the OLDEST keeps the newest state; a dropped delta is superseded
+            # by its final frame anyway, and every dice/NPC frame is also in the lane.
+            if len(hold) > _HELD_EVENTS_CAP:
+                logger.debug("replay: dropping %d held live events for %s", len(hold) - _HELD_EVENTS_CAP, chat_key)
+                del hold[: len(hold) - _HELD_EVENTS_CAP]
+            for event in hold:
+                try:
+                    await member.deliver(event)
+                except Exception:
+                    break  # the connection is gone or was revoked; the loop's owner handles it
+
+    async def _deliver_replay(self, member: Any, event: Event) -> None:
+        """Send one REPLAYED event now — past the hold that queues live ones, but through
+        the same per-event authorization check `deliver` applies (a key revoked mid-join
+        gets nothing further, exactly as it would from a live publish)."""
+        authorize = getattr(member, "authorize", None)
+        if authorize is not None and not authorize():
+            raise PermissionError("member authorization was revoked")  # i18n-exempt: internal hub signal
+        frame = render_frame(event)
+        if frame is not None:
+            await member.send_frame(frame)
+
+    async def _replay_history_body(self, member: Any, chat_key: str) -> None:
         try:
             # M20 D moved the conversation into the append-only history tree; the
             # `room_state` blob of the same name survives only in rooms that upgraded
@@ -380,43 +427,85 @@ class SessionCore:
                 legacy = json.loads(raw) if raw else []
                 history = legacy if isinstance(legacy, list) else []
             events_by_turn = await self._recorded_turn_events(chat_key)
-            for entry in history[-_HISTORY_REPLAY_CAP:]:
-                if not isinstance(entry, dict):
-                    continue
+            entries = [entry for entry in history if isinstance(entry, dict)]
+            window = entries[-_HISTORY_REPLAY_CAP:]
+
+            def _turn_of(entry: dict) -> int:
+                # `load_chain` renames the stored `turn` to `_lw_turn`; the legacy
+                # room_state blob has neither, and 0 matches no recorded turn. A
+                # non-numeric value (a backup restores history rows verbatim) reads as
+                # 0 rather than aborting the whole replay.
+                try:
+                    return int(entry.get("_lw_turn", entry.get("turn", 0)) or 0)
+                except (TypeError, ValueError):
+                    return 0
+
+            # AFTER-events (typed rolls) are keyed by the turn COUNTER at the moment they
+            # were typed, and the counter is not one-to-one with assistant entries: a
+            # companion sub-turn advances it mid-turn, so two entries can share a stamp
+            # and a stamp can have no entry (…6, 6, then 8 — with typed rolls keyed 7).
+            # So an after-key T attaches after the LAST assistant entry whose stamp is
+            # <= T, before the first stamped above it — never to a stamp by equality.
+            assistant_turns = [_turn_of(entry) for entry in window if entry.get("role") == "assistant"]
+            after_keys = sorted(turn for turn, after in events_by_turn if after)
+
+            async def _deliver_after(lower: int, upper: int | None) -> None:
+                """Typed rolls keyed in [lower, upper) — upper None = the open end."""
+                for key in after_keys:
+                    if key < lower or (upper is not None and key >= upper):
+                        continue
+                    for event in events_by_turn.pop((key, True), []):
+                        await self._deliver_replay(member, event)
+
+            # The rolls typed between the last turn OUTSIDE the window and the first
+            # inside it — where the scene the joiner sees begins. Earlier ones fall
+            # outside the window exactly as their narrations do.
+            before_window = entries[:-_HISTORY_REPLAY_CAP] if len(entries) > _HISTORY_REPLAY_CAP else []
+            previous_turn = max((_turn_of(entry) for entry in before_window), default=0)
+            if assistant_turns:
+                await _deliver_after(previous_turn, assistant_turns[0])
+            seen_assistants = 0
+            for entry in window:
                 text = str(entry.get("content") or "").strip()
-                if not text:
-                    continue
                 role = entry.get("role")
                 if role == "assistant":
+                    turn_index = _turn_of(entry)
+                    seen_assistants += 1
                     # The rolls and NPC lines that happened DURING this turn, before its
-                    # narration closed — the live order (gateway.turn), reproduced.
-                    # `load_chain` renames the stored `turn` to `_lw_turn`; the legacy
-                    # room_state blob has neither, and 0 matches no recorded turn.
-                    turn_index = int(entry.get("_lw_turn", entry.get("turn", 0)) or 0)
-                    for event in events_by_turn.pop(turn_index, []):
-                        await member.deliver(event)
+                    # narration closed — the live order (gateway.turn), reproduced. They
+                    # replay even when the narration itself is empty (a final round that
+                    # was all stripped machinery): the roll happened, the prose did not.
+                    for event in events_by_turn.pop((turn_index, False), []):
+                        await self._deliver_replay(member, event)
+                    if text:
+                        await self._deliver_replay(member, Event.narrative(speaker="kp", text=text, fmt="markdown"))
+                    # …and the rolls typed after it closed, before the next turn.
+                    next_turn = assistant_turns[seen_assistants] if seen_assistants < len(assistant_turns) else None
+                    if next_turn is None or next_turn > turn_index:
+                        await _deliver_after(turn_index, next_turn)
+                    continue
+                if not text:
+                    continue
                 # Replay is STORY continuity, not an ops log: dot-command echoes and
                 # their system responses (setup acks, ".panels enable" …) read as
                 # backstage noise to a joining player, so only the narrative lanes
                 # (player utterances + KP prose) replay.
                 if role == "user" and text.startswith((".", "/")):
                     continue
-                if role not in ("user", "assistant"):
+                if role != "user":
                     continue
-                speaker = "player" if role == "user" else "kp"
-                fmt = "plain" if speaker == "player" else "markdown"
-                await member.deliver(Event.narrative(speaker=speaker, text=text, fmt=fmt))
+                await self._deliver_replay(member, Event.narrative(speaker="player", text=text, fmt="plain"))
             media_raw = await self.services.store.state_get(chat_key, "media_history")
             media_history = json.loads(media_raw) if media_raw else []
             if isinstance(media_history, list):
                 for frame in media_history[-MEDIA_HISTORY_REPLAY_CAP:]:
                     if isinstance(frame, dict) and frame.get("type") == "media":
-                        await member.deliver(Event.media(frame))
+                        await self._deliver_replay(member, Event.media(frame))
             audio_items = await list_audio_items(self.services.store, chat_key)
             for frame in audio_items[-MEDIA_HISTORY_REPLAY_CAP:]:
-                await member.deliver(Event.audio(frame))
+                await self._deliver_replay(member, Event.audio(frame))
             if audio_items or await has_audio_state(self.services.store, chat_key):
-                await member.deliver(Event.audio(await audio_state_frame(self.services.store, chat_key)))
+                await self._deliver_replay(member, Event.audio(await audio_state_frame(self.services.store, chat_key)))
             # The room's upload policy greets a joining member (UPSTREAM item 14, from
             # the studio): the toggle reply used to be unicast to the issuing keeper, so
             # everyone else could only learn "uploads are off" from their first refused
@@ -424,7 +513,7 @@ class SessionCore:
             # assumption, and an unconditional extra frame would reshape every join
             # sequence for nothing.
             if not await is_media_enabled(self.services.store, chat_key):
-                await member.deliver(Event.media({"type": "media_enabled", "enabled": False}))
+                await self._deliver_replay(member, Event.media({"type": "media_enabled", "enabled": False}))
         except Exception:
             return
 

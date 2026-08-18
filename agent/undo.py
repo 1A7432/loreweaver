@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Awaitable, Callable
 
 from agent.history import DEFAULT_HISTORY_KEY, leaf_at_or_before, leaf_key
 from agent.services import Services
@@ -73,7 +74,17 @@ async def available_turns(services: Services, chat_key: str) -> list[int]:
         return []
 
 
-async def restore(services: Services, chat_key: str, turn: int, *, history_key: str = DEFAULT_HISTORY_KEY) -> bool:
+StateRewrite = Callable[[list[dict]], Awaitable[list[dict]]]
+
+
+async def restore(
+    services: Services,
+    chat_key: str,
+    turn: int,
+    *,
+    history_key: str = DEFAULT_HISTORY_KEY,
+    state_rewrite: StateRewrite | None = None,
+) -> bool:
     """Rewind the room to the end of `turn`. True if a snapshot was found and applied.
 
     Both halves move together or neither does: documents and room_state are replaced from
@@ -84,6 +95,13 @@ async def restore(services: Services, chat_key: str, turn: int, *, history_key: 
     The abandoned turns are still in the tree. Playing forward from here appends children
     to the restored leaf, which is how a branch happens: nothing was deleted to make room
     for it.
+
+    `state_rewrite` lets the caller adjust the room_state rows BEFORE they land (it runs
+    ahead of the one write transaction, under the room's turn lock like the rest of
+    `.undo`) — for a lane that is written after the snapshot is taken and so must be cut
+    to `turn` from the live room rather than restored from the snapshot's stale copy
+    (`gateway.turn.undo_state_rewrite`, the join-replay event lane). This module stays
+    ignorant of which lanes those are.
     """
     raw = await services.store.snapshot_get(chat_key, turn)
     if raw is None:
@@ -91,6 +109,8 @@ async def restore(services: Services, chat_key: str, turn: int, *, history_key: 
     payload = json.loads(raw)
     state_rows = payload.get("room_state") or []
     documents = payload.get("documents") or []
+    if state_rewrite is not None:
+        state_rows = await state_rewrite(state_rows)
 
     # The RAW rows go back verbatim, bypassing `DocumentStore.put`'s validate/stamp path:
     # this is a restore of bytes that were already validated on the way in, and re-running

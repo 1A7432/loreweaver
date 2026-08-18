@@ -77,6 +77,10 @@ class WsMember:
     locale: str
     transport: str = "tui"
     authorize: Callable[[], bool] | None = None
+    # While this member's join replay runs, LIVE room events are held here and flushed
+    # after it, so an in-flight turn's frames cannot land between two replayed lines
+    # (`SessionCore._replay_history` opens and closes the hold). None = not replaying.
+    held_events: list[Event] | None = None
 
     async def send_frame(self, frame: dict[str, Any]) -> None:
         """Send one already-built protocol frame over this connection.
@@ -92,6 +96,9 @@ class WsMember:
 
     async def deliver(self, event: Event) -> None:
         """Render `event` to its WS frame and send it (dropping a closed socket)."""
+        if self.held_events is not None:
+            self.held_events.append(event)
+            return
         if self.authorize is not None and not self.authorize():
             await self.send_frame(_error_frame("forbidden", get_i18n(self.locale)))
             await self.ws.close()

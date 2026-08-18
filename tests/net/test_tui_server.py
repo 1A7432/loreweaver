@@ -1065,6 +1065,58 @@ async def test_a_party_member_on_another_system_keeps_their_seat_and_their_meter
 # ---------------------------------------------------------------------------
 
 
+async def test_a_check_lane_roll_never_lands_under_the_open_draft_bubble():
+    """The end-of-turn check lane does not stream. Its corrective roll used to publish
+    UNDER the already-open final draft, and the corrected narration then replaced that
+    draft in place — narration above the roll live, roll above the narration on replay.
+    A public tool event now closes an open draft first (an empty final the client drops)
+    and the final reply takes a fresh id: dice, then narration, live and replayed alike."""
+
+    def responder(messages, tools):
+        called = _tools_called_this_turn(messages)
+        if "roll_dice" not in called:
+            # The reply STATES a roll no tool made — `dice_forged` fires and the check
+            # lane asks for the real dice…
+            if not any(m.get("role") == "user" and "roll" in str(m.get("content", "")).lower() for m in messages[-1:]):
+                return assistant_text("Spot Hidden — 22 vs 25. You find nothing.")
+            return assistant_tools(tool_call("roll_dice", expression="1d100"))
+        return assistant_text("Spot Hidden — the die decides. You find nothing.")
+
+    services = _services(responder=responder)
+    toolset = build_kp_toolset(services)
+    keystore = Keystore()
+    key = keystore.add(room="check-lane-room", name="Nora")
+    server = TuiServer(services, keystore, port=0, toolset=toolset)
+    url = await _start(server)
+    try:
+        ws, *_ = await _connect_and_join(url, key, "Nora")
+        await ws.send(json.dumps({"type": "input", "text": "I search the desk."}))
+        await _recv(ws)  # echo
+        await _recv(ws)  # busy
+        frames = []
+        while True:
+            frame = await _recv(ws)
+            frames.append(frame)
+            if frame["type"] == "turn_status" and frame["status"] == "idle":
+                break
+        kinds = [f["type"] for f in frames]
+        assert "dice" in kinds, kinds
+        dice_at = kinds.index("dice")
+        deltas = [i for i, f in enumerate(frames) if f["type"] == "narrative_delta"]
+        finals = [f for f in frames if f["type"] == "narrative" and f["speaker"] == "kp"]
+        # The forged draft streamed, then was CLOSED (empty final, same id) before the roll…
+        assert deltas and deltas[-1] < dice_at
+        draft_id = frames[deltas[0]]["id"]
+        closed = next(f for f in finals if f["id"] == draft_id)
+        assert closed["text"] == "" and frames.index(closed) < dice_at
+        # …and the corrected narration comes AFTER the roll, under a fresh id.
+        final = next(f for f in finals if f["text"])
+        assert final["id"] != draft_id and frames.index(final) > dice_at
+        await ws.close()
+    finally:
+        await server.close()
+
+
 async def test_join_replays_this_turn_s_rolls_and_npc_lines_in_order():
     """A reconnecting member used to get a transcript with every roll missing.
 
@@ -1115,6 +1167,175 @@ async def test_join_replays_this_turn_s_rolls_and_npc_lines_in_order():
         assert frames[1]["total"] == 37
         assert frames[2]["name"] == "Martha"
 
+        await ws.close()
+    finally:
+        await server.close()
+
+
+async def test_join_replays_typed_rolls_after_the_turn_they_followed_and_before_the_next():
+    """The command branch's dice (`.ra`, `r 3d6`, `.sc`) — the most common rolls at a
+    table — never entered the replay lane: only the AI-Keeper branch recorded, so a
+    rejoin kept the prose and lost every typed roll. They are recorded `after` the
+    last completed turn and replay right after that turn's reply, before the next.
+    Rolls typed before any turn at all sit at the very top."""
+    from gateway.hub import Event
+    from gateway.turn import record_turn_events
+
+    services = _services()
+    keystore = Keystore()
+    key = keystore.add(room="after-replay-room", name="Ann")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        chat_key = _room_ctx("after-replay-room").chat_key
+        # A roll before the first AI turn (turn 0, after).
+        await record_turn_events(
+            services.store, chat_key, 0, [Event.dice(actor="Ann", kind="roll", expr="1d20", total=3)], after=True
+        )
+        await append_turn(services, chat_key, DEFAULT_HISTORY_KEY, user_message="I look", reply="Fog.", turn=1)
+        await record_turn_events(
+            services.store, chat_key, 1, [Event.dice(actor="Ann", kind="check", expr="1d100", total=37)]
+        )
+        # A typed roll after turn 1's reply …
+        await record_turn_events(
+            services.store, chat_key, 1, [Event.dice(actor="Ann", kind="roll", expr="3d6", total=11)], after=True
+        )
+        # … and turn 2 whose reply is EMPTY (all stripped machinery) but which rolled.
+        await append_turn(services, chat_key, DEFAULT_HISTORY_KEY, user_message="I search", reply="", turn=2)
+        await record_turn_events(
+            services.store, chat_key, 2, [Event.dice(actor="Ann", kind="check", expr="1d100", total=88)]
+        )
+
+        ws = await websockets.connect(url)
+        await _join(ws, key, "Ann")
+        await _recv(ws)  # own join presence
+
+        frames = [await _recv(ws) for _ in range(7)]
+        seen = [(f["type"], f.get("speaker"), f.get("total")) for f in frames]
+        assert seen == [
+            ("dice", None, 3),  # before any turn
+            ("narrative", "player", None),  # turn 1: I look
+            ("dice", None, 37),  # during turn 1
+            ("narrative", "kp", None),  # Fog.
+            ("dice", None, 11),  # typed after turn 1
+            ("narrative", "player", None),  # turn 2: I search
+            ("dice", None, 88),  # during turn 2 — its reply was empty, the roll still replays
+        ], seen
+        await ws.close()
+    finally:
+        await server.close()
+
+
+async def test_typed_rolls_keyed_past_a_companion_sub_turn_still_replay_in_place():
+    """A companion sub-turn advances the turn counter MID-turn, so two assistant entries
+    can share a stamp and the counter can end one past any entry (…6, 6, then 8, with
+    the counter at 7 between). A typed roll keyed 7 has no entry stamped 7: it attaches
+    after the LAST entry stamped <= 7 and before the first stamped above — where it
+    happened — rather than to a stamp by equality (which orphaned it forever)."""
+    from gateway.hub import Event
+    from gateway.turn import record_turn_events
+
+    services = _services()
+    keystore = Keystore()
+    key = keystore.add(room="companion-stamp-room", name="Ann")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        chat_key = _room_ctx("companion-stamp-room").chat_key
+        # The nested companion turn and the outer turn both stamped 6 (the outer's index
+        # was fixed at its start), then the counter sat at 7, then a normal turn 8.
+        await append_turn(services, chat_key, DEFAULT_HISTORY_KEY, user_message="(companion)", reply="Rook nods.", turn=6)
+        await append_turn(services, chat_key, DEFAULT_HISTORY_KEY, user_message="I look", reply="Fog.", turn=6)
+        await record_turn_events(
+            services.store, chat_key, 7, [Event.dice(actor="Ann", kind="roll", expr="3d6", total=11)], after=True
+        )
+        await append_turn(services, chat_key, DEFAULT_HISTORY_KEY, user_message="I go on", reply="Rain.", turn=8)
+
+        ws = await websockets.connect(url)
+        await _join(ws, key, "Ann")
+        await _recv(ws)  # presence
+        frames = [await _recv(ws) for _ in range(7)]
+        seen = [(f["type"], f.get("text") or f.get("total")) for f in frames]
+        assert seen == [
+            ("narrative", "(companion)"),
+            ("narrative", "Rook nods."),
+            ("narrative", "I look"),
+            ("narrative", "Fog."),
+            ("dice", 11),  # after the LAST entry stamped 6, before turn 8
+            ("narrative", "I go on"),
+            ("narrative", "Rain."),
+        ], seen
+        await ws.close()
+    finally:
+        await server.close()
+
+
+async def test_a_malformed_turn_event_record_costs_that_record_not_the_join_replay():
+    """One bad record (importable verbatim through a room backup) used to raise past
+    the lane reader into `_replay_history`'s blanket except: the joiner got an EMPTY log
+    — no prose, no media, no audio state — with nothing logged."""
+    from gateway.hub import Event
+    from gateway.turn import TURN_EVENT_HISTORY_KEY, record_turn_events
+
+    services = _services()
+    keystore = Keystore()
+    key = keystore.add(room="malformed-lane-room", name="Ann")
+    server = TuiServer(services, keystore, port=0)
+    url = await _start(server)
+    try:
+        chat_key = _room_ctx("malformed-lane-room").chat_key
+        await append_turn(services, chat_key, DEFAULT_HISTORY_KEY, user_message="I look", reply="Fog.", turn=1)
+        await record_turn_events(
+            services.store, chat_key, 1, [Event.dice(actor="Ann", kind="check", expr="1d100", total=37)]
+        )
+        raw = await services.store.state_get(chat_key, TURN_EVENT_HISTORY_KEY)
+        lane = json.loads(raw)
+        lane.insert(0, {"turn": "abc", "event": {"kind": "dice", "data": {"total": 1}}})
+        lane.append("not even a record")
+        await services.store.state_set(chat_key, TURN_EVENT_HISTORY_KEY, json.dumps(lane))
+
+        ws = await websockets.connect(url)
+        await _join(ws, key, "Ann")
+        await _recv(ws)  # presence
+        frames = [await _recv(ws) for _ in range(3)]
+        assert [(f["type"], f.get("total")) for f in frames] == [("narrative", None), ("dice", 37), ("narrative", None)]
+        await ws.close()
+    finally:
+        await server.close()
+
+
+async def test_live_frames_published_during_a_join_replay_arrive_after_it():
+    """Both carriers subscribe the member BEFORE replaying (subscribing after would lose
+    frames), so an in-flight turn's frames — since 2.3 including its dice as they
+    happen — could land between two REPLAYED lines. The member holds live events for
+    the duration of its replay and flushes them, in order, right after."""
+    from gateway.hub import Event
+
+    services = _services()
+    keystore = Keystore()
+    key = keystore.add(room="hold-room", name="Ann")
+    server = TuiServer(services, keystore, port=0)
+    # Publish a LIVE event the moment replay starts, before its first line goes out.
+    original = server._replay_history_body
+
+    async def slow_replay(member, chat_key):
+        await server.hub.publish(member.session_key, Event.dice(actor="Bob", kind="roll", expr="1d6", total=6))
+        await original(member, chat_key)
+
+    server._replay_history_body = slow_replay  # type: ignore[method-assign]
+    url = await _start(server)
+    try:
+        chat_key = _room_ctx("hold-room").chat_key
+        await append_turn(services, chat_key, DEFAULT_HISTORY_KEY, user_message="I look", reply="Fog.", turn=1)
+        ws = await websockets.connect(url)
+        await _join(ws, key, "Ann")
+        await _recv(ws)  # presence
+        frames = [await _recv(ws) for _ in range(3)]
+        assert [(f["type"], f.get("total")) for f in frames] == [
+            ("narrative", None),
+            ("narrative", None),
+            ("dice", 6),  # the live roll, AFTER the replayed past — not between its lines
+        ]
         await ws.close()
     finally:
         await server.close()

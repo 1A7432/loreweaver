@@ -11,11 +11,12 @@ Iron rule (repeated at the tool level so the model sees it at the exact point it
 invents world facts -- the KP narrates the returned line and adjudicates any resulting mechanics
 itself via the existing dice/check tools, exactly as `docs/specs/M5.md` §5 describes.
 
-Channel split (`speak_as_npc`): what that tool RETURNS is what the room reads -- `gateway.turn`
-republishes it verbatim as an `npc` narrative frame to every member -- so the returned line carries
-the performance only (name + mood + dialogue). The sub-actor's `action_intent` is its private plan,
-usually the very thing the dialogue conceals; it is parked on the keeper-only `note` surface instead
-(`_park_action_intent`), never concatenated onto the quotable line.
+Channel split (`speak_as_npc`): the line the room reads is what the tool EMITS through
+`AgentCtx.emit_npc_line` on its success path -- `gateway.turn._npc_events` builds the `npc` narrative
+frame from that structural record, never from the tool's return string (so a refusal or an error
+can never be spoken as the NPC) -- and it carries the performance only (name + mood + dialogue). The
+sub-actor's `action_intent` is its private plan, usually the very thing the dialogue conceals; it is
+parked on the keeper-only `note` surface instead (`_park_action_intent`), never on the quotable line.
 
 `get_npc`/`list_npcs` are `keeper_only` (they surface `secret_agenda` and full `knowledge`, matching
 `agent.kp_tools_knowledge`'s convention of prefixing keeper-only bodies with a localized banner so the
@@ -444,18 +445,22 @@ class NpcTools:
             mood = voiced.get("mood", "")
             action_intent = voiced.get("action_intent", "")
 
-            # This return value IS the room's line: `gateway.turn._npc_event` republishes it
-            # verbatim as an `npc` narrative frame to every member, so only PERFORMED material
-            # belongs in it -- the words spoken and the affect they were spoken with. The
-            # sub-actor's `action_intent` is the opposite: what the NPC privately means to do
-            # NEXT, routinely the very thing the dialogue is concealing. It goes to the
-            # keeper-only note surface instead (`_park_action_intent`).
+            # This line IS what the room hears: it is EMITTED through the structural channel
+            # (`ctx.emit_npc_line`) and `gateway.turn._npc_events` builds the `npc` narrative
+            # frame from that -- never from this tool's return string, so a failure path
+            # (the `not_found` / `failed` returns above and below) can never be spoken as
+            # the NPC. Only PERFORMED material belongs in it -- the words spoken and the
+            # affect they were spoken with. The sub-actor's `action_intent` is the opposite:
+            # what the NPC privately means to do NEXT, routinely the very thing the dialogue
+            # is concealing. It goes to the keeper-only note surface instead
+            # (`_park_action_intent`).
             line = i18n.t(
                 "npc.tools.speak.line",
                 name=record.name,
                 mood=mood or i18n.t("npc.tools.speak.mood_unset"),
                 dialogue=dialogue,
             )
+            ctx.emit_npc_line(record.name, line)
             if action_intent:
                 await self._park_action_intent(i18n, ctx.chat_key, record.name, action_intent)
 

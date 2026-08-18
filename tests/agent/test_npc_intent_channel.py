@@ -1,8 +1,9 @@
 """Sentinel tests for the AI-NPC sub-actor's PRIVATE `action_intent` channel (audit S05).
 
-`gateway.turn._npc_event` publishes the string `speak_as_npc` RETURNS, verbatim, as an
-`npc` narrative frame to every member of the room -- that return value is therefore a
-player-grade surface, not a keeper-side one. The sub-actor's `action_intent` (what the
+`speak_as_npc` EMITS its line (`AgentCtx.emit_npc_line`) and `gateway.turn._npc_events`
+publishes that line as an `npc` narrative frame to every member of the room; the tool's
+return value carries the same performed line, so BOTH are player-grade surfaces, not
+keeper-side ones. The sub-actor's `action_intent` (what the
 NPC privately means to DO next, e.g. slip out the back door to warn the cult) must never
 ride it, in any locale.
 

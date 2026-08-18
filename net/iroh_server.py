@@ -104,6 +104,8 @@ class IrohMember:
     transport: str = "iroh"
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     authorize: Callable[[], bool] | None = None
+    # See `net.tui_server.WsMember.held_events`: live events held during join replay.
+    held_events: list[Event] | None = None
 
     async def send_frame(self, frame: dict[str, Any]) -> None:
         """Send one protocol frame as a newline-terminated JSON line."""
@@ -116,6 +118,9 @@ class IrohMember:
                 pass  # peer gone / stream reset — dropped like a closed socket
 
     async def deliver(self, event: Event) -> None:
+        if self.held_events is not None:
+            self.held_events.append(event)
+            return
         if self.authorize is not None and not self.authorize():
             await self.send_frame(
                 {

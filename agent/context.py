@@ -30,6 +30,7 @@ class AgentCtx:
     fs: FsAdapter | None = None
     extra: dict = field(default_factory=dict)
     dice_payloads: list[dict[str, Any]] = field(default_factory=list, init=False, repr=False, compare=False)
+    npc_lines: list[dict[str, str]] = field(default_factory=list, init=False, repr=False, compare=False)
 
     def uid(self) -> str:
         """Defensive accessor for the resolved user id."""
@@ -44,6 +45,21 @@ class AgentCtx:
         payloads = self.dice_payloads
         self.dice_payloads = []
         return payloads
+
+    def emit_npc_line(self, name: str, text: str) -> None:
+        """Buffer one PERFORMED NPC line for this turn — the words the table hears.
+
+        The same structural channel dice use: the room's `npc` narrative frame is built
+        from what a tool EMITTED here, never re-read off the tool's return string, so a
+        hook's refusal, an unknown-NPC error or a gated-tool notice can never become an
+        NPC's line (`gateway.turn._npc_events`)."""
+        self.npc_lines.append({"name": str(name), "text": str(text)})
+
+    def consume_npc_lines(self) -> list[dict[str, str]]:
+        """Return and clear every buffered NPC line in emission order."""
+        lines = self.npc_lines
+        self.npc_lines = []
+        return lines
 
 
 class FsAdapter(Protocol):

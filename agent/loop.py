@@ -265,6 +265,7 @@ async def run_kp_turn(
     # AgentCtx instances may be reused by gateways. Never let a direct tool call
     # or an earlier turn's unconsumed dice payload attach to this turn's trace.
     ctx.consume_dice()
+    ctx.consume_npc_lines()
     # Event hooks (Layer C — core.hooks): one sandboxed engine per turn, inert (None) when
     # nothing is registered. turn_start fires BEFORE prompt assembly so its inject() texts and
     # variable writes shape this very turn; every later phase fires in the finalization block
@@ -532,6 +533,12 @@ async def run_kp_turn(
 
         if gate is not None:
             gate.finish_round(discard=False)
+            # The final round's draft is on the wire BEFORE the check lane may act on
+            # it: a corrective roll from that lane must find the draft open so it can
+            # close it (gateway.turn `_emit_tool_event`) — the order "roll, then the
+            # corrected narration" is then the same whether the provider streams
+            # synchronously (the fake) or truly asynchronously.
+            await gate.drain()
         reply = result.content or ""
         break
 
@@ -1032,6 +1039,14 @@ def _record_call(
     dice_payloads = ctx.consume_dice()
     if dice_payloads:
         trace_entry["dice_payloads"] = dice_payloads
+    npc_lines = ctx.consume_npc_lines()
+    if npc_lines:
+        # Capped like the result string it used to ride in: an NPC line reaches the
+        # wire and the replay lane, so an over-long one is cut the same way.
+        trace_entry["npc_lines"] = [
+            {"name": line.get("name", ""), "text": _capped_tool_result(str(line.get("text", "")), ctx.locale)}
+            for line in npc_lines
+        ]
     tool_trace.append(trace_entry)
     conversation.append({"role": "tool", "tool_call_id": call.id, "content": tool_result})
     return trace_entry

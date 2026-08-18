@@ -163,6 +163,7 @@ async def run_turn(
             else:
                 await hub.publish(ctx.chat_key, event)
             return None
+        public_events: list[Event] = []
         for event in command_events:
             if event.kind == "dice":
                 # Commands record the stable user id; the room edge owns the active
@@ -180,6 +181,19 @@ async def run_turn(
                     await origin.deliver(event)
             else:
                 await hub.publish(ctx.chat_key, event)
+                public_events.append(event)
+        if public_events:
+            # A typed roll is table content like any other: it joins the replay lane,
+            # anchored AFTER the last completed AI-Keeper turn (see `record_turn_events`).
+            from agent.chronicle import chronicle_turn
+
+            await record_turn_events(
+                services.store,
+                ctx.chat_key,
+                await chronicle_turn(services.store, ctx.chat_key),
+                public_events,
+                after=True,
+            )
         # F16: a reply that says the command did NOT happen is feedback for whoever
         # typed it, never table content — and broadcasting one advertises the command's
         # existence, arguments and privilege gate to everyone. A 2026-08-07 session had
@@ -270,8 +284,24 @@ async def run_turn(
                 same room, order decided by whether the provider happened to stream.
                 Publishing at the call site makes the log match the fiction's own order
                 on every turn: the dice land, the NPC speaks, the narration closes.
+
+                One rule keeps that order true in every lane: a public tool event NEVER
+                lands under an open draft. A tool round's draft is discarded anyway (the
+                next round re-streams); the end-of-turn check lane does not stream at
+                all, so without this its corrective roll fell BELOW the already-open
+                final draft and the corrected narration then replaced that draft in
+                place — narration above the roll live, roll above the narration on
+                replay. Closing the draft first (an empty final, which clients drop) and
+                letting the final reply take a fresh id makes live and replay agree.
                 """
-                for event in _public_tool_events(entry, name, i18n):
+                events = _public_tool_events(entry, name, i18n)
+                if events and stream_state["id"]:
+                    await hub.publish(
+                        ctx.chat_key,
+                        Event.narrative(speaker="kp", text="", fmt="markdown", frame_id=stream_state["id"]),
+                    )
+                    stream_state["id"] = ""
+                for event in events:
                     await hub.publish(ctx.chat_key, event)
 
             final_published = False
@@ -285,9 +315,14 @@ async def run_turn(
                     on_reply_delta=_emit_reply_delta,
                     on_tool_event=_emit_tool_event,
                 )
+                # `frame_id` is the open draft's id (the final REPLACES the draft) or a
+                # fresh one when no draft is open — the check lane closed it, or nothing
+                # ever streamed.
                 await hub.publish(
                     ctx.chat_key,
-                    Event.narrative(speaker="kp", text=result.reply, fmt="markdown", frame_id=stream_state["id"]),
+                    Event.narrative(
+                        speaker="kp", text=result.reply, fmt="markdown", frame_id=stream_state["id"] or new_id()
+                    ),
                 )
                 final_published = True
             finally:
@@ -568,22 +603,37 @@ async def _display_name(origin: Member | None, ctx: AgentCtx, services: Services
     return f"{sheet.name} ({nickname})"
 
 
-def _npc_event(entry: dict[str, Any], i18n: I18n) -> Event | None:
-    """Best-effort ``narrative`` event from one AI-NPC dialogue tool-trace entry."""
-    if entry.get("name") != "speak_as_npc":
-        return None
+def _npc_events(entry: dict[str, Any], i18n: I18n) -> list[Event]:
+    """The ``npc`` narrative events one tool call put in front of the table.
 
-    arguments = entry.get("arguments")
-    npc_name = ""
-    if isinstance(arguments, dict):
-        npc_name = str(arguments.get("npc") or "").strip()
-
-    return Event.narrative(
-        speaker="npc",
-        name=npc_name or i18n.t("hub.npc.unknown_name"),
-        text=str(entry.get("result") or ""),
-        fmt="markdown",
-    )
+    Built ONLY from the lines the tool EMITTED (`AgentCtx.emit_npc_line`, recorded on
+    the trace as `npc_lines`) — the same rule dice frames follow (`_dice_events`): never
+    reconstructed from the tool's return string. `speak_as_npc` emits on its success path
+    alone, so a hook's refusal (`suppressed`), an unknown-NPC error or a gated-tool notice
+    is a tool RESULT the model reads, and structurally not something the NPC said. A
+    keeper-only tool call has no public consequences at all.
+    """
+    if entry.get("keeper_only") or entry.get("suppressed"):
+        return []
+    lines = entry.get("npc_lines")
+    if not isinstance(lines, list):
+        return []
+    events: list[Event] = []
+    for line in lines:
+        if not isinstance(line, dict):
+            continue
+        text = str(line.get("text") or "")
+        if not text.strip():
+            continue
+        events.append(
+            Event.narrative(
+                speaker="npc",
+                name=str(line.get("name") or "").strip() or i18n.t("hub.npc.unknown_name"),
+                text=text,
+                fmt="markdown",
+            )
+        )
+    return events
 
 
 def _public_tool_events(entry: dict[str, Any], actor: str, i18n: I18n) -> list[Event]:
@@ -593,32 +643,111 @@ def _public_tool_events(entry: dict[str, Any], actor: str, i18n: I18n) -> list[E
     two lists that drifted apart would show a reconnecting player a different scene
     than the one everyone else watched.
     """
-    events = list(_dice_events(entry, actor))
-    npc_event = _npc_event(entry, i18n)
-    if npc_event is not None:
-        events.append(npc_event)
-    return events
+    return [*_dice_events(entry, actor), *_npc_events(entry, i18n)]
 
 
-# The public tool events of recent turns, kept for join replay. Capped like every other
-# replay lane: a room that has run for months replays a scene, not a campaign.
+# The public tool events of recent turns, kept for join replay. Windowed by TURN, not by
+# event count: replay walks the last `net.session._HISTORY_REPLAY_CAP` (30) chat-history
+# entries — about 15 turns, fewer with companion sub-turns — and a flat event cap cut at
+# an arbitrary event offset, so a run of dice-heavy combat turns silently evicted older
+# turns' rolls and truncated the oldest surviving turn mid-sequence, which reads as "only
+# half of that turn was rolled". Forty turns covers the replay window with room to spare;
+# the flat ceiling below is a safety net for a pathological turn, not the working bound.
 TURN_EVENT_HISTORY_KEY = "turn_event_history"
-TURN_EVENT_HISTORY_CAP = 200
+TURN_EVENT_HISTORY_TURNS = 40
+TURN_EVENT_HISTORY_CAP = 2000
 
 
-async def record_turn_events(store: Any, chat_key: str, turn: int, events: list[Event]) -> None:
-    """Store `turn`'s public tool events so a joining member's replay can include them.
+def prune_turn_events(records: list[Any]) -> list[Any]:
+    """The records that stay: every event of the newest `TURN_EVENT_HISTORY_TURNS` DISTINCT
+    turns, under the flat safety ceiling. Malformed entries are dropped here rather than
+    replayed.
+
+    "Newest" is by APPEND ORDER, not by the largest turn number: records are written
+    chronologically, `.undo` moves turn numbers back, and one imported record with an
+    absurd `turn` must not evict everything else and then swallow every future write —
+    it is one distinct turn among forty and ages out like any other.
+    """
+    turns: list[tuple[int, Any]] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        try:
+            turns.append((int(record.get("turn", 0) or 0), record))
+        except (TypeError, ValueError):
+            continue
+    recent: set[int] = set()
+    for turn, _record in reversed(turns):
+        if turn in recent:
+            continue
+        if len(recent) >= TURN_EVENT_HISTORY_TURNS:
+            break
+        recent.add(turn)
+    kept = [record for turn, record in turns if turn in recent]
+    return kept[-TURN_EVENT_HISTORY_CAP:]
+
+
+def undo_state_rewrite(store: Any, chat_key: str, turn: int):
+    """The `agent.undo.restore` `state_rewrite` for this lane: cut it to `turn` from the
+    LIVE room instead of restoring the snapshot's copy.
+
+    The turn-boundary snapshot is taken at the end of `run_kp_turn` — before this module
+    records that turn's public tool events (their turn index is only settled once the
+    turn is). So the snapshot named N never holds turn N's own rolls, and restoring its
+    copy of the lane deleted them from replay while the restored transcript still ended
+    on turn N's narration. A rewind to the end of turn N means, for this lane: keep
+    everything up to and including turn N's own events, drop the abandoned future — the
+    rolls typed after N (`after`) included. Best-effort: an unreadable lane is left as the
+    snapshot had it.
+    """
+
+    async def rewrite(state_rows: list[dict]) -> list[dict]:
+        try:
+            raw = await store.state_get(chat_key, TURN_EVENT_HISTORY_KEY)
+            live = json.loads(raw) if raw else []
+        except Exception:  # noqa: BLE001 — see docstring
+            return state_rows
+        if not isinstance(live, list):
+            return state_rows
+        kept = [
+            record
+            for record in prune_turn_events(live)
+            if int(record.get("turn", 0) or 0) < turn
+            or (int(record.get("turn", 0) or 0) == turn and not record.get("after"))
+        ]
+        rows = [row for row in state_rows if not (isinstance(row, dict) and row.get("key") == TURN_EVENT_HISTORY_KEY)]
+        if kept:
+            rows.append({"key": TURN_EVENT_HISTORY_KEY, "value": json.dumps(kept, ensure_ascii=False)})
+        return rows
+
+    return rewrite
+
+
+async def record_turn_events(
+    store: Any, chat_key: str, turn: int, events: list[Event], *, after: bool = False
+) -> None:
+    """Store public tool events so a joining member's replay can include them.
 
     Best-effort, and PUBLIC only: a private event is a unicast to one connection and has
-    no place in a lane that is re-broadcast to whoever joins next. `turn <= 0` records
-    nothing — that is the provider-error early return, which committed no turn at all,
-    so there is no history record for these events to sit beside.
+    no place in a lane that is re-broadcast to whoever joins next.
+
+    `after=False` (the AI-Keeper branch): the events that happened DURING `turn`, before
+    its narration closed; replay puts them right before that turn's reply. `turn <= 0`
+    then records nothing — that is the provider-error early return, which committed no
+    turn at all, so there is no history record for these events to sit beside.
+
+    `after=True` (the command branch — `.ra`, `r 3d6`, `.sc`, every dot-command that
+    rolls): the events happened AFTER the last completed turn `turn` (0 before any), and
+    replay puts them right after that turn's reply — where they happened, between two
+    narrations. Without this lane the most common rolls at a table, the typed ones,
+    vanished on every rejoin while the AI-Keeper's survived.
     """
-    if turn <= 0 or not events:
+    if (turn <= 0 and not after) or turn < 0 or not events:
         return
     payload = [
         {
             "turn": turn,
+            **({"after": True} if after else {}),
             "event": {
                 "kind": event.kind,
                 "speaker": event.speaker,
@@ -642,7 +771,7 @@ async def record_turn_events(store: Any, chat_key: str, turn: int, events: list[
         await store.state_set(
             chat_key,
             TURN_EVENT_HISTORY_KEY,
-            json.dumps(history[-TURN_EVENT_HISTORY_CAP:], ensure_ascii=False),
+            json.dumps(prune_turn_events(history), ensure_ascii=False),
         )
     except Exception:  # noqa: BLE001 — a replay convenience must never break a turn
         logger.warning("turn: could not record public tool events for %s", chat_key, exc_info=True)
