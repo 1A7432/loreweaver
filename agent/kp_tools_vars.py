@@ -37,6 +37,23 @@ from core.modvars import (
 from core.mvu_compat import load_mvu, mvu_flatten, mvu_has_data, save_mvu
 from infra.i18n import I18n
 
+# Cap on tool-driven variable writes recorded per turn for the hook layer — the same
+# posture as the clock-advance record (`kp_tools_knowledge`): a bounded list on
+# `ctx.extra`, consumed once by the turn finalizer.
+MAX_RECORDED_VARIABLE_WRITES = 64
+
+
+def _record_variable_write(ctx: AgentCtx, path: str, op: str) -> None:
+    """Note a SUCCESSFUL keeper-tool variable write on the turn context so the room's
+    event hooks see it: `agent.loop` folds these into the once-per-turn `variables_changed`
+    event next to hook writes and the reply's own MVU commands. Before this record existed
+    the most common way a variable changes — the Keeper's own set/adjust tools — never
+    fired the event at all, so a module calendar or panel keyed on it silently missed
+    every keeper edit."""
+    writes = ctx.extra.setdefault("variable_writes", [])
+    if isinstance(writes, list) and len(writes) < MAX_RECORDED_VARIABLE_WRITES:
+        writes.append({"path": path, "op": op})
+
 
 class ModuleVarTools:
     """AI-KP tools for defining and updating deterministic module variables."""
@@ -154,6 +171,7 @@ class ModuleVarTools:
             return spec_or_error["error"]
         try:
             old, new = await set_modvar(self._services.documents, ctx.chat_key, slug, value)
+            _record_variable_write(ctx, slug, "set")
             return i18n.t(
                 "modvars.tools.set.done", label=label_for(spec_or_error, ctx.locale), id=slug, old=old, new=new
             )
@@ -180,6 +198,7 @@ class ModuleVarTools:
             return spec_or_error["error"]
         try:
             old, new = await adjust_modvar(self._services.documents, ctx.chat_key, slug, delta)
+            _record_variable_write(ctx, slug, "add")
             return i18n.t(
                 "modvars.tools.adjust.done",
                 label=label_for(spec_or_error, ctx.locale),
@@ -287,6 +306,7 @@ class MvuStatTools:
             old = _stat_at(tree, path.strip())
             new_tree = apply_set(tree, path.strip(), parsed)
             await save_mvu(documents, ctx.chat_key, new_tree)
+            _record_variable_write(ctx, path.strip(), "set")
             shown_old = leaf_value(old) if isinstance(old, list) else old
             return i18n.t("modvars.stat.set.done", path=path.strip(), old=shown_old, new=parsed)
         except Exception as exc:
@@ -313,6 +333,7 @@ class MvuStatTools:
             old = _stat_leaf(tree, path.strip())
             new_tree = apply_add(tree, path.strip(), delta)
             await save_mvu(documents, ctx.chat_key, new_tree)
+            _record_variable_write(ctx, path.strip(), "add")
             new = _stat_leaf(new_tree, path.strip())
             return i18n.t("modvars.stat.adjust.done", path=path.strip(), old=old, new=new, delta=delta)
         except Exception as exc:

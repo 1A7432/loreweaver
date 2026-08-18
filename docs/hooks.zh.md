@@ -34,7 +34,7 @@ on("tool_use",          (event) => { ... });  // event.tool、event.arguments—
 - **`turn_start`**——守秘人开始思考之前触发，带着玩家输入。这是 `inject()` 唯一有意义的事件：注入的段落会进入**本**回合的守秘人提示词。
 - **`reply_ready`**——守秘人的叙事已经完成，`event.reply` 是全文。`narrate()` / `rewriteReply()` 该在这里用。
 - **`dice_rolled`**——本回合有骰子工具结算了。
-- **`variables_changed`**——本回合发生了变量写入。**每回合最多触发一次**，所以一个「响应变量变化又去写变量」的钩子不可能无限连锁——终止是构造出来的，不是靠自觉。
+- **`variables_changed`**——本回合发生了变量写入：钩子自己的写入、回复自带的 `<UpdateVariable>` 命令、守秘人的 `set_variable`／`adjust_variable`／`set_stat`／`adjust_stat` 工具调用，一律计入。**每回合最多触发一次**，所以一个「响应变量变化又去写变量」的钩子不可能无限连锁——终止是构造出来的，不是靠自觉。
 - **`clock_advanced`**——守秘人本回合推进了游戏内时钟（`game_clock advance`），每次推进触发一次，带着旧钟面、新钟面和原始增量文本。模组侧历法该写在这里：日期计数、死线倒计时、定时凶兆。
 - **`tool_use`**——每次守秘人工具调用**之前**触发，带着工具名和参数。唯一能拒绝的事件：`denyTool(理由)` 拦下这次调用，理由会回喂给模型（例如 `on("tool_use", (e) => { if (e.tool === "game_clock") denyTool("此景时间冻结"); })`）。字段名必须读准——守卫读了本事件不携带的字段就永远不会触发，无声无息，它本该守住的门一直敞着。
 

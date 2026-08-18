@@ -284,3 +284,42 @@ async def test_variables_changed_getvar_does_not_see_mvu_writes():
     assert "op=set" in result.reply
     assert "seen=undefined" in result.reply  # the event says WHAT changed, never the value
     assert (await load_mvu(services.documents, ctx.chat_key))["bond"] == 7  # the write itself landed
+
+
+async def test_keeper_tool_variable_writes_fire_variables_changed():
+    """The Keeper's own set/adjust tools are the most common way a variable changes; the
+    once-per-turn `variables_changed` event must carry them (path + op) like every other
+    write, or a module calendar/panel keyed on the event misses every keeper edit."""
+    from agent.kp_tools_vars import ModuleVarTools, MvuStatTools
+
+    llm = FakeLLM(
+        script=[
+            assistant_tools(
+                tool_call("set_variable", var_id="fear", value="7"),
+                tool_call("adjust_variable", var_id="fear", delta=1),
+                tool_call("set_stat", path="trail.seen", value="true"),
+            ),
+            assistant_text("noted"),
+            assistant_text("quiet"),
+        ]
+    )
+    services = _services(llm)
+    ctx = _ctx("chat-hooks-toolwrites")
+    await define_modvar(services.documents, ctx.chat_key, build_spec("fear", "number", minimum=0, maximum=10))
+    await install_room_hooks(
+        services,
+        ctx.chat_key,
+        "test",
+        ["on('variables_changed', (e) => narrate('changed:' + e.writes.map((w) => w.path + '/' + w.op).join(',')));"],
+    )
+
+    result = await run_kp_turn(
+        ctx, services, Toolset(ModuleVarTools(services), MvuStatTools(services)), "the fear grows"
+    )
+
+    assert "changed:fear/set,fear/add,trail.seen/set" in result.reply
+    state = await load_modvars(services.documents, ctx.chat_key)
+    assert state["values"]["fear"] == 8
+    # The record is consumed by the turn: a second turn without writes fires nothing.
+    second = await run_kp_turn(ctx, services, Toolset(ModuleVarTools(services)), "wait")
+    assert "changed:" not in second.reply

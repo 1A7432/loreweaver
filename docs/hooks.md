@@ -54,7 +54,9 @@ on("tool_use",          (event) => { ... });  // event.tool, event.arguments —
 - **`reply_ready`** — the Keeper's narration is complete; `event.reply` is the text.
   The place for `narrate()` / `rewriteReply()`.
 - **`dice_rolled`** — one or more dice tools resolved this turn.
-- **`variables_changed`** — variable writes happened this turn. Fires **at most once
+- **`variables_changed`** — variable writes happened this turn: hook writes, the reply's
+  own `<UpdateVariable>` commands, and the Keeper's `set_variable` / `adjust_variable` /
+  `set_stat` / `adjust_stat` tool calls alike. Fires **at most once
   per turn**, so a hook that writes variables in response cannot cascade forever —
   it stops because it cannot do otherwise, not because everyone agreed to be careful.
 - **`clock_advanced`** — the Keeper moved the game clock forward this turn

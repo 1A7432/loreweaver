@@ -266,6 +266,7 @@ async def run_kp_turn(
     hook_panel_events: list[dict] = []
     ctx.extra.pop("hook_injections", None)  # reused ctx must not leak a prior turn's injections
     ctx.extra.pop("clock_advances", None)  # same for a prior turn's unconsumed clock records
+    ctx.extra.pop("variable_writes", None)  # and a prior turn's keeper-tool variable writes
     # This turn's player message doubles as the worldbook retrieval context —
     # `agent.prompt_builder` reads `extra["user_message"]` for `worldbook.match`. Nothing
     # else ever wrote this key, which left live-play lorebook injection retrieving against
@@ -1208,6 +1209,14 @@ async def _run_reply_hooks(
             {"path": str(command.get("path", "")), "op": str(command.get("op", ""))}
             for command in mvu_applied
             if isinstance(command, dict)
+        ]
+        # Keeper-tool writes (set_variable / adjust_variable / set_stat / adjust_stat) are
+        # variable writes too — recorded on ctx.extra by `agent.kp_tools_vars` as they
+        # succeed. Without them the event only ever saw hook and reply-embedded writes.
+        changed += [
+            {"path": str(write.get("path", "")), "op": str(write.get("op", "set"))}
+            for write in list(ctx.extra.get("variable_writes") or [])
+            if isinstance(write, dict) and write.get("path")
         ]
         if changed:
             outcome = engine.fire("variables_changed", {"writes": changed})
