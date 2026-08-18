@@ -64,6 +64,40 @@ async def test_build_room_state_lists_the_rule_systems_and_how_to_create_in_them
     assert set(by_id["coc7"]) <= {"id", "make_char"}
 
 
+async def test_an_extends_pack_advertises_its_OWN_creation_word_never_its_base_s(tmp_path):
+    """A module's rulepack patch (`extends: coc7`) inherits the base's whole `commands:`
+    table, base words first — and dispatch routes an inherited word to the BASE pack.
+    Advertising `.coc` on the patch's row would hand a player a plain CoC7 sheet with
+    none of the module's own attributes. So the word on the wire is one that routes back
+    to this very pack; a patch that declares none has no `make_char` at all, rather
+    than the base's — the client then offers describe/import for it, not roll.
+    """
+    from core import rulepacks as rulepacks_module
+
+    (tmp_path / "coc7-patch.yaml").write_text(
+        "extends: coc7\nnames: [coc7-patch]\ndefaults:\n  根值: 0\ncommands:\n  patch: {action: make_char}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "coc7-wordless.yaml").write_text(
+        "extends: coc7\nnames: [coc7-wordless]\ndefaults:\n  根值: 0\n",
+        encoding="utf-8",
+    )
+    rulepacks_module._USER_RULEPACK_DIR = tmp_path
+    rulepacks_module.reload_rulepacks()
+    try:
+        state = await build_room_state(_services(), _room_ctx("extends-room"))
+        by_id = {entry["id"]: entry for entry in state["systems"]}
+        assert by_id["coc7"]["make_char"] == "coc"
+        # The patch's own word — the only one that creates a sheet IN the patch.
+        assert by_id["coc7-patch"]["make_char"] == "patch"
+        assert rulepacks_module.pack_declaring_command("patch", "make_char").system == "coc7-patch"
+        # Inherited words route to the base, so a wordless patch carries none.
+        assert "make_char" not in by_id["coc7-wordless"]
+    finally:
+        rulepacks_module._USER_RULEPACK_DIR = None
+        rulepacks_module.reload_rulepacks()
+
+
 async def test_build_room_state_surfaces_pregen_roster_to_every_viewer():
     from core.character_manager import CharacterSheet
     from core.pregen_roster import pregen_add, pregen_claim

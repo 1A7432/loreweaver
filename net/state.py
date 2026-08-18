@@ -38,8 +38,7 @@ _UNSET_CHARACTER_NAME = "default"
 async def build_room_state(services: Services, ctx: AgentCtx) -> dict[str, Any]:
     """Assemble one `state` frame's payload (including `type`) for `ctx`'s room."""
     sheet = await resolve_active_character(services, ctx)
-    active_system = sheet.system if sheet is not None else None
-    party = await _party(services, ctx.chat_key, active_system=active_system, locale=ctx.locale)
+    party = await _party(services, ctx.chat_key, locale=ctx.locale)
     initiative = await _initiative(services, ctx.chat_key)
     initiative_by_name = {entry["name"]: entry["value"] for entry in initiative}
 
@@ -97,8 +96,15 @@ def _rule_systems() -> list[dict[str, str]]:
     A system with no `make_char` binding still lists (it can be imported into); it simply
     carries no word to create with. Both lookups are cached in `core.rulepacks`, so
     rebuilding this on every state snapshot costs a dict walk.
+
+    The word advertised is one that ROUTES BACK to this pack. An `extends:` pack inherits
+    its base's whole `commands:` table (base first, then its own — `_merge_extends`), and
+    dispatch (`pack_declaring_command`) gives an inherited word to the base pack, so
+    `.coc` on a `coc7-antu` row would create a plain CoC7 sheet. Only the pack's own word
+    (`antu`) is its entry point; a patch that declares none has no way to create in it,
+    and says so by carrying no `make_char` rather than the base's.
     """
-    from core.rulepacks import available_systems, load_rulepack
+    from core.rulepacks import available_systems, load_rulepack, pack_declaring_command
 
     entries: list[dict[str, str]] = []
     for system in available_systems():
@@ -109,7 +115,10 @@ def _rule_systems() -> list[dict[str, str]]:
         entry = {"id": pack.system}
         # Declaration order, so a pack that declares several words picks its own primary.
         for word, binding in pack.commands.items():
-            if binding.action == "make_char":
+            if binding.action != "make_char":
+                continue
+            maker = pack_declaring_command(word, "make_char")
+            if maker is not None and maker.system == pack.system:
                 entry["make_char"] = word
                 break
         entries.append(entry)
@@ -171,27 +180,27 @@ async def _party(
     services: Services,
     chat_key: str,
     *,
-    active_system: str | None = None,
     locale: str | None = None,
 ) -> list[dict[str, Any]]:
+    """The room's whole roster, every member with their own meters.
+
+    Mixed-system rooms are real (a module's `extends:` rulepack is a different system
+    from the base it patches, and a keeper on one and a player on the other share a
+    table), and nothing about the wire needs the members to agree: `resources` is the
+    generic ``{id,label,value,max}`` list, its labels resolve from EACH member's own pack
+    (``label_maps`` is keyed by the member's system), and every client renders one
+    member's bars from that member's list alone. So no member is dropped for their
+    system, and none loses their meters for it — a d20 sheet's HP bar beside a CoC
+    sheet's HP/MP/SAN bars is exactly what that table looks like.
+    """
     try:
         roster = await services.characters.get_party_roster(chat_key)
     except Exception:
         return []
     companion_names = await _companion_sheet_names(services, chat_key)
-    canonical_active = _canonical_system(active_system) if active_system is not None else None
     label_maps: dict[str, dict[str, str]] = {}
     members: list[dict[str, Any]] = []
     for member in roster:
-        # A roster entry built on a DIFFERENT rule system keeps its seat and loses its
-        # meters. The vitals are pack-shaped, so rendering a d20 character's bars beside
-        # a CoC sheet's would be nonsense — but dropping the whole person answered that
-        # by breaking what the roster is FOR. A keeper on the module's own system and a
-        # player on the base system could not see each other at the same table.
-        foreign_system = (
-            canonical_active is not None
-            and _canonical_system(member.get("system", "")) != canonical_active
-        )
         payload = {
             "name": member.get("name", ""),
             "online": True,
@@ -202,13 +211,12 @@ async def _party(
         avatar = member.get("avatar")
         if isinstance(avatar, dict):
             payload["avatar"] = avatar
-        if not foreign_system:
-            system = str(member.get("system", "") or "")
-            if system not in label_maps:
-                label_maps[system] = resource_label_map(system, locale)
-            resources = _party_member_resources(member, label_maps[system])
-            if resources:
-                payload["resources"] = resources
+        system = str(member.get("system", "") or "")
+        if system not in label_maps:
+            label_maps[system] = resource_label_map(system, locale)
+        resources = _party_member_resources(member, label_maps[system])
+        if resources:
+            payload["resources"] = resources
         members.append(payload)
     return members
 
@@ -237,20 +245,6 @@ def _party_member_resources(member: dict[str, Any], labels: dict[str, str]) -> l
             continue
         resources.append({"id": res_id, "label": labels.get(res_id, label), "value": value, "max": maximum})
     return resources
-
-
-def _canonical_system(name: str) -> str:
-    """`name` resolved to its rulepack's canonical system id, else `name`
-    unchanged (an unresolvable or blank name has nothing to canonicalize
-    against). Lets an active-character filter compare like with like even when
-    a roster entry's `system` predates a pack's canonical id -- imported
-    lazily to avoid a module-level cycle."""
-    from core.rulepacks import load_rulepack
-
-    try:
-        return load_rulepack(name).system
-    except Exception:
-        return name
 
 
 def _int_value(value: Any) -> int | None:

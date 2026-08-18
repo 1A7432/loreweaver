@@ -120,6 +120,14 @@ async def test_list_pack_cards_answers_a_player_with_installed_refs(tmp_path):
         assert frame["cards"] == [
             {"ref": "harbour/cards/pilot.json", "pack": "harbour", "name": "pilot", "kind": "character"}
         ]
+        # It walks the pack dirs on the event loop, player-open and off the turn lock —
+        # so it spends the same allowance an input does, and a client looping it is
+        # throttled like one looping `.import list` (the limiter's capacity is 5).
+        for _ in range(6):
+            await ws.send(json.dumps({"type": "list_pack_cards"}))
+        seen = [await _recv(ws) for _ in range(6)]
+        assert [f["type"] for f in seen].count("pack_cards") == 4  # 5 tokens minus the one above
+        assert any(f.get("type") == "error" and f.get("code") == "rate_limited" for f in seen)
     finally:
         await server.close()
 
@@ -1022,12 +1030,13 @@ async def test_build_room_state_reports_character_party_and_clock():
     assert state["clock"]["time"] == "Night 1, 22:00"
 
 
-async def test_a_party_member_on_another_system_keeps_their_seat_and_loses_their_meters():
+async def test_a_party_member_on_another_system_keeps_their_seat_and_their_meters():
     """Mixed-system rooms are real: a pack rulepack that declares its own `system:`
     resolves to a different canonical id than the base it extends, so one PC built on
-    the module's system and one on the base landed in the same room and could not see
-    each other. Vitals are pack-shaped and genuinely cannot render across systems —
-    that is what gets dropped, not the person."""
+    the module's system and one on the base land in the same room. Nothing on the wire
+    needs them to agree: each member's `resources` is the generic list, labelled from
+    THAT member's own pack, and a client renders each row on its own — so nobody is
+    dropped for their system, and nobody loses their meters for it either."""
     services = _services()
     ctx = _room_ctx("mixed-system-state", user_id="dnd-player")
     coc = services.characters.generate_character("coc7", "Nora Vance")
@@ -1040,8 +1049,12 @@ async def test_a_party_member_on_another_system_keeps_their_seat_and_loses_their
     assert state["character"]["system"] == "dnd5e"
     party = {member["name"]: member for member in state["party"]}
     assert set(party) == {"Nora Vance", "Kael Thorn"}
-    assert party["Kael Thorn"].get("resources"), "the viewer's own system still renders meters"
-    assert "resources" not in party["Nora Vance"], "a foreign system's meters never render"
+    assert party["Kael Thorn"].get("resources"), "the viewer's own system renders meters"
+    nora = party["Nora Vance"]["resources"]
+    assert nora, "a member on another system keeps their meters too"
+    # …labelled from HER pack, not the viewer's: CoC's vitals, not a d20 sheet's.
+    assert {entry["id"] for entry in nora} >= {"hp", "san"}
+    assert all(set(entry) == {"id", "label", "value", "max"} for entry in nora)
     roster = await services.characters.get_party_roster(ctx.chat_key)
     assert {member["name"] for member in roster} == {"Nora Vance", "Kael Thorn"}
 
