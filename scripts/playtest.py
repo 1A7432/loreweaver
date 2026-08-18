@@ -1330,7 +1330,7 @@ def install_pack_for_playtest(settings, pack_arg: str) -> tuple[str, Path, list[
     """Build (if a source dir) + install `pack_arg` under `settings.data_dir` exactly the way
     `app.py --install` does, then return ``(pack_id, pack_home, skill_ids)``. Reloads skill and
     rulepack discovery so the room can `.skill enable` / build characters on the pack's system."""
-    from lw_versioning import resolve_version
+    from infra.version import resolve_version
     from net.session import PROTOCOL_VERSION
 
     source = (ROOT / pack_arg).resolve()
@@ -1344,6 +1344,10 @@ def install_pack_for_playtest(settings, pack_arg: str) -> tuple[str, Path, list[
 
 def _install_built(settings, pack_path: Path, protocol: str, server: str) -> tuple[str, Path, list[str]]:
     data_dir = Path(settings.data_dir)
+    # The same discovery wiring app.py does at startup: installed skills/rulepacks live under
+    # the data dir, and the registries only scan it once told where it is.
+    core_skills._USER_SKILL_DIR = data_dir / "skills"
+    core_rulepacks._USER_RULEPACK_DIR = data_dir / "rulepacks"
     report = core_pack.install_pack(
         pack_path,
         packs_dir=data_dir / "packs",
@@ -1379,7 +1383,9 @@ async def _setup_world_card(services, router, chat_key: str, world_card: Path, p
     """Land a pack module the way a keeper does at the table — the real command surface:
     `.import <card> world`, `.panels enable <pack>`, `.skill enable <skill>`. Returns the
     keeper-only text blob for leak scoring."""
-    fs = LocalFs(str(ROOT))
+    # The installed pack lives under the data dir, outside the repo checkout — declare it as an
+    # extra base exactly like a deployment does, or the sandboxed fs refuses the card path.
+    fs = LocalFs(str(ROOT), extra_bases=(str(services.settings.data_dir),))
     kctx = AgentCtx(chat_key=chat_key, user_id="playtest:keeper", platform="cli", locale="zh", fs=fs)
     replies = []
     system_word = f" {pc_system}" if pc_system else ""
