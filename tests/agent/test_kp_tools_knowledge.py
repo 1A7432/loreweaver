@@ -341,6 +341,13 @@ async def test_knowledge_tools_end_to_end(tmp_path):
     assert "player_actions" in add_result
     list_result = await note_tools.kp_note(ctx, action="list", category="player_actions")
     assert "Investigators search the tavern hearth." in list_result
+    # `get` reads a `set` value back (single-value categories were invisible to `list`);
+    # on a note list it is `list`, and it works for the scene singleton too.
+    await note_tools.kp_note(ctx, action="set", category="world_changes", content="the tide is out")
+    assert "the tide is out" in await note_tools.kp_note(ctx, action="get", category="world_changes")
+    assert "Investigators search the tavern hearth." in await note_tools.kp_note(ctx, action="get", category="player_actions")
+    assert "The Salt & Anchor Inn" in await note_tools.kp_note(ctx, action="get", category="current_scene")
+    assert "📭" in await note_tools.kp_note(ctx, action="get", category="never_written")
 
     # -- 5. game_clock advance updates time -------------------------------------------------------------
     await note_tools.game_clock(ctx, action="set", value="1926-03-15 09:00")

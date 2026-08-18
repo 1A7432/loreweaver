@@ -1075,7 +1075,8 @@ class NoteTools(_KnowledgeToolsBase):
 
         Args:
             action: set (set a single-value state) / add (append a note) / update (edit the last note) /
-                delete (remove a whole category) / list (list every note in a category).
+                delete (remove a whole category) / get or list (read a category back: the single
+                value, or every note in it).
             category: The note category, e.g. current_scene, current_focus, improvised_scenes, npc_status,
                 world_changes, player_actions, kp_reasoning.
             content: The note text. For action=set this is the single value (e.g. a scene name); for
@@ -1122,7 +1123,12 @@ class NoteTools(_KnowledgeToolsBase):
                 await docs.delete(chat_key, "note", category)
                 return i18n.t("kp_tools.know.note.delete_done", category=category)
 
-            if action == "list":
+            if action in ("list", "get"):
+                # `get` is the read-back a `set` value never had: `list` treated a
+                # single-value category as empty, so the model asked for `get` (40 times
+                # in one 50-turn 《安土》 run) and was told the action did not exist.
+                if isinstance(stored, str) and stored:
+                    return i18n.t("kp_tools.know.note.get_done", category=category, content=stored)
                 items = stored if isinstance(stored, list) else []
                 if not items:
                     return i18n.t("kp_tools.know.note.list_empty", category=category)
@@ -1158,10 +1164,12 @@ class NoteTools(_KnowledgeToolsBase):
             await docs.put_singleton(chat_key, "scene", data)
             return i18n.t("kp_tools.know.note.delete_done", category=category)
 
-        if action == "list":
+        if action in ("list", "get"):
             value = data.get(field, "")
             if not value:
                 return i18n.t("kp_tools.know.note.list_empty", category=category)
+            if action == "get":
+                return i18n.t("kp_tools.know.note.get_done", category=category, content=value)
             lines = [
                 i18n.t("kp_tools.know.note.list_header", category=category, count=1),
                 "",

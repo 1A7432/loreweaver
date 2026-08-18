@@ -166,6 +166,7 @@
   "kp_tools.know.note.list_header": "📝 {category} 笔记（共 {count} 条）：",
   "kp_tools.know.note.list_item": "{index}. [{time}] {content}",
   "kp_tools.know.note.set_done": "✅ 已设置 {category} = {content}",
+  "kp_tools.know.note.get_done": "📝 {category} = {content}",
   "kp_tools.know.note.update_done": "✅ 已更新 {category} 最后一条笔记",
   "kp_tools.know.pool.invalid_type": "❌ pool_type 必须是 'keeper' 或 'player'",
   "kp_tools.know.pool.item_keywords": "   关键词：{keywords}",
