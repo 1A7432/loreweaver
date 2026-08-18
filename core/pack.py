@@ -702,6 +702,15 @@ def _detected_card_kind(payloads: WorldPayloads) -> str:
     return "world" if payloads.any else "character"
 
 
+def detect_card_kind(path: str, data: bytes) -> str:
+    """One card file's 拆卡 kind, straight from its payload — the same rule the build
+    stamps into a manifest (:func:`_detected_card_kind`), exposed for the callers that
+    have bytes but no built manifest (a `.dev mount` source tree). Raises `PackError`
+    on an unparseable or oversized card, like every other card read here."""
+    _has_ejs, payloads = _validate_card_bytes(path, data)
+    return _detected_card_kind(payloads)
+
+
 def _enforce_card_kind(path: str, stored: str, payloads: WorldPayloads) -> None:
     """Verify side: the BUILT manifest's stamped kind must equal detection —
     a hand-edited manifest cannot relabel a machinery-carrying card."""

@@ -3,8 +3,9 @@
 // additive. 2.1 adds the M19 presentation surface: the `image` and performance block
 // kinds, and `visible_when` on panel template blocks. 2.2 adds the installed-pack
 // card listing (`list_pack_cards` → `pack_cards`), the structured lane behind every
-// "import from installed pack" picker. A 2.0/2.1 client ignores all of it.
-export const PROTOCOL_VERSION = "2.2" as const
+// "import from installed pack" picker. 2.3 adds each listed card's `kind`, so a picker
+// can send the right import verb. A 2.0/2.1 client ignores all of it.
+export const PROTOCOL_VERSION = "2.3" as const
 
 export const FrameType = {
   Join: "join",
@@ -184,6 +185,11 @@ export interface PackCardEntry {
   ref: string
   pack: string
   name: string
+  /** v2.3: the card's 拆卡 classification. A `world` card is module machinery and
+   * imports through the KEEPER's `.import <ref> world`; a `character` card is the
+   * ordinary `.import <ref> pc`. Absent from a pre-2.3 server — treat that as
+   * `"character"`, which is what every client assumed before this field existed. */
+  kind?: "character" | "world"
 }
 
 // v2.2: the unicast answer to `list_pack_cards`. `cards` is empty (not absent)

@@ -5,6 +5,7 @@
   "charcard.commands.import.companion_denied": "只有已认证的守秘人可以导入 AI 同伴。",
   "charcard.commands.import.help": "导入 SillyTavern 角色卡：.import <文件> [coc7|dnd5e] [pc|companion|world]——pc/companion 只取人物半（世界机制自动剥离）；world（仅守秘人）导入模组：钩子、变量、守秘人设定，且卡上角色进入待认领角色池（.pc claim）。",
   "charcard.commands.import.list": "已安装扩展包携带的可导入卡（用 `.import <引用> pc` 导入）：\n{refs}",
+  "charcard.commands.import.list_world": "  （世界卡——守秘人专用：`.import <引用> world`）",
   "charcard.commands.import.list_empty": "已安装的扩展包里没有卡文件。用 `--install` 装一个，或把你自己的卡作为附件导入。",
   "charcard.commands.import.usage": "用法：.import <角色卡文件|包内引用> [coc7|dnd5e] [pc|companion|world]——`.import list` 列出已安装包携带的引用。",
   "charcard.commands.import.world_denied": "只有已认证的守秘人可以导入世界卡（它会安装全房间钩子并注入共享变量）。",

@@ -53,13 +53,16 @@ from net.room_backup import room_rows, room_vector_points
 
 logger = logging.getLogger(__name__)
 
-# v2.2 adds the installed-pack card listing (`list_pack_cards` → `pack_cards`), the
-# structured lane behind "import from installed pack" pickers. v1.8 added module UI
+# v2.3 adds `kind` to every `pack_cards` entry — the 拆卡 classification a picker needs
+# to send the right import verb (without it every client hard-coded `.import <ref> pc`
+# and a world card was offered to players as a character). v2.2 added the installed-pack
+# card listing (`list_pack_cards` → `pack_cards`), the structured lane behind
+# "import from installed pack" pickers. v1.8 added module UI
 # panels (M15): per-viewer `ui_manifest`, hook-emitted `panel_event`, the
 # `panel_intent` client frame, and pack-asset resolution on the media byte channel.
 # v1.7 added declarative hook-emitted `ui` frames (core.hooks emitUI); v1.6 added
 # player-visible module variables on the state frame.
-_PROTOCOL_VERSION = "2.2"
+_PROTOCOL_VERSION = "2.3"
 # Public alias for out-of-band consumers (the `.lwpack` engine-minimum check in app.py).
 PROTOCOL_VERSION = _PROTOCOL_VERSION
 _SERVER_BANNER = "loreweaver/1"
@@ -417,6 +420,7 @@ class SessionCore:
                 # v2.2, player-open: card FILENAMES from installed packs — claimable
                 # knowledge (the install banner prints them), never card content. The
                 # same inventory `.import list` prints, in structured form for pickers.
+                # v2.3 adds each entry's `kind` so a picker sends the right verb.
                 from gateway.panels import installed_card_entries
 
                 await member.send_frame(

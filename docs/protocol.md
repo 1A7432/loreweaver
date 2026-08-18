@@ -1,13 +1,13 @@
 *English · [中文](protocol.zh.md)*
 
-# loreweaver networked TUI — wire protocol 2.2
+# loreweaver networked TUI — wire protocol 2.3
 
 This is the open, versioned wire protocol between a loreweaver server (started via
 `python -m app --serve`) and the OpenTUI terminal client. The engine itself
 (deterministic core + AI Keeper) is unaffected by transport; the transport-neutral
 session logic is `net.session.SessionCore`, and this document is the language-agnostic seam.
 
-Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"2.1"`. The same
+Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"2.3"`. The same
 frames + `join` handshake ride the transport; only the carrier + its framing differ:
 
 - **Iroh** (the transport `--serve` starts) — peer-to-peer QUIC. The server
@@ -113,7 +113,7 @@ connections receive `error too_many_connections` before `join` is read.
 ## Server → Client
 
 - `welcome` — sent once, on a successful `join`:
-  `{type:"welcome", protocol:"2.2", features:["media","audio", "imagegen"?, "demo"?, "update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
+  `{type:"welcome", protocol:"2.3", features:["media","audio", "imagegen"?, "demo"?, "update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
   `version` is the server's own release version (compare it to the client's to detect a mismatch). The `"update"` feature appears only for a keeper on a server whose operator configured a self-update command, and gates the `admin_update_server` control.
   `demo` means the server is using its offline sample Keeper, vector support is
   enabled, and this specific Keeper room was empty when the server checked it.
@@ -255,10 +255,15 @@ connections receive `error too_many_connections` before `join` is read.
   `input_tokens`/`output_tokens`/`cache_hit_tokens`/`cache_miss_tokens` are summed across
   every turn in the room's session so far.
 - `pack_cards` (v2.2) — the unicast answer to `list_pack_cards`: every installed
-  pack's card files. `ref` is exactly what `.import <ref> pc` accepts; `pack` and
-  `name` (the filename stem) are for display. `cards` is empty — not absent — when
-  no installed pack ships card files:
-  `{type:"pack_cards", cards:[{ref:string, pack:string, name:string}]}`
+  pack's card files. `ref` is exactly what `.import <ref>` accepts; `pack` and
+  `name` (the filename stem) are for display. `kind` (v2.3) is the card's 拆卡
+  classification and it decides the VERB: a `character` card imports as
+  `.import <ref> pc`, a `world` card is module machinery and imports through the
+  keeper's `.import <ref> world` (a player-facing picker should offer it as
+  keeper-only rather than as a character). A pre-2.3 server omits `kind`; treat a
+  missing one as `"character"`. `cards` is empty — not absent — when no installed
+  pack ships card files:
+  `{type:"pack_cards", cards:[{ref:string, pack:string, name:string, kind:"character"|"world"}]}`
 - `presence` — the connected-player roster, sent on join/leave:
   `{type:"presence", players:[{id,name,online}], online:int}`
 - `system` — an out-of-band notice: `{type:"system", level:"info"|"warn", text:string, spinner?:boolean}`

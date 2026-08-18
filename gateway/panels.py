@@ -22,7 +22,7 @@ re-reading keeps enable/install/upgrade coherent without a cache to invalidate.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -84,21 +84,68 @@ def installed_pack_homes(data_dir: Path) -> dict[str, Path]:
 
 
 def installed_card_entries(data_dir: Path) -> list[dict[str, str]]:
-    """Every installed pack's card files as `{ref, pack, name}` entries (v2.2
+    """Every installed pack's card files as `{ref, pack, name, kind}` entries (the
     `pack_cards` frame + `.import list`): `ref` is exactly what `.import <ref>`
     accepts, `name` is the filename stem for display. Filenames only — the trust
-    card already printed them to the operator; card CONTENT never rides this."""
+    card already printed them to the operator; card CONTENT never rides this.
+
+    `kind` (protocol 2.3) is the manifest's 拆卡 classification, `"character"` or
+    `"world"`, and it is what a picker needs to send the RIGHT verb: without it
+    every client hard-coded `.import <ref> pc`, so clicking a world card tried to
+    make a player character out of a module and failed on a name collision. It
+    leaks nothing a filename does not — "this pack ships module machinery" is the
+    same claimable fact as "this pack ships a card"; the keeper gate on
+    `.import … world` is unchanged and structural.
+
+    A SOURCE tree (a `.dev mount` room) has no stamped kind — detection runs at
+    build time — so its cards are read and classified here, which an author's own
+    box can afford and an installed pack never pays for.
+    """
     entries: list[dict[str, str]] = []
     for pack_id, home in sorted(installed_pack_homes(data_dir).items()):
         cards_dir = home / "cards"
         if not cards_dir.is_dir():
             continue
+        kinds = _card_kinds(home)
         for entry in sorted(cards_dir.iterdir()):
             if entry.is_file() and entry.suffix.casefold() in {".json", ".png"}:
                 entries.append(
-                    {"ref": f"{pack_id}/cards/{entry.name}", "pack": pack_id, "name": entry.stem}
+                    {
+                        "ref": f"{pack_id}/cards/{entry.name}",
+                        "pack": pack_id,
+                        "name": entry.stem,
+                        "kind": kinds(f"cards/{entry.name}", entry),
+                    }
                 )
     return entries
+
+
+def _card_kinds(home: Path) -> Callable[[str, Path], str]:
+    """`(relative_path, file) -> kind` for one pack home. Best-effort: an unreadable
+    manifest or an unparseable card falls back to `"character"`, which is the verb
+    every client sent before kinds existed."""
+    is_dev = home in _DEV_HOMES.values()
+    manifest: PackManifest | None = None
+    try:
+        manifest = parse_manifest_text(
+            (home / MANIFEST_NAME).read_text(encoding="utf-8"), expect_trust=not is_dev
+        )
+    except Exception:
+        logger.warning("panels: unreadable pack manifest under %s", home, exc_info=True)
+
+    def kind_of(relative: str, path: Path) -> str:
+        if not is_dev:
+            return manifest.card_kind(relative) if manifest is not None else "character"
+        # Source tree: no stamped kind, so ask the same detector the build uses.
+        from core.pack import detect_card_kind
+
+        try:
+            return detect_card_kind(relative, path.read_bytes())
+        except Exception:
+            logger.warning("panels: card %s under %s is unclassifiable", relative, home, exc_info=True)
+            return "character"
+
+    return kind_of
 
 
 def _digest_source_assets(home: Path, manifest: PackManifest) -> PackManifest:

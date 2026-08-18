@@ -31,6 +31,10 @@ export interface PartyRosterProps {
   // renders no section at all. Click-only ON PURPOSE — Enter stays with the pregen
   // claim above so a stray keypress can never fire an accidental `.import`.
   packCards?: PackCardEntry[]
+  // Whether this connection authenticated as the keeper (`welcome.you.role`). Only
+  // the keeper may import a world card, so a player's row for one is inert rather
+  // than a click that the server will refuse.
+  isKeeper?: boolean
 }
 
 function keyName(event: KeyEvent): string {
@@ -86,6 +90,7 @@ export function PartyRoster({
   initiativeFirst = false,
   pregens,
   packCards,
+  isKeeper,
 }: PartyRosterProps) {
   const [expanded, setExpanded] = useState(false)
   const [expandedMembers, setExpandedMembers] = useState<Set<string>>(() => new Set())
@@ -97,10 +102,16 @@ export function PartyRoster({
     client?.sendInput(`.pc claim ${name}`)
   }
 
-  const importPackCard = (ref: string) => {
-    // Same wire path as typing `.import <ref> pc` by hand — the server owns all
-    // validation (bad ref, duplicate character) and replies in the chat log.
-    client?.sendInput(`.import ${ref} pc`)
+  const importPackCard = (entry: PackCardEntry) => {
+    // v2.3: the card's own kind picks the VERB. Before the wire carried it every
+    // client sent `pc` for everything, so clicking a module's world card tried to
+    // build a player character out of it. `world` is keeper-only (the server gate is
+    // the authority — this only avoids offering a click that must be refused).
+    const world = entry.kind === "world"
+    if (world && !isKeeper) return
+    // Same wire path as typing the command by hand: the server owns all validation
+    // (bad ref, duplicate character) and replies in the chat log.
+    client?.sendInput(`.import ${entry.ref} ${world ? "world" : "pc"}`)
   }
 
   const toggle = () => {
@@ -243,13 +254,18 @@ export function PartyRoster({
       {packCards && packCards.length > 0 ? (
         <box flexDirection="column">
           <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "party.packCards")}</text>
-          {packCards.map((entry) => (
-            <box key={entry.ref} flexDirection="row" onMouseDown={() => importPackCard(entry.ref)}>
-              <text fg={theme.player} wrapMode="none" truncate>
-                {"▸ "}{stripControlChars(entry.name)} · {stripControlChars(entry.pack)}
-              </text>
-            </box>
-          ))}
+          {packCards.map((entry) => {
+            const world = entry.kind === "world"
+            const locked = world && !isKeeper
+            return (
+              <box key={entry.ref} flexDirection="row" onMouseDown={() => importPackCard(entry)}>
+                <text fg={locked ? theme.dim : theme.player} wrapMode="none" truncate>
+                  {"▸ "}{stripControlChars(entry.name)} · {stripControlChars(entry.pack)}
+                  {world ? tt(locale, locked ? "party.packCardKeeperOnly" : "party.packCardWorld") : ""}
+                </text>
+              </box>
+            )
+          })}
         </box>
       ) : null}
 

@@ -29,7 +29,7 @@ const PREGENS: PregenEntry[] = [
 function renderRoster(
   recorder: ClaimRecorder,
   pregens?: PregenEntry[],
-  options: { focused?: boolean; locale?: string; packCards?: PackCardEntry[] } = {},
+  options: { focused?: boolean; locale?: string; packCards?: PackCardEntry[]; isKeeper?: boolean } = {},
 ) {
   return testRender(
     <PartyRoster
@@ -42,6 +42,7 @@ function renderRoster(
       onFocus={() => {}}
       pregens={pregens}
       packCards={options.packCards}
+      isKeeper={options.isKeeper}
     />,
     { width: 40, height: 14 },
   )
@@ -170,6 +171,68 @@ describe("PartyRoster pack-card import section (v2.2)", () => {
     })
     await flush()
     expect(recorder.sent).toEqual([".import harbour/cards/medic.png pc"])
+
+    act(() => renderer.destroy())
+  })
+
+  test("a world card imports with the WORLD verb for a keeper, not `pc`", async () => {
+    // The bug this pins: every client hard-coded `pc`, so a keeper clicking the
+    // module's own world card asked the server to build a PC out of a module.
+    const recorder = new ClaimRecorder()
+    const { renderer, flush, captureCharFrame, mockMouse } = await renderRoster(recorder, undefined, {
+      packCards: [{ ref: "mistwharf/cards/customs.json", pack: "mistwharf", name: "customs", kind: "world" }],
+      isKeeper: true,
+    })
+    await flush()
+
+    const lines = captureCharFrame().split("\n")
+    const y = lines.findIndex((line) => line.includes("customs"))
+    expect(y).toBeGreaterThan(0)
+    expect(lines[y]).toContain("world")
+    await act(async () => {
+      await mockMouse.click(lines[y].indexOf("customs"), y)
+    })
+    await flush()
+    expect(recorder.sent).toEqual([".import mistwharf/cards/customs.json world"])
+
+    act(() => renderer.destroy())
+  })
+
+  test("a player's world-card row is inert and says so", async () => {
+    const recorder = new ClaimRecorder()
+    const { renderer, flush, captureCharFrame, mockMouse } = await renderRoster(recorder, undefined, {
+      packCards: [{ ref: "mistwharf/cards/customs.json", pack: "mistwharf", name: "customs", kind: "world" }],
+      isKeeper: false,
+    })
+    await flush()
+
+    const lines = captureCharFrame().split("\n")
+    const y = lines.findIndex((line) => line.includes("customs"))
+    expect(lines[y]).toContain("keeper only")
+    await act(async () => {
+      await mockMouse.click(lines[y].indexOf("customs"), y)
+    })
+    await flush()
+    // The server would refuse it anyway; the picker simply stops offering the click.
+    expect(recorder.sent).toEqual([])
+
+    act(() => renderer.destroy())
+  })
+
+  test("a card with no kind still imports as `pc` (a pre-2.3 server)", async () => {
+    const recorder = new ClaimRecorder()
+    const { renderer, flush, captureCharFrame, mockMouse } = await renderRoster(recorder, undefined, {
+      packCards: [{ ref: "harbour/cards/pilot.json", pack: "harbour", name: "pilot" }],
+    })
+    await flush()
+
+    const lines = captureCharFrame().split("\n")
+    const y = lines.findIndex((line) => line.includes("pilot"))
+    await act(async () => {
+      await mockMouse.click(lines[y].indexOf("pilot"), y)
+    })
+    await flush()
+    expect(recorder.sent).toEqual([".import harbour/cards/pilot.json pc"])
 
     act(() => renderer.destroy())
   })

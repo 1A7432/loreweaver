@@ -115,8 +115,10 @@ async def test_list_pack_cards_answers_a_player_with_installed_refs(tmp_path):
         ws, *_ = await _connect_and_join(url, key, "Momo")
         await ws.send(json.dumps({"type": "list_pack_cards"}))
         frame = await _recv_until(ws, "pack_cards")
+        # v2.3: every entry carries the kind a picker needs to choose the import verb.
+        # This pack home has no manifest, which is the pre-2.3 assumption's own default.
         assert frame["cards"] == [
-            {"ref": "harbour/cards/pilot.json", "pack": "harbour", "name": "pilot"}
+            {"ref": "harbour/cards/pilot.json", "pack": "harbour", "name": "pilot", "kind": "character"}
         ]
     finally:
         await server.close()

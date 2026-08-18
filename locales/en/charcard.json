@@ -5,6 +5,7 @@
   "charcard.commands.import.companion_denied": "Only an authenticated Keeper can import an AI companion.",
   "charcard.commands.import.help": "Import a SillyTavern card: .import <file> [coc7|dnd5e] [pc|companion|world] — pc/companion take the character half (world machinery stripped); world (keeper-only) imports the module: hooks, variables, keeper lore, and the card's character joins the claimable roster (.pc claim).",
   "charcard.commands.import.list": "Importable cards from installed packs (use `.import <ref> pc`):\n{refs}",
+  "charcard.commands.import.list_world": "  (world card — keeper only: `.import <ref> world`)",
   "charcard.commands.import.list_empty": "No installed pack ships card files. Install one with `--install`, or import your own card as an attachment.",
   "charcard.commands.import.usage": "Usage: .import <card file|pack ref> [coc7|dnd5e] [pc|companion|world] — `.import list` shows the refs installed packs ship.",
   "charcard.commands.import.world_denied": "Only an authenticated Keeper can import a world card (it installs room hooks and seeds shared variables).",

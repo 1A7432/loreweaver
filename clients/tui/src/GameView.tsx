@@ -595,6 +595,7 @@ export function GameView({
                 initiative={stateFrame.initiative}
                 pregens={stateFrame.pregens}
                 packCards={packCards}
+                isKeeper={welcome.you.role === "keeper"}
                 theme={theme}
                 locale={locale}
                 client={client}

@@ -3719,9 +3719,16 @@ def _installed_card_refs(ctx: CommandCtx) -> str:
 
     from gateway.panels import installed_card_entries
 
-    refs = [entry["ref"] for entry in installed_card_entries(Path(ctx.services.settings.data_dir))]
-    if not refs:
+    entries = installed_card_entries(Path(ctx.services.settings.data_dir))
+    if not entries:
         return ctx.i18n.t("charcard.commands.import.list_empty")
+    # A world card takes a DIFFERENT verb (`world`, keeper-only). The listing is what a
+    # keeper reads the ref off, so it says which ones those are rather than letting the
+    # header's `pc` example stand for every line.
+    refs = [
+        entry["ref"] + (ctx.i18n.t("charcard.commands.import.list_world") if entry.get("kind") == "world" else "")
+        for entry in entries
+    ]
     return ctx.i18n.t("charcard.commands.import.list", refs="\n".join(refs))
 
 

@@ -1,10 +1,10 @@
 *[English](protocol.md) · 中文*
 
-# Loreweaver 联网 TUI —— 协议 2.2
+# Loreweaver 联网 TUI —— 协议 2.3
 
 这是 loreweaver 服务器（通过 `python -m app --serve` 启动）与 OpenTUI 终端客户端之间开放、带版本的协议。引擎本身（确定性内核加 AI 守秘人）和用什么传输无关；与传输无关的会话逻辑在 `net.session.SessionCore` 里，这份文档描述的是接口，不绑定任何编程语言。
 
-控制流使用 `{"type": ...}` 形状的 JSON 帧，协议版本为 `"2.1"`。同一套帧和 `join` 握手可以跑在两种传输上：
+控制流使用 `{"type": ...}` 形状的 JSON 帧，协议版本为 `"2.3"`。同一套帧和 `join` 握手可以跑在两种传输上：
 
 - **Iroh** 是 `--serve` 实际启动的默认传输：点对点 QUIC，服务端打印可分享 ticket，不需要域名、证书或端口转发。控制帧是在长连接双向流上的 newline-delimited JSON；媒体字节使用同一连接上的额外双向流。
 - **WebSocket**（`net.tui_server`）只留作离线测试和本机回环，不是 `--serve` 的一个选项。控制帧是文本消息，媒体字节是二进制消息。
@@ -41,7 +41,7 @@
 ## 服务端 → 客户端
 
 - `welcome` — 成功 `join` 时发送一次：
-  `{type:"welcome", protocol:"2.2", features:["media","audio","imagegen"?,"demo"?,"update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
+  `{type:"welcome", protocol:"2.3", features:["media","audio","imagegen"?,"demo"?,"update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
   `version` 是服务端自己的发布版本（和客户端一比就能看出两边不一致）。`"update"` 特性仅在守秘人连接且服务端运维配置了自更新命令时出现，有它才允许发 `admin_update_server`。
   `demo` 表示服务端正在用离线示例守秘人、向量功能已启用，且本次检查时这个守秘人房间为空。服务端会在房间回合锁内再次检查，过期 flag 不会覆盖战役状态；客户端收到 `admin_config{using_demo:false}`（例如从模型页保存后）会立即移除入口，否则重连时重新计算，过期操作也会被服务端拒绝。
 - `error` — 本地化的故障通知；`bad_key`、`join_timeout` 和 `too_many_connections` 关闭连接（它们仅在 `join` 握手期间或之前发生），其他不关闭：
@@ -93,8 +93,8 @@
   `Resource = {id:string, label:string, value:number, max?:number}` — 规则系统的生命体征条（HP、理智、魔法值……）作为通用数据：客户端按列表渲染条形量表，无需知道任何系统的字段名。条目按渲染顺序到达。`label` 已按**本观看者**的语言解析：规则包的 `sheet.resources[].label` 可写成语言映射，于是同一个房间的 `en` 与 `zh` 连接各自读到自己那一版。
   `variables`（v1.6，增量字段，可有可无——房间没有就整个省略）是房间的确定性模块变量，且只含玩家可见子集：仅守秘人可见的变量在引擎内部（`core.modvars.player_entries`）就被过滤，永远不会到达任何传输层。条目按定义顺序到达（按原样渲染，不要排序）；`label` 已按房间语言本地化；`min`/`max` 只出现在有界的 `number` 变量上（客户端可将其渲染为进度条）。导入的 SillyTavern MVU 卡片变量共用同一列表：`id` 带 `mvu.` 前缀、点分路径作为 `label`（只有标量叶子，数量由服务端封顶）——不新增帧类型，客户端无需改动。MVU 的叶子由**守秘人挑着放出来**（默认全部隐藏，没公开的一律不发）：玩家帧只携带守秘人公开过的路径（`.var expose`）；守秘人自己连接的帧额外携带未公开的其余叶子，每条带 `hidden:true` 标记（增量字段，可有可无——不认识它的客户端照常渲染，认识的可以画成置灰或者加把锁）。
   `reset:true` 标记的是战役被清空（`.reset` / `admin_reset_room`）之后服务端推的那份快照：面板数据已经是最新的（空的），客户端还应该把本地攒下的聊天记录也清掉。
-- `pack_cards`（v2.2）— 对 `list_pack_cards` 的单播回复：每个已安装扩展包携带的卡文件。`ref` 就是 `.import <ref> pc` 接受的引用；`pack` 与 `name`（文件名主干）用于展示。没有任何包携带卡文件时 `cards` 为空数组（不是缺省）：
-  `{type:"pack_cards", cards:[{ref:string, pack:string, name:string}]}`
+- `pack_cards`（v2.2）— 对 `list_pack_cards` 的单播回复：每个已安装扩展包携带的卡文件。`ref` 就是 `.import <ref>` 接受的引用；`pack` 与 `name`（文件名主干）用于展示。`kind`（v2.3）是这张卡的拆卡归类，它决定用哪个动词：`character` 走 `.import <ref> pc`，`world` 是模组机器部件，只能走守秘人的 `.import <ref> world`（面向玩家的选择器应把它标成守秘人专用，而不是当角色卡给出）。2.3 之前的服务端不发 `kind`，缺失按 `"character"` 处理。没有任何包携带卡文件时 `cards` 为空数组（不是缺省）：
+  `{type:"pack_cards", cards:[{ref:string, pack:string, name:string, kind:"character"|"world"}]}`
 - `presence` — 连接的玩家名单，在加入/离开时发送：
   `{type:"presence", players:[{id,name,online}], online:int}`
 - `system` — 带外通知：`{type:"system", level:"info"|"warn", text:string}`
