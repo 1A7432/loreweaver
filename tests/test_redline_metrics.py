@@ -253,6 +253,67 @@ def test_metrics_record_the_evidence_behind_every_checkable_turn() -> None:
     assert recorded[0]["missed_roll"] is True
 
 
+# ---------------------------------------------------------------------------
+# The judge's VOCABULARY. `scripts.playtest` used to impose a second, stricter
+# length floor (>= 3) on top of `all_check_terms`' own (>= 2). CoC's Chinese
+# skill names are overwhelmingly two characters, so that floor deleted 58% of
+# the CJK vocabulary and a Chinese run scored 0 checkable turns -- the
+# dice-first rule then bound on nothing and `evaluate_gate` passed a run it had
+# never actually measured. The floor now lives in exactly one place.
+# ---------------------------------------------------------------------------
+
+
+def test_two_character_chinese_skill_names_are_in_the_judge_s_vocabulary() -> None:
+    """The vocabulary the judge compiles must not be narrower than the engine's."""
+    terms = all_check_terms()
+    two_char_cjk = {term for term in terms if len(term) == 2 and not term.isascii()}
+    assert two_char_cjk, "the bundled packs ship two-character CJK skill names"
+
+    for skill in ("侦查", "聆听"):
+        assert skill in terms
+        evidence = judge_checkable(action="", reply=f"请做一次{skill}检定。")
+        assert evidence is not None, skill
+        assert evidence.skill == skill
+
+
+def test_a_chinese_check_request_is_checkable_from_either_side() -> None:
+    from_player = judge_checkable(action="我掷一次侦查", reply="")
+    assert from_player is not None
+    assert from_player.source == "player_action"
+
+    from_keeper = judge_checkable(action="我翻找货箱", reply="来一次聆听判定。")
+    assert from_keeper is not None
+    assert from_keeper.source == "keeper_reply"
+
+
+def test_a_chinese_stat_word_in_ordinary_prose_is_not_a_check_request() -> None:
+    """The floor is not what kept false positives out -- the request window is.
+
+    "力量" is a pack term two characters long; it earns evidence only when a
+    check-request word sits beside it.
+    """
+    assert judge_checkable(action="", reply="他力量很大，一把扛起了货箱。") is None
+    assert judge_checkable(action="", reply="来一次力量检定。") is not None
+
+
+def test_a_chinese_run_that_never_rolls_fails_the_gate() -> None:
+    """End-to-end positive control: the whole chain, in the language the leak ran in."""
+    metrics = RedlineMetrics()
+    for _ in range(5):
+        metrics.record_turn(
+            reply="你俯身查看货箱的封蜡。做一次侦查检定。你看清了压印的边缘。",
+            action="我仔细看看那个箱子",
+            tool_trace=[],
+            secret_snippets=[],
+            secret_concepts=[],
+        )
+    assert metrics.checkable_turns == 5
+    assert metrics.missed_roll_turns == 5
+    passed, reasons = evaluate_gate(metrics, GateThresholds())
+    assert passed is False
+    assert any("miss rate" in reason for reason in reasons), reasons
+
+
 def test_one_arguable_miss_in_two_checkable_turns_cannot_fail_the_gate() -> None:
     metrics = _dice_run(rolled=1, missed=1)
     assert metrics.dice_miss_rate == 0.5  # the "rate" the nightly reported

@@ -198,7 +198,9 @@ _EVIDENCE_CLAUSE_SPLIT_RE = re.compile(r"[,.!?;:\n。！？；：，]")
 # NOT itself action language ("library use", "cthulhu mythos"), so a skill named
 # in an explicit request still counts. Kept deliberately small: this is a
 # detector lexicon, not user-facing copy (same convention as `agent/loop.py`).
-_CHECK_REQUEST_RE = re.compile(r"\b(?:check|checks|roll|rolls|rolling|test|tests)\b|检定|判定|骰", re.IGNORECASE)  # i18n-exempt
+# `掷` is in the request vocabulary because `name_checkable_skill` documents "掷一次侦查"
+# as a canonical example and the regex did not actually accept it — the doc was right.
+_CHECK_REQUEST_RE = re.compile(r"\b(?:check|checks|roll|rolls|rolling|test|tests)\b|检定|判定|骰|掷", re.IGNORECASE)  # i18n-exempt
 _CHECK_REQUEST_WINDOW = 32
 
 
@@ -226,10 +228,20 @@ def _pack_term_re(terms: frozenset[str]) -> re.Pattern[str]:
     """One alternation over every pack check term, longest first.
 
     Longest-first so a compound skill wins over its own prefix ("spot hidden"
-    before "spot"). Terms under 3 characters are dropped: stat abbreviations
-    match far too much ordinary prose to be evidence of anything.
+    before "spot").
+
+    NO length floor of its own. `core.rulepacks.all_check_terms` already drops
+    everything under 2 characters (single CJK characters and one-letter aliases
+    match far too much ordinary prose), and that is the ONE place the floor
+    belongs. A second, stricter floor here silently deleted 58% of the Chinese
+    vocabulary — CoC's zh skill names are overwhelmingly two characters — so a
+    Chinese run scored 0 checkable turns and the dice-first rule never bound at
+    all: `evaluate_gate` reported "0/0" and passed. Short terms stay honest
+    because a match is only evidence when a check-request word sits in the same
+    window, and every match is logged with the term it fired on
+    (`checkable_evidence`), so a false positive is auditable instead of silent.
     """
-    ordered = sorted({term.strip() for term in terms if len(term.strip()) >= 3}, key=len, reverse=True)
+    ordered = sorted({term.strip() for term in terms}, key=len, reverse=True)
     alternatives = [rf"\b{re.escape(term)}\b" if term.isascii() else re.escape(term) for term in ordered]
     return re.compile("|".join(alternatives), re.IGNORECASE)
 
