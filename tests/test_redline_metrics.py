@@ -296,6 +296,61 @@ def test_a_chinese_stat_word_in_ordinary_prose_is_not_a_check_request() -> None:
     assert judge_checkable(action="", reply="来一次力量检定。") is not None
 
 
+# ---------------------------------------------------------------------------
+# The judge's PROXIMITY rule. Widening the vocabulary (23460cf: `掷` became a
+# request word and the judge's extra length floor went away) turned a flat
+# +-32-character window into a false-positive machine. Each turn below has NO
+# check in it, an empty tool trace, and used to be scored a missed roll -- so it
+# inflated `dice_miss_rate` and could fail `evaluate_gate` on turns where nobody
+# asked for anything.
+# ---------------------------------------------------------------------------
+
+NOT_A_CHECK_REQUEST = [
+    # The term licensed ITSELF: `投掷` is a pack skill and carries `掷`.
+    "他把绳子投掷过去，钩爪咬住了栏杆。",
+    # Two-letter ASCII pack aliases in ordinary prose: a unit, and a noun.
+    "The rope is 30 cm short; you roll it up and stow it.",
+    "He grabs the ax — check the door first",
+    # `护甲` and the request word are in DIFFERENT clauses about different things.
+    "守卫的护甲上有一道深深的凹痕，他投掷了长矛。",
+]
+
+
+def test_prose_that_asks_for_no_check_is_not_a_checkable_turn() -> None:
+    for reply in NOT_A_CHECK_REQUEST:
+        assert judge_checkable(action="", reply=reply) is None, reply
+        assert judge_checkable(action=reply, reply="") is None, reply
+
+
+def test_prose_that_asks_for_no_check_does_not_move_the_dice_gate() -> None:
+    """The whole point of the rule: an empty tool trace on these turns is correct."""
+    metrics = RedlineMetrics()
+    for reply in NOT_A_CHECK_REQUEST:
+        outcome = metrics.record_turn(
+            reply=reply, action="", tool_trace=[], secret_snippets=[], secret_concepts=[]
+        )
+        assert outcome["missed_roll"] is False, reply
+    assert metrics.checkable_turns == 0
+    assert metrics.missed_roll_turns == 0
+
+
+def test_a_real_request_beside_the_skill_still_earns_evidence() -> None:
+    """Positive control for the three rules above -- both languages, both sides."""
+    expected = {
+        "掷一次侦查": "侦查",
+        "make a Library Use check": "library use",
+        "请做一次侦查检定": "侦查",
+        "roll Spot Hidden": "spot hidden",
+    }
+    pack_terms = {term.lower() for term in all_check_terms()}
+    for line, skill in expected.items():
+        assert skill in pack_terms, skill  # named from pack DATA, never a hardcoded list
+        evidence = judge_checkable(action="", reply=line)
+        assert evidence is not None, line
+        assert evidence.skill.lower() == skill, evidence
+        assert evidence.skill.lower() in evidence.quote.lower(), evidence
+
+
 def test_a_chinese_run_that_never_rolls_fails_the_gate() -> None:
     """End-to-end positive control: the whole chain, in the language the leak ran in."""
     metrics = RedlineMetrics()
@@ -437,3 +492,21 @@ def test_a_chronicle_leak_does_not_hide_inside_the_reply_leak_rate() -> None:
     assert metrics.leak_turns == 0 and metrics.turns == 0
     assert metrics.chronicle_leak_records == 1
     assert metrics.paraphrase_leaks == 1, "it still counts as a leak that was found"
+
+
+def test_a_request_and_its_skill_may_sit_either_side_of_a_comma_or_colon():
+    """The sentence is the bound, not the clause: "Roll for it: Spot Hidden" and
+    "掷骰，侦查" are how a Keeper actually asks. Only a full stop separates them."""
+    from scripts.playtest import name_checkable_skill
+
+    for text, skill in (
+        ("Roll for it: Spot Hidden", "Spot Hidden"),
+        ("Roll: Spot Hidden.", "Spot Hidden"),
+        ("make a check, Library Use", "Library Use"),
+        ("掷骰，侦查", "侦查"),
+    ):
+        named = name_checkable_skill(text)
+        assert named is not None and named[0] == skill, text
+    assert name_checkable_skill("Make a check. Library Use, please.") is None
+    # A request word INSIDE another pack term is not a request: `投掷` carries `掷`.
+    assert name_checkable_skill("守卫的护甲上有一道深深的凹痕，他投掷了长矛。") is None

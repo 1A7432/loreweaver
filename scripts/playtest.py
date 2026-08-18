@@ -193,6 +193,11 @@ _EVIDENCE_QUOTE_MAX = 160
 
 # Clause boundaries used to cut the quoted span out of the surrounding text.
 _EVIDENCE_CLAUSE_SPLIT_RE = re.compile(r"[,.!?;:\n。！？；：，]")
+# The SENTENCE boundary the request rule uses (`_request_bounds`): only the hard stops.
+# A comma or a colon routinely joins a request to the skill it names ("Roll for it:
+# Spot Hidden", "掷骰，侦查"), so those stay inside one span; the audit quote
+# (`_quote_span`) keeps the finer clause split for a tighter excerpt.
+_REQUEST_SENTENCE_SPLIT_RE = re.compile(r"[.!?;\n。！？；]")
 
 # Generic check-request vocabulary. Only used to license a pack term that is
 # NOT itself action language ("library use", "cthulhu mythos"), so a skill named
@@ -201,7 +206,20 @@ _EVIDENCE_CLAUSE_SPLIT_RE = re.compile(r"[,.!?;:\n。！？；：，]")
 # `掷` is in the request vocabulary because `name_checkable_skill` documents "掷一次侦查"
 # as a canonical example and the regex did not actually accept it — the doc was right.
 _CHECK_REQUEST_RE = re.compile(r"\b(?:check|checks|roll|rolls|rolling|test|tests)\b|检定|判定|骰|掷", re.IGNORECASE)  # i18n-exempt
+
+# Outer bound on how far either side of a matched term the judge will look for a
+# request word. The CLAUSE is the real boundary (`_request_bounds`); this only stops
+# one runaway clause -- a wall of prose with no punctuation in it -- from making the
+# scan grow with the length of the whole turn.
 _CHECK_REQUEST_WINDOW = 32
+
+# The judge's OWN floor, and only for ASCII terms. `core.rulepacks.all_check_terms`
+# rightly keeps two-letter stat abbreviations ("hp", "ax", "cm", "dc") -- the engine's
+# detectors want them. In free prose they are ordinary words and units: "the rope is
+# 30 cm short; you roll it up" named `cm`, "he grabs the ax -- check the door" named
+# `ax`. Two-character CJK terms are NOT affected (CoC's zh skill names are mostly two
+# characters, which is what 23460cf fixed); this floor never reaches the engine.
+_MIN_ASCII_TERM_LEN = 3
 
 
 @dataclass(frozen=True)
@@ -230,16 +248,20 @@ def _pack_term_re(terms: frozenset[str]) -> re.Pattern[str]:
     Longest-first so a compound skill wins over its own prefix ("spot hidden"
     before "spot").
 
-    NO length floor of its own. `core.rulepacks.all_check_terms` already drops
-    everything under 2 characters (single CJK characters and one-letter aliases
-    match far too much ordinary prose), and that is the ONE place the floor
-    belongs. A second, stricter floor here silently deleted 58% of the Chinese
-    vocabulary — CoC's zh skill names are overwhelmingly two characters — so a
-    Chinese run scored 0 checkable turns and the dice-first rule never bound at
-    all: `evaluate_gate` reported "0/0" and passed. Short terms stay honest
-    because a match is only evidence when a check-request word sits in the same
-    window, and every match is logged with the term it fired on
-    (`checkable_evidence`), so a false positive is auditable instead of silent.
+    NO length floor of its own: the vocabulary this compiles is exactly the
+    engine's. `core.rulepacks.all_check_terms` already drops everything under 2
+    characters (single CJK characters and one-letter aliases match far too much
+    ordinary prose), and that is the ONE place a floor over the PACK data
+    belongs. A second, stricter floor over the whole vocabulary silently deleted
+    58% of the Chinese one — CoC's zh skill names are overwhelmingly two
+    characters — so a Chinese run scored 0 checkable turns and the dice-first
+    rule never bound at all: `evaluate_gate` reported "0/0" and passed. The
+    judge's residual ASCII-only floor (`_MIN_ASCII_TERM_LEN`) is applied per
+    match in `name_checkable_skill`, not here, so this pattern stays the plain
+    pack vocabulary. Short terms stay honest because a match is only evidence
+    when a check-request word sits OUTSIDE the term in the SAME clause, and
+    every match is logged with the term it fired on (`checkable_evidence`), so
+    a false positive is auditable instead of silent.
     """
     ordered = sorted({term.strip() for term in terms}, key=len, reverse=True)
     alternatives = [rf"\b{re.escape(term)}\b" if term.isascii() else re.escape(term) for term in ordered]
@@ -254,6 +276,33 @@ def _quote_span(text: str, start: int, end: int) -> str:
     return " ".join(text[left:right].split())[:_EVIDENCE_QUOTE_MAX]
 
 
+def _request_bounds(text: str, start: int, end: int) -> tuple[int, int]:
+    """`[left, right)` around `[start, end)` in which a request word still counts.
+
+    The SENTENCE containing the term (hard stops only — a comma or colon between a
+    request and its skill is ordinary phrasing), clamped to `_CHECK_REQUEST_WINDOW`
+    characters each side.
+    """
+    floor = max(0, start - _CHECK_REQUEST_WINDOW)
+    ceiling = min(len(text), end + _CHECK_REQUEST_WINDOW)
+    left = max((match.end() for match in _REQUEST_SENTENCE_SPLIT_RE.finditer(text, floor, start)), default=floor)
+    right_match = _REQUEST_SENTENCE_SPLIT_RE.search(text, end, ceiling)
+    return left, right_match.start() if right_match else ceiling
+
+
+def _request_word_outside_terms(text: str, lo: int, hi: int, term_spans: list[tuple[int, int]]) -> bool:
+    """A check-request word in `text[lo:hi]` that is not itself part of a pack term.
+
+    `掷` inside `投掷` (a skill) must not license the `护甲` two words away, any more
+    than it may license `投掷` itself — a request word is a WORD, not a character that
+    happens to sit inside a skill name.
+    """
+    for match in _CHECK_REQUEST_RE.finditer(text, lo, hi):
+        if not any(span_lo <= match.start() < span_hi for span_lo, span_hi in term_spans):
+            return True
+    return False
+
+
 def name_checkable_skill(text: str) -> tuple[str, str, str] | None:
     """`(skill, quote, rule)` if `text` explicitly calls for a roll, else None.
 
@@ -265,6 +314,23 @@ def name_checkable_skill(text: str) -> tuple[str, str, str] | None:
     That lexicon no longer exists in the engine, and reproducing it here would
     reproduce the circularity along with it.
 
+    "Next to" is three conditions, all of which a false positive from the live
+    gate walked through when it was a flat +-32-character window:
+
+    1. The request word is searched OUTSIDE the term's own span. "他把绳子投掷过去"
+       scored itself: `投掷` is a pack skill AND carries `掷`, so the term licensed
+       itself and every rope-throwing sentence became a missed check.
+    2. It has to sit in the SAME SENTENCE as the term (`_request_bounds`: hard stops
+       bound it; a comma or colon between a request and its skill — "Roll for it:
+       Spot Hidden", "掷骰，侦查" — is ordinary phrasing and stays inside), and it must
+       be a request WORD, not a character inside another pack term
+       (`_request_word_outside_terms`): in "守卫的护甲上有一道深深的凹痕，他投掷了长矛。"
+       the only `掷` belongs to the skill `投掷`, so it licenses neither `护甲` nor
+       itself. A request one full stop away ("Make a check. Library Use.") is out of
+       reach — the price of not scoring "the law students roll their eyes".
+    3. ASCII terms must clear `_MIN_ASCII_TERM_LEN` -- the judge's own floor, not
+       the engine's. "the rope is 30 cm short; you roll it up" is not a `cm` check.
+
     What this deliberately gives up is the turn where a player declares a
     checkable action in plain words and nobody says "check". That question needs
     the fiction read, and it is now the Scribe's `unrolled_check` observation --
@@ -274,10 +340,17 @@ def name_checkable_skill(text: str) -> tuple[str, str, str] | None:
     if not text:
         return None
     terms = all_check_terms()
-    for match in _pack_term_re(terms).finditer(text):
-        window = text[max(0, match.start() - _CHECK_REQUEST_WINDOW) : match.end() + _CHECK_REQUEST_WINDOW]
-        if _CHECK_REQUEST_RE.search(window):
-            return match.group(0), _quote_span(text, match.start(), match.end()), "explicit_check_request"
+    matches = list(_pack_term_re(terms).finditer(text))
+    term_spans = [(match.start(), match.end()) for match in matches]
+    for match in matches:
+        term = match.group(0)
+        if term.isascii() and len(term) < _MIN_ASCII_TERM_LEN:
+            continue
+        left, right = _request_bounds(text, match.start(), match.end())
+        if _request_word_outside_terms(text, left, match.start(), term_spans) or _request_word_outside_terms(
+            text, match.end(), right, term_spans
+        ):
+            return term, _quote_span(text, match.start(), match.end()), "explicit_check_request"
     return None
 
 
