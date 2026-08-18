@@ -115,6 +115,45 @@ class NpcTools:
     def _i18n(self, ctx: AgentCtx) -> I18n:
         return self._services.i18n.with_locale(ctx.locale)
 
+
+    async def _player_character_names(self, ctx: AgentCtx) -> set[str]:
+        """The names a room has already given to PLAYER characters — the party roster
+        (minus AI companions, whose sheets are NPC-backed by design) plus the module's
+        claimable pregens. An NPC/companion may never take one of these: the 2026-08-18
+        《安土》 run had the Keeper, unable to see a non-acting player's sheet, register a
+        real player as an AI companion `npc-4` and drive them with `companion_act` — a
+        scene narrated twice, the clock overwritten. A name check here is the structural
+        answer; the sheet-visibility gap is a separate matter."""
+        names: set[str] = set()
+        try:
+            from agent.npc import list_companions
+
+            companions = {r.stat_char or r.name for r in await list_companions(self._services.documents, ctx.chat_key)}
+        except Exception:
+            companions = set()
+        try:
+            for member in await self._services.characters.get_party_roster(ctx.chat_key):
+                name = str(member.get("name") or "").strip()
+                if name and name not in companions:
+                    names.add(name)
+        except Exception:
+            pass
+        try:
+            from core.pregen_roster import pregen_entries
+
+            for entry in await pregen_entries(self._services.documents, ctx.chat_key):
+                name = str(entry.get("name") or "").strip()
+                if name:
+                    names.add(name)
+        except Exception:
+            pass
+        return names
+
+    async def _refuse_player_name(self, ctx: AgentCtx, name: str) -> str | None:
+        if name.strip() and name.strip() in await self._player_character_names(ctx):
+            return self._i18n(ctx).t("npc.tools.create.name_is_player", name=name.strip())
+        return None
+
     @tool(prep_only=True)
     async def create_npc(
         self,
@@ -149,6 +188,9 @@ class NpcTools:
             Confirmation naming the created NPC and its resolved id.
         """
         i18n = self._i18n(ctx)
+        refused = await self._refuse_player_name(ctx, name)
+        if refused:
+            return refused
         try:
             npc = await npc_records.create_npc(
                 self._services.documents,
@@ -184,6 +226,9 @@ class NpcTools:
         # actor -- so an improvised NPC's private knowledge would have no structural home
         # at all (iron rule #3). Facts they learn later arrive through `npc_learns`.
         i18n = self._i18n(ctx)
+        refused = await self._refuse_player_name(ctx, name)
+        if refused:
+            return refused
         try:
             npc = await npc_records.create_npc(
                 self._services.documents, ctx.chat_key, name, persona=one_line, major=True

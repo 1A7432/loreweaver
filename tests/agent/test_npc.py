@@ -589,3 +589,36 @@ def test_get_npc_and_list_npcs_are_keeper_only_in_build_kp_toolset():
 
     # locked decision (docs/specs/M5-npc.md): no separate options tool
     assert "npc_action_options" not in toolset.names()
+
+
+async def test_a_player_character_can_never_be_created_as_an_npc():
+    """2026-08-18 《安土》 run 1: the Keeper — unable to see a non-acting player's sheet —
+    registered a real player as an AI companion `npc-4` and drove them with
+    `companion_act` (a scene narrated twice, the clock overwritten). A player's name is
+    off-limits to create_npc / sketch_npc: roster PCs and the module's claimable pregens
+    alike; AI companions' own NPC-backed sheets are not players and stay creatable."""
+    from core.character_manager import CharacterSheet
+    from core.pregen_roster import pregen_add
+    from infra.config import ImageGenSettings
+
+    services = build_services(Settings(imagegen=ImageGenSettings()), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(8))
+    chat_key = "antu-guard"
+    tools = NpcTools(services)
+    ctx = _ctx(chat_key)
+
+    # A real player's character on the roster.
+    await services.characters.save_character("player-2", chat_key, CharacterSheet("平知章", "coc7"))
+    # An unclaimed pregen from the module's cast.
+    await pregen_add(services.documents, chat_key, CharacterSheet("秦苁蓉", "coc7"))
+
+    refused = await tools.create_npc(ctx, name="平知章", persona="a surveyor")
+    assert refused.startswith("❌") and "平知章" in refused
+    refused_sketch = await tools.sketch_npc(ctx, name="秦苁蓉", one_line="the physician")
+    assert refused_sketch.startswith("❌")
+    from agent import npc as npc_records
+
+    assert {record.name for record in await npc_records.list_npcs(services.documents, chat_key)} == set()
+
+    # An ordinary NPC still creates.
+    created = await tools.sketch_npc(ctx, name="老蒯", one_line="the ring-forest warden")
+    assert created.startswith("✅")
