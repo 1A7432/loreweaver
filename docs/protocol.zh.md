@@ -61,6 +61,7 @@
 - `narrative` — 一行**完整的**故事/聊天文本：
   `{type:"narrative", id:string, speaker:"kp"|"player"|"system"|"npc", name?:string, text:string, format:"markdown"|"plain"}`
   对于 `speaker:"npc"`，`name` 携带 NPC 名称。`narrative` 帧永远携带完整的最终文本：当其 `id` 与客户端由 `narrative_delta` 累积出的草稿气泡匹配时，最终文本**替换**该草稿（生成后修正已折入）；否则就是一条普通的单发文本。**空的最终文本是撤销，不是消息**：服务器用它收掉被放弃的草稿（守秘人换了下一轮工具草稿、或回合中途夭折），客户端必须**移除**——绝不渲染——最终文本为空的气泡。
+  **加入时的回放。** 每次加入，服务器都把房间最近的记录（最后 30 条对话历史）作为普通 `narrative` 帧回放——只回放故事通道，不回放点命令回显；自 v2.3 起，每条被回放的 AI 守秘人回复**之前**，先回放该回合现场产生的 `dice` 与 npc `narrative` 帧（见"回合流程"第 5–6 步）。回放帧与现场帧刻意不可区分：客户端按到达顺序渲染，并按 `id` 去重 `narrative`。
 - `narrative_delta` — 草稿气泡的一段流式文本增量：
   `{type:"narrative_delta", id:string, speaker:"kp", name?:string, text:string}`
   客户端把共享同一 `id` 的增量拼接进草稿气泡（按 markdown 渲染）。流在**同 `id`** 的 `narrative` 帧到达时结束；服务端保证这条收尾帧一定会来（回合失败也会以已流出的文本收口）。服务端在 AI 守秘人生成的同时就往外发，并且边发边清理：拿不准的一律不发，机关和 MVU 块永远不会流出去。
@@ -112,8 +113,8 @@
 3. 向整个房间广播 `narrative{speaker:"player", name, text}`（每个人都看到该操作，包括发送者）。
 4. 如果 `CommandRouter.dispatch(ctx, text)` 返回非 `None`，该字符串是回复（一个 `.`/`/` 命令或 SealDice 风格的内联掷骰子）。
    否则，服务器先广播 `turn_status{status:"busy", actor:name}`，再由 `run_kp_turn(ctx, services, toolset, text, output_review=censor)` 驱动 AI 守秘人，返回一个 `KPTurnResult`。
-5. 对于每个 `tool_trace` 条目，如果是掷骰子/检定工具（`roll_dice`、`skill_check`、`sanity_check`、`opposed_check`、`initiative_tracker`），按工具在分发时绑定的结构化 payload 逐一广播 `dice` 帧（未发射 payload 的工具没有 dice 帧——帧永不从工具文本反解析重建）。
-6. 对于每个名为 `speak_as_npc` 的 `tool_trace` 条目，在最终 KP 回复之前广播 `narrative{speaker:"npc", name, text, format:"markdown"}`。`name` 是工具调用的 `npc` 参数，`text` 是玩家安全的工具结果。
+5. AI 守秘人运行**期间**，每次工具调用的公开后果**即时**广播，顺序就是模型调用的顺序（v2.3——此前是回合结束后从完整 trace 里读出来再发，流式服务商上会让叙述排在它所叙述的那次掷骰**上面**）：掷骰/检定工具（`roll_dice`、`skill_check`、`sanity_check`、`opposed_check`、`initiative_tracker`）按分发时绑定的结构化 payload 逐一产生 `dice` 帧（未发射 payload 的工具没有 dice 帧——帧永不从工具文本反解析重建）；`speak_as_npc` 产生 `narrative{speaker:"npc", name, text, format:"markdown"}`，`name` 是工具调用的 `npc` 参数，`text` 是玩家安全的工具结果。因此在流式服务商上这些帧会夹在 `narrative_delta` 分片**之间**到达；客户端不得假设增量流是连续的。
+6. 同一批 dice / npc 帧按回合**记录**（`turn_event_history`），加入房间时回放，各自紧接在所属回合的 `narrative` 之前——见上文 `narrative` 条目的加入回放说明。加入者看到的顺序与现场一致。
 7. 将回复广播为 `narrative{text: reply}`——命令回复为 `speaker:"system"`，AI 守秘人的回复是 `speaker:"kp", format:"markdown"`。回复已经过配置好的输出词表；守秘人专用工具的原始结果不会被代码直接抄进这一帧，但主守秘人模型看过那些结果，仍有可能自己复述出来，所以这部分风险由真模型红线评测另行实测。
 8. 对回合内事件钩子经 `emitUI` 缓冲的每条发射，各广播一个 `ui` 帧——服务端已经校验并截断过；没有钩子的房间完全不会出现此帧。
 9. 对钩子经 `emitPanel` 缓冲的每条发射，各送达一个 `panel_event` 帧——**不是**广播：每条只送达自己清单里含目标面板的成员。

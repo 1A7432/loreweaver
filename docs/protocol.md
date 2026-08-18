@@ -150,6 +150,13 @@ connections receive `error too_many_connections` before `join` is read.
   server closes an abandoned draft that way (a tool round the Keeper superseded,
   a turn that died mid-stream), and a client must remove — never render — a
   bubble whose final text is empty.
+  **Join replay.** On every join the server replays the room's recent transcript
+  (the last 30 chat-history entries) as ordinary `narrative` frames — story lanes
+  only, never dot-command echoes — and, since v2.3, each replayed AI-Keeper
+  reply is PRECEDED by the `dice` and npc `narrative` frames its turn produced
+  live (see Turn flow, steps 5–6). Replayed frames are indistinguishable from
+  live ones by design: a client renders them in arrival order and dedupes a
+  `narrative` by `id`.
 - `narrative_delta` — one streaming text delta for a draft bubble:
   `{type:"narrative_delta", id:string, speaker:"kp", name?:string, text:string}`
   Clients concatenate deltas sharing an `id` into a draft bubble (render as
@@ -290,15 +297,22 @@ On an `input` frame from a client in room `R`, the server:
    `run_kp_turn(ctx, services, toolset, text,
    output_review=censor)` drives the AI Keeper and returns a
    `KPTurnResult`.
-5. For each `tool_trace` entry that is a dice/check tool (`roll_dice`,
-   `skill_check`, `sanity_check`, `opposed_check`, `initiative_tracker`),
-   broadcasts one `dice` frame per structured payload the tool bound during
-   dispatch (a tool that emitted no payload emits no dice frame — frames are
-   never reconstructed from tool text).
-6. For each `tool_trace` entry named `speak_as_npc`, broadcasts
-   `narrative{speaker:"npc", name, text, format:"markdown"}` before the final
-   KP reply. `name` is the tool call's `npc` argument and `text` is the
-   player-safe tool result.
+5. WHILE the AI Keeper runs, each tool call's public consequences are broadcast
+   AS THEY HAPPEN, in the order the model made them (v2.3 — before, they were
+   read off the finished trace after the reply, which on a streaming provider
+   put the narration ABOVE the roll it narrates): a dice/check tool
+   (`roll_dice`, `skill_check`, `sanity_check`, `opposed_check`,
+   `initiative_tracker`) yields one `dice` frame per structured payload it
+   bound during dispatch (a tool that emitted no payload emits no dice frame —
+   frames are never reconstructed from tool text); `speak_as_npc` yields
+   `narrative{speaker:"npc", name, text, format:"markdown"}`, `name` being the
+   tool call's `npc` argument and `text` the player-safe tool result. On a
+   streaming provider these frames therefore arrive BETWEEN `narrative_delta`
+   chunks; a client must not assume the delta stream is contiguous.
+6. The same dice / npc frames are RECORDED per turn (`turn_event_history`) and
+   replayed on join, each set right before the `narrative` of the turn it
+   belongs to — see the join replay note under `narrative` above. A joining
+   member's transcript keeps the live order.
 7. Broadcasts the reply as `narrative{text: reply}` — `speaker:"system"` for
    a command reply, `speaker:"kp", format:"markdown"` for an AI Keeper
    reply. The reply is already passed through the configured output wordlist.
