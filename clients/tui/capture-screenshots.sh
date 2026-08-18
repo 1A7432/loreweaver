@@ -45,23 +45,18 @@ sleep 16
 
 # The `character` screen has no character yet, so it mounts straight on the
 # create form (method="roll" by default) — send real keystrokes over the tmux
-# pty so the shot instead shows "manual" (all four methods still list above it)
-# together with its point-budget line, and the flavor name typed into the form:
-#   Down (method: roll -> manual) -> Enter (confirm, focus -> system, left on
-#   CoC) -> Tab (system -> name) -> type the name -> Tab (name -> attrs).
+# pty so the shot shows the three creation methods, the server-reported rule
+# systems, and a flavor name typed into the form:
+#   Tab (method -> system) -> Tab (system -> name) -> type the name.
 if echo " $SCREENS " | grep -q " character "; then
   for L in en zh; do
     sess=$(session_for character "$L")
     name=$([ "$L" = "zh" ] && echo "张伟" || echo "Alex")
-    tmux send-keys -t "$sess" Down
-    sleep 0.3
-    tmux send-keys -t "$sess" Enter
+    tmux send-keys -t "$sess" Tab
     sleep 0.3
     tmux send-keys -t "$sess" Tab
     sleep 0.3
     tmux send-keys -t "$sess" -l "$name"
-    sleep 0.3
-    tmux send-keys -t "$sess" Tab
     sleep 0.3
   done
 fi

@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
-import { FrameType, PROTOCOL_VERSION, type ServerFrame, type WelcomeFrame } from "loreweaver-protocol"
+import {
+  FrameType,
+  PROTOCOL_VERSION,
+  type CharacterState,
+  type RuleSystemEntry,
+  type ServerFrame,
+  type WelcomeFrame,
+} from "loreweaver-protocol"
 import App, { type AppClient } from "../App"
 
 // Same MockClient shape as App.test.tsx: connect/join are recorded, sent input is
@@ -61,6 +68,60 @@ const PLAYER_WELCOME: WelcomeFrame = {
   server: "mock",
 }
 
+// Shaped like the real `state` frame (protocol 2.3, `net/state.py::_rule_systems`):
+// canonical pack ids, and the dot-command word only for a system whose pack declares
+// one. `wod` declares none — it can be described into or imported into, never rolled.
+const SYSTEMS: RuleSystemEntry[] = [
+  { id: "coc7", make_char: "coc" },
+  { id: "dnd5e", make_char: "dnd" },
+  { id: "wod" },
+]
+
+// Attributes arrive as RAW STORAGE KEYS, vitals and derived leaves included — the
+// same payload `.st <key> <n>` accepts back. Vitals ride the protocol-2.0 generic
+// `resources` list, which carries its own labels.
+const SHEET: CharacterState = {
+  name: "漱雪",
+  system: "coc7",
+  resources: [
+    { id: "hp", label: "HP", value: 12, max: 12 },
+    { id: "mp", label: "MP", value: 13, max: 13 },
+    { id: "san", label: "SAN", value: 65, max: 99 },
+  ],
+  attributes: {
+    STR: 55,
+    CON: 60,
+    SIZ: 65,
+    DEX: 70,
+    APP: 50,
+    INT: 75,
+    POW: 65,
+    EDU: 80,
+    LUC: 45,
+    HPMAX: 12,
+    MPMAX: 13,
+    SANMAX: 99,
+    IDEA: 75,
+    KNOW: 80,
+    HP: 12,
+    MP: 13,
+    SAN: 65,
+  },
+  status_effects: [],
+}
+
+function stateFrame(extra: Partial<{ character: CharacterState; systems: RuleSystemEntry[] }> = {}): ServerFrame {
+  const { character, systems } = { systems: SYSTEMS, ...extra }
+  return {
+    type: FrameType.State,
+    character,
+    party: [],
+    initiative: [],
+    online: 1,
+    ...(systems ? { systems } : {}),
+  }
+}
+
 function renderApp(client: MockClient, width = 110, height = 34) {
   return testRender(<App client={client} prefill={{}} />, { width, height })
 }
@@ -70,18 +131,246 @@ function renderApp(client: MockClient, width = 110, height = 34) {
 // row's line hits it; x=6 mirrors App.test.tsx's own working coordinate.
 const CLICK_X = 6
 
-describe("CharacterScreen", () => {
-  test("80 columns gives the creation form full width and clears it when the sheet lands", async () => {
+/** Join the room, land a `state` frame, then keyboard-navigate into "我的角色". */
+async function openCharacterScreen(client: MockClient, width = 110, height = 34, frame: ServerFrame = stateFrame()) {
+  const harness = await renderApp(client, width, height)
+  await harness.flush()
+  act(() => client.push(PLAYER_WELCOME))
+  await harness.waitForFrame((text) => text.includes("我的角色"))
+  act(() => client.push(frame))
+  await harness.flush()
+
+  await act(async () => harness.mockInput.pressArrow("down"))
+  await harness.flush()
+  await act(async () => harness.mockInput.pressEnter())
+  await harness.flush()
+  return harness
+}
+
+describe("CharacterScreen system picker (protocol 2.3)", () => {
+  test("the picker lists exactly the server's systems; roll mode drops the ones with no make_char word", async () => {
     const client = new MockClient()
-    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client, 80, 24)
+    const { renderer, flush, waitForFrame, mockInput } = await openCharacterScreen(client)
+
+    // Roll mode (the default): only a system whose pack declares a make-character
+    // word can be rolled, so `wod` is not offered here.
+    const roll = await waitForFrame((text) => text.includes("规则系统"))
+    expect(roll).toContain("coc7")
+    expect(roll).toContain("dnd5e")
+    expect(roll).not.toContain("wod")
+    // Ids verbatim off the wire — the client invents no display names.
+    expect(roll).not.toContain("CoC 7")
+    expect(roll).not.toContain("D&D")
+    // The manual/point-buy lane is gone: its budgets live in a pack's constraints
+    // and no frame carries them.
+    expect(roll).not.toContain("手动设置")
+
+    // Description mode can target any system the server reported.
+    await act(async () => mockInput.pressArrow("down"))
     await flush()
+    const persona = await waitForFrame((text) => text.includes("wod"))
+    expect(persona).toContain("coc7")
+    expect(persona).toContain("dnd5e")
+    expect(persona).toContain("wod")
+
+    act(() => renderer.destroy())
+  })
+
+  test("a server that reports no systems gets a plain message instead of a create form", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame } = await openCharacterScreen(
+      client,
+      110,
+      34,
+      // A pre-2.3 server: no `systems` on the frame at all.
+      stateFrame({ systems: undefined as unknown as RuleSystemEntry[] }),
+    )
+    await flush()
+
+    const frame = await waitForFrame((text) => text.includes("服务端没有报告任何规则系统"))
+    // No method picker, no system picker, no submit button — nothing to guess with.
+    expect(frame).not.toContain("建卡方式")
+    expect(frame).not.toContain("自动掷骰")
+    expect(frame).not.toContain("coc7")
+    expect(client.sent).toEqual([])
+
+    act(() => renderer.destroy())
+  })
+})
+
+describe("CharacterScreen creation commands", () => {
+  test("roll sends `.<make_char> <name>` using the picked system's own word", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame, mockInput } = await openCharacterScreen(client)
+    await waitForFrame((t) => t.includes("规则系统"))
+
+    // Tab from method -> system -> name, type a name, submit.
+    await act(async () => {
+      mockInput.pressTab()
+      mockInput.pressTab()
+    })
+    await flush()
+    await act(async () => {
+      await mockInput.typeText("漱雪")
+    })
+    await flush()
+    await act(async () => mockInput.pressEnter())
+    await flush()
+
+    // The first offered system (coc7) declares `coc`, so that is the word sent —
+    // the client never spells a rule system out of its own knowledge.
+    expect(client.sent).toEqual([".coc 漱雪"])
+
+    // Awaiting the reply plays the dice-tumble flicker (bounded, not a spinner) —
+    // dice glyphs only, no per-system characteristic labels.
+    const rolling = await waitForFrame((t) => t.includes("掷骰中"))
+    expect(rolling).toContain("漱雪…")
+    // Generic dice faces, never a system's characteristic names.
+    expect(rolling).not.toContain("STR")
+    expect(rolling).not.toContain("力量")
+
+    // The server replies with a refreshed `state` frame — there is no scoped
+    // response, so the UI reacts to this arrival, not to a return value.
+    act(() => client.push(stateFrame({ character: SHEET })))
+    await flush()
+
+    // The roll "lands": the landed sheet names its OWN attributes (storage keys off
+    // the wire), which is the only place attribute names come from.
+    const landed = await waitForFrame((t) => t.includes("落定"))
+    expect(landed).toContain("漱雪")
+    expect(landed).toContain("STR 55")
+
+    // After the bounded landing flourish the screen drops back into view mode.
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 600)))
+    await flush()
+    const settled = await waitForFrame((t) => t.includes("重掷 / 新建"))
+    expect(settled).not.toContain("建卡方式")
+    expect(settled).toContain("STR 55")
+
+    act(() => renderer.destroy())
+  })
+
+  test("picking the second system rolls with ITS word, not the first one's", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame, mockInput } = await openCharacterScreen(client)
+    await waitForFrame((t) => t.includes("规则系统"))
+
+    // Enter on the method select hands focus to the system picker; down = dnd5e.
+    await act(async () => mockInput.pressEnter())
+    await flush()
+    await act(async () => mockInput.pressArrow("down"))
+    await flush()
+    await act(async () => mockInput.pressTab())
+    await flush()
+    await act(async () => {
+      await mockInput.typeText("米拉")
+      mockInput.pressEnter()
+    })
+    await flush()
+
+    expect(client.sent).toEqual([".dnd 米拉"])
+
+    act(() => renderer.destroy())
+  })
+
+  test("mouse click with a blank name sends the bare make-char word", async () => {
+    const client = new MockClient()
+    const harness = await renderApp(client)
+    await harness.flush()
     act(() => client.push(PLAYER_WELCOME))
-    await waitForFrame((text) => text.includes("我的角色"))
+    const menu = await harness.waitForFrame((t) => t.includes("我的角色"))
+    act(() => client.push(stateFrame()))
+    await harness.flush()
+    const menuRowY = menu.split("\n").findIndex((line) => line.includes("我的角色"))
+    expect(menuRowY).toBeGreaterThan(0)
+
+    await act(async () => {
+      await harness.mockMouse.click(CLICK_X, menuRowY)
+    })
+    await harness.flush()
+
+    const form = await harness.waitForFrame((t) => t.includes("⚄ 自动掷骰"))
+    const buttonRowY = form.split("\n").findIndex((line) => line.includes("⚄ 自动掷骰"))
+    expect(buttonRowY).toBeGreaterThan(0)
+
+    await act(async () => {
+      await harness.mockMouse.click(CLICK_X, buttonRowY)
+    })
+    await harness.flush()
+
+    expect(client.sent).toEqual([".coc"])
+
+    act(() => harness.renderer.destroy())
+  })
+
+  test("description mode sends `.genchar <systemId> <name> | <description>`", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame, mockInput } = await openCharacterScreen(client)
+    await waitForFrame((t) => t.includes("建卡方式"))
 
     await act(async () => mockInput.pressArrow("down"))
     await flush()
     await act(async () => mockInput.pressEnter())
     await flush()
+
+    await act(async () => mockInput.pressTab())
+    await flush()
+    await act(async () => {
+      await mockInput.typeText("阿达")
+    })
+    await flush()
+    await act(async () => mockInput.pressTab())
+    await flush()
+    await act(async () => {
+      await mockInput.typeText("冷静的医生,在雾港调查失踪案")
+    })
+    await flush()
+    await act(async () => mockInput.pressEnter())
+    await flush()
+
+    // The canonical system ID goes on the wire, not a dialect word.
+    expect(client.sent).toEqual([".genchar coc7 阿达 | 冷静的医生,在雾港调查失踪案"])
+
+    await act(async () => mockInput.pressEscape())
+    await flush()
+    act(() => renderer.destroy())
+  })
+
+  test("import mode sends `.import <path> <systemId> pc`", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame, mockInput } = await openCharacterScreen(client)
+    await waitForFrame((t) => t.includes("建卡方式"))
+
+    await act(async () => {
+      mockInput.pressArrow("down")
+      mockInput.pressArrow("down")
+    })
+    await flush()
+    await act(async () => mockInput.pressEnter())
+    await flush()
+    await waitForFrame((t) => t.includes("⚄ 导入"))
+
+    await act(async () => mockInput.pressTab())
+    await flush()
+    await act(async () => {
+      await mockInput.typeText("/cards/ada.json")
+    })
+    await flush()
+    await act(async () => mockInput.pressEnter())
+    await flush()
+
+    expect(client.sent).toEqual([".import /cards/ada.json coc7 pc"])
+    const sent = await waitForFrame((t) => t.includes("已发送"))
+    expect(sent).toContain(".import /cards/ada.json coc7 pc")
+
+    await act(async () => mockInput.pressEscape())
+    await flush()
+    act(() => renderer.destroy())
+  })
+
+  test("80 columns gives the creation form full width and clears it when the sheet lands", async () => {
+    const client = new MockClient()
+    const { renderer, flush, waitForFrame, mockInput } = await openCharacterScreen(client, 80, 24)
 
     const create = await waitForFrame((text) => text.includes("建卡方式") && text.includes("规则系统"))
     expect(create).not.toContain("CHARACTER")
@@ -98,415 +387,35 @@ describe("CharacterScreen", () => {
     })
     await flush()
 
-    act(() => {
-      client.push({
-        type: FrameType.State,
-        character: {
-          name: "八十列调查员",
-          system: "CoC",
-          hp: 10,
-          hpmax: 10,
-          mp: 10,
-          mpmax: 10,
-          san: 65,
-          sanmax: 99,
-          attributes: { STR: 60, CON: 55, SIZ: 65, DEX: 70, APP: 50, INT: 75, POW: 65, EDU: 80 },
-          status_effects: [],
-        },
-        party: [],
-        initiative: [],
-        online: 1,
-      })
-    })
+    act(() => client.push(stateFrame({ character: { ...SHEET, name: "八十列调查员" } })))
     await flush()
     await act(async () => new Promise((resolve) => setTimeout(resolve, 600)))
     await flush()
 
     const settled = await waitForFrame((text) => text.includes("重掷 / 新建"))
     expect(settled).not.toContain("建卡方式")
-    expect(settled).not.toContain("DEXr")
     expect(settled.split("\n").every((line) => Bun.stringWidth(line) <= 80)).toBe(true)
 
     act(() => renderer.destroy())
   })
+})
 
-  test("从主菜单键盘进入角色页;无角色时直接展示建卡表单", async () => {
+describe("CharacterScreen view actions", () => {
+  test("微调 sends the free-text `.st <text>` exactly as typed", async () => {
     const client = new MockClient()
-    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client)
-    await flush()
-    act(() => client.push(PLAYER_WELCOME))
-    await waitForFrame((t) => t.includes("我的角色"))
-
-    // Down once from "进入游戏" onto "我的角色", Enter activates it.
-    await act(async () => {
-      mockInput.pressArrow("down")
-    })
-    await flush()
-    await act(async () => {
-      mockInput.pressEnter()
-    })
-    await flush()
-
-    const frame = await waitForFrame((t) => t.includes("规则系统"))
-    expect(frame).toContain("规则系统")
-    expect(frame).toContain("CoC 7 版")
-    expect(frame).toContain("D&D 5e")
-    expect(frame).toContain("建卡方式")
-    expect(frame).toContain("自动掷骰")
-    expect(frame).toContain("手动设置")
-    expect(frame).toContain("描述生成")
-    expect(frame).toContain("导入酒馆卡")
-    expect(frame).toContain("姓名")
-    expect(frame).toContain("⚄ 自动掷骰")
-    // The old Stage-1 stub note is gone; this is real navigation now.
-    expect(frame).not.toContain("即将推出")
-
-    act(() => renderer.destroy())
-  })
-
-  test("键盘完成建卡:Tab到姓名字段输入后 Enter 发送 .coc <name>,新 state 帧到达后展示掷骰落定与角色卡", async () => {
-    const client = new MockClient()
-    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client)
-    await flush()
-    act(() => client.push(PLAYER_WELCOME))
-    await waitForFrame((t) => t.includes("我的角色"))
-
-    await act(async () => {
-      mockInput.pressArrow("down")
-    })
-    await flush()
-    await act(async () => {
-      mockInput.pressEnter()
-    })
-    await flush()
-    await waitForFrame((t) => t.includes("规则系统"))
-
-    // Tab from method -> system -> name, type a name, submit.
-    await act(async () => {
-      mockInput.pressTab()
-      mockInput.pressTab()
-    })
-    await flush()
-    await act(async () => {
-      await mockInput.typeText("漱雪")
-    })
-    await flush()
-    await act(async () => {
-      mockInput.pressEnter()
-    })
-    await flush()
-
-    // The default system (index 0) is CoC; `sendInput` carries the exact
-    // `.coc <name>` command the server's `cmd_make_char` expects.
-    expect(client.sent).toContain(".coc 漱雪")
-
-    // Awaiting the reply plays the dice-tumble flicker (bounded, not a spinner).
-    const rolling = await waitForFrame((t) => t.includes("掷骰中"))
-    expect(rolling).toContain("⚄ 掷骰中…")
-
-    // The server replies with a refreshed `state` frame — there is no scoped
-    // response, so the UI reacts to this arrival, not to a return value.
-    act(() => {
-      client.push({
-        type: FrameType.State,
-        character: {
-          name: "漱雪",
-          system: "CoC",
-          hp: 10,
-          hpmax: 10,
-          mp: 10,
-          mpmax: 10,
-          san: 65,
-          sanmax: 99,
-          attributes: { STR: 60, CON: 55, SIZ: 65, DEX: 70, APP: 50, INT: 75, POW: 65, EDU: 80, LUC: 45 },
-          status_effects: [],
-        },
-        party: [],
-        initiative: [],
-        online: 1,
-      })
-    })
-    await flush()
-
-    // The roll "lands": the new values flash in immediately (theme.success),
-    // driven by the incoming character change rather than any timer.
-    const landed = await waitForFrame((t) => t.includes("落定"))
-    expect(landed).toContain("漱雪")
-    expect(landed).toContain("STR 60")
-
-    // After the bounded landing flourish, the screen drops back into view mode
-    // showing the settled sheet via the reused CharacterPanel.
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 600))
-    })
-    await flush()
-    const settled = await waitForFrame((t) => t.includes("重掷 / 新建"))
-    expect(settled).toContain("重掷 / 新建")
-    expect(settled).toContain("漱雪")
-    expect(settled).toContain("STR 60")
-
-    act(() => renderer.destroy())
-  })
-
-  test("鼠标也能进入角色页并点击建卡按钮(留空姓名发送裸命令)", async () => {
-    const client = new MockClient()
-    const { renderer, flush, waitForFrame, mockMouse } = await renderApp(client)
-    await flush()
-    act(() => client.push(PLAYER_WELCOME))
-    const menu = await waitForFrame((t) => t.includes("我的角色"))
-    const menuRowY = menu.split("\n").findIndex((line) => line.includes("我的角色"))
-    expect(menuRowY).toBeGreaterThan(0)
-
-    await act(async () => {
-      await mockMouse.click(CLICK_X, menuRowY)
-    })
-    await flush()
-
-    const form = await waitForFrame((t) => t.includes("⚄ 自动掷骰"))
-    const buttonRowY = form.split("\n").findIndex((line) => line.includes("⚄ 自动掷骰"))
-    expect(buttonRowY).toBeGreaterThan(0)
-
-    // No system change, no typed name: clicking straight away submits the
-    // default (CoC) system with a blank name, i.e. the bare `.coc` command.
-    await act(async () => {
-      await mockMouse.click(CLICK_X, buttonRowY)
-    })
-    await flush()
-
-    expect(client.sent).toContain(".coc")
-
-    act(() => renderer.destroy())
-  })
-
-  test("建卡屏可导入酒馆卡:路径输入 Enter 发送 .import <path> <system> pc", async () => {
-    const client = new MockClient()
-    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client)
-    await flush()
-    act(() => client.push(PLAYER_WELCOME))
-    await waitForFrame((t) => t.includes("我的角色"))
-
-    await act(async () => {
-      mockInput.pressArrow("down")
-    })
-    await flush()
-    await act(async () => {
-      mockInput.pressEnter()
-    })
-    await flush()
-    await waitForFrame((t) => t.includes("建卡方式"))
-
-    await act(async () => {
-      mockInput.pressArrow("down")
-      mockInput.pressArrow("down")
-      mockInput.pressArrow("down")
-    })
-    await flush()
-    await act(async () => {
-      mockInput.pressEnter()
-    })
-    await flush()
-    await waitForFrame((t) => t.includes("⚄ 导入"))
-
-    await act(async () => {
-      mockInput.pressTab()
-    })
-    await flush()
-    await act(async () => {
-      await mockInput.typeText("/cards/ada.json")
-    })
-    await flush()
-    await act(async () => {
-      mockInput.pressEnter()
-    })
-    await flush()
-
-    expect(client.sent).toContain(".import /cards/ada.json coc pc")
-    const sent = await waitForFrame((t) => t.includes("已发送"))
-    expect(sent).toContain(".import /cards/ada.json coc pc")
-
-    await act(async () => {
-      mockInput.pressEscape()
-    })
-    await flush()
-    act(() => renderer.destroy())
-  })
-
-  test("手动建卡显示点数预算并发送 .dnd + .st 特性", async () => {
-    const client = new MockClient()
-    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client)
-    await flush()
-    act(() => client.push(PLAYER_WELCOME))
-    await waitForFrame((t) => t.includes("我的角色"))
-
-    await act(async () => {
-      mockInput.pressArrow("down")
-    })
-    await flush()
-    await act(async () => {
-      mockInput.pressEnter()
-    })
-    await flush()
-    await waitForFrame((t) => t.includes("建卡方式"))
-
-    await act(async () => {
-      mockInput.pressArrow("down")
-    })
-    await flush()
-    await act(async () => {
-      mockInput.pressEnter()
-    })
-    await flush()
-    await act(async () => {
-      mockInput.pressArrow("down")
-    })
-    await flush()
-    await act(async () => {
-      mockInput.pressEnter()
-    })
-    await flush()
-
-    await act(async () => {
-      await mockInput.typeText("米拉")
-    })
-    await flush()
-    await act(async () => {
-      mockInput.pressTab()
-    })
-    await flush()
-
-    const budget = await waitForFrame((t) => t.includes("点数购买 0/27"))
-    expect(budget).toContain("STR 力量  8")
-
-    await act(async () => {
-      mockInput.pressEnter()
-    })
-    await flush()
-
-    expect(client.sent).toContain(".dnd 米拉")
-    expect(client.sent).toContain(".st 力量8 敏捷8 体质8 智力8 感知8 魅力8")
-    // `.dnd`/`.coc` seeds DEFAULT characteristics (deriving current HP/MP/SAN from
-    // those); `.st` then overwrites the characteristics but -- being an in-play EDIT
-    // -- preserves the (now stale) current vitals instead of re-deriving them. A
-    // trailing finalize word re-derives current HP/MP/SAN to their maxima for the
-    // manually-chosen characteristics, so the finished character isn't left with
-    // default-derived vitals. Order matters: create, then set attrs, then finalize.
-    expect(client.sent).toEqual([".dnd 米拉", ".st 力量8 敏捷8 体质8 智力8 感知8 魅力8", ".st finalize"])
-
-    await act(async () => {
-      mockInput.pressEscape()
-    })
-    await flush()
-    act(() => renderer.destroy())
-  })
-
-  test("描述生成模式发送 .genchar <system> <name> | <description>", async () => {
-    const client = new MockClient()
-    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client)
-    await flush()
-    act(() => client.push(PLAYER_WELCOME))
-    await waitForFrame((t) => t.includes("我的角色"))
-
-    await act(async () => {
-      mockInput.pressArrow("down")
-    })
-    await flush()
-    await act(async () => {
-      mockInput.pressEnter()
-    })
-    await flush()
-    await waitForFrame((t) => t.includes("建卡方式"))
-
-    await act(async () => {
-      mockInput.pressArrow("down")
-      mockInput.pressArrow("down")
-    })
-    await flush()
-    await act(async () => {
-      mockInput.pressEnter()
-    })
-    await flush()
-
-    await act(async () => {
-      mockInput.pressTab()
-    })
-    await flush()
-    await act(async () => {
-      await mockInput.typeText("阿达")
-    })
-    await flush()
-    await act(async () => {
-      mockInput.pressTab()
-    })
-    await flush()
-    await act(async () => {
-      await mockInput.typeText("冷静的医生,在雾港调查失踪案")
-    })
-    await flush()
-    await act(async () => {
-      mockInput.pressEnter()
-    })
-    await flush()
-
-    expect(client.sent).toContain(".genchar coc 阿达 | 冷静的医生,在雾港调查失踪案")
-
-    await act(async () => {
-      mockInput.pressEscape()
-    })
-    await flush()
-    act(() => renderer.destroy())
-  })
-
-  test("已有角色时可微调:发送 .st 力量60 侦查70", async () => {
-    const client = new MockClient()
-    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client, 80, 24)
-    await flush()
-    act(() => client.push(PLAYER_WELCOME))
-    await waitForFrame((t) => t.includes("我的角色"))
-
-    // Seed an existing character before entering the screen, so it opens in
-    // "view" mode (with a 微调 action) instead of the create flow.
-    act(() => {
-      client.push({
-        type: FrameType.State,
-        character: {
-          name: "漱雪",
-          system: "CoC",
-          hp: 10,
-          hpmax: 10,
-          mp: 10,
-          mpmax: 10,
-          san: 65,
-          sanmax: 99,
-          attributes: { STR: 50, DEX: 50 },
-          status_effects: [],
-        },
-        party: [],
-        initiative: [],
-        online: 1,
-      })
-    })
-    await flush()
-
-    await act(async () => {
-      mockInput.pressArrow("down")
-    })
-    await flush()
-    await act(async () => {
-      mockInput.pressEnter()
-    })
-    await flush()
+    const { renderer, flush, waitForFrame, mockInput } = await openCharacterScreen(
+      client,
+      80,
+      24,
+      stateFrame({ character: SHEET }),
+    )
 
     const view = await waitForFrame((t) => t.includes("重掷 / 新建"))
     expect(view).toContain("微调")
 
-    // Down onto "微调", Enter activates it.
-    await act(async () => {
-      mockInput.pressArrow("down")
-    })
+    await act(async () => mockInput.pressArrow("down"))
     await flush()
-    await act(async () => {
-      mockInput.pressEnter()
-    })
+    await act(async () => mockInput.pressEnter())
     await flush()
     const tweak = await waitForFrame((t) => t.includes("微调指令"))
     expect(tweak).toContain("⚄ 应用")
@@ -516,140 +425,90 @@ describe("CharacterScreen", () => {
       await mockInput.typeText("力量60 侦查70")
     })
     await flush()
-    await act(async () => {
-      mockInput.pressEnter()
-    })
+    await act(async () => mockInput.pressEnter())
     await flush()
 
-    expect(client.sent).toContain(".st 力量60 侦查70")
+    expect(client.sent).toEqual([".st 力量60 侦查70"])
     const sent = await waitForFrame((t) => t.includes("已发送"))
     expect(sent).toContain(".st 力量60 侦查70")
 
     act(() => renderer.destroy())
   })
 
-  test("已有角色时删除需要两次确认并发送 .st delete", async () => {
+  test("重算 sends the canonical `.st finalize`", async () => {
     const client = new MockClient()
-    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client)
-    await flush()
-    act(() => client.push(PLAYER_WELCOME))
-    await waitForFrame((t) => t.includes("我的角色"))
+    const { renderer, flush, waitForFrame, mockInput } = await openCharacterScreen(
+      client,
+      110,
+      34,
+      stateFrame({ character: SHEET }),
+    )
+    await waitForFrame((t) => t.includes("重掷 / 新建"))
 
-    act(() => {
-      client.push({
-        type: FrameType.State,
-        character: {
-          name: "漱雪",
-          system: "CoC",
-          hp: 10,
-          hpmax: 10,
-          mp: 10,
-          mpmax: 10,
-          san: 65,
-          sanmax: 99,
-          attributes: { STR: 60, CON: 50, SIZ: 65, DEX: 55, APP: 45, INT: 70, POW: 65, EDU: 80, LUC: 50 },
-          status_effects: [],
-        },
-        party: [],
-        initiative: [],
-        online: 1,
-      })
-    })
-    await flush()
-    await act(async () => {
-      mockInput.pressArrow("down")
-    })
-    await flush()
-    await act(async () => {
-      mockInput.pressEnter()
-    })
-    await flush()
-
-    await waitForFrame((t) => t.includes("删除当前角色"))
     await act(async () => {
       mockInput.pressArrow("down")
       mockInput.pressArrow("down")
     })
     await flush()
-    await act(async () => {
-      mockInput.pressEnter()
-    })
+    await act(async () => mockInput.pressEnter())
     await flush()
-    expect(client.sent).not.toContain(".st delete")
-    await waitForFrame((t) => t.includes("确认删除角色"))
 
-    await act(async () => {
-      mockInput.pressEnter()
-    })
-    await flush()
-    expect(client.sent).toContain(".st delete")
+    // The canonical word, never a locale dialect one: a client issuing the command
+    // programmatically has no locale to speak.
+    expect(client.sent).toEqual([".st finalize"])
 
     act(() => renderer.destroy())
   })
 
-  test("属性表和角色面板过滤内部修正键并保留核心属性对齐", async () => {
+  test("delete needs a second confirmation before it sends `.st delete`", async () => {
     const client = new MockClient()
-    const { renderer, flush, waitForFrame, mockInput } = await renderApp(client)
-    await flush()
-    act(() => client.push(PLAYER_WELCOME))
-    await waitForFrame((t) => t.includes("我的角色"))
-
-    act(() => {
-      client.push({
-        type: FrameType.State,
-        character: {
-          name: "漱雪",
-          system: "CoC",
-          hp: 10,
-          hpmax: 10,
-          mp: 10,
-          mpmax: 10,
-          san: 65,
-          sanmax: 99,
-          attributes: {
-            STR: 60,
-            SANMAXADD: 0,
-            HPMAXADD: 0,
-            MPMAXADD: 0,
-            IDEA: 70,
-            KNOW: 80,
-            DEX: 55,
-            CON: 50,
-            SIZ: 65,
-            APP: 45,
-            INT: 70,
-            POW: 65,
-            EDU: 80,
-            LUC: 40,
-          },
-          status_effects: [],
-        },
-        party: [],
-        initiative: [],
-        online: 1,
-      })
-    })
-    await flush()
+    const { renderer, flush, waitForFrame, mockInput } = await openCharacterScreen(
+      client,
+      110,
+      34,
+      stateFrame({ character: SHEET }),
+    )
+    await waitForFrame((t) => t.includes("删除当前角色"))
 
     await act(async () => {
       mockInput.pressArrow("down")
+      mockInput.pressArrow("down")
+      mockInput.pressArrow("down")
     })
     await flush()
-    await act(async () => {
-      mockInput.pressEnter()
-    })
+    await act(async () => mockInput.pressEnter())
     await flush()
+    expect(client.sent).not.toContain(".st delete")
+    await waitForFrame((t) => t.includes("确认删除角色"))
+
+    await act(async () => mockInput.pressEnter())
+    await flush()
+    expect(client.sent).toEqual([".st delete"])
+
+    act(() => renderer.destroy())
+  })
+
+  test("the sheet view renders the wire's own attribute keys and hides the internal ones", async () => {
+    const client = new MockClient()
+    const { renderer, waitForFrame } = await openCharacterScreen(
+      client,
+      110,
+      34,
+      stateFrame({
+        character: {
+          ...SHEET,
+          attributes: { ...SHEET.attributes, SANMAXADD: 0, HPMAXADD: 0, MPMAXADD: 0 },
+        },
+      }),
+    )
 
     const frame = await waitForFrame((t) => t.includes("属性 / ATTRIBUTES"))
-    expect(frame).toContain("STR 60")
-    expect(frame).toContain("DEX 55")
-    expect(frame).toContain("LUC 40")
+    expect(frame).toContain("STR 55")
+    expect(frame).toContain("DEX 70")
+    expect(frame).toContain("LUC 45")
     expect(frame).not.toContain("SANMAXADD")
     expect(frame).not.toContain("HPMAXADD")
     expect(frame).not.toContain("MPMAXADD")
-    expect(frame).not.toContain("SANM 0")
-    expect(frame).not.toContain("HPM")
-    expect(frame).not.toContain("MPM")
     expect(frame).not.toContain("IDEA")
     expect(frame).not.toContain("KNOW")
 

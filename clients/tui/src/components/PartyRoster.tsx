@@ -260,8 +260,13 @@ export function PartyRoster({
             return (
               <box key={entry.ref} flexDirection="row" onMouseDown={() => importPackCard(entry)}>
                 <text fg={locked ? theme.dim : theme.player} wrapMode="none" truncate>
-                  {"▸ "}{stripControlChars(entry.name)} · {stripControlChars(entry.pack)}
-                  {world ? tt(locale, locked ? "party.packCardKeeperOnly" : "party.packCardWorld") : ""}
+                  {"▸ "}
+                  {/* LEADING, never trailing: this panel lives in a sidebar clamped to
+                      32 columns (`layout.sidebarWidth`), so anything appended after the
+                      card + pack name is the first thing `truncate` eats — which left a
+                      player's inert world-card row looking like an ordinary one. */}
+                  {world ? `${tt(locale, locked ? "party.packCardKeeperOnly" : "party.packCardWorld")} ` : ""}
+                  {stripControlChars(entry.name)} · {stripControlChars(entry.pack)}
                 </text>
               </box>
             )

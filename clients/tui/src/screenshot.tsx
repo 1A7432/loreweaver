@@ -200,11 +200,20 @@ if (SCREEN === "game") {
   const client = new MockClient()
   // No `character` on the state frame -> CharacterScreen's `mode` initializes to
   // "create" directly (`hasCharacter ? "view" : "create"`), landing on the create
-  // form without any click. The capture script then sends real keystrokes (Down +
-  // Enter to pick the "manual" method, Tab, type the name, Tab again) so the shot
-  // shows both the four creation methods AND the point-budget line at once —
-  // "roll" (the default method) never renders a budget line by itself.
-  const state: StateFrame = { type: FrameType.State, party: [], initiative: [], online: 1 }
+  // form without any click. `systems` is what the picker is built from (protocol
+  // 2.3): without it the screen correctly refuses to guess a rule system, so a shot
+  // needs the same list a real server sends. The capture script then tabs to the
+  // name field and types one, so the shot shows a filled-in form.
+  const state: StateFrame = {
+    type: FrameType.State,
+    party: [],
+    initiative: [],
+    online: 1,
+    systems: [
+      { id: "coc7", make_char: "coc" },
+      { id: "dnd5e", make_char: "dnd" },
+    ],
+  }
   root.render(
     <CharacterScreen client={client} theme={theme} themeName="lamplight" welcome={welcome} stateFrame={state} onBack={() => {}} />,
   )

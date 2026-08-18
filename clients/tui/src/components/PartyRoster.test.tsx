@@ -3,6 +3,7 @@ import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
 import type { PackCardEntry, PregenEntry } from "loreweaver-protocol"
 import type { AppClient } from "../client"
+import { sidebarWidth } from "../layout"
 import { themes } from "../themes"
 import { PartyRoster } from "./PartyRoster"
 
@@ -26,6 +27,11 @@ const PREGENS: PregenEntry[] = [
   { name: "Mary", claimed_by: "p2" },
 ]
 
+// The REAL width this panel gets in GameView: the sidebar is clamped to 32 columns
+// at every terminal size (`layout.sidebarWidth`), so rendering wider than that would
+// hide row truncation — exactly the bug that let a world-card marker fall off the end.
+const SIDEBAR_COLUMNS = sidebarWidth(120)
+
 function renderRoster(
   recorder: ClaimRecorder,
   pregens?: PregenEntry[],
@@ -44,7 +50,7 @@ function renderRoster(
       packCards={options.packCards}
       isKeeper={options.isKeeper}
     />,
-    { width: 40, height: 14 },
+    { width: SIDEBAR_COLUMNS, height: 14 },
   )
 }
 
@@ -141,6 +147,10 @@ describe("PartyRoster pack-card import section (v2.2)", () => {
     expect(frame).toContain("PACK CARDS")
     expect(frame).toContain("▸ pilot · harbour")
     expect(frame).toContain("▸ medic · harbour")
+    // A character card carries no kind marker at all.
+    const pilotLine = frame.split("\n").find((line) => line.includes("pilot")) ?? ""
+    expect(pilotLine).not.toContain("[W]")
+    expect(pilotLine).not.toContain("[K]")
 
     act(() => renderer.destroy())
   })
@@ -188,7 +198,10 @@ describe("PartyRoster pack-card import section (v2.2)", () => {
     const lines = captureCharFrame().split("\n")
     const y = lines.findIndex((line) => line.includes("customs"))
     expect(y).toBeGreaterThan(0)
-    expect(lines[y]).toContain("world")
+    // The marker LEADS the row: at the real sidebar width a trailing one is the
+    // first thing `truncate` eats, which is why it used to be invisible in play.
+    expect(lines[y]).toContain("[W] customs")
+    expect(lines[y].indexOf("[W]")).toBeLessThan(lines[y].indexOf("customs"))
     await act(async () => {
       await mockMouse.click(lines[y].indexOf("customs"), y)
     })
@@ -208,7 +221,8 @@ describe("PartyRoster pack-card import section (v2.2)", () => {
 
     const lines = captureCharFrame().split("\n")
     const y = lines.findIndex((line) => line.includes("customs"))
-    expect(lines[y]).toContain("keeper only")
+    expect(lines[y]).toContain("[K] customs")
+    expect(lines[y].indexOf("[K]")).toBeLessThan(lines[y].indexOf("customs"))
     await act(async () => {
       await mockMouse.click(lines[y].indexOf("customs"), y)
     })
