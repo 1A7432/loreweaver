@@ -464,9 +464,15 @@ class SessionCore:
                 # v2.2, player-open: card FILENAMES from installed packs — claimable
                 # knowledge (the install banner prints them), never card content. The
                 # same inventory `.import list` prints, in structured form for pickers.
-                # v2.3 adds each entry's `kind` so a picker sends the right verb.
+                # v2.3 adds each entry's `kind` so a picker sends the right verb. It
+                # walks the pack dirs on the event loop, so it spends the same
+                # per-member / per-room allowance an input does — a client looping the
+                # frame is throttled exactly like one looping `.import list`.
                 from gateway.panels import installed_card_entries
 
+                if not self.rate_limiter.allow(member.id) or not self.rate_limiter.allow(member.session_key):
+                    await member.send_frame(error_frame("rate_limited", i18n))
+                    return
                 await member.send_frame(
                     {
                         "type": "pack_cards",

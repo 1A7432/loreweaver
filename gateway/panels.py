@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Mapping
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -120,32 +121,81 @@ def installed_card_entries(data_dir: Path) -> list[dict[str, str]]:
     return entries
 
 
+def _file_stamp(path: Path) -> tuple[int, int] | None:
+    """`(mtime_ns, size)` — the identity a memo key needs; None when unreadable."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
+
+
+@lru_cache(maxsize=256)
+def _manifest_card_kinds(home: Path, is_dev: bool, _stamp: tuple[int, int] | None) -> Mapping[str, str] | None:
+    """`relative path -> kind` from one home's manifest, memoized on the manifest file's
+    identity: an installed home's manifest never changes (a new version is a new dir),
+    a dev mount's changes when the author saves — either way the parse happens once per
+    file version, not once per `list_pack_cards` frame (player-open, off the turn lock)."""
+    try:
+        manifest = parse_manifest_text((home / MANIFEST_NAME).read_text(encoding="utf-8"), expect_trust=not is_dev)
+    except Exception:
+        logger.warning("panels: unreadable pack manifest under %s", home, exc_info=True)
+        return None
+    return {card.path: card.kind for card in manifest.card_entries}
+
+
+@lru_cache(maxsize=1024)
+def _detected_card_kind(path: Path, relative: str, _stamp: tuple[int, int] | None) -> str:
+    """The build's own detector over one SOURCE card, memoized on the file's identity —
+    a dev mount's cards are read and classified once per save, not per listing."""
+    from core.pack import detect_card_kind
+
+    try:
+        return detect_card_kind(relative, path.read_bytes())
+    except Exception:
+        logger.warning("panels: card %s at %s is unclassifiable", relative, path, exc_info=True)
+        return "character"
+
+
 def _card_kinds(home: Path) -> Callable[[str, Path], str]:
     """`(relative_path, file) -> kind` for one pack home. Best-effort: an unreadable
     manifest or an unparseable card falls back to `"character"`, which is the verb
     every client sent before kinds existed."""
     is_dev = home in _DEV_HOMES.values()
-    manifest: PackManifest | None = None
-    try:
-        manifest = parse_manifest_text(
-            (home / MANIFEST_NAME).read_text(encoding="utf-8"), expect_trust=not is_dev
-        )
-    except Exception:
-        logger.warning("panels: unreadable pack manifest under %s", home, exc_info=True)
+    kinds = _manifest_card_kinds(home, is_dev, _file_stamp(home / MANIFEST_NAME))
 
     def kind_of(relative: str, path: Path) -> str:
         if not is_dev:
-            return manifest.card_kind(relative) if manifest is not None else "character"
+            return kinds.get(relative, "character") if kinds is not None else "character"
         # Source tree: no stamped kind, so ask the same detector the build uses.
-        from core.pack import detect_card_kind
-
-        try:
-            return detect_card_kind(relative, path.read_bytes())
-        except Exception:
-            logger.warning("panels: card %s under %s is unclassifiable", relative, home, exc_info=True)
-            return "character"
+        return _detected_card_kind(path, relative, _file_stamp(path))
 
     return kind_of
+
+
+def resolve_pack_ref(data_dir: Path | str, ref: str) -> Path | None:
+    """The file a pack-relative ref (`<packId>/<relative>`) names, for `.import`.
+
+    `core.pack.resolve_installed_path` knows only `data_dir/packs/<id>@<ver>/`; a
+    `.dev mount` home is a SOURCE tree elsewhere, and its cards are listed by
+    `installed_card_entries` under the same ref shape — so a ref must resolve against
+    the dev home too, or the picker offers rows `.import` cannot take. Confined exactly
+    the same way (resolved path must stay under the home; regular files only)."""
+    from core.pack import resolve_installed_path
+
+    text = str(ref).strip()
+    pack_id, _, rest = text.partition("/")
+    home = _DEV_HOMES.get(pack_id)
+    if home is not None and rest.strip():
+        base = home.resolve()
+        try:
+            target = (home / rest.strip()).resolve(strict=True)
+            target.relative_to(base)
+        except (OSError, ValueError):
+            target = None
+        if target is not None and target.is_file():
+            return target
+    return resolve_installed_path(data_dir, text)
 
 
 def _digest_source_assets(home: Path, manifest: PackManifest) -> PackManifest:

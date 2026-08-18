@@ -1988,16 +1988,17 @@ class CommandRouter:
                     system = resolved_system
         if not from_attachment:
             # Pack-relative refs (`.import <packId>/cards/x.png`) resolve against the
-            # newest installed `data_dir/packs/<id>@<version>/` — CONFINED by
-            # `resolve_installed_path`, never an arbitrary server read. A confined ref
+            # newest installed `data_dir/packs/<id>@<version>/` (or a `.dev mount` home,
+            # whose cards the picker lists under the same ref shape) — CONFINED by
+            # `gateway.panels.resolve_pack_ref`, never an arbitrary server read. A confined ref
             # stays open to players for the character half ("the module shipped a PC
             # card" must not be a keeper-only ceremony — card split still strips world
             # machinery structurally); `world`/`companion` keep their keeper gates below.
             # A RAW host path (not pack-shaped, or nothing installed) reads an arbitrary
             # file off the server, so it stays keeper-only.
-            from core.pack import resolve_installed_path
+            from gateway.panels import resolve_pack_ref
 
-            resolved = resolve_installed_path(ctx.services.settings.data_dir, file_path)
+            resolved = resolve_pack_ref(ctx.services.settings.data_dir, file_path)
             if resolved is not None:
                 file_path = str(resolved)
             elif not _is_keeper(ctx.raw_ctx):
