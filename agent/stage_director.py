@@ -54,6 +54,7 @@ from typing import TYPE_CHECKING, Any
 
 from agent.context import AgentCtx
 from agent.services import Services
+from agent.tool_trace import trace_event
 from core.documents import PLAYER_VIEWER, SCENE_ID
 from core.hooks import sanitize_ui_emissions
 from core.modvars import MODVARS_DOC_ID, MODVARS_DOC_TYPE, wire_entries
@@ -72,6 +73,21 @@ BEATS = ("scene_change", "act_transition", "handout", "spike")
 
 PREGEN_KEY = "director_pregen"  # subject id -> media hash, the 慢菜先备 larder
 SPENT_KEY = "director_images"  # how many generations this room has paid for
+
+# Why a beat did or did not end up showing a picture. Written to the tool probe
+# (`agent.tool_trace`, `TRPG_DEBUG__TOOL_TRACE`) under `director`, because "the whole
+# session produced zero images" is otherwise unattributable after the fact.
+IMAGE_NONE = "none"  # the Director never asked for one
+IMAGE_KIT_MISSING = "kit_missing"  # this room's modules ship no presentation kit
+IMAGE_TEMPLATE_DENIED = "template_denied"  # the kit's `templates:` allowlist excludes images
+IMAGE_IMAGEGEN_OFF = "imagegen_off"  # no provider configured, or the kit/settings say pack-only
+IMAGE_REF_MISSING = "ref_missing"  # 宁缺毋滥: no readable 定妆 reference for that subject
+IMAGE_BUDGET = "budget"  # the room's generation budget is spent
+IMAGE_PROVIDER_FAILED = "llm_failed"  # the provider raised
+IMAGE_LARDER = "larder"  # served warm from the 慢菜先备 larder
+IMAGE_GENERATED = "generated"
+
+DIRECTOR_TRACE_KIND = "director"
 
 MAX_BLOCKS = 6
 MAX_AUDIO_CUES = 2
@@ -230,9 +246,15 @@ async def _json_state(services: Services, chat_key: str, key: str, default: Any)
         return default
 
 
-async def _generate_subject(services: Services, ctx: AgentCtx, kit: RoomKit, subject_id: str, prompt: str) -> str | None:
-    """Generate (or serve from the 慢菜先备 larder) one subject's picture; returns its
-    media hash, or ``None`` when the kit, the budget or the provider says no.
+async def _generate_subject(
+    services: Services, ctx: AgentCtx, kit: RoomKit, subject_id: str, prompt: str
+) -> tuple[str | None, str]:
+    """Generate (or serve from the 慢菜先备 larder) one subject's picture.
+
+    Returns ``(media hash, outcome)`` — the hash is ``None`` whenever the kit, the budget
+    or the provider said no, and the outcome NAMES which of them did. The reason is the
+    load-bearing half: a whole session that produced zero pictures used to be
+    indistinguishable from a session nobody asked for one in (run 2, 2026-08-19).
 
     Ref-mandatory is enforced HERE as well as in the prompt: a subject with no readable
     reference image never reaches the provider, whatever the model asked for.
@@ -240,18 +262,18 @@ async def _generate_subject(services: Services, ctx: AgentCtx, kit: RoomKit, sub
     settings = services.settings.director
     larder = await _json_state(services, ctx.chat_key, PREGEN_KEY, {})
     if isinstance(larder, dict) and isinstance(larder.get(subject_id), str):
-        return larder[subject_id]
+        return larder[subject_id], IMAGE_LARDER
     if not settings.images or not kit.generates or not kit.allows_template("image") or services.imagegen is None:
-        return None
+        return None, IMAGE_IMAGEGEN_OFF
     entry = kit.subject(subject_id)
     if entry is None or not entry.generatable:
         logger.info("director: refusing to generate %r (no 定妆 reference in the kit)", subject_id)
-        return None
+        return None, IMAGE_REF_MISSING
     spent = await _json_state(services, ctx.chat_key, SPENT_KEY, 0)
     spent = spent if isinstance(spent, int) else 0
     if spent >= max(0, settings.max_images):
         logger.info("director: image budget spent for %s (%d)", ctx.chat_key, spent)
-        return None
+        return None, IMAGE_BUDGET
 
     full_prompt = ". ".join(
         part
@@ -274,7 +296,7 @@ async def _generate_subject(services: Services, ctx: AgentCtx, kit: RoomKit, sub
         )
     except Exception as exc:  # noqa: BLE001 — a dead image provider must not break the table
         logger.info("director: image generation failed for %r: %s", subject_id, exc)
-        return None
+        return None, IMAGE_PROVIDER_FAILED
 
     from infra.media_store import ALLOWED_IMAGE_MIMES, MediaStore
 
@@ -297,7 +319,7 @@ async def _generate_subject(services: Services, ctx: AgentCtx, kit: RoomKit, sub
     larder = larder if isinstance(larder, dict) else {}
     larder[subject_id] = record.hash
     await services.store.state_set(ctx.chat_key, PREGEN_KEY, json.dumps(larder, ensure_ascii=False))
-    return record.hash
+    return record.hash, IMAGE_GENERATED
 
 
 async def _publish(
@@ -356,9 +378,18 @@ async def run_director(
 
     from gateway.presentation import load_room_kit
 
+    def _trace(*, blocks: int, cues: int, prepared: int, image: dict[str, Any]) -> None:
+        trace_event(
+            DIRECTOR_TRACE_KIND,
+            {"beat": beat, "blocks": blocks, "cues": cues, "prepared": prepared, "image": image},
+            chat_key=ctx.chat_key,
+        )
+
     kit = await load_room_kit(services, ctx.chat_key, ctx.locale)
     if not kit:
-        return False  # a room whose modules ship no kit has nothing authored to stage
+        # a room whose modules ship no kit has nothing authored to stage
+        _trace(blocks=0, cues=0, prepared=0, image={"outcome": IMAGE_KIT_MISSING})
+        return False
 
     trackers, scene = await _player_context(services, ctx)
     prompt = _build_prompt(kit, beat, player_text, reply_text, trackers, scene)
@@ -366,9 +397,11 @@ async def run_director(
         result = await _director_llm(services).chat([{"role": "user", "content": prompt}])
     except Exception as exc:  # noqa: BLE001 — presentation must never break the table
         logger.debug("director: llm call failed: %s", exc)
+        _trace(blocks=0, cues=0, prepared=0, image={"outcome": IMAGE_PROVIDER_FAILED})
         return False
     parsed = _extract_json(result.content or "")
     if parsed is None:
+        _trace(blocks=0, cues=0, prepared=0, image={"outcome": IMAGE_NONE})
         return False
 
     raw_blocks = parsed.get("blocks")
@@ -381,14 +414,20 @@ async def run_director(
     ]
 
     image = parsed.get("image")
-    if isinstance(image, dict) and image.get("subject") and kit.allows_template("image"):
-        digest = await _generate_subject(
-            services, ctx, kit, str(image["subject"]), str(image.get("prompt") or "")
-        )
-        if digest:
-            entry = kit.subject(str(image["subject"]))
-            caption = entry.subject.display_name(ctx.locale) if entry is not None else ""
-            blocks.insert(0, {"kind": "image", "hash": digest, "caption": caption})
+    image_trace: dict[str, Any] = {"outcome": IMAGE_NONE}
+    if isinstance(image, dict) and image.get("subject"):
+        subject_id = str(image["subject"])
+        image_trace = {"subject": subject_id, "outcome": IMAGE_TEMPLATE_DENIED}
+        if kit.allows_template("image"):
+            digest, outcome = await _generate_subject(
+                services, ctx, kit, subject_id, str(image.get("prompt") or "")
+            )
+            image_trace = {"subject": subject_id, "outcome": outcome}
+            if digest:
+                entry = kit.subject(subject_id)
+                caption = entry.subject.display_name(ctx.locale) if entry is not None else ""
+                blocks.insert(0, {"kind": "image", "hash": digest, "caption": caption})
+                image_trace["hash"] = digest
 
     cues: list[tuple[Any, str]] = []
     raw_audio = parsed.get("audio")
@@ -404,11 +443,14 @@ async def run_director(
 
     # 慢菜先备: warm likely-next subjects AFTER this beat is on screen, so the latency
     # lands in the quiet turns instead of in front of a player.
+    prepared = 0
     prepare = parsed.get("prepare")
     if isinstance(prepare, list) and kit.generates and kit.allows_template("image"):
         for subject_id in prepare[: max(0, settings.pregen_per_beat)]:
             _spawn_pregen(services, ctx, kit, str(subject_id))
+            prepared += 1
 
+    _trace(blocks=len(blocks), cues=len(cues), prepared=prepared, image=image_trace)
     return bool(blocks or cues)
 
 
@@ -420,7 +462,7 @@ def _spawn_pregen(services: Services, ctx: AgentCtx, kit: RoomKit, subject_id: s
 
     async def _warm() -> None:
         try:
-            await _generate_subject(services, ctx, kit, subject_id, "")
+            await _generate_subject(services, ctx, kit, subject_id, "")  # (hash, outcome) unused here
         except Exception:  # noqa: BLE001
             logger.debug("director: pre-generation of %r failed", subject_id, exc_info=True)
 

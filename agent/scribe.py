@@ -69,6 +69,7 @@ from agent.context import AgentCtx
 from agent.npc import list_npcs
 from agent.services import Services
 from agent.stage_director import BEATS
+from agent.tool_trace import trace_event
 from core.documents import KEEPER_VIEWER
 from core.modvars import MODVARS_DOC_ID, MODVARS_DOC_TYPE, adjust_modvar, set_modvar, wire_entries
 from core.table_habits import HABITS_DOC_TYPE, HABITS_ID, observe
@@ -97,6 +98,8 @@ class ScribePass:
 
 WHISPERS_KEY = "scribe_whispers"
 MAX_OPS = 8
+SCRIBE_TRACE_KIND = "scribe"
+
 MAX_WHISPERS = 3
 MAX_WHISPER_CHARS = 300
 MAX_STORED_WHISPERS = 5
@@ -305,8 +308,8 @@ async def _record_habit(services: Services, ctx: AgentCtx, raw: Any) -> None:
 
 async def _record_auto_chronicle(
     services: Services, ctx: AgentCtx, raw: Any, *, turn: int, tool_names: list[str]
-) -> None:
-    """Append this turn's automatic chronicle record (M21). Never raises.
+) -> bool:
+    """Append this turn's automatic chronicle record (M21). Never raises. True if written.
 
     PLAYER-GRADE BY CONSTRUCTION: `keeper` is never written from here. The spoiler
     margin — what the players missed, which secret consequence is now armed — stays
@@ -318,23 +321,25 @@ async def _record_auto_chronicle(
     """
     settings = services.settings.chronicle
     if not settings.enabled or not settings.auto_record:
-        return
+        return False
     if turn <= 0:
         # No committed turn to record against — the provider-error early return writes
         # no history and never advances the counter. A record stamped on a turn that
         # has no history would let a later fold trim history it never summarised.
-        return
+        return False
     if "record_chronicle" in tool_names:
         # The Keeper recorded this turn deliberately, and may have annotated it. That
         # record stands; a near-duplicate would only add fold and recall noise.
-        return
+        return False
     text = str(raw or "").strip()[:_MAX_CHRONICLE_CHARS]
     if not text:
-        return  # a quiet turn records nothing — most turns of pure talk land here
+        return False  # a quiet turn records nothing — most turns of pure talk land here
     try:
         await record_entry(services, ctx.chat_key, text=text, turn=turn)
     except Exception as exc:  # noqa: BLE001 — bookkeeping must never break the table
         logger.debug("scribe: auto chronicle record dropped: %s", exc)
+        return False
+    return True
 
 
 async def run_scribe(
@@ -380,7 +385,9 @@ async def run_scribe(
         return ScribePass()
 
     changed = False
+    applied_ops = 0
     ops = parsed.get("ops")
+    proposed_ops = len(ops) if isinstance(ops, list) else 0
     known = {str(entry.get("id")) for entry in trackers}
     # The quote pool is the KEEPER's narration only (same slice the model saw). A
     # player message is an ATTEMPT, never an outcome — the same reason iron rule #2
@@ -408,6 +415,7 @@ async def run_scribe(
             except (KeyError, TypeError, ValueError, OverflowError) as exc:
                 logger.debug("scribe: op on %s rejected: %s", var_id, exc)
                 continue
+            applied_ops += 1
             if old != new:
                 changed = True
 
@@ -456,13 +464,30 @@ async def run_scribe(
     # M21 durable memory: one player-grade line of campaign history per material turn,
     # so the chronicle (and the fold that trims history off the back of it) no longer
     # waits on the Keeper remembering a tool. Zero extra model calls, same as the habit.
-    await _record_auto_chronicle(services, ctx, parsed.get("chronicle"), turn=turn, tool_names=tool_names or [])
+    wrote_chronicle = await _record_auto_chronicle(
+        services, ctx, parsed.get("chronicle"), turn=turn, tool_names=tool_names or []
+    )
 
     # 场记: a single word from a closed vocabulary, or nothing. Anything else the model
     # wrote here is discarded rather than forwarded — this field is the ONLY thing that
     # crosses from the keeper-side scribe to the player-side Director.
     beat = str(parsed.get("beat") or "").strip()
-    return ScribePass(changed=changed, beat=beat if beat in BEATS else "")
+    beat = beat if beat in BEATS else ""
+    # The verdict, into the tool probe (`TRPG_DEBUG__TOOL_TRACE`). This pass makes
+    # decisions that never become a tool call, so without this line a session's
+    # bookkeeping — and the beat that cues the Director — leaves no trace to read back.
+    trace_event(
+        SCRIBE_TRACE_KIND,
+        {
+            "beat": beat,
+            "ops": applied_ops,
+            "ops_seen": proposed_ops,
+            "whispers": len(fresh_whispers),
+            "chronicle": wrote_chronicle,
+        },
+        chat_key=ctx.chat_key,
+    )
+    return ScribePass(changed=changed, beat=beat)
 
 
 # --- Room lifecycle (M23 WS1) -----------------------------------------------

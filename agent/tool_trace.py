@@ -59,6 +59,37 @@ def _capped(value: Any) -> Any:
     return text if len(text) <= MAX_TRACE_FIELD_CHARS else text[:MAX_TRACE_FIELD_CHARS] + "…"
 
 
+def trace_event(kind: str, payload: dict[str, Any], *, chat_key: str = "") -> None:
+    """Append one NON-tool decision to the same trace, under `tool: <kind>`.
+
+    The tool seam only sees what the model asked for. Two lanes decide things that never
+    become a tool call — the Scribe's per-turn 场记 verdict and the Stage Director's
+    performance decision — and the 2026-08-19 run-2 could not explain why the whole
+    session produced zero images, because neither lane left a trace. One reader, one
+    file, one shape: a consumer filters on `tool` exactly as it does for a real call.
+
+    Zero cost when the trace is off (the guard is the first statement) and best-effort
+    when it is on, like every other writer here.
+    """
+    if _TRACE_PATH is None:
+        return
+    try:
+        line = json.dumps(
+            {
+                "ts": round(time.time(), 3),
+                "room": chat_key,
+                "tool": str(kind),
+                "event": _capped(payload or {}),
+            },
+            ensure_ascii=False,
+        )
+        with _TRACE_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+        restrict_file(_TRACE_PATH)
+    except Exception:  # noqa: BLE001 — see module docstring
+        logger.debug("tool trace event write failed", exc_info=True)
+
+
 def record_tool_call(
     *,
     chat_key: str,
