@@ -503,6 +503,62 @@ def test_reload_rulepacks_picks_up_a_newly_written_pack(tmp_path: Path) -> None:
         _clear_rulepack_caches()
 
 
+# ---------------------------------------------------------------------------
+# Out-of-process install self-heal: another process (Studio's install button shells out to the
+# CLI) drops a pack into a discovery dir the running server already scanned. A resolution MISS
+# re-checks the dirs' signature once and reloads before giving up.
+# ---------------------------------------------------------------------------
+
+
+def test_load_rulepack_self_heals_after_an_out_of_process_install(tmp_path: Path) -> None:
+    original_user_dir = rulepacks_module._USER_RULEPACK_DIR
+    rulepacks_module._USER_RULEPACK_DIR = tmp_path
+    _clear_rulepack_caches()
+    try:
+        # Warm the caches the way a running server does.
+        assert rulepacks_module.load_rulepack("coc7").system == "coc7"
+        with pytest.raises(ValueError):
+            rulepacks_module.load_rulepack("user-fixture-system")
+
+        # Another process installs a pack. Nothing in THIS process calls reload_rulepacks().
+        _write_rulepack(tmp_path, "installed-elsewhere", _USER_DIR_FIXTURE_YAML)
+
+        pack = rulepacks_module.load_rulepack("user-fixture-system")
+        assert pack.system == "installed-elsewhere"
+    finally:
+        rulepacks_module._USER_RULEPACK_DIR = original_user_dir
+        _clear_rulepack_caches()
+
+
+def test_unknown_rulepack_name_does_not_rescan_when_the_dirs_are_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bad name must not turn every miss into a full directory scan."""
+    original_user_dir = rulepacks_module._USER_RULEPACK_DIR
+    rulepacks_module._USER_RULEPACK_DIR = tmp_path
+    _clear_rulepack_caches()
+    try:
+        rulepacks_module.load_rulepack("coc7")  # warm
+
+        scans = 0
+        real_scan = rulepacks_module._scan_rulepack_dir
+
+        def counting_scan(directory, registry, **kwargs):
+            nonlocal scans
+            scans += 1
+            return real_scan(directory, registry, **kwargs)
+
+        monkeypatch.setattr(rulepacks_module, "_scan_rulepack_dir", counting_scan)
+
+        for _ in range(3):
+            with pytest.raises(ValueError):
+                rulepacks_module.load_rulepack("no-such-system-anywhere")
+        assert scans == 0
+    finally:
+        rulepacks_module._USER_RULEPACK_DIR = original_user_dir
+        _clear_rulepack_caches()
+
+
 def test_built_in_rulepack_ids_matches_the_real_rulepacks_dir() -> None:
     ids = rulepacks_module.built_in_rulepack_ids()
     assert "coc7" in ids

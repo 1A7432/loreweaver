@@ -705,6 +705,54 @@ def _scan_rulepack_dir(directory: Path, registry: dict[str, RulePack], *, allow_
             logger.warning("Skipping malformed rulepack file: %s", path, exc_info=True)
 
 
+def _discovery_dirs() -> tuple[Path, ...]:
+    """Every directory discovery scans, in precedence order (built-in first)."""
+    dirs = [_RULEPACK_DIR]
+    if _USER_RULEPACK_DIR is not None:
+        dirs.append(_USER_RULEPACK_DIR)
+    dirs.extend(_EXTRA_RULEPACK_DIRS)
+    return tuple(dirs)
+
+
+def _discovery_signature() -> tuple[Any, ...]:
+    """A fingerprint of the discovery dirs: each dir's `mtime_ns` plus its `*.yaml` names/mtimes.
+
+    A directory's own mtime moves whenever an entry is created or removed inside it — exactly
+    what installing a pack out-of-process does — and the per-file mtimes additionally catch an
+    in-place rewrite on a filesystem with coarse directory timestamps. Only ever computed on a
+    resolution MISS, so the hit path never touches the filesystem.
+    """
+    signature: list[Any] = []
+    for directory in _discovery_dirs():
+        try:
+            dir_mtime: int | None = directory.stat().st_mtime_ns
+            files = tuple(sorted((path.name, path.stat().st_mtime_ns) for path in directory.glob("*.yaml")))
+        except OSError:
+            dir_mtime, files = None, ()
+        signature.append((str(directory), dir_mtime, files))
+    return tuple(signature)
+
+
+# Signature of the discovery dirs as they looked during the last real scan. `None` means
+# discovery has not run yet in this process.
+_LAST_SCAN_SIGNATURE: tuple[Any, ...] | None = None
+
+
+def _rescan_if_dirs_changed() -> bool:
+    """Reload discovery when the dirs changed since the last scan; True if a reload happened.
+
+    This is the SELF-HEAL for out-of-process installs: a pack installed by another process
+    (Studio's install button shells out to the CLI) writes into a discovery dir that the
+    running server already scanned, and both `@cache`s would otherwise stay stale for the
+    rest of the process lifetime. Signature unchanged means the miss is a genuine unknown
+    name, so nothing is rescanned and a bad name cannot trigger a scan storm.
+    """
+    if _discovery_signature() == _LAST_SCAN_SIGNATURE:
+        return False
+    reload_rulepacks()
+    return True
+
+
 @cache
 def _discover_registry() -> dict[str, RulePack]:
     """Scan `rulepacks/*.yaml` (built-in), then `_USER_RULEPACK_DIR` (Layer B.3b) when set.
@@ -717,6 +765,8 @@ def _discover_registry() -> dict[str, RulePack]:
     (every test unless it opts in), this scans ONLY `_RULEPACK_DIR` -- byte-identical to before
     the user data-dir existed.
     """
+    global _LAST_SCAN_SIGNATURE
+    _LAST_SCAN_SIGNATURE = _discovery_signature()
     registry: dict[str, RulePack] = {}
     _scan_rulepack_dir(_RULEPACK_DIR, registry, allow_override=True)
     if _USER_RULEPACK_DIR is not None:
@@ -759,6 +809,8 @@ def reload_rulepacks() -> None:
     Discovery is otherwise cached for process lifetime; nothing else needs to call this in normal
     operation since the on-disk rulepack set doesn't change outside of generation.
     """
+    global _LAST_SCAN_SIGNATURE
+    _LAST_SCAN_SIGNATURE = None
     _discover_registry.cache_clear()
     _alias_resolver.cache_clear()
 
@@ -813,8 +865,14 @@ def load_rulepack(system: str) -> RulePack:
 
     Resolution is cached keyed by the resolved pack id (via `_discover_registry`),
     so every alias of a pack returns the same loaded `RulePack`.
+
+    A miss re-checks the discovery dirs once (`_rescan_if_dirs_changed`) before giving up, so a
+    pack installed by ANOTHER process resolves without restarting the server.
     """
-    pack_id = _alias_resolver().get(_normalize_alias(system))
+    alias = _normalize_alias(system)
+    pack_id = _alias_resolver().get(alias)
+    if pack_id is None and _rescan_if_dirs_changed():
+        pack_id = _alias_resolver().get(alias)
     if pack_id is None:
         raise ValueError(f"unknown rulepack: {system}")
     return _discover_registry()[pack_id]
