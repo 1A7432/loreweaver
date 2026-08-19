@@ -248,6 +248,86 @@ class CharacterTools:
 
         return "\n".join(lines)
 
+    @tool(read_only=True)
+    async def list_party_sheets(self, ctx: AgentCtx) -> str:
+        """Every character sheet at this table — the WHOLE party, not only whoever is acting.
+
+        The one sheet tool that crosses the acting-player boundary, and read-only for that
+        reason. Every other one (get_character_sheet, update_character_attribute, …) acts on
+        the member whose turn it is, so without this a second player's numbers are invisible
+        to you — a module that asks for per-character bookkeeping (a daily dosage ledger, who
+        is nearest a threshold) cannot be run from one seat. Shows each member's declared
+        characteristics and vital meters, not their skills.
+
+        To CHANGE one of these, narrate the new ABSOLUTE value and let that player set it on
+        their own turn (`.st <key>=<value>`); writes never cross the boundary.
+
+        Returns:
+            One block per party member: name, rule system, characteristics, meters.
+        """
+        i18n = self.services.i18n.with_locale(ctx.locale)
+        characters = self.services.characters
+        try:
+            roster = await characters.get_party_roster(ctx.chat_key)
+        except Exception as exc:
+            return i18n.t("kp_tools.character.list.failed", error=str(exc))
+        try:
+            from agent.npc import list_companions
+
+            companions = {
+                record.stat_char or record.name
+                for record in await list_companions(self.services.documents, ctx.chat_key)
+            }
+        except Exception:
+            companions = set()
+
+        blocks: list[str] = []
+        for member in roster:
+            name = str(member.get("name") or "").strip()
+            if not name:
+                continue
+            try:
+                sheet = await characters.get_character(ctx.uid(), ctx.chat_key, name)
+            except CharacterDataError:
+                continue  # one unreadable row must not cost the keeper the whole roster
+            if not _has_character(sheet):
+                continue
+            lines = [
+                i18n.t(
+                    "kp_tools.character.party.member",
+                    name=sheet.name,
+                    system=sheet.system,
+                    ai=i18n.t("kp_tools.character.party.ai") if sheet.name in companions else "",
+                )
+            ]
+            attrs = sheet.attributes
+            try:
+                spec = load_rulepack(sheet.system).sheet_spec
+            except Exception:
+                spec = None
+            # The pack's declared characteristics, in the pack's own order — the same
+            # selection `state.character.attributes` puts on the wire, so what the keeper
+            # reads here and what a client shows are one list.
+            for key in (spec.attributes if spec is not None else attrs):
+                if key in attrs:
+                    lines.append(i18n.t("kp_tools.character.sheet.attr_line", attr=key, value=attrs[key]))
+            for meter in character_resources(sheet, ctx.locale):
+                lines.append(
+                    i18n.t(
+                        "kp_tools.character.sheet.meter_line",
+                        label=meter["label"],
+                        value=meter["value"],
+                        max=meter["max"],
+                    )
+                )
+            blocks.append("\n".join(lines))
+
+        if not blocks:
+            return i18n.t("kp_tools.character.party.empty")
+        return "\n".join(
+            [i18n.t("kp_tools.character.party.header", count=len(blocks)), *blocks, i18n.t("kp_tools.character.party.write_hint")]
+        )
+
     @tool(prep_only=True)
     async def update_character_skill(self, ctx: AgentCtx, skill_name: str, value: int) -> str:
         """Update a character's skill value.

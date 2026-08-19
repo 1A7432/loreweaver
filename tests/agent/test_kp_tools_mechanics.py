@@ -45,13 +45,14 @@ def _build() -> tuple[Services, AgentCtx]:
 # ---------------------------------------------------------------------------
 
 
-def test_toolset_collects_all_twelve_static_tools_and_none_are_keeper_only():
+def test_toolset_collects_all_thirteen_static_tools_and_none_are_keeper_only():
     services, _ctx = _build()
     toolset = Toolset(CharacterTools(services), DiceTools(services), InitiativeTools(services))
 
     expected_names = {
         "create_character",
         "get_character_sheet",
+        "list_party_sheets",
         "update_character_skill",
         "update_character_attribute",
         "list_characters",
@@ -63,11 +64,11 @@ def test_toolset_collects_all_twelve_static_tools_and_none_are_keeper_only():
         "hp_manager",
         "initiative_tracker",
     }
-    assert len(expected_names) == 12
+    assert len(expected_names) == 13
     assert set(toolset.names()) == expected_names
 
     schemas = toolset.schemas()
-    assert len(schemas) == 12
+    assert len(schemas) == 13
     for name in expected_names:
         assert toolset.is_keeper_only(name) is False
 
@@ -1308,3 +1309,53 @@ async def test_loss_ceiling_absent_in_base_pack_never_caps():
     seed_dice(11)
     result = await _run_sub(services, ctx, "sanity_check", success_loss="0", failure_loss="1d6", tag="fire")
     assert "Loss ceiling applied" not in result
+
+
+async def test_list_party_sheets_crosses_the_acting_player_boundary_read_only():
+    """The whole table's numbers from any seat — every other sheet tool acts on whoever is
+    acting, so a two-player module ledger was unrunnable from one seat (2026-08-18 《安土》
+    run 1: root values narrated for a second player never landed). Read-only by design:
+    writes still act on the actor alone."""
+    from agent.npc import create_companion
+    from core.character_manager import CharacterSheet
+
+    services, ctx = _build()
+    tools = CharacterTools(services)
+    toolset = Toolset(tools)
+
+    shen = CharacterSheet("沈拾遗", "coc7")
+    shen.attributes = {"STR": 25, "CON": 50, "POW": 60}
+    await services.characters.save_character("u1", ctx.chat_key, shen)
+    ping = CharacterSheet("平知章", "coc7")
+    ping.attributes = {"STR": 55, "CON": 65, "POW": 50}
+    await services.characters.save_character("u2", ctx.chat_key, ping)
+    helper = CharacterSheet("公所助手", "coc7")
+    await services.characters.save_character("u3", ctx.chat_key, helper)
+    await create_companion(services.documents, ctx.chat_key, "公所助手", stat_char="公所助手")
+
+    # Acting as u1: the single-seat tool sees only 沈拾遗 …
+    solo = await tools.get_character_sheet(ctx)
+    assert "沈拾遗" in solo and "平知章" not in solo
+
+    # … the party tool sees the whole table, from that same seat.
+    listing = await toolset.dispatch("list_party_sheets", ctx, {})
+    assert "沈拾遗" in listing and "平知章" in listing
+    assert "STR: 25" in listing and "STR: 55" in listing  # each member's own numbers
+    assert "公所助手" in listing and "AI" in listing  # companions are marked, not hidden
+
+    # Read-only, and present in BOTH phases — the daily ledger runs during play.
+    assert toolset.is_read_only("list_party_sheets") is True
+    assert toolset.is_prep_only("list_party_sheets") is False
+    assert toolset.is_keeper_only("list_party_sheets") is False  # a PC sheet is not secret
+
+    # The boundary itself is unchanged: a write still lands on the ACTOR's sheet alone.
+    await tools.update_character_attribute(ctx, attribute="POW", value=70)
+    assert (await services.characters.get_character("u1", ctx.chat_key, "沈拾遗")).attributes["POW"] == 70
+    assert (await services.characters.get_character("u2", ctx.chat_key, "平知章")).attributes["POW"] == 50
+
+
+async def test_list_party_sheets_is_empty_before_anyone_has_a_sheet():
+    services, ctx = _build()
+    tools = CharacterTools(services)
+
+    assert "📄" in await tools.list_party_sheets(ctx)
