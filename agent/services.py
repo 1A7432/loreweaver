@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 
+from agent.tools import enable_tool_trace
 from core.battle_report import BattleReportManager
 from core.character_manager import CharacterManager
 from core.dice_engine import DiceRoller
@@ -76,6 +78,15 @@ def build_services(
     initially offline app can hot-switch when credentials arrive."""
     settings = settings or get_settings()
     i18n = i18n or get_i18n(settings.locale)
+    # TRPG_DEBUG__TOOL_TRACE: off unless an operator asked for it. A relative path lands
+    # under data_dir, which is already private-mode — the file holds keeper-grade content
+    # (tool arguments and results), so it must never sit somewhere casually shared.
+    trace = (settings.debug.tool_trace or "").strip()
+    if not trace:
+        enable_tool_trace(None)
+    else:
+        path = Path(trace)
+        enable_tool_trace(path if path.is_absolute() else Path(settings.data_dir) / path)
     store = store or Store(db_path)
     runtime_config = RuntimeConfig(store)
     llm_credentials = CredentialBook(store)

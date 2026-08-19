@@ -17,14 +17,19 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 import re
+import time
 import types
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from agent.context import AgentCtx
 from infra.i18n import t
+
+logger = logging.getLogger(__name__)
 
 # `self` is bound automatically; `ctx`/`_ctx` is injected positionally by
 # `Toolset.dispatch`. Neither belongs in the schema or the coerced kwargs.
@@ -252,27 +257,86 @@ class Toolset:
         The same holds for a `prep_only` tool called during play -- and that
         refusal names the switch, because the keeper is the one who can flip it.
         """
+        started = time.perf_counter()
         entry = self._entries.get(name)
+
+        def _traced(result_text: str) -> str:
+            _record_trace(name, entry.meta if entry is not None else None, arguments, result_text, phase, started)
+            return result_text
+
         if entry is None:
-            return t("agent.tools.unknown_tool", locale=ctx.locale, name=name)
+            return _traced(t("agent.tools.unknown_tool", locale=ctx.locale, name=name))
         if entry.meta.gated and name not in (unlocked or set()):
-            return t("agent.tools.tool_not_available", locale=ctx.locale, name=name)
+            return _traced(t("agent.tools.tool_not_available", locale=ctx.locale, name=name))
         if entry.meta.prep_only and phase == PLAY_PHASE:
-            return t("agent.tools.prep_phase_only", locale=ctx.locale, name=name)
+            return _traced(t("agent.tools.prep_phase_only", locale=ctx.locale, name=name))
         if not _capability_met(entry.meta, capabilities):
             # Defense in depth, like the gated/phase refusals above: a model that
             # remembers the name from another room still gets a reason, not a stack trace.
-            return t("agent.tools.capability_missing", locale=ctx.locale, name=name, capability=entry.meta.needs)
+            return _traced(
+                t("agent.tools.capability_missing", locale=ctx.locale, name=name, capability=entry.meta.needs)
+            )
 
         try:
             coerced = _coerce_arguments(entry.meta.fn, arguments or {})
             result = await entry.bound(ctx, **coerced)
         except ToolArgumentError as exc:
-            return t("agent.tools.bad_arguments", locale=ctx.locale, name=name, error=str(exc))
+            return _traced(t("agent.tools.bad_arguments", locale=ctx.locale, name=name, error=str(exc)))
         except TypeError as exc:
-            return t("agent.tools.bad_arguments", locale=ctx.locale, name=name, error=str(exc))
+            return _traced(t("agent.tools.bad_arguments", locale=ctx.locale, name=name, error=str(exc)))
 
-        return result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+        return _traced(result if isinstance(result, str) else json.dumps(result, ensure_ascii=False))
+
+
+# --- Tool trace (TRPG_DEBUG__TOOL_TRACE) -----------------------------------
+# One JSON line per dispatched call, written only when an operator configured a path.
+# `dispatch` is the single choke point every AI-KP tool call passes through, which is
+# why the 2026-08-18 play-test harness monkey-patched exactly this method from outside
+# to find five root causes (a wrong pool size, a same-turn write a hook could not see,
+# tools that could only fail). Keeping it in-tree means the next investigation does not
+# have to. The file holds keeper-grade content by construction — see `infra.config.DebugSettings`.
+_TRACE_PATH: Path | None = None
+MAX_TRACE_FIELD_CHARS = 20_000
+
+
+def enable_tool_trace(path: str | Path | None) -> None:
+    """Point the tool trace at `path` (absolute), or disable it with `None`/empty."""
+    global _TRACE_PATH
+    _TRACE_PATH = Path(path) if path else None
+    if _TRACE_PATH is not None:
+        try:
+            _TRACE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            logger.warning("tool trace directory is unwritable; tracing off: %s", _TRACE_PATH, exc_info=True)
+            _TRACE_PATH = None
+
+
+def _capped(value: Any) -> Any:
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    return text if len(text) <= MAX_TRACE_FIELD_CHARS else text[:MAX_TRACE_FIELD_CHARS] + "…"
+
+
+def _record_trace(name: str, meta: ToolMeta | None, arguments: Any, result: str, phase: str | None, started: float) -> None:
+    """Append one call to the trace. Best-effort: a debugging aid never breaks a turn."""
+    if _TRACE_PATH is None:
+        return
+    try:
+        line = json.dumps(
+            {
+                "ts": round(time.time(), 3),
+                "ms": round((time.perf_counter() - started) * 1000, 1),
+                "tool": name,
+                "phase": phase or "",
+                "keeper_only": bool(meta.keeper_only) if meta is not None else None,
+                "args": _capped(arguments or {}),
+                "result": _capped(result),
+            },
+            ensure_ascii=False,
+        )
+        with _TRACE_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except Exception:  # noqa: BLE001 — see docstring
+        logger.debug("tool trace write failed", exc_info=True)
 
 
 def _capability_met(meta: ToolMeta, capabilities: set[str] | None) -> bool:
