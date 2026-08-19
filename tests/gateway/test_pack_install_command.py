@@ -247,3 +247,74 @@ async def test_several_world_cards_are_the_one_fork_left_to_a_human(server, tmp_
     assert await server.store.state_get(chat_key, "world_import") is None
     # ...but everything unambiguous still went live.
     assert "tideline" in await get_enabled_skills(server.store, chat_key)
+
+
+async def test_a_skill_installed_by_another_process_enables_at_once(server, tmp_path):
+    """The half-open door the throttle left: `.skill enable` used to read the LISTING,
+    whose staleness check is time-throttled, so a skill installed by the desktop client
+    seconds after any other lookup answered "unknown skill". This test deliberately does
+    NOT shorten the interval — arming the throttle first is the whole point."""
+    router = CommandRouter(server)
+    chat_key = "cli:dm:enable-now"
+
+    # Arm the throttle the way a live room does: something resolves, recording the scan.
+    skills_module.load_skill("mature-mode")
+
+    # ANOTHER PROCESS installs the pack — the desktop client shells out to the CLI, so
+    # nothing in this process clears a cache. Writing the files is exactly what it leaves
+    # behind. (Going through `install_pack_here` here would prove nothing: it reloads
+    # discovery itself, which is the in-process door that already worked.)
+    installed = Path(server.settings.data_dir) / "skills" / "tideline"
+    installed.mkdir(parents=True)
+    (installed / "SKILL.md").write_text(SKILL_MD, encoding="utf-8")
+
+    reply = await router.dispatch(_keeper(chat_key), ".skill enable tideline")
+
+    i18n = server.i18n.with_locale("en")
+    assert reply == i18n.t("commands.skill.enable_done", id="tideline"), reply
+    assert "tideline" in await get_enabled_skills(server.store, chat_key)
+
+
+async def test_a_world_import_that_fails_is_not_reported_as_a_module(server, tmp_path, monkeypatch):
+    """`import_world_card` reports refusals as prose and writes its `world_import` marker
+    partway through its own work, so a room that ALREADY ran a module keeps a truthy marker
+    however the next import ends. Reading that marker back would have printed "module
+    loaded" over a failure."""
+    router = CommandRouter(server)
+    chat_key = "cli:dm:failed-import"
+    await server.store.state_set(chat_key, "world_import", "An Earlier Module")
+
+    from agent import kp_tools_charcard
+
+    async def refuse(self, ctx, file_path, system="", *, raise_on_failure=False):
+        message = "the card could not be read"
+        if raise_on_failure:
+            raise kp_tools_charcard.CardImportRefused(message)
+        return message
+
+    monkeypatch.setattr(kp_tools_charcard.CharcardTools, "import_world_card", refuse)
+
+    reply = await router.dispatch(_keeper(chat_key), f".pack install {_built_module_pack(tmp_path)}")
+
+    i18n = server.i18n.with_locale("en")
+    assert i18n.t("commands.pack.live_card", ref="tidemodule/cards/world.json") not in reply
+    assert "tidemodule/cards/world.json" in reply  # named as the import to retry
+    assert i18n.t("commands.pack.next_header") in reply
+    # The skill still went live: one card failing is not the install failing.
+    assert "tideline" in await get_enabled_skills(server.store, chat_key)
+
+
+async def test_the_system_pin_is_claimed_only_when_the_room_is_really_on_it(server, tmp_path):
+    """The summary said "and the pack's character system" unconditionally. A pack with no
+    character system of its own pins nothing, and saying otherwise is the kind of line an
+    operator would trust and then debug for an hour."""
+    router = CommandRouter(server)
+    chat_key = "cli:dm:no-pin"
+
+    reply = await router.dispatch(_keeper(chat_key), f".pack install {_built_module_pack(tmp_path)}")
+
+    i18n = server.i18n.with_locale("en")
+    # This fixture ships no rulepack, so there is nothing to pin and nothing to claim.
+    assert await server.store.state_get(chat_key, "room_system") is None
+    assert i18n.t("commands.pack.live_card", ref="tidemodule/cards/world.json") in reply
+    assert "coc7" not in reply

@@ -766,11 +766,14 @@ def _rescan_if_dirs_changed(*, force: bool = False) -> bool:
     now = time.monotonic()
     if not force and now - _LAST_SIGNATURE_CHECK < RESCAN_MIN_INTERVAL_SECONDS:
         return False
+    changed = _discovery_signature() != _LAST_SCAN_SIGNATURE
+    if changed:
+        reload_rulepacks()
+    # Stamped AFTER the reload, never before: reload_rulepacks() clears this timestamp so an
+    # EXPLICIT reload is followed by a fresh look, and stamping first would let that
+    # clearing undo the throttle we just paid for — leaving every probe unthrottled.
     _LAST_SIGNATURE_CHECK = now
-    if _discovery_signature() == _LAST_SCAN_SIGNATURE:
-        return False
-    reload_rulepacks()
-    return True
+    return changed
 
 
 @cache

@@ -260,45 +260,56 @@ async def _switch_everything_on(
         # can read off a manifest. Not a confirmation step — a fork.
         leftover.extend(ctx.i18n.t("commands.pack.next_card", ref=ref) for ref in world_refs)
     elif world_refs:
-        if await _import_world_card(ctx, world_refs[0]):
-            live.append(ctx.i18n.t("commands.pack.live_card", ref=world_refs[0]))
-        else:
+        loaded, pinned = await _import_world_card(ctx, world_refs[0])
+        if not loaded:
             leftover.append(ctx.i18n.t("commands.pack.next_card", ref=world_refs[0]))
+        elif pinned:
+            live.append(ctx.i18n.t("commands.pack.live_card_pinned", ref=world_refs[0], system=pinned))
+        else:
+            live.append(ctx.i18n.t("commands.pack.live_card", ref=world_refs[0]))
     if leftover:
         leftover.insert(0, ctx.i18n.t("commands.pack.next_header"))
     return live, leftover
 
 
-async def _import_world_card(ctx: CommandCtx, ref: str) -> bool:
-    """Load one world card as this room's module. False (never an exception) when it
-    could not be read — the install itself already succeeded, and a keeper can retry the
-    import by hand from the line this returns them to."""
+async def _import_world_card(ctx: CommandCtx, ref: str) -> tuple[bool, str]:
+    """Load one world card as this room's module. Returns (landed, pinned system).
+
+    Both halves are OBSERVED, never assumed. `import_world_card` normally reports every
+    refusal as prose and writes its `world_import` marker partway through its own work, so
+    neither the return value nor that marker can tell a caller whether this call did
+    anything — a room that already ran a module carries a truthy marker regardless. Hence
+    `raise_on_failure`, and hence reading the room's rule system back afterwards rather
+    than repeating the pin the pack asked for: the summary claims a pinned system only
+    when the room is actually on it.
+    """
+    from agent.context import AgentCtx, LocalFs
     from agent.kp_tools_charcard import CharcardTools
+    from core.pack import installed_pack_character_system
     from gateway.panels import resolve_pack_ref as resolve_room_pack_ref
 
-    resolved = resolve_room_pack_ref(ctx.services.settings.data_dir, ref)
+    data_dir = ctx.services.settings.data_dir
+    resolved = resolve_room_pack_ref(data_dir, ref)
     if resolved is None:
-        return False
-    from agent.context import AgentCtx, LocalFs
-
+        return False, ""
     # The importer reads through an `FsAdapter`, and a transport that carries none would
-    # otherwise turn a perfectly resolved pack path into "no filesystem". `resolve_room_pack_ref`
-    # has already confined this path under the pack home, so a reader rooted at the data dir
-    # adds a second boundary rather than opening one.
-    fs = getattr(ctx.raw_ctx, "fs", None) or LocalFs(ctx.services.settings.data_dir)
+    # otherwise turn a perfectly resolved pack path into "no filesystem". The path is
+    # already confined under the pack home, so a reader rooted at the data dir adds a
+    # second boundary rather than opening one.
     agent_ctx = AgentCtx(
         chat_key=ctx.chat_key,
         user_id=ctx.user_id,
         platform=str(getattr(ctx.raw_ctx, "platform", "cli") or "cli"),
         locale=ctx.locale,
-        fs=fs,
+        fs=getattr(ctx.raw_ctx, "fs", None) or LocalFs(data_dir),
         extra=getattr(ctx.raw_ctx, "extra", {}) or {},
     )
     try:
-        await CharcardTools(ctx.services).import_world_card(agent_ctx, file_path=str(resolved))
-    except Exception:  # noqa: BLE001 — a bad card must not lose the install that worked
+        await CharcardTools(ctx.services).import_world_card(agent_ctx, file_path=str(resolved), raise_on_failure=True)
+    except Exception:  # noqa: BLE001 — CardImportRefused included; a bad card must not lose the install
         logger.info("pack install: could not import the world card %r", ref, exc_info=True)
-        return False
-    # `import_world_card` reports refusals (unreadable card, no filesystem) as TEXT, so the
-    # marker it writes on success is the only honest signal that the module really landed.
-    return bool(await ctx.services.store.state_get(ctx.chat_key, "world_import"))
+        return False, ""
+
+    wanted = installed_pack_character_system(data_dir, resolved) or ""
+    on_now = str(await ctx.services.store.state_get(ctx.chat_key, "room_system") or "")
+    return True, wanted if wanted and wanted == on_now else ""

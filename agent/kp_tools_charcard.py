@@ -144,6 +144,11 @@ async def _module_summary(services: Services, chat_key: str) -> str:
         return ""
 
 
+
+class CardImportRefused(RuntimeError):
+    """A world import a caller asked to branch on could not proceed. Carries the same
+    localized sentence the text-returning path would have printed."""
+
 class CharcardTools:
     """AI-KP tools for importing SillyTavern cards as a player PC or an AI companion."""
 
@@ -316,7 +321,9 @@ class CharcardTools:
             ctx.chat_key, card.character_book, source=card.name, is_keeper=False, char_name=card.name
         )
 
-    async def import_world_card(self, ctx: AgentCtx, file_path: str, system: str = "") -> str:
+    async def import_world_card(
+        self, ctx: AgentCtx, file_path: str, system: str = "", *, raise_on_failure: bool = False
+    ) -> str:
         """Import a card as a MODULE, both halves at once (拆卡, keeper trust):
 
         - the WORLD half — full lorebook with secrecy flags honored, `[InitVar]`
@@ -333,14 +340,29 @@ class CharcardTools:
         Deliberately NOT an `@tool`: reprogramming the room is the human keeper's decision,
         so this is reachable only through `.import <file> world`, whose keeper check is
         deterministic (`gateway.commands`).
+
+        Every failure normally comes back as TEXT, because the keeper who typed `.import`
+        is reading the reply. `raise_on_failure` is for a caller that must BRANCH on the
+        outcome instead of printing it (`.pack install` decides what to claim in its
+        summary): a refusal that reads as prose is indistinguishable from success to code,
+        and the room state left behind is no substitute — the `world_import` marker is
+        written partway through, so a room that already ran a module keeps a truthy marker
+        no matter how this call ends.
         """
         i18n = self._i18n(ctx)
+
+        def _refuse(key: str, **fields: object) -> str:
+            message = i18n.t(key, **fields)
+            if raise_on_failure:
+                raise CardImportRefused(message)
+            return message
+
         if ctx.fs is None:
-            return i18n.t("charcard.tools.import.no_fs")
+            return _refuse("charcard.tools.import.no_fs")
         try:
             host_path = Path(ctx.fs.get_file(file_path))
             if not host_path.exists():
-                return i18n.t("charcard.tools.import.no_file", path=file_path)
+                return _refuse("charcard.tools.import.no_file", path=file_path)
 
             # System pin (owner verdict 2026-08-17, widened 2026-08-18): an explicit
             # `system` argument wins outright. Otherwise, a card imported FROM an
@@ -497,7 +519,11 @@ class CharcardTools:
                 line for line in (pinned_line, specs_line, brief_line, pregen_line, cast_line, skipped_line) if line
             ]
             return "\n".join([result, *extra_lines])
+        except CardImportRefused:
+            raise
         except Exception as exc:
+            if raise_on_failure:
+                raise
             return i18n.t("charcard.tools.world.failed", error=str(exc))
 
     @tool(keeper_only=True, read_only=True)

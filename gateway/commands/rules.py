@@ -6,7 +6,7 @@ from __future__ import annotations
 from agent.kp_tools_subsystems import dispatch_subsystem
 from agent.services import set_room_rule_variant
 from agent.tool_phase import PHASES, is_pinned, room_phase, set_room_phase
-from core.skills import available_skills
+from core.skills import available_skills, load_skill
 from core.table_habits import HABITS_DOC_TYPE, HABITS_ID, normalize
 from gateway.commands.checks import _get_rule_variant, _variant_display
 from gateway.commands.rooms import _is_keeper
@@ -152,8 +152,11 @@ class RulesCommands:
         if not _is_keeper(ctx.raw_ctx):
             return ctx.fail(ctx.i18n.t("commands.skill.denied"))
         skill_id = skill_id.strip()
-        known_ids = {skill.id for skill in available_skills()}
-        if not skill_id or skill_id not in known_ids:
+        # RESOLVE, don't scan: `load_skill` forces a discovery re-check when the id misses,
+        # so a skill another process just installed enables immediately. The listing's own
+        # check is throttled (a stale listing is cosmetic), and enabling straight after an
+        # install is exactly the moment that throttle would answer "unknown skill".
+        if not skill_id or load_skill(skill_id) is None:
             return ctx.i18n.t("commands.skill.unknown", id=skill_id)
 
         await toggle_enabled_skill(ctx.services.store, ctx.chat_key, skill_id, on=enable)

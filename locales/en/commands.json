@@ -166,6 +166,7 @@
   "commands.opposed.tie": "tie",
   "commands.pack.installed": "📦 Installed on this server: {id}@{version}. Its panels and presentation kit are live in this room.",
   "commands.pack.live_card": "· Module loaded from `{ref}` — lore, variables, room hooks and the pack's character system.",
+  "commands.pack.live_card_pinned": "· Module loaded from `{ref}` — lore, variables, room hooks; this room now creates characters on `{system}`.",
   "commands.pack.live_skill": "· KP skill `{id}` is enabled here.",
   "commands.pack.next_card": "· `.import {ref} world` — this pack ships more than one module; load the one this table is playing.",
   "commands.pack.next_header": "One choice left to you:",

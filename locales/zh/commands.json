@@ -166,6 +166,7 @@
   "commands.opposed.tie": "平手",
   "commands.pack.installed": "📦 已装到本服务器：{id}@{version}。其面板与演出包已在本房间生效。",
   "commands.pack.live_card": "· 已从 `{ref}` 载入模组——世界书、变量、房间钩子，以及本包的建卡系统。",
+  "commands.pack.live_card_pinned": "· 已从 `{ref}` 载入模组——世界书、变量、房间钩子；本房间现在用 `{system}` 建卡。",
   "commands.pack.live_skill": "· KP 技能 `{id}` 已在本房间启用。",
   "commands.pack.next_card": "· `.import {ref} world` —— 本包带不止一个模组；载入这桌要玩的那个。",
   "commands.pack.next_header": "只剩一个由你来定的选择：",
