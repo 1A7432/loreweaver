@@ -174,6 +174,8 @@ def _discover_registry() -> dict[str, Skill]:
     default `None` (every test unless it opts in), this scans ONLY `_SKILL_DIR` -- byte-identical
     to before the user data-dir existed.
     """
+    global _LAST_SCAN_SIGNATURE
+    _LAST_SCAN_SIGNATURE = _discovery_signature()
     registry: dict[str, Skill] = {}
     _scan_skill_dir(_SKILL_DIR, registry, allow_override=True)
     if _USER_SKILL_DIR is not None:
@@ -190,6 +192,54 @@ def _discover_registry() -> dict[str, Skill]:
 _EXTRA_SKILL_DIRS: tuple[Path, ...] = ()
 
 
+def _discovery_dirs() -> tuple[Path, ...]:
+    """Every directory discovery scans, in precedence order (built-in first)."""
+    dirs = [_SKILL_DIR]
+    if _USER_SKILL_DIR is not None:
+        dirs.append(_USER_SKILL_DIR)
+    dirs.extend(_EXTRA_SKILL_DIRS)
+    return tuple(dirs)
+
+
+def _discovery_signature() -> tuple[object, ...]:
+    """A fingerprint of the discovery dirs: each dir's `mtime_ns` plus its skills' manifests.
+
+    The twin of ``core.rulepacks._discovery_signature`` for the same reason: a pack installed
+    by ANOTHER process (Studio's install button shells out to the CLI) ships skill directories
+    into a dir this process already scanned, and the `@cache` would otherwise stay stale for
+    the rest of the process lifetime. Only ever computed on a resolution MISS, so the hit path
+    never touches the filesystem.
+    """
+    signature: list[object] = []
+    for directory in _discovery_dirs():
+        try:
+            dir_mtime: int | None = directory.stat().st_mtime_ns
+            files = tuple(
+                sorted((path.parent.name, path.stat().st_mtime_ns) for path in directory.glob("*/SKILL.md"))
+            )
+        except OSError:
+            dir_mtime, files = None, ()
+        signature.append((str(directory), dir_mtime, files))
+    return tuple(signature)
+
+
+# Signature of the discovery dirs as they looked during the last real scan. `None` means
+# discovery has not run yet in this process.
+_LAST_SCAN_SIGNATURE: tuple[object, ...] | None = None
+
+
+def _rescan_if_dirs_changed() -> bool:
+    """Reload discovery when the dirs changed since the last scan; True if a reload happened.
+
+    Signature unchanged means the miss is a genuine unknown id, so nothing is rescanned and
+    a bad id cannot trigger a scan storm.
+    """
+    if _discovery_signature() == _LAST_SCAN_SIGNATURE:
+        return False
+    reload_skills()
+    return True
+
+
 def set_extra_skill_dirs(dirs: Iterable[Path | str]) -> None:
     """Replace the extra discovery dirs and drop the cache (dev-room mounts)."""
     global _EXTRA_SKILL_DIRS
@@ -203,6 +253,8 @@ def reload_skills() -> None:
     Discovery is otherwise cached for process lifetime (`@cache`); nothing else needs to call
     this in normal operation since the on-disk skill set doesn't change outside of generation.
     """
+    global _LAST_SCAN_SIGNATURE
+    _LAST_SCAN_SIGNATURE = None
     _discover_registry.cache_clear()
 
 
@@ -229,8 +281,15 @@ def load_skill(skill_id: str) -> Skill | None:
 
     Callers must tolerate ``None`` (an id enabled for a room that no longer
     resolves to a discoverable skill, e.g. after its directory was removed).
+
+    A miss re-checks the discovery dirs once (`_rescan_if_dirs_changed`) before giving up,
+    so a skill installed by ANOTHER process resolves without restarting the server — the
+    same self-heal, for the same out-of-process install, as `core.rulepacks.load_rulepack`.
     """
-    return _discover_registry().get(skill_id)
+    skill = _discover_registry().get(skill_id)
+    if skill is None and _rescan_if_dirs_changed():
+        skill = _discover_registry().get(skill_id)
+    return skill
 
 
 async def unlocked_tools_for(store: Any, chat_key: str) -> set[str]:

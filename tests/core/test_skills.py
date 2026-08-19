@@ -358,9 +358,11 @@ def test_reload_skills_picks_up_a_newly_written_skill(tmp_path: Path) -> None:
     try:
         assert load_skill("late-skill") is None
         _write_skill(tmp_path, "late-skill", GOOD_SKILL)
-        assert load_skill("late-skill") is None  # still cached -- reload_skills() not called yet
+        # A miss now self-heals (the dirs' signature changed), so the new skill resolves
+        # WITHOUT an explicit reload — the same out-of-process-install fix as rulepacks.
+        assert load_skill("late-skill") is not None
 
-        skills_module.reload_skills()
+        skills_module.reload_skills()  # the explicit path still works and stays cheap
 
         loaded = load_skill("late-skill")
         assert loaded is not None
@@ -423,3 +425,56 @@ def test_parse_skill_text_rejects_alias_bomb_frontmatter_fast() -> None:
     assert elapsed < _ALIAS_BOMB_FAST_BOUND_SECONDS, (
         f"alias-bomb frontmatter rejection took {elapsed:.3f}s (bound {_ALIAS_BOMB_FAST_BOUND_SECONDS}s)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Out-of-process install self-heal (the twin of `core.rulepacks`' test): another process
+# (Studio's install button shells out to the CLI) ships a skill into a discovery dir the
+# running server already scanned. A resolution MISS re-checks the dirs' signature once and
+# reloads before giving up; an unchanged signature must not turn misses into scan storms.
+# ---------------------------------------------------------------------------
+
+
+def test_load_skill_self_heals_after_an_out_of_process_install(tmp_path: Path) -> None:
+    original_user_dir = skills_module._USER_SKILL_DIR
+    skills_module._USER_SKILL_DIR = tmp_path
+    skills_module.reload_skills()
+    try:
+        # Warm the cache the way a running server does.
+        assert skills_module.load_skill("installed-elsewhere") is None
+
+        # Another process installs a pack. Nothing in THIS process calls reload_skills().
+        _write_skill(tmp_path, "installed-elsewhere", GOOD_SKILL)
+
+        skill = skills_module.load_skill("installed-elsewhere")
+        assert skill is not None and skill.id == "installed-elsewhere"
+    finally:
+        skills_module._USER_SKILL_DIR = original_user_dir
+        skills_module.reload_skills()
+
+
+def test_unknown_skill_id_does_not_rescan_when_the_dirs_are_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_user_dir = skills_module._USER_SKILL_DIR
+    skills_module._USER_SKILL_DIR = tmp_path
+    skills_module.reload_skills()
+    try:
+        skills_module.load_skill("warm-the-cache")  # first miss scans and records the signature
+
+        scans = 0
+        real_scan = skills_module._scan_skill_dir
+
+        def counting_scan(directory, registry, **kwargs):
+            nonlocal scans
+            scans += 1
+            return real_scan(directory, registry, **kwargs)
+
+        monkeypatch.setattr(skills_module, "_scan_skill_dir", counting_scan)
+
+        for _ in range(3):
+            assert skills_module.load_skill("no-such-skill-anywhere") is None
+        assert scans == 0
+    finally:
+        skills_module._USER_SKILL_DIR = original_user_dir
+        skills_module.reload_skills()
