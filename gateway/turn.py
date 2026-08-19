@@ -233,6 +233,20 @@ async def run_turn(
         # other room keeps today's behavior exactly.
         unfiltered = await room_content_unfiltered(services.store, ctx.chat_key)
         review = None if unfiltered else ((lambda value: censor.review(value).cleaned) if censor is not None else None)
+        # Progress inside a long busy stretch: each tool round refreshes the room's `busy`
+        # frame with a COARSE category and the round number (protocol 2.3.1). Gated on the
+        # PLAYER-turn path for the same structural reason the Scribe and the Director are —
+        # a companion sub-turn re-enters this function, and its rounds are not the table's
+        # turn. `run_kp_turn` is the only caller of the sink (`agent.loop`).
+        if ctx.platform != "companion":
+
+            async def _publish_activity(activity: str, round_index: int) -> None:
+                await hub.publish(
+                    ctx.chat_key,
+                    Event.turn_status("busy", actor=name, activity=activity, round_index=round_index),
+                )
+
+            ctx.activity_sink = _publish_activity
         await hub.begin_turn(ctx.chat_key, name)
         try:
             # Streaming narrative (docs/protocol.md 2.0): `narrative_delta` frames sharing

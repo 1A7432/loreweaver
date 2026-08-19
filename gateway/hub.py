@@ -116,11 +116,20 @@ class Event:
         return cls(kind="system", text=text, data={"level": level})
 
     @classmethod
-    def turn_status(cls, status: str, *, actor: str = "") -> Event:
-        """Ephemeral room-wide AI-KP activity (``busy`` with actor, then ``idle``)."""
-        data = {"status": status}
+    def turn_status(cls, status: str, *, actor: str = "", activity: str = "", round_index: int = 0) -> Event:
+        """Ephemeral room-wide AI-KP activity (``busy`` with actor, then ``idle``).
+
+        ``activity``/``round_index`` are the optional protocol-2.3.1 progress hints a
+        long ``busy`` stretch refreshes itself with. Both are omitted when unset, so a
+        client that ignores them sees exactly the pre-2.3.1 frame.
+        """
+        data: dict[str, Any] = {"status": status}
         if actor:
             data["actor"] = actor
+        if activity:
+            data["activity"] = activity
+        if round_index >= 1:
+            data["round"] = round_index
         return cls(kind="turn_status", data=data)
 
     @classmethod

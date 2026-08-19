@@ -199,6 +199,28 @@ _TEXT_TOOL_CALL_MARKER_RE = re.compile(
 )
 
 
+# The FOUR coarse activity categories a room may be told a turn is in (protocol 2.3.1's
+# optional `turn_status.activity`). Deliberately coarse and closed: a tool's own name or
+# arguments would put keeper-side material on a room-wide frame, so the wire only ever
+# carries which of these four buckets the round's first tool fell into.
+ACTIVITY_READING = "reading"
+ACTIVITY_DICE = "dice"
+ACTIVITY_CAST = "cast"
+ACTIVITY_BOOKKEEPING = "bookkeeping"
+
+
+def tool_activity(tool_name: str) -> str:
+    """Map one tool name to its coarse activity bucket. Anything unclassified is bookkeeping."""
+    name = (tool_name or "").casefold()
+    if name in {"query_lore", "module_brief"} or name.startswith(("get_", "list_", "search")):
+        return ACTIVITY_READING
+    if name == "roll_dice" or name.endswith("_check") or name.startswith("opposed"):
+        return ACTIVITY_DICE
+    if "npc" in name or "companion" in name:
+        return ACTIVITY_CAST
+    return ACTIVITY_BOOKKEEPING
+
+
 def _strip_text_tool_calls(reply: str) -> str:
     """Remove tool-call-shaped machinery blocks a model wrote as plain text."""
 
@@ -675,6 +697,10 @@ async def run_kp_turn(
         if result.tool_calls:
             if gate is not None:
                 gate.finish_round(discard=True)
+            # Coarse progress for a long turn: which KIND of work this round opened with,
+            # and which round it is. The first call sets the round's character; the bucket
+            # is all that leaves this function (see `tool_activity`).
+            await ctx.report_activity(tool_activity(result.tool_calls[0].name), round_index)
             try:
                 await _dispatch_and_record(
                     toolset,

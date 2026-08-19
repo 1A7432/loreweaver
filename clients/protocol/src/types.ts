@@ -826,8 +826,22 @@ export interface SystemFrame {
   spinner?: boolean
 }
 
+/**
+ * Coarse kind of work a busy turn is doing. Added in 2.3.1 and deliberately closed:
+ * the server never puts a tool name or argument on the wire.
+ */
+export type TurnActivity = "reading" | "dice" | "cast" | "bookkeeping"
+
 export type TurnStatusFrame =
-  | { type: typeof FrameType.TurnStatus; status: "busy"; actor: string }
+  | {
+      type: typeof FrameType.TurnStatus
+      status: "busy"
+      actor: string
+      /** 2.3.1, optional: a long turn refreshes `busy` once per tool round with this. */
+      activity?: TurnActivity
+      /** 2.3.1, optional: the tool round this refresh belongs to, counting from 1. */
+      round?: number
+    }
   | { type: typeof FrameType.TurnStatus; status: "idle"; actor?: never }
 
 export interface PongFrame {

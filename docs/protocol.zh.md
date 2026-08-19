@@ -102,7 +102,11 @@
   `{type:"presence", players:[{id,name,online}], online:int}`
 - `system` — 带外通知：`{type:"system", level:"info"|"warn", text:string}`
 - `turn_status` — 临时的房间级 AI-KP 活动状态。`busy` 携带正在结算其行动的 actor，`idle` 清除状态。客户端应显示动画忙碌指示，并设置安全超时以防结束帧丢失：
-  `{type:"turn_status", status:"busy", actor:string}` 或 `{type:"turn_status", status:"idle"}`
+  `{type:"turn_status", status:"busy", actor:string, activity?:"reading"|"dice"|"cast"|"bookkeeping", round?:int}` 或 `{type:"turn_status", status:"idle"}`。
+  长回合每进入一个工具轮会重发一次 `busy`，携带可选的 `activity` 与 `round`（2.3.1 新增）：`activity`
+  是该轮开头那类工作的粗分类，绝不含工具名或参数；`round` 从 1 开始计数。开场的 `busy` 以及更早版本的
+  服务器都不带这两个字段，忽略它们的客户端行为与以前完全一致；重复的 `busy` 应视为同一个指示器的刷新，
+  而不是新一轮回合。
 - `pong`: `{type:"pong", t:number}`
 
 ## 一个回合怎么走

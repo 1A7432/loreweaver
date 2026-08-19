@@ -9,9 +9,13 @@ in the rest of the stack.
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -31,6 +35,22 @@ class AgentCtx:
     extra: dict = field(default_factory=dict)
     dice_payloads: list[dict[str, Any]] = field(default_factory=list, init=False, repr=False, compare=False)
     npc_lines: list[dict[str, str]] = field(default_factory=list, init=False, repr=False, compare=False)
+    # Optional progress channel for a long turn: `(activity, round_index)`, where activity is
+    # one of four COARSE categories. The gateway injects a publisher on the player-turn path;
+    # everywhere else it stays None and the loop's calls are no-ops. Deliberately coarse — a
+    # tool's name or arguments would leak keeper-side material into a room-wide frame.
+    activity_sink: Callable[[str, int], Awaitable[None]] | None = field(
+        default=None, repr=False, compare=False
+    )
+
+    async def report_activity(self, activity: str, round_index: int) -> None:
+        """Announce coarse turn progress, if anyone is listening. Never raises."""
+        if self.activity_sink is None:
+            return
+        try:
+            await self.activity_sink(activity, round_index)
+        except Exception:  # a cosmetic progress frame must never take a turn down
+            logger.debug("activity sink failed", exc_info=True)
 
     def uid(self) -> str:
         """Defensive accessor for the resolved user id."""

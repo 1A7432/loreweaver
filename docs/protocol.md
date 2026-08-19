@@ -287,8 +287,14 @@ connections receive `error too_many_connections` before `join` is read.
 - `turn_status` — ephemeral room-wide AI-KP activity. `busy` names the actor whose
   action is being resolved; `idle` clears the activity. Clients should animate their
   busy indicator and apply a safety timeout in case an end frame is lost:
-  `{type:"turn_status", status:"busy", actor:string}` or
-  `{type:"turn_status", status:"idle"}`
+  `{type:"turn_status", status:"busy", actor:string, activity?:"reading"|"dice"|"cast"|"bookkeeping", round?:int}` or
+  `{type:"turn_status", status:"idle"}`.
+  A long turn re-sends `busy` once per tool round with the OPTIONAL `activity` and
+  `round` hints (added in 2.3.1): `activity` is the coarse kind of work that round
+  opened with — never a tool name or argument — and `round` counts from 1. Both fields
+  are absent on the opening `busy` and on any server that predates them, so a client
+  that ignores them behaves exactly as before; treat a repeated `busy` as a refresh of
+  the one indicator, not as a second turn.
 - `pong`: `{type:"pong", t:number}`
 
 ## Turn flow
