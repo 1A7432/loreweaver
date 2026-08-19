@@ -1,0 +1,15 @@
+{
+  "typeCheckingMode": "basic",
+  "venvPath": ".",
+  "venv": ".venv",
+  "exclude": [
+    ".claude",
+    ".venv",
+    "**/node_modules",
+    "**/__pycache__",
+    "clients",
+    "content",
+    "data",
+    "marketing"
+  ]
+}
