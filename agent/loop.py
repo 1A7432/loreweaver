@@ -18,6 +18,114 @@ stays lean across turns. A keeper-only tool's raw result is recorded in
 ``role="tool"`` message; it is never surfaced as-is as ``reply`` (the model
 must transform it first, per the keeper-secrecy discipline block the system
 prompt carries — see ``agent/prompt_builder.py``).
+
+=====================================================================
+THE MAP — read this before changing anything below
+=====================================================================
+
+This module is the most paid-for code in the repo: nearly every block below
+exists because a live session broke without it, and the fix's reason is in
+the comment next to it. The line-level comments say WHY each piece is there;
+this section says HOW THE PIECES FIT, which is the thing a reader cannot
+recover from any one of them. Do not split this file for readability alone
+(owner ruling 2026-08-19): the pieces are kept together because their ORDER
+is the contract.
+
+How one turn runs (``run_kp_turn``), in order — every step depends on the
+ones above it:
+
+ 1. Reset per-turn residue on the (reused) ``AgentCtx``: dice payloads, NPC
+    lines, ``hook_injections`` / ``clock_advances`` / ``variable_writes``.
+ 2. Fire the ``turn_start`` hook BEFORE prompt assembly — its injections and
+    variable writes must shape this very prompt.
+ 3. Adopt legacy history (``migrate_legacy_blob``), then run the routine
+    chronicle fold (``maybe_fold_chronicle``) — also BEFORE assembly, so the
+    emergency ceiling keeps headroom for the fold's own generation.
+ 4. Fix this turn's tool catalog ONCE: ``unlocked`` (skills), ``phase``
+    (prep/play), ``capabilities`` (room stores), ``room_pack`` subsystem
+    tools. Every schema build and every dispatch this turn uses the same
+    four values, so what is offered and what is refused can never disagree.
+ 5. Assemble the prompt (``_assemble_base``): stable head as ONE system
+    message with a cache breakpoint; replayed history (trimmed to what the
+    fold has absorbed); the volatile state tail as a USER message headed as
+    engine state; the player line. One assembler, one object (iron rule #5);
+    two wire slots for cache behavior (M20 A1).
+ 6. Stamp ``turn_index`` (= completed turns + 1, the same stamp chronicle
+    records use), heal a crashed prior attempt's dangling leaf (NOT inside a
+    companion sub-turn), write down the hook injections (M23 WS3), and
+    persist the PLAYER message NOW — so a nested companion turn appends its
+    exchange between the player's line and the reply, the order the table saw.
+ 7. The round loop: ``chat`` → if tool calls, ``_dispatch_and_record`` and go
+    again; else the content is the reply. A context overflow — refusal OR a
+    reply truncated at the window — folds once and retries ONCE
+    (``_recover_from_overflow``); any other provider error returns a
+    localized diagnosis WITHOUT persisting the turn (the player line is
+    abandoned back off the path).
+ 8. End-of-turn checks (``_run_turn_checks``): the pack-declared Stop-form
+    table, re-verified after every re-ask, bounded by
+    ``MAX_ROUNDS_PER_TURN``; a tool round inside a check is not the end
+    (the narration that reads the real roll is).
+ 9. If ``max_rounds`` ran out with no plain reply: one tools-disabled
+    finalizer over the public committed results, else the deterministic
+    fallback.
+10. Reply post-processing, in THIS order: MVU ``<UpdateVariable>`` blocks
+    applied + stripped (deterministic code does the bookkeeping) → text-shaped
+    tool calls stripped → reply hooks (``apply``/``reply`` phases) →
+    ``output_review`` (the censor sees final text) → stream gate drained.
+11. Persist the reply, advance the chronicle counter, photograph the room for
+    undo (``capture_snapshot`` AFTER the counter, so snapshot ``turn_index``
+    is the end-of-turn state), fill an estimated prompt size if the provider
+    reported none.
+
+Invariants a change here must keep (each one was paid for — see the comment
+at the site, and ``docs/defensive-patterns.md``):
+
+ * ``messages`` is mutated IN PLACE for the whole turn and never rebound: the
+   provider's continuation state (``_clear_llm_continuation``) is keyed by the
+   list's identity. The overflow rebuild splices (``messages[:] = ...``).
+ * Cache breakpoints are wire-only marks on COPIES; the persisted chain never
+   carries ``CACHE_BREAKPOINT_KEY``. Exactly one breakpoint rides the newest
+   tool result (``_move_in_turn_breakpoint``); calls that leave the main
+   prefix (checks, finalizer) strip the marks.
+ * The overflow retry is at most once per KP turn and only if the fold FOLDED
+   something — no progress, no retry (the ping-pong guard). The retry is
+   budgeted as +1 round, not as a tool round.
+ * Provider errors never crash a turn and never persist one; cancellation
+   (``asyncio.CancelledError``) always releases continuation state before it
+   propagates.
+ * Tool calls in one round run concurrently ONLY when every one is
+   ``read_only`` — two writers racing on one document is a lost update, not a
+   speedup. ``speak_as_npc`` / ``companion_act`` are never read-only.
+ * The stream gate is fail-closed: text leaves for the client only once it can
+   no longer become part of a machinery/MVU block; a tool round's draft is
+   discarded; the final ``narrative`` frame is authoritative. Streaming the
+   final draft happens BEFORE the check lane so a corrective roll can close it.
+ * Tool results are capped (``MAX_TOOL_RESULT_CHARS``) and the cut is ANNOUNCED
+   to the model — a silent cut makes it answer from half a document.
+ * Nothing here is a new model-call lane: the turn's budget is
+   ``AGENTS.md`` "Per-turn model-call budget", pinned by
+   ``tests/agent/test_turn_call_budget.py``. The check runner's calls are
+   deliberately NOT folded into the headline usage.
+ * Hook failures never break a turn; hook emissions are capped
+   (``MAX_PANEL_EVENTS_PER_TURN``).
+ * ``ctx.platform == "companion"`` marks a NESTED turn: no dangling-leaf heal,
+   no Scribe/Director (those guards live in ``gateway/turn.py`` and
+   ``gateway/director.py``), and it deliberately does NOT take the room's
+   turn lock — that is what keeps it from self-deadlocking.
+
+Traps (things that look like small improvements and are not):
+
+ * "This round also needs to do one small thing" — a new per-turn step goes
+   in the phase list above or in ``agent/turn_checks`` (the declarative
+   table), not as a sixth ad-hoc branch in the round loop.
+ * Folding the check runner's usage into ``turn_usage`` (it is a bounded
+   repair pass, and the meter drives the fold).
+ * Re-ordering step 11: the reply is persisted FIRST (it carries this turn's
+   stamp), the counter advances SECOND, the undo snapshot is taken LAST
+   (before the counter it would be named one turn off).
+ * Reading a chronicle/turn index AFTER ``run_kp_turn`` returns by re-reading
+   the counter — take it from ``KPTurnResult.turn`` (M21 trap).
+ * Re-ordering step 10: the censor must see what the player will see.
 """
 
 from __future__ import annotations
