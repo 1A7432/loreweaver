@@ -101,7 +101,7 @@ async def test_command_lane_names_the_missing_roll_param(monkeypatch):
     await services.characters.save_character("u1", ctx.chat_key, character)
 
     broken = _undefaulted(load_rulepack("wod"))
-    monkeypatch.setattr("gateway.commands.load_rulepack", lambda system: broken)
+    monkeypatch.setattr("gateway.commands.checks.load_rulepack", lambda system: broken)
 
     reply = await router.dispatch_reply(ctx, ".ra")
 
@@ -120,7 +120,7 @@ async def test_command_lane_still_rolls_when_the_param_has_a_default(monkeypatch
     await services.characters.save_character("u1", ctx.chat_key, character)
 
     pack = load_rulepack("wod")
-    monkeypatch.setattr("gateway.commands.load_rulepack", lambda system: pack)
+    monkeypatch.setattr("gateway.commands.checks.load_rulepack", lambda system: pack)
 
     seed_dice(3)
     reply = await router.dispatch_reply(ctx, ".ra")

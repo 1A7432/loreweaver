@@ -20,7 +20,7 @@ from gateway.events import InboundMessage
 from gateway.hub import Event, RoomHub
 from gateway.media import media_frame, record_media_history
 from gateway.member import AdapterMember
-from gateway.ops import Botlist, Censor, RateLimiter, censor_from_settings
+from gateway.ops import Botlist, Censor, RateLimiter, bot_setting, censor_from_settings
 from gateway.rooms import (
     get_keeper_binding,
     resolve_session_key,
@@ -39,9 +39,6 @@ from infra.media_store import (
 
 logger = logging.getLogger(__name__)
 
-_BOT_ENABLED_PREFIX = "bot_enabled."
-_BOT_ENABLED_VALUE = "1"
-_BOT_DISABLED_VALUE = "0"
 _CHAT_LOCALE_KEYS = ("chat_locale",)
 _DIRECT_CHAT_TYPES = {"dm", "direct", "private", "c2c"}
 _COMMAND_PREFIXES = (".", "。", "/")
@@ -135,10 +132,10 @@ class GatewayRunner:
             quote = "\n".join(f"> {line}" for line in msg.quoted_text.strip().splitlines())
             text = f"{quote}\n\n{text}".rstrip()
 
-        bot_setting = await self.services.store.state_get(chat_key, "bot_enabled")
+        setting = await bot_setting(self.services.store, chat_key)
         welcome_key = f"chat_welcomed.{channel_key}"
         if (
-            bot_setting is None
+            setting is None
             and not is_command
             and msg.at_bot
             and not self._default_bot_enabled(source)
@@ -146,10 +143,10 @@ class GatewayRunner:
         ):
             await self.services.store.set(user_key="", store_key=welcome_key, value="1")
             return self._welcome_message(locale)
-        if bot_setting == _BOT_DISABLED_VALUE:
+        if setting is False:
             if not self._is_bot_on_command(text, locale):
                 return None
-        elif bot_setting != _BOT_ENABLED_VALUE and not self._default_bot_enabled(source) and not is_command:
+        elif setting is None and not self._default_bot_enabled(source) and not is_command:
             return None
 
         if self._requires_mention(source) and not msg.at_bot and not is_command:

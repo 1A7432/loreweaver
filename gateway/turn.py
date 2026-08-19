@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING, Any
 from agent.context import AgentCtx
 from agent.loop import KPTurnResult, run_kp_turn
 from gateway.hub import Event
-from gateway.ops import room_content_unfiltered
+from gateway.ops import is_bot_enabled, room_content_unfiltered
 from gateway.panels import deliver_panel_events
 from gateway.ui_media import filter_ui_media
 from infra.i18n import I18n, get_i18n
@@ -200,12 +200,7 @@ async def run_turn(
             ),
         )
         origin_only = bool(
-            interaction_private
-            or command_failed
-            or (
-                matched_spec
-                and (matched_spec.private_reply or matched_spec.canonical == "room")
-            )
+            interaction_private or command_failed or (matched_spec and matched_spec.private_reply)
         )
         if origin_only:
             # Sensitive keeper-command reply (masked API key / keeper-only secret lore /
@@ -215,7 +210,7 @@ async def run_turn(
         else:
             await hub.publish(ctx.chat_key, reply_event)
     else:
-        # `.bot off` (gateway.commands.cmd_bot_toggle) mutes the AI Keeper for this
+        # `.bot off` (gateway.commands.rooms.cmd_bot_toggle) mutes the AI Keeper for this
         # room: the player message above is still echoed to everyone (a human-Keeper
         # table keeps chatting, dice commands keep working), but no KP turn runs.
         # Unset defaults to ON — the hub/TUI table's existing behavior. The chat
@@ -427,14 +422,9 @@ async def run_scribe_pass(
 
 
 async def _kp_enabled(services: Services, chat_key: str) -> bool:
-    """Whether the AI Keeper answers non-command messages in this room.
-
-    Reads the SAME store flag `.bot on/off` writes (`bot_enabled.{chat_key}` --
-    see `gateway.commands.cmd_bot_toggle` and `GatewayRunner._bot_enabled`);
-    only an explicit "0" mutes the KP, so existing rooms keep today's behavior.
-    """
-    value = await services.store.state_get(chat_key, "bot_enabled")
-    return value != "0"
+    """Whether the AI Keeper answers non-command messages in this room — the one
+    `bot_enabled` reader, `gateway.ops.is_bot_enabled` (unset means ON)."""
+    return await is_bot_enabled(services.store, chat_key)
 
 
 def _matched_command_spec(command_router: CommandRouter, text: str, locale: str) -> CommandSpec | None:

@@ -25,7 +25,8 @@ from core.character_manager import CharacterSheet
 from core.dice_engine import seed_dice
 from core.rulepacks import load_rulepack
 from core.sheets import sheet_value
-from gateway.commands import CommandRouter, _parse_sheet_assignments
+from gateway.commands import CommandRouter
+from gateway.commands.sheet import _parse_sheet_assignments
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM
@@ -370,8 +371,8 @@ async def test_target_avatar_denied_does_not_consume_imagegen_quota(monkeypatch)
     async def _fake_target(_ctx, _target):
         return object()  # resolves as an existing NPC/companion target
 
-    monkeypatch.setattr("gateway.commands.allow_imagegen_request", _spy_allow)
-    monkeypatch.setattr("gateway.commands._resolve_avatar_target", _fake_target)
+    monkeypatch.setattr("gateway.commands.media.allow_imagegen_request", _spy_allow)
+    monkeypatch.setattr("gateway.commands.media._resolve_avatar_target", _fake_target)
 
     router = CommandRouter(services)
     ctx = _player_ctx("tui:group:av")

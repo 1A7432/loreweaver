@@ -12,5 +12,5 @@
 - **Reason:** players should be able to play from `.help` without seeing
   `.dev`. Keepers still need the full wall. Owner picked option 3 in the
   2026-08-17 three-persona review.
-- **Rule home:** `gateway/commands.py` (`CommandSpec.keeper_help`, `cmd_help`).
+- **Rule home:** `gateway/commands/` (`types.CommandSpec.keeper_help`, `router.cmd_help`).
 - **Date:** 2026-08-17.

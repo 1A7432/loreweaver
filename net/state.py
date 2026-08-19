@@ -356,7 +356,7 @@ async def _combat_round(services: Services, chat_key: str) -> int | None:
 
 _MVU_PANEL_CAP = 32
 _KEEPER_ROLE = "keeper"
-# The single-operator platform set (mirrors `gateway.commands._AUTO_MASTER_PLATFORMS`): a
+# The single-operator platform set (mirrors `gateway.commands.rooms._AUTO_MASTER_PLATFORMS`): a
 # `--cli` session is the box's owner running their own table, keeper by construction.
 _LOCAL_OPERATOR_PLATFORMS = {"cli"}
 

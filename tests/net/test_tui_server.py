@@ -1568,7 +1568,7 @@ async def test_join_replay_is_capped_and_skips_a_brand_new_room():
 
 
 # ---------------------------------------------------------------------------
-# Privilege-escalation regression (see `gateway.commands._privilege_level`): the
+# Privilege-escalation regression (see `gateway.commands.rooms._privilege_level`): the
 # TUI is a MULTI-USER network service, so a connection's dot-command privilege
 # must come from its AUTHENTICATED keystore role, never be assumed just because
 # the transport is `tui`. `_ctx_for` is the wiring that carries that role from

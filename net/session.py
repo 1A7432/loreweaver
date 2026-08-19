@@ -1030,7 +1030,7 @@ class SessionCore:
 
     def _ctx_for(self, member: Any) -> AgentCtx:
         """Build the `AgentCtx` for `member`'s room, carrying the connection's keystore role in
-        `extra["role"]` so `gateway.commands._privilege_level` gates keeper-only dot-commands by the
+        `extra["role"]` so `gateway.commands.rooms._privilege_level` gates keeper-only dot-commands by the
         AUTHENTICATED role — the networked TUI is a multi-user service, not a single local operator.
         """
         source = SessionSource(

@@ -304,9 +304,23 @@ def _coerce_level(level: Any) -> int:
         return int(CensorLevel.NOTICE)
 
 
-async def is_bot_enabled(store, chat_key: str) -> bool:
+async def bot_setting(store, chat_key: str) -> bool | None:
+    """The room's `.bot on/off` flag as written: True / False, or None when nobody has
+    set it. The ONE reader of the `bot_enabled` key — the hub turn and the gateway
+    runner both derive their answer from this, with their own meaning for None."""
     value = await store.state_get(chat_key, "bot_enabled")
-    return value == _BOT_ENABLED_VALUE
+    if value == _BOT_ENABLED_VALUE:
+        return True
+    if value == _BOT_DISABLED_VALUE:
+        return False
+    return None
+
+
+async def is_bot_enabled(store, chat_key: str) -> bool:
+    """Whether the AI Keeper answers in this room: only an explicit `.bot off` mutes it
+    (unset means ON — the hub table's rule, `gateway.turn`). The chat-adapter runner
+    keeps its own per-platform default for the unset case via `bot_setting`."""
+    return await bot_setting(store, chat_key) is not False
 
 
 async def set_bot_enabled(store, chat_key: str, on: bool) -> None:
@@ -537,6 +551,7 @@ __all__ = [
     "RateLimiter",
     "censor_from_settings",
     "get_enabled_skills",
+    "bot_setting",
     "is_bot_enabled",
     "load_wordlist",
     "requires_at_mention",

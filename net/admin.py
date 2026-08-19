@@ -630,7 +630,7 @@ async def _saved_llm_credentials(services: Services, provider: str) -> dict[str,
 
 def _describe_llm(services: Services) -> dict[str, str]:
     """The live LLM's display snapshot — from the `MutableLLM` if present, else
-    from the (possibly injected) settings. Mirrors `gateway.commands._describe_llm`."""
+    from the (possibly injected) settings. Mirrors `gateway.commands.llm._describe_llm`."""
     describe = getattr(services.llm, "describe", None)
     if callable(describe):
         return describe()
@@ -639,7 +639,7 @@ def _describe_llm(services: Services) -> dict[str, str]:
 
 def _reconfigure_llm(services: Services, overrides: dict[str, str]) -> bool:
     """Hot-reconfigure the `MutableLLM` if present (else the override is still
-    persisted and applies on restart). Mirrors `gateway.commands._reconfigure_llm`."""
+    persisted and applies on restart). Mirrors `gateway.commands.llm._reconfigure_llm`."""
     apply = getattr(services.llm, "apply", None)
     if callable(apply):
         apply(overrides)

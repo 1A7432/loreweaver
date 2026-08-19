@@ -175,16 +175,23 @@ def test_censor_from_settings_default_empty_settings_is_explicit_noop() -> None:
     assert result.cleaned == "badword is not filtered when unconfigured"
 
 
-async def test_bot_on_off_defaults_disabled_then_enabled() -> None:
+async def test_bot_flag_is_tri_state_and_unset_means_on() -> None:
+    """One reader of `bot_enabled`: the raw tri-state for the runner (unset → its own
+    per-platform default) and the hub rule for the turn (only an explicit off mutes)."""
+    from gateway.ops import bot_setting
+
     store = Store(":memory:")
     chat_key = "qq:group:42"
     try:
-        assert not await is_bot_enabled(store, chat_key)
+        assert await bot_setting(store, chat_key) is None
+        assert await is_bot_enabled(store, chat_key)
 
         await set_bot_enabled(store, chat_key, True)
+        assert await bot_setting(store, chat_key) is True
         assert await is_bot_enabled(store, chat_key)
 
         await set_bot_enabled(store, chat_key, False)
+        assert await bot_setting(store, chat_key) is False
         assert not await is_bot_enabled(store, chat_key)
     finally:
         store.close()

@@ -469,7 +469,7 @@ async def test_model_login_switches_current_chatgpt_proxy_to_oauth(monkeypatch):
         async def aclose(self):
             return None
 
-    monkeypatch.setattr("gateway.commands.flow_for", lambda _provider: _ImmediateFlow())
+    monkeypatch.setattr("gateway.commands.llm.flow_for", lambda _provider: _ImmediateFlow())
     settings = Settings(
         llm=LLMSettings(
             provider="chatgpt",
@@ -505,7 +505,7 @@ async def test_model_login_switches_current_chatgpt_proxy_to_oauth(monkeypatch):
 
 
 async def test_subscription_proxy_switch_persistence_failure_keeps_live_oauth_switch(monkeypatch):
-    from gateway.commands import _refresh_active_subscription_clients
+    from gateway.commands.llm import _refresh_active_subscription_clients
 
     settings = Settings(
         llm=LLMSettings(
@@ -651,7 +651,7 @@ async def test_model_login_supergrok_refreshes_explicit_imagegen_when_llm_is_oth
         async def aclose(self):
             return None
 
-    monkeypatch.setattr("gateway.commands.flow_for", lambda _provider: _ImmediateFlow())
+    monkeypatch.setattr("gateway.commands.llm.flow_for", lambda _provider: _ImmediateFlow())
     settings = Settings(
         llm=LLMSettings(provider="openai", chat_model="gpt-4o", api_key="sk-baseline"),
         imagegen=ImageGenSettings(provider="supergrok", model="grok-imagine-image"),
@@ -891,7 +891,7 @@ async def test_model_relogin_hot_rebuilds_active_supergrok_clients(monkeypatch):
         async def aclose(self):
             return None
 
-    monkeypatch.setattr("gateway.commands.flow_for", lambda _provider: _ImmediateFlow())
+    monkeypatch.setattr("gateway.commands.llm.flow_for", lambda _provider: _ImmediateFlow())
     settings = Settings(
         llm=LLMSettings(provider="openai", chat_model="gpt-4o", api_key="sk-baseline")
     )
@@ -945,7 +945,7 @@ async def test_model_relogin_refresh_failure_keeps_new_grant_and_rebuilt_clients
     import asyncio
     import time
 
-    import gateway.commands as commands_module
+    import gateway.commands.llm as commands_module
     from infra.oauth_flows import DeviceLogin, OAuthError, SubscriptionToken
 
     class _ImmediateFlow:
@@ -1023,7 +1023,7 @@ async def test_model_first_proxy_login_persistence_failure_keeps_new_oauth_state
     import asyncio
     import time
 
-    import gateway.commands as commands_module
+    import gateway.commands.llm as commands_module
     from infra.oauth_flows import DeviceLogin, SubscriptionToken
 
     class _ImmediateFlow:
@@ -1240,7 +1240,7 @@ async def test_model_login_unexpected_poll_failure_allows_retry(monkeypatch):
             return None
 
     flows = iter([_BrokenFlow("FIRST"), _BrokenFlow("RETRY")])
-    monkeypatch.setattr("gateway.commands.flow_for", lambda _provider: next(flows))
+    monkeypatch.setattr("gateway.commands.llm.flow_for", lambda _provider: next(flows))
     services = _mutable_services()
     router = CommandRouter(services)
     ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
@@ -1266,7 +1266,7 @@ async def test_model_login_closes_flow_when_start_fails(monkeypatch):
             self.closed = True
 
     flow = _StartFailureFlow()
-    monkeypatch.setattr("gateway.commands.flow_for", lambda _provider: flow)
+    monkeypatch.setattr("gateway.commands.llm.flow_for", lambda _provider: flow)
     services = _mutable_services()
     router = CommandRouter(services)
     ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
@@ -1310,7 +1310,7 @@ async def test_concurrent_model_login_starts_only_one_device_flow(monkeypatch):
             return None
 
     flow = _SlowFlow()
-    monkeypatch.setattr("gateway.commands.flow_for", lambda _provider: flow)
+    monkeypatch.setattr("gateway.commands.llm.flow_for", lambda _provider: flow)
     services = _mutable_services()
     router = CommandRouter(services)
     ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
@@ -1359,7 +1359,7 @@ async def test_model_login_logout_and_set_with_mock_flow(monkeypatch):
             return None
 
     fake = _FakeFlow()
-    monkeypatch.setattr("gateway.commands.flow_for", lambda _p: fake)
+    monkeypatch.setattr("gateway.commands.llm.flow_for", lambda _p: fake)
 
     services = _mutable_services()
     # Builder that accepts subscription providers once credentials exist.
@@ -1462,7 +1462,7 @@ async def test_model_reset_clear_failure_keeps_live_reset_and_persisted_override
 
 
 async def test_model_reset_build_failure_does_not_clear_persisted_override(monkeypatch):
-    import gateway.commands as commands_module
+    import gateway.commands.llm as commands_module
 
     services = _mutable_services()
     router = CommandRouter(services)
@@ -1517,7 +1517,7 @@ async def test_model_key_rejected_in_public_channel_but_accepted_in_dm():
 # (`net/tui_server.py`), unlike the single-local-operator `cli`. Its privilege
 # must come from the AUTHENTICATED keystore role stamped into `ctx.extra["role"]`
 # (`TuiServer._ctx_for`), never be assumed from the platform name alone (see
-# `gateway.commands._privilege_level`). A player-role `tui` connection must be
+# `gateway.commands.rooms._privilege_level`). A player-role `tui` connection must be
 # denied every keeper-only dot-command; a keeper-role one is allowed; `cli`
 # keeps auto-master.
 # ---------------------------------------------------------------------------

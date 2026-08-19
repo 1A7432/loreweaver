@@ -14,6 +14,6 @@
 - **Reason:** a confined pack read is not a server-filesystem read, and the card
   split strips world machinery structurally either way (iron rule 3 holds by
   construction, not by the gate that was removed).
-- **Rule home:** `gateway/commands.py::cmd_import` (gate order comment);
+- **Rule home:** `gateway/commands/world.py::cmd_import` (gate order comment);
   sentinels in `tests/gateway/test_command_gates.py`.
 - **Date:** 2026-08-17.

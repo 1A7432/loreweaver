@@ -8,7 +8,7 @@ NPC privately means to DO next, e.g. slip out the back door to warn the cult) mu
 ride it, in any locale.
 
 The session report is NOT a keeper-side surface either: `.report` is a
-`required_level=0`, room-broadcast command (`gateway.commands.cmd_report`), so parking
+`required_level=0`, room-broadcast command (`gateway.commands.world.cmd_report`), so parking
 the intent anywhere it renders would only delay the same leak.
 
 Sentinel shape: the intent text is the secret that must not cross the boundary, and every
