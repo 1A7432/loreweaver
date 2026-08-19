@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 from agent import npc as npc_records
 from agent.companion_actor import companion_action
 from agent.context import AgentCtx
+from agent.kp_tools_npc import player_name_refusal
 from agent.kp_tools_subsystems import room_rulepack
 from agent.services import Services
 from agent.tools import tool
@@ -44,9 +45,10 @@ _TRUTHY = {"on", "1", "true", "yes", "y", "开", "开启", "啟用", "開"}
 _FALSY = {"off", "0", "false", "no", "n", "关", "关闭", "關閉"}
 
 
-def _companion_uid(companion_id: str) -> str:
-    """The virtual per-player user_key a companion's CharacterSheet is stored under."""
-    return f"companion:{companion_id}"
+# The virtual per-player user_key a companion's CharacterSheet is stored under — ONE
+# definition (`agent.npc.companion_uid`), because a sheet's owner prefix is also how the
+# cast writer tells a companion apart from a player.
+_companion_uid = npc_records.companion_uid
 
 
 class CompanionTools:
@@ -103,9 +105,18 @@ class CompanionTools:
                 sheet = self._services.characters.generate_character(pack.system, name)
             else:
                 sheet = CharacterSheet(name=name, system=pack.system)
-            await self._services.characters.save_character(_companion_uid(record.id), ctx.chat_key, sheet)
+            try:
+                await self._services.characters.save_character(_companion_uid(record.id), ctx.chat_key, sheet)
+            except Exception:
+                # A companion is its record AND its sheet: a record whose sheet never landed
+                # is a phantom `companion_act` would still drive (the 2026-08-18 《安土》 run's
+                # `npc-4`). Undo the record rather than leave the two halves disagreeing.
+                await npc_records.delete_npc(self._services.documents, ctx.chat_key, record.id)
+                raise
 
             return i18n.t("companion.tools.add.done", name=record.name, id=record.id, system=pack.system)
+        except npc_records.PlayerNameReservedError as exc:
+            return player_name_refusal(i18n, exc)
         except Exception as exc:
             return i18n.t("companion.tools.add.failed", error=str(exc))
 

@@ -26,6 +26,7 @@ from pathlib import Path
 from agent import npc as npc_records
 from agent.context import AgentCtx
 from agent.hook_runtime import install_room_hooks
+from agent.kp_tools_npc import player_name_refusal
 from agent.kp_tools_subsystems import room_rulepack
 from agent.services import Services
 from agent.tools import tool
@@ -60,9 +61,9 @@ def _parse_any_card_file(host_path: Path) -> tuple[CharacterCard, Lorecard | Non
     return parse_card_bytes(data, host_path.name), None
 
 
-def _companion_uid(companion_id: str) -> str:
-    """The virtual per-player user_key a companion's CharacterSheet is stored under (matches M10)."""
-    return f"companion:{companion_id}"
+# The virtual per-player user_key a companion's CharacterSheet is stored under (M10) —
+# the one definition lives with the cast writer, `agent.npc`.
+_companion_uid = npc_records.companion_uid
 
 
 def _persona_text(card: CharacterCard) -> str:
@@ -218,7 +219,12 @@ class CharcardTools:
                     stat_char=final_name,
                     pronouns=_card_pronouns(card),
                 )
-                await self._services.characters.save_character(_companion_uid(record.id), ctx.chat_key, sheet)
+                try:
+                    await self._services.characters.save_character(_companion_uid(record.id), ctx.chat_key, sheet)
+                except Exception:
+                    # Record + sheet or nothing (see `CompanionTools.add_companion`).
+                    await npc_records.delete_npc(self._services.documents, ctx.chat_key, record.id)
+                    raise
                 lore = await self._import_card_lore(ctx, card)
                 result = i18n.t(
                     "charcard.tools.import.done_companion",
@@ -241,6 +247,10 @@ class CharcardTools:
                 lore=lore,
             )
             return "\n".join([result, *[notice for notice in notices if notice]])
+        except npc_records.PlayerNameReservedError as exc:
+            # `as companion` with a PLAYER's name: refused by the cast writer, same text as
+            # every other entry point (`agent.npc.PlayerNameReservedError`).
+            return player_name_refusal(i18n, exc)
         except Exception as exc:
             return i18n.t("charcard.tools.import.failed", error=str(exc))
 

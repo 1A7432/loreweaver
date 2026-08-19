@@ -2544,3 +2544,12 @@ async def test_npc_and_companion_give_the_keeper_a_hand_on_the_cast():
     player = AgentCtx(chat_key=chat_key, user_id="p1", platform="tui", locale="en", extra={"role": "player"})
     denied = await router.dispatch(player, ".npc")
     assert "老蒯" not in denied
+
+    # And the keeper's own `.party add` cannot recreate the incident: a player's name is
+    # refused at the cast writer, whichever door it comes through.
+    from core.character_manager import CharacterSheet
+
+    await services.characters.save_character("p1", chat_key, CharacterSheet("平知章", "coc7"))
+    refused = await router.dispatch(keeper, ".party add 平知章 | a surveyor")
+    assert refused.startswith("❌") and "平知章" in refused
+    assert {record.name for record in await list_npcs(services.documents, chat_key)} == {"老蒯"}

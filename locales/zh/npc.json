@@ -9,7 +9,7 @@
   "npc.actor_user.target_line": "你正在对……说话/回应：{target}",
   "npc.actor_user.tone_line": "要求的语气：{tone}",
   "npc.tools.create.done": "✅ 已创建 NPC “{name}”（id：{id}）。",
-  "npc.tools.create.name_is_player": "❌ “{name}”是本房间的玩家角色（在队伍名册或可认领预构里）——玩家不能被建成 NPC 或 AI 同伴。用叙述对他说话；那张卡是他的。",
+  "npc.tools.create.name_is_player": "❌ “{name}”是本房间的玩家角色（这里有他的角色卡，或在可认领预构里）——玩家不能被建成 NPC 或 AI 同伴。用叙述对他说话；那张卡是他的。",
   "npc.tools.create.failed": "❌ 创建 NPC 失败：{error}",
   "npc.tools.detail.disposition_line": "态度：{disposition}",
   "npc.tools.detail.header": "📋 NPC：{name}（id：{id}）",

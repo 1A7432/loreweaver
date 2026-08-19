@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from agent import npc as npc_records
 from agent.context import AgentCtx
 from agent.kp_tools import build_kp_toolset
@@ -591,12 +593,16 @@ def test_get_npc_and_list_npcs_are_keeper_only_in_build_kp_toolset():
     assert "npc_action_options" not in toolset.names()
 
 
-async def test_a_player_character_can_never_be_created_as_an_npc():
+async def test_a_player_character_can_never_be_created_as_an_npc_or_companion():
     """2026-08-18 《安土》 run 1: the Keeper — unable to see a non-acting player's sheet —
-    registered a real player as an AI companion `npc-4` and drove them with
-    `companion_act` (a scene narrated twice, the clock overwritten). A player's name is
-    off-limits to create_npc / sketch_npc: roster PCs and the module's claimable pregens
-    alike; AI companions' own NPC-backed sheets are not players and stay creatable."""
+    registered a real player as an AI companion `npc-4` (`add_companion`) and drove them
+    with `companion_act`: a scene narrated twice, the clock overwritten. The refusal lives
+    in the cast WRITER (`agent.npc.create_npc`, which `create_companion` wraps), so every
+    entry point is covered — the NPC tools, `add_companion`, `.party add`, a card imported
+    as companion, a module's NPC seed — not two of them. A player = a character sheet not
+    owned by a companion, or a claimable pregen; casefolded; AI companions' own NPC-backed
+    sheets are not players and stay creatable."""
+    from agent.kp_tools_companion import CompanionTools
     from core.character_manager import CharacterSheet
     from core.pregen_roster import pregen_add
     from infra.config import ImageGenSettings
@@ -604,21 +610,49 @@ async def test_a_player_character_can_never_be_created_as_an_npc():
     services = build_services(Settings(imagegen=ImageGenSettings()), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(8))
     chat_key = "antu-guard"
     tools = NpcTools(services)
+    companions = CompanionTools(services)
     ctx = _ctx(chat_key)
 
-    # A real player's character on the roster.
+    # A real player's characters: the active one and an inactive alt (both are the player's).
+    await services.characters.save_character("player-2", chat_key, CharacterSheet("Alt Ego", "coc7"))
     await services.characters.save_character("player-2", chat_key, CharacterSheet("平知章", "coc7"))
     # An unclaimed pregen from the module's cast.
     await pregen_add(services.documents, chat_key, CharacterSheet("秦苁蓉", "coc7"))
 
     refused = await tools.create_npc(ctx, name="平知章", persona="a surveyor")
     assert refused.startswith("❌") and "平知章" in refused
-    refused_sketch = await tools.sketch_npc(ctx, name="秦苁蓉", one_line="the physician")
-    assert refused_sketch.startswith("❌")
-    from agent import npc as npc_records
-
+    assert (await tools.sketch_npc(ctx, name="秦苁蓉", one_line="the physician")).startswith("❌")
+    # THE incident path: the companion tool, the inactive alt, and a case variant.
+    assert (await companions.add_companion(ctx, name="平知章", persona="the surveyor")).startswith("❌")
+    assert (await companions.add_companion(ctx, name="Alt Ego", persona="…")).startswith("❌")
+    assert (await companions.add_companion(ctx, name="alt ego", persona="…")).startswith("❌")
+    # The writer itself refuses, whoever calls it.
+    with pytest.raises(npc_records.PlayerNameReservedError):
+        await npc_records.create_companion(services.documents, chat_key, "秦苁蓉")
     assert {record.name for record in await npc_records.list_npcs(services.documents, chat_key)} == set()
 
-    # An ordinary NPC still creates.
-    created = await tools.sketch_npc(ctx, name="老蒯", one_line="the ring-forest warden")
-    assert created.startswith("✅")
+    # An ordinary NPC and an ordinary companion still create; the companion's own
+    # NPC-backed sheet does not turn its name into a player's (re-adding is idempotent).
+    assert (await tools.sketch_npc(ctx, name="老蒯", one_line="the ring-forest warden")).startswith("✅")
+    assert (await companions.add_companion(ctx, name="Silas", persona="a quiet archer")).startswith("✅")
+    assert (await companions.add_companion(ctx, name="Silas", persona="a quiet archer")).startswith("✅")
+    assert {record.name for record in await npc_records.list_companions(services.documents, chat_key)} == {"Silas"}
+
+
+async def test_a_companion_whose_sheet_cannot_be_written_leaves_no_record_behind(monkeypatch):
+    """`add_companion` writes a record, then a sheet. A sheet write that fails must not
+    leave a phantom companion `companion_act` would still drive (2026-08-18 《安土》 npc-4)."""
+    from agent.kp_tools_companion import CompanionTools
+    from infra.config import ImageGenSettings
+
+    services = build_services(Settings(imagegen=ImageGenSettings()), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(8))
+    chat_key = "antu-orphan"
+    ctx = _ctx(chat_key)
+
+    async def _boom(*_args, **_kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(services.characters, "save_character", _boom)
+    reply = await CompanionTools(services).add_companion(ctx, name="Silas", persona="an archer")
+    assert reply.startswith("❌") and "disk full" in reply
+    assert await npc_records.list_companions(services.documents, chat_key) == []

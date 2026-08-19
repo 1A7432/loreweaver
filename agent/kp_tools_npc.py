@@ -106,6 +106,12 @@ def _render_npc_detail(i18n: I18n, record: NpcRecord) -> str:
     return "\n".join(lines)
 
 
+def player_name_refusal(i18n: I18n, exc: npc_records.PlayerNameReservedError) -> str:
+    """The localized answer to `agent.npc.PlayerNameReservedError` — one text for every
+    entry point that can hit it (NPC tools, `add_companion`, a card imported as companion)."""
+    return i18n.t("npc.tools.create.name_is_player", name=exc.name)
+
+
 class NpcTools:
     """AI-KP tools for creating/updating AI-played NPCs and delegating their in-character turns."""
 
@@ -114,45 +120,6 @@ class NpcTools:
 
     def _i18n(self, ctx: AgentCtx) -> I18n:
         return self._services.i18n.with_locale(ctx.locale)
-
-
-    async def _player_character_names(self, ctx: AgentCtx) -> set[str]:
-        """The names a room has already given to PLAYER characters — the party roster
-        (minus AI companions, whose sheets are NPC-backed by design) plus the module's
-        claimable pregens. An NPC/companion may never take one of these: the 2026-08-18
-        《安土》 run had the Keeper, unable to see a non-acting player's sheet, register a
-        real player as an AI companion `npc-4` and drive them with `companion_act` — a
-        scene narrated twice, the clock overwritten. A name check here is the structural
-        answer; the sheet-visibility gap is a separate matter."""
-        names: set[str] = set()
-        try:
-            from agent.npc import list_companions
-
-            companions = {r.stat_char or r.name for r in await list_companions(self._services.documents, ctx.chat_key)}
-        except Exception:
-            companions = set()
-        try:
-            for member in await self._services.characters.get_party_roster(ctx.chat_key):
-                name = str(member.get("name") or "").strip()
-                if name and name not in companions:
-                    names.add(name)
-        except Exception:
-            pass
-        try:
-            from core.pregen_roster import pregen_entries
-
-            for entry in await pregen_entries(self._services.documents, ctx.chat_key):
-                name = str(entry.get("name") or "").strip()
-                if name:
-                    names.add(name)
-        except Exception:
-            pass
-        return names
-
-    async def _refuse_player_name(self, ctx: AgentCtx, name: str) -> str | None:
-        if name.strip() and name.strip() in await self._player_character_names(ctx):
-            return self._i18n(ctx).t("npc.tools.create.name_is_player", name=name.strip())
-        return None
 
     @tool(prep_only=True)
     async def create_npc(
@@ -188,9 +155,6 @@ class NpcTools:
             Confirmation naming the created NPC and its resolved id.
         """
         i18n = self._i18n(ctx)
-        refused = await self._refuse_player_name(ctx, name)
-        if refused:
-            return refused
         try:
             npc = await npc_records.create_npc(
                 self._services.documents,
@@ -205,6 +169,8 @@ class NpcTools:
                 major=major,
             )
             return i18n.t("npc.tools.create.done", name=npc.name, id=npc.id)
+        except npc_records.PlayerNameReservedError as exc:
+            return player_name_refusal(i18n, exc)
         except Exception as exc:
             return i18n.t("npc.tools.create.failed", error=str(exc))
 
@@ -226,14 +192,13 @@ class NpcTools:
         # actor -- so an improvised NPC's private knowledge would have no structural home
         # at all (iron rule #3). Facts they learn later arrive through `npc_learns`.
         i18n = self._i18n(ctx)
-        refused = await self._refuse_player_name(ctx, name)
-        if refused:
-            return refused
         try:
             npc = await npc_records.create_npc(
                 self._services.documents, ctx.chat_key, name, persona=one_line, major=True
             )
             return i18n.t("npc.tools.create.done", name=npc.name, id=npc.id)
+        except npc_records.PlayerNameReservedError as exc:
+            return player_name_refusal(i18n, exc)
         except Exception as exc:
             return i18n.t("npc.tools.create.failed", error=str(exc))
 
@@ -261,6 +226,7 @@ class NpcTools:
             existing_names = {record.name.strip().lower() for record in await npc_records.list_npcs(self._services.documents, ctx.chat_key)}
             imported: list[str] = []
             skipped: list[str] = []
+            refused: list[str] = []
             for entry in entries:
                 if not isinstance(entry, dict):
                     continue
@@ -271,22 +237,29 @@ class NpcTools:
                     skipped.append(name)
                     continue
 
-                await npc_records.create_npc(self._services.documents,
-                    ctx.chat_key,
-                    name,
-                    public_description=str(entry.get("description", "")),
-                    secret_agenda=str(entry.get("secret", "")),
-                    role=str(entry.get("role", "")),
-                )
+                try:
+                    await npc_records.create_npc(self._services.documents,
+                        ctx.chat_key,
+                        name,
+                        public_description=str(entry.get("description", "")),
+                        secret_agenda=str(entry.get("secret", "")),
+                        role=str(entry.get("role", "")),
+                    )
+                except npc_records.PlayerNameReservedError as exc:
+                    # A module NPC who is also one of its claimable pregens (or already
+                    # a player's PC) is a player, not an NPC: skipped, and said so.
+                    refused.append(player_name_refusal(i18n, exc))
+                    continue
                 existing_names.add(name.lower())
                 imported.append(name)
 
-            return i18n.t(
+            summary = i18n.t(
                 "npc.tools.import.done",
                 count=len(imported),
                 names=", ".join(imported) if imported else i18n.t("common.none"),
                 skipped=len(skipped),
             )
+            return "\n".join([summary, *refused])
         except Exception as exc:
             return i18n.t("npc.tools.import.failed", error=str(exc))
 

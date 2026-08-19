@@ -26,9 +26,37 @@ import time
 from dataclasses import dataclass, field, fields
 from typing import Any
 
+from core.pregen_roster import pregen_entries
 from infra.room_facets import STORAGE_DOCUMENTS, RoomStateFacet
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+# The virtual per-player user_key an AI companion's CharacterSheet is stored under.
+# One definition: it is how a sheet's `owner` tells a companion (an NPC record with a
+# sheet) apart from a PLAYER — see `player_character_names`.
+COMPANION_UID_PREFIX = "companion:"
+
+
+def companion_uid(companion_id: str) -> str:
+    return f"{COMPANION_UID_PREFIX}{companion_id}"
+
+
+class PlayerNameReservedError(ValueError):
+    """`name` is a PLAYER character in this room — a player is never an NPC or an AI
+    companion, so `create_npc`/`create_companion` refuse to write the record.
+
+    Raised at the WRITER, not in one tool's preamble: the 2026-08-18 《安土》 run had the
+    Keeper register a real player as an AI companion `npc-4` (`add_companion`, then
+    `companion_act` — a scene narrated twice, the clock overwritten), and a guard that
+    covered only `create_npc`/`sketch_npc` would have let that exact call through again.
+    Every entry point (the NPC tools, `add_companion`, `.party add`, a character card
+    imported `as companion`, a module's NPC seed) reaches this function, so every one of
+    them is refused here."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        # Developer-facing (the tools localize the refusal — `agent.kp_tools_npc.player_name_refusal`).
+        super().__init__(f"player_name_reserved: {name!r}")
 
 
 def _slugify(name: str) -> str:
@@ -179,6 +207,27 @@ async def _resolve_id(documents: Any, chat_key: str, name_or_id: str) -> str | N
     return None
 
 
+async def player_character_names(documents: Any, chat_key: str) -> set[str]:
+    """The names this room has given to PLAYER characters, casefolded: every character
+    sheet not owned by an AI companion (the sheet name IS the identity — see
+    `core.character_manager.CharacterNameTakenError`), plus the module's claimable
+    pregens, which a player may take at any moment. Raises when the store cannot be
+    read: the callers are about to WRITE a cast record, and a guard that cannot see the
+    roster refuses rather than waves the write through."""
+    names: set[str] = set()
+    for doc in await documents.list(chat_key, "sheet"):
+        if str(doc.data.get("owner") or "").startswith(COMPANION_UID_PREFIX):
+            continue
+        name = str(doc.data.get("name") or doc.id).strip()
+        if name:
+            names.add(name.casefold())
+    for entry in await pregen_entries(documents, chat_key):
+        name = str(entry.get("name") or "").strip()
+        if name:
+            names.add(name.casefold())
+    return names
+
+
 async def create_npc(
     documents: Any,
     chat_key: str,
@@ -200,12 +249,15 @@ async def create_npc(
     seeding from a module's `npcs[]`, which has a `role` field but no `persona`): it becomes this
     NPC's `persona` only when `persona` itself is not given.
 
-    Creating an EXACT already-existing name returns that record untouched instead of
-    minting a duplicate: the model's persisted history keeps only final replies (tool
+    A name that belongs to a PLAYER character raises `PlayerNameReservedError` and
+    writes nothing (see that class). Creating an EXACT already-existing name returns
+    that record untouched instead of minting a duplicate: the model's persisted history keeps only final replies (tool
     chatter is dropped by design), so a later turn legitimately re-"creates" an NPC it
     already seeded — and a fresh surface-persona duplicate must never shadow or race a
     record that carries the seeded secret_agenda/knowledge (2026-08-06 live playtest).
     """
+    if name.strip().casefold() in await player_character_names(documents, chat_key):
+        raise PlayerNameReservedError(name.strip())
     pairs = await _load_all(documents, chat_key)
     ids = [npc_id for npc_id, _record in pairs]
     wanted = name.strip().lower()

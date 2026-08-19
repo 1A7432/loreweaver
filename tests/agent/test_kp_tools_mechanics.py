@@ -1316,7 +1316,7 @@ async def test_list_party_sheets_crosses_the_acting_player_boundary_read_only():
     acting, so a two-player module ledger was unrunnable from one seat (2026-08-18 《安土》
     run 1: root values narrated for a second player never landed). Read-only by design:
     writes still act on the actor alone."""
-    from agent.npc import create_companion
+    from agent.npc import companion_uid, create_companion
     from core.character_manager import CharacterSheet
 
     services, ctx = _build()
@@ -1329,9 +1329,10 @@ async def test_list_party_sheets_crosses_the_acting_player_boundary_read_only():
     ping = CharacterSheet("平知章", "coc7")
     ping.attributes = {"STR": 55, "CON": 65, "POW": 50}
     await services.characters.save_character("u2", ctx.chat_key, ping)
-    helper = CharacterSheet("公所助手", "coc7")
-    await services.characters.save_character("u3", ctx.chat_key, helper)
-    await create_companion(services.documents, ctx.chat_key, "公所助手", stat_char="公所助手")
+    # An AI companion the way `add_companion` builds one: record first, sheet under its
+    # own `companion:` uid (a sheet under a player uid would make the name a player's).
+    helper_record = await create_companion(services.documents, ctx.chat_key, "公所助手", stat_char="公所助手")
+    await services.characters.save_character(companion_uid(helper_record.id), ctx.chat_key, CharacterSheet("公所助手", "coc7"))
 
     # Acting as u1: the single-seat tool sees only 沈拾遗 …
     solo = await tools.get_character_sheet(ctx)
