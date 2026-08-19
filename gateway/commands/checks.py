@@ -194,9 +194,8 @@ async def _pack_for_character(ctx: CommandCtx, character: CharacterSheet) -> Rul
     try:
         return load_rulepack(character.system)
     except Exception:
-        from agent.kp_tools_subsystems import room_rulepack
 
-        return await room_rulepack(ctx.services, ctx.raw_ctx)
+        return await ctx.services.room_rulepack(ctx.raw_ctx)
 
 
 def _consume_bonus_penalty(text: str, bonus: int, penalty: int) -> tuple[str, int, int]:

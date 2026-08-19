@@ -156,7 +156,7 @@ from agent.history import (
     trim_folded,
 )
 from agent.hook_runtime import apply_hook_writes, load_room_hook_engine, record_hook_injections
-from agent.kp_tools_subsystems import dispatch_subsystem, room_rulepack, subsystem_schemas
+from agent.kp_tools_subsystems import dispatch_subsystem, subsystem_schemas
 from agent.prompt_builder import build_system_prompt_parts
 from agent.services import Services
 from agent.tool_phase import room_capabilities, room_phase
@@ -442,7 +442,7 @@ async def run_kp_turn(
     # Stage D tool materialization: the room's rulepack declares which subsystem
     # tools exist here (a system that declares none materializes none), and their
     # schemas ride alongside the static toolset for this turn.
-    room_pack = await room_rulepack(services, ctx)
+    room_pack = await services.room_rulepack(ctx)
     subsystem_tools = subsystem_schemas(room_pack)
 
     # M20 A2: history is APPEND-ONLY between folds — the sliding window is gone, because

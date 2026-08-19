@@ -26,13 +26,12 @@ import json
 from typing import Any
 
 from agent.context import AgentCtx
+from agent.npc import list_companions
 from agent.services import Services
-from core.character_manager import CharacterSheet, character_resources, resource_label_map
+from core.character_manager import CharacterSheet, character_resources, has_character, resource_label_map
 from core.documents import KEEPER_VIEWER, MODULE_POOL_ID, MVU_ID, PLAYER_VIEWER, SCENE_ID
 from core.modvars import MODVARS_DOC_ID, MODVARS_DOC_TYPE, wire_entries
 from infra.usage_stats import USAGE_STATS_KEY
-
-_UNSET_CHARACTER_NAME = "default"
 
 
 async def build_room_state(services: Services, ctx: AgentCtx) -> dict[str, Any]:
@@ -131,7 +130,7 @@ async def resolve_active_character(services: Services, ctx: AgentCtx) -> Charact
         sheet = await services.characters.get_character(ctx.uid(), ctx.chat_key)
     except Exception:
         return None
-    if not sheet or not sheet.name or sheet.name == _UNSET_CHARACTER_NAME:
+    if not has_character(sheet):
         return None
     return sheet
 
@@ -279,8 +278,6 @@ def _int_value(value: Any) -> int | None:
 async def _companion_sheet_names(services: Services, chat_key: str) -> set[str]:
     """Character-sheet names belonging to AI player companions in this room (best-effort, may be empty)."""
     try:
-        from agent.npc import list_companions
-
         records = await list_companions(services.documents, chat_key)
     except Exception:
         return set()

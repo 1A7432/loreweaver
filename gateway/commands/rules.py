@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from agent.kp_tools_subsystems import dispatch_subsystem
 from agent.services import set_room_rule_variant
 from agent.tool_phase import PHASES, is_pinned, room_phase, set_room_phase
 from core.skills import available_skills
@@ -54,9 +55,8 @@ class RulesCommands:
         it; checks then grade under the default ladder). Changing the ladder
         regrades EVERY member's checks (a house rule), so the write is
         keeper-gated in-handler — matching ``.bot``."""
-        from agent.kp_tools_subsystems import room_rulepack
 
-        pack = await room_rulepack(ctx.services, ctx.raw_ctx)
+        pack = await ctx.services.room_rulepack(ctx.raw_ctx)
         resolver = pack.resolver
         known = set(resolver.variant_ids()) if resolver is not None else set()
         raw = ctx.args.strip().casefold()
@@ -89,14 +89,13 @@ class RulesCommands:
         not have the command (stage D materialization at the command layer).
         Exception: a make-char word is the ENTRY POINT into the pack that
         declares it, so it resolves across all installed packs."""
-        from agent.kp_tools_subsystems import dispatch_subsystem, room_rulepack
         from core.rulepacks import pack_declaring_command
 
         maker = pack_declaring_command(ctx.spec.canonical, "make_char")
         if maker is not None:
             return await self.cmd_make_char(ctx, maker)
 
-        pack = await room_rulepack(ctx.services, ctx.raw_ctx)
+        pack = await ctx.services.room_rulepack(ctx.raw_ctx)
         binding = pack.commands.get(ctx.spec.canonical)
         if binding is None:
             return ctx.i18n.t("commands.pack_word.not_in_system", word=ctx.spec.canonical)

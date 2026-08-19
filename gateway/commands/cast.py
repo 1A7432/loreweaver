@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from agent import npc as npc_records
 from agent.context import AgentCtx
 from gateway.commands.rooms import _is_keeper
 from gateway.commands.types import CommandCtx
@@ -107,8 +108,6 @@ class CastCommands:
         `secret_agenda` and an NPC's private knowledge live in them), so every subcommand is
         keeper-only and the reply is private — `show` prints the full record, listings do not.
         """
-        from agent import npc as npc_records
-
         if not _is_keeper(ctx.raw_ctx):
             return ctx.fail(ctx.i18n.t("rooms.denied"))
         companions_only = ctx.spec.canonical == "companion"

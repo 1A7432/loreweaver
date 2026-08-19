@@ -17,7 +17,6 @@ import pytest
 import core.rulepacks as rulepacks_module
 from agent.context import AgentCtx, LocalFs
 from agent.kp_tools_charcard import CharcardTools
-from agent.kp_tools_subsystems import room_rulepack
 from agent.services import build_services
 from core.pregen_roster import pregen_entries
 from infra.config import Settings
@@ -103,7 +102,7 @@ async def test_sole_rulepack_pack_pins_the_room_system(tmp_path, user_rulepack_d
     roster = await pregen_entries(services.documents, "pin-room")
     assert roster and roster[0]["system"] == "harbour-tides"
     # No character claimed yet: the room's rulepack now follows the pin.
-    pack = await room_rulepack(services, ctx)
+    pack = await services.room_rulepack(ctx)
     assert pack.system == "harbour-tides"
 
 
@@ -135,7 +134,7 @@ async def test_among_several_rulepacks_the_one_that_creates_characters_is_the_pi
 
     assert "harbour-crew" in reply
     assert await services.store.state_get("crew-room", "room_system") == "harbour-crew"
-    assert (await room_rulepack(services, ctx)).system == "harbour-crew"
+    assert (await services.room_rulepack(ctx)).system == "harbour-crew"
 
 
 async def test_two_character_systems_in_one_pack_stay_ambiguous(tmp_path, user_rulepack_dir):

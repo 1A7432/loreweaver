@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent import npc as npc_records
 from agent.services import Services
-from core.character_manager import CharacterDataError, CharacterSheet
-
-_UNSET_CHARACTER_NAME = "default"
+from core.character_manager import CharacterDataError, CharacterSheet, has_character
 
 
 class AvatarError(ValueError):
@@ -29,7 +28,7 @@ async def set_user_avatar(
         # An unreadable row cannot safely carry an avatar update (saving would
         # overwrite it); surface it through the transport-handled AvatarError.
         raise AvatarError("avatar_no_character") from exc
-    if not sheet or not sheet.name or sheet.name == _UNSET_CHARACTER_NAME:
+    if not has_character(sheet):
         raise AvatarError("avatar_no_character")
     sheet.avatar = avatar
     await services.characters.save_character(user_id, chat_key, sheet)
@@ -43,8 +42,6 @@ async def set_target_avatar(
     target: str,
     avatar: dict[str, Any] | None,
 ) -> CharacterSheet:
-    from agent import npc as npc_records
-
     record = await npc_records.get_npc(services.documents, chat_key, target)
     if record is None or not record.stat_char:
         raise AvatarError("avatar_target_not_found")
@@ -55,7 +52,7 @@ async def set_target_avatar(
             sheet = await services.characters.get_character(user_id, chat_key, record.stat_char)
         except CharacterDataError:
             continue
-        if sheet and sheet.name and sheet.name != _UNSET_CHARACTER_NAME:
+        if has_character(sheet):
             sheet.avatar = avatar
             await services.characters.save_character(user_id, chat_key, sheet)
             return sheet

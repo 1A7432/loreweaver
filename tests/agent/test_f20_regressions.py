@@ -25,7 +25,7 @@ import pytest
 from agent.context import AgentCtx
 from agent.hook_runtime import apply_hook_writes, load_room_hook_engine
 from agent.kp_tools import build_kp_toolset
-from agent.kp_tools_subsystems import dispatch_subsystem, room_rulepack
+from agent.kp_tools_subsystems import dispatch_subsystem
 from agent.services import build_services
 from core.dice_engine import seed_dice
 from core.modvars import define_modvar
@@ -62,7 +62,7 @@ async def test_a_failed_loss_check_deducts_and_the_panel_shows_it_the_same_turn(
     assert _panel(await build_room_state(services, ctx))["san"] == 50
 
     seed_dice(FAILING_SEED)
-    pack = await room_rulepack(services, ctx)
+    pack = await services.room_rulepack(ctx)
     reply = await dispatch_subsystem(
         services, ctx, pack, "sanity_check", {"success_loss": "0", "failure_loss": "1d6"}
     )
@@ -87,7 +87,7 @@ async def test_a_zero_failure_cost_is_stated_instead_of_looking_like_a_broken_en
     services, ctx = await _room()
 
     seed_dice(FAILING_SEED)
-    pack = await room_rulepack(services, ctx)
+    pack = await services.room_rulepack(ctx)
     reply = await dispatch_subsystem(
         services, ctx, pack, "sanity_check", {"success_loss": "0", "failure_loss": "0"}
     )
@@ -103,7 +103,7 @@ async def test_a_successful_check_with_a_zero_success_cost_says_nothing_unusual(
     services, ctx = await _room()
 
     seed_dice(PASSING_SEED)
-    pack = await room_rulepack(services, ctx)
+    pack = await services.room_rulepack(ctx)
     reply = await dispatch_subsystem(
         services, ctx, pack, "sanity_check", {"success_loss": "0", "failure_loss": "1d6"}
     )

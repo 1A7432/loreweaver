@@ -44,6 +44,17 @@ class CharacterDataError(Exception):
         super().__init__(message or f"character data for {char_name!r} is unreadable")
 
 
+# The fixed slot `get_character` falls back to when a user has no active character:
+# a sheet named this is the NOT-FOUND placeholder, never a real character.
+UNSET_CHARACTER_NAME = "default"
+
+
+def has_character(sheet: CharacterSheet | None) -> bool:
+    """Whether `sheet` is a real (saved) character rather than `get_character`'s
+    not-found placeholder. The ONE predicate every "is there a sheet?" check uses."""
+    return bool(sheet) and bool(sheet.name) and sheet.name != UNSET_CHARACTER_NAME
+
+
 class CharacterNameTakenError(Exception):
     """A sheet write would land on a character owned by a DIFFERENT user.
 
@@ -333,9 +344,9 @@ class CharacterManager:
         if not char_name:
             try:
                 active_name = await self.store.state_get(chat_key, f"active_character.{user_id}")
-                char_name = active_name if active_name else "default"
+                char_name = active_name if active_name else UNSET_CHARACTER_NAME
             except Exception:
-                char_name = "default"
+                char_name = UNSET_CHARACTER_NAME
 
         try:
             doc = await self.documents.get(chat_key, "sheet", char_name)

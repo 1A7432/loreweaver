@@ -18,7 +18,7 @@ from typing import Any
 
 from agent.context import AgentCtx
 from agent.services import Services, room_rule_variant
-from core.character_manager import CharacterDataError, CharacterSheet
+from core.character_manager import CharacterDataError, CharacterSheet, has_character
 from core.check_outcome import RollDetail, outcome_wire
 from core.luck import adjust_check_with_luck, find_latest_character_check, is_luck_eligible_check
 from core.resolution import InvalidRollParamError, MissingRollParamError
@@ -26,38 +26,9 @@ from core.rulepacks import RulePack, load_rulepack
 from core.subsystems import SubsystemSpec
 from infra.i18n import I18n
 
-_UNSET_CHARACTER_NAME = "default"
-
 
 async def _active_character(services: Services, ctx: AgentCtx) -> CharacterSheet:
     return await services.characters.get_character(ctx.uid(), ctx.chat_key)
-
-
-def _has_character(character: CharacterSheet | None) -> bool:
-    return bool(character and character.name and character.name != _UNSET_CHARACTER_NAME)
-
-
-async def room_rulepack(services: Services, ctx: AgentCtx) -> RulePack:
-    """The rule system THIS room plays: the active character's system, then the
-    room's world-import system pin (`room_system`, written by `.import … world`
-    when the module's pack ships exactly one rulepack), then the deployment's
-    configured default pack."""
-    system = ""
-    try:
-        character = await _active_character(services, ctx)
-        if _has_character(character):
-            system = character.system
-    except Exception:
-        system = ""
-    if not system:
-        try:
-            system = await services.store.state_get(ctx.chat_key, "room_system") or ""
-        except Exception:
-            system = ""
-    try:
-        return load_rulepack(system or services.settings.default_rulepack)
-    except Exception:
-        return load_rulepack(services.settings.default_rulepack)
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +211,7 @@ async def _run_script_flow(services: Services, ctx: AgentCtx, i18n: I18n, spec: 
     from core.sheets import canonical_values, set_sheet_value, sheet_value
 
     character = await _active_character(services, ctx)
-    if not _has_character(character):
+    if not has_character(character):
         return i18n.t("kp_tools.character.none")
     pack = load_rulepack(character.system)
     if pack.subsystems.get(spec.id) is None:
@@ -299,7 +270,7 @@ async def _run_check_with_loss(
     services: Services, ctx: AgentCtx, i18n: I18n, spec: SubsystemSpec, success_loss: str, failure_loss: str, tag: str = ""
 ) -> str:
     character = await _active_character(services, ctx)
-    if not _has_character(character):
+    if not has_character(character):
         return i18n.t("kp_tools.character.none")
     pack = load_rulepack(character.system)
     if pack.subsystems.get(spec.id) is not spec and spec.id not in pack.subsystems:
@@ -420,7 +391,7 @@ async def _run_improvement_check(
     services: Services, ctx: AgentCtx, i18n: I18n, spec: SubsystemSpec, skill_name: str
 ) -> str:
     character = await _active_character(services, ctx)
-    if not _has_character(character):
+    if not has_character(character):
         return i18n.t("kp_tools.character.none")
 
     standard_name = services.characters.find_skill_by_alias(character, skill_name)
@@ -471,7 +442,7 @@ async def _run_resource_spend(
         points = points_raw
 
     active_character = await _active_character(services, ctx)
-    if not _has_character(active_character):
+    if not has_character(active_character):
         return i18n.t("kp_tools.character.none")
     pack = load_rulepack(active_character.system)
     if spec.id not in pack.subsystems or pack.resolver is None:
@@ -603,7 +574,7 @@ async def _run_opposed(
     services: Services, ctx: AgentCtx, i18n: I18n, spec: SubsystemSpec, arguments: dict[str, Any]
 ) -> str:
     character = await _active_character(services, ctx)
-    if not _has_character(character):
+    if not has_character(character):
         return i18n.t("kp_tools.character.none")
     pack = load_rulepack(character.system)
     resolver = pack.resolver

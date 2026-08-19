@@ -296,9 +296,8 @@ class SheetCommands:
         command word routed here — the word set itself is pack data), falling
         back to the room's active system."""
         if pack is None:
-            from agent.kp_tools_subsystems import room_rulepack
 
-            pack = await room_rulepack(ctx.services, ctx.raw_ctx)
+            pack = await ctx.services.room_rulepack(ctx.raw_ctx)
         name = ctx.args.strip() or ctx.i18n.t("commands.character.default_name")
         character = ctx.services.characters.generate_character(pack.system, name)
         character, violations = validate_sheet(
@@ -329,9 +328,8 @@ class SheetCommands:
             return ctx.i18n.t("charcard.commands.genchar.usage")
         system = request.system
         if not system:
-            from agent.kp_tools_subsystems import room_rulepack
 
-            system = (await room_rulepack(ctx.services, ctx.raw_ctx)).system
+            system = (await ctx.services.room_rulepack(ctx.raw_ctx)).system
 
         character = await build_sheet_from_description(
             ctx.services,

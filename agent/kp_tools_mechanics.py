@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 
 from agent.context import AgentCtx
+from agent.npc import list_companions
 from agent.services import Services, room_rule_variant
 from agent.tools import tool
 from core.battle_recording import record_check, record_dice_roll
@@ -45,6 +46,7 @@ from core.character_manager import (
     CharacterSheet,
     character_resources,
     get_hit_points,
+    has_character,
     set_hit_points,
 )
 from core.character_rules import render_validation_notice, validate_sheet
@@ -64,17 +66,11 @@ async def _get_active_character(services: Services, ctx: AgentCtx) -> CharacterS
 async def _sheet_pack(services: Services, ctx: AgentCtx, character: CharacterSheet) -> RulePack:
     """The rulepack governing `character`: its own system when resolvable,
     falling back to the room's active pack (bare/unset sheets)."""
-    from agent.kp_tools_subsystems import room_rulepack
 
     try:
         return load_rulepack(character.system)
     except Exception:
-        return await room_rulepack(services, ctx)
-
-
-def _has_character(character: CharacterSheet | None) -> bool:
-    """Whether `character` is a real (saved) character, not the `"default"` not-found placeholder."""
-    return bool(character) and character.name != "default"
+        return await services.room_rulepack(ctx)
 
 
 def _characteristic_lines(sheet: CharacterSheet, i18n: I18n, locale: str | None) -> tuple[list[str], list[str]]:
@@ -150,9 +146,8 @@ class CharacterTools:
             if system.strip():
                 pack = load_rulepack(system)
             else:
-                from agent.kp_tools_subsystems import room_rulepack
 
-                pack = await room_rulepack(self.services, ctx)
+                pack = await self.services.room_rulepack(ctx)
 
             if auto_generate:
                 character = self.services.characters.generate_character(pack.system, name)
@@ -195,7 +190,7 @@ class CharacterTools:
             character = await _get_active_character(self.services, ctx)
         except CharacterDataError:
             return i18n.t("kp_tools.character.data_error")
-        if not _has_character(character):
+        if not has_character(character):
             return i18n.t("kp_tools.character.none")
 
         lines = [
@@ -286,8 +281,6 @@ class CharacterTools:
         except Exception as exc:
             return i18n.t("kp_tools.character.list.failed", error=str(exc))
         try:
-            from agent.npc import list_companions
-
             companions = {
                 record.stat_char or record.name
                 for record in await list_companions(self.services.documents, ctx.chat_key)
@@ -304,7 +297,7 @@ class CharacterTools:
                 sheet = await characters.get_character(ctx.uid(), ctx.chat_key, name)
             except CharacterDataError:
                 continue  # one unreadable row must not cost the keeper the whole roster
-            if not _has_character(sheet):
+            if not has_character(sheet):
                 continue
             attribute_lines, meter_lines = _characteristic_lines(sheet, i18n, ctx.locale)
             header = i18n.t(
@@ -333,7 +326,7 @@ class CharacterTools:
         characters = self.services.characters
         try:
             character = await _get_active_character(self.services, ctx)
-            if not _has_character(character):
+            if not has_character(character):
                 return i18n.t("kp_tools.character.none")
 
             pack = await _sheet_pack(self.services, ctx, character)
@@ -370,7 +363,7 @@ class CharacterTools:
         characters = self.services.characters
         try:
             character = await _get_active_character(self.services, ctx)
-            if not _has_character(character):
+            if not has_character(character):
                 return i18n.t("kp_tools.character.none")
 
             pack = await _sheet_pack(self.services, ctx, character)
@@ -502,7 +495,7 @@ class CharacterTools:
 
         try:
             character = await _get_active_character(self.services, ctx)
-            if not _has_character(character):
+            if not has_character(character):
                 return i18n.t("kp_tools.character.none")
 
             await self.services.characters.sync_party_roster(ctx.chat_key, character, status_effects=effects)
@@ -623,9 +616,8 @@ class DiceTools:
 
     async def _pool_check(self, ctx: AgentCtx, i18n, params: dict, actor: str | None) -> str:
         """Graded pool check for parameterized systems, under the ROOM's pack."""
-        from agent.kp_tools_subsystems import room_rulepack
 
-        pack = await room_rulepack(self.services, ctx)
+        pack = await self.services.room_rulepack(ctx)
         resolver = pack.resolver
         if resolver is None or not resolver.params:
             return i18n.t("kp_tools.dice.pool.not_parameterized")
@@ -714,7 +706,7 @@ class DiceTools:
                 # the params ARE the whole input — no sheet required.
                 return await self._pool_check(ctx, i18n, params, actor)
             character = await _get_active_character(self.services, ctx)
-            if not _has_character(character):
+            if not has_character(character):
                 return i18n.t("kp_tools.character.none")
             display_name, is_npc = await _resolve_actor_identity(
                 self.services,
@@ -866,7 +858,7 @@ class DiceTools:
         characters = self.services.characters
         try:
             character = await _get_active_character(self.services, ctx)
-            if not _has_character(character):
+            if not has_character(character):
                 return i18n.t("kp_tools.character.none")
 
             hp, hp_max = get_hit_points(character)

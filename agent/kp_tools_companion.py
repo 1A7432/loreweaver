@@ -29,7 +29,6 @@ from agent import npc as npc_records
 from agent.companion_actor import companion_action
 from agent.context import AgentCtx
 from agent.kp_tools_npc import player_name_refusal
-from agent.kp_tools_subsystems import room_rulepack
 from agent.services import Services
 from agent.tools import tool
 from core.character_manager import CharacterSheet
@@ -111,7 +110,7 @@ class CompanionTools:
         """
         i18n = self._i18n(ctx)
         try:
-            pack = await room_rulepack(self._services, ctx) if not system.strip() else load_rulepack(system)
+            pack = await self._services.room_rulepack(ctx) if not system.strip() else load_rulepack(system)
 
             # A companion is its record AND its sheet: a record whose sheet never landed is a
             # phantom `companion_act` would still drive (the 2026-08-18 《安土》 run's `npc-4`).

@@ -5,6 +5,7 @@ from __future__ import annotations
 import shlex
 from typing import Any
 
+from agent import npc as npc_records
 from gateway.audio import add_audio_item, build_audio_control, list_audio_items, resolve_audio_item, update_audio_item
 from gateway.avatar import AvatarError, set_target_avatar, set_user_avatar
 from gateway.commands.rooms import _is_keeper
@@ -41,8 +42,6 @@ def _shell_words(text: str) -> list[str]:
 
 async def _resolve_avatar_target(ctx: CommandCtx, target: str) -> Any | None:
     try:
-        from agent import npc as npc_records
-
         return await npc_records.get_npc(ctx.services.documents, ctx.chat_key, target)
     except Exception:
         return None

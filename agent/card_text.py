@@ -34,6 +34,7 @@ from collections.abc import Callable
 from typing import Any
 
 from agent.services import Services
+from core.character_manager import has_character
 from core.documents import MODVARS_ID, MVU_ID, PLAYER_VIEWER
 from core.ejs_full import EjsFullError, FullEjsEngine, create_full_engine
 from core.ejs_lite import render as render_subset
@@ -45,7 +46,6 @@ from core.varspace import build_resolver, modvar_values_from_view
 # Mirrors `net.state.resolve_active_character`'s sentinel (agent must not import net):
 # `CharacterManager.get_character` resolves an unset active-character pointer to a fresh,
 # unsaved sheet named "default", so that name means "no character bound".
-_UNSET_CHARACTER_NAME = "default"
 
 
 async def _active_character_name(services: Services, uid: str, chat_key: str) -> str:
@@ -58,7 +58,7 @@ async def _active_character_name(services: Services, uid: str, chat_key: str) ->
         sheet = await services.characters.get_character(uid, chat_key)
     except Exception:
         return ""
-    if not sheet or not sheet.name or sheet.name == _UNSET_CHARACTER_NAME:
+    if not has_character(sheet):
         return ""
     return sheet.name
 

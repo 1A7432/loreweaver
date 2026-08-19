@@ -12,14 +12,16 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from agent.context import AgentCtx
 from agent.document_manager import VectorDatabaseManager
 from agent.module_initializer import ModuleInitializer
 from agent.tool_trace import enable_tool_trace
 from core.battle_report import BattleReportManager
-from core.character_manager import CharacterManager
+from core.character_manager import CharacterManager, has_character
 from core.dice_engine import DiceRoller
 from core.dice_engine import config as dice_config
 from core.documents import DocumentStore
+from core.rulepacks import RulePack, load_rulepack
 from core.worldbook import Worldbook
 from infra.config import Settings, get_settings
 from infra.embeddings import Embeddings, OpenAIEmbeddings
@@ -59,6 +61,30 @@ class Services:
     # One deployment-wide mutation lock shared by TUI admin frames, chat `.model`
     # commands, and subscription refresh publication. Room turn locks remain separate.
     config_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+
+    async def room_rulepack(self, ctx: AgentCtx) -> RulePack:
+        """The rule system THIS room plays: the active character's system, then the
+        room's world-import system pin (`room_system`, written by `.import … world`
+        when the module's pack ships exactly one rulepack), then the deployment's
+        configured default pack. The ONE answer to "which pack is this room on" —
+        every command and tool asks here (it used to be a function-level import in
+        eight places)."""
+        system = ""
+        try:
+            character = await self.characters.get_character(ctx.uid(), ctx.chat_key)
+            if has_character(character):
+                system = character.system
+        except Exception:
+            system = ""
+        if not system:
+            try:
+                system = await self.store.state_get(ctx.chat_key, "room_system") or ""
+            except Exception:
+                system = ""
+        try:
+            return load_rulepack(system or self.settings.default_rulepack)
+        except Exception:
+            return load_rulepack(self.settings.default_rulepack)
 
 
 def build_services(

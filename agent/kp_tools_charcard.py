@@ -28,7 +28,6 @@ from agent.char_from_persona import build_sheet_from_persona, infer_pronoun_note
 from agent.context import AgentCtx
 from agent.hook_runtime import install_room_hooks
 from agent.kp_tools_npc import player_name_refusal
-from agent.kp_tools_subsystems import room_rulepack
 from agent.services import Services
 from agent.tools import tool
 from core.card_split import WorldPayloads, card_hook_codes, detect_world_payloads, split_card
@@ -188,7 +187,7 @@ class CharcardTools:
                 ) or ""
             except Exception:
                 pack_system = ""
-            system = pack_system or (await room_rulepack(self._services, ctx)).system
+            system = pack_system or (await self._services.room_rulepack(ctx)).system
         if ctx.fs is None:
             return i18n.t("charcard.tools.import.no_fs")
         try:
@@ -365,7 +364,7 @@ class CharcardTools:
                     pin_system = pack_system
                     pinned_line = i18n.t("charcard.tools.world.system_pinned", system=pack_system)
                 else:
-                    pack = await room_rulepack(self._services, ctx)
+                    pack = await self._services.room_rulepack(ctx)
                     system = pack.system
 
             card, lorecard = _parse_any_card_file(host_path)
