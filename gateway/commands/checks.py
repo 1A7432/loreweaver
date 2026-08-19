@@ -15,6 +15,7 @@ from core.character_manager import (
     CharacterSheet,
 )
 from core.check_outcome import CheckOutcome, outcome_wire
+from core.check_roll import favor_modifiers, graded_roll
 from core.dice_engine import DiceResult
 from core.resolution import InvalidRollParamError, MissingRollParamError, ResolutionError
 from core.rulepacks import RulePack, load_rulepack
@@ -527,14 +528,10 @@ class ChecksCommands:
         times, rest = _split_multi(args)
         parsed = _parse_check_args(rest, pack, default_name=check.default_skill)
         variant = await _get_rule_variant(ctx)
+        modifiers, _applied = favor_modifiers(check, parsed.bonus, parsed.penalty)
 
-        modifiers: dict[str, int] = {}
-        favor_net = parsed.bonus - parsed.penalty
-        if favor_net > 0 and check.favorable:
-            modifiers[check.favorable] = favor_net
-        elif favor_net < 0 and check.unfavorable:
-            modifiers[check.unfavorable] = -favor_net
-
+        # What the roll is graded against, and the flat sheet modifier — the typed
+        # lane's inputs (a temporary value, an explicit DC, the sheet's own value).
         if resolver.target_kind == "dc":
             target_value = parsed.temp_value  # explicit target; None = ungraded roll
             modifier = check_value(character, pack, parsed.canonical)
@@ -544,17 +541,20 @@ class ChecksCommands:
             target_value = _target_value(character, pack, parsed.canonical, parsed.temp_value)
             modifier = 0
 
-        effective_target = (
-            resolver.effective_target(target_value, difficulty=parsed.difficulty)
-            if target_value is not None
-            else None
-        )
         display_name = pack.display_name(parsed.canonical, ctx.locale)
         lines = []
         for _ in range(min(times, 20)):
-            rolled = ctx.services.dice.roll_for_check(resolver, modifiers=modifiers or None)
-            total = rolled.total + modifier
-            if target_value is None:
+            graded = graded_roll(
+                ctx.services.dice,
+                resolver,
+                modifiers=modifiers,
+                target=target_value,
+                modifier=modifier,
+                variant=variant,
+                difficulty=parsed.difficulty,
+            )
+            rolled, total, outcome = graded.rolled, graded.total, graded.outcome
+            if outcome is None:
                 # No target declared for a modifier-style system: show the roll.
                 ctx.dice(
                     "check",
@@ -574,9 +574,6 @@ class ChecksCommands:
                     )
                 )
                 continue
-            outcome = resolver.interpret(
-                rolled, target_value, variant=variant, difficulty=parsed.difficulty, modifier=modifier
-            )
             label = pack.rank_label(outcome.rank.id, ctx.locale)
             ctx.dice(
                 "check",
@@ -585,7 +582,7 @@ class ChecksCommands:
                 rolls=[rolled.total],
                 total=total,
                 target=target_value,
-                effective_target=effective_target,
+                effective_target=graded.effective_target,
                 outcome=outcome_wire(outcome, label),
                 detail={"modifier": modifier, **dict(rolled.modifiers)},
             )
@@ -608,7 +605,7 @@ class ChecksCommands:
                     "commands.check.result",
                     name=display_name,
                     target=target_value,
-                    effective=effective_target,
+                    effective=graded.effective_target,
                     roll=total,
                     rank=label,
                 )

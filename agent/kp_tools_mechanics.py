@@ -51,6 +51,7 @@ from core.character_manager import (
 )
 from core.character_rules import render_validation_notice, validate_sheet
 from core.check_outcome import CheckOutcome, outcome_wire
+from core.check_roll import favor_modifiers, graded_roll
 from core.dice_engine import DiceResult
 from core.rulepacks import RulePack, load_rulepack
 from core.sheets import check_value, has_check_value, set_sheet_value, sheet_value
@@ -733,22 +734,18 @@ class DiceTools:
                 return i18n.t("kp_tools.dice.skill_check.unknown_skill", name=skill_name)
             sheet_check_value = None if is_npc else check_value(character, pack, canonical)
 
-            # The pack routes the favorable/unfavorable counts to its declared
-            # roll modifiers; opposing counts cancel (net), and the engine
-            # replays multi-dice semantics for count-style modifiers.
+            # The pack routes the favorable/unfavorable counts to its declared roll
+            # modifiers (opposing counts cancel) — `core.check_roll`, shared with the
+            # typed-command lane so the two cannot drift on how a check is rolled.
             net_favor = bonus - penalty
-            modifiers: dict[str, int] = {}
-            favor_label = ""
-            if net_favor > 0 and check.favorable:
-                modifiers[check.favorable] = net_favor
-                favor_label = pack.display_name(check.favorable, ctx.locale)
-            elif net_favor < 0 and check.unfavorable:
-                modifiers[check.unfavorable] = -net_favor
-                favor_label = pack.display_name(check.unfavorable, ctx.locale)
+            modifiers, applied = favor_modifiers(check, bonus, penalty)
+            favor_label = pack.display_name(applied, ctx.locale) if applied else ""
 
             variant = await room_rule_variant(self.services.store, ctx.chat_key)
-            rolled = dice.roll_for_check(resolver, modifiers=modifiers or None)
 
+            # What the roll is graded against, and the flat sheet modifier — the tool
+            # lane's inputs (an explicit DC or the pack default; an NPC's stated number
+            # or the sheet's own value).
             if resolver.target_kind == "dc":
                 # Roll + sheet modifier against an external difficulty target.
                 target = int(dc) if dc is not None else int(check.default_target or 0)
@@ -760,10 +757,10 @@ class DiceTools:
                 target = int(npc_target) if is_npc else int(sheet_check_value or 0)
                 modifier = 0
 
-            outcome = resolver.interpret(rolled, target, variant=variant, modifier=modifier)
+            graded = graded_roll(dice, resolver, modifiers=modifiers, target=target, modifier=modifier, variant=variant)
+            rolled, outcome, total = graded.rolled, graded.outcome, graded.total  # graded: target is an int
             level_label = pack.rank_label(outcome.rank.id, ctx.locale)
             skill_label = pack.display_name(canonical, ctx.locale)
-            total = rolled.total + modifier
 
             prof_label = i18n.t("kp_tools.dice.skill_check.proficient_label") if proficient and check.proficiency else ""
             lines = [i18n.t("kp_tools.dice.skill_check.header", name=display_name, skill=skill_label, extra=prof_label)]
