@@ -29,7 +29,7 @@ from agent.kp_tools_companion import CompanionTools
 from agent.services import build_services
 from gateway.commands import CommandReply, CommandRouter
 from gateway.events import InboundMessage
-from gateway.hub import Event, RoomHub
+from gateway.hub import TURN_QUEUED_KEY, Event, RoomHub
 from gateway.runner import GatewayRunner
 from gateway.session import SessionSource
 from infra.config import Settings
@@ -76,9 +76,14 @@ class _FakeAdapter:
 
     def __init__(self) -> None:
         self.sends: list[tuple] = []
+        self.messages: list[str] = []
 
     async def deliver_event(self, source, session_key, event, *, locale, media_store=None):
         self.sends.append((source, event, session_key))
+        return None
+
+    async def send_message(self, source, message, *, reply_to=None, session_key=None):
+        self.messages.append(message.text)
         return None
 
 
@@ -410,3 +415,68 @@ async def test_save_load_completes_through_the_real_choke_point(tmp_path) -> Non
     assert not hub.turn_lock(keeper.session_key).locked()
     # The load genuinely ran: the checkpointed scene is back.
     assert await services.store.state_get(keeper.session_key, "scene") == "the docks"
+
+
+# ---------------------------------------------------------------------------
+# (7) queued input gets an immediate private receipt, so a player whose message
+#     seems to vanish behind a long turn knows it landed.
+# ---------------------------------------------------------------------------
+
+
+def _system_texts(member: WsMember) -> list[str]:
+    frames = [json.loads(raw) for raw in member.ws.sent]
+    return [frame["text"] for frame in frames if frame.get("type") == "system"]
+
+
+async def test_input_arriving_during_a_running_turn_gets_a_queue_receipt() -> None:
+    hub = RoomHub()
+    services = _services()
+    order: list[tuple[str, str]] = []
+    ann = _ws_member("receipt-room", "conn-a", "Ann")
+    bob = _ws_member("receipt-room", "conn-b", "Bob")
+    keystore = Keystore()
+    _authorize(keystore, ann, bob)
+    server = TuiServer(services, keystore, command_router=_RosterRmwRouter(services.store, order), hub=hub)
+
+    await asyncio.gather(server.dispatch_input(ann, "Ann"), server.dispatch_input(bob, "Bob"))
+    for _ in range(5):
+        await asyncio.sleep(0)  # let the fire-and-forget notice land
+
+    queued = services.i18n.with_locale("en").t(TURN_QUEUED_KEY)
+    notices = _system_texts(ann).count(queued) + _system_texts(bob).count(queued)
+    assert notices == 1  # exactly the connection that had to wait, and only once
+
+
+async def test_a_turn_on_an_idle_room_gets_no_queue_receipt() -> None:
+    hub = RoomHub()
+    services = _services()
+    solo = _ws_member("idle-room", "conn-solo", "Solo")
+    keystore = Keystore()
+    _authorize(keystore, solo)
+    server = TuiServer(services, keystore, command_router=_RosterRmwRouter(services.store, []), hub=hub)
+
+    await server.dispatch_input(solo, "Solo")
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    queued = services.i18n.with_locale("en").t(TURN_QUEUED_KEY)
+    assert queued not in _system_texts(solo)
+
+
+async def test_runner_hub_path_also_receipts_queued_input() -> None:
+    hub = RoomHub()
+    services = _services()
+    router = _RosterRmwRouter(services.store, [])
+    adapter = _FakeAdapter()
+    runner = GatewayRunner(services, [adapter], command_router=router, hub=hub, keystore=Keystore())
+    source = SessionSource(platform="discord", chat_type="dm", chat_id="dm-2", user_id="u-2", user_name="Nora")
+
+    await asyncio.gather(
+        runner.on_inbound(InboundMessage(source=source, text="Ann", at_bot=True)),
+        runner.on_inbound(InboundMessage(source=source, text="Bob", at_bot=True)),
+    )
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    queued = services.i18n.with_locale("en").t(TURN_QUEUED_KEY)
+    assert adapter.messages.count(queued) == 1

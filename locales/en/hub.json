@@ -1,3 +1,4 @@
 {
-  "hub.npc.unknown_name": "Unknown NPC"
+  "hub.npc.unknown_name": "Unknown NPC",
+  "hub.turn.queued": "⏳ A turn is already running at this table. Your input is queued and will run as soon as it is your turn."
 }

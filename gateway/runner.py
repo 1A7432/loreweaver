@@ -17,7 +17,7 @@ from gateway.base_adapter import BaseAdapter
 from gateway.chat import ChatAttachment, ChatComponent, ChatMessage
 from gateway.commands import CommandRouter, CommandSpec
 from gateway.events import InboundMessage
-from gateway.hub import Event, RoomHub
+from gateway.hub import TURN_QUEUED_KEY, Event, RoomHub
 from gateway.media import media_frame, record_media_history
 from gateway.member import AdapterMember
 from gateway.ops import Botlist, Censor, RateLimiter, bot_setting, censor_from_settings
@@ -38,6 +38,9 @@ from infra.media_store import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Fire-and-forget sends need a strong reference or the loop may collect them mid-flight.
+_QUEUE_NOTICES: set[asyncio.Task[Any]] = set()
 
 _CHAT_LOCALE_KEYS = ("chat_locale",)
 _DIRECT_CHAT_TYPES = {"dm", "direct", "private", "c2c"}
@@ -207,6 +210,28 @@ class GatewayRunner:
         await run_scribe_pass(None, self.services, ctx, text, result)
         return ChatMessage(text=result.reply, markdown=True)
 
+    def _notice_turn_queued(self, adapter: BaseAdapter, source: Any, session_key: str, locale: str) -> None:
+        """Tell this channel its input is waiting behind the room's running turn.
+
+        Deliberately NOT awaited: the notice must not sit between the `locked()` check and
+        `acquire()`, because the lock's waiter queue is what makes queued input run in arrival
+        order — an await there would let two racing inputs swap places.
+        """
+
+        async def _send() -> None:
+            try:
+                await adapter.send_message(
+                    source,
+                    ChatMessage(text=get_i18n(locale).t(TURN_QUEUED_KEY)),
+                    session_key=session_key,
+                )
+            except Exception:
+                logger.debug("Could not deliver the turn-queued notice", exc_info=True)
+
+        task = asyncio.create_task(_send())
+        _QUEUE_NOTICES.add(task)
+        task.add_done_callback(_QUEUE_NOTICES.discard)
+
     async def _answer_on_hub(
         self,
         msg: InboundMessage,
@@ -251,7 +276,10 @@ class GatewayRunner:
         # per-room state. Keyed by `session_key` on the shared hub, so it also serializes against
         # a TUI turn on the same room; the companion sub-turn re-enters `run_turn` directly (never
         # this choke point), so it never re-acquires this lock and cannot self-deadlock.
-        async with self.hub.turn_lock(session_key):
+        lock = self.hub.turn_lock(session_key)
+        if lock.locked():
+            self._notice_turn_queued(adapter, source, session_key, locale)
+        async with lock:
             keeper_role = await self._keeper_role(source, session_key)
             if keeper_role is None:
                 hub_ctx.extra.pop("role", None)

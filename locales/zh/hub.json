@@ -1,3 +1,4 @@
 {
-  "hub.npc.unknown_name": "未知 NPC"
+  "hub.npc.unknown_name": "未知 NPC",
+  "hub.turn.queued": "⏳ 桌上正有一个回合在进行。你的输入已入队，轮到时会自动执行。"
 }

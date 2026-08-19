@@ -28,6 +28,10 @@ from infra.room_facets import STORAGE_MEMORY, FacetContext, RoomStateFacet
 
 logger = logging.getLogger(__name__)
 
+# The private line a transport choke point sends the ONE connection whose input arrived while
+# the room's turn lock was held. Lives here because the lock does; both choke points use it.
+TURN_QUEUED_KEY = "hub.turn.queued"
+
 
 @dataclass
 class Event:

@@ -12,6 +12,7 @@ a p2p player and (historically) a chat member sit at the same live table.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -29,7 +30,7 @@ from gateway.audio import add_audio_item, audio_state_frame, has_audio_state, li
 from gateway.avatar import AvatarError, set_user_avatar
 from gateway.commands import CommandRouter
 from gateway.demo import is_demo_setup_request, is_guided_demo_request
-from gateway.hub import Event, RoomHub
+from gateway.hub import TURN_QUEUED_KEY, Event, RoomHub
 from gateway.media import MEDIA_HISTORY_REPLAY_CAP, media_frame, record_media_history
 from gateway.ops import Censor, RateLimiter, censor_from_settings, is_media_enabled, set_media_enabled
 from gateway.session import SessionSource
@@ -266,6 +267,30 @@ def parse_frame(raw: Any) -> dict[str, Any] | None:
 
 def error_frame(code: str, i18n: I18n) -> dict[str, Any]:
     return {"type": "error", "code": code, "message": i18n.t(f"tui.error.{code}")}
+
+
+# Fire-and-forget sends need a strong reference or the loop may collect them mid-flight.
+_QUEUE_NOTICES: set[asyncio.Task[Any]] = set()
+
+
+def notify_turn_queued(member: Any, i18n: I18n) -> None:
+    """Privately tell one connection its input is waiting behind the room's running turn.
+
+    Deliberately NOT awaited: the notice must not sit between the `locked()` check and
+    `acquire()`, because the lock's waiter queue is what makes queued input run in arrival
+    order — an await there would let two racing inputs swap places. A failed send is a
+    cosmetic loss, so it is swallowed rather than failing the turn that follows.
+    """
+
+    async def _send() -> None:
+        try:
+            await member.send_frame({"type": "system", "level": "info", "text": i18n.t(TURN_QUEUED_KEY)})
+        except Exception:
+            logger.debug("Could not deliver the turn-queued notice", exc_info=True)
+
+    task = asyncio.create_task(_send())
+    _QUEUE_NOTICES.add(task)
+    task.add_done_callback(_QUEUE_NOTICES.discard)
 
 
 def new_id() -> str:
@@ -989,7 +1014,10 @@ class SessionCore:
             # Serialize the WHOLE turn per room (F8): two connections in the same room must not
             # interleave their read-modify-write of the shared per-room state. `run_turn` publishes
             # a companion sub-turn inline (re-entering `run_turn`, not this choke), so no re-lock.
-            async with self.hub.turn_lock(member.session_key):
+            lock = self.hub.turn_lock(member.session_key)
+            if lock.locked():
+                notify_turn_queued(member, i18n)
+            async with lock:
                 # A queued turn must not retain authority from before it waited. This also
                 # refreshes `member.role` before `_ctx_for` copies it into command privileges.
                 if not self._refresh_member_authorization(member):
