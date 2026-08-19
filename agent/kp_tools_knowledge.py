@@ -90,6 +90,7 @@ from typing import Any
 from agent.context import AgentCtx
 from agent.history import DEFAULT_HISTORY_KEY, load_chain
 from agent.services import Services
+from agent.tool_phase import CAPABILITY_MODULE_POOL
 from agent.tools import tool
 from core.battle_report import _default_session_name
 from core.documents import KEEPER_VIEWER, MODULE_POOL_ID
@@ -339,7 +340,7 @@ class ModuleTools(_KnowledgeToolsBase):
             body = i18n.t("kp_tools.know.catalog.failed", error=str(exc))
         return self._keeper_wrap(i18n, body)
 
-    @tool(keeper_only=True, read_only=True)
+    @tool(keeper_only=True, read_only=True, needs=CAPABILITY_MODULE_POOL)
     async def query_knowledge_pool(self, ctx: AgentCtx, query: str, pool_type: str = "keeper") -> str:
         """Search the module knowledge pool for a topic -- an NPC's truth, a scene's behind-the-scenes
         setting, already-unlocked clues, etc. (KEEPER-ONLY; results are for the AI's own reasoning).
@@ -476,7 +477,7 @@ class ModuleTools(_KnowledgeToolsBase):
             body = i18n.t("kp_tools.know.inspect.failed", error=str(exc))
         return self._keeper_wrap(i18n, body)
 
-    @tool(keeper_only=True, read_only=True)
+    @tool(keeper_only=True, read_only=True, needs=CAPABILITY_MODULE_POOL)
     async def list_module_elements(self, ctx: AgentCtx, element_type: str = "scenes") -> str:
         """List the names of every scene/NPC/clue/truth in the module (KEEPER-ONLY), for browsing before
         drilling into one with get_module_element_detail.
@@ -512,7 +513,7 @@ class ModuleTools(_KnowledgeToolsBase):
             body = i18n.t("kp_tools.know.elements.failed", error=str(exc))
         return self._keeper_wrap(i18n, body)
 
-    @tool(keeper_only=True, read_only=True)
+    @tool(keeper_only=True, read_only=True, needs=CAPABILITY_MODULE_POOL)
     async def get_module_element_detail(self, ctx: AgentCtx, element_type: str, name: str) -> str:
         """Get one scene/NPC/clue/truth's full field-by-field detail (KEEPER-ONLY) -- solves
         inspect_knowledge_pool's truncation for long entries.
@@ -567,7 +568,7 @@ class ModuleTools(_KnowledgeToolsBase):
             body = i18n.t("kp_tools.know.elements.detail_failed", error=str(exc))
         return self._keeper_wrap(i18n, body)
 
-    @tool(keeper_only=True, read_only=True)
+    @tool(keeper_only=True, read_only=True, needs=CAPABILITY_MODULE_POOL)
     async def get_module_summary(self, ctx: AgentCtx) -> str:
         """Get the module's global overview -- summary + background + truths + timeline + scene/NPC/threat
         lists (KEEPER-ONLY). Call this once before the session opens to build full behind-the-scenes context.
@@ -730,7 +731,7 @@ class ModuleTools(_KnowledgeToolsBase):
         except Exception as exc:
             return i18n.t("kp_tools.know.update.failed", error=str(exc))
 
-    @tool
+    @tool(needs=CAPABILITY_MODULE_POOL)
     async def unlock_for_player(self, ctx: AgentCtx, element_type: str, name: str) -> str:
         """Unlock a scene/NPC/clue/truth from the keeper pool into the player pool once the players have
         actually discovered it through investigation or conversation -- keep this in sync as play

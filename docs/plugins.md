@@ -815,7 +815,13 @@ actually shipped as, for anyone reading the code.)*
    is ordinary play, so the light `sketch_npc` counterpart is available in both.
    `agent/tool_phase.py` decides a room's phase (a keeper's `.phase` pin first,
    otherwise the room's own module-init state), and unmarked tools are visible
-   in both phases so a new tool is never silently unreachable.
+   in both phases so a new tool is never silently unreachable. A third filter of
+   the same family: `needs: str` names a ROOM CAPABILITY a tool cannot work
+   without (today only `"module_pool"`, the knowledge pool a `--module` text
+   upload builds). A module imported as a WORLD CARD has no pool — its lore is
+   worldbook entries — so those tools are dropped there rather than offered and
+   refused; `agent.tool_phase.room_capabilities` recomputes per turn, so a room
+   that uploads a module mid-session gets them back by itself.
    `romance-relationships` shipped as
    the second built-in skill, backed by coc7 intimate-vocabulary aliases
    (魅惑/媚惑/勾引/风情 → 取悦, 调情/撩拨 → 话术, 洞察情感/察言观色/共情/同理心 →

@@ -50,7 +50,7 @@ from agent.hook_runtime import apply_hook_writes, load_room_hook_engine, record_
 from agent.kp_tools_subsystems import dispatch_subsystem, room_rulepack, subsystem_schemas
 from agent.prompt_builder import build_system_prompt_parts
 from agent.services import Services
-from agent.tool_phase import room_phase
+from agent.tool_phase import room_capabilities, room_phase
 from agent.tools import Toolset
 from agent.turn_checks import (
     MAX_ROUNDS_PER_TURN,
@@ -325,6 +325,10 @@ async def run_kp_turn(
     # once here and threaded through every schema build and dispatch this turn so the two
     # can never disagree. See `agent.tool_phase` for where the phase comes from.
     phase = await room_phase(services.store, ctx.chat_key)
+    # …and what this ROOM actually has behind those tools: a world-card room has no
+    # module knowledge pool, so the five pool-backed tools could only ever fail there.
+    # Same filter family, same once-per-turn threading (see `agent.tool_phase`).
+    capabilities = await room_capabilities(services.documents, ctx.chat_key)
     # Stage D tool materialization: the room's rulepack declares which subsystem
     # tools exist here (a system that declares none materializes none), and their
     # schemas ride alongside the static toolset for this turn.
@@ -437,7 +441,7 @@ async def run_kp_turn(
     # Built once: `unlocked` and `phase` are fixed for the turn, so every round sends
     # the same catalog — and the meter's estimate fallback below has to size the same
     # bytes the rounds actually sent.
-    round_tools = [*toolset.schemas(unlocked, phase=phase), *subsystem_tools]
+    round_tools = [*toolset.schemas(unlocked, phase=phase, capabilities=capabilities), *subsystem_tools]
 
     async def _recover_from_overflow() -> bool:
         """Fold once because the provider says this prompt is at the window; retry?
@@ -571,6 +575,7 @@ async def run_kp_turn(
                     tool_trace,
                     unlocked,
                     phase=phase,
+                    capabilities=capabilities,
                     room_pack=room_pack,
                     hook_engine=hook_engine,
                     on_tool_event=on_tool_event,
@@ -608,6 +613,7 @@ async def run_kp_turn(
             i18n,
             unlocked,
             phase=phase,
+            capabilities=capabilities,
             room_pack=room_pack,
             subsystem_tools=subsystem_tools,
             hook_engine=hook_engine,
@@ -926,11 +932,16 @@ def _assistant_tool_call_message(result: ChatResult) -> dict:
 
 
 def _schemas_for_tool_names(
-    toolset: Toolset, unlocked: set[str] | None, names: frozenset[str], *, phase: str | None = None
+    toolset: Toolset,
+    unlocked: set[str] | None,
+    names: frozenset[str],
+    *,
+    phase: str | None = None,
+    capabilities: set[str] | None = None,
 ) -> list[dict]:
     """Return schemas for the named tools that are available in this turn."""
     schemas = []
-    for schema in toolset.schemas(unlocked, phase=phase):
+    for schema in toolset.schemas(unlocked, phase=phase, capabilities=capabilities):
         try:
             name = schema["function"]["name"]
         except (KeyError, TypeError):
@@ -966,6 +977,7 @@ async def _dispatch_and_record(
     unlocked: set[str] | None = None,
     *,
     phase: str | None = None,
+    capabilities: set[str] | None = None,
     room_pack: RulePack | None = None,
     hook_engine=None,
     on_tool_event: Callable[[dict], Awaitable[None]] | None = None,
@@ -989,7 +1001,7 @@ async def _dispatch_and_record(
     if len(result.tool_calls) > 1 and all(toolset.is_read_only(call.name) for call in result.tool_calls):
         results = await asyncio.gather(
             *(
-                _dispatch_one(toolset, ctx, services, call, tool_trace, unlocked, phase, room_pack, hook_engine)
+                _dispatch_one(toolset, ctx, services, call, tool_trace, unlocked, phase, capabilities, room_pack, hook_engine)
                 for call in result.tool_calls
             )
         )
@@ -1014,7 +1026,7 @@ async def _dispatch_and_record(
             suppressed = True
         else:
             tool_result, suppressed = await _dispatch_one(
-                toolset, ctx, services, call, tool_trace, unlocked, phase, room_pack, hook_engine
+                toolset, ctx, services, call, tool_trace, unlocked, phase, capabilities, room_pack, hook_engine
             )
         entry = _record_call(toolset, ctx, call, tool_result, suppressed, conversation, tool_trace)
         await _announce_tool_event(on_tool_event, entry)
@@ -1029,6 +1041,7 @@ async def _dispatch_one(
     tool_trace: list[dict],
     unlocked: set[str] | None,
     phase: str | None,
+    capabilities: set[str] | None,
     room_pack: RulePack | None,
     hook_engine,
 ) -> tuple[str, bool]:
@@ -1042,7 +1055,7 @@ async def _dispatch_one(
         else None
     )
     if tool_result is None:
-        tool_result = await toolset.dispatch(call.name, ctx, call.arguments, unlocked, phase=phase)
+        tool_result = await toolset.dispatch(call.name, ctx, call.arguments, unlocked, phase=phase, capabilities=capabilities)
     return tool_result, False
 
 
@@ -1147,6 +1160,7 @@ async def _run_turn_checks(
     unlocked: set[str] | None = None,
     *,
     phase: str | None = None,
+    capabilities: set[str] | None = None,
     room_pack: RulePack | None = None,
     subsystem_tools: list[dict] | None = None,
     hook_engine=None,
@@ -1194,7 +1208,7 @@ async def _run_turn_checks(
                 result = await _chat_with_continuation_cleanup(
                     services,
                     convo,
-                    tools=[*toolset.schemas(unlocked, phase=phase), *(subsystem_tools or [])],
+                    tools=[*toolset.schemas(unlocked, phase=phase, capabilities=capabilities), *(subsystem_tools or [])],
                     tool_choice="auto",
                     temperature=temperature,
                 )
@@ -1216,6 +1230,7 @@ async def _run_turn_checks(
                         tool_trace,
                         unlocked,
                         phase=phase,
+                        capabilities=capabilities,
                         room_pack=room_pack,
                         hook_engine=hook_engine,
                         on_tool_event=on_tool_event,

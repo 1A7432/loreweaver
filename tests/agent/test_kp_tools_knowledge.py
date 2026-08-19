@@ -423,3 +423,37 @@ async def test_knowledge_tools_end_to_end(tmp_path):
 
     status_after_delete = await module_tools.get_module_init_status(ctx)
     assert services.i18n.with_locale("en").t("kp_tools.know.init.status_none") == status_after_delete
+
+
+async def test_pool_backed_tools_are_absent_from_a_room_that_has_no_pool():
+    """A world-card room (`.import … world`) never builds a module knowledge pool, so the
+    five pool-backed tools could only fail there — a 2026-08-18 play-test logged 102 such
+    calls in 50 turns. They leave the schema until the room has a pool, and dispatch
+    refuses them with a reason meanwhile (defense in depth, like gating and phases)."""
+    from agent.kp_tools_knowledge import ModuleTools
+    from agent.tool_phase import CAPABILITY_MODULE_POOL, room_capabilities
+    from agent.tools import Toolset
+    from infra.config import ImageGenSettings
+
+    services = build_services(Settings(imagegen=ImageGenSettings()), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(8))
+    chat_key = "world-card-room"
+    ctx = AgentCtx(chat_key=chat_key, user_id="kp", locale="en")
+    toolset = Toolset(ModuleTools(services))
+    pool_tools = {"query_knowledge_pool", "list_module_elements", "get_module_element_detail", "get_module_summary", "unlock_for_player"}
+
+    capabilities = await room_capabilities(services.documents, chat_key)
+    assert capabilities == set()
+    offered = {schema["function"]["name"] for schema in toolset.schemas(capabilities=capabilities)}
+    assert not (offered & pool_tools)
+    refused = await toolset.dispatch("get_module_summary", ctx, {}, capabilities=capabilities)
+    assert "query_lore" in refused  # the refusal names what this room DOES have
+
+    # A room that gains a pool mid-session gets them back with no ceremony.
+    await services.documents.put_singleton(chat_key, "module_pool", {"keeper": {"scenes": []}, "player": {}})
+    capabilities = await room_capabilities(services.documents, chat_key)
+    assert capabilities == {CAPABILITY_MODULE_POOL}
+    offered = {schema["function"]["name"] for schema in toolset.schemas(capabilities=capabilities)}
+    assert pool_tools <= offered
+
+    # An unfiltered caller (every pre-capability call site) still sees everything.
+    assert pool_tools <= {schema["function"]["name"] for schema in toolset.schemas()}

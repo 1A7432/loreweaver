@@ -71,6 +71,7 @@ class ToolMeta:
     gated: bool
     prep_only: bool
     read_only: bool
+    needs: str
     param_descriptions: dict[str, str]
     _schema: dict[str, Any] | None = field(default=None, init=False, repr=False, compare=False)
 
@@ -90,6 +91,7 @@ def tool(
     gated: bool = False,
     prep_only: bool = False,
     read_only: bool = False,
+    needs: str = "",
     params: dict[str, str] | None = None,
 ):
     """Mark an async method as an AI-KP tool. Schema is generated from type hints + docstring.
@@ -122,6 +124,17 @@ def tool(
     a genuine reader opts in. `speak_as_npc`/`companion_act` contain nested model
     calls and must never carry it.
 
+    `needs` names a ROOM CAPABILITY the tool cannot work without — today the only
+    one is `"module_pool"`, the knowledge pool a `--module` text upload builds. A
+    world-card room (`.import … world`) never has one, so those five tools could only
+    ever fail there: a 2026-08-18 play-test logged 102 such calls in 50 turns, ~2 per
+    player turn of pure waste plus the model's attention. A tool whose `needs` is not
+    in the caller's capability set is dropped from `schemas()` and refused by
+    `dispatch()`, exactly like a gated or wrong-phase tool. Capabilities are recomputed
+    every turn (`agent.tool_phase.room_capabilities`), so a room that gains a pool
+    mid-session gets the tools back with no ceremony. Passing no capability set filters
+    nothing — every caller that predates this is unaffected.
+
     Attaches the metadata to the function as `__tool_meta__`; the function's
     behavior is otherwise unchanged.
     """
@@ -135,6 +148,7 @@ def tool(
             gated=gated,
             prep_only=prep_only,
             read_only=read_only,
+            needs=needs,
             param_descriptions=dict(params or {}),
         )
         return func
@@ -162,7 +176,13 @@ class Toolset:
                 meta: ToolMeta = bound_method.__tool_meta__
                 self._entries[meta.name] = _ToolEntry(meta=meta, bound=bound_method)
 
-    def schemas(self, unlocked: set[str] | None = None, *, phase: str | None = None) -> list[dict[str, Any]]:
+    def schemas(
+        self,
+        unlocked: set[str] | None = None,
+        *,
+        phase: str | None = None,
+        capabilities: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
         """OpenAI function-calling schema list: every non-gated tool, ALWAYS,
         plus any gated tool whose name is in `unlocked`.
 
@@ -174,6 +194,10 @@ class Toolset:
         `phase` (M20 B) is the room's tool phase. Pass ``"play"`` to drop the
         `prep_only` bulk tools; ``None`` (the default) filters nothing, so every
         caller that does not know about phases is unaffected.
+
+        `capabilities` is what this ROOM actually has (see `needs` on `@tool`): a tool
+        naming a capability the room lacks cannot succeed there, so it is not offered.
+        ``None`` filters nothing, same posture as `phase`.
         """
         allowed = unlocked or set()
         return [
@@ -181,6 +205,7 @@ class Toolset:
             for entry in self._entries.values()
             if (not entry.meta.gated or entry.meta.name in allowed)
             and not (entry.meta.prep_only and phase == PLAY_PHASE)
+            and _capability_met(entry.meta, capabilities)
         ]
 
     def names(self) -> list[str]:
@@ -213,6 +238,7 @@ class Toolset:
         unlocked: set[str] | None = None,
         *,
         phase: str | None = None,
+        capabilities: set[str] | None = None,
     ) -> str:
         """Look up `name`, coerce `arguments` to its parameter types, call it, and
         guarantee a `str` result.
@@ -233,6 +259,10 @@ class Toolset:
             return t("agent.tools.tool_not_available", locale=ctx.locale, name=name)
         if entry.meta.prep_only and phase == PLAY_PHASE:
             return t("agent.tools.prep_phase_only", locale=ctx.locale, name=name)
+        if not _capability_met(entry.meta, capabilities):
+            # Defense in depth, like the gated/phase refusals above: a model that
+            # remembers the name from another room still gets a reason, not a stack trace.
+            return t("agent.tools.capability_missing", locale=ctx.locale, name=name, capability=entry.meta.needs)
 
         try:
             coerced = _coerce_arguments(entry.meta.fn, arguments or {})
@@ -243,6 +273,12 @@ class Toolset:
             return t("agent.tools.bad_arguments", locale=ctx.locale, name=name, error=str(exc))
 
         return result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+
+
+def _capability_met(meta: ToolMeta, capabilities: set[str] | None) -> bool:
+    """Whether `meta`'s required room capability (if any) is present. An unfiltered
+    caller (`capabilities is None`) sees everything, exactly as before `needs` existed."""
+    return not meta.needs or capabilities is None or meta.needs in capabilities
 
 
 # ---------------------------------------------------------------------------

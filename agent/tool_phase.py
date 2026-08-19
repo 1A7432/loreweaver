@@ -24,6 +24,7 @@ wins — including pinning a never-initialized freeform room to `play`.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from agent.tools import PLAY_PHASE, PREP_PHASE
 from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
@@ -54,6 +55,29 @@ async def room_phase(store: Store, chat_key: str) -> str:
         logger.debug("tool phase unreadable for %s; falling back to prep", chat_key, exc_info=True)
         return PREP_PHASE
     return PLAY_PHASE if status in _READY_STATES else PREP_PHASE
+
+
+# Room capabilities (see `needs` on `agent.tools.tool`). One name so far: the module
+# knowledge pool a `--module` TEXT upload builds. A world-card room never has one.
+CAPABILITY_MODULE_POOL = "module_pool"
+
+
+async def room_capabilities(documents: Any, chat_key: str) -> set[str]:
+    """What backing stores this room actually has, for the schema filter.
+
+    Recomputed per turn, so a room that uploads a module mid-session gets the pool
+    tools back by itself. Never raises: an unreadable store reports NO capability,
+    which only hides tools that would have failed anyway.
+    """
+    capabilities: set[str] = set()
+    try:
+        doc = await documents.get_singleton(chat_key, "module_pool")
+    except Exception:  # noqa: BLE001 — see docstring
+        logger.debug("room capabilities unreadable for %s", chat_key, exc_info=True)
+        return capabilities
+    if doc is not None and isinstance(doc.data, dict) and doc.data:
+        capabilities.add(CAPABILITY_MODULE_POOL)
+    return capabilities
 
 
 async def set_room_phase(store: Store, chat_key: str, phase: str | None) -> None:
