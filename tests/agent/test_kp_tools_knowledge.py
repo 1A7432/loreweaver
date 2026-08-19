@@ -379,6 +379,14 @@ async def test_knowledge_tools_end_to_end(tmp_path):
     ]
     ctx.extra.pop("clock_advances", None)
 
+    # An engine-readable face the engine REFUSES to move (before day 1) is not a
+    # custom-calendar advance: nothing recorded, no ✅.
+    await note_tools.game_clock(ctx, action="set", value="D1 01:00")
+    refused = await note_tools.game_clock(ctx, action="advance", value="-2天")
+    assert refused.startswith("⚠️") and "clock_advances" not in ctx.extra
+    clock_raw = json.loads(await services.store.state_get(CHAT_KEY, "game_clock"))
+    assert clock_raw["current_time"] == "D1 01:00"
+
     # -- 6. start_session_recording + generate_session_report produce a report ------------------------
     await session_tools.start_session_recording(ctx, session_name="Blackmoor One-Shot")
     await services.battles.add_dice_roll(CHAT_KEY, "u1", "Nora", "1d100", 7, True, "success")

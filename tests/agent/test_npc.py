@@ -640,19 +640,43 @@ async def test_a_player_character_can_never_be_created_as_an_npc_or_companion():
 
 
 async def test_a_companion_whose_sheet_cannot_be_written_leaves_no_record_behind(monkeypatch):
-    """`add_companion` writes a record, then a sheet. A sheet write that fails must not
-    leave a phantom companion `companion_act` would still drive (2026-08-18 《安土》 npc-4)."""
+    """`add_companion` is record + sheet or nothing (2026-08-18 《安土》 npc-4 was a record
+    whose sheet never landed): the sheet is built BEFORE the record exists, a failed sheet
+    write undoes a record this call minted — and never one that already existed, since
+    re-adding a companion is idempotent and its seeded knowledge is not this call's to lose."""
     from agent.kp_tools_companion import CompanionTools
     from infra.config import ImageGenSettings
 
     services = build_services(Settings(imagegen=ImageGenSettings()), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(8))
     chat_key = "antu-orphan"
     ctx = _ctx(chat_key)
+    tools = CompanionTools(services)
 
-    async def _boom(*_args, **_kwargs):
+    def _no_sheet(*_args, **_kwargs):
+        raise RuntimeError("bad roll expression")
+
+    async def _no_write(*_args, **_kwargs):
         raise RuntimeError("disk full")
 
-    monkeypatch.setattr(services.characters, "save_character", _boom)
-    reply = await CompanionTools(services).add_companion(ctx, name="Silas", persona="an archer")
+    # Generation fails: nothing was written, not even the record.
+    monkeypatch.setattr(services.characters, "generate_character", _no_sheet)
+    reply = await tools.add_companion(ctx, name="Silas", persona="an archer")
+    assert reply.startswith("❌") and "bad roll expression" in reply
+    assert await npc_records.list_companions(services.documents, chat_key) == []
+    monkeypatch.undo()
+
+    # The write fails on a fresh name: the record this call minted is undone.
+    monkeypatch.setattr(services.characters, "save_character", _no_write)
+    reply = await tools.add_companion(ctx, name="Silas", persona="an archer")
     assert reply.startswith("❌") and "disk full" in reply
     assert await npc_records.list_companions(services.documents, chat_key) == []
+    monkeypatch.undo()
+
+    # A real companion with seeded knowledge, then a re-add whose write fails: the
+    # existing record survives untouched.
+    assert (await tools.add_companion(ctx, name="Silas", persona="an archer")).startswith("✅")
+    await npc_records.npc_learns(services.documents, chat_key, "Silas", "the well is poisoned")
+    monkeypatch.setattr(services.characters, "save_character", _no_write)
+    assert (await tools.add_companion(ctx, name="Silas", persona="an archer")).startswith("❌")
+    (silas,) = await npc_records.list_companions(services.documents, chat_key)
+    assert silas.knowledge == ["the well is poisoned"]

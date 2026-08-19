@@ -334,7 +334,7 @@ def test_render_panel_text_binds_hides_and_localizes_like_the_client():
         "Come home.",
         "📰 Flood (Gazette · 1926)",
         "Rain.",
-        # `map_pin Well` binds its note to the missing `ghost` → whole block hidden
+        "📍 Well",  # its optional note binds to the missing `ghost` → the note drops, the pin stays
         "📍 Gate",
         "🖼 The gate",
     ]

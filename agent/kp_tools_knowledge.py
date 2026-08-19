@@ -94,7 +94,7 @@ from agent.tool_phase import CAPABILITY_MODULE_POOL
 from agent.tools import tool
 from core.battle_report import _default_session_name
 from core.documents import KEEPER_VIEWER, MODULE_POOL_ID
-from core.game_clock import advance_game_time, parse_time_delta
+from core.game_clock import advance_game_time, face_is_engine_readable, parse_time_delta
 from core.module_initializer import ProgressCb, _emit
 from infra.i18n import I18n
 from infra.room_facets import STORAGE_DOCUMENTS, RoomStateFacet
@@ -1224,6 +1224,10 @@ class NoteTools(_KnowledgeToolsBase):
                     if parse_time_delta(value) is None:
                         # The DELTA is the problem: nothing to record, nothing to move.
                         return i18n.t("kp_tools.know.clock.advance_unparsed", delta=value, time=current)
+                    if face_is_engine_readable(current):
+                        # Delta AND face parse, yet the engine declined: the move would
+                        # land before day 1. A refusal, not an advance — nothing recorded.
+                        return i18n.t("kp_tools.know.clock.advance_refused", delta=value, time=current)
                     # The delta parses; only the FACE does not — a module running its own
                     # calendar ("澹洲三百年六月初二 午时"). The face stays as written (a
                     # "X → +2 hours" chain would pollute the HUD and the model can `set` a

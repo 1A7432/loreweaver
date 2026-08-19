@@ -23,6 +23,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from infra.file_permissions import ensure_private_directory, restrict_file
+
 logger = logging.getLogger(__name__)
 
 MAX_TRACE_FIELD_CHARS = 20_000
@@ -31,12 +33,18 @@ _TRACE_PATH: Path | None = None
 
 
 def enable_tool_trace(path: str | Path | None) -> None:
-    """Point the trace at `path` (absolute), or disable it with `None`/empty."""
+    """Point the trace at `path` (absolute), or disable it with `None`/empty.
+
+    The directory is created private (`0700`, like every other secret-bearing writer in
+    the repo — keystore, media store, backups) and the file is held at `0600` after each
+    write: under `data_dir` that is defense in depth, on an operator's absolute path it is
+    the only thing keeping keeper-grade content off a shared box's world-readable files.
+    An existing, user-chosen parent keeps its own policy (`tighten_existing=False`)."""
     global _TRACE_PATH
     _TRACE_PATH = Path(path) if path else None
     if _TRACE_PATH is not None:
         try:
-            _TRACE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            ensure_private_directory(_TRACE_PATH.parent, tighten_existing=False)
         except OSError:
             logger.warning("tool trace directory is unwritable; tracing off: %s", _TRACE_PATH, exc_info=True)
             _TRACE_PATH = None
@@ -80,5 +88,6 @@ def record_tool_call(
         )
         with _TRACE_PATH.open("a", encoding="utf-8") as handle:
             handle.write(line + "\n")
+        restrict_file(_TRACE_PATH)
     except Exception:  # noqa: BLE001 — see module docstring
         logger.debug("tool trace write failed", exc_info=True)

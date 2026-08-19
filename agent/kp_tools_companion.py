@@ -97,21 +97,26 @@ class CompanionTools:
         try:
             pack = await room_rulepack(self._services, ctx) if not system.strip() else load_rulepack(system)
 
-            record = await npc_records.create_companion(
-                self._services.documents, ctx.chat_key, name, persona=persona, playstyle=playstyle, stat_char=name
-            )
-
+            # A companion is its record AND its sheet: a record whose sheet never landed is a
+            # phantom `companion_act` would still drive (the 2026-08-18 《安土》 run's `npc-4`).
+            # So the sheet is BUILT before the record exists (a generation failure creates
+            # nothing), and a failed sheet WRITE undoes the record — but only a record this
+            # call minted: re-adding an existing companion is idempotent by design, and its
+            # seeded persona/knowledge is not this call's to delete.
             if generate:
                 sheet = self._services.characters.generate_character(pack.system, name)
             else:
                 sheet = CharacterSheet(name=name, system=pack.system)
+            documents = self._services.documents
+            minted = await npc_records.find_npc_by_name(documents, ctx.chat_key, name) is None
+            record = await npc_records.create_companion(
+                documents, ctx.chat_key, name, persona=persona, playstyle=playstyle, stat_char=name
+            )
             try:
                 await self._services.characters.save_character(_companion_uid(record.id), ctx.chat_key, sheet)
             except Exception:
-                # A companion is its record AND its sheet: a record whose sheet never landed
-                # is a phantom `companion_act` would still drive (the 2026-08-18 《安土》 run's
-                # `npc-4`). Undo the record rather than leave the two halves disagreeing.
-                await npc_records.delete_npc(self._services.documents, ctx.chat_key, record.id)
+                if minted:
+                    await npc_records.delete_npc(documents, ctx.chat_key, record.id)
                 raise
 
             return i18n.t("companion.tools.add.done", name=record.name, id=record.id, system=pack.system)

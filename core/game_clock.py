@@ -82,6 +82,17 @@ def parse_game_datetime(value: str) -> datetime | None:
     return _parse_with_format(value)[0]
 
 
+def face_is_engine_readable(value: str) -> bool:
+    """Whether the engine can MOVE this clock face by itself — a day face (``D3 14:00`` /
+    ``第3天 14:00``) or one of the datetime formats. A face that is not (a module's own
+    calendar, ``澹洲三百年六月初二 午时``) is still a legitimate clock: its advances are
+    counted for the room's hooks while the face text is the keeper's to set. The
+    distinction matters when `advance_game_time` declines: on a readable face that is
+    the engine REFUSING the move (before day 1), on an unreadable one it is merely
+    unable to move the text."""
+    return _parse_day_face(value) is not None or _parse_with_format(value)[0] is not None
+
+
 def parse_time_delta(value: str) -> timedelta | None:
     """Parse +N分钟/+N小时/+N天 and common English unit deltas."""
     text = value.strip().lower().replace(" ", "")

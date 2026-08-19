@@ -211,7 +211,9 @@ class CharcardTools:
             notices = [render_validation_notice(i18n, violations), _stripped_notice(i18n, world)]
 
             if as_.strip().lower() == "companion":
-                record = await npc_records.create_companion(self._services.documents,
+                documents = self._services.documents
+                minted = await npc_records.find_npc_by_name(documents, ctx.chat_key, final_name) is None
+                record = await npc_records.create_companion(documents,
                     ctx.chat_key,
                     final_name,
                     persona=_persona_text(card),
@@ -222,8 +224,11 @@ class CharcardTools:
                 try:
                     await self._services.characters.save_character(_companion_uid(record.id), ctx.chat_key, sheet)
                 except Exception:
-                    # Record + sheet or nothing (see `CompanionTools.add_companion`).
-                    await npc_records.delete_npc(self._services.documents, ctx.chat_key, record.id)
+                    # Record + sheet or nothing — for a record THIS call minted (see
+                    # `CompanionTools.add_companion`); a re-import of an existing companion
+                    # must not delete what it did not create.
+                    if minted:
+                        await npc_records.delete_npc(documents, ctx.chat_key, record.id)
                     raise
                 lore = await self._import_card_lore(ctx, card)
                 result = i18n.t(

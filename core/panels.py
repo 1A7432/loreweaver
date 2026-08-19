@@ -530,6 +530,18 @@ def parse_panels_text(text: str) -> tuple[PanelSpec, ...]:
 
 MAX_TEXT_REPEAT_INSTANCES = MAX_REPEAT_INSTANCES
 
+# Per kind: (required, optional) template fields, mirroring `clients/tui/src/panelTemplates.ts`
+# — a required binding that misses drops the block, an optional one drops only itself.
+_TEXT_FIELDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "meter": (("label", "value", "min", "max"), ()),
+    "stat": (("label", "value"), ()),
+    "badge": (("label",), ("tone",)),
+    "text": (("text",), ("style",)),
+    "image": ((), ("caption", "alt")),
+    "choices": ((), ("prompt",)),
+    **_PERFORMANCE_KINDS,
+}
+
 
 def _localized_text(value: Any, locale: str) -> str:
     if isinstance(value, dict):
@@ -595,14 +607,19 @@ def _block_text(block: Mapping[str, Any], index: Mapping[str, Mapping[str, Any]]
     if kind == "divider":
         return ["—"]
 
+    # Required fields resolve or the WHOLE block hides; an optional field this viewer
+    # cannot see is simply left out (a `map_pin` without its note, a badge without its
+    # tone) — the reference client's rule for both, so text and rich rendering agree.
+    required, optional = _TEXT_FIELDS.get(str(kind), ((), ()))
     values: dict[str, Any] = {}
-    for key in ("label", "value", "min", "max", "text", "prompt", "caption", "alt", "tone", "style",
-                "body", "headline", "title", "subtitle", "act", "from", "to", "date", "source", "note"):
+    for key in (*required, *optional):
         if key not in block:
             continue
         resolved = _resolved_scalar(block[key], index, leaf)
         if resolved is _MISSING:
-            return []  # a binding this viewer cannot see hides the WHOLE block
+            if key in required:
+                return []
+            continue
         values[key] = _localized_text(resolved, locale) if key not in ("value", "min", "max") else resolved
 
     if kind == "meter":

@@ -207,6 +207,20 @@ async def _resolve_id(documents: Any, chat_key: str, name_or_id: str) -> str | N
     return None
 
 
+async def find_npc_by_name(documents: Any, chat_key: str, name: str) -> NpcRecord | None:
+    """The record whose name is EXACTLY `name` (case-insensitive), or None — the same test
+    `create_npc` uses to hand back an existing record instead of minting a duplicate, so a
+    caller can tell "this call created it" from "it was already there" before it decides
+    what an undo may touch."""
+    wanted = name.strip().lower()
+    if not wanted:
+        return None
+    for _npc_id, record in await _load_all(documents, chat_key):
+        if record.name.strip().lower() == wanted:
+            return record
+    return None
+
+
 async def player_character_names(documents: Any, chat_key: str) -> set[str]:
     """The names this room has given to PLAYER characters, casefolded: every character
     sheet not owned by an AI companion (the sheet name IS the identity — see

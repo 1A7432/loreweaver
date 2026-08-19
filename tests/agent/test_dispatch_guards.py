@@ -278,6 +278,13 @@ async def test_tool_trace_records_every_dispatched_call_when_an_operator_asks(tm
     assert lines[0]["phase"] in ("prep", "play")
     assert "nope" in lines[1]["result"]  # the refusal, verbatim
 
+    # The file holds keeper-grade content: private directory, owner-only file.
+    import os
+    import stat
+
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    assert stat.S_IMODE(os.stat(path.parent).st_mode) == 0o700
+
     # Disabled again: a later turn writes nothing more.
     llm2 = FakeLLM(script=[assistant_tools(tool_call("echo", text="quiet")), assistant_text("Done.")])
     await run_kp_turn(_ctx("traced-room"), _services(llm2), Toolset(_Probe()), "again")
