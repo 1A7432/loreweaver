@@ -12,7 +12,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from agent.tools import enable_tool_trace
+from agent.tool_trace import enable_tool_trace
 from core.battle_report import BattleReportManager
 from core.character_manager import CharacterManager
 from core.dice_engine import DiceRoller

@@ -10,7 +10,7 @@ from __future__ import annotations
 from agent.context import AgentCtx
 from agent.loop import MAX_TOOL_RESULT_CHARS, run_kp_turn
 from agent.services import build_services
-from agent.tools import PLAY_PHASE, Toolset, tool
+from agent.tools import Toolset, tool
 from core.hooks import HookOutcome
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
@@ -239,13 +239,16 @@ def test_a_failed_dispatch_clears_the_denial_inside_the_engine_too():
 
 
 async def test_tool_trace_records_every_dispatched_call_when_an_operator_asks(tmp_path):
-    """TRPG_DEBUG__TOOL_TRACE: one JSON line per call, arguments and result included —
-    five root causes in the 2026-08-18 flagship play-test were only findable from those
-    two fields, and the harness had to monkey-patch this dispatcher to get them. Off by
-    default; the file holds keeper-grade content, so nothing but an operator turns it on."""
+    """TRPG_DEBUG__TOOL_TRACE: one JSON line per model-issued call, arguments and result
+    included — five root causes in the 2026-08-18 flagship play-test were only findable
+    from those two fields, and the harness had to monkey-patch the dispatcher to get
+    them. It hangs off the loop's dispatch seam, so it names the ROOM, sees a refusal, a
+    hook veto and a subsystem tool alike, and leaves `Toolset` knowing nothing about
+    files. Off by default; the file holds keeper-grade content, so nothing but an
+    operator turns it on."""
     import json as _json
 
-    from agent.tools import enable_tool_trace
+    from agent.tool_trace import enable_tool_trace
 
     class _Probe:
         @tool
@@ -253,27 +256,29 @@ async def test_tool_trace_records_every_dispatched_call_when_an_operator_asks(tm
             """Echo."""
             return f"said {text}"
 
-        @tool(prep_only=True)
-        async def bulky(self, ctx: AgentCtx) -> str:
-            """Bulk work."""
-            return "done"
-
-    ctx = AgentCtx(chat_key="c", user_id="u", locale="en")
-    toolset = Toolset(_Probe())
+    llm = FakeLLM(
+        script=[
+            assistant_tools(tool_call("echo", text="hi")),
+            assistant_tools(tool_call("nope")),  # an unknown tool is a call too
+            assistant_text("Done."),
+        ]
+    )
+    services = _services(llm)
     path = tmp_path / "trace" / "tools.jsonl"
     try:
         enable_tool_trace(path)
-        assert await toolset.dispatch("echo", ctx, {"text": "hi"}) == "said hi"
-        await toolset.dispatch("bulky", ctx, {}, phase=PLAY_PHASE)  # a refusal is a call too
-        await toolset.dispatch("nope", ctx, {})
+        await run_kp_turn(_ctx("traced-room"), services, Toolset(_Probe()), "hello")
     finally:
         enable_tool_trace(None)
     lines = [_json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-    assert [entry["tool"] for entry in lines] == ["echo", "bulky", "nope"]
+    assert [entry["tool"] for entry in lines] == ["echo", "nope"]
+    assert all(entry["room"] == "traced-room" for entry in lines)
     assert lines[0]["args"] == _json.dumps({"text": "hi"}, ensure_ascii=False)
     assert lines[0]["result"] == "said hi" and isinstance(lines[0]["ms"], float)
-    assert "prep" in lines[1]["result"] or "phase" in lines[1]["result"]  # the refusal, verbatim
+    assert lines[0]["phase"] in ("prep", "play")
+    assert "nope" in lines[1]["result"]  # the refusal, verbatim
 
-    # Disabled again: a later call writes nothing more.
-    await toolset.dispatch("echo", ctx, {"text": "quiet"})
-    assert len(path.read_text(encoding="utf-8").splitlines()) == 3
+    # Disabled again: a later turn writes nothing more.
+    llm2 = FakeLLM(script=[assistant_tools(tool_call("echo", text="quiet")), assistant_text("Done.")])
+    await run_kp_turn(_ctx("traced-room"), _services(llm2), Toolset(_Probe()), "again")
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 2

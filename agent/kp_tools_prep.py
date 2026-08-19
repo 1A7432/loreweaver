@@ -21,6 +21,7 @@ import logging
 
 from agent.context import AgentCtx
 from agent.services import Services
+from agent.tool_phase import PREP_PHASE, room_capabilities
 from agent.tools import Toolset, tool
 from core.prep_script import MAX_OPERATIONS, build_plan
 from infra.i18n import I18n
@@ -101,14 +102,19 @@ class PrepScriptTools:
         # gated tool stays locked) and no less (a skill the keeper enabled is not quietly
         # revoked just because the call arrived via a script).
         unlocked = await unlocked_tools_for(self._services.store, ctx.chat_key)
+        # …and the room's real capability set, for the same reason (a pool tool in a
+        # world-card room is unreachable for a script exactly as it is for the model).
+        capabilities = await room_capabilities(self._services.documents, ctx.chat_key)
 
-        unreachable = self._unreachable(toolset, plan.operations, unlocked)
+        unreachable = self._unreachable(toolset, plan.operations, unlocked, capabilities)
         if unreachable:
             return i18n.t("prep_script.unreachable", tools=", ".join(unreachable))
-        return await self._apply(ctx, toolset, plan.operations, unlocked, i18n)
+        return await self._apply(ctx, toolset, plan.operations, unlocked, capabilities, i18n)
 
     @staticmethod
-    def _unreachable(toolset: Toolset, operations: list[dict], unlocked: set[str]) -> list[str]:
+    def _unreachable(
+        toolset: Toolset, operations: list[dict], unlocked: set[str], capabilities: set[str]
+    ) -> list[str]:
         """Named tools this plan cannot reach — checked BEFORE anything is applied.
 
         This is the atomicity the CodeAct exclusion said a scripted lane would lose, and
@@ -124,11 +130,18 @@ class PrepScriptTools:
                 for operation in operations
                 if operation["tool"] not in known
                 or (toolset.is_gated(operation["tool"]) and operation["tool"] not in unlocked)
+                or (toolset.needs(operation["tool"]) and toolset.needs(operation["tool"]) not in capabilities)
             }
         )
 
     async def _apply(
-        self, ctx: AgentCtx, toolset: Toolset, operations: list[dict], unlocked: set[str], i18n: I18n
+        self,
+        ctx: AgentCtx,
+        toolset: Toolset,
+        operations: list[dict],
+        unlocked: set[str],
+        capabilities: set[str],
+        i18n: I18n,
     ) -> str:
         """Apply each pre-checked operation through the ordinary tool path, in order.
 
@@ -137,13 +150,11 @@ class PrepScriptTools:
         the pre-check already guaranteed is that no operation is refused for a reason the
         plan could have known about in advance.
         """
-        from agent.tool_phase import PREP_PHASE
-
         lines: list[str] = []
         for index, operation in enumerate(operations[:MAX_OPERATIONS], start=1):
             try:
                 result = await toolset.dispatch(
-                    operation["tool"], ctx, operation["args"], unlocked, phase=PREP_PHASE
+                    operation["tool"], ctx, operation["args"], unlocked, phase=PREP_PHASE, capabilities=capabilities
                 )
             except Exception as exc:  # noqa: BLE001 — a raising tool body stops the run
                 logger.warning("prep plan operation %s failed", operation["tool"], exc_info=True)

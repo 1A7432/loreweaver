@@ -81,11 +81,13 @@ class DevSettings(BaseModel):
 class DebugSettings(BaseModel):
     """Diagnostics an operator turns on to investigate a session, off by default.
 
-    `tool_trace` names a file every AI-KP tool call is appended to as one JSON line
-    (`{ts, tool, phase, args, result, ms}`). It exists because five root causes in the
-    2026-08-18 flagship play-test were only findable from the ARGUMENTS and RESULTS of
-    calls — a wrong `duan`, a same-turn write a hook could not see, tools that always
-    fail — and the harness had to monkey-patch the dispatcher from outside to get them.
+    `tool_trace` names a file every model-issued tool call is appended to as one JSON
+    line (`{ts, ms, room, tool, phase, keeper_only, args, result}` — `agent.tool_trace`,
+    hung off the loop's dispatch seam so a hook veto and a rulepack subsystem tool are
+    recorded like any other call). It exists because five root causes in the 2026-08-18
+    flagship play-test were only findable from the ARGUMENTS and RESULTS of calls — a
+    wrong `duan`, a same-turn write a hook could not see, tools that always fail — and
+    the harness had to monkey-patch the dispatcher from outside to get them.
 
     **The file contains keeper-grade content by construction**: tool arguments and
     results carry secret lore, module truths and private NPC knowledge (the play-test's

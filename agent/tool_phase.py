@@ -24,9 +24,9 @@ wins — including pinning a never-initialized freeform room to `play`.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from agent.tools import PLAY_PHASE, PREP_PHASE
+from core.documents import DocumentStore
 from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
 from infra.store import Store
 
@@ -62,7 +62,7 @@ async def room_phase(store: Store, chat_key: str) -> str:
 CAPABILITY_MODULE_POOL = "module_pool"
 
 
-async def room_capabilities(documents: Any, chat_key: str) -> set[str]:
+async def room_capabilities(documents: DocumentStore, chat_key: str) -> set[str]:
     """What backing stores this room actually has, for the schema filter.
 
     Recomputed per turn, so a room that uploads a module mid-session gets the pool

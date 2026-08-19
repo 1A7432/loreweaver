@@ -713,7 +713,7 @@ gate a release must pass.
 
 **When a live run goes wrong, trace the tools.** `TRPG_DEBUG__TOOL_TRACE=tool_trace.jsonl`
 (relative paths land under `data_dir`) appends one JSON line per AI-KP tool call —
-`{ts, ms, tool, phase, args, result}`, refusals included. It answers the questions a
+`{ts, ms, room, tool, phase, args, result}`, refusals and hook vetoes included. It answers the questions a
 transcript cannot: which argument the Keeper actually passed, which tool failed every
 time it was tried, how long a turn spent where. Off unless you set it, and worth one
 warning: the file records tool arguments and results verbatim, so it contains your

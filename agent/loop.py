@@ -26,6 +26,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
@@ -51,6 +52,7 @@ from agent.kp_tools_subsystems import dispatch_subsystem, room_rulepack, subsyst
 from agent.prompt_builder import build_system_prompt_parts
 from agent.services import Services
 from agent.tool_phase import room_capabilities, room_phase
+from agent.tool_trace import record_tool_call, tool_trace_enabled
 from agent.tools import Toolset
 from agent.turn_checks import (
     MAX_ROUNDS_PER_TURN,
@@ -1045,18 +1047,38 @@ async def _dispatch_one(
     room_pack: RulePack | None,
     hook_engine,
 ) -> tuple[str, bool]:
-    """Run one tool call through the hook veto, then the pack subsystems, then the toolset."""
+    """Run one tool call through the hook veto, then the pack subsystems, then the toolset.
+
+    Also the seam the operator's tool trace (`agent.tool_trace`, off by default) hangs
+    off: every model-issued call — a veto, a subsystem tool, a `Toolset` tool or its
+    refusal — passes through here with the room and the phase in hand.
+    """
+    started = time.perf_counter()
     denial = _hook_tool_veto(hook_engine, ctx, call)
     if denial is not None:
-        return denial, True
-    tool_result = (
-        await dispatch_subsystem(services, ctx, room_pack, call.name, call.arguments)
-        if room_pack is not None
-        else None
-    )
-    if tool_result is None:
-        tool_result = await toolset.dispatch(call.name, ctx, call.arguments, unlocked, phase=phase, capabilities=capabilities)
-    return tool_result, False
+        tool_result, suppressed = denial, True
+    else:
+        tool_result = (
+            await dispatch_subsystem(services, ctx, room_pack, call.name, call.arguments)
+            if room_pack is not None
+            else None
+        )
+        if tool_result is None:
+            tool_result = await toolset.dispatch(
+                call.name, ctx, call.arguments, unlocked, phase=phase, capabilities=capabilities
+            )
+        suppressed = False
+    if tool_trace_enabled():
+        record_tool_call(
+            chat_key=ctx.chat_key,
+            phase=phase,
+            name=call.name,
+            arguments=call.arguments,
+            result=tool_result,
+            keeper_only=toolset.is_keeper_only(call.name),
+            started=started,
+        )
+    return tool_result, suppressed
 
 
 def _hook_tool_veto(hook_engine, ctx: AgentCtx, call) -> str | None:
