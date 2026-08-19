@@ -50,7 +50,7 @@ class PanelsCommands:
         knowledge of this command.
         """
         from core.panels import panel_title_text, render_panel_text
-        from gateway.panels import enabled_panels
+        from gateway.panels import enabled_panels, panel_wire_blocks
 
         snapshot = await self._viewer_snapshot(ctx)
         if snapshot:
@@ -85,7 +85,11 @@ class PanelsCommands:
                 ctx.i18n.t("commands.panel.unknown", name=wanted, ids=", ".join(wire_id for wire_id, _ in panels))
             )
         wire_id, panel = matches[0]
-        body = render_panel_text(panel, snapshot.get("variables") or [], ctx.locale)
+        # The WIRE blocks, not the authored ones: `.panel` renders exactly what a client
+        # would draw (`src` paths already resolved to content hashes), through the same
+        # `resolve_panel_blocks` contract the reference client implements.
+        blocks = panel_wire_blocks(ctx.services, wire_id.partition("/")[0], panel)
+        body = render_panel_text(blocks, snapshot.get("variables") or [], ctx.locale)
         title = ctx.i18n.t("commands.panel.title", title=panel_title_text(panel, ctx.locale), id=wire_id)
         if not body:
             return f"{title}\n{ctx.i18n.t('commands.panel.rich_only')}"

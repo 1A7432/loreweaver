@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 from core.pack import DEV_PACK_HOMES, MANIFEST_NAME, PackManifest, parse_manifest_text
 from core.pack import set_dev_pack_homes as _set_dev_pack_homes
-from core.panels import PanelSpec, audience_allows, parse_panels_text, wire_panel
+from core.panels import PanelSpec, audience_allows, parse_panels_text, wire_panel, wire_panel_blocks
 from gateway.hub import Event, RoomHub
 from gateway.ops import get_enabled_panel_packs
 
@@ -342,6 +342,29 @@ async def build_ui_manifest_frame(services: Services, chat_key: str, role: str) 
             except ValueError:
                 logger.warning("panels: skipping %s/%s (broken integrity records)", pack_id, panel.id, exc_info=True)
     return {"type": "ui_manifest", "panels": panels}
+
+
+def panel_wire_blocks(services: Services, pack_id: str, panel: PanelSpec) -> list[dict[str, Any]]:
+    """ONE panel's blocks in WIRE form — what a client of this room would draw.
+
+    The server-side text fallback (`.panel`, `core.panels.render_panel_text`) needs the
+    same content-addressed blocks the manifest ships, so it goes through the SAME
+    `wire_panel_blocks` + asset-index machinery `build_ui_manifest_frame` uses rather
+    than a second hashing path. Empty when the pack home, its manifest or its integrity
+    records are unreadable (logged) — fail closed, exactly as the manifest path does.
+    """
+    home = installed_pack_homes(services.settings.data_dir).get(pack_id)
+    manifest = _load_manifest(home) if home is not None else None
+    if manifest is None:
+        return []
+    asset_info = {
+        asset.path: {"sha256": asset.sha256, "size": asset.size, "mime": asset.mime} for asset in manifest.assets
+    }
+    try:
+        return wire_panel_blocks(pack_id, panel, asset_info)
+    except ValueError:
+        logger.warning("panels: cannot wire %s/%s (broken integrity records)", pack_id, panel.id, exc_info=True)
+        return []
 
 
 async def enabled_panels(services: Services, chat_key: str, role: str) -> list[tuple[str, PanelSpec]]:

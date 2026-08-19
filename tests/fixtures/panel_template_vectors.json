@@ -1,0 +1,361 @@
+{
+  "_comment": [
+    "GOLDEN VECTORS for panel TEMPLATE INSTANTIATION (M15 tier-1 panels, protocol 2.1).",
+    "",
+    "A panel ships as a TEMPLATE: blocks with `{$var}` / `{$leaf}` bindings, `repeat`",
+    "constructs and `visible_when` gates, instantiated against each viewer's OWN",
+    "`state.variables`. That instantiation happens in every client AND on the server (the",
+    "`.panel` text fallback), so 'the reference client and the engine agree' is a promise",
+    "no amount of prose can keep. This table IS the promise: the same rows run through",
+    "`uv run pytest tests/core/test_panel_template_vectors.py` (`core.panels.",
+    "resolve_panel_blocks`) and through `bun test clients/tui/src/panelTemplates.vectors.",
+    "test.ts` (`resolvePanelBlocks`). A rule that moves on either side breaks both suites.",
+    "",
+    "The reference client is the ORACLE. Where the two could differ, the engine copies it.",
+    "",
+    "Each case: `blocks` (in WIRE form — `wire_panel` has already turned every authored",
+    "`src` path into the `hash`/`mime`/`size` triple, which is what a client receives)",
+    "resolved against `variables` in `locale` must deep-equal `expect`.",
+    "",
+    "The rule under nearly every row is FAIL-CLOSED: a binding this viewer cannot resolve",
+    "omits the WHOLE block, a required field that misses drops the block, an optional one",
+    "drops only itself, and an undecidable `visible_when` hides. A panel can never widen",
+    "visibility — the server's per-viewer state filter stays the single choke point, and",
+    "`hidden` variables are dropped before anything resolves at all.",
+    "",
+    "One representation note: the client writes an image's `mime`/`size` through",
+    "unconditionally, so a wire block without them yields properties holding `undefined` —",
+    "which is what an ABSENT key is once the object is serialized or compared. The engine",
+    "omits them instead; `image-without-mime-or-size` is that agreement, written down."
+  ],
+  "cases": [
+    {
+      "id": "divider",
+      "why": "nothing to resolve, nothing to hide: a divider always survives",
+      "blocks": [{"kind": "divider"}],
+      "variables": [],
+      "locale": "en",
+      "expect": [{"kind": "divider"}]
+    },
+    {
+      "id": "meter-binds-and-localizes",
+      "why": "the ordinary bound gauge: value from this viewer's variable, label in this locale",
+      "blocks": [{"kind": "meter", "label": {"en": "Fear", "zh": "恐慌"}, "value": {"$var": "town_fear"}, "min": 0, "max": 10}],
+      "variables": [{"id": "town_fear", "label": "Fear", "value": 7}],
+      "locale": "zh",
+      "expect": [{"kind": "meter", "label": "恐慌", "value": 7, "min": 0, "max": 10}]
+    },
+    {
+      "id": "meter-var-miss-drops-only-its-own-block",
+      "why": "fail-closed is per block, not per panel — the neighbours still render",
+      "blocks": [{"kind": "meter", "label": {"en": "Doom"}, "value": {"$var": "keeper_secret"}, "min": 0, "max": 10}, {"kind": "text", "text": {"en": "still here"}}],
+      "variables": [{"id": "town_fear", "label": "Fear", "value": 7}],
+      "locale": "en",
+      "expect": [{"kind": "text", "text": "still here"}]
+    },
+    {
+      "id": "meter-max-not-greater-than-min",
+      "why": "a zero-width gauge cannot be drawn, so it is not sent",
+      "blocks": [{"kind": "meter", "label": {"en": "Fear"}, "value": 10, "min": 10, "max": 10}],
+      "variables": [],
+      "locale": "en",
+      "expect": []
+    },
+    {
+      "id": "meter-value-that-is-not-a-number",
+      "why": "a gauge bound to a text variable resolves to nothing, never to a guess",
+      "blocks": [{"kind": "meter", "label": {"en": "Fear"}, "value": {"$var": "note"}, "min": 0, "max": 10}],
+      "variables": [{"id": "note", "label": "note", "value": "seven"}],
+      "locale": "en",
+      "expect": []
+    },
+    {
+      "id": "stat-passes-numbers-bools-and-strings-through",
+      "why": "a stat's value keeps its TYPE: 7 is not '7' and true is not 'true'",
+      "blocks": [{"kind": "stat", "label": {"en": "Day"}, "value": {"$var": "day"}}, {"kind": "stat", "label": {"en": "Alerted"}, "value": {"$var": "alerted"}}, {"kind": "stat", "label": {"en": "Note"}, "value": {"$var": "note"}}],
+      "variables": [{"id": "day", "label": "day", "value": 15}, {"id": "alerted", "label": "alerted", "value": true}, {"id": "note", "label": "note", "value": "cold ash"}],
+      "locale": "en",
+      "expect": [{"kind": "stat", "label": "Day", "value": 15}, {"kind": "stat", "label": "Alerted", "value": true}, {"kind": "stat", "label": "Note", "value": "cold ash"}]
+    },
+    {
+      "id": "stat-value-may-be-a-localized-map",
+      "why": "an authored value is localized text like any other field",
+      "blocks": [{"kind": "stat", "label": {"en": "Gate", "zh": "门"}, "value": {"en": "Open", "zh": "已开"}}],
+      "variables": [],
+      "locale": "zh",
+      "expect": [{"kind": "stat", "label": "门", "value": "已开"}]
+    },
+    {
+      "id": "stat-label-miss-drops-the-block",
+      "why": "a label is required — a stat with a value and no name says nothing",
+      "blocks": [{"kind": "stat", "label": {"$var": "keeper_secret"}, "value": 15}],
+      "variables": [{"id": "day", "label": "day", "value": 15}],
+      "locale": "en",
+      "expect": []
+    },
+    {
+      "id": "badge-carries-a-valid-tone",
+      "why": "the happy path for the optional enum",
+      "blocks": [{"kind": "badge", "label": {"en": "Alerted"}, "tone": "warn"}],
+      "variables": [],
+      "locale": "en",
+      "expect": [{"kind": "badge", "label": "Alerted", "tone": "warn"}]
+    },
+    {
+      "id": "badge-invalid-tone-strips-the-tone-not-the-badge",
+      "why": "v1.7 stance for optional enums: drop the field, keep the block",
+      "blocks": [{"kind": "badge", "label": {"en": "Alerted"}, "tone": "scarlet"}],
+      "variables": [],
+      "locale": "en",
+      "expect": [{"kind": "badge", "label": "Alerted"}]
+    },
+    {
+      "id": "text-style-passes-through-when-present",
+      "why": "`style` is authored, not bound — it rides along untouched",
+      "blocks": [{"kind": "text", "text": {"en": "He never came back."}, "style": "quote"}],
+      "variables": [],
+      "locale": "en",
+      "expect": [{"kind": "text", "text": "He never came back.", "style": "quote"}]
+    },
+    {
+      "id": "text-stringifies-numbers-and-booleans",
+      "why": "JavaScript's String(): one number type (3.0 prints as 3) and lowercase booleans",
+      "blocks": [{"kind": "text", "text": {"$var": "day"}}, {"kind": "text", "text": {"$var": "alerted"}}],
+      "variables": [{"id": "day", "label": "day", "value": 3}, {"id": "alerted", "label": "alerted", "value": true}],
+      "locale": "en",
+      "expect": [{"kind": "text", "text": "3"}, {"kind": "text", "text": "true"}]
+    },
+    {
+      "id": "image-happy-path",
+      "why": "content-addressed by the pack build; caption and alt are ordinary localized text",
+      "blocks": [{"kind": "image", "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "mime": "image/png", "size": 4096, "caption": {"en": "The gate", "zh": "门"}, "alt": {"en": "A gate in the rain"}}],
+      "variables": [],
+      "locale": "zh",
+      "expect": [{"kind": "image", "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "mime": "image/png", "size": 4096, "caption": "门", "alt": "A gate in the rain"}]
+    },
+    {
+      "id": "image-without-a-hash-is-dropped",
+      "why": "a manifest hand-edited into a hashless block would render as a dead fetch",
+      "blocks": [{"kind": "image", "mime": "image/png", "size": 4096}],
+      "variables": [],
+      "locale": "en",
+      "expect": []
+    },
+    {
+      "id": "image-caption-miss-drops-the-caption",
+      "why": "caption/alt are optional: the picture still ships",
+      "blocks": [{"kind": "image", "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "mime": "image/png", "size": 4096, "caption": {"$var": "keeper_secret"}}],
+      "variables": [],
+      "locale": "en",
+      "expect": [{"kind": "image", "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "mime": "image/png", "size": 4096}]
+    },
+    {
+      "id": "image-without-mime-or-size",
+      "why": "the one representation agreement: the client's `undefined` property is an absent key",
+      "blocks": [{"kind": "image", "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],
+      "variables": [],
+      "locale": "en",
+      "expect": [{"kind": "image", "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]
+    },
+    {
+      "id": "choices-happy-path",
+      "why": "prompt plus options, each with the input string it sends back verbatim",
+      "blocks": [{"kind": "choices", "prompt": {"en": "Now?", "zh": "现在？"}, "options": [{"id": "go", "label": {"en": "Go", "zh": "走"}, "input": "I go"}, {"id": "wait", "label": {"en": "Wait"}, "input": "I wait"}]}],
+      "variables": [],
+      "locale": "en",
+      "expect": [{"kind": "choices", "prompt": "Now?", "options": [{"id": "go", "label": "Go", "input": "I go"}, {"id": "wait", "label": "Wait", "input": "I wait"}]}]
+    },
+    {
+      "id": "choices-drops-an-unusable-option-not-the-block",
+      "why": "a label this viewer cannot see, or a non-string id/input, takes that option only",
+      "blocks": [{"kind": "choices", "options": [{"id": "secret", "label": {"$var": "keeper_secret"}, "input": "I know"}, {"id": "typo", "label": {"en": "Wait"}, "input": 3}, {"id": 7, "label": {"en": "Run"}, "input": "I run"}, {"id": "go", "label": {"en": "Go"}, "input": "I go"}]}],
+      "variables": [],
+      "locale": "en",
+      "expect": [{"kind": "choices", "options": [{"id": "go", "label": "Go", "input": "I go"}]}]
+    },
+    {
+      "id": "choices-with-no-usable-option-is-dropped",
+      "why": "an empty chooser is worse than no chooser",
+      "blocks": [{"kind": "choices", "prompt": {"en": "Now?"}, "options": [{"id": "a", "label": {"$var": "keeper_secret"}, "input": "x"}]}],
+      "variables": [],
+      "locale": "en",
+      "expect": []
+    },
+    {
+      "id": "choices-prompt-is-optional",
+      "why": "no prompt authored, no prompt on the wire",
+      "blocks": [{"kind": "choices", "options": [{"id": "go", "label": {"en": "Go"}, "input": "I go"}]}],
+      "variables": [],
+      "locale": "en",
+      "expect": [{"kind": "choices", "options": [{"id": "go", "label": "Go", "input": "I go"}]}]
+    },
+    {
+      "id": "performance-kinds-happy-path",
+      "why": "all four M19 templates with every field authored",
+      "blocks": [{"kind": "letter", "body": {"en": "Come home."}, "from": {"en": "Ma"}, "to": {"en": "Da"}, "date": {"en": "1926"}}, {"kind": "clipping", "headline": {"en": "Flood"}, "body": {"en": "Rain."}, "source": {"en": "Gazette"}, "date": {"en": "1926"}}, {"kind": "title_card", "title": {"en": "Landing"}, "subtitle": {"en": "a wet dawn"}, "act": {"en": "Act I"}}, {"kind": "map_pin", "hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "mime": "image/webp", "size": 2048, "label": {"en": "The well"}, "x": 0.2, "y": 0.4, "note": {"en": "still wet"}}],
+      "variables": [],
+      "locale": "en",
+      "expect": [{"kind": "letter", "body": "Come home.", "from": "Ma", "to": "Da", "date": "1926"}, {"kind": "clipping", "headline": "Flood", "body": "Rain.", "source": "Gazette", "date": "1926"}, {"kind": "title_card", "title": "Landing", "subtitle": "a wet dawn", "act": "Act I"}, {"kind": "map_pin", "label": "The well", "note": "still wet", "hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "mime": "image/webp", "size": 2048, "x": 0.2, "y": 0.4}]
+    },
+    {
+      "id": "performance-optional-field-miss-drops-the-field",
+      "why": "one missing optional per kind: the block still performs, one line shorter",
+      "blocks": [{"kind": "letter", "body": {"en": "Come home."}, "from": {"$var": "keeper_secret"}}, {"kind": "clipping", "headline": {"en": "Flood"}, "body": {"en": "Rain."}, "source": {"$var": "keeper_secret"}}, {"kind": "title_card", "title": {"en": "Landing"}, "subtitle": {"$var": "keeper_secret"}}, {"kind": "map_pin", "hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "mime": "image/webp", "size": 2048, "label": {"en": "The well"}, "x": 0.2, "y": 0.4, "note": {"$var": "keeper_secret"}}],
+      "variables": [],
+      "locale": "en",
+      "expect": [{"kind": "letter", "body": "Come home."}, {"kind": "clipping", "headline": "Flood", "body": "Rain."}, {"kind": "title_card", "title": "Landing"}, {"kind": "map_pin", "label": "The well", "hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "mime": "image/webp", "size": 2048, "x": 0.2, "y": 0.4}]
+    },
+    {
+      "id": "performance-required-field-miss-drops-the-block",
+      "why": "one missing required per kind: a letter with no body is not a letter",
+      "blocks": [{"kind": "letter", "body": {"$var": "keeper_secret"}, "from": {"en": "Ma"}}, {"kind": "clipping", "headline": {"$var": "keeper_secret"}, "body": {"en": "Rain."}}, {"kind": "title_card", "title": {"$var": "keeper_secret"}, "act": {"en": "Act I"}}, {"kind": "map_pin", "hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "mime": "image/webp", "size": 2048, "label": {"$var": "keeper_secret"}, "x": 0.2, "y": 0.4}],
+      "variables": [],
+      "locale": "en",
+      "expect": []
+    },
+    {
+      "id": "map-pin-clamps-its-coordinates",
+      "why": "x/y are fractions of the map's own box: a pin outside it is clamped, not dropped",
+      "blocks": [{"kind": "map_pin", "hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "mime": "image/webp", "size": 2048, "label": {"en": "The well"}, "x": 1.4, "y": -0.3}],
+      "variables": [],
+      "locale": "en",
+      "expect": [{"kind": "map_pin", "label": "The well", "hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "mime": "image/webp", "size": 2048, "x": 1, "y": 0}]
+    },
+    {
+      "id": "map-pin-without-a-coordinate-is-dropped",
+      "why": "a pin with nowhere to sit is not a pin",
+      "blocks": [{"kind": "map_pin", "hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "mime": "image/webp", "size": 2048, "label": {"en": "The well"}, "y": 0.4}],
+      "variables": [],
+      "locale": "en",
+      "expect": []
+    },
+    {
+      "id": "hidden-variable-is-absent-to-a-binding",
+      "why": "an un-exposed MVU leaf reaches keeper connections flagged hidden; a panel still cannot read it",
+      "blocks": [{"kind": "stat", "label": {"en": "Day"}, "value": {"$var": "day"}}, {"kind": "text", "text": {"en": "still here"}}],
+      "variables": [{"id": "day", "label": "day", "value": 15, "hidden": true}],
+      "locale": "en",
+      "expect": [{"kind": "text", "text": "still here"}]
+    },
+    {
+      "id": "hidden-variable-is-never-a-repeat-instance",
+      "why": "the same rule from the other side: hidden leaves are filtered before the prefix match",
+      "blocks": [{"repeat": {"prefix": "clue.", "block": {"kind": "badge", "label": {"$leaf": "label"}}}}],
+      "variables": [{"id": "clue.boot", "label": "A muddy boot", "value": true}, {"id": "clue.name", "label": "The murderer", "value": true, "hidden": true}],
+      "locale": "en",
+      "expect": [{"kind": "badge", "label": "A muddy boot"}]
+    },
+    {
+      "id": "repeat-substitutes-leaf-id-label-and-value",
+      "why": "the three fields `$leaf` exposes, over the same matched variables",
+      "blocks": [{"repeat": {"prefix": "clue.", "block": {"kind": "stat", "label": {"$leaf": "label"}, "value": {"$leaf": "value"}}}}, {"repeat": {"prefix": "clue.", "block": {"kind": "text", "text": {"$leaf": "id"}}}}],
+      "variables": [{"id": "clue.ash", "label": "cold ash", "value": "a smear"}, {"id": "clue.ring", "label": "a brass ring", "value": true}],
+      "locale": "en",
+      "expect": [{"kind": "stat", "label": "cold ash", "value": "a smear"}, {"kind": "stat", "label": "a brass ring", "value": true}, {"kind": "text", "text": "clue.ash"}, {"kind": "text", "text": "clue.ring"}]
+    },
+    {
+      "id": "leaf-field-outside-id-label-value-is-a-miss",
+      "why": "the binding vocabulary is closed; an unknown field hides its block rather than guessing",
+      "blocks": [{"repeat": {"prefix": "clue.", "block": {"kind": "badge", "label": {"$leaf": "kind"}}}}],
+      "variables": [{"id": "clue.ash", "label": "cold ash", "value": true}],
+      "locale": "en",
+      "expect": []
+    },
+    {
+      "id": "leaf-outside-a-repeat-is-a-miss",
+      "why": "there is no matched variable to read, so there is nothing to render",
+      "blocks": [{"kind": "badge", "label": {"$leaf": "label"}}],
+      "variables": [{"id": "clue.ash", "label": "cold ash", "value": true}],
+      "locale": "en",
+      "expect": []
+    },
+    {
+      "id": "repeat-caps-its-instances",
+      "why": "MAX_PANEL_REPEAT_INSTANCES is 32: 35 matches expand to exactly 32, in order",
+      "blocks": [{"repeat": {"prefix": "clue.", "block": {"kind": "badge", "label": {"$leaf": "label"}}}}],
+      "variables": [{"id": "clue.00", "label": "Clue 00", "value": true}, {"id": "clue.01", "label": "Clue 01", "value": true}, {"id": "clue.02", "label": "Clue 02", "value": true}, {"id": "clue.03", "label": "Clue 03", "value": true}, {"id": "clue.04", "label": "Clue 04", "value": true}, {"id": "clue.05", "label": "Clue 05", "value": true}, {"id": "clue.06", "label": "Clue 06", "value": true}, {"id": "clue.07", "label": "Clue 07", "value": true}, {"id": "clue.08", "label": "Clue 08", "value": true}, {"id": "clue.09", "label": "Clue 09", "value": true}, {"id": "clue.10", "label": "Clue 10", "value": true}, {"id": "clue.11", "label": "Clue 11", "value": true}, {"id": "clue.12", "label": "Clue 12", "value": true}, {"id": "clue.13", "label": "Clue 13", "value": true}, {"id": "clue.14", "label": "Clue 14", "value": true}, {"id": "clue.15", "label": "Clue 15", "value": true}, {"id": "clue.16", "label": "Clue 16", "value": true}, {"id": "clue.17", "label": "Clue 17", "value": true}, {"id": "clue.18", "label": "Clue 18", "value": true}, {"id": "clue.19", "label": "Clue 19", "value": true}, {"id": "clue.20", "label": "Clue 20", "value": true}, {"id": "clue.21", "label": "Clue 21", "value": true}, {"id": "clue.22", "label": "Clue 22", "value": true}, {"id": "clue.23", "label": "Clue 23", "value": true}, {"id": "clue.24", "label": "Clue 24", "value": true}, {"id": "clue.25", "label": "Clue 25", "value": true}, {"id": "clue.26", "label": "Clue 26", "value": true}, {"id": "clue.27", "label": "Clue 27", "value": true}, {"id": "clue.28", "label": "Clue 28", "value": true}, {"id": "clue.29", "label": "Clue 29", "value": true}, {"id": "clue.30", "label": "Clue 30", "value": true}, {"id": "clue.31", "label": "Clue 31", "value": true}, {"id": "clue.32", "label": "Clue 32", "value": true}, {"id": "clue.33", "label": "Clue 33", "value": true}, {"id": "clue.34", "label": "Clue 34", "value": true}],
+      "locale": "en",
+      "expect": [{"kind": "badge", "label": "Clue 00"}, {"kind": "badge", "label": "Clue 01"}, {"kind": "badge", "label": "Clue 02"}, {"kind": "badge", "label": "Clue 03"}, {"kind": "badge", "label": "Clue 04"}, {"kind": "badge", "label": "Clue 05"}, {"kind": "badge", "label": "Clue 06"}, {"kind": "badge", "label": "Clue 07"}, {"kind": "badge", "label": "Clue 08"}, {"kind": "badge", "label": "Clue 09"}, {"kind": "badge", "label": "Clue 10"}, {"kind": "badge", "label": "Clue 11"}, {"kind": "badge", "label": "Clue 12"}, {"kind": "badge", "label": "Clue 13"}, {"kind": "badge", "label": "Clue 14"}, {"kind": "badge", "label": "Clue 15"}, {"kind": "badge", "label": "Clue 16"}, {"kind": "badge", "label": "Clue 17"}, {"kind": "badge", "label": "Clue 18"}, {"kind": "badge", "label": "Clue 19"}, {"kind": "badge", "label": "Clue 20"}, {"kind": "badge", "label": "Clue 21"}, {"kind": "badge", "label": "Clue 22"}, {"kind": "badge", "label": "Clue 23"}, {"kind": "badge", "label": "Clue 24"}, {"kind": "badge", "label": "Clue 25"}, {"kind": "badge", "label": "Clue 26"}, {"kind": "badge", "label": "Clue 27"}, {"kind": "badge", "label": "Clue 28"}, {"kind": "badge", "label": "Clue 29"}, {"kind": "badge", "label": "Clue 30"}, {"kind": "badge", "label": "Clue 31"}]
+    },
+    {
+      "id": "repeat-filters-before-it-caps",
+      "why": "the cap is on INSTANCES, never on how deep into an MVU import a match may sit",
+      "blocks": [{"repeat": {"prefix": "clue.", "block": {"kind": "badge", "label": {"$leaf": "label"}}}}],
+      "variables": [{"id": "mvu.node.0", "label": "mvu.node.0", "value": 0}, {"id": "mvu.node.1", "label": "mvu.node.1", "value": 1}, {"id": "mvu.node.2", "label": "mvu.node.2", "value": 2}, {"id": "mvu.node.3", "label": "mvu.node.3", "value": 3}, {"id": "mvu.node.4", "label": "mvu.node.4", "value": 4}, {"id": "mvu.node.5", "label": "mvu.node.5", "value": 5}, {"id": "mvu.node.6", "label": "mvu.node.6", "value": 6}, {"id": "mvu.node.7", "label": "mvu.node.7", "value": 7}, {"id": "mvu.node.8", "label": "mvu.node.8", "value": 8}, {"id": "mvu.node.9", "label": "mvu.node.9", "value": 9}, {"id": "mvu.node.10", "label": "mvu.node.10", "value": 10}, {"id": "mvu.node.11", "label": "mvu.node.11", "value": 11}, {"id": "mvu.node.12", "label": "mvu.node.12", "value": 12}, {"id": "mvu.node.13", "label": "mvu.node.13", "value": 13}, {"id": "mvu.node.14", "label": "mvu.node.14", "value": 14}, {"id": "mvu.node.15", "label": "mvu.node.15", "value": 15}, {"id": "mvu.node.16", "label": "mvu.node.16", "value": 16}, {"id": "mvu.node.17", "label": "mvu.node.17", "value": 17}, {"id": "mvu.node.18", "label": "mvu.node.18", "value": 18}, {"id": "mvu.node.19", "label": "mvu.node.19", "value": 19}, {"id": "mvu.node.20", "label": "mvu.node.20", "value": 20}, {"id": "mvu.node.21", "label": "mvu.node.21", "value": 21}, {"id": "mvu.node.22", "label": "mvu.node.22", "value": 22}, {"id": "mvu.node.23", "label": "mvu.node.23", "value": 23}, {"id": "mvu.node.24", "label": "mvu.node.24", "value": 24}, {"id": "mvu.node.25", "label": "mvu.node.25", "value": 25}, {"id": "mvu.node.26", "label": "mvu.node.26", "value": 26}, {"id": "mvu.node.27", "label": "mvu.node.27", "value": 27}, {"id": "mvu.node.28", "label": "mvu.node.28", "value": 28}, {"id": "mvu.node.29", "label": "mvu.node.29", "value": 29}, {"id": "mvu.node.30", "label": "mvu.node.30", "value": 30}, {"id": "mvu.node.31", "label": "mvu.node.31", "value": 31}, {"id": "mvu.node.32", "label": "mvu.node.32", "value": 32}, {"id": "mvu.node.33", "label": "mvu.node.33", "value": 33}, {"id": "mvu.node.34", "label": "mvu.node.34", "value": 34}, {"id": "mvu.node.35", "label": "mvu.node.35", "value": 35}, {"id": "mvu.node.36", "label": "mvu.node.36", "value": 36}, {"id": "mvu.node.37", "label": "mvu.node.37", "value": 37}, {"id": "mvu.node.38", "label": "mvu.node.38", "value": 38}, {"id": "mvu.node.39", "label": "mvu.node.39", "value": 39}, {"id": "mvu.node.40", "label": "mvu.node.40", "value": 40}, {"id": "mvu.node.41", "label": "mvu.node.41", "value": 41}, {"id": "mvu.node.42", "label": "mvu.node.42", "value": 42}, {"id": "mvu.node.43", "label": "mvu.node.43", "value": 43}, {"id": "mvu.node.44", "label": "mvu.node.44", "value": 44}, {"id": "mvu.node.45", "label": "mvu.node.45", "value": 45}, {"id": "mvu.node.46", "label": "mvu.node.46", "value": 46}, {"id": "mvu.node.47", "label": "mvu.node.47", "value": 47}, {"id": "mvu.node.48", "label": "mvu.node.48", "value": 48}, {"id": "mvu.node.49", "label": "mvu.node.49", "value": 49}, {"id": "mvu.node.50", "label": "mvu.node.50", "value": 50}, {"id": "mvu.node.51", "label": "mvu.node.51", "value": 51}, {"id": "mvu.node.52", "label": "mvu.node.52", "value": 52}, {"id": "mvu.node.53", "label": "mvu.node.53", "value": 53}, {"id": "mvu.node.54", "label": "mvu.node.54", "value": 54}, {"id": "mvu.node.55", "label": "mvu.node.55", "value": 55}, {"id": "mvu.node.56", "label": "mvu.node.56", "value": 56}, {"id": "mvu.node.57", "label": "mvu.node.57", "value": 57}, {"id": "mvu.node.58", "label": "mvu.node.58", "value": 58}, {"id": "mvu.node.59", "label": "mvu.node.59", "value": 59}, {"id": "mvu.node.60", "label": "mvu.node.60", "value": 60}, {"id": "mvu.node.61", "label": "mvu.node.61", "value": 61}, {"id": "mvu.node.62", "label": "mvu.node.62", "value": 62}, {"id": "mvu.node.63", "label": "mvu.node.63", "value": 63}, {"id": "mvu.node.64", "label": "mvu.node.64", "value": 64}, {"id": "mvu.node.65", "label": "mvu.node.65", "value": 65}, {"id": "mvu.node.66", "label": "mvu.node.66", "value": 66}, {"id": "mvu.node.67", "label": "mvu.node.67", "value": 67}, {"id": "mvu.node.68", "label": "mvu.node.68", "value": 68}, {"id": "mvu.node.69", "label": "mvu.node.69", "value": 69}, {"id": "mvu.node.70", "label": "mvu.node.70", "value": 70}, {"id": "mvu.node.71", "label": "mvu.node.71", "value": 71}, {"id": "mvu.node.72", "label": "mvu.node.72", "value": 72}, {"id": "mvu.node.73", "label": "mvu.node.73", "value": 73}, {"id": "mvu.node.74", "label": "mvu.node.74", "value": 74}, {"id": "mvu.node.75", "label": "mvu.node.75", "value": 75}, {"id": "mvu.node.76", "label": "mvu.node.76", "value": 76}, {"id": "mvu.node.77", "label": "mvu.node.77", "value": 77}, {"id": "mvu.node.78", "label": "mvu.node.78", "value": 78}, {"id": "mvu.node.79", "label": "mvu.node.79", "value": 79}, {"id": "mvu.node.80", "label": "mvu.node.80", "value": 80}, {"id": "mvu.node.81", "label": "mvu.node.81", "value": 81}, {"id": "mvu.node.82", "label": "mvu.node.82", "value": 82}, {"id": "mvu.node.83", "label": "mvu.node.83", "value": 83}, {"id": "mvu.node.84", "label": "mvu.node.84", "value": 84}, {"id": "mvu.node.85", "label": "mvu.node.85", "value": 85}, {"id": "mvu.node.86", "label": "mvu.node.86", "value": 86}, {"id": "mvu.node.87", "label": "mvu.node.87", "value": 87}, {"id": "mvu.node.88", "label": "mvu.node.88", "value": 88}, {"id": "mvu.node.89", "label": "mvu.node.89", "value": 89}, {"id": "mvu.node.90", "label": "mvu.node.90", "value": 90}, {"id": "mvu.node.91", "label": "mvu.node.91", "value": 91}, {"id": "mvu.node.92", "label": "mvu.node.92", "value": 92}, {"id": "mvu.node.93", "label": "mvu.node.93", "value": 93}, {"id": "mvu.node.94", "label": "mvu.node.94", "value": 94}, {"id": "mvu.node.95", "label": "mvu.node.95", "value": 95}, {"id": "mvu.node.96", "label": "mvu.node.96", "value": 96}, {"id": "mvu.node.97", "label": "mvu.node.97", "value": 97}, {"id": "mvu.node.98", "label": "mvu.node.98", "value": 98}, {"id": "mvu.node.99", "label": "mvu.node.99", "value": 99}, {"id": "mvu.node.100", "label": "mvu.node.100", "value": 100}, {"id": "mvu.node.101", "label": "mvu.node.101", "value": 101}, {"id": "mvu.node.102", "label": "mvu.node.102", "value": 102}, {"id": "mvu.node.103", "label": "mvu.node.103", "value": 103}, {"id": "mvu.node.104", "label": "mvu.node.104", "value": 104}, {"id": "mvu.node.105", "label": "mvu.node.105", "value": 105}, {"id": "mvu.node.106", "label": "mvu.node.106", "value": 106}, {"id": "mvu.node.107", "label": "mvu.node.107", "value": 107}, {"id": "mvu.node.108", "label": "mvu.node.108", "value": 108}, {"id": "mvu.node.109", "label": "mvu.node.109", "value": 109}, {"id": "mvu.node.110", "label": "mvu.node.110", "value": 110}, {"id": "mvu.node.111", "label": "mvu.node.111", "value": 111}, {"id": "mvu.node.112", "label": "mvu.node.112", "value": 112}, {"id": "mvu.node.113", "label": "mvu.node.113", "value": 113}, {"id": "mvu.node.114", "label": "mvu.node.114", "value": 114}, {"id": "mvu.node.115", "label": "mvu.node.115", "value": 115}, {"id": "mvu.node.116", "label": "mvu.node.116", "value": 116}, {"id": "mvu.node.117", "label": "mvu.node.117", "value": 117}, {"id": "mvu.node.118", "label": "mvu.node.118", "value": 118}, {"id": "mvu.node.119", "label": "mvu.node.119", "value": 119}, {"id": "mvu.node.120", "label": "mvu.node.120", "value": 120}, {"id": "mvu.node.121", "label": "mvu.node.121", "value": 121}, {"id": "mvu.node.122", "label": "mvu.node.122", "value": 122}, {"id": "mvu.node.123", "label": "mvu.node.123", "value": 123}, {"id": "mvu.node.124", "label": "mvu.node.124", "value": 124}, {"id": "mvu.node.125", "label": "mvu.node.125", "value": 125}, {"id": "mvu.node.126", "label": "mvu.node.126", "value": 126}, {"id": "mvu.node.127", "label": "mvu.node.127", "value": 127}, {"id": "mvu.node.128", "label": "mvu.node.128", "value": 128}, {"id": "mvu.node.129", "label": "mvu.node.129", "value": 129}, {"id": "mvu.node.130", "label": "mvu.node.130", "value": 130}, {"id": "mvu.node.131", "label": "mvu.node.131", "value": 131}, {"id": "mvu.node.132", "label": "mvu.node.132", "value": 132}, {"id": "mvu.node.133", "label": "mvu.node.133", "value": 133}, {"id": "mvu.node.134", "label": "mvu.node.134", "value": 134}, {"id": "mvu.node.135", "label": "mvu.node.135", "value": 135}, {"id": "mvu.node.136", "label": "mvu.node.136", "value": 136}, {"id": "mvu.node.137", "label": "mvu.node.137", "value": 137}, {"id": "mvu.node.138", "label": "mvu.node.138", "value": 138}, {"id": "mvu.node.139", "label": "mvu.node.139", "value": 139}, {"id": "mvu.node.140", "label": "mvu.node.140", "value": 140}, {"id": "mvu.node.141", "label": "mvu.node.141", "value": 141}, {"id": "mvu.node.142", "label": "mvu.node.142", "value": 142}, {"id": "mvu.node.143", "label": "mvu.node.143", "value": 143}, {"id": "mvu.node.144", "label": "mvu.node.144", "value": 144}, {"id": "mvu.node.145", "label": "mvu.node.145", "value": 145}, {"id": "mvu.node.146", "label": "mvu.node.146", "value": 146}, {"id": "mvu.node.147", "label": "mvu.node.147", "value": 147}, {"id": "mvu.node.148", "label": "mvu.node.148", "value": 148}, {"id": "mvu.node.149", "label": "mvu.node.149", "value": 149}, {"id": "clue.late", "label": "Found late", "value": true}],
+      "locale": "en",
+      "expect": [{"kind": "badge", "label": "Found late"}]
+    },
+    {
+      "id": "repeat-does-not-nest",
+      "why": "a repeat inside a repeat resolves to nothing at all — the schema refuses it at build too",
+      "blocks": [{"repeat": {"prefix": "clue.", "block": {"repeat": {"prefix": "clue.", "block": {"kind": "divider"}}}}}],
+      "variables": [{"id": "clue.ash", "label": "cold ash", "value": true}],
+      "locale": "en",
+      "expect": []
+    },
+    {
+      "id": "repeat-carries-its-own-visible-when",
+      "why": "the author gating the WHOLE list: false hides every instance, not one of them",
+      "blocks": [{"repeat": {"prefix": "clue.", "block": {"kind": "badge", "label": {"$leaf": "label"}}}, "visible_when": "board_open"}, {"kind": "text", "text": {"en": "still here"}}],
+      "variables": [{"id": "board_open", "label": "board_open", "value": false}, {"id": "clue.ash", "label": "cold ash", "value": true}],
+      "locale": "en",
+      "expect": [{"kind": "text", "text": "still here"}]
+    },
+    {
+      "id": "repeat-without-a-usable-prefix",
+      "why": "a missing or empty prefix would match EVERY variable; it expands to nothing instead",
+      "blocks": [{"repeat": {"block": {"kind": "badge", "label": {"$leaf": "label"}}}}, {"repeat": {"prefix": "", "block": {"kind": "badge", "label": {"$leaf": "label"}}}}],
+      "variables": [{"id": "clue.ash", "label": "cold ash", "value": true}],
+      "locale": "en",
+      "expect": []
+    },
+    {
+      "id": "visible-when-decides-per-block",
+      "why": "the value gate `$var`'s absent-means-hide cannot express",
+      "blocks": [{"kind": "badge", "label": {"en": "Open"}, "visible_when": "gate_open"}, {"kind": "badge", "label": {"en": "Shut"}, "visible_when": "!gate_open"}],
+      "variables": [{"id": "gate_open", "label": "gate_open", "value": false}],
+      "locale": "en",
+      "expect": [{"kind": "badge", "label": "Shut"}]
+    },
+    {
+      "id": "visible-when-undecidable-hides",
+      "why": "ordering against an absent variable is an error; an error is HIDDEN, never shown",
+      "blocks": [{"kind": "badge", "label": {"en": "Open"}, "visible_when": "missing > 5"}],
+      "variables": [],
+      "locale": "en",
+      "expect": []
+    },
+    {
+      "id": "visible-when-that-is-not-a-condition-hides",
+      "why": "the build refuses an empty condition, so this is a hand-edited manifest: it hides, exactly like an error",
+      "blocks": [{"kind": "badge", "label": {"en": "Open"}, "visible_when": ""}],
+      "variables": [],
+      "locale": "en",
+      "expect": []
+    },
+    {
+      "id": "duplicate-variable-id-resolves-to-the-first",
+      "why": "a room should never ship two variables of one id; if it does, both sides read the same one",
+      "blocks": [{"kind": "stat", "label": {"en": "Day"}, "value": {"$var": "day"}}],
+      "variables": [{"id": "day", "label": "day", "value": 1}, {"id": "day", "label": "day", "value": 2}],
+      "locale": "en",
+      "expect": [{"kind": "stat", "label": "Day", "value": 1}]
+    },
+    {
+      "id": "localization-falls-back-to-en",
+      "why": "this viewer's locale first, then en",
+      "blocks": [{"kind": "text", "text": {"en": "The gate"}}],
+      "variables": [],
+      "locale": "zh",
+      "expect": [{"kind": "text", "text": "The gate"}]
+    },
+    {
+      "id": "localization-falls-back-to-any-value",
+      "why": "and after en, whatever the map does carry — a panel in one language beats no panel",
+      "blocks": [{"kind": "text", "text": {"zh": "门"}}],
+      "variables": [],
+      "locale": "en",
+      "expect": [{"kind": "text", "text": "门"}]
+    }
+  ]
+}

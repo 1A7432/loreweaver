@@ -270,9 +270,10 @@ panels:
 
 # ---------------------------------------------------------------------------
 # Text rendering — `render_panel_text`, the terminal / protocol-client fallback.
-# The oracle is the reference client's `resolvePanelBlocks` semantics: `$var` miss hides
-# the block, `hidden` variables are invisible, repeat expands over VISIBLE matches capped
-# at MAX_REPEAT_INSTANCES, `visible_when` runs through core.condexpr.
+# It stringifies `resolve_panel_blocks` output, whose agreement with the reference
+# client is pinned row by row in `tests/fixtures/panel_template_vectors.json`
+# (`tests/core/test_panel_template_vectors.py` + the TypeScript half). What these tests
+# own is the TEXT: which lines a resolved panel becomes on a terminal.
 # ---------------------------------------------------------------------------
 
 RENDER_YAML = """\
@@ -308,6 +309,14 @@ def _var(id_: str, value, *, label: str | None = None, hidden: bool = False) -> 
     return entry
 
 
+def _wire(panel) -> list[dict]:
+    """The panel's blocks as they ride the wire — what a client actually resolves, and
+    since this batch what `render_panel_text` takes (`src` already a content hash)."""
+    from core.panels import wire_panel_blocks
+
+    return wire_panel_blocks("pack", panel, IMAGE_ASSETS)
+
+
 def test_render_panel_text_binds_hides_and_localizes_like_the_client():
     from core.panels import render_panel_text
 
@@ -319,7 +328,7 @@ def test_render_panel_text_binds_hides_and_localizes_like_the_client():
         _var("clue.1", True, label="A muddy boot"),
         _var("clue.2", True, label="A torn map"),
     ]
-    lines = render_panel_text(panel, variables, "en")
+    lines = render_panel_text(_wire(panel), variables, "en")
     assert lines == [
         "Day: 15",
         "Timber: 8/24",
@@ -341,7 +350,7 @@ def test_render_panel_text_binds_hides_and_localizes_like_the_client():
     # `ghost` never existed for this viewer: the stat bound to it is absent, not blank.
     assert not any("Ghost" in line for line in lines)
 
-    zh = render_panel_text(panel, variables, "zh")
+    zh = render_panel_text(_wire(panel), variables, "zh")
     assert zh[0] == "日: 15" and "  · 走 → I go" in zh and "回家。" in zh
 
 
@@ -357,7 +366,7 @@ def test_render_panel_text_never_reads_a_hidden_variable():
         _var("clue.1", True, label="A muddy boot"),
         _var("gate_open", True),
     ]
-    lines = render_panel_text(panel, variables, "en")
+    lines = render_panel_text(_wire(panel), variables, "en")
     assert "Day: 3" not in lines
     assert "[The murderer]" not in lines and "[A muddy boot]" in lines
     assert "[Open]" in lines
@@ -371,10 +380,10 @@ def test_render_panel_text_repeat_filters_before_it_caps():
     (panel,) = parse_panels_text(RENDER_YAML)
     filler = [_var(f"mvu.node.{index}", index) for index in range(MAX_REPEAT_INSTANCES * 4 + 10)]
     tail = [_var("clue.late", True, label="Found late")]
-    assert "[Found late]" in render_panel_text(panel, filler + tail, "en")
+    assert "[Found late]" in render_panel_text(_wire(panel), filler + tail, "en")
 
     many = [_var(f"clue.{index}", True, label=f"Clue {index}") for index in range(MAX_REPEAT_INSTANCES + 5)]
-    lines = render_panel_text(panel, many, "en")
+    lines = render_panel_text(_wire(panel), many, "en")
     assert sum(1 for line in lines if line.startswith("[Clue ")) == MAX_REPEAT_INSTANCES
 
 
@@ -383,10 +392,10 @@ def test_render_panel_text_uses_the_tier2_fallback_and_reports_none():
 
     (panel,) = parse_panels_text(TIER2_YAML)
     assert panel_title_text(panel, "zh") == "庄园地图"
-    assert render_panel_text(panel, [], "zh") == ["地图请在富客户端查看。"]
-    assert render_panel_text(panel, [], "en") == ["Map in the rich client."]
+    assert render_panel_text(_wire(panel), [], "zh") == ["地图请在富客户端查看。"]
+    assert render_panel_text(_wire(panel), [], "en") == ["Map in the rich client."]
 
     (rich_only,) = parse_panels_text(
         "panels:\n  - {id: p, title: T, slot: modal, entry: ui/p/index.html, assets: [ui/p/index.html], fallback: null}\n"
     )
-    assert render_panel_text(rich_only, [], "en") == []
+    assert render_panel_text(_wire(rich_only), [], "en") == []

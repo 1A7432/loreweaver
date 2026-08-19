@@ -857,6 +857,18 @@ actually shipped as, for anyone reading the code.)*
    (client-evaluated, grammar refused at build outside a tiny portable subset —
    `tests/fixtures/visible_when_vectors.json` is the shared conformance table), and
    content-addressed tier-2 assets with a mandatory text-first `fallback`.
+
+   Template INSTANTIATION — a panel's blocks plus one viewer's variables becoming the
+   blocks that viewer sees — now has a shared table of its own,
+   `tests/fixtures/panel_template_vectors.json`. Every rule lives there as a row: which
+   binding miss drops a whole block and which drops one field, how `repeat` filters
+   before it caps, what an invalid badge tone does, how a `map_pin` clamps its
+   coordinates, which locale wins. The same rows run through the engine
+   (`tests/core/test_panel_template_vectors.py`, over the pure
+   `core.panels.resolve_panel_blocks` the `.panel` text fallback is built on) and through
+   the reference client (`clients/tui/src/panelTemplates.vectors.test.ts`), so a rule that
+   moves on either side breaks both suites. A panel is instantiated per viewer in every
+   client AND on the server; a second client proves itself against this file.
 8. **M16 — rules externalization** — **landed**: the compiled `RuleSystem` + the neutral
    `CheckOutcome`/`Rank` contract; ROLL (engine) → INTERPRET (pack, pure) → APPLY (engine); the
    old per-system modules deleted outright.
