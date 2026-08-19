@@ -9,7 +9,7 @@
   had (an empty `visible_when` showed server-side but hid client-side; a duplicate
   variable id resolved to the LAST entry server-side and the first client-side; a
   `{$var: …, extra: …}` dict was a binding client-side and a literal server-side).
-- **Decision:** one table, `tests/fixtures/panel_template_vectors.json`, consumed by
+- **Verdict:** one table, `tests/fixtures/panel_template_vectors.json`, consumed by
   `tests/core/test_panel_template_vectors.py` and
   `clients/tui/src/panelTemplates.vectors.test.ts` — the shape
   `visible_when_vectors.json` established for the condition grammar. The engine grew a
