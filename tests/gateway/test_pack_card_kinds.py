@@ -52,6 +52,52 @@ def test_each_listed_card_reports_the_manifest_s_kind(tmp_path) -> None:
     assert by_name["customs"]["ref"] == "mistwharf/cards/customs.json"
 
 
+def test_a_pack_installed_by_another_process_is_listed_without_a_restart(tmp_path) -> None:
+    """The desktop client's install button shells out to the CLI, so a pack lands in
+    `data_dir/packs` from OUTSIDE the running server. The kind memos are keyed on the
+    pack home and its manifest's identity, so a new home is a fresh key and the listing
+    is re-derived from disk on every call — a card list can lag a save, never stick."""
+    data_dir = _installed_pack(tmp_path)
+    assert {entry["name"] for entry in installed_card_entries(data_dir)} == {"customs", "pilot"}
+
+    # Another process installs a second pack. Nothing in THIS process is told.
+    late = data_dir / "packs" / "harbour@2.0.0"
+    (late / "cards").mkdir(parents=True)
+    (late / "pack.yaml").write_text(
+        _MANIFEST.replace("mistwharf", "harbour").replace("version: 1.0.0", "version: 2.0.0"),
+        encoding="utf-8",
+    )
+    (late / "cards" / "customs.json").write_text(json.dumps({"name": "Harbour Customs"}), encoding="utf-8")
+    (late / "cards" / "pilot.json").write_text(json.dumps({"name": "Harbour Pilot"}), encoding="utf-8")
+
+    entries = installed_card_entries(data_dir)
+    by_ref = {entry["ref"]: entry for entry in entries}
+    assert "harbour/cards/customs.json" in by_ref
+    assert by_ref["harbour/cards/customs.json"]["kind"] == "world"  # the memo did not serve a stale kind
+
+
+def test_a_newer_version_of_an_installed_pack_replaces_the_old_listing(tmp_path) -> None:
+    """An upgrade is a NEW home dir, so it is a new memo key too — the picker must not
+    keep offering the superseded version's cards."""
+    data_dir = _installed_pack(tmp_path)
+    assert [entry["ref"] for entry in installed_card_entries(data_dir)] == [
+        "mistwharf/cards/customs.json",
+        "mistwharf/cards/pilot.json",
+    ]
+
+    upgraded = data_dir / "packs" / "mistwharf@1.1.0"
+    (upgraded / "cards").mkdir(parents=True)
+    (upgraded / "pack.yaml").write_text(
+        _MANIFEST.replace("version: 1.0.0", "version: 1.1.0").replace(
+            "    - {path: cards/pilot.json, kind: character}\n", ""
+        ),
+        encoding="utf-8",
+    )
+    (upgraded / "cards" / "customs.json").write_text(json.dumps({"name": "Mistwharf Customs"}), encoding="utf-8")
+
+    assert [entry["ref"] for entry in installed_card_entries(data_dir)] == ["mistwharf/cards/customs.json"]
+
+
 def test_a_pack_with_no_readable_manifest_falls_back_to_character(tmp_path) -> None:
     """The pre-2.3 assumption is the safe default: an unreadable manifest must not
     make the picker refuse every card, and `character` is the verb it already sent."""
