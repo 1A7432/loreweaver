@@ -4,6 +4,7 @@ resolution with an injected fetcher (no network ever)."""
 from __future__ import annotations
 
 import json
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -116,24 +117,30 @@ class _FakeResponse:
         return False
 
 
-def _captured_headers(monkeypatch: pytest.MonkeyPatch, url: str) -> dict[str, str]:
+def _captured_headers(monkeypatch: pytest.MonkeyPatch, url: str, *, api: bool = True) -> dict[str, str]:
+    """Headers one fetch would send. `api=True` uses the credentialed lane this module
+    reserves for the release-metadata request it composes itself; `api=False` is the
+    download lane every caller-named ref goes through."""
     seen: dict[str, str] = {}
 
-    def fake_urlopen(request, timeout=None):
-        seen.update(request.headers)
-        return _FakeResponse()
+    class _Opener:
+        def open(self, request, timeout=None):
+            seen.update(request.headers)
+            return _FakeResponse()
 
-    monkeypatch.setattr(pack_source.urllib.request, "urlopen", fake_urlopen)
-    pack_source._default_fetch(url)
+    monkeypatch.setattr(pack_source.urllib.request, "build_opener", lambda *_h: _Opener())
+    (pack_source._default_api_fetch if api else pack_source._default_fetch)(url)
     return seen
+
+
+API_URL = "https://api.github.com/repos/ada/blackmoor/releases/latest"
 
 
 def test_github_token_is_sent_to_the_api_host_only(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("GITHUB_TOKEN", "s3cret")
     monkeypatch.delenv("GH_TOKEN", raising=False)
 
-    api = _captured_headers(monkeypatch, "https://api.github.com/repos/ada/blackmoor/releases/latest")
-    assert api.get("Authorization") == "Bearer s3cret"
+    assert _captured_headers(monkeypatch, API_URL).get("Authorization") == "Bearer s3cret"
 
     for other in (
         "https://objects.githubusercontent.com/ada/blackmoor/a.lwpack",
@@ -143,15 +150,45 @@ def test_github_token_is_sent_to_the_api_host_only(monkeypatch: pytest.MonkeyPat
         assert "Authorization" not in _captured_headers(monkeypatch, other), other
 
 
+def test_a_caller_named_ref_is_never_authenticated_even_on_the_api_host(monkeypatch: pytest.MonkeyPatch):
+    """`.pack install https://api.github.com/…` must not spend the server's PAT: the
+    credential belongs to the request this module composes, not to a matching hostname."""
+    monkeypatch.setenv("GITHUB_TOKEN", "s3cret")
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    assert "Authorization" not in _captured_headers(monkeypatch, API_URL, api=False)
+
+
+def test_a_cross_host_redirect_drops_the_credential(monkeypatch: pytest.MonkeyPatch):
+    """urllib forwards every header across hosts by default, and the asset lane redirects
+    off-host by design. Same-host redirects (a renamed repo) keep it."""
+    monkeypatch.setenv("GITHUB_TOKEN", "s3cret")
+    handler = pack_source._AuthStrippingRedirect()
+    original = urllib.request.Request(API_URL, headers={"Authorization": "Bearer s3cret"})
+
+    class _Headers(dict):
+        def get_all(self, _name, _default=None):
+            return None
+
+    offhost = handler.redirect_request(
+        original, None, 302, "Found", _Headers(), "https://objects.githubusercontent.com/x.lwpack"
+    )
+    assert offhost is not None
+    assert not any(key.lower() == "authorization" for key in offhost.headers)
+
+    samehost = handler.redirect_request(
+        original, None, 302, "Found", _Headers(), "https://api.github.com/repos/new/name/releases/latest"
+    )
+    assert samehost is not None
+    assert any(key.lower() == "authorization" for key in samehost.headers)
+
+
 def test_gh_token_is_the_fallback_env_var(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.setenv("GH_TOKEN", "other")
-    headers = _captured_headers(monkeypatch, "https://api.github.com/repos/ada/blackmoor/releases/latest")
-    assert headers.get("Authorization") == "Bearer other"
+    assert _captured_headers(monkeypatch, API_URL).get("Authorization") == "Bearer other"
 
 
 def test_no_token_configured_stays_anonymous(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
-    headers = _captured_headers(monkeypatch, "https://api.github.com/repos/ada/blackmoor/releases/latest")
-    assert "Authorization" not in headers
+    assert "Authorization" not in _captured_headers(monkeypatch, API_URL)
