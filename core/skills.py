@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from functools import cache
@@ -226,14 +227,28 @@ def _discovery_signature() -> tuple[object, ...]:
 # Signature of the discovery dirs as they looked during the last real scan. `None` means
 # discovery has not run yet in this process.
 _LAST_SCAN_SIGNATURE: tuple[object, ...] | None = None
+# When the signature was last compared (monotonic seconds); -inf means never.
+_LAST_SIGNATURE_CHECK: float = float("-inf")
+
+# The twin of `core.rulepacks.RESCAN_MIN_INTERVAL_SECONDS`; see it for the reasoning. Two
+# out-of-process shapes to cover: a NEW id (a miss, which forces a check) and an id
+# UPGRADED IN PLACE — a HIT that would otherwise keep serving the body from the old scan,
+# which is exactly what reinstalling a pack at a newer version does to its skill.
+RESCAN_MIN_INTERVAL_SECONDS = 2.0
 
 
-def _rescan_if_dirs_changed() -> bool:
+def _rescan_if_dirs_changed(*, force: bool = False) -> bool:
     """Reload discovery when the dirs changed since the last scan; True if a reload happened.
 
-    Signature unchanged means the miss is a genuine unknown id, so nothing is rescanned and
-    a bad id cannot trigger a scan storm.
+    Signature unchanged means nothing on disk moved, so nothing is rescanned and a bad id
+    cannot trigger a scan storm. `force` skips the throttle for a resolution MISS, so
+    "install a pack, enable its skill in the next breath" never waits out an interval.
     """
+    global _LAST_SIGNATURE_CHECK
+    now = time.monotonic()
+    if not force and now - _LAST_SIGNATURE_CHECK < RESCAN_MIN_INTERVAL_SECONDS:
+        return False
+    _LAST_SIGNATURE_CHECK = now
     if _discovery_signature() == _LAST_SCAN_SIGNATURE:
         return False
     reload_skills()
@@ -253,8 +268,9 @@ def reload_skills() -> None:
     Discovery is otherwise cached for process lifetime (`@cache`); nothing else needs to call
     this in normal operation since the on-disk skill set doesn't change outside of generation.
     """
-    global _LAST_SCAN_SIGNATURE
+    global _LAST_SCAN_SIGNATURE, _LAST_SIGNATURE_CHECK
     _LAST_SCAN_SIGNATURE = None
+    _LAST_SIGNATURE_CHECK = float("-inf")
     _discover_registry.cache_clear()
 
 
@@ -272,7 +288,14 @@ def built_in_skill_ids() -> set[str]:
 
 
 def available_skills() -> list[Skill]:
-    """Return every discoverable skill in ``skills/``, sorted by id."""
+    """Return every discoverable skill in ``skills/``, sorted by id.
+
+    Self-heals like `load_skill`, and it matters MORE here: `.skill list` and the
+    membership check behind `.skill enable` (`gateway.commands.rules`) both read this, so
+    without the check a skill installed by another process stayed "unknown" at the very
+    command a keeper reaches for right after installing a pack.
+    """
+    _rescan_if_dirs_changed()
     return [skill for _, skill in sorted(_discover_registry().items())]
 
 
@@ -282,12 +305,14 @@ def load_skill(skill_id: str) -> Skill | None:
     Callers must tolerate ``None`` (an id enabled for a room that no longer
     resolves to a discoverable skill, e.g. after its directory was removed).
 
-    A miss re-checks the discovery dirs once (`_rescan_if_dirs_changed`) before giving up,
-    so a skill installed by ANOTHER process resolves without restarting the server — the
-    same self-heal, for the same out-of-process install, as `core.rulepacks.load_rulepack`.
+    Self-healing against out-of-process installs, the same way `core.rulepacks.load_rulepack`
+    is: a throttled signature check every call (catching a skill UPGRADED in place, so an
+    enabled skill's body follows a pack upgrade) and a forced one on a MISS (catching a
+    newly installed id). Neither needs a restart.
     """
+    _rescan_if_dirs_changed()
     skill = _discover_registry().get(skill_id)
-    if skill is None and _rescan_if_dirs_changed():
+    if skill is None and _rescan_if_dirs_changed(force=True):
         skill = _discover_registry().get(skill_id)
     return skill
 

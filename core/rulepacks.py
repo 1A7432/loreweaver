@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from functools import cache
@@ -736,17 +737,36 @@ def _discovery_signature() -> tuple[Any, ...]:
 # Signature of the discovery dirs as they looked during the last real scan. `None` means
 # discovery has not run yet in this process.
 _LAST_SCAN_SIGNATURE: tuple[Any, ...] | None = None
+# When the signature was last compared (monotonic seconds); -inf means never.
+_LAST_SIGNATURE_CHECK: float = float("-inf")
+
+# How often a lookup may re-stat the discovery dirs. The self-heal has to cover two
+# out-of-process shapes, not one: a NEW id (a miss — always worth a fresh look, so a miss
+# forces the check) and an id UPGRADED IN PLACE, which is a HIT that quietly keeps serving
+# the object from the old scan. Reinstalling a pack at a newer version is exactly that
+# second shape, so the check runs on hits as well — throttled, since a hit is the hot path:
+# one `monotonic()` compare, and at most one stat sweep of two or three directories per
+# interval. Tests set this to 0 to check every call.
+RESCAN_MIN_INTERVAL_SECONDS = 2.0
 
 
-def _rescan_if_dirs_changed() -> bool:
+def _rescan_if_dirs_changed(*, force: bool = False) -> bool:
     """Reload discovery when the dirs changed since the last scan; True if a reload happened.
 
     This is the SELF-HEAL for out-of-process installs: a pack installed by another process
     (Studio's install button shells out to the CLI) writes into a discovery dir that the
     running server already scanned, and both `@cache`s would otherwise stay stale for the
-    rest of the process lifetime. Signature unchanged means the miss is a genuine unknown
-    name, so nothing is rescanned and a bad name cannot trigger a scan storm.
+    rest of the process lifetime. Signature unchanged means nothing on disk moved, so
+    nothing is rescanned and a bad name cannot trigger a scan storm.
+
+    `force` skips the throttle: a resolution MISS is rare and worth an immediate look, so
+    "install a pack, use it in the next breath" never waits out an interval.
     """
+    global _LAST_SIGNATURE_CHECK
+    now = time.monotonic()
+    if not force and now - _LAST_SIGNATURE_CHECK < RESCAN_MIN_INTERVAL_SECONDS:
+        return False
+    _LAST_SIGNATURE_CHECK = now
     if _discovery_signature() == _LAST_SCAN_SIGNATURE:
         return False
     reload_rulepacks()
@@ -809,8 +829,9 @@ def reload_rulepacks() -> None:
     Discovery is otherwise cached for process lifetime; nothing else needs to call this in normal
     operation since the on-disk rulepack set doesn't change outside of generation.
     """
-    global _LAST_SCAN_SIGNATURE
+    global _LAST_SCAN_SIGNATURE, _LAST_SIGNATURE_CHECK
     _LAST_SCAN_SIGNATURE = None
+    _LAST_SIGNATURE_CHECK = float("-inf")
     _discover_registry.cache_clear()
     _alias_resolver.cache_clear()
 
@@ -856,7 +877,13 @@ def claims_built_in_alias(candidates: Iterable[str]) -> bool:
 
 
 def available_systems() -> list[str]:
-    """Return the sorted ids of every rule pack discoverable in `rulepacks/`."""
+    """Return the sorted ids of every rule pack discoverable in `rulepacks/`.
+
+    Self-heals on the same throttled signature check `load_rulepack` uses: a LISTING is
+    how a keeper finds out an installed pack is there at all, so it must not be the one
+    surface that still needs a restart.
+    """
+    _rescan_if_dirs_changed()
     return sorted(_discover_registry())
 
 
@@ -866,12 +893,14 @@ def load_rulepack(system: str) -> RulePack:
     Resolution is cached keyed by the resolved pack id (via `_discover_registry`),
     so every alias of a pack returns the same loaded `RulePack`.
 
-    A miss re-checks the discovery dirs once (`_rescan_if_dirs_changed`) before giving up, so a
-    pack installed by ANOTHER process resolves without restarting the server.
+    Self-healing against out-of-process installs: every call makes a throttled check of the
+    discovery dirs (catching a pack UPGRADED in place under an id already resolved), and a
+    MISS forces one immediately (catching a newly installed id). Neither needs a restart.
     """
+    _rescan_if_dirs_changed()  # throttled: catches a pack UPGRADED in place under a known id
     alias = _normalize_alias(system)
     pack_id = _alias_resolver().get(alias)
-    if pack_id is None and _rescan_if_dirs_changed():
+    if pack_id is None and _rescan_if_dirs_changed(force=True):
         pack_id = _alias_resolver().get(alias)
     if pack_id is None:
         raise ValueError(f"unknown rulepack: {system}")

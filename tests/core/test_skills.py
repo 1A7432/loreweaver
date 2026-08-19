@@ -478,3 +478,50 @@ def test_unknown_skill_id_does_not_rescan_when_the_dirs_are_unchanged(
     finally:
         skills_module._USER_SKILL_DIR = original_user_dir
         skills_module.reload_skills()
+
+
+def test_a_pack_upgraded_in_place_replaces_the_skill_a_hit_would_have_served(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bite a miss-only self-heal leaves: reinstalling a pack at a NEWER version
+    rewrites its SKILL.md under the SAME id, which resolves as a HIT — so the running
+    server kept serving the old body (the procedure the Keeper is actually following)
+    until a restart. This is antu 0.2.0 -> 0.2.1 exactly."""
+    monkeypatch.setattr(skills_module, "RESCAN_MIN_INTERVAL_SECONDS", 0.0)
+    original_user_dir = skills_module._USER_SKILL_DIR
+    skills_module._USER_SKILL_DIR = tmp_path
+    skills_module.reload_skills()
+    try:
+        _write_skill(tmp_path, "antu-keeper", GOOD_SKILL)
+        first = skills_module.load_skill("antu-keeper")
+        assert first is not None and "Test Skill Body" in first.body
+
+        # Another process installs the newer pack over the old one: same id, new body.
+        upgraded = GOOD_SKILL.replace("# Test Skill Body", "# Warm-up first, then the table")
+        _write_skill(tmp_path, "antu-keeper", upgraded)
+
+        second = skills_module.load_skill("antu-keeper")
+        assert second is not None
+        assert "Warm-up first" in second.body, "a hit kept serving the pre-upgrade body"
+    finally:
+        skills_module._USER_SKILL_DIR = original_user_dir
+        skills_module.reload_skills()
+
+
+def test_the_listing_behind_skill_enable_sees_an_out_of_process_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`.skill enable <id>` validates against `available_skills()`, not `load_skill()`
+    (`gateway.commands.rules`). Healing only the loader left the very command a keeper
+    reaches for after installing a pack answering "unknown skill"."""
+    monkeypatch.setattr(skills_module, "RESCAN_MIN_INTERVAL_SECONDS", 0.0)
+    original_user_dir = skills_module._USER_SKILL_DIR
+    skills_module._USER_SKILL_DIR = tmp_path
+    skills_module.reload_skills()
+    try:
+        assert "installed-elsewhere" not in {skill.id for skill in skills_module.available_skills()}
+        _write_skill(tmp_path, "installed-elsewhere", GOOD_SKILL)
+        assert "installed-elsewhere" in {skill.id for skill in skills_module.available_skills()}
+    finally:
+        skills_module._USER_SKILL_DIR = original_user_dir
+        skills_module.reload_skills()

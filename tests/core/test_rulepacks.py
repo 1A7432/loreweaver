@@ -738,3 +738,69 @@ def test_loss_ceiling_parses_and_validates():
         bad = f"extends: coc7\nnames: [t]\nsubsystems:\n  sanity_check:\n    loss_ceiling: {bad_ceiling}\n"
         with pytest.raises((SubsystemError, ValueError)):
             parse_rulepack_text("t", bad, base_loader=load_raw_rulepack_yaml)
+
+
+def test_a_pack_upgraded_in_place_replaces_the_rulepack_a_hit_would_have_served(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The twin of the skills case, and the one that changes DICE: reinstalling a pack at
+    a newer version rewrites its rulepack under the same id, which resolves as a HIT — so a
+    miss-only self-heal left the room rolling on the pre-upgrade ladder until a restart."""
+    monkeypatch.setattr(rulepacks_module, "RESCAN_MIN_INTERVAL_SECONDS", 0.0)
+    original_user_dir = rulepacks_module._USER_RULEPACK_DIR
+    rulepacks_module._USER_RULEPACK_DIR = tmp_path
+    _clear_rulepack_caches()
+    try:
+        _write_rulepack(tmp_path, "upgradable", _USER_DIR_FIXTURE_YAML)
+        assert rulepacks_module.load_rulepack("user-fixture-system").defaults["力量"] == 10
+
+        # Another process installs the newer pack over the old one: same id, new numbers.
+        _write_rulepack(tmp_path, "upgradable", _USER_DIR_FIXTURE_YAML.replace("力量: 10", "力量: 55"))
+
+        assert rulepacks_module.load_rulepack("user-fixture-system").defaults["力量"] == 55
+    finally:
+        rulepacks_module._USER_RULEPACK_DIR = original_user_dir
+        _clear_rulepack_caches()
+
+
+def test_available_systems_sees_an_out_of_process_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The listing is how a keeper learns an installed system exists at all."""
+    monkeypatch.setattr(rulepacks_module, "RESCAN_MIN_INTERVAL_SECONDS", 0.0)
+    original_user_dir = rulepacks_module._USER_RULEPACK_DIR
+    rulepacks_module._USER_RULEPACK_DIR = tmp_path
+    _clear_rulepack_caches()
+    try:
+        assert "listed-elsewhere" not in rulepacks_module.available_systems()
+        _write_rulepack(tmp_path, "listed-elsewhere", _USER_DIR_FIXTURE_YAML)
+        assert "listed-elsewhere" in rulepacks_module.available_systems()
+    finally:
+        rulepacks_module._USER_RULEPACK_DIR = original_user_dir
+        _clear_rulepack_caches()
+
+
+def test_the_hit_path_stays_throttled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Healing on hits must not turn the hot path into a stat storm: inside one interval
+    the dirs are probed once, however many times a rulepack resolves."""
+    original_user_dir = rulepacks_module._USER_RULEPACK_DIR
+    rulepacks_module._USER_RULEPACK_DIR = tmp_path
+    _clear_rulepack_caches()
+    try:
+        rulepacks_module.load_rulepack("coc7")  # warm + record the signature
+
+        probes = 0
+        real_signature = rulepacks_module._discovery_signature
+
+        def counting_signature():
+            nonlocal probes
+            probes += 1
+            return real_signature()
+
+        monkeypatch.setattr(rulepacks_module, "_discovery_signature", counting_signature)
+        for _ in range(50):
+            rulepacks_module.load_rulepack("coc7")
+        assert probes <= 1
+    finally:
+        rulepacks_module._USER_RULEPACK_DIR = original_user_dir
+        _clear_rulepack_caches()
