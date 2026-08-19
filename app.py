@@ -35,7 +35,6 @@ from infra.pack_source import PackRefError, resolve_pack_ref
 from infra.providers import provider_cost_class
 from infra.version import resolve_version
 from net.keystore import Keystore
-from net.session import PROTOCOL_VERSION
 from net.tui_server import TuiServer
 
 DEFAULT_TUI_HOST = "127.0.0.1"
@@ -434,73 +433,12 @@ def _rulepack_stem_collision_warnings(settings: Settings, i18n: I18n) -> list[st
 
 
 def _print_trust_card(i18n: I18n, manifest: core_pack.PackManifest, locale: str) -> None:
-    """The pre-install/post-build disclosure card: what's inside, notably whether the
-    pack ships sandboxed hooks/EJS code and how heavy its media is. Disclosure, not a
-    gate — the same trust stance as full EJS (the operator's box, the operator's call)."""
-    trust = manifest.trust
-    if trust is None:
-        return
-    description = manifest.description.get(locale) or manifest.description.get("en") or ""
-    print(
-        i18n.t(
-            "pack.card.header",
-            name=manifest.display_name(locale),
-            id=manifest.id,
-            version=manifest.version,
-        ),
-        file=sys.stderr,
-    )
-    if description:
-        print(i18n.t("pack.card.description", description=description), file=sys.stderr)
-    print(
-        i18n.t(
-            "pack.card.provenance",
-            authors=", ".join(manifest.authors) or "-",
-            license=manifest.license,
-        ),
-        file=sys.stderr,
-    )
-    print(
-        i18n.t(
-            "pack.card.trust",
-            skills=trust.skills,
-            rulepacks=trust.rulepacks,
-            cards=trust.cards,
-            lorebooks=trust.lorebooks,
-            panels=trust.panels,
-            assets=trust.assets,
-            asset_mb=f"{trust.asset_bytes / (1024 * 1024):.1f}",
-            hooks=i18n.t("pack.flag.yes") if trust.has_hooks else i18n.t("pack.flag.no"),
-            ejs=i18n.t("pack.flag.yes") if trust.has_ejs else i18n.t("pack.flag.no"),
-            rules_script=i18n.t("pack.flag.yes") if trust.has_rules_script else i18n.t("pack.flag.no"),
-        ),
-        file=sys.stderr,
-    )
-    if trust.has_rules_script:
-        # The flag alone undersells it: hooks decorate a turn, but a rules script
-        # IS the check ladder — it decides whether the operator's players succeed.
-        print(i18n.t("pack.card.rules_script"), file=sys.stderr)
-    if trust.world_cards:
-        print(i18n.t("pack.card.world_cards", count=trust.world_cards), file=sys.stderr)
-    if trust.presentation:
-        # Disclosure, not marketing: an operator must see BEFORE install whether a
-        # module's Stage Director may spend their image-provider budget.
-        print(
-            i18n.t(
-                "pack.card.presentation",
-                subjects=trust.presentation,
-                imagegen=i18n.t(
-                    "pack.card.presentation.imagegen" if trust.imagegen else "pack.card.presentation.pack_only"
-                ),
-            ),
-            file=sys.stderr,
-        )
-    if trust.presets:
-        print(i18n.t("pack.card.presets", count=trust.presets), file=sys.stderr)
-    if trust.prep_scripts:
-        # Code, so it gets a loud line like hooks — but unlike hooks it never
-        # auto-runs: the keeper invokes it by reference and previews the whole plan.
-        print(i18n.t("pack.card.prep", count=trust.prep_scripts), file=sys.stderr)
+    """The pre-install/post-build disclosure card, on stderr. The card itself is built by
+    `gateway.pack_install.trust_card_lines`, which the in-room `.pack install` renders too."""
+    from gateway.pack_install import trust_card_lines
+
+    for line in trust_card_lines(i18n, manifest, locale):
+        print(line, file=sys.stderr)
 
 
 def _run_pack(i18n: I18n, args: argparse.Namespace) -> int:
@@ -574,26 +512,13 @@ def _run_install(settings: Settings, i18n: I18n, args: argparse.Namespace) -> in
             print(i18n.t("pack.install.aborted"), file=sys.stderr)
             return 1
 
-    builtin_skill_ids = [entry.parent.name for entry in core_skills._SKILL_DIR.glob("*/SKILL.md")]
-    builtin_rulepack_ids = [entry.stem for entry in core_rulepacks._RULEPACK_DIR.glob("*.yaml")]
+    from gateway.pack_install import install_pack_here
+
     try:
-        report = core_pack.install_pack(
-            pack_path,
-            packs_dir=packs_dir,
-            skills_dir=Path(settings.data_dir) / "skills",
-            rulepacks_dir=Path(settings.data_dir) / "rulepacks",
-            presets_dir=Path(settings.data_dir) / "presets",
-            current_protocol=PROTOCOL_VERSION,
-            current_server=resolve_version(),
-            builtin_skill_ids=builtin_skill_ids,
-            builtin_rulepack_ids=builtin_rulepack_ids,
-        )
+        report = install_pack_here(settings.data_dir, pack_path)
     except core_pack.PackError as exc:
         print(i18n.t("pack.install.failed", error=str(exc)), file=sys.stderr)
         return 1
-    # A just-installed skill/rulepack must be discoverable without a restart.
-    core_skills.reload_skills()
-    core_rulepacks.reload_rulepacks()
 
     print(i18n.t("pack.install.done", id=report.manifest.id, version=report.manifest.version), file=sys.stderr)
     if report.skills:

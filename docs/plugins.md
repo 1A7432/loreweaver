@@ -666,10 +666,21 @@ so this costs nothing until an author asks for it.
   `pack.yaml` manifest (`core/pack.py`). Authors run `python -m app --pack <src-dir>`;
   users run `python -m app --install <ref> [--yes]`. No "install plugin X first"
   instructions, no image-host/OSS links for assets.
+- **From the table, too:** a keeper with no shell on the box runs `.pack install
+  <ref>` in the room. Same refs, same install function (`gateway/pack_install.py`
+  serves both doors). On a remote table install IS enable — the terminal's
+  per-item confirmation has no honest wire equivalent, and a keeper who typed the
+  ref has already made the trust decision — so the pack is enabled for that room
+  and the reply carries the trust card plus one line saying its hooks and scripts
+  now run there. Keeper-only, naturally: it writes to the server's data dir.
 - **Git IS the registry:** an install ref is a local path, an `https://` direct
-  link, or `gh:owner/repo[@tag]` — resolved through the anonymous GitHub API to
-  that release's `*.lwpack` asset (`@tag` pins a release; without it, latest)
-  by `infra/pack_source.py`. There is deliberately no central package registry.
+  link, or `gh:owner/repo[@tag]` — resolved through the GitHub API to that
+  release's `*.lwpack` asset (`@tag` pins a release; without it, latest) by
+  `infra/pack_source.py`. The API call is anonymous unless `GITHUB_TOKEN` /
+  `GH_TOKEN` is set, which lifts the per-IP anonymous rate limit a shared host
+  hits as a 403; the credential rides ONLY on `api.github.com` requests, never on
+  the asset download or on any other `https://` ref. There is deliberately no
+  central package registry.
 - **Install ≠ enable** (the existing layering): skills land in the user skill
   dir and rulepacks in the user rulepack dir — discoverable immediately, but a
   room still opts in via `.skill enable <id>`. A rulepack is discoverable but

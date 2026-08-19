@@ -333,6 +333,15 @@ class CommandRouter(
                 keeper_help=True,
             ),
             CommandSpec("panels", self.cmd_panels, ["panels"], ["panels", "模组面板"], None, "commands.help.panels"),
+            CommandSpec(
+                "pack",
+                self.cmd_pack,
+                ["pack"],
+                ["pack", "扩展包", "擴展包"],
+                None,
+                "commands.help.pack",
+                keeper_help=True,
+            ),
             CommandSpec("avatar", self.cmd_avatar, ["avatar"], ["avatar", "头像"], None, "commands.help.avatar"),
             CommandSpec(
                 "audio",

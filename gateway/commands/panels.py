@@ -1,8 +1,10 @@
-"""Module panels: `.panel` (a panel as text, per viewer) and `.panels` (pack enablement)."""
+"""Content packs: `.panel` (a panel as text, per viewer), `.panels` (pack enablement for
+this room) and `.pack install` (landing a pack on this server in the first place)."""
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 from gateway.commands.rooms import _TUI_KEEPER_ROLE, _is_keeper
@@ -16,6 +18,9 @@ from gateway.ops import (
 from gateway.turn import state_for_ctx
 
 logger = logging.getLogger(__name__)
+
+# `.pack <sub>` — one subcommand for now, spelled in both dialects.
+_PACK_INSTALL_WORDS = {"install", "add", "安装", "安裝"}
 
 
 class PanelsCommands:
@@ -124,6 +129,63 @@ class PanelsCommands:
             marker_key = "commands.skill.enabled_some" if pack_id in enabled_ids else "commands.skill.enabled_none"
             lines.append(f"[{ctx.i18n.t(marker_key)}] {pack_id} — {ctx.i18n.t('commands.panels.count', count=count)}")
         return ctx.i18n.t("commands.panels.list", items="\n".join(lines))
+
+    async def cmd_pack(self, ctx: CommandCtx) -> str:
+        """`.pack install <ref>` — install a content pack onto THIS server and enable it here.
+
+        `ref` is what `--install` accepts: a server-local path, an `https://` link, or
+        `gh:owner/repo[@tag]` (Git releases ARE the registry). Keeper-only, because it
+        writes to the server's data dir and because what it installs then RUNS here.
+
+        Owner verdict 2026-08-19: on a remote table, install IS enable. The CLI's
+        per-item confirmation cannot be reproduced across the wire in any honest way —
+        a keeper who typed the ref has already made the trust decision — so the reply
+        carries the same disclosure card the terminal prints, plus one line saying
+        plainly that the pack's hooks and scripts now run in this room.
+        """
+        import asyncio
+
+        from core.pack import PackError, inspect_pack
+        from gateway.pack_install import install_pack_here, trust_card_lines
+        from gateway.panels import publish_ui_manifests
+        from infra.pack_source import PackRefError, resolve_pack_ref
+
+        if not _is_keeper(ctx.raw_ctx):
+            return ctx.fail(ctx.i18n.t("rooms.denied"))
+        parts = ctx.args.split(maxsplit=1)
+        sub = parts[0].casefold() if parts else ""
+        ref = parts[1].strip() if len(parts) > 1 else ""
+        if sub not in _PACK_INSTALL_WORDS or not ref:
+            return ctx.i18n.t("commands.pack.usage")
+
+        data_dir = Path(ctx.services.settings.data_dir)
+        # Every step below is blocking (network, zip verification, extraction) and this
+        # runs under the room's turn lock, so it goes to a worker thread — an install
+        # must not park the whole server's event loop.
+        try:
+            pack_path = await asyncio.to_thread(
+                resolve_pack_ref, ref, cache_dir=data_dir / "packs" / "_cache"
+            )
+        except PackRefError as exc:
+            return ctx.fail(ctx.i18n.t("pack.ref.failed", error=str(exc)))
+        try:
+            manifest = await asyncio.to_thread(inspect_pack, pack_path)
+            report = await asyncio.to_thread(install_pack_here, data_dir, pack_path)
+        except PackError as exc:
+            # `install_pack` verifies before it writes, so a failure here changed nothing.
+            return ctx.fail(ctx.i18n.t("pack.install.failed", error=str(exc)))
+
+        pack_id = report.manifest.id
+        await toggle_enabled_panel_pack(ctx.services.store, ctx.chat_key, pack_id, on=True)
+        if self.hub is not None:
+            await publish_ui_manifests(self.hub, ctx.services, ctx.chat_key)
+
+        lines = [
+            ctx.i18n.t("commands.pack.installed", id=pack_id, version=report.manifest.version),
+            *trust_card_lines(ctx.i18n, manifest, ctx.locale),
+            ctx.i18n.t("commands.pack.risk"),
+        ]
+        return "\n".join(lines)
 
     async def _panels_set(self, ctx: CommandCtx, pack_id: str, *, enable: bool) -> str:
         from gateway.panels import installed_panel_count, installed_presentation_count, publish_ui_manifests
