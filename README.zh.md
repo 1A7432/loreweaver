@@ -15,7 +15,7 @@ Loreweaver 是一个开源的 **AI RPG 引擎与开放标准**。你和朋友出
 
 一个世界的规则、设定、演员表、界面和演出，都是写成文件的公开格式，而不是写死在引擎里的功能——所以一个世界可以打包带走，也可以交给别人。服务器跑在你自己的电脑上。《克苏鲁的呼唤》7 版和 D&D 5e（SRD）随包发，中英双语都是一等公民。
 
-[![CI](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml/badge.svg)](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml) ![license](https://img.shields.io/badge/license-MIT-green) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![clients](https://img.shields.io/badge/clients-TypeScript%20%2F%20Bun-black) [![protocol](https://img.shields.io/badge/protocol-2.1-informational)](docs/protocol.zh.md)
+[![CI](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml/badge.svg)](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml) ![license](https://img.shields.io/badge/license-MIT-green) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![clients](https://img.shields.io/badge/clients-TypeScript%20%2F%20Bun-black) [![protocol](https://img.shields.io/badge/protocol-2.3-informational)](docs/protocol.zh.md)
 
 **链接：**[项目主页](https://1a7432.site) · [玩家指令手册](https://1a7432.site/commands.html) · [路线图](docs/roadmap.zh.md) · [部署](docs/deploy.zh.md) · [GitHub](https://github.com/1A7432/loreweaver)
 
@@ -224,7 +224,7 @@ net/    Iroh p2p + 会话核心     adapters/ CLI          clients/ protocol（n
 
 层级契约、铁律，以及怎么加规则包 / provider / 工具 / 客户端：**[AGENTS.md](AGENTS.md)**。
 
-**要写客户端或机器人？** 协议是公开的，也有版本号：**[docs/protocol.zh.md](docs/protocol.zh.md)**（2.1）。带类型的帧定义和一个会自动重连的 WebSocket 客户端发在 npm 上，包名 [`loreweaver-protocol`](https://www.npmjs.com/package/loreweaver-protocol)，它的 `major.minor` 跟着协议版本走。
+**要写客户端或机器人？** 协议是公开的，也有版本号：**[docs/protocol.zh.md](docs/protocol.zh.md)**（2.3）。带类型的帧定义和一个会自动重连的 WebSocket 客户端发在 npm 上，包名 [`loreweaver-protocol`](https://www.npmjs.com/package/loreweaver-protocol)，它的 `major.minor` 跟着协议版本走。
 
 **要跑常驻服务器？** 多数牌桌用笔记本 p2p 就够了；要 7×24，见 **[docs/deploy.zh.md](docs/deploy.zh.md)**（systemd、密钥、备份、信任边界）。
 

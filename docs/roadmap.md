@@ -60,6 +60,21 @@ speak the open protocol instead.
   should do with it — the build fails if any state has nobody answering for it, which is what three
   "the reset forgot something" fixes in one month were asking for. Decisions taken and rejected live
   in [docs/notes/](notes/).
+- **The first full live run of the flagship module, and the structure it paid for (2026-08-18/19).**
+  Fifty player turns through all five acts, with a real model and two real players. The module held;
+  the engine and the Keeper's seat did not, in two places: the Keeper could not see a non-acting
+  player's sheet, registered that player as an AI companion and acted for them, and an advance on a
+  module's own calendar was dropped whole, so its day counter never moved. Both are fixed at the
+  structural layer — a player's name can no longer be written as an NPC or companion through *any*
+  door, removing a companion retires its sheet with it, a custom calendar's advances still reach the
+  room's hooks — and the run left behind three operator levers: `.npc` / `.companion` (the keeper's
+  hand on the cast), `.panel <id>` (a module panel as text, for any client that cannot draw it) and
+  `TRPG_DEBUG__TOOL_TRACE` (every tool call the model made, with arguments and results, off by
+  default). A whole-repo review the next day found the debt concentrated rather than spread, and the
+  two halves that mattered landed the same day: the 4,000-line command router is now a package of
+  domain modules (a new command lands in its domain, never in the turn pipeline), and every model
+  call site declares its lane — the Keeper's context has exactly one assembler and one caller,
+  `core/` makes no model calls at all, and a new call site fails the build until it is named.
 
 Alongside those: deterministic module variables with a live tracker panel, full SillyTavern
 compatibility for imported cards (MVU variable trees, the `<UpdateVariable>` text protocol, full EJS

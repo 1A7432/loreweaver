@@ -184,7 +184,18 @@ Every provider path retries a 429 or an overloaded response with bounded, jitter
 throttled turn gets **slower, never dead**. Watch the server log for `LLM throttled` lines; if you
 see them often, the table is outrunning your plan's rate limit. The first fix is not a bigger plan —
 it is giving the Scribe (and the Director, if you run one) their own smaller model and key instead of
-sharing the Keeper's.
+sharing the Keeper's. When a provider says *how long* to wait (a `Retry-After` header or a cooldown in
+the error body), the retry waits that long (up to 60 seconds) instead of burning its attempts inside
+the cooldown.
+
+### When a turn went wrong and you need to know why
+
+`TRPG_DEBUG__TOOL_TRACE=tool_trace.jsonl` in `.env` appends one JSON line per tool call the model
+makes — room, tool, phase, arguments, result, elapsed time — including calls that were refused and
+calls a hook vetoed. It is the fastest way to answer "which number did the Keeper actually pass" or
+"which tool failed every time it was tried". Off unless you set it; a relative path lands under the
+data directory with owner-only permissions, because the file holds keeper-grade content (arguments
+and results carry secret lore). A debugging artifact, not something to attach to a bug report.
 
 ### Campaign memory folds itself
 

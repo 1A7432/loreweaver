@@ -15,7 +15,7 @@ Loreweaver is an open-source **engine and open standard for AI-run tabletop RPGs
 
 A world's rules, lore, cast, interface and staging are all plain files in documented formats rather than features baked into the engine, so a world can be packed up and handed to someone else. The server runs on your own machine. Call of Cthulhu 7e and D&D 5e (SRD) ship with it, and English and Chinese are both first-class.
 
-[![CI](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml/badge.svg)](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml) ![license](https://img.shields.io/badge/license-MIT-green) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![clients](https://img.shields.io/badge/clients-TypeScript%20%2F%20Bun-black) [![protocol](https://img.shields.io/badge/protocol-2.1-informational)](docs/protocol.md)
+[![CI](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml/badge.svg)](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml) ![license](https://img.shields.io/badge/license-MIT-green) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![clients](https://img.shields.io/badge/clients-TypeScript%20%2F%20Bun-black) [![protocol](https://img.shields.io/badge/protocol-2.3-informational)](docs/protocol.md)
 
 **Links:** [Homepage](https://1a7432.site) · [Command manual](https://1a7432.site/commands-en.html) · [Play](docs/play.md) · [Author a pack](docs/authoring.md) · [Run a table](docs/operating.md)
 
@@ -323,7 +323,7 @@ Layer contracts, the iron rules, and how to add a rulepack / provider / tool / c
 **[AGENTS.md](AGENTS.md)**.
 
 **Building a client or a bot?** The protocol is open and versioned:
-**[docs/protocol.md](docs/protocol.md)** (2.1). Typed frames and a reconnecting WebSocket client
+**[docs/protocol.md](docs/protocol.md)** (2.3). Typed frames and a reconnecting WebSocket client
 ship on npm as [`loreweaver-protocol`](https://www.npmjs.com/package/loreweaver-protocol), whose
 `major.minor` tracks the protocol version.
 

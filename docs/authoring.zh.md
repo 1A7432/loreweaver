@@ -582,6 +582,8 @@ TRPG_DEV__SOURCE_ROOT=~/my-packs uv run python -m app --serve --keys /tmp/lw-key
 
 挂载被限制在 `TRPG_DEV__SOURCE_ROOT` 之下，不设置它整个功能就是关的——只在你自己的开发机上开。开发挂载直接从源码提供面板和演出资料包（跳过构建期的上限检查），所以 `--pack` 仍然是发布前必须过的那道门。
 
+**真跑出了问题，把工具调用记下来。** `TRPG_DEBUG__TOOL_TRACE=tool_trace.jsonl`（相对路径落在数据目录下）会把模型发出的每一次工具调用追加成一行 JSON——`{ts, ms, room, tool, phase, args, result}`，被拒绝的和被 hook 否决的也在内。它回答的是对话记录回答不了的问题：守秘人到底传了哪个参数、哪个工具每次都失败、一个回合的时间花在哪。默认关，值得一句提醒：文件里逐字记着工具的参数和结果，也就是你模组的秘密——它是调试用的，不是该贴进 bug 报告的东西。
+
 **脚本化链路**——不用 key、不联网、真骰子：
 
 ```bash
