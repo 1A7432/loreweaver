@@ -583,6 +583,12 @@ def _pick_text(value: Any, locale: str | None) -> str | None:
     """
     if isinstance(value, str):
         return value
+    if isinstance(value, (list, tuple)):
+        # The client treats ANY non-null object as a locale map and falls through to
+        # `Object.values(...)` — for an array that is its elements in order. Reachable: an
+        # exposed MVU array leaf bound with `$var` lands here, and the rich clients draw
+        # its first string; so must the text fallback.
+        return next((item for item in value if isinstance(item, str) and item), None)
     if not isinstance(value, Mapping):
         return None
     short = ("en" if locale is None else str(locale))[:2]

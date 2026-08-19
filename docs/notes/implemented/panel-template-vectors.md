@@ -8,7 +8,11 @@
   until the next edit: nothing failed when the halves drifted, and three of them already
   had (an empty `visible_when` showed server-side but hid client-side; a duplicate
   variable id resolved to the LAST entry server-side and the first client-side; a
-  `{$var: …, extra: …}` dict was a binding client-side and a literal server-side).
+  `{$var: …, extra: …}` dict was a binding client-side and a literal server-side). The
+  owner's review of the first cut found a fourth, REACHABLE one the subagent had
+  classed as unreachable: an exposed MVU array leaf bound with `$var` — the client
+  treats any object as a locale map and picks the first string element, the engine saw
+  a list, called it "no text" and hid the block. Every one of the four is now a row.
 - **Verdict:** one table, `tests/fixtures/panel_template_vectors.json`, consumed by
   `tests/core/test_panel_template_vectors.py` and
   `clients/tui/src/panelTemplates.vectors.test.ts` — the shape

@@ -342,6 +342,30 @@
       "expect": [{"kind": "stat", "label": "Day", "value": 1}]
     },
     {
+      "id": "var-binding-with-extra-keys-is-still-a-binding",
+      "why": "the client tests `\"$var\" in value`, not \"exactly this one key\" — a dict that also carries other keys is a binding (the build refuses it anyway); pinned so neither side drifts back to \"exactly one key\", which once had the engine render the variable id as text",
+      "blocks": [{"kind": "stat", "label": "Day", "value": {"$var": "day", "extra": 1}}],
+      "variables": [{"id": "day", "label": "Day", "value": 15}],
+      "locale": "en",
+      "expect": [{"kind": "stat", "label": "Day", "value": 15}]
+    },
+    {
+      "id": "array-variable-value-picks-its-first-string",
+      "why": "an exposed MVU array leaf bound into a text field: the client treats any object as a locale map and falls through to Object.values, so the first non-empty string element is the text — the rich clients draw it, and the text fallback must not hide the block instead",
+      "blocks": [{"kind": "text", "text": {"$var": "mvu.notes"}}, {"kind": "stat", "label": "Tags", "value": {"$var": "mvu.tags"}}],
+      "variables": [{"id": "mvu.notes", "label": "notes", "value": ["", "first note", "second"]}, {"id": "mvu.tags", "label": "tags", "value": ["wet", "cold"]}],
+      "locale": "zh",
+      "expect": [{"kind": "text", "text": "first note"}, {"kind": "stat", "label": "Tags", "value": "wet"}]
+    },
+    {
+      "id": "array-variable-without-a-string-is-a-miss",
+      "why": "the other half of the same rule: an array of numbers has no text to pick, and a required text field with nothing to show hides its block",
+      "blocks": [{"kind": "text", "text": {"$var": "mvu.readings"}}],
+      "variables": [{"id": "mvu.readings", "label": "readings", "value": [16, 19, 22]}],
+      "locale": "en",
+      "expect": []
+    },
+    {
       "id": "localization-falls-back-to-en",
       "why": "this viewer's locale first, then en",
       "blocks": [{"kind": "text", "text": {"en": "The gate"}}],
