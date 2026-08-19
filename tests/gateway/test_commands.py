@@ -2535,6 +2535,15 @@ async def test_npc_and_companion_give_the_keeper_a_hand_on_the_cast():
     only_companions = await router.dispatch(keeper, ".companion list")
     assert "公所助手" in only_companions and "老蒯" not in only_companions
 
+    # An empty COMPANION list answers the narrower question it was asked: a room full of
+    # NPCs and no companions is not "this room has no cast records".
+    other = AgentCtx(chat_key="cli:dm:cast-npcs-only", user_id="kp", locale="en")
+    await create_npc(services.documents, other.chat_key, "灯匠", persona="the lamp-maker")
+    empty = await router.dispatch(other, ".companion list")
+    assert empty == services.i18n.with_locale("en").t("commands.cast.empty_companions")
+    assert ".party add" in empty
+    assert "灯匠" in await router.dispatch(other, ".npc")
+
     shown = await router.dispatch(keeper, ".npc show 老蒯")
     assert "the warden" in shown and "knows the dormancy month" in shown
     assert "the belt sleeps in the eleventh month" in shown

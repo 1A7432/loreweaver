@@ -126,7 +126,12 @@ class CastCommands:
                 else await npc_records.list_npcs(documents, ctx.chat_key)
             )
             if not records:
-                return ctx.i18n.t("commands.cast.empty")
+                # `.companion` asked a narrower question than `.npc` did, so "no cast
+                # records" answered something the keeper did not ask: a room full of NPCs
+                # and no companions read as an empty room.
+                return ctx.i18n.t(
+                    "commands.cast.empty_companions" if companions_only else "commands.cast.empty"
+                )
             lines = [ctx.i18n.t("commands.cast.header", count=len(records))]
             for record in records:
                 lines.append(

@@ -55,6 +55,7 @@
   "commands.botlist.usage": "用法：.botlist [add|remove|list] <机器人ID>",
   "commands.cast.deleted": "✅ 已从名录移除 {name} [{id}]（其角色卡若有，原样保留）。",
   "commands.cast.empty": "本房间还没有任何角色记录。",
+  "commands.cast.empty_companions": "队伍里还没有 AI 同伴。守秘人可用 `.party add <名字>` 添加。",
   "commands.cast.header": "🎭 角色名录（{count} 位）：",
   "commands.cast.item": "· {name} [{id}] —— {kind}，在 {location}",
   "commands.cast.kind.companion": "AI 同伴",

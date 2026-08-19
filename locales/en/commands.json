@@ -55,6 +55,7 @@
   "commands.botlist.usage": "Usage: .botlist [add|remove|list] <bot_id>",
   "commands.cast.deleted": "✅ Removed {name} [{id}] from the cast (their character sheet, if any, is untouched).",
   "commands.cast.empty": "This room has no cast records yet.",
+  "commands.cast.empty_companions": "No AI companions in the party yet. A Keeper adds one with `.party add <name>`.",
   "commands.cast.header": "🎭 Cast ({count}):",
   "commands.cast.item": "· {name} [{id}] — {kind}, at {location}",
   "commands.cast.kind.companion": "AI companion",
