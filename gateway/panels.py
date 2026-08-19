@@ -344,15 +344,23 @@ async def build_ui_manifest_frame(services: Services, chat_key: str, role: str) 
     return {"type": "ui_manifest", "panels": panels}
 
 
-async def member_panel_ids(services: Services, chat_key: str, role: str) -> set[str]:
-    """The wire panel ids in ``role``'s manifest for this room — the `panel_intent`
-    authorization set (an intent naming any other panel is refused)."""
-    ids: set[str] = set()
+async def enabled_panels(services: Services, chat_key: str, role: str) -> list[tuple[str, PanelSpec]]:
+    """Every panel ``role`` may see in this room, as ``(wire_id, spec)`` in pack order.
+
+    The audience filter is the same one `build_ui_manifest_frame` applies — keeper panels
+    are absent from a player's list here too, structurally, not hidden downstream."""
+    panels: list[tuple[str, PanelSpec]] = []
     for pack_id, home, manifest in await enabled_packs(services, chat_key):
         for panel in _load_pack_panels(home, manifest):
             if audience_allows(panel.audience, role):
-                ids.add(f"{pack_id}/{panel.id}")
-    return ids
+                panels.append((f"{pack_id}/{panel.id}", panel))
+    return panels
+
+
+async def member_panel_ids(services: Services, chat_key: str, role: str) -> set[str]:
+    """The wire panel ids in ``role``'s manifest for this room — the `panel_intent`
+    authorization set (an intent naming any other panel is refused)."""
+    return {wire_id for wire_id, _panel in await enabled_panels(services, chat_key, role)}
 
 
 async def pack_asset_mime(services: Services, chat_key: str, sha256: str) -> str | None:

@@ -44,12 +44,12 @@ from __future__ import annotations
 
 import posixpath
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
 
-from core.condexpr import MAX_EXPR_LEN, CondExprError, check_subset, compile_expression
+from core.condexpr import MAX_EXPR_LEN, CondExprError, check_subset, compile_expression, evaluate_safe
 from core.hooks import (
     MAX_UI_BODY_CHARS,
     MAX_UI_CAPTION_CHARS,
@@ -514,6 +514,136 @@ def parse_panels_text(text: str) -> tuple[PanelSpec, ...]:
             raise ValueError(f"panels: duplicate panel id {panel.id!r}")
         seen.add(panel.id)
     return panels
+
+
+# --- Text rendering (protocol-client / terminal fallback) --------------------
+#
+# A tier-2 panel's `fallback` exists for exactly one purpose: to be READ by a client
+# that cannot render the rich page. Until this function existed nothing could turn it
+# into text — a 2026-08-18 play-test found `.panel` produced no frame at all, so a
+# module's look-at-the-chart clues (its whole ◈ layer) were unreachable on a terminal.
+# Pure and here rather than in a client because this module already owns the template
+# semantics both sides implement: `$var` substitution, absent-means-hide, `repeat`, and
+# `visible_when` through `core.condexpr` — the same evaluator the portability check
+# validates against at build time, so a server-rendered panel and a client-rendered one
+# cannot disagree about what is visible.
+
+MAX_TEXT_REPEAT_INSTANCES = MAX_REPEAT_INSTANCES
+
+
+def _localized_text(value: Any, locale: str) -> str:
+    if isinstance(value, dict):
+        short = (locale or "en").split("-", 1)[0].split("_", 1)[0]
+        for candidate in (short, "en"):
+            if value.get(candidate):
+                return str(value[candidate])
+        return next((str(text) for text in value.values() if text), "")
+    return "" if value is None else str(value)
+
+
+def _variable_index(variables: Sequence[Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
+    return {str(entry.get("id", "")): entry for entry in variables if entry.get("id")}
+
+
+def _resolved_scalar(value: Any, index: Mapping[str, Mapping[str, Any]], leaf: Mapping[str, Any] | None) -> Any:
+    """One template scalar with its bindings applied, or `_MISSING` when a binding names
+    a variable this viewer does not have — the fail-closed rule that hides the block."""
+    if isinstance(value, dict) and set(value) == {"$var"}:
+        entry = index.get(str(value["$var"]))
+        return entry["value"] if entry is not None else _MISSING
+    if isinstance(value, dict) and set(value) == {"$leaf"}:
+        if leaf is None:
+            return _MISSING
+        return leaf.get(str(value["$leaf"]), _MISSING)
+    return value
+
+
+_MISSING = object()
+
+
+def _block_text(block: Mapping[str, Any], index: Mapping[str, Mapping[str, Any]], locale: str, leaf: Mapping[str, Any] | None = None) -> list[str]:
+    """One rendered block as text lines (empty when it is hidden for this viewer)."""
+    condition = block.get("visible_when")
+    if isinstance(condition, str) and condition:
+        def resolve(name: str) -> Any:
+            entry = index.get(name)
+            return entry["value"] if entry is not None else None
+
+        if not evaluate_safe(condition, resolve, default=False):
+            return []
+
+    if "repeat" in block:
+        spec = block["repeat"]
+        prefix = str(spec.get("prefix", ""))
+        inner = spec.get("block") or {}
+        lines: list[str] = []
+        for entry in list(index.values())[: MAX_TEXT_REPEAT_INSTANCES * 4]:
+            if not str(entry.get("id", "")).startswith(prefix):
+                continue
+            lines.extend(_block_text(inner, index, locale, leaf=entry))
+            if len(lines) >= MAX_TEXT_REPEAT_INSTANCES:
+                break
+        return lines
+
+    kind = block.get("kind")
+    if kind == "divider":
+        return ["—"]
+
+    values: dict[str, Any] = {}
+    for key in ("label", "value", "min", "max", "text", "prompt", "caption", "alt", "tone", "style",
+                "body", "headline", "title", "subtitle", "act", "from", "to", "date", "source", "note"):
+        if key not in block:
+            continue
+        resolved = _resolved_scalar(block[key], index, leaf)
+        if resolved is _MISSING:
+            return []  # a binding this viewer cannot see hides the WHOLE block
+        values[key] = _localized_text(resolved, locale) if key not in ("value", "min", "max") else resolved
+
+    if kind == "meter":
+        return [f"{values.get('label', '')}: {values.get('value', '')}/{values.get('max', '')}"]
+    if kind == "stat":
+        return [f"{values.get('label', '')}: {values.get('value', '')}"]
+    if kind == "badge":
+        return [f"[{values.get('label', '')}]"]
+    if kind == "text":
+        return [values.get("text", "")]
+    if kind == "image":
+        caption = values.get("caption") or values.get("alt") or ""
+        return [f"🖼 {caption}".rstrip()]
+    if kind == "choices":
+        lines = [values["prompt"]] if values.get("prompt") else []
+        for option in block.get("options", []):
+            lines.append(f"  · {_localized_text(option.get('label'), locale)} → {option.get('input', '')}")
+        return lines
+    if kind == "title_card":
+        head = " · ".join(part for part in (values.get("act"), values.get("title"), values.get("subtitle")) if part)
+        return [f"— {head} —"] if head else []
+    if kind == "letter":
+        head = " · ".join(part for part in (values.get("from"), values.get("to"), values.get("date")) if part)
+        return ([f"✉ {head}"] if head else ["✉"]) + [values.get("body", "")]
+    if kind == "clipping":
+        head = " · ".join(part for part in (values.get("source"), values.get("date")) if part)
+        return [f"📰 {values.get('headline', '')}" + (f" ({head})" if head else ""), values.get("body", "")]
+    if kind == "map_pin":
+        return [f"📍 {values.get('label', '')}" + (f" — {values['note']}" if values.get("note") else "")]
+    return []
+
+
+def panel_title_text(panel: PanelSpec, locale: str) -> str:
+    """`panel`'s title in `locale` (falling back to en, then to its id)."""
+    return _localized_text(panel.title, locale) or panel.id
+
+
+def render_panel_text(panel: PanelSpec, variables: Sequence[Mapping[str, Any]], locale: str) -> list[str]:
+    """`panel` as text lines for THIS viewer: its blocks (tier 1) or its `fallback`
+    (tier 2). Empty when a tier-2 panel declared `fallback: null`, or when every block
+    is hidden — the caller decides what to say about that."""
+    blocks = panel.blocks if panel.tier == 1 else (panel.fallback or ())
+    index = _variable_index(variables)
+    lines: list[str] = []
+    for block in blocks:
+        lines.extend(_block_text(block, index, locale))
+    return [line for line in lines if line != ""]
 
 
 def audience_allows(audience: str, role: str) -> bool:

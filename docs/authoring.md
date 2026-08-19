@@ -483,6 +483,26 @@ $ .panels enable xipu-songdeng
 Enabled UI panels from pack: xipu-songdeng
 ```
 
+Anyone at the table can then read a panel as **text**, which is what makes a `fallback`
+worth writing — and how you check yours says something useful:
+
+```console
+$ .panel
+📋 Panels you can open (2):
+· xipu-songdeng/jieqing-richeng — Festival Schedule
+· xipu-songdeng/dengzhen — Lantern Array
+`.panel <id>` shows one as text.
+
+$ .panel dengzhen
+📋 Lantern Array (xipu-songdeng/dengzhen)
+The lantern array chart is best viewed in a rich client; the keeper will describe it.
+[Nine lanterns]
+```
+
+It renders against **that viewer's** own variables and audience, so a keeper panel never
+appears in a player's listing, and a block bound to a variable they cannot see is simply
+absent. `visible_when` is evaluated by the same `core.condexpr` grammar the build checked.
+
 ---
 
 ## 5. The presentation kit: giving your module a Stage Director

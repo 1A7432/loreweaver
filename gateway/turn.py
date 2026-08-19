@@ -163,13 +163,16 @@ async def run_turn(
     command_events = reply.events if reply is not None else ()
     if command_reply is not None:
         if matched_spec is not None and matched_spec.canonical == "panel":
+            # `.panel` refreshes the caller's HUD snapshot AND answers in text (the reply
+            # falls through below): a client that cannot draw a module's panels reads them
+            # here, which is the whole point of a tier-2 `fallback`. Before this the reply
+            # was dropped and the command produced no frame at all on such a client.
             snapshot = await _state_for_ctx(hub, services, ctx)
             event = Event.panel(snapshot)
             if origin is not None:
                 await origin.deliver(event)
             else:
                 await hub.publish(ctx.chat_key, event)
-            return None
         public_events: list[Event] = []
         for event in command_events:
             if event.kind == "dice":

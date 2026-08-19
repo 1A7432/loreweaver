@@ -2400,3 +2400,104 @@ async def test_panels_enable_rejects_unknown_packs_and_non_keepers(tmp_path):
     # Viewing stays open to any player.
     listing = await router.dispatch(player, ".panels")
     assert "panelpack" in listing
+
+
+_PANEL_TEXT_PANELS = """\
+panels:
+  - id: ledger
+    title: {en: The Ledger, zh: 拔营账}
+    slot: sidebar
+    audience: all
+    blocks:
+      - {kind: stat, label: {en: Day, zh: 戏内日}, value: {$var: day}}
+      - {kind: meter, label: {en: Timber, zh: 薪材}, value: {$var: timber}, min: 0, max: 24}
+      - {kind: badge, label: {en: "Gate open", zh: "门已开"}, tone: info, visible_when: "gate_open"}
+      - {kind: stat, label: {en: Secret, zh: 密}, value: {$var: keeper_only_var}}
+  - id: gauges
+    title: {en: Keeper Gauges}
+    slot: sidebar
+    audience: keeper
+    blocks: [{kind: text, text: {en: "for the keeper alone"}}]
+  - id: chart
+    title: {en: Chart, zh: 图}
+    slot: modal
+    audience: all
+    entry: ui/chart/index.html
+    assets: [ui/chart/index.html]
+    fallback:
+      - {kind: text, text: {en: "Readings: 16 / 19 / 22", zh: "读数：十六／十九／二十二"}}
+"""
+
+
+def _services_with_text_panels(tmp_path):
+    from infra.config import ImageGenSettings
+    from infra.config import Settings as _Settings
+
+    home = tmp_path / "data/packs/panelpack@1.0.0"
+    (home / "ui/chart").mkdir(parents=True)
+    (home / "pack.yaml").write_text(_PANELPACK_MANIFEST, encoding="utf-8")
+    (home / "ui/panels.yaml").write_text(_PANEL_TEXT_PANELS, encoding="utf-8")
+    (home / "ui/chart/index.html").write_text("<!doctype html><title>c</title>", encoding="utf-8")
+    return build_services(
+        _Settings(data_dir=str(tmp_path / "data"), imagegen=ImageGenSettings()),
+        llm=FakeLLM(script=[]),
+        embeddings=FakeEmbeddings(64),
+    )
+
+
+async def test_panel_renders_a_module_panel_as_text_for_this_viewer(tmp_path):
+    """`.panel <id>` is how a client that cannot draw a panel reads one — the reason a
+    tier-2 `fallback` exists at all. Before this the command produced no frame whatsoever
+    (2026-08-18 play-test), so a module's look-at-the-chart layer was unreachable."""
+    from core.modvars import build_spec, define_modvar, set_modvar
+
+    services = _services_with_text_panels(tmp_path)
+    router = CommandRouter(services)
+    chat_key = "cli:dm:panel-text"
+    keeper = AgentCtx(chat_key=chat_key, user_id="kp", locale="en")
+    await router.dispatch(keeper, ".panels enable panelpack")
+
+    documents = services.documents
+    await define_modvar(documents, chat_key, build_spec("day", "number", minimum=0, maximum=200))
+    await define_modvar(documents, chat_key, build_spec("timber", "number", minimum=0, maximum=24))
+    await define_modvar(documents, chat_key, build_spec("gate_open", "bool"))
+    await define_modvar(documents, chat_key, build_spec("keeper_only_var", "number", visibility="keeper"))
+    await set_modvar(documents, chat_key, "day", 15)
+    await set_modvar(documents, chat_key, "timber", 8)
+
+    listing = await router.dispatch(keeper, ".panel")
+    assert "panelpack/ledger" in listing and "panelpack/chart" in listing
+    assert "panelpack/gauges" in listing  # keeper sees the keeper panel
+
+    rendered = await router.dispatch(keeper, ".panel panelpack/ledger")
+    assert "Day: 15" in rendered and "Timber: 8/24" in rendered
+    assert "Gate open" not in rendered  # visible_when is false → hidden
+    assert "Secret" not in rendered  # a keeper-only variable never reaches any panel
+
+    await set_modvar(documents, chat_key, "gate_open", True)
+    assert "Gate open" in await router.dispatch(keeper, ".panel ledger")  # bare id resolves too
+
+    # A tier-2 panel answers with its fallback — the whole point.
+    chart = await router.dispatch(keeper, ".panel chart")
+    assert "Readings: 16 / 19 / 22" in chart
+
+    # zh viewer gets the zh strings from the same declaration.
+    zh = AgentCtx(chat_key=chat_key, user_id="kp", locale="zh")
+    assert "戏内日: 15" in await router.dispatch(zh, ".panel ledger")
+
+    # An unknown id names what IS available instead of failing silently.
+    assert "panelpack/ledger" in await router.dispatch(keeper, ".panel nope")
+
+
+async def test_panel_never_shows_a_player_a_keeper_panel(tmp_path):
+    services = _services_with_text_panels(tmp_path)
+    router = CommandRouter(services)
+    chat_key = "cli:dm:panel-audience"
+    keeper = AgentCtx(chat_key=chat_key, user_id="kp", locale="en")
+    await router.dispatch(keeper, ".panels enable panelpack")
+
+    player = AgentCtx(chat_key=chat_key, user_id="p1", platform="tui", locale="en", extra={"role": "player"})
+    listing = await router.dispatch(player, ".panel")
+    assert "panelpack/ledger" in listing
+    assert "gauges" not in listing
+    assert "for the keeper alone" not in await router.dispatch(player, ".panel panelpack/gauges")

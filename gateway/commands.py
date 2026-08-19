@@ -707,8 +707,61 @@ class CommandRouter:
         return f"{result}\n{notice}" if notice else result
 
     async def cmd_panel(self, ctx: CommandCtx) -> str:
-        del ctx.args
-        return ctx.i18n.t("commands.panel.ready")
+        """`.panel [<id>]` — the module's panels as TEXT, for a client that cannot draw them.
+
+        A tier-2 panel's `fallback` exists to be read by exactly such a client, and until
+        this rendered it nothing could: `.panel` produced no frame at all (its reply was
+        swallowed by the state refresh in `gateway.turn`), so a module's look-at-the-chart
+        layer was unreachable from a terminal. Bare, it lists what THIS viewer may open
+        (audience filtered server-side, same as the manifest); with an id it renders that
+        panel against this viewer's own variables — `$var` absent means hidden, and
+        `visible_when` runs through `core.condexpr`, the evaluator every client implements.
+        The state refresh still rides along (`gateway.turn`).
+        """
+        from core.panels import panel_title_text, render_panel_text
+        from gateway.panels import enabled_panels
+
+        role = _TUI_KEEPER_ROLE if _is_keeper(ctx.raw_ctx) else "player"
+        panels = await enabled_panels(ctx.services, ctx.chat_key, role)
+        if not panels:
+            return ctx.i18n.t("commands.panel.none")
+
+        wanted = ctx.args.strip()
+        if not wanted:
+            lines = [ctx.i18n.t("commands.panel.list_header", count=len(panels))]
+            for wire_id, panel in panels:
+                lines.append(
+                    ctx.i18n.t(
+                        "commands.panel.list_item",
+                        id=wire_id,
+                        title=panel_title_text(panel, ctx.locale),
+                    )
+                )
+            lines.append(ctx.i18n.t("commands.panel.list_hint"))
+            return "\n".join(lines)
+
+        matches = [
+            (wire_id, panel)
+            for wire_id, panel in panels
+            if wanted in (wire_id, panel.id) or wanted.casefold() == panel_title_text(panel, ctx.locale).casefold()
+        ]
+        if not matches:
+            return ctx.fail(
+                ctx.i18n.t("commands.panel.unknown", name=wanted, ids=", ".join(wire_id for wire_id, _ in panels))
+            )
+        wire_id, panel = matches[0]
+        from net.state import build_room_state
+
+        try:
+            snapshot = await build_room_state(ctx.services, ctx.raw_ctx)
+            variables = snapshot.get("variables") or []
+        except Exception:  # noqa: BLE001 — a panel with no live values still renders its static text
+            variables = []
+        body = render_panel_text(panel, variables, ctx.locale)
+        title = ctx.i18n.t("commands.panel.title", title=panel_title_text(panel, ctx.locale), id=wire_id)
+        if not body:
+            return f"{title}\n{ctx.i18n.t('commands.panel.rich_only')}"
+        return "\n".join([title, *body])
 
     async def cmd_language(self, ctx: CommandCtx) -> str:
         """`.language <en|zh>` — set the room-wide display locale. ``chat_locale`` is
@@ -2817,6 +2870,9 @@ class CommandRouter:
                 ["panel", "面板"],
                 {"name": "panel"},
                 "commands.help.panel",
+                # Per-viewer content by construction (audience filter + this member's own
+                # variables), so the answer goes to the caller alone, never the room.
+                private_reply=True,
             ),
             CommandSpec(
                 "language",
