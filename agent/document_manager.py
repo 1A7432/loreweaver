@@ -1,5 +1,10 @@
 """TRPG document management: text extraction + chunking + vector retrieval.
 
+Lives in ``agent/`` (moved from ``core/`` 2026-08-19) because it holds an ``LLMClient``
+and asks the model questions over the retrieved chunks — generative work, and ``core/``
+is the deterministic engine by iron rule #1. Its deterministic halves (chunking, the
+vector payload shape) ride along; nothing here is consulted by the rules core.
+
 Ported from ``nekro_trpg_dice_plugin``'s ``core/document_manager.py`` per the
 M1 spec (``docs/specs/M1.md`` §4). ``DocumentProcessor`` is copied verbatim
 (pure text parsing/chunking, no external services involved — only its type
@@ -422,7 +427,7 @@ class VectorDatabaseManager:
 ROOM_FACETS = (
     RoomStateFacet(
         name="document_chunks",
-        owner="core.document_manager",
+        owner="agent.document_manager",
         reset_scope="all",
         # The embedding lane with no `collection` payload field: chunks of an uploaded
         # document, addressed by `chat_key`. They index the module, so they die with it.

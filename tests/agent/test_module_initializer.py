@@ -1,4 +1,4 @@
-"""Tests for core.module_initializer: LLM-driven full-text module analysis,
+"""Tests for agent.module_initializer: LLM-driven full-text module analysis,
 split into a keeper-only knowledge pool (full secrets) and a player-safe
 knowledge pool (spoiler-free subset).
 
@@ -21,9 +21,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+from agent.module_initializer import ModuleInitializer
 from core.battle_report import BattleReportManager
 from core.documents import KEEPER_VIEWER, MODULE_POOL_ID, PLAYER_VIEWER, DocumentStore
-from core.module_initializer import ModuleInitializer
 from infra.config import LLMSettings, Settings
 from infra.i18n import I18n
 from infra.llm import ChatResult, FakeLLM, Usage, assistant_text, context_window_for
@@ -131,7 +131,7 @@ class _RecordingLLM:
 
 class _FakeVectorDb:
     """Minimal `list_all_chunks` double (duck-typed like
-    `core.document_manager.VectorDatabaseManager`) for the chunk-reassembly
+    `agent.document_manager.VectorDatabaseManager`) for the chunk-reassembly
     fallback read path."""
 
     def __init__(self, chunks: list[dict]) -> None:

@@ -19,7 +19,7 @@ installs) so the model is nudged at the exact point it reads secret
 material, not only once at the top of its context.
 
 Two deliberate deviations from a byte-for-byte port, both required because
-this repo's ``core.module_initializer.ModuleInitializer`` (M1 §5, DONE/GREEN,
+this repo's ``agent.module_initializer.ModuleInitializer`` (M1 §5, DONE/GREEN,
 not modified here) persists a different shape than the legacy source:
 
 - **No separate catalog copy at all (M17).** The source's v2 initializer
@@ -66,11 +66,11 @@ field-name tokens when rendered as headers -- consistent with
 ``core.prompt_sections.inject_document_context_prompt``, which renders the
 exact same categories the exact same way (``f"### {category}"``) -- since
 they are the fixed JSON-schema contract's field names (see
-``core/module_initializer.py``'s ``_ANALYSIS_JSON_SCHEMA``), not natural-
+``agent/module_initializer.py``'s ``_ANALYSIS_JSON_SCHEMA``), not natural-
 language UI text. The keeper-sensitive-content regex list
 (``_KEEPER_SENSITIVE_PATTERNS``) and the query tokenizer's stop-word set
 (``_QUERY_STOP_WORDS``) are likewise internal text-processing data, the same
-sanctioned exemption ``core.document_manager``'s ``_CHUNK_BREAK_POINTS``
+sanctioned exemption ``agent.document_manager``'s ``_CHUNK_BREAK_POINTS``
 uses -- both are ported verbatim from the source (Chinese literals) with a
 handful of English equivalents appended, since unlike ``_CHUNK_BREAK_POINTS``
 these specifically exist to catch *natural-language* prompt-injection/
@@ -89,13 +89,13 @@ from typing import Any
 
 from agent.context import AgentCtx
 from agent.history import DEFAULT_HISTORY_KEY, load_chain
+from agent.module_initializer import ProgressCb, _emit
 from agent.services import Services
 from agent.tool_phase import CAPABILITY_MODULE_POOL
 from agent.tools import tool
 from core.battle_report import _default_session_name
 from core.documents import KEEPER_VIEWER, MODULE_POOL_ID
 from core.game_clock import advance_game_time, face_is_engine_readable, parse_time_delta
-from core.module_initializer import ProgressCb, _emit
 from infra.i18n import I18n
 from infra.room_facets import STORAGE_DOCUMENTS, RoomStateFacet
 
@@ -301,7 +301,7 @@ class ModuleTools(_KnowledgeToolsBase):
 
     async def _load_catalog(self, chat_key: str) -> dict | None:
         """Catalog view of the module: the knowledge-pool document's keeper half
-        (the source of truth `core.module_initializer.ModuleInitializer`
+        (the source of truth `agent.module_initializer.ModuleInitializer`
         persists) — no mirrored copy exists to go stale, see the module
         docstring's first deviation note."""
         keeper = (await _load_pools(self._services, chat_key)).get("keeper")
@@ -955,7 +955,7 @@ class DocumentTools(_KnowledgeToolsBase):
             init_note = ""
             if doc_type in _MODULE_INIT_DOC_TYPES:
                 # module_fulltext is the exact source text ModuleInitializer analyzes (see
-                # core/module_initializer.py's `_load_full_text`); only module/story uploads are
+                # agent/module_initializer.py's `_load_full_text`); only module/story uploads are
                 # "the module" being analyzed, so only those may (over)write it -- a `rule`/
                 # `background` upload must never clobber a previously uploaded module's full text.
                 await self._services.store.state_set(chat_key, _fulltext_key(chat_key), text_content)

@@ -1,4 +1,8 @@
-"""Build rule-legal TRPG sheets from SillyTavern persona cards."""
+"""Build rule-legal TRPG sheets from SillyTavern persona cards.
+
+Lives in ``agent/`` (moved from ``core/`` 2026-08-19): the persona → numbers step is a
+model call; only the validation against the rulepack (``core.character_rules``) is
+deterministic, and that part stays in ``core/``."""
 
 from __future__ import annotations
 

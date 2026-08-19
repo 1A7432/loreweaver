@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from agent.char_from_persona import build_sheet_from_description
 from agent.chronicle import CHRONICLE_TURN_KEY, chronicle_turn
 from agent.context import AgentCtx
 from agent.kp_tools_mechanics import InitiativeTools, roll_initiative
@@ -19,7 +20,6 @@ from agent.tool_phase import PHASES, is_pinned, room_phase, set_room_phase
 from agent.undo import available_turns, undo_depth
 from agent.undo import restore as restore_room
 from core.battle_recording import record_check, record_dice_roll
-from core.char_from_persona import build_sheet_from_description
 from core.character_manager import (
     CharacterDataError,
     CharacterNameTakenError,

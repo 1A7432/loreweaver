@@ -68,7 +68,7 @@ def _versioned_analysis(version: str) -> str:
 
 def _scripted_analysis_json() -> str:
     """A minimal well-formed module-analysis JSON (the shape `module.analysis_prompt` asks the LLM
-    to emit) whose keeper-only NPC secret carries the sentinel -- `core.module_initializer`
+    to emit) whose keeper-only NPC secret carries the sentinel -- `agent.module_initializer`
     normalizes any missing list/str fields, so this doesn't need every field populated."""
     return json.dumps(
         {

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.char_from_persona import build_sheet_from_description, build_sheet_from_persona, infer_pronoun_note
+from agent.char_from_persona import build_sheet_from_description, build_sheet_from_persona, infer_pronoun_note
 from core.character_manager import CharacterManager
 from core.charcard import parse_card_bytes
 from core.dice_engine import seed_dice

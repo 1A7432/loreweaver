@@ -226,7 +226,7 @@ def _confined_file_target(user_dir: Path, entry_id: str, filename: str) -> Path:
 
 def _build_messages(services: Services, description: str) -> list[dict]:
     """The two-message prompt sent to `services.llm.chat`: the schema+example framing text
-    (localized, mirroring `core.module_initializer._build_analysis_prompt`'s "framing text is
+    (localized, mirroring `agent.module_initializer._build_analysis_prompt`'s "framing text is
     localized" convention -- see `locales/{en,zh}/agent.json`'s `agent.forge.system_prompt`) as
     the system message, and the keeper's raw play-style `description` as the user message.
     """

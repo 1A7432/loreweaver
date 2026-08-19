@@ -318,7 +318,7 @@ async def test_knowledge_tools_end_to_end(tmp_path):
 
     # -- 3. unlock_for_player moves an element keeper -> player pool ----------------------------------
     # `module_player_pool` is pre-seeded with a spoiler-free copy of every scene/npc by
-    # `ModuleInitializer._build_knowledge_pools` (see core/module_initializer.py); only the
+    # `ModuleInitializer._build_knowledge_pools` (see agent/module_initializer.py); only the
     # module-wide `clues` catalog starts empty, so unlocking a clue is what actually demonstrates a
     # keeper -> player move here.
     player_before = await services.documents.get_view(CHAT_KEY, "module_pool", MODULE_POOL_ID, PLAYER_VIEWER)

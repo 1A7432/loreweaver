@@ -12,14 +12,14 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from agent.document_manager import VectorDatabaseManager
+from agent.module_initializer import ModuleInitializer
 from agent.tool_trace import enable_tool_trace
 from core.battle_report import BattleReportManager
 from core.character_manager import CharacterManager
 from core.dice_engine import DiceRoller
 from core.dice_engine import config as dice_config
-from core.document_manager import VectorDatabaseManager
 from core.documents import DocumentStore
-from core.module_initializer import ModuleInitializer
 from core.worldbook import Worldbook
 from infra.config import Settings, get_settings
 from infra.embeddings import Embeddings, OpenAIEmbeddings

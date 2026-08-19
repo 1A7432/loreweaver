@@ -2,7 +2,7 @@
 
 `CharcardTools` bridges a persona-chat character into a real adventure: it parses a SillyTavern
 card (`core.charcard`), asks the deterministic core to build a rule-LEGAL sheet biased toward the
-persona (`core.char_from_persona`), then drops the character in as EITHER the acting player's PC or
+persona (`agent.char_from_persona`), then drops the character in as EITHER the acting player's PC or
 an AI player companion (M10). A card's embedded `character_book` is folded into the world lore
 (M11), so the character brings its setting with it.
 
@@ -24,6 +24,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent import npc as npc_records
+from agent.char_from_persona import build_sheet_from_persona, infer_pronoun_note
 from agent.context import AgentCtx
 from agent.hook_runtime import install_room_hooks
 from agent.kp_tools_npc import player_name_refusal
@@ -31,7 +32,6 @@ from agent.kp_tools_subsystems import room_rulepack
 from agent.services import Services
 from agent.tools import tool
 from core.card_split import WorldPayloads, card_hook_codes, detect_world_payloads, split_card
-from core.char_from_persona import build_sheet_from_persona, infer_pronoun_note
 from core.character_manager import CharacterSheet
 from core.character_rules import render_validation_notice, validate_sheet
 from core.charcard import PNG_SIGNATURE, CharacterCard, parse_card_bytes

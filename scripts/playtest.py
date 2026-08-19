@@ -117,7 +117,7 @@ _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|(?<=[。！？；])\s*|\n+")
 def extract_secret_snippets(keeper_pool_raw: str, min_len: int = 30, max_len: int = 220, cap: int = 80) -> list[str]:
     """Pull plausibly-verbatim-leakable snippets out of a stored keeper pool.
 
-    `core.module_initializer.ModuleInitializer.initialize` persists the keeper
+    `agent.module_initializer.ModuleInitializer.initialize` persists the keeper
     pool as a single-line `json.dumps(...)` blob (no `indent=`), so a naive
     `keeper_pool.splitlines()` yields exactly ONE "line" -- the entire JSON
     document -- which will essentially never appear verbatim in a reply and

@@ -1,6 +1,10 @@
 """Module (adventure/scenario) initialization: full-text LLM analysis into
 keeper/player knowledge pools.
 
+Lives in ``agent/`` (moved from ``core/`` 2026-08-19): it holds an ``LLMClient`` and
+the analysis IS a model call — generative work, which iron rule #1 keeps out of the
+deterministic ``core/``.
+
 Ported from ``nekro_trpg_dice_plugin``'s ``core/module_initializer.py`` per
 the M1 spec (``docs/specs/M1.md`` §5). The module's full text is handed to
 the LLM in one shot (vector-store chunking is for retrieval only —
@@ -212,7 +216,7 @@ class ModuleInitializer:
         self.store = store
         self.documents = DocumentStore(store)
         # Duck-typed: only `list_all_chunks(chat_key, limit=...)` is used
-        # (shaped like `core.document_manager.VectorDatabaseManager`), and
+        # (shaped like `agent.document_manager.VectorDatabaseManager`), and
         # only as a fallback when no `module_fulltext.{chat_key}` is stored.
         # May be `None` if the caller never wires a vector store up.
         self.vector_db = vector_db
@@ -489,7 +493,7 @@ class ModuleInitializer:
 ROOM_FACETS = (
     RoomStateFacet(
         name="module_text",
-        owner="core.module_initializer",
+        owner="agent.module_initializer",
         reset_scope="all",
         # The loaded module: its text, the ingestion status/error pair, and the keeper and
         # player knowledge pools built from it. They install together and they leave

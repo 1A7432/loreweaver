@@ -16,8 +16,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from agent.document_manager import document_point_id
 from agent.services import Services
-from core.document_manager import document_point_id
 from gateway.session import SessionSource
 from infra.file_permissions import atomic_write_private, ensure_private_directory, restrict_file
 from infra.media_store import (

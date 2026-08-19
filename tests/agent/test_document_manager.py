@@ -1,4 +1,4 @@
-"""Tests for `core.document_manager`: `DocumentProcessor` text extraction/chunking
+"""Tests for `agent.document_manager`: `DocumentProcessor` text extraction/chunking
 (pure logic, PDF/DOCX libs deliberately absent in this environment) and
 `VectorDatabaseManager` (chunk/embed/store/search/delete/list) driven against
 `infra.embeddings.FakeEmbeddings` + `infra.vector.VectorStore` — no network,
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from core.document_manager import DOCX_AVAILABLE, PDF_AVAILABLE, DocumentProcessor, VectorDatabaseManager
+from agent.document_manager import DOCX_AVAILABLE, PDF_AVAILABLE, DocumentProcessor, VectorDatabaseManager
 from infra.embeddings import FakeEmbeddings
 from infra.i18n import I18n, t
 from infra.llm import FakeLLM, assistant_text
