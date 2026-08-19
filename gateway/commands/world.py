@@ -145,8 +145,12 @@ class WorldCommands:
                 as_ = "world"
             else:
                 resolved_system = _resolve_system_token(low)
-                if resolved_system:
-                    system = resolved_system
+                if not resolved_system:
+                    # Never swallow it: a keeper naming a system that does not resolve (an
+                    # uninstalled pack, a typo) used to have the token silently dropped and the
+                    # card imported under the default system instead.
+                    return ctx.fail(ctx.i18n.t("charcard.commands.import.unknown_option", option=token))
+                system = resolved_system
         if not from_attachment:
             # Pack-relative refs (`.import <packId>/cards/x.png`) resolve against the
             # newest installed `data_dir/packs/<id>@<version>/` (or a `.dev mount` home,

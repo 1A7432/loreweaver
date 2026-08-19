@@ -255,6 +255,18 @@ async def test_import_attachment_open_to_player():
     assert reply != _denied(services)
 
 
+async def test_import_names_an_option_it_cannot_resolve_instead_of_dropping_it():
+    """A system token that resolves to nothing used to be silently skipped — the card then
+    imported under the DEFAULT system while the keeper believed the name had been honored."""
+    services = _services()
+    router = CommandRouter(services)
+    reply = await router.dispatch(_keeper_ctx("cli:dm:imp3"), ".import /nonexistent/card.png coc7-nosuchpack pc")
+    assert "coc7-nosuchpack" in reply
+    assert reply == services.i18n.with_locale("en").t(
+        "charcard.commands.import.unknown_option", option="coc7-nosuchpack"
+    )
+
+
 def _install_pack_card(data_dir, card: dict) -> str:
     """Drop a card file where `resolve_installed_path` finds it; return its pack ref."""
     import json as _json

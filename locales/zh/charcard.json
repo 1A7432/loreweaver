@@ -7,6 +7,7 @@
   "charcard.commands.import.list": "已安装扩展包携带的可导入卡（用 `.import <引用> pc` 导入）：\n{refs}",
   "charcard.commands.import.list_world": "  （世界卡——守秘人专用：`.import <引用> world`）",
   "charcard.commands.import.list_empty": "已安装的扩展包里没有卡文件。用 `--install` 装一个，或把你自己的卡作为附件导入。",
+  "charcard.commands.import.unknown_option": "无法识别的选项“{option}”——这里只能填规则系统（规则包 id 或它的名字）或 pc/companion/world。本次未导入任何内容。",
   "charcard.commands.import.usage": "用法：.import <角色卡文件|包内引用> [coc7|dnd5e] [pc|companion|world]——`.import list` 列出已安装包携带的引用。",
   "charcard.commands.import.world_denied": "只有已认证的守秘人可以导入世界卡（它会安装全房间钩子并注入共享变量）。",
   "charcard.concept_prompt": "你要把 SillyTavern 人设转换为 {system} 的 TRPG 角色概念。只根据人设和模组上下文提出职业/职业类别、属性倾向、标志技能和 1-2 行背景，不要编造具体数值。只返回 JSON，键包括：occupation/class、attribute_emphasis（按优先级排列的属性代码列表）、signature_skills（简短列表）、backstory。模组上下文：{module_context}\n人设：\n{persona}",

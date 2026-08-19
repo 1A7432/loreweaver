@@ -7,6 +7,7 @@
   "charcard.commands.import.list": "Importable cards from installed packs (use `.import <ref> pc`):\n{refs}",
   "charcard.commands.import.list_world": "  (world card — keeper only: `.import <ref> world`)",
   "charcard.commands.import.list_empty": "No installed pack ships card files. Install one with `--install`, or import your own card as an attachment.",
+  "charcard.commands.import.unknown_option": "Unrecognized option \"{option}\" — expected a rule system (a rulepack id or one of its names) or pc/companion/world. Nothing was imported.",
   "charcard.commands.import.usage": "Usage: .import <card file|pack ref> [coc7|dnd5e] [pc|companion|world] — `.import list` shows the refs installed packs ship.",
   "charcard.commands.import.world_denied": "Only an authenticated Keeper can import a world card (it installs room hooks and seeds shared variables).",
   "charcard.concept_prompt": "You convert a SillyTavern persona into a TRPG character concept for {system}. Use the persona and module context only as inspiration; do not invent numeric stats. Return JSON only with keys: occupation/class, attribute_emphasis as a ranked list of attribute codes, signature_skills as a short list, and backstory as 1-2 lines. Module context: {module_context}\nPersona:\n{persona}",
