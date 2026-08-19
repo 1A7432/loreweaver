@@ -14,8 +14,10 @@ corner mean.
 
 ## 1. Get in
 
-Install the client (one line, [see the README](../README.md#1-install-the-client)), run
-`loreweaver`, and paste the two things your Keeper sent you:
+Install a client ([see the README](../README.md#1-install-the-client)): **Loreweaver Studio**, the
+desktop app, is the recommended one — the graphical play surface with live panels and the keeper
+screens; the **terminal client** is one line to install and runs anywhere with a terminal. Open
+Studio, or run `loreweaver`, and paste the two things your Keeper sent you:
 
 - a **ticket** — the server's peer-to-peer address, a long string starting with `endpoint`;
 - an **invite key** — yours alone, and it is also your identity: there are no accounts and no

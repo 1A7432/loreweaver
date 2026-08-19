@@ -31,6 +31,24 @@ A world's rules, lore, cast, interface and staging are all plain files in docume
 
 ### 1. Install the client
 
+Two clients speak the same open protocol; pick by where you want to play.
+
+**Loreweaver Studio — the desktop app, recommended.** A graphical client
+([companion repo](https://github.com/1A7432/loreweaver-studio), Tauri: Rust core + React UI) with the
+full play surface — markdown narrative log, colour-coded dice, live character / party / variable
+panels, a module's own panels (tier-1 templates *and* sandboxed tier-2 pages), the keeper screens
+(rooms & invites, model, module, rules, skills, character), and the same one-click **Host locally &
+play** — plus the card and pack studio (forge, card split, `.lwpack` build) in the other mode. It is
+built from source for now — macOS build verified, Windows / Linux compile in CI, installers are
+next:
+
+```bash
+git clone https://github.com/1A7432/loreweaver-studio && cd loreweaver-studio
+bun install && bun tauri build        # needs Rust stable + Bun; `bun tauri dev` to run it unbundled
+```
+
+**The terminal client** — one line, no toolchain, runs anywhere with a terminal:
+
 macOS / Linux:
 
 ```bash
@@ -67,11 +85,13 @@ broken borders and swallows mouse input.
 
 ### 2. Host
 
+Open the app (Studio), or in a terminal:
+
 ```bash
 loreweaver
 ```
 
-On the connect screen, click the green **Host locally & play**. There is no step two: it downloads
+On the connect screen, click the green **Host locally & play** — it is the same button in both clients. There is no step two: it downloads
 a self-contained server build for your OS (**no Python, no environment setup**), starts it, issues
 your Keeper key, and drops you into the main menu as the Keeper.
 
@@ -273,8 +293,9 @@ misses; threshold violations, provider failures and auth failures all make the r
 per model and per run, not a standing guarantee.
 
 **Young.** Networked multiplayer is comfortable for a table of friends but has rough edges. The
-rich client and the card studio live in a [companion repo](https://github.com/1A7432/loreweaver-studio)
-and are earlier than this one. The flagship module is in development. The forward plan, the open
+desktop client and card studio ([companion repo](https://github.com/1A7432/loreweaver-studio)) is
+the recommended way to play but still ships from source — installers are the next step. The flagship
+module is in development. The forward plan, the open
 design questions, and where help is most wanted: **[docs/roadmap.md](docs/roadmap.md)**.
 
 ---
@@ -317,6 +338,7 @@ cd clients/tui && bun test                        # terminal client
 core/   deterministic engine        infra/    store · config · i18n · llm · embeddings · vector · providers
 agent/  the AI actors + KP tools    gateway/  commands · ops · hub · runner · director
 net/    Iroh p2p + session core     adapters/ CLI          clients/ protocol (npm) · tui
+                                                           (the desktop client lives in loreweaver-studio)
 ```
 
 Layer contracts, the iron rules, and how to add a rulepack / provider / tool / client:
