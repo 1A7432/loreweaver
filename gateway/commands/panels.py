@@ -4,8 +4,8 @@ this room) and `.pack install` (landing a pack on this server in the first place
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import Any
+from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING, Any
 
 from gateway.commands.rooms import _TUI_KEEPER_ROLE, _is_keeper
 from gateway.commands.rules import _SKILL_DISABLE_WORDS, _SKILL_ENABLE_WORDS
@@ -16,6 +16,9 @@ from gateway.ops import (
     toggle_enabled_panel_pack,
 )
 from gateway.turn import state_for_ctx
+
+if TYPE_CHECKING:
+    from core.pack import PackManifest
 
 logger = logging.getLogger(__name__)
 
@@ -137,11 +140,20 @@ class PanelsCommands:
         `gh:owner/repo[@tag]` (Git releases ARE the registry). Keeper-only, because it
         writes to the server's data dir and because what it installs then RUNS here.
 
-        Owner verdict 2026-08-19: on a remote table, install IS enable. The CLI's
-        per-item confirmation cannot be reproduced across the wire in any honest way —
-        a keeper who typed the ref has already made the trust decision — so the reply
-        carries the same disclosure card the terminal prints, plus one line saying
-        plainly that the pack's hooks and scripts now run in this room.
+        Owner verdict 2026-08-19, sharpened 2026-08-20: on a remote table, install IS
+        enable, and it means PLAYABLE — one command, not a command plus a checklist.
+        Convenience outranks ceremony here (the same stance `docs/notes` records for ST
+        content and full EJS): a keeper who typed the ref has made the trust decision, and
+        the CLI's per-item confirmation cannot be reproduced across the wire honestly, so
+        the reply carries the terminal's disclosure card and one plain risk line instead.
+
+        So this throws every switch the pack ships: its panels and presentation kit
+        (`.panels enable`), its KP skills (`.skill enable`), and — when the pack ships
+        exactly ONE world card — that card
+        as the room's module (`.import <ref> world`, which also pins the pack's character
+        system). The only thing not thrown automatically is the choice between SEVERAL
+        world cards in one pack — which module this table is playing is a fork, not a
+        confirmation — and the reply names those as the command that would load one.
         """
         import asyncio
 
@@ -177,13 +189,16 @@ class PanelsCommands:
 
         pack_id = report.manifest.id
         await toggle_enabled_panel_pack(ctx.services.store, ctx.chat_key, pack_id, on=True)
+        live, leftover = await _switch_everything_on(ctx, report.manifest, pack_id)
         if self.hub is not None:
             await publish_ui_manifests(self.hub, ctx.services, ctx.chat_key)
 
         lines = [
             ctx.i18n.t("commands.pack.installed", id=pack_id, version=report.manifest.version),
             *trust_card_lines(ctx.i18n, manifest, ctx.locale),
+            *live,
             ctx.i18n.t("commands.pack.risk"),
+            *leftover,
         ]
         return "\n".join(lines)
 
@@ -209,3 +224,81 @@ class PanelsCommands:
         if enable:
             return ctx.i18n.t("commands.panels.enable_done", id=pack_id)
         return ctx.i18n.t("commands.panels.disable_done", id=pack_id)
+
+
+async def _switch_everything_on(
+    ctx: CommandCtx, manifest: PackManifest, pack_id: str
+) -> tuple[list[str], list[str]]:
+    """Throw the rest of the pack's switches; return (what went live, what is left over).
+
+    Panels are already on when this runs. Here: every KP skill the pack ships, and its
+    world card whenever the pack ships exactly one. Nothing waits for a confirmation —
+    the keeper typed the ref, the reply states the risk, and the table is playable. The
+    single leftover case is a pack with SEVERAL world cards, where "which module is this
+    table playing" is a fork no installer can read off a manifest.
+    """
+    from gateway.ops import toggle_enabled_skill
+
+    live: list[str] = []
+    leftover: list[str] = []
+
+    for skill_path in manifest.contents.get("skills", ()):
+        skill_id = PurePosixPath(str(skill_path)).name
+        if not skill_id:
+            continue
+        await toggle_enabled_skill(ctx.services.store, ctx.chat_key, skill_id, on=True)
+        live.append(ctx.i18n.t("commands.pack.live_skill", id=skill_id))
+
+    world_refs = [
+        f"{pack_id}/{card_path}"
+        for index, card_path in enumerate(manifest.contents.get("cards", ()))
+        if index < len(manifest.card_entries) and manifest.card_entries[index].kind == "world"
+    ]
+    if len(world_refs) > 1:
+        # The ONE thing left for a human: a pack shipping several world cards ships
+        # several modules, and which one this table is playing is not a fact an installer
+        # can read off a manifest. Not a confirmation step — a fork.
+        leftover.extend(ctx.i18n.t("commands.pack.next_card", ref=ref) for ref in world_refs)
+    elif world_refs:
+        if await _import_world_card(ctx, world_refs[0]):
+            live.append(ctx.i18n.t("commands.pack.live_card", ref=world_refs[0]))
+        else:
+            leftover.append(ctx.i18n.t("commands.pack.next_card", ref=world_refs[0]))
+    if leftover:
+        leftover.insert(0, ctx.i18n.t("commands.pack.next_header"))
+    return live, leftover
+
+
+async def _import_world_card(ctx: CommandCtx, ref: str) -> bool:
+    """Load one world card as this room's module. False (never an exception) when it
+    could not be read — the install itself already succeeded, and a keeper can retry the
+    import by hand from the line this returns them to."""
+    from agent.kp_tools_charcard import CharcardTools
+    from gateway.panels import resolve_pack_ref as resolve_room_pack_ref
+
+    resolved = resolve_room_pack_ref(ctx.services.settings.data_dir, ref)
+    if resolved is None:
+        return False
+    from agent.context import AgentCtx, LocalFs
+
+    # The importer reads through an `FsAdapter`, and a transport that carries none would
+    # otherwise turn a perfectly resolved pack path into "no filesystem". `resolve_room_pack_ref`
+    # has already confined this path under the pack home, so a reader rooted at the data dir
+    # adds a second boundary rather than opening one.
+    fs = getattr(ctx.raw_ctx, "fs", None) or LocalFs(ctx.services.settings.data_dir)
+    agent_ctx = AgentCtx(
+        chat_key=ctx.chat_key,
+        user_id=ctx.user_id,
+        platform=str(getattr(ctx.raw_ctx, "platform", "cli") or "cli"),
+        locale=ctx.locale,
+        fs=fs,
+        extra=getattr(ctx.raw_ctx, "extra", {}) or {},
+    )
+    try:
+        await CharcardTools(ctx.services).import_world_card(agent_ctx, file_path=str(resolved))
+    except Exception:  # noqa: BLE001 — a bad card must not lose the install that worked
+        logger.info("pack install: could not import the world card %r", ref, exc_info=True)
+        return False
+    # `import_world_card` reports refusals (unreadable card, no filesystem) as TEXT, so the
+    # marker it writes on success is the only honest signal that the module really landed.
+    return bool(await ctx.services.store.state_get(ctx.chat_key, "world_import"))

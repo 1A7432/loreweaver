@@ -668,27 +668,43 @@ so this costs nothing until an author asks for it.
   instructions, no image-host/OSS links for assets.
 - **From the table, too:** a keeper with no shell on the box runs `.pack install
   <ref>` in the room. Same refs, same install function (`gateway/pack_install.py`
-  serves both doors). On a remote table install IS enable — the terminal's
-  per-item confirmation has no honest wire equivalent, and a keeper who typed the
-  ref has already made the trust decision — so the pack is enabled for that room
-  and the reply carries the trust card plus one line saying its hooks and scripts
-  now run there. Keeper-only, naturally: it writes to the server's data dir.
+  serves both doors). On a remote table install IS enable, and enable means
+  PLAYABLE: the command throws every switch the pack ships — its panels and
+  presentation kit, its KP skills, and its world card when the pack ships exactly
+  one (which also pins the pack's character system). The terminal's per-item
+  confirmation has no honest wire equivalent and a keeper who typed the ref has
+  already made the trust decision, so the reply carries the trust card and one
+  plain risk line instead of a checklist. The single thing it will not decide is
+  WHICH module, when a pack ships several world cards — that is a fork, not a
+  confirmation, and the reply names each as the `.import <ref> world` that loads
+  it. Keeper-only, naturally: it writes to the server's data dir.
 - **Git IS the registry:** an install ref is a local path, an `https://` direct
   link, or `gh:owner/repo[@tag]` — resolved through the GitHub API to that
   release's `*.lwpack` asset (`@tag` pins a release; without it, latest) by
   `infra/pack_source.py`. The API call is anonymous unless `GITHUB_TOKEN` /
   `GH_TOKEN` is set, which lifts the per-IP anonymous rate limit a shared host
-  hits as a 403; the credential rides ONLY on `api.github.com` requests, never on
-  the asset download or on any other `https://` ref. There is deliberately no
+  hits as a 403. The credential is scoped by TWO rules, not one hostname check:
+  it rides only on the release-metadata request the engine composes itself (a
+  caller-named `https://api.github.com/...` ref is fetched anonymously, so a
+  keeper's `.pack install` can never spend the server's PAT), and a redirect that
+  leaves the host drops it (`urllib` forwards headers across hosts by default,
+  and the asset lane redirects off-host by design). There is deliberately no
   central package registry.
-- **Install ≠ enable** (the existing layering): skills land in the user skill
-  dir and rulepacks in the user rulepack dir — discoverable immediately, but a
-  room still opts in via `.skill enable <id>`. A rulepack is discoverable but
-  does not become the room's system; create a character on that system (the
-  pack must declare a `make_char` word) or name the system on import. Cards,
+- **Install ≠ enable** (the CLI layering): `--install` from a shell lands content
+  and turns nothing on — skills land in the user skill dir and rulepacks in the
+  user rulepack dir, discoverable immediately, but a room still opts in via
+  `.skill enable <id>`. A rulepack is discoverable but does not become the room's
+  system; create a character on that system (the pack must declare a `make_char`
+  word) or name the system on import. The in-room `.pack install` is the
+  deliberate exception above: a keeper installing INTO a room has named the room
+  as well as the pack, so the same act enables it there. Cards,
   lorebooks and assets land under `data_dir/packs/<id>@<version>/` for the
   existing in-room import flows (`.import`, `.module`) to consume; re-installing
-  the same `id@version` replaces that pack dir wholesale, never merges.
+  the same `id@version` replaces that pack dir wholesale, never merges. A running
+  server picks up an install another process made — the desktop client shells out
+  to the CLI — without a restart: skill and rulepack discovery re-check their
+  directories' signature (`core.skills` / `core.rulepacks`), so both a NEW id and
+  an id UPGRADED in place resolve, and `.skill list` sees it too.
 - **Trust card, not a gate:** before installing, the CLI prints the pack's
   auto-generated `trust` summary — skill/rulepack/card/lorebook counts, whether
   sandboxed hooks JS or EJS templates ship, asset megabytes — then asks for

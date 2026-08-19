@@ -5,7 +5,10 @@ over the wire could enable only what someone had already installed for them. The
 2026-08-19 verdict is that on a remote table install IS enable — the CLI's per-item
 confirmation cannot be reproduced honestly across the wire, and a keeper who typed the ref
 has already made the trust decision — so the reply carries the terminal's own disclosure
-card plus one line saying plainly that the pack's code now runs in this room.
+card plus one line saying plainly that the pack's code now runs in this room. Sharpened
+2026-08-20: install means PLAYABLE, so it throws the pack's OTHER switches too — panels,
+KP skills, and the world card when the pack ships exactly one. A per-item approval flow
+is the thing this command exists to not have.
 
 It shares ONE implementation with `python -m app --install` (`gateway.pack_install`), so
 the two doors cannot drift over which directories a pack lands in or which caches are
@@ -14,16 +17,18 @@ cleared afterwards.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+import pytest
 
 import core.rulepacks as rulepacks_module
 import core.skills as skills_module
-import pytest
 from agent.context import AgentCtx
 from agent.services import build_services
 from core.pack import MANIFEST_NAME, build_pack
 from gateway.commands import CommandRouter
-from gateway.ops import get_enabled_panel_packs
+from gateway.ops import get_enabled_panel_packs, get_enabled_skills
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM
@@ -148,3 +153,97 @@ async def test_a_bare_or_unknown_subcommand_prints_the_usage(server):
     assert await router.dispatch(_keeper("cli:dm:usage"), ".pack") == usage
     assert await router.dispatch(_keeper("cli:dm:usage"), ".pack install") == usage
     assert await router.dispatch(_keeper("cli:dm:usage"), ".pack remove tidepack") == usage
+
+
+WORLD_CARD_JSON = json.dumps(
+    {
+        "spec": "chara_card_v2",
+        "data": {
+            "name": "Tidewatch",
+            "description": "The customs hall itself.",
+            "extensions": {"loreweaver_hooks": ["on('turn_start', () => {});"]},
+            "character_book": {
+                "entries": [{"comment": "[InitVar]", "content": '{"潮位": [3, "tide"]}'}]
+            },
+        },
+    }
+)
+
+MODULE_MANIFEST = """\
+id: tidemodule
+version: 1.0.0
+name:
+  en: Tide Module
+  zh: 潮汐模组
+description: A module pack whose install must leave the room playable.
+authors: [ada]
+license: MIT
+engine:
+  protocol: "2.0"
+contents:
+  skills: [skills/tideline]
+  cards: [cards/world.json]
+"""
+
+
+def _built_module_pack(tmp_path: Path, *, cards: tuple[str, ...] = ("cards/world.json",)) -> Path:
+    src = tmp_path / "module-src"
+    (src / "skills/tideline").mkdir(parents=True)
+    (src / "skills/tideline/SKILL.md").write_text(SKILL_MD, encoding="utf-8")
+    (src / "cards").mkdir()
+    for index, card in enumerate(cards):
+        payload = json.loads(WORLD_CARD_JSON)
+        payload["data"]["name"] = f"Tidewatch {index}" if index else "Tidewatch"
+        (src / card).write_text(json.dumps(payload), encoding="utf-8")
+    listed = "".join(f"    - {card}\n" for card in cards)
+    (src / MANIFEST_NAME).write_text(
+        MODULE_MANIFEST.replace("  cards: [cards/world.json]\n", f"  cards:\n{listed}"),
+        encoding="utf-8",
+    )
+    return build_pack(src, tmp_path / "tidemodule.lwpack").path
+
+
+async def test_installing_a_module_pack_leaves_the_room_playable(server, tmp_path):
+    """The owner's line: one command, then play. Not one command and a checklist — a
+    keeper who typed the ref does not want to be asked again about each switch."""
+    router = CommandRouter(server)
+    chat_key = "cli:dm:playable"
+
+    reply = await router.dispatch(_keeper(chat_key), f".pack install {_built_module_pack(tmp_path)}")
+
+    i18n = server.i18n.with_locale("en")
+    # Panels, the skill, and the module itself — all live, without a second command.
+    assert "tidemodule" in await get_enabled_panel_packs(server.store, chat_key)
+    assert "tideline" in await get_enabled_skills(server.store, chat_key)
+    assert await server.store.state_get(chat_key, "world_import")
+    assert i18n.t("commands.pack.live_skill", id="tideline") in reply
+    assert "tidemodule/cards/world.json" in reply
+    # The risk line is what replaces the confirmations, so it must still be there.
+    assert i18n.t("commands.pack.risk") in reply
+    # Nothing is left for the keeper to run.
+    assert i18n.t("commands.pack.next_header") not in reply
+
+    # The MACHINERY landed, not just the card's name: the world half's `[InitVar]` tree
+    # seeded this room's variables, which is what makes the module playable at all.
+    from core.documents import MVU_ID
+
+    mvu = await server.documents.get(chat_key, "mvu_tree", MVU_ID)
+    assert mvu is not None and "潮位" in json.dumps(mvu.data, ensure_ascii=False)
+
+
+async def test_several_world_cards_are_the_one_fork_left_to_a_human(server, tmp_path):
+    """Which module this table is playing is not a fact an installer can read off a
+    manifest — so the ONLY leftover line is that choice, named as the command."""
+    router = CommandRouter(server)
+    chat_key = "cli:dm:fork"
+    pack = _built_module_pack(tmp_path, cards=("cards/world.json", "cards/other.json"))
+
+    reply = await router.dispatch(_keeper(chat_key), f".pack install {pack}")
+
+    i18n = server.i18n.with_locale("en")
+    assert i18n.t("commands.pack.next_header") in reply
+    assert "tidemodule/cards/world.json" in reply and "tidemodule/cards/other.json" in reply
+    # Nothing was imported behind the keeper's back...
+    assert await server.store.state_get(chat_key, "world_import") is None
+    # ...but everything unambiguous still went live.
+    assert "tideline" in await get_enabled_skills(server.store, chat_key)
