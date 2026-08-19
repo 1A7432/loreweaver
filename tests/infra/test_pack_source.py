@@ -93,3 +93,65 @@ def test_oversized_download_is_refused(tmp_path: Path, monkeypatch: pytest.Monke
     monkeypatch.setattr(pack_source, "_MAX_DOWNLOAD_BYTES", 8)
     with pytest.raises(PackRefError, match="cap"):
         resolve_pack_ref("https://example.test/big.lwpack", cache_dir=tmp_path, fetch=lambda url: b"123456789")
+
+
+# ---------------------------------------------------------------------------
+# GITHUB_TOKEN / GH_TOKEN: the anonymous API rate limit is per IP, which a shared cloud host
+# burns through. The credential rides ONLY on api.github.com requests — never on the asset
+# host, never on a caller-supplied https ref.
+# ---------------------------------------------------------------------------
+
+
+class _FakeResponse:
+    def __init__(self) -> None:
+        self.body = b"pack-bytes"
+
+    def read(self, _size: int) -> bytes:
+        return self.body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc) -> bool:
+        return False
+
+
+def _captured_headers(monkeypatch: pytest.MonkeyPatch, url: str) -> dict[str, str]:
+    seen: dict[str, str] = {}
+
+    def fake_urlopen(request, timeout=None):
+        seen.update(request.headers)
+        return _FakeResponse()
+
+    monkeypatch.setattr(pack_source.urllib.request, "urlopen", fake_urlopen)
+    pack_source._default_fetch(url)
+    return seen
+
+
+def test_github_token_is_sent_to_the_api_host_only(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "s3cret")
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+
+    api = _captured_headers(monkeypatch, "https://api.github.com/repos/ada/blackmoor/releases/latest")
+    assert api.get("Authorization") == "Bearer s3cret"
+
+    for other in (
+        "https://objects.githubusercontent.com/ada/blackmoor/a.lwpack",
+        "https://example.test/a.lwpack",
+        "https://api.github.com.evil.test/repos/ada/blackmoor/releases/latest",
+    ):
+        assert "Authorization" not in _captured_headers(monkeypatch, other), other
+
+
+def test_gh_token_is_the_fallback_env_var(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("GH_TOKEN", "other")
+    headers = _captured_headers(monkeypatch, "https://api.github.com/repos/ada/blackmoor/releases/latest")
+    assert headers.get("Authorization") == "Bearer other"
+
+
+def test_no_token_configured_stays_anonymous(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    headers = _captured_headers(monkeypatch, "https://api.github.com/repos/ada/blackmoor/releases/latest")
+    assert "Authorization" not in headers

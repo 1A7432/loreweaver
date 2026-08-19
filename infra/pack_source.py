@@ -1,8 +1,10 @@
 """Resolve a `.lwpack` ref — local path / https direct link / ``gh:owner/repo[@tag]`` — to a
 local file.
 
-Git IS the registry: a ``gh:`` ref asks the anonymous GitHub API for a release's
-``*.lwpack`` asset (``@tag`` pins a release; without it the latest release is used).
+Git IS the registry: a ``gh:`` ref asks the GitHub API for a release's ``*.lwpack``
+asset (``@tag`` pins a release; without it the latest release is used). The API call is
+anonymous unless ``GITHUB_TOKEN``/``GH_TOKEN`` is set, in which case that credential —
+and ONLY on requests to ``api.github.com`` — lifts the per-IP anonymous rate limit.
 There is deliberately no central package registry. All network code lives here (infra
 plumbing — ``core.pack`` stays offline-pure and re-validates every byte on inspect);
 the ``fetch`` callable is injectable so tests run fully offline.
@@ -12,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import urllib.parse
 import urllib.request
@@ -29,6 +32,12 @@ _GH_REF_RE = re.compile(r"^gh:([A-Za-z0-9_.-]{1,100})/([A-Za-z0-9_.-]{1,100})(?:
 _USER_AGENT = "loreweaver-pack"
 _FETCH_TIMEOUT_SECONDS = 30.0
 
+# The ONE host a GitHub credential may be sent to. Release assets are served from other hosts
+# (objects.githubusercontent.com and friends) and an https ref can name any host at all, so the
+# token is scoped to the API host by construction rather than by trusting the caller's ref.
+_GITHUB_API_HOST = "api.github.com"
+_TOKEN_ENV_VARS = ("GITHUB_TOKEN", "GH_TOKEN")
+
 Fetcher = Callable[[str], bytes]
 
 
@@ -36,8 +45,33 @@ class PackRefError(ValueError):
     """A ref could not be resolved/downloaded. Technical English detail; the CLI wraps it."""
 
 
+def _github_token() -> str:
+    for name in _TOKEN_ENV_VARS:
+        token = (os.environ.get(name) or "").strip()
+        if token:
+            return token
+    return ""
+
+
+def _request_headers(url: str) -> dict[str, str]:
+    """Headers for ``url`` — the GitHub credential ONLY when the host is the API host.
+
+    Anonymous API calls are rate-limited per IP, which a shared or cloud-hosted server
+    exhausts quickly; a token lifts that limit. The credential must never ride along to the
+    asset host or to an arbitrary ``https://`` ref, so the host is checked here rather than
+    trusted from the caller's ref.
+    """
+    headers = {"User-Agent": _USER_AGENT, "Accept": "*/*"}
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme == "https" and (parsed.hostname or "").lower() == _GITHUB_API_HOST:
+        token = _github_token()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
 def _default_fetch(url: str) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT, "Accept": "*/*"})
+    request = urllib.request.Request(url, headers=_request_headers(url))
     with urllib.request.urlopen(request, timeout=_FETCH_TIMEOUT_SECONDS) as response:
         data = response.read(_MAX_DOWNLOAD_BYTES + 1)
     return data
