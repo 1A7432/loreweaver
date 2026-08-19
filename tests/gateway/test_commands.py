@@ -2508,7 +2508,8 @@ async def test_npc_and_companion_give_the_keeper_a_hand_on_the_cast():
     Keeper register a real player as an AI companion, the operator's only lever was to ask
     the Keeper in narration to call remove_companion itself. Keeper-only and private —
     a record carries the NPC's secret agenda and private knowledge."""
-    from agent.npc import create_companion, create_npc, list_npcs
+    from agent.kp_tools_companion import CompanionTools
+    from agent.npc import companion_uid, create_npc, list_npcs
     from infra.config import ImageGenSettings
     from infra.config import Settings as _Settings
 
@@ -2522,7 +2523,10 @@ async def test_npc_and_companion_give_the_keeper_a_hand_on_the_cast():
         services.documents, chat_key, "老蒯", persona="the warden", secret_agenda="knows the dormancy month",
         knowledge=["the belt sleeps in the eleventh month"], location="the boundary stones",
     )
-    await create_companion(services.documents, chat_key, "公所助手", stat_char="公所助手")
+    # A real companion the way the Keeper makes one: record + sheet under `companion:<id>`.
+    assert (await CompanionTools(services).add_companion(keeper, name="公所助手", persona="a clerk")).startswith("✅")
+    helper_id = next(r.id for r in await list_npcs(services.documents, chat_key) if r.name == "公所助手")
+    assert helper_id != "npc"  # a CJK name slugs to the shared "npc" fallback → suffixed after 老蒯
 
     listing = await router.dispatch(keeper, ".npc")
     assert "老蒯" in listing and "公所助手" in listing
@@ -2535,10 +2539,24 @@ async def test_npc_and_companion_give_the_keeper_a_hand_on_the_cast():
     assert "the warden" in shown and "knows the dormancy month" in shown
     assert "the belt sleeps in the eleventh month" in shown
 
-    # `.companion` refuses to act on a plain NPC, and deletion works by name.
+    # `.companion` refuses to act on a plain NPC, and deletion works by name — and takes
+    # the companion's SHEET with it: a sheet left under `companion:<old id>` was a ghost
+    # party member no command could reach (roster, HUD, list_party_sheets), and a
+    # same-name re-add under a fresh id then hit CharacterNameTakenError on it.
     assert "❌" in await router.dispatch(keeper, ".companion delete 老蒯")
     assert "✅" in await router.dispatch(keeper, ".companion delete 公所助手")
     assert {record.name for record in await list_npcs(services.documents, chat_key)} == {"老蒯"}
+    assert await services.characters.list_characters(companion_uid(helper_id), chat_key) == []
+    assert "公所助手" not in {row["name"] for row in await services.characters.get_party_roster(chat_key)}
+    # Another NPC takes the freed id, so the re-added companion lands under a NEW id.
+    await create_npc(services.documents, chat_key, "梅婆", persona="the matron")
+    assert (await CompanionTools(services).add_companion(keeper, name="公所助手", persona="a clerk")).startswith("✅")
+    new_id = next(r.id for r in await list_npcs(services.documents, chat_key) if r.name == "公所助手")
+    assert new_id != helper_id
+    assert [c["name"] for c in await services.characters.list_characters(companion_uid(new_id), chat_key)] == ["公所助手"]
+    await router.dispatch(keeper, ".npc delete 梅婆")
+    await router.dispatch(keeper, ".npc delete 公所助手")  # `.npc delete` on a companion retires it whole too
+    assert await services.characters.list_characters(companion_uid(new_id), chat_key) == []
 
     # Keeper-only: a player gets nothing, not even the roster.
     player = AgentCtx(chat_key=chat_key, user_id="p1", platform="tui", locale="en", extra={"role": "player"})

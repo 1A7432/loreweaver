@@ -51,6 +51,22 @@ _FALSY = {"off", "0", "false", "no", "n", "关", "关闭", "關閉"}
 _companion_uid = npc_records.companion_uid
 
 
+async def retire_companion(services: Services, chat_key: str, companion: npc_records.NpcRecord) -> None:
+    """Remove an AI companion WHOLE: its sheet (and roster row) and then its record.
+
+    A companion is record + sheet; deleting only the record left the sheet on the table
+    under `companion:<old id>` — a party member the HUD, `list_party_sheets` and the
+    roster kept showing, that no command could reach, and that a same-name
+    `add_companion` then tripped over (`CharacterNameTakenError` under a fresh id) — the
+    exact ghost `.companion delete` was added to remove (2026-08-18 《安土》 npc-4). The
+    sheet delete keeps the owner check: only a sheet THIS companion owns goes, never a
+    same-named sheet a player holds. Both doors — the `remove_companion` tool and the
+    keeper's `.companion` / `.npc delete` — come through here."""
+    sheet_name = companion.stat_char or companion.name
+    await services.characters.delete_character(_companion_uid(companion.id), chat_key, sheet_name)
+    await npc_records.delete_npc(services.documents, chat_key, companion.id)
+
+
 class CompanionTools:
     """AI-KP tools for adding/steering AI player companions (party members the AI fills seats with)."""
 
@@ -237,7 +253,7 @@ class CompanionTools:
 
     @tool(prep_only=True)
     async def remove_companion(self, ctx: AgentCtx, name: str) -> str:
-        """Remove an AI companion from the party (deletes its record; its sheet is left in place).
+        """Remove an AI companion from the party: its record AND its character sheet.
 
         Args:
             name: The companion's name or id.
@@ -250,7 +266,7 @@ class CompanionTools:
             companion = await npc_records.get_npc(self._services.documents, ctx.chat_key, name)
             if companion is None or companion.role != "player_companion":
                 return i18n.t("companion.tools.not_found", name=name)
-            await npc_records.delete_npc(self._services.documents, ctx.chat_key, companion.id)
+            await retire_companion(self._services, ctx.chat_key, companion)
             return i18n.t("companion.tools.remove.done", name=companion.name)
         except Exception as exc:
             return i18n.t("companion.tools.remove.failed", error=str(exc))

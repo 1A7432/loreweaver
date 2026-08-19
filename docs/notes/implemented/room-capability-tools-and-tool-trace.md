@@ -36,7 +36,12 @@
   the reply; `gateway.turn` no longer recognizes the command by name. (d) The text
   renderer filters repeat matches BEFORE capping (the `* 4` slice silently emptied a
   large MVU tree), drops `hidden` variables and unresolvable choice labels exactly as
-  the reference client does, and has its own unit tests. Not done, deliberately: the
+  the reference client does, and has its own unit tests. (e) Removing a companion —
+  `remove_companion` or `.companion` / `.npc delete` — retires it WHOLE (sheet + roster row
+  + record, `agent.kp_tools_companion.retire_companion`): the record-only delete left a
+  `companion:<old id>` sheet as a ghost party member no command could reach, and a
+  same-name re-add under a fresh id then hit `CharacterNameTakenError` on it — the very
+  path `.companion delete` was added for. Not done, deliberately: the
   1000-line file split (`kp_tools_mechanics.py`) — a separate hygiene change, not this
   batch's debt.
 - **Rule home:** `docs/plugins.md` Layer B (the three filters); `infra.config.DebugSettings`

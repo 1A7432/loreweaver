@@ -2214,7 +2214,15 @@ class CommandRouter:
             return "\n".join(lines)
 
         if sub in {"delete", "del", "remove", "删除"}:
-            await npc_records.delete_npc(documents, ctx.chat_key, record.id)
+            if _is_companion(record):
+                # A companion is record + sheet: `.companion delete` (or `.npc delete` on
+                # a companion) takes both, or the sheet stays on the table as a ghost
+                # party member no command can reach (`agent.kp_tools_companion.retire_companion`).
+                from agent.kp_tools_companion import retire_companion
+
+                await retire_companion(ctx.services, ctx.chat_key, record)
+            else:
+                await npc_records.delete_npc(documents, ctx.chat_key, record.id)
             return ctx.i18n.t("commands.cast.deleted", name=record.name, id=record.id)
 
         return ctx.fail(ctx.i18n.t("commands.cast.usage"))

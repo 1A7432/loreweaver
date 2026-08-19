@@ -373,10 +373,17 @@ async def test_companion_steering_tools_persist():
     assert "The cellar door is unlocked." in learn_result
     assert "The cellar door is unlocked." in (await npc_records.get_npc(npcs, chat_key, "Silas")).knowledge
 
-    # remove deletes the record.
+    # remove deletes the record AND the sheet (a companion is both) — a sheet left under
+    # `companion:<old id>` was a ghost party member no command could reach, and a
+    # same-name re-add then tripped over it.
+    from agent.npc import companion_uid
+
+    silas_id = (await npc_records.get_npc(npcs, chat_key, "Silas")).id
     assert "Silas" in await tools.remove_companion(ctx, "Silas")
     assert await npc_records.get_npc(npcs, chat_key, "Silas") is None
     assert await npc_records.list_companions(npcs, chat_key) == []
+    assert await services.characters.list_characters(companion_uid(silas_id), chat_key) == []
+    assert "Silas" not in {row["name"] for row in await services.characters.get_party_roster(chat_key)}
 
 
 async def test_witness_grows_companion_knowledge_but_not_keeper_npcs():

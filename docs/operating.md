@@ -337,7 +337,8 @@ During:
   — if you ever see one land in the room's log, that's a bug worth reporting.
 - `.npc` / `.companion` are your hand on the room's cast: list it, `show <name>` for the full record
   (persona, secret agenda, what that NPC knows), `delete <name>` when the Keeper improvised one you
-  do not want. Deleting leaves any character sheet in place.
+  do not want. Deleting a companion takes its character sheet with it (a companion is record + sheet);
+  deleting a plain NPC touches no sheet.
 - `.panel` reads a module's panels as text — useful on a terminal, and the fastest way to see what a
   player's panel is actually showing them.
 
