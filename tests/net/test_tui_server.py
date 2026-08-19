@@ -844,15 +844,22 @@ async def test_kp_turn_after_module_seed_has_no_sentinel_leak_and_uses_keeper_to
         echo = await _recv(ws)
         busy = await _recv(ws)
         streamed = []
+        refreshes = []
         reply = await _recv(ws)
-        while reply["type"] == "narrative_delta":
-            streamed.append(reply)  # spec streaming: delta frames share the reply's id
+        while reply["type"] == "narrative_delta" or (
+            # 2.3.1: each tool round re-sends `busy` with a coarse activity + round.
+            reply["type"] == "turn_status" and reply.get("status") == "busy"
+        ):
+            (refreshes if reply["type"] == "turn_status" else streamed).append(reply)
             reply = await _recv(ws)
         idle = await _recv(ws)
         state = await _recv(ws)
 
         assert echo["type"] == "narrative" and echo["speaker"] == "player"
         assert busy == {"type": "turn_status", "status": "busy", "actor": "Nora"}
+        # The turn read the module, and said so without naming the tool that did it.
+        assert [frame["activity"] for frame in refreshes] == ["reading"]
+        assert all(frame["round"] >= 1 and frame["actor"] == "Nora" for frame in refreshes)
         assert reply["type"] == "narrative" and reply["speaker"] == "kp"
         assert reply["format"] == "markdown"
         # Protocol 2.0: the closing narrative carries the FULL final text and
@@ -865,7 +872,7 @@ async def test_kp_turn_after_module_seed_has_no_sentinel_leak_and_uses_keeper_to
         assert idle == {"type": "turn_status", "status": "idle"}
         assert state["type"] == "state"
 
-        for frame in (echo, busy, *streamed, reply, idle, state):
+        for frame in (echo, busy, *refreshes, *streamed, reply, idle, state):
             assert SENTINEL not in json.dumps(frame), "sentinel leaked in frame"
 
         assert server.turns, "no turn was recorded"
