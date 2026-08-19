@@ -304,11 +304,20 @@ async def _generate_subject(
     return digest, IMAGE_GENERATED
 
 
-async def _store_picture(services: Services, ctx: AgentCtx, subject_id: str, data: bytes, mime: str) -> str:
-    """Put one subject's picture into the room's media store and the 慢菜先备 larder.
+async def _store_picture(
+    services: Services, ctx: AgentCtx, subject_id: str, data: bytes, mime: str, *, remember: bool = True
+) -> str:
+    """Put one subject's picture into the room's media store, and into the 慢菜先备 larder
+    when ``remember``.
 
     `register_blob` is content-addressed and returns the existing record for bytes the
     room already holds, so re-storing the same picture costs nothing.
+
+    ``remember=False`` is for a REFERENCE shown because generation could not run. The
+    larder is checked before generation, so remembering a fallback would retire that
+    subject permanently: the moment an image provider came online, the room would keep
+    serving the reference it fell back to weeks earlier. A fallback is what this beat
+    could do, never what the subject is from now on.
     """
     from infra.media_store import ALLOWED_IMAGE_MIMES, MediaStore
 
@@ -327,10 +336,11 @@ async def _store_picture(services: Services, ctx: AgentCtx, subject_id: str, dat
         name=f"{subject_id}.png",
         uploader=ctx.uid(),
     )
-    larder = await _json_state(services, ctx.chat_key, PREGEN_KEY, {})
-    larder = larder if isinstance(larder, dict) else {}
-    larder[subject_id] = record.hash
-    await services.store.state_set(ctx.chat_key, PREGEN_KEY, json.dumps(larder, ensure_ascii=False))
+    if remember:
+        larder = await _json_state(services, ctx.chat_key, PREGEN_KEY, {})
+        larder = larder if isinstance(larder, dict) else {}
+        larder[subject_id] = record.hash
+        await services.store.state_set(ctx.chat_key, PREGEN_KEY, json.dumps(larder, ensure_ascii=False))
     return record.hash
 
 
@@ -345,7 +355,11 @@ async def _show_reference(services: Services, ctx: AgentCtx, kit: RoomKit, subje
     after it has already declined.
 
     Costs no generation budget — nothing was generated — and rides the same media path,
-    so the hash a client fetches is a real room asset.
+    so the hash a client fetches is a real room asset. It is deliberately NOT remembered
+    in the 慢菜先备 larder: that larder short-circuits generation, so a remembered
+    fallback would mean "this room could not draw this subject once" turning into "this
+    room may never draw this subject". Re-showing costs one content-addressed re-register
+    of bytes the store already holds.
     """
     entry = kit.subject(subject_id)
     if entry is None or entry.ref_path is None or not entry.ref_path.is_file():
@@ -358,7 +372,9 @@ async def _show_reference(services: Services, ctx: AgentCtx, kit: RoomKit, subje
     if not data:
         return None
     try:
-        return await _store_picture(services, ctx, subject_id, data, entry.ref_mime or "image/png")
+        return await _store_picture(
+            services, ctx, subject_id, data, entry.ref_mime or "image/png", remember=False
+        )
     except Exception:  # noqa: BLE001 — presentation must never break the table
         logger.info("director: could not show the reference for %r", subject_id, exc_info=True)
         return None

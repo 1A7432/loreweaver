@@ -50,8 +50,9 @@ async def _room(tmp_path, payload, *, kit: str = KIT, imagegen: FakeImageGen | N
     settings.data_dir = tmp_path / "data"
     services = build_services(settings, llm=llm, embeddings=FakeEmbeddings(64))
     services.settings.director.enabled = True
-    if imagegen is not None:
-        services.imagegen = imagegen
+    # Explicit either way: `Settings()` reads the developer's own `.env`, so a machine with
+    # TRPG_IMAGEGEN__* configured would silently hand the "no provider" tests a real one.
+    services.imagegen = imagegen
     await install_kit_pack(services, CHAT, tmp_path, kit=kit)
     return services, _Hub()
 
@@ -290,23 +291,45 @@ async def test_the_fixed_reference_is_shown_when_no_image_provider_is_configured
     assert len(image_blocks[0]["hash"]) == 64
     # Nothing was generated, so nothing was charged for.
     assert await services.store.state_get(CHAT, SPENT_KEY) is None
-    # ...and it joins the larder, so the same subject reuses it instead of re-storing.
-    larder = json.loads(await services.store.state_get(CHAT, PREGEN_KEY))
-    assert larder == {"wantang": image_blocks[0]["hash"]}
+    # ...and it stays OUT of the 慢菜先备 larder: that larder short-circuits generation,
+    # so remembering a fallback would retire the subject for the life of the story.
+    assert await services.store.state_get(CHAT, PREGEN_KEY) is None
 
 
-async def test_the_reference_fallback_is_reused_from_the_larder(tmp_path):
+async def test_the_reference_fallback_repeats_without_ever_entering_the_larder(tmp_path):
     services, hub = await _room(
         tmp_path,
         {"blocks": [], "audio": [], "image": {"subject": "wantang", "prompt": "x"}, "prepare": []},
     )
 
     await run_director(services, _ctx(), "我抬头", "她在灯下。", beat="handout", hub=hub)
-    first = json.loads(await services.store.state_get(CHAT, PREGEN_KEY))["wantang"]
     await run_director(services, _ctx(), "我再抬头", "她还在灯下。", beat="handout", hub=hub)
 
-    assert json.loads(await services.store.state_get(CHAT, PREGEN_KEY)) == {"wantang": first}
-    assert [block["hash"] for block in _blocks(hub) if block["kind"] == "image"] == [first, first]
+    hashes = [block["hash"] for block in _blocks(hub) if block["kind"] == "image"]
+    # Same bytes, so the content-addressed store hands back the same hash both times —
+    # a re-show costs a re-register, never a second copy.
+    assert len(hashes) == 2 and hashes[0] == hashes[1]
+    assert await services.store.state_get(CHAT, PREGEN_KEY) is None
+
+
+async def test_a_provider_that_arrives_later_can_still_draw_a_subject_that_fell_back(tmp_path):
+    """The bite the larder write would have caused: one beat with no provider (or a dead
+    one, or a spent budget) must not mean this room may never draw that subject again."""
+    services, hub = await _room(
+        tmp_path,
+        {"blocks": [], "audio": [], "image": {"subject": "wantang", "prompt": "她站在灯下"}, "prepare": []},
+    )
+    assert services.imagegen is None
+    await run_director(services, _ctx(), "我抬头", "她在灯下。", beat="handout", hub=hub)
+
+    imagegen = FakeImageGen()
+    services.imagegen = imagegen  # the provider comes online mid-story
+    await run_director(services, _ctx(), "我再抬头", "她还在灯下。", beat="handout", hub=hub)
+
+    assert len(imagegen.calls) == 1, "the earlier fallback must not have retired the subject"
+    assert await services.store.state_get(CHAT, SPENT_KEY) == "1"
+    # NOW it is remembered: a real generation is what the larder is for.
+    assert json.loads(await services.store.state_get(CHAT, PREGEN_KEY))["wantang"]
 
 
 async def test_a_subject_with_no_reference_still_shows_nothing(tmp_path):
