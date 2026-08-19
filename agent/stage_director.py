@@ -85,6 +85,7 @@ IMAGE_REF_MISSING = "ref_missing"  # 宁缺毋滥: no readable 定妆 reference 
 IMAGE_BUDGET = "budget"  # the room's generation budget is spent
 IMAGE_PROVIDER_FAILED = "llm_failed"  # the provider raised
 IMAGE_LARDER = "larder"  # served warm from the 慢菜先备 larder
+IMAGE_REF_FALLBACK = "ref_fallback"  # generation declined; the kit's own 定妆 reference was shown
 IMAGE_GENERATED = "generated"
 
 DIRECTOR_TRACE_KIND = "director"
@@ -298,6 +299,17 @@ async def _generate_subject(
         logger.info("director: image generation failed for %r: %s", subject_id, exc)
         return None, IMAGE_PROVIDER_FAILED
 
+    digest = await _store_picture(services, ctx, subject_id, data, mime)
+    await services.store.state_set(ctx.chat_key, SPENT_KEY, json.dumps(spent + 1))
+    return digest, IMAGE_GENERATED
+
+
+async def _store_picture(services: Services, ctx: AgentCtx, subject_id: str, data: bytes, mime: str) -> str:
+    """Put one subject's picture into the room's media store and the 慢菜先备 larder.
+
+    `register_blob` is content-addressed and returns the existing record for bytes the
+    room already holds, so re-storing the same picture costs nothing.
+    """
     from infra.media_store import ALLOWED_IMAGE_MIMES, MediaStore
 
     tui = services.settings.tui
@@ -315,11 +327,41 @@ async def _generate_subject(
         name=f"{subject_id}.png",
         uploader=ctx.uid(),
     )
-    await services.store.state_set(ctx.chat_key, SPENT_KEY, json.dumps(spent + 1))
+    larder = await _json_state(services, ctx.chat_key, PREGEN_KEY, {})
     larder = larder if isinstance(larder, dict) else {}
     larder[subject_id] = record.hash
     await services.store.state_set(ctx.chat_key, PREGEN_KEY, json.dumps(larder, ensure_ascii=False))
-    return record.hash, IMAGE_GENERATED
+    return record.hash
+
+
+async def _show_reference(services: Services, ctx: AgentCtx, kit: RoomKit, subject_id: str) -> str | None:
+    """Serve the subject's own 定妆 reference when generation could not run.
+
+    The kit already ships an authored, on-model picture of every generatable subject —
+    it is the very image a generation would have been conditioned on. A room with no
+    image provider, a spent budget or a dead vendor showed the table NOTHING rather than
+    that (run 2, 2026-08-19: fourteen 定妆 references on disk, zero pictures all
+    session). Generation still wins whenever it is available; this is only what happens
+    after it has already declined.
+
+    Costs no generation budget — nothing was generated — and rides the same media path,
+    so the hash a client fetches is a real room asset.
+    """
+    entry = kit.subject(subject_id)
+    if entry is None or entry.ref_path is None or not entry.ref_path.is_file():
+        return None
+    try:
+        data = entry.ref_path.read_bytes()
+    except OSError:
+        logger.info("director: reference for %r is unreadable", subject_id, exc_info=True)
+        return None
+    if not data:
+        return None
+    try:
+        return await _store_picture(services, ctx, subject_id, data, entry.ref_mime or "image/png")
+    except Exception:  # noqa: BLE001 — presentation must never break the table
+        logger.info("director: could not show the reference for %r", subject_id, exc_info=True)
+        return None
 
 
 async def _publish(
@@ -422,6 +464,13 @@ async def run_director(
             digest, outcome = await _generate_subject(
                 services, ctx, kit, subject_id, str(image.get("prompt") or "")
             )
+            if not digest:
+                # Generation declined — no provider, spent budget, a dead vendor. The
+                # kit's own 定妆 reference is an authored picture of this very subject,
+                # so show that rather than nothing (`_show_reference`).
+                digest = await _show_reference(services, ctx, kit, subject_id)
+                if digest:
+                    outcome = IMAGE_REF_FALLBACK
             image_trace = {"subject": subject_id, "outcome": outcome}
             if digest:
                 entry = kit.subject(subject_id)

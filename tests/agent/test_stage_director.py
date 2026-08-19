@@ -229,6 +229,9 @@ async def test_pack_only_generation_is_an_author_veto_no_config_overrides(tmp_pa
     await run_director(services, _ctx(), "我抬头", "她在灯下。", beat="handout", hub=hub)
 
     assert imagegen.calls == []
+    # `pack_only` vetoes GENERATION, not pictures: the kit's own 定妆 reference is pack
+    # content, so it is exactly what such an author asked to be shown.
+    assert [block["kind"] for block in _blocks(hub)] == ["image"]
 
 
 async def test_the_room_image_budget_is_a_hard_stop(tmp_path):
@@ -263,6 +266,109 @@ async def test_a_pregenerated_subject_is_served_from_the_larder_without_spending
     # The larder hash is not room media, so the reachability gate drops the block —
     # exactly the behaviour that keeps a stale/foreign hash off the wire.
     assert _blocks(hub) == []
+
+
+# --- lane 3b: showing the 定妆 reference when generation cannot run ----------
+
+
+async def test_the_fixed_reference_is_shown_when_no_image_provider_is_configured(tmp_path):
+    """Run 2 (2026-08-19): fourteen authored 定妆 references on disk, zero pictures all
+    session, because a room with no imagegen showed NOTHING rather than the picture the
+    kit already ships of that very subject."""
+    services, hub = await _room(
+        tmp_path,
+        {"blocks": [], "audio": [], "image": {"subject": "wantang", "prompt": "她站在灯下"}, "prepare": []},
+    )
+    assert services.imagegen is None
+
+    await run_director(services, _ctx(), "我抬头", "她在灯下。", beat="handout", hub=hub)
+
+    image_blocks = [block for block in _blocks(hub) if block["kind"] == "image"]
+    assert len(image_blocks) == 1
+    assert image_blocks[0]["caption"] == "顾晚棠"
+    # The block survived the reachability gate, so the hash IS resolvable room media.
+    assert len(image_blocks[0]["hash"]) == 64
+    # Nothing was generated, so nothing was charged for.
+    assert await services.store.state_get(CHAT, SPENT_KEY) is None
+    # ...and it joins the larder, so the same subject reuses it instead of re-storing.
+    larder = json.loads(await services.store.state_get(CHAT, PREGEN_KEY))
+    assert larder == {"wantang": image_blocks[0]["hash"]}
+
+
+async def test_the_reference_fallback_is_reused_from_the_larder(tmp_path):
+    services, hub = await _room(
+        tmp_path,
+        {"blocks": [], "audio": [], "image": {"subject": "wantang", "prompt": "x"}, "prepare": []},
+    )
+
+    await run_director(services, _ctx(), "我抬头", "她在灯下。", beat="handout", hub=hub)
+    first = json.loads(await services.store.state_get(CHAT, PREGEN_KEY))["wantang"]
+    await run_director(services, _ctx(), "我再抬头", "她还在灯下。", beat="handout", hub=hub)
+
+    assert json.loads(await services.store.state_get(CHAT, PREGEN_KEY)) == {"wantang": first}
+    assert [block["hash"] for block in _blocks(hub) if block["kind"] == "image"] == [first, first]
+
+
+async def test_a_subject_with_no_reference_still_shows_nothing(tmp_path):
+    """宁缺毋滥 is untouched: the fallback IS the reference, so no reference means no
+    picture — the same structural rule generation obeys."""
+    services, hub = await _room(
+        tmp_path,
+        {"blocks": [], "audio": [], "image": {"subject": "the-quay", "prompt": "石埠"}, "prepare": []},
+    )
+
+    await run_director(services, _ctx(), "我看埠头", "石埠空着。", beat="scene_change", hub=hub)
+
+    assert _blocks(hub) == []
+
+
+async def test_generation_still_wins_whenever_it_is_available(tmp_path):
+    imagegen = FakeImageGen()
+    services, hub = await _room(
+        tmp_path,
+        {"blocks": [], "audio": [], "image": {"subject": "wantang", "prompt": "她站在灯下"}, "prepare": []},
+        imagegen=imagegen,
+    )
+
+    await run_director(services, _ctx(), "我抬头", "她在灯下。", beat="handout", hub=hub)
+
+    assert len(imagegen.calls) == 1  # the fallback never pre-empts a working provider
+    assert await services.store.state_get(CHAT, SPENT_KEY) == "1"
+
+
+async def test_a_spent_budget_falls_back_to_the_reference_without_charging_again(tmp_path):
+    imagegen = FakeImageGen()
+    services, hub = await _room(
+        tmp_path,
+        {"blocks": [], "audio": [], "image": {"subject": "wantang", "prompt": "x"}, "prepare": []},
+        imagegen=imagegen,
+    )
+    services.settings.director.max_images = 0
+
+    await run_director(services, _ctx(), "我抬头", "她在灯下。", beat="handout", hub=hub)
+
+    assert imagegen.calls == []
+    assert await services.store.state_get(CHAT, SPENT_KEY) is None
+    assert [block["kind"] for block in _blocks(hub)] == ["image"]
+
+
+async def test_the_reference_fallback_is_named_in_the_probe(tmp_path):
+    from agent.stage_director import IMAGE_REF_FALLBACK
+    from agent.tool_trace import enable_tool_trace
+
+    services, hub = await _room(
+        tmp_path,
+        {"blocks": [], "audio": [], "image": {"subject": "wantang", "prompt": "x"}, "prepare": []},
+    )
+    path = tmp_path / "trace" / "tools.jsonl"
+    try:
+        enable_tool_trace(path)
+        await run_director(services, _ctx(), "我抬头", "她在灯下。", beat="handout", hub=hub)
+    finally:
+        enable_tool_trace(None)
+
+    [line] = [json.loads(raw) for raw in path.read_text(encoding="utf-8").splitlines()]
+    assert json.loads(line["event"])["image"]["outcome"] == IMAGE_REF_FALLBACK
 
 
 async def test_player_visible_trackers_are_in_context_and_keeper_ones_are_not(tmp_path):
