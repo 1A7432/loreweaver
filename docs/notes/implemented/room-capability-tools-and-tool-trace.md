@@ -23,7 +23,23 @@
   about visibility — and `.panel [<id>]` answers with it privately while the HUD refresh
   still rides along. `.npc` / `.companion` are keeper-only, private, and never print a
   dossier in a listing.
+- **Review follow-up (same day), four judo moves instead of four more branches:**
+  (a) the player-name reservation moved from two tools' preambles into the cast WRITER
+  (`agent.npc.create_npc` raises `PlayerNameReservedError`; `create_companion` wraps it),
+  because the run's actual path was `add_companion`, which the first cut never covered —
+  a player is any sheet not owned by a `companion:` uid, plus the claimable pregens,
+  casefolded, and an unreadable store refuses rather than waves the write through;
+  `add_companion` also undoes its record when the sheet write fails (the run's phantom
+  `npc-4`). (b) The trace hangs off `agent.loop._dispatch_one` (`agent.tool_trace`), not
+  `Toolset.dispatch`: it names the room, sees a hook veto and a subsystem tool, and the
+  dispatcher knows nothing about files. (c) `.panel` attaches its own `Event.panel` to
+  the reply; `gateway.turn` no longer recognizes the command by name. (d) The text
+  renderer filters repeat matches BEFORE capping (the `* 4` slice silently emptied a
+  large MVU tree), drops `hidden` variables and unresolvable choice labels exactly as
+  the reference client does, and has its own unit tests. Not done, deliberately: the
+  1000-line file split (`kp_tools_mechanics.py`) — a separate hygiene change, not this
+  batch's debt.
 - **Rule home:** `docs/plugins.md` Layer B (the three filters); `infra.config.DebugSettings`
-  (what the trace holds); `core/panels.py` (rendering semantics); `gateway/commands.py`
-  (`cmd_panel`, `cmd_cast`).
+  (what the trace holds); `core/panels.py` (rendering semantics); `agent/npc.py`
+  (`PlayerNameReservedError`); `gateway/commands.py` (`cmd_panel`, `cmd_cast`).
 - **Date:** 2026-08-19.

@@ -52,6 +52,7 @@ from core.check_outcome import CheckOutcome, outcome_wire
 from core.dice_engine import DiceResult
 from core.rulepacks import RulePack, load_rulepack
 from core.sheets import check_value, has_check_value, set_sheet_value, sheet_value
+from infra.i18n import I18n
 from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
 
 
@@ -74,6 +75,30 @@ async def _sheet_pack(services: Services, ctx: AgentCtx, character: CharacterShe
 def _has_character(character: CharacterSheet | None) -> bool:
     """Whether `character` is a real (saved) character, not the `"default"` not-found placeholder."""
     return bool(character) and character.name != "default"
+
+
+def _characteristic_lines(sheet: CharacterSheet, i18n: I18n, locale: str | None) -> tuple[list[str], list[str]]:
+    """A sheet's declared characteristics and its vital meters as text lines — the ONE
+    rendering both `get_character_sheet` (the actor's sheet) and `list_party_sheets` (the
+    whole table) print, so what the keeper reads is the same list either way. The pack's
+    `sheet.attributes` selection in the pack's own order — the same list
+    `state.character.attributes` puts on the wire — falling back to every stored key when
+    the pack is unknown."""
+    attrs = sheet.attributes
+    try:
+        spec = load_rulepack(sheet.system).sheet_spec
+    except Exception:
+        spec = None
+    attribute_lines = [
+        i18n.t("kp_tools.character.sheet.attr_line", attr=key, value=attrs[key])
+        for key in (spec.attributes if spec is not None else attrs)
+        if key in attrs
+    ]
+    meter_lines = [
+        i18n.t("kp_tools.character.sheet.meter_line", label=meter["label"], value=meter["value"], max=meter["max"])
+        for meter in character_resources(sheet, locale)
+    ]
+    return attribute_lines, meter_lines
 
 
 async def _resolve_actor_identity(
@@ -173,7 +198,6 @@ class CharacterTools:
         if not _has_character(character):
             return i18n.t("kp_tools.character.none")
 
-        attrs = character.attributes
         lines = [
             i18n.t("kp_tools.character.sheet.title", name=character.name),
             i18n.t("kp_tools.character.sheet.system_line", system=character.system),
@@ -185,26 +209,16 @@ class CharacterTools:
             pack = None
         spec = pack.sheet_spec if pack is not None else None
 
-        source_keys = [key for key in (spec.attributes if spec is not None else attrs) if key in attrs]
-        if source_keys:
+        attribute_lines, meter_lines = _characteristic_lines(character, i18n, None)
+        if attribute_lines:
             lines.append("")
             lines.append(i18n.t("kp_tools.character.sheet.attributes_header"))
-            for attr in source_keys:
-                lines.append(i18n.t("kp_tools.character.sheet.attr_line", attr=attr, value=attrs[attr]))
+            lines.extend(attribute_lines)
 
-        meters = character_resources(character)
-        if meters:
+        if meter_lines:
             lines.append("")
             lines.append(i18n.t("kp_tools.character.sheet.status_header"))
-            for meter in meters:
-                lines.append(
-                    i18n.t(
-                        "kp_tools.character.sheet.meter_line",
-                        label=meter["label"],
-                        value=meter["value"],
-                        max=meter["max"],
-                    )
-                )
+            lines.extend(meter_lines)
         elif spec is None:
             hp, hp_max = get_hit_points(character)
             if hp_max:
@@ -292,35 +306,14 @@ class CharacterTools:
                 continue  # one unreadable row must not cost the keeper the whole roster
             if not _has_character(sheet):
                 continue
-            lines = [
-                i18n.t(
-                    "kp_tools.character.party.member",
-                    name=sheet.name,
-                    system=sheet.system,
-                    ai=i18n.t("kp_tools.character.party.ai") if sheet.name in companions else "",
-                )
-            ]
-            attrs = sheet.attributes
-            try:
-                spec = load_rulepack(sheet.system).sheet_spec
-            except Exception:
-                spec = None
-            # The pack's declared characteristics, in the pack's own order — the same
-            # selection `state.character.attributes` puts on the wire, so what the keeper
-            # reads here and what a client shows are one list.
-            for key in (spec.attributes if spec is not None else attrs):
-                if key in attrs:
-                    lines.append(i18n.t("kp_tools.character.sheet.attr_line", attr=key, value=attrs[key]))
-            for meter in character_resources(sheet, ctx.locale):
-                lines.append(
-                    i18n.t(
-                        "kp_tools.character.sheet.meter_line",
-                        label=meter["label"],
-                        value=meter["value"],
-                        max=meter["max"],
-                    )
-                )
-            blocks.append("\n".join(lines))
+            attribute_lines, meter_lines = _characteristic_lines(sheet, i18n, ctx.locale)
+            header = i18n.t(
+                "kp_tools.character.party.member",
+                name=sheet.name,
+                system=sheet.system,
+                ai=i18n.t("kp_tools.character.party.ai") if sheet.name in companions else "",
+            )
+            blocks.append("\n".join([header, *attribute_lines, *meter_lines]))
 
         if not blocks:
             return i18n.t("kp_tools.character.party.empty")

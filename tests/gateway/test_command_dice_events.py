@@ -180,3 +180,29 @@ async def test_coc_command_roll_check_opposed_and_sanity_are_recorded_structural
     assert san["loss_expr"] in {"0", "1d4"}
     assert isinstance(san["loss"], int)
     assert san["stat_before"] >= san["stat_after"]
+
+
+async def test_panel_refreshes_the_callers_hud_through_the_reply_events_alone() -> None:
+    """`.panel` used to be a command name the turn pipeline recognized (a state refresh
+    keyed on `canonical == "panel"`). Now the command attaches its own `Event.panel` to
+    the reply, so the pipeline treats it like any other private command: the caller gets
+    the text and one state frame, the room gets nothing."""
+    services = _services()
+    room = "tui:group:panel-hud"
+    ctx = AgentCtx(chat_key=room, user_id="u1", platform="tui", locale="en")
+    router = CommandRouter(services)
+    toolset = build_kp_toolset(services)
+
+    hub = RoomHub()
+    origin = RecordingMember("u1", "Nora")
+    peer = RecordingMember("u2", "Mina")
+    await hub.subscribe(room, origin)
+    await hub.subscribe(room, peer)
+
+    await run_turn(hub, services, ctx, ".panel", command_router=router, toolset=toolset, origin=origin)
+
+    panels = [event for event in origin.events if event.kind == "panel"]
+    assert len(panels) == 1 and panels[0].data.get("type") == "state" and panels[0].private
+    replies = [event for event in origin.events if event.kind == "narrative"]
+    assert len(replies) == 1 and replies[0].private
+    assert all(event.kind not in ("panel", "narrative") for event in peer.events)

@@ -162,17 +162,6 @@ async def run_turn(
     command_reply = reply.text if reply is not None else None
     command_events = reply.events if reply is not None else ()
     if command_reply is not None:
-        if matched_spec is not None and matched_spec.canonical == "panel":
-            # `.panel` refreshes the caller's HUD snapshot AND answers in text (the reply
-            # falls through below): a client that cannot draw a module's panels reads them
-            # here, which is the whole point of a tier-2 `fallback`. Before this the reply
-            # was dropped and the command produced no frame at all on such a client.
-            snapshot = await _state_for_ctx(hub, services, ctx)
-            event = Event.panel(snapshot)
-            if origin is not None:
-                await origin.deliver(event)
-            else:
-                await hub.publish(ctx.chat_key, event)
         public_events: list[Event] = []
         for event in command_events:
             if event.kind == "dice":
@@ -539,7 +528,7 @@ async def publish_state(hub: RoomHub, services: Services, ctx: AgentCtx, *, rese
     online = len({identity_ctx.uid() for identity_ctx, _name in identity_contexts})
 
     async def event_for(member: Member) -> Event:
-        snapshot = await _state_for_ctx(
+        snapshot = await state_for_ctx(
             hub,
             services,
             member_ctx(member),
@@ -554,7 +543,7 @@ async def publish_state(hub: RoomHub, services: Services, ctx: AgentCtx, *, rese
     await hub.publish_each(ctx.chat_key, event_for)
 
 
-async def _state_for_ctx(
+async def state_for_ctx(
     hub: RoomHub,
     services: Services,
     ctx: AgentCtx,
@@ -563,6 +552,9 @@ async def _state_for_ctx(
     connected_names: set[str] | None = None,
     online: int | None = None,
 ) -> dict[str, Any]:
+    """`ctx`'s own room snapshot (`net.state.build_room_state`) with the hub's presence
+    overlaid — the frame `publish_state` sends each member, for one member. A command
+    that wants to refresh its caller's HUD (`.panel`) attaches this as `Event.panel`."""
     members = hub.members(ctx.chat_key) if members is None else members
     connected_names = (
         {getattr(member, "name", "") for member in members}

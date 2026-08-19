@@ -60,7 +60,7 @@ from gateway.rooms import (
     set_binding,
     set_keeper_binding,
 )
-from gateway.turn import publish_state
+from gateway.turn import publish_state, state_for_ctx
 from infra.i18n import I18n, get_i18n
 from infra.imagegen import ImageGenError
 from infra.media_store import ALLOWED_AUDIO_MIMES, ALLOWED_IMAGE_MIMES, MediaError, MediaStore
@@ -706,6 +706,20 @@ class CommandRouter:
         notice = render_validation_notice(ctx.i18n, violations)
         return f"{result}\n{notice}" if notice else result
 
+    async def _viewer_snapshot(self, ctx: CommandCtx) -> dict[str, Any]:
+        """This caller's room snapshot: with the hub's presence overlaid when there is a
+        hub (`gateway.turn.state_for_ctx`), the bare `net.state.build_room_state` otherwise.
+        Never raises — a panel with no live values still renders its static text."""
+        from net.state import build_room_state
+
+        try:
+            if self.hub is not None:
+                return await state_for_ctx(self.hub, ctx.services, ctx.raw_ctx)
+            return await build_room_state(ctx.services, ctx.raw_ctx)
+        except Exception:  # noqa: BLE001 — see docstring
+            logger.debug("room snapshot unavailable for .panel", exc_info=True)
+            return {}
+
     async def cmd_panel(self, ctx: CommandCtx) -> str:
         """`.panel [<id>]` — the module's panels as TEXT, for a client that cannot draw them.
 
@@ -716,10 +730,16 @@ class CommandRouter:
         (audience filtered server-side, same as the manifest); with an id it renders that
         panel against this viewer's own variables — `$var` absent means hidden, and
         `visible_when` runs through `core.condexpr`, the evaluator every client implements.
-        The state refresh still rides along (`gateway.turn`).
+        The caller's HUD refresh rides along as an `Event.panel` on the reply (private, like
+        the text) — the one snapshot serves both, and the turn pipeline needs no special
+        knowledge of this command.
         """
         from core.panels import panel_title_text, render_panel_text
         from gateway.panels import enabled_panels
+
+        snapshot = await self._viewer_snapshot(ctx)
+        if snapshot:
+            ctx.events.append(Event.panel(snapshot, private=True))
 
         role = _TUI_KEEPER_ROLE if _is_keeper(ctx.raw_ctx) else "player"
         panels = await enabled_panels(ctx.services, ctx.chat_key, role)
@@ -750,14 +770,7 @@ class CommandRouter:
                 ctx.i18n.t("commands.panel.unknown", name=wanted, ids=", ".join(wire_id for wire_id, _ in panels))
             )
         wire_id, panel = matches[0]
-        from net.state import build_room_state
-
-        try:
-            snapshot = await build_room_state(ctx.services, ctx.raw_ctx)
-            variables = snapshot.get("variables") or []
-        except Exception:  # noqa: BLE001 — a panel with no live values still renders its static text
-            variables = []
-        body = render_panel_text(panel, variables, ctx.locale)
+        body = render_panel_text(panel, snapshot.get("variables") or [], ctx.locale)
         title = ctx.i18n.t("commands.panel.title", title=panel_title_text(panel, ctx.locale), id=wire_id)
         if not body:
             return f"{title}\n{ctx.i18n.t('commands.panel.rich_only')}"
@@ -2170,7 +2183,7 @@ class CommandRouter:
                 )
             return "\n".join(lines)
 
-        name = rest or (" ".join(tokens[1:]) if len(tokens) > 1 else "")
+        name = rest
         if not name:
             return ctx.fail(ctx.i18n.t("commands.cast.usage"))
         record = await npc_records.get_npc(documents, ctx.chat_key, name)
