@@ -542,7 +542,11 @@ def _localized_text(value: Any, locale: str) -> str:
 
 
 def _variable_index(variables: Sequence[Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
-    return {str(entry.get("id", "")): entry for entry in variables if entry.get("id")}
+    """The viewer's VISIBLE variables by id. A `hidden` entry (an imported-card MVU leaf a
+    keeper connection receives before `.var expose`) is dropped before any binding
+    resolves — the same rule the reference client applies, so a pack-authored panel
+    cannot surface un-exposed module internals as ordinary panel text on any screen."""
+    return {str(entry.get("id", "")): entry for entry in variables if entry.get("id") and not entry.get("hidden")}
 
 
 def _resolved_scalar(value: Any, index: Mapping[str, Mapping[str, Any]], leaf: Mapping[str, Any] | None) -> Any:
@@ -552,7 +556,9 @@ def _resolved_scalar(value: Any, index: Mapping[str, Mapping[str, Any]], leaf: M
         entry = index.get(str(value["$var"]))
         return entry["value"] if entry is not None else _MISSING
     if isinstance(value, dict) and set(value) == {"$leaf"}:
-        if leaf is None:
+        # `$leaf` reads the repeat instance's matched variable — its id, label or value,
+        # the three fields the reference client exposes; anything else is a miss.
+        if leaf is None or value["$leaf"] not in ("id", "label", "value"):
             return _MISSING
         return leaf.get(str(value["$leaf"]), _MISSING)
     return value
@@ -573,16 +579,16 @@ def _block_text(block: Mapping[str, Any], index: Mapping[str, Mapping[str, Any]]
             return []
 
     if "repeat" in block:
+        # One instance per visible variable under the prefix, capped at the same count
+        # the reference client expands (filter first, then cap — the cap is on
+        # INSTANCES, never on how far into the variable list a match may sit).
         spec = block["repeat"]
         prefix = str(spec.get("prefix", ""))
         inner = spec.get("block") or {}
+        matches = [entry for entry in index.values() if str(entry.get("id", "")).startswith(prefix)]
         lines: list[str] = []
-        for entry in list(index.values())[: MAX_TEXT_REPEAT_INSTANCES * 4]:
-            if not str(entry.get("id", "")).startswith(prefix):
-                continue
+        for entry in matches[:MAX_TEXT_REPEAT_INSTANCES]:
             lines.extend(_block_text(inner, index, locale, leaf=entry))
-            if len(lines) >= MAX_TEXT_REPEAT_INSTANCES:
-                break
         return lines
 
     kind = block.get("kind")
@@ -611,10 +617,17 @@ def _block_text(block: Mapping[str, Any], index: Mapping[str, Mapping[str, Any]]
         caption = values.get("caption") or values.get("alt") or ""
         return [f"🖼 {caption}".rstrip()]
     if kind == "choices":
-        lines = [values["prompt"]] if values.get("prompt") else []
+        # An option whose label binding this viewer cannot see is dropped, and a choices
+        # block with no options left is hidden whole — the reference client's rule.
+        options: list[str] = []
         for option in block.get("options", []):
-            lines.append(f"  · {_localized_text(option.get('label'), locale)} → {option.get('input', '')}")
-        return lines
+            label = _resolved_scalar(option.get("label"), index, leaf)
+            if label is _MISSING:
+                continue
+            options.append(f"  · {_localized_text(label, locale)} → {option.get('input', '')}")
+        if not options:
+            return []
+        return ([values["prompt"]] if values.get("prompt") else []) + options
     if kind == "title_card":
         head = " · ".join(part for part in (values.get("act"), values.get("title"), values.get("subtitle")) if part)
         return [f"— {head} —"] if head else []
