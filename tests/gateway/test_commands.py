@@ -2501,3 +2501,46 @@ async def test_panel_never_shows_a_player_a_keeper_panel(tmp_path):
     assert "panelpack/ledger" in listing
     assert "gauges" not in listing
     assert "for the keeper alone" not in await router.dispatch(player, ".panel panelpack/gauges")
+
+
+async def test_npc_and_companion_give_the_keeper_a_hand_on_the_cast():
+    """No command could list or remove a room's NPCs: when a 2026-08-18 play-test had the
+    Keeper register a real player as an AI companion, the operator's only lever was to ask
+    the Keeper in narration to call remove_companion itself. Keeper-only and private —
+    a record carries the NPC's secret agenda and private knowledge."""
+    from agent.npc import create_companion, create_npc, list_npcs
+    from infra.config import ImageGenSettings
+    from infra.config import Settings as _Settings
+
+    services = build_services(
+        _Settings(imagegen=ImageGenSettings()), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64)
+    )
+    router = CommandRouter(services)
+    chat_key = "cli:dm:cast"
+    keeper = AgentCtx(chat_key=chat_key, user_id="kp", locale="en")
+    await create_npc(
+        services.documents, chat_key, "老蒯", persona="the warden", secret_agenda="knows the dormancy month",
+        knowledge=["the belt sleeps in the eleventh month"], location="the boundary stones",
+    )
+    await create_companion(services.documents, chat_key, "公所助手", stat_char="公所助手")
+
+    listing = await router.dispatch(keeper, ".npc")
+    assert "老蒯" in listing and "公所助手" in listing
+    assert "knows the dormancy month" not in listing  # a listing is not a dossier
+
+    only_companions = await router.dispatch(keeper, ".companion list")
+    assert "公所助手" in only_companions and "老蒯" not in only_companions
+
+    shown = await router.dispatch(keeper, ".npc show 老蒯")
+    assert "the warden" in shown and "knows the dormancy month" in shown
+    assert "the belt sleeps in the eleventh month" in shown
+
+    # `.companion` refuses to act on a plain NPC, and deletion works by name.
+    assert "❌" in await router.dispatch(keeper, ".companion delete 老蒯")
+    assert "✅" in await router.dispatch(keeper, ".companion delete 公所助手")
+    assert {record.name for record in await list_npcs(services.documents, chat_key)} == {"老蒯"}
+
+    # Keeper-only: a player gets nothing, not even the roster.
+    player = AgentCtx(chat_key=chat_key, user_id="p1", platform="tui", locale="en", extra={"role": "player"})
+    denied = await router.dispatch(player, ".npc")
+    assert "老蒯" not in denied

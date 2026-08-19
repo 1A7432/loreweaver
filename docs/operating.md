@@ -333,8 +333,13 @@ During:
 
 - Glance at `ctx` and `cache` once in a while. `ctx` should sawtooth, not climb forever.
 - If replies get slow, check the log for `LLM throttled` before blaming the model.
-- Keeper-only replies (`.model`, `.lore`, `.chronicle`, `.var`) are unicast to you by design — if you
-  ever see one land in the room's log, that's a bug worth reporting.
+- Keeper-only replies (`.model`, `.lore`, `.chronicle`, `.var`, `.npc`) are unicast to you by design
+  — if you ever see one land in the room's log, that's a bug worth reporting.
+- `.npc` / `.companion` are your hand on the room's cast: list it, `show <name>` for the full record
+  (persona, secret agenda, what that NPC knows), `delete <name>` when the Keeper improvised one you
+  do not want. Deleting leaves any character sheet in place.
+- `.panel` reads a module's panels as text — useful on a terminal, and the fastest way to see what a
+  player's panel is actually showing them.
 
 After:
 
