@@ -54,7 +54,7 @@
   },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
-    "test": "bun test",
+    "test": "tsc --noEmit -p tsconfig.build.json && bun test",
     "prepublishOnly": "rm -rf dist && tsc -p tsconfig.build.json"
   },
   "devDependencies": {

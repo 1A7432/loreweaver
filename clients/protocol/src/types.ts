@@ -101,7 +101,6 @@ export type ErrorCode =
   | "avatar_no_character"
 export type DiceKind = "roll" | "check" | "subsystem" | "opposed" | "init"
 export type SystemLevel = "info" | "warn"
-export type TurnActivity = "busy" | "idle"
 export type AudioLayer = "bgm" | "ambience" | "sfx"
 export type AudioAction = "play" | "stop" | "pause" | "resume" | "volume"
 export type AdminErrorCode =
