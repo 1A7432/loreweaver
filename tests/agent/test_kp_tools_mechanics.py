@@ -1360,3 +1360,35 @@ async def test_list_party_sheets_is_empty_before_anyone_has_a_sheet():
     tools = CharacterTools(services)
 
     assert "📄" in await tools.list_party_sheets(ctx)
+
+
+async def test_a_sheet_with_no_name_is_no_character_at_every_door():
+    """`has_character` gained its `sheet.name` truthiness test in the 8c11975 unification
+    (one of the two copies it replaced lacked it), undeclared and untested. It is
+    deliberate: a nameless sheet row cannot be addressed, saved back or told apart from
+    `get_character`'s not-found placeholder, so every door treats it as NO character —
+    the acting seat answers "create one first", and the party listing leaves it out."""
+    services, ctx = _build()
+    tools = CharacterTools(services)
+
+    # A sheet document whose stored name is empty, pointed at by the active-character
+    # pointer and listed in the party roster — the shape both doors have to reject.
+    await services.store.doc_put(
+        ctx.chat_key,
+        "sheet",
+        "ghost",
+        schema_version=1,
+        data=json.dumps({"name": "", "system": "coc7", "owner": "u1", "attributes": {"STR": 50}}),
+        meta="{}",
+        grants="[]",
+    )
+    await services.store.state_set(ctx.chat_key, "active_character.u1", "ghost")
+    await services.store.state_set(
+        ctx.chat_key,
+        "party_roster",
+        json.dumps({"ghost": {"name": "ghost", "system": "coc7", "resources": []}}),
+    )
+
+    i18n = services.i18n.with_locale(ctx.locale)
+    assert await tools.get_character_sheet(ctx) == i18n.t("kp_tools.character.none")
+    assert await tools.list_party_sheets(ctx) == i18n.t("kp_tools.character.party.empty")

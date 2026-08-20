@@ -51,7 +51,13 @@ UNSET_CHARACTER_NAME = "default"
 
 def has_character(sheet: CharacterSheet | None) -> bool:
     """Whether `sheet` is a real (saved) character rather than `get_character`'s
-    not-found placeholder. The ONE predicate every "is there a sheet?" check uses."""
+    not-found placeholder. The ONE predicate every "is there a sheet?" check uses.
+
+    A sheet with no NAME is no character either. The name IS a sheet's identity (M17 keys
+    the document by it), so a nameless row cannot be addressed, written back, or told
+    apart from the placeholder. The 8c11975 unification took that test from the stricter
+    of the two copies it replaced — deliberately, and pinned since by
+    `tests/agent/test_kp_tools_mechanics.py`."""
     return bool(sheet) and bool(sheet.name) and sheet.name != UNSET_CHARACTER_NAME
 
 
