@@ -583,3 +583,58 @@ async def test_removing_a_companion_whose_sheet_belongs_to_a_player_refuses_and_
     assert (await tools.remove_companion(ctx, "Silas")).startswith("✅")
     assert await npc_records.list_companions(npcs, chat_key) == []
     assert await services.characters.list_characters(companion_uid(silas.id), chat_key) == []
+
+
+async def test_reset_story_takes_the_companion_whole_and_leaves_the_players_alone(tmp_path):
+    """A companion is record + sheet, and the two halves used to die at DIFFERENT reset
+    scopes: the records are session state (`npc_records`, story) while sheets belong to the
+    `characters` facet and are kept until `chars`, so the same investigators can replay.
+    `.reset story` therefore left a recordless `companion:<id>` sheet on the table — a HUD
+    party row with `ai` flipped to False (so it read as a real player), unreachable by
+    `.companion delete`, still counted by `list_party_sheets`. The `companion_sheets` facet
+    disposes of that half with the records; the players' sheets still survive."""
+    from agent.npc import companion_uid
+    from net.room_backup import reset_room_state
+
+    chat_key = "reset-ghost-room"
+    services = build_services(
+        Settings(locale="en", data_dir=str(tmp_path)), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(8)
+    )
+    npcs = services.documents
+    keeper_ctx = _ctx(chat_key)
+    player_ctx = _ctx(chat_key, user_id="human")
+    tools = CompanionTools(services)
+
+    async def _seat_the_table() -> str:
+        nora = services.characters.generate_character("coc7", "Nora")
+        await services.characters.save_character("human", chat_key, nora)
+        await tools.add_companion(keeper_ctx, name="Silas")
+        return (await npc_records.list_companions(npcs, chat_key))[0].id
+
+    silas_id = await _seat_the_table()
+    party = {member["name"]: member for member in (await build_room_state(services, player_ctx))["party"]}
+    assert party["Silas"]["ai"] is True and party["Nora"]["ai"] is False
+
+    await reset_room_state(services, chat_key, scope="story")
+
+    assert await npc_records.list_companions(npcs, chat_key) == []
+    # The sheet left with the record: document, roster row and active-character pointer.
+    assert await services.characters.list_characters(companion_uid(silas_id), chat_key) == []
+    assert {doc.id for doc in await npcs.list(chat_key, "sheet")} == {"Nora"}
+    assert {row["name"] for row in await services.characters.get_party_roster(chat_key)} == {"Nora"}
+    assert {member["name"] for member in (await build_room_state(services, player_ctx))["party"]} == {"Nora"}
+    # The player replays the same module with the same investigator.
+    assert (await services.characters.get_character("human", chat_key)).name == "Nora"
+
+    # The heavier scopes still take the whole table with them.
+    await _seat_the_table()
+    await reset_room_state(services, chat_key, scope="chars")
+    assert await npcs.list(chat_key, "sheet") == []
+    assert await services.characters.get_party_roster(chat_key) == []
+    assert await npc_records.list_companions(npcs, chat_key) == []
+
+    await _seat_the_table()
+    await reset_room_state(services, chat_key, scope="all")
+    assert await npcs.list(chat_key, "sheet") == []
+    assert await services.characters.get_party_roster(chat_key) == []
+    assert await npc_records.list_companions(npcs, chat_key) == []

@@ -30,6 +30,12 @@ media toggles — configuration rather than campaign content. Surviving is a dec
 `None` requires `survives_because` to say why; an unexplained survivor is the exact
 drift this registry exists to prevent.
 
+A facet may also own a SLICE of a family another facet owns wholesale: the companion half
+of the `sheet` documents dies with the companion RECORDS at `story`, while the players'
+sheets live on to `chars`. A slice is exactly what a target list cannot name, so such a
+facet declares an `on_reset` hook and the operation runs it — the selection rule stays in
+the module that wrote the state, and no lifecycle operation learns what a companion is.
+
 ## Export and import are one rule, not two
 
 A facet names the room-scoped `storages` it lives in. Every storage a facet claims must
@@ -133,6 +139,13 @@ class RoomStateFacet:
     # Disposal a target list cannot express — currently only in-process state. Runs inside
     # the segment `delete_room_data` assigns it, never on a schedule of its own.
     on_delete: Callable[[FacetContext], Awaitable[None]] | None = field(
+        default=None, compare=False, repr=False
+    )
+    # The same, for a `.reset` that reaches this facet: disposal of a SLICE of a family
+    # another facet owns wholesale, which no target list can name (see the module
+    # docstring). `reset_room_state` runs these BEFORE the target-list wipes, so a hook can
+    # still read the records whose other half it is disposing of.
+    on_reset: Callable[[FacetContext], Awaitable[None]] | None = field(
         default=None, compare=False, repr=False
     )
 
@@ -241,6 +254,10 @@ class FacetRegistry:
 
     def delete_hooks(self) -> tuple[RoomStateFacet, ...]:
         return tuple(facet for facet in self.facets if facet.on_delete is not None)
+
+    def reset_hooks(self, scope: str) -> tuple[RoomStateFacet, ...]:
+        """Facets a `.reset <scope>` reaches that dispose through a hook of their own."""
+        return tuple(facet for facet in self.in_scope(scope) if facet.on_reset is not None)
 
 
 def _reject_collisions(facets: tuple[RoomStateFacet, ...]) -> None:

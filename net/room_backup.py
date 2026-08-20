@@ -1153,9 +1153,11 @@ async def reset_room_state(
     channel/keeper bindings and live connections. ``scope`` chooses how much:
 
     - ``"story"`` (default): the narrative session only — chat, session/battle
-      records, KP notes, initiative, clock, recap, relationships and in-play NPCs.
-      Characters, the loaded module, world lore and media are KEPT, so the same
-      table replays the same scenario from a clean slate.
+      records, KP notes, initiative, clock, recap, relationships and in-play NPCs
+      (an AI companion is one of those, and it leaves WHOLE: record, sheet and
+      party-roster row, because half a companion is a ghost party member no command
+      can reach). The PLAYERS' characters, the loaded module, world lore and media
+      are KEPT, so the same table replays the same scenario from a clean slate.
     - ``"chars"``: the above PLUS the party's characters, so fresh investigators
       face the SAME module.
     - ``"all"``: everything above PLUS the module, world lore and media (KV rows,
@@ -1172,6 +1174,17 @@ async def reset_room_state(
     # room-scoped by an exact COLUMN — a dotted-neighbor room can no longer alias this
     # room's rows, so the pre-M17 prefix-ambiguity guard is structurally unnecessary here.
     registry = room_registry()
+    # Facet-owned disposal a target list cannot name — a facet that owns a SLICE of a
+    # family another facet owns wholesale (`infra.room_facets`). It runs FIRST: such a
+    # hook selects its slice by reading the records the target lists below are about to
+    # delete, so running it after them would leave it with nothing to select on. Which
+    # facets these are, and what each one takes, is the registry's answer; the order is
+    # this operation's, like every other leg.
+    facet_ctx = FacetContext(services=services, room=room_for_chat_key(chat_key), chat_key=chat_key)
+    for facet in registry.reset_hooks(scope):
+        hook = facet.on_reset
+        if hook is not None:
+            await hook(facet_ctx)
     doc_types, state_keys, state_prefixes = registry.reset_targets(scope)
     storages = registry.storages_at(scope)
     deleted_docs = 0

@@ -34,7 +34,12 @@ from agent.tools import tool
 from core.character_manager import CharacterSheet
 from core.rulepacks import load_rulepack
 from infra.i18n import I18n
-from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
+from infra.room_facets import (
+    STORAGE_DOCUMENTS,
+    STORAGE_ROOM_STATE,
+    FacetContext,
+    RoomStateFacet,
+)
 
 if TYPE_CHECKING:
     from gateway.commands import CommandRouter
@@ -369,6 +374,31 @@ async def witness(services: Services, chat_key: str, fact: str) -> None:
         pass
 
 
+async def _dispose_companion_sheets(facet_ctx: FacetContext) -> None:
+    """The sheet half of every companion, disposed with the records at `.reset story`.
+
+    A companion is record + sheet, and the two halves sit in facets with DIFFERENT reset
+    scopes: the records are session state (`npc_records`, story), the sheets are the
+    `characters` facet's `sheet` documents, kept until `chars` so the same investigators
+    can replay. So `.reset story` used to leave the companion's sheet behind, recordless:
+    the HUD kept its party row with `ai` flipped to False (it impersonated a real player),
+    `.companion delete` could no longer reach it, and `list_party_sheets` counted it as a
+    member — the same ghost 968bd1b closed on the delete door, arriving through the reset
+    door instead.
+
+    Only a slice of the `sheet` family goes, which is why this is a hook and not a target
+    list: the rows a `companion:` uid owns. `delete_character` is the door, so the roster
+    row and the active-character pointer leave with the document, and its owner check
+    still stands — a `stat_char` retargeted at a PLAYER's sheet deletes nothing here, and
+    the reset moves on rather than failing the room's whole cleanup for one bad pointer.
+    """
+    services, chat_key = facet_ctx.services, facet_ctx.chat_key
+    for companion in await npc_records.list_companions(services.documents, chat_key):
+        await services.characters.delete_character(
+            _companion_uid(companion.id), chat_key, companion_sheet_name(companion)
+        )
+
+
 # --- Room lifecycle (M23 WS1) -----------------------------------------------
 ROOM_FACETS = (
     RoomStateFacet(
@@ -378,5 +408,16 @@ ROOM_FACETS = (
         # `.party auto` is a property of THIS party: it leaves when the party does.
         state_keys=frozenset({"party_auto"}),
         storages=frozenset({STORAGE_ROOM_STATE}),
+    ),
+    RoomStateFacet(
+        name="companion_sheets",
+        owner="agent.kp_tools_companion",
+        reset_scope="story",
+        # The companion half of the `sheet` documents and their party-roster rows: a slice
+        # of two families the `characters` facet owns wholesale at `chars`, which dies one
+        # scope earlier because it belongs to the companion RECORDS (`npc_records`, story)
+        # rather than to the table's players.
+        storages=frozenset({STORAGE_DOCUMENTS, STORAGE_ROOM_STATE}),
+        on_reset=_dispose_companion_sheets,
     ),
 )

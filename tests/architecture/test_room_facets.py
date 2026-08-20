@@ -424,3 +424,29 @@ def test_two_facets_cannot_claim_the_same_whole_storage_wipe():
                                storages=frozenset({STORAGE_HISTORY})),
             )
         )
+
+
+def test_a_reset_hook_names_the_storages_it_disposes_of():
+    """A hook is the escape hatch for a slice of a family a target list cannot name — not
+    a licence to dispose of state the registry has no record of. It still says WHERE."""
+    for facet in room_registry().facets:
+        if facet.on_reset is not None:
+            assert facet.storages, f"{facet.name} disposes through a hook but names no storage"
+
+
+def test_the_companion_half_of_the_sheet_documents_dies_with_the_records():
+    """Record and sheet leave together. `sheet` documents belong to the `characters` facet
+    at `chars` — the same investigators replaying the same module is the lightest reset's
+    whole point — but the ones a `companion:` uid owns belong to the companion RECORDS,
+    which are session state and die at `story`. That is a SLICE of a family, which is what
+    an `on_reset` hook is for; losing either half of this pin brings back the recordless
+    ghost party member `.reset story` used to leave on the table."""
+    registry = room_registry()
+    facets = {facet.name: facet for facet in registry.facets}
+    assert facets["npc_records"].reset_scope == "story"
+    assert facets["characters"].reset_scope == "chars"
+    companion_sheets = facets["companion_sheets"]
+    assert companion_sheets.reset_scope == "story"
+    assert companion_sheets.on_reset is not None
+    for scope in RESET_SCOPES:
+        assert companion_sheets in registry.reset_hooks(scope), scope
