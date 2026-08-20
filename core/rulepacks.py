@@ -776,6 +776,18 @@ def _rescan_if_dirs_changed(*, force: bool = False) -> bool:
     return changed
 
 
+def refresh_discovery() -> bool:
+    """Re-check the discovery dirs NOW, throttle skipped; True if anything was reloaded.
+
+    The miss door for a caller that keeps its OWN snapshot of discovery instead of
+    resolving through `load_rulepack` — the command router's dialect table (built once from
+    `all_command_words`) is the one such caller, and a word it does not know is that
+    table's version of a resolution miss. The throttle stays with THAT caller, because
+    its misses are player-typed text: see `gateway.commands.router.refresh_pack_words`.
+    """
+    return _rescan_if_dirs_changed(force=True)
+
+
 @cache
 def _discover_registry() -> dict[str, RulePack]:
     """Scan `rulepacks/*.yaml` (built-in), then `_USER_RULEPACK_DIR` (Layer B.3b) when set.

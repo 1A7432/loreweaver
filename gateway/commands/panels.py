@@ -188,6 +188,11 @@ class PanelsCommands:
             return ctx.fail(ctx.i18n.t("pack.install.failed", error=str(exc)))
 
         pack_id = report.manifest.id
+        # A bundled rulepack's dot-command words (its `make_char` word, its subsystem
+        # words) are a SNAPSHOT in the router's spec table, so they route nowhere until it
+        # is rebuilt. Dispatch self-heals on a miss too — the out-of-process door has no
+        # other way in — but this door knows a pack just landed, so it skips the throttle.
+        self.refresh_pack_words(force=True)
         await toggle_enabled_panel_pack(ctx.services.store, ctx.chat_key, pack_id, on=True)
         live, leftover = await _switch_everything_on(ctx, report.manifest, pack_id)
         if self.hub is not None:

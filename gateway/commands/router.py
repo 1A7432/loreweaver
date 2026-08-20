@@ -9,15 +9,16 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Any
 
+import core.rulepacks as core_rulepacks
 from agent.context import AgentCtx
 from agent.services import Services
 from core.character_manager import (
     CharacterDataError,
 )
 from core.resolution import ResolutionError
-from core.rulepacks import all_command_words
 from gateway.commands.cast import CastCommands
 from gateway.commands.checks import ChecksCommands, _resolution_notice
 from gateway.commands.llm import LlmCommands
@@ -88,10 +89,14 @@ class CommandRouter(
         # router/runner pair -- never two independently-mutated copies. A caller
         # may inject a pre-built list (e.g. seeded in tests); default is empty.
         self.botlist = botlist if botlist is not None else Botlist()
-        self._specs = self._build_specs()
+        # The pack-declared dialect words this table was built from, and when they were
+        # last re-checked against discovery — see `refresh_pack_words`.
+        self._pack_words = core_rulepacks.all_command_words()
+        self._last_word_check = float("-inf")
+        self._specs = self._build_specs(self._pack_words)
         self._alias_maps = {
-            "en": self._build_alias_map("en"),
-            "zh": self._build_alias_map("zh"),
+            "en": self._build_alias_map(self._specs, "en"),
+            "zh": self._build_alias_map(self._specs, "zh"),
         }
 
     def resolve(self, text: str, locale: str) -> tuple[CommandSpec, str] | None:
@@ -107,11 +112,56 @@ class CommandRouter(
 
         token = match.group(1).casefold()
         args = (match.group(2) or "").strip()
+        spec = self._lookup(token, locale)
+        if spec is None and self.refresh_pack_words():
+            # A word nothing claims is this table's resolution MISS: a pack installed
+            # after the router was built may have brought it. Look once more, then give up.
+            spec = self._lookup(token, locale)
+        return (spec, args) if spec is not None else None
+
+    def _lookup(self, token: str, locale: str) -> CommandSpec | None:
         for dialect in self._locale_order(locale):
             spec = self._alias_maps[dialect].get(token)
             if spec is not None:
-                return spec, args
+                return spec
         return None
+
+    def refresh_pack_words(self, *, force: bool = False) -> bool:
+        """Rebuild the dialect table when the pack-declared command words changed.
+
+        The spec table is a SNAPSHOT of `all_command_words()` taken when the router was
+        built, and the router lives as long as the process: a pack installed afterwards —
+        by `.pack install` in this room, or by ANOTHER process (the desktop client shells
+        out to the CLI) — declared words that routed nowhere until a restart. Discovery
+        already self-heals on a resolution miss; this is that doctrine one layer up.
+
+        The throttle lives HERE rather than in `core.rulepacks` because the trigger is
+        player-typed text — every unmatched `.word` is a miss — so an unthrottled probe
+        would let one bad word start a stat storm; the interval is the discovery one, so a
+        test that relaxes discovery relaxes this too. `force` is the IN-process door:
+        `.pack install` knows a pack just landed and must not wait out an interval.
+
+        Synchronous and swap-at-the-end: the tables are rebuilt into locals and assigned
+        after, so a concurrent `resolve` on this shared router reads the old pair or the
+        new one, never a half-built one.
+        """
+        now = time.monotonic()
+        if not force and now - self._last_word_check < core_rulepacks.RESCAN_MIN_INTERVAL_SECONDS:
+            return False
+        self._last_word_check = now
+        core_rulepacks.refresh_discovery()
+        words = core_rulepacks.all_command_words()
+        if words == self._pack_words:
+            return False
+        specs = self._build_specs(words)
+        alias_maps = {
+            "en": self._build_alias_map(specs, "en"),
+            "zh": self._build_alias_map(specs, "zh"),
+        }
+        self._pack_words = words
+        self._specs = specs
+        self._alias_maps = alias_maps
+        return True
 
     async def dispatch(self, ctx: AgentCtx | Any, text: str) -> str | None:
         """Run a command and return its localized text for non-hub callers."""
@@ -202,15 +252,16 @@ class CommandRouter(
             lines.append(ctx.i18n.t("commands.help.player_hint"))
         return "\n".join(lines)
 
-    def _build_specs(self) -> list[CommandSpec]:
-        specs = self._static_specs()
+    def _build_specs(self, words: frozenset[str]) -> list[CommandSpec]:
         # Pack-declared dot-command dialect words (stage D): every word ANY
         # discovered pack declares gets one spec routed through cmd_pack_word,
         # which resolves it against the ROOM's pack at dispatch (a word the
         # room's system doesn't declare is refused there). Words a static spec
-        # already claims (ra/rc on `check`) stay with that spec.
+        # already claims (ra/rc on `check`) stay with that spec. `words` is passed
+        # in rather than read here so a rebuild and its trigger see one word set.
+        specs = self._static_specs()
         claimed = {word for spec in specs for word in (*spec.aliases_en, *spec.aliases_zh)}
-        for word in sorted(all_command_words()):
+        for word in sorted(words):
             if word in claimed:
                 continue
             specs.append(
@@ -536,9 +587,9 @@ class CommandRouter(
             ),
         ]
 
-    def _build_alias_map(self, locale: str) -> dict[str, CommandSpec]:
+    def _build_alias_map(self, specs: list[CommandSpec], locale: str) -> dict[str, CommandSpec]:
         alias_map = {}
-        for spec in self._specs:
+        for spec in specs:
             aliases = spec.aliases_zh if locale == "zh" else spec.aliases_en
             for alias in aliases:
                 alias_map[alias.casefold()] = spec

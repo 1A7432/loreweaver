@@ -56,7 +56,13 @@ contents:
   rulepacks: [rulepacks/tiderules.yaml]
 """
 
-RULEPACK_YAML = "names: [tiderules, 潮汐规则]\ndefaults:\n  力量: 7\n"
+RULEPACK_YAML = (
+    "names: [tiderules, 潮汐规则]\n"
+    "defaults:\n  力量: 7\n"
+    # A dot-command dialect word, the way a real system pack ships one: the router
+    # only routes it once its spec table has seen this pack.
+    "commands:\n  tidemake: {action: make_char}\n"
+)
 
 
 def _built_pack(tmp_path: Path) -> Path:
@@ -318,3 +324,43 @@ async def test_the_system_pin_is_claimed_only_when_the_room_is_really_on_it(serv
     assert await server.store.state_get(chat_key, "room_system") is None
     assert i18n.t("commands.pack.live_card", ref="tidemodule/cards/world.json") in reply
     assert "coc7" not in reply
+
+
+WORD_RULEPACK_YAML = "names: [wordrules]\ndefaults:\n  力量: 7\ncommands:\n  wordmake: {action: make_char}\n"
+
+
+async def test_a_pack_word_installed_by_another_process_routes_at_once(server, tmp_path):
+    """The dialect table is a SNAPSHOT: `CommandRouter` folds `all_command_words()` in when
+    it is built, and it is built once per process. A pack installed afterwards by ANOTHER
+    process (the desktop client shells out to the CLI) declared words that routed nowhere
+    until a restart — even though discovery itself self-heals. Like its skills twin, this
+    test deliberately does NOT shorten the throttle: arming it first is the whole point."""
+    router = CommandRouter(server)
+    chat_key = "cli:dm:word-now"
+
+    # Arm the discovery throttle the way a live room does — anything that resolves.
+    rulepacks_module.load_rulepack("coc7")
+
+    rulepacks_dir = Path(server.settings.data_dir) / "rulepacks"
+    rulepacks_dir.mkdir(parents=True, exist_ok=True)
+    (rulepacks_dir / "wordrules.yaml").write_text(WORD_RULEPACK_YAML, encoding="utf-8")
+
+    reply = await router.dispatch(_keeper(chat_key), ".wordmake Tidewalker")
+
+    i18n = server.i18n.with_locale("en")
+    assert reply is not None, "the pack's own make_char word routed nowhere"
+    assert i18n.t("commands.character.created", name="Tidewalker", system="wordrules") in reply
+
+
+async def test_installing_here_makes_the_packs_make_char_word_live(server, tmp_path):
+    """The in-process door: `.pack install` knows a pack just landed, so its words work in
+    the next breath rather than one throttle interval later."""
+    router = CommandRouter(server)
+    chat_key = "cli:dm:word-install"
+
+    await router.dispatch(_keeper(chat_key), f".pack install {_built_pack(tmp_path)}")
+    reply = await router.dispatch(_keeper(chat_key), ".tidemake Tidewalker")
+
+    i18n = server.i18n.with_locale("en")
+    assert reply is not None, "the installed pack's make_char word routed nowhere"
+    assert i18n.t("commands.character.created", name="Tidewalker", system="tiderules") in reply
