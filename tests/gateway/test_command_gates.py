@@ -510,6 +510,96 @@ async def test_sheet_explicit_assignment_stores_an_absolute_negative(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# `.st <someone else> <attr>=<n>` — the ghost-key mis-parse. Both scans take
+# everything before the value as the attribute NAME, so a teammate's name became
+# part of the key and was written to the CALLER's own sheet, then echoed back as
+# "updated" while the real attribute never moved (run-3 play-test).
+# ---------------------------------------------------------------------------
+
+
+async def _table_with_two_characters(tmp_path, chat_key: str):
+    settings = Settings(locale="en", data_dir=str(tmp_path))
+    services = build_services(settings, llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(64))
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key=chat_key, user_id="u1", locale="en")
+    await router.dispatch(ctx, ".coc Investigator")
+    # A second player's character, so the room's roster really holds the name typed below.
+    await services.characters.save_character("u2", chat_key, CharacterSheet("沈拾遗", "coc7"))
+    return services, router, ctx
+
+
+async def test_st_refuses_a_teammates_name_and_writes_no_ghost_key(tmp_path):
+    services, router, ctx = await _table_with_two_characters(tmp_path, "cli:dm:st-ghost")
+
+    reply = await router.dispatch(ctx, ".st 沈拾遗 力量=3")
+
+    i18n = services.i18n.with_locale("en")
+    assert reply is not None
+    # It names the other character, says whose sheet `.st` writes, and spells the fix.
+    assert i18n.t("commands.sheet.key_is_name", name="沈拾遗", key="沈拾遗 力量") in reply
+    assert i18n.t("commands.sheet.key_suggestion", command="st", suggestion="力量=3") in reply
+    assert i18n.t("commands.sheet.changed", items="") not in reply
+
+    # Nothing was written ANYWHERE: not the ghost key, not the real attribute.
+    caller = await services.characters.get_character("u1", ctx.chat_key)
+    assert not any("沈拾遗" in str(key) for key in {**caller.attributes, **caller.skills})
+    assert caller.attributes.get("STR") != 3
+    other = await services.characters.get_character("u2", ctx.chat_key)
+    assert not any("沈拾遗" in str(key) for key in {**other.attributes, **other.skills})
+
+
+async def test_st_refuses_a_relative_assignment_under_a_name_too(tmp_path):
+    services, router, ctx = await _table_with_two_characters(tmp_path, "cli:dm:st-ghost-rel")
+    before = (await services.characters.get_character("u1", ctx.chat_key)).attributes.get("STR")
+
+    reply = await router.dispatch(ctx, ".st 沈拾遗 力量+=3")
+
+    i18n = services.i18n.with_locale("en")
+    assert reply is not None
+    assert i18n.t("commands.sheet.key_is_name", name="沈拾遗", key="沈拾遗 力量") in reply
+    # The correction keeps the operator it was typed with, or it would silently mean
+    # something else than the player asked for.
+    assert i18n.t("commands.sheet.key_suggestion", command="st", suggestion="力量+=3") in reply
+    caller = await services.characters.get_character("u1", ctx.chat_key)
+    assert caller.attributes.get("STR") == before
+    assert not any("沈拾遗" in str(key) for key in {**caller.attributes, **caller.skills})
+
+
+async def test_st_refuses_a_spaced_key_that_names_nobody(tmp_path):
+    """Whitespace in a name the pack never declared is a mis-parse whoever typed it —
+    a stranger's name, a typo, a two-word phrase. It is refused either way; only the
+    sentence differs, because "that is another character here" would be a lie."""
+    services, router, ctx = await _table_with_two_characters(tmp_path, "cli:dm:st-spaced")
+
+    reply = await router.dispatch(ctx, ".st 无名氏 力量=3")
+
+    i18n = services.i18n.with_locale("en")
+    assert reply is not None
+    assert i18n.t("commands.sheet.key_has_space", name="无名氏", key="无名氏 力量") in reply
+    assert i18n.t("commands.sheet.key_is_name", name="无名氏", key="无名氏 力量") not in reply
+    assert i18n.t("commands.sheet.key_suggestion", command="st", suggestion="力量=3") in reply
+    caller = await services.characters.get_character("u1", ctx.chat_key)
+    assert not any("无名氏" in str(key) for key in {**caller.attributes, **caller.skills})
+
+
+async def test_st_still_writes_the_plain_and_the_custom_single_token_key(tmp_path):
+    """The refusal must not cost a table its house skills: inventing a skill mid-session
+    is what `.st` is FOR, so a single-token key nobody declared still writes (owner
+    amendment). A pack-DECLARED multi-word name still writes too — it resolves."""
+    services, router, ctx = await _table_with_two_characters(tmp_path, "cli:dm:st-custom")
+    pack = load_rulepack("coc7")
+
+    assert await router.dispatch(ctx, ".st 力量=60") is not None
+    assert await router.dispatch(ctx, ".st 学识星象=45") is not None
+    assert await router.dispatch(ctx, ".st spot hidden=70") is not None
+
+    character = await services.characters.get_character("u1", ctx.chat_key)
+    assert character.attributes["STR"] == 60
+    assert sheet_value(character, pack, "学识星象") == 45
+    assert sheet_value(character, pack, "侦查") == 70
+
+
+# ---------------------------------------------------------------------------
 # 拆卡 — the world-import verb is keeper-gated even for a room attachment,
 # and `.var` (imported-variable exposure) is keeper-gated on every subcommand.
 # ---------------------------------------------------------------------------

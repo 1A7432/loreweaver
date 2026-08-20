@@ -35,6 +35,8 @@ _SHEET_ASSIGN_RE = re.compile(rf"(\+=|-=|=)\s*({_SHEET_VALUE_RE.pattern})", re.I
 # Assignment operators -> how `_apply_value_expr` folds the value into the current one.
 _SHEET_OPS = {"=": "set", "+=": "add", "-=": "sub"}
 _SHEET_SIGN_OPS = {"+": "add", "-": "sub"}
+# The reverse map, for spelling a correction back to whoever mis-typed one.
+_SHEET_OP_SYMBOLS = {"set": "=", "add": "+=", "sub": "-="}
 
 # `.st`/`.sheet` finalize word: re-derive current HP/MP/SAN to their maxima for
 # the sheet's CURRENT characteristics (CREATION semantics -- see `cmd_sheet`).
@@ -175,6 +177,73 @@ def _parse_sheet_assignments(text: str) -> list[tuple[str, str, str]]:
     return assignments
 
 
+async def _table_character_names(ctx: CommandCtx) -> set[str]:
+    """Every character NAME this room knows, case-folded: the live party roster plus the
+    module's pregen cast. Only ever read to EXPLAIN a refusal, never to authorize one."""
+    from core.pregen_roster import pregen_entries
+
+    names: set[str] = set()
+    for member in await ctx.services.characters.get_party_roster(ctx.chat_key):
+        name = str(member.get("name") or "").strip()
+        if name:
+            names.add(name.casefold())
+    try:
+        for entry in await pregen_entries(ctx.services.documents, ctx.chat_key):
+            name = str(entry.get("name") or "").strip()
+            if name:
+                names.add(name.casefold())
+    except Exception:
+        # A room with no pregen documents (or an unreadable one) still gets the
+        # generic refusal — the roster half is what usually answers.
+        pass
+    return names
+
+
+async def _refuse_spaced_key(
+    ctx: CommandCtx, pack: RulePack, assignments: list[tuple[str, str, str]]
+) -> str | None:
+    """Refuse a `.st` whose attribute name holds whitespace; ``None`` when all are clean.
+
+    BOTH scans take "everything before the value" as the name, so `.st <teammate> <attr>
+    <n>` — a real habit from dice-bot dialects — used to mint a ghost attribute
+    "<teammate> <attr>" on the CALLER's own sheet and echo it back as updated, while the
+    named character's real attribute never moved (run-3 play-test). A name nobody declared
+    that holds a space is a mis-parse, never a house skill: single-token names the pack has
+    never heard of (`学识星象=45`) still write, because inventing a skill mid-session is
+    what `.st` is for. A pack-DECLARED multi-word name (`spot hidden=70`) still writes too —
+    it resolves, so it is not a mis-parse.
+    """
+    for raw_name, op, raw_value in assignments:
+        name = raw_name.strip()
+        if not any(char.isspace() for char in name):
+            continue
+        if pack.resolve_skill(name):
+            continue
+        tokens = name.split(maxsplit=1)
+        head = tokens[0]
+        rest = tokens[1].strip() if len(tokens) > 1 else ""
+        known = head.casefold() in await _table_character_names(ctx)
+        lines = [
+            ctx.i18n.t(
+                "commands.sheet.key_is_name" if known else "commands.sheet.key_has_space",
+                name=head,
+                key=name,
+            )
+        ]
+        # Only when what is left of the name reads as one plausible attribute: a
+        # suggestion built out of a second mis-parse would just be wrong twice.
+        if rest and not any(char.isspace() for char in rest):
+            lines.append(
+                ctx.i18n.t(
+                    "commands.sheet.key_suggestion",
+                    command=ctx.command,
+                    suggestion=f"{rest}{_SHEET_OP_SYMBOLS.get(op, '=')}{raw_value}",
+                )
+            )
+        return "\n".join(lines)
+    return None
+
+
 def _apply_value_expr(services: Services, current: int, op: str, raw_value: str) -> int:
     """Fold a parsed assignment value into the current one: set / add / sub."""
     expression = raw_value.strip()
@@ -239,6 +308,11 @@ class SheetCommands:
         assignments = _parse_sheet_assignments(args)
         if not assignments:
             return ctx.i18n.t("commands.error.bad_args")
+        # A mis-parsed name must never reach a write: half of `.st`'s value is that its
+        # receipt can be trusted, and a ghost attribute is echoed back as "updated".
+        refusal = await _refuse_spaced_key(ctx, pack, assignments)
+        if refusal is not None:
+            return ctx.fail(refusal)
 
         changed = []
         changed_names = []
