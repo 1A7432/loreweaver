@@ -315,6 +315,11 @@ async def _run_check_with_loss(
         "stat_before": stat_value,
         "stat_after": new_value,
     }
+    if ceiling_applied:
+        # Without this the record says a 1d6 loss cost 0 and offers no reason, so every
+        # later reader — the session report, the recap, the Keeper re-reading the turn —
+        # sees a capped loss and a rolled zero as the same event.
+        record_kwargs["loss_ceiling"] = ceiling
     if variant:
         record_kwargs["variant"] = variant
     await _record_subsystem_check(services, ctx, character.name, spec.stat, outcome, **record_kwargs)
@@ -347,9 +352,11 @@ async def _run_check_with_loss(
         i18n.t("kp_tools.subsystem.loss.result_line", level=level_label),
         # A FAILED check that costs nothing prints a line identical to a success's,
         # which is how a 2026-08-07 session read "no deduction" as an engine bug when
-        # the model had simply passed `failure_loss: "0"`. Say which it is.
+        # the model had simply passed `failure_loss: "0"`. Say which it is — and NOT when
+        # the pack's ceiling is what zeroed it, because "the declared failure cost was 0"
+        # would then be false and would hide the very rule that fired (run-3 play-test).
         i18n.t("kp_tools.subsystem.loss.no_cost_line", label=label)
-        if not outcome.rank.success and loss == 0
+        if not outcome.rank.success and loss == 0 and not ceiling_applied
         else i18n.t(
             "kp_tools.subsystem.loss.loss_line",
             loss=loss,

@@ -1287,7 +1287,8 @@ async def test_loss_ceiling_caps_loss_only_when_the_condition_holds(monkeypatch)
     capped = await dispatch_subsystem(
         services, ctx, pack, "sanity_check", {"success_loss": "0", "failure_loss": "1d6", "tag": "fire"}
     )
-    assert "Loss ceiling applied: capped at 0" in capped
+    i18n = services.i18n.with_locale(ctx.locale)
+    assert i18n.t("kp_tools.subsystem.loss.ceiling_line", value=0) in capped
     sheet = await char_tools.get_character_sheet(ctx)
     assert "SAN: 50/99" in sheet
 
@@ -1297,6 +1298,62 @@ async def test_loss_ceiling_caps_loss_only_when_the_condition_holds(monkeypatch)
         services, ctx, pack, "sanity_check", {"success_loss": "0", "failure_loss": "1d6"}
     )
     assert "Loss ceiling applied" not in uncapped
+
+
+async def test_a_capped_loss_says_so_on_the_check_line_and_in_the_record(monkeypatch):
+    """A ceiling that zeroes the loss used to print the line for a DECLARED zero — "the
+    declared failure cost was 0" — which is false, and which hides the pack's own rule at
+    the exact moment it fires. A module whose signature mechanic is a conditional immunity
+    then reads as broken dice (run-3 play-test). The clause is generic: the engine names
+    the ceiling, never the fiction the pack wrapped around it."""
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)  # SAN 50/99
+
+    pack = _ceiling_pack()
+    monkeypatch.setattr("agent.kp_tools_subsystems.load_rulepack", lambda *a, **k: pack)
+
+    seed_dice(11)
+    capped = await dispatch_subsystem(
+        services, ctx, pack, "sanity_check", {"success_loss": "0", "failure_loss": "1d6", "tag": "fire"}
+    )
+
+    i18n = services.i18n.with_locale(ctx.locale)
+    assert i18n.t("kp_tools.subsystem.loss.ceiling_line", value=0) in capped
+    # ...and NOT the sentence that blames a zero the caller never declared.
+    assert i18n.t("kp_tools.subsystem.loss.no_cost_line", label="Sanity") not in capped
+    assert "1d6" in capped  # the roll that was capped is still on the line
+
+    # The session record carries the ceiling too, or every later reader — the report, the
+    # recap, the Keeper re-reading the turn — sees a capped loss and a rolled 0 alike.
+    from core.battle_report import SessionRecord
+
+    raw = await services.store.state_get(ctx.chat_key, "session_record.current")
+    check = SessionRecord.from_dict(json.loads(raw)).skill_checks[-1]
+    assert check["loss"] == 0 and check["loss_expr"] == "1d6" and check["loss_ceiling"] == 0
+
+
+async def test_an_uncapped_loss_carries_no_ceiling_clause_or_record_field(monkeypatch):
+    services, ctx = _build()
+    char_tools = CharacterTools(services)
+    await char_tools.create_character(ctx, name="Vera", system="coc7", auto_generate=False)
+
+    pack = _ceiling_pack()
+    monkeypatch.setattr("agent.kp_tools_subsystems.load_rulepack", lambda *a, **k: pack)
+
+    seed_dice(11)
+    uncapped = await dispatch_subsystem(
+        services, ctx, pack, "sanity_check", {"success_loss": "0", "failure_loss": "1d6"}
+    )
+
+    i18n = services.i18n.with_locale(ctx.locale)
+    assert i18n.t("kp_tools.subsystem.loss.ceiling_line", value=0) not in uncapped
+
+    from core.battle_report import SessionRecord
+
+    raw = await services.store.state_get(ctx.chat_key, "session_record.current")
+    check = SessionRecord.from_dict(json.loads(raw)).skill_checks[-1]
+    assert "loss_ceiling" not in check
 
 
 async def test_loss_ceiling_absent_in_base_pack_never_caps():

@@ -259,7 +259,7 @@
   "kp_tools.subsystem.improve.failure": "📈 {name} 的 {skill} 成长检定\n🎲 掷出: {roll} ≤ {value} → 未成长",
   "kp_tools.subsystem.improve.maxed": "📈 {skill} 已满值({value})，无需成长",
   "kp_tools.subsystem.improve.success": "📈 {name} 的 {skill} 成长检定\n🎲 掷出: {roll} > {old} → 成功!\n✨ {skill}: {old} → {new} (+{delta})",
-  "kp_tools.subsystem.loss.ceiling_line": "🛡️ 损失封顶生效: 封顶至 {value}",
+  "kp_tools.subsystem.loss.ceiling_line": "🛡️ 损失封顶生效：本房间的规则把这次损失封顶为 {value}——骰子掷出的数更高。",
   "kp_tools.subsystem.loss.header_failure": "🤯 {name} 的{label}检定",
   "kp_tools.subsystem.loss.header_success": "😰 {name} 的{label}检定",
   "kp_tools.subsystem.loss.loss_line": "💔 损失: {loss} (骰子: {expr}={detail})",

@@ -259,7 +259,7 @@
   "kp_tools.subsystem.improve.failure": "📈 {name}'s {skill} growth check\n🎲 Rolled: {roll} ≤ {value} → No growth",
   "kp_tools.subsystem.improve.maxed": "📈 {skill} is already maxed ({value}), no growth needed",
   "kp_tools.subsystem.improve.success": "📈 {name}'s {skill} growth check\n🎲 Rolled: {roll} > {old} → Success!\n✨ {skill}: {old} → {new} (+{delta})",
-  "kp_tools.subsystem.loss.ceiling_line": "🛡️ Loss ceiling applied: capped at {value}",
+  "kp_tools.subsystem.loss.ceiling_line": "🛡️ Loss ceiling applied: this room's rule system capped the loss at {value} — the dice rolled higher.",
   "kp_tools.subsystem.loss.header_failure": "🤯 {name}'s {label} Check",
   "kp_tools.subsystem.loss.header_success": "😰 {name}'s {label} Check",
   "kp_tools.subsystem.loss.loss_line": "💔 Lost: {loss} (roll: {expr}={detail})",
