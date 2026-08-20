@@ -51,10 +51,21 @@ def install_pack_here(data_dir: Path | str, pack_path: Path | str) -> core_pack.
     return report
 
 
-def trust_card_lines(i18n: I18n, manifest: core_pack.PackManifest, locale: str) -> list[str]:
+def trust_card_lines(
+    i18n: I18n, manifest: core_pack.PackManifest, locale: str, *, instructional: bool = True
+) -> list[str]:
     """The disclosure card for one pack: what is inside, notably whether it ships
     sandboxed hooks/EJS/rules code and how heavy its media is. Empty for a manifest with
-    no trust block (a source tree, which has not been built yet)."""
+    no trust block (a source tree, which has not been built yet).
+
+    ``instructional`` is which DOOR is rendering. The terminal's `--install` shows the card
+    BEFORE anything happens, so telling the operator which command loads a world card is the
+    only place that fact is available. The room's `.pack install` shows it AFTER an install
+    that already imported the unique world card itself — and when several ship, the reply
+    names each `.import` fork on its own line — so the card repeating the instruction there
+    is at best noise and at worst a contradiction. Pass ``instructional=False`` for that door
+    and the world-card line states the count alone.
+    """
     trust = manifest.trust
     if trust is None:
         return []
@@ -87,7 +98,8 @@ def trust_card_lines(i18n: I18n, manifest: core_pack.PackManifest, locale: str) 
         # IS the check ladder — it decides whether the operator's players succeed.
         lines.append(i18n.t("pack.card.rules_script"))
     if trust.world_cards:
-        lines.append(i18n.t("pack.card.world_cards", count=trust.world_cards))
+        world_key = "pack.card.world_cards" if instructional else "pack.card.world_cards_plain"
+        lines.append(i18n.t(world_key, count=trust.world_cards))
     if trust.presentation:
         # Disclosure, not marketing: an operator must see BEFORE install whether a
         # module's Stage Director may spend their image-provider budget.

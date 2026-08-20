@@ -160,7 +160,7 @@ class PanelsCommands:
         from core.pack import PackError, inspect_pack
         from gateway.pack_install import install_pack_here, trust_card_lines
         from gateway.panels import installed_panel_count, installed_presentation_count, publish_ui_manifests
-        from infra.pack_source import PackRefError, resolve_pack_ref
+        from infra.pack_source import PackRefError, pack_ref_hint, resolve_pack_ref
 
         if not _is_keeper(ctx.raw_ctx):
             return ctx.fail(ctx.i18n.t("rooms.denied"))
@@ -179,7 +179,11 @@ class PanelsCommands:
                 resolve_pack_ref, ref, cache_dir=data_dir / "packs" / "_cache"
             )
         except PackRefError as exc:
-            return ctx.fail(ctx.i18n.t("pack.ref.failed", error=str(exc)))
+            failed = [ctx.i18n.t("pack.ref.failed", error=str(exc))]
+            hint = pack_ref_hint(exc)
+            if hint:
+                failed.append(ctx.i18n.t(hint))
+            return ctx.fail("\n".join(failed))
         try:
             manifest = await asyncio.to_thread(inspect_pack, pack_path)
             report = await asyncio.to_thread(install_pack_here, data_dir, pack_path)
@@ -209,7 +213,10 @@ class PanelsCommands:
         headline = "commands.pack.installed" if dressed else "commands.pack.installed_plain"
         lines = [
             ctx.i18n.t(headline, id=pack_id, version=report.manifest.version),
-            *trust_card_lines(ctx.i18n, manifest, ctx.locale),
+            # `instructional=False`: this door already imported the unique world card, and
+            # names each fork below when several ship — the card must not send the keeper
+            # off to type an `.import` that has already happened.
+            *trust_card_lines(ctx.i18n, manifest, ctx.locale, instructional=False),
             *live,
             ctx.i18n.t("commands.pack.risk"),
             *leftover,

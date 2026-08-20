@@ -12,6 +12,7 @@
   "pack.card.rules_script": "带规则脚本：这个包的判定成败由它自带的沙箱 JavaScript 算出来——骰子仍然由引擎来掷，脚本交回的结果引擎会校验并夹紧。",
   "pack.card.trust": "   内含:{skills} 个技能、{rulepacks} 个规则包、{cards} 张角色卡、{lorebooks} 本世界书、{panels} 个 UI 面板、{assets} 个素材({asset_mb} MB)· hooks 代码:{hooks} · EJS 模板:{ejs} · 规则脚本:{rules_script}",
   "pack.card.world_cards": "包含 {count} 张世界卡——模组机制（钩子/变量/EJS），由守秘人以 `.import <文件> world` 导入。",
+  "pack.card.world_cards_plain": "包含 {count} 张世界卡——模组机制（钩子/变量/EJS）。",
   "pack.flag.no": "无",
   "pack.flag.yes": "有",
   "pack.install.aborted": "已取消安装。",
@@ -27,5 +28,6 @@
   "pack.install.shadowed": "   注意:「{id}」与内置同名;内置版本始终优先(想用包内版本请改名)。",
   "pack.install.skills": "   技能:{ids} —— 由守秘人在房间内执行 .skill enable <id> 启用",
   "pack.install.world_cards": "世界卡（守秘人以 `.import <文件> world` 导入）：{names}",
-  "pack.ref.failed": "无法解析包引用:{error}"
+  "pack.ref.failed": "无法解析包引用:{error}",
+  "pack.ref.github_rate_limit": "GitHub 把这次查询当成匿名请求拒了——在服务器上设置 GITHUB_TOKEN 或 GH_TOKEN（任意个人访问令牌即可，不需要任何权限范围）就能解除按地址计数的限制，然后重试。"
 }

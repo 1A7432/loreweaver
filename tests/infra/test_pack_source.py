@@ -4,6 +4,7 @@ resolution with an injected fetcher (no network ever)."""
 from __future__ import annotations
 
 import json
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -210,3 +211,49 @@ def test_no_token_configured_stays_anonymous(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
     assert "Authorization" not in _captured_headers(monkeypatch, API_URL)
+
+
+def test_a_403_from_the_api_names_the_remedy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A `gh:` install from a shared or cloud address hits the per-IP anonymous limit as an
+    HTTP 403. The engine has honoured GITHUB_TOKEN/GH_TOKEN since 2026-08-19, but the keeper
+    reading "HTTP 403" had no way to learn that, so the error carries the remedy's i18n key."""
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+
+    def fetch(url: str) -> bytes:
+        raise urllib.error.HTTPError(url, 403, "rate limit exceeded", {}, None)
+
+    with pytest.raises(PackRefError) as caught:
+        resolve_pack_ref("gh:ada/blackmoor", cache_dir=tmp_path, fetch=fetch)
+
+    assert "403" in str(caught.value)
+    assert pack_source.pack_ref_hint(caught.value) == "pack.ref.github_rate_limit"
+
+
+def test_a_403_with_a_token_already_set_suggests_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """"Set a token" is wrong advice for an operator who set one — a 403 then means
+    something else (a private repo, a revoked PAT), and the raw detail is the honest answer."""
+    monkeypatch.setenv("GITHUB_TOKEN", "s3cret")
+
+    def fetch(url: str) -> bytes:
+        raise urllib.error.HTTPError(url, 403, "forbidden", {}, None)
+
+    with pytest.raises(PackRefError) as caught:
+        resolve_pack_ref("gh:ada/blackmoor", cache_dir=tmp_path, fetch=fetch)
+
+    assert pack_source.pack_ref_hint(caught.value) == ""
+
+
+def test_other_ref_failures_carry_no_hint(tmp_path: Path):
+    """The hint is a diagnosis, not decoration: a 404 or a bad ref must not tell an operator
+    to go configure a credential that would change nothing."""
+    def fetch(url: str) -> bytes:
+        raise urllib.error.HTTPError(url, 404, "not found", {}, None)
+
+    with pytest.raises(PackRefError) as caught:
+        resolve_pack_ref("gh:ada/blackmoor", cache_dir=tmp_path, fetch=fetch)
+    assert pack_source.pack_ref_hint(caught.value) == ""
+
+    with pytest.raises(PackRefError) as bad_ref:
+        resolve_pack_ref("gh:not-a-ref", cache_dir=tmp_path, fetch=lambda url: b"")
+    assert pack_source.pack_ref_hint(bad_ref.value) == ""

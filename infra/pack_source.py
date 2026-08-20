@@ -50,7 +50,23 @@ Fetcher = Callable[[str], bytes]
 
 
 class PackRefError(ValueError):
-    """A ref could not be resolved/downloaded. Technical English detail; the CLI wraps it."""
+    """A ref could not be resolved/downloaded. Technical English detail; the CLI wraps it.
+
+    ``hint`` optionally names an i18n key holding ONE localized sentence about what the
+    OPERATOR can do next. It is always an engine literal from this module, never anything a
+    caller typed, so a door may render it directly. Empty when there is nothing to suggest.
+    """
+
+    def __init__(self, message: str, *, hint: str = "") -> None:
+        super().__init__(message)
+        self.hint = hint
+
+
+def pack_ref_hint(exc: PackRefError) -> str:
+    """The i18n key of ``exc``'s remedy sentence, or ``""``. Both install doors call this
+    rather than reading the attribute, so an error raised by older code cannot crash them."""
+    hint = getattr(exc, "hint", "")
+    return hint if isinstance(hint, str) else ""
 
 
 def _github_token() -> str:
@@ -161,7 +177,15 @@ def _resolve_github(ref: str, *, cache_dir: Path, fetch: Fetcher, api_fetch: Fet
     except PackRefError:
         raise
     except Exception as exc:
-        raise PackRefError(f"could not resolve {ref!r} via the GitHub API: {exc}") from exc
+        # A 403 on THIS request is almost always the per-IP anonymous rate limit, which a
+        # shared or cloud-hosted box exhausts in a morning (run-2 play-test). The engine
+        # already honours GITHUB_TOKEN/GH_TOKEN — the keeper reading "HTTP 403" just had no
+        # way to know that, so the remedy rides along with the diagnosis.
+        rate_limited = getattr(exc, "code", None) == 403 and not _github_token()
+        raise PackRefError(
+            f"could not resolve {ref!r} via the GitHub API: {exc}",
+            hint="pack.ref.github_rate_limit" if rate_limited else "",
+        ) from exc
     assets = release.get("assets") if isinstance(release, dict) else None
     if not isinstance(assets, list):
         raise PackRefError(f"no release assets found for {ref!r}")

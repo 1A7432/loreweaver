@@ -31,7 +31,7 @@ from infra.embeddings import FakeEmbeddings, LocalEmbeddings
 from infra.file_permissions import atomic_write_private, ensure_private_directory
 from infra.i18n import I18n, get_i18n
 from infra.llm import FakeLLM
-from infra.pack_source import PackRefError, resolve_pack_ref
+from infra.pack_source import PackRefError, pack_ref_hint, resolve_pack_ref
 from infra.providers import provider_cost_class
 from infra.version import resolve_version
 from net.keystore import Keystore
@@ -495,6 +495,9 @@ def _run_install(settings: Settings, i18n: I18n, args: argparse.Namespace) -> in
         pack_path = resolve_pack_ref(args.install, cache_dir=packs_dir / "_cache")
     except PackRefError as exc:
         print(i18n.t("pack.ref.failed", error=str(exc)), file=sys.stderr)
+        hint = pack_ref_hint(exc)
+        if hint:
+            print(i18n.t(hint), file=sys.stderr)
         return 1
     try:
         manifest = core_pack.inspect_pack(pack_path)

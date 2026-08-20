@@ -12,6 +12,7 @@
   "pack.card.rules_script": "Ships rules code: this pack decides its check outcomes in sandboxed JavaScript of its own — the engine still rolls the dice and clamps what the script hands back.",
   "pack.card.trust": "   contains: {skills} skill(s), {rulepacks} rulepack(s), {cards} card(s), {lorebooks} lorebook(s), {panels} UI panel(s), {assets} asset(s) ({asset_mb} MB) · hooks code: {hooks} · EJS templates: {ejs} · rules code: {rules_script}",
   "pack.card.world_cards": "Contains {count} WORLD card(s) — module machinery (hooks/variables/EJS); the keeper imports them with `.import <file> world`.",
+  "pack.card.world_cards_plain": "Contains {count} WORLD card(s) — module machinery (hooks/variables/EJS).",
   "pack.flag.no": "no",
   "pack.flag.yes": "yes",
   "pack.install.aborted": "Install aborted.",
@@ -27,5 +28,6 @@
   "pack.install.shadowed": "   note: '{id}' shares a built-in id; the built-in keeps winning (rename the packed one to use it).",
   "pack.install.skills": "   skills: {ids} — a keeper enables one in-room with .skill enable <id>",
   "pack.install.world_cards": "World cards (keeper-imported via `.import <file> world`): {names}",
-  "pack.ref.failed": "Could not resolve the pack ref: {error}"
+  "pack.ref.failed": "Could not resolve the pack ref: {error}",
+  "pack.ref.github_rate_limit": "GitHub refused the lookup as an anonymous one — set GITHUB_TOKEN or GH_TOKEN on the SERVER (any personal access token, no scopes needed) to lift the per-address limit, then try again."
 }

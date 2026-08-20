@@ -154,6 +154,30 @@ async def test_an_unresolvable_ref_reports_and_changes_nothing(server):
     assert await get_enabled_panel_packs(server.store, "cli:dm:badref") == []
 
 
+async def test_a_rate_limited_gh_install_names_the_remedy_in_the_room(server, monkeypatch):
+    """The keeper's door is where a 403 is actually READ — over the wire there is no server
+    log to go check. `infra.pack_source` diagnoses it; the room renders the sentence."""
+    import urllib.error
+
+    import infra.pack_source as pack_source
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setattr(
+        pack_source,
+        "_default_api_fetch",
+        lambda url: (_ for _ in ()).throw(urllib.error.HTTPError(url, 403, "rate limit exceeded", {}, None)),
+    )
+    router = CommandRouter(server)
+
+    reply = await router.dispatch(_keeper("cli:dm:ratelimit"), ".pack install gh:ada/blackmoor")
+
+    i18n = server.i18n.with_locale("en")
+    assert "403" in reply
+    assert i18n.t("pack.ref.github_rate_limit") in reply
+    assert await get_enabled_panel_packs(server.store, "cli:dm:ratelimit") == []
+
+
 async def test_a_bare_or_unknown_subcommand_prints_the_usage(server):
     router = CommandRouter(server)
     usage = server.i18n.with_locale("en").t("commands.pack.usage")
@@ -251,10 +275,50 @@ async def test_several_world_cards_are_the_one_fork_left_to_a_human(server, tmp_
     i18n = server.i18n.with_locale("en")
     assert i18n.t("commands.pack.next_header") in reply
     assert "tidemodule/cards/world.json" in reply and "tidemodule/cards/other.json" in reply
+    # The trust card states the COUNT; the forks below it are where a real `.import`
+    # command belongs, one per card, spelled with the ref the keeper would actually type.
+    assert i18n.t("pack.card.world_cards_plain", count=2) in reply
+    assert i18n.t("pack.card.world_cards", count=2) not in reply
+    assert i18n.t("commands.pack.next_card", ref="tidemodule/cards/world.json") in reply
     # Nothing was imported behind the keeper's back...
     assert await server.store.state_get(chat_key, "world_import") is None
     # ...but everything unambiguous still went live.
     assert "tideline" in await get_enabled_skills(server.store, chat_key)
+
+
+async def test_the_room_card_never_tells_a_keeper_to_import_what_it_just_imported(server, tmp_path):
+    """The card is shared with the terminal door, where `--install` runs BEFORE anything
+    happens and naming the import command is the only place that fact is available. In a
+    room the install has already imported the unique world card, so the same sentence sent
+    the keeper off to type a command that would redo work that is done."""
+    router = CommandRouter(server)
+    chat_key = "cli:dm:card-door"
+
+    reply = await router.dispatch(_keeper(chat_key), f".pack install {_built_module_pack(tmp_path)}")
+
+    i18n = server.i18n.with_locale("en")
+    assert i18n.t("pack.card.world_cards_plain", count=1) in reply
+    assert i18n.t("pack.card.world_cards", count=1) not in reply
+    assert "`.import <file> world`" not in reply
+    # The card still DISCLOSES the world half — that is what it is for.
+    assert "WORLD card(s)" in reply and "hooks/variables/EJS" in reply
+    # ...and the install really did the import the line no longer asks for.
+    assert await server.store.state_get(chat_key, "world_import")
+
+
+def test_the_terminal_door_still_names_the_import_command(server, tmp_path):
+    """The CLI shows the card BEFORE the install, and installing there is not importing —
+    the operator has no other way to learn which command loads a world card."""
+    from core.pack import inspect_pack
+    from gateway.pack_install import trust_card_lines
+
+    i18n = server.i18n.with_locale("en")
+    manifest = inspect_pack(_built_module_pack(tmp_path, cards=("cards/world.json", "cards/other.json")))
+    assert manifest.trust is not None and manifest.trust.world_cards == 2
+
+    lines = "\n".join(trust_card_lines(i18n, manifest, "en"))
+    assert i18n.t("pack.card.world_cards", count=2) in lines
+    assert i18n.t("pack.card.world_cards_plain", count=2) not in lines
 
 
 async def test_a_skill_installed_by_another_process_enables_at_once(server, tmp_path):
