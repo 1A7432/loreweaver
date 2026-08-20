@@ -677,7 +677,10 @@ so this costs nothing until an author asks for it.
   plain risk line instead of a checklist. The single thing it will not decide is
   WHICH module, when a pack ships several world cards — that is a fork, not a
   confirmation, and the reply names each as the `.import <ref> world` that loads
-  it. Keeper-only, naturally: it writes to the server's data dir.
+  it. A skill whose id a BUILT-IN already claims is enabled like any other (owner
+  verdict 2026-08-20: the keeper typed the ref), and the reply names it, because a
+  built-in always wins discovery — so the copy the room runs is the built-in, never
+  the pack's. Keeper-only, naturally: it writes to the server's data dir.
 - **Git IS the registry:** an install ref is a local path, an `https://` direct
   link, or `gh:owner/repo[@tag]` — resolved through the GitHub API to that
   release's `*.lwpack` asset (`@tag` pins a release; without it, latest) by
@@ -686,10 +689,11 @@ so this costs nothing until an author asks for it.
   hits as a 403. The credential is scoped by TWO rules, not one hostname check:
   it rides only on the release-metadata request the engine composes itself (a
   caller-named `https://api.github.com/...` ref is fetched anonymously, so a
-  keeper's `.pack install` can never spend the server's PAT), and a redirect that
-  leaves the host drops it (`urllib` forwards headers across hosts by default,
-  and the asset lane redirects off-host by design). There is deliberately no
-  central package registry.
+  keeper's `.pack install` can never spend the server's PAT), and a redirect
+  that leaves the host — or merely downgrades to `http` on it — drops it
+  (`urllib` forwards headers across hosts by default, and the asset lane
+  redirects off-host by design). There is deliberately no central package
+  registry.
 - **Install ≠ enable** (the CLI layering): `--install` from a shell lands content
   and turns nothing on — skills land in the user skill dir and rulepacks in the
   user rulepack dir, discoverable immediately, but a room still opts in via
@@ -703,8 +707,14 @@ so this costs nothing until an author asks for it.
   the same `id@version` replaces that pack dir wholesale, never merges. A running
   server picks up an install another process made — the desktop client shells out
   to the CLI — without a restart: skill and rulepack discovery re-check their
-  directories' signature (`core.skills` / `core.rulepacks`), so both a NEW id and
-  an id UPGRADED in place resolve, and `.skill list` sees it too.
+  directories' signature (`core.skills` / `core.rulepacks`) — each directory's own
+  mtime, plus every manifest's name, mtime AND size, so a rewrite inside one
+  timestamp tick still counts as a change — so both a NEW id and an id UPGRADED in
+  place resolve, and `.skill list` sees it too. The dot-command dialect words a
+  rulepack declares heal the same way one layer up: a word no command claims makes
+  the router re-check discovery and rebuild its table (throttled, since any typo is
+  such a word), and installing from the table rebuilds it on the spot — so a
+  bundled rulepack's `make_char` word works in the next breath, from either door.
 - **Trust card, not a gate:** before installing, the CLI prints the pack's
   auto-generated `trust` summary — skill/rulepack/card/lorebook counts, whether
   sandboxed hooks JS or EJS templates ship, asset megabytes — then asks for
