@@ -33,12 +33,7 @@ Loreweaver 是一个开源的 **AI RPG 引擎与开放标准**。你和朋友出
 
 两个客户端说同一套公开协议，按你想在哪玩来挑。
 
-**Loreweaver Studio——桌面应用，推荐。** 图形客户端（[配套仓库](https://github.com/1A7432/loreweaver-studio)，Tauri：Rust 内核 + React 界面），整套游玩界面都有——Markdown 叙事流、带颜色的骰子、实时的角色 / 队伍 / 变量面板、模组自带的面板（一层模板和沙箱里的二层页面都能画）、守秘人的那几屏（房间与邀请、模型、模组、规则、技能、角色），以及同一个一键「本地托管并游玩」——另一个模式里还有制卡与打包工作室（锻造、拆卡、`.lwpack` 构建）。目前从源码构建——macOS 构建已验证，Windows / Linux 在 CI 里能编译，安装包是下一步：
-
-```bash
-git clone https://github.com/1A7432/loreweaver-studio && cd loreweaver-studio
-bun install && bun tauri build        # 需要 Rust stable + Bun；`bun tauri dev` 不打包直接跑
-```
+**Loreweaver Studio——桌面应用，推荐。** 图形客户端（[配套仓库](https://github.com/1A7432/loreweaver-studio)，Tauri：Rust 内核 + React 界面），整套游玩界面都有——Markdown 叙事流、带颜色的骰子、实时的角色 / 队伍 / 变量面板、模组自带的面板（一层模板和沙箱里的二层页面都能画）、守秘人的那几屏（房间与邀请、模型、模组、规则、技能、角色），以及同一个一键「本地托管并游玩」——另一个模式里还有制卡与打包工作室（锻造、拆卡、`.lwpack` 构建）。三平台安装包在[最新 release](https://github.com/1A7432/loreweaver-studio/releases/latest)直接下载——macOS `.dmg`（Apple 芯片与 Intel）、Windows 安装器 `.exe`、Linux `.AppImage` / `.deb`。目前未签名：macOS 首次启动右键 →「打开」，Windows 在 SmartScreen 里选「仍要运行」。想从源码构建也一样能跑（`bun install && bun tauri build`，需要 Rust stable + Bun）。
 
 **终端客户端**——一行命令，不装任何工具链，有终端就能跑：
 
@@ -195,7 +190,7 @@ uv run python -m app --install gh:owner/repo    # 或者本地路径、https 链
 
 **只有实测数据的部分。** *活的*模型行不行是另一个问题，CI 绿了也回答不了。有一个[每晚跑的红线评测](https://github.com/1A7432/loreweaver/actions/workflows/redline-eval.yml)，让脚本化的玩家去对真模型，逐回合看两件事：秘密有没有说漏，该掷骰的地方有没有掷。超过阈值、服务商故障、鉴权失败，都算红。结论只对那个模型、那一次运行有效，不是一张长期保票。
 
-**年轻的部分。** 联网多人对一桌熟人来说够用了，但边角还粗糙。桌面客户端兼制卡工作台（[配套仓库](https://github.com/1A7432/loreweaver-studio)）已经是推荐的游玩方式，但还得从源码构建——安装包是下一步。旗舰模组在做。往前的计划、公开讨论过的设计问题、以及最缺人手的地方，都在 **[docs/roadmap.zh.md](docs/roadmap.zh.md)**。
+**年轻的部分。** 联网多人对一桌熟人来说够用了，但边角还粗糙。桌面客户端兼制卡工作台（[配套仓库](https://github.com/1A7432/loreweaver-studio)）已经是推荐的游玩方式，macOS / Windows / Linux 安装包都有。旗舰模组在做。往前的计划、公开讨论过的设计问题、以及最缺人手的地方，都在 **[docs/roadmap.zh.md](docs/roadmap.zh.md)**。
 
 ---
 

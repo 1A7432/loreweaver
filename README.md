@@ -38,14 +38,13 @@ Two clients speak the same open protocol; pick by where you want to play.
 full play surface — markdown narrative log, colour-coded dice, live character / party / variable
 panels, a module's own panels (tier-1 templates *and* sandboxed tier-2 pages), the keeper screens
 (rooms & invites, model, module, rules, skills, character), and the same one-click **Host locally &
-play** — plus the card and pack studio (forge, card split, `.lwpack` build) in the other mode. It is
-built from source for now — macOS build verified, Windows / Linux compile in CI, installers are
-next:
-
-```bash
-git clone https://github.com/1A7432/loreweaver-studio && cd loreweaver-studio
-bun install && bun tauri build        # needs Rust stable + Bun; `bun tauri dev` to run it unbundled
-```
+play** — plus the card and pack studio (forge, card split, `.lwpack` build) in the other mode.
+Installers for all three desktop platforms are on the
+[latest release](https://github.com/1A7432/loreweaver-studio/releases/latest) — macOS `.dmg`
+(Apple silicon and Intel), a Windows setup `.exe`, Linux `.AppImage` / `.deb`. The builds are
+unsigned for now: macOS wants one right-click → **Open** on first launch, Windows one
+"More info → Run anyway". Building from source still works
+(`bun install && bun tauri build`, Rust stable + Bun).
 
 **The terminal client** — one line, no toolchain, runs anywhere with a terminal:
 
@@ -294,7 +293,7 @@ per model and per run, not a standing guarantee.
 
 **Young.** Networked multiplayer is comfortable for a table of friends but has rough edges. The
 desktop client and card studio ([companion repo](https://github.com/1A7432/loreweaver-studio)) is
-the recommended way to play but still ships from source — installers are the next step. The flagship
+the recommended way to play and ships installers for macOS / Windows / Linux. The flagship
 module is in development. The forward plan, the open
 design questions, and where help is most wanted: **[docs/roadmap.md](docs/roadmap.md)**.
 
