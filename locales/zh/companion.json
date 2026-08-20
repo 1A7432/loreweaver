@@ -38,5 +38,6 @@
   "companion.tools.playstyle.done": "✅ {name} 的行事风格现在是：{playstyle}",
   "companion.tools.playstyle.failed": "❌ 设置同伴行事风格失败：{error}",
   "companion.tools.remove.done": "✅ 已将 AI 同伴“{name}”移出队伍。",
-  "companion.tools.remove.failed": "❌ 移除同伴失败：{error}"
+  "companion.tools.remove.failed": "❌ 移除同伴失败：{error}",
+  "companion.tools.remove.sheet_not_owned": "❌ 无法移除 AI 同伴“{name}”：它指向的角色卡“{sheet}”属于别人，因此什么都没有删除。请先把该同伴指回它自己的角色卡（stat_char），再移除一次。"
 }

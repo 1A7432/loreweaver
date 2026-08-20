@@ -542,3 +542,44 @@ async def test_companion_act_inside_a_turn_keeps_the_player_s_line_and_the_live_
         if "kick the door" in next((str(m.get("content", "")) for m in reversed(call) if m.get("role") == "user"), "")
     )
     assert any("take point" in str(m.get("content", "")) for m in nested), "the companion's KP turn lost the player's line"
+
+
+# ---------------------------------------------------------------------------
+# (e) record + sheet, always both or neither — on the delete door AND the reset door
+# ---------------------------------------------------------------------------
+
+
+async def test_removing_a_companion_whose_sheet_belongs_to_a_player_refuses_and_keeps_both():
+    """`update_npc` can retarget a companion's `stat_char` at a PLAYER's sheet, and the
+    sheet delete then refuses on its owner check — which the retire path used to ignore,
+    deleting the record and leaving the keeper with nothing to repoint. Whole or nothing
+    in both directions: nothing is deleted, and the reply names the sheet in the way."""
+    from agent.npc import companion_uid
+
+    chat_key = "stat-char-clash"
+    services = build_services(Settings(locale="en"), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(8))
+    npcs = services.documents
+    ctx = _ctx(chat_key)
+    tools = CompanionTools(services)
+
+    nora = services.characters.generate_character("coc7", "Nora")
+    await services.characters.save_character("human", chat_key, nora)
+    await tools.add_companion(ctx, name="Silas")
+    silas = (await npc_records.list_companions(npcs, chat_key))[0]
+    await npc_records.update_npc(npcs, chat_key, silas.id, stat_char="Nora")
+
+    answer = await tools.remove_companion(ctx, "Silas")
+
+    assert answer.startswith("❌")
+    assert "Nora" in answer and "Silas" in answer
+    # The record stays, so the keeper can fix `stat_char` and try again.
+    assert (await npc_records.get_npc(npcs, chat_key, "Silas")) is not None
+    # The player's sheet, their roster row and their sheet document are untouched.
+    assert (await services.characters.get_character("human", chat_key)).name == "Nora"
+    assert "Nora" in {row["name"] for row in await services.characters.get_party_roster(chat_key)}
+    assert "Nora" in {doc.id for doc in await npcs.list(chat_key, "sheet")}
+    # Repointed at its own sheet, the retire works again — whole.
+    await npc_records.update_npc(npcs, chat_key, silas.id, stat_char="Silas")
+    assert (await tools.remove_companion(ctx, "Silas")).startswith("✅")
+    assert await npc_records.list_companions(npcs, chat_key) == []
+    assert await services.characters.list_characters(companion_uid(silas.id), chat_key) == []

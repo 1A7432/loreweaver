@@ -38,5 +38,6 @@
   "companion.tools.playstyle.done": "✅ {name}'s playstyle is now: {playstyle}",
   "companion.tools.playstyle.failed": "❌ Failed to set companion playstyle: {error}",
   "companion.tools.remove.done": "✅ Removed AI companion \"{name}\" from the party.",
-  "companion.tools.remove.failed": "❌ Failed to remove companion: {error}"
+  "companion.tools.remove.failed": "❌ Failed to remove companion: {error}",
+  "companion.tools.remove.sheet_not_owned": "❌ Could not remove AI companion \"{name}\": its character sheet \"{sheet}\" belongs to someone else, so nothing was deleted. Point the companion back at its own sheet (its stat_char), then remove it again."
 }

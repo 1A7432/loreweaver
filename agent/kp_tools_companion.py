@@ -50,6 +50,37 @@ _FALSY = {"off", "0", "false", "no", "n", "关", "关闭", "關閉"}
 _companion_uid = npc_records.companion_uid
 
 
+class CompanionSheetNotRemovedError(RuntimeError):
+    """A companion's sheet could not be removed, so its record stays too.
+
+    The one way this happens: the record's `stat_char` points at a sheet the companion
+    does not own — a PLAYER's, which `update_npc` can retarget it to. `delete_character`
+    refuses that write (its owner check is the thing standing between one member and
+    every other member's sheet), and retiring the record anyway would strand the
+    companion half-removed with no record left to fix the pointer on. So nothing is
+    deleted and the keeper is told which sheet is in the way."""
+
+    def __init__(self, companion_name: str, sheet_name: str) -> None:
+        self.companion_name = companion_name
+        self.sheet_name = sheet_name
+        # Developer-facing; the doors localize (`companion_sheet_refusal`).
+        super().__init__(f"companion_sheet_not_removed: {sheet_name!r}")
+
+
+def companion_sheet_refusal(i18n: I18n, exc: CompanionSheetNotRemovedError) -> str:
+    """The localized answer to `CompanionSheetNotRemovedError` — one text for both doors
+    (the `remove_companion` tool and the keeper's `.companion` / `.npc delete`)."""
+    return i18n.t(
+        "companion.tools.remove.sheet_not_owned", name=exc.companion_name, sheet=exc.sheet_name
+    )
+
+
+def companion_sheet_name(companion: npc_records.NpcRecord) -> str:
+    """The CharacterSheet name a companion's record points at — ONE definition, because
+    the sheet's name is also its roster row's key and its identity in the documents table."""
+    return companion.stat_char or companion.name
+
+
 async def retire_companion(services: Services, chat_key: str, companion: npc_records.NpcRecord) -> None:
     """Remove an AI companion WHOLE: its sheet (and roster row) and then its record.
 
@@ -59,10 +90,13 @@ async def retire_companion(services: Services, chat_key: str, companion: npc_rec
     `add_companion` then tripped over (`CharacterNameTakenError` under a fresh id) — the
     exact ghost `.companion delete` was added to remove (2026-08-18 《安土》 npc-4). The
     sheet delete keeps the owner check: only a sheet THIS companion owns goes, never a
-    same-named sheet a player holds. Both doors — the `remove_companion` tool and the
-    keeper's `.companion` / `.npc delete` — come through here."""
-    sheet_name = companion.stat_char or companion.name
-    await services.characters.delete_character(_companion_uid(companion.id), chat_key, sheet_name)
+    same-named sheet a player holds. A refused sheet delete raises
+    `CompanionSheetNotRemovedError` and keeps the record too — whole or nothing, in both
+    directions. Both doors — the `remove_companion` tool and the keeper's `.companion` /
+    `.npc delete` — come through here."""
+    sheet_name = companion_sheet_name(companion)
+    if not await services.characters.delete_character(_companion_uid(companion.id), chat_key, sheet_name):
+        raise CompanionSheetNotRemovedError(companion.name, sheet_name)
     await npc_records.delete_npc(services.documents, chat_key, companion.id)
 
 
@@ -272,6 +306,8 @@ class CompanionTools:
                 return i18n.t("companion.tools.not_found", name=name)
             await retire_companion(self._services, ctx.chat_key, companion)
             return i18n.t("companion.tools.remove.done", name=companion.name)
+        except CompanionSheetNotRemovedError as exc:
+            return companion_sheet_refusal(i18n, exc)
         except Exception as exc:
             return i18n.t("companion.tools.remove.failed", error=str(exc))
 
