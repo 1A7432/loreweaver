@@ -77,6 +77,7 @@ class _FakeAdapter:
     def __init__(self) -> None:
         self.sends: list[tuple] = []
         self.messages: list[str] = []
+        self.private_flags: list[bool] = []
 
     async def deliver_event(self, source, session_key, event, *, locale, media_store=None):
         self.sends.append((source, event, session_key))
@@ -84,6 +85,7 @@ class _FakeAdapter:
 
     async def send_message(self, source, message, *, reply_to=None, session_key=None):
         self.messages.append(message.text)
+        self.private_flags.append(message.private)
         return None
 
 
@@ -480,3 +482,8 @@ async def test_runner_hub_path_also_receipts_queued_input() -> None:
 
     queued = services.i18n.with_locale("en").t(TURN_QUEUED_KEY)
     assert adapter.messages.count(queued) == 1
+    # The receipt is addressed to the one connection that had to wait, never the room —
+    # net/session.py's half of this feature (`notify_turn_queued`) is private by
+    # construction (a direct frame to one member), and this adapter path must match.
+    index = adapter.messages.index(queued)
+    assert adapter.private_flags[index] is True

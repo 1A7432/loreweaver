@@ -222,7 +222,7 @@ class GatewayRunner:
             try:
                 await adapter.send_message(
                     source,
-                    ChatMessage(text=get_i18n(locale).t(TURN_QUEUED_KEY)),
+                    ChatMessage(text=get_i18n(locale).t(TURN_QUEUED_KEY), private=True),
                     session_key=session_key,
                 )
             except Exception:

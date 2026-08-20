@@ -40,7 +40,7 @@ class AgentCtx:
     # everywhere else it stays None and the loop's calls are no-ops. Deliberately coarse — a
     # tool's name or arguments would leak keeper-side material into a room-wide frame.
     activity_sink: Callable[[str, int], Awaitable[None]] | None = field(
-        default=None, repr=False, compare=False
+        default=None, init=False, repr=False, compare=False
     )
 
     async def report_activity(self, activity: str, round_index: int) -> None:
