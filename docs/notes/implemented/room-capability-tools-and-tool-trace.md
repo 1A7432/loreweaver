@@ -44,6 +44,18 @@
   path `.companion delete` was added for. Not done, deliberately: the
   1000-line file split (`kp_tools_mechanics.py`) — a separate hygiene change, not this
   batch's debt.
+- **What the player-name reservation deliberately closes (2026-08-20):** the guard
+  reserves every sheet not owned by a `companion:` uid PLUS every claimable pregen, so it
+  also closes two flows that are not abuse: (a) an absent player's PC handed to the AI for
+  the evening — their sheet makes the name a player's, whether or not they are at the
+  table; (b) a module that lists the same figure as a claimable pregen AND seeds it as an
+  NPC — the pregen wins, and the seed is refused. Both are the intended price of covering
+  the run's actual path (`add_companion` on a real player) at the WRITER instead of in one
+  tool's preamble, and the keeper's workaround is ordinary: rename the cast entry, or have
+  the player claim the pregen first (a claimed pregen is that player's sheet, which the
+  reservation is protecting on purpose). A keeper-side explicit takeover — "this player is
+  away tonight, drive their PC" — would be a NEW entry, deliberate and keeper-gated; it is
+  future work, not something this reservation implies or half-supports.
 - **Rule home:** `docs/plugins.md` Layer B (the three filters); `infra.config.DebugSettings`
   (what the trace holds); `core/panels.py` (rendering semantics); `agent/npc.py`
   (`PlayerNameReservedError`); `gateway/commands.py` (`cmd_panel`, `cmd_cast`).
