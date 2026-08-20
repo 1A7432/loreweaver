@@ -205,7 +205,7 @@ class CharacterTools:
             pack = None
         spec = pack.sheet_spec if pack is not None else None
 
-        attribute_lines, meter_lines = _characteristic_lines(character, i18n, None)
+        attribute_lines, meter_lines = _characteristic_lines(character, i18n, ctx.locale)
         if attribute_lines:
             lines.append("")
             lines.append(i18n.t("kp_tools.character.sheet.attributes_header"))

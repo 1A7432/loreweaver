@@ -421,7 +421,7 @@ class ModuleTools(_KnowledgeToolsBase):
             body = i18n.t("kp_tools.know.pool.query_failed", error=str(exc))
         return self._keeper_wrap(i18n, body)
 
-    @tool(keeper_only=True, prep_only=True, read_only=True)
+    @tool(keeper_only=True, prep_only=True, read_only=True, needs=CAPABILITY_MODULE_POOL)
     async def inspect_knowledge_pool(self, ctx: AgentCtx, pool_type: str = "keeper") -> str:
         """Dump a knowledge pool's raw contents (KEEPER-ONLY) -- use when query_knowledge_pool finds
         nothing, to see what the pool actually holds.

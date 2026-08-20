@@ -33,6 +33,19 @@ def test_adapters_holds_only_the_cli_repl() -> None:
         "(docs/notes/rejected/platform-chat-adapters.md) — build a protocol client instead"
     )
 
+    # The directory check above misses a SINGLE-FILE adapter (`adapters/discord.py`):
+    # the one allowed adapter is the `cli` PACKAGE, so nothing but `__init__.py` may
+    # sit directly under `adapters/`.
+    stray_modules = sorted(
+        path.name
+        for path in ADAPTERS_DIR.iterdir()
+        if path.is_file() and path.suffix == ".py" and path.name != "__init__.py"
+    )
+    assert not stray_modules, (
+        f"adapters/ contains top-level module(s) {stray_modules}; chat-platform adapters were removed "
+        "for good (docs/notes/rejected/platform-chat-adapters.md) — build a protocol client instead"
+    )
+
 
 def test_no_platform_sdk_is_imported_anywhere() -> None:
     offenders: list[str] = []
