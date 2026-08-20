@@ -329,6 +329,9 @@ async def test_the_system_pin_is_claimed_only_when_the_room_is_really_on_it(serv
     assert await server.store.state_get(chat_key, "room_system") is None
     assert i18n.t("commands.pack.live_card", ref="tidemodule/cards/world.json") in reply
     assert "coc7" not in reply
+    # The unpinned line must not mention a character system AT ALL — the first cut of this
+    # fix routed the pinned case to its own sentence and left the old claim in the fallback.
+    assert "character system" not in reply and "建卡系统" not in reply
 
 
 WORD_RULEPACK_YAML = "names: [wordrules]\ndefaults:\n  力量: 7\ncommands:\n  wordmake: {action: make_char}\n"
