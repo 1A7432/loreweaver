@@ -29,6 +29,8 @@ import json
 import mimetypes
 import re
 import shutil
+import tempfile
+import time
 import zipfile
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
@@ -1391,6 +1393,27 @@ def _confined_target(base: Path, relative: PurePosixPath | str) -> Path:
     return target
 
 
+# Staging dirs live inside `packs_dir` (a rename out of it would not be atomic) under a
+# name no installed pack can collide with — and one name per ATTEMPT, see `install_pack`.
+_STAGING_PREFIX = ".tmp-install-"
+_STAGING_STALE_SECONDS = 24 * 60 * 60
+
+
+def _sweep_stale_staging(packs_dir: Path) -> None:
+    """Delete staging trees older than a day. Per-attempt names mean nobody ever reuses
+    (and so nobody cleans) the one a crashed install left behind, so each install sweeps
+    what is plainly dead. Best-effort by construction: a leftover directory that cannot be
+    read or removed must never fail the install that noticed it."""
+    cutoff = time.time() - _STAGING_STALE_SECONDS
+    for entry in packs_dir.glob(f"{_STAGING_PREFIX}*"):
+        try:
+            stale = entry.is_dir() and entry.stat().st_mtime < cutoff
+        except OSError:
+            continue
+        if stale:
+            shutil.rmtree(entry, ignore_errors=True)
+
+
 def install_pack(
     pack_path: Path,
     *,
@@ -1435,13 +1458,16 @@ def install_pack(
         version_dir_name = f"{manifest.id}@{manifest.version}"
         packs_dir = Path(packs_dir)
         packs_dir.mkdir(parents=True, exist_ok=True)
-        staging = packs_dir / f".tmp-install-{manifest.id}"
-        if staging.exists():
-            shutil.rmtree(staging)
+        _sweep_stale_staging(packs_dir)
+        # One staging dir per ATTEMPT, never one per pack id: `.pack install` runs in a
+        # worker thread under a per-ROOM lock, so two rooms installing the same pack run
+        # at the same time, and a shared name made each attempt's cleanup delete the
+        # other's half-extracted tree — a half-written pack home, or a FileNotFoundError
+        # escaping `cmd_pack`, which localizes PackError alone.
+        staging = Path(tempfile.mkdtemp(prefix=f"{_STAGING_PREFIX}{manifest.id}-", dir=packs_dir))
 
         try:
             # Stage the pack home first (cards/lorebooks/assets + provenance manifest).
-            staging.mkdir(parents=True)
             manifest_target = _confined_target(staging, MANIFEST_NAME)
             manifest_target.write_text(_archive_read_text(archive, MANIFEST_NAME), encoding="utf-8")
             for kind in ("cards", "lorebooks", "panels", "presentation", "prep"):

@@ -360,6 +360,81 @@ def test_reinstall_replaces_the_pack_dir_instead_of_stacking(tmp_path: Path):
     assert not stale.exists()  # replaced wholesale, never merged
 
 
+def test_two_installs_of_one_pack_id_do_not_destroy_each_others_staging(tmp_path: Path, monkeypatch):
+    """`.pack install` extracts in a worker thread under a per-ROOM lock, so two rooms
+    installing the same pack overlap. Staging under a name derived from the pack ID meant
+    the second attempt's cleanup deleted the first's half-extracted tree: a pack home
+    missing whatever had already been staged, or a bare FileNotFoundError out of a command
+    that localizes PackError alone."""
+    import threading
+
+    import core.pack as pack_module
+
+    built = build_pack(_write_source(tmp_path), tmp_path / "out.lwpack")
+    staged = threading.Event()
+    resume = threading.Event()
+    here = threading.current_thread()
+    real_extract = pack_module._extract_entry
+
+    def extract(archive, name, target):
+        # Hold the OTHER room's install inside extraction — its staging dir exists and is
+        # incomplete — while this one runs start to finish underneath it.
+        if threading.current_thread() is not here and not staged.is_set():
+            staged.set()
+            resume.wait(timeout=10)
+        return real_extract(archive, name, target)
+
+    monkeypatch.setattr(pack_module, "_extract_entry", extract)
+    failures: list[BaseException] = []
+
+    def install_in_the_other_room() -> None:
+        try:
+            _install(built.path, tmp_path)
+        except BaseException as exc:  # noqa: BLE001 — reported by the assertion below
+            failures.append(exc)
+
+    other = threading.Thread(target=install_in_the_other_room)
+    other.start()
+    assert staged.wait(timeout=10), "the other room never reached extraction"
+
+    report = _install(built.path, tmp_path)  # a whole install while the first is staged
+    resume.set()
+    other.join(timeout=10)
+
+    assert not failures, failures
+    home = report.pack_dir
+    assert (home / MANIFEST_NAME).is_file()
+    assert (home / "cards/keeper.json").is_file()
+    assert (home / "assets/theme.mp3").is_file()
+    # And neither attempt left its staging tree behind.
+    assert not list((tmp_path / "data/packs").glob(".tmp-install-*"))
+
+
+def test_install_sweeps_staging_trees_a_crash_left_behind(tmp_path: Path):
+    """Per-attempt staging names mean nobody reuses — and so nobody cleans — what a
+    process killed mid-install left behind. Each install drops the plainly dead ones; a
+    staging dir from a minute ago may belong to an install running right now."""
+    import os
+    import time
+
+    from core.pack import _STAGING_PREFIX, _STAGING_STALE_SECONDS
+
+    built = build_pack(_write_source(tmp_path), tmp_path / "out.lwpack")
+    packs_dir = tmp_path / "data/packs"
+    packs_dir.mkdir(parents=True)
+    dead = packs_dir / f"{_STAGING_PREFIX}blackmoor-dead"
+    dead.mkdir()
+    old = time.time() - _STAGING_STALE_SECONDS - 60
+    os.utime(dead, (old, old))
+    live = packs_dir / f"{_STAGING_PREFIX}blackmoor-live"
+    live.mkdir()
+
+    _install(built.path, tmp_path)
+
+    assert not dead.exists()
+    assert live.is_dir()
+
+
 def test_builtin_collisions_are_reported_as_shadowed(tmp_path: Path):
     src = _write_source(tmp_path)
     built = build_pack(src, tmp_path / "out.lwpack")
