@@ -257,6 +257,42 @@ async def test_images_off_gate_is_named_in_the_probe(tmp_path):
     assert json.loads(line["event"])["image"]["outcome"] == IMAGE_IMAGES_OFF
 
 
+async def test_a_background_warm_is_traced_where_the_budget_actually_went(tmp_path):
+    """A 慢菜先备 warm is a REAL generation on a later task, so the beat's own row never
+    mentions it. The 2026-08-20 play-test read the wrong story out of that silence: two
+    pictures traced as generated while the room had paid for eleven, and every later
+    `larder` hit looked like it came from nowhere."""
+    import asyncio
+
+    from agent.stage_director import IMAGE_GENERATED, PREGEN_TRACE_KIND
+    from agent.tool_trace import enable_tool_trace
+
+    imagegen = FakeImageGen()
+    services, hub = await _room(
+        tmp_path,
+        {"blocks": [], "audio": [], "image": {}, "prepare": ["wantang"]},
+        imagegen=imagegen,
+    )
+    path = tmp_path / "trace" / "tools.jsonl"
+    try:
+        enable_tool_trace(path)
+        await run_director(services, _ctx(), "我抬头", "她在灯下。", beat="handout", hub=hub)
+        for _ in range(20):  # the warm runs on its own task; let it land
+            await asyncio.sleep(0)
+            if PREGEN_TRACE_KIND in path.read_text(encoding="utf-8"):
+                break
+    finally:
+        enable_tool_trace(None)
+
+    rows = [json.loads(raw) for raw in path.read_text(encoding="utf-8").splitlines()]
+    warms = [json.loads(row["event"]) for row in rows if row["tool"] == PREGEN_TRACE_KIND]
+    assert [(w["subject"], w["outcome"]) for w in warms] == [("wantang", IMAGE_GENERATED)]
+    assert warms[0]["hash"]
+    # And the beat's own row still says it asked for one, so the two halves reconcile.
+    beat = next(json.loads(row["event"]) for row in rows if row["tool"] == "director")
+    assert beat["prepared"] == 1
+
+
 async def test_pack_only_gate_is_named_in_the_probe(tmp_path):
     from agent.stage_director import IMAGE_PACK_ONLY
     from agent.tool_trace import enable_tool_trace
