@@ -112,6 +112,13 @@ def player_name_refusal(i18n: I18n, exc: npc_records.PlayerNameReservedError) ->
     return i18n.t("npc.tools.create.name_is_player", name=exc.name)
 
 
+def keeper_npc_refusal(i18n: I18n, exc: npc_records.KeeperNpcNameTakenError) -> str:
+    """The localized answer to `agent.npc.KeeperNpcNameTakenError` — one text for every
+    door that can create a companion (`add_companion`, `.party add`, a card imported as
+    companion)."""
+    return i18n.t("npc.tools.create.name_is_npc", name=exc.name)
+
+
 class NpcTools:
     """AI-KP tools for creating/updating AI-played NPCs and delegating their in-character turns."""
 

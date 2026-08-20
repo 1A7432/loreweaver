@@ -10,6 +10,7 @@
   "npc.actor_user.tone_line": "Requested tone: {tone}",
   "npc.tools.create.done": "✅ Created NPC \"{name}\" (id: {id}).",
   "npc.tools.create.name_is_player": "❌ \"{name}\" is a PLAYER character in this room (has a character sheet here, or is on the claimable cast) — a player is never an NPC or an AI companion. Address them by narration; their sheet is theirs.",
+  "npc.tools.create.name_is_npc": "❌ \"{name}\" is already a keeper NPC in this room — an NPC is never turned into a party companion in place, because it would join the party still carrying its own secrets and knowledge. Pick another name for the companion, or remove the NPC first (.npc delete \"{name}\").",
   "npc.tools.create.failed": "❌ Failed to create NPC: {error}",
   "npc.tools.detail.disposition_line": "Disposition: {disposition}",
   "npc.tools.detail.header": "📋 NPC: {name} (id: {id})",

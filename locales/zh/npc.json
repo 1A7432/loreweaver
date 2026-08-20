@@ -10,6 +10,7 @@
   "npc.actor_user.tone_line": "要求的语气：{tone}",
   "npc.tools.create.done": "✅ 已创建 NPC “{name}”（id：{id}）。",
   "npc.tools.create.name_is_player": "❌ “{name}”是本房间的玩家角色（这里有他的角色卡，或在可认领预构里）——玩家不能被建成 NPC 或 AI 同伴。用叙述对他说话；那张卡是他的。",
+  "npc.tools.create.name_is_npc": "❌ “{name}”在本房间已经是一名守秘人 NPC——不能就地把 NPC 变成队伍同伴，那会让它带着自己的秘密和知识加入队伍。请给同伴换个名字，或先删除该 NPC（.npc delete “{name}”）。",
   "npc.tools.create.failed": "❌ 创建 NPC 失败：{error}",
   "npc.tools.detail.disposition_line": "态度：{disposition}",
   "npc.tools.detail.header": "📋 NPC：{name}（id：{id}）",

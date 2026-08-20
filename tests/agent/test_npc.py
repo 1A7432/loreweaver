@@ -639,6 +639,52 @@ async def test_a_player_character_can_never_be_created_as_an_npc_or_companion():
     assert {record.name for record in await npc_records.list_companions(services.documents, chat_key)} == {"Silas"}
 
 
+async def test_a_keeper_npc_is_never_converted_into_a_companion_in_place():
+    """`create_npc` deliberately hands back an EXISTING record on an exact name match (so a
+    fresh surface persona cannot shadow seeded secrets), and `create_companion` then stamped
+    `role="player_companion"` / `is_pc=True` onto whatever came back — so `add_companion` on
+    a module NPC's name converted the villain, secret agenda and seeded knowledge included,
+    into a party-side actor. The writer refuses instead, so every door refuses; creating a
+    fresh companion and re-adding an existing one both still work."""
+    from agent.kp_tools_companion import CompanionTools
+    from infra.config import ImageGenSettings
+
+    services = build_services(
+        Settings(imagegen=ImageGenSettings()), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(8)
+    )
+    chat_key = "conversion-guard"
+    documents = services.documents
+    ctx = _ctx(chat_key)
+    companions = CompanionTools(services)
+
+    villain = await npc_records.create_npc(
+        documents, chat_key, "Villain", secret_agenda="kill everyone", knowledge=[SENTINEL]
+    )
+
+    refused = await companions.add_companion(ctx, name="Villain", persona="a loyal friend")
+    assert refused.startswith("❌") and "Villain" in refused
+
+    kept = await npc_records.get_npc(documents, chat_key, "Villain")
+    assert (kept.role, kept.is_pc) == ("keeper_npc", False)
+    assert kept.secret_agenda == "kill everyone"
+    assert kept.knowledge == [SENTINEL]
+    assert kept.persona == villain.persona
+    assert await npc_records.list_companions(documents, chat_key) == []
+    # Nothing landed on the sheet side either — the record was never minted, so there is
+    # no half-created companion for the rollback path to strand.
+    assert await services.characters.list_characters(npc_records.companion_uid(kept.id), chat_key) == []
+
+    # The writer refuses whoever calls it, not just the tool.
+    with pytest.raises(npc_records.KeeperNpcNameTakenError):
+        await npc_records.create_companion(documents, chat_key, "Villain")
+
+    # An unused name still creates, and re-adding a name that IS already a companion stays
+    # idempotent (a re-create, not a conversion).
+    assert (await companions.add_companion(ctx, name="Silas", persona="a quiet archer")).startswith("✅")
+    assert (await companions.add_companion(ctx, name="Silas", persona="a quiet archer")).startswith("✅")
+    assert {item.name for item in await npc_records.list_companions(documents, chat_key)} == {"Silas"}
+
+
 async def test_a_companion_whose_sheet_cannot_be_written_leaves_no_record_behind(monkeypatch):
     """`add_companion` is record + sheet or nothing (2026-08-18 《安土》 npc-4 was a record
     whose sheet never landed): the sheet is built BEFORE the record exists, a failed sheet

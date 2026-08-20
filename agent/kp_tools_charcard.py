@@ -27,7 +27,7 @@ from agent import npc as npc_records
 from agent.char_from_persona import build_sheet_from_persona, infer_pronoun_note
 from agent.context import AgentCtx
 from agent.hook_runtime import install_room_hooks
-from agent.kp_tools_npc import player_name_refusal
+from agent.kp_tools_npc import keeper_npc_refusal, player_name_refusal
 from agent.services import Services
 from agent.tools import tool
 from core.card_split import WorldPayloads, card_hook_codes, detect_world_payloads, split_card
@@ -260,6 +260,10 @@ class CharcardTools:
             # `as companion` with a PLAYER's name: refused by the cast writer, same text as
             # every other entry point (`agent.npc.PlayerNameReservedError`).
             return player_name_refusal(i18n, exc)
+        except npc_records.KeeperNpcNameTakenError as exc:
+            # `as companion` onto an existing KEEPER NPC: the writer refuses to convert the
+            # module's own character into a party member, same text as every other door.
+            return keeper_npc_refusal(i18n, exc)
         except Exception as exc:
             return i18n.t("charcard.tools.import.failed", error=str(exc))
 

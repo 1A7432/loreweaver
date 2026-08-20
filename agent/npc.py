@@ -59,6 +59,29 @@ class PlayerNameReservedError(ValueError):
         super().__init__(f"player_name_reserved: {name!r}")
 
 
+class KeeperNpcNameTakenError(ValueError):
+    """`name` already belongs to a KEEPER NPC, so `create_companion` refuses to write.
+
+    `create_npc` deliberately hands back an EXISTING record on an exact name match rather
+    than minting a duplicate (2026-08-06 live playtest: a fresh surface-persona duplicate
+    must never shadow a record carrying seeded secrets). `create_companion` wrapped that
+    and then stamped `role="player_companion"` / `is_pc=True` onto whatever came back — so
+    `add_companion("Villain")` CONVERTED the module's villain into a party-side companion
+    in place, keeping its `secret_agenda` and its seeded knowledge, and handing the party
+    an actor built from the antagonist's own record.
+
+    A keeper NPC and a party companion are opposite sides of the table; turning one into
+    the other is never what a create call meant. So the writer refuses, writes nothing,
+    and the tools localize (`agent.kp_tools_npc.keeper_npc_refusal`). Re-adding a name
+    that is ALREADY a companion stays idempotent — that is a re-create, not a conversion."""
+
+    def __init__(self, name: str, role: str = "") -> None:
+        self.name = name
+        self.role = role
+        # Developer-facing (the tools localize the refusal).
+        super().__init__(f"keeper_npc_name_taken: {name!r}")
+
+
 def _slugify(name: str) -> str:
     """Turn `name` into a `-`-joined, lowercase slug; falls back to `"npc"` if nothing alphanumeric remains."""
     slug = _SLUG_RE.sub("-", name.strip().lower()).strip("-")
@@ -66,6 +89,10 @@ def _slugify(name: str) -> str:
 
 
 NPC_DOC_TYPE = "npc"
+
+# The `role` a party-side AI companion's record carries — the other side of the table from
+# the "keeper_npc" default, and the test `create_companion` refuses to cross.
+COMPANION_ROLE = "player_companion"
 
 
 @dataclass
@@ -317,11 +344,19 @@ async def create_companion(
 
     Thin wrapper over `create_npc` (so id-collision suffixing is reused unchanged)
     that then stamps the companion-only fields `role="player_companion"`,
-    `is_pc=True`, `playstyle`, `pronouns` and `stat_char`."""
+    `is_pc=True`, `playstyle`, `pronouns` and `stat_char`.
+
+    A name that already belongs to a KEEPER NPC raises `KeeperNpcNameTakenError` and
+    writes nothing: `create_npc` returns that existing record, and stamping the companion
+    fields onto it would convert the module's own NPC — secrets, knowledge and all — into
+    a party member. Re-creating a name that IS already a companion stays idempotent."""
+    existing = await find_npc_by_name(documents, chat_key, name)
+    if existing is not None and existing.role != COMPANION_ROLE:
+        raise KeeperNpcNameTakenError(name.strip(), existing.role)
     record = await create_npc(
         documents, chat_key, name, persona=persona, knowledge=knowledge, stat_char=stat_char, major=True
     )
-    record.role = "player_companion"
+    record.role = COMPANION_ROLE
     record.is_pc = True
     record.playstyle = playstyle
     record.pronouns = pronouns
@@ -335,7 +370,7 @@ async def list_npcs(documents: Any, chat_key: str) -> list[NpcRecord]:
 
 async def list_companions(documents: Any, chat_key: str) -> list[NpcRecord]:
     """Every `player_companion` in this room, in insertion order (keeper NPCs excluded)."""
-    return [record for record in await list_npcs(documents, chat_key) if record.role == "player_companion"]
+    return [record for record in await list_npcs(documents, chat_key) if record.role == COMPANION_ROLE]
 
 
 async def get_npc(documents: Any, chat_key: str, name_or_id: str) -> NpcRecord | None:

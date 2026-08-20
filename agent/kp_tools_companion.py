@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING
 from agent import npc as npc_records
 from agent.companion_actor import companion_action
 from agent.context import AgentCtx
-from agent.kp_tools_npc import player_name_refusal
+from agent.kp_tools_npc import keeper_npc_refusal, player_name_refusal
 from agent.services import Services
 from agent.tools import tool
 from core.character_manager import CharacterSheet
@@ -117,7 +117,10 @@ class CompanionTools:
             # So the sheet is BUILT before the record exists (a generation failure creates
             # nothing), and a failed sheet WRITE undoes the record — but only a record this
             # call minted: re-adding an existing companion is idempotent by design, and its
-            # seeded persona/knowledge is not this call's to delete.
+            # seeded persona/knowledge is not this call's to delete. `minted` is exact
+            # because the writer now refuses the third case: a same-name record that is NOT
+            # a companion raises instead of being converted, so "already there" can only
+            # mean "already a companion", which this call may reuse but must never undo.
             if generate:
                 sheet = self._services.characters.generate_character(pack.system, name)
             else:
@@ -137,6 +140,8 @@ class CompanionTools:
             return i18n.t("companion.tools.add.done", name=record.name, id=record.id, system=pack.system)
         except npc_records.PlayerNameReservedError as exc:
             return player_name_refusal(i18n, exc)
+        except npc_records.KeeperNpcNameTakenError as exc:
+            return keeper_npc_refusal(i18n, exc)
         except Exception as exc:
             return i18n.t("companion.tools.add.failed", error=str(exc))
 
@@ -159,7 +164,7 @@ class CompanionTools:
             return i18n.t("companion.tools.act.nested")
         try:
             companion = await npc_records.get_npc(self._services.documents, ctx.chat_key, name)
-            if companion is None or companion.role != "player_companion":
+            if companion is None or companion.role != npc_records.COMPANION_ROLE:
                 return i18n.t("companion.tools.not_found", name=name)
 
             if self._hub is not None and self._command_router is not None:
@@ -263,7 +268,7 @@ class CompanionTools:
         i18n = self._i18n(ctx)
         try:
             companion = await npc_records.get_npc(self._services.documents, ctx.chat_key, name)
-            if companion is None or companion.role != "player_companion":
+            if companion is None or companion.role != npc_records.COMPANION_ROLE:
                 return i18n.t("companion.tools.not_found", name=name)
             await retire_companion(self._services, ctx.chat_key, companion)
             return i18n.t("companion.tools.remove.done", name=companion.name)
@@ -284,7 +289,7 @@ class CompanionTools:
         i18n = self._i18n(ctx)
         try:
             companion = await npc_records.get_npc(self._services.documents, ctx.chat_key, name)
-            if companion is None or companion.role != "player_companion":
+            if companion is None or companion.role != npc_records.COMPANION_ROLE:
                 return i18n.t("companion.tools.not_found", name=name)
             record = await npc_records.update_npc(self._services.documents, ctx.chat_key, companion.id, playstyle=playstyle)
             return i18n.t("companion.tools.playstyle.done", name=record.name, playstyle=record.playstyle)
@@ -306,7 +311,7 @@ class CompanionTools:
         i18n = self._i18n(ctx)
         try:
             companion = await npc_records.get_npc(self._services.documents, ctx.chat_key, name)
-            if companion is None or companion.role != "player_companion":
+            if companion is None or companion.role != npc_records.COMPANION_ROLE:
                 return i18n.t("companion.tools.not_found", name=name)
             record = await npc_records.npc_learns(self._services.documents, ctx.chat_key, companion.id, fact)
             return i18n.t("companion.tools.learns.done", name=record.name, fact=fact)

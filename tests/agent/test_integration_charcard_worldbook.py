@@ -16,7 +16,7 @@ from agent.kp_tools import build_kp_toolset
 from agent.kp_tools_charcard import CharcardTools
 from agent.kp_tools_companion import CompanionTools
 from agent.kp_tools_worldbook import WorldbookTools
-from agent.npc import list_companions
+from agent.npc import create_npc, get_npc, list_companions
 from agent.prompt_builder import build_system_prompt
 from agent.services import build_services
 from core.worldbook import LoreEntry
@@ -88,6 +88,30 @@ async def test_import_png_card_registers_avatar_media(tmp_path):
     assert sheet.avatar["mime"] == "image/png"
     roster = await services.characters.get_party_roster("chat-avatar")
     assert roster[0]["avatar"]["hash"] == sheet.avatar["hash"]
+
+
+async def test_import_as_companion_refuses_to_convert_an_existing_keeper_npc(tmp_path):
+    """The card door rides the same cast writer as `add_companion`: importing a card `as
+    companion` onto a name the module already seeded as a KEEPER NPC would have stamped
+    the companion role onto that record and handed the party the antagonist's own actor.
+    It is refused, and nothing — record, sheet or lore — is written."""
+    services = _services()
+    fs = _write_card(tmp_path)
+    chat_key = "chat-comp-clash"
+    ctx = AgentCtx(chat_key=chat_key, user_id="player-1", locale="en", fs=fs)
+    await create_npc(services.documents, chat_key, "Ada", secret_agenda="poisons the well")
+
+    result = await CharcardTools(services).import_character(
+        ctx, file_path="ada.json", system="coc7", as_="companion"
+    )
+
+    assert result.startswith("❌") and "Ada" in result
+    record = await get_npc(services.documents, chat_key, "Ada")
+    assert record.role == "keeper_npc"
+    assert record.is_pc is False
+    assert record.secret_agenda == "poisons the well"
+    assert await list_companions(services.documents, chat_key) == []
+    assert await services.characters.list_characters(f"companion:{record.id}", chat_key) == []
 
 
 async def test_import_character_as_companion_creates_record_sheet_and_lore(tmp_path):
