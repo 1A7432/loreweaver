@@ -131,7 +131,9 @@ def test_calendar_sync_from_clock_advance():
     assert w["day"] == 3 and w["window_days"] == 147 and "window_state" not in w  # still waiting (default)
     engine = _engine(day=148)
     w = _writes(engine.fire("clock_advanced", {"from": "", "to": "", "delta": "2 days"}))
-    assert w == {"day": 150, "window_days": 0, "window_state": "open"}
+    # v0.2.2: crossing day 150 also ledgers the keeper whisper — "entered", read
+    # (and cleared) by the next turn_start.
+    assert w == {"day": 150, "window_days": 0, "window_state": "open", "clock_jump_notice": "entered"}
     engine = _engine(day=179, window_state="open", window_days=0)
     w = _writes(engine.fire("clock_advanced", {"from": "", "to": "", "delta": "+1日"}))
     assert w["window_state"] == "missed"
@@ -235,7 +237,7 @@ def test_root_band_boundaries():
 
 def test_variables_match_the_canon_gate_table():
     variables = {v["id"]: v for v in _card()["variables"]}
-    assert len(variables) == 31
+    assert len(variables) == 33
     for gate in ("gate_truth", "gate_window", "gate_column"):
         assert variables[gate]["kind"] == "bool" and variables[gate]["visibility"] == "player"
     assert variables["window_state"]["options"] == ["waiting", "open", "missed"]
@@ -244,7 +246,10 @@ def test_variables_match_the_canon_gate_table():
     assert variables["belt_load"]["maximum"] == 16 and variables["march_hour"]["maximum"] == 12
     keeper_only = {k for k, v in variables.items() if v["visibility"] == "keeper"}
     assert keeper_only == {"truth_staging", "coalition_wen", "coalition_jiao", "coalition_zhu", "coalition_pei",
-                          "therm_shenju", "therm_licheng", "therm_fougen", "therm_qianjing", "therm_yujia", "therm_minqing"}
+                          "therm_shenju", "therm_licheng", "therm_fougen", "therm_qianjing", "therm_yujia", "therm_minqing",
+                          # v0.2.2: the hooks' own keeper-side scratch — the clock-jump whisper ledger
+                          # and the forming-stall counter. Whisper state, never panel-bound.
+                          "clock_jump_notice", "forming_turns"}
 
 
 def test_authoring_sources_are_in_sync():
