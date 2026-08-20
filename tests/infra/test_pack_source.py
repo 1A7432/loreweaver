@@ -182,6 +182,24 @@ def test_a_cross_host_redirect_drops_the_credential(monkeypatch: pytest.MonkeyPa
     assert any(key.lower() == "authorization" for key in samehost.headers)
 
 
+def test_a_same_host_scheme_downgrade_drops_the_credential(monkeypatch: pytest.MonkeyPatch):
+    """The host check alone let a 302 to http:// on the SAME host keep the header, which
+    puts the token on the wire in clear — the very leak the host check exists to prevent."""
+    monkeypatch.setenv("GITHUB_TOKEN", "s3cret")
+    handler = pack_source._AuthStrippingRedirect()
+    original = urllib.request.Request(API_URL, headers={"Authorization": "Bearer s3cret"})
+
+    class _Headers(dict):
+        def get_all(self, _name, _default=None):
+            return None
+
+    downgraded = handler.redirect_request(
+        original, None, 302, "Found", _Headers(), "http://api.github.com/repos/o/r/releases/latest"
+    )
+    assert downgraded is not None
+    assert not any(key.lower() == "authorization" for key in downgraded.headers)
+
+
 def test_gh_token_is_the_fallback_env_var(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.setenv("GH_TOKEN", "other")

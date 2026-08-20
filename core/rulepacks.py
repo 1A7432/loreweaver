@@ -716,21 +716,28 @@ def _discovery_dirs() -> tuple[Path, ...]:
 
 
 def _discovery_signature() -> tuple[Any, ...]:
-    """A fingerprint of the discovery dirs: each dir's `mtime_ns` plus its `*.yaml` names/mtimes.
+    """A fingerprint of the discovery dirs: each dir's `mtime_ns` plus its `*.yaml` names,
+    `mtime_ns` and sizes.
 
     A directory's own mtime moves whenever an entry is created or removed inside it — exactly
-    what installing a pack out-of-process does — and the per-file mtimes additionally catch an
-    in-place rewrite on a filesystem with coarse directory timestamps. Only ever computed on a
-    resolution MISS, so the hit path never touches the filesystem.
+    what installing a pack out-of-process does — and the per-file `(mtime_ns, size)` stamps
+    additionally catch an in-place rewrite the timestamps miss: a coarse-timestamp filesystem,
+    or a rewrite inside one tick, which is what reinstalling a pack seconds after building it
+    looks like. Same pair as the repo's other two content fingerprints (`gateway.panels`,
+    `gateway.dev_room`). Computed on a lookup, throttled, so the hot path stats at most a few
+    directories per interval.
     """
     signature: list[Any] = []
     for directory in _discovery_dirs():
+        files: list[tuple[str, int, int]] = []
         try:
             dir_mtime: int | None = directory.stat().st_mtime_ns
-            files = tuple(sorted((path.name, path.stat().st_mtime_ns) for path in directory.glob("*.yaml")))
+            for path in directory.glob("*.yaml"):
+                stamp = path.stat()
+                files.append((path.name, stamp.st_mtime_ns, stamp.st_size))
         except OSError:
-            dir_mtime, files = None, ()
-        signature.append((str(directory), dir_mtime, files))
+            dir_mtime, files = None, []
+        signature.append((str(directory), dir_mtime, tuple(sorted(files))))
     return tuple(signature)
 
 

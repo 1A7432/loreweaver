@@ -51,7 +51,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - name: protocol (shared)
         working-directory: clients/protocol
-        run: bun install && bun test
+        # `bun run test`, not `bun test`: the package script is `tsc --noEmit` AND the
+        # runner, and the type gate is the half that catches a protocol type drifting.
+        run: bun install && bun run test
       - name: tui (OpenTUI)
         working-directory: clients/tui
         run: bun install && bun test && bun run build

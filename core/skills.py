@@ -203,24 +203,28 @@ def _discovery_dirs() -> tuple[Path, ...]:
 
 
 def _discovery_signature() -> tuple[object, ...]:
-    """A fingerprint of the discovery dirs: each dir's `mtime_ns` plus its skills' manifests.
+    """A fingerprint of the discovery dirs: each dir's `mtime_ns` plus its skills' manifest
+    names, `mtime_ns` and sizes.
 
     The twin of ``core.rulepacks._discovery_signature`` for the same reason: a pack installed
     by ANOTHER process (Studio's install button shells out to the CLI) ships skill directories
     into a dir this process already scanned, and the `@cache` would otherwise stay stale for
-    the rest of the process lifetime. Only ever computed on a resolution MISS, so the hit path
-    never touches the filesystem.
+    the rest of the process lifetime. Size rides along with the timestamp for the same reason
+    it does there — a rewrite inside one mtime tick is what a same-second reinstall looks like.
+    Computed on a lookup, throttled, so the hot path stats at most a few directories per
+    interval.
     """
     signature: list[object] = []
     for directory in _discovery_dirs():
+        files: list[tuple[str, int, int]] = []
         try:
             dir_mtime: int | None = directory.stat().st_mtime_ns
-            files = tuple(
-                sorted((path.parent.name, path.stat().st_mtime_ns) for path in directory.glob("*/SKILL.md"))
-            )
+            for path in directory.glob("*/SKILL.md"):
+                stamp = path.stat()
+                files.append((path.parent.name, stamp.st_mtime_ns, stamp.st_size))
         except OSError:
-            dir_mtime, files = None, ()
-        signature.append((str(directory), dir_mtime, files))
+            dir_mtime, files = None, []
+        signature.append((str(directory), dir_mtime, tuple(sorted(files))))
     return tuple(signature)
 
 

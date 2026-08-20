@@ -82,12 +82,15 @@ def _request_headers(url: str, *, authenticated: bool) -> dict[str, str]:
 
 
 class _AuthStrippingRedirect(urllib.request.HTTPRedirectHandler):
-    """Drop ``Authorization`` when a redirect leaves the host it was minted for.
+    """Drop ``Authorization`` unless the redirect stays on the same host AND on https.
 
     `urllib`'s own handler copies every header except the content ones into the new
     request, so a credential set for ``api.github.com`` would follow a 302 to whatever
     host the response named — and the release-asset path redirects off-host by design.
-    Same-host redirects (a renamed repo) keep the header, so this costs nothing real.
+    The scheme is the same rule read once more: a redirect to ``http://`` on the very
+    same host puts the token on the wire in clear, which is the leak the host check was
+    written to prevent. A same-host https redirect (a renamed repo) keeps the header, so
+    this costs nothing real.
     """
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
@@ -95,8 +98,8 @@ class _AuthStrippingRedirect(urllib.request.HTTPRedirectHandler):
         if new_request is None:
             return None
         old_host = (urllib.parse.urlsplit(req.full_url).hostname or "").lower()
-        new_host = (urllib.parse.urlsplit(newurl).hostname or "").lower()
-        if old_host != new_host:
+        target = urllib.parse.urlsplit(newurl)
+        if (target.hostname or "").lower() != old_host or target.scheme != "https":
             # Request normalizes header names to Capitalized-Form; drop every casing.
             for name in [key for key in new_request.headers if key.lower() == "authorization"]:
                 del new_request.headers[name]
