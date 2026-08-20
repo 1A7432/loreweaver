@@ -18,7 +18,7 @@ from gateway.ops import (
 from gateway.turn import state_for_ctx
 
 if TYPE_CHECKING:
-    from core.pack import PackManifest
+    from core.pack import InstallReport
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +159,7 @@ class PanelsCommands:
 
         from core.pack import PackError, inspect_pack
         from gateway.pack_install import install_pack_here, trust_card_lines
-        from gateway.panels import publish_ui_manifests
+        from gateway.panels import installed_panel_count, installed_presentation_count, publish_ui_manifests
         from infra.pack_source import PackRefError, resolve_pack_ref
 
         if not _is_keeper(ctx.raw_ctx):
@@ -194,12 +194,21 @@ class PanelsCommands:
         # other way in — but this door knows a pack just landed, so it skips the throttle.
         self.refresh_pack_words(force=True)
         await toggle_enabled_panel_pack(ctx.services.store, ctx.chat_key, pack_id, on=True)
-        live, leftover = await _switch_everything_on(ctx, report.manifest, pack_id)
+        live, leftover = await _switch_everything_on(ctx, report, pack_id)
         if self.hub is not None:
             await publish_ui_manifests(self.hub, ctx.services, ctx.chat_key)
 
+        # Claim the table dressing only when the pack has some — the same predicate
+        # `.panels enable` refuses an empty pack with. A pack of skills and lore ships
+        # neither, and "its panels and presentation kit are live in this room" is exactly
+        # the sentence an operator would then spend an hour debugging.
+        dressed = (
+            installed_panel_count(ctx.services, pack_id) > 0
+            or installed_presentation_count(ctx.services, pack_id) > 0
+        )
+        headline = "commands.pack.installed" if dressed else "commands.pack.installed_plain"
         lines = [
-            ctx.i18n.t("commands.pack.installed", id=pack_id, version=report.manifest.version),
+            ctx.i18n.t(headline, id=pack_id, version=report.manifest.version),
             *trust_card_lines(ctx.i18n, manifest, ctx.locale),
             *live,
             ctx.i18n.t("commands.pack.risk"),
@@ -232,7 +241,7 @@ class PanelsCommands:
 
 
 async def _switch_everything_on(
-    ctx: CommandCtx, manifest: PackManifest, pack_id: str
+    ctx: CommandCtx, report: InstallReport, pack_id: str
 ) -> tuple[list[str], list[str]]:
     """Throw the rest of the pack's switches; return (what went live, what is left over).
 
@@ -241,9 +250,14 @@ async def _switch_everything_on(
     the keeper typed the ref, the reply states the risk, and the table is playable. The
     single leftover case is a pack with SEVERAL world cards, where "which module is this
     table playing" is a fork no installer can read off a manifest.
+
+    It takes the whole `InstallReport`, not just the manifest, because what the install
+    OBSERVED is part of the receipt: a skill id a built-in shadows is enabled like any
+    other, and the room is told which one it is really running.
     """
     from gateway.ops import toggle_enabled_skill
 
+    manifest = report.manifest
     live: list[str] = []
     leftover: list[str] = []
 
@@ -253,6 +267,13 @@ async def _switch_everything_on(
             continue
         await toggle_enabled_skill(ctx.services.store, ctx.chat_key, skill_id, on=True)
         live.append(ctx.i18n.t("commands.pack.live_skill", id=skill_id))
+    if report.shadowed:
+        # Enabled all the same (owner verdict 2026-08-20: a keeper who typed the ref
+        # decides, built-in ids included) — but the id the room now runs is the BUILT-IN,
+        # because a built-in always wins discovery. Saying so is what the terminal door
+        # already does (`pack.install.shadowed`); an author debugging "my skill changed
+        # nothing" has no other way to see it. A courtesy line, not a gate.
+        live.append(ctx.i18n.t("commands.pack.shadowed", ids=", ".join(report.shadowed)))
 
     world_refs = [
         f"{pack_id}/{card_path}"
@@ -267,7 +288,9 @@ async def _switch_everything_on(
     elif world_refs:
         loaded, pinned = await _import_world_card(ctx, world_refs[0])
         if not loaded:
-            leftover.append(ctx.i18n.t("commands.pack.next_card", ref=world_refs[0]))
+            # NOT the several-modules fork: this pack ships exactly one, the install
+            # tried it, and it did not land. Say that, and name the retry.
+            leftover.append(ctx.i18n.t("commands.pack.card_failed", ref=world_refs[0]))
         elif pinned:
             live.append(ctx.i18n.t("commands.pack.live_card_pinned", ref=world_refs[0], system=pinned))
         else:

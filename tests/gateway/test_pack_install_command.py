@@ -110,7 +110,9 @@ async def test_a_keeper_installs_a_pack_and_it_is_live_in_this_room(server, tmp_
     reply = await router.dispatch(_keeper(chat_key), f".pack install {pack}")
 
     i18n = server.i18n.with_locale("en")
-    assert i18n.t("commands.pack.installed", id="tidepack", version="1.0.0") in reply
+    # The PLAIN headline: this pack ships neither panels nor a presentation kit, and the
+    # receipt claims only what the install actually did.
+    assert i18n.t("commands.pack.installed_plain", id="tidepack", version="1.0.0") in reply
     # The terminal's own disclosure card, verbatim — counts and the code flags.
     assert "1 skill(s)" in reply and "1 rulepack(s)" in reply
     assert "hooks code: no" in reply
@@ -304,7 +306,10 @@ async def test_a_world_import_that_fails_is_not_reported_as_a_module(server, tmp
 
     i18n = server.i18n.with_locale("en")
     assert i18n.t("commands.pack.live_card", ref="tidemodule/cards/world.json") not in reply
-    assert "tidemodule/cards/world.json" in reply  # named as the import to retry
+    # Named as the import to retry, and as a FAILURE — not as the several-modules fork,
+    # which is what this branch used to print with both of its halves untrue.
+    assert i18n.t("commands.pack.card_failed", ref="tidemodule/cards/world.json") in reply
+    assert i18n.t("commands.pack.next_card", ref="tidemodule/cards/world.json") not in reply
     assert i18n.t("commands.pack.next_header") in reply
     # The skill still went live: one card failing is not the install failing.
     assert "tideline" in await get_enabled_skills(server.store, chat_key)
@@ -364,3 +369,90 @@ async def test_installing_here_makes_the_packs_make_char_word_live(server, tmp_p
     i18n = server.i18n.with_locale("en")
     assert reply is not None, "the installed pack's make_char word routed nowhere"
     assert i18n.t("commands.character.created", name="Tidewalker", system="tiderules") in reply
+
+
+PANELS_YAML = """\
+panels:
+  - id: tide-board
+    title: {en: Tide Board, zh: 潮汐板}
+    slot: sidebar
+    audience: all
+    blocks:
+      - {kind: meter, label: {en: Tide}, value: {$var: tide}, min: 0, max: 10}
+"""
+
+PANEL_MANIFEST = """\
+id: tidepanels
+version: 1.0.0
+name: Tide Panels
+description: A pack whose table dressing the receipt may claim.
+authors: [ada]
+license: MIT
+engine:
+  protocol: "2.0"
+contents:
+  panels: [ui/panels.yaml]
+"""
+
+
+def _built_panel_pack(tmp_path: Path) -> Path:
+    src = tmp_path / "panel-src"
+    (src / "ui").mkdir(parents=True)
+    (src / "ui/panels.yaml").write_text(PANELS_YAML, encoding="utf-8")
+    (src / MANIFEST_NAME).write_text(PANEL_MANIFEST, encoding="utf-8")
+    return build_pack(src, tmp_path / "tidepanels.lwpack").path
+
+
+async def test_the_headline_claims_panels_only_when_the_pack_ships_some(server, tmp_path):
+    """"Its panels and presentation kit are live in this room" printed for packs shipping
+    neither — an operator reading that would go looking for panels that do not exist. The
+    claim now rides the same predicate .panels enable refuses an empty pack with."""
+    router = CommandRouter(server)
+    i18n = server.i18n.with_locale("en")
+
+    reply = await router.dispatch(_keeper("cli:dm:dressed"), f".pack install {_built_panel_pack(tmp_path)}")
+    assert i18n.t("commands.pack.installed", id="tidepanels", version="1.0.0") in reply
+
+    plain = await router.dispatch(_keeper("cli:dm:plain"), f".pack install {_built_pack(tmp_path)}")
+    assert i18n.t("commands.pack.installed_plain", id="tidepack", version="1.0.0") in plain
+    assert i18n.t("commands.pack.installed", id="tidepack", version="1.0.0") not in plain
+
+
+SHADOW_MANIFEST = """\
+id: shadowpack
+version: 1.0.0
+name: Shadow Pack
+description: A pack whose skill id a built-in already claims.
+authors: [ada]
+license: MIT
+engine:
+  protocol: "2.0"
+contents:
+  skills: [skills/mature-mode]
+"""
+
+
+def _built_shadow_pack(tmp_path: Path) -> Path:
+    src = tmp_path / "shadow-src"
+    (src / "skills/mature-mode").mkdir(parents=True)
+    (src / "skills/mature-mode/SKILL.md").write_text(SKILL_MD, encoding="utf-8")
+    (src / MANIFEST_NAME).write_text(SHADOW_MANIFEST, encoding="utf-8")
+    return build_pack(src, tmp_path / "shadowpack.lwpack").path
+
+
+async def test_a_skill_a_builtin_shadows_is_enabled_and_named(server, tmp_path):
+    """Owner verdict 2026-08-20: a pack naming a BUILT-IN skill id — mature-mode included —
+    still enables it, because a keeper who typed the ref made the trust decision and
+    convenience outranks a gate here. What the room gets is a courtesy line, not a refusal:
+    a built-in always wins discovery, so the pack's own file never runs, and an author
+    debugging "my skill changed nothing" has no other way to see it."""
+    router = CommandRouter(server)
+    chat_key = "cli:dm:shadow"
+
+    reply = await router.dispatch(_keeper(chat_key), f".pack install {_built_shadow_pack(tmp_path)}")
+
+    i18n = server.i18n.with_locale("en")
+    assert i18n.t("commands.pack.live_skill", id="mature-mode") in reply
+    assert i18n.t("commands.pack.shadowed", ids="mature-mode") in reply
+    # Enabled exactly as any other skill would be — the line is a receipt, not a gate.
+    assert "mature-mode" in await get_enabled_skills(server.store, chat_key)
