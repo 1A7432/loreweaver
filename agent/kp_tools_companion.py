@@ -391,12 +391,17 @@ async def _dispose_companion_sheets(facet_ctx: FacetContext) -> None:
     row and the active-character pointer leave with the document, and its owner check
     still stands — a `stat_char` retargeted at a PLAYER's sheet deletes nothing here, and
     the reset moves on rather than failing the room's whole cleanup for one bad pointer.
+
+    The slice is selected by OWNER, not by the record's `stat_char` pointer: the pointer
+    is model-writable (`update_npc`), and following a retargeted one would spare the
+    companion's own sheet — the very ghost this hook exists to dispose of. What the
+    companion uid owns is what leaves with it.
     """
     services, chat_key = facet_ctx.services, facet_ctx.chat_key
     for companion in await npc_records.list_companions(services.documents, chat_key):
-        await services.characters.delete_character(
-            _companion_uid(companion.id), chat_key, companion_sheet_name(companion)
-        )
+        uid = _companion_uid(companion.id)
+        for sheet in await services.characters.list_characters(uid, chat_key):
+            await services.characters.delete_character(uid, chat_key, str(sheet.get("name", "")))
 
 
 # --- Room lifecycle (M23 WS1) -----------------------------------------------

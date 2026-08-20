@@ -638,3 +638,35 @@ async def test_reset_story_takes_the_companion_whole_and_leaves_the_players_alon
     assert await npcs.list(chat_key, "sheet") == []
     assert await services.characters.get_party_roster(chat_key) == []
     assert await npc_records.list_companions(npcs, chat_key) == []
+
+
+async def test_reset_story_disposes_by_owner_not_by_the_records_pointer(tmp_path):
+    """`stat_char` is model-writable (`update_npc` can retarget it at a PLAYER's sheet),
+    and a disposal that FOLLOWED the pointer would spare the companion's own sheet — the
+    very ghost the `companion_sheets` facet exists to take. The slice is selected by
+    owner: whatever the companion uid holds leaves with the record, and the player's
+    sheet survives because it was never the companion's to lose."""
+    from agent.npc import companion_uid
+    from net.room_backup import reset_room_state
+
+    chat_key = "reset-retargeted-room"
+    services = build_services(
+        Settings(locale="en", data_dir=str(tmp_path)), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(8)
+    )
+    npcs = services.documents
+    keeper_ctx = _ctx(chat_key)
+    tools = CompanionTools(services)
+
+    nora = services.characters.generate_character("coc7", "Nora")
+    await services.characters.save_character("human", chat_key, nora)
+    await tools.add_companion(keeper_ctx, name="Silas")
+    silas = (await npc_records.list_companions(npcs, chat_key))[0]
+    await npc_records.update_npc(npcs, chat_key, silas.id, stat_char="Nora")
+
+    await reset_room_state(services, chat_key, scope="story")
+
+    # The companion's OWN sheet is gone even though the pointer aimed elsewhere...
+    assert await services.characters.list_characters(companion_uid(silas.id), chat_key) == []
+    # ...and the player's sheet was not the companion's to lose.
+    assert {doc.id for doc in await npcs.list(chat_key, "sheet")} == {"Nora"}
+    assert (await services.characters.get_character("human", chat_key)).name == "Nora"
