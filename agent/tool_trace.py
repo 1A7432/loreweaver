@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,18 @@ logger = logging.getLogger(__name__)
 MAX_TRACE_FIELD_CHARS = 20_000
 
 _TRACE_PATH: Path | None = None
+
+
+def _open_private(path: str, flags: int) -> int:
+    """`opener=` hook for `open()`: create (or reopen) the trace file at `0600`.
+
+    Default umask leaves a freshly CREATED file at `0644` until `restrict_file`
+    chmods it after the write returns — a window in which the first keeper-grade
+    line sat in a world-readable file. Passing an explicit mode to `os.open`
+    closes that window from the very first byte; `restrict_file` below still
+    handles a pre-existing file whose mode predates this fix.
+    """
+    return os.open(path, flags, 0o600)
 
 
 def enable_tool_trace(path: str | Path | None) -> None:
@@ -83,7 +96,7 @@ def trace_event(kind: str, payload: dict[str, Any], *, chat_key: str = "") -> No
             },
             ensure_ascii=False,
         )
-        with _TRACE_PATH.open("a", encoding="utf-8") as handle:
+        with open(_TRACE_PATH, "a", encoding="utf-8", opener=_open_private) as handle:
             handle.write(line + "\n")
         restrict_file(_TRACE_PATH)
     except Exception:  # noqa: BLE001 — see module docstring
@@ -117,7 +130,7 @@ def record_tool_call(
             },
             ensure_ascii=False,
         )
-        with _TRACE_PATH.open("a", encoding="utf-8") as handle:
+        with open(_TRACE_PATH, "a", encoding="utf-8", opener=_open_private) as handle:
             handle.write(line + "\n")
         restrict_file(_TRACE_PATH)
     except Exception:  # noqa: BLE001 — see module docstring

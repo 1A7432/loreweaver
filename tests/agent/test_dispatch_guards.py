@@ -289,3 +289,35 @@ async def test_tool_trace_records_every_dispatched_call_when_an_operator_asks(tm
     llm2 = FakeLLM(script=[assistant_tools(tool_call("echo", text="quiet")), assistant_text("Done.")])
     await run_kp_turn(_ctx("traced-room"), _services(llm2), Toolset(_Probe()), "again")
     assert len(path.read_text(encoding="utf-8").splitlines()) == 2
+
+
+def test_tool_trace_file_is_private_from_its_very_first_byte(tmp_path, monkeypatch):
+    """The file must never be `0644` even for the instant between creation and the
+    post-write `restrict_file` chmod: default umask creates a new file world-readable,
+    and a keeper-grade line could land in it before that chmod runs. `agent.tool_trace`
+    opens the file with an explicit `0600` mode from the first write, so — proven here
+    by no-opping `restrict_file` — the opener alone is enough; the chmod call is only
+    defense in depth for a file that predates this fix."""
+    import os
+    import stat
+
+    import agent.tool_trace as tool_trace
+    from agent.tool_trace import enable_tool_trace, record_tool_call
+
+    monkeypatch.setattr(tool_trace, "restrict_file", lambda *_a, **_k: None)
+
+    path = tmp_path / "trace" / "tools.jsonl"
+    try:
+        enable_tool_trace(path)
+        record_tool_call(
+            chat_key="private-room",
+            phase="play",
+            name="echo",
+            arguments={"text": "hi"},
+            result="said hi",
+            keeper_only=False,
+            started=0.0,
+        )
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    finally:
+        enable_tool_trace(None)

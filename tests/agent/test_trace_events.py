@@ -161,6 +161,87 @@ async def test_a_dropped_op_and_a_skipped_chronicle_are_visible_in_the_verdict(t
     }
 
 
+async def test_scribe_disabled_is_distinguishable_from_the_scribe_dying(tmp_path):
+    services = build_services(
+        Settings(),
+        llm=FakeLLM(responder=lambda messages, tools: assistant_text("{}")),
+        embeddings=FakeEmbeddings(64),
+    )
+    services.settings.scribe.enabled = False
+
+    path = tmp_path / "trace" / "tools.jsonl"
+    try:
+        enable_tool_trace(path)
+        await run_scribe(services, _ctx(), "我伸手", "你什么也没摸到。", [], 4)
+    finally:
+        enable_tool_trace(None)
+
+    [entry] = [line for line in _read(path) if line["tool"] == SCRIBE_TRACE_KIND]
+    assert entry["event"] == {"outcome": "disabled"}
+
+
+async def test_scribe_skips_an_empty_reply_and_says_so(tmp_path):
+    services = build_services(
+        Settings(),
+        llm=FakeLLM(responder=lambda messages, tools: assistant_text("{}")),
+        embeddings=FakeEmbeddings(64),
+    )
+    services.settings.scribe.enabled = True
+
+    path = tmp_path / "trace" / "tools.jsonl"
+    try:
+        enable_tool_trace(path)
+        await run_scribe(services, _ctx(), "我伸手", "   ", [], 4)
+    finally:
+        enable_tool_trace(None)
+
+    [entry] = [line for line in _read(path) if line["tool"] == SCRIBE_TRACE_KIND]
+    assert entry["event"] == {"outcome": "empty_reply"}
+
+
+async def test_a_dead_scribe_llm_is_traced_as_llm_failed(tmp_path):
+    def _boom(messages, tools):
+        raise RuntimeError("scribe llm down")
+
+    services = build_services(
+        Settings(),
+        llm=FakeLLM(responder=_boom),
+        embeddings=FakeEmbeddings(64),
+    )
+    services.settings.scribe.enabled = True
+
+    path = tmp_path / "trace" / "tools.jsonl"
+    try:
+        enable_tool_trace(path)
+        outcome = await run_scribe(services, _ctx(), "我伸手", "你什么也没摸到。", [], 4)
+    finally:
+        enable_tool_trace(None)
+
+    assert outcome.changed is False
+    [entry] = [line for line in _read(path) if line["tool"] == SCRIBE_TRACE_KIND]
+    assert entry["event"] == {"outcome": "llm_failed"}
+
+
+async def test_an_unparseable_scribe_reply_is_traced_as_parse_failed(tmp_path):
+    services = build_services(
+        Settings(),
+        llm=FakeLLM(responder=lambda messages, tools: assistant_text("not json at all")),
+        embeddings=FakeEmbeddings(64),
+    )
+    services.settings.scribe.enabled = True
+
+    path = tmp_path / "trace" / "tools.jsonl"
+    try:
+        enable_tool_trace(path)
+        outcome = await run_scribe(services, _ctx(), "我伸手", "你什么也没摸到。", [], 4)
+    finally:
+        enable_tool_trace(None)
+
+    assert outcome.changed is False
+    [entry] = [line for line in _read(path) if line["tool"] == SCRIBE_TRACE_KIND]
+    assert entry["event"] == {"outcome": "parse_failed"}
+
+
 # --- the Director's decision -------------------------------------------------
 
 

@@ -352,7 +352,14 @@ async def run_scribe(
 ) -> ScribePass:
     """One reconciliation pass (see :class:`ScribePass`). Never raises."""
     settings = services.settings.scribe
-    if not settings.enabled or not reply_text.strip():
+    if not settings.enabled:
+        # Without this the probe cannot tell "the Scribe never ran" from "the Scribe
+        # died" — both used to look like a session with zero whispers, zero habits,
+        # zero chronicle lines, and no way to tell why.
+        trace_event(SCRIBE_TRACE_KIND, {"outcome": "disabled"}, chat_key=ctx.chat_key)
+        return ScribePass()
+    if not reply_text.strip():
+        trace_event(SCRIBE_TRACE_KIND, {"outcome": "empty_reply"}, chat_key=ctx.chat_key)
         return ScribePass()
     try:
         view = await services.documents.get_view(ctx.chat_key, MODVARS_DOC_TYPE, MODVARS_DOC_ID, KEEPER_VIEWER)
@@ -379,9 +386,11 @@ async def run_scribe(
         result = await _scribe_llm(services).chat([{"role": "user", "content": prompt}])
     except Exception as exc:  # noqa: BLE001 — bookkeeping must never break the table
         logger.debug("scribe: llm call failed: %s", exc)
+        trace_event(SCRIBE_TRACE_KIND, {"outcome": "llm_failed"}, chat_key=ctx.chat_key)
         return ScribePass()
     parsed = _extract_json(result.content or "")
     if parsed is None:
+        trace_event(SCRIBE_TRACE_KIND, {"outcome": "parse_failed"}, chat_key=ctx.chat_key)
         return ScribePass()
 
     changed = False
