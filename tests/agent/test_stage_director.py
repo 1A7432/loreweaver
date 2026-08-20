@@ -217,7 +217,7 @@ async def test_a_subject_without_a_reference_is_never_generated(tmp_path):
     assert _blocks(hub) == []
 
 
-async def test_pack_only_generation_is_an_author_veto_no_config_overrides(tmp_path):
+async def test_pack_only_vetoes_generation_but_pack_art_still_stages(tmp_path):
     imagegen = FakeImageGen()
     services, hub = await _room(
         tmp_path,
@@ -230,9 +230,71 @@ async def test_pack_only_generation_is_an_author_veto_no_config_overrides(tmp_pa
     await run_director(services, _ctx(), "我抬头", "她在灯下。", beat="handout", hub=hub)
 
     assert imagegen.calls == []
-    # `pack_only` vetoes GENERATION, not pictures: the kit's own 定妆 reference is pack
+    # `pack_only` vetoes GENERATION, never STAGING: the kit's own 定妆 reference is pack
     # content, so it is exactly what such an author asked to be shown.
     assert [block["kind"] for block in _blocks(hub)] == ["image"]
+
+
+async def test_images_off_gate_is_named_in_the_probe(tmp_path):
+    from agent.stage_director import IMAGE_IMAGES_OFF
+    from agent.tool_trace import enable_tool_trace
+
+    services, hub = await _room(
+        tmp_path,
+        # "the-quay" has no 定妆 reference, so a decline here can never be masked by the
+        # reference fallback — the trace word under test is the one that survives.
+        {"blocks": [], "audio": [], "image": {"subject": "the-quay", "prompt": "x"}, "prepare": []},
+    )
+    services.settings.director.images = False
+    path = tmp_path / "trace" / "tools.jsonl"
+    try:
+        enable_tool_trace(path)
+        await run_director(services, _ctx(), "我看埠头", "石埠空着。", beat="scene_change", hub=hub)
+    finally:
+        enable_tool_trace(None)
+
+    [line] = [json.loads(raw) for raw in path.read_text(encoding="utf-8").splitlines()]
+    assert json.loads(line["event"])["image"]["outcome"] == IMAGE_IMAGES_OFF
+
+
+async def test_pack_only_gate_is_named_in_the_probe(tmp_path):
+    from agent.stage_director import IMAGE_PACK_ONLY
+    from agent.tool_trace import enable_tool_trace
+
+    services, hub = await _room(
+        tmp_path,
+        {"blocks": [], "audio": [], "image": {"subject": "the-quay", "prompt": "x"}, "prepare": []},
+        kit=KIT.replace("generation: allow", "generation: pack_only"),
+    )
+    path = tmp_path / "trace" / "tools.jsonl"
+    try:
+        enable_tool_trace(path)
+        await run_director(services, _ctx(), "我看埠头", "石埠空着。", beat="scene_change", hub=hub)
+    finally:
+        enable_tool_trace(None)
+
+    [line] = [json.loads(raw) for raw in path.read_text(encoding="utf-8").splitlines()]
+    assert json.loads(line["event"])["image"]["outcome"] == IMAGE_PACK_ONLY
+
+
+async def test_no_provider_gate_is_named_in_the_probe(tmp_path):
+    from agent.stage_director import IMAGE_NO_PROVIDER
+    from agent.tool_trace import enable_tool_trace
+
+    services, hub = await _room(
+        tmp_path,
+        {"blocks": [], "audio": [], "image": {"subject": "the-quay", "prompt": "x"}, "prepare": []},
+    )
+    assert services.imagegen is None
+    path = tmp_path / "trace" / "tools.jsonl"
+    try:
+        enable_tool_trace(path)
+        await run_director(services, _ctx(), "我看埠头", "石埠空着。", beat="scene_change", hub=hub)
+    finally:
+        enable_tool_trace(None)
+
+    [line] = [json.loads(raw) for raw in path.read_text(encoding="utf-8").splitlines()]
+    assert json.loads(line["event"])["image"]["outcome"] == IMAGE_NO_PROVIDER
 
 
 async def test_the_room_image_budget_is_a_hard_stop(tmp_path):

@@ -80,7 +80,9 @@ SPENT_KEY = "director_images"  # how many generations this room has paid for
 IMAGE_NONE = "none"  # the Director never asked for one
 IMAGE_KIT_MISSING = "kit_missing"  # this room's modules ship no presentation kit
 IMAGE_TEMPLATE_DENIED = "template_denied"  # the kit's `templates:` allowlist excludes images
-IMAGE_IMAGEGEN_OFF = "imagegen_off"  # no provider configured, or the kit/settings say pack-only
+IMAGE_IMAGES_OFF = "images_off"  # settings.director.images is off (deployment-level toggle)
+IMAGE_PACK_ONLY = "pack_only"  # kit.generates is False — the author's pack-art-only choice
+IMAGE_NO_PROVIDER = "no_provider"  # services.imagegen is None — no image provider configured
 IMAGE_REF_MISSING = "ref_missing"  # 宁缺毋滥: no readable 定妆 reference for that subject
 IMAGE_BUDGET = "budget"  # the room's generation budget is spent
 IMAGE_PROVIDER_FAILED = "llm_failed"  # the provider raised
@@ -264,8 +266,14 @@ async def _generate_subject(
     larder = await _json_state(services, ctx.chat_key, PREGEN_KEY, {})
     if isinstance(larder, dict) and isinstance(larder.get(subject_id), str):
         return larder[subject_id], IMAGE_LARDER
-    if not settings.images or not kit.generates or not kit.allows_template("image") or services.imagegen is None:
-        return None, IMAGE_IMAGEGEN_OFF
+    if not settings.images:
+        return None, IMAGE_IMAGES_OFF
+    if not kit.generates:
+        return None, IMAGE_PACK_ONLY
+    if not kit.allows_template("image"):
+        return None, IMAGE_TEMPLATE_DENIED
+    if services.imagegen is None:
+        return None, IMAGE_NO_PROVIDER
     entry = kit.subject(subject_id)
     if entry is None or not entry.generatable:
         logger.info("director: refusing to generate %r (no 定妆 reference in the kit)", subject_id)
