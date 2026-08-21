@@ -39,10 +39,12 @@ import asyncio
 import logging
 import random
 import re
+import time
 from collections.abc import Callable
 from typing import Any
 
 from infra.llm import ChatResult, LLMClient
+from infra.model_call_trace import record_model_call
 
 logger = logging.getLogger(__name__)
 
@@ -232,9 +234,13 @@ class RetryingLLM:
         on_text_delta: Callable[[str], None] | None = None,
     ) -> ChatResult:
         last_error: BaseException | None = None
+        # One probe row per LOGICAL call — retries and their sleeps included — because the
+        # room is occupied for that whole span, not for the last attempt alone
+        # (`infra.model_call_trace`; free unless the operator's trace is on).
+        started = time.perf_counter()
         for attempt in range(1, self._max_attempts + 1):
             try:
-                return await self._inner.chat(
+                result = await self._inner.chat(
                     messages,
                     tools=tools,
                     tool_choice=tool_choice,
@@ -246,6 +252,12 @@ class RetryingLLM:
             except Exception as error:
                 last_error = error
                 if attempt >= self._max_attempts or not is_retryable(error):
+                    record_model_call(
+                        ms=(time.perf_counter() - started) * 1000.0,
+                        attempts=attempt,
+                        model=model or "",
+                        error=error,
+                    )
                     raise
                 delay = backoff_delay(attempt, rand=self._rand)
                 hint = retry_after_hint(error)
@@ -263,6 +275,14 @@ class RetryingLLM:
                 if self._on_retry is not None:
                     self._on_retry(attempt, delay, error)
                 await self._sleep(delay)
+            else:
+                record_model_call(
+                    ms=(time.perf_counter() - started) * 1000.0,
+                    attempts=attempt,
+                    usage=getattr(result, "usage", None),
+                    model=model or "",
+                )
+                return result
         # Unreachable — the loop above either returns or re-raises.
         raise last_error if last_error is not None else RuntimeError("retry loop exited without a result")  # i18n-exempt: developer invariant, never player-facing
 

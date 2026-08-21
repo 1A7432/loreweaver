@@ -26,6 +26,7 @@ from agent.services import Services
 from core.character_manager import CharacterSheet, character_resources
 from core.rulepacks import load_rulepack
 from infra.i18n import I18n
+from infra.model_call_trace import lane_scope
 
 # How many of the companion's highest-value skills to surface in its sheet summary, so the actor
 # plays to its strengths without the prompt ballooning with every default-value skill.
@@ -145,13 +146,14 @@ async def companion_action(
     user_message = _build_user_message(i18n, situation, recent or [])
     model = services.settings.llm.npc_model or services.settings.llm.chat_model
 
-    result = await services.llm.chat(
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ],
-        model=model,
-    )
+    with lane_scope("companion", chat_key=chat_key, companion=companion.id):
+        result = await services.llm.chat(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            model=model,
+        )
 
     content = result.content or ""
     parsed = _extract_json_object(content)

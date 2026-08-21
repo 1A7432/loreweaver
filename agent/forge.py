@@ -51,6 +51,7 @@ from agent.services import Services
 from core.documents import KEEPER_VIEWER, MODULE_POOL_ID
 from core.yaml_safety import safe_load_no_aliases
 from infra.file_permissions import atomic_write_private
+from infra.model_call_trace import lane_scope
 from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
 from infra.usage_stats import record_usage_stats
 
@@ -136,7 +137,8 @@ async def _llm_authored(
     NOT an uncaught exception that surfaces as a generic `error` frame (which would leave a client's
     "generating…" spinner stuck forever)."""
     try:
-        result = await services.llm.chat(messages)
+        with lane_scope("authoring", chat_key=chat_key or None):
+            result = await services.llm.chat(messages)
     except Exception as exc:
         return None, ForgeResult(False, "", "", "", f"llm_failed: {exc}")  # i18n-exempt
     if chat_key:

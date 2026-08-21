@@ -332,3 +332,48 @@ async def test_a_room_with_no_presentation_kit_is_traced_as_such(tmp_path):
         "prepared": 0,
         "image": {"outcome": "kit_missing"},
     }
+
+
+# --- the model-call rows ------------------------------------------------------
+
+
+async def test_every_model_call_of_a_turn_leaves_a_row_named_by_its_lane(tmp_path):
+    """One row per LOGICAL model call, in the same file, under `tool: "model_call"`: the
+    Keeper's rounds numbered as the loop advances, and an NPC voiced from inside a round
+    as its own lane — then back to the Keeper. This is the wiring the unit tests in
+    tests/infra/test_model_call_trace.py cannot see: `enable_tool_trace` installs the
+    sink, `RetryingLLM` (every production path) records through it."""
+    from agent import npc as npc_records
+    from agent.kp_tools_npc import NpcTools
+    from agent.loop import run_kp_turn
+    from agent.tools import Toolset
+    from infra.llm import assistant_tools, tool_call
+    from infra.llm_retry import RetryingLLM
+
+    path = tmp_path / "probe.jsonl"
+    try:
+        llm = RetryingLLM(
+            FakeLLM(
+                script=[
+                    assistant_tools(tool_call("speak_as_npc", npc="Ada", situation="asked the time")),
+                    assistant_text('{"dialogue": "Past noon.", "mood": "dry"}'),
+                    assistant_text("Ada answers."),
+                ]
+            )
+        )
+        services = build_services(Settings(locale="en"), llm=llm, embeddings=FakeEmbeddings(8))
+        # AFTER build_services: it (re)configures the probe from settings, and the default
+        # is off — the same lifecycle the sink follows.
+        enable_tool_trace(path)
+        await npc_records.create_npc(services.documents, CHAT, "Ada", persona="a clerk")
+        ctx = AgentCtx(chat_key=CHAT, user_id="kp", locale="en")
+
+        await run_kp_turn(ctx, services, Toolset(NpcTools(services)), "What time is it, Ada?")
+    finally:
+        enable_tool_trace(None)
+
+    rows = [r for r in _read(path) if r.get("tool") == "model_call"]
+    lanes = [(r["event"]["lane"], r["event"].get("round"), r.get("room")) for r in rows]
+    assert lanes == [("keeper", 1, CHAT), ("npc", None, CHAT), ("keeper", 2, CHAT)], lanes
+    assert rows[1]["event"]["npc"] == "ada"
+    assert all("ms" in r["event"] and r["event"]["attempts"] == 1 for r in rows)

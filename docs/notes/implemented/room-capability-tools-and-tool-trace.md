@@ -60,3 +60,5 @@
   (what the trace holds); `core/panels.py` (rendering semantics); `agent/npc.py`
   (`PlayerNameReservedError`); `gateway/commands.py` (`cmd_panel`, `cmd_cast`).
 - **Date:** 2026-08-19.
+
+- **Addendum 2026-08-21:** the same file now also carries one `tool: "model_call"` row per logical model call (lane, round, ms, attempts, prompt/cached tokens, error class) — see `docs/notes/implemented/model-call-probe-and-npc-concurrency.md`.

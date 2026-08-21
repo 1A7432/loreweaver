@@ -48,6 +48,7 @@ from core.documents import DocumentStore
 from infra.config import Settings
 from infra.i18n import I18n
 from infra.llm import LLMClient
+from infra.model_call_trace import lane_scope
 from infra.room_facets import STORAGE_DOCUMENTS, STORAGE_ROOM_STATE, RoomStateFacet
 from infra.store import Store
 from infra.usage_stats import record_usage_stats
@@ -335,11 +336,12 @@ class ModuleInitializer:
         last_error = ""
         for attempt in range(2):
             try:
-                result = await self.llm.chat(
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.3,
-                    model=model,
-                )
+                with lane_scope("authoring"):
+                    result = await self.llm.chat(
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.3,
+                        model=model,
+                    )
                 # A response consumed provider tokens even when its JSON is
                 # malformed, so account for usage before parsing it.
                 await record_usage_stats(

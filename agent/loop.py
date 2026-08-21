@@ -179,6 +179,7 @@ from core.skills import unlocked_tools_for
 from infra.i18n import t
 from infra.llm import CACHE_BREAKPOINT_KEY, ChatResult, Usage
 from infra.llm_errors import is_context_overflow, is_context_overflow_stop
+from infra.model_call_trace import lane_scope, set_lane_field
 from infra.usage_stats import record_context_overflow
 
 logger = logging.getLogger(__name__)
@@ -373,6 +374,42 @@ class KPTurnResult:
 
 
 async def run_kp_turn(
+    ctx: AgentCtx,
+    services: Services,
+    toolset: Toolset,
+    user_message: str,
+    *,
+    history_key: str | None = None,
+    user_record_id: str | None = None,
+    max_rounds: int = 12,
+    output_review: Callable[[str], str] | None = None,
+    on_reply_delta: Callable[[dict], Awaitable[None]] | None = None,
+    on_tool_event: Callable[[dict], Awaitable[None]] | None = None,
+) -> KPTurnResult:
+    """Drive one AI-KP turn to completion — see `_run_kp_turn_body` for the turn itself.
+
+    This shell only names the lane for the operator's model-call probe
+    (`infra.model_call_trace`): every call the body makes — rounds, finalizer, checks —
+    reports as the Keeper's, with the room and whether this is a nested companion turn;
+    the round index is stamped by the body as it advances. Actors voiced from inside a
+    round open their own scope and restore this one.
+    """
+    with lane_scope("keeper", chat_key=ctx.chat_key, nested=True if ctx.platform == "companion" else None):
+        return await _run_kp_turn_body(
+            ctx,
+            services,
+            toolset,
+            user_message,
+            history_key=history_key,
+            user_record_id=user_record_id,
+            max_rounds=max_rounds,
+            output_review=output_review,
+            on_reply_delta=on_reply_delta,
+            on_tool_event=on_tool_event,
+        )
+
+
+async def _run_kp_turn_body(
     ctx: AgentCtx,
     services: Services,
     toolset: Toolset,
@@ -630,6 +667,7 @@ async def run_kp_turn(
     while round_index < allowed_rounds:
         round_index += 1
         rounds = round_index
+        set_lane_field(round=round_index)
         if gate is not None:
             gate.begin_round()
         try:
@@ -1020,6 +1058,7 @@ async def _run_max_rounds_finalizer(
     ]
     if gate is not None:
         gate.begin_round()
+    set_lane_field(round="finalizer")
     try:
         result = await _chat_with_continuation_cleanup(
             services,
@@ -1360,6 +1399,7 @@ async def _run_turn_checks(
                 **_check_fields(check.id, reply, tool_trace, i18n),
             )
             convo = [*convo, {"role": "assistant", "content": reply}, {"role": "user", "content": instruction}]
+            set_lane_field(round="check")
             try:
                 result = await _chat_with_continuation_cleanup(
                     services,

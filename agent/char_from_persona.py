@@ -16,6 +16,7 @@ from core.charcard import CharacterCard
 from core.rulepacks import RulePack, load_rulepack
 from core.sheets import has_check_value, refresh_sheet, set_sheet_value, sheet_value
 from infra.i18n import t
+from infra.model_call_trace import lane_scope
 from infra.store import Store
 
 # Gendered-pronoun markers for the deterministic gender/pronoun inference below. English is matched on
@@ -101,13 +102,14 @@ async def _ask_concept(
 
     prompt = _render_prompt(services, card, template_name, module_context)
     try:
-        result = await llm.chat(
-            [
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": _persona_summary(card)},
-            ],
-            temperature=0,
-        )
+        with lane_scope("authoring"):
+            result = await llm.chat(
+                [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": _persona_summary(card)},
+                ],
+                temperature=0,
+            )
     except Exception:
         return {}
     return _parse_concept(getattr(result, "content", None))

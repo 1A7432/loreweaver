@@ -59,6 +59,7 @@ from core.documents import PLAYER_VIEWER, SCENE_ID
 from core.hooks import sanitize_ui_emissions
 from core.modvars import MODVARS_DOC_ID, MODVARS_DOC_TYPE, wire_entries
 from infra.llm import LLMClient
+from infra.model_call_trace import lane_scope
 from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
 
 if TYPE_CHECKING:
@@ -463,7 +464,8 @@ async def run_director(
     trackers, scene = await _player_context(services, ctx)
     prompt = _build_prompt(kit, beat, player_text, reply_text, trackers, scene)
     try:
-        result = await _director_llm(services).chat([{"role": "user", "content": prompt}])
+        with lane_scope("director", chat_key=ctx.chat_key):
+            result = await _director_llm(services).chat([{"role": "user", "content": prompt}])
     except Exception as exc:  # noqa: BLE001 — presentation must never break the table
         logger.debug("director: llm call failed: %s", exc)
         _trace(blocks=0, cues=0, prepared=0, image={"outcome": IMAGE_PROVIDER_FAILED})

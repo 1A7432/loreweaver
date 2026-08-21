@@ -25,6 +25,7 @@ from agent.card_text import build_card_text_renderer
 from agent.npc import NpcRecord
 from agent.services import Services
 from infra.i18n import I18n
+from infra.model_call_trace import lane_scope
 
 _CODE_FENCE_PREFIX_RE = re.compile(r"^```[a-zA-Z]*\s*")
 _CODE_FENCE_SUFFIX_RE = re.compile(r"\s*```$")
@@ -159,13 +160,14 @@ async def voice_npc(
     # Providers apply it only when the deployment runs with reasoning at all.
     if effort not in ("low", "medium", "high"):
         effort = "medium"
-    result = await services.llm.chat(
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ],
-        model=model,
-        reasoning_effort=effort,
+    with lane_scope("npc", chat_key=chat_key, npc=npc.id):
+        result = await services.llm.chat(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            model=model,
+            reasoning_effort=effort,
     )
 
     content = result.content or ""

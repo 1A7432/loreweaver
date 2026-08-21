@@ -85,6 +85,7 @@ from core.chronicle import (
 from core.documents import KEEPER_VIEWER, PLAYER_VIEWER, Document
 from infra.i18n import I18n
 from infra.llm import HISTORY_TURN_KEY
+from infra.model_call_trace import lane_scope
 from infra.room_facets import STORAGE_DOCUMENTS, STORAGE_ROOM_STATE, STORAGE_VECTORS, RoomStateFacet
 from infra.usage_stats import USAGE_STATS_KEY
 
@@ -515,7 +516,8 @@ async def _fold_batch(
                 ),
             },
         ]
-        result = await services.llm.chat(messages)
+        with lane_scope("fold", chat_key=chat_key):
+            result = await services.llm.chat(messages)
         text = (result.content or "").strip()
         if not text:
             return False

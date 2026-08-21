@@ -74,6 +74,7 @@ from core.documents import KEEPER_VIEWER
 from core.modvars import MODVARS_DOC_ID, MODVARS_DOC_TYPE, adjust_modvar, set_modvar, wire_entries
 from core.table_habits import HABITS_DOC_TYPE, HABITS_ID, observe
 from infra.llm import LLMClient
+from infra.model_call_trace import lane_scope
 from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
 
 logger = logging.getLogger(__name__)
@@ -383,7 +384,8 @@ async def run_scribe(
         reply=reply_text[:_MAX_TURN_TEXT],
     )
     try:
-        result = await _scribe_llm(services).chat([{"role": "user", "content": prompt}])
+        with lane_scope("scribe", chat_key=ctx.chat_key):
+            result = await _scribe_llm(services).chat([{"role": "user", "content": prompt}])
     except Exception as exc:  # noqa: BLE001 — bookkeeping must never break the table
         logger.debug("scribe: llm call failed: %s", exc)
         trace_event(SCRIBE_TRACE_KIND, {"outcome": "llm_failed"}, chat_key=ctx.chat_key)

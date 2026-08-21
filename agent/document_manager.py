@@ -43,6 +43,7 @@ from typing import Any
 from infra.embeddings import Embeddings
 from infra.i18n import I18n, t
 from infra.llm import LLMClient
+from infra.model_call_trace import lane_scope
 from infra.room_facets import DOCUMENT_VECTOR_LANE, STORAGE_VECTORS, RoomStateFacet
 from infra.vector import VectorStore
 
@@ -419,7 +420,8 @@ class VectorDatabaseManager:
             return self.i18n.t("document.answer.no_llm")
 
         prompt = self.i18n.t("document.answer.prompt", question=question, context=context)
-        result = await self.llm.chat([{"role": "user", "content": prompt}])
+        with lane_scope("authoring"):
+            result = await self.llm.chat([{"role": "user", "content": prompt}])
         return result.content or ""
 
 

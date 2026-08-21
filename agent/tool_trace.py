@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from infra import model_call_trace
 from infra.file_permissions import ensure_private_directory, restrict_file
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,17 @@ def enable_tool_trace(path: str | Path | None) -> None:
         except OSError:
             logger.warning("tool trace directory is unwritable; tracing off: %s", _TRACE_PATH, exc_info=True)
             _TRACE_PATH = None
+    # The per-model-call rows ride the same file (`tool: "model_call"`), so one reader
+    # serves tool calls, lane decisions and the calls that paid for them. Installed and
+    # removed together with the path: no trace, no sink, no cost.
+    model_call_trace.set_sink(_model_call_sink if _TRACE_PATH is not None else None)
+
+
+def _model_call_sink(payload: dict[str, Any]) -> None:
+    """`infra.model_call_trace` → one probe row. `chat_key` becomes the row's room column."""
+    row = dict(payload)
+    chat_key = str(row.pop("chat_key", "") or "")
+    trace_event("model_call", row, chat_key=chat_key)
 
 
 def tool_trace_enabled() -> bool:
