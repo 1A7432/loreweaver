@@ -93,9 +93,13 @@ at the site, and ``docs/defensive-patterns.md``):
  * Provider errors never crash a turn and never persist one; cancellation
    (``asyncio.CancelledError``) always releases continuation state before it
    propagates.
- * Tool calls in one round run concurrently ONLY when every one is
-   ``read_only`` — two writers racing on one document is a lost update, not a
-   speedup. ``speak_as_npc`` / ``companion_act`` are never read-only.
+ * Tool calls in one round run concurrently only inside a RUN of calls that
+   cannot touch the same document: ``read_only`` tools, and tools declaring
+   ``concurrent_by=<arg>`` whose keys differ (``speak_as_npc`` by ``npc``; its one
+   shared write, the intent note, takes a per-room lock). Any other writer is a
+   barrier, and ``companion_act`` — a nested turn — always is. Recording and
+   publishing stay in CALL order; only the execution overlaps
+   (``_concurrency_groups``, ``capture_npc_lines``).
  * The stream gate is fail-closed: text leaves for the client only once it can
    no longer become part of a machinery/MVU block; a tool round's draft is
    discarded; the final ``narrative`` frame is authoritative. Streaming the
@@ -145,7 +149,7 @@ from agent.chronicle import (
     maybe_fold_chronicle,
     summary_through_turn,
 )
-from agent.context import AgentCtx
+from agent.context import AgentCtx, capture_npc_lines
 from agent.history import (
     DEFAULT_HISTORY_KEY,
     abandon_message,
@@ -1164,28 +1168,39 @@ async def _dispatch_and_record(
     see `Toolset.dispatch`) is the room's set of unlocked gated-tool names; `None`/empty
     means no gated tool is callable.
 
-    Calls in one round run CONCURRENTLY when every one of them is flagged read-only, and
-    strictly serially otherwise. The flag has to be explicit (`@tool(read_only=True)`): a
-    tool's signature says nothing about whether it writes, and two writers racing on the
-    same document is a lost update, not a speedup. `speak_as_npc`/`companion_act` contain
-    nested model calls and are never read-only, so they stay serial by construction.
+    Calls in one round are split, IN ORDER, into runs that may overlap
+    (`_concurrency_groups`): a run holds only calls that cannot touch the same document —
+    tools flagged `read_only`, and tools declaring `concurrent_by=<arg>` whose keys differ
+    (an NPC's line is voiced from its own record alone, so two different NPCs are
+    independent; the same NPC twice is not). Both flags have to be explicit: a tool's
+    signature says nothing about whether it writes, and two writers racing on one document
+    is a lost update, not a speedup. Every other writer is a barrier between runs, and
+    `companion_act` (a nested turn) always is. A run of one dispatches serially, with the
+    initiative de-duplication that only makes sense in call order. Recording and publishing
+    happen in CALL order for every run, so the trace, the conversation and the room see the
+    same sequence the model issued; only the execution overlapped. Each concurrent call's
+    NPC lines are captured per task (`capture_npc_lines`) so they stay bound to that call.
     """
     for call in result.tool_calls:
         call.arguments = _normalize_tool_arguments(call.name, call.arguments)
     conversation.append(_assistant_tool_call_message(result))
-    if len(result.tool_calls) > 1 and all(toolset.is_read_only(call.name) for call in result.tool_calls):
-        results = await asyncio.gather(
-            *(
-                _dispatch_one(toolset, ctx, services, call, tool_trace, unlocked, phase, capabilities, room_pack, hook_engine)
-                for call in result.tool_calls
+    for group in _concurrency_groups(toolset, result.tool_calls):
+        if len(group) > 1:
+            outcomes = await asyncio.gather(
+                *(
+                    _dispatch_captured(
+                        toolset, ctx, services, call, tool_trace, unlocked, phase, capabilities, room_pack, hook_engine
+                    )
+                    for call in group
+                )
             )
-        )
-        for call, (tool_result, suppressed) in zip(result.tool_calls, results, strict=True):
-            entry = _record_call(toolset, ctx, call, tool_result, suppressed, conversation, tool_trace)
-            await _announce_tool_event(on_tool_event, entry)
-        _move_in_turn_breakpoint(conversation)
-        return
-    for call in result.tool_calls:
+            for call, (tool_result, suppressed, lines) in zip(group, outcomes, strict=True):
+                entry = _record_call(
+                    toolset, ctx, call, tool_result, suppressed, conversation, tool_trace, npc_lines=lines
+                )
+                await _announce_tool_event(on_tool_event, entry)
+            continue
+        call = group[0]
         duplicate_initiative_next = (
             call.name == "initiative_tracker"
             and (call.arguments or {}).get("action") == "next"
@@ -1206,6 +1221,62 @@ async def _dispatch_and_record(
         entry = _record_call(toolset, ctx, call, tool_result, suppressed, conversation, tool_trace)
         await _announce_tool_event(on_tool_event, entry)
     _move_in_turn_breakpoint(conversation)
+
+
+def _concurrency_groups(toolset: Toolset, calls: list) -> list[list]:
+    """Split one round's calls, in order, into runs whose members may execute together.
+
+    A call joins the current run when it is `read_only`, or when it carries a
+    `concurrency_key` nobody in the run has; a call with a key the run already holds
+    starts a new run; a call with neither (a plain writer, an unknown tool, a nested turn)
+    is a run of its own and a barrier for what follows. Order within and across runs is
+    the model's call order — the caller records in that order too.
+    """
+    groups: list[list] = []
+    current: list = []
+    keys: set[tuple[str, str]] = set()
+    for call in calls:
+        independent = toolset.is_read_only(call.name)
+        key = None if independent else toolset.concurrency_key(call.name, call.arguments)
+        if not independent and key is None:
+            if current:
+                groups.append(current)
+                current, keys = [], set()
+            groups.append([call])
+            continue
+        if key is not None and key in keys:
+            groups.append(current)
+            current, keys = [], set()
+        current.append(call)
+        if key is not None:
+            keys.add(key)
+    if current:
+        groups.append(current)
+    return groups
+
+
+async def _dispatch_captured(
+    toolset: Toolset,
+    ctx: AgentCtx,
+    services: Services,
+    call,
+    tool_trace: list[dict],
+    unlocked: set[str] | None,
+    phase: str | None,
+    capabilities: set[str] | None,
+    room_pack: RulePack | None,
+    hook_engine,
+) -> tuple[str, bool, list[dict[str, str]]]:
+    """`_dispatch_one` for a concurrent run: the NPC lines it emits come back WITH its
+    result instead of landing in the shared `ctx.npc_lines`, where the first call recorded
+    would otherwise consume every concurrent sibling's lines as its own. Dice payloads are
+    NOT captured: nothing eligible for a concurrent run rolls (readers by definition, voices
+    by the actor's own rule) — a keyed tool that ever does must capture them the same way."""
+    with capture_npc_lines() as lines:
+        tool_result, suppressed = await _dispatch_one(
+            toolset, ctx, services, call, tool_trace, unlocked, phase, capabilities, room_pack, hook_engine
+        )
+    return tool_result, suppressed, lines
 
 
 async def _dispatch_one(
@@ -1285,8 +1356,14 @@ def _record_call(
     suppressed: bool,
     conversation: list[dict],
     tool_trace: list[dict],
+    *,
+    npc_lines: list[dict[str, str]] | None = None,
 ) -> dict:
-    """Append one dispatched call to the trace and the conversation; return the entry."""
+    """Append one dispatched call to the trace and the conversation; return the entry.
+
+    `npc_lines` are the lines a CONCURRENT call captured for itself; they go first, then
+    whatever reached the shared buffer (a serial call's lines, or anything emitted outside
+    a capture scope), so nothing is lost and nothing is attributed twice."""
     tool_result = _capped_tool_result(tool_result, ctx.locale)
     trace_entry = {
         "name": call.name,
@@ -1299,7 +1376,7 @@ def _record_call(
     dice_payloads = ctx.consume_dice()
     if dice_payloads:
         trace_entry["dice_payloads"] = dice_payloads
-    npc_lines = ctx.consume_npc_lines()
+    npc_lines = [*(npc_lines or []), *ctx.consume_npc_lines()]
     if npc_lines:
         # Capped like the result string it used to ride in: an NPC line reaches the
         # wire and the replay lane, so an over-long one is cut the same way.

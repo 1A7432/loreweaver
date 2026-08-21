@@ -9,13 +9,36 @@ in the rest of the stack.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Generator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
+
+
+# Per-task capture for `AgentCtx.emit_npc_line`. `AgentCtx` is shared by every tool call in
+# a turn; when the loop runs two NPC calls CONCURRENTLY (`agent.loop._dispatch_and_record`,
+# `concurrent_by`), their lines would interleave in one list and the first call recorded
+# would consume both. Each gathered task copies the context, sets its own list here, and
+# hands it back with its result — lines stay bound to the call that spoke them.
+_NPC_LINE_CAPTURE: contextvars.ContextVar[list[dict[str, str]] | None] = contextvars.ContextVar(
+    "npc_line_capture", default=None
+)
+
+
+@contextlib.contextmanager
+def capture_npc_lines() -> Generator[list[dict[str, str]], None, None]:
+    """Route this task's `emit_npc_line` calls into the yielded list until the block ends."""
+    lines: list[dict[str, str]] = []
+    token = _NPC_LINE_CAPTURE.set(lines)
+    try:
+        yield lines
+    finally:
+        _NPC_LINE_CAPTURE.reset(token)
 
 
 @dataclass
@@ -72,8 +95,11 @@ class AgentCtx:
         The same structural channel dice use: the room's `npc` narrative frame is built
         from what a tool EMITTED here, never re-read off the tool's return string, so a
         hook's refusal, an unknown-NPC error or a gated-tool notice can never become an
-        NPC's line (`gateway.turn._npc_events`)."""
-        self.npc_lines.append({"name": str(name), "text": str(text)})
+        NPC's line (`gateway.turn._npc_events`). Inside `capture_npc_lines()` the line
+        goes to that task's private list instead, so two NPC calls voiced concurrently in
+        one round each keep their own lines."""
+        sink = _NPC_LINE_CAPTURE.get()
+        (sink if sink is not None else self.npc_lines).append({"name": str(name), "text": str(text)})
 
     def consume_npc_lines(self) -> list[dict[str, str]]:
         """Return and clear every buffered NPC line in emission order."""

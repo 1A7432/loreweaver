@@ -321,3 +321,149 @@ def test_tool_trace_file_is_private_from_its_very_first_byte(tmp_path, monkeypat
         assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
     finally:
         enable_tool_trace(None)
+
+
+# ---------------------------------------------------------------------------
+# Keyed concurrency: calls that cannot touch the same document overlap (2026-08-21)
+# ---------------------------------------------------------------------------
+
+
+class _Cast:
+    """Two voices keyed by `npc` (one slow), and one shared ledger that writes."""
+
+    def __init__(self) -> None:
+        self.order: list[str] = []
+        self.active = 0
+        self.max_active = 0
+
+    @tool(concurrent_by="npc")
+    async def speak(self, ctx: AgentCtx, npc: str) -> str:
+        """Voice one NPC."""
+        import asyncio
+
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        await asyncio.sleep(0.03 if npc == "slow" else 0.0)
+        ctx.emit_npc_line(npc, f"{npc} speaks")
+        self.order.append(npc)
+        self.active -= 1
+        return f"{npc} spoke"
+
+    @tool
+    async def ledger(self, ctx: AgentCtx, value: str) -> str:
+        """Write the shared ledger."""
+        self.order.append(f"ledger:{value}")
+        return "ok"
+
+
+async def test_two_voices_with_different_subjects_overlap_and_keep_their_own_lines():
+    """run-3: three NPC lines in one round ran serially — 38s each — because the tool
+    writes and so could never be read-only. Voices of DIFFERENT NPCs touch different
+    records, so they may overlap; and each call's emitted line must stay ITS line even
+    though both wrote into one `AgentCtx` at once."""
+    cast = _Cast()
+    llm = FakeLLM(
+        script=[assistant_tools(tool_call("speak", npc="slow"), tool_call("speak", npc="fast")), assistant_text("Scene.")]
+    )
+    result = await run_kp_turn(_ctx(), _services(llm), Toolset(cast), "Both talk.")
+
+    assert cast.max_active == 2, "the two voices ran at the same time"
+    assert cast.order == ["fast", "slow"], "the fast one finished first — they overlapped"
+    entries = [e for e in result.tool_trace if e["name"] == "speak"]
+    assert [e["arguments"]["npc"] for e in entries] == ["slow", "fast"], "recorded in CALL order, not finish order"
+    assert [[line["name"] for line in e["npc_lines"]] for e in entries] == [["slow"], ["fast"]], (
+        "each call keeps the line IT emitted, even though the fast one spoke first"
+    )
+    assert [e["result"] for e in entries] == ["slow spoke", "fast spoke"]
+
+
+async def test_the_same_subject_twice_stays_serial():
+    cast = _Cast()
+    llm = FakeLLM(script=[assistant_tools(tool_call("speak", npc="slow"), tool_call("speak", npc="slow")), assistant_text("x")])
+    await run_kp_turn(_ctx(), _services(llm), Toolset(cast), "Twice.")
+    assert cast.max_active == 1, "one NPC's two lines share its record — they do not overlap"
+
+
+async def test_a_writer_is_a_barrier_between_runs():
+    cast = _Cast()
+    llm = FakeLLM(
+        script=[
+            assistant_tools(tool_call("speak", npc="slow"), tool_call("ledger", value="1"), tool_call("speak", npc="fast")),
+            assistant_text("x"),
+        ]
+    )
+    await run_kp_turn(_ctx(), _services(llm), Toolset(cast), "Speak, write, speak.")
+    assert cast.order == ["slow", "ledger:1", "fast"], "the writer waited for the voice before it, and the voice after waited for the writer"
+    assert cast.max_active == 1
+
+
+async def test_a_writer_after_two_voices_waits_for_both():
+    cast = _Cast()
+    llm = FakeLLM(
+        script=[
+            assistant_tools(tool_call("speak", npc="slow"), tool_call("speak", npc="fast"), tool_call("ledger", value="1")),
+            assistant_text("x"),
+        ]
+    )
+    await run_kp_turn(_ctx(), _services(llm), Toolset(cast), "Speak twice, then write.")
+    assert cast.order == ["fast", "slow", "ledger:1"]
+    assert cast.max_active == 2
+
+
+def test_the_runs_are_cut_in_call_order_by_independence():
+    """The grouping rule itself: readers and distinct-keyed voices share a run; a repeated
+    key starts a new run; a plain writer (or an unknown tool) is a run of its own."""
+    from agent.loop import _concurrency_groups
+
+    toolset = Toolset(_Provider(), _Cast())
+    calls = [
+        tool_call("read_a"),
+        tool_call("speak", npc="A"),
+        tool_call("speak", npc="B"),
+        tool_call("speak", npc="a"),  # same subject as "A" (case-folded) → new run
+        tool_call("ledger", value="1"),  # writer → barrier
+        tool_call("speak", npc="C"),
+        tool_call("read_b"),
+        tool_call("unknown_tool"),  # never heard of → serial
+    ]
+    groups = [[c.name + ":" + str((c.arguments or {}).get("npc", "")) for c in g] for g in _concurrency_groups(toolset, calls)]
+    assert groups == [
+        ["read_a:", "speak:A", "speak:B"],
+        ["speak:a"],
+        ["ledger:"],
+        ["speak:C", "read_b:"],
+        ["unknown_tool:"],
+    ]
+
+
+def test_the_key_is_the_subject_and_only_a_declared_flag_mints_one():
+    toolset = Toolset(_Provider(), _Cast())
+    assert toolset.concurrency_key("speak", {"npc": " Lao Kuai "}) == ("subject", "lao kuai")
+    assert toolset.concurrency_key("speak", {"npc": ""}) is None, "an empty subject is serial"
+    assert toolset.concurrency_key("speak", {}) is None
+    assert toolset.concurrency_key("ledger", {"value": "x"}) is None, "no flag, no key"
+    assert toolset.concurrency_key("read_a", {}) is None, "readers are independent through is_read_only, not a key"
+    assert toolset.concurrency_key("nope", {"npc": "x"}) is None
+
+
+async def test_two_intents_parked_at_once_both_survive():
+    """The one thing `speak_as_npc` WRITES — the keeper's `npc_intents` staging note — is a
+    read-modify-write on a document every NPC shares. Concurrent voices made that a lost
+    update; the per-room lock in `agent.kp_tools_npc` is what lets the voices overlap."""
+    import asyncio
+
+    from agent.kp_tools_npc import NpcTools
+
+    services = _services(FakeLLM(script=[]))
+    tools = NpcTools(services)
+    i18n = services.i18n
+    await asyncio.gather(
+        tools._park_action_intent(i18n, "intent-room", "A", "slip out the back"),
+        tools._park_action_intent(i18n, "intent-room", "B", "stall them at the door"),
+        tools._park_action_intent(i18n, "intent-room", "C", "signal the guards"),
+    )
+    doc = await services.documents.get("intent-room", "note", "npc_intents")
+    assert doc is not None
+    texts = " ".join(str(entry.get("content", "")) for entry in doc.data["content"])
+    assert all(who in texts for who in ("A", "B", "C")), texts
+    assert len(doc.data["content"]) == 3

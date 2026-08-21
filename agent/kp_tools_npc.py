@@ -29,6 +29,7 @@ of their own (same convention `core.character_manager`/`agent.kp_tools_knowledge
 
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import datetime
 from typing import Any
@@ -63,6 +64,18 @@ _TRUTHY_STRINGS = {"true", "1", "yes", "y", "on"}
 # write cannot grow one document without bound over a long campaign.
 _INTENT_NOTE_CATEGORY = "npc_intents"
 _INTENT_NOTE_KEEP = 20
+# `speak_as_npc` may run concurrently with ANOTHER NPC's line in the same round (the loop's
+# `concurrent_by="npc"` lane): the voices are independent, but this one staging note is
+# shared by every NPC in the room, and its write is a read-modify-write. One lock per room
+# keeps two parked intents from each reading the same list and the last one winning.
+_INTENT_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _intent_lock(chat_key: str) -> asyncio.Lock:
+    lock = _INTENT_LOCKS.get(chat_key)
+    if lock is None:
+        lock = _INTENT_LOCKS[chat_key] = asyncio.Lock()
+    return lock
 
 
 def _split_knowledge(text: str) -> list[str]:
@@ -392,27 +405,28 @@ class NpcTools:
         `kp_note('list', ...)`. Best-effort: the NPC's line already succeeded, and losing a
         staging note must never turn into a failed performance.
         """
-        try:
-            documents = self._services.documents
-            doc = await documents.get(chat_key, "note", _INTENT_NOTE_CATEGORY)
-            stored = doc.data.get("content") if doc is not None else None
-            entries = list(stored) if isinstance(stored, list) else []
-            entries.append(
-                {
-                    "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    "content": i18n.t("npc.tools.speak.intent_note", name=name, action_intent=action_intent),
-                }
-            )
-            await documents.put(
-                chat_key,
-                "note",
-                _INTENT_NOTE_CATEGORY,
-                {"category": _INTENT_NOTE_CATEGORY, "content": entries[-_INTENT_NOTE_KEEP:]},
-            )
-        except Exception:
-            pass  # best-effort keeper-side staging note only -- see the docstring above
+        async with _intent_lock(chat_key):
+            try:
+                documents = self._services.documents
+                doc = await documents.get(chat_key, "note", _INTENT_NOTE_CATEGORY)
+                stored = doc.data.get("content") if doc is not None else None
+                entries = list(stored) if isinstance(stored, list) else []
+                entries.append(
+                    {
+                        "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "content": i18n.t("npc.tools.speak.intent_note", name=name, action_intent=action_intent),
+                    }
+                )
+                await documents.put(
+                    chat_key,
+                    "note",
+                    _INTENT_NOTE_CATEGORY,
+                    {"category": _INTENT_NOTE_CATEGORY, "content": entries[-_INTENT_NOTE_KEEP:]},
+                )
+            except Exception:
+                pass  # best-effort keeper-side staging note only -- see the docstring above
 
-    @tool
+    @tool(concurrent_by="npc")
     async def speak_as_npc(
         self,
         ctx: AgentCtx,

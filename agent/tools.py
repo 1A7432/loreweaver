@@ -73,6 +73,7 @@ class ToolMeta:
     read_only: bool
     needs: str
     param_descriptions: dict[str, str]
+    concurrent_by: str = ""
     _schema: dict[str, Any] | None = field(default=None, init=False, repr=False, compare=False)
 
     def schema(self) -> dict[str, Any]:
@@ -92,6 +93,7 @@ def tool(
     prep_only: bool = False,
     read_only: bool = False,
     needs: str = "",
+    concurrent_by: str = "",
     params: dict[str, str] | None = None,
 ):
     """Mark an async method as an AI-KP tool. Schema is generated from type hints + docstring.
@@ -150,6 +152,7 @@ def tool(
             read_only=read_only,
             needs=needs,
             param_descriptions=dict(params or {}),
+            concurrent_by=concurrent_by,
         )
         return func
 
@@ -234,6 +237,26 @@ class Toolset:
         else that has not opted in."""
         entry = self._entries.get(name)
         return entry.meta.read_only if entry is not None else False
+
+    def concurrency_key(self, name: str, arguments: dict | None) -> tuple[str, str] | None:
+        """The independence key of ONE call, or `None` for "dispatch serially".
+
+        A tool that declared `@tool(concurrent_by="<arg>")` promises that two calls naming
+        DIFFERENT values of that argument touch different documents (each NPC's line is
+        voiced from its own record), so they may overlap; two calls naming the SAME value
+        collide and stay serial. Unknown tools, tools without the flag, and calls that
+        leave the keying argument empty are `None` — serial, like everything that has not
+        opted in. The key is the subject alone, not (tool, subject): two different keyed
+        tools naming one subject serialize too, which costs a little overlap and never a
+        lost update.
+        """
+        entry = self._entries.get(name)
+        if entry is None or not entry.meta.concurrent_by:
+            return None
+        value = (arguments or {}).get(entry.meta.concurrent_by)
+        if value is None or not str(value).strip():
+            return None
+        return ("subject", str(value).strip().casefold())
 
     async def dispatch(
         self,
