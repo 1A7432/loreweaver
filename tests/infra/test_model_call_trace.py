@@ -79,18 +79,27 @@ async def test_retries_are_one_logical_call_with_the_attempt_count(rows):
     assert rows[0]["attempts"] == 3 and rows[0]["lane"] == "scribe"
 
 
-async def test_a_terminal_failure_is_recorded_with_the_error_class(rows):
-    class Forbidden(RuntimeError):
-        status_code = 403
+async def test_a_terminal_failure_is_recorded_by_class_and_status_never_by_text(rows):
+    """A provider's 401/403 body routinely quotes the key it rejected. The row keeps what
+    an operator needs to attribute the failure — the exception class and the HTTP status —
+    and nothing of the message, so the probe file never becomes a second place a
+    credential lives."""
+
+    class Unauthorized(RuntimeError):
+        status_code = 401
 
     def responder(messages, tools):
-        raise Forbidden("no")
+        raise Unauthorized("Incorrect API key provided: sk-live-ABCDEF0123456789")
 
     llm = RetryingLLM(FakeLLM(responder=responder), sleep=_no_sleep)
-    with trace.lane_scope("director"), pytest.raises(Forbidden):
+    with trace.lane_scope("director"), pytest.raises(Unauthorized):
         await llm.chat([{"role": "user", "content": "x"}])
 
-    assert rows[0]["error"] == "Forbidden" and rows[0]["attempts"] == 1 and rows[0]["lane"] == "director"
+    row = rows[0]
+    assert row["error"] == "Unauthorized" and row["status"] == 401
+    assert row["attempts"] == 1 and row["lane"] == "director"
+    assert "error_text" not in row
+    assert "sk-live" not in repr(row), "the message text — and the key in it — never reaches the row"
 
 
 async def test_nested_scopes_restore_the_outer_lane(rows):

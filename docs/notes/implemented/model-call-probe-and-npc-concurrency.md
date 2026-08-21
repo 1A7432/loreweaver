@@ -19,7 +19,7 @@
   path passes through: lane, room, round (the Keeper's, stamped as the loop advances —
   `finalizer` / `check` for the two other Keeper calls), wall-clock ms including retry
   sleeps, attempts, model, the provider's prompt / completion / cached token counts, and
-  the error class when the call died. `agent.tool_trace` installs the sink with the tool
+  the error class and HTTP status when the call died — never the message text, which a provider's 401/403 routinely fills with the credential it rejected. `agent.tool_trace` installs the sink with the tool
   probe (`tool: "model_call"`, same file, same reader); no trace, no sink, no cost.
   Concurrency: `@tool(concurrent_by="npc")` declares that two calls naming DIFFERENT
   values of that argument touch different documents; `_dispatch_and_record` splits a

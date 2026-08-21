@@ -83,8 +83,14 @@ def record_model_call(
     usage: Any = None,
     model: str = "",
     error: BaseException | None = None,
+    status: int | None = None,
 ) -> None:
-    """Hand one finished logical call to the sink. Never raises; free when no sink."""
+    """Hand one finished logical call to the sink. Never raises; free when no sink.
+
+    A failed call records its exception CLASS and the HTTP `status` the caller read off it
+    — never the message text. A provider's 401/403 body routinely quotes the credential
+    it rejected, and the probe file, 0600 or not, is the wrong place for a key to land.
+    """
     if _SINK is None:
         return
     payload: dict[str, Any] = dict(_LANE.get() or {}) or {"lane": ""}
@@ -101,7 +107,8 @@ def record_model_call(
             payload["estimated"] = True
     if error is not None:
         payload["error"] = type(error).__name__
-        payload["error_text"] = str(error)[:200]
+        if status is not None:
+            payload["status"] = int(status)
     try:
         _SINK(payload)
     except Exception:  # noqa: BLE001 — the probe must never cost the call that fed it

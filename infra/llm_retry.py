@@ -257,6 +257,7 @@ class RetryingLLM:
                         attempts=attempt,
                         model=model or "",
                         error=error,
+                        status=status_of(error),
                     )
                     raise
                 delay = backoff_delay(attempt, rand=self._rand)
