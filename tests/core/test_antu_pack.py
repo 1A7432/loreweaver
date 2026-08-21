@@ -183,7 +183,15 @@ def test_crossing_day_hour_clean_march():
     engine = _engine(column_state="marching", mobile_count=800, timber_stock=12, gate_column=True, day=155)
     out = _march(engine, [8, 9, 10, 4, 3, 9, 8, 10])  # s=6, o=0 → 齐速
     w = _writes(out)
-    assert w == {"march_hour": 1, "crossed_count": 6 * 25 + 25, "taken_count": 0, "belt_load": 0}
+    # v0.2.4: the first marching hour also snapshots the DEPARTURE base — the ending
+    # judgement reads that, never the draining `mobile_count`.
+    assert w == {
+        "march_hour": 1,
+        "crossed_count": 6 * 25 + 25,
+        "taken_count": 0,
+        "belt_load": 0,
+        "march_mobile": 800,
+    }
     hour = next(p for p in out.panel_events if p["payload"]["kind"] == "hour")["payload"]
     assert hour["rank"] == "qisu" and hour["phase"] == "day" and hour["blood_arc"] is False
 
@@ -227,6 +235,43 @@ def test_no_bookkeeping_outside_the_march():
     assert _march(done, [8, 8, 8]).writes == []
 
 
+def _face_text(faces):
+    return f"🎲 {len(faces)}d10>=6 = [{', '.join(str(f) for f in faces)}] = {sum(1 for f in faces if f >= 6)}"
+
+
+def _run_to_done(engine, faces) -> str:
+    """March hour after hour until the hooks close the column; return the verdict written."""
+    verdict = ""
+    for _ in range(12):
+        writes = _writes(engine.fire("dice_rolled", {"rolls": [{"tool": "roll_dice", "result": _face_text(faces)}]}))
+        verdict = writes.get("column_ending", verdict)
+        if writes.get("column_state") == "done":
+            break
+    return verdict
+
+
+def test_the_ending_reads_the_departure_base_not_just_the_ratio():
+    """《安土》 v0.2.4. The judgement used to be ratio-only, so run-3's fourteen souls
+    crossing to a man scored the same word as six hundred marching out — while 3186 of a
+    3200-soul city stayed. CANON draws the blood line at 600 and the procession line at
+    800; the verdict now actually spends the first of them."""
+    # Fourteen souls, all of them across: the ratio is perfect, the base is not there.
+    small = _engine(column_state="marching", mobile_count=14, timber_stock=0, gate_column=False, day=157)
+    assert _run_to_done(small, [10]) == "xianxing"
+    # ...and the verdict reaches the keeper exactly once, through the whisper channel.
+    first = _writes(small.fire("turn_start", {}))
+    assert first.get("column_ending") == "none"
+    assert _writes(small.fire("turn_start", {})).get("column_ending") is None
+
+    # Six hundred out, most of them across: ratio AND base — the word the module means.
+    big = _engine(column_state="marching", mobile_count=600, timber_stock=12, gate_column=True, day=157)
+    assert _run_to_done(big, [10, 10, 10, 10, 10, 10]) == "chengxing"
+
+    # And a column that could not get six in ten across is still the blood arc, base or no.
+    bloody = _engine(column_state="marching", mobile_count=900, timber_stock=12, gate_column=True, day=157)
+    assert _run_to_done(bloody, [1, 1, 1, 1, 1, 1, 1, 1]) == "xuehu"
+
+
 def test_root_band_boundaries():
     src = (SRC / "rulepacks/coc7-antu.yaml").read_text(encoding="utf-8")
     pack = parse_rulepack_text("coc7-antu", src, base_loader=load_raw_rulepack_yaml)
@@ -237,7 +282,7 @@ def test_root_band_boundaries():
 
 def test_variables_match_the_canon_gate_table():
     variables = {v["id"]: v for v in _card()["variables"]}
-    assert len(variables) == 33
+    assert len(variables) == 35
     for gate in ("gate_truth", "gate_window", "gate_column"):
         assert variables[gate]["kind"] == "bool" and variables[gate]["visibility"] == "player"
     assert variables["window_state"]["options"] == ["waiting", "open", "missed"]
@@ -249,7 +294,10 @@ def test_variables_match_the_canon_gate_table():
                           "therm_shenju", "therm_licheng", "therm_fougen", "therm_qianjing", "therm_yujia", "therm_minqing",
                           # v0.2.2: the hooks' own keeper-side scratch — the clock-jump whisper ledger
                           # and the forming-stall counter. Whisper state, never panel-bound.
-                          "clock_jump_notice", "forming_turns"}
+                          "clock_jump_notice", "forming_turns",
+                          # v0.2.4: the departure base the ending is judged against, and the
+                          # verdict itself, whispered once at the next turn_start.
+                          "march_mobile", "column_ending"}
 
 
 def test_authoring_sources_are_in_sync():
