@@ -28,6 +28,6 @@
   still close the connection.
 - **Reason:** the documented join fatals have to be distinguishable from a
   dropped socket, and a default-carrier close has to actually stop accepting.
-- **Rule home:** `docs/defensive-patterns.md` entry 7; `net/iroh_server.py`
-  (`close`, `_authenticate`, `_close_transport`).
+- **Rule home:** `net/iroh_server.py` (`close`, `_authenticate`,
+  `_close_transport`).
 - **Date:** 2026-08-22.
