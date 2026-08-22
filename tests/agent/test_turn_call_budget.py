@@ -23,7 +23,6 @@ Everything here is offline: `FakeLLM` + `FakeEmbeddings`, no network, no keys.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 
@@ -119,17 +118,10 @@ async def _room(services, hub: RoomHub, chat_key: str, *, companions: int):
 
 
 async def _drain_scribe_tasks() -> None:
-    """Await the fire-and-forget Scribe tasks `run_turn` spawned."""
-    import gateway.turn as turn_module
+    """Await the fire-and-forget Scribe chain `run_turn` scheduled."""
+    from agent.scribe_coord import scribe_runtime
 
-    for _ in range(20):
-        tasks = [task for task in turn_module._SCRIBE_TASKS if not task.done()]
-        if not tasks:
-            await asyncio.sleep(0)
-            if not [task for task in turn_module._SCRIBE_TASKS if not task.done()]:
-                return
-            continue
-        await asyncio.gather(*tasks, return_exceptions=True)
+    await scribe_runtime.await_all()
 
 
 # ---------------------------------------------------------------------------

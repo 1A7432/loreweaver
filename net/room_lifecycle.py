@@ -32,6 +32,7 @@ FACET_MODULES: tuple[str, ...] = (
     "agent.kp_tools_mechanics",
     "agent.npc",
     "agent.scribe",
+    "agent.scribe_coord",
     "agent.services",
     "agent.stage_director",
     "agent.tool_phase",

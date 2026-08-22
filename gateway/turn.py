@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 
 from agent.context import AgentCtx
 from agent.loop import KPTurnResult, run_kp_turn
+from agent.scribe_coord import ScribeEpoch, refresh_latest_snapshot
 from gateway.hub import Event
 from gateway.ops import is_bot_enabled, room_content_unfiltered
 from gateway.panels import deliver_panel_events
@@ -52,9 +53,9 @@ if TYPE_CHECKING:
     from gateway.hub import Member, RoomHub
     from gateway.ops import Censor
 
-# Strong refs to in-flight post-turn scribe tasks (fire-and-forget asyncio tasks
-# are garbage-collected mid-run without one).
-_SCRIBE_TASKS: set[asyncio.Task] = set()
+# Strong refs used to live here as a GC keep-alive. The per-room coordinator
+# (`agent.scribe_coord`) now owns the chain — tests and playtest drain through
+# `scribe_runtime.await_idle`.
 
 
 async def run_turn(
@@ -378,17 +379,27 @@ async def run_turn(
     # times off the same narrated fact, and drained the keeper whisper channel
     # into its own sub-turns. The PLAYER turn's pass already sees the whole
     # exchange — the companions' beats are part of what it reads.
-    if result is not None:
-        task = asyncio.create_task(run_scribe_pass(hub, services, ctx, text, result))
-        _SCRIBE_TASKS.add(task)
-        task.add_done_callback(_SCRIBE_TASKS.discard)
+    if result is not None and ctx.platform != "companion" and services.settings.scribe.enabled:
+        from agent.scribe_coord import scribe_runtime
+
+        epoch = scribe_runtime.capture_epoch(ctx.chat_key)
+        scribe_runtime.schedule(
+            ctx.chat_key,
+            lambda: run_scribe_pass(hub, services, ctx, text, result, snapshot_epoch=epoch),
+        )
 
     await publish_state(hub, services, ctx)
     return result
 
 
 async def run_scribe_pass(
-    hub: RoomHub | None, services: Services, ctx: AgentCtx, text: str, result: KPTurnResult
+    hub: RoomHub | None,
+    services: Services,
+    ctx: AgentCtx,
+    text: str,
+    result: KPTurnResult,
+    *,
+    snapshot_epoch: ScribeEpoch | None = None,
 ) -> None:
     """One post-turn Scribe pass — the SAME pass on every channel that runs real turns.
 
@@ -420,17 +431,22 @@ async def run_scribe_pass(
         # (and after any companion sub-turns), so the counter has moved on. See
         # `KPTurnResult.turn` / `agent.chronicle.record_entry`.
         outcome = await run_scribe(services, ctx, text, result.reply, names, result.turn)
-        if hub is None:
-            return
-        if outcome.changed:
-            await publish_state(hub, services, ctx)
-        if outcome.beat and services.settings.director.enabled:
-            # The Director receives the PLAYER-VISIBLE turn — what was broadcast —
-            # plus the beat KIND. Nothing keeper-side crosses this call; that is the
-            # whole isolation contract (tests/architecture).
-            from agent.stage_director import run_director
+        if hub is not None:
+            if outcome.changed:
+                await publish_state(hub, services, ctx)
+            if outcome.beat and services.settings.director.enabled:
+                # The Director receives the PLAYER-VISIBLE turn — what was broadcast —
+                # plus the beat KIND. Nothing keeper-side crosses this call; that is
+                # the whole isolation contract (tests/architecture).
+                from agent.stage_director import run_director
 
-            await run_director(services, ctx, text, result.reply, beat=outcome.beat, hub=hub)
+                await run_director(services, ctx, text, result.reply, beat=outcome.beat, hub=hub)
+        # Refresh the LATEST boundary (current chronicle turn), not `result.turn`:
+        # companion sub-turns have already photographed the later indexes. Skip
+        # when a later external turn has begun assembling its prompt.
+        await refresh_latest_snapshot(services, ctx.chat_key, epoch=snapshot_epoch)
+    except asyncio.CancelledError:
+        raise
     except Exception:  # noqa: BLE001 — bookkeeping must never break the table
         logging.getLogger(__name__).debug("scribe pass failed", exc_info=True)
 

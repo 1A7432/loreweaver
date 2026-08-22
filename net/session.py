@@ -1014,6 +1014,9 @@ class SessionCore:
             # Serialize the WHOLE turn per room (F8): two connections in the same room must not
             # interleave their read-modify-write of the shared per-room state. `run_turn` publishes
             # a companion sub-turn inline (re-entering `run_turn`, not this choke), so no re-lock.
+            # The previous turn's Scribe is awaited at `run_kp_turn` (prompt assembly), not
+            # here: this choke also admits `.undo` / reset / import, which cancel-and-drain
+            # the chain at their mutation entries (`agent.undo.restore`, `net.room_backup`).
             lock = self.hub.turn_lock(member.session_key)
             if lock.locked():
                 notify_turn_queued(member, i18n)
