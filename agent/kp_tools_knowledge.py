@@ -944,6 +944,12 @@ class DocumentTools(_KnowledgeToolsBase):
             chat_key = ctx.chat_key
             await _emit(progress, "read", str(len(text_content)))
             await _emit(progress, "embed")
+            # Progress emit is preflight (it may await). Last reauth success
+            # immediately before store_document is the linearization point.
+            from infra.live_auth import ctx_still_authorized
+
+            if not await ctx_still_authorized(ctx):
+                return i18n.t("rooms.denied")
             chunk_count = await self._services.vector_db.store_document(
                 document_id=str(uuid.uuid4()),
                 filename=filename,

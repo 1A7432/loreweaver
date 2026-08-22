@@ -187,7 +187,13 @@ async def test_reset_zh_alias_and_scope_words(tmp_path):
     router = CommandRouter(services)
     chat_key = "tui:group:room-2"
     await _seed_room(services, chat_key)
-    ctx = AgentCtx(chat_key=chat_key, user_id="k1", platform="tui", locale="zh", extra={"role": "keeper"})
+    ctx = AgentCtx(
+        chat_key=chat_key,
+        user_id="k1",
+        platform="tui",
+        locale="zh",
+        extra={"role": "keeper", "reauthorize": lambda: True},
+    )
 
     # `.重开 全部` arms the full-wipe scope in Chinese.
     armed = await router.dispatch(ctx, ".重开 全部")
@@ -209,7 +215,13 @@ async def test_reset_confirm_pushes_a_reset_flagged_state_frame(tmp_path):
     await hub.subscribe(chat_key, member)
     router = CommandRouter(services, hub=hub)
     await _seed_room(services, chat_key)
-    ctx = AgentCtx(chat_key=chat_key, user_id="k1", platform="tui", locale="en", extra={"role": "keeper"})
+    ctx = AgentCtx(
+        chat_key=chat_key,
+        user_id="k1",
+        platform="tui",
+        locale="en",
+        extra={"role": "keeper", "reauthorize": lambda: True},
+    )
 
     await router.dispatch(ctx, ".reset")
     member.events.clear()  # only care about what the confirm publishes

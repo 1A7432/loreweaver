@@ -395,6 +395,12 @@ class CharcardTools:
 
             card, lorecard = _parse_any_card_file(host_path)
             character, world = split_card(card)
+            # Parse / split is the long prep; import_entries is the first write.
+            # Last reauth success here is the linearization point for the batch.
+            from infra.live_auth import ctx_still_authorized
+
+            if not await ctx_still_authorized(ctx):
+                return _refuse("charcard.commands.import.world_denied")
             # Keeper trust: secrecy flags are honored and InitVar declarations are consumed
             # into the shared MVU tree (`core.worldbook.import_entries` gates that on
             # `is_keeper=True`). The ORIGINAL entries are imported, not the stripped half —

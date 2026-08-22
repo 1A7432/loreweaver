@@ -47,6 +47,11 @@ from infra.imagegen import (
     build_imagegen,
     describe_imagegen_settings,
 )
+from infra.live_auth import (
+    AuthorizationRevoked,
+    confirm_live_authorization,
+    invoke_reauthorize,
+)
 from infra.oauth_flows import (
     SUBSCRIPTION_DEFAULT_MODELS,
     canonical_subscription_provider,
@@ -133,6 +138,10 @@ class AdminService:
         if role == _KEEPER_ROLE and frame.get("type") == "admin_delete_key":
             binding = await self._chat_binding_for_id(caller_room, str(frame.get("id") or ""))
             if binding is not None:
+                try:
+                    await confirm_live_authorization(reauthorize)
+                except AuthorizationRevoked:
+                    return await self._with_chat_bindings(_error("forbidden", i18n), caller_room)
                 await clear_keeper_binding(
                     self.services.store,
                     *binding,
@@ -261,12 +270,12 @@ async def _dispatch_admin_frame(
         return await _config_frame(services)
     if kind == "admin_set_model":
         async with services.config_lock:
-            if reauthorize is not None and not reauthorize():
+            if not await invoke_reauthorize(reauthorize):
                 return _error("forbidden", i18n)
             return await _set_model(services, frame, i18n)
     if kind == "admin_set_imagegen":
         async with services.config_lock:
-            if reauthorize is not None and not reauthorize():
+            if not await invoke_reauthorize(reauthorize):
                 return _error("forbidden", i18n)
             return await _set_imagegen(services, frame, i18n)
     if kind == "admin_list_models":
@@ -276,19 +285,29 @@ async def _dispatch_admin_frame(
     if kind == "admin_mint_key":
         return _mint_key(keystore, caller_room, frame, i18n)
     if kind == "admin_update_key":
-        return _update_key(keystore, caller_room, frame, i18n)
+        return await _update_key(keystore, caller_room, frame, i18n, reauthorize=reauthorize)
     if kind == "admin_delete_key":
-        return _delete_key(keystore, caller_room, frame, i18n)
+        return await _delete_key(keystore, caller_room, frame, i18n, reauthorize=reauthorize)
     if kind == "admin_delete_room":
-        return await _delete_room(services, keystore, caller_room, frame, i18n)
+        return await _delete_room(
+            services, keystore, caller_room, frame, i18n, reauthorize=reauthorize
+        )
     if kind == "admin_export_room":
-        return await _export_room(services, keystore, caller_room, frame, i18n)
+        return await _export_room(
+            services, keystore, caller_room, frame, i18n, reauthorize=reauthorize
+        )
     if kind == "admin_import_room":
-        return await _import_room(services, keystore, caller_room, frame, i18n)
+        return await _import_room(
+            services, keystore, caller_room, frame, i18n, reauthorize=reauthorize
+        )
     if kind == "admin_delete_room_data":
-        return await _delete_room_data(services, keystore, caller_room, frame, i18n, hub=hub)
+        return await _delete_room_data(
+            services, keystore, caller_room, frame, i18n, hub=hub, reauthorize=reauthorize
+        )
     if kind == "admin_reset_room":
-        return await _reset_room(services, keystore, caller_room, frame, i18n)
+        return await _reset_room(
+            services, keystore, caller_room, frame, i18n, reauthorize=reauthorize
+        )
     if kind == "admin_update_server":
         return await _update_server(services, i18n)
     if kind == "admin_list_skills":
@@ -298,7 +317,9 @@ async def _dispatch_admin_frame(
     if kind == "admin_list_rules":
         return _rules_frame()
     if kind == "admin_generate":
-        return await _generate(services, caller_room, fs, frame, i18n)
+        return await _generate(
+            services, caller_room, fs, frame, i18n, reauthorize=reauthorize
+        )
     return _error("bad_request", i18n)
 
 
@@ -769,7 +790,14 @@ def _keeper_count(keystore: Keystore, room: str) -> int:
     return sum(1 for e in keystore.entries() if e.room == room and e.role == "keeper")
 
 
-def _update_key(keystore: Keystore, caller_room: str, frame: dict[str, Any], i18n: I18n) -> dict[str, Any]:
+async def _update_key(
+    keystore: Keystore,
+    caller_room: str,
+    frame: dict[str, Any],
+    i18n: I18n,
+    *,
+    reauthorize: Any = None,
+) -> dict[str, Any]:
     key_id = str(frame.get("id") or "").strip()
     updates: dict[str, str] = {}
     if "room" in frame:
@@ -804,11 +832,22 @@ def _update_key(keystore: Keystore, caller_room: str, frame: dict[str, Any], i18
         if entry.role == "keeper" and updates.get("role", "keeper") != "keeper":
             if _keeper_count(keystore, caller_room) <= 1:
                 return _last_keeper_error(i18n)
+        try:
+            await confirm_live_authorization(reauthorize)
+        except AuthorizationRevoked:
+            return _error("forbidden", i18n)
         keystore.update(key, **updates)
     return _keys_frame(keystore, caller_room)
 
 
-def _delete_key(keystore: Keystore, caller_room: str, frame: dict[str, Any], i18n: I18n) -> dict[str, Any]:
+async def _delete_key(
+    keystore: Keystore,
+    caller_room: str,
+    frame: dict[str, Any],
+    i18n: I18n,
+    *,
+    reauthorize: Any = None,
+) -> dict[str, Any]:
     key_id = str(frame.get("id") or "").strip()
     with keystore.persisted_mutation():
         key = _resolve_key(keystore, key_id)
@@ -821,6 +860,10 @@ def _delete_key(keystore: Keystore, caller_room: str, frame: dict[str, Any], i18
         # strand the room without any way to recover keeper access.
         if entry.role == "keeper" and _keeper_count(keystore, caller_room) <= 1:
             return _last_keeper_error(i18n)
+        try:
+            await confirm_live_authorization(reauthorize)
+        except AuthorizationRevoked:
+            return _error("forbidden", i18n)
         keystore.remove(key)
     return _keys_frame(keystore, caller_room)
 
@@ -831,6 +874,8 @@ async def _delete_room(
     caller_room: str,
     frame: dict[str, Any],
     i18n: I18n,
+    *,
+    reauthorize: Any = None,
 ) -> dict[str, Any]:
     room = str(frame.get("room") or "").strip()
     if not room:
@@ -838,6 +883,10 @@ async def _delete_room(
     if room != caller_room:  # a keeper can only delete its OWN room
         return _error("forbidden", i18n)
     with keystore.persisted_mutation():
+        try:
+            await confirm_live_authorization(reauthorize)
+        except AuthorizationRevoked:
+            return _error("forbidden", i18n)
         removed = keystore.remove_room(room)
         if removed <= 0:
             return _error("not_found", i18n)
@@ -852,6 +901,8 @@ async def _export_room(
     caller_room: str,
     frame: dict[str, Any],
     i18n: I18n,
+    *,
+    reauthorize: Any = None,
 ) -> dict[str, Any]:
     room = str(frame.get("room") or "").strip()
     if not room:
@@ -860,7 +911,12 @@ async def _export_room(
         return _error("forbidden", i18n)
     path = str(frame.get("path") or "").strip()
     try:
-        return _room_op_frame("export", await export_room(services, keystore, room, path))
+        return _room_op_frame(
+            "export",
+            await export_room(services, keystore, room, path, reauthorize=reauthorize),
+        )
+    except AuthorizationRevoked:
+        return _error("forbidden", i18n)
     except Exception:
         return _error("op_failed", i18n)
 
@@ -871,6 +927,8 @@ async def _import_room(
     caller_room: str,
     frame: dict[str, Any],
     i18n: I18n,
+    *,
+    reauthorize: Any = None,
 ) -> dict[str, Any]:
     path = str(frame.get("path") or "").strip()
     if not path:
@@ -882,8 +940,13 @@ async def _import_room(
         return _error("forbidden", i18n)
     try:
         return _room_op_frame(
-            "import", await import_room(services, keystore, path, expected_room=caller_room)
+            "import",
+            await import_room(
+                services, keystore, path, expected_room=caller_room, reauthorize=reauthorize
+            ),
         )
+    except AuthorizationRevoked:
+        return _error("forbidden", i18n)
     except Exception:
         return _error("op_failed", i18n)
 
@@ -896,6 +959,7 @@ async def _delete_room_data(
     i18n: I18n,
     *,
     hub: Any = None,
+    reauthorize: Any = None,
 ) -> dict[str, Any]:
     room = str(frame.get("room") or "").strip()
     if not room:
@@ -908,15 +972,21 @@ async def _delete_room_data(
     backup_path = ""
     try:
         if backup:
-            backup_result = await export_room(services, keystore, room, path)
+            backup_result = await export_room(
+                services, keystore, room, path, reauthorize=reauthorize
+            )
             backup_path = str(backup_result.get("path") or "")
         # The hub rides along so a DIRECT caller drops the room's in-process turn lock
         # with the room (M23 WS1). This path is not one: the session layer serializes
         # destructive admin frames under that very lock, the in-op disposal declines on
         # a held lock, and net/session disposes right after the lock releases.
-        result = await delete_room_data(services, keystore, room, hub=hub)
+        result = await delete_room_data(
+            services, keystore, room, hub=hub, reauthorize=reauthorize
+        )
         await clear_keeper_bindings_for_room(services.store, room)
         await clear_bindings_for_session(services.store, session_key_for_room(room))
+    except AuthorizationRevoked:
+        return _error("forbidden", i18n)
     except Exception:
         return _error("op_failed", i18n)
     if backup_path:
@@ -930,6 +1000,8 @@ async def _reset_room(
     caller_room: str,
     frame: dict[str, Any],
     i18n: I18n,
+    *,
+    reauthorize: Any = None,
 ) -> dict[str, Any]:
     """Wipe one room's campaign state in place — the button behind an in-place
     campaign restart. Unlike ``_delete_room_data`` it takes NO backup and removes
@@ -945,7 +1017,15 @@ async def _reset_room(
     if scope not in RESET_SCOPES:
         return _error("bad_request", i18n)
     try:
-        result = await reset_room_state(services, chat_key_for_room(room), scope=scope, keystore=keystore)
+        result = await reset_room_state(
+            services,
+            chat_key_for_room(room),
+            scope=scope,
+            keystore=keystore,
+            reauthorize=reauthorize,
+        )
+    except AuthorizationRevoked:
+        return _error("forbidden", i18n)
     except Exception:
         return _error("op_failed", i18n)
     result["room"] = room
@@ -1063,6 +1143,8 @@ async def _generate(
     fs: FsAdapter | None,
     frame: dict[str, Any],
     i18n: I18n,
+    *,
+    reauthorize: Any = None,
 ) -> dict[str, Any]:
     """Answer `admin_generate`: run the matching `agent.forge` engine and reply
     `admin_generated`. Never `eval`/`exec`s anything — see `agent.forge`'s module docstring;
@@ -1085,13 +1167,16 @@ async def _generate(
         # Mirrors `net.session.SessionCore._ctx_for`'s AgentCtx construction: a keeper-role
         # context scoped to the CALLER'S room, so the generated module lands in the calling
         # keeper's own knowledge pool via `agent.kp_tools_knowledge.DocumentTools.upload_document`.
+        extra: dict[str, Any] = {"role": _KEEPER_ROLE}
+        if reauthorize is not None:
+            extra["reauthorize"] = reauthorize
         ctx = AgentCtx(
             chat_key=room_chat_key,
             user_id="keeper",
             platform="tui",
             locale=i18n.locale,
             fs=fs,
-            extra={"role": _KEEPER_ROLE},
+            extra=extra,
         )
         result = await generate_and_install_module(services, ctx, description)
     return _generated_frame(kind, result)

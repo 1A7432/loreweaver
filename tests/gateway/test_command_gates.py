@@ -651,7 +651,7 @@ async def test_import_world_runs_for_the_keeper(tmp_path):
         platform="tui",
         locale="en",
         fs=LocalFs(str(tmp_path)),
-        extra={"role": "keeper", "attachment_names": ["w.json"]},
+        extra={"role": "keeper", "attachment_names": ["w.json"], "reauthorize": lambda: True},
     )
 
     reply = await router.dispatch(keeper, ".import world")
