@@ -18,6 +18,7 @@ listener is actually started.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 from collections.abc import Callable
@@ -102,6 +103,8 @@ class IrohMember:
     session_key: str
     locale: str
     transport: str = "iroh"
+    # QUIC connection; closed on handshake failure and live-authorization revoke (WS `ws.close()`).
+    conn: Any = None
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     authorize: Callable[[], bool] | None = None
     # See `net.tui_server.WsMember.held_events`: live events held during join replay.
@@ -115,7 +118,10 @@ class IrohMember:
             try:
                 await self.send.write_all(line)
             except Exception:
-                pass  # peer gone / stream reset — dropped like a closed socket
+                # Swallow: matches WS `_send`. Raising here would make every hub publish drop
+                # the member (RoomHub drops on `deliver` raise) — a broader policy than this
+                # lifecycle fix. Handshake writes go through `_write_line`, which reports failure.
+                pass
 
     async def deliver(self, event: Event) -> None:
         if self.held_events is not None:
@@ -129,6 +135,7 @@ class IrohMember:
                     "message": get_i18n(self.locale).t("tui.error.forbidden"),
                 }
             )
+            await _close_transport(self.conn, self.send)
             raise PermissionError("member authorization was revoked")  # i18n-exempt: internal hub signal
         frame = render_frame(event)
         if frame is not None:
@@ -192,11 +199,65 @@ def _parse_line(line: bytes) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
-async def _write_line(send: Any, frame: dict[str, Any]) -> None:
+async def _await_maybe(value: Any) -> None:
+    if inspect.isawaitable(value):
+        await value
+
+
+async def _write_line(send: Any, frame: dict[str, Any]) -> bool:
+    """Write one newline-JSON frame. Returns False if the stream is gone.
+
+    Handshake uses the return value so it can still close the QUIC connection
+    after a failed write. Post-join media errors stay best-effort (ignore the bool).
+    """
     try:
         await send.write_all((json.dumps(frame, ensure_ascii=False) + "\n").encode("utf-8"))
     except Exception:
-        pass
+        return False
+    return True
+
+
+_FINISH_TIMEOUT = 0.5
+
+
+async def _close_transport(conn: Any, send: Any | None = None) -> None:
+    """Best-effort finish of the control stream, then close the QUIC connection.
+
+    Handshake-failure / live-authorization-revoke / handle-exit only. Post-join
+    recoverable errors (`rate_limited`, `bad_frame` after join, …) stay on the
+    live stream — `docs/protocol.md` closes only on join-handshake fatals.
+
+    Real iroh: `SendStream.finish()` is async; `Connection.close(error_code, reason)`
+    is sync. Fakes may omit args or return an awaitable; both shapes are accepted.
+    `CancelledError` during finish still closes the connection, then re-raises
+    the saved exception (a bare `raise` here is no longer in an active `except`
+    and would become `RuntimeError: No active exception to reraise`).
+    """
+    cancelled_exc: BaseException | None = None
+    if send is not None:
+        finish = getattr(send, "finish", None)
+        if finish is not None:
+            try:
+                await asyncio.wait_for(_await_maybe(finish()), timeout=_FINISH_TIMEOUT)
+            except asyncio.CancelledError as exc:
+                cancelled_exc = exc
+            except Exception:
+                pass
+    if conn is not None:
+        closer = getattr(conn, "close", None)
+        if closer is not None:
+            try:
+                try:
+                    result = closer(0, b"")
+                except TypeError:
+                    result = closer()
+                await _await_maybe(result)
+            except asyncio.CancelledError as exc:
+                cancelled_exc = exc
+            except Exception:
+                pass
+    if cancelled_exc is not None:
+        raise cancelled_exc
 
 
 async def _write_bytes_chunked(send: Any, data: bytes, chunk_size: int = _READ_CHUNK) -> None:
@@ -246,8 +307,13 @@ class IrohServer:
         """Accept connections until the endpoint is closed (call `start()` first)."""
         assert self._endpoint is not None, "call start() before serve()"
         while True:
+            endpoint = self._endpoint
+            if endpoint is None:
+                break
             try:
-                incoming = await self._endpoint.accept_next()
+                incoming = await endpoint.accept_next()
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 break
             if incoming is None:
@@ -258,46 +324,57 @@ class IrohServer:
 
     async def _handle(self, incoming: Any) -> None:
         core = self.core
+        conn: Any = None
+        send: Any = None
         try:
-            accepting = await incoming.accept()
-            conn = await accepting.connect()
-            bi = await conn.accept_bi()
-        except Exception:
-            return
-        send = bi.send()
-        reader = _LineReader(bi.recv())
-
-        member = await self._authenticate(reader, send)
-        if member is None:
-            return
-        if not core._refresh_member_authorization(member):
-            await member.send_frame(
-                {
-                    "type": "error",
-                    "code": "forbidden",
-                    "message": get_i18n(member.locale).t("tui.error.forbidden"),
-                }
-            )
-            return
-        await core.hub.subscribe(member.session_key, member)
-        media_task = asyncio.create_task(self._accept_media_streams(conn, member))
-        try:
-            await core._replay_history(member)
-            await publish_state(core.hub, core.services, core._ctx_for(member))
-            await core.send_ui_manifest(member)
-            while True:
-                line = await reader.readline()
-                if line is None:
-                    break
-                await core._on_frame(member, line)
-        finally:
-            media_task.cancel()
             try:
-                await media_task
+                accepting = await incoming.accept()
+                conn = await accepting.connect()
+                bi = await conn.accept_bi()
             except asyncio.CancelledError:
-                pass
-            core.drop_pending_media(member)
-            await core.hub.unsubscribe(member)
+                raise
+            except Exception:
+                return
+            send = bi.send()
+            reader = _LineReader(bi.recv())
+
+            member = await self._authenticate(reader, send)
+            if member is None:
+                return
+            member.conn = conn
+            if not core._refresh_member_authorization(member):
+                await member.send_frame(
+                    {
+                        "type": "error",
+                        "code": "forbidden",
+                        "message": get_i18n(member.locale).t("tui.error.forbidden"),
+                    }
+                )
+                return
+            await core.hub.subscribe(member.session_key, member)
+            media_task = asyncio.create_task(self._accept_media_streams(conn, member))
+            try:
+                await core._replay_history(member)
+                await publish_state(core.hub, core.services, core._ctx_for(member))
+                await core.send_ui_manifest(member)
+                while True:
+                    line = await reader.readline()
+                    if line is None:
+                        break
+                    await core._on_frame(member, line)
+            finally:
+                media_task.cancel()
+                try:
+                    await media_task
+                except asyncio.CancelledError:
+                    pass
+                core.drop_pending_media(member)
+                await core.hub.unsubscribe(member)
+        finally:
+            # Always tear down the QUIC connection when this handler exits: handshake
+            # failure, EOF, cancellation, or live-auth revoke. Post-join recoverable
+            # errors stay on the stream and do not come through this path.
+            await _close_transport(conn, send)
 
     async def _accept_media_streams(self, conn: Any, member: IrohMember) -> None:
         while True:
@@ -347,11 +424,25 @@ class IrohServer:
 
     async def _authenticate(self, reader: _LineReader, send: Any) -> IrohMember | None:
         """Consume the mandatory first `join` line; `welcome` + return an `IrohMember` on
-        success, best-effort `error` + drop on failure. Mirrors the WS _authenticate."""
+        success, best-effort `error` + drop on failure. Mirrors the WS _authenticate.
+
+        `TimeoutError` (`asyncio.wait_for`; `asyncio.TimeoutError` is this alias)
+        writes the promised `error{code:'join_timeout'}` then fails. `CancelledError`
+        propagates (server shutdown). Other read errors fail cleanly with no frame —
+        the caller closes the QUIC connection. A failed `welcome` write (`_write_line`
+        returns False) also returns None so `_handle` never subscribes a half-open member.
+        """
         i18n = get_i18n(self.core.services.settings.locale)
         timeout = getattr(self.core, "join_timeout", _DEFAULT_JOIN_TIMEOUT) or _DEFAULT_JOIN_TIMEOUT
         try:
             line = await asyncio.wait_for(reader.readline(), timeout=timeout)
+        except TimeoutError:
+            await _write_line(
+                send, {"type": "error", "code": "join_timeout", "message": i18n.t("tui.error.join_timeout")}
+            )
+            return None
+        except asyncio.CancelledError:
+            raise
         except Exception:
             return None
         if line is None:
@@ -370,31 +461,60 @@ class IrohServer:
 
         member = IrohMember(send=send, **fields)
         member.authorize = lambda: self.core._refresh_member_authorization(member)
-        await member.send_frame(
-            welcome_frame(
-                fields,
-                imagegen=self.core.services.imagegen is not None,
-                demo=(
-                    fields["role"] == "keeper"
-                    and await guided_demo_available(self.core.services, fields["session_key"])
-                ),
-                can_update=(
-                    fields["role"] == "keeper"
-                    and bool(self.core.services.settings.tui.update_command)
-                ),
-            )
+        welcome = welcome_frame(
+            fields,
+            imagegen=self.core.services.imagegen is not None,
+            demo=(
+                fields["role"] == "keeper"
+                and await guided_demo_available(self.core.services, fields["session_key"])
+            ),
+            can_update=(
+                fields["role"] == "keeper"
+                and bool(self.core.services.settings.tui.update_command)
+            ),
         )
+        if not await _write_line(send, welcome):
+            return None
         return member
 
-    async def close(self) -> None:
-        """Cancel in-flight per-connection tasks, then close the endpoint. Best-effort and
-        idempotent — safe to call more than once (e.g. once from a signal handler's stop
-        path and once from an outer `finally`)."""
-        for task in list(self._tasks):
+    async def _cancel_and_drain_tasks(self) -> None:
+        """Cancel tracked connection/media tasks and wait for them to settle.
+
+        Snapshot first: each task's done callback discards from `_tasks`, so iterating
+        the live set while awaiting would drop references mid-drain.
+        """
+        tasks = list(self._tasks)
+        if not tasks:
+            return
+        for task in tasks:
             task.cancel()
-        if self._endpoint is not None:
-            endpoint, self._endpoint = self._endpoint, None
-            try:
-                endpoint.close()
-            except Exception:
-                pass
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, asyncio.CancelledError):
+                continue
+            if isinstance(result, BaseException) and not isinstance(result, Exception):
+                raise result
+
+    async def close(self) -> None:
+        """Cancel and drain tracked tasks, then await `endpoint.close()`.
+
+        Idempotent — safe to call more than once (e.g. once from a signal handler's
+        stop path and once from an outer `finally`). `Endpoint.close()` is async and
+        MUST be awaited; a bare call leaves a `RuntimeWarning` and the accept loop
+        stuck. After the endpoint is closed, `serve()`'s `accept_next()` returns
+        `None` and the accept task can exit.
+        """
+        try:
+            await self._cancel_and_drain_tasks()
+        finally:
+            if self._endpoint is not None:
+                endpoint, self._endpoint = self._endpoint, None
+                try:
+                    await _await_maybe(endpoint.close())
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    pass
+            # A late `_handle` can spawn between the first drain and endpoint close
+            # (the accept loop is still live until `endpoint.close()` returns).
+            await self._cancel_and_drain_tasks()

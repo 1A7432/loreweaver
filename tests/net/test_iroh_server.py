@@ -8,21 +8,29 @@ with fakes — the bug-prone part where a QUIC byte stream is cut back into prot
 `IrohServer.start`), so this always runs.
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import os
 import stat
+import warnings
+from unittest.mock import AsyncMock
 
 import pytest
 
+from gateway.hub import Event
 from net.iroh_server import (
     IrohMember,
+    IrohServer,
+    _close_transport,
     _LineReader,
     _parse_line,
     _write_bytes_chunked,
     _write_line,
     load_or_create_secret,
 )
+from net.keystore import KeyEntry, Keystore
 
 
 class _FakeRecv:
@@ -36,9 +44,120 @@ class _FakeRecv:
 class _FakeSend:
     def __init__(self) -> None:
         self.written = bytearray()
+        self.finished = False
 
     async def write_all(self, buf: bytes) -> None:
         self.written.extend(buf)
+
+    async def finish(self) -> None:
+        self.finished = True
+
+
+class _FailSend:
+    async def write_all(self, _buf: bytes) -> None:
+        raise ConnectionError("stream reset")
+
+
+class _HangRecv:
+    def __init__(self) -> None:
+        self.entered = asyncio.Event()
+
+    async def read(self, _n: int) -> bytes:
+        self.entered.set()
+        await asyncio.Event().wait()
+        return b""
+
+
+class _FakeBi:
+    def __init__(self, send: _FakeSend, recv: object) -> None:
+        self._send = send
+        self._recv = recv
+
+    def send(self) -> _FakeSend:
+        return self._send
+
+    def recv(self) -> object:
+        return self._recv
+
+
+class _FakeConn:
+    def __init__(self, send: _FakeSend, recv: object) -> None:
+        self._bi = _FakeBi(send, recv)
+        self.close_calls: list[tuple[int, bytes]] = []
+
+    async def accept_bi(self) -> _FakeBi:
+        return self._bi
+
+    def close(self, error_code: int = 0, reason: bytes = b"") -> None:
+        self.close_calls.append((error_code, reason))
+
+
+class _FakeIncoming:
+    def __init__(self, conn: _FakeConn) -> None:
+        self._conn = conn
+
+    async def accept(self) -> _FakeIncoming:
+        return self
+
+    async def connect(self) -> _FakeConn:
+        return self._conn
+
+
+class _FakeTui:
+    update_command = ""
+
+
+class _FakeSettings:
+    locale = "en"
+    tui = _FakeTui()
+
+
+class _FakeServices:
+    settings = _FakeSettings()
+    imagegen = None
+
+
+class _SpyHub:
+    def __init__(self) -> None:
+        self.subscribed = 0
+
+    async def subscribe(self, *_a, **_k) -> None:
+        self.subscribed += 1
+
+
+class _FakeCore:
+    def __init__(self, *, join_timeout: float = 1.0, authorized: bool = True, keys: dict | None = None) -> None:
+        entries = keys if keys is not None else {"good": KeyEntry(key="good", room="room", name="Alice", role="player")}
+        self.keystore = Keystore(entries)
+        self.join_timeout = join_timeout
+        self.services = _FakeServices()
+        self._authorized = authorized
+        self.hub = _SpyHub()
+
+    def _refresh_member_authorization(self, _member) -> bool:
+        return self._authorized
+
+
+def _written_frames(send: _FakeSend) -> list[dict]:
+    raw = bytes(send.written)
+    if not raw:
+        return []
+    return [json.loads(line) for line in raw.split(b"\n") if line]
+
+
+def _member(send: _FakeSend | None = None, **overrides) -> IrohMember:
+    fields = dict(
+        send=send or _FakeSend(),
+        id="i",
+        user_key="u",
+        name="n",
+        role="player",
+        room="r",
+        session_key="s",
+        locale="en",
+    )
+    fields.update(overrides)
+    return IrohMember(**fields)
 
 
 def test_linereader_splits_frames_across_chunk_boundaries() -> None:
@@ -90,13 +209,23 @@ def test_write_line_and_bytes_chunked_for_media_stream() -> None:
     send = _FakeSend()
 
     async def go() -> None:
-        await _write_line(send, {"size": 6})
+        written = await _write_line(send, {"size": 6})
+        assert written is True
         await _write_bytes_chunked(send, b"abcdef", chunk_size=2)
 
     asyncio.run(go())
     line, body = bytes(send.written).split(b"\n", 1)
     assert json.loads(line) == {"size": 6}
     assert body == b"abcdef"
+
+
+def test_write_line_reports_handshake_write_failure() -> None:
+    """The handshake helper must surface a dead stream so the caller can close the QUIC conn."""
+
+    async def go() -> bool:
+        return await _write_line(_FailSend(), {"type": "error", "code": "bad_key"})
+
+    assert asyncio.run(go()) is False
 
 
 # --- persisted secret key (stable NodeId / ticket across restarts) ---------
@@ -251,3 +380,255 @@ def test_serve_iroh_sigterm_triggers_clean_shutdown(monkeypatch, tmp_path) -> No
     result = asyncio.run(go())
     assert result is True  # a clean stop returns True
     assert closed["value"] is True  # the finally-close actually ran
+
+
+# --- lifecycle: close drain + join-handshake fatals (deterministic fakes) ----
+
+
+def test_close_awaits_endpoint_and_settles_cancelled_child_tasks() -> None:
+    """`endpoint.close()` is async and must be awaited AFTER cancelled children settle.
+
+    A bare `endpoint.close()` (the previous bug) leaves `RuntimeWarning: coroutine
+    Endpoint.close was never awaited` and cleanup racing past `close()`'s return.
+    """
+    order: list[str] = []
+    started = asyncio.Event()
+
+    async def child() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await asyncio.sleep(0)
+            order.append("child_settled")
+            raise
+
+    class _FakeEndpoint:
+        async def close(self) -> None:
+            order.append("endpoint_close")
+
+    async def go() -> None:
+        server = IrohServer(object())
+        endpoint = _FakeEndpoint()
+        server._endpoint = endpoint
+        task = asyncio.create_task(child())
+        server._tasks.add(task)
+        task.add_done_callback(server._tasks.discard)
+        await started.wait()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            await server.close()
+        assert task.done()
+        assert task not in server._tasks
+        assert server._endpoint is None
+
+    asyncio.run(go())
+    assert order == ["child_settled", "endpoint_close"]
+
+
+def test_close_twice_is_idempotent_without_warnings() -> None:
+    async def go() -> None:
+        endpoint = AsyncMock()
+        server = IrohServer(object())
+        server._endpoint = endpoint
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            await server.close()
+            await server.close()
+        endpoint.close.assert_awaited_once()
+        assert server._endpoint is None
+
+    asyncio.run(go())
+
+
+def test_close_unblocks_serve_accept_loop() -> None:
+    """After `await endpoint.close()`, `accept_next()` returns None and `serve()` exits."""
+
+    class _FakeEndpoint:
+        def __init__(self) -> None:
+            self.entered = asyncio.Event()
+            self._closed = asyncio.Event()
+            self.close_awaited = False
+
+        async def accept_next(self):
+            self.entered.set()
+            await self._closed.wait()
+            return None
+
+        async def close(self) -> None:
+            self.close_awaited = True
+            self._closed.set()
+
+    async def go() -> None:
+        endpoint = _FakeEndpoint()
+        server = IrohServer(object())
+        server._endpoint = endpoint
+        serve_task = asyncio.create_task(server.serve())
+        await endpoint.entered.wait()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            await server.close()
+        await asyncio.wait_for(serve_task, timeout=1)
+        assert serve_task.done()
+        assert endpoint.close_awaited
+
+    asyncio.run(go())
+
+
+def test_authenticate_timeout_writes_join_timeout() -> None:
+    async def go() -> None:
+        recv = _HangRecv()
+        send = _FakeSend()
+        server = IrohServer(_FakeCore(join_timeout=0.05))
+        member = await server._authenticate(_LineReader(recv), send)
+        assert member is None
+        frames = _written_frames(send)
+        assert frames[0]["type"] == "error"
+        assert frames[0]["code"] == "join_timeout"
+
+    asyncio.run(go())
+
+
+def test_authenticate_propagates_cancellation() -> None:
+    async def go() -> None:
+        recv = _HangRecv()
+        send = _FakeSend()
+        server = IrohServer(_FakeCore(join_timeout=10))
+        task = asyncio.create_task(server._authenticate(_LineReader(recv), send))
+        await recv.entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert bytes(send.written) == b""
+
+    asyncio.run(go())
+
+
+def test_authenticate_other_read_error_fails_cleanly() -> None:
+    class _BoomReader:
+        async def readline(self) -> bytes:
+            raise RuntimeError("recv exploded")
+
+    async def go() -> None:
+        send = _FakeSend()
+        server = IrohServer(_FakeCore())
+        member = await server._authenticate(_BoomReader(), send)
+        assert member is None
+        assert bytes(send.written) == b""
+
+    asyncio.run(go())
+
+
+def test_handle_timeout_writes_join_timeout_and_closes_conn() -> None:
+    async def go() -> None:
+        send = _FakeSend()
+        conn = _FakeConn(send, _HangRecv())
+        server = IrohServer(_FakeCore(join_timeout=0.05))
+        await server._handle(_FakeIncoming(conn))
+        frames = _written_frames(send)
+        assert frames[0]["code"] == "join_timeout"
+        assert conn.close_calls
+        assert send.finished
+
+    asyncio.run(go())
+
+
+def test_handle_bad_key_writes_error_and_closes_conn() -> None:
+    async def go() -> None:
+        send = _FakeSend()
+        conn = _FakeConn(send, _FakeRecv([b'{"type":"join","key":"nope"}\n']))
+        server = IrohServer(_FakeCore())
+        await server._handle(_FakeIncoming(conn))
+        frames = _written_frames(send)
+        assert frames[0]["code"] == "bad_key"
+        assert conn.close_calls
+        assert send.finished
+
+    asyncio.run(go())
+
+
+def test_handle_bad_frame_writes_error_and_closes_conn() -> None:
+    async def go() -> None:
+        send = _FakeSend()
+        conn = _FakeConn(send, _FakeRecv([b'{"type":"ping","t":1}\n']))
+        server = IrohServer(_FakeCore())
+        await server._handle(_FakeIncoming(conn))
+        frames = _written_frames(send)
+        assert frames[0]["code"] == "bad_frame"
+        assert conn.close_calls
+        assert send.finished
+
+    asyncio.run(go())
+
+
+def test_handle_live_authorization_failure_closes_conn() -> None:
+    async def go() -> None:
+        send = _FakeSend()
+        conn = _FakeConn(send, _FakeRecv([b'{"type":"join","key":"good"}\n']))
+        server = IrohServer(_FakeCore(authorized=False))
+        await server._handle(_FakeIncoming(conn))
+        frames = _written_frames(send)
+        assert frames[0]["type"] == "welcome"
+        assert frames[1]["code"] == "forbidden"
+        assert conn.close_calls
+        assert send.finished
+
+    asyncio.run(go())
+
+
+def test_deliver_revocation_closes_transport() -> None:
+    async def go() -> None:
+        send = _FakeSend()
+        conn = _FakeConn(send, _FakeRecv([]))
+        member = _member(send, conn=conn)
+        member.authorize = lambda: False
+        with pytest.raises(PermissionError):
+            await member.deliver(Event.system("info", "x"))
+        assert _written_frames(send)[0]["code"] == "forbidden"
+        assert conn.close_calls
+        assert send.finished
+
+    asyncio.run(go())
+
+
+def test_close_transport_cancel_during_finish_closes_conn_and_reraises() -> None:
+    """A cancelled `finish()` must still `conn.close`, then propagate CancelledError
+    — not `RuntimeError: No active exception to reraise` from a bare `raise`."""
+
+    class _HangFinishSend:
+        def __init__(self) -> None:
+            self.entered = asyncio.Event()
+
+        async def finish(self) -> None:
+            self.entered.set()
+            await asyncio.Event().wait()
+
+    async def go() -> None:
+        send = _HangFinishSend()
+        conn = _FakeConn(_FakeSend(), _FakeRecv([]))
+        task = asyncio.create_task(_close_transport(conn, send))
+        await send.entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert conn.close_calls
+
+    asyncio.run(go())
+
+
+def test_welcome_write_failure_returns_none_and_does_not_subscribe() -> None:
+    async def go() -> None:
+        core = _FakeCore()
+        server = IrohServer(core)
+        member = await server._authenticate(
+            _LineReader(_FakeRecv([b'{"type":"join","key":"good"}\n'])),
+            _FailSend(),
+        )
+        assert member is None
+
+        conn = _FakeConn(_FailSend(), _FakeRecv([b'{"type":"join","key":"good"}\n']))
+        await server._handle(_FakeIncoming(conn))
+        assert core.hub.subscribed == 0
+        assert conn.close_calls
+
+    asyncio.run(go())
