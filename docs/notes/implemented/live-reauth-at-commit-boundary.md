@@ -20,8 +20,7 @@
   carries the same optional callback to the write that actually counts. The
   helper accepts a sync or awaitable callback so a future I/O refresh does
   not force a second shape.
-- **Rule home:** `docs/defensive-patterns.md` entry 7;
-  `infra.live_auth` (the exception + sync/awaitable helper);
+- **Rule home:** `infra/live_auth.py` (the exception + sync/awaitable helper);
   `net.room_backup` commit calls (export write, import first store mutation,
   delete first store mutation, reset first hook);
   `gateway.commands.rooms._keeper_still_authorized` (`.undo` before

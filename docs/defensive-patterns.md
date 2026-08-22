@@ -51,17 +51,3 @@ names where it bit us; the fix commit is the proof it was paid for.
    else. Read the vendor's own definition before treating any of them as a
    size signal — and remember that a truncated reply arrives as a SUCCESS, so
    nothing downstream will flag it for you.
-7. **Live-reauth at the commit boundary, not only at the lock.** The
-   transport choke point refreshes a keeper key when it takes the room lock,
-   but another admin connection or ops process can revoke or demote that key
-   during verification, backup, or analysis. Long / destructive keeper ops
-   (`.undo`, `.save` / `.save load`, world/module import, admin
-   export/import/delete/reset and key/room delete) re-check authorization
-   AFTER that preflight and BEFORE the first irreversible mutation or the
-   final secret-artifact write. The last successful reauth is the
-   linearization point: the operation is authorized. Do not try to kill a
-   transaction that has already begun. Fail closed — no backup created or
-   overwritten, no storage/key/vector/media change, existing
-   forbidden/denied copy, no path or content leak. Rule home:
-   `infra.live_auth.confirm_live_authorization`;
-   `docs/notes/implemented/live-reauth-at-commit-boundary.md`.
