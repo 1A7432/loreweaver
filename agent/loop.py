@@ -75,7 +75,9 @@ ones above it:
 11. Persist the reply, advance the chronicle counter, photograph the room for
     undo (``capture_snapshot`` AFTER the counter, so snapshot ``turn_index``
     is the end-of-turn state), fill an estimated prompt size if the provider
-    reported none.
+    reported none. The post-turn Scribe/Director later refreshes the *latest*
+    chronicle-turn snapshot (``agent.scribe_coord``), not this turn's index —
+    companion sub-turns will have moved the counter.
 
 Invariants a change here must keep (each one was paid for — see the comment
 at the site, and ``docs/defensive-patterns.md``):
@@ -452,6 +454,17 @@ async def _run_kp_turn_body(
     # or an earlier turn's unconsumed dice payload attach to this turn's trace.
     ctx.consume_dice()
     ctx.consume_npc_lines()
+    # The previous player turn's Scribe is fire-and-forget so its latency never
+    # sits on that turn's already-streamed reply. This is the next *external*
+    # KP turn, and whispers are consumed read-and-clear during prompt assembly
+    # below — wait here, not at the transport choke point (that path also
+    # admits `.undo` / reset, which must cancel the chain rather than wait
+    # for it). Companion sub-turns skip: they are not a new external turn and
+    # the parent has not even scheduled its pass yet.
+    if ctx.platform != "companion":
+        from agent.scribe_coord import scribe_runtime
+
+        await scribe_runtime.take_external_turn(ctx.chat_key)
     # Event hooks (Layer C — core.hooks): one sandboxed engine per turn, inert (None) when
     # nothing is registered. turn_start fires BEFORE prompt assembly so its inject() texts and
     # variable writes shape this very turn; every later phase fires in the finalization block

@@ -276,6 +276,8 @@ class GatewayRunner:
         # per-room state. Keyed by `session_key` on the shared hub, so it also serializes against
         # a TUI turn on the same room; the companion sub-turn re-enters `run_turn` directly (never
         # this choke point), so it never re-acquires this lock and cannot self-deadlock.
+        # Scribe wait is at `run_kp_turn`, not here — this choke also runs `.undo` / reset /
+        # load, which cancel-and-drain at `agent.undo.restore` / `net.room_backup`.
         lock = self.hub.turn_lock(session_key)
         if lock.locked():
             self._notice_turn_queued(adapter, source, session_key, locale)

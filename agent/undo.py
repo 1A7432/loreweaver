@@ -88,6 +88,12 @@ async def restore(services: Services, chat_key: str, turn: int, *, history_key: 
     to the restored leaf, which is how a branch happens: nothing was deleted to make room
     for it.
     """
+    # A Scribe still in flight would write the abandoned future back over this
+    # restore. Cancel-and-drain first; the pass is the one lane outside the
+    # turn lock, so holding that lock is not enough.
+    from agent.scribe_coord import scribe_runtime
+
+    await scribe_runtime.quiesce(chat_key)
     raw = await services.store.snapshot_get(chat_key, turn)
     if raw is None:
         return False

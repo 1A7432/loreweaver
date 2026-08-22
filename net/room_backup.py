@@ -1170,6 +1170,12 @@ async def reset_room_state(
     """
     if scope not in RESET_SCOPES:
         raise ValueError(f"unknown reset scope: {scope}")  # i18n-exempt: internal guard
+    from agent.scribe_coord import scribe_runtime
+
+    # The Scribe is the one lane outside the turn lock. Wipe first and it can
+    # write the abandoned campaign back; cancel-and-drain first. A full reset
+    # also drops the in-process slot (story/chars keep the room, so the slot).
+    await scribe_runtime.quiesce(chat_key, dispose=scope == "all")
     # M17: content lives in the documents table and runtime state in room_state, both
     # room-scoped by an exact COLUMN — a dotted-neighbor room can no longer alias this
     # room's rows, so the pre-M17 prefix-ambiguity guard is structurally unnecessary here.
@@ -1241,6 +1247,9 @@ async def delete_room_data(
     if not room:
         raise ValueError("snapshot room is empty")
     chat_key = chat_key_for_room(room)
+    from agent.scribe_coord import scribe_runtime
+
+    await scribe_runtime.quiesce(chat_key, dispose=True)
     state = await _capture_room_state(services, keystore, room, chat_key)
     stage_root, staged_media = await _stage_room_media(services, chat_key, state.media)
     keys_before_delete = state.keys
@@ -1622,6 +1631,13 @@ async def import_room(
         key_values.add(key)
         validated_keys.append({"key": key, "room": room, "name": name, "role": role})
 
+    from agent.scribe_coord import scribe_runtime
+
+    # Cancel any pass still writing this room before the replacement transaction
+    # reads it for rollback and then overwrites it. The transaction body itself
+    # is unchanged — this is the same "quiesce before mutate" entry reset/delete
+    # use, not a new import replacement.
+    await scribe_runtime.quiesce(new_chat_key)
     state = await _capture_room_state(services, keystore, room, new_chat_key)
     # The undo ring is the one persisted storage no snapshot carries, so the import
     # transaction below CLEARS it — otherwise `.undo` could rewind through the load into

@@ -376,22 +376,16 @@ def judge_checkable(*, action: str, reply: str) -> CheckEvidence | None:
 
 
 async def _drain_scribe_tasks() -> None:
-    """Await the Scribe's fire-and-forget tasks so its writes are visible.
+    """Await the Scribe's fire-and-forget chain so its writes are visible.
 
-    `gateway.turn` spawns one per player turn and only keeps a strong reference; a pass
-    therefore lands some time AFTER the turn returned. Anything reading what the Scribe
-    wrote -- the chronicle records this gate scores -- has to wait for them first.
+    `gateway.turn` schedules one pass per player turn on the per-room coordinator;
+    a pass therefore lands some time AFTER the turn returned. Anything reading
+    what the Scribe wrote -- the chronicle records this gate scores -- has to
+    wait for them first.
     """
-    import gateway.turn as turn_module
+    from agent.scribe_coord import scribe_runtime
 
-    for _ in range(20):
-        tasks = [task for task in turn_module._SCRIBE_TASKS if not task.done()]  # noqa: SLF001 — the drain IS the point
-        if not tasks:
-            await asyncio.sleep(0)
-            if not [task for task in turn_module._SCRIBE_TASKS if not task.done()]:  # noqa: SLF001
-                return
-            continue
-        await asyncio.gather(*tasks, return_exceptions=True)
+    await scribe_runtime.await_all()
 
 
 def _find_leak(text: str, secret_snippets: list[str], secret_concepts: list[str]) -> tuple[str | None, str | None]:
