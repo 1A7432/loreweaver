@@ -28,6 +28,7 @@ from gateway.rooms import (
     set_keeper_binding,
 )
 from gateway.turn import publish_state
+from infra.live_auth import AuthorizationRevoked, invoke_reauthorize
 from infra.room_facets import RESET_SCOPES, STORAGE_ROOM_STATE, RoomStateFacet
 
 logger = logging.getLogger(__name__)
@@ -146,6 +147,15 @@ def _is_keeper(ctx: Any) -> bool:
     return isinstance(extra, dict) and extra.get("role") == _TUI_KEEPER_ROLE
 
 
+def _command_reauthorize(ctx: CommandCtx) -> Any:
+    """Live-authorization callback for a command's room_backup commit boundary."""
+
+    async def _check() -> bool:
+        return await _keeper_still_authorized(ctx.raw_ctx, ctx.chat_key, ctx.services.store)
+
+    return _check
+
+
 async def _keeper_still_authorized(ctx: Any, chat_key: str, store: Any) -> bool:
     platform = str(getattr(ctx, "platform", "") or "").casefold()
     if platform in _AUTO_MASTER_PLATFORMS:
@@ -156,7 +166,9 @@ async def _keeper_still_authorized(ctx: Any, chat_key: str, store: Any) -> bool:
     if source is None or platform in {"tui", "iroh"}:
         extra = getattr(ctx, "extra", None)
         reauthorize = extra.get("reauthorize") if isinstance(extra, dict) else None
-        return bool(reauthorize()) if callable(reauthorize) else True
+        # Network transports must present a live callback. A stamped keeper role
+        # without one is fail-closed — the key may already have been revoked.
+        return await invoke_reauthorize(reauthorize, missing_ok=False)
     room = await get_keeper_binding(
         store,
         source.platform,
@@ -293,10 +305,22 @@ class RoomsCommands:
         # dispatch already — re-acquiring `hub.turn_lock` HERE wedged the room forever:
         # the lock is not reentrant and its holder was this very task, so the second
         # acquire waited on itself and every later turn queued behind it.
+        # Availability / snapshot lookup is the preflight; reset/restore is the mutation.
+        # Last reauth success here is the linearization point.
+        if not await _keeper_still_authorized(ctx.raw_ctx, ctx.chat_key, ctx.services.store):
+            return ctx.fail(ctx.i18n.t("commands.undo.denied"))
         if target == 0:
             from net.room_backup import reset_room_state
 
-            await reset_room_state(ctx.services, ctx.chat_key, scope="story")
+            try:
+                await reset_room_state(
+                    ctx.services,
+                    ctx.chat_key,
+                    scope="story",
+                    reauthorize=_command_reauthorize(ctx),
+                )
+            except AuthorizationRevoked:
+                return ctx.fail(ctx.i18n.t("commands.undo.denied"))
         elif not await restore_room(ctx.services, ctx.chat_key, target):
             return ctx.i18n.t("commands.undo.unavailable", turns="-")
         await ctx.services.store.state_set(ctx.chat_key, CHRONICLE_TURN_KEY, str(target))
@@ -349,6 +373,7 @@ class RoomsCommands:
         sub = parts[0].casefold() if parts else ""
         rest = parts[1].strip() if len(parts) > 1 else ""
         room = room_for_chat_key(ctx.chat_key)
+        reauthorize = _command_reauthorize(ctx)
         try:
             if sub in _SAVE_LOAD_WORDS:
                 if not rest:
@@ -356,11 +381,17 @@ class RoomsCommands:
                 # Serialized by the transport choke point's turn lock, exactly like
                 # `.undo` above — a command handler must never re-take the room's own
                 # lock (not reentrant; the holder is this task).
-                result = await import_room(ctx.services, keystore, rest, expected_room=room)
+                result = await import_room(
+                    ctx.services, keystore, rest, expected_room=room, reauthorize=reauthorize
+                )
                 await self._publish_reset(ctx)
                 return ctx.i18n.t("commands.save.loaded", name=rest, documents=result.get("documents", 0))
-            result = await export_room(ctx.services, keystore, room, ctx.args.strip())
+            result = await export_room(
+                ctx.services, keystore, room, ctx.args.strip(), reauthorize=reauthorize
+            )
             return ctx.i18n.t("commands.save.done", path=str(result.get("path", "")))
+        except AuthorizationRevoked:
+            return ctx.fail(ctx.i18n.t("commands.save.denied"))
         except Exception as exc:  # noqa: BLE001 — a save must report, never crash the room
             logger.warning("room save/load failed for %s", ctx.chat_key, exc_info=True)
             return ctx.i18n.t("commands.save.failed", error=str(exc))
@@ -527,8 +558,14 @@ class RoomsCommands:
 
                 try:
                     result = await reset_room_state(
-                        ctx.services, ctx.chat_key, scope=armed_scope, keystore=self.keystore
+                        ctx.services,
+                        ctx.chat_key,
+                        scope=armed_scope,
+                        keystore=self.keystore,
+                        reauthorize=_command_reauthorize(ctx),
                     )
+                except AuthorizationRevoked:
+                    return ctx.fail(ctx.i18n.t("commands.reset.denied"))
                 except Exception:
                     logger.exception("campaign reset failed for %s", ctx.chat_key)
                     return ctx.i18n.t("commands.reset.failed")

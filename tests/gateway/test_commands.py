@@ -1523,9 +1523,12 @@ async def test_model_key_rejected_in_public_channel_but_accepted_in_dm():
 # ---------------------------------------------------------------------------
 
 
-def _tui_ctx(role: str, *, room: str = "room1") -> AgentCtx:
+def _tui_ctx(role: str, *, room: str = "room1", reauthorize=None) -> AgentCtx:
+    extra: dict = {"role": role}
+    if reauthorize is not None:
+        extra["reauthorize"] = reauthorize
     return AgentCtx(
-        chat_key=f"tui:group:{room}", user_id="u1", platform="tui", locale="en", extra={"role": role}
+        chat_key=f"tui:group:{room}", user_id="u1", platform="tui", locale="en", extra=extra
     )
 
 
@@ -1603,7 +1606,7 @@ async def test_tui_keeper_role_is_allowed_keeper_only_commands():
     services = _mutable_services()
     keystore = Keystore()
     router = CommandRouter(services, keystore=keystore)
-    keeper = _tui_ctx("keeper")
+    keeper = _tui_ctx("keeper", reauthorize=lambda: True)
     i18n = services.i18n.with_locale("en")
 
     allowed = await router.dispatch(keeper, ".model set anthropic")

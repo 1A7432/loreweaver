@@ -20,6 +20,7 @@ from agent.document_manager import document_point_id
 from agent.services import Services
 from gateway.session import SessionSource
 from infra.file_permissions import atomic_write_private, ensure_private_directory, restrict_file
+from infra.live_auth import AuthorizationRevoked, confirm_live_authorization
 from infra.media_store import (
     ALLOWED_AUDIO_MIMES,
     ALLOWED_IMAGE_MIMES,
@@ -587,7 +588,14 @@ def room_key_entries(
     return entries
 
 
-async def export_room(services: Services, keystore: Keystore, room: str, path: str = "") -> dict[str, Any]:
+async def export_room(
+    services: Services,
+    keystore: Keystore,
+    room: str,
+    path: str = "",
+    *,
+    reauthorize: Any = None,
+) -> dict[str, Any]:
     room = room.strip()
     if not room:
         raise ValueError("snapshot room is empty")
@@ -627,6 +635,9 @@ async def export_room(services: Services, keystore: Keystore, room: str, path: s
     encoded = json.dumps(snapshot, ensure_ascii=False, indent=2)
     if len(encoded.encode("utf-8")) > MAX_BACKUP_FILE_BYTES:
         raise ValueError("room snapshot byte limit exceeded")
+    # Linearization point: last reauth success → this write is authorized. A key
+    # revoked during the secret read must not create or overwrite the artifact.
+    await confirm_live_authorization(reauthorize)
     atomic_write_private(target, encoded)
     return {
         "room": room,
@@ -1148,6 +1159,7 @@ async def reset_room_state(
     *,
     scope: str = "story",
     keystore: Keystore | None = None,
+    reauthorize: Any = None,
 ) -> dict[str, Any]:
     """Wipe part of one room's campaign state in place, keeping keystore keys,
     channel/keeper bindings and live connections. ``scope`` chooses how much:
@@ -1174,6 +1186,10 @@ async def reset_room_state(
     # room-scoped by an exact COLUMN — a dotted-neighbor room can no longer alias this
     # room's rows, so the pre-M17 prefix-ambiguity guard is structurally unnecessary here.
     registry = room_registry()
+    # Scope lookup is the preflight; facet hooks are the first mutation. Last reauth
+    # success here is the linearization point — do not try to unwind a hook that
+    # already ran.
+    await confirm_live_authorization(reauthorize)
     # Facet-owned disposal a target list cannot name — a facet that owns a SLICE of a
     # family another facet owns wholesale (`infra.room_facets`). It runs FIRST: such a
     # hook selects its slice by reading the records the target lists below are about to
@@ -1234,6 +1250,7 @@ async def delete_room_data(
     room: str,
     *,
     hub: Any | None = None,
+    reauthorize: Any = None,
 ) -> dict[str, Any]:
     """Delete one room entirely. ``hub`` lets facets that own in-process state dispose of
     it too; a caller without a bus (the CLI) passes none and leaks nothing."""
@@ -1247,6 +1264,9 @@ async def delete_room_data(
     keys_mutated = False
 
     try:
+        # Capture + media stage are the preflight (the stage is a private recovery
+        # copy, not a live mutation). Last reauth success → the delete is authorized.
+        await confirm_live_authorization(reauthorize)
         deleted_rows = await _atomic_store_update(
             services,
             delete_rows=state.rows,
@@ -1275,6 +1295,10 @@ async def delete_room_data(
             hook = facet.on_delete
             if hook is not None:
                 await hook(facet_ctx)
+    except AuthorizationRevoked:
+        # No live mutation has started — discard the private stage and fail closed.
+        _discard_stage(stage_root)
+        raise
     except BaseException:
         rollback_state = _RoomState(
             rows=state.rows,
@@ -1317,6 +1341,7 @@ async def import_room(
     path: str,
     *,
     expected_room: str = "",
+    reauthorize: Any = None,
 ) -> dict[str, Any]:
     expected = expected_room.strip()
     source = _resolve_import_path(services, path, expected)
@@ -1630,6 +1655,9 @@ async def import_room(
     snapshots_before = await _capture_room_snapshots(services, new_chat_key)
     cleared_storages = sorted(room_registry().storages_not_exported())
     created_media_hashes: set[str] = set()
+    # Validation + capture are the preflight. Last reauth success → the first
+    # store write is authorized. Do not try to unwind `_atomic_store_update`.
+    await confirm_live_authorization(reauthorize)
     try:
         await _atomic_store_update(
             services,
