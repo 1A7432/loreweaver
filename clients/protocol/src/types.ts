@@ -73,46 +73,71 @@ export const FrameType = {
 
 export type FrameType = (typeof FrameType)[keyof typeof FrameType]
 
-export type PlayerRole = "player" | "keeper"
-export type AdminKeyPurpose = "join" | "chat_bind"
-export type NarrativeSpeaker = "kp" | "player" | "system" | "npc"
-export type NarrativeFormat = "markdown" | "plain"
-export type ErrorCode =
-  | "bad_key"
-  | "bad_frame"
-  | "input_too_long"
-  | "rate_limited"
-  | "server_error"
-  | "join_timeout"
-  | "too_many_connections"
-  | "forbidden"
-  | "media_disabled"
-  | "media_rate_limited"
-  | "media_bad_mime"
-  | "media_too_large"
-  | "media_quota_exceeded"
-  | "media_bad_hash"
-  | "media_bad_offer"
-  | "media_bad_svg"
-  | "media_bad_upload"
-  | "media_size_mismatch"
-  | "media_hash_mismatch"
-  | "media_not_found"
-  | "avatar_no_character"
-export type DiceKind = "roll" | "check" | "subsystem" | "opposed" | "init"
-export type SystemLevel = "info" | "warn"
-export type AudioLayer = "bgm" | "ambience" | "sfx"
-export type AudioAction = "play" | "stop" | "pause" | "resume" | "volume"
-export type AdminErrorCode =
-  | "forbidden"
-  | "unknown_provider"
-  | "bad_request"
-  | "set_failed"
-  | "not_found"
-  | "op_failed"
-  | "not_configured"
-export type AdminRoomOpAction = "export" | "import" | "delete" | "reset"
-export type AdminForgeKind = "skill" | "rule" | "module"
+export const PLAYER_ROLES = ["player", "keeper"] as const
+export type PlayerRole = (typeof PLAYER_ROLES)[number]
+export const ADMIN_KEY_PURPOSES = ["join", "chat_bind"] as const
+export type AdminKeyPurpose = (typeof ADMIN_KEY_PURPOSES)[number]
+export const NARRATIVE_SPEAKERS = ["kp", "player", "system", "npc"] as const
+export type NarrativeSpeaker = (typeof NARRATIVE_SPEAKERS)[number]
+export const NARRATIVE_FORMATS = ["markdown", "plain"] as const
+export type NarrativeFormat = (typeof NARRATIVE_FORMATS)[number]
+
+/** Every `error.code` the current protocol emits. Derived union so a new code
+ * cannot land in types without also joining the runtime set the architecture
+ * gate cross-checks against locales and `net.session.ERROR_CODES`. */
+export const ERROR_CODES = [
+  "bad_key",
+  "bad_frame",
+  "input_too_long",
+  "rate_limited",
+  "server_error",
+  "join_timeout",
+  "too_many_connections",
+  "demo_unavailable",
+  "forbidden",
+  "media_disabled",
+  "media_rate_limited",
+  "media_bad_mime",
+  "media_too_large",
+  "media_quota_exceeded",
+  "media_bad_hash",
+  "media_bad_offer",
+  "media_bad_svg",
+  "media_bad_upload",
+  "media_size_mismatch",
+  "media_hash_mismatch",
+  "media_not_found",
+  "avatar_no_character",
+] as const
+export type ErrorCode = (typeof ERROR_CODES)[number]
+
+export const DICE_KINDS = ["roll", "check", "subsystem", "opposed", "init"] as const
+export type DiceKind = (typeof DICE_KINDS)[number]
+export const SYSTEM_LEVELS = ["info", "warn"] as const
+export type SystemLevel = (typeof SYSTEM_LEVELS)[number]
+export const AUDIO_LAYERS = ["bgm", "ambience", "sfx"] as const
+export type AudioLayer = (typeof AUDIO_LAYERS)[number]
+export const AUDIO_ACTIONS = ["play", "stop", "pause", "resume", "volume"] as const
+export type AudioAction = (typeof AUDIO_ACTIONS)[number]
+
+/** Every `admin_error.code` the current protocol emits. Same derived-union
+ * contract as `ERROR_CODES`. */
+export const ADMIN_ERROR_CODES = [
+  "forbidden",
+  "unknown_provider",
+  "bad_request",
+  "set_failed",
+  "not_found",
+  "op_failed",
+  "not_configured",
+  "last_keeper",
+] as const
+export type AdminErrorCode = (typeof ADMIN_ERROR_CODES)[number]
+
+export const ADMIN_ROOM_OP_ACTIONS = ["export", "import", "delete", "reset"] as const
+export type AdminRoomOpAction = (typeof ADMIN_ROOM_OP_ACTIONS)[number]
+export const ADMIN_FORGE_KINDS = ["skill", "rule", "module"] as const
+export type AdminForgeKind = (typeof ADMIN_FORGE_KINDS)[number]
 
 export interface ClientInfo {
   name: string
@@ -188,7 +213,7 @@ export interface PackCardEntry {
    * imports through the KEEPER's `.import <ref> world`; a `character` card is the
    * ordinary `.import <ref> pc`. Absent from a pre-2.3 server — treat that as
    * `"character"`, which is what every client assumed before this field existed. */
-  kind?: "character" | "world"
+  kind?: PackCardKind
 }
 
 // v2.2: the unicast answer to `list_pack_cards`. `cards` is empty (not absent)
@@ -341,9 +366,26 @@ export interface DiceFrame {
 // block before it reaches the wire, so clients may render them as-is. Content is
 // player-visible authorial output — the same trust stance as narration.
 
-export type UiPanel = "inline" | "sidebar"
-export type UiBadgeTone = "info" | "warn" | "danger"
-export type UiTextStyle = "quote" | "warning"
+export const UI_PANELS = ["inline", "sidebar"] as const
+export type UiPanel = (typeof UI_PANELS)[number]
+export const UI_BADGE_TONES = ["info", "warn", "danger"] as const
+export type UiBadgeTone = (typeof UI_BADGE_TONES)[number]
+export const UI_TEXT_STYLES = ["quote", "warning"] as const
+export type UiTextStyle = (typeof UI_TEXT_STYLES)[number]
+export const UI_BLOCK_KINDS = [
+  "meter",
+  "stat",
+  "badge",
+  "text",
+  "divider",
+  "choices",
+  "image",
+  "letter",
+  "clipping",
+  "map_pin",
+  "title_card",
+] as const
+export type UiBlockKind = (typeof UI_BLOCK_KINDS)[number]
 
 export interface UiMeterBlock {
   kind: "meter"
@@ -480,8 +522,14 @@ export interface UiFrame {
 // CLIENT substitutes from its own `state.variables`; tier-2 panels ship sandboxed
 // HTML/JS assets (rich clients) plus a tier-1 `fallback` for everyone else.
 
-export type PanelSlot = "sidebar" | "tray" | "modal"
-export type PanelIntentKind = "choice" | "input" | "roll"
+export const PANEL_SLOTS = ["sidebar", "tray", "modal"] as const
+export type PanelSlot = (typeof PANEL_SLOTS)[number]
+export const PANEL_INTENT_KINDS = ["choice", "input", "roll"] as const
+export type PanelIntentKind = (typeof PANEL_INTENT_KINDS)[number]
+export const PANEL_LEAF_FIELDS = ["id", "label", "value"] as const
+export type PanelLeafField = (typeof PANEL_LEAF_FIELDS)[number]
+export const PACK_CARD_KINDS = ["character", "world"] as const
+export type PackCardKind = (typeof PACK_CARD_KINDS)[number]
 
 // Localized template text: the server normalizes plain strings to `{en: ...}`.
 export interface PanelText {
@@ -498,7 +546,7 @@ export interface PanelVarBinding {
 
 // `{$leaf: ...}` — inside a `repeat` template only: the matched variable's field.
 export interface PanelLeafBinding {
-  $leaf: "id" | "label" | "value"
+  $leaf: PanelLeafField
 }
 
 export type PanelBindable<T> = T | PanelVarBinding | PanelLeafBinding
@@ -742,7 +790,8 @@ export interface UsageState {
   cache_miss_tokens: number
 }
 
-export type ModuleVariableKind = "number" | "bool" | "text" | "enum"
+export const MODULE_VARIABLE_KINDS = ["number", "bool", "text", "enum"] as const
+export type ModuleVariableKind = (typeof MODULE_VARIABLE_KINDS)[number]
 
 // v1.6 additive: one player-visible module/story variable (a "tracker": suspicion,
 // doom, supplies, ...). Player connections only ever receive player-visible
@@ -829,7 +878,8 @@ export interface SystemFrame {
  * Coarse kind of work a busy turn is doing. Added in 2.3.1 and deliberately closed:
  * the server never puts a tool name or argument on the wire.
  */
-export type TurnActivity = "reading" | "dice" | "cast" | "bookkeeping"
+export const TURN_ACTIVITIES = ["reading", "dice", "cast", "bookkeeping"] as const
+export type TurnActivity = (typeof TURN_ACTIVITIES)[number]
 
 export type TurnStatusFrame =
   | {
@@ -951,7 +1001,8 @@ export interface AdminDeleteRoomDataFrame {
 //  - "chars": also roll new characters (keep the module)
 //  - "all":   erase everything (characters, module, lore, media, story)
 // Room settings (language, house rules) and connections survive every scope.
-export type AdminResetScope = "story" | "chars" | "all"
+export const ADMIN_RESET_SCOPES = ["story", "chars", "all"] as const
+export type AdminResetScope = (typeof ADMIN_RESET_SCOPES)[number]
 
 // In-place campaign restart: wipe part of this room's campaign state while keeping
 // keystore keys and live connections — no backup, no key removal. Contrast

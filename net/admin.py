@@ -1112,5 +1112,21 @@ def _generated_frame(kind: str, result: ForgeResult) -> dict[str, Any]:
     }
 
 
+# The codes `_error` actually emits. Cross-checked against the TypeScript
+# `ADMIN_ERROR_CODES` array and the `tui.admin.error.*` locale keys.
+ADMIN_ERROR_CODES: frozenset[str] = frozenset(
+    {
+        "forbidden",
+        "unknown_provider",
+        "bad_request",
+        "set_failed",
+        "not_found",
+        "op_failed",
+        "not_configured",
+        "last_keeper",
+    }
+)
+
+
 def _error(code: str, i18n: I18n) -> dict[str, Any]:
     return {"type": "admin_error", "code": code, "message": i18n.t(f"tui.admin.error.{code}")}

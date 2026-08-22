@@ -265,6 +265,38 @@ def parse_frame(raw: Any) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+# The codes `error_frame` (and MediaError, whose `.code` lands here) actually emit.
+# `tests/architecture/test_protocol_error_codes.py` cross-checks this set against
+# the TypeScript `ERROR_CODES` array and the `tui.error.*` locale keys so a new
+# code cannot ship in one runtime and vanish from the others.
+ERROR_CODES: frozenset[str] = frozenset(
+    {
+        "bad_key",
+        "bad_frame",
+        "input_too_long",
+        "rate_limited",
+        "server_error",
+        "join_timeout",
+        "too_many_connections",
+        "demo_unavailable",
+        "forbidden",
+        "media_disabled",
+        "media_rate_limited",
+        "media_bad_mime",
+        "media_too_large",
+        "media_quota_exceeded",
+        "media_bad_hash",
+        "media_bad_offer",
+        "media_bad_svg",
+        "media_bad_upload",
+        "media_size_mismatch",
+        "media_hash_mismatch",
+        "media_not_found",
+        "avatar_no_character",
+    }
+)
+
+
 def error_frame(code: str, i18n: I18n) -> dict[str, Any]:
     return {"type": "error", "code": code, "message": i18n.t(f"tui.error.{code}")}
 
