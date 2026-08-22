@@ -1515,6 +1515,116 @@ async def test_import_room_rolls_back_every_component_when_key_persistence_fails
         await media_store.read_bytes(chat_key, backup_media.hash)
 
 
+async def test_import_room_replaces_live_extras_the_snapshot_does_not_name(tmp_path):
+    """A load is a checkpoint, not a merge: extras added after export must vanish."""
+    services = _services(str(tmp_path))
+    keystore = Keystore()
+    keystore.add(room="arkham", name="Keeper", role="keeper")
+    chat_key = chat_key_for_room("arkham")
+    await services.documents.put(chat_key, "lore", "kept", {"title": "Kingsport"})
+    await services.store.state_set(chat_key, "game_clock", "snapshot-clock")
+    await services.store.set(user_key="", store_key="bound_room.discord:group:table", value=chat_key)
+    await services.vector_db.vector_store.upsert(
+        [("kept:0", [0.1] * 64, {"chat_key": chat_key, "document_id": "kept", "chunk_index": 0})]
+    )
+    media_store = MediaStore(
+        services.store,
+        services.settings.data_dir,
+        allowed_mimes=ALLOWED_MEDIA_MIMES,
+    )
+    kept_media = await media_store.register_blob(
+        room=chat_key,
+        data=b"kept handout",
+        mime="image/png",
+        name="kept.png",
+        uploader="keeper",
+    )
+    exported = await export_room(services, keystore, "arkham", "checkpoint.json")
+
+    await services.documents.put(chat_key, "lore", "extra", {"title": "after export"})
+    await services.store.state_set(chat_key, "kp_notes", "after-export")
+    await services.store.set(user_key="", store_key="bound_room.discord:group:extra", value=chat_key)
+    await services.vector_db.vector_store.upsert(
+        [("extra:0", [0.9] * 64, {"chat_key": chat_key, "document_id": "extra", "chunk_index": 0})]
+    )
+    extra_media = await media_store.register_blob(
+        room=chat_key,
+        data=b"extra handout",
+        mime="image/png",
+        name="extra.png",
+        uploader="keeper",
+    )
+
+    await import_room(
+        services,
+        keystore,
+        Path(exported["path"]).name,
+        expected_room="arkham",
+    )
+
+    docs = await services.store.doc_list(chat_key)
+    assert {(row["type"], row["id"]) for row in docs} == {("lore", "kept")}
+    assert await services.store.state_get(chat_key, "game_clock") == "snapshot-clock"
+    assert await services.store.state_get(chat_key, "kp_notes") is None
+    assert await services.store.get(store_key="bound_room.discord:group:table") == chat_key
+    assert await services.store.get(store_key="bound_room.discord:group:extra") is None
+    assert [point["id"] for point in await room_vector_points(services, chat_key)] == ["kept:0"]
+    assert [record.hash for record in await media_store.list_room_records(chat_key)] == [kept_media.hash]
+    with pytest.raises(MediaError, match="media_not_found"):
+        await media_store.read_bytes(chat_key, extra_media.hash)
+
+
+async def test_import_rollback_restores_history_after_a_later_leg_fails(tmp_path):
+    """History is replaced before vectors/media/keys; a later failure must put it back."""
+    services = _services(str(tmp_path))
+    keystore = Keystore()
+    keystore.add(room="arkham", name="Keeper", role="keeper")
+    chat_key = chat_key_for_room("arkham")
+    await services.store.history_append(
+        chat_key,
+        "chat_history",
+        [{"id": "snap-1", "parent_id": None, "turn": 1, "role": "user", "content": "snapshot line"}],
+    )
+    media_store = MediaStore(
+        services.store,
+        services.settings.data_dir,
+        allowed_mimes=ALLOWED_MEDIA_MIMES,
+    )
+    await media_store.register_blob(
+        room=chat_key,
+        data=b"snapshot handout",
+        mime="image/png",
+        name="snap.png",
+        uploader="keeper",
+    )
+    exported = await export_room(services, keystore, "arkham", "history-rollback.json")
+
+    await services.store.history_delete_room(chat_key)
+    await services.store.history_append(
+        chat_key,
+        "chat_history",
+        [{"id": "live-1", "parent_id": None, "turn": 2, "role": "user", "content": "live line"}],
+    )
+    original_history = await services.store.history_rows(chat_key)
+    assert [row["id"] for row in original_history] == ["live-1"]
+
+    async def _fail_after_history(_instance, **_kwargs):
+        replaced = await services.store.history_rows(chat_key)
+        assert [row["id"] for row in replaced] == ["snap-1"]
+        raise OSError("injected import failure after history replace")
+
+    with patch.object(MediaStore, "validate_offer", new=_fail_after_history):
+        with pytest.raises(OSError, match="after history replace"):
+            await import_room(
+                services,
+                keystore,
+                Path(exported["path"]).name,
+                expected_room="arkham",
+            )
+
+    assert await services.store.history_rows(chat_key) == original_history
+
+
 async def test_admin_room_ops_are_scoped_to_the_callers_room():
     """Security: a keeper key bound to room A cannot mutate/export/wipe/import room B — only its
     own room, including listing/minting/mutating access keys."""
