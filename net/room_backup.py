@@ -96,7 +96,9 @@ _VECTOR_OWNERSHIP_FIELDS = frozenset({"chat_key", "namespace"})
 # Which snapshot section carries each room-scoped storage. The export manifest is built
 # from this map, so a storage a facet lives in cannot quietly go uncarried — the
 # architecture test requires every facet storage to appear here or to be export-exempt,
-# and an export-exempt storage must be CLEARED on import (below) instead.
+# and an export-exempt storage must be CLEARED on import (below) instead. A load is a
+# whole-room checkpoint: each carried storage is replaced, not merged, so live rows the
+# snapshot does not name disappear with the export-exempt ones.
 EXPORT_SECTIONS: dict[str, str] = {
     STORAGE_DOCUMENTS: "documents",
     STORAGE_ROOM_STATE: "room_state",
@@ -338,12 +340,13 @@ async def _preflight_vector_import(
     points: list[tuple[str, list[float], dict[str, Any]]],
     chat_key: str,
 ) -> list[str]:
-    """Reject global id collisions and find obsolete aliases in the target room.
+    """Reject global id collisions before import mutates live state.
 
     Vector ids are global even though retrieval is payload-scoped. A same-room
-    point with the same id is an ordinary upsert; the same id owned by any other
-    room must fail before import mutates live state. Legacy backup aliases for the
-    same document/chunk are returned for removal after canonical points publish.
+    point with the same id is an ordinary replace; the same id owned by any other
+    room must fail closed. Legacy backup aliases for the same document/chunk are
+    still returned, but a checkpoint load wipes every room-owned point first, so
+    the caller no longer has to delete that list separately.
     """
     if not points:
         return []
@@ -647,6 +650,7 @@ class _RoomState:
     rows: list[dict[str, str | None]]
     documents: list[dict[str, Any]]
     state_rows: list[dict[str, str | None]]
+    history: list[dict[str, Any]]
     vectors: list[dict[str, Any]]
     keys: list[dict[str, str]]
     media: list[MediaRecord]
@@ -671,6 +675,7 @@ async def _capture_room_state(
         rows=rows,
         documents=await room_documents(services, chat_key, enforce_limits=False),
         state_rows=await room_state_rows(services, chat_key, enforce_limits=False),
+        history=await room_history_rows(services, chat_key, enforce_limits=False),
         vectors=await room_vector_points(services, chat_key, enforce_limits=False),
         keys=[
             {"key": entry.key, "room": entry.room, "name": entry.name, "role": entry.role}
@@ -850,6 +855,9 @@ async def _replace_room_content(
     rows: list[dict[str, Any]],
     documents: list[dict[str, Any]],
     state_rows: list[dict[str, Any]],
+    *,
+    clear_storages: tuple[str, list[str]] | None = None,
+    preserve_foreign_bindings: bool = True,
 ) -> None:
     current = await room_rows(services, chat_key, enforce_limits=False)
     await _atomic_store_update(
@@ -860,8 +868,27 @@ async def _replace_room_content(
         upsert_documents=documents,
         delete_state_room=chat_key,
         upsert_state=(chat_key, state_rows),
-        preserve_foreign_bindings=True,
+        clear_storages=clear_storages,
+        preserve_foreign_bindings=preserve_foreign_bindings,
     )
+
+
+async def _replace_room_history(
+    services: Services,
+    chat_key: str,
+    history_rows: list[dict[str, Any]],
+) -> None:
+    """Wipe the room's history tree and write `history_rows` in its place.
+
+    A named save is a whole-room checkpoint: rows the snapshot does not carry must
+    not survive the load, and a failed load must be able to put the captured tree
+    back the same way.
+    """
+    await services.store.history_delete_room(chat_key)
+    for key in {row["key"] for row in history_rows}:
+        await services.store.history_append(
+            chat_key, key, [row for row in history_rows if row["key"] == key]
+        )
 
 
 async def _delete_room_vectors(services: Services, chat_key: str) -> int:
@@ -1115,6 +1142,7 @@ async def _rollback_room_state(
         lambda: _restore_staged_media(services, staged_media),
         lambda: _replace_room_vectors(services, chat_key, state.vectors),
         lambda: _replace_room_content(services, chat_key, state.rows, state.documents, state.state_rows),
+        lambda: _replace_room_history(services, chat_key, state.history),
     ):
         try:
             await action()
@@ -1280,6 +1308,7 @@ async def delete_room_data(
             rows=state.rows,
             documents=state.documents,
             state_rows=state.state_rows,
+            history=state.history,
             vectors=state.vectors,
             keys=keys_before_delete,
             media=state.media,
@@ -1519,7 +1548,10 @@ async def import_room(
             raise ValueError("vector value limit exceeded")
         vector_ids.add(point_id)
         validated_vectors.append((point_id, [float(value) for value in vector], payload))
-    stale_vector_ids = await _preflight_vector_import(
+    # Collision check only: a same-id point owned by another room must fail before
+    # any live mutation. Room-owned leftovers are not listed here — the import
+    # replaces the whole room vector set rather than deleting aliases of incoming ids.
+    await _preflight_vector_import(
         vector_store,
         validated_vectors,
         new_chat_key,
@@ -1629,27 +1661,42 @@ async def import_room(
     # mutation it makes, and a ring only this code erased must come back with the rest.
     snapshots_before = await _capture_room_snapshots(services, new_chat_key)
     cleared_storages = sorted(room_registry().storages_not_exported())
+    # Live blobs the snapshot does not name are extras: they must leave on a successful
+    # load, and they must come back if a later leg fails. Stage them before any mutation
+    # so rollback can put the bytes back after the live copies are removed.
+    extra_media = [record for record in state.media if record.hash not in media_hashes]
+    stage_root: Path | None = None
+    staged_media: list[_StagedMedia] = []
+    if extra_media:
+        stage_root, staged_media = await _stage_room_media(services, new_chat_key, extra_media)
     created_media_hashes: set[str] = set()
     try:
-        await _atomic_store_update(
+        # A load is a checkpoint replacement, not a merge: wipe the live room's
+        # exportable rows, then write the snapshot.
+        await _replace_room_content(
             services,
-            upsert_rows=validated_rows,
-            upsert_documents=validated_documents,
-            upsert_state=(new_chat_key, validated_state),
+            new_chat_key,
+            validated_rows,
+            validated_documents,
+            validated_state,
             clear_storages=(new_chat_key, cleared_storages),
+            # A live binding that already names another room is a conflict, not a
+            # merge: fail the load rather than silently drop the snapshot row.
+            # Rollback (the default) skips that upsert so a concurrent rebind wins.
+            preserve_foreign_bindings=False,
         )
-        # The history tree rides outside that transaction because it is append-only:
-        # re-inserting a row that already exists is a no-op by construction, so a retry
-        # after a partial import converges rather than duplicating the conversation.
-        await services.store.history_delete_room(new_chat_key)
-        for key in {row["key"] for row in validated_history}:
-            await services.store.history_append(
-                new_chat_key, key, [row for row in validated_history if row["key"] == key]
-            )
-        if validated_vectors:
-            await vector_store.upsert(validated_vectors)
-        if stale_vector_ids:
-            await vector_store.delete(stale_vector_ids)
+        # History rides outside that transaction: the tree is append-only at the
+        # store API, so replacement is delete-then-append. A later-leg failure
+        # puts the captured tree back through the same helper.
+        await _replace_room_history(services, new_chat_key, validated_history)
+        await _replace_room_vectors(
+            services,
+            new_chat_key,
+            [
+                {"id": point_id, "vector": vector, "payload": payload}
+                for point_id, vector, payload in validated_vectors
+            ],
+        )
         for pending, data in validated_media:
             file_limit, quota_limit, allowed_mimes = _media_policy(services, pending.mime)
             existing = await media_store.validate_offer(
@@ -1664,6 +1711,12 @@ async def import_room(
             if existing is None:
                 await media_store.commit_bytes(pending, data)
                 created_media_hashes.add(pending.sha256)
+        if extra_media:
+            await _remove_imported_media(
+                services,
+                new_chat_key,
+                {record.hash for record in extra_media},
+            )
 
         imported_keys = 0
         with keystore.persisted_mutation():
@@ -1690,6 +1743,7 @@ async def import_room(
                 room,
                 new_chat_key,
                 state,
+                staged_media=staged_media,
                 imported_media=created_media_hashes,
             )
         except BaseException as rollback_exc:
@@ -1702,8 +1756,14 @@ async def import_room(
         except BaseException as ring_exc:
             rollback_errors.append(ring_exc)
         if rollback_errors:
+            # Keep the private staging directory for manual recovery if even compensation fails.
             raise RuntimeError("room import failed and rollback was incomplete") from rollback_errors[0]  # i18n-exempt
+        if stage_root is not None:
+            _discard_stage(stage_root)
         raise
+
+    if stage_root is not None:
+        _discard_stage(stage_root)
 
     return {
         "room": room,

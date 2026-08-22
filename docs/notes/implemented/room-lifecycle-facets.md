@@ -57,6 +57,13 @@
 - `import_room`'s undo-ring restore joined the attempt-every-leg rollback discipline
   instead of riding behind the other legs in one `try`.
 
+## Checkpoint replacement (2026-08-22)
+
+WS1 inverted ownership and made an uncarried storage clear on import. It did not
+change the carried-storage write from upsert-merge to replacement, and history
+stayed out of the capture/rollback snapshot. That follow-through is
+`docs/notes/implemented/room-import-checkpoint-replacement.md`.
+
 ## M23 tail cleanups (2026-08-14, same batch)
 
 Three small closure items from the post-M23 review, landed together on `m23-tail`:
