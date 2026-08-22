@@ -7,7 +7,7 @@
     },
     "protocol": {
       "name": "loreweaver-protocol",
-      "version": "1.7.0",
+      "version": "2.3.2",
       "devDependencies": {
         "typescript": "^5.5.0",
       },

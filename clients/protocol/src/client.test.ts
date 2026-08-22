@@ -158,6 +158,9 @@ describe("WsClient", () => {
       type: FrameType.PackCards,
       cards: [{ ref: "harbour/cards/pilot.json", pack: "harbour", name: "pilot" }],
     })
+    sockets[0].serverSend({ type: FrameType.PackCards, cards: [null] })
+    sockets[0].serverSend({ type: FrameType.PackCards, cards: ["harbour/cards/pilot.json"] })
+    sockets[0].serverSend({ type: FrameType.PackCards, cards: [{ pack: "harbour", name: "pilot" }] })
     expect(cards).toEqual(["harbour/cards/pilot.json"])
   })
 
@@ -231,6 +234,13 @@ describe("WsClient", () => {
 
     // Right `type`, but missing the load-bearing fields the consumers read.
     sockets[0].serverSend({ type: FrameType.State }) // no party / initiative
+    sockets[0].serverSend({ type: FrameType.State, party: [null], initiative: [], online: 1 })
+    sockets[0].serverSend({ type: FrameType.State, party: ["Nora"], initiative: [], online: 1 })
+    sockets[0].serverSend({ type: FrameType.State, party: [], initiative: [null], online: 1 })
+    sockets[0].serverSend({ type: FrameType.AudioState, layers: [null] })
+    sockets[0].serverSend({ type: FrameType.AudioState, layers: ["bgm"] })
+    sockets[0].serverSend({ type: FrameType.Presence, players: [null], online: 1 })
+    sockets[0].serverSend({ type: FrameType.Presence, players: ["Ada"], online: 1 })
     sockets[0].serverSend({ type: FrameType.Narrative, id: "x" }) // no speaker / text
     sockets[0].serverSend({ type: FrameType.System, level: "info" }) // no text
     sockets[0].serverSend({ type: "totally-unknown" }) // unknown type
@@ -267,6 +277,8 @@ describe("WsClient", () => {
       online: 1,
       variables,
     } satisfies StateFrame)
+    sockets[0].serverSend({ type: FrameType.State, party: [], initiative: [], online: 1, variables: [null] })
+    sockets[0].serverSend({ type: FrameType.State, party: [], initiative: [], online: 1, variables: [{ id: "x" }] })
     // An older server omits the field entirely (never an empty array): the frame
     // still validates + dispatches, and the consumer sees `undefined`.
     sockets[0].serverSend({ type: FrameType.State, party: [], initiative: [], online: 1 } satisfies StateFrame)
@@ -303,6 +315,9 @@ describe("WsClient", () => {
     // Malformed variants of the load-bearing fields are dropped, not dispatched.
     sockets[0].serverSend({ type: FrameType.Ui, panel: "inline" }) // no blocks
     sockets[0].serverSend({ type: FrameType.Ui, blocks: [] }) // no panel
+    sockets[0].serverSend({ type: FrameType.Ui, panel: "inline", blocks: [null] })
+    sockets[0].serverSend({ type: FrameType.Ui, panel: "inline", blocks: ["meter"] })
+    sockets[0].serverSend({ type: FrameType.Ui, panel: "inline", blocks: [{ kind: "meter", label: "Fear" }] })
 
     expect(seen).toHaveLength(2)
     expect(seen[0].blocks).toEqual(blocks) // block order preserved, content untouched
@@ -461,7 +476,9 @@ describe("WsClient", () => {
       override_active: false,
     })
     sockets[0].serverSend({ type: FrameType.AdminModels, provider: "openai", models: ["gpt-4o", "gpt-4o-mini"] })
+    sockets[0].serverSend({ type: FrameType.AdminModels, provider: "openai", models: [null] })
     sockets[0].serverSend({ type: FrameType.AdminKeys, keys: [] })
+    sockets[0].serverSend({ type: FrameType.AdminKeys, keys: [null] })
     sockets[0].serverSend({
       type: FrameType.AdminRoomOp,
       action: "export",
@@ -473,6 +490,16 @@ describe("WsClient", () => {
       media_files: 4,
     })
     sockets[0].serverSend({ type: FrameType.AdminError, code: "forbidden" })
+    sockets[0].serverSend({
+      type: FrameType.AdminConfig,
+      provider: "openai",
+      chat_model: "gpt-4o",
+      base_url: "",
+      api_key_masked: "",
+      providers: [null],
+      saved_providers: [],
+      override_active: false,
+    })
 
     expect(seen).toEqual([
       FrameType.AdminConfig,
@@ -514,7 +541,9 @@ describe("WsClient", () => {
     })
     // Malformed variants of each are dropped, not dispatched.
     sockets[0].serverSendRaw(JSON.stringify({ type: FrameType.AdminSkills })) // no `skills`
+    sockets[0].serverSendRaw(JSON.stringify({ type: FrameType.AdminSkills, skills: [null] }))
     sockets[0].serverSendRaw(JSON.stringify({ type: FrameType.AdminRules })) // no `systems`
+    sockets[0].serverSendRaw(JSON.stringify({ type: FrameType.AdminRules, systems: [null] }))
     sockets[0].serverSendRaw(JSON.stringify({ type: FrameType.AdminGenerated, kind: "skill" })) // no `ok`
 
     expect(seen).toEqual([FrameType.AdminSkills, FrameType.AdminRules, FrameType.AdminGenerated])
@@ -580,6 +609,9 @@ describe("module UI panels (v1.8)", () => {
       panels: [{ id: "pack/board", title: { en: "Board" }, slot: "sidebar", tier: 1, blocks: [] }],
     })
     sockets[0].serverSend({ type: "ui_manifest" }) // no panels array -> dropped
+    sockets[0].serverSend({ type: "ui_manifest", panels: [null] })
+    sockets[0].serverSend({ type: "ui_manifest", panels: ["pack/board"] })
+    sockets[0].serverSend({ type: "ui_manifest", panels: [{ title: { en: "Board" }, slot: "sidebar", tier: 1 }] })
     sockets[0].serverSend({ type: "panel_event", panel: "pack/board", payload: { clue: 1 } })
     sockets[0].serverSend({ type: "panel_event", panel: "pack/board" }) // opaque payload may be absent
     sockets[0].serverSend({ type: "panel_event", panel: "" }) // no target panel -> dropped

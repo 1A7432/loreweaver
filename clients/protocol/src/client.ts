@@ -1,5 +1,23 @@
 import {
+  ADMIN_FORGE_KINDS,
+  ADMIN_KEY_PURPOSES,
+  ADMIN_ROOM_OP_ACTIONS,
+  AUDIO_ACTIONS,
+  AUDIO_LAYERS,
+  DICE_KINDS,
   FrameType,
+  MODULE_VARIABLE_KINDS,
+  NARRATIVE_FORMATS,
+  NARRATIVE_SPEAKERS,
+  PACK_CARD_KINDS,
+  PANEL_LEAF_FIELDS,
+  PANEL_SLOTS,
+  PLAYER_ROLES,
+  SYSTEM_LEVELS,
+  UI_BADGE_TONES,
+  UI_BLOCK_KINDS,
+  UI_PANELS,
+  UI_TEXT_STYLES,
   type AdminDeleteRoomDataFrame,
   type AdminEnableSkillFrame,
   type AdminExportRoomFrame,
@@ -86,55 +104,497 @@ const OPEN = 1
 const WS_MEDIA_HEADER_BYTES = 4
 
 function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
 const isStr = (v: unknown): v is string => typeof v === "string"
-const isNum = (v: unknown): v is number => typeof v === "number"
+const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v)
+const isBool = (v: unknown): v is boolean => typeof v === "boolean"
 const isArr = Array.isArray
 
-// Per-frame-type validation of the load-bearing required fields. A frame that
-// passes the `type` check but is missing/mistyped these (e.g. `{"type":"state"}`
-// with no party/initiative, or a narrative with no speaker/text) is DROPPED here
-// so it can never crash a downstream consumer (`.map`/`.length`/`.toUpperCase`
-// on `undefined` in the web panels and the TUI). One validator table protects
-// every client.
+function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
+  return typeof value === "string" && (allowed as readonly string[]).includes(value)
+}
+
+function optional(value: unknown, check: (v: unknown) => boolean): boolean {
+  return value === undefined || check(value)
+}
+
+function everyItem(value: unknown, check: (item: unknown) => boolean): boolean {
+  return isArr(value) && value.every(check)
+}
+
+function isStringList(value: unknown): value is string[] {
+  return everyItem(value, isStr)
+}
+
+/** Content-addressed media blob. Downstream fetches by `hash` and reads `mime`/`size`. */
+function isMediaRef(value: unknown): boolean {
+  return isObject(value) && isStr(value.hash) && isStr(value.mime) && isNum(value.size) && optional(value.name, isStr)
+}
+
+function isMediaFrameFields(value: Record<string, unknown>): boolean {
+  return (
+    isMediaRef(value) &&
+    isStr(value.id) &&
+    isStr(value.name) &&
+    isStr(value.from) &&
+    isNum(value.ts)
+  )
+}
+
+function isAudioLibraryItem(value: unknown): boolean {
+  return (
+    isObject(value) &&
+    isMediaFrameFields(value) &&
+    optional(value.title, isStr) &&
+    optional(value.license, isStr) &&
+    optional(value.source, isStr) &&
+    optional(value.tags, isStringList)
+  )
+}
+
+function isWelcomeYou(value: unknown): boolean {
+  return isObject(value) && isStr(value.id) && isStr(value.name) && isOneOf(value.role, PLAYER_ROLES)
+}
+
+function isResourceState(value: unknown): boolean {
+  return isObject(value) && isStr(value.id) && isStr(value.label) && isNum(value.value) && optional(value.max, isNum)
+}
+
+function isCharacterState(value: unknown): boolean {
+  return (
+    isObject(value) &&
+    isStr(value.name) &&
+    isStr(value.system) &&
+    everyItem(value.resources, isResourceState) &&
+    isObject(value.attributes) &&
+    isStringList(value.status_effects) &&
+    optional(value.avatar, isMediaRef)
+  )
+}
+
+function isPartyMember(value: unknown): boolean {
+  return (
+    isObject(value) &&
+    isStr(value.name) &&
+    isBool(value.online) &&
+    isBool(value.active) &&
+    optional(value.initiative, isNum) &&
+    optional(value.resources, (v) => everyItem(v, isResourceState)) &&
+    optional(value.ai, isBool) &&
+    optional(value.avatar, isMediaRef)
+  )
+}
+
+function isInitiativeEntry(value: unknown): boolean {
+  return isObject(value) && isStr(value.name) && isNum(value.value) && isBool(value.current)
+}
+
+function isUsageState(value: unknown): boolean {
+  return (
+    isObject(value) &&
+    isNum(value.context_tokens) &&
+    isNum(value.context_window) &&
+    isNum(value.input_tokens) &&
+    isNum(value.output_tokens) &&
+    isNum(value.cache_hit_tokens) &&
+    isNum(value.cache_miss_tokens)
+  )
+}
+
+function isModuleVariable(value: unknown): boolean {
+  return (
+    isObject(value) &&
+    isStr(value.id) &&
+    isStr(value.label) &&
+    isOneOf(value.kind, MODULE_VARIABLE_KINDS) &&
+    (isNum(value.value) || isBool(value.value) || isStr(value.value)) &&
+    optional(value.min, isNum) &&
+    optional(value.max, isNum) &&
+    optional(value.hidden, isBool)
+  )
+}
+
+function isPregenEntry(value: unknown): boolean {
+  return isObject(value) && isStr(value.name) && isStr(value.claimed_by)
+}
+
+function isRuleSystemEntry(value: unknown): boolean {
+  return isObject(value) && isStr(value.id) && optional(value.make_char, isStr)
+}
+
+function isSceneState(value: unknown): boolean {
+  return isObject(value) && isStr(value.name) && optional(value.focus, isStr)
+}
+
+function isClockState(value: unknown): boolean {
+  return isObject(value) && isStr(value.time) && optional(value.round, isNum)
+}
+
+function isPresencePlayer(value: unknown): boolean {
+  return isObject(value) && isStr(value.id) && isStr(value.name) && isBool(value.online)
+}
+
+function isAudioLayerState(value: unknown): boolean {
+  return (
+    isObject(value) &&
+    isOneOf(value.layer, AUDIO_LAYERS) &&
+    isBool(value.playing) &&
+    optional(value.hash, isStr) &&
+    optional(value.mime, isStr) &&
+    optional(value.name, isStr) &&
+    optional(value.title, isStr) &&
+    optional(value.volume, isNum) &&
+    optional(value.loop, isBool) &&
+    optional(value.started_at, isNum)
+  )
+}
+
+function isPackCardEntry(value: unknown): boolean {
+  return (
+    isObject(value) &&
+    isStr(value.ref) &&
+    isStr(value.pack) &&
+    isStr(value.name) &&
+    optional(value.kind, (v) => isOneOf(v, PACK_CARD_KINDS))
+  )
+}
+
+function isDiceOutcome(value: unknown): boolean {
+  return (
+    isObject(value) &&
+    isStr(value.id) &&
+    isStr(value.label) &&
+    isBool(value.success) &&
+    isBool(value.critical) &&
+    isBool(value.fumble) &&
+    isNum(value.tier) &&
+    optional(value.margin, isNum)
+  )
+}
+
+function isUiChoiceOption(value: unknown): boolean {
+  return isObject(value) && isStr(value.id) && isStr(value.label) && isStr(value.input)
+}
+
+function isKnownUiBlockKind(kind: string): kind is (typeof UI_BLOCK_KINDS)[number] {
+  return (UI_BLOCK_KINDS as readonly string[]).includes(kind)
+}
+
+/** Hook `ui` blocks: object + kind; known kinds check their required fields.
+ * An unknown kind is additive and passes so a newer server can ship a new
+ * template without dropping the whole frame. null / primitives never pass. */
+function isUiBlock(value: unknown): boolean {
+  if (!isObject(value) || !isStr(value.kind)) return false
+  if (!isKnownUiBlockKind(value.kind)) return true
+  switch (value.kind) {
+    case "meter":
+      return isStr(value.label) && isNum(value.value) && isNum(value.min) && isNum(value.max)
+    case "stat":
+      return isStr(value.label) && (isNum(value.value) || isStr(value.value) || isBool(value.value))
+    case "badge":
+      return isStr(value.label) && optional(value.tone, (v) => isOneOf(v, UI_BADGE_TONES))
+    case "text":
+      return isStr(value.text) && optional(value.style, (v) => isOneOf(v, UI_TEXT_STYLES))
+    case "divider":
+      return true
+    case "choices":
+      return optional(value.prompt, isStr) && everyItem(value.options, isUiChoiceOption)
+    case "image":
+      return isStr(value.hash) && optional(value.mime, isStr) && optional(value.size, isNum)
+    case "letter":
+      return isStr(value.body)
+    case "clipping":
+      return isStr(value.headline) && isStr(value.body)
+    case "map_pin":
+      return isStr(value.hash) && isStr(value.label) && isNum(value.x) && isNum(value.y)
+    case "title_card":
+      return isStr(value.title)
+  }
+}
+
+function isPanelText(value: unknown): boolean {
+  return isObject(value) && optional(value.en, isStr) && optional(value.zh, isStr)
+}
+
+function isPanelVarBinding(value: unknown): boolean {
+  return isObject(value) && isStr(value.$var)
+}
+
+function isPanelLeafBinding(value: unknown): boolean {
+  return isObject(value) && isOneOf(value.$leaf, PANEL_LEAF_FIELDS)
+}
+
+function isPanelTextValue(value: unknown): boolean {
+  return isPanelText(value) || isPanelVarBinding(value) || isPanelLeafBinding(value)
+}
+
+function isPanelBindableNumber(value: unknown): boolean {
+  return isNum(value) || isPanelVarBinding(value) || isPanelLeafBinding(value)
+}
+
+function isPanelBindableScalar(value: unknown): boolean {
+  return isNum(value) || isStr(value) || isBool(value) || isPanelVarBinding(value) || isPanelLeafBinding(value)
+}
+
+function isPanelChoiceOption(value: unknown): boolean {
+  return isObject(value) && isStr(value.id) && isPanelTextValue(value.label) && isStr(value.input)
+}
+
+/** One `repeat` wrapper. The inner template is checked with `allowRepeat=false`
+ * so a nested / thousand-deep `repeat` tree is a flat reject, not a walk.
+ * Protocol and Studio both say repeat does not nest — this is that rule. */
+function isPanelRepeat(value: unknown): boolean {
+  return (
+    isObject(value) &&
+    isObject(value.repeat) &&
+    isStr(value.repeat.prefix) &&
+    isPanelTemplateBlock(value.repeat.block, false)
+  )
+}
+
+/** Panel template blocks: object + kind (or `repeat`) + that kind's required
+ * fields. Bindings (`$var` / `$leaf`) count as present. Unknown kinds pass.
+ * `allowRepeat` is true only at the panel `blocks` / `fallback` root; the
+ * inner of a repeat must be a kind (or unknown-kind object), never another
+ * repeat. This is the only recursive validator pair, and it is bounded to
+ * one level. The flag is required (no default) so it cannot be confused
+ * with `Array.every`'s index argument. */
+function isPanelTemplateBlock(value: unknown, allowRepeat: boolean): boolean {
+  if (!isObject(value)) return false
+  if (optional(value.visible_when, isStr) === false) return false
+  if ("repeat" in value) return allowRepeat && isPanelRepeat(value)
+  if (!isStr(value.kind)) return false
+  if (!isKnownUiBlockKind(value.kind)) return true
+  switch (value.kind) {
+    case "meter":
+      return (
+        isPanelTextValue(value.label) &&
+        isPanelBindableNumber(value.value) &&
+        isPanelBindableNumber(value.min) &&
+        isPanelBindableNumber(value.max)
+      )
+    case "stat":
+      return isPanelTextValue(value.label) && isPanelBindableScalar(value.value)
+    case "badge":
+      return (
+        isPanelTextValue(value.label) &&
+        optional(value.tone, (v) => isOneOf(v, UI_BADGE_TONES) || isPanelVarBinding(v) || isPanelLeafBinding(v))
+      )
+    case "text":
+      return isPanelTextValue(value.text) && optional(value.style, (v) => isOneOf(v, UI_TEXT_STYLES))
+    case "divider":
+      return true
+    case "choices":
+      return optional(value.prompt, isPanelTextValue) && everyItem(value.options, isPanelChoiceOption)
+    case "image":
+      return isStr(value.hash) && isStr(value.mime) && isNum(value.size)
+    case "letter":
+      return isPanelTextValue(value.body)
+    case "clipping":
+      return isPanelTextValue(value.headline) && isPanelTextValue(value.body)
+    case "map_pin":
+      return (
+        isStr(value.hash) &&
+        isStr(value.mime) &&
+        isNum(value.size) &&
+        isPanelTextValue(value.label) &&
+        isPanelBindableNumber(value.x) &&
+        isPanelBindableNumber(value.y)
+      )
+    case "title_card":
+      return isPanelTextValue(value.title)
+  }
+}
+
+function isPanelAssetRef(value: unknown): boolean {
+  return isObject(value) && isStr(value.path) && isStr(value.hash) && isNum(value.size) && isStr(value.mime)
+}
+
+function isUiManifestPanel(value: unknown): boolean {
+  if (!isObject(value) || !isStr(value.id) || !isPanelText(value.title)) return false
+  if (!isOneOf(value.slot, PANEL_SLOTS) || (value.tier !== 1 && value.tier !== 2)) return false
+  if (!optional(value.blocks, (v) => everyItem(v, (item) => isPanelTemplateBlock(item, true)))) return false
+  if (
+    !optional(
+      value.entry,
+      (v) => isObject(v) && isStr(v.hash) && isNum(v.size),
+    )
+  ) {
+    return false
+  }
+  if (!optional(value.assets, (v) => everyItem(v, isPanelAssetRef))) return false
+  if (value.fallback === null) return true
+  return optional(value.fallback, (v) => everyItem(v, (item) => isPanelTemplateBlock(item, true)))
+}
+
+function isImageGenStatus(value: unknown): boolean {
+  return (
+    isObject(value) &&
+    isStr(value.provider) &&
+    isStr(value.base_url) &&
+    isStr(value.model) &&
+    isStr(value.size) &&
+    isStr(value.api_key_masked) &&
+    isBool(value.has_key) &&
+    isBool(value.configured) &&
+    optional(value.saved_providers, isStringList)
+  )
+}
+
+function isAdminKeyInfo(value: unknown): boolean {
+  return (
+    isObject(value) &&
+    isStr(value.id) &&
+    isStr(value.key_masked) &&
+    isStr(value.room) &&
+    isStr(value.name) &&
+    isOneOf(value.role, PLAYER_ROLES) &&
+    isOneOf(value.purpose, ADMIN_KEY_PURPOSES) &&
+    (value.expires_at === null || isNum(value.expires_at))
+  )
+}
+
+function isMintedKey(value: unknown): boolean {
+  return (
+    isObject(value) &&
+    isStr(value.key) &&
+    isStr(value.room) &&
+    isStr(value.name) &&
+    isOneOf(value.role, PLAYER_ROLES) &&
+    isOneOf(value.purpose, ADMIN_KEY_PURPOSES) &&
+    (value.expires_at === null || isNum(value.expires_at))
+  )
+}
+
+function isAdminSkillInfo(value: unknown): boolean {
+  return (
+    isObject(value) &&
+    isStr(value.id) &&
+    isStr(value.name) &&
+    isStr(value.description) &&
+    isStr(value.content_rating) &&
+    isBool(value.enabled)
+  )
+}
+
+function isAdminRuleInfo(value: unknown): boolean {
+  return isObject(value) && isStr(value.id) && isBool(value.built_in)
+}
+
+// Per-frame-type validation of the load-bearing required fields AND the nested
+// shapes downstream clients dereference (`.map`, `.id`, `layers[wire.layer]`,
+// `you.role`, …). A frame that passes the `type` check but carries null /
+// primitive / missing-required entries in those arrays is DROPPED here so it
+// can never crash a consumer. Unknown extra fields and unknown frame types
+// stay additive (ignored, not rejected). One validator table protects every
+// client.
 const serverFrameValidators: Record<string, (f: Record<string, unknown>) => boolean> = {
-  [FrameType.Welcome]: (f) => isStr(f.room) && isObject(f.you) && isStr(f.you.name) && isStr(f.you.role),
+  [FrameType.Welcome]: (f) =>
+    isStr(f.protocol) &&
+    isStr(f.room) &&
+    isWelcomeYou(f.you) &&
+    isStr(f.locale) &&
+    isStr(f.server) &&
+    optional(f.features, isStringList) &&
+    optional(f.version, isStr),
   [FrameType.Error]: (f) => isStr(f.code) && isStr(f.message),
-  [FrameType.MediaAccept]: (f) => isStr(f.upload_id),
-  [FrameType.Media]: (f) =>
-    isStr(f.id) && isStr(f.hash) && isStr(f.mime) && isNum(f.size) && isStr(f.name) && isStr(f.from) && isNum(f.ts),
-  [FrameType.MediaEnabled]: (f) => typeof f.enabled === "boolean",
-  [FrameType.AudioLibraryItem]: (f) =>
-    isStr(f.id) && isStr(f.hash) && isStr(f.mime) && isNum(f.size) && isStr(f.name) && isStr(f.from) && isNum(f.ts),
-  [FrameType.AudioControl]: (f) => isStr(f.id) && isStr(f.action) && isStr(f.layer),
-  [FrameType.AudioState]: (f) => isArr(f.layers),
-  [FrameType.Narrative]: (f) => isStr(f.id) && isStr(f.speaker) && isStr(f.text),
-  [FrameType.NarrativeDelta]: (f) => isStr(f.id) && isStr(f.speaker) && isStr(f.text),
-  [FrameType.PackCards]: (f) => isArr(f.cards),
-  [FrameType.Dice]: (f) => isStr(f.actor) && isStr(f.expr) && isNum(f.total),
-  [FrameType.Ui]: (f) => isArr(f.blocks) && isStr(f.panel),
-  // v1.8 module panels: a manifest is a full-replace panel list; a panel event names
-  // its target panel (payload is opaque JSON and may legitimately be null/absent).
-  [FrameType.UiManifest]: (f) => isArr(f.panels),
+  [FrameType.MediaAccept]: (f) =>
+    isStr(f.upload_id) &&
+    optional(f.existing, isBool) &&
+    optional(f.media, (v) => isObject(v) && v.type === FrameType.Media && isMediaFrameFields(v)) &&
+    optional(f.audio, isAudioLibraryItem),
+  [FrameType.Media]: (f) => isMediaFrameFields(f),
+  [FrameType.MediaEnabled]: (f) => isBool(f.enabled),
+  [FrameType.AudioLibraryItem]: (f) => isAudioLibraryItem(f),
+  [FrameType.AudioControl]: (f) =>
+    isStr(f.id) &&
+    isOneOf(f.action, AUDIO_ACTIONS) &&
+    isOneOf(f.layer, AUDIO_LAYERS) &&
+    optional(f.hash, isStr) &&
+    optional(f.mime, isStr) &&
+    optional(f.name, isStr) &&
+    optional(f.title, isStr) &&
+    optional(f.loop, isBool) &&
+    optional(f.volume, isNum) &&
+    optional(f.fade_ms, isNum) &&
+    optional(f.position_ms, isNum) &&
+    optional(f.server_ts, isNum),
+  [FrameType.AudioState]: (f) => everyItem(f.layers, isAudioLayerState),
+  [FrameType.Narrative]: (f) =>
+    isStr(f.id) && isOneOf(f.speaker, NARRATIVE_SPEAKERS) && isStr(f.text) && isOneOf(f.format, NARRATIVE_FORMATS),
+  [FrameType.NarrativeDelta]: (f) => isStr(f.id) && isOneOf(f.speaker, NARRATIVE_SPEAKERS) && isStr(f.text),
+  [FrameType.PackCards]: (f) => everyItem(f.cards, isPackCardEntry),
+  [FrameType.Dice]: (f) =>
+    isStr(f.actor) &&
+    isOneOf(f.kind, DICE_KINDS) &&
+    isStr(f.expr) &&
+    everyItem(f.rolls, isNum) &&
+    isNum(f.total) &&
+    optional(f.target, isNum) &&
+    optional(f.effective_target, isNum) &&
+    optional(f.subsystem, isStr) &&
+    optional(f.outcome, isDiceOutcome) &&
+    optional(f.detail, isObject),
+  [FrameType.Ui]: (f) => everyItem(f.blocks, isUiBlock) && isOneOf(f.panel, UI_PANELS),
+  [FrameType.UiManifest]: (f) => everyItem(f.panels, isUiManifestPanel),
   [FrameType.PanelEvent]: (f) => isStr(f.panel) && f.panel.length > 0,
-  [FrameType.State]: (f) => isArr(f.party) && isArr(f.initiative) && isNum(f.online),
-  [FrameType.Presence]: (f) => isArr(f.players) && isNum(f.online),
-  [FrameType.System]: (f) => isStr(f.level) && isStr(f.text),
+  [FrameType.State]: (f) =>
+    optional(f.character, isCharacterState) &&
+    everyItem(f.party, isPartyMember) &&
+    optional(f.scene, isSceneState) &&
+    optional(f.clock, isClockState) &&
+    everyItem(f.initiative, isInitiativeEntry) &&
+    isNum(f.online) &&
+    optional(f.usage, isUsageState) &&
+    optional(f.variables, (v) => everyItem(v, isModuleVariable)) &&
+    optional(f.pregens, (v) => everyItem(v, isPregenEntry)) &&
+    optional(f.systems, (v) => everyItem(v, isRuleSystemEntry)) &&
+    optional(f.reset, isBool),
+  [FrameType.Presence]: (f) => everyItem(f.players, isPresencePlayer) && isNum(f.online),
+  [FrameType.System]: (f) => isOneOf(f.level, SYSTEM_LEVELS) && isStr(f.text) && optional(f.spinner, isBool),
   [FrameType.TurnStatus]: (f) =>
-    (f.status === "busy" && isStr(f.actor) && f.actor.length > 0) || f.status === "idle",
+    (f.status === "busy" &&
+      isStr(f.actor) &&
+      f.actor.length > 0 &&
+      optional(f.activity, isStr) &&
+      optional(f.round, isNum)) ||
+    f.status === "idle",
   [FrameType.Pong]: (f) => isNum(f.t),
-  [FrameType.AdminConfig]: (f) => isStr(f.provider) && isStr(f.chat_model) && isArr(f.providers),
-  [FrameType.AdminModels]: (f) => isStr(f.provider) && isArr(f.models),
-  [FrameType.AdminKeys]: (f) => isArr(f.keys),
+  [FrameType.AdminConfig]: (f) =>
+    isStr(f.provider) &&
+    isStr(f.chat_model) &&
+    isStr(f.base_url) &&
+    isStr(f.api_key_masked) &&
+    isStringList(f.providers) &&
+    isStringList(f.saved_providers) &&
+    isBool(f.override_active) &&
+    optional(f.imagegen, isImageGenStatus) &&
+    optional(f.using_demo, isBool) &&
+    optional(f.subscription_status, (v) => v === "" || v === "logged_in" || v === "logged_out"),
+  [FrameType.AdminModels]: (f) => isStr(f.provider) && isStringList(f.models) && optional(f.imagegen, isImageGenStatus),
+  [FrameType.AdminKeys]: (f) => everyItem(f.keys, isAdminKeyInfo) && optional(f.minted, isMintedKey),
   [FrameType.AdminRoomOp]: (f) =>
-    isStr(f.action) && isStr(f.room) && isNum(f.keys) && isNum(f.store_rows) && isNum(f.vector_points),
-  [FrameType.AdminError]: (f) => isStr(f.code),
-  [FrameType.AdminSkills]: (f) => isArr(f.skills),
-  [FrameType.AdminRules]: (f) => isArr(f.systems),
-  [FrameType.AdminGenerated]: (f) => isStr(f.kind) && typeof f.ok === "boolean",
-  [FrameType.AdminUpdate]: (f) => isStr(f.status),
+    isOneOf(f.action, ADMIN_ROOM_OP_ACTIONS) &&
+    isStr(f.room) &&
+    isNum(f.keys) &&
+    isNum(f.store_rows) &&
+    isNum(f.vector_points) &&
+    optional(f.path, isStr) &&
+    optional(f.media_files, isNum) &&
+    optional(f.scope, isStr),
+  [FrameType.AdminError]: (f) => isStr(f.code) && optional(f.message, isStr),
+  [FrameType.AdminSkills]: (f) => everyItem(f.skills, isAdminSkillInfo),
+  [FrameType.AdminRules]: (f) => everyItem(f.systems, isAdminRuleInfo),
+  [FrameType.AdminGenerated]: (f) =>
+    isOneOf(f.kind, ADMIN_FORGE_KINDS) &&
+    isBool(f.ok) &&
+    optional(f.id, isStr) &&
+    optional(f.name, isStr) &&
+    optional(f.error, isStr) &&
+    optional(f.detail, isStr),
+  [FrameType.AdminUpdate]: (f) => (f.status === "restarting" || f.status === "failed") && optional(f.output, isStr),
 }
 
 function defaultWebSocketFactory(url: string): WebSocketLike {
