@@ -48,7 +48,16 @@ def _services(responder=None):
 
 def _room_ctx(room: str, *, user_id: str = "seed", fs=None) -> AgentCtx:
     chat_key = SessionSource(platform="tui", chat_type="group", chat_id=room).chat_key()
-    return AgentCtx(chat_key=chat_key, user_id=user_id, platform="tui", locale="en", fs=fs)
+    # Same extra key SessionCore stamps: a TUI ctx without `reauthorize` is
+    # fail-closed at the first live-auth write (e.g. `upload_document`).
+    return AgentCtx(
+        chat_key=chat_key,
+        user_id=user_id,
+        platform="tui",
+        locale="en",
+        fs=fs,
+        extra={"reauthorize": lambda: True},
+    )
 
 
 async def _start(server: TuiServer) -> str:
