@@ -1,0 +1,4 @@
+{
+  "name": "Loreweaver",
+  "install": "bash .cursor/install.sh"
+}
