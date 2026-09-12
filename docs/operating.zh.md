@@ -108,6 +108,18 @@ TRPG_SCRIBE__REASONING_EFFORT=low
 
 `MAX_IMAGES` 是每个房间的终身上限（房间是长期战役，不是单场）。超了之后导演继续用包内美术和已经生成过的素材做舞台，只是不再花钱。
 
+要用 MuAPI 生图，可以直接使用内置的 provider 预设，只填 key：
+
+```dotenv
+TRPG_IMAGEGEN__PROVIDER=muapi
+TRPG_IMAGEGEN__API_KEY=...
+# 可选：下面就是 MuAPI 预设的默认值。
+# TRPG_IMAGEGEN__BASE_URL=https://api.muapi.ai/v1
+# TRPG_IMAGEGEN__MODEL=flux-schnell
+```
+
+这个预设使用 MuAPI 文档中返回 URL 的生图响应。由于公开的生图接口没有定义编辑 endpoint，带参考图时会退回仅使用提示词的生成。
+
 ### 本地模型
 
 提示不能出你这台机器的话，把 `TRPG_LLM__PROVIDER` 指向 `ollama` 或 `lmstudio`。只有这一种配置能让模组正文、守秘人设定和玩家输入都留在你自己掌控的基础设施上——自托管**服务器**本身并不会让模型流量也变成本地的。

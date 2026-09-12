@@ -137,6 +137,19 @@ Image generation additionally needs all three of these to agree:
 `MAX_IMAGES` is a lifetime cap per room (rooms are long-lived campaigns). Past it the Director keeps
 staging with pack art and already-generated subjects and simply stops spending.
 
+For MuAPI image generation, use the built-in provider preset and set its key:
+
+```dotenv
+TRPG_IMAGEGEN__PROVIDER=muapi
+TRPG_IMAGEGEN__API_KEY=...
+# Optional: these are the MuAPI preset defaults.
+# TRPG_IMAGEGEN__BASE_URL=https://api.muapi.ai/v1
+# TRPG_IMAGEGEN__MODEL=flux-schnell
+```
+
+The preset uses MuAPI's documented URL-returning image-generation response. Reference images fall
+back to prompt-only generation because the public image surface does not define an edit endpoint.
+
 ### Local models
 
 Point `TRPG_LLM__PROVIDER` at `ollama` or `lmstudio` when prompts must not leave your machine. This
