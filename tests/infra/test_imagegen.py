@@ -6,7 +6,14 @@ import httpx
 import pytest
 
 from infra.config import ImageGenSettings, Settings
-from infra.imagegen import IMAGEGEN_PRESETS, ImageGenError, OpenAICompatImageGen, build_imagegen
+from infra.imagegen import (
+    IMAGEGEN_PRESETS,
+    MUAPI_DEFAULT_IMAGE_MODEL,
+    MUAPI_IMAGE_BASE_URL,
+    ImageGenError,
+    OpenAICompatImageGen,
+    build_imagegen,
+)
 from infra.oauth_flows import XAI_API_BASE, XAI_DEFAULT_IMAGE_MODEL, SubscriptionToken
 from infra.runtime_config import CredentialBook
 from infra.store import Store
@@ -68,6 +75,61 @@ async def test_openai_compat_imagegen_uses_magic_bytes_before_declared_mime():
 
     assert data == image_bytes
     assert mime == "image/jpeg"
+
+
+async def test_muapi_preset_accepts_https_url_results_without_forwarding_api_key():
+    image_bytes = b"\x89PNG\r\n\x1a\nfixture"
+    seen: list[tuple[str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.headers.get("authorization")))
+        if request.url.path.endswith("/images/generations"):
+            body = json.loads(request.read())
+            assert "response_format" not in body
+            assert body["n"] == 1
+            return httpx.Response(200, json={"data": [{"url": "https://cdn.example/image.png"}]})
+        return httpx.Response(200, content=image_bytes, headers={"content-type": "image/png"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    gen = OpenAICompatImageGen(
+        ImageGenSettings(provider="muapi", api_key="secret", model=MUAPI_DEFAULT_IMAGE_MODEL),
+        client=client,
+    )
+    try:
+        data, mime = await gen.generate("a lantern", size="1024x1024")
+    finally:
+        await client.aclose()
+
+    assert data == image_bytes
+    assert mime == "image/png"
+    assert seen == [("POST", "Bearer secret"), ("GET", None)]
+    assert IMAGEGEN_PRESETS["muapi"] == {
+        "base_url": MUAPI_IMAGE_BASE_URL,
+        "model": MUAPI_DEFAULT_IMAGE_MODEL,
+    }
+
+
+async def test_muapi_prompt_only_fallback_does_not_call_undocumented_edit_endpoint():
+    seen_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append(request.url.path)
+        return httpx.Response(
+            200,
+            json={"data": [{"b64_json": base64.b64encode(b"image").decode("ascii")}]},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    gen = OpenAICompatImageGen(
+        ImageGenSettings(provider="muapi", api_key="secret", model=MUAPI_DEFAULT_IMAGE_MODEL),
+        client=client,
+    )
+    try:
+        await gen.generate("a lantern", reference=b"reference")
+    finally:
+        await client.aclose()
+
+    assert seen_paths == ["/v1/images/generations"]
 
 
 async def test_token_provider_preferred_over_api_key():

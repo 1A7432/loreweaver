@@ -22,14 +22,19 @@ if TYPE_CHECKING:
     from infra.runtime_config import CredentialBook
 
 OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1"
+MUAPI_IMAGE_BASE_URL = "https://api.muapi.ai/v1"
+MUAPI_DEFAULT_IMAGE_MODEL = "flux-schnell"
 IMAGEGEN_OVERRIDE_FIELDS: tuple[str, ...] = ("provider", "base_url", "api_key", "model", "size")
 
 # Provider presets: base_url + default model. ``supergrok`` reuses the SuperGrok
 # subscription token from the LLM credential book (not a separate image key).
 IMAGEGEN_PRESETS: dict[str, dict[str, str]] = {
     "openai": {"base_url": OPENAI_IMAGE_BASE_URL, "model": "gpt-image-1"},
+    "muapi": {"base_url": MUAPI_IMAGE_BASE_URL, "model": MUAPI_DEFAULT_IMAGE_MODEL},
     "supergrok": {"base_url": XAI_API_BASE, "model": XAI_DEFAULT_IMAGE_MODEL},
 }
+
+MAX_IMAGE_BYTES = 64 * 1024 * 1024
 
 TokenProvider = Callable[[], Awaitable[str]]
 
@@ -128,56 +133,104 @@ class OpenAICompatImageGen:
         request_body = {
             "model": self._settings.model,
             "prompt": prompt,
-            "response_format": "b64_json",
         }
-        if (self._settings.provider or "").casefold() == "supergrok":
+        provider = (self._settings.provider or "").casefold()
+        if provider == "supergrok":
             # xAI's Imagine API uses aspect_ratio + 1k/2k resolution rather
             # than OpenAI's pixel-based `size` field.
             request_body.update(_xai_dimensions(requested_size))
         else:
             request_body["size"] = requested_size
+            # MuAPI documents URL results and does not document response_format.
+            # Other OpenAI-compatible providers keep the existing base64 request.
+            if provider == "muapi":
+                request_body["n"] = 1
+            else:
+                request_body["response_format"] = "b64_json"
 
         base = _base_url(self._settings).rstrip("/")
         try:
-            if reference:
-                # A 定妆 reference means image-to-image, which is a DIFFERENT endpoint
-                # and a multipart body on the OpenAI-compatible surface. `response_format`
-                # is not accepted there; edits answer b64 by default.
-                request_body.pop("response_format", None)
-                response = await client.post(
-                    f"{base}/images/edits",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    data={key: str(value) for key, value in request_body.items()},
-                    files={"image": ("reference.png", reference, reference_mime or "image/png")},
-                )
-            else:
-                response = await client.post(
-                    f"{base}/images/generations",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    json=request_body,
-                )
-        except httpx.TimeoutException as exc:
-            raise ImageGenError("imagegen_timeout") from exc
-        except httpx.HTTPError as exc:
-            raise ImageGenError("imagegen_http_error") from exc
+            try:
+                if reference and provider != "muapi":
+                    # A 定妆 reference means image-to-image, which is a DIFFERENT endpoint
+                    # and a multipart body on the OpenAI-compatible surface. `response_format`
+                    # is not accepted there; edits answer b64 by default.
+                    response = await client.post(
+                        f"{base}/images/edits",
+                        headers={"Authorization": f"Bearer {api_key}"},
+                        data={
+                            key: str(value)
+                            for key, value in request_body.items()
+                            if key != "response_format"
+                        },
+                        files={"image": ("reference.png", reference, reference_mime or "image/png")},
+                    )
+                else:
+                    response = await client.post(
+                        f"{base}/images/generations",
+                        headers={"Authorization": f"Bearer {api_key}"},
+                        json=request_body,
+                    )
+            except httpx.TimeoutException as exc:
+                raise ImageGenError("imagegen_timeout") from exc
+            except httpx.HTTPError as exc:
+                raise ImageGenError("imagegen_http_error") from exc
+
+            if response.status_code < 200 or response.status_code >= 300:
+                raise ImageGenError("imagegen_http_error", str(response.status_code))
+
+            try:
+                payload = response.json()
+                entry = payload["data"][0]
+                if not isinstance(entry, dict):
+                    raise TypeError
+                if "b64_json" in entry:
+                    data = base64.b64decode(str(entry["b64_json"]), validate=True)
+                elif "url" in entry:
+                    data = await self._download_output(client, entry["url"])
+                else:
+                    raise KeyError("b64_json or url")
+            except (KeyError, IndexError, TypeError, ValueError, binascii.Error) as exc:
+                raise ImageGenError("imagegen_bad_response") from exc
+            if not data:
+                raise ImageGenError("imagegen_bad_response")
+            declared_mime = entry.get("mime_type") if isinstance(entry, dict) else None
+            return data, _detect_image_mime(data, declared_mime)
         finally:
             if close_client:
                 await client.aclose()
 
-        if response.status_code < 200 or response.status_code >= 300:
-            raise ImageGenError("imagegen_http_error", str(response.status_code))
-
+    async def _download_output(self, client: httpx.AsyncClient, value: object) -> bytes:
         try:
-            payload = response.json()
-            entry = payload["data"][0]
-            b64 = entry["b64_json"]
-            data = base64.b64decode(str(b64), validate=True)
-        except (KeyError, IndexError, TypeError, ValueError, binascii.Error) as exc:
+            output_url = httpx.URL(str(value))
+        except (TypeError, ValueError) as exc:
             raise ImageGenError("imagegen_bad_response") from exc
+        if output_url.scheme != "https" or not output_url.host or output_url.username or output_url.password:
+            raise ImageGenError("imagegen_bad_response")
+        try:
+            async with client.stream("GET", output_url, follow_redirects=False) as response:
+                if response.status_code != 200:
+                    raise ImageGenError("imagegen_http_error", str(response.status_code))
+                content_length = response.headers.get("content-length")
+                if content_length and int(content_length) > MAX_IMAGE_BYTES:
+                    raise ImageGenError("imagegen_bad_response")
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in response.aiter_bytes():
+                    total += len(chunk)
+                    if total > MAX_IMAGE_BYTES:
+                        raise ImageGenError("imagegen_bad_response")
+                    chunks.append(chunk)
+        except ValueError as exc:
+            raise ImageGenError("imagegen_bad_response") from exc
+        except httpx.TimeoutException as exc:
+            raise ImageGenError("imagegen_timeout") from exc
+        except httpx.HTTPError as exc:
+            raise ImageGenError("imagegen_http_error") from exc
+        data = b"".join(chunks)
         if not data:
             raise ImageGenError("imagegen_bad_response")
-        declared_mime = entry.get("mime_type") if isinstance(entry, dict) else None
-        return data, _detect_image_mime(data, declared_mime)
+        return data
 
 
 class FakeImageGen:
