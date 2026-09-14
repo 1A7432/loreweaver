@@ -99,6 +99,7 @@ export interface BridgeRouterOptions {
   settingsPath?: string
   onIntent: (intent: OutboundIntent) => void
   onKickClose?: (userId: string, memberKey: string) => void
+  onLog?: (text: string) => void
   now?: () => number
   setTimeoutFn?: typeof setTimeout
   clearTimeoutFn?: typeof clearTimeout
@@ -119,6 +120,7 @@ export class BridgeRouter {
   private readonly observerSeen = new CappedSet(OBSERVER_SEEN_CAP)
   private readonly privatelySent = new CappedSet(OBSERVER_SEEN_CAP)
   private readonly lastChannel = new Map<string, InboundChannel>()
+  private readonly inputChannels = new Map<string, InboundChannel[]>()
   private readonly lastNotAdmin = new Map<string, number>()
   private readonly holdTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private holdSeq = 0
@@ -223,14 +225,17 @@ export class BridgeRouter {
     slot.link.sendInput(text)
   }
 
-  async handleInbound(msg: {
-    userId: string
-    memberKey: string
-    text: string
-    channel: InboundChannel
-    mentioned?: boolean
-    isAdmin: boolean
-  }): Promise<void> {
+  async handleInbound(
+    msg: {
+      userId: string
+      memberKey: string
+      text: string
+      channel: InboundChannel
+      mentioned?: boolean
+      isAdmin: boolean
+    },
+    onForward?: () => Promise<void>,
+  ): Promise<boolean> {
     this.markChannel(msg.userId, msg.channel)
     const reply = (text: string) => {
       if (msg.channel === "private" || msg.isAdmin) this.emit({ dest: "private", userId: msg.userId, text })
@@ -240,18 +245,20 @@ export class BridgeRouter {
     if (isBridgeCommand(msg.text)) {
       if (!msg.isAdmin) {
         const last = this.lastNotAdmin.get(msg.userId)
-        if (last !== undefined && this.now() - last < NOT_ADMIN_COOLDOWN_MS) return
+        if (last !== undefined && this.now() - last < NOT_ADMIN_COOLDOWN_MS) return false
         this.lastNotAdmin.set(msg.userId, this.now())
       }
       const text = await runBridgeCommand(msg.text, msg.isAdmin, this.commandView(), this.commandEffects())
       if (text) reply(text)
-      return
+      return false
     }
 
     const choice = this.choices.match(msg.text, this.now())
     if (choice.kind === "hit") {
+      if (onForward) await onForward()
+      this.noteInputChannel(msg.userId, msg.channel)
       this.queueInput(msg.memberKey, choice.input)
-      return
+      return true
     }
     if (
       shouldForwardInbound({
@@ -261,8 +268,24 @@ export class BridgeRouter {
         mentioned: Boolean(msg.mentioned),
       })
     ) {
+      if (onForward) await onForward()
+      this.noteInputChannel(msg.userId, msg.channel)
       this.queueInput(msg.memberKey, msg.text)
+      return true
     }
+    return false
+  }
+
+  private noteInputChannel(userId: string, channel: InboundChannel): void {
+    const queue = this.inputChannels.get(userId) ?? []
+    queue.push(channel)
+    this.inputChannels.set(userId, queue)
+  }
+
+  private consumeInputChannel(userId: string): InboundChannel | undefined {
+    const queue = this.inputChannels.get(userId)
+    if (queue && queue.length > 0) return queue.shift()
+    return this.lastChannel.get(userId)
   }
 
   private commandView() {
@@ -288,6 +311,9 @@ export class BridgeRouter {
       admins: this.admins,
       mode: this.mode,
       busyNotice: this.busyNotice,
+    }).catch((error) => {
+      const detail = error instanceof Error ? error.message : String(error)
+      this.options.onLog?.(`bridge.settings_save_failed ${detail}`)
     })
   }
 
@@ -475,7 +501,7 @@ export class BridgeRouter {
     if (!userId) return
     const text = unicastText(frame)
     if (!text) return
-    const channel = this.lastChannel.get(userId)
+    const channel = this.consumeInputChannel(userId)
     if (channel === "group") this.emit({ dest: "reply", userId, text })
     else this.emit({ dest: "private", userId, text })
   }

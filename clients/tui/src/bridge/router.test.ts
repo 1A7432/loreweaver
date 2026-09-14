@@ -1,4 +1,4 @@
-import { mkdtemp, stat } from "node:fs/promises"
+import { mkdtemp, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, test } from "bun:test"
@@ -209,6 +209,57 @@ describe("router — observer / player / admin tables", () => {
     expect(intents.some((item) => item.text === "")).toBe(false)
     expect(intents.filter((item) => item.media?.hash === "hash-img")).toHaveLength(1)
     expect(intents.filter((item) => item.text.includes("thinking"))).toHaveLength(2)
+  })
+
+  test("a private .st show is answered privately even if the user then typed in the group", async () => {
+    const { router, intents } = await makeRouter()
+    const player = new FakeLink()
+    router.attachLink("player", "p-key", player, "111")
+    player.push(MANIFEST)
+    await router.handleInbound({
+      userId: "111",
+      memberKey: "p-key",
+      text: ".st show",
+      channel: "private",
+      isAdmin: false,
+    })
+    await router.handleInbound({
+      userId: "111",
+      memberKey: "p-key",
+      text: ".r 1d4",
+      channel: "group",
+      isAdmin: false,
+    })
+    player.push({ type: FrameType.System, level: "info", text: "STR 60" })
+    player.push({ type: FrameType.System, level: "info", text: "queued" })
+    expect(intents).toEqual([
+      { dest: "private", userId: "111", text: "STR 60" },
+      { dest: "reply", userId: "111", text: "queued" },
+    ])
+  })
+
+  test("a settings write failure is logged and does not reject", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lw-router-"))
+    const blocked = join(dir, "blocked")
+    await writeFile(blocked, "not-a-dir")
+    const logs: string[] = []
+    const { router } = await makeRouter(undefined, {
+      settingsPath: join(blocked, "g.settings.json"),
+      onLog: (text) => logs.push(text),
+    })
+    const admin = new FakeLink()
+    router.attachLink("admin", "adm-key", admin, "42")
+    admin.push(MANIFEST)
+    await router.handleInbound({
+      userId: "42",
+      memberKey: "adm-key",
+      text: ".bridge mode all",
+      channel: "private",
+      isAdmin: true,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(logs.some((line) => line.startsWith("bridge.settings_save_failed"))).toBe(true)
+    expect(router.groupMode).toBe("all")
   })
 
   test("player link drops broadcast kinds; system is reply-to in group, private when the input was private", async () => {

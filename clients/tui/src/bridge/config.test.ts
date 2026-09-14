@@ -143,6 +143,49 @@ describe("bridge config", () => {
     throw new Error("expected invalid_timeout")
   })
 
+  test("rejects a room_keeper_key reused by two groups", () => {
+    try {
+      parseBridgeConfig({
+        onebot: base.onebot,
+        keeper_key: "top",
+        groups: [
+          { group_id: 1, room_keeper_key: "same", admins: [] },
+          { group_id: 2, room_keeper_key: "same", admins: [] },
+        ],
+      })
+    } catch (error) {
+      expect((error as BridgeConfigError).code).toBe("duplicate_keeper_key")
+      return
+    }
+    throw new Error("expected duplicate_keeper_key")
+  })
+
+  test("one group may use the top-level keeper_key; two groups may not share it", () => {
+    const ok = parseBridgeConfig({
+      onebot: base.onebot,
+      keeper_key: "shared",
+      groups: [
+        { group_id: 1, room_keeper_key: "shared", admins: [] },
+        { group_id: 2, room_keeper_key: "other", admins: [] },
+      ],
+    })
+    expect(ok.groups).toHaveLength(2)
+    try {
+      parseBridgeConfig({
+        onebot: base.onebot,
+        keeper_key: "shared",
+        groups: [
+          { group_id: 1, room_keeper_key: "shared", admins: [] },
+          { group_id: 2, room_keeper_key: "shared", admins: [] },
+        ],
+      })
+    } catch (error) {
+      expect((error as BridgeConfigError).code).toBe("duplicate_keeper_key")
+      return
+    }
+    throw new Error("expected duplicate_keeper_key")
+  })
+
   test("rejects duplicate group ids", () => {
     try {
       parseBridgeConfig({

@@ -98,8 +98,6 @@ export class Keyring {
   private pending: Pending | undefined
   private chain: Promise<void> = Promise.resolve()
   private seq = 0
-  private readonly staleMints: Array<{ name: string; role: PlayerRole }> = []
-  private readonly staleDeletes: string[] = []
   private writeChain: Promise<void> = Promise.resolve()
   private readonly unsubscribe: () => void
 
@@ -200,6 +198,17 @@ export class Keyring {
     }
   }
 
+  /** Wait for the persist chain. Shutdown flushes through this. */
+  async drainWrites(): Promise<void> {
+    await this.writeChain
+  }
+
+  private userIdFromName(name: string): string | undefined {
+    if (name === observerName(this.options.groupId)) return observerUserId(this.options.groupId)
+    if (name.startsWith("qq:") && !name.startsWith("qq:observer:")) return name.slice(3) || undefined
+    return undefined
+  }
+
   private keyName(userId: string): string {
     return this.isObserver(userId) ? observerName(this.options.groupId) : memberName(userId)
   }
@@ -229,7 +238,6 @@ export class Keyring {
       const setTimeoutFn = this.options.setTimeoutFn ?? setTimeout
       const timer = setTimeoutFn(() => {
         if (this.pending?.seq === seq) {
-          this.staleMints.push({ name, role })
           this.pending = undefined
           reject(new Error("admin_mint_key timed out"))
         }
@@ -249,7 +257,6 @@ export class Keyring {
       const setTimeoutFn = this.options.setTimeoutFn ?? setTimeout
       const timer = setTimeoutFn(() => {
         if (this.pending?.seq === seq) {
-          this.staleDeletes.push(id)
           this.pending = undefined
           reject(new Error("admin_delete_key timed out"))
         }
@@ -272,15 +279,11 @@ export class Keyring {
   }
 
   private onControl(frame: ServerFrame): void {
-    if (isAdminKeys(frame) && frame.minted) {
-      const stale = this.staleMints.findIndex((item) => item.name === frame.minted!.name && item.role === frame.minted!.role)
-      if (stale >= 0) {
-        this.staleMints.splice(stale, 1)
-        return
-      }
-    }
     const pending = this.pending
-    if (!pending) return
+    if (!pending) {
+      if (isAdminKeys(frame) && frame.minted) this.adoptOrphanMint(frame)
+      return
+    }
     if (isAdminError(frame)) {
       this.clearPending()
       if (frame.code === "last_keeper") pending.reject(new LastKeeperError(frame.message || "last_keeper"))
@@ -296,24 +299,37 @@ export class Keyring {
         pending.reject(new Error("minted key collided with the bridge keeper key"))
         return
       }
-      const listed = frame.keys.find((row) => row.name === frame.minted!.name && row.role === frame.minted!.role)
-      const entry: KeyringEntry = {
-        key: frame.minted.key,
-        key_id: listed?.id || keyIdFromSecret(frame.minted.key),
-        role: frame.minted.role,
-      }
+      const entry = this.entryFromMinted(frame)
+      if (!entry) return
       this.clearPending()
       pending.resolve(entry)
       return
     }
     if (frame.keys.some((row) => row.id === pending.id)) return
-    const staleDel = this.staleDeletes.indexOf(pending.id)
-    if (staleDel >= 0) {
-      this.staleDeletes.splice(staleDel, 1)
-      return
-    }
     this.clearPending()
     pending.resolve(frame)
+  }
+
+  private entryFromMinted(frame: AdminKeysFrame): KeyringEntry | undefined {
+    if (!frame.minted) return undefined
+    if (this.isKeeperKey(frame.minted.key)) return undefined
+    const listed = frame.keys.find((row) => row.name === frame.minted!.name && row.role === frame.minted!.role)
+    return {
+      key: frame.minted.key,
+      key_id: listed?.id || keyIdFromSecret(frame.minted.key),
+      role: frame.minted.role,
+    }
+  }
+
+  /** A late mint with no pending request is adopted if that user has no entry yet. */
+  private adoptOrphanMint(frame: AdminKeysFrame): void {
+    if (!frame.minted) return
+    const userId = this.userIdFromName(frame.minted.name)
+    if (!userId || this.entries.has(userId)) return
+    const entry = this.entryFromMinted(frame)
+    if (!entry) return
+    this.entries.set(userId, entry)
+    void this.flush()
   }
 
   private clearPending(): void {

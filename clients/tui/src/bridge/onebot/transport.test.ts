@@ -128,6 +128,19 @@ function stubRaw(overrides: Partial<OneBotRawTransport> = {}): OneBotRawTranspor
   return stub
 }
 
+describe("isGroupMember", () => {
+  test("true on get_group_member_info success, false on any error, and caches positives", async () => {
+    const stub = stubRaw()
+    const transport = new OneBotTransport({ transport: stub })
+    expect(await transport.isGroupMember(99, 8)).toBe(true)
+    expect(stub.calls).toEqual([["get_group_member_info", { group_id: 99, user_id: 8 }]])
+    expect(await transport.isGroupMember(99, 8)).toBe(true)
+    expect(stub.calls).toHaveLength(1)
+    stub.error = new Error("nope")
+    expect(await transport.isGroupMember(99, 9)).toBe(false)
+  })
+})
+
 describe("forward mode", () => {
   test("sends Bearer when a token is configured and reconnects with backoff after a drop", async () => {
     const sockets: FakeSocket[] = []

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { FrameType, type ServerFrame } from "loreweaver-protocol"
-import { IrohLink, bindIrohEndpoint, ticketAddr, type LoadIroh } from "./irohLink"
+import { IrohLink, MAX_IROH_MEDIA_BYTES, bindIrohEndpoint, ticketAddr, type LoadIroh } from "./irohLink"
 
 const TICKET = "endpointaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 const settle = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -256,6 +256,19 @@ describe("IrohLink media channel", () => {
     const { promise } = await startUpload(link, streams)
     streams[1]!.push(`${JSON.stringify({ type: "error", code: "media_hash_mismatch", message: "hash mismatch" })}\n`)
     await expect(promise).rejects.toThrow("hash mismatch")
+  })
+
+  test("getMedia refuses a header size above the media cap before reading the body", async () => {
+    const { loadIroh, streams } = createMockIroh()
+    const link = await openLink(loadIroh)
+    link.start()
+    const promise = link.getMedia(UPLOAD.sha256)
+    promise.catch(() => {})
+    await settle(0)
+    streams[1]!.push(
+      `${JSON.stringify({ op: "get", hash: UPLOAD.sha256, size: MAX_IROH_MEDIA_BYTES + 1, mime: "image/png", name: "a.png" })}\n`,
+    )
+    await expect(promise).rejects.toThrow(/size cap/)
   })
 
   test("getMedia returns the header fields plus the exact body bytes", async () => {

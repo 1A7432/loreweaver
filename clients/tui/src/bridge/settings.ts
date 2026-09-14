@@ -40,3 +40,8 @@ export async function saveGroupSettings(path: string, settings: GroupRuntimeSett
   )
   return next
 }
+
+/** Wait for every in-flight settings write. Shutdown flushes through this. */
+export async function flushSettingsWrites(): Promise<void> {
+  await Promise.all([...writeChains.values()])
+}

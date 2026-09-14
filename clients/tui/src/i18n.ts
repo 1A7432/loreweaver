@@ -355,6 +355,9 @@ const messages = {
     "bridge.cli.shutdown": "QQ bridge stopped.",
     "bridge.rateLimited": "Slow down — the table can only take so many messages at once.",
     "bridge.privateFailed": "I couldn't send you a private message. Add this bot as a friend and try again.",
+    "bridge.seatFailed": "Couldn't join you to the table. Try again in a moment.",
+    "bridge.cli.missingGroupKey": "Group {group} has no room keeper key.",
+    "bridge.cli.onebotConnectFailed": "The OneBot transport failed to connect.",
   },
   zh: {
     "connect.subtitle": "灯下的牌桌 · 用邀请码连接一位守秘人",
@@ -699,6 +702,9 @@ const messages = {
     "bridge.cli.shutdown": "QQ 桥接已停止。",
     "bridge.rateLimited": "慢一点——这桌一次接不了这么多消息。",
     "bridge.privateFailed": "没法给你发私聊。请先加这个机器人为好友再试。",
+    "bridge.seatFailed": "没法把你拉进这桌。稍后再试一次。",
+    "bridge.cli.missingGroupKey": "群 {group} 没有房间守秘人密钥。",
+    "bridge.cli.onebotConnectFailed": "OneBot 传输没能连上。",
   },
 } as const
 

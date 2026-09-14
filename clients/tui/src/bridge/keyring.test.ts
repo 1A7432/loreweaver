@@ -207,7 +207,7 @@ describe("keyring", () => {
     ring.close()
   })
 
-  test("a stale timed-out mint reply never lands on a later request", async () => {
+  test("a late mint reply with no pending is adopted; a late reply never blocks a subsequent mint", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lw-keyring-"))
     const control = new FakeControl()
     const ring = await Keyring.load({
@@ -220,16 +220,30 @@ describe("keyring", () => {
     })
     const first = ring.ensure("111")
     await expect(first).rejects.toThrow(/timed out/)
-
-    const second = ring.ensure("111")
-    await Promise.resolve()
-    control.push(mintedKeys(memberName("111"), "stale-key", "player", "id-stale"))
-    await Promise.resolve()
-    control.push(mintedKeys(memberName("111"), "fresh-key", "player", "id-fresh"))
-    const entry = await second
-    expect(entry.key).toBe("fresh-key")
-    expect(ring.get("111")?.key).toBe("fresh-key")
+    expect(ring.get("111")).toBeUndefined()
+    control.push(mintedKeys(memberName("111"), "adopted-key", "player", "id-adopt"))
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(ring.get("111")?.key).toBe("adopted-key")
     ring.close()
+
+    const control2 = new FakeControl()
+    const ring2 = await Keyring.load({
+      path: join(dir, "g2.keyring.json"),
+      groupId: "99",
+      control: control2,
+      admins: () => [],
+      keeperKey: "KEEP-SECRET",
+      mintTimeoutMs: 20,
+    })
+    const timed = ring2.ensure("222")
+    await expect(timed).rejects.toThrow(/timed out/)
+    const second = ring2.ensure("222")
+    await Promise.resolve()
+    control2.push(mintedKeys(memberName("222"), "late-key", "player", "id-late"))
+    const entry = await second
+    expect(entry.key).toBe("late-key")
+    expect(ring2.get("222")?.key).toBe("late-key")
+    ring2.close()
   })
 
   test("role change deletes the old key; last_keeper keeps the old entry", async () => {

@@ -62,6 +62,7 @@ export type BridgeConfigErrorCode =
   | "missing_keeper_key"
   | "missing_room_keeper_key"
   | "invalid_timeout"
+  | "duplicate_keeper_key"
 
 export class BridgeConfigError extends Error {
   constructor(
@@ -228,6 +229,19 @@ export function parseBridgeConfig(raw: unknown): BridgeConfig {
   }
   if (groups.length > 1 && groups.some((group) => !group.room_keeper_key)) {
     throw new BridgeConfigError("missing_room_keeper_key", "each group needs its own room_keeper_key when more than one group is listed")
+  }
+  const claimedKeys = new Map<string, string>()
+  for (const group of groups) {
+    const key = group.room_keeper_key || keeper_key
+    if (!key) continue
+    const previous = claimedKeys.get(key)
+    if (previous !== undefined) {
+      throw new BridgeConfigError(
+        "duplicate_keeper_key",
+        `room_keeper_key is already used by group ${previous}`,
+      )
+    }
+    claimedKeys.set(key, group.group_id)
   }
   const state_dir = expandHome(asString(raw.state_dir)?.trim() || "~/.loreweaver/bridge")
   return {

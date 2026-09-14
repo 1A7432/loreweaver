@@ -2,17 +2,19 @@ import { mkdtemp, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, test } from "bun:test"
-import { FrameType } from "loreweaver-protocol"
+import { FrameType, type ClientFrame, type ServerFrame } from "loreweaver-protocol"
 import type { LoadIroh } from "../irohLink"
 import { tt } from "../i18n"
 import {
+  RelayingControl,
   isDroppedOneBotSender,
   onebotTransportOptions,
   parseBridgeConfig,
+  redactKeeperSecrets,
   runBridge,
   runBridgeFromFile,
 } from "./index"
-import type { ConnectFactory, OneBotInbound, OneBotSocket } from "./onebot"
+import { OneBotTransport, type ConnectFactory, type OneBotInbound, type OneBotRawTransport, type OneBotSocket } from "./onebot"
 
 const TICKET = "endpointaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 const KEEP = "KEEP-SECRET"
@@ -68,6 +70,7 @@ function createMockIroh() {
   }
 
   const streams: Array<ReturnType<typeof makeRecvStream>> = []
+  const mintCount = new Map<string, number>()
 
   const loadIroh: LoadIroh = async () => ({
     Endpoint: {
@@ -97,11 +100,16 @@ function createMockIroh() {
                           stream: recv,
                         })
                       }
+                      if (frame.type === FrameType.AdminDeleteKey) {
+                        recv.push(`${JSON.stringify({ type: FrameType.AdminKeys, keys: [] })}\n`)
+                      }
                       if (frame.type === FrameType.AdminMintKey) {
                         const name = String(frame.name)
                         const role = frame.role === "keeper" ? "keeper" : "player"
-                        const key = `k-${name}`
-                        const id = `id-${name}`
+                        const n = (mintCount.get(name) ?? 0) + 1
+                        mintCount.set(name, n)
+                        const key = n === 1 ? `k-${name}` : `k-${name}-${n}`
+                        const id = n === 1 ? `id-${name}` : `id-${name}-${n}`
                         recv.push(
                           `${JSON.stringify({
                             type: FrameType.AdminKeys,
@@ -171,6 +179,7 @@ function createMockIroh() {
 class AckSocket implements OneBotSocket {
   sent: string[] = []
   failPrivate = false
+  groupMembers = new Set<string>()
   closeArgs?: { code?: number; reason?: string }
   private readonly queue: string[] = []
   private waiter?: (result: IteratorResult<string>) => void
@@ -186,8 +195,22 @@ class AckSocket implements OneBotSocket {
       return
     }
     if (parsed.echo && parsed.action) {
-      const fail = this.failPrivate && parsed.action === "send_private_msg"
       const echo = parsed.echo
+      if (parsed.action === "get_group_member_info") {
+        const params = (parsed.params ?? {}) as Record<string, unknown>
+        const key = `${params.group_id}:${params.user_id}`
+        const ok = this.groupMembers.has(key)
+        queueMicrotask(() => {
+          this.push({
+            status: ok ? "ok" : "failed",
+            retcode: ok ? 0 : 1,
+            echo,
+            data: ok ? { user_id: params.user_id, group_id: params.group_id } : {},
+          })
+        })
+        return
+      }
+      const fail = this.failPrivate && parsed.action === "send_private_msg"
       queueMicrotask(() => {
         this.push({
           status: fail ? "failed" : "ok",
@@ -534,7 +557,7 @@ describe("QQ bridge entry", () => {
       groupEvent({
         message_id: 50,
         message: [
-          { type: "text", data: { text: "look" } },
+          { type: "text", data: { text: ".r 3d6" } },
           { type: "image", data: { file: `base64://${png}`, name: "shot.png" } },
         ],
       }),
@@ -630,7 +653,262 @@ describe("QQ bridge entry", () => {
     await waitFor(() => iroh.joins.some((row) => row.key === KEEP))
     await handle.stop()
     expect(socket.closeArgs).toBeDefined()
-    await waitFor(() => handle.stopped === handle.stopped)
+    await handle.stopped
+  })
+
+  test("a stranger's private message is ignored; a confirmed group member is accepted", async () => {
+    const iroh = createMockIroh()
+    const socket = new AckSocket()
+    socket.groupMembers.add("99:8")
+    const { handle } = await startBridge(iroh, socket)
+    const before = iroh.joins.length
+    socket.push({
+      time: 1,
+      self_id: 1,
+      post_type: "message",
+      message_type: "private",
+      user_id: 9,
+      message_id: 70,
+      message: [{ type: "text", data: { text: ".r 3d6" } }],
+      sender: { nickname: "Stranger" },
+    })
+    await settle(80)
+    expect(iroh.joins.length).toBe(before)
+    expect(framesOf(iroh.sent).some((frame) => frame.type === FrameType.Input)).toBe(false)
+
+    socket.push({
+      time: 1,
+      self_id: 1,
+      post_type: "message",
+      message_type: "private",
+      user_id: 8,
+      message_id: 71,
+      message: [{ type: "text", data: { text: ".r 3d6" } }],
+      sender: { nickname: "Member" },
+    })
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-qq:8"))
+    await ungate(iroh, "k-qq:8")
+    await waitFor(() => framesOf(iroh.sent).some((frame) => frame.type === FrameType.Input && frame.text === ".r 3d6"))
+    await handle.stop()
+  })
+
+  test("hostLocal bootstrap lines that carry a keeper key are redacted", async () => {
+    const logs: string[] = []
+    const iroh = createMockIroh()
+    const socket = new AckSocket()
+    const secret = "ABCDEFGHIJKLMNOP"
+    let stopped = 0
+    const handle = await runBridge(baseConfig(await tmpState(), { ticket: undefined, keeper_key: undefined }), {
+      loadIroh: iroh.loadIroh,
+      connectFactory: async () => socket,
+      hostLocal: async (onLog) => {
+        onLog(`  Keeper key: ${secret}`, "out")
+        onLog(`签发密钥：${secret}`, "out")
+        return { host: TICKET, key: secret, stop: () => { stopped += 1 } }
+      },
+      installSignals: false,
+      onLog: (text) => logs.push(text),
+    })
+    expect(logs.join("")).not.toContain(secret)
+    expect(logs.some((line) => line.includes("****"))).toBe(true)
+    await handle.stop()
+    expect(stopped).toBe(1)
+  })
+
+  test("a failed host path stops the spawned engine; stop() survives a transport close error", async () => {
+    let stopped = 0
+    const logs: string[] = []
+    const secret = "ABCDEFGHIJKLMNOP"
+    await expect(
+      runBridge(baseConfig(await tmpState(), { ticket: undefined, keeper_key: undefined }), {
+        hostLocal: async (onLog) => {
+          onLog(`  Keeper key: ${secret}`, "out")
+          return { host: TICKET, key: secret, stop: () => { stopped += 1 } }
+        },
+        loadIroh: async () => {
+          throw new Error("iroh boom")
+        },
+        installSignals: false,
+        onLog: (text) => logs.push(text),
+      }),
+    ).rejects.toThrow("iroh boom")
+    expect(stopped).toBe(1)
+    expect(logs.join("")).not.toContain(secret)
+
+    const iroh = createMockIroh()
+    const inner: OneBotRawTransport = {
+      kind: "reverse",
+      connected: true,
+      pendingCount: 0,
+      pendingEvents: 0,
+      requestTimeoutMs: 1000,
+      async start() {},
+      async close() {
+        throw new Error("close fail")
+      },
+      async call() {
+        return {}
+      },
+    }
+    const transport = new OneBotTransport({ transport: inner })
+    const handle = await runBridge(baseConfig(await tmpState()), {
+      loadIroh: iroh.loadIroh,
+      transport,
+      installSignals: false,
+      onLog: () => {},
+    })
+    await handle.stop()
+    await handle.stopped
+  })
+
+  test("demoting an admin closes the old keeper link; promoting opens an admin link", async () => {
+    const iroh = createMockIroh()
+    const socket = new AckSocket()
+    const { handle } = await startBridge(iroh, socket, {
+      groups: [{ group_id: 99, admins: [42, 7], mode: "mention" }],
+    })
+    socket.push(
+      groupEvent({
+        user_id: 42,
+        message_id: 80,
+        message: [{ type: "text", data: { text: ".r 1" } }],
+        sender: { nickname: "Admin" },
+      }),
+    )
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-qq:42"))
+    await ungate(iroh, "k-qq:42", "en", "keeper")
+    const keeperJoin = iroh.joins.find((row) => row.key === "k-qq:42")!
+    socket.push(
+      groupEvent({
+        user_id: 42,
+        message_id: 81,
+        message: [{ type: "text", data: { text: ".bridge admin remove 42" } }],
+        sender: { nickname: "Admin" },
+      }),
+    )
+    await settle(80)
+    socket.push(
+      groupEvent({
+        user_id: 42,
+        message_id: 82,
+        message: [{ type: "text", data: { text: ".r 2" } }],
+        sender: { nickname: "Admin" },
+      }),
+    )
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-qq:42-2"))
+    await ungate(iroh, "k-qq:42-2")
+    expect(iroh.joins.filter((row) => row.key === "k-qq:42" || row.key === "k-qq:42-2").map((row) => row.key)).toEqual([
+      "k-qq:42",
+      "k-qq:42-2",
+    ])
+    keeperJoin.stream.end()
+    await settle(40)
+    expect(iroh.joins.filter((row) => row.key === "k-qq:42").length).toBe(1)
+
+    socket.push(
+      groupEvent({
+        user_id: 7,
+        message_id: 83,
+        message: [{ type: "text", data: { text: ".bridge admin add 42" } }],
+        sender: { nickname: "Ada", card: "Investigator" },
+      }),
+    )
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-qq:7"))
+    await ungate(iroh, "k-qq:7")
+    socket.push(
+      groupEvent({
+        user_id: 7,
+        message_id: 84,
+        message: [{ type: "text", data: { text: ".bridge admin add 42" } }],
+        sender: { nickname: "Ada", card: "Investigator" },
+      }),
+    )
+    await settle(40)
+    socket.push(
+      groupEvent({
+        user_id: 42,
+        message_id: 85,
+        message: [{ type: "text", data: { text: ".r 3" } }],
+        sender: { nickname: "Admin" },
+      }),
+    )
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-qq:42-3"))
+    await handle.stop()
+  })
+
+  test("idle_close_minutes 0 does not idle-close a player link", async () => {
+    const iroh = createMockIroh()
+    const socket = new AckSocket()
+    const { handle } = await startBridge(iroh, socket, { idle_close_minutes: 0 })
+    socket.push(groupEvent({ message_id: 90 }))
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-qq:7"))
+    await ungate(iroh, "k-qq:7")
+    const joinsAfterFirst = iroh.joins.filter((row) => row.key === "k-qq:7").length
+    await settle(80)
+    socket.push(groupEvent({ message_id: 91, message: [{ type: "text", data: { text: ".r 2d6" } }] }))
+    await waitFor(() => framesOf(iroh.sent).some((frame) => frame.type === FrameType.Input && frame.text === ".r 2d6"))
+    expect(iroh.joins.filter((row) => row.key === "k-qq:7").length).toBe(joinsAfterFirst)
+    await handle.stop()
+  })
+
+  test("a two-group config keeps rooms isolated", async () => {
+    const iroh = createMockIroh()
+    const socket = new AckSocket()
+    const KEEP2 = "KEEP-SECRET-B"
+    const stateDir = await tmpState()
+    const handle = await runBridge(
+      parseBridgeConfig({
+        ticket: TICKET,
+        keeper_key: KEEP,
+        onebot: { mode: "forward", ws_url: "ws://127.0.0.1:3001", access_token: "tok", request_timeout: 2, reconnect_delay: 0.05 },
+        groups: [
+          { group_id: 99, room_keeper_key: KEEP, admins: [42], mode: "mention" },
+          { group_id: 88, room_keeper_key: KEEP2, admins: [], mode: "mention" },
+        ],
+        busy_notice: true,
+        idle_close_minutes: 30,
+        state_dir: stateDir,
+      }),
+      {
+        loadIroh: iroh.loadIroh,
+        connectFactory: async () => socket,
+        installSignals: false,
+        onLog: () => {},
+      },
+    )
+    await waitFor(() => iroh.joins.some((row) => row.key === KEEP))
+    await waitFor(() => iroh.joins.some((row) => row.key === KEEP2))
+    await waitFor(() => iroh.joins.filter((row) => row.key.startsWith("k-qq:observer:")).length === 2)
+    for (const row of iroh.joins.filter((item) => item.key === KEEP || item.key === KEEP2 || item.key.startsWith("k-qq:observer:"))) {
+      await ungate(iroh, row.key, undefined, row.key === KEEP || row.key === KEEP2 ? "keeper" : "player")
+    }
+    socket.push(groupEvent({ message_id: 100 }))
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-qq:7"))
+    expect(iroh.joins.filter((row) => row.key.startsWith("k-qq:7")).length).toBe(1)
+    expect(iroh.joins.some((row) => row.name === "qq:observer:88")).toBe(true)
+    expect(iroh.joins.some((row) => row.name === "qq:observer:99")).toBe(true)
+    await handle.stop()
+  })
+
+  test("an image is not uploaded when the group message is not forwarded", async () => {
+    const iroh = createMockIroh()
+    const socket = new AckSocket()
+    const { handle } = await startBridge(iroh, socket)
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString("base64")
+    socket.push(
+      groupEvent({
+        message_id: 110,
+        message: [
+          { type: "text", data: { text: "look" } },
+          { type: "image", data: { file: `base64://${png}`, name: "shot.png" } },
+        ],
+      }),
+    )
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-qq:7"))
+    await ungate(iroh, "k-qq:7")
+    await settle(50)
+    expect(framesOf(iroh.sent).some((frame) => frame.type === FrameType.MediaOffer)).toBe(false)
+    await handle.stop()
   })
 
   test("isDroppedOneBotSender covers self and bot senders", () => {
@@ -656,5 +934,49 @@ describe("QQ bridge entry", () => {
       raw: { self_id: 42, sender: { user_id: 7 } },
     }
     expect(isDroppedOneBotSender(person)).toBe(false)
+  })
+})
+
+describe("RelayingControl", () => {
+  test("queues while unbound or dead and flushes on bind, in order", () => {
+    const control = new RelayingControl()
+    const first: ClientFrame = { type: FrameType.AdminMintKey, name: "qq:1", role: "player", purpose: "join" }
+    const second: ClientFrame = { type: FrameType.AdminMintKey, name: "qq:2", role: "player", purpose: "join" }
+    control.send(first)
+    const dead = {
+      sent: [] as ClientFrame[],
+      isAlive: false,
+      send(frame: ClientFrame) {
+        this.sent.push(frame)
+      },
+      onMessage(_cb: (frame: ServerFrame) => void) {
+        return () => {}
+      },
+    }
+    control.bind(dead)
+    control.send(second)
+    expect(dead.sent).toEqual([])
+    const live = {
+      sent: [] as ClientFrame[],
+      isAlive: true,
+      send(frame: ClientFrame) {
+        this.sent.push(frame)
+      },
+      onMessage(_cb: (frame: ServerFrame) => void) {
+        return () => {}
+      },
+    }
+    control.bind(live)
+    expect(live.sent).toEqual([first, second])
+  })
+})
+
+describe("redactKeeperSecrets", () => {
+  test("masks the bootstrap keeper-key line and url-safe tokens after key/密钥", () => {
+    const secret = "ABCDEFGHIJKLMNOP"
+    expect(redactKeeperSecrets(`  Keeper key: ${secret}`)).toBe("  Keeper key: ****")
+    expect(redactKeeperSecrets(`签发密钥：${secret}`)).toBe("签发密钥：****")
+    expect(redactKeeperSecrets(`token key=${secret}`)).toBe("token key=****")
+    expect(redactKeeperSecrets("no secrets here")).toBe("no secrets here")
   })
 })

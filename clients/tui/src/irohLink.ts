@@ -14,6 +14,8 @@ import {
 // stream (no message boundaries), so every frame is one compact JSON object + "\n".
 const ALPN = "loreweaver/tui/1"
 const NEWLINE = 10
+/** Same 20 MiB cap the OneBot attachment path uses; refuse before reading the body. */
+export const MAX_IROH_MEDIA_BYTES = 20 * 1024 * 1024
 const enc = new TextEncoder()
 const dec = new TextDecoder()
 const toBytes = (text: string): number[] => Array.from(enc.encode(text))
@@ -175,6 +177,9 @@ export class IrohLink {
     // silently read as an empty zero-byte payload.
     if (header.op !== "get") throw new Error(String(header.message ?? "Iroh media download failed."))
     const size = Number(header.size ?? 0)
+    if (!Number.isFinite(size) || size < 0 || size > MAX_IROH_MEDIA_BYTES) {
+      throw new Error("Iroh media download exceeds the size cap.")
+    }
     const bytes = await reader.readExact(size)
     return {
       hash: String(header.hash ?? hash),

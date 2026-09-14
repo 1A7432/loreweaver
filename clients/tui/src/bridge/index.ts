@@ -24,7 +24,7 @@ import {
 } from "./onebot"
 import { PostedIds, postedPath } from "./postedIds"
 import { BridgeRouter, type LinkRole, type OutboundIntent } from "./router"
-import { loadGroupSettings, settingsPath } from "./settings"
+import { flushSettingsWrites, loadGroupSettings, settingsPath } from "./settings"
 
 export { loadBridgeConfig, parseBridgeConfig, BridgeConfigError } from "./config"
 export type { BridgeConfig } from "./config"
@@ -32,12 +32,28 @@ export type { BridgeConfig } from "./config"
 type ControlLinkLike = {
   send(frame: ClientFrame): void
   onMessage(cb: (frame: ServerFrame) => void): () => void
+  readonly isAlive?: boolean
+}
+
+const CONTROL_QUEUE_CAP = 64
+const FRIEND_NOTICE_MS = 10 * 60 * 1000
+const URL_SAFE_TOKEN = /[A-Za-z0-9_-]{16,}/
+
+/**
+ * Mask keeper keys in host-bootstrap logs. Matches `Keeper key: …` / `密钥` lines
+ * and any ≥16 url-safe token after the words `key` / `密钥`.
+ */
+export function redactKeeperSecrets(line: string): string {
+  return line
+    .replace(/\bkey\b\s*[:=]?\s*[A-Za-z0-9_-]{16,}/gi, (match) => match.replace(URL_SAFE_TOKEN, "****"))
+    .replace(/密钥\s*[:：]?\s*[A-Za-z0-9_-]{16,}/g, (match) => match.replace(URL_SAFE_TOKEN, "****"))
 }
 
 /** Fan-out control surface so a Keyring survives control-link redials. */
 export class RelayingControl implements ControlLinkLike {
   private link: ControlLinkLike | undefined
   private readonly handlers = new Set<(frame: ServerFrame) => void>()
+  private readonly queue: ClientFrame[] = []
   private off: (() => void) | undefined
 
   bind(link: ControlLinkLike): void {
@@ -46,10 +62,17 @@ export class RelayingControl implements ControlLinkLike {
     this.off = link.onMessage((frame) => {
       for (const handler of this.handlers) handler(frame)
     })
+    const pending = this.queue.splice(0)
+    for (const frame of pending) this.send(frame)
   }
 
   send(frame: ClientFrame): void {
-    this.link?.send(frame)
+    if (this.isLive()) {
+      this.link!.send(frame)
+      return
+    }
+    this.queue.push(frame)
+    while (this.queue.length > CONTROL_QUEUE_CAP) this.queue.shift()
   }
 
   onMessage(cb: (frame: ServerFrame) => void): () => void {
@@ -58,12 +81,18 @@ export class RelayingControl implements ControlLinkLike {
       this.handlers.delete(cb)
     }
   }
+
+  private isLive(): boolean {
+    if (!this.link) return false
+    if (this.link.isAlive === false) return false
+    return true
+  }
 }
 
 type LinkKind =
   | { kind: "control"; groupId: string }
   | { kind: "observer"; groupId: string }
-  | { kind: "member"; groupId: string; userId: string }
+  | { kind: "member"; groupId: string; userId: string; role: LinkRole }
 
 export interface BridgeDeps {
   loadConfig?: (path: string) => Promise<BridgeConfig>
@@ -135,6 +164,7 @@ class GroupRuntime {
   readonly lastMessageId = new Map<string, string>()
   observerLink: IrohLink | undefined
   private outbox: Promise<void> = Promise.resolve()
+  private readonly lastFriendNotice = new Map<string, number>()
   router!: BridgeRouter
   keyring!: Keyring
   posted!: PostedIds
@@ -143,7 +173,7 @@ class GroupRuntime {
     readonly groupId: string,
     readonly group: BridgeGroupConfig,
     private readonly transport: OneBotTransport,
-    now: () => number,
+    private readonly now: () => number,
   ) {
     this.limiter = new UserRateLimiter(undefined, undefined, now)
   }
@@ -185,6 +215,9 @@ class GroupRuntime {
     }
     const result = await this.transport.sendText({ type: "private", id: intent.userId }, intent.text)
     if (!result.ok) {
+      const last = this.lastFriendNotice.get(intent.userId)
+      if (last !== undefined && this.now() - last < FRIEND_NOTICE_MS) return
+      this.lastFriendNotice.set(intent.userId, this.now())
       await this.transport.sendText(groupTarget, tt(this.router.locale(), "bridge.privateFailed"))
     }
   }
@@ -198,24 +231,67 @@ export async function runBridge(config: BridgeConfig, deps: BridgeDeps = {}): Pr
   let ticket = config.ticket
   let keeperKey = config.keeper_key
   let host: HostHandle | undefined
+  let pool: LinkPool | undefined
+  let transport: OneBotTransport | undefined
+  const sessions = new Map<string, GroupRuntime>()
+  const catalog = new Map<string, LinkKind>()
+  const lastGroupByUser = new Map<string, string>()
+
+  const teardown = async (): Promise<void> => {
+    try {
+      if (transport) await transport.close()
+    } catch {
+      // keep going — every step of stop is independent
+    }
+    try {
+      pool?.close()
+    } catch {
+      // ignore
+    }
+    for (const session of sessions.values()) {
+      try {
+        session.keyring.close()
+      } catch {
+        // ignore
+      }
+      try {
+        await session.keyring.drainWrites()
+      } catch {
+        // ignore
+      }
+      try {
+        await session.posted.flush()
+      } catch {
+        // ignore
+      }
+    }
+    try {
+      await flushSettingsWrites()
+    } catch {
+      // ignore
+    }
+    try {
+      host?.stop()
+    } catch {
+      // ignore
+    }
+  }
+
+  try {
   if (!ticket) {
     onLog(tt(config.locale, "bridge.cli.hosting"))
-    const log: OnLog = (text) => onLog(text)
+    const log: OnLog = (text) => onLog(redactKeeperSecrets(text))
     host = await hostLocal(log)
     ticket = host.host
     keeperKey = host.key
   }
   const resolved: BridgeConfig = { ...config, ticket, keeper_key: keeperKey }
 
-  const sessions = new Map<string, GroupRuntime>()
-  const catalog = new Map<string, LinkKind>()
-  const lastGroupByUser = new Map<string, string>()
-
   const idleCloseMs =
     resolved.idle_close_minutes > 0 ? resolved.idle_close_minutes * 60 * 1000 : 30 * 60 * 1000
   const playerIdleClose = resolved.idle_close_minutes > 0
 
-  const pool = new LinkPool({
+  pool = new LinkPool({
     loadIroh: deps.loadIroh,
     clientInfo: deps.clientInfo ?? clientInfo(),
     idleCloseMs,
@@ -235,8 +311,7 @@ export async function runBridge(config: BridgeConfig, deps: BridgeDeps = {}): Pr
         session.router.attachLink("observer", memberKey, link, undefined, reason)
         return
       }
-      const role: LinkRole = session.keyring.get(meta.userId)?.role === "keeper" ? "admin" : "player"
-      session.router.attachLink(role, memberKey, link, meta.userId, reason)
+      session.router.attachLink(meta.role, memberKey, link, meta.userId, reason)
     },
     onLinkDown: (memberKey) => {
       const meta = catalog.get(memberKey)
@@ -246,7 +321,7 @@ export async function runBridge(config: BridgeConfig, deps: BridgeDeps = {}): Pr
   })
   await pool.connect(ticket)
 
-  const transport =
+  transport =
     deps.transport ??
     new OneBotTransport({
       ...onebotTransportOptions(resolved),
@@ -258,9 +333,7 @@ export async function runBridge(config: BridgeConfig, deps: BridgeDeps = {}): Pr
   for (const group of resolved.groups) {
     const groupKeeper = roomKeeperKey(resolved, group)
     if (!groupKeeper) {
-      pool.close()
-      host?.stop()
-      throw new Error(`group ${group.group_id} has no room keeper key`)
+      throw new Error(tt(resolved.locale, "bridge.cli.missingGroupKey", { group: group.group_id }))
     }
     const session = new GroupRuntime(group.group_id, group, transport, now)
     sessions.set(group.group_id, session)
@@ -297,8 +370,9 @@ export async function runBridge(config: BridgeConfig, deps: BridgeDeps = {}): Pr
       onIntent: (intent) => session.enqueue(intent),
       onKickClose: (_userId, memberKey) => {
         catalog.delete(memberKey)
-        pool.closeLink(memberKey)
+        pool?.closeLink(memberKey)
       },
+      onLog,
       now,
       setTimeoutFn: deps.setTimeoutFn,
       clearTimeoutFn: deps.clearTimeoutFn,
@@ -312,12 +386,12 @@ export async function runBridge(config: BridgeConfig, deps: BridgeDeps = {}): Pr
   transport.onMessage((msg) => onInbound(msg))
 
   async function onInbound(msg: OneBotInbound): Promise<void> {
+    if (!transport || !pool) return
     if (isDroppedOneBotSender(msg)) return
-    const session = resolveSession(msg)
+    const session = await resolveSession(msg)
     if (!session) return
     const userId = msg.sender.userId
     if (msg.chatType === "group") lastGroupByUser.set(userId, session.groupId)
-    if (msg.messageId) session.lastMessageId.set(userId, msg.messageId)
 
     const rate = session.limiter.take(userId)
     if (rate === "drop") return
@@ -332,60 +406,94 @@ export async function runBridge(config: BridgeConfig, deps: BridgeDeps = {}): Pr
       }
       return
     }
+    if (msg.chatType === "group" && msg.messageId) session.lastMessageId.set(userId, msg.messageId)
 
-    const entry = await session.keyring.ensure(userId)
-    catalog.set(entry.key, { kind: "member", groupId: session.groupId, userId })
-    const link = await pool.open(entry.key, {
-      name: msg.sender.name,
-      idleClose: playerIdleClose,
-    })
-    pool.touch(entry.key)
+    try {
+      const previousKey = memberKeyFor(userId, session.groupId)
+      const entry = await session.keyring.ensure(userId)
+      const role: LinkRole = entry.role === "keeper" ? "admin" : "player"
+      if (previousKey && previousKey !== entry.key) {
+        catalog.delete(previousKey)
+        session.router.detachLink(previousKey)
+        pool.closeLink(previousKey)
+      }
+      catalog.set(entry.key, { kind: "member", groupId: session.groupId, userId, role })
+      await pool.open(entry.key, {
+        name: msg.sender.name,
+        idleClose: playerIdleClose,
+      })
+      pool.touch(entry.key)
 
-    for (const att of msg.attachments) {
-      if (!isImageAttachment(att)) continue
-      try {
-        const bytes = await transport.fetchAttachment(att)
-        await link.uploadMedia({
-          name: att.name || "image.png",
-          mime: att.mime || "image/png",
-          bytes,
-          sha256: sha256Hex(bytes),
-        })
-      } catch {
-        // SSRF, size, or server media policy — skip this file, keep the text
+      await session.router.handleInbound(
+        {
+          userId,
+          memberKey: entry.key,
+          text: msg.text,
+          channel: msg.chatType,
+          mentioned: msg.atSelf,
+          isAdmin: session.router.adminIds.map(String).includes(String(userId)),
+        },
+        async () => {
+          const live = pool!.get(entry.key)
+          if (!live) return
+          for (const att of msg.attachments) {
+            if (!isImageAttachment(att)) continue
+            try {
+              const bytes = await transport!.fetchAttachment(att)
+              await live.uploadMedia({
+                name: att.name || "image.png",
+                mime: att.mime || "image/png",
+                bytes,
+                sha256: sha256Hex(bytes),
+              })
+            } catch {
+              // SSRF, size, or server media policy — skip this file, keep the text
+            }
+          }
+        },
+      )
+    } catch {
+      onLog("bridge.seat_failed")
+      const text = tt(session.router.locale(), "bridge.seatFailed")
+      if (msg.chatType === "private") {
+        await transport.sendText({ type: "private", id: userId }, text)
+      } else if (msg.messageId) {
+        await transport.sendReply({ type: "group", id: session.groupId }, msg.messageId, text)
+      } else {
+        await transport.sendText({ type: "group", id: session.groupId }, text)
       }
     }
-
-    await session.router.handleInbound({
-      userId,
-      memberKey: entry.key,
-      text: msg.text,
-      channel: msg.chatType,
-      mentioned: msg.atSelf,
-      isAdmin: session.router.adminIds.map(String).includes(String(userId)),
-    })
   }
 
-  function resolveSession(msg: OneBotInbound): GroupRuntime | undefined {
+  function memberKeyFor(userId: string, groupId: string): string | undefined {
+    for (const [key, meta] of catalog) {
+      if (meta.kind === "member" && meta.userId === userId && meta.groupId === groupId) return key
+    }
+    return undefined
+  }
+
+  async function resolveSession(msg: OneBotInbound): Promise<GroupRuntime | undefined> {
     if (msg.chatType === "group") return sessions.get(msg.chatId)
-    const last = lastGroupByUser.get(msg.sender.userId)
+    const userId = msg.sender.userId
+    const last = lastGroupByUser.get(userId)
     if (last) {
       const hit = sessions.get(last)
       if (hit) return hit
     }
-    if (sessions.size === 1) return [...sessions.values()][0]
     for (const session of sessions.values()) {
-      if (session.router.adminIds.map(String).includes(String(msg.sender.userId))) return session
-      if (session.keyring.get(msg.sender.userId)) return session
+      if (session.router.adminIds.map(String).includes(String(userId))) return session
+      if (session.keyring.get(userId)) return session
+    }
+    if (!transport) return undefined
+    for (const session of sessions.values()) {
+      if (await transport.isGroupMember(session.groupId, userId)) return session
     }
     return undefined
   }
 
   const connected = await transport.connect()
   if (!connected) {
-    pool.close()
-    host?.stop()
-    throw new Error("OneBot transport failed to connect")
+    throw new Error(tt(resolved.locale, "bridge.cli.onebotConnectFailed"))
   }
 
   onLog(tt(resolved.locale, "bridge.cli.ready", { groups: resolved.groups.map((g) => g.group_id).join(", ") }))
@@ -404,13 +512,7 @@ export async function runBridge(config: BridgeConfig, deps: BridgeDeps = {}): Pr
       process.off("SIGTERM", onSignal)
     }
     try {
-      await transport.close()
-      pool.close()
-      for (const session of sessions.values()) {
-        session.keyring.close()
-        await session.posted.flush()
-      }
-      host?.stop()
+      await teardown()
       onLog(tt(resolved.locale, "bridge.cli.shutdown"))
     } finally {
       stoppedResolve()
@@ -432,6 +534,10 @@ export async function runBridge(config: BridgeConfig, deps: BridgeDeps = {}): Pr
     ticket,
     hosted: Boolean(host),
     groups: resolved.groups.map((g) => g.group_id),
+  }
+  } catch (error) {
+    await teardown()
+    throw error
   }
 }
 

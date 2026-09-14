@@ -692,6 +692,8 @@ export class OneBotReverseWebSocketTransport extends ActionWebSocketTransport {
   }
 }
 
+const MEMBER_POSITIVE_CACHE_MS = 10 * 60 * 1000
+
 export class OneBotTransport {
   private readonly inner: OneBotRawTransport | undefined
   private readonly window = new RecentMessageWindow()
@@ -699,6 +701,7 @@ export class OneBotTransport {
   private readonly statusHandlers = new Set<StatusHandler>()
   private readonly fetchDeps: FetchDeps
   private readonly attachmentTimeoutMs: number
+  private readonly memberPositiveUntil = new Map<string, number>()
 
   constructor(options: OneBotTransportOptions = {}) {
     this.inner = options.transport ?? buildOneBotTransport(options)
@@ -835,6 +838,28 @@ export class OneBotTransport {
 
   sendAt(target: ChatTarget, qq: string | number, text?: string, opts: { replyTo?: string } = {}): Promise<OneBotSendResult> {
     return this.send(target, { text, at: [qq], ...opts })
+  }
+
+  /**
+   * True when OneBot reports this QQ user is in the group. Any error (missing
+   * member, timeout, disconnected) is false. Positive answers are cached 10 minutes.
+   */
+  async isGroupMember(groupId: string | number, userId: string | number): Promise<boolean> {
+    const cacheKey = `${stringId(groupId)}\0${stringId(userId)}`
+    const cached = this.memberPositiveUntil.get(cacheKey)
+    const now = Date.now()
+    if (cached !== undefined && cached > now) return true
+    if (!this.inner) return false
+    try {
+      await this.inner.call("get_group_member_info", {
+        group_id: protocolId(groupId),
+        user_id: protocolId(userId),
+      })
+      this.memberPositiveUntil.set(cacheKey, now + MEMBER_POSITIVE_CACHE_MS)
+      return true
+    } catch {
+      return false
+    }
   }
 
   async fetchAttachment(
