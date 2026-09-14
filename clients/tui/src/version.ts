@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs"
 
-const FALLBACK_CLIENT_VERSION = "0.5.0"
+const FALLBACK_CLIENT_VERSION = "0.6.0"
 type Env = Record<string, string | undefined>
 
 function clean(value: string | undefined): string | undefined {
