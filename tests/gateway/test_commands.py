@@ -2580,3 +2580,187 @@ async def test_npc_and_companion_give_the_keeper_a_hand_on_the_cast():
     refused = await router.dispatch(keeper, ".party add 平知章 | a surveyor")
     assert refused.startswith("❌") and "平知章" in refused
     assert {record.name for record in await list_npcs(services.documents, chat_key)} == {"老蒯"}
+
+
+# ---------------------------------------------------------------------------
+# .imagegen / .forge — M24 WS-B chat-side twins of admin_set_imagegen / admin_generate
+# ---------------------------------------------------------------------------
+
+_FORGE_SKILL_MD = """---
+name: Grim Survival Horror
+description: >
+  Enable for a campaign about grinding, resource-scarce survival horror.
+allowed-tools: []
+metadata:
+  scope: room
+  content-rating: mature
+---
+
+# Grim survival horror
+
+Track scarcity relentlessly.
+"""
+
+
+async def test_imagegen_and_forge_are_denied_for_non_keeper():
+    services = _baseline_services()
+    router = CommandRouter(services)
+    player = AgentCtx(chat_key="grp:public", user_id="u1", platform="discord", locale="en")
+
+    shown = await router.dispatch(player, ".imagegen show")
+    assert shown == services.i18n.with_locale("en").t("commands.imagegen.denied")
+    assert await services.imagegen_runtime_config.get() == {}
+
+    forged = await router.dispatch(player, ".forge skill a grim survival horror campaign")
+    assert forged == services.i18n.with_locale("en").t("commands.forge.denied")
+
+
+async def test_imagegen_show_masks_the_key_and_set_new_base_url_without_key_clears_it():
+    services = _baseline_services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:imagegen", user_id="u1", locale="en")
+
+    first = await router.dispatch(
+        ctx,
+        ".imagegen set openai gpt-image-1 512x512 key=sk-old-image-endpoint "
+        "base_url=https://images-old.example/v1",
+    )
+    assert first is not None
+    assert "openai" in first
+    assert services.settings.imagegen.api_key == "sk-old-image-endpoint"
+    assert "sk-old-image-endpoint" not in first
+
+    shown = await router.dispatch(ctx, ".imagegen show")
+    assert shown is not None
+    assert "sk-old-image-endpoint" not in shown
+    assert "oint" in shown
+    assert "*" in shown
+    assert "openai" in shown
+    assert "gpt-image-1" in shown
+    assert "512x512" in shown
+
+    changed = await router.dispatch(
+        ctx,
+        ".imagegen set openai gpt-image-1 base_url=https://images-new.example/v1",
+    )
+    assert changed is not None
+    assert services.settings.imagegen.base_url == "https://images-new.example/v1"
+    assert services.settings.imagegen.api_key == ""
+    assert await services.imagegen_credentials.get("openai") == {
+        "base_url": "https://images-new.example/v1"
+    }
+
+    disabled = await router.dispatch(ctx, ".imagegen off")
+    assert disabled == services.i18n.with_locale("en").t("commands.imagegen.off_done")
+    assert services.settings.imagegen.provider == ""
+    assert services.imagegen is None
+
+
+async def test_forge_with_fake_llm_installs_a_skill(tmp_path):
+    import core.skills as skills_module
+
+    settings = _baseline_settings()
+    services = build_services(
+        settings,
+        llm=FakeLLM(script=[assistant_text(_FORGE_SKILL_MD)]),
+        embeddings=FakeEmbeddings(64),
+    )
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:forge", user_id="u1", locale="en")
+
+    original = skills_module._USER_SKILL_DIR
+    skills_module._USER_SKILL_DIR = tmp_path
+    skills_module.reload_skills()
+    try:
+        reply = await router.dispatch(ctx, ".forge skill a grim survival horror campaign")
+        assert reply is not None
+        assert "Grim Survival Horror" in reply
+        loaded = skills_module.load_skill("grim-survival-horror")
+        assert loaded is not None
+        assert loaded.name == "Grim Survival Horror"
+        assert (tmp_path / "grim-survival-horror" / "SKILL.md").is_file()
+    finally:
+        skills_module._USER_SKILL_DIR = original
+        skills_module.reload_skills()
+
+
+async def test_forge_followup_posts_a_system_line_on_the_hub(tmp_path):
+    import core.skills as skills_module
+
+    class _SpyHub:
+        def __init__(self) -> None:
+            self.published: list = []
+
+        async def publish(self, chat_key, event, **kwargs) -> None:
+            self.published.append((chat_key, event, kwargs))
+
+    settings = _baseline_settings()
+    services = build_services(
+        settings,
+        llm=FakeLLM(script=[assistant_text(_FORGE_SKILL_MD)]),
+        embeddings=FakeEmbeddings(64),
+    )
+    hub = _SpyHub()
+    router = CommandRouter(services, hub=hub)
+    ctx = AgentCtx(
+        chat_key="tui:group:forge",
+        user_id="kp",
+        platform="tui",
+        locale="en",
+        extra={"role": "keeper", "member_user_key": "tui:kp"},
+    )
+    original = skills_module._USER_SKILL_DIR
+    skills_module._USER_SKILL_DIR = tmp_path
+    skills_module.reload_skills()
+    try:
+        started = await router.dispatch(ctx, ".forge skill a grim survival horror campaign")
+        assert started == services.i18n.with_locale("en").t(
+            "commands.forge.started",
+            kind=services.i18n.with_locale("en").t("commands.forge.kind.skill"),
+        )
+        pending = [task for task in getattr(services, "_forge_command_tasks", []) if not task.done()]
+        if pending:
+            await asyncio.gather(*pending)
+        assert skills_module.load_skill("grim-survival-horror") is not None
+        followups = [(chat_key, event, kwargs) for chat_key, event, kwargs in hub.published]
+        assert len(followups) == 1
+        chat_key, event, kwargs = followups[0]
+        assert chat_key == "tui:group:forge"
+        assert kwargs.get("only_user") == "tui:kp"
+        assert event.speaker == "system"
+        assert "Grim Survival Horror" in event.text
+    finally:
+        skills_module._USER_SKILL_DIR = original
+        skills_module.reload_skills()
+
+
+async def test_help_lists_imagegen_and_forge_for_the_keeper():
+    services = _baseline_services()
+    router = CommandRouter(services)
+    keeper = AgentCtx(chat_key="cli:dm:help", user_id="k1", locale="en")
+    player = AgentCtx(
+        chat_key="tui:room:help", user_id="p1", platform="tui", locale="en", extra={"role": "player"}
+    )
+
+    keeper_help = await router.dispatch(keeper, ".help")
+    assert keeper_help is not None
+    assert ".imagegen" in keeper_help
+    assert ".forge" in keeper_help
+
+    player_help = await router.dispatch(player, ".help")
+    assert player_help is not None
+    assert ".imagegen" not in player_help
+    assert ".forge" not in player_help
+
+
+async def test_zh_aliases_resolve_imagegen_and_forge():
+    services = _baseline_services()
+    router = CommandRouter(services)
+    ctx = AgentCtx(chat_key="cli:dm:zh", user_id="u1", locale="zh")
+
+    shown = await router.dispatch(ctx, ".图片生成")
+    assert shown is not None
+    assert "图片生成" in shown or "提供方" in shown
+
+    usage = await router.dispatch(ctx, ".锻造")
+    assert usage == services.i18n.with_locale("zh").t("commands.forge.usage")

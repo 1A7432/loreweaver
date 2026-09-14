@@ -1,7 +1,7 @@
 """The command router core: the spec table, alias resolution, dispatch, and `.help`.
 
 Handlers live in per-domain mixins (`checks`, `sheet`, `rules`, `rooms`, `cast`, `world`,
-`panels`, `media`, `llm`) that `CommandRouter` composes — the same shape `agent.kp_tools`
+`panels`, `media`, `llm`, `forge`) that `CommandRouter` composes — the same shape `agent.kp_tools`
 uses to compose tool providers. A new command lands in its domain module; this file
 only learns its spec row."""
 
@@ -21,6 +21,7 @@ from core.character_manager import (
 from core.resolution import ResolutionError
 from gateway.commands.cast import CastCommands
 from gateway.commands.checks import ChecksCommands, _resolution_notice
+from gateway.commands.forge import ForgeCommands
 from gateway.commands.llm import LlmCommands
 from gateway.commands.media import MediaCommands
 from gateway.commands.panels import PanelsCommands
@@ -65,6 +66,7 @@ class CommandRouter(
     PanelsCommands,
     MediaCommands,
     LlmCommands,
+    ForgeCommands,
 ):
     def __init__(
         self,
@@ -571,6 +573,28 @@ class CommandRouter(
                 "commands.help.model",
                 # `.model key` echoes a masked API key; `.model show`/`set`/`reset` also
                 # surface provider/base_url/key config. None of that belongs on the room bus.
+                private_reply=True,
+                keeper_help=True,
+            ),
+            CommandSpec(
+                "imagegen",
+                self.cmd_imagegen,
+                ["imagegen"],
+                ["imagegen", "图片生成", "圖片生成"],
+                None,
+                "commands.help.imagegen",
+                # `.imagegen show`/`set` surface provider/base_url and a masked key.
+                private_reply=True,
+                keeper_help=True,
+            ),
+            CommandSpec(
+                "forge",
+                self.cmd_forge,
+                ["forge"],
+                ["forge", "锻造", "鍛造"],
+                None,
+                "commands.help.forge",
+                # Install paths and authoring errors stay on the caller.
                 private_reply=True,
                 keeper_help=True,
             ),

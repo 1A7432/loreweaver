@@ -3,6 +3,7 @@ subscription OAuth flows, and the live LLM hot-switch."""
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
 
@@ -35,6 +36,12 @@ _MODEL_KEY_WORDS = {"key", "apikey", "token", "密钥", "密鑰"}
 _MODEL_RESET_WORDS = {"reset", "clear", "revert", "重置", "清除"}
 _MODEL_LOGIN_WORDS = {"login", "auth", "signin", "登录", "登入"}
 _MODEL_LOGOUT_WORDS = {"logout", "signout", "登出", "退出登录", "退出登入"}
+
+# `.imagegen` subcommand vocabularies (EN + CN synonyms) -- runtime image-generation config.
+_IMAGEGEN_SHOW_WORDS = {"", "show", "status", "info", "查看", "状态", "狀態"}
+_IMAGEGEN_SET_WORDS = {"set", "use", "switch", "设置", "設置", "切换", "切換"}
+_IMAGEGEN_OFF_WORDS = {"off", "disable", "关闭", "關閉", "停用"}
+_IMAGEGEN_SIZE_RE = re.compile(r"^\d+x\d+$", re.I)
 
 
 def _model_mutation_failed(ctx: CommandCtx, provider: str) -> str:
@@ -519,3 +526,144 @@ class LlmCommands:
             return _model_mutation_failed(ctx, provider)
         info = _describe_llm(ctx.services)
         return ctx.i18n.t("commands.model.reset_done", provider=info["provider"], chat_model=info["chat_model"])
+
+    async def cmd_imagegen(self, ctx: CommandCtx) -> str:
+        """`.imagegen [show | set <provider> [model] [size] [key=…] [base_url=…] | off]`
+
+        The chat-side twin of `admin_set_imagegen`: same endpoint/key isolation (an
+        omitted key is reusable only for the same endpoint; a new base_url without a
+        key clears the old key). Mutations take `services.config_lock` the way
+        `.model set` does. Replies stay private — they can carry a masked key.
+        """
+        parts = ctx.args.split(maxsplit=1)
+        sub = parts[0].casefold() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        if sub in _IMAGEGEN_SHOW_WORDS:
+            if not await _keeper_still_authorized(ctx.raw_ctx, ctx.chat_key, ctx.services.store):
+                return ctx.fail(ctx.i18n.t("commands.imagegen.denied"))
+            return await self._imagegen_show(ctx)
+        if ctx.raw_ctx.platform != "cli" and not _is_keeper(ctx.raw_ctx):
+            return ctx.fail(ctx.i18n.t("commands.imagegen.denied"))
+        if sub in _IMAGEGEN_SET_WORDS | _IMAGEGEN_OFF_WORDS:
+            async with ctx.services.config_lock:
+                if not await _keeper_still_authorized(ctx.raw_ctx, ctx.chat_key, ctx.services.store):
+                    return ctx.fail(ctx.i18n.t("commands.imagegen.denied"))
+                if sub in _IMAGEGEN_SET_WORDS:
+                    return await self._imagegen_set(ctx, rest)
+                return await self._imagegen_off(ctx)
+        return ctx.i18n.t("commands.imagegen.usage")
+
+    async def _imagegen_show(self, ctx: CommandCtx) -> str:
+        from net.admin import _imagegen_status
+
+        status = await _imagegen_status(ctx.services)
+        api_key = str(status.get("api_key_masked") or "") or ctx.i18n.t("commands.imagegen.key_none")
+        base_url = str(status.get("base_url") or "") or ctx.i18n.t("commands.imagegen.base_default")
+        provider = str(status.get("provider") or "") or ctx.i18n.t("commands.imagegen.key_none")
+        model = str(status.get("model") or "") or ctx.i18n.t("commands.imagegen.key_none")
+        size = str(status.get("size") or "") or ctx.i18n.t("commands.imagegen.key_none")
+        return ctx.i18n.t(
+            "commands.imagegen.show",
+            provider=provider,
+            model=model,
+            size=size,
+            base_url=base_url,
+            api_key=api_key,
+        )
+
+    async def _imagegen_set(self, ctx: CommandCtx, rest: str) -> str:
+        from infra.imagegen import IMAGEGEN_PRESETS
+        from net.admin import _set_imagegen
+
+        if not _is_keeper(ctx.raw_ctx):
+            return ctx.fail(ctx.i18n.t("commands.imagegen.denied"))
+        parsed = _parse_imagegen_set(rest)
+        if parsed is None:
+            return ctx.i18n.t("commands.imagegen.set_usage")
+        provider, model, size, extras = parsed
+        live = ctx.services.settings.imagegen
+        if not model:
+            same_provider = provider == (live.provider or "").casefold()
+            if same_provider and live.model:
+                model = live.model
+            else:
+                model = IMAGEGEN_PRESETS.get(provider, {}).get("model", "") or (live.model or "")
+        if not model:
+            return ctx.i18n.t("commands.imagegen.set_usage")
+        frame: dict[str, Any] = {"provider": provider, "model": model}
+        if size:
+            frame["size"] = size
+        # Only put key/base_url on the frame when the caller typed them: `_set_imagegen`
+        # treats presence vs omission as the isolation rule (a new endpoint without a
+        # key must not reuse the previous endpoint's key).
+        if "api_key" in extras:
+            frame["api_key"] = extras["api_key"]
+        if "base_url" in extras:
+            frame["base_url"] = extras["base_url"]
+        result = await _set_imagegen(ctx.services, frame, ctx.i18n)
+        if result.get("type") == "admin_error":
+            code = str(result.get("code") or "")
+            if code == "bad_request":
+                return ctx.i18n.t("commands.imagegen.set_usage")
+            return ctx.fail(ctx.i18n.t("commands.imagegen.set_failed"))
+        imagegen = result.get("imagegen") if isinstance(result.get("imagegen"), dict) else {}
+        return ctx.i18n.t(
+            "commands.imagegen.set_done",
+            provider=str(imagegen.get("provider") or provider),
+            model=str(imagegen.get("model") or model),
+            size=str(imagegen.get("size") or size or live.size or "1024x1024"),
+        )
+
+    async def _imagegen_off(self, ctx: CommandCtx) -> str:
+        from net.admin import _reconfigure_imagegen
+
+        if not _is_keeper(ctx.raw_ctx):
+            return ctx.fail(ctx.i18n.t("commands.imagegen.denied"))
+        size = ctx.services.settings.imagegen.size or "1024x1024"
+        overrides = {
+            "provider": "",
+            "model": "",
+            "size": size,
+            "api_key": "",
+            "base_url": "",
+        }
+        try:
+            _reconfigure_imagegen(ctx.services, overrides)
+            await ctx.services.imagegen_runtime_config.replace(**overrides)
+        except Exception:
+            return ctx.fail(ctx.i18n.t("commands.imagegen.set_failed"))
+        return ctx.i18n.t("commands.imagegen.off_done")
+
+
+def _parse_imagegen_set(rest: str) -> tuple[str, str, str, dict[str, str]] | None:
+    """Split `.imagegen set` arguments into provider / model / size / keyed extras.
+
+    Keyed tokens (`key=`, `base_url=`) are stripped out first so a size or model
+    cannot be confused with a flag. The extras dict only contains keys the caller
+    actually typed, which is what `_set_imagegen` needs for endpoint/key isolation.
+    """
+    if not rest.strip():
+        return None
+    positional: list[str] = []
+    extras: dict[str, str] = {}
+    for token in rest.split():
+        lower = token.casefold()
+        if lower.startswith("key="):
+            extras["api_key"] = token.split("=", 1)[1]
+        elif lower.startswith("base_url="):
+            extras["base_url"] = token.split("=", 1)[1]
+        else:
+            positional.append(token)
+    if not positional:
+        return None
+    provider = positional[0].casefold()
+    model = ""
+    size = ""
+    for token in positional[1:]:
+        if _IMAGEGEN_SIZE_RE.fullmatch(token) and not size:
+            size = token
+        elif not model:
+            model = token
+        else:
+            return None
+    return provider, model, size, extras

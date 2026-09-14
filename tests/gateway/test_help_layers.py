@@ -21,7 +21,7 @@ def _keeper_ctx(*, locale: str = "en") -> AgentCtx:
 
 
 _PLAYER_VERBS = (".roll", ".check", ".pc", ".recap", ".help")
-_KEEPER_VERBS = (".dev", ".var", ".model", ".reset")
+_KEEPER_VERBS = (".dev", ".var", ".model", ".reset", ".imagegen", ".forge")
 
 
 async def test_player_help_lists_play_verbs_and_hides_operator_surfaces():
