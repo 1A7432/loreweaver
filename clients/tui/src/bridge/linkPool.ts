@@ -12,6 +12,7 @@ import {
 const DEFAULT_IDLE_CLOSE_MS = 30 * 60 * 1000
 const DEFAULT_RECONNECT_BASE_MS = 250
 const DEFAULT_RECONNECT_MAX_MS = 5_000
+const OPENING_DROPPED_MESSAGE = "Iroh connection is not open."
 
 export type LinkReadyReason = "open" | "redial"
 
@@ -49,13 +50,14 @@ interface MemberSlot {
   name?: string
   idleClose: boolean
   link?: IrohLink
-  opening?: Promise<IrohLink>
+  opening?: Promise<IrohLink | undefined>
   generation: number
   reconnectAttempts: number
   lastTouch: number
   idleTimer?: ReturnType<typeof setTimeout>
   reconnectTimer?: ReturnType<typeof setTimeout>
-  reconnectReject?: (error: Error) => void
+  reconnectReject?: (reason: unknown) => void
+  openingAbort?: () => void
 }
 
 /**
@@ -132,7 +134,10 @@ export class LinkPool {
     }
     if (slot?.opening) {
       this.touch(memberKey)
-      return slot.opening
+      return slot.opening.then((link) => {
+        if (!link) throw new Error(OPENING_DROPPED_MESSAGE)
+        return link
+      })
     }
     if (!slot) {
       slot = {
@@ -230,26 +235,20 @@ export class LinkPool {
     if (this.closed || !this.reconnect || !this.ticket) return
     if (slot.opening) return
     // Assign the shared promise SYNCHRONOUSLY so a concurrent open() (or onLinkDown
-    // calling open) joins this redial instead of starting a second connect.
-    let settle: (link: IrohLink) => void = () => {}
-    let fail: (error: unknown) => void = () => {}
-    const promise = new Promise<IrohLink>((resolve, reject) => {
-      settle = resolve
-      fail = reject
-    })
+    // calling open) joins this redial instead of starting a second connect. A drop
+    // fulfills it with undefined; open() waiters throw Error("Iroh connection is not open.").
+    const promise = this.redialOpening(slot)
     slot.opening = promise
-    const running = this.redialUntilUp(slot)
-    void running.then(
-      (link) => {
-        if (link) settle(link)
-      },
-      fail,
-    )
-    void running.catch(() => {})
-    void promise.catch(() => {})
     void promise.finally(() => {
       if (slot.opening === promise) slot.opening = undefined
     })
+  }
+
+  private async redialOpening(slot: MemberSlot): Promise<IrohLink | undefined> {
+    const aborted = new Promise<undefined>((resolve) => {
+      slot.openingAbort = () => resolve(undefined)
+    })
+    return await Promise.race([this.redialUntilUp(slot), aborted])
   }
 
   private slotOwned(slot: MemberSlot): boolean {
@@ -314,8 +313,14 @@ export class LinkPool {
       slot.reconnectTimer = undefined
     }
     if (slot.reconnectReject) {
-      slot.reconnectReject(new Error("LinkPool is closed."))
+      slot.reconnectReject("dropped")
       slot.reconnectReject = undefined
+    }
+    // Settle waiters of a shared redial immediately — do not wait for IrohLink.open
+    // to finish. Resolves undefined; open() waiters convert that to the public Error.
+    if (slot.openingAbort) {
+      slot.openingAbort()
+      slot.openingAbort = undefined
     }
     slot.opening = undefined
     slot.link?.close()
