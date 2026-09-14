@@ -13,9 +13,10 @@
   same `agent.forge` generators `admin_generate` uses; a module installs into the
   caller's room. Generation is prep-phase (`room_phase == play` is refused, same
   axis as `prep_only` on the forge tools) and does not require the forge skills
-  (the admin surface is already keeper-gated). A hub-backed router replies that
-  generation started and posts the result as a follow-up system line; a standalone
-  router waits and returns the result in-line. Replies are `private_reply`.
+  (the admin surface is already keeper-gated). It runs in-line under the per-room
+  turn lock — authorization and the install share one locked scope, so a later
+  `.reset` / `.undo` / import / delete cannot be overwritten by a leftover task
+  (defensive-patterns §7). Replies are `private_reply`.
 - **Rule home:** `gateway/commands/llm.py` (`cmd_imagegen`), `gateway/commands/forge.py`,
   spec rows in `gateway/commands/router.py`.
 - **Date:** 2026-09-14.

@@ -11,7 +11,12 @@ install new skills/rule systems/modules on its own initiative -- the keeper must
 from __future__ import annotations
 
 from agent.context import AgentCtx
-from agent.forge import generate_and_install_module, generate_and_install_rulepack, generate_and_install_skill
+from agent.forge import (
+    format_forge_result,
+    generate_and_install_module,
+    generate_and_install_rulepack,
+    generate_and_install_skill,
+)
 from agent.services import Services
 from agent.tools import tool
 from infra.i18n import I18n
@@ -42,15 +47,8 @@ class ForgeTools:
             Confirmation naming the new skill and its id, or an explanation of why generation
             failed (nothing is installed on failure).
         """
-        i18n = self._i18n(ctx)
         result = await generate_and_install_skill(self._services, description, chat_key=ctx.chat_key)
-        if result.ok:
-            return i18n.t("agent.forge.installed", name=result.name, skill_id=result.skill_id, path=result.path)
-        if result.error == "no_data_dir":
-            return i18n.t("agent.forge.no_data_dir")
-        if result.error.startswith("bad_id"):
-            return i18n.t("agent.forge.bad_id", error=result.error.removeprefix("bad_id: "))
-        return i18n.t("agent.forge.invalid", error=result.error)
+        return format_forge_result(self._i18n(ctx), "skill", result)
 
     @tool(gated=True, prep_only=True)
     async def generate_rulepack(self, ctx: AgentCtx, description: str) -> str:
@@ -67,15 +65,8 @@ class ForgeTools:
             Confirmation naming the new rule system and its id, or an explanation of why generation
             failed (nothing is installed on failure).
         """
-        i18n = self._i18n(ctx)
         result = await generate_and_install_rulepack(self._services, description, chat_key=ctx.chat_key)
-        if result.ok:
-            return i18n.t("agent.forge.rulepack_installed", name=result.name, rulepack_id=result.skill_id, path=result.path)
-        if result.error == "no_data_dir":
-            return i18n.t("agent.forge.rulepack_no_data_dir")
-        if result.error.startswith("bad_id"):
-            return i18n.t("agent.forge.rulepack_bad_id", error=result.error.removeprefix("bad_id: "))
-        return i18n.t("agent.forge.rulepack_invalid", error=result.error)
+        return format_forge_result(self._i18n(ctx), "rule", result)
 
     @tool(gated=True, prep_only=True)
     async def generate_module(self, ctx: AgentCtx, description: str) -> str:
@@ -92,18 +83,5 @@ class ForgeTools:
             Confirmation naming the new module and summarizing this room's resulting knowledge-pool
             state, or an explanation of why generation failed (nothing is installed on failure).
         """
-        i18n = self._i18n(ctx)
         result = await generate_and_install_module(self._services, ctx, description)
-        if result.ok:
-            if result.reused:
-                return i18n.t(
-                    "agent.forge.module_reused",
-                    name=result.name,
-                    path=result.path,
-                )
-            return i18n.t("agent.forge.module_installed", name=result.name, path=result.path, detail=result.detail)
-        if result.error == "no_data_dir":
-            return i18n.t("agent.forge.module_no_data_dir")
-        if result.error.startswith("bad_id"):
-            return i18n.t("agent.forge.module_bad_id", error=result.error.removeprefix("bad_id: "))
-        return i18n.t("agent.forge.module_invalid", error=result.error)
+        return format_forge_result(self._i18n(ctx), "module", result)

@@ -50,6 +50,12 @@ Subscription providers need `.model login` first.
 .model login chatgpt            ChatGPT 订阅的设备码 OAuth
 .model login supergrok          SuperGrok 同理
 .model reset                    丢掉运行时覆盖，回到 .env
+.imagegen                       看图片生成端点（只回给你自己）
+.imagegen set <provider> [model] [size] [key=…] [base_url=…]
+.imagegen off                   关闭图片生成
+.forge skill|rulepack|module <描述>
+                                创作并安装技能、规则包或模组
+                                （筹备阶段；模组装进本房间）
 ```
 
 key 是**按 provider 记住**的，所以换回一个用过的不会再问你要。但新的 `base_url` 永远不会配旧 key：要么你在同一条请求里把对应的 key 给上，要么这个端点拿到的是空 key。守秘人客户端在模型页也能做同样的事。
@@ -95,7 +101,7 @@ TRPG_SCRIBE__REASONING_EFFORT=low
 **有资料包它才会醒**：只有当房间启用的模组带了 `ui/presentation.yaml`，导演才上工。没有这种模组的桌子从不唤醒它，也就不会为它付钱。出图还要额外满足三个条件，缺一不可：
 
 1. `TRPG_DIRECTOR__IMAGES=1`；
-2. 配好了 `TRPG_IMAGEGEN__*` 端点；
+2. 配好了图片生成端点——`.env` 里的 `TRPG_IMAGEGEN__*`，或运行时 `.imagegen set`（隔离规则和模型页相同）；
 3. 模组自己的资料包允许——如果作者写了 `generation: pack_only`，那是作者的否决权，你这边任何设置都覆盖不了。
 
 ```dotenv
@@ -257,7 +263,7 @@ TRPG_TUI__UPDATE_COMMAND=git pull --ff-only && uv sync    # 默认（git 检出�
 
 - 偶尔瞄一眼 `上下文` 和 `缓存`。`上下文` 应该是锯齿状的，不该一路只涨。
 - 回复变慢先去日志里找 `LLM throttled`，再怪模型。
-- 守秘人专属的回复（`.model`、`.lore`、`.chronicle`、`.var`、`.npc`）按设计只发给你自己。哪天你看见这类回复落进了房间日志，那是个值得报的 bug。
+- 守秘人专属的回复（`.model`、`.imagegen`、`.forge`、`.lore`、`.chronicle`、`.var`、`.npc`）按设计只发给你自己。哪天你看见这类回复落进了房间日志，那是个值得报的 bug。
 - `.npc` / `.companion` 是你对这桌名录的那只手：列出来，`show <名字>` 看完整记录（人设、秘密议程、这个 NPC 知道什么），`delete <名字>` 删掉守秘人临场编出来而你不想要的。删伙伴会连它的角色卡一起删（伙伴 = 记录 + 卡）；删普通 NPC 不碰任何卡。
 - `.panel` 把模组面板渲成文字——终端上有用，也是看"玩家的面板此刻到底显示着什么"最快的办法。
 

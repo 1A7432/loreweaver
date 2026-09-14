@@ -51,6 +51,7 @@ from agent.services import Services
 from core.documents import KEEPER_VIEWER, MODULE_POOL_ID
 from core.yaml_safety import safe_load_no_aliases
 from infra.file_permissions import atomic_write_private
+from infra.i18n import I18n
 from infra.model_call_trace import lane_scope
 from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
 from infra.usage_stats import record_usage_stats
@@ -109,7 +110,7 @@ class ForgeResult:
     optional extra payload only the module generator uses (the room-install confirmation from
     `agent.kp_tools_knowledge.DocumentTools.upload_document`); it is always `""` for skills/rulepacks.
 
-    `error` is an internal (English, untranslated) diagnostic -- `agent.kp_tools_forge.ForgeTools`
+    `error` is an internal (English, untranslated) diagnostic -- `format_forge_result`
     maps it to a localized string for the model/player. `"no_data_dir"` and a `"bad_id: ..."` /
     `"invalid_skill: ..."` / `"invalid_rulepack: ..."` / `"path_escape: ..."` / `"write_failed:
     ..."` prefix are the recognized shapes; callers that only care about success/failure should
@@ -123,6 +124,42 @@ class ForgeResult:
     error: str
     detail: str = ""
     reused: bool = False
+
+
+def format_forge_result(i18n: I18n, kind: str, result: ForgeResult) -> str:
+    """Map a `ForgeResult` to the localized install/error string both the forge
+    KP tools and the `.forge` command return."""
+    lane = "rule" if kind in {"rule", "rulepack"} else kind
+    if lane == "skill":
+        if result.ok:
+            return i18n.t("agent.forge.installed", name=result.name, skill_id=result.skill_id, path=result.path)
+        if result.error == "no_data_dir":
+            return i18n.t("agent.forge.no_data_dir")
+        if result.error.startswith("bad_id"):
+            return i18n.t("agent.forge.bad_id", error=result.error.removeprefix("bad_id: "))
+        return i18n.t("agent.forge.invalid", error=result.error)
+    if lane == "rule":
+        if result.ok:
+            return i18n.t(
+                "agent.forge.rulepack_installed",
+                name=result.name,
+                rulepack_id=result.skill_id,
+                path=result.path,
+            )
+        if result.error == "no_data_dir":
+            return i18n.t("agent.forge.rulepack_no_data_dir")
+        if result.error.startswith("bad_id"):
+            return i18n.t("agent.forge.rulepack_bad_id", error=result.error.removeprefix("bad_id: "))
+        return i18n.t("agent.forge.rulepack_invalid", error=result.error)
+    if result.ok:
+        if result.reused:
+            return i18n.t("agent.forge.module_reused", name=result.name, path=result.path)
+        return i18n.t("agent.forge.module_installed", name=result.name, path=result.path, detail=result.detail)
+    if result.error == "no_data_dir":
+        return i18n.t("agent.forge.module_no_data_dir")
+    if result.error.startswith("bad_id"):
+        return i18n.t("agent.forge.module_bad_id", error=result.error.removeprefix("bad_id: "))
+    return i18n.t("agent.forge.module_invalid", error=result.error)
 
 
 async def _llm_authored(

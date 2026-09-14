@@ -58,6 +58,12 @@ Switching is hot — no restart, mid-session is fine:
 .model login chatgpt            device-code OAuth for a ChatGPT subscription
 .model login supergrok          the same for SuperGrok
 .model reset                    drop the runtime override, back to .env
+.imagegen                       show the image-generation endpoint (private to you)
+.imagegen set <provider> [model] [size] [key=…] [base_url=…]
+.imagegen off                   disable image generation
+.forge skill|rulepack|module <description>
+                                author and install a skill, rulepack, or module
+                                (prep phase; a module lands in this room)
 ```
 
 Keys are remembered **per provider**, so switching back to one you've used before doesn't re-ask. A
@@ -122,7 +128,8 @@ beats are rare and the job is taste.
 Image generation additionally needs all three of these to agree:
 
 1. `TRPG_DIRECTOR__IMAGES=1`,
-2. a configured `TRPG_IMAGEGEN__*` endpoint,
+2. a configured image-generation endpoint — `TRPG_IMAGEGEN__*` in `.env`, or `.imagegen set`
+   at runtime (same endpoint/key isolation as the model screen),
 3. the module's own kit — and if its author wrote `generation: pack_only`, that is the author's
    call, and nothing you set on your side overrides it.
 
@@ -344,7 +351,7 @@ During:
 
 - Glance at `ctx` and `cache` once in a while. `ctx` should sawtooth, not climb forever.
 - If replies get slow, check the log for `LLM throttled` before blaming the model.
-- Keeper-only replies (`.model`, `.lore`, `.chronicle`, `.var`, `.npc`) are unicast to you by design
+- Keeper-only replies (`.model`, `.imagegen`, `.forge`, `.lore`, `.chronicle`, `.var`, `.npc`) are unicast to you by design
   — if you ever see one land in the room's log, that's a bug worth reporting.
 - `.npc` / `.companion` are your hand on the room's cast: list it, `show <name>` for the full record
   (persona, secret agenda, what that NPC knows), `delete <name>` when the Keeper improvised one you
