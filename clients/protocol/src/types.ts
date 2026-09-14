@@ -111,6 +111,7 @@ export type AdminErrorCode =
   | "not_found"
   | "op_failed"
   | "not_configured"
+  | "last_keeper"
 export type AdminRoomOpAction = "export" | "import" | "delete" | "reset"
 export type AdminForgeKind = "skill" | "rule" | "module"
 
