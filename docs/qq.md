@@ -61,9 +61,11 @@ adapter's unit); the client converts them to milliseconds internally.
 ```
 
 Omit `ticket` (and `keeper_key`) to host locally. One group maps to one room; a
-keeper key is room-bound, so each group names its room's key. The top-level
+keeper key is room-bound, so each group names its room's key. Two groups must
+not share a `room_keeper_key` (or the top-level `keeper_key`). The top-level
 `keeper_key` is the default for a single-group setup. `locale` is optional: when
-unset, the bridge follows the room's `welcome.locale`.
+unset, the bridge follows the room's `welcome.locale`. `idle_close_minutes: 0`
+disables idle-close of player links (the observer and control links never idle-close).
 
 State files (`<group>.keyring.json`, `<group>.posted.json`,
 `<group>.settings.json`) are written mode 0600 under `state_dir`.
@@ -96,14 +98,22 @@ the bridge, never forwarded to the engine).
 Every keeper-gated engine command already works over a keeper-role link: import,
 `.skill`, `.panels`, `.pack install`, `.model`, `.save`, `.reset`, `.module`,
 `.rule`, `.preset`, `.phase`, `.var expose`, `.dev mount`, `.language`,
-`.chronicle`, `.lore`. **Replies to those commands arrive in private chat**,
-never in the group — including acknowledgements. That is fail-closed on
-purpose.
+`.chronicle`, `.lore`, `.imagegen`, `.forge`. **Admin replies always arrive in
+private chat**, even when the command was typed in the group — including
+acknowledgements. That is fail-closed on purpose. The bot must be a **friend**
+of that admin: if a private send fails, the group is told only to add the bot
+as a friend; the content is never posted in the group.
 
 Secret-reading commands (`.lore`, `.var`, anything that would show keeper-only
 material) should be sent as a **private message** to the bot. The admin doc is
 the same instruction: private chat is where those answers go, and it is also
 where you should ask.
+
+A player-addressed `system` / `error` (`.st show`, "your input is queued") is
+answered on the channel that command was typed on: private stays private even
+if the same person then types in the group. `.imagegen` and `.forge` are
+ordinary engine commands in this release; the bridge needs nothing extra for
+them.
 
 Bridge-level commands (admin-only): `.bridge status`, `.bridge members`,
 `.bridge kick <qq>`, `.bridge admin add|remove <qq>`, `.bridge mode all|mention`,

@@ -58,8 +58,10 @@ ticket 和守秘人密钥。Studio / 终端的玩家仍然可以用普通邀请�
 ```
 
 省略 `ticket`（和 `keeper_key`）就是本地开服。一个群对应一个房间；守秘人密钥是绑房间的，
-所以每个群要写自己房间的密钥。只有一个群时，顶层的 `keeper_key` 就是默认值。`locale`
-可省略：不写就跟房间 `welcome.locale` 走。
+所以每个群要写自己房间的密钥。两个群不能共用一把 `room_keeper_key`（也不能共用顶层的
+`keeper_key`）。只有一个群时，顶层的 `keeper_key` 就是默认值。`locale` 可省略：不写就跟
+房间 `welcome.locale` 走。`idle_close_minutes: 0` 会关掉玩家连接的空闲关闭（观察席和控制
+连接本来就不会因空闲关掉）。
 
 状态文件（`<group>.keyring.json`、`<group>.posted.json`、`<group>.settings.json`）
 写在 `state_dir` 下，权限 0600。
@@ -87,11 +89,16 @@ NapCat / Lagrange：打开 OneBot 11 的 websocket，填同一段 token，正向
 所有需要守秘人权限的引擎命令，在守秘人角色的链路上本来就能用：导入、`.skill`、
 `.panels`、`.pack install`、`.model`、`.save`、`.reset`、`.module`、`.rule`、
 `.preset`、`.phase`、`.var expose`、`.dev mount`、`.language`、`.chronicle`、
-`.lore`。**这些命令的回复只进私聊**，不会进群——包括「完成了」这类回执。这是故意
-往安全一侧收的。
+`.lore`、`.imagegen`、`.forge`。**管理员的回复永远走私聊**，就算命令是在群里打的
+也一样——包括「完成了」这类回执。这是故意往安全一侧收的。管理员必须先把机器人
+**加为好友**：私聊发不出去时，群里只会提示去加好友，内容绝不会改发到群里。
 
 会读到秘密的命令（`.lore`、`.var`，以及任何会带出守秘人材料的）请用**私聊**发给机器人。
 文档里也是这句：答案走私聊，提问也请走私聊。
+
+玩家专属的 `system` / `error`（`.st show`、「你的输入已排队」）按**那条命令打进去的频道**
+回：私聊问的仍走私聊，即使同一个人随后在群里说了话。`.imagegen` 和 `.forge` 是这一版
+的引擎命令，桥不用为它们多做什么。
 
 桥自己的命令（仅管理员）：`.bridge status`、`.bridge members`、`.bridge kick <qq>`、
 `.bridge admin add|remove <qq>`、`.bridge mode all|mention`、`.bridge notice on|off`。
