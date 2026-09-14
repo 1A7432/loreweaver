@@ -7,6 +7,7 @@ import {
   type ServerFrame,
   type SystemFrame,
   type UiFrame,
+  type WelcomeFrame,
 } from "loreweaver-protocol"
 import { tt } from "../i18n"
 import { ChoicesWindow } from "./choices"
@@ -17,13 +18,19 @@ import {
   type BridgeCommandEffects,
 } from "./commands"
 import type { GroupMode } from "./config"
-import { LastKeeperError, type Keyring } from "./keyring"
-import { dicePostedId, type PostedIds } from "./postedIds"
+import type { Keyring } from "./keyring"
+import type { LinkReadyReason } from "./linkPool"
+import { observerSeenKey, type PostedIds } from "./postedIds"
 import { diceLine } from "./render/dice"
 import { renderNarrativeNpc, renderNarrativeText, splitText } from "./render/narrative"
 import { renderUiBlocks, type BridgeMediaRef } from "./render/uiText"
+import { saveGroupSettings } from "./settings"
 
-export const ADMIN_HOLD_MS = 1000
+export const ADMIN_HOLD_MS = 2000
+export const STATE_UNGATE_MS = 2000
+export const QUEUE_CAP = 50
+export const OBSERVER_SEEN_CAP = 4096
+export const NOT_ADMIN_COOLDOWN_MS = 30_000
 
 export type LinkRole = "observer" | "player" | "admin"
 export type InboundChannel = "group" | "private"
@@ -37,6 +44,7 @@ export interface BridgeLink {
   send(frame: ClientFrame): void
   sendInput(text: string): void
   onMessage(cb: (frame: ServerFrame) => void): () => void
+  readonly isAlive: boolean
 }
 
 const NEVER_RENDER = new Set<string>([
@@ -49,12 +57,22 @@ const NEVER_RENDER = new Set<string>([
   FrameType.Welcome,
 ])
 
-function frameId(frame: ServerFrame): string | undefined {
-  if ("id" in frame && typeof (frame as { id?: unknown }).id === "string") {
-    const id = (frame as { id: string }).id
-    return id || undefined
+class CappedSet {
+  private readonly ids = new Set<string>()
+  private readonly order: string[] = []
+  constructor(private readonly cap: number) {}
+  has(id: string): boolean {
+    return this.ids.has(id)
   }
-  return undefined
+  add(id: string): void {
+    if (!id || this.ids.has(id)) return
+    this.ids.add(id)
+    this.order.push(id)
+    while (this.order.length > this.cap) {
+      const oldest = this.order.shift()
+      if (oldest) this.ids.delete(oldest)
+    }
+  }
 }
 
 interface MemberSlot {
@@ -64,10 +82,13 @@ interface MemberSlot {
   link: BridgeLink
   off: () => void
   gated: boolean
+  reason: LinkReadyReason
+  stateUngate?: ReturnType<typeof setTimeout>
 }
 
 export interface BridgeRouterOptions {
   groupId: string
+  /** Config override. When omitted, locale comes from the observer's `welcome`. */
   locale?: string
   mode?: GroupMode
   busyNotice?: boolean
@@ -75,8 +96,8 @@ export interface BridgeRouterOptions {
   postedIds: PostedIds
   choices?: ChoicesWindow
   keyring?: Keyring
+  settingsPath?: string
   onIntent: (intent: OutboundIntent) => void
-  /** Close the playing link after a successful kick. */
   onKickClose?: (userId: string, memberKey: string) => void
   now?: () => number
   setTimeoutFn?: typeof setTimeout
@@ -88,21 +109,25 @@ export interface BridgeRouterOptions {
  * Three-role routing + per-link replay gate. Observer frames become group
  * posts; player `system`/`error` become reply-to (or private if the input
  * came from private chat); admin unicast is always private; admin broadcast
- * kinds are held 1 s and dropped if the observer saw the same `id`.
- * `state` / `ui_manifest` are never rendered.
+ * kinds are held and dropped if the observer saw the same seen-key.
  */
 export class BridgeRouter {
   readonly choices: ChoicesWindow
   private readonly slots = new Map<string, MemberSlot>()
   private readonly down = new Set<string>()
   private readonly queues = new Map<string, string[]>()
-  private readonly observerSeen = new Set<string>()
+  private readonly observerSeen = new CappedSet(OBSERVER_SEEN_CAP)
+  private readonly privatelySent = new CappedSet(OBSERVER_SEEN_CAP)
   private readonly lastChannel = new Map<string, InboundChannel>()
+  private readonly lastNotAdmin = new Map<string, number>()
   private readonly holdTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private holdSeq = 0
   private lastTurn: "busy" | "idle" | undefined
   private mode: GroupMode
   private busyNotice: boolean
   private admins: string[]
+  private welcomeLocale: string | undefined
+  private duplicateHolds = 0
   private readonly holdMs: number
   private readonly now: () => number
   private readonly setTimeoutFn: typeof setTimeout
@@ -131,13 +156,23 @@ export class BridgeRouter {
     return this.admins
   }
 
+  get lateHolds(): number {
+    return this.duplicateHolds
+  }
+
+  locale(): string {
+    return this.options.locale || this.welcomeLocale || "en"
+  }
+
   /**
-   * Re-arm the replay gate on every `onLinkReady` (`open` and `redial`).
-   * Subscriptions do not migrate across redials — attach the new link here.
+   * Re-arm the replay gate on every `onLinkReady`. Observer + `"open"`: full
+   * gate. Observer + `"redial"`: narrative passes (deduped by postedIds);
+   * dice/ui/media/audio/turn_status stay gated. Player/admin: full gate always.
    */
-  attachLink(role: LinkRole, memberKey: string, link: BridgeLink, userId?: string): void {
+  attachLink(role: LinkRole, memberKey: string, link: BridgeLink, userId?: string, reason: LinkReadyReason = "open"): void {
     const existing = this.slots.get(memberKey)
     existing?.off()
+    if (existing?.stateUngate) this.clearTimeoutFn(existing.stateUngate)
     this.down.delete(memberKey)
     const slot: MemberSlot = {
       role,
@@ -145,6 +180,7 @@ export class BridgeRouter {
       userId,
       link,
       gated: true,
+      reason,
       off: () => {},
     }
     slot.off = link.onMessage((frame) => this.onFrame(slot, frame))
@@ -158,6 +194,7 @@ export class BridgeRouter {
   detachLink(memberKey: string): void {
     const slot = this.slots.get(memberKey)
     slot?.off()
+    if (slot?.stateUngate) this.clearTimeoutFn(slot.stateUngate)
     this.slots.delete(memberKey)
     this.down.delete(memberKey)
     this.queues.delete(memberKey)
@@ -176,9 +213,10 @@ export class BridgeRouter {
 
   queueInput(memberKey: string, text: string): void {
     const slot = this.slots.get(memberKey)
-    if (!slot || slot.gated || this.down.has(memberKey)) {
+    if (!slot || slot.gated || this.down.has(memberKey) || !slot.link.isAlive) {
       const queue = this.queues.get(memberKey) ?? []
       queue.push(text)
+      while (queue.length > QUEUE_CAP) queue.shift()
       this.queues.set(memberKey, queue)
       return
     }
@@ -200,6 +238,11 @@ export class BridgeRouter {
     }
 
     if (isBridgeCommand(msg.text)) {
+      if (!msg.isAdmin) {
+        const last = this.lastNotAdmin.get(msg.userId)
+        if (last !== undefined && this.now() - last < NOT_ADMIN_COOLDOWN_MS) return
+        this.lastNotAdmin.set(msg.userId, this.now())
+      }
       const text = await runBridgeCommand(msg.text, msg.isAdmin, this.commandView(), this.commandEffects())
       if (text) reply(text)
       return
@@ -208,10 +251,6 @@ export class BridgeRouter {
     const choice = this.choices.match(msg.text, this.now())
     if (choice.kind === "hit") {
       this.queueInput(msg.memberKey, choice.input)
-      return
-    }
-    if (choice.kind === "expired") {
-      this.queueInput(msg.memberKey, msg.text)
       return
     }
     if (
@@ -233,64 +272,116 @@ export class BridgeRouter {
       role: row.role,
     })) ?? []
     return {
-      locale: this.options.locale,
+      locale: this.locale(),
       groupId: this.options.groupId,
       mode: this.mode,
       busyNotice: this.busyNotice,
       admins: this.admins,
       members,
+      lateHolds: this.duplicateHolds,
     }
+  }
+
+  private persistSettings(): void {
+    if (!this.options.settingsPath) return
+    void saveGroupSettings(this.options.settingsPath, {
+      admins: this.admins,
+      mode: this.mode,
+      busyNotice: this.busyNotice,
+    })
   }
 
   private commandEffects(): BridgeCommandEffects {
     return {
       setMode: (mode) => {
         this.mode = mode
+        this.persistSettings()
       },
       setBusyNotice: (on) => {
         this.busyNotice = on
+        this.persistSettings()
       },
       addAdmin: (userId) => {
         if (!this.admins.includes(userId)) this.admins.push(userId)
+        this.persistSettings()
       },
       removeAdmin: (userId) => {
         this.admins = this.admins.filter((id) => id !== userId)
+        this.persistSettings()
       },
       kick: async (userId) => {
         const keyring = this.options.keyring
         if (!keyring) throw new Error("no keyring")
-        try {
-          const entry = await keyring.kick(userId)
-          this.options.onKickClose?.(userId, entry.key)
-          for (const [memberKey, slot] of this.slots) {
-            if (slot.userId === userId || memberKey === entry.key) this.detachLink(memberKey)
-          }
-        } catch (error) {
-          if (error instanceof LastKeeperError) throw error
-          throw error
+        const entry = await keyring.kick(userId)
+        this.options.onKickClose?.(userId, entry.key)
+        for (const [memberKey, slot] of [...this.slots]) {
+          if (slot.userId === userId || memberKey === entry.key) this.detachLink(memberKey)
         }
       },
     }
   }
 
+  private effectiveRole(slot: MemberSlot): LinkRole {
+    if (slot.role === "observer") return "observer"
+    if (slot.userId && this.options.keyring?.get(slot.userId)?.role === "keeper" && slot.role === "player") {
+      console.warn("bridge: keeper-keyed link mislabeled player; treating as admin")
+      return "admin"
+    }
+    return slot.role
+  }
+
   private onFrame(slot: MemberSlot, frame: ServerFrame): void {
+    if (frame.type === FrameType.Welcome) {
+      this.onWelcome(slot, frame)
+      return
+    }
     if (frame.type === FrameType.UiManifest) {
-      if (slot.gated) {
-        slot.gated = false
-        this.flush(slot.memberKey)
+      this.ungate(slot)
+      return
+    }
+    if (frame.type === FrameType.State) {
+      this.armStateUngate(slot)
+      return
+    }
+    if (slot.gated) {
+      if (slot.role === "observer" && slot.reason === "redial" && frame.type === FrameType.Narrative) {
+        this.onObserver(frame)
       }
       return
     }
-    if (slot.gated) return
     if (NEVER_RENDER.has(frame.type)) return
-    if (slot.role === "observer") this.onObserver(frame)
-    else if (slot.role === "player") this.onPlayer(slot, frame)
+    const role = this.effectiveRole(slot)
+    if (role === "observer") this.onObserver(frame)
+    else if (role === "player") this.onPlayer(slot, frame)
     else this.onAdmin(slot, frame)
+  }
+
+  private onWelcome(_slot: MemberSlot, frame: WelcomeFrame): void {
+    if (!this.options.locale && frame.locale) this.welcomeLocale = frame.locale
+  }
+
+  private ungate(slot: MemberSlot): void {
+    if (slot.stateUngate) {
+      this.clearTimeoutFn(slot.stateUngate)
+      slot.stateUngate = undefined
+    }
+    if (slot.gated) {
+      slot.gated = false
+      this.flush(slot.memberKey)
+    }
+  }
+
+  private armStateUngate(slot: MemberSlot): void {
+    if (!slot.gated || slot.stateUngate) return
+    slot.stateUngate = this.setTimeoutFn(() => {
+      slot.stateUngate = undefined
+      if (slot.gated) this.ungate(slot)
+    }, STATE_UNGATE_MS)
   }
 
   private flush(memberKey: string): void {
     const slot = this.slots.get(memberKey)
-    if (!slot || slot.gated || this.down.has(memberKey)) return
+    if (!slot || slot.gated || this.down.has(memberKey) || !slot.link.isAlive) return
     const queue = this.queues.get(memberKey)
     if (!queue?.length) return
     this.queues.set(memberKey, [])
@@ -298,20 +389,22 @@ export class BridgeRouter {
   }
 
   private onObserver(frame: ServerFrame): void {
-    const id = frameId(frame)
-    if (id) this.observerSeen.add(id)
+    const rendered = frame.type === FrameType.Ui ? renderUiBlocks(frame.blocks) : undefined
+    const key = observerSeenKey(frame, rendered ? { lines: rendered.lines, mediaHashes: rendered.media.map((item) => item.hash) } : undefined)
+    if (key) this.observerSeen.add(key)
 
     switch (frame.type) {
       case FrameType.Narrative:
-        this.onObserverNarrative(frame)
+        this.onObserverNarrative(frame, key)
         return
       case FrameType.Dice:
-        this.onObserverDice(frame)
+        this.onObserverDice(frame, key)
         return
       case FrameType.Ui:
-        this.onObserverUi(frame)
+        this.onObserverUi(frame, rendered, key)
         return
       case FrameType.Media: {
+        this.notePosted(key)
         this.emit({
           dest: "group",
           text: frame.name,
@@ -320,6 +413,7 @@ export class BridgeRouter {
         return
       }
       case FrameType.AudioLibraryItem: {
+        this.notePosted(key)
         this.emit({ dest: "group", text: frame.title || frame.name })
         return
       }
@@ -330,7 +424,7 @@ export class BridgeRouter {
         }
         if (frame.status === "busy") {
           if (this.busyNotice && this.lastTurn !== "busy") {
-            this.emit({ dest: "group", text: tt(this.options.locale, "bridge.busy") })
+            this.emit({ dest: "group", text: tt(this.locale(), "bridge.busy") })
           }
           this.lastTurn = "busy"
         }
@@ -341,32 +435,36 @@ export class BridgeRouter {
     }
   }
 
-  private onObserverNarrative(frame: NarrativeFrame): void {
+  private notePosted(key: string | undefined): void {
+    if (key && this.privatelySent.has(key)) this.duplicateHolds += 1
+  }
+
+  private onObserverNarrative(frame: NarrativeFrame, key: string | undefined): void {
     if (frame.speaker === "player") return
     if (!frame.text) return
     if (this.options.postedIds.has(frame.id)) return
     void this.options.postedIds.add(frame.id)
-    if (frame.speaker === "kp") this.choices.close()
+    this.notePosted(key)
+    if (frame.speaker === "kp") this.choices.close(this.now())
     const text =
       frame.speaker === "npc"
         ? renderNarrativeNpc(frame.name, frame.text, frame.format)
         : renderNarrativeText(frame.text, frame.format)
-    for (const part of splitText(text)) this.emit({ dest: "group", text: part })
+    this.emit({ dest: "group", text })
   }
 
-  private onObserverDice(frame: DiceFrame): void {
-    const id = dicePostedId(frame)
-    if (this.options.postedIds.has(id)) return
-    void this.options.postedIds.add(id)
-    this.emit({ dest: "group", text: diceLine(frame) })
+  private onObserverDice(frame: DiceFrame, key: string | undefined): void {
+    this.notePosted(key)
+    this.emit({ dest: "group", text: diceLine(frame, this.locale()) })
   }
 
-  private onObserverUi(frame: UiFrame): void {
-    const rendered = renderUiBlocks(frame.blocks)
-    if (rendered.choices) this.choices.open(rendered.choices, this.now())
-    const text = rendered.lines.join("\n")
+  private onObserverUi(frame: UiFrame, rendered: ReturnType<typeof renderUiBlocks> | undefined, key: string | undefined): void {
+    const view = rendered ?? renderUiBlocks(frame.blocks)
+    if (view.choices) this.choices.open(view.choices, this.now())
+    this.notePosted(key)
+    const text = view.lines.join("\n")
     if (text) this.emit({ dest: "group", text })
-    for (const media of rendered.media) {
+    for (const media of view.media) {
       this.emit({ dest: "group", text: media.name || "", media })
     }
   }
@@ -389,45 +487,64 @@ export class BridgeRouter {
       if (userId && text) this.emit({ dest: "private", userId, text })
       return
     }
-    const id = frameId(frame)
     const userId = slot.userId
     if (!userId) return
-    const holdKey = `${slot.memberKey}:${id ?? `${frame.type}:${this.now()}`}`
+    const rendered = frame.type === FrameType.Ui ? renderUiBlocks(frame.blocks) : undefined
+    const seenKey = observerSeenKey(frame, rendered ? { lines: rendered.lines, mediaHashes: rendered.media.map((item) => item.hash) } : undefined)
+    const holdKey = `${slot.memberKey}:${seenKey ?? `anon:${++this.holdSeq}`}`
     const timer = this.setTimeoutFn(() => {
       this.holdTimers.delete(holdKey)
-      if (id && this.observerSeen.has(id)) return
-      const text = adminBroadcastText(frame)
-      if (text) this.emit({ dest: "private", userId, text })
+      if (seenKey && this.observerSeen.has(seenKey)) return
+      const text = this.adminBroadcastText(frame, rendered)
+      if (text) {
+        if (seenKey) this.privatelySent.add(seenKey)
+        this.emit({ dest: "private", userId, text })
+      }
     }, this.holdMs)
     this.holdTimers.set(holdKey, timer)
   }
 
+  private adminBroadcastText(frame: ServerFrame, rendered?: ReturnType<typeof renderUiBlocks>): string {
+    switch (frame.type) {
+      case FrameType.Narrative:
+        if (!frame.text) return ""
+        return frame.speaker === "npc"
+          ? renderNarrativeNpc(frame.name, frame.text, frame.format)
+          : renderNarrativeText(frame.text, frame.format)
+      case FrameType.Dice:
+        return diceLine(frame, this.locale())
+      case FrameType.Ui:
+        return (rendered ?? renderUiBlocks(frame.blocks)).lines.join("\n")
+      case FrameType.Media:
+        return frame.name
+      case FrameType.AudioLibraryItem:
+        return frame.title || frame.name
+      default:
+        return ""
+    }
+  }
+
   private emit(intent: OutboundIntent): void {
-    this.options.onIntent(intent)
+    if (intent.dest === "group" && intent.media && !intent.text) {
+      this.options.onIntent(intent)
+      return
+    }
+    const parts = splitText(intent.text)
+    parts.forEach((part, index) => {
+      if (intent.dest === "group") {
+        this.options.onIntent({
+          dest: "group",
+          text: part,
+          media: index === 0 ? intent.media : undefined,
+        })
+      } else {
+        this.options.onIntent({ ...intent, text: part })
+      }
+    })
   }
 }
 
 function unicastText(frame: SystemFrame | ErrorFrame): string {
   if (frame.type === FrameType.System) return frame.text
   return frame.message
-}
-
-function adminBroadcastText(frame: ServerFrame): string {
-  switch (frame.type) {
-    case FrameType.Narrative:
-      if (!frame.text) return ""
-      return frame.speaker === "npc"
-        ? renderNarrativeNpc(frame.name, frame.text, frame.format)
-        : renderNarrativeText(frame.text, frame.format)
-    case FrameType.Dice:
-      return diceLine(frame)
-    case FrameType.Ui:
-      return renderUiBlocks(frame.blocks).lines.join("\n")
-    case FrameType.Media:
-      return frame.name
-    case FrameType.AudioLibraryItem:
-      return frame.title || frame.name
-    default:
-      return ""
-  }
 }

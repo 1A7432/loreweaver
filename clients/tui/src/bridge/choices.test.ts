@@ -38,8 +38,21 @@ describe("choices window", () => {
   test("the next Keeper narrative closes the window", () => {
     const window = new ChoicesWindow()
     window.open(BLOCK, 0)
-    window.close()
-    expect(window.match("1", 1000)).toEqual({ kind: "expired" })
+    window.close(1000)
+    expect(window.match("1", 2000)).toEqual({ kind: "expired" })
+  })
+
+  test("closed/expired resets after the TTL so it is not permanent", () => {
+    const window = new ChoicesWindow()
+    window.open(BLOCK, 0)
+    window.close(0)
+    expect(window.match("1", CHOICES_TTL_MS)).toEqual({ kind: "miss" })
+  })
+
+  test("fullwidth digits match as ASCII", () => {
+    const window = new ChoicesWindow()
+    window.open(BLOCK, 0)
+    expect(window.match("１", 1000)).toEqual({ kind: "hit", input: "I open the door" })
   })
 
   test("digits with no window ever opened are a miss, not an expired match", () => {

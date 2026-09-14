@@ -9,11 +9,15 @@ export type ChoiceMatch =
   | { kind: "expired" }
   | { kind: "miss" }
 
+function normalizeDigits(text: string): string {
+  return text.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xff10 + 0x30))
+}
+
 /**
  * One open choices window per group. A digits-only message from any user within
  * the window (until the next Keeper narrative, or 10 minutes) becomes that
- * option's `input` on that user's link. Expired → the caller forwards as plain
- * text. A non-digit message never matches.
+ * option's `input` on that user's link. Expired / closed digits go through
+ * normal inbound rules (they are not auto-forwarded). A non-digit never matches.
  */
 export class ChoicesWindow {
   private current:
@@ -22,17 +26,16 @@ export class ChoicesWindow {
         openedAt: number
       }
     | undefined
-  /** Distinguishes "never opened" (miss → normal inbound rules) from "just closed". */
-  private closed = false
+  private closedAt: number | undefined
 
   open(block: UiChoicesBlock, now: number): void {
     this.current = { options: block.options.slice(), openedAt: now }
-    this.closed = false
+    this.closedAt = undefined
   }
 
   /** Keeper narrative (or an explicit close) ends the window. */
-  close(): void {
-    if (this.current) this.closed = true
+  close(now: number): void {
+    if (this.current || this.closedAt !== undefined) this.closedAt = now
     this.current = undefined
   }
 
@@ -41,13 +44,16 @@ export class ChoicesWindow {
   }
 
   match(text: string, now: number): ChoiceMatch {
-    const trimmed = text.trim()
+    const trimmed = normalizeDigits(text.trim())
     if (!DIGITS_ONLY.test(trimmed)) return { kind: "miss" }
+    if (this.closedAt !== undefined && now - this.closedAt >= CHOICES_TTL_MS) {
+      this.closedAt = undefined
+    }
     const open = this.current
-    if (!open) return this.closed ? { kind: "expired" } : { kind: "miss" }
+    if (!open) return this.closedAt !== undefined ? { kind: "expired" } : { kind: "miss" }
     if (now - open.openedAt >= CHOICES_TTL_MS) {
       this.current = undefined
-      this.closed = true
+      this.closedAt = now
       return { kind: "expired" }
     }
     const index = Number.parseInt(trimmed, 10)

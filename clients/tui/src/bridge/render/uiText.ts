@@ -60,18 +60,17 @@ function textBlockLines(block: Extract<UiBlock, { kind: "text" }>): string[] {
   return body.split("\n")
 }
 
-function choicesLines(block: Extract<UiBlock, { kind: "choices" }>): string[] {
+function choicesLines(block: Extract<UiBlock, { kind: "choices" }>, start = 1): string[] {
   const lines: string[] = []
   if (block.prompt) lines.push(stripControlChars(block.prompt))
   block.options.forEach((option, index) => {
-    lines.push(`${index + 1}. ${stripControlChars(option.label)}`)
+    lines.push(`${start + index}. ${stripControlChars(option.label)}`)
   })
   return lines
 }
 
 function imageCaption(block: Extract<UiBlock, { kind: "image" }>): string {
-  const text = stripControlChars(block.caption || block.alt || "").trim()
-  return text || block.hash.slice(0, 12)
+  return stripControlChars(block.caption || block.alt || "").trim()
 }
 
 function mapPinText(block: Extract<UiBlock, { kind: "map_pin" }>): string {
@@ -102,19 +101,21 @@ export function renderUiBlock(block: UiBlock): RenderedUi {
       return { lines: ["——"], media: [] }
     case "choices":
       return { lines: choicesLines(block), media: [], choices: block }
-    case "image":
+    case "image": {
+      const caption = imageCaption(block)
       return {
-        lines: [imageCaption(block)],
-        media: [{ hash: block.hash, mime: block.mime, name: block.caption || block.alt || block.hash.slice(0, 12) }],
+        lines: [],
+        media: [{ hash: block.hash, mime: block.mime, name: caption || undefined }],
       }
+    }
     case "letter":
       return { lines: letterLines(block), media: [] }
     case "clipping":
       return { lines: clippingLines(block), media: [] }
     case "map_pin":
       return {
-        lines: [mapPinText(block)],
-        media: [{ hash: block.hash, mime: block.mime, name: block.label }],
+        lines: [],
+        media: [{ hash: block.hash, mime: block.mime, name: mapPinText(block) }],
       }
     case "title_card":
       return { lines: titleCardLines(block), media: [] }
@@ -124,12 +125,24 @@ export function renderUiBlock(block: UiBlock): RenderedUi {
 export function renderUiBlocks(blocks: UiBlock[]): RenderedUi {
   const lines: string[] = []
   const media: BridgeMediaRef[] = []
-  let choices: Extract<UiBlock, { kind: "choices" }> | undefined
+  const allOptions: Extract<UiBlock, { kind: "choices" }>["options"] = []
+  let prompt: string | undefined
+  let optionNumber = 1
   for (const block of blocks) {
+    if (block.kind === "choices") {
+      if (block.prompt && !prompt) prompt = block.prompt
+      lines.push(...choicesLines(block, optionNumber))
+      allOptions.push(...block.options)
+      optionNumber += block.options.length
+      continue
+    }
     const rendered = renderUiBlock(block)
     lines.push(...rendered.lines)
     media.push(...rendered.media)
-    if (rendered.choices) choices = rendered.choices
   }
+  const choices =
+    allOptions.length > 0
+      ? { kind: "choices" as const, prompt, options: allOptions }
+      : undefined
   return { lines, media, choices }
 }

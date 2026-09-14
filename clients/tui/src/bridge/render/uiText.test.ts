@@ -40,7 +40,7 @@ describe("bridge ui degradation — all 11 block kinds", () => {
     {
       name: "image",
       block: { kind: "image", hash: "abc123def456", caption: "harbor map", alt: "map" },
-      lines: ["harbor map"],
+      lines: [],
     },
     {
       name: "letter",
@@ -55,7 +55,7 @@ describe("bridge ui degradation — all 11 block kinds", () => {
     {
       name: "map_pin",
       block: { kind: "map_pin", hash: "m".repeat(16), label: "pier", x: 0.4, y: 0.625, note: "unlit" },
-      lines: ["pier (40%, 63%) unlit"],
+      lines: [],
     },
     {
       name: "title_card",
@@ -70,20 +70,26 @@ describe("bridge ui degradation — all 11 block kinds", () => {
     })
   }
 
-  test("image and map_pin carry a media hash for the image segment", () => {
+  test("image and map_pin carry a media hash; caption lives on the media, not a duplicate line", () => {
     const image = renderUiBlock({ kind: "image", hash: "deadbeef", caption: "handout" })
+    expect(image.lines).toEqual([])
     expect(image.media).toEqual([{ hash: "deadbeef", mime: undefined, name: "handout" }])
+    const bare = renderUiBlock({ kind: "image", hash: "deadbeef" })
+    expect(bare.lines).toEqual([])
+    expect(bare.media[0]?.name).toBeUndefined()
     const pin = renderUiBlock({ kind: "map_pin", hash: "map1", label: "X", x: 0, y: 0 })
+    expect(pin.lines).toEqual([])
     expect(pin.media[0]?.hash).toBe("map1")
+    expect(pin.media[0]?.name).toContain("X")
   })
 
-  test("a mixed frame concatenates lines and keeps the last choices block", () => {
+  test("a mixed frame numbers choices continuously and opens one concatenated window", () => {
     const rendered = renderUiBlocks([
       { kind: "divider" },
       { kind: "choices", options: [{ id: "a", label: "Go", input: "go" }] },
       { kind: "choices", prompt: "Next", options: [{ id: "b", label: "Stay", input: "stay" }] },
     ])
-    expect(rendered.lines).toEqual(["——", "1. Go", "Next", "1. Stay"])
-    expect(rendered.choices?.prompt).toBe("Next")
+    expect(rendered.lines).toEqual(["——", "1. Go", "Next", "2. Stay"])
+    expect(rendered.choices?.options.map((option) => option.input)).toEqual(["go", "stay"])
   })
 })

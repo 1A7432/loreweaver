@@ -49,6 +49,17 @@ describe("split without loss", () => {
     const text = `${"a".repeat(30)}\n\n${"b".repeat(30)}`
     const parts = splitText(text, 40)
     expect(parts.join("")).toBe(text)
-    expect(parts[0]!.endsWith("\n\n") || parts[0]!.includes("\n\n") || parts.length >= 1).toBe(true)
+    expect(parts.length).toBe(2)
+    expect(parts[0]!.endsWith("\n\n")).toBe(true)
+    expect(parts[1]!.startsWith("b")).toBe(true)
+  })
+
+  test("a hard cut never splits a UTF-16 surrogate pair", () => {
+    const emoji = "😀"
+    const text = `${"x".repeat(4)}${emoji}${"y".repeat(4)}`
+    const parts = splitText(text, 5)
+    expect(parts.join("")).toBe(text)
+    expect(parts.some((part) => part.includes("\uD83D") && !part.includes("\uDE00"))).toBe(false)
+    expect(parts.some((part) => part.includes(emoji))).toBe(true)
   })
 })

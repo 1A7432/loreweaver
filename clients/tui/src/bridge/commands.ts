@@ -1,6 +1,6 @@
 import { tt, type MessageKey } from "../i18n"
 import type { GroupMode } from "./config"
-import { LastKeeperError } from "./keyring"
+import { LastKeeperError, ObserverProtectedError } from "./keyring"
 
 const BRIDGE_RE = /^\s*[./。]bridge(?:\s+(.*))?$/i
 
@@ -79,6 +79,7 @@ export interface BridgeCommandView {
   busyNotice: boolean
   admins: readonly string[]
   members: ReadonlyArray<{ userId: string; keyId: string; role: string }>
+  lateHolds?: number
 }
 
 export interface BridgeCommandEffects {
@@ -117,6 +118,7 @@ export async function runBridgeCommand(
         mode: view.mode,
         notice: view.busyNotice ? "on" : "off",
         members: view.members.length,
+        dupes: view.lateHolds ?? 0,
       })
     case "members": {
       if (view.members.length === 0) return msg(view.locale, "bridge.members.empty")
@@ -129,10 +131,9 @@ export async function runBridgeCommand(
         await effects.kick(parsed.userId)
         return msg(view.locale, "bridge.kicked", { qq: parsed.userId })
       } catch (error) {
-        if (error instanceof LastKeeperError) {
-          return msg(view.locale, "bridge.lastKeeper", { detail: error.message })
-        }
-        return msg(view.locale, "bridge.kickFailed", { detail: (error as Error).message })
+        if (error instanceof LastKeeperError) return msg(view.locale, "bridge.lastKeeper")
+        if (error instanceof ObserverProtectedError) return msg(view.locale, "bridge.kickObserver")
+        return msg(view.locale, "bridge.kickFailed")
       }
     case "admin": {
       if (parsed.op === "add") {

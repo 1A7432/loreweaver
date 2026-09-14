@@ -32,6 +32,18 @@ function rfind(haystack: string, needle: string, start: number, end: number): nu
   return idx < 0 ? -1 : start + idx
 }
 
+/** Never split a UTF-16 surrogate pair. Prefer backing up one unit; if that would
+ * yield an empty chunk, include the full pair (one unit over the limit). */
+function avoidSurrogateSplit(text: string, cut: number): number {
+  if (cut <= 0 || cut >= text.length) return cut
+  const prev = text.charCodeAt(cut - 1)
+  const next = text.charCodeAt(cut)
+  const pair = prev >= 0xd800 && prev <= 0xdbff && next >= 0xdc00 && next <= 0xdfff
+  if (!pair) return cut
+  if (cut > 1) return cut - 1
+  return Math.min(text.length, cut + 1)
+}
+
 export function splitText(text: string, limit = BRIDGE_TEXT_LIMIT): string[] {
   if (!text) return [""]
   if (limit < 1) throw new Error("text limit must be positive")
@@ -57,6 +69,7 @@ export function splitText(text: string, limit = BRIDGE_TEXT_LIMIT): string[] {
     } else {
       cut += separator
     }
+    cut = avoidSurrogateSplit(remaining, cut)
     chunks.push(remaining.slice(0, cut))
     remaining = remaining.slice(cut)
   }

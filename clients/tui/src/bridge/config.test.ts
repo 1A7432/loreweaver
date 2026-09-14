@@ -67,6 +67,61 @@ describe("bridge config", () => {
     expect(isLoopbackHost("localhost")).toBe(true)
   })
 
+  test("omitted locale is undefined so welcome.locale can win", () => {
+    const cfg = parseBridgeConfig(base)
+    expect(cfg.locale).toBeUndefined()
+  })
+
+  test("a ticket requires a keeper key", () => {
+    try {
+      parseBridgeConfig({ ...base, ticket: "endpointabc" })
+    } catch (error) {
+      expect((error as BridgeConfigError).code).toBe("missing_keeper_key")
+      return
+    }
+    throw new Error("expected missing_keeper_key")
+  })
+
+  test("more than one group requires per-group room_keeper_key", () => {
+    try {
+      parseBridgeConfig({
+        onebot: base.onebot,
+        keeper_key: "k",
+        groups: [
+          { group_id: 1, admins: [] },
+          { group_id: 2, admins: [] },
+        ],
+      })
+    } catch (error) {
+      expect((error as BridgeConfigError).code).toBe("missing_room_keeper_key")
+      return
+    }
+    throw new Error("expected missing_room_keeper_key")
+  })
+
+  test("invalid idle_close_minutes has its own error code", () => {
+    try {
+      parseBridgeConfig({ ...base, idle_close_minutes: -1 })
+    } catch (error) {
+      expect((error as BridgeConfigError).code).toBe("invalid_idle_close")
+      return
+    }
+    throw new Error("expected invalid_idle_close")
+  })
+
+  test("reverse path must start with /", () => {
+    try {
+      parseBridgeConfig({
+        groups: base.groups,
+        onebot: { mode: "reverse", listen_host: "127.0.0.1", listen_port: 1, path: "onebot" },
+      })
+    } catch (error) {
+      expect((error as BridgeConfigError).code).toBe("invalid_reverse_path")
+      return
+    }
+    throw new Error("expected invalid_reverse_path")
+  })
+
   test("rejects duplicate group ids", () => {
     try {
       parseBridgeConfig({

@@ -79,5 +79,6 @@ describe("bridge commands", () => {
       },
     )
     expect(reply).toContain("last keeper key")
+    expect(reply).not.toContain("cannot delete")
   })
 })

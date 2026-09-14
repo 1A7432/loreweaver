@@ -13,32 +13,38 @@ const base: DiceFrame = {
 
 describe("dice line", () => {
   test("actor, expr, total without an outcome", () => {
-    expect(diceLine(base)).toBe("Ada 3d6+2 11")
+    expect(diceLine(base, "en")).toBe("Ada 3d6+2 11")
   })
 
   test("includes the outcome label when present", () => {
     expect(
-      diceLine({
-        ...base,
-        kind: "check",
-        expr: "SpotHidden",
-        outcome: { id: "regular", label: "Regular", success: true, critical: false, fumble: false, tier: 1 },
-      }),
+      diceLine(
+        {
+          ...base,
+          kind: "check",
+          expr: "SpotHidden",
+          outcome: { id: "regular", label: "Regular", success: true, critical: false, fumble: false, tier: 1 },
+        },
+        "en",
+      ),
     ).toBe("Ada SpotHidden Regular 11")
   })
 
-  test("detail extras: critical flags and opposed right", () => {
-    const line = diceLine({
+  test("detail extras: critical flags, opposed right, and winner — localized", () => {
+    const frame = {
       ...base,
-      kind: "opposed",
+      kind: "opposed" as const,
       outcome: { id: "regular", label: "Regular", success: true, critical: true, fumble: false, tier: 2 },
-      detail: { right: { name: "Cultist", total: 40 }, critical_success: true },
-    })
-    expect(line).toContain("Ada")
-    expect(line).toContain("Regular")
-    expect(line).toContain("11")
-    expect(line).toContain("critical")
-    expect(line).toContain("vs Cultist 40")
+      detail: { right: { name: "Cultist", total: 40 }, critical_success: true, winner: "left" },
+    }
+    const en = diceLine(frame, "en")
+    expect(en).toContain("critical")
+    expect(en).toContain("vs Cultist 40")
+    expect(en).toContain("winner left")
+    const zh = diceLine(frame, "zh")
+    expect(zh).toContain("大成功")
+    expect(zh).toContain("对 Cultist 40")
+    expect(zh).toContain("胜 左")
   })
 
   test("built ONLY from public dice fields — extra keys never appear", () => {

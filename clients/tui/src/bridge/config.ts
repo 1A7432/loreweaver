@@ -29,7 +29,8 @@ export type OneBotConfig = OneBotForwardConfig | OneBotReverseConfig
 export interface BridgeConfig {
   ticket?: string
   keeper_key?: string
-  locale: "en" | "zh"
+  /** When set, overrides `welcome.locale`. Absent → follow the observer's welcome. */
+  locale?: "en" | "zh"
   onebot: OneBotConfig
   groups: BridgeGroupConfig[]
   busy_notice: boolean
@@ -48,6 +49,10 @@ export type BridgeConfigErrorCode =
   | "invalid_listen_port"
   | "invalid_mode"
   | "invalid_locale"
+  | "invalid_idle_close"
+  | "invalid_reverse_path"
+  | "missing_keeper_key"
+  | "missing_room_keeper_key"
 
 export class BridgeConfigError extends Error {
   constructor(
@@ -146,6 +151,9 @@ function parseReverse(raw: Record<string, unknown>): OneBotReverseConfig {
     throw new BridgeConfigError("reverse_token_required", "a non-loopback reverse listener requires access_token")
   }
   const path = asString(raw.path)?.trim() || undefined
+  if (path && !path.startsWith("/")) {
+    throw new BridgeConfigError("invalid_reverse_path", "onebot.path must start with /")
+  }
   return { mode: "reverse", listen_host, listen_port, path, access_token }
 }
 
@@ -171,22 +179,32 @@ export function parseBridgeConfig(raw: unknown): BridgeConfig {
     }
     seen.add(group.group_id)
   }
-  const localeRaw = raw.locale === undefined ? "zh" : asString(raw.locale)?.trim()
-  if (localeRaw !== "en" && localeRaw !== "zh") {
-    throw new BridgeConfigError("invalid_locale", "locale must be en or zh")
+  let locale: "en" | "zh" | undefined
+  if (raw.locale !== undefined) {
+    const localeRaw = asString(raw.locale)?.trim()
+    if (localeRaw !== "en" && localeRaw !== "zh") {
+      throw new BridgeConfigError("invalid_locale", "locale must be en or zh")
+    }
+    locale = localeRaw
   }
   const idle = asNumber(raw.idle_close_minutes)
   const idle_close_minutes = idle === undefined ? 30 : idle
   if (!Number.isFinite(idle_close_minutes) || idle_close_minutes < 0) {
-    throw new BridgeConfigError("invalid_json", "idle_close_minutes must be >= 0")
+    throw new BridgeConfigError("invalid_idle_close", "idle_close_minutes must be >= 0")
   }
   const ticket = asString(raw.ticket)?.trim() || undefined
   const keeper_key = asString(raw.keeper_key)?.trim() || undefined
+  if (ticket && !keeper_key && groups.every((group) => !group.room_keeper_key)) {
+    throw new BridgeConfigError("missing_keeper_key", "a ticket requires keeper_key or per-group room_keeper_key")
+  }
+  if (groups.length > 1 && groups.some((group) => !group.room_keeper_key)) {
+    throw new BridgeConfigError("missing_room_keeper_key", "each group needs its own room_keeper_key when more than one group is listed")
+  }
   const state_dir = expandHome(asString(raw.state_dir)?.trim() || "~/.loreweaver/bridge")
   return {
     ticket,
     keeper_key,
-    locale: localeRaw,
+    locale,
     onebot,
     groups,
     busy_notice: asBoolean(raw.busy_notice, true),

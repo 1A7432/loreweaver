@@ -1,22 +1,17 @@
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises"
-import { dirname } from "node:path"
+import { createHash } from "node:crypto"
+import type { DiceFrame, ServerFrame, UiFrame } from "loreweaver-protocol"
+import { readPrivateJson, writePrivateAtomic } from "./persist"
 
 const DEFAULT_CAP = 2048
-const FILE_MODE = 0o600
 
 export function postedPath(stateDir: string, groupId: string): string {
   return `${stateDir.replace(/\/+$/, "")}/${groupId}.posted.json`
 }
 
-async function writePrivate(path: string, body: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true })
-  await writeFile(path, body, { encoding: "utf8", mode: FILE_MODE })
-  await chmod(path, FILE_MODE)
-}
-
 /**
- * Persisted set of observer-posted `narrative` / `dice` ids so a restart never
- * re-posts join-replay history. Capped FIFO; files are mode 0600.
+ * Persisted set of observer-posted *narrative* ids so a restart never re-posts
+ * join-replay history. Dice is NOT stored here: the observer receives each live
+ * dice frame once, and the replay gate covers join replay. Capped FIFO; 0600.
  */
 export class PostedIds {
   private readonly ids = new Set<string>()
@@ -30,16 +25,14 @@ export class PostedIds {
 
   static async load(path: string, cap = DEFAULT_CAP): Promise<PostedIds> {
     const store = new PostedIds(path, cap)
-    try {
-      const raw = await readFile(path, "utf8")
-      const parsed = JSON.parse(raw) as unknown
-      const list = Array.isArray(parsed) ? parsed : Array.isArray((parsed as { ids?: unknown }).ids) ? (parsed as { ids: unknown[] }).ids : []
-      for (const item of list) {
-        if (typeof item === "string" && item) store.remember(item)
-      }
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code
-      if (code !== "ENOENT") throw error
+    const parsed = await readPrivateJson(path)
+    const list = Array.isArray(parsed)
+      ? parsed
+      : parsed && typeof parsed === "object" && Array.isArray((parsed as { ids?: unknown }).ids)
+        ? (parsed as { ids: unknown[] }).ids
+        : []
+    for (const item of list) {
+      if (typeof item === "string" && item) store.remember(item)
     }
     return store
   }
@@ -66,21 +59,43 @@ export class PostedIds {
 
   flush(): Promise<void> {
     const body = JSON.stringify(this.order)
-    this.writeChain = this.writeChain.then(() => writePrivate(this.path, body)).catch(() => {})
+    this.writeChain = this.writeChain.then(() => writePrivateAtomic(this.path, body)).catch(() => {})
     return this.writeChain
   }
 }
 
-/** Stable id for a dice frame: the wire type has no `id`, so fingerprint public fields. */
+/** Fingerprint for a dice frame (no wire `id`). Used by the admin-hold seen set, not postedIds. */
 export function dicePostedId(frame: {
-  id?: unknown
   actor: string
   kind: string
   expr: string
   total: number
   rolls?: number[]
 }): string {
-  if (typeof frame.id === "string" && frame.id) return frame.id
   const rolls = Array.isArray(frame.rolls) ? frame.rolls.join(",") : ""
   return `dice:${frame.actor}:${frame.kind}:${frame.expr}:${frame.total}:${rolls}`
+}
+
+export function uiContentKey(lines: string[], mediaHashes: string[] = []): string {
+  const payload = `${lines.join("\n")}\n${mediaHashes.join(",")}`
+  return `ui:${createHash("sha256").update(payload, "utf8").digest("hex").slice(0, 16)}`
+}
+
+/** Observer-seen / admin-hold key for a broadcast frame. */
+export function observerSeenKey(frame: ServerFrame, ui?: { lines: string[]; mediaHashes: string[] }): string | undefined {
+  switch (frame.type) {
+    case "narrative":
+      return frame.id ? `narrative:${frame.id}` : undefined
+    case "dice":
+      return dicePostedId(frame as DiceFrame)
+    case "ui":
+      if (ui) return uiContentKey(ui.lines, ui.mediaHashes)
+      return uiContentKey((frame as UiFrame).blocks.map((block) => block.kind))
+    case "media":
+      return frame.hash ? `media:${frame.hash}` : undefined
+    case "audio_library_item":
+      return `audio:${frame.hash || frame.title || frame.name || ""}`
+    default:
+      return undefined
+  }
 }
