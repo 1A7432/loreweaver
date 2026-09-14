@@ -14,6 +14,10 @@ export interface OneBotForwardConfig {
   mode: "forward"
   ws_url: string
   access_token?: string
+  /** Seconds. Converted to milliseconds for the transport. */
+  request_timeout: number
+  /** Seconds. Converted to milliseconds for the transport. */
+  reconnect_delay: number
 }
 
 export interface OneBotReverseConfig {
@@ -22,6 +26,10 @@ export interface OneBotReverseConfig {
   listen_port: number
   path?: string
   access_token?: string
+  /** Seconds. Converted to milliseconds for the transport. */
+  request_timeout: number
+  /** Seconds. Converted to milliseconds for the transport (forward reconnect). */
+  reconnect_delay: number
 }
 
 export type OneBotConfig = OneBotForwardConfig | OneBotReverseConfig
@@ -53,6 +61,7 @@ export type BridgeConfigErrorCode =
   | "invalid_reverse_path"
   | "missing_keeper_key"
   | "missing_room_keeper_key"
+  | "invalid_timeout"
 
 export class BridgeConfigError extends Error {
   constructor(
@@ -131,13 +140,33 @@ function parseGroup(raw: unknown): BridgeGroupConfig {
   }
 }
 
+/** JSON keeps seconds (old OneBot adapter); the transport takes milliseconds. */
+export const DEFAULT_REQUEST_TIMEOUT_SECONDS = 10
+export const DEFAULT_RECONNECT_DELAY_SECONDS = 1
+
+export function secondsToMs(seconds: number): number {
+  return Math.round(seconds * 1000)
+}
+
+function parseOneBotTimeouts(raw: Record<string, unknown>): { request_timeout: number; reconnect_delay: number } {
+  const request_timeout = raw.request_timeout === undefined ? DEFAULT_REQUEST_TIMEOUT_SECONDS : asNumber(raw.request_timeout)
+  if (request_timeout === undefined || !(request_timeout > 0) || !Number.isFinite(request_timeout)) {
+    throw new BridgeConfigError("invalid_timeout", "onebot.request_timeout must be > 0 seconds")
+  }
+  const reconnect_delay = raw.reconnect_delay === undefined ? DEFAULT_RECONNECT_DELAY_SECONDS : asNumber(raw.reconnect_delay)
+  if (reconnect_delay === undefined || reconnect_delay < 0 || !Number.isFinite(reconnect_delay)) {
+    throw new BridgeConfigError("invalid_timeout", "onebot.reconnect_delay must be >= 0 seconds")
+  }
+  return { request_timeout, reconnect_delay }
+}
+
 function parseForward(raw: Record<string, unknown>): OneBotForwardConfig {
   const ws_url = asString(raw.ws_url)?.trim()
   if (!ws_url || !isWsUrl(ws_url)) {
     throw new BridgeConfigError("invalid_ws_url", "onebot.ws_url must be a ws:// or wss:// URL")
   }
   const access_token = asString(raw.access_token)?.trim() || undefined
-  return { mode: "forward", ws_url, access_token }
+  return { mode: "forward", ws_url, access_token, ...parseOneBotTimeouts(raw) }
 }
 
 function parseReverse(raw: Record<string, unknown>): OneBotReverseConfig {
@@ -154,7 +183,7 @@ function parseReverse(raw: Record<string, unknown>): OneBotReverseConfig {
   if (path && !path.startsWith("/")) {
     throw new BridgeConfigError("invalid_reverse_path", "onebot.path must start with /")
   }
-  return { mode: "reverse", listen_host, listen_port, path, access_token }
+  return { mode: "reverse", listen_host, listen_port, path, access_token, ...parseOneBotTimeouts(raw) }
 }
 
 function parseOneBot(raw: unknown): OneBotConfig {
@@ -232,4 +261,11 @@ export async function loadBridgeConfig(path: string): Promise<BridgeConfig> {
 /** Default keeper key for a group: the group's own key, else the process-level one. */
 export function roomKeeperKey(config: BridgeConfig, group: BridgeGroupConfig): string | undefined {
   return group.room_keeper_key || config.keeper_key
+}
+
+export function onebotTimeoutsMs(onebot: OneBotConfig): { requestTimeoutMs: number; reconnectDelayMs: number } {
+  return {
+    requestTimeoutMs: secondsToMs(onebot.request_timeout),
+    reconnectDelayMs: secondsToMs(onebot.reconnect_delay),
+  }
 }

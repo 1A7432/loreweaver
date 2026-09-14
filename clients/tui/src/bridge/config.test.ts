@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { BridgeConfigError, isLoopbackHost, isWsUrl, parseBridgeConfig } from "./config"
+import { BridgeConfigError, isLoopbackHost, isWsUrl, onebotTimeoutsMs, parseBridgeConfig } from "./config"
 
 const base = {
   onebot: { mode: "forward" as const, ws_url: "ws://127.0.0.1:3001", access_token: "tok" },
@@ -120,6 +120,27 @@ describe("bridge config", () => {
       return
     }
     throw new Error("expected invalid_reverse_path")
+  })
+
+  test("OneBot timeouts are seconds in JSON and convert to milliseconds", () => {
+    const cfg = parseBridgeConfig(base)
+    expect(cfg.onebot.request_timeout).toBe(10)
+    expect(cfg.onebot.reconnect_delay).toBe(1)
+    const ms = onebotTimeoutsMs(cfg.onebot)
+    expect(ms.requestTimeoutMs).toBe(10_000)
+    expect(ms.reconnectDelayMs).toBe(1_000)
+    const custom = parseBridgeConfig({
+      ...base,
+      onebot: { ...base.onebot, request_timeout: 7.5, reconnect_delay: 0 },
+    })
+    expect(onebotTimeoutsMs(custom.onebot)).toEqual({ requestTimeoutMs: 7500, reconnectDelayMs: 0 })
+    try {
+      parseBridgeConfig({ ...base, onebot: { ...base.onebot, request_timeout: 0 } })
+    } catch (error) {
+      expect((error as BridgeConfigError).code).toBe("invalid_timeout")
+      return
+    }
+    throw new Error("expected invalid_timeout")
   })
 
   test("rejects duplicate group ids", () => {

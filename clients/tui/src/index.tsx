@@ -4,7 +4,8 @@ import { createRoot } from "@opentui/react"
 import App, { type AppPrefill } from "./App"
 import { createClient } from "./client"
 import { forgetServer, loadConnectMemory, rememberServer, saveConnectMemory, type SavedServer } from "./connectMemory"
-import { defaultTuiLocale } from "./i18n"
+import { BridgeConfigError, runBridgeFromFile } from "./bridge"
+import { defaultTuiLocale, tt } from "./i18n"
 import { clientUpdateCommand, triggerServerUpdate } from "./update"
 
 interface Args {
@@ -12,6 +13,7 @@ interface Args {
   host?: string
   key?: string
   name?: string
+  config?: string
   solo?: boolean
   clientOnly?: boolean
   serverOnly?: boolean
@@ -26,6 +28,7 @@ function parseArgs(argv: string[]): Args {
     if (part === "--host") args.host = rest.shift()
     else if (part === "--key") args.key = rest.shift()
     else if (part === "--name") args.name = rest.shift()
+    else if (part === "--config") args.config = rest.shift()
     else if (part === "--solo") args.solo = true
     else if (part === "--client-only") args.clientOnly = true
     else if (part === "--server-only") args.serverOnly = true
@@ -41,6 +44,7 @@ function usage(): string {
     "  loreweaver update             # reinstall the latest client AND update your server",
     "  loreweaver update --client-only   # just the client",
     "  loreweaver update --server-only   # just the saved server",
+    tt(defaultTuiLocale(), "bridge.cli.usageLine"),
     "",
     "Local server:",
     "  click 'Host locally & play' on the connect screen (or: python -m app --serve)",
@@ -55,6 +59,24 @@ const args = parseArgs(Bun.argv.slice(2))
 if (args.command === "help" || args.command === "--help" || args.command === "-h") {
   console.log(usage())
   process.exit(0)
+}
+
+if (args.command === "bridge") {
+  const locale = defaultTuiLocale()
+  if (!args.config) {
+    console.error(tt(locale, "bridge.cli.needConfig"))
+    process.exit(1)
+  }
+  try {
+    const handle = await runBridgeFromFile(args.config)
+    await handle.stopped
+    process.exit(0)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    const key = error instanceof BridgeConfigError ? "bridge.cli.badConfig" : "bridge.cli.failed"
+    console.error(tt(locale, key, { reason }))
+    process.exit(1)
+  }
 }
 
 if (args.command === "update") {
