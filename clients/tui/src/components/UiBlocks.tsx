@@ -4,20 +4,21 @@ import {
   stripControlChars,
   type UiBadgeTone,
   type UiChoicesBlock,
-  type UiClippingBlock,
   type UiFrame,
   type UiImageBlock,
-  type UiLetterBlock,
   type UiMapPinBlock,
   type UiMeterBlock,
   type UiStatBlock,
   type UiTitleCardBlock,
 } from "loreweaver-protocol"
+import { clippingLines, letterLines } from "../bridge/render/uiText"
 import type { AppClient } from "../client"
 import { tt } from "../i18n"
 import type { Palette } from "../themes"
 import { bar } from "./CharacterPanel"
 import { MediaPreviewRows, useMediaPreview } from "./MediaPreview"
+
+export { clippingLines, letterLines } from "../bridge/render/uiText"
 
 // Sidebar meters match VariablesPanel's compact tracker width; the inline log has
 // room for CharacterPanel's full-width bars (NarrativeLog passes 10).
@@ -52,31 +53,6 @@ export function badgeLine(block: { label: string }): string {
 export function imageLine(block: UiImageBlock, locale?: string): string {
   const text = stripControlChars(block.caption || block.alt || "").trim()
   return tt(locale, "ui.image", { text: text || block.hash.slice(0, 12) })
-}
-
-/** The M19 performance templates as terminal text. A rich client draws stationery
- * and full-bleed act cards; here each template becomes the same information in lines,
- * which is the honest degradation — never a blank where a letter should be. Exported
- * so tests pin the shape without a renderer. */
-export function letterLines(block: UiLetterBlock): string[] {
-  const attribution = [
-    block.to ? `→ ${stripControlChars(block.to)}` : "",
-    block.from ? `— ${stripControlChars(block.from)}` : "",
-    block.date ? stripControlChars(block.date) : "",
-  ].filter(Boolean)
-  return [
-    ...stripControlChars(block.body).split("\n").map((line) => `│ ${line}`),
-    ...(attribution.length ? [`│ ${attribution.join(" · ")}`] : []),
-  ]
-}
-
-export function clippingLines(block: UiClippingBlock): string[] {
-  const credit = [block.source, block.date].filter(Boolean).map((part) => stripControlChars(String(part)))
-  return [
-    `▬ ${stripControlChars(block.headline)}`,
-    ...stripControlChars(block.body).split("\n"),
-    ...(credit.length ? [`— ${credit.join(" · ")}`] : []),
-  ]
 }
 
 export function mapPinLine(block: UiMapPinBlock): string {
