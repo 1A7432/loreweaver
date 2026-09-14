@@ -59,6 +59,14 @@ irm https://github.com/1A7432/loreweaver/releases/latest/download/install.ps1 | 
 
 不想装进用户目录，就在安装前设 `TRPG_HOME`（客户端）和 `TRPG_LOCAL_SERVER_HOME`（一键开服的服务器状态，含它自己的 `.env`）。Windows 上请在 **Windows Terminal** 或 **WezTerm** 里跑——老式控制台会把边框画烂、吞掉鼠标。
 
+**在 QQ 群里玩。** 同一个终端客户端可以作为一个普通的协议客户端坐进 NapCat / Lagrange 的群——不是引擎适配器：
+
+```bash
+loreweaver bridge --config bridge.json
+```
+
+安装、管理员、私聊跑会读秘密的命令、以及那一个画不出来的缺口，见 [docs/qq.zh.md](docs/qq.zh.md)。
+
 ### 2. 开服
 
 打开 Studio，或者在终端里：
