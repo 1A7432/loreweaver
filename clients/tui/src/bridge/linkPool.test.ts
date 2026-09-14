@@ -23,6 +23,8 @@ function createMockIroh(options: { hangFirstWrite?: boolean } = {}) {
   let connectCount = 0
   let openBiCount = 0
   let connectionCloses = 0
+  let holdNext = false
+  let releaseHeldConnect: (() => void) | undefined
 
   function makeRecvStream() {
     const queue: Array<number[] | null> = []
@@ -68,6 +70,12 @@ function createMockIroh(options: { hangFirstWrite?: boolean } = {}) {
             online: async () => {},
             connect: async () => {
               connectCount += 1
+              if (holdNext) {
+                holdNext = false
+                await new Promise<void>((resolve) => {
+                  releaseHeldConnect = resolve
+                })
+              }
               return {
                 openBi: async () => {
                   const recv = makeRecvStream()
@@ -104,7 +112,20 @@ function createMockIroh(options: { hangFirstWrite?: boolean } = {}) {
     },
   })
 
-  return { loadIroh, sent, streams, counts: () => ({ bindCount, connectCount, connectionCloses }) }
+  return {
+    loadIroh,
+    sent,
+    streams,
+    counts: () => ({ bindCount, connectCount, connectionCloses }),
+    holdNextConnect: () => {
+      holdNext = true
+    },
+    releaseHeld: () => {
+      const release = releaseHeldConnect
+      releaseHeldConnect = undefined
+      release?.()
+    },
+  }
 }
 
 describe("LinkPool", () => {
@@ -394,6 +415,81 @@ describe("LinkPool", () => {
     await expect(pool.connect(OTHER_TICKET)).rejects.toThrow("already connected to a different ticket")
     await pool.open("key-ada", { name: "Ada" })
     expect(counts().connectCount).toBe(1)
+    pool.close()
+  })
+
+  test("kick during a redial's in-flight connect leaves no zombie", async () => {
+    const { loadIroh, sent, streams, counts, holdNextConnect, releaseHeld } = createMockIroh()
+    const pool = new LinkPool({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20 })
+    await pool.connect(TICKET)
+    await pool.open("k", { name: "K" })
+    expect(counts().connectCount).toBe(1)
+    expect(sent.filter((line) => JSON.parse(line).type === FrameType.Join).length).toBe(1)
+
+    holdNextConnect()
+    streams[0]!.end()
+    await settle(20)
+    expect(counts().connectCount).toBe(2)
+
+    pool.closeLink("k")
+    releaseHeld()
+    await settle(40)
+    expect(counts().connectCount).toBe(2)
+    expect(sent.filter((line) => JSON.parse(line).type === FrameType.Join).length).toBe(1)
+    expect(pool.get("k")).toBeUndefined()
+
+    await settle(40)
+    expect(counts().connectCount).toBe(2)
+    pool.close()
+  })
+
+  test("reopen after a drop during in-flight dial does not orphan the new slot", async () => {
+    const { loadIroh, sent, streams, counts, holdNextConnect, releaseHeld } = createMockIroh()
+    const pool = new LinkPool({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20 })
+    await pool.connect(TICKET)
+    await pool.open("k", { name: "K" })
+    const joinsBefore = sent.filter((line) => JSON.parse(line).type === FrameType.Join).length
+
+    holdNextConnect()
+    streams[0]!.end()
+    await settle(20)
+    pool.closeLink("k")
+    const p = pool.open("k", { name: "K" })
+    releaseHeld()
+    const link = await p
+    expect(pool.get("k")).toBe(link)
+    expect(link.isAlive).toBe(true)
+    const joins = sent.filter((line) => JSON.parse(line).type === FrameType.Join)
+    expect(joins.length).toBe(joinsBefore + 1)
+    expect(JSON.parse(joins.at(-1)!)).toEqual({ type: FrameType.Join, key: "k", name: "K" })
+    expect(counts().connectCount).toBe(3)
+    pool.close()
+  })
+
+  test("idle close while a redial connect is parked", async () => {
+    const { loadIroh, sent, streams, counts, holdNextConnect, releaseHeld } = createMockIroh()
+    const pool = new LinkPool({
+      loadIroh,
+      reconnectBaseMs: 5,
+      reconnectMaxMs: 20,
+      idleCloseMs: 50,
+    })
+    await pool.connect(TICKET)
+    await pool.open("k", { name: "K" })
+    expect(sent.filter((line) => JSON.parse(line).type === FrameType.Join).length).toBe(1)
+
+    holdNextConnect()
+    streams[0]!.end()
+    await settle(20)
+    expect(counts().connectCount).toBe(2)
+
+    await settle(50)
+    expect(pool.get("k")).toBeUndefined()
+    releaseHeld()
+    await settle(40)
+    expect(counts().connectCount).toBe(2)
+    expect(sent.filter((line) => JSON.parse(line).type === FrameType.Join).length).toBe(1)
+    expect(pool.get("k")).toBeUndefined()
     pool.close()
   })
 })

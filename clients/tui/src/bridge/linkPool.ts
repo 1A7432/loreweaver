@@ -150,6 +150,7 @@ export class LinkPool {
       slot.lastTouch = Date.now()
     }
     const promise = this.dialMember(slot, "open").then((link) => {
+      if (!link) throw new Error("Iroh connection is not open.")
       this.armIdle(slot)
       return link
     })
@@ -157,7 +158,8 @@ export class LinkPool {
     try {
       return await promise
     } catch (error) {
-      if (!slot.link?.isAlive) this.members.delete(memberKey)
+      // Only this slot — a newer slot for the same key must not be deleted out from under its dial.
+      if (this.members.get(memberKey) === slot && !slot.link?.isAlive) this.members.delete(memberKey)
       throw error
     } finally {
       if (slot.opening === promise) slot.opening = undefined
@@ -186,13 +188,15 @@ export class LinkPool {
     this.endpoint = undefined
   }
 
-  private async dialMember(slot: MemberSlot, reason: LinkReadyReason): Promise<IrohLink> {
+  private async dialMember(slot: MemberSlot, reason: LinkReadyReason): Promise<IrohLink | undefined> {
     if (this.closed || !this.endpoint) throw new Error("Iroh connection is not open.")
     const myGeneration = ++slot.generation
     const link = await IrohLink.open(this.endpoint, this.addr)
-    if (this.closed || slot.generation !== myGeneration) {
+    // Identity, not generation: a dropped slot can ++generation on a later loop and
+    // match itself while no longer living in `members`. Close the fresh link and stop.
+    if (this.closed || slot.generation !== myGeneration || this.members.get(slot.key) !== slot) {
       link.close()
-      throw new Error("Iroh connection is not open.")
+      return undefined
     }
     const superseded = slot.link
     slot.link = link
@@ -234,26 +238,44 @@ export class LinkPool {
       fail = reject
     })
     slot.opening = promise
-    void this.redialUntilUp(slot).then(settle, fail)
+    const running = this.redialUntilUp(slot)
+    void running.then(
+      (link) => {
+        if (link) settle(link)
+      },
+      fail,
+    )
+    void running.catch(() => {})
     void promise.catch(() => {})
     void promise.finally(() => {
       if (slot.opening === promise) slot.opening = undefined
     })
   }
 
-  private async redialUntilUp(slot: MemberSlot): Promise<IrohLink> {
+  private slotOwned(slot: MemberSlot): boolean {
+    return this.members.get(slot.key) === slot
+  }
+
+  private async redialUntilUp(slot: MemberSlot): Promise<IrohLink | undefined> {
     while (!this.closed && this.reconnect) {
+      if (!this.slotOwned(slot)) return undefined
       const delay = Math.min(this.reconnectMaxMs, this.reconnectBaseMs * 2 ** slot.reconnectAttempts)
       slot.reconnectAttempts += 1
-      await this.sleep(delay, slot)
-      if (this.closed) throw new Error("LinkPool is closed.")
       try {
-        return await this.dialMember(slot, "redial")
-      } catch (error) {
-        if (this.closed || !this.reconnect) throw error instanceof Error ? error : new Error("Iroh connection is not open.")
+        await this.sleep(delay, slot)
+      } catch {
+        return undefined
+      }
+      if (this.closed || !this.slotOwned(slot)) return undefined
+      try {
+        const link = await this.dialMember(slot, "redial")
+        if (!link) return undefined
+        return link
+      } catch {
+        if (this.closed || !this.reconnect || !this.slotOwned(slot)) return undefined
       }
     }
-    throw new Error("LinkPool is closed.")
+    return undefined
   }
 
   private sleep(ms: number, slot: MemberSlot): Promise<void> {
@@ -295,6 +317,7 @@ export class LinkPool {
       slot.reconnectReject(new Error("LinkPool is closed."))
       slot.reconnectReject = undefined
     }
+    slot.opening = undefined
     slot.link?.close()
   }
 }
