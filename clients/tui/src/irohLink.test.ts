@@ -21,6 +21,7 @@ function createMockIroh(options: { failConnectTimes?: number; hangFirstWrite?: b
   let connectCount = 0
   let connectFailuresLeft = options.failConnectTimes ?? 0
   let openBiCount = 0
+  let writeAllEntries = 0
 
   function makeRecvStream() {
     const queue: Array<number[] | null> = []
@@ -81,6 +82,7 @@ function createMockIroh(options: { failConnectTimes?: number; hangFirstWrite?: b
                   return {
                     send: {
                       writeAll: async (buf: number[]) => {
+                        writeAllEntries += 1
                         if (isDeadStream && streams[0]?.dead) {
                           await new Promise(() => {}) // never settles
                         }
@@ -102,7 +104,7 @@ function createMockIroh(options: { failConnectTimes?: number; hangFirstWrite?: b
     EndpointTicket: { fromString: () => ({ endpointAddr: () => ({}) }) },
   })
 
-  return { loadIroh, sent, streams, counts: () => ({ bindCount, connectCount }) }
+  return { loadIroh, sent, streams, counts: () => ({ bindCount, connectCount, writeAllEntries }) }
 }
 
 async function openLink(loadIroh: LoadIroh): Promise<IrohLink> {
@@ -152,7 +154,7 @@ describe("IrohLink framing", () => {
 
 describe("IrohLink write chain (F13)", () => {
   test("a write hung on one link never blocks a later link on the same endpoint", async () => {
-    const { loadIroh, sent, streams } = createMockIroh({ hangFirstWrite: true })
+    const { loadIroh, sent, streams, counts } = createMockIroh({ hangFirstWrite: true })
     const { iroh, endpoint } = await bindIrohEndpoint(loadIroh)
     const addr = ticketAddr(iroh, TICKET)
 
@@ -161,6 +163,8 @@ describe("IrohLink write chain (F13)", () => {
     await settle(0)
     streams[0]!.dead = true
     dead.sendInput("still on the dead chain")
+    await settle(0)
+    expect(counts().writeAllEntries).toBe(2)
     dead.close()
 
     const live = await IrohLink.open(endpoint, addr)
@@ -199,6 +203,24 @@ describe("IrohLink write chain (F13)", () => {
     await settle()
     expect(unexpected).toBe(1)
     expect(link.isClosed).toBe(false)
+    expect(link.isAlive).toBe(false)
+  })
+
+  test("a throwing onUnexpectedEnd subscriber does not block the others", async () => {
+    const { loadIroh, streams } = createMockIroh()
+    const link = await openLink(loadIroh)
+    let second = 0
+    link.onUnexpectedEnd(() => {
+      throw new Error("subscriber boom")
+    })
+    link.onUnexpectedEnd(() => {
+      second += 1
+    })
+    link.start()
+    streams[0]!.end()
+    await settle()
+    expect(second).toBe(1)
+    expect(link.isAlive).toBe(false)
   })
 })
 

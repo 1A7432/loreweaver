@@ -90,6 +90,7 @@ export class IrohLink {
   private recv: IrohRecvStreamLike | undefined
   private writeChain: Promise<void> = Promise.resolve()
   private closed = false
+  private ended = false
   private started = false
   private readonly handlers = new Set<(frame: ServerFrame) => void>()
   private readonly unexpectedEndHandlers = new Set<() => void>()
@@ -115,6 +116,11 @@ export class IrohLink {
 
   get isClosed(): boolean {
     return this.closed
+  }
+
+  /** False once `close()` ran or the control-stream read loop ended (EOF / reset). */
+  get isAlive(): boolean {
+    return !this.closed && !this.ended
   }
 
   send(frame: ClientFrame): void {
@@ -217,7 +223,14 @@ export class IrohLink {
       // stream closed / reset — nothing more to read
     }
     if (!this.closed) {
-      for (const handler of this.unexpectedEndHandlers) handler()
+      this.ended = true
+      for (const handler of this.unexpectedEndHandlers) {
+        try {
+          handler()
+        } catch {
+          // a throwing subscriber must not reject the voided read loop
+        }
+      }
     }
   }
 

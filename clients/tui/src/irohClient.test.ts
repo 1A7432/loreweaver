@@ -22,10 +22,12 @@ describe("isIrohTicket", () => {
 // end to end without loading the native module. Each `connect()` call opens a fresh mock
 // bi-stream; `streams[n].end()` simulates that connection's read side hitting EOF (a server
 // restart / laptop sleep / network flap), which is exactly what an unexpected redial reacts to.
-function createMockIroh() {
+function createMockIroh(options: { failConnectTimes?: number } = {}) {
   const enc = new TextEncoder()
   const dec = new TextDecoder()
   const sent: string[] = []
+  let endpointCloses = 0
+  let connectFailuresLeft = options.failConnectTimes ?? 0
 
   function makeRecvStream() {
     const queue: Array<number[] | null> = []
@@ -68,21 +70,29 @@ function createMockIroh() {
       builder: () => ({
         bind: async () => ({
           online: async () => {},
-          connect: async () => ({
-            openBi: async () => {
-              const recv = makeRecvStream()
-              streams.push(recv)
-              return {
-                send: {
-                  writeAll: async (buf: number[]) => {
-                    sent.push(dec.decode(Uint8Array.from(buf)))
+          connect: async () => {
+            if (connectFailuresLeft > 0) {
+              connectFailuresLeft -= 1
+              throw new Error("relay warmup")
+            }
+            return {
+              openBi: async () => {
+                const recv = makeRecvStream()
+                streams.push(recv)
+                return {
+                  send: {
+                    writeAll: async (buf: number[]) => {
+                      sent.push(dec.decode(Uint8Array.from(buf)))
+                    },
                   },
-                },
-                recv,
-              }
-            },
-          }),
-          close: () => {},
+                  recv,
+                }
+              },
+            }
+          },
+          close: () => {
+            endpointCloses += 1
+          },
         }),
       }),
     },
@@ -90,7 +100,7 @@ function createMockIroh() {
     EndpointTicket: { fromString: () => ({ endpointAddr: () => ({}) }) },
   })
 
-  return { loadIroh, sent, streams }
+  return { loadIroh, sent, streams, endpointCloses: () => endpointCloses }
 }
 
 const settle = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -194,6 +204,34 @@ describe("IrohClient reconnect", () => {
     await settle()
     expect(streams.length).toBe(1)
     expect(statuses).toEqual(["connecting", "online", "offline"])
+  })
+
+  test("onStatus close() on online does not throw and leaves the client offline", async () => {
+    const { loadIroh, streams } = createMockIroh()
+    const client = new IrohClient({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20 })
+    const statuses: string[] = []
+    client.onStatus((status) => {
+      statuses.push(status)
+      if (status === "online") client.close()
+    })
+
+    await expect(
+      client.connect("endpointaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+    ).resolves.toBeUndefined()
+    expect(statuses).toEqual(["connecting", "online", "offline"])
+
+    streams[0]!.end()
+    await settle()
+    expect(streams.length).toBe(1)
+  })
+
+  test("a failed dial closes the endpoint it just bound", async () => {
+    const { loadIroh, endpointCloses } = createMockIroh({ failConnectTimes: Number.POSITIVE_INFINITY })
+    const client = new IrohClient({ loadIroh, reconnect: false })
+    await expect(
+      client.connect("endpointaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+    ).rejects.toThrow("relay warmup")
+    expect(endpointCloses()).toBe(1)
   })
 })
 

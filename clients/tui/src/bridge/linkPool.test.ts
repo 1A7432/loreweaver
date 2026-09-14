@@ -1,10 +1,19 @@
 import { describe, expect, test } from "bun:test"
-import { FrameType } from "loreweaver-protocol"
+import { FrameType, type ServerFrame } from "loreweaver-protocol"
 import type { LoadIroh } from "../irohLink"
 import { LinkPool, type LinkReadyReason } from "./linkPool"
 
 const TICKET = "endpointaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+const OTHER_TICKET = "endpointbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 const settle = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms))
+
+const NARRATIVE = {
+  type: FrameType.Narrative,
+  id: "n1",
+  speaker: "kp" as const,
+  text: "The hinge shrieks.",
+  format: "markdown" as const,
+}
 
 function createMockIroh(options: { hangFirstWrite?: boolean } = {}) {
   const enc = new TextEncoder()
@@ -27,6 +36,16 @@ function createMockIroh(options: { hangFirstWrite?: boolean } = {}) {
           resolve(null)
         } else {
           queue.push(null)
+        }
+      },
+      push(text: string): void {
+        const bytes = Array.from(enc.encode(text))
+        if (waiter) {
+          const resolve = waiter
+          waiter = undefined
+          resolve(bytes)
+        } else {
+          queue.push(bytes)
         }
       },
       async read(): Promise<number[] | null> {
@@ -77,7 +96,12 @@ function createMockIroh(options: { hangFirstWrite?: boolean } = {}) {
       }),
     },
     presetN0: () => {},
-    EndpointTicket: { fromString: () => ({ endpointAddr: () => ({}) }) },
+    EndpointTicket: {
+      fromString: (ticket: string) => {
+        if (ticket.includes("bad")) throw new Error("invalid ticket")
+        return { endpointAddr: () => ({}) }
+      },
+    },
   })
 
   return { loadIroh, sent, streams, counts: () => ({ bindCount, connectCount, connectionCloses }) }
@@ -224,6 +248,152 @@ describe("LinkPool", () => {
     expect(pool.get("key-ada")).toBeUndefined()
     expect(pool.get("key-bao")).toBeDefined()
     expect(counts().connectionCloses).toBe(1)
+    pool.close()
+  })
+
+  test("get() is undefined during the disconnect window; open() shares the in-flight redial", async () => {
+    const { loadIroh, sent, streams, counts } = createMockIroh()
+    const down: string[] = []
+    const pool = new LinkPool({
+      loadIroh,
+      reconnectBaseMs: 40,
+      reconnectMaxMs: 40,
+      onLinkDown: (key) => down.push(key),
+    })
+    await pool.connect(TICKET)
+    await pool.open("key-ada", { name: "Ada" })
+    expect(counts().connectCount).toBe(1)
+
+    streams[0]!.end()
+    await settle(0)
+    expect(pool.get("key-ada")).toBeUndefined()
+    expect(down).toEqual(["key-ada"])
+    expect(counts().connectCount).toBe(1)
+
+    const reopened = await pool.open("key-ada", { name: "Ada" })
+    expect(reopened.isAlive).toBe(true)
+    expect(pool.get("key-ada")).toBe(reopened)
+    expect(counts().connectCount).toBe(2)
+    expect(sent.filter((line) => JSON.parse(line).type === FrameType.Join).length).toBe(2)
+    pool.close()
+  })
+
+  test("with reconnect: false the dead link is never handed out and open() dials afresh", async () => {
+    const { loadIroh, sent, streams, counts } = createMockIroh()
+    const pool = new LinkPool({ loadIroh, reconnect: false, reconnectBaseMs: 5, reconnectMaxMs: 20 })
+    await pool.connect(TICKET)
+    const first = await pool.open("key-ada", { name: "Ada" })
+    streams[0]!.end()
+    await settle(0)
+    expect(first.isAlive).toBe(false)
+    expect(pool.get("key-ada")).toBeUndefined()
+    expect(counts().connectCount).toBe(1)
+
+    const second = await pool.open("key-ada", { name: "Ada" })
+    expect(second).not.toBe(first)
+    expect(second.isAlive).toBe(true)
+    expect(counts().connectCount).toBe(2)
+    expect(sent.filter((line) => JSON.parse(line).type === FrameType.Join).length).toBe(2)
+    pool.close()
+  })
+
+  test("a throwing onLinkReady does not skip join or the read loop", async () => {
+    const { loadIroh, sent, streams, counts } = createMockIroh()
+    let readyCalls = 0
+    const pool = new LinkPool({
+      loadIroh,
+      reconnectBaseMs: 5,
+      reconnectMaxMs: 20,
+      onLinkReady: () => {
+        readyCalls += 1
+        throw new Error("hook boom")
+      },
+    })
+    await pool.connect(TICKET)
+    const link = await pool.open("key-ada", { name: "Ada" })
+    expect(link.isAlive).toBe(true)
+    expect(JSON.parse(sent[0]!)).toEqual({ type: FrameType.Join, key: "key-ada", name: "Ada" })
+    expect(readyCalls).toBe(1)
+
+    streams[0]!.end()
+    await settle()
+    expect(counts().connectCount).toBe(2)
+    expect(readyCalls).toBe(2)
+    expect(sent.filter((line) => JSON.parse(line).type === FrameType.Join).length).toBe(2)
+    pool.close()
+  })
+
+  test("two concurrent opens resolve to the same link with one connect and one join", async () => {
+    const { loadIroh, sent, counts } = createMockIroh()
+    const pool = new LinkPool({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20 })
+    await pool.connect(TICKET)
+    const [a, b] = await Promise.all([
+      pool.open("key-ada", { name: "Ada" }),
+      pool.open("key-ada", { name: "Ada" }),
+    ])
+    expect(a).toBe(b)
+    expect(a.isAlive).toBe(true)
+    expect(counts().connectCount).toBe(1)
+    expect(sent.filter((line) => JSON.parse(line).type === FrameType.Join).length).toBe(1)
+    pool.close()
+  })
+
+  test("onLinkReady runs before join is sent and before the read loop starts", async () => {
+    const { loadIroh, sent, streams } = createMockIroh()
+    const frames: ServerFrame[] = []
+    let sentAtHook = -1
+    const pool = new LinkPool({
+      loadIroh,
+      reconnectBaseMs: 5,
+      reconnectMaxMs: 20,
+      onLinkReady: (_key, link) => {
+        sentAtHook = sent.length
+        link.onMessage((frame) => frames.push(frame))
+      },
+    })
+    await pool.connect(TICKET)
+    await pool.open("key-ada", { name: "Ada" })
+    expect(sentAtHook).toBe(0)
+    expect(sent.length).toBe(1)
+    expect(JSON.parse(sent[0]!).type).toBe(FrameType.Join)
+
+    streams[0]!.push(`${JSON.stringify(NARRATIVE)}\n`)
+    await settle(0)
+    expect(frames).toEqual([NARRATIVE])
+    pool.close()
+  })
+
+  test("clientInfo reaches the join frame sent by LinkPool", async () => {
+    const { loadIroh, sent } = createMockIroh()
+    const pool = new LinkPool({
+      loadIroh,
+      clientInfo: { name: "loreweaver-bridge", version: "0.6.0" },
+      reconnectBaseMs: 5,
+      reconnectMaxMs: 20,
+    })
+    await pool.connect(TICKET)
+    await pool.open("key-ada", { name: "Ada" })
+    expect(JSON.parse(sent[0]!)).toEqual({
+      type: FrameType.Join,
+      key: "key-ada",
+      name: "Ada",
+      client: { name: "loreweaver-bridge", version: "0.6.0" },
+    })
+    pool.close()
+  })
+
+  test("connect() with a different ticket throws; a bad ticket leaves the pool unconnected", async () => {
+    const { loadIroh, counts } = createMockIroh()
+    const pool = new LinkPool({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20 })
+    await expect(pool.connect("endpointbadticket")).rejects.toThrow("invalid ticket")
+    expect(counts().bindCount).toBe(1)
+    await pool.connect(TICKET)
+    expect(counts().bindCount).toBe(2)
+    await pool.connect(TICKET)
+    expect(counts().bindCount).toBe(2)
+    await expect(pool.connect(OTHER_TICKET)).rejects.toThrow("already connected to a different ticket")
+    await pool.open("key-ada", { name: "Ada" })
+    expect(counts().connectCount).toBe(1)
     pool.close()
   })
 })

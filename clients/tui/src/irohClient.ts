@@ -56,9 +56,9 @@ export interface IrohClientOptions {
 
 /**
  * The p2p transport, behind the same `AppClient` contract as `WsClient`. `@number0/iroh` is a
- * native (napi) module, imported DYNAMICALLY in `dial()` — the browser web client never loads
- * this file, and a WS-only run never pulls iroh into memory. Frames are newline-JSON over one
- * long-lived `openBi` stream, dispatched with the shared `loreweaver-protocol` validators.
+ * native (napi) module, imported DYNAMICALLY in `irohLink.ts` — the browser web client never
+ * loads this file, and a WS-only run never pulls iroh into memory. Frames are newline-JSON over
+ * one long-lived `openBi` stream, dispatched with the shared `loreweaver-protocol` validators.
  *
  * Reconnect parity with `WsClient` (clients/protocol/src/client.ts): `lastJoin` is re-sent on
  * every successful (re)dial; an unexpected end of the read loop (not a manual `close()`)
@@ -109,7 +109,7 @@ export class IrohClient implements AppClient {
     }
     // A first-time connect failure rejects straight to the caller (the connect screen shows
     // the error) — it does NOT enter the redial loop; redials only start once a session has
-    // actually been established (see `IrohLink`'s unexpected-end handling below).
+    // actually been established (see `irohLink.ts` unexpected-end handling).
     await this.dial(ticket)
   }
 
@@ -117,8 +117,14 @@ export class IrohClient implements AppClient {
     const myGeneration = ++this.generation
     this.setStatus("connecting")
     const { iroh, endpoint } = await bindIrohEndpoint(this.loadIroh)
-    const addr = ticketAddr(iroh, ticket)
-    const link = await IrohLink.open(endpoint, addr)
+    let link: IrohLink
+    try {
+      const addr = ticketAddr(iroh, ticket)
+      link = await IrohLink.open(endpoint, addr)
+    } catch (error) {
+      closeIrohEndpoint(endpoint)
+      throw error
+    }
 
     // A manual close() (or a newer dial superseding this one) raced us while we were still
     // connecting — don't take over as the live connection; tear down what we just opened.
@@ -143,13 +149,14 @@ export class IrohClient implements AppClient {
     link.onUnexpectedEnd(() => {
       if (!this.manualClose && myGeneration === this.generation) this.scheduleRedial()
     })
+    // Same order as `close()`: drop the superseded link, then its endpoint.
+    supersededLink?.close()
     if (supersededEndpoint && supersededEndpoint !== endpoint) closeIrohEndpoint(supersededEndpoint)
     // F13: the superseded link is left with its own write chain. Nothing waits on a
     // hung writeAll against the dead stream; this dial's IrohLink started a fresh chain.
-    supersededLink?.close()
     this.setStatus("online")
-    if (this.lastJoin) this.link.join(this.lastJoin.key, this.lastJoin.name, this.clientInfo)
-    this.link.start()
+    if (this.lastJoin) link.join(this.lastJoin.key, this.lastJoin.name, this.clientInfo)
+    link.start()
   }
 
   private scheduleRedial(): void {
