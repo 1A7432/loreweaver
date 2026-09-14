@@ -1,4 +1,7 @@
 import { promises as dns } from "node:dns"
+import http from "node:http"
+import https from "node:https"
+import type { IncomingMessage } from "node:http"
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   MAX_ATTACHMENT_BYTES,
@@ -23,10 +26,36 @@ export interface HttpResponse {
   body: AsyncIterable<Uint8Array>
 }
 
-export type HttpGet = (
-  url: string,
-  init: { redirect: "manual"; signal?: AbortSignal },
-) => Promise<HttpResponse>
+export type AddressEntry = { address: string; family: 4 | 6 }
+
+/** Node/Bun `net.connect` lookup: array form `cb(null, [{address, family}])`. */
+export type PinnedLookup = (
+  hostname: string,
+  options: unknown,
+  callback?: (err: Error | null, addresses: AddressEntry[]) => void,
+) => void
+
+export interface HttpGetInit {
+  redirect: "manual"
+  signal?: AbortSignal
+  /** Addresses `assertPublicHttpUrl` already validated; the request lookup may only return these. */
+  addresses?: string[]
+  /** Test seam: override the pinned lookup. Production always uses `pinnedLookup(addresses)`. */
+  lookup?: PinnedLookup
+}
+
+export type HttpGet = (url: string, init: HttpGetInit) => Promise<HttpResponse>
+
+export interface PinnedRequestOptions {
+  protocol: string
+  hostname: string
+  servername: string
+  port: number
+  path: string
+  method: "GET"
+  lookup: PinnedLookup
+  signal?: AbortSignal
+}
 
 export interface FetchDeps {
   resolveAddresses?: ResolveAddresses
@@ -46,34 +75,101 @@ export async function defaultResolveAddresses(host: string, port: number): Promi
   return results.map((item) => item.address)
 }
 
-export async function defaultHttpGet(
-  url: string,
-  init: { redirect: "manual"; signal?: AbortSignal },
-): Promise<HttpResponse> {
-  const response = await fetch(url, { redirect: "manual", signal: init.signal })
-  return {
-    status: response.status,
-    headers: response.headers,
-    raiseForStatus() {
-      if (response.status >= 400) {
-        throw new Error(`http.${response.status}`)
-      }
-    },
-    body: iterateBody(response.body),
+export function pinnedLookup(addresses: string[]): PinnedLookup {
+  const entries: AddressEntry[] = addresses.map((address) => ({
+    address,
+    family: address.includes(":") ? 6 : 4,
+  }))
+  return (_hostname, options, callback) => {
+    const cb = typeof options === "function" ? options : callback
+    if (typeof cb !== "function") return
+    try {
+      assertPublicAddresses(addresses)
+    } catch (err) {
+      cb(err instanceof Error ? err : new Error(String(err)), [])
+      return
+    }
+    cb(null, entries)
   }
 }
 
-async function* iterateBody(body: ReadableStream<Uint8Array> | null): AsyncIterable<Uint8Array> {
-  if (!body) return
-  const reader = body.getReader()
-  try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) return
-      if (value) yield value
+/**
+ * Options for `http`/`https`.request. Host header and TLS SNI stay the original
+ * hostname; `lookup` returns only the already-validated addresses so the TCP
+ * connect cannot rebind.
+ */
+export function buildHttpRequestOptions(
+  url: URL,
+  addresses: string[],
+  signal?: AbortSignal,
+  lookup: PinnedLookup = pinnedLookup(addresses),
+): PinnedRequestOptions {
+  const hostname = stripIpv6Brackets(url.hostname)
+  const scheme = url.protocol.replace(/:$/, "").toLowerCase()
+  return {
+    protocol: url.protocol,
+    hostname,
+    servername: hostname,
+    port: url.port ? Number(url.port) : scheme === "https" ? 443 : 80,
+    path: `${url.pathname}${url.search}`,
+    method: "GET",
+    lookup,
+    ...(signal ? { signal } : {}),
+  }
+}
+
+export async function defaultHttpGet(url: string, init: HttpGetInit): Promise<HttpResponse> {
+  void init.redirect
+  const parsed = new URL(url)
+  const addresses = init.addresses ?? []
+  const lookup = init.lookup ?? pinnedLookup(addresses)
+  const opts = buildHttpRequestOptions(parsed, addresses, init.signal, lookup)
+  const lib = parsed.protocol === "https:" ? https : http
+  return new Promise<HttpResponse>((resolve, reject) => {
+    const req = lib.request(opts as http.RequestOptions, (res) => {
+      resolve(wrapIncomingMessage(res))
+    })
+    const fail = (err: Error) => {
+      req.destroy()
+      reject(err)
     }
-  } finally {
-    reader.releaseLock()
+    req.on("error", reject)
+    if (init.signal) {
+      const onAbort = () => {
+        const err = new Error("The operation was aborted.")
+        err.name = "AbortError"
+        fail(err)
+      }
+      if (init.signal.aborted) onAbort()
+      else {
+        init.signal.addEventListener("abort", onAbort, { once: true })
+        req.on("close", () => init.signal?.removeEventListener("abort", onAbort))
+      }
+    }
+    req.end()
+  })
+}
+
+function wrapIncomingMessage(res: IncomingMessage): HttpResponse {
+  return {
+    status: res.statusCode ?? 0,
+    headers: {
+      get(name: string) {
+        const value = res.headers[name.toLowerCase()]
+        if (value === undefined) return null
+        return Array.isArray(value) ? (value[0] ?? null) : value
+      },
+    },
+    raiseForStatus() {
+      if ((res.statusCode ?? 0) >= 400) throw new Error(`http.${res.statusCode}`)
+    },
+    body: iterateIncoming(res),
+  }
+}
+
+async function* iterateIncoming(res: IncomingMessage): AsyncIterable<Uint8Array> {
+  for await (const chunk of res) {
+    yield chunk instanceof Uint8Array ? chunk : Buffer.from(chunk)
   }
 }
 
@@ -128,8 +224,12 @@ async function fetchPublicUrl(
       err.name = "AbortError"
       throw err
     }
-    await assertPublicHttpUrl(currentUrl, deps.resolveAddresses)
-    const response = await deps.httpGet(currentUrl, { redirect: "manual", signal: deps.signal })
+    const addresses = await assertPublicHttpUrl(currentUrl, deps.resolveAddresses)
+    const response = await deps.httpGet(currentUrl, {
+      redirect: "manual",
+      signal: deps.signal,
+      addresses,
+    })
     if (REDIRECT_STATUSES.has(response.status)) {
       const location = response.headers.get("Location") ?? response.headers.get("location") ?? ""
       if (!location || redirectCount >= MAX_ATTACHMENT_REDIRECTS) {
@@ -168,7 +268,10 @@ function concat(chunks: Uint8Array[], size: number): Uint8Array {
   return out
 }
 
-export async function assertPublicHttpUrl(value: string, resolveAddresses: ResolveAddresses = defaultResolveAddresses): Promise<void> {
+export async function assertPublicHttpUrl(
+  value: string,
+  resolveAddresses: ResolveAddresses = defaultResolveAddresses,
+): Promise<string[]> {
   let parsed: URL
   try {
     parsed = new URL(value)
@@ -188,19 +291,19 @@ export async function assertPublicHttpUrl(value: string, resolveAddresses: Resol
     throw new OneBotError("onebot.attachment.unsafe_url")
   }
   const port = parsed.port ? Number(parsed.port) : scheme === "https" ? 443 : 80
-  const literal = parseIPv4(host) !== null || host.includes(":")
-  if (literal && parseIPv4(host) !== null) {
+  if (parseIPv4(host) !== null) {
     if (!isPublicIp(host)) throw new OneBotError("onebot.attachment.unsafe_url")
-    return
+    return [host]
   }
   if (host.includes(":")) {
     if (!isPublicIp(host)) throw new OneBotError("onebot.attachment.unsafe_url")
-    return
+    return [host]
   }
   const addresses = await resolveAddresses(host, port)
   if (!addresses.length || addresses.some((address) => !isPublicIp(address))) {
     throw new OneBotError("onebot.attachment.unsafe_url")
   }
+  return addresses
 }
 
 export function assertPublicAddresses(addresses: string[]): void {
@@ -295,9 +398,33 @@ function isPublicIPv6(bytes: Uint8Array): boolean {
   if ((bytes[0]! & 0xfe) === 0xfc) return false
   // ff00::/8 multicast
   if (bytes[0] === 0xff) return false
+  // 2001::/23 Teredo / ORCHID — Python ipaddress.is_global is false here
+  if (bytes[0] === 0x20 && bytes[1] === 0x01 && (bytes[2]! & 0xfe) === 0) return false
   // 2001:db8::/32 documentation
   if (bytes[0] === 0x20 && bytes[1] === 0x01 && bytes[2] === 0x0d && bytes[3] === 0xb8) return false
+  // 64:ff9b::/96 NAT64 well-known prefix: unwrap and check the embedded IPv4
+  if (isNat64Prefix(bytes)) {
+    const embedded = (bytes[12]! << 24) | (bytes[13]! << 16) | (bytes[14]! << 8) | bytes[15]!
+    return isPublicIPv4(embedded >>> 0)
+  }
   return true
+}
+
+function isNat64Prefix(bytes: Uint8Array): boolean {
+  return (
+    bytes[0] === 0x00 &&
+    bytes[1] === 0x64 &&
+    bytes[2] === 0xff &&
+    bytes[3] === 0x9b &&
+    bytes[4] === 0 &&
+    bytes[5] === 0 &&
+    bytes[6] === 0 &&
+    bytes[7] === 0 &&
+    bytes[8] === 0 &&
+    bytes[9] === 0 &&
+    bytes[10] === 0 &&
+    bytes[11] === 0
+  )
 }
 
 function allZeroExceptLast(bytes: Uint8Array): boolean {

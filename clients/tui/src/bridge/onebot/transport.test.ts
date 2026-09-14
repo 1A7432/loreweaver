@@ -4,6 +4,7 @@ import {
   OneBotForwardWebSocketTransport,
   OneBotReverseWebSocketTransport,
   OneBotTransport,
+  defaultConnectFactory,
   reverseHandshakeResponse,
   EVENT_QUEUE_LIMIT,
   MAX_TEXT_CHARS,
@@ -193,6 +194,34 @@ describe("forward mode", () => {
       sockets[1]!.push({ status: "ok", retcode: 0, data: { message_id: 2 }, echo })
       expect(await live).toEqual({ message_id: 2 })
       expect(sockets[1]!.sent.some((line) => line.includes('"n":1'))).toBe(false)
+    } finally {
+      await transport.close()
+    }
+  })
+
+  test("a throwing status subscriber does not kill the reconnect loop", async () => {
+    const sockets: FakeSocket[] = []
+    const factory: ConnectFactory = async () => {
+      const sock = new FakeSocket()
+      sockets.push(sock)
+      return sock
+    }
+    const transport = new OneBotForwardWebSocketTransport({
+      url: "ws://127.0.0.1:9/",
+      requestTimeoutMs: 200,
+      reconnectDelayMs: 15,
+      connectFactory: factory,
+    })
+    transport.onStatus((status) => {
+      if (status === "reconnecting") throw new Error("subscriber boom")
+    })
+    try {
+      await transport.start(() => {})
+      await transport.waitConnected(200)
+      sockets[0]!.end()
+      await waitFor(() => sockets.length === 2)
+      await transport.waitConnected(200)
+      expect(transport.connected).toBe(true)
     } finally {
       await transport.close()
     }
@@ -427,6 +456,21 @@ describe("events — dispatch, backlog, frame size", () => {
     expect(transport.pendingEvents).toBe(0)
   })
 
+  test("an inbound frame above the cap is closed with 1009 and treated as a drop", async () => {
+    const huge = "x".repeat(MAX_WEBSOCKET_FRAME_BYTES + 1)
+    const sock = new FakeSocket([huge])
+    const received: Array<Record<string, unknown>> = []
+    const transport = new ActionWebSocketTransport()
+    transport.startDispatcher((payload) => {
+      received.push(payload)
+    })
+    transport.adopt(sock)
+    await transport.consume(sock)
+    expect(sock.closeArgs).toEqual({ code: 1009, reason: "frame too large" })
+    expect(received).toEqual([])
+    await transport.stopDispatcher()
+  })
+
   test("reverse accepts a frame above the 1 MiB library default", async () => {
     const raw = Buffer.alloc(800_000, 120)
     const event = groupEvent({
@@ -483,24 +527,39 @@ describe("outbound", () => {
     expect(image.data.file).toBe(`base64://${Buffer.from(png).toString("base64")}`)
   })
 
-  test("a private reply to a user does not carry an invalid group reply segment", async () => {
+  test("a group message redirected to private drops the reply segment; a native private reply keeps it", async () => {
     const stub = stubRaw()
     const bot = new OneBotTransport({ transport: stub })
-    const result = await bot.send(
+    const redirected = await bot.send(
       { type: "group", id: 99, userId: 7 },
       { text: "private sheet", private: true, replyTo: "group-message-10" },
     )
-    expect(result.ok).toBe(true)
+    expect(redirected.ok).toBe(true)
     expect(stub.calls).toEqual([
       [
         "send_private_msg",
         { user_id: 7, message: [{ type: "text", data: { text: "private sheet" } }] },
       ],
     ])
+    const native = await bot.send(
+      { type: "private", id: 7 },
+      { text: "dm reply", replyTo: "private-message-3" },
+    )
+    expect(native.ok).toBe(true)
+    expect(stub.calls[1]).toEqual([
+      "send_private_msg",
+      {
+        user_id: 7,
+        message: [
+          { type: "reply", data: { id: "private-message-3" } },
+          { type: "text", data: { text: "dm reply" } },
+        ],
+      },
+    ])
     const unavailable = await bot.send({ type: "group", id: 99 }, { text: "secret", private: true })
     expect(unavailable.ok).toBe(false)
     expect(unavailable.error).toBe("onebot.private_target.unavailable")
-    expect(stub.calls).toHaveLength(1)
+    expect(stub.calls).toHaveLength(2)
   })
 
   test("send failures are stable errors that never leak the token", async () => {
@@ -565,6 +624,35 @@ describe("OneBotTransport event stream", () => {
       expect(seen).toEqual(["hello"])
     } finally {
       await bot.close()
+    }
+  })
+})
+
+describe("defaultConnectFactory", () => {
+  test("sends Bearer when a token is configured", async () => {
+    const auths: string[] = []
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req, bunServer) {
+        auths.push(req.headers.get("Authorization") ?? "")
+        if (bunServer.upgrade(req)) return undefined as unknown as Response
+        return new Response("", { status: 500 })
+      },
+      websocket: {
+        message() {},
+      },
+    })
+    try {
+      const sock = await defaultConnectFactory(`ws://127.0.0.1:${server.port}/`, {
+        headers: { Authorization: "Bearer token" },
+        timeoutMs: 500,
+        maxSize: MAX_WEBSOCKET_FRAME_BYTES,
+      })
+      expect(auths[0]).toBe("Bearer token")
+      sock.close()
+    } finally {
+      server.stop(true)
     }
   })
 })

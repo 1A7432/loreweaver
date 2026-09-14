@@ -116,7 +116,8 @@ export function parseIPv4(host: string): number | null {
   if (parts.length !== 4) return null
   let n = 0
   for (const part of parts) {
-    if (!/^\d+$/.test(part)) return null
+    // Reject leading zeros (except the value "0"): the OS may parse "0177" as octal.
+    if (!/^(0|[1-9]\d*)$/.test(part)) return null
     const v = Number(part)
     if (v > 255) return null
     n = (n << 8) + v
@@ -148,11 +149,14 @@ export function errorName(err: unknown): string {
 export async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (ms <= 0 || signal?.aborted) return
   await new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, ms)
     const onAbort = () => {
       clearTimeout(timer)
       resolve()
     }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort)
+      resolve()
+    }, ms)
     signal?.addEventListener("abort", onAbort, { once: true })
   })
 }

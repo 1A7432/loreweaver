@@ -23,7 +23,16 @@ describe("splitText", () => {
     const text = `${"a".repeat(3000)}\n\n${"b".repeat(2000)}`
     const parts = splitText(text, 4000)
     expect(parts.join("")).toBe(text)
-    expect(parts[0]!.endsWith("\n\n") || parts[0]!.length === 4000).toBe(true)
+    expect(parts[0]!.endsWith("\n\n")).toBe(true)
+    expect(parts[0]!.length).toBe(3002)
+    expect(parts[0]!.length).toBeLessThanOrEqual(4000)
+  })
+
+  test("a separator at the window edge does not produce a chunk longer than the limit", () => {
+    const text = `${"a".repeat(99)}\n\n${"b".repeat(50)}`
+    const parts = splitText(text, 100)
+    expect(parts.every((part) => part.length <= 100)).toBe(true)
+    expect(parts.join("")).toBe(text)
   })
 })
 

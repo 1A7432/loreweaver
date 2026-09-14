@@ -314,6 +314,14 @@ export class ActionWebSocketTransport implements OneBotRawTransport {
   async consume(connection: OneBotSocket): Promise<void> {
     try {
       for await (const raw of connection) {
+        if (Buffer.byteLength(raw, "utf8") > MAX_WEBSOCKET_FRAME_BYTES) {
+          try {
+            await Promise.resolve(connection.close(1009, "frame too large"))
+          } catch {
+            // best-effort — the point is we did not accept an oversized frame
+          }
+          return
+        }
         const payload = jsonObject(raw)
         if (!payload) continue
         if ("echo" in payload) {
@@ -373,7 +381,11 @@ export class ActionWebSocketTransport implements OneBotRawTransport {
   }
 
   protected emitStatus(status: OneBotStatus): void {
-    this.statusHandler?.(status)
+    try {
+      this.statusHandler?.(status)
+    } catch {
+      // a throwing subscriber must not kill the reconnect loop
+    }
   }
 
   protected attach(connection: OneBotSocket): OneBotSocket | undefined {
@@ -413,8 +425,12 @@ export class ActionWebSocketTransport implements OneBotRawTransport {
     const next = previous.then(async () => {
       if (this.connection !== connection) throw new OneBotError("onebot.websocket.disconnected")
       const abort = this.untilDetached(connection)
-      void abort.catch(() => {})
-      await Promise.race([Promise.resolve(connection.send(payload)), abort])
+      void abort.promise.catch(() => {})
+      try {
+        await Promise.race([Promise.resolve(connection.send(payload)), abort.promise])
+      } finally {
+        abort.release()
+      }
     })
     this.writeChains.set(
       connection,
@@ -426,12 +442,22 @@ export class ActionWebSocketTransport implements OneBotRawTransport {
     return next
   }
 
-  private untilDetached(connection: OneBotSocket): Promise<never> {
-    return new Promise((_, reject) => {
+  private untilDetached(connection: OneBotSocket): { promise: Promise<never>; release: () => void } {
+    let rejecter: (err: unknown) => void = () => {}
+    const promise = new Promise<never>((_, reject) => {
+      rejecter = reject
       const list = this.writeWaiters.get(connection) ?? []
       list.push(reject)
       this.writeWaiters.set(connection, list)
     })
+    const release = () => {
+      const list = this.writeWaiters.get(connection)
+      if (!list) return
+      const next = list.filter((item) => item !== rejecter)
+      if (next.length) this.writeWaiters.set(connection, next)
+      else this.writeWaiters.delete(connection)
+    }
+    return { promise, release }
   }
 
   private async dispatchEvents(
@@ -742,7 +768,9 @@ export class OneBotTransport {
       return { ok: false, error: "onebot.private_target.unavailable" }
     }
     const asPrivate = target.type === "private" || privateTarget
-    const replyTo = asPrivate ? undefined : content.replyTo
+    // A group message id is not valid in the private conversation used for a
+    // redirected private reply. A reply that is already in a private chat keeps its segment.
+    const replyTo = privateTarget ? undefined : content.replyTo
     const text = content.text ?? ""
     const chunks = text ? splitText(text, MAX_TEXT_CHARS) : [""]
     let last: OneBotSendResult = { ok: false, error: "onebot.message.empty" }
@@ -839,7 +867,13 @@ export class OneBotTransport {
   }
 
   private emitStatus(status: OneBotStatus): void {
-    for (const handler of this.statusHandlers) handler(status)
+    for (const handler of this.statusHandlers) {
+      try {
+        handler(status)
+      } catch {
+        // a throwing subscriber must not kill status fan-out or the reconnect loop
+      }
+    }
   }
 }
 
@@ -910,6 +944,8 @@ export async function defaultConnectFactory(
   url: string,
   opts: { headers?: Record<string, string>; timeoutMs: number; maxSize: number },
 ): Promise<OneBotSocket> {
+  // Bun's WebSocket client cannot pre-bound inbound frames (no maxPayloadLength).
+  // consume() closes with 1009 when a message exceeds MAX_WEBSOCKET_FRAME_BYTES.
   void opts.maxSize
   const ws = new BunWebSocket(url, opts.headers ? { headers: opts.headers } : undefined)
   await waitWebSocketOpen(ws, opts.timeoutMs)

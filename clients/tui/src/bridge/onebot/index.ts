@@ -53,12 +53,24 @@ export type { OutboundContent } from "./segments"
 export {
   assertPublicAddresses,
   assertPublicHttpUrl,
+  buildHttpRequestOptions,
   defaultHttpGet,
   defaultResolveAddresses,
   fetchAttachment,
   isPublicIp,
+  pinnedLookup,
 } from "./fetch"
-export type { FetchAttachmentOptions, FetchDeps, HttpGet, HttpResponse, ResolveAddresses } from "./fetch"
+export type {
+  AddressEntry,
+  FetchAttachmentOptions,
+  FetchDeps,
+  HttpGet,
+  HttpGetInit,
+  HttpResponse,
+  PinnedLookup,
+  PinnedRequestOptions,
+  ResolveAddresses,
+} from "./fetch"
 
 export { OneBotAPIError, OneBotAttachmentNotFound, OneBotError } from "./shared"
 

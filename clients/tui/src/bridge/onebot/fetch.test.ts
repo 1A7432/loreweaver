@@ -1,14 +1,19 @@
 import { describe, expect, test } from "bun:test"
+import { promises as dns } from "node:dns"
 import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_REDIRECTS } from "./constants"
 import {
-  assertPublicAddresses,
+  buildHttpRequestOptions,
+  defaultHttpGet,
+  defaultResolveAddresses,
   fetchAttachment,
   isPublicIp,
+  pinnedLookup,
+  type AddressEntry,
   type HttpGet,
   type HttpResponse,
   type ResolveAddresses,
 } from "./fetch"
-import { OneBotAttachmentNotFound, OneBotError } from "./shared"
+import { OneBotAttachmentNotFound, OneBotError, parseIPv4 } from "./shared"
 
 class FakeResponse implements HttpResponse {
   statusChecked = false
@@ -107,13 +112,94 @@ describe("fetchAttachment — DNS answers", () => {
     expect(http.urls).toEqual([])
   })
 
-  test("assertPublicAddresses throws unsafe_address on a DNS-rebinding set", () => {
-    expect(() => assertPublicAddresses(["93.184.216.34", "169.254.169.254"])).toThrow(OneBotError)
+  test("pinned lookup refuses a rebinding set and never hands private addresses to the client", () => {
+    const lookup = pinnedLookup(["93.184.216.34", "169.254.169.254"])
+    let err: Error | null = null
+    let entries: AddressEntry[] | undefined
+    lookup("rebind.example", { all: true }, (error, addresses) => {
+      err = error
+      entries = addresses
+    })
+    expect(err).toBeInstanceOf(OneBotError)
+    expect((err as unknown as OneBotError).code).toBe("onebot.attachment.unsafe_address")
+    expect(entries).toEqual([])
+  })
+
+  test("the pinned lookup hands the client only the already-validated addresses", () => {
+    const lookup = pinnedLookup(["93.184.216.34"])
+    let entries: AddressEntry[] | undefined
+    lookup("cdn.example", { all: true }, (error, addresses) => {
+      expect(error).toBeNull()
+      entries = addresses
+    })
+    expect(entries).toEqual([{ address: "93.184.216.34", family: 4 }])
+  })
+})
+
+describe("defaultHttpGet — pinned lookup seam", () => {
+  test("an HTTPS URL keeps servername equal to the original hostname", () => {
+    const opts = buildHttpRequestOptions(new URL("https://cdn.example/file"), ["93.184.216.34"])
+    expect(opts.servername).toBe("cdn.example")
+    expect(opts.hostname).toBe("cdn.example")
+    expect(opts.protocol).toBe("https:")
+  })
+
+  test("defaultHttpGet uses the injected lookup against a local server", async () => {
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        return new Response("local-ok")
+      },
+    })
     try {
-      assertPublicAddresses(["93.184.216.34", "169.254.169.254"])
-    } catch (err) {
-      expect((err as OneBotError).code).toBe("onebot.attachment.unsafe_address")
+      const url = `http://127.0.0.1:${server.port}/file`
+      const lookup = (_host: string, options: unknown, callback?: (err: Error | null, addresses: AddressEntry[]) => void) => {
+        const cb = typeof options === "function" ? options : callback
+        cb?.(null, [{ address: "127.0.0.1", family: 4 }])
+      }
+      const response = await defaultHttpGet(url, {
+        redirect: "manual",
+        addresses: ["127.0.0.1"],
+        lookup,
+      })
+      expect(response.status).toBe(200)
+      const chunks: Uint8Array[] = []
+      for await (const chunk of response.body) chunks.push(chunk)
+      expect(Buffer.concat(chunks).toString()).toBe("local-ok")
+    } finally {
+      server.stop(true)
     }
+  })
+
+  test("a resolver that answers public first does not reach a loopback server", async () => {
+    let hits = 0
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        hits += 1
+        return new Response("secret")
+      },
+    })
+    try {
+      await expect(
+        fetchAttachment(`http://localhost:${server.port}/secret`, {
+          resolveAddresses: async () => ["93.184.216.34"],
+          timeoutMs: 250,
+        }),
+      ).rejects.toBeTruthy()
+      expect(hits).toBe(0)
+    } finally {
+      server.stop(true)
+    }
+  })
+
+  test("defaultResolveAddresses returns every A and AAAA answer for localhost", async () => {
+    const independent = await dns.lookup("localhost", { all: true })
+    const ours = await defaultResolveAddresses("localhost", 80)
+    expect(ours.sort()).toEqual(independent.map((item) => item.address).sort())
+    expect(ours.length).toBeGreaterThanOrEqual(1)
   })
 })
 
@@ -194,5 +280,21 @@ describe("isPublicIp", () => {
     expect(isPublicIp("::ffff:127.0.0.1")).toBe(false)
     expect(isPublicIp("8.8.8.8")).toBe(true)
     expect(isPublicIp("93.184.216.34")).toBe(true)
+  })
+
+  test("rejects 2001::/23 (Teredo/ORCHID) and NAT64-embedded private IPv4", () => {
+    expect(isPublicIp("2001::1")).toBe(false)
+    expect(isPublicIp("2001:1::1")).toBe(false)
+    expect(isPublicIp("2001:200::1")).toBe(true)
+    expect(isPublicIp("64:ff9b::10.0.0.1")).toBe(false)
+    expect(isPublicIp("64:ff9b::8.8.8.8")).toBe(true)
+  })
+})
+
+describe("parseIPv4", () => {
+  test("rejects leading zeros (except the value 0)", () => {
+    expect(parseIPv4("0177.0.0.1")).toBeNull()
+    expect(parseIPv4("127.0.0.1")).not.toBeNull()
+    expect(parseIPv4("0.0.0.0")).toBe(0)
   })
 })

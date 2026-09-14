@@ -42,8 +42,8 @@ export interface OutboundContent {
 }
 
 /**
- * Reply first, then @, then text, then image. A private reply must pass `replyTo`
- * as undefined — a group message id is not valid in the private conversation.
+ * Reply first, then @, then text, then image. A group-to-private redirect must
+ * pass `replyTo` as undefined — a group message id is not valid there.
  */
 export function buildOutboundSegments(content: OutboundContent): OneBotSegment[] {
   const segments: OneBotSegment[] = []
@@ -79,17 +79,20 @@ export function splitText(text: string, limit = MAX_TEXT_CHARS): string[] {
   while (remaining.length > limit) {
     const window = remaining.slice(0, limit + 1)
     const boundaryFloor = Math.max(1, Math.floor(limit / 2))
-    let cut = window.lastIndexOf("\n\n", limit - 1)
+    // rfind(sep, floor, limit): the whole separator must lie in [floor, limit), matching
+    // Python's str.rfind(sep, start, end). lastIndexOf(sep, limit-1) can start at limit-1
+    // and swallow the extra window char, producing a chunk of limit+1.
+    let cut = rfind(window, "\n\n", boundaryFloor, limit)
     let separator = 2
-    if (cut < boundaryFloor) {
-      cut = window.lastIndexOf("\n", limit - 1)
+    if (cut < 1) {
+      cut = rfind(window, "\n", boundaryFloor, limit)
       separator = 1
     }
-    if (cut < boundaryFloor) {
-      cut = window.lastIndexOf(" ", limit - 1)
+    if (cut < 1) {
+      cut = rfind(window, " ", boundaryFloor, limit)
       separator = 1
     }
-    if (cut < boundaryFloor) {
+    if (cut < 1) {
       cut = limit
       separator = 0
     } else {
@@ -100,6 +103,11 @@ export function splitText(text: string, limit = MAX_TEXT_CHARS): string[] {
   }
   if (remaining) chunks.push(remaining)
   return chunks
+}
+
+function rfind(haystack: string, needle: string, start: number, end: number): number {
+  const idx = haystack.slice(start, end).lastIndexOf(needle)
+  return idx === -1 ? -1 : start + idx
 }
 
 function httpUrl(value: string): boolean {
