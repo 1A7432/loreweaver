@@ -184,6 +184,7 @@ async def test_supergrok_uses_xai_dimensions_instead_of_openai_size():
         await client.aclose()
 
     assert "size" not in seen["json"]
+    assert seen["json"]["response_format"] == "b64_json"
     assert seen["json"]["aspect_ratio"] == "16:9"
     assert seen["json"]["resolution"] == "2k"
 
@@ -205,6 +206,38 @@ async def test_supergrok_preset_build_uses_llm_subscription():
     assert gen._settings.base_url == XAI_API_BASE
     assert gen._token_provider is not None
     assert IMAGEGEN_PRESETS["supergrok"]["model"] == XAI_DEFAULT_IMAGE_MODEL
+
+
+async def test_url_output_respects_configured_media_limit():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/images/generations"):
+            return httpx.Response(200, json={"data": [{"url": "https://cdn.example/image.png"}]})
+        return httpx.Response(200, content=b"12345", headers={"content-type": "image/png"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    gen = OpenAICompatImageGen(
+        ImageGenSettings(provider="muapi", api_key="secret", model=MUAPI_DEFAULT_IMAGE_MODEL),
+        client=client,
+        max_image_bytes=4,
+    )
+    try:
+        with pytest.raises(ImageGenError) as exc:
+            await gen.generate("a lantern")
+    finally:
+        await client.aclose()
+
+    assert exc.value.code == "imagegen_bad_response"
+
+
+def test_build_imagegen_uses_room_media_limit():
+    settings = Settings(
+        imagegen=ImageGenSettings(provider="muapi", api_key="secret"),
+    )
+    settings.tui.media_max_file_bytes = 1234
+    gen = build_imagegen(settings)
+
+    assert isinstance(gen, OpenAICompatImageGen)
+    assert gen._max_image_bytes == 1234
 
 
 async def test_openai_compat_imagegen_maps_bad_response_to_error_code():

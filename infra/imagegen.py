@@ -34,7 +34,10 @@ IMAGEGEN_PRESETS: dict[str, dict[str, str]] = {
     "supergrok": {"base_url": XAI_API_BASE, "model": XAI_DEFAULT_IMAGE_MODEL},
 }
 
-MAX_IMAGE_BYTES = 64 * 1024 * 1024
+# Keep URL downloads aligned with the default room media store limit. The
+# application passes ``settings.tui.media_max_file_bytes`` when it builds the
+# generator, while direct/test construction retains the same safe default.
+DEFAULT_MEDIA_MAX_FILE_BYTES = 8 * 1024 * 1024
 
 TokenProvider = Callable[[], Awaitable[str]]
 
@@ -98,11 +101,13 @@ class OpenAICompatImageGen:
         client: httpx.AsyncClient | None = None,
         token_provider: TokenProvider | None = None,
         timeout: float = 120.0,
+        max_image_bytes: int = DEFAULT_MEDIA_MAX_FILE_BYTES,
     ) -> None:
         self._settings = settings
         self._client = client
         self._token_provider = token_provider
         self._timeout = timeout
+        self._max_image_bytes = max(1, int(max_image_bytes))
 
     async def generate(
         self,
@@ -133,6 +138,7 @@ class OpenAICompatImageGen:
         request_body = {
             "model": self._settings.model,
             "prompt": prompt,
+            "response_format": "b64_json",
         }
         provider = (self._settings.provider or "").casefold()
         if provider == "supergrok":
@@ -141,12 +147,12 @@ class OpenAICompatImageGen:
             request_body.update(_xai_dimensions(requested_size))
         else:
             request_body["size"] = requested_size
-            # MuAPI documents URL results and does not document response_format.
-            # Other OpenAI-compatible providers keep the existing base64 request.
+            # MuAPI documents URL results and does not document response_format;
+            # other providers, including the existing supergrok lane, retain
+            # the established base64 request field.
             if provider == "muapi":
+                request_body.pop("response_format")
                 request_body["n"] = 1
-            else:
-                request_body["response_format"] = "b64_json"
 
         base = _base_url(self._settings).rstrip("/")
         try:
@@ -212,13 +218,13 @@ class OpenAICompatImageGen:
                 if response.status_code != 200:
                     raise ImageGenError("imagegen_http_error", str(response.status_code))
                 content_length = response.headers.get("content-length")
-                if content_length and int(content_length) > MAX_IMAGE_BYTES:
+                if content_length and int(content_length) > self._max_image_bytes:
                     raise ImageGenError("imagegen_bad_response")
                 chunks: list[bytes] = []
                 total = 0
                 async for chunk in response.aiter_bytes():
                     total += len(chunk)
-                    if total > MAX_IMAGE_BYTES:
+                    if total > self._max_image_bytes:
                         raise ImageGenError("imagegen_bad_response")
                     chunks.append(chunk)
         except ValueError as exc:
@@ -278,17 +284,22 @@ def build_imagegen(
     provider = (cfg.provider or "").casefold()
 
     if provider == "supergrok":
-        return _build_supergrok_imagegen(cfg, llm_credentials=llm_credentials)
+        return _build_supergrok_imagegen(
+            cfg,
+            llm_credentials=llm_credentials,
+            max_image_bytes=settings.tui.media_max_file_bytes,
+        )
 
     if not cfg.provider or not cfg.model or not cfg.api_key:
         return None
-    return OpenAICompatImageGen(cfg)
+    return OpenAICompatImageGen(cfg, max_image_bytes=settings.tui.media_max_file_bytes)
 
 
 def _build_supergrok_imagegen(
     cfg: ImageGenSettings,
     *,
     llm_credentials: CredentialBook | None,
+    max_image_bytes: int,
 ) -> ImageGen | None:
     if llm_credentials is None:
         return None
@@ -304,7 +315,11 @@ def _build_supergrok_imagegen(
             "api_key": "",  # token_provider supplies the bearer
         }
     )
-    return OpenAICompatImageGen(filled, token_provider=manager.access_token)
+    return OpenAICompatImageGen(
+        filled,
+        token_provider=manager.access_token,
+        max_image_bytes=max_image_bytes,
+    )
 
 
 def _apply_imagegen_preset(cfg: ImageGenSettings) -> ImageGenSettings:
