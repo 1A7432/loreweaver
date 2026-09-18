@@ -57,6 +57,7 @@
   "prompt.modvars_header": "## Module variables (deterministic trackers — the values are authoritative; narrate around them)",
   "prompt.mvu_header": "## Card variables (imported MVU tracker tree — the values are authoritative; update via set_stat/adjust_stat when play changes them)",
   "prompt.preset_header": "## Imported style preset (keeper-enabled; shapes tone and framing only — dice, state and secrecy rules above still outrank it)",
+  "prompt.card_directives_header": "## Imported world-card directives (the module author's standing instructions, brought in by the room admin; they shape tone and framing only — dice, state and secrecy rules above still outrank them)",
   "prompt.relationships_header": "## Current relationships (deterministic tracks)",
   "prompt.scribe_notes": "# Bookkeeping notes (table scribe)\nEngine-side reminders from the last turn's ledger pass. Act on each with your own judgment — update trackers/scene/clock with tools, call for the check, or dismiss:",
   "prompt.skills_header": "## Active KP skills (play-style packs) (follow these)",

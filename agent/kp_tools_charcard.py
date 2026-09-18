@@ -36,7 +36,7 @@ from core.character_rules import render_validation_notice, validate_sheet
 from core.charcard import PNG_SIGNATURE, CharacterCard, parse_card_bytes
 from core.documents import MODULE_POOL_ID, PLAYER_VIEWER
 from core.lorecard import Lorecard, looks_like_lorecard, parse_lorecard_bytes
-from core.module_brief import BRIEF_DOC_TYPE, brief_id, build_brief
+from core.module_brief import BRIEF_DOC_TYPE, DIRECTIVE_FIELDS, brief_id, build_brief
 from core.modvars import define_modvar
 from core.pregen_roster import pregen_add
 from core.rulepacks import load_rulepack
@@ -121,8 +121,10 @@ async def _register_png_avatar(services: Services, ctx: AgentCtx, host_path: Pat
 
 
 def _stripped_notice(i18n: I18n, world: WorldPayloads) -> str:
-    """The itemized what-was-stripped line for a character import; "" for a plain card."""
-    if not world.any:
+    """The itemized what-was-stripped line for a character import; "" for a plain card.
+    Machinery AND the card's standing directives count — a player must learn that the
+    card's system prompt did not follow the character into the room."""
+    if not world.any_stripped:
         return ""
     return i18n.t(
         "charcard.tools.import.stripped",
@@ -130,6 +132,7 @@ def _stripped_notice(i18n: I18n, world: WorldPayloads) -> str:
         vars=world.initvar_entries,
         ejs=world.ejs_blocks,
         secret=world.secret_entries,
+        directives=world.directives,
     )
 
 
@@ -307,6 +310,8 @@ class CharcardTools:
                         ejs=world.ejs_blocks,
                     )
                 )
+            if world.directives:
+                lines.append(i18n.t("charcard.tools.preview.directives_line", count=world.directives))
             return "\n".join(lines)
         except Exception as exc:
             return i18n.t("charcard.tools.preview.failed", error=str(exc))
@@ -431,6 +436,7 @@ class CharcardTools:
                     openings = tuple(str(entry) for entry in alt if isinstance(entry, str))
             brief = build_brief(card, openings)
             brief_line = ""
+            directives_line = ""
             if brief is not None:
                 await self._services.documents.put(
                     ctx.chat_key,
@@ -440,6 +446,15 @@ class CharcardTools:
                     source=f"card:{card.name}",
                 )
                 brief_line = i18n.t("charcard.tools.world.brief_line")
+                # The card's standing directives ride the Keeper prompt from here on
+                # (`agent.prompt_builder`); the receipt says so, by size, so the keeper
+                # knows the module now speaks in the prompt and can read it back.
+                head_text = str(brief.get(DIRECTIVE_FIELDS["head"], ""))
+                post_text = str(brief.get(DIRECTIVE_FIELDS["post_history"], ""))
+                if head_text or post_text:
+                    directives_line = i18n.t(
+                        "charcard.tools.world.directives_line", head=len(head_text), post=len(post_text)
+                    )
 
             # A native bundle (M14) additionally carries TYPED variable specs — the lossless
             # flavor of what an ST card can only ship as an [InitVar] tree. Keeper trust:
@@ -520,7 +535,17 @@ class CharcardTools:
                     titles=i18n.t("common.list_separator").join(skipped_titles[:5]),
                 )
             extra_lines = [
-                line for line in (pinned_line, specs_line, brief_line, pregen_line, cast_line, skipped_line) if line
+                line
+                for line in (
+                    pinned_line,
+                    specs_line,
+                    brief_line,
+                    directives_line,
+                    pregen_line,
+                    cast_line,
+                    skipped_line,
+                )
+                if line
             ]
             return "\n".join([result, *extra_lines])
         except CardImportRefused:
@@ -571,7 +596,7 @@ class CharcardTools:
                 names=i18n.t("common.list_separator").join(str(view.get("name", "")) for view in briefs),
             )
         lines = [i18n.t("charcard.tools.brief.header", name=str(chosen.get("name", "")))]
-        for field in ("description", "personality", "scenario", "examples", "notes"):
+        for field in ("description", "personality", "scenario", "examples", "notes", *DIRECTIVE_FIELDS.values()):
             value = str(chosen.get(field, "")).strip()
             if value:
                 lines.append(f"{i18n.t('charcard.tools.brief.label.' + field)}:\n{value}")

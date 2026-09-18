@@ -35,6 +35,12 @@ class CharacterCard:
     first_mes: str = ""
     mes_example: str = ""
     creator_notes: str = ""
+    # The card's own standing directives — V2 `system_prompt` / `post_history_instructions`,
+    # ST's per-card overrides of a preset's main and post-history prompts. Parsed here so
+    # the split can classify them: `core.card_split` blanks both on the character half,
+    # and `core.module_brief` carries them for a keeper world import.
+    system_prompt: str = ""
+    post_history_instructions: str = ""
     tags: list[str] = field(default_factory=list)
     character_book: list[dict] = field(default_factory=list)
     raw: dict = field(default_factory=dict)
@@ -204,6 +210,8 @@ def _normalize_card(raw: Any) -> CharacterCard:
         first_mes=_as_text(body.get("first_mes")),
         mes_example=_as_text(body.get("mes_example")),
         creator_notes=_as_text(body.get("creator_notes") or body.get("creator_notes_multilingual")),
+        system_prompt=_as_text(body.get("system_prompt")),
+        post_history_instructions=_as_text(body.get("post_history_instructions")),
         tags=[_as_text(tag) for tag in tags if _as_text(tag)],
         character_book=[entry for entry in entries if isinstance(entry, dict)],
         raw=raw,

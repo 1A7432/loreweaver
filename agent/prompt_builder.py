@@ -13,12 +13,14 @@ partly this way.
 So the assembly is now two explicit halves (see :class:`SystemPrompt`):
 
 - **stable head** — TRPG identity, system expertise, interaction style, the module
-  knowledge pool, the preset layer, the enabled skill bodies, and the M18 rolling
+  knowledge pool, the preset layer, the imported world card's head directives, the
+  enabled skill bodies, and the M18 rolling
   campaign summary (+ its keeper margin). These change when the ROOM's configuration
   changes (a module loads, a keeper enables a skill), or — for the summary — when a
   chronicle fold runs. This is the cacheable prefix.
 - **volatile tail** — world lore (retrieval-dependent), live game state, relationship
-  tracks, module variables, MVU leaves, scribe whispers, hook injections, and the rest
+  tracks, module variables, MVU leaves, the preset's and the world card's post-history
+  bands, scribe whispers, hook injections, and the rest
   of the M18 chronicle section (open threads + records recalled against this turn),
   which closes the tail.
 
@@ -92,8 +94,10 @@ from agent.history import DEFAULT_HISTORY_KEY, load_chain
 from agent.player_line import player_line_body
 from agent.services import Services
 from core.dice_engine import DiceRoller
+from core.documents import KEEPER_VIEWER
 from core.ejs_full import create_full_engine
-from core.ejs_lite import MacroContext
+from core.ejs_lite import MacroContext, substitute_macros
+from core.module_brief import BRIEF_DOC_TYPE, directive_bands
 from core.modvars import describe_modvars, load_modvars
 from core.mvu_compat import apply_set, flatten_leaves, load_mvu, save_mvu
 from core.preset import style_bands
@@ -277,6 +281,17 @@ async def build_system_prompt_parts(
     preset_bands = await _enabled_preset_bands(ctx, services, i18n)
     stable.append(preset_bands.get("head", ""))
 
+    # The imported world card's own standing directives (its `system_prompt` /
+    # `post_history_instructions`, carried on the keeper-only module brief), on the
+    # SAME two bands the preset uses: head text right after the preset's head band
+    # (still ahead of the skill bodies), post-history text right after the preset's
+    # post-history band below — the module's own standing command sits nearer
+    # generation than the room's generic style. Gated by the brief's existence,
+    # which only a keeper `.import … world` creates: a free-sandbox room, and a room
+    # whose player imported the same card as a PC, never receive them.
+    card_bands = await _world_card_directive_bands(ctx, services, i18n, variable_resolver, macros)
+    stable.append(card_bands.get("head", ""))
+
     skill_bodies = await _enabled_skill_bodies(ctx, services)
     if skill_bodies:
         stable.append(i18n.t("prompt.skills_header") + "\n\n" + "\n\n".join(skill_bodies))
@@ -333,6 +348,7 @@ async def build_system_prompt_parts(
     # (whispers, hook injections, the chronicle's recalled records) — standing
     # directives before per-turn ones is the recency order everything here follows.
     volatile.append(preset_bands.get("post_history", ""))
+    volatile.append(card_bands.get("post_history", ""))
 
     # This turn's own direction goes LAST, keeping recency where it matters most.
     # Scribe whispers (agent.scribe): keeper-side bookkeeping reminders from the
@@ -499,6 +515,34 @@ async def _enabled_preset_bands(ctx: AgentCtx, services: Services, i18n) -> dict
         band: header + "\n\n" + text if text else ""
         for band, text in style_bands(preset).items()
     }
+
+
+async def _world_card_directive_bands(
+    ctx: AgentCtx, services: Services, i18n, resolve, macros: MacroContext
+) -> dict[str, str]:
+    """The imported world card's directive layer — `core.module_brief.directive_bands`
+    over every brief in the room, each non-empty band rendered with the provenance
+    header. Empty when no world card was imported or none carried directives.
+
+    The ``head`` band is folded VERBATIM: it rides the stable head, and `prepare_directive`
+    already did the static work at import (EJS out, ``{{char}}`` bound), so it stays
+    byte-identical across turns. The ``post_history`` band rides the volatile tail and
+    gets the same per-turn macro pass as lore — ``{{user}}`` = the caller's active PC,
+    ``{{getvar}}`` through the keeper-lane resolver, ``{{roll}}`` on real dice, game-clock
+    ``{{time}}``. Best-effort: an unreadable brief contributes nothing, never a failed turn.
+    """
+    try:
+        pairs = await services.documents.list_views(ctx.chat_key, BRIEF_DOC_TYPE, KEEPER_VIEWER)
+    except Exception:  # noqa: BLE001 — a directive layer is never worth a failed turn
+        return {}
+    bands = directive_bands(view for _doc, view in pairs if view)
+    header = i18n.t("prompt.card_directives_header")
+    rendered: dict[str, str] = {}
+    if bands.get("head"):
+        rendered["head"] = header + "\n\n" + bands["head"]
+    if bands.get("post_history"):
+        rendered["post_history"] = header + "\n\n" + substitute_macros(bands["post_history"], resolve, macros=macros)
+    return rendered
 
 
 async def _enabled_skill_bodies(ctx: AgentCtx, services: Services) -> list[str]:

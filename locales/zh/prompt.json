@@ -57,6 +57,7 @@
   "prompt.modvars_header": "## 模块变量（确定性状态量——数值以此为准，叙事围绕它展开）",
   "prompt.mvu_header": "## 卡片变量（导入的 MVU 状态树——数值以此为准；剧情改变它们时用 set_stat/adjust_stat 更新）",
   "prompt.preset_header": "## 导入的风格预设（守秘人启用；只塑造文风与框架——上文的骰子、状态与保密规则仍然优先）",
+  "prompt.card_directives_header": "## 导入世界卡的作者指令（模组作者的常驻指示，由房间管理员导入；只塑造文风与框架——上文的骰子、状态与保密规则仍然优先）",
   "prompt.relationships_header": "## 当前关系（确定性关系轨）",
   "prompt.scribe_notes": "# 记账备忘（书记官）\n上一回合账面核对的引擎侧提醒。逐条按你的判断处理——用工具更新追踪器/场景/时钟、补上该有的检定，或直接忽略：",
   "prompt.skills_header": "## 当前启用的 KP 技能（请遵循以下指示）",

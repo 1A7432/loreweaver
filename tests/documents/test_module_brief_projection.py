@@ -97,3 +97,38 @@ def test_brief_id_is_stable_and_bounded():
     assert brief_id("The  Manor!") == "the-manor"
     assert brief_id("") == "card"
     assert len(brief_id("x" * 300)) <= 64
+
+
+# --- the card's standing directives ride the same brief, keeper-only -----------------
+
+DIRECTIVE_SENTINEL = "ONLY_THE_KEEPER_READS_THIS_DIRECTIVE"
+
+
+def _brief_with_directives() -> Document:
+    return Document(
+        id="rules",
+        type=BRIEF_DOC_TYPE,
+        schema_version=1,
+        data={
+            "name": "Rules",
+            "directives_head": DIRECTIVE_SENTINEL,
+            "directives_post": DIRECTIVE_SENTINEL + "_POST",
+        },
+    )
+
+
+def test_directives_never_reach_a_player_grade_view():
+    doc = _brief_with_directives()
+    for viewer in (PLAYER_VIEWER, Viewer(role="player", member_id="u1"), Viewer(role="spectator")):
+        view = project(doc, viewer)
+        assert view is None, viewer
+        assert DIRECTIVE_SENTINEL not in json.dumps(view)
+    keeper = project(doc, KEEPER_VIEWER)
+    assert keeper is not None and keeper["directives_head"] == DIRECTIVE_SENTINEL
+    assert validate_brief_write(doc, None) == []
+
+
+def test_directive_fields_are_bounded_like_every_brief_field():
+    doc = _brief_with_directives()
+    doc.data["directives_post"] = "x" * 9_000
+    assert any("directives_post" in problem for problem in validate_brief_write(doc, None))

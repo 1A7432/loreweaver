@@ -10,7 +10,12 @@ of carrying the fusion forward:
   for any player to self-import;
 - the WORLD payloads — hook scripts, variable declarations, executable templates — which
   only the room's keeper may bring in (``.import <file> world``), because they reshape
-  play for everyone at the table.
+  play for everyone at the table;
+- the card's standing DIRECTIVES — ``system_prompt`` / ``post_history_instructions``,
+  ST's per-card prompt overrides. Not machinery (a plain persona card routinely carries
+  a system prompt, so they never make a card a world card), but standing Keeper-prompt
+  text all the same: the character half drops them, and only a keeper world import
+  folds them (``core.module_brief``).
 
 Detection and stripping are pure functions with no model involvement (iron rule #1), so
 the player-path guarantee is structural: a stripped card CANNOT install room hooks, seed
@@ -53,10 +58,21 @@ class WorldPayloads:
     # Keeper-only (`secret: true`) worldbook entries — a native bundle (M14) can carry
     # them; stock ST cards never do. Keeper-only lore IS world machinery.
     secret_entries: int = 0
+    # The card's standing directives (`system_prompt` / `post_history_instructions`, 0-2).
+    # Deliberately OUTSIDE `any`: they are prompt text, not machinery, and `core.pack` keys
+    # a card's kind on `any` — a persona card with a system prompt is still a character card.
+    directives: int = 0
 
     @property
     def any(self) -> bool:
+        """Whether the card carries world MACHINERY (what makes it a world card)."""
         return bool(self.hooks or self.initvar_entries or self.ejs_blocks or self.secret_entries)
+
+    @property
+    def any_stripped(self) -> bool:
+        """Whether a character import had anything at all to leave out — machinery or
+        directives — i.e. whether the import receipt owes the importer an itemized line."""
+        return self.any or bool(self.directives)
 
 
 def card_hook_codes(card: CharacterCard) -> list[str]:
@@ -120,9 +136,10 @@ def split_card(card: CharacterCard) -> tuple[CharacterCard, WorldPayloads]:
 
     The character half is a new :class:`CharacterCard`: prose fields with EJS spans
     stripped, ``character_book`` minus variable-declaration entries (their contents
-    EJS-stripped too), and ``raw`` with the hooks extension removed. The original card
-    is never mutated. The world payloads are counts only — a keeper who wants that half
-    imports the ORIGINAL card through the world path, which reads it in full.
+    EJS-stripped too), the two directive fields blanked, and ``raw`` with the hooks
+    extension and the directive keys removed. The original card is never mutated. The
+    world payloads are counts only — a keeper who wants that half imports the ORIGINAL
+    card through the world path, which reads it in full.
     """
     ejs_blocks = 0
 
@@ -152,6 +169,7 @@ def split_card(card: CharacterCard) -> tuple[CharacterCard, WorldPayloads]:
         entries.append(entry)
 
     hooks = card_hook_codes(card)
+    directives = sum(1 for text in (card.system_prompt, card.post_history_instructions) if text.strip())
     character = replace(
         card,
         description=_clean(card.description),
@@ -160,21 +178,32 @@ def split_card(card: CharacterCard) -> tuple[CharacterCard, WorldPayloads]:
         first_mes=_clean(card.first_mes),
         mes_example=_clean(card.mes_example),
         creator_notes=_clean(card.creator_notes),
+        # Standing directives never ride the character half: a player import must not
+        # push standing text into the Keeper prompt (see the module docstring).
+        system_prompt="",
+        post_history_instructions="",
         character_book=entries,
-        raw=_raw_without_hooks(card.raw) if hooks else card.raw,
+        raw=_raw_without_world_text(card.raw) if hooks or directives else card.raw,
     )
     return character, WorldPayloads(
         hooks=len(hooks),
         initvar_entries=initvar_entries,
         ejs_blocks=ejs_blocks,
         secret_entries=secret_entries,
+        directives=directives,
     )
 
 
-def _raw_without_hooks(raw: Any) -> Any:
-    """A shallow-per-level copy of `raw` with hook scripts dropped: the native
-    top-level ``hooks`` list, plus ``extensions.loreweaver_hooks`` in both the
-    v2/v3 ``data.extensions`` location and the root-level ``extensions``."""
+# The card-level directive keys, in both the v2/v3 ``data`` body and a v1 root.
+DIRECTIVE_KEYS: tuple[str, ...] = ("system_prompt", "post_history_instructions")
+
+
+def _raw_without_world_text(raw: Any) -> Any:
+    """A shallow-per-level copy of `raw` with hook scripts and the directive keys
+    dropped: the native top-level ``hooks`` list, ``extensions.loreweaver_hooks`` in both
+    the v2/v3 ``data.extensions`` location and the root-level ``extensions``, and
+    :data:`DIRECTIVE_KEYS` wherever the body lives — so nothing downstream can read a
+    directive back off the character half's raw document."""
     if not isinstance(raw, dict):
         return raw
     clean = dict(raw)
@@ -187,8 +216,10 @@ def _raw_without_hooks(raw: Any) -> Any:
         if isinstance(extensions, dict) and HOOKS_EXTENSION_KEY in extensions:
             extensions = {key: value for key, value in extensions.items() if key != HOOKS_EXTENSION_KEY}
             holder = {**holder, "extensions": extensions}
-            if holder_key is None:
-                clean = holder
-            else:
-                clean[holder_key] = holder
+        if any(key in holder for key in DIRECTIVE_KEYS):
+            holder = {key: value for key, value in holder.items() if key not in DIRECTIVE_KEYS}
+        if holder_key is None:
+            clean = holder
+        else:
+            clean[holder_key] = holder
     return clean

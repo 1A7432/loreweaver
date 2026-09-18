@@ -184,11 +184,11 @@ host's discovery dirs, so a world can carry base + patch together.
 Loreweaver already imports SillyTavern cards (`core/charcard.py` →
 `char_from_persona.py` → the `import_character` KP tool). We formalize this as
 the card-plugin contract: a `chara_card_v2` / `chara_card_v3` JSON (or PNG with
-the `chara` tEXt chunk). Fields consumed: `name, description, personality,
-scenario, first_mes, mes_example, system_prompt, post_history_instructions,
-alternate_greetings, tags, creator, character_version, character_book,
-extensions`. Unknown fields are ignored, not rejected — forward-compatible with
-V3 additions.
+the `chara` tEXt chunk). Fields consumed on every path: `name, description,
+personality, scenario, first_mes, mes_example, creator_notes, tags,
+character_book`; on the keeper's world path only (below): `alternate_greetings`,
+`extensions.loreweaver_hooks`, `system_prompt`, `post_history_instructions`.
+Unknown fields are ignored, not rejected — forward-compatible with V3 additions.
 
 **The card split (拆卡).** An ST "heavy card" fuses two artifacts that Loreweaver keeps
 separate: the CHARACTER (persona, memory, abilities, a sheet) and the WORLD (hook scripts,
@@ -209,6 +209,20 @@ decomposes every card deterministically (`core.card_split`):
   claims are exclusive, releases restore the pristine sheet). One keeper import ships a
   module's world AND its cast; an AI-played companion remains a separate
   `.import <file> companion`.
+- **Card directives** (`system_prompt` / `post_history_instructions` — ST's per-card
+  prompt overrides, where a heavy card's "jailbreak" usually lives) are standing
+  Keeper-prompt text, so they follow the machinery boundary: a character import blanks
+  them (the receipt says so), a world import copies them onto the keeper-only module
+  brief and folds them on the two bands a preset uses — the system prompt into the
+  stable head right after the preset's head band, the post-history text late in the
+  per-turn state message right after the preset's post-history band — under a
+  provenance header that keeps dice, state and secrecy rules above them. The copy is
+  deterministic (`core.module_brief.prepare_directive`): EJS removed, `{{original}}`
+  dropped (there is no preset entry to splice into), `{{char}}` bound to the card name.
+  The post-history band gets the per-turn macro pass (`{{user}}`, `{{getvar}}`,
+  `{{roll}}`, `{{time}}`); the head band stays byte-stable for the cache. Directives are
+  not machinery: a persona card with a system prompt is still a `kind: character` card
+  in a pack; the `preview_card` tool and the `.import` receipt name the count either way.
 
 The boundary is the room's trust boundary, not a capability cut: "author freedom over
 gatekeeping" is the *operator's* stance about the operator's own box, and the keeper is the
