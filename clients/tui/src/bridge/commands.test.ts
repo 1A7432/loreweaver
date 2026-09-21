@@ -1,6 +1,11 @@
+import { mkdtemp } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { describe, expect, test } from "bun:test"
 import { isBridgeCommand, looksLikeCommand, parseBridgeCommand, runBridgeCommand, shouldForwardInbound } from "./commands"
 import { LastKeeperError } from "./keyring"
+import { IdentityStore } from "./qqbot/identity"
+import { tt } from "../i18n"
 
 describe("bridge commands", () => {
   test(".bridge is recognised with ., /, and fullwidth prefix, and never looks like engine input", () => {
@@ -61,6 +66,11 @@ describe("bridge commands", () => {
     expect(await runBridgeCommand(".bridge kick 8", true, view(), effects)).toContain("8")
     expect(state.kicked).toEqual(["8"])
     expect(await runBridgeCommand(".bridge status", false, view(), effects)).toContain("Only a room admin")
+    expect(parseBridgeCommand(".bridge claim ABCDEFGH")).toEqual({ name: "claim", code: "ABCDEFGH" })
+    expect(parseBridgeCommand(".bridge name 阿绫")).toEqual({ name: "name", display: "阿绫" })
+    expect(parseBridgeCommand(".bridge deferred")).toEqual({ name: "deferred" })
+    expect(await runBridgeCommand(".bridge claim ABCDEFGH", false, view(), effects)).toContain("Only a room admin")
+    expect(await runBridgeCommand(".bridge deferred", true, view(), effects)).toContain("Unknown")
   })
 
   test("a last_keeper refusal is surfaced, never worked around", async () => {
@@ -80,5 +90,135 @@ describe("bridge commands", () => {
     )
     expect(reply).toContain("last keeper key")
     expect(reply).not.toContain("cannot delete")
+  })
+
+  test(".bridge name before/after a character claim; collision returns the minted name", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lw-cmd-id-"))
+    const identity = await IdentityStore.load(join(dir, "g.identity.json"), "G")
+    const taken = new Set<string>(["路人"])
+    const remints: Array<{ userId: string; display: string }> = []
+    const closed: string[] = []
+    const view = {
+      locale: "zh" as const,
+      groupId: "G",
+      mode: "mention" as const,
+      busyNotice: true,
+      admins: [] as string[],
+      members: [],
+      channel: "group" as const,
+      memberOpenid: "M2",
+      seat: "M2",
+    }
+    const effects = {
+      setMode() {},
+      setBusyNotice() {},
+      addAdmin() {},
+      removeAdmin() {},
+      kick: async () => {},
+      identity,
+      hasCharacter: (seat: string) => seat === "M-locked",
+      remintSeat: async (userId: string, displayName: string) => {
+        remints.push({ userId, display: displayName })
+        const name = taken.has(displayName) && displayName !== "first" ? `qq:${userId}` : displayName
+        taken.add(name)
+        return { previousKey: "old-key", name }
+      },
+      onSeatReminted: (_userId: string, previousKey: string) => {
+        closed.push(previousKey)
+      },
+    }
+    const changed = await runBridgeCommand(".bridge name 阿绫", false, view, effects)
+    expect(changed).toBe(tt("zh", "bridge.qqbot.nameChanged", { name: "阿绫" }))
+    expect(identity.chosenName("M2")).toBe("阿绫")
+    expect(closed).toEqual(["old-key"])
+
+    const collide = await runBridgeCommand(".bridge name 路人", false, view, effects)
+    expect(collide).toBe(tt("zh", "bridge.qqbot.nameChanged", { name: "qq:M2" }))
+
+    const locked = await runBridgeCommand(
+      ".bridge name 新名",
+      false,
+      { ...view, memberOpenid: "M-locked", seat: "M-locked" },
+      effects,
+    )
+    expect(locked).toBe(tt("zh", "bridge.qqbot.nameLocked"))
+  })
+
+  test(".bridge deferred reports queue length and oldest age", async () => {
+    const view = {
+      locale: "en" as const,
+      groupId: "99",
+      mode: "mention" as const,
+      busyNotice: true,
+      admins: ["1"],
+      members: [],
+      deferredSummary: { length: 3, oldestAgeMs: 45_000 },
+    }
+    const effects = {
+      setMode() {},
+      setBusyNotice() {},
+      addAdmin() {},
+      removeAdmin() {},
+      kick: async () => {},
+    }
+    expect(await runBridgeCommand(".bridge deferred", true, view, effects)).toBe(
+      tt("en", "bridge.qqbot.deferred", { count: 3, seconds: 45 }),
+    )
+    expect(
+      await runBridgeCommand(".bridge deferred", true, { ...view, deferredSummary: { length: 0 } }, effects),
+    ).toBe(tt("en", "bridge.qqbot.deferredEmpty"))
+  })
+
+  test("C2C claim issues a link privately; group claim completes", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lw-cmd-claim-"))
+    const identity = await IdentityStore.load(join(dir, "g.identity.json"), "G")
+    const admins: string[] = []
+    const remints: string[] = []
+    const effects = {
+      setMode() {},
+      setBusyNotice() {},
+      addAdmin: (id: string) => {
+        if (!admins.includes(id)) admins.push(id)
+      },
+      removeAdmin() {},
+      kick: async () => {},
+      identity,
+      remintSeat: async (userId: string, displayName: string) => {
+        remints.push(userId)
+        return { name: displayName }
+      },
+    }
+    const code = await identity.issueClaimCode()
+    const c2c = await runBridgeCommand(".bridge claim " + code, false, {
+      locale: "en",
+      groupId: "G",
+      mode: "mention",
+      busyNotice: true,
+      admins,
+      members: [],
+      channel: "private",
+      userOpenid: "U1",
+    }, effects)
+    expect(c2c).toContain(".bridge claim")
+    expect(admins).toEqual([])
+    const issued = identity.pending[0]
+    expect(issued).toBeDefined()
+
+    const link = (c2c ?? "").match(/claim\s+([A-Z2-9]{6})/i)?.[1]
+    expect(link).toBeTruthy()
+    const group = await runBridgeCommand(`.bridge claim ${link}`, false, {
+      locale: "en",
+      groupId: "G",
+      mode: "mention",
+      busyNotice: true,
+      admins,
+      members: [],
+      channel: "group",
+      memberOpenid: "M1",
+      username: "阿绫",
+    }, effects)
+    expect(group).toBe(tt("en", "bridge.qqbot.claimDone"))
+    expect(admins).toEqual(["M1"])
+    expect(remints).toEqual(["M1"])
   })
 })

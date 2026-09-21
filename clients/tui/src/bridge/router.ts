@@ -13,12 +13,15 @@ import { tt } from "../i18n"
 import { ChoicesWindow } from "./choices"
 import {
   isBridgeCommand,
+  parseBridgeCommand,
   runBridgeCommand,
   shouldForwardInbound,
   type BridgeCommandEffects,
+  type DeferredSummary,
 } from "./commands"
 import type { GroupMode } from "./config"
 import type { Keyring } from "./keyring"
+import type { IdentityStore } from "./qqbot/identity"
 import type { LinkReadyReason } from "./linkPool"
 import { observerSeenKey, type PostedIds } from "./postedIds"
 import { diceLine } from "./render/dice"
@@ -123,6 +126,12 @@ export interface BridgeRouterOptions {
   setTimeoutFn?: typeof setTimeout
   clearTimeoutFn?: typeof clearTimeout
   holdMs?: number
+  /** QQ official-bot identity. Unset on the OneBot path. */
+  identity?: IdentityStore
+  hasCharacter?: (seat: string) => boolean
+  deferredSummary?: () => DeferredSummary
+  /** Old seat key after `.bridge name` remint; WS4 closes the previous link. */
+  onSeatReminted?: (userId: string, previousKey: string) => void
 }
 
 /**
@@ -259,25 +268,63 @@ export class BridgeRouter {
       channel: InboundChannel
       mentioned?: boolean
       isAdmin: boolean
+      userOpenid?: string
+      memberOpenid?: string
+      unionOpenid?: string
+      username?: string
     },
     onForward?: () => Promise<void>,
   ): Promise<boolean> {
     this.markChannel(msg.userId, msg.channel)
+    const userOpenid = msg.userOpenid ?? (msg.channel === "private" ? msg.userId : undefined)
+    const memberOpenid =
+      msg.memberOpenid ?? (msg.channel === "group" ? msg.userId : this.options.identity?.seatForC2C(userOpenid ?? ""))
+    const unionOpenid = msg.unionOpenid?.trim() || undefined
+
+    let unionBound: { memberOpenid: string; userOpenid: string } | undefined
+    if (this.options.identity && msg.channel === "group" && memberOpenid && unionOpenid) {
+      unionBound = await this.options.identity.tryUnionLink({ memberOpenid, unionOpenid })
+    }
+
     const reply = (text: string) => {
       if (msg.channel === "private" || msg.isAdmin) this.emit({ dest: "private", userId: msg.userId, text })
       else this.emit({ dest: "reply", userId: msg.userId, text })
     }
 
     if (isBridgeCommand(msg.text)) {
-      if (!msg.isAdmin) {
+      const parsed = parseBridgeCommand(msg.text)
+      const isClaim = parsed?.name === "claim"
+      const isName = parsed?.name === "name" && Boolean(this.options.identity)
+      if (!msg.isAdmin && !isClaim && !isName) {
         const last = this.lastNotAdmin.get(msg.userId)
         if (last !== undefined && this.now() - last < NOT_ADMIN_COOLDOWN_MS) return false
         this.lastNotAdmin.set(msg.userId, this.now())
       }
-      const text = await runBridgeCommand(msg.text, msg.isAdmin, this.commandView(), this.commandEffects())
-      if (text) reply(text)
+      const text = await runBridgeCommand(
+        msg.text,
+        msg.isAdmin,
+        this.commandView({
+          channel: msg.channel,
+          seat: memberOpenid ?? msg.userId,
+          userOpenid,
+          memberOpenid,
+          unionOpenid,
+          username: msg.username,
+        }),
+        this.commandEffects(),
+      )
+      if (text) {
+        if (isClaim) {
+          if (msg.channel === "private") this.emit({ dest: "private", userId: msg.userId, text })
+          else this.emit({ dest: "reply", userId: msg.userId, text })
+        } else {
+          reply(text)
+        }
+      }
       return false
     }
+
+    if (unionBound) await this.promoteBoundAdmin(unionBound.memberOpenid, msg.username)
 
     const choice = this.choices.match(msg.text, this.now())
     if (choice.kind === "hit") {
@@ -314,7 +361,16 @@ export class BridgeRouter {
     return this.lastChannel.get(userId)
   }
 
-  private commandView() {
+  private commandView(
+    extra: {
+      channel?: InboundChannel
+      seat?: string
+      userOpenid?: string
+      memberOpenid?: string
+      unionOpenid?: string
+      username?: string
+    } = {},
+  ) {
     const members = this.options.keyring?.list().map((row) => ({
       userId: row.userId,
       keyId: row.key_id,
@@ -329,6 +385,8 @@ export class BridgeRouter {
       admins: this.admins,
       members,
       lateHolds: this.duplicateHolds,
+      deferredSummary: this.options.deferredSummary?.(),
+      ...extra,
     }
   }
 
@@ -371,6 +429,37 @@ export class BridgeRouter {
           if (slot.userId === userId || memberKey === entry.key) this.detachLink(memberKey)
         }
       },
+      identity: this.options.identity,
+      hasCharacter: this.options.hasCharacter,
+      remintSeat: async (userId, displayName) => {
+        const keyring = this.options.keyring
+        if (!keyring) return { name: displayName }
+        const previous = keyring.get(userId)
+        const { previous: remintedPrev, entry } = await keyring.remint(userId, displayName)
+        const previousKey = (remintedPrev ?? previous)?.key
+        return { previousKey: previousKey && previousKey !== entry.key ? previousKey : undefined, name: entry.name ?? displayName }
+      },
+      onSeatReminted: this.options.onSeatReminted,
+    }
+  }
+
+  private async promoteBoundAdmin(memberOpenid: string, username?: string): Promise<void> {
+    if (!this.admins.includes(memberOpenid)) {
+      this.admins.push(memberOpenid)
+      this.persistSettings()
+    }
+    const keyring = this.options.keyring
+    if (!keyring) return
+    const identity = this.options.identity
+    const display = identity?.displayNameFor(memberOpenid, { username }, this.locale()) ?? username
+    const previous = keyring.get(memberOpenid)
+    try {
+      const entry = await keyring.ensure(memberOpenid, display)
+      const previousKey = previous?.key
+      if (previousKey && previousKey !== entry.key) this.options.onSeatReminted?.(memberOpenid, previousKey)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      this.options.onLog?.(`qqbot.claim.mint_failed ${detail}`)
     }
   }
 

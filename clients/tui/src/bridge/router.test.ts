@@ -14,8 +14,10 @@ import {
 import { CHOICES_TTL_MS } from "./choices"
 import { Keyring } from "./keyring"
 import { PostedIds } from "./postedIds"
-import { ADMIN_HOLD_MS, BridgeRouter, STATE_UNGATE_MS, type BridgeLink, type OutboundIntent } from "./router"
+import { ADMIN_HOLD_MS, BridgeRouter, NOT_ADMIN_COOLDOWN_MS, STATE_UNGATE_MS, type BridgeLink, type OutboundIntent } from "./router"
 import { loadGroupSettings, settingsPath } from "./settings"
+import { IdentityStore } from "./qqbot/identity"
+import { tt } from "../i18n"
 
 class FakeLink implements BridgeLink {
   sent: ClientFrame[] = []
@@ -559,5 +561,145 @@ describe("router — choices, commands, queued input", () => {
     const loaded = await loadGroupSettings(path, { admins: [], mode: "mention", busyNotice: true })
     expect(loaded.admins).toContain("7")
     expect(loaded.mode).toBe("all")
+  })
+
+  test("claim bypasses the admin gate and cooldown; other verbs stay gated", async () => {
+    const clock = new ManualClock()
+    const dir = await mkdtemp(join(tmpdir(), "lw-router-claim-"))
+    const identity = await IdentityStore.load(join(dir, "g.identity.json"), "99", { now: clock.now })
+    const { router, intents } = await makeRouter(clock, { identity, locale: "en" })
+    const player = new FakeLink()
+    router.attachLink("player", "p-key", player, "M1")
+    player.push(MANIFEST)
+
+    const code = await identity.issueClaimCode()
+    await router.handleInbound({
+      userId: "U1",
+      memberKey: "p-key",
+      text: `.bridge claim ${code}`,
+      channel: "private",
+      isAdmin: false,
+      userOpenid: "U1",
+    })
+    expect(player.sent).toEqual([])
+    expect(intents.some((item) => item.dest === "private" && item.text.includes(".bridge claim"))).toBe(true)
+    const link = intents.find((item) => item.dest === "private")?.text.match(/claim\s+([A-Z2-9]{6})/i)?.[1]
+    expect(link).toBeTruthy()
+
+    intents.length = 0
+    await router.handleInbound({
+      userId: "M1",
+      memberKey: "p-key",
+      text: `.bridge claim ${link}`,
+      channel: "group",
+      isAdmin: false,
+      memberOpenid: "M1",
+    })
+    expect(intents).toEqual([
+      { dest: "reply", userId: "M1", text: tt("en", "bridge.qqbot.claimDone") },
+    ])
+    expect(router.adminIds).toContain("M1")
+
+    intents.length = 0
+    await router.handleInbound({
+      userId: "M-other",
+      memberKey: "p-key",
+      text: ".bridge status",
+      channel: "group",
+      isAdmin: false,
+    })
+    expect(intents.some((item) => item.text.includes("Only a room admin"))).toBe(true)
+    intents.length = 0
+    clock.advance(NOT_ADMIN_COOLDOWN_MS - 1)
+    await router.handleInbound({
+      userId: "M-other",
+      memberKey: "p-key",
+      text: ".bridge status",
+      channel: "group",
+      isAdmin: false,
+    })
+    expect(intents).toEqual([])
+
+    intents.length = 0
+    await router.handleInbound({
+      userId: "U-wrong",
+      memberKey: "p-key",
+      text: ".bridge claim WRONGWRG",
+      channel: "private",
+      isAdmin: false,
+      userOpenid: "U-wrong",
+    })
+    expect(intents[0]).toMatchObject({ dest: "private", text: tt("en", "bridge.qqbot.claimRejected") })
+    intents.length = 0
+    await router.handleInbound({
+      userId: "U-wrong",
+      memberKey: "p-key",
+      text: ".bridge claim WRONGWRG",
+      channel: "private",
+      isAdmin: false,
+      userOpenid: "U-wrong",
+    })
+    expect(intents).toEqual([])
+  })
+
+  test("unbound C2C .r 1d6 never reaches the router: no seat, no forward, throttled log", async () => {
+    const clock = new ManualClock()
+    const dir = await mkdtemp(join(tmpdir(), "lw-router-c2c-"))
+    const logs: string[] = []
+    const identity = await IdentityStore.load(join(dir, "g.identity.json"), "99", {
+      now: clock.now,
+      onLog: (line) => logs.push(line),
+    })
+    const { router, intents } = await makeRouter(clock, { identity, locale: "en" })
+    const player = new FakeLink()
+    router.attachLink("player", "p-key", player, "M1")
+    player.push(MANIFEST)
+
+    async function inboundC2C(userOpenid: string, text: string) {
+      const action = identity.acceptC2CInbound(userOpenid, text)
+      if (action === "ignore") return
+      const seat = action === "forward" ? identity.seatForC2C(userOpenid) : undefined
+      await router.handleInbound({
+        userId: seat ?? userOpenid,
+        memberKey: "p-key",
+        text,
+        channel: "private",
+        isAdmin: Boolean(seat && router.adminIds.includes(seat)),
+        userOpenid,
+      })
+    }
+
+    await inboundC2C("Ux", ".r 1d6")
+    expect(player.sent).toEqual([])
+    expect(intents).toEqual([])
+    expect(logs.filter((line) => line === "qqbot.c2c.unbound")).toEqual(["qqbot.c2c.unbound"])
+    await inboundC2C("Ux", ".r 1d6")
+    expect(logs.filter((line) => line === "qqbot.c2c.unbound")).toHaveLength(1)
+  })
+
+  test(".bridge name from a non-admin seat remints and does not trip the cooldown", async () => {
+    const clock = new ManualClock()
+    const dir = await mkdtemp(join(tmpdir(), "lw-router-name-"))
+    const identity = await IdentityStore.load(join(dir, "g.identity.json"), "99", { now: clock.now })
+    const reminted: string[] = []
+    const { router, intents } = await makeRouter(clock, {
+      identity,
+      locale: "zh",
+      hasCharacter: () => false,
+      onSeatReminted: (_id, key) => reminted.push(key),
+    })
+    const player = new FakeLink()
+    router.attachLink("player", "p-key", player, "M1")
+    player.push(MANIFEST)
+    await router.handleInbound({
+      userId: "M1",
+      memberKey: "p-key",
+      text: ".bridge name 阿绫",
+      channel: "group",
+      isAdmin: false,
+      memberOpenid: "M1",
+    })
+    expect(intents[0]?.text).toBe(tt("zh", "bridge.qqbot.nameChanged", { name: "阿绫" }))
+    expect(identity.chosenName("M1")).toBe("阿绫")
   })
 })

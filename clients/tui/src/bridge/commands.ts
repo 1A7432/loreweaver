@@ -1,6 +1,7 @@
 import { tt, type MessageKey } from "../i18n"
 import type { GroupMode } from "./config"
-import { LastKeeperError, ObserverProtectedError } from "./keyring"
+import { LastKeeperError, ObserverProtectedError, keyNameFromDisplay } from "./keyring"
+import type { IdentityStore } from "./qqbot/identity"
 
 const BRIDGE_RE = /^\s*[./。]bridge(?:\s+(.*))?$/i
 
@@ -36,6 +37,9 @@ export type ParsedBridgeCommand =
   | { name: "admin"; op: "add" | "remove"; userId: string }
   | { name: "mode"; mode: GroupMode }
   | { name: "notice"; on: boolean }
+  | { name: "claim"; code: string }
+  | { name: "name"; display: string }
+  | { name: "deferred" }
   | { name: "usage"; key: MessageKey }
   | { name: "unknown" }
 
@@ -69,7 +73,15 @@ export function parseBridgeCommand(text: string): ParsedBridgeCommand | undefine
     if (flag !== "on" && flag !== "off") return { name: "usage", key: "bridge.usage.notice" }
     return { name: "notice", on: flag === "on" }
   }
+  if (verb === "claim") return { name: "claim", code: rest.join("").trim() }
+  if (verb === "name") return { name: "name", display: args.slice(head.length).trim() }
+  if (verb === "deferred") return { name: "deferred" }
   return { name: "unknown" }
+}
+
+export interface DeferredSummary {
+  length: number
+  oldestAgeMs?: number
 }
 
 export interface BridgeCommandView {
@@ -80,6 +92,13 @@ export interface BridgeCommandView {
   admins: readonly string[]
   members: ReadonlyArray<{ userId: string; keyId: string; role: string; name?: string }>
   lateHolds?: number
+  deferredSummary?: DeferredSummary
+  channel?: "group" | "private"
+  seat?: string
+  userOpenid?: string
+  memberOpenid?: string
+  unionOpenid?: string
+  username?: string
 }
 
 export interface BridgeCommandEffects {
@@ -88,6 +107,10 @@ export interface BridgeCommandEffects {
   addAdmin(userId: string): void
   removeAdmin(userId: string): void
   kick(userId: string): Promise<void>
+  identity?: IdentityStore
+  hasCharacter?: (seat: string) => boolean
+  remintSeat?: (userId: string, displayName: string) => Promise<{ previousKey?: string; name: string }>
+  onSeatReminted?: (userId: string, previousKey: string) => void
 }
 
 function msg(locale: string | undefined, key: MessageKey, vars?: Record<string, string | number>): string {
@@ -95,8 +118,9 @@ function msg(locale: string | undefined, key: MessageKey, vars?: Record<string, 
 }
 
 /**
- * Admin-only `.bridge` commands. Never forwarded to the engine: the caller must
- * intercept `isBridgeCommand` before `input`. Non-admins get `bridge.notAdmin`.
+ * Admin-only `.bridge` commands, plus qqbot `claim` (gate-exempt) and `name`
+ * (any seat, only when an IdentityStore is wired). Never forwarded to the
+ * engine: the caller must intercept `isBridgeCommand` before `input`.
  */
 export async function runBridgeCommand(
   text: string,
@@ -106,6 +130,14 @@ export async function runBridgeCommand(
 ): Promise<string | undefined> {
   const parsed = parseBridgeCommand(text)
   if (!parsed) return undefined
+  if (parsed.name === "claim" && effects.identity) return runClaim(parsed, view, effects)
+  if (parsed.name === "name") {
+    if (!effects.identity) {
+      if (!isAdmin) return msg(view.locale, "bridge.notAdmin")
+      return msg(view.locale, "bridge.unknown")
+    }
+    return runName(parsed, view, effects)
+  }
   if (!isAdmin) return msg(view.locale, "bridge.notAdmin")
   switch (parsed.name) {
     case "unknown":
@@ -155,5 +187,68 @@ export async function runBridgeCommand(
     case "notice":
       effects.setBusyNotice(parsed.on)
       return msg(view.locale, "bridge.noticeSet", { state: parsed.on ? "on" : "off" })
+    case "deferred":
+      return formatDeferred(view)
+    case "claim":
+    case "name":
+      return msg(view.locale, "bridge.unknown")
   }
+}
+
+async function runClaim(
+  parsed: Extract<ParsedBridgeCommand, { name: "claim" }>,
+  view: BridgeCommandView,
+  effects: BridgeCommandEffects,
+): Promise<string | undefined> {
+  if (!effects.identity) return msg(view.locale, "bridge.unknown")
+  if (!parsed.code) return msg(view.locale, "bridge.usage.claim")
+  const channel = view.channel ?? "group"
+  const result = await effects.identity.claim({
+    channel,
+    code: parsed.code,
+    userOpenid: view.userOpenid,
+    memberOpenid: view.memberOpenid,
+    unionOpenid: view.unionOpenid,
+  })
+  if (result.outcome === "usage") return msg(view.locale, "bridge.usage.claim")
+  if (result.outcome === "cooldown") return undefined
+  if (result.outcome === "rejected") return msg(view.locale, "bridge.qqbot.claimRejected")
+  if (result.outcome === "link_issued") {
+    return msg(view.locale, "bridge.qqbot.claimLinkIssued", { code: result.linkCode })
+  }
+  const already = view.admins.map(String).includes(result.memberOpenid)
+  effects.addAdmin(result.memberOpenid)
+  if (!already) {
+    const display = effects.identity.displayNameFor(result.memberOpenid, { username: view.username }, view.locale)
+    const reminted = await effects.remintSeat?.(result.memberOpenid, display)
+    if (reminted?.previousKey) effects.onSeatReminted?.(result.memberOpenid, reminted.previousKey)
+  }
+  return msg(view.locale, "bridge.qqbot.claimDone")
+}
+
+async function runName(
+  parsed: Extract<ParsedBridgeCommand, { name: "name" }>,
+  view: BridgeCommandView,
+  effects: BridgeCommandEffects,
+): Promise<string | undefined> {
+  const identity = effects.identity
+  if (!parsed.display) return msg(view.locale, "bridge.usage.name")
+  if (!identity) return msg(view.locale, "bridge.unknown")
+  const seat = view.memberOpenid || view.seat
+  if (!seat) return msg(view.locale, "bridge.usage.name")
+  if (effects.hasCharacter?.(seat)) return msg(view.locale, "bridge.qqbot.nameLocked")
+  const cleaned = keyNameFromDisplay(parsed.display)
+  if (!cleaned) return msg(view.locale, "bridge.usage.name")
+  await identity.setChosenName(seat, cleaned)
+  const reminted = await effects.remintSeat?.(seat, cleaned)
+  if (reminted?.previousKey) effects.onSeatReminted?.(seat, reminted.previousKey)
+  return msg(view.locale, "bridge.qqbot.nameChanged", { name: reminted?.name ?? cleaned })
+}
+
+function formatDeferred(view: BridgeCommandView): string {
+  const summary = view.deferredSummary
+  if (!summary) return msg(view.locale, "bridge.unknown")
+  if (summary.length <= 0) return msg(view.locale, "bridge.qqbot.deferredEmpty")
+  const seconds = Math.max(0, Math.floor((summary.oldestAgeMs ?? 0) / 1000))
+  return msg(view.locale, "bridge.qqbot.deferred", { count: summary.length, seconds })
 }
