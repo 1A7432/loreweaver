@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises"
 import { expandHome } from "../localPaths"
 
 export type GroupMode = "all" | "mention"
+export type BridgePlatform = "onebot" | "qqbot"
 
 export interface BridgeGroupConfig {
   group_id: string
@@ -34,12 +35,30 @@ export interface OneBotReverseConfig {
 
 export type OneBotConfig = OneBotForwardConfig | OneBotReverseConfig
 
+export interface QQBotBridgeConfig {
+  app_id: string
+  client_secret: string
+  transport: "websocket"
+  receive_all: boolean
+  max_chunk_chars: number
+  url_whitelist: string[]
+  media_public_base_url: string | null
+  bot_qpm: number
+  /** Seconds. Converted to milliseconds for the transport and deliverer. */
+  send_timeout: number
+}
+
 export interface BridgeConfig {
   ticket?: string
   keeper_key?: string
   /** When set, overrides `welcome.locale`. Absent → follow the observer's welcome. */
   locale?: "en" | "zh"
-  onebot: OneBotConfig
+  /** Absent JSON `platform` parses as `"onebot"` so every M24 config keeps working. */
+  platform: BridgePlatform
+  /** Required when `platform` is `"onebot"`; omitted on the official-bot path. */
+  onebot?: OneBotConfig
+  /** Required when `platform` is `"qqbot"`; omitted on the OneBot path. */
+  qqbot?: QQBotBridgeConfig
   groups: BridgeGroupConfig[]
   busy_notice: boolean
   idle_close_minutes: number
@@ -54,6 +73,10 @@ export type BridgeConfigErrorCode =
   | "missing_groups"
   | "invalid_group"
   | "invalid_onebot"
+  | "invalid_qqbot"
+  | "invalid_platform"
+  | "platform_mismatch"
+  | "secret_required"
   | "invalid_listen_port"
   | "invalid_mode"
   | "invalid_locale"
@@ -119,10 +142,16 @@ function parseAdmins(value: unknown): string[] {
   return admins
 }
 
-function parseGroup(raw: unknown): BridgeGroupConfig {
+function parseGroup(raw: unknown, platform: BridgePlatform): BridgeGroupConfig {
   if (!isObject(raw)) throw new BridgeConfigError("invalid_group", "each group must be an object")
-  const group_id = asString(raw.group_id)?.trim()
-  if (!group_id) throw new BridgeConfigError("invalid_group", "each group needs a group_id")
+  const group_id =
+    platform === "qqbot" ? asString(raw.group_openid)?.trim() : asString(raw.group_id)?.trim()
+  if (!group_id) {
+    throw new BridgeConfigError(
+      "invalid_group",
+      platform === "qqbot" ? "each group needs a group_openid" : "each group needs a group_id",
+    )
+  }
   const modeRaw = raw.mode === undefined ? "mention" : asString(raw.mode)
   if (modeRaw !== "all" && modeRaw !== "mention") {
     throw new BridgeConfigError("invalid_mode", "group mode must be all or mention")
@@ -139,6 +168,9 @@ function parseGroup(raw: unknown): BridgeGroupConfig {
 /** JSON keeps seconds (old OneBot adapter); the transport takes milliseconds. */
 export const DEFAULT_REQUEST_TIMEOUT_SECONDS = 10
 export const DEFAULT_RECONNECT_DELAY_SECONDS = 1
+export const DEFAULT_QQBOT_SEND_TIMEOUT_SECONDS = 5
+export const DEFAULT_QQBOT_BOT_QPM = 30
+export const DEFAULT_QQBOT_MAX_CHUNK_CHARS = 2800
 
 export function secondsToMs(seconds: number): number {
   return Math.round(seconds * 1000)
@@ -203,13 +235,105 @@ function parseOneBot(raw: unknown): OneBotConfig {
   throw new BridgeConfigError("invalid_onebot", "onebot.mode must be forward or reverse")
 }
 
+function parseUrlWhitelist(value: unknown): string[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) {
+    throw new BridgeConfigError("invalid_qqbot", "qqbot.url_whitelist must be an array of hostnames")
+  }
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const item of value) {
+    const host = asString(item)?.trim()
+    if (!host) throw new BridgeConfigError("invalid_qqbot", "qqbot.url_whitelist entries must be strings")
+    if (seen.has(host)) continue
+    seen.add(host)
+    out.push(host)
+  }
+  return out
+}
+
+function parsePublicBaseUrl(value: unknown): string | null {
+  if (value === undefined || value === null) return null
+  const raw = asString(value)?.trim()
+  if (!raw) return null
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    throw new BridgeConfigError("invalid_qqbot", "qqbot.media_public_base_url must be an http(s) URL")
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new BridgeConfigError("invalid_qqbot", "qqbot.media_public_base_url must be an http(s) URL")
+  }
+  return raw
+}
+
+function parseQQBot(raw: unknown): QQBotBridgeConfig {
+  if (!isObject(raw)) throw new BridgeConfigError("invalid_qqbot", "qqbot config is required")
+  const app_id = asString(raw.app_id)?.trim()
+  if (!app_id) throw new BridgeConfigError("invalid_qqbot", "qqbot.app_id is required")
+  const client_secret = asString(raw.client_secret)?.trim()
+  if (!client_secret) {
+    throw new BridgeConfigError("secret_required", "qqbot.client_secret is required")
+  }
+  const transportRaw = raw.transport === undefined ? "websocket" : asString(raw.transport)?.trim()
+  if (transportRaw !== "websocket") {
+    throw new BridgeConfigError("invalid_qqbot", "qqbot.transport must be websocket")
+  }
+  const max_chunk_chars =
+    raw.max_chunk_chars === undefined ? DEFAULT_QQBOT_MAX_CHUNK_CHARS : asNumber(raw.max_chunk_chars)
+  if (max_chunk_chars === undefined || !(max_chunk_chars > 0) || !Number.isFinite(max_chunk_chars)) {
+    throw new BridgeConfigError("invalid_qqbot", "qqbot.max_chunk_chars must be > 0")
+  }
+  const bot_qpm = raw.bot_qpm === undefined ? DEFAULT_QQBOT_BOT_QPM : asNumber(raw.bot_qpm)
+  if (bot_qpm === undefined || !(bot_qpm > 0) || !Number.isFinite(bot_qpm)) {
+    throw new BridgeConfigError("invalid_qqbot", "qqbot.bot_qpm must be > 0")
+  }
+  const send_timeout =
+    raw.send_timeout === undefined ? DEFAULT_QQBOT_SEND_TIMEOUT_SECONDS : asNumber(raw.send_timeout)
+  if (send_timeout === undefined || !(send_timeout > 0) || !Number.isFinite(send_timeout)) {
+    throw new BridgeConfigError("invalid_timeout", "qqbot.send_timeout must be > 0 seconds")
+  }
+  return {
+    app_id,
+    client_secret,
+    transport: "websocket",
+    receive_all: asBoolean(raw.receive_all, false),
+    max_chunk_chars,
+    url_whitelist: parseUrlWhitelist(raw.url_whitelist),
+    media_public_base_url: parsePublicBaseUrl(raw.media_public_base_url),
+    bot_qpm,
+    send_timeout,
+  }
+}
+
+function parsePlatform(raw: Record<string, unknown>): BridgePlatform {
+  if (raw.platform === undefined) return "onebot"
+  const platform = asString(raw.platform)?.trim()
+  if (platform === "onebot" || platform === "qqbot") return platform
+  throw new BridgeConfigError("invalid_platform", "platform must be onebot or qqbot")
+}
+
 export function parseBridgeConfig(raw: unknown): BridgeConfig {
   if (!isObject(raw)) throw new BridgeConfigError("invalid_json", "config must be a JSON object")
-  const onebot = parseOneBot(raw.onebot)
+  const platform = parsePlatform(raw)
+  const hasOneBot = raw.onebot !== undefined
+  const hasQQBot = raw.qqbot !== undefined
+  if (hasOneBot && hasQQBot) {
+    throw new BridgeConfigError("platform_mismatch", "onebot and qqbot blocks are mutually exclusive")
+  }
+  if (platform === "onebot" && hasQQBot) {
+    throw new BridgeConfigError("platform_mismatch", "platform onebot cannot include a qqbot block")
+  }
+  if (platform === "qqbot" && hasOneBot) {
+    throw new BridgeConfigError("platform_mismatch", "platform qqbot cannot include an onebot block")
+  }
+  const onebot = platform === "onebot" ? parseOneBot(raw.onebot) : undefined
+  const qqbot = platform === "qqbot" ? parseQQBot(raw.qqbot) : undefined
   if (!Array.isArray(raw.groups) || raw.groups.length === 0) {
     throw new BridgeConfigError("missing_groups", "config.groups must list at least one group")
   }
-  const groups = raw.groups.map(parseGroup)
+  const groups = raw.groups.map((group) => parseGroup(group, platform))
   const seen = new Set<string>()
   for (const group of groups) {
     if (seen.has(group.group_id)) {
@@ -256,7 +380,9 @@ export function parseBridgeConfig(raw: unknown): BridgeConfig {
     ticket,
     keeper_key,
     locale,
-    onebot,
+    platform,
+    ...(onebot ? { onebot } : {}),
+    ...(qqbot ? { qqbot } : {}),
     groups,
     busy_notice: asBoolean(raw.busy_notice, true),
     idle_close_minutes,
@@ -290,4 +416,18 @@ export function onebotTimeoutsMs(onebot: OneBotConfig): { requestTimeoutMs: numb
     requestTimeoutMs: secondsToMs(onebot.request_timeout),
     reconnectDelayMs: secondsToMs(onebot.reconnect_delay),
   }
+}
+
+export function requireOneBot(config: BridgeConfig): OneBotConfig {
+  if (config.platform !== "onebot" || !config.onebot) {
+    throw new BridgeConfigError("platform_mismatch", "onebot config is required when platform is onebot")
+  }
+  return config.onebot
+}
+
+export function requireQQBot(config: BridgeConfig): QQBotBridgeConfig {
+  if (config.platform !== "qqbot" || !config.qqbot) {
+    throw new BridgeConfigError("platform_mismatch", "qqbot config is required when platform is qqbot")
+  }
+  return config.qqbot
 }
