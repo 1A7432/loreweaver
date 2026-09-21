@@ -41,6 +41,8 @@ type ControlLinkLike = {
 const CONTROL_QUEUE_CAP = 64
 const FRIEND_NOTICE_MS = 10 * 60 * 1000
 const STATUS_LOG_THROTTLE_MS = 60 * 1000
+/** The live membership check before a private redirect; it sits on the group's serial outbox. */
+const MEMBER_GATE_TIMEOUT_MS = 3_000
 const URL_SAFE_TOKEN = /[A-Za-z0-9_-]{16,}/
 
 /**
@@ -225,8 +227,24 @@ class GroupRuntime {
       else await this.transport.sendText(groupTarget, intent.text)
       return
     }
-    const result = await this.transport.sendText({ type: "private", id: intent.userId }, intent.text)
+    // A private reply carries the group it belongs to, so NapCat can use the group temp
+    // session when the two are not friends — but ONLY once NapCat has confirmed it can
+    // resolve this member: with an unresolvable user NapCat falls back to posting into the
+    // group itself, and a keeper-grade reply must never take that path (iron rule #3).
+    // The check is LIVE (no cache) and short: a 10-minute-old "yes" is not a verdict, and this
+    // await sits on the group's serial outbox. Anything but a confirmed member sends plain.
+    const status = await this.transport.memberStatus(this.groupId, intent.userId, { fresh: true, timeoutMs: MEMBER_GATE_TIMEOUT_MS })
+    const result =
+      status === "member"
+        ? await this.transport.sendText({ type: "group", id: this.groupId, userId: intent.userId }, intent.text, { private: true })
+        : await this.transport.sendText({ type: "private", id: intent.userId }, intent.text)
     if (!result.ok) {
+      // A transport hiccup is not "not friends": no friend notice for a failure that may
+      // have nothing to do with friendship.
+      if (status === "unknown") {
+        console.warn("onebot.private_send_failed_unverified", result.error ?? "")
+        return
+      }
       const last = this.lastFriendNotice.get(intent.userId)
       if (last !== undefined && this.now() - last < FRIEND_NOTICE_MS) return
       this.lastFriendNotice.set(intent.userId, this.now())
@@ -450,7 +468,8 @@ export async function runBridge(config: BridgeConfig, deps: BridgeDeps = {}): Pr
 
     try {
       const previousKey = memberKeyFor(userId, session.groupId)
-      const entry = await session.keyring.ensure(userId)
+      // The group card (else nickname) becomes the key name — what the Keeper calls them.
+      const entry = await session.keyring.ensure(userId, msg.sender.name)
       const role: LinkRole = entry.role === "keeper" ? "admin" : "player"
       if (previousKey && previousKey !== entry.key) {
         catalog.delete(previousKey)

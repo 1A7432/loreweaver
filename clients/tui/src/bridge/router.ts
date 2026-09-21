@@ -293,6 +293,7 @@ export class BridgeRouter {
       userId: row.userId,
       keyId: row.key_id,
       role: row.role,
+      name: row.name ?? "",
     })) ?? []
     return {
       locale: this.locale(),

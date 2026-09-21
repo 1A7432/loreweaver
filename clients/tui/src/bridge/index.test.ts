@@ -424,9 +424,9 @@ describe("QQ bridge entry", () => {
     const socket = new AckSocket()
     const { handle, observerKey } = await startBridge(iroh, socket)
     socket.push(groupEvent())
-    await waitFor(() => iroh.joins.some((row) => row.key === "k-qq:7"))
-    expect(iroh.joins.find((row) => row.key === "k-qq:7")?.name).toBe("Investigator")
-    await ungate(iroh, "k-qq:7")
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-Investigator"))
+    expect(iroh.joins.find((row) => row.key === "k-Investigator")?.name).toBe("Investigator")
+    await ungate(iroh, "k-Investigator")
     await waitFor(() => framesOf(iroh.sent).some((frame) => frame.type === FrameType.Input && frame.text === ".r 3d6"))
     const playerInputs = framesOf(iroh.sent).filter((frame) => frame.type === FrameType.Input)
     expect(playerInputs).toEqual([{ type: FrameType.Input, text: ".r 3d6" }])
@@ -462,16 +462,45 @@ describe("QQ bridge entry", () => {
         sender: { nickname: "Admin", card: "KeeperAdmin" },
       }),
     )
-    await waitFor(() => iroh.joins.some((row) => row.key === "k-qq:42"))
-    await ungate(iroh, "k-qq:42", "en", "keeper")
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-KeeperAdmin"))
+    await ungate(iroh, "k-KeeperAdmin", "en", "keeper")
     await waitFor(() => framesOf(iroh.sent).some((frame) => frame.type === FrameType.Input && frame.text === ".lore"))
-    const admin = iroh.joins.find((row) => row.key === "k-qq:42")!
+    const admin = iroh.joins.find((row) => row.key === "k-KeeperAdmin")!
     admin.stream.push(`${JSON.stringify({ type: FrameType.System, level: "info", text: "secret lore" })}\n`)
     await waitFor(() => onebotActions(socket).some((row) => row.action === "send_private_msg"))
     const priv = onebotActions(socket).filter((row) => row.action === "send_private_msg")
     const group = onebotActions(socket).filter((row) => row.action === "send_group_msg")
     expect(priv.some((row) => JSON.stringify(row.params).includes("secret lore"))).toBe(true)
     expect(group.some((row) => JSON.stringify(row.params).includes("secret lore"))).toBe(false)
+    // Membership was not confirmable on this fake: the reply went out WITHOUT the group,
+    // never risking NapCat's fall-back-into-the-group path.
+    expect(priv.every((row) => !("group_id" in (row.params as Record<string, unknown>)))).toBe(true)
+    await handle.stop()
+  })
+
+  test("a confirmed member's private reply carries the group so NapCat can use the temp session", async () => {
+    const iroh = createMockIroh()
+    const socket = new AckSocket()
+    socket.groupMembers.add("99:42")
+    const { handle } = await startBridge(iroh, socket)
+    socket.push(
+      groupEvent({
+        user_id: 42,
+        message_id: 22,
+        message: [{ type: "text", data: { text: ".lore" } }],
+        sender: { nickname: "Admin", card: "KeeperAdmin" },
+      }),
+    )
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-KeeperAdmin"))
+    await ungate(iroh, "k-KeeperAdmin", "en", "keeper")
+    await waitFor(() => framesOf(iroh.sent).some((frame) => frame.type === FrameType.Input && frame.text === ".lore"))
+    const admin = iroh.joins.find((row) => row.key === "k-KeeperAdmin")!
+    admin.stream.push(`${JSON.stringify({ type: FrameType.System, level: "info", text: "secret lore" })}\n`)
+    await waitFor(() => onebotActions(socket).some((row) => row.action === "send_private_msg"))
+    const priv = onebotActions(socket).filter((row) => row.action === "send_private_msg")
+    expect(priv[0]!.params).toMatchObject({ user_id: 42, group_id: 99 })
+    expect(onebotActions(socket).some((row) => row.action === "get_group_member_info")).toBe(true)
+    expect(onebotActions(socket).some((row) => row.action === "send_group_msg" && JSON.stringify(row.params).includes("secret lore"))).toBe(false)
     await handle.stop()
   })
 
@@ -488,9 +517,9 @@ describe("QQ bridge entry", () => {
         sender: { nickname: "Admin" },
       }),
     )
-    await waitFor(() => iroh.joins.some((row) => row.key === "k-qq:42"))
-    await ungate(iroh, "k-qq:42", "en", "keeper")
-    const admin = iroh.joins.find((row) => row.key === "k-qq:42")!
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-Admin"))
+    await ungate(iroh, "k-Admin", "en", "keeper")
+    const admin = iroh.joins.find((row) => row.key === "k-Admin")!
     admin.stream.push(`${JSON.stringify({ type: FrameType.System, level: "info", text: "secret lore" })}\n`)
     await waitFor(() =>
       onebotActions(socket).some(
@@ -535,8 +564,8 @@ describe("QQ bridge entry", () => {
     for (let i = 0; i < 8; i++) {
       socket.push(groupEvent({ message_id: 40 + i, message: [{ type: "text", data: { text: `.r ${i}` } }] }))
     }
-    await waitFor(() => iroh.joins.some((row) => row.key === "k-qq:7"))
-    await ungate(iroh, "k-qq:7")
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-Investigator"))
+    await ungate(iroh, "k-Investigator")
     await waitFor(() => framesOf(iroh.sent).filter((frame) => frame.type === FrameType.Input).length === 5)
     await waitFor(
       () =>
@@ -568,8 +597,8 @@ describe("QQ bridge entry", () => {
         ],
       }),
     )
-    await waitFor(() => iroh.joins.some((row) => row.key === "k-qq:7"))
-    await ungate(iroh, "k-qq:7")
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-Investigator"))
+    await ungate(iroh, "k-Investigator")
     await waitFor(() => framesOf(iroh.sent).some((frame) => frame.type === FrameType.MediaOffer))
     const offer = framesOf(iroh.sent).find((frame) => frame.type === FrameType.MediaOffer)
     expect(offer?.name).toBe("shot.png")
@@ -692,8 +721,8 @@ describe("QQ bridge entry", () => {
       message: [{ type: "text", data: { text: ".r 3d6" } }],
       sender: { nickname: "Member" },
     })
-    await waitFor(() => iroh.joins.some((row) => row.key === "k-qq:8"))
-    await ungate(iroh, "k-qq:8")
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-Member"))
+    await ungate(iroh, "k-Member")
     await waitFor(() => framesOf(iroh.sent).some((frame) => frame.type === FrameType.Input && frame.text === ".r 3d6"))
     await handle.stop()
   })
@@ -781,9 +810,9 @@ describe("QQ bridge entry", () => {
         sender: { nickname: "Admin" },
       }),
     )
-    await waitFor(() => iroh.joins.some((row) => row.key === "k-qq:42"))
-    await ungate(iroh, "k-qq:42", "en", "keeper")
-    const keeperJoin = iroh.joins.find((row) => row.key === "k-qq:42")!
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-Admin"))
+    await ungate(iroh, "k-Admin", "en", "keeper")
+    const keeperJoin = iroh.joins.find((row) => row.key === "k-Admin")!
     socket.push(
       groupEvent({
         user_id: 42,
@@ -801,15 +830,15 @@ describe("QQ bridge entry", () => {
         sender: { nickname: "Admin" },
       }),
     )
-    await waitFor(() => iroh.joins.some((row) => row.key === "k-qq:42-2"))
-    await ungate(iroh, "k-qq:42-2")
-    expect(iroh.joins.filter((row) => row.key === "k-qq:42" || row.key === "k-qq:42-2").map((row) => row.key)).toEqual([
-      "k-qq:42",
-      "k-qq:42-2",
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-Admin-2"))
+    await ungate(iroh, "k-Admin-2")
+    expect(iroh.joins.filter((row) => row.key === "k-Admin" || row.key === "k-Admin-2").map((row) => row.key)).toEqual([
+      "k-Admin",
+      "k-Admin-2",
     ])
     keeperJoin.stream.end()
     await settle(40)
-    expect(iroh.joins.filter((row) => row.key === "k-qq:42").length).toBe(1)
+    expect(iroh.joins.filter((row) => row.key === "k-Admin").length).toBe(1)
 
     socket.push(
       groupEvent({
@@ -819,8 +848,8 @@ describe("QQ bridge entry", () => {
         sender: { nickname: "Ada", card: "Investigator" },
       }),
     )
-    await waitFor(() => iroh.joins.some((row) => row.key === "k-qq:7"))
-    await ungate(iroh, "k-qq:7")
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-Investigator"))
+    await ungate(iroh, "k-Investigator")
     socket.push(
       groupEvent({
         user_id: 7,
@@ -838,7 +867,7 @@ describe("QQ bridge entry", () => {
         sender: { nickname: "Admin" },
       }),
     )
-    await waitFor(() => iroh.joins.some((row) => row.key === "k-qq:42-3"))
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-Admin-3"))
     await handle.stop()
   })
 
@@ -847,13 +876,13 @@ describe("QQ bridge entry", () => {
     const socket = new AckSocket()
     const { handle } = await startBridge(iroh, socket, { idle_close_minutes: 0 })
     socket.push(groupEvent({ message_id: 90 }))
-    await waitFor(() => iroh.joins.some((row) => row.key === "k-qq:7"))
-    await ungate(iroh, "k-qq:7")
-    const joinsAfterFirst = iroh.joins.filter((row) => row.key === "k-qq:7").length
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-Investigator"))
+    await ungate(iroh, "k-Investigator")
+    const joinsAfterFirst = iroh.joins.filter((row) => row.key === "k-Investigator").length
     await settle(80)
     socket.push(groupEvent({ message_id: 91, message: [{ type: "text", data: { text: ".r 2d6" } }] }))
     await waitFor(() => framesOf(iroh.sent).some((frame) => frame.type === FrameType.Input && frame.text === ".r 2d6"))
-    expect(iroh.joins.filter((row) => row.key === "k-qq:7").length).toBe(joinsAfterFirst)
+    expect(iroh.joins.filter((row) => row.key === "k-Investigator").length).toBe(joinsAfterFirst)
     await handle.stop()
   })
 
@@ -889,8 +918,8 @@ describe("QQ bridge entry", () => {
       await ungate(iroh, row.key, undefined, row.key === KEEP || row.key === KEEP2 ? "keeper" : "player")
     }
     socket.push(groupEvent({ message_id: 100 }))
-    await waitFor(() => iroh.joins.some((row) => row.key === "k-qq:7"))
-    expect(iroh.joins.filter((row) => row.key.startsWith("k-qq:7")).length).toBe(1)
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-Investigator"))
+    expect(iroh.joins.filter((row) => row.key.startsWith("k-Investigator")).length).toBe(1)
     expect(iroh.joins.some((row) => row.name === "qq:observer:88")).toBe(true)
     expect(iroh.joins.some((row) => row.name === "qq:observer:99")).toBe(true)
     await handle.stop()
@@ -910,8 +939,8 @@ describe("QQ bridge entry", () => {
         ],
       }),
     )
-    await waitFor(() => iroh.joins.some((row) => row.key === "k-qq:7"))
-    await ungate(iroh, "k-qq:7")
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-Investigator"))
+    await ungate(iroh, "k-Investigator")
     await settle(50)
     expect(framesOf(iroh.sent).some((frame) => frame.type === FrameType.MediaOffer)).toBe(false)
     await handle.stop()
@@ -974,8 +1003,8 @@ describe("QQ bridge entry", () => {
         ],
       }),
     )
-    await waitFor(() => iroh.joins.some((row) => row.key === "k-qq:7"))
-    await ungate(iroh, "k-qq:7")
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-Investigator"))
+    await ungate(iroh, "k-Investigator")
     await waitFor(() => logs.some((line) => line.includes("E5F6.jpg")))
     const line = logs.find((item) => item.includes("E5F6.jpg"))!
     expect(line).toBe(tt("en", "bridge.cli.attachmentFailed", { name: "E5F6.jpg", reason: "onebot.attachment.unsafe_url" }))

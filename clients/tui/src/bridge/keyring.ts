@@ -10,6 +10,7 @@ import {
 import { readPrivateJson, writePrivateAtomic } from "./persist"
 
 const MINT_TIMEOUT_MS = 10_000
+const LATE_MINT_CAP = 32
 
 export function keyringPath(stateDir: string, groupId: string): string {
   return `${stateDir.replace(/\/+$/, "")}/${groupId}.keyring.json`
@@ -19,6 +20,20 @@ export interface KeyringEntry {
   key: string
   key_id: string
   role: PlayerRole
+  /** The key's name as minted — the group card at first message, else `qq:<userId>`. */
+  name?: string
+}
+
+/** Longest key name minted from a group card; longer cards are cut, never rejected. */
+export const MAX_KEY_NAME_CHARS = 32
+
+/** A group card as a key name: trimmed, one-spaced, control characters out, capped. */
+export function keyNameFromDisplay(display: string | undefined): string {
+  const cleaned = (display ?? "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  return [...cleaned].slice(0, MAX_KEY_NAME_CHARS).join("")
 }
 
 export interface ControlLink {
@@ -86,15 +101,27 @@ function isAdminKeys(frame: ServerFrame): frame is AdminKeysFrame {
 }
 
 /**
- * QQ id → `{key, key_id, role}`. Mints on first message via the control link's
+ * QQ id → `{key, key_id, role, name}`. Mints on first message via the control link's
  * `admin_mint_key` (`purpose:"join"`; `role:"keeper"` for configured admins).
- * Key names are ALWAYS `qq:<userId>` / `qq:observer:<groupId>` — display names
- * are a join-time property, never stored here. Mint and delete share one
- * request chain (at most one control request outstanding).
+ * A member key is NAMED after the player's group card (nickname when there is no card,
+ * `qq:<userId>` when the event carries neither): the engine shows a member under its
+ * key name and ignores the join-time name (anti-impersonation), so this is the only way
+ * the Keeper ever sees "阿绫" rather than "qq:123456789". Names are not unique — the
+ * QQ id → key map lives in this file, never in the name. The observer stays
+ * `qq:observer:<groupId>`. Mint and delete share one request chain (at most one control
+ * request outstanding).
  */
 export class Keyring {
   private readonly entries = new Map<string, KeyringEntry>()
   private readonly inflight = new Map<string, Promise<KeyringEntry>>()
+  /**
+   * Mints that timed out client-side: a late reply with this name+role is adopted for that
+   * user. Bounded (LATE_MINT_CAP) and short-lived (2× the mint timeout); names repeat, so
+   * the oldest matching candidate wins and a stale one is never kept around.
+   */
+  private readonly lateMints: Array<{ name: string; role: PlayerRole; userId: string; at: number }> = []
+  /** Users kicked since the last mint for them: a late mint for them is deleted, not adopted. */
+  private readonly kicked = new Set<string>()
   private pending: Pending | undefined
   private chain: Promise<void> = Promise.resolve()
   private seq = 0
@@ -128,7 +155,8 @@ export class Keyring {
       const role = rec.role === "keeper" ? "keeper" : rec.role === "player" ? "player" : ""
       if (!userId || !key || !key_id || !role) continue
       if (options.keeperKey && key === options.keeperKey) continue
-      ring.entries.set(userId, { key, key_id, role })
+      const name = typeof rec.name === "string" && rec.name ? rec.name : undefined
+      ring.entries.set(userId, { key, key_id, role, ...(name ? { name } : {}) })
     }
     return ring
   }
@@ -160,13 +188,19 @@ export class Keyring {
     return Boolean(this.options.keeperKey && key === this.options.keeperKey)
   }
 
-  async ensure(userId: string): Promise<KeyringEntry> {
+  /**
+   * The entry for this QQ id, minting one on first sight. `displayName` (group card,
+   * else nickname) becomes the key name at mint time; an existing entry keeps the name
+   * it was minted with — a later card change does not re-mint.
+   */
+  async ensure(userId: string, displayName?: string): Promise<KeyringEntry> {
+    this.kicked.delete(userId) // speaking again after a kick is a legitimate new seat
     const existing = this.entries.get(userId)
     const want = this.roleFor(userId)
     if (existing && existing.role === want && !this.isKeeperKey(existing.key)) return existing
     const inflight = this.inflight.get(userId)
     if (inflight) return inflight
-    const pending = this.ensureFresh(userId, want, existing)
+    const pending = this.ensureFresh(userId, want, existing, this.keyName(userId, displayName))
     this.inflight.set(userId, pending)
     try {
       return await pending
@@ -185,6 +219,9 @@ export class Keyring {
     if (!entry) throw new Error(`no keyring entry for ${userId}`)
     await this.enqueueDelete(entry.key_id)
     this.entries.delete(userId)
+    // A mint for this user still in flight server-side must not revive the seat: its late
+    // reply is attributed through lateMints and then DELETED (see adoptOrphanMint).
+    this.kicked.add(userId)
     await this.flush()
     return entry
   }
@@ -209,12 +246,30 @@ export class Keyring {
     return undefined
   }
 
-  private keyName(userId: string): string {
-    return this.isObserver(userId) ? observerName(this.options.groupId) : memberName(userId)
+  private keyName(userId: string, displayName?: string): string {
+    if (this.isObserver(userId)) return observerName(this.options.groupId)
+    const wanted = keyNameFromDisplay(displayName)
+    // A card that would wear another seat's name, the observer's, or the `qq:` fallback
+    // shape is not a name this seat may take: fall back to the id form.
+    if (!wanted || wanted.startsWith("qq:") || this.nameTaken(wanted, userId)) return memberName(userId)
+    return wanted
   }
 
-  private async ensureFresh(userId: string, role: PlayerRole, existing: KeyringEntry | undefined): Promise<KeyringEntry> {
-    const minted = await this.enqueueMint(this.keyName(userId), role)
+  private nameTaken(name: string, userId: string): boolean {
+    if (name === observerName(this.options.groupId)) return true
+    for (const [otherId, entry] of this.entries) {
+      if (otherId !== userId && entry.name === name) return true
+    }
+    return false
+  }
+
+  private async ensureFresh(
+    userId: string,
+    role: PlayerRole,
+    existing: KeyringEntry | undefined,
+    name: string,
+  ): Promise<KeyringEntry> {
+    const minted = await this.enqueueMint(name, role, userId)
     this.entries.set(userId, minted)
     await this.flush()
     if (existing && existing.key_id !== minted.key_id) {
@@ -233,12 +288,17 @@ export class Keyring {
     return minted
   }
 
-  private enqueueMint(name: string, role: PlayerRole): Promise<KeyringEntry> {
+  private enqueueMint(name: string, role: PlayerRole, userId: string): Promise<KeyringEntry> {
     return this.enqueue((seq) => new Promise<KeyringEntry>((resolve, reject) => {
       const setTimeoutFn = this.options.setTimeoutFn ?? setTimeout
       const timer = setTimeoutFn(() => {
         if (this.pending?.seq === seq) {
           this.pending = undefined
+          // The server may still answer: remember who this mint was for so the late
+          // reply is adopted instead of orphaned (names no longer encode the QQ id).
+          this.pruneLateMints()
+          this.lateMints.push({ name, role, userId, at: Date.now() })
+          while (this.lateMints.length > LATE_MINT_CAP) this.lateMints.shift()
           reject(new Error("admin_mint_key timed out"))
         }
       }, this.options.mintTimeoutMs ?? MINT_TIMEOUT_MS)
@@ -313,19 +373,41 @@ export class Keyring {
   private entryFromMinted(frame: AdminKeysFrame): KeyringEntry | undefined {
     if (!frame.minted) return undefined
     if (this.isKeeperKey(frame.minted.key)) return undefined
-    const listed = frame.keys.find((row) => row.name === frame.minted!.name && row.role === frame.minted!.role)
+    // The server's key id IS sha256(key)[:16] (`net/admin.py _key_id`); a lookup by name
+    // would pick another player's row when two players share a group card.
     return {
       key: frame.minted.key,
-      key_id: listed?.id || keyIdFromSecret(frame.minted.key),
+      key_id: keyIdFromSecret(frame.minted.key),
       role: frame.minted.role,
+      name: frame.minted.name,
     }
   }
 
-  /** A late mint with no pending request is adopted if that user has no entry yet. */
+  private pruneLateMints(): void {
+    const ttl = 2 * (this.options.mintTimeoutMs ?? MINT_TIMEOUT_MS)
+    const cutoff = Date.now() - ttl
+    for (let i = this.lateMints.length - 1; i >= 0; i -= 1) {
+      if (this.lateMints[i]!.at < cutoff) this.lateMints.splice(i, 1)
+    }
+  }
+
+  /**
+   * A late mint with no pending request is adopted if that user has no entry yet. A late
+   * mint for a user kicked meanwhile is a live key nobody owns: delete it instead.
+   */
   private adoptOrphanMint(frame: AdminKeysFrame): void {
     if (!frame.minted) return
-    const userId = this.userIdFromName(frame.minted.name)
-    if (!userId || this.entries.has(userId)) return
+    this.pruneLateMints()
+    const late = this.lateMints.findIndex((row) => row.name === frame.minted!.name && row.role === frame.minted!.role)
+    let userId: string | undefined
+    if (late >= 0) userId = this.lateMints.splice(late, 1)[0]!.userId
+    else userId = this.userIdFromName(frame.minted.name)
+    if (!userId) return
+    if (this.kicked.has(userId)) {
+      if (!this.isKeeperKey(frame.minted.key)) void this.enqueueDelete(keyIdFromSecret(frame.minted.key)).catch(() => {})
+      return
+    }
+    if (this.entries.has(userId)) return
     const entry = this.entryFromMinted(frame)
     if (!entry) return
     this.entries.set(userId, entry)

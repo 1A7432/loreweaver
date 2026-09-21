@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test"
 import { FrameType, type ClientFrame, type ServerFrame } from "loreweaver-protocol"
 import {
   Keyring,
+  keyIdFromSecret,
   LastKeeperError,
   ObserverProtectedError,
   memberName,
@@ -167,10 +168,10 @@ describe("keyring", () => {
 
     const kick = ring.kick("42")
     await Promise.resolve()
-    expect(control.sent.at(-1)).toEqual({ type: FrameType.AdminDeleteKey, id: "id-42" })
+    expect(control.sent.at(-1)).toEqual({ type: FrameType.AdminDeleteKey, id: keyIdFromSecret("admin-key-bbbb") })
     control.push({ type: FrameType.AdminError, code: "last_keeper", message: "cannot delete the last keeper key" })
     await expect(kick).rejects.toBeInstanceOf(LastKeeperError)
-    expect(ring.get("42")?.key_id).toBe("id-42")
+    expect(ring.get("42")?.key_id).toBe(keyIdFromSecret("admin-key-bbbb"))
     ring.close()
   })
 
@@ -270,7 +271,7 @@ describe("keyring", () => {
     expect(playerMint).toBeDefined()
     control.push(mintedKeys(memberName("42"), "player-new", "player", "id-new"))
     await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(control.sent.some((frame) => frame.type === FrameType.AdminDeleteKey && "id" in frame && frame.id === "id-old")).toBe(true)
+    expect(control.sent.some((frame) => frame.type === FrameType.AdminDeleteKey && "id" in frame && frame.id === keyIdFromSecret("keeper-old"))).toBe(true)
     control.push({
       type: FrameType.AdminError,
       code: "last_keeper",
@@ -279,7 +280,7 @@ describe("keyring", () => {
     await expect(demote).rejects.toBeInstanceOf(LastKeeperError)
     expect(ring.get("42")?.key).toBe("keeper-old")
     await new Promise((resolve) => setTimeout(resolve, 20))
-    if (control.sent.some((frame) => frame.type === FrameType.AdminDeleteKey && "id" in frame && frame.id === "id-new")) {
+    if (control.sent.some((frame) => frame.type === FrameType.AdminDeleteKey && "id" in frame && frame.id === keyIdFromSecret("player-new"))) {
       control.push({ type: FrameType.AdminKeys, keys: [keyRow("id-old", memberName("42"), "keeper")] })
     }
     ring.close()

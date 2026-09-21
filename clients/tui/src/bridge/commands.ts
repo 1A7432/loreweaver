@@ -78,7 +78,7 @@ export interface BridgeCommandView {
   mode: GroupMode
   busyNotice: boolean
   admins: readonly string[]
-  members: ReadonlyArray<{ userId: string; keyId: string; role: string }>
+  members: ReadonlyArray<{ userId: string; keyId: string; role: string; name?: string }>
   lateHolds?: number
 }
 
@@ -123,7 +123,7 @@ export async function runBridgeCommand(
     case "members": {
       if (view.members.length === 0) return msg(view.locale, "bridge.members.empty")
       return view.members
-        .map((row) => msg(view.locale, "bridge.members.line", { qq: row.userId, keyId: row.keyId, role: row.role }))
+        .map((row) => msg(view.locale, "bridge.members.line", { qq: row.userId, name: row.name || row.userId, keyId: row.keyId, role: row.role }))
         .join("\n")
     }
     case "kick":

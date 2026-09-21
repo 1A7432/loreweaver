@@ -20,3 +20,13 @@
   WebSocket upgrade, so an open socket proves nothing. The official QQ Bot
   API was set as the primary QQ route the same day; this bridge is the
   secondary, personal-account route. Record: `docs/specs/M24-qq-bridge.md`.
+- **Addendum 2026-09-20, batch 2 (owner decisions):** member keys are named after
+  the group card (nickname, then `qq:<id>`), with `key_id` always
+  `sha256(key)[:16]` — the server's own derivation — because a lookup by name
+  crosses two players who share a card; private replies carry `group_id` so
+  NapCat uses the group temp session for non-friends, but only after a LIVE
+  membership check, since NapCat falls back to posting into the group when it
+  cannot resolve the user (iron rule #3); a heartbeat watchdog (2.5× the
+  announced interval) redials half-open sockets; output over one message goes
+  out as a merged-forward card; a reply to the Keeper without an @ stays
+  ignored (QQ inserts the @ on reply; a deleted @ is deliberate).

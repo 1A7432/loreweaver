@@ -119,9 +119,17 @@ Every keeper-gated engine command already works over a keeper-role link: import,
 `.rule`, `.preset`, `.phase`, `.var expose`, `.dev mount`, `.language`,
 `.chronicle`, `.lore`, `.imagegen`, `.forge`. **Admin replies always arrive in
 private chat**, even when the command was typed in the group — including
-acknowledgements. That is fail-closed on purpose. The bot must be a **friend**
-of that admin: if a private send fails, the group is told only to add the bot
-as a friend; the content is never posted in the group.
+acknowledgements. That is fail-closed on purpose. A private reply carries the
+group it came from, so NapCat delivers it over the **group temp session** when
+the admin and the bot are not friends (the group must allow members to start
+temp chats) and over the ordinary friend chat when they are. Before adding the
+group, the bridge confirms NapCat can resolve that member; when it cannot, the
+reply goes out as a plain private message instead, because NapCat would
+otherwise fall back to posting into the group. If the private send still fails,
+the group is told only to add the bot as a friend; the content is never posted
+in the group. The bot never answers friend requests itself (`request` events are
+ignored), so approve a friend request in the QQ client that is logged into the
+bot account.
 
 Secret-reading commands (`.lore`, `.var`, anything that would show keeper-only
 material) should be sent as a **private message** to the bot. The admin doc is
@@ -140,7 +148,26 @@ Bridge-level commands (admin-only): `.bridge status`, `.bridge members`,
 
 Group default is `mention` mode: recognized commands (`.`, `/`, `r `, the zh
 dialect) always forward; story prose forwards only when the bot is @-mentioned,
-unless the table sets `.bridge mode all`.
+unless the table sets `.bridge mode all`. Replying to one of the Keeper's
+messages in QQ inserts an @ by itself; a reply whose @ was deleted is, on
+purpose, not for the Keeper and is left alone.
+
+## Players and names
+
+A player's key is minted on their first message and **named after their group
+card** (nickname when there is no card; `qq:<id>` when the event carries
+neither). That name is what the Keeper sees and uses; once a player claims a
+character, the Keeper attributes their lines as `<character> (<card>)`. The name
+is fixed at first sight: changing a group card later does not rename the seat.
+The name is cleaned (control characters out, whitespace collapsed) and cut to
+32 characters; a card that would copy another seat's name, or looks like the
+`qq:` fallback, falls back to `qq:<id>`. Two players with the same card are
+still two seats.
+
+Long Keeper output — anything over one QQ message — arrives as **one
+merged-forward card** (one node per chunk, signed as the bot), not as a wall of
+consecutive messages. A card cannot quote or @: a long answer to a player's
+command does not quote their message.
 
 ## The one gap
 
@@ -167,6 +194,11 @@ group is quiet.
 - The token / self-check error lines can also appear after startup: a reconnect
   or a reverse-mode accept whose `get_login_info` fails prints the same message
   startup would have, once per minute.
+- A `reconnecting` line with nothing else wrong usually means the heartbeat
+  watchdog fired: the implementation announces a heartbeat interval, and when
+  no frame at all arrives for 2.5× that interval the socket is treated as
+  half-open (router timeout, host asleep) and redialed. With heartbeats
+  disabled on the implementation the watchdog never arms.
 - `Attachment … was not forwarded (reason)` — a player's image could not be
   fetched (no direct URL, an expired signed link, size, an unsafe address, or the
   room's media policy). The text still went through. The reason is a machine

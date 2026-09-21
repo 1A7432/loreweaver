@@ -722,7 +722,7 @@ describe("events — dispatch, backlog, frame size", () => {
 })
 
 describe("outbound", () => {
-  test("text is split to OneBot limits without loss; reply and image are segments", async () => {
+  test("text over the OneBot limit is one merged-forward card: chunks without loss, image on the last node", async () => {
     const stub = stubRaw()
     const bot = new OneBotTransport({ transport: stub })
     const rendered = `prefix\n${"x".repeat(5000)}\n1. Help — .help`
@@ -733,19 +733,18 @@ describe("outbound", () => {
     )
     expect(result.ok).toBe(true)
     expect(result.messageId).toBe("101")
-    expect(stub.calls.length).toBe(2)
-    const texts = stub.calls.map(([, params]) => {
-      const message = params.message as Array<{ type: string; data: { text?: string } }>
-      return message.find((segment) => segment.type === "text")!.data.text!
-    })
+    expect(stub.calls.length).toBe(1)
+    expect(stub.calls[0]![0]).toBe("send_group_forward_msg")
+    expect(stub.calls[0]![1].group_id).toBe(99)
+    const nodes = stub.calls[0]![1].messages as Array<{ type: string; data: { content: Array<{ type: string; data: Record<string, unknown> }> } }>
+    expect(nodes.length).toBe(2)
+    const texts = nodes.map((node) => node.data.content.find((segment) => segment.type === "text")!.data.text as string)
     expect(texts.every((part) => part.length <= MAX_TEXT_CHARS)).toBe(true)
     expect(texts.join("")).toBe(rendered)
-    expect(stub.calls[0]![0]).toBe("send_group_msg")
-    const firstMessage = stub.calls[0]![1].message as Array<{ type: string; data: Record<string, unknown> }>
-    expect(firstMessage[0]).toEqual({ type: "reply", data: { id: "10" } })
-    const lastMessage = stub.calls[1]![1].message as Array<{ type: string; data: Record<string, unknown> }>
-    expect(lastMessage.some((segment) => segment.type === "image")).toBe(true)
-    const image = lastMessage.find((segment) => segment.type === "image")!
+    // A card cannot carry a reply segment; the card itself is the reply.
+    expect(JSON.stringify(nodes)).not.toContain('"reply"')
+    const lastContent = nodes[1]!.data.content
+    const image = lastContent.find((segment) => segment.type === "image")!
     expect(image.data.file).toBe(`base64://${Buffer.from(png).toString("base64")}`)
   })
 
@@ -757,10 +756,11 @@ describe("outbound", () => {
       { text: "private sheet", private: true, replyTo: "group-message-10" },
     )
     expect(redirected.ok).toBe(true)
+    // The group rides along so NapCat can use the group temp session for a non-friend.
     expect(stub.calls).toEqual([
       [
         "send_private_msg",
-        { user_id: 7, message: [{ type: "text", data: { text: "private sheet" } }] },
+        { user_id: 7, group_id: 99, message: [{ type: "text", data: { text: "private sheet" } }] },
       ],
     ])
     const native = await bot.send(

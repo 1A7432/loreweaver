@@ -4,11 +4,12 @@ import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   DEFAULT_REVERSE_PATH,
   EVENT_QUEUE_LIMIT,
+  HEARTBEAT_GRACE_FACTOR,
   MAX_ATTACHMENT_BYTES,
   MAX_TEXT_CHARS,
   MAX_WEBSOCKET_FRAME_BYTES,
 } from "./constants"
-import { eventPartition, ingestEvent, RecentMessageWindow, type OneBotInbound } from "./events"
+import { eventPartition, ingestEvent, RecentMessageWindow, type OneBotInbound, type OneBotSegment } from "./events"
 import { fetchAttachment, type FetchDeps } from "./fetch"
 import { buildOutboundSegments, splitText, type OutboundContent } from "./segments"
 import {
@@ -235,6 +236,8 @@ export class ActionWebSocketTransport implements OneBotRawTransport {
   readonly requestTimeoutMs: number
   protected connection: OneBotSocket | undefined
   private _authRejected = false
+  /** Armed by the first heartbeat meta event; fed by every frame; fires = half-open socket. */
+  private watchdog: { timer: ReturnType<typeof setTimeout>; graceMs: number; connection: OneBotSocket } | undefined
   private readonly pending = new Map<string, PendingCall>()
   private sequence = 1
   private readonly writeChains = new WeakMap<object, Promise<void>>()
@@ -340,6 +343,7 @@ export class ActionWebSocketTransport implements OneBotRawTransport {
         }
         const payload = jsonObject(raw)
         if (!payload) continue
+        this.noteFrame(payload, connection)
         // An action response carries `echo` (NapCat always, even `null`) — or, from LLOneBot's
         // token rejection, no echo at all: a `retcode` without a `post_type` is still a response.
         if ("echo" in payload || (!("post_type" in payload) && "retcode" in payload)) {
@@ -419,12 +423,62 @@ export class ActionWebSocketTransport implements OneBotRawTransport {
     }
   }
 
+  /**
+   * Liveness from the implementation's own heartbeat: the first `meta_event` heartbeat
+   * announces its `interval` and arms a watchdog at HEARTBEAT_GRACE_FACTOR × interval;
+   * every later frame re-arms it. When it fires the socket is half-open (NAT timeout,
+   * host asleep) — close it so the forward loop redials / the reverse accept ends. An
+   * implementation with heartbeats off never arms it.
+   */
+  private noteFrame(payload: Record<string, unknown>, connection: OneBotSocket): void {
+    // A frame still draining from a replaced socket must not touch the live watchdog.
+    if (this.connection !== connection) return
+    const isHeartbeat = payload.post_type === "meta_event" && payload.meta_event_type === "heartbeat"
+    if (isHeartbeat) {
+      const interval = asInteger(payload.interval, 0)
+      if (interval > 0) {
+        this.clearWatchdog(connection)
+        this.watchdog = { timer: this.watchdogTimer(connection, interval * HEARTBEAT_GRACE_FACTOR), graceMs: interval * HEARTBEAT_GRACE_FACTOR, connection }
+        return
+      }
+    }
+    const armed = this.watchdog
+    if (!armed || armed.connection !== connection) return
+    clearTimeout(armed.timer)
+    armed.timer = this.watchdogTimer(connection, armed.graceMs)
+  }
+
+  private watchdogTimer(connection: OneBotSocket, graceMs: number): ReturnType<typeof setTimeout> {
+    return setTimeout(() => {
+      if (this.connection !== connection) return
+      console.warn("onebot.heartbeat_lost", Math.round(graceMs))
+      try {
+        void Promise.resolve(connection.close(1001, "heartbeat lost")).catch(() => {})
+      } catch {
+        // a synchronous throw from a custom socket must not escape a timer callback
+      }
+      this.detach(connection)
+    }, graceMs)
+  }
+
+  private clearWatchdog(connection: OneBotSocket): void {
+    if (this.watchdog && this.watchdog.connection === connection) {
+      clearTimeout(this.watchdog.timer)
+      this.watchdog = undefined
+    }
+  }
+
   protected attach(connection: OneBotSocket): OneBotSocket | undefined {
     const previous = this.connection
     if (previous !== undefined && previous !== connection) this.detach(previous)
     this.connection = connection
-    // A new connection is a new verdict: the flag describes THIS socket's rejection only.
+    // A new connection is a new verdict: the flag describes THIS socket's rejection only,
+    // and any watchdog still armed for an older socket is dead weight.
     this._authRejected = false
+    if (this.watchdog) {
+      clearTimeout(this.watchdog.timer)
+      this.watchdog = undefined
+    }
     this.connectedGate.open()
     this.emitStatus("online")
     return previous !== undefined && previous !== connection ? previous : undefined
@@ -432,6 +486,7 @@ export class ActionWebSocketTransport implements OneBotRawTransport {
 
   protected detach(connection: OneBotSocket): void {
     if (this.connection !== connection) return
+    this.clearWatchdog(connection)
     this.connection = undefined
     this.connectedGate.close()
     const disconnected = new OneBotError("onebot.websocket.disconnected")
@@ -769,6 +824,8 @@ export class OneBotTransport {
   private readonly memberPositiveUntil = new Map<string, number>()
   private _lastLogin: OneBotLoginInfo | undefined
   private _lastConnectError: OneBotConnectError | undefined
+  /** `self_id` of the latest inbound event — the bot's own account when no login answered yet. */
+  private lastSelfId: string | undefined
   private ready = false
 
   constructor(options: OneBotTransportOptions = {}) {
@@ -869,6 +926,7 @@ export class OneBotTransport {
     this._lastConnectError = undefined
     this.emitStatus("connecting")
     await this.inner.start(async (payload) => {
+      if (payload.self_id !== undefined && payload.self_id !== null) this.lastSelfId = String(payload.self_id)
       const inbound = ingestEvent(payload, this.window)
       if (!inbound) return
       await this.dispatchMessage(inbound)
@@ -930,6 +988,16 @@ export class OneBotTransport {
     const replyTo = privateTarget ? undefined : content.replyTo
     const text = content.text ?? ""
     const chunks = text ? splitText(text, MAX_TEXT_CHARS) : [""]
+    // A redirected private reply carries the group it came from: NapCat then uses the
+    // group temp session when the two are not friends (SendMsg.ts createContext), and
+    // plain friend chat when they are. The caller has confirmed membership first —
+    // NapCat would otherwise fall back to posting INTO the group when it cannot resolve
+    // the user, which is exactly the leak the private redirect exists to prevent.
+    const privateParams = (): Record<string, unknown> =>
+      privateTarget
+        ? { user_id: protocolId(target.userId), group_id: protocolId(target.id) }
+        : { user_id: protocolId(target.id) }
+    if (chunks.length > 1) return this.sendForward(target, asPrivate, privateParams, chunks, content)
     let last: OneBotSendResult = { ok: false, error: "onebot.message.empty" }
     for (let index = 0; index < chunks.length; index += 1) {
       const lastPart = index === chunks.length - 1
@@ -951,14 +1019,8 @@ export class OneBotTransport {
       }
       const action = asPrivate ? "send_private_msg" : "send_group_msg"
       const params: Record<string, unknown> = asPrivate
-        ? {
-            user_id: protocolId(target.type === "private" ? target.id : target.userId),
-            message: segments,
-          }
-        : {
-            group_id: protocolId(target.id),
-            message: segments,
-          }
+        ? { ...privateParams(), message: segments }
+        : { group_id: protocolId(target.id), message: segments }
       try {
         const data = await this.inner.call(action, params)
         last = { ok: true, ...(messageIdOf(data) ? { messageId: messageIdOf(data) } : {}) }
@@ -968,6 +1030,53 @@ export class OneBotTransport {
       }
     }
     return last
+  }
+
+  /**
+   * Text that needs more than one message goes out as ONE merged-forward card
+   * (`send_group_forward_msg` / `send_private_forward_msg`): one `node` per chunk, the
+   * image on the last node, every node signed as the bot's own account. A card cannot
+   * carry `reply` or `at`, so those are dropped here — the card is the reply.
+   */
+  private async sendForward(
+    target: ChatTarget,
+    asPrivate: boolean,
+    privateParams: () => Record<string, unknown>,
+    chunks: string[],
+    content: OutboundContent,
+  ): Promise<OneBotSendResult> {
+    if (!this.inner) return { ok: false, error: "onebot.transport.unavailable" }
+    // Signed as the bot: the login info when the self-check answered, else the self_id every
+    // inbound event carries. `time` is seconds — NapCat's own default for a missing value
+    // is Date.now() in milliseconds, which lands in a seconds field.
+    const selfId = this._lastLogin?.userId || this.lastSelfId
+    const sender: Record<string, unknown> = { time: Math.floor(Date.now() / 1000) }
+    if (selfId) sender.user_id = protocolId(selfId)
+    if (this._lastLogin?.nickname) sender.nickname = this._lastLogin.nickname
+    const nodes: OneBotSegment[] = []
+    for (let index = 0; index < chunks.length; index += 1) {
+      const lastPart = index === chunks.length - 1
+      let segments: OneBotSegment[]
+      try {
+        segments = buildOutboundSegments({ text: chunks[index], image: lastPart ? content.image : undefined })
+      } catch (err) {
+        console.warn("onebot.message_encode_failed", errorName(err))
+        return { ok: false, error: sendErrorCode(err) }
+      }
+      if (segments.length) nodes.push({ type: "node", data: { ...sender, content: segments } })
+    }
+    if (!nodes.length) return { ok: false, error: "onebot.message.empty" }
+    const action = asPrivate ? "send_private_forward_msg" : "send_group_forward_msg"
+    const params: Record<string, unknown> = asPrivate
+      ? { ...privateParams(), messages: nodes }
+      : { group_id: protocolId(target.id), messages: nodes }
+    try {
+      const data = await this.inner.call(action, params)
+      return { ok: true, ...(messageIdOf(data) ? { messageId: messageIdOf(data) } : {}) }
+    } catch (err) {
+      console.warn("onebot.send_failed", errorName(err))
+      return { ok: false, error: sendErrorCode(err) }
+    }
   }
 
   sendText(
@@ -999,20 +1108,39 @@ export class OneBotTransport {
    * member, timeout, disconnected) is false. Positive answers are cached 10 minutes.
    */
   async isGroupMember(groupId: string | number, userId: string | number): Promise<boolean> {
+    return (await this.memberStatus(groupId, userId)) === "member"
+  }
+
+  /**
+   * `member`: the implementation answered `get_group_member_info` with data.
+   * `not_member`: it answered with an error (NapCat: retcode 1200 for an unknown member).
+   * `unknown`: no usable answer — timeout, socket down, transport unavailable.
+   * With `fresh: true` the positive cache is bypassed (still refreshed on success): the
+   * private-reply gate must decide on a live answer, never on a 10-minute-old one.
+   */
+  async memberStatus(
+    groupId: string | number,
+    userId: string | number,
+    opts: { fresh?: boolean; timeoutMs?: number } = {},
+  ): Promise<"member" | "not_member" | "unknown"> {
     const cacheKey = `${stringId(groupId)}\0${stringId(userId)}`
-    const cached = this.memberPositiveUntil.get(cacheKey)
     const now = Date.now()
-    if (cached !== undefined && cached > now) return true
-    if (!this.inner) return false
+    if (!opts.fresh) {
+      const cached = this.memberPositiveUntil.get(cacheKey)
+      if (cached !== undefined && cached > now) return "member"
+    }
+    if (!this.inner) return "unknown"
     try {
-      await this.inner.call("get_group_member_info", {
+      const call = this.inner.call("get_group_member_info", {
         group_id: protocolId(groupId),
         user_id: protocolId(userId),
       })
+      await (opts.timeoutMs !== undefined ? withTimeout(call, opts.timeoutMs, "onebot.member_check.timeout") : call)
       this.memberPositiveUntil.set(cacheKey, now + MEMBER_POSITIVE_CACHE_MS)
-      return true
-    } catch {
-      return false
+      return "member"
+    } catch (err) {
+      if (err instanceof OneBotAPIError) return "not_member"
+      return "unknown"
     }
   }
 

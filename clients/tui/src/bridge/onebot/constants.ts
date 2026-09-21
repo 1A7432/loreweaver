@@ -9,3 +9,5 @@ export const EVENT_QUEUE_LIMIT = 256
 /** Raised above the python-websockets 1 MiB default so a base64 image frame can land. */
 export const MAX_WEBSOCKET_FRAME_BYTES = 4 * Math.floor((MAX_ATTACHMENT_BYTES + 2) / 3) + 1024 * 1024
 export const MAX_ATTACHMENT_REDIRECTS = 5
+/** Watchdog grace as a multiple of the heartbeat `interval` the implementation announces. */
+export const HEARTBEAT_GRACE_FACTOR = 2.5
