@@ -55,4 +55,16 @@ describe("QQBotTransportPort mapping", () => {
       }),
     ).toEqual({ ok: false, code: 40034105, message: "off" })
   })
+
+  test("HTTP 429 without a platform code maps to numeric 429 and keeps retryAfterMs", () => {
+    expect(
+      toPortSendResult({
+        ok: false,
+        code: "qqbot.send.rate_limited",
+        message: "slow",
+        httpStatus: 429,
+        retryAfterMs: 1500,
+      }),
+    ).toEqual({ ok: false, code: 429, message: "slow", retryAfterMs: 1500 })
+  })
 })

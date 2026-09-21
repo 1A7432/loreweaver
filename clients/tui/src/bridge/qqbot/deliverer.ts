@@ -93,10 +93,11 @@ export class QQBotDeliverer implements Deliverer {
   private readonly pendingSleeps = new Map<ReturnType<typeof setTimeout>, () => void>()
   private readonly stopped = new Set<string>()
   private thinkingThisTurn = false
+  private thinkingAnchorId: string | undefined
   private contentThisTurn = false
   private heldForTail: CoalescedWindow | undefined
   private narrativeGeneration = 0
-  private readonly busyNotice: boolean
+  private busyNotice: boolean
   private readonly whitelist: readonly string[]
   private readonly maxChunk: number
   private readonly now: () => number
@@ -196,8 +197,14 @@ export class QQBotDeliverer implements Deliverer {
     target: string
     seat?: string
     receivedAt?: number
+    /** When false, skip the thinking line (commands / rate-limit). Default true. */
+    busy?: boolean
   }): Promise<Anchor> {
     return this.runSerial(() => this.openAnchorLocked(input))
+  }
+
+  setBusyNotice(on: boolean): void {
+    this.busyNotice = on
   }
 
   setGroupActive(on: boolean | null): void {
@@ -420,6 +427,7 @@ export class QQBotDeliverer implements Deliverer {
     target: string
     seat?: string
     receivedAt?: number
+    busy?: boolean
   }): Promise<Anchor> {
     const anchor = this.anchors.create({
       id: input.id,
@@ -455,9 +463,23 @@ export class QQBotDeliverer implements Deliverer {
       this.c2cAuditNotices.delete(input.target)
       for (const line of notices) await this.sendNotice(anchor, line)
     }
-    if (input.scope === "group" && this.busyNotice && !this.thinkingThisTurn) {
+    if (this.thinkingAnchorId) {
+      const prev = this.anchors.get(this.thinkingAnchorId)
+      if (!prev || !this.anchors.isOpen(prev)) {
+        this.thinkingThisTurn = false
+        this.thinkingAnchorId = undefined
+      }
+    }
+    const busy = input.busy ?? true
+    if (!busy) {
+      this.thinkingThisTurn = false
+      this.thinkingAnchorId = undefined
+    } else if (input.scope === "group" && this.busyNotice && !this.thinkingThisTurn) {
       const sent = await this.sendNotice(anchor, tt(this.locale(), "bridge.qqbot.thinking"))
-      if (sent) this.thinkingThisTurn = true
+      if (sent) {
+        this.thinkingThisTurn = true
+        this.thinkingAnchorId = anchor.id
+      }
     }
     await this.persist()
     return anchor

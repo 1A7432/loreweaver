@@ -134,6 +134,14 @@ export interface BridgeRouterOptions {
   deferredSummary?: () => DeferredSummary
   /** Old seat key after `.bridge name` remint; WS4 closes the previous link. */
   onSeatReminted?: (userId: string, previousKey: string) => void
+  /**
+   * When false, TurnStatus does not emit the router's own thinking line
+   * (`bridge.busy`). The qqbot path sets this so the deliverer owns the
+   * notice while `.bridge status` still reads `busyNotice`.
+   */
+  ownBusyNotice?: boolean
+  /** Live `.bridge notice` on the qqbot path forwards to the deliverer. */
+  onBusyNotice?: (on: boolean) => void
 }
 
 /**
@@ -163,6 +171,9 @@ export class BridgeRouter {
   private sink: FrameSink | undefined
   /** Seats whose latest player-link `state` frame carried a non-null `character`. */
   private readonly characterSeats = new Set<string>()
+  /** Seats that have received at least one `state` frame on this link. */
+  private readonly stateSeen = new Set<string>()
+  private readonly ownBusyNotice: boolean
   private readonly holdMs: number
   private readonly now: () => number
   private readonly setTimeoutFn: typeof setTimeout
@@ -172,6 +183,7 @@ export class BridgeRouter {
     this.choices = options.choices ?? new ChoicesWindow()
     this.mode = options.mode ?? "mention"
     this.busyNotice = options.busyNotice ?? true
+    this.ownBusyNotice = options.ownBusyNotice ?? true
     this.admins = (options.admins ?? []).map(String)
     this.sink = options.sink
     this.holdMs = options.holdMs ?? ADMIN_HOLD_MS
@@ -425,6 +437,7 @@ export class BridgeRouter {
       setBusyNotice: (on) => {
         this.busyNotice = on
         this.persistSettings()
+        this.options.onBusyNotice?.(on)
       },
       addAdmin: (userId) => {
         if (!this.admins.includes(userId)) this.admins.push(userId)
@@ -444,7 +457,9 @@ export class BridgeRouter {
         }
       },
       identity: this.options.identity,
-      hasCharacter: this.options.hasCharacter ?? ((seat) => this.characterSeats.has(seat)),
+      hasCharacter:
+        this.options.hasCharacter ??
+        ((seat) => !this.stateSeen.has(seat) || this.characterSeats.has(seat)),
       remintSeat: async (userId, displayName) => {
         const keyring = this.options.keyring
         if (!keyring) return { name: displayName }
@@ -524,6 +539,7 @@ export class BridgeRouter {
    */
   private noteCharacterState(slot: MemberSlot, frame: StateFrame): void {
     if (slot.role === "observer" || !slot.userId) return
+    this.stateSeen.add(slot.userId)
     if (frame.character) this.characterSeats.add(slot.userId)
     else this.characterSeats.delete(slot.userId)
   }
@@ -594,7 +610,7 @@ export class BridgeRouter {
           return
         }
         if (frame.status === "busy") {
-          if (this.busyNotice && this.lastTurn !== "busy") {
+          if (this.ownBusyNotice && this.busyNotice && this.lastTurn !== "busy") {
             this.emit({ dest: "group", text: tt(this.locale(), "bridge.busy") })
           }
           this.lastTurn = "busy"

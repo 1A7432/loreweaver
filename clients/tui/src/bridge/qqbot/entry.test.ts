@@ -5,8 +5,10 @@ import { describe, expect, test } from "bun:test"
 import { FrameType } from "loreweaver-protocol"
 import type { LoadIroh } from "../../irohLink"
 import { tt } from "../../i18n"
-import { parseBridgeConfig } from "../config"
+import { parseBridgeConfig, qqbotTransportOptions } from "../config"
 import { runBridge } from "../index"
+import { QQBotApiError } from "./shared"
+import { qqbotStartFailure } from "./entry"
 import { GROUP_WINDOW_MS } from "./anchors"
 import { WINDOW_MS } from "./coalescer"
 import { startFakeQQBotGateway } from "./testing/fakeGateway"
@@ -16,6 +18,7 @@ import {
   SAMPLE_MEMBER_OPENID,
   c2cMessageCreate,
   dispatch,
+  friendAdd,
   groupAddRobot,
   groupAtMessageCreate,
   groupMsgReceive,
@@ -220,7 +223,9 @@ function messageCalls(rest: ReturnType<typeof startFakeQQBotRest>): Array<{ path
     }))
 }
 
-async function startHarness() {
+async function startHarness(
+  extra: { busyNotice?: boolean; admins?: string[]; receiveAll?: boolean } = {},
+) {
   const stateDir = await mkdtemp(join(tmpdir(), "lw-qqbot-entry-"))
   const clock = new ManualClock()
   const gw = startFakeQQBotGateway({ heartbeatIntervalMs: 3_600_000 })
@@ -229,7 +234,7 @@ async function startHarness() {
     appId: APP_ID,
     clientSecret: SECRET,
     transport: "websocket",
-    receiveAll: false,
+    receiveAll: extra.receiveAll ?? false,
     apiBase: rest.apiBase,
     authBase: rest.authBase,
     requestTimeoutMs: 2000,
@@ -242,9 +247,9 @@ async function startHarness() {
     ticket: TICKET,
     keeper_key: KEEP,
     locale: "en",
-    qqbot: { app_id: APP_ID, client_secret: SECRET },
-    groups: [{ group_openid: SAMPLE_GROUP_OPENID }],
-    busy_notice: false,
+    qqbot: { app_id: APP_ID, client_secret: SECRET, receive_all: extra.receiveAll ?? false },
+    groups: [{ group_openid: SAMPLE_GROUP_OPENID, admins: extra.admins ?? [] }],
+    busy_notice: extra.busyNotice ?? false,
     idle_close_minutes: 30,
     state_dir: stateDir,
   })
@@ -261,6 +266,50 @@ async function startHarness() {
   await ungate(iroh, KEEP, "keeper")
   await ungate(iroh, observerKey, "player")
   return { handle, iroh, gw, rest, transport, clock, logs, observerKey, stateDir }
+}
+
+async function claimKeeper(h: Awaited<ReturnType<typeof startHarness>>) {
+  const claim = h.logs.find((line) => /claim code: [A-Z2-9]{8}/.test(line))!.match(/claim code: ([A-Z2-9]{8})/)![1]!
+  h.gw.sendDispatch(
+    dispatch(
+      "C2C_MESSAGE_CREATE",
+      c2cMessageCreate({
+        id: `c2c-claim-${Date.now()}`,
+        content: `.bridge claim ${claim}`,
+        timestamp: "",
+        author: { id: ADMIN_USER_OPENID, user_openid: ADMIN_USER_OPENID, username: "Keeper", bot: false },
+      }),
+      { id: "evt-claim-h", s: 2 },
+    ),
+  )
+  await waitFor(() => messageCalls(h.rest).some((call) => call.path.includes(`/users/${ADMIN_USER_OPENID}/messages`)))
+  const link = JSON.stringify(
+    messageCalls(h.rest).find((call) => call.path.includes(`/users/${ADMIN_USER_OPENID}/messages`))!.body,
+  ).match(/\.bridge claim ([A-Z2-9]{6})/)![1]!
+  h.gw.sendDispatch(
+    dispatch(
+      "GROUP_AT_MESSAGE_CREATE",
+      groupAtMessageCreate({
+        id: "msg-link-h",
+        content: `.bridge claim ${link}`,
+        timestamp: "",
+        author: {
+          id: SAMPLE_MEMBER_OPENID,
+          member_openid: SAMPLE_MEMBER_OPENID,
+          username: "Keeper",
+          bot: false,
+        },
+      }),
+      { id: "evt-link-h", s: 3 },
+    ),
+  )
+  await waitFor(() =>
+    messageCalls(h.rest).some((call) => JSON.stringify(call.body).includes("You are now a room admin")),
+  )
+  await waitFor(() => h.iroh.joins.filter((row) => row.key.startsWith("k-Keeper")).length >= 2)
+  const keeperJoin = [...h.iroh.joins].reverse().find((row) => row.key.startsWith("k-Keeper"))!
+  await ungate(h.iroh, keeperJoin.key, "keeper")
+  return keeperJoin
 }
 
 describe("qqbot bridge entry", () => {
@@ -457,4 +506,251 @@ describe("qqbot bridge entry", () => {
       gw.close()
     }
   }, 30_000)
+
+  test("a second @ on the same seat is not re-gated; system and input still flow", async () => {
+    const { handle, iroh, gw, rest, logs } = await startHarness()
+    try {
+      const claim = logs.find((line) => /claim code: [A-Z2-9]{8}/.test(line))!.match(/claim code: ([A-Z2-9]{8})/)![1]!
+      gw.sendDispatch(
+        dispatch(
+          "C2C_MESSAGE_CREATE",
+          c2cMessageCreate({
+            id: "c2c-claim-b1",
+            content: `.bridge claim ${claim}`,
+            timestamp: "",
+            author: { id: ADMIN_USER_OPENID, user_openid: ADMIN_USER_OPENID, username: "Keeper", bot: false },
+          }),
+          { id: "evt-claim-b1", s: 2 },
+        ),
+      )
+      await waitFor(() => messageCalls(rest).some((call) => call.path.includes(`/users/${ADMIN_USER_OPENID}/messages`)))
+      const link = JSON.stringify(
+        messageCalls(rest).find((call) => call.path.includes(`/users/${ADMIN_USER_OPENID}/messages`))!.body,
+      ).match(/\.bridge claim ([A-Z2-9]{6})/)![1]!
+      gw.sendDispatch(
+        dispatch(
+          "GROUP_AT_MESSAGE_CREATE",
+          groupAtMessageCreate({
+            id: "msg-link-b1",
+            content: `.bridge claim ${link}`,
+            timestamp: "",
+            author: {
+              id: SAMPLE_MEMBER_OPENID,
+              member_openid: SAMPLE_MEMBER_OPENID,
+              username: "Keeper",
+              bot: false,
+            },
+          }),
+          { id: "evt-link-b1", s: 3 },
+        ),
+      )
+      await waitFor(() =>
+        messageCalls(rest).some((call) => JSON.stringify(call.body).includes("You are now a room admin")),
+      )
+      await waitFor(() => iroh.joins.filter((row) => row.key.startsWith("k-Keeper")).length >= 2)
+      const keeperJoin = [...iroh.joins].reverse().find((row) => row.key.startsWith("k-Keeper"))!
+      await ungate(iroh, keeperJoin.key, "keeper")
+
+      const at = (id: string, content: string, s: number) =>
+        gw.sendDispatch(
+          dispatch(
+            "GROUP_AT_MESSAGE_CREATE",
+            groupAtMessageCreate({
+              id,
+              content,
+              timestamp: "",
+              author: {
+                id: SAMPLE_MEMBER_OPENID,
+                member_openid: SAMPLE_MEMBER_OPENID,
+                username: "Keeper",
+                bot: false,
+              },
+            }),
+            { id: `evt-${id}`, s },
+          ),
+        )
+      at("msg-roll-2", ".r 3d6", 4)
+      await waitFor(() => framesOf(iroh.sent).some((frame) => frame.type === FrameType.Input && frame.text === ".r 3d6"))
+      at("msg-roll-3", ".r 1d4", 5)
+      await waitFor(() => framesOf(iroh.sent).some((frame) => frame.type === FrameType.Input && frame.text === ".r 1d4"))
+
+      keeperJoin.stream.push(`${JSON.stringify({ type: FrameType.System, level: "info", text: "secret after two ats" })}\n`)
+      await waitFor(() =>
+        messageCalls(rest).some((call) => JSON.stringify(call.body).includes("secret after two ats")),
+      )
+      const secret = messageCalls(rest).filter((call) => JSON.stringify(call.body).includes("secret after two ats"))
+      expect(secret.some((call) => call.path.includes(`/users/${ADMIN_USER_OPENID}/messages`))).toBe(true)
+      expect(secret.some((call) => call.path.includes("/groups/"))).toBe(false)
+    } finally {
+      await handle.stop()
+      rest.close()
+      gw.close()
+    }
+  }, 30_000)
+
+  test(".bridge status is one POST; a later forwarded input sends the thinking line", async () => {
+    const { handle, iroh, gw, rest, observerKey } = await startHarness({ busyNotice: true })
+    try {
+      gw.sendDispatch(
+        dispatch(
+          "GROUP_AT_MESSAGE_CREATE",
+          groupAtMessageCreate({
+            id: "msg-status",
+            content: ".bridge status",
+            timestamp: "",
+            author: {
+              id: SAMPLE_MEMBER_OPENID,
+              member_openid: SAMPLE_MEMBER_OPENID,
+              username: "Ada",
+              bot: false,
+            },
+          }),
+          { id: "evt-status", s: 2 },
+        ),
+      )
+      await waitFor(() => messageCalls(rest).some((call) => call.path.includes("/groups/")))
+      const afterStatus = messageCalls(rest).filter((call) => call.path.includes("/groups/"))
+      expect(afterStatus).toHaveLength(1)
+      expect(JSON.stringify(afterStatus[0]!.body)).not.toContain(tt("en", "bridge.qqbot.thinking"))
+
+      const adaKey = iroh.joins.find((row) => row.key.startsWith("k-Ada"))!.key
+      await ungate(iroh, adaKey)
+      gw.sendDispatch(
+        dispatch(
+          "GROUP_AT_MESSAGE_CREATE",
+          groupAtMessageCreate({
+            id: "msg-roll-busy",
+            content: ".r 3d6",
+            timestamp: "",
+            author: {
+              id: SAMPLE_MEMBER_OPENID,
+              member_openid: SAMPLE_MEMBER_OPENID,
+              username: "Ada",
+              bot: false,
+            },
+          }),
+          { id: "evt-roll-busy", s: 3 },
+        ),
+      )
+      await waitFor(() =>
+        messageCalls(rest).some((call) => JSON.stringify(call.body).includes(tt("en", "bridge.qqbot.thinking"))),
+      )
+      expect(observerKey).toBeTruthy()
+    } finally {
+      await handle.stop()
+      rest.close()
+      gw.close()
+    }
+  }, 30_000)
+
+  test(".bridge notice off is live and status reports it; the next turn has no thinking POST", async () => {
+    const h = await startHarness({ busyNotice: true })
+    try {
+      await claimKeeper(h)
+      const at = (id: string, content: string, s: number) =>
+        h.gw.sendDispatch(
+          dispatch(
+            "GROUP_AT_MESSAGE_CREATE",
+            groupAtMessageCreate({
+              id,
+              content,
+              timestamp: "",
+              author: {
+                id: SAMPLE_MEMBER_OPENID,
+                member_openid: SAMPLE_MEMBER_OPENID,
+                username: "Keeper",
+                bot: false,
+              },
+            }),
+            { id: `evt-${id}`, s },
+          ),
+        )
+      at("msg-notice-off", ".bridge notice off", 4)
+      await waitFor(() =>
+        messageCalls(h.rest).some((call) => JSON.stringify(call.body).includes("Busy notice is now off")),
+      )
+      at("msg-status-off", ".bridge status", 5)
+      await waitFor(() => messageCalls(h.rest).some((call) => JSON.stringify(call.body).includes("notice off")))
+      const beforeRoll = messageCalls(h.rest).length
+      at("msg-roll-silent", ".r 3d6", 6)
+      await waitFor(() =>
+        framesOf(h.iroh.sent).some((frame) => frame.type === FrameType.Input && frame.text === ".r 3d6"),
+      )
+      await settle(80)
+      const after = messageCalls(h.rest).slice(beforeRoll)
+      expect(after.some((call) => JSON.stringify(call.body).includes(tt("en", "bridge.qqbot.thinking")))).toBe(false)
+    } finally {
+      await h.handle.stop()
+      h.rest.close()
+      h.gw.close()
+    }
+  }, 30_000)
+
+  test("plain groupMessage prose does not mint a seat even with receive_all", async () => {
+    const { handle, iroh, gw, rest } = await startHarness({ receiveAll: true })
+    try {
+      const joinsBefore = iroh.joins.length
+      gw.sendDispatch(
+        dispatch(
+          "GROUP_MESSAGE_CREATE",
+          groupAtMessageCreate({
+            id: "msg-chat",
+            content: "hello bystander",
+            timestamp: "",
+            author: {
+              id: SAMPLE_MEMBER_OPENID,
+              member_openid: SAMPLE_MEMBER_OPENID,
+              username: "Ada",
+              bot: false,
+            },
+          }),
+          { id: "evt-chat", s: 2 },
+        ),
+      )
+      await settle(80)
+      expect(iroh.joins.length).toBe(joinsBefore)
+      expect(messageCalls(rest)).toEqual([])
+    } finally {
+      await handle.stop()
+      rest.close()
+      gw.close()
+    }
+  }, 15_000)
+
+  test("GROUP_DEL_ROBOT and friend events are logged; start-failure codes map to distinct i18n", async () => {
+    const { handle, gw, rest, logs } = await startHarness()
+    try {
+      gw.sendDispatch(dispatch("GROUP_DEL_ROBOT", groupAddRobot({ group_openid: "LEFT-GROUP" }), { id: "evt-left", s: 2 }))
+      gw.sendDispatch(dispatch("FRIEND_ADD", friendAdd({ openid: "U-NEW" }), { id: "evt-friend", s: 3 }))
+      await settle(40)
+      expect(logs.some((line) => line.includes("qqbot.group.left LEFT-GROUP"))).toBe(true)
+      expect(logs.some((line) => line.includes("qqbot.friend.add U-NEW"))).toBe(true)
+    } finally {
+      await handle.stop()
+      rest.close()
+      gw.close()
+    }
+    expect(qqbotStartFailure(new QQBotApiError("qqbot.auth.rejected"))).toEqual({
+      log: "qqbot.start.failed qqbot.auth.rejected",
+      key: "bridge.qqbot.authFailed",
+    })
+    expect(qqbotStartFailure(new QQBotApiError("qqbot.gateway.ready_timeout"))).toEqual({
+      log: "qqbot.start.failed qqbot.gateway.ready_timeout",
+      key: "bridge.qqbot.intentNotApproved",
+    })
+    expect(qqbotStartFailure(new QQBotApiError("qqbot.gateway.invalid_session"))).toEqual({
+      log: "qqbot.start.failed qqbot.gateway.invalid_session",
+      key: "bridge.qqbot.intentNotApproved",
+    })
+    expect(qqbotStartFailure(new Error("boom"))).toEqual({
+      log: "qqbot.start.failed Error",
+      key: "bridge.qqbot.connectFailed",
+    })
+    const cfg = parseBridgeConfig({
+      platform: "qqbot",
+      qqbot: { app_id: APP_ID, client_secret: SECRET, send_timeout: 5 },
+      groups: [{ group_openid: SAMPLE_GROUP_OPENID }],
+    })
+    expect(qqbotTransportOptions(cfg.qqbot!)).toEqual({ requestTimeoutMs: 10_000 })
+  }, 15_000)
 })

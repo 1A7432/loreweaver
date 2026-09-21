@@ -398,6 +398,9 @@ const messages = {
     "bridge.qqbot.reconnecting": "QQ Bot connection dropped; reconnecting.",
     "bridge.qqbot.offline": "QQ Bot connection is offline.",
     "bridge.qqbot.connectFailed": "The QQ Bot transport failed to connect.",
+    "bridge.qqbot.authFailed": "The QQ Bot rejected the app credentials. Check app_id and client_secret.",
+    "bridge.qqbot.intentNotApproved":
+      "The QQ Bot gateway refused the session. Apply for GROUP_AND_C2C_EVENT in the q.qq.com console.",
   },
   zh: {
     "connect.subtitle": "灯下的牌桌 · 用邀请码连接一位守秘人",
@@ -781,6 +784,9 @@ const messages = {
     "bridge.qqbot.reconnecting": "QQ 官方机器人连接断了，正在重连。",
     "bridge.qqbot.offline": "QQ 官方机器人连接已离线。",
     "bridge.qqbot.connectFailed": "QQ 官方机器人传输没能连上。",
+    "bridge.qqbot.authFailed": "QQ 官方机器人拒绝了应用凭据。请核对 app_id 和 client_secret。",
+    "bridge.qqbot.intentNotApproved":
+      "QQ 官方网关拒绝了会话。请在 q.qq.com 控制台申请 GROUP_AND_C2C_EVENT。",
   },
 } as const
 

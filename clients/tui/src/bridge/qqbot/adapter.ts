@@ -35,6 +35,11 @@ export function toTransportSendRequest(target: string, req: QQBotSendRequest): Q
   return out
 }
 
+function withRetryAfter(fail: QQBotSendResult, retryAfterMs: number | undefined): QQBotSendResult {
+  if (fail.ok || retryAfterMs === undefined) return fail
+  return { ...fail, retryAfterMs }
+}
+
 export function toPortSendResult(result: QQBotTransportSendResult): QQBotSendResult {
   if (result.ok) {
     const ok: QQBotSendResult = { ok: true }
@@ -49,9 +54,15 @@ export function toPortSendResult(result: QQBotTransportSendResult): QQBotSendRes
     return { ok: false, code: "markdown_refused", message: result.message }
   }
   if (result.platformCode !== undefined) {
-    return { ok: false, code: result.platformCode, message: result.message }
+    return withRetryAfter(
+      { ok: false, code: result.platformCode, message: result.message },
+      result.retryAfterMs,
+    )
   }
-  return { ok: false, code: result.code, message: result.message }
+  if (result.httpStatus === 429) {
+    return withRetryAfter({ ok: false, code: 429, message: result.message }, result.retryAfterMs)
+  }
+  return withRetryAfter({ ok: false, code: result.code, message: result.message }, result.retryAfterMs)
 }
 
 function toPortUpload(result: QQBotUploadResult | undefined): { file_info: string } | undefined {

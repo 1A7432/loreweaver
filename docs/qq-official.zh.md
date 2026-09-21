@@ -33,10 +33,16 @@ ticket 和守秘人密钥。Studio / 终端的玩家仍然可以用普通邀请�
 3. 把 `AppID`（`app_id`）和 `AppSecret`（`client_secret`）写进配置。密钥不会出现在
    任何错误信息或日志行里。
 4. 如果希望骰子和命令不用 @（`.ra 侦查`、`r 3d6`），再打开「**接收所有消息**」。
-   文档里的默认是关：机器人听到的每一句都已经带了 @。即便打开，旁白仍然要 @。
+   文档里的默认是关：机器人听到的每一句都已经带了 @。即便打开，旁白仍然要 @——
+   `groups[].mode: "all"` 只作用于 `@` 事件（`GROUP_AT_MESSAGE_CREATE`）；一条不是
+   命令的普通 `GROUP_MESSAGE_CREATE` 会被忽略，也不会开席。
 5. 消息里需要链接时，在控制台的「**消息URL配置**」里加主机名，并在
    `qqbot.url_whitelist` 里列同一批。配置本身不授权任何控制台没放过的东西；两边
    名单对不上的 URL 会被替换成 `[链接]`。
+6. **§10.7 — 分片上传。** 在控制台确认未认证机器人可以调用 `upload_prepare` /
+   `upload_part_finish`（没有公网 URL 时，定妆图就是这样出房间的）。首次跑通时
+   归档一条真实的 `upload_prepare` 响应。
+7. **§10.9 — markdown。** 原生 markdown（`msg_type: 2`）不用在控制台另外申请。
 
 Webhook 传输没有做。桥只走官方 WebSocket 网关。
 
@@ -65,7 +71,8 @@ Webhook 传输没有做。桥只走官方 WebSocket 网关。
     "url_whitelist": [],
     "media_public_base_url": null,
     "bot_qpm": 30,
-    "send_timeout": 5
+    "send_timeout": 5,
+    "request_timeout": 10
   },
   "groups": [
     { "group_openid": "…", "room_keeper_key": "…", "mode": "mention", "admins": [] }
@@ -86,6 +93,15 @@ Webhook 传输没有做。桥只走官方 WebSocket 网关。
 `admins` 是可选的 `member_openid` 种子（从 `.bridge members` 或上一次运行抄），
 给不想走领取流程的时候用。种子管理员可以在群里跑 `.bridge` 命令；守秘人级的私聊
 回复仍然需要走领取绑定，桥才知道该发到哪个 C2C 身份。
+
+`groups[].mode` 是 `mention`（默认）或 `all`。在这条路径上它只改变 **@ 之后**
+会发生什么：`all` 会把带 @ 的旁白和命令一起转发；`mention` 本来就会转发带 @
+的旁白，因为每一句 @ 都是 mention。打开 `receive_all` 时，看起来像命令的普通
+群消息（`.ra`、`r 3d6`）仍然听得到；没有 @ 的旁白永远不会转发，也不会开席。
+
+`qqbot.send_timeout`（默认 5 秒）是投递器每条发送的竞赛超时。
+`qqbot.request_timeout`（默认 10 秒）是传输层的就绪门和 REST 超时——别把它缩到
+5 秒，否则 Identify + Ready 在慢控制台上会失败。
 
 状态文件（`<group>.keyring.json`、`<group>.posted.json`、`<group>.settings.json`、
 `<group>.identity.json`、`<group>.anchors.json`、`<group>.deferred.json`）以
@@ -129,7 +145,8 @@ Webhook 传输没有做。桥只走官方 WebSocket 网关。
 席位名称来自事件里的 `author.username`（有的话），否则是 `玩家<后 4 位十六进制>`。
 `.bridge name <名字>` 给席位改名，**只在该席还没有领取角色时可用**。领过角色之后
 会回答「请用 `.rename` 改角色名」。先给自己起名，再领卡。没有这一步，这条路径上
-每个席位整场都会是 `玩家a1b2`。
+每个席位整场都会是 `玩家a1b2`。重连之后席位上的第一条 `.bridge name` 可能要再发
+一次——在 `state` 帧到达之前，桥把席位当成已锁定，以免拆掉一张已领取的卡。
 
 桥级命令：`.bridge status`、`.bridge members`、`.bridge kick`、
 `.bridge admin add|remove`、`.bridge mode`、`.bridge notice`、`.bridge claim`、
@@ -152,6 +169,7 @@ Webhook 传输没有做。桥只走官方 WebSocket 网关。
 - 正文里的 URL 除非主机同时在控制台白名单和 `url_whitelist` 里，否则会被拒。
 - `member_openid` 是按（机器人，群）计的。如果平台重新签发，席位会重铸，已领取
   的角色会变成孤儿。
+- `media_public_base_url` 在 v1 里只是占位，没有接线；上传只走分片会话。
 
 ## 回合要几分钟
 
@@ -176,7 +194,10 @@ Webhook 传输没有做。桥只走官方 WebSocket 网关。
 
 ## 现场冒烟清单
 
-在你自己当群主的小群里、用未认证机器人跑。按期望的返回码打勾。
+在你自己当群主的小群里、用未认证机器人跑。按期望的返回码打勾。**先做这三件：**
+（1）同一个人连发两条 `@`，再在群里打一条管理员的秘密问题，答案只出现在私聊；
+（2）未认证机器人走一次分片上传，把真实的 `upload_prepare` 响应归档；
+（3）第一次 Identify，失败时日志里能看到启动失败码（`qqbot.start.failed …`）。
 
 | 检查 | 期望 |
 |---|---|

@@ -39,7 +39,7 @@ export type { PendingReview, QQBotDelivererOptions, QQBotMediaSource } from "./d
 
 export { QQBotTransportPort, toPortSendResult, toTransportSendRequest } from "./adapter"
 
-export { runQQBotBridge } from "./entry"
+export { runQQBotBridge, qqbotStartFailure } from "./entry"
 
 export { isSendOk, numericCode } from "./port"
 export type {

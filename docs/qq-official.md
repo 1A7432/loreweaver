@@ -38,11 +38,20 @@ is one more member set, not a different room.
    The secret is never printed in an error or a log line.
 4. Optionally enable **接收所有消息** if you want `@`-free commands
    (`.ra 侦查`, `r 3d6`). The documented default is off: every line the bot
-   hears was an `@`. Prose still requires an `@` even when this is on.
+   hears was an `@`. Prose still requires an `@` even when this is on —
+   `groups[].mode: "all"` only applies to `@` events (`GROUP_AT_MESSAGE_CREATE`);
+   a plain `GROUP_MESSAGE_CREATE` that is not a command is ignored and does not
+   mint a seat.
 5. If you need URLs in messages, add the hosts under the console's **消息URL配置**
    and list the same hosts in `qqbot.url_whitelist`. The config grants nothing
    the console has not already allowed; a URL that is not on both lists is
    replaced by `[链接]` / `[link]`.
+6. **§10.7 — chunked upload.** Confirm in the console that unverified bots may
+   call `upload_prepare` / `upload_part_finish` (this is how stills leave the
+   room with no public URL). Archive one real `upload_prepare` response on first
+   run.
+7. **§10.9 — markdown.** Native markdown (`msg_type: 2`) needs no extra
+   application in the console.
 
 Webhook transport is not built. The bridge speaks the official WebSocket
 gateway only.
@@ -74,7 +83,8 @@ One JSON file per bridge process. Timeouts are **seconds**.
     "url_whitelist": [],
     "media_public_base_url": null,
     "bot_qpm": 30,
-    "send_timeout": 5
+    "send_timeout": 5,
+    "request_timeout": 10
   },
   "groups": [
     { "group_openid": "…", "room_keeper_key": "…", "mode": "mention", "admins": [] }
@@ -97,6 +107,17 @@ same `group_id` the OneBot route uses for state files and the duplicate check.
 or a previous run) for when you do not want the claim flow. Seeded admins can
 run `.bridge` commands in the group; keeper-private replies still need the
 claim binding so the bridge knows which C2C identity to send them to.
+
+`groups[].mode` is `mention` (default) or `all`. On this route it only changes
+what happens **after an `@`**: `all` forwards `@`'d prose as well as commands;
+`mention` already forwards `@`'d prose because every `@` is a mention. With
+`receive_all`, a plain group message that looks like a command (`.ra`, `r 3d6`)
+is still heard; prose without an `@` is never forwarded and never mints a seat.
+
+`qqbot.send_timeout` (default 5 s) is the deliverer's per-send race.
+`qqbot.request_timeout` (default 10 s) is the transport ready-gate and REST
+timeout — do not shrink it to 5 s or Identify + Ready will fail on a slow
+console.
 
 State files (`<group>.keyring.json`, `<group>.posted.json`,
 `<group>.settings.json`, `<group>.identity.json`, `<group>.anchors.json`,
@@ -150,7 +171,9 @@ Seats are named from `author.username` when the event carries one, else
 and is allowed **only while the seat has no claimed character**. After a
 character claim it answers "use `.rename` for the character". Name yourself
 first, then claim. Without this, every seat on this route would stay
-`玩家a1b2` for the whole campaign.
+`玩家a1b2` for the whole campaign. A seat's first `.bridge name` right after a
+reconnect may need to be repeated — until a `state` frame arrives the bridge
+treats the seat as locked so it cannot orphan a claimed sheet.
 
 Bridge-level commands: `.bridge status`, `.bridge members`, `.bridge kick`,
 `.bridge admin add|remove`, `.bridge mode`, `.bridge notice`, `.bridge claim`,
@@ -178,6 +201,8 @@ In **both** modes:
   **and** in `url_whitelist`.
 - `member_openid` is per (bot, group). If the platform ever reissues it, the
   seat is reminted and a claimed character is orphaned.
+- `media_public_base_url` is reserved, not wired in v1; uploads use the chunked
+  session only.
 
 ## Turns take a few minutes
 
@@ -208,7 +233,11 @@ group is quiet. A second player's input during a turn is not forwarded as a
 ## Live-smoke checklist
 
 Run this in a small group you own, with an unverified bot. Tick the expected
-return.
+return. Do these **first**: (1) the same person sending two `@` in a row, then
+an admin's group-typed secret question answered only in private; (2) a chunked
+upload from an unverified bot, with the real `upload_prepare` response
+archived; (3) the first Identify, with the start-failure code visible in the
+log if it fails (`qqbot.start.failed …`).
 
 | Check | Expected |
 |---|---|

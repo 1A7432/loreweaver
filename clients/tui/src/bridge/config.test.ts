@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { BridgeConfigError, isWsUrl, onebotTimeoutsMs, parseBridgeConfig } from "./config"
+import { BridgeConfigError, isWsUrl, onebotTimeoutsMs, parseBridgeConfig, qqbotTransportOptions } from "./config"
 
 const base = {
   onebot: { mode: "forward" as const, ws_url: "ws://127.0.0.1:3001", access_token: "tok" },
@@ -232,6 +232,7 @@ describe("bridge config — qqbot platform", () => {
       media_public_base_url: null,
       bot_qpm: 30,
       send_timeout: 5,
+      request_timeout: 10,
     })
     expect(cfg.groups[0]!.group_id).toBe("B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5")
     expect(cfg.groups[0]!.admins).toEqual([])
@@ -379,5 +380,21 @@ describe("bridge config — qqbot platform", () => {
       return
     }
     throw new Error("expected invalid_timeout")
+  })
+
+  test("send_timeout feeds the deliverer; request_timeout (default 10s) feeds the transport", () => {
+    const cfg = parseBridgeConfig({
+      ...qqbotBase,
+      qqbot: { ...qqbotBase.qqbot, send_timeout: 5 },
+    })
+    expect(cfg.qqbot!.send_timeout).toBe(5)
+    expect(cfg.qqbot!.request_timeout).toBe(10)
+    expect(qqbotTransportOptions(cfg.qqbot!)).toEqual({ requestTimeoutMs: 10_000 })
+    const custom = parseBridgeConfig({
+      ...qqbotBase,
+      qqbot: { ...qqbotBase.qqbot, send_timeout: 3, request_timeout: 15 },
+    })
+    expect(qqbotTransportOptions(custom.qqbot!)).toEqual({ requestTimeoutMs: 15_000 })
+    expect(custom.qqbot!.send_timeout).toBe(3)
   })
 })

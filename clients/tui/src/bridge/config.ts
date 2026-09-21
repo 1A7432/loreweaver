@@ -44,8 +44,10 @@ export interface QQBotBridgeConfig {
   url_whitelist: string[]
   media_public_base_url: string | null
   bot_qpm: number
-  /** Seconds. Converted to milliseconds for the transport and deliverer. */
+  /** Seconds. Converted to milliseconds for the deliverer send race only. */
   send_timeout: number
+  /** Seconds. Converted to milliseconds for the transport ready-gate and REST. Default 10. */
+  request_timeout: number
 }
 
 export interface BridgeConfig {
@@ -169,6 +171,7 @@ function parseGroup(raw: unknown, platform: BridgePlatform): BridgeGroupConfig {
 export const DEFAULT_REQUEST_TIMEOUT_SECONDS = 10
 export const DEFAULT_RECONNECT_DELAY_SECONDS = 1
 export const DEFAULT_QQBOT_SEND_TIMEOUT_SECONDS = 5
+export const DEFAULT_QQBOT_REQUEST_TIMEOUT_SECONDS = 10
 export const DEFAULT_QQBOT_BOT_QPM = 30
 export const DEFAULT_QQBOT_MAX_CHUNK_CHARS = 2800
 
@@ -294,6 +297,11 @@ function parseQQBot(raw: unknown): QQBotBridgeConfig {
   if (send_timeout === undefined || !(send_timeout > 0) || !Number.isFinite(send_timeout)) {
     throw new BridgeConfigError("invalid_timeout", "qqbot.send_timeout must be > 0 seconds")
   }
+  const request_timeout =
+    raw.request_timeout === undefined ? DEFAULT_QQBOT_REQUEST_TIMEOUT_SECONDS : asNumber(raw.request_timeout)
+  if (request_timeout === undefined || !(request_timeout > 0) || !Number.isFinite(request_timeout)) {
+    throw new BridgeConfigError("invalid_timeout", "qqbot.request_timeout must be > 0 seconds")
+  }
   return {
     app_id,
     client_secret,
@@ -304,6 +312,7 @@ function parseQQBot(raw: unknown): QQBotBridgeConfig {
     media_public_base_url: parsePublicBaseUrl(raw.media_public_base_url),
     bot_qpm,
     send_timeout,
+    request_timeout,
   }
 }
 
@@ -430,4 +439,9 @@ export function requireQQBot(config: BridgeConfig): QQBotBridgeConfig {
     throw new BridgeConfigError("platform_mismatch", "qqbot config is required when platform is qqbot")
   }
   return config.qqbot
+}
+
+/** Transport ready-gate / REST timeout. `send_timeout` is the deliverer's send race only. */
+export function qqbotTransportOptions(qqbot: QQBotBridgeConfig): { requestTimeoutMs: number } {
+  return { requestTimeoutMs: secondsToMs(qqbot.request_timeout) }
 }

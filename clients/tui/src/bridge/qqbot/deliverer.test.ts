@@ -315,6 +315,16 @@ describe("qqbot deliverer — coalescing, zero-output, images, two players", () 
     expect(groupTexts(port).some((text) => text.includes("入队"))).toBe(false)
   })
 
+  test("openAnchor busy:false skips thinking and lets the next forwarded turn send it", async () => {
+    const { deliverer, port } = await setup({ busyNotice: true })
+    await deliverer.openAnchor({ id: "m-cmd", scope: "group", target: "G1", receivedAt: 0, busy: false })
+    await deliverer.whenIdle()
+    expect(groupTexts(port)).toEqual([])
+    await deliverer.openAnchor({ id: "m-fwd", scope: "group", target: "G1", receivedAt: 1, busy: true })
+    await deliverer.whenIdle()
+    expect(groupTexts(port).some((text) => text === tt("zh", "bridge.qqbot.thinking"))).toBe(true)
+  })
+
   test("zero-output turn sends nothingToShow only if thinking was sent", async () => {
     const withBusy = await setup({ busyNotice: true })
     await withBusy.deliverer.openAnchor({ id: "m1", scope: "group", target: "G1", receivedAt: 0 })

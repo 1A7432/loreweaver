@@ -32,6 +32,7 @@ export interface QQBotSendFail {
   ok: false
   code: QQBotSendFailCode
   message?: string
+  retryAfterMs?: number
 }
 
 export type QQBotSendResult = QQBotSendOk | QQBotSendFail

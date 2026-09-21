@@ -808,14 +808,6 @@ describe("router — choices, commands, queued input", () => {
     const player = new FakeLink()
     router.attachLink("player", "p-key", player, "M1")
     player.push(MANIFEST)
-    player.push({
-      type: FrameType.State,
-      character: { name: "Ada", system: "coc7", resources: [], attributes: {}, status_effects: [] },
-      party: [],
-      initiative: [],
-      online: 1,
-    })
-    expect(intents).toEqual([])
 
     await router.handleInbound({
       userId: "M1",
@@ -827,6 +819,53 @@ describe("router — choices, commands, queued input", () => {
     })
     expect(intents[0]?.text).toBe(tt("en", "bridge.qqbot.nameLocked"))
     expect(control.sent).toEqual([])
+
+    player.push({
+      type: FrameType.State,
+      character: null,
+      party: [],
+      initiative: [],
+      online: 1,
+    } as ServerFrame)
+    intents.length = 0
+    clock.advance(NOT_ADMIN_COOLDOWN_MS + 1)
+    const pendingUnlock = router.handleInbound({
+      userId: "M1",
+      memberKey: "p-key",
+      text: ".bridge name Bao",
+      channel: "group",
+      isAdmin: false,
+      memberOpenid: "M1",
+    })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(control.sent[0]).toMatchObject({ type: FrameType.AdminMintKey, name: "Bao", role: "player" })
+    control.push({
+      type: FrameType.AdminKeys,
+      keys: [],
+      minted: { key: "key-bao", room: "arkham", name: "Bao", role: "player", purpose: "join", expires_at: null },
+    } as ServerFrame)
+    await pendingUnlock
+    expect(intents[0]?.text).toBe(tt("en", "bridge.qqbot.nameChanged", { name: "Bao" }))
+
+    player.push({
+      type: FrameType.State,
+      character: { name: "Bao", system: "coc7", resources: [], attributes: {}, status_effects: [] },
+      party: [],
+      initiative: [],
+      online: 1,
+    })
+    expect(intents.slice(1)).toEqual([])
+    intents.length = 0
+    clock.advance(NOT_ADMIN_COOLDOWN_MS + 1)
+    await router.handleInbound({
+      userId: "M1",
+      memberKey: "p-key",
+      text: ".bridge name Ada",
+      channel: "group",
+      isAdmin: false,
+      memberOpenid: "M1",
+    })
+    expect(intents[0]?.text).toBe(tt("en", "bridge.qqbot.nameLocked"))
 
     player.push({
       type: FrameType.State,

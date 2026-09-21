@@ -1,15 +1,17 @@
 import { bringUpServer, type HostHandle, type OnLog } from "../../hostLocal"
-import { tt } from "../../i18n"
+import { tt, type MessageKey } from "../../i18n"
 import type { IrohLink } from "../../irohLink"
 import { sha256Hex } from "../../media"
 import { clientInfo } from "../../version"
 import {
+  qqbotTransportOptions,
   requireQQBot,
   roomKeeperKey,
   secondsToMs,
   type BridgeConfig,
   type BridgeGroupConfig,
 } from "../config"
+import { looksLikeCommand, shouldForwardInbound } from "../commands"
 import type { BridgeDeps, BridgeHandle } from "../index"
 import { Keyring, keyringPath, observerName } from "../keyring"
 import { LinkPool } from "../linkPool"
@@ -29,7 +31,7 @@ import { QQBotDeliverer } from "./deliverer"
 import type { QQBotEvent, QQBotMessageEvent } from "./events"
 import { C2CIdentityRouter, IdentityStore, identityPath } from "./identity"
 import type { QQBotSwitchEvent } from "./port"
-import { QQBotApiError } from "./shared"
+import { QQBotApiError, errorName } from "./shared"
 import { QQBotTransport } from "./transport"
 
 const STATUS_LOG_THROTTLE_MS = 60 * 1000
@@ -68,6 +70,16 @@ function receivedAtMs(timestamp: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+export function qqbotStartFailure(err: unknown): { log: string; key: MessageKey } {
+  const code = err instanceof QQBotApiError ? err.code : errorName(err)
+  const log = `qqbot.start.failed ${code}`
+  if (code.startsWith("qqbot.auth.")) return { log, key: "bridge.qqbot.authFailed" }
+  if (code === "qqbot.gateway.invalid_session" || code === "qqbot.gateway.ready_timeout") {
+    return { log, key: "bridge.qqbot.intentNotApproved" }
+  }
+  return { log, key: "bridge.qqbot.connectFailed" }
+}
+
 function asSwitchEvent(event: QQBotEvent): QQBotSwitchEvent | undefined {
   if (event.type === "groupMsgReceive" || event.type === "groupMsgReject") {
     return { type: event.type, groupOpenid: event.groupOpenid }
@@ -94,6 +106,7 @@ export async function runQQBotBridge(config: BridgeConfig, deps: BridgeDeps = {}
   const sessions = new Map<string, QQBotGroupRuntime>()
   const catalog = new Map<string, LinkKind>()
   let offTransport: (() => void) | undefined
+  let offStatus: (() => void) | undefined
 
   const teardown = async (): Promise<void> => {
     try {
@@ -102,6 +115,12 @@ export async function runQQBotBridge(config: BridgeConfig, deps: BridgeDeps = {}
       // ignore
     }
     offTransport = undefined
+    try {
+      offStatus?.()
+    } catch {
+      // ignore
+    }
+    offStatus = undefined
     try {
       if (transport) await transport.close()
     } catch {
@@ -203,7 +222,7 @@ export async function runQQBotBridge(config: BridgeConfig, deps: BridgeDeps = {}
         clientSecret: qqbot.client_secret,
         transport: "websocket",
         receiveAll: qqbot.receive_all,
-        requestTimeoutMs: secondsToMs(qqbot.send_timeout),
+        requestTimeoutMs: qqbotTransportOptions(qqbot).requestTimeoutMs,
       })
     const port = new QQBotTransportPort(transport)
     const sendTimeoutMs = secondsToMs(qqbot.send_timeout)
@@ -215,7 +234,7 @@ export async function runQQBotBridge(config: BridgeConfig, deps: BridgeDeps = {}
       loggedAt.set(kind, now())
       return false
     }
-    transport.onStatus((status) => {
+    offStatus = transport.onStatus((status) => {
       if (status !== "reconnecting" && status !== "offline") return
       if (throttled(status)) return
       onLog(
@@ -290,7 +309,9 @@ export async function runQQBotBridge(config: BridgeConfig, deps: BridgeDeps = {}
         groupId: group.group_id,
         ...(locale ? { locale } : {}),
         mode: settings.mode,
-        busyNotice: false,
+        busyNotice: settings.busyNotice,
+        ownBusyNotice: false,
+        onBusyNotice: (on) => session.deliverer.setBusyNotice(on),
         admins: settings.admins,
         postedIds: session.posted,
         keyring: session.keyring,
@@ -382,16 +403,29 @@ export async function runQQBotBridge(config: BridgeConfig, deps: BridgeDeps = {}
       }
     }
 
+    const logUnknownGroup = (groupOpenid: string): void => {
+      if (throttled(`unknown:${groupOpenid}`)) return
+      onLog(`qqbot.group.unknown ${groupOpenid}`)
+      onLog(tt(locale, "bridge.qqbot.unknownGroup", { group: groupOpenid }))
+    }
+
     const onGroupMessage = async (event: QQBotMessageEvent): Promise<void> => {
+      if (event.type === "groupMessage" && !looksLikeCommand(event.content)) return
       const groupOpenid = event.groupOpenid
       const memberOpenid = event.memberOpenid
       if (!groupOpenid || !memberOpenid) return
       const session = sessions.get(groupOpenid)
       if (!session) {
-        onLog(`qqbot.group.unknown ${groupOpenid}`)
-        onLog(tt(locale, "bridge.qqbot.unknownGroup", { group: groupOpenid }))
+        logUnknownGroup(groupOpenid)
         return
       }
+      const mentioned = event.type === "groupAtMessage"
+      const forward = shouldForwardInbound({
+        text: event.content,
+        channel: "group",
+        mode: session.router.groupMode,
+        mentioned,
+      })
       const rate = session.limiter.take(memberOpenid)
       if (rate === "drop") return
       const display = session.identity.displayNameFor(memberOpenid, { username: event.username }, session.router.locale())
@@ -402,6 +436,7 @@ export async function runQQBotBridge(config: BridgeConfig, deps: BridgeDeps = {}
           target: groupOpenid,
           seat: memberOpenid,
           receivedAt: receivedAtMs(event.timestamp, now()),
+          busy: rate === "ok" && forward,
         })
         if (rate === "notice") {
           session.deliverer.enqueue({
@@ -418,7 +453,7 @@ export async function runQQBotBridge(config: BridgeConfig, deps: BridgeDeps = {}
             memberKey: entry.key,
             text: event.content,
             channel: "group",
-            mentioned: event.type === "groupAtMessage",
+            mentioned,
             isAdmin: session.router.adminIds.map(String).includes(String(memberOpenid)),
             memberOpenid,
             unionOpenid: event.unionOpenid,
@@ -426,11 +461,7 @@ export async function runQQBotBridge(config: BridgeConfig, deps: BridgeDeps = {}
           },
           () => forwardAttachments(session, entry.key, event),
         )
-        const latest = await bindSeat(session, memberOpenid, display)
-        const role: LinkRole = latest.role === "keeper" ? "admin" : "player"
-        catalog.set(latest.key, { kind: "member", groupId: session.groupId, userId: memberOpenid, role })
-        const live = pool.get(latest.key)
-        if (live) session.router.attachLink(role, latest.key, live, memberOpenid)
+        await bindSeat(session, memberOpenid, display)
       } catch {
         onLog(tt(session.router.locale(), "bridge.seatFailed"))
         session.deliverer.enqueue({
@@ -508,13 +539,18 @@ export async function runQQBotBridge(config: BridgeConfig, deps: BridgeDeps = {}
         return
       }
       if (event.type === "groupAddRobot") {
-        if (!sessions.has(event.groupOpenid)) {
-          onLog(`qqbot.group.unknown ${event.groupOpenid}`)
-          onLog(tt(locale, "bridge.qqbot.unknownGroup", { group: event.groupOpenid }))
-        }
+        if (!sessions.has(event.groupOpenid)) logUnknownGroup(event.groupOpenid)
         return
       }
-      if (event.type === "groupDelRobot" || event.type === "friendAdd" || event.type === "friendDel") {
+      if (event.type === "groupDelRobot") {
+        if (!throttled(`del:${event.groupOpenid}`)) onLog(`qqbot.group.left ${event.groupOpenid}`)
+        return
+      }
+      if (event.type === "friendAdd" || event.type === "friendDel") {
+        const kind = event.type === "friendAdd" ? "add" : "del"
+        if (!throttled(`friend:${kind}:${event.userOpenid}`)) {
+          onLog(`qqbot.friend.${kind} ${event.userOpenid}`)
+        }
         return
       }
       if (event.type === "c2cMessage") {
@@ -531,10 +567,9 @@ export async function runQQBotBridge(config: BridgeConfig, deps: BridgeDeps = {}
     try {
       await transport.start()
     } catch (err) {
-      if (err instanceof QQBotApiError) {
-        throw new Error(tt(locale, "bridge.qqbot.connectFailed"))
-      }
-      throw new Error(tt(locale, "bridge.qqbot.connectFailed"))
+      const mapped = qqbotStartFailure(err)
+      onLog(mapped.log)
+      throw new Error(tt(locale, mapped.key))
     }
 
     const login = transport.lastLogin
