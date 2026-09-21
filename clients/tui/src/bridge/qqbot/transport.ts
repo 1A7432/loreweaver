@@ -8,10 +8,16 @@ import {
   DEFAULT_UPLOAD_BLOCK_SIZE,
   GATEWAY_OP,
   GROUP_AND_C2C_EVENT,
+  INVALID_SESSION_JITTER_MAX_MS,
+  INVALID_SESSION_JITTER_MIN_MS,
   MD5_10M_BYTES,
+  MIN_REQUEST_TIMEOUT_MS,
   RECONNECT_BACKOFF_CAP_MS,
   RECONNECT_BACKOFF_MS,
+  TOKEN_REFRESH_FLOOR_MS,
   TOKEN_REFRESH_MARGIN_S,
+  UPLOAD_PART_TIMEOUT_BASE_MS,
+  UPLOAD_PART_TIMEOUT_PER_MIB_MS,
 } from "./constants"
 import {
   ingestDispatch,
@@ -22,18 +28,20 @@ import {
 } from "./events"
 import {
   asInteger,
+  defaultInvalidSessionJitterMs,
   errorName,
   finiteTimeout,
   headerTraceId,
   joinUrl,
   jsonObject,
   nextBackoffMs,
+  parseExpiresIn,
   parseRetryAfterMs,
   QQBotApiError,
-  sleep,
-  stringId,
   realClock,
+  stringId,
   tokenRefreshDelayMs,
+  uploadPartTimeoutMs,
   withTimeout,
   type QQBotClock,
 } from "./shared"
@@ -72,6 +80,8 @@ export interface QQBotTransportOptions {
   wsFactory?: QQBotWsFactory
   /** Test seam: wall clock + delay. Production uses Date.now / setTimeout. */
   clock?: QQBotClock
+  /** Test seam: extra delay after op 9. Production is 1–5 s. */
+  invalidSessionJitterMs?: () => number
 }
 
 export interface QQBotLoginInfo {
@@ -92,7 +102,7 @@ export interface QQBotSendRequest {
 }
 
 export type QQBotSendResult =
-  | { ok: true; id: string; timestamp: string; auditId?: string }
+  | { ok: true; id?: string; timestamp?: string; auditId?: string }
   | {
       ok: false
       code: string
@@ -216,9 +226,11 @@ export class QQBotTransport {
   readonly transport = "websocket" as const
 
   #clientSecret: string
+  #tokenValue = ""
   private readonly fetchImpl: QQBotFetchImpl
   private readonly wsFactory: QQBotWsFactory
   private readonly clock: QQBotClock
+  private readonly invalidSessionJitterMs: () => number
   private readonly window = new RecentEventWindow()
   private readonly eventHandlers = new Set<EventHandler>()
   private readonly statusHandlers = new Set<StatusHandler>()
@@ -230,9 +242,10 @@ export class QQBotTransport {
   private closing = false
   private started = false
 
-  private tokenValue = ""
   private tokenDeadline = 0
+  private tokenFlight: Promise<string> | undefined
   private refreshAbort: AbortController | undefined
+  private pendingJitterMs = 0
 
   private ws: WebSocket | undefined
   private writeChain: Promise<void> = Promise.resolve()
@@ -262,6 +275,9 @@ export class QQBotTransport {
     this.fetchImpl = opts.fetchImpl ?? defaultFetch
     this.wsFactory = opts.wsFactory ?? ((url) => new WebSocket(url))
     this.clock = opts.clock ?? realClock
+    this.invalidSessionJitterMs =
+      opts.invalidSessionJitterMs ??
+      (() => defaultInvalidSessionJitterMs(INVALID_SESSION_JITTER_MIN_MS, INVALID_SESSION_JITTER_MAX_MS))
     this._lastLogin = { appId: opts.appId }
   }
 
@@ -403,7 +419,9 @@ export class QQBotTransport {
       if (!this.closing && !signal.aborted) {
         this.emitStatus("reconnecting")
         this.backoffAttempt += 1
-        const delay = nextBackoffMs(this.backoffAttempt, RECONNECT_BACKOFF_MS, RECONNECT_BACKOFF_CAP_MS)
+        const delay =
+          nextBackoffMs(this.backoffAttempt, RECONNECT_BACKOFF_MS, RECONNECT_BACKOFF_CAP_MS) + this.pendingJitterMs
+        this.pendingJitterMs = 0
         await this.clock.sleep(delay, signal)
       }
     }
@@ -489,6 +507,7 @@ export class QQBotTransport {
         if (payload.op === GATEWAY_OP.HELLO) {
           const interval = asInteger((jsonObject(payload.d) ?? {}).heartbeat_interval, 0)
           if (interval <= 0) throw new QQBotApiError("qqbot.gateway.hello_invalid")
+          if (!this.expectResume || !this.sessionId) this.lastSeq = null
           this.startHeartbeat(interval, signal)
           if (!identified) {
             identified = true
@@ -514,11 +533,14 @@ export class QQBotTransport {
           return
         }
         if (payload.op === GATEWAY_OP.INVALID_SESSION) {
-          this.sessionId = undefined
-          this.lastSeq = null
-          this.expectResume = false
-          await this.sendIdentify()
-          continue
+          this.beginNewSession()
+          this.pendingJitterMs = this.invalidSessionJitterMs()
+          try {
+            ws.close()
+          } catch {
+            // already gone
+          }
+          return
         }
         if (payload.op === GATEWAY_OP.DISPATCH) {
           await this.handleDispatch(payload)
@@ -533,20 +555,22 @@ export class QQBotTransport {
     }
   }
 
+  private beginNewSession(): void {
+    this.sessionId = undefined
+    this.lastSeq = null
+    this.expectResume = false
+  }
+
   private applyCloseCode(code: number): void {
     const policy = sessionPolicyForClose(code)
     if (policy === "refresh-token") {
-      this.tokenValue = ""
+      this.#tokenValue = ""
       this.tokenDeadline = 0
-      this.sessionId = undefined
-      this.lastSeq = null
-      this.expectResume = false
+      this.beginNewSession()
       return
     }
     if (policy === "new-session") {
-      this.sessionId = undefined
-      this.lastSeq = null
-      this.expectResume = false
+      this.beginNewSession()
       return
     }
     if (this.sessionId) this.expectResume = true
@@ -643,8 +667,20 @@ export class QQBotTransport {
             }
             return
           }
-          await this.sendHeartbeat()
+          try {
+            await this.sendHeartbeat()
+          } catch {
+            console.warn("qqbot.gateway.heartbeat_failed")
+            try {
+              this.ws?.close()
+            } catch {
+              // already gone — readyState may already be CLOSED without a close event
+            }
+            return
+          }
         }
+      } catch {
+        console.warn("qqbot.gateway.heartbeat_failed")
       } finally {
         signal.removeEventListener("abort", linked)
       }
@@ -659,7 +695,12 @@ export class QQBotTransport {
 
   private async sendHeartbeat(): Promise<void> {
     this.pendingAck = true
-    await this.enqueueWrite(JSON.stringify({ op: GATEWAY_OP.HEARTBEAT, d: this.lastSeq }))
+    try {
+      await this.enqueueWrite(JSON.stringify({ op: GATEWAY_OP.HEARTBEAT, d: this.lastSeq }))
+    } catch (err) {
+      this.pendingAck = false
+      throw err
+    }
   }
 
   private enqueueWrite(payload: string): Promise<void> {
@@ -680,24 +721,30 @@ export class QQBotTransport {
 
   private async ensureToken(force = false): Promise<string> {
     const now = this.clock.now()
-    if (!force && this.tokenValue && now < this.tokenDeadline - TOKEN_REFRESH_MARGIN_S * 1000) {
-      return this.tokenValue
+    if (!force && this.#tokenValue && now < this.tokenDeadline) {
+      return this.#tokenValue
     }
+    if (this.tokenFlight) return this.tokenFlight
+    this.tokenFlight = this.refreshToken().finally(() => {
+      this.tokenFlight = undefined
+    })
+    return this.tokenFlight
+  }
+
+  private async refreshToken(): Promise<string> {
     const body = await this.postToken()
     const access = String(body.access_token ?? "")
-    const expiresIn = asInteger(body.expires_in, 0)
-    if (!access) throw new QQBotApiError("qqbot.auth.invalid_response")
-    const sameToken = access === this.tokenValue && this.tokenDeadline > 0
+    const expiresIn = parseExpiresIn(body.expires_in)
+    if (!access || expiresIn === undefined) throw new QQBotApiError("qqbot.auth.invalid_response")
+    const sameToken = access === this.#tokenValue && this.tokenDeadline > 0
     if (sameToken) {
-      // Same token: not a refresh. Keep the old deadline (spec §5) and wait it out
-      // rather than spinning at the -30 s mark.
       this.scheduleRefresh({ untilExpiry: true })
     } else {
-      this.tokenValue = access
-      this.tokenDeadline = this.clock.now() + Math.max(expiresIn, 1) * 1000
+      this.#tokenValue = access
+      this.tokenDeadline = this.clock.now() + expiresIn * 1000
       this.scheduleRefresh()
     }
-    return this.tokenValue
+    return this.#tokenValue
   }
 
   private scheduleRefresh(opts: { untilExpiry?: boolean } = {}): void {
@@ -706,14 +753,15 @@ export class QQBotTransport {
     this.refreshAbort = abort
     const remainingMs = this.tokenDeadline - this.clock.now()
     const delay = opts.untilExpiry
-      ? Math.max(0, remainingMs)
-      : tokenRefreshDelayMs(remainingMs / 1000, TOKEN_REFRESH_MARGIN_S)
+      ? Math.max(TOKEN_REFRESH_FLOOR_MS, remainingMs)
+      : tokenRefreshDelayMs(remainingMs / 1000, TOKEN_REFRESH_MARGIN_S, TOKEN_REFRESH_FLOOR_MS)
     void (async () => {
-      await this.clock.sleep(delay, abort.signal)
-      if (abort.signal.aborted || this.closing) return
       try {
+        await this.clock.sleep(delay, abort.signal)
+        if (abort.signal.aborted || this.closing) return
         await this.ensureToken(true)
       } catch (err) {
+        if (abort.signal.aborted || this.closing) return
         console.warn("qqbot.auth.refresh_failed", errorName(err))
       }
     })()
@@ -773,6 +821,15 @@ export class QQBotTransport {
       if (isTimeout(err)) {
         return { ok: false, code: "qqbot.send.timeout", message: "qqbot.send.timeout", httpStatus: 0 }
       }
+      if (err instanceof QQBotApiError && err.code.startsWith("qqbot.auth.")) {
+        return {
+          ok: false,
+          code: err.code,
+          message: err.code,
+          httpStatus: err.httpStatus ?? 0,
+          ...(err.platformCode !== undefined ? { platformCode: err.platformCode } : {}),
+        }
+      }
       return { ok: false, code: "qqbot.send.failed", message: "qqbot.send.failed", httpStatus: 0 }
     }
     const parsed = await readJson(response)
@@ -795,22 +852,32 @@ export class QQBotTransport {
     }
 
     if (auditId && (response.status < 300 || platformCode === 304023 || platformCode === 0)) {
+      const audited: QQBotSendResult = { ok: true, auditId }
+      const id = stringId(data.id)
+      const timestamp = stringId(data.timestamp)
+      if (id !== undefined) audited.id = id
+      if (timestamp !== undefined) audited.timestamp = timestamp
+      return audited
+    }
+
+    if (platformCode === 304023) {
       return {
-        ok: true,
-        id: stringId(data.id) ?? "",
-        timestamp: stringId(data.timestamp) ?? "",
-        auditId,
+        ok: false,
+        code: "qqbot.send.audit_pending",
+        message: String(envelope.message ?? envelope.msg ?? "qqbot.send.audit_pending"),
+        httpStatus: response.status,
+        platformCode: 304023,
       }
     }
 
     const httpOk = response.status >= 200 && response.status < 300
     const bodyOk = platformCode === undefined || platformCode === 0
-    if (httpOk && bodyOk && (data.id !== undefined || data.timestamp !== undefined)) {
-      const success: QQBotSendResult = {
-        ok: true,
-        id: stringId(data.id) ?? "",
-        timestamp: stringId(data.timestamp) ?? "",
-      }
+    if (httpOk && bodyOk) {
+      const success: QQBotSendResult = { ok: true }
+      const id = stringId(data.id)
+      const timestamp = stringId(data.timestamp)
+      if (id !== undefined) success.id = id
+      if (timestamp !== undefined) success.timestamp = timestamp
       if (auditId) success.auditId = auditId
       return success
     }
@@ -902,7 +969,11 @@ export class QQBotTransport {
     const runPart = async (part: { index: number; url: string; size: number; start: number }) => {
       const slice = bytes.subarray(part.start, Math.min(bytes.byteLength, part.start + part.size))
       if (part.url) {
-        await this.timedFetch(part.url, { method: "PUT", body: slice })
+        await this.timedFetch(part.url, { method: "PUT", body: slice }, uploadPartTimeoutMs(
+          slice.byteLength,
+          Math.max(MIN_REQUEST_TIMEOUT_MS, UPLOAD_PART_TIMEOUT_BASE_MS),
+          UPLOAD_PART_TIMEOUT_PER_MIB_MS,
+        ))
       }
       await this.apiJson(finishPath, {
         upload_id: uploadId,
@@ -979,9 +1050,9 @@ export class QQBotTransport {
     return this.timedFetch(joinUrl(this.apiBase, path), { ...init, headers })
   }
 
-  private async timedFetch(url: string, init: QQBotFetchInit): Promise<QQBotFetchResponse> {
+  private async timedFetch(url: string, init: QQBotFetchInit, timeoutMs = this.requestTimeoutMs): Promise<QQBotFetchResponse> {
     const abort = new AbortController()
-    const timer = setTimeout(() => abort.abort(), this.requestTimeoutMs)
+    const timer = setTimeout(() => abort.abort(), timeoutMs)
     const onParent = () => abort.abort()
     this.runAbort?.signal.addEventListener("abort", onParent, { once: true })
     try {
@@ -1016,7 +1087,7 @@ export function buildSendBody(req: QQBotSendRequest): Record<string, unknown> {
   const body: Record<string, unknown> = { msg_type: req.msgType, msg_seq: req.msgSeq }
   if (req.msgId) body.msg_id = req.msgId
   if (req.eventId) body.event_id = req.eventId
-  if (req.msgType === 0 && req.content !== undefined) body.content = req.content
+  if (req.msgType !== 2 && req.content !== undefined) body.content = req.content
   if (req.msgType === 2) body.markdown = { content: req.markdown?.content ?? "" }
   if (req.msgType === 7) body.media = { file_info: req.media?.fileInfo ?? "" }
   return body

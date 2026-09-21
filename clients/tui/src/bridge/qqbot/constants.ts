@@ -9,8 +9,16 @@ export const MIN_REQUEST_TIMEOUT_MS = 5_000
 
 /** Refresh inside the server's 60 s overlap window, matching adapter-qq. */
 export const TOKEN_REFRESH_MARGIN_S = 30
+/** Floor on every token-refresh sleep so expires_in ≤ 30 cannot spin. */
+export const TOKEN_REFRESH_FLOOR_MS = 30_000
 /** Official overlap: a request earlier than this returns the old token. */
 export const TOKEN_OVERLAP_WINDOW_S = 60
+/** Extra delay after Invalid Session (op 9), on top of reconnect backoff. */
+export const INVALID_SESSION_JITTER_MIN_MS = 1_000
+export const INVALID_SESSION_JITTER_MAX_MS = 5_000
+/** Chunk PUT: 30 s plus 10 s per MiB of that part. */
+export const UPLOAD_PART_TIMEOUT_BASE_MS = 30_000
+export const UPLOAD_PART_TIMEOUT_PER_MIB_MS = 10_000
 
 export const GROUP_AND_C2C_EVENT = 1 << 25
 

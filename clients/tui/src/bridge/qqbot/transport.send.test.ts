@@ -4,6 +4,8 @@ import { SAMPLE_FILE_INFO, SAMPLE_GROUP_OPENID, SAMPLE_MSG_ID, SAMPLE_USER_OPENI
 import { startFakeQQBotGateway } from "./testing/fakeGateway"
 import { startFakeQQBotRest } from "./testing/fakeRest"
 import { sendSuccess } from "./testing/fixtures"
+import { MIN_REQUEST_TIMEOUT_MS, uploadPartTimeoutMs } from "./index"
+import { FakeClock } from "./testing/clock"
 import { QQBotTransport, buildSendBody, mapSendPlatformCode } from "./transport"
 
 const APP_ID = "102000000"
@@ -28,6 +30,7 @@ async function started() {
     apiBase: rest.apiBase,
     authBase: rest.authBase,
     requestTimeoutMs: 500,
+    invalidSessionJitterMs: () => 0,
   })
   await transport.start()
   return { gw, rest, transport }
@@ -67,6 +70,7 @@ describe("buildSendBody — official autogen request shapes", () => {
       buildSendBody({
         target: SAMPLE_GROUP_OPENID,
         msgType: 7,
+        content: "a caption on the image",
         media: { fileInfo: SAMPLE_FILE_INFO },
         msgId: SAMPLE_MSG_ID,
         eventId: "evt-1",
@@ -74,6 +78,7 @@ describe("buildSendBody — official autogen request shapes", () => {
       }),
     ).toEqual({
       msg_type: 7,
+      content: "a caption on the image",
       media: { file_info: SAMPLE_FILE_INFO },
       msg_id: SAMPLE_MSG_ID,
       event_id: "evt-1",
@@ -226,6 +231,127 @@ describe("QQBotTransport.send — platform answers never throw", () => {
       ctx.rest.hangSend = false
       await stop(ctx)
     }
+  })
+
+  test("304023 without audit_id is audit_pending; 2xx code 0 with no id is possibly delivered", async () => {
+    const ctx = await started()
+    try {
+      ctx.rest.sendAnswer = { status: 200, body: { code: 304023, message: "push message is waiting for audit now" } }
+      const pending = await ctx.transport.sendGroup({
+        target: SAMPLE_GROUP_OPENID,
+        msgType: 0,
+        content: "x",
+        msgSeq: 1,
+      })
+      expect(pending).toMatchObject({ ok: false, code: "qqbot.send.audit_pending", platformCode: 304023 })
+
+      ctx.rest.sendAnswer = { status: 200, body: { code: 0 } }
+      const delivered = await ctx.transport.sendGroup({
+        target: SAMPLE_GROUP_OPENID,
+        msgType: 0,
+        content: "x",
+        msgSeq: 2,
+      })
+      expect(delivered.ok).toBe(true)
+      if (delivered.ok) expect(delivered.id).toBeUndefined()
+    } finally {
+      await stop(ctx)
+    }
+  })
+
+  test("auth failure on send surfaces qqbot.auth.* rather than qqbot.send.failed", async () => {
+    const clock = new FakeClock(0)
+    const gw = startFakeQQBotGateway({ heartbeatIntervalMs: 3_600_000 })
+    const rest = startFakeQQBotRest({
+      appId: APP_ID,
+      clientSecret: SECRET,
+      gatewayUrl: gw.url,
+      expiresIn: 40,
+      stickyToken: true,
+      now: () => clock.now(),
+    })
+    const transport = new QQBotTransport({
+      appId: APP_ID,
+      clientSecret: SECRET,
+      transport: "websocket",
+      receiveAll: false,
+      apiBase: rest.apiBase,
+      authBase: rest.authBase,
+      requestTimeoutMs: 1000,
+      clock,
+      invalidSessionJitterMs: () => 0,
+    })
+    try {
+      await transport.start()
+      await clock.advance(40_000 + 1)
+      await waitFor(() => rest.tokenCalls.length >= 2)
+      rest.tokenStatus = 401
+      const result = await transport.sendGroup({
+        target: SAMPLE_GROUP_OPENID,
+        msgType: 0,
+        content: "x",
+        msgSeq: 1,
+      })
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.code.startsWith("qqbot.auth.")).toBe(true)
+        expect(result.code).not.toBe("qqbot.send.failed")
+      }
+    } finally {
+      await transport.close()
+      rest.close()
+      gw.close()
+    }
+  })
+
+  test("concurrent sends after expiry share one token POST", async () => {
+    const clock = new FakeClock(0)
+    const gw = startFakeQQBotGateway({ heartbeatIntervalMs: 3_600_000 })
+    const rest = startFakeQQBotRest({
+      appId: APP_ID,
+      clientSecret: SECRET,
+      gatewayUrl: gw.url,
+      expiresIn: 40,
+      stickyToken: true,
+      now: () => clock.now(),
+    })
+    const transport = new QQBotTransport({
+      appId: APP_ID,
+      clientSecret: SECRET,
+      transport: "websocket",
+      receiveAll: false,
+      apiBase: rest.apiBase,
+      authBase: rest.authBase,
+      requestTimeoutMs: 1000,
+      clock,
+      invalidSessionJitterMs: () => 0,
+    })
+    try {
+      await transport.start()
+      await clock.advance(40_000 + 1)
+      await waitFor(() => rest.tokenCalls.length >= 2)
+      const before = rest.tokenCalls.length
+      await Promise.all([
+        transport.sendGroup({ target: SAMPLE_GROUP_OPENID, msgType: 0, content: "a", msgSeq: 1 }),
+        transport.sendGroup({ target: SAMPLE_GROUP_OPENID, msgType: 0, content: "b", msgSeq: 2 }),
+        transport.sendGroup({ target: SAMPLE_GROUP_OPENID, msgType: 0, content: "c", msgSeq: 3 }),
+      ])
+      expect(rest.tokenCalls.length - before).toBe(1)
+    } finally {
+      await transport.close()
+      rest.close()
+      gw.close()
+    }
+  })
+})
+
+describe("uploadPartTimeoutMs", () => {
+  test("is 30 s plus 10 s per MiB, never below the 5 s docs floor", () => {
+    expect(uploadPartTimeoutMs(0, 30_000, 10_000)).toBe(30_000)
+    expect(uploadPartTimeoutMs(1024 * 1024, 30_000, 10_000)).toBe(40_000)
+    expect(uploadPartTimeoutMs(1024 * 1024 + 1, 30_000, 10_000)).toBe(50_000)
+    expect(MIN_REQUEST_TIMEOUT_MS).toBe(5_000)
+    expect(30_000).toBeGreaterThan(MIN_REQUEST_TIMEOUT_MS)
   })
 })
 

@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test"
-import { GROUP_AND_C2C_EVENT, TOKEN_REFRESH_MARGIN_S, tokenRefreshDelayMs } from "./index"
+import {
+  GROUP_AND_C2C_EVENT,
+  RECONNECT_BACKOFF_CAP_MS,
+  RECONNECT_BACKOFF_MS,
+  TOKEN_REFRESH_FLOOR_MS,
+  TOKEN_REFRESH_MARGIN_S,
+  containsSecret,
+  nextBackoffMs,
+  tokenRefreshDelayMs,
+} from "./index"
 import { QQBotApiError } from "./shared"
 import { FakeClock } from "./testing/clock"
 import { startFakeQQBotGateway } from "./testing/fakeGateway"
@@ -37,6 +46,10 @@ class ScriptedSocket extends EventTarget {
   close(code = 1000, reason = ""): void {
     this.readyState = WebSocket.CLOSED
     this.dispatchEvent(new CloseEvent("close", { code, reason }))
+  }
+  /** Flip readyState without a close event (half-open / dropped client). */
+  silenceClose(): void {
+    this.readyState = WebSocket.CLOSED
   }
   push(payload: unknown): void {
     this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(payload) }))
@@ -83,16 +96,27 @@ function harness(opts: { heartbeatIntervalMs?: number; expiresIn?: number; stick
     apiBase: rest.apiBase,
     authBase: rest.authBase,
     requestTimeoutMs: opts.requestTimeoutMs ?? 2000,
+    invalidSessionJitterMs: () => 0,
     ...(opts.clock ? { clock: opts.clock } : {}),
   })
   return { gw, rest, transport }
 }
 
 describe("tokenRefreshDelayMs", () => {
-  test("refreshes 30 s before the returned expires_in", () => {
-    expect(tokenRefreshDelayMs(7200, TOKEN_REFRESH_MARGIN_S)).toBe(7170_000)
-    expect(tokenRefreshDelayMs(30, TOKEN_REFRESH_MARGIN_S)).toBe(0)
-    expect(tokenRefreshDelayMs(31, TOKEN_REFRESH_MARGIN_S)).toBe(1000)
+  test("refreshes 30 s before expires_in, floored at 30 s", () => {
+    expect(tokenRefreshDelayMs(7200, TOKEN_REFRESH_MARGIN_S, TOKEN_REFRESH_FLOOR_MS)).toBe(7_170_000)
+    expect(tokenRefreshDelayMs(20, TOKEN_REFRESH_MARGIN_S, TOKEN_REFRESH_FLOOR_MS)).toBe(30_000)
+    expect(tokenRefreshDelayMs(31, TOKEN_REFRESH_MARGIN_S, TOKEN_REFRESH_FLOOR_MS)).toBe(30_000)
+    expect(tokenRefreshDelayMs(61, TOKEN_REFRESH_MARGIN_S, TOKEN_REFRESH_FLOOR_MS)).toBe(31_000)
+  })
+})
+
+describe("nextBackoffMs", () => {
+  test("attempts 1..7 keep doubling after the last step and clamp at 30 s", () => {
+    const delays = [1, 2, 3, 4, 5, 6, 7].map((attempt) =>
+      nextBackoffMs(attempt, RECONNECT_BACKOFF_MS, RECONNECT_BACKOFF_CAP_MS),
+    )
+    expect(delays).toEqual([1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000])
   })
 })
 
@@ -126,8 +150,10 @@ describe("QQBotTransport — auth + identify", () => {
         botOpenid: "6158788878435714165",
         username: "群pro测试机器人",
       })
-      expect(JSON.stringify(transport)).not.toContain(SECRET)
-      expect(warn.lines.join("\n")).not.toContain(SECRET)
+      expect(containsSecret(JSON.stringify(transport), SECRET)).toBe(false)
+      expect(containsSecret(JSON.stringify(transport), "ACCESS_TOKEN")).toBe(false)
+      expect(containsSecret(warn.lines.join("\n"), SECRET)).toBe(false)
+      expect(containsSecret(warn.lines.join("\n"), "ACCESS_TOKEN")).toBe(false)
     } finally {
       await transport.close()
       rest.close()
@@ -143,7 +169,7 @@ describe("QQBotTransport — auth + identify", () => {
     try {
       await same.transport.start()
       expect(same.rest.tokenCalls).toHaveLength(1)
-      await clock.advance(tokenRefreshDelayMs(100, TOKEN_REFRESH_MARGIN_S) + 1)
+      await clock.advance(tokenRefreshDelayMs(100, TOKEN_REFRESH_MARGIN_S, TOKEN_REFRESH_FLOOR_MS) + 1)
       await waitFor(() => same.rest.tokenCalls.length >= 2)
       expect(same.rest.tokenCalls[1]!.body).toEqual({ appId: APP_ID, clientSecret: SECRET })
       const afterSame = same.rest.tokenCalls.length
@@ -159,7 +185,7 @@ describe("QQBotTransport — auth + identify", () => {
     const rotated = harness({ clock: clock2, expiresIn: 100, heartbeatIntervalMs: 3_600_000 })
     try {
       await rotated.transport.start()
-      await clock2.advance(tokenRefreshDelayMs(100, TOKEN_REFRESH_MARGIN_S) + 1)
+      await clock2.advance(tokenRefreshDelayMs(100, TOKEN_REFRESH_MARGIN_S, TOKEN_REFRESH_FLOOR_MS) + 1)
       await waitFor(() => rotated.rest.tokenCalls.length >= 2)
       expect(rotated.rest.tokenCalls[1]!.body).toEqual({ appId: APP_ID, clientSecret: SECRET })
       expect(rotated.rest.accessToken).not.toBe("ACCESS_TOKEN")
@@ -242,19 +268,135 @@ describe("QQBotTransport — gateway", () => {
     }
   })
 
-  test("invalid session (op 9) sends a fresh Identify on the same connection", async () => {
+  test("invalid session (op 9) closes the socket and Identifies on the next backoff, not the same connection", async () => {
     const { gw, rest, transport } = harness()
     try {
       await transport.start()
       expect(gw.identifies).toHaveLength(1)
       gw.sendOp(9, false)
-      await waitFor(() => gw.identifies.length >= 2)
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      expect(gw.identifies).toHaveLength(1)
+      await waitFor(() => gw.identifies.length >= 2, 3000)
       expect(gw.identifies[1]!.intents).toBe(GROUP_AND_C2C_EVENT)
-      expect(gw.identifies[1]!.token).toBe("QQBot ACCESS_TOKEN")
     } finally {
       await transport.close()
       rest.close()
       gw.close()
+    }
+  })
+
+  test("a gateway that always answers Identify with op 9 sends at most one Identify per backoff step and stays responsive", async () => {
+    const gw = startFakeQQBotGateway({ heartbeatIntervalMs: 3_600_000, rejectIdentify: true })
+    const rest = startFakeQQBotRest({ appId: APP_ID, clientSecret: SECRET, gatewayUrl: gw.url })
+    const transport = new QQBotTransport({
+      appId: APP_ID,
+      clientSecret: SECRET,
+      transport: "websocket",
+      receiveAll: false,
+      apiBase: rest.apiBase,
+      authBase: rest.authBase,
+      requestTimeoutMs: 15_000,
+      invalidSessionJitterMs: () => 0,
+    })
+    try {
+      void transport.start().catch(() => {})
+      await waitFor(() => gw.identifies.length >= 1)
+      let timerFired = false
+      const timer = new Promise<void>((resolve) => {
+        setTimeout(() => {
+          timerFired = true
+          resolve()
+        }, 300)
+      })
+      await new Promise((resolve) => setTimeout(resolve, 700))
+      expect(gw.identifies.length).toBe(1)
+      await timer
+      expect(timerFired).toBe(true)
+      await waitFor(() => gw.identifies.length >= 2, 3000)
+      expect(gw.identifies.length).toBe(2)
+      await new Promise((resolve) => setTimeout(resolve, 700))
+      expect(gw.identifies.length).toBe(2)
+    } finally {
+      await transport.close()
+      rest.close()
+      gw.close()
+    }
+  })
+
+  test("a heartbeat write on a socket whose readyState is CLOSED without a close event is not an unhandled rejection", async () => {
+    const rest = startFakeQQBotRest({ appId: APP_ID, clientSecret: SECRET, gatewayUrl: "ws://gateway.test/" })
+    let socket: ScriptedSocket | undefined
+    const transport = new QQBotTransport({
+      appId: APP_ID,
+      clientSecret: SECRET,
+      transport: "websocket",
+      receiveAll: false,
+      apiBase: rest.apiBase,
+      authBase: rest.authBase,
+      requestTimeoutMs: 2000,
+      invalidSessionJitterMs: () => 0,
+      wsFactory: async () => {
+        socket = new ScriptedSocket()
+        setTimeout(() => socket!.push({ op: 10, d: { heartbeat_interval: 1 } }), 0)
+        return socket as unknown as WebSocket
+      },
+    })
+    const rejections: unknown[] = []
+    const probe = (reason: unknown) => {
+      rejections.push(reason)
+    }
+    process.on("unhandledRejection", probe)
+    try {
+      await transport.start()
+      socket!.silenceClose()
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(rejections).toEqual([])
+    } finally {
+      process.off("unhandledRejection", probe)
+      await transport.close()
+      rest.close()
+    }
+  })
+
+  test("expires_in 20 schedules a ≥30 s wait; unparseable expires_in is invalid_response; sticky past deadline is ≤1 POST per 30 s", async () => {
+    const clock = new FakeClock(0)
+    const short = harness({ clock, expiresIn: 20, stickyToken: true, heartbeatIntervalMs: 3_600_000 })
+    try {
+      await short.transport.start()
+      expect(short.rest.tokenCalls).toHaveLength(1)
+      await clock.advance(29_000)
+      expect(short.rest.tokenCalls).toHaveLength(1)
+      await clock.advance(1_500)
+      await waitFor(() => short.rest.tokenCalls.length >= 2)
+      expect(short.rest.tokenCalls.length).toBe(2)
+      await clock.advance(29_000)
+      expect(short.rest.tokenCalls.length).toBe(2)
+    } finally {
+      await short.transport.close()
+      short.rest.close()
+      short.gw.close()
+    }
+
+    const bad = startFakeQQBotRest({
+      appId: APP_ID,
+      clientSecret: SECRET,
+      gatewayUrl: "ws://127.0.0.1:9/",
+    })
+    bad.tokenBody = { access_token: "ACCESS_TOKEN", expires_in: "7200.0" }
+    const badTransport = new QQBotTransport({
+      appId: APP_ID,
+      clientSecret: SECRET,
+      transport: "websocket",
+      receiveAll: false,
+      apiBase: bad.apiBase,
+      authBase: bad.authBase,
+      requestTimeoutMs: 1000,
+    })
+    try {
+      await expect(badTransport.start()).rejects.toMatchObject({ code: "qqbot.auth.invalid_response" })
+    } finally {
+      await badTransport.close()
+      bad.close()
     }
   })
 

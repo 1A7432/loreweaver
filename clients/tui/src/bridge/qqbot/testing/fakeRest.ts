@@ -1,3 +1,4 @@
+import { TOKEN_OVERLAP_WINDOW_S } from "../constants"
 import { filesSuccess, sendSuccess, uploadPrepareSuccess } from "./fixtures"
 
 export interface FakeRestCall {
@@ -66,7 +67,7 @@ export class FakeQQBotRest {
     this.clientSecret = opts.clientSecret ?? "test-secret"
     this.accessToken = opts.accessToken ?? "ACCESS_TOKEN"
     this.expiresIn = typeof opts.expiresIn === "string" ? Number(opts.expiresIn) : (opts.expiresIn ?? 7200)
-    this.overlapWindowS = opts.overlapWindowS ?? 60
+    this.overlapWindowS = opts.overlapWindowS ?? TOKEN_OVERLAP_WINDOW_S
     this.now = opts.now ?? (() => Date.now())
     this.issuedAt = this.now()
     this.sendHandler = opts.sendHandler

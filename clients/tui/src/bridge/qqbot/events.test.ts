@@ -141,4 +141,21 @@ describe("RecentEventWindow — message d.id vs dispatch id", () => {
     expect(bounded.size).toBe(4)
     expect(RECENT_EVENT_LIMIT).toBe(2048)
   })
+
+  test("with receiveAll, groupAtMessage wins over a same-id groupMessage in either arrival order", () => {
+    const atFirst = new RecentEventWindow()
+    const at = parseGatewayPayload(
+      dispatch("GROUP_AT_MESSAGE_CREATE", groupAtMessageCreate({ id: "shared" }), { id: "e-at" }),
+    )!
+    const plain = parseGatewayPayload(
+      dispatch("GROUP_MESSAGE_CREATE", groupAtMessageCreate({ id: "shared" }), { id: "e-plain" }),
+    )!
+    expect(ingestDispatch(at, atFirst, true)?.type).toBe("groupAtMessage")
+    expect(ingestDispatch(plain, atFirst, true)).toBeNull()
+
+    const plainFirst = new RecentEventWindow()
+    expect(ingestDispatch(plain, plainFirst, true)?.type).toBe("groupMessage")
+    expect(ingestDispatch(at, plainFirst, true)?.type).toBe("groupAtMessage")
+    expect(ingestDispatch(at, plainFirst, true)).toBeNull()
+  })
 })

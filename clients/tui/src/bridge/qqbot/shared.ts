@@ -111,16 +111,44 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, code = "qqbot.ga
   })
 }
 
-export function tokenRefreshDelayMs(expiresInSec: number, marginSec: number): number {
-  if (!Number.isFinite(expiresInSec) || expiresInSec <= 0) return 0
-  return Math.max(0, (expiresInSec - marginSec) * 1000)
+export function parseExpiresIn(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || !Number.isInteger(value) || value <= 0) return undefined
+    return value
+  }
+  if (typeof value === "string") {
+    const text = value.trim()
+    if (!/^[1-9]\d*$/.test(text)) return undefined
+    const parsed = Number.parseInt(text, 10)
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined
+  }
+  return undefined
 }
 
+export function tokenRefreshDelayMs(expiresInSec: number, marginSec: number, floorMs: number): number {
+  if (!Number.isFinite(expiresInSec) || expiresInSec <= 0) return floorMs
+  return Math.max(floorMs, (expiresInSec - marginSec) * 1000)
+}
+
+/** 1, 2, 4, then keep doubling; clamp to cap. attempts 1..7 with default steps → 1,2,4,8,16,30,30 s. */
 export function nextBackoffMs(attempt: number, steps: readonly number[], cap: number): number {
-  if (attempt <= 0) return steps[0] ?? cap
-  const index = Math.min(attempt - 1, steps.length - 1)
-  const value = steps[index] ?? cap
-  return Math.min(value, cap)
+  const first = steps[0] ?? cap
+  if (attempt <= 0) return Math.min(first, cap)
+  if (attempt <= steps.length) return Math.min(steps[attempt - 1] ?? first, cap)
+  const last = steps[steps.length - 1] ?? first
+  const extras = attempt - steps.length
+  const doubled = last * 2 ** extras
+  return Math.min(doubled, cap)
+}
+
+export function defaultInvalidSessionJitterMs(minMs: number, maxMs: number): number {
+  const span = Math.max(0, maxMs - minMs)
+  return minMs + Math.floor(Math.random() * (span + 1))
+}
+
+export function uploadPartTimeoutMs(partBytes: number, baseMs: number, perMibMs: number): number {
+  const mib = Math.max(0, partBytes) / (1024 * 1024)
+  return baseMs + Math.ceil(mib) * perMibMs
 }
 
 export function joinUrl(base: string, path: string): string {

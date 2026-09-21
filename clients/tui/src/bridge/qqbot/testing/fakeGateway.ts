@@ -15,6 +15,8 @@ export interface FakeQQBotGatewayOptions {
   closeAfterHello?: number
   /** Reply to Resume with op 9 (invalid session). */
   invalidResume?: boolean
+  /** Reply to every Identify with op 9 (never Ready). */
+  rejectIdentify?: boolean
 }
 
 type ClientData = { send(data: string): void; close(code?: number, reason?: string): void }
@@ -33,6 +35,7 @@ export class FakeQQBotGateway {
   sessionId: string
   botUser: { id: string; username: string; bot: boolean }
   invalidResume: boolean
+  rejectIdentify: boolean
   closeAfterHello?: number
   private server: ReturnType<typeof Bun.serve<{ adapter?: ClientData }>>
   private clients: Array<{ ws: { send(data: string): void; close(code?: number, reason?: string): void } }> = []
@@ -42,6 +45,7 @@ export class FakeQQBotGateway {
     this.sessionId = opts.sessionId ?? "082ee18c-0be3-491b-9d8b-fbd95c51673a"
     this.botUser = opts.botUser ?? { id: "6158788878435714165", username: "群pro测试机器人", bot: true }
     this.invalidResume = opts.invalidResume ?? false
+    this.rejectIdentify = opts.rejectIdentify ?? false
     this.closeAfterHello = opts.closeAfterHello
     const self = this
     this.server = Bun.serve({
@@ -87,6 +91,10 @@ export class FakeQQBotGateway {
               shard: d.shard,
               properties: d.properties,
             })
+            if (self.rejectIdentify) {
+              ws.send(JSON.stringify({ op: 9, d: false }))
+              return
+            }
             ws.send(
               JSON.stringify({
                 op: 0,

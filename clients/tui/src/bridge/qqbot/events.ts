@@ -68,29 +68,42 @@ const FRIEND_TYPES: Record<string, QQBotFriendType> = {
 }
 
 export class RecentEventWindow {
-  private readonly seen = new Map<string, null>()
+  private readonly seen = new Map<string, string>()
 
   constructor(private readonly limit = RECENT_EVENT_LIMIT) {}
 
-  /** True when this key was already observed. Empty keys are never recorded. */
-  remember(key: string): boolean {
-    if (!key) return false
-    if (this.seen.has(key)) {
-      this.seen.delete(key)
-      this.seen.set(key, null)
-      return true
+  /**
+   * Record `kind` for `key`. Empty keys are never stored.
+   * `upgrade` means a later `groupAtMessage` wins over a same-id `groupMessage`
+   * (WS2 still dedupes by id+type — both variants may have been emitted).
+   */
+  remember(key: string, kind = ""): "new" | "duplicate" | "upgrade" {
+    if (!key) return "new"
+    const prior = this.seen.get(key)
+    if (prior === undefined) {
+      this.seen.set(key, kind)
+      this.evict()
+      return "new"
     }
-    this.seen.set(key, null)
+    this.seen.delete(key)
+    if (prior === "groupMessage" && kind === "groupAtMessage") {
+      this.seen.set(key, kind)
+      return "upgrade"
+    }
+    this.seen.set(key, prior)
+    return "duplicate"
+  }
+
+  get size(): number {
+    return this.seen.size
+  }
+
+  private evict(): void {
     while (this.seen.size > this.limit) {
       const first = this.seen.keys().next().value
       if (first === undefined) break
       this.seen.delete(first)
     }
-    return false
-  }
-
-  get size(): number {
-    return this.seen.size
   }
 }
 
@@ -150,7 +163,8 @@ export function ingestDispatch(
   const event = parseDispatch(payload, receiveAll)
   if (event === null) return null
   const key = dedupeKey(event)
-  if (window.remember(key)) return null
+  const outcome = window.remember(key, event.type)
+  if (outcome === "duplicate") return null
   return event
 }
 
