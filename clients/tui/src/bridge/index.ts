@@ -18,13 +18,13 @@ import {
   OneBotAPIError,
   OneBotError,
   OneBotTransport,
-  type ChatTarget,
   type ConnectFactory,
   type FetchDeps,
   type OneBotInbound,
   type OneBotStatus,
   type OneBotTransportOptions,
 } from "./onebot"
+import { OneBotDeliverer } from "./deliverer"
 import { PostedIds, postedPath } from "./postedIds"
 import { BridgeRouter, type LinkRole, type OutboundIntent } from "./router"
 import { flushSettingsWrites, loadGroupSettings, settingsPath } from "./settings"
@@ -39,10 +39,7 @@ type ControlLinkLike = {
 }
 
 const CONTROL_QUEUE_CAP = 64
-const FRIEND_NOTICE_MS = 10 * 60 * 1000
 const STATUS_LOG_THROTTLE_MS = 60 * 1000
-/** The live membership check before a private redirect; it sits on the group's serial outbox. */
-const MEMBER_GATE_TIMEOUT_MS = 3_000
 const URL_SAFE_TOKEN = /[A-Za-z0-9_-]{16,}/
 
 /**
@@ -177,8 +174,7 @@ class GroupRuntime {
   readonly limiter: UserRateLimiter
   readonly lastMessageId = new Map<string, string>()
   observerLink: IrohLink | undefined
-  private outbox: Promise<void> = Promise.resolve()
-  private readonly lastFriendNotice = new Map<string, number>()
+  readonly deliverer: OneBotDeliverer
   router!: BridgeRouter
   keyring!: Keyring
   posted!: PostedIds
@@ -186,70 +182,22 @@ class GroupRuntime {
   constructor(
     readonly groupId: string,
     readonly group: BridgeGroupConfig,
-    private readonly transport: OneBotTransport,
-    private readonly now: () => number,
+    transport: OneBotTransport,
+    now: () => number,
   ) {
     this.limiter = new UserRateLimiter(undefined, undefined, now)
+    this.deliverer = new OneBotDeliverer({
+      groupId,
+      transport,
+      getObserver: () => this.observerLink,
+      getLastReplyId: (userId) => this.lastMessageId.get(userId),
+      getLocale: () => this.router?.locale() ?? "en",
+      now,
+    })
   }
 
   enqueue(intent: OutboundIntent): void {
-    this.outbox = this.outbox.then(() => this.dispatch(intent)).catch(() => {})
-  }
-
-  private async dispatch(intent: OutboundIntent): Promise<void> {
-    const groupTarget: ChatTarget = { type: "group", id: this.groupId }
-    if (intent.dest === "group") {
-      if (intent.media) {
-        const observer = this.observerLink
-        if (observer?.isAlive) {
-          try {
-            const payload = await observer.getMedia(intent.media.hash)
-            const result = await this.transport.sendImage(
-              groupTarget,
-              { data: payload.bytes, mime: payload.mime || intent.media.mime },
-              { text: intent.text || undefined },
-            )
-            if (result.ok) return
-          } catch {
-            // fall through to the name line — never pretend the image sent
-          }
-        }
-        const fallback = intent.text || intent.media.name || ""
-        if (fallback) await this.transport.sendText(groupTarget, fallback)
-        return
-      }
-      if (intent.text) await this.transport.sendText(groupTarget, intent.text)
-      return
-    }
-    if (intent.dest === "reply") {
-      const replyTo = this.lastMessageId.get(intent.userId)
-      if (replyTo) await this.transport.sendReply(groupTarget, replyTo, intent.text)
-      else await this.transport.sendText(groupTarget, intent.text)
-      return
-    }
-    // A private reply carries the group it belongs to, so NapCat can use the group temp
-    // session when the two are not friends — but ONLY once NapCat has confirmed it can
-    // resolve this member: with an unresolvable user NapCat falls back to posting into the
-    // group itself, and a keeper-grade reply must never take that path (iron rule #3).
-    // The check is LIVE (no cache) and short: a 10-minute-old "yes" is not a verdict, and this
-    // await sits on the group's serial outbox. Anything but a confirmed member sends plain.
-    const status = await this.transport.memberStatus(this.groupId, intent.userId, { fresh: true, timeoutMs: MEMBER_GATE_TIMEOUT_MS })
-    const result =
-      status === "member"
-        ? await this.transport.sendText({ type: "group", id: this.groupId, userId: intent.userId }, intent.text, { private: true })
-        : await this.transport.sendText({ type: "private", id: intent.userId }, intent.text)
-    if (!result.ok) {
-      // A transport hiccup is not "not friends": no friend notice for a failure that may
-      // have nothing to do with friendship.
-      if (status === "unknown") {
-        console.warn("onebot.private_send_failed_unverified", result.error ?? "")
-        return
-      }
-      const last = this.lastFriendNotice.get(intent.userId)
-      if (last !== undefined && this.now() - last < FRIEND_NOTICE_MS) return
-      this.lastFriendNotice.set(intent.userId, this.now())
-      await this.transport.sendText(groupTarget, tt(this.router.locale(), "bridge.privateFailed"))
-    }
+    this.deliverer.enqueue(intent)
   }
 }
 
@@ -279,6 +227,11 @@ export async function runBridge(config: BridgeConfig, deps: BridgeDeps = {}): Pr
       // ignore
     }
     for (const session of sessions.values()) {
+      try {
+        await session.deliverer.close()
+      } catch {
+        // ignore
+      }
       try {
         session.keyring.close()
       } catch {
@@ -435,6 +388,7 @@ export async function runBridge(config: BridgeConfig, deps: BridgeDeps = {}): Pr
       setTimeoutFn: deps.setTimeoutFn,
       clearTimeoutFn: deps.clearTimeoutFn,
     })
+    session.deliverer.attach(session.router)
 
     const observer = await session.keyring.ensureObserver()
     catalog.set(observer.key, { kind: "observer", groupId: group.group_id })
