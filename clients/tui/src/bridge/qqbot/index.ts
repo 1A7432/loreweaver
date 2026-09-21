@@ -92,6 +92,29 @@ export type {
 } from "./transport"
 
 export {
+  CLAIM_CODE_LENGTH,
+  CLAIM_CODE_TTL_MS,
+  CLAIM_REJECT_COOLDOWN_MS,
+  CODE_ALPHABET,
+  IdentityStore,
+  LINK_CODE_LENGTH,
+  LINK_CODE_TTL_MS,
+  UNBOUND_C2C_LOG_EVERY_MS,
+  identityPath,
+  isC2CClaimText,
+  openidTail,
+  seatName,
+} from "./identity"
+export type {
+  C2CInboundAction,
+  ClaimInput,
+  ClaimOutcome,
+  IdentityBinding,
+  IdentityState,
+  PendingClaim,
+} from "./identity"
+
+export {
   RecentEventWindow,
   ingestDispatch,
   parseDispatch,

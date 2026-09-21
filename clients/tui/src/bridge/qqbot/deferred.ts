@@ -204,6 +204,14 @@ export class DeferredStore {
     return this.items.length
   }
 
+  /** Queue length and age of the oldest group item. Hook for `.bridge deferred`. */
+  summary(now = this.now()): { length: number; oldestAgeMs?: number } {
+    this.expire(now)
+    const oldest = this.items[0]
+    if (!oldest) return { length: 0 }
+    return { length: this.items.length, oldestAgeMs: Math.max(0, now - oldest.createdAt) }
+  }
+
   expire(now = this.now()): { group: number; player: number } {
     const keep = (item: DeferredItem, ttl: number) => now - item.createdAt < ttl
     const before = this.items.length

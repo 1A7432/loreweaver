@@ -72,6 +72,15 @@ describe("deferred store", () => {
     expect(third?.notice).toBe(true)
   })
 
+  test("summary reports length and oldest age", () => {
+    let now = 5_000
+    const store = new DeferredStore("/tmp/unused.json", { now: () => now })
+    expect(store.summary()).toEqual({ length: 0 })
+    store.pushGroup(item(0, "old"))
+    store.pushGroup(item(4_000, "newer"))
+    expect(store.summary(now)).toEqual({ length: 2, oldestAgeMs: 5_000 })
+  })
+
   test("player holds and C2C outbox are per seat / user", () => {
     const store = new DeferredStore("/tmp/unused.json", { now: () => 0 })
     store.pushPlayerHold("111", item(0, "ada"))
