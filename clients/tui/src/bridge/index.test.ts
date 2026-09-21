@@ -1077,4 +1077,11 @@ describe("redactKeeperSecrets", () => {
     expect(redactKeeperSecrets(`token key=${secret}`)).toBe("token key=****")
     expect(redactKeeperSecrets("no secrets here")).toBe("no secrets here")
   })
+
+  test("masks client_secret / clientSecret keys and exact extra secret values", () => {
+    const secret = "super-secret-value-never-echo"
+    expect(redactKeeperSecrets(`qqbot.client_secret=${secret}`)).toBe("qqbot.client_secret ****")
+    expect(redactKeeperSecrets(`clientSecret: ${secret}`)).toBe("clientSecret ****")
+    expect(redactKeeperSecrets(`token POST body ${secret}`, [secret])).toBe("token POST body ****")
+  })
 })

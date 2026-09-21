@@ -5,6 +5,7 @@ import {
   type ErrorFrame,
   type NarrativeFrame,
   type ServerFrame,
+  type StateFrame,
   type SystemFrame,
   type UiFrame,
   type WelcomeFrame,
@@ -160,6 +161,8 @@ export class BridgeRouter {
   private welcomeLocale: string | undefined
   private duplicateHolds = 0
   private sink: FrameSink | undefined
+  /** Seats whose latest player-link `state` frame carried a non-null `character`. */
+  private readonly characterSeats = new Set<string>()
   private readonly holdMs: number
   private readonly now: () => number
   private readonly setTimeoutFn: typeof setTimeout
@@ -441,7 +444,7 @@ export class BridgeRouter {
         }
       },
       identity: this.options.identity,
-      hasCharacter: this.options.hasCharacter,
+      hasCharacter: this.options.hasCharacter ?? ((seat) => this.characterSeats.has(seat)),
       remintSeat: async (userId, displayName) => {
         const keyring = this.options.keyring
         if (!keyring) return { name: displayName }
@@ -494,6 +497,7 @@ export class BridgeRouter {
       return
     }
     if (frame.type === FrameType.State) {
+      this.noteCharacterState(slot, frame)
       this.armStateUngate(slot)
       return
     }
@@ -512,6 +516,16 @@ export class BridgeRouter {
 
   private onWelcome(_slot: MemberSlot, frame: WelcomeFrame): void {
     if (!this.options.locale && frame.locale) this.welcomeLocale = frame.locale
+  }
+
+  /**
+   * Smallest hook for `.bridge name`: a player/admin link's `state.character`
+   * is non-null once that member has an active character. Never rendered.
+   */
+  private noteCharacterState(slot: MemberSlot, frame: StateFrame): void {
+    if (slot.role === "observer" || !slot.userId) return
+    if (frame.character) this.characterSeats.add(slot.userId)
+    else this.characterSeats.delete(slot.userId)
   }
 
   private ungate(slot: MemberSlot): void {

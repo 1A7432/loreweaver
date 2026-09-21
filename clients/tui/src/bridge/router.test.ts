@@ -791,4 +791,68 @@ describe("router — choices, commands, queued input", () => {
     expect(identity.resolveC2C("M1")).toBe("U1")
     expect(router.adminIds).toContain("M1")
   })
+
+  test("state.character on a player link locks .bridge name; the frame is never rendered", async () => {
+    const clock = new ManualClock()
+    const dir = await mkdtemp(join(tmpdir(), "lw-router-char-"))
+    const identity = await IdentityStore.load(join(dir, "g.identity.json"), "99", { now: clock.now })
+    const control = new FakeControl()
+    const keyring = await Keyring.load({
+      path: join(dir, "g.keyring.json"),
+      groupId: "99",
+      control,
+      admins: () => [],
+      keeperKey: "KEEP-SECRET",
+    })
+    const { router, intents } = await makeRouter(clock, { identity, keyring, locale: "en" })
+    const player = new FakeLink()
+    router.attachLink("player", "p-key", player, "M1")
+    player.push(MANIFEST)
+    player.push({
+      type: FrameType.State,
+      character: { name: "Ada", system: "coc7", resources: [], attributes: {}, status_effects: [] },
+      party: [],
+      initiative: [],
+      online: 1,
+    })
+    expect(intents).toEqual([])
+
+    await router.handleInbound({
+      userId: "M1",
+      memberKey: "p-key",
+      text: ".bridge name Bao",
+      channel: "group",
+      isAdmin: false,
+      memberOpenid: "M1",
+    })
+    expect(intents[0]?.text).toBe(tt("en", "bridge.qqbot.nameLocked"))
+    expect(control.sent).toEqual([])
+
+    player.push({
+      type: FrameType.State,
+      party: [],
+      initiative: [],
+      online: 1,
+    })
+    intents.length = 0
+    clock.advance(NOT_ADMIN_COOLDOWN_MS + 1)
+    const pending = router.handleInbound({
+      userId: "M1",
+      memberKey: "p-key",
+      text: ".bridge name Bao",
+      channel: "group",
+      isAdmin: false,
+      memberOpenid: "M1",
+    })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(control.sent.some((frame) => frame.type === FrameType.AdminMintKey && (frame as { name?: string }).name === "Bao")).toBe(true)
+    control.push({
+      type: FrameType.AdminKeys,
+      keys: [],
+      minted: { key: "key-bao", room: "arkham", name: "Bao", role: "player", purpose: "join", expires_at: null },
+    } as ServerFrame)
+    await pending
+    expect(intents[0]?.text).toBe(tt("en", "bridge.qqbot.nameChanged", { name: "Bao" }))
+    keyring.close()
+  })
 })

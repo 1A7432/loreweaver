@@ -1,4 +1,4 @@
-import type { ClientFrame, ClientInfo, ServerFrame } from "loreweaver-protocol"
+import type { ClientInfo } from "loreweaver-protocol"
 import { bringUpServer, type HostHandle, type OnLog } from "../hostLocal"
 import { tt } from "../i18n"
 import { sha256Hex } from "../media"
@@ -7,6 +7,7 @@ import type { IrohLink, LoadIroh } from "../irohLink"
 import {
   loadBridgeConfig,
   onebotTimeoutsMs,
+  requireOneBot,
   roomKeeperKey,
   type BridgeConfig,
   type BridgeGroupConfig,
@@ -15,8 +16,6 @@ import { Keyring, keyringPath, observerName } from "./keyring"
 import { LinkPool } from "./linkPool"
 import { UserRateLimiter } from "./limits"
 import {
-  OneBotAPIError,
-  OneBotError,
   OneBotTransport,
   type ConnectFactory,
   type FetchDeps,
@@ -27,70 +26,21 @@ import {
 import { OneBotDeliverer } from "./deliverer"
 import { PostedIds, postedPath } from "./postedIds"
 import { BridgeRouter, type LinkRole, type OutboundIntent } from "./router"
+import {
+  RelayingControl,
+  attachmentFailureReason,
+  isImageAttachment,
+  redactKeeperSecrets,
+} from "./runtime"
 import { flushSettingsWrites, loadGroupSettings, settingsPath } from "./settings"
+import { runQQBotBridge } from "./qqbot/entry"
+import type { QQBotTransport } from "./qqbot/transport"
 
 export { loadBridgeConfig, parseBridgeConfig, BridgeConfigError } from "./config"
 export type { BridgeConfig } from "./config"
+export { RelayingControl, attachmentFailureReason, redactKeeperSecrets } from "./runtime"
 
-type ControlLinkLike = {
-  send(frame: ClientFrame): void
-  onMessage(cb: (frame: ServerFrame) => void): () => void
-  readonly isAlive?: boolean
-}
-
-const CONTROL_QUEUE_CAP = 64
 const STATUS_LOG_THROTTLE_MS = 60 * 1000
-const URL_SAFE_TOKEN = /[A-Za-z0-9_-]{16,}/
-
-/**
- * Mask keeper keys in host-bootstrap logs. Matches `Keeper key: …` / `密钥` lines
- * and any ≥16 url-safe token after the words `key` / `密钥`.
- */
-export function redactKeeperSecrets(line: string): string {
-  return line
-    .replace(/\bkey\b\s*[:=]?\s*[A-Za-z0-9_-]{16,}/gi, (match) => match.replace(URL_SAFE_TOKEN, "****"))
-    .replace(/密钥\s*[:：]?\s*[A-Za-z0-9_-]{16,}/g, (match) => match.replace(URL_SAFE_TOKEN, "****"))
-}
-
-/** Fan-out control surface so a Keyring survives control-link redials. */
-export class RelayingControl implements ControlLinkLike {
-  private link: ControlLinkLike | undefined
-  private readonly handlers = new Set<(frame: ServerFrame) => void>()
-  private readonly queue: ClientFrame[] = []
-  private off: (() => void) | undefined
-
-  bind(link: ControlLinkLike): void {
-    this.off?.()
-    this.link = link
-    this.off = link.onMessage((frame) => {
-      for (const handler of this.handlers) handler(frame)
-    })
-    const pending = this.queue.splice(0)
-    for (const frame of pending) this.send(frame)
-  }
-
-  send(frame: ClientFrame): void {
-    if (this.isLive()) {
-      this.link!.send(frame)
-      return
-    }
-    this.queue.push(frame)
-    while (this.queue.length > CONTROL_QUEUE_CAP) this.queue.shift()
-  }
-
-  onMessage(cb: (frame: ServerFrame) => void): () => void {
-    this.handlers.add(cb)
-    return () => {
-      this.handlers.delete(cb)
-    }
-  }
-
-  private isLive(): boolean {
-    if (!this.link) return false
-    if (this.link.isAlive === false) return false
-    return true
-  }
-}
 
 type LinkKind =
   | { kind: "control"; groupId: string }
@@ -112,6 +62,8 @@ export interface BridgeDeps {
   onLog?: (text: string) => void
   /** Default true. Tests pass false so SIGINT is not stolen. */
   installSignals?: boolean
+  /** Official-bot path: inject a transport pointed at the WS1 fakes. */
+  qqbotTransport?: QQBotTransport
 }
 
 export interface BridgeHandle {
@@ -123,22 +75,23 @@ export interface BridgeHandle {
 }
 
 export function onebotTransportOptions(config: BridgeConfig): OneBotTransportOptions {
-  const timeouts = onebotTimeoutsMs(config.onebot)
-  if (config.onebot.mode === "forward") {
+  const onebot = requireOneBot(config)
+  const timeouts = onebotTimeoutsMs(onebot)
+  if (onebot.mode === "forward") {
     return {
       mode: "forward",
-      wsUrl: config.onebot.ws_url,
-      accessToken: config.onebot.access_token,
+      wsUrl: onebot.ws_url,
+      accessToken: onebot.access_token,
       requestTimeoutMs: timeouts.requestTimeoutMs,
       reconnectDelayMs: timeouts.reconnectDelayMs,
     }
   }
   return {
     mode: "reverse",
-    listenHost: config.onebot.listen_host,
-    listenPort: config.onebot.listen_port,
-    path: config.onebot.path,
-    accessToken: config.onebot.access_token,
+    listenHost: onebot.listen_host,
+    listenPort: onebot.listen_port,
+    path: onebot.path,
+    accessToken: onebot.access_token,
     requestTimeoutMs: timeouts.requestTimeoutMs,
   }
 }
@@ -154,19 +107,6 @@ export function isDroppedOneBotSender(msg: OneBotInbound): boolean {
   if (selfId !== undefined && msg.sender.userId === selfId) return true
   if (msg.raw.anonymous && typeof msg.raw.anonymous === "object") return true
   return false
-}
-
-function isImageAttachment(att: { mime: string; name: string }): boolean {
-  if (att.mime.toLowerCase().startsWith("image/")) return true
-  return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(att.name)
-}
-
-/** A machine code for the log line — never the error message, which can carry a signed URL. */
-export function attachmentFailureReason(err: unknown): string {
-  if (err instanceof OneBotAPIError) return `onebot.api.${err.retcode}`
-  if (err instanceof OneBotError) return err.code
-  if (err instanceof Error) return err.name || "Error"
-  return "Error"
 }
 
 class GroupRuntime {
@@ -202,6 +142,7 @@ class GroupRuntime {
 }
 
 export async function runBridge(config: BridgeConfig, deps: BridgeDeps = {}): Promise<BridgeHandle> {
+  if (config.platform === "qqbot") return runQQBotBridge(config, deps)
   const onLog = deps.onLog ?? ((text: string) => console.log(text))
   const hostLocal = deps.hostLocal ?? bringUpServer
   const now = deps.now ?? Date.now

@@ -348,8 +348,10 @@ const messages = {
     "bridge.dice.left": "left",
     "bridge.dice.right": "right",
     "bridge.dice.tie": "tie",
-    "bridge.cli.usageLine": "  loreweaver bridge --config <file>   # play in a QQ group (OneBot 11)",
-    "bridge.cli.needConfig": "loreweaver bridge needs --config <file>. See docs/qq.md.",
+    "bridge.cli.usageLine":
+      "  loreweaver bridge --config <file>   # play in a QQ group (official Bot API or OneBot 11)",
+    "bridge.cli.needConfig":
+      "loreweaver bridge needs --config <file>. See docs/qq-official.md (official bot) or docs/qq.md (OneBot).",
     "bridge.cli.badConfig": "Bridge config is invalid: {reason}",
     "bridge.cli.failed": "Bridge failed to start: {reason}",
     "bridge.cli.hosting": "No ticket in the config — starting a local server…",
@@ -389,6 +391,13 @@ const messages = {
     "bridge.qqbot.nameLocked": "This seat already has a character. Use .rename for the character.",
     "bridge.qqbot.deferredEmpty": "No deferred items.",
     "bridge.qqbot.deferred": "Deferred queue: {count}. Oldest item is {seconds} seconds old.",
+    "bridge.qqbot.claimCode":
+      "Group {group} claim code: {code} (30 minutes). In a private chat with the bot, send: .bridge claim {code}",
+    "bridge.qqbot.unknownGroup": "Unknown group {group}; ignored. Add its group_openid to the config to adopt it.",
+    "bridge.qqbot.loggedIn": "QQ Bot is up: {user} ({name}).",
+    "bridge.qqbot.reconnecting": "QQ Bot connection dropped; reconnecting.",
+    "bridge.qqbot.offline": "QQ Bot connection is offline.",
+    "bridge.qqbot.connectFailed": "The QQ Bot transport failed to connect.",
   },
   zh: {
     "connect.subtitle": "灯下的牌桌 · 用邀请码连接一位守秘人",
@@ -726,8 +735,10 @@ const messages = {
     "bridge.dice.left": "左",
     "bridge.dice.right": "右",
     "bridge.dice.tie": "平",
-    "bridge.cli.usageLine": "  loreweaver bridge --config <file>   # 在 QQ 群里玩（OneBot 11）",
-    "bridge.cli.needConfig": "loreweaver bridge 需要 --config <file>。见 docs/qq.zh.md。",
+    "bridge.cli.usageLine":
+      "  loreweaver bridge --config <file>   # 在 QQ 群里玩（官方机器人 API 或 OneBot 11）",
+    "bridge.cli.needConfig":
+      "loreweaver bridge 需要 --config <file>。见 docs/qq-official.zh.md（官方机器人）或 docs/qq.zh.md（OneBot）。",
     "bridge.cli.badConfig": "桥接配置无效：{reason}",
     "bridge.cli.failed": "桥接启动失败：{reason}",
     "bridge.cli.hosting": "配置里没有 ticket — 正在启动本地服务器…",
@@ -763,6 +774,13 @@ const messages = {
     "bridge.qqbot.nameLocked": "该席位已领取角色，请用 .rename 改角色名。",
     "bridge.qqbot.deferredEmpty": "补发队列为空。",
     "bridge.qqbot.deferred": "补发队列 {count} 条，最早一条已等待 {seconds} 秒。",
+    "bridge.qqbot.claimCode":
+      "群 {group} 的领取码：{code}（30 分钟有效）。请私聊机器人发送：.bridge claim {code}",
+    "bridge.qqbot.unknownGroup": "未知群 {group}，已忽略。把它的 group_openid 写进配置后再重启才会接入。",
+    "bridge.qqbot.loggedIn": "QQ 官方机器人已就绪：{user}（{name}）。",
+    "bridge.qqbot.reconnecting": "QQ 官方机器人连接断了，正在重连。",
+    "bridge.qqbot.offline": "QQ 官方机器人连接已离线。",
+    "bridge.qqbot.connectFailed": "QQ 官方机器人传输没能连上。",
   },
 } as const
 

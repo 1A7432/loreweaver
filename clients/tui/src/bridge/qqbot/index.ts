@@ -37,6 +37,10 @@ export type { DeferredItem, DeferredMedia, DeferredState } from "./deferred"
 export { QQBotDeliverer } from "./deliverer"
 export type { PendingReview, QQBotDelivererOptions, QQBotMediaSource } from "./deliverer"
 
+export { QQBotTransportPort, toPortSendResult, toTransportSendRequest } from "./adapter"
+
+export { runQQBotBridge } from "./entry"
+
 export { isSendOk, numericCode } from "./port"
 export type {
   QQBotMarkdown,
