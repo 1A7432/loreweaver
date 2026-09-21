@@ -34,6 +34,16 @@ export const NOT_ADMIN_COOLDOWN_MS = 30_000
 
 export type LinkRole = "observer" | "player" | "admin"
 export type InboundChannel = "group" | "private"
+/** Classified outbound scope handed to a `FrameSink` before plain-text rendering. */
+export type FrameScope = "group" | "player" | "admin"
+
+export interface SinkEvent {
+  scope: FrameScope
+  seat?: string
+  frame: ServerFrame
+}
+
+export type FrameSink = (event: SinkEvent) => void
 
 export type OutboundIntent =
   | { dest: "group"; text: string; media?: BridgeMediaRef }
@@ -98,6 +108,13 @@ export interface BridgeRouterOptions {
   keyring?: Keyring
   settingsPath?: string
   onIntent: (intent: OutboundIntent) => void
+  /**
+   * Frame-level hand-off AFTER role/kind classification and BEFORE plain-text
+   * rendering. When set, the router does not emit `onIntent` for that frame
+   * (the deliverer owns rendering, busy notice, and the choices window).
+   * The OneBot path leaves this unset and keeps today's render-and-send path.
+   */
+  sink?: FrameSink
   onKickClose?: (userId: string, memberKey: string) => void
   onLog?: (text: string) => void
   now?: () => number
@@ -130,6 +147,7 @@ export class BridgeRouter {
   private admins: string[]
   private welcomeLocale: string | undefined
   private duplicateHolds = 0
+  private sink: FrameSink | undefined
   private readonly holdMs: number
   private readonly now: () => number
   private readonly setTimeoutFn: typeof setTimeout
@@ -140,6 +158,7 @@ export class BridgeRouter {
     this.mode = options.mode ?? "mention"
     this.busyNotice = options.busyNotice ?? true
     this.admins = (options.admins ?? []).map(String)
+    this.sink = options.sink
     this.holdMs = options.holdMs ?? ADMIN_HOLD_MS
     this.now = options.now ?? Date.now
     this.setTimeoutFn = options.setTimeoutFn ?? setTimeout
@@ -164,6 +183,11 @@ export class BridgeRouter {
 
   locale(): string {
     return this.options.locale || this.welcomeLocale || "en"
+  }
+
+  /** Register (or clear) the pre-render frame sink. Used by `Deliverer.attach`. */
+  setSink(sink: FrameSink | undefined): void {
+    this.sink = sink
   }
 
   /**
@@ -432,6 +456,7 @@ export class BridgeRouter {
         return
       case FrameType.Media: {
         this.notePosted(key)
+        if (this.handoff("group", frame)) return
         this.emit({
           dest: "group",
           text: frame.name,
@@ -441,10 +466,12 @@ export class BridgeRouter {
       }
       case FrameType.AudioLibraryItem: {
         this.notePosted(key)
+        if (this.handoff("group", frame)) return
         this.emit({ dest: "group", text: frame.title || frame.name })
         return
       }
       case FrameType.TurnStatus: {
+        if (this.handoff("group", frame)) return
         if (frame.status === "idle") {
           this.lastTurn = "idle"
           return
@@ -472,6 +499,7 @@ export class BridgeRouter {
     if (this.options.postedIds.has(frame.id)) return
     void this.options.postedIds.add(frame.id)
     this.notePosted(key)
+    if (this.handoff("group", frame)) return
     if (frame.speaker === "kp") this.choices.close(this.now())
     const text =
       frame.speaker === "npc"
@@ -482,13 +510,15 @@ export class BridgeRouter {
 
   private onObserverDice(frame: DiceFrame, key: string | undefined): void {
     this.notePosted(key)
+    if (this.handoff("group", frame)) return
     this.emit({ dest: "group", text: diceLine(frame, this.locale()) })
   }
 
   private onObserverUi(frame: UiFrame, rendered: ReturnType<typeof renderUiBlocks> | undefined, key: string | undefined): void {
     const view = rendered ?? renderUiBlocks(frame.blocks)
-    if (view.choices) this.choices.open(view.choices, this.now())
     this.notePosted(key)
+    if (this.handoff("group", frame)) return
+    if (view.choices) this.choices.open(view.choices, this.now())
     const text = view.lines.join("\n")
     if (text) this.emit({ dest: "group", text })
     for (const media of view.media) {
@@ -503,6 +533,7 @@ export class BridgeRouter {
     const text = unicastText(frame)
     if (!text) return
     const channel = this.consumeInputChannel(userId)
+    if (this.handoff("player", frame, userId)) return
     if (channel === "group") this.emit({ dest: "reply", userId, text })
     else this.emit({ dest: "private", userId, text })
   }
@@ -511,7 +542,10 @@ export class BridgeRouter {
     if (frame.type === FrameType.System || frame.type === FrameType.Error) {
       const userId = slot.userId
       const text = unicastText(frame)
-      if (userId && text) this.emit({ dest: "private", userId, text })
+      if (userId && text) {
+        if (this.handoff("admin", frame, userId)) return
+        this.emit({ dest: "private", userId, text })
+      }
       return
     }
     const userId = slot.userId
@@ -522,6 +556,7 @@ export class BridgeRouter {
     const timer = this.setTimeoutFn(() => {
       this.holdTimers.delete(holdKey)
       if (seenKey && this.observerSeen.has(seenKey)) return
+      if (this.handoff("admin", frame, userId)) return
       const text = this.adminBroadcastText(frame, rendered)
       if (text) {
         if (seenKey) this.privatelySent.add(seenKey)
@@ -529,6 +564,22 @@ export class BridgeRouter {
       }
     }, this.holdMs)
     this.holdTimers.set(holdKey, timer)
+  }
+
+  /**
+   * Hand a classified frame to the registered sink. Returns true when the
+   * caller must skip the plain-text `onIntent` path (qqbot). OneBot leaves
+   * the sink unset, so this is always false there.
+   */
+  private handoff(scope: FrameScope, frame: ServerFrame, seat?: string): boolean {
+    if (!this.sink) return false
+    try {
+      this.sink(seat ? { scope, seat, frame } : { scope, frame })
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      this.options.onLog?.(`bridge.sink_failed ${detail}`)
+    }
+    return true
   }
 
   private adminBroadcastText(frame: ServerFrame, rendered?: ReturnType<typeof renderUiBlocks>): string {

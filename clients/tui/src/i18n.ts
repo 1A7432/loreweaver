@@ -366,6 +366,17 @@ const messages = {
     "bridge.cli.onebotReconnecting": "OneBot connection dropped; reconnecting.",
     "bridge.cli.onebotOffline": "OneBot connection is offline.",
     "bridge.cli.attachmentFailed": "Attachment {name} was not forwarded ({reason}); the text still went through.",
+    "bridge.qqbot.thinking": "The Keeper is thinking…",
+    "bridge.qqbot.lateDelivery": "Late delivery:",
+    "bridge.qqbot.deferredDropped": "The late-delivery queue is full; the oldest item was dropped.",
+    "bridge.qqbot.privateHeld":
+      "Keeper material is waiting for you: send me a private message, or allow the bot to send you active messages in QQ.",
+    "bridge.qqbot.activeOff":
+      "This group has not allowed the bot to speak on its own. The group owner can turn on “Allow the bot to speak in this group” on the bot's profile to lift the reply limit.",
+    "bridge.qqbot.dailyCap": "This group's daily message cap has been reached. Further lines will wait until tomorrow.",
+    "bridge.qqbot.nothingToShow": "Nothing to show for that turn.",
+    "bridge.qqbot.choiceExpired": "This choice has expired.",
+    "bridge.qqbot.auditRejected": "That passage did not pass review.",
   },
   zh: {
     "connect.subtitle": "灯下的牌桌 · 用邀请码连接一位守秘人",
@@ -719,6 +730,16 @@ const messages = {
     "bridge.cli.onebotReconnecting": "OneBot 连接断了，正在重连。",
     "bridge.cli.onebotOffline": "OneBot 连接已离线。",
     "bridge.cli.attachmentFailed": "附件 {name} 没有转发（{reason}）；文字已照常送达。",
+    "bridge.qqbot.thinking": "守秘人正在思考…",
+    "bridge.qqbot.lateDelivery": "上回合补发：",
+    "bridge.qqbot.deferredDropped": "补发队列已满，已丢弃最早的一条。",
+    "bridge.qqbot.privateHeld": "有守秘人材料在等你：私聊我一句，或在 QQ 里允许接收机器人主动消息",
+    "bridge.qqbot.activeOff":
+      "本群尚未允许机器人主动发言。群主可在机器人资料页打开「机器人主动在群聊内发言」，即可解除回复条数限制。",
+    "bridge.qqbot.dailyCap": "本群今日主动消息额度已用完，其余内容将等到明天再发。",
+    "bridge.qqbot.nothingToShow": "这一回合没有可展示的内容。",
+    "bridge.qqbot.choiceExpired": "此选项已过期",
+    "bridge.qqbot.auditRejected": "这段没能通过审核",
   },
 } as const
 
