@@ -213,6 +213,27 @@ export class Keyring {
     return this.ensure(observerUserId(this.options.groupId))
   }
 
+  /**
+   * Always mint a fresh key named from `displayName` (collision rule applies).
+   * Returns the previous entry so the caller can close the old link; the old
+   * control-plane key is deleted after the new mint lands (same as a role change).
+   */
+  async remint(userId: string, displayName?: string): Promise<{ previous?: KeyringEntry; entry: KeyringEntry }> {
+    this.kicked.delete(userId)
+    const inflight = this.inflight.get(userId)
+    if (inflight) await inflight.catch(() => undefined)
+    const existing = this.entries.get(userId)
+    const want = this.roleFor(userId)
+    const pending = this.ensureFresh(userId, want, existing, this.keyName(userId, displayName))
+    this.inflight.set(userId, pending)
+    try {
+      const entry = await pending
+      return { previous: existing, entry }
+    } finally {
+      if (this.inflight.get(userId) === pending) this.inflight.delete(userId)
+    }
+  }
+
   async kick(userId: string): Promise<KeyringEntry> {
     if (this.isObserver(userId)) throw new ObserverProtectedError()
     const entry = this.entries.get(userId)

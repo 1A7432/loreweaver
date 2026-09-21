@@ -150,6 +150,26 @@ describe("Keyring — keys are named after the group card", () => {
     keyring.close()
   })
 
+  test("remint always mints a new key named from the display, returning the previous", async () => {
+    const control = new FakeControl()
+    const keyring = await ring(control)
+    const first = keyring.ensure("111", "阿绫")
+    await Promise.resolve()
+    control.push(minted("阿绫", "key-aaaa", "player"))
+    await first
+    const pending = keyring.remint("111", "绫绫")
+    await Promise.resolve()
+    expect(control.sent.at(-1)).toMatchObject({ type: FrameType.AdminMintKey, name: "绫绫", role: "player" })
+    control.push(minted("绫绫", "key-bbbb", "player"))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    control.push({ type: FrameType.AdminKeys, keys: [] } as ServerFrame)
+    const { previous, entry } = await pending
+    expect(previous?.key).toBe("key-aaaa")
+    expect(entry.key).toBe("key-bbbb")
+    expect(entry.name).toBe("绫绫")
+    keyring.close()
+  })
+
   test("keyNameFromDisplay trims, collapses whitespace, strips control characters, and caps", () => {
     expect(keyNameFromDisplay("  阿  绫\t\n")).toBe("阿 绫")
     expect(keyNameFromDisplay("a\u0000b")).toBe("a b")
