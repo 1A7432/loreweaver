@@ -15,11 +15,14 @@ import { Keyring, keyringPath, observerName } from "./keyring"
 import { LinkPool } from "./linkPool"
 import { UserRateLimiter } from "./limits"
 import {
+  OneBotAPIError,
+  OneBotError,
   OneBotTransport,
   type ChatTarget,
   type ConnectFactory,
   type FetchDeps,
   type OneBotInbound,
+  type OneBotStatus,
   type OneBotTransportOptions,
 } from "./onebot"
 import { PostedIds, postedPath } from "./postedIds"
@@ -37,6 +40,7 @@ type ControlLinkLike = {
 
 const CONTROL_QUEUE_CAP = 64
 const FRIEND_NOTICE_MS = 10 * 60 * 1000
+const STATUS_LOG_THROTTLE_MS = 60 * 1000
 const URL_SAFE_TOKEN = /[A-Za-z0-9_-]{16,}/
 
 /**
@@ -140,15 +144,15 @@ export function onebotTransportOptions(config: BridgeConfig): OneBotTransportOpt
   }
 }
 
+/**
+ * Own messages (`user_id === self_id`) and OneBot 11 anonymous group messages are dropped.
+ * There is no bot flag on a message sender in NapCat, LLOneBot or the spec — the only
+ * marker is `is_robot` on a `get_group_member_info` member object — so a second bot in
+ * the group is NOT recognised: the bridge has no second-bot guard on the protocol path.
+ */
 export function isDroppedOneBotSender(msg: OneBotInbound): boolean {
   const selfId = msg.raw.self_id === undefined || msg.raw.self_id === null ? undefined : String(msg.raw.self_id)
   if (selfId !== undefined && msg.sender.userId === selfId) return true
-  const sender = msg.raw.sender
-  if (sender && typeof sender === "object") {
-    const rec = sender as Record<string, unknown>
-    if (rec.bot === true || rec.is_bot === true) return true
-    if (String(rec.role ?? "").toLowerCase() === "bot") return true
-  }
   if (msg.raw.anonymous && typeof msg.raw.anonymous === "object") return true
   return false
 }
@@ -156,6 +160,14 @@ export function isDroppedOneBotSender(msg: OneBotInbound): boolean {
 function isImageAttachment(att: { mime: string; name: string }): boolean {
   if (att.mime.toLowerCase().startsWith("image/")) return true
   return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(att.name)
+}
+
+/** A machine code for the log line — never the error message, which can carry a signed URL. */
+export function attachmentFailureReason(err: unknown): string {
+  if (err instanceof OneBotAPIError) return `onebot.api.${err.retcode}`
+  if (err instanceof OneBotError) return err.code
+  if (err instanceof Error) return err.name || "Error"
+  return "Error"
 }
 
 class GroupRuntime {
@@ -330,6 +342,34 @@ export async function runBridge(config: BridgeConfig, deps: BridgeDeps = {}): Pr
       resolveAddresses: deps.resolveAddresses,
     })
 
+  // The operator's only view of the OneBot side: which account answered, when the socket
+  // drops, and when a later self-check fails. "connecting"/"online" are implied by the
+  // login line. Every line is throttled to once per minute per kind, except a login by a
+  // DIFFERENT account, which always prints.
+  const loggedAt = new Map<string, number>()
+  const throttled = (kind: string): boolean => {
+    const last = loggedAt.get(kind)
+    if (last !== undefined && now() - last < STATUS_LOG_THROTTLE_MS) return true
+    loggedAt.set(kind, now())
+    return false
+  }
+  let lastLoginUser: string | undefined
+  transport.onLogin((info) => {
+    const changed = info.userId !== lastLoginUser
+    lastLoginUser = info.userId
+    if (!changed && throttled("login")) return
+    onLog(tt(resolved.locale, "bridge.cli.onebotLoggedIn", { user: info.userId || "?", name: info.nickname || "?" }))
+  })
+  transport.onStatus((status: OneBotStatus) => {
+    if (status !== "reconnecting" && status !== "offline") return
+    if (throttled(status)) return
+    onLog(tt(resolved.locale, status === "reconnecting" ? "bridge.cli.onebotReconnecting" : "bridge.cli.onebotOffline"))
+  })
+  transport.onSelfCheckFailed((code) => {
+    if (throttled(code)) return
+    onLog(tt(resolved.locale, code === "onebot.auth_rejected" ? "bridge.cli.onebotAuthRejected" : "bridge.cli.onebotSelfCheckFailed"))
+  })
+
   for (const group of resolved.groups) {
     const groupKeeper = roomKeeperKey(resolved, group)
     if (!groupKeeper) {
@@ -446,14 +486,21 @@ export async function runBridge(config: BridgeConfig, deps: BridgeDeps = {}): Pr
                 bytes,
                 sha256: sha256Hex(bytes),
               })
-            } catch {
-              // SSRF, size, or server media policy — skip this file, keep the text
+            } catch (err) {
+              // No direct URL, an expired signed link, SSRF, size, or the server's media
+              // policy — the text still goes through; the operator gets ONE line saying why.
+              onLog(
+                tt(session.router.locale(), "bridge.cli.attachmentFailed", {
+                  name: att.name || att.id || "?",
+                  reason: attachmentFailureReason(err),
+                }),
+              )
             }
           }
         },
       )
     } catch {
-      onLog("bridge.seat_failed")
+      onLog(tt(session.router.locale(), "bridge.seatFailed"))
       const text = tt(session.router.locale(), "bridge.seatFailed")
       if (msg.chatType === "private") {
         await transport.sendText({ type: "private", id: userId }, text)
@@ -493,7 +540,14 @@ export async function runBridge(config: BridgeConfig, deps: BridgeDeps = {}): Pr
 
   const connected = await transport.connect()
   if (!connected) {
-    throw new Error(tt(resolved.locale, "bridge.cli.onebotConnectFailed"))
+    const reason = transport.lastConnectError
+    const key =
+      reason === "onebot.auth_rejected"
+        ? "bridge.cli.onebotAuthRejected"
+        : reason === "onebot.self_check_failed"
+          ? "bridge.cli.onebotSelfCheckFailed"
+          : "bridge.cli.onebotConnectFailed"
+    throw new Error(tt(resolved.locale, key))
   }
 
   onLog(tt(resolved.locale, "bridge.cli.ready", { groups: resolved.groups.map((g) => g.group_id).join(", ") }))

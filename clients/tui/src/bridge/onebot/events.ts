@@ -144,7 +144,9 @@ export function decodeMessage(
       if (selfId !== undefined && target === selfId) {
         atSelf = true
         stripNext = true
-      } else if (target) {
+      } else if (target && target !== "all") {
+        // `qq:"all"` is @全体成员 (NapCat `api/msg.ts` textElement): it addresses nobody the
+        // Keeper knows, so it is dropped rather than leaking a literal "@all" into the input.
         textParts.push(`@${target}`)
       }
     } else if (segmentType === "reply") {
@@ -225,7 +227,9 @@ function attachmentFromSegment(segmentType: string, data: Record<string, unknown
     }
   }
 
-  const name = String(data.name ?? "") || attachmentName(url || fileValue, segmentType)
+  // NapCat puts the real file name in `file` ("<md5>.jpg") and a query-style download URL
+  // in `url`, whose path segment is just "download" — so a plain file name wins over the URL.
+  const name = String(data.name ?? "") || plainFileName(fileValue) || attachmentName(url || fileValue, segmentType)
   const mime = attachmentMime(segmentType, name)
   const size = asInteger(data.file_size ?? data.size, 0)
   return {
@@ -246,6 +250,12 @@ function httpUrl(value: string): boolean {
   } catch {
     return false
   }
+}
+
+/** The basename of a plain file name or local path; empty for URLs and inline base64. */
+function plainFileName(value: string): string {
+  if (!value || value.startsWith("base64://") || value.includes("://")) return ""
+  return value.split(/[\\/]/).filter(Boolean).pop() ?? ""
 }
 
 function attachmentName(value: string, segmentType: string): string {

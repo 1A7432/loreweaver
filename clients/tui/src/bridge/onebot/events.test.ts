@@ -70,6 +70,35 @@ describe("parseOneBotEvent — array segments", () => {
     expect(inbound!.atSelf).toBe(false)
     expect(inbound!.text).toBe("@99 hello")
   })
+
+  test("@全体成员 is dropped from the text, and NapCat's file name beats its download URL", () => {
+    // Shapes from NapCat api/msg.ts: textElement → {type:"at",data:{qq:"all"}};
+    // picElement → {file:"<md5>.jpg", url:"https://multimedia.nt.qq.com.cn/download?…", file_size, sub_type}.
+    const inbound = parseOneBotEvent(
+      groupEvent({
+        message: [
+          { type: "at", data: { qq: "all" } },
+          { type: "text", data: { text: " 开团了" } },
+          {
+            type: "image",
+            data: {
+              summary: "",
+              file: "A1B2C3D4E5F6.jpg",
+              sub_type: 0,
+              url: "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=abc&rkey=xyz",
+              file_size: "34567",
+            },
+          },
+        ],
+      }),
+    )
+    expect(inbound!.text).toBe("开团了")
+    expect(inbound!.atSelf).toBe(false)
+    expect(inbound!.attachments[0]!.name).toBe("A1B2C3D4E5F6.jpg")
+    expect(inbound!.attachments[0]!.mime).toBe("image/jpeg")
+    expect(inbound!.attachments[0]!.size).toBe(34567)
+    expect(inbound!.attachments[0]!.url).toBe("https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=abc&rkey=xyz")
+  })
 })
 
 describe("parseOneBotEvent — CQ strings", () => {

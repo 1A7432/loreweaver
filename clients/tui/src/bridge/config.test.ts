@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { BridgeConfigError, isLoopbackHost, isWsUrl, onebotTimeoutsMs, parseBridgeConfig } from "./config"
+import { BridgeConfigError, isWsUrl, onebotTimeoutsMs, parseBridgeConfig } from "./config"
 
 const base = {
   onebot: { mode: "forward" as const, ws_url: "ws://127.0.0.1:3001", access_token: "tok" },
@@ -39,32 +39,27 @@ describe("bridge config", () => {
     expect(isWsUrl("wss://napcat.local/ws")).toBe(true)
   })
 
-  test("a non-loopback reverse listener requires access_token", () => {
-    expect(() =>
-      parseBridgeConfig({
-        groups: base.groups,
-        onebot: { mode: "reverse", listen_host: "0.0.0.0", listen_port: 6700 },
-      }),
-    ).toThrow(BridgeConfigError)
-    try {
-      parseBridgeConfig({
-        groups: base.groups,
-        onebot: { mode: "reverse", listen_host: "0.0.0.0", listen_port: 6700 },
-      })
-    } catch (error) {
-      expect((error as BridgeConfigError).code).toBe("reverse_token_required")
+  test("access_token is required in both modes, loopback included", () => {
+    const missing = [
+      { mode: "forward", ws_url: "ws://127.0.0.1:3001" },
+      { mode: "forward", ws_url: "ws://127.0.0.1:3001", access_token: "   " },
+      { mode: "reverse", listen_host: "0.0.0.0", listen_port: 6700 },
+      { mode: "reverse", listen_host: "127.0.0.1", listen_port: 6700 },
+    ]
+    for (const onebot of missing) {
+      expect(() => parseBridgeConfig({ groups: base.groups, onebot })).toThrow(BridgeConfigError)
+      try {
+        parseBridgeConfig({ groups: base.groups, onebot })
+      } catch (error) {
+        expect((error as BridgeConfigError).code).toBe("token_required")
+      }
     }
     const ok = parseBridgeConfig({
       groups: base.groups,
       onebot: { mode: "reverse", listen_host: "0.0.0.0", listen_port: 6700, access_token: "secret" },
     })
     expect(ok.onebot.mode).toBe("reverse")
-    const loopback = parseBridgeConfig({
-      groups: base.groups,
-      onebot: { mode: "reverse", listen_host: "127.0.0.1", listen_port: 6700 },
-    })
-    expect(loopback.onebot.mode).toBe("reverse")
-    expect(isLoopbackHost("localhost")).toBe(true)
+    expect(ok.onebot.access_token).toBe("secret")
   })
 
   test("omitted locale is undefined so welcome.locale can win", () => {
@@ -113,7 +108,7 @@ describe("bridge config", () => {
     try {
       parseBridgeConfig({
         groups: base.groups,
-        onebot: { mode: "reverse", listen_host: "127.0.0.1", listen_port: 1, path: "onebot" },
+        onebot: { mode: "reverse", listen_host: "127.0.0.1", listen_port: 1, path: "onebot", access_token: "tok" },
       })
     } catch (error) {
       expect((error as BridgeConfigError).code).toBe("invalid_reverse_path")

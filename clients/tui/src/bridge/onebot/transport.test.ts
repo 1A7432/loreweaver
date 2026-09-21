@@ -49,6 +49,8 @@ class FakeSocket implements OneBotSocket {
   sent: string[] = []
   closeArgs?: { code?: number; reason?: string }
   hangSend = false
+  /** Answer every action the way NapCat does (`get_login_info` → the account, else a message id). */
+  ackActions = false
   private readonly queue: string[] = []
   private waiter?: (result: IteratorResult<string>) => void
   private closed = false
@@ -59,6 +61,17 @@ class FakeSocket implements OneBotSocket {
 
   send(data: string): void | Promise<void> {
     this.sent.push(data)
+    if (this.ackActions) {
+      try {
+        const parsed = JSON.parse(data) as { action?: string; echo?: unknown }
+        if (parsed.action && parsed.echo !== undefined) {
+          const payload = parsed.action === "get_login_info" ? { user_id: 42, nickname: "Keeper" } : { message_id: 1 }
+          queueMicrotask(() => this.push({ status: "ok", retcode: 0, data: payload, message: "", wording: "", echo: parsed.echo }))
+        }
+      } catch {
+        // not an action frame
+      }
+    }
     if (this.hangSend) return new Promise(() => {})
   }
 
@@ -252,6 +265,168 @@ describe("forward mode", () => {
     })
     const adapter = new OneBotTransport({ transport })
     expect(await adapter.connect()).toBe(false)
+    expect(adapter.lastConnectError).toBe("onebot.websocket.connect_timeout")
+  })
+
+  test("connect() runs get_login_info and reports which account answered", async () => {
+    const sock = new FakeSocket()
+    sock.ackActions = true
+    const bot = new OneBotTransport({
+      mode: "forward",
+      wsUrl: "ws://127.0.0.1:9/",
+      requestTimeoutMs: 200,
+      reconnectDelayMs: 20,
+      connectFactory: async () => sock,
+    })
+    const logins: string[] = []
+    bot.onLogin((info) => logins.push(`${info.userId}:${info.nickname}`))
+    try {
+      expect(await bot.connect()).toBe(true)
+      expect(JSON.parse(sock.sent[0]!).action).toBe("get_login_info")
+      expect(logins).toEqual(["42:Keeper"])
+      expect(bot.lastLogin).toEqual({ userId: "42", nickname: "Keeper" })
+      expect(bot.lastConnectError).toBeUndefined()
+    } finally {
+      await bot.close()
+    }
+  })
+
+  test("a wrong token is an in-band 1403 after the upgrade: connect() fails with onebot.auth_rejected", async () => {
+    // NapCat websocket-server.ts authorize(): accept the upgrade, send
+    // {status:"failed", retcode:1403, echo:null}, close. LLOneBot connect/ws.ts does the same.
+    let dials = 0
+    const factory: ConnectFactory = async () => {
+      dials += 1
+      const sock = new FakeSocket([
+        { status: "failed", retcode: 1403, data: null, message: "token验证失败", wording: "token验证失败", echo: null },
+      ])
+      queueMicrotask(() => sock.end())
+      return sock
+    }
+    const bot = new OneBotTransport({
+      mode: "forward",
+      wsUrl: "ws://127.0.0.1:9/",
+      requestTimeoutMs: 200,
+      reconnectDelayMs: 10,
+      connectFactory: factory,
+    })
+    const statuses: string[] = []
+    bot.onStatus((status) => statuses.push(status))
+    expect(await bot.connect()).toBe(false)
+    expect(bot.lastConnectError).toBe("onebot.auth_rejected")
+    expect(bot.raw?.authRejected).toBe(true)
+    expect(statuses.at(-1)).toBe("offline")
+    const dialsAtFailure = dials
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(dials).toBe(dialsAtFailure)
+  })
+
+  test("an open socket that never answers get_login_info is not 'connected'", async () => {
+    const sock = new FakeSocket()
+    const bot = new OneBotTransport({
+      mode: "forward",
+      wsUrl: "ws://127.0.0.1:9/",
+      requestTimeoutMs: 60,
+      reconnectDelayMs: 10,
+      connectFactory: async () => sock,
+    })
+    expect(await bot.connect()).toBe(false)
+    expect(bot.lastConnectError).toBe("onebot.self_check_failed")
+    expect(bot.connected).toBe(false)
+  })
+
+  test("LLOneBot's 1403 frame has NO echo key and is still an auth rejection", async () => {
+    // LLOneBot connect/ws.ts: OB11Response.res(null,'failed',1403,'token验证失败') with
+    // echo: undefined, which JSON.stringify drops; then close(1008).
+    const factory: ConnectFactory = async () => {
+      const sock = new FakeSocket([{ status: "failed", retcode: 1403, data: null, message: "token验证失败", wording: "token验证失败" }])
+      queueMicrotask(() => sock.end())
+      return sock
+    }
+    const bot = new OneBotTransport({
+      mode: "forward",
+      wsUrl: "ws://127.0.0.1:9/",
+      requestTimeoutMs: 200,
+      reconnectDelayMs: 10,
+      connectFactory: factory,
+    })
+    const events: string[] = []
+    bot.onMessage((msg) => events.push(msg.text))
+    expect(await bot.connect()).toBe(false)
+    expect(bot.lastConnectError).toBe("onebot.auth_rejected")
+    expect(events).toEqual([])
+  })
+
+  test("close() during an in-flight dial returns, and the late socket is never attached", async () => {
+    let resolveDial: (sock: OneBotSocket) => void = () => {}
+    const factory: ConnectFactory = () =>
+      new Promise<OneBotSocket>((resolve) => {
+        resolveDial = resolve
+      })
+    const transport = new OneBotForwardWebSocketTransport({
+      url: "ws://127.0.0.1:9/",
+      requestTimeoutMs: 200,
+      reconnectDelayMs: 10,
+      connectFactory: factory,
+    })
+    await transport.start(() => {})
+    const closing = transport.close()
+    const late = new FakeSocket()
+    resolveDial(late)
+    await Promise.race([closing, new Promise((_, reject) => setTimeout(() => reject(new Error("close() hung")), 500))])
+    expect(late.closeArgs).toBeDefined()
+    expect(transport.connected).toBe(false)
+  })
+
+  test("a dial that lands after the connect timeout is closed, not adopted", async () => {
+    const late = new FakeSocket()
+    const factory: ConnectFactory = () => new Promise<OneBotSocket>((resolve) => setTimeout(() => resolve(late), 120))
+    const bot = new OneBotTransport({
+      mode: "forward",
+      wsUrl: "ws://127.0.0.1:9/",
+      requestTimeoutMs: 40,
+      reconnectDelayMs: 10,
+      connectFactory: factory,
+    })
+    const result = await Promise.race([
+      bot.connect(),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("connect() hung")), 1000)),
+    ])
+    expect(result).toBe(false)
+    expect(bot.lastConnectError).toBe("onebot.websocket.connect_timeout")
+    await waitFor(() => late.closeArgs !== undefined, 500)
+    expect(bot.connected).toBe(false)
+  })
+
+  test("a self-check that fails after a reconnect is reported, not swallowed", async () => {
+    const first = new FakeSocket()
+    first.ackActions = true
+    let dials = 0
+    const factory: ConnectFactory = async () => {
+      dials += 1
+      if (dials === 1) return first
+      // The implementation came back with a different token: NapCat-shaped 1403, then close.
+      const sock = new FakeSocket([{ status: "failed", retcode: 1403, data: null, message: "token验证失败", wording: "token验证失败", echo: null }])
+      queueMicrotask(() => sock.end())
+      return sock
+    }
+    const bot = new OneBotTransport({
+      mode: "forward",
+      wsUrl: "ws://127.0.0.1:9/",
+      requestTimeoutMs: 200,
+      reconnectDelayMs: 10,
+      connectFactory: factory,
+    })
+    const codes: string[] = []
+    bot.onSelfCheckFailed((code) => codes.push(code))
+    try {
+      expect(await bot.connect()).toBe(true)
+      first.end()
+      await waitFor(() => codes.length > 0, 1000)
+      expect(codes[0]).toBe("onebot.auth_rejected")
+    } finally {
+      await bot.close()
+    }
   })
 })
 
@@ -274,6 +449,40 @@ describe("reverse mode", () => {
       ),
     ).toBeNull()
     expect(reverseHandshakeResponse({ url: "http://127.0.0.1/other", headers: new Headers() }, opts)?.status).toBe(404)
+  })
+
+  test("every reverse refusal names its reason as an onebot.reverse.* code in the body", async () => {
+    const opts = { path: "/onebot/v11/ws", accessToken: "token" }
+    const url = "http://127.0.0.1/onebot/v11/ws"
+    // A token pasted into the URL arrives with NapCat's empty `Bearer ` header.
+    expect(
+      await reverseHandshakeResponse(
+        { url: `${url}?access_token=token`, headers: new Headers({ Authorization: "Bearer " }) },
+        opts,
+      )?.text(),
+    ).toBe("onebot.reverse.rejected.token_in_query")
+    expect(
+      await reverseHandshakeResponse({ url, headers: new Headers({ Authorization: "Bearer wrong" }) }, opts)?.text(),
+    ).toBe("onebot.reverse.rejected.wrong_token")
+    // A non-empty bearer that does not match is wrong, whatever the query says.
+    expect(
+      await reverseHandshakeResponse(
+        { url: `${url}?access_token=token`, headers: new Headers({ Authorization: "Bearer wrong" }) },
+        opts,
+      )?.text(),
+    ).toBe("onebot.reverse.rejected.wrong_token")
+    expect(await reverseHandshakeResponse({ url, headers: new Headers() }, opts)?.text()).toBe(
+      "onebot.reverse.rejected.missing_authorization",
+    )
+    expect(await reverseHandshakeResponse({ url: "http://127.0.0.1/other", headers: new Headers() }, opts)?.text()).toBe(
+      "onebot.reverse.rejected.path",
+    )
+    expect(
+      await reverseHandshakeResponse(
+        { url, headers: new Headers({ Authorization: "Bearer token", "X-Client-Role": "Event" }) },
+        opts,
+      )?.text(),
+    ).toBe("onebot.reverse.rejected.role")
   })
 
   test("refuses to listen off loopback without a token", () => {
@@ -616,6 +825,7 @@ describe("outbound", () => {
 describe("OneBotTransport event stream", () => {
   test("connect fans parsed inbound messages out of the raw socket", async () => {
     const sock = new FakeSocket()
+    sock.ackActions = true
     const factory: ConnectFactory = async () => sock
     const bot = new OneBotTransport({
       mode: "forward",

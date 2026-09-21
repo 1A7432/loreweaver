@@ -7,12 +7,14 @@ import type { LoadIroh } from "../irohLink"
 import { tt } from "../i18n"
 import {
   RelayingControl,
+  attachmentFailureReason,
   isDroppedOneBotSender,
   onebotTransportOptions,
   parseBridgeConfig,
   redactKeeperSecrets,
   runBridge,
   runBridgeFromFile,
+  type BridgeDeps,
 } from "./index"
 import { OneBotTransport, type ConnectFactory, type OneBotInbound, type OneBotRawTransport, type OneBotSocket } from "./onebot"
 
@@ -339,6 +341,7 @@ async function startBridge(
   socket: AckSocket,
   extra: Record<string, unknown> = {},
   hostLocal?: () => Promise<{ host: string; key: string; stop: () => void }>,
+  depsExtra: Partial<BridgeDeps> = {},
 ) {
   const stateDir = await tmpState()
   const sockets: AckSocket[] = []
@@ -352,6 +355,7 @@ async function startBridge(
     hostLocal,
     installSignals: false,
     onLog: () => {},
+    ...depsExtra,
   })
   await waitFor(() => iroh.joins.some((row) => row.key === KEEP))
   await waitFor(() => iroh.joins.some((row) => row.key.startsWith("k-qq:observer:")))
@@ -364,19 +368,19 @@ async function startBridge(
 describe("onebotTransportOptions", () => {
   test("converts config seconds to transport milliseconds", () => {
     const cfg = parseBridgeConfig({
-      onebot: { mode: "forward", ws_url: "ws://127.0.0.1:3001", request_timeout: 10, reconnect_delay: 1 },
+      onebot: { mode: "forward", ws_url: "ws://127.0.0.1:3001", access_token: "tok", request_timeout: 10, reconnect_delay: 1 },
       groups: [{ group_id: 1 }],
     })
     expect(onebotTransportOptions(cfg)).toEqual({
       mode: "forward",
       wsUrl: "ws://127.0.0.1:3001",
-      accessToken: undefined,
+      accessToken: "tok",
       requestTimeoutMs: 10_000,
       reconnectDelayMs: 1_000,
     })
     const reverse = parseBridgeConfig({
       groups: [{ group_id: 1 }],
-      onebot: { mode: "reverse", listen_host: "127.0.0.1", listen_port: 6700, request_timeout: 4 },
+      onebot: { mode: "reverse", listen_host: "127.0.0.1", listen_port: 6700, access_token: "tok", request_timeout: 4 },
     })
     const opts = onebotTransportOptions(reverse)
     expect(opts.mode).toBe("reverse")
@@ -502,7 +506,7 @@ describe("QQ bridge entry", () => {
     await handle.stop()
   })
 
-  test("drops own messages, other bots, and groups not in the config", async () => {
+  test("drops own messages, anonymous senders, and groups not in the config", async () => {
     const iroh = createMockIroh()
     const socket = new AckSocket()
     const { handle } = await startBridge(iroh, socket)
@@ -512,7 +516,9 @@ describe("QQ bridge entry", () => {
       groupEvent({
         user_id: 88,
         message_id: 31,
-        sender: { nickname: "DiceBot", bot: true },
+        sub_type: "anonymous",
+        anonymous: { id: 1, name: "匿名", flag: "f" },
+        sender: { nickname: "匿名" },
       }),
     )
     socket.push(groupEvent({ group_id: 123456, user_id: 9, message_id: 32 }))
@@ -911,7 +917,7 @@ describe("QQ bridge entry", () => {
     await handle.stop()
   })
 
-  test("isDroppedOneBotSender covers self and bot senders", () => {
+  test("isDroppedOneBotSender drops self and anonymous senders only — no sender carries a bot flag", () => {
     const self: OneBotInbound = {
       chatType: "group",
       chatId: "99",
@@ -922,18 +928,81 @@ describe("QQ bridge entry", () => {
       raw: { self_id: 42, sender: { user_id: 42 } },
     }
     expect(isDroppedOneBotSender(self)).toBe(true)
-    const bot: OneBotInbound = {
+    const anonymous: OneBotInbound = {
       ...self,
       sender: { userId: "88" },
-      raw: { self_id: 42, sender: { user_id: 88, bot: true } },
+      raw: { self_id: 42, sender: { user_id: 88 }, anonymous: { id: 1, name: "x", flag: "f" } },
     }
-    expect(isDroppedOneBotSender(bot)).toBe(true)
+    expect(isDroppedOneBotSender(anonymous)).toBe(true)
+    // NapCat / LLOneBot / the spec have no `bot` field on a message sender (the only marker
+    // is `is_robot` on a group-member object), so these fields must not be load-bearing.
+    const fictionalBot: OneBotInbound = {
+      ...self,
+      sender: { userId: "88" },
+      raw: { self_id: 42, sender: { user_id: 88, bot: true, is_bot: true, role: "bot" } },
+    }
+    expect(isDroppedOneBotSender(fictionalBot)).toBe(false)
     const person: OneBotInbound = {
       ...self,
       sender: { userId: "7" },
       raw: { self_id: 42, sender: { user_id: 7 } },
     }
     expect(isDroppedOneBotSender(person)).toBe(false)
+  })
+
+  test("a failed attachment fetch logs one line with a reason code, never the URL", async () => {
+    const iroh = createMockIroh()
+    const socket = new AckSocket()
+    const logs: string[] = []
+    const { handle } = await startBridge(iroh, socket, { locale: "en" }, undefined, {
+      onLog: (text) => logs.push(text),
+      resolveAddresses: async () => [],
+    })
+    socket.push(
+      groupEvent({
+        message_id: 120,
+        message: [
+          { type: "text", data: { text: ".ra 侦查" } },
+          {
+            type: "image",
+            data: {
+              file: "E5F6.jpg",
+              url: "https://multimedia.nt.qq.com.cn/download?fileid=abc&rkey=SIGNEDSECRET",
+              file_size: 10,
+            },
+          },
+        ],
+      }),
+    )
+    await waitFor(() => iroh.joins.some((row) => row.key === "k-qq:7"))
+    await ungate(iroh, "k-qq:7")
+    await waitFor(() => logs.some((line) => line.includes("E5F6.jpg")))
+    const line = logs.find((item) => item.includes("E5F6.jpg"))!
+    expect(line).toBe(tt("en", "bridge.cli.attachmentFailed", { name: "E5F6.jpg", reason: "onebot.attachment.unsafe_url" }))
+    expect(logs.join("\n")).not.toContain("SIGNEDSECRET")
+    expect(framesOf(iroh.sent).some((frame) => frame.type === FrameType.Input)).toBe(true)
+    await handle.stop()
+  })
+
+  test("attachmentFailureReason never surfaces an error message", () => {
+    expect(attachmentFailureReason(new Error("https://x/download?rkey=SECRET"))).toBe("Error")
+  })
+
+  test("a rejected token fails startup with the auth message instead of a silent ready", async () => {
+    const iroh = createMockIroh()
+    const socket = new AckSocket()
+    // NapCat: upgrade accepted, then {status:"failed", retcode:1403, echo:null}, then close.
+    socket.push({ status: "failed", retcode: 1403, data: null, message: "token验证失败", wording: "token验证失败", echo: null })
+    socket.end()
+    const stateDir = await tmpState()
+    await expect(
+      runBridge(baseConfig(stateDir, { locale: "en" }), {
+        loadIroh: iroh.loadIroh,
+        connectFactory: async () => socket,
+        installSignals: false,
+        onLog: () => {},
+      }),
+    ).rejects.toThrow(tt("en", "bridge.cli.onebotAuthRejected"))
   })
 })
 

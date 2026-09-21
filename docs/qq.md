@@ -15,9 +15,11 @@ keeper-role key: they configure the table and they are also a player at it.
 
 On the host machine, two processes:
 
-1. A OneBot 11 implementation — [NapCat](https://github.com/NapNeko/NapCatQQ) or
-   [Lagrange](https://github.com/LagrangeDev/Lagrange.Core) are the ones this
-   was written against. LLOneBot speaks the same wire.
+1. A OneBot 11 implementation — [NapCat](https://github.com/NapNeko/NapCatQQ) is
+   the one this was written and probed against; [LLOneBot](https://github.com/LLOneBot/LLOneBot)
+   speaks the same wire. Lagrange's main branch now ships the Milky protocol, not
+   OneBot 11 (its OneBot 11 build lives only on the sunset `v1` branch), so do not
+   point this bridge at a current Lagrange.
 2. The terminal client in bridge mode:
 
 ```bash
@@ -77,16 +79,33 @@ mode.
 
 **Forward** (typical for NapCat on the same machine): the bridge connects out to
 the implementation and reconnects after a drop. Set `onebot.mode` to `forward`
-and `ws_url` to a `ws://` or `wss://` URL. When `access_token` is set, the
-bridge sends `Authorization: Bearer <token>`.
+and `ws_url` to a `ws://` or `wss://` URL.
+
+`access_token` is **required in both modes** and is sent as
+`Authorization: Bearer <token>`. NapCat instances left with an empty token were
+mass-exploited in 2026 and the QQ accounts behind them banned; use a long random
+token and paste the same value into the implementation's `token` field. In
+forward mode the bridge calls `get_login_info` at startup and logs the QQ id it
+is logged in as; a wrong token fails startup with a clear error, because NapCat
+and LLOneBot reject the token *after* the WebSocket upgrade and an open socket
+alone proves nothing. The same check runs again after every reconnect.
 
 **Reverse**: the implementation connects in. Set `listen_host` / `listen_port` /
 `path` (default `/onebot/v11/ws`). A client that sends `X-Client-Role` must use
 `Universal`. Keep the listener on loopback unless you have secured the
-surrounding network; a non-loopback reverse listener **requires**
-`access_token`.
+surrounding network. The bridge reads the token only from the
+`Authorization: Bearer` header, which is what NapCat and LLOneBot send from their
+`token` field — a token pasted into the URL as `?access_token=` is refused. A
+refused handshake answers with an `onebot.reverse.rejected.*` code in the body
+and one log line: `token_in_query` (move the token into the implementation's
+token field), `missing_authorization`, `wrong_token`, `path`, or `role`. The
+implementation's own log only ever says "Expected 101 status code". In reverse
+mode startup succeeds as soon as the listener is up, before any implementation
+has dialed in; the `get_login_info` check runs on each accepted connection, and
+a wrong token on the implementation's side shows up only as that refused
+handshake.
 
-NapCat / Lagrange: enable the OneBot 11 websocket, paste the same token, and
+NapCat / LLOneBot: enable the OneBot 11 websocket, paste the same token, and
 point the URL (forward) or the reverse host/port (reverse) at this process.
 
 ## Admins
@@ -138,6 +157,20 @@ on the order of **five minutes**, not five seconds. When `busy_notice` is on
 (the default), the group gets one "the Keeper is thinking" line at the start
 of a turn. That is the heartbeat. Do not assume the bot is stuck because the
 group is quiet.
+
+## What the log tells you
+
+- `OneBot is up: logged in as QQ …` — the token was accepted and this is the
+  account that answered; printed at startup and again after every reconnect.
+- `OneBot connection dropped; reconnecting.` / `OneBot connection is offline.` —
+  the socket dropped; at most one line per kind per minute during a redial storm.
+- The token / self-check error lines can also appear after startup: a reconnect
+  or a reverse-mode accept whose `get_login_info` fails prints the same message
+  startup would have, once per minute.
+- `Attachment … was not forwarded (reason)` — a player's image could not be
+  fetched (no direct URL, an expired signed link, size, an unsafe address, or the
+  room's media policy). The text still went through. The reason is a machine
+  code; the URL is never logged because NapCat's links carry a signed key.
 
 ## Signals
 

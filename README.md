@@ -82,7 +82,7 @@ Prefer a different location than your user profile? Set `TRPG_HOME` (client) and
 Windows, run the client in **Windows Terminal** or **WezTerm** — the legacy console host renders
 broken borders and swallows mouse input.
 
-**Play in a QQ group.** The same terminal client can sit in a NapCat / Lagrange group as an
+**Play in a QQ group.** The same terminal client can sit in a NapCat / LLOneBot group as an
 ordinary protocol client — not an engine adapter:
 
 ```bash

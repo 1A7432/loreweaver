@@ -14,9 +14,10 @@
 
 宿主机器上就两件事：
 
-1. 一个 OneBot 11 实现——按 [NapCat](https://github.com/NapNeko/NapCatQQ) 或
-   [Lagrange](https://github.com/LagrangeDev/Lagrange.Core) 来写的，LLOneBot
-   走同一套线。
+1. 一个 OneBot 11 实现——按 [NapCat](https://github.com/NapNeko/NapCatQQ) 来写、
+   也照着它的源码探针验过；[LLOneBot](https://github.com/LLOneBot/LLOneBot) 走同一套线。
+   Lagrange 的主分支现在只带 Milky 协议，不再有 OneBot 11（OneBot 11 那一版只留在
+   已停更的 `v1` 分支），别把桥指到现在的 Lagrange 上。
 2. 终端客户端的桥接模式：
 
 ```bash
@@ -71,14 +72,25 @@ ticket 和守秘人密钥。Studio / 终端的玩家仍然可以用普通邀请�
 OneBot 用一条通用 WebSocket 同时收事件和发动作。两种模式只选一种。
 
 **正向**（同一台机器上跑 NapCat 时最常见）：桥向外连到实现，掉线会重连。
-`onebot.mode` 设为 `forward`，`ws_url` 必须是 `ws://` 或 `wss://`。配了
-`access_token` 就会带 `Authorization: Bearer <token>`。
+`onebot.mode` 设为 `forward`，`ws_url` 必须是 `ws://` 或 `wss://`。
+
+`access_token` **两种模式都必填**，以 `Authorization: Bearer <token>` 发出。2026 年
+那批空 token 的 NapCat 实例被批量利用，背后的 QQ 号被封；请用一段够长的随机 token，
+并把同一段填进实现端的 `token` 字段。正向模式下桥启动时会调一次 `get_login_info`，把登录的
+QQ 号打进日志；token 填错会让启动直接失败并报清楚原因，因为 NapCat 和 LLOneBot 是在
+WebSocket 握手*之后*才拒绝 token 的，连接打开了不代表什么。之后每次重连也会再查一次。
 
 **反向**：由实现连进来。设 `listen_host` / `listen_port` / `path`（默认
 `/onebot/v11/ws`）。对端如果带 `X-Client-Role`，必须是 `Universal`。监听口请放在
-回环上，除非外围网络已经收紧；非回环的反向监听**必须**带 `access_token`。
+回环上，除非外围网络已经收紧。桥只从 `Authorization: Bearer` 请求头读 token——NapCat
+和 LLOneBot 就是从各自的 `token` 字段这样发的；把 token 拼进 URL 的 `?access_token=`
+会被拒。被拒的握手会在响应体里给一个 `onebot.reverse.rejected.*` 代码并打一行日志：
+`token_in_query`（把 token 挪进实现端的 token 字段）、`missing_authorization`、
+`wrong_token`、`path`、`role`。实现端自己的日志永远只有一句「Expected 101 status code」。
+反向模式下监听一起来启动就算成功，那时还没有任何实现连进来；`get_login_info` 那次检查改在
+每次接受连接时跑，实现端 token 填错只会表现为上面那种被拒的握手。
 
-NapCat / Lagrange：打开 OneBot 11 的 websocket，填同一段 token，正向把 URL 指到
+NapCat / LLOneBot：打开 OneBot 11 的 websocket，填同一段 token，正向把 URL 指到
 实现，反向把 host/port 指到这个进程。
 
 ## 管理员
@@ -117,6 +129,18 @@ NapCat / Lagrange：打开 OneBot 11 的 websocket，填同一段 token，正向
 玩家的一回合不是聊天回复。守秘人可能掷骰、读卡、写追踪器、用 NPC 说话，还要等同伴的
 子回合。最坏大约是**五分钟**，不是五秒。`busy_notice` 默认开着，回合开始时群里会有
 一句「守秘人正在思考」。那就是心跳。群里安静，不要当成机器人卡死。
+
+## 日志会告诉你什么
+
+- `OneBot 已就绪：登录账号 QQ …`——token 被接受了，这就是应答的那个账号；启动时打一次，
+  每次重连后再打一次。
+- `OneBot 连接断了，正在重连。` / `OneBot 连接已离线。`——连接掉了；重连风暴期间每种
+  每分钟最多一行。
+- token / 自检那两条报错启动之后也可能出现：重连或反向模式接受的连接上 `get_login_info`
+  失败时，会打出和启动期一样的那句，每分钟最多一次。
+- `附件 … 没有转发（原因）`——玩家的图片取不下来（没有直链、签名链接过期、超大、地址不安全、
+  房间的媒体策略）。文字已照常送达。原因是机器码；URL 永远不进日志，因为 NapCat 的链接
+  带着签名密钥。
 
 ## 信号
 

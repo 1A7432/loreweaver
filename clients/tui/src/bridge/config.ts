@@ -13,7 +13,7 @@ export interface BridgeGroupConfig {
 export interface OneBotForwardConfig {
   mode: "forward"
   ws_url: string
-  access_token?: string
+  access_token: string
   /** Seconds. Converted to milliseconds for the transport. */
   request_timeout: number
   /** Seconds. Converted to milliseconds for the transport. */
@@ -25,7 +25,7 @@ export interface OneBotReverseConfig {
   listen_host: string
   listen_port: number
   path?: string
-  access_token?: string
+  access_token: string
   /** Seconds. Converted to milliseconds for the transport. */
   request_timeout: number
   /** Seconds. Converted to milliseconds for the transport (forward reconnect). */
@@ -49,7 +49,7 @@ export interface BridgeConfig {
 export type BridgeConfigErrorCode =
   | "invalid_json"
   | "invalid_ws_url"
-  | "reverse_token_required"
+  | "token_required"
   | "duplicate_group"
   | "missing_groups"
   | "invalid_group"
@@ -88,11 +88,6 @@ function asBoolean(value: unknown, fallback: boolean): boolean {
 
 function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined
-}
-
-export function isLoopbackHost(host: string): boolean {
-  const h = host.trim().toLowerCase()
-  return h === "127.0.0.1" || h === "::1" || h === "localhost" || h === "0:0:0:0:0:0:0:1"
 }
 
 /** ws/wss only; a host is required; fragments are rejected (old OneBot adapter rule). */
@@ -166,8 +161,24 @@ function parseForward(raw: Record<string, unknown>): OneBotForwardConfig {
   if (!ws_url || !isWsUrl(ws_url)) {
     throw new BridgeConfigError("invalid_ws_url", "onebot.ws_url must be a ws:// or wss:// URL")
   }
-  const access_token = asString(raw.access_token)?.trim() || undefined
+  const access_token = requireToken(raw)
   return { mode: "forward", ws_url, access_token, ...parseOneBotTimeouts(raw) }
+}
+
+/**
+ * Both modes require a token. NapCat instances left with an empty token are what got
+ * QQ accounts mass-banned in 2026, and a loopback listener is one port-forward away from
+ * the internet; the bridge refuses to be the weak side of that pairing.
+ */
+function requireToken(raw: Record<string, unknown>): string {
+  const access_token = asString(raw.access_token)?.trim() || undefined
+  if (!access_token) {
+    throw new BridgeConfigError(
+      "token_required",
+      "onebot.access_token is required in both modes; set the same token in the OneBot implementation",
+    )
+  }
+  return access_token
 }
 
 function parseReverse(raw: Record<string, unknown>): OneBotReverseConfig {
@@ -176,10 +187,7 @@ function parseReverse(raw: Record<string, unknown>): OneBotReverseConfig {
   if (listen_port === undefined || !Number.isInteger(listen_port) || listen_port < 1 || listen_port > 65535) {
     throw new BridgeConfigError("invalid_listen_port", "onebot.listen_port must be an integer 1..65535")
   }
-  const access_token = asString(raw.access_token)?.trim() || undefined
-  if (!isLoopbackHost(listen_host) && !access_token) {
-    throw new BridgeConfigError("reverse_token_required", "a non-loopback reverse listener requires access_token")
-  }
+  const access_token = requireToken(raw)
   const path = asString(raw.path)?.trim() || undefined
   if (path && !path.startsWith("/")) {
     throw new BridgeConfigError("invalid_reverse_path", "onebot.path must start with /")

@@ -63,6 +63,8 @@ export interface OneBotRawTransport {
   readonly pendingCount: number
   readonly pendingEvents: number
   readonly requestTimeoutMs: number
+  /** True once the implementation rejected the access token in-band (see `AUTH_REJECTED_RETCODE`). */
+  readonly authRejected?: boolean
   start(handler: EventHandler): Promise<void>
   close(): Promise<void>
   call(action: string, params: Record<string, unknown>): Promise<unknown>
@@ -220,10 +222,19 @@ class Latch {
   }
 }
 
+/**
+ * NapCat and LLOneBot accept the WebSocket upgrade FIRST and answer a wrong access token
+ * in-band — `{status:"failed", retcode:1403, …}` — then close the socket. NapCat's frame
+ * carries `echo: null`; LLOneBot's has NO echo key at all (`echo: undefined` is dropped by
+ * JSON.stringify). (NapCat `network/websocket-server.ts` `authorize()`, LLOneBot `connect/ws.ts`.)
+ */
+export const AUTH_REJECTED_RETCODE = 1403
+
 export class ActionWebSocketTransport implements OneBotRawTransport {
   kind: "forward" | "reverse" = "forward"
   readonly requestTimeoutMs: number
   protected connection: OneBotSocket | undefined
+  private _authRejected = false
   private readonly pending = new Map<string, PendingCall>()
   private sequence = 1
   private readonly writeChains = new WeakMap<object, Promise<void>>()
@@ -247,6 +258,11 @@ export class ActionWebSocketTransport implements OneBotRawTransport {
 
   get connected(): boolean {
     return this.connection !== undefined
+  }
+
+  /** Sticky: set by the first in-band token rejection, consulted when a connect attempt fails. */
+  get authRejected(): boolean {
+    return this._authRejected
   }
 
   get pendingCount(): number {
@@ -324,11 +340,26 @@ export class ActionWebSocketTransport implements OneBotRawTransport {
         }
         const payload = jsonObject(raw)
         if (!payload) continue
-        if ("echo" in payload) {
-          const echo = String(payload.echo)
-          const item = this.pending.get(echo)
-          this.pending.delete(echo)
-          if (item && !item.settled) item.resolve(payload)
+        // An action response carries `echo` (NapCat always, even `null`) — or, from LLOneBot's
+        // token rejection, no echo at all: a `retcode` without a `post_type` is still a response.
+        if ("echo" in payload || (!("post_type" in payload) && "retcode" in payload)) {
+          const echo = "echo" in payload ? String(payload.echo) : undefined
+          const item = echo === undefined ? undefined : this.pending.get(echo)
+          if (echo !== undefined) this.pending.delete(echo)
+          if (item && !item.settled) {
+            item.resolve(payload)
+          } else if (String(payload.status ?? "").toLowerCase() === "failed") {
+            // An unmatched failure is not a stale echo: it is the implementation talking
+            // to us outside any call — the wrong-token rejection above all. Dropping it
+            // silently is how the bridge once reported "ready" on a bad token.
+            const retcode = asInteger(payload.retcode, -1)
+            if (retcode === AUTH_REJECTED_RETCODE) {
+              this._authRejected = true
+              console.warn("onebot.auth_rejected")
+            } else {
+              console.warn("onebot.unmatched_failed_response", retcode)
+            }
+          }
           continue
         }
         if (!this.queueEvent(payload)) {
@@ -392,6 +423,8 @@ export class ActionWebSocketTransport implements OneBotRawTransport {
     const previous = this.connection
     if (previous !== undefined && previous !== connection) this.detach(previous)
     this.connection = connection
+    // A new connection is a new verdict: the flag describes THIS socket's rejection only.
+    this._authRejected = false
     this.connectedGate.open()
     this.emitStatus("online")
     return previous !== undefined && previous !== connection ? previous : undefined
@@ -555,6 +588,17 @@ export class OneBotForwardWebSocketTransport extends ActionWebSocketTransport {
       }
     }
     if (connection) this.detach(connection)
+    // A dial that completed between the snapshot above and the runner's exit may have
+    // attached a newer socket; re-read rather than trust the snapshot.
+    const late = this.connection
+    if (late && late !== connection) {
+      try {
+        await Promise.resolve(late.close())
+      } catch {
+        // ignore
+      }
+      this.detach(late)
+    }
     this.runner = undefined
     await this.stopDispatcher()
     this.emitStatus("offline")
@@ -571,6 +615,16 @@ export class OneBotForwardWebSocketTransport extends ActionWebSocketTransport {
           timeoutMs: this.requestTimeoutMs,
           maxSize: MAX_WEBSOCKET_FRAME_BYTES,
         })
+        if (this.closing || signal.aborted) {
+          // close() ran while this dial was in flight: a socket attached now would sit in
+          // consume() forever and close() would never return. Drop it unattached.
+          try {
+            await Promise.resolve(connection.close())
+          } catch {
+            // best-effort
+          }
+          return
+        }
         this.attach(connection)
         await this.consume(connection)
       } catch (err) {
@@ -694,14 +748,28 @@ export class OneBotReverseWebSocketTransport extends ActionWebSocketTransport {
 
 const MEMBER_POSITIVE_CACHE_MS = 10 * 60 * 1000
 
+export interface OneBotLoginInfo {
+  userId: string
+  nickname: string
+}
+export type LoginHandler = (info: OneBotLoginInfo) => void
+
+/** Why the last `connect()` returned false — stable machine codes, never user copy. */
+export type OneBotConnectError = "onebot.websocket.connect_timeout" | "onebot.auth_rejected" | "onebot.self_check_failed"
+
 export class OneBotTransport {
   private readonly inner: OneBotRawTransport | undefined
   private readonly window = new RecentMessageWindow()
   private readonly messageHandlers = new Set<MessageHandler>()
   private readonly statusHandlers = new Set<StatusHandler>()
+  private readonly loginHandlers = new Set<LoginHandler>()
+  private readonly selfCheckHandlers = new Set<(code: OneBotConnectError) => void>()
   private readonly fetchDeps: FetchDeps
   private readonly attachmentTimeoutMs: number
   private readonly memberPositiveUntil = new Map<string, number>()
+  private _lastLogin: OneBotLoginInfo | undefined
+  private _lastConnectError: OneBotConnectError | undefined
+  private ready = false
 
   constructor(options: OneBotTransportOptions = {}) {
     this.inner = options.transport ?? buildOneBotTransport(options)
@@ -710,12 +778,63 @@ export class OneBotTransport {
       finiteTimeout(options.requestTimeoutMs, DEFAULT_REQUEST_TIMEOUT_MS, { allowZero: false }) ??
       DEFAULT_REQUEST_TIMEOUT_MS
     if (this.inner && "onStatus" in this.inner && typeof this.inner.onStatus === "function") {
-      this.inner.onStatus((status) => this.emitStatus(status))
+      this.inner.onStatus((status) => {
+        this.emitStatus(status)
+        // Every later (re)connection — a forward redial, a reverse accept — re-runs the
+        // identity check so the log says which account answered. Startup runs it
+        // explicitly inside connect(), which is what `ready` gates.
+        if (status === "online" && this.ready) void this.loginInfo().catch((err) => this.reportSelfCheckFailure(err))
+      })
     }
   }
 
   get connected(): boolean {
     return this.inner?.connected ?? false
+  }
+
+  /** The account behind the last successful `get_login_info`. */
+  get lastLogin(): OneBotLoginInfo | undefined {
+    return this._lastLogin
+  }
+
+  get lastConnectError(): OneBotConnectError | undefined {
+    return this._lastConnectError
+  }
+
+  onLogin(handler: LoginHandler): () => void {
+    this.loginHandlers.add(handler)
+    return () => {
+      this.loginHandlers.delete(handler)
+    }
+  }
+
+  /** Fires when a post-startup self-check fails: `onebot.auth_rejected` or `onebot.self_check_failed`. */
+  onSelfCheckFailed(handler: (code: OneBotConnectError) => void): () => void {
+    this.selfCheckHandlers.add(handler)
+    return () => {
+      this.selfCheckHandlers.delete(handler)
+    }
+  }
+
+  /**
+   * `get_login_info` — the one call made on every connection. A wrong token never fails
+   * the upgrade (NapCat / LLOneBot reject in-band, then close), so this is what proves
+   * the token was accepted and says which QQ account is on the other side.
+   */
+  async loginInfo(): Promise<OneBotLoginInfo> {
+    if (!this.inner) throw new OneBotError("onebot.transport.unavailable")
+    const data = await this.inner.call("get_login_info", {})
+    const record = data && typeof data === "object" ? (data as Record<string, unknown>) : {}
+    const info: OneBotLoginInfo = { userId: stringId(record.user_id) ?? "", nickname: String(record.nickname ?? "") }
+    this._lastLogin = info
+    for (const handler of this.loginHandlers) {
+      try {
+        handler(info)
+      } catch {
+        // a throwing subscriber must not fail the check
+      }
+    }
+    return info
   }
 
   get pendingCount(): number {
@@ -740,8 +859,14 @@ export class OneBotTransport {
     }
   }
 
+  /**
+   * Forward mode: true only after the socket is open AND `get_login_info` answered —
+   * an open socket alone proves nothing, because a rejected token still upgrades.
+   * Reverse mode: true once the listener is up; the check runs on each accept.
+   */
   async connect(): Promise<boolean> {
     if (!this.inner) return false
+    this._lastConnectError = undefined
     this.emitStatus("connecting")
     await this.inner.start(async (payload) => {
       const inbound = ingestEvent(payload, this.window)
@@ -752,12 +877,41 @@ export class OneBotTransport {
       try {
         await this.inner.waitConnected(this.inner.requestTimeoutMs)
       } catch {
-        await this.inner.close()
-        this.emitStatus("offline")
-        return false
+        return this.failConnect("onebot.websocket.connect_timeout")
+      }
+      try {
+        await this.loginInfo()
+      } catch (err) {
+        return this.failConnect(this.inner.authRejected ? "onebot.auth_rejected" : "onebot.self_check_failed", err)
       }
     }
+    this.ready = true
     return true
+  }
+
+  private async failConnect(code: OneBotConnectError, err?: unknown): Promise<false> {
+    this._lastConnectError = code
+    console.warn("onebot.connect_failed", code, err === undefined ? "" : errorName(err))
+    try {
+      // inner.close() emits the single "offline" through the status hook.
+      await this.inner?.close()
+    } catch {
+      // the outcome is already decided
+    }
+    return false
+  }
+
+  /** A self-check failed after startup (a forward redial or a reverse accept). */
+  private reportSelfCheckFailure(err: unknown): void {
+    const code: OneBotConnectError = this.inner?.authRejected ? "onebot.auth_rejected" : "onebot.self_check_failed"
+    console.warn("onebot.self_check_failed", code, errorName(err))
+    for (const handler of this.selfCheckHandlers) {
+      try {
+        handler(code)
+      } catch {
+        // a throwing subscriber must not break the hook
+      }
+    }
   }
 
   async close(): Promise<void> {
@@ -936,23 +1090,51 @@ export function buildOneBotTransport(options: OneBotTransportOptions): OneBotRaw
   })
 }
 
+/**
+ * Every refusal names its reason — as a stable `onebot.reverse.*` code in the response
+ * body and in one warn line here — because the implementation's own log only ever says
+ * "Expected 101 status code". Token values are never logged.
+ */
 export function reverseHandshakeResponse(
   req: { url: string; headers: Headers },
   opts: { path: string; accessToken: string },
 ): Response | null {
   let path: string
+  let tokenInQuery = false
   try {
-    path = new URL(req.url).pathname
+    const parsed = new URL(req.url)
+    path = parsed.pathname
+    tokenInQuery = parsed.searchParams.has("access_token")
   } catch {
-    path = (req.url.split("?")[0] ?? "")
+    path = req.url.split("?")[0] ?? ""
+    tokenInQuery = (req.url.split("?")[1] ?? "").includes("access_token=")
   }
-  if (path !== opts.path) return new Response("", { status: 404 })
+  if (path !== opts.path) {
+    const code = "onebot.reverse.rejected.path"
+    console.warn(code, path, "expected", opts.path)
+    return new Response(code, { status: 404 })
+  }
   const authorization = req.headers.get("Authorization") ?? ""
   if (opts.accessToken && !bearerMatches(authorization, opts.accessToken)) {
-    return new Response("", { status: 401 })
+    // The bridge reads ONLY the `Authorization: Bearer` header, which is what NapCat and
+    // LLOneBot send from their `token` field; a token pasted into the URL query arrives
+    // here as an EMPTY `Bearer ` header. A non-empty bearer that does not match is simply
+    // wrong, whatever the query says.
+    const bearer = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : ""
+    const code = bearer
+      ? "onebot.reverse.rejected.wrong_token"
+      : tokenInQuery
+        ? "onebot.reverse.rejected.token_in_query"
+        : "onebot.reverse.rejected.missing_authorization"
+    console.warn(code)
+    return new Response(code, { status: 401 })
   }
   const role = (req.headers.get("X-Client-Role") ?? "").toLowerCase()
-  if (role && role !== "universal") return new Response("", { status: 400 })
+  if (role && role !== "universal") {
+    const code = "onebot.reverse.rejected.role"
+    console.warn(code, role)
+    return new Response(code, { status: 400 })
+  }
   return null
 }
 

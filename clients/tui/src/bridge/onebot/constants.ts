@@ -1,4 +1,4 @@
-/** OneBot 11 practical text cap (NapCat / Lagrange / LLOneBot). */
+/** OneBot 11 practical text cap (NapCat / LLOneBot; Lagrange's OneBot 11 build is sunset). */
 export const MAX_TEXT_CHARS = 4000
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 export const DEFAULT_REQUEST_TIMEOUT_MS = 10_000

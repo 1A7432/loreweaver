@@ -358,6 +358,14 @@ const messages = {
     "bridge.seatFailed": "Couldn't join you to the table. Try again in a moment.",
     "bridge.cli.missingGroupKey": "Group {group} has no room keeper key.",
     "bridge.cli.onebotConnectFailed": "The OneBot transport failed to connect.",
+    "bridge.cli.onebotAuthRejected":
+      "The OneBot side rejected the access token. Set the same token in the implementation's token field and in onebot.access_token.",
+    "bridge.cli.onebotSelfCheckFailed":
+      "Connected to the OneBot socket, but get_login_info got no answer. Is that really a OneBot 11 endpoint?",
+    "bridge.cli.onebotLoggedIn": "OneBot is up: logged in as QQ {user} ({name}).",
+    "bridge.cli.onebotReconnecting": "OneBot connection dropped; reconnecting.",
+    "bridge.cli.onebotOffline": "OneBot connection is offline.",
+    "bridge.cli.attachmentFailed": "Attachment {name} was not forwarded ({reason}); the text still went through.",
   },
   zh: {
     "connect.subtitle": "灯下的牌桌 · 用邀请码连接一位守秘人",
@@ -705,6 +713,12 @@ const messages = {
     "bridge.seatFailed": "没法把你拉进这桌。稍后再试一次。",
     "bridge.cli.missingGroupKey": "群 {group} 没有房间守秘人密钥。",
     "bridge.cli.onebotConnectFailed": "OneBot 传输没能连上。",
+    "bridge.cli.onebotAuthRejected": "OneBot 那边拒绝了 access_token。请在实现端的 token 字段和 onebot.access_token 里填同一段。",
+    "bridge.cli.onebotSelfCheckFailed": "已连上 OneBot 的连接，但 get_login_info 没有应答。那真的是 OneBot 11 端点吗？",
+    "bridge.cli.onebotLoggedIn": "OneBot 已就绪：登录账号 QQ {user}（{name}）。",
+    "bridge.cli.onebotReconnecting": "OneBot 连接断了，正在重连。",
+    "bridge.cli.onebotOffline": "OneBot 连接已离线。",
+    "bridge.cli.attachmentFailed": "附件 {name} 没有转发（{reason}）；文字已照常送达。",
   },
 } as const
 

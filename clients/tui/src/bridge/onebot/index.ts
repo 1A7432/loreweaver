@@ -1,5 +1,6 @@
 export {
   ActionWebSocketTransport,
+  AUTH_REJECTED_RETCODE,
   OneBotForwardWebSocketTransport,
   OneBotReverseWebSocketTransport,
   OneBotTransport,
@@ -19,7 +20,10 @@ export type {
   ChatTarget,
   ConnectFactory,
   EventHandler,
+  LoginHandler,
   MessageHandler,
+  OneBotConnectError,
+  OneBotLoginInfo,
   OneBotRawTransport,
   OneBotSendResult,
   OneBotSocket,
