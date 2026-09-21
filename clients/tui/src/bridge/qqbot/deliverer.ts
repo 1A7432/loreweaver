@@ -1,8 +1,7 @@
 import { FrameType, type UiChoicesBlock } from "loreweaver-protocol"
 import { tt } from "../../i18n"
-import type { ChoicesWindow } from "../choices"
 import type { Deliverer } from "../deliverer"
-import type { BridgeRouter, SinkEvent } from "../router"
+import type { BridgeRouter, OutboundIntent, SinkEvent } from "../router"
 import {
   AnchorRegistry,
   anchorsPath,
@@ -32,7 +31,7 @@ import {
   renderFrame,
   replaceUrls,
   toPlain,
-  URL_PLACEHOLDER,
+  urlPlaceholder,
 } from "./render"
 
 const DEAD_CODES = new Set([40034128, 40034005, 304027, 40034024, 40034025, 40034026, 40034027])
@@ -40,6 +39,7 @@ const LENGTH_CODES = new Set([40054007, 40054018])
 const STOP_CODES = new Set([40054002, 40054003, 40034101, 40054013])
 const BACKOFF_MS = [1000, 2000, 4000]
 const DAY_MS = 24 * 60 * 60 * 1000
+const MAX_POST_ATTEMPTS = 6
 
 export interface QQBotMediaSource {
   getMedia(hash: string): Promise<{ bytes: Uint8Array; mime: string } | undefined>
@@ -57,6 +57,11 @@ export interface QQBotDelivererOptions {
   sendTimeoutMs?: number
   /** Override 1s/2s/4s HTTP 429 backoff. Tests pass `[0, 0, 0]`. */
   backoffMs?: number[]
+  /**
+   * Seat id (member_openid-derived) → platform `user_openid`. WS3 supplies the
+   * binding. Unresolved seats fail closed: keeper text stays in the outbox.
+   */
+  resolveC2C?: (seat: string) => string | undefined
   getMedia?: QQBotMediaSource["getMedia"]
   onLog?: (text: string) => void
   now?: () => number
@@ -103,6 +108,10 @@ export class QQBotDeliverer implements Deliverer {
   private readonly onLog: (text: string) => void
   private localeOverride: string | undefined
   private readonly backoffMs: number[]
+  private readonly sendTimeoutMs: number
+  private readonly resolveC2C?: (seat: string) => string | undefined
+  private sendingNotice = false
+  private readonly c2cAuditNotices = new Map<string, string[]>()
 
   private constructor(
     options: QQBotDelivererOptions,
@@ -128,23 +137,28 @@ export class QQBotDeliverer implements Deliverer {
     this.onLog = options.onLog ?? (() => {})
     this.localeOverride = options.locale
     this.backoffMs = options.backoffMs ?? BACKOFF_MS
+    this.sendTimeoutMs = options.sendTimeoutMs ?? DEFAULT_SEND_TIMEOUT_MS
+    this.resolveC2C = options.resolveC2C
     this.coalescer = new Coalescer({
       now: this.now,
       setTimeoutFn: this.setTimeoutFn,
       clearTimeoutFn: this.clearTimeoutFn,
       locale: () => this.locale(),
-      onFlush: (window) => this.enqueue(() => this.deliverWindow(window)),
+      onFlush: (window) => this.runSerial(() => this.deliverWindow(window)),
     })
     this.offEvent = this.port.onEvent((event) => this.onPortEvent(event))
   }
 
   static async load(options: QQBotDelivererOptions): Promise<QQBotDeliverer> {
+    const onLog = options.onLog ?? (() => {})
     const anchors = await AnchorRegistry.load(anchorsPath(options.stateDir, options.groupOpenid), {
       sendTimeoutMs: options.sendTimeoutMs ?? DEFAULT_SEND_TIMEOUT_MS,
       now: options.now,
+      onLog,
     })
     const deferred = await DeferredStore.load(deferredPath(options.stateDir, options.groupOpenid), {
       now: options.now,
+      onLog,
     })
     return new QQBotDeliverer(options, anchors, deferred)
   }
@@ -166,8 +180,13 @@ export class QQBotDeliverer implements Deliverer {
     this.router?.setSink(undefined)
     this.offEvent?.()
     this.offEvent = undefined
-    await this.outbox
+    await Promise.race([this.outbox, this.sleep(2 * this.sendTimeoutMs, true)])
     await this.persist()
+  }
+
+  /** Command replies (`onIntent`) that the sink does not see. */
+  enqueue(intent: OutboundIntent): void {
+    this.runSerial(() => this.handleIntent(intent))
   }
 
   /** Every accepted inbound creates an anchor (seq starts at 0). */
@@ -178,17 +197,18 @@ export class QQBotDeliverer implements Deliverer {
     seat?: string
     receivedAt?: number
   }): Promise<Anchor> {
-    return this.enqueue(() => this.openAnchorLocked(input))
+    return this.runSerial(() => this.openAnchorLocked(input))
   }
 
   setGroupActive(on: boolean | null): void {
     this.anchors.setGroupActive(on)
+    if (on === true) this.runSerial(() => this.drainGroupActive())
     void this.persist()
   }
 
   setC2CActive(userOpenid: string, on: boolean): void {
     this.anchors.setC2CActive(userOpenid, on)
-    if (on) this.enqueue(() => this.drainPrivateActive(userOpenid))
+    if (on) this.runSerial(() => this.drainPrivateActive(userOpenid))
     void this.persist()
   }
 
@@ -214,7 +234,7 @@ export class QQBotDeliverer implements Deliverer {
     return this.localeOverride || this.router?.locale() || "en"
   }
 
-  private enqueue<T>(work: () => Promise<T> | T): Promise<T> {
+  private runSerial<T>(work: () => Promise<T> | T): Promise<T> {
     const run = this.outbox.then(work, work)
     this.outbox = run.then(
       () => undefined,
@@ -231,7 +251,7 @@ export class QQBotDeliverer implements Deliverer {
       this.coalescer.push(event)
       return
     }
-    this.enqueue(() => this.handleSink(event))
+    this.runSerial(() => this.handleSink(event))
   }
 
   private async handleSink(event: SinkEvent): Promise<void> {
@@ -250,24 +270,37 @@ export class QQBotDeliverer implements Deliverer {
   private async handleAdmin(event: SinkEvent): Promise<void> {
     const rendered = renderFrame(event.frame, this.locale())
     if (rendered.skip || rendered.isQueuedNotice) return
-    const user = event.seat
-    if (!user) return
-    const item = this.itemFromRendered("admin", user, rendered, event.seat)
-    const flag = this.anchors.c2cFlag(user)
-    if (flag === true && !this.anchors.activeUnpermitted) {
-      const sent = await this.sendActiveC2C(user, item)
+    const seat = event.seat
+    if (!seat) return
+    const item = this.itemFromRendered("admin", seat, rendered, seat)
+    await this.holdOrSendPrivate(seat, item)
+  }
+
+  private async holdOrSendPrivate(seat: string, item: DeferredItem): Promise<void> {
+    const resolved = this.resolveC2C?.(seat)
+    if (!resolved) {
+      this.deferred.pushPrivate(seat, { ...item, target: seat, seat })
+      this.onLog("qqbot.private.unbound")
+      await this.maybePrivateHeld(seat)
+      await this.persist()
+      return
+    }
+    const keyed = { ...item, target: resolved, seat }
+    const flag = this.anchors.c2cFlag(resolved)
+    if (flag === true && !this.anchors.activeUnpermitted && !this.stopped.has(resolved)) {
+      const sent = await this.sendActiveC2C(resolved, keyed)
       if (sent) return
     }
-    this.deferred.pushPrivate(user, item)
-    const c2c = this.anchors.newestOpen("c2c", user)
+    this.deferred.pushPrivate(resolved, keyed)
+    const c2c = this.anchors.newestOpen("c2c", resolved)
     if (c2c && this.anchors.isOpen(c2c)) {
       const room = Math.max(0, c2c.budget - 1)
-      const taken = this.deferred.takePrivate(user, room)
+      const taken = this.deferred.takePrivate(resolved, room)
       for (const next of taken) await this.deliverItem(next, c2c, { late: false })
       await this.persist()
       return
     }
-    await this.maybePrivateHeld()
+    await this.maybePrivateHeld(seat)
     await this.persist()
   }
 
@@ -277,7 +310,8 @@ export class QQBotDeliverer implements Deliverer {
     const seat = event.seat
     if (!seat) return
     const item = this.itemFromRendered("player", this.groupOpenid, rendered, seat)
-    const anchor = this.anchors.newestOpenForSeat(seat)
+    const prefer = event.channel === "private" ? "c2c" : event.channel === "group" ? "group" : undefined
+    const anchor = this.anchors.newestOpenForSeat(seat, this.now(), prefer)
     if (!anchor) {
       this.deferred.pushPlayerHold(seat, item)
       await this.persist()
@@ -285,6 +319,83 @@ export class QQBotDeliverer implements Deliverer {
     }
     await this.deliverItem(item, anchor, { late: false })
     await this.persist()
+  }
+
+  private async handleIntent(intent: OutboundIntent): Promise<void> {
+    if (this.closed) return
+    if (intent.dest === "group") {
+      const item: DeferredItem = {
+        id: nextDeferredId(this.now()),
+        scope: "group",
+        target: this.groupOpenid,
+        text: intent.text,
+        media: intent.media ? [mediaFromRef(intent.media)] : [],
+        createdAt: this.now(),
+        late: false,
+      }
+      await this.dispatchGroupItem(item)
+      await this.persist()
+      return
+    }
+    if (intent.dest === "reply") {
+      const seat = intent.userId
+      const item = this.itemFromRendered(
+        "player",
+        this.groupOpenid,
+        { text: intent.text, media: [], isKpNarrative: false, isQueuedNotice: false, skip: false },
+        seat,
+      )
+      const anchor =
+        this.anchors.newestOpenForSeat(seat, this.now(), "group") ?? this.anchors.newestOpenForSeat(seat)
+      if (anchor) {
+        await this.deliverItem(item, anchor, { late: false })
+      } else if (this.anchors.groupActive === true && !this.anchors.activeUnpermitted) {
+        const sent = await this.sendActiveGroup({ ...item, scope: "group", target: this.groupOpenid })
+        if (!sent) this.deferred.pushGroup({ ...item, scope: "group", target: this.groupOpenid, late: true })
+      } else {
+        this.deferred.pushGroup({ ...item, scope: "group", target: this.groupOpenid, late: true })
+      }
+      await this.persist()
+      return
+    }
+    const item = this.itemFromRendered(
+      "admin",
+      intent.userId,
+      { text: intent.text, media: [], isKpNarrative: false, isQueuedNotice: false, skip: false },
+      intent.userId,
+    )
+    await this.holdOrSendPrivate(intent.userId, item)
+  }
+
+  private async drainGroupActive(): Promise<void> {
+    const items = this.deferred.takeAll()
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]!
+      const sent = await this.sendActiveGroup(item)
+      if (!sent) {
+        for (const rest of items.slice(i)) this.deferred.pushGroup({ ...rest, late: true })
+        break
+      }
+    }
+    await this.persist()
+  }
+
+  private async dispatchGroupItem(item: DeferredItem): Promise<void> {
+    const anchor = this.anchors.newestOpen("group", this.groupOpenid)
+    if (anchor) {
+      await this.deliverItem(item, anchor, { late: false })
+      this.contentThisTurn = true
+      return
+    }
+    if (this.anchors.groupActive !== false && !this.anchors.activeUnpermitted) {
+      const sent = await this.sendActiveGroup(item)
+      if (sent) {
+        this.contentThisTurn = true
+        return
+      }
+    }
+    const drop = this.deferred.pushGroup({ ...item, late: true })
+    if (drop?.notice) await this.sendGroupLine(tt(this.locale(), "bridge.qqbot.deferredDropped"))
   }
 
   private async openAnchorLocked(input: {
@@ -311,8 +422,22 @@ export class QQBotDeliverer implements Deliverer {
     }
     if (input.scope === "c2c") {
       const room = Math.max(0, anchor.budget - 1)
-      const taken = this.deferred.takePrivate(input.target, room)
-      for (const item of taken) await this.deliverItem(item, anchor, { late: false })
+      const keys = new Set<string>([input.target])
+      if (input.seat) {
+        keys.add(input.seat)
+        const resolved = this.resolveC2C?.(input.seat)
+        if (resolved) keys.add(resolved)
+      }
+      let remaining = room
+      for (const key of keys) {
+        if (remaining <= 0) break
+        const taken = this.deferred.takePrivate(key, remaining)
+        remaining -= taken.length
+        for (const item of taken) await this.deliverItem(item, anchor, { late: false })
+      }
+      const notices = this.c2cAuditNotices.get(input.target) ?? []
+      this.c2cAuditNotices.delete(input.target)
+      for (const line of notices) await this.sendNotice(anchor, line)
     }
     if (input.scope === "group" && this.busyNotice && !this.thinkingThisTurn) {
       const sent = await this.sendNotice(anchor, tt(this.locale(), "bridge.qqbot.thinking"))
@@ -366,22 +491,8 @@ export class QQBotDeliverer implements Deliverer {
   private async dispatchGroupWindow(window: CoalescedWindow, isTail: boolean): Promise<void> {
     const item = this.windowToItem(window)
     if (!item) return
-    const anchor = this.anchors.newestOpen("group", this.groupOpenid)
-    if (anchor) {
-      await this.deliverItem(item, anchor, { late: false, isTail })
-      this.contentThisTurn = true
-      return
-    }
-    // Unknown or ON: try an active send once passive budget is gone. OFF never does.
-    if (this.anchors.groupActive !== false && !this.anchors.activeUnpermitted) {
-      const sent = await this.sendActiveGroup(item)
-      if (sent) {
-        this.contentThisTurn = true
-        return
-      }
-    }
-    const drop = this.deferred.pushGroup({ ...item, late: true })
-    if (drop?.notice) await this.sendGroupLine(tt(this.locale(), "bridge.qqbot.deferredDropped"))
+    await this.dispatchGroupItem(item)
+    void isTail
   }
 
   private windowToItem(window: CoalescedWindow): DeferredItem | undefined {
@@ -470,7 +581,7 @@ export class QQBotDeliverer implements Deliverer {
         this.router?.choices.open(item.choices, this.now())
       }
     }
-    const chunks = text ? cutMarkdown(replaceUrls(text, this.whitelist), this.maxChunk) : [""]
+    const chunks = text ? cutMarkdown(replaceUrls(text, this.whitelist, this.urlToken()), this.maxChunk) : [""]
     const usePassive = this.anchors.isOpen(anchor)
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i]!
@@ -544,7 +655,7 @@ export class QQBotDeliverer implements Deliverer {
     }
     const drop = this.deferred.pushGroup({ ...item, late: true })
     if (drop?.notice) {
-      this.enqueue(() => this.sendGroupLine(tt(this.locale(), "bridge.qqbot.deferredDropped")))
+      this.runSerial(() => this.sendGroupLine(tt(this.locale(), "bridge.qqbot.deferredDropped")))
     }
   }
 
@@ -559,13 +670,22 @@ export class QQBotDeliverer implements Deliverer {
   }
 
   private async sendGroupLine(text: string): Promise<void> {
-    const anchor = this.anchors.newestOpen("group", this.groupOpenid)
-    if (anchor) {
-      await this.postText({ channel: "group", target: this.groupOpenid, text, anchor })
+    if (this.sendingNotice) {
+      this.onLog("qqbot.notice.failed")
       return
     }
-    if (this.anchors.groupActive === true) {
-      await this.postText({ channel: "group", target: this.groupOpenid, text })
+    this.sendingNotice = true
+    try {
+      const anchor = this.anchors.newestOpen("group", this.groupOpenid)
+      if (anchor) {
+        await this.postText({ channel: "group", target: this.groupOpenid, text, anchor })
+        return
+      }
+      if (this.anchors.groupActive === true) {
+        await this.postText({ channel: "group", target: this.groupOpenid, text })
+      }
+    } finally {
+      this.sendingNotice = false
     }
   }
 
@@ -603,23 +723,33 @@ export class QQBotDeliverer implements Deliverer {
   }
 
   private async drainPrivateActive(user: string): Promise<void> {
-    const items = this.deferred.takePrivate(user, 50)
-    for (const item of items) {
-      const ok = await this.sendActiveC2C(user, item)
+    const keys = new Set<string>([user])
+    for (const key of Object.keys(this.deferred.privateOutboxes)) {
+      if (key === user || this.resolveC2C?.(key) === user) keys.add(key)
+    }
+    const items: DeferredItem[] = []
+    for (const key of keys) items.push(...this.deferred.takePrivate(key, 50))
+    for (let i = 0; i < items.length; i++) {
+      const ok = await this.sendActiveC2C(user, items[i]!)
       if (!ok) {
-        this.deferred.pushPrivate(user, item)
+        for (const rest of items.slice(i)) this.deferred.pushPrivate(user, rest)
         break
       }
     }
     await this.persist()
   }
 
-  private async maybePrivateHeld(): Promise<void> {
-    const any = Object.values(this.deferred.privateOutboxes).some((list) => list.length > 0)
-    if (!any) return
-    if (!this.deferred.shouldPrivateHeld(this.now())) return
-    this.deferred.markPrivateHeld(this.now())
+  private async maybePrivateHeld(adminKey: string): Promise<void> {
+    const resolved = this.resolveC2C?.(adminKey) ?? adminKey
+    const pending = (this.deferred.privateOutboxes[adminKey]?.length ?? 0) + (this.deferred.privateOutboxes[resolved]?.length ?? 0)
+    if (pending <= 0) return
+    if (!this.deferred.shouldPrivateHeld(adminKey, this.now())) return
+    this.deferred.markPrivateHeld(adminKey, this.now())
     await this.sendGroupLine(tt(this.locale(), "bridge.qqbot.privateHeld"))
+  }
+
+  private urlToken(): string {
+    return urlPlaceholder(this.locale())
   }
 
   private async postText(opts: {
@@ -628,13 +758,15 @@ export class QQBotDeliverer implements Deliverer {
     text: string
     anchor?: Anchor
   }): Promise<"sent" | "deferred" | "dropped" | "pending" | "dead" | "stopped"> {
-    let text = replaceUrls(opts.text, this.whitelist)
+    let text = replaceUrls(opts.text, this.whitelist, this.urlToken())
     let markdown = true
     let recut = false
     let urlRetry = false
     let dedupeRetry = false
     let backoff = 0
+    let attempts = 0
     while (!this.closed) {
+      if (++attempts > MAX_POST_ATTEMPTS) return "deferred"
       if (!opts.anchor) {
         const gate = await this.waitActive(opts.channel, opts.target)
         if (gate === "daily") return "deferred"
@@ -684,9 +816,14 @@ export class QQBotDeliverer implements Deliverer {
         continue
       }
       if (num === 40054010 && !urlRetry) {
+        const stripped = replaceUrls(text, [], this.urlToken())
+        if (stripped === text) {
+          this.onLog("qqbot.url.unchanged")
+          await this.persist()
+          return "dropped"
+        }
         urlRetry = true
-        text = replaceUrls(text, [])
-        if (!text.includes(URL_PLACEHOLDER) && !text.includes("http")) text = text.replace(/\S+:\/\/\S+/g, URL_PLACEHOLDER)
+        text = stripped
         continue
       }
       if ((num === 429 || num === 40034100) && backoff < this.backoffMs.length) {
@@ -696,7 +833,6 @@ export class QQBotDeliverer implements Deliverer {
       }
       if (num === 40034105) {
         await this.onActiveOff(opts.channel, opts.target)
-        if (opts.anchor) continue
         return "deferred"
       }
       if (num === 40034102) {
@@ -708,7 +844,7 @@ export class QQBotDeliverer implements Deliverer {
       }
       if (num === 40034006) {
         this.onLog("qqbot.audit.rejected")
-        await this.sendGroupLine(tt(this.locale(), "bridge.qqbot.auditRejected"))
+        await this.deliverAuditRejected(opts.channel, opts.target)
         await this.persist()
         return "dropped"
       }
@@ -729,6 +865,21 @@ export class QQBotDeliverer implements Deliverer {
       return "deferred"
     }
     return "deferred"
+  }
+
+  private async deliverAuditRejected(channel: "group" | "c2c", target: string): Promise<void> {
+    const line = tt(this.locale(), "bridge.qqbot.auditRejected")
+    if (this.sendingNotice) {
+      this.onLog("qqbot.notice.failed")
+      return
+    }
+    if (channel === "c2c") {
+      const list = this.c2cAuditNotices.get(target) ?? []
+      list.push(line)
+      this.c2cAuditNotices.set(target, list)
+      return
+    }
+    await this.sendGroupLine(line)
   }
 
   private buildTextRequest(anchor: Anchor | undefined, text: string, markdown: boolean): QQBotSendRequest {
@@ -757,49 +908,83 @@ export class QQBotDeliverer implements Deliverer {
     }
     const uploaded =
       opts.channel === "group"
-        ? await this.port.uploadGroupMedia(opts.target, bytes.bytes, bytes.mime || opts.media.mime, opts.media.name)
-        : await this.port.uploadC2CMedia(opts.target, bytes.bytes, bytes.mime || opts.media.mime, opts.media.name)
+        ? await this.racePort(
+            this.port.uploadGroupMedia(opts.target, bytes.bytes, bytes.mime || opts.media.mime, opts.media.name),
+            undefined,
+          )
+        : await this.racePort(
+            this.port.uploadC2CMedia(opts.target, bytes.bytes, bytes.mime || opts.media.mime, opts.media.name),
+            undefined,
+          )
     if (!uploaded?.file_info) {
       const fallback = opts.caption || opts.media.name || ""
       if (!fallback) return "dropped"
       return this.postText({ channel: opts.channel, target: opts.target, text: fallback, anchor: opts.anchor })
     }
-    if (!opts.anchor) {
-      const gate = await this.waitActive(opts.channel, opts.target)
-      if (gate !== "ok") return "deferred"
-    }
-    const req: QQBotSendRequest = {
-      msg_type: 7,
-      media: { file_info: uploaded.file_info },
-      ...(opts.caption ? { content: opts.caption } : {}),
-    }
-    if (opts.anchor) {
-      req.msg_id = opts.anchor.id
-      req.msg_seq = this.anchors.bumpSeq(opts.anchor)
-    }
-    const result = await this.send(opts.channel, opts.target, req)
-    const accepted = isSendOk(result) || result.code === "timeout"
-    if (accepted && opts.anchor) this.anchors.spendBudget(opts.anchor)
-    if (isSendOk(result)) {
-      if (!opts.anchor) this.markActiveSuccess(opts.channel, opts.target)
-      if (result.auditId) {
-        this.pendingReview.push({ text: opts.caption, auditId: result.auditId, at: this.now() })
-        this.onLog(`qqbot.audit.pending ${result.auditId}`)
+    let attempts = 0
+    let dedupeRetry = false
+    let backoff = 0
+    while (!this.closed) {
+      if (++attempts > MAX_POST_ATTEMPTS) return "deferred"
+      if (!opts.anchor) {
+        const gate = await this.waitActive(opts.channel, opts.target)
+        if (gate !== "ok") return "deferred"
+      } else if (!this.anchors.isOpen(opts.anchor)) {
+        return "dead"
       }
-      await this.persist()
-      return result.auditId ? "pending" : "sent"
-    }
-    if (result.code === "timeout") {
-      this.onLog("qqbot.send.timeout")
-      return "sent"
-    }
-    const num = numericCode(result)
-    if (num !== undefined && DEAD_CODES.has(num)) {
-      if (opts.anchor) this.anchors.markDead(opts.anchor)
-      return "dead"
-    }
-    if (num === 40034105) {
-      await this.onActiveOff(opts.channel, opts.target)
+      const req: QQBotSendRequest = {
+        msg_type: 7,
+        media: { file_info: uploaded.file_info },
+        ...(opts.caption ? { content: opts.caption } : {}),
+      }
+      if (opts.anchor) {
+        req.msg_id = opts.anchor.id
+        req.msg_seq = this.anchors.bumpSeq(opts.anchor)
+      }
+      const result = await this.send(opts.channel, opts.target, req)
+      const accepted = isSendOk(result) || result.code === "timeout"
+      if (accepted && opts.anchor) this.anchors.spendBudget(opts.anchor)
+      if (isSendOk(result)) {
+        if (!opts.anchor) this.markActiveSuccess(opts.channel, opts.target)
+        if (result.auditId) {
+          this.pendingReview.push({ text: opts.caption, auditId: result.auditId, at: this.now() })
+          this.onLog(`qqbot.audit.pending ${result.auditId}`)
+        }
+        await this.persist()
+        return result.auditId ? "pending" : "sent"
+      }
+      if (result.code === "timeout") {
+        this.onLog("qqbot.send.timeout")
+        return "sent"
+      }
+      const num = numericCode(result)
+      if (num !== undefined && DEAD_CODES.has(num)) {
+        if (opts.anchor) this.anchors.markDead(opts.anchor)
+        return "dead"
+      }
+      if (num === 40054005 && !dedupeRetry && opts.anchor) {
+        dedupeRetry = true
+        continue
+      }
+      if ((num === 429 || num === 40034100) && backoff < this.backoffMs.length) {
+        await this.sleep(this.backoffMs[backoff]!)
+        backoff += 1
+        continue
+      }
+      if (num !== undefined && STOP_CODES.has(num)) {
+        this.stopped.add(opts.target)
+        this.onLog(`qqbot.target.stopped ${num}`)
+        return "stopped"
+      }
+      if (num === 40034006) {
+        this.onLog("qqbot.audit.rejected")
+        await this.deliverAuditRejected(opts.channel, opts.target)
+        return "dropped"
+      }
+      if (num === 40034105) {
+        await this.onActiveOff(opts.channel, opts.target)
+        return "deferred"
+      }
       return "deferred"
     }
     return "deferred"
@@ -810,10 +995,17 @@ export class QQBotDeliverer implements Deliverer {
     target: string,
     req: QQBotSendRequest,
   ): Promise<QQBotSendResult> {
+    const call =
+      channel === "group" ? this.port.sendGroup(target, req) : this.port.sendC2C(target, req)
+    return this.racePort(call, { ok: false, code: "timeout" })
+  }
+
+  private async racePort<T>(call: Promise<T>, onTimeout: T): Promise<T> {
+    const timeout = this.sleep(this.sendTimeoutMs).then(() => onTimeout)
     try {
-      return channel === "group" ? await this.port.sendGroup(target, req) : await this.port.sendC2C(target, req)
+      return await Promise.race([call, timeout])
     } catch {
-      return { ok: false, code: "timeout" }
+      return onTimeout
     }
   }
 
@@ -896,8 +1088,8 @@ export class QQBotDeliverer implements Deliverer {
     }
   }
 
-  private sleep(ms: number): Promise<void> {
-    if (this.closed || ms <= 0) return Promise.resolve()
+  private sleep(ms: number, evenIfClosed = false): Promise<void> {
+    if ((!evenIfClosed && this.closed) || ms <= 0) return Promise.resolve()
     return new Promise((resolve) => {
       const id = this.setTimeoutFn(() => {
         this.pendingSleeps.delete(id)

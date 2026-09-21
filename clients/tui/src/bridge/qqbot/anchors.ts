@@ -182,18 +182,20 @@ export class AnchorRegistry {
   private writeChain: Promise<void> = Promise.resolve()
   private readonly sendTimeoutMs: number
   private readonly now: () => number
+  private readonly onLog?: (line: string) => void
 
   constructor(
     private readonly path: string,
-    opts: { sendTimeoutMs?: number; now?: () => number } = {},
+    opts: { sendTimeoutMs?: number; now?: () => number; onLog?: (line: string) => void } = {},
   ) {
     this.sendTimeoutMs = opts.sendTimeoutMs ?? DEFAULT_SEND_TIMEOUT_MS
     this.now = opts.now ?? Date.now
+    this.onLog = opts.onLog
   }
 
   static async load(
     path: string,
-    opts: { sendTimeoutMs?: number; now?: () => number } = {},
+    opts: { sendTimeoutMs?: number; now?: () => number; onLog?: (line: string) => void } = {},
   ): Promise<AnchorRegistry> {
     const store = new AnchorRegistry(path, opts)
     const parsed = parseState(await readPrivateJson(path))
@@ -203,6 +205,7 @@ export class AnchorRegistry {
     store.lastActiveOffAt = parsed.lastActiveOffAt
     store.quota = parsed.quota
     for (const [key, value] of Object.entries(parsed.c2cActive)) store.c2cActive.set(key, value)
+    store.prune()
     return store
   }
 
@@ -214,6 +217,10 @@ export class AnchorRegistry {
     return this.anchors.find((item) => item.id === id)
   }
 
+  prune(now = this.now()): void {
+    this.anchors = this.anchors.filter((anchor) => anchor.received_at + windowMs(anchor.scope) >= now)
+  }
+
   create(input: {
     id: string
     scope: AnchorScope
@@ -221,6 +228,7 @@ export class AnchorRegistry {
     seat?: string
     receivedAt: number
   }): Anchor {
+    this.prune(this.now())
     const existing = this.get(input.id)
     if (existing) return existing
     const budgetMax = budgetMaxFor(input.scope)
@@ -277,14 +285,18 @@ export class AnchorRegistry {
     return best
   }
 
-  newestOpenForSeat(seat: string, now = this.now()): Anchor | undefined {
+  newestOpenForSeat(seat: string, now = this.now(), prefer?: AnchorScope): Anchor | undefined {
     let best: Anchor | undefined
+    let preferred: Anchor | undefined
     for (const anchor of this.anchors) {
       if (anchor.seat !== seat) continue
       if (!this.isOpen(anchor, now)) continue
       if (!best || anchor.received_at > best.received_at) best = anchor
+      if (prefer && anchor.scope === prefer) {
+        if (!preferred || anchor.received_at > preferred.received_at) preferred = anchor
+      }
     }
-    return best
+    return preferred ?? best
   }
 
   setGroupActive(on: boolean | null): void {
@@ -314,7 +326,11 @@ export class AnchorRegistry {
 
   flush(): Promise<void> {
     const body = JSON.stringify(this.snapshot())
-    this.writeChain = this.writeChain.then(() => writePrivateAtomic(this.path, body)).catch(() => {})
+    this.writeChain = this.writeChain
+      .then(() => writePrivateAtomic(this.path, body))
+      .catch(() => {
+        this.onLog?.(`qqbot.persist.failed ${this.path}`)
+      })
     return this.writeChain
   }
 }

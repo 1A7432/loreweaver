@@ -52,7 +52,6 @@ export type {
 
 export {
   QQBOT_CHUNK_CHARS,
-  URL_PLACEHOLDER,
   atUserTag,
   cutMarkdown,
   hostAllowed,
@@ -62,5 +61,6 @@ export {
   renderNpcMarkdown,
   replaceUrls,
   toPlain,
+  urlPlaceholder,
 } from "./render"
 export type { RenderedQqFrame } from "./render"

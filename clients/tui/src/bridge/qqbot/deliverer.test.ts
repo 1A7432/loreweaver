@@ -5,11 +5,13 @@ import { describe, expect, test } from "bun:test"
 import { FrameType, type ClientFrame, type ServerFrame } from "loreweaver-protocol"
 import { tt } from "../../i18n"
 import { PostedIds } from "../postedIds"
-import { BridgeRouter, type BridgeLink, type OutboundIntent } from "../router"
+import { ADMIN_HOLD_MS, BridgeRouter, type BridgeLink, type OutboundIntent } from "../router"
 import { WINDOW_MS } from "./coalescer"
 import { QQBotDeliverer } from "./deliverer"
 import type { QQBotSendPort, QQBotSendRequest, QQBotSendResult, QQBotSwitchEvent } from "./port"
-import { URL_PLACEHOLDER } from "./render"
+import { urlPlaceholder } from "./render"
+
+const ADMIN_OPENID = "c2c-42"
 
 class FakeLink implements BridgeLink {
   sent: ClientFrame[] = []
@@ -103,32 +105,51 @@ const NPC: ServerFrame = {
   format: "plain",
 }
 
-async function setup(opts: { locale?: string; busyNotice?: boolean; media?: Record<string, Uint8Array>; backoffMs?: number[] } = {}) {
+async function setup(opts: {
+  locale?: string
+  busyNotice?: boolean
+  media?: Record<string, Uint8Array>
+  backoffMs?: number[]
+  resolveC2C?: (seat: string) => string | undefined
+  bindAdmin?: boolean
+  sendTimeoutMs?: number
+  urlWhitelist?: string[]
+} = {}) {
   const dir = await mkdtemp(join(tmpdir(), "lw-qq-"))
   const posted = await PostedIds.load(join(dir, "g.posted.json"))
   const clock = new ManualClock()
   const port = new FakePort()
   const intents: OutboundIntent[] = []
   const logs: string[] = []
+  const resolveC2C =
+    opts.resolveC2C ??
+    (opts.bindAdmin === false ? () => undefined : (seat: string) => (seat === "42" ? ADMIN_OPENID : undefined))
+  let deliverer!: QQBotDeliverer
   const router = new BridgeRouter({
     groupId: "G1",
     locale: opts.locale ?? "zh",
     postedIds: posted,
     busyNotice: false,
     admins: ["42"],
-    onIntent: (intent) => intents.push(intent),
+    onIntent: (intent) => {
+      intents.push(intent)
+      deliverer.enqueue(intent)
+    },
     now: clock.now,
     setTimeoutFn: clock.setTimeoutFn as typeof setTimeout,
     clearTimeoutFn: clock.clearTimeoutFn as typeof clearTimeout,
   })
   const media = opts.media ?? {}
-  const deliverer = await QQBotDeliverer.load({
+  deliverer = await QQBotDeliverer.load({
     groupOpenid: "G1",
     port,
     stateDir: dir,
     locale: opts.locale ?? "zh",
     busyNotice: opts.busyNotice ?? true,
     backoffMs: opts.backoffMs,
+    sendTimeoutMs: opts.sendTimeoutMs,
+    urlWhitelist: opts.urlWhitelist,
+    resolveC2C,
     now: clock.now,
     setTimeoutFn: clock.setTimeoutFn as typeof setTimeout,
     clearTimeoutFn: clock.clearTimeoutFn as typeof clearTimeout,
@@ -170,7 +191,7 @@ describe("qqbot deliverer — scope sentinel", () => {
     await deliverer.whenIdle()
     expect(groupTexts(port).some((text) => text.includes("cultist"))).toBe(false)
     expect(c2cTexts(port).some((text) => text.includes("cultist"))).toBe(false)
-    expect(deliverer.deferred.privateCount("42")).toBe(1)
+    expect(deliverer.deferred.privateCount(ADMIN_OPENID)).toBe(1)
     clock.advance(WINDOW_MS)
     await deliverer.whenIdle()
     expect(groupTexts(port).some((text) => text.includes("cultist"))).toBe(false)
@@ -334,8 +355,8 @@ describe("qqbot deliverer — coalescing, zero-output, images, two players", () 
 })
 
 describe("qqbot deliverer — failure table", () => {
-  async function sendOnce(result: QQBotSendResult, text = "hello https://evil.example/x") {
-    const ctx = await setup()
+  async function sendOnce(result: QQBotSendResult, text = "hello https://evil.example/x", extra: { urlWhitelist?: string[] } = {}) {
+    const ctx = await setup(extra)
     ctx.deliverer.setGroupActive(false)
     await ctx.deliverer.openAnchor({ id: "m1", scope: "group", target: "G1", receivedAt: 0 })
     ctx.port.results.push(result)
@@ -358,10 +379,12 @@ describe("qqbot deliverer — failure table", () => {
     expect(after.some((row) => row.req.msg_type === 0)).toBe(true)
   })
 
-  test("40054010 strips URLs to [链接] and retries", async () => {
-    const { port } = await sendOnce({ ok: false, code: 40054010 })
+  test("40054010 strips URLs to the locale placeholder and retries", async () => {
+    const { port } = await sendOnce({ ok: false, code: 40054010 }, "hello https://evil.example/x", {
+      urlWhitelist: ["evil.example"],
+    })
     const retried = port.sends.filter((row) => row.req.msg_type === 2).at(-1)
-    expect(retried?.req.markdown?.content ?? retried?.req.content ?? "").toContain(URL_PLACEHOLDER)
+    expect(retried?.req.markdown?.content ?? retried?.req.content ?? "").toContain(urlPlaceholder("zh"))
     expect(retried?.req.markdown?.content ?? "").not.toContain("https://evil.example")
   })
 
@@ -513,15 +536,15 @@ describe("qqbot deliverer — deferred, private, restart, close", () => {
     expect(groupTexts(port).filter((text) => text === tt("zh", "bridge.qqbot.privateHeld"))).toHaveLength(1)
 
     port.sends.length = 0
-    await deliverer.openAnchor({ id: "c2c-1", scope: "c2c", target: "42", seat: "42", receivedAt: clock.nowMs })
+    await deliverer.openAnchor({ id: "c2c-1", scope: "c2c", target: ADMIN_OPENID, seat: "42", receivedAt: clock.nowMs })
     const flushed = c2cTexts(port).filter((text) => text.startsWith("secret-"))
     expect(flushed.length).toBeLessThanOrEqual(3) // budget 4, keep 1
-    expect(deliverer.deferred.privateCount("42")).toBeGreaterThan(0)
+    expect(deliverer.deferred.privateCount(ADMIN_OPENID)).toBeGreaterThan(0)
   })
 
   test("C2C active flag pushes private replies as active C2C", async () => {
     const { admin, deliverer, port } = await setup()
-    deliverer.setC2CActive("42", true)
+    deliverer.setC2CActive(ADMIN_OPENID, true)
     await deliverer.whenIdle()
     admin.push({ type: FrameType.System, level: "info", text: "pushed secret" })
     await deliverer.whenIdle()
@@ -606,5 +629,176 @@ describe("qqbot deliverer — deferred, private, restart, close", () => {
       ctx.logs.some((line) => line.includes("qqbot.daily"))
     expect(told).toBe(true)
     expect(ctx.deliverer.quota.groupDay.told100).toBe(true)
+  })
+})
+
+describe("qqbot deliverer — fix round 1", () => {
+  test("B1: always-40034105 with an open anchor produces ≤ 2 POSTs", async () => {
+    const ctx = await setup({ busyNotice: false })
+    ctx.port.defaultResult = { ok: false, code: 40034105 }
+    await ctx.deliverer.openAnchor({ id: "m1", scope: "group", target: "G1", receivedAt: 0 })
+    ctx.observer.push(KP("n1", "hello"))
+    ctx.clock.advance(WINDOW_MS)
+    await ctx.deliverer.whenIdle()
+    expect(ctx.port.sends.length).toBeLessThanOrEqual(2)
+  })
+
+  test("B1: always-40034006 produces exactly 2 POSTs (item + one notice) and stops", async () => {
+    const ctx = await setup({ busyNotice: false })
+    ctx.port.defaultResult = { ok: false, code: 40034006 }
+    await ctx.deliverer.openAnchor({ id: "m1", scope: "group", target: "G1", receivedAt: 0 })
+    ctx.observer.push(KP("n1", "horror"))
+    ctx.clock.advance(WINDOW_MS)
+    await ctx.deliverer.whenIdle()
+    expect(ctx.port.sends.length).toBe(2)
+  })
+
+  test("M2: bound admin C2C send goes to the resolved openid", async () => {
+    const { admin, deliverer, port } = await setup()
+    deliverer.setC2CActive(ADMIN_OPENID, true)
+    await deliverer.whenIdle()
+    admin.push({ type: FrameType.System, level: "info", text: "bound secret" })
+    await deliverer.whenIdle()
+    expect(port.sends.some((row) => row.channel === "c2c" && row.target === ADMIN_OPENID)).toBe(true)
+    expect(c2cTexts(port).some((text) => text.includes("bound secret"))).toBe(true)
+  })
+
+  test("M2: unbound admin → zero sends, item retained, qqbot.private.unbound", async () => {
+    const { admin, deliverer, port, logs } = await setup({ bindAdmin: false })
+    admin.push({ type: FrameType.System, level: "info", text: "unbound secret" })
+    await deliverer.whenIdle()
+    expect(port.sends.filter((row) => row.channel === "c2c")).toEqual([])
+    expect(deliverer.deferred.privateCount("42")).toBe(1)
+    expect(logs.some((line) => line.includes("qqbot.private.unbound"))).toBe(true)
+  })
+
+  test("M2: c2cMsgReceive for the resolved openid drains the outbox", async () => {
+    const { admin, deliverer, port } = await setup()
+    admin.push({ type: FrameType.System, level: "info", text: "held then drained" })
+    await deliverer.whenIdle()
+    expect(deliverer.deferred.privateCount(ADMIN_OPENID)).toBe(1)
+    port.emit({ type: "c2cMsgReceive", userOpenid: ADMIN_OPENID })
+    await deliverer.whenIdle()
+    expect(c2cTexts(port).some((text) => text.includes("held then drained"))).toBe(true)
+    expect(deliverer.deferred.privateCount(ADMIN_OPENID)).toBe(0)
+  })
+
+  test("M3: group active ON drains three deferred items as active sends in order", async () => {
+    const { observer, deliverer, port, clock } = await setup({ busyNotice: false })
+    deliverer.setGroupActive(false)
+    for (const [id, text] of [["a", "one"], ["b", "two"], ["c", "three"]] as const) {
+      observer.push(KP(id, text))
+      clock.advance(WINDOW_MS)
+      await deliverer.whenIdle()
+    }
+    expect(deliverer.deferred.length).toBe(3)
+    port.sends.length = 0
+    deliverer.setGroupActive(true)
+    await deliverer.whenIdle()
+    const bodies = groupTexts(port)
+    expect(bodies.some((text) => text.includes("one"))).toBe(true)
+    expect(bodies.some((text) => text.includes("two"))).toBe(true)
+    expect(bodies.some((text) => text.includes("three"))).toBe(true)
+    const i1 = bodies.findIndex((text) => text.includes("one"))
+    const i2 = bodies.findIndex((text) => text.includes("two"))
+    const i3 = bodies.findIndex((text) => text.includes("three"))
+    expect(i1).toBeLessThan(i2)
+    expect(i2).toBeLessThan(i3)
+    expect(port.sends.every((row) => row.req.msg_id === undefined)).toBe(true)
+  })
+
+  test("M4: a never-resolving sendGroup does not hang close(); bound by 2× sendTimeoutMs on the clock", async () => {
+    const sendTimeoutMs = 1000
+    const ctx = await setup({ busyNotice: true, sendTimeoutMs })
+    ctx.port.sendGroup = () => new Promise(() => {})
+    void ctx.deliverer.openAnchor({ id: "m1", scope: "group", target: "G1", receivedAt: 0 })
+    await Promise.resolve()
+    const closed = ctx.deliverer.close()
+    ctx.clock.advance(2 * sendTimeoutMs)
+    await closed
+  })
+
+  test("M5: enqueue dest group / reply / private each take their path", async () => {
+    const ctx = await setup({ busyNotice: false })
+    await ctx.deliverer.openAnchor({ id: "m-g", scope: "group", target: "G1", seat: "111", receivedAt: 0 })
+    ctx.deliverer.enqueue({ dest: "group", text: ".bridge status ok" })
+    await ctx.deliverer.whenIdle()
+    expect(groupTexts(ctx.port).some((text) => text.includes(".bridge status ok"))).toBe(true)
+
+    ctx.port.sends.length = 0
+    ctx.deliverer.enqueue({ dest: "reply", userId: "111", text: "not-admin" })
+    await ctx.deliverer.whenIdle()
+    expect(ctx.port.sends.some((row) => row.req.msg_id === "m-g" && (row.req.markdown?.content ?? row.req.content ?? "").includes("not-admin"))).toBe(true)
+
+    ctx.port.sends.length = 0
+    ctx.deliverer.enqueue({ dest: "private", userId: "42", text: "claim code" })
+    await ctx.deliverer.whenIdle()
+    expect(ctx.deliverer.deferred.privateCount(ADMIN_OPENID)).toBe(1)
+    expect(groupTexts(ctx.port).some((text) => text.includes("claim code"))).toBe(false)
+  })
+
+  test("m1: postMedia 40034006 drops and sends one guarded notice", async () => {
+    const bytes = new Uint8Array([1, 2, 3])
+    const ctx = await setup({ busyNotice: false, media: { "hash-img": bytes } })
+    await ctx.deliverer.openAnchor({ id: "m1", scope: "group", target: "G1", receivedAt: 0 })
+    ctx.port.defaultResult = { ok: false, code: 40034006 }
+    ctx.observer.push({
+      type: FrameType.Media,
+      id: "m-img",
+      hash: "hash-img",
+      mime: "image/png",
+      size: 3,
+      name: "handout.png",
+      from: "kp",
+      ts: 1,
+    })
+    ctx.clock.advance(WINDOW_MS)
+    await ctx.deliverer.whenIdle()
+    expect(ctx.port.sends.filter((row) => row.req.msg_type === 7)).toHaveLength(1)
+    expect(groupTexts(ctx.port).filter((text) => text === tt("zh", "bridge.qqbot.auditRejected"))).toHaveLength(1)
+  })
+
+  test("m7: 40054010 with unchanged text is dropped, not retried", async () => {
+    const ctx = await setup({ busyNotice: false })
+    await ctx.deliverer.openAnchor({ id: "m1", scope: "group", target: "G1", receivedAt: 0 })
+    ctx.port.results.push({ ok: false, code: 40054010 })
+    ctx.observer.push(KP("n1", "no url here"))
+    ctx.clock.advance(WINDOW_MS)
+    await ctx.deliverer.whenIdle()
+    const bodies = ctx.port.sends.filter((row) => (row.req.markdown?.content ?? "").includes("no url here"))
+    expect(bodies).toHaveLength(1)
+    expect(ctx.logs.some((line) => line.includes("qqbot.url.unchanged"))).toBe(true)
+  })
+
+  test("m9: private question is answered on the seat's C2C anchor, not a newer group one", async () => {
+    const ctx = await setup({ busyNotice: false })
+    await ctx.deliverer.openAnchor({ id: "c2c-old", scope: "c2c", target: "c2c-111", seat: "111", receivedAt: 0 })
+    await ctx.deliverer.openAnchor({ id: "g-new", scope: "group", target: "G1", seat: "111", receivedAt: 1 })
+    ctx.router.markChannel("111", "private")
+    ctx.ada.push({ type: FrameType.System, level: "info", text: "STR 60" })
+    await ctx.deliverer.whenIdle()
+    expect(ctx.port.sends.some((row) => row.req.msg_id === "c2c-old" && (row.req.markdown?.content ?? "").includes("STR 60"))).toBe(true)
+    expect(ctx.port.sends.some((row) => row.req.msg_id === "g-new" && (row.req.markdown?.content ?? "").includes("STR 60"))).toBe(false)
+  })
+
+  test("sentinel: admin broadcast after the 2s hold never rides a group send", async () => {
+    const ctx = await setup({ busyNotice: false })
+    await ctx.deliverer.openAnchor({ id: "m-g", scope: "group", target: "G1", seat: "111", receivedAt: 0 })
+    ctx.admin.push(KP("secret-kp", "the mayor is the cultist"))
+    ctx.clock.advance(ADMIN_HOLD_MS)
+    await ctx.deliverer.whenIdle()
+    expect(groupTexts(ctx.port).some((text) => text.includes("cultist"))).toBe(false)
+    expect(ctx.deliverer.deferred.privateCount(ADMIN_OPENID)).toBe(1)
+  })
+
+  test("m5: C2C 40034006 does not shout auditRejected in the group", async () => {
+    const ctx = await setup({ busyNotice: false })
+    ctx.port.defaultResult = { ok: false, code: 40034006 }
+    ctx.deliverer.setC2CActive(ADMIN_OPENID, true)
+    await ctx.deliverer.whenIdle()
+    ctx.admin.push({ type: FrameType.System, level: "info", text: "private horror" })
+    await ctx.deliverer.whenIdle()
+    expect(groupTexts(ctx.port).some((text) => text === tt("zh", "bridge.qqbot.auditRejected"))).toBe(false)
+    expect(ctx.logs.some((line) => line.includes("qqbot.audit.rejected"))).toBe(true)
   })
 })

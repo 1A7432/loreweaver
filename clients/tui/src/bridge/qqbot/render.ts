@@ -1,10 +1,14 @@
 import { FrameType, stripControlChars, type ServerFrame, type UiChoicesBlock } from "loreweaver-protocol"
+import { tt } from "../../i18n"
 import { diceLine } from "../render/dice"
 import { markdownToPlain, splitText } from "../render/narrative"
 import { renderUiBlocks, type BridgeMediaRef } from "../render/uiText"
 
 export const QQBOT_CHUNK_CHARS = 2800
-export const URL_PLACEHOLDER = "[链接]"
+
+export function urlPlaceholder(locale?: string): string {
+  return tt(locale, "bridge.qqbot.urlStripped")
+}
 
 const URL_RE = /https?:\/\/[^\s<>"'\]）)>\u3001\u3002]+/gi
 
@@ -24,8 +28,9 @@ export function hostAllowed(url: string, whitelist: readonly string[]): boolean 
   }
 }
 
-export function replaceUrls(text: string, whitelist: readonly string[] = []): string {
-  return text.replace(URL_RE, (url) => (hostAllowed(url, whitelist) ? url : URL_PLACEHOLDER))
+export function replaceUrls(text: string, whitelist: readonly string[] = [], placeholder?: string): string {
+  const token = placeholder ?? urlPlaceholder()
+  return text.replace(URL_RE, (url) => (hostAllowed(url, whitelist) ? url : token))
 }
 
 export function atUserTag(memberOpenid: string): string {

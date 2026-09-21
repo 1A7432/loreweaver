@@ -62,4 +62,28 @@ describe("anchors", () => {
     expect(store.newestOpenForSeat("222", 0)?.id).toBe("b")
     expect(store.newestOpenForSeat("333", 0)).toBeUndefined()
   })
+
+  test("create and load prune anchors past the platform window", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lw-anc-"))
+    const path = join(dir, "g.anchors.json")
+    let now = 0
+    const first = await AnchorRegistry.load(path, { now: () => now })
+    first.create({ id: "old", scope: "group", target: "G", receivedAt: 0 })
+    now = GROUP_WINDOW_MS + 1
+    first.create({ id: "fresh", scope: "group", target: "G", receivedAt: now })
+    expect(first.get("old")).toBeUndefined()
+    expect(first.get("fresh")).toBeDefined()
+    await first.flush()
+
+    const second = await AnchorRegistry.load(path, { now: () => now + GROUP_WINDOW_MS + 1 })
+    expect(second.get("fresh")).toBeUndefined()
+  })
+
+  test("prefer-scope newestOpenForSeat returns the channel's own anchor first", () => {
+    const store = new AnchorRegistry("/tmp/unused.json", { now: () => 0 })
+    store.create({ id: "c2c-old", scope: "c2c", target: "U", seat: "111", receivedAt: 1 })
+    store.create({ id: "g-new", scope: "group", target: "G", seat: "111", receivedAt: 2 })
+    expect(store.newestOpenForSeat("111", 0, "c2c")?.id).toBe("c2c-old")
+    expect(store.newestOpenForSeat("111", 0, "group")?.id).toBe("g-new")
+  })
 })

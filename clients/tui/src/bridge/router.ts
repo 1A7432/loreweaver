@@ -41,6 +41,8 @@ export interface SinkEvent {
   scope: FrameScope
   seat?: string
   frame: ServerFrame
+  /** Channel the seat last typed on. Observer frames are always `"group"`. */
+  channel: InboundChannel
 }
 
 export type FrameSink = (event: SinkEvent) => void
@@ -532,8 +534,8 @@ export class BridgeRouter {
     if (!userId) return
     const text = unicastText(frame)
     if (!text) return
-    const channel = this.consumeInputChannel(userId)
-    if (this.handoff("player", frame, userId)) return
+    const channel = this.consumeInputChannel(userId) ?? "group"
+    if (this.handoff("player", frame, userId, channel)) return
     if (channel === "group") this.emit({ dest: "reply", userId, text })
     else this.emit({ dest: "private", userId, text })
   }
@@ -543,7 +545,8 @@ export class BridgeRouter {
       const userId = slot.userId
       const text = unicastText(frame)
       if (userId && text) {
-        if (this.handoff("admin", frame, userId)) return
+        const channel = this.consumeInputChannel(userId) ?? this.lastChannel.get(userId) ?? "private"
+        if (this.handoff("admin", frame, userId, channel)) return
         this.emit({ dest: "private", userId, text })
       }
       return
@@ -556,7 +559,8 @@ export class BridgeRouter {
     const timer = this.setTimeoutFn(() => {
       this.holdTimers.delete(holdKey)
       if (seenKey && this.observerSeen.has(seenKey)) return
-      if (this.handoff("admin", frame, userId)) return
+      const channel = this.lastChannel.get(userId) ?? "private"
+      if (this.handoff("admin", frame, userId, channel)) return
       const text = this.adminBroadcastText(frame, rendered)
       if (text) {
         if (seenKey) this.privatelySent.add(seenKey)
@@ -571,10 +575,10 @@ export class BridgeRouter {
    * caller must skip the plain-text `onIntent` path (qqbot). OneBot leaves
    * the sink unset, so this is always false there.
    */
-  private handoff(scope: FrameScope, frame: ServerFrame, seat?: string): boolean {
+  private handoff(scope: FrameScope, frame: ServerFrame, seat?: string, channel: InboundChannel = "group"): boolean {
     if (!this.sink) return false
     try {
-      this.sink(seat ? { scope, seat, frame } : { scope, frame })
+      this.sink(seat ? { scope, seat, frame, channel } : { scope, frame, channel })
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       this.options.onLog?.(`bridge.sink_failed ${detail}`)

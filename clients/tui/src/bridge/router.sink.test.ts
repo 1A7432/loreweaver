@@ -158,12 +158,35 @@ describe("router sink", () => {
     admin.push({ type: FrameType.System, level: "info", text: "lore dump" })
 
     expect(sunk.filter((item) => item.scope === "player")).toEqual([
-      { scope: "player", seat: "111", frame: { type: FrameType.System, level: "info", text: "STR 60" } },
+      { scope: "player", seat: "111", frame: { type: FrameType.System, level: "info", text: "STR 60" }, channel: "group" },
     ])
     expect(sunk.filter((item) => item.scope === "admin")).toEqual([
-      { scope: "admin", seat: "42", frame: { type: FrameType.System, level: "info", text: "lore dump" } },
+      { scope: "admin", seat: "42", frame: { type: FrameType.System, level: "info", text: "lore dump" }, channel: "private" },
     ])
     expect(sunk.some((item) => item.scope === "player" && item.seat === "222")).toBe(false)
+  })
+
+  test("player sink carries the input channel (private vs group)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lw-sink-"))
+    const posted = await PostedIds.load(join(dir, "g.posted.json"))
+    const sunk: SinkEvent[] = []
+    const router = new BridgeRouter({
+      groupId: "99",
+      locale: "en",
+      postedIds: posted,
+      busyNotice: false,
+      onIntent: () => {},
+      sink: (event) => sunk.push(event),
+    })
+    const player = new FakeLink()
+    router.attachLink("player", "ada", player, "111")
+    player.push(MANIFEST)
+    router.markChannel("111", "private")
+    player.push({ type: FrameType.System, level: "info", text: "STR 60" })
+    expect(sunk[0]?.channel).toBe("private")
+    router.markChannel("111", "group")
+    player.push({ type: FrameType.System, level: "info", text: "queued" })
+    expect(sunk[1]?.channel).toBe("group")
   })
 
   test("observer redial still swallows turn_status (not sunk, not intented)", async () => {

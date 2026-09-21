@@ -377,6 +377,7 @@ const messages = {
     "bridge.qqbot.nothingToShow": "Nothing to show for that turn.",
     "bridge.qqbot.choiceExpired": "This choice has expired.",
     "bridge.qqbot.auditRejected": "That passage did not pass review.",
+    "bridge.qqbot.urlStripped": "[link]",
   },
   zh: {
     "connect.subtitle": "灯下的牌桌 · 用邀请码连接一位守秘人",
@@ -740,6 +741,7 @@ const messages = {
     "bridge.qqbot.nothingToShow": "这一回合没有可展示的内容。",
     "bridge.qqbot.choiceExpired": "此选项已过期",
     "bridge.qqbot.auditRejected": "这段没能通过审核",
+    "bridge.qqbot.urlStripped": "[链接]",
   },
 } as const
 

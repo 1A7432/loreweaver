@@ -1,8 +1,10 @@
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
 import { describe, expect, test } from "bun:test"
 import { FrameType } from "loreweaver-protocol"
+import { tt } from "../../i18n"
 import {
   QQBOT_CHUNK_CHARS,
-  URL_PLACEHOLDER,
   atUserTag,
   cutMarkdown,
   isQueuedInputNotice,
@@ -10,6 +12,7 @@ import {
   renderFrame,
   renderNpcMarkdown,
   replaceUrls,
+  urlPlaceholder,
 } from "./render"
 
 describe("qqbot render", () => {
@@ -17,10 +20,25 @@ describe("qqbot render", () => {
     expect(renderNpcMarkdown("Nora", "Stay **back**.")).toBe("**Nora**：Stay **back**.")
   })
 
-  test("URLs become [链接] unless the host is whitelisted", () => {
+  test("URLs become the locale placeholder unless the host is whitelisted", () => {
+    const zh = urlPlaceholder("zh")
+    const en = urlPlaceholder("en")
+    expect(zh).toBe(tt("zh", "bridge.qqbot.urlStripped"))
+    expect(en).toBe(tt("en", "bridge.qqbot.urlStripped"))
     const text = "see https://evil.example/x and https://ok.example/y"
-    expect(replaceUrls(text, [])).toBe(`see ${URL_PLACEHOLDER} and ${URL_PLACEHOLDER}`)
-    expect(replaceUrls(text, ["ok.example"])).toBe(`see ${URL_PLACEHOLDER} and https://ok.example/y`)
+    expect(replaceUrls(text, [], zh)).toBe(`see ${zh} and ${zh}`)
+    expect(replaceUrls(text, ["ok.example"], zh)).toBe(`see ${zh} and https://ok.example/y`)
+    expect(replaceUrls(text, [], en)).toContain("[link]")
+  })
+
+  test("queued-input substrings still appear in both engine hub locales", () => {
+    const root = join(import.meta.dir, "../../../../../locales")
+    const en = JSON.parse(readFileSync(join(root, "en/hub.json"), "utf8")) as { "hub.turn.queued": string }
+    const zh = JSON.parse(readFileSync(join(root, "zh/hub.json"), "utf8")) as { "hub.turn.queued": string }
+    expect(en["hub.turn.queued"]).toContain("Your input is queued")
+    expect(zh["hub.turn.queued"]).toContain("你的输入已入队")
+    expect(isQueuedInputNotice(en["hub.turn.queued"])).toBe(true)
+    expect(isQueuedInputNotice(zh["hub.turn.queued"])).toBe(true)
   })
 
   test("queued-input notice is recognised in both engine locales", () => {

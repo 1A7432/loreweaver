@@ -36,7 +36,8 @@ export interface DeferredState {
   items: DeferredItem[]
   playerHolds: Record<string, DeferredItem[]>
   privateOutboxes: Record<string, DeferredItem[]>
-  lastPrivateHeldAt?: number
+  /** Per-admin last `privateHeld` shout. */
+  lastPrivateHeldAt?: Record<string, number>
   lastDeferredDroppedAt?: number
 }
 
@@ -157,30 +158,42 @@ function parseHolds(raw: unknown): Record<string, DeferredItem[]> {
 
 export type DropResult = { dropped: DeferredItem; notice: boolean } | undefined
 
+function parseHeldMap(raw: unknown): Record<string, number> {
+  const out: Record<string, number> = {}
+  const rec = asRecord(raw)
+  if (!rec) return out
+  for (const [key, value] of Object.entries(rec)) {
+    if (typeof value === "number" && Number.isFinite(value)) out[key] = value
+  }
+  return out
+}
+
 export class DeferredStore {
   items: DeferredItem[] = []
   playerHolds: Record<string, DeferredItem[]> = {}
   privateOutboxes: Record<string, DeferredItem[]> = {}
-  lastPrivateHeldAt: number | undefined
+  lastPrivateHeldAt: Record<string, number> = {}
   lastDeferredDroppedAt: number | undefined
   private writeChain: Promise<void> = Promise.resolve()
   private readonly now: () => number
+  private readonly onLog?: (line: string) => void
 
   constructor(
     private readonly path: string,
-    opts: { now?: () => number } = {},
+    opts: { now?: () => number; onLog?: (line: string) => void } = {},
   ) {
     this.now = opts.now ?? Date.now
+    this.onLog = opts.onLog
   }
 
-  static async load(path: string, opts: { now?: () => number } = {}): Promise<DeferredStore> {
+  static async load(path: string, opts: { now?: () => number; onLog?: (line: string) => void } = {}): Promise<DeferredStore> {
     const store = new DeferredStore(path, opts)
     const rec = asRecord(await readPrivateJson(path))
     if (rec) {
       store.items = parseList(rec.items)
       store.playerHolds = parseHolds(rec.playerHolds)
       store.privateOutboxes = parseHolds(rec.privateOutboxes)
-      store.lastPrivateHeldAt = asNumber(rec.lastPrivateHeldAt)
+      store.lastPrivateHeldAt = parseHeldMap(rec.lastPrivateHeldAt)
       store.lastDeferredDroppedAt = asNumber(rec.lastDeferredDroppedAt)
     }
     store.expire(store.now())
@@ -230,6 +243,13 @@ export class DeferredStore {
     return taken
   }
 
+  takeAll(now = this.now()): DeferredItem[] {
+    this.expire(now)
+    const taken = this.items
+    this.items = []
+    return taken
+  }
+
   pushPlayerHold(seat: string, item: DeferredItem): void {
     const list = this.playerHolds[seat] ?? []
     list.push({ ...item, late: false, seat })
@@ -261,13 +281,14 @@ export class DeferredStore {
     return this.privateOutboxes[userOpenid]?.length ?? 0
   }
 
-  shouldPrivateHeld(now = this.now()): boolean {
-    if (this.lastPrivateHeldAt === undefined) return true
-    return now - this.lastPrivateHeldAt >= PRIVATE_HELD_EVERY_MS
+  shouldPrivateHeld(adminKey: string, now = this.now()): boolean {
+    const last = this.lastPrivateHeldAt[adminKey]
+    if (last === undefined) return true
+    return now - last >= PRIVATE_HELD_EVERY_MS
   }
 
-  markPrivateHeld(now = this.now()): void {
-    this.lastPrivateHeldAt = now
+  markPrivateHeld(adminKey: string, now = this.now()): void {
+    this.lastPrivateHeldAt[adminKey] = now
   }
 
   snapshot(): DeferredState {
@@ -279,14 +300,18 @@ export class DeferredStore {
       privateOutboxes: Object.fromEntries(
         Object.entries(this.privateOutboxes).map(([k, v]) => [k, v.map((item) => ({ ...item, media: item.media.map((m) => ({ ...m })) }))]),
       ),
-      lastPrivateHeldAt: this.lastPrivateHeldAt,
+      lastPrivateHeldAt: { ...this.lastPrivateHeldAt },
       lastDeferredDroppedAt: this.lastDeferredDroppedAt,
     }
   }
 
   flush(): Promise<void> {
     const body = JSON.stringify(this.snapshot())
-    this.writeChain = this.writeChain.then(() => writePrivateAtomic(this.path, body)).catch(() => {})
+    this.writeChain = this.writeChain
+      .then(() => writePrivateAtomic(this.path, body))
+      .catch(() => {
+        this.onLog?.(`qqbot.persist.failed ${this.path}`)
+      })
     return this.writeChain
   }
 }
