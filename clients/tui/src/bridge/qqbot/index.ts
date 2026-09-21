@@ -1,3 +1,4 @@
+// Delivery layer (WS2): anchors, buckets, coalescer, deferred queue, deliverer, port, render.
 export {
   AnchorRegistry,
   C2C_BUDGET,
@@ -64,3 +65,73 @@ export {
   urlPlaceholder,
 } from "./render"
 export type { RenderedQqFrame } from "./render"
+
+// Transport layer (WS1): gateway/REST transport, events, shared helpers, constants.
+// The transport's request/result types are exported under Transport* names: the port
+// layer above speaks the snake_case wire shape, the transport a camelCase one (WS4 adapts).
+export {
+  QQBotTransport,
+  buildSendBody,
+  mapSendPlatformCode,
+  sessionPolicyForClose,
+} from "./transport"
+export type {
+  EventHandler,
+  QQBotFetchImpl,
+  QQBotFetchInit,
+  QQBotFetchResponse,
+  QQBotLoginInfo,
+  QQBotSendRequest as QQBotTransportSendRequest,
+  QQBotSendResult as QQBotTransportSendResult,
+  QQBotStatus,
+  QQBotTransportOptions,
+  QQBotUploadRequest,
+  QQBotUploadResult,
+  QQBotWsFactory,
+  StatusHandler,
+} from "./transport"
+
+export {
+  RecentEventWindow,
+  ingestDispatch,
+  parseDispatch,
+  parseGatewayPayload,
+  trimLeadingAtSpace,
+} from "./events"
+export type {
+  GatewayPayload,
+  QQBotAttachment,
+  QQBotEvent,
+  QQBotFriendEvent,
+  QQBotGroupRobotEvent,
+  QQBotMessageEvent,
+} from "./events"
+
+export {
+  QQBotApiError,
+  containsSecret,
+  nextBackoffMs,
+  parseExpiresIn,
+  tokenRefreshDelayMs,
+  uploadPartTimeoutMs,
+} from "./shared"
+export type { QQBotClock } from "./shared"
+
+export {
+  CLOSE_NEW_SESSION,
+  CLOSE_TOKEN_INVALID,
+  DEFAULT_API_BASE,
+  DEFAULT_AUTH_BASE,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  FILE_TYPE,
+  GATEWAY_OP,
+  GROUP_AND_C2C_EVENT,
+  MD5_10M_BYTES,
+  MIN_REQUEST_TIMEOUT_MS,
+  RECENT_EVENT_LIMIT,
+  RECONNECT_BACKOFF_CAP_MS,
+  RECONNECT_BACKOFF_MS,
+  TOKEN_OVERLAP_WINDOW_S,
+  TOKEN_REFRESH_FLOOR_MS,
+  TOKEN_REFRESH_MARGIN_S,
+} from "./constants"
