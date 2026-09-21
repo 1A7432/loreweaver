@@ -24,7 +24,7 @@ retired**: the project's UI direction — declarative `ui` frames, live tracker 
 deeply customizable client-side extension layer — is something plain-text chat platforms
 structurally cannot render, so clients speak the open protocol instead. QQ reach returned as a
 **mode of the terminal client** (`loreweaver bridge`): an ordinary protocol client, not an
-engine adapter.
+engine adapter — official Bot API first, OneBot 11 (personal account) second.
 
 **v1.0.0 shipped as the first stable release**, and development has continued past it on a
 `1.0.1.dev*` line. Since then, seven structural milestones landed:
@@ -100,7 +100,7 @@ A round of unglamorous work just landed — the things that have to be right bef
 - **Honest moderation.** The content filter ships switched off, with no word list, and the docs say so plainly rather than implying there is moderation built in.
 - **A nightly run against a real model.** It plays real turns and fails if too many keeper secrets come out — quoted or reworded — or if too many checks are narrated without being rolled. It tells you about one model on one night; it is not a standing guarantee. (See [below](#offline-tests-vs-real-model-quality) for why this is separate from the offline suite.)
 - **Transport and release housekeeping.** Iroh join timeouts, Keeper keys that can only administer their own room, secret files restricted to their owner where the filesystem allows it, release archives with verified checksums, stable and prerelease kept apart, CI on Python 3.11 *and* 3.12, and dead code removed.
-- **Chat adapters — built, then retired.** Five platform adapters (Discord, official QQ, Telegram, Feishu, OneBot 11) were taken to a respectable state, with mock tests, and then deleted on purpose: once the interface direction became declarative frames and module-drawn panels, plain-text chat was a dead end, and removing them beats shipping a permanently second-class experience forever. The cross-transport RoomHub they proved out is still there, under the CLI and the protocol clients. The QQ path that returned later is the terminal client's OneBot 11 bridge mode (`loreweaver bridge`), not a new adapter.
+- **Chat adapters — built, then retired.** Five platform adapters (Discord, official QQ, Telegram, Feishu, OneBot 11) were taken to a respectable state, with mock tests, and then deleted on purpose: once the interface direction became declarative frames and module-drawn panels, plain-text chat was a dead end, and removing them beats shipping a permanently second-class experience forever. The cross-transport RoomHub they proved out is still there, under the CLI and the protocol clients. The QQ path that returned later is the terminal client's bridge mode (`loreweaver bridge`), not a new adapter: official Bot API first, OneBot 11 second.
 
 ## Near-term
 

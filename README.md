@@ -82,15 +82,17 @@ Prefer a different location than your user profile? Set `TRPG_HOME` (client) and
 Windows, run the client in **Windows Terminal** or **WezTerm** — the legacy console host renders
 broken borders and swallows mouse input.
 
-**Play in a QQ group.** The same terminal client can sit in a NapCat / LLOneBot group as an
-ordinary protocol client — not an engine adapter:
+**Play in a QQ group.** The same terminal client sits in the group as an ordinary protocol
+client — not an engine adapter. Two routes, same command:
+
+1. **Official QQ Bot API** (primary) — a bot from q.qq.com. No NapCat, no personal QQ account.
+   Setup: [docs/qq-official.md](docs/qq-official.md).
+2. **OneBot 11** (secondary) — NapCat / LLOneBot on a **personal** QQ account. That account
+   carries the risk of a ban. Setup: [docs/qq.md](docs/qq.md).
 
 ```bash
 loreweaver bridge --config bridge.json
 ```
-
-Setup, admins, private chat for secret-reading commands, and the one rendering gap:
-[docs/qq.md](docs/qq.md).
 
 ### 2. Host
 

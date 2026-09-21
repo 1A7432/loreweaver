@@ -59,13 +59,16 @@ irm https://github.com/1A7432/loreweaver/releases/latest/download/install.ps1 | 
 
 不想装进用户目录，就在安装前设 `TRPG_HOME`（客户端）和 `TRPG_LOCAL_SERVER_HOME`（一键开服的服务器状态，含它自己的 `.env`）。Windows 上请在 **Windows Terminal** 或 **WezTerm** 里跑——老式控制台会把边框画烂、吞掉鼠标。
 
-**在 QQ 群里玩。** 同一个终端客户端可以作为一个普通的协议客户端坐进 NapCat / LLOneBot 的群——不是引擎适配器：
+**在 QQ 群里玩。** 同一个终端客户端作为一个普通的协议客户端坐进群——不是引擎适配器。两条路，同一条命令：
+
+1. **QQ 官方机器人 API**（主路径）——在 q.qq.com 创建的机器人。不用 NapCat，也不用私人 QQ 号。
+   安装见 [docs/qq-official.zh.md](docs/qq-official.zh.md)。
+2. **OneBot 11**（次路径）——把 NapCat / LLOneBot 挂在一个**私人** QQ 号上。那个号有被封的风险。
+   安装见 [docs/qq.zh.md](docs/qq.zh.md)。
 
 ```bash
 loreweaver bridge --config bridge.json
 ```
-
-安装、管理员、私聊跑会读秘密的命令、以及那一个画不出来的缺口，见 [docs/qq.zh.md](docs/qq.zh.md)。
 
 ### 2. 开服
 
