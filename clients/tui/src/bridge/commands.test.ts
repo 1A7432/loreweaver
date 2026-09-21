@@ -142,6 +142,12 @@ describe("bridge commands", () => {
       effects,
     )
     expect(locked).toBe(tt("zh", "bridge.qqbot.nameLocked"))
+
+    const noPred = await runBridgeCommand(".bridge name 别名", false, view, {
+      ...effects,
+      hasCharacter: undefined,
+    })
+    expect(noPred).toBe(tt("zh", "bridge.qqbot.nameLocked"))
   })
 
   test(".bridge deferred reports queue length and oldest age", async () => {
@@ -220,5 +226,87 @@ describe("bridge commands", () => {
     expect(group).toBe(tt("en", "bridge.qqbot.claimDone"))
     expect(admins).toEqual(["M1"])
     expect(remints).toEqual(["M1"])
+
+    effects.removeAdmin = () => {
+      admins.length = 0
+    }
+    await runBridgeCommand(".bridge admin remove M1", true, {
+      locale: "en",
+      groupId: "G",
+      mode: "mention",
+      busyNotice: true,
+      admins,
+      members: [],
+    }, effects)
+    expect(admins).toEqual([])
+    remints.length = 0
+    const againGroup = await runBridgeCommand(".bridge claim GARBAGE", false, {
+      locale: "en",
+      groupId: "G",
+      mode: "mention",
+      busyNotice: true,
+      admins,
+      members: [],
+      channel: "group",
+      memberOpenid: "M1",
+    }, effects)
+    expect(againGroup).toBe(tt("en", "bridge.qqbot.claimDone"))
+    const againC2C = await runBridgeCommand(".bridge claim GARBAGE", false, {
+      locale: "en",
+      groupId: "G",
+      mode: "mention",
+      busyNotice: true,
+      admins,
+      members: [],
+      channel: "private",
+      userOpenid: "U1",
+    }, effects)
+    expect(againC2C).toBe(tt("en", "bridge.qqbot.claimDone"))
+    expect(admins).toEqual([])
+    expect(remints).toEqual([])
+  })
+
+  test("a mint failure on group claim does not addAdmin and answers seatFailed", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lw-cmd-mintfail-"))
+    const identity = await IdentityStore.load(join(dir, "g.identity.json"), "G")
+    const admins: string[] = []
+    const effects = {
+      setMode() {},
+      setBusyNotice() {},
+      addAdmin: (id: string) => {
+        admins.push(id)
+      },
+      removeAdmin() {},
+      kick: async () => {},
+      identity,
+      remintSeat: async () => {
+        throw new Error("admin_mint_key timed out")
+      },
+      onLog() {},
+    }
+    const code = await identity.issueClaimCode()
+    const c2c = await runBridgeCommand(`.bridge claim ${code}`, false, {
+      locale: "en",
+      groupId: "G",
+      mode: "mention",
+      busyNotice: true,
+      admins,
+      members: [],
+      channel: "private",
+      userOpenid: "U1",
+    }, effects)
+    const link = (c2c ?? "").match(/claim\s+([A-Z2-9]{6})/i)?.[1]
+    const group = await runBridgeCommand(`.bridge claim ${link}`, false, {
+      locale: "en",
+      groupId: "G",
+      mode: "mention",
+      busyNotice: true,
+      admins,
+      members: [],
+      channel: "group",
+      memberOpenid: "M1",
+    }, effects)
+    expect(group).toBe(tt("en", "bridge.seatFailed"))
+    expect(admins).toEqual([])
   })
 })

@@ -77,6 +77,7 @@ export class OneBotDeliverer implements Deliverer {
       else await this.options.transport.sendText(groupTarget, intent.text)
       return
     }
+    if (intent.dest === "c2c_direct") return
     // A private reply carries the group it belongs to, so NapCat can use the group temp
     // session when the two are not friends — but ONLY once NapCat has confirmed it can
     // resolve this member: with an unresolvable user NapCat falls back to posting into the

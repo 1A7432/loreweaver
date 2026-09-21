@@ -7,6 +7,7 @@ import { tt } from "../../i18n"
 import { PostedIds } from "../postedIds"
 import { ADMIN_HOLD_MS, BridgeRouter, type BridgeLink, type OutboundIntent } from "../router"
 import { WINDOW_MS } from "./coalescer"
+import { IdentityStore } from "./identity"
 import { QQBotDeliverer } from "./deliverer"
 import type { QQBotSendPort, QQBotSendRequest, QQBotSendResult, QQBotSwitchEvent } from "./port"
 import { urlPlaceholder } from "./render"
@@ -114,6 +115,7 @@ async function setup(opts: {
   bindAdmin?: boolean
   sendTimeoutMs?: number
   urlWhitelist?: string[]
+  qqIdentity?: boolean
 } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "lw-qq-"))
   const posted = await PostedIds.load(join(dir, "g.posted.json"))
@@ -124,6 +126,12 @@ async function setup(opts: {
   const resolveC2C =
     opts.resolveC2C ??
     (opts.bindAdmin === false ? () => undefined : (seat: string) => (seat === "42" ? ADMIN_OPENID : undefined))
+  const identity = opts.qqIdentity
+    ? await IdentityStore.load(join(dir, "g.identity.json"), "G1", {
+        now: clock.now,
+        onLog: (line) => logs.push(line),
+      })
+    : undefined
   let deliverer!: QQBotDeliverer
   const router = new BridgeRouter({
     groupId: "G1",
@@ -131,6 +139,8 @@ async function setup(opts: {
     postedIds: posted,
     busyNotice: false,
     admins: ["42"],
+    identity,
+    hasCharacter: () => false,
     onIntent: (intent) => {
       intents.push(intent)
       deliverer.enqueue(intent)
@@ -172,7 +182,7 @@ async function setup(opts: {
   ada.push(MANIFEST)
   bao.push(MANIFEST)
   admin.push(MANIFEST)
-  return { dir, clock, port, router, deliverer, observer, ada, bao, admin, intents, logs, posted }
+  return { dir, clock, port, router, deliverer, observer, ada, bao, admin, intents, logs, posted, identity }
 }
 
 function groupTexts(port: FakePort): string[] {
@@ -735,6 +745,44 @@ describe("qqbot deliverer — fix round 1", () => {
     await ctx.deliverer.whenIdle()
     expect(ctx.deliverer.deferred.privateCount(ADMIN_OPENID)).toBe(1)
     expect(groupTexts(ctx.port).some((text) => text.includes("claim code"))).toBe(false)
+  })
+
+  test("c2c_direct uses the C2C anchor only; no anchor drops without outbox or group", async () => {
+    const ctx = await setup({ busyNotice: false })
+    ctx.deliverer.enqueue({ dest: "c2c_direct", userOpenid: "U-stranger", text: "link SECRET" })
+    await ctx.deliverer.whenIdle()
+    expect(groupTexts(ctx.port).some((text) => text.includes("SECRET"))).toBe(false)
+    expect(c2cTexts(ctx.port).some((text) => text.includes("SECRET"))).toBe(false)
+    expect(ctx.deliverer.deferred.privateCount("U-stranger")).toBe(0)
+    expect(ctx.logs.filter((line) => line === "qqbot.c2c.direct_dropped")).toHaveLength(1)
+
+    await ctx.deliverer.openAnchor({ id: "c2c-u", scope: "c2c", target: "U-stranger", receivedAt: 0 })
+    ctx.deliverer.enqueue({ dest: "c2c_direct", userOpenid: "U-stranger", text: "link SECRET2" })
+    await ctx.deliverer.whenIdle()
+    expect(c2cTexts(ctx.port).some((text) => text.includes("SECRET2"))).toBe(true)
+    expect(groupTexts(ctx.port).some((text) => text.includes("SECRET2"))).toBe(false)
+    expect(ctx.deliverer.deferred.privateCount("U-stranger")).toBe(0)
+  })
+
+  test("5 garbage C2C claims from an unbound openid: zero group, zero outbox, one throttled log", async () => {
+    const ctx = await setup({ busyNotice: false, qqIdentity: true, locale: "en" })
+    for (let i = 0; i < 5; i++) {
+      await ctx.router.handleInbound({
+        userId: "Ux",
+        memberKey: "p-key",
+        text: `.bridge claim GARBAGE${i}`,
+        channel: "private",
+        isAdmin: false,
+        userOpenid: "Ux",
+      })
+    }
+    await ctx.deliverer.whenIdle()
+    expect(groupTexts(ctx.port).some((text) => /GARBAGE|claim|领取/.test(text))).toBe(false)
+    expect(ctx.deliverer.deferred.privateCount("Ux")).toBe(0)
+    expect(ctx.deliverer.deferred.privateCount("42")).toBe(0)
+    expect(ctx.deliverer.deferred.privateCount(ADMIN_OPENID)).toBe(0)
+    expect(ctx.logs.filter((line) => line === "qqbot.c2c.direct_dropped")).toHaveLength(1)
+    expect(ctx.intents.filter((item) => item.dest === "c2c_direct")).toHaveLength(1)
   })
 
   test("m1: postMedia 40034006 drops and sends one guarded notice", async () => {

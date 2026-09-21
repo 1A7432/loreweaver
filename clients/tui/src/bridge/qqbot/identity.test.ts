@@ -7,6 +7,7 @@ import {
   CLAIM_CODE_LENGTH,
   CLAIM_CODE_TTL_MS,
   CLAIM_REJECT_COOLDOWN_MS,
+  C2CIdentityRouter,
   IdentityStore,
   LINK_CODE_LENGTH,
   LINK_CODE_TTL_MS,
@@ -45,9 +46,12 @@ describe("IdentityStore — claim / link codes", () => {
   test("issue / expire / one-use / re-issue; secrets never in logs or on disk", async () => {
     const now = { ms: 10_000 }
     const { store, path, logs, groupId } = await makeStore({ now })
-    const code = await store.issueClaimCode(groupId)
-    expect(code).toHaveLength(CLAIM_CODE_LENGTH)
+    const unused = await store.issueClaimCode()
+    expect(unused).toHaveLength(CLAIM_CODE_LENGTH)
     expect(logs).toEqual([`qqbot.claim.issued ${groupId}`])
+    const code = await store.issueClaimCode()
+    expect(code).not.toBe(unused)
+    expect((await store.claim({ channel: "private", code: unused, userOpenid: "U-stale" })).outcome).toBe("rejected")
     expect(logs.join("\n")).not.toContain(code)
     await store.drainWrites()
     const onDisk = await Bun.file(path).text()
@@ -101,7 +105,7 @@ describe("IdentityStore — claim / link codes", () => {
     expect(c2c.linkCode).toHaveLength(LINK_CODE_LENGTH)
 
     const group = await store.claim({ channel: "group", code: c2c.linkCode, memberOpenid: "M1" })
-    expect(group).toEqual({ outcome: "done", memberOpenid: "M1", userOpenid: "U1" })
+    expect(group).toMatchObject({ outcome: "done", memberOpenid: "M1", userOpenid: "U1" })
     expect(store.resolveC2C("M1")).toBe("U1")
     expect(store.isBoundC2C("U1")).toBe(true)
     expect(store.seatForC2C("U1")).toBe("M1")
@@ -111,7 +115,7 @@ describe("IdentityStore — claim / link codes", () => {
   })
 
   test("a link code sent in C2C is rejected; a claim code sent in the group is rejected", async () => {
-    const { store } = await makeStore()
+    const { store, logs } = await makeStore()
     const claim = await store.issueClaimCode()
     const c2c = await store.claim({ channel: "private", code: claim, userOpenid: "U1" })
     expect(c2c.outcome).toBe("link_issued")
@@ -125,9 +129,10 @@ describe("IdentityStore — claim / link codes", () => {
     const claimInGroup = await store.claim({ channel: "group", code: other, memberOpenid: "M1" })
     expect(claimInGroup.outcome).toBe("rejected")
     expect(store.resolveC2C("M1")).toBeUndefined()
+    expect(logs.includes("qqbot.claim.burned")).toBe(true)
 
     const still = await store.claim({ channel: "private", code: other, userOpenid: "U2" })
-    expect(still.outcome).toBe("link_issued")
+    expect(still.outcome).toBe("rejected")
   })
 
   test("union_openid fast path links a later group message; empty never links", async () => {
@@ -147,9 +152,11 @@ describe("IdentityStore — claim / link codes", () => {
     const mismatch = await store.tryUnionLink({ memberOpenid: "M1", unionOpenid: "OTHER" })
     expect(mismatch).toBeUndefined()
 
+    const short = await store.tryUnionLink({ memberOpenid: "M1", unionOpenid: "SHORT" })
+    expect(short).toBeUndefined()
     const linked = await store.tryUnionLink({ memberOpenid: "M1", unionOpenid: "UNION-SAME" })
-    expect(linked).toEqual({ memberOpenid: "M1", userOpenid: "U1" })
-    expect(logs.some((line) => line === "qqbot.claim.union_linked")).toBe(true)
+    expect(linked).toMatchObject({ memberOpenid: "M1", userOpenid: "U1" })
+    expect(logs.some((line) => line === "qqbot.claim.union_linked M1")).toBe(true)
     expect(store.resolveC2C("M1")).toBe("U1")
 
     if (c2c.outcome === "link_issued") {
@@ -161,14 +168,14 @@ describe("IdentityStore — claim / link codes", () => {
   test("union_openid on the group claim verb also completes without the link code", async () => {
     const { store } = await makeStore()
     const claim = await store.issueClaimCode()
-    await store.claim({ channel: "private", code: claim, userOpenid: "U1", unionOpenid: "UN-1" })
+    await store.claim({ channel: "private", code: claim, userOpenid: "U1", unionOpenid: "UNION-001" })
     const done = await store.claim({
       channel: "group",
       code: "XXXXXX",
       memberOpenid: "M1",
-      unionOpenid: "UN-1",
+      unionOpenid: "UNION-001",
     })
-    expect(done).toEqual({ outcome: "done", memberOpenid: "M1", userOpenid: "U1" })
+    expect(done).toMatchObject({ outcome: "done", memberOpenid: "M1", userOpenid: "U1" })
   })
 
   test("link code expires after 5 minutes", async () => {
@@ -207,13 +214,14 @@ describe("IdentityStore — claim / link codes", () => {
 describe("IdentityStore — unbound C2C fail-closed", () => {
   test("unbound C2C .r 1d6 is ignored with one throttled log line; claim still accepted", async () => {
     const now = { ms: 0 }
-    const { store, logs } = await makeStore({ now })
+    const { store, logs, path } = await makeStore({ now })
     expect(isC2CClaimText(".bridge claim ABCDEFGH")).toBe(true)
     expect(isC2CClaimText(".r 1d6")).toBe(false)
 
     expect(store.acceptC2CInbound("Ux", ".r 1d6")).toBe("ignore")
     await store.drainWrites()
     expect(logs.filter((line) => line === "qqbot.c2c.unbound")).toEqual(["qqbot.c2c.unbound"])
+    expect(await Bun.file(path).exists()).toBe(false)
 
     expect(store.acceptC2CInbound("Ux", "hello")).toBe("ignore")
     expect(store.acceptC2CInbound("Ux", ".bridge status")).toBe("ignore")
@@ -238,5 +246,37 @@ describe("IdentityStore — unbound C2C fail-closed", () => {
     await store.claim({ channel: "group", code: c2c.linkCode, memberOpenid: "M1" })
     expect(store.acceptC2CInbound("U1", ".r 1d6")).toBe("forward")
     expect(store.acceptC2CInbound("U-other", ".r 1d6")).toBe("ignore")
+  })
+})
+
+describe("C2CIdentityRouter — multi-group C2C", () => {
+  test("bound in A routes to A; B's claim code from an unbound openid; garbage is one log", async () => {
+    const now = { ms: 0 }
+    const logs: string[] = []
+    const dir = await mkdtemp(join(tmpdir(), "lw-c2c-router-"))
+    const storeA = await IdentityStore.load(identityPath(dir, "A"), "A", { now: () => now.ms })
+    const storeB = await IdentityStore.load(identityPath(dir, "B"), "B", { now: () => now.ms })
+    const facade = new C2CIdentityRouter([storeA, storeB], { now: () => now.ms, onLog: (line) => logs.push(line) })
+
+    const codeA = await storeA.issueClaimCode()
+    const c2cA = await storeA.claim({ channel: "private", code: codeA, userOpenid: "U-ada" })
+    if (c2cA.outcome !== "link_issued") throw new Error("expected link")
+    await storeA.claim({ channel: "group", code: c2cA.linkCode, memberOpenid: "M-ada" })
+
+    const toA = facade.classify("U-ada", ".r 1d6")
+    expect(toA).toMatchObject({ kind: "bound", seat: "M-ada" })
+    if (toA.kind === "bound") expect(toA.store.id).toBe("A")
+
+    const codeB = await storeB.issueClaimCode()
+    const claimB = facade.classify("U-stranger", `.bridge claim ${codeB}`)
+    expect(claimB).toMatchObject({ kind: "claim" })
+    if (claimB.kind === "claim") expect(claimB.store.id).toBe("B")
+
+    expect(facade.classify("U-x", ".bridge claim GARBAGE1")).toEqual({ kind: "ignore" })
+    expect(logs.filter((line) => line === "qqbot.c2c.unbound")).toHaveLength(1)
+    expect(facade.classify("U-x", ".bridge claim GARBAGE2")).toEqual({ kind: "ignore" })
+    expect(logs.filter((line) => line === "qqbot.c2c.unbound")).toHaveLength(1)
+    expect(facade.classify("U-x", ".r 1d6")).toEqual({ kind: "ignore" })
+    expect(logs.filter((line) => line === "qqbot.c2c.unbound")).toHaveLength(1)
   })
 })

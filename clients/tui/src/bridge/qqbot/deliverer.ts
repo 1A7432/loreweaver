@@ -337,6 +337,22 @@ export class QQBotDeliverer implements Deliverer {
       await this.persist()
       return
     }
+    if (intent.dest === "c2c_direct") {
+      const anchor = this.anchors.newestOpen("c2c", intent.userOpenid)
+      if (!anchor || !this.anchors.isOpen(anchor)) {
+        this.onLog("qqbot.c2c.direct_dropped")
+        return
+      }
+      const outcome = await this.postText({
+        channel: "c2c",
+        target: intent.userOpenid,
+        text: intent.text,
+        anchor,
+      })
+      if (outcome !== "sent" && outcome !== "pending") this.onLog("qqbot.c2c.direct_dropped")
+      await this.persist()
+      return
+    }
     if (intent.dest === "reply") {
       const seat = intent.userId
       const item = this.itemFromRendered(

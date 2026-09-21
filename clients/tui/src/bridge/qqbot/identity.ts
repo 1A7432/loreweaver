@@ -11,15 +11,22 @@ export const CLAIM_CODE_TTL_MS = 30 * 60 * 1000
 export const LINK_CODE_TTL_MS = 5 * 60 * 1000
 export const CLAIM_REJECT_COOLDOWN_MS = 30_000
 export const UNBOUND_C2C_LOG_EVERY_MS = 10 * 60 * 1000
+export const UNION_OPENID_MIN_LENGTH = 8
 
-const C2C_CLAIM_RE = /^\s*[./。]bridge\s+claim\b/i
+/** Same length as sha256 hex; used so a missing claim hash still does a compare. */
+const DUMMY_CLAIM_HASH = "0".repeat(64)
 
 export function identityPath(stateDir: string, groupId: string): string {
   return `${stateDir.replace(/\/+$/, "")}/${groupId}.identity.json`
 }
 
 export function isC2CClaimText(text: string): boolean {
-  return C2C_CLAIM_RE.test(text)
+  return /^\s*[./。]bridge\s+claim\b/i.test(text)
+}
+
+export function c2cClaimCode(text: string): string {
+  const match = text.trim().match(/^\s*[./。]bridge\s+claim(?:\s+(\S+))?$/i)
+  return (match?.[1] ?? "").trim()
 }
 
 /** Last 4 hex digits of `openid`; hashed tail when the id has no hex. */
@@ -51,6 +58,7 @@ export interface PendingClaim {
 export interface IdentityBinding {
   memberOpenid: string
   userOpenid: string
+  boundAt: number
 }
 
 export interface ClaimInput {
@@ -64,6 +72,7 @@ export interface ClaimInput {
 export type ClaimOutcome =
   | { outcome: "link_issued"; linkCode: string; userOpenid: string }
   | { outcome: "done"; memberOpenid: string; userOpenid: string }
+  | { outcome: "already"; memberOpenid: string; userOpenid: string }
   | { outcome: "rejected" }
   | { outcome: "cooldown" }
   | { outcome: "usage" }
@@ -75,7 +84,6 @@ export interface IdentityState {
   bindings: IdentityBinding[]
   chosenNames: Record<string, string>
   claimRejectUntil: Record<string, number>
-  unboundC2cLogAt: Record<string, number>
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -104,6 +112,12 @@ function hashesEqual(left: string, right: string): boolean {
 
 function normalizeCode(raw: string): string {
   return raw.trim().toUpperCase()
+}
+
+function usableUnion(value: string | undefined): string | undefined {
+  const union = value?.trim()
+  if (!union || union.length < UNION_OPENID_MIN_LENGTH) return undefined
+  return union
 }
 
 function randomCode(length: number, randomBytes: (n: number) => Uint8Array): string {
@@ -141,7 +155,7 @@ function parseBindings(raw: unknown): IdentityBinding[] {
     const memberOpenid = rec ? asString(rec.memberOpenid) : undefined
     const userOpenid = rec ? asString(rec.userOpenid) : undefined
     if (!memberOpenid || !userOpenid) continue
-    out.push({ memberOpenid, userOpenid })
+    out.push({ memberOpenid, userOpenid, boundAt: asNumber(rec.boundAt) ?? 0 })
   }
   return out
 }
@@ -210,7 +224,6 @@ export class IdentityStore {
     store.bindings = parseBindings(rec.bindings)
     store.chosenNames = parseStringMap(rec.chosenNames)
     store.claimRejectUntil = parseNumberMap(rec.claimRejectUntil)
-    store.unboundC2cLogAt = parseNumberMap(rec.unboundC2cLogAt)
     store.prune(store.now())
     return store
   }
@@ -219,13 +232,30 @@ export class IdentityStore {
    * Console-only: 8-char claim code, 30 minutes, one use. A new issue invalidates
    * the previous unused claim code for this group. Never logged.
    */
-  async issueClaimCode(groupId = this.groupId): Promise<string> {
+  async issueClaimCode(): Promise<string> {
     const code = randomCode(CLAIM_CODE_LENGTH, this.randomBytes)
     this.claimHash = hashCode(code)
     this.claimExpiresAt = this.now() + CLAIM_CODE_TTL_MS
-    this.onLog(`qqbot.claim.issued ${groupId}`)
+    this.onLog(`qqbot.claim.issued ${this.groupId}`)
     await this.flush()
     return code
+  }
+
+  get id(): string {
+    return this.groupId
+  }
+
+  /**
+   * Constant-time compare against this group's live claim hash. Always does a
+   * compare, even when no code is outstanding, so a multi-store scan cannot
+   * leak which group has a live code by timing.
+   */
+  matchesLiveClaimHash(hashed: string): boolean {
+    this.prune(this.now())
+    const live = this.claimHash && this.claimExpiresAt !== undefined && this.now() < this.claimExpiresAt
+    const target = live && this.claimHash ? this.claimHash : DUMMY_CLAIM_HASH
+    const equal = hashesEqual(target, hashed)
+    return Boolean(live && equal)
   }
 
   resolveC2C(seat: string): string | undefined {
@@ -280,7 +310,6 @@ export class IdentityStore {
     if (last !== undefined && now - last < UNBOUND_C2C_LOG_EVERY_MS) return false
     this.unboundC2cLogAt[userOpenid] = now
     this.onLog("qqbot.c2c.unbound")
-    await this.flush()
     return true
   }
 
@@ -290,14 +319,14 @@ export class IdentityStore {
    * side never links. Never trusted for anything else.
    */
   async tryUnionLink(input: { memberOpenid: string; unionOpenid?: string }): Promise<IdentityBinding | undefined> {
-    const union = input.unionOpenid?.trim()
+    const union = usableUnion(input.unionOpenid)
     if (!union || !input.memberOpenid) return undefined
     this.prune(this.now())
     const pending = this.pending.find((row) => row.unionOpenid && row.unionOpenid === union)
     if (!pending) return undefined
     const binding = this.bind(input.memberOpenid, pending.userOpenid)
     this.pending = this.pending.filter((row) => row !== pending)
-    this.onLog("qqbot.claim.union_linked")
+    this.onLog(`qqbot.claim.union_linked ${input.memberOpenid}`)
     await this.flush()
     return binding
   }
@@ -321,7 +350,6 @@ export class IdentityStore {
       bindings: this.bindings.map((row) => ({ ...row })),
       chosenNames: { ...this.chosenNames },
       claimRejectUntil: { ...this.claimRejectUntil },
-      unboundC2cLogAt: { ...this.unboundC2cLogAt },
     }
   }
 
@@ -349,7 +377,7 @@ export class IdentityStore {
 
     if (this.isBoundC2C(userOpenid)) {
       const seat = this.seatForC2C(userOpenid)
-      if (seat) return { outcome: "done", memberOpenid: seat, userOpenid }
+      if (seat) return { outcome: "already", memberOpenid: seat, userOpenid }
     }
 
     // Link codes are never accepted on C2C, even if the string matches a pending hash.
@@ -362,7 +390,7 @@ export class IdentityStore {
     this.claimHash = undefined
     this.claimExpiresAt = undefined
     const linkCode = randomCode(LINK_CODE_LENGTH, this.randomBytes)
-    const unionOpenid = input.unionOpenid?.trim() || undefined
+    const unionOpenid = usableUnion(input.unionOpenid)
     this.pending = this.pending.filter((row) => row.userOpenid !== userOpenid)
     this.pending.push({
       userOpenid,
@@ -379,21 +407,29 @@ export class IdentityStore {
     if (!memberOpenid) return { outcome: "rejected" }
 
     const existing = this.bindings.find((row) => row.memberOpenid === memberOpenid)
-    if (existing) return { outcome: "done", memberOpenid, userOpenid: existing.userOpenid }
+    if (existing) return { outcome: "already", memberOpenid, userOpenid: existing.userOpenid }
 
-    const union = input.unionOpenid?.trim()
+    const union = usableUnion(input.unionOpenid)
     if (union) {
       const byUnion = this.pending.find((row) => row.unionOpenid && row.unionOpenid === union)
       if (byUnion) {
         const binding = this.bind(memberOpenid, byUnion.userOpenid)
         this.pending = this.pending.filter((row) => row !== byUnion)
-        this.onLog("qqbot.claim.union_linked")
+        this.onLog(`qqbot.claim.union_linked ${memberOpenid}`)
         await this.flush()
         return { outcome: "done", memberOpenid: binding.memberOpenid, userOpenid: binding.userOpenid }
       }
     }
 
-    // Claim codes are never accepted in the group, even if the hash would match.
+    // A claim code typed in the group is burned: it must never remain a C2C credential.
+    if (this.claimValid(code)) {
+      this.claimHash = undefined
+      this.claimExpiresAt = undefined
+      this.onLog("qqbot.claim.burned")
+      await this.flush()
+      return { outcome: "rejected" }
+    }
+
     if (code.length !== LINK_CODE_LENGTH) return { outcome: "rejected" }
 
     const hashed = hashCode(code)
@@ -422,7 +458,7 @@ export class IdentityStore {
 
   private bind(memberOpenid: string, userOpenid: string): IdentityBinding {
     this.bindings = this.bindings.filter((row) => row.memberOpenid !== memberOpenid && row.userOpenid !== userOpenid)
-    const binding = { memberOpenid, userOpenid }
+    const binding = { memberOpenid, userOpenid, boundAt: this.now() }
     this.bindings.push(binding)
     return binding
   }
@@ -439,5 +475,80 @@ export class IdentityStore {
     for (const [key, at] of Object.entries(this.unboundC2cLogAt)) {
       if (now - at >= UNBOUND_C2C_LOG_EVERY_MS * 2) delete this.unboundC2cLogAt[key]
     }
+  }
+}
+
+export type C2CClassify =
+  | { kind: "bound"; store: IdentityStore; seat: string }
+  | { kind: "claim"; store: IdentityStore }
+  | { kind: "ignore" }
+
+/**
+ * One C2C inbox over N per-group stores. Shared per-openid claim cooldown and
+ * unbound-log throttle so brute-force is process-wide, not per group.
+ */
+export class C2CIdentityRouter {
+  private readonly claimRejectUntil = new Map<string, number>()
+  private readonly unboundLogAt = new Map<string, number>()
+  private readonly now: () => number
+  private readonly onLog: (line: string) => void
+
+  constructor(
+    private readonly stores: IdentityStore[],
+    opts: { now?: () => number; onLog?: (line: string) => void } = {},
+  ) {
+    this.now = opts.now ?? Date.now
+    this.onLog = opts.onLog ?? (() => {})
+  }
+
+  classify(userOpenid: string, text: string): C2CClassify {
+    const bound = this.boundHits(userOpenid)
+    if (bound.length === 1) return { kind: "bound", store: bound[0]!.store, seat: bound[0]!.seat }
+    if (bound.length > 1) {
+      bound.sort((a, b) => b.boundAt - a.boundAt)
+      const pick = bound[0]!
+      this.onLog(`qqbot.c2c.multi_bound ${pick.store.id}`)
+      return { kind: "bound", store: pick.store, seat: pick.seat }
+    }
+
+    if (isC2CClaimText(text)) {
+      const until = this.claimRejectUntil.get(userOpenid)
+      if (until !== undefined && this.now() < until) return { kind: "ignore" }
+      const code = c2cClaimCode(text)
+      const hashed = hashCode(normalizeCode(code))
+      let matched: IdentityStore | undefined
+      let hits = 0
+      for (const store of this.stores) {
+        if (store.matchesLiveClaimHash(hashed)) {
+          hits += 1
+          matched = store
+        }
+      }
+      if (hits === 1 && matched && code) return { kind: "claim", store: matched }
+      this.claimRejectUntil.set(userOpenid, this.now() + CLAIM_REJECT_COOLDOWN_MS)
+      this.noteUnbound(userOpenid)
+      return { kind: "ignore" }
+    }
+
+    this.noteUnbound(userOpenid)
+    return { kind: "ignore" }
+  }
+
+  private boundHits(userOpenid: string): Array<{ store: IdentityStore; seat: string; boundAt: number }> {
+    const out: Array<{ store: IdentityStore; seat: string; boundAt: number }> = []
+    for (const store of this.stores) {
+      const seat = store.seatForC2C(userOpenid)
+      if (!seat) continue
+      const row = store.bindings.find((item) => item.userOpenid === userOpenid)
+      out.push({ store, seat, boundAt: row?.boundAt ?? 0 })
+    }
+    return out
+  }
+
+  private noteUnbound(userOpenid: string): void {
+    const last = this.unboundLogAt.get(userOpenid)
+    if (last !== undefined && this.now() - last < UNBOUND_C2C_LOG_EVERY_MS) return
+    this.unboundLogAt.set(userOpenid, this.now())
+    this.onLog("qqbot.c2c.unbound")
   }
 }

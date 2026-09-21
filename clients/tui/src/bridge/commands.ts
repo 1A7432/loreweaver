@@ -111,6 +111,7 @@ export interface BridgeCommandEffects {
   hasCharacter?: (seat: string) => boolean
   remintSeat?: (userId: string, displayName: string) => Promise<{ previousKey?: string; name: string }>
   onSeatReminted?: (userId: string, previousKey: string) => void
+  onLog?: (line: string) => void
 }
 
 function msg(locale: string | undefined, key: MessageKey, vars?: Record<string, string | number>): string {
@@ -216,13 +217,21 @@ async function runClaim(
   if (result.outcome === "link_issued") {
     return msg(view.locale, "bridge.qqbot.claimLinkIssued", { code: result.linkCode })
   }
-  const already = view.admins.map(String).includes(result.memberOpenid)
-  effects.addAdmin(result.memberOpenid)
-  if (!already) {
-    const display = effects.identity.displayNameFor(result.memberOpenid, { username: view.username }, view.locale)
-    const reminted = await effects.remintSeat?.(result.memberOpenid, display)
-    if (reminted?.previousKey) effects.onSeatReminted?.(result.memberOpenid, reminted.previousKey)
+  if (result.outcome === "already") {
+    return msg(view.locale, "bridge.qqbot.claimDone")
   }
+  const display = effects.identity.displayNameFor(result.memberOpenid, { username: view.username }, view.locale)
+  if (effects.remintSeat) {
+    try {
+      const reminted = await effects.remintSeat(result.memberOpenid, display)
+      if (reminted.previousKey) effects.onSeatReminted?.(result.memberOpenid, reminted.previousKey)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      effects.onLog?.(`qqbot.claim.mint_failed ${detail}`)
+      return msg(view.locale, "bridge.seatFailed")
+    }
+  }
+  effects.addAdmin(result.memberOpenid)
   return msg(view.locale, "bridge.qqbot.claimDone")
 }
 
@@ -236,13 +245,24 @@ async function runName(
   if (!identity) return msg(view.locale, "bridge.unknown")
   const seat = view.memberOpenid || view.seat
   if (!seat) return msg(view.locale, "bridge.usage.name")
-  if (effects.hasCharacter?.(seat)) return msg(view.locale, "bridge.qqbot.nameLocked")
+  if (effects.hasCharacter === undefined || effects.hasCharacter(seat)) {
+    return msg(view.locale, "bridge.qqbot.nameLocked")
+  }
   const cleaned = keyNameFromDisplay(parsed.display)
   if (!cleaned) return msg(view.locale, "bridge.usage.name")
   await identity.setChosenName(seat, cleaned)
-  const reminted = await effects.remintSeat?.(seat, cleaned)
-  if (reminted?.previousKey) effects.onSeatReminted?.(seat, reminted.previousKey)
-  return msg(view.locale, "bridge.qqbot.nameChanged", { name: reminted?.name ?? cleaned })
+  if (effects.remintSeat) {
+    try {
+      const reminted = await effects.remintSeat(seat, cleaned)
+      if (reminted.previousKey) effects.onSeatReminted?.(seat, reminted.previousKey)
+      return msg(view.locale, "bridge.qqbot.nameChanged", { name: reminted.name })
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      effects.onLog?.(`qqbot.claim.mint_failed ${detail}`)
+      return msg(view.locale, "bridge.seatFailed")
+    }
+  }
+  return msg(view.locale, "bridge.qqbot.nameChanged", { name: cleaned })
 }
 
 function formatDeferred(view: BridgeCommandView): string {

@@ -54,6 +54,7 @@ export type OutboundIntent =
   | { dest: "group"; text: string; media?: BridgeMediaRef }
   | { dest: "reply"; userId: string; text: string }
   | { dest: "private"; userId: string; text: string }
+  | { dest: "c2c_direct"; userOpenid: string; text: string }
 
 export interface BridgeLink {
   send(frame: ClientFrame): void
@@ -275,8 +276,13 @@ export class BridgeRouter {
     },
     onForward?: () => Promise<void>,
   ): Promise<boolean> {
-    this.markChannel(msg.userId, msg.channel)
     const userOpenid = msg.userOpenid ?? (msg.channel === "private" ? msg.userId : undefined)
+    if (this.options.identity && msg.channel === "private") {
+      const action = this.options.identity.acceptC2CInbound(userOpenid ?? msg.userId, msg.text)
+      if (action === "ignore") return false
+    }
+
+    this.markChannel(msg.userId, msg.channel)
     const memberOpenid =
       msg.memberOpenid ?? (msg.channel === "group" ? msg.userId : this.options.identity?.seatForC2C(userOpenid ?? ""))
     const unionOpenid = msg.unionOpenid?.trim() || undefined
@@ -285,6 +291,7 @@ export class BridgeRouter {
     if (this.options.identity && msg.channel === "group" && memberOpenid && unionOpenid) {
       unionBound = await this.options.identity.tryUnionLink({ memberOpenid, unionOpenid })
     }
+    if (unionBound) await this.promoteBoundAdmin(unionBound.memberOpenid, msg.username)
 
     const reply = (text: string) => {
       if (msg.channel === "private" || msg.isAdmin) this.emit({ dest: "private", userId: msg.userId, text })
@@ -293,9 +300,14 @@ export class BridgeRouter {
 
     if (isBridgeCommand(msg.text)) {
       const parsed = parseBridgeCommand(msg.text)
-      const isClaim = parsed?.name === "claim"
-      const isName = parsed?.name === "name" && Boolean(this.options.identity)
+      const identityOn = Boolean(this.options.identity)
+      const isClaim = parsed?.name === "claim" && identityOn
+      const isName = parsed?.name === "name" && identityOn
       if (!msg.isAdmin && !isClaim && !isName) {
+        const last = this.lastNotAdmin.get(msg.userId)
+        if (last !== undefined && this.now() - last < NOT_ADMIN_COOLDOWN_MS) return false
+        this.lastNotAdmin.set(msg.userId, this.now())
+      } else if (isClaim || isName) {
         const last = this.lastNotAdmin.get(msg.userId)
         if (last !== undefined && this.now() - last < NOT_ADMIN_COOLDOWN_MS) return false
         this.lastNotAdmin.set(msg.userId, this.now())
@@ -314,17 +326,16 @@ export class BridgeRouter {
         this.commandEffects(),
       )
       if (text) {
-        if (isClaim) {
-          if (msg.channel === "private") this.emit({ dest: "private", userId: msg.userId, text })
-          else this.emit({ dest: "reply", userId: msg.userId, text })
+        if (isClaim && msg.channel === "private") {
+          this.emit({ dest: "c2c_direct", userOpenid: userOpenid ?? msg.userId, text })
+        } else if (isClaim) {
+          this.emit({ dest: "reply", userId: msg.userId, text })
         } else {
           reply(text)
         }
       }
       return false
     }
-
-    if (unionBound) await this.promoteBoundAdmin(unionBound.memberOpenid, msg.username)
 
     const choice = this.choices.match(msg.text, this.now())
     if (choice.kind === "hit") {
@@ -440,6 +451,7 @@ export class BridgeRouter {
         return { previousKey: previousKey && previousKey !== entry.key ? previousKey : undefined, name: entry.name ?? displayName }
       },
       onSeatReminted: this.options.onSeatReminted,
+      onLog: this.options.onLog,
     }
   }
 
