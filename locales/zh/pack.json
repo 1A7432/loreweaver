@@ -30,5 +30,6 @@
   "pack.install.world_cards": "世界卡（守秘人以 `.import <文件> world` 导入）：{names}",
   "pack.ref.failed": "无法解析包引用:{error}",
   "pack.ref.github_rate_limit": "GitHub 把这次查询当成匿名请求拒了——在服务器上设置 GITHUB_TOKEN 或 GH_TOKEN（任意个人访问令牌即可，不需要任何权限范围）就能解除按地址计数的限制，然后重试。",
-  "pack.build.warning": "   提醒：{detail}"
+  "pack.build.warning": "   提醒：{detail}",
+  "pack.card.overlays": "   设定覆盖：{count} 份（对包内卡片自身条目的守秘人侧标注）· 公开给玩家的变量前缀：{exposes} 个"
 }

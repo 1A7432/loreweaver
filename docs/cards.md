@@ -171,8 +171,10 @@ is Keeper-only, and none of it rewrites the card.
 - **Change the variables directly.** `.var set <path> <value>` and `.var add <path>
   <delta>` now reach the imported card's own tree, not just Loreweaver's typed trackers:
   `.var set 配置.难度 残酷`, and the bound entries follow on the next turn. You change
-  values; creating new paths stays the Keeper's tool, so a typo gets you the nearest
-  existing paths instead of a new leaf nobody reads.
+  values; creating new paths — and restructuring them — stays the Keeper's tool, so a typo
+  gets you the nearest existing paths instead of a new leaf nobody reads, and naming a
+  BRANCH (`.var set 配置 残酷`) is refused with its children listed rather than silently
+  replacing the whole subtree with a string.
 - **Know whether it actually fits.** Every switch that turns something ON comes back
   with a budget receipt: it fits this turn, it is crowded out (and by what), or it is
   larger than a whole Keeper turn's lore budget and can never inject at all. "I chose

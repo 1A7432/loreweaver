@@ -112,6 +112,13 @@ def trust_card_lines(
                 ),
             )
         )
+    if trust.overlays:
+        # M26 §5.5. Not code, so no loud line — but `expose:` publishes module variables to
+        # PLAYER panels, which is the one thing in an overlay an operator may want to veto
+        # before installing rather than discover on the party screen afterwards.
+        lines.append(
+            i18n.t("pack.card.overlays", count=trust.overlays, exposes=trust.overlay_exposes)
+        )
     if trust.presets:
         lines.append(i18n.t("pack.card.presets", count=trust.presets))
     if trust.prep_scripts:

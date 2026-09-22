@@ -161,6 +161,60 @@ def test_install_refuses_an_archive_whose_overlay_is_missing(tmp_path: Path):
         _install(tampered, tmp_path)
 
 
+def test_the_trust_card_discloses_the_overlays_and_what_they_publish(tmp_path: Path):
+    """`expose:` moves module variables onto PLAYER panels — the one thing in an overlay an
+    operator may want to veto before installing rather than find on the party screen."""
+    from infra.i18n import get_i18n
+
+    from gateway.pack_install import trust_card_lines
+
+    src = _source(tmp_path, cards_yaml=_WITH_OVERLAY)
+    built = build_pack(src, tmp_path / "overlay.lwpack")
+
+    assert built.manifest.trust is not None
+    assert (built.manifest.trust.overlays, built.manifest.trust.overlay_exposes) == (1, 1)
+    card = "\n".join(trust_card_lines(get_i18n("en"), built.manifest, "en"))
+    assert "lore overlays: 1" in card
+    assert "variable prefixes published to players: 1" in card
+
+    # A pack with no overlay says nothing about them at all.
+    plain_src = _source(tmp_path / "plain", cards_yaml="    - cards/world.json\n")
+    plain = build_pack(plain_src, tmp_path / "plain.lwpack")
+    assert plain.manifest.trust is not None and plain.manifest.trust.overlays == 0
+    assert "lore overlays" not in "\n".join(trust_card_lines(get_i18n("en"), plain.manifest, "en"))
+
+
+def test_install_rejects_a_trust_block_that_hides_what_an_overlay_publishes(tmp_path: Path):
+    """The trust block is re-derived from the real archive at install, like every other row."""
+    import yaml
+
+    src = _source(tmp_path, cards_yaml=_WITH_OVERLAY)
+    built = build_pack(src, tmp_path / "overlay.lwpack")
+    tampered = tmp_path / "liar.lwpack"
+    with zipfile.ZipFile(built.path) as source, zipfile.ZipFile(tampered, "w") as sink:
+        for name in source.namelist():
+            data = source.read(name)
+            if name == MANIFEST_NAME:
+                manifest = yaml.safe_load(data.decode("utf-8"))
+                manifest["trust"]["overlay_exposes"] = 0
+                data = yaml.safe_dump(manifest, sort_keys=True, allow_unicode=True).encode("utf-8")
+            sink.writestr(name, data)
+
+    with pytest.raises(PackError, match="trust block does not match"):
+        _install(tampered, tmp_path)
+
+
+def test_a_pack_overlay_may_not_ask_to_expose_the_whole_tree(tmp_path: Path):
+    src = _source(
+        tmp_path,
+        cards_yaml=_WITH_OVERLAY,
+        overlay="format: loreweaver.lore-overlay/1\nexpose: ['*']\n",
+    )
+
+    with pytest.raises(PackError, match="expose"):
+        build_pack(src, tmp_path / "greedy.lwpack")
+
+
 def test_installed_pack_card_overlay_finds_it_only_inside_the_pack_home(tmp_path: Path):
     src = _source(tmp_path, cards_yaml=_WITH_OVERLAY + "    - cards/keeper.json\n")
     built = build_pack(src, tmp_path / "overlay.lwpack")

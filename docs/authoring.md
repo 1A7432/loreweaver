@@ -650,7 +650,11 @@ contents:
   escape hatch here, by design.
 - `setup` declares the choices the table owes the module, against the card's own
   variable-tree paths. `expose` hands those prefixes to `.var expose`, so the players'
-  panel shows the choice they made.
+  panel shows the choice they made — name them **explicitly**: `expose: ['*']` is refused
+  at build, because "publish the whole tree" is a judgement about one table's spoilers and
+  only the keeper sitting at it (`.var expose *`) may make it. Both numbers — how many
+  overlays a pack ships and how many prefixes they publish — are on the trust card the
+  operator sees before installing.
 - The build validates all of it with the real parser. A structural problem — unknown
   `format`, an expression the grammar refuses or over the length cap, more than 20
   options or 200 entries — **fails the build**. A title the card no longer carries is a

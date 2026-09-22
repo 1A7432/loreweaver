@@ -30,5 +30,6 @@
   "pack.install.world_cards": "World cards (keeper-imported via `.import <file> world`): {names}",
   "pack.ref.failed": "Could not resolve the pack ref: {error}",
   "pack.ref.github_rate_limit": "GitHub refused the lookup as an anonymous one — set GITHUB_TOKEN or GH_TOKEN on the SERVER (any personal access token, no scopes needed) to lift the per-address limit, then try again.",
-  "pack.build.warning": "   warning: {detail}"
+  "pack.build.warning": "   warning: {detail}",
+  "pack.card.overlays": "   lore overlays: {count} (keeper-side annotations of a bundled card's own entries) · variable prefixes published to players: {exposes}"
 }

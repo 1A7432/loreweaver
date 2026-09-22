@@ -27,6 +27,16 @@
   receipt, because "chose = did nothing" is the failure mode this replaces, and it would
   otherwise come back in a new form: the 12-slot cut runs before the character cap, so a
   switched-on entry can be dropped in silence.
+- **Two trust lines the review pass added (2026-09-22).** (a) A pack's `expose:` may name
+  explicit prefixes only — `*` is refused at parse time, because "publish the whole
+  variable tree to the players" is a judgement about one table's spoilers and only the
+  keeper sitting at it (`.var expose *`) may make it; how many prefixes a pack's overlays
+  publish is disclosed on the trust card BEFORE install, not discovered on the party
+  screen after. (b) The admin write path refuses a CONTAINER: "the path exists" is not
+  "the path is a value", and `.var set 配置 残酷` replaced a whole subtree with a string
+  and then reported the deleted dict as the old value. The model's own `_.set` may still
+  restructure the tree — that shape is the module's business — but a human typing a value
+  is changing a value.
 - **Rule home:** `core/lore_overlay.py`'s module docstring (the concept, the single
   effective-state function, the no-inference line) and AGENTS.md iron rule 3's card-split
   paragraph (the overlay is keeper-only and never rides a player import).

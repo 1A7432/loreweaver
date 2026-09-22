@@ -212,6 +212,11 @@ class PackTrust:
     # like everything else a pack brings, and deliberately counted apart from the code
     # rows above — an overlay is closed-grammar data that cannot run.
     overlays: int = 0
+    # How many variable prefixes those overlays PUBLISH to player panels (`expose:`). A
+    # separate number because it is a separate decision: the rest of an overlay only moves
+    # keeper-side lore around, while this one moves module state onto the players' screens
+    # — the one thing in the file an operator may want to veto before installing.
+    overlay_exposes: int = 0
 
 
 @dataclass(frozen=True)
@@ -525,6 +530,7 @@ def parse_manifest_text(text: str, *, expect_trust: bool) -> PackManifest:
                 presets=int(trust_raw.get("presets", 0)),
                 prep_scripts=int(trust_raw.get("prep_scripts", 0)),
                 overlays=int(trust_raw.get("overlays", 0)),
+                overlay_exposes=int(trust_raw.get("overlay_exposes", 0)),
             )
         except (TypeError, ValueError) as exc:
             raise PackError(f"invalid trust block: {exc}") from exc
@@ -1036,6 +1042,7 @@ def _manifest_to_yaml(manifest: PackManifest) -> str:
             "presets": manifest.trust.presets,
             "prep_scripts": manifest.trust.prep_scripts,
             "overlays": manifest.trust.overlays,
+            "overlay_exposes": manifest.trust.overlay_exposes,
         },
     }
     return yaml.safe_dump(data, sort_keys=True, allow_unicode=True, default_flow_style=False)
@@ -1100,6 +1107,7 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
 
     detected_cards: list[PackCard] = []
     warnings: list[str] = []
+    overlay_exposes = 0
     for card in manifest.card_entries:
         card_bytes = _source_file(source_dir, card.path).read_bytes()
         card_ejs, payloads = _validate_card_bytes(card.path, card_bytes)
@@ -1114,6 +1122,7 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
             # The overlay ships WITH the card (it is useless apart from it) and is checked
             # against that card's real entry titles — the one thing only the build knows.
             overlay = _validate_card_overlay(read_text, card)
+            overlay_exposes += len(overlay.expose)
             warnings.extend(
                 f"{card.overlay}: {reason}"
                 for reason in validate_overlay(overlay, _card_entry_titles(card.path, card_bytes))
@@ -1204,6 +1213,7 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
         presets=len(preset_ids),
         prep_scripts=len(manifest.contents["prep"]),
         overlays=sum(1 for card in manifest.card_entries if card.overlay),
+        overlay_exposes=overlay_exposes,
     )
     # The complete member inventory (manifest v2): every archive file except the
     # manifest itself, with its integrity record. Install verifies set-equality.
@@ -1365,6 +1375,7 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
 
     has_hooks = False
     has_ejs = False
+    verify_overlay_exposes = 0
     for skill_dir in manifest.contents["skills"]:
         prefix = f"{skill_dir}/"
         files = {name[len(prefix):] for name in names if name.startswith(prefix) and "/" not in name[len(prefix):]}
@@ -1400,7 +1411,7 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
         if card.overlay:
             if card.overlay not in names:
                 raise PackError(f"declared card overlay missing from archive: {card.overlay!r}")
-            _validate_card_overlay(read_text, card)
+            verify_overlay_exposes += len(_validate_card_overlay(read_text, card).expose)
     for lorebook_path in manifest.contents["lorebooks"]:
         if lorebook_path not in names:
             raise PackError(f"declared lorebook missing from archive: {lorebook_path!r}")
@@ -1450,6 +1461,7 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
         presets=len(verify_preset_ids),
         prep_scripts=len(manifest.contents["prep"]),
         overlays=sum(1 for card in manifest.card_entries if card.overlay),
+        overlay_exposes=verify_overlay_exposes,
     )
     if manifest.trust != computed:
         stored = manifest.trust
@@ -1459,6 +1471,7 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
                 "skills", "rulepacks", "cards", "lorebooks", "assets",
                 "asset_bytes", "has_hooks", "has_ejs", "has_rules_script", "world_cards", "panels",
                 "presentation", "imagegen", "presets", "prep_scripts", "overlays",
+                "overlay_exposes",
             )
             if stored is None or getattr(stored, name) != getattr(computed, name)
         ]
