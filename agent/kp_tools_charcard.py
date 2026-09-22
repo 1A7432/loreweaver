@@ -22,6 +22,7 @@ fields (name/description/tags) are game DATA supplied at runtime, not string lit
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from agent import npc as npc_records
 from agent.char_from_persona import build_sheet_from_persona, infer_pronoun_note
@@ -35,6 +36,7 @@ from core.character_manager import CharacterSheet
 from core.character_rules import render_validation_notice, validate_sheet
 from core.charcard import PNG_SIGNATURE, CharacterCard, parse_card_bytes
 from core.documents import MODULE_POOL_ID, PLAYER_VIEWER
+from core.lore_overlay import SetupItem
 from core.lorecard import Lorecard, looks_like_lorecard, parse_lorecard_bytes
 from core.module_brief import BRIEF_DOC_TYPE, DIRECTIVE_FIELDS, brief_id, build_brief
 from core.modvars import define_modvar
@@ -118,6 +120,14 @@ async def _register_png_avatar(services: Services, ctx: AgentCtx, host_path: Pat
     except Exception:
         return
     sheet.avatar = record.ref()
+
+
+def _book_entries(character_book: Any) -> list[dict[str, Any]]:
+    """The raw entry dicts of a card's `character_book`, whatever shape it arrived in."""
+    entries = character_book.get("entries") if isinstance(character_book, dict) else character_book
+    if isinstance(entries, dict):
+        entries = list(entries.values())
+    return [raw for raw in entries if isinstance(raw, dict)] if isinstance(entries, list) else []
 
 
 def _stripped_notice(i18n: I18n, world: WorldPayloads) -> str:
@@ -405,6 +415,7 @@ class CharcardTools:
             # `is_keeper=True`). The ORIGINAL entries are imported, not the stripped half —
             # render-time EJS in world lore is exactly what this path exists to carry.
             skipped_titles: list[str] = []
+            unreachable_titles: list[str] = []
             lore = await self._services.worldbook.import_entries(
                 ctx.chat_key,
                 card.character_book,
@@ -412,6 +423,7 @@ class CharcardTools:
                 is_keeper=True,
                 char_name=card.name,
                 skipped_titles=skipped_titles,
+                unreachable_titles=unreachable_titles,
             )
             hooks = card_hook_codes(card)
             if hooks:
@@ -460,10 +472,30 @@ class CharcardTools:
             # flavor of what an ST card can only ship as an [InitVar] tree. Keeper trust:
             # they land as real `core.modvars` trackers (validated/clamped from here on).
             specs_line = ""
+            setup_items: list[SetupItem] = []
             if lorecard is not None and lorecard.variable_specs:
                 for spec in lorecard.variable_specs:
                     await define_modvar(self._services.documents, ctx.chat_key, dict(spec))
+                    # M26 §5.3: a `setup: true` spec is a choice the table owes the module.
+                    if spec.get("setup"):
+                        setup_items.append(
+                            SetupItem(
+                                path=str(spec["id"]),
+                                options=tuple(str(option) for option in spec.get("options", ())),
+                                labels=dict(spec.get("labels") or {}),
+                            )
+                        )
                 specs_line = i18n.t("charcard.tools.world.specs_line", count=len(lorecard.variable_specs))
+
+            # M26: the keeper-side annotations of THIS card, if the pack that ships it
+            # declared any, plus whatever setup choices the card itself declared. Both land
+            # in the room's overlay document — the stored lore is never rewritten, and a
+            # re-import of a revised card keeps every switch (same promise the variable tree
+            # already makes). Only the pack path is consulted: a card imported from an
+            # attachment or a raw host path has no pack, so it gets no overlay.
+            overlay_line, setup_line = await self._apply_world_overlay(
+                ctx, i18n, host_path, card.character_book, setup_items
+            )
 
             # Only a card with an actual PERSONA half self-registers as a claimable PC.
             # A pure world/module card (no personality; for native bundles `opening` is
@@ -534,6 +566,15 @@ class CharcardTools:
                     count=len(skipped_titles),
                     titles=i18n.t("common.list_separator").join(skipped_titles[:5]),
                 )
+            # M26 §5.6: how many entries landed disabled with no keywords — nothing in the
+            # engine's activation model can ever fire one, because in SillyTavern the card's
+            # own frontend scripts toggle them. A COUNT and a hint at the commands that turn
+            # them on; it never groups them and never suggests which to pick.
+            unreachable_line = ""
+            if unreachable_titles:
+                unreachable_line = i18n.t(
+                    "charcard.tools.world.unreachable_line", count=len(unreachable_titles)
+                )
             extra_lines = [
                 line
                 for line in (
@@ -544,6 +585,9 @@ class CharcardTools:
                     pregen_line,
                     cast_line,
                     skipped_line,
+                    unreachable_line,
+                    overlay_line,
+                    setup_line,
                 )
                 if line
             ]
@@ -608,6 +652,73 @@ class CharcardTools:
             if text:
                 lines.append(f"{i18n.t('charcard.tools.brief.label.alt_opening', index=index)}:\n{text}")
         return "\n\n".join(lines)
+
+    async def _apply_world_overlay(
+        self,
+        ctx: AgentCtx,
+        i18n: I18n,
+        host_path: Path,
+        character_book: Any,
+        setup_items: list[SetupItem],
+    ) -> tuple[str, str]:
+        """Land the pack's overlay (if any) plus the card's own setup choices (M26 §5.5).
+
+        Returns the two receipt lines. Best-effort by construction: an overlay that cannot
+        be read must never fail a world import that has already landed its lore — the
+        module still runs on the author's defaults, which is exactly the state this whole
+        layer exists to let a human change afterwards."""
+        from core.lore_overlay import (
+            EMPTY_OVERLAY,
+            Overlay,
+            OverlayError,
+            load_overlay,
+            merge_overlay_file,
+            parse_overlay_file,
+            save_overlay,
+            set_setup_items,
+        )
+        from core.pack import installed_pack_card_overlay
+
+        documents = self._services.documents
+        overlay_line = ""
+        parsed = EMPTY_OVERLAY
+        try:
+            overlay_path = installed_pack_card_overlay(self._services.settings.data_dir, host_path)
+            if overlay_path is not None:
+                parsed = parse_overlay_file(overlay_path.read_bytes(), label=overlay_path.name)
+        except (OverlayError, OSError):
+            parsed = EMPTY_OVERLAY
+        if parsed.is_empty and not parsed.expose and not setup_items:
+            return "", ""
+        known_titles = {
+            str(raw.get("title") or raw.get("comment") or raw.get("name") or "").strip()
+            for raw in _book_entries(character_book)
+        }
+        current = await load_overlay(documents, ctx.chat_key)
+        merged, report = await merge_overlay_file(
+            documents, ctx.chat_key, parsed, current=current, known_titles=known_titles
+        )
+        if setup_items:
+            merged = set_setup_items(merged, setup_items)
+        await save_overlay(documents, ctx.chat_key, merged)
+        if not isinstance(merged, Overlay):  # pragma: no cover - defensive, shape is fixed
+            return "", ""
+        if report["entries"] or report["exposed"] or report["unknown"]:
+            overlay_line = i18n.t(
+                "charcard.tools.world.overlay_line",
+                entries=report["entries"],
+                exposed=report["exposed"],
+                unknown=report["unknown"],
+            )
+        pending = merged.pending()
+        setup_line = ""
+        if pending:
+            setup_line = i18n.t(
+                "charcard.tools.world.setup_line",
+                count=len(pending),
+                items=i18n.t("common.list_separator").join(item.label_for(ctx.locale) for item in pending),
+            )
+        return overlay_line, setup_line
 
     async def _build_pregen_sheet(
         self, ctx: AgentCtx, character: CharacterCard, system: str, host_path: Path

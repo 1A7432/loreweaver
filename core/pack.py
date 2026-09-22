@@ -42,6 +42,7 @@ import yaml
 from core.card_split import WorldPayloads, detect_world_payloads
 from core.charcard import MAX_CARD_FILE_BYTES, parse_card_bytes
 from core.hooks import MAX_HOOK_SOURCE_CHARS, UI_IMAGE_MIMES
+from core.lore_overlay import Overlay, OverlayError, parse_overlay_file, validate_overlay
 from core.lorecard import looks_like_lorecard, parse_lorecard_bytes
 from core.panels import (
     CODE_MIMES,
@@ -167,6 +168,13 @@ class PackCard:
     path: str
     kind: str = "character"
     notes: dict[str, str] = field(default_factory=dict)
+    #: M26 §5.5 — an optional sibling overlay FILE of keeper-side annotations for this
+    #: card: which of its file-disabled entries this pack means to switch on, and under
+    #: which variable condition. ANNOTATION, never machinery: it is closed-grammar data,
+    #: it cannot make a `character` card a `world` card, and a player import never reads
+    #: it (it is not in the card at all). Native lorecards need none — their authors write
+    #: `enabled`/`condition`/`setup` directly.
+    overlay: str = ""
 
 
 @dataclass(frozen=True)
@@ -199,6 +207,11 @@ class PackTrust:
     # like hooks — but they NEVER auto-run: a keeper invokes one by reference through
     # `run_prep_plan`, which previews the whole plan before anything applies.
     prep_scripts: int = 0
+    # M26 §5.5 lore overlays: keeper-side ANNOTATIONS of a bundled card's own entries
+    # (which switches this pack means to flip, under which variable condition). Disclosed
+    # like everything else a pack brings, and deliberately counted apart from the code
+    # rows above — an overlay is closed-grammar data that cannot run.
+    overlays: int = 0
 
 
 @dataclass(frozen=True)
@@ -235,6 +248,9 @@ class BuiltPack:
     path: Path
     sha256: str
     manifest: PackManifest
+    #: Author-actionable notes the build did NOT fail on (M26 §5.5: an overlay naming an
+    #: entry title the card no longer carries). Printed by `python -m app --pack`.
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass
@@ -320,7 +336,7 @@ def _parse_card_entry(raw: Any, *, built: bool) -> PackCard:
         return PackCard(path=_relative_content_path(raw, kind="cards"))
     if not isinstance(raw, dict):
         raise PackError("contents.cards entries must be path strings or {path, notes} mappings")
-    allowed = {"path", "kind", "notes"} if built else {"path", "notes"}
+    allowed = {"path", "kind", "notes", "overlay"} if built else {"path", "notes", "overlay"}
     unknown = set(raw) - allowed
     if unknown:
         if "kind" in unknown:
@@ -333,7 +349,8 @@ def _parse_card_entry(raw: Any, *, built: bool) -> PackCard:
     if kind not in CARD_KINDS:
         raise PackError(f"card {path}: kind must be one of {list(CARD_KINDS)}")
     notes = _localized_field(raw["notes"], f"cards[{path}].notes") if raw.get("notes") is not None else {}
-    return PackCard(path=path, kind=str(kind), notes=notes)
+    overlay = _relative_content_path(raw["overlay"], kind="cards") if raw.get("overlay") is not None else ""
+    return PackCard(path=path, kind=str(kind), notes=notes, overlay=overlay)
 
 
 def parse_manifest_text(text: str, *, expect_trust: bool) -> PackManifest:
@@ -507,6 +524,7 @@ def parse_manifest_text(text: str, *, expect_trust: bool) -> PackManifest:
                 imagegen=bool(trust_raw.get("imagegen", False)),
                 presets=int(trust_raw.get("presets", 0)),
                 prep_scripts=int(trust_raw.get("prep_scripts", 0)),
+                overlays=int(trust_raw.get("overlays", 0)),
             )
         except (TypeError, ValueError) as exc:
             raise PackError(f"invalid trust block: {exc}") from exc
@@ -694,6 +712,46 @@ def _validate_card_bytes(path: str, data: bytes) -> tuple[bool, WorldPayloads]:
     except ValueError as exc:
         raise PackError(f"card {path}: {exc}") from exc
     return _detect_ejs(data.decode("utf-8", errors="ignore")), detect_world_payloads(card)
+
+
+def _card_entry_titles(path: str, data: bytes) -> set[str]:
+    """Every lorebook entry title a bundled card carries — the overlay cross-check's oracle.
+
+    Best-effort: a card the parsers refuse has already failed `_validate_card_bytes`, so an
+    empty set here only ever means "nothing to cross-check against"."""
+    try:
+        if looks_like_lorecard(data):
+            card = parse_lorecard_bytes(data, filename=PurePosixPath(path).name).card
+        else:
+            card = parse_card_bytes(data, filename=PurePosixPath(path).name)
+    except ValueError:
+        return set()
+    book = card.character_book
+    entries = book.get("entries") if isinstance(book, dict) else book
+    if isinstance(entries, dict):
+        entries = list(entries.values())
+    if not isinstance(entries, list):
+        return set()
+    titles = {
+        str(raw.get("title") or raw.get("comment") or raw.get("name") or "").strip()
+        for raw in entries
+        if isinstance(raw, dict)
+    }
+    return titles - {""}
+
+
+def _validate_card_overlay(read_text: Callable[[str], str], card: PackCard) -> Overlay:
+    """Parse a bundled card's overlay file with the real engine parser (build AND verify).
+
+    Structural problems — an unknown `format`, an expression outside the closed grammar or
+    over `MAX_EXPR_LEN`, too many options or entries — FAIL the build: an overlay that only
+    half-loads leaves the module half-alive in a way nothing reports. A title the card no
+    longer carries is a WARNING instead, because cards get revised and refusing the build
+    for that would make shipping an overlay a liability."""
+    try:
+        return parse_overlay_file(read_text(card.overlay), label=card.overlay)
+    except OverlayError as exc:
+        raise PackError(f"card {card.path}: {exc}") from exc
 
 
 def _detected_card_kind(payloads: WorldPayloads) -> str:
@@ -923,6 +981,8 @@ def _card_entry_to_yaml(card: PackCard) -> Any:
     entry: dict[str, Any] = {"path": card.path, "kind": card.kind}
     if card.notes:
         entry["notes"] = dict(card.notes)
+    if card.overlay:
+        entry["overlay"] = card.overlay
     return entry
 
 
@@ -975,6 +1035,7 @@ def _manifest_to_yaml(manifest: PackManifest) -> str:
             "imagegen": manifest.trust.imagegen,
             "presets": manifest.trust.presets,
             "prep_scripts": manifest.trust.prep_scripts,
+            "overlays": manifest.trust.overlays,
         },
     }
     return yaml.safe_dump(data, sort_keys=True, allow_unicode=True, default_flow_style=False)
@@ -1038,8 +1099,10 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
         archive_files.extend(script_paths)
 
     detected_cards: list[PackCard] = []
+    warnings: list[str] = []
     for card in manifest.card_entries:
-        card_ejs, payloads = _validate_card_bytes(card.path, _source_file(source_dir, card.path).read_bytes())
+        card_bytes = _source_file(source_dir, card.path).read_bytes()
+        card_ejs, payloads = _validate_card_bytes(card.path, card_bytes)
         detected_cards.append(replace(card, kind=_detected_card_kind(payloads)))
         has_ejs = has_ejs or card_ejs
         # A world card's `extensions.loreweaver_hooks` is code the keeper's `.import … world`
@@ -1047,6 +1110,15 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
         # let a pack ship handlers behind a `has_hooks: false` trust card.
         has_hooks = has_hooks or payloads.hooks > 0
         archive_files.append(card.path)
+        if card.overlay:
+            # The overlay ships WITH the card (it is useless apart from it) and is checked
+            # against that card's real entry titles — the one thing only the build knows.
+            overlay = _validate_card_overlay(read_text, card)
+            warnings.extend(
+                f"{card.overlay}: {reason}"
+                for reason in validate_overlay(overlay, _card_entry_titles(card.path, card_bytes))
+            )
+            archive_files.append(card.overlay)
 
     for lorebook_path in manifest.contents["lorebooks"]:
         lore_ejs = _validate_lorebook_bytes(lorebook_path, _source_file(source_dir, lorebook_path).read_bytes())
@@ -1131,6 +1203,7 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
         imagegen=any(kit.generates and any(subject.ref for subject in kit.subjects) for kit in pack_kits),
         presets=len(preset_ids),
         prep_scripts=len(manifest.contents["prep"]),
+        overlays=sum(1 for card in manifest.card_entries if card.overlay),
     )
     # The complete member inventory (manifest v2): every archive file except the
     # manifest itself, with its integrity record. Install verifies set-equality.
@@ -1174,7 +1247,12 @@ def build_pack(source_dir: Path, out_path: Path | None = None) -> BuiltPack:
         for name in sorted(archive_files):
             archive.writestr(_zip_info(name), _source_file(source_dir, name).read_bytes())
 
-    return BuiltPack(path=out_path, sha256=_file_sha256(out_path), manifest=built_manifest)
+    return BuiltPack(
+        path=out_path,
+        sha256=_file_sha256(out_path),
+        manifest=built_manifest,
+        warnings=tuple(warnings),
+    )
 
 
 def _file_sha256(path: Path) -> str:
@@ -1315,6 +1393,14 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
         _enforce_card_kind(card_path, manifest.card_kind(card_path), payloads)
         has_ejs = has_ejs or card_ejs
         has_hooks = has_hooks or payloads.hooks > 0
+    for card in manifest.card_entries:
+        # M26: an overlay a manifest declares must BE in the archive and must still parse —
+        # the same posture every other declared file gets, so a tampered pack cannot point a
+        # card at annotations nobody can read.
+        if card.overlay:
+            if card.overlay not in names:
+                raise PackError(f"declared card overlay missing from archive: {card.overlay!r}")
+            _validate_card_overlay(read_text, card)
     for lorebook_path in manifest.contents["lorebooks"]:
         if lorebook_path not in names:
             raise PackError(f"declared lorebook missing from archive: {lorebook_path!r}")
@@ -1363,6 +1449,7 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
         imagegen=any(kit.generates and any(subject.ref for subject in kit.subjects) for kit in verify_kits),
         presets=len(verify_preset_ids),
         prep_scripts=len(manifest.contents["prep"]),
+        overlays=sum(1 for card in manifest.card_entries if card.overlay),
     )
     if manifest.trust != computed:
         stored = manifest.trust
@@ -1371,7 +1458,7 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
             for name in (
                 "skills", "rulepacks", "cards", "lorebooks", "assets",
                 "asset_bytes", "has_hooks", "has_ejs", "has_rules_script", "world_cards", "panels",
-                "presentation", "imagegen", "presets", "prep_scripts",
+                "presentation", "imagegen", "presets", "prep_scripts", "overlays",
             )
             if stored is None or getattr(stored, name) != getattr(computed, name)
         ]
@@ -1476,6 +1563,12 @@ def install_pack(
                     getattr(report, kind).append(name)
                     if kind == "cards" and manifest.card_kind(name) == "world":
                         report.world_cards.append(name)
+            # A card's overlay lands beside it (M26 §5.5). It belongs to no contents kind
+            # of its own — it is an annotation OF that card and is useless apart from it —
+            # so it rides the card loop's home rather than a discovery dir.
+            for card in manifest.card_entries:
+                if card.overlay:
+                    _extract_entry(archive, card.overlay, _confined_target(staging, card.overlay))
             for asset in manifest.assets:
                 report.asset_bytes += _extract_entry(archive, asset.path, _confined_target(staging, asset.path))
                 report.assets += 1
@@ -1683,6 +1776,47 @@ def installed_pack_character_system(data_dir: Path | str, path: Path | str) -> s
         creators = [pack for pack in packs if own_make_char_word(pack) is not None]
         if len(creators) == 1:
             return str(creators[0].system)
+        return None
+    except Exception:
+        return None
+
+
+def installed_pack_card_overlay(data_dir: Path | str, path: Path | str) -> Path | None:
+    """The overlay file a pack declares beside the card at `path`, or None (M26 §5.5).
+
+    Mirrors :func:`installed_pack_character_system`: the card must sit inside a pack home —
+    an installed ``data_dir/packs/<id>@<ver>/`` or a `.dev mount` source tree — and the
+    manifest there must name an `overlay:` for exactly that card. A card imported from an
+    attachment or an arbitrary host path therefore gets no overlay, which is the honest
+    answer: the annotations belong to the pack that adopted the card, not to the file.
+
+    Never raises — a missing or unreadable manifest is simply "no overlay"."""
+    try:
+        pack_home = pack_home_of(data_dir, path)
+        if pack_home is None:
+            return None
+        manifest_path = pack_home / MANIFEST_NAME
+        if not manifest_path.is_file() or manifest_path.stat().st_size > MAX_MANIFEST_BYTES:
+            return None
+        # One field, read leniently: the manifest was fully validated at install time, and
+        # `parse_manifest_text`'s two modes disagree about `trust` presence.
+        raw = safe_load_no_aliases(manifest_path.read_text(encoding="utf-8"))
+        contents = raw.get("contents") if isinstance(raw, dict) else None
+        cards = contents.get("cards") if isinstance(contents, dict) else None
+        if not isinstance(cards, list):
+            return None
+        wanted = Path(path).resolve()
+        for entry in cards:
+            if not isinstance(entry, dict):
+                continue
+            declared = entry.get("path")
+            overlay = entry.get("overlay")
+            if not isinstance(declared, str) or not isinstance(overlay, str) or not overlay:
+                continue
+            if (pack_home / PurePosixPath(declared)).resolve() != wanted:
+                continue
+            candidate = _confined_target(pack_home, PurePosixPath(overlay))
+            return candidate if candidate.is_file() else None
         return None
     except Exception:
         return None

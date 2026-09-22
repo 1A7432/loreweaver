@@ -48,5 +48,8 @@
   "charcard.tools.brief.label.directives_head": "Author directives (head of the prompt)",
   "charcard.tools.brief.label.directives_post": "Author directives (after the history)",
   "charcard.tools.world.specs_line": "Typed variables: {count} tracker(s) defined from the native bundle.",
-  "charcard.tools.world.system_pinned": "Room system pinned to {system} — the module's pack ships it, so the cast and new characters are built on it (name a system on import to override)."
+  "charcard.tools.world.system_pinned": "Room system pinned to {system} — the module's pack ships it, so the cast and new characters are built on it (name a system on import to override).",
+  "charcard.tools.world.unreachable_line": "{count} entr(ies) imported disabled with no keywords — in SillyTavern the card's own scripts toggle those. Here you do: .lore list disabled, then .lore enable <title> or .lore bind <title> <condition>.",
+  "charcard.tools.world.overlay_line": "Pack overlay applied: {entries} entry override(s), {exposed} variable prefix(es) exposed, {unknown} title(s) this card no longer has.",
+  "charcard.tools.world.setup_line": "Setup still open ({count}): {items} — set each with .var set <name> <value>."
 }

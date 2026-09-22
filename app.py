@@ -467,10 +467,15 @@ def _run_pack(i18n: I18n, args: argparse.Namespace) -> int:
                     "version": built.manifest.version,
                     "sha256": built.sha256,
                     "trust": trust,
+                    "warnings": list(built.warnings),
                 },
                 ensure_ascii=False,
             )
         )
+    for warning in built.warnings:
+        # Author-actionable, but not a build failure (M26 §5.5): an overlay naming an entry
+        # title the card no longer carries usually means the card was revised.
+        print(i18n.t("pack.build.warning", detail=warning), file=sys.stderr)
     print(
         i18n.t(
             "pack.build.done",
