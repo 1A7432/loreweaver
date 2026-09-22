@@ -55,8 +55,14 @@ def card_book(*, heavy_chars: int = 5_000, route_chars: int = 1_500) -> dict[str
     """The whole synthetic `character_book`, in the raw shape an import path receives."""
     entries: list[dict[str, Any]] = [
         {
+            # The marker lives in the NAME, and only there. `_consume_initvar` strips
+            # leading `@@decorators` from the content and then parses what is left as
+            # JSON5/YAML — a repeated `[InitVar]` line inside the content is not a
+            # decorator, so it makes the whole block unparseable and the tree silently
+            # stays empty. Every real card (and every other fixture here) puts it in the
+            # entry name; a fixture that did otherwise quietly tested nothing.
             "comment": INITVAR_TITLE,
-            "content": "[InitVar]\n{\n  \"配置\": {\n    \"难度\": \"标准\",\n    \"路线\": \"主线\"\n  }\n}",
+            "content": "{\n  \"配置\": {\n    \"难度\": \"标准\",\n    \"路线\": \"主线\"\n  }\n}",
             "keys": [],
             "enabled": True,
         },

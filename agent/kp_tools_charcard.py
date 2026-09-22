@@ -22,7 +22,6 @@ fields (name/description/tags) are game DATA supplied at runtime, not string lit
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from agent import npc as npc_records
 from agent.char_from_persona import build_sheet_from_persona, infer_pronoun_note
@@ -120,14 +119,6 @@ async def _register_png_avatar(services: Services, ctx: AgentCtx, host_path: Pat
     except Exception:
         return
     sheet.avatar = record.ref()
-
-
-def _book_entries(character_book: Any) -> list[dict[str, Any]]:
-    """The raw entry dicts of a card's `character_book`, whatever shape it arrived in."""
-    entries = character_book.get("entries") if isinstance(character_book, dict) else character_book
-    if isinstance(entries, dict):
-        entries = list(entries.values())
-    return [raw for raw in entries if isinstance(raw, dict)] if isinstance(entries, list) else []
 
 
 def _stripped_notice(i18n: I18n, world: WorldPayloads) -> str:
@@ -493,9 +484,7 @@ class CharcardTools:
             # re-import of a revised card keeps every switch (same promise the variable tree
             # already makes). Only the pack path is consulted: a card imported from an
             # attachment or a raw host path has no pack, so it gets no overlay.
-            overlay_line, setup_line = await self._apply_world_overlay(
-                ctx, i18n, host_path, card.character_book, setup_items
-            )
+            overlay_lines = await self._apply_world_overlay(ctx, i18n, host_path, setup_items)
 
             # Only a card with an actual PERSONA half self-registers as a claimable PC.
             # A pure world/module card (no personality; for native bundles `opening` is
@@ -586,8 +575,7 @@ class CharcardTools:
                     cast_line,
                     skipped_line,
                     unreachable_line,
-                    overlay_line,
-                    setup_line,
+                    *overlay_lines,
                 )
                 if line
             ]
@@ -658,29 +646,35 @@ class CharcardTools:
         ctx: AgentCtx,
         i18n: I18n,
         host_path: Path,
-        character_book: Any,
         setup_items: list[SetupItem],
-    ) -> tuple[str, str]:
+    ) -> list[str]:
         """Land the pack's overlay (if any) plus the card's own setup choices (M26 §5.5).
 
-        Returns the two receipt lines. Best-effort by construction: an overlay that cannot
-        be read must never fail a world import that has already landed its lore — the
-        module still runs on the author's defaults, which is exactly the state this whole
-        layer exists to let a human change afterwards."""
+        Returns the receipt lines. Best-effort by construction: an overlay that cannot be
+        read must never fail a world import that has already landed its lore — the module
+        still runs on the author's defaults, which is exactly the state this whole layer
+        exists to let a human change afterwards.
+
+        The RE-IMPORT report (§5.1) is independent of all that: whenever the room already
+        carries an overlay, the receipt says how many of its titles the new lore still has
+        and how many it no longer does. That is the promise "a re-import keeps your
+        switches" being checked out loud, and it is owed to a keeper importing a bare
+        attachment exactly as much as to one importing from a pack."""
         from core.lore_overlay import (
             EMPTY_OVERLAY,
-            Overlay,
             OverlayError,
             load_overlay,
             merge_overlay_file,
             parse_overlay_file,
+            room_entry_titles,
             save_overlay,
             set_setup_items,
+            stale_titles,
         )
         from core.pack import installed_pack_card_overlay
 
         documents = self._services.documents
-        overlay_line = ""
+        separator = i18n.t("common.list_separator")
         parsed = EMPTY_OVERLAY
         try:
             overlay_path = installed_pack_card_overlay(self._services.settings.data_dir, host_path)
@@ -688,37 +682,61 @@ class CharcardTools:
                 parsed = parse_overlay_file(overlay_path.read_bytes(), label=overlay_path.name)
         except (OverlayError, OSError):
             parsed = EMPTY_OVERLAY
-        if parsed.is_empty and not parsed.expose and not setup_items:
-            return "", ""
-        known_titles = {
-            str(raw.get("title") or raw.get("comment") or raw.get("name") or "").strip()
-            for raw in _book_entries(character_book)
-        }
+
         current = await load_overlay(documents, ctx.chat_key)
+        if parsed.is_empty and not parsed.expose and not setup_items and current.is_empty:
+            return []
+
+        # ONE oracle for "is this title real": the room's stored entries. The card's RAW
+        # list still holds what the import consumed as data and what it skipped as
+        # oversized, so asking it would call a title "known" that the room does not have.
+        known_titles = await room_entry_titles(self._services.worldbook, ctx.chat_key)
         merged, report = await merge_overlay_file(
             documents, ctx.chat_key, parsed, current=current, known_titles=known_titles
         )
         if setup_items:
             merged = set_setup_items(merged, setup_items)
         await save_overlay(documents, ctx.chat_key, merged)
-        if not isinstance(merged, Overlay):  # pragma: no cover - defensive, shape is fixed
-            return "", ""
-        if report["entries"] or report["exposed"] or report["unknown"]:
-            overlay_line = i18n.t(
-                "charcard.tools.world.overlay_line",
-                entries=report["entries"],
-                exposed=report["exposed"],
-                unknown=report["unknown"],
+
+        lines: list[str] = []
+        if report["entries"] or report["unknown"]:
+            lines.append(
+                i18n.t(
+                    "charcard.tools.world.overlay_line",
+                    entries=report["entries"],
+                    unknown=report["unknown"],
+                )
+            )
+        if report["prefixes"]:
+            # By NAME, not by count: `expose:` publishes module variables to player panels,
+            # and "2 prefixes" is not a fact an operator can check against their table.
+            lines.append(
+                i18n.t(
+                    "charcard.tools.world.exposed_line",
+                    count=len(report["prefixes"]),
+                    prefixes=separator.join(report["prefixes"]),
+                )
+            )
+        if current.entries:
+            stale = stale_titles(merged, known_titles)
+            lines.append(
+                i18n.t(
+                    "charcard.tools.world.overlay_kept_line",
+                    matched=len(merged.entries) - len(stale),
+                    stale=len(stale),
+                    titles=separator.join(stale[:5]) if stale else i18n.t("common.none"),
+                )
             )
         pending = merged.pending()
-        setup_line = ""
         if pending:
-            setup_line = i18n.t(
-                "charcard.tools.world.setup_line",
-                count=len(pending),
-                items=i18n.t("common.list_separator").join(item.label_for(ctx.locale) for item in pending),
+            lines.append(
+                i18n.t(
+                    "charcard.tools.world.setup_line",
+                    count=len(pending),
+                    items=separator.join(item.label_for(ctx.locale) for item in pending),
+                )
             )
-        return overlay_line, setup_line
+        return lines
 
     async def _build_pregen_sheet(
         self, ctx: AgentCtx, character: CharacterCard, system: str, host_path: Path

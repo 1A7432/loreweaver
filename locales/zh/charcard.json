@@ -50,6 +50,8 @@
   "charcard.tools.world.specs_line": "类型化变量：已从原生卡包定义 {count} 个追踪器。",
   "charcard.tools.world.system_pinned": "房间系统已钉为 {system}——模组的扩展包自带该系统，预设角色和新建角色都按它生成（导入时指明系统可覆盖）。",
   "charcard.tools.world.unreachable_line": "有 {count} 条设定导入后是关着的、也没有关键词——在 SillyTavern 里是卡片自带的脚本去开它们。在这里由你来开：.lore list disabled，然后 .lore enable <标题> 或 .lore bind <标题> <条件>。",
-  "charcard.tools.world.overlay_line": "已应用整合包的覆盖：{entries} 条条目覆盖、公开了 {exposed} 个变量前缀、{unknown} 个标题这张卡已经没有了。",
-  "charcard.tools.world.setup_line": "开局还没定（{count} 项）：{items}——用 .var set <名称> <值> 逐项定下。"
+  "charcard.tools.world.overlay_line": "已应用整合包的覆盖：{entries} 条条目覆盖、{unknown} 个标题这张卡已经没有了。",
+  "charcard.tools.world.setup_line": "开局还没定（{count} 项）：{items}——用 .var set <名称> <值> 逐项定下。",
+  "charcard.tools.world.exposed_line": "覆盖把 {count} 个变量前缀公开到了玩家面板：{prefixes}",
+  "charcard.tools.world.overlay_kept_line": "你原来设的开关都留着：{matched} 条覆盖对上了，{stale} 个标题已经不在（{titles}）——那几条用 .lore restore 清掉。"
 }

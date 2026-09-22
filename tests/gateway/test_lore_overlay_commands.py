@@ -83,20 +83,72 @@ async def test_bind_and_unbind(tmp_path):
     assert entry.condition == "" and entry.enabled is True
 
 
-async def test_bind_accepts_a_pipe_for_a_title_with_spaces(tmp_path):
-    services, router = await _room(tmp_path)
+async def _with_spaced_title(services, chat_key: str = KEEPER_ROOM) -> None:
     await services.worldbook.import_entries(
-        KEEPER_ROOM,
+        chat_key,
         {"entries": [{"comment": "the deep water", "content": "cold", "enabled": False, "keys": []}]},
         source="second",
         is_keeper=True,
     )
+
+
+async def test_bind_accepts_a_pipe_for_a_title_with_spaces(tmp_path):
+    services, router = await _room(tmp_path)
+    await _with_spaced_title(services)
 
     reply = await router.dispatch(_keeper(), '.lore bind the deep water | 配置.难度 == "残酷"')
 
     assert reply is not None
     overlay = await load_overlay(services.documents, KEEPER_ROOM)
     assert overlay.entries["the deep water"].condition == '配置.难度 == "残酷"'
+
+
+async def test_every_non_bind_switch_takes_the_whole_rest_as_the_title(tmp_path):
+    """`.lore enable the deep water` went looking for an entry called "the"."""
+    services, router = await _room(tmp_path)
+    await _with_spaced_title(services)
+    ctx = _keeper()
+
+    for command, check in (
+        (".lore enable the deep water", lambda o: o.entries["the deep water"].enabled is True),
+        (".lore disable the deep water", lambda o: o.entries["the deep water"].enabled is False),
+        (".lore unbind the deep water", lambda o: o.entries["the deep water"].condition == ""),
+    ):
+        reply = await router.dispatch(ctx, command)
+        assert reply is not None and "No lore entry" not in reply, command
+        assert check(await load_overlay(services.documents, KEEPER_ROOM)), command
+
+    shown = await router.dispatch(ctx, ".lore show the deep water")
+    assert shown is not None and "the deep water" in shown and "No lore entry" not in shown
+
+    restored = await router.dispatch(ctx, ".lore restore the deep water")
+    assert restored is not None
+    assert "the deep water" not in (await load_overlay(services.documents, KEEPER_ROOM)).entries
+
+
+async def test_bind_never_splits_on_a_bare_pipe_so_an_or_expression_survives(tmp_path):
+    """`配置.难度 == "残酷" || 配置.难度 == "困难"` is one condition, not a title and a tail."""
+    services, router = await _room(tmp_path)
+    expression = '配置.难度 == "残酷" || 配置.难度 == "困难"'
+
+    positional = await router.dispatch(_keeper(), f".lore bind 难度·残酷 {expression}")
+
+    assert positional is not None
+    assert (await load_overlay(services.documents, KEEPER_ROOM)).entries["难度·残酷"].condition == expression
+
+    await _with_spaced_title(services)
+    piped = await router.dispatch(_keeper(), f".lore bind the deep water | {expression}")
+
+    assert piped is not None
+    overlay = await load_overlay(services.documents, KEEPER_ROOM)
+    assert overlay.entries["the deep water"].condition == expression
+    # And it actually fires on either value.
+    from core.varspace import build_resolver
+
+    for value in ("残酷", "困难"):
+        resolve = build_resolver({}, {"配置": {"难度": value}})
+        chosen = [e.title for e in await services.worldbook.match(KEEPER_ROOM, "", role="keeper", resolve=resolve)]
+        assert "难度·残酷" in chosen, value
 
 
 async def test_restore_star_drops_every_override(tmp_path):
@@ -430,3 +482,126 @@ async def test_var_setup_says_so_when_a_module_declares_none(tmp_path):
     reply = await router.dispatch(_keeper(), ".var setup")
 
     assert reply is not None and "no \"set before play\" choices" in reply
+
+
+# ---------------------------------------------------------------------------
+# The three distinct refusals: unknown path / branch / illegal write
+# ---------------------------------------------------------------------------
+
+
+async def test_writing_a_branch_is_refused_by_name_and_the_tree_survives(tmp_path):
+    services, router = await _room(tmp_path)
+    before = json.dumps(await load_mvu(services.documents, KEEPER_ROOM), ensure_ascii=False, sort_keys=True)
+
+    reply = await router.dispatch(_keeper(), ".var set 配置 残酷")
+
+    assert reply is not None
+    assert "is a branch" in reply and "难度" in reply  # names it as a branch, lists the children
+    assert "neither a defined tracker" not in reply  # NOT the unknown-target sentence
+    after = json.dumps(await load_mvu(services.documents, KEEPER_ROOM), ensure_ascii=False, sort_keys=True)
+    assert after == before
+
+
+async def test_a_refused_write_on_an_existing_leaf_says_why_not_that_it_is_unknown(tmp_path):
+    """`.var add 配置.难度 3` on a STRING leaf used to print "neither a tracker nor a leaf"
+    and then list 配置.难度 as the nearest path."""
+    services, router = await _room(tmp_path)
+
+    reply = await router.dispatch(_keeper(), ".var add 配置.难度 3")
+
+    assert reply is not None
+    assert "Could not write" in reply and "配置.难度" in reply
+    assert "neither a defined tracker" not in reply
+    assert "Nearest card paths" not in reply
+
+
+async def test_an_unknown_path_still_gets_the_nearest_names(tmp_path):
+    services, router = await _room(tmp_path)
+
+    reply = await router.dispatch(_keeper(), ".var set 配置.不存在 x")
+
+    assert reply is not None
+    assert "neither a defined tracker" in reply and "配置.难度" in reply
+
+
+# ---------------------------------------------------------------------------
+# `.lore overlay` names the prefixes it publishes to players
+# ---------------------------------------------------------------------------
+
+
+async def test_the_overlay_receipt_names_the_exposed_prefixes(tmp_path):
+    services, router = await _room(tmp_path)
+    overlay_path = tmp_path / "overlay.yaml"
+    overlay_path.write_text(OVERLAY_FILE, encoding="utf-8")
+
+    reply = await router.dispatch(_keeper(fs=LocalFs(str(tmp_path))), f".lore overlay {overlay_path}")
+
+    assert reply is not None
+    assert "publishes 1 variable prefix(es) to the players' panel: 配置" in reply
+
+
+async def test_an_overlay_file_that_asks_for_star_exposure_is_refused(tmp_path):
+    services, router = await _room(tmp_path)
+    overlay_path = tmp_path / "greedy.yaml"
+    overlay_path.write_text("format: loreweaver.lore-overlay/1\nexpose: ['*']\n", encoding="utf-8")
+
+    reply = await router.dispatch(_keeper(fs=LocalFs(str(tmp_path))), f".lore overlay {overlay_path}")
+
+    assert reply is not None and "Could not apply" in reply
+    from core.mvu_compat import mvu_exposed_prefixes
+
+    assert await mvu_exposed_prefixes(services.documents, KEEPER_ROOM) == []
+
+
+# ---------------------------------------------------------------------------
+# Spec §5.7, end to end: import a pack-wrapped card, choose, play
+# ---------------------------------------------------------------------------
+
+
+async def test_the_whole_flow_from_world_import_to_the_entry_that_injects(tmp_path):
+    """The walkthrough in the spec, through the real doors: keeper world-imports a
+    pack-wrapped card, the pack's overlay binds the difficulty family, the keeper types
+    `.var set`, and from the next turn exactly the matching sibling injects."""
+    from agent.kp_tools_charcard import CharcardTools
+    from core.modvars import load_modvars
+    from core.varspace import build_resolver
+
+    services = _services(tmp_path)
+    router = CommandRouter(services)
+    home = tmp_path / "packs" / "canjin@1.0.0"  # `_services` sets data_dir=tmp_path
+    (home / "cards").mkdir(parents=True)
+    (home / "cards" / "world.json").write_text(
+        json.dumps({"name": "残堇", "description": "the estate", "character_book": card_book()}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (home / "cards" / "world.overlay.yaml").write_text(OVERLAY_FILE, encoding="utf-8")
+    (home / "pack.yaml").write_text(
+        "manifest: 2\nid: canjin\nname: Canjin\nversion: \"1.0.0\"\ncontents:\n"
+        "  cards:\n    - path: cards/world.json\n      overlay: cards/world.overlay.yaml\n",
+        encoding="utf-8",
+    )
+    ctx = _keeper(fs=LocalFs(str(tmp_path)))
+
+    receipt = await CharcardTools(services).import_world_card(ctx, file_path=str(home / "cards" / "world.json"))
+
+    assert "Pack overlay applied" in receipt
+    assert "Setup still open (2)" in receipt
+    assert "配置" in receipt  # the exposed prefix, by name
+    # The [InitVar] tree really landed — every later step depends on it.
+    assert (await load_mvu(services.documents, KEEPER_ROOM))["配置"]["难度"] == "标准"
+
+    async def _injected() -> list[str]:
+        resolve = build_resolver(
+            (await load_modvars(services.documents, KEEPER_ROOM))["values"],
+            await load_mvu(services.documents, KEEPER_ROOM),
+        )
+        entries = await services.worldbook.match(KEEPER_ROOM, "", role="keeper", resolve=resolve)
+        return [entry.title for entry in entries if entry.title.startswith("难度·")]
+
+    assert await _injected() == ["难度·标准"]  # the card's own default, via the binding
+
+    assert await router.dispatch(ctx, ".var set 配置.难度 残酷") is not None
+
+    assert await _injected() == ["难度·残酷"]  # exactly the chosen sibling, the others closed
+    setup = await router.dispatch(ctx, ".var setup")
+    assert setup is not None and "[x]" in setup and "1 still open" in setup

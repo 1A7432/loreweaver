@@ -193,12 +193,83 @@ async def test_a_reimport_keeps_the_overlay_and_reports_it(tmp_path):
 
     await mark_setup_done(services.documents, "room-h", "配置.难度")
 
-    await tools.import_world_card(ctx, file_path=card_path)
+    receipt = await tools.import_world_card(ctx, file_path=card_path)
 
     overlay = await load_overlay(services.documents, "room-h")
     assert overlay.entries["难度·残酷"].condition == '配置.难度 == "残酷"'
     # A choice the table already made is not re-opened by a re-import.
     assert [item.path for item in overlay.pending()] == ["配置.路线"]
+    assert "Your existing switches were kept" in receipt
+
+
+async def test_the_reimport_report_does_not_depend_on_the_card_being_pack_wrapped(tmp_path):
+    """§5.1's matched/stale promise is owed to a keeper importing a bare attachment too —
+    it used to be skipped entirely for any card with no pack overlay beside it."""
+    from gateway.commands import CommandRouter
+
+    services = _services(tmp_path)
+    card_path = _loose_card(tmp_path, CARD)
+    ctx = _keeper_ctx(tmp_path, "room-j")
+    tools = CharcardTools(services)
+    await tools.import_world_card(ctx, file_path=card_path)
+    # Switches typed at the table, by hand — no pack anywhere in this story.
+    router = CommandRouter(services)
+    await router.dispatch(ctx, ".lore enable 难度·残酷")
+    await router.dispatch(ctx, ".lore enable 一条不再存在的条目")  # refused: not in the room
+    from core.lore_overlay import load_overlay as _load, save_overlay, set_entry
+
+    await save_overlay(
+        services.documents, "room-j", set_entry(await _load(services.documents, "room-j"), "旧标题", enabled=True)
+    )
+
+    receipt = await tools.import_world_card(ctx, file_path=card_path)
+
+    assert "Your existing switches were kept" in receipt
+    assert "1 title(s) no longer present" in receipt and "旧标题" in receipt
+    assert (await load_overlay(services.documents, "room-j")).entries["难度·残酷"].enabled is True
+
+
+async def test_a_first_import_into_a_clean_room_reports_no_kept_switches(tmp_path):
+    services = _services(tmp_path)
+    card_path = _loose_card(tmp_path, CARD)
+
+    receipt = await CharcardTools(services).import_world_card(
+        _keeper_ctx(tmp_path, "room-k"), file_path=card_path
+    )
+
+    assert "Your existing switches were kept" not in receipt
+
+
+async def test_the_world_import_names_the_exposed_prefixes(tmp_path):
+    services = _services(tmp_path)
+    card_path = _packed_card(tmp_path / "data", CARD, overlay=OVERLAY_FILE)
+
+    receipt = await CharcardTools(services).import_world_card(
+        _keeper_ctx(tmp_path, "room-l"), file_path=card_path
+    )
+
+    assert "publishes 1 variable prefix(es) to the players' panel: 配置" in receipt
+
+
+async def test_the_unknown_title_oracle_is_the_rooms_entries_not_the_cards_raw_list(tmp_path):
+    """The raw list still holds `[InitVar]` and the oversized block; an overlay naming one
+    of those must read as unknown on this door exactly as it does on `.lore overlay`."""
+    services = _services(tmp_path)
+    card_path = _packed_card(
+        tmp_path / "data",
+        CARD,
+        overlay=(
+            "format: loreweaver.lore-overlay/1\nentries:\n"
+            "  '[InitVar]开局变量': {enabled: true}\n"
+            "  '[mvu_update]变量输出格式': {enabled: true}\n"
+        ),
+    )
+
+    receipt = await CharcardTools(services).import_world_card(
+        _keeper_ctx(tmp_path, "room-m"), file_path=card_path
+    )
+
+    assert "2 title(s) this card no longer has" in receipt
 
 
 # ---------------------------------------------------------------------------

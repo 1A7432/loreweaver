@@ -57,12 +57,15 @@
   "worldbook.commands.lore.budget_fits": "· {size} chars — it makes this turn's cut.",
   "worldbook.commands.lore.budget_crowded": "· {size} chars — it does NOT make this turn's cut ({limit} entries / {budget} chars). Ahead of it: {titles}.",
   "worldbook.commands.lore.budget_inactive": "· {size} chars — nothing selects it on a quiet turn; it waits for its keywords or its condition.",
-  "worldbook.commands.lore.overlay_applied": "Overlay applied: {entries} entry override(s), {setup} setup choice(s), {exposed} variable prefix(es) exposed, {unknown} title(s) this room does not have.",
+  "worldbook.commands.lore.overlay_applied": "Overlay applied: {entries} entry override(s), {setup} setup choice(s), {unknown} title(s) this room does not have.",
   "worldbook.commands.lore.overlay_failed": "Could not apply that overlay file: {error}",
   "worldbook.tools.list.item_keeper": "- [{scope}/{category}] {title}{markers}",
   "worldbook.tools.list.marker_off": "[off]",
   "worldbook.tools.list.marker_const": "[always-on]",
   "worldbook.tools.list.marker_when": "[when: {expression}]",
   "worldbook.tools.list.marker_changed": "*",
-  "worldbook.tools.list.stale_line": "{count} override(s) name entries that are gone ({titles}) — drop them with .lore restore."
+  "worldbook.tools.list.stale_line": "{count} override(s) name entries that are gone ({titles}) — drop them with .lore restore.",
+  "worldbook.commands.lore.overlay_exposed": "· it publishes {count} variable prefix(es) to the players' panel: {prefixes}",
+  "worldbook.commands.lore.budget_js_unevaluated": "· note: some entries here gate on JavaScript conditions this check cannot evaluate (no EJS sandbox in this room), so the verdict above covers only the rest.",
+  "worldbook.tools.update.overridden": "Note: this room overrides \"{title}\" in its lore overlay, and the overlay wins — effective now: enabled={enabled}, condition: {condition}. Change it with .lore enable/disable/bind, not with this tool."
 }

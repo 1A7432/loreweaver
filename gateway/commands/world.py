@@ -46,14 +46,22 @@ def _first_attachment_name(ctx: Any) -> str:
     return str(names[0]) if isinstance(names, list) and names else ""
 
 
-def _split_title_and_expression(rest: str) -> tuple[str, str]:
+# `.lore bind <title> | <expr>`'s separator: a pipe with a space on BOTH sides. A bare `|`
+# cannot be it — `配置.难度 == "残酷" || 配置.难度 == "困难"` is an ordinary condition, and
+# splitting on its first pipe would bind half an expression and refuse it as a parse error.
+_BIND_SEPARATOR = " | "
+
+
+def _split_bind_argument(rest: str) -> tuple[str, str]:
     """`.lore bind <title> <expr>` — and `<title> | <expr>` for a title with spaces.
 
     An entry title is game DATA an author chose; most carry no space, but some do, and a
-    positional split alone would silently bind the wrong thing. The pipe is the same
-    separator `.lore add` already uses, so there is one spelling to remember."""
-    if "|" in rest:
-        title, _, expression = rest.partition("|")
+    positional split alone would silently bind the wrong thing. This is the ONLY `.lore`
+    subcommand that splits its argument: for every other one the whole rest IS the title,
+    because `.lore enable the deep water` must not go looking for an entry called "the".
+    """
+    if _BIND_SEPARATOR in rest:
+        title, _, expression = rest.partition(_BIND_SEPARATOR)
         return title.strip(), expression.strip()
     title, _, expression = rest.partition(" ")
     return title.strip(), expression.strip()
@@ -65,13 +73,39 @@ def _yes_no(i18n: Any, value: bool) -> str:
 
 async def _variable_resolver(ctx: CommandCtx):
     """A resolver over this room's variables, the same one the keeper turn builds."""
+    return (await _variable_context(ctx))[0]
+
+
+async def _variable_context(ctx: CommandCtx):
+    """``(resolver, ejs_engine)`` over this room's variables — one state load, both halves.
+
+    The pair the real keeper turn works from. The engine is `None` when the room has no
+    full-EJS sandbox (the `ejs` extra missing, or the setting off), which is a verdict the
+    caller must report rather than paper over."""
+    from core.ejs_full import build_room_engine
     from core.modvars import load_modvars
     from core.mvu_compat import load_mvu
     from core.varspace import build_resolver
 
-    state = await load_modvars(ctx.services.documents, ctx.chat_key)
-    tree = await load_mvu(ctx.services.documents, ctx.chat_key)
-    return build_resolver(state["values"], tree)
+    documents = ctx.services.documents
+    state = await load_modvars(documents, ctx.chat_key)
+    tree = await load_mvu(documents, ctx.chat_key)
+    engine = None
+    try:
+        engine = await build_room_engine(
+            ctx.services.worldbook,
+            ctx.chat_key,
+            enabled=ctx.services.settings.enable_full_ejs,
+            flat_variables=state["values"],
+            tree=tree,
+        )
+    except Exception:  # noqa: BLE001 — no sandbox is a reportable state, never a failed command
+        engine = None
+    return build_resolver(state["values"], tree), engine
+
+
+async def _room_ejs_engine(ctx: CommandCtx):
+    return (await _variable_context(ctx))[1]
 
 
 async def _missing_condition_paths(ctx: CommandCtx, condition: str) -> list[str]:
@@ -94,15 +128,22 @@ async def _budget_lines(ctx: CommandCtx, title: str) -> list[str]:
 
     Without it, "I chose and nothing happened" survives the deletion of the sole-active
     mechanism in a new form — the slot cut runs before the character cap, so a switched-on
-    entry can be dropped silently by an entry that ranked above it."""
+    entry can be dropped silently by an entry that ranked above it.
+
+    The dry run is given the SAME full-EJS engine the real turn builds when the room has
+    one. Without it an arbitrary-JS `@@if` — which real imported cards carry — cannot be
+    evaluated, and the receipt would confidently report "nothing selects it" about an
+    entry that injects every turn; the probe flags that case and the reply says so."""
     from core.worldbook import KEEPER_TURN_BUDGET_CHARS, KEEPER_TURN_LIMIT, probe_turn_budget
 
     i18n = ctx.i18n
+    resolve, engine = await _variable_context(ctx)
     probe = await probe_turn_budget(
-        ctx.services.worldbook, ctx.chat_key, title, resolve=await _variable_resolver(ctx)
+        ctx.services.worldbook, ctx.chat_key, title, resolve=resolve, engine=engine
     )
     if not probe.found:
         return []
+    caveat = [i18n.t("worldbook.commands.lore.budget_js_unevaluated")] if probe.js_unevaluated else []
     if probe.oversize:
         return [
             i18n.t(
@@ -112,7 +153,7 @@ async def _budget_lines(ctx: CommandCtx, title: str) -> list[str]:
             )
         ]
     if probe.fits:
-        return [i18n.t("worldbook.commands.lore.budget_fits", size=probe.size)]
+        return [i18n.t("worldbook.commands.lore.budget_fits", size=probe.size), *caveat]
     if probe.crowded_out:
         return [
             i18n.t(
@@ -121,9 +162,10 @@ async def _budget_lines(ctx: CommandCtx, title: str) -> list[str]:
                 limit=KEEPER_TURN_LIMIT,
                 budget=KEEPER_TURN_BUDGET_CHARS,
                 titles=i18n.t("common.list_separator").join(probe.ranked_above[:5]),
-            )
+            ),
+            *caveat,
         ]
-    return [i18n.t("worldbook.commands.lore.budget_inactive", size=probe.size)]
+    return [i18n.t("worldbook.commands.lore.budget_inactive", size=probe.size), *caveat]
 
 
 def _installed_card_refs(ctx: CommandCtx) -> str:
@@ -235,7 +277,12 @@ class WorldCommands:
         if not rest:
             return i18n.t("worldbook.commands.lore.overlay_usage")
 
-        title, expression = _split_title_and_expression(rest)
+        # Only `bind` takes two arguments. For every other switch the WHOLE rest is the
+        # title — an entry called "the deep water" is not an entry called "the".
+        if sub in _LORE_BIND_WORDS:
+            title, expression = _split_bind_argument(rest)
+        else:
+            title, expression = rest.strip(), ""
         overlay = await load_overlay(documents, chat_key)
 
         if sub in _LORE_RESTORE_WORDS:
@@ -350,6 +397,7 @@ class WorldCommands:
             load_overlay,
             merge_overlay_file,
             parse_overlay_file,
+            room_entry_titles,
             save_overlay,
         )
 
@@ -380,16 +428,28 @@ class WorldCommands:
             ctx.chat_key,
             parsed,
             current=await load_overlay(documents, ctx.chat_key),
-            known_titles={entry.title for entry in await ctx.services.worldbook.list(ctx.chat_key)},
+            known_titles=await room_entry_titles(ctx.services.worldbook, ctx.chat_key),
         )
         await save_overlay(documents, ctx.chat_key, merged)
-        return i18n.t(
-            "worldbook.commands.lore.overlay_applied",
-            entries=report["entries"],
-            setup=report["setup"],
-            unknown=report["unknown"],
-            exposed=report["exposed"],
-        )
+        lines = [
+            i18n.t(
+                "worldbook.commands.lore.overlay_applied",
+                entries=report["entries"],
+                setup=report["setup"],
+                unknown=report["unknown"],
+            )
+        ]
+        if report["prefixes"]:
+            # Naming them is the point: `expose:` publishes module variables to PLAYER
+            # panels, and a count cannot be checked against what the table should see.
+            lines.append(
+                i18n.t(
+                    "worldbook.commands.lore.overlay_exposed",
+                    count=len(report["prefixes"]),
+                    prefixes=i18n.t("common.list_separator").join(report["prefixes"]),
+                )
+            )
+        return "\n".join(lines)
 
     async def cmd_import(self, ctx: CommandCtx) -> str:
         """`.import <card file> [system] [pc|companion|world]` — import a SillyTavern card.
@@ -627,13 +687,29 @@ class WorldCommands:
         return "\n".join(lines)
 
     async def _var_write_tree(self, ctx: CommandCtx, path: str, payload: str, *, adding: bool) -> str:
-        """`.var set|add` against an EXISTING leaf of the imported card's variable tree."""
+        """`.var set|add` against an EXISTING leaf of the imported card's variable tree.
+
+        Three refusals, three different sentences — they used to be one. "No such path"
+        wants the nearest names; "that is a branch" wants the children under it; "that
+        exists but this write is illegal" (a delta onto a string) wants the real reason.
+        Collapsing them printed "neither a tracker nor a leaf" about a leaf, and then
+        helpfully listed that very leaf as the nearest path.
+        """
         from core.lore_overlay import mark_setup_done
         from core.modvars import load_modvars
-        from core.mvu_compat import load_mvu, mvu_add_path, mvu_set_path, nearest_paths, parse_scalar
+        from core.mvu_compat import (
+            MvuBranchTarget,
+            MvuPathMissing,
+            load_mvu,
+            mvu_add_path,
+            mvu_set_path,
+            nearest_paths,
+            parse_scalar,
+        )
 
         documents = ctx.services.documents
         i18n = ctx.i18n
+        separator = i18n.t("common.list_separator")
         try:
             if adding:
                 delta = parse_scalar(payload)
@@ -642,7 +718,15 @@ class WorldCommands:
                 old, new = await mvu_add_path(documents, ctx.chat_key, path, delta)
             else:
                 old, new = await mvu_set_path(documents, ctx.chat_key, path, parse_scalar(payload))
-        except ValueError as exc:
+        except MvuBranchTarget as exc:
+            return ctx.fail(
+                i18n.t(
+                    "vars.commands.branch_refused",
+                    path=path,
+                    children=separator.join(exc.children[:8]) or i18n.t("common.none"),
+                )
+            )
+        except MvuPathMissing:
             tree = await load_mvu(documents, ctx.chat_key)
             state = await load_modvars(documents, ctx.chat_key)
             if not tree and not state["specs"]:
@@ -651,12 +735,14 @@ class WorldCommands:
                 i18n.t(
                     "vars.commands.unknown_target",
                     id=path,
-                    known=i18n.t("common.list_separator").join(state["specs"]) or i18n.t("common.none"),
-                    paths=i18n.t("common.list_separator").join(nearest_paths(tree, path))
-                    or i18n.t("common.none"),
-                    error=str(exc),
+                    known=separator.join(state["specs"]) or i18n.t("common.none"),
+                    paths=separator.join(nearest_paths(tree, path)) or i18n.t("common.none"),
                 )
             )
+        except ValueError as exc:
+            # The target IS there; the WRITE is what was refused (a delta onto a string,
+            # a toggle onto a number). Say the real reason, and never offer nearest paths.
+            return ctx.fail(i18n.t("vars.commands.write_refused", path=path, error=str(exc)))
         await mark_setup_done(documents, ctx.chat_key, path)
         # An exposed leaf is on the party panel; the projection decides what players see.
         if old != new and ctx.router.hub is not None:

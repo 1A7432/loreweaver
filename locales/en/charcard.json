@@ -50,6 +50,8 @@
   "charcard.tools.world.specs_line": "Typed variables: {count} tracker(s) defined from the native bundle.",
   "charcard.tools.world.system_pinned": "Room system pinned to {system} — the module's pack ships it, so the cast and new characters are built on it (name a system on import to override).",
   "charcard.tools.world.unreachable_line": "{count} entr(ies) imported disabled with no keywords — in SillyTavern the card's own scripts toggle those. Here you do: .lore list disabled, then .lore enable <title> or .lore bind <title> <condition>.",
-  "charcard.tools.world.overlay_line": "Pack overlay applied: {entries} entry override(s), {exposed} variable prefix(es) exposed, {unknown} title(s) this card no longer has.",
-  "charcard.tools.world.setup_line": "Setup still open ({count}): {items} — set each with .var set <name> <value>."
+  "charcard.tools.world.overlay_line": "Pack overlay applied: {entries} entry override(s), {unknown} title(s) this card no longer has.",
+  "charcard.tools.world.setup_line": "Setup still open ({count}): {items} — set each with .var set <name> <value>.",
+  "charcard.tools.world.exposed_line": "The overlay publishes {count} variable prefix(es) to the players' panel: {prefixes}",
+  "charcard.tools.world.overlay_kept_line": "Your existing switches were kept: {matched} overlay entr(ies) matched, {stale} title(s) no longer present ({titles}) — drop those with .lore restore."
 }

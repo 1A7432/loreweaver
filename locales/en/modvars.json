@@ -52,5 +52,7 @@
   "vars.commands.setup_item_pending": "· [ ] {label} [{path}] — options: {options}",
   "vars.commands.setup_item_done": "· [x] {label} [{path}]",
   "vars.commands.setup_empty": "This module declares no \"set before play\" choices.",
-  "vars.commands.setup_pending_line": "Setup still open: {items}"
+  "vars.commands.setup_pending_line": "Setup still open: {items}",
+  "vars.commands.branch_refused": "\"{path}\" is a branch of the card's variable tree, not a value — writing there would delete everything under it. Under it: {children}.",
+  "vars.commands.write_refused": "Could not write \"{path}\": {error}"
 }

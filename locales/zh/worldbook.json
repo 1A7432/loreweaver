@@ -57,12 +57,15 @@
   "worldbook.commands.lore.budget_fits": "· {size} 字——这一回合排得进去。",
   "worldbook.commands.lore.budget_crowded": "· {size} 字——这一回合排不进去（上限 {limit} 条 / {budget} 字）。排在它前面的：{titles}。",
   "worldbook.commands.lore.budget_inactive": "· {size} 字——安静的一回合里没有东西会选中它；它在等自己的关键词或条件。",
-  "worldbook.commands.lore.overlay_applied": "覆盖已应用：{entries} 条条目覆盖、{setup} 项开局选择、公开了 {exposed} 个变量前缀、{unknown} 个标题本房间没有。",
+  "worldbook.commands.lore.overlay_applied": "覆盖已应用：{entries} 条条目覆盖、{setup} 项开局选择、{unknown} 个标题本房间没有。",
   "worldbook.commands.lore.overlay_failed": "这个覆盖文件用不了：{error}",
   "worldbook.tools.list.item_keeper": "- [{scope}/{category}] {title}{markers}",
   "worldbook.tools.list.marker_off": "[关]",
   "worldbook.tools.list.marker_const": "[常驻]",
   "worldbook.tools.list.marker_when": "[条件：{expression}]",
   "worldbook.tools.list.marker_changed": "*",
-  "worldbook.tools.list.stale_line": "有 {count} 条覆盖指向已经不存在的条目（{titles}）——用 .lore restore 清掉。"
+  "worldbook.tools.list.stale_line": "有 {count} 条覆盖指向已经不存在的条目（{titles}）——用 .lore restore 清掉。",
+  "worldbook.commands.lore.overlay_exposed": "· 它把 {count} 个变量前缀公开到了玩家面板：{prefixes}",
+  "worldbook.commands.lore.budget_js_unevaluated": "· 注意：这里有条目用 JavaScript 条件把关，本次检查算不了（这个房间没有 EJS 沙箱），所以上面的结论只覆盖其余部分。",
+  "worldbook.tools.update.overridden": "注意：本房间在设定覆盖里改写了「{title}」，而且以覆盖为准——当前实际：启用={enabled}，条件：{condition}。要改它请用 .lore enable/disable/bind，不是这个工具。"
 }
