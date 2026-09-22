@@ -244,7 +244,9 @@ needs house rules ships a *patch*: `extends: coc7` and only the lines it changes
 templates). When a player imports the character half, the world machinery is **taken out by the importer
 itself** — and the summary you get back lists exactly what was left behind. World machinery reaches a room only through
 the Keeper's own `.import <file> world`, because it reprograms the whole table. Imported variable
-trees stay off player panels until the Keeper exposes them (`.var expose`).
+trees stay off player panels until the Keeper exposes them (`.var expose`). And the switches a
+card's frontend scripts used to throw are yours to flip at the table: `.lore enable`, or
+`.lore bind <entry> <condition>` to let a variable decide — without ever editing the card.
 
 **Campaign memory that survives the context window.** Play is recorded as chronicle documents. Once the
 assembled prompt passes 60% of the model's context window, the oldest records are folded in batches

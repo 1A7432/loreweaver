@@ -141,6 +141,63 @@ that:
   out instead of hanging the server); zero host I/O; buffered template writes capped
   per turn.
 
+## Making a card's switches work here
+
+Some heavy cards ship an opening-configuration wizard: a family of lorebook entries
+that arrive `enabled: false` with no keywords — difficulty tiers, route variants, taste
+axes — plus a frontend script that flips the chosen one on when you click a button in
+SillyTavern's UI. Loreweaver imports those entries faithfully and runs no frontend
+script, so nothing flips: the card collapses to whatever its author happened to leave
+enabled. The world import says so by number — *N entries imported disabled with no
+keywords* — because nothing in the engine's activation model can ever fire one.
+
+Here is how you turn them on: by hand, once, or as a function of a variable. All of it
+is Keeper-only, and none of it rewrites the card.
+
+- **See what is off.** `.lore list disabled` lists them; the full `.lore list` marks
+  every entry `[off]`, `[always-on]`, `[when: <condition>]`, and `*` where this room has
+  changed the file's own answer.
+- **Flip one by hand.** `.lore enable <title>` / `.lore disable <title>`. The stored
+  entry is never touched — the switch lives in a separate Keeper-only **overlay**
+  document — so re-importing a revised card replaces the lore and **keeps your
+  switches**, the same promise variable progress already has.
+- **Or bind it to a variable.** `.lore bind 难度·残酷 配置.难度 == "残酷"` makes that entry
+  inject exactly while the condition holds, and fail closed otherwise. Three siblings
+  bound to three values of one variable behave like the ST panel's radio buttons — with
+  no panel and no script. The card's own prose usually reads the choice out of the
+  variable tree anyway, so the tree stays the single truth and entry activation is
+  derived from it. `.lore unbind <title>` clears the condition; `.lore restore <title>`
+  (or `*`) drops the override entirely and hands the entry back to the file.
+- **Change the variables directly.** `.var set <path> <value>` and `.var add <path>
+  <delta>` now reach the imported card's own tree, not just Loreweaver's typed trackers:
+  `.var set 配置.难度 残酷`, and the bound entries follow on the next turn. You change
+  values; creating new paths stays the Keeper's tool, so a typo gets you the nearest
+  existing paths instead of a new leaf nobody reads.
+- **Know whether it actually fits.** Every switch that turns something ON comes back
+  with a budget receipt: it fits this turn, it is crowded out (and by what), or it is
+  larger than a whole Keeper turn's lore budget and can never inject at all. "I chose
+  and nothing happened" is exactly the failure this exists to prevent. `.lore show
+  <title>` prints the same receipt beside the file's state and this room's, and warns
+  when a binding waits on a variable path the room does not have.
+- **A controller template also works, with no overlay at all.** An enabled entry can
+  read a disabled one: `<%- getwi("难度·" + getvar("配置.难度")) %>`. The engine fills the
+  template library from **every** entry in the room, disabled ones included. Needs the
+  `ejs` extra; without it the read returns nothing (and never leaks template text).
+- **"Set before play" choices.** A module can mark a variable as one the table must pick
+  once before play starts. `.var setup` lists what is still open, `.var list` leads with
+  it, and the Keeper sees the same list as plain state while the room is still in prep.
+
+Loreweaver will never guess which variant you meant. It does not read titles for
+structure, group entries into families, or offer a pick — that was tried on 2026-08-05,
+it mis-grouped its own sample card, and it was deleted the next day. A switch exists
+because you typed it, or because a pack you installed shipped it.
+
+**Shipping a card for other people?** Put the annotations in the pack: an `overlay:`
+file declared beside the card in `pack.yaml` carries exactly these switches and
+conditions as data, so the table gets a card that is alive on import instead of one
+waiting for someone to read its scripts. See [plugins.md](plugins.md) and
+[authoring.md](authoring.md).
+
 ## The import trust boundary
 
 An imported file doesn't get to pick its own privileges:
@@ -150,15 +207,22 @@ An imported file doesn't get to pick its own privileges:
   deterministic code before anything touches room state, not filtered by a prompt.
   Only the Keeper's `world` import carries it in.
 - **Scope is pinned** to the importing room — a card can't write global lore.
-- **`constant` is forced off** for imported entries, for everyone. An always-on
-  entry would let any card permanently occupy the prompt; imported lore activates
-  by keyword and budget like everything else.
+- **`constant` is honored for the Keeper's `world` import** — module rules and
+  timelines are constant entries, and stripping the flag left every imported module
+  rule keyword-gated — and **forced off for any player upload**, where an always-on
+  entry would let an untrusted card permanently occupy the prompt. The real bound on
+  always-on text is the per-turn injection budget — 12 entries / 12,000 characters on a
+  Keeper turn — not the flag; an entry larger than that budget never injects at all,
+  which `.lore enable` and `.lore show` tell you at the moment you switch it on.
 - **`secret` is honored only when a Keeper does the import** — an untrusted card
   cannot mint keeper-only lore.
 - **Entry ids are regenerated**, so a card can't address (and overwrite) another
   card's entries.
 - **Re-importing replaces** that card's hooks and entries rather than stacking
-  duplicates — and, as above, never resets variable progress. (Replacement matches
+  duplicates — and, as above, never resets variable progress, nor the room's
+  [overlay](#making-a-cards-switches-work-here): the switches and bindings you set
+  survive a revised card, and a title the new version no longer carries is reported as
+  stale rather than silently dropped. (Replacement matches
   entries by import provenance, recorded since 2026-08-15: a room whose lore was
   imported before then stacks once more on its first re-import, then replaces
   forever after. Keeper imports only — a player's card import is always additive,

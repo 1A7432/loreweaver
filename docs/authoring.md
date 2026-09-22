@@ -148,7 +148,7 @@ skipped and reported as a warning, so one bad row never costs you the whole impo
 | `content` | the entry text. Required — an empty one is skipped with a warning |
 | `keys` / `secondary_keys` | activation keywords. Secondary keys gate the entry: `selective_logic` picks `and_any` (default) / `and_all` / `not_any` / `not_all` |
 | `secret` | **keeper-only.** Honored only on a keeper import; a player import drops it outright, so marking an entry secret can never widen anyone's visibility |
-| `constant` | always-on. Forced off for uploaded files — an always-on entry would inject itself into every prompt regardless of keywords |
+| `constant` | always-on. Honored for the keeper's `world` import (module rules and timelines ARE constant entries) and forced off for any player upload. The real bound on always-on text is the per-turn injection budget — 12 entries / 12,000 characters on a keeper turn — not the flag: an entry larger than the budget never injects at all |
 | `condition` | an expression; rides in as an `@@if` decorator. Longer than 500 characters and it will never fire, and you get a warning saying so |
 | `priority`, `enabled`, `probability` (0–100, rolled by real code), `case_sensitive`, `match_whole_words`, `scan_depth`, `position` (`before`/`after`), `sticky`, `cooldown`, `delay` | SillyTavern World Info trigger semantics, imported and honored |
 
@@ -161,13 +161,23 @@ about.** That flag is the thing the projection layer enforces.
 {"id": "祭典日",   "kind": "number", "labels": {"en": "Festival Day", "zh": "祭典日"},
  "default": 1, "minimum": 1, "maximum": 3, "visibility": "player"},
 {"id": "仪式警觉", "kind": "number", "labels": {"en": "Rite Alert", "zh": "仪式警觉"},
- "default": 0, "minimum": 0, "maximum": 5, "visibility": "keeper"}
+ "default": 0, "minimum": 0, "maximum": 5, "visibility": "keeper"},
+{"id": "难度",     "kind": "enum",   "labels": {"en": "Difficulty", "zh": "难度"},
+ "options": ["轻松", "标准", "残酷"], "setup": true}
 ```
 
 `kind` is `number` / `bool` / `text` / `enum`. `visibility: player` puts it on the party panel;
 `visibility: keeper` means it **never reaches a player transport at all** — filtered inside the
 engine, not hidden by the client. Bounds are enforced on every write, including writes the model
 asks for. Ids can be CJK.
+
+`setup: true` marks a **"set before play"** variable: one the table must pick once before the
+module runs, because your default is not their choice. It changes nothing about the variable
+itself — it only makes the choice visible until somebody makes it: named in the world-import
+receipt, listed by `.var setup`, leading `.var list`, and carried to the Keeper as one line of
+state while the room is in its prep phase. Writing the variable — `.var set`, or the Keeper's own
+`set_variable` — closes it; the default never does. Pair it with `enum` + `options` and the table
+sees the choices you meant.
 
 This is the difference between a tracker and a note: a tracker is state the engine validates,
 keeps in range, stores and filters. Declare the things your ending depends on.
@@ -600,6 +610,60 @@ file is a runbook.
 
 ## 7. Build, install, publish
 
+### Adopting a SillyTavern card
+
+A module of your own declares `enabled`, `condition` and `setup` directly in its
+`worldbook[]`/`variables[]`, so it needs nothing here. This subsection is for the other
+case: you are packaging **somebody else's heavy card** — one whose opening choices live
+in a frontend script that does not exist here, so the card arrives with a family of
+`enabled: false`, keyword-less entries that nothing can ever fire.
+
+Ship the switches as data, in an overlay file beside the card:
+
+```yaml
+# cards/xunzhao.overlay.yaml
+format: loreweaver.lore-overlay/1
+entries:
+  难度·轻松:   {condition: '配置.难度 == "轻松"'}
+  难度·标准:   {condition: '配置.难度 == "标准"'}
+  难度·残酷:   {condition: '配置.难度 == "残酷"'}
+  路线·判官线: {condition: '配置.路线 == "判官线"'}
+  回复模板:    {enabled: false}
+setup:
+  - {path: 配置.难度, options: [轻松, 标准, 残酷], labels: {en: Difficulty, zh: 难度}}
+  - {path: 配置.路线, options: [主线, 判官线],      labels: {en: Route, zh: 路线}}
+expose: [配置]
+```
+
+```yaml
+# pack.yaml
+contents:
+  cards:
+    - path: cards/xunzhao.png
+      overlay: cards/xunzhao.overlay.yaml
+```
+
+- `entries` is keyed by the card's own entry **titles** (ids regenerate on every import,
+  titles do not). A `condition` implies `enabled: true` — a binding on an entry that
+  stayed off would be an inert trap. Expressions are the closed `core.condexpr` grammar
+  (comparisons, boolean logic, dotted variable paths, ≤ 500 characters); there is no JS
+  escape hatch here, by design.
+- `setup` declares the choices the table owes the module, against the card's own
+  variable-tree paths. `expose` hands those prefixes to `.var expose`, so the players'
+  panel shows the choice they made.
+- The build validates all of it with the real parser. A structural problem — unknown
+  `format`, an expression the grammar refuses or over the length cap, more than 20
+  options or 200 entries — **fails the build**. A title the card no longer carries is a
+  **warning**, printed beside the trust card, because cards get revised.
+- At install the overlay lands beside its card; the keeper's `.import <packId>/cards/…
+  world` applies it, and the receipt says how many overrides and setup choices landed.
+  The same card imported from an attachment gets nothing — the annotations belong to the
+  pack that adopted the card, not to the file. `.lore overlay <file>` applies one by hand.
+- It is **annotation, never machinery**: counted on the trust card as `overlays`, unable
+  to change a card's detected `kind`, and never read by a player's `pc`/`companion`
+  import. The engine still infers nothing from titles — see
+  `docs/notes/rejected/sole-active-card-mechanism.md`.
+
 ### Build
 
 ```console
@@ -621,7 +685,8 @@ Contains 2 WORLD card(s) — module machinery (hooks/variables/EJS); the keeper 
  "trust": {"skills": 1, "rulepacks": 2, "cards": 2, "lorebooks": 1, "assets": 9,
            "asset_bytes": 282853, "has_hooks": true, "has_ejs": false,
            "has_rules_script": false, "world_cards": 2, "panels": 4,
-           "presentation": 5, "imagegen": true}}
+           "presentation": 5, "imagegen": true, "overlays": 1},
+ "warnings": []}
 ```
 
 Two properties worth relying on: the build validates everything through the **real engine parsers**

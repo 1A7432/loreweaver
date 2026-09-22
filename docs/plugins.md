@@ -239,6 +239,16 @@ A card's embedded `character_book`, or a standalone lorebook, maps to
 keyword-in-recent-context with budgeted insertion — the ST model — so an
 existing lorebook works unchanged.
 
+`enabled` and `condition` are the two fields a ROOM may override (M26). The imported
+entry is stored faithfully and never rewritten; the keeper's `.lore enable/disable/bind`
+writes a separate, keeper-only **overlay** document keyed by entry title, and one
+function (`core.lore_overlay.apply`) computes effective state for all three activation
+paths — keyword matching, semantic recall and the `activewi` extra pass — so there is no
+second notion of "enabled" for a filter to miss. A re-import replaces the lore and
+leaves the overlay alone, exactly as it leaves variable progress alone. A pack that
+adopts a foreign card ships the same overrides as data (`overlay:` under
+`contents.cards`); nothing here infers a group from a title.
+
 ### A.4 Module variables (deterministic trackers)
 
 The engine exposes a declared-variable surface (`core.modvars`, inspired by the
@@ -313,8 +323,9 @@ ST-Prompt-Template EJS extension import and RUN, within a documented subset:
   frontend features with no meaning server-side; those entries import disabled so they
   never pollute a prompt, and the TUI's tracker panel shows the variable tree instead).
 
-The import trust boundary (scope pinning, constant stripped, secret keeper-gated, ids
-regenerated) applies unchanged in both modes — and everything in this section describes
+The import trust boundary (scope pinning, `constant` honored for a keeper world import
+and forced off for any player upload, secret keeper-gated, ids regenerated) applies
+unchanged in both modes — and everything in this section describes
 what runs after a **keeper world-import** (see the card split in A.2): a player's
 character import carries none of this machinery in the first place. With full EJS
 enabled, world content runs code in the sandbox described above — that is the point;
@@ -760,7 +771,7 @@ so this costs nothing until an author asks for it.
 | `engine` | no | minimum versions: `protocol` (wire protocol) and/or `server` — minimum-compare only |
 | `contents.skills` | no | skill DIRECTORIES (`skills/<id>`), each exactly `SKILL.md` + optional `hooks.js` |
 | `contents.rulepacks` | no | rulepack YAML files (`rulepacks/<id>.yaml`) |
-| `contents.cards` | no | SillyTavern cards (PNG or JSON) **or native bundles** (`*.lorecard.json`, dispatched to the native parser by content sniff so their machinery is detected honestly): a plain path, or a `{path, notes: {en, zh}}` mapping to attach install notes. The 拆卡 `kind` is **detected, never declared**: build stamps `character`/`world` into the built manifest from the real payload (hooks/`[InitVar]`/EJS/`secret` lore/typed specs ⇒ `world`, keeper-imported via `.import <file> world`), and install re-checks the stamp against detection |
+| `contents.cards` | no | SillyTavern cards (PNG or JSON) **or native bundles** (`*.lorecard.json`, dispatched to the native parser by content sniff so their machinery is detected honestly): a plain path, or a `{path, notes: {en, zh}}` mapping to attach install notes. The 拆卡 `kind` is **detected, never declared**: build stamps `character`/`world` into the built manifest from the real payload (hooks/`[InitVar]`/EJS/`secret` lore/typed specs ⇒ `world`, keeper-imported via `.import <file> world`), and install re-checks the stamp against detection. An entry may also carry `overlay: <path.yaml>` — keeper-side ANNOTATIONS of that card's own lorebook (which file-disabled entries this pack means to switch on, under which variable condition, and which "set before play" choices the table owes the module). Validated at build with the real parser (unknown `format`, an expression outside the closed `core.condexpr` grammar or over 500 characters, more than 20 options or 200 entries all FAIL; a title the card no longer carries is a warning); applied by the keeper's `.import … world` when the card is imported FROM the pack home, and by hand with `.lore overlay <file>`. Data, never machinery: it is counted on the trust card as `overlays` and cannot make a `character` card a `world` card |
 | `contents.lorebooks` | no | lorebook JSON (ST `character_book` / `{entries: [...]}` shapes) |
 | `contents.panels` | no | panels YAML files (`ui/panels.yaml`) declaring module UI panels (Layer D) — ≤ 16 panels per pack; a tier-2 panel's `entry`/`assets` files and every tier-1 `image`/`map_pin` `src` are folded into the pack asset pipeline at build (sha256'd, code payload ≤ 2 MB per panel) |
 | `contents.presentation` | no | the presentation kit (`ui/presentation.yaml`, one per pack) — the Stage Director's creative brief; its 定妆 references and audio cues join the same asset pipeline, and the trust card discloses whether the module may generate images |
