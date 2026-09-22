@@ -246,3 +246,80 @@ async def test_build_system_prompt_without_module_variables_has_no_modvars_heade
     prompt = await build_system_prompt(ctx, services)
 
     assert services.i18n.with_locale("en").t("prompt.modvars_header") not in prompt
+
+
+# --- M26 §5.3: the table's open "set before play" choices -------------------
+
+
+async def _seed_setup_items(services, chat_key: str) -> None:
+    from core.lore_overlay import EMPTY_OVERLAY, SetupItem, save_overlay, set_setup_items
+
+    await save_overlay(
+        services.documents,
+        chat_key,
+        set_setup_items(
+            EMPTY_OVERLAY,
+            [
+                SetupItem(path="配置.难度", options=("轻松", "标准", "残酷"), labels={"en": "Difficulty"}),
+                SetupItem(path="配置.路线", options=("主线", "判官线"), labels={"en": "Route"}),
+            ],
+        ),
+    )
+
+
+def _setup_header(services) -> str:
+    return services.i18n.with_locale("en").t("prompt.setup_pending").splitlines()[0]
+
+
+async def test_pending_setup_choices_reach_the_keeper_as_one_data_line():
+    services = _services("en")
+    chat_key = "chat-prompt-builder-setup"
+    ctx = AgentCtx(chat_key=chat_key, user_id="u1", locale="en")
+    await _seed_setup_items(services, chat_key)
+
+    prompt = await build_system_prompt(ctx, services)
+
+    assert _setup_header(services) in prompt
+    assert "Difficulty (轻松|标准|残酷)" in prompt
+    assert "Route (主线|判官线)" in prompt
+
+
+async def test_the_setup_line_disappears_once_the_table_has_chosen():
+    from core.lore_overlay import mark_setup_done
+
+    services = _services("en")
+    chat_key = "chat-prompt-builder-setup-done"
+    ctx = AgentCtx(chat_key=chat_key, user_id="u1", locale="en")
+    await _seed_setup_items(services, chat_key)
+
+    await mark_setup_done(services.documents, chat_key, "配置.难度")
+    partly = await build_system_prompt(ctx, services)
+    assert "Difficulty" not in partly and "Route" in partly
+
+    await mark_setup_done(services.documents, chat_key, "配置.路线")
+    done = await build_system_prompt(ctx, services)
+    assert _setup_header(services) not in done
+
+
+async def test_the_setup_line_is_prep_phase_only():
+    """Once the room is playing, an unmade opening choice IS the author's default; repeating
+    it every turn would be the engine nagging about a decision nobody owes anyone."""
+    services = _services("en")
+    chat_key = "chat-prompt-builder-setup-phase"
+    ctx = AgentCtx(chat_key=chat_key, user_id="u1", locale="en")
+    await _seed_setup_items(services, chat_key)
+    assert _setup_header(services) in await build_system_prompt(ctx, services)
+
+    from agent.tool_phase import set_room_phase
+    from agent.tools import PLAY_PHASE
+
+    await set_room_phase(services.store, chat_key, PLAY_PHASE)
+
+    assert _setup_header(services) not in await build_system_prompt(ctx, services)
+
+
+async def test_a_room_with_no_overlay_gets_no_setup_line():
+    services = _services("en")
+    ctx = AgentCtx(chat_key="chat-prompt-builder-no-setup", user_id="u1", locale="en")
+
+    assert _setup_header(services) not in await build_system_prompt(ctx, services)

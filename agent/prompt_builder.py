@@ -156,6 +156,35 @@ async def habit_index(services, chat_key: str) -> list[str]:
     return index_lines(document.data) if document is not None else []
 
 
+async def _setup_pending_line(services: Services, ctx: AgentCtx, i18n) -> str:
+    """The M26 setup choices this table has not made yet, as one localized data line.
+
+    PREP phase only (`agent.tool_phase.room_phase`): once a room is playing, an opening
+    choice nobody made is the author's default, and repeating it every turn would be the
+    engine nagging. Never raises — a room with no overlay contributes nothing at all.
+    """
+    from agent.tool_phase import room_phase
+    from agent.tools import PREP_PHASE
+    from core.lore_overlay import load_overlay
+
+    try:
+        if await room_phase(services.store, ctx.chat_key) != PREP_PHASE:
+            return ""
+        pending = (await load_overlay(services.documents, ctx.chat_key)).pending()
+    except Exception:  # noqa: BLE001 — see docstring
+        return ""
+    if not pending:
+        return ""
+    separator = i18n.t("common.list_separator")
+    items = separator.join(
+        i18n.t("prompt.setup_item", label=item.label_for(ctx.locale), options="|".join(item.options))
+        if item.options
+        else item.label_for(ctx.locale)
+        for item in pending
+    )
+    return i18n.t("prompt.setup_pending", items=items)
+
+
 async def build_system_prompt_parts(
     ctx: AgentCtx, services: Services, *, advance_timers: bool = True
 ) -> SystemPrompt:
@@ -329,6 +358,14 @@ async def build_system_prompt_parts(
     modvar_lines = await describe_modvars(services.documents, ctx.chat_key, i18n, ctx.locale)
     if modvar_lines:
         volatile.append(i18n.t("prompt.modvars_header") + "\n" + "\n".join(f"- {line}" for line in modvar_lines))
+
+    # M26 §5.3: the "set before play" choices the table still owes the module, as ONE data
+    # line — what is open, with its options. Not a directive: the Keeper is not told to ask
+    # for them, because a module whose difficulty is unset is a perfectly playable module
+    # with the author's default. Prep phase only, and absent the moment nothing is pending.
+    setup_line = await _setup_pending_line(services, ctx, i18n)
+    if setup_line:
+        volatile.append(setup_line)
 
     # Imported MVU card variables (core.mvu_compat) — same fold-in pattern: the Keeper sees the
     # current tree every turn (post-template-writes — see above) and updates it via

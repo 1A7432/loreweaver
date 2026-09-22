@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import copy
 import datetime
+import difflib
 import json
 import math
 import re
@@ -1044,6 +1045,66 @@ async def mvu_flatten(documents: Any, chat_key: str, limit: int = MAX_FLAT_LEAVE
 async def mvu_has_data(documents: Any, chat_key: str) -> bool:
     """Whether this room has any (recoverable) MVU state."""
     return bool(await load_mvu(documents, chat_key))
+
+
+def path_leaf(tree: MvuTree, path: str) -> Any:
+    """The value at `path`, ValueWithDescription unwrapped. Raises `ValueError` when missing."""
+    segments = _split_path(path)
+    parent = _walk_parent(tree, segments, path, create=False)
+    return leaf_value(_child(parent, segments[-1], path))
+
+
+def nearest_paths(tree: MvuTree, wanted: str, limit: int = 5) -> list[str]:
+    """Leaf paths closest to `wanted`, for the "unknown path" error (M26 §5.2).
+
+    Prefix/substring matches first (which is what a mistyped CJK path usually is), then
+    `difflib`'s ranking for the rest. Advisory only: it never picks a path for the caller.
+    """
+    candidates = [str(leaf["path"]) for leaf in flatten_leaves(tree, MAX_TREE_NODES)]
+    needle = str(wanted).strip()
+    if not needle:
+        return candidates[:limit]
+    ranked = [path for path in candidates if needle in path or path.startswith(needle.split(".")[0])]
+    for path in difflib.get_close_matches(needle, candidates, n=limit, cutoff=0.4):
+        if path not in ranked:
+            ranked.append(path)
+    return ranked[:limit]
+
+
+async def mvu_set_path(
+    documents: Any, chat_key: str, path: str, value: Any, *, existing_only: bool = True
+) -> tuple[Any, Any]:
+    """Write ONE leaf of the imported variable tree; returns ``(old, new)``.
+
+    The single tree-write primitive (M26 §5.2): the Keeper's `set_stat` tool and the room
+    admin's `.var set` go through the same code, so "the value changed" means the same
+    thing whichever hand made it. ``existing_only=True`` is the ADMIN posture — the admin
+    changes values, never the tree's SHAPE, so a path that is not already there is an
+    error rather than a new leaf; creating paths stays the model tool's job.
+    """
+    tree, exposed = await _load_doc(documents, chat_key)
+    try:
+        old = path_leaf(tree, path)
+    except ValueError:
+        if existing_only:
+            raise
+        old = None
+    new_tree = apply_set(tree, path, value)
+    await _save_doc(documents, chat_key, new_tree, exposed)
+    return old, path_leaf(new_tree, path)
+
+
+async def mvu_add_path(documents: Any, chat_key: str, path: str, delta: Any) -> tuple[Any, Any]:
+    """`mvu_set_path`'s sibling for a signed nudge (`apply_add` semantics); ``(old, new)``.
+
+    Always existing-only: `_.add` has no create semantics upstream either — there is no
+    number to add to until something set it.
+    """
+    tree, exposed = await _load_doc(documents, chat_key)
+    old = path_leaf(tree, path)
+    new_tree = apply_add(tree, path, delta)
+    await _save_doc(documents, chat_key, new_tree, exposed)
+    return old, path_leaf(new_tree, path)
 
 
 async def mvu_exposed_prefixes(documents: Any, chat_key: str) -> list[str]:

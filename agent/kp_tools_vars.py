@@ -22,6 +22,7 @@ import json
 from agent.context import AgentCtx
 from agent.services import Services
 from agent.tools import tool
+from core.lore_overlay import mark_setup_done
 from core.modvars import (
     KINDS,
     VISIBILITIES,
@@ -34,7 +35,7 @@ from core.modvars import (
     remove_modvar,
     set_modvar,
 )
-from core.mvu_compat import load_mvu, mvu_flatten, mvu_has_data, save_mvu
+from core.mvu_compat import mvu_add_path, mvu_flatten, mvu_has_data, mvu_set_path
 from infra.i18n import I18n
 
 # Cap on tool-driven variable writes recorded per turn for the hook layer — the same
@@ -172,6 +173,7 @@ class ModuleVarTools:
         try:
             old, new = await set_modvar(self._services.documents, ctx.chat_key, slug, value)
             _record_variable_write(ctx, slug, "set")
+            await mark_setup_done(self._services.documents, ctx.chat_key, slug)
             return i18n.t(
                 "modvars.tools.set.done", label=label_for(spec_or_error, ctx.locale), id=slug, old=old, new=new
             )
@@ -199,6 +201,7 @@ class ModuleVarTools:
         try:
             old, new = await adjust_modvar(self._services.documents, ctx.chat_key, slug, delta)
             _record_variable_write(ctx, slug, "add")
+            await mark_setup_done(self._services.documents, ctx.chat_key, slug)
             return i18n.t(
                 "modvars.tools.adjust.done",
                 label=label_for(spec_or_error, ctx.locale),
@@ -298,17 +301,17 @@ class MvuStatTools:
         """
         i18n = self._i18n(ctx)
         try:
-            from core.mvu_compat import apply_set, leaf_value
-
             documents = self._services.documents
-            tree = await load_mvu(documents, ctx.chat_key)
-            parsed = _parse_stat_value(value)
-            old = _stat_at(tree, path.strip())
-            new_tree = apply_set(tree, path.strip(), parsed)
-            await save_mvu(documents, ctx.chat_key, new_tree)
-            _record_variable_write(ctx, path.strip(), "set")
-            shown_old = leaf_value(old) if isinstance(old, list) else old
-            return i18n.t("modvars.stat.set.done", path=path.strip(), old=shown_old, new=parsed)
+            wanted = path.strip()
+            # The ONE tree-write primitive (M26 §5.2), shared with the room admin's
+            # `.var set`. `existing_only=False` keeps the model's ability to introduce a
+            # leaf — the shape of the tree is the module's business, and the card's own
+            # `_.set` protocol creates paths too.
+            old, new = await mvu_set_path(documents, ctx.chat_key, wanted, _parse_stat_value(value), existing_only=False)
+            _record_variable_write(ctx, wanted, "set")
+            # A "set before play" choice is made by whoever writes the path, model or admin.
+            await mark_setup_done(documents, ctx.chat_key, wanted)
+            return i18n.t("modvars.stat.set.done", path=wanted, old=old, new=new)
         except Exception as exc:
             return i18n.t("modvars.stat.failed", error=str(exc))
 
@@ -326,16 +329,12 @@ class MvuStatTools:
         """
         i18n = self._i18n(ctx)
         try:
-            from core.mvu_compat import apply_add
-
             documents = self._services.documents
-            tree = await load_mvu(documents, ctx.chat_key)
-            old = _stat_leaf(tree, path.strip())
-            new_tree = apply_add(tree, path.strip(), delta)
-            await save_mvu(documents, ctx.chat_key, new_tree)
-            _record_variable_write(ctx, path.strip(), "add")
-            new = _stat_leaf(new_tree, path.strip())
-            return i18n.t("modvars.stat.adjust.done", path=path.strip(), old=old, new=new, delta=delta)
+            wanted = path.strip()
+            old, new = await mvu_add_path(documents, ctx.chat_key, wanted, delta)
+            _record_variable_write(ctx, wanted, "add")
+            await mark_setup_done(documents, ctx.chat_key, wanted)
+            return i18n.t("modvars.stat.adjust.done", path=wanted, old=old, new=new, delta=delta)
         except Exception as exc:
             return i18n.t("modvars.stat.failed", error=str(exc))
 
@@ -348,14 +347,3 @@ def _parse_stat_value(value: str):
         return text
 
 
-def _stat_at(tree, path: str):
-    from core.varspace import resolve_tree_path
-
-    return resolve_tree_path(tree, path)
-
-
-def _stat_leaf(tree, path: str):
-    from core.mvu_compat import is_value_with_desc, leaf_value
-
-    node = _stat_at(tree, path)
-    return leaf_value(node) if is_value_with_desc(node) else node

@@ -147,11 +147,16 @@ def build_spec(
     maximum: int | None = None,
     default: Any = None,
     options: list[str] | None = None,
+    setup: bool = False,
 ) -> dict[str, Any]:
     """Build a validated spec dict, raising `ValueError` (with a concise reason) on bad input.
 
     This is the strict path used when DEFINING a variable; `normalize_spec` below is the
     tolerant sibling used when loading possibly-corrupt stored state.
+
+    ``setup`` (M26 §5.3) marks a "set before play" variable: one the table must touch ONCE
+    before the module runs, because the author's default is not the table's choice. It is
+    stored only when true, so every existing spec keeps its exact stored shape.
     """
     slug = normalize_id(var_id)
     if slug is None:
@@ -195,6 +200,8 @@ def build_spec(
     elif options:
         raise ValueError(f"options only apply to the enum kind, not {kind!r}")  # i18n-exempt: developer diagnostic; tool layer wraps it in a localized template
 
+    if setup:
+        spec["setup"] = True
     spec["default"] = _default_value(spec) if default is None else validate_value(spec, default)
     return spec
 
@@ -273,6 +280,7 @@ def normalize_spec(var_id: Any, raw: Any) -> dict[str, Any] | None:
             maximum=raw.get("maximum") if kind == "number" else None,
             default=raw.get("default"),
             options=raw.get("options") if kind == "enum" and isinstance(raw.get("options"), list) else None,
+            setup=bool(raw.get("setup", False)),
         )
     except ValueError:
         return None
