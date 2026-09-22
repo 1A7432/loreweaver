@@ -316,3 +316,38 @@ def create_full_engine(
     except Exception:
         logger.warning("full-EJS engine unavailable, falling back to the subset", exc_info=True)
         return None
+
+
+async def build_room_engine(
+    worldbook: Any,
+    chat_key: str,
+    *,
+    enabled: bool,
+    flat_variables: dict[str, Any],
+    tree: dict[str, Any],
+) -> FullEjsEngine | None:
+    """The per-turn sandbox for one ROOM: `create_full_engine` with the room's whole
+    worldbook as its template library. `None` when the room has no engine.
+
+    Factored out because TWO callers need an identical engine and two constructions would
+    drift: `agent.prompt_builder` builds the real turn's, and `.lore enable|bind|show`'s
+    budget receipt dry-runs that same selection — a dry run without the sandbox cannot
+    evaluate an arbitrary-JS `@@if` and would report "nothing selects this" about an entry
+    the real turn injects every time.
+
+    It lives here rather than beside the prompt assembler on purpose: this is an
+    EVALUATION sandbox, not Keeper context, and `agent.prompt_builder` has exactly one
+    importer by design (iron rule #5, pinned by
+    `tests/architecture/test_model_call_lanes.py`).
+
+    The library deliberately includes DISABLED entries: `getwi(name)` reading a switched-off
+    variant is the controller pattern imported cards already use (M26 §3).
+    """
+    if not enabled:
+        return None
+    entries = await worldbook.list(chat_key)
+    return create_full_engine(
+        flat_variables=flat_variables,
+        tree=tree,
+        worldinfo={entry.title: entry.content for entry in entries},
+    )

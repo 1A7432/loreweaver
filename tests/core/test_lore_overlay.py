@@ -33,6 +33,7 @@ from core.lore_overlay import (
 )
 from core.worldbook import (
     KEEPER_TURN_BUDGET_CHARS,
+    KEEPER_TURN_LIMIT,
     LoreEntry,
     Worldbook,
     probe_turn_budget,
@@ -471,6 +472,100 @@ async def test_mark_setup_done_flips_exactly_one_path():
     assert [item.path for item in (await load_overlay(documents, "room1")).pending()] == ["配置.路线"]
 
 
+def test_a_pack_overlay_may_not_expose_the_whole_tree():
+    """`*` is a judgement about THIS table's spoilers, so only the human at it may say it.
+    A pack author writing `expose: ['*']` is reaching past the keeper."""
+    for spelling in ("'*'", "'**'", "'*配置'"):
+        body = f"format: loreweaver.lore-overlay/1\nexpose: [{spelling}]\n"
+        with pytest.raises(OverlayError) as caught:
+            parse_overlay_file(body.encode("utf-8"))
+        assert "expose" in str(caught.value)
+
+    explicit = parse_overlay_file(
+        b"format: loreweaver.lore-overlay/1\nexpose: ['\xe9\x85\x8d\xe7\xbd\xae']\n"
+    )
+    assert explicit.expose == ("配置",)
+
+
+async def test_a_stored_condition_outside_the_closed_grammar_is_dropped_on_load():
+    """A restored `.save` file (or a hand-edited row) must not hand an arbitrary string to
+    the EJS sandbox through `_condition_holds`: the load re-validates, fail closed."""
+    store = Store()
+    documents = DocumentStore(store)
+    worldbook = await _imported_room(store)
+    await documents.put(
+        "room1",
+        "lore_overlay",
+        "overlay",
+        {
+            "entries": {
+                "难度·残酷": {"enabled": True, "condition": "Object.keys(globalThis).length > 0"},
+                "路线·判官线": {"enabled": True, "condition": '配置.路线 == "判官线"'},
+            }
+        },
+    )
+
+    overlay = await load_overlay(documents, "room1")
+
+    assert overlay.entries["难度·残酷"].condition == ""  # the JS never survives the load
+    assert overlay.entries["难度·残酷"].enabled is True  # but the switch does
+    assert overlay.entries["路线·判官线"].condition == '配置.路线 == "判官线"'
+    # And with the gate gone the entry is unconditional again, not JS-gated.
+    chosen = [entry.title for entry in await worldbook.match("room1", "", role="keeper")]
+    assert "难度·残酷" in chosen
+    assert "路线·判官线" not in chosen  # its (valid) condition still fails closed with no resolver
+
+
+async def test_update_lore_says_so_when_the_room_overlay_overrules_the_edit():
+    """`update_lore` edits the FILE copy. Reporting "enabled is now false" for an entry the
+    overlay keeps ON is a lie the model would then narrate around."""
+    from agent.context import AgentCtx
+    from agent.kp_tools_worldbook import WorldbookTools
+    from agent.services import build_services
+    from infra.config import Settings
+    from infra.embeddings import FakeEmbeddings
+    from infra.llm import FakeLLM
+
+    services = build_services(Settings(), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(16))
+    ctx = AgentCtx(chat_key="room-update", user_id="kp", locale="en")
+    await services.worldbook.import_entries(
+        ctx.chat_key, card_book(), source="card", is_keeper=True
+    )
+    await save_overlay(
+        services.documents, ctx.chat_key, Overlay(entries={"通用规则": OverlayEntry(enabled=True)})
+    )
+    tools = WorldbookTools(services)
+
+    overruled = await tools.update_lore(ctx, title="通用规则", field="enabled", value="false")
+
+    assert "this room overrides" in overruled and "enabled=Yes" in overruled
+    # The FILE copy really did change — the tool did its job, it just is not the switch.
+    assert (await services.worldbook.get(ctx.chat_key, "通用规则")).enabled is False
+    assert (await services.worldbook.effective_list(ctx.chat_key))
+    effective = next(
+        entry for entry in await services.worldbook.effective_list(ctx.chat_key) if entry.title == "通用规则"
+    )
+    assert effective.enabled is True
+
+    plain = await tools.update_lore(ctx, title="难度·残酷", field="priority", value="3")
+    assert "this room overrides" not in plain
+
+
+async def test_room_entry_titles_is_the_one_oracle_for_known_titles():
+    """The card's RAW list still holds what the import consumed as data and what it skipped
+    as oversized; the ROOM's stored entries are what an overlay title can actually name."""
+    from core.lore_overlay import room_entry_titles
+
+    store = Store()
+    worldbook = await _imported_room(store)
+
+    titles = await room_entry_titles(worldbook, "room1")
+
+    assert "难度·残酷" in titles
+    assert "[InitVar]开局变量" not in titles  # consumed as data, never stored
+    assert "[mvu_update]变量输出格式" not in titles  # skipped as oversized
+
+
 def test_a_corrupt_overlay_degrades_to_the_file_state():
     assert normalize_overlay("not a mapping") is EMPTY_OVERLAY
     assert normalize_overlay({"entries": "junk", "setup": 7}).is_empty
@@ -550,3 +645,71 @@ async def test_a_missing_title_probes_as_not_found():
     probe = await probe_turn_budget(await _imported_room(Store()), "room1", "不存在的条目")
 
     assert not probe.found
+
+
+async def test_the_probe_flags_a_js_condition_it_could_not_evaluate():
+    """Without the sandbox an arbitrary-JS `@@if` cannot be judged. Saying "nothing selects
+    it" would be a confident lie about an entry the real turn injects every time."""
+    store = Store()
+    worldbook = await _imported_room(store)
+    await worldbook.add(
+        "room1",
+        LoreEntry.from_dict(
+            {
+                "id": "",
+                "title": "JS 门",
+                "content": "gated",
+                "constant": True,
+                "condition": "[1,2].filter(x => x > 0).length > 1",
+            }
+        ),
+    )
+
+    probe = await probe_turn_budget(worldbook, "room1", ALWAYS_ON_TITLE)
+
+    assert probe.js_unevaluated is True
+
+
+async def test_a_room_with_only_closed_grammar_conditions_is_not_flagged():
+    store = Store()
+    worldbook = await _imported_room(store)
+    await save_overlay(
+        DocumentStore(store),
+        "room1",
+        Overlay(entries={"难度·残酷": OverlayEntry(enabled=True, condition='配置.难度 == "残酷"')}),
+    )
+
+    probe = await probe_turn_budget(worldbook, "room1", ALWAYS_ON_TITLE)
+
+    assert probe.js_unevaluated is False
+
+
+async def test_the_comparison_run_is_bounded_by_the_room_not_by_the_import_caps():
+    """The unbounded run exists to answer "would it be selected at all"; a 3.2 MB budget
+    means "no cap" only by accident, and the room's own totals say it on purpose."""
+    store = Store()
+    worldbook = await _imported_room(store, route_chars=11_500)
+    await save_overlay(
+        DocumentStore(store),
+        "room1",
+        Overlay(
+            entries={
+                "路线·判官线": OverlayEntry(enabled=True),
+                "难度·残酷": OverlayEntry(enabled=True),
+            }
+        ),
+    )
+    seen: list[tuple[int, int]] = []
+    original = worldbook.match
+
+    async def _recording(chat_key, context, **kwargs):
+        seen.append((kwargs["limit"], kwargs["budget_chars"]))
+        return await original(chat_key, context, **kwargs)
+
+    worldbook.match = _recording  # type: ignore[method-assign]
+    probe = await probe_turn_budget(worldbook, "room1", "难度·残酷")
+
+    assert probe.crowded_out
+    entries = await worldbook.effective_list("room1")
+    assert seen[0] == (KEEPER_TURN_LIMIT, KEEPER_TURN_BUDGET_CHARS)
+    assert seen[1] == (len(entries), sum(len(entry.content) for entry in entries))

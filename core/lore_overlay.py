@@ -447,6 +447,14 @@ def _parse_labels(raw: Any, at: str) -> dict[str, str]:
 
 
 def _parse_file_expose(raw: Any, where: str) -> tuple[str, ...]:
+    """`expose:` — the variable prefixes this overlay publishes to PLAYER panels.
+
+    A file may name explicit prefixes and nothing else. ``*`` — expose the whole tree — is
+    refused outright: an imported tree is opaque module state that starts fully hidden by
+    construction (iron rule #3, fail-closed), and "publish everything" is a judgement about
+    THIS table's spoilers that only the human at it can make. A pack author writing `*` is
+    reaching past the keeper; `.var expose *` typed at the table is not.
+    """
     if raw is None:
         return ()
     if isinstance(raw, str):
@@ -456,9 +464,27 @@ def _parse_file_expose(raw: Any, where: str) -> tuple[str, ...]:
     prefixes: list[str] = []
     for item in raw[:MAX_EXPOSE_PREFIXES]:
         text = str(item).strip()
+        if text.startswith("*"):
+            reason = "name explicit prefixes; only `.var expose *` at the table publishes everything"  # i18n-exempt: author diagnostic, wrapped in a localized summary
+            raise OverlayError(f"{where}overlay expose may not use {text!r} — {reason}")
         if text and text not in prefixes:
             prefixes.append(text)
     return tuple(prefixes)
+
+
+async def room_entry_titles(worldbook: Any, chat_key: str) -> set[str]:
+    """Every lore title this ROOM actually holds — the one oracle for "is this title real".
+
+    Both doors an overlay can come through (`.lore overlay <file>` and the pack overlay a
+    world import applies) ask the same question, and they must not ask it of different
+    things: the card's RAW entry list still contains what the import consumed as data
+    (`[InitVar]`) and what it skipped as oversized, so an overlay naming one of those would
+    read as "known" on one door and "unknown" on the other.
+    """
+    try:
+        return {entry.title for entry in await worldbook.list(chat_key)}
+    except Exception:  # noqa: BLE001 — an unreadable book means "cross-check nothing"
+        return set()
 
 
 async def merge_overlay_file(
@@ -501,7 +527,11 @@ async def merge_overlay_file(
         "entries": applied,
         "setup": len(parsed.setup),
         "unknown": len(validate_overlay(parsed, known_titles)),
+        # How many prefixes this call NEWLY published, and — because a count alone hides
+        # the one fact that matters here — WHICH prefixes the overlay puts on the players'
+        # panel at all. A second import adds nothing and still names them.
         "exposed": exposed,
+        "prefixes": list(parsed.expose),
     }
 
 
@@ -529,6 +559,13 @@ def normalize_overlay(raw: Any) -> Overlay:
     Same posture as `core.mvu_compat._normalize_exposed`: the worst case is that the room
     falls back to the file's own state, which is a state the module shipped with — never an
     exception on the injection path.
+
+    Stored conditions are RE-VALIDATED against the closed grammar here, not trusted because
+    a write path once checked them. The document can arrive from a restored `.save` file or
+    a hand-edited database, and `core.worldbook._condition_holds` hands an expression the
+    closed grammar cannot parse to the full-EJS sandbox — so an unchecked string in this
+    field is a route from a backup file into the JS engine. One that does not parse is
+    dropped to "" (fail closed: the entry keeps its switch, loses its gate).
     """
     if not isinstance(raw, dict):
         return EMPTY_OVERLAY
@@ -541,8 +578,11 @@ def normalize_overlay(raw: Any) -> Overlay:
                 continue
             enabled = body.get("enabled")
             enabled = enabled if isinstance(enabled, bool) else None
-            condition = body.get("condition")
-            condition = str(condition)[:MAX_EXPR_LEN] if isinstance(condition, str) else ""
+            raw_condition = body.get("condition")
+            try:
+                condition = validate_expression(raw_condition) if isinstance(raw_condition, str) else ""
+            except OverlayError:
+                condition = ""
             entry = OverlayEntry(enabled=enabled, condition=condition)
             if not entry.is_empty:
                 entries[name] = entry

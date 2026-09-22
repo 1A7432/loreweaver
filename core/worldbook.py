@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from core.card_split import is_variable_declaration_entry
-from core.condexpr import MAX_EXPR_LEN, CondExprError, evaluate_bool
+from core.condexpr import MAX_EXPR_LEN, CondExprError, compile_expression, evaluate_bool
 from core.documents import DocumentStore
 from core.ejs_lite import render as render_template
 from core.ejs_lite import split_decorators, substitute_macros
@@ -581,6 +581,10 @@ class BudgetProbe:
     crowded_out: bool = False
     #: Titles that took slots/characters ahead of it (only when `crowded_out`).
     ranked_above: tuple[str, ...] = ()
+    #: No full-EJS engine was available, so an arbitrary-JS `@@if` condition could not be
+    #: evaluated and the verdict is incomplete. The receipt must SAY this rather than
+    #: report "nothing selects it" for an entry the real turn injects.
+    js_unevaluated: bool = False
 
 
 async def probe_turn_budget(
@@ -589,6 +593,7 @@ async def probe_turn_budget(
     title: str,
     *,
     resolve: Any = None,
+    engine: Any = None,
 ) -> BudgetProbe:
     """Dry-run the keeper turn's selection and report where `title` landed.
 
@@ -599,18 +604,31 @@ async def probe_turn_budget(
     worst case for "will the thing I just switched on be there".
 
     Two runs, because "did not make the cut" and "did not trigger at all" are different
-    answers and only the first one is a budget problem.
+    answers and only the first one is a budget problem. The comparison run is bounded by
+    the ROOM's own entry count and total content, not by the import caps: a `limit` far
+    above what exists changes nothing, and a `budget_chars` of 3.2 MB is a number that
+    means "no cap" only by accident.
+
+    `engine` is the same optional `core.ejs_full.FullEjsEngine` the real turn builds. Pass
+    it or the probe cannot evaluate an arbitrary-JS `@@if` — which is a condition real
+    imported cards carry — and would report "nothing selects it" for an entry that injects
+    every turn. Without one the verdict is still returned, flagged `js_unevaluated` so the
+    reader is told the receipt is partial instead of being told something false.
     """
     overlay = await worldbook.overlay(chat_key)
-    entry = next(
-        (item for item in await worldbook.effective_list(chat_key, overlay=overlay) if item.title == title),
-        None,
-    )
+    effective = await worldbook.effective_list(chat_key, overlay=overlay)
+    entry = next((item for item in effective if item.title == title), None)
     if entry is None:
         return BudgetProbe()
+    # Only a condition the CLOSED grammar cannot parse needs the sandbox; everything else
+    # is decided by the resolver either way, so a room without the `ejs` extra is not
+    # warned about entries the probe judged perfectly well.
+    js_unevaluated = engine is None and any(
+        item.condition and not _parses_in_closed_grammar(item.condition) for item in effective
+    )
     size = len(entry.content)
     if size > KEEPER_TURN_BUDGET_CHARS:
-        return BudgetProbe(found=True, size=size, oversize=True)
+        return BudgetProbe(found=True, size=size, oversize=True, js_unevaluated=js_unevaluated)
 
     def _run(limit: int, budget: int) -> Any:
         # A fixed seed keeps a `probability` entry's verdict stable between the two runs
@@ -622,6 +640,7 @@ async def probe_turn_budget(
             limit=limit,
             budget_chars=budget,
             resolve=resolve,
+            engine=engine,
             advance_timers=False,
             rng=random.Random(0),
             overlay=overlay,
@@ -629,16 +648,30 @@ async def probe_turn_budget(
 
     chosen = await _run(KEEPER_TURN_LIMIT, KEEPER_TURN_BUDGET_CHARS)
     if any(item.title == title for item in chosen):
-        return BudgetProbe(found=True, size=size, fits=True)
-    unbounded = await _run(MAX_IMPORT_ENTRIES, MAX_IMPORT_ENTRIES * MAX_IMPORT_CONTENT_CHARS)
+        return BudgetProbe(found=True, size=size, fits=True, js_unevaluated=js_unevaluated)
+    room_entries = max(len(effective), 1)
+    room_chars = max(sum(len(item.content) for item in effective), 1)
+    unbounded = await _run(room_entries, room_chars)
     if not any(item.title == title for item in unbounded):
-        return BudgetProbe(found=True, size=size)
+        return BudgetProbe(found=True, size=size, js_unevaluated=js_unevaluated)
     return BudgetProbe(
         found=True,
         size=size,
         crowded_out=True,
         ranked_above=tuple(item.title for item in chosen),
+        js_unevaluated=js_unevaluated,
     )
+
+
+def _parses_in_closed_grammar(condition: str) -> bool:
+    """Whether `core.condexpr` can read this condition at all (vs. arbitrary JS)."""
+    try:
+        compile_expression(condition, probe="1")
+    except CondExprError:
+        return False
+    except Exception:  # noqa: BLE001 — a probe-dependent evaluation quirk still parses
+        return True
+    return True
 
 
 def _condition_holds(condition: str, resolve: Any, engine: Any) -> bool:

@@ -129,6 +129,44 @@ async def test_a_disabled_entry_is_readable_through_getwi_but_never_injects_itse
     assert prompt.count("线索会骗人。") == 1  # the disabled entry still never injects itself
 
 
+async def test_the_lore_budget_receipt_evaluates_js_conditions_with_the_real_engine():
+    """The dry run behind `.lore enable|show` gets the SAME sandbox the turn does.
+
+    Without it an arbitrary-JS `@@if` cannot be judged, and the receipt would report
+    "nothing selects it on a quiet turn" about an entry that injects every turn."""
+    from gateway.commands import CommandRouter
+
+    services = _services()
+    ctx = _ctx("chat-ejs-full-receipt")
+    condition = "[1,2,3].filter(x => x <= stat_data.stage[0]).length >= 2"
+    await mvu_init_from_initvar(services.documents, ctx.chat_key, {"stage": [2, "story stage"]})
+    await services.worldbook.add(
+        ctx.chat_key, _entry(title="late-game", content="LATEGAME", condition=condition)
+    )
+
+    reply = await CommandRouter(services).dispatch(ctx, ".lore show late-game")
+
+    assert reply is not None
+    assert "makes this turn's cut" in reply  # judged, not guessed
+    assert "cannot evaluate" not in reply  # and no "partial verdict" caveat
+
+
+async def test_the_receipt_says_when_it_could_not_evaluate_a_js_condition():
+    services = _services(enable_full_ejs=False)
+    ctx = _ctx("chat-ejs-full-receipt-off")
+    from gateway.commands import CommandRouter
+
+    await services.worldbook.add(
+        ctx.chat_key,
+        _entry(title="js-gated", content="GATED", condition="[1,2].filter(x => x > 0).length > 1"),
+    )
+    await services.worldbook.add(ctx.chat_key, _entry(title="plain", content="PLAIN"))
+
+    reply = await CommandRouter(services).dispatch(ctx, ".lore show plain")
+
+    assert reply is not None and "cannot evaluate" in reply
+
+
 async def test_without_the_full_engine_a_getwi_controller_degrades_to_nothing_visible():
     services = _services(enable_full_ejs=False)
     ctx = _ctx("chat-ejs-full-library-off")

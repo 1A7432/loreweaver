@@ -25,7 +25,7 @@ from agent.context import AgentCtx
 from agent.services import Services
 from agent.tools import tool
 from core.lore_overlay import apply as apply_overlay
-from core.lore_overlay import stale_titles
+from core.lore_overlay import differs, stale_titles
 from core.worldbook import LoreEntry
 from infra.i18n import I18n
 
@@ -257,8 +257,14 @@ class WorldbookTools:
 
     @tool(prep_only=True)
     async def update_lore(self, ctx: AgentCtx, title: str, field: str, value: str) -> str:
-        """Update a single field on a lore entry: title/content/keys/category/scope/secret/constant/
-        priority/enabled.
+        """Edit one field of a lore entry's stored copy: title/content/keys/category/scope/secret/
+        constant/priority/enabled.
+
+        This edits the entry ITSELF — the imported file's copy. It is not the room's switch:
+        the keeper may have overridden `enabled`/`condition` for this title in the room's
+        overlay (`.lore enable/disable/bind`), and the OVERLAY WINS wherever the two
+        disagree. When that is the case the reply says so and names the effective state, so
+        do not read a successful edit of `enabled` as "the entry is now off".
 
         Args:
             title: The entry's title or id.
@@ -266,16 +272,31 @@ class WorldbookTools:
             value: The new value (keys: comma-separated; secret/constant/enabled: true/false; priority: integer).
 
         Returns:
-            Confirmation, or a not-found/unsupported-field message.
+            Confirmation (plus the effective state when a room override differs), or a
+            not-found/unsupported-field message.
         """
         i18n = self._i18n(ctx)
         if field not in _UPDATABLE_FIELDS:
             return i18n.t("worldbook.tools.update.bad_field", field=field, allowed=", ".join(sorted(_UPDATABLE_FIELDS)))
         try:
-            record = await self._services.worldbook.update(ctx.chat_key, title, **{field: _coerce_field_value(field, value)})
+            worldbook = self._services.worldbook
+            record = await worldbook.update(ctx.chat_key, title, **{field: _coerce_field_value(field, value)})
             if record is None:
                 return i18n.t("worldbook.tools.update.not_found", title=title)
-            return i18n.t("worldbook.tools.update.done", title=record.title, field=field, value=value)
+            done = i18n.t("worldbook.tools.update.done", title=record.title, field=field, value=value)
+            # An edit that the room's overlay overrules must not read as success: reporting
+            # "enabled is now false" for an entry the overlay keeps on is a lie the model
+            # would then narrate around.
+            overlay = await worldbook.overlay(ctx.chat_key)
+            if differs(record, overlay):
+                effective = apply_overlay(record, overlay)
+                done += "\n" + i18n.t(
+                    "worldbook.tools.update.overridden",
+                    title=record.title,
+                    enabled=i18n.t("common.yes" if effective.enabled else "common.no"),
+                    condition=effective.condition or i18n.t("common.none"),
+                )
+            return done
         except Exception as exc:
             return i18n.t("worldbook.tools.update.failed", error=str(exc))
 

@@ -95,7 +95,7 @@ from agent.player_line import player_line_body
 from agent.services import Services
 from core.dice_engine import DiceRoller
 from core.documents import KEEPER_VIEWER
-from core.ejs_full import create_full_engine
+from core.ejs_full import build_room_engine
 from core.ejs_lite import MacroContext, substitute_macros
 from core.module_brief import BRIEF_DOC_TYPE, directive_bands
 from core.modvars import describe_modvars, load_modvars
@@ -225,14 +225,13 @@ async def build_system_prompt_parts(
     modvar_state = await load_modvars(services.documents, ctx.chat_key)
     mvu_tree = await load_mvu(services.documents, ctx.chat_key)
     variable_resolver = build_resolver(modvar_state["values"], mvu_tree)
-    engine = None
-    if services.settings.enable_full_ejs:
-        room_entries = await services.worldbook.list(ctx.chat_key)
-        engine = create_full_engine(
-            flat_variables=modvar_state["values"],
-            tree=mvu_tree,
-            worldinfo={entry.title: entry.content for entry in room_entries},
-        )
+    engine = await build_room_engine(
+        services.worldbook,
+        ctx.chat_key,
+        enabled=services.settings.enable_full_ejs,
+        flat_variables=modvar_state["values"],
+        tree=mvu_tree,
+    )
     # M23 WS3: everything random that reaches the model is seeded from persisted state.
     from agent.chronicle import chronicle_turn
 
