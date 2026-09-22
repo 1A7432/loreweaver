@@ -33,12 +33,28 @@ from core.condexpr import MAX_EXPR_LEN, CondExprError, evaluate_bool
 from core.documents import DocumentStore
 from core.ejs_lite import render as render_template
 from core.ejs_lite import split_decorators, substitute_macros
+from core.lore_overlay import Overlay, load_overlay
+from core.lore_overlay import apply as apply_overlay
 from core.mvu_compat import parse_initvar
 from infra.room_facets import STORAGE_DOCUMENTS, STORAGE_ROOM_STATE, STORAGE_VECTORS, RoomStateFacet
 
 WORLD_SCOPE = "world"
 LORE_DOC_TYPE = "lore"
 WORLDBOOK_COLLECTION = "worldbook"
+
+# The KEEPER turn's injection budget, tuned for imported module cards: their rule/timeline
+# entries are constant (a keeper world import preserves the flag) and a handful run 2-5KB
+# each, so the browse-path default (8 entries / 4000 chars) starves the module. Oversized
+# protocol/teaching blocks (10KB+) still stay out — `_cap_entries` skips anything that
+# alone exceeds the budget, which also keeps ST JSONPatch tutors from steering the model
+# off the engine's `_.set` wire.
+#
+# Named here rather than inline in `agent.prompt_builder` because two callers need the
+# SAME numbers: the once-per-turn injection, and the `.lore enable|bind|show` receipt that
+# tells an admin whether the entry they just switched on can actually fit (M26 §5.4 — a
+# switch that silently changes nothing is how "chose = did nothing" comes back).
+KEEPER_TURN_LIMIT = 12
+KEEPER_TURN_BUDGET_CHARS = 12_000
 
 _SELECTIVE_LOGICS = ("and_any", "and_all", "not_any", "not_all")
 _POSITION_RANK = {"before": 0, "": 1, "after": 2}
@@ -203,6 +219,34 @@ class Worldbook:
             return [entry for entry in entries if entry.scope == scope]
         return entries
 
+    async def overlay(self, chat_key: str) -> Overlay:
+        """This room's keeper-side lore overlay (M26); EMPTY when it has none."""
+        return await load_overlay(self.documents, chat_key)
+
+    async def effective_list(
+        self, chat_key: str, *, scope: str | None = None, overlay: Overlay | None = None
+    ) -> list[LoreEntry]:
+        """Every entry with the room's overlay applied — the state activation reads.
+
+        `overlay=None` loads it; a caller that already holds one (a single turn's
+        injection) passes it so the document is read once. The entries themselves are
+        never rewritten: `core.lore_overlay.apply` returns copies.
+        """
+        if overlay is None:
+            overlay = await self.overlay(chat_key)
+        return [apply_overlay(entry, overlay) for entry in await self.list(chat_key, scope=scope)]
+
+    async def effective_get(
+        self, chat_key: str, id_or_title: str, *, overlay: Overlay | None = None
+    ) -> LoreEntry | None:
+        """`get` with the overlay applied (the `activewi` extra pass's entrance)."""
+        entry = await self.get(chat_key, id_or_title)
+        if entry is None:
+            return None
+        if overlay is None:
+            overlay = await self.overlay(chat_key)
+        return apply_overlay(entry, overlay)
+
     async def update(self, chat_key: str, id_or_title: str, **fields: Any) -> LoreEntry | None:
         current = await self.get(chat_key, id_or_title)
         if current is None:
@@ -257,6 +301,7 @@ class Worldbook:
         is_keeper: bool = False,
         char_name: str = "",
         skipped_titles: list[str] | None = None,
+        unreachable_titles: list[str] | None = None,
     ) -> int:
         """Import lorebook entries into this room.
 
@@ -271,6 +316,13 @@ class Worldbook:
         whole-import failure — real module cards mix ordinary lore with a few oversized
         protocol/teaching blocks); its title is appended to the caller-supplied
         ``skipped_titles`` accumulator so command surfaces can itemize what was left out.
+
+        ``unreachable_titles`` collects the entries that landed DISABLED with no keywords
+        (M26 §5.6): nothing in the engine's activation model can ever fire one, because in
+        SillyTavern the card's own frontend scripts toggle them. It is a COUNT and a hint
+        in the import receipt and nothing else — no grouping, no inference, no suggested
+        pick (`docs/notes/rejected/sole-active-card-mechanism.md`). Variable-declaration
+        entries are consumed before this point, so they never appear here.
         """
         raw_entries: Any = entries.get("entries", []) if isinstance(entries, dict) else entries
         if not isinstance(raw_entries, list):
@@ -323,6 +375,8 @@ class Worldbook:
                 # otherwise keep its old text forever).
                 await self.add(chat_key, entry, source=source)
                 count += 1
+                if unreachable_titles is not None and not entry.enabled and not entry.keys:
+                    unreachable_titles.append(entry.title)
         return count
 
     async def match(
@@ -339,6 +393,7 @@ class Worldbook:
         rng: random.Random | None = None,
         advance_timers: bool = False,
         include_constant: bool = True,
+        overlay: Overlay | None = None,
     ) -> list[LoreEntry]:
         """Select the entries to inject for `context_text`.
 
@@ -361,10 +416,16 @@ class Worldbook:
         (sticky/cooldown/delay) track against a per-room turn counter that ONLY advances when
         `advance_timers=True` — the once-per-turn injection path (the prompt builder) passes it;
         browse/search paths leave the counter and effect windows untouched.
+
+        The room's M26 lore OVERLAY is applied before anything else, on BOTH selection halves
+        (keyword and semantic), because effective "enabled" has exactly one definition —
+        `core.lore_overlay.apply`. `overlay` is loaded here unless a caller already holds it.
         """
         context = context_text or ""
         rng = rng or _RNG
-        entries = [entry for entry in await self.list(chat_key) if entry.enabled]
+        if overlay is None:
+            overlay = await self.overlay(chat_key)
+        entries = [entry for entry in await self.effective_list(chat_key, overlay=overlay) if entry.enabled]
         timers = await self._load_timers(chat_key)
         turn = int(timers.get("turn", 0)) + (1 if advance_timers else 0)
         timer_entries = timers.get("entries", {})
@@ -393,7 +454,7 @@ class Worldbook:
             if (entry.constant and include_constant) or _keyword_hit(entry, context):
                 selected[entry.id] = entry
 
-        for entry in await self._semantic_hits(chat_key, context, limit=limit):
+        for entry in await self._semantic_hits(chat_key, context, limit=limit, overlay=overlay):
             if entry.id in selected:
                 continue
             if _sticky_active(entry) or _timer_eligible(entry):
@@ -468,7 +529,14 @@ class Worldbook:
             ]
         )
 
-    async def _semantic_hits(self, chat_key: str, context: str, *, limit: int) -> list[LoreEntry]:
+    async def _semantic_hits(
+        self, chat_key: str, context: str, *, limit: int, overlay: Overlay | None = None
+    ) -> list[LoreEntry]:
+        """Vector recall, through the SAME effective-state function keyword matching uses.
+
+        The overlay is not an optimisation here, it is the fix for the shape that killed the
+        2026-08-06 sole-active mechanism: a filter honored by keyword selection and bypassed
+        by semantic recall re-admits exactly the entry the admin switched off."""
         if self.vector_db is None or self.embeddings is None or not context.strip():
             return []
         [vector] = await self.embeddings.embed([context])
@@ -486,10 +554,91 @@ class Worldbook:
         for hit in hits[:limit]:
             if hit.score <= 0:
                 continue
-            entry = await self.get(chat_key, str(hit.payload.get("entry_id") or ""))
+            entry = await self.effective_get(chat_key, str(hit.payload.get("entry_id") or ""), overlay=overlay)
             if entry is not None and entry.enabled:
                 entries.append(entry)
         return entries
+
+
+@dataclass(frozen=True)
+class BudgetProbe:
+    """What a dry run of this turn's selection says about ONE entry (M26 §5.4).
+
+    The receipt behind `.lore enable|bind|show`. Without it, an admin who switches an
+    entry on has no way to learn that it never injects — which is how "I chose and nothing
+    happened" survived the deletion of the sole-active mechanism in a new form.
+    """
+
+    #: The entry was found at all.
+    found: bool = False
+    #: `len(content)`.
+    size: int = 0
+    #: Bigger than the WHOLE turn budget, so `_cap_entries` can never fit it — ever.
+    oversize: bool = False
+    #: It made this turn's cut on an empty context.
+    fits: bool = False
+    #: It would be selected with an unlimited budget but not with the real one.
+    crowded_out: bool = False
+    #: Titles that took slots/characters ahead of it (only when `crowded_out`).
+    ranked_above: tuple[str, ...] = ()
+
+
+async def probe_turn_budget(
+    worldbook: Worldbook,
+    chat_key: str,
+    title: str,
+    *,
+    resolve: Any = None,
+) -> BudgetProbe:
+    """Dry-run the keeper turn's selection and report where `title` landed.
+
+    Deliberately side-effect free: `advance_timers=False`, so sticky/cooldown/delay windows
+    and the room's turn counter are exactly as they were (the injection path is the only
+    writer of those). The empty context is the QUIET-turn posture — constants and
+    conditioned entries select themselves, keyword entries do not — which is the honest
+    worst case for "will the thing I just switched on be there".
+
+    Two runs, because "did not make the cut" and "did not trigger at all" are different
+    answers and only the first one is a budget problem.
+    """
+    overlay = await worldbook.overlay(chat_key)
+    entry = next(
+        (item for item in await worldbook.effective_list(chat_key, overlay=overlay) if item.title == title),
+        None,
+    )
+    if entry is None:
+        return BudgetProbe()
+    size = len(entry.content)
+    if size > KEEPER_TURN_BUDGET_CHARS:
+        return BudgetProbe(found=True, size=size, oversize=True)
+
+    def _run(limit: int, budget: int) -> Any:
+        # A fixed seed keeps a `probability` entry's verdict stable between the two runs
+        # and between two readings of the same receipt; the real turn rolls its own.
+        return worldbook.match(
+            chat_key,
+            "",
+            role="keeper",
+            limit=limit,
+            budget_chars=budget,
+            resolve=resolve,
+            advance_timers=False,
+            rng=random.Random(0),
+            overlay=overlay,
+        )
+
+    chosen = await _run(KEEPER_TURN_LIMIT, KEEPER_TURN_BUDGET_CHARS)
+    if any(item.title == title for item in chosen):
+        return BudgetProbe(found=True, size=size, fits=True)
+    unbounded = await _run(MAX_IMPORT_ENTRIES, MAX_IMPORT_ENTRIES * MAX_IMPORT_CONTENT_CHARS)
+    if not any(item.title == title for item in unbounded):
+        return BudgetProbe(found=True, size=size)
+    return BudgetProbe(
+        found=True,
+        size=size,
+        crowded_out=True,
+        ranked_above=tuple(item.title for item in chosen),
+    )
 
 
 def _condition_holds(condition: str, resolve: Any, engine: Any) -> bool:
@@ -527,6 +676,8 @@ async def inject_world_lore_prompt(
     limit: int = 8,
     budget_chars: int = 4000,
 ) -> str:
+    # One overlay read per turn, shared by `match()` and the `activewi` pass below.
+    overlay = await worldbook.overlay(ctx.chat_key)
     entries = await worldbook.match(
         ctx.chat_key,
         recent_context,
@@ -537,6 +688,7 @@ async def inject_world_lore_prompt(
         engine=engine,
         rng=rng,
         advance_timers=advance_timers,
+        overlay=overlay,
     )
     rendered = [render_entry_content(entry, resolve, engine, macros=macros) for entry in entries]
 
@@ -549,7 +701,7 @@ async def inject_world_lore_prompt(
             if name in seen:
                 continue
             seen.add(name)
-            extra = await worldbook.get(ctx.chat_key, name)
+            extra = await worldbook.effective_get(ctx.chat_key, name, overlay=overlay)
             if extra is not None and extra.enabled and (role == "keeper" or not extra.secret):
                 rendered.append(render_entry_content(extra, resolve, engine, macros=macros))
 

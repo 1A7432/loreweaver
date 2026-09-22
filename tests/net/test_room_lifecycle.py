@@ -345,3 +345,53 @@ async def test_the_export_manifest_carries_every_section_a_facet_storage_names(t
 
     for section in EXPORT_SECTIONS.values():
         assert section in snapshot, f"the export manifest lost its {section!r} section"
+
+
+# --- M26: the lore overlay's lifecycle --------------------------------------
+
+
+async def _seed_overlay(services, chat_key: str):
+    from core.lore_overlay import EMPTY_OVERLAY, SetupItem, save_overlay, set_entry, set_setup_items
+
+    overlay = set_setup_items(
+        set_entry(EMPTY_OVERLAY, "难度·残酷", enabled=True, condition='配置.难度 == "残酷"'),
+        [SetupItem(path="配置.难度", options=("轻松", "标准", "残酷"))],
+    )
+    await save_overlay(services.documents, chat_key, overlay)
+    return overlay
+
+
+@pytest.mark.parametrize("scope,survives", [("story", True), ("chars", True), ("all", False)])
+async def test_the_lore_overlay_leaves_with_the_module_not_with_the_session(tmp_path, scope, survives):
+    """Replaying the same scenario must not silently revert the difficulty the table picked,
+    so the overlay dies at `all` exactly like the lore and the variable tree it annotates."""
+    from core.lore_overlay import load_overlay
+
+    services = _services(str(tmp_path))
+    chat_key = chat_key_for_room("arkham")
+    await _seed_overlay(services, chat_key)
+
+    await reset_room_state(services, chat_key, scope=scope)
+
+    overlay = await load_overlay(services.documents, chat_key)
+    assert (not overlay.is_empty) is survives
+
+
+async def test_a_room_snapshot_round_trips_the_lore_overlay(tmp_path):
+    from core.lore_overlay import load_overlay
+
+    services = _services(str(tmp_path))
+    keystore = Keystore()
+    keystore.add(room="arkham", name="Keeper", role="keeper")
+    chat_key = chat_key_for_room("arkham")
+    saved = await _seed_overlay(services, chat_key)
+
+    exported = await export_room(services, keystore, "arkham", "overlay.json")
+    await reset_room_state(services, chat_key, scope="all")
+    assert (await load_overlay(services.documents, chat_key)).is_empty
+
+    await import_room(services, keystore, exported["path"], expected_room="arkham")
+
+    restored = await load_overlay(services.documents, chat_key)
+    assert restored.entries == saved.entries
+    assert [item.to_dict() for item in restored.setup] == [item.to_dict() for item in saved.setup]

@@ -242,11 +242,22 @@ def _project_note(doc: Document, viewer: Viewer) -> dict[str, Any] | None:
     return dict(doc.data) if viewer.is_keeper else None
 
 
+def _project_lore_overlay(doc: Document, viewer: Viewer) -> dict[str, Any] | None:
+    """M26 lore overlay: keeper-only, whole-document.
+
+    It is an index of which entries the module keeps switched OFF and which variable
+    values gate the rest — i.e. a map of the secret lore a player has not reached yet,
+    stated as titles and conditions. Keeper-grade by construction, so the projection is
+    all-or-nothing rather than filtered (there is no player-safe half to compute)."""
+    return dict(doc.data) if viewer.is_keeper else None
+
+
 # Singleton document ids.
 MODVARS_ID = "modvars"
 MVU_ID = "mvu"
 MODULE_POOL_ID = "module"
 SCENE_ID = "scene"
+LORE_OVERLAY_ID = "overlay"
 
 for _name, _project_fn, _singleton in (
     ("lore", _project_lore, None),
@@ -257,6 +268,7 @@ for _name, _project_fn, _singleton in (
     ("mvu_tree", _project_mvu, MVU_ID),
     ("module_pool", _project_module_pool, MODULE_POOL_ID),
     ("note", _project_note, None),
+    ("lore_overlay", _project_lore_overlay, LORE_OVERLAY_ID),
     ("scene", _full_view, SCENE_ID),
     ("media", _full_view, None),
 ):

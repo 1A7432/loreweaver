@@ -97,3 +97,49 @@ async def test_flag_off_falls_back_to_the_subset_renderer():
     assert "LOOPplain" in prompt
     assert "LOOPLOOPLOOP" not in prompt
     assert "<%" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# M26 §3: disabled entries as an EJS content LIBRARY already work — pinned, not built
+# ---------------------------------------------------------------------------
+
+
+async def test_a_disabled_entry_is_readable_through_getwi_but_never_injects_itself():
+    """The controller pattern an imported card can already use, with no overlay at all.
+
+    `agent.prompt_builder` fills the engine's `__wi` map from EVERY room entry, disabled
+    ones included, so one enabled "controller" template can read the variant the variable
+    tree currently names. This is a capability the engine HAS; M26 documents it and pins it
+    here so nobody narrows `worldinfo` to enabled entries as a tidy-up.
+    """
+    services = _services()
+    ctx = _ctx("chat-ejs-full-library")
+    await mvu_init_from_initvar(services.documents, ctx.chat_key, {"配置": {"难度": "残酷"}})
+    await services.worldbook.add(
+        ctx.chat_key, _entry(title="难度·残酷", content="线索会骗人。", enabled=False, constant=True)
+    )
+    await services.worldbook.add(
+        ctx.chat_key,
+        _entry(title="控制器", content='难度：<%- getwi("难度·" + getvar("配置.难度")) %>'),
+    )
+
+    prompt = await build_system_prompt(ctx, services)
+
+    assert "难度：线索会骗人。" in prompt  # read through the library
+    assert prompt.count("线索会骗人。") == 1  # the disabled entry still never injects itself
+
+
+async def test_without_the_full_engine_a_getwi_controller_degrades_to_nothing_visible():
+    services = _services(enable_full_ejs=False)
+    ctx = _ctx("chat-ejs-full-library-off")
+    await services.worldbook.add(
+        ctx.chat_key, _entry(title="难度·残酷", content="线索会骗人。", enabled=False, constant=True)
+    )
+    await services.worldbook.add(
+        ctx.chat_key, _entry(title="控制器", content='难度：<%- getwi("难度·残酷") %>')
+    )
+
+    prompt = await build_system_prompt(ctx, services)
+
+    assert "线索会骗人。" not in prompt  # the subset has no library
+    assert "<%" not in prompt and "getwi" not in prompt  # and leaks no raw template text

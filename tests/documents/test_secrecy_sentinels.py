@@ -215,3 +215,47 @@ def test_keeper_only_modvars_never_project_to_players() -> None:
 
     keeper_view = _dump(project(doc, KEEPER_VIEWER))
     assert "true_culprit" in keeper_view and SENTINEL in keeper_view
+
+
+# -- 6. the M26 lore overlay --------------------------------------------------
+
+
+def _overlay_doc() -> Document:
+    return _doc(
+        "lore_overlay",
+        "overlay",
+        {
+            "entries": {
+                f"真相·{SENTINEL}": {"enabled": True, "condition": '配置.路线 == "判官线"'},
+                "难度·残酷": {"enabled": True},
+            },
+            "setup": [{"path": "配置.难度", "options": ["轻松", "残酷"], "labels": {}, "done": False}],
+        },
+    )
+
+
+def test_the_lore_overlay_never_projects_to_players_or_actors() -> None:
+    """It is a map of which entries the module keeps switched off and what unlocks them —
+    i.e. an index of the lore the players have not reached. Keeper-grade whole, no half."""
+    doc = _overlay_doc()
+
+    assert project(doc, PLAYER_VIEWER) is None
+    assert project(doc, actor_viewer("npc_1")) is None
+    assert _dump(project(doc, actor_viewer("companion_1"))) == ""
+
+    keeper_view = project(doc, KEEPER_VIEWER)
+    assert keeper_view is not None and SENTINEL in _dump(keeper_view)
+    assert keeper_view["setup"][0]["path"] == "配置.难度"
+
+
+async def test_players_never_see_a_lore_overlay_in_a_document_listing() -> None:
+    """`list_views` is the chokepoint every outbound listing goes through."""
+    from core.documents import DocumentStore
+    from infra.store import Store
+
+    documents = DocumentStore(Store())
+    await documents.put("room1", "lore_overlay", "overlay", _overlay_doc().data)
+
+    assert await documents.list_views("room1", "lore_overlay", PLAYER_VIEWER) == []
+    assert len(await documents.list_views("room1", "lore_overlay", KEEPER_VIEWER)) == 1
+    assert await documents.get_view("room1", "lore_overlay", "overlay", PLAYER_VIEWER) is None

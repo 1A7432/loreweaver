@@ -113,7 +113,7 @@ from core.relationships import RelationshipManager
 from core.skills import load_skill
 from core.table_habits import HABITS_DOC_TYPE, HABITS_ID, index_lines
 from core.varspace import build_resolver
-from core.worldbook import inject_world_lore_prompt
+from core.worldbook import KEEPER_TURN_BUDGET_CHARS, KEEPER_TURN_LIMIT, inject_world_lore_prompt
 
 # How much of the room's conversation seeds the retrieval context (`_recent_transcript`).
 _RECENT_CONTEXT_MESSAGES = 6
@@ -220,14 +220,11 @@ async def build_system_prompt_parts(
         macros=macros,
         rng=turn_rng(ctx.chat_key, replay_turn, "worldbook"),
         advance_timers=advance_timers,  # the once-per-turn injection path drives sticky/cooldown/delay
-        # Keeper-turn injection budget, tuned for imported module cards: their rule/timeline
-        # entries are constant (a keeper world import preserves the flag) and a handful run
-        # 2-5KB each, so the browse-path default (8 entries / 4000 chars) starves the module.
-        # Oversized protocol/teaching blocks (10KB+) still stay out — `_cap_entries` skips
-        # anything that alone exceeds the budget, which also keeps ST JSONPatch tutors from
-        # steering the model off the engine's `_.set` wire.
-        limit=12,
-        budget_chars=12_000,
+        # The keeper-turn injection budget. It lives in `core.worldbook` because the
+        # `.lore enable|bind` receipt dry-runs selection against the SAME numbers (M26 §5.4);
+        # two copies would make the receipt lie the first time one of them moved.
+        limit=KEEPER_TURN_LIMIT,
+        budget_chars=KEEPER_TURN_BUDGET_CHARS,
     )
     if engine is not None:
         mvu_tree = await _flush_template_writes(services, ctx.chat_key, engine, mvu_tree)
