@@ -24,11 +24,10 @@
   "modvars.stat.set.done": "{path}: {old} → {new}.",
   "modvars.stat.adjust.done": "{path}: {old} → {new} (change: {delta}).",
   "modvars.stat.failed": "Card-variable operation failed: {error}",
-  "vars.commands.help": "Keeper: curate imported-card variable exposure and write module variables: .var list | expose <prefix|*> | hide <prefix> | set <id> <value> | add <id> <delta>",
-  "vars.commands.usage": "Usage: .var list | .var expose <prefix|*> | .var hide <prefix> | .var set <id> <value> | .var add <id> <delta>",
+  "vars.commands.help": "Keeper: curate imported-card variable exposure and write module variables: .var list | setup | expose <prefix|*> | hide <prefix> | set <id-or-path> <value> | add <id-or-path> <delta>",
+  "vars.commands.usage": "Usage: .var list | .var setup | .var expose <prefix|*> | .var hide <prefix> | .var set <id-or-path> <value> | .var add <id-or-path> <delta>",
   "vars.commands.denied": "Only an authenticated Keeper can manage module variables.",
   "vars.commands.none_defined": "No module variables are defined in this room yet — the Keeper defines them (define_variable) during prep.",
-  "vars.commands.unknown_var": "Unknown variable \"{id}\". Defined variables: {known}.",
   "vars.commands.bad_delta": "\"{delta}\" isn't a usable whole number.",
   "vars.commands.set_done": "{label} [{id}]: {old} → {new}.",
   "vars.commands.add_done": "{label} [{id}]: {old} → {new} (change: {delta}).",
@@ -45,5 +44,13 @@
   "vars.commands.exposed": "Exposed “{prefix}” to the party panel.",
   "vars.commands.expose_noop": "“{prefix}” is already exposed (or the exposure list is full).",
   "vars.commands.hidden": "Hid “{prefix}” from the party panel.",
-  "vars.commands.hide_noop": "“{prefix}” was not an exposed prefix (use .var list to see them)."
+  "vars.commands.hide_noop": "“{prefix}” was not an exposed prefix (use .var list to see them).",
+  "vars.commands.unknown_target": "\"{id}\" is neither a defined tracker nor a leaf of the imported card's tree. Trackers: {known}. Nearest card paths: {paths}.",
+  "vars.commands.tree_set_done": "{path}: {old} → {new}.",
+  "vars.commands.tree_add_done": "{path}: {old} → {new} (change: {delta}).",
+  "vars.commands.setup_header": "Setup choices for this module ({count} still open):",
+  "vars.commands.setup_item_pending": "· [ ] {label} [{path}] — options: {options}",
+  "vars.commands.setup_item_done": "· [x] {label} [{path}]",
+  "vars.commands.setup_empty": "This module declares no \"set before play\" choices.",
+  "vars.commands.setup_pending_line": "Setup still open: {items}"
 }

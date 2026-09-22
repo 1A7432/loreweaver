@@ -16,6 +16,17 @@ _LORE_ADD_WORDS = {"add", "new", "添加", "新增"}
 _LORE_LIST_WORDS = {"", "list", "ls", "列表", "查看"}
 _LORE_QUERY_WORDS = {"query", "search", "find", "查询", "查詢", "搜索"}
 _LORE_IMPORT_WORDS = {"import", "load", "导入", "導入"}
+# M26 — the overlay switches. They write the room's keeper-only `lore_overlay` document,
+# never the stored entry: faithful import survives every one of them.
+_LORE_ENABLE_WORDS = {"enable", "on", "启用", "啟用", "开启", "開啟"}
+_LORE_DISABLE_WORDS = {"disable", "off", "禁用", "关闭", "關閉"}
+_LORE_BIND_WORDS = {"bind", "绑定", "綁定"}
+_LORE_UNBIND_WORDS = {"unbind", "解绑", "解綁"}
+_LORE_RESTORE_WORDS = {"restore", "还原", "還原", "复原", "復原"}
+_LORE_SHOW_WORDS = {"show", "详情", "詳情"}
+_LORE_OVERLAY_WORDS = {"overlay", "覆盖层", "覆蓋層"}
+# `.lore list` filters that are not scopes: the keeper view's "show me what is off".
+_LORE_DISABLED_FILTERS = {"disabled", "off", "已关", "已關", "关闭", "關閉"}
 
 # `.chronicle` subcommand vocabularies (EN + a couple of CN synonyms) -- campaign chronicle (M18).
 _CHRONICLE_LIST_WORDS = {"", "list", "ls", "列表", "记录", "記錄"}
@@ -33,6 +44,86 @@ def _first_attachment_name(ctx: Any) -> str:
     extra = getattr(ctx, "extra", None)
     names = extra.get("attachment_names") if isinstance(extra, dict) else None
     return str(names[0]) if isinstance(names, list) and names else ""
+
+
+def _split_title_and_expression(rest: str) -> tuple[str, str]:
+    """`.lore bind <title> <expr>` — and `<title> | <expr>` for a title with spaces.
+
+    An entry title is game DATA an author chose; most carry no space, but some do, and a
+    positional split alone would silently bind the wrong thing. The pipe is the same
+    separator `.lore add` already uses, so there is one spelling to remember."""
+    if "|" in rest:
+        title, _, expression = rest.partition("|")
+        return title.strip(), expression.strip()
+    title, _, expression = rest.partition(" ")
+    return title.strip(), expression.strip()
+
+
+def _yes_no(i18n: Any, value: bool) -> str:
+    return i18n.t("common.yes") if value else i18n.t("common.no")
+
+
+async def _variable_resolver(ctx: CommandCtx):
+    """A resolver over this room's variables, the same one the keeper turn builds."""
+    from core.modvars import load_modvars
+    from core.mvu_compat import load_mvu
+    from core.varspace import build_resolver
+
+    state = await load_modvars(ctx.services.documents, ctx.chat_key)
+    tree = await load_mvu(ctx.services.documents, ctx.chat_key)
+    return build_resolver(state["values"], tree)
+
+
+async def _missing_condition_paths(ctx: CommandCtx, condition: str) -> list[str]:
+    """Reference paths in `condition` that resolve to nothing in this room right now.
+
+    Advisory: a condition over a missing path is not an error, it is a condition that
+    fails closed forever — which is worth saying out loud at the moment it is typed."""
+    from core.condexpr import CondExprError, referenced_paths
+
+    try:
+        paths = referenced_paths(condition)
+    except CondExprError:
+        return []
+    resolve = await _variable_resolver(ctx)
+    return [path for path in paths if resolve(path) is None]
+
+
+async def _budget_lines(ctx: CommandCtx, title: str) -> list[str]:
+    """The M26 §5.4 receipt: does the entry that was just switched on actually inject?
+
+    Without it, "I chose and nothing happened" survives the deletion of the sole-active
+    mechanism in a new form — the slot cut runs before the character cap, so a switched-on
+    entry can be dropped silently by an entry that ranked above it."""
+    from core.worldbook import KEEPER_TURN_BUDGET_CHARS, KEEPER_TURN_LIMIT, probe_turn_budget
+
+    i18n = ctx.i18n
+    probe = await probe_turn_budget(
+        ctx.services.worldbook, ctx.chat_key, title, resolve=await _variable_resolver(ctx)
+    )
+    if not probe.found:
+        return []
+    if probe.oversize:
+        return [
+            i18n.t(
+                "worldbook.commands.lore.budget_oversize",
+                size=probe.size,
+                budget=KEEPER_TURN_BUDGET_CHARS,
+            )
+        ]
+    if probe.fits:
+        return [i18n.t("worldbook.commands.lore.budget_fits", size=probe.size)]
+    if probe.crowded_out:
+        return [
+            i18n.t(
+                "worldbook.commands.lore.budget_crowded",
+                size=probe.size,
+                limit=KEEPER_TURN_LIMIT,
+                budget=KEEPER_TURN_BUDGET_CHARS,
+                titles=i18n.t("common.list_separator").join(probe.ranked_above[:5]),
+            )
+        ]
+    return [i18n.t("worldbook.commands.lore.budget_inactive", size=probe.size)]
 
 
 def _installed_card_refs(ctx: CommandCtx) -> str:
@@ -58,9 +149,13 @@ class WorldCommands:
     """`CommandRouter` mixin — see the module docstring."""
 
     async def cmd_lore(self, ctx: CommandCtx) -> str:
-        """`.lore [add <title> | <content> | list [scope] | query <text> | import <file>]` — manage
-        world lore (M11). `list` is open; authoring/secret-revealing ops (add/query/import) are
-        keeper-gated via the shared privilege check."""
+        """`.lore [add | list | query | import | enable | disable | bind | unbind | restore |
+        show | overlay]` — manage world lore (M11) and the M26 keeper overlay over it.
+
+        `list` is open; authoring/secret-revealing ops (add/query/import) and every overlay
+        switch are keeper-gated via the shared privilege check. The switches never touch the
+        stored entry — they write the room's keeper-only `lore_overlay` document, so a
+        re-import of a revised card stays a clean replace and the switches survive it."""
         from agent.kp_tools_worldbook import WorldbookTools
 
         parts = ctx.args.split(maxsplit=1)
@@ -72,8 +167,22 @@ class WorldCommands:
 
         if sub in _LORE_LIST_WORDS:
             # A player's `.lore list` must never reveal that a secret entry even exists; only a
-            # keeper sees secret titles (mirrors `query_lore` being keeper-gated).
-            return await tools.list_lore(agent_ctx, scope=rest, _keeper=keeper)
+            # keeper sees secret titles (mirrors `query_lore` being keeper-gated) — and only a
+            # keeper's listing carries overlay markers, since the overlay is keeper-only.
+            scope = "disabled" if rest.casefold() in _LORE_DISABLED_FILTERS else rest
+            return await tools.list_lore(agent_ctx, scope=scope, _keeper=keeper)
+        if sub in (
+            _LORE_ENABLE_WORDS
+            | _LORE_DISABLE_WORDS
+            | _LORE_BIND_WORDS
+            | _LORE_UNBIND_WORDS
+            | _LORE_RESTORE_WORDS
+            | _LORE_SHOW_WORDS
+            | _LORE_OVERLAY_WORDS
+        ):
+            if not keeper:
+                return ctx.fail(ctx.i18n.t("worldbook.commands.lore.denied"))
+            return await self._lore_overlay_command(ctx, sub, rest)
         if sub in _LORE_ADD_WORDS:
             if not keeper:
                 return ctx.fail(ctx.i18n.t("worldbook.commands.lore.denied"))
@@ -103,6 +212,184 @@ class WorldCommands:
             # This branch is keeper-gated above, so the import may honor `secret` flags.
             return await tools.import_lorebook(agent_ctx, file_path=rest, _keeper=True)
         return ctx.i18n.t("worldbook.commands.lore.usage")
+
+    async def _lore_overlay_command(self, ctx: CommandCtx, sub: str, rest: str) -> str:
+        """The M26 switch family, keeper-only (gated by the caller). One place, because all
+        seven share the same load-overlay / resolve-title / save-overlay spine."""
+        from core.lore_overlay import (
+            OverlayError,
+            clear_entry,
+            load_overlay,
+            save_overlay,
+            set_entry,
+            stale_titles,
+        )
+
+        documents = ctx.services.documents
+        worldbook = ctx.services.worldbook
+        chat_key = ctx.chat_key
+        i18n = ctx.i18n
+
+        if sub in _LORE_OVERLAY_WORDS:
+            return await self._lore_apply_overlay_file(ctx, rest)
+        if not rest:
+            return i18n.t("worldbook.commands.lore.overlay_usage")
+
+        title, expression = _split_title_and_expression(rest)
+        overlay = await load_overlay(documents, chat_key)
+
+        if sub in _LORE_RESTORE_WORDS:
+            overlay, removed = clear_entry(overlay, title)
+            if not removed:
+                return i18n.t("worldbook.commands.lore.restore_noop", title=title)
+            await save_overlay(documents, chat_key, overlay)
+            return i18n.t("worldbook.commands.lore.restored", title=title, count=removed)
+
+        # Everything else addresses a real entry, so a typo must not create a silent
+        # annotation of nothing. A title several entries share applies to all of them —
+        # that is stated, never resolved by guessing which one was meant.
+        matches = [entry for entry in await worldbook.list(chat_key) if entry.title == title]
+        if not matches:
+            return i18n.t("worldbook.commands.lore.not_found", title=title)
+        shared = (
+            i18n.t("worldbook.commands.lore.shared_title", count=len(matches)) if len(matches) > 1 else ""
+        )
+
+        if sub in _LORE_SHOW_WORDS:
+            return await self._lore_show(ctx, matches[0], overlay, shared)
+
+        try:
+            if sub in _LORE_ENABLE_WORDS:
+                overlay = set_entry(overlay, title, enabled=True)
+            elif sub in _LORE_DISABLE_WORDS:
+                overlay = set_entry(overlay, title, enabled=False)
+            elif sub in _LORE_UNBIND_WORDS:
+                overlay = set_entry(overlay, title, condition="")
+            else:  # bind
+                if not expression:
+                    return i18n.t("worldbook.commands.lore.bind_usage")
+                # A binding implies the switch: a condition on an entry that stayed
+                # file-disabled would be an inert trap nothing ever fires.
+                overlay = set_entry(overlay, title, enabled=True, condition=expression)
+        except OverlayError as exc:
+            return ctx.fail(i18n.t("worldbook.commands.lore.bad_expression", error=str(exc)))
+        await save_overlay(documents, chat_key, overlay)
+
+        if sub in _LORE_DISABLE_WORDS:
+            lines = [i18n.t("worldbook.commands.lore.switched_off", title=title)]
+        elif sub in _LORE_UNBIND_WORDS:
+            lines = [i18n.t("worldbook.commands.lore.unbound", title=title)]
+        elif sub in _LORE_BIND_WORDS:
+            lines = [i18n.t("worldbook.commands.lore.bound", title=title, expression=expression)]
+        else:
+            lines = [i18n.t("worldbook.commands.lore.switched_on", title=title)]
+        if shared:
+            lines.append(shared)
+        if sub not in _LORE_DISABLE_WORDS:
+            # The receipt (§5.4): a switch that changes nothing must not read like success.
+            lines.extend(await _budget_lines(ctx, title))
+        stale = stale_titles(overlay, {entry.title for entry in await worldbook.list(chat_key)})
+        if stale:
+            lines.append(
+                i18n.t(
+                    "worldbook.commands.lore.stale_line",
+                    count=len(stale),
+                    titles=i18n.t("common.list_separator").join(stale[:5]),
+                )
+            )
+        return "\n".join(lines)
+
+    async def _lore_show(self, ctx: CommandCtx, entry, overlay, shared: str) -> str:
+        """`.lore show <title>` — the file's own state beside the effective one."""
+        from core.lore_overlay import apply as apply_overlay
+
+        i18n = ctx.i18n
+        effective = apply_overlay(entry, overlay)
+        override = overlay.entry(entry.title)
+        lines = [i18n.t("worldbook.commands.lore.show_header", title=entry.title)]
+        if shared:
+            lines.append(shared)
+        lines.append(
+            i18n.t(
+                "worldbook.commands.lore.show_file",
+                enabled=_yes_no(i18n, entry.enabled),
+                constant=_yes_no(i18n, entry.constant),
+                keys=i18n.t("common.list_separator").join(entry.keys) or i18n.t("worldbook.commands.lore.no_keys"),
+                size=len(entry.content),
+                condition=entry.condition or i18n.t("worldbook.commands.lore.no_condition"),
+            )
+        )
+        if override is None:
+            lines.append(i18n.t("worldbook.commands.lore.show_no_override"))
+        else:
+            lines.append(
+                i18n.t(
+                    "worldbook.commands.lore.show_effective",
+                    enabled=_yes_no(i18n, effective.enabled),
+                    condition=effective.condition or i18n.t("worldbook.commands.lore.no_condition"),
+                )
+            )
+        if effective.condition:
+            missing = await _missing_condition_paths(ctx, effective.condition)
+            if missing:
+                lines.append(
+                    i18n.t(
+                        "worldbook.commands.lore.show_path_missing",
+                        paths=i18n.t("common.list_separator").join(missing),
+                    )
+                )
+        lines.extend(await _budget_lines(ctx, entry.title))
+        return "\n".join(lines)
+
+    async def _lore_apply_overlay_file(self, ctx: CommandCtx, rest: str) -> str:
+        """`.lore overlay <file>` — apply a pack-shaped overlay file by hand (§5.5)."""
+        from pathlib import Path
+
+        from core.lore_overlay import (
+            OverlayError,
+            load_overlay,
+            merge_overlay_file,
+            parse_overlay_file,
+            save_overlay,
+        )
+
+        i18n = ctx.i18n
+        path_text = rest or _first_attachment_name(ctx.raw_ctx)
+        if not path_text:
+            return i18n.t("worldbook.commands.lore.overlay_file_usage")
+        agent_ctx = self._agent_ctx(ctx)
+        if agent_ctx.fs is None:
+            return i18n.t("worldbook.tools.import.no_fs")
+        from core.pack import resolve_installed_path
+
+        resolved = resolve_installed_path(ctx.services.settings.data_dir, path_text)
+        if resolved is not None:
+            path_text = str(resolved)
+        try:
+            host_path = Path(agent_ctx.fs.get_file(path_text))
+            if not host_path.exists():
+                return i18n.t("worldbook.tools.import.no_file", path=path_text)
+            parsed = parse_overlay_file(host_path.read_bytes(), label=host_path.name)
+        except OverlayError as exc:
+            return ctx.fail(i18n.t("worldbook.commands.lore.overlay_failed", error=str(exc)))
+        except Exception as exc:  # noqa: BLE001 — unreadable file, same shape as an import failure
+            return ctx.fail(i18n.t("worldbook.commands.lore.overlay_failed", error=str(exc)))
+        documents = ctx.services.documents
+        merged, report = await merge_overlay_file(
+            documents,
+            ctx.chat_key,
+            parsed,
+            current=await load_overlay(documents, ctx.chat_key),
+            known_titles={entry.title for entry in await ctx.services.worldbook.list(ctx.chat_key)},
+        )
+        await save_overlay(documents, ctx.chat_key, merged)
+        return i18n.t(
+            "worldbook.commands.lore.overlay_applied",
+            entries=report["entries"],
+            setup=report["setup"],
+            unknown=report["unknown"],
+            exposed=report["exposed"],
+        )
 
     async def cmd_import(self, ctx: CommandCtx) -> str:
         """`.import <card file> [system] [pc|companion|world]` — import a SillyTavern card.
@@ -181,8 +468,9 @@ class WorldCommands:
         return await tools.import_character(self._agent_ctx(ctx), file_path=file_path, system=system, as_=as_)
 
     async def cmd_var(self, ctx: CommandCtx) -> str:
-        """`.var [list|expose <prefix|*>|hide <prefix>|set <id> <value>|add <id> <delta>]` —
-        the keeper's variable lever, both halves of the variable surface.
+        """`.var [list|setup|expose <prefix|*>|hide <prefix>|set <id-or-path> <value>|
+        add <id-or-path> <delta>]` — the keeper's variable lever, both halves of the
+        variable surface.
 
         expose/hide curate which imported-card variables (the MVU tree) appear on the party's
         state panel: an imported tree is opaque module state, so it starts fully hidden (iron
@@ -190,9 +478,14 @@ class WorldCommands:
         on the players' panel. set/add write ENGINE-NATIVE module variables through
         `core.modvars` validation (kind check, bounds clamp, enum match) — the keeper's direct
         hand on a tracker without spending a model turn; the variable must already be defined
-        (definition stays a prep-phase Keeper tool). Keeper-only on every subcommand — even
-        `list`, since the listing shows the hidden remainder."""
+        (definition stays a prep-phase Keeper tool). An id that is not a typed tracker falls
+        through to an EXISTING leaf of the imported card's tree (M26 §5.2, owner verdict
+        2026-09-21: the human admin may change module state directly — the trust subject of
+        the card split is the operator). The admin changes VALUES; creating a path stays the
+        model tool's job. `setup` lists the module's "set before play" choices. Keeper-only on
+        every subcommand — even `list`, since the listing shows the hidden remainder."""
         from core.documents import KEEPER_VIEWER, MVU_ID
+        from core.lore_overlay import load_overlay, mark_setup_done
         from core.modvars import adjust_modvar, coerce_int, label_for, load_modvars, normalize_id, set_modvar
         from core.mvu_compat import mvu_expose, mvu_hide
 
@@ -204,6 +497,8 @@ class WorldCommands:
         documents = ctx.services.documents
         set_words = {"set", "设置", "設置"}
         add_words = {"add", "调整", "調整"}
+        if sub in {"setup", "开局", "開局"}:
+            return await self._var_setup(ctx)
         if sub in set_words or sub in add_words:
             parts = rest.split(None, 1)
             if len(parts) < 2:
@@ -212,9 +507,11 @@ class WorldCommands:
             slug = normalize_id(raw_id)
             state = await load_modvars(documents, ctx.chat_key)
             if slug is None or slug not in state["specs"]:
-                if not state["specs"]:
-                    return ctx.i18n.t("vars.commands.none_defined")
-                return ctx.i18n.t("vars.commands.unknown_var", id=raw_id, known=", ".join(state["specs"]))
+                # M26 §5.2: fall through to the IMPORTED card's variable tree. The admin
+                # changes VALUES there, never the tree's shape — creating a path stays the
+                # model tool's job, so an unknown one is an error with the nearest names
+                # rather than a new leaf nobody asked for.
+                return await self._var_write_tree(ctx, raw_id, payload, adding=sub in add_words)
             label = label_for(state["specs"][slug], ctx.locale)
             try:
                 if sub in set_words:
@@ -226,6 +523,9 @@ class WorldCommands:
                     old, new = await adjust_modvar(documents, ctx.chat_key, slug, delta_value)
             except ValueError as exc:
                 return ctx.i18n.t("vars.commands.write_failed", id=slug, error=str(exc))
+            # A typed tracker can BE a setup item (a native lorecard's `setup: true`), and
+            # the choice is made by whoever writes it — model or admin, one call site each.
+            await mark_setup_done(documents, ctx.chat_key, slug)
             # A changed player-visible value belongs on the party panel right away; the
             # projection decides what players see, this only refreshes it (same pattern
             # as expose/hide below).
@@ -262,6 +562,18 @@ class WorldCommands:
         # recited into room-visible narration. Bookkeeping belongs to real code.
         state = await load_modvars(documents, ctx.chat_key)
         modvar_lines: list[str] = []
+        # M26: the table's open opening choices lead the listing — they are the one thing
+        # here that is waiting on a human rather than reporting on the game.
+        pending = (await load_overlay(documents, ctx.chat_key)).pending()
+        if pending:
+            modvar_lines.append(
+                ctx.i18n.t(
+                    "vars.commands.setup_pending_line",
+                    items=ctx.i18n.t("common.list_separator").join(
+                        item.label_for(ctx.locale) for item in pending
+                    ),
+                )
+            )
         if state["specs"]:
             modvar_lines.append(ctx.i18n.t("vars.commands.modvars_header", count=len(state["specs"])))
             for var_id, spec in state["specs"].items():
@@ -293,6 +605,64 @@ class WorldCommands:
         if len(leaves) > max_lines:
             lines.append(ctx.i18n.t("vars.commands.more", count=len(leaves) - max_lines))
         return "\n".join(lines)
+
+    async def _var_setup(self, ctx: CommandCtx) -> str:
+        """`.var setup` — the module's "set before play" choices, done and still open."""
+        from core.lore_overlay import load_overlay
+
+        overlay = await load_overlay(ctx.services.documents, ctx.chat_key)
+        if not overlay.setup:
+            return ctx.i18n.t("vars.commands.setup_empty")
+        lines = [ctx.i18n.t("vars.commands.setup_header", count=len(overlay.pending()))]
+        for item in overlay.setup:
+            key = "vars.commands.setup_item_done" if item.done else "vars.commands.setup_item_pending"
+            lines.append(
+                ctx.i18n.t(
+                    key,
+                    label=item.label_for(ctx.locale),
+                    path=item.path,
+                    options="|".join(item.options) or ctx.i18n.t("common.none"),
+                )
+            )
+        return "\n".join(lines)
+
+    async def _var_write_tree(self, ctx: CommandCtx, path: str, payload: str, *, adding: bool) -> str:
+        """`.var set|add` against an EXISTING leaf of the imported card's variable tree."""
+        from core.lore_overlay import mark_setup_done
+        from core.modvars import load_modvars
+        from core.mvu_compat import load_mvu, mvu_add_path, mvu_set_path, nearest_paths, parse_scalar
+
+        documents = ctx.services.documents
+        i18n = ctx.i18n
+        try:
+            if adding:
+                delta = parse_scalar(payload)
+                if not isinstance(delta, (int, float)) or isinstance(delta, bool):
+                    return i18n.t("vars.commands.bad_delta", delta=payload)
+                old, new = await mvu_add_path(documents, ctx.chat_key, path, delta)
+            else:
+                old, new = await mvu_set_path(documents, ctx.chat_key, path, parse_scalar(payload))
+        except ValueError as exc:
+            tree = await load_mvu(documents, ctx.chat_key)
+            state = await load_modvars(documents, ctx.chat_key)
+            if not tree and not state["specs"]:
+                return i18n.t("vars.commands.none_defined")
+            return ctx.fail(
+                i18n.t(
+                    "vars.commands.unknown_target",
+                    id=path,
+                    known=i18n.t("common.list_separator").join(state["specs"]) or i18n.t("common.none"),
+                    paths=i18n.t("common.list_separator").join(nearest_paths(tree, path))
+                    or i18n.t("common.none"),
+                    error=str(exc),
+                )
+            )
+        await mark_setup_done(documents, ctx.chat_key, path)
+        # An exposed leaf is on the party panel; the projection decides what players see.
+        if old != new and ctx.router.hub is not None:
+            await publish_state(ctx.router.hub, ctx.services, ctx.raw_ctx)
+        key = "vars.commands.tree_add_done" if adding else "vars.commands.tree_set_done"
+        return i18n.t(key, path=path, old=old, new=new, delta=payload)
 
     async def cmd_module(self, ctx: CommandCtx) -> str:
         """`.module <module file>` — import a module document and run module analysis."""

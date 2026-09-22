@@ -461,6 +461,50 @@ def _parse_file_expose(raw: Any, where: str) -> tuple[str, ...]:
     return tuple(prefixes)
 
 
+async def merge_overlay_file(
+    documents: Any,
+    chat_key: str,
+    parsed: Overlay,
+    *,
+    current: Overlay,
+    known_titles: set[str],
+) -> tuple[Overlay, dict[str, int]]:
+    """Fold a parsed overlay FILE into a room's overlay; returns ``(merged, report)``.
+
+    Shared by the two doors a file can come through — `.lore overlay <file>` and the
+    `overlay:` a pack declares beside a card — so a hand-applied file and a pack-applied
+    one do exactly the same thing. `expose:` prefixes are handed to the MVU document's own
+    exposure list rather than copied here: exposure has one owner.
+
+    The report counts what LANDED, never what was asked for: unknown titles are reported
+    (the card was revised) and a merge that would blow `MAX_OVERLAY_ENTRIES` stops rather
+    than raising, because a partially-adopted card is still better than a refused one.
+    """
+    from core.mvu_compat import mvu_expose
+
+    merged = current
+    applied = 0
+    for title, entry in parsed.entries.items():
+        try:
+            merged = set_entry(
+                merged, title, enabled=entry.enabled, condition=entry.condition or None
+            )
+        except OverlayError:
+            break
+        applied += 1
+    merged = set_setup_items(merged, list(parsed.setup))
+    exposed = 0
+    for prefix in parsed.expose:
+        if await mvu_expose(documents, chat_key, prefix):
+            exposed += 1
+    return merged, {
+        "entries": applied,
+        "setup": len(parsed.setup),
+        "unknown": len(validate_overlay(parsed, known_titles)),
+        "exposed": exposed,
+    }
+
+
 def validate_overlay(overlay: Overlay, known_titles: set[str]) -> list[str]:
     """Build-time cross-check against the card's real lorebook: unknown titles are WARNINGS.
 

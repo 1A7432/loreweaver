@@ -756,9 +756,11 @@ async def test_var_set_and_add_write_native_modvars_with_validation():
     assert (bad := await router.dispatch(keeper, ".var add mood 1")) is not None and "mood" in bad
     assert await router.dispatch(keeper, ".var add suspicion abc") == en.t("vars.commands.bad_delta", delta="abc")
 
-    # unknown id lists the defined ones; a missing value is a usage error
+    # An id that is neither a tracker nor a leaf of the imported card's tree lists both
+    # spaces (M26 §5.2 made `.var set` reach the tree as well, so the error names it too);
+    # a missing value is a usage error.
     assert await router.dispatch(keeper, ".var set nosuch 1") == en.t(
-        "vars.commands.unknown_var", id="nosuch", known="suspicion, mood"
+        "vars.commands.unknown_target", id="nosuch", known="suspicion, mood", paths=en.t("common.none")
     )
     assert await router.dispatch(keeper, ".var set suspicion") == en.t("vars.commands.usage")
 

@@ -17,8 +17,6 @@ All user-visible text is looked up via `services.i18n` under `modvars.*`
 
 from __future__ import annotations
 
-import json
-
 from agent.context import AgentCtx
 from agent.services import Services
 from agent.tools import tool
@@ -35,7 +33,7 @@ from core.modvars import (
     remove_modvar,
     set_modvar,
 )
-from core.mvu_compat import mvu_add_path, mvu_flatten, mvu_has_data, mvu_set_path
+from core.mvu_compat import mvu_add_path, mvu_flatten, mvu_has_data, mvu_set_path, parse_scalar
 from infra.i18n import I18n
 
 # Cap on tool-driven variable writes recorded per turn for the hook layer — the same
@@ -307,7 +305,7 @@ class MvuStatTools:
             # `.var set`. `existing_only=False` keeps the model's ability to introduce a
             # leaf — the shape of the tree is the module's business, and the card's own
             # `_.set` protocol creates paths too.
-            old, new = await mvu_set_path(documents, ctx.chat_key, wanted, _parse_stat_value(value), existing_only=False)
+            old, new = await mvu_set_path(documents, ctx.chat_key, wanted, parse_scalar(value), existing_only=False)
             _record_variable_write(ctx, wanted, "set")
             # A "set before play" choice is made by whoever writes the path, model or admin.
             await mark_setup_done(documents, ctx.chat_key, wanted)
@@ -339,11 +337,5 @@ class MvuStatTools:
             return i18n.t("modvars.stat.failed", error=str(exc))
 
 
-def _parse_stat_value(value: str):
-    text = value.strip()
-    try:
-        return json.loads(text)
-    except (json.JSONDecodeError, ValueError):
-        return text
 
 

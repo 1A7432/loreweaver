@@ -470,6 +470,49 @@ def referenced_names(
     return frozenset(names)
 
 
+def referenced_paths(
+    expression: str,
+    *,
+    functions: Mapping[str, Callable[..., Any]] | None = None,
+) -> tuple[str, ...]:
+    """Every dotted reference PATH the expression reads, in source order, STATICALLY.
+
+    `referenced_names` answers "which identifiers", which is what a closed NUMERIC
+    namespace needs. A variable-tree consumer needs the whole path instead — ``配置.难度``
+    is one reference, not two — so it can tell the room admin that the leaf a binding
+    waits on does not exist in the tree (M26 §5.8, `.lore show`). Function calls and
+    literal keywords are skipped; nothing is evaluated.
+    """
+    tokens = _tokenize(expression)
+    known_functions = set(functions or ()) | {"getvar"}
+    skip = set(_KEYWORDS) | set(_WORD_OPS)
+    paths: list[str] = []
+    index = 0
+    while index < len(tokens):
+        kind, value = tokens[index]
+        index += 1
+        if kind != "ident":
+            continue
+        head = str(value)
+        follower = tokens[index] if index < len(tokens) else None
+        if follower == ("op", "(") or head in known_functions:
+            continue
+        if head.lower() in skip:
+            continue
+        segments = [head]
+        while (
+            index + 1 < len(tokens)
+            and tokens[index] == ("op", ".")
+            and tokens[index + 1][0] == "ident"
+        ):
+            segments.append(str(tokens[index + 1][1]))
+            index += 2
+        path = ".".join(segments)
+        if path not in paths:
+            paths.append(path)
+    return tuple(paths)
+
+
 # ---------------------------------------------------------------------------
 # The PORTABLE subset (M19 item 7)
 # ---------------------------------------------------------------------------

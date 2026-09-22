@@ -24,8 +24,16 @@ from typing import Any
 from agent.context import AgentCtx
 from agent.services import Services
 from agent.tools import tool
+from core.lore_overlay import apply as apply_overlay
+from core.lore_overlay import stale_titles
 from core.worldbook import LoreEntry
 from infra.i18n import I18n
+
+# `list_lore(scope=...)` doubles as the keeper view's one FILTER word: "show me what is
+# off right now", which is the question an admin asks after importing a card whose
+# switches its own frontend scripts used to throw. Kept English-only here (the model's
+# vocabulary); `gateway.commands.world` maps its dialect words onto it.
+_DISABLED_FILTER = "disabled"
 
 # `update_lore`'s allowed field names and how each caller-supplied string value is coerced onto the
 # `core.worldbook.LoreEntry` field. `id` is identity (never mutated); `keys` splits a list, the
@@ -40,6 +48,22 @@ def _split_keys(text: str) -> list[str]:
     if not text:
         return []
     return [part.strip() for part in re.split(r"[,\n]+", text) if part.strip()]
+
+
+def _entry_markers(i18n: I18n, entry: LoreEntry, effective: LoreEntry) -> str:
+    """The keeper listing's per-entry markers: what is off, what gates it, what the room
+    changed. `*` means the OVERLAY differs from the file — the one place a reader can see
+    that the stored entry and the effective one have parted ways."""
+    markers: list[str] = []
+    if not effective.enabled:
+        markers.append(i18n.t("worldbook.tools.list.marker_off"))
+    if effective.constant:
+        markers.append(i18n.t("worldbook.tools.list.marker_const"))
+    if effective.condition:
+        markers.append(i18n.t("worldbook.tools.list.marker_when", expression=effective.condition))
+    if effective is not entry:
+        markers.append(i18n.t("worldbook.tools.list.marker_changed"))
+    return (" " + " ".join(markers)) if markers else ""
 
 
 def _coerce_field_value(field: str, value: str) -> Any:
@@ -167,7 +191,8 @@ class WorldbookTools:
         """List world-lore entries (titles + scope/category only -- no secret content is revealed).
 
         Args:
-            scope: Optionally restrict to "world", "module", or "session"; empty lists all scopes.
+            scope: Optionally restrict to "world", "module", or "session"; "disabled" lists
+                only the entries that are currently off; empty lists everything.
 
         Returns:
             A roster of lore entries, or an empty-book notice.
@@ -178,15 +203,54 @@ class WorldbookTools:
         # this tool with the default keeper view (it may see that secrets exist; the keeper-secrecy
         # discipline still forbids it from quoting them to players).
         i18n = self._i18n(ctx)
+        wanted = scope.strip()
         try:
-            entries = await self._services.worldbook.list(ctx.chat_key, scope=scope.strip() or None)
+            worldbook = self._services.worldbook
             if not _keeper:
-                entries = [entry for entry in entries if not entry.secret]
-            if not entries:
+                # The player roster is unchanged, byte for byte: no overlay is read (it is a
+                # keeper-only document), so no marker and no filter can leak through it.
+                entries = [
+                    entry
+                    for entry in await worldbook.list(ctx.chat_key, scope=wanted or None)
+                    if not entry.secret
+                ]
+                if not entries:
+                    return i18n.t("worldbook.tools.list.empty")
+                lines = [i18n.t("worldbook.tools.list.header", count=len(entries))]
+                lines.extend(
+                    i18n.t("worldbook.tools.list.item", scope=entry.scope, category=entry.category, title=entry.title)
+                    for entry in entries
+                )
+                return "\n".join(lines)
+
+            disabled_only = wanted.casefold() == _DISABLED_FILTER
+            overlay = await worldbook.overlay(ctx.chat_key)
+            stored = await worldbook.list(ctx.chat_key, scope=None if disabled_only else (wanted or None))
+            pairs = [(entry, apply_overlay(entry, overlay)) for entry in stored]
+            if disabled_only:
+                pairs = [pair for pair in pairs if not pair[1].enabled]
+            if not pairs:
                 return i18n.t("worldbook.tools.list.empty")
-            lines = [i18n.t("worldbook.tools.list.header", count=len(entries))]
-            for entry in entries:
-                lines.append(i18n.t("worldbook.tools.list.item", scope=entry.scope, category=entry.category, title=entry.title))
+            lines = [i18n.t("worldbook.tools.list.header", count=len(pairs))]
+            for entry, effective in pairs:
+                lines.append(
+                    i18n.t(
+                        "worldbook.tools.list.item_keeper",
+                        scope=effective.scope,
+                        category=effective.category,
+                        title=effective.title,
+                        markers=_entry_markers(i18n, entry, effective),
+                    )
+                )
+            stale = stale_titles(overlay, {entry.title for entry in stored})
+            if stale:
+                lines.append(
+                    i18n.t(
+                        "worldbook.tools.list.stale_line",
+                        count=len(stale),
+                        titles=i18n.t("common.list_separator").join(stale[:5]),
+                    )
+                )
             return "\n".join(lines)
         except Exception as exc:
             return i18n.t("worldbook.tools.list.failed", error=str(exc))

@@ -1047,6 +1047,19 @@ async def mvu_has_data(documents: Any, chat_key: str) -> bool:
     return bool(await load_mvu(documents, chat_key))
 
 
+def parse_scalar(text: str) -> Any:
+    """Coerce a typed-in variable value: JSON if it parses, otherwise plain text.
+
+    The one coercion both hands share (M26 §5.2) — the Keeper's `set_stat` and the room
+    admin's `.var set` — so ``true`` is a boolean and ``残酷`` is a string on both.
+    """
+    stripped = str(text).strip()
+    try:
+        return json.loads(stripped)
+    except (json.JSONDecodeError, ValueError):
+        return stripped
+
+
 def path_leaf(tree: MvuTree, path: str) -> Any:
     """The value at `path`, ValueWithDescription unwrapped. Raises `ValueError` when missing."""
     segments = _split_path(path)
