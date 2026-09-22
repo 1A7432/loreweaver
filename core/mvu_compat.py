@@ -1047,17 +1047,69 @@ async def mvu_has_data(documents: Any, chat_key: str) -> bool:
     return bool(await load_mvu(documents, chat_key))
 
 
+class MvuPathMissing(ValueError):
+    """`path` is not in the tree at all — the caller may offer the nearest names."""
+
+
+class MvuBranchTarget(ValueError):
+    """`path` names a CONTAINER, not a value: writing a scalar there would delete a subtree.
+
+    Carries the branch's immediate child names so the caller can say what is under it
+    instead of just refusing.
+    """
+
+    def __init__(self, path: str, children: tuple[str, ...]) -> None:
+        self.path = path
+        self.children = children
+        super().__init__(f"path {path!r} is a branch, not a value ({len(children)} child(ren))")  # i18n-exempt: command layer renders its own message
+
+
+def _is_container(node: Any) -> bool:
+    """Whether `node` holds other nodes. A ``[value, "description"]`` leaf is a VALUE."""
+    return isinstance(node, dict) or (isinstance(node, list) and not is_value_with_desc(node))
+
+
+def _child_names(node: Any) -> tuple[str, ...]:
+    if isinstance(node, dict):
+        return tuple(str(key) for key in node)
+    if isinstance(node, list):
+        return tuple(str(index) for index in range(len(node)))
+    return ()
+
+
+def _finite(value: Any) -> bool:
+    """Whether `value` carries no non-finite float anywhere inside it.
+
+    `json.loads` accepts the JavaScript spellings ``NaN`` / ``Infinity`` / ``-Infinity``,
+    which then round-trip through `json.dumps` as tokens no strict JSON reader will take
+    back — so a room whose state held one could be exported and never re-imported. Worse,
+    every comparison against NaN is false, which is how a condition silently stops firing.
+    """
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, dict):
+        return all(_finite(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return all(_finite(item) for item in value)
+    return True
+
+
 def parse_scalar(text: str) -> Any:
     """Coerce a typed-in variable value: JSON if it parses, otherwise plain text.
 
     The one coercion both hands share (M26 §5.2) — the Keeper's `set_stat` and the room
     admin's `.var set` — so ``true`` is a boolean and ``残酷`` is a string on both.
+
+    A parse that yields a non-finite float degrades to the raw TEXT rather than storing it:
+    ``NaN`` is a perfectly good variable value in a story ("NaN" the string), and it is
+    never a usable number (see `_finite`).
     """
     stripped = str(text).strip()
     try:
-        return json.loads(stripped)
+        parsed = json.loads(stripped)
     except (json.JSONDecodeError, ValueError):
         return stripped
+    return parsed if _finite(parsed) else stripped
 
 
 def path_leaf(tree: MvuTree, path: str) -> Any:
@@ -1065,6 +1117,26 @@ def path_leaf(tree: MvuTree, path: str) -> Any:
     segments = _split_path(path)
     parent = _walk_parent(tree, segments, path, create=False)
     return leaf_value(_child(parent, segments[-1], path))
+
+
+def existing_leaf(tree: MvuTree, path: str) -> Any:
+    """`path_leaf`, but it also refuses a CONTAINER — the admin write-path's guard.
+
+    "The path exists" is not "the path is a value": `_.set('配置', '残酷')` on
+    ``{"配置": {"难度": …, "路线": …}}`` is a legal MVU operation that replaces the whole
+    subtree with a string, and the old value it would report is the dict it just deleted.
+    The model's own protocol may do that (the tree's SHAPE is the module's business); a
+    human typing `.var set` is changing a VALUE and must be told the difference.
+    """
+    segments = _split_path(path)
+    try:
+        parent = _walk_parent(tree, segments, path, create=False)
+        node = _child(parent, segments[-1], path)
+    except ValueError as exc:
+        raise MvuPathMissing(str(exc)) from exc
+    if _is_container(node):
+        raise MvuBranchTarget(path, _child_names(node))
+    return leaf_value(node)
 
 
 def nearest_paths(tree: MvuTree, wanted: str, limit: int = 5) -> list[str]:
@@ -1092,16 +1164,18 @@ async def mvu_set_path(
     The single tree-write primitive (M26 §5.2): the Keeper's `set_stat` tool and the room
     admin's `.var set` go through the same code, so "the value changed" means the same
     thing whichever hand made it. ``existing_only=True`` is the ADMIN posture — the admin
-    changes values, never the tree's SHAPE, so a path that is not already there is an
-    error rather than a new leaf; creating paths stays the model tool's job.
+    changes values, never the tree's SHAPE, so a path that is not already there raises
+    `MvuPathMissing` and a path that names a CONTAINER raises `MvuBranchTarget` (see
+    `existing_leaf`); creating paths, and restructuring them, stay the model tool's job.
     """
     tree, exposed = await _load_doc(documents, chat_key)
-    try:
-        old = path_leaf(tree, path)
-    except ValueError:
-        if existing_only:
-            raise
-        old = None
+    if existing_only:
+        old = existing_leaf(tree, path)
+    else:
+        try:
+            old = path_leaf(tree, path)
+        except ValueError:
+            old = None
     new_tree = apply_set(tree, path, value)
     await _save_doc(documents, chat_key, new_tree, exposed)
     return old, path_leaf(new_tree, path)
@@ -1111,10 +1185,11 @@ async def mvu_add_path(documents: Any, chat_key: str, path: str, delta: Any) -> 
     """`mvu_set_path`'s sibling for a signed nudge (`apply_add` semantics); ``(old, new)``.
 
     Always existing-only: `_.add` has no create semantics upstream either — there is no
-    number to add to until something set it.
+    number to add to until something set it — and the same branch guard applies, so the
+    refusal for `配置` says "that is a branch" rather than "that is not a number".
     """
     tree, exposed = await _load_doc(documents, chat_key)
-    old = path_leaf(tree, path)
+    old = existing_leaf(tree, path)
     new_tree = apply_add(tree, path, delta)
     await _save_doc(documents, chat_key, new_tree, exposed)
     return old, path_leaf(new_tree, path)
