@@ -40,6 +40,12 @@ export const OBSERVER_SEEN_CAP = 4096
 export const NOT_ADMIN_COOLDOWN_MS = 30_000
 /** How long a command's echo keeps naming the channel its reply belongs to. */
 export const REPLY_CHANNEL_TTL_MS = 5 * 60_000
+/**
+ * A typed roll arrives as a dice frame and, right behind it, the command's own reply
+ * (`narrative{speaker:"system"}`). The group gets them as ONE message; a dice frame with
+ * no reply behind it (a Keeper-rolled check) goes out alone after this long.
+ */
+export const DICE_MERGE_MS = 400
 const FORWARDED_CAP = 20
 
 export type LinkRole = "observer" | "player" | "admin"
@@ -181,6 +187,8 @@ export class BridgeRouter {
   private readonly holdTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private holdSeq = 0
   private lastTurn: "busy" | "idle" | undefined
+  /** A dice line waiting briefly for the typed command's reply to ride with it. */
+  private heldDice: { text: string; timer: ReturnType<typeof setTimeout> } | undefined
   private mode: GroupMode
   private busyNotice: boolean
   private admins: string[]
@@ -686,6 +694,9 @@ export class BridgeRouter {
     const rendered = frame.type === FrameType.Ui ? renderUiBlocks(frame.blocks) : undefined
     const key = observerSeenKey(frame, rendered ? { lines: rendered.lines, mediaHashes: rendered.media.map((item) => item.hash) } : undefined)
     if (key) this.observerSeen.add(key)
+    // Anything but a command reply ends the dice line's wait, so group order holds.
+    const isReply = frame.type === FrameType.Narrative && frame.speaker === "system"
+    if (!isReply && frame.type !== FrameType.Dice) this.flushDice()
 
     switch (frame.type) {
       case FrameType.Narrative:
@@ -749,13 +760,29 @@ export class BridgeRouter {
       frame.speaker === "npc"
         ? renderNarrativeNpc(frame.name, frame.text, frame.format)
         : renderNarrativeText(frame.text, frame.format)
-    this.emit({ dest: "group", text })
+    const dice = frame.speaker === "system" ? this.takeDice() : (this.flushDice(), undefined)
+    this.emit({ dest: "group", text: dice ? `${dice}\n${text}` : text })
   }
 
   private onObserverDice(frame: DiceFrame, key: string | undefined): void {
     this.notePosted(key)
     if (this.handoff("group", frame)) return
-    this.emit({ dest: "group", text: diceLine(frame, this.locale()) })
+    this.flushDice()
+    const timer = this.setTimeoutFn(() => this.flushDice(), DICE_MERGE_MS)
+    this.heldDice = { text: diceLine(frame, this.locale()), timer }
+  }
+
+  private takeDice(): string | undefined {
+    const held = this.heldDice
+    if (!held) return undefined
+    this.clearTimeoutFn(held.timer)
+    this.heldDice = undefined
+    return held.text
+  }
+
+  private flushDice(): void {
+    const text = this.takeDice()
+    if (text) this.emit({ dest: "group", text })
   }
 
   private onObserverUi(frame: UiFrame, rendered: ReturnType<typeof renderUiBlocks> | undefined, key: string | undefined): void {

@@ -5,6 +5,7 @@ import {
   DEFAULT_REVERSE_PATH,
   EVENT_QUEUE_LIMIT,
   HEARTBEAT_GRACE_FACTOR,
+  UNANSWERED_ACTIONS_LIMIT,
   MAX_ATTACHMENT_BYTES,
   MAX_TEXT_CHARS,
   MAX_WEBSOCKET_FRAME_BYTES,
@@ -236,6 +237,13 @@ export class ActionWebSocketTransport implements OneBotRawTransport {
   readonly requestTimeoutMs: number
   protected connection: OneBotSocket | undefined
   private _authRejected = false
+  /**
+   * Unanswered actions in a row on the current socket. The heartbeat watchdog only sees
+   * the INBOUND half: events and heartbeats can keep flowing while nothing we send is
+   * answered, and then every post times out forever (seen live, 2026-09-23). Past the
+   * limit the socket is closed so the run loop dials a fresh one.
+   */
+  private unansweredActions = 0
   /** Armed by the first heartbeat meta event; fed by every frame; fires = half-open socket. */
   private watchdog: { timer: ReturnType<typeof setTimeout>; graceMs: number; connection: OneBotSocket } | undefined
   private readonly pending = new Map<string, PendingCall>()
@@ -315,7 +323,14 @@ export class ActionWebSocketTransport implements OneBotRawTransport {
     const payload = JSON.stringify({ action, params, echo })
     try {
       await this.enqueueWrite(connection, payload)
-      const body = await withTimeout(response, this.requestTimeoutMs)
+      let body: Record<string, unknown>
+      try {
+        body = await withTimeout(response, this.requestTimeoutMs)
+      } catch (err) {
+        if (err instanceof Error && err.name === "TimeoutError") this.noteUnanswered(connection)
+        throw err
+      }
+      if (this.connection === connection) this.unansweredActions = 0
       const status = String(body.status ?? "").toLowerCase()
       const retcode = asInteger(body.retcode, -1)
       if (status !== "ok" || retcode !== 0) {
@@ -327,6 +342,19 @@ export class ActionWebSocketTransport implements OneBotRawTransport {
       this.pending.delete(echo)
       if (item && !item.settled) item.settled = true
       throw err
+    }
+  }
+
+  private noteUnanswered(connection: OneBotSocket): void {
+    if (this.connection !== connection) return
+    this.unansweredActions += 1
+    if (this.unansweredActions < UNANSWERED_ACTIONS_LIMIT) return
+    this.unansweredActions = 0
+    console.warn("onebot.actions_unanswered")
+    try {
+      void Promise.resolve(connection.close(4000, "actions unanswered")).catch(() => {})
+    } catch {
+      // the close is best-effort; the reader ending is what triggers the redial
     }
   }
 
@@ -475,6 +503,7 @@ export class ActionWebSocketTransport implements OneBotRawTransport {
     // A new connection is a new verdict: the flag describes THIS socket's rejection only,
     // and any watchdog still armed for an older socket is dead weight.
     this._authRejected = false
+    this.unansweredActions = 0
     if (this.watchdog) {
       clearTimeout(this.watchdog.timer)
       this.watchdog = undefined
@@ -701,6 +730,16 @@ export class OneBotForwardWebSocketTransport extends ActionWebSocketTransport {
       }
     }
   }
+}
+
+/**
+ * What a failed send logs: the error class, plus the implementation's retcode when it
+ * answered — enough to tell "QQ refused it" (NapCat's EventChecker failures under a
+ * rate limit) from a dead socket. Never the wording: NapCat puts file URLs, signed
+ * keys included, into it.
+ */
+function sendFailureDetail(err: unknown): string {
+  return err instanceof OneBotAPIError ? `${errorName(err)} retcode=${err.retcode}` : errorName(err)
 }
 
 const LOST_LOG_EVERY_MS = 60_000
@@ -1034,7 +1073,7 @@ export class OneBotTransport {
         const data = await this.inner.call(action, params)
         last = { ok: true, ...(messageIdOf(data) ? { messageId: messageIdOf(data) } : {}) }
       } catch (err) {
-        console.warn("onebot.send_failed", errorName(err))
+        console.warn("onebot.send_failed", sendFailureDetail(err))
         return { ok: false, error: sendErrorCode(err) }
       }
     }
@@ -1083,7 +1122,7 @@ export class OneBotTransport {
       const data = await this.inner.call(action, params)
       return { ok: true, ...(messageIdOf(data) ? { messageId: messageIdOf(data) } : {}) }
     } catch (err) {
-      console.warn("onebot.send_failed", errorName(err))
+      console.warn("onebot.send_failed", sendFailureDetail(err))
       return { ok: false, error: sendErrorCode(err) }
     }
   }

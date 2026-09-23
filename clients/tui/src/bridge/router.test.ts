@@ -14,7 +14,7 @@ import {
 import { CHOICES_TTL_MS } from "./choices"
 import { Keyring } from "./keyring"
 import { PostedIds } from "./postedIds"
-import { ADMIN_HOLD_MS, BridgeRouter, NOT_ADMIN_COOLDOWN_MS, STATE_UNGATE_MS, type BridgeLink, type OutboundIntent } from "./router"
+import { ADMIN_HOLD_MS, BridgeRouter, DICE_MERGE_MS, NOT_ADMIN_COOLDOWN_MS, STATE_UNGATE_MS, type BridgeLink, type OutboundIntent } from "./router"
 import { loadGroupSettings, settingsPath } from "./settings"
 import { IdentityStore } from "./qqbot/identity"
 import { Keyring, keyIdFromSecret } from "./keyring"
@@ -189,13 +189,35 @@ describe("router — observer / player / admin tables", () => {
   })
 
   test("two identical consecutive dice frames both post", async () => {
-    const { router, intents } = await makeRouter()
+    const { router, intents, clock } = await makeRouter()
     const observer = new FakeLink()
     router.attachLink("observer", "obs-key", observer)
     observer.push(MANIFEST)
     observer.push(DICE)
     observer.push(DICE)
+    clock.advance(DICE_MERGE_MS)
     expect(intents.filter((item) => item.dest === "group")).toHaveLength(2)
+  })
+
+  test("a typed roll's dice line and its reply are one group message; a Keeper roll goes out alone, in order", async () => {
+    const { router, intents, clock } = await makeRouter()
+    const observer = new FakeLink()
+    router.attachLink("observer", "obs-key", observer)
+    observer.push(MANIFEST)
+    observer.push(DICE)
+    observer.push({ type: FrameType.Narrative, id: "r1", speaker: "system", text: "Rolled 3d6+2: 11", format: "plain" })
+    expect(intents).toEqual([{ dest: "group", text: "🎲 Ada 3d6+2 = 11\nRolled 3d6+2: 11" }])
+    intents.length = 0
+
+    observer.push(DICE)
+    observer.push(NPC)
+    expect(intents.map((item) => item.text)).toEqual(["🎲 Ada 3d6+2 = 11", "Nora: Stay back."])
+    intents.length = 0
+
+    observer.push(DICE)
+    expect(intents).toEqual([])
+    clock.advance(DICE_MERGE_MS)
+    expect(intents.map((item) => item.text)).toEqual(["🎲 Ada 3d6+2 = 11"])
   })
 
   test("empty-text narrative is dropped; media posts once; busy notice once per turn", async () => {

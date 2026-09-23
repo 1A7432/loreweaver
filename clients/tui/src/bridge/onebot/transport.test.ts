@@ -590,6 +590,31 @@ describe("actions — echo matching", () => {
     }
   })
 
+  test("three unanswered actions in a row close the socket (outbound dead, inbound alive); an answer resets the count", async () => {
+    const sock = new FakeSocket()
+    const transport = new ActionWebSocketTransport(15)
+    transport.startDispatcher(() => {})
+    transport.adopt(sock)
+    const consuming = transport.consume(sock)
+    try {
+      await expect(transport.call("send_group_msg", {})).rejects.toMatchObject({ name: "TimeoutError" })
+      await expect(transport.call("send_group_msg", {})).rejects.toMatchObject({ name: "TimeoutError" })
+      // One answered action in between: the socket is fine after all.
+      const answered = transport.call("get_login_info", {})
+      await waitFor(() => sock.sent.length === 3)
+      sock.push({ status: "ok", retcode: 0, data: {}, echo: JSON.parse(sock.sent[2]!).echo })
+      await answered
+      await expect(transport.call("send_group_msg", {})).rejects.toMatchObject({ name: "TimeoutError" })
+      await expect(transport.call("send_group_msg", {})).rejects.toMatchObject({ name: "TimeoutError" })
+      expect(sock.closeArgs).toBeUndefined()
+      await expect(transport.call("send_group_msg", {})).rejects.toMatchObject({ name: "TimeoutError" })
+      expect(sock.closeArgs).toEqual({ code: 4000, reason: "actions unanswered" })
+    } finally {
+      sock.end()
+      await consuming
+    }
+  })
+
   test("a pending call fails cleanly on disconnect and is not re-issued", async () => {
     let actionCount = 0
     const sockets: FakeSocket[] = []

@@ -11,3 +11,5 @@ export const MAX_WEBSOCKET_FRAME_BYTES = 4 * Math.floor((MAX_ATTACHMENT_BYTES + 
 export const MAX_ATTACHMENT_REDIRECTS = 5
 /** Watchdog grace as a multiple of the heartbeat `interval` the implementation announces. */
 export const HEARTBEAT_GRACE_FACTOR = 2.5
+/** Actions in a row left unanswered before the socket is treated as dead outbound. */
+export const UNANSWERED_ACTIONS_LIMIT = 3
