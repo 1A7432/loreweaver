@@ -146,3 +146,22 @@ async def test_speak_as_npc_writes_no_intent_note_when_the_actor_declared_none()
     # POSITIVE CONTROL: the line itself is unaffected.
     assert "I saw nothing that night." in line
     assert await services.documents.get_view(chat_key, "note", "npc_intents", KEEPER_VIEWER) is None
+
+
+async def test_the_table_copy_of_a_line_leaves_the_name_to_the_frame():
+    """Every client labels an `npc` frame with its `name` (studio NarrativeLog, the terminal,
+    the QQ bridge), so a name inside the text showed twice — "阿橦: 阿橦（…）：…" in a live
+    QQ run (2026-09-23). The Keeper's return value keeps the name; the table copy does not."""
+    chat_key = "table-line"
+    services = await _room(chat_key, _voiced("散了。", "熟络", INTENT_ZH))
+    tools = NpcTools(services)
+    ctx = _ctx(chat_key, locale="zh")
+    await tools.create_npc(ctx, name="阿橦", persona="港口说书人。")
+
+    line = await tools.speak_as_npc(ctx, npc="阿橦", situation="散场。")
+    emitted = ctx.consume_npc_lines()
+
+    assert "阿橦" in line
+    assert [entry["name"] for entry in emitted] == ["阿橦"]
+    assert emitted[0]["text"] == "（熟络）“散了。”"
+    assert INTENT_ZH not in emitted[0]["text"]

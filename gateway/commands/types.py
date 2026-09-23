@@ -54,6 +54,9 @@ class CommandCtx:
     # Set by `fail()`: this reply reports that nothing happened, so it is unicast to
     # the caller rather than broadcast to the room (F16).
     failed: bool = False
+    # Set by a handler whose reply IS Markdown (a rendered report): the reply frame then
+    # says `format:"markdown"`, so clients render it instead of showing the `#`/`**`.
+    markdown: bool = False
 
     @property
     def chat_key(self) -> str:
@@ -91,3 +94,4 @@ class CommandReply:
     # F16: a reply that reports the command did NOT happen. `gateway.turn` unicasts
     # these to the invoking connection; success replies broadcast exactly as before.
     error: bool = False
+    markdown: bool = False

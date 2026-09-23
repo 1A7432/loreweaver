@@ -200,7 +200,7 @@ def render_frame(event: Event) -> dict[str, Any] | None:
     if event.kind == "player_action":
         return {
             "type": "narrative",
-            "id": new_id(),
+            "id": event.data.get("frame_id") or new_id(),
             "speaker": "player",
             "name": event.name,
             "text": event.text,
@@ -1078,6 +1078,8 @@ class SessionCore:
                 # Hub filters use Member.user_key, which is transport-qualified
                 # and is not necessarily identical to AgentCtx.user_id.
                 "member_user_key": member.user_key,
+                # The seat's display name, for replies the whole room reads ("X now plays …").
+                "member_name": member.name,
                 "reauthorize": lambda: self._refresh_member_authorization(member),
             },
         )

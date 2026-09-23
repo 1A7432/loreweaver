@@ -824,6 +824,11 @@ class WorldCommands:
         if rendered is None:
             return ctx.i18n.t("commands.report.no_session")
         markdown, saved_note = rendered
+        ctx.markdown = True
+        # The saved file sits on the SERVER. Only a local operator can open it; over the
+        # network the line just broadcast the host's absolute path to every player.
+        if str(getattr(ctx.raw_ctx, "platform", "cli") or "cli") != "cli":
+            saved_note = ""
         return f"{markdown}\n\n{saved_note}" if saved_note else markdown
 
     async def cmd_recap(self, ctx: CommandCtx) -> str:

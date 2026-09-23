@@ -230,6 +230,21 @@ async def test_initiative_subcommands_share_tracker_and_next_never_rolls():
     ) == []
 
 
+async def test_a_networked_report_does_not_broadcast_the_servers_file_path(tmp_path):
+    """`.report` is broadcast; the saved file sits on the server. A local operator gets the
+    path, a networked room does not (a QQ group was handed the host's absolute path)."""
+    from agent.context import LocalFs
+
+    services = _services()
+    router = CommandRouter(services)
+    for platform, expect_path in (("cli", True), ("tui", False)):
+        ctx = AgentCtx(chat_key=f"{platform}:dm:report-path", user_id="p", platform=platform, locale="en", fs=LocalFs(tmp_path))
+        await services.battles.start_session(ctx.chat_key, "Path Check")
+        report = await router.dispatch(ctx, ".report")
+        assert report is not None and "Path Check" in report
+        assert (str(tmp_path) in report) is expect_path
+
+
 async def test_report_command_exports_summary_without_keeper_permission():
     services = _services()
     router = CommandRouter(services)
@@ -246,6 +261,10 @@ async def test_report_command_exports_summary_without_keeper_permission():
     assert report is not None
     assert "Report Command" in report
     assert "Player Scores" in report
+    # The report IS Markdown: its reply frame must say so, or every client shows the
+    # `#`/`**` raw (seen live in a QQ group, 2026-09-23). An ordinary reply stays plain.
+    assert (await router.dispatch_reply(ctx, ".report")).markdown
+    assert not (await router.dispatch_reply(ctx, ".r 1d1")).markdown
     # Bare `.report` is the scoreboard; the conversation rides `.report detailed`.
     assert "The Whole Session" not in report
     assert "I check the locked desk." not in report

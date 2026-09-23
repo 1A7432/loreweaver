@@ -1,11 +1,27 @@
 import { stripControlChars } from "loreweaver-protocol"
 import { BRIDGE_TEXT_LIMIT } from "./uiText"
 
+/** A GFM table row (`| a | b |`) → `a · b`; the `|---|---|` rule row → nothing. */
+function tableRowsToLines(text: string): string {
+  return text
+    .split("\n")
+    .flatMap((line) => {
+      const row = line.trim()
+      if (!/^\|.*\|$/.test(row)) return [line]
+      const cells = row.slice(1, -1).split("|").map((cell) => cell.trim())
+      if (cells.every((cell) => /^:?-{3,}:?$/.test(cell))) return []
+      return [cells.join(" · ")]
+    })
+    .join("\n")
+}
+
 /** Markdown → plain for group chat (raw asterisks otherwise). Strips emphasis and
- * code fences, turns headings into their text, keeps list markers and blank lines. */
+ * code fences, turns headings into their text and table rows into `a · b` lines,
+ * keeps list markers and blank lines. */
 export function markdownToPlain(source: string): string {
   let text = source.replace(/\r\n/g, "\n")
   text = text.replace(/^ {0,3}(```|~~~)[^\n]*\n([\s\S]*?)^ {0,3}\1[ \t]*$/gm, "$2")
+  text = tableRowsToLines(text)
   text = text.replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, "")
   text = text.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
   text = text.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")

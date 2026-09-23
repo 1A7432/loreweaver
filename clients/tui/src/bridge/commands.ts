@@ -179,6 +179,12 @@ export async function runBridgeCommand(
       if (!view.admins.map(String).includes(parsed.userId)) {
         return msg(view.locale, "bridge.adminMissing", { qq: parsed.userId })
       }
+      // OneBot has no claim code to fall back on: the runtime list is persisted and
+      // outranks the config file's `admins`, so an empty one could only be undone by
+      // hand-editing the 0600 settings file. (The official-bot path mints a claim code.)
+      if (!effects.identity && view.admins.length <= 1) {
+        return msg(view.locale, "bridge.lastAdmin", { qq: parsed.userId })
+      }
       effects.removeAdmin(parsed.userId)
       return msg(view.locale, "bridge.adminRemoved", { qq: parsed.userId })
     }

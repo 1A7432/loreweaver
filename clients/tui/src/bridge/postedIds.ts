@@ -64,6 +64,18 @@ export class PostedIds {
   }
 }
 
+/**
+ * What a posted narrative line SAID, for the observer's redial window. The engine's join
+ * replay rebuilds each transcript line with a fresh `id` on every join, so after a redial
+ * the id never matches the one posted live and would re-post the whole transcript into the
+ * group (seen live 2026-09-23 on an engine restart). Stored in postedIds beside the id.
+ */
+export function narrativeContentKey(frame: { speaker: string; name?: string; text: string }): string {
+  // Trimmed: the replay rebuilds a line from the stored transcript entry, stripped.
+  const digest = createHash("sha256").update(`${frame.speaker}\n${frame.name ?? ""}\n${frame.text.trim()}`, "utf8").digest("hex")
+  return `narrative-content:${digest.slice(0, 24)}`
+}
+
 /** Fingerprint for a dice frame (no wire `id`). Used by the admin-hold seen set, not postedIds. */
 export function dicePostedId(frame: {
   actor: string

@@ -266,6 +266,11 @@ async def _run_script_flow(services: Services, ctx: AgentCtx, i18n: I18n, spec: 
     return "\n".join(line for line in lines if line)
 
 
+def _stat_display(pack: Any, stat: str, locale: str) -> str:
+    """A subsystem's stat as the table reads it: storage key → canonical → display name."""
+    return pack.display_name(pack.resolve_skill(stat) or stat, locale)
+
+
 async def _run_check_with_loss(
     services: Services, ctx: AgentCtx, i18n: I18n, spec: SubsystemSpec, success_loss: str, failure_loss: str, tag: str = ""
 ) -> str:
@@ -327,7 +332,9 @@ async def _run_check_with_loss(
         {
             "kind": "subsystem",
             "subsystem": spec.id,
-            "expr": spec.stat,
+            # What the table reads: the localized stat ("理智"/"Sanity"), as a typed check
+            # shows "侦查" — never the storage key ("SAN").
+            "expr": _stat_display(pack, spec.stat, ctx.locale),
             "rolls": [rolled.total],
             "total": rolled.total,
             "target": stat_value,
@@ -551,7 +558,7 @@ async def _run_resource_spend(
             {
                 "kind": "subsystem",
                 "subsystem": spec.id,
-                "expr": spec.stat,
+                "expr": _stat_display(pack, spec.stat, ctx.locale),
                 "rolls": [adjustment.after_roll],
                 "total": adjustment.after_roll,
                 "target": check_target,

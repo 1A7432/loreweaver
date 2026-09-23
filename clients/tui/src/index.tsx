@@ -4,7 +4,7 @@ import { createRoot } from "@opentui/react"
 import App, { type AppPrefill } from "./App"
 import { createClient } from "./client"
 import { forgetServer, loadConnectMemory, rememberServer, saveConnectMemory, type SavedServer } from "./connectMemory"
-import { BridgeConfigError, runBridgeFromFile } from "./bridge"
+import { BridgeConfigError, loadBridgeConfig, runBridgeFromFile } from "./bridge"
 import { defaultTuiLocale, tt } from "./i18n"
 import { clientUpdateCommand, triggerServerUpdate } from "./update"
 
@@ -74,7 +74,9 @@ if (args.command === "bridge") {
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     const key = error instanceof BridgeConfigError ? "bridge.cli.badConfig" : "bridge.cli.failed"
-    console.error(tt(locale, key, { reason }))
+    // The reason is already in the config's locale; the line around it should match.
+    const configLocale = await loadBridgeConfig(args.config).then((config) => config.locale).catch(() => undefined)
+    console.error(tt(configLocale || locale, key, { reason }))
     process.exit(1)
   }
 }

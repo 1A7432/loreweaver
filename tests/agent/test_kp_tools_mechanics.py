@@ -638,7 +638,7 @@ async def test_sanity_check_records_roll_rank_and_structured_loss():
     payload = ctx.dice_payloads[-1]
     assert payload["kind"] == "subsystem"
     assert payload["subsystem"] == "sanity_check"
-    assert payload["expr"] == "SAN"
+    assert payload["expr"] == "Sanity"  # the localized stat, never the storage key
     assert payload["rolls"] == [check["roll"]]
     assert payload["total"] == check["roll"]
     assert payload["target"] == check["stat_before"]

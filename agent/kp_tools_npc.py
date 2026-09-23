@@ -439,9 +439,10 @@ class NpcTools:
     ) -> str:
         """Delegate one NPC's in-character line to their knowledge-scoped AI sub-actor. The sub-actor
         sees ONLY this NPC's own persona/knowledge -- never the keeper pool or other NPCs' secrets --
-        so it structurally cannot leak or act on information this NPC doesn't have. Weave the returned
-        line into your narration yourself; the actor never rolls dice or invents world facts, so
-        adjudicate any resulting mechanics via the normal dice/check tools.
+        so it structurally cannot leak or act on information this NPC doesn't have. The line reaches
+        the table at once as that NPC's own message, so do not restate it in your narration: narrate
+        around it (the gesture, the reaction, what happens next). The actor never rolls dice or
+        invents world facts, so adjudicate any resulting mechanics via the normal dice/check tools.
 
         Args:
             npc: The NPC's name or id.
@@ -454,7 +455,7 @@ class NpcTools:
                 for confessions, climaxes, and lines that must thread a secret.
 
         Returns:
-            The NPC's spoken line and mood, for you to weave into the scene. Their private
+            The NPC's spoken line and mood, already shown to the players as-is. Their private
             action intent is NOT in it -- it goes to your `npc_intents` notes, since the
             players read this line as-is; pull it with kp_note('list', 'npc_intents') when
             you need to adjudicate what the NPC does next.
@@ -499,7 +500,16 @@ class NpcTools:
                 mood=mood or i18n.t("npc.tools.speak.mood_unset"),
                 dialogue=dialogue,
             )
-            ctx.emit_npc_line(record.name, line)
+            # Every client labels an `npc` frame with its `name`; the table copy leaves the
+            # name out of the text, or each client showed it twice ("Martha: Martha (…): …").
+            ctx.emit_npc_line(
+                record.name,
+                i18n.t(
+                    "npc.tools.speak.table_line",
+                    mood=mood or i18n.t("npc.tools.speak.mood_unset"),
+                    dialogue=dialogue,
+                ),
+            )
             if action_intent:
                 await self._park_action_intent(i18n, ctx.chat_key, record.name, action_intent)
 

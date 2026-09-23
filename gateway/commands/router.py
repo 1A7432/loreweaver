@@ -215,7 +215,9 @@ class CommandRouter(
             # room's language, NAMING what it needs.
             logger.warning("resolution failed during command %s: %s", spec.canonical, exc)
             return CommandReply(_resolution_notice(get_i18n(locale), exc), error=True)
-        return CommandReply(rendered, tuple(command_ctx.events), error=command_ctx.failed)
+        return CommandReply(
+            rendered, tuple(command_ctx.events), error=command_ctx.failed, markdown=command_ctx.markdown
+        )
 
     def slash_definitions(self, locale: str = "en") -> list[dict]:
         i18n = get_i18n(locale)

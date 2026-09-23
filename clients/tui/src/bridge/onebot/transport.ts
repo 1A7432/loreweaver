@@ -590,6 +590,7 @@ export class OneBotForwardWebSocketTransport extends ActionWebSocketTransport {
   readonly url: string
   readonly accessToken: string
   readonly reconnectDelayMs: number
+  private lastLostLogAt = -Infinity
   private readonly connectFactory: ConnectFactory
   private runner: Promise<void> | undefined
   private closing = false
@@ -684,7 +685,13 @@ export class OneBotForwardWebSocketTransport extends ActionWebSocketTransport {
         await this.consume(connection)
       } catch (err) {
         if (this.closing || signal.aborted) return
-        console.warn("onebot.forward_connection_lost", errorName(err))
+        // One dial per reconnect_delay while the implementation is down (a restart, a QR
+        // re-login): a line per dial was 60 a minute. docs/qq.md promises one a minute.
+        const at = Date.now()
+        if (at - this.lastLostLogAt >= LOST_LOG_EVERY_MS) {
+          this.lastLostLogAt = at
+          console.warn("onebot.forward_connection_lost", errorName(err))
+        }
       } finally {
         if (connection) this.detach(connection)
       }
@@ -695,6 +702,8 @@ export class OneBotForwardWebSocketTransport extends ActionWebSocketTransport {
     }
   }
 }
+
+const LOST_LOG_EVERY_MS = 60_000
 
 type ReverseWsData = { adapter: ServerWebSocketSocket }
 

@@ -27,6 +27,12 @@ describe("markdown → plain", () => {
     expect(plain).toContain("\n\n")
   })
 
+  test("a table becomes one `a · b` line per row; the rule row disappears", () => {
+    const table = "| 统计项 | 数值 |\n|--------|------|\n| 技能检定成功率 | 0/2 |\n| 大成功次数 | 0 |"
+    expect(markdownToPlain(table)).toBe("统计项 · 数值\n技能检定成功率 · 0/2\n大成功次数 · 0")
+    expect(markdownToPlain("a | b is not a table")).toBe("a | b is not a table")
+  })
+
   test("plain format is not re-parsed as markdown", () => {
     expect(renderNarrativeText("use *this* lever", "plain")).toBe("use *this* lever")
   })

@@ -446,7 +446,7 @@ describe("QQ bridge entry", () => {
     const groupPosts = onebotActions(socket).filter((row) => row.action === "send_group_msg")
     expect(groupPosts).toHaveLength(1)
     const message = (groupPosts[0]!.params as { message: Array<{ type: string; data: { text?: string } }> }).message
-    expect(message.some((seg) => seg.type === "text" && seg.data.text === "Ada 3d6 11")).toBe(true)
+    expect(message.some((seg) => seg.type === "text" && seg.data.text === "🎲 Ada 3d6 = 11")).toBe(true)
     await handle.stop()
   })
 

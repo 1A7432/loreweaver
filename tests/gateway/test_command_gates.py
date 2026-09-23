@@ -798,6 +798,12 @@ async def test_pc_roster_claim_is_player_open_but_foreign_release_is_keeper_only
     p2 = AgentCtx(chat_key=chat_key, user_id="p2", platform="tui", locale="en", extra={"role": "player"})
     taken = await router.dispatch(p2, ".pc claim 理")
     assert taken == services.i18n.with_locale("en").t("pregen.commands.claim_taken", name="理")
+    # A claim that did not happen is feedback for its author, never table content (F16):
+    # in a QQ group a broadcast one lands in front of everyone.
+    refused = await router.dispatch_reply(p2, ".pc claim 理")
+    assert refused is not None and refused.error
+    missing = await router.dispatch_reply(p2, ".pc claim Nobody")
+    assert missing is not None and missing.error
     denied = await router.dispatch(p2, ".pc release 理")
     assert denied == services.i18n.with_locale("en").t("pregen.commands.release_not_yours", name="理")
 
@@ -807,6 +813,16 @@ async def test_pc_roster_claim_is_player_open_but_foreign_release_is_keeper_only
     assert released == services.i18n.with_locale("en").t("pregen.commands.released", name="理")
     reclaim = await router.dispatch(p2, ".pc claim 理")
     assert reclaim == services.i18n.with_locale("en").t("pregen.commands.claimed", name="理", system="CoC")
+
+    # A seat with a display name (every networked member) is named: the reply is broadcast.
+    await router.dispatch(keeper, ".pc release 理")
+    p3 = AgentCtx(chat_key=chat_key, user_id="p3", platform="tui", locale="en",
+                  extra={"role": "player", "member_name": "Dirac"})
+    named = await router.dispatch(p3, ".pc claim 理")
+    assert named == services.i18n.with_locale("en").t(
+        "pregen.commands.claimed_by", name="理", system="CoC", player="Dirac"
+    )
+    assert "Dirac" in named
 
 
 def test_parse_sheet_assignments_refuses_a_mix_of_forms_and_operator_names():

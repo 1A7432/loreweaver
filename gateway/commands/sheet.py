@@ -448,17 +448,22 @@ class SheetCommands:
         chat_key = ctx.chat_key
         if sub in {"claim", "认领", "認領"}:
             if not rest:
-                return ctx.i18n.t("pregen.commands.claim_usage")
+                return ctx.fail(ctx.i18n.t("pregen.commands.claim_usage"))
             status, sheet = await pregen_claim(documents, chat_key, rest, ctx.user_id, ctx.services.characters)
             if status in {"ok", "yours"} and sheet is not None:
                 if ctx.router.hub is not None:
                     await publish_state(ctx.router.hub, ctx.services, ctx.raw_ctx)
+                # The reply is broadcast: in a shared room "you now play X" names nobody.
+                extra = getattr(ctx.raw_ctx, "extra", None)
+                player = str(extra.get("member_name") or "").strip() if isinstance(extra, dict) else ""
                 key = "pregen.commands.claimed" if status == "ok" else "pregen.commands.reclaimed"
+                if player:
+                    return ctx.i18n.t(f"{key}_by", name=sheet.name, system=sheet.system, player=player)
                 return ctx.i18n.t(key, name=sheet.name, system=sheet.system)
-            return ctx.i18n.t(f"pregen.commands.claim_{status}", name=rest)
+            return ctx.fail(ctx.i18n.t(f"pregen.commands.claim_{status}", name=rest))
         if sub in {"release", "放弃", "放棄", "释放", "釋放"}:
             if not rest:
-                return ctx.i18n.t("pregen.commands.release_usage")
+                return ctx.fail(ctx.i18n.t("pregen.commands.release_usage"))
             status = await pregen_release(
                 documents, chat_key, rest, ctx.user_id, ctx.services.characters, force=_is_keeper(ctx.raw_ctx)
             )
@@ -466,9 +471,9 @@ class SheetCommands:
                 if ctx.router.hub is not None:
                     await publish_state(ctx.router.hub, ctx.services, ctx.raw_ctx)
                 return ctx.i18n.t("pregen.commands.released", name=rest)
-            return ctx.i18n.t(f"pregen.commands.release_{status}", name=rest)
+            return ctx.fail(ctx.i18n.t(f"pregen.commands.release_{status}", name=rest))
         if sub not in {"list", "列表"}:
-            return ctx.i18n.t("pregen.commands.usage")
+            return ctx.fail(ctx.i18n.t("pregen.commands.usage"))
         entries = await pregen_entries(documents, chat_key)
         if not entries:
             return ctx.i18n.t("pregen.commands.empty")

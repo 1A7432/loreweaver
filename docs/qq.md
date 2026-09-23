@@ -112,14 +112,23 @@ point the URL (forward) or the reverse host/port (reverse) at this process.
 
 Admins are QQ ids in the group's `admins` list. They can also be added and
 removed at runtime with `.bridge admin add|remove <qq>` (admin-only, handled by
-the bridge, never forwarded to the engine).
+the bridge, never forwarded to the engine). The runtime list is saved in
+`<group>.settings.json` and from then on outranks the config file, so the bridge
+refuses to remove the last admin: add another one first.
 
 Every keeper-gated engine command already works over a keeper-role link: import,
 `.skill`, `.panels`, `.pack install`, `.model`, `.save`, `.reset`, `.module`,
 `.rule`, `.preset`, `.phase`, `.var expose`, `.dev mount`, `.language`,
-`.chronicle`, `.lore`, `.imagegen`, `.forge`. **Admin replies always arrive in
-private chat**, even when the command was typed in the group — including
-acknowledgements. That is fail-closed on purpose. A private reply carries the
+`.chronicle`, `.lore`, `.imagegen`, `.forge`.
+
+Where a command's reply lands is the engine's call, the same one every client
+sees. A reply the engine **broadcasts to the table** (the `.pack install`
+receipt, `.st show`, a `.pc claim`) is posted in the group — and, when you typed
+the command in private chat, you get it there too. A reply the engine sends to
+**you alone** (`.help`, `.lore`, `.var`, `.model`, and any command that failed)
+always goes to your private chat, for players as well as admins, even when the
+command was typed in the group; it is never posted in the group. The bot never
+repeats your command back to you. A private reply carries the
 group it came from, so NapCat delivers it over the **group temp session** when
 the admin and the bot are not friends (the group must allow members to start
 temp chats) and over the ordinary friend chat when they are. Before adding the
@@ -136,8 +145,8 @@ material) should be sent as a **private message** to the bot. The admin doc is
 the same instruction: private chat is where those answers go, and it is also
 where you should ask.
 
-A player-addressed `system` / `error` (`.st show`, "your input is queued") is
-answered on the channel that command was typed on: private stays private even
+A player-addressed `system` / `error` notice ("your input is queued") is
+answered on the channel that input was typed on: private stays private even
 if the same person then types in the group. `.imagegen` and `.forge` are
 ordinary engine commands in this release; the bridge needs nothing extra for
 them.

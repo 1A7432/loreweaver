@@ -3,6 +3,7 @@ import {
   OneBotTransport,
   type ChatTarget,
   type OneBotSendResult,
+  type OneBotStatus,
 } from "./onebot"
 import type { BridgeMediaRef } from "./render/uiText"
 import type { BridgeRouter, OutboundIntent } from "./router"
@@ -10,6 +11,15 @@ import type { BridgeRouter, OutboundIntent } from "./router"
 /** The live membership check before a private redirect; it sits on the group's serial outbox. */
 export const MEMBER_GATE_TIMEOUT_MS = 3_000
 export const FRIEND_NOTICE_MS = 10 * 60 * 1000
+/**
+ * How long the outbox holds a message while the OneBot connection is down. A Keeper turn
+ * takes minutes; an implementation restart or a re-login in that window used to drop the
+ * turn's narration for good (the observer had already marked it posted). Held messages go
+ * out in order once the connection is back; past this bound they are dropped, logged.
+ */
+export const OUTBOX_HOLD_MS = 15 * 60 * 1000
+
+const DISCONNECTED = new Set(["onebot.websocket.disconnected", "onebot.transport.unavailable"])
 
 export interface Deliverer {
   attach(router: BridgeRouter): void
@@ -28,6 +38,8 @@ export interface OneBotDelivererOptions {
   getLastReplyId: (userId: string) => string | undefined
   getLocale: () => string
   now?: () => number
+  holdMs?: number
+  onLog?: (text: string) => void
 }
 
 /**
@@ -40,9 +52,62 @@ export class OneBotDeliverer implements Deliverer {
   private outbox: Promise<void> = Promise.resolve()
   private readonly lastFriendNotice = new Map<string, number>()
   private readonly now: () => number
+  private readonly holdMs: number
+  private connected = true
+  private readonly onlineWaiters = new Set<() => void>()
+  private holding = false
 
   constructor(private readonly options: OneBotDelivererOptions) {
     this.now = options.now ?? Date.now
+    this.holdMs = options.holdMs ?? OUTBOX_HOLD_MS
+    options.transport.onStatus((status: OneBotStatus) => {
+      this.connected = status === "online"
+      if (!this.connected) return
+      for (const wake of [...this.onlineWaiters]) wake()
+    })
+  }
+
+  /** Resolves when the connection is next online, or after `ms` — whichever comes first. */
+  private waitOnline(ms: number): Promise<void> {
+    if (this.connected) return Promise.resolve()
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer)
+        this.onlineWaiters.delete(done)
+        resolve()
+      }
+      const timer = setTimeout(done, Math.max(0, ms))
+      this.onlineWaiters.add(done)
+    })
+  }
+
+  private noteHolding(): void {
+    if (this.holding) return
+    this.holding = true
+    this.options.onLog?.(tt(this.locale(), "bridge.cli.outboxHolding"))
+  }
+
+  /**
+   * One send, held across a dropped connection: while the implementation is away the
+   * outbox waits (serially, so order holds) and sends again once it is back.
+   */
+  private async held(send: () => Promise<OneBotSendResult>): Promise<OneBotSendResult> {
+    const deadline = this.now() + this.holdMs
+    if (!this.connected) this.noteHolding()
+    await this.waitOnline(deadline - this.now())
+    let result = await send()
+    while (!result.ok && DISCONNECTED.has(result.error ?? "") && this.now() < deadline) {
+      this.noteHolding()
+      this.connected = false
+      await this.waitOnline(deadline - this.now())
+      result = await send()
+    }
+    if (this.holding && result.ok) {
+      this.holding = false
+      this.options.onLog?.(tt(this.locale(), "bridge.cli.outboxResumed"))
+    }
+    if (!result.ok && DISCONNECTED.has(result.error ?? "")) this.options.onLog?.(tt(this.locale(), "bridge.cli.outboxDropped"))
+    return result
   }
 
   attach(router: BridgeRouter): void {
@@ -68,16 +133,18 @@ export class OneBotDeliverer implements Deliverer {
         await this.dispatchGroupMedia(groupTarget, intent)
         return
       }
-      if (intent.text) await this.options.transport.sendText(groupTarget, intent.text)
+      if (intent.text) await this.held(() => this.options.transport.sendText(groupTarget, intent.text))
       return
     }
     if (intent.dest === "reply") {
       const replyTo = this.options.getLastReplyId(intent.userId)
-      if (replyTo) await this.options.transport.sendReply(groupTarget, replyTo, intent.text)
-      else await this.options.transport.sendText(groupTarget, intent.text)
+      if (replyTo) await this.held(() => this.options.transport.sendReply(groupTarget, replyTo, intent.text))
+      else await this.held(() => this.options.transport.sendText(groupTarget, intent.text))
       return
     }
     if (intent.dest === "c2c_direct") return
+    // The membership check below needs a live connection to mean anything.
+    await this.waitOnline(this.holdMs)
     // A private reply carries the group it belongs to, so NapCat can use the group temp
     // session when the two are not friends — but ONLY once NapCat has confirmed it can
     // resolve this member: with an unresolvable user NapCat falls back to posting into the
@@ -88,14 +155,15 @@ export class OneBotDeliverer implements Deliverer {
       fresh: true,
       timeoutMs: MEMBER_GATE_TIMEOUT_MS,
     })
-    const result: OneBotSendResult =
+    const result: OneBotSendResult = await this.held(() =>
       status === "member"
-        ? await this.options.transport.sendText(
+        ? this.options.transport.sendText(
             { type: "group", id: this.options.groupId, userId: intent.userId },
             intent.text,
             { private: true },
           )
-        : await this.options.transport.sendText({ type: "private", id: intent.userId }, intent.text)
+        : this.options.transport.sendText({ type: "private", id: intent.userId }, intent.text),
+    )
     if (!result.ok) {
       // A transport hiccup is not "not friends": no friend notice for a failure that may
       // have nothing to do with friendship.
@@ -118,10 +186,12 @@ export class OneBotDeliverer implements Deliverer {
     if (observer?.isAlive) {
       try {
         const payload = await observer.getMedia(intent.media.hash)
-        const result = await this.options.transport.sendImage(
-          groupTarget,
-          { data: payload.bytes, mime: payload.mime || intent.media.mime },
-          { text: intent.text || undefined },
+        const result = await this.held(() =>
+          this.options.transport.sendImage(
+            groupTarget,
+            { data: payload.bytes, mime: payload.mime || intent.media.mime },
+            { text: intent.text || undefined },
+          ),
         )
         if (result.ok) return
       } catch {
@@ -129,6 +199,6 @@ export class OneBotDeliverer implements Deliverer {
       }
     }
     const fallback = intent.text || intent.media.name || ""
-    if (fallback) await this.options.transport.sendText(groupTarget, fallback)
+    if (fallback) await this.held(() => this.options.transport.sendText(groupTarget, fallback))
   }
 }

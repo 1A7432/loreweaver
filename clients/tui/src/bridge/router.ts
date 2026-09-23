@@ -14,6 +14,7 @@ import { tt } from "../i18n"
 import { ChoicesWindow } from "./choices"
 import {
   isBridgeCommand,
+  looksLikeCommand,
   parseBridgeCommand,
   runBridgeCommand,
   shouldForwardInbound,
@@ -24,7 +25,7 @@ import type { GroupMode } from "./config"
 import type { Keyring } from "./keyring"
 import type { IdentityStore } from "./qqbot/identity"
 import type { LinkReadyReason } from "./linkPool"
-import { observerSeenKey, type PostedIds } from "./postedIds"
+import { narrativeContentKey, observerSeenKey, type PostedIds } from "./postedIds"
 import { diceLine } from "./render/dice"
 import { renderNarrativeNpc, renderNarrativeText, splitText } from "./render/narrative"
 import { renderUiBlocks, type BridgeMediaRef } from "./render/uiText"
@@ -33,8 +34,13 @@ import { saveGroupSettings } from "./settings"
 export const ADMIN_HOLD_MS = 2000
 export const STATE_UNGATE_MS = 2000
 export const QUEUE_CAP = 50
+/** Replayed lines an observer holds on a fresh open, to find what it missed while down. */
+export const REPLAY_TAIL_CAP = 64
 export const OBSERVER_SEEN_CAP = 4096
 export const NOT_ADMIN_COOLDOWN_MS = 30_000
+/** How long a command's echo keeps naming the channel its reply belongs to. */
+export const REPLY_CHANNEL_TTL_MS = 5 * 60_000
+const FORWARDED_CAP = 20
 
 export type LinkRole = "observer" | "player" | "admin"
 export type InboundChannel = "group" | "private"
@@ -101,6 +107,8 @@ interface MemberSlot {
   gated: boolean
   reason: LinkReadyReason
   stateUngate?: ReturnType<typeof setTimeout>
+  /** Observer, fresh open: the replayed story lines, held until the gate opens. */
+  replayed?: NarrativeFrame[]
 }
 
 export interface BridgeRouterOptions {
@@ -128,6 +136,12 @@ export interface BridgeRouterOptions {
   setTimeoutFn?: typeof setTimeout
   clearTimeoutFn?: typeof clearTimeout
   holdMs?: number
+  /**
+   * Split outgoing text at this many characters (default `BRIDGE_TEXT_LIMIT`). The OneBot
+   * path passes Infinity: its transport turns anything over one message into ONE
+   * merged-forward card, which a pre-split here would never let it see.
+   */
+  textLimit?: number
   /** QQ official-bot identity. Unset on the OneBot path. */
   identity?: IdentityStore
   hasCharacter?: (seat: string) => boolean
@@ -159,6 +173,10 @@ export class BridgeRouter {
   private readonly privatelySent = new CappedSet(OBSERVER_SEEN_CAP)
   private readonly lastChannel = new Map<string, InboundChannel>()
   private readonly inputChannels = new Map<string, InboundChannel[]>()
+  /** Inputs forwarded per user, oldest first, until the engine echoes them back. */
+  private readonly forwarded = new Map<string, Array<{ text: string; channel: InboundChannel }>>()
+  /** The channel a user's last echoed COMMAND came from: where its reply goes. */
+  private readonly replyChannel = new Map<string, { channel: InboundChannel; at: number }>()
   private readonly lastNotAdmin = new Map<string, number>()
   private readonly holdTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private holdSeq = 0
@@ -356,6 +374,7 @@ export class BridgeRouter {
     if (choice.kind === "hit") {
       if (onForward) await onForward()
       this.noteInputChannel(msg.userId, msg.channel)
+      this.noteForwarded(msg.userId, choice.input, msg.channel)
       this.queueInput(msg.memberKey, choice.input)
       return true
     }
@@ -369,6 +388,7 @@ export class BridgeRouter {
     ) {
       if (onForward) await onForward()
       this.noteInputChannel(msg.userId, msg.channel)
+      this.noteForwarded(msg.userId, msg.text, msg.channel)
       this.queueInput(msg.memberKey, msg.text)
       return true
     }
@@ -379,6 +399,13 @@ export class BridgeRouter {
     const queue = this.inputChannels.get(userId) ?? []
     queue.push(channel)
     this.inputChannels.set(userId, queue)
+  }
+
+  private noteForwarded(userId: string, text: string, channel: InboundChannel): void {
+    const queue = this.forwarded.get(userId) ?? []
+    queue.push({ text: text.trim(), channel })
+    while (queue.length > FORWARDED_CAP) queue.shift()
+    this.forwarded.set(userId, queue)
   }
 
   private consumeInputChannel(userId: string): InboundChannel | undefined {
@@ -517,16 +544,77 @@ export class BridgeRouter {
       return
     }
     if (slot.gated) {
-      if (slot.role === "observer" && slot.reason === "redial" && frame.type === FrameType.Narrative) {
-        this.onObserver(frame)
+      if (slot.role === "observer" && frame.type === FrameType.Narrative) {
+        if (slot.reason === "redial") {
+          // Replayed lines carry fresh ids, so only their content says "already posted".
+          if (!this.options.postedIds.has(narrativeContentKey(frame))) this.onObserver(frame)
+        } else if (frame.speaker !== "player" && frame.text) {
+          const held = (slot.replayed ??= [])
+          held.push(frame)
+          if (held.length > REPLAY_TAIL_CAP) held.shift()
+        }
       }
       return
     }
     if (NEVER_RENDER.has(frame.type)) return
     const role = this.effectiveRole(slot)
     if (role === "observer") this.onObserver(frame)
-    else if (role === "player") this.onPlayer(slot, frame)
-    else this.onAdmin(slot, frame)
+    else if (frame.type === FrameType.Narrative && frame.speaker === "player") this.onEcho(slot, frame)
+    else if (frame.type === FrameType.Narrative && frame.speaker === "system") this.onCommandReply(slot, role, frame)
+    else {
+      if (frame.type === FrameType.Narrative && frame.speaker === "kp" && slot.userId) this.replyChannel.delete(slot.userId)
+      if (role === "player") this.onPlayer(slot, frame)
+      else this.onAdmin(slot, frame)
+    }
+  }
+
+  /**
+   * A `speaker:"player"` line on a member link is an echo — of this user's own input
+   * (a command's echo reaches ONLY its sender) or of someone else's prose. Never
+   * rendered: the group already shows what people typed. It does tell us which input
+   * the engine just took up, so the reply that follows goes where that command came from.
+   */
+  private onEcho(slot: MemberSlot, frame: NarrativeFrame): void {
+    const userId = slot.userId
+    if (!userId) return
+    const queue = this.forwarded.get(userId)
+    const text = frame.text.trim()
+    const index = queue?.findIndex((entry) => entry.text === text) ?? -1
+    if (!queue || index < 0) return
+    const [entry] = queue.splice(0, index + 1).slice(-1)
+    if (entry && looksLikeCommand(entry.text)) this.replyChannel.set(userId, { channel: entry.channel, at: this.now() })
+  }
+
+  private takeReplyChannel(userId: string): InboundChannel | undefined {
+    const pending = this.replyChannel.get(userId)
+    this.replyChannel.delete(userId)
+    if (!pending || this.now() - pending.at > REPLY_CHANNEL_TTL_MS) return undefined
+    return pending.channel
+  }
+
+  /**
+   * `narrative{speaker:"system"}` on a member link is a command's reply. The engine
+   * either broadcast it (table content — the observer posts it to the group) or sent it
+   * to this member alone (a private-reply command such as `.help`/`.lore`, or a command
+   * that failed). Held like admin broadcasts to learn which: an origin-only reply goes to
+   * this user's private chat, never the group; a broadcast one is answered by the group
+   * post, plus a private copy when the command was typed in private chat.
+   */
+  private onCommandReply(slot: MemberSlot, role: LinkRole, frame: NarrativeFrame): void {
+    const userId = slot.userId
+    if (!userId || !frame.text) return
+    const channel = this.takeReplyChannel(userId)
+    const seenKey = observerSeenKey(frame)
+    const holdKey = `${slot.memberKey}:${seenKey ?? `anon:${++this.holdSeq}`}`
+    const timer = this.setTimeoutFn(() => {
+      this.holdTimers.delete(holdKey)
+      const broadcast = Boolean(seenKey && this.observerSeen.has(seenKey))
+      if (broadcast && channel !== "private") return
+      if (this.handoff(role === "admin" ? "admin" : "player", frame, userId, "private")) return
+      if (seenKey) this.privatelySent.add(seenKey)
+      this.emit({ dest: "private", userId, text: renderNarrativeText(frame.text, frame.format) })
+    }, this.holdMs)
+    this.holdTimers.set(holdKey, timer)
   }
 
   private onWelcome(_slot: MemberSlot, frame: WelcomeFrame): void {
@@ -551,8 +639,27 @@ export class BridgeRouter {
     }
     if (slot.gated) {
       slot.gated = false
+      const replayed = slot.replayed
+      slot.replayed = undefined
+      if (replayed?.length) this.postMissedTail(replayed)
       this.flush(slot.memberKey)
     }
+  }
+
+  /**
+   * A fresh bridge process (not a redial) swallows the join replay — except the lines
+   * after the last one this group was already shown. Those were published while the
+   * bridge was down (a restart mid-turn), and nothing else will ever bring them to the
+   * group. With no posted line in the window (a first run, a long outage) nothing is
+   * posted: the group is never handed the room's history wholesale.
+   */
+  private postMissedTail(replayed: NarrativeFrame[]): void {
+    let last = -1
+    replayed.forEach((frame, index) => {
+      if (this.options.postedIds.has(narrativeContentKey(frame))) last = index
+    })
+    if (last < 0) return
+    for (const frame of replayed.slice(last + 1)) this.onObserver(frame)
   }
 
   private armStateUngate(slot: MemberSlot): void {
@@ -630,6 +737,7 @@ export class BridgeRouter {
     if (frame.speaker === "player") return
     if (!frame.text) return
     if (this.options.postedIds.has(frame.id)) return
+    this.options.postedIds.remember(narrativeContentKey(frame))
     void this.options.postedIds.add(frame.id)
     this.notePosted(key)
     if (this.handoff("group", frame)) return
@@ -742,7 +850,7 @@ export class BridgeRouter {
       this.options.onIntent(intent)
       return
     }
-    const parts = splitText(intent.text)
+    const parts = splitText(intent.text, this.options.textLimit)
     parts.forEach((part, index) => {
       if (intent.dest === "group") {
         this.options.onIntent({

@@ -181,7 +181,7 @@ describe("router — observer / player / admin tables", () => {
     expect(group.map((item) => item.text)).toEqual([
       "The hinge shrieks.",
       "Nora: Stay back.",
-      "Ada 3d6+2 11",
+      "🎲 Ada 3d6+2 = 11",
       "HP: 8\nDo you?\n1. Open\n2. Wait",
     ])
     expect(intents.some((item) => item.text.includes("secret sheet"))).toBe(false)
@@ -364,6 +364,89 @@ describe("router — observer / player / admin tables", () => {
   })
 })
 
+// Real engine shapes (net/session.render_frame + gateway/turn.run_turn, probed live
+// 2026-09-23): a command's echo is `narrative{speaker:"player"}` sent to its sender ONLY;
+// its reply is `narrative{speaker:"system"}`, broadcast to the room unless the command is
+// private-reply or failed, in which case only the sender gets it. Since the same fix, one
+// broadcast carries ONE id on every link.
+function echo(text: string, id = `echo-${text}`): NarrativeFrame {
+  return { type: FrameType.Narrative, id, speaker: "player", name: "Dirac", text, format: "plain" }
+}
+function systemReply(text: string, id: string): NarrativeFrame {
+  return { type: FrameType.Narrative, id, speaker: "system", text, format: "plain" }
+}
+
+describe("router — command echoes and replies (engine shapes)", () => {
+  async function table() {
+    const made = await makeRouter()
+    const observer = new FakeLink()
+    const admin = new FakeLink()
+    const player = new FakeLink()
+    made.router.attachLink("observer", "obs-key", observer)
+    made.router.attachLink("admin", "adm-key", admin, "42")
+    made.router.attachLink("player", "p-key", player, "111")
+    for (const link of [observer, admin, player]) link.push(MANIFEST)
+    return { ...made, observer, admin, player }
+  }
+
+  test("an admin command typed in private: echo never shown, broadcast reply in the group AND in private once", async () => {
+    const { router, intents, clock, observer, admin } = await table()
+    await router.handleInbound({ userId: "42", memberKey: "adm-key", text: ".pack install gh:a/b", channel: "private", isAdmin: true })
+    admin.push(echo(".pack install gh:a/b"))
+    const reply = systemReply("installed antu", "r1")
+    observer.push(reply)
+    admin.push(reply)
+    clock.advance(ADMIN_HOLD_MS)
+    expect(intents).toEqual([
+      { dest: "group", text: "installed antu" },
+      { dest: "private", userId: "42", text: "installed antu" },
+    ])
+  })
+
+  test("an admin command typed in the group: the group post is the reply, nothing private", async () => {
+    const { router, intents, clock, observer, admin } = await table()
+    await router.handleInbound({ userId: "42", memberKey: "adm-key", text: ".panels enable antu", channel: "group", isAdmin: true })
+    admin.push(echo(".panels enable antu"))
+    const reply = systemReply("panels on", "r2")
+    observer.push(reply)
+    admin.push(reply)
+    clock.advance(ADMIN_HOLD_MS)
+    expect(intents).toEqual([{ dest: "group", text: "panels on" }])
+  })
+
+  test("a player's private-reply command typed in the group is answered in private, never in the group", async () => {
+    const { router, intents, clock, player } = await table()
+    await router.handleInbound({ userId: "111", memberKey: "p-key", text: ".help", channel: "group", isAdmin: false })
+    player.push(echo(".help"))
+    player.push(systemReply("commands: .r .st", "r3"))
+    clock.advance(ADMIN_HOLD_MS)
+    expect(intents).toEqual([{ dest: "private", userId: "111", text: "commands: .r .st" }])
+  })
+
+  test("a failed player command (origin-only reply) reaches the player instead of vanishing", async () => {
+    const { router, intents, clock, player } = await table()
+    await router.handleInbound({ userId: "111", memberKey: "p-key", text: ".pc claim Nobody", channel: "group", isAdmin: false })
+    player.push(echo(".pc claim Nobody"))
+    player.push(systemReply("no such pregen", "r4"))
+    clock.advance(ADMIN_HOLD_MS)
+    expect(intents).toEqual([{ dest: "private", userId: "111", text: "no such pregen" }])
+  })
+
+  test("someone else's broadcast reply and a prose echo never produce a private copy", async () => {
+    const { router, intents, clock, observer, admin, player } = await table()
+    await router.handleInbound({ userId: "111", memberKey: "p-key", text: "I look around", channel: "private", isAdmin: false })
+    observer.push(echo("I look around", "prose"))
+    player.push(echo("I look around", "prose"))
+    admin.push(echo("I look around", "prose"))
+    const other = systemReply("Ada claimed Pei", "r5")
+    observer.push(other)
+    player.push(other)
+    admin.push(other)
+    clock.advance(ADMIN_HOLD_MS)
+    expect(intents).toEqual([{ dest: "group", text: "Ada claimed Pei" }])
+  })
+})
+
 describe("router — replay gate", () => {
   test("swallows every frame until that link's first ui_manifest on open", async () => {
     const { router, intents } = await makeRouter()
@@ -395,6 +478,56 @@ describe("router — replay gate", () => {
     expect(intents.filter((item) => item.dest === "group").map((item) => item.text)).toEqual(["First beat.", "Second beat."])
     redial.push(MANIFEST)
     expect(intents.filter((item) => item.text.includes("Ada 3d6"))).toHaveLength(0)
+  })
+
+  test("observer redial: a replayed line with a fresh id is not re-posted; a missed one is", async () => {
+    const { router, intents } = await makeRouter()
+    const live = new FakeLink()
+    router.attachLink("observer", "obs-key", live)
+    live.push(MANIFEST)
+    live.push({ ...KP, id: "live-1", text: "The gate opens." })
+    live.push({ ...NPC, id: "live-2" })
+    intents.length = 0
+
+    const redial = new FakeLink()
+    router.attachLink("observer", "obs-key", redial, undefined, "redial")
+    redial.push({ ...KP, id: "replay-1", text: "The gate opens." })
+    redial.push({ ...NPC, id: "replay-2" })
+    redial.push({ ...KP, id: "replay-3", text: "While you were away, the bell rang." })
+    redial.push(MANIFEST)
+    expect(intents).toEqual([{ dest: "group", text: "While you were away, the bell rang." }])
+  })
+
+  test("a restarted bridge posts only the lines after the last one the group saw", async () => {
+    const first = await makeRouter()
+    const live = new FakeLink()
+    first.router.attachLink("observer", "obs-key", live)
+    live.push(MANIFEST)
+    live.push({ ...KP, id: "live-1", text: "The gate opens." })
+    await first.posted.flush()
+
+    const posted = await PostedIds.load(join(first.dir, "g.posted.json"))
+    const { router, intents } = await makeRouter(undefined, { postedIds: posted })
+    const fresh = new FakeLink()
+    router.attachLink("observer", "obs-key", fresh)
+    fresh.push({ ...PLAYER_NAR, id: "r0" })
+    fresh.push({ ...KP, id: "r1", text: "The gate opens.\n" })
+    fresh.push({ ...NPC, id: "r2" })
+    fresh.push({ ...KP, id: "r3", text: "The bell rings while the bridge is down." })
+    fresh.push(STATE)
+    expect(intents).toEqual([])
+    fresh.push(MANIFEST)
+    expect(intents.map((item) => item.text)).toEqual(["Nora: Stay back.", "The bell rings while the bridge is down."])
+  })
+
+  test("a first run with no posted history posts none of the replay", async () => {
+    const { router, intents } = await makeRouter()
+    const fresh = new FakeLink()
+    router.attachLink("observer", "obs-key", fresh)
+    fresh.push({ ...KP, id: "r1", text: "Old story." })
+    fresh.push({ ...NPC, id: "r2" })
+    fresh.push(MANIFEST)
+    expect(intents).toEqual([])
   })
 
   test("posted ids survive restart so history is not re-posted", async () => {
@@ -545,6 +678,16 @@ describe("router — choices, commands, queued input", () => {
     expect(intents.every((item) => item.text.length <= 4000)).toBe(true)
     expect(intents.map((item) => item.text).join("")).toContain("block-0")
     expect(intents.map((item) => item.text).join("")).toContain("block-399")
+  })
+
+  test("with no text limit (the OneBot path) a long line reaches the transport whole", async () => {
+    const { router, intents } = await makeRouter(undefined, { textLimit: Number.POSITIVE_INFINITY })
+    const observer = new FakeLink()
+    router.attachLink("observer", "obs", observer)
+    observer.push(MANIFEST)
+    observer.push({ ...KP, id: "long", text: "沙".repeat(9000) })
+    expect(intents).toHaveLength(1)
+    expect(intents[0]!.text.length).toBe(9000)
   })
 
   test("admin add/remove and mode persist in the settings file", async () => {

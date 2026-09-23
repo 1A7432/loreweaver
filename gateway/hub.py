@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -55,6 +56,14 @@ class Event:
     # rendered. It is how a member's join replay tells "this held live event is the one I
     # just replayed from storage" from "a second, identical roll" (`net.session`).
     origin_id: str = ""
+
+    def __post_init__(self) -> None:
+        # A line of story renders ONCE per recipient (`Member.deliver`), so its wire id is
+        # fixed here, at creation: every member sees the same `id` for the same line. A
+        # client holding several links to one room (the QQ bridge's observer + a member
+        # seat) dedupes by that id; a fresh id per render made one broadcast look like two.
+        if self.kind in ("narrative", "player_action") and not self.data.get("frame_id"):
+            self.data["frame_id"] = uuid.uuid4().hex
 
     @classmethod
     def player_action(cls, name: str, text: str) -> Event:

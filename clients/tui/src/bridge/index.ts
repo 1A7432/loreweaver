@@ -124,6 +124,7 @@ class GroupRuntime {
     readonly group: BridgeGroupConfig,
     transport: OneBotTransport,
     now: () => number,
+    onLog?: (text: string) => void,
   ) {
     this.limiter = new UserRateLimiter(undefined, undefined, now)
     this.deliverer = new OneBotDeliverer({
@@ -133,6 +134,7 @@ class GroupRuntime {
       getLastReplyId: (userId) => this.lastMessageId.get(userId),
       getLocale: () => this.router?.locale() ?? "en",
       now,
+      onLog,
     })
   }
 
@@ -287,7 +289,7 @@ export async function runBridge(config: BridgeConfig, deps: BridgeDeps = {}): Pr
     if (!groupKeeper) {
       throw new Error(tt(resolved.locale, "bridge.cli.missingGroupKey", { group: group.group_id }))
     }
-    const session = new GroupRuntime(group.group_id, group, transport, now)
+    const session = new GroupRuntime(group.group_id, group, transport, now, onLog)
     sessions.set(group.group_id, session)
 
     const settings = await loadGroupSettings(settingsPath(resolved.state_dir, group.group_id), {
@@ -319,6 +321,8 @@ export async function runBridge(config: BridgeConfig, deps: BridgeDeps = {}): Pr
       postedIds: session.posted,
       keyring: session.keyring,
       settingsPath: settingsPath(resolved.state_dir, group.group_id),
+      // Long text reaches the transport whole: over one message it becomes a forward card.
+      textLimit: Number.POSITIVE_INFINITY,
       onIntent: (intent) => session.enqueue(intent),
       onKickClose: (_userId, memberKey) => {
         catalog.delete(memberKey)

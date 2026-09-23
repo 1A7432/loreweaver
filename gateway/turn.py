@@ -198,7 +198,7 @@ async def run_turn(
         reply_event = Event.narrative(
             speaker="system",
             text=command_reply,
-            fmt="plain",
+            fmt="markdown" if reply is not None and reply.markdown else "plain",
             private=bool(
                 interaction_private or command_failed or (matched_spec and matched_spec.private_reply)
             ),
