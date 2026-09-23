@@ -225,6 +225,12 @@ def test_installed_pack_card_overlay_finds_it_only_inside_the_pack_home(tmp_path
     found = installed_pack_card_overlay(tmp_path / "data", home / "cards/world.json")
     assert found is not None and found.read_text(encoding="utf-8").startswith("format:")
 
+    # A declared overlay whose file went missing is still NAMED: the import reports the
+    # failure instead of treating the pack as one that never had an overlay.
+    (home / "cards" / "world.overlay.yaml").unlink()
+    gone = installed_pack_card_overlay(tmp_path / "data", home / "cards/world.json")
+    assert gone == home / "cards" / "world.overlay.yaml" and not gone.exists()
+
     # A card in the same pack that declares no overlay gets none...
     assert installed_pack_card_overlay(tmp_path / "data", home / "cards/keeper.json") is None
     # ...and neither does a copy of the same card outside any pack home (an attachment).

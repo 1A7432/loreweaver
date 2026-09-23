@@ -124,8 +124,13 @@ describe("Keyring — keys are named after the group card", () => {
     control.push(minted("阿绫", "key-player", "player"))
     await first
     admins = ["111"]
-    // The promotion re-mint times out client-side while the server is still working on it.
-    await expect(keyring.ensure("111", "阿绫")).rejects.toThrow("admin_mint_key timed out")
+    // An older server refuses the role update, so the promotion falls back to a re-mint —
+    // which times out client-side while the server is still working on it. (A TIMEOUT of
+    // the role update itself never re-mints: the seat would be lost.)
+    const promote = keyring.ensure("111", "阿绫")
+    await new Promise((resolve) => setTimeout(resolve, 2))
+    control.push({ type: FrameType.AdminError, code: "bad_request", message: "unknown admin frame" } as ServerFrame)
+    await expect(promote).rejects.toThrow("admin_mint_key timed out")
     const kick = keyring.kick("111")
     await Promise.resolve()
     control.push({ type: FrameType.AdminKeys, keys: [] } as ServerFrame)

@@ -49,6 +49,25 @@ export class LastKeeperError extends Error {
   }
 }
 
+/** The control plane answered an admin frame with a refusal other than `last_keeper`. */
+export class AdminRefusedError extends Error {
+  constructor(
+    readonly code: string,
+    message?: string,
+  ) {
+    super(message || code)
+    this.name = "AdminRefusedError"
+  }
+}
+
+/** No answer within the timeout: the server may or may not have acted on the frame. */
+export class ControlTimeoutError extends Error {
+  constructor(readonly op: "mint" | "update" | "delete") {
+    super(`admin_${op}_key timed out`)
+    this.name = "ControlTimeoutError"
+  }
+}
+
 export class ObserverProtectedError extends Error {
   readonly code = "observer_protected" as const
   constructor() {
@@ -301,8 +320,15 @@ export class Keyring {
    * knows a member by its key (`member_id_for_key`), and everything the player owns — the
    * claimed character above all — hangs off that identity; a fresh key was a stranger
    * with an empty sheet. The server refusing to demote the last keeper key surfaces as
-   * `LastKeeperError`; any other failure (an older server, a timeout) falls back to a
-   * fresh key, which is what this path used to do.
+   * `LastKeeperError`. Only a refusal the server actually SENT falls back to a fresh key
+   * (what this path used to do): an older server that does not know the frame
+   * (`bad_request`), or an entry the server no longer has (`not_found`/`forbidden`) — the
+   * update definitely did not happen, so a mint loses nothing. A timeout is not a
+   * refusal: the server may already have changed the role, and minting a fresh key
+   * then DELETING the old one would throw away the seat and its character — the very
+   * symptom this path exists to prevent. The frame is idempotent, so a timeout is
+   * retried once; a second silence fails the seat, the entry stays as it was, and the
+   * next message tries the role change again.
    */
   private async changeRole(
     userId: string,
@@ -311,15 +337,27 @@ export class Keyring {
     displayName?: string,
   ): Promise<KeyringEntry> {
     try {
-      await this.enqueueUpdateRole(existing.key_id, role)
+      await this.updateRoleWithOneRetry(existing.key_id, role)
     } catch (error) {
-      if (error instanceof LastKeeperError) throw error
-      return this.ensureFresh(userId, role, existing, this.keyName(userId, displayName))
+      if (error instanceof AdminRefusedError) {
+        return this.ensureFresh(userId, role, existing, this.keyName(userId, displayName))
+      }
+      throw error
     }
     const updated: KeyringEntry = { ...existing, role }
     this.entries.set(userId, updated)
     await this.flush()
     return updated
+  }
+
+  private async updateRoleWithOneRetry(id: string, role: PlayerRole): Promise<AdminKeysFrame> {
+    try {
+      return await this.enqueueUpdateRole(id, role)
+    } catch (error) {
+      if (!(error instanceof ControlTimeoutError)) throw error
+      // A late reply to the first send satisfies the second (same id, same role).
+      return this.enqueueUpdateRole(id, role)
+    }
   }
 
   private enqueueUpdateRole(id: string, role: PlayerRole): Promise<AdminKeysFrame> {
@@ -328,7 +366,7 @@ export class Keyring {
       const timer = setTimeoutFn(() => {
         if (this.pending?.seq === seq) {
           this.pending = undefined
-          reject(new Error("admin_update_key timed out"))
+          reject(new ControlTimeoutError("update"))
         }
       }, this.options.mintTimeoutMs ?? MINT_TIMEOUT_MS)
       this.pending = { kind: "update", seq, id, role, resolve, reject, timer }
@@ -372,7 +410,7 @@ export class Keyring {
           this.pruneLateMints()
           this.lateMints.push({ name, role, userId, at: Date.now() })
           while (this.lateMints.length > LATE_MINT_CAP) this.lateMints.shift()
-          reject(new Error("admin_mint_key timed out"))
+          reject(new ControlTimeoutError("mint"))
         }
       }, this.options.mintTimeoutMs ?? MINT_TIMEOUT_MS)
       this.pending = { kind: "mint", seq, name, role, resolve, reject, timer }
@@ -391,7 +429,7 @@ export class Keyring {
       const timer = setTimeoutFn(() => {
         if (this.pending?.seq === seq) {
           this.pending = undefined
-          reject(new Error("admin_delete_key timed out"))
+          reject(new ControlTimeoutError("delete"))
         }
       }, this.options.mintTimeoutMs ?? MINT_TIMEOUT_MS)
       this.pending = { kind: "delete", seq, id, resolve, reject, timer }
@@ -420,7 +458,7 @@ export class Keyring {
     if (isAdminError(frame)) {
       this.clearPending()
       if (frame.code === "last_keeper") pending.reject(new LastKeeperError(frame.message || "last_keeper"))
-      else pending.reject(new Error(frame.message || frame.code))
+      else pending.reject(new AdminRefusedError(frame.code, frame.message))
       return
     }
     if (!isAdminKeys(frame)) return

@@ -700,6 +700,7 @@ class WorldCommands:
         from core.mvu_compat import (
             MvuBranchTarget,
             MvuPathMissing,
+            MvuShapeWrite,
             load_mvu,
             mvu_add_path,
             mvu_set_path,
@@ -726,6 +727,12 @@ class WorldCommands:
                     children=separator.join(exc.children[:8]) or i18n.t("common.none"),
                 )
             )
+        except MvuShapeWrite:
+            # The target is a leaf and the write is legal in form; what is refused is the
+            # VALUE's shape. `.var set` changes values — a mapping or list typed as JSON
+            # would turn the leaf into a subtree, the same reshaping the branch guard
+            # refuses from the path side.
+            return ctx.fail(i18n.t("vars.commands.shape_refused", path=path))
         except MvuPathMissing:
             tree = await load_mvu(documents, ctx.chat_key)
             state = await load_modvars(documents, ctx.chat_key)

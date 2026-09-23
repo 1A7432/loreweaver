@@ -172,15 +172,32 @@ async def test_an_overlay_naming_a_missing_title_is_reported_not_refused(tmp_pat
     assert (await load_overlay(services.documents, "room-f")).entries["没有这条"].enabled is True
 
 
-async def test_a_broken_overlay_never_fails_the_world_import(tmp_path):
-    """The lore has already landed; the module still runs on the author's defaults."""
+async def test_a_broken_overlay_never_fails_the_world_import_and_the_receipt_says_so(tmp_path):
+    """The lore has already landed; the module still runs on the author's defaults — and
+    the keeper is TOLD, or the table plays on defaults believing the overlay is in force."""
     services = _services(tmp_path)
     card_path = _packed_card(tmp_path / "data", CARD, overlay="format: nonsense\n")
 
     reply = await CharcardTools(services).import_world_card(_keeper_ctx(tmp_path, "room-g"), file_path=card_path)
 
     assert "Pack overlay applied" not in reply
+    assert "Pack overlay NOT applied (world.overlay.yaml)" in reply
+    assert "format" in reply  # the parser's own reason rides along
     assert await services.worldbook.list("room-g")  # the lore is there
+    assert (await load_overlay(services.documents, "room-g")).is_empty
+
+
+async def test_an_overlay_the_manifest_names_but_the_disk_lacks_is_reported_not_swallowed(tmp_path):
+    """A deleted or moved overlay file is an `OSError`, not a parse error; same receipt."""
+    services = _services(tmp_path)
+    card_path = _packed_card(tmp_path / "data", CARD, overlay=OVERLAY_FILE)
+    (Path(card_path).parent / "world.overlay.yaml").unlink()
+
+    reply = await CharcardTools(services).import_world_card(_keeper_ctx(tmp_path, "room-h"), file_path=card_path)
+
+    assert "Pack overlay NOT applied (world.overlay.yaml)" in reply
+    assert str(tmp_path) not in reply  # the reason, not the host path
+    assert await services.worldbook.list("room-h")
 
 
 async def test_a_reimport_keeps_the_overlay_and_reports_it(tmp_path):

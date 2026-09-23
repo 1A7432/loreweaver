@@ -1064,6 +1064,19 @@ class MvuBranchTarget(ValueError):
         super().__init__(f"path {path!r} is a branch, not a value ({len(children)} child(ren))")  # i18n-exempt: command layer renders its own message
 
 
+class MvuShapeWrite(ValueError):
+    """The VALUE is a structure (a mapping or a list): writing it onto a leaf grows a subtree.
+
+    `existing_leaf` guards the PATH side of "the admin changes values, never the tree's
+    shape" (M26 §5.2); this guards the value side, which `parse_scalar` cannot — it is
+    shared with the model's `set_stat`, whose posture allows restructuring.
+    """
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        super().__init__(f"path {path!r}: a mapping or list is a shape, not a value")  # i18n-exempt: command layer renders its own message
+
+
 def _is_container(node: Any) -> bool:
     """Whether `node` holds other nodes. A ``[value, "description"]`` leaf is a VALUE."""
     return isinstance(node, dict) or (isinstance(node, list) and not is_value_with_desc(node))
@@ -1165,12 +1178,16 @@ async def mvu_set_path(
     admin's `.var set` go through the same code, so "the value changed" means the same
     thing whichever hand made it. ``existing_only=True`` is the ADMIN posture — the admin
     changes values, never the tree's SHAPE, so a path that is not already there raises
-    `MvuPathMissing` and a path that names a CONTAINER raises `MvuBranchTarget` (see
-    `existing_leaf`); creating paths, and restructuring them, stay the model tool's job.
+    `MvuPathMissing`, a path that names a CONTAINER raises `MvuBranchTarget` (see
+    `existing_leaf`), and a VALUE that is itself a container raises `MvuShapeWrite` —
+    the same reshaping done from the other side; creating paths, and restructuring
+    them, stay the model tool's job.
     """
     tree, exposed = await _load_doc(documents, chat_key)
     if existing_only:
         old = existing_leaf(tree, path)
+        if isinstance(value, (dict, list)):
+            raise MvuShapeWrite(path)
     else:
         try:
             old = path_leaf(tree, path)

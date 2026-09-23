@@ -235,6 +235,27 @@ def test_parse_scalar_still_parses_ordinary_json():
     assert parse_scalar('{"a": 1}') == {"a": 1}
 
 
+async def test_a_structure_value_never_reshapes_a_leaf_through_the_admin_path():
+    """`.var set 配置.难度 {"a": 1}` used to pass the branch guard (the TARGET is a leaf)
+    and hand `apply_set` a mapping — the same reshaping, done from the value side."""
+    from core.mvu_compat import MvuShapeWrite, load_mvu, parse_scalar
+
+    documents = await _tree_room()
+    before = json.dumps(await load_mvu(documents, "room1"), ensure_ascii=False, sort_keys=True)
+
+    for typed in ('{"a": 1}', '[1, "x"]', "[]"):
+        with pytest.raises(MvuShapeWrite) as caught:
+            await mvu_set_path(documents, "room1", "配置.难度", parse_scalar(typed))
+        assert caught.value.path == "配置.难度"
+    after = json.dumps(await load_mvu(documents, "room1"), ensure_ascii=False, sort_keys=True)
+    assert after == before
+
+    # The model tool's posture (`existing_only=False`) may still restructure: the tree's
+    # shape is the module's business, and that is the one hand allowed to change it.
+    old, new = await mvu_set_path(documents, "room1", "配置.难度", {"a": 1}, existing_only=False)
+    assert (old, new) == ("标准", {"a": 1})
+
+
 async def test_a_nan_never_reaches_the_tree_through_var_set():
     from core.mvu_compat import load_mvu, parse_scalar
 

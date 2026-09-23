@@ -502,6 +502,21 @@ async def test_writing_a_branch_is_refused_by_name_and_the_tree_survives(tmp_pat
     assert after == before
 
 
+async def test_a_structure_typed_as_a_value_is_refused_and_the_leaf_survives(tmp_path):
+    """The spec's "the admin changes VALUES, never the tree's shape" has a value side too:
+    `.var set 配置.难度 {"a":1}` used to turn the leaf into a mapping."""
+    services, router = await _room(tmp_path)
+    before = json.dumps(await load_mvu(services.documents, KEEPER_ROOM), ensure_ascii=False, sort_keys=True)
+
+    reply = await router.dispatch(_keeper(), '.var set 配置.难度 {"a": 1}')
+
+    assert reply is not None
+    assert "takes a value" in reply and "配置.难度" in reply
+    assert "Could not write" not in reply and "is a branch" not in reply
+    after = json.dumps(await load_mvu(services.documents, KEEPER_ROOM), ensure_ascii=False, sort_keys=True)
+    assert after == before
+
+
 async def test_a_refused_write_on_an_existing_leaf_says_why_not_that_it_is_unknown(tmp_path):
     """`.var add 配置.难度 3` on a STRING leaf used to print "neither a tracker nor a leaf"
     and then list 配置.难度 as the nearest path."""

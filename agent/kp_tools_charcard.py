@@ -653,7 +653,10 @@ class CharcardTools:
         Returns the receipt lines. Best-effort by construction: an overlay that cannot be
         read must never fail a world import that has already landed its lore — the module
         still runs on the author's defaults, which is exactly the state this whole layer
-        exists to let a human change afterwards.
+        exists to let a human change afterwards. Best-effort is not SILENT, though: the
+        receipt names the overlay that did not land and why, or the table keeps playing
+        on defaults while everyone believes the pack's annotations and `expose:` are in
+        force (a `.dev mount` author meets this on every broken save of the file).
 
         The RE-IMPORT report (§5.1) is independent of all that: whenever the room already
         carries an overlay, the receipt says how many of its titles the new lore still has
@@ -676,16 +679,27 @@ class CharcardTools:
         documents = self._services.documents
         separator = i18n.t("common.list_separator")
         parsed = EMPTY_OVERLAY
+        lines: list[str] = []
         try:
             overlay_path = installed_pack_card_overlay(self._services.settings.data_dir, host_path)
             if overlay_path is not None:
                 parsed = parse_overlay_file(overlay_path.read_bytes(), label=overlay_path.name)
-        except (OverlayError, OSError):
+        except (OverlayError, OSError) as exc:
             parsed = EMPTY_OVERLAY
+            # An OSError's `strerror` is the reason without the host path; the parser's
+            # own message already carries the file's label.
+            reason = getattr(exc, "strerror", None) or str(exc)
+            lines.append(
+                i18n.t(
+                    "charcard.tools.world.overlay_failed_line",
+                    file=overlay_path.name if overlay_path is not None else "",
+                    error=reason,
+                )
+            )
 
         current = await load_overlay(documents, ctx.chat_key)
         if parsed.is_empty and not parsed.expose and not setup_items and current.is_empty:
-            return []
+            return lines
 
         # ONE oracle for "is this title real": the room's stored entries. The card's RAW
         # list still holds what the import consumed as data and what it skipped as
@@ -698,7 +712,6 @@ class CharcardTools:
             merged = set_setup_items(merged, setup_items)
         await save_overlay(documents, ctx.chat_key, merged)
 
-        lines: list[str] = []
         if report["entries"] or report["unknown"]:
             lines.append(
                 i18n.t(

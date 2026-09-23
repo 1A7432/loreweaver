@@ -54,5 +54,6 @@
   "vars.commands.setup_empty": "这个模组没有声明需要开局前敲定的选项。",
   "vars.commands.setup_pending_line": "开局还没定：{items}",
   "vars.commands.branch_refused": "「{path}」是卡片变量树上的一个分枝，不是一个值——往那里写会把它下面的东西整片删掉。它下面有：{children}。",
-  "vars.commands.write_refused": "写入「{path}」失败：{error}"
+  "vars.commands.write_refused": "写入「{path}」失败：{error}",
+  "vars.commands.shape_refused": "「{path}」放的是一个值，而你输入的是一个结构（映射或列表）——.var set 只改值；树的形状是模组的事。"
 }

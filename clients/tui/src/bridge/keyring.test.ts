@@ -281,7 +281,7 @@ describe("keyring", () => {
     ring.close()
   })
 
-  test("a role change the server refuses as last_keeper keeps the old entry; other failures fall back to a fresh key", async () => {
+  test("a role change the server refuses as last_keeper keeps the old entry; a refusal it SENDS (an older server) falls back to a fresh key", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lw-keyring-"))
     let admins = ["42", "43"]
     const control = new FakeControl()
@@ -308,6 +308,58 @@ describe("keyring", () => {
     control.push({ type: FrameType.AdminKeys, keys: [keyRow(keyIdFromSecret("player-42"), memberName("42"), "player")] })
     expect((await fallback).key).toBe("player-42")
     expect(control.sent.some((frame) => frame.type === FrameType.AdminDeleteKey && "id" in frame && frame.id === keyIdFromSecret("keeper-42"))).toBe(true)
+    ring.close()
+  })
+
+  test("a role change the server is slow to answer is sent once more, and the SAME key keeps the seat", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lw-keyring-"))
+    let admins = ["42", "43"]
+    const control = new FakeControl()
+    const ring = await Keyring.load({ path: join(dir, "g.keyring.json"), groupId: "99", control, admins: () => admins, mintTimeoutMs: 20 })
+    const first = ring.ensure("42")
+    await Promise.resolve()
+    control.push(mintedKeys(memberName("42"), "keeper-42", "keeper", keyIdFromSecret("keeper-42")))
+    await first
+    const sentBefore = control.sent.length
+
+    admins = ["43"]
+    const demote = ring.ensure("42")
+    await new Promise((resolve) => setTimeout(resolve, 30)) // the first send timed out; the retry is out
+    const update = { type: FrameType.AdminUpdateKey, id: keyIdFromSecret("keeper-42"), role: "player" }
+    expect(control.sent.slice(sentBefore)).toEqual([update, update])
+    control.push({ type: FrameType.AdminKeys, keys: [keyRow(keyIdFromSecret("keeper-42"), memberName("42"), "player")] })
+    expect(await demote).toEqual({ key: "keeper-42", key_id: keyIdFromSecret("keeper-42"), role: "player", name: memberName("42") })
+    expect(control.sent.slice(sentBefore).some((frame) => frame.type === FrameType.AdminMintKey || frame.type === FrameType.AdminDeleteKey)).toBe(false)
+    ring.close()
+  })
+
+  test("a role change the server never answers fails the seat and keeps the entry — never a fresh key", async () => {
+    // The update may have landed server-side: a mint followed by deleting the old key
+    // would discard the seat and its character, which is exactly what a role change
+    // must not do. The entry is left as it was; the next message tries again.
+    const dir = await mkdtemp(join(tmpdir(), "lw-keyring-"))
+    let admins = ["42", "43"]
+    const control = new FakeControl()
+    const ring = await Keyring.load({ path: join(dir, "g.keyring.json"), groupId: "99", control, admins: () => admins, mintTimeoutMs: 20 })
+    const first = ring.ensure("42")
+    await Promise.resolve()
+    control.push(mintedKeys(memberName("42"), "keeper-42", "keeper", keyIdFromSecret("keeper-42")))
+    await first
+    const sentBefore = control.sent.length
+
+    admins = ["43"]
+    await expect(ring.ensure("42")).rejects.toThrow(/admin_update_key timed out/)
+    const update = { type: FrameType.AdminUpdateKey, id: keyIdFromSecret("keeper-42"), role: "player" }
+    expect(control.sent.slice(sentBefore)).toEqual([update, update])
+    expect(control.sent.some((frame) => frame.type === FrameType.AdminDeleteKey)).toBe(false)
+    expect(ring.get("42")).toEqual({ key: "keeper-42", key_id: keyIdFromSecret("keeper-42"), role: "keeper", name: memberName("42") })
+
+    // The next message: the same frame again, answered this time — same key, new role.
+    const again = ring.ensure("42")
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    control.push({ type: FrameType.AdminKeys, keys: [keyRow(keyIdFromSecret("keeper-42"), memberName("42"), "player")] })
+    expect((await again).key).toBe("keeper-42")
+    expect(control.sent.some((frame) => frame.type === FrameType.AdminMintKey && control.sent.indexOf(frame) >= sentBefore)).toBe(false)
     ring.close()
   })
 

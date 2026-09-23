@@ -54,5 +54,6 @@
   "vars.commands.setup_empty": "This module declares no \"set before play\" choices.",
   "vars.commands.setup_pending_line": "Setup still open: {items}",
   "vars.commands.branch_refused": "\"{path}\" is a branch of the card's variable tree, not a value — writing there would delete everything under it. Under it: {children}.",
-  "vars.commands.write_refused": "Could not write \"{path}\": {error}"
+  "vars.commands.write_refused": "Could not write \"{path}\": {error}",
+  "vars.commands.shape_refused": "\"{path}\" takes a value, and what you typed is a structure (a mapping or a list) — .var set changes values only; the tree's shape belongs to the module."
 }

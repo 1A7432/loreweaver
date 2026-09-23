@@ -1803,7 +1803,10 @@ def installed_pack_card_overlay(data_dir: Path | str, path: Path | str) -> Path 
     attachment or an arbitrary host path therefore gets no overlay, which is the honest
     answer: the annotations belong to the pack that adopted the card, not to the file.
 
-    Never raises — a missing or unreadable manifest is simply "no overlay"."""
+    Never raises — a missing or unreadable manifest is simply "no overlay". A manifest
+    that DECLARES an overlay gets its (confined) path back whether or not the file is
+    still there: a declared-but-missing overlay is a failure the import must report,
+    not a pack that never had one."""
     try:
         pack_home = pack_home_of(data_dir, path)
         if pack_home is None:
@@ -1828,8 +1831,7 @@ def installed_pack_card_overlay(data_dir: Path | str, path: Path | str) -> Path 
                 continue
             if (pack_home / PurePosixPath(declared)).resolve() != wanted:
                 continue
-            candidate = _confined_target(pack_home, PurePosixPath(overlay))
-            return candidate if candidate.is_file() else None
+            return _confined_target(pack_home, PurePosixPath(overlay))
         return None
     except Exception:
         return None
