@@ -512,8 +512,11 @@ export class BridgeRouter {
     const previous = keyring.get(memberOpenid)
     try {
       const entry = await keyring.ensure(memberOpenid, display)
-      const previousKey = previous?.key
-      if (previousKey && previousKey !== entry.key) this.options.onSeatReminted?.(memberOpenid, previousKey)
+      // A promotion keeps the key (and the seat's character); its live link still joined
+      // as a player, so it is closed and re-dialled either way.
+      if (previous && (previous.key !== entry.key || previous.role !== entry.role)) {
+        this.options.onSeatReminted?.(memberOpenid, previous.key)
+      }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       this.options.onLog?.(`qqbot.claim.mint_failed ${detail}`)

@@ -138,6 +138,15 @@ function createMockIroh() {
                       if (frame.type === FrameType.AdminDeleteKey) {
                         recv.push(`${JSON.stringify({ type: FrameType.AdminKeys, keys: [] })}\n`)
                       }
+                      if (frame.type === FrameType.AdminUpdateKey) {
+                        const role = frame.role === "keeper" ? "keeper" : "player"
+                        recv.push(
+                          `${JSON.stringify({
+                            type: FrameType.AdminKeys,
+                            keys: [{ id: String(frame.id), key_masked: "xxxx", room: "arkham", name: "", role, purpose: "join", expires_at: null }],
+                          })}\n`,
+                        )
+                      }
                       if (frame.type === FrameType.AdminMintKey) {
                         const name = String(frame.name)
                         const role = frame.role === "keeper" ? "keeper" : "player"
@@ -486,9 +495,11 @@ describe("qqbot bridge entry", () => {
       await waitFor(() =>
         messageCalls(rest).some((call) => JSON.stringify(call.body).includes("You are now a room admin")),
       )
+      // The promotion keeps the seat's key (and its character): a role update, not a mint.
       await waitFor(() =>
-        framesOf(iroh.sent).some((frame) => frame.type === FrameType.AdminMintKey && frame.role === "keeper"),
+        framesOf(iroh.sent).some((frame) => frame.type === FrameType.AdminUpdateKey && frame.role === "keeper"),
       )
+      expect(framesOf(iroh.sent).some((frame) => frame.type === FrameType.AdminMintKey && frame.role === "keeper")).toBe(false)
       await waitFor(() => iroh.joins.filter((row) => row.key.startsWith("k-Keeper")).length >= 2)
       const keeperJoin = [...iroh.joins].reverse().find((row) => row.key.startsWith("k-Keeper"))!
       await ungate(iroh, keeperJoin.key, "keeper")

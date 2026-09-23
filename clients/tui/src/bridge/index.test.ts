@@ -105,6 +105,15 @@ function createMockIroh() {
                       if (frame.type === FrameType.AdminDeleteKey) {
                         recv.push(`${JSON.stringify({ type: FrameType.AdminKeys, keys: [] })}\n`)
                       }
+                      if (frame.type === FrameType.AdminUpdateKey) {
+                        const role = frame.role === "keeper" ? "keeper" : "player"
+                        recv.push(
+                          `${JSON.stringify({
+                            type: FrameType.AdminKeys,
+                            keys: [{ id: String(frame.id), key_masked: "xxxx", room: "arkham", name: "", role, purpose: "join", expires_at: null }],
+                          })}\n`,
+                        )
+                      }
                       if (frame.type === FrameType.AdminMintKey) {
                         const name = String(frame.name)
                         const role = frame.role === "keeper" ? "keeper" : "player"
@@ -796,12 +805,19 @@ describe("QQ bridge entry", () => {
     await handle.stopped
   })
 
-  test("demoting an admin closes the old keeper link; promoting opens an admin link", async () => {
+  test("demoting or promoting an admin keeps the same key (the seat and its character) and re-joins under the new role", async () => {
     const iroh = createMockIroh()
     const socket = new AckSocket()
     const { handle } = await startBridge(iroh, socket, {
       groups: [{ group_id: 99, admins: [42, 7], mode: "mention" }],
     })
+    const adminJoins = () => iroh.joins.filter((row) => row.key.startsWith("k-Admin"))
+    const ungateLatest = async (role: "player" | "keeper") => {
+      const row = adminJoins().at(-1)!
+      row.stream.push(`${JSON.stringify({ type: FrameType.Welcome, room: "arkham", you: { name: "Admin", role }, locale: "en" })}\n`)
+      row.stream.push(`${JSON.stringify({ type: FrameType.UiManifest, panels: [] })}\n`)
+      await settle(0)
+    }
     socket.push(
       groupEvent({
         user_id: 42,
@@ -810,9 +826,9 @@ describe("QQ bridge entry", () => {
         sender: { nickname: "Admin" },
       }),
     )
-    await waitFor(() => iroh.joins.some((row) => row.key === "k-Admin"))
-    await ungate(iroh, "k-Admin", "en", "keeper")
-    const keeperJoin = iroh.joins.find((row) => row.key === "k-Admin")!
+    await waitFor(() => adminJoins().length === 1)
+    await ungateLatest("keeper")
+    const keeperJoin = adminJoins()[0]!
     socket.push(
       groupEvent({
         user_id: 42,
@@ -830,15 +846,17 @@ describe("QQ bridge entry", () => {
         sender: { nickname: "Admin" },
       }),
     )
-    await waitFor(() => iroh.joins.some((row) => row.key === "k-Admin-2"))
-    await ungate(iroh, "k-Admin-2")
-    expect(iroh.joins.filter((row) => row.key === "k-Admin" || row.key === "k-Admin-2").map((row) => row.key)).toEqual([
-      "k-Admin",
-      "k-Admin-2",
-    ])
+    await waitFor(() => adminJoins().length === 2)
+    await ungateLatest("player")
+    // The same key dialled again — no second key was minted for this seat.
+    expect(adminJoins().map((row) => row.key)).toEqual(["k-Admin", "k-Admin"])
+    const updates = framesOf(iroh.sent).filter((frame) => frame.type === FrameType.AdminUpdateKey)
+    expect(updates.map((frame) => ("role" in frame ? frame.role : ""))).toEqual(["player"])
+    expect(framesOf(iroh.sent).filter((frame) => frame.type === FrameType.AdminMintKey && "name" in frame && frame.name === "Admin")).toHaveLength(1)
+    // The old keeper link was closed on purpose: its stream ending is not redialled.
     keeperJoin.stream.end()
     await settle(40)
-    expect(iroh.joins.filter((row) => row.key === "k-Admin").length).toBe(1)
+    expect(adminJoins()).toHaveLength(2)
 
     socket.push(
       groupEvent({
@@ -849,16 +867,7 @@ describe("QQ bridge entry", () => {
       }),
     )
     await waitFor(() => iroh.joins.some((row) => row.key === "k-Investigator"))
-    await ungate(iroh, "k-Investigator")
-    socket.push(
-      groupEvent({
-        user_id: 7,
-        message_id: 84,
-        message: [{ type: "text", data: { text: ".bridge admin add 42" } }],
-        sender: { nickname: "Ada", card: "Investigator" },
-      }),
-    )
-    await settle(40)
+    await ungate(iroh, "k-Investigator", "en", "keeper")
     socket.push(
       groupEvent({
         user_id: 42,
@@ -867,7 +876,13 @@ describe("QQ bridge entry", () => {
         sender: { nickname: "Admin" },
       }),
     )
-    await waitFor(() => iroh.joins.some((row) => row.key === "k-Admin-3"))
+    await waitFor(() => adminJoins().length === 3)
+    expect(adminJoins().at(-1)!.key).toBe("k-Admin")
+    expect(
+      framesOf(iroh.sent)
+        .filter((frame) => frame.type === FrameType.AdminUpdateKey)
+        .map((frame) => ("role" in frame ? frame.role : "")),
+    ).toEqual(["player", "keeper"])
     await handle.stop()
   })
 
@@ -1033,6 +1048,29 @@ describe("QQ bridge entry", () => {
       }),
     ).rejects.toThrow(tt("en", "bridge.cli.onebotAuthRejected"))
   })
+
+  test("OneBot not up yet at startup (NapCat waiting for its QR login): the bridge waits, then starts", async () => {
+    const iroh = createMockIroh()
+    const socket = new AckSocket()
+    let up = false
+    setTimeout(() => {
+      up = true
+    }, 2_300)
+    const logs: string[] = []
+    const handle = await runBridge(baseConfig(await tmpState(), { locale: "en" }), {
+      loadIroh: iroh.loadIroh,
+      connectFactory: async () => {
+        if (!up) throw new Error("ECONNREFUSED")
+        return socket
+      },
+      installSignals: false,
+      onLog: (text) => logs.push(text),
+      startupRetryMs: 50,
+    })
+    expect(logs.filter((line) => line === tt("en", "bridge.cli.onebotWaiting"))).toHaveLength(1)
+    expect(logs).toContain(tt("en", "bridge.cli.ready", { groups: "99" }))
+    await handle.stop()
+  }, 15_000)
 })
 
 describe("RelayingControl", () => {

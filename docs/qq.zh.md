@@ -98,6 +98,8 @@ NapCat / LLOneBot：打开 OneBot 11 的 websocket，填同一段 token，正向
 管理员是群配置里 `admins` 列出的 QQ 号。运行时也可以用 `.bridge admin add|remove <qq>`
 增删（仅管理员，由桥自己处理，不会转给引擎）。运行时的名单存在 `<group>.settings.json` 里，
 从那以后以它为准、配置文件里的不再生效，所以桥不允许移除最后一个管理员：先加一个再删。
+增删管理员改的是这个人现有密钥的角色（`admin_update_key`）——座位和他认领的角色卡都还是他的；
+新角色从他下一条消息起生效。
 
 所有需要守秘人权限的引擎命令，在守秘人角色的链路上本来就能用：导入、`.skill`、
 `.panels`、`.pack install`、`.model`、`.save`、`.reset`、`.module`、`.rule`、
@@ -154,6 +156,8 @@ NapCat / LLOneBot：打开 OneBot 11 的 websocket，填同一段 token，正向
 
 ## 日志会告诉你什么
 
+- `OneBot 还没起来……`——启动时正向地址没有应答。NapCat 要等 QQ 登录后才开端口，所以比它先
+  起来的桥（宿主重启、正在重新扫码）会一直等，一应答就启动；只打一次。token 填错仍然立刻失败。
 - `OneBot 已就绪：登录账号 QQ …`——token 被接受了，这就是应答的那个账号；启动时打一次，
   每次重连后再打一次。
 - `OneBot 连接断了，正在重连。` / `OneBot 连接已离线。`——连接掉了；重连风暴期间每种

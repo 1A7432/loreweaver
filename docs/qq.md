@@ -114,7 +114,9 @@ Admins are QQ ids in the group's `admins` list. They can also be added and
 removed at runtime with `.bridge admin add|remove <qq>` (admin-only, handled by
 the bridge, never forwarded to the engine). The runtime list is saved in
 `<group>.settings.json` and from then on outranks the config file, so the bridge
-refuses to remove the last admin: add another one first.
+refuses to remove the last admin: add another one first. Adding or removing an admin
+changes the role of that person's existing key (`admin_update_key`) — their seat, and
+the character they claimed, stay theirs; the new role applies from their next message.
 
 Every keeper-gated engine command already works over a keeper-role link: import,
 `.skill`, `.panels`, `.pack install`, `.model`, `.save`, `.reset`, `.module`,
@@ -196,6 +198,10 @@ group is quiet.
 
 ## What the log tells you
 
+- `OneBot is not up yet …` — nothing answered the forward URL at startup. NapCat
+  opens its port only after the QQ login, so a bridge started first (a host reboot, a
+  QR re-login) waits and starts the moment it answers; printed once. A rejected token
+  still fails at once.
 - `OneBot is up: logged in as QQ …` — the token was accepted and this is the
   account that answered; printed at startup and again after every reconnect.
 - `OneBot connection dropped; reconnecting.` / `OneBot connection is offline.` —

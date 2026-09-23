@@ -366,6 +366,7 @@ const messages = {
     "bridge.seatFailed": "Couldn't join you to the table. Try again in a moment.",
     "bridge.cli.missingGroupKey": "Group {group} has no room keeper key.",
     "bridge.cli.onebotConnectFailed": "The OneBot transport failed to connect.",
+    "bridge.cli.onebotWaiting": "OneBot is not up yet (NapCat opens its port only after the QQ login). Waiting for it; the bridge starts as soon as it answers.",
     "bridge.cli.onebotAuthRejected":
       "The OneBot side rejected the access token. Set the same token in the implementation's token field and in onebot.access_token.",
     "bridge.cli.onebotSelfCheckFailed":
@@ -763,6 +764,7 @@ const messages = {
     "bridge.seatFailed": "没法把你拉进这桌。稍后再试一次。",
     "bridge.cli.missingGroupKey": "群 {group} 没有房间守秘人密钥。",
     "bridge.cli.onebotConnectFailed": "OneBot 传输没能连上。",
+    "bridge.cli.onebotWaiting": "OneBot 还没起来（NapCat 要等 QQ 登录后才开端口）。桥在等它，一应答就启动。",
     "bridge.cli.onebotAuthRejected": "OneBot 那边拒绝了 access_token。请在实现端的 token 字段和 onebot.access_token 里填同一段。",
     "bridge.cli.onebotSelfCheckFailed": "已连上 OneBot 的连接，但 get_login_info 没有应答。那真的是 OneBot 11 端点吗？",
     "bridge.cli.onebotLoggedIn": "OneBot 已就绪：登录账号 QQ {user}（{name}）。",

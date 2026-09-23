@@ -41,6 +41,8 @@ export type { BridgeConfig } from "./config"
 export { RelayingControl, attachmentFailureReason, redactKeeperSecrets } from "./runtime"
 
 const STATUS_LOG_THROTTLE_MS = 60 * 1000
+/** Between startup dials while the OneBot implementation is not up yet. */
+const STARTUP_RETRY_MS = 5 * 1000
 
 type LinkKind =
   | { kind: "control"; groupId: string }
@@ -64,6 +66,8 @@ export interface BridgeDeps {
   installSignals?: boolean
   /** Official-bot path: inject a transport pointed at the WS1 fakes. */
   qqbotTransport?: QQBotTransport
+  /** Delay between startup dials while OneBot is not up; 0 = fail on the first miss. */
+  startupRetryMs?: number
 }
 
 export interface BridgeHandle {
@@ -370,7 +374,12 @@ export async function runBridge(config: BridgeConfig, deps: BridgeDeps = {}): Pr
       // The group card (else nickname) becomes the key name — what the Keeper calls them.
       const entry = await session.keyring.ensure(userId, msg.sender.name)
       const role: LinkRole = entry.role === "keeper" ? "admin" : "player"
-      if (previousKey && previousKey !== entry.key) {
+      const previous = previousKey ? catalog.get(previousKey) : undefined
+      // A new key (first seat, a rename) or the SAME key with a new role (an admin added
+      // or removed — the key keeps its identity, so the character stays): either way the
+      // live link joined under the old terms and must dial again.
+      const roleChanged = previous?.kind === "member" && previous.role !== role
+      if (previousKey && (previousKey !== entry.key || roleChanged)) {
         catalog.delete(previousKey)
         session.router.detachLink(previousKey)
         pool.closeLink(previousKey)
@@ -456,7 +465,21 @@ export async function runBridge(config: BridgeConfig, deps: BridgeDeps = {}): Pr
     return undefined
   }
 
-  const connected = await transport.connect()
+  let connected = await transport.connect()
+  // NapCat opens its OneBot port only once QQ is logged in, so a bridge started first (a
+  // host reboot, a QR re-login in progress) waits for it instead of exiting — the same
+  // patience the running bridge has for a dropped connection. A rejected token or an
+  // endpoint that is not OneBot still fails at once: those never fix themselves.
+  const retryMs = deps.startupRetryMs ?? STARTUP_RETRY_MS
+  let waitingLogged = false
+  while (!connected && retryMs > 0 && transport.lastConnectError === "onebot.websocket.connect_timeout") {
+    if (!waitingLogged) {
+      onLog(tt(resolved.locale, "bridge.cli.onebotWaiting"))
+      waitingLogged = true
+    }
+    await new Promise((resolve) => setTimeout(resolve, retryMs))
+    connected = await transport.connect()
+  }
   if (!connected) {
     const reason = transport.lastConnectError
     const key =

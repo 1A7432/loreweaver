@@ -352,8 +352,17 @@ export async function runQQBotBridge(config: BridgeConfig, deps: BridgeDeps = {}
       return undefined
     }
 
-    const closePrevious = (session: QQBotGroupRuntime, previousKey: string | undefined, nextKey: string) => {
-      if (!previousKey || previousKey === nextKey) return
+    const closePrevious = (
+      session: QQBotGroupRuntime,
+      previousKey: string | undefined,
+      nextKey: string,
+      nextRole: LinkRole,
+    ) => {
+      // A new key, or the SAME key with a new role (an admin added or removed keeps the
+      // key and so the seat's character): the live link joined under the old terms.
+      const previous = previousKey ? catalog.get(previousKey) : undefined
+      const roleChanged = previous?.kind === "member" && previous.role !== nextRole
+      if (!previousKey || (previousKey === nextKey && !roleChanged)) return
       catalog.delete(previousKey)
       session.router.detachLink(previousKey)
       pool?.closeLink(previousKey)
@@ -366,8 +375,8 @@ export async function runQQBotBridge(config: BridgeConfig, deps: BridgeDeps = {}
     ) => {
       const previousKey = memberKeyFor(userId, session.groupId)
       const entry = await session.keyring.ensure(userId, displayName)
-      closePrevious(session, previousKey, entry.key)
       const role: LinkRole = entry.role === "keeper" ? "admin" : "player"
+      closePrevious(session, previousKey, entry.key, role)
       catalog.set(entry.key, { kind: "member", groupId: session.groupId, userId, role })
       await pool!.open(entry.key, { name: displayName, idleClose: playerIdleClose })
       pool!.touch(entry.key)

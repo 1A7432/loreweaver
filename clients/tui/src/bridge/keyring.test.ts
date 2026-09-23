@@ -247,42 +247,67 @@ describe("keyring", () => {
     ring2.close()
   })
 
-  test("role change deletes the old key; last_keeper keeps the old entry", async () => {
+  test("a role change keeps the SAME key (and so the seat and its character): admin_update_key, no mint", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lw-keyring-"))
     const path = join(dir, "g.keyring.json")
     let admins = ["42"]
     const control = new FakeControl()
-    const ring = await Keyring.load({
-      path,
-      groupId: "99",
-      control,
-      admins: () => admins,
-      keeperKey: "KEEP-SECRET",
-    })
+    const ring = await Keyring.load({ path, groupId: "99", control, admins: () => admins, keeperKey: "KEEP-SECRET" })
     const first = ring.ensure("42")
     await Promise.resolve()
-    control.push(mintedKeys(memberName("42"), "keeper-old", "keeper", "id-old"))
+    control.push(mintedKeys(memberName("42"), "keeper-old", "keeper", keyIdFromSecret("keeper-old")))
     await first
+    const sentBefore = control.sent.length
 
     admins = []
     const demote = ring.ensure("42")
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    const playerMint = control.sent.find((frame) => frame.type === FrameType.AdminMintKey && "role" in frame && frame.role === "player")
-    expect(playerMint).toBeDefined()
-    control.push(mintedKeys(memberName("42"), "player-new", "player", "id-new"))
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(control.sent.some((frame) => frame.type === FrameType.AdminDeleteKey && "id" in frame && frame.id === keyIdFromSecret("keeper-old"))).toBe(true)
-    control.push({
-      type: FrameType.AdminError,
-      code: "last_keeper",
-      message: "cannot delete the last keeper key",
-    })
-    await expect(demote).rejects.toBeInstanceOf(LastKeeperError)
-    expect(ring.get("42")?.key).toBe("keeper-old")
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    if (control.sent.some((frame) => frame.type === FrameType.AdminDeleteKey && "id" in frame && frame.id === keyIdFromSecret("player-new"))) {
-      control.push({ type: FrameType.AdminKeys, keys: [keyRow("id-old", memberName("42"), "keeper")] })
-    }
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(control.sent.slice(sentBefore)).toEqual([
+      { type: FrameType.AdminUpdateKey, id: keyIdFromSecret("keeper-old"), role: "player" },
+    ])
+    control.push({ type: FrameType.AdminKeys, keys: [keyRow(keyIdFromSecret("keeper-old"), memberName("42"), "player")] })
+    const demoted = await demote
+    expect(demoted).toEqual({ key: "keeper-old", key_id: keyIdFromSecret("keeper-old"), role: "player", name: memberName("42") })
+
+    admins = ["42"]
+    const promote = ring.ensure("42")
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    control.push({ type: FrameType.AdminKeys, keys: [keyRow(keyIdFromSecret("keeper-old"), memberName("42"), "keeper")] })
+    expect((await promote).key).toBe("keeper-old")
+    expect(control.sent.some((frame) => frame.type === FrameType.AdminMintKey && control.sent.indexOf(frame) >= sentBefore)).toBe(false)
+    expect(control.sent.some((frame) => frame.type === FrameType.AdminDeleteKey)).toBe(false)
+    const reloaded = await Keyring.load({ path, groupId: "99", control: new FakeControl(), admins: () => admins })
+    expect(reloaded.get("42")?.role).toBe("keeper")
+    ring.close()
+  })
+
+  test("a role change the server refuses as last_keeper keeps the old entry; other failures fall back to a fresh key", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lw-keyring-"))
+    let admins = ["42", "43"]
+    const control = new FakeControl()
+    const ring = await Keyring.load({ path: join(dir, "g.keyring.json"), groupId: "99", control, admins: () => admins })
+    const first = ring.ensure("42")
+    await Promise.resolve()
+    control.push(mintedKeys(memberName("42"), "keeper-42", "keeper", keyIdFromSecret("keeper-42")))
+    await first
+
+    admins = ["43"]
+    const refused = ring.ensure("42")
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    control.push({ type: FrameType.AdminError, code: "last_keeper", message: "cannot demote the last keeper key" })
+    await expect(refused).rejects.toBeInstanceOf(LastKeeperError)
+    expect(ring.get("42")?.role).toBe("keeper")
+
+    // An older server (no role update): the old behavior — a fresh key, then the old one deleted.
+    const fallback = ring.ensure("42")
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    control.push({ type: FrameType.AdminError, code: "bad_request", message: "unknown admin frame" })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    control.push(mintedKeys(memberName("42"), "player-42", "player", keyIdFromSecret("player-42")))
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    control.push({ type: FrameType.AdminKeys, keys: [keyRow(keyIdFromSecret("player-42"), memberName("42"), "player")] })
+    expect((await fallback).key).toBe("player-42")
+    expect(control.sent.some((frame) => frame.type === FrameType.AdminDeleteKey && "id" in frame && frame.id === keyIdFromSecret("keeper-42"))).toBe(true)
     ring.close()
   })
 

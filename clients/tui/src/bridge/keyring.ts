@@ -68,6 +68,15 @@ type Pending =
       timer: ReturnType<typeof setTimeout>
     }
   | {
+      kind: "update"
+      seq: number
+      id: string
+      role: PlayerRole
+      resolve: (frame: AdminKeysFrame) => void
+      reject: (error: Error) => void
+      timer: ReturnType<typeof setTimeout>
+    }
+  | {
       kind: "delete"
       seq: number
       id: string
@@ -108,7 +117,7 @@ function isAdminKeys(frame: ServerFrame): frame is AdminKeysFrame {
  * key name and ignores the join-time name (anti-impersonation), so this is the only way
  * the Keeper ever sees "阿绫" rather than "qq:123456789". Names are not unique — the
  * QQ id → key map lives in this file, never in the name. The observer stays
- * `qq:observer:<groupId>`. Mint and delete share one request chain (at most one control
+ * `qq:observer:<groupId>`. Mint, role update and delete share one request chain (at most one control
  * request outstanding).
  */
 export class Keyring {
@@ -200,7 +209,10 @@ export class Keyring {
     if (existing && existing.role === want && !this.isKeeperKey(existing.key)) return existing
     const inflight = this.inflight.get(userId)
     if (inflight) return inflight
-    const pending = this.ensureFresh(userId, want, existing, this.keyName(userId, displayName))
+    const pending =
+      existing && !this.isKeeperKey(existing.key)
+        ? this.changeRole(userId, existing, want, displayName)
+        : this.ensureFresh(userId, want, existing, this.keyName(userId, displayName))
     this.inflight.set(userId, pending)
     try {
       return await pending
@@ -282,6 +294,46 @@ export class Keyring {
       if (otherId !== userId && entry.name === name) return true
     }
     return false
+  }
+
+  /**
+   * An admin added or removed: the SAME key changes role (`admin_update_key`). The engine
+   * knows a member by its key (`member_id_for_key`), and everything the player owns — the
+   * claimed character above all — hangs off that identity; a fresh key was a stranger
+   * with an empty sheet. The server refusing to demote the last keeper key surfaces as
+   * `LastKeeperError`; any other failure (an older server, a timeout) falls back to a
+   * fresh key, which is what this path used to do.
+   */
+  private async changeRole(
+    userId: string,
+    existing: KeyringEntry,
+    role: PlayerRole,
+    displayName?: string,
+  ): Promise<KeyringEntry> {
+    try {
+      await this.enqueueUpdateRole(existing.key_id, role)
+    } catch (error) {
+      if (error instanceof LastKeeperError) throw error
+      return this.ensureFresh(userId, role, existing, this.keyName(userId, displayName))
+    }
+    const updated: KeyringEntry = { ...existing, role }
+    this.entries.set(userId, updated)
+    await this.flush()
+    return updated
+  }
+
+  private enqueueUpdateRole(id: string, role: PlayerRole): Promise<AdminKeysFrame> {
+    return this.enqueue((seq) => new Promise<AdminKeysFrame>((resolve, reject) => {
+      const setTimeoutFn = this.options.setTimeoutFn ?? setTimeout
+      const timer = setTimeoutFn(() => {
+        if (this.pending?.seq === seq) {
+          this.pending = undefined
+          reject(new Error("admin_update_key timed out"))
+        }
+      }, this.options.mintTimeoutMs ?? MINT_TIMEOUT_MS)
+      this.pending = { kind: "update", seq, id, role, resolve, reject, timer }
+      this.options.control.send({ type: FrameType.AdminUpdateKey, id, role })
+    }))
   }
 
   private async ensureFresh(
@@ -384,6 +436,12 @@ export class Keyring {
       if (!entry) return
       this.clearPending()
       pending.resolve(entry)
+      return
+    }
+    if (pending.kind === "update") {
+      if (!frame.keys.some((row) => row.id === pending.id && row.role === pending.role)) return
+      this.clearPending()
+      pending.resolve(frame)
       return
     }
     if (frame.keys.some((row) => row.id === pending.id)) return
