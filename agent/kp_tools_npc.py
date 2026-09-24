@@ -439,10 +439,11 @@ class NpcTools:
     ) -> str:
         """Delegate one NPC's in-character line to their knowledge-scoped AI sub-actor. The sub-actor
         sees ONLY this NPC's own persona/knowledge -- never the keeper pool or other NPCs' secrets --
-        so it structurally cannot leak or act on information this NPC doesn't have. The line reaches
-        the table at once as that NPC's own message, so do not restate it in your narration: narrate
-        around it (the gesture, the reaction, what happens next). The actor never rolls dice or
-        invents world facts, so adjudicate any resulting mechanics via the normal dice/check tools.
+        so it structurally cannot leak or act on information this NPC doesn't have. Weave the returned
+        line into your narration yourself: your narration is all you will remember of this scene next
+        turn, even though the table also sees the line as the NPC's own message. The actor never rolls
+        dice or invents world facts, so adjudicate any resulting mechanics via the normal dice/check
+        tools.
 
         Args:
             npc: The NPC's name or id.
@@ -455,7 +456,7 @@ class NpcTools:
                 for confessions, climaxes, and lines that must thread a secret.
 
         Returns:
-            The NPC's spoken line and mood, already shown to the players as-is. Their private
+            The NPC's spoken line and mood, for you to weave into the scene. Their private
             action intent is NOT in it -- it goes to your `npc_intents` notes, since the
             players read this line as-is; pull it with kp_note('list', 'npc_intents') when
             you need to adjudicate what the NPC does next.

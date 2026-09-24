@@ -18,7 +18,10 @@
   already saw; the OneBot outbox holds sends across a dropped connection (15 minutes,
   in order, then dropped and logged); OneBot text reaches the transport whole so it can
   become one forward card; `CommandReply.markdown`; the table copy of an NPC line leaves
-  the name to the frame and the Keeper is told the line is already at the table.
+  the name to the frame. (The Keeper was also briefly told not to restate the line in its
+  narration; the Studio run the next day reverted that: only the narration is persisted, so
+  the Keeper lost what its NPCs had said and re-told it the following turn. It weaves the
+  line again.)
 - **Reason:** each one was seen live, and each is the protocol working as written with a
   consumer that assumed more than it said — ids that were unique per render, a reply
   format that was always `plain`, an echo the bridge took for admin material. Fixing the
