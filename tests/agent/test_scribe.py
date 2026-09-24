@@ -209,3 +209,28 @@ async def test_disabled_scribe_never_calls_the_llm():
     services = build_services(Settings(), llm=FakeLLM(responder=_explode), embeddings=FakeEmbeddings(64))
     services.settings.scribe.enabled = False
     assert (await run_scribe(services, _ctx(), "行动", "叙述。", [])).changed is False
+
+
+async def test_a_variable_a_hook_wrote_this_turn_is_left_to_the_hook():
+    # The 《安土》 run's last march hour: the dice hook booked the number after the reply
+    # was final, and the Scribe quoted the Keeper's stale figure back over it.
+    payload = json.dumps(
+        {
+            "ops": [
+                {"op": "set", "id": "信物", "value": 1, "evidence": "信物已得其一"},
+            ],
+            "whispers": [],
+        }
+    )
+    services = _services(payload)
+    await _with_tracker(services)
+    from core.modvars import set_modvar
+
+    await set_modvar(services.documents, CHAT, "信物", 3)
+
+    await run_scribe(services, _ctx(), "我把指环收进口袋", "你确实拿到了指环——信物已得其一。", [], hook_writes=["信物"])
+
+    from core.documents import KEEPER_VIEWER, MODVARS_ID
+
+    view = await services.documents.get_view(CHAT, "modvars", MODVARS_ID, KEEPER_VIEWER)
+    assert (view or {}).get("values", {}).get("信物") == 3

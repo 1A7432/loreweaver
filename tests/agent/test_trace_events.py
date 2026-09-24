@@ -116,6 +116,7 @@ async def test_the_scribe_records_its_verdict(tmp_path):
         "beat": "handout",
         "ops": 1,
         "ops_seen": 1,
+        "ops_vetoed": 0,
         "whispers": 1,
         "chronicle": True,
     }
@@ -156,6 +157,7 @@ async def test_a_dropped_op_and_a_skipped_chronicle_are_visible_in_the_verdict(t
         "beat": "",  # "none" is not a beat, so the Director is never cued
         "ops": 0,  # proposed but dropped: the evidence was not a verbatim quote
         "ops_seen": 1,
+        "ops_vetoed": 0,  # dropped at the evidence gate, before any hook was asked
         "whispers": 0,
         "chronicle": False,
     }

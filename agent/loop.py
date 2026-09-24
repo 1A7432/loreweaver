@@ -378,6 +378,10 @@ class KPTurnResult:
     # `panel_event` payload ({panel, payload}) `gateway.turn.run_turn` delivers only to
     # viewers whose panel manifest contains that panel. Empty whenever hooks are inert.
     panel_events: list[dict] = field(default_factory=list)
+    # Every variable a hook wrote this turn, in write order (turn_start through
+    # variables_changed). The Scribe leaves these alone for this turn's pass: most of
+    # them landed after the reply was final, so the narration cannot have seen them.
+    hook_writes: list[str] = field(default_factory=list)
 
 
 async def run_kp_turn(
@@ -869,6 +873,7 @@ async def _run_kp_turn_body(
         usage=turn_usage,
         ui_frames=hook_ui_frames,
         panel_events=_capped_panel_events(hook_panel_events, ctx.chat_key),
+        hook_writes=hook_writes_this_turn,
     )
 
 
@@ -1617,7 +1622,7 @@ async def _run_reply_hooks(
         ]
         if changed:
             outcome = engine.fire("variables_changed", {"writes": changed})
-            await apply_hook_writes(services, ctx.chat_key, outcome.writes)
+            hook_writes = hook_writes + await apply_hook_writes(services, ctx.chat_key, outcome.writes)
             ui_frames += outcome.ui_blocks
             panel_events += outcome.panel_events
             if outcome.narrations:

@@ -452,7 +452,12 @@ operator's content, the operator's box):
   throws, or a script that hits the QuickJS time limit, allows the call. Every hook failure is
   internally harmless today (a broken handler loses its effects and the turn continues), and
   that property had to survive contact with the critical path — a hook that cannot run does
-  not get to stop the game.
+  not get to stop the game. The Scribe's tracker writes pass the same veto, each described
+  as the `set_variable` / `adjust_variable` call it stands for, so a guard a pack declares
+  on a variable holds against every model lane that writes it; a keeper's own `.var` command
+  is not a model and is not asked. Independently of any guard, the Scribe never writes a
+  variable a hook wrote that same turn: most hook phases run after the narration is final,
+  so where the two disagree, the narration is the stale one.
   With module UI panels (Layer D) there is additionally `emitPanel(panelId, payload)` — an
   opaque JSON payload (≤ 32 KB, ≤ 20 per turn) for one pack-declared panel, delivered as a
   `panel_event` ONLY to viewers whose manifest contains that panel. The same

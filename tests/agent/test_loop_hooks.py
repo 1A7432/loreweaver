@@ -93,6 +93,30 @@ async def test_dice_rolled_fires_on_real_dice_tools():
     assert "dice:skill_check" in result.reply
 
 
+async def test_the_turn_result_names_every_variable_a_hook_wrote():
+    # The Scribe leaves these alone for the turn's pass (`agent.scribe.run_scribe`), so
+    # the list has to cover the phases after the reply, variables_changed included.
+    llm = FakeLLM(script=[assistant_tools(tool_call("skill_check", skill_name="Spot Hidden")), assistant_text("done")])
+    services = _services(llm)
+    ctx = _ctx("chat-hooks-writes")
+    for name in ("fear", "found", "echo"):
+        await define_modvar(services.documents, ctx.chat_key, build_spec(name, "number", minimum=0, maximum=10))
+    await install_room_hooks(
+        services,
+        ctx.chat_key,
+        "test",
+        [
+            "on('turn_start', () => setvar('fear', 1));"
+            "on('dice_rolled', () => setvar('found', 2));"
+            "on('variables_changed', () => setvar('echo', 3));"
+        ],
+    )
+
+    result = await run_kp_turn(ctx, services, Toolset(_DiceProvider()), "I search the room")
+
+    assert result.hook_writes == ["fear", "found", "echo"]
+
+
 async def test_turn_start_inject_lands_in_the_system_prompt():
     services = _services(FakeLLM(script=[]))
     ctx = _ctx("chat-hooks-4")

@@ -450,7 +450,9 @@ async def run_scribe_pass(
         # `result.turn`, never the room's counter: this runs after the turn returned
         # (and after any companion sub-turns), so the counter has moved on. See
         # `KPTurnResult.turn` / `agent.chronicle.record_entry`.
-        outcome = await run_scribe(services, ctx, text, result.reply, names, result.turn)
+        outcome = await run_scribe(
+            services, ctx, text, result.reply, names, result.turn, hook_writes=result.hook_writes
+        )
         if hub is not None:
             if outcome.changed:
                 await publish_state(hub, services, ctx)

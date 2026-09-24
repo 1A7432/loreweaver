@@ -66,6 +66,7 @@ from typing import Any
 
 from agent.chronicle import record_entry
 from agent.context import AgentCtx
+from agent.hook_runtime import load_room_hook_engine
 from agent.npc import list_npcs
 from agent.services import Services
 from agent.stage_director import BEATS
@@ -343,6 +344,36 @@ async def _record_auto_chronicle(
     return True
 
 
+_HOOKS_UNLOADED = object()
+
+
+def _hook_refusal(engine: Any, op: dict, var_id: str) -> str | None:
+    """A room hook's reason for refusing this tracker write, or None to allow it.
+
+    The Scribe writes on the Keeper's behalf, so its writes answer to the same `tool_use`
+    veto a Keeper `set_variable` / `adjust_variable` call does, described as that call.
+    Without it a pack's declared guard held only against the Keeper: in the 2026-09-24
+    《安土》 run the crossing ledger is hook-owned while the column marches, the hook
+    booked an hour at 475, and the Scribe "reconciled" it back to the 450 the Keeper had
+    guessed in its narration before the hook ran. Fails open exactly like the Keeper's
+    path (`agent.loop._hook_tool_veto`): a hook that cannot run does not stop the write.
+    """
+    if engine is None:
+        return None
+    if op.get("op") == "set":
+        call = {"tool": "set_variable", "arguments": {"var_id": var_id, "value": op.get("value")}}
+    elif op.get("op") == "adjust":
+        call = {"tool": "adjust_variable", "arguments": {"var_id": var_id, "delta": op.get("delta")}}
+    else:
+        return None  # not a write; the caller skips it
+    try:
+        outcome = engine.fire("tool_use", call)
+    except Exception:  # noqa: BLE001 — see docstring
+        logger.debug("scribe: tool_use hook dispatch failed; allowing the write", exc_info=True)
+        return None
+    return outcome.deny or None
+
+
 async def run_scribe(
     services: Services,
     ctx: AgentCtx,
@@ -350,6 +381,8 @@ async def run_scribe(
     reply_text: str,
     tool_names: list[str] | None = None,
     turn: int = 0,
+    *,
+    hook_writes: list[str] | None = None,
 ) -> ScribePass:
     """One reconciliation pass (see :class:`ScribePass`).
 
@@ -411,6 +444,14 @@ async def run_scribe(
     # lets the dice decide instead of the player's assertion — so player text may
     # inform a whisper but can never be the verbatim evidence for a tracker write.
     haystack = _squash_ws(reply_text[:_MAX_TURN_TEXT])
+    # A variable a hook wrote this turn is deterministic code's for this turn. The reply-phase
+    # hooks (dice_rolled, clock_advanced, reply_ready, variables_changed) run after the
+    # narration is final, so where the two disagree it is the narration that is stale — the
+    # 《安土》 run's last march hour booked 800 and finished the column, and the Scribe quoted
+    # the Keeper's "七百七十五" back over it once the pack's own marching guard had lapsed.
+    hook_owned = set(hook_writes or [])
+    hooks: Any = _HOOKS_UNLOADED
+    vetoed_ops = 0
     if isinstance(ops, list):
         for op in ops[:MAX_OPS]:
             if not isinstance(op, dict):
@@ -421,6 +462,18 @@ async def run_scribe(
             evidence = _squash_ws(str(op.get("evidence") or ""))
             if len(evidence) < _MIN_EVIDENCE_CHARS or evidence not in haystack:
                 logger.debug("scribe: op on %s dropped (evidence not a verbatim quote)", var_id)
+                continue
+            if var_id in hook_owned:
+                logger.info("scribe: op on %s dropped (a hook wrote it this turn)", var_id)
+                vetoed_ops += 1
+                continue
+            # Built only once an op has passed the evidence gate: most passes write nothing.
+            if hooks is _HOOKS_UNLOADED:
+                hooks = await load_room_hook_engine(services, ctx)
+            refusal = _hook_refusal(hooks, op, var_id)
+            if refusal:
+                logger.info("scribe: op on %s refused by a hook: %s", var_id, refusal)
+                vetoed_ops += 1
                 continue
             try:
                 if op.get("op") == "set":
@@ -499,6 +552,7 @@ async def run_scribe(
             "beat": beat,
             "ops": applied_ops,
             "ops_seen": proposed_ops,
+            "ops_vetoed": vetoed_ops,
             "whispers": len(fresh_whispers),
             "chronicle": wrote_chronicle,
         },
