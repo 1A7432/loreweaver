@@ -301,21 +301,22 @@ async def test_the_setup_line_disappears_once_the_table_has_chosen():
     assert _setup_header(services) not in done
 
 
-async def test_the_setup_line_is_prep_phase_only():
-    """Once the room is playing, an unmade opening choice IS the author's default; repeating
-    it every turn would be the engine nagging about a decision nobody owes anyone."""
+async def test_the_setup_line_shows_in_the_play_phase_too():
+    """A world-card import puts a room straight into play (`agent.tool_phase.room_phase`),
+    and packs are where setup choices come from: a prep-only line would never reach the
+    Keeper of a pack room. It is state, not instruction, and it leaves once the choice is
+    made (the test above)."""
     services = _services("en")
     chat_key = "chat-prompt-builder-setup-phase"
     ctx = AgentCtx(chat_key=chat_key, user_id="u1", locale="en")
     await _seed_setup_items(services, chat_key)
-    assert _setup_header(services) in await build_system_prompt(ctx, services)
 
     from agent.tool_phase import set_room_phase
     from agent.tools import PLAY_PHASE
 
     await set_room_phase(services.store, chat_key, PLAY_PHASE)
 
-    assert _setup_header(services) not in await build_system_prompt(ctx, services)
+    assert _setup_header(services) in await build_system_prompt(ctx, services)
 
 
 async def test_a_room_with_no_overlay_gets_no_setup_line():

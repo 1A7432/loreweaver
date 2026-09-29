@@ -352,7 +352,9 @@ class CharacterTools:
         except Exception as exc:
             return i18n.t("kp_tools.character.skill.failed", error=str(exc))
 
-    @tool(prep_only=True)
+    # Both phases: it is the only tool that writes a sheet attribute, and a module's own
+    # attribute moves in play — 《安土》's 根值 was written thirteen times in one run.
+    @tool
     async def update_character_attribute(self, ctx: AgentCtx, attribute: str, value: int) -> str:
         """Update a character's attribute value.
 

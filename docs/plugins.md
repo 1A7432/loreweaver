@@ -539,8 +539,10 @@ The contract, and why it is safe to hand a keeper:
 **Shipping one with a pack**: declare it under `contents.prep` (`.js`, conventionally
 in `prep/`). It installs into the pack home and the keeper invokes it by reference —
 `run_prep_plan(script_ref="<packId>/prep/setup.js")` — previewing first, exactly like
-inline script text. The trust card counts shipped scripts (`prep scripts: N`); they
-NEVER run automatically, at install or any other time. Build checks are static
+inline script text. A room reads as `play` from the moment its world card is imported,
+so the keeper pins `.phase prep` first and `.phase auto` when the script has run. The
+trust card counts shipped scripts (`prep scripts: N`); they NEVER run automatically, at
+install or any other time. Build checks are static
 (extension, size cap, UTF-8) so packs build identically on machines without the
 optional QuickJS extra; syntax errors surface at preview.
 
@@ -876,13 +878,18 @@ actually shipped as, for anyone reading the code.)*
    and `core.skills.unlocked_tools_for` unioning enabled skills' `allowed-tools`
    for `agent.loop.run_kp_turn` to pass in. A second filter of the same family
    rides alongside it (M20 B): `prep_only: bool` marks a bulk / low-frequency
-   tool — module-grade NPC authoring, imports, exports, defining a variable —
-   which a room's `play` phase drops and its `prep` phase carries. The axis is
-   bulk vs improvisational, not "prep-type work": improvising an NPC mid-scene
-   is ordinary play, so the light `sketch_npc` counterpart is available in both.
-   `agent/tool_phase.py` decides a room's phase (a keeper's `.phase` pin first,
-   otherwise the room's own module-init state), and unmarked tools are visible
-   in both phases so a new tool is never silently unreachable. A third filter of
+   tool — imports, exports, defining a variable, bulk lore editing — which a
+   room's `play` phase drops and its `prep` phase carries. The axis is bulk vs
+   improvisational, not "prep-type work": authoring an NPC as they walk on is
+   ordinary play (a pack seeds no NPC records, so a module's cast is written
+   that way), so `create_npc` and the one-line `sketch_npc` are both available in
+   both phases, and so is `update_character_attribute`, the only tool that
+   writes a sheet attribute a module moves in play.
+   `agent/tool_phase.py` decides a room's phase: a keeper's `.phase` pin first,
+   otherwise whether the room's module is in — a `--module` upload whose
+   analysis reached ready, or a world-card import (which is how a `.lwpack`
+   module arrives). Unmarked tools are visible in both phases so a new tool is
+   never silently unreachable. A third filter of
    the same family: `needs: str` names a ROOM CAPABILITY a tool cannot work
    without (today only `"module_pool"`, the knowledge pool a `--module` text
    upload builds). A module imported as a WORLD CARD has no pool — its lore is

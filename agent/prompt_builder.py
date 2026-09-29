@@ -159,17 +159,16 @@ async def habit_index(services, chat_key: str) -> list[str]:
 async def _setup_pending_line(services: Services, ctx: AgentCtx, i18n) -> str:
     """The M26 setup choices this table has not made yet, as one localized data line.
 
-    PREP phase only (`agent.tool_phase.room_phase`): once a room is playing, an opening
-    choice nobody made is the author's default, and repeating it every turn would be the
-    engine nagging. Never raises — a room with no overlay contributes nothing at all.
+    In either tool phase, for as long as a choice is pending: it disappears the moment the
+    variable is written. It was prep-only while world-card rooms never left prep, so in
+    practice it always showed until set; once a world-card import started counting as the
+    room's module being in (2026-09-24, `agent.tool_phase.room_phase`), a prep-only line
+    would never have reached the Keeper of a pack room at all — and packs are where setup
+    choices come from. Never raises — a room with no overlay contributes nothing at all.
     """
-    from agent.tool_phase import room_phase
-    from agent.tools import PREP_PHASE
     from core.lore_overlay import load_overlay
 
     try:
-        if await room_phase(services.store, ctx.chat_key) != PREP_PHASE:
-            return ""
         pending = (await load_overlay(services.documents, ctx.chat_key)).pending()
     except Exception:  # noqa: BLE001 — see docstring
         return ""

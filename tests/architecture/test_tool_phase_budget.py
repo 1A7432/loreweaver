@@ -24,7 +24,9 @@ from infra.llm import FakeLLM
 
 # Measured 2026-08-11: the play phase is 32 tools / ~16.6k characters, cut from 35.7k
 # ungated. The ceiling leaves room for a couple of genuinely per-turn additions and no
-# more; a bulk tool cannot slip in under it.
+# more; a bulk tool cannot slip in under it. 2026-09-24: 36 tools / ~19.3k, after
+# `create_npc` and `update_character_attribute` joined play — both used in play by the
+# 《安土》 Studio run (see `_PLAY_ESSENTIALS`) — and the ceiling did not move.
 PLAY_PHASE_SCHEMA_BUDGET = 20_000
 
 # What a turn cannot be run without. Losing any of these to a phase reclassification is
@@ -39,6 +41,11 @@ _PLAY_ESSENTIALS = frozenset(
         "kp_note",
         "game_clock",
         "record_chronicle",
+        # A pack seeds no NPC records, so a module's cast is authored as each one walks
+        # on; and a module's own sheet attribute (《安土》's 根值) moves in play, with no
+        # other tool that writes one. Owner verdict 2026-09-24.
+        "create_npc",
+        "update_character_attribute",
     }
 )
 
@@ -69,7 +76,11 @@ def test_phasing_actually_cut_something():
     prep = _payload(toolset.schemas(phase=PREP_PHASE))
     play = _payload(toolset.schemas(phase=PLAY_PHASE))
 
-    assert play < prep / 2, f"phasing removed almost nothing: prep {prep}, play {play}"
+    # Under half until 2026-09-24; `create_npc` and `update_character_attribute` joining
+    # play took it to ~51% (19.3k of 37.5k), and the owner accepted that as the price of a
+    # pack room that can author its cast and write its own attribute mid-campaign. 60%
+    # still fails the day phasing stops meaning anything.
+    assert play < prep * 0.6, f"phasing removed almost nothing: prep {prep}, play {play}"
 
 
 def test_the_per_turn_essentials_are_never_prep_only():

@@ -211,7 +211,7 @@
   "commands.phase.name.prep": "prep",
   "commands.phase.pinned": "pinned by the keeper",
   "commands.phase.set_done": "Toolset phase pinned to {phase}.",
-  "commands.phase.status": "Toolset phase: {phase} ({source}). Prep carries the bulk tools (module-grade NPCs, imports, exports, variable definition); play drops them so the Keeper's attention stays on the per-turn set. Improvising an NPC works in both.",
+  "commands.phase.status": "Toolset phase: {phase} ({source}). Prep carries the bulk tools (imports, exports, variable definition, bulk lore editing); play drops them so the Keeper's attention stays on the per-turn set. A room enters play once its module is in: a module upload finishes its analysis, or a world card is imported. Creating NPCs works in both.",
   "commands.phase.usage": "Usage: .phase [prep | play | auto]",
   "commands.recap.empty": "No chronicle yet — the story so far will appear here once the campaign gets going.",
   "commands.recap.header": "📜 Previously on… (the campaign so far)",

@@ -23,6 +23,7 @@ from agent.loop import run_kp_turn
 from agent.services import build_services
 from agent.tool_phase import PHASE_KEY, is_pinned, room_phase, set_room_phase
 from agent.tools import PLAY_PHASE, PREP_PHASE
+from core.modvars import load_modvars
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
 from infra.llm import FakeLLM, ToolCall, assistant_text, assistant_tools
@@ -65,6 +66,19 @@ async def test_a_ready_room_reads_as_play():
     await services.store.state_set(CHAT, "module_init_status", "ready")
 
     assert await room_phase(services.store, CHAT) == PLAY_PHASE
+
+
+async def test_a_world_card_room_reads_as_play():
+    """The other road a module takes into a room: a world-card import, which is also how a
+    `.lwpack` module arrives. Until 2026-09-24 it did not count, and every pack room played
+    its whole campaign in prep. A pin still wins — the way back to run a pack's prep script."""
+    services = _services()
+    await services.store.state_set(CHAT, "world_import", "安土")
+
+    assert await room_phase(services.store, CHAT) == PLAY_PHASE
+
+    await set_room_phase(services.store, CHAT, PREP_PHASE)
+    assert await room_phase(services.store, CHAT) == PREP_PHASE
 
 
 async def test_a_keeper_pin_beats_the_lifecycle_both_ways():
@@ -129,7 +143,7 @@ async def test_the_bulk_half_is_gone_from_play_and_says_how_to_get_it_back():
     services = _services(
         FakeLLM(
             script=[
-                assistant_tools(_call("create_npc", name="Lady Ashcombe", persona="The mastermind.")),
+                assistant_tools(_call("define_variable", var_id="dread", kind="number")),
                 assistant_text("Noted."),
             ]
         )
@@ -137,12 +151,12 @@ async def test_the_bulk_half_is_gone_from_play_and_says_how_to_get_it_back():
     await services.store.state_set(CHAT, "module_init_status", "ready")
     toolset = build_kp_toolset(services)
 
-    result = await run_kp_turn(_ctx(), services, toolset, "Who runs the estate?")
+    result = await run_kp_turn(_ctx(), services, toolset, "Track the dread.")
 
     offered = {schema["function"]["name"] for schema in services.llm.calls[0][1]}
-    assert "create_npc" not in offered and "sketch_npc" in offered
+    assert "define_variable" not in offered and "set_variable" in offered
     assert ".phase prep" in result.tool_trace[0]["result"]
-    assert await npc_records.get_npc(services.documents, CHAT, "Lady Ashcombe") is None
+    assert "dread" not in (await load_modvars(services.documents, CHAT))["specs"]
 
 
 async def test_the_same_turn_in_prep_carries_the_bulk_tools():
@@ -177,7 +191,7 @@ def test_the_marker_defaults_to_visible():
     toolset = build_kp_toolset(services)
 
     assert not toolset.is_prep_only("skill_check")
-    assert toolset.is_prep_only("create_npc")
+    assert toolset.is_prep_only("define_variable")
 
 
 async def test_scripted_dispatch_refuses_a_prep_tool_in_play_even_unlisted():

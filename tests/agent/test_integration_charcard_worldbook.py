@@ -269,6 +269,22 @@ async def test_player_import_strips_world_machinery_and_reports(tmp_path):
     assert "<%" not in entries[0].content
 
 
+async def test_a_world_import_puts_the_room_into_the_play_phase(tmp_path):
+    # The marker the import writes is the one `room_phase` reads; the unit test in
+    # tests/agent/test_tool_phase.py sets it by hand, this one goes through the import.
+    from agent.tool_phase import room_phase
+    from agent.tools import PLAY_PHASE, PREP_PHASE
+
+    services = _services()
+    fs = _write_heavy_card(tmp_path)
+    ctx = AgentCtx(chat_key="chat-world-phase", user_id="kp", locale="en", fs=fs)
+    assert await room_phase(services.store, ctx.chat_key) == PREP_PHASE
+
+    await CharcardTools(services).import_world_card(ctx, file_path="heavy.json")
+
+    assert await room_phase(services.store, ctx.chat_key) == PLAY_PHASE
+
+
 async def test_keeper_world_import_installs_the_module_half(tmp_path):
     from core.mvu_compat import load_mvu
 

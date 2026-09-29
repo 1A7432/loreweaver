@@ -16,9 +16,15 @@ actor, so an NPC voiced without one would have nowhere to keep its private knowl
 **Where the default comes from.** An unset room follows its own recorded lifecycle rather
 than a guess about intent: a room whose module has not finished initializing is still
 being built, so it reads as `prep` (which is where the bulk tools belong, and it is what
-makes a brand-new room work with no ceremony at all); once `module_init_status` reaches
-ready, the room reads as `play`. A keeper's explicit `.phase` choice is a pin and always
-wins — including pinning a never-initialized freeform room to `play`.
+makes a brand-new room work with no ceremony at all); once its module is in, the room
+reads as `play`. A module is "in" by either road a room gets one: a `--module` text
+upload whose `module_init_status` reached ready, or a keeper's world-card import (the
+`world_import` marker — which is also how a `.lwpack` module arrives). Only the first
+road was counted until 2026-09-24, so every pack room played its whole campaign in prep:
+1009 tool calls of the 《安土》 Studio run, all of them offered the full bulk toolset. A
+keeper's explicit `.phase` choice is a pin and always wins — including pinning a
+never-initialized freeform room to `play`, or a world-card room back to `prep` to run a
+pack's prep scripts.
 """
 
 from __future__ import annotations
@@ -51,10 +57,11 @@ async def room_phase(store: Store, chat_key: str) -> str:
         if pinned in PHASES:
             return pinned
         status = await store.state_get(chat_key, "module_init_status")
+        world = await store.state_get(chat_key, "world_import")
     except Exception:  # noqa: BLE001 — see docstring
         logger.debug("tool phase unreadable for %s; falling back to prep", chat_key, exc_info=True)
         return PREP_PHASE
-    return PLAY_PHASE if status in _READY_STATES else PREP_PHASE
+    return PLAY_PHASE if status in _READY_STATES or world else PREP_PHASE
 
 
 # Room capabilities (see `needs` on `agent.tools.tool`). One name so far: the module

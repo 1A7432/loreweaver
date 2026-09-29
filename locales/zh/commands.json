@@ -211,7 +211,7 @@
   "commands.phase.name.prep": "筹备",
   "commands.phase.pinned": "守秘人固定的",
   "commands.phase.set_done": "工具阶段已固定为：{phase}。",
-  "commands.phase.status": "工具阶段：{phase}（{source}）。筹备阶段带着成批的工具（模组级 NPC、各种导入、导出、定义变量）；游玩阶段把它们收起来，让守秘人的注意力留在每回合真正要用的那一小套上。临场现编 NPC 两个阶段都能做。",
+  "commands.phase.status": "工具阶段：{phase}（{source}）。筹备阶段带着成批的工具（各种导入、导出、定义变量、成批改设定）；游玩阶段把它们收起来，让守秘人的注意力留在每回合真正要用的那一小套上。模组一进房间就算开玩：上传的模组分析完成，或者导入了世界卡。建 NPC 两个阶段都能做。",
   "commands.phase.usage": "用法：.phase [prep | play | auto]",
   "commands.recap.empty": "还没有编年记录——战役展开后，前情提要会出现在这里。",
   "commands.recap.header": "📜 前情提要（战役至今）",

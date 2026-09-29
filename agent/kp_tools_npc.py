@@ -141,7 +141,11 @@ class NpcTools:
     def _i18n(self, ctx: AgentCtx) -> I18n:
         return self._services.i18n.with_locale(ctx.locale)
 
-    @tool(prep_only=True)
+    # Both phases (owner, 2026-09-24): a pack seeds no NPC records, so a module's cast is
+    # authored the first time each one walks on — 14 module-grade NPCs across the first
+    # fifteen turns of the 《安土》 Studio run. `sketch_npc`'s one line would leave the
+    # knowledge-scoped actor almost nothing to play from.
+    @tool
     async def create_npc(
         self,
         ctx: AgentCtx,

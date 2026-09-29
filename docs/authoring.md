@@ -175,7 +175,7 @@ asks for. Ids can be CJK.
 module runs, because your default is not their choice. It changes nothing about the variable
 itself — it only makes the choice visible until somebody makes it: named in the world-import
 receipt, listed by `.var setup`, leading `.var list`, and carried to the Keeper as one line of
-state while the room is in its prep phase. Writing the variable — `.var set`, or the Keeper's own
+state every turn until it is made. Writing the variable — `.var set`, or the Keeper's own
 `set_variable` — closes it; the default never does. Pair it with `enum` + `options` and the table
 sees the choices you meant.
 
