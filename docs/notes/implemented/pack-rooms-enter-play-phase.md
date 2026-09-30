@@ -23,6 +23,13 @@
      the Keeper of a pack room at all, and packs are where setup choices come from.
   4. A pack's prep scripts and `.forge` stay prep-only: the room admin pins `.phase prep`
      to run them and `.phase auto` afterwards (docs/plugins.md C.3).
+- **Follow-up (review, 2026-09-30):** `import_world_card` wrote `world_import` right after
+  the hooks, before the brief, variable specs, overlay and pregen sheets (the last a model
+  call). Once the marker also chose the tool phase, an import that failed there left a
+  half-built room in play with the bulk tools gone. The marker now lands at the end of a
+  successful import, beside the `room_system` pin. It is not cleared on failure: a failed
+  re-import keeps the marker its successful predecessor wrote, which is still true, and
+  clearing it would drop a campaign in progress back to prep.
 - **Budget:** the play set grew from 34 tools / 17.5k characters to 36 / 19.3k, inside the
   unchanged 20k ceiling. The "phasing actually cut something" check (play under half of
   prep) moved to 60%: play is now ~51% of prep, the price the owner accepted.

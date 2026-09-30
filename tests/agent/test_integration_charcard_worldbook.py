@@ -285,6 +285,53 @@ async def test_a_world_import_puts_the_room_into_the_play_phase(tmp_path):
     assert await room_phase(services.store, ctx.chat_key) == PLAY_PHASE
 
 
+async def test_a_world_import_that_fails_partway_leaves_the_room_in_prep(tmp_path, monkeypatch):
+    # The lore and hooks have landed by the time the brief is built. The marker used to be
+    # written before this point, so a failure here left a half-built room in play with the
+    # bulk tools gone and the module-discipline prompt switched on.
+    import agent.kp_tools_charcard as importer
+    from agent.tool_phase import room_phase
+    from agent.tools import PREP_PHASE
+
+    def broken_brief(*_args, **_kwargs):
+        raise RuntimeError("the brief could not be built")
+
+    monkeypatch.setattr(importer, "build_brief", broken_brief)
+    services = _services()
+    fs = _write_heavy_card(tmp_path)
+    ctx = AgentCtx(chat_key="chat-world-half", user_id="kp", locale="en", fs=fs)
+
+    result = await CharcardTools(services).import_world_card(ctx, file_path="heavy.json")
+
+    assert "the brief could not be built" in result
+    assert not await services.store.state_get(ctx.chat_key, "world_import")
+    assert await room_phase(services.store, ctx.chat_key) == PREP_PHASE
+
+
+async def test_a_failed_reimport_keeps_the_marker_of_the_import_that_worked(tmp_path, monkeypatch):
+    # Moving the marker to the end, rather than clearing it on failure, is what keeps a
+    # campaign in progress in play when a revised card fails to import over it.
+    import agent.kp_tools_charcard as importer
+    from agent.tool_phase import room_phase
+    from agent.tools import PLAY_PHASE
+
+    services = _services()
+    fs = _write_heavy_card(tmp_path)
+    ctx = AgentCtx(chat_key="chat-world-reimport", user_id="kp", locale="en", fs=fs)
+    await CharcardTools(services).import_world_card(ctx, file_path="heavy.json")
+    marker = await services.store.state_get(ctx.chat_key, "world_import")
+    assert marker
+
+    def broken_brief(*_args, **_kwargs):
+        raise RuntimeError("the brief could not be built")
+
+    monkeypatch.setattr(importer, "build_brief", broken_brief)
+    await CharcardTools(services).import_world_card(ctx, file_path="heavy.json")
+
+    assert await services.store.state_get(ctx.chat_key, "world_import") == marker
+    assert await room_phase(services.store, ctx.chat_key) == PLAY_PHASE
+
+
 async def test_keeper_world_import_installs_the_module_half(tmp_path):
     from core.mvu_compat import load_mvu
 

@@ -355,9 +355,9 @@ class CharcardTools:
         is reading the reply. `raise_on_failure` is for a caller that must BRANCH on the
         outcome instead of printing it (`.pack install` decides what to claim in its
         summary): a refusal that reads as prose is indistinguishable from success to code,
-        and the room state left behind is no substitute — the `world_import` marker is
-        written partway through, so a room that already ran a module keeps a truthy marker
-        no matter how this call ends.
+        and the room state left behind is no substitute — the `world_import` marker lands
+        only when an import completes, but a room that already ran a module keeps its old
+        truthy marker no matter how this call ends.
         """
         i18n = self._i18n(ctx)
 
@@ -419,11 +419,6 @@ class CharcardTools:
             hooks = card_hook_codes(card)
             if hooks:
                 await install_room_hooks(self._services, ctx.chat_key, f"card:{card.name}", hooks)
-            # Durable "this room runs an imported module" marker: the prompt builder folds the
-            # keeper_discipline/module_fidelity blocks into the lore section ONLY for rooms
-            # that actually loaded a module this way — a free-sandbox room whose keeper merely
-            # `.lore add`ed some setting notes must never receive run-the-module directives.
-            await self._services.store.state_set(ctx.chat_key, "world_import", card.name or "card")
 
             # The card's PROSE gets a home (UPSTREAM item 10): a keeper-only brief
             # document, copied deterministically — before this, description/scenario
@@ -537,9 +532,21 @@ class CharcardTools:
                         names=i18n.t("common.list_separator").join(cast_names),
                     )
 
-            # The import made it through every step — only now does the pin land.
+            # The import made it through every step — only now do the pin and the marker land.
             if pin_system:
                 await self._services.store.state_set(ctx.chat_key, "room_system", pin_system)
+            # Durable "this room runs an imported module" marker. Two things read it: the
+            # prompt builder folds the keeper_discipline/module_fidelity blocks into the lore
+            # section ONLY for rooms that actually loaded a module this way (a free-sandbox
+            # room whose keeper merely `.lore add`ed some setting notes must never receive
+            # run-the-module directives), and `agent.tool_phase.room_phase` reads the room as
+            # `play`, taking the bulk tools away. It used to be written right after the hooks,
+            # so an import that failed later — the pregen sheet is a model call — left a
+            # half-built room in play with no bulk tools to finish it. Written last, a failed
+            # FIRST import leaves no marker; a failed RE-import keeps the one its successful
+            # predecessor wrote, which is still true (a module ran here), and clearing it
+            # would drop a campaign in progress back to prep.
+            await self._services.store.state_set(ctx.chat_key, "world_import", card.name or "card")
 
             result = i18n.t(
                 "charcard.tools.world.done",

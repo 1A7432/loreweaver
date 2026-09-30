@@ -311,9 +311,9 @@ async def _import_world_card(ctx: CommandCtx, ref: str) -> tuple[bool, str]:
     """Load one world card as this room's module. Returns (landed, pinned system).
 
     Both halves are OBSERVED, never assumed. `import_world_card` normally reports every
-    refusal as prose and writes its `world_import` marker partway through its own work, so
-    neither the return value nor that marker can tell a caller whether this call did
-    anything — a room that already ran a module carries a truthy marker regardless. Hence
+    refusal as prose, and its `world_import` marker cannot tell a caller whether THIS call
+    did anything either — the marker lands only when an import completes, but a room that
+    already ran a module carries a truthy marker regardless. Hence
     `raise_on_failure`, and hence reading the room's rule system back afterwards rather
     than repeating the pin the pack asked for: the summary claims a pinned system only
     when the room is actually on it.
