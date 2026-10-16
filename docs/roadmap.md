@@ -27,7 +27,7 @@ structurally cannot render, so clients speak the open protocol instead. QQ reach
 engine adapter — official Bot API first, OneBot 11 (personal account) second.
 
 **v1.0.0 shipped as the first stable release**, and development has continued past it on a
-`1.0.1.dev*` line. Since then, seven structural milestones landed:
+`2.3.dev*` line (the version follows the wire-protocol version). Since then, seven structural milestones landed:
 
 - **Rules became data (M16).** A rule system is one file, and it owns everything about itself: the
   tiers a check can land on, what a sheet looks like, which subsystems exist, which dot-commands it
@@ -105,8 +105,8 @@ A round of unglamorous work just landed — the things that have to be right bef
 ## Near-term
 
 - **Multiplayer polish.** With permissions now enforced, smooth off the remaining rough edges of networked play — a real guard against bot loops, more of the state a late joiner needs — so a room among people who trust each other is genuinely comfortable.
-- **The desktop client is the recommended way to play.** [loreweaver-studio](https://github.com/1A7432/loreweaver-studio) started as the card workbench and is now the full graphical client: a markdown narrative log with colour-coded dice, live character / party / variable panels, a module's own panels — tier-1 templates and sandboxed tier-2 pages, the thing the terminal structurally cannot draw — the keeper screens (rooms & invites, model, module, rules, skills, character creation), and the same one-click *Host locally & play*; its other mode is the studio (forge, card split, `.lwpack` build, AI drafting gated by the same validators as typed content). It tracks protocol 2.3 and a cross-repo round-trip gate fails when its output and the engine's parsers drift. What it still lacks is an installer: it builds from source today (macOS verified; Windows / Linux compile in CI), and release bundles are the next step. The terminal client stays — one line to install, runs anywhere with a terminal, and is what the server's own `--cli` and the playtest harness drive.
-- **A flagship module.** The formats are only worth as much as the first serious thing built on them. One is in development, co-designed with the panel/presentation layers so that layer has a real consumer rather than a hypothetical one.
+- **The desktop client is the recommended way to play.** [loreweaver-studio](https://github.com/1A7432/loreweaver-studio) started as the card workbench and is now the full graphical client: a markdown narrative log with colour-coded dice, live character / party / variable panels, a module's own panels — tier-1 templates and sandboxed tier-2 pages, the thing the terminal structurally cannot draw — the keeper screens (rooms & invites, model, module, rules, skills, character creation), and the same one-click *Host locally & play*; its other mode is the studio (forge, card split, `.lwpack` build, AI drafting gated by the same validators as typed content). It tracks protocol 2.3 and a cross-repo round-trip gate fails when its output and the engine's parsers drift. Installers ship with its releases since v0.1.0: macOS (Apple silicon and Intel), Windows x64, Linux x64 (AppImage / deb). The terminal client stays — one line to install, runs anywhere with a terminal, and is what the server's own `--cli` and the playtest harness drive.
+- **A flagship module.** The formats are only worth as much as the first serious thing built on them. The first one, [《安土》](https://github.com/1A7432/antu), is out as an `.lwpack` on its Git releases; it was co-designed with the panel/presentation layers so that layer has a real consumer rather than a hypothetical one.
 
 ## The bigger arc — the world engine
 
