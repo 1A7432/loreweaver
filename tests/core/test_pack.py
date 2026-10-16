@@ -981,3 +981,51 @@ def test_pack_prep_scripts_respect_the_sandbox_size_cap_and_extension(tmp_path):
     )
     with pytest.raises(PackError, match=".js"):
         build_pack(src2, tmp_path / "ext.lwpack")
+
+
+def test_reinstall_without_hooks_removes_the_stale_hooks_js(tmp_path: Path):
+    src = _write_source(tmp_path)
+    v1 = build_pack(src, tmp_path / "v1.lwpack")
+    _install(v1.path, tmp_path)
+    installed_hooks = tmp_path / "data/skills/omen-engine/hooks.js"
+    assert installed_hooks.is_file()
+
+    (src / "skills/omen-engine/hooks.js").unlink()
+    manifest = src / MANIFEST_NAME
+    manifest.write_text(manifest.read_text(encoding="utf-8").replace("version: 1.2.0", "version: 1.3.0"), encoding="utf-8")
+    v2 = build_pack(src, tmp_path / "v2.lwpack")
+    assert v2.manifest.trust is not None and v2.manifest.trust.has_hooks is False
+    _install(v2.path, tmp_path)
+
+    assert not installed_hooks.exists()
+    assert (tmp_path / "data/skills/omen-engine/SKILL.md").is_file()
+    original = skills_module._USER_SKILL_DIR
+    skills_module._USER_SKILL_DIR = tmp_path / "data/skills"
+    skills_module._discover_registry.cache_clear()
+    try:
+        skill = load_skill("omen-engine")
+        assert skill is not None and not skill.hooks
+    finally:
+        skills_module._USER_SKILL_DIR = original
+        skills_module._discover_registry.cache_clear()
+
+
+def test_png_card_ejs_is_counted_in_the_trust_card_scan():
+    import base64
+    import struct
+    import zlib
+
+    from core.pack import _validate_card_bytes
+
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        crc = zlib.crc32(kind + payload) & 0xFFFFFFFF
+        return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", crc)
+
+    def png(description: str) -> bytes:
+        raw = {"spec": "chara_card_v2", "data": {"name": "Ada", "description": description}}
+        text = b"chara\x00" + base64.b64encode(json.dumps(raw).encode())
+        ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
+        return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"tEXt", text) + chunk(b"IEND", b"")
+
+    assert _validate_card_bytes("cards/a.png", png("hello <% if (x) { %>there<% } %>"))[0] is True
+    assert _validate_card_bytes("cards/b.png", png("plain scholar"))[0] is False

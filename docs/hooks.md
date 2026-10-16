@@ -19,14 +19,17 @@ Two facts frame everything else:
    proceeds without you.
 
 Requirements: the server has the `ejs` extra installed and `TRPG_ENABLE_FULL_EJS`
-is not `false` (one switch governs every sandboxed-JS surface).
+is not `false`. That switch governs hooks and full EJS only; rules scripts and prep
+scripts are not affected by it.
 
 ## Where hooks live
 
 - **In a skill:** a `hooks.js` file next to the skill's `SKILL.md`. It is active
   while the skill is enabled for the room — `.skill enable <id>` is the on/off
   switch, nothing new to learn.
-- **In a card:** an `extensions.loreweaver_hooks` list of script strings. A card
+- **In a card:** a native lorecard (`*.lorecard.json`, format v1) carries its scripts in
+  the top-level `hooks` list (strings or `{code: "…"}` objects); an ST-shaped card
+  uses an `extensions.loreweaver_hooks` list of script strings. A card
   carrying hooks is a **world card**: the scripts install when the Keeper imports
   it with `.import <file> world` (a player's character import strips them — see
   [cards.md](cards.md)); **re-importing the card replaces its scripts** rather
@@ -83,7 +86,7 @@ The full template bridge is available:
   with `define_variable` goes through its kind/bounds check (a number with bounds
   stays inside them); any other name lands in the imported-card (MVU) variable tree. A
   failing write is skipped and reported, never fatal. At most **64 writes** apply
-  per turn.
+  per event dispatch.
 - **Snapshot semantics:** variables are snapshotted once per turn. A handler sees
   its **own** earlier writes — as REQUESTED, before validation (a `setvar` beyond a
   variable's bounds reads back unclamped in the sandbox; the store keeps the clamped
@@ -98,17 +101,18 @@ The full template bridge is available:
 
 Effect emitters:
 
-| Emitter | Does | Per-turn caps |
+| Emitter | Does | Caps (per event dispatch unless noted) |
 |---|---|---|
 | `inject(text)` | adds a section to this turn's Keeper prompt (`turn_start` only) | 8 × 4,000 chars |
 | `narrate(text)` | appends to the player-visible reply | 8 × 2,000 chars |
 | `rewriteReply(text)` | replaces the player-visible reply | 1 × 4,000 chars |
 | `emitUI(blocks, opts?)` | draws declarative UI in clients (below) | 8 emissions |
+| `emitPanel(panelId, payload)` | sends an opaque JSON payload to one module panel's own code (`panel_event` frame) | 20 per **turn**, 32 KiB each |
 | `log(text)` | writes a warning-level line to the server log | — |
 
 ## `emitUI` — declarative module UI
 
-`emitUI(blocks, opts?)` sends validated UI blocks to clients as protocol-v1.7 `ui`
+`emitUI(blocks, opts?)` sends validated UI blocks to clients as `ui`
 frames ([protocol.md](protocol.md) has the exact schema). Block kinds:
 
 ```js
@@ -118,7 +122,17 @@ frames ([protocol.md](protocol.md) has the exact schema). Block kinds:
 {kind: "text",    text, style?}                    // style: "quote" | "warning"
 {kind: "divider"}
 {kind: "choices", prompt?, options: [{id, label, input}]}
+{kind: "image",   hash, mime?, caption?, alt?}     // a picture by sha256 content hash (64 hex)
+// the four presentation templates:
+{kind: "letter",     body, from?, to?, date?}
+{kind: "clipping",   headline, body, source?, date?}
+{kind: "map_pin",    label, hash, x, y, note?}     // x, y: 0..1 fractions of the map image
+{kind: "title_card", title, subtitle?, act?}
 ```
+
+`image` and `map_pin` name their picture by content hash, and the hash must be reachable
+in the room's media or the block is dropped before it reaches the wire. A block missing a
+required field is dropped; a bad optional field is stripped and the block kept.
 
 Options (second argument): `panel: "inline" | "sidebar"` (default `"inline"` — into
 the narrative stream; `"sidebar"` renders a persistent panel), `id` (names a UI
@@ -132,7 +146,7 @@ player had typed it** — a normal input frame, no new protocol machinery.
 UI frames are **not replayed on join**: a hook that wants a persistent panel simply
 re-emits it every turn (cheap, idempotent with a stable `id`).
 
-Caps: 8 emissions/turn × 16 blocks each; 12 options per `choices`; labels 120
+Caps: 8 emissions per event dispatch × 16 blocks each; 12 options per `choices`; labels 120
 chars, text 2,000, prompt 200, option input 200, `id` 64. A block that fails its
 schema is dropped; the rest of the emission survives.
 

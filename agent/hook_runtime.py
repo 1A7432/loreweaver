@@ -33,8 +33,9 @@ ROOM_HOOKS_CAP = 16
 
 async def load_room_hook_engine(services: Services, ctx: AgentCtx) -> HookEngine | None:
     """Build this turn's hook engine, or `None` (hooks inert) when nothing is registered,
-    the `ejs` extra is missing, or `enable_full_ejs` is off (one switch governs every
-    sandboxed-JS surface). Best-effort throughout — never raises into the turn."""
+    the `ejs` extra is missing, or `enable_full_ejs` is off (that switch governs hooks and
+    full EJS only — rules scripts and prep scripts do not read it). Best-effort throughout —
+    never raises into the turn."""
     if not services.settings.enable_full_ejs:
         return None
     try:

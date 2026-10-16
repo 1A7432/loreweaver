@@ -2,7 +2,7 @@
 
 # Loreweaver 扩展契约：插件、技能与内容包
 
-> 状态：**契约**（2026-08-07 更新；协议 **2.1**）。这份是贡献者照着建的规范。作者向的入口更友好：从零到发布的教程在 [authoring.zh.md](authoring.zh.md)，卡的细节在 [cards.zh.md](cards.zh.md)，钩子在 [hooks.zh.md](hooks.zh.md)。
+> 状态：**契约**（2026-10-16 更新；协议 **2.4**）。这份是贡献者照着建的规范。作者向的入口更友好：从零到发布的教程在 [authoring.zh.md](authoring.zh.md)，卡的细节在 [cards.zh.md](cards.zh.md)，钩子在 [hooks.zh.md](hooks.zh.md)。
 >
 > **已落地的层，以及各自的含义：**
 >
@@ -32,7 +32,7 @@ Loreweaver 是一个自托管的、世界与故事优先的 AI 守秘人，不�
 |---|---|---|
 | 人物卡 | **SillyTavern Character Card V2/V3** | 现成的素材库巨大，`core/charcard.py` 已经能解析 |
 | 世界信息 / 设定 | **SillyTavern World Info / lorebook** | 卡里就内嵌它，已映射到 `core/worldbook.py` |
-| KP 技能 | **Claude Code `SKILL.md`**（YAML frontmatter + Markdown + 渐进披露 + `allowed-tools`） | agent 工具作者熟悉，不用学新 schema |
+| KP 技能 | **Claude Code `SKILL.md`**（YAML frontmatter + Markdown + `allowed-tools`） | agent 工具作者熟悉，不用学新 schema |
 | 规则系统 | Loreweaver **规则包 YAML**（唯一没有外部标准的地方） | TTRPG 的骰子／技能系统没有对应的现成标准，所以下面完整写出来 |
 | LLM provider | OpenAI 兼容 + 一条 `PRESETS`（本来就是数据） | 标准 OpenAI API 面 |
 
@@ -97,7 +97,7 @@ sheet:                                   # 卡表形状（属性／生命／资�
 resolution:
   version: 1
   roll: 1d100                # 任意骰点表达式：2d20kh1、4dF、5d6!、{pool}d10>=8
-  target: skill              # skill | attribute | dc | none | <表达式>
+  target: skill              # skill | dc | none
   compare: "<="
   params:   {deng: {min: 1, max: 9, default: 3}}   # 骰池参数，由检定工具传入
   modifiers:                 # 具名、可组合的掷骰变换
@@ -116,7 +116,7 @@ expertise:   {en: "…", zh: "…"}
 labels:      {en: {crit: [Critical Success], …}, zh: {crit: [大成功], …}}
 ```
 
-表达式里可用的名字是一个闭合集合——`roll`、`dice`（可按 `dice1`、`dice2` 取）、`target`（难度调整后）、`raw_target`（调整前）、`modifier`、`successes`、`ones`——并且在**加载时静态校验**，所以一个拼写错误会让包在构建时带着可定位的诊断失败，而不是在某人第一次检定时崩掉。在 `difficulties.*.target` 表达式里 `target` 是原始值，在 rank 的 `when:` 里是调整后的值。
+表达式里可用的名字是一个闭合集合——`roll`、`dice`（从 0 起算：`dice[0]` / `dice.0`、`dice[1]`……）、`target`（难度调整后）、`raw_target`（调整前）、`modifier`、`successes`、`ones`——并且在**加载时静态校验**，所以一个拼写错误会让包在构建时带着可定位的诊断失败，而不是在某人第一次检定时崩掉。在 `difficulties.*.target` 表达式里 `target` 是原始值，在 rank 的 `when:` 里是调整后的值。
 
 **演进纪律：** DSL 绝不为了一个系统长语法。DSL 表达不了的系统走脚本通道（`resolution: {script: resolver.js}`，子系统流程则是 `subsystems: {<name>: {script: flow.js}}`）——QuickJS，和 `hooks.js` 同一条信任通道：引擎先掷好声明的骰子把点数递进去，脚本返回一个纯粹的判定，或者一份取自引擎自有闭合词汇的效果描述，再由引擎核对、把超界的值拉回范围内、然后施加。随机性和状态永远不出引擎。信任卡以 `has_rules_script` 披露它，安装时重新校验。只有一个模式在两三个走脚本通道的系统里反复出现，才会被提升为 DSL 语法。
 
@@ -176,8 +176,7 @@ provider 预设（`infra/providers.py:PRESETS`）和本地化包（`locales/{lan
 ```
 skills/<skill-id>/
   SKILL.md            # YAML frontmatter + Markdown 说明
-  references/…        # 按需加载（渐进披露）
-  assets/…            # 表格、世界书片段等
+  hooks.js            # 可选的沙箱事件处理器（见 hooks.zh.md）
 ```
 
 ```markdown
@@ -200,9 +199,9 @@ metadata:
 <这段 Markdown 会作为 KP 提示段注入>
 ```
 
-映射到已有的架构上（不引入任何新的运行时机制）：`description` 是给守秘人的启用提示；Markdown 正文是拼进系统提示的一段；`allowed-tools` 限制该房间的 `agent.tools.Toolset`；`references/*` 是按需取的渐进披露数据；`metadata.scope: room` 是按房间的开关；`metadata.content-rating` 接进成人模式开关。
+映射到已有的架构上（不引入任何新的运行时机制）：`description` 是给守秘人的启用提示；Markdown 正文是拼进系统提示的一段；`allowed-tools` 限制该房间的 `agent.tools.Toolset`；`metadata.scope: room` 是按房间的开关；`metadata.content-rating` 接进成人模式开关。
 
-渐进披露的意思是：顶层 `SKILL.md` 展示成本很低，沉重的参考材料只在技能真正触发时才加载。
+技能目录里只会读取 `SKILL.md` 和 `hooks.js`，打包时其它任何文件都会被拒绝，所以一个技能就是一份 Markdown（外加可选的钩子）——写精炼些。
 
 ---
 
@@ -234,7 +233,7 @@ metadata:
   })
   ```
 
-  这不是绕开沙箱生命周期的变通，这**就是**铁律 #1。任何需要跨回合活下来的东西都是真状态，而真状态属于确定性引擎。（在你的模组里把这个变量声明出来，它就能有边界和标签；不声明的名字也会持久化，作为一个 MVU 叶子。）`TRPG_ENABLE_FULL_EJS=false` 会连同其它所有沙箱 JS 面一起关掉它。
+  这不是绕开沙箱生命周期的变通，这**就是**铁律 #1。任何需要跨回合活下来的东西都是真状态，而真状态属于确定性引擎。（在你的模组里把这个变量声明出来，它就能有边界和标签；不声明的名字也会持久化，作为一个 MVU 叶子。）`TRPG_ENABLE_FULL_EJS=false` 会连同钩子和完整 EJS 一起关掉它（规则脚本和筹备脚本不受这个开关管）。
 
 ### C.2 Python 入口点插件（仍然推迟）
 
@@ -358,7 +357,7 @@ audio:                       # 导演可以调用的音频提示
 | `id` | 是 | 小写 slug（`[a-z0-9-]`，≤64）——决定 `packs/<id>@<version>` 安装目录名 |
 | `version` | 是 | semver `MAJOR.MINOR.PATCH`（可带 `-pre`/`+build` 后缀） |
 | `name`、`description` | 是 | 一个普通字符串，或者一个 `{en, zh}` 映射 |
-| `authors` | 是 | 非空字符串列表 |
+| `authors` | 否 | 非空字符串列表（可为空或省略） |
 | `license` | 是 | SPDX id 或者一个简短名字 |
 | `engine` | 否 | 最低版本：`protocol`（协议）和／或 `server`——只比较最低值 |
 | `contents.skills` | 否 | 技能**目录**（`skills/<id>`），每个恰好是 `SKILL.md` + 可选 `hooks.js` |

@@ -10,7 +10,7 @@
 
 ## 什么能导入
 
-- **角色卡**——SillyTavern **V2/V3**（`chara_card_v2` / `chara_card_v3`），JSON 或内嵌 `chara` 块的 PNG 都行。会读取的字段：`name`、`description`、`personality`、`scenario`、`first_mes`、`mes_example`、`system_prompt`、`post_history_instructions`、`alternate_greetings`、`tags`、`creator`、`character_version`、`character_book`、`extensions`。不认识的字段忽略、不报错——新版本酒馆导出的卡照样能进。
+- **角色卡**——SillyTavern **V2/V3**（`chara_card_v2` / `chara_card_v3`），JSON 或内嵌 `chara` 块的 PNG 都行。会读取的字段：`name`、`description`、`personality`、`scenario`、`first_mes`、`mes_example`、`system_prompt`、`post_history_instructions`、`alternate_greetings`、`tags`、`character_book`、`extensions`。不认识的字段忽略、不报错——新版本酒馆导出的卡照样能进。
 - **世界书**——卡内嵌的 `character_book`，或独立的世界书 JSON。V2 的 `character_book` 字段名和酒馆原生 world-info 字段名都认。
 - **MVU 变量**——`[InitVar]` / `[InitialVariables]` / `@@initial_variables` 条目在**世界导入**时被读进按房间隔离的变量树（容忍 JSON5、支持中文嵌套路径、`[值, "说明"]` 叶子）。它们按数据处理，不算 lore——不占提示词预算，而且**重新导入同一张卡绝不会重置房间已有的变量进度**。
 - **钩子**——卡可以带 `extensions.loreweaver_hooks`：挂在回合生命周期上的沙箱 JavaScript，在**世界导入**时安装。这是 Loreweaver 自己的扩展点（Tavern Helper 的思路，由引擎校验落地），见 [hooks.zh.md](hooks.zh.md)。

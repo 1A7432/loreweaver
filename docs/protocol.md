@@ -395,7 +395,8 @@ CLIENT resolves against its OWN `state.variables` (ids exactly as they appear th
 modvar ids, `mvu.`-prefixed leaves):
 
 - any scalar field may be `{"$var": "<variable id>"}`; the variable being absent/hidden
-  for this viewer omits the WHOLE block (fail-closed — a panel can never widen
+  for this viewer omits the WHOLE block when that field is REQUIRED; on an OPTIONAL field
+  only that field is dropped and the block stays (fail-closed — a panel can never widen
   visibility; the `state` wire filter remains the single choke point);
 - `{"repeat": {"prefix": "<id prefix>", "block": <TemplateBlock>}}` renders one
   instance per visible variable whose id starts with the prefix (≤ 32 instances);

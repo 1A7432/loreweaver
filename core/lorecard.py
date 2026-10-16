@@ -29,7 +29,7 @@ consequences are worth stating up front:
   ``secret`` rides as a plain ``secret: True`` key — honored only for a keeper import and dropped
   structurally for anyone else, because iron rule #3 lives in the importer, not here;
 - the original document is kept verbatim on ``card.raw``, so ``core.card_split`` classifies a
-  native bundle like any other card: hooks under the root-level ``extensions`` are found by
+  native bundle like any other card: the top-level ``hooks`` list is found by
   ``card_hook_codes``, and a bundle carrying hooks / variables / secret lore is world-kind by
   construction.
 
@@ -46,7 +46,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from core.charcard import MAX_CARD_FILE_BYTES, CharacterCard
-from core.modvars import normalize_spec
+from core.modvars import MAX_VARS, normalize_spec
+from core.worldbook import MAX_IMPORT_CONTENT_CHARS, MAX_IMPORT_ENTRIES
 
 LORECARD_FORMAT = "loreweaver.card"
 # The schema version this build writes/reads natively. Older documents upgrade through
@@ -64,12 +65,15 @@ HOOKS_KEY = "hooks"
 # Hard caps against a hostile or simply broken bundle fed through `.import`. The file cap is the
 # character-card cap (same upload path, same OOM concern); the rest bound prompt-injection surface
 # and parse cost. Passing one is FATAL: a document that far out of shape is not an author typo
-# worth half-importing. Note these are PARSE caps — a room's own limits (``core.modvars.MAX_VARS``,
-# ``core.worldbook.MAX_IMPORT_ENTRIES``) still apply when the parsed bundle is actually installed.
+# worth half-importing. The entry / content / variable caps below are the room's own import limits
+# (``core.worldbook.MAX_IMPORT_ENTRIES`` / ``MAX_IMPORT_CONTENT_CHARS``, ``core.modvars.MAX_VARS``).
 MAX_LORECARD_FILE_BYTES = MAX_CARD_FILE_BYTES
-MAX_LORECARD_ENTRIES = 512
-MAX_LORECARD_ENTRY_CONTENT_BYTES = 128 * 1024
-MAX_LORECARD_VARIABLES = 256
+# The entry / content / variable caps ARE the room-import limits (same constants, not copies):
+# a card the parser accepts must be importable into a room, so one over those limits fails here
+# at parse/pack time instead of being rejected (or silently trimmed) at `.import`.
+MAX_LORECARD_ENTRIES = MAX_IMPORT_ENTRIES
+MAX_LORECARD_ENTRY_CONTENT_CHARS = MAX_IMPORT_CONTENT_CHARS
+MAX_LORECARD_VARIABLES = MAX_VARS
 MAX_LORECARD_PREGENS = 8
 # Mirrors ``core.condexpr.MAX_EXPR_LEN`` (not imported — see HOOKS_EXTENSION_KEY). A longer
 # condition still rides along, but fails closed downstream, so the author gets a warning here.
@@ -255,8 +259,8 @@ def _parse_entry(raw: Any, index: int, label: str, warnings: list[str]) -> dict[
         warnings.append(f"{where}: skipped (content must be text)")  # i18n-exempt: author diagnostic, wrapped in a localized import summary
         return None
     content = _text(body)
-    if len(content.encode("utf-8")) > MAX_LORECARD_ENTRY_CONTENT_BYTES:
-        raise _fail(label, f"{where} content exceeds the {MAX_LORECARD_ENTRY_CONTENT_BYTES}-byte limit")
+    if len(content) > MAX_LORECARD_ENTRY_CONTENT_CHARS:
+        raise _fail(label, f"{where} content exceeds the {MAX_LORECARD_ENTRY_CONTENT_CHARS}-character limit")
     if not content.strip():
         warnings.append(f"{where}: skipped (empty content)")  # i18n-exempt: author diagnostic, wrapped in a localized import summary
         return None

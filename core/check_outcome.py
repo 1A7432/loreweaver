@@ -5,7 +5,13 @@
 vocabulary (``"extreme"``, ``"strong_hit"``, ...) and strictly presentational;
 the semantic booleans and ``tier`` are the only fields a consumer may branch
 on (``tests/architecture/test_rules_decoupling.py`` enforces this). Opposed
-checks compare ``tier`` first, then ``margin`` — never rank ids.
+checks compare ``tier`` first and never rank ids; what breaks a tier tie depends
+on the path. The ``.rav`` command (``gateway/commands/checks.cmd_opposed``) breaks
+it by the two totals for a dc-style (``target: dc``) system and calls it a tie for a
+roll-under system, where totals are not comparable across sides. The ``opposed``
+subsystem tool (``agent/kp_tools_subsystems._run_opposed``) breaks it by the raw
+skill values (higher value wins), and only a value tie is a tie. Neither path reads
+``margin``.
 
 ``label_key`` names how the rank renders: while the legacy resolution code is
 alive (stage A) it is an ``infra.i18n`` key; once packs carry their own

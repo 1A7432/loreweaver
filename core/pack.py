@@ -717,7 +717,12 @@ def _validate_card_bytes(path: str, data: bytes) -> tuple[bool, WorldPayloads]:
         card = parse_card_bytes(data, filename=PurePosixPath(path).name)
     except ValueError as exc:
         raise PackError(f"card {path}: {exc}") from exc
-    return _detect_ejs(data.decode("utf-8", errors="ignore")), detect_world_payloads(card)
+    # A PNG card's JSON is base64 inside a tEXt/iTXt chunk, so the raw bytes never show a
+    # literal `<%`; scan the DECODED card (the parser above already applied the size caps).
+    has_ejs = _detect_ejs(data.decode("utf-8", errors="ignore")) or _detect_ejs(
+        json.dumps(card.raw, ensure_ascii=False, default=str)
+    )
+    return has_ejs, detect_world_payloads(card)
 
 
 def _card_entry_titles(path: str, data: bytes) -> set[str]:
@@ -1591,10 +1596,16 @@ def install_pack(
             skills_dir = Path(skills_dir)
             for skill_dir in manifest.contents["skills"]:
                 skill_id = PurePosixPath(skill_dir).name
-                for filename in ("SKILL.md", "hooks.js"):
+                for filename in sorted(_SKILL_FILES):
                     archive_name = f"{skill_dir}/{filename}"
                     if archive_name in names:
                         _extract_entry(archive, archive_name, _confined_target(skills_dir, f"{skill_id}/{filename}"))
+                    else:
+                        # A reinstall must not leave the previous version's file behind: a stale
+                        # hooks.js would keep running while the trust card says has_hooks: false.
+                        stale = _confined_target(skills_dir, f"{skill_id}/{filename}")
+                        if stale.is_file() or stale.is_symlink():
+                            stale.unlink()
                 report.skills.append(skill_id)
                 if skill_id in builtin_skills:
                     report.shadowed.append(skill_id)

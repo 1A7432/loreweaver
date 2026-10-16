@@ -26,7 +26,7 @@ isn't rejected either way — it's decomposed.
   as JSON or as a PNG with the embedded `chara` chunk. Fields consumed: `name`,
   `description`, `personality`, `scenario`, `first_mes`, `mes_example`,
   `system_prompt`, `post_history_instructions`, `alternate_greetings`, `tags`,
-  `creator`, `character_version`, `character_book`, `extensions`. Unknown fields
+  `character_book`, `extensions`. Unknown fields
   are ignored, never rejected — a card from a newer ST build still imports.
 - **Lorebooks** — the card's embedded `character_book`, or a standalone lorebook
   JSON. Both the V2 `character_book` field names and ST-native world-info names map.

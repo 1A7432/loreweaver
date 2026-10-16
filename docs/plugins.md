@@ -2,7 +2,7 @@
 
 # Loreweaver extensibility: plugins, skills & content packs
 
-> Status: **contract** (updated 2026-08-07; wire protocol **2.1**). This document is what
+> Status: **contract** (updated 2026-10-16; wire protocol **2.4**). This document is what
 > contributors build against. Authors have friendlier on-ramps: a start-to-finish tutorial in
 > [authoring.md](authoring.md), card specifics in [cards.md](cards.md), hooks in
 > [hooks.md](hooks.md).
@@ -40,7 +40,7 @@ migrate with minimal friction. Concretely:
 |---|---|---|
 | Character cards | **SillyTavern Character Card V2/V3** (`chara_card_v2` / `chara_card_v3`) | Huge existing library; Loreweaver already parses it (`core/charcard.py`) |
 | World info / lore | **SillyTavern World Info / lorebook** (`character_book` entries) | Cards embed it; already mapped to `core/worldbook.py` |
-| KP skills | **Claude Code `SKILL.md`** (YAML frontmatter + Markdown + progressive disclosure + `allowed-tools`) | Familiar to agent-tooling authors; no new schema to learn |
+| KP skills | **Claude Code `SKILL.md`** (YAML frontmatter + Markdown + `allowed-tools`) | Familiar to agent-tooling authors; no new schema to learn |
 | Rule systems | Loreweaver **rulepack YAML** (the one place with no external standard) | TTRPG dice/skill systems have no ST/CC analogue; documented below |
 | LLM providers | OpenAI-compatible + a `PRESETS` entry (already data) | Standard OpenAI API surface |
 
@@ -135,7 +135,7 @@ touching code.
 resolution:
   version: 1
   roll: 1d100                # any dice expression: 2d20kh1, 4dF, 5d6!, {pool}d10>=8
-  target: skill              # skill | attribute | dc | none | <expression>
+  target: skill              # skill | dc | none
   compare: "<="
   params:   {deng: {min: 1, max: 9, default: 3}}   # pool parameters, supplied by the check tool
   modifiers:                 # named, composable roll transforms
@@ -154,7 +154,7 @@ expertise:   {en: "…", zh: "…"}           # what the Keeper is told about ru
 labels:      {en: {crit: [Critical Success], …}, zh: {crit: [大成功], …}}
 ```
 
-Expression names are a closed set — `roll`, `dice` (indexable `dice1`, `dice2`, …), `target`
+Expression names are a closed set — `roll`, `dice` (zero-based: `dice[0]` / `dice.0`, `dice[1]`, …), `target`
 (difficulty-adjusted), `raw_target` (before difficulty), `modifier`, `successes`, `ones` — and are
 validated **statically at load**, so a misspelling fails the pack build with a pointable diagnostic
 rather than crashing on someone's first check. Inside a `difficulties.*.target` expression `target`
@@ -371,8 +371,7 @@ skill authors reuse what they know:
 ```
 skills/<skill-id>/
   SKILL.md            # YAML frontmatter + Markdown instructions
-  references/…        # loaded on demand (progressive disclosure)
-  assets/…            # tables, worldbook snippets, etc.
+  hooks.js            # optional sandboxed event handlers (see hooks.md)
 ```
 
 ```markdown
@@ -403,13 +402,11 @@ metadata:
 | `description` | relevance/enable hint shown to the keeper (and, later, retrieval) |
 | Markdown body | a `core.prompt_sections`-style block folded into the system prompt |
 | `allowed-tools` | restricts the `agent.tools.Toolset` for that room |
-| `references/*` | progressive-disclosure data, fetched on demand |
 | `metadata.scope: room` | a per-room enable flag (like `.mature` / `bot_enabled`) |
 | `metadata.content-rating` | ties into the mature-mode content gate |
 
-Progressive disclosure means the top `SKILL.md` is cheap to advertise; heavy
-reference material loads only when the skill actually fires — the same token
-discipline CC skills use.
+Only `SKILL.md` and `hooks.js` are read from a skill directory, and packing rejects any
+other file in it, so a skill is one Markdown file (plus optional hooks) — keep it lean.
 
 **Dogfood:** the first two built-in skills are `mature-mode` (content/tone gate
 + censor bypass) and `romance-relationships` — proving the interface on real
@@ -493,7 +490,7 @@ operator's content, the operator's box):
   to survive a turn is real state, and real state belongs to the deterministic engine. (Declare
   the variable in your module so it gets bounds and a label; an undeclared name still persists,
   as an MVU leaf.)
-  `TRPG_ENABLE_FULL_EJS=false` switches this off along with every other sandboxed-JS surface.
+  `TRPG_ENABLE_FULL_EJS=false` switches this off along with hooks and full EJS (rules scripts and prep scripts are not governed by that flag).
 
 ### C.2 Python entry-point plugins (still deferred)
 
@@ -773,7 +770,7 @@ so this costs nothing until an author asks for it.
 | `id` | yes | lowercase slug (`[a-z0-9-]`, ≤64) — names the `packs/<id>@<version>` install dir |
 | `version` | yes | semver `MAJOR.MINOR.PATCH` (optional `-pre`/`+build` suffix) |
 | `name`, `description` | yes | a plain string, or an `{en, zh}` mapping |
-| `authors` | yes | list of non-empty strings |
+| `authors` | no | list of non-empty strings (may be empty or omitted) |
 | `license` | yes | SPDX id or a short name |
 | `engine` | no | minimum versions: `protocol` (wire protocol) and/or `server` — minimum-compare only |
 | `contents.skills` | no | skill DIRECTORIES (`skills/<id>`), each exactly `SKILL.md` + optional `hooks.js` |

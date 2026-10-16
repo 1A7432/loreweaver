@@ -21,7 +21,7 @@ from core.card_split import card_hook_codes, detect_world_payloads
 from core.lorecard import (
     LORECARD_FORMAT,
     MAX_LORECARD_ENTRIES,
-    MAX_LORECARD_ENTRY_CONTENT_BYTES,
+    MAX_LORECARD_ENTRY_CONTENT_CHARS,
     MAX_LORECARD_FILE_BYTES,
     MAX_LORECARD_VARIABLES,
     SUPPORTED_FORMAT_VERSIONS,
@@ -386,7 +386,7 @@ def test_entry_count_cap_is_enforced():
 
 
 def test_entry_content_cap_is_enforced():
-    body = "x" * MAX_LORECARD_ENTRY_CONTENT_BYTES
+    body = "x" * MAX_LORECARD_ENTRY_CONTENT_CHARS
     assert _parse(worldbook=[_entry(title="Big", content=body)]).card.character_book[0]["content"] == body
 
     with pytest.raises(ValueError, match="worldbook\\[0\\] content exceeds"):
@@ -445,3 +445,15 @@ def test_pregens_parse_normalizes_and_caps():
     assert parsed.pregens[1]["notes"] == "医生"
     assert any("pregens[1]" in warning for warning in parsed.warnings)
     assert any("skills" in warning for warning in parsed.warnings)
+
+
+def test_native_caps_are_the_room_import_limits():
+    from core.modvars import MAX_VARS
+    from core.worldbook import MAX_IMPORT_CONTENT_CHARS, MAX_IMPORT_ENTRIES
+
+    assert MAX_LORECARD_ENTRIES == MAX_IMPORT_ENTRIES == 200
+    assert MAX_LORECARD_ENTRY_CONTENT_CHARS == MAX_IMPORT_CONTENT_CHARS
+    assert MAX_LORECARD_VARIABLES == MAX_VARS
+    # 201 entries used to parse (cap was 512) yet could not be world-imported.
+    with pytest.raises(ValueError, match="at most 200"):
+        _parse(worldbook=[_entry(title=f"E{i}", content="lore") for i in range(201)])

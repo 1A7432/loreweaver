@@ -9,12 +9,12 @@
 1. **钩子只提请求，引擎负责落实。** 处理器发出的每个效果都先进缓冲区；处理器返回后，由确定性引擎代码校验、限量、应用。钩子做的任何事都绕不开规则。
 2. **钩子永远坏不了回合。** 脚本写坏、处理器抛错、死循环、没装 `ejs` extra——统统退化成「钩子失效（留日志）」，回合照常进行，只是没有你参与。
 
-前提：服务端装了 `ejs` extra 且 `TRPG_ENABLE_FULL_EJS` 没有设为 `false`（这一个开关管着所有跑沙箱 JS 的地方）。
+前提：服务端装了 `ejs` extra 且 `TRPG_ENABLE_FULL_EJS` 没有设为 `false`。这个开关只管钩子和完整 EJS；规则脚本和筹备脚本不受它影响。
 
 ## 钩子放在哪
 
 - **随技能：** 在技能的 `SKILL.md` 旁边放一个 `hooks.js`。技能为房间启用时它就生效——开关就是现成的 `.skill enable <id>`，不用学新东西。
-- **随卡：** 卡的 `extensions.loreweaver_hooks` 是一个脚本字符串列表。带钩子的卡就是**世界卡**：由守秘人以 `.import <文件> world` 导入时装上（玩家的人物导入会剥掉它们——见 [cards.zh.md](cards.zh.md)）；**重新导入这张卡会替换它的脚本**，不会叠加出重复。
+- **随卡：** 原生包（`*.lorecard.json`，format v1）把脚本放在顶层 `hooks` 列表里（字符串或 `{code: "…"}` 对象）；酒馆形状的卡用 `extensions.loreweaver_hooks` 脚本字符串列表。带钩子的卡就是**世界卡**：由守秘人以 `.import <文件> world` 导入时装上（玩家的人物导入会剥掉它们——见 [cards.zh.md](cards.zh.md)）；**重新导入这张卡会替换它的脚本**，不会叠加出重复。
 
 一个房间最多跑 **16 个脚本**，每个最多 **40,000 字符**；超出的直接跳过并记警告。
 
@@ -45,23 +45,24 @@ on("tool_use",          (event) => { ... });  // event.tool、event.arguments—
 完整的模板桥都在：
 
 - **变量：** `getvar(名)`、`setvar(名, 值)`、`incvar(名, 增量)`，外加 `variables` / `stat_data` 两个树视图，以及作为 `_` 的 lodash。
-- **写入走校验路由：** 名字命中用 `define_variable` 声明过的模组变量时，走它的类型/边界校验（有钳位的数值始终被钳住）；其他名字落进导入卡（MVU）变量树。写失败就跳过并报告，绝不致命。每回合最多应用 **64 次写入**。
+- **写入走校验路由：** 名字命中用 `define_variable` 声明过的模组变量时，走它的类型/边界校验（有钳位的数值始终被钳住）；其他名字落进导入卡（MVU）变量树。写失败就跳过并报告，绝不致命。每次事件分发最多应用 **64 次写入**。
 - **快照语义：** 变量每回合快照一次。处理器能看到**自己**先前的写入——但那是**请求值**、未经校验（越界的 `setvar` 在沙箱里读回来是原样，库里存的才是被夹回边界的值）；看不到本回合中途守秘人工具的写入，也看不到回复自带 `<UpdateVariable>` 协议的写入。特别地：在 `variables_changed` 处理器里，对引擎应用的写入 `getvar(path)` **不会**返回新值；事件只告诉你改了什么、怎么改（`{path, op}`），从不携带值。到下一回合一切重新一致。
 - **信任层级：** 钩子是模组逻辑，看到的是变量的**守秘人视图**，包括仅守秘人可见的状态量。你选择发给玩家的内容属于作者产出——绝不要把守秘人专属材料放进 `narrate` / `emitUI`。
 
 效果发射器：
 
-| 发射器 | 作用 | 每回合限额 |
+| 发射器 | 作用 | 限额（除注明外按每次事件分发计） |
 |---|---|---|
 | `inject(text)` | 往本回合守秘人提示词里加一段（仅 `turn_start`） | 8 × 4,000 字符 |
 | `narrate(text)` | 追加到玩家可见回复后面 | 8 × 2,000 字符 |
 | `rewriteReply(text)` | 替换玩家可见回复 | 1 × 4,000 字符 |
 | `emitUI(blocks, opts?)` | 在客户端画声明式 UI（见下） | 8 次发射 |
+| `emitPanel(panelId, payload)` | 把一份不透明的 JSON 载荷发给某个模组面板自己的代码（`panel_event` 帧） | 每**回合** 20 次，每次 32 KiB |
 | `log(text)` | 往服务器日志写一行警告级记录 | — |
 
 ## `emitUI`——声明式模组 UI
 
-`emitUI(blocks, opts?)` 把校验过的 UI 块作为协议 v1.7 的 `ui` 帧发给客户端（线上 schema 见 [protocol.zh.md](protocol.zh.md)）。块类型：
+`emitUI(blocks, opts?)` 把校验过的 UI 块作为 `ui` 帧发给客户端（线上 schema 见 [protocol.zh.md](protocol.zh.md)）。块类型：
 
 ```js
 {kind: "meter",   label, value, min, max}          // 有界仪表
@@ -70,7 +71,15 @@ on("tool_use",          (event) => { ... });  // event.tool、event.arguments—
 {kind: "text",    text, style?}                    // style: "quote" | "warning"
 {kind: "divider"}
 {kind: "choices", prompt?, options: [{id, label, input}]}
+{kind: "image",   hash, mime?, caption?, alt?}     // 按 sha256 内容哈希（64 位十六进制）引用图片
+// 四种演出模板：
+{kind: "letter",     body, from?, to?, date?}
+{kind: "clipping",   headline, body, source?, date?}
+{kind: "map_pin",    label, hash, x, y, note?}     // x、y：占地图图片的 0..1 比例
+{kind: "title_card", title, subtitle?, act?}
 ```
+
+`image` 和 `map_pin` 按内容哈希引用图片，该哈希必须在房间媒体里可达，否则这个块在上线前就被丢弃。缺必填字段的块被丢弃；可选字段不合规只剥掉该字段，块保留。
 
 选项（第二个参数）：`panel: "inline" | "sidebar"`（默认 `"inline"`——插进叙事流；`"sidebar"` 渲染成常驻面板）、`id`（给 UI 区域命名——后来的同 `id` 侧栏帧会替换该区域内容）、`replace: true`（行内帧可以原地更新前一个同 `id` 行内帧）。
 
@@ -78,7 +87,7 @@ on("tool_use",          (event) => { ... });  // event.tool、event.arguments—
 
 UI 帧**不会在入房时重放**：想要常驻面板的钩子每回合重发一次就行（开销很小，配合固定 `id` 天然幂等）。
 
-限额：每回合 8 次发射 × 每次 16 块；每个 `choices` 最多 12 个选项；label 120 字符、text 2,000、prompt 200、选项 input 200、`id` 64。不合 schema 的块被丢弃，同次发射的其余块保留。
+限额：每次事件分发 8 次发射 × 每次 16 块；每个 `choices` 最多 12 个选项；label 120 字符、text 2,000、prompt 200、选项 input 200、`id` 64。不合 schema 的块被丢弃，同次发射的其余块保留。
 
 ## 失败语义（出问题时会发生什么）
 

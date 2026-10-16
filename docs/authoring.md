@@ -121,8 +121,9 @@ per-entry conditions, stable ids, hook scripts.
 | `pregens` | | the claimable cast — see below |
 | `hooks` | | JavaScript sources, or `{code: "…"}` objects |
 
-Caps that matter: 512 worldbook entries, 128 KB per entry, 256 variables, 8 pregens. Passing one is
-fatal. *Entry-level* junk is different — a malformed lore row or an unusable variable spec is
+Caps that matter: 200 worldbook entries, 16,000 characters per entry, 64 variables, 8 pregens. These are
+the same limits a room applies on import, so a card that parses and packs is always importable. Passing
+one is fatal at parse/pack time. *Entry-level* junk is different — a malformed lore row or an unusable variable spec is
 skipped and reported as a warning, so one bad row never costs you the whole import.
 
 ### `worldbook[]` — what the author wrote
@@ -365,7 +366,7 @@ expertise:
 **The DSL in one paragraph.** `roll` is a dice expression; the engine rolls it, seeded and logged.
 `ranks` is an ordered ladder of pure conditions — first match wins, and the last entry with no
 `when:` is the fallback. Available names are a closed set: `roll` (the total), `dice` (the natural
-dice, indexable as `dice1`, `dice2`, …), `target` (difficulty-adjusted), `raw_target` (before
+dice, zero-based: `dice[0]` / `dice.0`, `dice[1]`, …), `target` (difficulty-adjusted), `raw_target` (before
 difficulty), `modifier`, and `successes` / `ones` for pools. The flags `success` / `critical` / `fumble` are
 declared *by you*: the engine and the AI only ever read those flags and the `tier` ordinal, never
 your rank id, which is why a system can invent its own names for things without breaking anything
@@ -449,7 +450,8 @@ markup, and you never have to write two versions.
 
 **Live values:** any scalar field may be `{$var: <id>}` against the viewer's own `state.variables`.
 When in doubt it shows nothing: if the variable is absent or hidden *for that viewer*, the **whole
-block** is omitted. A panel can never widen visibility.
+block** is omitted when the field is required; on an optional field (a caption, say) only that field
+is dropped and the block stays. A panel can never widen visibility.
 
 **A handout is one `image` block**, not a hand-written page. `src` is a pack-relative path; the build
 folds it into the content-addressed asset pipeline and the manifest carries the hash. You never write
