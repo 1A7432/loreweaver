@@ -15,7 +15,7 @@ Loreweaver is an open-source **engine and open standard for AI-run tabletop RPGs
 
 A world's rules, lore, cast, interface and staging are all plain files in documented formats rather than features baked into the engine, so a world can be packed up and handed to someone else. The server runs on your own machine. Call of Cthulhu 7e and D&D 5e (SRD) ship with it, and English and Chinese are both first-class.
 
-[![CI](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml/badge.svg)](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml) ![license](https://img.shields.io/badge/license-MIT-green) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![clients](https://img.shields.io/badge/clients-TypeScript%20%2F%20Bun-black) [![protocol](https://img.shields.io/badge/protocol-2.3-informational)](docs/protocol.md)
+[![CI](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml/badge.svg)](https://github.com/1A7432/loreweaver/actions/workflows/ci.yml) ![license](https://img.shields.io/badge/license-MIT-green) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![clients](https://img.shields.io/badge/clients-TypeScript%20%2F%20Bun-black) [![protocol](https://img.shields.io/badge/protocol-2.4-informational)](docs/protocol.md)
 
 **Links:** [Homepage](https://1a7432.site) · [Command manual](https://1a7432.site/commands-en.html) · [Play](docs/play.md) · [Author a pack](docs/authoring.md) · [Run a table](docs/operating.md)
 
@@ -360,12 +360,22 @@ Layer contracts, the iron rules, and how to add a rulepack / provider / tool / c
 **[AGENTS.md](AGENTS.md)**.
 
 **Building a client or a bot?** The protocol is open and versioned:
-**[docs/protocol.md](docs/protocol.md)** (2.3). Typed frames and a reconnecting WebSocket client
+**[docs/protocol.md](docs/protocol.md)** (2.4). Typed frames and a reconnecting WebSocket client
 ship on npm as [`loreweaver-protocol`](https://www.npmjs.com/package/loreweaver-protocol), whose
 `major.minor` tracks the protocol version.
 
 **Running a persistent server?** Most tables run p2p off a laptop; for a 24/7 game, see
 **[docs/deploy.md](docs/deploy.md)** (systemd unit, keys, backups, trust boundaries).
+
+## Standards
+
+The formats Loreweaver reads are specified on their own, in **[docs/lwf/](docs/lwf/README.md)**:
+the Loreweaver World Format (LWF 2.0). It covers the `.lwpack` container, cards and the
+world/character split, rulepacks, skills and hooks, and module panels; the wire protocol is its
+sixth part. This engine is the reference implementation.
+[loreweaver-dsh](https://github.com/1A7432/loreweaver-dsh) is a second, independent
+implementation of the rulepack format, checked against tables exported from this engine. The
+spec text is licensed CC BY 4.0.
 
 ## Documentation map
 
@@ -379,10 +389,11 @@ ship on npm as [`loreweaver-protocol`](https://www.npmjs.com/package/loreweaver-
 | Hook authors | [docs/hooks.md](docs/hooks.md) — the sandboxed turn-lifecycle API |
 | Extension contract | [docs/plugins.md](docs/plugins.md) — the full layered specification |
 | Client authors | [docs/protocol.md](docs/protocol.md) — the versioned wire protocol |
+| Format implementers | [docs/lwf/](docs/lwf/README.md) — the format specification (LWF 2.0) |
 | Contributors | [AGENTS.md](AGENTS.md) — architecture, iron rules, conventions |
 | Design history | [docs/notes/](docs/notes/) — decisions taken and proposals rejected, five lines each; [docs/defensive-patterns.md](docs/defensive-patterns.md) — implementation rules paid for in bugs; specs stay internal until published into [docs/specs/](docs/specs/) |
 
-Every page above except `AGENTS.md` and the design-history records has a Chinese version; the link is at the top of each one.
+Every page above except `AGENTS.md`, the format specification and the design-history records has a Chinese version; the link is at the top of each one.
 
 ## Contributing
 
