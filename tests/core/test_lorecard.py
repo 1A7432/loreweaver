@@ -385,12 +385,15 @@ def test_entry_count_cap_is_enforced():
         _parse(worldbook=[_entry(title=f"E{i}", content="lore") for i in range(MAX_LORECARD_ENTRIES + 1)])
 
 
-def test_entry_content_cap_is_enforced():
+def test_entry_over_the_content_cap_is_skipped_like_room_import():
     body = "x" * MAX_LORECARD_ENTRY_CONTENT_CHARS
     assert _parse(worldbook=[_entry(title="Big", content=body)]).card.character_book[0]["content"] == body
 
-    with pytest.raises(ValueError, match="worldbook\\[0\\] content exceeds"):
-        _parse(worldbook=[_entry(title="Bigger", content=body + "x")])
+    # The room skips an over-long entry and reports it; the parser does the same, so one long
+    # row never costs the whole card.
+    parsed = _parse(worldbook=[_entry(title="Bigger", content=body + "x"), _entry(title="Small", content="lore")])
+    assert [entry["content"] for entry in parsed.card.character_book] == ["lore"]
+    assert any("worldbook[0]" in warning and "content exceeds" in warning for warning in parsed.warnings)
 
 
 def test_variable_count_cap_is_enforced():

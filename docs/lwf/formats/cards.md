@@ -64,7 +64,7 @@ a warning.
 | `hooks` | Hook scripts: strings or `{code}` objects. A bare string counts as one script. |
 
 **`worldbook[]` entries.** `content` is required: an empty one is skipped, and one over
-16,000 characters fails the whole bundle. Optional fields:
+16,000 characters is skipped with a warning, as room import skips it (§6). Optional fields:
 
 - `id`: a stable, author-owned id (see [pack.md](pack.md) §7);
 - `title`: defaults to `Untitled Lore`;

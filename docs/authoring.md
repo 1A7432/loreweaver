@@ -122,8 +122,9 @@ per-entry conditions, stable ids, hook scripts.
 | `hooks` | | JavaScript sources, or `{code: "…"}` objects |
 
 Caps that matter: 200 worldbook entries, 16,000 characters per entry, 64 variables, 8 pregens. These are
-the same limits a room applies on import, so a card that parses and packs is always importable. Passing
-one is fatal at parse/pack time. *Entry-level* junk is different — a malformed lore row or an unusable variable spec is
+the same limits a room applies on import, and they behave the same way: too many entries or variables is
+fatal at parse/pack time, while an entry over 16,000 characters is skipped and reported, as the room skips
+it. *Entry-level* junk is treated alike — a malformed lore row or an unusable variable spec is
 skipped and reported as a warning, so one bad row never costs you the whole import.
 
 ### `worldbook[]` — what the author wrote

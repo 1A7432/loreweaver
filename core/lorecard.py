@@ -64,13 +64,14 @@ HOOKS_KEY = "hooks"
 
 # Hard caps against a hostile or simply broken bundle fed through `.import`. The file cap is the
 # character-card cap (same upload path, same OOM concern); the rest bound prompt-injection surface
-# and parse cost. Passing one is FATAL: a document that far out of shape is not an author typo
+# and parse cost. Passing the file, entry or variable cap is FATAL: a document that far out of shape is not an author typo
 # worth half-importing. The entry / content / variable caps below are the room's own import limits
 # (``core.worldbook.MAX_IMPORT_ENTRIES`` / ``MAX_IMPORT_CONTENT_CHARS``, ``core.modvars.MAX_VARS``).
 MAX_LORECARD_FILE_BYTES = MAX_CARD_FILE_BYTES
-# The entry / content / variable caps ARE the room-import limits (same constants, not copies):
-# a card the parser accepts must be importable into a room, so one over those limits fails here
-# at parse/pack time instead of being rejected (or silently trimmed) at `.import`.
+# The entry / content / variable caps ARE the room-import limits (same constants, not copies) and
+# behave the way the room does: too many entries or variables fails here at parse/pack time
+# instead of being rejected at `.import`; an over-long entry is skipped with a warning, exactly as
+# the room skips it, so one long row never costs the whole card.
 MAX_LORECARD_ENTRIES = MAX_IMPORT_ENTRIES
 MAX_LORECARD_ENTRY_CONTENT_CHARS = MAX_IMPORT_CONTENT_CHARS
 MAX_LORECARD_VARIABLES = MAX_VARS
@@ -260,7 +261,8 @@ def _parse_entry(raw: Any, index: int, label: str, warnings: list[str]) -> dict[
         return None
     content = _text(body)
     if len(content) > MAX_LORECARD_ENTRY_CONTENT_CHARS:
-        raise _fail(label, f"{where} content exceeds the {MAX_LORECARD_ENTRY_CONTENT_CHARS}-character limit")
+        warnings.append(f"{where}: skipped (content exceeds the {MAX_LORECARD_ENTRY_CONTENT_CHARS}-character limit)")  # i18n-exempt: author diagnostic, wrapped in a localized import summary
+        return None
     if not content.strip():
         warnings.append(f"{where}: skipped (empty content)")  # i18n-exempt: author diagnostic, wrapped in a localized import summary
         return None
