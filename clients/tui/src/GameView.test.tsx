@@ -3,6 +3,7 @@ import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
+import { createHash } from "node:crypto"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
 import { FrameType, PROTOCOL_VERSION, type MediaFrame, type MediaPayload, type MediaUpload, type ServerFrame, type WelcomeFrame } from "loreweaver-protocol"
@@ -1180,6 +1181,46 @@ describe("Ctrl+S transcript export", () => {
     await act(async () => mockInput.pressKey("s", { ctrl: true }))
     const frame = await waitForFrame((text) => text.includes("Nothing to save yet"))
     expect(frame).toContain("Nothing to save yet")
+    expect(await readdir(dir)).toEqual([])
+
+    act(() => renderer.destroy())
+  })
+})
+
+// v2.4: a `report` frame is saved to disk (never rendered) and the saved path printed.
+describe("session report frames", () => {
+  test("a report frame is fetched, saved and its path printed", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lw-report-view-"))
+    const html = new TextEncoder().encode("<!DOCTYPE html><p>keepsake</p>")
+    const hash = createHash("sha256").update(html).digest("hex")
+    const client = new MockClient()
+    client.getMedia = (requested: string) => Promise.resolve({ hash: requested, mime: "text/html", name: "r.html", bytes: html })
+    const { renderer, flush, waitForFrame } = await renderGame(client, 140, 34, { reportDir: dir })
+    await flush()
+
+    act(() => {
+      client.push({ type: FrameType.Report, hash, name: "r.html", size: html.length, mime: "text/html", variant: "player" })
+    })
+    const screen = await waitForFrame((text) => text.includes("Session report saved"))
+    expect(screen).toContain("Session report saved")
+    expect(await readdir(dir)).toEqual(["r.html"])
+    expect(new Uint8Array(await readFile(join(dir, "r.html")))).toEqual(html)
+
+    act(() => renderer.destroy())
+  })
+
+  test("a report that cannot be fetched says so", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lw-report-view-fail-"))
+    const client = new MockClient()
+    client.getMedia = () => Promise.reject(new Error("media_not_found"))
+    const { renderer, flush, waitForFrame } = await renderGame(client, 140, 34, { reportDir: dir })
+    await flush()
+
+    act(() => {
+      client.push({ type: FrameType.Report, hash: "ab".repeat(32), name: "r.html", size: 3, mime: "text/html", variant: "reveal" })
+    })
+    const screen = await waitForFrame((text) => text.includes("Could not save the session report"))
+    expect(screen).toContain("media_not_found")
     expect(await readdir(dir)).toEqual([])
 
     act(() => renderer.destroy())

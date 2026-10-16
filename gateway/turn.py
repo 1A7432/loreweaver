@@ -175,7 +175,7 @@ async def run_turn(
             event_origin_only = bool(
                 event.private
                 or interaction_private
-                or (reply is not None and reply.error)
+                or (reply is not None and (reply.error or reply.private))
                 or (matched_spec and matched_spec.private_reply)
             )
             if event_origin_only:
@@ -195,16 +195,20 @@ async def run_turn(
         # existence, arguments and privilege gate to everyone. A 2026-08-07 session had
         # a player read the keeper's `.rule` error and start probing the console.
         command_failed = bool(reply is not None and reply.error)
+        # A handler may also mark ONE successful reply as its caller's alone
+        # (`CommandCtx.private`) — `.report html` saying "sent to your client".
+        reply_private = bool(reply is not None and reply.private)
+        origin_only = bool(
+            interaction_private
+            or command_failed
+            or reply_private
+            or (matched_spec and matched_spec.private_reply)
+        )
         reply_event = Event.narrative(
             speaker="system",
             text=command_reply,
             fmt="markdown" if reply is not None and reply.markdown else "plain",
-            private=bool(
-                interaction_private or command_failed or (matched_spec and matched_spec.private_reply)
-            ),
-        )
-        origin_only = bool(
-            interaction_private or command_failed or (matched_spec and matched_spec.private_reply)
+            private=origin_only,
         )
         if origin_only:
             # Sensitive keeper-command reply (masked API key / keeper-only secret lore /

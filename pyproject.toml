@@ -119,6 +119,8 @@ rulepacks = ["*.yaml"]
 "locales.zh" = ["*.json"]
 # core/ejs_full.py loads the vendored EJS + lodash sources at engine start.
 "assets.vendor" = ["*.js", "*LICENSE*"]
+# core/report_html.py inlines this stylesheet into every exported session report.
+assets = ["session_report.css"]
 # adapters/cli/demo.py loads this offline-demo module text via a
 # `Path(__file__).with_name(...)` sibling-file read at import time; without
 # declaring it, setuptools ships only `*.py` for a package and the import

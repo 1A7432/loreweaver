@@ -34,6 +34,7 @@ import { droppedImagePath, openMedia, readAudioUpload, readUpload, type HalfBloc
 import type { Palette, ThemeName } from "./themes"
 import { usesAppClipboardCopy } from "./copy"
 import { writeTranscript } from "./transcript"
+import { saveReport } from "./report"
 
 // The game view needs only these three from the client. `WsClient` (and the
 // shell's wider `AppClient`) satisfies it structurally; tests inject a mock.
@@ -80,6 +81,8 @@ export interface GameViewProps {
   // Injected by tests so an export can be asserted without touching the real
   // `~/.loreweaver/transcripts`.
   transcriptDir?: string
+  // Injected by tests: where a v2.4 `report` frame's file is saved (default: report.ts).
+  reportDir?: string
 }
 
 // Cap a single streaming message so a hostile/runaway stream can't grow the
@@ -163,6 +166,7 @@ export function GameView({
   copyNotice,
   platform = process.platform,
   transcriptDir,
+  reportDir,
 }: GameViewProps) {
   const { width: terminalWidth } = useTerminalDimensions()
   const narrow = sidebarCollapsed(terminalWidth)
@@ -283,6 +287,30 @@ export function GameView({
         // `panel_event` frames go unhandled by design — they feed tier-2 panel code,
         // which the TUI does not run (it renders fallbacks instead).
         setPanelManifest(frame.panels)
+        return
+      }
+      if (frame.type === FrameType.Report) {
+        // v2.4: a session report addressed to THIS connection. Fetch + verify + save it;
+        // never render the HTML here (protocol rule) — the line names the saved file so
+        // the player can open it in their browser.
+        const variant = frame.variant
+        saveReport(client, frame, { dir: reportDir })
+          .then((path) => {
+            const key = variant === "reveal" ? "report.savedReveal" : "report.saved"
+            setFrames((current) =>
+              appendFrame(current, { type: FrameType.System, level: "info", text: tt(locale, key, { path }) }),
+            )
+          })
+          .catch((error: unknown) => {
+            const reason = error instanceof Error ? error.message : String(error)
+            setFrames((current) =>
+              appendFrame(current, {
+                type: FrameType.System,
+                level: "warn",
+                text: tt(locale, "report.failed", { error: stripControlChars(reason) }),
+              }),
+            )
+          })
         return
       }
       if (frame.type === FrameType.PackCards) {

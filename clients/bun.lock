@@ -7,14 +7,14 @@
     },
     "protocol": {
       "name": "loreweaver-protocol",
-      "version": "2.3.1",
+      "version": "2.4.0",
       "devDependencies": {
         "typescript": "^5.5.0",
       },
     },
     "tui": {
       "name": "@loreweaver/tui",
-      "version": "0.5.0",
+      "version": "0.7.0",
       "bin": {
         "loreweaver": "./dist/index.js",
       },

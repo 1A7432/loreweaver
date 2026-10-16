@@ -57,6 +57,10 @@ class CommandCtx:
     # Set by a handler whose reply IS Markdown (a rendered report): the reply frame then
     # says `format:"markdown"`, so clients render it instead of showing the `#`/`**`.
     markdown: bool = False
+    # Set by a handler whose SUCCESSFUL reply concerns only its caller — the per-invocation
+    # form of `CommandSpec.private_reply` (`.report html` answers "sent to your client"
+    # while the rest of `.report` stays table content). Unicast like a failed reply.
+    private: bool = False
 
     @property
     def chat_key(self) -> str:
@@ -95,3 +99,5 @@ class CommandReply:
     # these to the invoking connection; success replies broadcast exactly as before.
     error: bool = False
     markdown: bool = False
+    # A successful reply meant for the invoking connection only (`CommandCtx.private`).
+    private: bool = False

@@ -4,8 +4,9 @@
 // kinds, and `visible_when` on panel template blocks. 2.2 adds the installed-pack
 // card listing (`list_pack_cards` → `pack_cards`), the structured lane behind every
 // "import from installed pack" picker. 2.3 adds each listed card's `kind`, so a picker
-// can send the right import verb. A 2.0/2.1 client ignores all of it.
-export const PROTOCOL_VERSION = "2.3" as const
+// can send the right import verb. 2.4 adds the `report` frame: a server-generated HTML
+// session report announced to the issuing connection only. A 2.0/2.1 client ignores all of it.
+export const PROTOCOL_VERSION = "2.4" as const
 
 export const FrameType = {
   Join: "join",
@@ -24,6 +25,8 @@ export const FrameType = {
   AudioLibraryItem: "audio_library_item",
   AudioControl: "audio_control",
   AudioState: "audio_state",
+  // v2.4 additive: a server-generated HTML session report, unicast to its issuer.
+  Report: "report",
   Welcome: "welcome",
   Error: "error",
   Narrative: "narrative",
@@ -158,6 +161,21 @@ export interface MediaFrame extends MediaRef {
   name: string
   from: string
   ts: number
+}
+
+/** v2.4: a session report (`.report html` / `.report html reveal`) is ready for THIS
+ * connection. Never broadcast or replayed. Fetch the bytes with the ordinary media GET
+ * (`getMedia(hash)`) and verify the sha256. A `reveal` blob answers only a keeper-key
+ * connection. Clients MUST NOT render the HTML inside their own UI: save the file and,
+ * at most, hand it to the system browser. `name` is a suggestion — keep only its base
+ * name. */
+export interface ReportFrame {
+  type: typeof FrameType.Report
+  hash: string
+  name: string
+  size: number
+  mime: "text/html"
+  variant: "player" | "reveal"
 }
 
 export interface MediaAcceptFrame {
@@ -1166,6 +1184,7 @@ export type ServerFrame =
   | NarrativeFrame
   | NarrativeDeltaFrame
   | PackCardsFrame
+  | ReportFrame
   | DiceFrame
   | UiFrame
   | UiManifestFrame

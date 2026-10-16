@@ -61,6 +61,11 @@ ROOM_FACETS = (
         # The `media` document type is registered for the frame contract and no document
         # of it is written today; it is claimed here so the type cannot become an orphan
         # the day something does write one.
+        # The media table also holds the UNLISTED session-report blobs (`text/html`,
+        # `gateway.report_export`, protocol 2.4). They are part of this family: they die
+        # with it at `.reset all` and on room delete. A room export carries listed media
+        # only (`net.room_backup.room_media_entries`), so a load drops report blobs with
+        # the other extras — a printout is re-made from the restored story, not restored.
         doc_types=frozenset({"media"}),
         state_keys=frozenset({"media_history"}),
         storages=frozenset({STORAGE_DOCUMENTS, STORAGE_ROOM_STATE, STORAGE_MEDIA}),

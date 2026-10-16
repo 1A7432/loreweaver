@@ -38,6 +38,10 @@ _CHRONICLE_NOTE_WORDS = {"note", "margin", "批注", "边注", "邊注"}
 
 # `.report` detailed-log toggle words (EN + a couple of CN synonyms) -- session report export ("团报").
 _REPORT_DETAILED_WORDS = {"detailed", "full", "log", "详细", "詳細", "完整", "全部"}
+# `.report html [reveal]` — the self-contained HTML keepsake (protocol 2.4 `report` frame).
+# A bare reveal word (`.团报 复盘`) is shorthand for `html reveal`.
+_REPORT_HTML_WORDS = {"html", "page", "网页", "網頁", "网页版", "網頁版"}
+_REPORT_REVEAL_WORDS = {"reveal", "复盘", "復盤", "复盘版", "復盤版"}
 
 
 def _first_attachment_name(ctx: Any) -> str:
@@ -826,6 +830,10 @@ class WorldCommands:
         render/save helper, so the report is also saved to the shared reports path and its path noted."""
         from agent.kp_tools_knowledge import render_session_report
 
+        words = ctx.args.strip().casefold().split()
+        if words and (words[0] in _REPORT_HTML_WORDS or words[0] in _REPORT_REVEAL_WORDS):
+            reveal = any(word in _REPORT_REVEAL_WORDS for word in words)
+            return await self._report_html(ctx, reveal=reveal)
         detailed = ctx.args.strip().casefold() in _REPORT_DETAILED_WORDS
         rendered = await render_session_report(ctx.services, self._agent_ctx(ctx), ctx.i18n, detailed=detailed)
         if rendered is None:
@@ -837,6 +845,44 @@ class WorldCommands:
         if str(getattr(ctx.raw_ctx, "platform", "cli") or "cli") != "cli":
             saved_note = ""
         return f"{markdown}\n\n{saved_note}" if saved_note else markdown
+
+    async def _report_html(self, ctx: CommandCtx, *, reveal: bool) -> str:
+        """`.report html` / `.report html reveal` — the HTML keepsake, delivered privately.
+
+        The player edition is open to any member; the reveal edition (`gateway.report_export`
+        — hidden rolls, the Keeper's margins, the module's secrets, hidden variables) is a
+        keeper-grade view, gated exactly like `.chronicle` and delivered the same way: to
+        the issuing connection only. Over the network the page becomes an unlisted room
+        blob announced by a private `report` frame; the local CLI has no byte channel, so
+        it gets the file on the shared reports path instead. Zero model calls."""
+        from gateway.report_export import build_report_html, store_report
+        from infra.media_store import MediaError
+
+        if reveal and not _is_keeper(ctx.raw_ctx):
+            return ctx.fail(ctx.i18n.t("rooms.denied"))
+        agent_ctx = self._agent_ctx(ctx)
+        built = await build_report_html(ctx.services, agent_ctx, ctx.i18n, reveal=reveal)
+        if built is None:
+            return ctx.fail(ctx.i18n.t("commands.report.no_session"))
+        # Never broadcast, whatever the edition: it is this caller's delivery, and the
+        # "saved to …" line of a local run names a host path.
+        ctx.private = True
+        if str(getattr(ctx.raw_ctx, "platform", "cli") or "cli") == "cli":
+            fs = agent_ctx.fs
+            if fs is None:
+                return ctx.fail(ctx.i18n.t("commands.report.html.failed", reason=ctx.i18n.t("tui.error.server_error")))
+            try:
+                path = fs.shared_path / built.name
+                path.write_text(built.html, encoding="utf-8")
+            except OSError:
+                return ctx.fail(ctx.i18n.t("commands.report.html.failed", reason=ctx.i18n.t("tui.error.server_error")))
+            return ctx.i18n.t("commands.report.html.saved", path=fs.forward_file(path))
+        try:
+            frame = await store_report(ctx.services, ctx.chat_key, built, uploader=ctx.user_id)
+        except MediaError as exc:
+            return ctx.fail(ctx.i18n.t("commands.report.html.failed", reason=ctx.i18n.t(f"tui.error.{exc.code}")))
+        ctx.events.append(Event.report(frame))
+        return ctx.i18n.t("commands.report.html.sent_reveal" if reveal else "commands.report.html.sent")
 
     async def cmd_recap(self, ctx: CommandCtx) -> str:
         """`.recap` — the spoiler-free "previously on…" campaign recap (M18). Player-facing

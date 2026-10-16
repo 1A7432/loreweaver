@@ -364,6 +364,11 @@ After:
 
 - `.report` exports a session report — the scoreboard on its own, or `.report full` for the keepsake:
   every dice roll with its result, and the table's whole conversation.
+- `.report html` sends the same keepsake as one self-contained web page to the asking client
+  (any player may ask for their own copy); `.report html reveal` is the keeper's reveal edition with
+  a spoiler section behind the screen — hidden rolls, your chronicle margins, the module's secrets,
+  hidden variables — delivered to your connection only. On the local CLI both are written to the
+  shared reports folder instead.
 - `.chronicle` / `.recap` — check the ledger actually matches what happened. If a tracker is stale or
   running *ahead* of the fiction, that's the exact failure class both playtests were built to find,
   and it is worth an issue.

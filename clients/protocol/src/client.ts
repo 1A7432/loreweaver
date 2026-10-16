@@ -113,6 +113,14 @@ const serverFrameValidators: Record<string, (f: Record<string, unknown>) => bool
   [FrameType.Narrative]: (f) => isStr(f.id) && isStr(f.speaker) && isStr(f.text),
   [FrameType.NarrativeDelta]: (f) => isStr(f.id) && isStr(f.speaker) && isStr(f.text),
   [FrameType.PackCards]: (f) => isArr(f.cards),
+  // v2.4: the hash is the media address; anything but a 64-hex digest is unusable.
+  [FrameType.Report]: (f) =>
+    isStr(f.hash) &&
+    /^[0-9a-f]{64}$/.test(f.hash) &&
+    isStr(f.name) &&
+    isNum(f.size) &&
+    f.mime === "text/html" &&
+    (f.variant === "player" || f.variant === "reveal"),
   [FrameType.Dice]: (f) => isStr(f.actor) && isStr(f.expr) && isNum(f.total),
   [FrameType.Ui]: (f) => isArr(f.blocks) && isStr(f.panel),
   // v1.8 module panels: a manifest is a full-replace panel list; a panel event names

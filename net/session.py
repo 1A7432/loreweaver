@@ -44,6 +44,7 @@ from infra.media_store import (
     MediaRecord,
     MediaStore,
     PendingUpload,
+    audiences_for_role,
     is_audio_mime,
     is_image_mime,
 )
@@ -54,7 +55,10 @@ from net.room_backup import room_rows, room_vector_points
 
 logger = logging.getLogger(__name__)
 
-# v2.3 adds `kind` to every `pack_cards` entry — the 拆卡 classification a picker needs
+# v2.4 adds the `report` frame: a server-generated, self-contained HTML session report
+# (`.report html` / `.report html reveal`), stored as an UNLISTED room blob and announced
+# to the issuing connection only — fetched over the ordinary media GET, never broadcast,
+# listed or replayed (`gateway.report_export`). v2.3 adds `kind` to every `pack_cards` entry — the 拆卡 classification a picker needs
 # to send the right import verb (without it every client hard-coded `.import <ref> pc`
 # and a world card was offered to players as a character). v2.2 added the installed-pack
 # card listing (`list_pack_cards` → `pack_cards`), the structured lane behind
@@ -63,7 +67,7 @@ logger = logging.getLogger(__name__)
 # `panel_intent` client frame, and pack-asset resolution on the media byte channel.
 # v1.7 added declarative hook-emitted `ui` frames (core.hooks emitUI); v1.6 added
 # player-visible module variables on the state frame.
-_PROTOCOL_VERSION = "2.3"
+_PROTOCOL_VERSION = "2.4"
 # Public alias for out-of-band consumers (the `.lwpack` engine-minimum check in app.py).
 PROTOCOL_VERSION = _PROTOCOL_VERSION
 _SERVER_BANNER = "loreweaver/1"
@@ -251,6 +255,10 @@ def render_frame(event: Event) -> dict[str, Any] | None:
     if event.kind == "media":
         return dict(event.data)
     if event.kind == "audio":
+        return dict(event.data)
+    if event.kind == "report":
+        # v2.4: the event data IS the wire frame. `gateway.report_export` builds it and
+        # attaches it as a PRIVATE command event, so it only ever reaches the issuer.
         return dict(event.data)
     return None
 
@@ -952,7 +960,12 @@ class SessionCore:
         if not self._refresh_member_authorization(member):
             raise MediaError("forbidden")
         try:
-            record, data = await self.media_store.read_bytes(member.session_key, sha256)
+            # The connection's AUTHENTICATED role decides which unlisted blobs it may
+            # fetch: a keeper-audience report is `media_not_found` for a player — the same
+            # reply, through the same fallthrough, as a hash this room does not hold.
+            record, data = await self.media_store.read_bytes(
+                member.session_key, sha256, audiences=audiences_for_role(getattr(member, "role", ""))
+            )
         except MediaError as exc:
             if exc.code != "media_not_found":
                 raise

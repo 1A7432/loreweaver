@@ -44,7 +44,7 @@ class Event:
     ``data``, a ``narrative`` event carries ``speaker``/``text``/``fmt``).
     """
 
-    kind: str  # "player_action" | "dice" | "narrative" | "state" | "presence" | "system" | "turn_status" | "media" | "audio" | "ui"
+    kind: str  # "player_action" | "dice" | "narrative" | "state" | "presence" | "system" | "turn_status" | "media" | "audio" | "ui" | "report"
     speaker: str = ""  # narrative: "kp" | "npc" | "player" | "system"
     name: str = ""  # actor / npc / player display name
     text: str = ""  # narrative / system text
@@ -113,6 +113,14 @@ class Event:
     @classmethod
     def panel(cls, snapshot: dict[str, Any], *, private: bool = False) -> Event:
         return cls(kind="panel", data=dict(snapshot), private=private)
+
+    @classmethod
+    def report(cls, frame: dict[str, Any]) -> Event:
+        """A generated session report's delivery notice (protocol 2.4 `report` frame).
+
+        ALWAYS private: it names an unlisted blob meant for the one connection that asked
+        for it, so a command attaches it and `gateway.turn` unicasts it to that origin."""
+        return cls(kind="report", data=dict(frame), private=True)
 
     @classmethod
     def presence(cls, players: list[dict[str, Any]], online: int) -> Event:

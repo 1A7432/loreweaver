@@ -724,37 +724,12 @@ class BattleReportGenerator:
         `assistant` = the Keeper's reply) and stamped with the turn it belongs to,
         so a reader can line the story up with `.undo` and the chronicle. When the
         budget cuts, the KEPT part is the tail and the report says so — a silent
-        truncation would make a keepsake lie about where the session ended.
+        truncation would make a keepsake lie about where the session ended. Which
+        messages survive the cut is `transcript_window`'s answer, shared with the
+        HTML keepsake (`core.report_html`) so both files print the same session.
         """
-        rendered: list[str] = []
-        used = 0
-        omitted = 0
-        for message in reversed(transcript):
-            text = str(message.get("content", "")).strip()
-            if not text:
-                continue
-            if omitted:  # the budget is spent; from here on we only count what we lost
-                omitted += 1
-                continue
-            speaker = i18n.t(
-                "battle.report.md.transcript.keeper"
-                if message.get("role") == "assistant"
-                else "battle.report.md.transcript.player"
-            )
-            block = i18n.t(
-                "battle.report.md.transcript.message",
-                turn=int(message.get(HISTORY_TURN_KEY, 0) or 0),
-                speaker=speaker,
-                text=text,
-            )
-            # `rendered` guards the floor: the newest message is always shown, even
-            # if it alone is over budget, so the report can never come back empty.
-            if used + len(block) > TRANSCRIPT_MAX_CHARS and rendered:
-                omitted += 1
-                continue
-            used += len(block)
-            rendered.append(block)
-        rendered.reverse()
+        kept, omitted = transcript_window(transcript, i18n)
+        rendered = [_transcript_block(message, i18n) for message in kept]
         if not rendered:
             return [i18n.t("battle.report.md.transcript.empty")]
         if omitted:
@@ -767,6 +742,48 @@ class BattleReportGenerator:
                 ),
             )
         return rendered
+
+
+def _transcript_block(message: dict, i18n: I18n) -> str:
+    speaker = i18n.t(
+        "battle.report.md.transcript.keeper"
+        if message.get("role") == "assistant"
+        else "battle.report.md.transcript.player"
+    )
+    return i18n.t(
+        "battle.report.md.transcript.message",
+        turn=int(message.get(HISTORY_TURN_KEY, 0) or 0),
+        speaker=speaker,
+        text=str(message.get("content", "")).strip(),
+    )
+
+
+def transcript_window(transcript: list[dict], i18n: I18n) -> tuple[list[dict], int]:
+    """``(kept messages oldest-first, omitted count)`` under ``TRANSCRIPT_MAX_CHARS``.
+
+    Empty messages are skipped. The budget is spent newest-first on the Markdown
+    block each message renders to, so the Markdown and HTML reports keep exactly the
+    same tail. The newest message is always kept, even if it alone is over budget, so
+    a report can never come back empty while the room has anything to show.
+    """
+    kept: list[dict] = []
+    used = 0
+    omitted = 0
+    for message in reversed(transcript):
+        text = str(message.get("content", "")).strip()
+        if not text:
+            continue
+        if omitted:  # the budget is spent; from here on we only count what we lost
+            omitted += 1
+            continue
+        block = _transcript_block(message, i18n)
+        if used + len(block) > TRANSCRIPT_MAX_CHARS and kept:
+            omitted += 1
+            continue
+        used += len(block)
+        kept.append(message)
+    kept.reverse()
+    return kept, omitted
 
 
 class BattleReportManager:

@@ -184,6 +184,8 @@ projection that keeps every other secret out of your client — keeper annotatio
 | `.pc` | the module's pre-generated cast |
 | `.recap` | the spoiler-free story so far |
 | `.report` | export a session report — the scoreboard; `.report full` adds every dice roll and the whole conversation |
+| `.report html` | the same keepsake as a printable, self-contained web page, sent to **your** client only — the terminal client saves it (`~/Downloads/loreweaver`, else `~/.loreweaver/reports`) for you to open in a browser |
+| `.report html reveal` | keeper only: the reveal edition — the player page plus a spoiler section behind the screen (hidden rolls, the Keeper's chronicle margins, the module's secrets, hidden variables). Delivered to the keeper's connection alone |
 | `.jrrp` | today's luck, for no mechanical reason whatsoever |
 
 Both dialects work at once: the Chinese SealDice style (`.ra 侦查`, `.st 力量50`, `.sc 1/1d6`) and

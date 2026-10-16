@@ -24,6 +24,7 @@ from infra.media_store import (
     ALLOWED_AUDIO_MIMES,
     ALLOWED_IMAGE_MIMES,
     ALLOWED_MEDIA_MIMES,
+    AUDIENCE_ROOM,
     MediaRecord,
     MediaStore,
     PendingUpload,
@@ -550,7 +551,10 @@ def _media_policy(
 async def room_media_entries(services: Services, chat_key: str) -> list[dict[str, Any]]:
     """Serialize room-owned media into the private, self-contained snapshot."""
     media = _media_store(services)
-    records = await media.list_room_records(chat_key)
+    # Unlisted blobs (the session reports, `gateway.report_export`) are a private delivery
+    # derived from state the snapshot already carries, not room media: a snapshot never
+    # names them, and a load drops them with the other extras.
+    records = [record for record in await media.list_room_records(chat_key) if record.audience == AUDIENCE_ROOM]
     if len(records) > MAX_BACKUP_MEDIA_FILES:
         raise ValueError("media entry limit exceeded")
     declared_total = sum(record.size for record in records)
@@ -1081,8 +1085,8 @@ async def _restore_staged_media(
             conn.executemany(
                 """
                 INSERT OR REPLACE INTO media_index
-                    (hash, room, mime, size, name, uploader, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (hash, room, mime, size, name, uploader, created_at, audience)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -1093,6 +1097,7 @@ async def _restore_staged_media(
                         item.record.name,
                         item.record.uploader,
                         item.record.created_at,
+                        item.record.audience,
                     )
                     for item in staged
                 ],

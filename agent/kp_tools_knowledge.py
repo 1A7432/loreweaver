@@ -93,7 +93,7 @@ from agent.module_initializer import ProgressCb, _emit
 from agent.services import Services
 from agent.tool_phase import CAPABILITY_MODULE_POOL
 from agent.tools import tool
-from core.battle_report import _default_session_name
+from core.battle_report import SessionRecord, _default_session_name
 from core.documents import KEEPER_VIEWER, MODULE_POOL_ID
 from core.game_clock import advance_game_time, face_is_engine_readable, parse_time_delta
 from infra.i18n import I18n
@@ -220,6 +220,32 @@ def _find_by_name(items: list[Any], name: str) -> Any:
     return None
 
 
+async def resolve_report_record(
+    services: Services, chat_key: str, i18n: I18n, *, session_name: str = ""
+) -> tuple[SessionRecord, str] | None:
+    """The session a report covers and its display name, or ``None`` with nothing to report.
+
+    The in-progress session, else the latest archived one; the name is the caller's,
+    else the one recorded for that session, else the generated default. Shared by the
+    Markdown export below and the HTML keepsake (`gateway.report_export`), so both
+    always describe the same session."""
+    generator = services.battles.generator
+    record = await generator.get_current_session(chat_key)
+    scope = "current"
+    if record is None:
+        record = await generator.get_latest_history(chat_key)
+        scope = "latest"
+    if record is None:
+        return None
+
+    name = session_name.strip()
+    if not name:
+        name = await services.store.state_get(chat_key, f"session_name.{scope}")
+    if not name:
+        name = _default_session_name(datetime.fromtimestamp(record.start_time), i18n)
+    return record, name
+
+
 async def render_session_report(
     services: Services,
     ctx: AgentCtx,
@@ -248,19 +274,10 @@ async def render_session_report(
     render/save flow.
     """
     generator = services.battles.generator
-    record = await generator.get_current_session(ctx.chat_key)
-    scope = "current"
-    if record is None:
-        record = await generator.get_latest_history(ctx.chat_key)
-        scope = "latest"
-    if record is None:
+    resolved = await resolve_report_record(services, ctx.chat_key, i18n, session_name=session_name)
+    if resolved is None:
         return None
-
-    name = session_name.strip()
-    if not name:
-        name = await services.store.state_get(ctx.chat_key, f"session_name.{scope}")
-    if not name:
-        name = _default_session_name(datetime.fromtimestamp(record.start_time), i18n)
+    record, name = resolved
 
     transcript = await load_chain(services, ctx.chat_key, DEFAULT_HISTORY_KEY) if detailed else None
     markdown = generator.generate_markdown_report(record, name, i18n=i18n, transcript=transcript)

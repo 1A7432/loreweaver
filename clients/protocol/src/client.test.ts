@@ -161,6 +161,22 @@ describe("WsClient", () => {
     expect(cards).toEqual(["harbour/cards/pilot.json"])
   })
 
+  test("report frames pass validation and malformed ones are dropped (v2.4)", async () => {
+    const { client, sockets } = createClient()
+    const seen: string[] = []
+    client.on(FrameType.Report, (frame) => seen.push(`${frame.variant}:${frame.name}`))
+
+    await client.connect("ws://example.test")
+    const hash = "ab".repeat(32)
+    sockets[0].serverSend({ type: FrameType.Report, hash, name: "r.html", size: 10, mime: "text/html", variant: "reveal" })
+    // Not text/html, a short hash, an unknown variant: each one is dropped.
+    sockets[0].serverSend({ type: FrameType.Report, hash, name: "r.html", size: 10, mime: "image/png", variant: "player" })
+    sockets[0].serverSend({ type: FrameType.Report, hash: "ab", name: "r.html", size: 10, mime: "text/html", variant: "player" })
+    sockets[0].serverSend({ type: FrameType.Report, hash, name: "r.html", size: 10, mime: "text/html", variant: "all" })
+
+    expect(seen).toEqual(["reveal:r.html"])
+  })
+
   test("narrative_delta frames pass validation and reach handlers", async () => {
     // Regression: the validator table shipped without a narrative_delta entry, so
     // every streaming delta was silently dropped by isServerFrame — both clients

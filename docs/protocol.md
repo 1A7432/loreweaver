@@ -1,13 +1,13 @@
 *English · [中文](protocol.zh.md)*
 
-# loreweaver networked TUI — wire protocol 2.3
+# loreweaver networked TUI — wire protocol 2.4
 
 This is the open, versioned wire protocol between a loreweaver server (started via
 `python -m app --serve`) and the OpenTUI terminal client. The engine itself
 (deterministic core + AI Keeper) is unaffected by transport; the transport-neutral
 session logic is `net.session.SessionCore`, and this document is the language-agnostic seam.
 
-Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"2.3"`. The same
+Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"2.4"`. The same
 frames + `join` handshake ride the transport; only the carrier + its framing differ:
 
 - **Iroh** (the transport `--serve` starts) — peer-to-peer QUIC. The server
@@ -37,6 +37,11 @@ a panel template block carrying `visible_when` and cannot evaluate that conditio
 it does not implement the field, or does not implement that corner of the grammar, or the
 evaluation errors — MUST NOT render the block. Ignoring the gate draws content the author
 hid, so the undecidable case fails CLOSED, exactly as an unresolved `$var` does.
+
+**2.4 (additive)** adds the `report` frame (Server → Client): the HTML session report
+(`.report html`, and the keeper-only `.report html reveal`), stored as an unlisted room blob
+and announced only to the connection that asked for it. A 2.3 client ignores the frame and
+simply never receives the file.
 
 **2.1 (additive, M19)** adds the presentation surface: the `image` block kind and the
 four performance templates (`letter`, `clipping`, `map_pin`, `title_card`) in the `ui`
@@ -113,7 +118,7 @@ connections receive `error too_many_connections` before `join` is read.
 ## Server → Client
 
 - `welcome` — sent once, on a successful `join`:
-  `{type:"welcome", protocol:"2.3", features:["media","audio", "imagegen"?, "demo"?, "update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
+  `{type:"welcome", protocol:"2.4", features:["media","audio", "imagegen"?, "demo"?, "update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
   `version` is the server's own release version (compare it to the client's to detect a mismatch). The `"update"` feature appears only for a keeper on a server whose operator configured a self-update command, and gates the `admin_update_server` control.
   `demo` means the server is using its offline sample Keeper, vector support is
   enabled, and this specific Keeper room was empty when the server checked it.
@@ -295,6 +300,20 @@ connections receive `error too_many_connections` before `join` is read.
   are absent on the opening `busy` and on any server that predates them, so a client
   that ignores them behaves exactly as before; treat a repeated `busy` as a refresh of
   the one indicator, not as a second turn.
+- `report` (v2.4) — a server-generated session report is ready for THIS connection.
+  Sent ONLY to the connection whose `.report html` / `.report html reveal` produced it —
+  never broadcast, never part of join replay, never listed:
+  `{type:"report", hash:string, name:string, size:int, mime:"text/html", variant:"player"|"reveal"}`
+  The page is one self-contained HTML file (inline CSS, no scripts, no external
+  resources) stored as an UNLISTED room blob; fetch it with the ordinary media GET
+  (`{op:"get", hash}`) and verify its sha256. `variant:"reveal"` is the keeper's
+  spoiler edition: its blob answers a GET only on a keeper-key connection of the room —
+  any other connection gets `media_not_found`, exactly as for a hash the room does not
+  hold. `name` is a suggested file name; treat it as untrusted (keep only its base name).
+  **Client rule (normative):** a client MUST NOT render the report inside its own UI
+  (no webview, no inline HTML panel) — it saves the file and MAY hand the saved file to
+  the system browser. The page's content is untrusted table text; a browser opening a
+  local file is the sandbox it was written for, a client's own UI is not.
 - `pong`: `{type:"pong", t:number}`
 
 ## Turn flow
@@ -467,6 +486,13 @@ Download flow:
    shape; the server re-verifies the bytes against their manifest digest before
    serving. A hash from a pack the room has not enabled stays `media_not_found`
    (no arbitrary blob oracle).
+4. (v2.4) A room may also hold UNLISTED blobs: the server-generated session reports
+   (`text/html`, see the `report` frame). They are never broadcast as `media`, never
+   replayed on join and never carried by a room export. The `members` audience (the
+   player edition) answers a GET from any member of the room; the `keeper` audience (the
+   reveal edition) answers only a keeper-key connection, and is `media_not_found` for
+   everyone else — the same reply as an unknown hash. `text/html` is NOT an upload type:
+   a client can never offer HTML. Report bytes count against the room's image quota.
 
 MediaChannel wire formats:
 

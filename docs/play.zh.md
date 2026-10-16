@@ -154,6 +154,8 @@ Check Spot Hidden: target 70 (effective 35), roll 13 -> Extreme Success
 | `.pc` | 模组的预设角色池 |
 | `.recap` | 不带剧透的前情提要 |
 | `.report` | 导出这一场的战报（要这场已经有内容可导） |
+| `.团报 网页`（`.report html`） | 同一份团报的可打印网页版，自包含，只发给**你自己**的客户端——终端客户端会把它存下来（`~/Downloads/loreweaver`，没有下载目录就存到 `~/.loreweaver/reports`），用浏览器打开 |
+| `.团报 复盘`（`.report html reveal`） | 仅守秘人：复盘版——玩家版之外再加一段“幕后”剧透（暗骰、守秘人在编年史里的旁注、模组的秘密、隐藏变量），只发给守秘人自己的连接 |
 | `.jrrp` | 今日人品。没有任何机制作用 |
 
 两套写法同时生效：骰娘系的中文写法（`.ra 侦查`、`.st 力量50`、`.sc 1/1d6`）和 Avrae 系的英文写法（`/roll 4d6kh3`、`/check`）。你手熟哪套就用哪套。全量参考——包括守秘人那一侧的——在[玩家指令手册](https://1a7432.site/commands.html)。

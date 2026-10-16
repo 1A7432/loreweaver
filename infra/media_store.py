@@ -33,6 +33,47 @@ ALLOWED_DOCUMENT_MIMES = frozenset(
     }
 )
 ALLOWED_CHAT_ATTACHMENT_MIMES = ALLOWED_MEDIA_MIMES | ALLOWED_DOCUMENT_MIMES
+# Server-ORIGINATED HTML (the session report, `gateway.report_export`). Deliberately NOT in
+# any upload whitelist above: a client can never offer HTML, and a blob of this type can
+# only enter the index through `register_server_blob` with an UNLISTED audience.
+REPORT_MIME = "text/html"
+# Who may see an indexed blob. `room` is ordinary room media — broadcast as a `media`
+# frame, replayed on join, carried by a room export, fetchable by every member. The two
+# UNLISTED audiences are never broadcast, never replayed and never exported: `members`
+# is fetchable by any member of the room that holds its hash, `keeper` by a keeper-key
+# connection of that room ONLY — for anyone else it is indistinguishable from a hash the
+# room does not hold (no oracle).
+AUDIENCE_ROOM = "room"
+AUDIENCE_MEMBERS = "members"
+AUDIENCE_KEEPER = "keeper"
+AUDIENCES = frozenset({AUDIENCE_ROOM, AUDIENCE_MEMBERS, AUDIENCE_KEEPER})
+UNLISTED_AUDIENCES = frozenset({AUDIENCE_MEMBERS, AUDIENCE_KEEPER})
+# What a lookup sees when the caller names no audience: listed room media only. Every
+# pre-existing caller (avatar binding, `ui` image reachability, upload dedupe) therefore
+# treats an unlisted blob exactly like a hash the room does not hold.
+LISTED_AUDIENCES = frozenset({AUDIENCE_ROOM})
+
+
+def audiences_for_role(role: str) -> frozenset[str]:
+    """The audiences a connection with keystore `role` may FETCH over the byte channel."""
+    if role == "keeper":
+        return AUDIENCES
+    return frozenset({AUDIENCE_ROOM, AUDIENCE_MEMBERS})
+
+
+def quota_mimes(mimes: set[str] | frozenset[str]) -> frozenset[str]:
+    """The MIME family whose bytes count against the same room quota as ``mimes``.
+
+    Server-generated reports share the IMAGE quota (`media_room_quota_bytes`): they are
+    small documents, and a separate budget would be a knob nobody asked for. So any sum
+    that covers images also covers reports, and a report's own quota check covers images.
+    """
+    family = set(mimes)
+    if family & ALLOWED_IMAGE_MIMES or REPORT_MIME in family:
+        family |= ALLOWED_IMAGE_MIMES | {REPORT_MIME}
+    return frozenset(family)
+
+
 DEFAULT_MAX_FILE_BYTES = 8 * 1024 * 1024
 DEFAULT_ROOM_QUOTA_BYTES = 512 * 1024 * 1024
 # TODO: EXIF stripping is intentionally out of scope for media P1; blobs stay opaque.
@@ -56,6 +97,7 @@ class MediaRecord:
     name: str
     uploader: str
     created_at: float
+    audience: str = AUDIENCE_ROOM
 
     def ref(self) -> dict[str, Any]:
         return {
@@ -82,6 +124,8 @@ class PendingUpload:
     max_file_bytes: int | None = None
     room_quota_bytes: int | None = None
     allowed_mimes: frozenset[str] | None = None
+    # Only `register_server_blob` sets an unlisted audience; every upload path is `room`.
+    audience: str = AUDIENCE_ROOM
 
 
 class MediaStore:
@@ -160,6 +204,43 @@ class MediaStore:
         )
         return await self.commit_bytes(pending, data)
 
+    async def register_server_blob(
+        self,
+        *,
+        room: str,
+        data: bytes,
+        mime: str,
+        name: str,
+        uploader: str,
+        audience: str,
+        max_file_bytes: int | None = None,
+        room_quota_bytes: int | None = None,
+    ) -> MediaRecord:
+        """Index server-ORIGINATED bytes under an UNLISTED audience (the session report).
+
+        This is the only way a `REPORT_MIME` blob enters the index, and it cannot create
+        listed media: an unlisted blob is never broadcast, replayed or exported, so it is
+        the caller's private delivery, not a room upload. Its bytes count against the
+        image quota family (`quota_mimes`)."""
+        if audience not in UNLISTED_AUDIENCES:
+            raise MediaError("media_bad_upload")
+        mime = str(mime or "").lower()
+        sha256 = hashlib.sha256(data).hexdigest()
+        pending = PendingUpload(
+            upload_id="",
+            room=room,
+            mime=mime,
+            size=len(data),
+            name=name,
+            uploader=uploader,
+            sha256=sha256,
+            max_file_bytes=max_file_bytes,
+            room_quota_bytes=room_quota_bytes,
+            allowed_mimes=frozenset({mime}),
+            audience=audience,
+        )
+        return await self.commit_bytes(pending, data)
+
     async def commit_bytes(self, pending: PendingUpload, data: bytes) -> MediaRecord:
         """Store uploaded bytes after verifying content and quota atomically.
 
@@ -183,6 +264,12 @@ class MediaStore:
         )
         if pending.mime not in allowed_mimes:
             raise MediaError("media_bad_mime")
+        # HTML is server-originated and private by construction: it never becomes listed
+        # room media, whatever whitelist a caller hands in.
+        if pending.audience not in AUDIENCES or (
+            pending.mime == REPORT_MIME and pending.audience not in UNLISTED_AUDIENCES
+        ):
+            raise MediaError("media_bad_mime")
         if pending.size <= 0 or pending.size > max_file_bytes:
             raise MediaError("media_too_large")
         if pending.mime == SVG_MIME:
@@ -201,7 +288,7 @@ class MediaStore:
             try:
                 row = conn.execute(
                     """
-                    SELECT hash, room, mime, size, name, uploader, created_at
+                    SELECT hash, room, mime, size, name, uploader, created_at, audience
                     FROM media_index
                     WHERE room = ? AND hash = ?
                     """,
@@ -209,9 +296,16 @@ class MediaStore:
                 ).fetchone()
                 if row is not None:
                     conn.rollback()
-                    return _row_to_record(row)
+                    existing = _row_to_record(row)
+                    if existing.audience != pending.audience:
+                        # The same bytes already sit in this room under ANOTHER audience.
+                        # Answering with that record would publish an unlisted blob as room
+                        # media (or downgrade a report): refuse instead. Only a caller who
+                        # already holds the exact bytes can reach this branch.
+                        raise MediaError("media_bad_upload")
+                    return existing
 
-                mimes = tuple(allowed_mimes)
+                mimes = tuple(quota_mimes(allowed_mimes))
                 placeholders = ",".join("?" for _ in mimes)
                 total_row = conn.execute(
                     f"SELECT COALESCE(SUM(size), 0) FROM media_index "
@@ -231,6 +325,7 @@ class MediaStore:
                     name=pending.name,
                     uploader=pending.uploader,
                     created_at=time.time(),
+                    audience=pending.audience,
                 )
                 await self._insert_record(record, conn=conn)
                 self._store._commit(conn)
@@ -242,13 +337,23 @@ class MediaStore:
                 raise
         return record
 
-    async def get_record(self, room: str, sha256: str) -> MediaRecord | None:
+    async def get_record(
+        self, room: str, sha256: str, *, audiences: frozenset[str] = LISTED_AUDIENCES
+    ) -> MediaRecord | None:
+        """The room's record for `sha256` if its audience is in `audiences`, else None.
+
+        The default sees listed room media only, so a caller that names no audience can
+        never act on — or reveal the existence of — an unlisted blob."""
+        record = await self._get_any_record(room, sha256)
+        return record if record is not None and record.audience in audiences else None
+
+    async def _get_any_record(self, room: str, sha256: str) -> MediaRecord | None:
         await self._ensure_schema()
         async with self._store._lock:
             conn = self._store._ensure_conn()
             row = conn.execute(
                 """
-                SELECT hash, room, mime, size, name, uploader, created_at
+                SELECT hash, room, mime, size, name, uploader, created_at, audience
                 FROM media_index
                 WHERE room = ? AND hash = ?
                 """,
@@ -256,8 +361,12 @@ class MediaStore:
             ).fetchone()
         return _row_to_record(row) if row else None
 
-    async def read_bytes(self, room: str, sha256: str) -> tuple[MediaRecord, bytes]:
-        record = await self.get_record(room, sha256.lower())
+    async def read_bytes(
+        self, room: str, sha256: str, *, audiences: frozenset[str] = LISTED_AUDIENCES
+    ) -> tuple[MediaRecord, bytes]:
+        """Bytes + record for `sha256`; an audience outside `audiences` is `media_not_found`,
+        the same answer as a hash the room does not hold."""
+        record = await self.get_record(room, sha256.lower(), audiences=audiences)
         if record is None:
             raise MediaError("media_not_found")
         path = self._path(room, record.hash)
@@ -273,7 +382,7 @@ class MediaStore:
         await self._ensure_schema()
         async with self._store._lock:
             conn = self._store._ensure_conn()
-            mimes = tuple(self.allowed_mimes)
+            mimes = tuple(quota_mimes(self.allowed_mimes))
             placeholders = ",".join("?" for _ in mimes)
             row = conn.execute(
                 f"SELECT COALESCE(SUM(size), 0) FROM media_index "
@@ -283,13 +392,16 @@ class MediaStore:
         return int(row[0] or 0) if row else 0
 
     async def list_room_records(self, room: str) -> list[MediaRecord]:
-        """Return every indexed blob owned by ``room`` in stable hash order."""
+        """Return every indexed blob owned by ``room`` in stable hash order.
+
+        INCLUDES unlisted blobs (each record says its `audience`): this is the internal
+        inventory the lifecycle operations walk, never a player-facing listing."""
         await self._ensure_schema()
         async with self._store._lock:
             conn = self._store._ensure_conn()
             rows = conn.execute(
                 """
-                SELECT hash, room, mime, size, name, uploader, created_at
+                SELECT hash, room, mime, size, name, uploader, created_at, audience
                 FROM media_index
                 WHERE room = ?
                 ORDER BY hash
@@ -318,7 +430,7 @@ class MediaStore:
             try:
                 rows = conn.execute(
                     """
-                    SELECT hash, room, mime, size, name, uploader, created_at
+                    SELECT hash, room, mime, size, name, uploader, created_at, audience
                     FROM media_index
                     WHERE room = ?
                     ORDER BY hash
@@ -381,8 +493,8 @@ class MediaStore:
             conn.execute(
                 """
                 INSERT INTO media_index
-                    (hash, room, mime, size, name, uploader, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (hash, room, mime, size, name, uploader, created_at, audience)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.hash,
@@ -392,6 +504,7 @@ class MediaStore:
                     record.name,
                     record.uploader,
                     record.created_at,
+                    record.audience,
                 ),
             )
             return
@@ -401,10 +514,19 @@ class MediaStore:
             store_conn.execute(
                 """
                 INSERT OR IGNORE INTO media_index
-                    (hash, room, mime, size, name, uploader, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (hash, room, mime, size, name, uploader, created_at, audience)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (record.hash, record.room, record.mime, record.size, record.name, record.uploader, record.created_at),
+                (
+                    record.hash,
+                    record.room,
+                    record.mime,
+                    record.size,
+                    record.name,
+                    record.uploader,
+                    record.created_at,
+                    record.audience,
+                ),
             )
             self._store._commit(store_conn)
 
@@ -421,10 +543,16 @@ class MediaStore:
                     name TEXT NOT NULL,
                     uploader TEXT NOT NULL,
                     created_at REAL NOT NULL,
+                    audience TEXT NOT NULL DEFAULT 'room',
                     PRIMARY KEY (room, hash)
                 )
                 """
             )
+            # A media_index created before the audience column existed: every row in it is
+            # ordinary room media, which is exactly what the column default says.
+            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(media_index)").fetchall()}
+            if "audience" not in columns:
+                conn.execute("ALTER TABLE media_index ADD COLUMN audience TEXT NOT NULL DEFAULT 'room'")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_media_index_room ON media_index(room)")
             self._store._commit(conn)
 
@@ -446,6 +574,7 @@ def _row_to_record(row: Any) -> MediaRecord:
         name=str(row[4]),
         uploader=str(row[5]),
         created_at=float(row[6]),
+        audience=str(row[7]) if len(row) > 7 and row[7] else AUDIENCE_ROOM,
     )
 
 

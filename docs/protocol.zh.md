@@ -1,15 +1,17 @@
 *[English](protocol.md) · 中文*
 
-# Loreweaver 联网 TUI —— 协议 2.3
+# Loreweaver 联网 TUI —— 协议 2.4
 
 这是 loreweaver 服务器（通过 `python -m app --serve` 启动）与 OpenTUI 终端客户端之间开放、带版本的协议。引擎本身（确定性内核加 AI 守秘人）和用什么传输无关；与传输无关的会话逻辑在 `net.session.SessionCore` 里，这份文档描述的是接口，不绑定任何编程语言。
 
-控制流使用 `{"type": ...}` 形状的 JSON 帧，协议版本为 `"2.3"`。同一套帧和 `join` 握手可以跑在两种传输上：
+控制流使用 `{"type": ...}` 形状的 JSON 帧，协议版本为 `"2.4"`。同一套帧和 `join` 握手可以跑在两种传输上：
 
 - **Iroh** 是 `--serve` 实际启动的默认传输：点对点 QUIC，服务端打印可分享 ticket，不需要域名、证书或端口转发。控制帧是在长连接双向流上的 newline-delimited JSON；媒体字节使用同一连接上的额外双向流。
 - **WebSocket**（`net.tui_server`）只留作离线测试和本机回环，不是 `--serve` 的一个选项。控制帧是文本消息，媒体字节是二进制消息。
 
 两种传输驱动的是同一个 `SessionCore` / `RoomHub`。
+
+**2.4（增量）**新增 `report` 帧（服务端 → 客户端）：HTML 团报（`.report html`，以及仅守秘人可用的 `.report html reveal`），存为房间不公开 blob，只通知请求它的那条连接。2.3 客户端忽略此帧，只是收不到文件。
 
 **版本控制。**`"2.0"` 是对 1.x 的一次性破坏性整合——主版本号即兼容契约：客户端与服务端必须在主版本（`2`）上一致，`welcome.protocol` 主版本不同的客户端应拒绝连接（或明确警告）。`loreweaver-protocol` 自带这个判定（`protocolMismatch`），任何客户端都不必自己写；两个参考客户端——TUI 与 Loreweaver Studio——都取更强的那一档：**拒绝连接**、断开、并把两边的版本号都说出来。继续与主版本不同的服务端对话，结果是误读帧而不是失败，比拒绝难排查得多。版本号解析不出来时不算证据，不能当成版本不一致来处理。同一个主版本里，小版本只做增量；客户端忽略无法识别的帧类型与字段——但有**一条规范性例外：能拦下渲染的字段永远不可忽略**。客户端遇到带 `visible_when` 的面板模板块而无法对该条件求值（不实现这个字段、不实现语法的某个角落、或求值本身出错）时，**必须不渲染该块**：无视这个条件，等于把作者藏起来的内容画到屏幕上，所以判不出来的一律不画，和 `$var` 取不到值是同一条规矩。线上没有任何东西能让服务端核对这一点（`welcome.protocol` 报的是**服务端**版本，`join` 不携带客户端版本），因此这是一条客户端一致性要求，用到 `visible_when` 的包即以 2.1 为最低版本。同时也要看清它**不是**什么：带条件的块，内容无论条件成不成立都随清单下发——`visible_when` 决定的是块**何时**画出来，不是其内容是否到达客户端；保密靠 `audience`（服务端解析）与 `state` 变量过滤器。2.0 打破了哪些东西，各自了结了哪个老毛病：
 
@@ -41,7 +43,7 @@
 ## 服务端 → 客户端
 
 - `welcome` — 成功 `join` 时发送一次：
-  `{type:"welcome", protocol:"2.3", features:["media","audio","imagegen"?,"demo"?,"update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
+  `{type:"welcome", protocol:"2.4", features:["media","audio","imagegen"?,"demo"?,"update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
   `version` 是服务端自己的发布版本（和客户端一比就能看出两边不一致）。`"update"` 特性仅在守秘人连接且服务端运维配置了自更新命令时出现，有它才允许发 `admin_update_server`。
   `demo` 表示服务端正在用离线示例守秘人、向量功能已启用，且本次检查时这个守秘人房间为空。服务端会在房间回合锁内再次检查，过期 flag 不会覆盖战役状态；客户端收到 `admin_config{using_demo:false}`（例如从模型页保存后）会立即移除入口，否则重连时重新计算，过期操作也会被服务端拒绝。
 - `error` — 本地化的故障通知；`bad_key`、`join_timeout` 和 `too_many_connections` 关闭连接（它们仅在 `join` 握手期间或之前发生），其他不关闭：
@@ -107,6 +109,10 @@
   是该轮开头那类工作的粗分类，绝不含工具名或参数；`round` 从 1 开始计数。开场的 `busy` 以及更早版本的
   服务器都不带这两个字段，忽略它们的客户端行为与以前完全一致；重复的 `busy` 应视为同一个指示器的刷新，
   而不是新一轮回合。
+- `report`（v2.4）— 服务端生成的团报已为**本连接**准备好。只发给发出该 `.report html` / `.report html reveal` 的那一条连接——绝不广播、不进加入回放、不出现在任何列表里：
+  `{type:"report", hash:string, name:string, size:int, mime:"text/html", variant:"player"|"reveal"}`
+  页面是一个自包含的 HTML 文件（内联 CSS，无脚本，无外部资源），存为房间的**不公开** blob；用普通的媒体 GET（`{op:"get", hash}`）拉取并校验 sha256。`variant:"reveal"` 是守秘人的剧透复盘版：它的 blob 只回应本房间守秘人密钥连接的 GET——其他连接得到 `media_not_found`，与房间里不存在的哈希完全一样。`name` 是建议文件名，按不可信处理（只保留基础文件名）。
+  **客户端规则（规范性）：**客户端**不得**在自己的界面里渲染团报（不用 webview、不做内联 HTML 面板）——只把文件存下来，**可以**把存好的文件交给系统浏览器打开。页面内容是不可信的桌面文本；浏览器打开本地文件才是它被设计面对的沙箱，客户端自己的界面不是。
 - `pong`: `{type:"pong", t:number}`
 
 ## 一个回合怎么走
@@ -182,6 +188,7 @@ SVG 是“不透明存储”的例外：服务端只接受静态安全子集（`
 1. 客户端通过 MediaChannel 发送 GET：header `{op:"get", hash}`。
 2. 服务端确认该 hash 属于调用者房间，然后返回 `{op:"get",hash,size,mime,name}` 加原始字节。客户端应校验 sha256，并可缓存到 `~/.loreweaver/cache/media/<hash>`。
 3. 不属于房间媒体的 hash 会继续在**本房间已启用**包的已安装资产里解析——这就是面板资产的拉取路径。回复形状相同；服务端在返回前会把字节重新对照 manifest 摘要校验。房间没启用的包，它的 hash 仍然返回 `media_not_found`——这个接口不能被当成任意文件的下载口。
+4. （v2.4）房间里还可能有**不公开** blob：服务端生成的团报（`text/html`，见 `report` 帧）。它们从不作为 `media` 广播、不在加入时回放、也不进房间导出。`members` 受众（玩家版）回应本房间任何成员的 GET；`keeper` 受众（复盘版）只回应守秘人密钥连接，对其他人一律 `media_not_found`——与未知哈希的回复相同。`text/html` **不是**可上传类型：客户端永远不能提交 HTML。团报字节计入房间的图片配额。
 
 MediaChannel 的传输格式：
 
