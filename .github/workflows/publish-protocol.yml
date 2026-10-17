@@ -1,0 +1,97 @@
+name: publish-protocol
+# Publishes clients/protocol to npm as `loreweaver-protocol` from CI instead of a
+# maintainer's shell. Auth is npm trusted publishing (OIDC): the package's settings
+# on npmjs.com name this repository and this workflow file as its trusted publisher,
+# so no npm token exists anywhere, and every publish carries a signed provenance
+# statement linking the tarball to this run.
+#
+# Publish decision = push the tag `protocol-v<version>` where <version> equals
+# clients/protocol/package.json (the tag is checked). Its major.minor must equal
+# `_PROTOCOL_VERSION` in net/session.py, the rule
+# tests/architecture/test_protocol_version_sync.py enforces; the check here repeats
+# it so a stale tag cannot publish a package that advertises the wrong protocol.
+# `workflow_dispatch` rehearses with `npm publish --dry-run` unless dry_run is
+# unticked. A version already on the registry is skipped, so a rerun is safe.
+on:
+  push:
+    tags:
+      - "protocol-v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "npm publish --dry-run (nothing is published)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: npm publish loreweaver-protocol
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write   # the OIDC token npm exchanges for a publish grant
+    defaults:
+      run:
+        shell: bash
+        working-directory: clients/protocol
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+
+      - name: The tag, package.json and net/session.py agree on the version
+        run: |
+          set -euo pipefail
+          version="$(jq -r .version package.json)"
+          protocol="$(sed -nE 's/^_PROTOCOL_VERSION[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' ../../net/session.py)"
+          [ -n "$protocol" ] || { echo "net/session.py no longer declares _PROTOCOL_VERSION as a string literal"; exit 1; }
+          [ "${version%.*}" = "$protocol" ] || { echo "loreweaver-protocol $version would publish protocol ${version%.*}, but the server speaks $protocol"; exit 1; }
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            [ "$GITHUB_REF_NAME" = "protocol-v$version" ] || { echo "tag $GITHUB_REF_NAME does not match package.json ($version): expected protocol-v$version"; exit 1; }
+          fi
+          echo "loreweaver-protocol $version (protocol $protocol)"
+
+      # Same gate as ci.yml: `bun run test` is the type check AND the runner. The
+      # workspace root is clients/ (bun.lock lives there); bun finds it from here.
+      - name: Test and build
+        run: bun install && bun run test && bun run build
+
+      # Trusted publishing needs npm 11.5.1+ on Node 22.14+. setup-node's registry-url
+      # writes the .npmrc; with no token set, npm falls back to the OIDC exchange.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+      - run: npm install -g npm@11 && npm --version && node --version
+
+      - name: Publish (a version already on the registry is skipped)
+        env:
+          DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: |
+          set -euo pipefail
+          name="$(jq -r .name package.json)"
+          version="$(jq -r .version package.json)"
+          if npm view "$name@$version" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "skip: $name@$version is already on the registry"
+            exit 0
+          fi
+          echo "npm publish $name@$version $DRY_RUN"
+          # prepublishOnly rebuilds dist/ (package.json); --access public matches publishConfig.
+          npm publish --access public --registry https://registry.npmjs.org $DRY_RUN
+
+      - name: Verify on the registry (the registry processes a new version for a few minutes)
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          name="$(jq -r .name package.json)"
+          version="$(jq -r .version package.json)"
+          for i in $(seq 1 40); do
+            if [ "$(npm view "$name@$version" version --registry https://registry.npmjs.org 2>/dev/null)" = "$version" ]; then
+              echo "ok $name@$version"; exit 0
+            fi
+            sleep 15
+          done
+          echo "$name@$version is not on the registry after 10 minutes"; exit 1
