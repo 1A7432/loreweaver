@@ -27,7 +27,11 @@ from infra.llm import FakeLLM
 # more; a bulk tool cannot slip in under it. 2026-09-24: 36 tools / ~19.3k, after
 # `create_npc` and `update_character_attribute` joined play — both used in play by the
 # 《安土》 Studio run (see `_PLAY_ESSENTIALS`) — and the ceiling did not move.
-PLAY_PHASE_SCHEMA_BUDGET = 20_000
+# 2026-10-21: 20_000 -> 21_000. The 19.3k above was measured while the docstring parser
+# dropped every continuation line of an `Args:` entry (14 play parameters cut mid-sentence);
+# with the full descriptions the same 36 tools measure 20.4k. No tool grew; the text the
+# model should always have received is now counted.
+PLAY_PHASE_SCHEMA_BUDGET = 21_000
 
 # What a turn cannot be run without. Losing any of these to a phase reclassification is
 # not a budget question — it breaks play.

@@ -441,17 +441,23 @@ def _first_doc_line(doc: str | None) -> str:
 
 
 def _parse_docstring_args(doc: str | None) -> dict[str, str]:
-    """Parse a Google-style `Args:` block into `{param_name: description}`."""
+    """Parse a Google-style `Args:` block into `{param_name: description}`.
+
+    A description runs over every continuation line (indented deeper than its arg line),
+    joined with single spaces. Keeping only the arg line shipped 14 play-phase parameters
+    cut mid-sentence, e.g. `game_clock`'s `"+2 hours"/"+1` with its format example lost."""
     if not doc:
         return {}
 
     descriptions: dict[str, str] = {}
     in_args = False
     args_indent: int | None = None
+    current: str | None = None
     for line in doc.splitlines():
         if _ARGS_HEADER_RE.match(line):
             in_args = True
             args_indent = None
+            current = None
             continue
         if not in_args or not line.strip():
             continue
@@ -464,7 +470,10 @@ def _parse_docstring_args(doc: str | None) -> dict[str, str]:
 
         match = _ARG_LINE_RE.match(line)
         if match and indent == args_indent:
-            descriptions[match.group("name").lstrip("*")] = match.group("desc").strip()
+            current = match.group("name").lstrip("*")
+            descriptions[current] = match.group("desc").strip()
+        elif current is not None and indent > args_indent:
+            descriptions[current] = f"{descriptions[current]} {line.strip()}".strip()
 
     return descriptions
 

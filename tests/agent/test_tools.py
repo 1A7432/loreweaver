@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 
 from agent.context import AgentCtx
-from agent.tools import Toolset, tool
+from agent.tools import Toolset, _parse_docstring_args, tool
 from infra.i18n import t
 
 
@@ -150,6 +150,65 @@ def test_required_str_param_type_description_and_required_list():
         "description": "The widget's display name.",
     }
     assert params["required"] == ["name"]
+
+
+_WRAPPED_ARGS_DOC = """Do a thing.
+
+    Args:
+        value: Depends on action. For set, e.g. "1926-03-15 14:00"; for advance,
+            e.g. "+2 hours"/"+1 day"; for add_event, the event
+            description.
+        action: show / set / advance.
+        effort: How hard to think --
+            "low" for filler, "high" for climaxes.
+
+    Returns:
+        Confirmation text that is not an argument description.
+"""
+
+
+def test_parse_docstring_args_joins_continuation_lines_with_single_spaces():
+    parsed = _parse_docstring_args(_WRAPPED_ARGS_DOC)
+
+    assert parsed["value"] == (
+        'Depends on action. For set, e.g. "1926-03-15 14:00"; for advance, '
+        'e.g. "+2 hours"/"+1 day"; for add_event, the event description.'
+    )
+
+
+def test_parse_docstring_args_stops_each_description_at_the_next_arg_and_at_returns():
+    parsed = _parse_docstring_args(_WRAPPED_ARGS_DOC)
+
+    assert parsed["action"] == "show / set / advance."  # not swallowed into value, nor extended
+    assert parsed["effort"] == 'How hard to think -- "low" for filler, "high" for climaxes.'
+    assert set(parsed) == {"value", "action", "effort"}  # `Returns:` text is nobody's description
+
+
+def test_parse_docstring_args_single_line_args_are_unchanged():
+    assert _parse_docstring_args("Hi.\n\n    Args:\n        a: First.\n        b (int): Second.\n") == {
+        "a": "First.",
+        "b": "Second.",
+    }
+
+
+class _WrappedArgTool:
+    @tool
+    async def clock(self, ctx: AgentCtx, value: str, action: str = "show") -> str:
+        """Drive a clock.
+
+        Args:
+            value: For advance, e.g. "+2 hours"/"+1
+                day"; for set, a timestamp.
+            action: show or set.
+        """
+        return value + action
+
+
+def test_schema_param_description_keeps_the_wrapped_part_of_an_args_entry():
+    properties = _schema_of(Toolset(_WrappedArgTool()), "clock")["function"]["parameters"]["properties"]
+
+    assert properties["value"]["description"] == 'For advance, e.g. "+2 hours"/"+1 day"; for set, a timestamp.'
+    assert properties["action"]["description"] == "show or set."
 
 
 def test_self_and_ctx_are_never_in_the_schema():
