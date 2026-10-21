@@ -465,3 +465,58 @@ async def test_pool_backed_tools_are_absent_from_a_room_that_has_no_pool():
 
     # An unfiltered caller (every pre-capability call site) still sees everything.
     assert pool_tools <= {schema["function"]["name"] for schema in toolset.schemas()}
+
+
+# ---------------------------------------------------------------------------
+# kp_note: the two scene categories are the only player-visible ones
+# ---------------------------------------------------------------------------
+
+
+def _note_tools() -> tuple[NoteTools, Services]:
+    services = build_services(Settings(), llm=FakeLLM(), embeddings=FakeEmbeddings(8))
+    return NoteTools(services), services
+
+
+async def test_kp_note_set_on_a_scene_category_reminds_the_keeper_it_is_on_the_players_scene_card():
+    """2026-10-21 Studio run: the Keeper filed a keeper-side aside under `current_focus` and
+    every player's scene card showed it. `current_scene`/`current_focus` are the all-viewer
+    `scene` singleton, so the confirmation of a write there says so at the moment of writing."""
+    note_tools, services = _note_tools()
+    i18n = services.i18n.with_locale("en")
+
+    for category, field in (("current_scene", "name"), ("current_focus", "focus")):
+        result = await note_tools.kp_note(_ctx(), action="set", category=category, content="The harbour at dusk")
+        assert result == i18n.t("kp_tools.know.note.scene_set_done", category=category, content="The harbour at dusk")
+        assert result != i18n.t("kp_tools.know.note.set_done", category=category, content="The harbour at dusk")
+        assert "player" in result.lower()
+        scene = await services.documents.get_singleton(CHAT_KEY, "scene")
+        assert scene is not None and scene.data[field] == "The harbour at dusk"
+
+    zh = await note_tools.kp_note(_ctx(locale="zh"), action="set", category="current_focus", content="港口黄昏")
+    assert zh == services.i18n.with_locale("zh").t("kp_tools.know.note.scene_set_done", category="current_focus", content="港口黄昏")
+    assert zh != services.i18n.with_locale("zh").t("kp_tools.know.note.set_done", category="current_focus", content="港口黄昏")
+
+
+async def test_kp_note_set_on_a_keeper_category_keeps_the_plain_confirmation():
+    note_tools, services = _note_tools()
+    i18n = services.i18n.with_locale("en")
+
+    for category in ("kp_reasoning", "npc_status", "world_changes"):
+        result = await note_tools.kp_note(_ctx(), action="set", category=category, content="the clerk is lying")
+        assert result == i18n.t("kp_tools.know.note.set_done", category=category, content="the clerk is lying")
+
+    # and none of it landed on the player-visible scene card
+    assert await services.documents.get_singleton(CHAT_KEY, "scene") is None
+
+
+def test_the_kp_note_schema_tells_the_model_which_categories_the_players_see():
+    """The model only ever sees the schema: the docstring must name the two player-visible
+    categories where it reads them, not leave `current_scene`/`current_focus` looking like
+    two more keeper notebook pages."""
+    note_tools, _services = _note_tools()
+    schemas = {schema["function"]["name"]: schema["function"] for schema in Toolset(note_tools).schemas()}
+
+    description = schemas["kp_note"]["description"]
+    assert "current_scene" in description and "current_focus" in description
+    assert "player-visible" in description.lower()
+    assert "keeper-only" in description.lower()

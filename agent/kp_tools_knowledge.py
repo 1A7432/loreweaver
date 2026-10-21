@@ -1088,8 +1088,9 @@ class NoteTools(_KnowledgeToolsBase):
     @tool
     async def kp_note(self, ctx: AgentCtx, action: str, category: str, content: str = "") -> str:
         """The AI KP's free-form notebook -- improvised scenes, world-state changes, NPC status updates,
-        player-action history, etc. Kept separate from the (read-only, official) module knowledge pool;
-        this is for whatever comes up during play.
+        player-action history, etc. Kept separate from the (read-only, official) module knowledge pool.
+        current_scene and current_focus are PLAYER-VISIBLE (shown on every player's scene card): table-facing
+        text only there (the scene's name, what the table is doing). Every other category is keeper-only.
 
         Args:
             action: set (set a single-value state) / add (append a note) / update (edit the last note) /
@@ -1173,7 +1174,7 @@ class NoteTools(_KnowledgeToolsBase):
         if action in ("set", "add", "update"):
             data[field] = content
             await docs.put_singleton(chat_key, "scene", data)
-            return i18n.t("kp_tools.know.note.set_done", category=category, content=content)
+            return i18n.t("kp_tools.know.note.scene_set_done", category=category, content=content)
 
         if action == "delete":
             if field not in data:
