@@ -105,6 +105,52 @@ async def test_a_hidden_roll_is_private_and_stays_out_of_the_lane() -> None:
     assert await _lane(services, room) == []
 
 
+# --- `ui` frames: inline ones are log lines, sidebar ones are regions -------------------
+
+
+async def test_the_lane_takes_inline_ui_frames_and_never_a_sidebar_region() -> None:
+    """An inline frame is a line of the table's scrollback and replays where it was seen;
+    a sidebar frame is a region the next frame with its `id` replaces — replaying a log
+    of them would flicker stale values through it, and the protocol leaves a sidebar to
+    the hook that re-emits it each turn."""
+    services = _services()
+    room = "tui:group:ui-lane"
+    reply_id = await append_message(services, room, DEFAULT_HISTORY_KEY, role="assistant", content="Dusk.", turn=3)
+    card = Event.ui({"blocks": [{"kind": "text", "text": "Ledger: 800"}], "panel": "inline"})
+    meter = Event.ui(
+        {
+            "blocks": [{"kind": "meter", "label": "Fear", "value": 3, "min": 0, "max": 10}],
+            "panel": "sidebar",
+            "id": "fear",
+        }
+    )
+    hidden = Event(kind="ui", data={"blocks": [{"kind": "text", "text": "x"}], "panel": "inline"}, private=True)
+
+    await record_turn_events(services, room, [card, meter, hidden])
+
+    lane = await _lane(services, room)
+    assert [record["event"]["data"]["panel"] for record in lane] == ["inline"]
+    assert lane[0]["event"]["kind"] == "ui" and lane[0]["after_id"] == reply_id and lane[0]["turn"] == 3
+    # The live object carries its record's id, like every laned event (join-replay dedupe).
+    assert card.origin_id == lane[0]["id"] and meter.origin_id == ""
+
+
+async def test_a_named_anchor_wins_over_the_current_leaf() -> None:
+    """A late writer (the Stage Director's post-turn pass) names the message its own turn
+    ended on; by then the leaf may be the NEXT turn's player line."""
+    services = _services()
+    room = "tui:group:named-anchor"
+    reply_id = await append_message(services, room, DEFAULT_HISTORY_KEY, role="assistant", content="Dusk.", turn=4)
+    await append_message(services, room, DEFAULT_HISTORY_KEY, role="user", content="I go on", turn=5)
+
+    await record_turn_events(
+        services, room, [Event.ui({"blocks": [{"kind": "text", "text": "x"}], "panel": "inline"})], anchor=reply_id
+    )
+
+    (record,) = await _lane(services, room)
+    assert record["after_id"] == reply_id and record["turn"] == 4  # the anchor's own stamp, not the counter's
+
+
 # --- the window is counted in TURNS ---------------------------------------------------
 
 

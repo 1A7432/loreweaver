@@ -82,7 +82,13 @@ async def restore(services: Services, chat_key: str, turn: int, *, history_key: 
     moment by construction, not by coincidence. The join-replay event lane
     (`gateway.turn.record_turn_events`) rides room_state and is written the moment each
     roll happens, so the snapshot of turn N already holds turn N's own rolls and none of
-    the abandoned future's — restoring it is exactly right.
+    the abandoned future's — restoring it is exactly right. Two writers land AFTER that
+    snapshot: a hook's inline `ui` frames (published behind the reply) and the Stage
+    Director's staging (the post-turn pass). They reach turn N's snapshot through the
+    pass's refresh (`agent.scribe_coord.refresh_latest_snapshot`) unless a newer turn
+    started first (or the Scribe is off); then a rewind to N replays without them — a
+    loss, never a leak: the pass is cancelled below before the lane is swapped, and a
+    record anchored on an abandoned branch is never on the path a replay walks.
 
     The abandoned turns are still in the tree. Playing forward from here appends children
     to the restored leaf, which is how a branch happens: nothing was deleted to make room

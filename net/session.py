@@ -24,6 +24,7 @@ from agent.context import AgentCtx, FsAdapter, LocalFs
 from agent.history import DEFAULT_HISTORY_KEY, load_chain
 from agent.kp_tools import build_kp_toolset
 from agent.loop import KPTurnResult
+from agent.player_line import split_player_line
 from agent.services import Services
 from agent.tools import Toolset
 from gateway.audio import add_audio_item, audio_state_frame, has_audio_state, list_audio_items
@@ -35,6 +36,7 @@ from gateway.media import MEDIA_HISTORY_REPLAY_CAP, media_frame, record_media_hi
 from gateway.ops import Censor, RateLimiter, censor_from_settings, is_media_enabled, set_media_enabled
 from gateway.session import SessionSource
 from gateway.turn import TURN_EVENT_HISTORY_KEY, publish_state, run_turn
+from gateway.ui_media import filter_ui_media
 from infra.i18n import I18n, get_i18n
 from infra.media_store import (
     ALLOWED_AUDIO_MIMES,
@@ -405,10 +407,13 @@ class SessionCore:
 
         A joining/reconnecting player would otherwise see an empty log while the KP session keeps
         continuing from server-side history. Renders the last `_HISTORY_REPLAY_CAP` `chat_history`
-        entries as `narrative` frames, each KP reply preceded by that turn's public tool events —
-        the dice and the NPC lines. Those used to be dropped, because only prose was ever stored:
-        a member who reconnected got a transcript with every roll missing while everyone who
-        stayed connected kept theirs, so the same scene read differently at one table.
+        entries as `narrative` frames, each followed by the public events the table saw right
+        after it — the dice, the NPC lines, and the inline `ui` frames (a hook's ledger card, the
+        Stage Director's picture or handout). Those used to be dropped, because only prose was
+        ever stored: a member who reconnected got a transcript with every roll and every handout
+        missing while everyone who stayed connected kept theirs, so the same scene read
+        differently at one table. A player line renders as the live echo did — the speaker in
+        `name`, the body as text — never with the Keeper-facing speaker tag inline.
         Best-effort: any failure silently no-ops.
         """
         chat_key = self._ctx_for(member).chat_key
@@ -499,6 +504,22 @@ class SessionCore:
 
             async def _deliver_anchored(anchor: str) -> None:
                 for record_id, event in events_by_anchor.pop(anchor, []):
+                    if event.kind == "ui":
+                        # The reachability gate again, at replay time: a picture recorded
+                        # from a pack the room has since disabled is no longer fetchable
+                        # here, and a hash a client cannot fetch renders as a permanent
+                        # broken image (`gateway.ui_media`). The lane holds hashes, never
+                        # bytes; room media outlives the lane in every reset scope. A
+                        # malformed record (importable verbatim through a room backup)
+                        # costs that record, never the rest of the replay.
+                        try:
+                            frames = await filter_ui_media(self.services, chat_key, [event.data])
+                        except Exception:
+                            logger.debug("replay: skipping a malformed ui record for %s", chat_key, exc_info=True)
+                            continue
+                        if not frames:
+                            continue
+                        event = Event.ui(frames[0])
                     await self._deliver_replay(member, event, replayed, record_id)
 
             # A pre-M20 room_state blob (adopted into the tree by the first AI turn) has
@@ -526,9 +547,21 @@ class SessionCore:
                 # to the messages around it still do — the roll happened, the prose did
                 # not.
                 anchor = str(entry.get("_lw_id") or "")
-                if text and role == "user" and not text.startswith((".", "/")):
+                # The persisted player line carries the speaker tag the KEEPER reads
+                # (`[name]\n…`, `agent.player_line`); the live echo carried the name in
+                # its own field and the body as text. Replay renders the echo's shape, so
+                # a rejoining member sees the same bubble — not the tag inside it. The
+                # command-echo filter still reads the STORED line, as it always has: a
+                # tagged line was never filtered, and a tagged "..." line (a player
+                # trailing off) must not start being dropped now.
+                speaker, body = split_player_line(text) if role == "user" else ("", text)
+                body = body.strip()
+                if body and role == "user" and not text.startswith((".", "/")):
                     await self._deliver_replay(
-                        member, Event.narrative(speaker="player", text=text, fmt="plain"), replayed, anchor
+                        member,
+                        Event.narrative(speaker="player", name=speaker, text=body, fmt="plain"),
+                        replayed,
+                        anchor,
                     )
                 elif text and role == "assistant":
                     await self._deliver_replay(

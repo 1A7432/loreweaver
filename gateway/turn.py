@@ -17,7 +17,9 @@ streaming draft had already opened — so a streaming turn showed the narration 
 roll it narrated and a non-streaming turn showed it below, same room, order decided by
 the provider. They are also recorded as they happen (``record_turn_events``, anchored to
 the transcript line they followed) so a member who joins or reconnects replays the same
-scene — the same interleaving — rather than one with every roll missing. On a real
+scene — the same interleaving — rather than one with every roll missing; so are the
+INLINE ``ui`` frames, the hooks' right after the reply and the Stage Director's from the
+post-turn pass, anchored to the turn they belong to however late they land. On a real
 (non-command) AI-KP turn, the KP narrative is also followed by a best-effort
 call into ``gateway.director.run_director`` (M10), which lets the party's AI
 companions take an auto-paced turn (their own sub-turns fan out through this
@@ -352,8 +354,18 @@ async def run_turn(
             # narrative it annotates, before the closing `state` snapshot. Image
             # blocks pass the reachability gate first: a hash this room cannot fetch
             # would render as a permanent broken picture (`gateway.ui_media`).
-            for ui_frame in await filter_ui_media(services, ctx.chat_key, result.ui_frames):
-                await hub.publish(ctx.chat_key, Event.ui(ui_frame))
+            ui_frames = await filter_ui_media(services, ctx.chat_key, result.ui_frames)
+            ui_events = [Event.ui(ui_frame) for ui_frame in ui_frames]
+            for ui_event in ui_events:
+                await hub.publish(ctx.chat_key, ui_event)
+            # …and the inline ones into the replay lane, right after the reply they
+            # annotate — a hook's ledger card is table content like a roll, and a member
+            # who reconnected used to get the narration without it. Anchored to the
+            # reply by id (it IS the leaf right now; naming it says which message is
+            # meant). A turn that committed nothing (provider error: no reply on the
+            # path) records nothing, exactly as its narration is not replayed.
+            if ui_events and result.reply_record_id:
+                await record_turn_events(services, ctx.chat_key, ui_events, anchor=result.reply_record_id)
             # Hook-emitted module-panel events (protocol v1.8) follow the same slot,
             # but are NOT a broadcast: each reaches only members whose own manifest
             # contains the target panel (gateway.panels.deliver_panel_events).
@@ -466,7 +478,16 @@ async def run_scribe_pass(
                 # the whole isolation contract (tests/architecture).
                 from agent.stage_director import run_director
 
-                await run_director(services, ctx, text, result.reply, beat=outcome.beat, hub=hub)
+                # Where its staging replays: the message THIS turn ended on, captured
+                # when the pass was scheduled — never the leaf now, which is the next
+                # turn's player line whenever this pass runs late (defensive pattern
+                # #7). A caller with no epoch (tests) falls back to this turn's reply,
+                # which the result carries; with neither, the staging is shown live
+                # only.
+                anchor = (snapshot_epoch.transcript_leaf if snapshot_epoch is not None else None) or (
+                    result.reply_record_id or None
+                )
+                await run_director(services, ctx, text, result.reply, beat=outcome.beat, hub=hub, anchor=anchor)
         # Refresh the LATEST boundary (current chronicle turn), not `result.turn`:
         # companion sub-turns have already photographed the later indexes. Skip
         # when the counter has moved past the turn this pass was scheduled on —
@@ -724,12 +745,37 @@ def prune_turn_events(records: list[Any]) -> list[Any]:
     return kept[-TURN_EVENT_HISTORY_CAP:]
 
 
-async def record_turn_events(services: Any, chat_key: str, events: list[Event]) -> None:
+def _laned(event: Event) -> bool:
+    """Whether ``event`` belongs in the replay lane: PUBLIC, and — for a ``ui`` frame —
+    INLINE. An inline frame is a line of the table's scrollback; a ``sidebar`` frame
+    is a region the next frame with its ``id`` replaces, which a log replayed in order
+    cannot represent (the protocol leaves it to the hook to re-emit each turn)."""
+    if event.private:
+        return False
+    return event.kind != "ui" or event.data.get("panel", "inline") == "inline"
+
+
+async def record_turn_events(
+    services: Any, chat_key: str, events: list[Event], *, anchor: str | None = None
+) -> None:
     """Store public events so a joining member's replay can include them — anchored to
-    the history message the transcript currently ends on (`agent.history.current_leaf`).
+    the history message the transcript currently ends on (`agent.history.current_leaf`),
+    or to ``anchor`` when the caller names one.
 
     Best-effort, and PUBLIC only: a private event is a unicast to one connection and has
-    no place in a lane that is re-broadcast to whoever joins next.
+    no place in a lane that is re-broadcast to whoever joins next. A ``ui`` frame joins
+    only when it is INLINE (`_laned`).
+
+    ``anchor`` exists for the writer that runs LATE: the Stage Director stages a beat
+    from the post-turn pass, outside the turn lock, and by the time it publishes the
+    NEXT turn may already have written its player line — the current leaf would replay
+    the staging after that line, in a turn it does not belong to. Such a writer passes
+    the message its own turn ended on, captured when the pass was scheduled
+    (`agent.scribe_coord.ScribeEpoch.transcript_leaf`). That writer is outside the turn
+    lock, so the lane has writers on both sides of it; the read-modify-write below
+    never suspends on the SQLite store (each op runs synchronously under the store's
+    own lock), so the two cannot interleave — the footing every post-turn writer
+    (whispers, the Director's larder) already stands on.
 
     The anchor is a message ID, not a turn number: replay walks the persisted transcript
     and emits each anchored event right after its message, so a KP roll made before a
@@ -739,14 +785,15 @@ async def record_turn_events(services: Any, chat_key: str, events: list[Event]) 
     advances the counter mid-turn, so two messages can share a stamp and a stamp can
     have no message. The turn IS kept on the record, for the lane's window.
     """
-    public = [event for event in events if not event.private]
+    public = [event for event in events if _laned(event)]
     if not public:
         return
     try:
         from agent.chronicle import chronicle_turn
         from agent.history import DEFAULT_HISTORY_KEY, current_leaf
 
-        anchor = await current_leaf(services, chat_key)
+        if anchor is None:
+            anchor = await current_leaf(services, chat_key)
         # The turn stamp (for the lane's window only): the anchor message's own — exact
         # both during a turn (its player line) and after it (its reply) — else the
         # completed-turn counter, before any message.
@@ -835,9 +882,9 @@ ROOM_FACETS = (
     RoomStateFacet(
         name="turn_events",
         owner="gateway.turn",
-        # The public dice/NPC frames of recent turns: the same narrative session
-        # `agent.history`'s conversation facet holds, in its wire form. A story reset
-        # that kept them would replay rolls from a campaign the room just erased.
+        # The public dice/NPC/inline-ui frames of recent turns: the same narrative
+        # session `agent.history`'s conversation facet holds, in its wire form. A story
+        # reset that kept them would replay rolls from a campaign the room just erased.
         reset_scope="story",
         state_keys=frozenset({TURN_EVENT_HISTORY_KEY}),
         storages=frozenset({STORAGE_ROOM_STATE}),

@@ -160,11 +160,16 @@ connections receive `error too_many_connections` before `join` is read.
   only, never dot-command echoes — and, since v2.3, every `dice` and npc
   `narrative` frame the table saw live (an AI-Keeper roll, a companion's turn, a
   typed `.ra`) is replayed right after the transcript line it followed live, so
-  the interleaving is the one everyone watched (see Turn flow, steps 5–6). Live
-  frames published while a member's replay is running are delivered after it,
-  in order, once. Replayed frames are indistinguishable from live ones by
-  design: a client renders them in arrival order and dedupes a `narrative` by
-  `id`.
+  the interleaving is the one everyone watched (see Turn flow, steps 5–6). The
+  same holds for every INLINE `ui` frame (`panel:"inline"`): a hook's card right
+  after the reply it followed, and the Stage Director's staging (a picture, a
+  letter, a title card) right after the turn it dressed — even when it finished
+  rendering after the next player had already spoken. A replayed player line has
+  the live echo's shape: `speaker:"player"`, the speaker in `name`, the player's
+  own words in `text`. Live frames published while a member's replay is running
+  are delivered after it, in order, once. Replayed frames are indistinguishable
+  from live ones by design: a client renders them in arrival order and dedupes a
+  `narrative` by `id`.
 - `narrative_delta` — one streaming text delta for a draft bubble:
   `{type:"narrative_delta", id:string, speaker:"kp", name?:string, text:string}`
   Clients concatenate deltas sharing an `id` into a draft bubble (render as
@@ -192,8 +197,11 @@ connections receive `error too_many_connections` before `join` is read.
   (`core.hooks`), so clients may render them as-is. The content is PLAYER-VISIBLE
   authorial output on the same trust stance as narration: hooks must never emit
   keeper-only secrets into it, and the engine never routes keeper tool results into
-  this frame. Not replayed on join — a hook that wants a persistent panel simply
-  re-emits it each turn:
+  this frame. An `inline` frame is part of the story log and is replayed on join
+  where the table saw it (see the join replay note under `narrative`); its image
+  hashes pass the same reachability check again at replay time. A `sidebar` frame
+  is not replayed — a hook that wants a persistent panel simply re-emits it each
+  turn:
   `{type:"ui", blocks:[UiBlock], panel:"inline"|"sidebar", id?:string, replace?:boolean}`
   `UiBlock = {kind:"meter", label:string, value:number, min:number, max:number}`
   `| {kind:"stat", label:string, value:number|string|boolean}`
@@ -356,7 +364,8 @@ On an `input` frame from a client in room `R`, the server:
    risk is measured separately by the live-model red-line eval.
 8. Broadcasts one `ui` frame per emission the turn's event hooks buffered via
    `emitUI` — already validated and capped server-side; rooms
-   with no hooks never see this frame.
+   with no hooks never see this frame. The `inline` ones are recorded with the
+   step-6 events, anchored to the reply, and replayed on join in that place.
 9. Delivers one `panel_event` frame per emission the turn's hooks buffered via
    `emitPanel` — NOT a broadcast: each event reaches only members
    whose own manifest contains the target panel.

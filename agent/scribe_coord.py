@@ -53,10 +53,17 @@ class ScribeEpoch:
     ``chronicle_turn`` is the room's completed-turn counter as it stood when the
     pass was scheduled — a pass that finishes after the counter has advanced must
     not refresh a boundary a newer turn already owns.
+    ``transcript_leaf`` is the history message the scheduling turn ENDED on (its
+    reply, or the last companion exchange inside it) — where anything the pass puts
+    in front of the table (the Stage Director's staging) anchors in the join-replay
+    lane. Read when the pass runs, the leaf would be the NEXT turn's player line
+    whenever the pass is late, and the staging would replay inside a turn it does
+    not belong to. ``None`` = not captured (a hand-built epoch).
     """
 
     cancel_gen: int
     chronicle_turn: int
+    transcript_leaf: str | None = None
 
 
 @dataclass
@@ -186,12 +193,19 @@ scribe_runtime = ScribeRuntime()
 
 
 async def capture_epoch(services: Any, chat_key: str) -> ScribeEpoch:
-    """What the pass being scheduled right now must remember about the room."""
+    """What the pass being scheduled right now must remember about the room.
+
+    Called by `gateway.turn.run_turn` as it schedules the pass, while the transport
+    still holds the room's turn lock — so every field is that turn's own, and nothing
+    a later turn writes can be read into it.
+    """
     from agent.chronicle import chronicle_turn
+    from agent.history import current_leaf
 
     return ScribeEpoch(
         cancel_gen=scribe_runtime.cancel_generation(chat_key),
         chronicle_turn=await chronicle_turn(services.store, chat_key),
+        transcript_leaf=await current_leaf(services, chat_key),
     )
 
 

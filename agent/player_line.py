@@ -15,7 +15,7 @@ from infra.i18n import I18n
 
 # Inverse of `prompt.speaker_line` (`[{name}]\n{text}`). Names are `_display_name`
 # values (no `]` / newline).
-_SPEAKER_LINE_PREFIX = re.compile(r"^\[[^\n\]]+\]\n")
+_SPEAKER_LINE_PREFIX = re.compile(r"^\[([^\n\]]+)\]\n")
 
 
 def attributed_player_line(i18n: I18n, name: str, text: str) -> str:
@@ -31,11 +31,24 @@ def attributed_player_line(i18n: I18n, name: str, text: str) -> str:
     return i18n.t("prompt.speaker_line", name=speaker, text=text)
 
 
+def split_player_line(text: str) -> tuple[str, str]:
+    """``(speaker, body)`` of a Keeper user line — the full inverse of
+    ``attributed_player_line``.
+
+    The join replay renders a persisted player line the way the live echo rendered
+    it: the speaker in the frame's ``name``, the body as its text (`net.session`).
+    A line that was never tagged answers ``("", text)``.
+    """
+    match = _SPEAKER_LINE_PREFIX.match(text)
+    if match is None:
+        return "", text
+    return match.group(1), text[match.end() :]
+
+
 def player_line_body(text: str) -> str:
     """The player-authored body of a Keeper user line.
 
     Inverse of ``attributed_player_line``. A line that was never tagged is
     returned unchanged.
     """
-    match = _SPEAKER_LINE_PREFIX.match(text)
-    return text[match.end() :] if match else text
+    return split_player_line(text)[1]
