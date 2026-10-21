@@ -98,7 +98,7 @@ def _kp_rolls_then_replies(messages, tools):
     """A KP turn that rolls a die once (producing a `dice` event) then narrates."""
     already_rolled = any(message.get("role") == "tool" for message in messages)
     if not already_rolled:
-        return assistant_tools(tool_call("roll_dice", expression="1d20", reason="searching the room"))
+        return assistant_tools(tool_call("roll_dice", expression="1d20"))
     return assistant_text(KP_REPLY)
 
 

@@ -53,7 +53,8 @@ _ARG_LINE_RE = re.compile(r"^(?P<indent>\s+)(?P<name>\**\w+)\s*(?:\([^)]*\))?:\s
 
 
 class ToolArgumentError(Exception):
-    """Raised when an incoming argument can't be coerced to its declared type.
+    """Raised when an incoming argument is missing, can't be coerced to its declared
+    type, or names a parameter the tool does not have.
 
     Caught internally by `Toolset.dispatch`, which turns it into a localized
     error string; this never escapes to the caller.
@@ -478,11 +479,20 @@ def _coerce_arguments(fn: Callable[..., Any], arguments: dict[str, Any]) -> dict
     signature = inspect.signature(fn)
     hints = _resolve_type_hints(fn)
 
-    coerced: dict[str, Any] = {}
-    for param_name, param in signature.parameters.items():
-        if _skip_param(param_name, param):
-            continue
+    accepted = [name for name, param in signature.parameters.items() if not _skip_param(name, param)]
+    unknown = [name for name in arguments if name not in accepted]
+    if unknown:
+        # A name the tool does not have is a mistake the model can fix, never a harmless extra:
+        # dropping it would let the call run on defaults (a `kp_note(value=...)` aimed at
+        # `content` set the player-visible scene name to ""). Refuse, and say what IS accepted.
+        raise ToolArgumentError(
+            f"unknown argument{'s' if len(unknown) > 1 else ''} {', '.join(repr(name) for name in unknown)}; "
+            f"accepted parameters: {', '.join(accepted) or '(none)'}"
+        )
 
+    coerced: dict[str, Any] = {}
+    for param_name in accepted:
+        param = signature.parameters[param_name]
         annotation = hints.get(param_name, param.annotation)
         if param_name not in arguments:
             if param.default is not inspect.Parameter.empty:
