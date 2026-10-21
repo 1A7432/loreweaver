@@ -43,6 +43,7 @@ from core.battle_report import (
     BattleReportGenerator,
     SessionRecord,
     _visible_rolls,
+    transcript_speaker,
     transcript_window,
 )
 from infra.i18n import I18n
@@ -438,18 +439,15 @@ def _transcript(transcript: list[dict[str, Any]], i18n: I18n) -> str:
             + "</p>"
         )
     previous_turn: int | None = None
-    keeper_label = i18n.t("battle.report.md.transcript.keeper")
-    player_label = i18n.t("battle.report.md.transcript.player")
     turn_word = i18n.t("battle.report.html.transcript.turn")
     opened = False
     for message in kept:
         turn = int(message.get(HISTORY_TURN_KEY, 0) or 0)
-        keeper = message.get("role") == "assistant"
+        keeper, label, content = transcript_speaker(message, i18n)
         marker = ""
         if turn != previous_turn:
             marker = f"{_esc(turn_word)}<b>{turn}</b>"
             previous_turn = turn
-        content = str(message.get("content", ""))
         text = render_markdown(content) if keeper else render_plain(content)
         kind = "keeper" if keeper else "player"
         if keeper and not opened:
@@ -458,7 +456,7 @@ def _transcript(transcript: list[dict[str, Any]], i18n: I18n) -> str:
         out.append(
             f'<article class="msg msg--{kind}">'
             f'<div class="turn">{marker}</div>'
-            f'<div class="body"><span class="speaker">{_esc(keeper_label if keeper else player_label)}</span>'
+            f'<div class="body"><span class="speaker">{_esc(label)}</span>'
             f'<div class="text">{text}</div></div>'
             "</article>"
         )
