@@ -631,28 +631,39 @@ async def _serve_iroh(core: TuiServer, i18n: I18n, keys_path: str) -> bool:
         i18n, ticket, keys_path, port=iroh_server.direct_port, port_changed_from=iroh_server.port_changed_from
     )
 
-    # Graceful SIGTERM (systemd `stop`/`restart`): asyncio.run does NOT turn SIGTERM into
-    # KeyboardInterrupt, so without this a supervisor stop would hard-kill the process without
-    # closing the endpoint/store. Cancelling the serve task makes `iroh_server.serve()` return
-    # so the `finally: await iroh_server.close()` below runs — the same clean shutdown Ctrl-C
-    # already gets via the outer KeyboardInterrupt path, which is left untouched.
+    # Graceful stop on SIGTERM (systemd `stop`/`restart`) AND SIGINT (Ctrl-C, `kill -INT`):
+    # cancelling the serve task makes `iroh_server.serve()` return, so the `finally: await
+    # iroh_server.close()` below runs and every client gets a real close instead of waiting out
+    # the QUIC idle timeout. SIGINT is hooked here rather than left to `asyncio.run`, because
+    # the default path is not a reliable shutdown: (1) a process started with a shell `&`
+    # inherits SIGINT=SIG_IGN, so Python installs no SIGINT handler and `asyncio.Runner` (which
+    # only hooks SIGINT over Python's default one) installs none either — a plain SIGINT was a
+    # silent no-op; (2) when it does fire, the first SIGINT only cancels the main task (clean
+    # solely because of the `except CancelledError: pass` below) and the second raises
+    # KeyboardInterrupt from wherever the loop is, possibly mid-close. Both handlers are
+    # removed BEFORE `close()`, which hands SIGINT back to Python's default handler: during
+    # shutdown a SECOND Ctrl-C raises KeyboardInterrupt (caught in `_run_serve`, which still
+    # closes the store) — the escape for a close that hangs.
     loop = asyncio.get_running_loop()
     serve_task = asyncio.ensure_future(iroh_server.serve())
-    handler_installed = True
-    try:
-        loop.add_signal_handler(signal.SIGTERM, serve_task.cancel)
-    except NotImplementedError:
-        # Not available on Windows — laptop self-hosters there already stop via Ctrl-C.
-        handler_installed = False
+    stop_signals: list[signal.Signals] = []
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, serve_task.cancel)
+        except NotImplementedError:
+            # Not available on Windows — laptop self-hosters there stop via Ctrl-C, which
+            # still lands in asyncio.run / `_run_serve`'s KeyboardInterrupt path.
+            break
+        stop_signals.append(sig)
 
     try:
         await serve_task
     except asyncio.CancelledError:
         pass
     finally:
-        if handler_installed:
+        for sig in stop_signals:
             try:
-                loop.remove_signal_handler(signal.SIGTERM)
+                loop.remove_signal_handler(sig)
             except (NotImplementedError, ValueError):
                 pass
         await iroh_server.close()
