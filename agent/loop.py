@@ -56,8 +56,10 @@ ones above it:
     persist the PLAYER message NOW — so a nested companion turn appends its
     exchange between the player's line and the reply, the order the table saw.
  7. The round loop: ``chat`` → if tool calls, ``_dispatch_and_record`` and go
-    again; else the content is the reply. A context overflow — refusal OR a
-    reply truncated at the window — folds once and retries ONCE
+    again; else the content is the reply. A tool round's own text never reaches
+    the table; it is kept in memory (``tool_round_texts``) only so the
+    narration check can tell when a scene went with it. A context overflow —
+    refusal OR a reply truncated at the window — folds once and retries ONCE
     (``_recover_from_overflow``); any other provider error returns a
     localized diagnosis WITHOUT persisting the turn (the player line is
     abandoned back off the path).
@@ -173,6 +175,7 @@ from agent.turn_checks import (
     MAX_ROUNDS_PER_TURN,
     TurnState,
     dice_tool_names,
+    interim_texts,
     rolled_values,
     scene_title_lines,
     turn_checks_for,
@@ -614,6 +617,10 @@ async def _run_kp_turn_body(
     overflow_retried = False
 
     tool_trace: list[dict] = []
+    # What each tool round said alongside its calls. Never shown, never persisted, never in
+    # the tool trace (which leaves this function): the end-of-turn narration check reads it
+    # to catch a scene the model wrote together with its bookkeeping (2026-10-21).
+    tool_round_texts: list[str] = []
     reply: str | None = None
     rounds = 0
     # Accumulated across MAIN loop rounds and the max-rounds finalizer. The end-of-turn
@@ -750,6 +757,7 @@ async def _run_kp_turn_body(
         if result.tool_calls:
             if gate is not None:
                 gate.finish_round(discard=True)
+            tool_round_texts.append(result.content or "")
             # Coarse progress for a long turn: which KIND of work this round opened with,
             # and which round it is. The first call sets the round's character; the bucket
             # is all that leaves this function (see `tool_activity`).
@@ -808,6 +816,7 @@ async def _run_kp_turn_body(
             hook_engine=hook_engine,
             temperature=services.settings.llm.temperature,
             on_tool_event=on_tool_event,
+            tool_round_texts=tool_round_texts,
         )
 
     if reply is None:  # max_rounds exhausted without ever reaching a plain-text reply
@@ -1450,6 +1459,7 @@ async def _run_turn_checks(
     hook_engine=None,
     temperature: float | None,
     on_tool_event: Callable[[dict], Awaitable[None]] | None = None,
+    tool_round_texts: list[str] | None = None,
 ) -> str:
     """Run this room's end-of-turn check table in pure Stop form; return the final reply.
 
@@ -1474,21 +1484,26 @@ async def _run_turn_checks(
     calls are deliberately NOT folded into the turn's headline usage.
     """
     convo = _correction_base_messages(messages)
+    # A check round that calls tools is a tool round like any other: its text is not shown
+    # either, so it joins the main loop's for every row that runs after it.
+    round_texts = list(tool_round_texts or [])
     spent = 0
     for check in turn_checks_for(room_pack):
         awaiting_narration = False
         for _ in range(check.max_rounds):
             if spent >= MAX_ROUNDS_PER_TURN:
                 return reply
-            if not awaiting_narration and not check.holds(TurnState(reply=reply, tool_trace=tool_trace)):
+            state = TurnState(reply=reply, tool_trace=tool_trace, tool_round_texts=tuple(round_texts))
+            if not awaiting_narration and not check.holds(state):
                 break
             instruction = check.instruction(
                 i18n,
                 ctx.locale,
-                **_check_fields(check.id, reply, tool_trace, i18n),
+                **_check_fields(check.condition, state, i18n),
             )
             convo = [*convo, {"role": "assistant", "content": reply}, {"role": "user", "content": instruction}]
-            set_lane_field(round="check")
+            # Which row asked, so the probe can say where a turn's check rounds went.
+            set_lane_field(round="check", check=check.id)
             try:
                 result = await _chat_with_continuation_cleanup(
                     services,
@@ -1505,6 +1520,7 @@ async def _run_turn_checks(
                 return reply
             spent += 1
             if result.tool_calls:
+                round_texts.append(result.content or "")
                 try:
                     await _dispatch_and_record(
                         toolset,
@@ -1531,18 +1547,24 @@ async def _run_turn_checks(
     return reply
 
 
-def _check_fields(check_id: str, reply: str, tool_trace: list[dict], i18n) -> dict[str, str]:
-    """Per-check substitutions for an instruction's placeholders.
+def _check_fields(condition: str, state: TurnState, i18n) -> dict[str, str]:
+    """Per-check substitutions for an instruction's placeholders, keyed by CONDITION (a
+    pack may give its row any id).
 
-    Only what the model cannot see for itself: the real numbers it contradicted, and the
-    heading it drew. Everything else the instruction needs is already in the conversation.
+    Only what the model cannot see for itself: the real numbers it contradicted, the
+    heading it drew, and the text its tool rounds carried — the check conversation drops
+    this turn's tool chatter, so without it the model would be asked to restore a scene it
+    can no longer read. Everything else the instruction needs is already in the
+    conversation.
     """
-    if check_id == "dice_contradicts":
-        real = sorted(rolled_values(tool_trace))
+    if condition == "dice_contradicts":
+        real = sorted(rolled_values(state.tool_trace))
         return {"rolled": ", ".join(str(value) for value in real)}
-    if check_id == "stale_scene_hud":
-        titles = scene_title_lines(reply)
-        return {"title": titles[0] if titles else reply[:160]}
+    if condition == "stale_scene_hud":
+        titles = scene_title_lines(state.reply)
+        return {"title": titles[0] if titles else state.reply[:160]}
+    if condition == "narration_lost":
+        return {"earlier": "\n\n".join(interim_texts(state))}
     return {}
 
 
