@@ -440,7 +440,7 @@ panels:
     assets: [ui/dengzhen/index.html, ui/dengzhen/app.js, ui/dengzhen/canlye.png]
     fallback:                                                       # mandatory
       - {kind: text, text: {en: "The lantern array chart is best viewed in a rich client;
-                                the keeper will describe it.", zh: "灯阵图请在富客户端查看；终端下由守密人描述。"}}
+                                the keeper will describe it.", zh: "灯阵图请在富客户端查看；终端下由守秘人描述。"}}
       - {kind: badge, label: {en: "Nine lanterns", zh: "九灯之阵"}, tone: info}
 ```
 

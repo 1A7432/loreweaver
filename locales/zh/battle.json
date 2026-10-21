@@ -85,7 +85,7 @@
   "battle.report.md.total_score_line": "**总分**: {score}/100 - {rating}",
   "battle.report.md.transcript.empty": "*（本房间还没有任何对话。）*",
   "battle.report.md.transcript.heading": "📜 全程记录",
-  "battle.report.md.transcript.keeper": "守密人",
+  "battle.report.md.transcript.keeper": "守秘人",
   "battle.report.md.transcript.message": "**[第 {turn} 回合] {speaker}**\n\n{text}\n",
   "battle.report.md.transcript.player": "玩家",
   "battle.report.md.transcript.truncated": "*（这份记录太长，无法全部打印：略去了较早的 {omitted} 条发言，下面是最近的 {kept} 条。什么都没有被删除——房间里仍保存着完整历史。）*\n",
