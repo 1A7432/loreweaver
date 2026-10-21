@@ -249,6 +249,7 @@
   "commands.save.usage": "Usage: .save [name] | .save load <name>",
   "commands.sheet.changed": "Updated: {items}",
   "commands.sheet.changed_item": "{name}={value}",
+  "commands.sheet.delete_failed": "Nothing was deleted: \"{name}\" is not yours, or could not be removed.",
   "commands.sheet.deleted": "Deleted character: {name}",
   "commands.sheet.finalized": "Vitals (HP/MP/SAN) recalculated to full for the current characteristics: {name}",
   "commands.sheet.item": "{name} {value}",

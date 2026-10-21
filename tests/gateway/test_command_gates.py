@@ -875,6 +875,28 @@ async def test_st_delete_leaves_another_players_pregen_claim_alone():
     assert (await services.characters.get_character("p1", chat_key)).name == "理"
 
 
+async def test_st_delete_that_removes_nothing_says_so_instead_of_claiming_success():
+    """`delete_character` refuses a sheet owned by someone else; the command used to answer
+    "Deleted character" regardless."""
+    from core.character_manager import CharacterSheet
+
+    services = _services()
+    router = CommandRouter(services)
+    en = services.i18n.with_locale("en")
+    chat_key = "tui:group:delete-refused"
+    await services.characters.save_character("p1", chat_key, CharacterSheet(name="Carol", system="CoC"))
+    # p2's active-character pointer names p1's sheet (a stale pointer is enough).
+    await services.characters.set_active_character("p2", chat_key, "Carol")
+    p2 = AgentCtx(chat_key=chat_key, user_id="p2", platform="tui", locale="en", extra={"role": "player"})
+
+    reply = await router.dispatch_reply(p2, ".st delete")
+
+    assert reply is not None and reply.error
+    assert reply.text == en.t("commands.sheet.delete_failed", name="Carol")
+    assert (await services.characters.get_character("p1", chat_key, "Carol")).name == "Carol"
+    assert await services.characters.documents.get(chat_key, "sheet", "Carol") is not None
+
+
 def test_parse_sheet_assignments_refuses_a_mix_of_forms_and_operator_names():
     """`.st STR=16 DEX14` used to set STR and silently drop DEX. Half-doing a command is
     worse than refusing it: the whole thing is refused (the caller answers bad_args)."""

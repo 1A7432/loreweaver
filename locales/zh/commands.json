@@ -249,6 +249,7 @@
   "commands.save.usage": "用法：.save [名字] | .save load <名字>",
   "commands.sheet.changed": "已更新：{items}",
   "commands.sheet.changed_item": "{name}={value}",
+  "commands.sheet.delete_failed": "没有删除：「{name}」不属于你，或暂时无法移除。",
   "commands.sheet.deleted": "已删除角色：{name}",
   "commands.sheet.finalized": "已按当前属性重新计算生命值/魔法值/理智至满值：{name}",
   "commands.sheet.item": "{name} {value}",
