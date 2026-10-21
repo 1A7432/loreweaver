@@ -225,7 +225,7 @@
   "commands.report.html.sent_reveal": "复盘版团报已生成，只发送到你的客户端。",
   "commands.report.no_session": "还没有可导出的跑团记录。",
   "commands.reset.armed": "即将永久清空 {what}。房间设置（语言、房规）与连接保留。请在 {seconds} 秒内发送 `.reset confirm` 确认执行。",
-  "commands.reset.denied": "只有守密人可以重置战役。",
+  "commands.reset.denied": "只有守秘人可以重置战役。",
   "commands.reset.done": "重置完成——已清空 {what}（{rows} 条记录）。可继续游戏，或用 `.coc` / `.dnd` 建卡。",
   "commands.reset.failed": "战役重置中途失败；本房间以外的数据未受影响。再次发送 `.reset confirm` 清理剩余部分。",
   "commands.reset.scope.all": "全部——角色、模组、设定、媒体与剧情",

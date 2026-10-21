@@ -611,6 +611,6 @@ def test_the_transcript_heading_and_speakers_are_localized():
     )
 
     assert "全程记录" in zh
-    assert "守密人" in zh and "玩家" in zh
+    assert "守秘人" in zh and "玩家" in zh
     assert "储物间" in zh
     assert "The Whole Session" not in zh

@@ -695,7 +695,7 @@ const messages = {
     "skills.generateError": "失败:{error}",
     "skills.help": "Tab 切换字段 · ↑↓ 选择 · Enter 切换选中行 · 点击同样可用 · Esc 返回菜单",
     "party.title": "队伍 / PARTY",
-    "party.empty": "队伍空 · 找守密人建卡,或 Esc→我的角色",
+    "party.empty": "队伍空 · 找守秘人建卡,或 Esc→我的角色",
     "party.noCharacter": "尚未创建角色",
     "party.you": "你",
     "party.legacyTitle": "PARTY",
