@@ -7,7 +7,7 @@
   "commands.model.base_default": "（提供方默认）",
   "commands.model.key_none": "（未设置）",
   "commands.model.list": "提供方 —— 兼容 OpenAI：{compatible}；原生：{native}；订阅：{subscription}。将 base_url 指向任意 OpenAI 兼容端点即可使用。订阅提供方需先 `.model login`。",
-  "commands.model.denied": "只有群管理员或 Keeper 才能修改 LLM 配置。",
+  "commands.model.denied": "只有房间管理员才能修改 LLM 配置。",
   "commands.model.set_usage": "用法：.model set <提供方> [聊天模型]",
   "commands.model.unknown_provider": "未知提供方：{provider}。请使用 .model list 查看可选项。",
   "commands.model.set_done": "LLM 已切换为提供方 {provider}，聊天模型 {chat_model}。",
