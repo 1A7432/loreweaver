@@ -57,5 +57,7 @@
   "tui.serve.iroh.failed": "Iroh transport could not start ({error}).",
   "tui.serve.iroh.hint": "  Saved to {path}. Share the ticket + an invite key; friends dial in with no domain/TLS/port.",
   "tui.serve.iroh.missing": "The 'iroh' package is not installed — install it: pip install iroh (or uv sync).",
+  "tui.serve.iroh.port": "  Direct UDP port {port}: remembered across restarts so saved tickets keep a direct route (pin it with TRPG_TUI__IROH_PORT, e.g. for a firewall rule).",
+  "tui.serve.iroh.port_changed": "  Warning: UDP port {old} was unavailable, so this start bound {new}. Tickets saved before now can reach this server only through the relay until they are replaced with the one above.",
   "tui.serve.iroh.ticket": "  Ticket: {ticket}"
 }

@@ -608,15 +608,16 @@ async def _serve_iroh(core: TuiServer, i18n: I18n, keys_path: str) -> bool:
     instantiated directly in tests.) `core` is a `net.session.SessionCore` — a `TuiServer` is one,
     so we borrow it as the shared engine without ever binding its socket.
 
-    The endpoint's secret key is persisted next to the keystore (`iroh-secret.key`) so the
-    NodeId — and therefore the shareable ticket — is STABLE across restarts.
+    The endpoint's secret key and its UDP port are persisted next to the keystore
+    (`iroh-secret.key`, `iroh-port.txt`) so the shareable ticket — NodeId AND direct
+    addresses — is STABLE across restarts (`TRPG_TUI__IROH_PORT` pins the port).
 
     Returns True once the endpoint came online and served (a clean stop), False if it never
     started — the caller turns a False into a non-zero exit code so a supervisor restarts it."""
     from net.iroh_server import IrohServer
 
     secret_path = Path(keys_path).with_name("iroh-secret.key")
-    iroh_server = IrohServer(core, secret_path=secret_path)
+    iroh_server = IrohServer(core, secret_path=secret_path, port=core.services.settings.tui.iroh_port)
     try:
         # Bound the relay handshake so an unreachable relay can't hang startup forever.
         ticket = await asyncio.wait_for(iroh_server.start(), timeout=45)
@@ -626,7 +627,9 @@ async def _serve_iroh(core: TuiServer, i18n: I18n, keys_path: str) -> bool:
     except Exception as exc:  # relay unreachable, bind failure, startup timeout, etc.
         print(i18n.t("tui.serve.iroh.failed", error=str(exc)), file=sys.stderr)
         return False
-    _announce_iroh_ticket(i18n, ticket, keys_path)
+    _announce_iroh_ticket(
+        i18n, ticket, keys_path, port=iroh_server.direct_port, port_changed_from=iroh_server.port_changed_from
+    )
 
     # Graceful SIGTERM (systemd `stop`/`restart`): asyncio.run does NOT turn SIGTERM into
     # KeyboardInterrupt, so without this a supervisor stop would hard-kill the process without
@@ -656,9 +659,13 @@ async def _serve_iroh(core: TuiServer, i18n: I18n, keys_path: str) -> bool:
     return True
 
 
-def _announce_iroh_ticket(i18n: I18n, ticket: str, keys_path: str) -> None:
+def _announce_iroh_ticket(
+    i18n: I18n, ticket: str, keys_path: str, *, port: int = 0, port_changed_from: int = 0
+) -> None:
     """Print the shareable Iroh ticket prominently + drop it in a sidecar file, mirroring the
-    keeper-key bootstrap banner. The operator shares this ticket (the address) + an invite key."""
+    keeper-key bootstrap banner. The operator shares this ticket (the address) + an invite key.
+    `port` is the pinned UDP port (for a firewall rule); `port_changed_from` is the remembered
+    port that was unavailable this start, i.e. saved tickets are stale until replaced."""
     sidecar = Path(keys_path).with_name("iroh-ticket.txt")
     try:
         atomic_write_private(sidecar, f"ticket={ticket}\n")  # i18n-exempt: data file
@@ -667,6 +674,10 @@ def _announce_iroh_ticket(i18n: I18n, ticket: str, keys_path: str) -> None:
     print(i18n.t("tui.serve.iroh.banner"), file=sys.stderr)
     print(i18n.t("tui.serve.iroh.ticket", ticket=ticket), file=sys.stderr)
     print(i18n.t("tui.serve.iroh.hint", path=str(sidecar)), file=sys.stderr)
+    if port:
+        print(i18n.t("tui.serve.iroh.port", port=port), file=sys.stderr)
+    if port_changed_from:
+        print(i18n.t("tui.serve.iroh.port_changed", old=port_changed_from, new=port or "?"), file=sys.stderr)
 
 
 def _uses_demo_llm(services) -> bool:

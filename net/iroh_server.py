@@ -21,7 +21,7 @@ import asyncio
 import inspect
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -45,8 +45,9 @@ _DEFAULT_JOIN_TIMEOUT = 10.0
 def load_or_create_secret(secret_path: Path) -> Any:
     """Load the persisted Iroh `SecretKey` from `secret_path`, creating it on first run.
 
-    Reusing the same secret key across restarts keeps the endpoint's NodeId — and therefore
-    the shareable ticket — STABLE, so a saved ticket keeps working after a server restart.
+    Reusing the same secret key across restarts keeps the endpoint's NodeId STABLE; together
+    with the remembered UDP port (`IrohServer._bind_endpoint`) the whole shareable ticket is,
+    so a saved ticket keeps working -- directly, not only via the relay -- after a restart.
 
     - Missing file: generate a fresh key, persist it (best-effort `chmod 0600` — it's a
       bearer secret), and return it.
@@ -83,6 +84,62 @@ def load_or_create_secret(secret_path: Path) -> Any:
             secret_path,
         )
     return key
+
+
+# The direct-address port (see `IrohServer.start`). Remembered next to the secret key so the
+# ticket's direct addresses -- not just its NodeId -- survive a restart.
+PORT_SIDECAR_NAME = "iroh-port.txt"
+
+
+def port_sidecar_path(secret_path: Path) -> Path:
+    """Where the remembered UDP port lives: beside the secret key, in the keys directory."""
+    return secret_path.with_name(PORT_SIDECAR_NAME)
+
+
+def _valid_port(value: Any) -> int:
+    """`value` as a usable UDP port (1-65535), else 0 ("none")."""
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return port if 1 <= port <= 65535 else 0
+
+
+def read_remembered_port(sidecar: Path) -> int:
+    """The port saved in `sidecar`, or 0 when it is missing/unreadable/not a port.
+
+    A damaged sidecar is not an error: it reads as "nothing remembered" and the next
+    successful bind overwrites it."""
+    try:
+        return _valid_port(sidecar.read_text(encoding="utf-8").strip())
+    except (OSError, UnicodeDecodeError):
+        return 0
+
+
+def write_remembered_port(sidecar: Path, port: int) -> bool:
+    """Persist `port` (best-effort, like the secret key: a read-only data dir must not brick
+    startup under `Restart=on-failure`). Returns whether the write landed."""
+    try:
+        atomic_write_private(sidecar, f"{port}\n")
+    except OSError:
+        logger.warning(
+            "Could not persist the Iroh UDP port to %s; the ticket's direct addresses will "
+            "change on the next restart until the data dir is writable again.",
+            sidecar,
+        )
+        return False
+    return True
+
+
+def ipv4_port(bound_sockets: Iterable[str]) -> int:
+    """The port of the first IPv4 socket in `Endpoint.bound_sockets()` (``"0.0.0.0:50264"``,
+    ``"[::]:58702"``), or 0 if there is none. IPv6 entries are skipped on purpose: only the
+    IPv4 socket is pinned (see `IrohServer._bind_endpoint`)."""
+    for sock in bound_sockets:
+        host, _, port = str(sock).rpartition(":")
+        if host and ":" not in host:
+            return _valid_port(port)
+    return 0
 
 
 @dataclass(eq=False)
@@ -273,18 +330,26 @@ class IrohServer:
     so the WS server stays untouched and both wires fan out through one `RoomHub`.
     """
 
-    def __init__(self, core: SessionCore, *, secret_path: Path | None = None) -> None:
+    def __init__(self, core: SessionCore, *, secret_path: Path | None = None, port: int = 0) -> None:
+        """`port` is the operator's explicit UDP port (`TRPG_TUI__IROH_PORT`; 0 = remembered/auto).
+        It only matters with a `secret_path`; loopback/test servers bind as they always did."""
         self.core = core
         self._secret_path = secret_path
+        self._port_override = port
         self._endpoint: Any = None
         self._tasks: set[asyncio.Task[Any]] = set()
+        # Filled by `start()` for the banner: the IPv4 port actually bound (0 = unknown / not
+        # pinned) and, when the wanted port was unavailable, the port we had to give up on.
+        self.direct_port = 0
+        self.port_changed_from = 0
 
     async def start(self) -> str:
         """Bind the endpoint, wait for a home relay, and return the shareable ticket string.
 
         When `secret_path` was given, reuse (or create) a persisted secret key so the NodeId
-        — and therefore the ticket — is stable across restarts. Otherwise (loopback/tests),
-        bind with an ephemeral, randomly generated key, as before.
+        is stable across restarts, and pin the UDP port the same way (`_bind_endpoint`) so the
+        ticket's direct addresses are stable too. Otherwise (loopback/tests), bind with an
+        ephemeral, randomly generated key on a random port, as before.
         """
         import iroh  # lazy: native dep, only imported when Iroh is actually enabled
 
@@ -296,12 +361,67 @@ class IrohServer:
             # `EndpointOptions(...)` construction (uniffi validates lazily) but raises
             # `TypeError: a bytes-like object is required, not 'SecretKey'` inside
             # `Endpoint.bind()`. Serialize it the same way it's persisted to disk.
-            options = iroh.EndpointOptions(preset=iroh.preset_n0(), alpns=[ALPN], secret_key=secret_key.to_bytes())
+            self._endpoint = await self._bind_endpoint(iroh, secret_key.to_bytes(), self._secret_path)
         else:
-            options = iroh.EndpointOptions(preset=iroh.preset_n0(), alpns=[ALPN])
-        self._endpoint = await iroh.Endpoint.bind(options)
+            self._endpoint = await iroh.Endpoint.bind(iroh.EndpointOptions(preset=iroh.preset_n0(), alpns=[ALPN]))
         await self._endpoint.online()
         return str(iroh.EndpointTicket.from_addr(self._endpoint.addr()))
+
+    async def _bind_endpoint(self, iroh: Any, secret_key: bytes, secret_path: Path) -> Any:
+        """Bind on a UDP port that survives restarts, so a saved ticket stays directly dialable.
+
+        The secret key fixes the NodeId, but a ticket also carries the server's DIRECT addresses
+        (LAN/public IP + port); with a random port per start every one of them is dead after a
+        restart and a returning client can only reach us through the relay (30-70 s from far
+        away). So the port is remembered in a sidecar next to the key:
+
+        - wanted port = `TRPG_TUI__IROH_PORT` (operator pin, wins) else the sidecar;
+        - first start (nothing wanted): bind a random port, then read back what we got and
+          save it;
+        - the wanted port is unavailable (in use, no permission): bind a random port instead,
+          log that the ticket changes this time, and overwrite the sidecar.
+
+        `EndpointOptions.bind_addr` is ONE ``host:port`` string and pins only the socket family
+        of that address: ``"0.0.0.0:P"`` fixes the IPv4 socket, while the IPv6 socket
+        (``[::]:*``) keeps a random port on every start -- verified against the iroh 1.1 binding
+        (``Endpoint.bound_sockets()`` shows both). The IPv4 addresses (LAN + public) are the
+        ones that matter for a returning client, so that is what we pin; IPv6 direct addresses
+        in an old ticket simply fail fast and the IPv4/relay paths carry the connection.
+        """
+        sidecar = port_sidecar_path(secret_path)
+        remembered = read_remembered_port(sidecar)
+        override = _valid_port(self._port_override)
+        if self._port_override and not override:
+            logger.warning(
+                "TRPG_TUI__IROH_PORT=%r is not a UDP port (1-65535); ignoring it.", self._port_override
+            )
+        wanted = override or remembered
+
+        base: dict[str, Any] = {"preset": iroh.preset_n0(), "alpns": [ALPN], "secret_key": secret_key}
+        endpoint: Any = None
+        if wanted:
+            try:
+                endpoint = await iroh.Endpoint.bind(iroh.EndpointOptions(**base, bind_addr=f"0.0.0.0:{wanted}"))
+            except Exception as exc:
+                logger.warning(
+                    "Could not bind the %s UDP port %d (%r); falling back to a random port. "
+                    "The direct addresses in the Iroh ticket change THIS time, so saved tickets "
+                    "reach the server only through the relay until they are replaced.",
+                    "pinned" if override else "remembered",
+                    wanted,
+                    exc,
+                )
+                self.port_changed_from = wanted
+        if endpoint is None:
+            endpoint = await iroh.Endpoint.bind(iroh.EndpointOptions(**base))
+
+        try:
+            self.direct_port = ipv4_port(endpoint.bound_sockets())
+        except Exception:
+            self.direct_port = 0  # an unreadable port is "not remembered", never a startup failure
+        if self.direct_port and self.direct_port != remembered:
+            write_remembered_port(sidecar, self.direct_port)
+        return endpoint
 
     async def serve(self) -> None:
         """Accept connections until the endpoint is closed (call `start()` first)."""
