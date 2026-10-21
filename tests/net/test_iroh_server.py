@@ -15,6 +15,7 @@ import json
 import os
 import stat
 import warnings
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -350,7 +351,10 @@ def test_serve_iroh_sigterm_triggers_clean_shutdown(monkeypatch, tmp_path) -> No
     closed = {"value": False}
 
     class _FakeIrohServer:
-        def __init__(self, core, *, secret_path=None) -> None:  # noqa: D401 - test stub
+        direct_port = 0
+        port_changed_from = 0
+
+        def __init__(self, core, *, secret_path=None, port=0) -> None:  # noqa: D401 - test stub
             pass
 
         async def start(self) -> str:
@@ -368,9 +372,8 @@ def test_serve_iroh_sigterm_triggers_clean_shutdown(monkeypatch, tmp_path) -> No
     monkeypatch.setattr(app_module, "_announce_iroh_ticket", lambda *a, **k: None)
 
     async def go() -> bool:
-        task = asyncio.ensure_future(
-            app_module._serve_iroh(object(), get_i18n("en"), str(tmp_path / "keys.toml"))
-        )
+        core = SimpleNamespace(services=SimpleNamespace(settings=SimpleNamespace(tui=SimpleNamespace(iroh_port=0))))
+        task = asyncio.ensure_future(app_module._serve_iroh(core, get_i18n("en"), str(tmp_path / "keys.toml")))
         # The signal handler is installed BEFORE serve() runs, so once `started` is set it is
         # safe to raise SIGTERM without the default disposition killing the test runner.
         await asyncio.wait_for(started.wait(), timeout=5)

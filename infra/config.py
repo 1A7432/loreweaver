@@ -223,6 +223,13 @@ class TuiSettings(BaseModel):
     # never anything a client supplies; override it for a non-git deployment (docker/pip/
     # binary), or set it BLANK to disable the feature entirely (the button then never shows).
     update_command: str = "git pull --ff-only && uv sync"  # i18n-exempt: shell command default, not UI text
+    # The UDP port the Iroh endpoint binds. 0 (default) = remembered/auto: the server picks a
+    # port on its first start and saves it next to the secret key (`iroh-port.txt`), so the
+    # direct addresses inside a ticket survive restarts, not just the NodeId. Set a port to pin
+    # it yourself (e.g. to open exactly that port in a firewall); it wins over the saved one.
+    # Pins the IPv4 socket only. If the port is unavailable the server falls back to a random
+    # one and logs that the ticket changed. Ignored when there is no persisted secret key.
+    iroh_port: int = 0
 
 
 class ImageGenSettings(BaseModel):
