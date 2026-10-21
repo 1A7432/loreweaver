@@ -286,7 +286,16 @@ class SheetCommands:
         if not args or args.casefold() == "show":
             return _render_sheet(ctx, character, pack)
         if args.casefold() in {"clr", "clear", "del", "delete"}:
-            await ctx.services.characters.delete_character(ctx.user_id, ctx.chat_key, character.name)
+            from core.pregen_roster import pregen_release_deleted
+
+            deleted = await ctx.services.characters.delete_character(ctx.user_id, ctx.chat_key, character.name)
+            # A claimed pregen's roster entry must not outlive its copy: it would stay
+            # "taken" for everyone, and re-claiming it would open a blank sheet.
+            if deleted and await pregen_release_deleted(
+                ctx.services.documents, ctx.chat_key, character.name, ctx.user_id
+            ):
+                if ctx.router.hub is not None:
+                    await publish_state(ctx.router.hub, ctx.services, ctx.raw_ctx)
             return ctx.i18n.t("commands.sheet.deleted", name=character.name)
         _migrate_legacy_luck(character, pack)
         if args.casefold() in _SHEET_FINALIZE_WORDS:
