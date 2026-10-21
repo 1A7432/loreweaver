@@ -339,6 +339,10 @@ async def test_anthropic_chat_uses_fake_client_without_network():
         ("claude-sonnet-5", False),
         ("claude-fable-5", False),
         ("claude-mythos-5", False),
+        ("claude-opus-5", False),
+        ("claude-opus-5-5", False),
+        ("claude-sonnet-5-5", False),
+        ("claude-haiku-5-5", False),
         ("CLAUDE-OPUS-4-8", False),  # case-insensitive
         ("anthropic.claude-opus-4-8", False),  # Bedrock-prefixed id
         ("", True),  # unknown/empty: don't silently drop a caller's temperature
@@ -491,6 +495,64 @@ async def test_anthropic_chat_forced_tool_choice_runs_without_thinking():
     assert "thinking" not in kwargs
     assert kwargs["max_tokens"] == 4096
     assert kwargs["tool_choice"] == {"type": "tool", "name": "skill_check"}
+
+
+async def test_anthropic_adaptive_only_models_get_effort_not_a_budget():
+    # Opus 4.7+ / the 5-series reject `budget_tokens` with a 400; the same knob becomes
+    # adaptive thinking + output_config.effort, streamed, with a cap that leaves room
+    # for the thinking (it counts toward max_tokens).
+    holder: dict = {}
+    stream = _FakeAnthropicStream(holder, SimpleNamespace(content=[SimpleNamespace(type="text", text="ok")]))
+    fake_client = SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(), stream=stream))
+    llm = AnthropicLLM(
+        LLMSettings(api_key="sk-test", chat_model="claude-opus-5-5", reasoning_effort="medium"),
+        client=fake_client,
+    )
+
+    await llm.chat([{"role": "user", "content": "act"}], temperature=0.9)
+
+    kwargs = holder["kwargs"]
+    assert kwargs["thinking"] == {"type": "adaptive"}
+    assert kwargs["output_config"] == {"effort": "medium"}
+    assert kwargs["max_tokens"] >= 32000
+    assert "temperature" not in (kwargs.get("extra_body") or {})
+    fake_client.messages.create.assert_not_called()
+
+    await llm.chat([{"role": "user", "content": "line"}], reasoning_effort="low")
+    assert holder["kwargs"]["output_config"] == {"effort": "low"}
+
+
+async def test_anthropic_models_that_think_by_default_keep_a_thinking_sized_cap():
+    # With the knob blank, the 5-series still thinks (no `thinking` field = adaptive),
+    # so the 4096 cap sized for a bare reply would cut long turns off.
+    holder: dict = {}
+    stream = _FakeAnthropicStream(holder, SimpleNamespace(content=[SimpleNamespace(type="text", text="ok")]))
+    fake_client = SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(), stream=stream))
+    fake_client.messages.create.return_value = SimpleNamespace(content=[SimpleNamespace(type="text", text="ok")])
+
+    always_on = AnthropicLLM(LLMSettings(api_key="sk-test", chat_model="claude-opus-5-5"), client=fake_client)
+    await always_on.chat([{"role": "user", "content": "act"}])
+    kwargs = holder["kwargs"]
+    assert "thinking" not in kwargs and "output_config" not in kwargs
+    assert kwargs["max_tokens"] >= 32000
+
+    off_by_default = AnthropicLLM(LLMSettings(api_key="sk-test", chat_model="claude-opus-4-8"), client=fake_client)
+    await off_by_default.chat([{"role": "user", "content": "act"}])
+    assert fake_client.messages.create.call_args.kwargs["max_tokens"] == 4096
+
+
+async def test_anthropic_adaptive_model_forced_tool_choice_sends_no_thinking_config():
+    fake_client = SimpleNamespace(messages=SimpleNamespace(create=AsyncMock()))
+    fake_client.messages.create.return_value = SimpleNamespace(content=[SimpleNamespace(type="text", text="ok")])
+    llm = AnthropicLLM(
+        LLMSettings(api_key="sk-test", chat_model="claude-opus-4-8", reasoning_effort="high"),
+        client=fake_client,
+    )
+
+    await llm.chat([{"role": "user", "content": "act"}], tool_choice="skill_check")
+
+    kwargs = fake_client.messages.create.call_args.kwargs
+    assert "thinking" not in kwargs and "output_config" not in kwargs
 
 
 async def test_anthropic_streams_text_and_still_reports_its_usage():
