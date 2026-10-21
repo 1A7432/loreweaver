@@ -276,6 +276,17 @@ def _render_sheet(ctx: CommandCtx, character: CharacterSheet, pack: RulePack) ->
     return ctx.i18n.t("commands.sheet.show", name=character.name, items=", ".join(items))
 
 
+async def _release_pregen_claim(ctx: CommandCtx, name: str) -> None:
+    """The caller's sheet `name` is gone: free the roster claim it came from (a claimed
+    pregen's entry must not outlive its copy — it would stay "taken" for everyone) and
+    publish the roster change."""
+    from core.pregen_roster import pregen_release_deleted
+
+    if await pregen_release_deleted(ctx.services.documents, ctx.chat_key, name, ctx.user_id):
+        if ctx.router.hub is not None:
+            await publish_state(ctx.router.hub, ctx.services, ctx.raw_ctx)
+
+
 class SheetCommands:
     """`CommandRouter` mixin — see the module docstring."""
 
@@ -286,16 +297,11 @@ class SheetCommands:
         if not args or args.casefold() == "show":
             return _render_sheet(ctx, character, pack)
         if args.casefold() in {"clr", "clear", "del", "delete"}:
-            from core.pregen_roster import pregen_release_deleted
-
             deleted = await ctx.services.characters.delete_character(ctx.user_id, ctx.chat_key, character.name)
-            # A claimed pregen's roster entry must not outlive its copy: it would stay
-            # "taken" for everyone, and re-claiming it would open a blank sheet.
-            if deleted and await pregen_release_deleted(
-                ctx.services.documents, ctx.chat_key, character.name, ctx.user_id
-            ):
-                if ctx.router.hub is not None:
-                    await publish_state(ctx.router.hub, ctx.services, ctx.raw_ctx)
+            if not deleted:
+                # The sheet is another player's (or the store refused): nothing was deleted.
+                return ctx.fail(ctx.i18n.t("commands.sheet.delete_failed", name=character.name))
+            await _release_pregen_claim(ctx, character.name)
             return ctx.i18n.t("commands.sheet.deleted", name=character.name)
         _migrate_legacy_luck(character, pack)
         if args.casefold() in _SHEET_FINALIZE_WORDS:
@@ -440,7 +446,10 @@ class SheetCommands:
             # character would overwrite their sheet and steal it. Refuse instead.
             return ctx.fail(ctx.i18n.t("commands.rename.name_taken", name=new_name))
         if old_name and old_name != new_name:
-            await ctx.services.characters.delete_character(ctx.user_id, ctx.chat_key, old_name)
+            if await ctx.services.characters.delete_character(ctx.user_id, ctx.chat_key, old_name):
+                # Renaming a claimed pregen's copy makes it the player's own character:
+                # the cast member itself goes back to the pool.
+                await _release_pregen_claim(ctx, old_name)
         return ctx.i18n.t("commands.rename.changed", old=old_name, new=new_name)
 
     async def cmd_pc(self, ctx: CommandCtx) -> str:
