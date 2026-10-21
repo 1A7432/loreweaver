@@ -257,8 +257,11 @@ class _ReplyStreamGate:
     plausible suspicious opener onward is HELD until the block closes (then dropped
     whole via `_strip_text_tool_calls`) or the round ends (unclosed suspicious tail
     dropped). The final `narrative` frame remains authoritative — clients replace the
-    whole draft with it. Emission is coalesced and scheduled as ordered tasks so the
-    provider's sync callback can feed the async transport."""
+    whole draft with it. Emission is coalesced and scheduled as tasks so the provider's
+    sync callback can feed the async transport; the tasks form a chain, each slice
+    published only after the previous one, because the receiver keeps draft state
+    across its own awaits (`gateway.turn` closes the last round's draft before opening
+    the next) and two slices in flight at once each opened a draft of their own."""
 
     def __init__(self, emit: Callable[[dict], Awaitable[None]]) -> None:
         self._emit = emit
@@ -340,7 +343,13 @@ class _ReplyStreamGate:
             asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._tasks.append(asyncio.ensure_future(self._emit(frame)))
+        previous = self._tasks[-1] if self._tasks else None
+        self._tasks.append(asyncio.ensure_future(self._emit_after(previous, frame)))
+
+    async def _emit_after(self, previous: asyncio.Task | None, frame: dict) -> None:
+        if previous is not None:
+            await asyncio.wait([previous])  # a failed slice is `drain`'s to log; send on
+        await self._emit(frame)
 
 
 @dataclass
@@ -750,6 +759,10 @@ async def _run_kp_turn_body(
         if result.tool_calls:
             if gate is not None:
                 gate.finish_round(discard=True)
+                # This round's slices are out before any tool runs: a public tool event
+                # closes the open draft (gateway.turn `_emit_tool_event`), and a slice
+                # still in flight behind it reopened a bubble that nothing closes.
+                await gate.drain()
             # Coarse progress for a long turn: which KIND of work this round opened with,
             # and which round it is. The first call sets the round's character; the bucket
             # is all that leaves this function (see `tool_activity`).

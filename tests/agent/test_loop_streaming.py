@@ -4,13 +4,15 @@ discarded, and the final reply stays authoritative."""
 
 from __future__ import annotations
 
+import asyncio
+
 from agent.context import AgentCtx
 from agent.kp_tools import build_kp_toolset
 from agent.loop import _ReplyStreamGate, run_kp_turn
 from agent.services import build_services
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
-from infra.llm import FakeLLM, assistant_text, assistant_tools, tool_call
+from infra.llm import ChatResult, FakeLLM, assistant_text, assistant_tools, tool_call
 
 
 async def _collecting_emitter(frames: list[dict]):
@@ -96,3 +98,69 @@ async def test_run_kp_turn_streams_final_round_and_discards_tool_round_draft(tmp
     assert reconstructed == result.reply  # the streamed draft equals the final authoritative text
     # The tool round produced no streamed draft text (no content in that round).
     assert all(frame["epoch"] == final_epoch for frame in frames)
+
+
+async def test_gate_publishes_one_slice_at_a_time_in_order():
+    """A slice goes out only after the previous one has.
+
+    The receiver keeps draft state across its own awaits (`gateway.turn` closes the
+    previous round's draft before it opens the next). With every slice its own free
+    task, two slices of one round were in flight at once and each opened a bubble of
+    its own — the orphan drafts a 2026-10-21 playtest showed above a finished reply."""
+    frames: list[dict] = []
+    in_flight = 0
+    peak = 0
+
+    async def emit(frame: dict) -> None:
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        frames.append(frame)
+        in_flight -= 1
+
+    gate = _ReplyStreamGate(emit)
+    gate.begin_round()
+    for line in ("第一行。\n", "第二行。\n", "第三行。\n"):
+        gate.feed(line)
+    gate.finish_round(discard=False)
+    await gate.drain()
+
+    assert peak == 1
+    assert [frame["seq"] for frame in frames] == [0, 1, 2]
+
+
+async def test_a_tool_round_s_slices_are_out_before_its_tools_publish():
+    """A public tool event closes the open draft; a slice of the same round still in
+    flight behind it would reopen a bubble that nothing ever closes."""
+    script = [
+        ChatResult(
+            content="档案库里很静，只有翻页的声音。\n裴照把簿子推过来。\n",
+            tool_calls=[tool_call("roll_dice", expression="1d100")],
+        ),
+        assistant_text("你看见那一行被人划掉了。"),
+    ]
+    services = build_services(Settings(locale="zh"), llm=FakeLLM(script=script), embeddings=FakeEmbeddings(16))
+    ctx = AgentCtx(chat_key="stream-order-room", user_id="p1", locale="zh")
+    timeline: list[str] = []
+
+    async def emit(frame: dict) -> None:
+        await asyncio.sleep(0.01)
+        timeline.append(f"delta:{frame['epoch']}")
+
+    async def on_tool_event(entry: dict) -> None:
+        timeline.append(f"tool:{entry['name']}")
+
+    await run_kp_turn(
+        ctx,
+        services,
+        build_kp_toolset(services),
+        "我翻看簿子。",
+        on_reply_delta=emit,
+        on_tool_event=on_tool_event,
+    )
+
+    tool_at = timeline.index("tool:roll_dice")
+    assert "delta:1" in timeline
+    assert all(event != "delta:1" for event in timeline[tool_at:])
