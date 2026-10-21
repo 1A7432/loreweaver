@@ -15,8 +15,11 @@ Deterministic bookkeeping (iron rule #1): claims are exclusive by construction; 
 document keeps the PRISTINE imported sheet, a claim materializes a COPY under the
 claiming player's own uid (`CharacterManager.save_character` — active + party roster
 included), and a release deletes the player's copy while the pristine original stays
-for the next claimant. Unclaimed pregens deliberately never touch the party roster —
-the panel shows who is AT the table, not the whole cast list.
+for the next claimant. A player who deletes their own copy (`.st delete`) frees the
+claim the same way (`pregen_release_deleted`), and a claim whose copy is gone is
+re-materialized from the pristine sheet on the next claim rather than reopened blank.
+Unclaimed pregens deliberately never touch the party roster — the panel shows who is
+AT the table, not the whole cast list.
 """
 
 from __future__ import annotations
@@ -121,7 +124,8 @@ async def pregen_claim(
     documents: Any, chat_key: str, ref: str, user_id: str, characters: CharacterManager
 ) -> tuple[str, CharacterSheet | None]:
     """Claim a pregen for `user_id`. Returns ``(status, sheet)`` with status one of
-    ``ok`` (fresh claim — pristine copy saved under the player's uid, made active),
+    ``ok`` (fresh claim — pristine copy saved under the player's uid, made active; also a
+    claim the player still holds whose copy is gone, re-materialized from the pristine),
     ``yours`` (already theirs — re-activated, progress untouched),
     ``taken`` (someone else's), ``unknown``, ``corrupt`` (pristine sheet unreadable),
     ``name_conflict`` (the name is already another player's own, non-pregen sheet)."""
@@ -131,9 +135,12 @@ async def pregen_claim(
     claimer = entry["claimed_by"]
     if claimer and claimer != user_id:
         return "taken", None
-    if claimer == user_id:
+    if claimer == user_id and await characters.documents.get(chat_key, "sheet", entry["name"]) is not None:
         await characters.set_active_character(user_id, chat_key, entry["name"])
         return "yours", await characters.get_character(user_id, chat_key, entry["name"])
+    # Free, or still held by this player but their copy is gone (deleted before the
+    # release hook existed, or by a path that never released): materialize afresh —
+    # `get_character` on a missing sheet would hand back a blank one.
     sheet = await pregen_pristine_sheet(documents, chat_key, entry["id"])
     if sheet is None:
         return "corrupt", None
@@ -173,6 +180,19 @@ async def pregen_release(
     await characters.delete_character(claimer, chat_key, entry["name"])
     await _set_claimed(documents, chat_key, entry["id"], "")
     return "ok"
+
+
+async def pregen_release_deleted(documents: Any, chat_key: str, name: str, user_id: str) -> bool:
+    """`user_id` deleted their sheet `name`: free the roster claim it came from.
+
+    Only the deleter's OWN claim is cleared — an entry nobody holds, or one held by
+    another player, is left alone. Returns whether a claim was released, so the caller
+    knows to publish the roster change."""
+    entry = await pregen_find(documents, chat_key, name)
+    if entry is None or entry["claimed_by"] != user_id:
+        return False
+    await _set_claimed(documents, chat_key, entry["id"], "")
+    return True
 
 
 # --- Room lifecycle (M23 WS1) -----------------------------------------------

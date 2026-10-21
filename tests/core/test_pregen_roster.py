@@ -19,6 +19,7 @@ from core.pregen_roster import (
     pregen_find,
     pregen_pristine_sheet,
     pregen_release,
+    pregen_release_deleted,
     slug_for,
 )
 from infra.store import Store
@@ -111,3 +112,51 @@ async def test_name_matching_is_case_insensitive_and_roster_is_capped():
     for index in range(MAX_ROSTER_ENTRIES + 3):
         await pregen_add(docs, chat, _sheet(f"extra-{index}"))
     assert len(await pregen_entries(docs, chat)) == MAX_ROSTER_ENTRIES
+
+
+async def test_reclaim_after_the_copy_is_gone_rematerializes_the_pristine_sheet():
+    """A claim whose copy vanished (the player deleted their sheet) must not reopen as
+    a blank character: the claimer's next claim rebuilds the copy from the pristine."""
+    store = Store()
+    characters = CharacterManager(store)
+    docs = DocumentStore(store)
+    chat = "room-stale-claim"
+    await pregen_add(docs, chat, _sheet("理", hp=10))
+    assert (await pregen_claim(docs, chat, "理", "p1", characters))[0] == "ok"
+
+    # The copy disappears while the roster claim stays (a delete path that never released).
+    assert await characters.delete_character("p1", chat, "理")
+    assert (await pregen_find(docs, chat, "理"))["claimed_by"] == "p1"
+
+    status, sheet = await pregen_claim(docs, chat, "理", "p1", characters)
+    assert status == "ok" and sheet is not None
+    assert sheet.system == "CoC" and sheet.attributes["HP"] == 10
+    # The copy really exists again, is active, and the claim is still p1's alone.
+    active = await characters.get_character("p1", chat)
+    assert active.name == "理" and active.attributes["HP"] == 10
+    assert [member["name"] for member in await characters.get_party_roster(chat)] == ["理"]
+    assert (await pregen_claim(docs, chat, "理", "p2", characters))[0] == "taken"
+
+
+async def test_release_deleted_frees_only_the_deleters_own_claim():
+    store = Store()
+    characters = CharacterManager(store)
+    docs = DocumentStore(store)
+    chat = "room-release-deleted"
+    await pregen_add(docs, chat, _sheet("理"))
+    await pregen_add(docs, chat, _sheet("Ada"))
+
+    # Nobody holds it: nothing to release.
+    assert await pregen_release_deleted(docs, chat, "理", "p1") is False
+
+    assert (await pregen_claim(docs, chat, "理", "p1", characters))[0] == "ok"
+    # Another player's delete never touches p1's claim; an unknown name is a no-op.
+    assert await pregen_release_deleted(docs, chat, "理", "p2") is False
+    assert await pregen_release_deleted(docs, chat, "nobody", "p1") is False
+    assert (await pregen_find(docs, chat, "理"))["claimed_by"] == "p1"
+
+    # The command deletes the copy first, then releases.
+    assert await characters.delete_character("p1", chat, "理")
+    assert await pregen_release_deleted(docs, chat, "理", "p1") is True
+    assert (await pregen_find(docs, chat, "理"))["claimed_by"] == ""
+    assert (await pregen_claim(docs, chat, "理", "p2", characters))[0] == "ok"
