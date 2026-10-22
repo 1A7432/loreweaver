@@ -42,12 +42,13 @@ def test_the_engine_default_table_fits_inside_the_ceiling():
     why stale_scene_hud is last: its first round is the bookkeeping call, so a cut run has
     still synced the HUD and keeps the reply that drew the heading.
 
-    A row's cap counts its ASKS. A tool round is always followed by the narration round
-    that reads it, even past the row's cap (otherwise a one-round row that answers with a
-    tool call would end on that call and keep the reply it fired on), so a turn whose rows
-    answer with tools can reach the ceiling sooner and cut an earlier row. The ceiling
-    itself never moves: the runner stops at `MAX_ROUNDS_PER_TURN` whatever the rows do —
-    `tests/agent/test_turn_checks.py::test_a_model_that_keeps_calling_tools_stops_at_the_turn_ceiling`.
+    A tool round on a row's LAST round earns that row exactly one round past its cap
+    (otherwise a one-round row that answers with a tool call would end on that call and
+    keep the reply it fired on). One, so no row can spend the rounds owed to the rows after
+    it; but a turn whose rows answer with tools can still reach the ceiling sooner and cut
+    an earlier row. The ceiling itself never moves: the runner stops at
+    `MAX_ROUNDS_PER_TURN` whatever the rows do —
+    `tests/agent/test_turn_checks.py::test_a_model_that_keeps_calling_tools_gets_one_round_past_the_cap_not_the_turn`.
     """
     caps = [check.max_rounds for check in DEFAULT_TURN_CHECKS]
 
