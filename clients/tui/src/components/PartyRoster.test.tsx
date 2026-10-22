@@ -150,7 +150,7 @@ describe("PartyRoster pack-card import section (v2.2)", () => {
     // A character card carries no kind marker at all.
     const pilotLine = frame.split("\n").find((line) => line.includes("pilot")) ?? ""
     expect(pilotLine).not.toContain("[W]")
-    expect(pilotLine).not.toContain("[K]")
+    expect(pilotLine).not.toContain("[A]")
 
     act(() => renderer.destroy())
   })
@@ -221,8 +221,8 @@ describe("PartyRoster pack-card import section (v2.2)", () => {
 
     const lines = captureCharFrame().split("\n")
     const y = lines.findIndex((line) => line.includes("customs"))
-    expect(lines[y]).toContain("[K] customs")
-    expect(lines[y].indexOf("[K]")).toBeLessThan(lines[y].indexOf("customs"))
+    expect(lines[y]).toContain("[A] customs")
+    expect(lines[y].indexOf("[A]")).toBeLessThan(lines[y].indexOf("customs"))
     await act(async () => {
       await mockMouse.click(lines[y].indexOf("customs"), y)
     })

@@ -297,13 +297,14 @@ const messages = {
     "party.noRoster": "No roster",
     "party.pregens": "PREGENS · Enter/click to claim",
     "party.pregenClaimed": "claimed by {who}",
-    "party.packCards": "PACK CARDS [W]orld [K]eeper",
+    "party.packCards": "PACK CARDS [W]orld [A]dmin",
     // Leading kind markers, kept to 3 cells so the ≤32-column sidebar can never
-    // truncate them away. A world card is ALWAYS keeper-only to import: [W] is what
-    // the keeper sees (a world card, theirs to import through `.import … world`),
-    // [K] is what a player sees (keeper-only — the row renders dim and inert).
+    // truncate them away. Only the room admin (the keeper-key holder) can import a
+    // world card: [W] is what the admin sees (a world card, theirs to import through
+    // `.import … world`), [A] is what a player sees (admin-only — the row renders
+    // dim and inert). It marks an import permission, not a content audience.
     "party.packCardWorld": "[W]",
-    "party.packCardKeeperOnly": "[K]",
+    "party.packCardAdminOnly": "[A]",
     "scene.title": "SCENE",
     "scene.unframed": "Unframed",
     "scene.clock": "CLOCK",
@@ -702,9 +703,9 @@ const messages = {
     "party.noRoster": "暂无队伍",
     "party.pregens": "预设角色 · Enter/点击认领",
     "party.pregenClaimed": "已被 {who} 认领",
-    "party.packCards": "扩展包卡片 [W]世界 [K]守秘人",
+    "party.packCards": "扩展包卡片 [W]世界 [A]管理员",
     "party.packCardWorld": "[W]",
-    "party.packCardKeeperOnly": "[K]",
+    "party.packCardAdminOnly": "[A]",
     "scene.title": "场景",
     "scene.unframed": "未定场景",
     "scene.clock": "时间",
