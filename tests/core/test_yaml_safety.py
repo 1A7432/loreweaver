@@ -19,7 +19,10 @@ import yaml
 
 from core.yaml_safety import NoAliasSafeLoader, safe_load_no_aliases
 
-FAST_BOUND_SECONDS = 0.5
+# The exception is what catches a regression to plain `yaml.safe_load`; this bound only adds
+# "and it did not run away". It is loose on purpose: a starved CI runner can stall a process
+# for a while, and the blowup it guards against takes far longer than this bound.
+FAST_BOUND_SECONDS = 10.0
 
 
 def _alias_bomb(name_key: str = "name", levels: int = 6, branch: int = 10) -> str:

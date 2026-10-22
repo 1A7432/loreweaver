@@ -399,6 +399,14 @@ async def test_target_avatar_denied_does_not_consume_imagegen_quota(monkeypatch)
 # ---------------------------------------------------------------------------
 
 
+# Linearity is checked with a wall-clock bound, so the input is sized to make the gap between
+# linear and quadratic enormous: the linear scan takes a few ms on 80k characters, while the old
+# backtracking assignment regex was quadratic (~0.7 s at 8k characters, so over a minute at 80k).
+# The bound can then be loose enough that a starved CI runner never trips it.
+_PATHOLOGICAL_CHARS = 80_000
+_LINEAR_BOUND_SECONDS = 5.0
+
+
 async def test_oversized_command_argument_is_rejected_fast():
     services = _services()
     router = CommandRouter(services)
@@ -410,7 +418,9 @@ async def test_oversized_command_argument_is_rejected_fast():
     elapsed = time.monotonic() - start
 
     assert reply == services.i18n.with_locale("en").t("commands.error.too_long", limit=4000)
-    assert elapsed < 1.0  # rejected at the router, never handed to the regex
+    # The reply proves the router refused it; the bound is loose so a starved CI runner cannot
+    # fail it, yet still below the ~8 s the old backtracking regex spent on this argument.
+    assert elapsed < _LINEAR_BOUND_SECONDS
 
 
 async def test_reset_confirm_still_works_under_arg_cap(tmp_path):
@@ -427,12 +437,12 @@ async def test_reset_confirm_still_works_under_arg_cap(tmp_path):
 
 def test_parse_sheet_assignments_is_linear_on_pathological_input():
     # A long run of non-matching characters must not blow up the assignment regex.
-    payload = "力" * 8000
+    payload = "力" * _PATHOLOGICAL_CHARS
     start = time.monotonic()
     result = _parse_sheet_assignments(payload)
     elapsed = time.monotonic() - start
     assert result == []
-    assert elapsed < 1.0
+    assert elapsed < _LINEAR_BOUND_SECONDS
 
 
 def test_parse_sheet_assignments_still_parses_valid_glued_pairs():
@@ -464,12 +474,12 @@ def test_parse_sheet_assignments_explicit_form():
 def test_parse_sheet_assignments_explicit_form_is_linear_on_pathological_input():
     # An `=` in the argument switches the scan to the explicit form; it must stay
     # as linear as the legacy one on a long run of non-matching characters.
-    payload = "力" * 4000 + "=" + "力" * 4000
+    payload = "力" * (_PATHOLOGICAL_CHARS // 2) + "=" + "力" * (_PATHOLOGICAL_CHARS // 2)
     start = time.monotonic()
     result = _parse_sheet_assignments(payload)
     elapsed = time.monotonic() - start
     assert result == []
-    assert elapsed < 1.0
+    assert elapsed < _LINEAR_BOUND_SECONDS
 
 
 async def test_sheet_explicit_assignment_sets_absolutely_and_relatively(tmp_path):

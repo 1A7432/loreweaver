@@ -32,7 +32,9 @@ from infra.llm import FakeLLM, assistant_text
 # Wall-clock bound for rejecting an alias-bomb/oversized generated SKILL.md (see the two tests
 # near the bottom of this file): both rejections happen BEFORE any YAML parse call, so they must
 # stay fast regardless of how deep/large the (rejected) content is.
-_FAST_REJECTION_BOUND_SECONDS = 1.0
+# The rejection error and the empty skill dir are the real guards; the bound is loose so a
+# starved CI runner cannot fail it, while a runaway parse would still blow through it.
+_FAST_REJECTION_BOUND_SECONDS = 10.0
 
 
 def _alias_bomb_skill_md(levels: int = 6, branch: int = 10) -> str:

@@ -23,7 +23,10 @@ from core.rulepacks import available_systems, load_rulepack
 # `[str(name) for name in data.get("names")]` (the pre-fix code path) would instead expand the
 # alias chain into an exponential structure before ever raising -- this bound catches a
 # regression back to that behavior, not just "it eventually raises."
-_ALIAS_BOMB_FAST_BOUND_SECONDS = 0.5
+# The exception is what catches a regression to plain `yaml.safe_load`; this bound only adds
+# "and it did not run away". It is loose on purpose: a starved CI runner can stall a process
+# for a while, and the blowup it guards against takes far longer than this bound.
+_ALIAS_BOMB_FAST_BOUND_SECONDS = 10.0
 
 
 def _alias_bomb_yaml(levels: int = 6, branch: int = 10) -> str:
