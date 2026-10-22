@@ -176,9 +176,9 @@ async def test_reset_denied_for_networked_player(tmp_path):
     await _seed_room(services, chat_key)
     ctx = AgentCtx(chat_key=chat_key, user_id="p1", platform="tui", extra={"role": "player"})
 
-    assert await router.dispatch(ctx, ".reset") == "Only the keeper can reset the campaign."
-    assert await router.dispatch(ctx, ".reset all") == "Only the keeper can reset the campaign."
-    assert await router.dispatch(ctx, ".reset confirm") == "Only the keeper can reset the campaign."
+    assert await router.dispatch(ctx, ".reset") == "Only the room admin can reset the campaign."
+    assert await router.dispatch(ctx, ".reset all") == "Only the room admin can reset the campaign."
+    assert await router.dispatch(ctx, ".reset confirm") == "Only the room admin can reset the campaign."
     assert await services.documents.get(chat_key, "note", "clue_log") is not None
 
 

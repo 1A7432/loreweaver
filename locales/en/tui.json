@@ -27,7 +27,7 @@
   "tui.error.avatar_no_character": "Create or select a character before setting an avatar.",
   "tui.error.bad_frame": "Malformed message.",
   "tui.error.bad_key": "Unrecognized key. Ask your deployer for a valid invite key.",
-  "tui.error.demo_unavailable": "The sample adventure is available only to a Keeper in an empty room while the offline demo is active. Your room was not changed.",
+  "tui.error.demo_unavailable": "Only a room admin can load the sample adventure, and only in an empty room while the offline demo is active. Your room was not changed.",
   "tui.error.forbidden": "That action requires a keeper key.",
   "tui.error.input_too_long": "Messages may contain at most 4,000 characters. Nothing was sent.",
   "tui.error.join_timeout": "Timed out waiting for your join message.",

@@ -1,7 +1,7 @@
 {
-  "dev.commands.help": "Keeper: live-reload a pack source dir into this room: .dev mount <path> | reload | status | unmount (needs TRPG_DEV__SOURCE_ROOT)",
+  "dev.commands.help": "Admin: live-reload a pack source dir into this room: .dev mount <path> | reload | status | unmount (needs TRPG_DEV__SOURCE_ROOT)",
   "dev.commands.usage": "Usage: .dev [status | mount <path> | unmount | reload]",
-  "dev.commands.denied": "Only an authenticated Keeper can manage a dev mount.",
+  "dev.commands.denied": "Only an authenticated admin can manage a dev mount.",
   "dev.commands.disabled": "Dev rooms are off on this server — set TRPG_DEV__SOURCE_ROOT to the directory your pack sources live under, then mount a path inside it.",
   "dev.commands.outside_root": "That path is not a directory under the configured dev source root ({root}) — mounts are confined there.",
   "dev.commands.no_manifest": "That directory has no pack.yaml — point .dev mount at a pack SOURCE tree.",

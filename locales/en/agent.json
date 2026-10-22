@@ -20,7 +20,7 @@
   "agent.tools.bad_arguments": "Invalid arguments for tool {name}: {error}",
   "agent.tools.capability_missing": "Tool {name} needs this room's `{capability}`, which it does not have — it is not offered here.{hint}",
   "agent.tools.capability_hint.module_pool": "A module imported as a world card carries its lore as worldbook entries: use query_lore instead.",
-  "agent.tools.prep_phase_only": "Tool {name} belongs to the prep phase; this room is in the play phase. Ask the keeper to run `.phase prep` if this really needs doing now.",
+  "agent.tools.prep_phase_only": "Tool {name} belongs to the prep phase; this room is in the play phase. Ask the room admin to run `.phase prep` if this really needs doing now.",
   "agent.tools.tool_not_available": "Tool {name} is not available in this room.",
   "agent.tools.unknown_tool": "Unknown tool: {name}"
 }

@@ -94,7 +94,7 @@
   "kp_tools.image.generate.error.imagegen_not_configured": "Image generation is not configured.",
   "kp_tools.image.generate.error.imagegen_timeout": "Image generation timed out.",
   "kp_tools.image.generate.failed": "❌ Failed to generate image: {error}",
-  "kp_tools.image.generate.not_configured": "Image generation is not configured. Ask the keeper to configure an image provider first.",
+  "kp_tools.image.generate.not_configured": "Image generation is not configured. Ask the room admin to configure an image provider first.",
   "kp_tools.image.generate.rate_limited": "Image generation limit reached for this room. Try again later.",
   "kp_tools.initiative.added": "✅ Added {name}'s initiative: {initiative}",
   "kp_tools.initiative.cleared": "✅ Initiative list cleared",

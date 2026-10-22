@@ -20,7 +20,7 @@
   "agent.tools.bad_arguments": "工具 {name} 参数无效：{error}",
   "agent.tools.capability_missing": "工具 {name} 需要本房间的 `{capability}`，而本房间没有——这里不提供它。{hint}",
   "agent.tools.capability_hint.module_pool": "以世界卡导入的模组把设定放在世界书里：请改用 query_lore。",
-  "agent.tools.prep_phase_only": "工具 {name} 属于筹备相，本房间当前在游玩相。确实需要现在做的话，请守秘人执行 `.phase prep`。",
+  "agent.tools.prep_phase_only": "工具 {name} 属于筹备相，本房间当前在游玩相。确实需要现在做的话，请管理员执行 `.phase prep`。",
   "agent.tools.tool_not_available": "工具 {name} 在本房间不可用。",
   "agent.tools.unknown_tool": "未知工具：{name}"
 }

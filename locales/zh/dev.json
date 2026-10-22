@@ -1,7 +1,7 @@
 {
-  "dev.commands.help": "守秘人：把包源码目录热载进本房间：.dev mount <路径> | reload | status | unmount（需要 TRPG_DEV__SOURCE_ROOT）",
+  "dev.commands.help": "管理员：把包源码目录热载进本房间：.dev mount <路径> | reload | status | unmount（需要 TRPG_DEV__SOURCE_ROOT）",
   "dev.commands.usage": "用法：.dev [status | mount <路径> | unmount | reload]",
-  "dev.commands.denied": "只有已认证的守秘人可以管理开发挂载。",
+  "dev.commands.denied": "只有已认证的管理员可以管理开发挂载。",
   "dev.commands.disabled": "本服务器未开启开发房间——把 TRPG_DEV__SOURCE_ROOT 设为你的包源码所在目录，然后挂载其中的路径。",
   "dev.commands.outside_root": "该路径不在配置的开发源码根目录（{root}）之下——挂载只限于那里。",
   "dev.commands.no_manifest": "该目录没有 pack.yaml——.dev mount 要指向一个包的源码树。",
