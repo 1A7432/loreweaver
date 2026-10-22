@@ -135,7 +135,7 @@ Contains 1 WORLD card(s) — module machinery (hooks/variables/EJS); the keeper 
 | `title` | 给守秘人看的标题，不写会变成 `Untitled Lore` |
 | `content` | 条目正文。必填——空的会被跳过并给一条警告 |
 | `keys` / `secondary_keys` | 触发关键词。次要关键词会给条目加门：`selective_logic` 可选 `and_any`（默认）/ `and_all` / `not_any` / `not_all` |
-| `secret` | **守秘人专属。** 只在守秘人导入时生效；玩家路径的导入会结构性地丢掉它，所以把一条标成 secret 永远不可能扩大任何人的可见范围 |
+| `secret` | **守秘人专属。** 只在管理员导入时生效；玩家路径的导入会结构性地丢掉它，所以把一条标成 secret 永远不可能扩大任何人的可见范围 |
 | `constant` | 常驻。上传的文件会被强制关掉——一条常驻条目会不管关键词地往每一次提示里塞自己 |
 | `condition` | 一个表达式，以 `@@if` 装饰行的形式带进去。超过 500 字符它就永远不会触发，并且你会收到一条这么说的警告 |
 | `priority`、`enabled`、`probability`（0–100，由真代码掷）、`case_sensitive`、`match_whole_words`、`scan_depth`、`position`（`before`/`after`）、`sticky`、`cooldown`、`delay` | 酒馆世界书那套触发语义，都能导入也都生效 |
@@ -202,7 +202,7 @@ on('turn_start', () => {
   0 template block(s), 0 keeper-only entr(y/ies). Module content is keeper-imported: `.import <card file> world`.
   ```
 
-- **`.import <文件> world`**——只有守秘人能做，而且刻意不是模型工具。这才是一个模组真正落地的方式：
+- **`.import <文件> world`**——只有管理员能做，而且刻意不是模型工具。这才是一个模组真正落地的方式：
 
   ```console
   Imported "汐浦送灯" as world content: 16 lore entries (keeper trust), 0 variable declaration(s) seeded,
@@ -211,7 +211,7 @@ on('turn_start', () => {
   Cast registered (3): 顾晚棠, 白榆生, 陈九鲤 — players claim with `.pc claim <name>`.
   ```
 
-照着这条边界写。任何会改变整桌人怎么玩的东西都属于世界那一半，而放它进来的人是守秘人。
+照着这条边界写。任何会改变整桌人怎么玩的东西都属于世界那一半，而放它进来的人是房间管理员。
 
 ---
 
@@ -409,7 +409,7 @@ panels:
 
 **二级面板**是关在沙箱 iframe 里的真 HTML/JS/CSS，用来做可交互的地图或者定制卡表。它必须声明自己带的每一个资源，以及一个显式的一级 `fallback`（或者 `fallback: null`，纯文本客户端会渲染成一行“请在富客户端查看”）。面板的身份就是在看它的那个玩家：进来的数据只有那个人过滤后的那份；出去时一个 `roll` 意图，会以那个玩家的身份走真的骰子引擎。
 
-面板进房间要守秘人点头——装上不等于启用：
+面板进房间要管理员点头——装上不等于启用：
 
 ```console
 $ .panels
@@ -484,7 +484,7 @@ description: Procedure guide for running 《汐浦送灯》 — act pacing, rule
 C 断锚 = 信物满 3。玩家硬闯缺门结局时，在 fiction 内让门本身拦住。
 ```
 
-可选的 frontmatter：`allowed-tools`（把这个房间的工具集收窄到一个白名单）、`name-zh` / `description-zh`（本地化显示）、`metadata.systems`、`metadata.content-rating`。同目录下的 `hooks.js` 在技能启用期间生效。守秘人按房间启用：
+可选的 frontmatter：`allowed-tools`（把这个房间的工具集收窄到一个白名单）、`name-zh` / `description-zh`（本地化显示）、`metadata.systems`、`metadata.content-rating`。同目录下的 `hooks.js` 在技能启用期间生效。管理员按房间启用：
 
 ```console
 $ .skill enable yingchao-zhuchi
@@ -573,7 +573,7 @@ Could not resolve the pack ref: release for 'gh:1A7432/loreweaver@v1.0.0' has no
 
 ```bash
 TRPG_DEV__SOURCE_ROOT=~/my-packs uv run python -m app --serve --keys /tmp/lw-keys
-# 然后以房间守秘人的身份：
+# 然后以房间管理员的身份：
 #   .dev mount ~/my-packs/my-module     ——导入模组并开始监视
 #   （随便改哪个文件、保存——lore、技能、规则包、面板都会热重载；
 #     改过的条目替换旧文本，删掉的条目跟着离开，房间里的变量值每次重载都保留）

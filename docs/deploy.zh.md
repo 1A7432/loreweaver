@@ -57,7 +57,7 @@ journalctl -u loreweaver -f       # 跟日志——ticket 和守秘人密钥在�
 
 ## 更新
 
-守秘人在客户端的「房间与邀请」页里就能更新服务器，不用 SSH。上面那种 git 部署**默认就是开着的**：只有守秘人能看到服务端和客户端的版本，客户端比服务端新的时候会多出一个「更新服务器」按钮。按下去，服务器跑的是 `TRPG_TUI__UPDATE_COMMAND`（默认 `git pull --ff-only && uv sync`），然后把自己**换成新代码继续跑**——进程号不变，所以 Iroh ticket 不变，也不用 `systemctl restart`（和上面那个 `Restart=on-failure` 的配置是兼容的）。客户端会断一下再自己接上。
+管理员在客户端的「房间与邀请」页里就能更新服务器，不用 SSH。上面那种 git 部署**默认就是开着的**：只有管理员能看到服务端和客户端的版本，客户端比服务端新的时候会多出一个「更新服务器」按钮。按下去，服务器跑的是 `TRPG_TUI__UPDATE_COMMAND`（默认 `git pull --ff-only && uv sync`），然后把自己**换成新代码继续跑**——进程号不变，所以 Iroh ticket 不变，也不用 `systemctl restart`（和上面那个 `Restart=on-failure` 的配置是兼容的）。客户端会断一下再自己接上。
 
 `loreweaver update` 默认会先重装客户端，再用你保存的守秘人连接做同样的服务端更新，一条命令让两边同步；`loreweaver update --client-only` 只更新客户端。
 
@@ -102,7 +102,7 @@ cd ~/loreweaver && git pull && uv sync && sudo systemctl restart loreweaver
 | `TRPG_CENSOR__WORDLIST_PATH` | 敏感词表文件：JSON 格式 `{"词": 等级, ...}`（等级 `1`–`5`，见 `gateway.ops.CensorLevel`）。说明在[内容过滤](#内容过滤) | *（空 = 过滤关闭）* |
 | `TRPG_CENSOR__WORDLIST` | 敏感词表，直接写在环境变量里：`词[:等级],词2[:等级2],...`。两个都设了就合并 | *（空 = 过滤关闭）* |
 
-ChatGPT 订阅不是 API key。要走订阅通道，先把服务器起起来，在私聊里对守秘人发 `.model login chatgpt`，走完设备码流程，再 `.model set chatgpt [模型]`。这条路要把 `TRPG_LLM__BASE_URL` 留空；Loreweaver 用的是保存下来的 OAuth 授权，不是浏览器 cookie，也不是模拟网页操作。SuperGrok 同理：`.model login supergrok` 之后 `.model set supergrok [模型]`，同一份授权还能用来出图。
+ChatGPT 订阅不是 API key。要走订阅通道，先把服务器起起来，在私聊里发 `.model login chatgpt`，走完设备码流程，再 `.model set chatgpt [模型]`。这条路要把 `TRPG_LLM__BASE_URL` 留空；Loreweaver 用的是保存下来的 OAuth 授权，不是浏览器 cookie，也不是模拟网页操作。SuperGrok 同理：`.model login supergrok` 之后 `.model set supergrok [模型]`，同一份授权还能用来出图。
 
 已有的兼容网关照样支持：provider 填 `chatgpt` 或 `gpt-subscription`，显式设 `TRPG_LLM__BASE_URL=<网关的 /v1 地址>`，再给上网关的 API key。只要显式写了 `base_url`，走的就一定是这条经典代理通道，而不是订阅 OAuth。
 
@@ -144,7 +144,7 @@ Iroh 的玩家连接**天生就是端到端加密的**（QUIC/TLS，每个对端
 - **密钥**把一串随机串绑定到一个房间（共享的 `chat_key`）和一个角色上。用 `--tui-key add` 生成；不认识的密钥在进房间时就被拒。密钥存在一个 TOML 文件里（`keys.toml`）——永远别提交它。
 - **数据**是一个 SQLite 文件（`loreweaver.db`），按房间分隔，装着全部战役状态。想保住进度，就保住 `/data` 这个目录。
 - **运行时填的服务商凭据**（包括订阅 OAuth 的 access / refresh 授权）以明文存在同一个 SQLite 文件里，这样重启之后还能接着用。请像保护 `.env` 和 `keys.toml` 一样保护这个数据库。
-- **房间备份**是守秘人在管理界面里生成的服务端 JSON 快照，固定写在 `<data_dir>/room_backups/` 下面；就算填了路径，也只当成这个目录里的一个文件名。备份里有原始的访问密钥、房间状态、向量数据和内嵌的媒体，所以要按 `keys.toml` 的标准来保护。
+- **房间备份**是管理员在管理界面里生成的服务端 JSON 快照，固定写在 `<data_dir>/room_backups/` 下面；就算填了路径，也只当成这个目录里的一个文件名。备份里有原始的访问密钥、房间状态、向量数据和内嵌的媒体，所以要按 `keys.toml` 的标准来保护。
 - **本地权限**：在支持 POSIX 权限的文件系统上，新建的敏感文件会收紧到 `0600`，专用的数据和备份目录收紧到 `0700`。Windows 或者不支持 POSIX 权限的文件系统上只能尽力而为，它不是一个 ACL 管理器。
 - **秘密文件**（`.env`、`keys.toml`、`keeper-key.txt`、`*.db`、备份）都在 git 忽略列表里，只有 `*.example.*` 会被跟踪。永远别提交它们。
 

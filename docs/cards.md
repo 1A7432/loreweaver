@@ -17,7 +17,7 @@ card" fuses a character with a whole world — hook scripts, variable schemas,
 executable templates — because single-player ST had nowhere else to put them. Here
 those are two artifacts: the **character half** (persona, memory, abilities, a sheet)
 that any player may import, and the **world half** (the machinery) that only the
-room's Keeper imports, because it reprograms play for the whole table. Your card
+room's admin imports, because it reprograms play for the whole table. Your card
 isn't rejected either way — it's decomposed.
 
 ## What imports
@@ -46,11 +46,11 @@ isn't rejected either way — it's decomposed.
   against the rule system; a card whose numbers don't fit the rulepack gets fixed
   numbers, not a free pass.
 - **By command:** `.import <card file> [coc7|dnd5e] [pc|companion|world]`.
-  - `pc` (any player, via a room attachment) and `companion` (Keeper-only) take the
+  - `pc` (any player, via a room attachment) and `companion` (admin-only) take the
     **character half**. If the card also carries world machinery, the import strips
     it and tells you exactly what was stripped — the card still works as a
-    character, and the message points the Keeper at the world half.
-  - `world` (**Keeper-only**) imports the whole module in one step: the machinery
+    character, and the message points the room admin at the world half.
+  - `world` (**admin-only**) imports the whole module in one step: the machinery
     half — full lorebook with Keeper trust, `[InitVar]` seeded, hooks installed —
     AND the character half, which lands on the room's **pre-generated roster** as a
     claimable, rule-validated PC. The card's PROSE (description, scenario, the
@@ -60,8 +60,8 @@ isn't rejected either way — it's decomposed.
     `.pc claim <name>` (claims are exclusive; `.pc release` frees the slot and the
     next claimant starts from the pristine sheet). For an AI-played version of the
     same character, `.import <file> companion` still works.
-  - Importing from a server-side path (rather than a room attachment) is Keeper-only
-    in every mode. Standalone lorebooks: `.lore import <file>` (Keeper-only).
+  - Importing from a server-side path (rather than a room attachment) is admin-only
+    in every mode. Standalone lorebooks: `.lore import <file>` (admin-only).
 - **As part of a pack:** cards and lorebooks travel inside `.lwpack` content packs —
   `python -m app --install gh:owner/repo` — alongside skills, rulepacks and assets
   (see [plugins.md](plugins.md)).
@@ -70,7 +70,7 @@ isn't rejected either way — it's decomposed.
 
 Imported cards don't just contribute prose — the machinery runs, with deterministic
 code doing the bookkeeping. (Everything below describes the **world half**, live after
-a Keeper's `.import <file> world`; a character import carries none of it.)
+a room admin's `.import <file> world`; a character import carries none of it.)
 
 - **Worldbook trigger semantics.** Primary `keys`; `secondary_keys` with all four
   selective logics (AND ANY / AND ALL / NOT ANY / NOT ALL); `probability` — rolled
@@ -98,11 +98,11 @@ a Keeper's `.import <file> world`; a character import carries none of it.)
   the SAME turn (a retry, an undo replay) reproduces the same picks, so what the
   model saw is always reconstructable. The two draws use separate streams: adding a
   `{{random}}` macro never shifts which probabilistic lore entries fire.
-- **The tracker panel is Keeper-curated.** Your card's tree is module state, and heavy
+- **The tracker panel is admin-curated.** Your card's tree is module state, and heavy
   cards routinely keep hidden plot flags in it — so leaves reach NO player panel until
-  the Keeper exposes them: `.var expose <prefix|*>` puts a path (and its subtree) on
+  the room admin exposes them: `.var expose <prefix|*>` puts a path (and its subtree) on
   the party's panel, `.var hide` takes it off, `.var list` shows the whole tree with
-  visibility markers. The Keeper's own panel always shows everything (hidden leaves
+  visibility markers. The admin's own panel always shows everything (hidden leaves
   flagged). Tell your users which prefixes to expose — or ship that line in your
   pack's card `notes`.
 
@@ -152,7 +152,7 @@ enabled. The world import says so by number — *N entries imported disabled wit
 keywords* — because nothing in the engine's activation model can ever fire one.
 
 Here is how you turn them on: by hand, once, or as a function of a variable. All of it
-is Keeper-only, and none of it rewrites the card.
+is admin-only, and none of it rewrites the card.
 
 - **See what is off.** `.lore list disabled` lists them; the full `.lore list` marks
   every entry `[off]`, `[always-on]`, `[when: <condition>]`, and `*` where this room has
@@ -207,16 +207,16 @@ An imported file doesn't get to pick its own privileges:
 - **The card split is structural.** A player's character import cannot install hooks,
   seed the variable tree, or land executable templates — the machinery is stripped by
   deterministic code before anything touches room state, not filtered by a prompt.
-  Only the Keeper's `world` import carries it in.
+  Only the admin's `world` import carries it in.
 - **Scope is pinned** to the importing room — a card can't write global lore.
-- **`constant` is honored for the Keeper's `world` import** — module rules and
+- **`constant` is honored for the admin's `world` import** — module rules and
   timelines are constant entries, and stripping the flag left every imported module
   rule keyword-gated — and **forced off for any player upload**, where an always-on
   entry would let an untrusted card permanently occupy the prompt. The real bound on
   always-on text is the per-turn injection budget — 12 entries / 12,000 characters on a
   Keeper turn — not the flag; an entry larger than that budget never injects at all,
   which `.lore enable` and `.lore show` tell you at the moment you switch it on.
-- **`secret` is honored only when a Keeper does the import** — an untrusted card
+- **`secret` is honored only when a room admin does the import** — an untrusted card
   cannot mint keeper-only lore.
 - **Entry ids are regenerated**, so a card can't address (and overwrite) another
   card's entries.
@@ -227,11 +227,11 @@ An imported file doesn't get to pick its own privileges:
   stale rather than silently dropped. (Replacement matches
   entries by import provenance, recorded since 2026-08-15: a room whose lore was
   imported before then stacks once more on its first re-import, then replaces
-  forever after. Keeper imports only — a player's card import is always additive,
+  forever after. Admin imports only — a player's card import is always additive,
   so a crafted card cannot displace the module's lore.)
 
 With full EJS enabled, world content runs code in the sandbox described above — that
 is the point, and it is the operator's informed call: "your box, your cards" is the
-**Keeper's** stance about the Keeper's own table, which is exactly why the world half
-goes through the Keeper's hands. If you would rather nothing executed at all, set
+**admin's** stance about the admin's own table, which is exactly why the world half
+goes through the admin's hands. If you would rather nothing executed at all, set
 `TRPG_ENABLE_FULL_EJS=false` or skips the `ejs` extra.

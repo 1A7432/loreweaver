@@ -67,7 +67,7 @@ Packed harbour-bell@0.1.0 -> …/harbour-bell/harbour-bell-0.1.0.lwpack
    A one-shot for two to four investigators.
    by ada · license: CC-BY-4.0
    contains: 0 skill(s), 0 rulepack(s), 1 card(s), 0 lorebook(s), 0 UI panel(s), 0 asset(s) (0.0 MB) · hooks code: no · EJS templates: no
-Contains 1 WORLD card(s) — module machinery (hooks/variables/EJS); the keeper imports them with `.import <file> world`.
+Contains 1 WORLD card(s) — module machinery (hooks/variables/EJS); the room admin imports them with `.import <file> world`.
 ```
 
 That last line is worth pausing on, and section 1 explains it. Note also what you did *not* write:
@@ -149,8 +149,8 @@ skipped and reported as a warning, so one bad row never costs you the whole impo
 | `title` | shown to the Keeper; defaults to `Untitled Lore` |
 | `content` | the entry text. Required — an empty one is skipped with a warning |
 | `keys` / `secondary_keys` | activation keywords. Secondary keys gate the entry: `selective_logic` picks `and_any` (default) / `and_all` / `not_any` / `not_all` |
-| `secret` | **keeper-only.** Honored only on a keeper import; a player import drops it outright, so marking an entry secret can never widen anyone's visibility |
-| `constant` | always-on. Honored for the keeper's `world` import (module rules and timelines ARE constant entries) and forced off for any player upload. The real bound on always-on text is the per-turn injection budget — 12 entries / 12,000 characters on a keeper turn — not the flag: an entry larger than the budget never injects at all |
+| `secret` | **keeper-only.** Honored only on an admin world import; a player import drops it outright, so marking an entry secret can never widen anyone's visibility |
+| `constant` | always-on. Honored for the admin's `world` import (module rules and timelines ARE constant entries) and forced off for any player upload. The real bound on always-on text is the per-turn injection budget — 12 entries / 12,000 characters on a keeper turn — not the flag: an entry larger than the budget never injects at all |
 | `condition` | an expression; rides in as an `@@if` decorator. Longer than 500 characters and it will never fire, and you get a warning saying so |
 | `priority`, `enabled`, `probability` (0–100, rolled by real code), `case_sensitive`, `match_whole_words`, `scan_depth`, `position` (`before`/`after`), `sticky`, `cooldown`, `delay` | SillyTavern World Info trigger semantics, imported and honored |
 
@@ -230,10 +230,10 @@ if you come from SillyTavern:
   ```console
   Imported "潮脉盘" as your player character (coc7-xipu). Key stats: STR 50, CON 45, …
   World machinery was left out of this character import: 0 hook script(s), 1 variable declaration(s),
-  0 template block(s), 0 keeper-only entr(y/ies). Module content is keeper-imported: `.import <card file> world`.
+  0 template block(s), 0 keeper-only entr(y/ies). Module content is imported by the room admin: `.import <card file> world`.
   ```
 
-- **`.import <file> world`** — keeper only, and deliberately *not* a model tool. This is how a module
+- **`.import <file> world`** — admin only, and deliberately *not* a model tool. This is how a module
   actually lands:
 
   ```console
@@ -244,7 +244,7 @@ if you come from SillyTavern:
   ```
 
 Write for that boundary. Anything that changes how the whole table works belongs on the world side,
-and the Keeper is the one who admits it.
+and the room admin is the one who admits it.
 
 ---
 
@@ -485,7 +485,7 @@ text-first clients render as one "available in the rich client" line). A panel a
 viewing it: inbound it sees only that viewer's filtered data; outbound, a `roll` intent runs through
 the real dice engine as that player.
 
-A keeper admits panels to a room — install is not enable:
+A room admin admits panels to a room — install is not enable:
 
 ```console
 $ .panels
@@ -598,7 +598,7 @@ C 断锚 = 信物满 3。玩家硬闯缺门结局时，在 fiction 内让门本�
 
 Optional frontmatter: `allowed-tools` (gates the room's toolset to a list), `name-zh` /
 `description-zh` (localized display), `metadata.systems`, `metadata.content-rating`. A sibling
-`hooks.js` is active while the skill is enabled. The Keeper enables it per room:
+`hooks.js` is active while the skill is enabled. The room admin enables it per room:
 
 ```console
 $ .skill enable yingchao-zhuchi
@@ -655,14 +655,14 @@ contents:
   variable-tree paths. `expose` hands those prefixes to `.var expose`, so the players'
   panel shows the choice they made — name them **explicitly**: `expose: ['*']` is refused
   at build, because "publish the whole tree" is a judgement about one table's spoilers and
-  only the keeper sitting at it (`.var expose *`) may make it. Both numbers — how many
+  only the room admin sitting at it (`.var expose *`) may make it. Both numbers — how many
   overlays a pack ships and how many prefixes they publish — are on the trust card the
   operator sees before installing.
 - The build validates all of it with the real parser. A structural problem — unknown
   `format`, an expression the grammar refuses or over the length cap, more than 20
   options or 200 entries — **fails the build**. A title the card no longer carries is a
   **warning**, printed beside the trust card, because cards get revised.
-- At install the overlay lands beside its card; the keeper's `.import <packId>/cards/…
+- At install the overlay lands beside its card; the room admin's `.import <packId>/cards/…
   world` applies it, and the receipt says how many overrides and setup choices landed.
   The same card imported from an attachment gets nothing — the annotations belong to the
   pack that adopted the card, not to the file. `.lore overlay <file>` applies one by hand.
@@ -681,7 +681,7 @@ Packed xipu-songdeng@1.0.0 -> …/xipu-songdeng-1.0.0.lwpack
    A 1925 coastal-town mystery for the Tide-Greeting Festival — three days, nine lanterns, one chosen guest.
    by loreweaver-playtest · license: MIT
    contains: 1 skill(s), 2 rulepack(s), 2 card(s), 1 lorebook(s), 4 UI panel(s), 9 asset(s) (0.3 MB) · hooks code: yes · EJS templates: no
-Contains 2 WORLD card(s) — module machinery (hooks/variables/EJS); the keeper imports them with `.import <file> world`.
+Contains 2 WORLD card(s) — module machinery (hooks/variables/EJS); the room admin imports them with `.import <file> world`.
    presentation kit: 5 picturable subject(s) — the Stage Director MAY generate images (each call spends your image-provider budget)
 ```
 
@@ -709,10 +709,10 @@ $ uv run python -m app --install ./xipu-songdeng-1.0.0.lwpack --yes
    …
    contains: 1 skill(s), 2 rulepack(s), 2 card(s), 1 lorebook(s), 4 UI panel(s), 9 asset(s) (0.3 MB) · hooks code: yes · EJS templates: no
 Installed xipu-songdeng@1.0.0.
-   skills: yingchao-zhuchi — a keeper enables one in-room with .skill enable <id>
+   skills: yingchao-zhuchi — an admin enables one in-room with .skill enable <id>
    rulepacks: chaozhan, coc7-xipu — discoverable. They do not become the room's system by themselves: create a character on that system (the pack must declare a make_char word) or name the system on import.
    cards/lorebooks/assets: 2/1/9 file(s) under <data_dir>/packs/xipu-songdeng@1.0.0 — import in-room with .import <file> / .module
-World cards (keeper-imported via `.import <file> world`): cards/shipu.lorecard.json, cards/chaomai-st.json
+World cards (admin-imported via `.import <file> world`): cards/shipu.lorecard.json, cards/chaomai-st.json
 ```
 
 Without `--yes` the trust card is printed and confirmation is asked for; a non-interactive run
@@ -770,7 +770,7 @@ entirely: point the server at your source directory and mount it into a sandbox 
 
 ```bash
 TRPG_DEV__SOURCE_ROOT=~/my-packs uv run python -m app --serve --keys /tmp/lw-keys
-# then, as the room's keeper:
+# then, as the room admin:
 #   .dev mount ~/my-packs/my-module     — imports the module and starts watching
 #   (edit any file and save — lore, skills, rulepacks and panels reload live;
 #    edited entries replace their old text, deleted ones leave, and your room's

@@ -69,7 +69,7 @@ engine adapter — official Bot API first, OneBot 11 (personal account) second.
   module's own calendar was dropped whole, so its day counter never moved. Both are fixed at the
   structural layer — a player's name can no longer be written as an NPC or companion through *any*
   door, removing a companion retires its sheet with it, a custom calendar's advances still reach the
-  room's hooks — and the run left behind three operator levers: `.npc` / `.companion` (the keeper's
+  room's hooks — and the run left behind three operator levers: `.npc` / `.companion` (the room admin's
   hand on the cast), `.panel <id>` (a module panel as text, for any client that cannot draw it) and
   `TRPG_DEBUG__TOOL_TRACE` (every tool call the model made, with arguments and results, off by
   default). A whole-repo review the next day found the debt concentrated rather than spread, and the
@@ -86,7 +86,7 @@ UI, `.lwpack` content packs distributed through Git releases, and the protocol S
 split**: imports decompose an ST card into its character half (player-importable, machinery
 machinery removed by the importer) and its world half (keeper-only `.import … world`), packs label
 cards `world` or `character` and the build checks that label against what the card actually contains, imported variable trees stay off player
-panels until the keeper exposes them, and a module can ship its rules as a rulepack *patch*
+panels until the room admin exposes them, and a module can ship its rules as a rulepack *patch*
 (`extends: coc7` + deltas). Details: [plugins.md](plugins.md), [authoring.md](authoring.md),
 [cards.md](cards.md), [hooks.md](hooks.md).
 
@@ -105,7 +105,7 @@ A round of unglamorous work just landed — the things that have to be right bef
 ## Near-term
 
 - **Multiplayer polish.** With permissions now enforced, smooth off the remaining rough edges of networked play — a real guard against bot loops, more of the state a late joiner needs — so a room among people who trust each other is genuinely comfortable.
-- **The desktop client is the recommended way to play.** [loreweaver-studio](https://github.com/1A7432/loreweaver-studio) started as the card workbench and is now the full graphical client: a markdown narrative log with colour-coded dice, live character / party / variable panels, a module's own panels — tier-1 templates and sandboxed tier-2 pages, the thing the terminal structurally cannot draw — the keeper screens (rooms & invites, model, module, rules, skills, character creation), and the same one-click *Host locally & play*; its other mode is the studio (forge, card split, `.lwpack` build, AI drafting gated by the same validators as typed content). It tracks protocol 2.4 and a cross-repo round-trip gate fails when its output and the engine's parsers drift. Installers ship with its releases since v0.1.0: macOS (Apple silicon and Intel), Windows x64, Linux x64 (AppImage / deb). The terminal client stays — one line to install, runs anywhere with a terminal, and is what the server's own `--cli` and the playtest harness drive.
+- **The desktop client is the recommended way to play.** [loreweaver-studio](https://github.com/1A7432/loreweaver-studio) started as the card workbench and is now the full graphical client: a markdown narrative log with colour-coded dice, live character / party / variable panels, a module's own panels — tier-1 templates and sandboxed tier-2 pages, the thing the terminal structurally cannot draw — the admin screens (rooms & invites, model, module, rules, skills, character creation), and the same one-click *Host locally & play*; its other mode is the studio (forge, card split, `.lwpack` build, AI drafting gated by the same validators as typed content). It tracks protocol 2.4 and a cross-repo round-trip gate fails when its output and the engine's parsers drift. Installers ship with its releases since v0.1.0: macOS (Apple silicon and Intel), Windows x64, Linux x64 (AppImage / deb). The terminal client stays — one line to install, runs anywhere with a terminal, and is what the server's own `--cli` and the playtest harness drive.
 - **A flagship module.** The formats are only worth as much as the first serious thing built on them. The first one, [《安土》](https://github.com/1A7432/antu), is out as an `.lwpack` on its Git releases; it was co-designed with the panel/presentation layers so that layer has a real consumer rather than a hypothetical one.
 
 ## The bigger arc — the world engine

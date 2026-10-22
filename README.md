@@ -36,7 +36,7 @@ Two clients speak the same open protocol; pick by where you want to play.
 **Loreweaver Studio — the desktop app, recommended.** A graphical client
 ([companion repo](https://github.com/1A7432/loreweaver-studio), Tauri: Rust core + React UI) with the
 full play surface — markdown narrative log, colour-coded dice, live character / party / variable
-panels, a module's own panels (tier-1 templates *and* sandboxed tier-2 pages), the keeper screens
+panels, a module's own panels (tier-1 templates *and* sandboxed tier-2 pages), the admin screens
 (rooms & invites, model, module, rules, skills, character), and the same one-click **Host locally &
 play** — plus the card and pack studio (forge, card split, `.lwpack` build) in the other mode.
 Installers for all three desktop platforms are on the
@@ -104,9 +104,9 @@ loreweaver
 
 On the connect screen, click the green **Host locally & play** — it is the same button in both clients. There is no step two: it downloads
 a self-contained server build for your OS (**no Python, no environment setup**), starts it, issues
-your Keeper key, and drops you into the main menu as the Keeper.
+your Keeper key, and drops you into the main menu as the room admin.
 
-**No API key needed to taste it.** With no model configured, a Keeper in an empty room sees **Play
+**No API key needed to taste it.** With no model configured, a room admin in an empty room sees **Play
 sample adventure** — a built-in scripted Keeper runs the included lighthouse scenario through the
 real dice and rules pipeline. The server re-checks that the room is empty before loading it, so a
 stale menu can never overwrite a campaign. Add a provider on the model screen whenever you're
@@ -149,7 +149,7 @@ is **[docs/play.md](docs/play.md)**; the complete command reference is the
   <img src="assets/tui-character-en.png" width="49%" alt="Character creation: four methods, manual mode validates the point budget live" />
 </p>
 <p align="center">
-  <img src="assets/tui-menu-en.png" width="49%" alt="Keeper main menu: rooms & invites, import module, rule systems, KP skills, model config" />
+  <img src="assets/tui-menu-en.png" width="49%" alt="Admin main menu: rooms & invites, import module, rule systems, KP skills, model config" />
   <img src="assets/tui-skills-en.png" width="49%" alt="KP skills: toggle play-style packs, or describe one sentence and generate a new one" />
 </p>
 
@@ -243,8 +243,8 @@ needs house rules ships a *patch*: `extends: coc7` and only the lines it changes
 *character* (persona, sheet, memories) and the *world* (hook scripts, variable schemas, executable
 templates). When a player imports the character half, the world machinery is **taken out by the importer
 itself** — and the summary you get back lists exactly what was left behind. World machinery reaches a room only through
-the Keeper's own `.import <file> world`, because it reprograms the whole table. Imported variable
-trees stay off player panels until the Keeper exposes them (`.var expose`). And the switches a
+the room admin's own `.import <file> world`, because it reprograms the whole table. Imported variable
+trees stay off player panels until the room admin exposes them (`.var expose`). And the switches a
 card's frontend scripts used to throw are yours to flip at the table: `.lore enable`, or
 `.lore bind <entry> <condition>` to let a variable decide — without ever editing the card.
 
@@ -383,7 +383,7 @@ spec text is licensed CC BY 4.0.
 |---|---|
 | Players | [docs/play.md](docs/play.md) — five-minute start, keys, dice, panels, recaps |
 | Module authors | [docs/authoring.md](docs/authoring.md) — build a `.lwpack` from zero, with a real module as the worked example |
-| Keepers & operators | [docs/operating.md](docs/operating.md) — models, quota, caching, backups, reset, self-update |
+| Room admins & operators | [docs/operating.md](docs/operating.md) — models, quota, caching, backups, reset, self-update |
 | Server operators | [docs/deploy.md](docs/deploy.md) — always-on deployment, keys, trust boundaries |
 | Card authors | [docs/cards.md](docs/cards.md) — what imports, what runs, what differs from SillyTavern |
 | Hook authors | [docs/hooks.md](docs/hooks.md) — the sandboxed turn-lifecycle API |

@@ -77,8 +77,8 @@ journalctl -u loreweaver -f       # follow logs — the ticket + keeper key prin
 
 ## Updating
 
-A keeper updates the server from the client's **Rooms & invites** page — no SSH needed.
-It is **on by default** for the git-checkout deployment above: a keeper (only) sees the
+A room admin updates the server from the client's **Rooms & invites** page — no SSH needed.
+It is **on by default** for the git-checkout deployment above: an admin (only) sees the
 server-vs-client version and an **Update server** button whenever the client is newer.
 Pressing it runs `TRPG_TUI__UPDATE_COMMAND` on the server (default
 `git pull --ff-only && uv sync`), then the process **re-execs itself into the new code**
@@ -137,7 +137,7 @@ All settings use the `TRPG_` env prefix with `__` for nesting (see
 | `TRPG_CENSOR__WORDLIST` | Content-moderation wordlist, inline: `word[:level],word2[:level2],...` — an alternative to a file, handy for one env var. Combines with `WORDLIST_PATH` if both are set | *(empty = moderation OFF)* |
 
 ChatGPT subscriptions are not API keys. For the direct subscription path, start
-the server, run `.model login chatgpt` from a private/local Keeper chat, complete
+the server, run `.model login chatgpt` from a private/local admin chat, complete
 the device-code flow, then run `.model set chatgpt [model]`. Leave
 `TRPG_LLM__BASE_URL` blank for this path; Loreweaver uses the saved OAuth grant,
 not browser cookies or web-session automation. `.model login supergrok` followed
@@ -241,7 +241,7 @@ configurable building block that does nothing until you supply a wordlist.
 - **Provider credentials** entered at runtime, including subscription OAuth
   access/refresh grants, are stored unencrypted in that local SQLite file so
   they survive restart. Protect the database like `.env` or `keys.toml`.
-- **Room backups** created from the keeper admin UI are server-side JSON
+- **Room backups** created from the admin UI are server-side JSON
   snapshots confined to `<data_dir>/room_backups/`; an optional path is treated as a
   filename inside that directory. They include raw access keys, room state, vector data,
   and self-contained media blobs, so protect them like

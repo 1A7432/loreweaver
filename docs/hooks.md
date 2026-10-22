@@ -30,7 +30,7 @@ scripts are not affected by it.
 - **In a card:** a native lorecard (`*.lorecard.json`, format v1) carries its scripts in
   the top-level `hooks` list (strings or `{code: "…"}` objects); an ST-shaped card
   uses an `extensions.loreweaver_hooks` list of script strings. A card
-  carrying hooks is a **world card**: the scripts install when the Keeper imports
+  carrying hooks is a **world card**: the scripts install when the room admin imports
   it with `.import <file> world` (a player's character import strips them — see
   [cards.md](cards.md)); **re-importing the card replaces its scripts** rather
   than stacking duplicates.

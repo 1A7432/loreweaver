@@ -135,7 +135,7 @@ connections receive `error too_many_connections` before `join` is read.
 - `media` — media metadata broadcast and history replay entry; bytes are fetched on demand:
   `{type:"media", id:string, hash:string, mime:string, size:int, name:string, from:string, ts:number}`
 - `media_enabled` — the room's player-upload policy. Broadcast to every member when a
-  keeper toggles it, and sent to a joining member during replay when uploads are OFF
+  an admin toggles it, and sent to a joining member during replay when uploads are OFF
   (the non-default state; no frame on join means the default: enabled). Clients may
   gate their upload surface on it:
   `{type:"media_enabled", enabled:boolean}`
@@ -236,7 +236,7 @@ connections receive `error too_many_connections` before `join` is read.
   back verbatim as a NORMAL `input` frame — no new client→server frame type exists.
 - `ui_manifest` — this VIEWER's complete module-panel list, sent on
   `join` right after the initial `state` frame and pushed to every connected member
-  after a keeper's `.panels enable|disable`. FULL-REPLACE semantics: the frame carries
+  after an admin's `.panels enable|disable`. FULL-REPLACE semantics: the frame carries
   the whole list (empty = no panels, which also clears stale panels on reconnect). The
   pack's `audience` declarations are resolved server-side per the viewer's keystore
   role BEFORE this frame is built — a keeper-only panel structurally never appears in
@@ -265,7 +265,7 @@ connections receive `error too_many_connections` before `join` is read.
   never sent — so a client renders the dict as-is, in wire order, and each key is a
   name `.st <key>=<n>` accepts. A system that declares no sheet spec sends its
   stored dict unfiltered.
-  `variables[].hidden` marks a keeper-connection-only row the keeper has not `.var expose`d yet — players never receive hidden rows at all. `pregens` is the module's claimable cast (`.pc list`/`.pc claim`); `claimed_by` is the claiming member id, `""` while unclaimed; omitted when no roster exists. `systems` (v2.3) is every rule system this server discovered, each with the dialect word that makes a character in it (`make_char`, absent when the pack declares none) — what a client needs to offer character creation without knowing any rule system, so a pack that ships its own appears in every client's picker with no client release.
+  `variables[].hidden` marks a keeper-connection-only row the admin has not `.var expose`d yet — players never receive hidden rows at all. `pregens` is the module's claimable cast (`.pc list`/`.pc claim`); `claimed_by` is the claiming member id, `""` while unclaimed; omitted when no roster exists. `systems` (v2.3) is every rule system this server discovered, each with the dialect word that makes a character in it (`make_char`, absent when the pack declares none) — what a client needs to offer character creation without knowing any rule system, so a pack that ships its own appears in every client's picker with no client release.
   `variables` (optional — omitted when the room has none) is the room's
   deterministic module variables, PLAYER-VISIBLE subset only: keeper-only variables are
   filtered inside the engine (`core.modvars.player_entries`) and never reach any transport.
@@ -273,8 +273,8 @@ connections receive `error too_many_connections` before `join` is read.
   to the room's locale; `min`/`max` appear only on bounded `number` variables (clients may
   render those as a meter). Imported SillyTavern MVU card variables ride the same list with
   `id` prefixed `mvu.` and the dotted path as `label` (scalar leaves only, server-capped) —
-  no separate frame type, no client change required. MVU leaves are KEEPER-CURATED
-  (fail-closed): a player frame carries only the paths the keeper exposed (`.var expose`);
+  no separate frame type, no client change required. MVU leaves are ADMIN-CURATED
+  (fail-closed): a player frame carries only the paths the admin exposed (`.var expose`);
   a keeper connection's own frames additionally carry the unexposed remainder, each entry
   flagged `hidden:true` (additive/optional — clients that ignore it simply render the
   entry; ones that understand it may dim or lock-mark it).
@@ -289,8 +289,8 @@ connections receive `error too_many_connections` before `join` is read.
   `name` (the filename stem) are for display. `kind` (v2.3) is the card's 拆卡
   classification and it decides the VERB: a `character` card imports as
   `.import <ref> pc`, a `world` card is module machinery and imports through the
-  keeper's `.import <ref> world` (a player-facing picker should offer it as
-  keeper-only rather than as a character). A pre-2.3 server omits `kind`; treat a
+  admin's `.import <ref> world` (a player-facing picker should offer it as
+  admin-only rather than as a character). A pre-2.3 server omits `kind`; treat a
   missing one as `"character"`. `cards` is empty — not absent — when no installed
   pack ships card files:
   `{type:"pack_cards", cards:[{ref:string, pack:string, name:string, kind:"character"|"world"}]}`
@@ -380,7 +380,7 @@ connected to that room.
 ## Module UI panels
 
 A `.lwpack` may ship named UI panels (`contents.panels` + `ui/panels.yaml` — authoring
-guide in `docs/plugins.md`); a keeper admits an installed pack's panels to a room with
+guide in `docs/plugins.md`); a room admin admits an installed pack's panels to a room with
 `.panels enable <packId>` (install ≠ enable, exactly like skills). The room manifest is
 resolved per viewer and delivered via `ui_manifest` (above). The privilege model is one
 sentence: **a panel acts as the player viewing it** — inbound it receives only that
@@ -519,7 +519,7 @@ MediaChannel wire formats:
   plus the body.
 
 Audio control is intentionally separate from byte transfer. Uploading an audio file only creates
-or updates the room's audio library. Keeper/admin commands such as `.bgm play <audio>`,
+or updates the room's audio library. Admin commands such as `.bgm play <audio>`,
 `.ambience stop`, and `.sfx <audio>` broadcast `audio_control` frames; TUI clients fetch the bytes
 with the same GET flow and play them locally. The server never plays audio itself.
 
@@ -550,7 +550,7 @@ chat_id=room, user_id="tui:" + sha1(key)[:8], user_name=name)` — see
 
 ## Admin frames (keeper-gated)
 
-A deployer/keeper can manage the server from the client's keeper screens (Rooms &
+A deployer / room admin can manage the server from the client's admin screens (Rooms &
 invites, Model) over the SAME connection, using a **keeper-role
 key**: the keystore role stamped on the connection at `join` is the admin gate —
 there is no separate auth. The server answers these ONLY for a `keeper`
@@ -655,7 +655,7 @@ Server → client:
   The API key is never returned in cleartext.
 - `admin_keys` — the caller's own room-key roster; every entry's key value is masked. A
   `mint` request additionally returns the freshly minted key ONCE in cleartext
-  under `minted` (so the keeper can copy it):
+  under `minted` (so the admin can copy it):
   `{type:"admin_keys", keys:[{id:string, key_masked:string, room:string, name:string, role:"player"|"keeper"}], minted?:{key:string, room:string, name:string, role:"player"|"keeper"}}`
 - `admin_room_op` — result for export/import/full-delete room operations:
   `{type:"admin_room_op", action:"export"|"import"|"delete"|"reset", room:string, path?:string, keys:number, store_rows:number, vector_points:number, media_files?:number, scope?:"story"|"chars"|"all"}`
@@ -674,7 +674,7 @@ Server → client:
   whether the module actually landed in the room (`ok` merely means a valid document was authored
   and written); it is empty for `skill`/`rule` (no per-room install step):
   `{type:"admin_generated", kind:"skill"|"rule"|"module", ok:boolean, id:string, name:string, error:string, detail:string}`
-- `admin_update_server` — a keeper asks the server to update itself in place. No parameters: the
+- `admin_update_server` — an admin (keeper-role connection) asks the server to update itself in place. No parameters: the
   server runs its OWN operator-configured command (`TRPG_TUI__UPDATE_COMMAND`, e.g.
   `git pull && uv sync`), never anything the client supplies, and requires the `"update"` feature
   (advertised in `welcome`). On success it re-execs into the new code, so the client should expect

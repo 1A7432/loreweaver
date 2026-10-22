@@ -201,12 +201,12 @@ decomposes every card deterministically (`core.card_split`):
   are neither stored nor consumed, EJS spans are removed from prose and lore — and the
   result message itemizes exactly what was stripped. This is what a player may self-import
   into a shared room.
-- **World import** (`.import <file> world`, keeper-only, deliberately not a model tool)
+- **World import** (`.import <file> world`, admin-only, deliberately not a model tool)
   brings in BOTH halves as module content: the machinery — full lorebook with keeper trust
   (secrecy flags honored), `[InitVar]` seeded into the room's variable tree, hooks installed
   room-wide — and the character half, which joins the room's pre-generated roster
   (`core.pregen_roster`) as a claimable, rule-validated PC (`.pc list/claim/release`;
-  claims are exclusive, releases restore the pristine sheet). One keeper import ships a
+  claims are exclusive, releases restore the pristine sheet). One admin import ships a
   module's world AND its cast; an AI-played companion remains a separate
   `.import <file> companion`.
 - **Card directives** (`system_prompt` / `post_history_instructions` — ST's per-card
@@ -225,9 +225,9 @@ decomposes every card deterministically (`core.card_split`):
   in a pack; the `preview_card` tool and the `.import` receipt name the count either way.
 
 The boundary is the room's trust boundary, not a capability cut: "author freedom over
-gatekeeping" is the *operator's* stance about the operator's own box, and the keeper is the
+gatekeeping" is the *operator's* stance about the operator's own box, and the room admin is the
 operator of the room. Everything that reprograms shared play — skills (`.skill enable`),
-hooks, variable schemas, rules — goes through the keeper's hands; nothing a player uploads
+hooks, variable schemas, rules — goes through the room admin's hands; nothing a player uploads
 has no way to execute anything or change shared state.
 
 ### A.3 World info / lore — SillyTavern lorebook
@@ -240,7 +240,7 @@ keyword-in-recent-context with budgeted insertion — the ST model — so an
 existing lorebook works unchanged.
 
 `enabled` and `condition` are the two fields a ROOM may override (M26). The imported
-entry is stored faithfully and never rewritten; the keeper's `.lore enable/disable/bind`
+entry is stored faithfully and never rewritten; the room admin's `.lore enable/disable/bind`
 writes a separate, keeper-only **overlay** document keyed by entry title, and one
 function (`core.lore_overlay.apply`) computes effective state for all three activation
 paths — keyword matching, semantic recall and the `activewi` extra pass — so there is no
@@ -266,7 +266,7 @@ executes, so it stays firmly in Layer A's risk class.
 
 An **imported card's MVU tree** gets the same discipline from the other direction: it is
 opaque module state (heavy cards routinely keep hidden plot flags in it), so its leaves
-reach NO player panel by default. The keeper chooses what to show, with `.var expose
+reach NO player panel by default. The room admin chooses what to show, with `.var expose
 <prefix|*>` / `.var hide <prefix>` / `.var list`; keeper connections see the unexposed
 remainder flagged `hidden: true` on their own frames, players never see it at all.
 
@@ -323,10 +323,10 @@ ST-Prompt-Template EJS extension import and RUN, within a documented subset:
   frontend features with no meaning server-side; those entries import disabled so they
   never pollute a prompt, and the TUI's tracker panel shows the variable tree instead).
 
-The import trust boundary (scope pinning, `constant` honored for a keeper world import
+The import trust boundary (scope pinning, `constant` honored for an admin world import
 and forced off for any player upload, secret keeper-gated, ids regenerated) applies
 unchanged in both modes — and everything in this section describes
-what runs after a **keeper world-import** (see the card split in A.2): a player's
+what runs after a **admin world-import** (see the card split in A.2): a player's
 character import carries none of this machinery in the first place. With full EJS
 enabled, world content runs code in the sandbox described above — that is the point;
 operators who want the data-only Layer A posture set `TRPG_ENABLE_FULL_EJS=false` or
@@ -340,7 +340,7 @@ declare it under `contents.presets` and the build validates it with the same par
 `.preset import` uses. Install lands each file in the shared preset store
 (`data_dir/presets/<id>.json`, id = the sanitized filename stem), so `.preset list`
 sees it immediately — but nothing turns on by itself: a room folds a preset's style
-text into its prompt only when its keeper runs `.preset enable <id>`
+text into its prompt only when its room admin runs `.preset enable <id>`
 (install ≠ enable, as everywhere else). The trust card discloses the shipped count
 (`presets: N`). `.preset import` also understands pack-relative references
 (`.preset import <packId>/presets/x.json`) for cherry-picking a preset a pack ships
@@ -364,7 +364,7 @@ pattern.
 ## Layer B — KP skills (Claude Code `SKILL.md`)
 
 A **skill** packages a *play style* — combat refereeing, mystery clue-tracking,
-romance/relationship dynamics, a horror tone — as a declarative bundle a keeper
+romance/relationship dynamics, a horror tone — as a declarative bundle a room admin
 enables per room. We adopt the **Claude Code skill format verbatim in shape** so
 skill authors reuse what they know:
 
@@ -385,7 +385,7 @@ name-zh: 恋爱与关系             # optional localized display metadata for s
 description-zh: >              # lists; the English fields stay the fallback
   为以浪漫/亲密为核心的战役开启：追踪吸引与张力，将诱惑作为社交检定判定。
 metadata:
-  scope: room                 # per-room toggle (keeper-enabled)
+  scope: room                 # per-room toggle (admin-enabled)
   systems: [coc7]             # applicable rule systems (optional)
   content-rating: mature      # informs the mature-mode gate
 ---
@@ -537,7 +537,7 @@ The contract, and why it is safe to hand a keeper:
 in `prep/`). It installs into the pack home and the keeper invokes it by reference —
 `run_prep_plan(script_ref="<packId>/prep/setup.js")` — previewing first, exactly like
 inline script text. A room reads as `play` from the moment its world card is imported,
-so the keeper pins `.phase prep` first and `.phase auto` when the script has run. The
+so the room admin pins `.phase prep` first and `.phase auto` when the script has run. The
 trust card counts shipped scripts (`prep scripts: N`); they NEVER run automatically, at
 install or any other time. Build checks are static
 (extension, size cap, UTF-8) so packs build identically on machines without the
@@ -611,7 +611,7 @@ effort and risk:
 
 The rules that make this safe are the same iron rules, extended to UI:
 
-- **拆卡, extended:** panels enter a room only via a keeper's `.panels enable <packId>`
+- **拆卡, extended:** panels enter a room only via an admin's `.panels enable <packId>`
   of an installed pack (install ≠ enable). Players cannot upload panels.
 - **A panel acts as the player viewing it:** inbound it sees only that viewer's
   filtered variables (a `$var` that does not resolve drops the whole block — when in doubt it shows
@@ -623,8 +623,8 @@ The rules that make this safe are the same iron rules, extended to UI:
 - **No new privilege surface:** panels render and collect intent; every judgment stays
   server-side, and keeper-only actions stay on the command surface.
 
-Keeper commands: `.panels` / `.panels list` (anyone), `.panels enable|disable <packId>`
-(keeper). Hooks address panels with `emitPanel("<packId>/<panelId>", payload)` (C.1).
+Admin commands: `.panels` / `.panels list` (anyone), `.panels enable|disable <packId>`
+(admin). Hooks address panels with `emitPanel("<packId>/<panelId>", payload)` (C.1).
 
 ### The presentation kit — giving your module a Stage Director (M19)
 
@@ -695,21 +695,21 @@ so this costs nothing until an author asks for it.
   `pack.yaml` manifest (`core/pack.py`). Authors run `python -m app --pack <src-dir>`;
   users run `python -m app --install <ref> [--yes]`. No "install plugin X first"
   instructions, no image-host/OSS links for assets.
-- **From the table, too:** a keeper with no shell on the box runs `.pack install
+- **From the table, too:** a room admin with no shell on the box runs `.pack install
   <ref>` in the room. Same refs, same install function (`gateway/pack_install.py`
   serves both doors). On a remote table install IS enable, and enable means
   PLAYABLE: the command throws every switch the pack ships — its panels and
   presentation kit, its KP skills, and its world card when the pack ships exactly
   one (which also pins the pack's character system). The terminal's per-item
-  confirmation has no honest wire equivalent and a keeper who typed the ref has
+  confirmation has no honest wire equivalent and an admin who typed the ref has
   already made the trust decision, so the reply carries the trust card and one
   plain risk line instead of a checklist. The single thing it will not decide is
   WHICH module, when a pack ships several world cards — that is a fork, not a
   confirmation, and the reply names each as the `.import <ref> world` that loads
   it. A skill whose id a BUILT-IN already claims is enabled like any other (owner
-  verdict 2026-08-20: the keeper typed the ref), and the reply names it, because a
+  verdict 2026-08-20: the admin typed the ref), and the reply names it, because a
   built-in always wins discovery — so the copy the room runs is the built-in, never
-  the pack's. Keeper-only, naturally: it writes to the server's data dir.
+  the pack's. Admin-only, naturally: it writes to the server's data dir.
 - **Git IS the registry:** an install ref is a local path, an `https://` direct
   link, or `gh:owner/repo[@tag]` — resolved through the GitHub API to that
   release's `*.lwpack` asset (`@tag` pins a release; without it, latest) by
@@ -718,7 +718,7 @@ so this costs nothing until an author asks for it.
   hits as a 403. The credential is scoped by TWO rules, not one hostname check:
   it rides only on the release-metadata request the engine composes itself (a
   caller-named `https://api.github.com/...` ref is fetched anonymously, so a
-  keeper's `.pack install` can never spend the server's PAT), and a redirect
+  an admin's `.pack install` can never spend the server's PAT), and a redirect
   that leaves the host — or merely downgrades to `http` on it — drops it
   (`urllib` forwards headers across hosts by default, and the asset lane
   redirects off-host by design). There is deliberately no central package
@@ -729,7 +729,7 @@ so this costs nothing until an author asks for it.
   `.skill enable <id>`. A rulepack is discoverable but does not become the room's
   system; create a character on that system (the pack must declare a `make_char`
   word) or name the system on import. The in-room `.pack install` is the
-  deliberate exception above: a keeper installing INTO a room has named the room
+  deliberate exception above: an admin installing INTO a room has named the room
   as well as the pack, so the same act enables it there. Cards,
   lorebooks and assets land under `data_dir/packs/<id>@<version>/` for the
   existing in-room import flows (`.import`, `.module`) to consume; re-installing
@@ -882,7 +882,7 @@ actually shipped as, for anyone reading the code.)*
    that way), so `create_npc` and the one-line `sketch_npc` are both available in
    both phases, and so is `update_character_attribute`, the only tool that
    writes a sheet attribute a module moves in play.
-   `agent/tool_phase.py` decides a room's phase: a keeper's `.phase` pin first,
+   `agent/tool_phase.py` decides a room's phase: an admin's `.phase` pin first,
    otherwise whether the room's module is in — a `--module` upload whose
    analysis reached ready, or a world-card import (which is how a `.lwpack`
    module arrives). Unmarked tools are visible in both phases so a new tool is

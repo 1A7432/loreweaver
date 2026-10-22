@@ -33,7 +33,7 @@ Loreweaver 是一个开源的 **AI RPG 引擎与开放标准**。你和朋友出
 
 两个客户端说同一套公开协议，按你想在哪玩来挑。
 
-**Loreweaver Studio——桌面应用，推荐。** 图形客户端（[配套仓库](https://github.com/1A7432/loreweaver-studio)，Tauri：Rust 内核 + React 界面），整套游玩界面都有——Markdown 叙事流、带颜色的骰子、实时的角色 / 队伍 / 变量面板、模组自带的面板（一层模板和沙箱里的二层页面都能画）、守秘人的那几屏（房间与邀请、模型、模组、规则、技能、角色），以及同一个一键「本地托管并游玩」——另一个模式里还有制卡与打包工作室（锻造、拆卡、`.lwpack` 构建）。三平台安装包在[最新 release](https://github.com/1A7432/loreweaver-studio/releases/latest)直接下载——macOS `.dmg`（Apple 芯片与 Intel）、Windows 安装器 `.exe`、Linux `.AppImage` / `.deb`。目前未签名：macOS 首次启动右键 →「打开」，Windows 在 SmartScreen 里选「仍要运行」。想从源码构建也一样能跑（`bun install && bun tauri build`，需要 Rust stable + Bun）。
+**Loreweaver Studio——桌面应用，推荐。** 图形客户端（[配套仓库](https://github.com/1A7432/loreweaver-studio)，Tauri：Rust 内核 + React 界面），整套游玩界面都有——Markdown 叙事流、带颜色的骰子、实时的角色 / 队伍 / 变量面板、模组自带的面板（一层模板和沙箱里的二层页面都能画）、管理员的那几屏（房间与邀请、模型、模组、规则、技能、角色），以及同一个一键「本地托管并游玩」——另一个模式里还有制卡与打包工作室（锻造、拆卡、`.lwpack` 构建）。三平台安装包在[最新 release](https://github.com/1A7432/loreweaver-studio/releases/latest)直接下载——macOS `.dmg`（Apple 芯片与 Intel）、Windows 安装器 `.exe`、Linux `.AppImage` / `.deb`。目前未签名：macOS 首次启动右键 →「打开」，Windows 在 SmartScreen 里选「仍要运行」。想从源码构建也一样能跑（`bun install && bun tauri build`，需要 Rust stable + Bun）。
 
 **终端客户端**——一行命令，不装任何工具链，有终端就能跑：
 
@@ -78,9 +78,9 @@ loreweaver bridge --config bridge.json
 loreweaver
 ```
 
-在连接屏点绿色的「**本地开服并开玩**」——两个客户端是同一个按钮。没有第二步：它会下载对应你系统的自包含服务器程序（**不用装 Python，不用配环境**），起服、发钥匙，然后直接把你以守秘人身份送进主菜单。
+在连接屏点绿色的「**本地开服并开玩**」——两个客户端是同一个按钮。没有第二步：它会下载对应你系统的自包含服务器程序（**不用装 Python，不用配环境**），起服、发钥匙，然后直接把你以房间管理员身份送进主菜单。
 
-**不配 API key 也能先尝一口。** 没配模型且房间为空时，守秘人会看到「**试玩示例冒险**」——内置的脚本化守秘人会带着灯塔短篇走一遍真实的骰子和规则链路。服务端在载入前会再确认一次房间是空的，所以过期的菜单永远覆盖不了一个已经在跑的战役。准备好了随时在模型页填 provider，正在运行的服务会立刻切过去。
+**不配 API key 也能先尝一口。** 没配模型且房间为空时，管理员会看到「**试玩示例冒险**」——内置的脚本化守秘人会带着灯塔短篇走一遍真实的骰子和规则链路。服务端在载入前会再确认一次房间是空的，所以过期的菜单永远覆盖不了一个已经在跑的战役。准备好了随时在模型页填 provider，正在运行的服务会立刻切过去。
 
 ### 3. 叫人
 
@@ -107,7 +107,7 @@ loreweaver
   <img src="assets/tui-character-zh.png" width="49%" alt="建卡：四条路，手填模式实时校验点数预算" />
 </p>
 <p align="center">
-  <img src="assets/tui-menu-zh.png" width="49%" alt="守秘人主菜单：房间与邀请、导入模组、规则系统、KP 技能、模型配置" />
+  <img src="assets/tui-menu-zh.png" width="49%" alt="管理员主菜单：房间与邀请、导入模组、规则系统、KP 技能、模型配置" />
   <img src="assets/tui-skills-zh.png" width="49%" alt="KP 技能：开关玩法包，或描述一句话当场生成一个新的" />
 </p>
 
@@ -172,7 +172,7 @@ resolution:
 
 骰池（`7d10>=8`）、命运骰（`4dF`）、爆炸骰（`5d6!`）都是引擎自带的，所以数成功数的系统同样只是数据。DSL 实在表达不了的，交给 QuickJS 沙箱里的一段脚本：引擎先把骰子掷好，把点数递进去，脚本只返回一个判定——随机性和状态永远不出引擎。模组要加房规就发一份*补丁*：`extends: coc7` 加上要改的那几行，别的什么都不写。
 
-**拆卡。** 一张酒馆「重卡」把两样东西焊在了一起，而 Loreweaver 坚持把它们分开：*人物*（人设、卡表、记忆）和*世界*（钩子脚本、变量架构、可执行模板）。玩家导入人物那一半时，世界机制会被**结构性剥掉**，回执还会逐项告诉你剥了什么。世界机制进房间只有一条路——守秘人自己的 `.import <文件> world`，因为它改的是整张桌子的玩法。导入的变量树，在守秘人公开之前不上玩家面板（`.var expose`）。卡里原本靠前端脚本去拨的那些开关，在这里由你自己拨：`.lore enable`，或者 `.lore bind <条目> <条件>` 让一个变量来决定——全程不动那张卡。
+**拆卡。** 一张酒馆「重卡」把两样东西焊在了一起，而 Loreweaver 坚持把它们分开：*人物*（人设、卡表、记忆）和*世界*（钩子脚本、变量架构、可执行模板）。玩家导入人物那一半时，世界机制会被**结构性剥掉**，回执还会逐项告诉你剥了什么。世界机制进房间只有一条路——房间管理员自己的 `.import <文件> world`，因为它改的是整张桌子的玩法。导入的变量树，在管理员公开之前不上玩家面板（`.var expose`）。卡里原本靠前端脚本去拨的那些开关，在这里由你自己拨：`.lore enable`，或者 `.lore bind <条目> <条件>` 让一个变量来决定——全程不动那张卡。
 
 **能撑过上下文窗口的战役记忆。** 跑团过程被记成编年史文档。当拼出来的提示超过模型上下文窗口的 60%，最老的记录成批折叠进滚动摘要，直到降回 40% 以下；最近四回合永远不折（正在演的这场戏还不算历史）。折叠过的记录会进向量索引，所以第三场的一个细节到第十二场仍然找得回来。玩家这边是 `.recap`——同一段故事，守秘人的剧透批注在投影这一层就已经不在里面了。
 
@@ -257,7 +257,7 @@ Loreweaver 读的这些格式有一份独立的规范，在 **[docs/lwf/](docs/l
 |---|---|
 | 玩家 | [docs/play.zh.md](docs/play.zh.md) — 五分钟上手、按键、骰子、面板、前情提要 |
 | 模组作者 | [docs/authoring.zh.md](docs/authoring.zh.md) — 从零做一个 `.lwpack`，全程拿一个真模组当例子 |
-| 守秘人 / 运维 | [docs/operating.zh.md](docs/operating.zh.md) — 模型、配额、缓存、备份、重置、自更新 |
+| 房间管理员 / 运维 | [docs/operating.zh.md](docs/operating.zh.md) — 模型、配额、缓存、备份、重置、自更新 |
 | 服务器运维 | [docs/deploy.zh.md](docs/deploy.zh.md) — 常驻部署、密钥、信任边界 |
 | 卡作者 | [docs/cards.zh.md](docs/cards.zh.md) — 什么能导入、什么真的会跑、和酒馆有什么不同 |
 | 钩子作者 | [docs/hooks.zh.md](docs/hooks.zh.md) — 沙箱回合生命周期 API |
