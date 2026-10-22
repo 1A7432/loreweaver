@@ -28,6 +28,8 @@ export interface LinkPoolOptions {
   idleCloseMs?: number
   setTimeoutFn?: typeof setTimeout
   clearTimeoutFn?: typeof clearTimeout
+  /** Clock for the idle-close bookkeeping; defaults to `Date.now` (tests inject a manual one). */
+  now?: () => number
   /**
    * Fired after a link is opened or redialed, before join is sent and the read loop
    * starts, so the owner can attach a replay gate (WS2) to THIS connection.
@@ -80,6 +82,7 @@ export class LinkPool {
   private readonly idleCloseMs: number
   private readonly setTimeoutFn: typeof setTimeout
   private readonly clearTimeoutFn: typeof clearTimeout
+  private readonly now: () => number
   private readonly onLinkReady?: (memberKey: string, link: IrohLink, reason: LinkReadyReason) => void
   private readonly onLinkDown?: (memberKey: string) => void
 
@@ -92,6 +95,7 @@ export class LinkPool {
     this.idleCloseMs = options.idleCloseMs ?? DEFAULT_IDLE_CLOSE_MS
     this.setTimeoutFn = options.setTimeoutFn ?? setTimeout
     this.clearTimeoutFn = options.clearTimeoutFn ?? clearTimeout
+    this.now = options.now ?? Date.now
     this.onLinkReady = options.onLinkReady
     this.onLinkDown = options.onLinkDown
   }
@@ -146,13 +150,13 @@ export class LinkPool {
         idleClose: options.idleClose ?? true,
         generation: 0,
         reconnectAttempts: 0,
-        lastTouch: Date.now(),
+        lastTouch: this.now(),
       }
       this.members.set(memberKey, slot)
     } else {
       if (options.name !== undefined) slot.name = options.name
       if (options.idleClose !== undefined) slot.idleClose = options.idleClose
-      slot.lastTouch = Date.now()
+      slot.lastTouch = this.now()
     }
     const promise = this.dialMember(slot, "open").then((link) => {
       if (!link) throw new Error("Iroh connection is not open.")
@@ -174,7 +178,7 @@ export class LinkPool {
   touch(memberKey: string): void {
     const slot = this.members.get(memberKey)
     if (!slot) return
-    slot.lastTouch = Date.now()
+    slot.lastTouch = this.now()
     this.armIdle(slot)
   }
 
@@ -294,7 +298,7 @@ export class LinkPool {
       slot.idleTimer = undefined
     }
     if (!slot.idleClose || this.closed) return
-    const remaining = this.idleCloseMs - (Date.now() - slot.lastTouch)
+    const remaining = this.idleCloseMs - (this.now() - slot.lastTouch)
     const delay = Math.max(0, remaining)
     slot.idleTimer = this.setTimeoutFn(() => {
       if (this.closed) return

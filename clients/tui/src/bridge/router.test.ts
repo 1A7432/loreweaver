@@ -15,7 +15,8 @@ import { CHOICES_TTL_MS } from "./choices"
 import { Keyring } from "./keyring"
 import { PostedIds } from "./postedIds"
 import { ADMIN_HOLD_MS, BridgeRouter, DICE_MERGE_MS, NOT_ADMIN_COOLDOWN_MS, STATE_UNGATE_MS, type BridgeLink, type OutboundIntent } from "./router"
-import { loadGroupSettings, settingsPath } from "./settings"
+import { flushSettingsWrites, loadGroupSettings, settingsPath } from "./settings"
+import { waitFor } from "../testkit"
 import { IdentityStore } from "./qqbot/identity"
 import { Keyring, keyIdFromSecret } from "./keyring"
 import { tt } from "../i18n"
@@ -282,7 +283,9 @@ describe("router — observer / player / admin tables", () => {
       channel: "private",
       isAdmin: true,
     })
-    await new Promise((resolve) => setTimeout(resolve, 40))
+    // The write is fire-and-forget: wait for it to settle, then for its failure log.
+    await flushSettingsWrites()
+    await waitFor("the settings-save failure log", () => logs.some((line) => line.startsWith("bridge.settings_save_failed")))
     expect(logs.some((line) => line.startsWith("bridge.settings_save_failed"))).toBe(true)
     expect(router.groupMode).toBe("all")
   })
@@ -721,7 +724,7 @@ describe("router — choices, commands, queued input", () => {
     admin.push(MANIFEST)
     await router.handleInbound({ userId: "42", memberKey: "adm-key", text: ".bridge admin add 7", channel: "private", isAdmin: true })
     await router.handleInbound({ userId: "42", memberKey: "adm-key", text: ".bridge mode all", channel: "private", isAdmin: true })
-    await new Promise((resolve) => setTimeout(resolve, 40))
+    await flushSettingsWrites()
     const info = await stat(path)
     expect(info.mode & 0o777).toBe(0o600)
     const loaded = await loadGroupSettings(path, { admins: [], mode: "mention", busyNotice: true })
@@ -872,7 +875,7 @@ describe("router — choices, commands, queued input", () => {
       isAdmin: false,
       memberOpenid: "M1",
     })
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await waitFor("the name mint frame", () => control.sent.length > 0)
     expect(control.sent[0]).toMatchObject({ type: FrameType.AdminMintKey, name: "阿绫", role: "player" })
     control.push({
       type: FrameType.AdminKeys,
@@ -1002,7 +1005,7 @@ describe("router — choices, commands, queued input", () => {
       isAdmin: false,
       memberOpenid: "M1",
     })
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await waitFor("the name mint frame", () => control.sent.length > 0)
     expect(control.sent[0]).toMatchObject({ type: FrameType.AdminMintKey, name: "Bao", role: "player" })
     control.push({
       type: FrameType.AdminKeys,
@@ -1040,6 +1043,7 @@ describe("router — choices, commands, queued input", () => {
     })
     intents.length = 0
     clock.advance(NOT_ADMIN_COOLDOWN_MS + 1)
+    const sentBefore = control.sent.length
     const pending = router.handleInbound({
       userId: "M1",
       memberKey: "p-key",
@@ -1048,7 +1052,7 @@ describe("router — choices, commands, queued input", () => {
       isAdmin: false,
       memberOpenid: "M1",
     })
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await waitFor("the name mint frame", () => control.sent.length > sentBefore)
     expect(control.sent.some((frame) => frame.type === FrameType.AdminMintKey && (frame as { name?: string }).name === "Bao")).toBe(true)
     control.push({
       type: FrameType.AdminKeys,

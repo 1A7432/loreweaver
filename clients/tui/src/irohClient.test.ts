@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { FrameType } from "loreweaver-protocol"
 import { IrohClient, isIrohTicket, type LoadIroh } from "./irohClient"
+import { ManualClock, settle as settleTurns, waitFor } from "./testkit"
 
 // The transport picker (clients/tui/src/client.ts) routes on this: a ws(s):// URL keeps the
 // zero-dep WebSocket path; anything else is treated as an Iroh ticket. Getting this wrong
@@ -103,7 +104,24 @@ function createMockIroh(options: { failConnectTimes?: number } = {}) {
   return { loadIroh, sent, streams, endpointCloses: () => endpointCloses }
 }
 
-const settle = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms))
+// A 0 ms timer: every mock below is promise-only, so this flushes the microtasks a send or
+// a read queues. Nothing that depends on a real timer waits on it.
+const settle = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// The reconnect tests run the client's backoff timers on a ManualClock: a redial happens
+// only when the test advances the clock, after it has seen the drop land.
+function clocked(): { clock: ManualClock; timers: { setTimeoutFn: typeof setTimeout; clearTimeoutFn: typeof clearTimeout } } {
+  const clock = new ManualClock()
+  return { clock, timers: { setTimeoutFn: clock.setTimeoutFn, clearTimeoutFn: clock.clearTimeoutFn } }
+}
+
+/** Let any redial a regression would schedule fire, then flush what it would do. */
+async function runOutTheClock(clock: ManualClock): Promise<void> {
+  for (let i = 0; i < 5; i += 1) {
+    clock.advance(60 * 60 * 1000)
+    await settleTurns()
+  }
+}
 
 describe("IrohClient reconnect", () => {
   test("chat binding key request carries its purpose and expiry", async () => {
@@ -125,7 +143,8 @@ describe("IrohClient reconnect", () => {
 
   test("an unexpected stream end schedules a redial and re-sends the last join", async () => {
     const { loadIroh, sent, streams } = createMockIroh()
-    const client = new IrohClient({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20 })
+    const { clock, timers } = clocked()
+    const client = new IrohClient({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20, ...timers })
 
     await client.connect("endpointaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     client.join("room-key", "Ada")
@@ -135,7 +154,9 @@ describe("IrohClient reconnect", () => {
 
     // Simulate the p2p stream ending unexpectedly.
     streams[0].end()
-    await settle()
+    await waitFor("the redial backoff to be armed", () => clock.armed === 1)
+    clock.advance(5)
+    await waitFor("the re-sent join", () => sent.length >= 2)
 
     expect(streams.length).toBe(2) // a fresh dial happened
     expect(sent.length).toBe(2)
@@ -165,19 +186,21 @@ describe("IrohClient reconnect", () => {
 
   test("close() is manual — a late stream end after close() does not redial", async () => {
     const { loadIroh, streams } = createMockIroh()
-    const client = new IrohClient({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20 })
+    const { clock, timers } = clocked()
+    const client = new IrohClient({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20, ...timers })
 
     await client.connect("endpointaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     client.close()
     streams[0].end() // the read loop was still awaiting this stream when close() ran
 
-    await settle()
+    await runOutTheClock(clock)
     expect(streams.length).toBe(1) // no redial
   })
 
   test("onStatus goes online -> reconnecting -> online across an unexpected drop", async () => {
     const { loadIroh, streams } = createMockIroh()
-    const client = new IrohClient({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20 })
+    const { clock, timers } = clocked()
+    const client = new IrohClient({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20, ...timers })
     const statuses: string[] = []
     client.onStatus((status) => statuses.push(status))
 
@@ -185,14 +208,17 @@ describe("IrohClient reconnect", () => {
     expect(statuses).toEqual(["connecting", "online"])
 
     streams[0].end()
-    await settle()
+    await waitFor("the reconnecting status", () => statuses.includes("reconnecting"))
+    clock.advance(5)
+    await waitFor("the redial to come back online", () => statuses.length >= 5)
 
     expect(statuses).toEqual(["connecting", "online", "reconnecting", "connecting", "online"])
   })
 
   test("onStatus goes offline on a manual close, with no redial afterwards", async () => {
     const { loadIroh, streams } = createMockIroh()
-    const client = new IrohClient({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20 })
+    const { clock, timers } = clocked()
+    const client = new IrohClient({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20, ...timers })
     const statuses: string[] = []
     client.onStatus((status) => statuses.push(status))
 
@@ -201,14 +227,15 @@ describe("IrohClient reconnect", () => {
     expect(statuses).toEqual(["connecting", "online", "offline"])
 
     streams[0].end()
-    await settle()
+    await runOutTheClock(clock)
     expect(streams.length).toBe(1)
     expect(statuses).toEqual(["connecting", "online", "offline"])
   })
 
   test("onStatus close() on online does not throw and leaves the client offline", async () => {
     const { loadIroh, streams } = createMockIroh()
-    const client = new IrohClient({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20 })
+    const { clock, timers } = clocked()
+    const client = new IrohClient({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20, ...timers })
     const statuses: string[] = []
     client.onStatus((status) => {
       statuses.push(status)
@@ -221,7 +248,7 @@ describe("IrohClient reconnect", () => {
     expect(statuses).toEqual(["connecting", "online", "offline"])
 
     streams[0]!.end()
-    await settle()
+    await runOutTheClock(clock)
     expect(streams.length).toBe(1)
   })
 
@@ -363,7 +390,8 @@ function createHangingWriteIroh() {
 describe("IrohClient uplink recovery (F13)", () => {
   test("a write hung on the dead stream never blocks the reconnected one", async () => {
     const { loadIroh, sent, streams } = createHangingWriteIroh()
-    const client = new IrohClient({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20 })
+    const { clock, timers } = clocked()
+    const client = new IrohClient({ loadIroh, reconnectBaseMs: 5, reconnectMaxMs: 20, ...timers })
 
     await client.connect("endpointaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     client.join("key", "Keeper")
@@ -376,13 +404,15 @@ describe("IrohClient uplink recovery (F13)", () => {
     client.sendInput("this one is swallowed by the dying stream")
     streams[0]!.end()
 
-    await settle(60) // let the redial land
+    await waitFor("the redial backoff to be armed", () => clock.armed === 1)
+    clock.advance(5)
+    await waitFor("the redial's re-join", () => sent.filter((line) => JSON.parse(line).type === FrameType.Join).length === 2)
 
     // The uplink is alive again: the re-join went out over the fresh stream, and so does
     // everything typed afterwards. Before the fix both queued behind the hung write and
     // the keyboard stayed dead for the rest of the session.
     client.sendInput("I open the door")
-    await settle(10)
+    await settle(0)
 
     expect(sent.some((line) => line.includes("I open the door"))).toBe(true)
     // Two joins reached the server: the original, and the re-join the redial sent. (Both
