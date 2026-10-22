@@ -130,3 +130,12 @@ def test_module_level_t_supports_locale_kwarg():
 
 def test_module_level_t_missing_key_returns_key():
     assert t_("totally.unknown.key") == "totally.unknown.key"
+
+
+def test_the_chinese_term_for_the_keeper_is_one_word():
+    """The product says 守秘人; the near-homophone 守密人 crept into five zh strings and the TUI once."""
+    root = Path(__file__).resolve().parents[2]
+    shipped = [*(root / "locales" / "zh").glob("*.json"), root / "clients" / "tui" / "src" / "i18n.ts"]
+    assert len(shipped) > 2
+    offenders = [path.name for path in shipped if "守密人" in path.read_text(encoding="utf-8")]
+    assert offenders == []

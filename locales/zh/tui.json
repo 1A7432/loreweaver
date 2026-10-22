@@ -57,5 +57,7 @@
   "tui.serve.iroh.failed": "Iroh 传输启动失败（{error}）。",
   "tui.serve.iroh.hint": "  已保存到 {path}。把 ticket + 一个邀请码发给朋友，无需域名/TLS/端口即可连入。",
   "tui.serve.iroh.missing": "未安装 'iroh' 包——请安装：pip install iroh（或 uv sync）。",
+  "tui.serve.iroh.port": "  直连 UDP 端口 {port}：重启后沿用同一个端口，已保存的 ticket 仍能直连（可用 TRPG_TUI__IROH_PORT 固定端口，例如配防火墙规则）。",
+  "tui.serve.iroh.port_changed": "  警告：UDP 端口 {old} 不可用，这次改用了 {new}。在此之前保存的 ticket 只能经中继连入，请换成上面这条新的。",
   "tui.serve.iroh.ticket": "  Ticket：{ticket}"
 }

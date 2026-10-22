@@ -29,7 +29,7 @@ from core.character_manager import (
     CharacterSheet,
 )
 from core.documents import DocumentStore
-from core.pregen_roster import pregen_add, pregen_claim, pregen_release
+from core.pregen_roster import pregen_add, pregen_claim, pregen_entries, pregen_release
 from gateway.commands import CommandRouter
 from infra.config import Settings
 from infra.embeddings import FakeEmbeddings
@@ -241,3 +241,47 @@ async def test_pc_claim_name_conflict_returns_the_localized_notice():
     reply = await router.dispatch_reply(ctx, ".pc claim Carol")
 
     assert reply.text == get_i18n("en").t("pregen.commands.claim_name_conflict", name="Carol")
+
+
+async def test_kp_delete_character_tool_frees_the_pregen_claim_it_deleted():
+    """The model deleting a claimed pregen's copy must not leave the cast member "taken"
+    for everyone: the tool releases the claim, like the player's own `.st delete`."""
+    services = _services()
+    tools = CharacterTools(services)
+    chat = "cli:dm:kp-delete-pregen"
+    await pregen_add(services.documents, chat, CharacterSheet("Carol", "CoC"), source="card:module")
+    assert (await pregen_claim(services.documents, chat, "Carol", "uidA", services.characters))[0] == "ok"
+
+    ctx_b = AgentCtx(chat_key=chat, user_id="uidB", locale="en")
+    ctx_a = AgentCtx(chat_key=chat, user_id="uidA", locale="en")
+
+    # A refused delete (not the caller's sheet) keeps the claim.
+    await tools.delete_character(ctx_b, name="Carol")
+    assert [entry["claimed_by"] for entry in await pregen_entries(services.documents, chat)] == ["uidA"]
+
+    await tools.delete_character(ctx_a, name="Carol")
+    assert [entry["claimed_by"] for entry in await pregen_entries(services.documents, chat)] == [""]
+    assert (await pregen_claim(services.documents, chat, "Carol", "uidB", services.characters))[0] == "ok"
+
+
+async def test_rename_of_a_claimed_pregen_copy_returns_the_cast_member_to_the_pool():
+    """`.nn` makes the claimed copy the player's own character under a new name; the
+    pregen itself must not stay "taken" by a sheet that no longer exists under its name."""
+    services = build_services(Settings(locale="en"), llm=FakeLLM(script=[]), embeddings=FakeEmbeddings(8))
+    router = CommandRouter(services)
+    chat = "cli:dm:rename-pregen"
+    i18n = get_i18n("en")
+    await pregen_add(services.documents, chat, CharacterSheet("Carol", "CoC"), source="card:module")
+    ctx_a = AgentCtx(chat_key=chat, user_id="uidA", locale="en")
+    ctx_b = AgentCtx(chat_key=chat, user_id="uidB", locale="en")
+    await router.dispatch(ctx_a, ".pc claim Carol")
+
+    renamed = await router.dispatch(ctx_a, ".nn Caroline")
+    assert renamed == i18n.t("commands.rename.changed", old="Carol", new="Caroline")
+
+    assert [entry["claimed_by"] for entry in await pregen_entries(services.documents, chat)] == [""]
+    assert [entry["name"] for entry in await services.characters.list_characters("uidA", chat)] == ["Caroline"]
+    # The pool entry is claimable again, and the renamed character is untouched by that.
+    claimed = await router.dispatch(ctx_b, ".pc claim Carol")
+    assert claimed == i18n.t("pregen.commands.claimed", name="Carol", system="CoC")
+    assert [entry["name"] for entry in await services.characters.list_characters("uidA", chat)] == ["Caroline"]

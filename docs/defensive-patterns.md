@@ -87,3 +87,16 @@ names where it bit us; the fix commit is the proof it was paid for.
    do not fold `asyncio.TimeoutError` into a silent `except Exception` on a
    documented handshake — the protocol promises `error{code:'join_timeout'}`,
    and swallowing it makes clients redial a half-alive QUIC connection.
+9. **A stop signal needs its own handler; `asyncio.run` is not one.** A server
+   started with a shell `&` (which is also how an agent backgrounds one for a
+   test) inherits SIGINT as *ignored*. Python then installs no SIGINT handler
+   and `asyncio.Runner` only hooks SIGINT over Python's default, so a plain
+   Ctrl-C / `kill -INT` did nothing at all. Where SIGINT did fire, the first
+   one only reached the clean path through `except CancelledError: pass`, and
+   the second raised `KeyboardInterrupt` from wherever the loop was, possibly
+   mid-`close()`. `app._serve_iroh` now hooks SIGTERM and SIGINT the same way
+   (cancel the serve task, then `await iroh_server.close()`), and removes both
+   hooks before `close()` so a second Ctrl-C is Python's default again — the
+   escape for a close that hangs (`tests/net/test_iroh_server.py` pins both,
+   including the inherited-ignore start). When you test shutdown, start the
+   process the way an operator does and check how its SIGINT was inherited.

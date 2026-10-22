@@ -428,15 +428,47 @@ class MutableLLM:
 ANTHROPIC_NO_SAMPLING_PREFIXES: tuple[str, ...] = (
     "claude-opus-4-7",
     "claude-opus-4-8",
+    "claude-opus-5",
     "claude-sonnet-5",
+    "claude-haiku-5",
+    "claude-fable-5",
+    "claude-mythos-5",
+)
+
+# Claude models whose thinking is ADAPTIVE ONLY: `{"type": "enabled", "budget_tokens": N}`
+# is a 400 on every one of them, and depth is set with `output_config.effort` instead
+# (low/medium/high/xhigh/max on all of them). Checked 2026-10-21 against the per-model
+# table at platform.claude.com/docs/en/build-with-claude/thinking (Messages API).
+# Opus/Sonnet 4.6 still accept a budget (deprecated) and stay on the budget path.
+ANTHROPIC_ADAPTIVE_ONLY_PREFIXES: tuple[str, ...] = (
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-haiku-5",
+    "claude-fable-5",
+    "claude-mythos-5",
+)
+
+# The subset that thinks with NO `thinking` field at all (same table, "No thinking field"
+# column): leaving reasoning_effort blank does not turn their thinking off, it only leaves
+# the depth at the model's default — so their output cap must be sized for thinking too.
+ANTHROPIC_THINKS_BY_DEFAULT_PREFIXES: tuple[str, ...] = (
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-haiku-5",
     "claude-fable-5",
     "claude-mythos-5",
 )
 
 
+def _anthropic_model_matches(model: str, prefixes: tuple[str, ...]) -> bool:
+    return (model or "").lower().removeprefix("anthropic.").startswith(prefixes)
+
+
 def anthropic_accepts_temperature(model: str) -> bool:
     """False for Claude models that reject `temperature` outright (HTTP 400)."""
-    return not (model or "").lower().removeprefix("anthropic.").startswith(ANTHROPIC_NO_SAMPLING_PREFIXES)
+    return not _anthropic_model_matches(model, ANTHROPIC_NO_SAMPLING_PREFIXES)
 
 
 # Extended-thinking budgets for the shared `reasoning_effort` levels. Conservative by
@@ -444,6 +476,11 @@ def anthropic_accepts_temperature(model: str) -> bool:
 # current Claude model's output ceiling.
 _ANTHROPIC_THINKING_BUDGETS = {"low": 2048, "medium": 8192, "high": 16384, "xhigh": 24576, "max": 31744}
 _ANTHROPIC_THINKING_HEADROOM = 8192  # response tokens on top of the thinking budget
+_ANTHROPIC_EFFORT_LEVELS = frozenset(_ANTHROPIC_THINKING_BUDGETS)
+# Adaptive thinking has no budget to size against: the output cap is the only bound, and
+# thinking counts toward it, so a cap sized for a bare reply cuts thinking turns off.
+_ANTHROPIC_ADAPTIVE_MAX_TOKENS = 32000
+_ANTHROPIC_REPLY_MAX_TOKENS = 4096  # no thinking: the reply alone
 
 
 class AnthropicLLM:
@@ -487,19 +524,30 @@ class AnthropicLLM:
         # all — the operator's off switch always wins. API constraints while thinking:
         # temperature must stay unset and tool_choice must remain auto/none, so a forced-tool
         # call (e.g. the deterministic dice corrective) runs without thinking instead of 400ing.
+        # Models that take only adaptive thinking get `{"type": "adaptive"}` plus
+        # `output_config.effort` for the same knob — a budget would be a 400 there — and the
+        # ones that think by default keep a thinking-sized cap even with the knob blank.
         effort = self._settings.reasoning_effort
         if effort and reasoning_effort:
             effort = reasoning_effort
-        budget = _ANTHROPIC_THINKING_BUDGETS.get((effort or "").strip().lower())
+        effort = (effort or "").strip().lower()
+        model_id = model or self._settings.chat_model
         forced_tool = isinstance(choice, dict) and choice.get("type") in {"tool", "any"}
-        thinking = budget is not None and not forced_tool
-        kwargs: dict[str, Any] = {
-            "model": model or self._settings.chat_model,
-            "max_tokens": budget + _ANTHROPIC_THINKING_HEADROOM if thinking and budget else 4096,
-            "messages": anthropic_messages,
-        }
-        if thinking and budget:
+        adaptive = _anthropic_model_matches(model_id, ANTHROPIC_ADAPTIVE_ONLY_PREFIXES)
+        budget = None if adaptive else _ANTHROPIC_THINKING_BUDGETS.get(effort)
+        thinking = (adaptive and effort in _ANTHROPIC_EFFORT_LEVELS or budget is not None) and not forced_tool
+        if budget is not None and thinking:
+            max_tokens = budget + _ANTHROPIC_THINKING_HEADROOM
+        elif thinking or _anthropic_model_matches(model_id, ANTHROPIC_THINKS_BY_DEFAULT_PREFIXES):
+            max_tokens = _ANTHROPIC_ADAPTIVE_MAX_TOKENS
+        else:
+            max_tokens = _ANTHROPIC_REPLY_MAX_TOKENS
+        kwargs: dict[str, Any] = {"model": model_id, "max_tokens": max_tokens, "messages": anthropic_messages}
+        if thinking and budget is not None:
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
+        elif thinking:
+            kwargs["thinking"] = {"type": "adaptive"}
+            kwargs["output_config"] = {"effort": effort}
         if system:
             kwargs["system"] = system
         anthropic_tools = to_anthropic_tools(tools)
@@ -515,7 +563,7 @@ class AnthropicLLM:
             # older models (Haiku / Opus 4.6) continue to honour.
             kwargs["extra_body"] = {"temperature": effective_temperature}
 
-        if "thinking" in kwargs or on_text_delta is not None:
+        if max_tokens > _ANTHROPIC_REPLY_MAX_TOKENS or on_text_delta is not None:
             # Streaming serves two masters: the SDK refuses non-streaming requests sized
             # past its ~10-minute estimate (thinking budgets), and a caller-supplied
             # on_text_delta wants text as it generates. Either way the reassembled final

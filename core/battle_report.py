@@ -39,6 +39,7 @@ import json
 import time
 from datetime import datetime
 
+from core.player_line import split_player_line
 from infra.i18n import I18n, get_i18n
 from infra.llm import HISTORY_TURN_KEY
 from infra.room_facets import STORAGE_ROOM_STATE, RoomStateFacet
@@ -744,17 +745,29 @@ class BattleReportGenerator:
         return rendered
 
 
+def transcript_speaker(message: dict, i18n: I18n) -> tuple[bool, str, str]:
+    """``(is_keeper, label, text)`` of one transcript message — the one place both reports ask.
+
+    A player line is persisted with the model-facing speaker tag (`core.player_line`);
+    the keepsake shows the name as the line's label and the player's own words as the
+    text, and falls back to the generic "Player" label for a line that was never
+    tagged. A Keeper reply is never un-tagged: it is the model's prose, whatever it
+    opens with.
+    """
+    content = str(message.get("content", ""))
+    if message.get("role") == "assistant":
+        return True, i18n.t("battle.report.md.transcript.keeper"), content
+    name, body = split_player_line(content)
+    return False, name or i18n.t("battle.report.md.transcript.player"), body
+
+
 def _transcript_block(message: dict, i18n: I18n) -> str:
-    speaker = i18n.t(
-        "battle.report.md.transcript.keeper"
-        if message.get("role") == "assistant"
-        else "battle.report.md.transcript.player"
-    )
+    _keeper, speaker, text = transcript_speaker(message, i18n)
     return i18n.t(
         "battle.report.md.transcript.message",
         turn=int(message.get(HISTORY_TURN_KEY, 0) or 0),
         speaker=speaker,
-        text=str(message.get("content", "")).strip(),
+        text=text.strip(),
     )
 
 
@@ -770,8 +783,7 @@ def transcript_window(transcript: list[dict], i18n: I18n) -> tuple[list[dict], i
     used = 0
     omitted = 0
     for message in reversed(transcript):
-        text = str(message.get("content", "")).strip()
-        if not text:
+        if not transcript_speaker(message, i18n)[2].strip():  # a tag with nothing after it is empty too
             continue
         if omitted:  # the budget is spent; from here on we only count what we lost
             omitted += 1

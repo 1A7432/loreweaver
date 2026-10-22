@@ -526,6 +526,39 @@ def test_the_full_report_carries_the_conversation_and_the_dice_values():
     assert "Spot Hidden" in full and "regular success" in full
 
 
+def _tagged_exchange() -> list[dict]:
+    """History as the gateway persists it: the player line carries the model-facing speaker tag."""
+    return [
+        _message("user", "[平知章 (Dirac)]\nI pry open the rusted locker.", turn=1),
+        _message("assistant", "[not a speaker]\nThe lid gives.", turn=1),
+        _message("user", "I bang on the door.", turn=2),
+    ]
+
+
+def test_a_tagged_player_line_is_labelled_with_the_speaker_and_loses_the_tag():
+    generator = BattleReportGenerator(Store())
+
+    full = generator.generate_markdown_report(
+        SessionRecord("tagged"), "Tagged", i18n=EN, transcript=_tagged_exchange()
+    )
+
+    assert "[Turn 1] 平知章 (Dirac)" in full  # the name is the line's label...
+    assert "I pry open the rusted locker." in full  # ...the text is the player's own words
+    assert "[平知章 (Dirac)]" not in full  # the model-facing tag never reaches the keepsake
+    assert "[Turn 1] Player" not in full
+    assert "[Turn 2] Player" in full  # a line that was never tagged keeps the generic label
+    assert "[not a speaker]\nThe lid gives." in full  # only player lines are un-tagged
+
+
+def test_a_tag_with_nothing_after_it_is_an_empty_line_and_is_skipped():
+    generator = BattleReportGenerator(Store())
+    transcript = [_message("user", "[平知章 (Dirac)]\n", turn=1), _message("assistant", "Silence.", turn=1)]
+
+    full = generator.generate_markdown_report(SessionRecord("empty"), "Empty", i18n=EN, transcript=transcript)
+
+    assert "平知章" not in full and "Silence." in full
+
+
 def test_the_transcript_keeps_the_conversation_in_order():
     generator = BattleReportGenerator(Store())
     transcript = [
@@ -578,6 +611,6 @@ def test_the_transcript_heading_and_speakers_are_localized():
     )
 
     assert "全程记录" in zh
-    assert "守密人" in zh and "玩家" in zh
+    assert "守秘人" in zh and "玩家" in zh
     assert "储物间" in zh
     assert "The Whole Session" not in zh

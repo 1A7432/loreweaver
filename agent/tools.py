@@ -53,7 +53,8 @@ _ARG_LINE_RE = re.compile(r"^(?P<indent>\s+)(?P<name>\**\w+)\s*(?:\([^)]*\))?:\s
 
 
 class ToolArgumentError(Exception):
-    """Raised when an incoming argument can't be coerced to its declared type.
+    """Raised when an incoming argument is missing, can't be coerced to its declared
+    type, or names a parameter the tool does not have.
 
     Caught internally by `Toolset.dispatch`, which turns it into a localized
     error string; this never escapes to the caller.
@@ -441,17 +442,23 @@ def _first_doc_line(doc: str | None) -> str:
 
 
 def _parse_docstring_args(doc: str | None) -> dict[str, str]:
-    """Parse a Google-style `Args:` block into `{param_name: description}`."""
+    """Parse a Google-style `Args:` block into `{param_name: description}`.
+
+    A description runs over every continuation line (indented deeper than its arg line),
+    joined with single spaces. Keeping only the arg line shipped 14 play-phase parameters
+    cut mid-sentence, e.g. `game_clock`'s `"+2 hours"/"+1` with its format example lost."""
     if not doc:
         return {}
 
     descriptions: dict[str, str] = {}
     in_args = False
     args_indent: int | None = None
+    current: str | None = None
     for line in doc.splitlines():
         if _ARGS_HEADER_RE.match(line):
             in_args = True
             args_indent = None
+            current = None
             continue
         if not in_args or not line.strip():
             continue
@@ -464,7 +471,10 @@ def _parse_docstring_args(doc: str | None) -> dict[str, str]:
 
         match = _ARG_LINE_RE.match(line)
         if match and indent == args_indent:
-            descriptions[match.group("name").lstrip("*")] = match.group("desc").strip()
+            current = match.group("name").lstrip("*")
+            descriptions[current] = match.group("desc").strip()
+        elif current is not None and indent > args_indent:
+            descriptions[current] = f"{descriptions[current]} {line.strip()}".strip()
 
     return descriptions
 
@@ -478,11 +488,20 @@ def _coerce_arguments(fn: Callable[..., Any], arguments: dict[str, Any]) -> dict
     signature = inspect.signature(fn)
     hints = _resolve_type_hints(fn)
 
-    coerced: dict[str, Any] = {}
-    for param_name, param in signature.parameters.items():
-        if _skip_param(param_name, param):
-            continue
+    accepted = [name for name, param in signature.parameters.items() if not _skip_param(name, param)]
+    unknown = [name for name in arguments if name not in accepted]
+    if unknown:
+        # A name the tool does not have is a mistake the model can fix, never a harmless extra:
+        # dropping it would let the call run on defaults (a `kp_note(value=...)` aimed at
+        # `content` set the player-visible scene name to ""). Refuse, and say what IS accepted.
+        raise ToolArgumentError(
+            f"unknown argument{'s' if len(unknown) > 1 else ''} {', '.join(repr(name) for name in unknown)}; "
+            f"accepted parameters: {', '.join(accepted) or '(none)'}"
+        )
 
+    coerced: dict[str, Any] = {}
+    for param_name in accepted:
+        param = signature.parameters[param_name]
         annotation = hints.get(param_name, param.annotation)
         if param_name not in arguments:
             if param.default is not inspect.Parameter.empty:

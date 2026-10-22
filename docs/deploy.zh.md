@@ -17,6 +17,15 @@ uv run python -m app --serve --keys ./data/keys.toml
 
 第一次启动时，服务器会**自动生成一个守秘人密钥**，并打印一个可以直接发出去的 **Iroh ticket**——这两样也会写在密钥文件旁边的 `keeper-key.txt` / `iroh-ticket.txt` 里。把 ticket 和守秘人密钥发给自己，连进去之后，剩下的邀请码和房间都在客户端的「房间与邀请」页里发，不用再碰服务器。数据（SQLite 和密钥）就存在 `--keys` 旁边。
 
+### 重启后仍然有效的 ticket
+
+ticket 重启之后不变，而且是**直连**可达，不只是走中继。密钥文件旁边的两个小文件管着这件事：
+
+- `iroh-secret.key` 固定服务器的身份（ticket 的前半）。
+- `iroh-port.txt` 记着服务器绑定的 UDP 端口（ticket 里的直连地址）。第一次启动选一个端口存下来，之后每次启动都绑同一个。手里存着旧 ticket 的客户端（Loreweaver Studio 会记住上一桌）先拨这些地址，所以能很快重连，不用在中继上等几十秒。
+
+这两个文件都要留着（备份 `--keys` 所在目录就都带上了），删掉任何一个，服务器都会换一个新的 ticket。想自己定端口，比如要在云防火墙或安全组里只放行这一个端口，就设 `TRPG_TUI__IROH_PORT=<端口>`（优先于已保存的端口，并会被存下来）。如果启动时这个端口绑不上（被别的进程占着），服务器会在日志里给警告，改用一个随机端口，ticket 这一次会变，需要把新的重新发出去。只固定 IPv4 的端口；ticket 里 IPv6 的直连地址每次启动仍会变，没关系，IPv4 直连和中继会接住连接。
+
 > 用 SOCKS 代理连境外模型？装一下 `uv pip install socksio`。国内能直连的服务商（比如 DeepSeek）不用代理，干净环境跑就行。
 
 ## 让它一直开着（systemd）
@@ -89,6 +98,7 @@ cd ~/loreweaver && git pull && uv sync && sudo systemctl restart loreweaver
 | `TRPG_SERVER_RELEASE_TAG` | 只钉一键开服要下的服务器程序或源码；正式发布的安装脚本会自动写好 | 跟 `TRPG_RELEASE_TAG`，没有就是最新 |
 | `TRPG_ENABLE_VECTOR_DB` | 世界书和文档检索 | `true` |
 | `TRPG_TUI__JOIN_TIMEOUT` | 一个还没认证的连接必须在几秒内发出 `join`，否则关掉 | `10` |
+| `TRPG_TUI__IROH_PORT` | Iroh 绑定的 UDP 端口（IPv4）；要配防火墙规则时可以固定它。`0` = 沿用密钥旁 `iroh-port.txt` 里记的端口，第一次启动时选定。见[重启后仍然有效的 ticket](#重启后仍然有效的-ticket) | `0` |
 | `TRPG_CENSOR__WORDLIST_PATH` | 敏感词表文件：JSON 格式 `{"词": 等级, ...}`（等级 `1`–`5`，见 `gateway.ops.CensorLevel`）。说明在[内容过滤](#内容过滤) | *（空 = 过滤关闭）* |
 | `TRPG_CENSOR__WORDLIST` | 敏感词表，直接写在环境变量里：`词[:等级],词2[:等级2],...`。两个都设了就合并 | *（空 = 过滤关闭）* |
 
